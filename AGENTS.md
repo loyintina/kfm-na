@@ -15,9 +15,15 @@ kfmv4（/root/kfmv4，TypeScript Web 应用）的 **native 手机客户端**，R
 ## 常用命令
 
 ```bash
-bash scripts/chain.sh    # 唯一检查入口：fmt + clippy + test + build（提交前必过）
+bash scripts/chain.sh    # 唯一检查入口：fmt + clippy + android-check + test + build（提交前必过）
 cargo test               # 只跑测试
 cargo fmt                # fmt --check 红了的自救
+
+# 打 APK（release，签名用 Android 官方 debug keystore，尖刺期配置见 Cargo.toml）
+export ANDROID_HOME=/root/kfm-na-toolchain/sdk
+export ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/27.2.12479018
+export JAVA_HOME=/root/kfm-na-toolchain/jdk PATH=$JAVA_HOME/bin:$PATH
+cargo apk build --release   # 产物：target/release/apk/kfm-na.apk
 ```
 
 ## 纪律（三门，全部 hard fail，commit-msg/pre-commit 钩子机械化执法）
