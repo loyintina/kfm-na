@@ -294,6 +294,16 @@ impl App {
             if let Some(term) = &mut self.term {
                 let (w, h) = (buf.width().get(), buf.height().get());
                 term.render_into(&mut buf, w, h);
+                // tofu 目击上报：双字体都缺的字符（方框的真身），新字才报
+                let tofu = term.take_tofu_chars();
+                if !tofu.is_empty() {
+                    let list = tofu
+                        .iter()
+                        .map(|c| format!("U+{:04X}({c})", *c as u32))
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    crate::report::report("term", &format!("tofu 目击: {list}"));
+                }
                 static FIRST_TERM_FRAME: std::sync::atomic::AtomicBool =
                     std::sync::atomic::AtomicBool::new(false);
                 if !FIRST_TERM_FRAME.swap(true, std::sync::atomic::Ordering::Relaxed) {

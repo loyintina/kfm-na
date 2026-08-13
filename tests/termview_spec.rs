@@ -409,14 +409,21 @@ fn spec_边距_首格不贴边() {
 // ---------- A 档：CJK 判定与备用字体 ----------
 
 #[test]
-fn spec_cjk_判定边界() {
-    use termview::needs_cjk;
-    assert!(!needs_cjk('A'));
-    assert!(!needs_cjk('z'));
-    assert!(!needs_cjk('—')); // U+2014 破折号：常用但不进 CJK 备用字体
-    assert!(needs_cjk('中'));
-    assert!(needs_cjk('。')); // U+3002 CJK 标点
-    assert!(needs_cjk('ａ')); // U+FF41 全角小写
+fn spec_cjk_按覆盖挑选() {
+    use termview::prefer_cjk;
+    let mono = host_font(); // DejaVuSansMono：无 CJK、无盲文（host 实测 idx=0）
+    let sans = load_host_font(HOST_PROPORTIONAL_FONT); // DejaVuSans：有盲文、无 CJK
+    // 主字体有的（西文/制表符）→ 不换（保等宽 crisp）
+    assert!(!prefer_cjk(&mono, &sans, 'A'));
+    assert!(!prefer_cjk(&mono, &sans, '─'));
+    // 主字体缺、备用有（盲文转动点 ⠋）→ 换备用
+    assert!(
+        prefer_cjk(&mono, &sans, '⠋'),
+        "主字体缺盲文、备用有：必须换备用（TUI 转动点同款场景）"
+    );
+    // 主字体缺、备用也缺（'中'：DejaVu 双雄都没 CJK）→ 不换，主字体 tofu
+    assert!(!prefer_cjk(&mono, &sans, '中'));
+    assert!(!prefer_cjk(&mono, &mono, '中'));
 }
 
 #[test]
@@ -444,4 +451,21 @@ fn spec_渲染_cjk备用字体上屏() {
     let mut buf = vec![0u32; (buf_w * buf_h) as usize];
     tv.render_into(&mut buf, buf_w, buf_h);
     assert!(buf.iter().any(|&p| p != DEFAULT_BG), "CJK 必须有墨");
+}
+
+#[test]
+fn spec_渲染_tofu目击名单() {
+    // 双字体都缺的字符进目击名单（方框的真身 census）；
+    // 有覆盖的不进；取走后清空（防重复上报刷屏）
+    let mut tv = TermView::new(host_font(), Some(host_font()), 8, 2, CELL_W, CELL_H);
+    tv.feed("A\u{E000}\u{280B}".as_bytes()); // A 有字形；PUA 私用区、盲文双缺
+    let buf_w = 2 * termview::MARGIN_X + 8 * CELL_W;
+    let buf_h = 2 * termview::MARGIN_Y + 2 * CELL_H;
+    let mut buf = vec![0u32; (buf_w * buf_h) as usize];
+    tv.render_into(&mut buf, buf_w, buf_h);
+    let tofu = tv.take_tofu_chars();
+    assert!(tofu.contains(&'\u{E000}'), "PUA 私用区字符必须目击");
+    assert!(tofu.contains(&'\u{280B}'), "双缺的盲文必须目击");
+    assert!(!tofu.contains(&'A'), "有字形的字符不许目击");
+    assert!(tv.take_tofu_chars().is_empty(), "取走后必须清空");
 }

@@ -11,7 +11,8 @@
 //! - C 档实拍：手机终端画面（立项.md 尖刺验收 2/3）
 //!
 //! 已知留白（尖刺期不处理）：
-//! - 单字体无 fallback 链：缺字形画 tofu（.notdef 方框），不 panic
+//! - fallback 只有一节（主字体 + 一个 CJK 备用，prefer_cjk 按字形覆盖挑）；
+//!   备用也缺的画 tofu（.notdef 方框），不 panic。多级链等实拍再议
 //! - 每次 render_into 全量重绘，无 damage 增量（alacritty_terminal 自带
 //!   damage 追踪，性能成为问题再接）
 
@@ -31,10 +32,13 @@ pub const CELL_H: u32 = 30;
 pub const MARGIN_X: u32 = 12;
 pub const MARGIN_Y: u32 = 12;
 
-/// CJK 判定（A 档考题钉死）：U+2E80 起进 CJK 备用字体（部首/统一表意/
-/// 兼容/全角全在其后；CJK 标点 U+3000 起也在）。西文/破折号不走备用
-pub fn needs_cjk(c: char) -> bool {
-    c as u32 >= 0x2E80
+/// 按字形覆盖挑备用字体（A 档考题钉死）：主字体缺该字（glyph_index=0）
+/// 且备用字体有才换。字形存在性问 lookup_glyph_index——光栅有没有墨
+/// 靠不住（DejaVu 缺字也画 tofu，有墨但不是对的字，host 实测 '中'
+/// idx=0 ink=150）。盲文圆点（U+2800 盲文块，kimi code 转动点同款）
+/// 就是这条链救的：DejaVuSansMono 没盲文，BBK fallback 顶班
+pub fn prefer_cjk(primary: &fontdue::Font, cjk: &fontdue::Font, c: char) -> bool {
+    primary.lookup_glyph_index(c) == 0 && cjk.lookup_glyph_index(c) != 0
 }
 
 /// 默认前景白 / 背景黑（softbuffer XRGB：高字节不用）
@@ -157,10 +161,11 @@ pub fn diagnose_candidate(path: &str) -> String {
     match fontdue::Font::from_bytes(bytes, fontdue::FontSettings::default()) {
         Err(_) => format!("{path}: fontdue 不认"),
         Ok(f) => format!(
-            "{path}: usable={} mono={} cjk={}",
+            "{path}: usable={} mono={} cjk={} braille={}",
             font_usable(&f, 'M'),
             font_monospaced(&f),
-            font_usable(&f, '中')
+            font_usable(&f, '中'),
+            f.lookup_glyph_index('⠋') != 0 // U+280B 盲文：TUI 转动点覆盖判据
         ),
     }
 }
@@ -281,6 +286,7 @@ impl Dimensions for TermSize {
 }
 
 /// CJK 备用字体的字号几何（主字体的同款三件套，按两格宽适配）
+/// 不止 CJK：主字体缺的都归它（盲文/符号），见 prefer_cjk
 struct CjkStyle {
     font: fontdue::Font,
     px: f32,
@@ -293,9 +299,13 @@ pub struct TermView {
     term: Term<VoidListener>,
     processor: Processor,
     font: fontdue::Font,
-    /// CJK 备用字体（fallback 链第一节）：needs_cjk 的字符归它画；
+    /// CJK 备用字体（fallback 链第一节）：主字体缺的字符归它画（prefer_cjk）；
     /// None = 主字体 tofu 顶班
     cjk: Option<CjkStyle>,
+    /// tofu 目击名单（去重，16 格）：双字体都缺的字符攒着，android_app
+    /// 定期取走上报——「那个方框到底是什么字」不问用户，问机器。
+    /// RefCell：render_into 的 display_iter 借用着 term，draw_glyph 只能 &self
+    tofu_seen: std::cell::RefCell<Vec<char>>,
     cell_w: u32,
     cell_h: u32,
     /// 实际光栅字号：行盒（ascent-descent）比格高时按比例缩小，保证装进格
@@ -337,6 +347,7 @@ impl TermView {
             processor: Processor::new(),
             font,
             cjk,
+            tofu_seen: std::cell::RefCell::new(Vec::new()),
             cell_w,
             cell_h,
             font_px,
@@ -363,6 +374,11 @@ impl TermView {
     pub fn font_probe(&self, c: char) -> (usize, usize, usize) {
         let (m, bmp) = self.font.rasterize(c, self.cell_h as f32);
         (m.width, m.height, bmp.iter().filter(|&&a| a > 0).count())
+    }
+
+    /// 取走 tofu 目击名单（清缓冲）：双字体都缺的字符，android_app 上报用
+    pub fn take_tofu_chars(&self) -> Vec<char> {
+        self.tofu_seen.take()
     }
 
     /// 单元格像素尺寸（android_app 用窗口尺寸反推 cols/rows 时取值）
@@ -426,10 +442,23 @@ impl TermView {
     /// 光栅化单字形并 alpha 混合进帧缓冲。基线对齐（BAR-001）：fontdue
     /// y 轴向上，metrics.ymin 是位图底边相对基线的偏移（下伸字母为负），
     /// 位图顶边（屏坐标）= 格顶 + 基线偏移 - (ymin + 位图高)。
-    /// 字体选择：needs_cjk 且有备用字体 → CJK 三件套（两格宽适配）
+    /// 字体选择：主字体缺该字且备用有 → CJK 三件套（prefer_cjk，两格宽适配）；
+    /// 双字体都缺 → 记 tofu 目击名单（主字体画 .notdef 方框）
     fn draw_glyph(&self, frame: &mut Frame<'_>, c: char, px: u32, py: u32, fg: u32) {
+        if self.font.lookup_glyph_index(c) == 0 {
+            let covered = self
+                .cjk
+                .as_ref()
+                .is_some_and(|k| k.font.lookup_glyph_index(c) != 0);
+            let mut seen = self.tofu_seen.borrow_mut();
+            if !covered && !seen.contains(&c) && seen.len() < 16 {
+                seen.push(c);
+            }
+        }
         let (font, font_px, baseline) = match &self.cjk {
-            Some(cjk) if needs_cjk(c) => (&cjk.font, cjk.px, cjk.baseline_off),
+            Some(cjk) if prefer_cjk(&self.font, &cjk.font, c) => {
+                (&cjk.font, cjk.px, cjk.baseline_off)
+            }
             _ => (&self.font, self.font_px, self.baseline_off),
         };
         let (metrics, bitmap) = font.rasterize(c, font_px);
