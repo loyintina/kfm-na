@@ -12,4 +12,4 @@
 | BAR-003 | termview | 真机落到 Roboto（比例字体）→ 定宽格摆比例字形，间距忽近忽远。契约：'i'/'M' 步进宽不等即弃；路径候选全灭落内嵌 DejaVuSansMono | I | 已修（等宽判定 + 内嵌兜底） | tests/termview_spec.rs `spec_字体_等宽判定` / `spec_字体_加载跳过比例字体` / `spec_字体_内嵌字节可直接用` / `spec_字体_候选全灭落内嵌等宽` |
 | BAR-004 | android_app | 切后台再进页面消失：Android 退后台销毁 native 表面，壳不弃窗不弃 softbuffer 表面，回前台对着死柄画。契约：suspended 弃窗弃表面，resumed 重建；Term/会话还活着就不重开会话 | I | 已修（B 档生命周期胶水，C 档实拍判卷，无输入输出可出考题） | —（tests:na，平台胶水） |
 | BAR-005 | termview | 网格从 (0,0) 画起，边缘字符被屏幕圆角/曲面切半。契约：帧缓冲四周 MARGIN 带内必须是纯背景，墨水全在带内之后 | V | 已修（MARGIN 12px 黑带，不画框） | tests/termview_spec.rs `spec_边距_首格不贴边` |
-| BAR-006 | android_app | 软键盘盖住底部内容不上滚：cargo-apk 0.10/ndk-build 无 windowSoftInputMode 字段，android-activity 0.6 无 insets API。契约：Ime::Enabled 网格让出底部 42% 估计高度，Disabled 收回（C 档实拍调参） | V | 已修（估计式避让，真实高度待 JNI） | —（tests:na，平台胶水；避让几何挂在 apply_window_size 单点） |
+| BAR-006 | android_app/insets | 软键盘盖住底部内容不上滚。初版走 Ime::Enabled 事件 + 42% 估计——实拍判卷：该事件在本机（OriginOS）从未触发（全日志零条），估计式避让是死代码。正道：JNI 直调 WindowInsets.Type.ime() 拿真实高度，500ms 节流轮询驱动 resize | V | 已修（JNI insets.rs，C 档实拍判卷） | —（tests:na，平台胶水） |

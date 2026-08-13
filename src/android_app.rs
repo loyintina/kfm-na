@@ -69,14 +69,40 @@ struct App {
     dirty: bool,
     /// 会话终了（exited/failed）后定格最后一屏，出向不再发
     session_over: bool,
-    /// 软键盘可见（BAR-006）：可见时网格让出底部估计高度，输入行不被盖
-    ime_visible: bool,
+    /// 真实软键盘底部 inset（px，JNI 轮询得来，BAR-006）。0 = 未弹/未知
+    ime_bottom_px: u32,
+    /// 上次 JNI 轮询时刻（500ms 节流）
+    last_inset_poll: Option<std::time::Instant>,
+    /// AndroidApp 句柄（JNI 用；android_main 里 clone 进来）
+    android_app: Option<winit::platform::android::activity::AndroidApp>,
 }
 
 impl App {
-    /// 软键盘高度估计（占窗口高度百分比，C 档实拍调参）：
-    /// 拿不到真实 IME 高度（android-activity 0.6 无 insets API，JNI 是后话）
-    const KB_HEIGHT_PCT: u32 = 42;
+    /// JNI 轮询真实键盘高度（500ms 节流）：winit 的 Ime::Enabled/Disabled 在
+    /// 本机从未触发（全日志零条），事件驱动是死路，轮询才是活路（BAR-006）。
+    /// 值变了才 resize + 上报——resize 会抖动服务器 pty，不能跟着轮询抖
+    fn poll_ime_inset(&mut self) {
+        let now = std::time::Instant::now();
+        if let Some(t) = self.last_inset_poll {
+            if now.duration_since(t) < std::time::Duration::from_millis(500) {
+                return;
+            }
+        }
+        self.last_inset_poll = Some(now);
+        let Some(app) = &self.android_app else { return };
+        // None = 查询失败：维持旧值不抖动
+        let Some(px) = crate::insets::query_ime_bottom(app) else {
+            return;
+        };
+        if px != self.ime_bottom_px {
+            crate::report::report("ime", &format!("键盘 inset 变化: {px}px"));
+            self.ime_bottom_px = px;
+            if let Some(w) = &self.window {
+                let s = w.inner_size();
+                self.apply_window_size(s.width, s.height);
+            }
+        }
+    }
 
     /// 初始化 softbuffer（上下文 + 表面），按窗口尺寸配置
     fn init_gfx(window: &Arc<Window>) -> Gfx {
@@ -111,12 +137,18 @@ impl App {
             Some(p) => crate::report::report("term", &format!("CJK 备用字体: {p}")),
             None => crate::report::report("term", "CJK 备用字体全灭——中文画 tofu"),
         }
-        // 候选体检（一次性）：每个主候选一行判定结论——「为什么偏偏选中它」
-        // 不再靠猜（12:09 实录：DroidSansMono 在目录里却落选，原因未知）
+        // 候选体检（一次性）：每个主/CJK 候选一行判定结论——「为什么偏偏
+        // 选中它」不再靠猜（12:09 实录：DroidSansMono 在目录里却落选，原因未知）
         static DIAGNOSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
         if !DIAGNOSED.swap(true, std::sync::atomic::Ordering::Relaxed) {
             for path in termview::FONT_CANDIDATES {
                 crate::report::report("term", &termview::diagnose_candidate(path));
+            }
+            for path in termview::CJK_FONT_CANDIDATES {
+                crate::report::report(
+                    "term",
+                    &format!("[cjk] {}", termview::diagnose_candidate(path)),
+                );
             }
         }
         // 字体探针：加载成功 ≠ 能出字形，西文/中文各探一针（真机判卷「不见字」）
@@ -161,18 +193,13 @@ impl App {
     }
 
     /// 窗口 px 尺寸 → cols/rows → Term resize + terminal-resize 出向。
-    /// 可用区域 = 窗口 - 四周边距（BAR-005）- 软键盘遮挡估计（BAR-006，
-    /// cargo-apk 0.10 写不了 windowSoftInputMode，只能按窗口比例估）
+    /// 可用区域 = 窗口 - 四周边距（BAR-005）- 真实软键盘 inset（BAR-006，
+    /// JNI 轮询，insets.rs）
     fn apply_window_size(&mut self, w: u32, h: u32) {
         let Some(term) = &mut self.term else { return };
         let (cw, ch) = term.cell_size();
-        let kb = if self.ime_visible {
-            h * Self::KB_HEIGHT_PCT / 100
-        } else {
-            0
-        };
         let usable_w = w.saturating_sub(2 * termview::MARGIN_X);
-        let usable_h = h.saturating_sub(2 * termview::MARGIN_Y + kb);
+        let usable_h = h.saturating_sub(2 * termview::MARGIN_Y + self.ime_bottom_px);
         let (cols, rows) = termview::grid_dims(usable_w, usable_h, cw, ch);
         term.resize_cells(cols, rows);
         if !self.session_over {
@@ -379,23 +406,10 @@ impl ApplicationHandler for App {
             WindowEvent::Ime(ime) => {
                 if TERMINAL_MODE {
                     match ime {
-                        // BAR-006：键盘出没 → 网格让出/收回底部估计高度
-                        Ime::Enabled => {
-                            crate::report::report("ime", "IME Enabled");
-                            self.ime_visible = true;
-                            if let Some(w) = &self.window {
-                                let s = w.inner_size();
-                                self.apply_window_size(s.width, s.height);
-                            }
-                        }
-                        Ime::Disabled => {
-                            crate::report::report("ime", "IME Disabled");
-                            self.ime_visible = false;
-                            if let Some(w) = &self.window {
-                                let s = w.inner_size();
-                                self.apply_window_size(s.width, s.height);
-                            }
-                        }
+                        // Ime::Enabled/Disabled 只留痕——本机从未触发（BAR-006），
+                        // 键盘避让由 JNI 轮询驱动（poll_ime_inset）
+                        Ime::Enabled => crate::report::report("ime", "IME Enabled"),
+                        Ime::Disabled => crate::report::report("ime", "IME Disabled"),
                         // Preedit（拼音候选中）尖刺期不上屏，只留痕一次
                         Ime::Preedit(_, _) => {
                             static PREEDIT_SEEN: std::sync::atomic::AtomicBool =
@@ -442,6 +456,7 @@ impl ApplicationHandler for App {
     fn about_to_wait(&mut self, _el: &ActiveEventLoop) {
         if TERMINAL_MODE {
             self.drain_terminal_events();
+            self.poll_ime_inset();
         }
         if let Some(w) = &self.window {
             w.request_redraw();
@@ -483,12 +498,15 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
     });
     log::info!("KFM-NA android_main 进入");
     let event_loop = EventLoop::builder()
-        .with_android_app(app)
+        .with_android_app(app.clone())
         .build()
         .expect("创建事件循环失败");
     crate::report::report("boot", "event loop 建成");
-    let mut app = App::default();
-    let result = event_loop.run_app(&mut app);
+    let mut app_handler = App {
+        android_app: Some(app),
+        ..Default::default()
+    };
+    let result = event_loop.run_app(&mut app_handler);
     // 同步直报：async 入队后立刻 exit(0) 会吃掉这行（此前历次「静默消失」
     // 的嫌疑——死亡现场被自己的 exit(0) 毁尸灭迹）
     crate::report::report_sync("death", &format!("run_app 返回: {:?}", result));

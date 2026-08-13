@@ -742,6 +742,7 @@ dependencies = [
  "android_logger",
  "fontdue",
  "futures-util",
+ "jni",
  "log",
  "serde",
  "serde_json",

@@ -8,3 +8,5 @@ pub mod termview;
 
 #[cfg(target_os = "android")]
 pub mod android_app;
+#[cfg(target_os = "android")]
+pub mod insets;

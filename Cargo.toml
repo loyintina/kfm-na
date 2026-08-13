@@ -27,6 +27,8 @@ winit = { version = "0.30", default-features = false, features = ["android-nativ
 # 本就是 CPU 场景。softbuffer 与 winit 同门（rwh_06），CPU 位图直推原生窗
 softbuffer = "0.4"
 android_logger = "0.15"
+# JNI 直取真实软键盘高度（insets.rs，BAR-006）——与 android-activity 0.6 同版本线
+jni = "0.22"
 
 [package.metadata.android]
 package = "dev.kfm.na"
