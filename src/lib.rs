@@ -1,7 +1,9 @@
 //! lib.rs — kfm-na 库入口（集成测试与 Android cdylib 共享）
 
+pub mod conn;
 pub mod protocol;
 pub mod report;
+pub mod session;
 
 #[cfg(target_os = "android")]
 pub mod android_app;

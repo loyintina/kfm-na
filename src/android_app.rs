@@ -142,6 +142,9 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
     std::panic::set_hook(Box::new(|info| {
         crate::report::report("panic", &info.to_string());
     }));
+    // ws 冒烟（尖刺切片 3）：连服务器 terminal-pty 跑 echo 闭环，
+    // 判卷 = field-reports.log 的 [ws] 四格。紫屏稳定后改为启动即连
+    crate::conn::spawn_smoke("ws://8.145.46.182/kfmv4/ws", "echo KFM-NA-WS-OK");
     // 心跳：进程存活的客观判决——心跳停 = 进程真死（精确到秒）；
     // 心跳在跳但用户看到「闪退」= Activity 被系统杀、进程活着（病根完全不同）
     std::thread::spawn(|| {

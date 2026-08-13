@@ -126,7 +126,6 @@ fn req_str<'v>(p: &'v Value, ty: &str, key: &str) -> Result<&'v str, ProtocolErr
 /// 解码服务端封套 JSON 串
 pub fn decode_server(raw: &str) -> Result<ServerMsg, ProtocolError> {
     let v: Value = serde_json::from_str(raw).map_err(|e| err(format!("非合法 JSON: {e}")))?;
-    err("缺 type 字段");
     let ty = v
         .get("type")
         .and_then(Value::as_str)
