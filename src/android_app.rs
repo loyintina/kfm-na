@@ -12,6 +12,9 @@ use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::platform::android::EventLoopBuilderExtAndroid;
 use winit::window::{Window, WindowId};
 
+/// 对照实验开关（2026-08-13 下午）：false = wgpu 全摘裸窗组，见 resumed 注释
+const ENABLE_GFX: bool = false;
+
 struct Gfx {
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
@@ -165,24 +168,19 @@ impl ApplicationHandler for App {
             return;
         }
         crate::report::report("boot", "resumed——开始建窗口");
-        // init_gfx 总看门狗：5s 未完成即回传（锁 instance/surface/adapter/device 段挂起）
-        static GFX_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-        std::thread::spawn(|| {
-            std::thread::sleep(std::time::Duration::from_secs(5));
-            if !GFX_DONE.load(std::sync::atomic::Ordering::Relaxed) {
-                crate::report::report(
-                    "hang",
-                    "init_gfx 5 秒未完成——卡在 instance/surface/adapter/device",
-                );
-            }
-        });
         let attrs = Window::default_attributes().with_title("KFM-NA");
         let window = Arc::new(el.create_window(attrs).expect("创建窗口失败"));
-        let gfx = Self::init_gfx(&window);
-        GFX_DONE.store(true, std::sync::atomic::Ordering::Relaxed);
-        self.gfx = Some(gfx);
+        // 对照实验（2026-08-13 下午，ENABLE_GFX=false）：wgpu 全摘。
+        // 六次实拍死亡点横跨 event loop 构建/adapter/surface/configure、
+        // Vulkan 与 GLES 两后端都死——根本不是图形问题。裸 winit 窗 + 心跳
+        // 判决：心跳停 = 进程真死（精确到秒）；心跳在跳但用户看到「闪退」
+        // = Activity 被系统杀、进程活着，病根在 ROM/manifest 层。
+        if ENABLE_GFX {
+            let gfx = Self::init_gfx(&window);
+            self.gfx = Some(gfx);
+        }
         self.window = Some(window);
-        crate::report::report("boot", "启动完成——紫屏应已亮");
+        crate::report::report("boot", "启动完成（裸窗对照组）");
         log::info!("KFM-NA 壳启动完成");
     }
 
@@ -227,6 +225,16 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
     std::panic::set_hook(Box::new(|info| {
         crate::report::report("panic", &info.to_string());
     }));
+    // 心跳：进程存活的客观判决——心跳停 = 进程真死（精确到秒）；
+    // 心跳在跳但用户看到「闪退」= Activity 被系统杀、进程活着（病根完全不同）
+    std::thread::spawn(|| {
+        let mut n = 0u32;
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            n += 1;
+            crate::report::report("alive", &format!("心跳 {}", n));
+        }
+    });
     log::info!("KFM-NA android_main 进入");
     let event_loop = EventLoop::builder()
         .with_android_app(app)
