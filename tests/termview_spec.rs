@@ -232,3 +232,34 @@ fn spec_字体_host候选命中() {
         .expect("DejaVuSansMono 必须加载成功");
     assert_eq!(path, HOST_FONT);
 }
+
+/// CFF 轮廓字体（NimbusMonoPS）：fontdue 0.9 能载能画西文，但中文字形
+/// 光栅全空（w=0 h=0 ink=0，2026-08-13 host 实测）——空光栅判定的活教材
+const HOST_CFF_FONT: &str = "/usr/share/fonts/opentype/urw-base35/NimbusMonoPS-Regular.otf";
+
+fn load_host_font(path: &str) -> fontdue::Font {
+    let bytes = std::fs::read(path).expect("host 测试字体缺失");
+    fontdue::Font::from_bytes(bytes, fontdue::FontSettings::default()).expect("fontdue 不认该字体")
+}
+
+#[test]
+fn spec_字体_空光栅判不合格() {
+    let font = load_host_font(HOST_CFF_FONT);
+    assert!(
+        !termview::font_usable(&font, '中'),
+        "空光栅（CFF 字体缺中文字形）必须判不合格"
+    );
+    assert!(
+        termview::font_usable(&font, 'M'),
+        "同字体的正常西文字形必须判合格"
+    );
+}
+
+#[test]
+fn spec_字体_真字形判合格() {
+    let font = load_host_font(HOST_FONT);
+    assert!(termview::font_usable(&font, 'M'));
+    // DejaVu 无中文字形但 .notdef 豆腐块有墨（host 实测 ink=150）——
+    // 「有墨」与「是对的字」是两回事，判定只管前者
+    assert!(termview::font_usable(&font, '中'));
+}

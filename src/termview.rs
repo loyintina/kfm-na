@@ -58,15 +58,26 @@ pub const FONT_CANDIDATES: &[&str] = &[
     "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
 ];
 
-/// 按候选顺序加载第一个可读且 fontdue 认得的字体，返回 (来源路径, 字体)。
-/// 全灭返回 None（调用方决定降级/报错，本函数不 panic）。
+/// 字体可用性判定（A 档考题钉死）：光栅化探针字符，空字形（尺寸 0 或
+/// 位图零覆盖）判不合格。背景：2026-08-13 真机实拍「只见光标不见字」——
+/// NotoSansCJK-Regular.ttc from_bytes 成功却疑似光栅全空：能载 ≠ 能画
+pub fn font_usable(font: &fontdue::Font, probe: char) -> bool {
+    let (m, bmp) = font.rasterize(probe, CELL_H as f32);
+    m.width > 0 && m.height > 0 && bmp.iter().any(|&a| a > 0)
+}
+
+/// 按候选顺序加载第一个可读、fontdue 认得、且真能画出字的字体，
+/// 返回 (来源路径, 字体)。全灭返回 None（调用方决定降级/报错，本函数不 panic）。
 pub fn load_font(candidates: &[&str]) -> Option<(String, fontdue::Font)> {
     for path in candidates {
         let Ok(bytes) = std::fs::read(path) else {
             continue;
         };
         if let Ok(font) = fontdue::Font::from_bytes(bytes, fontdue::FontSettings::default()) {
-            return Some((path.to_string(), font));
+            // 能载不能画的（如真机 NotoSansCJK.ttc 嫌疑）跳过，给后面的候选机会
+            if font_usable(&font, 'M') {
+                return Some((path.to_string(), font));
+            }
         }
     }
     None
@@ -191,6 +202,14 @@ impl TermView {
             cols: (cols.max(1)) as usize,
             rows: (rows.max(1)) as usize,
         });
+    }
+
+    /// 字体探针（诊断用）：光栅化单字符，返回 (宽, 高, 非零覆盖像素数)。
+    /// 真机「只见光标不见字」判卷：字体加载成功 ≠ 能出字形（2026-08-13 实拍，
+    /// NotoSansCJK.ttc 载上了但疑似光栅全空）——数字传回，存在性说话
+    pub fn font_probe(&self, c: char) -> (usize, usize, usize) {
+        let (m, bmp) = self.font.rasterize(c, self.cell_h as f32);
+        (m.width, m.height, bmp.iter().filter(|&&a| a > 0).count())
     }
 
     /// 单元格像素尺寸（android_app 用窗口尺寸反推 cols/rows 时取值）

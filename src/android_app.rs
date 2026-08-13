@@ -37,6 +37,9 @@ use crate::termview::{self, TermView};
 /// KFM 紫（softbuffer 像素格式 XRGB）
 const KFM_PURPLE: u32 = 0x008B_5CF6;
 
+/// 帧缓冲探针状态：0=等首个 output，1=探针已上膛（下一帧数非背景像素），2=已报
+static FRAME_PROBE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
 /// 终端模式开关：true = 启动即进终端画面；false = 紫屏 + echo 冒烟对照组
 const TERMINAL_MODE: bool = true;
 
@@ -92,6 +95,11 @@ impl App {
             return;
         };
         crate::report::report("term", &format!("字体加载自 {font_path}"));
+        // 字体探针：加载成功 ≠ 能出字形，西文/中文各探一针（真机判卷「不见字」）
+        for c in ['M', '中'] {
+            let (w, h, ink) = tv.font_probe(c);
+            crate::report::report("term", &format!("字体探针 '{c}': {w}x{h} ink={ink}"));
+        }
         crate::report::report("term", "TermView 建成");
         self.term = Some(tv);
 
@@ -150,6 +158,8 @@ impl App {
                     if let Some(term) = &mut self.term {
                         term.feed(data.as_bytes());
                         self.dirty = true;
+                        // 上膛帧缓冲探针：下一帧数非背景像素（见 draw_frame）
+                        FRAME_PROBE.store(1, std::sync::atomic::Ordering::Relaxed);
                     }
                 }
                 SessionEvent::Exited { code } => {
@@ -195,6 +205,24 @@ impl App {
                     std::sync::atomic::AtomicBool::new(false);
                 if !FIRST_TERM_FRAME.swap(true, std::sync::atomic::Ordering::Relaxed) {
                     crate::report::report("term", "首终端帧渲染完成");
+                }
+                // 帧缓冲探针：首个 output 后的那一帧，数非背景像素传回——
+                // 光标块独占 ≈288px，提示符字形真画上则数千。真机判卷「不见字」
+                // 的最后一环：字形到底进没进帧缓冲（2026-08-13）
+                if FRAME_PROBE
+                    .compare_exchange(
+                        1,
+                        2,
+                        std::sync::atomic::Ordering::Relaxed,
+                        std::sync::atomic::Ordering::Relaxed,
+                    )
+                    .is_ok()
+                {
+                    let non_bg = buf.iter().filter(|&&p| p != termview::DEFAULT_BG).count();
+                    crate::report::report_sync(
+                        "term",
+                        &format!("output 后首帧非背景像素: {non_bg}"),
+                    );
                 }
             } else {
                 buf.fill(KFM_PURPLE); // 字体全灭的降级画面：紫屏 + 已有上报
