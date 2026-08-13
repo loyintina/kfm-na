@@ -22,8 +22,9 @@ use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Processor};
 
 /// 单元格像素尺寸（尖刺期常量，字体大小可配化是后话）
-pub const CELL_W: u32 = 12;
-pub const CELL_H: u32 = 24;
+/// 2026-08-13 实拍「字太小」：12x24 → 15x30（1080 屏 72 列，等宽字体可读性下限）
+pub const CELL_W: u32 = 15;
+pub const CELL_H: u32 = 30;
 
 /// 默认前景白 / 背景黑（softbuffer XRGB：高字节不用）
 pub const DEFAULT_FG: u32 = 0x00FF_FFFF;
@@ -49,10 +50,15 @@ pub const ANSI_16: [u32; 16] = [
     0x00FF_FFFF, // 亮白
 ];
 
-/// 字体加载候选（按序取第一个读得到的）：设备 CJK 优先，host 测试用 DejaVu
+/// 字体加载候选（按序取第一个及格的）：设备 CJK 优先，host 测试用 DejaVu
+/// （12:09 真机普查补充：DroidSansFallbackBBK = vivo 的 fallback 字体，
+/// DroidSansMono = 设备自带等宽——usable/monospaced 双判定会把关，
+/// 不及格的自动跳过，最后落内嵌 DejaVuSansMono）
 pub const FONT_CANDIDATES: &[&str] = &[
     "/system/fonts/NotoSansCJK-Regular.ttc",
     "/system/fonts/DroidSansFallbackFull.ttf",
+    "/system/fonts/DroidSansFallbackBBK.ttf",
+    "/system/fonts/DroidSansMono.ttf",
     "/system/fonts/Roboto-Regular.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
 ];
@@ -161,6 +167,30 @@ pub fn color_to_xrgb(c: Color) -> u32 {
     }
 }
 
+/// 字号几何（A 档考题钉死）：给出 (光栅字号, 格内基线偏移)。
+/// 约束一（BAR-001 基线对齐）：行盒(ascent-descent)装进格内并居中，
+///   行盒比格高则按比例缩字号；
+/// 约束二（宽度帽）：'M' 步进宽不得超过格宽，超了再缩——否则相邻格
+///   字形互相渗透（放大字号后 DejaVuSansMono 自然超宽）
+pub fn fit_font_px(font: &fontdue::Font, cell_w: u32, cell_h: u32) -> (f32, f32) {
+    let px0 = cell_h as f32;
+    match font.horizontal_line_metrics(px0) {
+        Some(lm) if lm.ascent > 0.0 => {
+            let line = lm.ascent - lm.descent; // descent 为负，相减即行盒高
+            let mut px = if line > px0 { px0 * px0 / line } else { px0 };
+            let (mm, _) = font.rasterize('M', px);
+            if mm.advance_width > cell_w as f32 {
+                px *= cell_w as f32 / mm.advance_width;
+            }
+            let lm2 = font.horizontal_line_metrics(px).unwrap_or(lm);
+            let pad = (px0 - (lm2.ascent - lm2.descent)).max(0.0) / 2.0;
+            (px, pad + lm2.ascent)
+        }
+        // 无水平度量（极端字体）兜底：原字号 + 经验基线 80% 处
+        _ => (px0, px0 * 0.8),
+    }
+}
+
 /// Term 尺寸适配器（alacritty_terminal::grid::Dimensions 的本地实现）
 #[derive(Clone, Copy)]
 struct TermSize {
@@ -203,27 +233,14 @@ impl TermView {
             rows: (rows.max(1)) as usize,
         };
         let cell_h = cell_h.max(1);
-        // 基线几何（BAR-001）：竖直居中会让高矮字母各自为政（里倒歪斜）。
-        // 行盒装进格内并居中，基线偏移 = 上边距 + ascent；行盒比格高则缩字号
-        let (font_px, baseline_off) = {
-            let px0 = cell_h as f32;
-            match font.horizontal_line_metrics(px0) {
-                Some(lm) if lm.ascent > 0.0 => {
-                    let line = lm.ascent - lm.descent; // descent 为负，相减即行盒高
-                    let px = if line > px0 { px0 * px0 / line } else { px0 };
-                    let lm2 = font.horizontal_line_metrics(px).unwrap_or(lm);
-                    let pad = (px0 - (lm2.ascent - lm2.descent)).max(0.0) / 2.0;
-                    (px, pad + lm2.ascent)
-                }
-                // 无水平度量（极端字体）兜底：原字号 + 经验基线 80% 处
-                _ => (px0, px0 * 0.8),
-            }
-        };
+        let cell_w = cell_w.max(1);
+        // 基线几何（BAR-001）+ 宽度帽：见 fit_font_px 文档
+        let (font_px, baseline_off) = fit_font_px(&font, cell_w, cell_h);
         Self {
             term: Term::new(Config::default(), &size, VoidListener),
             processor: Processor::new(),
             font,
-            cell_w: cell_w.max(1),
+            cell_w,
             cell_h,
             font_px,
             baseline_off,

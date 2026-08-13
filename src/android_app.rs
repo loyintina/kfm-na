@@ -91,6 +91,9 @@ impl App {
 
     /// 终端模式初始化：建 TermView + spawn 常驻会话 + 首发 resize
     fn init_terminal(&mut self, window: &Arc<Window>) {
+        // BAR-004 后台往返重开会话的路径：旧会话的死亡标记必须清掉，
+        // 否则键盘/IME 输入被 session_over 挡死，新会话成了哑巴
+        self.session_over = false;
         let Some((tv, font_path)) = termview::build_from_candidates(termview::FONT_CANDIDATES)
         else {
             crate::report::report_sync("term", "字体候选全灭——TermView 建不成");
@@ -294,7 +297,13 @@ impl ApplicationHandler for App {
         self.gfx = Some(gfx);
         self.window = Some(window.clone());
         if TERMINAL_MODE {
-            self.init_terminal(&window);
+            // BAR-004 后台往返：Term/会话还活着就只重建窗口表面，别重开会话
+            // （scrollback 和 shell 状态保住）；会话死了才重开
+            if self.term.is_none() || self.session_over {
+                self.init_terminal(&window);
+            } else {
+                crate::report::report("boot", "后台往返：会话还在，只重建表面");
+            }
             // 字体全灭走紫屏降级也要有首帧：dirty 兜底置位
             self.dirty = true;
         }
@@ -376,6 +385,11 @@ impl ApplicationHandler for App {
 
     fn suspended(&mut self, _el: &ActiveEventLoop) {
         crate::report::report("death", "suspended——Activity 被挂起（退后台/被销毁前奏）");
+        // BAR-004：Android 退后台即销毁 native 表面，softbuffer 握着的
+        // ANativeWindow 变成死柄——不弃窗则回前台对着死表面画，页面消失
+        // （12:10 实拍）。弃窗弃表面，resumed 走重建；Term/会话保留
+        self.gfx = None;
+        self.window = None;
     }
 
     fn exiting(&mut self, _el: &ActiveEventLoop) {

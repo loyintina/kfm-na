@@ -30,8 +30,8 @@ fn spec_布局_整除与非整除() {
     assert_eq!(grid_dims(100, 48, 10, 24), (10, 2));
     // 非整除向下取整：105x50 → 10x2（余下的半格不算）
     assert_eq!(grid_dims(105, 50, 10, 24), (10, 2));
-    // 尖刺常量：1080x2400 屏 12x24 格 → 90x100
-    assert_eq!(grid_dims(1080, 2400, CELL_W, CELL_H), (90, 100));
+    // 尖刺常量（2026-08-13 放大一轮：12x24 → 15x30）：1080x2400 屏 15x30 格 → 72x80
+    assert_eq!(grid_dims(1080, 2400, CELL_W, CELL_H), (72, 80));
 }
 
 #[test]
@@ -54,7 +54,27 @@ fn spec_布局_格坐标到像素原点() {
     assert_eq!(cell_origin(1, 0, 10, 24), (10, 0));
     assert_eq!(cell_origin(0, 1, 10, 24), (0, 24));
     assert_eq!(cell_origin(3, 2, 10, 24), (30, 48));
-    assert_eq!(cell_origin(89, 99, CELL_W, CELL_H), (1068, 2376));
+    // 尖刺常量 15x30：右下角 (71,79) → (1065, 2370)
+    assert_eq!(cell_origin(71, 79, CELL_W, CELL_H), (1065, 2370));
+}
+
+#[test]
+fn spec_字号_步进宽不超格宽() {
+    // 宽度帽契约：fit_font_px 给出的字号，'M' 步进宽不得超过格宽
+    // （否则相邻格字形互相渗透——放大字号后 DejaVuSansMono 自然超宽）
+    let font = load_host_font(HOST_FONT);
+    let (px, baseline) = termview::fit_font_px(&font, CELL_W, CELL_H);
+    let (m, _) = font.rasterize('M', px);
+    assert!(
+        m.advance_width <= CELL_W as f32 + 0.01,
+        "步进宽 {} 必须 ≤ 格宽 {CELL_W}",
+        m.advance_width
+    );
+    assert!(px > 0.0 && px <= CELL_H as f32, "字号必须为正且不超格高");
+    assert!(
+        baseline > 0.0 && baseline <= CELL_H as f32,
+        "基线偏移必须在格内"
+    );
 }
 
 // ---------- A 档：颜色映射 ----------
