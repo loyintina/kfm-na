@@ -25,6 +25,34 @@ public class KfmImeView extends View {
         setFocusableInTouchMode(true);
     }
 
+    // JNI 探针统一入口：探针是诊断工具，绝不杀死 Activity——JNI 符号缺失
+    // （dex/so 版本错配，BAR-011）等一切 Throwable 都吞掉降级
+    static void imeLog(String msg) {
+        try {
+            nativeImeLog(msg);
+        } catch (Throwable t) {
+            // 吞：丢一行探针好过崩一次
+        }
+    }
+
+    // 落字/软键同样走防护入口（KfmInputConnection 专用）：BAR-011 契约——
+    // Java 侧任何 JNI 调用都不许裸奔，符号缺失 = 输入哑火，不许 = 闪退
+    static void commitText(String text) {
+        try {
+            nativeCommitText(text);
+        } catch (Throwable t) {
+            // 吞
+        }
+    }
+
+    static void sendKey(int keyCode) {
+        try {
+            nativeSendKey(keyCode);
+        } catch (Throwable t) {
+            // 吞
+        }
+    }
+
     @Override
     public boolean onCheckIsTextEditor() {
         return true; // BAR-009：声明「我是文本编辑器」，IMM 才肯弹键盘
@@ -37,14 +65,14 @@ public class KfmImeView extends View {
         // ACTION_NONE：回车不当「完成」键，走按键事件进终端
         outAttrs.inputType = EditorInfo.TYPE_CLASS_TEXT;
         outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI | EditorInfo.IME_ACTION_NONE;
-        nativeImeLog("IMM 询问 InputConnection——已给出");
+        imeLog("IMM 询问 InputConnection——已给出");
         return new KfmInputConnection(this);
     }
 
     @Override
     protected void onFocusChanged(boolean gainFocus, int direction, android.graphics.Rect previouslyFocusedRect) {
         super.onFocusChanged(gainFocus, direction, previouslyFocusedRect);
-        nativeImeLog("IME 占位焦点变化: " + (gainFocus ? "拿到" : "丢了"));
+        imeLog("IME 占位焦点变化: " + (gainFocus ? "拿到" : "丢了"));
     }
 
     // JNI 对侧：src/ime_bridge.rs（落字/软键 → ime_queue → 事件循环排干）

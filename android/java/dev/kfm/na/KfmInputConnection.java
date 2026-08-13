@@ -21,7 +21,7 @@ final class KfmInputConnection extends BaseInputConnection {
     @Override
     public boolean commitText(CharSequence text, int newCursorPosition) {
         if (text != null && text.length() > 0) {
-            KfmImeView.nativeCommitText(text.toString());
+            KfmImeView.commitText(text.toString());
         }
         return true;
     }
@@ -31,7 +31,7 @@ final class KfmInputConnection extends BaseInputConnection {
         // 软退格：翻成 KEYCODE_DEL 送原生侧映射（ime_queue::key_code_to_bytes）
         int n = Math.min(beforeLength, 64);
         for (int i = 0; i < n; i++) {
-            KfmImeView.nativeSendKey(KeyEvent.KEYCODE_DEL);
+            KfmImeView.sendKey(KeyEvent.KEYCODE_DEL);
         }
         return true;
     }
@@ -41,12 +41,12 @@ final class KfmInputConnection extends BaseInputConnection {
         if (event.getAction() == KeyEvent.ACTION_DOWN) {
             int code = event.getKeyCode();
             if (code == KeyEvent.KEYCODE_DEL || code == KeyEvent.KEYCODE_ENTER) {
-                KfmImeView.nativeSendKey(code);
+                KfmImeView.sendKey(code);
             } else {
                 // 可打印键（字母/数字/符号）翻字符走落字通道
                 int ch = event.getUnicodeChar();
                 if (ch != 0) {
-                    KfmImeView.nativeCommitText(new String(Character.toChars(ch)));
+                    KfmImeView.commitText(new String(Character.toChars(ch)));
                 }
             }
         }

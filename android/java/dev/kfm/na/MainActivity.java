@@ -25,6 +25,6 @@ public class MainActivity extends NativeActivity {
         ime.setLayoutParams(new FrameLayout.LayoutParams(1, 1));
         root.addView(ime);
         ime.requestFocus();
-        KfmImeView.nativeImeLog("IME 占位已叠加, focus=" + ime.isFocused());
+        KfmImeView.imeLog("IME 占位已叠加, focus=" + ime.isFocused());
     }
 }
