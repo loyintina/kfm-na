@@ -54,6 +54,10 @@ impl App {
         crate::report::report("boot", "wgpu device 到手");
         let size = window.inner_size();
         let caps = surface.get_capabilities(&adapter);
+        crate::report::report(
+            "boot",
+            &format!("caps 到手: formats={}", caps.formats.len()),
+        );
         let format = caps
             .formats
             .iter()
@@ -120,6 +124,12 @@ impl App {
         }
         g.queue.submit([enc.finish()]);
         frame.present();
+        // 首帧呈现里程碑：紫屏真亮了才算雷 1 排除
+        static FIRST_PRESENT: std::sync::atomic::AtomicBool =
+            std::sync::atomic::AtomicBool::new(false);
+        if !FIRST_PRESENT.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            crate::report::report("boot", "首帧 present 完成——紫屏应已亮");
+        }
     }
 }
 

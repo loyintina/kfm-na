@@ -30,6 +30,14 @@ target_sdk_version = 35
 [package.metadata.android.application]
 label = "KFM-NA"
 
+# 国产 ROM 实锤坑（android-activity#196，MIUI 死锁）：cargo-apk 默认
+# config_changes 只有 orientation|keyboardHidden|screenSize，OriginOS 启动时
+# 注入 density/fontScale/uiMode 变化会触发 Activity relaunch——surface 在用
+# 着的时候被销毁，原生层崩、无 Rust panic（2026-08-13 实拍「黑屏再退」即此）。
+# 补全到 android-activity 官方示例 na-mainloop 同款全集。
+[package.metadata.android.application.activity]
+config_changes = "orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density|fontScale"
+
 # 飞鸽传书回传通道需要联网（report.rs）
 [[package.metadata.android.uses_permission]]
 name = "android.permission.INTERNET"
