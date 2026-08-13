@@ -88,6 +88,8 @@ pub async fn echo_roundtrip(
 }
 
 /// 冒烟入口（Android 起线程调）：echo 闭环 + 每事件飞鸽传书
+/// 各阶段用 report_sync 独立直发（绕开队列——队首阻塞时冒烟不受影响）；
+/// 全程 30s 超时兜底，失败有声
 pub fn spawn_smoke(url: &'static str, command: &'static str) {
     std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -95,9 +97,15 @@ pub fn spawn_smoke(url: &'static str, command: &'static str) {
             .build()
             .expect("建 tokio runtime 失败");
         rt.block_on(async move {
-            let mut report = |stage: &str| crate::report::report("ws", stage);
-            match echo_roundtrip(url, command, &mut report).await {
-                Ok(run) => crate::report::report(
+            crate::report::report_sync("ws", "冒烟线程启动");
+            let mut report = |stage: &str| crate::report::report_sync("ws", stage);
+            let run = tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                echo_roundtrip(url, command, &mut report),
+            )
+            .await;
+            match run {
+                Ok(Ok(run)) => crate::report::report_sync(
                     "ws",
                     &format!(
                         "闭环成功: session={} exit={} 输出预览={:.80}",
@@ -106,7 +114,8 @@ pub fn spawn_smoke(url: &'static str, command: &'static str) {
                         run.outputs.concat()
                     ),
                 ),
-                Err(e) => crate::report::report("ws", &format!("闭环失败: {e}")),
+                Ok(Err(e)) => crate::report::report_sync("ws", &format!("闭环失败: {e}")),
+                Err(_) => crate::report::report_sync("ws", "闭环超时（30s）"),
             }
         });
     });

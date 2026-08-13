@@ -147,12 +147,13 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
     crate::conn::spawn_smoke("ws://8.145.46.182/kfmv4/ws", "echo KFM-NA-WS-OK");
     // 心跳：进程存活的客观判决——心跳停 = 进程真死（精确到秒）；
     // 心跳在跳但用户看到「闪退」= Activity 被系统杀、进程活着（病根完全不同）
+    // 3s 间隔 + 独立同步直报：不给冲洗队列灌洪水，也不受队首阻塞牵连
     std::thread::spawn(|| {
         let mut n = 0u32;
         loop {
-            std::thread::sleep(std::time::Duration::from_secs(1));
+            std::thread::sleep(std::time::Duration::from_secs(3));
             n += 1;
-            crate::report::report("alive", &format!("心跳 {}", n));
+            crate::report::report_sync("alive", &format!("心跳 {}", n));
         }
     });
     log::info!("KFM-NA android_main 进入");

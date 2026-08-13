@@ -45,11 +45,18 @@ pub fn start_flusher() {
             while let Ok(line) = rx.try_recv() {
                 backlog.push_back(line);
             }
-            if let Some(front) = backlog.front()
-                && try_post(front).is_ok()
-            {
+            // 积压上限：爆了就丢最旧的（丢旧保新，好过全线憋死）
+            while backlog.len() > 200 {
                 backlog.pop_front();
-                continue; // 队里还有就立刻续冲
+            }
+            if let Some(front) = backlog.front() {
+                if try_post(front).is_ok() {
+                    backlog.pop_front();
+                    continue; // 队里还有就立刻续冲
+                }
+                // 失败轮转：队首移到队尾——绝不让一条「毒行」堵死全队
+                // （2026-08-13 实拍：首帧后全员静默，疑队首持续失败憋死心跳/ws）
+                backlog.rotate_left(1);
             }
             // 队空或发送失败：阻塞等下一条，1s 超时回头重试 backlog
             if let Ok(line) = rx.recv_timeout(Duration::from_secs(1)) {
