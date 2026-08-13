@@ -13,7 +13,9 @@ use winit::platform::android::EventLoopBuilderExtAndroid;
 use winit::window::{Window, WindowId};
 
 /// 对照实验开关（2026-08-13 下午）：false = wgpu 全摘裸窗组，见 resumed 注释
-const ENABLE_GFX: bool = false;
+/// 16:08 实拍判词：裸窗组 15s+ 稳定（死因全是用户手动杀）——图形栈加回来
+/// 重审（GLES 后端），死亡仪器（suspended/exiting/run_app 同步直报）已全开
+const ENABLE_GFX: bool = true;
 
 struct Gfx {
     surface: wgpu::Surface<'static>,
@@ -180,7 +182,7 @@ impl ApplicationHandler for App {
             self.gfx = Some(gfx);
         }
         self.window = Some(window);
-        crate::report::report("boot", "启动完成（裸窗对照组）");
+        crate::report::report("boot", "启动完成");
         log::info!("KFM-NA 壳启动完成");
     }
 
