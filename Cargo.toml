@@ -30,6 +30,10 @@ target_sdk_version = 35
 [package.metadata.android.application]
 label = "KFM-NA"
 
+# 飞鸽传书回传通道需要联网（report.rs）
+[[package.metadata.android.uses_permission]]
+name = "android.permission.INTERNET"
+
 # APK 包体基线（尖刺验收 1：<10MB）——debug 包 119MB 无意义，release 必须收紧
 [profile.release]
 lto = true

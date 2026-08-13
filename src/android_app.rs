@@ -39,6 +39,7 @@ impl App {
         }))
         .expect("无可用 Vulkan/GLES 适配器（雷 1 爆点）");
         log::info!("wgpu 适配器: {:?}", adapter.get_info());
+        crate::report::report("boot", &format!("wgpu 适配器: {:?}", adapter.get_info()));
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("kfm-na"),
             required_features: wgpu::Features::empty(),
@@ -122,11 +123,13 @@ impl ApplicationHandler for App {
         if self.window.is_some() {
             return;
         }
+        crate::report::report("boot", "resumed——开始建窗口");
         let attrs = Window::default_attributes().with_title("KFM-NA");
         let window = Arc::new(el.create_window(attrs).expect("创建窗口失败"));
         let gfx = Self::init_gfx(&window);
         self.gfx = Some(gfx);
         self.window = Some(window);
+        crate::report::report("boot", "启动完成——紫屏应已亮");
         log::info!("KFM-NA 壳启动完成");
     }
 
@@ -162,6 +165,11 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
     android_logger::init_once(
         android_logger::Config::default().with_max_level(log::LevelFilter::Info),
     );
+    // 飞鸽传书：panic 直报服务器（手机无 adb 通路，见 report.rs 头注）
+    std::panic::set_hook(Box::new(|info| {
+        crate::report::report("panic", &info.to_string());
+    }));
+    crate::report::report("boot", "android_main 进入");
     log::info!("KFM-NA android_main 进入");
     let event_loop = EventLoop::builder()
         .with_android_app(app)
