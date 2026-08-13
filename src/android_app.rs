@@ -74,7 +74,18 @@ impl App {
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };
+        // configure 死锁看门狗（2026-08-13 实拍：caps 到手后 26s 静默，进程活着
+        // ——疑 configure/present 挂起而非崩溃）。3s 未置旗即回传死锁警报。
+        static CONFIG_DONE: std::sync::atomic::AtomicBool =
+            std::sync::atomic::AtomicBool::new(false);
+        std::thread::spawn(|| {
+            std::thread::sleep(std::time::Duration::from_secs(3));
+            if !CONFIG_DONE.load(std::sync::atomic::Ordering::Relaxed) {
+                crate::report::report("hang", "configure 3 秒未返回——疑 Mali 驱动死锁");
+            }
+        });
         surface.configure(&device, &config);
+        CONFIG_DONE.store(true, std::sync::atomic::Ordering::Relaxed);
         crate::report::report("boot", "surface 配置完——开始渲染");
         Gfx {
             surface,
@@ -199,6 +210,10 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
         .expect("创建事件循环失败");
     crate::report::report("boot", "event loop 建成");
     let mut app = App::default();
-    event_loop.run_app(&mut app).expect("事件循环崩溃");
-    crate::report::report("boot", "run_app 返回（正常不该到这）");
+    let result = event_loop.run_app(&mut app);
+    crate::report::report("boot", &format!("run_app 返回: {:?}", result));
+    // 事件循环一生只能建一次（winit RecreationAttempt）。NativeActivity 销毁后
+    // 进程常被 ROM 保留，不自杀则下次点开 android_main 重跑必 panic
+    // （2026-08-13 实拍「白退」次生病灶）。活动结束 = 进程跟着死，重来即全新。
+    std::process::exit(0);
 }

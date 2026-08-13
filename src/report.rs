@@ -40,6 +40,8 @@ pub fn report(stage: &str, msg: &str) {
 }
 
 fn try_post(body: &str) -> std::io::Result<()> {
+    use std::io::Read;
+    use std::net::Shutdown;
     let mut s = TcpStream::connect((HOST, PORT))?;
     s.set_read_timeout(Some(Duration::from_secs(3)))?;
     s.set_write_timeout(Some(Duration::from_secs(3)))?;
@@ -48,6 +50,11 @@ fn try_post(body: &str) -> std::io::Result<()> {
         body.len()
     );
     s.write_all(req.as_bytes())?;
+    // 写完必须读到应答再关：发完即关会让 nginx 视客户端中止而断掉
+    // 上游转发（2026-08-13 实拍里程碑零星丢失的病根）
+    s.shutdown(Shutdown::Write)?;
+    let mut sink = Vec::new();
+    let _ = s.read_to_end(&mut sink); // 3s 超时也算送达——服务器已开始处理
     Ok(())
 }
 
