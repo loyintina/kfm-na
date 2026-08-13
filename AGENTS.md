@@ -27,10 +27,11 @@ bash scripts/package-apk.sh   # 产物：target/release/apk/kfm-na.apk
 
 ## 仓库布局（cargo 视野外的部分）
 
-- `android/java/dev/kfm/na/` — Java 皮：MainActivity + KfmSurfaceView +
+- `android/java/dev/kfm/na/` — Java 皮：MainActivity + KfmImeView +
   KfmInputConnection。NativeActivity 没有 InputConnection（中文死结根源），
-  这层皮把 IME commitText 经 JNI 推进 `src/ime_queue.rs`。改它必跑 chain
-  第 4 步（javac 编译检查）+ package-apk.sh 实拍。
+  这层皮把 IME commitText 经 JNI 推进 `src/ime_queue.rs`。**BAR-008 红线：
+  不许替换内容 View**——原生渲染路径一行不动，IME 用 1px 焦点占位 View
+  叠加。改它必跑 chain 第 4 步（javac 编译检查）+ package-apk.sh 实拍。
 - `android/AndroidManifest.xml` — 手工 manifest（package-apk.sh 直打）。
   包名 `dev.kfm.na`、主题、configChanges 与 cargo-apk 时代对齐。
 
