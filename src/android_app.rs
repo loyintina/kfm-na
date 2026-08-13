@@ -30,9 +30,11 @@ impl App {
     /// 初始化 wgpu（实例/表面/适配器/设备），配置表面为当前窗口尺寸
     fn init_gfx(window: &Arc<Window>) -> Gfx {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+        crate::report::report("boot", "wgpu instance 建成");
         let surface = instance
             .create_surface(window.clone())
             .expect("创建 wgpu surface 失败");
+        crate::report::report("boot", "wgpu surface 建成");
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::LowPower,
             compatible_surface: Some(&surface),
@@ -49,6 +51,7 @@ impl App {
             trace: wgpu::Trace::Off,
         }))
         .expect("请求 wgpu 设备失败");
+        crate::report::report("boot", "wgpu device 到手");
         let size = window.inner_size();
         let caps = surface.get_capabilities(&adapter);
         let format = caps
@@ -68,6 +71,7 @@ impl App {
             desired_maximum_frame_latency: 2,
         };
         surface.configure(&device, &config);
+        crate::report::report("boot", "surface 配置完——开始渲染");
         Gfx {
             surface,
             device,

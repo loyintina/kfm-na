@@ -8,6 +8,7 @@
 
 use std::io::Write;
 use std::net::TcpStream;
+use std::sync::Mutex;
 use std::time::Duration;
 
 /// 服务器地址（nginx 80 反代 → kfmv4 8021，/kfmv4 代字前缀）
@@ -15,17 +16,30 @@ const HOST: &str = "8.145.46.182";
 const PORT: u16 = 80;
 const PATH: &str = "/kfmv4/api/na-report";
 
-/// best-effort 上报一行（stage = 阶段名，msg = 详情）
-pub fn report(stage: &str, msg: &str) {
-    let _ = try_report(stage, msg);
-}
+/// 未送达队列：单条发送失败不丢，压进队列，下一次 report 捎带重发
+/// （2026-08-13 实拍：fire-and-forget 单条丢失导致无法区分「没跑到」与「丢了」）
+static PENDING: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
-fn try_report(stage: &str, msg: &str) -> std::io::Result<()> {
-    let body = format!(
+/// best-effort 上报一行（stage = 阶段名，msg = 详情）；任何失败只入队，不炸
+pub fn report(stage: &str, msg: &str) {
+    let line = format!(
         "{{\"stage\":\"{}\",\"msg\":\"{}\"}}",
         escape_json(stage),
         escape_json(msg)
     );
+    let mut q = PENDING.lock().unwrap_or_else(|e| e.into_inner());
+    q.push(line);
+    // 依次清队列：一条失败就停（多半网络不通），留待下次捎带
+    while let Some(first) = q.first() {
+        if try_post(first).is_ok() {
+            q.remove(0);
+        } else {
+            break;
+        }
+    }
+}
+
+fn try_post(body: &str) -> std::io::Result<()> {
     let mut s = TcpStream::connect((HOST, PORT))?;
     s.set_read_timeout(Some(Duration::from_secs(3)))?;
     s.set_write_timeout(Some(Duration::from_secs(3)))?;
