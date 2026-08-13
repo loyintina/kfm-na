@@ -24,7 +24,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
 
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, WindowEvent};
+use winit::event::{ElementState, Ime, TouchPhase, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{Key, NamedKey};
 use winit::platform::android::EventLoopBuilderExtAndroid;
@@ -138,6 +138,15 @@ impl App {
                     crate::report::report("term", &format!("会话 opened: {session_id}"));
                 }
                 SessionEvent::Output { data } => {
+                    // 首 output 预览：诊断「黑屏等提示符」——提示符何时到、内容是什么
+                    static FIRST_OUTPUT: std::sync::atomic::AtomicBool =
+                        std::sync::atomic::AtomicBool::new(false);
+                    if !FIRST_OUTPUT.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                        crate::report::report_sync(
+                            "term",
+                            &format!("首 output 到达: {:?}", &data[..data.len().min(120)]),
+                        );
+                    }
                     if let Some(term) = &mut self.term {
                         term.feed(data.as_bytes());
                         self.dirty = true;
@@ -251,6 +260,43 @@ impl ApplicationHandler for App {
             WindowEvent::KeyboardInput { event, .. } => {
                 if TERMINAL_MODE {
                     self.handle_key(&event);
+                }
+            }
+            // 触摸唤出软键盘（winit Android：set_ime_allowed(true) 即 show soft keyboard）
+            WindowEvent::Touch(touch) => {
+                if TERMINAL_MODE && touch.phase == TouchPhase::Started {
+                    if let Some(w) = &self.window {
+                        w.set_ime_allowed(true);
+                        static IME_REQ: std::sync::atomic::AtomicBool =
+                            std::sync::atomic::AtomicBool::new(false);
+                        if !IME_REQ.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                            crate::report::report("ime", "触摸唤出软键盘");
+                        }
+                    }
+                }
+            }
+            // IME 事件链：Commit = 上屏文本（中文候选词落字也走这），直接注入终端
+            WindowEvent::Ime(ime) => {
+                if TERMINAL_MODE {
+                    match ime {
+                        Ime::Enabled => crate::report::report("ime", "IME Enabled"),
+                        Ime::Disabled => crate::report::report("ime", "IME Disabled"),
+                        // Preedit（拼音候选中）尖刺期不上屏，只留痕一次
+                        Ime::Preedit(_, _) => {
+                            static PREEDIT_SEEN: std::sync::atomic::AtomicBool =
+                                std::sync::atomic::AtomicBool::new(false);
+                            if !PREEDIT_SEEN.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                                crate::report::report("ime", "首个 Preedit（候选中）");
+                            }
+                        }
+                        Ime::Commit(text) => {
+                            if !self.session_over {
+                                if let Some(tx) = &self.outbound {
+                                    let _ = tx.send(TermCmd::Input(text));
+                                }
+                            }
+                        }
+                    }
                 }
             }
             WindowEvent::RedrawRequested => {
