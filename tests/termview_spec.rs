@@ -182,9 +182,9 @@ fn spec_渲染_光标格反色() {
     tv.render_into(&mut buf, 24 * CELL_W, 6 * CELL_H);
     // 光标格（5列, 0行）反色后背景为白——该格矩形内必须有接近白的像素；
     // 相邻的空格（6列）不是光标，应全黑
-    // 渲染的格原点 = cell_origin + 边距（BAR-005）
+    // 渲染的格原点 = cell_origin + 边距（BAR-005）+ 顶部下探（BAR-010）
     let (cx, cy) = cell_origin(5, 0, CELL_W, CELL_H);
-    let (cx, cy) = (cx + termview::MARGIN_X, cy + termview::MARGIN_Y);
+    let (cx, cy) = (cx + termview::MARGIN_X, cy + termview::MARGIN_TOP);
     let buf_w = 24 * CELL_W;
     let mut cursor_white = false;
     let mut neighbor_dark = true;
@@ -249,10 +249,10 @@ fn spec_渲染_resize后正常() {
 
 /// 帧缓冲里某格的墨水纵向跨度 → (最上, 最下) 非背景像素行（相对格原点）。
 /// 无墨水的格返回 (CELL_H, 0)（上下颠倒即为空）。
-/// 注意含 BAR-005 边距偏移——渲染的格原点 = cell_origin + (MARGIN_X, MARGIN_Y)
+/// 注意含边距偏移——渲染的格原点 = cell_origin + (MARGIN_X, MARGIN_TOP)
 fn cell_ink_span(buf: &[u32], buf_w: u32, col: u32, row: u32) -> (u32, u32) {
     let (ox, oy) = cell_origin(col, row, CELL_W, CELL_H);
-    let (ox, oy) = (ox + termview::MARGIN_X, oy + termview::MARGIN_Y);
+    let (ox, oy) = (ox + termview::MARGIN_X, oy + termview::MARGIN_TOP);
     let (mut top, mut bot) = (CELL_H, 0);
     for y in 0..CELL_H {
         for x in 0..CELL_W {
@@ -269,9 +269,10 @@ fn cell_ink_span(buf: &[u32], buf_w: u32, col: u32, row: u32) -> (u32, u32) {
 fn spec_bar001_基线对齐_同基线字母底边对齐() {
     let mut tv = host_termview(8, 2);
     tv.feed(b"Axp"); // 光标落在第 4 格，不干扰前 3 格
-    let buf_w = 8 * CELL_W;
-    let mut buf = vec![0u32; (buf_w * 2 * CELL_H) as usize];
-    tv.render_into(&mut buf, buf_w, 2 * CELL_H);
+    let buf_w = 2 * termview::MARGIN_X + 8 * CELL_W;
+    let buf_h = termview::MARGIN_TOP + 2 * CELL_H + termview::MARGIN_Y;
+    let mut buf = vec![0u32; (buf_w * buf_h) as usize];
+    tv.render_into(&mut buf, buf_w, buf_h);
     let (top_a, bot_a) = cell_ink_span(&buf, buf_w, 0, 0);
     let (top_x, bot_x) = cell_ink_span(&buf, buf_w, 1, 0);
     let (_, bot_p) = cell_ink_span(&buf, buf_w, 2, 0);
@@ -372,17 +373,21 @@ fn spec_字体_加载跳过比例字体() {
 #[test]
 fn spec_边距_首格不贴边() {
     // BAR-005 病灶：网格从 (0,0) 画起，边缘字符被屏幕圆角/曲面切半。
-    // 契约：帧缓冲四周一圈 MARGIN 带内必须是纯背景，字形墨水全部在带内之后
+    // BAR-010：顶带再下探一整行（MARGIN_TOP = MARGIN_Y + CELL_H）——
+    // 圆角屏吃首行首字符（2026-08-13 实拍）。
+    // 契约：帧缓冲四周一圈边距带内必须是纯背景，字形墨水全部在带内之后；
+    // 顶带必须是一整行高（变异抽检：MARGIN_TOP 改回 MARGIN_Y 本考题必须红）
+    assert_eq!(termview::MARGIN_TOP, termview::MARGIN_Y + CELL_H);
     let mut tv = host_termview(8, 2);
     tv.feed(b"A");
     let buf_w = 2 * termview::MARGIN_X + 8 * CELL_W;
-    let buf_h = 2 * termview::MARGIN_Y + 2 * CELL_H;
+    let buf_h = termview::MARGIN_TOP + termview::MARGIN_Y + 2 * CELL_H;
     let mut buf = vec![0u32; (buf_w * buf_h) as usize];
     tv.render_into(&mut buf, buf_w, buf_h);
     for y in 0..buf_h {
         for x in 0..buf_w {
             if x < termview::MARGIN_X
-                || y < termview::MARGIN_Y
+                || y < termview::MARGIN_TOP
                 || x >= buf_w - termview::MARGIN_X
                 || y >= buf_h - termview::MARGIN_Y
             {
@@ -396,7 +401,7 @@ fn spec_边距_首格不贴边() {
     }
     // 墨水必须真的出现在边距之后的首格区域（防「全帧涂黑」式假绿）
     let mut ink = false;
-    for y in termview::MARGIN_Y..buf_h {
+    for y in termview::MARGIN_TOP..buf_h {
         for x in termview::MARGIN_X..buf_w {
             if buf[(y * buf_w + x) as usize] != DEFAULT_BG {
                 ink = true;
@@ -447,7 +452,7 @@ fn spec_渲染_cjk备用字体上屏() {
     let mut tv = TermView::new(host_font(), Some(host_font()), 8, 2, CELL_W, CELL_H);
     tv.feed("中文A".as_bytes());
     let buf_w = 2 * termview::MARGIN_X + 8 * CELL_W;
-    let buf_h = 2 * termview::MARGIN_Y + 2 * CELL_H;
+    let buf_h = termview::MARGIN_TOP + termview::MARGIN_Y + 2 * CELL_H;
     let mut buf = vec![0u32; (buf_w * buf_h) as usize];
     tv.render_into(&mut buf, buf_w, buf_h);
     assert!(buf.iter().any(|&p| p != DEFAULT_BG), "CJK 必须有墨");
@@ -460,7 +465,7 @@ fn spec_渲染_tofu目击名单() {
     let mut tv = TermView::new(host_font(), Some(host_font()), 8, 2, CELL_W, CELL_H);
     tv.feed("A\u{E000}\u{280B}".as_bytes()); // A 有字形；PUA 私用区、盲文双缺
     let buf_w = 2 * termview::MARGIN_X + 8 * CELL_W;
-    let buf_h = 2 * termview::MARGIN_Y + 2 * CELL_H;
+    let buf_h = termview::MARGIN_TOP + termview::MARGIN_Y + 2 * CELL_H;
     let mut buf = vec![0u32; (buf_w * buf_h) as usize];
     tv.render_into(&mut buf, buf_w, buf_h);
     let tofu = tv.take_tofu_chars();

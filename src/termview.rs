@@ -32,6 +32,10 @@ pub const CELL_H: u32 = 30;
 pub const MARGIN_X: u32 = 12;
 pub const MARGIN_Y: u32 = 12;
 
+/// 顶边距（BAR-010）：圆角屏吃掉首行首字符（2026-08-13 实拍）——
+/// 顶部在常规边距之上再下探一整行
+pub const MARGIN_TOP: u32 = MARGIN_Y + CELL_H;
+
 /// 按字形覆盖挑备用字体（A 档考题钉死）：主字体缺该字（glyph_index=0）
 /// 且备用字体有才换。字形存在性问 lookup_glyph_index——光栅有没有墨
 /// 靠不住（DejaVu 缺字也画 tofu，有墨但不是对的字，host 实测 '中'
@@ -422,8 +426,9 @@ impl TermView {
                 self.cell_w,
                 self.cell_h,
             );
-            // BAR-005：格原点加边距，网格不贴边（边距带留黑）
-            let (px, py) = (px + MARGIN_X, py + MARGIN_Y);
+            // BAR-005：格原点加边距，网格不贴边（边距带留黑）；
+            // BAR-010：顶部走 MARGIN_TOP（圆角屏下探一整行）
+            let (px, py) = (px + MARGIN_X, py + MARGIN_TOP);
             if px >= buf_w || py >= buf_h {
                 continue; // 窗口比网格小（resize 途中）：裁掉放不下的格
             }

@@ -201,7 +201,8 @@ impl App {
         let Some(term) = &mut self.term else { return };
         let (cw, ch) = term.cell_size();
         let usable_w = w.saturating_sub(2 * termview::MARGIN_X);
-        let usable_h = h.saturating_sub(2 * termview::MARGIN_Y + self.ime_bottom_px);
+        let usable_h =
+            h.saturating_sub(termview::MARGIN_TOP + termview::MARGIN_Y + self.ime_bottom_px);
         let (cols, rows) = termview::grid_dims(usable_w, usable_h, cw, ch);
         term.resize_cells(cols, rows);
         if !self.session_over {

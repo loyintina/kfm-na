@@ -40,3 +40,20 @@ pub extern "system" fn Java_dev_kfm_na_KfmImeView_nativeSendKey(
 ) {
     crate::ime_queue::global().push_key_code(code);
 }
+
+/// dev.kfm.na.KfmImeView.nativeImeLog —— Java 侧链路探针直送飞鸽传书。
+/// IME 的生死在 IMM 与焦点之间（BAR-009 就死在 IMM 拒弹），Rust 侧看不见，
+/// 让 Java 侧断点自己开口
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_kfm_na_KfmImeView_nativeImeLog(
+    mut env: EnvUnowned,
+    _class: JClass,
+    msg: JString,
+) {
+    env.with_env(|env| -> jni::errors::Result<()> {
+        let s = msg.try_to_string(env)?;
+        crate::report::report("ime", &format!("[java] {s}"));
+        Ok(())
+    })
+    .resolve_with::<LogContextErrorAndDefault, _>(|| "in nativeImeLog".to_string());
+}
