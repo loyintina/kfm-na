@@ -102,16 +102,22 @@ impl App {
             let (w, h, ink) = tv.font_probe(c);
             crate::report::report("term", &format!("字体探针 '{c}': {w}x{h} ink={ink}"));
         }
-        // 字体目录普查（一次性）：真机 CJK 候选排查——NotoSansCJK.ttc 空光栅
-        // 已实锤（BAR-002），下一个中文字体候选从这份清单里挑
+        // 字体目录普查（一次性）：真机 CJK/等宽候选排查——NotoSansCJK.ttc 空光栅
+        // 已实锤（BAR-002），Roboto 比例字体（BAR-003）。335 个字体全量上报必然
+        // 截断（11:55 实拍只见 A-B 开头），按关键词过滤出候选相关的
         if let Ok(rd) = std::fs::read_dir("/system/fonts") {
-            let mut names: Vec<String> = rd
+            const KEYS: &[&str] = &[
+                "mono", "Mono", "cjk", "CJK", "noto", "Noto", "droid", "Droid", "misans", "MiSans",
+                "vivo", "Vivo", "harmony", "Harmony", "SC", "fallback", "Fallback",
+            ];
+            let mut hits: Vec<String> = rd
                 .filter_map(|e| e.ok())
                 .filter_map(|e| e.file_name().into_string().ok())
+                .filter(|n| KEYS.iter().any(|k| n.contains(k)))
                 .collect();
-            names.sort();
-            let list: String = names.join(",").chars().take(600).collect();
-            crate::report::report("term", &format!("字体目录 {} 个: {list}", names.len()));
+            hits.sort();
+            let list: String = hits.join(",").chars().take(800).collect();
+            crate::report::report("term", &format!("字体候选 {} 个: {list}", hits.len()));
         }
         crate::report::report("term", "TermView 建成");
         self.term = Some(tv);

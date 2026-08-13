@@ -57,6 +57,11 @@ pub const FONT_CANDIDATES: &[&str] = &[
     "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
 ];
 
+/// 编译期内嵌的等宽兜底字体（BAR-003）：真机字体三连坑——NotoSansCJK.ttc
+/// 空光栅（BAR-002）、Roboto 比例字体间距错乱、DroidSansFallbackFull 不存在。
+/// 嵌一份及格的等宽字体进包，任何设备都有下限（选型/许可见 assets/fonts/README.md）
+pub static VENDORED_MONO_FONT: &[u8] = include_bytes!("../assets/fonts/DejaVuSansMono.ttf");
+
 /// 字体可用性判定（A 档考题钉死）：光栅化探针字符，空字形（尺寸 0 或
 /// 位图零覆盖）判不合格。背景：2026-08-13 真机实拍「只见光标不见字」——
 /// NotoSansCJK-Regular.ttc from_bytes 成功却疑似光栅全空：能载 ≠ 能画
@@ -65,21 +70,33 @@ pub fn font_usable(font: &fontdue::Font, probe: char) -> bool {
     m.width > 0 && m.height > 0 && bmp.iter().any(|&a| a > 0)
 }
 
-/// 按候选顺序加载第一个可读、fontdue 认得、且真能画出字的字体，
-/// 返回 (来源路径, 字体)。全灭返回 None（调用方决定降级/报错，本函数不 panic）。
+/// 等宽判定（A 档考题钉死，BAR-003）：终端网格按定宽格摆字形，比例字体
+/// （i 窄 m 宽）摆进去间距忽近忽远。'i' 与 'M' 步进宽相等才算终端可用
+pub fn font_monospaced(font: &fontdue::Font) -> bool {
+    let (mi, _) = font.rasterize('i', CELL_H as f32);
+    let (mm, _) = font.rasterize('M', CELL_H as f32);
+    (mi.advance_width - mm.advance_width).abs() < 0.5
+}
+
+/// 按候选顺序加载第一个可读、fontdue 认得、能画出字、且等宽的字体，
+/// 返回 (来源路径, 字体)。路径候选全灭时落内嵌等宽字体（路径标记
+/// "<内嵌>"）；内嵌也废（不可能，有钉）才返回 None。本函数不 panic。
 pub fn load_font(candidates: &[&str]) -> Option<(String, fontdue::Font)> {
     for path in candidates {
         let Ok(bytes) = std::fs::read(path) else {
             continue;
         };
         if let Ok(font) = fontdue::Font::from_bytes(bytes, fontdue::FontSettings::default()) {
-            // 能载不能画的（如真机 NotoSansCJK.ttc 嫌疑）跳过，给后面的候选机会
-            if font_usable(&font, 'M') {
+            // 能载不能画的（BAR-002 NotoSansCJK.ttc）与比例字体（BAR-003 Roboto）
+            // 都跳过，给后面的候选机会
+            if font_usable(&font, 'M') && font_monospaced(&font) {
                 return Some((path.to_string(), font));
             }
         }
     }
-    None
+    let font =
+        fontdue::Font::from_bytes(VENDORED_MONO_FONT, fontdue::FontSettings::default()).ok()?;
+    Some(("<内嵌>".to_string(), font))
 }
 
 /// 布局数学（A 档考题钉死）：窗口 px 尺寸 + 单元格 px 尺寸 → (cols, rows)。

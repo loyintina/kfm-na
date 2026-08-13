@@ -9,3 +9,4 @@
 |------|------|-----------|----|------|--------|
 | BAR-001 | termview | 字形竖直居中 → 高矮字母底边错位（里倒歪斜）。契约：同基线字母底边对齐、高字母顶边更高、下伸字母探过基线 | V | 已修 | tests/termview_spec.rs `spec_bar001_基线对齐_同基线字母底边对齐` |
 | BAR-002 | termview | 真机 NotoSansCJK-Regular.ttc 在 fontdue 0.9 下光栅全空（能载不能画）→ 只见光标不见字。契约：load_font 必须跳过空光栅字体（探针字符 'M' 无墨即弃） | I | 已修（跳过 → Roboto 兜底，11:30 实拍字已出） | tests/termview_spec.rs `spec_字体_空光栅判不合格` / `spec_字体_真字形判合格` |
+| BAR-003 | termview | 真机落到 Roboto（比例字体）→ 定宽格摆比例字形，间距忽近忽远。契约：'i'/'M' 步进宽不等即弃；路径候选全灭落内嵌 DejaVuSansMono | I | 已修（等宽判定 + 内嵌兜底） | tests/termview_spec.rs `spec_字体_等宽判定` / `spec_字体_加载跳过比例字体` / `spec_字体_内嵌字节可直接用` / `spec_字体_候选全灭落内嵌等宽` |

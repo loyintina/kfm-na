@@ -255,8 +255,14 @@ fn spec_bar001_基线对齐_同基线字母底边对齐() {
 }
 
 #[test]
-fn spec_字体_候选全灭返回none() {
-    assert!(termview::load_font(&["/nonexistent/a.ttf", "/nonexistent/b.ttf"]).is_none());
+fn spec_字体_候选全灭落内嵌等宽() {
+    // 契约（BAR-003 后改写）：路径候选全灭不再返回 None——
+    // 编译期内嵌的 DejaVuSansMono 兜底，任何设备都有及格等宽终端字体
+    let (path, font) =
+        termview::load_font(&["/nonexistent/a.ttf", "/nonexistent/b.ttf"]).expect("内嵌字体兜底");
+    assert_eq!(path, "<内嵌>");
+    assert!(termview::font_usable(&font, 'M'));
+    assert!(termview::font_monospaced(&font));
 }
 
 #[test]
@@ -266,9 +272,24 @@ fn spec_字体_host候选命中() {
     assert_eq!(path, HOST_FONT);
 }
 
+/// 内嵌兜底字体（编译期 include_bytes!）：字节必须真在包里、真能用。
+/// 钉住防「文件没提交进仓库/路径写错/复制成别的字体」
+#[test]
+fn spec_字体_内嵌字节可直接用() {
+    let font = fontdue::Font::from_bytes(
+        termview::VENDORED_MONO_FONT,
+        fontdue::FontSettings::default(),
+    )
+    .expect("内嵌字体字节必须可解析");
+    assert!(termview::font_usable(&font, 'M'));
+    assert!(termview::font_monospaced(&font));
+}
+
 /// CFF 轮廓字体（NimbusMonoPS）：fontdue 0.9 能载能画西文，但中文字形
 /// 光栅全空（w=0 h=0 ink=0，2026-08-13 host 实测）——空光栅判定的活教材
 const HOST_CFF_FONT: &str = "/usr/share/fonts/opentype/urw-base35/NimbusMonoPS-Regular.otf";
+/// 比例字体活教材（BAR-003 病灶同款：真机 Roboto 即比例字体）
+const HOST_PROPORTIONAL_FONT: &str = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf";
 
 fn load_host_font(path: &str) -> fontdue::Font {
     let bytes = std::fs::read(path).expect("host 测试字体缺失");
@@ -295,4 +316,25 @@ fn spec_字体_真字形判合格() {
     // DejaVu 无中文字形但 .notdef 豆腐块有墨（host 实测 ink=150）——
     // 「有墨」与「是对的字」是两回事，判定只管前者
     assert!(termview::font_usable(&font, '中'));
+}
+
+#[test]
+fn spec_字体_等宽判定() {
+    // BAR-003：终端网格按定宽格摆字形，比例字体（i 窄 m 宽）摆进去
+    // 间距忽近忽远。契约：'i' 与 'M' 步进宽相等才算终端可用
+    assert!(termview::font_monospaced(&load_host_font(HOST_FONT)));
+    assert!(termview::font_monospaced(&load_host_font(HOST_CFF_FONT)));
+    assert!(
+        !termview::font_monospaced(&load_host_font(HOST_PROPORTIONAL_FONT)),
+        "比例字体必须判非等宽（真机 Roboto 同款病灶）"
+    );
+}
+
+#[test]
+fn spec_字体_加载跳过比例字体() {
+    // 比例字体在前、等宽在后：必须跳过比例选等宽（真机场景复刻：
+    // Roboto 在前会被挑中，必须让位给后面的等宽）
+    let (path, _font) =
+        termview::load_font(&[HOST_PROPORTIONAL_FONT, HOST_FONT]).expect("必须命中等宽候选");
+    assert_eq!(path, HOST_FONT);
 }
