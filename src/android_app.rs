@@ -157,9 +157,21 @@ impl ApplicationHandler for App {
             return;
         }
         crate::report::report("boot", "resumed——开始建窗口");
+        // init_gfx 总看门狗：5s 未完成即回传（锁 instance/surface/adapter/device 段挂起）
+        static GFX_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        std::thread::spawn(|| {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            if !GFX_DONE.load(std::sync::atomic::Ordering::Relaxed) {
+                crate::report::report(
+                    "hang",
+                    "init_gfx 5 秒未完成——卡在 instance/surface/adapter/device",
+                );
+            }
+        });
         let attrs = Window::default_attributes().with_title("KFM-NA");
         let window = Arc::new(el.create_window(attrs).expect("创建窗口失败"));
         let gfx = Self::init_gfx(&window);
+        GFX_DONE.store(true, std::sync::atomic::Ordering::Relaxed);
         self.gfx = Some(gfx);
         self.window = Some(window);
         crate::report::report("boot", "启动完成——紫屏应已亮");
@@ -198,7 +210,8 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
     android_logger::init_once(
         android_logger::Config::default().with_max_level(log::LevelFilter::Info),
     );
-    // 飞鸽传书：panic 直报服务器（手机无 adb 通路，见 report.rs 头注）
+    // 飞鸽传书：先起后台冲洗线程，再挂 panic 钩子（钩子的报告才有人送）
+    crate::report::start_flusher();
     std::panic::set_hook(Box::new(|info| {
         crate::report::report("panic", &info.to_string());
     }));

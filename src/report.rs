@@ -4,58 +4,104 @@
 //! logcat 拿不到。APK 的 panic 与启动里程碑改走 HTTP POST 直报 kfmv4 服务器
 //! （手机既然能下载 APK，就一定能回传），落盘 /root/kfm-na/field-reports.log。
 //!
+//! 架构（第三版，血泪教训见下）：report() 只入队不触网，专用后台线程冲洗。
+//! - v1 fire-and-forget：单条丢失无法区分「没跑到」与「丢了」
+//! - v2 主线程同步等应答：白屏被网络 RTT 拉长；connect 无超时可卡分钟级；
+//!   服务器 502 也被当「送达」——三条全中过（2026-08-13 实拍）
+//! - v3 本版：入队即返回；后台线程冲洗，connect_timeout 2s、只认 HTTP 200、
+//!   失败留队 1s 后重试，宁重复不丢
+//!
 //! 铁律：本通道任何失败都必须吞掉——上报通道自己炸了就是二次事故。
 
-use std::io::Write;
-use std::net::TcpStream;
+use std::collections::VecDeque;
+use std::io::{Read, Write};
+use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::sync::Mutex;
+use std::sync::mpsc::{Sender, channel};
 use std::time::Duration;
 
 /// 服务器地址（nginx 80 反代 → kfmv4 8021，/kfmv4 代字前缀）
-const HOST: &str = "8.145.46.182";
-const PORT: u16 = 80;
+const SERVER_ADDR: SocketAddr = SocketAddr::new(
+    std::net::IpAddr::V4(std::net::Ipv4Addr::new(8, 145, 46, 182)),
+    80,
+);
+const HOST_HEADER: &str = "8.145.46.182";
 const PATH: &str = "/kfmv4/api/na-report";
 
-/// 未送达队列：单条发送失败不丢，压进队列，下一次 report 捎带重发
-/// （2026-08-13 实拍：fire-and-forget 单条丢失导致无法区分「没跑到」与「丢了」）
-static PENDING: Mutex<Vec<String>> = Mutex::new(Vec::new());
+static SENDER: Mutex<Option<Sender<String>>> = Mutex::new(None);
 
-/// best-effort 上报一行（stage = 阶段名，msg = 详情）；任何失败只入队，不炸
+/// 启动后台冲洗线程（android_main 第一时间调）。幂等。
+pub fn start_flusher() {
+    let mut guard = SENDER.lock().unwrap_or_else(|e| e.into_inner());
+    if guard.is_some() {
+        return;
+    }
+    let (tx, rx) = channel::<String>();
+    *guard = Some(tx);
+    std::thread::spawn(move || {
+        let mut backlog: VecDeque<String> = VecDeque::new();
+        loop {
+            // 先非阻塞排空新到的，再从队首冲洗（FIFO 保序）
+            while let Ok(line) = rx.try_recv() {
+                backlog.push_back(line);
+            }
+            if let Some(front) = backlog.front()
+                && try_post(front).is_ok()
+            {
+                backlog.pop_front();
+                continue; // 队里还有就立刻续冲
+            }
+            // 队空或发送失败：阻塞等下一条，1s 超时回头重试 backlog
+            if let Ok(line) = rx.recv_timeout(Duration::from_secs(1)) {
+                backlog.push_back(line);
+            }
+        }
+    });
+}
+
+/// 上报一行（stage = 阶段名，msg = 详情）。只入队，永不阻塞调用方。
 pub fn report(stage: &str, msg: &str) {
     let line = format!(
         "{{\"stage\":\"{}\",\"msg\":\"{}\"}}",
         escape_json(stage),
         escape_json(msg)
     );
-    let mut q = PENDING.lock().unwrap_or_else(|e| e.into_inner());
-    q.push(line);
-    // 依次清队列：一条失败就停（多半网络不通），留待下次捎带
-    while let Some(first) = q.first() {
-        if try_post(first).is_ok() {
-            q.remove(0);
-        } else {
-            break;
-        }
+    let guard = SENDER.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(tx) = guard.as_ref() {
+        let _ = tx.send(line);
     }
+    // flusher 未启动（如非 Android 单测）则直接丢——通道永不成事故
 }
 
 fn try_post(body: &str) -> std::io::Result<()> {
-    use std::io::Read;
-    use std::net::Shutdown;
-    let mut s = TcpStream::connect((HOST, PORT))?;
+    let mut s = TcpStream::connect_timeout(&SERVER_ADDR, Duration::from_secs(2))?;
     s.set_read_timeout(Some(Duration::from_secs(3)))?;
     s.set_write_timeout(Some(Duration::from_secs(3)))?;
     let req = format!(
-        "POST {PATH} HTTP/1.1\r\nHost: {HOST}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        "POST {PATH} HTTP/1.1\r\nHost: {HOST_HEADER}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
     s.write_all(req.as_bytes())?;
-    // 写完必须读到应答再关：发完即关会让 nginx 视客户端中止而断掉
-    // 上游转发（2026-08-13 实拍里程碑零星丢失的病根）
+    // 写完必须读应答：发完即关会让 nginx 视客户端中止而断掉上游转发；
+    // 且只认 200——502/500 一律视为未送达，留队重发（宁重复不丢）
     s.shutdown(Shutdown::Write)?;
-    let mut sink = Vec::new();
-    let _ = s.read_to_end(&mut sink); // 3s 超时也算送达——服务器已开始处理
-    Ok(())
+    let mut resp = Vec::new();
+    s.read_to_end(&mut resp)?;
+    if http_status_is_200(&resp) {
+        Ok(())
+    } else {
+        Err(std::io::Error::other("非 200 应答"))
+    }
+}
+
+/// 从 HTTP 应答提取状态码判 200（纯逻辑，有钉）
+pub fn http_status_is_200(resp: &[u8]) -> bool {
+    let end = resp
+        .iter()
+        .position(|&b| b == b'\r' || b == b'\n')
+        .unwrap_or(resp.len());
+    let status_line = String::from_utf8_lossy(&resp[..end]);
+    status_line.split_whitespace().nth(1) == Some("200")
 }
 
 /// JSON 字符串转义（引号/反斜杠/控制字符）
@@ -105,5 +151,21 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["stage"], "pa\"nic");
         assert_eq!(v["msg"], "at src\\main.rs:1\nboom");
+    }
+
+    #[test]
+    fn 状态码判定() {
+        assert!(http_status_is_200(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}"
+        ));
+        assert!(http_status_is_200(b"HTTP/1.0 200\n\n"));
+        assert!(!http_status_is_200(
+            b"HTTP/1.1 502 Bad Gateway\r\n\r\n<html>"
+        ));
+        assert!(!http_status_is_200(
+            b"HTTP/1.1 500 Internal Server Error\r\n\r\n"
+        ));
+        assert!(!http_status_is_200(b""));
+        assert!(!http_status_is_200(b"garbage"));
     }
 }
