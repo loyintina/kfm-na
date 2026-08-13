@@ -186,7 +186,10 @@ impl ApplicationHandler for App {
 
     fn window_event(&mut self, el: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         match event {
-            WindowEvent::CloseRequested => el.exit(),
+            WindowEvent::CloseRequested => {
+                crate::report::report("death", "CloseRequested——窗口被要求关闭");
+                el.exit();
+            }
             WindowEvent::Resized(sz) => {
                 if let Some(g) = &mut self.gfx {
                     g.config.width = sz.width.max(1);
@@ -201,6 +204,14 @@ impl ApplicationHandler for App {
             }
             _ => {}
         }
+    }
+
+    fn suspended(&mut self, _el: &ActiveEventLoop) {
+        crate::report::report("death", "suspended——Activity 被挂起（退后台/被销毁前奏）");
+    }
+
+    fn exiting(&mut self, _el: &ActiveEventLoop) {
+        crate::report::report_sync("death", "exiting——事件循环即将退出");
     }
 
     fn about_to_wait(&mut self, _el: &ActiveEventLoop) {
@@ -243,7 +254,9 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
     crate::report::report("boot", "event loop 建成");
     let mut app = App::default();
     let result = event_loop.run_app(&mut app);
-    crate::report::report("boot", &format!("run_app 返回: {:?}", result));
+    // 同步直报：async 入队后立刻 exit(0) 会吃掉这行（此前历次「静默消失」
+    // 的嫌疑——死亡现场被自己的 exit(0) 毁尸灭迹）
+    crate::report::report_sync("death", &format!("run_app 返回: {:?}", result));
     // 事件循环一生只能建一次（winit RecreationAttempt）。NativeActivity 销毁后
     // 进程常被 ROM 保留，不自杀则下次点开 android_main 重跑必 panic
     // （2026-08-13 实拍「白退」次生病灶）。活动结束 = 进程跟着死，重来即全新。
