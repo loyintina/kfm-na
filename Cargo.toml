@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [lib]
-# rlib 供 cargo test，cdylib 供 cargo-apk 打包（NativeActivity 加载 libkfm_na.so）
+# rlib 供 cargo test，cdylib 供 scripts/package-apk.sh 打包
+# （NativeActivity 按 manifest meta-data android.app.lib_name 加载 libkfm_na.so）
 crate-type = ["rlib", "cdylib"]
 
 [dependencies]
@@ -30,31 +31,12 @@ android_logger = "0.15"
 # JNI 直取真实软键盘高度（insets.rs，BAR-006）——与 android-activity 0.6 同版本线
 jni = "0.22"
 
-[package.metadata.android]
-package = "dev.kfm.na"
-build_targets = ["aarch64-linux-android"]
-
-[package.metadata.android.sdk]
-# 工具链装的 platforms;android-35（API 34 包已从官方/镜像下架，立项.md 有记）
-target_sdk_version = 35
-
-[package.metadata.android.application]
-label = "KFM-NA"
-# 沉浸式全屏：隐藏状态栏/导航栏（2026-08-13 实拍诉求——状态栏占着顶行，
-# 终端首行贴边又太高）。主题即 Android 官方 DeviceDefault 全屏变体
-theme = "@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen"
-
-# 国产 ROM 实锤坑（android-activity#196，MIUI 死锁）：cargo-apk 默认
-# config_changes 只有 orientation|keyboardHidden|screenSize，OriginOS 启动时
-# 注入 density/fontScale/uiMode 变化会触发 Activity relaunch——surface 在用
-# 着的时候被销毁，原生层崩、无 Rust panic（2026-08-13 实拍「黑屏再退」即此）。
-# 补全到 android-activity 官方示例 na-mainloop 同款全集。
-[package.metadata.android.application.activity]
-config_changes = "orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density|fontScale"
-
-# 飞鸽传书回传通道需要联网（report.rs）
-[[package.metadata.android.uses_permission]]
-name = "android.permission.INTERNET"
+# 打包配置的唯一事实源已迁至 android/AndroidManifest.xml +
+# scripts/package-apk.sh（2026-08-13 脱离 cargo-apk：中文输入的 Java 皮
+# 它塞不进去）。原 [package.metadata.android] 各表随之删除——留着只会
+# 长成「改了不生效」的双事实源。包名 dev.kfm.na、全屏主题、configChanges
+# 全集（MIUI/OriginOS relaunch 坑，见 manifest 注释）、INTERNET 权限都在
+# manifest 里；签名（debug keystore）与 versionCode 在 package-apk.sh 里。
 
 # APK 包体基线（尖刺验收 1：<10MB）——debug 包 119MB 无意义，release 必须收紧
 [profile.release]
@@ -62,8 +44,5 @@ lto = true
 strip = true
 opt-level = 2
 
-# 尖刺期：release 也签 debug keystore（Android 官方调试证书，口令公开）；
-# 正式发布前必须换正式 keystore——届时本条删除并走密钥管理
-[package.metadata.android.signing.release]
-path = "/root/.android/debug.keystore"
-keystore_password = "android"
+# 尖刺期：release 也签 Android 官方 debug keystore（口令公开，配置在
+# scripts/package-apk.sh）；正式发布前必须换正式 keystore 并走密钥管理

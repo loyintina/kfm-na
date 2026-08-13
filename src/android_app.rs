@@ -16,8 +16,10 @@
 //! - 重绘泵是忙轮询（about_to_wait 无条件 request_redraw）：ws 线程事件经
 //!   mpsc 送达，Android 上没用 EventLoopProxy 唤醒（可靠性未验证），busy loop
 //!   是最朴素的活路。电池不友好，正式版要换 proxy 唤醒
-//! - 键盘只翻可打印字符 + Enter/Backspace/Tab/Esc；中文 IME（候选词提交）
-//!   是下个切片的事——winit 0.30 Android 的 IME 事件能来多少算多少
+//! - 键盘只翻可打印字符 + Enter/Backspace/Tab/Esc；中文 IME 走 Java 皮
+//!   （KfmInputConnection.commitText → JNI → ime_queue → drain_ime_inject，
+//!   2026-08-13 定案——winit native-activity 后端零 Ime 事件代码，平台层
+//!   补不了，只能 Java 层接 InputConnection）
 
 use std::num::NonZeroU32;
 use std::sync::Arc;
@@ -266,6 +268,27 @@ impl App {
         }
     }
 
+    /// 排干 Java 皮（KfmInputConnection）经 JNI 注入的 IME 文字——
+    /// 中文落字从这里进终端（NativeActivity 无 InputConnection 的补丁，
+    /// 链路见 ime_queue.rs 文件头）
+    fn drain_ime_inject(&mut self) {
+        let texts = crate::ime_queue::global().drain();
+        if texts.is_empty() || self.session_over {
+            return;
+        }
+        static FIRST_INJECT: std::sync::atomic::AtomicBool =
+            std::sync::atomic::AtomicBool::new(false);
+        if !FIRST_INJECT.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            crate::report::report("ime", "首个 JNI IME 文字注入");
+        }
+        if let Some(tx) = &self.outbound {
+            for text in texts {
+                let _ = tx.send(TermCmd::Input(text));
+            }
+            self.last_input_at = Some(std::time::Instant::now());
+        }
+    }
+
     /// 键盘事件 → 终端输入字节（尖刺极简映射，IME 见文件头留白）
     fn handle_key(&mut self, event: &winit::event::KeyEvent) {
         if event.state != ElementState::Pressed || self.session_over {
@@ -466,6 +489,7 @@ impl ApplicationHandler for App {
     fn about_to_wait(&mut self, _el: &ActiveEventLoop) {
         if TERMINAL_MODE {
             self.drain_terminal_events();
+            self.drain_ime_inject();
             self.poll_ime_inset();
         }
         if let Some(w) = &self.window {

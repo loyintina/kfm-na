@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- KFM-NA 手工 manifest（2026-08-13 起，package-apk.sh 直打，不再经 cargo-apk
+     生成）——起因：cargo-apk 生成的 Activity 是裸 android.app.NativeActivity，
+     塞不进自定义 Java 类；中文输入需要 MainActivity 这层 Java 皮
+     （见 android/java/dev/kfm/na/，链路见 src/ime_queue.rs 文件头） -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="dev.kfm.na">
+
+    <!-- 飞鸽传书回传通道（report.rs） -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <application
+        android:label="KFM-NA"
+        android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density|fontScale">
+            <!-- configChanges 全集是国产 ROM 实锤坑（android-activity#196，
+                 MIUI/OriginOS 启动注入 density/fontScale/uiMode 变化会触发
+                 Activity relaunch，surface 在用着时被销毁 → 原生层崩、无
+                 Rust panic，2026-08-13 实拍「黑屏再退」即此）。一个都不许删。 -->
+            <!-- NativeActivity 约定：原生库名（libkfm_na.so） -->
+            <meta-data android:name="android.app.lib_name" android:value="kfm_na" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

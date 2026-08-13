@@ -15,16 +15,24 @@ kfmv4（/root/kfmv4，TypeScript Web 应用）的 **native 手机客户端**，R
 ## 常用命令
 
 ```bash
-bash scripts/chain.sh    # 唯一检查入口：fmt + clippy + android-check + test + build（提交前必过）
+bash scripts/chain.sh    # 唯一检查入口：fmt + clippy + android-check + java 编译 + test + build（提交前必过）
 cargo test               # 只跑测试
 cargo fmt                # fmt --check 红了的自救
 
-# 打 APK（release，签名用 Android 官方 debug keystore，尖刺期配置见 Cargo.toml）
-export ANDROID_HOME=/root/kfm-na-toolchain/sdk
-export ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/27.2.12479018
-export JAVA_HOME=/root/kfm-na-toolchain/jdk PATH=$JAVA_HOME/bin:$PATH
-cargo apk build --release   # 产物：target/release/apk/kfm-na.apk
+# 打 APK（2026-08-13 起脱离 cargo-apk：中文输入的 Java 皮它塞不进去。
+# 手工管线 javac → d8 → aapt2 → zipalign → apksigner，全本地工具零网络，
+# 签名沿用 Android 官方 debug keystore，与旧包同证书可覆盖安装）
+bash scripts/package-apk.sh   # 产物：target/release/apk/kfm-na.apk
 ```
+
+## 仓库布局（cargo 视野外的部分）
+
+- `android/java/dev/kfm/na/` — Java 皮：MainActivity + KfmSurfaceView +
+  KfmInputConnection。NativeActivity 没有 InputConnection（中文死结根源），
+  这层皮把 IME commitText 经 JNI 推进 `src/ime_queue.rs`。改它必跑 chain
+  第 4 步（javac 编译检查）+ package-apk.sh 实拍。
+- `android/AndroidManifest.xml` — 手工 manifest（package-apk.sh 直打）。
+  包名 `dev.kfm.na`、主题、configChanges 与 cargo-apk 时代对齐。
 
 ## 纪律（三门，全部 hard fail，commit-msg/pre-commit 钩子机械化执法）
 
