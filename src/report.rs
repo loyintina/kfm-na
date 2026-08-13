@@ -61,11 +61,28 @@ pub fn start_flusher() {
 
 /// 上报一行（stage = 阶段名，msg = 详情）。只入队，永不阻塞调用方。
 pub fn report(stage: &str, msg: &str) {
+    enqueue(format!(
+        "{{\"stage\":\"{}\",\"msg\":\"{}\"}}",
+        escape_json(stage),
+        escape_json(msg)
+    ));
+}
+
+/// 同步直报（仅启动第一格用）：早死进程等不到后台线程第一班车
+/// （2026-08-13 实拍：全异步版「进门即死」零行日志）。有界阻塞
+/// （connect 2s）直发一次，失败再入队交后台重试。
+pub fn report_sync(stage: &str, msg: &str) {
     let line = format!(
         "{{\"stage\":\"{}\",\"msg\":\"{}\"}}",
         escape_json(stage),
         escape_json(msg)
     );
+    if try_post(&line).is_err() {
+        enqueue(line);
+    }
+}
+
+fn enqueue(line: String) {
     let guard = SENDER.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(tx) = guard.as_ref() {
         let _ = tx.send(line);

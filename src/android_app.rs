@@ -210,12 +210,14 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
     android_logger::init_once(
         android_logger::Config::default().with_max_level(log::LevelFilter::Info),
     );
-    // 飞鸽传书：先起后台冲洗线程，再挂 panic 钩子（钩子的报告才有人送）
+    // 第一格同步直报：早死进程等不到后台线程（report.rs 头注铁律外的特例，
+    // 有界 2s）。能收到这行 = 死在 android_main 内部；收不到 = 死在更前（加载/manifest）。
+    crate::report::report_sync("boot", "android_main 进入");
+    // 飞鸽传书：起后台冲洗线程，再挂 panic 钩子（钩子的报告才有人送）
     crate::report::start_flusher();
     std::panic::set_hook(Box::new(|info| {
         crate::report::report("panic", &info.to_string());
     }));
-    crate::report::report("boot", "android_main 进入");
     log::info!("KFM-NA android_main 进入");
     let event_loop = EventLoop::builder()
         .with_android_app(app)
