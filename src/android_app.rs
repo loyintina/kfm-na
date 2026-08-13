@@ -423,11 +423,15 @@ impl ApplicationHandler for App {
                     self.handle_key(&event);
                 }
             }
-            // 触摸唤出软键盘（winit Android：set_ime_allowed(true) 即 show soft keyboard）
+            // 触摸唤出软键盘：winit 的 set_ime_allowed 走 SHOW_IMPLICIT，
+            // 用户收过键盘后 IMM 拒弹（BAR-012）——JNI SHOW_FORCED 强弹兜底
             WindowEvent::Touch(touch) => {
                 if TERMINAL_MODE && touch.phase == TouchPhase::Started {
                     if let Some(w) = &self.window {
                         w.set_ime_allowed(true);
+                        if let Some(app) = &self.android_app {
+                            crate::insets::force_show_keyboard(app);
+                        }
                         static IME_REQ: std::sync::atomic::AtomicBool =
                             std::sync::atomic::AtomicBool::new(false);
                         if !IME_REQ.swap(true, std::sync::atomic::Ordering::Relaxed) {

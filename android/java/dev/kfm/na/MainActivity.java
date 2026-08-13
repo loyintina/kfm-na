@@ -20,6 +20,12 @@ public class MainActivity extends NativeActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        // BAR-012：占位 View 是文本编辑器且持焦点，IMM 进场会自动弹键盘
+        // （实拍：启动完成即弹，用户没点任何东西）——STATE_HIDDEN 压住，
+        // 键盘只能由触摸主动召唤（touch → JNI SHOW_FORCED）
+        getWindow().setSoftInputMode(
+                android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN
+                        | android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         FrameLayout root = findViewById(android.R.id.content);
         KfmImeView ime = new KfmImeView(this);
         ime.setLayoutParams(new FrameLayout.LayoutParams(1, 1));

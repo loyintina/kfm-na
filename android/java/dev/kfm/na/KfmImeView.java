@@ -60,10 +60,13 @@ public class KfmImeView extends View {
 
     @Override
     public InputConnection onCreateInputConnection(EditorInfo outAttrs) {
-        // TYPE_CLASS_TEXT：让输入法进组词模式（拼音候选）；
+        // TYPE_CLASS_TEXT + VISIBLE_PASSWORD（BAR-012，Termux 同款）：
+        // 禁自动纠错/联想——否则 Gboard 对英文也开组词，字母走
+        // setComposingText 攒词不 commit，终端永远不见字。
+        // 中文组词（拼音候选）不受影响，选词仍走 commitText。
         // NO_EXTRACT_UI：横屏/小屏不弹全屏输入界面；
         // ACTION_NONE：回车不当「完成」键，走按键事件进终端
-        outAttrs.inputType = EditorInfo.TYPE_CLASS_TEXT;
+        outAttrs.inputType = EditorInfo.TYPE_CLASS_TEXT | EditorInfo.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD;
         outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI | EditorInfo.IME_ACTION_NONE;
         imeLog("IMM 询问 InputConnection——已给出");
         return new KfmInputConnection(this);

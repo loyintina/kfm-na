@@ -16,6 +16,52 @@ use jni::objects::JObject;
 use jni::{JavaVM, jni_sig, jni_str};
 use winit::platform::android::activity::AndroidApp;
 
+/// 强制弹出软键盘（BAR-012）：winit 的 set_ime_allowed 走 SHOW_IMPLICIT，
+/// 用户手动收过键盘后 IMM 按策略拒弹（实拍：关掉再点就召唤不出）。
+/// SHOW_FORCED = 用户强制召唤，无视该策略
+pub fn force_show_keyboard(app: &AndroidApp) {
+    // SAFETY: 同 query_ime_bottom
+    let vm = unsafe { JavaVM::from_raw(app.vm_as_ptr().cast()) };
+    let raw_activity = app.activity_as_ptr() as jni::sys::jobject;
+    let _ = vm.attach_current_thread(|env| -> jni::errors::Result<()> {
+        // SAFETY: 同 query_ime_bottom
+        let activity = unsafe { JObject::from_raw(env, raw_activity) };
+        let service_name = env.new_string("input_method")?;
+        let imm = env
+            .call_method(
+                &activity,
+                jni_str!("getSystemService"),
+                jni_sig!("(Ljava/lang/String;)Ljava/lang/Object;"),
+                &[jni::JValue::Object(&service_name)],
+            )?
+            .l()?;
+        let window = env
+            .call_method(
+                &activity,
+                jni_str!("getWindow"),
+                jni_sig!("()Landroid/view/Window;"),
+                &[],
+            )?
+            .l()?;
+        let decor = env
+            .call_method(
+                window,
+                jni_str!("getDecorView"),
+                jni_sig!("()Landroid/view/View;"),
+                &[],
+            )?
+            .l()?;
+        const SHOW_FORCED: i32 = 2;
+        env.call_method(
+            imm,
+            jni_str!("showSoftInput"),
+            jni_sig!("(Landroid/view/View;I)Z"),
+            &[jni::JValue::Object(&decor), jni::JValue::Int(SHOW_FORCED)],
+        )?;
+        Ok(())
+    });
+}
+
 /// 查询一次真实 IME 底部 inset（px；NativeActivity 全屏窗与帧缓冲同坐标系）。
 /// 键盘未弹 → Some(0)；弹出 → Some(高度)；查询失败（JNI 异常/无 insets）→ None
 /// （调用方维持旧值，不抖动）。
