@@ -11,11 +11,11 @@
 cd "$(dirname "$0")/../.." || exit 1
 
 if [ "$1" = "--staged" ]; then
-  files=$(git diff --cached --name-only 2>/dev/null)
+  files=$(git -c core.quotepath=false diff --cached --name-only 2>/dev/null)
   message=$(cat "$2" 2>/dev/null)
   label="本次提交（暂存区）"
 else
-  files=$(git show --name-only --format= HEAD 2>/dev/null)
+  files=$(git -c core.quotepath=false show --name-only --format= HEAD 2>/dev/null)
   message=$(git log -1 --format=%B 2>/dev/null)
   label="HEAD 提交"
 fi
