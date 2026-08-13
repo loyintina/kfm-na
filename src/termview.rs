@@ -1,0 +1,319 @@
+//! termview.rs — 终端视图：alacritty_terminal 网格 + fontdue 光栅 + softbuffer 直推
+//!
+//! 职责：包装 Term（转义序列/网格/滚屏全交给它），把当前可见网格软渲染进
+//! u32 帧缓冲（XRGB）。零 I/O、零平台依赖——host 单测与 Android 壳共用一份。
+//!
+//! 判卷方式：
+//! - A 档考题 tests/termview_spec.rs：布局数学纯函数（grid_dims / cell_origin）
+//!   与颜色映射（ANSI 表 / indexed 256 色 / 反色交换）钉死，含变异抽检
+//! - B 档冒烟钉（同文件）：feed 字节进真 Term，render_into 后断言帧缓冲
+//!   出现非背景像素（字形真画出来了）、红色转义真出红像素、光标格真反色
+//! - C 档实拍：手机终端画面（立项.md 尖刺验收 2/3）
+//!
+//! 已知留白（尖刺期不处理）：
+//! - 字形垂直居中对齐（不按 baseline），等宽场景够用，混排西文/中文会略浮
+//! - 单字体无 fallback 链：缺字形画 tofu（.notdef 方框），不 panic
+//! - 每次 render_into 全量重绘，无 damage 增量（alacritty_terminal 自带
+//!   damage 追踪，性能成为问题再接）
+
+use alacritty_terminal::event::VoidListener;
+use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::term::cell::Flags;
+use alacritty_terminal::term::{Config, Term};
+use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Processor};
+
+/// 单元格像素尺寸（尖刺期常量，字体大小可配化是后话）
+pub const CELL_W: u32 = 12;
+pub const CELL_H: u32 = 24;
+
+/// 默认前景白 / 背景黑（softbuffer XRGB：高字节不用）
+pub const DEFAULT_FG: u32 = 0x00FF_FFFF;
+pub const DEFAULT_BG: u32 = 0x0000_0000;
+
+/// ANSI 前 16 色表（VGA 经典配色，XRGB）：0-7 普通，8-15 高亮
+pub const ANSI_16: [u32; 16] = [
+    0x0000_0000, // 黑
+    0x00AA_0000, // 红
+    0x0000_AA00, // 绿
+    0x00AA_5500, // 黄（VGA 棕）
+    0x0000_00AA, // 蓝
+    0x00AA_00AA, // 品红
+    0x0000_AAAA, // 青
+    0x00AA_AAAA, // 白
+    0x0055_5555, // 亮黑（灰）
+    0x00FF_5555, // 亮红
+    0x0055_FF55, // 亮绿
+    0x00FF_FF55, // 亮黄
+    0x0055_55FF, // 亮蓝
+    0x00FF_55FF, // 亮品红
+    0x0055_FFFF, // 亮青
+    0x00FF_FFFF, // 亮白
+];
+
+/// 字体加载候选（按序取第一个读得到的）：设备 CJK 优先，host 测试用 DejaVu
+pub const FONT_CANDIDATES: &[&str] = &[
+    "/system/fonts/NotoSansCJK-Regular.ttc",
+    "/system/fonts/DroidSansFallbackFull.ttf",
+    "/system/fonts/Roboto-Regular.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+];
+
+/// 按候选顺序加载第一个可读且 fontdue 认得的字体，返回 (来源路径, 字体)。
+/// 全灭返回 None（调用方决定降级/报错，本函数不 panic）。
+pub fn load_font(candidates: &[&str]) -> Option<(String, fontdue::Font)> {
+    for path in candidates {
+        let Ok(bytes) = std::fs::read(path) else {
+            continue;
+        };
+        if let Ok(font) = fontdue::Font::from_bytes(bytes, fontdue::FontSettings::default()) {
+            return Some((path.to_string(), font));
+        }
+    }
+    None
+}
+
+/// 布局数学（A 档考题钉死）：窗口 px 尺寸 + 单元格 px 尺寸 → (cols, rows)。
+/// 任一边为 0（窗口未出/单元格非法）或装不下一个格子 → 对应维度为 0。
+pub fn grid_dims(win_w: u32, win_h: u32, cell_w: u32, cell_h: u32) -> (u32, u32) {
+    if cell_w == 0 || cell_h == 0 {
+        return (0, 0);
+    }
+    (win_w / cell_w, win_h / cell_h)
+}
+
+/// 布局数学（A 档考题钉死）：格坐标 → 帧缓冲像素原点（左上角）。
+pub fn cell_origin(col: u32, row: u32, cell_w: u32, cell_h: u32) -> (u32, u32) {
+    (col * cell_w, row * cell_h)
+}
+
+/// xterm 256 色索引 → XRGB（A 档考题钉死边界）：
+/// 0-15 走 ANSI 表；16-231 是 6×6×6 色立方；232-255 是 24 级灰阶。
+pub fn indexed_color(n: u8) -> u32 {
+    const LEVELS: [u32; 6] = [0, 95, 135, 175, 215, 255];
+    match n {
+        0..=15 => ANSI_16[n as usize],
+        16..=231 => {
+            let n = u32::from(n) - 16;
+            let r = LEVELS[(n / 36) as usize];
+            let g = LEVELS[((n / 6) % 6) as usize];
+            let b = LEVELS[(n % 6) as usize];
+            (r << 16) | (g << 8) | b
+        }
+        232..=255 => {
+            let v = 8 + u32::from(n - 232) * 10;
+            (v << 16) | (v << 8) | v
+        }
+    }
+}
+
+/// alacritty 颜色 → XRGB。命名色走表，前景/背景走默认，Spec 直包，
+/// 未专门处理的（Cursor/Dim*/BrightForeground…）归默认前景。
+pub fn color_to_xrgb(c: Color) -> u32 {
+    match c {
+        Color::Named(named) => match named {
+            NamedColor::Foreground | NamedColor::BrightForeground => DEFAULT_FG,
+            NamedColor::Background => DEFAULT_BG,
+            // 0-15 顺序与 ANSI 表一致（vte 定义即如此），直接转索引
+            n if (n as usize) < 16 => ANSI_16[n as usize],
+            n if (NamedColor::DimBlack as usize..=NamedColor::DimWhite as usize)
+                .contains(&(n as usize)) =>
+            {
+                // Dim 系：对应普通色减半亮度
+                let base = ANSI_16[n as usize - NamedColor::DimBlack as usize];
+                let (r, g, b) = (
+                    ((base >> 16) & 0xFF) / 2,
+                    ((base >> 8) & 0xFF) / 2,
+                    (base & 0xFF) / 2,
+                );
+                (r << 16) | (g << 8) | b
+            }
+            _ => DEFAULT_FG, // Cursor 等：无画面语义的归前景
+        },
+        Color::Spec(rgb) => (u32::from(rgb.r) << 16) | (u32::from(rgb.g) << 8) | u32::from(rgb.b),
+        Color::Indexed(n) => indexed_color(n),
+    }
+}
+
+/// Term 尺寸适配器（alacritty_terminal::grid::Dimensions 的本地实现）
+#[derive(Clone, Copy)]
+struct TermSize {
+    cols: usize,
+    rows: usize,
+}
+
+impl Dimensions for TermSize {
+    fn total_lines(&self) -> usize {
+        self.rows
+    }
+    fn screen_lines(&self) -> usize {
+        self.rows
+    }
+    fn columns(&self) -> usize {
+        self.cols
+    }
+}
+
+/// 终端视图：Term + vte 解析器 + 字体。事件用 VoidListener 空实现丢弃
+/// （OSC52 剪贴板/标题改写等本切片不消费）。
+pub struct TermView {
+    term: Term<VoidListener>,
+    processor: Processor,
+    font: fontdue::Font,
+    cell_w: u32,
+    cell_h: u32,
+}
+
+impl TermView {
+    /// 建视图：cols/rows 为初始网格尺寸（窗口未出时给个占位，resize 随后到）。
+    /// 任一为 0 会被钳到 1——alacritty Grid 不接受 0 维（会下溢 panic）。
+    pub fn new(font: fontdue::Font, cols: u32, rows: u32, cell_w: u32, cell_h: u32) -> Self {
+        let size = TermSize {
+            cols: (cols.max(1)) as usize,
+            rows: (rows.max(1)) as usize,
+        };
+        Self {
+            term: Term::new(Config::default(), &size, VoidListener),
+            processor: Processor::new(),
+            font,
+            cell_w: cell_w.max(1),
+            cell_h: cell_h.max(1),
+        }
+    }
+
+    /// 喂 PTY 原始字节流（含 ANSI/UTF-8），vte 解析器驱动 Term 状态迁移
+    pub fn feed(&mut self, bytes: &[u8]) {
+        self.processor.advance(&mut self.term, bytes);
+    }
+
+    /// 改网格尺寸（窗口 Resized 时调）。0 维钳 1，理由同 new。
+    pub fn resize_cells(&mut self, cols: u32, rows: u32) {
+        self.term.resize(TermSize {
+            cols: (cols.max(1)) as usize,
+            rows: (rows.max(1)) as usize,
+        });
+    }
+
+    /// 单元格像素尺寸（android_app 用窗口尺寸反推 cols/rows 时取值）
+    pub fn cell_size(&self) -> (u32, u32) {
+        (self.cell_w, self.cell_h)
+    }
+
+    /// 把当前可见网格渲染进 XRGB 帧缓冲（黑底，满幅重绘）。
+    /// buf 尺寸必须与 buf_w*buf_h 一致（调用方 softbuffer 保证；不一致只画放得下的部分）。
+    pub fn render_into(&mut self, buf: &mut [u32], buf_w: u32, buf_h: u32) {
+        buf.fill(DEFAULT_BG);
+        if buf_w == 0 || buf_h == 0 {
+            return;
+        }
+        let mut frame = Frame {
+            buf,
+            w: buf_w,
+            h: buf_h,
+        };
+        let content = self.term.renderable_content();
+        let cursor = content.cursor;
+        for indexed in content.display_iter {
+            let line = indexed.point.line.0;
+            if line < 0 {
+                continue; // 显示偏移下的历史行不进画面
+            }
+            let (mut fg, mut bg) = (
+                color_to_xrgb(indexed.cell.fg),
+                color_to_xrgb(indexed.cell.bg),
+            );
+            if indexed.cell.flags.contains(Flags::INVERSE) {
+                std::mem::swap(&mut fg, &mut bg);
+            }
+            let is_cursor = cursor.shape != CursorShape::Hidden && indexed.point == cursor.point;
+            if is_cursor {
+                std::mem::swap(&mut fg, &mut bg);
+            }
+            let (px, py) = cell_origin(
+                indexed.point.column.0 as u32,
+                line as u32,
+                self.cell_w,
+                self.cell_h,
+            );
+            if px >= buf_w || py >= buf_h {
+                continue; // 窗口比网格小（resize 途中）：裁掉放不下的格
+            }
+            // 背景不满格重画（全帧已填 DEFAULT_BG），只在非默认背景时补色块
+            if bg != DEFAULT_BG {
+                frame.fill_rect(px, py, self.cell_w, self.cell_h, bg);
+            }
+            let c = indexed.cell.c;
+            if c == ' ' || indexed.cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                continue; // 空格无字形；宽字符第二格不画（首格已画）
+            }
+            self.draw_glyph(&mut frame, c, px, py, fg);
+        }
+    }
+
+    /// 光栅化单字形并 alpha 混合进帧缓冲。垂直方向格内居中（简化，见文件头留白）。
+    fn draw_glyph(&self, frame: &mut Frame<'_>, c: char, px: u32, py: u32, fg: u32) {
+        let (metrics, bitmap) = self.font.rasterize(c, self.cell_h as f32);
+        if metrics.width == 0 || metrics.height == 0 {
+            return; // 缺字形/空白字形：fontdue 给空位图，不 panic
+        }
+        let top = py + self.cell_h.saturating_sub(metrics.height as u32) / 2;
+        for gy in 0..metrics.height as u32 {
+            let y = top + gy;
+            if y >= frame.h {
+                break;
+            }
+            for gx in 0..metrics.width as u32 {
+                // xmin 可为负（斜体左探）：用有符号算再裁
+                let x = px as i64 + i64::from(metrics.xmin) + i64::from(gx);
+                if x < 0 || x >= i64::from(frame.w) {
+                    continue;
+                }
+                let a = u32::from(bitmap[(gy * metrics.width as u32 + gx) as usize]);
+                if a == 0 {
+                    continue;
+                }
+                frame.blend_px(x as u32, y, fg, a);
+            }
+        }
+    }
+}
+
+/// 帧缓冲视图：把 buf + 尺寸打包，免得每个画图函数都拖一溜参数（clippy 红线）
+struct Frame<'a> {
+    buf: &'a mut [u32],
+    w: u32,
+    h: u32,
+}
+
+impl Frame<'_> {
+    /// 画纯色矩形（裁剪到帧缓冲内）
+    fn fill_rect(&mut self, x: u32, y: u32, w: u32, h: u32, color: u32) {
+        for row in y..(y + h).min(self.h) {
+            for col in x..(x + w).min(self.w) {
+                self.buf[(row * self.w + col) as usize] = color;
+            }
+        }
+    }
+
+    /// 单像素按覆盖率 a 混合（调用方保证 x/y 已在界内）
+    fn blend_px(&mut self, x: u32, y: u32, fg: u32, a: u32) {
+        let dst = &mut self.buf[(y * self.w + x) as usize];
+        *dst = blend(fg, *dst, a);
+    }
+}
+
+/// 按覆盖率 a（0-255）把 fg 混合到 dst 上（逐通道线性插值）
+fn blend(fg: u32, dst: u32, a: u32) -> u32 {
+    let inv = 255 - a;
+    let ch = |f: u32, d: u32| (f * a + d * inv) / 255;
+    let r = ch((fg >> 16) & 0xFF, (dst >> 16) & 0xFF);
+    let g = ch((fg >> 8) & 0xFF, (dst >> 8) & 0xFF);
+    let b = ch(fg & 0xFF, dst & 0xFF);
+    (r << 16) | (g << 8) | b
+}
+
+/// 供 android_app：从候选路径建视图（字体 + 默认 80x24 占位网格），
+/// 返回 (视图, 字体来源路径)。字体全灭返回 None。
+pub fn build_from_candidates(candidates: &[&str]) -> Option<(TermView, String)> {
+    let (path, font) = load_font(candidates)?;
+    Some((TermView::new(font, 80, 24, CELL_W, CELL_H), path))
+}

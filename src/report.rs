@@ -77,16 +77,21 @@ pub fn report(stage: &str, msg: &str) {
 
 /// 同步直报（仅启动第一格用）：早死进程等不到后台线程第一班车
 /// （2026-08-13 实拍：全异步版「进门即死」零行日志）。有界阻塞
-/// （connect 2s）直发一次，失败再入队交后台重试。
+/// （connect 2s）直发，失败重试 3 次再入队交后台——当日真机单条丢失率
+/// 约 50%（移动网络抖），重试压掉大部分；最坏 3×(2s+3s) 阻塞上限，可接受。
 pub fn report_sync(stage: &str, msg: &str) {
     let line = format!(
         "{{\"stage\":\"{}\",\"msg\":\"{}\"}}",
         escape_json(stage),
         escape_json(msg)
     );
-    if try_post(&line).is_err() {
-        enqueue(line);
+    // 连发重试无间隔：失败多是 connect 层秒挂，等不等都一样
+    for _ in 0..3 {
+        if try_post(&line).is_ok() {
+            return;
+        }
     }
+    enqueue(line);
 }
 
 fn enqueue(line: String) {

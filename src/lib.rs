@@ -4,6 +4,7 @@ pub mod conn;
 pub mod protocol;
 pub mod report;
 pub mod session;
+pub mod termview;
 
 #[cfg(target_os = "android")]
 pub mod android_app;

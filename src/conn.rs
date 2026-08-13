@@ -7,8 +7,8 @@
 //! [ws] connected / opened / output 预览 / exited 四格。
 //!
 //! 已知留白（尖刺后处理）：
-//! - 协议级 ping/pong：tungstenite 读帧时自动排队 pong，但只在下次写/flush
-//!   时才真发出去；长时间只读不写可能超 60s 被服务端判半开杀掉
+//! - echo_roundtrip（一次性冒烟路径）不主动冲 pong：30s 超时内必跑完，无感；
+//!   常驻路径 spawn_terminal_session 已在 Ping 时主动 flush（函数文档有实锤）
 //! - 明文 ws://：尖刺期直连 80，正式上 wss（nginx 443 证书）
 
 use crate::protocol::{self, ClientMsg};
@@ -119,4 +119,164 @@ pub fn spawn_smoke(url: &'static str, command: &'static str) {
             }
         });
     });
+}
+
+/// 常驻会话的出向命令（应用侧 → ws 线程）
+#[derive(Debug)]
+pub enum TermCmd {
+    /// terminal-input 的按键字节串（Opened 之前先缓存，绑定后按序补发）
+    Input(String),
+    /// terminal-resize；只留最新值，Opened 时补发一次
+    Resize { cols: u32, rows: u32 },
+    /// terminal-close
+    Close,
+}
+
+/// 常驻终端会话驱动（切片：手机启动即进交互 shell）。
+///
+/// 线程模型与 spawn_smoke 同款：独立线程 + tokio current_thread runtime。
+/// 双向：
+/// - ws 读循环：Opened/Output/Exited/Failed 经 Session 状态机转成 SessionEvent
+///   回调给 inbound（闭包运行在 ws 线程——跨线程交付由调用方自己桥，如 mpsc）
+/// - outbound_rx：TermCmd 翻译成出向协议消息；Opened 前 Input 缓存、
+///   Resize 只留最新（Session 门禁 None 时不丢不烂）
+///
+/// 30s 心跳实锤（tungstenite-0.26.2 src/protocol/mod.rs:647 + tokio-tungstenite
+/// src/lib.rs:286）：服务端协议级 ping 到达时 tungstenite 自动把 pong 排进
+/// additional 写队列，但只在「下一次写/flush」才真正发出——纯读路径不冲。
+/// 本驱动在读到 Message::Ping 时主动 flush 一次把队列里的 pong 顶出去，
+/// 空闲终端（用户不敲键盘=无写）也不会被 60s 半开判杀。
+pub fn spawn_terminal_session(
+    url: &'static str,
+    command: Option<String>,
+    mut inbound: impl FnMut(SessionEvent) + Send + 'static,
+) -> std::sync::mpsc::Sender<TermCmd> {
+    let (tx, rx) = std::sync::mpsc::channel::<TermCmd>();
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("建 tokio runtime 失败");
+        rt.block_on(async move {
+            if let Err(e) = run_terminal_session(url, command, &mut inbound, rx).await {
+                inbound(SessionEvent::Failed { message: e });
+            }
+        });
+    });
+    tx
+}
+
+/// 常驻驱动核心（异步）：连 url → 开会话 → select 双向泵，直到 Exited/Failed/断线
+async fn run_terminal_session(
+    url: &str,
+    command: Option<String>,
+    inbound: &mut impl FnMut(SessionEvent),
+    outbound_rx: std::sync::mpsc::Receiver<TermCmd>,
+) -> Result<(), String> {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+
+    // std mpsc → tokio 无界桥（select! 要异步流；转发线程随 rx 断开自然死）
+    let (otx, mut orx) = tokio::sync::mpsc::unbounded_channel::<TermCmd>();
+    std::thread::spawn(move || {
+        while let Ok(cmd) = outbound_rx.recv() {
+            if otx.send(cmd).is_err() {
+                break; // ws 线程已退，出向无人收——应用侧僵尸发送被吞
+            }
+        }
+    });
+
+    async fn send_msg<S, E>(ws: &mut S, msg: ClientMsg) -> Result<(), String>
+    where
+        S: futures_util::Sink<Message, Error = E> + Unpin,
+        E: std::fmt::Display,
+    {
+        let text = protocol::encode_client(&msg);
+        SinkExt::send(ws, Message::Text(text.into()))
+            .await
+            .map_err(|e| format!("发送失败: {e}"))
+    }
+
+    let (mut ws, _resp) = tokio_tungstenite::connect_async(url)
+        .await
+        .map_err(|e| format!("连接失败: {e}"))?;
+
+    let mut session = Session::new();
+    send_msg(&mut ws, Session::open_msg(command.as_deref())).await?;
+
+    // Opened 前的出向缓存：Input 全留（按键有序），Resize 只留最新
+    let mut pending_input: std::collections::VecDeque<String> = std::collections::VecDeque::new();
+    let mut last_resize: Option<(u32, u32)> = None;
+    let mut outbound_open = true;
+
+    loop {
+        tokio::select! {
+            frame = ws.next() => {
+                let text = match frame {
+                    Some(Ok(Message::Text(t))) => t,
+                    // ping：flush 把 tungstenite 自动排的 pong 顶出去（心跳实锤见上）
+                    Some(Ok(Message::Ping(_))) => {
+                        let _ = SinkExt::flush(&mut ws).await;
+                        continue;
+                    }
+                    Some(Ok(_)) => continue, // 二进制/pong/close：跳过
+                    Some(Err(e)) => return Err(format!("读帧失败: {e}")),
+                    None => return Err("服务端先关闭连接".into()),
+                };
+                let msg = protocol::decode_server(text.as_str())
+                    .map_err(|e| format!("解码失败: {e}"))?;
+                match session.on_server(msg) {
+                    Some(SessionEvent::Opened { session_id }) => {
+                        inbound(SessionEvent::Opened { session_id });
+                        // 补发缓存：先 resize（PTY 尺寸尽早对），再按序灌 input
+                        if let Some((cols, rows)) = last_resize.take()
+                            && let Some(m) = session.resize_msg(cols, rows)
+                        {
+                            send_msg(&mut ws, m).await?;
+                        }
+                        while let Some(input) = pending_input.pop_front() {
+                            if let Some(m) = session.input_msg(&input) {
+                                send_msg(&mut ws, m).await?;
+                            }
+                        }
+                    }
+                    Some(ev @ SessionEvent::Output { .. }) => inbound(ev),
+                    Some(ev @ SessionEvent::Exited { .. }) => {
+                        inbound(ev);
+                        return Ok(());
+                    }
+                    Some(ev @ SessionEvent::Failed { .. }) => {
+                        // 事件已上交，回 Ok 避免 spawn 包装层再报一次 Failed
+                        inbound(ev);
+                        return Ok(());
+                    }
+                    None => {}
+                }
+            }
+            cmd = orx.recv(), if outbound_open => {
+                match cmd {
+                    Some(TermCmd::Input(input)) => {
+                        match session.input_msg(&input) {
+                            Some(m) => send_msg(&mut ws, m).await?,
+                            None => pending_input.push_back(input), // 未 Live：缓存
+                        }
+                    }
+                    Some(TermCmd::Resize { cols, rows }) => {
+                        last_resize = Some((cols, rows));
+                        if let Some(m) = session.resize_msg(cols, rows) {
+                            send_msg(&mut ws, m).await?;
+                        }
+                    }
+                    Some(TermCmd::Close) => {
+                        if let Some(m) = session.close_msg() {
+                            send_msg(&mut ws, m).await?;
+                        }
+                        // 不主动断：等服务端 terminal-exit 走正常收尾
+                    }
+                    // 应用侧弃管（UI 死了）：标记关闭防 select 空转，继续读到会话终
+                    None => outbound_open = false,
+                }
+            }
+        }
+    }
 }

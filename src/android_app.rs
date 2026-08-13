@@ -6,18 +6,39 @@
 //! configure 间漂移、零 Rust panic，非代码逻辑病；裸 winit 窗对照组稳定。
 //! 终端负载（字符网格 + 光标）本就是 CPU 教科书级场景，softbuffer 零驱动
 //! 依赖、行为确定。GPU 路线留档后查（git 历史 ENABLE_GFX/wgpu 时代）。
+//!
+//! 切片「终端渲染」（2026-08-13）：TERMINAL_MODE=true 时启动即进终端——
+//! 建窗口 → softbuffer → 加载字体建 TermView → spawn 常驻 ws 会话
+//! （command=None 交互 shell）→ Output 喂 Term → render_into 帧缓冲 present。
+//! false 时走旧紫屏 + echo 冒烟路径（留作对照组/回退开关）。
+//!
+//! 已知留白（尖刺期）：
+//! - 重绘泵是忙轮询（about_to_wait 无条件 request_redraw）：ws 线程事件经
+//!   mpsc 送达，Android 上没用 EventLoopProxy 唤醒（可靠性未验证），busy loop
+//!   是最朴素的活路。电池不友好，正式版要换 proxy 唤醒
+//! - 键盘只翻可打印字符 + Enter/Backspace/Tab/Esc；中文 IME（候选词提交）
+//!   是下个切片的事——winit 0.30 Android 的 IME 事件能来多少算多少
 
 use std::num::NonZeroU32;
 use std::sync::Arc;
+use std::sync::mpsc::{self, Receiver, Sender};
 
 use winit::application::ApplicationHandler;
-use winit::event::WindowEvent;
+use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
+use winit::keyboard::{Key, NamedKey};
 use winit::platform::android::EventLoopBuilderExtAndroid;
 use winit::window::{Window, WindowId};
 
+use crate::conn::TermCmd;
+use crate::session::SessionEvent;
+use crate::termview::{self, TermView};
+
 /// KFM 紫（softbuffer 像素格式 XRGB）
 const KFM_PURPLE: u32 = 0x008B_5CF6;
+
+/// 终端模式开关：true = 启动即进终端画面；false = 紫屏 + echo 冒烟对照组
+const TERMINAL_MODE: bool = true;
 
 type SoftContext = softbuffer::Context<Arc<Window>>;
 type SoftSurface = softbuffer::Surface<Arc<Window>, Arc<Window>>;
@@ -27,11 +48,22 @@ struct Gfx {
     surface: SoftSurface,
 }
 
+/// ws 线程 → 主事件循环的会话事件桥（inbound 闭包在 ws 线程跑，跨线程走 mpsc）
+type EventRx = Receiver<SessionEvent>;
+
 #[derive(Default)]
 struct App {
     window: Option<Arc<Window>>,
     gfx: Option<Gfx>,
     reported_first_events: bool,
+    // ---- TERMINAL_MODE 状态 ----
+    term: Option<TermView>,
+    outbound: Option<Sender<TermCmd>>,
+    event_rx: Option<EventRx>,
+    /// 有新输出/尺寸变化待渲染
+    dirty: bool,
+    /// 会话终了（exited/failed）后定格最后一屏，出向不再发
+    session_over: bool,
 }
 
 impl App {
@@ -52,17 +84,122 @@ impl App {
         }
     }
 
-    /// 清屏一帧（KFM 紫）
-    fn draw_purple(g: &mut Gfx) {
-        let mut buf = g.surface.buffer_mut().expect("取帧缓冲失败");
-        buf.fill(KFM_PURPLE);
-        buf.present().expect("帧呈现失败");
-        // 首帧呈现里程碑：紫屏真亮了才算雷 1 排除
-        static FIRST_PRESENT: std::sync::atomic::AtomicBool =
-            std::sync::atomic::AtomicBool::new(false);
-        if !FIRST_PRESENT.swap(true, std::sync::atomic::Ordering::Relaxed) {
-            crate::report::report("boot", "首帧 present 完成——紫屏应已亮");
+    /// 终端模式初始化：建 TermView + spawn 常驻会话 + 首发 resize
+    fn init_terminal(&mut self, window: &Arc<Window>) {
+        let Some((tv, font_path)) = termview::build_from_candidates(termview::FONT_CANDIDATES)
+        else {
+            crate::report::report_sync("term", "字体候选全灭——TermView 建不成");
+            return;
+        };
+        crate::report::report("term", &format!("字体加载自 {font_path}"));
+        crate::report::report("term", "TermView 建成");
+        self.term = Some(tv);
+
+        // 常驻会话：command=None = 交互 shell；inbound 事件经 mpsc 桥回主循环
+        let (event_tx, event_rx) = mpsc::channel::<SessionEvent>();
+        let outbound =
+            crate::conn::spawn_terminal_session("ws://8.145.46.182/kfmv4/ws", None, move |ev| {
+                // 主循环死了发送失败：吞掉——ws 线程绝不为上报陪葬
+                let _ = event_tx.send(ev);
+            });
+        self.event_rx = Some(event_rx);
+        self.outbound = Some(outbound);
+
+        // 首发尺寸：Opened 前 outbound 会被 conn 层缓存，绑定后补发
+        let size = window.inner_size();
+        self.apply_window_size(size.width, size.height);
+        self.dirty = true;
+    }
+
+    /// 窗口 px 尺寸 → cols/rows → Term resize + terminal-resize 出向
+    fn apply_window_size(&mut self, w: u32, h: u32) {
+        let Some(term) = &mut self.term else { return };
+        let (cw, ch) = term.cell_size();
+        let (cols, rows) = termview::grid_dims(w, h, cw, ch);
+        term.resize_cells(cols, rows);
+        if !self.session_over {
+            if let Some(tx) = &self.outbound {
+                let _ = tx.send(TermCmd::Resize { cols, rows });
+            }
         }
+        self.dirty = true;
+    }
+
+    /// 抽干 ws 线程送来的会话事件（about_to_wait 每圈调）
+    fn drain_terminal_events(&mut self) {
+        let Some(rx) = &self.event_rx else { return };
+        let mut events = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            events.push(ev);
+        }
+        for ev in events {
+            match ev {
+                SessionEvent::Opened { session_id } => {
+                    crate::report::report("term", &format!("会话 opened: {session_id}"));
+                }
+                SessionEvent::Output { data } => {
+                    if let Some(term) = &mut self.term {
+                        term.feed(data.as_bytes());
+                        self.dirty = true;
+                    }
+                }
+                SessionEvent::Exited { code } => {
+                    crate::report::report_sync("term", &format!("会话 exited: code={code}"));
+                    self.session_over = true;
+                }
+                SessionEvent::Failed { message } => {
+                    crate::report::report_sync("term", &format!("会话 failed: {message}"));
+                    self.session_over = true;
+                }
+            }
+        }
+    }
+
+    /// 键盘事件 → 终端输入字节（尖刺极简映射，IME 见文件头留白）
+    fn handle_key(&mut self, event: &winit::event::KeyEvent) {
+        if event.state != ElementState::Pressed || self.session_over {
+            return;
+        }
+        let bytes: Option<String> = match &event.logical_key {
+            Key::Named(NamedKey::Enter) => Some("\r".into()),
+            Key::Named(NamedKey::Backspace) => Some("\x7f".into()),
+            Key::Named(NamedKey::Tab) => Some("\t".into()),
+            Key::Named(NamedKey::Escape) => Some("\x1b".into()),
+            _ => event.text.as_ref().map(|t| t.to_string()),
+        };
+        if let (Some(bytes), Some(tx)) = (bytes, &self.outbound) {
+            if !bytes.is_empty() {
+                let _ = tx.send(TermCmd::Input(bytes));
+            }
+        }
+    }
+
+    /// 渲染一帧：终端模式画网格，非终端模式清紫屏
+    fn draw_frame(&mut self) {
+        let Some(g) = &mut self.gfx else { return };
+        let mut buf = g.surface.buffer_mut().expect("取帧缓冲失败");
+        if TERMINAL_MODE {
+            if let Some(term) = &mut self.term {
+                let (w, h) = (buf.width().get(), buf.height().get());
+                term.render_into(&mut buf, w, h);
+                static FIRST_TERM_FRAME: std::sync::atomic::AtomicBool =
+                    std::sync::atomic::AtomicBool::new(false);
+                if !FIRST_TERM_FRAME.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    crate::report::report("term", "首终端帧渲染完成");
+                }
+            } else {
+                buf.fill(KFM_PURPLE); // 字体全灭的降级画面：紫屏 + 已有上报
+            }
+        } else {
+            buf.fill(KFM_PURPLE);
+            // 首帧呈现里程碑：紫屏真亮了才算雷 1 排除
+            static FIRST_PRESENT: std::sync::atomic::AtomicBool =
+                std::sync::atomic::AtomicBool::new(false);
+            if !FIRST_PRESENT.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                crate::report::report("boot", "首帧 present 完成——紫屏应已亮");
+            }
+        }
+        buf.present().expect("帧呈现失败");
     }
 }
 
@@ -83,7 +220,12 @@ impl ApplicationHandler for App {
         let window = Arc::new(el.create_window(attrs).expect("创建窗口失败"));
         let gfx = Self::init_gfx(&window);
         self.gfx = Some(gfx);
-        self.window = Some(window);
+        self.window = Some(window.clone());
+        if TERMINAL_MODE {
+            self.init_terminal(&window);
+            // 字体全灭走紫屏降级也要有首帧：dirty 兜底置位
+            self.dirty = true;
+        }
         crate::report::report("boot", "启动完成");
         log::info!("KFM-NA 壳启动完成");
     }
@@ -102,11 +244,21 @@ impl ApplicationHandler for App {
                         g.surface.resize(w, h).expect("surface resize 失败");
                     }
                 }
+                if TERMINAL_MODE {
+                    self.apply_window_size(sz.width, sz.height);
+                }
+            }
+            WindowEvent::KeyboardInput { event, .. } => {
+                if TERMINAL_MODE {
+                    self.handle_key(&event);
+                }
             }
             WindowEvent::RedrawRequested => {
-                if let Some(g) = &mut self.gfx {
-                    Self::draw_purple(g);
+                if TERMINAL_MODE && !self.dirty {
+                    return; // 忙轮询泵下的空圈：不重绘（省电的最后底线）
                 }
+                self.dirty = false;
+                self.draw_frame();
             }
             _ => {}
         }
@@ -121,6 +273,9 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, _el: &ActiveEventLoop) {
+        if TERMINAL_MODE {
+            self.drain_terminal_events();
+        }
         if let Some(w) = &self.window {
             w.request_redraw();
         }
@@ -142,9 +297,12 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
     std::panic::set_hook(Box::new(|info| {
         crate::report::report("panic", &info.to_string());
     }));
-    // ws 冒烟（尖刺切片 3）：连服务器 terminal-pty 跑 echo 闭环，
-    // 判卷 = field-reports.log 的 [ws] 四格。紫屏稳定后改为启动即连
-    crate::conn::spawn_smoke("ws://8.145.46.182/kfmv4/ws", "echo KFM-NA-WS-OK");
+    // ws 冒烟（尖刺切片 3 对照组）：连服务器 terminal-pty 跑 echo 闭环，
+    // 判卷 = field-reports.log 的 [ws] 四格。TERMINAL_MODE=true 时让位给
+    // 常驻会话（resumed 里 spawn），冒烟路径保留作回退开关
+    if !TERMINAL_MODE {
+        crate::conn::spawn_smoke("ws://8.145.46.182/kfmv4/ws", "echo KFM-NA-WS-OK");
+    }
     // 心跳：进程存活的客观判决——心跳停 = 进程真死（精确到秒）；
     // 心跳在跳但用户看到「闪退」= Activity 被系统杀、进程活着（病根完全不同）
     // 3s 间隔 + 独立同步直报：不给冲洗队列灌洪水，也不受队首阻塞牵连
