@@ -29,7 +29,15 @@ struct App {
 impl App {
     /// 初始化 wgpu（实例/表面/适配器/设备），配置表面为当前窗口尺寸
     fn init_gfx(window: &Arc<Window>) -> Gfx {
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+        // 后端锁 GLES（2026-08-13 实拍六次定案）：本机 Mali-G720 Immortalis
+        // Vulkan 驱动（r44p1）与 wgpu 25 相冲——死亡点在 instance→present 间
+        // 随机漂移（adapter/configure/present 各死过）、挂起与原生崩交替、
+        // 无 Rust panic，非代码逻辑病。Mali 的 GLES 驱动是另一套成熟栈，
+        // 清屏/终端渲染绰绰有余。Vulkan 留作后查（换机或驱动升级再试）。
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::GL,
+            ..Default::default()
+        });
         crate::report::report("boot", "wgpu instance 建成");
         let surface = instance
             .create_surface(window.clone())
@@ -210,11 +218,12 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
     android_logger::init_once(
         android_logger::Config::default().with_max_level(log::LevelFilter::Info),
     );
-    // 第一格同步直报：早死进程等不到后台线程（report.rs 头注铁律外的特例，
-    // 有界 2s）。能收到这行 = 死在 android_main 内部；收不到 = 死在更前（加载/manifest）。
-    crate::report::report_sync("boot", "android_main 进入");
-    // 飞鸽传书：起后台冲洗线程，再挂 panic 钩子（钩子的报告才有人送）
+    // 飞鸽传书：先起后台冲洗线程（必须在 report_sync 之前——sync 失败时
+    // 入队要有人接，否则第一格静默丢，06:42 实拍已踩），再挂 panic 钩子
     crate::report::start_flusher();
+    // 第一格同步直报：早死进程等不到后台线程（有界 2s）。
+    // 能收到这行 = 死在 android_main 内部；收不到 = 死在更前（加载/manifest）。
+    crate::report::report_sync("boot", "android_main 进入");
     std::panic::set_hook(Box::new(|info| {
         crate::report::report("panic", &info.to_string());
     }));
