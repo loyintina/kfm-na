@@ -23,6 +23,7 @@ struct Gfx {
 struct App {
     window: Option<Arc<Window>>,
     gfx: Option<Gfx>,
+    reported_first_events: bool,
 }
 
 impl App {
@@ -119,6 +120,13 @@ impl App {
 }
 
 impl ApplicationHandler for App {
+    fn new_events(&mut self, _el: &ActiveEventLoop, cause: winit::event::StartCause) {
+        if !self.reported_first_events {
+            self.reported_first_events = true;
+            crate::report::report("boot", &format!("new_events 首次: {:?}", cause));
+        }
+    }
+
     fn resumed(&mut self, el: &ActiveEventLoop) {
         if self.window.is_some() {
             return;
@@ -175,6 +183,8 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
         .with_android_app(app)
         .build()
         .expect("创建事件循环失败");
+    crate::report::report("boot", "event loop 建成");
     let mut app = App::default();
     event_loop.run_app(&mut app).expect("事件循环崩溃");
+    crate::report::report("boot", "run_app 返回（正常不该到这）");
 }
