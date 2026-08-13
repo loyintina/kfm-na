@@ -21,10 +21,14 @@ MIN_API=24
 # versionCode 必须大于已装包才能覆盖安装——旧包是 cargo-apk 默认的 16777472。
 # 红线：每次打包必须递增（2026-08-13 零日志闪退教训）——同 versionCode
 # 覆盖安装可能不重解压 .so，设备上「新 dex + 旧 so」JNI 符号缺失即闪退
-VERSION_CODE=16777475
+VERSION_CODE=16777476
 VERSION_NAME=0.1.0
 BUILD=build/apk
 OUT=target/release/apk/kfm-na.apk
+
+# 构建戳编译进 Rust（BAR-013）：设备跑的 .so 是哪个构建，
+# field-reports.log 首行一读便知
+export KFM_NA_BUILD="$(git rev-parse --short HEAD 2>/dev/null || echo nogit)-$(date -u +%m%d%H%M)"
 
 export PATH="$JDK/bin:$PATH"
 export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${MIN_API}-clang"
@@ -51,18 +55,23 @@ echo "=== [package 4/6] aapt2 link + 装 dex/lib ==="
     --version-code "$VERSION_CODE" --version-name "$VERSION_NAME"
 cp "$BUILD/dex/classes.dex" "$BUILD/stage/"
 cp "target/$TARGET/release/libkfm_na.so" "$BUILD/stage/lib/arm64-v8a/"
+# BAR-013：.so 不压缩（STORED）+ 下方 zipalign -p 页对齐，配 manifest 的
+# extractNativeLibs="false"——.so 直从 APK mmap 加载，与 dex 天然原子，
+# 「重解压被跳过 → dex 新 so 旧」整条错配链连根拔掉
 python3 - "$BUILD/stage" "$BUILD/unsigned.apk" <<'EOF'
 import os, sys, zipfile
 stage, apk = sys.argv[1], sys.argv[2]
-with zipfile.ZipFile(apk, "a", zipfile.ZIP_DEFLATED) as z:
+with zipfile.ZipFile(apk, "a") as z:
     for root, _, files in os.walk(stage):
         for f in files:
             p = os.path.join(root, f)
-            z.write(p, os.path.relpath(p, stage))
+            arc = os.path.relpath(p, stage)
+            ct = zipfile.ZIP_STORED if arc.endswith(".so") else zipfile.ZIP_DEFLATED
+            z.write(p, arc, ct)
 EOF
 
-echo "=== [package 5/6] zipalign ==="
-"$BT/zipalign" -f 4 "$BUILD/unsigned.apk" "$BUILD/aligned.apk"
+echo "=== [package 5/6] zipalign（-p 页对齐 .so） ==="
+"$BT/zipalign" -f -p 4 "$BUILD/unsigned.apk" "$BUILD/aligned.apk"
 
 echo "=== [package 6/6] apksigner（debug.keystore） ==="
 "$BT/apksigner" sign --ks "$KEYSTORE" --ks-pass pass:android \

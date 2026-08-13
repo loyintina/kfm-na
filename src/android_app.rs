@@ -514,7 +514,15 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
     crate::report::start_flusher();
     // 第一格同步直报：早死进程等不到后台线程（有界 2s）。
     // 能收到这行 = 死在 android_main 内部；收不到 = 死在更前（加载/manifest）。
-    crate::report::report_sync("boot", "android_main 进入");
+    // 构建戳（BAR-013）：设备跑的 .so 是哪个构建一读便知——dex/so 错配
+    // 实拍案里「探针全体沉默」曾让我们绕了一整圈才想到 .so 是旧的
+    crate::report::report_sync(
+        "boot",
+        &format!(
+            "android_main 进入 (构建 {})",
+            option_env!("KFM_NA_BUILD").unwrap_or("dev")
+        ),
+    );
     std::panic::set_hook(Box::new(|info| {
         crate::report::report("panic", &info.to_string());
     }));

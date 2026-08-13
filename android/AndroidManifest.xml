@@ -11,7 +11,12 @@
 
     <application
         android:label="KFM-NA"
+        android:extractNativeLibs="false"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen">
+        <!-- extractNativeLibs=false（BAR-013）：.so 不解压、直从 APK mmap，
+             与 classes.dex 天然原子同版本——「覆盖安装不重解压 .so →
+             dex 新 so 旧 → JNI 符号缺失」整条错配链连根拔掉。
+             配套：package-apk.sh 里 .so STORED 不压缩 + zipalign -p 页对齐 -->
 
         <activity
             android:name=".MainActivity"

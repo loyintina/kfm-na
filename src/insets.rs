@@ -18,48 +18,58 @@ use winit::platform::android::activity::AndroidApp;
 
 /// 强制弹出软键盘（BAR-012）：winit 的 set_ime_allowed 走 SHOW_IMPLICIT，
 /// 用户手动收过键盘后 IMM 按策略拒弹（实拍：关掉再点就召唤不出）。
-/// SHOW_FORCED = 用户强制召唤，无视该策略
+/// SHOW_FORCED = 用户强制召唤，无视该策略。
+/// 首调结果上报（BAR-013）：这刀落地时设备 .so 疑似不随更新重解压，
+/// 「强弹到底跑没跑、IMM 答没答应」必须能在日志里直接读到
 pub fn force_show_keyboard(app: &AndroidApp) {
     // SAFETY: 同 query_ime_bottom
     let vm = unsafe { JavaVM::from_raw(app.vm_as_ptr().cast()) };
     let raw_activity = app.activity_as_ptr() as jni::sys::jobject;
-    let _ = vm.attach_current_thread(|env| -> jni::errors::Result<()> {
-        // SAFETY: 同 query_ime_bottom
-        let activity = unsafe { JObject::from_raw(env, raw_activity) };
-        let service_name = env.new_string("input_method")?;
-        let imm = env
-            .call_method(
-                &activity,
-                jni_str!("getSystemService"),
-                jni_sig!("(Ljava/lang/String;)Ljava/lang/Object;"),
-                &[jni::JValue::Object(&service_name)],
-            )?
-            .l()?;
-        let window = env
-            .call_method(
-                &activity,
-                jni_str!("getWindow"),
-                jni_sig!("()Landroid/view/Window;"),
-                &[],
-            )?
-            .l()?;
-        let decor = env
-            .call_method(
-                window,
-                jni_str!("getDecorView"),
-                jni_sig!("()Landroid/view/View;"),
-                &[],
-            )?
-            .l()?;
-        const SHOW_FORCED: i32 = 2;
-        env.call_method(
-            imm,
-            jni_str!("showSoftInput"),
-            jni_sig!("(Landroid/view/View;I)Z"),
-            &[jni::JValue::Object(&decor), jni::JValue::Int(SHOW_FORCED)],
-        )?;
-        Ok(())
-    });
+    let shown = vm
+        .attach_current_thread(|env| -> jni::errors::Result<bool> {
+            // SAFETY: 同 query_ime_bottom
+            let activity = unsafe { JObject::from_raw(env, raw_activity) };
+            let service_name = env.new_string("input_method")?;
+            let imm = env
+                .call_method(
+                    &activity,
+                    jni_str!("getSystemService"),
+                    jni_sig!("(Ljava/lang/String;)Ljava/lang/Object;"),
+                    &[jni::JValue::Object(&service_name)],
+                )?
+                .l()?;
+            let window = env
+                .call_method(
+                    &activity,
+                    jni_str!("getWindow"),
+                    jni_sig!("()Landroid/view/Window;"),
+                    &[],
+                )?
+                .l()?;
+            let decor = env
+                .call_method(
+                    window,
+                    jni_str!("getDecorView"),
+                    jni_sig!("()Landroid/view/View;"),
+                    &[],
+                )?
+                .l()?;
+            const SHOW_FORCED: i32 = 2;
+            let shown = env
+                .call_method(
+                    imm,
+                    jni_str!("showSoftInput"),
+                    jni_sig!("(Landroid/view/View;I)Z"),
+                    &[jni::JValue::Object(&decor), jni::JValue::Int(SHOW_FORCED)],
+                )?
+                .z()?;
+            Ok(shown)
+        })
+        .ok(); // None = JNI 链路失败；Some(false) = IMM 拒弹；Some(true) = 弹了
+    static FIRST_CALL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !FIRST_CALL.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        crate::report::report("ime", &format!("强弹软键盘首调: {shown:?}"));
+    }
 }
 
 /// 查询一次真实 IME 底部 inset（px；NativeActivity 全屏窗与帧缓冲同坐标系）。
