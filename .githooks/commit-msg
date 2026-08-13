@@ -1,0 +1,8 @@
+#!/bin/sh
+# KFM-NA — commit-msg hook：文档耦合门 + fix 带钉门（均 hard fail，犯罪现场拦截）
+# 薄壳：逻辑全在 scripts/check/check-*.sh，禁止在此重新实现
+# 退出码必须透传（kfmv4 2026-07-30 教训：旧壳写死 exit 0 吞掉脚本退出码，拦截失效）
+# 安装：git config core.hooksPath .githooks
+cd "$(dirname "$0")/.." || exit 1
+bash scripts/check/check-commit-docs.sh --staged "$1" || exit 1
+bash scripts/check/check-fix-tests.sh --staged "$1" || exit 1

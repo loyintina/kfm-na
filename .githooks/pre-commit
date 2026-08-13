@@ -1,0 +1,5 @@
+#!/bin/sh
+# KFM-NA — pre-commit hook：每个提交都必须过 chain（fmt/clippy/test/build 全绿）
+# 安装：git config core.hooksPath .githooks
+cd "$(dirname "$0")/.." || exit 1
+bash scripts/chain.sh || exit 1
