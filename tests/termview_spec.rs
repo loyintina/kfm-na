@@ -15,11 +15,14 @@ use kfm_na::termview::{
 
 const HOST_FONT: &str = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf";
 
-fn host_termview(cols: u32, rows: u32) -> TermView {
+fn host_font() -> fontdue::Font {
     let bytes = std::fs::read(HOST_FONT).expect("host 测试字体缺失");
-    let font = fontdue::Font::from_bytes(bytes, fontdue::FontSettings::default())
-        .expect("fontdue 不认 DejaVuSansMono");
-    TermView::new(font, cols, rows, CELL_W, CELL_H)
+    fontdue::Font::from_bytes(bytes, fontdue::FontSettings::default())
+        .expect("fontdue 不认 DejaVuSansMono")
+}
+
+fn host_termview(cols: u32, rows: u32) -> TermView {
+    TermView::new(host_font(), None, cols, rows, CELL_W, CELL_H)
 }
 
 // ---------- A 档：布局数学 ----------
@@ -179,7 +182,9 @@ fn spec_渲染_光标格反色() {
     tv.render_into(&mut buf, 24 * CELL_W, 6 * CELL_H);
     // 光标格（5列, 0行）反色后背景为白——该格矩形内必须有接近白的像素；
     // 相邻的空格（6列）不是光标，应全黑
+    // 渲染的格原点 = cell_origin + 边距（BAR-005）
     let (cx, cy) = cell_origin(5, 0, CELL_W, CELL_H);
+    let (cx, cy) = (cx + termview::MARGIN_X, cy + termview::MARGIN_Y);
     let buf_w = 24 * CELL_W;
     let mut cursor_white = false;
     let mut neighbor_dark = true;
@@ -192,6 +197,7 @@ fn spec_渲染_光标格反色() {
         }
     }
     let (nx, _) = cell_origin(6, 0, CELL_W, CELL_H);
+    let nx = nx + termview::MARGIN_X;
     for y in cy..cy + CELL_H {
         for x in nx..nx + CELL_W {
             if buf[(y * buf_w + x) as usize] != DEFAULT_BG {
@@ -242,9 +248,11 @@ fn spec_渲染_resize后正常() {
 // ---------- A 档：字体加载 ----------
 
 /// 帧缓冲里某格的墨水纵向跨度 → (最上, 最下) 非背景像素行（相对格原点）。
-/// 无墨水的格返回 (CELL_H, 0)（上下颠倒即为空）
+/// 无墨水的格返回 (CELL_H, 0)（上下颠倒即为空）。
+/// 注意含 BAR-005 边距偏移——渲染的格原点 = cell_origin + (MARGIN_X, MARGIN_Y)
 fn cell_ink_span(buf: &[u32], buf_w: u32, col: u32, row: u32) -> (u32, u32) {
     let (ox, oy) = cell_origin(col, row, CELL_W, CELL_H);
+    let (ox, oy) = (ox + termview::MARGIN_X, oy + termview::MARGIN_Y);
     let (mut top, mut bot) = (CELL_H, 0);
     for y in 0..CELL_H {
         for x in 0..CELL_W {
@@ -357,4 +365,83 @@ fn spec_字体_加载跳过比例字体() {
     let (path, _font) =
         termview::load_font(&[HOST_PROPORTIONAL_FONT, HOST_FONT]).expect("必须命中等宽候选");
     assert_eq!(path, HOST_FONT);
+}
+
+// ---------- A 档：边距（BAR-005 边缘半字） ----------
+
+#[test]
+fn spec_边距_首格不贴边() {
+    // BAR-005 病灶：网格从 (0,0) 画起，边缘字符被屏幕圆角/曲面切半。
+    // 契约：帧缓冲四周一圈 MARGIN 带内必须是纯背景，字形墨水全部在带内之后
+    let mut tv = host_termview(8, 2);
+    tv.feed(b"A");
+    let buf_w = 2 * termview::MARGIN_X + 8 * CELL_W;
+    let buf_h = 2 * termview::MARGIN_Y + 2 * CELL_H;
+    let mut buf = vec![0u32; (buf_w * buf_h) as usize];
+    tv.render_into(&mut buf, buf_w, buf_h);
+    for y in 0..buf_h {
+        for x in 0..buf_w {
+            if x < termview::MARGIN_X
+                || y < termview::MARGIN_Y
+                || x >= buf_w - termview::MARGIN_X
+                || y >= buf_h - termview::MARGIN_Y
+            {
+                assert_eq!(
+                    buf[(y * buf_w + x) as usize],
+                    DEFAULT_BG,
+                    "边距带 ({x},{y}) 必须是纯背景"
+                );
+            }
+        }
+    }
+    // 墨水必须真的出现在边距之后的首格区域（防「全帧涂黑」式假绿）
+    let mut ink = false;
+    for y in termview::MARGIN_Y..buf_h {
+        for x in termview::MARGIN_X..buf_w {
+            if buf[(y * buf_w + x) as usize] != DEFAULT_BG {
+                ink = true;
+            }
+        }
+    }
+    assert!(ink, "边距之后必须有字形墨水");
+}
+
+// ---------- A 档：CJK 判定与备用字体 ----------
+
+#[test]
+fn spec_cjk_判定边界() {
+    use termview::needs_cjk;
+    assert!(!needs_cjk('A'));
+    assert!(!needs_cjk('z'));
+    assert!(!needs_cjk('—')); // U+2014 破折号：常用但不进 CJK 备用字体
+    assert!(needs_cjk('中'));
+    assert!(needs_cjk('。')); // U+3002 CJK 标点
+    assert!(needs_cjk('ａ')); // U+FF41 全角小写
+}
+
+#[test]
+fn spec_字号_cjk宽度帽() {
+    // CJK 全角字占两格：'中' 步进宽不得超过 2 格宽
+    let font = host_font();
+    let (px, _) = termview::fit_cjk_px(&font, 2 * CELL_W, CELL_H);
+    let (m, _) = font.rasterize('中', px);
+    assert!(
+        m.advance_width <= 2.0 * CELL_W as f32 + 0.01,
+        "CJK 步进宽 {} 必须 ≤ 两格宽 {}",
+        m.advance_width,
+        2 * CELL_W
+    );
+}
+
+#[test]
+fn spec_渲染_cjk备用字体上屏() {
+    // 主字体无 CJK 字形时，备用字体接管——host 双 DejaVu 画 tofu 也必须有墨，
+    // 且绝不 panic（宽字符 + 占位格链路）
+    let mut tv = TermView::new(host_font(), Some(host_font()), 8, 2, CELL_W, CELL_H);
+    tv.feed("中文A".as_bytes());
+    let buf_w = 2 * termview::MARGIN_X + 8 * CELL_W;
+    let buf_h = 2 * termview::MARGIN_Y + 2 * CELL_H;
+    let mut buf = vec![0u32; (buf_w * buf_h) as usize];
+    tv.render_into(&mut buf, buf_w, buf_h);
+    assert!(buf.iter().any(|&p| p != DEFAULT_BG), "CJK 必须有墨");
 }

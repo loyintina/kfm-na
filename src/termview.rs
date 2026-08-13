@@ -26,6 +26,17 @@ use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Processor};
 pub const CELL_W: u32 = 15;
 pub const CELL_H: u32 = 30;
 
+/// 画面边距（BAR-005）：网格不贴边，边缘字符不再被屏幕圆角/曲面切半。
+/// 纯黑带，不画框——框是装饰，等中央页面定稿再议
+pub const MARGIN_X: u32 = 12;
+pub const MARGIN_Y: u32 = 12;
+
+/// CJK 判定（A 档考题钉死）：U+2E80 起进 CJK 备用字体（部首/统一表意/
+/// 兼容/全角全在其后；CJK 标点 U+3000 起也在）。西文/破折号不走备用
+pub fn needs_cjk(c: char) -> bool {
+    c as u32 >= 0x2E80
+}
+
 /// 默认前景白 / 背景黑（softbuffer XRGB：高字节不用）
 pub const DEFAULT_FG: u32 = 0x00FF_FFFF;
 pub const DEFAULT_BG: u32 = 0x0000_0000;
@@ -105,6 +116,55 @@ pub fn load_font(candidates: &[&str]) -> Option<(String, fontdue::Font)> {
     Some(("<内嵌>".to_string(), font))
 }
 
+/// CJK 备用字体候选（按序取第一个真能画出 '中' 的）：
+/// HYQiHei = vivo 汉仪旗黑（12:09 真机普查实见），BBK/Monster = 国产 ROM
+/// fallback 系；NotoSansCJK.ttc 空光栅（BAR-002）会被 usable 判定自动跳过；
+/// 末位 host DejaVu 只供 host 测试（tofu 也有墨，链路可验证）。
+/// 注意：usable 探针分不出 tofu 和真字形——所以主字体（内嵌 DejaVuSansMono）
+/// 绝不能进这份清单，否则设备永远停在豆腐块
+pub const CJK_FONT_CANDIDATES: &[&str] = &[
+    "/system/fonts/HYQiHei-40_vivo-Design-02.ttf",
+    "/system/fonts/DroidSansFallbackBBK.ttf",
+    "/system/fonts/DroidSansFallbackMonster.ttf",
+    "/system/fonts/DroidSansFallbackFull.ttf",
+    "/system/fonts/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+];
+
+/// 按候选顺序加载第一个真能画出 '中' 的 CJK 备用字体。全灭返回 None
+/// （主字体的 tofu 顶班，不 panic）
+pub fn load_cjk_font(candidates: &[&str]) -> Option<(String, fontdue::Font)> {
+    for path in candidates {
+        let Ok(bytes) = std::fs::read(path) else {
+            continue;
+        };
+        if let Ok(font) = fontdue::Font::from_bytes(bytes, fontdue::FontSettings::default())
+            && font_usable(&font, '中')
+        {
+            return Some((path.to_string(), font));
+        }
+    }
+    None
+}
+
+/// 候选体检（诊断用）：一个字体一行结论——读不到/fontdue 不认/三项判定结果。
+/// 真机「为什么偏偏选中它」的判卷依据（12:09 实录：DroidSansMono 明明在
+/// 目录里却落选 <内嵌>，没有这行就只能猜）
+pub fn diagnose_candidate(path: &str) -> String {
+    let Ok(bytes) = std::fs::read(path) else {
+        return format!("{path}: 读不到");
+    };
+    match fontdue::Font::from_bytes(bytes, fontdue::FontSettings::default()) {
+        Err(_) => format!("{path}: fontdue 不认"),
+        Ok(f) => format!(
+            "{path}: usable={} mono={} cjk={}",
+            font_usable(&f, 'M'),
+            font_monospaced(&f),
+            font_usable(&f, '中')
+        ),
+    }
+}
+
 /// 布局数学（A 档考题钉死）：窗口 px 尺寸 + 单元格 px 尺寸 → (cols, rows)。
 /// 任一边为 0（窗口未出/单元格非法）或装不下一个格子 → 对应维度为 0。
 pub fn grid_dims(win_w: u32, win_h: u32, cell_w: u32, cell_h: u32) -> (u32, u32) {
@@ -170,15 +230,15 @@ pub fn color_to_xrgb(c: Color) -> u32 {
 /// 字号几何（A 档考题钉死）：给出 (光栅字号, 格内基线偏移)。
 /// 约束一（BAR-001 基线对齐）：行盒(ascent-descent)装进格内并居中，
 ///   行盒比格高则按比例缩字号；
-/// 约束二（宽度帽）：'M' 步进宽不得超过格宽，超了再缩——否则相邻格
-///   字形互相渗透（放大字号后 DejaVuSansMono 自然超宽）
-pub fn fit_font_px(font: &fontdue::Font, cell_w: u32, cell_h: u32) -> (f32, f32) {
+/// 约束二（宽度帽）：探针字符步进宽不得超过格宽，超了再缩——否则
+///   相邻格字形互相渗透（放大字号后 DejaVuSansMono 自然超宽）
+fn fit_probe_px(font: &fontdue::Font, probe: char, cell_w: u32, cell_h: u32) -> (f32, f32) {
     let px0 = cell_h as f32;
     match font.horizontal_line_metrics(px0) {
         Some(lm) if lm.ascent > 0.0 => {
             let line = lm.ascent - lm.descent; // descent 为负，相减即行盒高
             let mut px = if line > px0 { px0 * px0 / line } else { px0 };
-            let (mm, _) = font.rasterize('M', px);
+            let (mm, _) = font.rasterize(probe, px);
             if mm.advance_width > cell_w as f32 {
                 px *= cell_w as f32 / mm.advance_width;
             }
@@ -189,6 +249,16 @@ pub fn fit_font_px(font: &fontdue::Font, cell_w: u32, cell_h: u32) -> (f32, f32)
         // 无水平度量（极端字体）兜底：原字号 + 经验基线 80% 处
         _ => (px0, px0 * 0.8),
     }
+}
+
+/// 主字体（西文等宽）字号几何：宽度帽探针 'M'
+pub fn fit_font_px(font: &fontdue::Font, cell_w: u32, cell_h: u32) -> (f32, f32) {
+    fit_probe_px(font, 'M', cell_w, cell_h)
+}
+
+/// CJK 备用字体字号几何：全角字占两格，宽度帽探针 '中'（调用方传 2 倍格宽）
+pub fn fit_cjk_px(font: &fontdue::Font, two_cell_w: u32, cell_h: u32) -> (f32, f32) {
+    fit_probe_px(font, '中', two_cell_w, cell_h)
 }
 
 /// Term 尺寸适配器（alacritty_terminal::grid::Dimensions 的本地实现）
@@ -210,12 +280,22 @@ impl Dimensions for TermSize {
     }
 }
 
+/// CJK 备用字体的字号几何（主字体的同款三件套，按两格宽适配）
+struct CjkStyle {
+    font: fontdue::Font,
+    px: f32,
+    baseline_off: f32,
+}
+
 /// 终端视图：Term + vte 解析器 + 字体。事件用 VoidListener 空实现丢弃
 /// （OSC52 剪贴板/标题改写等本切片不消费）。
 pub struct TermView {
     term: Term<VoidListener>,
     processor: Processor,
     font: fontdue::Font,
+    /// CJK 备用字体（fallback 链第一节）：needs_cjk 的字符归它画；
+    /// None = 主字体 tofu 顶班
+    cjk: Option<CjkStyle>,
     cell_w: u32,
     cell_h: u32,
     /// 实际光栅字号：行盒（ascent-descent）比格高时按比例缩小，保证装进格
@@ -227,19 +307,36 @@ pub struct TermView {
 impl TermView {
     /// 建视图：cols/rows 为初始网格尺寸（窗口未出时给个占位，resize 随后到）。
     /// 任一为 0 会被钳到 1——alacritty Grid 不接受 0 维（会下溢 panic）。
-    pub fn new(font: fontdue::Font, cols: u32, rows: u32, cell_w: u32, cell_h: u32) -> Self {
+    /// cjk_font 为 CJK 备用字体（可 None）
+    pub fn new(
+        font: fontdue::Font,
+        cjk_font: Option<fontdue::Font>,
+        cols: u32,
+        rows: u32,
+        cell_w: u32,
+        cell_h: u32,
+    ) -> Self {
         let size = TermSize {
             cols: (cols.max(1)) as usize,
             rows: (rows.max(1)) as usize,
         };
         let cell_h = cell_h.max(1);
         let cell_w = cell_w.max(1);
-        // 基线几何（BAR-001）+ 宽度帽：见 fit_font_px 文档
+        // 基线几何（BAR-001）+ 宽度帽：见 fit_font_px/fit_cjk_px 文档
         let (font_px, baseline_off) = fit_font_px(&font, cell_w, cell_h);
+        let cjk = cjk_font.map(|f| {
+            let (px, bo) = fit_cjk_px(&f, cell_w * 2, cell_h);
+            CjkStyle {
+                font: f,
+                px,
+                baseline_off: bo,
+            }
+        });
         Self {
             term: Term::new(Config::default(), &size, VoidListener),
             processor: Processor::new(),
             font,
+            cjk,
             cell_w,
             cell_h,
             font_px,
@@ -309,6 +406,8 @@ impl TermView {
                 self.cell_w,
                 self.cell_h,
             );
+            // BAR-005：格原点加边距，网格不贴边（边距带留黑）
+            let (px, py) = (px + MARGIN_X, py + MARGIN_Y);
             if px >= buf_w || py >= buf_h {
                 continue; // 窗口比网格小（resize 途中）：裁掉放不下的格
             }
@@ -326,14 +425,18 @@ impl TermView {
 
     /// 光栅化单字形并 alpha 混合进帧缓冲。基线对齐（BAR-001）：fontdue
     /// y 轴向上，metrics.ymin 是位图底边相对基线的偏移（下伸字母为负），
-    /// 位图顶边（屏坐标）= 格顶 + 基线偏移 - (ymin + 位图高)
+    /// 位图顶边（屏坐标）= 格顶 + 基线偏移 - (ymin + 位图高)。
+    /// 字体选择：needs_cjk 且有备用字体 → CJK 三件套（两格宽适配）
     fn draw_glyph(&self, frame: &mut Frame<'_>, c: char, px: u32, py: u32, fg: u32) {
-        let (metrics, bitmap) = self.font.rasterize(c, self.font_px);
+        let (font, font_px, baseline) = match &self.cjk {
+            Some(cjk) if needs_cjk(c) => (&cjk.font, cjk.px, cjk.baseline_off),
+            _ => (&self.font, self.font_px, self.baseline_off),
+        };
+        let (metrics, bitmap) = font.rasterize(c, font_px);
         if metrics.width == 0 || metrics.height == 0 {
             return; // 缺字形/空白字形：fontdue 给空位图，不 panic
         }
-        let top =
-            py as i64 + self.baseline_off as i64 - i64::from(metrics.ymin) - metrics.height as i64;
+        let top = py as i64 + baseline as i64 - i64::from(metrics.ymin) - metrics.height as i64;
         for gy in 0..metrics.height as u32 {
             let y = top + i64::from(gy);
             if y < 0 {
@@ -392,9 +495,17 @@ fn blend(fg: u32, dst: u32, a: u32) -> u32 {
     (r << 16) | (g << 8) | b
 }
 
-/// 供 android_app：从候选路径建视图（字体 + 默认 80x24 占位网格），
-/// 返回 (视图, 字体来源路径)。字体全灭返回 None。
-pub fn build_from_candidates(candidates: &[&str]) -> Option<(TermView, String)> {
+/// 供 android_app：从候选路径建视图（主字体 + CJK 备用 + 默认 80x24 占位网格），
+/// 返回 (视图, 主字体来源, CJK 字体来源)。主字体全灭返回 None。
+pub fn build_from_candidates(candidates: &[&str]) -> Option<(TermView, String, Option<String>)> {
     let (path, font) = load_font(candidates)?;
-    Some((TermView::new(font, 80, 24, CELL_W, CELL_H), path))
+    let (cjk_path, cjk_font) = match load_cjk_font(CJK_FONT_CANDIDATES) {
+        Some((p, f)) => (Some(p), Some(f)),
+        None => (None, None),
+    };
+    Some((
+        TermView::new(font, cjk_font, 80, 24, CELL_W, CELL_H),
+        path,
+        cjk_path,
+    ))
 }

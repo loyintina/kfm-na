@@ -69,9 +69,15 @@ struct App {
     dirty: bool,
     /// 会话终了（exited/failed）后定格最后一屏，出向不再发
     session_over: bool,
+    /// 软键盘可见（BAR-006）：可见时网格让出底部估计高度，输入行不被盖
+    ime_visible: bool,
 }
 
 impl App {
+    /// 软键盘高度估计（占窗口高度百分比，C 档实拍调参）：
+    /// 拿不到真实 IME 高度（android-activity 0.6 无 insets API，JNI 是后话）
+    const KB_HEIGHT_PCT: u32 = 42;
+
     /// 初始化 softbuffer（上下文 + 表面），按窗口尺寸配置
     fn init_gfx(window: &Arc<Window>) -> Gfx {
         let context = softbuffer::Context::new(window.clone()).expect("创建 softbuffer 上下文失败");
@@ -94,12 +100,25 @@ impl App {
         // BAR-004 后台往返重开会话的路径：旧会话的死亡标记必须清掉，
         // 否则键盘/IME 输入被 session_over 挡死，新会话成了哑巴
         self.session_over = false;
-        let Some((tv, font_path)) = termview::build_from_candidates(termview::FONT_CANDIDATES)
+        let Some((tv, font_path, cjk_path)) =
+            termview::build_from_candidates(termview::FONT_CANDIDATES)
         else {
             crate::report::report_sync("term", "字体候选全灭——TermView 建不成");
             return;
         };
         crate::report::report("term", &format!("字体加载自 {font_path}"));
+        match &cjk_path {
+            Some(p) => crate::report::report("term", &format!("CJK 备用字体: {p}")),
+            None => crate::report::report("term", "CJK 备用字体全灭——中文画 tofu"),
+        }
+        // 候选体检（一次性）：每个主候选一行判定结论——「为什么偏偏选中它」
+        // 不再靠猜（12:09 实录：DroidSansMono 在目录里却落选，原因未知）
+        static DIAGNOSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if !DIAGNOSED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            for path in termview::FONT_CANDIDATES {
+                crate::report::report("term", &termview::diagnose_candidate(path));
+            }
+        }
         // 字体探针：加载成功 ≠ 能出字形，西文/中文各探一针（真机判卷「不见字」）
         for c in ['M', '中'] {
             let (w, h, ink) = tv.font_probe(c);
@@ -141,11 +160,20 @@ impl App {
         self.dirty = true;
     }
 
-    /// 窗口 px 尺寸 → cols/rows → Term resize + terminal-resize 出向
+    /// 窗口 px 尺寸 → cols/rows → Term resize + terminal-resize 出向。
+    /// 可用区域 = 窗口 - 四周边距（BAR-005）- 软键盘遮挡估计（BAR-006，
+    /// cargo-apk 0.10 写不了 windowSoftInputMode，只能按窗口比例估）
     fn apply_window_size(&mut self, w: u32, h: u32) {
         let Some(term) = &mut self.term else { return };
         let (cw, ch) = term.cell_size();
-        let (cols, rows) = termview::grid_dims(w, h, cw, ch);
+        let kb = if self.ime_visible {
+            h * Self::KB_HEIGHT_PCT / 100
+        } else {
+            0
+        };
+        let usable_w = w.saturating_sub(2 * termview::MARGIN_X);
+        let usable_h = h.saturating_sub(2 * termview::MARGIN_Y + kb);
+        let (cols, rows) = termview::grid_dims(usable_w, usable_h, cw, ch);
         term.resize_cells(cols, rows);
         if !self.session_over {
             if let Some(tx) = &self.outbound {
@@ -351,8 +379,23 @@ impl ApplicationHandler for App {
             WindowEvent::Ime(ime) => {
                 if TERMINAL_MODE {
                     match ime {
-                        Ime::Enabled => crate::report::report("ime", "IME Enabled"),
-                        Ime::Disabled => crate::report::report("ime", "IME Disabled"),
+                        // BAR-006：键盘出没 → 网格让出/收回底部估计高度
+                        Ime::Enabled => {
+                            crate::report::report("ime", "IME Enabled");
+                            self.ime_visible = true;
+                            if let Some(w) = &self.window {
+                                let s = w.inner_size();
+                                self.apply_window_size(s.width, s.height);
+                            }
+                        }
+                        Ime::Disabled => {
+                            crate::report::report("ime", "IME Disabled");
+                            self.ime_visible = false;
+                            if let Some(w) = &self.window {
+                                let s = w.inner_size();
+                                self.apply_window_size(s.width, s.height);
+                            }
+                        }
                         // Preedit（拼音候选中）尖刺期不上屏，只留痕一次
                         Ime::Preedit(_, _) => {
                             static PREEDIT_SEEN: std::sync::atomic::AtomicBool =
