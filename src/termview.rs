@@ -11,7 +11,6 @@
 //! - C 档实拍：手机终端画面（立项.md 尖刺验收 2/3）
 //!
 //! 已知留白（尖刺期不处理）：
-//! - 字形垂直居中对齐（不按 baseline），等宽场景够用，混排西文/中文会略浮
 //! - 单字体无 fallback 链：缺字形画 tofu（.notdef 方框），不 panic
 //! - 每次 render_into 全量重绘，无 damage 增量（alacritty_terminal 自带
 //!   damage 追踪，性能成为问题再接）
@@ -172,6 +171,10 @@ pub struct TermView {
     font: fontdue::Font,
     cell_w: u32,
     cell_h: u32,
+    /// 实际光栅字号：行盒（ascent-descent）比格高时按比例缩小，保证装进格
+    font_px: f32,
+    /// 基线在格内的纵向偏移（格顶向下，px）——BAR-001 基线对齐用
+    baseline_off: f32,
 }
 
 impl TermView {
@@ -182,12 +185,31 @@ impl TermView {
             cols: (cols.max(1)) as usize,
             rows: (rows.max(1)) as usize,
         };
+        let cell_h = cell_h.max(1);
+        // 基线几何（BAR-001）：竖直居中会让高矮字母各自为政（里倒歪斜）。
+        // 行盒装进格内并居中，基线偏移 = 上边距 + ascent；行盒比格高则缩字号
+        let (font_px, baseline_off) = {
+            let px0 = cell_h as f32;
+            match font.horizontal_line_metrics(px0) {
+                Some(lm) if lm.ascent > 0.0 => {
+                    let line = lm.ascent - lm.descent; // descent 为负，相减即行盒高
+                    let px = if line > px0 { px0 * px0 / line } else { px0 };
+                    let lm2 = font.horizontal_line_metrics(px).unwrap_or(lm);
+                    let pad = (px0 - (lm2.ascent - lm2.descent)).max(0.0) / 2.0;
+                    (px, pad + lm2.ascent)
+                }
+                // 无水平度量（极端字体）兜底：原字号 + 经验基线 80% 处
+                _ => (px0, px0 * 0.8),
+            }
+        };
         Self {
             term: Term::new(Config::default(), &size, VoidListener),
             processor: Processor::new(),
             font,
             cell_w: cell_w.max(1),
-            cell_h: cell_h.max(1),
+            cell_h,
+            font_px,
+            baseline_off,
         }
     }
 
@@ -268,16 +290,22 @@ impl TermView {
         }
     }
 
-    /// 光栅化单字形并 alpha 混合进帧缓冲。垂直方向格内居中（简化，见文件头留白）。
+    /// 光栅化单字形并 alpha 混合进帧缓冲。基线对齐（BAR-001）：fontdue
+    /// y 轴向上，metrics.ymin 是位图底边相对基线的偏移（下伸字母为负），
+    /// 位图顶边（屏坐标）= 格顶 + 基线偏移 - (ymin + 位图高)
     fn draw_glyph(&self, frame: &mut Frame<'_>, c: char, px: u32, py: u32, fg: u32) {
-        let (metrics, bitmap) = self.font.rasterize(c, self.cell_h as f32);
+        let (metrics, bitmap) = self.font.rasterize(c, self.font_px);
         if metrics.width == 0 || metrics.height == 0 {
             return; // 缺字形/空白字形：fontdue 给空位图，不 panic
         }
-        let top = py + self.cell_h.saturating_sub(metrics.height as u32) / 2;
+        let top =
+            py as i64 + self.baseline_off as i64 - i64::from(metrics.ymin) - metrics.height as i64;
         for gy in 0..metrics.height as u32 {
-            let y = top + gy;
-            if y >= frame.h {
+            let y = top + i64::from(gy);
+            if y < 0 {
+                continue; // 上探出屏（基线偏移 + 高字形）：裁
+            }
+            if y >= i64::from(frame.h) {
                 break;
             }
             for gx in 0..metrics.width as u32 {
@@ -290,7 +318,7 @@ impl TermView {
                 if a == 0 {
                     continue;
                 }
-                frame.blend_px(x as u32, y, fg, a);
+                frame.blend_px(x as u32, y as u32, fg, a);
             }
         }
     }

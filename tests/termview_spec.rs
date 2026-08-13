@@ -221,6 +221,39 @@ fn spec_渲染_resize后正常() {
 
 // ---------- A 档：字体加载 ----------
 
+/// 帧缓冲里某格的墨水纵向跨度 → (最上, 最下) 非背景像素行（相对格原点）。
+/// 无墨水的格返回 (CELL_H, 0)（上下颠倒即为空）
+fn cell_ink_span(buf: &[u32], buf_w: u32, col: u32, row: u32) -> (u32, u32) {
+    let (ox, oy) = cell_origin(col, row, CELL_W, CELL_H);
+    let (mut top, mut bot) = (CELL_H, 0);
+    for y in 0..CELL_H {
+        for x in 0..CELL_W {
+            if buf[((oy + y) * buf_w + ox + x) as usize] != DEFAULT_BG {
+                top = top.min(y);
+                bot = bot.max(y);
+            }
+        }
+    }
+    (top, bot)
+}
+
+#[test]
+fn spec_bar001_基线对齐_同基线字母底边对齐() {
+    let mut tv = host_termview(8, 2);
+    tv.feed(b"Axp"); // 光标落在第 4 格，不干扰前 3 格
+    let buf_w = 8 * CELL_W;
+    let mut buf = vec![0u32; (buf_w * 2 * CELL_H) as usize];
+    tv.render_into(&mut buf, buf_w, 2 * CELL_H);
+    let (top_a, bot_a) = cell_ink_span(&buf, buf_w, 0, 0);
+    let (top_x, bot_x) = cell_ink_span(&buf, buf_w, 1, 0);
+    let (_, bot_p) = cell_ink_span(&buf, buf_w, 2, 0);
+    // BAR-001 病灶：竖直居中让高矮字母各自为政（里倒歪斜）。
+    // 契约：同坐基线的字母底边对齐、高字母顶边更高、下伸字母探过基线
+    assert_eq!(bot_a, bot_x, "A 与 x 同坐基线：底边必须对齐");
+    assert!(top_a < top_x, "A 比 x 高：顶边必须更高");
+    assert!(bot_p > bot_x, "p 有下伸：底边必须探过基线");
+}
+
 #[test]
 fn spec_字体_候选全灭返回none() {
     assert!(termview::load_font(&["/nonexistent/a.ttf", "/nonexistent/b.ttf"]).is_none());

@@ -62,6 +62,8 @@ struct App {
     // ---- TERMINAL_MODE 状态 ----
     term: Option<TermView>,
     outbound: Option<Sender<TermCmd>>,
+    /// RTT 探针：最后一次击键送出的墙钟时刻（下个 output 到达时结算）
+    last_input_at: Option<std::time::Instant>,
     event_rx: Option<EventRx>,
     /// 有新输出/尺寸变化待渲染
     dirty: bool,
@@ -99,6 +101,17 @@ impl App {
         for c in ['M', '中'] {
             let (w, h, ink) = tv.font_probe(c);
             crate::report::report("term", &format!("字体探针 '{c}': {w}x{h} ink={ink}"));
+        }
+        // 字体目录普查（一次性）：真机 CJK 候选排查——NotoSansCJK.ttc 空光栅
+        // 已实锤（BAR-002），下一个中文字体候选从这份清单里挑
+        if let Ok(rd) = std::fs::read_dir("/system/fonts") {
+            let mut names: Vec<String> = rd
+                .filter_map(|e| e.ok())
+                .filter_map(|e| e.file_name().into_string().ok())
+                .collect();
+            names.sort();
+            let list: String = names.join(",").chars().take(600).collect();
+            crate::report::report("term", &format!("字体目录 {} 个: {list}", names.len()));
         }
         crate::report::report("term", "TermView 建成");
         self.term = Some(tv);
@@ -154,12 +167,27 @@ impl App {
                             "term",
                             &format!("首 output 到达: {:?}", &data[..data.len().min(120)]),
                         );
+                        // 上膛帧缓冲探针（一次性）：下一帧数非背景像素（见 draw_frame）。
+                        // 注意只能在首 output 上膛——此前写成每个 output 都上膛，
+                        // 探针变成常驻连发，报告通道被刷屏（11:31 实拍事故）
+                        FRAME_PROBE.store(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    // RTT 探针（输入延迟判卷）：击键→回显 output 的墙钟耗时，采样 5 发。
+                    // 数字说话：延迟到底在网络往返还是自家管线（2026-08-13 用户实拍问）
+                    if let Some(t) = self.last_input_at.take() {
+                        static RTT_N: std::sync::atomic::AtomicU8 =
+                            std::sync::atomic::AtomicU8::new(0);
+                        let n = RTT_N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        if n < 5 {
+                            crate::report::report_sync(
+                                "rtt",
+                                &format!("击键→回显: {}ms", t.elapsed().as_millis()),
+                            );
+                        }
                     }
                     if let Some(term) = &mut self.term {
                         term.feed(data.as_bytes());
                         self.dirty = true;
-                        // 上膛帧缓冲探针：下一帧数非背景像素（见 draw_frame）
-                        FRAME_PROBE.store(1, std::sync::atomic::Ordering::Relaxed);
                     }
                 }
                 SessionEvent::Exited { code } => {
@@ -189,6 +217,7 @@ impl App {
         if let (Some(bytes), Some(tx)) = (bytes, &self.outbound) {
             if !bytes.is_empty() {
                 let _ = tx.send(TermCmd::Input(bytes));
+                self.last_input_at = Some(std::time::Instant::now());
             }
         }
     }
@@ -321,6 +350,7 @@ impl ApplicationHandler for App {
                             if !self.session_over {
                                 if let Some(tx) = &self.outbound {
                                     let _ = tx.send(TermCmd::Input(text));
+                                    self.last_input_at = Some(std::time::Instant::now());
                                 }
                             }
                         }
