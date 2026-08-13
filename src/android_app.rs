@@ -1,9 +1,13 @@
 //! android_app.rs — Android 壳（B 档：平台胶水，冒烟钉防退化）
 //!
-//! 尖刺 1 第一步：winit（NativeActivity）+ wgpu 空窗，紫屏（KFM 紫 #8B5CF6）。
-//! 目的：一次踩掉两颗已知雷——wgpu 的 Android Vulkan 兼容性、APK 包体基线。
-//! 验收见 docs/active/立项.md 尖刺五条（包体 <10MB / 冷启动 <1s 手机实拍）。
+//! 渲染路线定案（2026-08-13，用户拍板）：**软渲染 softbuffer**。
+//! 背景：本机 GPU 驱动栈（Mali-G720 Immortalis r44p1 + OriginOS）与 wgpu
+//! 双后端（Vulkan/GLES）随机原生暴毙——六次实拍，死亡点在 adapter/surface/
+//! configure 间漂移、零 Rust panic，非代码逻辑病；裸 winit 窗对照组稳定。
+//! 终端负载（字符网格 + 光标）本就是 CPU 教科书级场景，softbuffer 零驱动
+//! 依赖、行为确定。GPU 路线留档后查（git 历史 ENABLE_GFX/wgpu 时代）。
 
+use std::num::NonZeroU32;
 use std::sync::Arc;
 
 use winit::application::ApplicationHandler;
@@ -12,16 +16,15 @@ use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::platform::android::EventLoopBuilderExtAndroid;
 use winit::window::{Window, WindowId};
 
-/// 对照实验开关（2026-08-13 下午）：false = wgpu 全摘裸窗组，见 resumed 注释
-/// 16:08 实拍判词：裸窗组 15s+ 稳定（死因全是用户手动杀）——图形栈加回来
-/// 重审（GLES 后端），死亡仪器（suspended/exiting/run_app 同步直报）已全开
-const ENABLE_GFX: bool = true;
+/// KFM 紫（softbuffer 像素格式 XRGB）
+const KFM_PURPLE: u32 = 0x008B_5CF6;
+
+type SoftContext = softbuffer::Context<Arc<Window>>;
+type SoftSurface = softbuffer::Surface<Arc<Window>, Arc<Window>>;
 
 struct Gfx {
-    surface: wgpu::Surface<'static>,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-    config: wgpu::SurfaceConfiguration,
+    _context: SoftContext,
+    surface: SoftSurface,
 }
 
 #[derive(Default)]
@@ -32,122 +35,28 @@ struct App {
 }
 
 impl App {
-    /// 初始化 wgpu（实例/表面/适配器/设备），配置表面为当前窗口尺寸
+    /// 初始化 softbuffer（上下文 + 表面），按窗口尺寸配置
     fn init_gfx(window: &Arc<Window>) -> Gfx {
-        // 后端锁 GLES（2026-08-13 实拍六次定案）：本机 Mali-G720 Immortalis
-        // Vulkan 驱动（r44p1）与 wgpu 25 相冲——死亡点在 instance→present 间
-        // 随机漂移（adapter/configure/present 各死过）、挂起与原生崩交替、
-        // 无 Rust panic，非代码逻辑病。Mali 的 GLES 驱动是另一套成熟栈，
-        // 清屏/终端渲染绰绰有余。Vulkan 留作后查（换机或驱动升级再试）。
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::GL,
-            ..Default::default()
-        });
-        crate::report::report("boot", "wgpu instance 建成");
-        let surface = instance
-            .create_surface(window.clone())
-            .expect("创建 wgpu surface 失败");
-        crate::report::report("boot", "wgpu surface 建成");
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::LowPower,
-            compatible_surface: Some(&surface),
-            force_fallback_adapter: false,
-        }))
-        .expect("无可用 Vulkan/GLES 适配器（雷 1 爆点）");
-        log::info!("wgpu 适配器: {:?}", adapter.get_info());
-        crate::report::report("boot", &format!("wgpu 适配器: {:?}", adapter.get_info()));
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("kfm-na"),
-            required_features: wgpu::Features::empty(),
-            required_limits: wgpu::Limits::downlevel_defaults(),
-            memory_hints: wgpu::MemoryHints::Performance,
-            trace: wgpu::Trace::Off,
-        }))
-        .expect("请求 wgpu 设备失败");
-        crate::report::report("boot", "wgpu device 到手");
+        let context = softbuffer::Context::new(window.clone()).expect("创建 softbuffer 上下文失败");
+        crate::report::report("boot", "softbuffer 上下文建成");
+        let mut surface =
+            softbuffer::Surface::new(&context, window.clone()).expect("创建 softbuffer 表面失败");
+        crate::report::report("boot", "softbuffer 表面建成");
         let size = window.inner_size();
-        let caps = surface.get_capabilities(&adapter);
-        crate::report::report(
-            "boot",
-            &format!("caps 到手: formats={}", caps.formats.len()),
-        );
-        let format = caps
-            .formats
-            .iter()
-            .copied()
-            .find(|f| f.is_srgb())
-            .unwrap_or(caps.formats[0]);
-        let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format,
-            width: size.width.max(1),
-            height: size.height.max(1),
-            present_mode: wgpu::PresentMode::Fifo,
-            alpha_mode: caps.alpha_modes[0],
-            view_formats: vec![],
-            desired_maximum_frame_latency: 2,
-        };
-        // configure 死锁看门狗（2026-08-13 实拍：caps 到手后 26s 静默，进程活着
-        // ——疑 configure/present 挂起而非崩溃）。3s 未置旗即回传死锁警报。
-        static CONFIG_DONE: std::sync::atomic::AtomicBool =
-            std::sync::atomic::AtomicBool::new(false);
-        std::thread::spawn(|| {
-            std::thread::sleep(std::time::Duration::from_secs(3));
-            if !CONFIG_DONE.load(std::sync::atomic::Ordering::Relaxed) {
-                crate::report::report("hang", "configure 3 秒未返回——疑 Mali 驱动死锁");
-            }
-        });
-        surface.configure(&device, &config);
-        CONFIG_DONE.store(true, std::sync::atomic::Ordering::Relaxed);
-        crate::report::report("boot", "surface 配置完——开始渲染");
+        if let (Some(w), Some(h)) = (NonZeroU32::new(size.width), NonZeroU32::new(size.height)) {
+            surface.resize(w, h).expect("surface resize 失败");
+        }
         Gfx {
+            _context: context,
             surface,
-            device,
-            queue,
-            config,
         }
     }
 
     /// 清屏一帧（KFM 紫）
-    fn draw_clear(g: &Gfx) {
-        let frame = match g.surface.get_current_texture() {
-            Ok(f) => f,
-            Err(_) => {
-                // 表面丢失（如息屏回来）：重配，本帧跳过
-                g.surface.configure(&g.device, &g.config);
-                return;
-            }
-        };
-        let view = frame
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-        let mut enc = g
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("clear"),
-            });
-        {
-            let _rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("clear"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.545, // #8B5CF6 KFM 紫
-                            g: 0.361,
-                            b: 0.965,
-                            a: 1.0,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                ..Default::default()
-            });
-        }
-        g.queue.submit([enc.finish()]);
-        frame.present();
+    fn draw_purple(g: &mut Gfx) {
+        let mut buf = g.surface.buffer_mut().expect("取帧缓冲失败");
+        buf.fill(KFM_PURPLE);
+        buf.present().expect("帧呈现失败");
         // 首帧呈现里程碑：紫屏真亮了才算雷 1 排除
         static FIRST_PRESENT: std::sync::atomic::AtomicBool =
             std::sync::atomic::AtomicBool::new(false);
@@ -172,15 +81,8 @@ impl ApplicationHandler for App {
         crate::report::report("boot", "resumed——开始建窗口");
         let attrs = Window::default_attributes().with_title("KFM-NA");
         let window = Arc::new(el.create_window(attrs).expect("创建窗口失败"));
-        // 对照实验（2026-08-13 下午，ENABLE_GFX=false）：wgpu 全摘。
-        // 六次实拍死亡点横跨 event loop 构建/adapter/surface/configure、
-        // Vulkan 与 GLES 两后端都死——根本不是图形问题。裸 winit 窗 + 心跳
-        // 判决：心跳停 = 进程真死（精确到秒）；心跳在跳但用户看到「闪退」
-        // = Activity 被系统杀、进程活着，病根在 ROM/manifest 层。
-        if ENABLE_GFX {
-            let gfx = Self::init_gfx(&window);
-            self.gfx = Some(gfx);
-        }
+        let gfx = Self::init_gfx(&window);
+        self.gfx = Some(gfx);
         self.window = Some(window);
         crate::report::report("boot", "启动完成");
         log::info!("KFM-NA 壳启动完成");
@@ -194,14 +96,16 @@ impl ApplicationHandler for App {
             }
             WindowEvent::Resized(sz) => {
                 if let Some(g) = &mut self.gfx {
-                    g.config.width = sz.width.max(1);
-                    g.config.height = sz.height.max(1);
-                    g.surface.configure(&g.device, &g.config);
+                    if let (Some(w), Some(h)) =
+                        (NonZeroU32::new(sz.width), NonZeroU32::new(sz.height))
+                    {
+                        g.surface.resize(w, h).expect("surface resize 失败");
+                    }
                 }
             }
             WindowEvent::RedrawRequested => {
-                if let Some(g) = &self.gfx {
-                    Self::draw_clear(g);
+                if let Some(g) = &mut self.gfx {
+                    Self::draw_purple(g);
                 }
             }
             _ => {}

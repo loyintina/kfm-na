@@ -15,8 +15,9 @@ log = "0.4"
 [target.'cfg(target_os = "android")'.dependencies]
 # native-activity 后端：免 GameActivity 的 gradle AAR 链，cargo-apk 直出
 winit = { version = "0.30", default-features = false, features = ["android-native-activity", "rwh_06"] }
-wgpu = "25"
-pollster = "0.4"
+# 软渲染路线（2026-08-13 定案）：GPU 驱动栈双后端随机原生暴毙，终端负载
+# 本就是 CPU 场景。softbuffer 与 winit 同门（rwh_06），CPU 位图直推原生窗
+softbuffer = "0.4"
 android_logger = "0.15"
 
 [package.metadata.android]
