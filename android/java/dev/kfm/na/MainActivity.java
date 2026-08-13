@@ -31,6 +31,8 @@ public class MainActivity extends NativeActivity {
         ime.setLayoutParams(new FrameLayout.LayoutParams(1, 1));
         root.addView(ime);
         ime.requestFocus();
-        KfmImeView.imeLog("IME 占位已叠加, focus=" + ime.isFocused());
+        // 探针延迟 3s 发：onCreate 时 Rust 侧 report flusher 可能还没起
+        // （enqueue 直接丢），delay 后通道必然就绪
+        ime.postDelayed(() -> KfmImeView.imeLog("IME 占位已叠加, focus=" + ime.isFocused()), 3000);
     }
 }

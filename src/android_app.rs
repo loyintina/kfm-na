@@ -77,6 +77,9 @@ struct App {
     last_inset_poll: Option<std::time::Instant>,
     /// AndroidApp 句柄（JNI 用；android_main 里 clone 进来）
     android_app: Option<winit::platform::android::activity::AndroidApp>,
+    /// 事件循环心跳的上次上报时刻（BAR-012③ 诊断：循环卡死则心跳停，
+    /// 与「触摸没派发」区分开）
+    last_loop_beat: Option<std::time::Instant>,
 }
 
 impl App {
@@ -427,8 +430,18 @@ impl ApplicationHandler for App {
             // 用户收过键盘后 IMM 拒弹（BAR-012）——JNI SHOW_FORCED 强弹兜底
             WindowEvent::Touch(touch) => {
                 if TERMINAL_MODE && touch.phase == TouchPhase::Started {
+                    // BAR-012③ 诊断：入口就报——判「事件没派发」还是「handler 卡死」
+                    crate::report::report(
+                        "ime",
+                        &format!("触摸进 handler ({},{})", touch.location.x, touch.location.y),
+                    );
                     if let Some(w) = &self.window {
                         w.set_ime_allowed(true);
+                        static IME_ALLOWED_RET: std::sync::atomic::AtomicBool =
+                            std::sync::atomic::AtomicBool::new(false);
+                        if !IME_ALLOWED_RET.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                            crate::report::report("ime", "set_ime_allowed 已返回（没卡死）");
+                        }
                         if let Some(app) = &self.android_app {
                             crate::insets::force_show_keyboard(app);
                         }
@@ -496,6 +509,16 @@ impl ApplicationHandler for App {
             self.drain_terminal_events();
             self.drain_ime_inject();
             self.poll_ime_inset();
+        }
+        // 事件循环心跳（10s 节流）：忙轮询泵下它在跳 = 循环活着，
+        // 它停 = 循环卡死在某个 handler 里（BAR-012③ 诊断分界线）
+        let beat_due = match self.last_loop_beat {
+            Some(t) => t.elapsed() >= std::time::Duration::from_secs(10),
+            None => true,
+        };
+        if beat_due {
+            self.last_loop_beat = Some(std::time::Instant::now());
+            crate::report::report("loop", "事件循环心跳");
         }
         if let Some(w) = &self.window {
             w.request_redraw();
