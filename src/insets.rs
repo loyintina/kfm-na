@@ -19,56 +19,79 @@ use winit::platform::android::activity::AndroidApp;
 /// 强制弹出软键盘（BAR-012）：winit 的 set_ime_allowed 走 SHOW_IMPLICIT，
 /// 用户手动收过键盘后 IMM 按策略拒弹（实拍：关掉再点就召唤不出）。
 /// SHOW_FORCED = 用户强制召唤，无视该策略。
-/// 首调结果上报（BAR-013）：这刀落地时设备 .so 疑似不随更新重解压，
-/// 「强弹到底跑没跑、IMM 答没答应」必须能在日志里直接读到
+///
+/// 二轮诊断（实拍 Some(false) 后）：强弹目标从 decorView 换成
+/// **当前焦点 View 本身**，并把「焦点是谁 + IMM 认不认它（isActive）」
+/// 一并报回——showSoftInput 返回 false 几乎只有一个意思：IMM 没有可用
+/// 输入目标（served view）。每次触摸都报（用户点几下就几行），
+/// 三个数直接区分焦点丢失 vs IMM 拒认。
 pub fn force_show_keyboard(app: &AndroidApp) {
     // SAFETY: 同 query_ime_bottom
     let vm = unsafe { JavaVM::from_raw(app.vm_as_ptr().cast()) };
     let raw_activity = app.activity_as_ptr() as jni::sys::jobject;
-    let shown = vm
-        .attach_current_thread(|env| -> jni::errors::Result<bool> {
-            // SAFETY: 同 query_ime_bottom
-            let activity = unsafe { JObject::from_raw(env, raw_activity) };
-            let service_name = env.new_string("input_method")?;
-            let imm = env
-                .call_method(
-                    &activity,
-                    jni_str!("getSystemService"),
-                    jni_sig!("(Ljava/lang/String;)Ljava/lang/Object;"),
-                    &[jni::JValue::Object(&service_name)],
-                )?
-                .l()?;
-            let window = env
-                .call_method(
-                    &activity,
-                    jni_str!("getWindow"),
-                    jni_sig!("()Landroid/view/Window;"),
-                    &[],
-                )?
-                .l()?;
-            let decor = env
-                .call_method(
-                    window,
-                    jni_str!("getDecorView"),
-                    jni_sig!("()Landroid/view/View;"),
-                    &[],
-                )?
-                .l()?;
-            const SHOW_FORCED: i32 = 2;
-            let shown = env
-                .call_method(
-                    imm,
-                    jni_str!("showSoftInput"),
-                    jni_sig!("(Landroid/view/View;I)Z"),
-                    &[jni::JValue::Object(&decor), jni::JValue::Int(SHOW_FORCED)],
-                )?
-                .z()?;
-            Ok(shown)
-        })
-        .ok(); // None = JNI 链路失败；Some(false) = IMM 拒弹；Some(true) = 弹了
-    static FIRST_CALL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-    if !FIRST_CALL.swap(true, std::sync::atomic::Ordering::Relaxed) {
-        crate::report::report("ime", &format!("强弹软键盘首调: {shown:?}"));
+    let result = vm.attach_current_thread(|env| -> jni::errors::Result<String> {
+        // SAFETY: 同 query_ime_bottom
+        let activity = unsafe { JObject::from_raw(env, raw_activity) };
+        let focus = env
+            .call_method(
+                &activity,
+                jni_str!("getCurrentFocus"),
+                jni_sig!("()Landroid/view/View;"),
+                &[],
+            )?
+            .l()?;
+        if focus.is_null() {
+            return Ok("焦点为空——showSoftInput 无目标可打".to_string());
+        }
+        let cls = env
+            .call_method(
+                &focus,
+                jni_str!("getClass"),
+                jni_sig!("()Ljava/lang/Class;"),
+                &[],
+            )?
+            .l()?;
+        let name_obj = env
+            .call_method(
+                cls,
+                jni_str!("getSimpleName"),
+                jni_sig!("()Ljava/lang/String;"),
+                &[],
+            )?
+            .l()?;
+        let name_jstring = env.cast_local::<jni::objects::JString>(name_obj)?;
+        let name = name_jstring.try_to_string(env)?;
+        let service_name = env.new_string("input_method")?;
+        let imm = env
+            .call_method(
+                &activity,
+                jni_str!("getSystemService"),
+                jni_sig!("(Ljava/lang/String;)Ljava/lang/Object;"),
+                &[jni::JValue::Object(&service_name)],
+            )?
+            .l()?;
+        let active = env
+            .call_method(
+                &imm,
+                jni_str!("isActive"),
+                jni_sig!("(Landroid/view/View;)Z"),
+                &[jni::JValue::Object(&focus)],
+            )?
+            .z()?;
+        const SHOW_FORCED: i32 = 2;
+        let shown = env
+            .call_method(
+                imm,
+                jni_str!("showSoftInput"),
+                jni_sig!("(Landroid/view/View;I)Z"),
+                &[jni::JValue::Object(&focus), jni::JValue::Int(SHOW_FORCED)],
+            )?
+            .z()?;
+        Ok(format!("焦点={name} isActive={active} 强弹={shown}"))
+    });
+    match result {
+        Ok(msg) => crate::report::report("ime", &format!("强弹诊断: {msg}")),
+        Err(_) => crate::report::report("ime", "强弹诊断: JNI 链路失败"),
     }
 }
 

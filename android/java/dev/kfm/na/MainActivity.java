@@ -17,6 +17,8 @@ import android.widget.FrameLayout;
  * InputMethodManager 用谁的 InputConnection。
  */
 public class MainActivity extends NativeActivity {
+    private KfmImeView mIme;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -31,8 +33,19 @@ public class MainActivity extends NativeActivity {
         ime.setLayoutParams(new FrameLayout.LayoutParams(1, 1));
         root.addView(ime);
         ime.requestFocus();
+        mIme = ime;
         // 探针延迟 3s 发：onCreate 时 Rust 侧 report flusher 可能还没起
         // （enqueue 直接丢），delay 后通道必然就绪
         ime.postDelayed(() -> KfmImeView.imeLog("IME 占位已叠加, focus=" + ime.isFocused()), 3000);
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        // 焦点重请求（BAR-012③ 嫌疑）：onCreate 里 requestFocus 时窗口还没拿到
+        // 焦点，请求可能落空——窗口真拿到焦点时再请求一次，IMM 才有输入目标
+        if (hasFocus && mIme != null) {
+            mIme.requestFocus();
+        }
     }
 }
