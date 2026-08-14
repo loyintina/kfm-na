@@ -437,8 +437,9 @@ impl TermView {
                 frame.fill_rect(px, py, self.cell_w, self.cell_h, bg);
             }
             let c = indexed.cell.c;
-            if c == ' ' || indexed.cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
-                continue; // 空格无字形；宽字符第二格不画（首格已画）
+            // 空格/控制符（BAR-015：tab 本体）无字形不画；宽字符第二格不画
+            if !paintable(c) || indexed.cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                continue;
             }
             self.draw_glyph(&mut frame, c, px, py, fg);
         }
@@ -493,6 +494,16 @@ impl TermView {
             }
         }
     }
+}
+
+/// 该字符是否值得上屏（BAR-015）：空格与控制符（C0/C1/DEL）无字形——
+/// alacritty put_tab 把 '\t' 本体写进格（为选中/复制能还原 tab），
+/// 设备主字体（DroidSansMono）没有 tab 字形 → 不拦就画方框（2026-08-14
+/// 实拍：ls 输出文件夹名后方框，tofu 目击名单实锤 U+0009）。
+/// 契约钉在本纯函数（A 档考题 spec_渲染_tab控制符不落墨不进目击名单）：
+/// host 的 DejaVuSansMono 有 tab 空白字形，像素层面咬不住，必须从这里过滤
+pub fn paintable(c: char) -> bool {
+    c != ' ' && !c.is_control()
 }
 
 /// 帧缓冲视图：把 buf + 尺寸打包，免得每个画图函数都拖一溜参数（clippy 红线）

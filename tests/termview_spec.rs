@@ -474,3 +474,49 @@ fn spec_渲染_tofu目击名单() {
     assert!(!tofu.contains(&'A'), "有字形的字符不许目击");
     assert!(tv.take_tofu_chars().is_empty(), "取走后必须清空");
 }
+
+#[test]
+fn spec_渲染_tab控制符不落墨不进目击名单() {
+    // BAR-015 病灶：alacritty put_tab 把 '\t' 本体写进格（为了选中/复制能还原
+    // tab），渲染层照单全收——设备主字体（DroidSansMono）没有 tab 字形 →
+    // ls 列对齐的 tab 全画成方框（2026-08-14 实拍：文件夹名后方框，
+    // 目击名单实锤 U+0009）。
+    // 契约钉在纯函数 paintable 上（A 档）：控制符（C0/C1/DEL）与空格一样
+    // 不上屏。注意 host 的 DejaVuSansMono 有 tab 空白字形，像素层面咬不住
+    // 这条（光栅全空，修不修都绿）——所以渲染层必须经 paintable 过滤，
+    // 本考题直接判 paintable 本身（变异抽检：摘掉 is_control 必须红）
+    assert!(!termview::paintable('\t'), "tab 不许上屏");
+    assert!(!termview::paintable('\u{0}'), "NUL 不许上屏");
+    assert!(!termview::paintable('\u{7f}'), "DEL 不许上屏");
+    assert!(!termview::paintable('\u{1b}'), "ESC 不许上屏");
+    assert!(!termview::paintable(' '), "空格不许上屏");
+    assert!(termview::paintable('a'), "普通字符必须上屏");
+    assert!(termview::paintable('中'), "CJK 必须上屏");
+    // B 档冒烟：tab 的推进语义不受影响——'b' 落在下一个 tab stop（第 8 列），
+    // tab 占据的列无墨，tab 不进 tofu 目击名单
+    let mut tv = TermView::new(host_font(), Some(host_font()), 16, 2, CELL_W, CELL_H);
+    tv.feed(b"a\tb");
+    let buf_w = 2 * termview::MARGIN_X + 16 * CELL_W;
+    let buf_h = termview::MARGIN_TOP + termview::MARGIN_Y + 2 * CELL_H;
+    let mut buf = vec![0u32; (buf_w * buf_h) as usize];
+    tv.render_into(&mut buf, buf_w, buf_h);
+    assert!(!tv.take_tofu_chars().contains(&'\t'), "tab 不许进目击名单");
+    let cell_ink = |buf: &[u32], col: u32| -> usize {
+        let (x0, y0) = cell_origin(col, 0, CELL_W, CELL_H);
+        let (x0, y0) = (x0 + termview::MARGIN_X, y0 + termview::MARGIN_TOP);
+        let mut n = 0;
+        for y in y0..y0 + CELL_H {
+            for x in x0..x0 + CELL_W {
+                if buf[(y * buf_w + x) as usize] != DEFAULT_BG {
+                    n += 1;
+                }
+            }
+        }
+        n
+    };
+    assert!(cell_ink(&buf, 0) > 0, "'a' 必须有墨");
+    for col in 1..8u32 {
+        assert_eq!(cell_ink(&buf, col), 0, "tab 占据的列 {col} 必须无墨");
+    }
+    assert!(cell_ink(&buf, 8) > 0, "'b' 必须落在 tab stop 第 8 列");
+}
