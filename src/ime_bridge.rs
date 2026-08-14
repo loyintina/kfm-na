@@ -12,6 +12,26 @@ use jni::EnvUnowned;
 use jni::errors::LogContextErrorAndDefault;
 use jni::objects::{JClass, JString};
 use jni::sys::jint;
+use std::sync::atomic::{AtomicU32, Ordering};
+
+/// JNI 入口计数器（BAR-012③ 三轮诊断）：在任何可能失败的调用之前自增——
+/// Java 侧 try/catch 把 UnsatisfiedLinkError 吞得无声无息，只有入口第一行
+/// 的计数能证明 ART 到底有没有把 Java 调用绑进 Rust。心跳里读数：
+/// 全 0 = Java→JNI 全灭（绑定失败）；>0 而 pushed=0 = 死在字符串转换
+static COMMIT_ENTER: AtomicU32 = AtomicU32::new(0);
+static COMMIT_PUSHED: AtomicU32 = AtomicU32::new(0);
+static SENDKEY_ENTER: AtomicU32 = AtomicU32::new(0);
+static IMELOG_ENTER: AtomicU32 = AtomicU32::new(0);
+
+/// 给事件循环心跳读数：(commit 入口, commit 入队成功, 软键入口, 探针入口)
+pub fn jni_counters() -> (u32, u32, u32, u32) {
+    (
+        COMMIT_ENTER.load(Ordering::Relaxed),
+        COMMIT_PUSHED.load(Ordering::Relaxed),
+        SENDKEY_ENTER.load(Ordering::Relaxed),
+        IMELOG_ENTER.load(Ordering::Relaxed),
+    )
+}
 
 /// dev.kfm.na.KfmImeView.nativeCommitText —— IME commitText 落字
 /// （中文候选词、英文整串、粘贴都走这）
@@ -21,9 +41,11 @@ pub extern "system" fn Java_dev_kfm_na_KfmImeView_nativeCommitText(
     _class: JClass,
     text: JString,
 ) {
+    COMMIT_ENTER.fetch_add(1, Ordering::Relaxed);
     env.with_env(|env| -> jni::errors::Result<()> {
         let s = text.try_to_string(env)?;
         crate::ime_queue::global().push_text(&s);
+        COMMIT_PUSHED.fetch_add(1, Ordering::Relaxed);
         Ok(())
     })
     .resolve_with::<LogContextErrorAndDefault, _>(|| "in nativeCommitText".to_string());
@@ -38,6 +60,7 @@ pub extern "system" fn Java_dev_kfm_na_KfmImeView_nativeSendKey(
     _class: JClass,
     code: jint,
 ) {
+    SENDKEY_ENTER.fetch_add(1, Ordering::Relaxed);
     crate::ime_queue::global().push_key_code(code);
 }
 
@@ -50,6 +73,7 @@ pub extern "system" fn Java_dev_kfm_na_KfmImeView_nativeImeLog(
     _class: JClass,
     msg: JString,
 ) {
+    IMELOG_ENTER.fetch_add(1, Ordering::Relaxed);
     env.with_env(|env| -> jni::errors::Result<()> {
         let s = msg.try_to_string(env)?;
         crate::report::report("ime", &format!("[java] {s}"));

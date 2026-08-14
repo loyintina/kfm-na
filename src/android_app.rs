@@ -518,7 +518,13 @@ impl ApplicationHandler for App {
         };
         if beat_due {
             self.last_loop_beat = Some(std::time::Instant::now());
-            crate::report::report("loop", "事件循环心跳");
+            // BAR-012③ 三轮：捎带 JNI 入口计数——commit=入口/入队，全 0 即
+            // Java→JNI 绑定全灭（符号在但被 ART 拒），>0 而 pushed=0 死在转换
+            let (ce, cp, sk, il) = crate::ime_bridge::jni_counters();
+            crate::report::report(
+                "loop",
+                &format!("事件循环心跳 jni(commit={ce}/{cp} key={sk} log={il})"),
+            );
         }
         if let Some(w) = &self.window {
             w.request_redraw();

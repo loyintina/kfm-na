@@ -18,6 +18,20 @@ import android.view.inputmethod.InputConnection;
  * （SDL 的 DummyEdit 同款覆写）。没有这条，占位 View 一拿焦点键盘就哑。
  */
 public class KfmImeView extends View {
+    static {
+        // BAR-012③ 三轮：libkfm_na.so 由框架 NativeActivity 加载，挂在框架
+        // classloader 名下——本类（应用 classloader）做 JNI 懒解析时在自己的
+        // native 库清单里找不到符号，UnsatisfiedLinkError 被下面的 try/catch
+        // 静默吞掉（实拍：键盘能弹但三年无一字进 Rust，探针全灭）。
+        // 对已加载的库再 loadLibrary 是幂等的，副作用正是把它登记进应用
+        // classloader 的库清单——懒解析立刻能命中。
+        try {
+            System.loadLibrary("kfm_na");
+        } catch (Throwable t) {
+            // 吞：登记失败也绝不杀死 Activity（BAR-011 契约）
+        }
+    }
+
     public KfmImeView(Context context) {
         super(context);
         // 必须可聚焦，InputMethodManager 才会把本 View 当输入目标
