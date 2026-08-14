@@ -21,7 +21,7 @@ MIN_API=24
 # versionCode 必须大于已装包才能覆盖安装——旧包是 cargo-apk 默认的 16777472。
 # 红线：每次打包必须递增（2026-08-13 零日志闪退教训）——同 versionCode
 # 覆盖安装可能不重解压 .so，设备上「新 dex + 旧 so」JNI 符号缺失即闪退
-VERSION_CODE=16777477
+VERSION_CODE=16777478
 VERSION_NAME=0.1.0
 BUILD=build/apk
 OUT=target/release/apk/kfm-na.apk

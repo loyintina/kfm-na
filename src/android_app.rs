@@ -184,7 +184,7 @@ impl App {
         // 常驻会话：command=None = 交互 shell；inbound 事件经 mpsc 桥回主循环
         let (event_tx, event_rx) = mpsc::channel::<SessionEvent>();
         let outbound =
-            crate::conn::spawn_terminal_session("ws://8.145.46.182/kfmv4/ws", None, move |ev| {
+            crate::conn::spawn_terminal_session("ws://127.0.0.1:8021/ws", None, move |ev| {
                 // 主循环死了发送失败：吞掉——ws 线程绝不为上报陪葬
                 let _ = event_tx.send(ev);
             });
@@ -553,7 +553,7 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
     // 判卷 = field-reports.log 的 [ws] 四格。TERMINAL_MODE=true 时让位给
     // 常驻会话（resumed 里 spawn），冒烟路径保留作回退开关
     if !TERMINAL_MODE {
-        crate::conn::spawn_smoke("ws://8.145.46.182/kfmv4/ws", "echo KFM-NA-WS-OK");
+        crate::conn::spawn_smoke("ws://127.0.0.1:8021/ws", "echo KFM-NA-WS-OK");
     }
     // 心跳：进程存活的客观判决——心跳停 = 进程真死（精确到秒）；
     // 心跳在跳但用户看到「闪退」= Activity 被系统杀、进程活着（病根完全不同）
