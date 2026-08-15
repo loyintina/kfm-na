@@ -95,10 +95,10 @@ impl App {
     /// 值变了才 resize + 上报——resize 会抖动服务器 pty，不能跟着轮询抖
     fn poll_ime_inset(&mut self) {
         let now = std::time::Instant::now();
-        if let Some(t) = self.last_inset_poll {
-            if now.duration_since(t) < std::time::Duration::from_millis(500) {
-                return;
-            }
+        if let Some(t) = self.last_inset_poll
+            && now.duration_since(t) < std::time::Duration::from_millis(500)
+        {
+            return;
         }
         self.last_inset_poll = Some(now);
         let Some(app) = &self.android_app else { return };
@@ -219,10 +219,10 @@ impl App {
         );
         let (cols, rows) = termview::grid_dims(usable_w, usable_h, cw, ch);
         term.resize_cells(cols, rows);
-        if !self.session_over {
-            if let Some(tx) = &self.outbound {
-                let _ = tx.send(TermCmd::Resize { cols, rows });
-            }
+        if !self.session_over
+            && let Some(tx) = &self.outbound
+        {
+            let _ = tx.send(TermCmd::Resize { cols, rows });
         }
         self.dirty = true;
     }
@@ -340,14 +340,14 @@ impl App {
             Key::Named(NamedKey::Escape) => Some("\x1b".into()),
             _ => event.text.as_ref().map(|t| t.to_string()),
         };
-        if let (Some(bytes), Some(tx)) = (bytes, &self.outbound) {
-            if !bytes.is_empty() {
-                let _ = tx.send(TermCmd::Input(bytes));
-                self.last_input_at = Some(std::time::Instant::now());
-                // 打字了就是要看现在——滚回底部贴最新输出
-                if let Some(t) = &mut self.term {
-                    t.scroll_to_bottom();
-                }
+        if let (Some(bytes), Some(tx)) = (bytes, &self.outbound)
+            && !bytes.is_empty()
+        {
+            let _ = tx.send(TermCmd::Input(bytes));
+            self.last_input_at = Some(std::time::Instant::now());
+            // 打字了就是要看现在——滚回底部贴最新输出
+            if let Some(t) = &mut self.term {
+                t.scroll_to_bottom();
             }
         }
     }
@@ -452,12 +452,11 @@ impl ApplicationHandler for App {
                 el.exit();
             }
             WindowEvent::Resized(sz) => {
-                if let Some(g) = &mut self.gfx {
-                    if let (Some(w), Some(h)) =
+                if let Some(g) = &mut self.gfx
+                    && let (Some(w), Some(h)) =
                         (NonZeroU32::new(sz.width), NonZeroU32::new(sz.height))
-                    {
-                        g.surface.resize(w, h).expect("surface resize 失败");
-                    }
+                {
+                    g.surface.resize(w, h).expect("surface resize 失败");
                 }
                 if TERMINAL_MODE {
                     self.apply_window_size(sz.width, sz.height);
@@ -591,14 +590,12 @@ impl ApplicationHandler for App {
                             return;
                         }
                         let was_tap = self.touch_scroll.take().is_some_and(|t| t.was_tap());
-                        if was_tap {
-                            if let Some(w) = &self.window {
-                                w.set_ime_allowed(true);
-                                if let Some(app) = &self.android_app {
-                                    crate::insets::force_show_keyboard(app);
-                                }
-                                crate::report::report("ime", "点按唤出软键盘");
+                        if was_tap && let Some(w) = &self.window {
+                            w.set_ime_allowed(true);
+                            if let Some(app) = &self.android_app {
+                                crate::insets::force_show_keyboard(app);
                             }
+                            crate::report::report("ime", "点按唤出软键盘");
                         }
                     }
                 }
@@ -620,14 +617,14 @@ impl ApplicationHandler for App {
                             }
                         }
                         Ime::Commit(text) => {
-                            if !self.session_over {
-                                if let Some(tx) = &self.outbound {
-                                    let _ = tx.send(TermCmd::Input(text));
-                                    self.last_input_at = Some(std::time::Instant::now());
-                                    // IME 落字 = 用户输入：滚回底部贴最新输出
-                                    if let Some(t) = &mut self.term {
-                                        t.scroll_to_bottom();
-                                    }
+                            if !self.session_over
+                                && let Some(tx) = &self.outbound
+                            {
+                                let _ = tx.send(TermCmd::Input(text));
+                                self.last_input_at = Some(std::time::Instant::now());
+                                // IME 落字 = 用户输入：滚回底部贴最新输出
+                                if let Some(t) = &mut self.term {
+                                    t.scroll_to_bottom();
                                 }
                             }
                         }

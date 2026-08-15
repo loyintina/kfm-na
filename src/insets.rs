@@ -6,6 +6,7 @@
 //! - cargo-apk 0.10 / ndk-build 的 Activity 字段表没有 windowSoftInputMode，
 //!   Manifest 正道被构建工具封死；
 //! - android-activity 0.6 无 insets API。
+//!
 //! 剩下的唯一活路：JNI 直调 WindowInsets。
 //! 链路：Activity.getWindow().getDecorView().getRootWindowInsets()
 //!   → WindowInsets.Type.ime() → isVisible(type) / getInsets(type).bottom

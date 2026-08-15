@@ -13,10 +13,42 @@ use kfm_na::termview::{
     grid_dims, indexed_color,
 };
 
-const HOST_FONT: &str = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf";
+/// 测试字体夹具双环境解析（档位 2 手机自举，2026-08-15）：服务器在
+/// /usr/share/fonts，手机 Termux 在 $PREFIX/share/fonts——同名 DejaVu/Nimbus
+/// 文件，度量一致才能当 A 档固定夹具。NimbusMonoPS.otf 手机没有，由服务器
+/// 拷至 ~/kfm-na-toolchain/fonts/
+fn fixture(cands: &[&str]) -> String {
+    for c in cands {
+        if std::path::Path::new(c).exists() {
+            return (*c).to_string();
+        }
+    }
+    panic!("host 测试字体缺失: {cands:?}");
+}
+
+fn host_mono() -> String {
+    fixture(&[
+        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+        "/data/data/com.termux/files/usr/share/fonts/TTF/DejaVuSansMono.ttf",
+    ])
+}
+
+fn host_cff() -> String {
+    fixture(&[
+        "/usr/share/fonts/opentype/urw-base35/NimbusMonoPS-Regular.otf",
+        "/data/data/com.termux/files/home/kfm-na-toolchain/fonts/NimbusMonoPS-Regular.otf",
+    ])
+}
+
+fn host_proportional() -> String {
+    fixture(&[
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/data/data/com.termux/files/usr/share/fonts/TTF/DejaVuSans.ttf",
+    ])
+}
 
 fn host_font() -> fontdue::Font {
-    let bytes = std::fs::read(HOST_FONT).expect("host 测试字体缺失");
+    let bytes = std::fs::read(host_mono()).expect("host 测试字体缺失");
     fontdue::Font::from_bytes(bytes, fontdue::FontSettings::default())
         .expect("fontdue 不认 DejaVuSansMono")
 }
@@ -65,7 +97,7 @@ fn spec_布局_格坐标到像素原点() {
 fn spec_字号_步进宽不超格宽() {
     // 宽度帽契约：fit_font_px 给出的字号，'M' 步进宽不得超过格宽
     // （否则相邻格字形互相渗透——放大字号后 DejaVuSansMono 自然超宽）
-    let font = load_host_font(HOST_FONT);
+    let font = load_host_font(&host_mono());
     let (px, baseline) = termview::fit_font_px(&font, CELL_W, CELL_H);
     let (m, _) = font.rasterize('M', px);
     assert!(
@@ -296,9 +328,9 @@ fn spec_字体_候选全灭落内嵌等宽() {
 
 #[test]
 fn spec_字体_host候选命中() {
-    let (path, _font) = termview::load_font(&["/nonexistent/x.ttf", HOST_FONT])
+    let (path, _font) = termview::load_font(&["/nonexistent/x.ttf", &host_mono()])
         .expect("DejaVuSansMono 必须加载成功");
-    assert_eq!(path, HOST_FONT);
+    assert_eq!(path, host_mono());
 }
 
 /// 内嵌兜底字体（编译期 include_bytes!）：字节必须真在包里、真能用。
@@ -314,12 +346,9 @@ fn spec_字体_内嵌字节可直接用() {
     assert!(termview::font_monospaced(&font));
 }
 
-/// CFF 轮廓字体（NimbusMonoPS）：fontdue 0.9 能载能画西文，但中文字形
-/// 光栅全空（w=0 h=0 ink=0，2026-08-13 host 实测）——空光栅判定的活教材
-const HOST_CFF_FONT: &str = "/usr/share/fonts/opentype/urw-base35/NimbusMonoPS-Regular.otf";
-/// 比例字体活教材（BAR-003 病灶同款：真机 Roboto 即比例字体）
-const HOST_PROPORTIONAL_FONT: &str = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf";
-
+// CFF 轮廓字体（NimbusMonoPS，host_cff() 夹具）：fontdue 0.9 能载能画西文，
+// 但中文字形光栅全空（w=0 h=0 ink=0，2026-08-13 host 实测）——空光栅判定的活教材
+// 比例字体（host_proportional() 夹具）：BAR-003 病灶同款（真机 Roboto 即比例字体）
 fn load_host_font(path: &str) -> fontdue::Font {
     let bytes = std::fs::read(path).expect("host 测试字体缺失");
     fontdue::Font::from_bytes(bytes, fontdue::FontSettings::default()).expect("fontdue 不认该字体")
@@ -327,7 +356,7 @@ fn load_host_font(path: &str) -> fontdue::Font {
 
 #[test]
 fn spec_字体_空光栅判不合格() {
-    let font = load_host_font(HOST_CFF_FONT);
+    let font = load_host_font(&host_cff());
     assert!(
         !termview::font_usable(&font, '中'),
         "空光栅（CFF 字体缺中文字形）必须判不合格"
@@ -340,7 +369,7 @@ fn spec_字体_空光栅判不合格() {
 
 #[test]
 fn spec_字体_真字形判合格() {
-    let font = load_host_font(HOST_FONT);
+    let font = load_host_font(&host_mono());
     assert!(termview::font_usable(&font, 'M'));
     // DejaVu 无中文字形但 .notdef 豆腐块有墨（host 实测 ink=150）——
     // 「有墨」与「是对的字」是两回事，判定只管前者
@@ -351,10 +380,10 @@ fn spec_字体_真字形判合格() {
 fn spec_字体_等宽判定() {
     // BAR-003：终端网格按定宽格摆字形，比例字体（i 窄 m 宽）摆进去
     // 间距忽近忽远。契约：'i' 与 'M' 步进宽相等才算终端可用
-    assert!(termview::font_monospaced(&load_host_font(HOST_FONT)));
-    assert!(termview::font_monospaced(&load_host_font(HOST_CFF_FONT)));
+    assert!(termview::font_monospaced(&load_host_font(&host_mono())));
+    assert!(termview::font_monospaced(&load_host_font(&host_cff())));
     assert!(
-        !termview::font_monospaced(&load_host_font(HOST_PROPORTIONAL_FONT)),
+        !termview::font_monospaced(&load_host_font(&host_proportional())),
         "比例字体必须判非等宽（真机 Roboto 同款病灶）"
     );
 }
@@ -364,8 +393,8 @@ fn spec_字体_加载跳过比例字体() {
     // 比例字体在前、等宽在后：必须跳过比例选等宽（真机场景复刻：
     // Roboto 在前会被挑中，必须让位给后面的等宽）
     let (path, _font) =
-        termview::load_font(&[HOST_PROPORTIONAL_FONT, HOST_FONT]).expect("必须命中等宽候选");
-    assert_eq!(path, HOST_FONT);
+        termview::load_font(&[&host_proportional(), &host_mono()]).expect("必须命中等宽候选");
+    assert_eq!(path, host_mono());
 }
 
 // ---------- A 档：边距（BAR-005 边缘半字） ----------
@@ -417,7 +446,7 @@ fn spec_边距_首格不贴边() {
 fn spec_cjk_按覆盖挑选() {
     use termview::prefer_cjk;
     let mono = host_font(); // DejaVuSansMono：无 CJK、无盲文（host 实测 idx=0）
-    let sans = load_host_font(HOST_PROPORTIONAL_FONT); // DejaVuSans：有盲文、无 CJK
+    let sans = load_host_font(&host_proportional()); // DejaVuSans：有盲文、无 CJK
     // 主字体有的（西文/制表符）→ 不换（保等宽 crisp）
     assert!(!prefer_cjk(&mono, &sans, 'A'));
     assert!(!prefer_cjk(&mono, &sans, '─'));

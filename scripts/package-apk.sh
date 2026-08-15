@@ -10,12 +10,32 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-SDK=/root/kfm-na-toolchain/sdk
-BT="$SDK/build-tools/34.0.0"
-AJAR="$SDK/platforms/android-35/android.jar"
-JDK=/root/kfm-na-toolchain/jdk
-NDK="$SDK/ndk/27.2.12479018"
-KEYSTORE=/root/.android/debug.keystore
+# 工具解析（双环境）：服务器 = SDK 全套本地路径；手机 Termux = 系统包
+# （cargo/javac/aapt2/zipalign/apksigner 在 PATH）+ 服务器拷来的
+# d8.jar/android.jar（~/kfm-na-toolchain）。档位 2 手机自举（2026-08-15）
+if [ -d /data/data/com.termux ]; then
+    TOOLBOX="$HOME/kfm-na-toolchain"
+    AJAR="$TOOLBOX/android.jar"
+    JAVAC=javac
+    D8="$TOOLBOX/bin/d8"
+    AAPT2=aapt2
+    ZIPALIGN=zipalign
+    APKSIGNER=apksigner
+    KEYSTORE="$HOME/.android/debug.keystore"
+    # Termux 的 cc 原生就是 aarch64-linux-android clang，无需 NDK 交叉链
+    LINKER=cc
+else
+    SDK=/root/kfm-na-toolchain/sdk
+    BT="$SDK/build-tools/34.0.0"
+    AJAR="$SDK/platforms/android-35/android.jar"
+    JAVAC=/root/kfm-na-toolchain/jdk/bin/javac
+    D8="$BT/d8"
+    AAPT2="$BT/aapt2"
+    ZIPALIGN="$BT/zipalign"
+    APKSIGNER="$BT/apksigner"
+    KEYSTORE=/root/.android/debug.keystore
+    LINKER="$SDK/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"
+fi
 TARGET=aarch64-linux-android
 MIN_API=24
 # versionCode 必须大于已装包才能覆盖安装——旧包是 cargo-apk 默认的 16777472。
@@ -30,8 +50,7 @@ OUT=target/release/apk/kfm-na.apk
 # field-reports.log 首行一读便知
 export KFM_NA_BUILD="$(git rev-parse --short HEAD 2>/dev/null || echo nogit)-$(date -u +%m%d%H%M)"
 
-export PATH="$JDK/bin:$PATH"
-export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${MIN_API}-clang"
+export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$LINKER"
 
 echo "=== [package 1/6] cargo build --release ($TARGET) ==="
 cargo build --release --target "$TARGET"
@@ -39,17 +58,17 @@ cargo build --release --target "$TARGET"
 echo "=== [package 2/6] javac（Java 皮） ==="
 rm -rf "$BUILD"
 mkdir -p "$BUILD/classes" "$BUILD/dex" "$BUILD/stage/lib/arm64-v8a" target/release/apk
-javac -source 8 -target 8 -cp "$AJAR" -d "$BUILD/classes" \
+$JAVAC -source 8 -target 8 -cp "$AJAR" -d "$BUILD/classes" \
     android/java/dev/kfm/na/*.java 2>&1 | grep -v 'bootstrap class path' || true
 # javac 的告警（-source 8 过时）不挡路，编译失败才挡
 [ "${PIPESTATUS[0]}" -eq 0 ] || { echo "❌ Java 皮编译不过"; exit 1; }
 
 echo "=== [package 3/6] d8（class → dex） ==="
-"$BT/d8" --min-api "$MIN_API" --lib "$AJAR" --output "$BUILD/dex" \
+"$D8" --min-api "$MIN_API" --lib "$AJAR" --output "$BUILD/dex" \
     $(find "$BUILD/classes" -name '*.class')
 
 echo "=== [package 4/6] aapt2 link + 装 dex/lib ==="
-"$BT/aapt2" link -o "$BUILD/unsigned.apk" -I "$AJAR" \
+"$AAPT2" link -o "$BUILD/unsigned.apk" -I "$AJAR" \
     --manifest android/AndroidManifest.xml \
     --min-sdk-version "$MIN_API" --target-sdk-version 35 \
     --version-code "$VERSION_CODE" --version-name "$VERSION_NAME"
@@ -71,10 +90,10 @@ with zipfile.ZipFile(apk, "a") as z:
 EOF
 
 echo "=== [package 5/6] zipalign（-p 页对齐 .so） ==="
-"$BT/zipalign" -f -p 4 "$BUILD/unsigned.apk" "$BUILD/aligned.apk"
+"$ZIPALIGN" -f -p 4 "$BUILD/unsigned.apk" "$BUILD/aligned.apk"
 
 echo "=== [package 6/6] apksigner（debug.keystore） ==="
-"$BT/apksigner" sign --ks "$KEYSTORE" --ks-pass pass:android \
+"$APKSIGNER" sign --ks "$KEYSTORE" --ks-pass pass:android \
     --out "$OUT" "$BUILD/aligned.apk"
 
 ls -lh "$OUT"

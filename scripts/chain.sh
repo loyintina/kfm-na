@@ -21,9 +21,17 @@ cargo check --target aarch64-linux-android || { echo "❌ Android 目标编译�
 echo "=== [chain 4/6] javac（Java 皮编译检查） ==="
 # Java 皮（android/java/）是中文输入的命脉，又不在 cargo 视野内——编译检查
 # 防「改了 Java 没打过包」的烂尾。APK 全量打包走 scripts/package-apk.sh
+# 双环境：服务器用本地 JDK+SDK；手机 Termux 用 openjdk-21 + 拷来的 android.jar
+if [ -d /data/data/com.termux ]; then
+    JAVAC=javac
+    AJAR="$HOME/kfm-na-toolchain/android.jar"
+else
+    JAVAC=/root/kfm-na-toolchain/jdk/bin/javac
+    AJAR=/root/kfm-na-toolchain/sdk/platforms/android-35/android.jar
+fi
 rm -rf build/java-check && mkdir -p build/java-check
-/root/kfm-na-toolchain/jdk/bin/javac -source 8 -target 8 \
-    -cp /root/kfm-na-toolchain/sdk/platforms/android-35/android.jar \
+"$JAVAC" -source 8 -target 8 \
+    -cp "$AJAR" \
     -d build/java-check android/java/dev/kfm/na/*.java 2>&1 \
     | grep -v 'bootstrap class path' || true
 # javac 的告警（-source 8 过时）不挡路，编译失败才挡

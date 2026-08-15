@@ -23,7 +23,32 @@ cargo fmt                # fmt --check 红了的自救
 # 手工管线 javac → d8 → aapt2 → zipalign → apksigner，全本地工具零网络，
 # 签名沿用 Android 官方 debug keystore，与旧包同证书可覆盖安装）
 bash scripts/package-apk.sh   # 产物：target/release/apk/kfm-na.apk
+
+# 送包到手机（ssh 隧道 localhost:8022 → Termux；scp 到共享存储 + am start
+# 调起系统安装器，用户在手机上点「安装」完成最后一步——普通 uid 无
+# INSTALL_PACKAGES 权限，静默安装 root 前无解）
+bash scripts/deploy-phone.sh           # 送当前已打好的包
+bash scripts/deploy-phone.sh --build   # 先打包再送
 ```
+
+## 双环境（档位 2 手机自举，2026-08-15）
+
+手机 Termux（`ssh -p 8022 localhost`）是第二个完整开发环境：`~/kfm-na`
+仓库与服务器同步（服务器 `git push phone master`，手机端
+`receive.denyCurrentBranch=updateInstead` 工作树自动更新）。
+
+- 工具链：cargo/rustc/aapt2/apksigner/zipalign/openjdk-21 全部来自 termux 包；
+  `d8.jar` + `android.jar` + `debug.keystore` 拷自服务器（`~/kfm-na-toolchain/`，
+  d8 是纯 Java，bin/d8 是 wrapper）；.so 链接用 Termux 原生 cc
+  （宿主即 aarch64-linux-android，免 NDK 交叉链）
+- 脚本双环境自适应：`package-apk.sh`/`chain.sh`/`deploy-phone.sh` 检测
+  `/data/data/com.termux` 自动切路径；测试字体夹具（DejaVu/Nimbus）在
+  `tests/termview_spec.rs` 按候选路径解析
+- 注意：手机 Rust 滚动更新（比服务器新），新 clippy lint 先在手机爆——
+  修法是修到两边都绿，不要给手机降版本
+- 手机上 `deploy-phone.sh` 走本地模式：跳过 scp 直接调安装器
+- 固定取包点（用户指定 2026-08-15）：每个包同时拷到手机 `~/w/项目/kfm-na/`——
+  安装器没弹/找不到包时去那里拿
 
 ## 仓库布局（cargo 视野外的部分）
 
