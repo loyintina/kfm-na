@@ -2,8 +2,11 @@
 
 pub mod conn;
 pub mod ime_queue;
+pub mod keybar;
+pub mod keymap;
 pub mod protocol;
 pub mod report;
+pub mod scroll;
 pub mod session;
 pub mod termview;
 

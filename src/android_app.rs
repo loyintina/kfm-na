@@ -71,7 +71,8 @@ struct App {
     dirty: bool,
     /// 会话终了（exited/failed）后定格最后一屏，出向不再发
     session_over: bool,
-    /// 真实软键盘底部 inset（px，JNI 轮询得来，BAR-006）。0 = 未弹/未知
+    /// 真实软键盘底部 inset（px，JNI 轮询得来，BAR-006）。0 = 未弹/未知。
+    /// 快捷键行的让位是 Rust 常量（keybar::HEIGHT_PX），不进本字段
     ime_bottom_px: u32,
     /// 上次 JNI 轮询时刻（500ms 节流）
     last_inset_poll: Option<std::time::Instant>,
@@ -80,6 +81,12 @@ struct App {
     /// 事件循环心跳的上次上报时刻（BAR-012③ 诊断：循环卡死则心跳停，
     /// 与「触摸没派发」区分开）
     last_loop_beat: Option<std::time::Instant>,
+    /// 触摸滚动手势状态机（A 档 src/scroll.rs）：Started 建机，Moved 滚
+    /// scrollback，Ended 没过阈值才算点按（唤键盘）。None = 没有按着的手指
+    touch_scroll: Option<crate::scroll::TouchScroll>,
+    /// 按在快捷键行带上的手势（BAR-017）：Started 记下起点，Ended 命中测试
+    /// 发键/翻修饰键。Some = 这手势归快捷键行，不滚屏不唤键盘
+    bar_touch: Option<(f64, f64)>,
 }
 
 impl App {
@@ -199,13 +206,17 @@ impl App {
 
     /// 窗口 px 尺寸 → cols/rows → Term resize + terminal-resize 出向。
     /// 可用区域 = 窗口 - 四周边距（BAR-005）- 真实软键盘 inset（BAR-006，
-    /// JNI 轮询，insets.rs）
+    /// JNI 轮询，insets.rs）- 快捷键行高（BAR-017，Rust 自绘常驻让位）
     fn apply_window_size(&mut self, w: u32, h: u32) {
         let Some(term) = &mut self.term else { return };
         let (cw, ch) = term.cell_size();
         let usable_w = w.saturating_sub(2 * termview::MARGIN_X);
-        let usable_h =
-            h.saturating_sub(termview::MARGIN_TOP + termview::MARGIN_Y + self.ime_bottom_px);
+        let usable_h = h.saturating_sub(
+            termview::MARGIN_TOP
+                + termview::MARGIN_Y
+                + self.ime_bottom_px
+                + crate::keybar::HEIGHT_PX,
+        );
         let (cols, rows) = termview::grid_dims(usable_w, usable_h, cw, ch);
         term.resize_cells(cols, rows);
         if !self.session_over {
@@ -272,12 +283,13 @@ impl App {
         }
     }
 
-    /// 排干 Java 皮（KfmInputConnection）经 JNI 注入的 IME 文字——
+    /// 排干 Java 皮（KfmInputConnection/快捷键行）经 JNI 注入的输入——
     /// 中文落字从这里进终端（NativeActivity 无 InputConnection 的补丁，
-    /// 链路见 ime_queue.rs 文件头）
+    /// 链路见 ime_queue.rs 文件头）。键码在排干侧按当下光标模式翻序列
+    /// （模式位只有这里的 Term 知道，keymap.rs 吃 app_cursor 参数）
     fn drain_ime_inject(&mut self) {
-        let texts = crate::ime_queue::global().drain();
-        if texts.is_empty() || self.session_over {
+        let items = crate::ime_queue::global().drain();
+        if items.is_empty() || self.session_over {
             return;
         }
         static FIRST_INJECT: std::sync::atomic::AtomicBool =
@@ -285,11 +297,34 @@ impl App {
         if !FIRST_INJECT.swap(true, std::sync::atomic::Ordering::Relaxed) {
             crate::report::report("ime", "首个 JNI IME 文字注入");
         }
+        let app_cursor = self.term.as_ref().is_some_and(|t| t.app_cursor_mode());
         if let Some(tx) = &self.outbound {
-            for text in texts {
-                let _ = tx.send(TermCmd::Input(text));
+            for item in items {
+                let bytes = match item {
+                    crate::ime_queue::Inject::Text(s) => Some(s),
+                    crate::ime_queue::Inject::Key(code) => {
+                        let seq = crate::keymap::key_seq(code, app_cursor);
+                        // BAR-018 诊断：快捷键行的键到底发了什么序列
+                        if let Some(seq) = seq {
+                            let esc: String =
+                                seq.chars().flat_map(|c| c.escape_default()).collect();
+                            crate::report::report(
+                                "ime",
+                                &format!("落键 {code} → {esc}（app_cursor={app_cursor}）"),
+                            );
+                        }
+                        seq.map(str::to_string)
+                    }
+                };
+                if let Some(bytes) = bytes {
+                    let _ = tx.send(TermCmd::Input(bytes));
+                }
             }
             self.last_input_at = Some(std::time::Instant::now());
+            // IME 落字 = 用户输入：滚回底部贴最新输出
+            if let Some(t) = &mut self.term {
+                t.scroll_to_bottom();
+            }
         }
     }
 
@@ -309,6 +344,10 @@ impl App {
             if !bytes.is_empty() {
                 let _ = tx.send(TermCmd::Input(bytes));
                 self.last_input_at = Some(std::time::Instant::now());
+                // 打字了就是要看现在——滚回底部贴最新输出
+                if let Some(t) = &mut self.term {
+                    t.scroll_to_bottom();
+                }
             }
         }
     }
@@ -321,6 +360,9 @@ impl App {
             if let Some(term) = &mut self.term {
                 let (w, h) = (buf.width().get(), buf.height().get());
                 term.render_into(&mut buf, w, h);
+                // 快捷键行（BAR-017：Rust 自绘覆盖层，画在终端网格之上；
+                // 键盘 inset 之上——键盘弹起时行跟着上浮）
+                term.render_keybar(&mut buf, w, h, self.ime_bottom_px);
                 // tofu 目击上报：双字体都缺的字符（方框的真身），新字才报
                 let tofu = term.take_tofu_chars();
                 if !tofu.is_empty() {
@@ -426,29 +468,137 @@ impl ApplicationHandler for App {
                     self.handle_key(&event);
                 }
             }
-            // 触摸唤出软键盘：winit 的 set_ime_allowed 走 SHOW_IMPLICIT，
-            // 用户收过键盘后 IMM 拒弹（BAR-012）——JNI SHOW_FORCED 强弹兜底
+            // 触摸：拖动 = 滚 scrollback（A 档手势状态机 src/scroll.rs），
+            // 没过阈值的点按才唤软键盘。winit 的 set_ime_allowed 走
+            // SHOW_IMPLICIT，用户收过键盘后 IMM 拒弹（BAR-012）——JNI
+            // SHOW_FORCED 强弹兜底
             WindowEvent::Touch(touch) => {
-                if TERMINAL_MODE && touch.phase == TouchPhase::Started {
-                    // BAR-012③ 诊断：入口就报——判「事件没派发」还是「handler 卡死」
-                    crate::report::report(
-                        "ime",
-                        &format!("触摸进 handler ({},{})", touch.location.x, touch.location.y),
-                    );
-                    if let Some(w) = &self.window {
-                        w.set_ime_allowed(true);
-                        static IME_ALLOWED_RET: std::sync::atomic::AtomicBool =
+                if !TERMINAL_MODE {
+                    return;
+                }
+                match touch.phase {
+                    TouchPhase::Started => {
+                        static FIRST_TOUCH: std::sync::atomic::AtomicBool =
                             std::sync::atomic::AtomicBool::new(false);
-                        if !IME_ALLOWED_RET.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                            crate::report::report("ime", "set_ime_allowed 已返回（没卡死）");
+                        if !FIRST_TOUCH.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                            crate::report::report("ime", "首个触摸进 handler（派发活着）");
                         }
-                        if let Some(app) = &self.android_app {
-                            crate::insets::force_show_keyboard(app);
+                        // 起点在快捷键行带上 → 这手势归行（不滚屏不唤键盘）
+                        // BAR-018：判定尺与渲染/hit 一致——减去键盘 inset，
+                        // 否则键盘弹起时行带浮在 inset 上方，这里却认屏底
+                        let in_bar = self.window.as_ref().is_some_and(|w| {
+                            crate::keybar::in_bar(
+                                touch.location.y,
+                                w.inner_size().height,
+                                self.ime_bottom_px,
+                            )
+                        });
+                        if in_bar {
+                            self.bar_touch = Some((touch.location.x, touch.location.y));
+                            return;
                         }
-                        static IME_REQ: std::sync::atomic::AtomicBool =
-                            std::sync::atomic::AtomicBool::new(false);
-                        if !IME_REQ.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                            crate::report::report("ime", "触摸唤出软键盘");
+                        let cell_h = self
+                            .term
+                            .as_ref()
+                            .map(|t| t.cell_size().1)
+                            .unwrap_or(crate::termview::CELL_H);
+                        self.touch_scroll = Some(crate::scroll::TouchScroll::new(
+                            touch.location.y,
+                            f64::from(cell_h),
+                        ));
+                    }
+                    TouchPhase::Moved => {
+                        if self.bar_touch.is_some() {
+                            return; // 快捷键行手势：不支持拖动
+                        }
+                        let Some(tracker) = &mut self.touch_scroll else {
+                            return;
+                        };
+                        let lines = tracker.moved(touch.location.y);
+                        if lines == 0 {
+                            return;
+                        }
+                        let Some(t) = &mut self.term else { return };
+                        if t.mouse_report_active() {
+                            // BAR-016②：对端开了鼠标上报（tmux/kimicode 等全屏
+                            // TUI）——alt screen 没有本地历史可滚，翻成 SGR 滚轮
+                            // 事件发 PTY，让对方滚自己的视图
+                            let (cw, ch) = t.cell_size();
+                            let col = (touch.location.x as u32 / cw + 1).max(1);
+                            let row = (touch.location.y as u32 / ch + 1).max(1);
+                            if let Some(tx) = &self.outbound {
+                                // 每次事件按行数发滚轮 tick，封顶防一次猛拖雪崩
+                                for _ in 0..lines.unsigned_abs().min(10) {
+                                    let _ = tx.send(TermCmd::Input(crate::scroll::wheel_seq(
+                                        lines > 0,
+                                        col,
+                                        row,
+                                    )));
+                                }
+                            }
+                        } else {
+                            t.scroll_lines(lines);
+                            self.dirty = true;
+                        }
+                    }
+                    TouchPhase::Ended | TouchPhase::Cancelled => {
+                        // 快捷键行手势：抬手命中发键（Cancelled 不发）
+                        if self.bar_touch.take().is_some() {
+                            // BAR-018 诊断：进得了这个分支 = Started 的 in_bar
+                            // 判定活着；hit 落空也会留痕（坐标+inset 三数）
+                            crate::report::report(
+                                "ime",
+                                &format!(
+                                    "快捷键行抬手 ({},{}), inset={}",
+                                    touch.location.x, touch.location.y, self.ime_bottom_px
+                                ),
+                            );
+                            if touch.phase != TouchPhase::Ended {
+                                return;
+                            }
+                            let Some(w) = &self.window else { return };
+                            let s = w.inner_size();
+                            let Some(kd) = crate::keybar::hit(
+                                touch.location.x,
+                                touch.location.y,
+                                s.width,
+                                s.height,
+                                self.ime_bottom_px,
+                            ) else {
+                                crate::report::report(
+                                    "ime",
+                                    &format!(
+                                        "快捷键行命中落空: 窗 {}x{} inset={}",
+                                        s.width, s.height, self.ime_bottom_px
+                                    ),
+                                );
+                                return;
+                            };
+                            // BAR-018 诊断：点哪个键报哪个键——实拍「PgUp
+                            // 表现得像↑」必须分清命中错还是对端不认
+                            crate::report::report("ime", &format!("快捷键行点按: {}", kd.label));
+                            match kd.key {
+                                crate::keybar::Key::Direct(code) => {
+                                    crate::ime_queue::global().push_key_code(code);
+                                }
+                                crate::keybar::Key::Modifier(bit) => {
+                                    let m = crate::keybar::toggle(bit);
+                                    crate::report::report("ime", &format!("修饰键粘滞位: {m:03b}"));
+                                }
+                                crate::keybar::Key::None => {}
+                            }
+                            self.dirty = true; // 修饰键变色/下帧重画
+                            return;
+                        }
+                        let was_tap = self.touch_scroll.take().is_some_and(|t| t.was_tap());
+                        if was_tap {
+                            if let Some(w) = &self.window {
+                                w.set_ime_allowed(true);
+                                if let Some(app) = &self.android_app {
+                                    crate::insets::force_show_keyboard(app);
+                                }
+                                crate::report::report("ime", "点按唤出软键盘");
+                            }
                         }
                     }
                 }
@@ -474,6 +624,10 @@ impl ApplicationHandler for App {
                                 if let Some(tx) = &self.outbound {
                                     let _ = tx.send(TermCmd::Input(text));
                                     self.last_input_at = Some(std::time::Instant::now());
+                                    // IME 落字 = 用户输入：滚回底部贴最新输出
+                                    if let Some(t) = &mut self.term {
+                                        t.scroll_to_bottom();
+                                    }
                                 }
                             }
                         }

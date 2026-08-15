@@ -2,13 +2,13 @@
 //!
 //! 判卷维度：
 //! - commitText 中文串顺序保持、排干即空、空串不注入
-//! - 软键码映射（ENTER/DEL → 终端字节，未知键吞掉）
+//! - Inject 双形态：文本原样、键码存原始值（翻译在排干侧，见 keymap_spec）
 //! - UTF-8 原样透传（CJK/emoji 混合不变形）
 //!
-//! 变异抽检：故意改坏答案（drain 不清队 / DEL 映射成 '\x08'）本文件必须红。
+//! 变异抽检：故意改坏答案（drain 不清队 / 未知键入队）本文件必须红。
 //! 答案 src/ime_queue.rs；JNI 薄皮（ime_bridge.rs）判卷在真机。
 
-use kfm_na::ime_queue::{ImeQueue, KEYCODE_DEL, KEYCODE_ENTER, key_code_to_bytes};
+use kfm_na::ime_queue::{ImeQueue, Inject};
 
 // ---------- A 档：队列行为 ----------
 
@@ -18,7 +18,14 @@ fn spec_队列_中文提交顺序保持() {
     q.push_text("你好");
     q.push_text("世界");
     q.push_text("kfm");
-    assert_eq!(q.drain(), vec!["你好", "世界", "kfm"]);
+    assert_eq!(
+        q.drain(),
+        vec![
+            Inject::Text("你好".into()),
+            Inject::Text("世界".into()),
+            Inject::Text("kfm".into()),
+        ]
+    );
 }
 
 #[test]
@@ -43,27 +50,30 @@ fn spec_队列_utf8原样透传() {
     q.push_text(mixed);
     let out = q.drain();
     assert_eq!(out.len(), 1);
-    assert_eq!(out[0], mixed, "注入通道不得动用户文字的一个字节");
-    assert_eq!(out[0].as_bytes(), mixed.as_bytes());
+    assert_eq!(
+        out[0],
+        Inject::Text(mixed.into()),
+        "注入通道不得动用户文字的一个字节"
+    );
 }
 
-// ---------- A 档：软键码映射 ----------
+// ---------- A 档：键码入队（原始值，翻译见 keymap_spec） ----------
 
 #[test]
-fn spec_键码_回车删除映射() {
-    // 与 android_app::handle_key 的键盘映射同表——软/硬键盘行为一致
-    assert_eq!(key_code_to_bytes(KEYCODE_ENTER), Some("\r"));
-    assert_eq!(key_code_to_bytes(KEYCODE_DEL), Some("\x7f"));
+fn spec_键码_原始键码入队() {
+    // 键码→序列的翻译在排干侧（模式分岔），队列只存原始码：
+    // 方向键进队列必须还是键码形态，不许提前翻成定死序列
+    let q = ImeQueue::new();
+    assert!(q.push_key_code(19), "方向键上必须可入队");
+    assert!(q.push_key_code(66), "回车必须可入队");
+    assert_eq!(q.drain(), vec![Inject::Key(19), Inject::Key(66)]);
 }
 
 #[test]
 fn spec_键码_未知键吞掉() {
-    assert_eq!(key_code_to_bytes(999), None);
     let q = ImeQueue::new();
     assert!(!q.push_key_code(999), "未知键必须回报未消费");
     assert!(q.drain().is_empty(), "未知键绝不注入队列");
-    assert!(q.push_key_code(KEYCODE_DEL));
-    assert_eq!(q.drain(), vec!["\x7f"]);
 }
 
 // ---------- A 档：全局实例冒烟（唯一碰全局的考题，防并行互踩） ----------
@@ -74,7 +84,8 @@ fn spec_全局队列_冒烟() {
     g.push_text("全局冒烟一针");
     let out = g.drain();
     assert!(
-        out.iter().any(|s| s == "全局冒烟一针"),
+        out.iter()
+            .any(|i| matches!(i, Inject::Text(s) if s == "全局冒烟一针")),
         "全局实例 push→drain 闭环断了: {out:?}"
     );
 }

@@ -34,7 +34,9 @@ pub fn jni_counters() -> (u32, u32, u32, u32) {
 }
 
 /// dev.kfm.na.KfmImeView.nativeCommitText —— IME commitText 落字
-/// （中文候选词、英文整串、粘贴都走这）
+/// （中文候选词、英文整串、粘贴都走这）。落字前过修饰键粘滞：
+/// 快捷键行的 Ctrl/Alt/Shift 状态在 Rust 侧（keybar.rs，BAR-017 后
+/// 修饰键状态也收归 Rust），take 读走即清 = 一次性联动
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_kfm_na_KfmImeView_nativeCommitText(
     mut env: EnvUnowned,
@@ -44,6 +46,17 @@ pub extern "system" fn Java_dev_kfm_na_KfmImeView_nativeCommitText(
     COMMIT_ENTER.fetch_add(1, Ordering::Relaxed);
     env.with_env(|env| -> jni::errors::Result<()> {
         let s = text.try_to_string(env)?;
+        let mods = crate::keybar::take_modifiers();
+        let s = if mods != 0 {
+            crate::keymap::map_text(
+                mods & crate::keybar::MOD_CTRL != 0,
+                mods & crate::keybar::MOD_ALT != 0,
+                mods & crate::keybar::MOD_SHIFT != 0,
+                &s,
+            )
+        } else {
+            s
+        };
         crate::ime_queue::global().push_text(&s);
         COMMIT_PUSHED.fetch_add(1, Ordering::Relaxed);
         Ok(())
@@ -53,7 +66,7 @@ pub extern "system" fn Java_dev_kfm_na_KfmImeView_nativeCommitText(
 
 /// dev.kfm.na.KfmImeView.nativeSendKey —— 软键事件（退格/回车）。
 /// 接上 InputConnection 后软键盘删除走连接而非按键队列，Java 侧翻成
-/// 键码送来这里，映射表在 ime_queue::key_code_to_bytes
+/// 键码送来这里存原始值，序列翻译在排干侧（keymap.rs）
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_kfm_na_KfmImeView_nativeSendKey(
     _env: EnvUnowned,

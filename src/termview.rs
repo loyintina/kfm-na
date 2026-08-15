@@ -17,9 +17,9 @@
 //!   damage 追踪，性能成为问题再接）
 
 use alacritty_terminal::event::VoidListener;
-use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::term::cell::Flags;
-use alacritty_terminal::term::{Config, Term};
+use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Processor};
 
 /// 单元格像素尺寸（尖刺期常量，字体大小可配化是后话）
@@ -385,6 +385,36 @@ impl TermView {
         self.tofu_seen.take()
     }
 
+    /// 滚动可视窗口（scrollback）：lines 正 = 看更老的历史（手指向下拖），
+    /// 负 = 往最新回。alacritty 内部自钳到历史顶/底，调用方不用管边界
+    pub fn scroll_lines(&mut self, lines: i32) {
+        self.term.scroll_display(Scroll::Delta(lines));
+    }
+
+    /// 回到底部贴最新输出（用户输入时调用——打字了就是要看现在，不是看历史）
+    pub fn scroll_to_bottom(&mut self) {
+        self.term.scroll_display(Scroll::Bottom);
+    }
+
+    /// 当前显示偏移（行，0 = 贴底）——B 档考题钉 + 实拍上报用
+    pub fn display_offset(&self) -> usize {
+        self.term.grid().display_offset()
+    }
+
+    /// 对端（tmux/kimicode 等 TUI）是否开了鼠标上报（?1000/1002/1003 任一）——
+    /// 开了滚屏就必须翻成滚轮事件发过去（BAR-016：alt screen 没有本地历史）
+    pub fn mouse_report_active(&self) -> bool {
+        self.term.mode().intersects(
+            TermMode::MOUSE_REPORT_CLICK | TermMode::MOUSE_DRAG | TermMode::MOUSE_MOTION,
+        )
+    }
+
+    /// 对端是否开了应用光标模式（?1h，vim/kimicode 会开）——快捷键行的
+    /// 方向键/End 序列按它分岔（keymap.rs key_seq 的 app_cursor 参数）
+    pub fn app_cursor_mode(&self) -> bool {
+        self.term.mode().contains(TermMode::APP_CURSOR)
+    }
+
     /// 单元格像素尺寸（android_app 用窗口尺寸反推 cols/rows 时取值）
     pub fn cell_size(&self) -> (u32, u32) {
         (self.cell_w, self.cell_h)
@@ -404,10 +434,14 @@ impl TermView {
         };
         let content = self.term.renderable_content();
         let cursor = content.cursor;
+        // 屏行 = 网格行 + 显示偏移（BAR-016）：滚进历史后 alacritty 给的行号
+        // 是负的（Line(-offset)），跳过或直接用绝对行号都会让内容不随偏移
+        // 移动、每滚一行底部黑一行（实拍「从下到上一行行消失」）
+        let offset = content.display_offset as i32;
         for indexed in content.display_iter {
-            let line = indexed.point.line.0;
-            if line < 0 {
-                continue; // 显示偏移下的历史行不进画面
+            let line = indexed.point.line.0 + offset;
+            if !(0..self.term.grid().screen_lines() as i32).contains(&line) {
+                continue; // 钳到屏内（防御：迭代区间理论上已对齐）
             }
             let (mut fg, mut bg) = (
                 color_to_xrgb(indexed.cell.fg),
@@ -442,6 +476,112 @@ impl TermView {
                 continue;
             }
             self.draw_glyph(&mut frame, c, px, py, fg);
+        }
+    }
+
+    /// 快捷键行渲染（BAR-017：Java View 被原生 busy 重绘盖掉，改 Rust 自绘——
+    /// 覆盖层 UI 的统一模式）。画在帧缓冲底部、键盘 inset 之上的 HEIGHT_PX 带
+    /// （键盘弹起时跟着上浮，16777485 实拍：画死在屏底会被键盘盖住）：
+    /// 行底 → 圆角药丸键格（修饰键粘滞中换高亮色）→ 标签字形居中
+    pub fn render_keybar(&self, buf: &mut [u32], buf_w: u32, buf_h: u32, ime_bottom: u32) {
+        use crate::keybar;
+        let Some(top) = buf_h
+            .checked_sub(ime_bottom)
+            .and_then(|b| b.checked_sub(keybar::HEIGHT_PX))
+        else {
+            return;
+        };
+        if buf_w == 0 {
+            return;
+        }
+        let mut frame = Frame {
+            buf,
+            w: buf_w,
+            h: buf_h,
+        };
+        frame.fill_rect(0, top, buf_w, keybar::HEIGHT_PX, KEYBAR_BG);
+        let cell_w = buf_w / keybar::COLS;
+        if cell_w < 8 {
+            return; // 窗太窄画不下，保命要紧
+        }
+        let mods = keybar::modifiers();
+        for (row, keys) in keybar::KEYS.iter().enumerate() {
+            for (col, kd) in keys.iter().enumerate() {
+                if matches!(kd.key, keybar::Key::None) {
+                    continue;
+                }
+                let x = col as u32 * cell_w;
+                let y = top + row as u32 * keybar::ROW_H_PX;
+                let active = matches!(kd.key, keybar::Key::Modifier(bit) if mods & bit != 0);
+                let bg = if active { KEYBAR_MOD_ON } else { KEYBAR_KEY_BG };
+                // 圆角药丸键格（内缩出缝，圆角半径 14px）
+                frame.fill_round_rect(x + 3, y + 3, cell_w - 6, keybar::ROW_H_PX - 6, 14, bg);
+                self.draw_label(&mut frame, kd.label, x, cell_w, y, keybar::ROW_H_PX);
+            }
+        }
+    }
+
+    /// 快捷键行标签：水平居中 + 垂直居中光栅文本。主字体缺字形走 CJK 备用
+    /// （↑↓←→ 的命），双缺记 tofu 目击名单后跳过（不画方框吓唬人）
+    fn draw_label(&self, frame: &mut Frame<'_>, text: &str, cx: u32, cw: u32, cy: u32, rh: u32) {
+        let px = rh as f32 * 0.26; // 字号：行高的 1/4 左右（实拍「太大」后收敛）
+        let Some(hm) = self.font.horizontal_line_metrics(px) else {
+            return;
+        };
+        // 逐字挑字体（与 draw_glyph 同规则），顺便算总宽
+        let pick = |c: char| -> Option<&fontdue::Font> {
+            if self.font.lookup_glyph_index(c) != 0 {
+                Some(&self.font)
+            } else if let Some(k) = &self.cjk {
+                if k.font.lookup_glyph_index(c) != 0 {
+                    Some(&k.font)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+        let mut glyphs = Vec::new();
+        let mut width = 0.0f32;
+        for c in text.chars() {
+            let Some(f) = pick(c) else {
+                let mut seen = self.tofu_seen.borrow_mut();
+                if !seen.contains(&c) && seen.len() < 16 {
+                    seen.push(c); // 标签缺字也上报（↑ 在不在设备字体里，问机器）
+                }
+                continue;
+            };
+            let m = f.metrics(c, px);
+            glyphs.push((f, c, m.advance_width));
+            width += m.advance_width;
+        }
+        if glyphs.is_empty() {
+            return;
+        }
+        let mut pen_x = cx as f32 + (cw as f32 - width).max(0.0) / 2.0;
+        // 垂直居中：行内盒（ascent-descent）放进键格正中
+        let baseline = cy as f32 + (rh as f32 - (hm.ascent - hm.descent)) / 2.0 + hm.ascent;
+        for (f, c, adv) in glyphs {
+            let (m, bmp) = f.rasterize(c, px);
+            let top = baseline - m.ymin as f32 - m.height as f32;
+            for gy in 0..m.height as u32 {
+                let y = top as i64 + i64::from(gy);
+                if y < 0 || y >= i64::from(frame.h) {
+                    continue;
+                }
+                for gx in 0..m.width as u32 {
+                    let x = (pen_x + m.xmin as f32) as i64 + i64::from(gx);
+                    if x < 0 || x >= i64::from(frame.w) {
+                        continue;
+                    }
+                    let a = u32::from(bmp[(gy * m.width as u32 + gx) as usize]);
+                    if a > 0 {
+                        frame.blend_px(x as u32, y as u32, KEYBAR_LABEL, a);
+                    }
+                }
+            }
+            pen_x += adv;
         }
     }
 
@@ -506,6 +646,12 @@ pub fn paintable(c: char) -> bool {
     c != ' ' && !c.is_control()
 }
 
+/// 快捷键行配色（XRGB，与帧缓冲同格式）
+pub const KEYBAR_BG: u32 = 0x0010_1216;
+pub const KEYBAR_KEY_BG: u32 = 0x0023_272E;
+pub const KEYBAR_MOD_ON: u32 = 0x003E_6FB4;
+pub const KEYBAR_LABEL: u32 = 0x00E8_EAED;
+
 /// 帧缓冲视图：把 buf + 尺寸打包，免得每个画图函数都拖一溜参数（clippy 红线）
 struct Frame<'a> {
     buf: &'a mut [u32],
@@ -519,6 +665,37 @@ impl Frame<'_> {
         for row in y..(y + h).min(self.h) {
             for col in x..(x + w).min(self.w) {
                 self.buf[(row * self.w + col) as usize] = color;
+            }
+        }
+    }
+
+    /// 画圆角矩形（四角半径 r 的圆外像素跳过），快捷键行药丸键用
+    fn fill_round_rect(&mut self, x: u32, y: u32, w: u32, h: u32, r: u32, color: u32) {
+        let r = r.min(w / 2).min(h / 2) as i64;
+        for py in 0..h as i64 {
+            for px in 0..w as i64 {
+                // 角区像素：到角圆心的距离超半径即跳过
+                let cx = if px < r {
+                    r
+                } else if px >= w as i64 - r {
+                    w as i64 - r - 1
+                } else {
+                    px
+                };
+                let cy = if py < r {
+                    r
+                } else if py >= h as i64 - r {
+                    h as i64 - r - 1
+                } else {
+                    py
+                };
+                if (px - cx) * (px - cx) + (py - cy) * (py - cy) > r * r {
+                    continue;
+                }
+                let (ax, ay) = (x as i64 + px, y as i64 + py);
+                if ax >= 0 && ay >= 0 && ax < i64::from(self.w) && ay < i64::from(self.h) {
+                    self.buf[(ay * i64::from(self.w) + ax) as usize] = color;
+                }
             }
         }
     }

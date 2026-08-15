@@ -11,29 +11,26 @@
 //! push 侧跑在 JNI 回调线程，drain 侧跑在事件循环线程——跨线程过桥，
 //! 所以是 Mutex 队列而不是直接调 winit。
 //!
+//! 2026-08-14 快捷键行改造：队列存原始 Inject（文本/键码），键码→序列的
+//! 翻译挪到排干侧——方向键/End 的序列分普通/应用光标模式，模式位只有
+//! 事件循环里的 Term 知道（keymap.rs 吃 app_cursor 参数）。
+//!
 //! B 档 JNI 薄皮在 ime_bridge.rs（cfg android），判卷 = 真机实拍
 //! 「拼音打你好选词 → 终端出现你好」。
 
 use std::collections::VecDeque;
 use std::sync::Mutex;
 
-/// Android KeyEvent 键码（android.view.KeyEvent）
-pub const KEYCODE_ENTER: i32 = 66;
-pub const KEYCODE_DEL: i32 = 67;
-
-/// 软键 → 终端输入字节。只翻尖刺期键盘映射已支持的键
-/// （与 android_app::handle_key 同表），未知键 → None（吞掉，不注入垃圾）
-pub fn key_code_to_bytes(code: i32) -> Option<&'static str> {
-    match code {
-        KEYCODE_ENTER => Some("\r"),
-        KEYCODE_DEL => Some("\x7f"),
-        _ => None,
-    }
+/// 一注输入：commitText 落字（文本）或快捷键行的键码（原始值，排干侧翻译）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Inject {
+    Text(String),
+    Key(i32),
 }
 
 /// 一次注入会话的 FIFO 队列。push 侧 = JNI 回调线程，drain 侧 = 事件循环
 pub struct ImeQueue {
-    q: Mutex<VecDeque<String>>,
+    q: Mutex<VecDeque<Inject>>,
 }
 
 impl ImeQueue {
@@ -53,22 +50,24 @@ impl ImeQueue {
         self.q
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .push_back(text.to_string());
+            .push_back(Inject::Text(text.to_string()));
     }
 
-    /// 软键事件（退格/回车）；已消费 → true，未知键吞掉 → false
+    /// 软键/快捷键行事件入队（原始键码，排干侧按当前光标模式翻序列）。
+    /// 键的合法性不问模式（key_seq 两种模式同真值表），未知键吞掉 → false
     pub fn push_key_code(&self, code: i32) -> bool {
-        match key_code_to_bytes(code) {
-            Some(bytes) => {
-                self.push_text(bytes);
-                true
-            }
-            None => false,
+        if crate::keymap::key_seq(code, false).is_none() {
+            return false;
         }
+        self.q
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push_back(Inject::Key(code));
+        true
     }
 
-    /// 事件循环侧排干：一次性取走全部待注入文字（FIFO），队列归空
-    pub fn drain(&self) -> Vec<String> {
+    /// 事件循环侧排干：一次性取走全部待注入项（FIFO），队列归空
+    pub fn drain(&self) -> Vec<Inject> {
         let mut q = self.q.lock().unwrap_or_else(|e| e.into_inner());
         q.drain(..).collect()
     }

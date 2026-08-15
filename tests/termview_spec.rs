@@ -520,3 +520,138 @@ fn spec_渲染_tab控制符不落墨不进目击名单() {
     }
     assert!(cell_ink(&buf, 8) > 0, "'b' 必须落在 tab stop 第 8 列");
 }
+
+#[test]
+fn spec_滚动_scroll_lines驱动display_offset() {
+    // 触摸滚动的 B 档钉：scroll_lines 必须真的驱动 alacritty 的 display_offset
+    // （正 = 看历史），scroll_to_bottom 必须贴回 0；越界由 alacritty 自钳
+    // （滚过历史顶 = 停在历史行数，不许 panic 不许穿透）
+    let mut tv = host_termview(8, 10);
+    for i in 0..30 {
+        tv.feed(format!("L{i:02}\r\n").as_bytes());
+    }
+    assert_eq!(tv.display_offset(), 0, "新输出必须贴底");
+    tv.scroll_lines(3);
+    assert_eq!(tv.display_offset(), 3, "+3 行必须看历史");
+    tv.scroll_lines(-1);
+    assert_eq!(tv.display_offset(), 2, "-1 行必须回新");
+    tv.scroll_lines(999);
+    assert_eq!(
+        tv.display_offset(),
+        21,
+        "滚过历史顶必须钳住（30 行内容+末尾换行=31 行，历史 31-10=21）"
+    );
+    tv.scroll_to_bottom();
+    assert_eq!(tv.display_offset(), 0, "回底必须贴 0");
+}
+
+#[test]
+fn spec_滚动_历史行必须画上屏() {
+    // BAR-016 病灶①：滚进历史后 alacritty 给的行号是负的（Line(-offset)），
+    // render_into 一句 line < 0 就跳过 + 像素行直接用绝对行号——历史行不画、
+    // 内容不随偏移移动，净效果是每滚一行底部黑一行（实拍「从下到上一行行
+    // 消失」）。契约：屏行 = 网格行 + display_offset，滚 3 行后顶行必须出墨
+    // （历史行 L18 上了屏），底行也必须有墨（不许黑带）
+    let mut tv = host_termview(8, 10);
+    for i in 0..30 {
+        tv.feed(format!("L{i:02}\r\n").as_bytes());
+    }
+    tv.scroll_lines(3);
+    let buf_w = 2 * termview::MARGIN_X + 8 * CELL_W;
+    let buf_h = termview::MARGIN_TOP + termview::MARGIN_Y + 10 * CELL_H;
+    let mut buf = vec![0u32; (buf_w * buf_h) as usize];
+    tv.render_into(&mut buf, buf_w, buf_h);
+    let row_ink = |row: u32| -> usize {
+        let y0 = termview::MARGIN_TOP + row * CELL_H;
+        let mut n = 0;
+        for y in y0..y0 + CELL_H {
+            for x in termview::MARGIN_X..buf_w - termview::MARGIN_X {
+                if buf[(y * buf_w + x) as usize] != DEFAULT_BG {
+                    n += 1;
+                }
+            }
+        }
+        n
+    };
+    assert!(row_ink(0) > 0, "滚 3 行后顶行必须是历史行（有墨），不许黑");
+    assert!(row_ink(9) > 0, "底行必须有内容，不许从下到上黑");
+}
+
+#[test]
+fn spec_滚动_鼠标上报模式识别() {
+    // BAR-016 病灶②配套：tmux/kimicode 开鼠标上报（?1000h 等）时，
+    // 滚屏必须翻成滚轮事件发给 PTY（alt screen 没有本地历史）。
+    // 契约：默认 false；?1000h 或 ?1006h 置位后 true
+    let mut tv = host_termview(8, 2);
+    assert!(!tv.mouse_report_active(), "默认必须不上报");
+    tv.feed(b"\x1b[?1000h\x1b[?1006h");
+    assert!(tv.mouse_report_active(), "?1000h 置位后必须识别为上报模式");
+}
+
+#[test]
+fn spec_模式_应用光标模式识别() {
+    // 快捷键行方向键/End 的序列分岔钉：默认普通模式（CSI），
+    // 对端开 ?1h 后必须识别（SS3）——vim/kimicode 方向键靠它活
+    let mut tv = host_termview(8, 2);
+    assert!(!tv.app_cursor_mode(), "默认必须是普通模式");
+    tv.feed(b"\x1b[?1h");
+    assert!(tv.app_cursor_mode(), "?1h 置位后必须是应用光标模式");
+    tv.feed(b"\x1b[?1l");
+    assert!(!tv.app_cursor_mode(), "?1l 复位后必须回普通模式");
+}
+
+#[test]
+fn spec_快捷键行_渲染冒烟() {
+    // BAR-017 二稿的 B 档钉：①行画出来了（键格色真上屏，标签真有墨）；
+    // ②键盘 inset 300 时行整体抬 300px（原屏底位置必须是背景）；
+    // ③修饰键粘滞中键格换高亮色
+    use kfm_na::keybar;
+    let tv = host_termview(8, 2);
+    let (w, h) = (700u32, 740u32);
+    let mut buf = vec![DEFAULT_BG; (w * h) as usize];
+    tv.render_keybar(&mut buf, w, h, 0);
+    // ESC 键格（第 1 列上排）左缘中段必须是键格色
+    // （中心是标签字形的位置，取不到底色）
+    let esc_cx = 8u32;
+    let esc_cy = h - keybar::HEIGHT_PX + keybar::ROW_H_PX / 2;
+    assert_eq!(
+        buf[(esc_cy * w + esc_cx) as usize],
+        termview::KEYBAR_KEY_BG,
+        "键格色必须上屏"
+    );
+    // 键格里必须有标签墨（非键底色非行底色的像素存在）
+    let mut ink = false;
+    for y in (h - keybar::HEIGHT_PX)..(h - keybar::HEIGHT_PX + keybar::ROW_H_PX) {
+        for x in 0..100u32 {
+            let p = buf[(y * w + x) as usize];
+            if p != termview::KEYBAR_KEY_BG && p != termview::KEYBAR_BG && p != DEFAULT_BG {
+                ink = true;
+            }
+        }
+    }
+    assert!(ink, "ESC 标签必须有墨");
+    // 键盘弹起 300px：行整体抬 300，原位置（被键盘盖住）必须是背景
+    let mut buf2 = vec![DEFAULT_BG; (w * h) as usize];
+    tv.render_keybar(&mut buf2, w, h, 300);
+    assert_eq!(
+        buf2[(esc_cy * w + esc_cx) as usize],
+        DEFAULT_BG,
+        "键盘盖住的原行位必须是背景"
+    );
+    assert_eq!(
+        buf2[((esc_cy - 300) * w + esc_cx) as usize],
+        termview::KEYBAR_KEY_BG,
+        "行必须跟着键盘上浮 300px"
+    );
+    // 修饰键高亮：点亮 CTRL，下排第 2 列键格必须换色；用完清理全局态
+    keybar::toggle(keybar::MOD_CTRL);
+    let mut buf3 = vec![DEFAULT_BG; (w * h) as usize];
+    tv.render_keybar(&mut buf3, w, h, 0);
+    let ctrl_cy = h - keybar::HEIGHT_PX + keybar::ROW_H_PX + keybar::ROW_H_PX / 2;
+    assert_eq!(
+        buf3[(ctrl_cy * w + 108) as usize],
+        termview::KEYBAR_MOD_ON,
+        "粘滞中的修饰键必须高亮"
+    );
+    keybar::take_modifiers();
+}
