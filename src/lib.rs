@@ -1,5 +1,6 @@
 //! lib.rs — kfm-na 库入口（集成测试与 Android cdylib 共享）
 
+pub mod base;
 pub mod conn;
 pub mod ime_queue;
 pub mod keybar;

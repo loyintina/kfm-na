@@ -92,6 +92,9 @@ bash scripts/deploy-phone.sh --build   # 先打包再送
 - `docs/active/立项.md` — 架构三层 + 尖刺五条验收标准（**动工前必读**）
 - `docs/active/工具卡.md` — 工具即卡设计（四个待拍板项定了才准实现）
 - `docs/ledger/bugs.md` — BAR 账本：每条修复登记编号/病灶/契约/钉位置
+- `/root/kfmv4/docs/ledger/agent-inbox/` — **跨线评审信箱**（评审会话维护，2026-08-15 迁入 kfmv4 文档目录）：
+  kfm-na 与 kfmv4 两线设计评审往来信 + 状态列；设计相关评审意见在此收/发。
+  kfm-na 侧的单文件信箱（docs/ledger/inbox.md）同日退役，勿重建
 
 ## 复用的 kfmv4 资产（只读引用，不复制）
 
