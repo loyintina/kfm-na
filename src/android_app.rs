@@ -48,6 +48,14 @@ static FRAME_PROBE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::n
 /// 终端模式开关：true = 启动即进终端画面；false = 紫屏 + echo 冒烟对照组
 const TERMINAL_MODE: bool = true;
 
+/// 开局上机提示（2026-08-20 用户实拍：快捷键是 app 层的，shell 里 help
+/// 看不见它们，要「至少一个提示」）。青色标题 + 灰说明，只 feed 视图
+/// 不进 PTY；滚屏可回看，每次冷启动印一次
+const HELP_BANNER: &str = "\x1b[36m── kfm-na 就绪 ──\x1b[0m\r\n\
+\x1b[90m切换会话: CTRL+] 本地⇄远程 · 触摸: 点按唤键盘 / 上下滑滚屏\x1b[0m\r\n\
+\x1b[90m快捷键行: CTRL/ALT/SHIFT 点一下粘住再敲字母 · HOME/END 跳首尾 · PGUP/PGDN 翻页\x1b[0m\r\n\
+\x1b[90m本地 HOME: Android/data/dev.kfm.na/files(文件管理器可见,随便读写)\x1b[0m\r\n";
+
 type SoftContext = softbuffer::Context<Arc<Window>>;
 type SoftSurface = softbuffer::Surface<Arc<Window>, Arc<Window>>;
 
@@ -277,6 +285,13 @@ impl App {
         crate::report::report("term", &format!("TermView 建成 +{}ms", boot_ms()));
         self.term = Some(tv);
         self.base = Some(base);
+
+        // 上机提示(L1 实拍后用户要「至少一个提示」):app 级快捷键 shell
+        // 看不见,开局直接印在网格上(只 feed 视图,不进 PTY 不污染会话)。
+        // 每次冷启动印一次;滚屏可回看
+        if let Some(t) = &mut self.term {
+            t.feed(HELP_BANNER.as_bytes());
+        }
 
         // 首发尺寸：Opened 前 outbound 会被 conn 层缓存，绑定后补发
         let size = window.inner_size();
