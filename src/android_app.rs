@@ -23,7 +23,7 @@
 
 use std::num::NonZeroU32;
 use std::sync::Arc;
-use std::sync::mpsc::{Receiver, Sender};
+use std::sync::mpsc::Receiver;
 
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, Ime, TouchPhase, WindowEvent};
@@ -77,16 +77,18 @@ struct App {
     /// 终端实例：插件工厂产出（term-alacritty），调用方持有的长寿命 mutable
     /// 状态（设计页 §7）——含 scrollback，跨插件生命周期存活
     term: Option<Box<dyn TermEmu>>,
-    /// 活跃会话的出向/入向通道（L1 双会话：默认本地 PTY，ws 远程在待机槽）
-    outbound: Option<Sender<TermCmd>>,
+    /// 出向路由核（L1 双会话：默认本地 PTY 活跃，ws 远程在待机槽）。
+    /// 一切击键/IME/Resize 出向经它发往活跃会话（评审裁决 4 附议：
+    /// 输入路由抽纯数据面，考题钉在 host 侧）
+    router: Option<crate::session_router::SessionRouter>,
     /// RTT 探针：最后一次击键送出的墙钟时刻（下个 output 到达时结算）
     last_input_at: Option<std::time::Instant>,
+    /// 活跃会话的入向事件通道（切换时与待机槽的 rx 互换——
+    /// 出向归 router，入向归壳，同一方法内同步换，不许分开动）
     event_rx: Option<EventRx>,
-    /// 待机会话槽（L1）：(出向, 入向, 名字)。待机期间事件在 mpsc 里积压，
+    /// 待机入向槽（L1）：(入向, 名字)。待机期间事件在 mpsc 里积压，
     /// 切入时一口气排干补屏（v1 接受；长时间积压的内存账暂不细算）
-    standby: Option<(Sender<TermCmd>, EventRx, &'static str)>,
-    /// 活跃会话名（"local" / "remote"；诊断与切换横幅用）
-    active_name: &'static str,
+    standby: Option<(EventRx, &'static str)>,
     /// 最近一次下发的网格尺寸（切换会话时给新活跃方补发 Resize）
     last_grid: (u32, u32),
     /// 有新输出/尺寸变化待渲染
@@ -237,23 +239,28 @@ impl App {
         };
         match (local, remote) {
             (Some(l), Some(r)) => {
+                let mut router = crate::session_router::SessionRouter::new(l.outbound, "local");
+                if let Err(e) = router.add_standby(r.outbound, "remote") {
+                    crate::report::report_sync("term", &format!("路由装配失败: {e}"));
+                }
                 self.event_rx = Some(l.events);
-                self.outbound = Some(l.outbound);
-                self.active_name = "local";
-                self.standby = Some((r.outbound, r.events, "remote"));
+                self.standby = Some((r.events, "remote"));
+                self.router = Some(router);
             }
             // 兜底：本地挂了远程顶上（单会话退化，行为同 L1 前）
             (None, Some(r)) => {
                 crate::report::report_sync("term", "本地会话断裂——退化纯远程模式");
                 self.event_rx = Some(r.events);
-                self.outbound = Some(r.outbound);
-                self.active_name = "remote";
+                self.router = Some(crate::session_router::SessionRouter::new(
+                    r.outbound, "remote",
+                ));
             }
             (Some(l), None) => {
                 crate::report::report_sync("term", "远程连接断裂——纯本地模式");
                 self.event_rx = Some(l.events);
-                self.outbound = Some(l.outbound);
-                self.active_name = "local";
+                self.router = Some(crate::session_router::SessionRouter::new(
+                    l.outbound, "local",
+                ));
             }
             (None, None) => {
                 crate::report::report_sync("term", "双会话全灭——本屏无会话");
@@ -324,33 +331,32 @@ impl App {
         term.resize_cells(cols, rows);
         self.last_grid = (cols, rows);
         if !self.session_over
-            && let Some(tx) = &self.outbound
+            && let Some(r) = &self.router
         {
-            let _ = tx.send(TermCmd::Resize { cols, rows });
+            r.send(TermCmd::Resize { cols, rows });
         }
         self.dirty = true;
     }
 
-    /// 会话切换（L1）：Ctrl-] 触达——活跃槽与待机槽互换，给新活跃方补发
-    /// 当前网格尺寸，横幅直接喂进终端网格（不走对端）。待机期积压的事件
-    /// 由下一圈 drain_terminal_events 一口气排干补屏
+    /// 会话切换（L1）：Ctrl-] 触达——router 换出向活跃槽，壳同步换入向
+    /// rx（同一方法内完成），给新活跃方补发当前网格尺寸，横幅直接喂进
+    /// 终端网格（不走对端）。待机期积压的事件由下一圈
+    /// drain_terminal_events 一口气排干补屏
     fn switch_session(&mut self) {
-        let (Some(tx_a), Some(rx_a)) = (self.outbound.take(), self.event_rx.take()) else {
+        let Some(router) = &mut self.router else {
             return;
         };
-        let Some((tx_s, rx_s, name_s)) = self.standby.take() else {
-            // 没待机方：把槽位放回去，装作没发生
-            self.outbound = Some(tx_a);
-            self.event_rx = Some(rx_a);
+        let Some((name_a, name_s)) = router.switch() else {
+            return; // 没待机方：装作没发生
+        };
+        let (Some(rx_a), Some((rx_s, _))) = (self.event_rx.take(), self.standby.take()) else {
+            crate::report::report_sync("term", "切换时入向槽残缺——装配 bug");
             return;
         };
-        let name_a = self.active_name;
-        self.standby = Some((tx_a, rx_a, name_a));
-        self.outbound = Some(tx_s.clone());
+        self.standby = Some((rx_a, name_a));
         self.event_rx = Some(rx_s);
-        self.active_name = name_s;
         let (cols, rows) = self.last_grid;
-        let _ = tx_s.send(TermCmd::Resize { cols, rows });
+        router.send(TermCmd::Resize { cols, rows });
         if let Some(t) = &mut self.term {
             let banner =
                 format!("\r\n\x1b[36m[kfm-na → {name_s} 会话（Ctrl-] 切回 {name_a}）]\x1b[0m\r\n");
@@ -473,8 +479,8 @@ impl App {
                 self.switch_session();
                 continue;
             }
-            if let Some(tx) = &self.outbound {
-                let _ = tx.send(TermCmd::Input(bytes));
+            if let Some(r) = &self.router {
+                r.send(TermCmd::Input(bytes));
                 sent = true;
             }
         }
@@ -499,10 +505,10 @@ impl App {
             Key::Named(NamedKey::Escape) => Some("\x1b".into()),
             _ => event.text.as_ref().map(|t| t.to_string()),
         };
-        if let (Some(bytes), Some(tx)) = (bytes, &self.outbound)
+        if let (Some(bytes), Some(r)) = (bytes, &self.router)
             && !bytes.is_empty()
         {
-            let _ = tx.send(TermCmd::Input(bytes));
+            r.send(TermCmd::Input(bytes));
             self.last_input_at = Some(std::time::Instant::now());
             // 打字了就是要看现在——滚回底部贴最新输出
             if let Some(t) = &mut self.term {
@@ -686,10 +692,10 @@ impl ApplicationHandler for App {
                             let (cw, ch) = t.cell_size();
                             let col = (touch.location.x as u32 / cw + 1).max(1);
                             let row = (touch.location.y as u32 / ch + 1).max(1);
-                            if let Some(tx) = &self.outbound {
+                            if let Some(r) = &self.router {
                                 // 每次事件按行数发滚轮 tick，封顶防一次猛拖雪崩
                                 for _ in 0..lines.unsigned_abs().min(10) {
-                                    let _ = tx.send(TermCmd::Input(crate::scroll::wheel_seq(
+                                    r.send(TermCmd::Input(crate::scroll::wheel_seq(
                                         lines > 0,
                                         col,
                                         row,
@@ -779,9 +785,9 @@ impl ApplicationHandler for App {
                         }
                         Ime::Commit(text) => {
                             if !self.session_over
-                                && let Some(tx) = &self.outbound
+                                && let Some(r) = &self.router
                             {
-                                let _ = tx.send(TermCmd::Input(text));
+                                r.send(TermCmd::Input(text));
                                 self.last_input_at = Some(std::time::Instant::now());
                                 // IME 落字 = 用户输入：滚回底部贴最新输出
                                 if let Some(t) = &mut self.term {

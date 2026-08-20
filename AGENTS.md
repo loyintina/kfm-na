@@ -78,6 +78,15 @@ bash scripts/deploy-phone.sh --build   # 先打包再送
 
 提交信息语言：中文，格式同 kfmv4（`类型(范围): 主题`，类型 feat/fix/chore/docs/test）。
 
+## 分层纪律（2026-08-20 多端分层设计，评审五问全裁落地）
+
+设计页：`/root/kfmv4/experiments/dsh-na/na/multi-end-layering.md`。三条：
+
+1. **核心层禁碰平台依赖**：cordis-na（及未来的核心 crate）不许依赖
+   winit/softbuffer/jni/android 系——chain 机械检查执法，不靠自觉；
+2. **终端仿真归核心，渲染归壳**：alacritty 网格状态是数据，画像素是壳的事；
+3. **新能力先问「核心还是壳」**：答不上来的不许写。
+
 ## 开发方法论（2026-08-13 用户拍板：考题先行，分三档）
 
 **agent 写的考题，代码是根据考题生成的答案**——但按判卷成本分三档，不搞一刀切：
@@ -94,6 +103,8 @@ bash scripts/deploy-phone.sh --build   # 先打包再送
 
 ## 文档地图
 
+- `docs/ledger/state.md` — **交接页：现在进行时**（当前位置/待判卷/欠账/日志
+  判读手册，里程碑必更新；接手冷启动第一读）
 - `docs/active/立项.md` — 架构三层 + 尖刺五条验收标准（**动工前必读**）
 - `docs/active/工具卡.md` — 工具即卡设计（四个待拍板项定了才准实现）
 - `docs/ledger/bugs.md` — BAR 账本：每条修复登记编号/病灶/契约/钉位置
@@ -108,5 +119,8 @@ bash scripts/deploy-phone.sh --build   # 先打包再送
 
 ## 当前阶段
 
-尖刺 1：手机上亮出终端画面。验收标准五条钉死在 `docs/active/立项.md`，
-不达到不扩功能。
+**阶段 3：多端核心层抽层（L1 已落地）**。尖刺 1/阶段 2 已闭环（终端可用化：
+内嵌字体/快捷键行/触摸滚动/中文 IME/启动归因 BAR-020~024 全链，详见
+bugs.md 与 state.md）。当前主线：L1 本地 PTY 双会话（本地秒开 + ws 远程
+后台接 + Ctrl-] 切换）→ L3 本地 apt 生态（exec 探针两轮实拍：targetSdk 28
+域降级放行私有目录 exec）。设计宪法：multi-end-layering.md（评审已批）。

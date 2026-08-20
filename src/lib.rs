@@ -16,6 +16,7 @@ pub mod protocol;
 pub mod report;
 pub mod scroll;
 pub mod session;
+pub mod session_router;
 pub mod termview;
 
 #[cfg(target_os = "android")]
