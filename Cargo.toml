@@ -27,6 +27,11 @@ futures-util = "0.3"
 alacritty_terminal = "0.25"
 # 字体光栅化（termview.rs）：纯 CPU，与软渲染路线同宗
 fontdue = "0.9"
+# 本地 PTY（local_pty.rs，L1）：bionic 无 openpty——nix 走 posix_openpt
+# 路径，Android/host Linux 同一份；fork/waitpid/kill 也在 nix
+nix = { version = "0.30", features = ["term", "process", "signal"] }
+# winsize/控制终端 ioctl（TIOCSWINSZ/TIOCSCTTY）直调，nix 不包这两个常量
+libc = "0.2"
 
 [target.'cfg(target_os = "android")'.dependencies]
 # native-activity 后端：免 GameActivity 的 gradle AAR 链，cargo-apk 直出

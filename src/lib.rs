@@ -9,6 +9,7 @@ pub mod ime_queue;
 pub mod insets;
 pub mod keybar;
 pub mod keymap;
+pub mod local_pty;
 pub mod plugins;
 pub mod protocol;
 pub mod report;

@@ -5,15 +5,15 @@
 
 ## 当前位置（2026-08-20)
 
-- **阶段 2(Android 终端可用化）收尾中**。启动慢归因已彻底定案
-  (BAR-020/021/022/023 连环，见 bugs.md)：冷进程首条连接恒吃 ~2.1s
-  一次性系统唤醒成本，应用侧杀不掉；观感修复（居中提示行）已上机。
-- **下一步旗舰动作：L1 本地 PTY(conn-provider-local 插件）**，同时承载
-  两个目标——①秒开（本地 shell 零网络，ws 唤醒退到后台）;②多端核心层
-  的第一次抽层（连接/会话抽象成平台中立 Rust API)。
-- **L1 前置**:《多端分层设计页》待写（核心层边界 / Android·桌面GUI·TUI·CLI
-  四个薄壳职责 / russh SSH 接入点），写完投 /root/kfmv4/docs/ledger/agent-inbox/
-  过评审再动手。
+- **阶段 2(Android 终端可用化）收尾完成**。启动慢归因定案
+  (BAR-020~023 连环，见 bugs.md)；BAR-023 提示行实拍判卷后取消
+  (c73bf61),2.1s 首连唤醒的结构性答案移交 L1。
+- **L1 本地 PTY 已落地（待实拍）**:conn-provider-local 插件 + 双会话槽
+  （本地秒开为默认活跃，ws 远程后台接为待机，Ctrl-] 切换）；考题 4 道
+  全绿（echo 往返/resize 传播/退出事件/双工厂并存）。关键技术债记档：
+  多线程 fork fd 继承竞态 → FD_CLOEXEC + FORK_LOCK 串行化。
+- **多端分层设计页已送审**(multi-end-layering.md v0，五问待裁决；用户
+  终审拍板先行，裁决到达后对账）。
 - **L2 探针待定**：私有目录 exec 封锁真机验证（静态 hello-world)，决定
   busybox/tmux 走 jniLibs 伪装还是低 targetSdk 豁免。共享存储是 noexec，
   可执行文件永远不放 /sdcard（用户问过，已答）。

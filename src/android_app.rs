@@ -69,10 +69,18 @@ struct App {
     /// 终端实例：插件工厂产出（term-alacritty），调用方持有的长寿命 mutable
     /// 状态（设计页 §7）——含 scrollback，跨插件生命周期存活
     term: Option<Box<dyn TermEmu>>,
+    /// 活跃会话的出向/入向通道（L1 双会话：默认本地 PTY，ws 远程在待机槽）
     outbound: Option<Sender<TermCmd>>,
     /// RTT 探针：最后一次击键送出的墙钟时刻（下个 output 到达时结算）
     last_input_at: Option<std::time::Instant>,
     event_rx: Option<EventRx>,
+    /// 待机会话槽（L1）：(出向, 入向, 名字)。待机期间事件在 mpsc 里积压，
+    /// 切入时一口气排干补屏（v1 接受；长时间积压的内存账暂不细算）
+    standby: Option<(Sender<TermCmd>, EventRx, &'static str)>,
+    /// 活跃会话名（"local" / "remote"；诊断与切换横幅用）
+    active_name: &'static str,
+    /// 最近一次下发的网格尺寸（切换会话时给新活跃方补发 Resize）
+    last_grid: (u32, u32),
     /// 有新输出/尺寸变化待渲染
     dirty: bool,
     /// 会话终了（exited/failed）后定格最后一屏，出向不再发
@@ -190,22 +198,50 @@ impl App {
             crate::report::report_sync("ime", "无 AndroidApp 句柄——输入插件未装");
         }
 
-        // 常驻会话：经基座取连接工厂（conn-provider-ws 插件）；事件桥收进
-        // 工厂内部，调用方只拿 TermHandle。command=None = 交互 shell（默认配置即现状）。
-        // BAR-022 收尾：spawn 提前到基座就绪即刻——首连 ~2.1s 唤醒成本与
-        // 字体加载/建终端（~140ms）并行，黑屏期不叠加
-        let handle = match base.ctx().get::<dyn TermFactory>() {
+        // 双会话（L1，多端分层设计页 §3）：本地 PTY 秒开为默认活跃会话——
+        // 零网络，冷进程首连 ~2.1s 唤醒成本（BAR-022/023 归因）不在此路径；
+        // ws 远程会话后台接为待机，Ctrl-] 切换（并存可切换，不自动接管）。
+        // spawn 提前到基座就绪即刻的传统保留（BAR-022：与建终端/字体加载并行）
+        if let Err(e) = base.load(crate::plugins::conn_provider_local::ConnProviderLocal::new()) {
+            crate::report::report_sync("term", &format!("本地连接插件装载失败: {e:?}"));
+        }
+        let local = match base.ctx().get::<crate::local_pty::LocalPtyFactory>() {
             Ok(factory) => Some(factory.spawn(&factory.default_config())),
             Err(e) => {
-                crate::report::report_sync("term", &format!("连接工厂取回失败: {e:?}"));
+                crate::report::report_sync("term", &format!("本地会话工厂取回失败: {e:?}"));
                 None
             }
         };
-        if let Some(h) = handle {
-            self.event_rx = Some(h.events);
-            self.outbound = Some(h.outbound);
-        } else {
-            crate::report::report_sync("term", "连接插件链断裂——本屏无会话");
+        let remote = match base.ctx().get::<dyn TermFactory>() {
+            Ok(factory) => Some(factory.spawn(&factory.default_config())),
+            Err(e) => {
+                crate::report::report_sync("term", &format!("远程连接工厂取回失败: {e:?}"));
+                None
+            }
+        };
+        match (local, remote) {
+            (Some(l), Some(r)) => {
+                self.event_rx = Some(l.events);
+                self.outbound = Some(l.outbound);
+                self.active_name = "local";
+                self.standby = Some((r.outbound, r.events, "remote"));
+            }
+            // 兜底：本地挂了远程顶上（单会话退化，行为同 L1 前）
+            (None, Some(r)) => {
+                crate::report::report_sync("term", "本地会话断裂——退化纯远程模式");
+                self.event_rx = Some(r.events);
+                self.outbound = Some(r.outbound);
+                self.active_name = "remote";
+            }
+            (Some(l), None) => {
+                crate::report::report_sync("term", "远程连接断裂——纯本地模式");
+                self.event_rx = Some(l.events);
+                self.outbound = Some(l.outbound);
+                self.active_name = "local";
+            }
+            (None, None) => {
+                crate::report::report_sync("term", "双会话全灭——本屏无会话");
+            }
         }
 
         // 建终端：经基座取终端工厂；build 失败 = 字体全灭走 Err（裁决 3，非插件失败）
@@ -263,11 +299,42 @@ impl App {
         );
         let (cols, rows) = termview::grid_dims(usable_w, usable_h, cw, ch);
         term.resize_cells(cols, rows);
+        self.last_grid = (cols, rows);
         if !self.session_over
             && let Some(tx) = &self.outbound
         {
             let _ = tx.send(TermCmd::Resize { cols, rows });
         }
+        self.dirty = true;
+    }
+
+    /// 会话切换（L1）：Ctrl-] 触达——活跃槽与待机槽互换，给新活跃方补发
+    /// 当前网格尺寸，横幅直接喂进终端网格（不走对端）。待机期积压的事件
+    /// 由下一圈 drain_terminal_events 一口气排干补屏
+    fn switch_session(&mut self) {
+        let (Some(tx_a), Some(rx_a)) = (self.outbound.take(), self.event_rx.take()) else {
+            return;
+        };
+        let Some((tx_s, rx_s, name_s)) = self.standby.take() else {
+            // 没待机方：把槽位放回去，装作没发生
+            self.outbound = Some(tx_a);
+            self.event_rx = Some(rx_a);
+            return;
+        };
+        let name_a = self.active_name;
+        self.standby = Some((tx_a, rx_a, name_a));
+        self.outbound = Some(tx_s.clone());
+        self.event_rx = Some(rx_s);
+        self.active_name = name_s;
+        let (cols, rows) = self.last_grid;
+        let _ = tx_s.send(TermCmd::Resize { cols, rows });
+        if let Some(t) = &mut self.term {
+            let banner =
+                format!("\r\n\x1b[36m[kfm-na → {name_s} 会话（Ctrl-] 切回 {name_a}）]\x1b[0m\r\n");
+            t.feed(banner.as_bytes());
+        }
+        self.session_over = false; // 新活跃方生死未知,先复活输出面
+        crate::report::report("term", &format!("会话切换: {name_a} → {name_s}"));
         self.dirty = true;
     }
 
@@ -349,28 +416,46 @@ impl App {
             crate::report::report("ime", "首个 JNI IME 文字注入");
         }
         let app_cursor = self.term.as_ref().is_some_and(|t| t.app_cursor_mode());
-        if let Some(tx) = &self.outbound {
-            for item in items {
-                let bytes = match item {
-                    crate::ime_queue::Inject::Text(s) => Some(s),
-                    crate::ime_queue::Inject::Key(code) => {
-                        let seq = crate::keymap::key_seq(code, app_cursor);
-                        // BAR-018 诊断：快捷键行的键到底发了什么序列
-                        if let Some(seq) = seq {
-                            let esc: String =
-                                seq.chars().flat_map(|c| c.escape_default()).collect();
-                            crate::report::report(
-                                "ime",
-                                &format!("落键 {code} → {esc}（app_cursor={app_cursor}）"),
-                            );
-                        }
-                        seq.map(str::to_string)
+        // 先落成字节串列表（借 self 算 app_cursor/记诊断），再逐条下发——
+        // 下发段要 &mut self（Ctrl-] 会话切换），与 outbound 借用拆开
+        let mut pending: Vec<String> = Vec::with_capacity(items.len());
+        for item in items {
+            let bytes = match item {
+                crate::ime_queue::Inject::Text(s) => Some(s),
+                crate::ime_queue::Inject::Key(code) => {
+                    let seq = crate::keymap::key_seq(code, app_cursor);
+                    // BAR-018 诊断：快捷键行的键到底发了什么序列
+                    if let Some(seq) = seq {
+                        let esc: String = seq.chars().flat_map(|c| c.escape_default()).collect();
+                        crate::report::report(
+                            "ime",
+                            &format!("落键 {code} → {esc}（app_cursor={app_cursor}）"),
+                        );
                     }
-                };
-                if let Some(bytes) = bytes {
-                    let _ = tx.send(TermCmd::Input(bytes));
+                    seq.map(str::to_string)
                 }
+            };
+            if let Some(bytes) = bytes {
+                pending.push(bytes);
             }
+        }
+        let mut sent = false;
+        for bytes in pending {
+            if bytes.is_empty() {
+                continue;
+            }
+            // L1 会话切换闸：Ctrl-]（keymap 把 Ctrl+] 落成 \x1d）不发对端，
+            // 活跃/待机槽互换（telnet 转义符惯例）
+            if bytes == "\u{1d}" {
+                self.switch_session();
+                continue;
+            }
+            if let Some(tx) = &self.outbound {
+                let _ = tx.send(TermCmd::Input(bytes));
+                sent = true;
+            }
+        }
+        if sent {
             self.last_input_at = Some(std::time::Instant::now());
             // IME 落字 = 用户输入：滚回底部贴最新输出
             if let Some(t) = &mut self.term {
