@@ -29,6 +29,14 @@
   一行不能抄；终端仿真我们已有 alacritty_terminal)。kfmv4 功能搬家
   （光球/卡片堆）后移到核心层分层落定之后。不为本地 shell 做常驻保活
   （wake lock 烧电；会话永生由服务器端 tmux 扛）。
+- **L3 进行中（2026-08-20 起）**:fork termux-packages 源码重编 bootstrap
+  （正道，设计/流水线页 = kfmv4 experiments/dsh-na/na/l3-bootstrap.md)。
+  代码侧全落地：`src/bootstrap.rs` 解压核心（考题 5 道）+ Android 壳
+  接线（JNI filesDir + ndk 资产 + second-stage)+ local_pty shell_plan
+  （考题 2 道）+ package-apk.sh 资产入包（4280703)。docker 构建在跑
+  （坑已修三：容器 uid 1001 chown / googlesource→tuna / github 资产
+  CDN 龟速→ghfast.top 镜像补丁进 termux_download.sh)。**等 zip 产物 →
+  打包送机实拍**：首启慢几秒解压环境，之后本地会话应变 bash 生态。
 
 ## 待判卷（实拍未回）
 
