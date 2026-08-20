@@ -44,9 +44,9 @@
 - `[?]` 行 = 自己的 curl 探针（`-d "{}"` 无 stage 字段），不是 bug。
 - 手机侧：`ssh -p 8022 localhost`(Termux);dumpsys/netlink 无权限。
 
-## 未提交状态警示
+## 提交纪律
 
-- **磁盘 ≠ git**:2026-08-20 时点 37 个文件未提交（含整个 crates/cordis-na
-  搬家、src/plugins/、内嵌字体链）。**禁止 `git checkout`/`git clean`/
-  从 clone 开工**——以磁盘为准。用户规矩是「会有其他人提交」；若超过
-  一个里程碑仍无人提交，向用户请示一次。
+- **2026-08-20 用户授权：na 线主力 agent 可自行提交**（此前规矩是「其他人
+  提交」，已作废）。阶段 2 全部工作已入库：`4558f33`。
+- 提交即过双门：pre-commit 重跑 chain；commit-msg 跑文档耦合门 + fix 带钉门
+  (scripts/check/check-*.sh,hard fail)。
