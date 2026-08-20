@@ -216,6 +216,11 @@ impl App {
             crate::report::report_sync("ime", "无 AndroidApp 句柄——输入插件未装");
         }
 
+        // L3 首启安装(必须在本地会话 spawn 前:装好后 shell_plan 才会
+        // 换成 $PREFIX/bin/bash)。幂等——非首启秒过(只查 prefix 非空)
+        if let Some(app) = &self.android_app {
+            crate::bootstrap::first_boot_install(app);
+        }
         // 双会话（L1，多端分层设计页 §3）：本地 PTY 秒开为默认活跃会话——
         // 零网络，冷进程首连 ~2.1s 唤醒成本（BAR-022/023 归因）不在此路径；
         // ws 远程会话后台接为待机，Ctrl-] 切换（并存可切换，不自动接管）。

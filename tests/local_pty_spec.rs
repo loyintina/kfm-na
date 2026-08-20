@@ -118,3 +118,39 @@ fn spec_l1_插件注册_双工厂并存() {
     base.ctx().get::<dyn TermFactory>().expect("ws 工厂应可取");
     base.ctx().get::<LocalPtyFactory>().expect("本地工厂应可取");
 }
+
+/// 考题 5(L3 挂勾):bootstrap 装好后 shell 换 $PREFIX/bin/bash,
+/// env 带 PATH/LD_LIBRARY_PATH/PREFIX;没装则回落系统 sh(行为不变)
+#[test]
+fn spec_l3_shell_plan_bash优先() {
+    let tmp = tempfile::tempdir().unwrap();
+    let prefix = tmp.path().join("usr");
+    std::fs::create_dir_all(prefix.join("bin")).unwrap();
+    std::fs::write(prefix.join("bin/bash"), b"fake").unwrap();
+    let plan = kfm_na::local_pty::shell_plan(&prefix);
+    assert_eq!(plan.shell, prefix.join("bin/bash").to_string_lossy());
+    assert!(
+        plan.env_extra
+            .iter()
+            .any(|e| e == &format!("PATH={}/bin:/system/bin:/system/xbin", prefix.display()))
+    );
+    assert!(
+        plan.env_extra
+            .iter()
+            .any(|e| e == &format!("LD_LIBRARY_PATH={}/lib", prefix.display()))
+    );
+    assert!(
+        plan.env_extra
+            .iter()
+            .any(|e| e == &format!("PREFIX={}", prefix.display()))
+    );
+}
+
+#[test]
+fn spec_l3_shell_plan_无bash回落系统sh() {
+    let tmp = tempfile::tempdir().unwrap();
+    let prefix = tmp.path().join("usr"); // 不存在
+    let plan = kfm_na::local_pty::shell_plan(&prefix);
+    assert_eq!(plan.shell, kfm_na::local_pty::default_shell());
+    assert!(plan.env_extra.is_empty());
+}

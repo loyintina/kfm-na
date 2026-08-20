@@ -43,6 +43,8 @@ softbuffer = "0.4"
 android_logger = "0.15"
 # JNI 直取真实软键盘高度（insets.rs，BAR-006）——与 android-activity 0.6 同版本线
 jni = "0.22"
+# assets 直读（bootstrap zip 入包，L3）——与 android-activity 0.6 的 ndk 同版本线
+ndk = "0.9"
 
 # 打包配置的唯一事实源已迁至 android/AndroidManifest.xml +
 # scripts/package-apk.sh（2026-08-13 脱离 cargo-apk：中文输入的 Java 皮

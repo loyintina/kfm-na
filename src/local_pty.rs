@@ -36,14 +36,59 @@ pub fn default_shell() -> &'static str {
     }
 }
 
-/// 子进程最小环境(envp)。Android 只给系统 toolbox 路径 + HOME(见
-/// pick_home);host 给常见路径(考题要跑 stty),HOME 不设(考题不碰)。
-/// TERM 与 ws 会话同款,terminfo 由对端自行解决(L2 才带本地 terminfo)。
-fn child_env(home: Option<&CString>) -> Vec<CString> {
-    let mut env: Vec<CString> = if cfg!(target_os = "android") {
-        [CString::new("PATH=/system/bin:/system/xbin").unwrap()].into()
+/// Android 私有 prefix(bootstrap 安装目标;与 pick_home 同款硬编码,
+/// JNI 推导在 bootstrap 壳侧——PTY 线程拿不到 AndroidApp 句柄,v1 从简)
+#[cfg(target_os = "android")]
+pub fn android_prefix() -> std::path::PathBuf {
+    std::path::PathBuf::from("/data/data/dev.kfm.na/files/usr")
+}
+
+/// L3 挂勾(设计页 l3-bootstrap.md §5):bootstrap 装好的 prefix 在 →
+/// shell 换 $PREFIX/bin/bash,env 补 PATH/LD_LIBRARY_PATH/PREFIX;
+/// 不在 → 回落平台默认(env_extra 空,行为与 L3 前逐字节一致)
+pub struct ShellPlan {
+    pub shell: String,
+    pub arg0: CString,
+    pub env_extra: Vec<String>,
+}
+
+pub fn shell_plan(prefix: &std::path::Path) -> ShellPlan {
+    let bash = prefix.join("bin/bash");
+    if bash.is_file() {
+        ShellPlan {
+            shell: bash.to_string_lossy().into_owned(),
+            arg0: CString::new("bash").unwrap(),
+            env_extra: vec![
+                format!("PATH={}/bin:/system/bin:/system/xbin", prefix.display()),
+                format!("LD_LIBRARY_PATH={}/lib", prefix.display()),
+                format!("PREFIX={}", prefix.display()),
+            ],
+        }
     } else {
-        [CString::new("PATH=/usr/bin:/bin:/usr/local/bin").unwrap()].into()
+        ShellPlan {
+            shell: default_shell().to_string(),
+            arg0: CString::new("sh").unwrap(),
+            env_extra: vec![],
+        }
+    }
+}
+
+/// 子进程最小环境(envp)。默认:Android 只给系统 toolbox 路径 + HOME(见
+/// pick_home);host 给常见路径(考题要跑 stty),HOME 不设(考题不碰)。
+/// env_extra 非空(L3 bash 方案)= 环境方案自带 PATH,平台默认 PATH 让位。
+/// TERM 与 ws 会话同款,terminfo 由对端自行解决(L2 才带本地 terminfo)。
+fn child_env(home: Option<&CString>, env_extra: &[String]) -> Vec<CString> {
+    let mut env: Vec<CString> = if env_extra.is_empty() {
+        if cfg!(target_os = "android") {
+            [CString::new("PATH=/system/bin:/system/xbin").unwrap()].into()
+        } else {
+            [CString::new("PATH=/usr/bin:/bin:/usr/local/bin").unwrap()].into()
+        }
+    } else {
+        env_extra
+            .iter()
+            .map(|e| CString::new(e.as_str()).unwrap())
+            .collect()
     };
     env.push(CString::new("TERM=xterm-256color").unwrap());
     if let Some(h) = home {
@@ -78,9 +123,16 @@ pub fn local_pty_spawner() -> Spawner {
     std::sync::Arc::new(|cfg: ConnConfig| {
         let (event_tx, event_rx) = std::sync::mpsc::channel::<SessionEvent>();
         let (cmd_tx, cmd_rx) = std::sync::mpsc::channel::<TermCmd>();
-        let shell = cfg.command.unwrap_or_else(|| default_shell().to_string());
+        let plan = match cfg.command {
+            Some(shell) => ShellPlan {
+                arg0: CString::new("sh").unwrap(),
+                env_extra: vec![],
+                shell,
+            },
+            None => shell_plan_for_platform(),
+        };
         std::thread::spawn(move || {
-            if let Err(e) = drive_local(shell, cmd_rx, event_tx.clone()) {
+            if let Err(e) = drive_local(plan, cmd_rx, event_tx.clone()) {
                 let _ = event_tx.send(SessionEvent::Failed { message: e });
             }
         });
@@ -89,6 +141,18 @@ pub fn local_pty_spawner() -> Spawner {
             events: event_rx,
         }
     })
+}
+
+/// 平台默认 shell 方案:Android 看 L3 prefix,host 直接默认(考题不碰)
+fn shell_plan_for_platform() -> ShellPlan {
+    #[cfg(target_os = "android")]
+    {
+        shell_plan(&android_prefix())
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        shell_plan(std::path::Path::new("/nonexistent"))
+    }
 }
 
 /// fork 序列化锁(多线程进程 fd 表继承事故,local_pty_spec 并行实证):
@@ -100,7 +164,7 @@ static FORK_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// 驱动主体(writer 线程):openpty → fork → 读写循环。
 fn drive_local(
-    shell: String,
+    plan: ShellPlan,
     cmd_rx: std::sync::mpsc::Receiver<TermCmd>,
     event_tx: std::sync::mpsc::Sender<SessionEvent>,
 ) -> Result<(), String> {
@@ -122,13 +186,14 @@ fn drive_local(
     }
 
     // fork 前备齐 CString(fork-exec 之间零分配纪律)
-    let path = CString::new(shell.as_str()).map_err(|_| format!("shell 路径含 NUL: {shell}"))?;
-    let arg0 = CString::new("sh").unwrap();
+    let path = CString::new(plan.shell.as_str())
+        .map_err(|_| format!("shell 路径含 NUL: {}", plan.shell))?;
+    let arg0 = plan.arg0;
     let home = pick_home(); // 含 create_dir_all(母进程侧,fork 前)
     if let Some(h) = &home {
         crate::report::report("term", &format!("本地 HOME = {}", h.to_string_lossy()));
     }
-    let env = child_env(home.as_ref());
+    let env = child_env(home.as_ref(), &plan.env_extra);
     let envp: Vec<&CString> = env.iter().collect();
 
     let child = match unsafe { fork() }.map_err(|e| format!("fork 失败: {e}"))? {

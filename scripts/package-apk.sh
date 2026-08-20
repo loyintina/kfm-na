@@ -76,6 +76,24 @@ cargo build --release --target "$TARGET"
 echo "=== [package 2/6] javac（Java 皮） ==="
 rm -rf "$BUILD"
 mkdir -p "$BUILD/classes" "$BUILD/dex" "$BUILD/stage/lib/arm64-v8a" target/release/apk
+
+# L3 bootstrap 资产(可选):找到就入包 assets/,找不到就裸包
+# (app 侧 asset 缺失会优雅回落系统 sh——报告 [boot] L3 行)
+BOOTSTRAP_ZIP="${KFM_BOOTSTRAP_ZIP:-}"
+if [ -z "$BOOTSTRAP_ZIP" ]; then
+    for cand in \
+        /root/kfm-na-toolchain/termux-packages/bootstrap-aarch64.zip \
+        "$HOME/kfm-na-toolchain/bootstrap-aarch64.zip"; do
+        [ -f "$cand" ] && BOOTSTRAP_ZIP="$cand" && break
+    done
+fi
+if [ -n "$BOOTSTRAP_ZIP" ]; then
+    mkdir -p "$BUILD/stage/assets"
+    cp "$BOOTSTRAP_ZIP" "$BUILD/stage/assets/bootstrap-aarch64.zip"
+    echo "bootstrap 资产入包 ← $BOOTSTRAP_ZIP"
+else
+    echo "bootstrap 资产缺席——裸包(本地会话回落系统 sh)"
+fi
 $JAVAC -source 8 -target 8 -cp "$AJAR" -d "$BUILD/classes" \
     android/java/dev/kfm/na/*.java 2>&1 | grep -v 'bootstrap class path' || true
 # javac 的告警（-source 8 过时）不挡路，编译失败才挡
@@ -107,7 +125,7 @@ with zipfile.ZipFile(apk, "a") as z:
         for f in files:
             p = os.path.join(root, f)
             arc = os.path.relpath(p, stage)
-            ct = zipfile.ZIP_STORED if arc.endswith(".so") else zipfile.ZIP_DEFLATED
+            ct = zipfile.ZIP_STORED if arc.endswith((".so", ".zip")) else zipfile.ZIP_DEFLATED
             z.write(p, arc, ct)
 EOF
 

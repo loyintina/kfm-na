@@ -775,6 +775,7 @@ dependencies = [
  "jni",
  "libc",
  "log",
+ "ndk",
  "nix",
  "serde",
  "serde_json",
