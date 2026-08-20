@@ -22,6 +22,15 @@ public class MainActivity extends NativeActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        // targetSdk 28 域降级（exec 探针放行）的副作用：系统按「旧应用」把窗口
+        // 压到状态栏下面（实拍 16777514：终端不再满屏）。运行时调用不受
+        // targetSdk 门控——decorFitsSystemWindows(false) 把内容铺回状态栏下，
+        // 刘海区允许进（短边），几何归 Rust 侧 MARGIN_TOP 管（圆角屏下探）
+        getWindow().setDecorFitsSystemWindows(false);
+        android.view.WindowManager.LayoutParams lp = getWindow().getAttributes();
+        lp.layoutInDisplayCutoutMode =
+                android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+        getWindow().setAttributes(lp);
         // BAR-012：占位 View 是文本编辑器且持焦点，IMM 进场会自动弹键盘
         // （实拍：启动完成即弹，用户没点任何东西）——STATE_HIDDEN 压住，
         // 键盘只能由触摸主动召唤（touch → JNI SHOW_FORCED）
