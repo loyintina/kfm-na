@@ -318,9 +318,6 @@ pub struct TermView {
     font_px: f32,
     /// 基线在格内的纵向偏移（格顶向下，px）——BAR-001 基线对齐用
     baseline_off: f32,
-    /// 接通中状态（BAR-022 收尾）：会话未开时渲染居中提示行，首帧输出
-    /// （feed）到达自动熄灭——首连 ~2.1s 唤醒成本不再是死黑屏
-    connecting: bool,
 }
 
 impl TermView {
@@ -361,18 +358,11 @@ impl TermView {
             cell_h,
             font_px,
             baseline_off,
-            connecting: false,
         }
-    }
-
-    /// 接通中状态开关（BAR-022）：会话 spawn 时置 true，首个输出 feed 自动熄灭
-    pub fn set_connecting(&mut self, on: bool) {
-        self.connecting = on;
     }
 
     /// 喂 PTY 原始字节流（含 ANSI/UTF-8），vte 解析器驱动 Term 状态迁移
     pub fn feed(&mut self, bytes: &[u8]) {
-        self.connecting = false;
         self.processor.advance(&mut self.term, bytes);
     }
 
@@ -437,21 +427,6 @@ impl TermView {
     pub fn render_into(&mut self, buf: &mut [u32], buf_w: u32, buf_h: u32) {
         buf.fill(DEFAULT_BG);
         if buf_w == 0 || buf_h == 0 {
-            return;
-        }
-        // BAR-022 收尾：接通中 → 居中画提示行（会话 spawn 置 true，首帧
-        // 输出 feed 熄灭）。首连 ~2.1s 唤醒成本期间不再是死黑屏。
-        // BAR-023 实拍：rh 取 buf_h/7 时字号 = 屏高/27，巨物不合比例——
-        // 收敛到终端格高（px = rh*0.26 ≈ cell_h，提示行与正文一般大）
-        if self.connecting {
-            let mut frame = Frame {
-                buf,
-                w: buf_w,
-                h: buf_h,
-            };
-            let rh = (self.cell_h * 4).max(24);
-            let cy = buf_h.saturating_sub(rh) / 2;
-            self.draw_label(&mut frame, "正在接通服务器…", 0, buf_w, cy, rh);
             return;
         }
         let mut frame = Frame {
@@ -803,9 +778,6 @@ pub trait TermEmu: Send {
     fn mouse_report_active(&self) -> bool;
     fn app_cursor_mode(&self) -> bool;
     fn font_probe(&self, c: char) -> (usize, usize, usize);
-    /// 接通中状态（BAR-022）：会话 spawn 置 true，首个输出 feed 自动熄灭——
-    /// 渲染层画居中提示行，首连 ~2.1s 唤醒成本不再是死黑屏
-    fn set_connecting(&mut self, on: bool);
 }
 
 impl TermEmu for TermView {
@@ -841,9 +813,6 @@ impl TermEmu for TermView {
     }
     fn font_probe(&self, c: char) -> (usize, usize, usize) {
         TermView::font_probe(self, c)
-    }
-    fn set_connecting(&mut self, on: bool) {
-        TermView::set_connecting(self, on)
     }
 }
 

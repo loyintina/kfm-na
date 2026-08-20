@@ -210,7 +210,7 @@ impl App {
 
         // 建终端：经基座取终端工厂；build 失败 = 字体全灭走 Err（裁决 3，非插件失败）
         crate::report::report("boot", &format!("基座+插件装载完成 +{}ms", boot_ms()));
-        let Some((mut tv, font_path, cjk_path)) = (match base.ctx().get::<dyn TermEmuFactory>() {
+        let Some((tv, font_path, cjk_path)) = (match base.ctx().get::<dyn TermEmuFactory>() {
             Ok(factory) => match factory.build() {
                 Ok(built) => Some(built),
                 Err(e) => {
@@ -239,7 +239,6 @@ impl App {
             crate::report::report("term", &format!("字体探针 '{c}': {w}x{h} ink={ink}"));
         }
         crate::report::report("term", &format!("TermView 建成 +{}ms", boot_ms()));
-        tv.set_connecting(true);
         self.term = Some(tv);
         self.base = Some(base);
 
