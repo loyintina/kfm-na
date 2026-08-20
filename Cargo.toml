@@ -32,6 +32,7 @@ fontdue = "0.9"
 nix = { version = "0.30", features = ["term", "process", "signal"] }
 # winsize/控制终端 ioctl（TIOCSWINSZ/TIOCSCTTY）直调，nix 不包这两个常量
 libc = "0.2"
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
 # native-activity 后端：免 GameActivity 的 gradle AAR 链，cargo-apk 直出
@@ -55,6 +56,9 @@ jni = "0.22"
 lto = true
 strip = true
 opt-level = 2
+
+[dev-dependencies]
+tempfile = "3.27.0"
 
 # 尖刺期：release 也签 Android 官方 debug keystore（口令公开，配置在
 # scripts/package-apk.sh）；正式发布前必须换正式 keystore 并走密钥管理
