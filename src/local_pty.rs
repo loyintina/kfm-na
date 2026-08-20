@@ -36,24 +36,40 @@ pub fn default_shell() -> &'static str {
     }
 }
 
-/// 子进程最小环境(envp)。Android 只给系统 toolbox 路径 + 私有目录 HOME;
-/// host 给常见路径(考题要跑 stty),HOME 由考题自己注入或不设。
+/// 子进程最小环境(envp)。Android 只给系统 toolbox 路径 + HOME(见
+/// pick_home);host 给常见路径(考题要跑 stty),HOME 不设(考题不碰)。
 /// TERM 与 ws 会话同款,terminfo 由对端自行解决(L2 才带本地 terminfo)。
-fn child_env() -> Vec<CString> {
-    if cfg!(target_os = "android") {
-        [
-            CString::new("PATH=/system/bin:/system/xbin").unwrap(),
-            CString::new("TERM=xterm-256color").unwrap(),
-            CString::new("HOME=/data/data/dev.kfm.na/files").unwrap(),
-        ]
-        .into()
+fn child_env(home: Option<&CString>) -> Vec<CString> {
+    let mut env: Vec<CString> = if cfg!(target_os = "android") {
+        [CString::new("PATH=/system/bin:/system/xbin").unwrap()].into()
     } else {
-        [
-            CString::new("PATH=/usr/bin:/bin:/usr/local/bin").unwrap(),
-            CString::new("TERM=xterm-256color").unwrap(),
-        ]
-        .into()
+        [CString::new("PATH=/usr/bin:/bin:/usr/local/bin").unwrap()].into()
+    };
+    env.push(CString::new("TERM=xterm-256color").unwrap());
+    if let Some(h) = home {
+        let mut line = b"HOME=".to_vec();
+        line.extend_from_slice(h.as_bytes());
+        env.push(CString::new(line).unwrap());
     }
+    env
+}
+
+/// 本地 HOME 选址(2026-08-20 实拍「ls / 全墙」后的修补):共享存储的应用
+/// 专属目录优先——免权限读写、文件管理器可见(用户要的「能看到的目录」);
+/// 建不起来退化私有目录。返回 None = host(不设 HOME 不改 cwd)
+fn pick_home() -> Option<CString> {
+    if !cfg!(target_os = "android") {
+        return None;
+    }
+    for cand in [
+        "/storage/emulated/0/Android/data/dev.kfm.na/files",
+        "/data/data/dev.kfm.na/files",
+    ] {
+        if std::fs::create_dir_all(cand).is_ok() {
+            return CString::new(cand).ok();
+        }
+    }
+    None
 }
 
 /// 本地 PTY transport:与 ws_spawner 同缝,ConnConfig.command = shell 路径
@@ -108,7 +124,11 @@ fn drive_local(
     // fork 前备齐 CString(fork-exec 之间零分配纪律)
     let path = CString::new(shell.as_str()).map_err(|_| format!("shell 路径含 NUL: {shell}"))?;
     let arg0 = CString::new("sh").unwrap();
-    let env = child_env();
+    let home = pick_home(); // 含 create_dir_all(母进程侧,fork 前)
+    if let Some(h) = &home {
+        crate::report::report("term", &format!("本地 HOME = {}", h.to_string_lossy()));
+    }
+    let env = child_env(home.as_ref());
     let envp: Vec<&CString> = env.iter().collect();
 
     let child = match unsafe { fork() }.map_err(|e| format!("fork 失败: {e}"))? {
@@ -122,6 +142,10 @@ fn drive_local(
                 libc::dup2(slave_fd, 0);
                 libc::dup2(slave_fd, 1);
                 libc::dup2(slave_fd, 2);
+                // 落进自己家(async-signal-safe 名单内含 chdir);失败留 / 也能活
+                if let Some(h) = &home {
+                    libc::chdir(h.as_ptr());
+                }
             }
             let argv = [arg0.as_ptr(), std::ptr::null()];
             let mut envp_raw: Vec<*const libc::c_char> = envp.iter().map(|c| c.as_ptr()).collect();
