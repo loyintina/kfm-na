@@ -38,6 +38,14 @@ else
 fi
 TARGET=aarch64-linux-android
 MIN_API=24
+# targetSdk 定案（exec 探针 vc16777513 实拍）：35 → 28。targetSdk≥29 进
+# untrusted_app 新域，SELinux 摘除私有目录 exec 权（errno 13 实锤）；
+# ≤28 留旧域（Termux 同款姿态，其 uid 语境 untrusted_app_27 亲见），
+# app_data_file exec 保留——L2 busybox / L3 apt 生态的总开关。
+# 代价：安装时系统或提示「为旧版 Android 打造」；Android 14+ 安装下限是
+# targetSdk<23，28 不受影响。行为变更按 targetSdk 门控的全部回落旧制
+# （含 legacy 共享存储访问，白送）
+TARGET_SDK=28
 # versionCode 必须大于已装包才能覆盖安装——旧包是 cargo-apk 默认的 16777472。
 # 红线：每次打包必须递增（2026-08-13 零日志闪退教训）——同 versionCode
 # 覆盖安装可能不重解压 .so，设备上「新 dex + 旧 so」JNI 符号缺失即闪退。
@@ -84,7 +92,7 @@ echo "=== [package 4/6] aapt2 compile+link + 装 dex/lib ==="
 "$AAPT2" link -o "$BUILD/unsigned.apk" -I "$AJAR" \
     --manifest android/AndroidManifest.xml \
     -R "$BUILD/res.zip" \
-    --min-sdk-version "$MIN_API" --target-sdk-version 35 \
+    --min-sdk-version "$MIN_API" --target-sdk-version "$TARGET_SDK" \
     --version-code "$VERSION_CODE" --version-name "$VERSION_NAME"
 cp "$BUILD/dex/classes.dex" "$BUILD/stage/"
 cp "target/$TARGET/release/libkfm_na.so" "$BUILD/stage/lib/arm64-v8a/"

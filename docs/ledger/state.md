@@ -29,7 +29,8 @@
 | ~~BAR-023 提示行~~ | kfm-na-16777509.apk | **已判卷（2026-08-20 用户实拍）**：字号正常，但观感尴尬，拍板取消——提示行已整体切除，连接前移+握手遥测保留（见 bugs.md BAR-023） |
 | L1 双会话 | kfm-na-16777510.apk 起 | ①本地提示符秒出（首轮实拍已过：+118ms `:/ $ `）②启动落家 `/storage/emulated/0/Android/data/dev.kfm.na/files`，裸 `ls` 不再全墙 ③`ls`/`echo` 正常 ④CTRL+`]` 切远程再切回，历史还在 |
 | L1 HOME 落家修补 | 16777511 起 | 首次实拍发现启动 cwd=/ 全墙，已修（HOME 选址+chdir），随下一包判卷 |
-| exec 探针（L2/L3 总开关） | kfm-na-16777513.apk | 日志 `[probe]` 行：`放行 ✅`（exit=42 + KFM-EXEC-PROBE-OK）→ L3 换前缀 termux-packages 可行；`拒绝 ❌ errno=13` → 只剩 jniLibs lib*.so 伪装（L2 可行、L3 运行时装包不可行）。背景：APK 经 aapt2 --target-sdk-version 35 链接，理论在封锁区 |
+| exec 探针（L2/L3 总开关） | kfm-na-16777513.apk | **第一轮已判：拒绝 ❌ errno=13**——targetSdk 35 进 untrusted_app 新域，私有目录 exec 被封（理论证实） |
+| exec 探针第二轮：targetSdk 28 域降级 | kfm-na-16777514.apk | Termux 同款姿态（其 uid 语境 untrusted_app_27 亲见）。日志 `[probe]` 行：`放行 ✅` → L3 复活（且白送 legacy 共享存储访问）；仍 `拒绝` → OriginOS 不看 targetSdk，只剩 jniLibs 伪装 |
 
 ## 欠账
 
