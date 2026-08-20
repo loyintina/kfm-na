@@ -5,6 +5,7 @@
 /// 消费侧零 churn;新代码可直接 `use cordis_na::…`
 pub use cordis_na as base;
 pub mod conn;
+pub mod exec_probe;
 pub mod ime_queue;
 pub mod insets;
 pub mod keybar;

@@ -169,6 +169,14 @@ impl App {
         // 否则键盘/IME 输入被 session_over 挡死，新会话成了哑巴
         self.session_over = false;
 
+        // exec 探针(L2/L3 总开关,exec_probe.rs):私有目录 exec 放行与否
+        // 决定 busybox/apt 生态路线。冷启动一次,结果走飞鸽传书
+        if let Some(app) = &self.android_app
+            && let Some(dir) = app.internal_data_path()
+        {
+            crate::exec_probe::run(&dir);
+        }
+
         // 插件基座：终端模拟器 + 连接 provider（边界手术第一/二刀）——
         // 「用哪个终端芯、连哪、怎么连」都不归主循环；工厂是服务，实例归调用方。
         // 瞬时返回契约预算 50ms 是 harness 政策(G5 归层:cordis-na 默认关,
