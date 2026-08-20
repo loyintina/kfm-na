@@ -8,7 +8,7 @@
 use std::any::{Any, TypeId};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use super::ctx::{Core, RealmId};
+use super::ctx::{Core, Owner, RealmId, gate};
 use super::effect::Disposer;
 
 /// 派发模式（v1 三派发；Parallel 缓建）
@@ -42,16 +42,18 @@ type EmitListener<D> = Arc<dyn Fn(&D) + Send + Sync>;
 type SerialListener<D> = Arc<dyn Fn(&D) -> Result<(), String> + Send + Sync>;
 type WaterfallListener<D> = Arc<dyn Fn(D, &dyn Fn(D) -> D) -> D + Send + Sync>;
 
-/// 事件总线句柄（随 Ctx 派发，realm 隔离）
+/// 事件总线句柄（随 Ctx 派发，realm 隔离;带 owner——活性闸同 Ctx,
+/// 死 fiber 发射/监听事件同样是死后访问,评审裁决 1:同闸不收窄)
 #[derive(Clone)]
 pub struct Events {
     pub(crate) core: Arc<Mutex<Core>>,
     pub(crate) realm: RealmId,
+    pub(crate) owner: Owner,
 }
 
 impl Events {
-    pub(crate) fn new(core: Arc<Mutex<Core>>, realm: RealmId) -> Self {
-        Events { core, realm }
+    pub(crate) fn new(core: Arc<Mutex<Core>>, realm: RealmId, owner: Owner) -> Self {
+        Events { core, realm, owner }
     }
 
     fn lock(&self) -> MutexGuard<'_, Core> {
@@ -59,8 +61,9 @@ impl Events {
     }
 
     /// 登记监听器并返回摘除条（摘下即「观察不到」，观察等价判据的一部分）
-    fn add_listener<E: Event>(&self, f: Arc<dyn Any + Send + Sync>) -> Disposer {
+    fn add_listener<E: Event>(&self, op: &str, f: Arc<dyn Any + Send + Sync>) -> Disposer {
         let id = {
+            gate(&self.core, &self.owner, op);
             let mut c = self.lock();
             c.next_listener += 1;
             let id = c.next_listener;
@@ -112,7 +115,7 @@ impl Events {
             E::DISPATCH
         );
         let f: EmitListener<E::Data> = Arc::new(f);
-        self.add_listener::<E>(Arc::new(f))
+        self.add_listener::<E>("on_emit", Arc::new(f))
     }
 
     /// 同步观察派发：返回时全部监听器已跑完
@@ -123,6 +126,7 @@ impl Events {
             E::NAME,
             E::DISPATCH
         );
+        gate(&self.core, &self.owner, "emit");
         for f in self.snapshot::<E>() {
             let f = f
                 .downcast::<EmitListener<E::Data>>()
@@ -143,7 +147,7 @@ impl Events {
             E::DISPATCH
         );
         let f: SerialListener<E::Data> = Arc::new(f);
-        self.add_listener::<E>(Arc::new(f))
+        self.add_listener::<E>("on_serial", Arc::new(f))
     }
 
     /// 顺序短路派发（serial+bail 合一）：首个 Err 短路并透传
@@ -154,6 +158,7 @@ impl Events {
             E::NAME,
             E::DISPATCH
         );
+        gate(&self.core, &self.owner, "serial");
         for f in self.snapshot::<E>() {
             let f = f
                 .downcast::<SerialListener<E::Data>>()
@@ -175,7 +180,7 @@ impl Events {
             E::DISPATCH
         );
         let f: WaterfallListener<E::Data> = Arc::new(f);
-        self.add_listener::<E>(Arc::new(f))
+        self.add_listener::<E>("on_waterfall", Arc::new(f))
     }
 
     /// 委托链派发：注册序外层优先，next 一路向内；不调 next 即否决
@@ -186,6 +191,7 @@ impl Events {
             E::NAME,
             E::DISPATCH
         );
+        gate(&self.core, &self.owner, "waterfall");
         let listeners = self.snapshot::<E>();
         waterfall_run::<E>(&listeners, 0, data)
     }

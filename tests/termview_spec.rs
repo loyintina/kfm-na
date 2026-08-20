@@ -397,6 +397,24 @@ fn spec_字体_加载跳过比例字体() {
     assert_eq!(path, host_mono());
 }
 
+#[test]
+fn spec_字体_体积闸跳过巨物() {
+    // BAR-020 病灶：NotoSansCJK.ttc(32MB)/DroidSansFallbackBBK(44MB)每次
+    // 启动全量解析再被探针扔掉（表面建成→TermView 建成实测 6 秒）。
+    // 体积闸：超 MAX_MAIN_FONT_BYTES 连读都不读。巨物在前也必须落到
+    // 后面的及格等宽
+    let giant = std::env::temp_dir().join("kfm-na-spec-giant-font.ttf");
+    std::fs::write(
+        &giant,
+        vec![0u8; (termview::MAX_MAIN_FONT_BYTES + 1) as usize],
+    )
+    .expect("巨物夹具写不进");
+    let (path, _font) = termview::load_font(&[giant.to_str().unwrap(), &host_mono()])
+        .expect("巨物被闸后必须命中等宽候选");
+    std::fs::remove_file(&giant).ok();
+    assert_eq!(path, host_mono());
+}
+
 // ---------- A 档：边距（BAR-005 边缘半字） ----------
 
 #[test]
@@ -634,11 +652,13 @@ fn spec_快捷键行_渲染冒烟() {
     // BAR-017 二稿的 B 档钉：①行画出来了（键格色真上屏，标签真有墨）；
     // ②键盘 inset 300 时行整体抬 300px（原屏底位置必须是背景）；
     // ③修饰键粘滞中键格换高亮色
+    // （2026-08-16 迁移：评审明示批准——断言一字不改，render_keybar 改吃
+    // mods 参数，修饰键态不再走进程静态，input-ime 插件化方案 A）
     use kfm_na::keybar;
     let tv = host_termview(8, 2);
     let (w, h) = (700u32, 740u32);
     let mut buf = vec![DEFAULT_BG; (w * h) as usize];
-    tv.render_keybar(&mut buf, w, h, 0);
+    tv.render_keybar(&mut buf, w, h, 0, 0);
     // ESC 键格（第 1 列上排）左缘中段必须是键格色
     // （中心是标签字形的位置，取不到底色）
     let esc_cx = 8u32;
@@ -661,7 +681,7 @@ fn spec_快捷键行_渲染冒烟() {
     assert!(ink, "ESC 标签必须有墨");
     // 键盘弹起 300px：行整体抬 300，原位置（被键盘盖住）必须是背景
     let mut buf2 = vec![DEFAULT_BG; (w * h) as usize];
-    tv.render_keybar(&mut buf2, w, h, 300);
+    tv.render_keybar(&mut buf2, w, h, 300, 0);
     assert_eq!(
         buf2[(esc_cy * w + esc_cx) as usize],
         DEFAULT_BG,
@@ -672,15 +692,163 @@ fn spec_快捷键行_渲染冒烟() {
         termview::KEYBAR_KEY_BG,
         "行必须跟着键盘上浮 300px"
     );
-    // 修饰键高亮：点亮 CTRL，下排第 2 列键格必须换色；用完清理全局态
-    keybar::toggle(keybar::MOD_CTRL);
+    // 修饰键高亮：点亮 CTRL（局部实例，不碰全局态），下排第 2 列键格必须换色
+    let mods = keybar::ModifierState::new();
+    mods.toggle(keybar::MOD_CTRL);
     let mut buf3 = vec![DEFAULT_BG; (w * h) as usize];
-    tv.render_keybar(&mut buf3, w, h, 0);
+    tv.render_keybar(&mut buf3, w, h, 0, mods.peek());
     let ctrl_cy = h - keybar::HEIGHT_PX + keybar::ROW_H_PX + keybar::ROW_H_PX / 2;
     assert_eq!(
         buf3[(ctrl_cy * w + 108) as usize],
         termview::KEYBAR_MOD_ON,
         "粘滞中的修饰键必须高亮"
     );
-    keybar::take_modifiers();
+}
+
+// ---------- A 档：生产内嵌字体（BAR-021，2026-08-18） ----------
+
+/// 内嵌主字体（build.rs 编译期选择：local/ 覆盖 > DejaVuSansMono）：
+/// 必须可解析、能画、等宽。两种来源（本机商业像素字体 / 开源占位）都要过
+#[test]
+fn spec_bar021_内嵌主字体_可用且等宽() {
+    let font = fontdue::Font::from_bytes(
+        termview::VENDORED_MAIN_FONT,
+        fontdue::FontSettings::default(),
+    )
+    .expect("内嵌主字体必须可解析");
+    assert!(termview::font_usable(&font, 'M'), "内嵌主字体必须能画 M");
+    assert!(
+        termview::font_monospaced(&font),
+        "内嵌主字体必须等宽（'i' 与 'M' 步进一致）"
+    );
+}
+
+/// 内嵌 CJK 字体：'中' 必须是真字形（非 tofu）、框线 '─' 在位、
+/// 全角步进 = 半角两倍（终端双格几何的命根）
+#[test]
+fn spec_bar021_内嵌cjk字体_真字形且双宽() {
+    let font = fontdue::Font::from_bytes(
+        termview::VENDORED_CJK_FONT,
+        fontdue::FontSettings::default(),
+    )
+    .expect("内嵌 CJK 字体必须可解析");
+    assert!(
+        font.lookup_glyph_index('中') != 0,
+        "CJK 字体的 '中' 必须是真字形（lookup 非 0，豆腐块不算）"
+    );
+    assert!(
+        font.lookup_glyph_index('─') != 0,
+        "CJK 字体必须有框线 '─'（tmux/TUI 边框命根）"
+    );
+    let (m_cjk, _) = font.rasterize('中', CELL_H as f32);
+    let (m_half, _) = font.rasterize('M', CELL_H as f32);
+    let ratio = m_cjk.advance_width / m_half.advance_width;
+    assert!(
+        (ratio - 2.0).abs() < 0.05,
+        "全角步进必须是半角两倍（实得 {ratio}）"
+    );
+}
+
+/// 窄字符居中钉（BAR-021 烘焙管线实拍病灶：lsb=0 让 freetype 系渲染器把
+/// i/l/| 贴到格子左缘）。契约：窄字符墨迹中心必须落在步进中心 ±15% 内。
+/// 变异抽检：把判据中心改成 0（贴左）重跑，本考题必须红
+#[test]
+fn spec_bar021_内嵌主字体_窄字符居中() {
+    let font = fontdue::Font::from_bytes(
+        termview::VENDORED_MAIN_FONT,
+        fontdue::FontSettings::default(),
+    )
+    .expect("内嵌主字体必须可解析");
+    for c in ['i', 'l', '|', '1', 'I'] {
+        let (m, bmp) = font.rasterize(c, CELL_H as f32);
+        assert!(m.width > 0 && bmp.iter().any(|&a| a > 0), "'{c}' 必须有墨");
+        let ink_center = m.xmin as f32 + m.width as f32 / 2.0;
+        let cell_center = m.advance_width / 2.0;
+        let off = (ink_center - cell_center).abs() / m.advance_width;
+        assert!(
+            off < 0.15,
+            "'{c}' 墨迹中心偏离步进中心 {:.0}%（阈 15%）——局左/局右病灶",
+            off * 100.0
+        );
+    }
+}
+
+/// 生产默认零探测钉：vendored 工厂的产物来源名必须标记内嵌——
+/// 启动路径碰 /system/fonts 的日子（BAR-020 病灶）不许回来
+#[test]
+fn spec_bar021_生产默认_零探测() {
+    let factory = termview::AlacrittyEmuFactory::vendored();
+    let (_tv, main, cjk) = termview::TermEmuFactory::build(&factory).expect("内嵌字体必须建成终端");
+    assert!(main.contains("内嵌"), "主字体来源必须内嵌，实得 {main}");
+    assert!(
+        cjk.as_deref().unwrap_or("").contains("内嵌"),
+        "CJK 字体来源必须内嵌，实得 {cjk:?}"
+    );
+}
+
+/// 终端符号补丁钉（BAR-022：纯 GB2312 子集裁掉了盲文转动点/方块/几何符号，
+/// 真机 U+25BD ▽ tofu 目击刷屏）。契约：内嵌 CJK/符号 fallback 字体必须
+/// 覆盖补丁表代表字符——盲文（kimi code 转动点）、方块、几何、箭头、框线
+#[test]
+fn spec_bar022_内嵌cjk字体_终端符号补丁覆盖() {
+    let font = fontdue::Font::from_bytes(
+        termview::VENDORED_CJK_FONT,
+        fontdue::FontSettings::default(),
+    )
+    .expect("内嵌 CJK 字体必须可解析");
+    for c in ['⠋', '█', '▽', '→', '─'] {
+        assert!(
+            font.lookup_glyph_index(c) != 0,
+            "内嵌 CJK/符号字体缺 {c}（U+{:04X}）——补丁表被裁掉了？",
+            c as u32
+        );
+    }
+}
+
+/// 接通提示行钉（BAR-023：ws 2.1s 冷启动首连唤醒成本归因定案后，黑屏期
+/// 观感修复）。契约：①未置位不画（空网格黑屏）；②set_connecting(true)
+/// 后画居中提示行；③首个输出 feed 自动熄灭（不再返回早退画提示行）
+#[test]
+fn spec_bar023_接通提示行_首个输出熄灭() {
+    let (mut tv, _, _) = termview::build_vendored().expect("内嵌字体必须建成终端");
+    let (w, h) = (400u32, 800u32);
+    let mut buf = vec![DEFAULT_BG; (w * h) as usize];
+    let lit = |buf: &[u32]| buf.iter().filter(|&&p| p != DEFAULT_BG).count();
+
+    // ①未置位：空网格只有光标块（约一格亮像素），无提示行
+    tv.render_into(&mut buf, w, h);
+    let baseline = lit(&buf);
+    assert!(baseline > 0, "光标块应该始终在画");
+    let (cw, ch) = tv.cell_size();
+    assert!(
+        baseline <= (cw * ch) as usize,
+        "未置接通态不该有提示行（亮像素应不超一个光标格）"
+    );
+
+    // ②置位：提示行画出（亮像素远超一个光标格）
+    tv.set_connecting(true);
+    tv.render_into(&mut buf, w, h);
+    assert!(
+        lit(&buf) > (cw * ch) as usize,
+        "接通态必须画提示行（亮像素应超一个光标格）"
+    );
+
+    // ③首个输出 feed 熄灭：提示行所在的中部区域清空（网格内容在顶部）
+    tv.feed(b"hello");
+    tv.render_into(&mut buf, w, h);
+    // 提示行带：居中、高 cell_h*4（BAR-023 实拍后收敛，原 buf_h/7）
+    let rh = (ch * 4).max(24);
+    let cy = h.saturating_sub(rh) / 2;
+    let mut center_lit = 0usize;
+    for row in cy..cy + rh {
+        for col in 0..w {
+            if buf[(row * w + col) as usize] != DEFAULT_BG {
+                center_lit += 1;
+            }
+        }
+    }
+    assert_eq!(
+        center_lit, 0,
+        "首个输出后提示行必须熄灭（中部应有零亮像素）"
+    );
 }

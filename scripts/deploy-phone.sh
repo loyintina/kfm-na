@@ -28,11 +28,14 @@ fi
 APK=target/release/apk/kfm-na.apk
 [ -f "$APK" ] || { echo "❌ $APK 不存在，先打包（或用 --build）"; exit 1; }
 
-VERSION_CODE=$(grep -m1 '^VERSION_CODE=' scripts/package-apk.sh | cut -d= -f2)
+VERSION_CODE=$(cat build/version-code.current 2>/dev/null)
+[ -n "$VERSION_CODE" ] || { echo "❌ build/version-code.current 不存在，先打包"; exit 1; }
 NAME="kfm-na-$VERSION_CODE.apk"
 
-PHONE_PICKUP=~/w/项目/kfm-na          # 用户固定取包点（2026-08-15 用户指定）：
-                                      # 安装器没弹/找不到包时来这里拿
+PHONE_PICKUP=/data/data/com.termux/files/home/w/项目/kfm-na  # 用户固定取包点
+                                      #（2026-08-15 用户指定）。必须写绝对路径：
+                                      # ~/ 会在本地 shell 展开成 /root 再送到手机
+                                      #（BAR-019），安装器没弹/找不到包时来这里拿
 
 if [ -d /data/data/com.termux ]; then
     # 手机上本地跑（档位 2 自举）：包就在本机，直接拷共享存储调安装器

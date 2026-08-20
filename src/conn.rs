@@ -149,6 +149,15 @@ pub enum TermCmd {
 pub fn spawn_terminal_session(
     url: &'static str,
     command: Option<String>,
+    inbound: impl FnMut(SessionEvent) + Send + 'static,
+) -> std::sync::mpsc::Sender<TermCmd> {
+    spawn_terminal_session_owned(url.to_string(), command, inbound)
+}
+
+/// String 版 spawn（工厂层用：配置来自 ConnConfig 而非编译期字面量）
+fn spawn_terminal_session_owned(
+    url: String,
+    command: Option<String>,
     mut inbound: impl FnMut(SessionEvent) + Send + 'static,
 ) -> std::sync::mpsc::Sender<TermCmd> {
     let (tx, rx) = std::sync::mpsc::channel::<TermCmd>();
@@ -158,12 +167,185 @@ pub fn spawn_terminal_session(
             .build()
             .expect("建 tokio runtime 失败");
         rt.block_on(async move {
-            if let Err(e) = run_terminal_session(url, command, &mut inbound, rx).await {
+            if let Err(e) = run_terminal_session(&url, command, &mut inbound, rx).await {
                 inbound(SessionEvent::Failed { message: e });
             }
         });
     });
     tx
+}
+
+// ---- 工厂层（连接 provider 设计页 §2；插件化边界，行为零变化） ----
+
+/// 连接配置：连哪、开什么命令（None = 交互 shell）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConnConfig {
+    pub url: String,
+    pub command: Option<String>,
+}
+
+impl Default for ConnConfig {
+    /// 默认 = 现状硬编码（android_app 启动即连的回环 8021），行为零变化的锚
+    fn default() -> Self {
+        ConnConfig {
+            url: "ws://127.0.0.1:8021/ws".into(),
+            command: None,
+        }
+    }
+}
+
+/// 一次已建立的终端连接：裸通道对，不含任何插件可蒸发状态——
+/// 归调用方持有，跨插件生命周期存活（设计页 §7 状态存活，评审裁决 2/3）
+pub struct TermHandle {
+    /// 应用 → 连接
+    pub outbound: std::sync::mpsc::Sender<TermCmd>,
+    /// 连接 → 应用（服务内部数据通道，非插件事件——设计页 §6 措辞钉死）
+    pub events: std::sync::mpsc::Receiver<SessionEvent>,
+}
+
+/// 连接工厂服务（服务键 `dyn TermFactory`，注册表式、独占绑定 v1）。
+/// spawn 瞬时返回：只开线程建通道，握手在线程里异步发生。
+pub trait TermFactory: Send + Sync {
+    /// 插件配置表解析出的默认连接参数（配置变更 = 自我重载换新工厂）
+    fn default_config(&self) -> ConnConfig;
+    /// 建一条连接；事件桥收进工厂内部，调用方只拿 TermHandle
+    fn spawn(&self, config: &ConnConfig) -> TermHandle;
+}
+
+/// transport 注入缝（评审裁决 4）：真实路径 = ws 线程，测试 = 假 transport
+pub type Spawner = std::sync::Arc<dyn Fn(ConnConfig) -> TermHandle + Send + Sync>;
+
+/// 真实 ws transport：内部建 mpsc 事件桥（原 android_app 手工工序收敛至此），
+/// 驱动仍是 spawn_terminal_session 同款的独立线程 + current_thread runtime
+pub fn ws_spawner() -> Spawner {
+    std::sync::Arc::new(|cfg: ConnConfig| {
+        let (event_tx, event_rx) = std::sync::mpsc::channel::<SessionEvent>();
+        let outbound = spawn_terminal_session_owned(cfg.url, cfg.command, move |ev| {
+            // 主循环死了发送失败：吞掉——ws 线程绝不为上报陪葬
+            let _ = event_tx.send(ev);
+        });
+        TermHandle {
+            outbound,
+            events: event_rx,
+        }
+    })
+}
+
+/// ws 连接工厂：捕获默认配置 + transport 缝
+pub struct WsTermFactory {
+    default: ConnConfig,
+    spawner: Spawner,
+}
+
+impl WsTermFactory {
+    pub fn new(default: ConnConfig, spawner: Spawner) -> Self {
+        WsTermFactory { default, spawner }
+    }
+}
+
+impl TermFactory for WsTermFactory {
+    fn default_config(&self) -> ConnConfig {
+        self.default.clone()
+    }
+    fn spawn(&self, config: &ConnConfig) -> TermHandle {
+        (self.spawner)(config.clone())
+    }
+}
+
+/// 手工 ws 握手（BAR-022 归因定案版：std 阻塞式——把 tokio/epoll 从握手
+/// 路径上整个拿掉，字节确实晚到应用 socket 与 tokio 无关；首连 ~2.1s 是
+/// 冷进程一次性唤醒成本，第二条连接即 ~0.2s，故不做预演只提前 spawn）。
+/// 校验从简：只认 101 状态行；之后用 from_partially_read 接管残流续帧。
+/// 内部四段耗时收进一条 summary，report() 异步上报（不经阻塞，不拖提示符）
+async fn ws_handshake(
+    url: &str,
+) -> Result<tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>, String> {
+    use std::io::{Read, Write};
+    use tokio_tungstenite::tungstenite::protocol::{Role, WebSocketConfig};
+
+    let (authority, path) = url
+        .split("://")
+        .nth(1)
+        .map(|rest| match rest.split_once('/') {
+            Some((h, p)) => (h.to_string(), format!("/{p}")),
+            None => (rest.to_string(), "/".into()),
+        })
+        .ok_or_else(|| format!("URL 无法解析: {url}"))?;
+
+    let t0 = std::time::Instant::now();
+    let mut tcp = std::net::TcpStream::connect(&authority)
+        .map_err(|e| format!("TCP 连接失败({authority}): {e}"))?;
+    let tcp_ms = t0.elapsed().as_millis();
+    tcp.set_read_timeout(Some(std::time::Duration::from_secs(5)))
+        .map_err(|e| format!("设读超时失败: {e}"))?;
+    tcp.set_write_timeout(Some(std::time::Duration::from_secs(5)))
+        .map_err(|e| format!("设写超时失败: {e}"))?;
+
+    let key = "dGhlIHNhbXBsZSBub25jZQ==";
+    let req = format!(
+        "GET {path} HTTP/1.1\r\nHost: {authority}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n"
+    );
+    tcp.write_all(req.as_bytes())
+        .map_err(|e| format!("发送升级请求失败: {e}"))?;
+    let write_ms = t0.elapsed().as_millis();
+
+    let mut buf: Vec<u8> = Vec::with_capacity(1024);
+    let mut chunk = [0u8; 512];
+    let mut first_ms = None;
+    loop {
+        let n = tcp
+            .read(&mut chunk)
+            .map_err(|e| format!("读握手响应失败: {e}"))?;
+        if n == 0 {
+            return Err("握手响应被提前关闭".into());
+        }
+        if first_ms.is_none() {
+            first_ms = Some(t0.elapsed().as_millis());
+        }
+        buf.extend_from_slice(&chunk[..n]);
+        if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+            break;
+        }
+        if buf.len() > 4096 {
+            return Err("握手响应头异常肥大".into());
+        }
+    }
+    let head_ms = t0.elapsed().as_millis();
+    let head = String::from_utf8_lossy(&buf);
+    if !head.starts_with("HTTP/1.1 101") {
+        return Err(format!(
+            "升级失败，状态行: {}",
+            head.lines().next().unwrap_or("(空)")
+        ));
+    }
+    let sep = buf
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .unwrap_or(buf.len());
+    let rest = buf[sep + 4..].to_vec();
+
+    tcp.set_nonblocking(true)
+        .map_err(|e| format!("转非阻塞失败: {e}"))?;
+    let tcp = tokio::net::TcpStream::from_std(tcp).map_err(|e| format!("转 tokio 流失败: {e}"))?;
+    let ws = tokio_tungstenite::WebSocketStream::from_partially_read(
+        tcp,
+        rest,
+        Role::Client,
+        Some(WebSocketConfig::default()),
+    )
+    .await;
+    // 异步上报（BAR-022）：sync 直发会卡握手线程 ~0.3s 拖慢提示符；
+    // 队列丢失可接受——这段归因数据只是遥测，连接提示行已让等待无感
+    crate::report::report(
+        "conn",
+        &format!(
+            "ws 握手 {} (TCP={tcp_ms}ms 写请求={write_ms}ms 首字节+{}ms 头读完+{}ms)",
+            head_ms,
+            first_ms.map(|v| v - write_ms).unwrap_or(0),
+            head_ms - write_ms
+        ),
+    );
+    Ok(ws)
 }
 
 /// 常驻驱动核心（异步）：连 url → 开会话 → select 双向泵，直到 Exited/Failed/断线
@@ -197,9 +379,19 @@ async fn run_terminal_session(
             .map_err(|e| format!("发送失败: {e}"))
     }
 
-    let (mut ws, _resp) = tokio_tungstenite::connect_async(url)
-        .await
-        .map_err(|e| format!("连接失败: {e}"))?;
+    // BAR-022 定案：std 阻塞式握手直接跑真会话（首连 ~2.1s 是冷进程一次性
+    // 唤醒成本，预演只会叠加；连接已提前到基座就绪即刻，与建终端并行）。
+    // summary 已由 ws_handshake 内部异步上报；此处保留常驻里程碑锚点
+    let t0 = std::time::Instant::now();
+    let mut ws = ws_handshake(url).await?;
+    crate::report::report(
+        "conn",
+        &format!(
+            "ws 握手完成 +{}ms (升级段 {}ms)",
+            crate::report::boot_ms(),
+            t0.elapsed().as_millis()
+        ),
+    );
 
     let mut session = Session::new();
     send_msg(&mut ws, Session::open_msg(command.as_deref())).await?;

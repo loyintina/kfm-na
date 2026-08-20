@@ -26,10 +26,12 @@ impl EffectStack {
     }
 
     pub fn push(&mut self, d: Disposer) {
-        if self.disposed {
-            // dispose 之后再注册的效果没有归属（fiber 已拆），直接丢弃撤销条
-            return;
-        }
+        // 活性闸(G2)配套:经 Ctx 入口时死后注册已不可能到达(入口先查活性);
+        // 直捅栈的 push-after-dispose 同样是结构性 bug——panic 显形,不静默丢弃
+        assert!(
+            !self.disposed,
+            "INACTIVE_ACCESS: 效果栈已 dispose,push 拒绝"
+        );
         self.items.push(d);
     }
 

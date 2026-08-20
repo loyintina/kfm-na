@@ -1,7 +1,8 @@
-//! ctx.rs — 公告栏（规格书 §4.2）：内核服务类型化字段 + 插件服务 registry
+//! ctx.rs — 公告栏（规格书 §4.2）：内核事件总线类型化字段 + 插件服务 registry
 //!
-//! - 内核服务是 Ctx 的类型化字段（`events` / `term` 占位）
-//! - 插件服务 registry：`(RealmId, ServiceKey) → Arc<T>`。按 trait 取回、
+//! - 内核服务只有事件总线一个类型化字段（`events`)——通用运行时纪律:
+//!   其余一律走 registry 由插件提供(harness 服务不进内核,G1 切除)
+//! - 插件服务 registry:`(RealmId, ServiceKey) → Arc<T>`。按 trait 取回、
 //!   不 import 具体类型——存储侧把整个 `Arc<T>` 再包一层 Arc 擦除成
 //!   `Arc<dyn Any + Send + Sync>`，取回时 downcast 到 `Arc<T>` 还原
 //!   （等价于 downcast-rs 同款「注册时定死具体类型」模式，`Arc<dyn Any>`
@@ -15,7 +16,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use super::effect::{Disposer, EffectStack};
 use super::event::{Events, ListenerEntry};
-use super::fiber::{BaseWarning, Fiber, PluginEntry};
+use super::fiber::{BaseWarning, Fiber, FiberState, PluginEntry};
 
 /// isolate 作用域标签（§4.3：realm = 按服务键的作用域表）
 pub type RealmId = u64;
@@ -66,16 +67,60 @@ pub enum ProvideError {
     AlreadyProvided(ServiceKey),
 }
 
-/// 内核服务占位（§4.2 内核服务类型化字段；接真终端属阶段 3）
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Term;
-
-/// 效果的归属：根 ctx / 某 fiber / 某子 ctx
+/// 效果的归属：根 ctx / 某 fiber 的某代激活 / 某子 ctx
+///
+/// `Fiber` 携带**激活代数**(generation):reload 换代后旧句柄永死——
+/// 与 epoch 实例比对同构(旧逆元不许误删新绑定;G2 活性闸,考题 23)
 #[derive(Clone, Copy)]
 pub(crate) enum Owner {
     Root,
-    Fiber(&'static str),
+    Fiber(&'static str, u64),
     Child(u64),
+}
+
+impl Owner {
+    fn describe(&self) -> String {
+        match self {
+            Owner::Root => "根 ctx".to_string(),
+            Owner::Fiber(name, g) => format!("fiber {name}#{g}"),
+            Owner::Child(id) => format!("子 ctx #{id}"),
+        }
+    }
+}
+
+/// 活性闸（G2,评审裁决 2;对应 Cordis INACTIVE_ACCESS,论文 Algorithm 6):
+/// 操作入口先查活性,死后访问 = panic——正确实现下「不可能到达」,到达即证明
+/// 有路径漏了排空。与观察等价判据直接绑定;错误返回式会诱导吞错,不取。
+///
+/// 活性判据按 Owner 分形:Root 永生;Fiber 活 ⇔ 状态 ∈ {Loading, Active}
+/// **且代数为当代**(reload 后旧代句柄永死);Child 活 ⇔ 级联栈条目在
+/// (fork 父栈 dispose 时摘除=死)。
+pub(crate) fn alive_of(c: &Core, owner: &Owner) -> bool {
+    match owner {
+        Owner::Root => true,
+        Owner::Fiber(name, g) => match c.fibers.get(name) {
+            Some(f) => {
+                f.generation == *g && matches!(f.state, FiberState::Loading | FiberState::Active)
+            }
+            None => false,
+        },
+        Owner::Child(id) => c.child_stacks.contains_key(id),
+    }
+}
+
+/// 活性判词:锁内只读判活、放锁后 panic——持锁 panic 会毒化 Mutex,
+/// 把「一个死后访问」传染成「全基座锁被毒化」(考题 23 实证)
+pub(crate) fn gate(core: &Arc<Mutex<Core>>, owner: &Owner, op: &str) {
+    let alive = {
+        let c = core.lock().expect("base core 锁被毒化");
+        alive_of(&c, owner)
+    };
+    assert!(
+        alive,
+        "INACTIVE_ACCESS: {} 已死,{} 拒绝",
+        owner.describe(),
+        op
+    );
 }
 
 /// 服务表条目。`value` 实为 `Arc<T>`（把 trait object 的 Arc 整体再包一层
@@ -127,13 +172,11 @@ impl Core {
     }
 }
 
-/// 插件眼中的上下文：内核服务是类型化字段，插件服务走 provide/get
+/// 插件眼中的上下文：内核事件总线类型化字段，插件服务走 provide/get
 #[derive(Clone)]
 pub struct Ctx {
     /// 内核服务：事件总线
     pub events: Events,
-    /// 内核服务：终端（占位）
-    pub term: Term,
     pub(crate) core: Arc<Mutex<Core>>,
     pub(crate) realm: RealmId,
     pub(crate) owner: Owner,
@@ -142,8 +185,7 @@ pub struct Ctx {
 impl Ctx {
     pub(crate) fn new(core: Arc<Mutex<Core>>, realm: RealmId, owner: Owner) -> Self {
         Ctx {
-            events: Events::new(core.clone(), realm),
-            term: Term,
+            events: Events::new(core.clone(), realm, owner),
             core,
             realm,
             owner,
@@ -161,6 +203,7 @@ impl Ctx {
         svc: Arc<T>,
     ) -> Result<Disposer, ProvideError> {
         let key = ServiceKey::of::<T>();
+        gate(&self.core, &self.owner, "provide");
         let mut c = self.lock();
         if c.services.contains_key(&(self.realm, key)) {
             return Err(ProvideError::AlreadyProvided(key));
@@ -176,7 +219,7 @@ impl Ctx {
                 stopping: false,
             },
         );
-        if let Owner::Fiber(name) = self.owner
+        if let Owner::Fiber(name, _) = self.owner
             && let Some(f) = c.fibers.get_mut(name)
         {
             f.provided.push(key);
@@ -197,6 +240,7 @@ impl Ctx {
     /// 按 trait 取回服务（不 import 具体类型）
     pub fn get<T: ?Sized + Send + Sync + 'static>(&self) -> Result<Arc<T>, GetError> {
         let key = ServiceKey::of::<T>();
+        gate(&self.core, &self.owner, "get");
         let c = self.lock();
         if let Some(e) = c.services.get(&(self.realm, key))
             && !e.stopping
@@ -213,10 +257,11 @@ impl Ctx {
 
     /// 把撤销条挂进当前 fiber（或子 ctx / 根）的效果栈
     pub fn effect(&self, d: Disposer) {
+        gate(&self.core, &self.owner, "effect");
         let mut c = self.lock();
         match self.owner {
             Owner::Root => c.root_stack.push(d),
-            Owner::Fiber(name) => {
+            Owner::Fiber(name, _) => {
                 if let Some(f) = c.fibers.get_mut(name) {
                     f.stack.push(d);
                 }
@@ -231,8 +276,9 @@ impl Ctx {
 
     /// 读本插件的已解析配置（激活时才解析，§4.1 配置延迟解析）
     pub fn config<C: Send + Sync + 'static>(&self) -> Option<Arc<C>> {
+        gate(&self.core, &self.owner, "config");
         let c = self.lock();
-        let Owner::Fiber(name) = self.owner else {
+        let Owner::Fiber(name, _) = self.owner else {
             return None;
         };
         c.fibers
@@ -247,6 +293,7 @@ impl Ctx {
     /// 派生子 ctx（独立 realm）；其撤销条自动贴进父栈（树形级联）
     pub fn fork(&self, realm: RealmId) -> Ctx {
         let id = {
+            gate(&self.core, &self.owner, "fork");
             let mut c = self.lock();
             c.next_child += 1;
             let id = c.next_child;
@@ -270,6 +317,7 @@ impl Ctx {
 
     /// 翻转某插件的目标态（取消边界的同步形态，考题 16）
     pub fn set_plugin_target(&self, name: &str, target: bool) {
+        gate(&self.core, &self.owner, "set_plugin_target");
         let mut c = self.lock();
         if let Some(f) = c.fibers.get_mut(name) {
             f.target = target;

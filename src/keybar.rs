@@ -118,21 +118,56 @@ pub const KEYS: [[KeyDef; COLS as usize]; 2] = [
     ],
 ];
 
-/// 当前粘滞的修饰键位掩码（0 = 无）
-static MODS: AtomicU8 = AtomicU8::new(0);
-
-pub fn modifiers() -> u8 {
-    MODS.load(Ordering::Relaxed)
+/// 修饰键粘滞状态（一次性粘滞语义的载体）。
+/// input-ime 插件化（设计页 input-ime.md 方案 A）：状态挂 `input.modifiers`
+/// 服务键——§4.5 共享态纪律：共享可变状态必须挂服务键/基座后面。
+/// 进程静态已删（2026-08-16，迁移考题=keybar_spec 粘滞题，断言未改）。
+pub struct ModifierState {
+    bits: AtomicU8,
 }
 
-/// 翻修饰键粘滞位（快捷键行 Modifier 键点按），返回新状态
-pub fn toggle(bit: u8) -> u8 {
-    MODS.fetch_xor(bit, Ordering::Relaxed) ^ bit
+impl ModifierState {
+    pub const fn new() -> Self {
+        ModifierState {
+            bits: AtomicU8::new(0),
+        }
+    }
+
+    /// 当前粘滞位掩码（0 = 无）
+    pub fn peek(&self) -> u8 {
+        self.bits.load(Ordering::Relaxed)
+    }
+
+    /// 翻粘滞位（Modifier 键点按），返回新状态
+    pub fn toggle(&self, bit: u8) -> u8 {
+        self.bits.fetch_xor(bit, Ordering::Relaxed) ^ bit
+    }
+
+    /// 读走并清零（一次性粘滞：commitText 落字时调用，联动一次自动灭）
+    pub fn take(&self) -> u8 {
+        self.bits.swap(0, Ordering::Relaxed)
+    }
 }
 
-/// 读走并清零（一次性粘滞：commitText 落字时调用，联动一次自动灭）
-pub fn take_modifiers() -> u8 {
-    MODS.swap(0, Ordering::Relaxed)
+impl Default for ModifierState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// JNI 桥端点（ime_bridge 的 commitText 在 JNI 回调线程跑，拿不到 ctx——
+/// 与 ime_queue::global 同性质：静态只是服务实例的句柄，单一来源仍是
+/// input.modifiers 服务；应用壳 init 时装入一次）
+static BRIDGE_MODS: std::sync::OnceLock<std::sync::Arc<ModifierState>> = std::sync::OnceLock::new();
+
+/// 装入桥端点（android_app init 时调；重复装入吞掉——后装不盖先装）
+pub fn install_bridge_mods(mods: std::sync::Arc<ModifierState>) {
+    let _ = BRIDGE_MODS.set(mods);
+}
+
+/// JNI 侧取修饰键服务句柄；未装入（不应发生）= None，调用方按无粘滞处理
+pub fn bridge_mods() -> Option<&'static std::sync::Arc<ModifierState>> {
+    BRIDGE_MODS.get()
 }
 
 /// 起点判定（BAR-018）：手势按下时认不认这手势归行。与渲染/hit 同一把尺——

@@ -23,7 +23,7 @@
 
 use std::num::NonZeroU32;
 use std::sync::Arc;
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{Receiver, Sender};
 
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, Ime, TouchPhase, WindowEvent};
@@ -32,12 +32,15 @@ use winit::keyboard::{Key, NamedKey};
 use winit::platform::android::EventLoopBuilderExtAndroid;
 use winit::window::{Window, WindowId};
 
-use crate::conn::TermCmd;
+use crate::base::{Base, PluginEntry};
+use crate::conn::{ConnConfig, TermCmd, TermFactory};
 use crate::session::SessionEvent;
-use crate::termview::{self, TermView};
+use crate::termview::{self, TermEmu, TermEmuFactory};
 
 /// KFM 紫（softbuffer 像素格式 XRGB）
 const KFM_PURPLE: u32 = 0x008B_5CF6;
+
+use crate::report::boot_ms;
 
 /// 帧缓冲探针状态：0=等首个 output，1=探针已上膛（下一帧数非背景像素），2=已报
 static FRAME_PROBE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
@@ -53,7 +56,8 @@ struct Gfx {
     surface: SoftSurface,
 }
 
-/// ws 线程 → 主事件循环的会话事件桥（inbound 闭包在 ws 线程跑，跨线程走 mpsc）
+/// 连接 → 主事件循环的会话事件通道（工厂内部建桥，跨线程走 mpsc；设计页 §6：
+/// 服务数据通道，非插件事件）
 type EventRx = Receiver<SessionEvent>;
 
 #[derive(Default)]
@@ -62,7 +66,9 @@ struct App {
     gfx: Option<Gfx>,
     reported_first_events: bool,
     // ---- TERMINAL_MODE 状态 ----
-    term: Option<TermView>,
+    /// 终端实例：插件工厂产出（term-alacritty），调用方持有的长寿命 mutable
+    /// 状态（设计页 §7）——含 scrollback，跨插件生命周期存活
+    term: Option<Box<dyn TermEmu>>,
     outbound: Option<Sender<TermCmd>>,
     /// RTT 探针：最后一次击键送出的墙钟时刻（下个 output 到达时结算）
     last_input_at: Option<std::time::Instant>,
@@ -87,6 +93,12 @@ struct App {
     /// 按在快捷键行带上的手势（BAR-017）：Started 记下起点，Ended 命中测试
     /// 发键/翻修饰键。Some = 这手势归快捷键行，不滚屏不唤键盘
     bar_touch: Option<(f64, f64)>,
+    /// 插件基座（连接 provider 设计页）：持有它 = 插件服务活着
+    base: Option<Base>,
+    /// input.modifiers 服务句柄（input-ime 插件，方案 A：修饰键状态挂服务键）
+    modifiers: Option<Arc<crate::keybar::ModifierState>>,
+    /// ime.insets 服务句柄（键盘高度/强弹；生产 = JniInsets）
+    ime_insets: Option<Arc<dyn crate::insets::ImeInsets>>,
 }
 
 impl App {
@@ -101,9 +113,11 @@ impl App {
             return;
         }
         self.last_inset_poll = Some(now);
-        let Some(app) = &self.android_app else { return };
+        let Some(insets) = &self.ime_insets else {
+            return;
+        };
         // None = 查询失败：维持旧值不抖动
-        let Some(px) = crate::insets::query_ime_bottom(app) else {
+        let Some(px) = insets.ime_bottom_px() else {
             return;
         };
         if px != self.ime_bottom_px {
@@ -122,7 +136,7 @@ impl App {
         crate::report::report("boot", "softbuffer 上下文建成");
         let mut surface =
             softbuffer::Surface::new(&context, window.clone()).expect("创建 softbuffer 表面失败");
-        crate::report::report("boot", "softbuffer 表面建成");
+        crate::report::report("boot", &format!("softbuffer 表面建成 +{}ms", boot_ms()));
         let size = window.inner_size();
         if let (Some(w), Some(h)) = (NonZeroU32::new(size.width), NonZeroU32::new(size.height)) {
             surface.resize(w, h).expect("surface resize 失败");
@@ -133,70 +147,101 @@ impl App {
         }
     }
 
-    /// 终端模式初始化：建 TermView + spawn 常驻会话 + 首发 resize
+    /// 终端模式初始化：建终端（插件工厂）+ spawn 常驻会话（插件工厂）+ 首发 resize
     fn init_terminal(&mut self, window: &Arc<Window>) {
         // BAR-004 后台往返重开会话的路径：旧会话的死亡标记必须清掉，
         // 否则键盘/IME 输入被 session_over 挡死，新会话成了哑巴
         self.session_over = false;
-        let Some((tv, font_path, cjk_path)) =
-            termview::build_from_candidates(termview::FONT_CANDIDATES)
-        else {
-            crate::report::report_sync("term", "字体候选全灭——TermView 建不成");
+
+        // 插件基座：终端模拟器 + 连接 provider（边界手术第一/二刀）——
+        // 「用哪个终端芯、连哪、怎么连」都不归主循环；工厂是服务，实例归调用方。
+        // 瞬时返回契约预算 50ms 是 harness 政策(G5 归层:cordis-na 默认关,
+        // 这里显式开启,规格书 §4.3)
+        let base = Base::new(vec![PluginEntry {
+            id: crate::plugins::conn_provider_ws::PLUGIN_NAME,
+            disabled: false,
+            config: Some(Box::new(|| {
+                Arc::new(ConnConfig::default()) as Arc<dyn std::any::Any + Send + Sync>
+            })),
+        }])
+        .with_apply_budget(std::time::Duration::from_millis(50));
+        if let Err(e) = base.load(crate::plugins::term_alacritty::TermAlacritty::new()) {
+            crate::report::report_sync("term", &format!("终端插件装载失败: {e:?}"));
+        }
+        if let Err(e) = base.load(crate::plugins::conn_provider_ws::ConnProviderWs::new()) {
+            crate::report::report_sync("term", &format!("连接插件装载失败: {e:?}"));
+        }
+        // 输入/IME 插件（边界手术第三刀，方案 A）：修饰键状态 + 键盘来源两个
+        // 共享实例直挂。JniInsets 持 AndroidApp 句柄（运行时对象，构造注入）
+        if let Some(app) = &self.android_app {
+            let input = crate::plugins::input_ime::InputIme::new(Arc::new(
+                crate::insets::JniInsets::new(app.clone()),
+            ));
+            if let Err(e) = base.load(input) {
+                crate::report::report_sync("ime", &format!("输入插件装载失败: {e:?}"));
+            }
+            self.modifiers = base.ctx().get::<crate::keybar::ModifierState>().ok();
+            self.ime_insets = base.ctx().get::<dyn crate::insets::ImeInsets>().ok();
+            // JNI 桥端点：commitText 回调线程拿不到 ctx，装入服务实例句柄
+            if let Some(m) = &self.modifiers {
+                crate::keybar::install_bridge_mods(m.clone());
+            }
+        } else {
+            crate::report::report_sync("ime", "无 AndroidApp 句柄——输入插件未装");
+        }
+
+        // 常驻会话：经基座取连接工厂（conn-provider-ws 插件）；事件桥收进
+        // 工厂内部，调用方只拿 TermHandle。command=None = 交互 shell（默认配置即现状）。
+        // BAR-022 收尾：spawn 提前到基座就绪即刻——首连 ~2.1s 唤醒成本与
+        // 字体加载/建终端（~140ms）并行，黑屏期不叠加
+        let handle = match base.ctx().get::<dyn TermFactory>() {
+            Ok(factory) => Some(factory.spawn(&factory.default_config())),
+            Err(e) => {
+                crate::report::report_sync("term", &format!("连接工厂取回失败: {e:?}"));
+                None
+            }
+        };
+        if let Some(h) = handle {
+            self.event_rx = Some(h.events);
+            self.outbound = Some(h.outbound);
+        } else {
+            crate::report::report_sync("term", "连接插件链断裂——本屏无会话");
+        }
+
+        // 建终端：经基座取终端工厂；build 失败 = 字体全灭走 Err（裁决 3，非插件失败）
+        crate::report::report("boot", &format!("基座+插件装载完成 +{}ms", boot_ms()));
+        let Some((mut tv, font_path, cjk_path)) = (match base.ctx().get::<dyn TermEmuFactory>() {
+            Ok(factory) => match factory.build() {
+                Ok(built) => Some(built),
+                Err(e) => {
+                    crate::report::report_sync("term", &e);
+                    None
+                }
+            },
+            Err(e) => {
+                crate::report::report_sync("term", &format!("终端工厂取回失败: {e:?}"));
+                None
+            }
+        }) else {
             return;
         };
-        crate::report::report("term", &format!("字体加载自 {font_path}"));
+        crate::report::report("term", &format!("字体加载自 {font_path} +{}ms", boot_ms()));
         match &cjk_path {
             Some(p) => crate::report::report("term", &format!("CJK 备用字体: {p}")),
             None => crate::report::report("term", "CJK 备用字体全灭——中文画 tofu"),
         }
-        // 候选体检（一次性）：每个主/CJK 候选一行判定结论——「为什么偏偏
-        // 选中它」不再靠猜（12:09 实录：DroidSansMono 在目录里却落选，原因未知）
-        static DIAGNOSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-        if !DIAGNOSED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-            for path in termview::FONT_CANDIDATES {
-                crate::report::report("term", &termview::diagnose_candidate(path));
-            }
-            for path in termview::CJK_FONT_CANDIDATES {
-                crate::report::report(
-                    "term",
-                    &format!("[cjk] {}", termview::diagnose_candidate(path)),
-                );
-            }
-        }
+        // （BAR-021：诊断脚手架已拆——候选体检/目录普查每个冷启动全量解析
+        // 44MB×2+32MB 巨物，是启动慢的最大单块成本；探测链本身也已退役，
+        // 生产字体编译期内嵌。需要排查时从 git 历史恢复）
         // 字体探针：加载成功 ≠ 能出字形，西文/中文各探一针（真机判卷「不见字」）
         for c in ['M', '中'] {
             let (w, h, ink) = tv.font_probe(c);
             crate::report::report("term", &format!("字体探针 '{c}': {w}x{h} ink={ink}"));
         }
-        // 字体目录普查（一次性）：真机 CJK/等宽候选排查——NotoSansCJK.ttc 空光栅
-        // 已实锤（BAR-002），Roboto 比例字体（BAR-003）。335 个字体全量上报必然
-        // 截断（11:55 实拍只见 A-B 开头），按关键词过滤出候选相关的
-        if let Ok(rd) = std::fs::read_dir("/system/fonts") {
-            const KEYS: &[&str] = &[
-                "mono", "Mono", "cjk", "CJK", "noto", "Noto", "droid", "Droid", "misans", "MiSans",
-                "vivo", "Vivo", "harmony", "Harmony", "SC", "fallback", "Fallback",
-            ];
-            let mut hits: Vec<String> = rd
-                .filter_map(|e| e.ok())
-                .filter_map(|e| e.file_name().into_string().ok())
-                .filter(|n| KEYS.iter().any(|k| n.contains(k)))
-                .collect();
-            hits.sort();
-            let list: String = hits.join(",").chars().take(800).collect();
-            crate::report::report("term", &format!("字体候选 {} 个: {list}", hits.len()));
-        }
-        crate::report::report("term", "TermView 建成");
+        crate::report::report("term", &format!("TermView 建成 +{}ms", boot_ms()));
+        tv.set_connecting(true);
         self.term = Some(tv);
-
-        // 常驻会话：command=None = 交互 shell；inbound 事件经 mpsc 桥回主循环
-        let (event_tx, event_rx) = mpsc::channel::<SessionEvent>();
-        let outbound =
-            crate::conn::spawn_terminal_session("ws://127.0.0.1:8021/ws", None, move |ev| {
-                // 主循环死了发送失败：吞掉——ws 线程绝不为上报陪葬
-                let _ = event_tx.send(ev);
-            });
-        self.event_rx = Some(event_rx);
-        self.outbound = Some(outbound);
+        self.base = Some(base);
 
         // 首发尺寸：Opened 前 outbound 会被 conn 层缓存，绑定后补发
         let size = window.inner_size();
@@ -237,7 +282,10 @@ impl App {
         for ev in events {
             match ev {
                 SessionEvent::Opened { session_id } => {
-                    crate::report::report("term", &format!("会话 opened: {session_id}"));
+                    crate::report::report(
+                        "term",
+                        &format!("会话 opened: {session_id} +{}ms", boot_ms()),
+                    );
                 }
                 SessionEvent::Output { data } => {
                     // 首 output 预览：诊断「黑屏等提示符」——提示符何时到、内容是什么
@@ -246,7 +294,11 @@ impl App {
                     if !FIRST_OUTPUT.swap(true, std::sync::atomic::Ordering::Relaxed) {
                         crate::report::report_sync(
                             "term",
-                            &format!("首 output 到达: {:?}", &data[..data.len().min(120)]),
+                            &format!(
+                                "首 output 到达 +{}ms: {:?}",
+                                boot_ms(),
+                                &data[..data.len().min(120)]
+                            ),
                         );
                         // 上膛帧缓冲探针（一次性）：下一帧数非背景像素（见 draw_frame）。
                         // 注意只能在首 output 上膛——此前写成每个 output 都上膛，
@@ -361,8 +413,10 @@ impl App {
                 let (w, h) = (buf.width().get(), buf.height().get());
                 term.render_into(&mut buf, w, h);
                 // 快捷键行（BAR-017：Rust 自绘覆盖层，画在终端网格之上；
-                // 键盘 inset 之上——键盘弹起时行跟着上浮）
-                term.render_keybar(&mut buf, w, h, self.ime_bottom_px);
+                // 键盘 inset 之上——键盘弹起时行跟着上浮）。
+                // 修饰键位读 input.modifiers 服务（input-ime 方案 A）
+                let mods = self.modifiers.as_ref().map_or(0, |m| m.peek());
+                term.render_keybar(&mut buf, w, h, self.ime_bottom_px, mods);
                 // tofu 目击上报：双字体都缺的字符（方框的真身），新字才报
                 let tofu = term.take_tofu_chars();
                 if !tofu.is_empty() {
@@ -376,7 +430,7 @@ impl App {
                 static FIRST_TERM_FRAME: std::sync::atomic::AtomicBool =
                     std::sync::atomic::AtomicBool::new(false);
                 if !FIRST_TERM_FRAME.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                    crate::report::report("term", "首终端帧渲染完成");
+                    crate::report::report("term", &format!("首终端帧渲染完成 +{}ms", boot_ms()));
                 }
                 // 帧缓冲探针：首个 output 后的那一帧，数非背景像素传回——
                 // 光标块独占 ≈288px，提示符字形真画上则数千。真机判卷「不见字」
@@ -424,7 +478,7 @@ impl ApplicationHandler for App {
         if self.window.is_some() {
             return;
         }
-        crate::report::report("boot", "resumed——开始建窗口");
+        crate::report::report("boot", &format!("resumed——开始建窗口 +{}ms", boot_ms()));
         let attrs = Window::default_attributes().with_title("KFM-NA");
         let window = Arc::new(el.create_window(attrs).expect("创建窗口失败"));
         let gfx = Self::init_gfx(&window);
@@ -441,7 +495,7 @@ impl ApplicationHandler for App {
             // 字体全灭走紫屏降级也要有首帧：dirty 兜底置位
             self.dirty = true;
         }
-        crate::report::report("boot", "启动完成");
+        crate::report::report("boot", &format!("启动完成 +{}ms", boot_ms()));
         log::info!("KFM-NA 壳启动完成");
     }
 
@@ -581,7 +635,7 @@ impl ApplicationHandler for App {
                                     crate::ime_queue::global().push_key_code(code);
                                 }
                                 crate::keybar::Key::Modifier(bit) => {
-                                    let m = crate::keybar::toggle(bit);
+                                    let m = self.modifiers.as_ref().map_or(0, |ms| ms.toggle(bit));
                                     crate::report::report("ime", &format!("修饰键粘滞位: {m:03b}"));
                                 }
                                 crate::keybar::Key::None => {}
@@ -592,8 +646,8 @@ impl ApplicationHandler for App {
                         let was_tap = self.touch_scroll.take().is_some_and(|t| t.was_tap());
                         if was_tap && let Some(w) = &self.window {
                             w.set_ime_allowed(true);
-                            if let Some(app) = &self.android_app {
-                                crate::insets::force_show_keyboard(app);
+                            if let Some(insets) = &self.ime_insets {
+                                insets.force_show();
                             }
                             crate::report::report("ime", "点按唤出软键盘");
                         }
@@ -689,18 +743,23 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
     android_logger::init_once(
         android_logger::Config::default().with_max_level(log::LevelFilter::Info),
     );
-    // 飞鸽传书：先起后台冲洗线程（必须在 report_sync 之前——sync 失败时
-    // 入队要有人接，否则第一格静默丢，06:42 实拍已踩），再挂 panic 钩子
-    crate::report::start_flusher();
-    // 第一格同步直报：早死进程等不到后台线程（有界 2s）。
+    // 飞鸽传书：先起后台冲洗线程（必须在任何上报之前——入队要有人接，
+    // 否则第一格静默丢，06:42 实拍已踩），再挂 panic 钩子。
+    // 第一格异步入队（BAR-022 归因实锤：此处曾用 report_sync 同步直报，
+    // connect 2s+读应答 3s+重试 3 次的同步 HTTP 卡在启动关键路径上，
+    // 冷隧道时单这一条就堵 3.3s——「启动慢的窃贼是日志通道自己」。
+    // 冲洗线程毫秒级即发出这行，「进门即死零日志」的防护仍在）。
     // 能收到这行 = 死在 android_main 内部；收不到 = 死在更前（加载/manifest）。
     // 构建戳（BAR-013）：设备跑的 .so 是哪个构建一读便知——dex/so 错配
     // 实拍案里「探针全体沉默」曾让我们绕了一整圈才想到 .so 是旧的
-    crate::report::report_sync(
+    crate::report::start_flusher();
+    crate::report::set_boot_t0();
+    crate::report::report(
         "boot",
         &format!(
-            "android_main 进入 (构建 {})",
-            option_env!("KFM_NA_BUILD").unwrap_or("dev")
+            "android_main 进入 (构建 {} · vc{})",
+            option_env!("KFM_NA_BUILD").unwrap_or("dev"),
+            option_env!("KFM_NA_VC").unwrap_or("dev")
         ),
     );
     std::panic::set_hook(Box::new(|info| {
@@ -724,11 +783,14 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
         }
     });
     log::info!("KFM-NA android_main 进入");
+    // BAR-022 归因钉：report_sync 是同步 HTTP（连 2s 读 3s × 至多 3 次重试），
+    // 若此行 ~3000ms 则首格直报是窃贼；若 ~0ms 则 EventLoop::build 是窃贼
+    crate::report::report("boot", &format!("event loop 开工 +{}ms", boot_ms()));
     let event_loop = EventLoop::builder()
         .with_android_app(app.clone())
         .build()
         .expect("创建事件循环失败");
-    crate::report::report("boot", "event loop 建成");
+    crate::report::report("boot", &format!("event loop 建成 +{}ms", boot_ms()));
     let mut app_handler = App {
         android_app: Some(app),
         ..Default::default()

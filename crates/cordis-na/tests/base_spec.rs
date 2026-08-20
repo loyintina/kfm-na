@@ -1,4 +1,4 @@
-//! base_spec.rs — 插件基座最小核心考题（A 档契约层，17 道，答案 src/base/）
+//! base_spec.rs — 插件基座最小核心考题（A 档契约层，17 道，答案 crates/cordis-na/src/）
 //!
 //! 契约来源：plugin-architecture-spec.md v1.1 §4 全部条款 + 跨线信箱
 //! （kfmv4 docs/ledger/agent-inbox/）评审裁决六条（全同步 / serial+bail 合一 /
@@ -7,12 +7,15 @@
 //! 分层说明（评审裁决 4-④）：规格书 §5 是四层测试体系，本文件只含第一层
 //! 「契约测试」。第二层「互操作组合矩阵」（多插件同挂边界，按 inject 依赖图
 //! 生成）**另立考题文件**，不在本文件。
+//!
+//! 2026-08-17 阶段 1 搬家：随基座迁入 cordis-na crate（通用运行时），
+//! 导入从 `kfm_na::base` 改 `cordis_na`——考题跟着答案走。
 
-use kfm_na::base::{
+use cordis_na::{
     Base, BaseWarning, Dispatch, Event, FiberState, GetError, Idle, LoadError, Plugin, PluginEntry,
     ProvideError, ROOT_REALM, ServiceKey,
 };
-use kfm_na::base::{Ctx, EffectStack};
+use cordis_na::{Ctx, EffectStack};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -921,4 +924,186 @@ fn spec_base_17_瞬时返回契约_阻塞apply报警() {
         .load(provider_plugin("fast", Arc::new(AtomicU64::new(0))))
         .unwrap();
     assert!(base2.warnings().is_empty(), "瞬时 apply 不许误报");
+}
+
+// ================= 考题 18-25:G2 活性闸(评审裁决 2,2026-08-18)=================
+// 契约:fiber 卸载/失败后其 Ctx 一切操作 = panic(INACTIVE_ACCESS 前缀,
+// 公开契约——断言前缀不断言全串)。正确实现下死后访问「不可能到达」,
+// 到达即证明有路径漏了排空。Events 同闸(评审裁决 1:不收窄)。
+
+/// 活性闸脚手架:apply 里把 fiber 自己的 Ctx 克进槽位(死后再访问的道具)
+fn ctx_stasher(name: &'static str, slot: Arc<Mutex<Option<Ctx>>>) -> FakePlugin {
+    fake(name, vec![], vec![], move |ctx| {
+        *slot.lock().unwrap() = Some(ctx.clone());
+        Ok(())
+    })
+}
+
+/// 装-卸-取死句柄三连(考题 18-22 共用)
+fn dead_ctx() -> (Base, Ctx) {
+    let slot = Arc::new(Mutex::new(None));
+    let base = Base::new(vec![]);
+    base.load(ctx_stasher("dead", slot.clone())).unwrap();
+    base.unload("dead");
+    let ctx = slot.lock().unwrap().clone().unwrap();
+    (base, ctx)
+}
+
+#[test]
+#[should_panic(expected = "INACTIVE_ACCESS")]
+fn spec_base_18_活性闸_卸载后provide拒绝() {
+    let (_base, ctx) = dead_ctx();
+    let svc: Arc<dyn Counter> = Arc::new(CounterImpl {
+        id: 9,
+        n: AtomicU64::new(0),
+    });
+    let _ = ctx.provide(svc);
+}
+
+#[test]
+#[should_panic(expected = "INACTIVE_ACCESS")]
+fn spec_base_19_活性闸_卸载后get拒绝() {
+    let (_base, ctx) = dead_ctx();
+    let _ = ctx.get::<dyn Counter>();
+}
+
+#[test]
+#[should_panic(expected = "INACTIVE_ACCESS")]
+fn spec_base_20_活性闸_卸载后effect拒绝() {
+    let (_base, ctx) = dead_ctx();
+    ctx.effect(Box::new(|| {}));
+}
+
+#[test]
+#[should_panic(expected = "INACTIVE_ACCESS")]
+fn spec_base_21_活性闸_卸载后事件发射拒绝() {
+    let (_base, ctx) = dead_ctx();
+    ctx.events.emit::<Ping>(&1);
+}
+
+#[test]
+#[should_panic(expected = "INACTIVE_ACCESS")]
+fn spec_base_21b_活性闸_卸载后事件监听拒绝() {
+    let (_base, ctx) = dead_ctx();
+    let _ = ctx.events.on_emit::<Ping>(|_| ());
+}
+
+#[test]
+#[should_panic(expected = "INACTIVE_ACCESS")]
+fn spec_base_22_活性闸_fork子ctx级联死() {
+    // 父 apply 里 fork 出子 ctx 并克进槽位;父卸载 → 父栈 dispose →
+    // 级联逆元摘除子栈条目 → 子 ctx 死(Owner::Child 判据)
+    let slot = Arc::new(Mutex::new(None));
+    let base = Base::new(vec![]);
+    let slot2 = slot.clone();
+    base.load(fake("parent", vec![], vec![], move |ctx| {
+        *slot2.lock().unwrap() = Some(ctx.fork(9));
+        Ok(())
+    }))
+    .unwrap();
+    base.unload("parent");
+    let child = slot.lock().unwrap().clone().unwrap();
+    let _ = child.get::<dyn Counter>();
+}
+
+#[test]
+fn spec_base_23_reload_新句柄活旧句柄死() {
+    let slot: Arc<Mutex<Option<Ctx>>> = Arc::new(Mutex::new(None));
+    let base = Base::new(vec![]);
+    base.load(ctx_stasher("re", slot.clone())).unwrap();
+    let v1 = slot.lock().unwrap().clone().unwrap();
+    base.unload("re");
+    base.reload("re");
+    let v2 = slot.lock().unwrap().clone().unwrap();
+    // 旧句柄永死(与 epoch 实例比对同构:旧逆元不许误删新绑定)
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = v1.get::<dyn Counter>();
+    }));
+    let payload = r.expect_err("旧句柄必须 panic");
+    let msg = payload
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| payload.downcast_ref::<&str>().copied())
+        .unwrap_or("");
+    assert!(msg.starts_with("INACTIVE_ACCESS"), "前缀契约:{msg}");
+    // 新句柄正常(未声明服务 = Err 不是 panic)
+    assert!(matches!(
+        v2.get::<dyn Counter>(),
+        Err(GetError::Undeclared(_))
+    ));
+}
+
+#[test]
+fn spec_base_24_root永生_卸载插件不伤根ctx() {
+    let base = Base::new(vec![]);
+    base.load(provider_plugin("p", Arc::new(AtomicU64::new(0))))
+        .unwrap();
+    base.unload("p");
+    // 根 ctx 照常:get 走错误两分,provide 照常注册
+    assert!(matches!(
+        base.ctx().get::<dyn Counter>(),
+        Err(GetError::DeclaredButInactive(_))
+    ));
+    let svc: Arc<dyn Counter> = Arc::new(CounterImpl {
+        id: 7,
+        n: AtomicU64::new(0),
+    });
+    let undo = base.ctx().provide(svc).unwrap();
+    undo(); // 根注册的逆元直连内核,不受闸
+}
+
+#[test]
+fn spec_base_25_disposer不受闸_卸载路径完整跑通() {
+    // disposer 捕获 Arc<Mutex<Core>> 直连内核,不经 Ctx 入口——卸载路径
+    // 零活性检查,三相语义不动;观察等价判据不回归
+    let ran = Arc::new(AtomicU64::new(0));
+    let base = Base::new(vec![]);
+    let ran2 = ran.clone();
+    base.load(fake("x", vec![], vec![], move |ctx| {
+        let ran3 = ran2.clone();
+        ctx.effect(Box::new(move || {
+            ran3.fetch_add(1, Ordering::SeqCst);
+        }));
+        Ok(())
+    }))
+    .unwrap();
+    let before = snapshot(&base);
+    base.unload("x");
+    assert_eq!(ran.load(Ordering::SeqCst), 1, "LIFO disposer 必须跑");
+    assert_eq!(snapshot(&base), before, "观察等价不回归");
+}
+
+// ================= 考题 26:G5 政策归层(评审裁决 3)=================
+
+#[test]
+fn spec_base_26_预算默认关_harness开启才记() {
+    // 默认关:60ms 的慢 apply 在旧默认(50ms)下会报警,现在不许
+    let base = Base::new(vec![]);
+    base.load(fake("slow", vec![], vec![], |_ctx| {
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_millis(60) {
+            std::hint::spin_loop();
+        }
+        Ok(())
+    }))
+    .unwrap();
+    assert!(
+        base.warnings().is_empty(),
+        "机制归内核:cordis-na 默认不记 SlowApply"
+    );
+    // 开启路径由考题 17 覆盖(with_apply_budget(1ms) 报警)
+}
+
+// ================= 缓建桩(G3/G4,评审附带确认:入桩即够)=================
+
+#[test]
+#[ignore = "G3 缓建:首个需要改写注入行为的插件出现时实现(差距审计 G3)"]
+fn spec_base_27_intercept桩() {
+    unimplemented!("缓建桩:需求驱动")
+}
+
+#[test]
+#[ignore = "G4 缓建:并发模型入档后实现;同步基座下 Parallel 不可达(v1.1 裁决)"]
+fn spec_base_28_parallel与独立bail桩() {
+    unimplemented!("缓建桩:不手搓")
 }

@@ -95,6 +95,9 @@ pub(crate) struct Fiber {
     pub(crate) config_parse: Option<ConfigParser>,
     /// 解析过的 config 缓存（启动读一次：重载不重复解析）
     pub(crate) config_value: Option<Arc<dyn Any + Send + Sync>>,
+    /// 激活代数：每次 activate 递增;Ctx 活性闸按 (name, generation) 判活,
+    /// reload 换代后旧句柄永死(考题 23)
+    pub(crate) generation: u64,
 }
 
 /// refresh 单步动作
@@ -109,7 +112,9 @@ enum Act {
 /// 全同步（v1.1）：一切生命周期转换在调用方线程上瞬时完成。
 pub struct Base {
     core: Arc<Mutex<Core>>,
-    apply_budget: Duration,
+    /// 瞬时返回契约的 apply 预算——**机制归内核、政策归 harness**(G5 归层,
+    /// 评审裁决 3):cordis-na 默认关闭,harness 显式开启并自带预算值
+    apply_budget: Option<Duration>,
 }
 
 impl Base {
@@ -117,13 +122,13 @@ impl Base {
     pub fn new(config: Vec<PluginEntry>) -> Self {
         Base {
             core: Arc::new(Mutex::new(Core::new(config))),
-            apply_budget: Duration::from_millis(50),
+            apply_budget: None,
         }
     }
 
-    /// 瞬时返回契约的 apply 预算（默认 50ms）
+    /// 开启瞬时返回契约检查并给预算(harness 政策;kfm-na 现值 50ms)
     pub fn with_apply_budget(mut self, budget: Duration) -> Self {
-        self.apply_budget = budget;
+        self.apply_budget = Some(budget);
         self
     }
 
@@ -171,6 +176,7 @@ impl Base {
                     epoch: Vec::new(),
                     config_parse: parse,
                     config_value: None,
+                    generation: 0,
                 },
             );
             c.order.push(name);
@@ -304,9 +310,15 @@ impl Base {
             let mut c = self.lock();
             let f = c.fibers.get_mut(name).expect("fiber 必须存在");
             f.state = FiberState::Loading;
+            f.generation += 1;
+            let generation = f.generation;
             (
                 f.plugin.clone(),
-                Ctx::new(Arc::clone(&self.core), f.realm, Owner::Fiber(name)),
+                Ctx::new(
+                    Arc::clone(&self.core),
+                    f.realm,
+                    Owner::Fiber(name, generation),
+                ),
             )
         };
         // 配置延迟解析（§4.1，fiber.ts:740）：依赖就绪后、apply 前求值一次；
@@ -328,8 +340,11 @@ impl Base {
         let start = Instant::now();
         let result = plugin.apply(&mut ctx);
         let elapsed = start.elapsed();
-        // 瞬时返回契约（§4.3 v1.1）：超预算记报警不记失败（理由见考题 17）
-        if elapsed > self.apply_budget {
+        // 瞬时返回契约（§4.3 v1.1）：超预算记报警不记失败（理由见考题 17);
+        // 预算检查默认关(G5 归层),harness 显式开启
+        if let Some(budget) = self.apply_budget
+            && elapsed > budget
+        {
             self.lock().warnings.push(BaseWarning::SlowApply {
                 plugin: name,
                 elapsed,

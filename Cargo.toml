@@ -1,3 +1,7 @@
+[workspace]
+# 根包 kfm-na 是隐式成员；cordis-na = 通用运行时（基座搬家，2026-08-17 阶段 1）
+members = ["crates/cordis-na"]
+
 [package]
 name = "kfm-na"
 version = "0.1.0"
@@ -9,11 +13,14 @@ edition = "2024"
 crate-type = ["rlib", "cdylib"]
 
 [dependencies]
+# 插件基座 = cordis-na 通用运行时（src/base/ 已搬入；harness 经 `pub use
+# cordis_na as base`  re-export，消费侧路径不变）
+cordis-na = { path = "crates/cordis-na" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 log = "0.4"
 # ws 连接层（conn.rs）：host 侧 live 测试与 Android 同用一份
-tokio = { version = "1", features = ["rt", "macros", "time", "sync"] }
+tokio = { version = "1", features = ["rt", "macros", "time", "sync", "net"] }
 tokio-tungstenite = "0.26"
 futures-util = "0.3"
 # 终端底座（termview.rs）：转义序列/网格/滚屏——最硬的骨头用现成的

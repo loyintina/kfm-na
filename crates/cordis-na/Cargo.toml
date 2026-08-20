@@ -1,0 +1,10 @@
+[package]
+name = "cordis-na"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Cordis 语义的 Rust 重实现：ctx 基座（fiber 生命周期 / effect 栈 / 事件三派发 / 服务 registry）。语义出处见 experiments/dsh-na/na/cordis-rs-gap-audit.md"
+
+# 通用运行时纪律：零依赖（std 之外什么都不许引）——内核不知道终端、
+# 不知道 IME、不知道 Android；出现业务字样 = 边界破洞
+[dependencies]

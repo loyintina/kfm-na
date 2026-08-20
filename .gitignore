@@ -1,3 +1,6 @@
 /target
 field-reports.log
 /build
+# 本地字体覆盖（BAR-021）：商业字体只存在于本机，永不进库。
+# chain.sh 第 1 步有防泄漏闸机械执法
+/assets/fonts/local/

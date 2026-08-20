@@ -47,8 +47,9 @@ bash scripts/deploy-phone.sh --build   # 先打包再送
 - 注意：手机 Rust 滚动更新（比服务器新），新 clippy lint 先在手机爆——
   修法是修到两边都绿，不要给手机降版本
 - 手机上 `deploy-phone.sh` 走本地模式：跳过 scp 直接调安装器
-- 固定取包点（用户指定 2026-08-15）：每个包同时拷到手机 `~/w/项目/kfm-na/`——
-  安装器没弹/找不到包时去那里拿
+- 固定取包点（用户指定 2026-08-15）：每个包同时拷到手机
+  `/data/data/com.termux/files/home/w/项目/kfm-na/`——安装器没弹/找不到包时去
+  那里拿（BAR-019：脚本里必须写绝对路径，`~` 会在本地 shell 展开成 /root）
 
 ## 仓库布局（cargo 视野外的部分）
 
@@ -59,6 +60,10 @@ bash scripts/deploy-phone.sh --build   # 先打包再送
   叠加。改它必跑 chain 第 4 步（javac 编译检查）+ package-apk.sh 实拍。
 - `android/AndroidManifest.xml` — 手工 manifest（package-apk.sh 直打）。
   包名 `dev.kfm.na`、主题、configChanges 与 cargo-apk 时代对齐。
+- `android/res/` — 应用图标等资源（mipmap-xxxhdpi/ic_launcher.jpg，
+  源图 kfmv4/icons/kfm-icon.png，2026-08-16 用户指定；注意源文件扩展名是
+  .png 但内容是 JPEG，仓内按内容存 .jpg，aapt2 与 BitmapFactory 都认内容）package-apk.sh
+  第 4 步 `aapt2 compile --dir` + link `-R` 进包，不编 R.java。
 
 ## 纪律（三门，全部 hard fail，commit-msg/pre-commit 钩子机械化执法）
 

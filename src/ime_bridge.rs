@@ -35,8 +35,8 @@ pub fn jni_counters() -> (u32, u32, u32, u32) {
 
 /// dev.kfm.na.KfmImeView.nativeCommitText —— IME commitText 落字
 /// （中文候选词、英文整串、粘贴都走这）。落字前过修饰键粘滞：
-/// 快捷键行的 Ctrl/Alt/Shift 状态在 Rust 侧（keybar.rs，BAR-017 后
-/// 修饰键状态也收归 Rust），take 读走即清 = 一次性联动
+/// 状态在 input.modifiers 服务（input-ime 方案 A），JNI 线程经桥端点
+/// （keybar::bridge_mods）取句柄，take 读走即清 = 一次性联动
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_kfm_na_KfmImeView_nativeCommitText(
     mut env: EnvUnowned,
@@ -46,7 +46,7 @@ pub extern "system" fn Java_dev_kfm_na_KfmImeView_nativeCommitText(
     COMMIT_ENTER.fetch_add(1, Ordering::Relaxed);
     env.with_env(|env| -> jni::errors::Result<()> {
         let s = text.try_to_string(env)?;
-        let mods = crate::keybar::take_modifiers();
+        let mods = crate::keybar::bridge_mods().map(|m| m.take()).unwrap_or(0);
         let s = if mods != 0 {
             crate::keymap::map_text(
                 mods & crate::keybar::MOD_CTRL != 0,

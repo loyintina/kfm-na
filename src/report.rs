@@ -33,6 +33,20 @@ const PATH: &str = "/kfmv4/api/na-report";
 
 static SENDER: Mutex<Option<Sender<String>>> = Mutex::new(None);
 
+/// 启动计时锚点（BAR-022：report 双通道的时间戳受冲洗节拍量化，段落归因
+/// 靠不住——把「距 android_main 的毫秒数」烘进里程碑消息文本，通道乱序/
+/// 量化都影响不了数值本身）。android_main 进门时 set 一次；非 Android
+/// 环境（单测）未 set 时恒 0
+static BOOT_T0: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
+pub fn set_boot_t0() {
+    BOOT_T0.set(std::time::Instant::now()).ok();
+}
+
+pub fn boot_ms() -> u128 {
+    BOOT_T0.get().map(|t| t.elapsed().as_millis()).unwrap_or(0)
+}
+
 /// 启动后台冲洗线程（android_main 第一时间调）。幂等。
 pub fn start_flusher() {
     let mut guard = SENDER.lock().unwrap_or_else(|e| e.into_inner());
@@ -95,6 +109,20 @@ pub fn report_sync(stage: &str, msg: &str) {
         }
     }
     enqueue(line);
+}
+
+/// 单发直报（BAR-022 归因锚点用）：一次尝试，失败入队交后台。
+/// 不带重试——重试会放大阻塞，诊断锚点宁可丢不可拖死握手线程
+/// （冲洗队列作载体已实踩不可靠：应用一划掉，队列里的行随进程死全丢）。
+pub fn report_sync_once(stage: &str, msg: &str) {
+    let line = format!(
+        "{{\"stage\":\"{}\",\"msg\":\"{}\"}}",
+        escape_json(stage),
+        escape_json(msg)
+    );
+    if try_post(&line).is_err() {
+        enqueue(line);
+    }
 }
 
 fn enqueue(line: String) {

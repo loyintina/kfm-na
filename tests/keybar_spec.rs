@@ -89,15 +89,18 @@ fn spec_bar018_起点判定_跟随键盘上浮() {
 #[test]
 fn spec_修饰键_一次性粘滞() {
     // 点亮 → 读走即清；再点灭；take 后回零
-    assert_eq!(keybar::modifiers(), 0, "开考必须无粘滞（上个考题不许漏）");
-    keybar::toggle(MOD_CTRL);
-    assert_eq!(keybar::modifiers(), MOD_CTRL, "点亮 Ctrl");
-    keybar::toggle(MOD_SHIFT);
-    assert_eq!(keybar::modifiers(), MOD_CTRL | MOD_SHIFT, "双粘滞并存");
-    let taken = keybar::take_modifiers();
+    // （2026-08-16 迁移：评审明示批准——断言一字不改，具身从进程静态搬到
+    // ModifierState 实例，input-ime 插件化方案 A）
+    let mods = keybar::ModifierState::new();
+    assert_eq!(mods.peek(), 0, "开考必须无粘滞");
+    mods.toggle(MOD_CTRL);
+    assert_eq!(mods.peek(), MOD_CTRL, "点亮 Ctrl");
+    mods.toggle(MOD_SHIFT);
+    assert_eq!(mods.peek(), MOD_CTRL | MOD_SHIFT, "双粘滞并存");
+    let taken = mods.take();
     assert_eq!(taken, MOD_CTRL | MOD_SHIFT, "take 读走全部");
-    assert_eq!(keybar::modifiers(), 0, "take 后必须清零（联动一次自动灭）");
-    keybar::toggle(MOD_CTRL);
-    keybar::toggle(MOD_CTRL);
-    assert_eq!(keybar::modifiers(), 0, "再点一次必须灭");
+    assert_eq!(mods.peek(), 0, "take 后必须清零（联动一次自动灭）");
+    mods.toggle(MOD_CTRL);
+    mods.toggle(MOD_CTRL);
+    assert_eq!(mods.peek(), 0, "再点一次必须灭");
 }

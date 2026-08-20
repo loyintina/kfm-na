@@ -11,6 +11,7 @@
 
     <application
         android:label="KFM-NA"
+        android:icon="@mipmap/ic_launcher"
         android:extractNativeLibs="false"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen">
         <!-- extractNativeLibs=false（BAR-013）：.so 不解压、直从 APK mmap，

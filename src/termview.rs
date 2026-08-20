@@ -73,11 +73,14 @@ pub const ANSI_16: [u32; 16] = [
 /// （12:09 真机普查补充：DroidSansFallbackBBK = vivo 的 fallback 字体，
 /// DroidSansMono = 设备自带等宽——usable/monospaced 双判定会把关，
 /// 不及格的自动跳过，最后落内嵌 DejaVuSansMono）
+/// 2026-08-18 启动提速：DroidSansMono 提首（真机实证它就是胜者，
+/// 108KB 秒杀）；NotoSansCJK.ttc/DroidSansFallback* 是几十 MB 巨物,
+/// 反正过不了探针,留表尾靠 MAX_MAIN_FONT_BYTES 体积闸廉价跳过
 pub const FONT_CANDIDATES: &[&str] = &[
+    "/system/fonts/DroidSansMono.ttf",
     "/system/fonts/NotoSansCJK-Regular.ttc",
     "/system/fonts/DroidSansFallbackFull.ttf",
     "/system/fonts/DroidSansFallbackBBK.ttf",
-    "/system/fonts/DroidSansMono.ttf",
     "/system/fonts/Roboto-Regular.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
 ];
@@ -86,6 +89,13 @@ pub const FONT_CANDIDATES: &[&str] = &[
 /// 空光栅（BAR-002）、Roboto 比例字体间距错乱、DroidSansFallbackFull 不存在。
 /// 嵌一份及格的等宽字体进包，任何设备都有下限（选型/许可见 assets/fonts/README.md）
 pub static VENDORED_MONO_FONT: &[u8] = include_bytes!("../assets/fonts/DejaVuSansMono.ttf");
+
+/// 生产内嵌字体（BAR-021，build.rs 编译期选择：assets/fonts/local/ 覆盖 >
+/// 开源占位，规则见 build.rs 头注）。启动零探测——不读 /system/fonts，
+/// 不解析 44MB 巨物，TermView 毫秒级建成（启动慢病灶连根拔，BAR-020 终章）
+pub static VENDORED_MAIN_FONT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/fonts/main.ttf"));
+/// 生产内嵌 CJK 备用字体（同 build.rs 选择；全角双宽，覆盖 GB2312 全字库）
+pub static VENDORED_CJK_FONT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/fonts/cjk.ttf"));
 
 /// 字体可用性判定（A 档考题钉死）：光栅化探针字符，空字形（尺寸 0 或
 /// 位图零覆盖）判不合格。背景：2026-08-13 真机实拍「只见光标不见字」——
@@ -103,11 +113,22 @@ pub fn font_monospaced(font: &fontdue::Font) -> bool {
     (mi.advance_width - mm.advance_width).abs() < 0.5
 }
 
+/// 主字体体积闸（2026-08-18 启动慢实测：表面建成→TermView 建成 6 秒,
+/// 病灶=每次启动全量解析 NotoSansCJK.ttc 32MB + DroidSansFallbackBBK
+/// 44MB 再被探针扔掉)。等宽 Latin 主字体不可能是几十 MB 的巨物——
+/// 超闸直接不解析,行为不变(它们本来就过不了 usable/mono 探针),
+/// CJK 备用表不受此闸(那边的巨物是真字形源)
+pub const MAX_MAIN_FONT_BYTES: u64 = 8 * 1024 * 1024;
+
 /// 按候选顺序加载第一个可读、fontdue 认得、能画出字、且等宽的字体，
 /// 返回 (来源路径, 字体)。路径候选全灭时落内嵌等宽字体（路径标记
 /// "<内嵌>"）；内嵌也废（不可能，有钉）才返回 None。本函数不 panic。
 pub fn load_font(candidates: &[&str]) -> Option<(String, fontdue::Font)> {
     for path in candidates {
+        // 体积闸:metadata 即判,几十 MB 的巨物连读都不读
+        if std::fs::metadata(path).map(|m| m.len()).unwrap_or(0) > MAX_MAIN_FONT_BYTES {
+            continue;
+        }
         let Ok(bytes) = std::fs::read(path) else {
             continue;
         };
@@ -153,25 +174,6 @@ pub fn load_cjk_font(candidates: &[&str]) -> Option<(String, fontdue::Font)> {
         }
     }
     None
-}
-
-/// 候选体检（诊断用）：一个字体一行结论——读不到/fontdue 不认/三项判定结果。
-/// 真机「为什么偏偏选中它」的判卷依据（12:09 实录：DroidSansMono 明明在
-/// 目录里却落选 <内嵌>，没有这行就只能猜）
-pub fn diagnose_candidate(path: &str) -> String {
-    let Ok(bytes) = std::fs::read(path) else {
-        return format!("{path}: 读不到");
-    };
-    match fontdue::Font::from_bytes(bytes, fontdue::FontSettings::default()) {
-        Err(_) => format!("{path}: fontdue 不认"),
-        Ok(f) => format!(
-            "{path}: usable={} mono={} cjk={} braille={}",
-            font_usable(&f, 'M'),
-            font_monospaced(&f),
-            font_usable(&f, '中'),
-            f.lookup_glyph_index('⠋') != 0 // U+280B 盲文：TUI 转动点覆盖判据
-        ),
-    }
 }
 
 /// 布局数学（A 档考题钉死）：窗口 px 尺寸 + 单元格 px 尺寸 → (cols, rows)。
@@ -316,6 +318,9 @@ pub struct TermView {
     font_px: f32,
     /// 基线在格内的纵向偏移（格顶向下，px）——BAR-001 基线对齐用
     baseline_off: f32,
+    /// 接通中状态（BAR-022 收尾）：会话未开时渲染居中提示行，首帧输出
+    /// （feed）到达自动熄灭——首连 ~2.1s 唤醒成本不再是死黑屏
+    connecting: bool,
 }
 
 impl TermView {
@@ -356,11 +361,18 @@ impl TermView {
             cell_h,
             font_px,
             baseline_off,
+            connecting: false,
         }
+    }
+
+    /// 接通中状态开关（BAR-022）：会话 spawn 时置 true，首个输出 feed 自动熄灭
+    pub fn set_connecting(&mut self, on: bool) {
+        self.connecting = on;
     }
 
     /// 喂 PTY 原始字节流（含 ANSI/UTF-8），vte 解析器驱动 Term 状态迁移
     pub fn feed(&mut self, bytes: &[u8]) {
+        self.connecting = false;
         self.processor.advance(&mut self.term, bytes);
     }
 
@@ -427,6 +439,21 @@ impl TermView {
         if buf_w == 0 || buf_h == 0 {
             return;
         }
+        // BAR-022 收尾：接通中 → 居中画提示行（会话 spawn 置 true，首帧
+        // 输出 feed 熄灭）。首连 ~2.1s 唤醒成本期间不再是死黑屏。
+        // BAR-023 实拍：rh 取 buf_h/7 时字号 = 屏高/27，巨物不合比例——
+        // 收敛到终端格高（px = rh*0.26 ≈ cell_h，提示行与正文一般大）
+        if self.connecting {
+            let mut frame = Frame {
+                buf,
+                w: buf_w,
+                h: buf_h,
+            };
+            let rh = (self.cell_h * 4).max(24);
+            let cy = buf_h.saturating_sub(rh) / 2;
+            self.draw_label(&mut frame, "正在接通服务器…", 0, buf_w, cy, rh);
+            return;
+        }
         let mut frame = Frame {
             buf,
             w: buf_w,
@@ -483,7 +510,16 @@ impl TermView {
     /// 覆盖层 UI 的统一模式）。画在帧缓冲底部、键盘 inset 之上的 HEIGHT_PX 带
     /// （键盘弹起时跟着上浮，16777485 实拍：画死在屏底会被键盘盖住）：
     /// 行底 → 圆角药丸键格（修饰键粘滞中换高亮色）→ 标签字形居中
-    pub fn render_keybar(&self, buf: &mut [u32], buf_w: u32, buf_h: u32, ime_bottom: u32) {
+    /// mods = 调用方传入的修饰键粘滞位（input-ime 方案 A：不自读静态，
+    /// 状态归 input.modifiers 服务，渲染层只收参数）
+    pub fn render_keybar(
+        &self,
+        buf: &mut [u32],
+        buf_w: u32,
+        buf_h: u32,
+        ime_bottom: u32,
+        mods: u8,
+    ) {
         use crate::keybar;
         let Some(top) = buf_h
             .checked_sub(ime_bottom)
@@ -504,7 +540,6 @@ impl TermView {
         if cell_w < 8 {
             return; // 窗太窄画不下，保命要紧
         }
-        let mods = keybar::modifiers();
         for (row, keys) in keybar::KEYS.iter().enumerate() {
             for (col, kd) in keys.iter().enumerate() {
                 if matches!(kd.key, keybar::Key::None) {
@@ -719,6 +754,8 @@ fn blend(fg: u32, dst: u32, a: u32) -> u32 {
 
 /// 供 android_app：从候选路径建视图（主字体 + CJK 备用 + 默认 80x24 占位网格），
 /// 返回 (视图, 主字体来源, CJK 字体来源)。主字体全灭返回 None。
+/// 注：生产已不走这条路（BAR-021 起用 build_vendored 零探测），本函数保留
+/// 给考题注入夹具与「探测链」行为的回归钉
 pub fn build_from_candidates(candidates: &[&str]) -> Option<(TermView, String, Option<String>)> {
     let (path, font) = load_font(candidates)?;
     let (cjk_path, cjk_font) = match load_cjk_font(CJK_FONT_CANDIDATES) {
@@ -730,4 +767,134 @@ pub fn build_from_candidates(candidates: &[&str]) -> Option<(TermView, String, O
         path,
         cjk_path,
     ))
+}
+
+/// 生产默认构建（BAR-021）：零探测——主/CJK 字体都是编译期内嵌字节，
+/// 启动全程不碰 /system/fonts。返回 (视图, "<内嵌主>", Some("<内嵌CJK>"))；
+/// 内嵌字节解析失败（不可能，有考题钉）才返回 None。本函数不 panic。
+pub fn build_vendored() -> Option<(TermView, String, Option<String>)> {
+    let font =
+        fontdue::Font::from_bytes(VENDORED_MAIN_FONT, fontdue::FontSettings::default()).ok()?;
+    let cjk = fontdue::Font::from_bytes(VENDORED_CJK_FONT, fontdue::FontSettings::default()).ok();
+    Some((
+        TermView::new(font, cjk, 80, 24, CELL_W, CELL_H),
+        "<内嵌主>".to_string(),
+        Some("<内嵌CJK>".to_string()),
+    ))
+}
+
+// ---- trait 层（终端模拟器设计页 §2；插件化边界，方法体一行不动） ----
+
+/// 终端模拟器对象面（服务键 `dyn TermEmuFactory` 产出的实例侧）。
+/// `Send` 不含 `Sync`：独占可变持有——类型约束编码状态存活分层（评审裁决 1）。
+///
+/// 演化纪律（评审裁决 2 边界注记）：方法面 = android_app 现调集合，
+/// 新增方法须有调用方先例；自由函数（grid_dims/paintable/颜色表）无状态，
+/// 永不进 trait。
+pub trait TermEmu: Send {
+    fn feed(&mut self, bytes: &[u8]);
+    fn resize_cells(&mut self, cols: u32, rows: u32);
+    fn cell_size(&self) -> (u32, u32);
+    fn render_into(&mut self, buf: &mut [u32], w: u32, h: u32);
+    fn render_keybar(&self, buf: &mut [u32], w: u32, h: u32, ime_bottom: u32, mods: u8);
+    fn take_tofu_chars(&self) -> Vec<char>;
+    fn scroll_lines(&mut self, lines: i32);
+    fn scroll_to_bottom(&mut self);
+    fn mouse_report_active(&self) -> bool;
+    fn app_cursor_mode(&self) -> bool;
+    fn font_probe(&self, c: char) -> (usize, usize, usize);
+    /// 接通中状态（BAR-022）：会话 spawn 置 true，首个输出 feed 自动熄灭——
+    /// 渲染层画居中提示行，首连 ~2.1s 唤醒成本不再是死黑屏
+    fn set_connecting(&mut self, on: bool);
+}
+
+impl TermEmu for TermView {
+    fn feed(&mut self, bytes: &[u8]) {
+        TermView::feed(self, bytes)
+    }
+    fn resize_cells(&mut self, cols: u32, rows: u32) {
+        TermView::resize_cells(self, cols, rows)
+    }
+    fn cell_size(&self) -> (u32, u32) {
+        TermView::cell_size(self)
+    }
+    fn render_into(&mut self, buf: &mut [u32], w: u32, h: u32) {
+        TermView::render_into(self, buf, w, h)
+    }
+    fn render_keybar(&self, buf: &mut [u32], w: u32, h: u32, ime_bottom: u32, mods: u8) {
+        TermView::render_keybar(self, buf, w, h, ime_bottom, mods)
+    }
+    fn take_tofu_chars(&self) -> Vec<char> {
+        TermView::take_tofu_chars(self)
+    }
+    fn scroll_lines(&mut self, lines: i32) {
+        TermView::scroll_lines(self, lines)
+    }
+    fn scroll_to_bottom(&mut self) {
+        TermView::scroll_to_bottom(self)
+    }
+    fn mouse_report_active(&self) -> bool {
+        TermView::mouse_report_active(self)
+    }
+    fn app_cursor_mode(&self) -> bool {
+        TermView::app_cursor_mode(self)
+    }
+    fn font_probe(&self, c: char) -> (usize, usize, usize) {
+        TermView::font_probe(self, c)
+    }
+    fn set_connecting(&mut self, on: bool) {
+        TermView::set_connecting(self, on)
+    }
+}
+
+/// build 产物：终端实例 + 主/CJK 字体来源名（供调用方诊断上报）
+pub type BuiltTerm = (Box<dyn TermEmu>, String, Option<String>);
+
+/// 终端模拟器工厂服务（注册表式、独占绑定 v1）。build 瞬时返回：
+/// 内嵌字体解析是毫秒级内存操作（BAR-021 起生产零文件 IO），不违反瞬时返回契约。
+pub trait TermEmuFactory: Send + Sync {
+    /// 建一台终端；Err = 字体全灭（调用方上报，不算插件失败——裁决 3）。
+    /// Ok 附（主字体来源, CJK 字体来源）供调用方诊断上报（现状行为保持）
+    fn build(&self) -> Result<BuiltTerm, String>;
+}
+
+/// 字体来源：Vendored = 生产（编译期内嵌，零探测，BAR-021）；
+/// Probed = 考题注入夹具（按候选路径探测，host 无 /system/fonts）
+pub enum FactoryFonts {
+    Vendored,
+    Probed(&'static [&'static str]),
+}
+
+/// alacritty 芯工厂：生产 = 内嵌字体直载；考题 = 候选表探测夹具
+pub struct AlacrittyEmuFactory {
+    fonts: FactoryFonts,
+}
+
+impl AlacrittyEmuFactory {
+    /// 生产构造：编译期内嵌字体，零探测
+    pub fn vendored() -> Self {
+        AlacrittyEmuFactory {
+            fonts: FactoryFonts::Vendored,
+        }
+    }
+
+    /// 注入字体候选表（契约考题用夹具；host 无 /system/fonts）
+    pub fn new(candidates: &'static [&'static str]) -> Self {
+        AlacrittyEmuFactory {
+            fonts: FactoryFonts::Probed(candidates),
+        }
+    }
+}
+
+impl TermEmuFactory for AlacrittyEmuFactory {
+    fn build(&self) -> Result<BuiltTerm, String> {
+        let built = match &self.fonts {
+            FactoryFonts::Vendored => build_vendored(),
+            FactoryFonts::Probed(candidates) => build_from_candidates(candidates),
+        };
+        match built {
+            Some((tv, main, cjk)) => Ok((Box::new(tv), main, cjk)),
+            None => Err("字体全灭——TermView 建不成".into()),
+        }
+    }
 }

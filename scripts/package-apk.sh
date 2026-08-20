@@ -40,8 +40,15 @@ TARGET=aarch64-linux-android
 MIN_API=24
 # versionCode 必须大于已装包才能覆盖安装——旧包是 cargo-apk 默认的 16777472。
 # 红线：每次打包必须递增（2026-08-13 零日志闪退教训）——同 versionCode
-# 覆盖安装可能不重解压 .so，设备上「新 dex + 旧 so」JNI 符号缺失即闪退
-VERSION_CODE=16777489
+# 覆盖安装可能不重解压 .so，设备上「新 dex + 旧 so」JNI 符号缺失即闪退。
+# 2026-08-18 手工递增已失信一次（16777496 连打两包）——改计数器自动递增，
+# 计数文件在 build/（gitignore），手机/服务器各自独立计数互不影响
+COUNTER=build/version-code.counter
+VERSION_CODE=$(( $(cat "$COUNTER" 2>/dev/null || echo 16777496) + 1 ))
+echo "$VERSION_CODE" > "$COUNTER"
+# deploy-phone.sh 从这里取已解析的值（别再从本脚本 grep 字面值——
+# 计数器表达式 grep 出来是未展开的源码串，2026-08-18 实踩）
+echo "$VERSION_CODE" > build/version-code.current
 VERSION_NAME=0.1.0
 BUILD=build/apk
 OUT=target/release/apk/kfm-na.apk
@@ -49,6 +56,9 @@ OUT=target/release/apk/kfm-na.apk
 # 构建戳编译进 Rust（BAR-013）：设备跑的 .so 是哪个构建，
 # field-reports.log 首行一读便知
 export KFM_NA_BUILD="$(git rev-parse --short HEAD 2>/dev/null || echo nogit)-$(date -u +%m%d%H%M)"
+# versionCode 同进编译期（BAR-022）：field-reports 自报家门，
+# 判「跑的是不是刚装的包」不再靠猜（16777504 那次实踩：旧包没装上，锚点全无）
+export KFM_NA_VC="$VERSION_CODE"
 
 export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$LINKER"
 
@@ -67,9 +77,13 @@ echo "=== [package 3/6] d8（class → dex） ==="
 "$D8" --min-api "$MIN_API" --lib "$AJAR" --output "$BUILD/dex" \
     $(find "$BUILD/classes" -name '*.class')
 
-echo "=== [package 4/6] aapt2 link + 装 dex/lib ==="
+echo "=== [package 4/6] aapt2 compile+link + 装 dex/lib ==="
+# res 先 compile 成 .flat 打包，再 -R 喂给 link（图标等二进制资源进包的正路；
+# 不编 R.java——Java 皮不引用资源，manifest 里 @mipmap 引用由 aapt2 解析）
+"$AAPT2" compile --dir android/res -o "$BUILD/res.zip"
 "$AAPT2" link -o "$BUILD/unsigned.apk" -I "$AJAR" \
     --manifest android/AndroidManifest.xml \
+    -R "$BUILD/res.zip" \
     --min-sdk-version "$MIN_API" --target-sdk-version 35 \
     --version-code "$VERSION_CODE" --version-name "$VERSION_NAME"
 cp "$BUILD/dex/classes.dex" "$BUILD/stage/"
