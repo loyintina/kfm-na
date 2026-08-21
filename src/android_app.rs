@@ -287,12 +287,17 @@ impl App {
         let t_init = std::time::Instant::now();
 
         // exec 探针(L2/L3 总开关,exec_probe.rs):私有目录 exec 放行与否
-        // 决定 busybox/apt 生态路线。冷启动一次,结果走飞鸽传书
+        // 决定 busybox/apt 生态路线。冷启动一次,结果走飞鸽传书。
+        // 真机实测(2026-08-21 探针归因):同步跑吃 2283ms,占 init 96%——
+        // 大头不是 exec 本身,是 report_sync 的阻塞 HTTP 三连重试。
+        // 探针结果 v1 只上报不分支,没资格堵启动路径:挪后台线程。
         let t_exec = std::time::Instant::now();
         if let Some(app) = &self.android_app
             && let Some(dir) = app.internal_data_path()
         {
-            crate::exec_probe::run(&dir);
+            std::thread::spawn(move || {
+                crate::exec_probe::run(&dir);
+            });
         }
         let ms_exec = t_exec.elapsed().as_millis();
 
