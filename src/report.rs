@@ -84,7 +84,10 @@ pub fn start_flusher() {
 }
 
 /// 上报一行（stage = 阶段名，msg = 详情）。只入队，永不阻塞调用方。
+/// 同时落 logcat(2026-08-21 诊断通道事故:HTTP 队列冲洗慢且随进程死
+/// 全丢,启动归因两度被断供;logcat 环形缓冲在系统侧,进程死了也能捞)
 pub fn report(stage: &str, msg: &str) {
+    log::info!("[{stage}] {msg}");
     enqueue(format!(
         "{{\"stage\":\"{}\",\"msg\":\"{}\"}}",
         escape_json(stage),
@@ -97,6 +100,7 @@ pub fn report(stage: &str, msg: &str) {
 /// （connect 2s）直发，失败重试 3 次再入队交后台——当日真机单条丢失率
 /// 约 50%（移动网络抖），重试压掉大部分；最坏 3×(2s+3s) 阻塞上限，可接受。
 pub fn report_sync(stage: &str, msg: &str) {
+    log::info!("[{stage}] {msg}");
     let line = format!(
         "{{\"stage\":\"{}\",\"msg\":\"{}\"}}",
         escape_json(stage),
@@ -115,6 +119,7 @@ pub fn report_sync(stage: &str, msg: &str) {
 /// 不带重试——重试会放大阻塞，诊断锚点宁可丢不可拖死握手线程
 /// （冲洗队列作载体已实踩不可靠：应用一划掉，队列里的行随进程死全丢）。
 pub fn report_sync_once(stage: &str, msg: &str) {
+    log::info!("[{stage}] {msg}");
     let line = format!(
         "{{\"stage\":\"{}\",\"msg\":\"{}\"}}",
         escape_json(stage),
