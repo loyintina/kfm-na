@@ -65,8 +65,9 @@ fn spec_布局_整除与非整除() {
     assert_eq!(grid_dims(100, 48, 10, 24), (10, 2));
     // 非整除向下取整：105x50 → 10x2（余下的半格不算）
     assert_eq!(grid_dims(105, 50, 10, 24), (10, 2));
-    // 尖刺常量（2026-08-13 放大一轮：12x24 → 15x30）：1080x2400 屏 15x30 格 → 72x80
-    assert_eq!(grid_dims(1080, 2400, CELL_W, CELL_H), (72, 80));
+    // 尖刺常量（2026-08-13 放大一轮：12x24 → 15x30；2026-08-21 再放大：
+    // 18x36，用户两次抱怨「太小」）：1080x2400 屏 18x36 格 → 60x66
+    assert_eq!(grid_dims(1080, 2400, CELL_W, CELL_H), (60, 66));
 }
 
 #[test]
@@ -89,8 +90,8 @@ fn spec_布局_格坐标到像素原点() {
     assert_eq!(cell_origin(1, 0, 10, 24), (10, 0));
     assert_eq!(cell_origin(0, 1, 10, 24), (0, 24));
     assert_eq!(cell_origin(3, 2, 10, 24), (30, 48));
-    // 尖刺常量 15x30：右下角 (71,79) → (1065, 2370)
-    assert_eq!(cell_origin(71, 79, CELL_W, CELL_H), (1065, 2370));
+    // 基准常量 18x36（2026-08-21 放大）：右下角 (71,79) → (1278, 2844)
+    assert_eq!(cell_origin(71, 79, CELL_W, CELL_H), (1278, 2844));
 }
 
 #[test]
@@ -803,4 +804,101 @@ fn spec_bar022_内嵌cjk字体_终端符号补丁覆盖() {
             c as u32
         );
     }
+}
+
+// ---------- A 档：捏合缩放（2026-08-21，用户两次抱怨「太小」+ 双指调字号） ----------
+
+#[test]
+fn spec_缩放_顶边距随格高走() {
+    // BAR-010 语义动态化：顶带 = 常规边距 + 一整行，格高变顶带跟着变。
+    // 基准格高下动态版必须等于常量版（旧考题 spec_边距_首格不贴边 的
+    // MARGIN_TOP == MARGIN_Y + CELL_H 钉继续有效）
+    // 变异抽检：margin_top 改回恒定 MARGIN_Y 本考题必须红
+    assert_eq!(termview::margin_top(CELL_H), termview::MARGIN_TOP);
+    assert_eq!(termview::margin_top(20), termview::MARGIN_Y + 20);
+    assert_eq!(termview::margin_top(90), termview::MARGIN_Y + 90);
+}
+
+#[test]
+fn spec_缩放_捏合钳制纯函数() {
+    use termview::{CELL_H_MAX, CELL_H_MIN, CELL_W_MAX, CELL_W_MIN, pinch_cell_size};
+    // 恒等：ratio 1.0 回基准
+    assert_eq!(pinch_cell_size(CELL_W, CELL_H, 1.0), (CELL_W, CELL_H));
+    // 正常缩放：18x36 × 1.5 = 27x54；× 2.0 = 36x72
+    assert_eq!(pinch_cell_size(CELL_W, CELL_H, 1.5), (27, 54));
+    assert_eq!(pinch_cell_size(CELL_W, CELL_H, 2.0), (36, 72));
+    // 钳制边界：暴捏/暴收都停在可读区间（变异抽检：摘掉 clamp 必须红）
+    assert_eq!(
+        pinch_cell_size(CELL_W, CELL_H, 10.0),
+        (CELL_W_MAX, CELL_H_MAX)
+    );
+    assert_eq!(
+        pinch_cell_size(CELL_W, CELL_H, 0.01),
+        (CELL_W_MIN, CELL_H_MIN)
+    );
+    assert_eq!(pinch_cell_size(CELL_W, CELL_H, 100.0), (45, 90));
+    assert_eq!(pinch_cell_size(CELL_W, CELL_H, 0.001), (10, 20));
+    // 非法输入（NaN/0/负/无穷）落基准钳制值，不许把字号打飞
+    assert_eq!(pinch_cell_size(CELL_W, CELL_H, f64::NAN), (CELL_W, CELL_H));
+    assert_eq!(pinch_cell_size(CELL_W, CELL_H, 0.0), (CELL_W, CELL_H));
+    assert_eq!(pinch_cell_size(CELL_W, CELL_H, -1.0), (CELL_W, CELL_H));
+    assert_eq!(
+        pinch_cell_size(CELL_W, CELL_H, f64::INFINITY),
+        (CELL_W, CELL_H)
+    );
+}
+
+/// 数一格内的非背景墨像素（set_cell_size 重算字号的判卷尺：
+/// 格放大 → 字号重算 → 同字符墨变多）
+fn cell_ink_count(tv: &mut TermView, buf_w: u32, buf_h: u32, col: u32, row: u32) -> usize {
+    let (cw, ch) = tv.cell_size();
+    let mut buf = vec![0u32; (buf_w * buf_h) as usize];
+    tv.render_into(&mut buf, buf_w, buf_h);
+    let (x0, y0) = cell_origin(col, row, cw, ch);
+    let (x0, y0) = (x0 + termview::MARGIN_X, y0 + termview::margin_top(ch));
+    let mut n = 0;
+    for y in y0..y0 + ch {
+        for x in x0..x0 + cw {
+            if buf[(y * buf_w + x) as usize] != DEFAULT_BG {
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
+#[test]
+fn spec_缩放_set_cell_size重算字几何() {
+    let mut tv = host_termview(10, 3);
+    tv.feed(b"M");
+    let big_buf = |cw: u32, ch: u32| {
+        (
+            2 * termview::MARGIN_X + 10 * cw,
+            termview::margin_top(ch) + 3 * ch + termview::MARGIN_Y,
+        )
+    };
+    // 基准 18x36 的墨量
+    let (bw, bh) = big_buf(CELL_W, CELL_H);
+    let ink_base = cell_ink_count(&mut tv, bw, bh, 0, 0);
+    // 放大到 27x54：cell_size 跟上、墨量必须显著变多（font_px 真重算——
+    // 变异抽检：set_cell_size 只改 cell_w/h 不重算 font_px 必须红）
+    tv.set_cell_size(27, 54);
+    assert_eq!(tv.cell_size(), (27, 54));
+    let (bw, bh) = big_buf(27, 54);
+    let ink_big = cell_ink_count(&mut tv, bw, bh, 0, 0);
+    assert!(
+        ink_big > ink_base * 2,
+        "格放大 1.5 倍墨量必须显著增长（基准 {ink_base} → 放大 {ink_big}）"
+    );
+    // 0 维钳 1 不 panic（resize_cells 同款先例）
+    tv.set_cell_size(0, 0);
+    assert_eq!(tv.cell_size(), (1, 1));
+    let mut tiny = vec![0u32; 64];
+    tv.render_into(&mut tiny, 8, 8);
+    // 设回不 panic + resize 跟随不 panic（android_app 链路：set_cell_size
+    // 后必跟 apply_window_size → resize_cells）
+    tv.set_cell_size(CELL_W, CELL_H);
+    tv.resize_cells(20, 5);
+    tv.resize_cells(0, 0);
+    tv.render_into(&mut tiny, 8, 8);
 }

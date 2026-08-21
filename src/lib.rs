@@ -23,4 +23,6 @@ pub mod termview;
 #[cfg(target_os = "android")]
 pub mod android_app;
 #[cfg(target_os = "android")]
+pub mod clipboard;
+#[cfg(target_os = "android")]
 pub mod ime_bridge;

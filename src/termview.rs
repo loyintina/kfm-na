@@ -18,14 +18,16 @@
 
 use alacritty_terminal::event::VoidListener;
 use alacritty_terminal::grid::{Dimensions, Scroll};
+use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Processor};
 
-/// 单元格像素尺寸（尖刺期常量，字体大小可配化是后话）
-/// 2026-08-13 实拍「字太小」：12x24 → 15x30（1080 屏 72 列，等宽字体可读性下限）
-pub const CELL_W: u32 = 15;
-pub const CELL_H: u32 = 30;
+/// 单元格像素尺寸基准（捏合缩放的 1.0 锚点 + 无持久化时的冷启动默认）。
+/// 2026-08-13 实拍「字太小」：12x24 → 15x30；2026-08-21 用户两次抱怨
+/// 「太小」：15x30 → 18x36（1080 屏净宽 1056px ≈ 58 列）
+pub const CELL_W: u32 = 18;
+pub const CELL_H: u32 = 36;
 
 /// 画面边距（BAR-005）：网格不贴边，边缘字符不再被屏幕圆角/曲面切半。
 /// 纯黑带，不画框——框是装饰，等中央页面定稿再议
@@ -33,8 +35,40 @@ pub const MARGIN_X: u32 = 12;
 pub const MARGIN_Y: u32 = 12;
 
 /// 顶边距（BAR-010）：圆角屏吃掉首行首字符（2026-08-13 实拍）——
-/// 顶部在常规边距之上再下探一整行
+/// 顶部在常规边距之上再下探一整行。这是基准格高（CELL_H）下的常量值；
+/// 格高随捏合缩放变后必须走 margin_top(cell_h) 动态版
 pub const MARGIN_TOP: u32 = MARGIN_Y + CELL_H;
+
+/// 顶边距动态版（A 档考题钉死）：跟随当前格高——缩放任一档下顶带都是
+/// 「常规边距 + 一整行」，圆角屏语义不随缩放漂移
+pub const fn margin_top(cell_h: u32) -> u32 {
+    MARGIN_Y + cell_h
+}
+
+/// 捏合缩放格尺寸钳制区间（A 档考题钉死）：10x20 = 还能认出字的下限，
+/// 45x90 = 一屏 24 列 26 行的上限（再大打不了字）
+pub const CELL_W_MIN: u32 = 10;
+pub const CELL_W_MAX: u32 = 45;
+pub const CELL_H_MIN: u32 = 20;
+pub const CELL_H_MAX: u32 = 90;
+
+/// 捏合比例 → 格尺寸（A 档考题钉死）：基准 × 比例四舍五入取整，钳到
+/// 可读区间。非法比例（NaN/0/负/无穷）不落钳制结果而落基准本身——
+/// 坏输入不许把字号打飞
+pub fn pinch_cell_size(base_w: u32, base_h: u32, ratio: f64) -> (u32, u32) {
+    if !ratio.is_finite() || ratio <= 0.0 {
+        return (
+            base_w.clamp(CELL_W_MIN, CELL_W_MAX),
+            base_h.clamp(CELL_H_MIN, CELL_H_MAX),
+        );
+    }
+    let w = (f64::from(base_w) * ratio).round() as u32;
+    let h = (f64::from(base_h) * ratio).round() as u32;
+    (
+        w.clamp(CELL_W_MIN, CELL_W_MAX),
+        h.clamp(CELL_H_MIN, CELL_H_MAX),
+    )
+}
 
 /// 按字形覆盖挑备用字体（A 档考题钉死）：主字体缺该字（glyph_index=0）
 /// 且备用字体有才换。字形存在性问 lookup_glyph_index——光栅有没有墨
@@ -190,6 +224,46 @@ pub fn cell_origin(col: u32, row: u32, cell_w: u32, cell_h: u32) -> (u32, u32) {
     (col * cell_w, row * cell_h)
 }
 
+/// 坐标换算（A 档考题钉死）：帧缓冲像素 → 屏内格 (col, row)。
+/// 渲染的反向：减边距 MARGIN_X 与顶带 margin_top(cell_h)（格高随缩放变，
+/// 判定尺必须与 render_into 同一把）；越界（边距带内/网格外）钳到网格边缘
+pub fn px_to_cell(x: f64, y: f64, cols: u32, rows: u32, cell_w: u32, cell_h: u32) -> (u32, u32) {
+    let col = ((x - f64::from(MARGIN_X)) / f64::from(cell_w.max(1))).floor();
+    let row = ((y - f64::from(margin_top(cell_h))) / f64::from(cell_h.max(1))).floor();
+    let max_col = f64::from(cols.max(1)) - 1.0;
+    let max_row = f64::from(rows.max(1)) - 1.0;
+    (
+        col.clamp(0.0, max_col) as u32,
+        row.clamp(0.0, max_row) as u32,
+    )
+}
+
+/// 词选择字符集（A 档考题钉死）：字母数字 + 常见路径字符 `_-./:~`
+/// 连续段算一个词——长按选词就是要把路径/URL/选项串整段拎出来
+pub fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | '/' | ':' | '~')
+}
+
+/// 选择区（网格坐标 (Line, Column)：行号含历史负行——滚进历史后选择
+/// 跟着内容走，与 render_into 的 display_iter 行号同坐标系）。
+/// anchor = 长按落点词首，cursor = 拖动当前点；归一化在判定/提取时做
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Selection {
+    pub anchor: (i32, u32),
+    pub cursor: (i32, u32),
+}
+
+/// 选择范围判定（A 档考题钉死）：anchor/cursor 归一化（反向拖也算），
+/// 含端点的闭区间按 (行, 列) 字典序
+pub fn in_selection(anchor: (i32, u32), cursor: (i32, u32), line: i32, col: u32) -> bool {
+    let (s, e) = if anchor <= cursor {
+        (anchor, cursor)
+    } else {
+        (cursor, anchor)
+    };
+    (line, col) >= s && (line, col) <= e
+}
+
 /// xterm 256 色索引 → XRGB（A 档考题钉死边界）：
 /// 0-15 走 ANSI 表；16-231 是 6×6×6 色立方；232-255 是 24 级灰阶。
 pub fn indexed_color(n: u8) -> u32 {
@@ -318,6 +392,9 @@ pub struct TermView {
     font_px: f32,
     /// 基线在格内的纵向偏移（格顶向下，px）——BAR-001 基线对齐用
     baseline_off: f32,
+    /// 长按选择区（网格坐标，含历史负行）：Some = 选择模式激活，
+    /// 渲染高亮 + 单击复制；None = 无选区
+    selection: Option<Selection>,
 }
 
 impl TermView {
@@ -358,6 +435,29 @@ impl TermView {
             cell_h,
             font_px,
             baseline_off,
+            selection: None,
+        }
+    }
+
+    /// 运行期改格尺寸（双指捏合缩放，2026-08-21）：重算光栅字号/基线/
+    /// CJK 备用三件套（逻辑同 new 的 fit_font_px/fit_cjk_px）。网格重排
+    /// 不在此做——调用方随后 resize_cells（alacritty resize 自带 reflow）。
+    /// 0 维钳 1，同 new；尺寸没变则不动（防抖链最后一环）
+    pub fn set_cell_size(&mut self, cell_w: u32, cell_h: u32) {
+        let cell_w = cell_w.max(1);
+        let cell_h = cell_h.max(1);
+        if (cell_w, cell_h) == (self.cell_w, self.cell_h) {
+            return;
+        }
+        self.cell_w = cell_w;
+        self.cell_h = cell_h;
+        let (px, bo) = fit_font_px(&self.font, cell_w, cell_h);
+        self.font_px = px;
+        self.baseline_off = bo;
+        if let Some(cjk) = &mut self.cjk {
+            let (px, bo) = fit_cjk_px(&cjk.font, cell_w * 2, cell_h);
+            cjk.px = px;
+            cjk.baseline_off = bo;
         }
     }
 
@@ -422,6 +522,117 @@ impl TermView {
         (self.cell_w, self.cell_h)
     }
 
+    // ---- 长按选择（2026-08-21，状态机/坐标约定见 docs/active/壳层交互.md） ----
+
+    /// 选择模式激活中（有选区）——android_app 据此改路由：拖动 = 扩选，
+    /// 单击 = 复制清选，点按唤键盘让路
+    pub fn selection_active(&self) -> bool {
+        self.selection.is_some()
+    }
+
+    /// 像素 → 网格点 (Line 含历史负行, Column)：屏格走 px_to_cell
+    /// （边距/顶带同 render_into 一把尺），网格行 = 屏行 - display_offset
+    /// （render_into 屏行 = 网格行 + display_offset 的逆运算）
+    fn grid_point_at(&self, x: f64, y: f64) -> (i32, u32) {
+        let grid = self.term.grid();
+        let (col, row) = px_to_cell(
+            x,
+            y,
+            grid.columns() as u32,
+            grid.screen_lines() as u32,
+            self.cell_w,
+            self.cell_h,
+        );
+        let line = row as i32 - grid.display_offset() as i32;
+        (line, col)
+    }
+
+    /// 长按选词：落点所在词（is_word_char 连续段）整段选中；落点非词
+    /// 字符（空白/标点）只选该格。滚进历史后选的就是历史行（坐标含
+    /// display_offset，见 grid_point_at）
+    pub fn select_word_at(&mut self, x: f64, y: f64) {
+        let (line, col) = self.grid_point_at(x, y);
+        let cols = self.term.grid().columns() as u32;
+        let at = |c: u32| self.term.grid()[Line(line)][Column(c as usize)].c;
+        let (mut start, mut end) = (col, col);
+        if is_word_char(at(col)) {
+            while start > 0 && is_word_char(at(start - 1)) {
+                start -= 1;
+            }
+            while end + 1 < cols && is_word_char(at(end + 1)) {
+                end += 1;
+            }
+        }
+        self.selection = Some(Selection {
+            anchor: (line, start),
+            cursor: (line, end),
+        });
+    }
+
+    /// 选择模式拖动扩选：cursor 端跟手指走，跨行/反向/历史区同尺
+    /// （归一化在 in_selection/selected_text 做）。反向拖过 anchor 时
+    /// 固定端翻转到原词另一端——整词保持在选区内（选词后上拖不收掉半词）
+    pub fn extend_selection(&mut self, x: f64, y: f64) {
+        if self.selection.is_none() {
+            return;
+        }
+        let point = self.grid_point_at(x, y);
+        if let Some(sel) = &mut self.selection {
+            if (point < sel.anchor && sel.cursor >= sel.anchor)
+                || (point > sel.anchor && sel.cursor < sel.anchor)
+            {
+                sel.anchor = sel.cursor;
+            }
+            sel.cursor = point;
+        }
+    }
+
+    /// 清高亮（复制后/会话重开等）
+    pub fn clear_selection(&mut self) {
+        self.selection = None;
+    }
+
+    /// 提取选中文字（复制用）：归一化区间逐行收 cell.c——tab 本体在格内
+    /// 原样还原（BAR-015：put_tab 写的就是 '\t'）；宽字符占位格跳过；
+    /// zerowidth 组合符带上；行尾空白 trim，行间补 \n。无选区 → None
+    pub fn selected_text(&self) -> Option<String> {
+        let sel = self.selection?;
+        let (s, e) = if sel.anchor <= sel.cursor {
+            (sel.anchor, sel.cursor)
+        } else {
+            (sel.cursor, sel.anchor)
+        };
+        let grid = self.term.grid();
+        let last_col = grid.columns() as u32 - 1;
+        // 防御钳制：选区存活期间滚屏/新输出可能让行号出界
+        let lo = -(grid.history_size() as i32);
+        let hi = grid.screen_lines() as i32 - 1;
+        let last_line = e.0.min(hi);
+        let mut out = String::new();
+        for l in s.0.max(lo)..=last_line {
+            let from = if l == s.0 { s.1 } else { 0 };
+            let to = if l == e.0 { e.1 } else { last_col };
+            let mut line = String::new();
+            for c in from..=to.min(last_col) {
+                let cell = &grid[Line(l)][Column(c as usize)];
+                if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                    continue;
+                }
+                line.push(cell.c);
+                if let Some(zw) = cell.zerowidth() {
+                    for &z in zw {
+                        line.push(z);
+                    }
+                }
+            }
+            out.push_str(line.trim_end());
+            if l < last_line {
+                out.push('\n');
+            }
+        }
+        Some(out)
+    }
+
     /// 把当前可见网格渲染进 XRGB 帧缓冲（黑底，满幅重绘）。
     /// buf 尺寸必须与 buf_w*buf_h 一致（调用方 softbuffer 保证；不一致只画放得下的部分）。
     pub fn render_into(&mut self, buf: &mut [u32], buf_w: u32, buf_h: u32) {
@@ -436,6 +647,7 @@ impl TermView {
         };
         let content = self.term.renderable_content();
         let cursor = content.cursor;
+        let selection = self.selection; // Copy 出来，与 content 的 term 借用拆开
         // 屏行 = 网格行 + 显示偏移（BAR-016）：滚进历史后 alacritty 给的行号
         // 是负的（Line(-offset)），跳过或直接用绝对行号都会让内容不随偏移
         // 移动、每滚一行底部黑一行（实拍「从下到上一行行消失」）
@@ -452,6 +664,17 @@ impl TermView {
             if indexed.cell.flags.contains(Flags::INVERSE) {
                 std::mem::swap(&mut fg, &mut bg);
             }
+            // 长按选择高亮：选中格盖选择底色（与网格行同坐标系，滚屏自动跟随）
+            if let Some(sel) = selection
+                && in_selection(
+                    sel.anchor,
+                    sel.cursor,
+                    indexed.point.line.0,
+                    indexed.point.column.0 as u32,
+                )
+            {
+                bg = SELECT_BG;
+            }
             let is_cursor = cursor.shape != CursorShape::Hidden && indexed.point == cursor.point;
             if is_cursor {
                 std::mem::swap(&mut fg, &mut bg);
@@ -463,8 +686,9 @@ impl TermView {
                 self.cell_h,
             );
             // BAR-005：格原点加边距，网格不贴边（边距带留黑）；
-            // BAR-010：顶部走 MARGIN_TOP（圆角屏下探一整行）
-            let (px, py) = (px + MARGIN_X, py + MARGIN_TOP);
+            // BAR-010：顶部走动态顶带 margin_top（圆角屏下探一整行，
+            // 格高随捏合缩放变，顶带跟格高走）
+            let (px, py) = (px + MARGIN_X, py + margin_top(self.cell_h));
             if px >= buf_w || py >= buf_h {
                 continue; // 窗口比网格小（resize 途中）：裁掉放不下的格
             }
@@ -662,6 +886,9 @@ pub const KEYBAR_KEY_BG: u32 = 0x0023_272E;
 pub const KEYBAR_MOD_ON: u32 = 0x003E_6FB4;
 pub const KEYBAR_LABEL: u32 = 0x00E8_EAED;
 
+/// 长按选择高亮底色（与修饰键粘滞高亮同色系——「这块被选中」的统一视觉语言）
+pub const SELECT_BG: u32 = KEYBAR_MOD_ON;
+
 /// 帧缓冲视图：把 buf + 尺寸打包，免得每个画图函数都拖一溜参数（clippy 红线）
 struct Frame<'a> {
     buf: &'a mut [u32],
@@ -770,6 +997,8 @@ pub trait TermEmu: Send {
     fn feed(&mut self, bytes: &[u8]);
     fn resize_cells(&mut self, cols: u32, rows: u32);
     fn cell_size(&self) -> (u32, u32);
+    /// 运行期改格尺寸（捏合缩放，android_app 双指手势调用方）
+    fn set_cell_size(&mut self, cell_w: u32, cell_h: u32);
     fn render_into(&mut self, buf: &mut [u32], w: u32, h: u32);
     fn render_keybar(&self, buf: &mut [u32], w: u32, h: u32, ime_bottom: u32, mods: u8);
     fn take_tofu_chars(&self) -> Vec<char>;
@@ -778,6 +1007,12 @@ pub trait TermEmu: Send {
     fn mouse_report_active(&self) -> bool;
     fn app_cursor_mode(&self) -> bool;
     fn font_probe(&self, c: char) -> (usize, usize, usize);
+    /// 长按选择面（android_app 触摸状态机调用方）
+    fn selection_active(&self) -> bool;
+    fn select_word_at(&mut self, x: f64, y: f64);
+    fn extend_selection(&mut self, x: f64, y: f64);
+    fn clear_selection(&mut self);
+    fn selected_text(&self) -> Option<String>;
 }
 
 impl TermEmu for TermView {
@@ -789,6 +1024,9 @@ impl TermEmu for TermView {
     }
     fn cell_size(&self) -> (u32, u32) {
         TermView::cell_size(self)
+    }
+    fn set_cell_size(&mut self, cell_w: u32, cell_h: u32) {
+        TermView::set_cell_size(self, cell_w, cell_h)
     }
     fn render_into(&mut self, buf: &mut [u32], w: u32, h: u32) {
         TermView::render_into(self, buf, w, h)
@@ -813,6 +1051,21 @@ impl TermEmu for TermView {
     }
     fn font_probe(&self, c: char) -> (usize, usize, usize) {
         TermView::font_probe(self, c)
+    }
+    fn selection_active(&self) -> bool {
+        TermView::selection_active(self)
+    }
+    fn select_word_at(&mut self, x: f64, y: f64) {
+        TermView::select_word_at(self, x, y)
+    }
+    fn extend_selection(&mut self, x: f64, y: f64) {
+        TermView::extend_selection(self, x, y)
+    }
+    fn clear_selection(&mut self) {
+        TermView::clear_selection(self)
+    }
+    fn selected_text(&self) -> Option<String> {
+        TermView::selected_text(self)
     }
 }
 

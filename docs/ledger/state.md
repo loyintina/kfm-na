@@ -3,8 +3,16 @@
 > 纪律：**每个里程碑必更新此页**。接手者冷启动顺序：本页 → bugs.md →
 > AGENTS.md → chain.sh 跑一遍。本页只写「现在进行时」，历史功过在 bugs.md。
 
-## 当前位置（2026-08-20)
+## 当前位置（2026-08-21)
 
+- **壳层交互三件套落地（本提交）**：①默认字号 15x30 → 18x36（用户两次
+  抱怨「太小」）；②双指捏合缩放（touch.id 双指跟踪，pinch_cell_size
+  钳制纯函数，files/kfm-zoom 持久化 + `[zoom]` 上报，顶带动态化
+  margin_top 跟格高走）；③长按选择 + 复制（500ms 计时走 RedrawRequested
+  忙轮询泵，词选择/扩选/网格坐标选区/SELECT_BG 高亮，JNI 剪贴板 +
+  Toast 薄壳 src/clipboard.rs）。**行为规格页 = docs/active/壳层交互.md**
+  （状态机定义 + 坐标换算约定，交接面）。考题 16 道新（select_spec 13 +
+  termview_spec 缩放 3），变异抽检过（摘 clamp/恒定顶带均红）。
 - **阶段 2(Android 终端可用化）收尾完成**。启动慢归因定案
   (BAR-020~023 连环，见 bugs.md)；BAR-023 提示行实拍判卷后取消
   (c73bf61),2.1s 首连唤醒的结构性答案移交 L1。
@@ -47,11 +55,12 @@
 | ~~exec 探针第二轮：targetSdk 28~~ | kfm-na-16777514.apk | **已判：放行 ✅ exit=42**——域降级生效，L3 复活（白送 legacy 共享存储访问） |
 | ~~BAR-024 窗口被压~~ | kfm-na-16777515.apk | **已判卷：满屏回归正常**（targetSdk 28 副作用已修） |
 | L1 双会话 + SessionRouter | kfm-na-16777510.apk 起 | ①本地提示符秒出（首轮已过：+118ms `:/ $ `）②启动落家 `/storage/emulated/0/Android/data/dev.kfm.na/files` ③`ls`/`echo` 正常 ④**Ctrl-] 切换实拍未回**——切远程再切回，历史还在，横幅出现，输入路由跟着翻面 |
+| 壳层三件套（本提交） | 本次包 | ①默认字号 18x36 观感 ②双指捏合：字号实时变、列数跟着变、松手后 `[zoom]` 持久化行 ③杀进程冷启动：字号保持 ④长按键词 500ms 高亮整词 ⑤拖动扩选跨行 ⑥单击任意处：Toast「已复制 N 字符」+ 粘贴他处验证 ⑦keybar 行触摸行为不变 ⑧捏合后顶带仍是一整行（首行不被圆角吃） |
 
 ## 欠账
 
-- 双指缩放调字号（用户明确要的；要动 CELL_W/CELL_H 常量化几何 +
-  TermView set_cell_size 重构路径，壳层活，不挡主线）
+- ~~双指缩放调字号~~（2026-08-21 已落地：18x36 基准 + 捏合 + 持久化 +
+  长按选择复制，规格 docs/active/壳层交互.md，待实拍判卷）
 - 阶段 2 落地通报（含 BAR-020/021/022/023）投信箱，模板参考
   /root/kfmv4/docs/ledger/agent-inbox/kfm-na-cordis-rs-stage1-landing.md
 - L3 路线规划：fork termux-packages 换前缀（TERMUX_APP_PACKAGE=
