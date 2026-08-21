@@ -869,18 +869,22 @@ impl App {
 
     /// 渲染一帧：终端模式画网格，非终端模式清紫屏
     fn draw_frame(&mut self) {
-        // 首帧分段探针(2026-08-21 归因:启动完成 +154ms → 首帧 +2339ms,
-        // 2.2s 黑箱在 buffer_mut/render_into/present 三者之一)
-        static FIRST_FRAME_PROBE: std::sync::atomic::AtomicBool =
-            std::sync::atomic::AtomicBool::new(true);
-        let probing = FIRST_FRAME_PROBE.swap(false, std::sync::atomic::Ordering::Relaxed);
+        // 前 3 帧分段探针(2026-08-21 归因:第二帧 draw_frame 内堵 2.5s——
+        // 首帧 buffer_mut/present 都毫秒级,堵点在第二帧的哪一句要钉死)
+        static FRAME_PROBE_N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let frame_n = FRAME_PROBE_N.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        let probing = frame_n <= 3;
         let t_frame = std::time::Instant::now();
         let Some(g) = &mut self.gfx else { return };
         let mut buf = g.surface.buffer_mut().expect("取帧缓冲失败");
         if probing {
             crate::report::report(
                 "boot",
-                &format!("首帧分段: buffer_mut={}ms", t_frame.elapsed().as_millis()),
+                &format!(
+                    "帧#{frame_n} 分段: buffer_mut={}ms +{}ms",
+                    t_frame.elapsed().as_millis(),
+                    boot_ms()
+                ),
             );
         }
         let t_render = std::time::Instant::now();
@@ -916,7 +920,10 @@ impl App {
                 if probing {
                     crate::report::report(
                         "boot",
-                        &format!("首帧分段: render={}ms", t_render.elapsed().as_millis()),
+                        &format!(
+                            "帧#{frame_n} 分段: render={}ms",
+                            t_render.elapsed().as_millis()
+                        ),
                     );
                 }
                 // 帧缓冲探针：首个 output 后的那一帧，数非背景像素传回——
@@ -955,7 +962,7 @@ impl App {
             crate::report::report(
                 "boot",
                 &format!(
-                    "首帧分段: present={}ms 全帧合计={}ms +{}ms",
+                    "帧#{frame_n} 分段: present={}ms 全帧合计={}ms +{}ms",
                     t_present.elapsed().as_millis(),
                     t_frame.elapsed().as_millis(),
                     boot_ms()
