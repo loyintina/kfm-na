@@ -14,7 +14,12 @@ cd "$(dirname "$0")/.." || exit 1
 # （nice 只在抢时生效）。顶部自重启一次，全步骤继承，不逐条包。
 # 起因：多 agent 同链撞车时交互会话被编译拖卡（2026-08-21 实踩）
 if [ -z "$KFM_CHAIN_NICED" ]; then
-    if command -v ionice >/dev/null 2>&1; then
+    # 2026-08-21 增：整链同时进独立 cgroup「kfm-builds」（内存隔离，评审代接）——
+    # 编译尖峰只在自己桶里互杀，不再与三线 agent 共享内存账（OOM 连坐可防）。
+    # helper 在 kfmv4 侧（共享本机构建基础设施）；缺失/不可写则回退纯 nice。
+    if [ -x /root/kfmv4/scripts/build-enter-cgroup.sh ] && [ -w /sys/fs/cgroup/agent.slice ]; then
+        KFM_CHAIN_NICED=1 exec bash /root/kfmv4/scripts/build-enter-cgroup.sh nice -n 10 ionice -c2 -n7 bash "$0" "$@"
+    elif command -v ionice >/dev/null 2>&1; then
         KFM_CHAIN_NICED=1 exec nice -n 10 ionice -c2 -n7 bash "$0" "$@"
     else
         KFM_CHAIN_NICED=1 exec nice -n 10 bash "$0" "$@"
