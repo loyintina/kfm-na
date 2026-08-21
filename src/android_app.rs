@@ -990,6 +990,12 @@ impl ApplicationHandler for App {
         }
         crate::report::report("boot", &format!("启动完成 +{}ms", boot_ms()));
         log::info!("KFM-NA 壳启动完成");
+        // 首帧快路(2026-08-21 探针破案):首笔 RedrawRequested 实测 +2347ms
+        // 才被 Android 发出来(启动动画/可见性门控),而绘制本身仅 ~20ms。
+        // 表面已建成、终端已就绪——主动画第一帧,不等系统发牌。
+        if TERMINAL_MODE {
+            self.draw_frame();
+        }
     }
 
     fn window_event(&mut self, el: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
