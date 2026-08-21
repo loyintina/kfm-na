@@ -966,6 +966,15 @@ impl App {
 }
 
 impl ApplicationHandler for App {
+    /// 唤醒锤落点探针:user event 到底何时被循环消化(blackout 归因:
+    /// 若 +2.5s 才到 = 主线程被框架启动工作堵死,锤叫不醒;
+    /// 若早就到 = 锤有效,病灶在别处)
+    fn user_event(&mut self, _el: &ActiveEventLoop, _event: ()) {
+        static FIRST_UE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+        if FIRST_UE.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            crate::report::report("boot", &format!("首笔 user event 到达 +{}ms", boot_ms()));
+        }
+    }
     fn new_events(&mut self, _el: &ActiveEventLoop, cause: winit::event::StartCause) {
         if !self.reported_first_events {
             self.reported_first_events = true;
@@ -1002,6 +1011,7 @@ impl ApplicationHandler for App {
         if TERMINAL_MODE {
             self.draw_frame();
         }
+        crate::report::report("boot", &format!("resumed 返回 +{}ms", boot_ms()));
     }
 
     fn window_event(&mut self, el: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
@@ -1473,9 +1483,19 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
     // about_to_wait(抽事件/补画脏帧);首笔 Redraw 到达即收锤
     let wake_proxy = event_loop.create_proxy();
     std::thread::spawn(move || {
+        let mut first = true;
         while !FIRST_REDRAW_SEEN.load(std::sync::atomic::Ordering::Relaxed) {
-            if wake_proxy.send_event(()).is_err() {
-                break; // 循环已死,收锤
+            match wake_proxy.send_event(()) {
+                Ok(()) => {
+                    if first {
+                        first = false;
+                        crate::report::report("boot", &format!("唤醒锤首发成功 +{}ms", boot_ms()));
+                    }
+                }
+                Err(e) => {
+                    crate::report::report("boot", &format!("唤醒锤断: {e:?}"));
+                    break; // 循环已死,收锤
+                }
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
