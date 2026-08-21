@@ -78,8 +78,9 @@
 
 - ~~双指缩放调字号~~（2026-08-21 已落地：18x36 基准 + 捏合 + 持久化 +
   长按选择复制，规格 docs/active/壳层交互.md，待实拍判卷）
-- 阶段 2 落地通报（含 BAR-020/021/022/023）投信箱，模板参考
-  /root/kfmv4/docs/ledger/agent-inbox/kfm-na-cordis-rs-stage1-landing.md
+- ~~阶段 2 落地通报~~(2026-08-21 已投:
+  /root/kfmv4/docs/ledger/agent-inbox/kfm-na-cordis-rs-stage2-landing.md,
+  落地 4558f33 对账——30 题全绿/三插件线程排查无风险面/实拍回归过)
 - ~~L3 路线规划~~(2026-08-21 已闭环，见「当前位置」L3 条与
   l3-bootstrap.md;apt 自建源换 keyring 路线留档 l3-bootstrap.md §6,
   真需要时再启)
@@ -101,7 +102,10 @@
   receive.denyCurrentBranch=updateInstead + bootstrap 资产已同步到
   手机 ~/kfm-na-toolchain/bootstrap-aarch64.zip。**bootstrap 重编后要
   重同步这个 zip**,否则手机编出的是裸包(壳会回落系统 sh)。
-- versionCode 双机各自独立计数(package-apk.sh 注释),不回同步。
+- versionCode 用 epoch 秒（package-apk.sh,2026-08-21 改）——跨机天然
+  单调，双机都打包也不会降级拒装；同秒连打/时钟回拨取「上次+1」保底。
+  （旧方案「双机各自独立计数」已失信废除：手机 16777497 < 已装 16777519
+  被拒装，实踩。）
 
 ## 日志判读手册（field-reports.log，踩坑攒的）
 
