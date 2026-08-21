@@ -55,4 +55,20 @@ impl SessionRouter {
         self.standby = Some(old);
         Some((old_name, new_name))
     }
+
+    /// 换心脏（断线重连，2026-08-21）：会话线程死了旧 sender 是僵尸
+    /// （出向全被静默吞，conn.rs 转发循环注释有实锤）——活跃槽 sender
+    /// 换新，槽位名不动
+    pub fn replace_active(&mut self, tx: Sender<TermCmd>) {
+        self.active.0 = tx;
+    }
+
+    /// 待机槽同款换心脏；无待机 = Err（装配错误不许静默——换了也没人收）
+    pub fn replace_standby(&mut self, tx: Sender<TermCmd>) -> Result<(), String> {
+        let Some((slot, _)) = &mut self.standby else {
+            return Err("无待机槽可换心脏".into());
+        };
+        *slot = tx;
+        Ok(())
+    }
 }

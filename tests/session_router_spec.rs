@@ -81,3 +81,48 @@ fn spec_l1_路由_待机槽拒绝覆盖() {
     assert!(r.add_standby(tx_c, "remote2").is_err());
     assert!(r.has_standby());
 }
+
+/// 考题 5e:换心脏（断线重连）——replace_active 后输入进新通道,
+/// 旧通道（僵尸会话）一粒不进;槽位名不动
+#[test]
+fn spec_l1_路由_活跃换心脏() {
+    let (tx_a, rx_a) = fake_pair();
+    let (tx_b, rx_b) = fake_pair();
+    let mut r = SessionRouter::new(tx_a, "local");
+    r.replace_active(tx_b);
+    r.send(TermCmd::Input("ls\n".into()));
+    assert!(matches!(
+        rx_b.recv_timeout(std::time::Duration::from_millis(200)),
+        Ok(TermCmd::Input(s)) if s == "ls\n"
+    ));
+    assert!(rx_a.try_recv().is_err(), "重连后旧通道不该再收输入");
+    assert_eq!(r.active_name(), "local", "换心脏不许换槽位名");
+}
+
+/// 考题 5f:待机换心脏——replace_standby 后切换,输入进新通道
+#[test]
+fn spec_l1_路由_待机换心脏() {
+    let (tx_a, rx_a) = fake_pair();
+    let (tx_b, _rx_b) = fake_pair();
+    let (tx_c, rx_c) = fake_pair();
+    let mut r = SessionRouter::new(tx_a, "local");
+    r.add_standby(tx_b, "remote").unwrap();
+    r.replace_standby(tx_c).unwrap();
+    let (old, new) = r.switch().expect("有待机必须可切");
+    assert_eq!((old, new), ("local", "remote"));
+    r.send(TermCmd::Input("tmux attach\n".into()));
+    assert!(matches!(
+        rx_c.recv_timeout(std::time::Duration::from_millis(200)),
+        Ok(TermCmd::Input(s)) if s == "tmux attach\n"
+    ));
+    assert!(rx_a.try_recv().is_err(), "切换后旧活跃方不该再收输入");
+}
+
+/// 考题 5g:无待机槽 replace_standby = Err(装配错误不许静默)
+#[test]
+fn spec_l1_路由_无待机换心脏拒绝() {
+    let (tx_a, _rx_a) = fake_pair();
+    let (tx_b, _rx_b) = fake_pair();
+    let mut r = SessionRouter::new(tx_a, "local");
+    assert!(r.replace_standby(tx_b).is_err(), "无待机槽换心脏必须报错");
+}

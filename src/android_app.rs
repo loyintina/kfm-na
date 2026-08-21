@@ -72,6 +72,18 @@ struct Press {
     long_fired: bool,
 }
 
+/// 会话健康牌（断线重连 2026-08-21，按名字记账——槽位随切换翻面,
+/// 死活跟名字走）：dead = Failed/Exited 钉死、Opened 复活;
+/// retried = 本次死亡剧集已自动重连过一次（防断网期重连风暴烧钱:
+/// 第一次自动,再死就得用户敲键/切换触发）;connecting = 重连在途
+/// （Opened/再死才清——在途再触发 = 重孵,在途会话的输入缓存通道被丢）
+#[derive(Clone, Copy, Debug, Default)]
+struct SessHealth {
+    dead: bool,
+    retried: bool,
+    connecting: bool,
+}
+
 struct Gfx {
     _context: SoftContext,
     surface: SoftSurface,
@@ -108,6 +120,12 @@ struct App {
     dirty: bool,
     /// 会话终了（exited/failed）后定格最后一屏，出向不再发
     session_over: bool,
+    /// 会话健康牌 ×2（断线重连）：字段语义见 SessHealth
+    health_local: SessHealth,
+    health_remote: SessHealth,
+    /// 待机输出缓存（每圈抽干待机 rx 攒的 Output;切换时补屏,待机死亡
+    /// 换新通道时清掉——旧 shell 遗物不喂新会话）
+    standby_buf: std::collections::VecDeque<SessionEvent>,
     /// 真实软键盘底部 inset（px，JNI 轮询得来，BAR-006）。0 = 未弹/未知。
     /// 快捷键行的让位是 Rust 常量（keybar::HEIGHT_PX），不进本字段
     ime_bottom_px: u32,
@@ -260,6 +278,10 @@ impl App {
         // BAR-004 后台往返重开会话的路径：旧会话的死亡标记必须清掉，
         // 否则键盘/IME 输入被 session_over 挡死，新会话成了哑巴
         self.session_over = false;
+        // 全量重建 = 生死簿重开（断线重连的健康牌/待机缓存一并归零）
+        self.health_local = SessHealth::default();
+        self.health_remote = SessHealth::default();
+        self.standby_buf.clear();
 
         // exec 探针(L2/L3 总开关,exec_probe.rs):私有目录 exec 放行与否
         // 决定 busybox/apt 生态路线。冷启动一次,结果走飞鸽传书
@@ -457,8 +479,9 @@ impl App {
 
     /// 会话切换（L1）：Ctrl-] 触达——router 换出向活跃槽，壳同步换入向
     /// rx（同一方法内完成），给新活跃方补发当前网格尺寸，横幅直接喂进
-    /// 终端网格（不走对端）。待机期积压的事件由下一圈
-    /// drain_terminal_events 一口气排干补屏
+    /// 终端网格（不走对端）。待机期缓存的输出先补屏（standby_buf，
+    /// 待机 rx 每圈已被 drain_terminal_events 抽干）。切入死会话 →
+    /// 立即重连（用户在场，断线重连 2026-08-21）
     fn switch_session(&mut self) {
         let Some(router) = &mut self.router else {
             return;
@@ -472,6 +495,16 @@ impl App {
         };
         self.standby = Some((rx_a, name_a));
         self.event_rx = Some(rx_s);
+        // 待机期缓存的输出补屏：死会话的遗屏也喂——用户看得到「死前最后
+        // 画面」,比重连后的白屏亲切;活的会话更必须(输出连续)
+        let buf = std::mem::take(&mut self.standby_buf);
+        for ev in buf {
+            if let SessionEvent::Output { data } = ev
+                && let Some(t) = &mut self.term
+            {
+                t.feed(data.as_bytes());
+            }
+        }
         let (cols, rows) = self.last_grid;
         router.send(TermCmd::Resize { cols, rows });
         if let Some(t) = &mut self.term {
@@ -479,71 +512,225 @@ impl App {
                 format!("\r\n\x1b[36m[kfm-na → {name_s} 会话（Ctrl-] 切回 {name_a}）]\x1b[0m\r\n");
             t.feed(banner.as_bytes());
         }
-        self.session_over = false; // 新活跃方生死未知,先复活输出面
+        self.session_over = self.health(name_s).dead;
         crate::report::report("term", &format!("会话切换: {name_a} → {name_s}"));
+        if self.session_over {
+            self.kick_reconnect(); // 切入死会话 = 立即重连
+        }
         self.dirty = true;
     }
 
-    /// 抽干 ws 线程送来的会话事件（about_to_wait 每圈调）
-    fn drain_terminal_events(&mut self) {
-        let Some(rx) = &self.event_rx else { return };
-        let mut events = Vec::new();
-        while let Ok(ev) = rx.try_recv() {
-            events.push(ev);
+    /// 健康牌按名查（槽位随切换翻面，死活跟名字走）
+    fn health(&self, name: &str) -> SessHealth {
+        if name == "local" {
+            self.health_local
+        } else {
+            self.health_remote
         }
+    }
+
+    fn health_mut(&mut self, name: &str) -> &mut SessHealth {
+        if name == "local" {
+            &mut self.health_local
+        } else {
+            &mut self.health_remote
+        }
+    }
+
+    /// 死会话上敲键/切入 = 重连触发器（用户在场的明示）。在途不重孵
+    /// （重孵会丢在途会话的输入缓存通道）
+    fn kick_reconnect(&mut self) {
+        let Some(name) = self.router.as_ref().map(|r| r.active_name()) else {
+            return;
+        };
+        let h = self.health(name);
+        if h.dead && !h.connecting {
+            self.respawn_session(name);
+        }
+    }
+
+    /// 断线重连（2026-08-21 实拍：WS 退后台被掐 → 会话线程死 → 僵尸通道
+    /// 静默吞输入）：给死会话 spawn 新实例，router 换心脏 + 壳换入向通道。
+    /// 服务器侧 PTY 随 WS 断即杀（kfmv4 ws-server killAll），重连必然是
+    /// 新 shell——横幅明示，旧现场引导 tmux attach。本地 PTY 死亡（shell
+    /// exit）同路重孵
+    fn respawn_session(&mut self, name: &'static str) {
+        let handle = match name {
+            "local" => self
+                .base
+                .as_ref()
+                .and_then(|b| b.ctx().get::<crate::local_pty::LocalPtyFactory>().ok())
+                .map(|f| f.spawn(&f.default_config())),
+            _ => self
+                .base
+                .as_ref()
+                .and_then(|b| b.ctx().get::<dyn TermFactory>().ok())
+                .map(|f| f.spawn(&f.default_config())),
+        };
+        let Some(h) = handle else {
+            crate::report::report_sync("term", &format!("重连失败: {name} 工厂取回不到"));
+            return;
+        };
+        {
+            let health = self.health_mut(name);
+            health.retried = true;
+            health.connecting = true;
+        }
+        if self
+            .router
+            .as_ref()
+            .is_some_and(|r| r.active_name() == name)
+        {
+            if let Some(r) = &mut self.router {
+                r.replace_active(h.outbound);
+            }
+            self.event_rx = Some(h.events);
+            // 新会话 Input 缓存到 Opened（conn pending_input）——输出面先解开
+            self.session_over = false;
+            let (cols, rows) = self.last_grid;
+            if let Some(r) = &self.router {
+                r.send(TermCmd::Resize { cols, rows });
+            }
+            if let Some(t) = &mut self.term {
+                let banner = format!(
+                    "\r\n\x1b[36m[kfm-na: {name} 会话断线，已重连 = 新 shell（旧现场 tmux attach 接回）]\x1b[0m\r\n"
+                );
+                t.feed(banner.as_bytes());
+            }
+        } else {
+            if let Some(r) = &mut self.router
+                && let Err(e) = r.replace_standby(h.outbound)
+            {
+                crate::report::report_sync("term", &format!("待机换心脏失败: {e}"));
+            }
+            self.standby = Some((h.events, name));
+            self.standby_buf.clear(); // 旧 shell 遗物不喂新会话
+        }
+        crate::report::report("term", &format!("会话重连: {name} 重孵"));
+        self.dirty = true;
+    }
+
+    /// 抽干会话事件（about_to_wait 每圈调）：活跃槽全量处理；待机槽也每圈
+    /// 抽——Output 进缓存（切换时补屏），生死事件即时登记（不抽的话死讯
+    /// 压到切换才爆，重连晚一整拍；2026-08-21 实拍 WS 退后台被掐的坑）
+    fn drain_terminal_events(&mut self) {
+        let mut events = Vec::new();
+        if let Some(rx) = &self.event_rx {
+            while let Ok(ev) = rx.try_recv() {
+                events.push(ev);
+            }
+        }
+        let active = self.router.as_ref().map_or("", |r| r.active_name());
         for ev in events {
-            match ev {
-                SessionEvent::Opened { session_id } => {
-                    crate::report::report(
+            self.on_session_event(active, ev, true);
+        }
+        let mut sbuf = Vec::new();
+        if let Some((rx, _)) = &self.standby {
+            while let Ok(ev) = rx.try_recv() {
+                sbuf.push(ev);
+            }
+        }
+        let sname = self.standby.as_ref().map_or("", |s| s.1);
+        for ev in sbuf {
+            if matches!(ev, SessionEvent::Output { .. }) {
+                self.standby_buf.push_back(ev);
+            } else {
+                self.on_session_event(sname, ev, false);
+            }
+        }
+    }
+
+    /// 单事件分派：name = 来源槽位名（健康牌按名记账，空名 = 无路由装配,
+    /// 只动 session_over 不记账），is_active = 是否当前可见方
+    fn on_session_event(&mut self, name: &'static str, ev: SessionEvent, is_active: bool) {
+        match ev {
+            SessionEvent::Opened { session_id } => {
+                if !name.is_empty() {
+                    let h = self.health_mut(name);
+                    h.dead = false;
+                    h.retried = false;
+                    h.connecting = false;
+                }
+                if is_active {
+                    self.session_over = false; // 重连复活：输出面解开
+                }
+                crate::report::report(
+                    "term",
+                    &format!("会话 opened: {session_id} +{}ms", boot_ms()),
+                );
+            }
+            SessionEvent::Output { data } => {
+                // 首 output 预览：诊断「黑屏等提示符」——提示符何时到、内容是什么
+                static FIRST_OUTPUT: std::sync::atomic::AtomicBool =
+                    std::sync::atomic::AtomicBool::new(false);
+                if !FIRST_OUTPUT.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    crate::report::report_sync(
                         "term",
-                        &format!("会话 opened: {session_id} +{}ms", boot_ms()),
+                        &format!(
+                            "首 output 到达 +{}ms: {:?}",
+                            boot_ms(),
+                            &data[..data.len().min(120)]
+                        ),
                     );
+                    // 上膛帧缓冲探针（一次性）：下一帧数非背景像素（见 draw_frame）。
+                    // 注意只能在首 output 上膛——此前写成每个 output 都上膛，
+                    // 探针变成常驻连发，报告通道被刷屏（11:31 实拍事故）
+                    FRAME_PROBE.store(1, std::sync::atomic::Ordering::Relaxed);
                 }
-                SessionEvent::Output { data } => {
-                    // 首 output 预览：诊断「黑屏等提示符」——提示符何时到、内容是什么
-                    static FIRST_OUTPUT: std::sync::atomic::AtomicBool =
-                        std::sync::atomic::AtomicBool::new(false);
-                    if !FIRST_OUTPUT.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                // RTT 探针（输入延迟判卷）：击键→回显 output 的墙钟耗时，采样 5 发。
+                // 数字说话：延迟到底在网络往返还是自家管线（2026-08-13 用户实拍问）
+                if let Some(t) = self.last_input_at.take() {
+                    static RTT_N: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+                    let n = RTT_N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if n < 5 {
                         crate::report::report_sync(
-                            "term",
-                            &format!(
-                                "首 output 到达 +{}ms: {:?}",
-                                boot_ms(),
-                                &data[..data.len().min(120)]
-                            ),
+                            "rtt",
+                            &format!("击键→回显: {}ms", t.elapsed().as_millis()),
                         );
-                        // 上膛帧缓冲探针（一次性）：下一帧数非背景像素（见 draw_frame）。
-                        // 注意只能在首 output 上膛——此前写成每个 output 都上膛，
-                        // 探针变成常驻连发，报告通道被刷屏（11:31 实拍事故）
-                        FRAME_PROBE.store(1, std::sync::atomic::Ordering::Relaxed);
-                    }
-                    // RTT 探针（输入延迟判卷）：击键→回显 output 的墙钟耗时，采样 5 发。
-                    // 数字说话：延迟到底在网络往返还是自家管线（2026-08-13 用户实拍问）
-                    if let Some(t) = self.last_input_at.take() {
-                        static RTT_N: std::sync::atomic::AtomicU8 =
-                            std::sync::atomic::AtomicU8::new(0);
-                        let n = RTT_N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        if n < 5 {
-                            crate::report::report_sync(
-                                "rtt",
-                                &format!("击键→回显: {}ms", t.elapsed().as_millis()),
-                            );
-                        }
-                    }
-                    if let Some(term) = &mut self.term {
-                        term.feed(data.as_bytes());
-                        self.dirty = true;
                     }
                 }
-                SessionEvent::Exited { code } => {
-                    crate::report::report_sync("term", &format!("会话 exited: code={code}"));
-                    self.session_over = true;
-                }
-                SessionEvent::Failed { message } => {
-                    crate::report::report_sync("term", &format!("会话 failed: {message}"));
-                    self.session_over = true;
+                if let Some(term) = &mut self.term {
+                    term.feed(data.as_bytes());
+                    self.dirty = true;
                 }
             }
+            SessionEvent::Exited { code } => {
+                self.on_slot_dead(name, is_active, &format!("exited: code={code}"));
+            }
+            SessionEvent::Failed { message } => {
+                self.on_slot_dead(name, is_active, &format!("failed: {message}"));
+            }
+        }
+    }
+
+    /// 会话死亡登记：钉健康牌;活跃方死亡且本剧集未自动重连过 → 立即重孵
+    /// 一次（用户在盯着，网多半是好的）;待机方死亡只记账不吵（切换那一刻
+    /// 再重连——断网期给待机自动重连是烧钱风暴）
+    fn on_slot_dead(&mut self, name: &'static str, is_active: bool, why: &str) {
+        crate::report::report_sync(
+            "term",
+            &format!(
+                "会话 {why}: {name}{}",
+                if is_active {
+                    "（活跃）"
+                } else {
+                    "（待机）"
+                }
+            ),
+        );
+        if is_active {
+            self.session_over = true;
+        }
+        if name.is_empty() {
+            return;
+        }
+        {
+            let h = self.health_mut(name);
+            h.dead = true;
+            h.connecting = false;
+        }
+        if is_active && !self.health(name).retried {
+            self.respawn_session(name);
         }
     }
 
@@ -553,8 +740,13 @@ impl App {
     /// （模式位只有这里的 Term 知道，keymap.rs 吃 app_cursor 参数）
     fn drain_ime_inject(&mut self) {
         let items = crate::ime_queue::global().drain();
-        if items.is_empty() || self.session_over {
+        if items.is_empty() {
             return;
+        }
+        // 死会话上敲键 = 重连触发器（不 return：重连后的新会话会缓存输入
+        // 到 Opened；没重连上 = 僵尸通道吞掉，无害）
+        if self.session_over {
+            self.kick_reconnect();
         }
         static FIRST_INJECT: std::sync::atomic::AtomicBool =
             std::sync::atomic::AtomicBool::new(false);
@@ -612,8 +804,12 @@ impl App {
 
     /// 键盘事件 → 终端输入字节（尖刺极简映射，IME 见文件头留白）
     fn handle_key(&mut self, event: &winit::event::KeyEvent) {
-        if event.state != ElementState::Pressed || self.session_over {
+        if event.state != ElementState::Pressed {
             return;
+        }
+        // 死会话上敲键 = 重连触发器（同 drain_ime_inject 口径）
+        if self.session_over {
+            self.kick_reconnect();
         }
         let bytes: Option<String> = match &event.logical_key {
             Key::Named(NamedKey::Enter) => Some("\r".into()),
@@ -1038,9 +1234,11 @@ impl ApplicationHandler for App {
                             }
                         }
                         Ime::Commit(text) => {
-                            if !self.session_over
-                                && let Some(r) = &self.router
-                            {
+                            // 死会话上落字 = 重连触发器（同 drain_ime_inject 口径）
+                            if self.session_over {
+                                self.kick_reconnect();
+                            }
+                            if let Some(r) = &self.router {
                                 r.send(TermCmd::Input(text));
                                 self.last_input_at = Some(std::time::Instant::now());
                                 // IME 落字 = 用户输入：滚回底部贴最新输出
