@@ -118,6 +118,9 @@ struct App {
     last_grid: (u32, u32),
     /// 有新输出/尺寸变化待渲染
     dirty: bool,
+    /// 首笔 RedrawRequested 是否已到(2026-08-21 探针:Android 启动动画期
+    /// 扣住重绘事件 ~2.3s——到达前由忙轮询泵直接画脏帧,到达后归回正道)
+    first_redraw_seen: bool,
     /// 会话终了（exited/failed）后定格最后一屏，出向不再发
     session_over: bool,
     /// 会话健康牌 ×2（断线重连）：字段语义见 SessHealth
@@ -1319,6 +1322,7 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::RedrawRequested => {
+                self.first_redraw_seen = true;
                 // 首笔 RedrawRequested 到达时刻探针:区分「事件迟迟不来」
                 // 与「来了但画得慢」——2026-08-21 首帧 2.2s 黑箱归因
                 static FIRST_REDRAW: std::sync::atomic::AtomicBool =
@@ -1361,6 +1365,22 @@ impl ApplicationHandler for App {
             self.drain_terminal_events();
             self.drain_ime_inject();
             self.poll_ime_inset();
+            // 系统 blackout 期补画(2026-08-21 探针:首笔 RedrawRequested
+            // 被 Android 扣 ~2.3s——期间的脏帧(如 shell 提示符)不能干等
+            // 系统发牌,忙轮询泵直接画;首笔 Redraw 到达后此路自动关闭)
+            if !self.first_redraw_seen && self.dirty && self.gfx.is_some() {
+                self.dirty = false;
+                self.draw_frame();
+                // 一次性探针:blackout 期补画发生时刻(验证提示符不再等 2.3s)
+                static BLACKOUT_DRAW: std::sync::atomic::AtomicBool =
+                    std::sync::atomic::AtomicBool::new(true);
+                if BLACKOUT_DRAW.swap(false, std::sync::atomic::Ordering::Relaxed) {
+                    crate::report::report(
+                        "boot",
+                        &format!("blackout 期补画首脏帧 +{}ms", boot_ms()),
+                    );
+                }
+            }
         }
         // 事件循环心跳（10s 节流）：忙轮询泵下它在跳 = 循环活着，
         // 它停 = 循环卡死在某个 handler 里（BAR-012③ 诊断分界线）
