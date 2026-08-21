@@ -8,15 +8,19 @@
 //!   历史区 display_offset 下的行号换算
 //! - 高亮渲染钉：选中格盖 SELECT_BG 底色，清选后消失；CJK 双宽字
 //!   两格都盖高亮且右半字形墨不被盖（两遍制渲染钉）
-//! - 拖柄：命中判定（±1 格触控宽容）、端点移动（含互换）、渲染钉
+//! - 拖柄：命中判定（±1 格触控宽容）、端点移动（含互换）、水滴渲染钉
+//!   （青色主体 + 近黑描边，kfmv4 色板字面量钉）
 //! - 放大镜：2 倍最近邻映射逐点比对、边框、屏内钳制
+//! - 宽字符边界钳制：端点落 CJK spacer 半格按拖动方向钳（右 col+1 /
+//!   左 col-1），选词/扩选/拖柄三入口同尺；提取一致性（探针
+//!   set_selection_raw）；渲染整字扩边不劈字
 //!
 //! JNI 剪贴板/Toast 薄壳（src/clipboard.rs）是 B 档平台胶水，无考题，
 //! 真机判卷（粘贴到别处 + Toast 文案）。
 
 use kfm_na::termview::{
-    self, CELL_H, CELL_W, HANDLE_COLOR, HandleEnd, MAG_BORDER, SELECT_BG, Selection, TermView,
-    handle_hit, in_selection, is_word_char, px_to_cell,
+    self, CELL_H, CELL_W, HANDLE_CYAN, HANDLE_DARK, HandleEnd, MAG_BORDER, SELECT_BG, Selection,
+    TermView, handle_hit, handle_radius, in_selection, is_word_char, px_to_cell,
 };
 
 /// 测试字体夹具双环境解析（与 termview_spec.rs 同规则：服务器 /usr/share，
@@ -443,8 +447,9 @@ fn spec_选择_拖柄移动端点() {
 
 #[test]
 fn spec_选择_拖柄渲染钉() {
-    // 选区激活时两端格下方必须有醒目橙圆点；清选后整帧无此色
-    // （变异抽检：摘掉 render_into 的拖柄段，本考题必须红）
+    // 水滴/图钉（kfmv4「黑边 + 亮色辉光」像素版）：圆头中心 = 青色主体，
+    // 圆头外沿一圈 = 近黑描边；柄体从格底缘连到圆头，侧沿描边。
+    // （变异抽检：摘掉描边层或柄体段，本考题必须红）
     let mut tv = host_termview(20, 4);
     tv.feed(b"hello world");
     let (x, y) = cell_center(1, 0);
@@ -453,19 +458,31 @@ fn spec_选择_拖柄渲染钉() {
     let buf_h = termview::margin_top(CELL_H) + 4 * CELL_H + termview::MARGIN_Y;
     let mut buf = vec![0u32; (buf_w * buf_h) as usize];
     tv.render_into(&mut buf, buf_w, buf_h);
+    let r = handle_radius(CELL_W);
     let (start, end) = tv.selection_handles().expect("选区在屏内");
     for hp in [start, end] {
-        let (hx, hy) = hp.expect("两端柄都在屏内");
+        let (hx, cy) = hp.expect("两端柄都在屏内");
+        let (hx, cy) = (hx as u32, cy as u32);
+        let px = |x: u32, y: u32| buf[(y * buf_w + x) as usize];
+        assert_eq!(px(hx, cy), HANDLE_CYAN, "圆头中心必须是青色主体");
         assert_eq!(
-            buf[(hy as u32 * buf_w + hx as u32) as usize],
-            HANDLE_COLOR,
-            "柄心必须是醒目橙"
+            px(hx + r + 1, cy),
+            HANDLE_DARK,
+            "圆头右侧沿必须是近黑描边（描边比主体大一圈）"
+        );
+        // 柄体：格底缘 = 柄心上行 (CELL_H - r) 处；柄心上方 4px 处必在柄体段
+        let cell_bottom = cy + r - CELL_H;
+        assert_eq!(px(hx, cell_bottom + 4), HANDLE_CYAN, "柄体中线必须是青色");
+        assert_eq!(
+            px(hx + r / 2 + 1, cell_bottom + 4),
+            HANDLE_DARK,
+            "柄体侧沿必须是近黑描边"
         );
     }
     tv.clear_selection();
     let mut buf2 = vec![0u32; (buf_w * buf_h) as usize];
     tv.render_into(&mut buf2, buf_w, buf_h);
-    assert!(!buf2.contains(&HANDLE_COLOR), "清选后拖柄必须消失");
+    assert!(!buf2.contains(&HANDLE_CYAN), "清选后拖柄必须消失");
 }
 
 // ---------- 放大镜（拖柄拖动中浮窗） ----------
@@ -515,4 +532,163 @@ fn spec_放大镜_两倍最近邻与边框钳制() {
         }
     }
     assert!(ink > 1000, "放大窗内必须有大量字形墨（实得 {ink}）");
+}
+
+// ---------- kfmv4 色板（2026-08-21 品牌统一） ----------
+
+#[test]
+fn spec_视觉_kfmv4色板() {
+    // 字面量钉死（变异抽检：改任一色值/半径比例，本考题必须红）
+    assert_eq!(SELECT_BG, 0x003B_82F6, "选中底色 = kfmv4 正蓝 #3B82F6");
+    assert_eq!(HANDLE_CYAN, 0x0006_B6D4, "拖柄主体 = kfmv4 青 #06B6D4");
+    assert_eq!(HANDLE_DARK, 0x000A_0C10, "拖柄描边 = 近黑 #0A0C10");
+    assert_eq!(MAG_BORDER, HANDLE_CYAN, "放大镜边框与拖柄同青色系");
+    // 圆头直径 ≈0.7 格宽：半径 = cell_w*7/20，下限 2
+    assert_eq!(handle_radius(CELL_W), 6, "18 格宽 → 半径 6");
+    assert_eq!(handle_radius(10), 3);
+    assert_eq!(handle_radius(4), 2, "半径下限 2");
+}
+
+// ---------- 宽字符边界钳制（2026-08-21，端点永不劈 CJK 字） ----------
+// 场景 "a中bc"：a0 中1(格0) sp2(spacer) b3 c4
+// 场景 "a 中bc"（带空格）：a0 空1 中2 sp3 b4 c5
+
+fn cjk_termview(text: &str) -> TermView {
+    assert!(
+        prefer_cjk_fixture_check(),
+        "夹具前提：主字体必须缺 '中'（走 CJK 双宽路径）"
+    );
+    let mut tv = TermView::new(host_font(), Some(fusion_font()), 20, 6, CELL_W, CELL_H);
+    tv.feed(text.as_bytes());
+    tv
+}
+
+#[test]
+fn spec_选择_宽字符_spacer落点选词() {
+    let mut tv = cjk_termview("a中bc");
+    // 按在 spacer 半格（col 2）→ 当作按在该字格 0 → 词 "a中" 整选，
+    // 词尾宽字符带上 spacer（end=2）；提取跳 spacer → "a中"（不含 b）
+    let (x, y) = cell_center(2, 0);
+    tv.select_word_at(x, y);
+    assert_eq!(tv.selected_text().as_deref(), Some("a中"));
+}
+
+#[test]
+fn spec_选择_宽字符_右拖钳到下一格() {
+    // 右移落在 spacer 半格 → 钳到 col+1（越过该字到下一格）。固有结果
+    // （实拍判卷点）：后一格非空白时多带一个字进选区
+    let mut tv = cjk_termview("a 中bc");
+    let (x, y) = cell_center(0, 0);
+    tv.select_word_at(x, y); // 'a' 单格（空格挡词扩展）(0,0)..(0,0)
+    let (x, y) = cell_center(3, 0); // spacer 格
+    tv.extend_selection(x, y);
+    assert_eq!(
+        tv.selected_text().as_deref(),
+        Some("a 中b"),
+        "右拖落 spacer 钳到 col+1：'b' 被包进选区"
+    );
+}
+
+#[test]
+fn spec_选择_宽字符_左拖钳回字首() {
+    // 左移落在 spacer 半格 → 钳到 col-1（该字格 0），整个中字进选区
+    let mut tv = cjk_termview("a 中bc");
+    let (x, y) = cell_center(4, 0);
+    tv.select_word_at(x, y); // "bc" (0,4)..(0,5)
+    let (x, y) = cell_center(3, 0); // spacer 格，向左拖
+    tv.extend_selection(x, y);
+    assert_eq!(
+        tv.selected_text().as_deref(),
+        Some("中bc"),
+        "左拖落 spacer 钳到格 0：整字进选区"
+    );
+}
+
+#[test]
+fn spec_选择_宽字符_跨行中西文钳制() {
+    // "中ab\r\ncd中e"：行0 中0 sp1 a2 b3；行1 c0 d1 中2 sp3 e4
+    let mut tv = cjk_termview("中ab\r\ncd中e");
+    let (x, y) = cell_center(2, 0);
+    tv.select_word_at(x, y); // "ab" (0,2)..(0,3)
+    // 拖到行 1 的 '中' 格 0（非 spacer，不钳）
+    let (x, y) = cell_center(2, 1);
+    tv.extend_selection(x, y);
+    assert_eq!(tv.selected_text().as_deref(), Some("ab\ncd中"));
+    // 继续右拖到行 1 的 spacer 格 → 钳到 col+1，带上 'e'
+    let (x, y) = cell_center(3, 1);
+    tv.extend_selection(x, y);
+    assert_eq!(tv.selected_text().as_deref(), Some("ab\ncd中e"));
+}
+
+#[test]
+fn spec_选择_宽字符_拖柄路径同钳() {
+    // move_selection_end 与 extend_selection 同一把钳（方向 = 新落点 vs
+    // 被拖端旧位置）：起端柄右拖到 spacer → 钳 col+1
+    let mut tv = cjk_termview("a中bc");
+    let (x, y) = cell_center(0, 0);
+    tv.select_word_at(x, y); // "a中" (0,0)..(0,2)
+    let (x, y) = cell_center(2, 0); // 起端柄右移到 spacer 格
+    tv.move_selection_end(HandleEnd::Start, x, y);
+    assert_eq!(
+        tv.selected_text().as_deref(),
+        Some("b"), // 钳到 col 3：选区 (0,3)..(0,2) 互换后 = 格 3 单格
+        "起端柄右拖落 spacer 必须同钳 col+1"
+    );
+}
+
+#[test]
+fn spec_选择_宽字符钳制提取一致性() {
+    // 探针 set_selection_raw 把端点人为放到 spacer 上，钉死两条等价：
+    //   start 在 spacer ≡ start 钳右 col+1（提取都不含该字）
+    //   end 在 spacer ≡ end 钳左 col-1（提取都含该字）
+    let mut tv = cjk_termview("a中bc");
+    tv.set_selection_raw((0, 2), (0, 4)); // start 落 spacer
+    let raw_start = tv.selected_text();
+    tv.set_selection_raw((0, 3), (0, 4)); // ≡ 钳右 col+1
+    assert_eq!(raw_start, tv.selected_text());
+    assert_eq!(raw_start.as_deref(), Some("bc"));
+    tv.set_selection_raw((0, 0), (0, 2)); // end 落 spacer
+    let raw_end = tv.selected_text();
+    tv.set_selection_raw((0, 0), (0, 1)); // ≡ 钳左 col-1
+    assert_eq!(raw_end, tv.selected_text());
+    assert_eq!(raw_end.as_deref(), Some("a中"));
+}
+
+#[test]
+fn spec_选择_宽字符_渲染整字扩边() {
+    // 渲染层高亮扩到整字边界：spacer 的格 0 选中 → spacer 也亮；
+    // 格 0 的 spacer 选中 → 格 0 也亮——任何钳法下高亮都不劈字
+    // （变异抽检：摘掉 render_into 收集段的扩边判定，本考题必须红）
+    let mut tv = cjk_termview("a中bc");
+    let buf_w = 2 * termview::MARGIN_X + 20 * CELL_W;
+    let buf_h = termview::margin_top(CELL_H) + 6 * CELL_H + termview::MARGIN_Y;
+    let lit = |buf: &[u32], col: u32| -> bool {
+        let (x0, y0) = (
+            termview::MARGIN_X + col * CELL_W,
+            termview::margin_top(CELL_H),
+        );
+        let mut n = 0u32;
+        for y in y0..y0 + CELL_H {
+            for x in x0..x0 + CELL_W {
+                if buf[(y * buf_w + x) as usize] == SELECT_BG {
+                    n += 1;
+                }
+            }
+        }
+        n > CELL_W * CELL_H / 2
+    };
+    // 只选 '中' 的格 0（探针绕钳）→ spacer 格 2 必须随格 0 同亮
+    tv.set_selection_raw((0, 1), (0, 1));
+    let mut buf = vec![0u32; (buf_w * buf_h) as usize];
+    tv.render_into(&mut buf, buf_w, buf_h);
+    assert!(lit(&buf, 1), "格 0 必须亮");
+    assert!(lit(&buf, 2), "spacer 格必须随格 0 同亮（扩边）");
+    assert!(!lit(&buf, 3), "选区外的 'b' 不许亮");
+    // 反向：选区从 spacer 起 → 格 0 必须随 spacer 同亮
+    tv.set_selection_raw((0, 2), (0, 4));
+    let mut buf2 = vec![0u32; (buf_w * buf_h) as usize];
+    tv.render_into(&mut buf2, buf_w, buf_h);
+    assert!(lit(&buf2, 1), "格 0 必须随 spacer 同亮（扩边）");
+    assert!(lit(&buf2, 2) && lit(&buf2, 4));
+    assert!(!lit(&buf2, 0), "选区外的 'a' 不许亮");
 }

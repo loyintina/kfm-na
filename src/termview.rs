@@ -547,11 +547,51 @@ impl TermView {
         (line, col)
     }
 
+    /// 该格是否 CJK 宽字符的 spacer 半格（宽字符占 col-1..col 两格，
+    /// col 是 spacer）。行出界（含历史区）按 false 防御
+    fn is_spacer(&self, line: i32, col: u32) -> bool {
+        let grid = self.term.grid();
+        let lo = -(grid.history_size() as i32);
+        let hi = grid.screen_lines() as i32 - 1;
+        if !(lo..=hi).contains(&line) {
+            return false;
+        }
+        grid[Line(line)][Column(col as usize)]
+            .flags
+            .contains(Flags::WIDE_CHAR_SPACER)
+    }
+
+    /// 宽字符边界钳制（2026-08-21 kfmv4 对齐）：端点落在 CJK spacer 半格
+    /// 时按拖动方向钳——右移钳 col+1（越过该字到下一格），左移钳 col-1
+    /// （回到该字格 0）。端点永不劈字。固有结果（实拍判卷点）：右拖终点
+    /// 到 spacer 会把后一格也包进选区（后一格非空白时多选一个字）；
+    /// 提取本就不收 spacer（selected_text 跳过），钳制前后提取等价
+    /// （一致性考题 spec_选择_宽字符钳制提取一致性 钉死）
+    fn clamp_wide_endpoint(&self, point: (i32, u32), moving_right: bool) -> (i32, u32) {
+        let (line, col) = point;
+        if !self.is_spacer(line, col) {
+            return point;
+        }
+        if moving_right {
+            let last = self.term.grid().columns() as u32 - 1;
+            (line, (col + 1).min(last))
+        } else {
+            (line, col - 1) // spacer 的格 0 必在 col-1（col ≥ 1）
+        }
+    }
+
     /// 长按选词：落点所在词（is_word_char 连续段）整段选中；落点非词
-    /// 字符（空白/标点）只选该格。滚进历史后选的就是历史行（坐标含
-    /// display_offset，见 grid_point_at）
+    /// 字符（空白/标点）只选该格。落点在 CJK spacer 半格 → 当作按在该字
+    /// 格 0（按下无方向，归字内）；词尾是宽字符格 0 时把它的 spacer 格
+    /// 带进选区（端点落整字边界，渲染/提取同尺不劈字）。滚进历史后选的
+    /// 就是历史行（坐标含 display_offset，见 grid_point_at）
     pub fn select_word_at(&mut self, x: f64, y: f64) {
         let (line, col) = self.grid_point_at(x, y);
+        let col = if self.is_spacer(line, col) {
+            col - 1
+        } else {
+            col
+        };
         let cols = self.term.grid().columns() as u32;
         let at = |c: u32| self.term.grid()[Line(line)][Column(c as usize)].c;
         let (mut start, mut end) = (col, col);
@@ -563,33 +603,45 @@ impl TermView {
                 end += 1;
             }
         }
+        if end + 1 < cols && self.is_spacer(line, end + 1) {
+            end += 1; // 词尾宽字符：带上它的 spacer 格
+        }
         self.selection = Some(Selection {
             anchor: (line, start),
             cursor: (line, end),
         });
     }
 
-    /// 选择模式拖动扩选：cursor 端跟手指走，跨行/反向/历史区同尺
+    /// 选择模式拖动扩选：cursor 端跟手指走（落 spacer 半格按拖动方向
+    /// 钳，见 clamp_wide_endpoint），跨行/反向/历史区同尺
     /// （归一化在 in_selection/selected_text 做）。反向拖过 anchor 时
     /// 固定端翻转到原词另一端——整词保持在选区内（选词后上拖不收掉半词）
     pub fn extend_selection(&mut self, x: f64, y: f64) {
-        if self.selection.is_none() {
+        let Some(mut sel) = self.selection else {
             return;
+        };
+        let raw = self.grid_point_at(x, y);
+        let point = self.clamp_wide_endpoint(raw, raw >= sel.cursor);
+        if (point < sel.anchor && sel.cursor >= sel.anchor)
+            || (point > sel.anchor && sel.cursor < sel.anchor)
+        {
+            sel.anchor = sel.cursor;
         }
-        let point = self.grid_point_at(x, y);
-        if let Some(sel) = &mut self.selection {
-            if (point < sel.anchor && sel.cursor >= sel.anchor)
-                || (point > sel.anchor && sel.cursor < sel.anchor)
-            {
-                sel.anchor = sel.cursor;
-            }
-            sel.cursor = point;
-        }
+        sel.cursor = point;
+        self.selection = Some(sel);
     }
 
     /// 清高亮（复制后/会话重开等）
     pub fn clear_selection(&mut self) {
         self.selection = None;
+    }
+
+    /// 考题探针：绕过宽字符边界钳制直接摆放选区端点——一致性考题拿它
+    /// 把端点人为放到 spacer 半格上，比对「raw 提取 ≡ 钳后提取」
+    /// （spec_选择_宽字符钳制提取一致性）。生产路径不走这里
+    #[doc(hidden)]
+    pub fn set_selection_raw(&mut self, anchor: (i32, u32), cursor: (i32, u32)) {
+        self.selection = Some(Selection { anchor, cursor });
     }
 
     /// 提取选中文字（复制用）：归一化区间逐行收 cell.c——tab 本体在格内
@@ -633,9 +685,11 @@ impl TermView {
         Some(out)
     }
 
-    /// 选择拖柄的屏像素位置（柄心，圆点中心）：归一化起/止端点各自
-    /// 格底缘中点再下探一个半径。端点滚出可视区 → 该端为 None；
-    /// 无选区 → 整个 None。渲染与命中判定共用这一份坐标（同一把尺）
+    /// 选择拖柄的屏像素位置（柄心 = 水滴圆头中心）：归一化起/止端点各自
+    /// 格底缘中点下探——整柄占格底缘下一整格高（柄体从格底缘连到圆头，
+    /// 圆头贴该格底），柄心 = 格底缘 + (cell_h - 半径)。端点滚出可视区 →
+    /// 该端为 None；无选区 → 整个 None。渲染与命中判定共用这一份坐标
+    /// （同一把尺）
     pub fn selection_handles(&self) -> Option<HandlePositions> {
         let sel = self.selection?;
         let (s, e) = if sel.anchor <= sel.cursor {
@@ -651,8 +705,10 @@ impl TermView {
                 return None;
             }
             let hx = f64::from(MARGIN_X + end.1 * self.cell_w) + f64::from(self.cell_w) / 2.0;
-            let hy = f64::from(margin_top(self.cell_h) + (row as u32 + 1) * self.cell_h)
-                + f64::from(HANDLE_R);
+            let hy = f64::from(
+                margin_top(self.cell_h) + (row as u32 + 2) * self.cell_h
+                    - handle_radius(self.cell_w),
+            );
             Some((hx, hy))
         };
         Some((to_px(s), to_px(e)))
@@ -683,7 +739,8 @@ impl TermView {
     }
 
     /// 拖动拖柄移动端点：归一化起/止端谁被拖就谁跟手指（网格坐标换算
-    /// 沿用 grid_point_at——跨行/历史区同尺）。拖过另一端则角色互换
+    /// 沿用 grid_point_at——跨行/历史区同尺；落 spacer 半格按拖动方向钳，
+    /// 方向 = 新落点 vs 该端旧位置字典序）。拖过另一端则角色互换
     /// （起点拖过终点 → 它变成新终点），选区不塌缩翻转
     pub fn move_selection_end(&mut self, which: HandleEnd, x: f64, y: f64) {
         let Some(sel) = self.selection else { return };
@@ -692,7 +749,12 @@ impl TermView {
         } else {
             (sel.cursor, sel.anchor)
         };
-        let p = self.grid_point_at(x, y);
+        let raw = self.grid_point_at(x, y);
+        let old = match which {
+            HandleEnd::Start => s,
+            HandleEnd::End => e,
+        };
+        let p = self.clamp_wide_endpoint(raw, raw >= old);
         self.selection = Some(match which {
             HandleEnd::Start => {
                 if p <= e {
@@ -849,16 +911,20 @@ impl TermView {
             if indexed.cell.flags.contains(Flags::INVERSE) {
                 std::mem::swap(&mut fg, &mut bg);
             }
-            // 长按选择高亮：选中格盖选择底色（与网格行同坐标系，滚屏自动跟随）
-            if let Some(sel) = selection
-                && in_selection(
-                    sel.anchor,
-                    sel.cursor,
-                    indexed.point.line.0,
-                    indexed.point.column.0 as u32,
-                )
-            {
-                bg = SELECT_BG;
+            // 长按选择高亮：选中格盖选择底色（与网格行同坐标系，滚屏自动跟随）。
+            // 宽字符整字扩边：spacer 的格 0 选中 → spacer 也亮；格 0 的 spacer
+            // 选中（选词带 spacer 收尾）→ 格 0 也亮——任何钳法下都不劈字
+            if let Some(sel) = selection {
+                let (line0, col0) = (indexed.point.line.0, indexed.point.column.0 as u32);
+                let selected = in_selection(sel.anchor, sel.cursor, line0, col0)
+                    || (col0 > 0
+                        && indexed.cell.flags.contains(Flags::WIDE_CHAR_SPACER)
+                        && in_selection(sel.anchor, sel.cursor, line0, col0 - 1))
+                    || (indexed.cell.flags.contains(Flags::WIDE_CHAR)
+                        && in_selection(sel.anchor, sel.cursor, line0, col0 + 1));
+                if selected {
+                    bg = SELECT_BG;
+                }
             }
             let is_cursor = cursor.shape != CursorShape::Hidden && indexed.point == cursor.point;
             if is_cursor {
@@ -908,13 +974,17 @@ impl TermView {
             self.draw_glyph(&mut frame, cell.c, cell.px, cell.py, cell.fg, clip_w);
         }
         // 选择拖柄（抬手定型后可拖，Termux 语义借鉴）：起/止端点格下方
-        // 各一个醒目圆点 + 短柄。屏外端点（滚出可视区）不画
+        // 各一枚水滴/图钉——圆头（直径 ≈0.7 格宽）+ 柄体（连到选中条边缘），
+        // 整柄一整格高。kfmv4 标志画法「黑边 + 亮色辉光」的像素版：先画
+        // 近黑 HANDLE_DARK 大一圈作描边，再叠青色 HANDLE_CYAN 主体。
+        // 屏外端点（滚出可视区）不画
         if let Some(sel) = selection {
             let (s, e) = if sel.anchor <= sel.cursor {
                 (sel.anchor, sel.cursor)
             } else {
                 (sel.cursor, sel.anchor)
             };
+            let r = handle_radius(self.cell_w);
             for end in [s, e] {
                 let row = end.0 + offset;
                 if !(0..self.term.grid().screen_lines() as i32).contains(&row) {
@@ -922,9 +992,26 @@ impl TermView {
                 }
                 let hx = MARGIN_X + end.1 * self.cell_w + self.cell_w / 2;
                 let cell_bottom = margin_top(self.cell_h) + (row as u32 + 1) * self.cell_h;
-                // 短柄（格底缘到圆点）+ 圆点，水滴意匠
-                frame.fill_rect(hx.saturating_sub(1), cell_bottom, 2, HANDLE_R, HANDLE_COLOR);
-                frame.fill_circle(hx, cell_bottom + HANDLE_R, HANDLE_R, HANDLE_COLOR);
+                let cy = cell_bottom + self.cell_h - r; // 圆头中心（贴该格底）
+                let stem_h = cy - cell_bottom; // 柄体高 = cell_h - r
+                // 描边层：圆 r+2 + 柄体横向左右各扩 2
+                frame.fill_rect(
+                    hx.saturating_sub(r / 2 + 2),
+                    cell_bottom,
+                    r + 4,
+                    stem_h,
+                    HANDLE_DARK,
+                );
+                frame.fill_circle(hx, cy, r + 2, HANDLE_DARK);
+                // 主体层
+                frame.fill_rect(
+                    hx.saturating_sub(r / 2),
+                    cell_bottom,
+                    r,
+                    stem_h,
+                    HANDLE_CYAN,
+                );
+                frame.fill_circle(hx, cy, r, HANDLE_CYAN);
             }
         }
     }
@@ -1113,20 +1200,27 @@ pub const KEYBAR_KEY_BG: u32 = 0x0023_272E;
 pub const KEYBAR_MOD_ON: u32 = 0x003E_6FB4;
 pub const KEYBAR_LABEL: u32 = 0x00E8_EAED;
 
-/// 长按选择高亮底色（与修饰键粘滞高亮同色系——「这块被选中」的统一视觉语言）
-pub const SELECT_BG: u32 = KEYBAR_MOD_ON;
+/// 长按选择高亮底色（kfmv4 正蓝 #3B82F6，2026-08-21 品牌色板统一——
+/// 此前借用的 KEYBAR_MOD_ON 0x3E6FB4 是快捷键行私色，不成套）
+pub const SELECT_BG: u32 = 0x003B_82F6;
 
-/// 选择拖柄（2026-08-21，Termux 语义借鉴）：端点格下方圆点半径（px）与
-/// 醒目橙（与 SELECT_BG 蓝对比，一眼可辨）
-pub const HANDLE_R: u32 = 10;
-pub const HANDLE_COLOR: u32 = 0x00FF_A500;
+/// 选择拖柄配色（kfmv4 标志画法「黑边 + 亮色辉光」的像素版）：
+/// 主体 = kfmv4 青 CYAN #06B6D4；描边/底影 = 近黑 #0A0C10 先画大一圈
+pub const HANDLE_CYAN: u32 = 0x0006_B6D4;
+pub const HANDLE_DARK: u32 = 0x000A_0C10;
+
+/// 拖柄圆头半径（A 档考题钉死）：直径 ≈ 0.7 格宽；整柄高度对齐选中条
+/// （一整格高：柄体从格底缘连到圆头）
+pub fn handle_radius(cell_w: u32) -> u32 {
+    (cell_w * 7 / 20).max(2)
+}
 
 /// 放大镜（拖柄拖动中浮窗）：源区 = 触点格 ±5 格宽 × ±3 行高，最近邻 2 倍；
-/// 边框/衬底配色（边框亮灰，衬底黑）
+/// 边框青色（与拖柄同色系，不撞色），衬底黑
 pub const MAG_HALF_COLS: u32 = 5;
 pub const MAG_HALF_ROWS: u32 = 3;
 pub const MAG_ZOOM: u32 = 2;
-pub const MAG_BORDER: u32 = 0x00E8_EAED;
+pub const MAG_BORDER: u32 = HANDLE_CYAN;
 /// 浮窗底缘与触点的间距（不挡手）
 pub const MAG_GAP_PX: u32 = 60;
 
