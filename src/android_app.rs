@@ -863,8 +863,21 @@ impl App {
 
     /// 渲染一帧：终端模式画网格，非终端模式清紫屏
     fn draw_frame(&mut self) {
+        // 首帧分段探针(2026-08-21 归因:启动完成 +154ms → 首帧 +2339ms,
+        // 2.2s 黑箱在 buffer_mut/render_into/present 三者之一)
+        static FIRST_FRAME_PROBE: std::sync::atomic::AtomicBool =
+            std::sync::atomic::AtomicBool::new(true);
+        let probing = FIRST_FRAME_PROBE.swap(false, std::sync::atomic::Ordering::Relaxed);
+        let t_frame = std::time::Instant::now();
         let Some(g) = &mut self.gfx else { return };
         let mut buf = g.surface.buffer_mut().expect("取帧缓冲失败");
+        if probing {
+            crate::report::report(
+                "boot",
+                &format!("首帧分段: buffer_mut={}ms", t_frame.elapsed().as_millis()),
+            );
+        }
+        let t_render = std::time::Instant::now();
         if TERMINAL_MODE {
             if let Some(term) = &mut self.term {
                 let (w, h) = (buf.width().get(), buf.height().get());
@@ -893,6 +906,12 @@ impl App {
                     std::sync::atomic::AtomicBool::new(false);
                 if !FIRST_TERM_FRAME.swap(true, std::sync::atomic::Ordering::Relaxed) {
                     crate::report::report("term", &format!("首终端帧渲染完成 +{}ms", boot_ms()));
+                }
+                if probing {
+                    crate::report::report(
+                        "boot",
+                        &format!("首帧分段: render={}ms", t_render.elapsed().as_millis()),
+                    );
                 }
                 // 帧缓冲探针：首个 output 后的那一帧，数非背景像素传回——
                 // 光标块独占 ≈288px，提示符字形真画上则数千。真机判卷「不见字」
@@ -924,7 +943,19 @@ impl App {
                 crate::report::report("boot", "首帧 present 完成——紫屏应已亮");
             }
         }
+        let t_present = std::time::Instant::now();
         buf.present().expect("帧呈现失败");
+        if probing {
+            crate::report::report(
+                "boot",
+                &format!(
+                    "首帧分段: present={}ms 全帧合计={}ms +{}ms",
+                    t_present.elapsed().as_millis(),
+                    t_frame.elapsed().as_millis(),
+                    boot_ms()
+                ),
+            );
+        }
     }
 }
 
@@ -1282,6 +1313,16 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::RedrawRequested => {
+                // 首笔 RedrawRequested 到达时刻探针:区分「事件迟迟不来」
+                // 与「来了但画得慢」——2026-08-21 首帧 2.2s 黑箱归因
+                static FIRST_REDRAW: std::sync::atomic::AtomicBool =
+                    std::sync::atomic::AtomicBool::new(true);
+                if FIRST_REDRAW.swap(false, std::sync::atomic::Ordering::Relaxed) {
+                    crate::report::report(
+                        "boot",
+                        &format!("首笔 RedrawRequested 到达 +{}ms", boot_ms()),
+                    );
+                }
                 if TERMINAL_MODE {
                     // 长按计时：忙轮询泵下每圈查时间戳（≥500ms 未动 → 选词）
                     self.check_long_press();
