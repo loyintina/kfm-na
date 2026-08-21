@@ -283,18 +283,24 @@ impl App {
         self.health_remote = SessHealth::default();
         self.standby_buf.clear();
 
+        // 启动分段计时探针:定位「不如 Termux 秒开」的大头在哪一段
+        let t_init = std::time::Instant::now();
+
         // exec 探针(L2/L3 总开关,exec_probe.rs):私有目录 exec 放行与否
         // 决定 busybox/apt 生态路线。冷启动一次,结果走飞鸽传书
+        let t_exec = std::time::Instant::now();
         if let Some(app) = &self.android_app
             && let Some(dir) = app.internal_data_path()
         {
             crate::exec_probe::run(&dir);
         }
+        let ms_exec = t_exec.elapsed().as_millis();
 
         // 插件基座：终端模拟器 + 连接 provider（边界手术第一/二刀）——
         // 「用哪个终端芯、连哪、怎么连」都不归主循环；工厂是服务，实例归调用方。
         // 瞬时返回契约预算 50ms 是 harness 政策(G5 归层:cordis-na 默认关,
         // 这里显式开启,规格书 §4.3)
+        let t_base = std::time::Instant::now();
         let base = Base::new(vec![PluginEntry {
             id: crate::plugins::conn_provider_ws::PLUGIN_NAME,
             disabled: false,
@@ -327,16 +333,20 @@ impl App {
         } else {
             crate::report::report_sync("ime", "无 AndroidApp 句柄——输入插件未装");
         }
+        let ms_base = t_base.elapsed().as_millis();
 
         // L3 首启安装(必须在本地会话 spawn 前:装好后 shell_plan 才会
         // 换成 $PREFIX/bin/bash)。幂等——非首启秒过(只查 prefix 非空)
+        let t_l3 = std::time::Instant::now();
         if let Some(app) = &self.android_app {
             crate::bootstrap::first_boot_install(app);
         }
+        let ms_l3 = t_l3.elapsed().as_millis();
         // 双会话（L1，多端分层设计页 §3）：本地 PTY 秒开为默认活跃会话——
         // 零网络，冷进程首连 ~2.1s 唤醒成本（BAR-022/023 归因）不在此路径；
         // ws 远程会话后台接为待机，Ctrl-] 切换（并存可切换，不自动接管）。
         // spawn 提前到基座就绪即刻的传统保留（BAR-022：与建终端/字体加载并行）
+        let t_sess = std::time::Instant::now();
         if let Err(e) = base.load(crate::plugins::conn_provider_local::ConnProviderLocal::new()) {
             crate::report::report_sync("term", &format!("本地连接插件装载失败: {e:?}"));
         }
@@ -383,9 +393,11 @@ impl App {
                 crate::report::report_sync("term", "双会话全灭——本屏无会话");
             }
         }
+        let ms_sess = t_sess.elapsed().as_millis();
 
         // 建终端：经基座取终端工厂；build 失败 = 字体全灭走 Err（裁决 3，非插件失败）
         crate::report::report("boot", &format!("基座+插件装载完成 +{}ms", boot_ms()));
+        let t_build = std::time::Instant::now();
         let Some((tv, font_path, cjk_path)) = (match base.ctx().get::<dyn TermEmuFactory>() {
             Ok(factory) => match factory.build() {
                 Ok(built) => Some(built),
@@ -401,6 +413,20 @@ impl App {
         }) else {
             return;
         };
+        let ms_build = t_build.elapsed().as_millis();
+        // init 分段汇总:一条报文收齐五段,归因「启动慢大头在哪」
+        crate::report::report(
+            "boot",
+            &format!(
+                "init 分段: exec={}ms 基座={}ms L3={}ms 会话={}ms 终端build={}ms init合计={}ms",
+                ms_exec,
+                ms_base,
+                ms_l3,
+                ms_sess,
+                ms_build,
+                t_init.elapsed().as_millis()
+            ),
+        );
         crate::report::report("term", &format!("字体加载自 {font_path} +{}ms", boot_ms()));
         match &cjk_path {
             Some(p) => crate::report::report("term", &format!("CJK 备用字体: {p}")),
