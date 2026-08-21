@@ -103,6 +103,10 @@
   receive.denyCurrentBranch=updateInstead + bootstrap 资产已同步到
   手机 ~/kfm-na-toolchain/bootstrap-aarch64.zip。**bootstrap 重编后要
   重同步这个 zip**,否则手机编出的是裸包(壳会回落系统 sh)。
+- **商业字体同理**:assets/fonts/local/ 永不进库 → git push 到手机时
+  不会带,手机编出的包回落开源占位字体(2026-08-21 实拍「字体不对」
+  的成因)。已 scp 同步 main.ttf(md5 两边一致);**local/ 字体换了要
+  重同步手机仓**,否则手机包字体跟服务器包不一致。
 - versionCode 用 epoch 秒（package-apk.sh,2026-08-21 改）——跨机天然
   单调，双机都打包也不会降级拒装；同秒连打/时钟回拨取「上次+1」保底。
   （旧方案「双机各自独立计数」已失信废除：手机 16777497 < 已装 16777519

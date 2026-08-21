@@ -769,8 +769,9 @@ impl TermView {
 
     /// 放大镜（边界拖动中，android_app 在主渲染+快捷键行之后调用）：
     /// 触点正下方那格为中心，±MAG_HALF_COLS 格 × ±MAG_HALF_ROWS 行的
-    /// 帧缓冲源区最近邻 MAG_ZOOM 倍贴进带边框的圆角浮窗，浮在触点上方
-    /// （MAG_GAP_PX 间距不挡手），整窗钳在屏内。源区出屏部分留衬底黑
+    /// 帧缓冲源区最近邻 MAG_ZOOM 倍贴进带边框的圆角浮窗，默认浮在触点
+    /// 上方（MAG_GAP_PX 间距不挡手）；上方放不下翻转到触点下方，两侧都
+    /// 放不下才钳屏内。源区出屏部分留衬底黑
     pub fn render_magnifier(&self, buf: &mut [u32], buf_w: u32, buf_h: u32, x: f64, y: f64) {
         if buf_w == 0 || buf_h == 0 || buf.len() < (buf_w * buf_h) as usize {
             return;
@@ -795,11 +796,23 @@ impl TermView {
         if win_w == 0 || win_h == 0 || win_w > buf_w || win_h > buf_h {
             return; // 窗比屏大（极端小窗）：保命不画
         }
-        // 浮窗位置：水平对触点居中，底缘在触点上方 MAG_GAP_PX；钳在屏内
+        // 浮窗位置：水平对触点居中；默认浮触点上方 MAG_GAP_PX 不挡手——
+        // 上方放不下（触点贴屏顶）翻转到触点下方（2026-08-21 实拍：贴顶
+        // 拖动时旧钳制把浮窗压到屏顶盖住触点，看不见 = 失控）；两侧都
+        // 放不下（极端矮屏）才退回屏内钳制保命
         const BORDER: u32 = 2;
         let win_x = (x as i64 - (win_w / 2) as i64).clamp(0, (buf_w - win_w) as i64) as u32;
-        let win_y = (y as i64 - i64::from(MAG_GAP_PX) - win_h as i64)
-            .clamp(0, (buf_h - win_h) as i64) as u32;
+        let above_y = y as i64 - i64::from(MAG_GAP_PX) - win_h as i64;
+        let win_y = if above_y >= 0 {
+            above_y as u32
+        } else {
+            let below_y = y as i64 + i64::from(MAG_GAP_PX);
+            if below_y + win_h as i64 <= i64::from(buf_h) {
+                below_y as u32
+            } else {
+                above_y.clamp(0, (buf_h - win_h) as i64) as u32
+            }
+        };
         // 先把源区拷出来（读写同一块 buf，不拷会自踩）
         let src_x0 = (cx as i64 - src_hw as i64).max(0);
         let src_y0 = (cy as i64 - src_hh as i64).max(0);

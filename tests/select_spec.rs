@@ -460,7 +460,7 @@ fn spec_选择_边界无柄渲染钉() {
     );
 }
 
-// ---------- 放大镜（拖柄拖动中浮窗） ----------
+// ---------- 放大镜（边界拖动中浮窗） ----------
 
 #[test]
 fn spec_放大镜_两倍最近邻与边框钳制() {
@@ -479,12 +479,14 @@ fn spec_放大镜_两倍最近邻与边框钳制() {
     let win_w = 5 * CELL_W * 2 * 2; // 360
     let win_h = 3 * CELL_H * 2 * 2; // 432
     // 触点格 (5,1) 格心 = (111, 102)：横向 111-180 < 0 → 钳 0；
-    // 纵向 102-60-432 < 0 → 钳 0。钳制本身也是被钉的行为
+    // 纵向 102-60-432 < 0 上方放不下 → **翻转到触点下方**（贴边翻转钉：
+    // 102+60=162，162+432=594 ≤ 700 放得下）。翻转本身是被钉的行为
     let win_x = 0u32;
-    let win_y = 0u32;
-    // 边框：窗顶中点上沿必须是边框色（圆角切角，取中点避开）
+    let win_y = ty as u32 + termview::MAG_GAP_PX;
+    // 边框：窗顶中点上沿必须是边框色（圆角切角，取中点避开；边框在内容
+    // 区外 2px——win_y 非 0 时不再与内容首行重叠）
     assert_eq!(
-        buf[(win_y * buf_w + win_x + win_w / 2) as usize],
+        buf[((win_y - 2) * buf_w + win_x + win_w / 2) as usize],
         MAG_BORDER,
         "浮窗外圈必须是边框色"
     );
@@ -507,6 +509,48 @@ fn spec_放大镜_两倍最近邻与边框钳制() {
         }
     }
     assert!(ink > 1000, "放大窗内必须有大量字形墨（实得 {ink}）");
+}
+
+#[test]
+fn spec_放大镜_贴边翻转() {
+    // 2026-08-21 实拍：贴屏顶拖动时旧钳制把浮窗压到屏顶盖住触点
+    // （看不见 = 失控）——上方放不下必须翻触点下方；下方也不行的极端
+    // 矮屏才退回屏内钳制（变异抽检：摘掉翻转分支，本考题必须红）
+    let mut tv = host_termview(20, 10);
+    tv.feed(b"ABCDEFGHIJ\r\nKLMNOPQRST\r\nUVWXYZabcd");
+    let (buf_w, buf_h) = (500u32, 900u32);
+    let win_h = 3 * CELL_H * 2 * 2; // 432
+    let gap = termview::MAG_GAP_PX;
+    let border_at = |buf: &[u32], win_x: u32, win_y: u32, expect: &str| {
+        assert_eq!(
+            buf[((win_y - 2) * buf_w + win_x + 180) as usize],
+            MAG_BORDER,
+            "{expect}"
+        );
+    };
+    // ① 触点低位（y=600，上方 600-60-432=108 ≥0）→ 维持上方
+    let mut buf = vec![0u32; (buf_w * buf_h) as usize];
+    tv.render_into(&mut buf, buf_w, buf_h);
+    tv.render_magnifier(&mut buf, buf_w, buf_h, 250.0, 600.0);
+    let win_y = 600 - gap - win_h;
+    border_at(&buf, 70, win_y, "触点低位：浮窗必须仍在触点上方");
+    // ② 触点贴顶（y=66，上方放不下）→ 翻下方 y=66+60=126
+    let mut buf = vec![0u32; (buf_w * buf_h) as usize];
+    tv.render_into(&mut buf, buf_w, buf_h);
+    tv.render_magnifier(&mut buf, buf_w, buf_h, 250.0, 66.0);
+    border_at(&buf, 70, 66 + gap, "触点贴顶：浮窗必须翻转到触点下方");
+    // ③ 极端矮屏（buf_h=500：上方 250-60-432<0，下方 250+60+432=742>500）
+    //   → 退回屏内钳制 win_y=0。查左边框中点（顶行会被内容覆盖，左边框
+    //   不被内容踩——内容区 x 从 win_x=70 起，取 x=69）
+    let buf_h2 = 500u32;
+    let mut buf = vec![0u32; (buf_w * buf_h2) as usize];
+    tv.render_into(&mut buf, buf_w, buf_h2);
+    tv.render_magnifier(&mut buf, buf_w, buf_h2, 250.0, 250.0);
+    assert_eq!(
+        buf[(250 * buf_w + 69) as usize],
+        MAG_BORDER,
+        "两侧都放不下：退回屏内钳制（win_y=0，左边框中点必为边框色）"
+    );
 }
 
 // ---------- kfmv4 色板（2026-08-21 品牌统一） ----------
