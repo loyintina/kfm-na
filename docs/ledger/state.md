@@ -53,14 +53,13 @@
   一行不能抄；终端仿真我们已有 alacritty_terminal)。kfmv4 功能搬家
   （光球/卡片堆）后移到核心层分层落定之后。不为本地 shell 做常驻保活
   （wake lock 烧电；会话永生由服务器端 tmux 扛）。
-- **L3 进行中（2026-08-20 起）**:fork termux-packages 源码重编 bootstrap
-  （正道，设计/流水线页 = kfmv4 experiments/dsh-na/na/l3-bootstrap.md)。
-  代码侧全落地：`src/bootstrap.rs` 解压核心（考题 5 道）+ Android 壳
-  接线（JNI filesDir + ndk 资产 + second-stage)+ local_pty shell_plan
-  （考题 2 道）+ package-apk.sh 资产入包（4280703)。docker 构建在跑
-  （坑已修三：容器 uid 1001 chown / googlesource→tuna / github 资产
-  CDN 龟速→ghfast.top 镜像补丁进 termux_download.sh)。**等 zip 产物 →
-  打包送机实拍**：首启慢几秒解压环境，之后本地会话应变 bash 生态。
+- **L3 已闭环（2026-08-21 实拍过 ✅)**:bootstrap-aarch64.zip 32M
+  (83 包运行时闭包,剪枝自 222 个 deb)入包,真机解压+second-stage
+  成功,本地会话进 bash 生态。fork 链 12 条坑全部记档在
+  kfmv4 experiments/dsh-na/na/l3-bootstrap.md §3(含 docker cp 权限
+  陷阱、overlay 活体手术禁令、output 剪枝纪律)。ss 类 netlink 诊断
+  是安卓内核铁墙(非包问题);curl/git/tmux 等靠 apt 装(keyring
+  是官方 key 复刻,官方源/镜像直通)。
 
 ## 待判卷（实拍未回）
 
@@ -81,9 +80,28 @@
   长按选择复制，规格 docs/active/壳层交互.md，待实拍判卷）
 - 阶段 2 落地通报（含 BAR-020/021/022/023）投信箱，模板参考
   /root/kfmv4/docs/ledger/agent-inbox/kfm-na-cordis-rs-stage1-landing.md
-- L3 路线规划：fork termux-packages 换前缀（TERMUX_APP_PACKAGE=
-  dev.kfm.na）出 bootstrap，体量 1~2 周——先出计划要点给用户拍板，
-  再动手（承诺过「先出计划再动手」）
+- ~~L3 路线规划~~(2026-08-21 已闭环，见「当前位置」L3 条与
+  l3-bootstrap.md;apt 自建源换 keyring 路线留档 l3-bootstrap.md §6,
+  真需要时再启)
+
+## 构建流程（2026-08-21 用户定案，勿翻）
+
+**服务器出题判卷，手机编包安装。** 分工：
+
+- 服务器（/root/kfm-na):代码事实来源；pre-commit chain 8 步全绿才算数，
+  commit-msg 双门照常。任何代码先进这里。
+- 手机（Termux,/data/data/com.termux/files/home/kfm-na)：只拉绿了的
+  master → 本地编 APK → 本地调安装器。不当判官、不提交代码。
+- 一键入口:`bash scripts/build-on-phone.sh`(push master → 手机跑
+  deploy-phone.sh --build，其本地模式直接调安装器)。
+- 为什么:APK 带 bootstrap 资产后 37M,scp 回传每趟太贵;源码 diff 走
+  ssh 隧道秒级;编译负载挪出服务器(多 agent 共线会卡,2026-08-21 实踩
+  孤儿链死锁 + 并发踩踏)。
+- 一次性铺设(已做):phone remote(ssh://localhost:8022/...)+ 手机侧
+  receive.denyCurrentBranch=updateInstead + bootstrap 资产已同步到
+  手机 ~/kfm-na-toolchain/bootstrap-aarch64.zip。**bootstrap 重编后要
+  重同步这个 zip**,否则手机编出的是裸包(壳会回落系统 sh)。
+- versionCode 双机各自独立计数(package-apk.sh 注释),不回同步。
 
 ## 日志判读手册（field-reports.log，踩坑攒的）
 
