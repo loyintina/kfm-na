@@ -685,64 +685,46 @@ impl TermView {
         Some(out)
     }
 
-    /// 选择拖柄的屏像素位置（柄心 = 水滴圆头中心）：归一化起/止端点各自
-    /// 格底缘中点下探——整柄占格底缘下一整格高（柄体从格底缘连到圆头，
-    /// 圆头贴该格底），柄心 = 格底缘 + (cell_h - 半径)。端点滚出可视区 →
-    /// 该端为 None；无选区 → 整个 None。渲染与命中判定共用这一份坐标
-    /// （同一把尺）
-    pub fn selection_handles(&self) -> Option<HandlePositions> {
+    /// 触点命中选区哪一端（边界直拖——2026-08-21 拖柄废除改此：水滴柄
+    /// 丑且白占一行高）：触点格与归一化起/止端格的行差、列差都 ≤1
+    /// （触控宽容，手指不是鼠标）即算抓住；两端同圈（相邻格小选区）取
+    /// 距触点像素近的一端，等距钉 Start（确定性规则，考题钉死）。
+    /// 屏外端点天然抓不到（触点总在屏内，距离必超圈）。无选区 → None
+    pub fn hit_boundary(&self, x: f64, y: f64) -> Option<SelEnd> {
         let sel = self.selection?;
         let (s, e) = if sel.anchor <= sel.cursor {
             (sel.anchor, sel.cursor)
         } else {
             (sel.cursor, sel.anchor)
         };
-        let offset = self.term.grid().display_offset() as i32;
-        let screen_lines = self.term.grid().screen_lines() as i32;
-        let to_px = |end: (i32, u32)| -> Option<(f64, f64)> {
-            let row = end.0 + offset;
-            if !(0..screen_lines).contains(&row) {
-                return None;
-            }
-            let hx = f64::from(MARGIN_X + end.1 * self.cell_w) + f64::from(self.cell_w) / 2.0;
-            let hy = f64::from(
-                margin_top(self.cell_h) + (row as u32 + 2) * self.cell_h
-                    - handle_radius(self.cell_w),
-            );
-            Some((hx, hy))
+        let (line, col) = self.grid_point_at(x, y);
+        let near =
+            |end: (i32, u32)| (end.0 - line).abs() <= 1 && (end.1 as i32 - col as i32).abs() <= 1;
+        // 平局裁决：端点格心距触点的像素距离（行换算回屏行 = +display_offset）
+        let dist = |end: (i32, u32)| {
+            let cx = f64::from(MARGIN_X + end.1 * self.cell_w) + f64::from(self.cell_w) / 2.0;
+            let row = end.0 + self.term.grid().display_offset() as i32;
+            let cy =
+                f64::from(margin_top(self.cell_h)) + (row as f64 + 0.5) * f64::from(self.cell_h);
+            (x - cx).powi(2) + (y - cy).powi(2)
         };
-        Some((to_px(s), to_px(e)))
-    }
-
-    /// 触点命中哪个拖柄（触控宽容 ±1 格，handle_hit）：双柄都中（相邻格
-    /// 选区）取近的；都不中/无选区 → None
-    pub fn hit_handle(&self, x: f64, y: f64) -> Option<HandleEnd> {
-        let (start, end) = self.selection_handles()?;
-        let hit = |hp: Option<(f64, f64)>| -> Option<f64> {
-            let (hx, hy) = hp?;
-            if handle_hit(hx, hy, x, y, self.cell_w, self.cell_h) {
-                Some((x - hx).powi(2) + (y - hy).powi(2))
+        match (near(s), near(e)) {
+            (true, true) => Some(if dist(s) <= dist(e) {
+                SelEnd::Start
             } else {
-                None
-            }
-        };
-        match (hit(start), hit(end)) {
-            (Some(ds), Some(de)) => Some(if ds <= de {
-                HandleEnd::Start
-            } else {
-                HandleEnd::End
+                SelEnd::End
             }),
-            (Some(_), None) => Some(HandleEnd::Start),
-            (None, Some(_)) => Some(HandleEnd::End),
-            (None, None) => None,
+            (true, false) => Some(SelEnd::Start),
+            (false, true) => Some(SelEnd::End),
+            (false, false) => None,
         }
     }
 
-    /// 拖动拖柄移动端点：归一化起/止端谁被拖就谁跟手指（网格坐标换算
+    /// 拖动选区边界移动端点：归一化起/止端谁被拖就谁跟手指（网格坐标换算
     /// 沿用 grid_point_at——跨行/历史区同尺；落 spacer 半格按拖动方向钳，
     /// 方向 = 新落点 vs 该端旧位置字典序）。拖过另一端则角色互换
     /// （起点拖过终点 → 它变成新终点），选区不塌缩翻转
-    pub fn move_selection_end(&mut self, which: HandleEnd, x: f64, y: f64) {
+    pub fn move_selection_end(&mut self, which: SelEnd, x: f64, y: f64) {
         let Some(sel) = self.selection else { return };
         let (s, e) = if sel.anchor <= sel.cursor {
             (sel.anchor, sel.cursor)
@@ -751,12 +733,12 @@ impl TermView {
         };
         let raw = self.grid_point_at(x, y);
         let old = match which {
-            HandleEnd::Start => s,
-            HandleEnd::End => e,
+            SelEnd::Start => s,
+            SelEnd::End => e,
         };
         let p = self.clamp_wide_endpoint(raw, raw >= old);
         self.selection = Some(match which {
-            HandleEnd::Start => {
+            SelEnd::Start => {
                 if p <= e {
                     Selection {
                         anchor: p,
@@ -769,7 +751,7 @@ impl TermView {
                     }
                 }
             }
-            HandleEnd::End => {
+            SelEnd::End => {
                 if p >= s {
                     Selection {
                         anchor: s,
@@ -785,7 +767,7 @@ impl TermView {
         });
     }
 
-    /// 放大镜（拖柄拖动中，android_app 在主渲染+快捷键行之后调用）：
+    /// 放大镜（边界拖动中，android_app 在主渲染+快捷键行之后调用）：
     /// 触点正下方那格为中心，±MAG_HALF_COLS 格 × ±MAG_HALF_ROWS 行的
     /// 帧缓冲源区最近邻 MAG_ZOOM 倍贴进带边框的圆角浮窗，浮在触点上方
     /// （MAG_GAP_PX 间距不挡手），整窗钳在屏内。源区出屏部分留衬底黑
@@ -972,47 +954,6 @@ impl TermView {
                 self.cell_w
             };
             self.draw_glyph(&mut frame, cell.c, cell.px, cell.py, cell.fg, clip_w);
-        }
-        // 选择拖柄（抬手定型后可拖，Termux 语义借鉴）：起/止端点格下方
-        // 各一枚水滴/图钉——圆头（直径 ≈0.7 格宽）+ 柄体（连到选中条边缘），
-        // 整柄一整格高。kfmv4 标志画法「黑边 + 亮色辉光」的像素版：先画
-        // 近黑 HANDLE_DARK 大一圈作描边，再叠青色 HANDLE_CYAN 主体。
-        // 屏外端点（滚出可视区）不画
-        if let Some(sel) = selection {
-            let (s, e) = if sel.anchor <= sel.cursor {
-                (sel.anchor, sel.cursor)
-            } else {
-                (sel.cursor, sel.anchor)
-            };
-            let r = handle_radius(self.cell_w);
-            for end in [s, e] {
-                let row = end.0 + offset;
-                if !(0..self.term.grid().screen_lines() as i32).contains(&row) {
-                    continue;
-                }
-                let hx = MARGIN_X + end.1 * self.cell_w + self.cell_w / 2;
-                let cell_bottom = margin_top(self.cell_h) + (row as u32 + 1) * self.cell_h;
-                let cy = cell_bottom + self.cell_h - r; // 圆头中心（贴该格底）
-                let stem_h = cy - cell_bottom; // 柄体高 = cell_h - r
-                // 描边层：圆 r+2 + 柄体横向左右各扩 2
-                frame.fill_rect(
-                    hx.saturating_sub(r / 2 + 2),
-                    cell_bottom,
-                    r + 4,
-                    stem_h,
-                    HANDLE_DARK,
-                );
-                frame.fill_circle(hx, cy, r + 2, HANDLE_DARK);
-                // 主体层
-                frame.fill_rect(
-                    hx.saturating_sub(r / 2),
-                    cell_bottom,
-                    r,
-                    stem_h,
-                    HANDLE_CYAN,
-                );
-                frame.fill_circle(hx, cy, r, HANDLE_CYAN);
-            }
         }
     }
 
@@ -1204,40 +1145,21 @@ pub const KEYBAR_LABEL: u32 = 0x00E8_EAED;
 /// 此前借用的 KEYBAR_MOD_ON 0x3E6FB4 是快捷键行私色，不成套）
 pub const SELECT_BG: u32 = 0x003B_82F6;
 
-/// 选择拖柄配色（kfmv4 标志画法「黑边 + 亮色辉光」的像素版）：
-/// 主体 = kfmv4 青 CYAN #06B6D4；描边/底影 = 近黑 #0A0C10 先画大一圈
-pub const HANDLE_CYAN: u32 = 0x0006_B6D4;
-pub const HANDLE_DARK: u32 = 0x000A_0C10;
-
-/// 拖柄圆头半径（A 档考题钉死）：直径 ≈ 0.7 格宽；整柄高度对齐选中条
-/// （一整格高：柄体从格底缘连到圆头）
-pub fn handle_radius(cell_w: u32) -> u32 {
-    (cell_w * 7 / 20).max(2)
-}
-
-/// 放大镜（拖柄拖动中浮窗）：源区 = 触点格 ±5 格宽 × ±3 行高，最近邻 2 倍；
-/// 边框青色（与拖柄同色系，不撞色），衬底黑
+/// 放大镜（边界拖动中浮窗）：源区 = 触点格 ±5 格宽 × ±3 行高，最近邻 2 倍；
+/// 边框 kfmv4 青 #06B6D4（与选中条正蓝同品牌色板），衬底黑
 pub const MAG_HALF_COLS: u32 = 5;
 pub const MAG_HALF_ROWS: u32 = 3;
 pub const MAG_ZOOM: u32 = 2;
-pub const MAG_BORDER: u32 = HANDLE_CYAN;
+pub const MAG_BORDER: u32 = 0x0006_B6D4;
 /// 浮窗底缘与触点的间距（不挡手）
 pub const MAG_GAP_PX: u32 = 60;
 
-/// 选择拖柄端点：Start = 归一化后的起端（字典序小），End = 止端
+/// 选区边界端点：Start = 归一化后的起端（字典序小），End = 止端
+/// （2026-08-21 拖柄废除后改名 SelEnd——柄没了，端点还在）
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum HandleEnd {
+pub enum SelEnd {
     Start,
     End,
-}
-
-/// 两端拖柄的屏像素位置（起端, 止端；滚出可视区的端为 None）
-pub type HandlePositions = (Option<(f64, f64)>, Option<(f64, f64)>);
-
-/// 拖柄命中判定（A 档考题钉死）：触点距柄心横向 ≤1 格宽、纵向 ≤1 格高
-/// 即算按住（触控宽容——手指不是鼠标，10px 圆点裸点命中率太低）
-pub fn handle_hit(hx: f64, hy: f64, x: f64, y: f64, cell_w: u32, cell_h: u32) -> bool {
-    (x - hx).abs() <= f64::from(cell_w) && (y - hy).abs() <= f64::from(cell_h)
 }
 
 /// 帧缓冲视图：把 buf + 尺寸打包，免得每个画图函数都拖一溜参数（clippy 红线）
@@ -1281,22 +1203,6 @@ impl Frame<'_> {
                     continue;
                 }
                 let (ax, ay) = (x as i64 + px, y as i64 + py);
-                if ax >= 0 && ay >= 0 && ax < i64::from(self.w) && ay < i64::from(self.h) {
-                    self.buf[(ay * i64::from(self.w) + ax) as usize] = color;
-                }
-            }
-        }
-    }
-
-    /// 画实心圆（裁剪到帧缓冲内），选择拖柄用
-    fn fill_circle(&mut self, cx: u32, cy: u32, r: u32, color: u32) {
-        let r = r as i64;
-        for dy in -r..=r {
-            for dx in -r..=r {
-                if dx * dx + dy * dy > r * r {
-                    continue;
-                }
-                let (ax, ay) = (cx as i64 + dx, cy as i64 + dy);
                 if ax >= 0 && ay >= 0 && ax < i64::from(self.w) && ay < i64::from(self.h) {
                     self.buf[(ay * i64::from(self.w) + ax) as usize] = color;
                 }
@@ -1380,9 +1286,9 @@ pub trait TermEmu: Send {
     fn extend_selection(&mut self, x: f64, y: f64);
     fn clear_selection(&mut self);
     fn selected_text(&self) -> Option<String>;
-    /// 选择拖柄/放大镜面（android_app 拖柄手势调用方）
-    fn hit_handle(&self, x: f64, y: f64) -> Option<HandleEnd>;
-    fn move_selection_end(&mut self, which: HandleEnd, x: f64, y: f64);
+    /// 选区边界/放大镜面（android_app 边界拖动手势调用方）
+    fn hit_boundary(&self, x: f64, y: f64) -> Option<SelEnd>;
+    fn move_selection_end(&mut self, which: SelEnd, x: f64, y: f64);
     fn render_magnifier(&self, buf: &mut [u32], w: u32, h: u32, x: f64, y: f64);
 }
 
@@ -1438,10 +1344,10 @@ impl TermEmu for TermView {
     fn selected_text(&self) -> Option<String> {
         TermView::selected_text(self)
     }
-    fn hit_handle(&self, x: f64, y: f64) -> Option<HandleEnd> {
-        TermView::hit_handle(self, x, y)
+    fn hit_boundary(&self, x: f64, y: f64) -> Option<SelEnd> {
+        TermView::hit_boundary(self, x, y)
     }
-    fn move_selection_end(&mut self, which: HandleEnd, x: f64, y: f64) {
+    fn move_selection_end(&mut self, which: SelEnd, x: f64, y: f64) {
         TermView::move_selection_end(self, which, x, y)
     }
     fn render_magnifier(&self, buf: &mut [u32], w: u32, h: u32, x: f64, y: f64) {

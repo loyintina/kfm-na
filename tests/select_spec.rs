@@ -8,19 +8,20 @@
 //!   历史区 display_offset 下的行号换算
 //! - 高亮渲染钉：选中格盖 SELECT_BG 底色，清选后消失；CJK 双宽字
 //!   两格都盖高亮且右半字形墨不被盖（两遍制渲染钉）
-//! - 拖柄：命中判定（±1 格触控宽容）、端点移动（含互换）、水滴渲染钉
-//!   （青色主体 + 近黑描边，kfmv4 色板字面量钉）
+//! - 边界直拖（2026-08-21 拖柄废除——水滴柄丑且占一行高，改按住选区
+//!   边界格直拖）：命中判定（端点格 ±1 触控宽容）、端点移动（含互换）、
+//!   无柄渲染钉（选区只剩 SELECT_BG 高亮，不得再画青色柄）
 //! - 放大镜：2 倍最近邻映射逐点比对、边框、屏内钳制
 //! - 宽字符边界钳制：端点落 CJK spacer 半格按拖动方向钳（右 col+1 /
-//!   左 col-1），选词/扩选/拖柄三入口同尺；提取一致性（探针
+//!   左 col-1），选词/扩选/边界三入口同尺；提取一致性（探针
 //!   set_selection_raw）；渲染整字扩边不劈字
 //!
 //! JNI 剪贴板/Toast 薄壳（src/clipboard.rs）是 B 档平台胶水，无考题，
 //! 真机判卷（粘贴到别处 + Toast 文案）。
 
 use kfm_na::termview::{
-    self, CELL_H, CELL_W, HANDLE_CYAN, HANDLE_DARK, HandleEnd, MAG_BORDER, SELECT_BG, Selection,
-    TermView, handle_hit, handle_radius, in_selection, is_word_char, px_to_cell,
+    self, CELL_H, CELL_W, MAG_BORDER, SELECT_BG, SelEnd, Selection, TermView, in_selection,
+    is_word_char, px_to_cell,
 };
 
 /// 测试字体夹具双环境解析（与 termview_spec.rs 同规则：服务器 /usr/share，
@@ -361,63 +362,58 @@ fn prefer_cjk_fixture_check() -> bool {
     host_font().lookup_glyph_index('中') == 0
 }
 
-// ---------- 选择拖柄（2026-08-21，Termux 语义借鉴） ----------
+// ---------- 选区边界直拖（2026-08-21 拖柄废除：水滴柄丑且白占一行高） ----------
 
 #[test]
-fn spec_选择_拖柄命中判定() {
-    // 纯函数边界（触控宽容 ±1 格，闭区间；变异抽检：改 < 或放宽到 ±2 格必须红）
-    assert!(handle_hit(
-        100.0,
-        100.0,
-        100.0 + f64::from(CELL_W),
-        100.0,
-        CELL_W,
-        CELL_H
-    ));
-    assert!(!handle_hit(
-        100.0,
-        100.0,
-        100.0 + f64::from(CELL_W) + 1.0,
-        100.0,
-        CELL_W,
-        CELL_H
-    ));
-    assert!(handle_hit(
-        100.0,
-        100.0,
-        100.0,
-        100.0 + f64::from(CELL_H),
-        CELL_W,
-        CELL_H
-    ));
-    assert!(!handle_hit(
-        100.0,
-        100.0,
-        100.0,
-        100.0 + f64::from(CELL_H) + 1.0,
-        CELL_W,
-        CELL_H
-    ));
-    // 端到端：选词后柄心命中起/止端，两柄中间不命中
+fn spec_选择_边界命中判定() {
+    // "hello world"：h0 e1 l2 l3 o4 空5 w6.. —— 选词 "hello" = (0,0)..(0,4)
     let mut tv = host_termview(20, 4);
     tv.feed(b"hello world");
     let (x, y) = cell_center(1, 0);
-    tv.select_word_at(x, y); // "hello" = (0,0)..(0,4)
-    let (start, end) = tv.selection_handles().expect("选区在屏内");
-    let (sx, sy) = start.expect("起端柄在屏内");
-    let (ex, ey) = end.expect("止端柄在屏内");
-    assert_eq!(tv.hit_handle(sx, sy), Some(HandleEnd::Start));
-    assert_eq!(tv.hit_handle(ex, ey), Some(HandleEnd::End));
-    // 两柄之间（col 2 格心同高度）距两端都 >1 格 → None
-    let mid_x = f64::from(termview::MARGIN_X + 2 * CELL_W) + f64::from(CELL_W) / 2.0;
-    assert_eq!(tv.hit_handle(mid_x, sy), None);
+    tv.select_word_at(x, y);
+    // 端点格心按下即抓（变异抽检：摘掉行或列的 ≤1 宽容，本考题必须红）
+    let (x, y) = cell_center(0, 0);
+    assert_eq!(tv.hit_boundary(x, y), Some(SelEnd::Start));
+    let (x, y) = cell_center(4, 0);
+    assert_eq!(tv.hit_boundary(x, y), Some(SelEnd::End));
+    // ±1 格触控宽容：起端右一格 (1,0) 仍抓 Start；止端右一格 (5,0 空格) 仍抓 End
+    let (x, y) = cell_center(1, 0);
+    assert_eq!(tv.hit_boundary(x, y), Some(SelEnd::Start));
+    let (x, y) = cell_center(5, 0);
+    assert_eq!(tv.hit_boundary(x, y), Some(SelEnd::End));
+    // 纵向宽容同尺：起端正下一行同列 (0,1) 抓 Start
+    let (x, y) = cell_center(0, 1);
+    assert_eq!(tv.hit_boundary(x, y), Some(SelEnd::Start));
+    // 中段只有 (2,0) 距两端都 >1 格 → None；(3,0) 距止端 1 格 → 抓 End
+    let (x, y) = cell_center(2, 0);
+    assert_eq!(tv.hit_boundary(x, y), None);
+    let (x, y) = cell_center(3, 0);
+    assert_eq!(tv.hit_boundary(x, y), Some(SelEnd::End));
     // 无选区 → None
     tv.clear_selection();
-    assert_eq!(tv.hit_handle(sx, sy), None);
+    let (x, y) = cell_center(0, 0);
+    assert_eq!(tv.hit_boundary(x, y), None);
 }
 
 #[test]
-fn spec_选择_拖柄移动端点() {
+fn spec_选择_边界命中_双端同圈取近() {
+    // 两格选区 (0,0)..(0,1)：触点落起端格时止端也在 ±1 圈内——
+    // 取距触点像素近的一端（起端格心距 0）→ Start；等距规则钉 Start
+    let mut tv = host_termview(20, 4);
+    tv.feed(b"hello world");
+    tv.set_selection_raw((0, 0), (0, 1));
+    let (x, y) = cell_center(0, 0);
+    assert_eq!(tv.hit_boundary(x, y), Some(SelEnd::Start));
+    let (x, y) = cell_center(1, 0);
+    assert_eq!(tv.hit_boundary(x, y), Some(SelEnd::End));
+    // 单格选区 (0,0)..(0,0)：触点 (1,0) 距两端同一格心等距 → 钉 Start
+    tv.set_selection_raw((0, 0), (0, 0));
+    let (x, y) = cell_center(1, 0);
+    assert_eq!(tv.hit_boundary(x, y), Some(SelEnd::Start));
+}
+
+#[test]
+fn spec_选择_边界移动端点() {
     // "hello world"：h0 e1 l2 l3 o4 空5 w6 o7 r8 l9 d10
     let mut tv = host_termview(20, 4);
     tv.feed(b"hello world");
@@ -425,15 +421,15 @@ fn spec_选择_拖柄移动端点() {
     tv.select_word_at(x, y); // "hello"
     // 拖止端右移 3 格 → 纳入 " wo"
     let (x, y) = cell_center(7, 0);
-    tv.move_selection_end(HandleEnd::End, x, y);
+    tv.move_selection_end(SelEnd::End, x, y);
     assert_eq!(tv.selected_text().as_deref(), Some("hello wo"));
     // 拖起端右移 2 格 → 掐头
     let (x, y) = cell_center(2, 0);
-    tv.move_selection_end(HandleEnd::Start, x, y);
+    tv.move_selection_end(SelEnd::Start, x, y);
     assert_eq!(tv.selected_text().as_deref(), Some("llo wo"));
     // 起端拖过止端 → 角色互换（起点变新终点），选区不塌缩
     let (x, y) = cell_center(9, 0);
-    tv.move_selection_end(HandleEnd::Start, x, y);
+    tv.move_selection_end(SelEnd::Start, x, y);
     assert_eq!(tv.selected_text().as_deref(), Some("orl"));
     // 跨行：止端拖到第 1 行
     let mut tv = host_termview(20, 6);
@@ -441,15 +437,14 @@ fn spec_选择_拖柄移动端点() {
     let (x, y) = cell_center(1, 0);
     tv.select_word_at(x, y); // "first"
     let (x, y) = cell_center(3, 1);
-    tv.move_selection_end(HandleEnd::End, x, y);
+    tv.move_selection_end(SelEnd::End, x, y);
     assert_eq!(tv.selected_text().as_deref(), Some("first\nseco"));
 }
 
 #[test]
-fn spec_选择_拖柄渲染钉() {
-    // 水滴/图钉（kfmv4「黑边 + 亮色辉光」像素版）：圆头中心 = 青色主体，
-    // 圆头外沿一圈 = 近黑描边；柄体从格底缘连到圆头，侧沿描边。
-    // （变异抽检：摘掉描边层或柄体段，本考题必须红）
+fn spec_选择_边界无柄渲染钉() {
+    // 拖柄废除的反向钉：选区高亮只剩 SELECT_BG 底色，任何像素都不得再
+    // 出现旧拖柄的青色 #06B6D4（变异抽检：把柄画回来，本考题必须红）
     let mut tv = host_termview(20, 4);
     tv.feed(b"hello world");
     let (x, y) = cell_center(1, 0);
@@ -458,31 +453,11 @@ fn spec_选择_拖柄渲染钉() {
     let buf_h = termview::margin_top(CELL_H) + 4 * CELL_H + termview::MARGIN_Y;
     let mut buf = vec![0u32; (buf_w * buf_h) as usize];
     tv.render_into(&mut buf, buf_w, buf_h);
-    let r = handle_radius(CELL_W);
-    let (start, end) = tv.selection_handles().expect("选区在屏内");
-    for hp in [start, end] {
-        let (hx, cy) = hp.expect("两端柄都在屏内");
-        let (hx, cy) = (hx as u32, cy as u32);
-        let px = |x: u32, y: u32| buf[(y * buf_w + x) as usize];
-        assert_eq!(px(hx, cy), HANDLE_CYAN, "圆头中心必须是青色主体");
-        assert_eq!(
-            px(hx + r + 1, cy),
-            HANDLE_DARK,
-            "圆头右侧沿必须是近黑描边（描边比主体大一圈）"
-        );
-        // 柄体：格底缘 = 柄心上行 (CELL_H - r) 处；柄心上方 4px 处必在柄体段
-        let cell_bottom = cy + r - CELL_H;
-        assert_eq!(px(hx, cell_bottom + 4), HANDLE_CYAN, "柄体中线必须是青色");
-        assert_eq!(
-            px(hx + r / 2 + 1, cell_bottom + 4),
-            HANDLE_DARK,
-            "柄体侧沿必须是近黑描边"
-        );
-    }
-    tv.clear_selection();
-    let mut buf2 = vec![0u32; (buf_w * buf_h) as usize];
-    tv.render_into(&mut buf2, buf_w, buf_h);
-    assert!(!buf2.contains(&HANDLE_CYAN), "清选后拖柄必须消失");
+    assert!(buf.contains(&SELECT_BG), "选区高亮必须在");
+    assert!(
+        !buf.contains(&0x0006_B6D4),
+        "旧拖柄青色 #06B6D4 不得再出现（拖柄已废除）"
+    );
 }
 
 // ---------- 放大镜（拖柄拖动中浮窗） ----------
@@ -538,15 +513,9 @@ fn spec_放大镜_两倍最近邻与边框钳制() {
 
 #[test]
 fn spec_视觉_kfmv4色板() {
-    // 字面量钉死（变异抽检：改任一色值/半径比例，本考题必须红）
+    // 字面量钉死（变异抽检：改任一色值，本考题必须红）
     assert_eq!(SELECT_BG, 0x003B_82F6, "选中底色 = kfmv4 正蓝 #3B82F6");
-    assert_eq!(HANDLE_CYAN, 0x0006_B6D4, "拖柄主体 = kfmv4 青 #06B6D4");
-    assert_eq!(HANDLE_DARK, 0x000A_0C10, "拖柄描边 = 近黑 #0A0C10");
-    assert_eq!(MAG_BORDER, HANDLE_CYAN, "放大镜边框与拖柄同青色系");
-    // 圆头直径 ≈0.7 格宽：半径 = cell_w*7/20，下限 2
-    assert_eq!(handle_radius(CELL_W), 6, "18 格宽 → 半径 6");
-    assert_eq!(handle_radius(10), 3);
-    assert_eq!(handle_radius(4), 2, "半径下限 2");
+    assert_eq!(MAG_BORDER, 0x0006_B6D4, "放大镜边框 = kfmv4 青 #06B6D4");
 }
 
 // ---------- 宽字符边界钳制（2026-08-21，端点永不劈 CJK 字） ----------
@@ -621,18 +590,18 @@ fn spec_选择_宽字符_跨行中西文钳制() {
 }
 
 #[test]
-fn spec_选择_宽字符_拖柄路径同钳() {
+fn spec_选择_宽字符_边界路径同钳() {
     // move_selection_end 与 extend_selection 同一把钳（方向 = 新落点 vs
-    // 被拖端旧位置）：起端柄右拖到 spacer → 钳 col+1
+    // 被拖端旧位置）：起端边界右拖到 spacer → 钳 col+1
     let mut tv = cjk_termview("a中bc");
     let (x, y) = cell_center(0, 0);
     tv.select_word_at(x, y); // "a中" (0,0)..(0,2)
-    let (x, y) = cell_center(2, 0); // 起端柄右移到 spacer 格
-    tv.move_selection_end(HandleEnd::Start, x, y);
+    let (x, y) = cell_center(2, 0); // 起端边界右移到 spacer 格
+    tv.move_selection_end(SelEnd::Start, x, y);
     assert_eq!(
         tv.selected_text().as_deref(),
         Some("b"), // 钳到 col 3：选区 (0,3)..(0,2) 互换后 = 格 3 单格
-        "起端柄右拖落 spacer 必须同钳 col+1"
+        "起端边界右拖落 spacer 必须同钳 col+1"
     );
 }
 
