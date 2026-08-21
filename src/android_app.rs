@@ -1360,7 +1360,16 @@ impl ApplicationHandler for App {
         crate::report::report_sync("death", "exiting——事件循环即将退出");
     }
 
-    fn about_to_wait(&mut self, _el: &ActiveEventLoop) {
+    fn about_to_wait(&mut self, el: &ActiveEventLoop) {
+        // blackout 期控制流(2026-08-21 探针:首笔 Redraw 被系统扣 ~2.3s 期间
+        // request_redraw 被吞、无事件唤醒,默认 Wait 下循环睡死 2.5s 实录)。
+        // 首笔 Redraw 到达前 Poll 硬轮询保持泵转;到达后归回默认 Wait,
+        // 稳态泵仍靠 Redraw 连绵自维持(行为同旧)
+        el.set_control_flow(if self.first_redraw_seen {
+            winit::event_loop::ControlFlow::Wait
+        } else {
+            winit::event_loop::ControlFlow::Poll
+        });
         if TERMINAL_MODE {
             self.drain_terminal_events();
             self.drain_ime_inject();
