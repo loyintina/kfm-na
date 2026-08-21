@@ -970,9 +970,12 @@ impl ApplicationHandler for App {
     /// 若 +2.5s 才到 = 主线程被框架启动工作堵死,锤叫不醒;
     /// 若早就到 = 锤有效,病灶在别处)
     fn user_event(&mut self, _el: &ActiveEventLoop, _event: ()) {
-        static FIRST_UE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
-        if FIRST_UE.swap(false, std::sync::atomic::Ordering::Relaxed) {
-            crate::report::report("boot", &format!("首笔 user event 到达 +{}ms", boot_ms()));
+        // blackout 期循环心跳测绘(2026-08-21:首笔 ue +1ms 到,但补画仍
+        // +2726ms——要分清「后续锤没送进循环」还是「atw 跑了但条件假」)
+        static UE_N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = UE_N.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        if n <= 20 {
+            crate::report::report("boot", &format!("ue #{n} +{}ms", boot_ms()));
         }
     }
     fn new_events(&mut self, _el: &ActiveEventLoop, cause: winit::event::StartCause) {
@@ -1374,6 +1377,17 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, _el: &ActiveEventLoop) {
+        // blackout 期 atw 心跳测绘(配合 ue #N:锤进了循环后 atw 跑没跑)
+        static ATW_N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        if !FIRST_REDRAW_SEEN.load(std::sync::atomic::Ordering::Relaxed) {
+            let n = ATW_N.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            if n <= 20 {
+                crate::report::report(
+                    "boot",
+                    &format!("atw #{n} +{}ms dirty={}", boot_ms(), self.dirty),
+                );
+            }
+        }
         if TERMINAL_MODE {
             self.drain_terminal_events();
             self.drain_ime_inject();
