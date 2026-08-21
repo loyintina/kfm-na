@@ -52,8 +52,9 @@ const TERMINAL_MODE: bool = true;
 /// 看不见它们，要「至少一个提示」）。青色标题 + 灰说明，只 feed 视图
 /// 不进 PTY；滚屏可回看，每次冷启动印一次
 const HELP_BANNER: &str = "\x1b[36m── kfm-na 就绪 ──\x1b[0m\r\n\
-\x1b[90m切换会话: CTRL+] 本地⇄远程 · 触摸: 点按唤键盘 / 上下滑滚屏\x1b[0m\r\n\
-\x1b[90m快捷键行: CTRL/ALT/SHIFT 点一下粘住再敲字母 · HOME/END 跳首尾 · PGUP/PGDN 翻页\x1b[0m\r\n\
+\x1b[90m切换会话: CTRL+] 本地⇄远程 · 触摸: 点按唤键盘 / 滑动滚屏 / 双指缩放字号\x1b[0m\r\n\
+\x1b[90m长按选词: 拖动扩选 / 拖柄精调(带放大镜) / 单击复制 · HOME/END 跳首尾 · PGUP/PGDN 翻页\x1b[0m\r\n\
+\x1b[90m快捷键行: CTRL/ALT/SHIFT 点一下粘住再敲字母\x1b[0m\r\n\
 \x1b[90m本地 HOME: Android/data/dev.kfm.na/files(文件管理器可见,随便读写)\x1b[0m\r\n";
 
 type SoftContext = softbuffer::Context<Arc<Window>>;
@@ -130,6 +131,11 @@ struct App {
     /// 即 moved 撤 armed；RedrawRequested 每圈查时间戳（忙轮询泵福利，
     /// 免定时器）——≥500ms 未动即进选择模式
     press: Option<Press>,
+    /// 选择拖柄拖动中：Some(端点) = 手指按住了起/止拖柄（抬手定型后的
+    /// 精调手势，2026-08-21）。Some 期间放大镜浮窗跟着触点走
+    handle_drag: Option<crate::termview::HandleEnd>,
+    /// 放大镜触点（拖柄拖动中 Some）：draw_frame 据此在触点上方画浮窗
+    magnifier_at: Option<(f64, f64)>,
     /// 按在快捷键行带上的手势（BAR-017）：Started 记下起点，Ended 命中测试
     /// 发键/翻修饰键。Some = 这手势归快捷键行，不滚屏不唤键盘
     bar_touch: Option<(f64, f64)>,
@@ -640,6 +646,11 @@ impl App {
                 // 修饰键位读 input.modifiers 服务（input-ime 方案 A）
                 let mods = self.modifiers.as_ref().map_or(0, |m| m.peek());
                 term.render_keybar(&mut buf, w, h, self.ime_bottom_px, mods);
+                // 选择拖柄拖动中的放大镜浮窗（画在所有内容之上——
+                // 帧缓冲源区在主渲染里已就位，这里纯位图放大）
+                if let Some((mx, my)) = self.magnifier_at {
+                    term.render_magnifier(&mut buf, w, h, mx, my);
+                }
                 // tofu 目击上报：双字体都缺的字符（方框的真身），新字才报
                 let tofu = term.take_tofu_chars();
                 if !tofu.is_empty() {
@@ -792,6 +803,8 @@ impl ApplicationHandler for App {
                             self.pinch = Some((dist0, base));
                             self.touch_scroll = None;
                             self.press = None;
+                            self.handle_drag = None;
+                            self.magnifier_at = None;
                             crate::report::report(
                                 "zoom",
                                 &format!("捏合开始: dist0={dist0:.0} base={}x{}", base.0, base.1),
@@ -800,6 +813,20 @@ impl ApplicationHandler for App {
                         }
                         if self.touches.len() > 2 {
                             return; // 第三指起不接管
+                        }
+                        let selecting = self.term.as_ref().is_some_and(|t| t.selection_active());
+                        // 选择态按住拖柄 → 端点精调（放大镜随触点浮起）；
+                        // 不记 press——拖柄抬手不触发复制
+                        if selecting
+                            && let Some(end) = self
+                                .term
+                                .as_ref()
+                                .and_then(|t| t.hit_handle(touch.location.x, touch.location.y))
+                        {
+                            self.handle_drag = Some(end);
+                            self.magnifier_at = Some((touch.location.x, touch.location.y));
+                            crate::report::report("ime", &format!("拖柄按住: {end:?}"));
+                            return;
                         }
                         // 单指：记按压（长按计时，RedrawRequested 里查）；
                         // 选择态下不建滚动机——拖动 = 扩选
@@ -810,7 +837,6 @@ impl ApplicationHandler for App {
                             moved: false,
                             long_fired: false,
                         });
-                        let selecting = self.term.as_ref().is_some_and(|t| t.selection_active());
                         if !selecting {
                             let cell_h = self
                                 .term
@@ -854,6 +880,16 @@ impl ApplicationHandler for App {
                         }
                         if self.bar_touch.is_some() {
                             return; // 快捷键行手势：不支持拖动
+                        }
+                        // 拖柄拖动：端点跟手指走（跨行/历史区换算在
+                        // move_selection_end），放大镜跟着触点浮
+                        if let Some(end) = self.handle_drag {
+                            if let Some(t) = &mut self.term {
+                                t.move_selection_end(end, touch.location.x, touch.location.y);
+                            }
+                            self.magnifier_at = Some((touch.location.x, touch.location.y));
+                            self.dirty = true;
+                            return;
                         }
                         // 过阈值撤长按 armed（选择态/滚动态同一把尺）
                         if let Some(p) = &mut self.press
@@ -958,6 +994,12 @@ impl ApplicationHandler for App {
                             return;
                         }
                         let press = self.press.take();
+                        // 拖柄抬手：定型保持高亮，不复制（Cancelled 同样只收尾）
+                        if self.handle_drag.take().is_some() {
+                            self.magnifier_at = None;
+                            self.dirty = true;
+                            return;
+                        }
                         // 选择态：抬手保持高亮；单击（未拖动扩选、且不是刚触发
                         // 长按的那次抬手）→ 复制 + Toast + 清选。点按唤键盘让路
                         if self.term.as_ref().is_some_and(|t| t.selection_active()) {

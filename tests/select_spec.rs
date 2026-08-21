@@ -6,13 +6,17 @@
 //! - 选词边界（单词/路径/空白落点）、跨行/反向扩选归一化
 //! - 提取 selected_text 逐字比对：tab 还原、行尾空白 trim、行间 \n、
 //!   历史区 display_offset 下的行号换算
-//! - 高亮渲染钉：选中格盖 SELECT_BG 底色，清选后消失
+//! - 高亮渲染钉：选中格盖 SELECT_BG 底色，清选后消失；CJK 双宽字
+//!   两格都盖高亮且右半字形墨不被盖（两遍制渲染钉）
+//! - 拖柄：命中判定（±1 格触控宽容）、端点移动（含互换）、渲染钉
+//! - 放大镜：2 倍最近邻映射逐点比对、边框、屏内钳制
 //!
 //! JNI 剪贴板/Toast 薄壳（src/clipboard.rs）是 B 档平台胶水，无考题，
 //! 真机判卷（粘贴到别处 + Toast 文案）。
 
 use kfm_na::termview::{
-    self, CELL_H, CELL_W, SELECT_BG, Selection, TermView, in_selection, is_word_char, px_to_cell,
+    self, CELL_H, CELL_W, HANDLE_COLOR, HandleEnd, MAG_BORDER, SELECT_BG, Selection, TermView,
+    handle_hit, in_selection, is_word_char, px_to_cell,
 };
 
 /// 测试字体夹具双环境解析（与 termview_spec.rs 同规则：服务器 /usr/share，
@@ -287,4 +291,228 @@ fn spec_选择_选区结构语义() {
     // 结构只是载体，归一化永远走 in_selection/selected_text
     assert!(in_selection(sel.anchor, sel.cursor, 2, 0));
     assert!(!in_selection(sel.anchor, sel.cursor, 4, 0));
+}
+
+// ---------- 高亮 × CJK 双宽（2026-08-21 实拍「选中态中文只剩左半」） ----------
+
+/// 内嵌 CJK/符号字体（FusionPixel，双环境同一份文件——compile-time
+/// include_bytes，夹具恒定）：真 CJK 双宽字形源
+fn fusion_font() -> fontdue::Font {
+    fontdue::Font::from_bytes(
+        termview::VENDORED_CJK_FONT,
+        fontdue::FontSettings::default(),
+    )
+    .expect("内嵌 CJK 字体必须可解析")
+}
+
+#[test]
+fn spec_bar025_选择_高亮_cjk双宽字两格完整() {
+    // 病灶：单遍绘制时宽字符格 0 画双宽字形、墨探进格 1，随后 spacer 格的
+    // SELECT_BG 背景填充把右半字形盖掉。两遍制（先全背景后全字形）修复。
+    // 契约：'中' 的两格都必须 SELECT_BG 过半（两格都盖高亮）且都有字形墨
+    // （右半不许被盖）。变异抽检：render_into 回退单遍制，本考题必须红
+    let mut tv = TermView::new(host_font(), Some(fusion_font()), 20, 4, CELL_W, CELL_H);
+    assert!(
+        prefer_cjk_fixture_check(),
+        "夹具前提：主字体必须缺 '中'（走 CJK 双宽路径）"
+    );
+    tv.feed("中文ab".as_bytes());
+    let (x, y) = cell_center(0, 0);
+    tv.select_word_at(x, y); // 选中 '中'（词扩展被 spacer 挡在格 0）
+    let (x, y) = cell_center(5, 0);
+    tv.extend_selection(x, y); // 扩到 'b'，覆盖 '中' 的两格
+    let buf_w = 2 * termview::MARGIN_X + 20 * CELL_W;
+    let buf_h = termview::margin_top(CELL_H) + 4 * CELL_H + termview::MARGIN_Y;
+    let mut buf = vec![0u32; (buf_w * buf_h) as usize];
+    tv.render_into(&mut buf, buf_w, buf_h);
+    // 格内 (SELECT_BG 像素数, 墨像素数)：墨 = 非高亮非背景的混合像素
+    let stats = |col: u32| -> (usize, usize) {
+        let x0 = termview::MARGIN_X + col * CELL_W;
+        let y0 = termview::margin_top(CELL_H);
+        let (mut bg_n, mut ink) = (0, 0);
+        for y in y0..y0 + CELL_H {
+            for x in x0..x0 + CELL_W {
+                let p = buf[(y * buf_w + x) as usize];
+                if p == SELECT_BG {
+                    bg_n += 1;
+                } else if p != termview::DEFAULT_BG {
+                    ink += 1;
+                }
+            }
+        }
+        (bg_n, ink)
+    };
+    for col in [0u32, 1] {
+        let (bg_n, ink) = stats(col);
+        assert!(
+            bg_n as u32 > CELL_W * CELL_H / 2,
+            "'中' 的格 {col} 必须盖高亮底色"
+        );
+        assert!(ink > 0, "'中' 的格 {col} 必须有字形墨——右半不许被底色盖掉");
+    }
+}
+
+/// 夹具前提检查：host 主字体（DejaVuSansMono）缺 '中'
+fn prefer_cjk_fixture_check() -> bool {
+    host_font().lookup_glyph_index('中') == 0
+}
+
+// ---------- 选择拖柄（2026-08-21，Termux 语义借鉴） ----------
+
+#[test]
+fn spec_选择_拖柄命中判定() {
+    // 纯函数边界（触控宽容 ±1 格，闭区间；变异抽检：改 < 或放宽到 ±2 格必须红）
+    assert!(handle_hit(
+        100.0,
+        100.0,
+        100.0 + f64::from(CELL_W),
+        100.0,
+        CELL_W,
+        CELL_H
+    ));
+    assert!(!handle_hit(
+        100.0,
+        100.0,
+        100.0 + f64::from(CELL_W) + 1.0,
+        100.0,
+        CELL_W,
+        CELL_H
+    ));
+    assert!(handle_hit(
+        100.0,
+        100.0,
+        100.0,
+        100.0 + f64::from(CELL_H),
+        CELL_W,
+        CELL_H
+    ));
+    assert!(!handle_hit(
+        100.0,
+        100.0,
+        100.0,
+        100.0 + f64::from(CELL_H) + 1.0,
+        CELL_W,
+        CELL_H
+    ));
+    // 端到端：选词后柄心命中起/止端，两柄中间不命中
+    let mut tv = host_termview(20, 4);
+    tv.feed(b"hello world");
+    let (x, y) = cell_center(1, 0);
+    tv.select_word_at(x, y); // "hello" = (0,0)..(0,4)
+    let (start, end) = tv.selection_handles().expect("选区在屏内");
+    let (sx, sy) = start.expect("起端柄在屏内");
+    let (ex, ey) = end.expect("止端柄在屏内");
+    assert_eq!(tv.hit_handle(sx, sy), Some(HandleEnd::Start));
+    assert_eq!(tv.hit_handle(ex, ey), Some(HandleEnd::End));
+    // 两柄之间（col 2 格心同高度）距两端都 >1 格 → None
+    let mid_x = f64::from(termview::MARGIN_X + 2 * CELL_W) + f64::from(CELL_W) / 2.0;
+    assert_eq!(tv.hit_handle(mid_x, sy), None);
+    // 无选区 → None
+    tv.clear_selection();
+    assert_eq!(tv.hit_handle(sx, sy), None);
+}
+
+#[test]
+fn spec_选择_拖柄移动端点() {
+    // "hello world"：h0 e1 l2 l3 o4 空5 w6 o7 r8 l9 d10
+    let mut tv = host_termview(20, 4);
+    tv.feed(b"hello world");
+    let (x, y) = cell_center(1, 0);
+    tv.select_word_at(x, y); // "hello"
+    // 拖止端右移 3 格 → 纳入 " wo"
+    let (x, y) = cell_center(7, 0);
+    tv.move_selection_end(HandleEnd::End, x, y);
+    assert_eq!(tv.selected_text().as_deref(), Some("hello wo"));
+    // 拖起端右移 2 格 → 掐头
+    let (x, y) = cell_center(2, 0);
+    tv.move_selection_end(HandleEnd::Start, x, y);
+    assert_eq!(tv.selected_text().as_deref(), Some("llo wo"));
+    // 起端拖过止端 → 角色互换（起点变新终点），选区不塌缩
+    let (x, y) = cell_center(9, 0);
+    tv.move_selection_end(HandleEnd::Start, x, y);
+    assert_eq!(tv.selected_text().as_deref(), Some("orl"));
+    // 跨行：止端拖到第 1 行
+    let mut tv = host_termview(20, 6);
+    tv.feed(b"first\r\nsecond");
+    let (x, y) = cell_center(1, 0);
+    tv.select_word_at(x, y); // "first"
+    let (x, y) = cell_center(3, 1);
+    tv.move_selection_end(HandleEnd::End, x, y);
+    assert_eq!(tv.selected_text().as_deref(), Some("first\nseco"));
+}
+
+#[test]
+fn spec_选择_拖柄渲染钉() {
+    // 选区激活时两端格下方必须有醒目橙圆点；清选后整帧无此色
+    // （变异抽检：摘掉 render_into 的拖柄段，本考题必须红）
+    let mut tv = host_termview(20, 4);
+    tv.feed(b"hello world");
+    let (x, y) = cell_center(1, 0);
+    tv.select_word_at(x, y);
+    let buf_w = 2 * termview::MARGIN_X + 20 * CELL_W;
+    let buf_h = termview::margin_top(CELL_H) + 4 * CELL_H + termview::MARGIN_Y;
+    let mut buf = vec![0u32; (buf_w * buf_h) as usize];
+    tv.render_into(&mut buf, buf_w, buf_h);
+    let (start, end) = tv.selection_handles().expect("选区在屏内");
+    for hp in [start, end] {
+        let (hx, hy) = hp.expect("两端柄都在屏内");
+        assert_eq!(
+            buf[(hy as u32 * buf_w + hx as u32) as usize],
+            HANDLE_COLOR,
+            "柄心必须是醒目橙"
+        );
+    }
+    tv.clear_selection();
+    let mut buf2 = vec![0u32; (buf_w * buf_h) as usize];
+    tv.render_into(&mut buf2, buf_w, buf_h);
+    assert!(!buf2.contains(&HANDLE_COLOR), "清选后拖柄必须消失");
+}
+
+// ---------- 放大镜（拖柄拖动中浮窗） ----------
+
+#[test]
+fn spec_放大镜_两倍最近邻与边框钳制() {
+    // 源区 = 触点格 ±5 格 × ±3 行 → 窗 360x432（18x36 格）。帧缓冲给足
+    let mut tv = host_termview(20, 10);
+    tv.feed(b"ABCDEFGHIJ\r\nKLMNOPQRST\r\nUVWXYZabcd");
+    let (buf_w, buf_h) = (500u32, 700u32);
+    let mut buf = vec![0u32; (buf_w * buf_h) as usize];
+    tv.render_into(&mut buf, buf_w, buf_h);
+    // 触点 = 格 (5,1)（'P'）格心；源区中心对齐该格心
+    let (tx, ty) = cell_center(5, 1);
+    let (cx, cy) = (tx as u32, ty as u32);
+    // 源区中心行在放大前的原始像素带（放大镜会覆盖 buf，先拷对照行）
+    let src_row: Vec<u32> = buf[(cy * buf_w) as usize..((cy + 1) * buf_w) as usize].to_vec();
+    tv.render_magnifier(&mut buf, buf_w, buf_h, tx, ty);
+    let win_w = 5 * CELL_W * 2 * 2; // 360
+    let win_h = 3 * CELL_H * 2 * 2; // 432
+    // 触点格 (5,1) 格心 = (111, 102)：横向 111-180 < 0 → 钳 0；
+    // 纵向 102-60-432 < 0 → 钳 0。钳制本身也是被钉的行为
+    let win_x = 0u32;
+    let win_y = 0u32;
+    // 边框：窗顶中点上沿必须是边框色（圆角切角，取中点避开）
+    assert_eq!(
+        buf[(win_y * buf_w + win_x + win_w / 2) as usize],
+        MAG_BORDER,
+        "浮窗外圈必须是边框色"
+    );
+    // 最近邻 2 倍映射逐点比对：dest(中心 + 2k) == src(中心 + k)
+    // （变异抽检：MAG_ZOOM 改 1 或中心不对齐格心，本考题必须红）
+    for k in (-60i32..=60).step_by(13) {
+        let dest_x = (win_x + win_w / 2) as i32 + 2 * k;
+        let dest = buf[((win_y + win_h / 2) * buf_w) as usize + dest_x as usize];
+        let src = src_row[(cx as i32 + k) as usize];
+        assert_eq!(dest, src, "映射点 k={k} 必须满足 2 倍最近邻");
+    }
+    // 内容非空：窗内必须有墨（放大的是真字形不是一窗黑）
+    let mut ink = 0;
+    for y in (win_y + 4)..(win_y + win_h - 4) {
+        for x in (win_x + 4)..(win_x + win_w - 4) {
+            let p = buf[(y * buf_w + x) as usize];
+            if p != termview::DEFAULT_BG && p != MAG_BORDER {
+                ink += 1;
+            }
+        }
+    }
+    assert!(ink > 1000, "放大窗内必须有大量字形墨（实得 {ink}）");
 }

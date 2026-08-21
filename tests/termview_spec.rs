@@ -902,3 +902,45 @@ fn spec_缩放_set_cell_size重算字几何() {
     tv.resize_cells(0, 0);
     tv.render_into(&mut tiny, 8, 8);
 }
+
+// ---------- A 档：单格 CJK 字形格宽裁剪（2026-08-21 实拍 ⇄ 溢出） ----------
+
+#[test]
+fn spec_bar026_渲染_单格cjk字形按格宽裁剪() {
+    // ⇄ (U+21C4) 模糊宽度：unicode-width 判 1 格，但 FusionPixel 里是
+    // 全角字形（px36 时步进 36px）——真机上主字体（商业像素字体）缺 ⇄
+    // 落 CJK 备用，墨溢进下一格。契约：单格路径右缘按 1 格宽裁剪。
+    // 夹具：内嵌 CJK/符号字体直接当主字体（双环境同一份文件，compile-time
+    // include_bytes 恒定），⇄ 走单格路径（无双倍宽标志）。变异抽检：
+    // draw_glyph 摘掉 clip_right，本考题必须红
+    let font = fontdue::Font::from_bytes(
+        termview::VENDORED_CJK_FONT,
+        fontdue::FontSettings::default(),
+    )
+    .expect("内嵌 CJK 字体必须可解析");
+    assert!(
+        font.lookup_glyph_index('\u{21C4}') != 0,
+        "夹具前提：⇄ 必须有真字形"
+    );
+    let mut tv = TermView::new(font, None, 10, 3, CELL_W, CELL_H);
+    tv.feed("\u{21C4}\r\n".as_bytes()); // 光标滚到下行，第 0 行无光标反色干扰
+    let buf_w = 2 * termview::MARGIN_X + 10 * CELL_W;
+    let buf_h = termview::margin_top(CELL_H) + 3 * CELL_H + termview::MARGIN_Y;
+    let mut buf = vec![0u32; (buf_w * buf_h) as usize];
+    tv.render_into(&mut buf, buf_w, buf_h);
+    let cell_ink = |col: u32| -> usize {
+        let x0 = termview::MARGIN_X + col * CELL_W;
+        let y0 = termview::margin_top(CELL_H);
+        let mut n = 0;
+        for y in y0..y0 + CELL_H {
+            for x in x0..x0 + CELL_W {
+                if buf[(y * buf_w + x) as usize] != DEFAULT_BG {
+                    n += 1;
+                }
+            }
+        }
+        n
+    };
+    assert!(cell_ink(0) > 0, "⇄ 必须画出来（不许裁没了）");
+    assert_eq!(cell_ink(1), 0, "单格字形的墨不许越界到下一格内容区");
+}
