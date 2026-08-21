@@ -82,6 +82,7 @@ mkdir -p "$BUILD/classes" "$BUILD/dex" "$BUILD/stage/lib/arm64-v8a" target/relea
 BOOTSTRAP_ZIP="${KFM_BOOTSTRAP_ZIP:-}"
 if [ -z "$BOOTSTRAP_ZIP" ]; then
     for cand in \
+        /root/kfm-na-toolchain/termux-packages/output/bootstrap-aarch64.zip \
         /root/kfm-na-toolchain/termux-packages/bootstrap-aarch64.zip \
         "$HOME/kfm-na-toolchain/bootstrap-aarch64.zip"; do
         [ -f "$cand" ] && BOOTSTRAP_ZIP="$cand" && break
