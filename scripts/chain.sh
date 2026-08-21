@@ -9,6 +9,18 @@
 # 新检查一律加在这里，禁止另起入口。
 cd "$(dirname "$0")/.." || exit 1
 
+# 2026-08-21 降压：整条链 nice +10 / ionice best-effort 最低档——CPU/IO
+# 争用时让交互进程（SSH、各会话收发）先行；空闲时编译速度不变
+# （nice 只在抢时生效）。顶部自重启一次，全步骤继承，不逐条包。
+# 起因：多 agent 同链撞车时交互会话被编译拖卡（2026-08-21 实踩）
+if [ -z "$KFM_CHAIN_NICED" ]; then
+    if command -v ionice >/dev/null 2>&1; then
+        KFM_CHAIN_NICED=1 exec nice -n 10 ionice -c2 -n7 bash "$0" "$@"
+    else
+        KFM_CHAIN_NICED=1 exec nice -n 10 bash "$0" "$@"
+    fi
+fi
+
 echo "=== [chain 1/8] 字体防泄漏闸（BAR-021） ==="
 # 商业字体（assets/fonts/local/）永不进库：gitignore 是第一道，这道闸是
 # 第二道机械执法——误 git add -A 也漏不出去。同时卡住超大字体资产
