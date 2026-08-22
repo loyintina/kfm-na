@@ -31,7 +31,13 @@ install)
     tar -xzf "$staging/overlay.tar.gz" -C "$staging"
     [ -d "$staging/payload" ] || { echo "❌ 包里没有 payload/——不是合法 overlay"; exit 1; }
 
-    cp -a "$staging/payload/." "$PREFIX/"
+    # 活体覆盖防护(2026-08-22 实拍):运行中的 shell 映射着 $PREFIX/lib
+    # 里的 .so,cp 原地截断覆写会把活体崩掉(装完 base 会话 exit -1)——
+    # 逐文件 .kfm-new + mv 原子替换,旧 inode 陪老进程到寿终
+    (cd "$staging/payload" && find . -depth -type d -exec mkdir -p "$PREFIX/{}" \;)
+    (cd "$staging/payload" && find . -type f | while read -r f; do
+        cp "$f" "$PREFIX/$f.kfm-new" && mv -f "$PREFIX/$f.kfm-new" "$PREFIX/$f"
+    done)
 
     # 符号链接(target←link,U+2190;对齐 bootstrap 建链语义)
     if [ -s "$staging/SYMLINKS.txt" ]; then

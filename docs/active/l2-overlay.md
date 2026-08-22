@@ -74,6 +74,13 @@ MANIFEST             # name=<名> / packages=<闭包列表> / built=<时间戳>
 
 (空——第一个包装上后开记)
 
+## 6.5 运行时安装的铁律(2026-08-22 实拍)
+
+**禁止原地截断覆写 $PREFIX 里的活体文件**。运行中的 shell 映射着
+`$PREFIX/lib` 的 .so,`cp -a` 原地覆写会抽空活体进程的内存映射
+(装完 base 会话 exit -1 实录)。kfm-pkg 逐文件 `.kfm-new` + `mv`
+原子替换:新文件新 inode,老 inode 陪老进程寿终,新进程自然用新文件。
+
 ## 7. 考题与判卷
 
 - **host 考题**(`scripts/test-overlay.sh`,挂 chain):fixture 假 deb
