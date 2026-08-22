@@ -697,11 +697,14 @@ impl App {
                 );
             }
             SessionEvent::Output { data } => {
-                // 首 output 预览：诊断「黑屏等提示符」——提示符何时到、内容是什么
+                // 首 output 预览：诊断「黑屏等提示符」——提示符何时到、内容是什么。
+                // 必须用异步 report(2026-08-21 破案:此处曾是 report_sync,
+                // 阻塞 HTTP 在主线程堵 ~2.1s——「系统扣 Redraw 2.5s」的假象
+                // 全是自家同步探针堵出来的;RTT/像素探针同病,一并改)
                 static FIRST_OUTPUT: std::sync::atomic::AtomicBool =
                     std::sync::atomic::AtomicBool::new(false);
                 if !FIRST_OUTPUT.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                    crate::report::report_sync(
+                    crate::report::report(
                         "term",
                         &format!(
                             "首 output 到达 +{}ms: {:?}",
@@ -720,7 +723,7 @@ impl App {
                     static RTT_N: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
                     let n = RTT_N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     if n < 5 {
-                        crate::report::report_sync(
+                        crate::report::report(
                             "rtt",
                             &format!("击键→回显: {}ms", t.elapsed().as_millis()),
                         );
@@ -744,7 +747,9 @@ impl App {
     /// 一次（用户在盯着，网多半是好的）;待机方死亡只记账不吵（切换那一刻
     /// 再重连——断网期给待机自动重连是烧钱风暴）
     fn on_slot_dead(&mut self, name: &'static str, is_active: bool, why: &str) {
-        crate::report::report_sync(
+        // 异步 report:此处在主线程抽干路径上,sync 直报会在断线瞬间
+        // 冻 UI(2026-08-21 同步探针堵主线程同案);进程没死,不需要 sync
+        crate::report::report(
             "term",
             &format!(
                 "会话 {why}: {name}{}",
@@ -928,7 +933,8 @@ impl App {
                 }
                 // 帧缓冲探针：首个 output 后的那一帧，数非背景像素传回——
                 // 光标块独占 ≈288px，提示符字形真画上则数千。真机判卷「不见字」
-                // 的最后一环：字形到底进没进帧缓冲（2026-08-13）
+                // 的最后一环：字形到底进没进帧缓冲（2026-08-13）。
+                // 异步 report(曾是 report_sync,主线程堵 ~340ms,同案犯)
                 if FRAME_PROBE
                     .compare_exchange(
                         1,
@@ -939,10 +945,7 @@ impl App {
                     .is_ok()
                 {
                     let non_bg = buf.iter().filter(|&&p| p != termview::DEFAULT_BG).count();
-                    crate::report::report_sync(
-                        "term",
-                        &format!("output 后首帧非背景像素: {non_bg}"),
-                    );
+                    crate::report::report("term", &format!("output 后首帧非背景像素: {non_bg}"));
                 }
             } else {
                 buf.fill(KFM_PURPLE); // 字体全灭的降级画面：紫屏 + 已有上报
