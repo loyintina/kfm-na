@@ -18,6 +18,7 @@
   legacy 牌;Termux 侧 serve-overlays.sh 起 127.0.0.1:8027) →
   na 终端 `kfm-pkg install <名>`(shell,assets 每启铺进 $PREFIX/bin)。
   考题 = scripts/test-overlay.sh(fixture 假 deb,chain 第 8 步)。
+  交接点服务已并入手机 `kalo` v3.4(随隧道同生同灭,status 可见)。
 - **探针脚手架拆除（本提交）**：启动战役归因探针全拆——termview 字体分段
   计时、init_terminal 五段计时、帧#N 三段探针、FIRST_OUTPUT/RTT 探针、
   user_event/new_events 测绘、ATW_N 测绘、resumed 三行计时、唤醒锤成败
