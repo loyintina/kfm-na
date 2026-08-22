@@ -14,12 +14,17 @@ set -euo pipefail
 name=$1; shift
 
 work="${TMPDIR:-/tmp}/kfm-overlay-$name"
-rm -rf "$work"; mkdir -p "$work/debs"
+rm -rf "$work"; mkdir -p "$work/debs" "$work/cache"
 : > "$work/empty-status"
 
 echo "=== [overlay 1/3] apt 解依赖闭包($*) ==="
-# --print-uris 只算不下载;空 status = 一切依赖按未装算,闭包完整
+# --print-uris 只算不下载。两道空闸缺一不可:
+#   空 status        = 一切依赖按未装算,闭包完整;
+#   空 cache/archives = 本机 apt 缓存里躺过的 deb 不算数(2026-08-22 实拍:
+#                       只骗 status 没骗缓存,openssh/git 本体被「已在缓存」
+#                       吞掉,overlay 只装了依赖没有主包)
 apt-get -y -o Dir::State::status="$work/empty-status" \
+    -o Dir::Cache::archives="$work/cache" \
     -o APT::Get::Download-Only=true --print-uris install "$@" \
     > "$work/uris.txt"
 grep -oE "'https?://[^']+'" "$work/uris.txt" | tr -d "'" > "$work/urls.txt"

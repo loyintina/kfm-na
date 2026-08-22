@@ -24,9 +24,10 @@ apt 解依赖+下载 deb                              (shell 脚本,$PREFIX/bin)
 → 打 na-overlay-<名>.tar.gz
 ```
 
-- **构建侧**:`scripts/build-overlay.sh openssh git ...`,借真 Termux 的
-  apt 干活(干净 apt state 骗出完整依赖闭包的下载地址,curl 拉回 deb),
-  逐个解包重打。产物 = overlay 包,扔交接点。
+- **构建侧**:`scripts/build-overlay.sh <名> <包...>`,借真 Termux 的
+  apt 干活(空 status + 空 cache 双闸骗出完整依赖闭包的下载地址——
+  只空 status 会被本机 apt 缓存吞掉主包,2026-08-22 实拍),curl 拉回
+  deb),逐个解包重打。产物 = overlay 包,扔交接点。
 - **运行时**:`kfm-pkg` 纯 shell 脚本(curl/unzip 都不需要——tar 就够),
   APK assets 自带,每次启动铺进 `$PREFIX/bin/kfm-pkg`(覆盖式,版本随
   APK 自然滚动)。install = 解包到 staging → 铺进 $PREFIX → 建符号链接 →
