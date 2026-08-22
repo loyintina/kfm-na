@@ -5,6 +5,14 @@
 
 ## 当前位置（2026-08-22)
 
+- **L2 命令生态定案：apt 直通，busybox 方案作废**。盘点 bootstrap
+  (3771 文件 / 275 bin 项）:coreutils 是多路复用 `bin/coreutils` +
+  SYMLINKS.txt 136 条链接（我们的安装器已建链）,grep/sed/gawk/find/
+  tar/curl/top/ps/nano/less 全齐；真缺口只有 ssh/git/vim/make/wget。
+  实拍：`apt update` 在应用内成功（packages-cf.termux.dev 连通、
+  InRelease 验签过——termux-keyring 的 postinst 生效）。路线 =
+  应用内 `apt install` 按需装，不打进 APK（保体积与启动速度）。
+  待验证：`apt install openssh git` 的 dpkg configure 完整性。
 - **探针脚手架拆除（本提交）**：启动战役归因探针全拆——termview 字体分段
   计时、init_terminal 五段计时、帧#N 三段探针、FIRST_OUTPUT/RTT 探针、
   user_event/new_events 测绘、ATW_N 测绘、resumed 三行计时、唤醒锤成败
