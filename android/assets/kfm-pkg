@@ -21,12 +21,12 @@ install)
     [ -n "$name" ] || { echo "用法: kfm-pkg install <名>"; exit 1; }
     staging="$PREFIX/tmp/kfm-pkg-$name"
     rm -rf "$staging"; mkdir -p "$staging"
+    # 本地文件逃生门:FUSE 上 -f/-r 都可能是「看得见读不了」的假象
+    # (2026-08-22 实拍:stat 过、open 拒)——直接试拷,拷不动才走 HTTP
     local_file="$OVERLAY_DIR/na-overlay-$name.tar.gz"
-    if [ -f "$local_file" ]; then
-        cp "$local_file" "$staging/overlay.tar.gz"
-    else
+    if ! cp "$local_file" "$staging/overlay.tar.gz" 2>/dev/null; then
         curl -fsSL "$OVERLAY_URL/na-overlay-$name.tar.gz" -o "$staging/overlay.tar.gz" \
-            || { echo "❌ 拉不到 $OVERLAY_URL/na-overlay-$name.tar.gz(Termux 侧 serve-overlays.sh 在跑吗?)"; exit 1; }
+            || { echo "❌ 拉不到 $OVERLAY_URL/na-overlay-$name.tar.gz(Termux 侧 kalo/8027 在跑吗?)"; exit 1; }
     fi
     tar -xzf "$staging/overlay.tar.gz" -C "$staging"
     [ -d "$staging/payload" ] || { echo "❌ 包里没有 payload/——不是合法 overlay"; exit 1; }
