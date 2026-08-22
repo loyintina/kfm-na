@@ -42,13 +42,10 @@ const KFM_PURPLE: u32 = 0x008B_5CF6;
 
 use crate::report::boot_ms;
 
-/// 帧缓冲探针状态：0=等首个 output，1=探针已上膛（下一帧数非背景像素），2=已报
-static FRAME_PROBE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
-
-/// 首笔 RedrawRequested 是否已到（2026-08-21 探针：Android 启动动画期扣住
-/// 重绘事件 ~2.7s；winit 安卓端不认 ControlFlow::Poll——Wait 下循环睡死
-/// 实录 +168→+2759ms）。改为唤醒锤：blackout 期外部线程 50ms 一锤
-/// proxy user event 把循环锤醒，补画脏帧；首笔 Redraw 到达即收锤。
+/// 首笔 RedrawRequested 是否已到。唤醒锤的收锤信号：blackout 期（首笔
+/// Redraw 前）外部线程 50ms 一锤 proxy user event 锤醒循环补画脏帧。
+/// （2026-08-22 探针拆除案保留此机制作冗余兜底；当日「系统扣 Redraw 2.5s」
+/// 后查明是自家主线程同步探针堵出来的假象，见 bugs.md/启动战役通报）
 static FIRST_REDRAW_SEEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// 终端模式开关：true = 启动即进终端画面；false = 紫屏 + echo 冒烟对照组
@@ -103,7 +100,6 @@ type EventRx = Receiver<SessionEvent>;
 struct App {
     window: Option<Arc<Window>>,
     gfx: Option<Gfx>,
-    reported_first_events: bool,
     // ---- TERMINAL_MODE 状态 ----
     /// 终端实例：插件工厂产出（term-alacritty），调用方持有的长寿命 mutable
     /// 状态（设计页 §7）——含 scrollback，跨插件生命周期存活
@@ -112,8 +108,6 @@ struct App {
     /// 一切击键/IME/Resize 出向经它发往活跃会话（评审裁决 4 附议：
     /// 输入路由抽纯数据面，考题钉在 host 侧）
     router: Option<crate::session_router::SessionRouter>,
-    /// RTT 探针：最后一次击键送出的墙钟时刻（下个 output 到达时结算）
-    last_input_at: Option<std::time::Instant>,
     /// 活跃会话的入向事件通道（切换时与待机槽的 rx 互换——
     /// 出向归 router，入向归壳，同一方法内同步换，不许分开动）
     event_rx: Option<EventRx>,
@@ -289,15 +283,10 @@ impl App {
         self.health_remote = SessHealth::default();
         self.standby_buf.clear();
 
-        // 启动分段计时探针:定位「不如 Termux 秒开」的大头在哪一段
-        let t_init = std::time::Instant::now();
-
         // exec 探针(L2/L3 总开关,exec_probe.rs):私有目录 exec 放行与否
         // 决定 busybox/apt 生态路线。冷启动一次,结果走飞鸽传书。
-        // 真机实测(2026-08-21 探针归因):同步跑吃 2283ms,占 init 96%——
-        // 大头不是 exec 本身,是 report_sync 的阻塞 HTTP 三连重试。
-        // 探针结果 v1 只上报不分支,没资格堵启动路径:挪后台线程。
-        let t_exec = std::time::Instant::now();
+        // 后台线程跑(2026-08-21 实测:同步跑吃 2283ms 占 init 96%,大头是
+        // report_sync 阻塞 HTTP;探针结果 v1 只上报不分支,没资格堵启动)
         if let Some(app) = &self.android_app
             && let Some(dir) = app.internal_data_path()
         {
@@ -305,13 +294,11 @@ impl App {
                 crate::exec_probe::run(&dir);
             });
         }
-        let ms_exec = t_exec.elapsed().as_millis();
 
         // 插件基座：终端模拟器 + 连接 provider（边界手术第一/二刀）——
         // 「用哪个终端芯、连哪、怎么连」都不归主循环；工厂是服务，实例归调用方。
         // 瞬时返回契约预算 50ms 是 harness 政策(G5 归层:cordis-na 默认关,
         // 这里显式开启,规格书 §4.3)
-        let t_base = std::time::Instant::now();
         let base = Base::new(vec![PluginEntry {
             id: crate::plugins::conn_provider_ws::PLUGIN_NAME,
             disabled: false,
@@ -344,20 +331,16 @@ impl App {
         } else {
             crate::report::report_sync("ime", "无 AndroidApp 句柄——输入插件未装");
         }
-        let ms_base = t_base.elapsed().as_millis();
 
         // L3 首启安装(必须在本地会话 spawn 前:装好后 shell_plan 才会
         // 换成 $PREFIX/bin/bash)。幂等——非首启秒过(只查 prefix 非空)
-        let t_l3 = std::time::Instant::now();
         if let Some(app) = &self.android_app {
             crate::bootstrap::first_boot_install(app);
         }
-        let ms_l3 = t_l3.elapsed().as_millis();
         // 双会话（L1，多端分层设计页 §3）：本地 PTY 秒开为默认活跃会话——
         // 零网络，冷进程首连 ~2.1s 唤醒成本（BAR-022/023 归因）不在此路径；
         // ws 远程会话后台接为待机，Ctrl-] 切换（并存可切换，不自动接管）。
         // spawn 提前到基座就绪即刻的传统保留（BAR-022：与建终端/字体加载并行）
-        let t_sess = std::time::Instant::now();
         if let Err(e) = base.load(crate::plugins::conn_provider_local::ConnProviderLocal::new()) {
             crate::report::report_sync("term", &format!("本地连接插件装载失败: {e:?}"));
         }
@@ -404,12 +387,8 @@ impl App {
                 crate::report::report_sync("term", "双会话全灭——本屏无会话");
             }
         }
-        let ms_sess = t_sess.elapsed().as_millis();
-
         // 建终端：经基座取终端工厂；build 失败 = 字体全灭走 Err（裁决 3，非插件失败）
-        crate::report::report("boot", &format!("基座+插件装载完成 +{}ms", boot_ms()));
-        let t_build = std::time::Instant::now();
-        let Some((tv, font_path, cjk_path)) = (match base.ctx().get::<dyn TermEmuFactory>() {
+        let Some((tv, _font_path, cjk_path)) = (match base.ctx().get::<dyn TermEmuFactory>() {
             Ok(factory) => match factory.build() {
                 Ok(built) => Some(built),
                 Err(e) => {
@@ -424,34 +403,14 @@ impl App {
         }) else {
             return;
         };
-        let ms_build = t_build.elapsed().as_millis();
-        // init 分段汇总:一条报文收齐五段,归因「启动慢大头在哪」
-        crate::report::report(
-            "boot",
-            &format!(
-                "init 分段: exec={}ms 基座={}ms L3={}ms 会话={}ms 终端build={}ms init合计={}ms",
-                ms_exec,
-                ms_base,
-                ms_l3,
-                ms_sess,
-                ms_build,
-                t_init.elapsed().as_millis()
-            ),
-        );
-        crate::report::report("term", &format!("字体加载自 {font_path} +{}ms", boot_ms()));
-        match &cjk_path {
-            Some(p) => crate::report::report("term", &format!("CJK 备用字体: {p}")),
-            None => crate::report::report("term", "CJK 备用字体全灭——中文画 tofu"),
+        // CJK 备用字体全灭是产品级风险（中文画 tofu），留一行预警；
+        // 其余启动计时探针已拆（2026-08-22 探针拆除案，数字见 git 历史）
+        if cjk_path.is_none() {
+            crate::report::report("term", "CJK 备用字体全灭——中文画 tofu");
         }
         // （BAR-021：诊断脚手架已拆——候选体检/目录普查每个冷启动全量解析
         // 44MB×2+32MB 巨物，是启动慢的最大单块成本；探测链本身也已退役，
         // 生产字体编译期内嵌。需要排查时从 git 历史恢复）
-        // 字体探针：加载成功 ≠ 能出字形，西文/中文各探一针（真机判卷「不见字」）
-        for c in ['M', '中'] {
-            let (w, h, ink) = tv.font_probe(c);
-            crate::report::report("term", &format!("字体探针 '{c}': {w}x{h} ink={ink}"));
-        }
-        crate::report::report("term", &format!("TermView 建成 +{}ms", boot_ms()));
         self.term = Some(tv);
         self.base = Some(base);
 
@@ -470,10 +429,6 @@ impl App {
             if let Some(t) = &mut self.term {
                 t.set_cell_size(cw, ch);
             }
-            crate::report::report(
-                "zoom",
-                &format!("冷启动读回缩放: ratio={ratio:.2} → {cw}x{ch}"),
-            );
         }
 
         // 上机提示(L1 实拍后用户要「至少一个提示」):app 级快捷键 shell
@@ -697,38 +652,6 @@ impl App {
                 );
             }
             SessionEvent::Output { data } => {
-                // 首 output 预览：诊断「黑屏等提示符」——提示符何时到、内容是什么。
-                // 必须用异步 report(2026-08-21 破案:此处曾是 report_sync,
-                // 阻塞 HTTP 在主线程堵 ~2.1s——「系统扣 Redraw 2.5s」的假象
-                // 全是自家同步探针堵出来的;RTT/像素探针同病,一并改)
-                static FIRST_OUTPUT: std::sync::atomic::AtomicBool =
-                    std::sync::atomic::AtomicBool::new(false);
-                if !FIRST_OUTPUT.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                    crate::report::report(
-                        "term",
-                        &format!(
-                            "首 output 到达 +{}ms: {:?}",
-                            boot_ms(),
-                            &data[..data.len().min(120)]
-                        ),
-                    );
-                    // 上膛帧缓冲探针（一次性）：下一帧数非背景像素（见 draw_frame）。
-                    // 注意只能在首 output 上膛——此前写成每个 output 都上膛，
-                    // 探针变成常驻连发，报告通道被刷屏（11:31 实拍事故）
-                    FRAME_PROBE.store(1, std::sync::atomic::Ordering::Relaxed);
-                }
-                // RTT 探针（输入延迟判卷）：击键→回显 output 的墙钟耗时，采样 5 发。
-                // 数字说话：延迟到底在网络往返还是自家管线（2026-08-13 用户实拍问）
-                if let Some(t) = self.last_input_at.take() {
-                    static RTT_N: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
-                    let n = RTT_N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    if n < 5 {
-                        crate::report::report(
-                            "rtt",
-                            &format!("击键→回显: {}ms", t.elapsed().as_millis()),
-                        );
-                    }
-                }
                 if let Some(term) = &mut self.term {
                     term.feed(data.as_bytes());
                     self.dirty = true;
@@ -836,7 +759,6 @@ impl App {
             }
         }
         if sent {
-            self.last_input_at = Some(std::time::Instant::now());
             // IME 落字 = 用户输入：滚回底部贴最新输出
             if let Some(t) = &mut self.term {
                 t.scroll_to_bottom();
@@ -864,7 +786,6 @@ impl App {
             && !bytes.is_empty()
         {
             r.send(TermCmd::Input(bytes));
-            self.last_input_at = Some(std::time::Instant::now());
             // 打字了就是要看现在——滚回底部贴最新输出
             if let Some(t) = &mut self.term {
                 t.scroll_to_bottom();
@@ -874,25 +795,8 @@ impl App {
 
     /// 渲染一帧：终端模式画网格，非终端模式清紫屏
     fn draw_frame(&mut self) {
-        // 前 3 帧分段探针(2026-08-21 归因:第二帧 draw_frame 内堵 2.5s——
-        // 首帧 buffer_mut/present 都毫秒级,堵点在第二帧的哪一句要钉死)
-        static FRAME_PROBE_N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-        let frame_n = FRAME_PROBE_N.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-        let probing = frame_n <= 3;
-        let t_frame = std::time::Instant::now();
         let Some(g) = &mut self.gfx else { return };
         let mut buf = g.surface.buffer_mut().expect("取帧缓冲失败");
-        if probing {
-            crate::report::report(
-                "boot",
-                &format!(
-                    "帧#{frame_n} 分段: buffer_mut={}ms +{}ms",
-                    t_frame.elapsed().as_millis(),
-                    boot_ms()
-                ),
-            );
-        }
-        let t_render = std::time::Instant::now();
         if TERMINAL_MODE {
             if let Some(term) = &mut self.term {
                 let (w, h) = (buf.width().get(), buf.height().get());
@@ -917,36 +821,6 @@ impl App {
                         .join(" ");
                     crate::report::report("term", &format!("tofu 目击: {list}"));
                 }
-                static FIRST_TERM_FRAME: std::sync::atomic::AtomicBool =
-                    std::sync::atomic::AtomicBool::new(false);
-                if !FIRST_TERM_FRAME.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                    crate::report::report("term", &format!("首终端帧渲染完成 +{}ms", boot_ms()));
-                }
-                if probing {
-                    crate::report::report(
-                        "boot",
-                        &format!(
-                            "帧#{frame_n} 分段: render={}ms",
-                            t_render.elapsed().as_millis()
-                        ),
-                    );
-                }
-                // 帧缓冲探针：首个 output 后的那一帧，数非背景像素传回——
-                // 光标块独占 ≈288px，提示符字形真画上则数千。真机判卷「不见字」
-                // 的最后一环：字形到底进没进帧缓冲（2026-08-13）。
-                // 异步 report(曾是 report_sync,主线程堵 ~340ms,同案犯)
-                if FRAME_PROBE
-                    .compare_exchange(
-                        1,
-                        2,
-                        std::sync::atomic::Ordering::Relaxed,
-                        std::sync::atomic::Ordering::Relaxed,
-                    )
-                    .is_ok()
-                {
-                    let non_bg = buf.iter().filter(|&&p| p != termview::DEFAULT_BG).count();
-                    crate::report::report("term", &format!("output 后首帧非背景像素: {non_bg}"));
-                }
             } else {
                 buf.fill(KFM_PURPLE); // 字体全灭的降级画面：紫屏 + 已有上报
             }
@@ -959,47 +833,15 @@ impl App {
                 crate::report::report("boot", "首帧 present 完成——紫屏应已亮");
             }
         }
-        let t_present = std::time::Instant::now();
         buf.present().expect("帧呈现失败");
-        if probing {
-            crate::report::report(
-                "boot",
-                &format!(
-                    "帧#{frame_n} 分段: present={}ms 全帧合计={}ms +{}ms",
-                    t_present.elapsed().as_millis(),
-                    t_frame.elapsed().as_millis(),
-                    boot_ms()
-                ),
-            );
-        }
     }
 }
 
 impl ApplicationHandler for App {
-    /// 唤醒锤落点探针:user event 到底何时被循环消化(blackout 归因:
-    /// 若 +2.5s 才到 = 主线程被框架启动工作堵死,锤叫不醒;
-    /// 若早就到 = 锤有效,病灶在别处)
-    fn user_event(&mut self, _el: &ActiveEventLoop, _event: ()) {
-        // blackout 期循环心跳测绘(2026-08-21:首笔 ue +1ms 到,但补画仍
-        // +2726ms——要分清「后续锤没送进循环」还是「atw 跑了但条件假」)
-        static UE_N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-        let n = UE_N.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-        if n <= 20 {
-            crate::report::report("boot", &format!("ue #{n} +{}ms", boot_ms()));
-        }
-    }
-    fn new_events(&mut self, _el: &ActiveEventLoop, cause: winit::event::StartCause) {
-        if !self.reported_first_events {
-            self.reported_first_events = true;
-            crate::report::report("boot", &format!("new_events 首次: {:?}", cause));
-        }
-    }
-
     fn resumed(&mut self, el: &ActiveEventLoop) {
         if self.window.is_some() {
             return;
         }
-        crate::report::report("boot", &format!("resumed——开始建窗口 +{}ms", boot_ms()));
         let attrs = Window::default_attributes().with_title("KFM-NA");
         let window = Arc::new(el.create_window(attrs).expect("创建窗口失败"));
         let gfx = Self::init_gfx(&window);
@@ -1016,15 +858,12 @@ impl ApplicationHandler for App {
             // 字体全灭走紫屏降级也要有首帧：dirty 兜底置位
             self.dirty = true;
         }
-        crate::report::report("boot", &format!("启动完成 +{}ms", boot_ms()));
         log::info!("KFM-NA 壳启动完成");
-        // 首帧快路(2026-08-21 探针破案):首笔 RedrawRequested 实测 +2347ms
-        // 才被 Android 发出来(启动动画/可见性门控),而绘制本身仅 ~20ms。
-        // 表面已建成、终端已就绪——主动画第一帧,不等系统发牌。
+        // 首帧快路(2026-08-21 落地):表面建成+终端就绪即主动画第一帧,
+        // 不等系统发首笔 RedrawRequested——用户实测「秒进」的一刀
         if TERMINAL_MODE {
             self.draw_frame();
         }
-        crate::report::report("boot", &format!("resumed 返回 +{}ms", boot_ms()));
     }
 
     fn window_event(&mut self, el: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
@@ -1322,14 +1161,8 @@ impl ApplicationHandler for App {
                         // 键盘避让由 JNI 轮询驱动（poll_ime_inset）
                         Ime::Enabled => crate::report::report("ime", "IME Enabled"),
                         Ime::Disabled => crate::report::report("ime", "IME Disabled"),
-                        // Preedit（拼音候选中）尖刺期不上屏，只留痕一次
-                        Ime::Preedit(_, _) => {
-                            static PREEDIT_SEEN: std::sync::atomic::AtomicBool =
-                                std::sync::atomic::AtomicBool::new(false);
-                            if !PREEDIT_SEEN.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                                crate::report::report("ime", "首个 Preedit（候选中）");
-                            }
-                        }
+                        // Preedit（拼音候选中）尖刺期不上屏
+                        Ime::Preedit(_, _) => {}
                         Ime::Commit(text) => {
                             // 死会话上落字 = 重连触发器（同 drain_ime_inject 口径）
                             if self.session_over {
@@ -1337,7 +1170,6 @@ impl ApplicationHandler for App {
                             }
                             if let Some(r) = &self.router {
                                 r.send(TermCmd::Input(text));
-                                self.last_input_at = Some(std::time::Instant::now());
                                 // IME 落字 = 用户输入：滚回底部贴最新输出
                                 if let Some(t) = &mut self.term {
                                     t.scroll_to_bottom();
@@ -1349,16 +1181,6 @@ impl ApplicationHandler for App {
             }
             WindowEvent::RedrawRequested => {
                 FIRST_REDRAW_SEEN.store(true, std::sync::atomic::Ordering::Relaxed);
-                // 首笔 RedrawRequested 到达时刻探针:区分「事件迟迟不来」
-                // 与「来了但画得慢」——2026-08-21 首帧 2.2s 黑箱归因
-                static FIRST_REDRAW: std::sync::atomic::AtomicBool =
-                    std::sync::atomic::AtomicBool::new(true);
-                if FIRST_REDRAW.swap(false, std::sync::atomic::Ordering::Relaxed) {
-                    crate::report::report(
-                        "boot",
-                        &format!("首笔 RedrawRequested 到达 +{}ms", boot_ms()),
-                    );
-                }
                 if TERMINAL_MODE {
                     // 长按计时：忙轮询泵下每圈查时间戳（≥500ms 未动 → 选词）
                     self.check_long_press();
@@ -1387,23 +1209,12 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, _el: &ActiveEventLoop) {
-        // blackout 期 atw 心跳测绘(配合 ue #N:锤进了循环后 atw 跑没跑)
-        static ATW_N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-        if !FIRST_REDRAW_SEEN.load(std::sync::atomic::Ordering::Relaxed) {
-            let n = ATW_N.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-            if n <= 20 {
-                crate::report::report(
-                    "boot",
-                    &format!("atw #{n} +{}ms dirty={}", boot_ms(), self.dirty),
-                );
-            }
-        }
         if TERMINAL_MODE {
             self.drain_terminal_events();
             self.drain_ime_inject();
             self.poll_ime_inset();
-            // 系统 blackout 期补画:首笔 RedrawRequested 被 Android 扣 ~2.7s,
-            // 期间的脏帧(如 shell 提示符)由唤醒锤锤醒的本方法直接画;
+            // blackout 期补画(冗余兜底,2026-08-22 探针拆除案保留):
+            // 首笔 RedrawRequested 到达前的脏帧由唤醒锤锤醒的本方法直画;
             // 首笔 Redraw 到达后唤醒锤收锤,此路自动关闭归回正道
             if !FIRST_REDRAW_SEEN.load(std::sync::atomic::Ordering::Relaxed)
                 && self.dirty
@@ -1411,15 +1222,6 @@ impl ApplicationHandler for App {
             {
                 self.dirty = false;
                 self.draw_frame();
-                // 一次性探针:blackout 期补画发生时刻(验证提示符不再等 2.7s)
-                static BLACKOUT_DRAW: std::sync::atomic::AtomicBool =
-                    std::sync::atomic::AtomicBool::new(true);
-                if BLACKOUT_DRAW.swap(false, std::sync::atomic::Ordering::Relaxed) {
-                    crate::report::report(
-                        "boot",
-                        &format!("blackout 期补画首脏帧 +{}ms", boot_ms()),
-                    );
-                }
             }
         }
         // 事件循环心跳（10s 节流）：忙轮询泵下它在跳 = 循环活着，
@@ -1490,36 +1292,22 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
         }
     });
     log::info!("KFM-NA android_main 进入");
-    // BAR-022 归因钉：report_sync 是同步 HTTP（连 2s 读 3s × 至多 3 次重试），
-    // 若此行 ~3000ms 则首格直报是窃贼；若 ~0ms 则 EventLoop::build 是窃贼
-    crate::report::report("boot", &format!("event loop 开工 +{}ms", boot_ms()));
     let event_loop = EventLoop::builder()
         .with_android_app(app.clone())
         .build()
         .expect("创建事件循环失败");
-    crate::report::report("boot", &format!("event loop 建成 +{}ms", boot_ms()));
     let mut app_handler = App {
         android_app: Some(app),
         ..Default::default()
     };
-    // blackout 唤醒锤:winit 安卓端不认 ControlFlow::Poll(实测照睡 2.7s),
-    // proxy user event 才是可靠唤醒源——50ms 一锤,把循环锤醒跑
-    // about_to_wait(抽事件/补画脏帧);首笔 Redraw 到达即收锤
+    // blackout 唤醒锤(冗余兜底,2026-08-22 探针拆除案保留):proxy user
+    // event 50ms 一锤,把循环锤醒跑 about_to_wait(抽事件/补画脏帧);
+    // 首笔 Redraw 到达即收锤
     let wake_proxy = event_loop.create_proxy();
     std::thread::spawn(move || {
-        let mut first = true;
         while !FIRST_REDRAW_SEEN.load(std::sync::atomic::Ordering::Relaxed) {
-            match wake_proxy.send_event(()) {
-                Ok(()) => {
-                    if first {
-                        first = false;
-                        crate::report::report("boot", &format!("唤醒锤首发成功 +{}ms", boot_ms()));
-                    }
-                }
-                Err(e) => {
-                    crate::report::report("boot", &format!("唤醒锤断: {e:?}"));
-                    break; // 循环已死,收锤
-                }
+            if wake_proxy.send_event(()).is_err() {
+                break; // 循环已死,收锤
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
         }

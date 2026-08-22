@@ -1261,27 +1261,14 @@ pub fn build_from_candidates(candidates: &[&str]) -> Option<(TermView, String, O
 /// 启动全程不碰 /system/fonts。返回 (视图, "<内嵌主>", Some("<内嵌CJK>"))；
 /// 内嵌字节解析失败（不可能，有考题钉）才返回 None。本函数不 panic。
 pub fn build_vendored() -> Option<(TermView, String, Option<String>)> {
-    // 冷启动成本探针（2026-08-21 启动慢归因）：两份内嵌字体每次冷启动都
-    // 重新解析，谁贵一目了然——为「字体异步化/分段首帧」手术供数字
-    let t0 = std::time::Instant::now();
     let font =
         fontdue::Font::from_bytes(VENDORED_MAIN_FONT, fontdue::FontSettings::default()).ok()?;
-    let t_main = t0.elapsed();
-    let t1 = std::time::Instant::now();
     let cjk = fontdue::Font::from_bytes(VENDORED_CJK_FONT, fontdue::FontSettings::default()).ok();
-    let t_cjk = t1.elapsed();
-    let t2 = std::time::Instant::now();
-    let tv = TermView::new(font, cjk, 80, 24, CELL_W, CELL_H);
-    crate::report::report(
-        "boot",
-        &format!(
-            "字体分段: main={}ms cjk={}ms TermView::new={}ms",
-            t_main.as_millis(),
-            t_cjk.as_millis(),
-            t2.elapsed().as_millis()
-        ),
-    );
-    Some((tv, "<内嵌主>".to_string(), Some("<内嵌CJK>".to_string())))
+    Some((
+        TermView::new(font, cjk, 80, 24, CELL_W, CELL_H),
+        "<内嵌主>".to_string(),
+        Some("<内嵌CJK>".to_string()),
+    ))
 }
 
 // ---- trait 层（终端模拟器设计页 §2；插件化边界，方法体一行不动） ----
