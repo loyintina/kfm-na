@@ -1,0 +1,68 @@
+#!/data/data/dev.kfm.na/files/usr/bin/bash
+# kfm-pkg — L2 overlay 运行时安装器(na 终端内用;设计 docs/active/l2-overlay.md)
+#
+#   kfm-pkg install <名>   从交接点装 overlay(拉包→解包→建链→跑 postinst→登记)
+#   kfm-pkg list           已装包清单
+#
+# 交接(设计页 §3,2026-08-22 实拍修正):na 读共享存储根被拒(scoped
+# storage 不吃 targetSdk 28 的 legacy 牌)——改走手机本机回环 HTTP:
+# Termux 侧 scripts/serve-overlays.sh 起静态服务(127.0.0.1:8027),
+# 这里 curl 拉包;KFM_OVERLAY_URL 可改;本地文件路径留作逃生门。
+set -euo pipefail
+
+PREFIX=/data/data/dev.kfm.na/files/usr
+OVERLAY_URL=${KFM_OVERLAY_URL:-http://127.0.0.1:8027}
+OVERLAY_DIR=${KFM_OVERLAY_DIR:-/storage/emulated/0/工作台/kfm-na-overlays}
+
+cmd=${1:-}
+case "$cmd" in
+install)
+    name=${2:-}
+    [ -n "$name" ] || { echo "用法: kfm-pkg install <名>"; exit 1; }
+    staging="$PREFIX/tmp/kfm-pkg-$name"
+    rm -rf "$staging"; mkdir -p "$staging"
+    local_file="$OVERLAY_DIR/na-overlay-$name.tar.gz"
+    if [ -f "$local_file" ]; then
+        cp "$local_file" "$staging/overlay.tar.gz"
+    else
+        curl -fsSL "$OVERLAY_URL/na-overlay-$name.tar.gz" -o "$staging/overlay.tar.gz" \
+            || { echo "❌ 拉不到 $OVERLAY_URL/na-overlay-$name.tar.gz(Termux 侧 serve-overlays.sh 在跑吗?)"; exit 1; }
+    fi
+    tar -xzf "$staging/overlay.tar.gz" -C "$staging"
+    [ -d "$staging/payload" ] || { echo "❌ 包里没有 payload/——不是合法 overlay"; exit 1; }
+
+    cp -a "$staging/payload/." "$PREFIX/"
+
+    # 符号链接(target←link,U+2190;对齐 bootstrap 建链语义)
+    if [ -s "$staging/SYMLINKS.txt" ]; then
+        while IFS= read -r line; do
+            [ -n "$line" ] || continue
+            target=${line%%←*}
+            link=${line#*←}
+            mkdir -p "$PREFIX/$(dirname "$link")"
+            ln -snf "$target" "$PREFIX/$link"
+        done < "$staging/SYMLINKS.txt"
+    fi
+
+    # maintainer 脚本(打包侧已改写 na 路径;非零不致命,逐包登记设计页 §6)
+    for s in "$staging"/maint/*.postinst; do
+        [ -f "$s" ] || continue
+        echo "[kfm-pkg] postinst: $(basename "$s")"
+        PREFIX="$PREFIX" PATH="$PREFIX/bin" LD_LIBRARY_PATH="$PREFIX/lib" \
+            bash "$s" || echo "⚠️ $(basename "$s") 非零退出(继续)"
+    done
+
+    mkdir -p "$PREFIX/var/kfm-pkg"
+    grep '^packages=' "$staging/MANIFEST" | cut -d= -f2- | tr ' ' '\n' \
+        >> "$PREFIX/var/kfm-pkg/installed"
+    rm -rf "$staging"
+    echo "✅ $name 安装完成"
+    ;;
+list)
+    cat "$PREFIX/var/kfm-pkg/installed" 2>/dev/null || echo "(空)"
+    ;;
+*)
+    echo "用法: kfm-pkg install <名> | list"
+    exit 1
+    ;;
+esac

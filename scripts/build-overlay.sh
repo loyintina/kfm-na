@@ -1,0 +1,37 @@
+#!/bin/bash
+# build-overlay.sh — L2 overlay 管线编排(在手机真 Termux 里跑)
+# 设计:docs/active/l2-overlay.md §2
+#
+# 用法: scripts/build-overlay.sh <overlay名> <包...>
+#   例: scripts/build-overlay.sh base openssh git
+#
+# 三段:apt 解依赖闭包(空 status 骗全量下载地址) → curl 拉回 deb →
+# 调 overlay-pack.sh 剥前缀重打包 → 落交接点 ~/w/kfm-na-overlays/
+# (na 侧 /storage/emulated/0/工作台/kfm-na-overlays/)
+set -euo pipefail
+
+[ $# -ge 2 ] || { echo "用法: $0 <overlay名> <包...>"; exit 1; }
+name=$1; shift
+
+work="${TMPDIR:-/tmp}/kfm-overlay-$name"
+rm -rf "$work"; mkdir -p "$work/debs"
+: > "$work/empty-status"
+
+echo "=== [overlay 1/3] apt 解依赖闭包($*) ==="
+# --print-uris 只算不下载;空 status = 一切依赖按未装算,闭包完整
+apt-get -y -o Dir::State::status="$work/empty-status" \
+    -o APT::Get::Download-Only=true --print-uris install "$@" \
+    > "$work/uris.txt"
+grep -oE "'https?://[^']+'" "$work/uris.txt" | tr -d "'" > "$work/urls.txt"
+[ -s "$work/urls.txt" ] || { echo "❌ 没解出任何下载地址(包名打错了?)"; exit 1; }
+
+echo "=== [overlay 2/3] 下载 $(wc -l < "$work/urls.txt") 个 deb ==="
+(cd "$work/debs" && while read -r u; do curl -fsSL -O "$u"; done < "$work/urls.txt")
+
+echo "=== [overlay 3/3] 剥前缀重打包 ==="
+OUTDIR="$work" bash "$(dirname "$0")/overlay-pack.sh" "$name" "$work"/debs/*.deb
+
+drop="$HOME/w/kfm-na-overlays"
+mkdir -p "$drop"
+cp "$work/na-overlay-$name.tar.gz" "$drop/"
+echo "✅ 落交接点: $drop/na-overlay-$name.tar.gz"

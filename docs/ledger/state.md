@@ -5,14 +5,19 @@
 
 ## 当前位置（2026-08-22)
 
-- **L2 命令生态定案：apt 直通，busybox 方案作废**。盘点 bootstrap
-  (3771 文件 / 275 bin 项）:coreutils 是多路复用 `bin/coreutils` +
-  SYMLINKS.txt 136 条链接（我们的安装器已建链）,grep/sed/gawk/find/
-  tar/curl/top/ps/nano/less 全齐；真缺口只有 ssh/git/vim/make/wget。
-  实拍：`apt update` 在应用内成功（packages-cf.termux.dev 连通、
-  InRelease 验签过——termux-keyring 的 postinst 生效）。路线 =
-  应用内 `apt install` 按需装，不打进 APK（保体积与启动速度）。
-  待验证：`apt install openssh git` 的 dpkg configure 完整性。
+- **L2 命令生态定案(实拍修正版):overlay 管线,apt 只做依赖解析器**。
+  盘点 bootstrap:coreutils 是多路复用 `bin/coreutils` + SYMLINKS.txt
+  136 条链接,grep/sed/gawk/find/tar/curl/top/ps 全齐;真缺口 = ssh/git/
+  vim/make。先判「apt 直通」→ 实拍证伪:`apt update` 能成(只拉清单),
+  `apt install` 全灭——deb 把 com.termux 前缀三处焊死(data.tar 路径、
+  maintainer 脚本、编译期 prefix),dpkg instdir=/ 解包敲别家院门
+  EACCES。路线改为三段(设计 docs/active/l2-overlay.md):手机真 Termux
+  跑 `scripts/build-overlay.sh`(apt --print-uris 空 status 骗闭包 →
+  curl → overlay-pack.sh 剥前缀/改脚本/收链接) → 交接点**手机回环
+  HTTP**(实拍修正:na 读共享存储根 EACCES,scoped storage 不吃
+  legacy 牌;Termux 侧 serve-overlays.sh 起 127.0.0.1:8027) →
+  na 终端 `kfm-pkg install <名>`(shell,assets 每启铺进 $PREFIX/bin)。
+  考题 = scripts/test-overlay.sh(fixture 假 deb,chain 第 8 步)。
 - **探针脚手架拆除（本提交）**：启动战役归因探针全拆——termview 字体分段
   计时、init_terminal 五段计时、帧#N 三段探针、FIRST_OUTPUT/RTT 探针、
   user_event/new_events 测绘、ATW_N 测绘、resumed 三行计时、唤醒锤成败

@@ -97,6 +97,11 @@ if [ -n "$BOOTSTRAP_ZIP" ]; then
 else
     echo "bootstrap 资产缺席——裸包(本地会话回落系统 sh)"
 fi
+# kfm-pkg 运行时安装器(L2 overlay,docs/active/l2-overlay.md):常驻资产,
+# app 侧每启覆盖铺进 $PREFIX/bin,版本随 APK 滚动
+mkdir -p "$BUILD/stage/assets"
+cp android/assets/kfm-pkg "$BUILD/stage/assets/kfm-pkg"
+
 $JAVAC -source 8 -target 8 -cp "$AJAR" -d "$BUILD/classes" \
     android/java/dev/kfm/na/*.java 2>&1 | grep -v 'bootstrap class path' || true
 # javac 的告警（-source 8 过时）不挡路，编译失败才挡

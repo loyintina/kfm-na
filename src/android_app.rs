@@ -336,6 +336,8 @@ impl App {
         // 换成 $PREFIX/bin/bash)。幂等——非首启秒过(只查 prefix 非空)
         if let Some(app) = &self.android_app {
             crate::bootstrap::first_boot_install(app);
+            // L2:kfm-pkg 每启覆盖铺进 $PREFIX/bin(版本随 APK 滚动)
+            crate::bootstrap::ensure_pkg_tool(app);
         }
         // 双会话（L1，多端分层设计页 §3）：本地 PTY 秒开为默认活跃会话——
         // 零网络，冷进程首连 ~2.1s 唤醒成本（BAR-022/023 归因）不在此路径；

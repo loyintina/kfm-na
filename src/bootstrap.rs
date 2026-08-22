@@ -186,6 +186,35 @@ mod android_shell {
         .ok()
     }
 
+    /// kfm-pkg 运行时安装器资产名(L2 overlay,设计 docs/active/l2-overlay.md)
+    const PKG_TOOL_ASSET: &str = "kfm-pkg";
+
+    /// kfm-pkg 每启覆盖铺进 $PREFIX/bin:版本随 APK 自然滚动,升级零仪式。
+    /// prefix 不在(裸包)就跳过;kfm-pkg 自己是 shell 脚本,0700。
+    pub fn ensure_pkg_tool(app: &AndroidApp) {
+        let Some(files) = app_files_dir(app) else {
+            return;
+        };
+        let bin = files.join("usr/bin");
+        if !bin.is_dir() {
+            return;
+        }
+        let assets = app.asset_manager();
+        let name = std::ffi::CString::new(PKG_TOOL_ASSET).unwrap();
+        let Some(mut asset) = assets.open(&name) else {
+            return; // 资产缺席(裸包)——不吵,装包脚本永远带上它
+        };
+        let mut bytes = Vec::with_capacity(asset.length());
+        if std::io::Read::read_to_end(&mut asset, &mut bytes).is_err() {
+            return;
+        }
+        let dst = bin.join(PKG_TOOL_ASSET);
+        if std::fs::write(&dst, &bytes).is_ok() {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&dst, std::fs::Permissions::from_mode(0o700));
+        }
+    }
+
     /// 首启安装(在 conn-provider-local 装载前调):assets 读 zip →
     /// ensure_prefix → 新装则同步跑 second-stage。全程 report_sync
     /// (安装期终端网格还没建,日志是唯一观测面)
@@ -195,7 +224,7 @@ mod android_shell {
             return;
         };
         let prefix = files.join("usr");
-        let mut assets = app.asset_manager();
+        let assets = app.asset_manager();
         let name = std::ffi::CString::new(BOOTSTRAP_ASSET).unwrap();
         let Some(mut asset) = assets.open(&name) else {
             crate::report::report_sync(
@@ -235,4 +264,4 @@ mod android_shell {
 }
 
 #[cfg(target_os = "android")]
-pub use android_shell::first_boot_install;
+pub use android_shell::{ensure_pkg_tool, first_boot_install};
