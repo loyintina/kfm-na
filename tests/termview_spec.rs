@@ -818,6 +818,28 @@ fn spec_bar022_内嵌cjk字体_终端符号补丁覆盖() {
     }
 }
 
+/// powerline 单格钉（BAR-028：FusionPixel 的 E0A0-E0D4 是全角设计，终端按
+/// unicode-width=1 渲染，右半被格宽裁剪切掉——agnoster 箭头变「方括号」，
+/// 2026-08-23 真机截图目击）。契约：powerline 字形步进 == 半角字符步进，
+/// 且墨迹不越格宽（纵向保持满行高不管）
+#[test]
+fn spec_bar028_powerline字形_单格步进() {
+    let font = fontdue::Font::from_bytes(
+        termview::VENDORED_CJK_FONT,
+        fontdue::FontSettings::default(),
+    )
+    .expect("内嵌 CJK 字体必须可解析");
+    let half = font.metrics('M', 100.0).advance_width;
+    for c in ['\u{E0A0}', '\u{E0B0}', '\u{E0B2}'] {
+        let m = font.metrics(c, 100.0);
+        assert_eq!(
+            m.advance_width, half,
+            "{c}（U+{:04X}）步进应=半角步进——全角 powerline 会被裁成方括号",
+            c as u32
+        );
+    }
+}
+
 // ---------- A 档：捏合缩放（2026-08-21，用户两次抱怨「太小」+ 双指调字号） ----------
 
 #[test]

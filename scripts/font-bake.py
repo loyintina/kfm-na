@@ -115,6 +115,49 @@ def monoify(font):
     return stats
 
 
+def half_cell(font):
+    """半角格宽：从字体现有半角字符量，不写死（BAR-028 实录：
+    商业字体 upm=1000 半格 500，缝合像素 upm=1200 半格 600，
+    借字形时按错格宽导致借入符号比邻居窄一截）"""
+    cmap = font.getBestCmap()
+    gn = cmap.get(ord("M"))
+    if gn:
+        return font["hmtx"][gn][0]
+    return HALF
+
+
+def squeeze_powerline(font):
+    """powerline 私有区字形横压进半格（BAR-028）：FusionPixel 的 E0A0-E0D4
+    是全角设计（墨迹 1100×1100 方块），终端按 unicode-width=1 渲染单格，
+    右半被格宽裁剪切掉，箭头变「方括号」（真机实拍目击）。
+    终端字体的标准做法：箭头要的是满行高不是宽度——X 压到半格、Y 不动，
+    墨迹左右贴齐格缘（powerline 要和相邻段无缝拼接，不能居中留白）。"""
+    cmap = font.getBestCmap()
+    glyf, hmtx = font["glyf"], font["hmtx"]
+    half = half_cell(font)
+    done = 0
+    for cp in range(0xE0A0, 0xE0D4 + 1):
+        gname = cmap.get(cp)
+        if not gname:
+            continue
+        b = ink_bounds(glyf, gname)
+        if not b:
+            hmtx[gname] = (half, 0)
+            continue
+        xMin, yMin, xMax, yMax = b
+        iw = xMax - xMin
+        if iw <= half and hmtx[gname][0] == half:
+            continue  # 已是半格,不动
+        sx = half / iw
+        t = Transform(sx, 0, 0, 1, -xMin * sx, 0)
+        pen = TTGlyphPen(glyf)
+        glyf[gname].draw(TransformPen(pen, t), glyf)
+        glyf[gname] = pen.glyph()
+        hmtx[gname] = (half, 0)
+        done += 1
+    return done
+
+
 def borrow(font, donor_path, cps):
     """从捐体借字形补进产物：按 upm 比例缩放轮廓，墨迹居中进半角格
     （超宽 XY 等比压缩，lsb 钉真实 xMin——与 monoify 同律），登记 cmap。
@@ -130,6 +173,8 @@ def borrow(font, donor_path, cps):
     # 登记——否则保存时 vmtx compile 按 glyphOrder 查不到新字形直接
     # KeyError（BAR-027 调试实录：hmtx 补了、vmtx 漏了，挂的是 _h_m_t_x）
     vmtx = font["vmtx"] if "vmtx" in font else None
+    half = half_cell(font)
+    cap = half - 20  # 墨迹上限:留 20 单位边距防相邻格渗透
     got, missing = [], []
     for cp in cps:
         dg = d_cmap.get(cp)
@@ -145,22 +190,22 @@ def borrow(font, donor_path, cps):
         d_gs[dg].draw(rec)
         rec.replay(TransformPen(pen, Transform(scale, 0, 0, scale, 0, 0)))
         glyf[gname] = pen.glyph()
-        # 2. 居中进半角格（与 monoify 同律）
+        # 2. 居中进半角格（与 monoify 同律;格宽按字体现测量, BAR-028）
         b = ink_bounds(glyf, gname)
         if b:
             xMin, yMin, xMax, yMax = b
             iw = xMax - xMin
-            if iw <= HALF_INK_CAP:
-                t = Transform(1, 0, 0, 1, (HALF - iw) / 2 - xMin, 0)
+            if iw <= cap:
+                t = Transform(1, 0, 0, 1, (half - iw) / 2 - xMin, 0)
             else:
-                s = HALF_INK_CAP / iw
-                t = Transform(s, 0, 0, s, (HALF - iw * s) / 2 - xMin * s, yMin - yMin * s)
+                s = cap / iw
+                t = Transform(s, 0, 0, s, (half - iw * s) / 2 - xMin * s, yMin - yMin * s)
             pen2 = TTGlyphPen(glyf)
             glyf[gname].draw(TransformPen(pen2, t), glyf)
             glyf[gname] = pen2.glyph()
-            hmtx[gname] = (HALF, ink_bounds(glyf, gname)[0])
+            hmtx[gname] = (half, ink_bounds(glyf, gname)[0])
         else:
-            hmtx[gname] = (HALF, 0)
+            hmtx[gname] = (half, 0)
         if vmtx is not None:
             vmtx[gname] = (font["head"].unitsPerEm, 0)
         # 3. 登记所有 unicode 子表
@@ -203,6 +248,9 @@ def main():
         got, missed = borrow(font, BORROW_DONOR, BORROW_CPS)
         print(f"borrow: 借入 {len(got)} 个字形"
               + (f"，捐体缺 {[hex(c) for c in missed]}" if missed else ""))
+    if do_subset:
+        n = squeeze_powerline(font)
+        print(f"powerline: 横压半格 {n} 个字形")
     font.save(dst)
     # 判卷：出的字体必须真能用
     check = TTFont(dst)
