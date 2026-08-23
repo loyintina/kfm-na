@@ -135,7 +135,8 @@ na bash,存在即过 shell 检查。
   na_push_key 内嵌 postinst)。na 写不进共享存储根(EPERM 实拍),这是
   唯一外传道。scp 须 `-S $PREFIX/bin/ssh`(scp 调 ssh 也走焊死路径;
   改写后非必需,保留无害)。
-- **冻结坑(BAR-029,挂单)**:na 退后台被 Android 冻结,sshd 冬眠——
+- **冻结坑(BAR-029)**:na 退后台被 Android 冻结,sshd 冬眠——
   TCP 握手由内核 backlog 完成但 banner 发不出(症状=`Connection timed
-  out during banner exchange`)。连不上时先把 na 切前台重跑
-  `bash $PREFIX/share/kfm-na/na-sshd.sh`;治本 = apk 加前台服务/wake-lock。
+  out during banner exchange`)。治本已落:KfmKeepAliveService 前台服务
+  (常驻通知 + wake-lock,Termux 同款);判卷走
+  `scripts/test-bg-survival.sh`(am start 遥控前后台 + 8024 探针全自动)。

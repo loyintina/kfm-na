@@ -8,6 +8,10 @@
 
     <!-- 飞鸽传书回传通道（report.rs） -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- BAR-029 保活三件套：前台服务 + 通知 + 息屏 CPU 保活（Termux 同款） -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <application
         android:label="KFM-NA"
@@ -34,5 +38,11 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- BAR-029：cached-app 冻结器对策——进程提为前台服务重要性，
+             退后台 sshd/tmux/会话不被冻僵（冬眠症状：8024 banner 超时） -->
+        <service
+            android:name=".KfmKeepAliveService"
+            android:exported="false" />
     </application>
 </manifest>

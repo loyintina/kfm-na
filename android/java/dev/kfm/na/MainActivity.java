@@ -43,6 +43,9 @@ public class MainActivity extends NativeActivity {
         root.addView(ime);
         ime.requestFocus();
         mIme = ime;
+        // BAR-029：前台服务保活——退后台不被 cached-app 冻结器冻住
+        // （sshd 冬眠、8024 闸门断流的治本；常驻通知是 Android 硬规矩）
+        startForegroundService(new android.content.Intent(this, KfmKeepAliveService.class));
         // 探针延迟 3s 发：onCreate 时 Rust 侧 report flusher 可能还没起
         // （enqueue 直接丢），delay 后通道必然就绪
         ime.postDelayed(() -> KfmImeView.imeLog("IME 占位已叠加, focus=" + ime.isFocused()), 3000);
