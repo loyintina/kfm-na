@@ -158,6 +158,52 @@ def squeeze_powerline(font):
     return done
 
 
+def synthesize_powerline_arrows(font):
+    """E0B0/E0B2 实心阶梯三角合成（BAR-032）：FusionPixel 上游的 powerline
+    箭头是装饰设计——E0B0 是「色块+C 形镂空」，渲染出来像方括号/C 字
+    （freetype 与 fontdue 双光栅器复现，真机实拍目击），压格治不了根。
+    正道：烘焙时直接换成合成的实心阶梯三角（像素气质与 FusionPixel 一致，
+    步长 = upm/12 = 1 像素），纵向沿用原字形墨区满行高，横向满半格。
+    契约：三角实心（无镂空）、左缘满高贴齐、尖角收拢、步进=半格。"""
+    cmap = font.getBestCmap()
+    glyf, hmtx = font["glyf"], font["hmtx"]
+    half = half_cell(font)
+    step = font["head"].unitsPerEm // 12  # 12px 像素字体：1 像素 = upm/12
+    done = 0
+    for cp in (0xE0B0, 0xE0B2):
+        gname = cmap.get(cp)
+        if not gname:
+            continue
+        b = ink_bounds(glyf, gname)
+        if b:
+            _, y_min, _, y_max = b  # 纵向沿用原设计满行高
+        else:
+            y_min, y_max = font["hhea"].descent, font["hhea"].ascent
+        rows = (y_max - y_min) // step
+        cols = half // step
+        # 对称三角行宽剖面（像素列数）：1,2,…,cols,…,2,1
+        widths = [
+            max(1, round(cols * (1 - abs(2 * i - (rows - 1)) / rows)))
+            for i in range(rows)
+        ]
+        pts = [(0, y_max)]
+        for i, w in enumerate(widths):
+            pts.append((w * step, y_max - i * step))
+            pts.append((w * step, y_max - (i + 1) * step))
+        pts.append((0, y_min))
+        if cp == 0xE0B2:  # 左箭头 = 右箭头镜像
+            pts = [(half - x, y) for x, y in pts]
+        pen = TTGlyphPen(glyf)
+        pen.moveTo(pts[0])
+        for p in pts[1:]:
+            pen.lineTo(p)
+        pen.closePath()
+        glyf[gname] = pen.glyph()
+        hmtx[gname] = (half, 0)
+        done += 1
+    return done
+
+
 def borrow(font, donor_path, cps):
     """从捐体借字形补进产物：按 upm 比例缩放轮廓，墨迹居中进半角格
     （超宽 XY 等比压缩，lsb 钉真实 xMin——与 monoify 同律），登记 cmap。
@@ -251,6 +297,8 @@ def main():
     if do_subset:
         n = squeeze_powerline(font)
         print(f"powerline: 横压半格 {n} 个字形")
+        n = synthesize_powerline_arrows(font)
+        print(f"powerline: 合成实心三角箭头 {n} 个(BAR-032)")
     font.save(dst)
     # 判卷：出的字体必须真能用
     check = TTFont(dst)
@@ -282,6 +330,18 @@ def main():
                 b = ink_bounds(cglyf, gn)
                 if b:
                     assert hmtx[gn][1] == b[0], f"U+{cp:04X} lsb({hmtx[gn][1]}) != xMin({b[0]})"
+    if do_subset:
+        # BAR-032 判卷:合成箭头必须满格实心三角(步进=半格、墨贴左右缘、
+        # 纵向满行高)
+        chmtx, cglyf = check["hmtx"], check["glyf"]
+        half = half_cell(check)
+        for cp in (0xE0B0, 0xE0B2):
+            gn = cmap.get(cp)
+            assert gn, f"U+{cp:04X} 缺字形"
+            assert chmtx[gn][0] == half, f"U+{cp:04X} 步进 {chmtx[gn][0]} != 半格 {half}"
+            b = ink_bounds(cglyf, gn)
+            assert b and b[0] == 0 and b[2] == half, \
+                f"U+{cp:04X} 墨迹未贴满左右格缘: {b}"
     print("判卷通过:", dst)
 
 

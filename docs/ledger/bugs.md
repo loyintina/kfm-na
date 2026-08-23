@@ -38,3 +38,4 @@
 | BAR-029 | android_app/sshd | na 退后台被 Android 冻结，沙箱 sshd 冬眠：TCP 握手由内核 backlog 完成但 banner 发不出，症状 = `Connection timed out during banner exchange`（8024 闸门通车后实拍）。临时解：na 切前台重跑 `na-sshd.sh`。治本：apk 加前台服务/wake-lock | I | 挂单（backlog） | —（tests:na，平台胶水） |
 | BAR-030 | termview | 长行不换行：一行内容过长时不自动折行，行首被标志隐藏（横向滚动式），且长行粘贴进 na 会被折行撕碎（2026-08-23 实拍）。怀疑 readline 横向滚动或 DECAWM 未开 | V | 挂单 | — |
 | BAR-031 | scripts/kfm-pkg | 安装分段非原子：overlay 安装中途被杀会留残局（zsh 案实拍：libcap.so.2 符号链接未建 → zsh 链接失败、命令全卡死）。契约方向：安装事务化/断点恢复，重跑同包必须能自愈 | I | 挂单 | — |
+| BAR-032 | scripts/font-bake.py/assets/fonts | agnoster 箭头变「C」根因定案（截图 201724 + PIL/fontdue 双光栅器复现）：FusionPixel 上游的 E0B0 根本不是箭头，是「色块+C 形镂空」的装饰设计（E0B2 同理带内纹），BAR-028 的压格只治宽度治不了芯。契约：烘焙时 E0B0/E0B2 直接换成合成实心阶梯三角（步长=upm/12=1px，像素气质一致；纵向沿用原墨区满行高、横向满半格贴缘；三角实心、顶/底行收腰）——像素级考题钉死 | V | 已修（烘焙判卷+像素考题绿；待装机实拍判卷） | tests/termview_spec.rs `spec_bar032_powerline箭头_实心阶梯三角` |

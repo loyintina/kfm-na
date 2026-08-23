@@ -840,6 +840,61 @@ fn spec_bar028_powerline字形_单格步进() {
     }
 }
 
+#[test]
+fn spec_bar032_powerline箭头_实心阶梯三角() {
+    // BAR-032：FusionPixel 上游的 E0B0 是「色块+C 形镂空」装饰设计，渲染
+    // 出来像方括号/C 字（freetype/fontdue 双光栅器复现，真机实拍目击）。
+    // 烘焙已换成合成实心阶梯三角。像素级契约：
+    //   中间行满宽有墨（杀镂空）；顶/底行只有左缘有墨（三角收腰，杀色块）；
+    //   E0B2 镜像对称。变异抽检：回滚成上游字形，本考题必红。
+    let font = fontdue::Font::from_bytes(
+        termview::VENDORED_CJK_FONT,
+        fontdue::FontSettings::default(),
+    )
+    .expect("内嵌 CJK 字体必须可解析");
+    let ink = |c: char, row_ratio: f32, col_ratio: f32| -> bool {
+        let (m, bmp) = font.rasterize(c, 100.0);
+        // 注：bitmap 顶/底可能各有一行取整产生的空 padding，探针打在 2%/98%
+        let y = ((m.height - 1) as f32 * row_ratio) as usize;
+        let x = ((m.width - 1) as f32 * col_ratio) as usize;
+        bmp[y * m.width + x] > 8
+    };
+    // E0B0 右箭头：尖朝右
+    assert!(
+        ink('\u{E0B0}', 0.5, 1.0),
+        "E0B0 中间行右缘必须有墨（箭头贴右缘）"
+    );
+    assert!(
+        ink('\u{E0B0}', 0.5, 0.7),
+        "E0B0 中间行 70% 处必须有墨（实心，不许镂空）"
+    );
+    assert!(
+        ink('\u{E0B0}', 0.02, 0.0),
+        "E0B0 顶行左缘必须有墨（左缘满高贴齐）"
+    );
+    assert!(
+        !ink('\u{E0B0}', 0.02, 0.5),
+        "E0B0 顶行中部必须无墨（三角收腰，不许是色块）"
+    );
+    assert!(
+        !ink('\u{E0B0}', 0.98, 1.0),
+        "E0B0 底行右缘必须无墨（尖角收拢）"
+    );
+    // E0B2 左箭头：镜像
+    assert!(
+        ink('\u{E0B2}', 0.5, 0.0),
+        "E0B2 中间行左缘必须有墨（尖朝左）"
+    );
+    assert!(
+        ink('\u{E0B2}', 0.02, 1.0),
+        "E0B2 顶行右缘必须有墨（右缘满高贴齐）"
+    );
+    assert!(
+        !ink('\u{E0B2}', 0.02, 0.5),
+        "E0B2 顶行中部必须无墨（三角收腰）"
+    );
+}
+
 // ---------- A 档：捏合缩放（2026-08-21，用户两次抱怨「太小」+ 双指调字号） ----------
 
 #[test]
