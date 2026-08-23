@@ -18,6 +18,9 @@ rm -rf "$work"; mkdir -p "$work/debs" "$work/cache"
 : > "$work/empty-status"
 
 echo "=== [overlay 1/3] apt 解依赖闭包($*) ==="
+# 先刷清单:陈旧清单会给出已被官方源撤下的旧版本 URL,下载 404
+# (2026-08-23 zsh 单包实拍踩中)
+apt-get update -qq
 # --print-uris 只算不下载。两道空闸缺一不可:
 #   空 status        = 一切依赖按未装算,闭包完整;
 #   空 cache/archives = 本机 apt 缓存里躺过的 deb 不算数(2026-08-22 实拍:
