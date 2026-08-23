@@ -17,6 +17,11 @@ printf '#!/data/data/com.termux/files/usr/bin/sh\necho fixhello\n' \
 chmod 755 "$fix/root/data/data/com.termux/files/usr/bin/fixhello"
 printf 'fake-lib' > "$fix/root/data/data/com.termux/files/usr/lib/libfix.so.1"
 ln -s libfix.so.1 "$fix/root/data/data/com.termux/files/usr/lib/libfix.so"
+# 假 ELF:魔数 + NUL + 焊死路径(模拟 sshd 的编译期焊死——§8 等长改写着靶)
+printf '\x7fELF\x02\x01\x01\x00/data/data/com.termux/files/usr/etc/ssh/fix.conf\x00padding' \
+    > "$fix/root/data/data/com.termux/files/usr/bin/fixelf"
+chmod 755 "$fix/root/data/data/com.termux/files/usr/bin/fixelf"
+elf_size_before=$(stat -c%s "$fix/root/data/data/com.termux/files/usr/bin/fixelf")
 printf '#!/data/data/com.termux/files/usr/bin/sh\nmkdir -p /data/data/com.termux/files/usr/var/fix\n' \
     > "$fix/ctl/postinst"
 echo 'Package: fixhello' > "$fix/ctl/control"
@@ -44,6 +49,15 @@ grep -q '/data/data/dev.kfm.na/files/usr/bin/sh' "$out/payload/bin/fixhello" \
 grep -q 'com.termux' "$out/maint/fixhello.postinst" && fail "postinst 未改写"
 grep -q '/data/data/dev.kfm.na/files/usr/var/fix' "$out/maint/fixhello.postinst" \
     || fail "postinst 内部路径没改写成 na 前缀"
+
+# 2.5 ELF 等长改写(§8):二进制里的焊死串也一个不剩,且字节数不变
+[ -f "$out/payload/bin/fixelf" ] || fail "payload/bin/fixelf 不在"
+grep -q 'com.termux' "$out/payload/bin/fixelf" && fail "ELF 残留 com.termux"
+grep -q '/data/data/dev.kfm.na/files/usr/etc/ssh/fix.conf' "$out/payload/bin/fixelf" \
+    || fail "ELF 改写后路径不对"
+[ "$(stat -c%s "$out/payload/bin/fixelf")" = "$elf_size_before" ] \
+    || fail "ELF 改写后字节数变了(等长铁律破,偏移挪动=毁 ELF)"
+[ "$(head -c4 "$out/payload/bin/fixelf")" = "$(printf '\x7fELF')" ] || fail "ELF 魔数被毁"
 
 # 3. 符号链接:登记且摘除
 [ "$(cat "$out/SYMLINKS.txt")" = "libfix.so.1←lib/libfix.so" ] \

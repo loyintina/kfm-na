@@ -10,14 +10,12 @@
 #      payload 根(usr 相对路径)
 #   2. 符号链接不落地,记进 SYMLINKS.txt(沿用 bootstrap 格式 target←link,
 #      U+2190),由安装侧建链
-#   3. 焊死路径改写:payload 文本文件与 maintainer 脚本里的 com.termux
-#      路径 → dev.kfm.na(二进制不改,运行时 shim 按包登记在设计页 §6)
+#   3. 焊死路径改写:裸前缀等长替换(com.termux ↔ dev.kfm.na 同为 10
+#      字符),文本与 ELF 通吃——等长不挪偏移,二进制照样安全
+#      (设计页 §8,sshd 案实拍;2026-08-23 起构建侧根治,不再靠 shim)
 set -euo pipefail
 
 FROM_USR=/data/data/com.termux/files/usr
-FROM_HOME=/data/data/com.termux/files/home
-TO_USR=/data/data/dev.kfm.na/files/usr
-TO_HOME=/data/data/dev.kfm.na/files/home
 
 [ $# -ge 2 ] || { echo "用法: OUTDIR=<目录> $0 <overlay名> <deb...>"; exit 1; }
 name=$1; shift
@@ -47,10 +45,13 @@ done
 ( cd "$work/payload" && find . -type l -printf '%l←%P\n' ) > "$work/SYMLINKS.txt"
 find "$work/payload" -type l -delete
 
-# 焊死路径改写(只碰文本;二进制里的编译期路径是 §5 shim 的事)
-grep -rlI '/data/data/com.termux' "$work/payload" "$work/maint" 2>/dev/null \
+# 焊死路径改写:裸前缀等长替换(com.termux ↔ dev.kfm.na 同为 10 字符),
+# 文本与 ELF 通吃——等长不挪偏移,不毁段表/重定位(§8,sshd 案实拍)。
+# grep -rl 不带 -I:二进制里的焊死串也要揪出来;sed 处理二进制安全
+# (替换串等长、模式无换行,GNU sed 对 NUL/长行均无碍)。
+grep -rl '/data/data/com\.termux' "$work/payload" "$work/maint" 2>/dev/null \
     | while read -r f; do
-        sed -i "s|$FROM_USR|$TO_USR|g; s|$FROM_HOME|$TO_HOME|g" "$f"
+        sed -i 's|/data/data/com\.termux|/data/data/dev.kfm.na|g' "$f"
     done
 
 {
