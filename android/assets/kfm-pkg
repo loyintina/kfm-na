@@ -26,10 +26,10 @@ install)
     local_file="$OVERLAY_DIR/na-overlay-$name.tar.gz"
     if ! cp "$local_file" "$staging/overlay.tar.gz" 2>/dev/null; then
         curl -fsSL "$OVERLAY_URL/na-overlay-$name.tar.gz" -o "$staging/overlay.tar.gz" \
-            || { echo "❌ 拉不到 $OVERLAY_URL/na-overlay-$name.tar.gz(Termux 侧 kalo/8027 在跑吗?)"; exit 1; }
+            || { echo "[kfm-pkg] 拉不到 $OVERLAY_URL/na-overlay-$name.tar.gz(Termux 侧 kalo/8027 在跑吗?)"; exit 1; }
     fi
     tar -xzf "$staging/overlay.tar.gz" -C "$staging"
-    [ -d "$staging/payload" ] || { echo "❌ 包里没有 payload/——不是合法 overlay"; exit 1; }
+    [ -d "$staging/payload" ] || { echo "[kfm-pkg] 包里没有 payload/——不是合法 overlay"; exit 1; }
 
     # 活体覆盖防护(2026-08-22 实拍):运行中的 shell 映射着 $PREFIX/lib
     # 里的 .so,cp 原地截断覆写会把活体崩掉(装完 base 会话 exit -1)——
@@ -55,14 +55,14 @@ install)
         [ -f "$s" ] || continue
         echo "[kfm-pkg] postinst: $(basename "$s")"
         PREFIX="$PREFIX" PATH="$PREFIX/bin" LD_LIBRARY_PATH="$PREFIX/lib" \
-            bash "$s" || echo "⚠️ $(basename "$s") 非零退出(继续)"
+            bash "$s" || echo "[kfm-pkg] 警告: $(basename "$s") 非零退出(继续)"
     done
 
     mkdir -p "$PREFIX/var/kfm-pkg"
     grep '^packages=' "$staging/MANIFEST" | cut -d= -f2- | tr ' ' '\n' \
         >> "$PREFIX/var/kfm-pkg/installed"
     rm -rf "$staging"
-    echo "✅ $name 安装完成"
+    echo "[kfm-pkg] $name 安装完成"
     ;;
 list)
     cat "$PREFIX/var/kfm-pkg/installed" 2>/dev/null || echo "(空)"
