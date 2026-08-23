@@ -3,8 +3,18 @@
 > 纪律：**每个里程碑必更新此页**。接手者冷启动顺序：本页 → bugs.md →
 > AGENTS.md → chain.sh 跑一遍。本页只写「现在进行时」，历史功过在 bugs.md。
 
-## 当前位置（2026-08-22)
+## 当前位置（2026-08-23)
 
+- **L2 判卷通过（2026-08-23 实拍）**:`kfm-pkg install base` 全绿,
+  `ssh -V`=OpenSSH_10.5p1、`git --version`=2.55.0、`ssh root@服务器`
+  登录成功。途中三案:①na 公网出站"不通"破案=境外链路掐 DSCP
+  标记包(IPQoS=none 即通;80 口超时是安全组丢包的假线索);
+  ②ssh 的 `~` 系路径焊死 com.termux 家目录 → `$HOME/.ssh/config` +
+  alias shim(登记 l2-overlay.md §6);③身份 = 复用 Termux moliy_key
+  (用户拍板),8027 传递后落 $PREFIX 私有区,副本已删。
+  另记:na 终端粘贴长命令会被折行撕碎(待办:粘贴保真)。
+- **ANSI 蓝系换品牌蓝（本提交）**:VGA #0000AA/#5555FF 纯黑底不可读
+  (ssh 远端 ls 目录名看不清)→ idx4/12 换 #3B82F6/#60A5FA,考题钉死。
 - **L2 命令生态定案(实拍修正版):overlay 管线,apt 只做依赖解析器**。
   盘点 bootstrap:coreutils 是多路复用 `bin/coreutils` + SYMLINKS.txt
   136 条链接,grep/sed/gawk/find/tar/curl/top/ps 全齐;真缺口 = ssh/git/

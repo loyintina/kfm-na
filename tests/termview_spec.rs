@@ -131,6 +131,14 @@ fn spec_颜色_ansi前16色走表() {
 }
 
 #[test]
+fn spec_颜色_蓝系可读_钉住品牌蓝() {
+    // 2026-08-23 实拍:VGA 蓝 #0000AA/#5555FF 在纯黑底上不可读
+    // (ssh 远端 ls 目录名看不清)——蓝系换 kfmv4 品牌蓝,钉死防回退
+    assert_eq!(ANSI_16[4], 0x003B_82F6);
+    assert_eq!(ANSI_16[12], 0x0060_A5FA);
+}
+
+#[test]
 fn spec_颜色_默认前景背景() {
     assert_eq!(
         color_to_xrgb(Color::Named(NamedColor::Foreground)),

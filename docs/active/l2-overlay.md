@@ -72,7 +72,16 @@ MANIFEST             # name=<名> / packages=<闭包列表> / built=<时间戳>
 
 ## 6. 已装包 shim 登记表
 
-(空——第一个包装上后开记)
+- **openssh(2026-08-23 实拍闭环)**:
+  - `known_hosts` 等 `~` 系路径走 getpwuid,焊死 com.termux 家目录
+    (EACCES 警告,不挡路)→ shim:`$HOME/.ssh/config` 显式给
+    `UserKnownHostsFile $HOME/.ssh/known_hosts`,alias
+    `ssh='ssh -F $HOME/.ssh/config'` 写入 `$HOME/.bashrc`。
+  - **境外链路掐 DSCP 标记包**(实拍:裸 TCP 通、KEX 后 userauth 段
+    abort;`IPQoS=none` 即通)→ shim:同 config 里 `IPQoS none`。
+  - 私钥 = 复用 Termux `moliy_key`(用户拍板),经 8027 传递后落
+    `$PREFIX/etc/ssh/id_ed25519`(**私有区,不进共享存储 HOME**),
+    传递副本用后已删。
 
 ## 6.5 运行时安装的铁律(2026-08-22 实拍)
 

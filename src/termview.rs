@@ -83,13 +83,15 @@ pub fn prefer_cjk(primary: &fontdue::Font, cjk: &fontdue::Font, c: char) -> bool
 pub const DEFAULT_FG: u32 = 0x00FF_FFFF;
 pub const DEFAULT_BG: u32 = 0x0000_0000;
 
-/// ANSI 前 16 色表（VGA 经典配色，XRGB）：0-7 普通，8-15 高亮
+/// ANSI 前 16 色表（XRGB）：0-7 普通，8-15 高亮。主体 VGA 经典配色；
+/// **蓝系例外（2026-08-23 实拍）**:VGA #0000AA/#5555FF 在纯黑底上不可读
+/// （ssh 远端 ls 目录名、help 标题看不清）——换 kfmv4 品牌蓝系
 pub const ANSI_16: [u32; 16] = [
     0x0000_0000, // 黑
     0x00AA_0000, // 红
     0x0000_AA00, // 绿
     0x00AA_5500, // 黄（VGA 棕）
-    0x0000_00AA, // 蓝
+    0x003B_82F6, // 蓝 → kfmv4 品牌正蓝(原 VGA #0000AA 黑底不可读)
     0x00AA_00AA, // 品红
     0x0000_AAAA, // 青
     0x00AA_AAAA, // 白
@@ -97,7 +99,7 @@ pub const ANSI_16: [u32; 16] = [
     0x00FF_5555, // 亮红
     0x0055_FF55, // 亮绿
     0x00FF_FF55, // 亮黄
-    0x0055_55FF, // 亮蓝
+    0x0060_A5FA, // 亮蓝 → 品牌蓝亮一档(原 VGA #5555FF)
     0x00FF_55FF, // 亮品红
     0x0055_FFFF, // 亮青
     0x00FF_FFFF, // 亮白
