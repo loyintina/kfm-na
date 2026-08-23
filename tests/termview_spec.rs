@@ -796,8 +796,10 @@ fn spec_bar021_生产默认_零探测() {
 }
 
 /// 终端符号补丁钉（BAR-022：纯 GB2312 子集裁掉了盲文转动点/方块/几何符号，
-/// 真机 U+25BD ▽ tofu 目击刷屏）。契约：内嵌 CJK/符号 fallback 字体必须
-/// 覆盖补丁表代表字符——盲文（kimi code 转动点）、方块、几何、箭头、框线
+/// 真机 U+25BD ▽ tofu 目击刷屏；BAR-027：agnoster/robbyrussell 要的
+/// /✘/⚡/✓/✗/➜/➦ 不在 GB2312，FusionPixel 缺的 7 个从 DejaVuSansMono
+/// 借形补位）。契约：内嵌 CJK/符号 fallback 字体必须覆盖补丁表代表字符——
+/// 盲文（kimi code 转动点）、方块、几何、箭头、框线、powerline、omz 符号
 #[test]
 fn spec_bar022_内嵌cjk字体_终端符号补丁覆盖() {
     let font = fontdue::Font::from_bytes(
@@ -805,7 +807,9 @@ fn spec_bar022_内嵌cjk字体_终端符号补丁覆盖() {
         fontdue::FontSettings::default(),
     )
     .expect("内嵌 CJK 字体必须可解析");
-    for c in ['⠋', '█', '▽', '→', '─'] {
+    for c in [
+        '⠋', '█', '▽', '→', '─', '\u{E0A0}', '\u{E0B0}', '✘', '⚡', '✓', '✗', '➜', '➦',
+    ] {
         assert!(
             font.lookup_glyph_index(c) != 0,
             "内嵌 CJK/符号字体缺 {c}（U+{:04X}）——补丁表被裁掉了？",

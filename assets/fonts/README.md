@@ -26,8 +26,11 @@
 - 来源：缝合像素字体（https://github.com/TakWolf/fusion-pixel-font），
   12px 等宽 zh_hans 变体，release 2026.08.11
 - 许可：SIL OFL 1.1（见 OFL-fusion-pixel.txt），允许嵌入再分发
-- 烘焙：`scripts/font-bake.py --subset`（GB2312 子集化，6.8MB → 1.36MB；
+- 烘焙：`scripts/font-bake.py --subset --borrow`（GB2312 子集化 + 终端符号
+  补丁表 + 借字形，6.8MB → 1.46MB；
   汉字覆盖 6618/6763，缺的 145 个为二级罕用字，渲染落 tofu）
+- 借字形（BAR-027）：agnoster/omz 要而 FusionPixel 没有的 7 个符号
+  （⚡✓✗✘✚➜➦）从 DejaVuSansMono 借入，upm 缩放后半角格居中
 - 用途：开源占位 CJK 备用字体（像素风，与商业覆盖字体气质一致）
 
 ## local/（不进库）
