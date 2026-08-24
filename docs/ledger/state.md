@@ -56,6 +56,21 @@
   na-type.sh(半写防护 = .new+mv 原子协议)。设计参考面:
   docs/active/调试闸门.md。考题:gate_spec 6 道 + termview dump_text
   题。用途:此后 na 调试 agent 自助闭环,不再要用户当手和眼。
+- **keys-in 零执行破案(2026-08-24,5260c1e)**:装机后注入无效——
+  回执上报(send_checked,eb798cd)先证 drain/登记/send/writer 四环
+  全活,读屏见四条命令带字面 `\r` 堆在提示符上:病在 na-type.sh
+  `printf '%s'` 把转义当字面发。改 `%b` 后端到端实证(echo 落盘真
+  执行)。教训入档:**「通道活了」≠「字节对了」,判案判到最后一厘米**。
+  钉:scripts/test-na-type-bytes.sh(假 ssh 注 PATH 判字节)。
+- **会话泵:Output 数据面分家(2026-08-24,本提交)**:旧制 Output 走
+  SessionEvent 进 UI 事件队列,挂起态不抽干 → 网格冻结,闸门读屏读
+  旧画面。新制 `gate::SessionPump` 是全部会话入向唯一消费者:活跃方
+  Output 谁 pump 谁喂共享终端(UI 每圈 + 值守 300ms 双 caller,前台
+  零延迟后台不冻结);待机方进 replay 缓存(帽 256KB 丢最旧,切换时
+  take_replay 补屏);控制事件按名带进控制队列,壳每圈取走记健康账
+  (语义不变)。壳的 event_rx/standby/standby_buf 三字段全删,切换不
+  再换入向槽,重连 = pump_register 同名登记(自清遗物)。考题
+  tests/session_pump_spec.rs 7 道。锁序追加 pump→term 单方向。
 - **L2 判卷通过（2026-08-23 实拍）**:`kfm-pkg install base` 全绿,
   `ssh -V`=OpenSSH_10.5p1、`git --version`=2.55.0、`ssh root@服务器`
   登录成功。途中三案:①na 公网出站"不通"破案=境外链路掐 DSCP

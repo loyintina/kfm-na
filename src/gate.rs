@@ -24,11 +24,28 @@
 //! keys-in 半写防护：写入端先写 keys-in.new 再 mv 成 keys-in（rename
 //! 原子）；消费端 rename 到 keys-in.reading 再读再删（原子取走）。
 //! 注入是裸字节——Ctrl-](\x1d)会话切换是 UI 层逻辑，闸门不过（有意留白）；
-//! 会话死亡时 send 静默吞，闸门不报错（text/shot 仍可读现场）。
+//! 会话死亡时 `SessionRouter::send` 静默吞（语义不动），闸门注入走
+//! `send_checked` 回执，三环结果各留一行 gate 报告。
+//!
+//! ---- 会话泵（Output 数据面分家，2026-08-24 与用户定） ----
+//!
+//! 背景：挂起态事件循环不抽 event_rx，PTY 输出全堆在 mpsc 里，网格冻结
+//! ——keys-in 注入真执行了，闸门读屏却读到旧画面（keys-in 修复案实证）。
+//! 分家后 SessionPump 是会话入向的唯一消费者：
+//! - 活跃方 Output：谁 pump 谁喂共享终端（UI 每圈 + 值守线程 300ms 双
+//!   caller——前台零延迟，后台网格照新，闸门眼睛实时）；
+//! - 待机方 Output：进 replay 缓存（切换时补屏，限量丢最旧）；
+//! - 控制事件（Opened/Exited/Failed）：一粒不动，留给 UI 记健康账。
+//!
+//! 锁序追加：pump→term（sink 回调内单方向）；pump 与 router 互不嵌套。
 
+use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
+
+use crate::session::SessionEvent;
 
 /// 闸门目录（na 沙箱 $PREFIX/tmp，调试闸门同机可见）
 pub const DUMP_DIR: &str = "/data/data/dev.kfm.na/files/usr/tmp";
@@ -149,16 +166,168 @@ pub fn inject_keys(dir: &str) {
 
 // ---- 值守线程 ----
 
-/// 起闸门值守线程（android_main 调一次）：300ms 一轮，三通道各查一遍
+/// 起闸门值守线程（android_main 调一次）：300ms 一轮，泵 + 三通道各查一遍
 pub fn spawn_gate_watcher() {
     std::thread::spawn(|| {
         loop {
             std::thread::sleep(std::time::Duration::from_millis(300));
+            // 数据面泵：挂起态事件循环不抽，值守顶上进料——闸门眼睛看实时
+            // 画面。锁序：注册表锁即取即还 → router 取名即还 → pump→term
+            // （sink 回调内，单方向）。终端没建好就不抽（事件堆 mpsc,同旧制）
+            let router = GATE_ROUTER.lock().unwrap().clone();
+            let term = DUMP_TERM.lock().unwrap().clone();
+            if let (Some(r), Some(t)) = (router, term) {
+                let active = r.lock().unwrap().active_name();
+                pump_once(active, &mut |b| t.lock().unwrap().feed(b));
+            }
             dump_now(DUMP_DIR);
             text_dump(DUMP_DIR);
             inject_keys(DUMP_DIR);
         }
     });
+}
+
+// ---- 会话泵（Output 数据面与生命周期控制面分家） ----
+
+/// replay 缓存帽（按名按字节）：挂起期待机话痨不许把内存吃穿
+/// （旧制 mpsc 无界积压本身就是暗雷，分家顺手排掉）
+pub const REPLAY_CAP_BYTES: usize = 256 * 1024;
+/// 控制队列帽（挂起期生死事件有限；真爆了丢最旧保最新）
+const CONTROL_CAP: usize = 256;
+
+/// 会话泵——全部会话入向通道的唯一消费者（纯数据面，零静态依赖，
+/// host 可判卷；生产实例挂模块静态 PUMP，UI 与值守线程双 caller）
+pub struct SessionPump {
+    /// (会话名, 入向通道)；同名 register = 换心脏（旧通道随旧 rx 一起 drop）
+    slots: Vec<(&'static str, Receiver<SessionEvent>)>,
+    /// 待机输出缓存：(名, 队列, 字节账)——会话数 ≤2,Vec 顺序扫够用
+    replay: Vec<(&'static str, VecDeque<String>, usize)>,
+    /// 控制事件队列（Opened/Exited/Failed 按名带进；UI 专属——健康牌/
+    /// 重连归壳管，泵一粒不判）
+    control: VecDeque<(&'static str, SessionEvent)>,
+}
+
+impl SessionPump {
+    pub const fn new() -> Self {
+        SessionPump {
+            slots: Vec::new(),
+            replay: Vec::new(),
+            control: VecDeque::new(),
+        }
+    }
+
+    /// 登记会话入向通道；同名 = 断线重连换心脏——旧通道遗物一粒不收，
+    /// 该名 replay 一并清（旧 shell 遗物不喂新会话）
+    pub fn register(&mut self, name: &'static str, rx: Receiver<SessionEvent>) {
+        self.slots.retain(|(n, _)| *n != name);
+        self.slots.push((name, rx));
+        self.replay.retain(|(n, _, _)| *n != name);
+    }
+
+    /// 抽干一轮：活跃方 Output 喂 sink（返回 true = 喂过，调用方置 dirty）；
+    /// 待机方 Output 进 replay（限量丢最旧）；控制事件进控制队列等 UI。
+    /// 跨槽顺序不保证（每槽内 FIFO 保序）——会话间本无因果序
+    pub fn pump(&mut self, active: &str, sink: &mut dyn FnMut(&[u8])) -> bool {
+        // 先全槽抽干成批次（借 &self.slots)，再处理（要 &mut self)——
+        // 一趟借完再改，不嵌套
+        let mut batches: Vec<(&'static str, Vec<SessionEvent>)> = Vec::new();
+        for (name, rx) in &self.slots {
+            let mut b = Vec::new();
+            while let Ok(ev) = rx.try_recv() {
+                b.push(ev);
+            }
+            if !b.is_empty() {
+                batches.push((*name, b));
+            }
+        }
+        let mut fed = false;
+        for (name, batch) in batches {
+            for ev in batch {
+                match ev {
+                    SessionEvent::Output { data } if name == active => {
+                        sink(data.as_bytes());
+                        fed = true;
+                    }
+                    SessionEvent::Output { data } => self.push_replay(name, data),
+                    ctl => {
+                        if self.control.len() >= CONTROL_CAP {
+                            self.control.pop_front();
+                        }
+                        self.control.push_back((name, ctl));
+                    }
+                }
+            }
+        }
+        fed
+    }
+
+    /// 待机输出补屏料（切换时 UI 取）：取走即清，一次性
+    pub fn take_replay(&mut self, name: &str) -> Vec<String> {
+        let Some(i) = self.replay.iter().position(|(n, _, _)| *n == name) else {
+            return Vec::new();
+        };
+        let entry = &mut self.replay[i];
+        entry.2 = 0;
+        entry.1.drain(..).collect()
+    }
+
+    /// 控制事件出队（UI 每圈取）：取走即清
+    pub fn take_control(&mut self) -> Vec<(&'static str, SessionEvent)> {
+        self.control.drain(..).collect()
+    }
+
+    fn push_replay(&mut self, name: &'static str, data: String) {
+        let i = match self.replay.iter().position(|(n, _, _)| *n == name) {
+            Some(i) => i,
+            None => {
+                self.replay.push((name, VecDeque::new(), 0));
+                self.replay.len() - 1
+            }
+        };
+        let entry = &mut self.replay[i];
+        entry.2 += data.len();
+        entry.1.push_back(data);
+        while entry.2 > REPLAY_CAP_BYTES {
+            match entry.1.pop_front() {
+                Some(old) => entry.2 -= old.len(),
+                None => {
+                    entry.2 = 0;
+                    break;
+                }
+            }
+        }
+    }
+}
+
+impl Default for SessionPump {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ---- 泵的生产实例（模块静态；UI 线程与值守线程双 caller) ----
+
+static PUMP: Mutex<SessionPump> = Mutex::new(SessionPump::new());
+
+/// 登记会话入向通道（装配/断线重连时壳调用）
+pub fn pump_register(name: &'static str, rx: Receiver<SessionEvent>) {
+    PUMP.lock().unwrap().register(name, rx);
+}
+
+/// 抽干一轮（壳每圈 + 值守线程 300ms)。active = 当时活跃会话名；
+/// sink 收活跃方输出字节。返回 true = 喂过（调用方置 dirty)
+pub fn pump_once(active: &str, sink: &mut dyn FnMut(&[u8])) -> bool {
+    PUMP.lock().unwrap().pump(active, sink)
+}
+
+/// 控制事件出队（仅 UI 调）
+pub fn pump_take_control() -> Vec<(&'static str, SessionEvent)> {
+    PUMP.lock().unwrap().take_control()
+}
+
+/// 待机输出补屏料（仅 UI 切换时调）
+pub fn pump_take_replay(name: &str) -> Vec<String> {
+    PUMP.lock().unwrap().take_replay(name)
 }
 
 // ---- 纯函数（考题钉死层） ----

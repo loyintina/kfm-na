@@ -23,7 +23,6 @@
 
 use std::num::NonZeroU32;
 use std::sync::Arc;
-use std::sync::mpsc::Receiver;
 
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, Ime, TouchPhase, WindowEvent};
@@ -92,10 +91,6 @@ struct Gfx {
     surface: SoftSurface,
 }
 
-/// 连接 → 主事件循环的会话事件通道（工厂内部建桥，跨线程走 mpsc；设计页 §6：
-/// 服务数据通道，非插件事件）
-type EventRx = Receiver<SessionEvent>;
-
 #[derive(Default)]
 struct App {
     window: Option<Arc<Window>>,
@@ -112,12 +107,10 @@ struct App {
     /// 闸门值守线程（keys-in 注入）也持一份；切换/重连换内脏不换 Arc,
     /// 注册一次永远新鲜
     router: Option<crate::gate::SharedRouter>,
-    /// 活跃会话的入向事件通道（切换时与待机槽的 rx 互换——
-    /// 出向归 router，入向归壳，同一方法内同步换，不许分开动）
-    event_rx: Option<EventRx>,
-    /// 待机入向槽（L1）：(入向, 名字)。待机期间事件在 mpsc 里积压，
-    /// 切入时一口气排干补屏（v1 接受；长时间积压的内存账暂不细算）
-    standby: Option<(EventRx, &'static str)>,
+    /// 入向面不在此——全部会话的事件通道归会话泵持有（gate::SessionPump,
+    /// 2026-08-24 数据面分家）：泵是唯一消费者，UI 每圈 pump 一次 +
+    /// 值守线程 300ms 一轮（挂起态网格照新，闸门眼睛不瞎）；壳只从泵
+    /// 取控制事件（记健康账）和待机 replay（切换补屏）。
     /// 最近一次下发的网格尺寸（切换会话时给新活跃方补发 Resize）
     last_grid: (u32, u32),
     /// 有新输出/尺寸变化待渲染
@@ -127,9 +120,6 @@ struct App {
     /// 会话健康牌 ×2（断线重连）：字段语义见 SessHealth
     health_local: SessHealth,
     health_remote: SessHealth,
-    /// 待机输出缓存（每圈抽干待机 rx 攒的 Output;切换时补屏,待机死亡
-    /// 换新通道时清掉——旧 shell 遗物不喂新会话）
-    standby_buf: std::collections::VecDeque<SessionEvent>,
     /// 真实软键盘底部 inset（px，JNI 轮询得来，BAR-006）。0 = 未弹/未知。
     /// 快捷键行的让位是 Rust 常量（keybar::HEIGHT_PX），不进本字段
     ime_bottom_px: u32,
@@ -283,10 +273,10 @@ impl App {
         // BAR-004 后台往返重开会话的路径：旧会话的死亡标记必须清掉，
         // 否则键盘/IME 输入被 session_over 挡死，新会话成了哑巴
         self.session_over = false;
-        // 全量重建 = 生死簿重开（断线重连的健康牌/待机缓存一并归零）
+        // 全量重建 = 生死簿重开（断线重连的健康牌归零；待机缓存在泵里,
+        // 下面装配时同名 register 自清）
         self.health_local = SessHealth::default();
         self.health_remote = SessHealth::default();
-        self.standby_buf.clear();
 
         // exec 探针(L2/L3 总开关,exec_probe.rs):私有目录 exec 放行与否
         // 决定 busybox/apt 生态路线。冷启动一次,结果走飞鸽传书。
@@ -371,21 +361,21 @@ impl App {
                 if let Err(e) = router.add_standby(r.outbound, "remote") {
                     crate::report::report_sync("term", &format!("路由装配失败: {e}"));
                 }
-                self.event_rx = Some(l.events);
-                self.standby = Some((r.events, "remote"));
+                crate::gate::pump_register("local", l.events);
+                crate::gate::pump_register("remote", r.events);
                 self.install_router(router);
             }
             // 兜底：本地挂了远程顶上（单会话退化，行为同 L1 前）
             (None, Some(r)) => {
                 crate::report::report_sync("term", "本地会话断裂——退化纯远程模式");
-                self.event_rx = Some(r.events);
+                crate::gate::pump_register("remote", r.events);
                 self.install_router(crate::session_router::SessionRouter::new(
                     r.outbound, "remote",
                 ));
             }
             (Some(l), None) => {
                 crate::report::report_sync("term", "远程连接断裂——纯本地模式");
-                self.event_rx = Some(l.events);
+                crate::gate::pump_register("local", l.events);
                 self.install_router(crate::session_router::SessionRouter::new(
                     l.outbound, "local",
                 ));
@@ -480,11 +470,11 @@ impl App {
         self.dirty = true;
     }
 
-    /// 会话切换（L1）：Ctrl-] 触达——router 换出向活跃槽，壳同步换入向
-    /// rx（同一方法内完成），给新活跃方补发当前网格尺寸，横幅直接喂进
-    /// 终端网格（不走对端）。待机期缓存的输出先补屏（standby_buf，
-    /// 待机 rx 每圈已被 drain_terminal_events 抽干）。切入死会话 →
-    /// 立即重连（用户在场，断线重连 2026-08-21）
+    /// 会话切换（L1）：Ctrl-] 触达——router 换出向活跃槽；入向不换槽
+    /// （全部 rx 归会话泵持有，路由按活跃名走）。待机期缓存的输出从泵
+    /// 取 replay 补屏；给新活跃方补发当前网格尺寸；横幅直接喂进终端
+    /// 网格（不走对端）。切入死会话 → 立即重连（用户在场，断线重连
+    /// 2026-08-21）
     fn switch_session(&mut self) {
         // 锁即取即还——后面补屏循环要借 self 别处
         let Some((name_a, name_s)) = self
@@ -493,20 +483,13 @@ impl App {
         else {
             return; // 没待机方：装作没发生(或没路由装配)
         };
-        let (Some(rx_a), Some((rx_s, _))) = (self.event_rx.take(), self.standby.take()) else {
-            crate::report::report_sync("term", "切换时入向槽残缺——装配 bug");
-            return;
-        };
-        self.standby = Some((rx_a, name_a));
-        self.event_rx = Some(rx_s);
         // 待机期缓存的输出补屏：死会话的遗屏也喂——用户看得到「死前最后
         // 画面」,比重连后的白屏亲切;活的会话更必须(输出连续)
-        let buf = std::mem::take(&mut self.standby_buf);
-        for ev in buf {
-            if let SessionEvent::Output { data } = ev
-                && let Some(t) = self.term_handle()
-            {
-                t.lock().unwrap().feed(data.as_bytes());
+        let replay = crate::gate::pump_take_replay(name_s);
+        if let Some(t) = self.term_handle() {
+            let mut g = t.lock().unwrap();
+            for chunk in &replay {
+                g.feed(chunk.as_bytes());
             }
         }
         let (cols, rows) = self.last_grid;
@@ -559,10 +542,10 @@ impl App {
     }
 
     /// 断线重连（2026-08-21 实拍：WS 退后台被掐 → 会话线程死 → 僵尸通道
-    /// 静默吞输入）：给死会话 spawn 新实例，router 换心脏 + 壳换入向通道。
-    /// 服务器侧 PTY 随 WS 断即杀（kfmv4 ws-server killAll），重连必然是
-    /// 新 shell——横幅明示，旧现场引导 tmux attach。本地 PTY 死亡（shell
-    /// exit）同路重孵
+    /// 静默吞输入）：给死会话 spawn 新实例，router 换心脏（出向）+ 泵同名
+    /// 登记换入向通道。服务器侧 PTY 随 WS 断即杀（kfmv4 ws-server killAll），
+    /// 重连必然是新 shell——横幅明示，旧现场引导 tmux attach。本地 PTY
+    /// 死亡（shell exit）同路重孵
     fn respawn_session(&mut self, name: &'static str) {
         let handle = match name {
             "local" => self
@@ -592,7 +575,8 @@ impl App {
             if let Some(r) = self.router_handle() {
                 r.lock().unwrap().replace_active(h.outbound);
             }
-            self.event_rx = Some(h.events);
+            // 泵换心脏:同名 register 顶掉旧通道、清该名 replay(遗物不喂)
+            crate::gate::pump_register(name, h.events);
             // 新会话 Input 缓存到 Opened（conn pending_input）——输出面先解开
             self.session_over = false;
             let (cols, rows) = self.last_grid;
@@ -611,51 +595,39 @@ impl App {
             {
                 crate::report::report_sync("term", &format!("待机换心脏失败: {e}"));
             }
-            self.standby = Some((h.events, name));
-            self.standby_buf.clear(); // 旧 shell 遗物不喂新会话
+            crate::gate::pump_register(name, h.events);
         }
         crate::report::report("term", &format!("会话重连: {name} 重孵"));
         self.dirty = true;
     }
 
-    /// 抽干会话事件（about_to_wait 每圈调）：活跃槽全量处理；待机槽也每圈
-    /// 抽——Output 进缓存（切换时补屏），生死事件即时登记（不抽的话死讯
-    /// 压到切换才爆，重连晚一整拍；2026-08-21 实拍 WS 退后台被掐的坑）
+    /// 抽干会话事件（about_to_wait 每圈调）：pump 一轮——活跃方 Output
+    /// 直接喂共享终端（值守线程 300ms 也在 pump，挂起态网格照新，
+    /// 2026-08-24 数据面分家）；待机 Output 泵自存 replay；控制事件
+    /// 出队记健康账（死讯即时登记——不抽的话压到切换才爆，重连晚一整拍；
+    /// 2026-08-21 实拍 WS 退后台被掐的坑）
     fn drain_terminal_events(&mut self) {
-        let mut events = Vec::new();
-        if let Some(rx) = &self.event_rx {
-            while let Ok(ev) = rx.try_recv() {
-                events.push(ev);
-            }
-        }
         let active = self
             .router_handle()
             .map_or("", |r| r.lock().unwrap().active_name());
-        for ev in events {
-            self.on_session_event(active, ev, true);
-        }
-        let mut sbuf = Vec::new();
-        if let Some((rx, _)) = &self.standby {
-            while let Ok(ev) = rx.try_recv() {
-                sbuf.push(ev);
+        // 终端还没建好就不 pump:Output 堆 mpsc 不丢(同旧制),控制事件
+        // 等得起(首轮 about_to_wait 前终端必就位——init_terminal 先跑)
+        if let Some(t) = self.term_handle() {
+            if crate::gate::pump_once(active, &mut |b| t.lock().unwrap().feed(b)) {
+                self.dirty = true;
             }
         }
-        let sname = self.standby.as_ref().map_or("", |s| s.1);
-        for ev in sbuf {
-            if matches!(ev, SessionEvent::Output { .. }) {
-                self.standby_buf.push_back(ev);
-            } else {
-                self.on_session_event(sname, ev, false);
-            }
+        for (name, ev) in crate::gate::pump_take_control() {
+            self.on_session_event(name, ev, name == active);
         }
     }
 
-    /// 单事件分派：name = 来源槽位名（健康牌按名记账，空名 = 无路由装配,
-    /// 只动 session_over 不记账），is_active = 是否当前可见方
+    /// 单控制事件分派（Output 不经过此——泵已直接喂终端）：
+    /// name = 来源会话名（泵按名带进），is_active = 是否当前可见方
     fn on_session_event(&mut self, name: &'static str, ev: SessionEvent, is_active: bool) {
         match ev {
             SessionEvent::Opened { session_id } => {
-                if !name.is_empty() {
+                {
                     let h = self.health_mut(name);
                     h.dead = false;
                     h.retried = false;
@@ -669,11 +641,8 @@ impl App {
                     &format!("会话 opened: {session_id} +{}ms", boot_ms()),
                 );
             }
-            SessionEvent::Output { data } => {
-                if let Some(term) = self.term_handle() {
-                    term.lock().unwrap().feed(data.as_bytes());
-                    self.dirty = true;
-                }
+            SessionEvent::Output { .. } => {
+                crate::report::report_sync("term", "Output 窜进控制队列——泵分派 bug");
             }
             SessionEvent::Exited { code } => {
                 self.on_slot_dead(name, is_active, &format!("exited: code={code}"));
@@ -703,9 +672,6 @@ impl App {
         );
         if is_active {
             self.session_over = true;
-        }
-        if name.is_empty() {
-            return;
         }
         {
             let h = self.health_mut(name);
