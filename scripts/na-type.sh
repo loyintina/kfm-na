@@ -18,8 +18,11 @@ if [ $# -ne 1 ]; then
     exit 64
 fi
 
-# 经 stdin 过 SSH 写字节(防引号/转义在两条 shell 间走样),远端 cat 落盘再 mv
-printf '%s' "$1" | ssh -p 8024 -i "$NA_KEY" -o BatchMode=yes -o ConnectTimeout=6 \
+# 经 stdin 过 SSH 写字节(防引号/转义在两条 shell 间走样),远端 cat 落盘再 mv。
+# printf '%b':把 \r \x03 等转义翻成真字节——'%s' 会当字面两字符发出去
+# (2026-08-24 实拍:四条注入命令带字面 "\r" 全堆在提示符上,零执行)
+printf '%b' "$1" | ssh -p 8024 -i "$NA_KEY" -o BatchMode=yes -o ConnectTimeout=6 \
     -o StrictHostKeyChecking=no localhost \
     "cat > $NA_TMP/keys-in.new && mv $NA_TMP/keys-in.new $NA_TMP/keys-in"
-echo "✅ 已注入 ${#$1} 字节(300ms 内落地;na-text.sh 可读屏核对)"
+n=$(printf '%b' "$1" | wc -c)
+echo "✅ 已注入 ${n} 字节(300ms 内落地;na-text.sh 可读屏核对)"
