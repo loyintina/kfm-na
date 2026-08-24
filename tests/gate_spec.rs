@@ -5,7 +5,7 @@
 //! ②触发文件不在 → 不动；在 → 倒 shot.rgb + shot.dim(“w h”)并摘触发；
 //! ③倒出来的字节数必须 = w*h*4（缺斤短两=画面错位）。
 
-use kfm_na::screendump::{encode_rgb, maybe_dump, trigger_pending};
+use kfm_na::gate::{encode_rgb, maybe_dump, trigger_pending};
 
 #[test]
 fn spec_编码_小端xrgb字节序() {
@@ -104,7 +104,7 @@ fn spec_离屏倒帧_渲染到dump全链路() {
 /// 通道（事件循环叫不醒，实拍验证过）。登记缺失/尺寸为零时不许倒
 #[test]
 fn spec_后台值守_dump_now走注册终端() {
-    use kfm_na::screendump::{dump_now, note_frame_size, register_dump_term};
+    use kfm_na::gate::{dump_now, note_frame_size, register_dump_term};
     use kfm_na::termview::{CELL_H, CELL_W, TermEmu, TermView};
     use std::sync::{Arc, Mutex};
 
@@ -152,5 +152,42 @@ fn spec_后台值守_dump_now走注册终端() {
         px != kfm_na::termview::DEFAULT_BG
     });
     assert!(has_glyph, "喂了 ok 的终端倒出来必须有字形像素");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+// ---------- keys-in 注入通道考题（2026-08-24，三件套之动手） ----------
+
+/// drain_keys_in 契约：无文件/空文件/只写一半(.new 未 mv)→ None；
+/// 有内容 → 原文返回且文件被消费（原子取走，半写安全）
+#[test]
+fn spec_keys_in_原子取走协议() {
+    use kfm_na::gate::drain_keys_in;
+    let dir = std::env::temp_dir().join(format!("kfm-keys-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let d = dir.to_str().unwrap();
+
+    assert_eq!(drain_keys_in(d), None, "无文件 → None");
+
+    // 半写安全:只写了 .new 还没 mv,消费端不许看到
+    std::fs::write(dir.join("keys-in.new"), b"ls").unwrap();
+    assert_eq!(drain_keys_in(d), None, ".new 未 mv = 半写,不许读到");
+
+    // 正式投递:mv 就位 → 原样取出,文件消费
+    std::fs::rename(dir.join("keys-in.new"), dir.join("keys-in")).unwrap();
+    assert_eq!(drain_keys_in(d).as_deref(), Some("ls"));
+    assert!(!dir.join("keys-in").exists(), "取走后触发文件必须消失");
+    assert!(
+        !dir.join("keys-in.reading").exists(),
+        "reading 残档也必须清"
+    );
+
+    // 空文件 = 无内容,但照样消费(不卡死队列)
+    std::fs::write(dir.join("keys-in"), b"").unwrap();
+    assert_eq!(drain_keys_in(d), None, "空文件 → None");
+    assert!(!dir.join("keys-in").exists(), "空文件也要消费掉");
+
+    // 控制字节/中文原样过(注入语义 = 裸字节)
+    std::fs::write(dir.join("keys-in"), "你好\x03\r").unwrap();
+    assert_eq!(drain_keys_in(d).as_deref(), Some("你好\x03\r"));
     std::fs::remove_dir_all(&dir).ok();
 }

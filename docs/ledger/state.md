@@ -45,6 +45,17 @@
   Arc<Mutex<Box<dyn TermEmu>>> 共享,值守线程锁终端离屏光栅化(只画
   网格本体,快捷键行/放大镜是 UI 装帧不进后台视野);draw_frame 每帧
   note_frame_size 记账供后台取尺寸。单消费者,前台后台一个样。
+- **调试闸门三件套闭环(2026-08-24 午后,本提交)**:screendump.rs 更名
+  gate.rs,从「画面回传」扩为完整调试闸门——看见(shot)+读懂(text)+
+  动手(keys)三条文件协议通道,值守线程一轮三查。新增:①text-req →
+  dump_text 导当前视野纯文本(TermEmu 新 trait 方法,网格眼睛胚胎,
+  滚动跟视野走);②keys-in → 裸字节注入活跃会话(远程键盘,手的胚胎,
+  退后台也能注),SessionRouter 随之 Arc 化共享(15 处调用点改
+  handle+lock,装配收拢 install_router 一次登记永新鲜)。限制(有意):
+  Ctrl-] 会话切换/修饰键粘滞是 UI 层,闸门不过。脚本:na-text.sh /
+  na-type.sh(半写防护 = .new+mv 原子协议)。设计参考面:
+  docs/active/调试闸门.md。考题:gate_spec 6 道 + termview dump_text
+  题。用途:此后 na 调试 agent 自助闭环,不再要用户当手和眼。
 - **L2 判卷通过（2026-08-23 实拍）**:`kfm-pkg install base` 全绿,
   `ssh -V`=OpenSSH_10.5p1、`git --version`=2.55.0、`ssh root@服务器`
   登录成功。途中三案:①na 公网出站"不通"破案=境外链路掐 DSCP

@@ -1033,3 +1033,37 @@ fn spec_bar026_渲染_单格cjk字形按格宽裁剪() {
     assert!(cell_ink(0) > 0, "⇄ 必须画出来（不许裁没了）");
     assert_eq!(cell_ink(1), 0, "单格字形的墨不许越界到下一格内容区");
 }
+
+// ---------- 调试闸门：视野纯文本导出（2026-08-24，三件套之读懂） ----------
+
+/// dump_text 契约：当前视野（display_offset 起 screen_lines 行）逐行收字符，
+/// ANSI 转义不露面、CJK 宽字符的 spacer 半格不产垃圾、行尾 trim、行间 \n；
+/// 滚动后导出跟视野走（眼睛对齐「所见」）
+#[test]
+fn spec_dump_text_视野纯文本导出() {
+    let mut tv = host_termview(16, 3);
+    tv.feed(b"hi\r\n\x1b[31m\xe7\xba\xa2\xe8\x89\xb2\x1b[0m plain");
+    let text = tv.dump_text();
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines[0], "hi", "第一行原样");
+    assert_eq!(
+        lines[1], "红色 plain",
+        "ANSI 转色不露面;CJK spacer 半格不产垃圾"
+    );
+    assert!(lines[2].is_empty(), "没内容的行 = 空串(行尾 trim)");
+
+    // 造历史再滚屏:导出的必须是视野而不是缓冲头
+    let mut tv = host_termview(16, 3);
+    tv.feed(b"l1\r\nl2\r\nl3\r\nl4\r\nl5");
+    let text = tv.dump_text();
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines, ["l3", "l4", "l5"], "贴底视野 = 最后三行");
+    tv.scroll_lines(1); // 回滚一行进历史
+    let text = tv.dump_text();
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines, ["l2", "l3", "l4"], "滚动后导出跟视野走");
+    tv.scroll_to_bottom();
+    let text = tv.dump_text();
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines, ["l3", "l4", "l5"], "回底后视野复原");
+}

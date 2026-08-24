@@ -102,14 +102,16 @@ struct App {
     gfx: Option<Gfx>,
     // ---- TERMINAL_MODE 状态 ----
     /// 终端实例：插件工厂产出（term-alacritty）。Arc<Mutex<>> 共享——
-    /// 除 UI 线程外，后台倒帧值守线程(screendump::spawn_dump_watcher)也
+    /// 除 UI 线程外，闸门值守线程(gate::spawn_gate_watcher)也
     /// 持有一份：事件循环在挂起态叫不醒(proxy 实证叫不动),倒帧只能
     /// 靠值守线程自己锁终端光栅化（2026-08-24 与用户定：后台可截屏）
-    term: Option<crate::screendump::SharedTerm>,
+    term: Option<crate::gate::SharedTerm>,
     /// 出向路由核（L1 双会话：默认本地 PTY 活跃，ws 远程在待机槽）。
-    /// 一切击键/IME/Resize 出向经它发往活跃会话（评审裁决 4 附议：
-    /// 输入路由抽纯数据面，考题钉在 host 侧）
-    router: Option<crate::session_router::SessionRouter>,
+    /// 一切击键/IME/闸门注入出向经它发往活跃会话（评审裁决 4 附议：
+    /// 输入路由抽纯数据面，考题钉在 host 侧）。Arc<Mutex<>> 共享——
+    /// 闸门值守线程（keys-in 注入）也持一份；切换/重连换内脏不换 Arc,
+    /// 注册一次永远新鲜
+    router: Option<crate::gate::SharedRouter>,
     /// 活跃会话的入向事件通道（切换时与待机槽的 rx 互换——
     /// 出向归 router，入向归壳，同一方法内同步换，不许分开动）
     event_rx: Option<EventRx>,
@@ -371,20 +373,20 @@ impl App {
                 }
                 self.event_rx = Some(l.events);
                 self.standby = Some((r.events, "remote"));
-                self.router = Some(router);
+                self.install_router(router);
             }
             // 兜底：本地挂了远程顶上（单会话退化，行为同 L1 前）
             (None, Some(r)) => {
                 crate::report::report_sync("term", "本地会话断裂——退化纯远程模式");
                 self.event_rx = Some(r.events);
-                self.router = Some(crate::session_router::SessionRouter::new(
+                self.install_router(crate::session_router::SessionRouter::new(
                     r.outbound, "remote",
                 ));
             }
             (Some(l), None) => {
                 crate::report::report_sync("term", "远程连接断裂——纯本地模式");
                 self.event_rx = Some(l.events);
-                self.router = Some(crate::session_router::SessionRouter::new(
+                self.install_router(crate::session_router::SessionRouter::new(
                     l.outbound, "local",
                 ));
             }
@@ -417,7 +419,7 @@ impl App {
         // 44MB×2+32MB 巨物，是启动慢的最大单块成本；探测链本身也已退役，
         // 生产字体编译期内嵌。需要排查时从 git 历史恢复）
         let term = std::sync::Arc::new(std::sync::Mutex::new(tv));
-        crate::screendump::register_dump_term(&term); // 后台倒帧值守持有
+        crate::gate::register_dump_term(&term); // 后台倒帧值守持有
         self.term = Some(term);
         self.base = Some(base);
 
@@ -471,9 +473,9 @@ impl App {
         term.lock().unwrap().resize_cells(cols, rows);
         self.last_grid = (cols, rows);
         if !self.session_over
-            && let Some(r) = &self.router
+            && let Some(r) = self.router_handle()
         {
-            r.send(TermCmd::Resize { cols, rows });
+            r.lock().unwrap().send(TermCmd::Resize { cols, rows });
         }
         self.dirty = true;
     }
@@ -484,8 +486,11 @@ impl App {
     /// 待机 rx 每圈已被 drain_terminal_events 抽干）。切入死会话 →
     /// 立即重连（用户在场，断线重连 2026-08-21）
     fn switch_session(&mut self) {
-        // switch() 的 &mut 借用到此为止——后面补屏循环要借 self 别处
-        let Some((name_a, name_s)) = self.router.as_mut().and_then(|r| r.switch()) else {
+        // 锁即取即还——后面补屏循环要借 self 别处
+        let Some((name_a, name_s)) = self
+            .router_handle()
+            .and_then(|r| r.lock().unwrap().switch())
+        else {
             return; // 没待机方：装作没发生(或没路由装配)
         };
         let (Some(rx_a), Some((rx_s, _))) = (self.event_rx.take(), self.standby.take()) else {
@@ -505,8 +510,8 @@ impl App {
             }
         }
         let (cols, rows) = self.last_grid;
-        if let Some(router) = &self.router {
-            router.send(TermCmd::Resize { cols, rows });
+        if let Some(router) = self.router_handle() {
+            router.lock().unwrap().send(TermCmd::Resize { cols, rows });
         }
         if let Some(t) = self.term_handle() {
             let banner =
@@ -541,7 +546,10 @@ impl App {
     /// 死会话上敲键/切入 = 重连触发器（用户在场的明示）。在途不重孵
     /// （重孵会丢在途会话的输入缓存通道）
     fn kick_reconnect(&mut self) {
-        let Some(name) = self.router.as_ref().map(|r| r.active_name()) else {
+        let Some(name) = self
+            .router_handle()
+            .map(|r| r.lock().unwrap().active_name())
+        else {
             return;
         };
         let h = self.health(name);
@@ -578,19 +586,18 @@ impl App {
             health.connecting = true;
         }
         if self
-            .router
-            .as_ref()
-            .is_some_and(|r| r.active_name() == name)
+            .router_handle()
+            .is_some_and(|r| r.lock().unwrap().active_name() == name)
         {
-            if let Some(r) = &mut self.router {
-                r.replace_active(h.outbound);
+            if let Some(r) = self.router_handle() {
+                r.lock().unwrap().replace_active(h.outbound);
             }
             self.event_rx = Some(h.events);
             // 新会话 Input 缓存到 Opened（conn pending_input）——输出面先解开
             self.session_over = false;
             let (cols, rows) = self.last_grid;
-            if let Some(r) = &self.router {
-                r.send(TermCmd::Resize { cols, rows });
+            if let Some(r) = self.router_handle() {
+                r.lock().unwrap().send(TermCmd::Resize { cols, rows });
             }
             if let Some(t) = self.term_handle() {
                 let banner = format!(
@@ -599,8 +606,8 @@ impl App {
                 t.lock().unwrap().feed(banner.as_bytes());
             }
         } else {
-            if let Some(r) = &mut self.router
-                && let Err(e) = r.replace_standby(h.outbound)
+            if let Some(r) = self.router_handle()
+                && let Err(e) = r.lock().unwrap().replace_standby(h.outbound)
             {
                 crate::report::report_sync("term", &format!("待机换心脏失败: {e}"));
             }
@@ -621,7 +628,9 @@ impl App {
                 events.push(ev);
             }
         }
-        let active = self.router.as_ref().map_or("", |r| r.active_name());
+        let active = self
+            .router_handle()
+            .map_or("", |r| r.lock().unwrap().active_name());
         for ev in events {
             self.on_session_event(active, ev, true);
         }
@@ -764,8 +773,8 @@ impl App {
                 self.switch_session();
                 continue;
             }
-            if let Some(r) = &self.router {
-                r.send(TermCmd::Input(bytes));
+            if let Some(r) = self.router_handle() {
+                r.lock().unwrap().send(TermCmd::Input(bytes));
                 sent = true;
             }
         }
@@ -793,10 +802,10 @@ impl App {
             Key::Named(NamedKey::Escape) => Some("\x1b".into()),
             _ => event.text.as_ref().map(|t| t.to_string()),
         };
-        if let (Some(bytes), Some(r)) = (bytes, &self.router)
+        if let (Some(bytes), Some(r)) = (bytes, self.router_handle())
             && !bytes.is_empty()
         {
-            r.send(TermCmd::Input(bytes));
+            r.lock().unwrap().send(TermCmd::Input(bytes));
             // 打字了就是要看现在——滚回底部贴最新输出
             if let Some(t) = self.term_handle() {
                 t.lock().unwrap().scroll_to_bottom();
@@ -843,10 +852,22 @@ impl App {
         }
     }
 
+    /// 装配路由：Arc 化 + 登记闸门注册表（keys-in 注入的唯一入口）
+    fn install_router(&mut self, router: crate::session_router::SessionRouter) {
+        let shared = std::sync::Arc::new(std::sync::Mutex::new(router));
+        crate::gate::register_gate_router(&shared);
+        self.router = Some(shared);
+    }
+
+    /// 取路由句柄（owned Arc，借用即还——同 term_handle 套路）
+    fn router_handle(&self) -> Option<crate::gate::SharedRouter> {
+        self.router.clone()
+    }
+
     /// 取终端句柄（Arc 克隆）：UI 线程与后台倒帧值守线程共用一把锁。
     /// 返回 owned Arc 而非 guard——guard 会拖着 &self 借用,挡住块内
     /// 写 self.dirty 等其他字段;句柄落地后 lock 出的 guard 只借本地
-    fn term_handle(&self) -> Option<crate::screendump::SharedTerm> {
+    fn term_handle(&self) -> Option<crate::gate::SharedTerm> {
         self.term.clone()
     }
 
@@ -858,7 +879,7 @@ impl App {
         let mut buf = g.surface.buffer_mut().expect("取帧缓冲失败");
         let (w, h) = (buf.width().get(), buf.height().get());
         if TERMINAL_MODE {
-            crate::screendump::note_frame_size(w, h); // 给后台倒帧值守记账
+            crate::gate::note_frame_size(w, h); // 给后台倒帧值守记账
             let mods = self.modifiers.as_ref().map_or(0, |m| m.peek());
             let mut tg = th.as_ref().map(|a| a.lock().unwrap());
             Self::rasterize(
@@ -879,7 +900,7 @@ impl App {
                 crate::report::report("boot", "首帧 present 完成——紫屏应已亮");
             }
         }
-        // 画面回传由值守线程统一消费(screendump::spawn_dump_watcher)——
+        // 画面回传由值守线程统一消费(gate::spawn_gate_watcher)——
         // 挂起态事件循环叫不醒,前台顺帧消费那套在后台是死路,单一消费者
         buf.present().expect("帧呈现失败");
     }
@@ -1116,7 +1137,8 @@ impl ApplicationHandler for App {
                             let (cw, ch) = t.cell_size();
                             let col = (touch.location.x as u32 / cw + 1).max(1);
                             let row = (touch.location.y as u32 / ch + 1).max(1);
-                            if let Some(r) = &self.router {
+                            if let Some(r) = self.router_handle() {
+                                let r = r.lock().unwrap();
                                 // 每次事件按行数发滚轮 tick，封顶防一次猛拖雪崩
                                 for _ in 0..lines.unsigned_abs().min(10) {
                                     r.send(TermCmd::Input(crate::scroll::wheel_seq(
@@ -1232,8 +1254,8 @@ impl ApplicationHandler for App {
                             if self.session_over {
                                 self.kick_reconnect();
                             }
-                            if let Some(r) = &self.router {
-                                r.send(TermCmd::Input(text));
+                            if let Some(r) = self.router_handle() {
+                                r.lock().unwrap().send(TermCmd::Input(text));
                                 // IME 落字 = 用户输入：滚回底部贴最新输出
                                 if let Some(t) = self.term_handle() {
                                     t.lock().unwrap().scroll_to_bottom();
@@ -1379,7 +1401,7 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
         }
     });
     // 后台画面回传值守(2026-08-24 与用户定:截图不要求应用在前台)
-    crate::screendump::spawn_dump_watcher();
+    crate::gate::spawn_gate_watcher();
     let result = event_loop.run_app(&mut app_handler);
     // 同步直报：async 入队后立刻 exit(0) 会吃掉这行（此前历次「静默消失」
     // 的嫌疑——死亡现场被自己的 exit(0) 毁尸灭迹）

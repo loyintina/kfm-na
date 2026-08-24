@@ -505,6 +505,32 @@ impl TermView {
         self.term.grid().display_offset()
     }
 
+    /// 当前视野纯文本导出（调试闸门 text-req 通道，2026-08-24）：
+    /// 可见区 = display_offset 起 screen_lines 行（滚动中跟视野走），
+    /// 逐格收字符、跳过宽字符 spacer 半格，行尾 trim，行间 \n。
+    /// v1 不导 scrollback——闸门只对齐「所见」（网格眼睛胚胎）
+    pub fn dump_text(&self) -> String {
+        let grid = self.term.grid();
+        let off = grid.display_offset() as i32;
+        let lines = grid.screen_lines() as i32;
+        let cols = grid.columns();
+        let mut out = String::with_capacity((lines as usize) * (cols / 2));
+        for row in 0..lines {
+            let grid_line = Line(row - off);
+            let mut s = String::with_capacity(cols);
+            for col in 0..cols {
+                let cell = &grid[grid_line][Column(col)];
+                if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                    continue; // CJK 宽字符的后半格:字已在前半格收过
+                }
+                s.push(cell.c);
+            }
+            out.push_str(s.trim_end());
+            out.push('\n');
+        }
+        out
+    }
+
     /// 对端（tmux/kimicode 等 TUI）是否开了鼠标上报（?1000/1002/1003 任一）——
     /// 开了滚屏就必须翻成滚轮事件发过去（BAR-016：alt screen 没有本地历史）
     pub fn mouse_report_active(&self) -> bool {
@@ -1292,6 +1318,8 @@ pub trait TermEmu: Send {
     fn take_tofu_chars(&self) -> Vec<char>;
     fn scroll_lines(&mut self, lines: i32);
     fn scroll_to_bottom(&mut self);
+    /// 当前视野纯文本导出（调试闸门 text-req 通道；跟随滚动位置，对齐「所见」）
+    fn dump_text(&self) -> String;
     fn mouse_report_active(&self) -> bool;
     fn app_cursor_mode(&self) -> bool;
     fn font_probe(&self, c: char) -> (usize, usize, usize);
@@ -1334,6 +1362,9 @@ impl TermEmu for TermView {
     }
     fn scroll_to_bottom(&mut self) {
         TermView::scroll_to_bottom(self)
+    }
+    fn dump_text(&self) -> String {
+        TermView::dump_text(self)
     }
     fn mouse_report_active(&self) -> bool {
         TermView::mouse_report_active(self)
