@@ -835,6 +835,14 @@ impl App {
                 crate::report::report("boot", "首帧 present 完成——紫屏应已亮");
             }
         }
+        // 画面回传（screendump）：触发文件在就把这一帧倒给调试侧——
+        // 倒出来的就是用户看到的整帧（网格/快捷键行/放大镜全在里面）
+        crate::screendump::maybe_dump(
+            "/data/data/dev.kfm.na/files/usr/tmp",
+            &buf,
+            buf.width().get(),
+            buf.height().get(),
+        );
         buf.present().expect("帧呈现失败");
     }
 }

@@ -28,9 +28,15 @@
   (3d71293)→ 根因定案:FusionPixel 上游 E0B0 是「色块+C形镂空」装饰
   设计(双光栅器复现),烘焙时换合成实心阶梯三角(4cb652e,像素级考题
   spec_bar032)。实拍判卷过。
-- **挂单**:BAR-030(长行不换行+粘贴撕碎——终端折行/PTY winsize/
-  readline/IME 透传四层全查正常,症状疑似 zsh 残局期产物,等用户复现
-  再定位)、BAR-031(kfm-pkg 安装非原子,中断留残局=zsh 卡死案病根)。
+- **挂单**:BAR-030(~~长行不换行+粘贴撕碎~~ 已销案 2026-08-24:用户
+  实拍不复现,四层检查全正常,疑为 zsh 残局期产物)、BAR-031(已封案
+  ea5ddec:kfm-pkg 原子性三件套,装机实拍过)。
+- **画面回传 na-shot(2026-08-24,本提交)**:8024 闸门配套调试通道——
+  na 画面是 Rust 软渲染,帧缓冲本来就在自己手里,倒出来就是截图(不需
+  Android 截屏权限)。`touch $PREFIX/tmp/shot-req` → 渲染循环下一帧倒
+  shot.rgb+shot.dim → scp 拉回 PIL 转 PNG。一键 scripts/na-shot.sh
+  (--watch 循环=近同步直播)。软键盘/系统弹窗不在帧缓冲里,拍不到
+  (预期内)。考题 tests/screendump_spec.rs 3 道。
 - **L2 判卷通过（2026-08-23 实拍）**:`kfm-pkg install base` 全绿,
   `ssh -V`=OpenSSH_10.5p1、`git --version`=2.55.0、`ssh root@服务器`
   登录成功。途中三案:①na 公网出站"不通"破案=境外链路掐 DSCP

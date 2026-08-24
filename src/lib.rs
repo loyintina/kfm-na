@@ -15,6 +15,7 @@ pub mod local_pty;
 pub mod plugins;
 pub mod protocol;
 pub mod report;
+pub mod screendump;
 pub mod scroll;
 pub mod session;
 pub mod session_router;
