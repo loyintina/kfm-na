@@ -3,8 +3,34 @@
 > 纪律：**每个里程碑必更新此页**。接手者冷启动顺序：本页 → bugs.md →
 > AGENTS.md → chain.sh 跑一遍。本页只写「现在进行时」，历史功过在 bugs.md。
 
-## 当前位置（2026-08-23)
+## 当前位置（2026-08-24)
 
+- **L2 自远程闸门通车（2026-08-23,等长二进制改写方案）**:服务器
+  `ssh -p 8024 localhost`(探针钥匙 /root/.ssh/na_probe_key)经 kalo 反隧
+  直入 na 沙箱 sshd(回环only/公钥only)——agent 从此能直接操作 na 终端,
+  不再靠用户手动测试转述。根治术:`com.termux` 与 `dev.kfm.na` 同 10 字符,
+  sed 等长直打 ELF 不挪偏移,sshd 20+ 处焊死路径一遍全愈;已挪进
+  overlay-pack.sh 构建侧(0b85924,考题钉等长铁律)。证伪留档:
+  LD_PRELOAD(bionic 不让插 libc 符号)、proot(seccomp 沙箱里 ptrace
+  失效)、SetEnv LD_LIBRARY_PATH(活不到 exec)——三条都别再试。
+  na 主动外传道 = kfm-push(scp 推 Termux ~/w/na-inbox/,na 写不进共享
+  存储根 EPERM 实拍)。全文:l2-overlay.md §8/§9;简报已投信箱。
+- **BAR-029 前台服务保活封案(2026-08-23,bbcb5f5)**:na 退后台被
+  cached-app 冻结器冻僵(sshd 冬眠、8024 断流)→ KfmKeepAliveService
+  前台服务(IMPORTANCE_MIN 常驻通知 + partial wake lock,Termux 同款)。
+  实拍判卷:修复前后台 10s 必冻 → 修复后 600s 六十探零断流。
+  判卷脚本 scripts/test-bg-survival.sh(am start 遥控前后台 + 8024 探针,
+  全自动)。**此条推翻 8-19「不做常驻保活」旧共识**——8024 闸门与会话
+  现场需要 na 退后台存活,电耗代价用户已拍板接受。
+- **zsh/omz + powerline 字体战役(2026-08-23,BAR-027/028/032)**:
+  omz 落私有区(FUSE 家目录不支持符号链接),.bashrc 换手行进 zsh;
+  agnoster 箭头三案连破——补丁表扩容+借字形(f58433b)→ 全角压半格
+  (3d71293)→ 根因定案:FusionPixel 上游 E0B0 是「色块+C形镂空」装饰
+  设计(双光栅器复现),烘焙时换合成实心阶梯三角(4cb652e,像素级考题
+  spec_bar032)。实拍判卷过。
+- **挂单**:BAR-030(长行不换行+粘贴撕碎——终端折行/PTY winsize/
+  readline/IME 透传四层全查正常,症状疑似 zsh 残局期产物,等用户复现
+  再定位)、BAR-031(kfm-pkg 安装非原子,中断留残局=zsh 卡死案病根)。
 - **L2 判卷通过（2026-08-23 实拍）**:`kfm-pkg install base` 全绿,
   `ssh -V`=OpenSSH_10.5p1、`git --version`=2.55.0、`ssh root@服务器`
   登录成功。途中三案:①na 公网出站"不通"破案=境外链路掐 DSCP
@@ -91,8 +117,9 @@
   nix 先用，desktop spike 点亮（裁决 2 拆分触发点）时再评 portable-pty。
 - **方向共识（2026-08-19 与用户定）**: 不重写 Termux(termux-app 是 GPL-3.0
   一行不能抄；终端仿真我们已有 alacritty_terminal)。kfmv4 功能搬家
-  （光球/卡片堆）后移到核心层分层落定之后。不为本地 shell 做常驻保活
-  （wake lock 烧电；会话永生由服务器端 tmux 扛）。
+  （光球/卡片堆）后移到核心层分层落定之后。~~不为本地 shell 做常驻保活~~
+  **已翻案（2026-08-23，用户拍板）**:BAR-029 前台服务保活已落地——
+  8024 闸门/会话现场需要 na 退后台存活，电耗代价接受。
 - **L3 已闭环（2026-08-21 实拍过 ✅)**:bootstrap-aarch64.zip 32M
   (83 包运行时闭包,剪枝自 222 个 deb)入包,真机解压+second-stage
   成功,本地会话进 bash 生态。fork 链 12 条坑全部记档在
