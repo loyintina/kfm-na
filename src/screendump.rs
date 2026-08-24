@@ -10,8 +10,23 @@
 //!
 //! 服务器一键入口：scripts/na-shot.sh(--watch 循环 = 近同步直播)。
 //! 注意：软键盘/系统弹窗不在我们的帧缓冲里，拍不到(预期内)。
+//!
+//! 后台倒帧（2026-08-24 与用户定：截图不该要求应用在前台）：
+//! 退后台/息屏后渲染泵歇工，draw_frame 不再跑。值守线程(唤醒锤二阶段)
+//! 发现触发文件就 EventLoopProxy 锤醒事件循环，由 about_to_wait 把终端
+//! 离屏光栅化进 Vec 倒出来——不依赖 surface，像素与前台的同一条
+//! 光栅化路径（rasterize），只是少了呈现动作。
 
 use std::path::Path;
+
+/// 倒帧目录（na 沙箱 $PREFIX/tmp，调试闸门同机可见）
+pub const DUMP_DIR: &str = "/data/data/dev.kfm.na/files/usr/tmp";
+
+/// 触发文件在不在（轻量探测：about_to_wait 每圈跑，靠它决定要不要
+/// 花一次全帧光栅化——没触发就一行 stat，零分配）
+pub fn trigger_pending(dir: &str) -> bool {
+    Path::new(dir).join("shot-req").exists()
+}
 
 /// XRGB u32 帧缓冲 → 原始字节流（小端，平台统一 aarch64 LE）。
 /// 每像素 4 字节，内存序 = B,G,R,X（0x00RRGGBB 的小端排布）。

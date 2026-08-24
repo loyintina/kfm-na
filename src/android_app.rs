@@ -118,6 +118,9 @@ struct App {
     last_grid: (u32, u32),
     /// 有新输出/尺寸变化待渲染
     dirty: bool,
+    /// 最近一次成功取到的帧尺寸（后台离屏倒帧用：退后台后 surface 没了，
+    /// 但用户最后看到的画面尺寸还在，按它光栅化）
+    last_frame_wh: (u32, u32),
     /// 会话终了（exited/failed）后定格最后一屏，出向不再发
     session_over: bool,
     /// 会话健康牌 ×2（断线重连）：字段语义见 SessHealth
@@ -795,37 +798,85 @@ impl App {
         }
     }
 
+    /// 光栅化一帧的内容（终端网格 + 快捷键行 + 放大镜 + tofu 上报）进
+    /// 任意像素缓冲。draw_frame(surface 缓冲)与后台离屏倒帧(Vec)共用——
+    /// 关联函数按字段传参，避开 buf 借用 self.gfx 时动不了 self 的问题
+    fn rasterize(
+        term: &mut Option<Box<dyn TermEmu>>,
+        mods: u8,
+        magnifier_at: Option<(f64, f64)>,
+        ime_bottom_px: u32,
+        buf: &mut [u32],
+        w: u32,
+        h: u32,
+    ) {
+        if let Some(term) = term {
+            term.render_into(buf, w, h);
+            // 快捷键行（BAR-017：Rust 自绘覆盖层，画在终端网格之上；
+            // 键盘 inset 之上——键盘弹起时行跟着上浮）。
+            // 修饰键位读 input.modifiers 服务（input-ime 方案 A）
+            term.render_keybar(buf, w, h, ime_bottom_px, mods);
+            // 选区边界拖动中的放大镜浮窗（画在所有内容之上——
+            // 帧缓冲源区在主渲染里已就位，这里纯位图放大）
+            if let Some((mx, my)) = magnifier_at {
+                term.render_magnifier(buf, w, h, mx, my);
+            }
+            // tofu 目击上报：双字体都缺的字符（方框的真身），新字才报
+            let tofu = term.take_tofu_chars();
+            if !tofu.is_empty() {
+                let list = tofu
+                    .iter()
+                    .map(|c| format!("U+{:04X}({c})", *c as u32))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                crate::report::report("term", &format!("tofu 目击: {list}"));
+            }
+        } else {
+            buf.fill(KFM_PURPLE); // 字体全灭的降级画面：紫屏 + 已有上报
+        }
+    }
+
+    /// 后台离屏倒帧：渲染泵歇工时由唤醒锤(值守模式)锤醒的 about_to_wait
+    /// 调用——触发文件在就按最后帧尺寸光栅化进 Vec 倒给调试侧
+    fn offscreen_dump(&mut self) {
+        let (w, h) = self.last_frame_wh;
+        if self.term.is_none() || w == 0 || h == 0 {
+            return;
+        }
+        if !crate::screendump::trigger_pending(crate::screendump::DUMP_DIR) {
+            return;
+        }
+        let mods = self.modifiers.as_ref().map_or(0, |m| m.peek());
+        let mut buf = vec![0u32; (w as usize) * (h as usize)];
+        Self::rasterize(
+            &mut self.term,
+            mods,
+            self.magnifier_at,
+            self.ime_bottom_px,
+            &mut buf,
+            w,
+            h,
+        );
+        crate::screendump::maybe_dump(crate::screendump::DUMP_DIR, &buf, w, h);
+    }
+
     /// 渲染一帧：终端模式画网格，非终端模式清紫屏
     fn draw_frame(&mut self) {
         let Some(g) = &mut self.gfx else { return };
         let mut buf = g.surface.buffer_mut().expect("取帧缓冲失败");
+        let (w, h) = (buf.width().get(), buf.height().get());
         if TERMINAL_MODE {
-            if let Some(term) = &mut self.term {
-                let (w, h) = (buf.width().get(), buf.height().get());
-                term.render_into(&mut buf, w, h);
-                // 快捷键行（BAR-017：Rust 自绘覆盖层，画在终端网格之上；
-                // 键盘 inset 之上——键盘弹起时行跟着上浮）。
-                // 修饰键位读 input.modifiers 服务（input-ime 方案 A）
-                let mods = self.modifiers.as_ref().map_or(0, |m| m.peek());
-                term.render_keybar(&mut buf, w, h, self.ime_bottom_px, mods);
-                // 选区边界拖动中的放大镜浮窗（画在所有内容之上——
-                // 帧缓冲源区在主渲染里已就位，这里纯位图放大）
-                if let Some((mx, my)) = self.magnifier_at {
-                    term.render_magnifier(&mut buf, w, h, mx, my);
-                }
-                // tofu 目击上报：双字体都缺的字符（方框的真身），新字才报
-                let tofu = term.take_tofu_chars();
-                if !tofu.is_empty() {
-                    let list = tofu
-                        .iter()
-                        .map(|c| format!("U+{:04X}({c})", *c as u32))
-                        .collect::<Vec<_>>()
-                        .join(" ");
-                    crate::report::report("term", &format!("tofu 目击: {list}"));
-                }
-            } else {
-                buf.fill(KFM_PURPLE); // 字体全灭的降级画面：紫屏 + 已有上报
-            }
+            self.last_frame_wh = (w, h);
+            let mods = self.modifiers.as_ref().map_or(0, |m| m.peek());
+            Self::rasterize(
+                &mut self.term,
+                mods,
+                self.magnifier_at,
+                self.ime_bottom_px,
+                &mut buf,
+                w,
+                h,
+            );
         } else {
             buf.fill(KFM_PURPLE);
             // 首帧呈现里程碑：紫屏真亮了才算雷 1 排除
@@ -837,12 +888,7 @@ impl App {
         }
         // 画面回传（screendump）：触发文件在就把这一帧倒给调试侧——
         // 倒出来的就是用户看到的整帧（网格/快捷键行/放大镜全在里面）
-        crate::screendump::maybe_dump(
-            "/data/data/dev.kfm.na/files/usr/tmp",
-            &buf,
-            buf.width().get(),
-            buf.height().get(),
-        );
+        crate::screendump::maybe_dump(crate::screendump::DUMP_DIR, &buf, w, h);
         buf.present().expect("帧呈现失败");
     }
 }
@@ -1233,6 +1279,10 @@ impl ApplicationHandler for App {
                 self.dirty = false;
                 self.draw_frame();
             }
+            // 后台画面回传(2026-08-24 与用户定):前台时触发文件由
+            // draw_frame 顺帧消费;退后台/息屏渲染泵歇工,由值守锤锤醒的
+            // 本方法离屏倒帧——draw_frame 先消费则此处探测即空,不重复倒
+            self.offscreen_dump();
         }
         // 事件循环心跳（10s 节流）：忙轮询泵下它在跳 = 循环活着，
         // 它停 = 循环卡死在某个 handler 里（BAR-012③ 诊断分界线）
@@ -1312,14 +1362,25 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
     };
     // blackout 唤醒锤(冗余兜底,2026-08-22 探针拆除案保留):proxy user
     // event 50ms 一锤,把循环锤醒跑 about_to_wait(抽事件/补画脏帧);
-    // 首笔 Redraw 到达即收锤
+    // 首笔 Redraw 到达后转值守模式(2026-08-24 后台截屏):渲染泵歇工,
+    // shot-req 触发文件在就锤醒循环,由 about_to_wait 离屏倒帧。
+    // (EventLoopProxy 在 Android 上的可靠性即此锤实证——blackout 案后
+    // 注释里「可靠性未验证」的存疑作废)
     let wake_proxy = event_loop.create_proxy();
     std::thread::spawn(move || {
         while !FIRST_REDRAW_SEEN.load(std::sync::atomic::Ordering::Relaxed) {
             if wake_proxy.send_event(()).is_err() {
-                break; // 循环已死,收锤
+                return; // 循环已死,收锤
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            if crate::screendump::trigger_pending(crate::screendump::DUMP_DIR)
+                && wake_proxy.send_event(()).is_err()
+            {
+                return; // 循环已死,收锤
+            }
         }
     });
     let result = event_loop.run_app(&mut app_handler);

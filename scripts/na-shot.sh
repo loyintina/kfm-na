@@ -20,20 +20,23 @@ gate() {
 }
 
 shoot() {
-    local stamp_before
-    stamp_before=$(gate "stat -c%Y $NA_TMP/shot.dim 2>/dev/null || echo 0")
-    gate "rm -f $NA_TMP/shot.rgb; touch $NA_TMP/shot-req" >/dev/null
-    # 等 na 倒完(dim 时间戳变了且 rgb 文件出现)
-    for _ in $(seq 1 20); do
+    # 先清场再触发:等待信号 = shot.rgb 和 shot.dim「重新出现」(不存在秒级时间戳 race)
+    gate "rm -f $NA_TMP/shot.rgb $NA_TMP/shot.dim; touch $NA_TMP/shot-req" >/dev/null
+    local ok=""
+    for _ in $(seq 1 30); do
         sleep 0.5
-        local now
-        now=$(gate "stat -c%Y $NA_TMP/shot.dim 2>/dev/null || echo 0")
-        if [ "$now" != "$stamp_before" ] && gate "test -f $NA_TMP/shot.rgb"; then
-            break
+        if gate "test -f $NA_TMP/shot.rgb -a -f $NA_TMP/shot.dim"; then
+            ok=1; break
         fi
     done
+    if [ -z "$ok" ]; then
+        echo "❌ 15 秒内没等到 na 倒帧 —— 触发器没被消费"
+        gate "test -f $NA_TMP/shot-req" >/dev/null \
+            && echo "   触发文件还在:na 没有在画帧。应用在前台吗?把它切到前台再拍。"
+        return 1
+    fi
     local dim
-    dim=$(gate "cat $NA_TMP/shot.dim") || { echo "❌ 没等到 na 倒帧(包里有 screendump 吗?na 活着吗?)"; return 1; }
+    dim=$(gate "cat $NA_TMP/shot.dim")
     scp -P 8024 -i "$NA_KEY" -o BatchMode=yes -o StrictHostKeyChecking=no \
         "localhost:$NA_TMP/shot.rgb" /tmp/na-shot.rgb >/dev/null
     "$PY" - "$dim" <<'EOF'

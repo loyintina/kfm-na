@@ -5,7 +5,7 @@
 //! ②触发文件不在 → 不动；在 → 倒 shot.rgb + shot.dim(“w h”)并摘触发；
 //! ③倒出来的字节数必须 = w*h*4（缺斤短两=画面错位）。
 
-use kfm_na::screendump::{encode_rgb, maybe_dump};
+use kfm_na::screendump::{encode_rgb, maybe_dump, trigger_pending};
 
 #[test]
 fn spec_编码_小端xrgb字节序() {
@@ -51,5 +51,50 @@ fn spec_触发_倒帧摘触发_尺寸正确() {
     let before = std::fs::read(dir.join("shot.rgb")).unwrap();
     assert!(!maybe_dump(d, &buf, 3, 2));
     assert_eq!(std::fs::read(dir.join("shot.rgb")).unwrap(), before);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// 后台倒帧全链路考题（2026-08-24）：真 TermView 喂字节 → 离屏光栅化进
+/// Vec → 触发 → 倒出的字节流必须就是这一帧的编码，且帧里真有字形像素
+/// （防「离屏路径渲染了但没真画/倒了但倒的不是刚渲染的帧」两类断链）
+#[test]
+fn spec_离屏倒帧_渲染到dump全链路() {
+    use kfm_na::termview::{CELL_H, CELL_W, DEFAULT_BG, TermView};
+    let font_path = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+        "/data/data/com.termux/files/usr/share/fonts/TTF/DejaVuSansMono.ttf",
+    ]
+    .iter()
+    .find(|p| std::path::Path::new(p).exists())
+    .expect("host 测试字体缺失");
+    let font = fontdue::Font::from_bytes(
+        std::fs::read(font_path).unwrap(),
+        fontdue::FontSettings::default(),
+    )
+    .expect("fontdue 不认 DejaVuSansMono");
+
+    let (cols, rows) = (8u32, 2u32);
+    let (w, h) = (cols * CELL_W, rows * CELL_H);
+    let mut tv = TermView::new(font, None, cols, rows, CELL_W, CELL_H);
+    tv.feed(b"hi");
+    let mut buf = vec![0u32; (w * h) as usize];
+    tv.render_into(&mut buf, w, h);
+    assert!(
+        buf.iter().any(|&px| px != DEFAULT_BG),
+        "喂了 hi 的帧里必须有非背景像素"
+    );
+
+    let dir = std::env::temp_dir().join(format!("kfm-shot3-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let d = dir.to_str().unwrap();
+    assert!(!trigger_pending(d), "没放触发文件时不许报待倒");
+    std::fs::write(dir.join("shot-req"), b"").unwrap();
+    assert!(trigger_pending(d));
+    assert!(maybe_dump(d, &buf, w, h));
+    assert_eq!(
+        std::fs::read(dir.join("shot.rgb")).unwrap(),
+        encode_rgb(&buf),
+        "倒出的必须就是刚渲染的这一帧"
+    );
     std::fs::remove_dir_all(&dir).ok();
 }

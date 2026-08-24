@@ -36,7 +36,13 @@
   Android 截屏权限)。`touch $PREFIX/tmp/shot-req` → 渲染循环下一帧倒
   shot.rgb+shot.dim → scp 拉回 PIL 转 PNG。一键 scripts/na-shot.sh
   (--watch 循环=近同步直播)。软键盘/系统弹窗不在帧缓冲里,拍不到
-  (预期内)。考题 tests/screendump_spec.rs 3 道。
+  (预期内)。考题 tests/screendump_spec.rs 4 道。
+  **后台倒帧(同日补)**:退后台/息屏后渲染泵歇工,旧路径拍不到——
+  唤醒锤首笔 Redraw 后转值守模式(300ms 轮询触发文件,在则
+  EventLoopProxy 锤醒循环),about_to_wait 按最后帧尺寸离屏光栅化
+  倒出;draw_frame 与离屏共用 rasterize() 光栅化路径,画面与前台
+  一致(会话/滚动位置都是活的)。顺带实证:EventLoopProxy 在
+  Android 可靠(blackout 案注释里的「未验证」存疑作废)。
 - **L2 判卷通过（2026-08-23 实拍）**:`kfm-pkg install base` 全绿,
   `ssh -V`=OpenSSH_10.5p1、`git --version`=2.55.0、`ssh root@服务器`
   登录成功。途中三案:①na 公网出站"不通"破案=境外链路掐 DSCP
