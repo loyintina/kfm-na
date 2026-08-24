@@ -126,3 +126,21 @@ fn spec_l1_路由_无待机换心脏拒绝() {
     let mut r = SessionRouter::new(tx_a, "local");
     assert!(r.replace_standby(tx_b).is_err(), "无待机槽换心脏必须报错");
 }
+
+/// 考题 5h:send_checked 回执——活通道 true 且送达;对端(接收方已丢)
+/// 死了报 false(僵尸通道不许静默吞,闸门判案靠它)
+#[test]
+fn spec_l1_路由_send_checked回执() {
+    let (tx_a, rx_a) = fake_pair();
+    let r = SessionRouter::new(tx_a, "local");
+    assert!(r.send_checked(TermCmd::Input("ls\n".into())));
+    assert!(matches!(
+        rx_a.recv_timeout(std::time::Duration::from_millis(200)),
+        Ok(TermCmd::Input(s)) if s == "ls\n"
+    ));
+    drop(rx_a);
+    assert!(
+        !r.send_checked(TermCmd::Input("x".into())),
+        "对端死了必须报 false"
+    );
+}

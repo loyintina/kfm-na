@@ -121,17 +121,30 @@ pub fn drain_keys_in(dir: &str) -> Option<String> {
     }
 }
 
-/// keys-in 在就取出注入活跃会话（裸字节 = 按键流；Ctrl 组合直接写控制字节）
+/// keys-in 在就取出注入活跃会话（裸字节 = 按键流；Ctrl 组合直接写控制字节）。
+/// 注入全程上报（闸门判案纪律：drain/登记/send 哪环断了都得在报告里看得见）
 pub fn inject_keys(dir: &str) {
     let Some(keys) = drain_keys_in(dir) else {
         return;
     };
+    let len = keys.len();
     let router = GATE_ROUTER.lock().unwrap().clone();
-    let Some(router) = router else { return };
-    router
-        .lock()
-        .unwrap()
-        .send(crate::conn::TermCmd::Input(keys));
+    let Some(router) = router else {
+        crate::report::report(
+            "gate",
+            &format!("keys-in {len}B 已取走但路由未登记——注入丢失"),
+        );
+        return;
+    };
+    let r = router.lock().unwrap();
+    let alive = r.send_checked(crate::conn::TermCmd::Input(keys));
+    crate::report::report(
+        "gate",
+        &format!(
+            "keys-in {len}B 注入: 活跃={} 通道存活={alive}",
+            r.active_name()
+        ),
+    );
 }
 
 // ---- 值守线程 ----

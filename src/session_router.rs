@@ -38,6 +38,12 @@ impl SessionRouter {
         let _ = self.active.0.send(cmd);
     }
 
+    /// 带回执的发送(调试闸门判案用):true = 通道活着,false = 对端
+    /// 已死(僵尸通道——send 会静默吞,闸门注入不能再瞎注)
+    pub fn send_checked(&self, cmd: TermCmd) -> bool {
+        self.active.0.send(cmd).is_ok()
+    }
+
     pub fn active_name(&self) -> &'static str {
         self.active.1
     }
