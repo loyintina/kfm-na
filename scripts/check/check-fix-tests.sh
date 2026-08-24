@@ -3,7 +3,9 @@
 #
 # 思想：修 bug 不带回归钉 = 同一个 bug 会回来第二次。
 # 规则：提交信息首行是 fix: / fix(范围): 且未触及测试且提交信息无豁免 → 中断。
-# 「触及测试」口径（Rust）：tests/ 目录、*_test.rs、tests.rs，或 diff 中含 #[cfg(test)]。
+# 「触及测试」口径（Rust）：tests/ 目录、*_test.rs、tests.rs，或 diff 中含 #[cfg(test)]；
+# （shell）：scripts/test-*.sh 回归考题（2026-08-24 扩——overlay/kfm-pkg 的
+# 钉是 shell 考题，挂 chain 第 8 步，与 Rust 钉同效）
 # 豁免：提交信息**独立一行**写 `tests:na`（声明此修复无需/无法补钉，如纯配置/文案）。
 #
 # 用法：check-fix-tests.sh --staged <msgFile>   （commit-msg 钩子）
@@ -23,7 +25,7 @@ fi
 first_line=$(echo "$message" | head -1)
 echo "$first_line" | grep -qE '^fix(\([^)]*\))?:' || { echo "[check-fix-tests] OK — ${label}（非 fix 提交）"; exit 0; }
 
-touched_tests=$(echo "$files" | grep -cE '^tests/|_test\.rs$|/tests\.rs$|(^|/)tests\.rs$' || true)
+touched_tests=$(echo "$files" | grep -cE '^tests/|_test\.rs$|/tests\.rs$|(^|/)tests\.rs$|^scripts/test-.*\.sh$' || true)
 exempt=$(echo "$message" | grep -cxE 'tests:na[[:space:]]*' || true)
 
 if [ "$touched_tests" -eq 0 ] && [ "$exempt" -eq 0 ]; then

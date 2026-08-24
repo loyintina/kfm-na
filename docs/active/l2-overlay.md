@@ -90,6 +90,21 @@ MANIFEST             # name=<名> / packages=<闭包列表> / built=<时间戳>
 (装完 base 会话 exit -1 实录)。kfm-pkg 逐文件 `.kfm-new` + `mv`
 原子替换:新文件新 inode,老 inode 陪老进程寿终,新进程自然用新文件。
 
+## 6.6 安装原子性三件套(BAR-031,2026-08-24)
+
+安装分段非原子是 zsh 卡死案的病根(杀在「文件铺完、链接未建」之间
+→ .so 在、libcap.so.2 没建 → 运行时链接失败)。kfm-pkg 契约:
+
+1. **中断标记**:铺文件前挂 `var/kfm-pkg/<名>.partial`,装成才摘;
+   任何 kfm-pkg 调用见残留标记即吼出自愈命令。
+2. **重装自愈**:全流程幂等重放(文件 .kfm-new+mv / ln -snf /
+   postinst 可重入),重跑 `install <名>` 必愈——不开单独修复命令。
+3. **装后校验**:payload 文件齐 + 符号链接全通(-e 判 target 在)
+   才摘标记,缺一件非零退出。静默残局从此不可能。
+
+考题:scripts/test-kfm-pkg.sh(chain 第 8 步,测试缝
+KFM_PKG_FAKE_KILL=after-files 模拟被杀现场)。
+
 ## 7. 考题与判卷
 
 - **host 考题**(`scripts/test-overlay.sh`,挂 chain):fixture 假 deb

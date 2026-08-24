@@ -83,6 +83,9 @@ echo "=== [chain 8/9] overlay 打包核考题（L2,fixture 假 deb) ==="
 # 2026-08-22 第 8 步：overlay-pack 是纯 shell 变换，cargo 看不见——
 # fixture 考题钉死剥前缀/改写/建链三规则（设计 docs/active/l2-overlay.md)
 bash scripts/test-overlay.sh || { echo "❌ overlay 考题不过"; exit 1; }
+# 2026-08-24 同步挂入：kfm-pkg 原子性考题（BAR-031——中断标记/重装自愈/
+# 装后校验，zsh 卡死案病根）
+bash scripts/test-kfm-pkg.sh || { echo "❌ kfm-pkg 考题不过"; exit 1; }
 
 echo "=== [chain 9/9] cargo build ==="
 cargo build || { echo "❌ 构建不过"; exit 1; }
