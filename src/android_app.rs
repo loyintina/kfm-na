@@ -101,9 +101,11 @@ struct App {
     window: Option<Arc<Window>>,
     gfx: Option<Gfx>,
     // ---- TERMINAL_MODE 状态 ----
-    /// 终端实例：插件工厂产出（term-alacritty），调用方持有的长寿命 mutable
-    /// 状态（设计页 §7）——含 scrollback，跨插件生命周期存活
-    term: Option<Box<dyn TermEmu>>,
+    /// 终端实例：插件工厂产出（term-alacritty）。Arc<Mutex<>> 共享——
+    /// 除 UI 线程外，后台倒帧值守线程(screendump::spawn_dump_watcher)也
+    /// 持有一份：事件循环在挂起态叫不醒(proxy 实证叫不动),倒帧只能
+    /// 靠值守线程自己锁终端光栅化（2026-08-24 与用户定：后台可截屏）
+    term: Option<crate::screendump::SharedTerm>,
     /// 出向路由核（L1 双会话：默认本地 PTY 活跃，ws 远程在待机槽）。
     /// 一切击键/IME/Resize 出向经它发往活跃会话（评审裁决 4 附议：
     /// 输入路由抽纯数据面，考题钉在 host 侧）
@@ -118,9 +120,6 @@ struct App {
     last_grid: (u32, u32),
     /// 有新输出/尺寸变化待渲染
     dirty: bool,
-    /// 最近一次成功取到的帧尺寸（后台离屏倒帧用：退后台后 surface 没了，
-    /// 但用户最后看到的画面尺寸还在，按它光栅化）
-    last_frame_wh: (u32, u32),
     /// 会话终了（exited/failed）后定格最后一屏，出向不再发
     session_over: bool,
     /// 会话健康牌 ×2（断线重连）：字段语义见 SessHealth
@@ -210,8 +209,8 @@ impl App {
         }
         p.long_fired = true;
         let (x, y) = (p.x, p.y);
-        if let Some(t) = &mut self.term {
-            t.select_word_at(x, y);
+        if let Some(t) = self.term_handle() {
+            t.lock().unwrap().select_word_at(x, y);
             self.dirty = true;
             crate::report::report("ime", "长按选词——进入选择模式");
         }
@@ -220,7 +219,8 @@ impl App {
     /// 选择态单击复制：提取选中文字 → JNI 系统剪贴板 + Toast，清高亮。
     /// 提取为空（按在空白格）不打扰剪贴板，只清选区
     fn copy_selection(&mut self) {
-        let Some(t) = &mut self.term else { return };
+        let Some(t) = self.term_handle() else { return };
+        let mut t = t.lock().unwrap();
         if let Some(text) = t.selected_text() {
             let n = text.chars().count();
             if n > 0
@@ -245,10 +245,10 @@ impl App {
     /// 捏合收尾写盘：缩放比浮点（相对编译期基准 CELL_W/CELL_H），
     /// 冷启动读回（init_terminal）；写失败只上报——缩放不该炸终端
     fn persist_zoom(&self) {
-        let (Some(term), Some(path)) = (&self.term, self.zoom_path()) else {
+        let (Some(term), Some(path)) = (self.term_handle(), self.zoom_path()) else {
             return;
         };
-        let (cw, ch) = term.cell_size();
+        let (cw, ch) = term.lock().unwrap().cell_size();
         let ratio = f64::from(cw) / f64::from(crate::termview::CELL_W);
         match std::fs::write(&path, format!("{ratio:.4}")) {
             Ok(()) => crate::report::report(
@@ -416,7 +416,9 @@ impl App {
         // （BAR-021：诊断脚手架已拆——候选体检/目录普查每个冷启动全量解析
         // 44MB×2+32MB 巨物，是启动慢的最大单块成本；探测链本身也已退役，
         // 生产字体编译期内嵌。需要排查时从 git 历史恢复）
-        self.term = Some(tv);
+        let term = std::sync::Arc::new(std::sync::Mutex::new(tv));
+        crate::screendump::register_dump_term(&term); // 后台倒帧值守持有
+        self.term = Some(term);
         self.base = Some(base);
 
         // 捏合缩放持久化读回（kfm-zoom，files 目录）：有记录则按基准×比例
@@ -431,16 +433,16 @@ impl App {
                 crate::termview::CELL_H,
                 ratio,
             );
-            if let Some(t) = &mut self.term {
-                t.set_cell_size(cw, ch);
+            if let Some(t) = self.term_handle() {
+                t.lock().unwrap().set_cell_size(cw, ch);
             }
         }
 
         // 上机提示(L1 实拍后用户要「至少一个提示」):app 级快捷键 shell
         // 看不见,开局直接印在网格上(只 feed 视图,不进 PTY 不污染会话)。
         // 每次冷启动印一次;滚屏可回看
-        if let Some(t) = &mut self.term {
-            t.feed(HELP_BANNER.as_bytes());
+        if let Some(t) = self.term_handle() {
+            t.lock().unwrap().feed(HELP_BANNER.as_bytes());
         }
 
         // 首发尺寸：Opened 前 outbound 会被 conn 层缓存，绑定后补发
@@ -454,8 +456,10 @@ impl App {
     /// JNI 轮询，insets.rs）- 快捷键行高（BAR-017，Rust 自绘常驻让位）。
     /// 顶带跟当前格高走（margin_top：捏合缩放后格高可变，2026-08-21）
     fn apply_window_size(&mut self, w: u32, h: u32) {
-        let Some(term) = &mut self.term else { return };
-        let (cw, ch) = term.cell_size();
+        let Some(term) = self.term_handle() else {
+            return;
+        };
+        let (cw, ch) = term.lock().unwrap().cell_size();
         let usable_w = w.saturating_sub(2 * termview::MARGIN_X);
         let usable_h = h.saturating_sub(
             termview::margin_top(ch)
@@ -464,7 +468,7 @@ impl App {
                 + crate::keybar::HEIGHT_PX,
         );
         let (cols, rows) = termview::grid_dims(usable_w, usable_h, cw, ch);
-        term.resize_cells(cols, rows);
+        term.lock().unwrap().resize_cells(cols, rows);
         self.last_grid = (cols, rows);
         if !self.session_over
             && let Some(r) = &self.router
@@ -480,11 +484,9 @@ impl App {
     /// 待机 rx 每圈已被 drain_terminal_events 抽干）。切入死会话 →
     /// 立即重连（用户在场，断线重连 2026-08-21）
     fn switch_session(&mut self) {
-        let Some(router) = &mut self.router else {
-            return;
-        };
-        let Some((name_a, name_s)) = router.switch() else {
-            return; // 没待机方：装作没发生
+        // switch() 的 &mut 借用到此为止——后面补屏循环要借 self 别处
+        let Some((name_a, name_s)) = self.router.as_mut().and_then(|r| r.switch()) else {
+            return; // 没待机方：装作没发生(或没路由装配)
         };
         let (Some(rx_a), Some((rx_s, _))) = (self.event_rx.take(), self.standby.take()) else {
             crate::report::report_sync("term", "切换时入向槽残缺——装配 bug");
@@ -497,17 +499,19 @@ impl App {
         let buf = std::mem::take(&mut self.standby_buf);
         for ev in buf {
             if let SessionEvent::Output { data } = ev
-                && let Some(t) = &mut self.term
+                && let Some(t) = self.term_handle()
             {
-                t.feed(data.as_bytes());
+                t.lock().unwrap().feed(data.as_bytes());
             }
         }
         let (cols, rows) = self.last_grid;
-        router.send(TermCmd::Resize { cols, rows });
-        if let Some(t) = &mut self.term {
+        if let Some(router) = &self.router {
+            router.send(TermCmd::Resize { cols, rows });
+        }
+        if let Some(t) = self.term_handle() {
             let banner =
                 format!("\r\n\x1b[36m[kfm-na → {name_s} 会话（Ctrl-] 切回 {name_a}）]\x1b[0m\r\n");
-            t.feed(banner.as_bytes());
+            t.lock().unwrap().feed(banner.as_bytes());
         }
         self.session_over = self.health(name_s).dead;
         crate::report::report("term", &format!("会话切换: {name_a} → {name_s}"));
@@ -588,11 +592,11 @@ impl App {
             if let Some(r) = &self.router {
                 r.send(TermCmd::Resize { cols, rows });
             }
-            if let Some(t) = &mut self.term {
+            if let Some(t) = self.term_handle() {
                 let banner = format!(
                     "\r\n\x1b[36m[kfm-na: {name} 会话断线，已重连 = 新 shell（旧现场 tmux attach 接回）]\x1b[0m\r\n"
                 );
-                t.feed(banner.as_bytes());
+                t.lock().unwrap().feed(banner.as_bytes());
             }
         } else {
             if let Some(r) = &mut self.router
@@ -657,8 +661,8 @@ impl App {
                 );
             }
             SessionEvent::Output { data } => {
-                if let Some(term) = &mut self.term {
-                    term.feed(data.as_bytes());
+                if let Some(term) = self.term_handle() {
+                    term.lock().unwrap().feed(data.as_bytes());
                     self.dirty = true;
                 }
             }
@@ -723,7 +727,9 @@ impl App {
         if !FIRST_INJECT.swap(true, std::sync::atomic::Ordering::Relaxed) {
             crate::report::report("ime", "首个 JNI IME 文字注入");
         }
-        let app_cursor = self.term.as_ref().is_some_and(|t| t.app_cursor_mode());
+        let app_cursor = self
+            .term_handle()
+            .is_some_and(|t| t.lock().unwrap().app_cursor_mode());
         // 先落成字节串列表（借 self 算 app_cursor/记诊断），再逐条下发——
         // 下发段要 &mut self（Ctrl-] 会话切换），与 outbound 借用拆开
         let mut pending: Vec<String> = Vec::with_capacity(items.len());
@@ -765,8 +771,8 @@ impl App {
         }
         if sent {
             // IME 落字 = 用户输入：滚回底部贴最新输出
-            if let Some(t) = &mut self.term {
-                t.scroll_to_bottom();
+            if let Some(t) = self.term_handle() {
+                t.lock().unwrap().scroll_to_bottom();
             }
         }
     }
@@ -792,17 +798,18 @@ impl App {
         {
             r.send(TermCmd::Input(bytes));
             // 打字了就是要看现在——滚回底部贴最新输出
-            if let Some(t) = &mut self.term {
-                t.scroll_to_bottom();
+            if let Some(t) = self.term_handle() {
+                t.lock().unwrap().scroll_to_bottom();
             }
         }
     }
 
     /// 光栅化一帧的内容（终端网格 + 快捷键行 + 放大镜 + tofu 上报）进
-    /// 任意像素缓冲。draw_frame(surface 缓冲)与后台离屏倒帧(Vec)共用——
-    /// 关联函数按字段传参，避开 buf 借用 self.gfx 时动不了 self 的问题
+    /// 任意像素缓冲。关联函数按字段传参，避开 buf 借用 self.gfx 时动
+    /// 不了 self 的问题。后台离屏倒帧不走这里——值守线程(screendump)
+    /// 只画终端网格本体，快捷键行/放大镜是 UI 装帧，不在后台视野里
     fn rasterize(
-        term: &mut Option<Box<dyn TermEmu>>,
+        term: Option<&mut Box<dyn TermEmu>>,
         mods: u8,
         magnifier_at: Option<(f64, f64)>,
         ime_bottom_px: u32,
@@ -836,40 +843,26 @@ impl App {
         }
     }
 
-    /// 后台离屏倒帧：渲染泵歇工时由唤醒锤(值守模式)锤醒的 about_to_wait
-    /// 调用——触发文件在就按最后帧尺寸光栅化进 Vec 倒给调试侧
-    fn offscreen_dump(&mut self) {
-        let (w, h) = self.last_frame_wh;
-        if self.term.is_none() || w == 0 || h == 0 {
-            return;
-        }
-        if !crate::screendump::trigger_pending(crate::screendump::DUMP_DIR) {
-            return;
-        }
-        let mods = self.modifiers.as_ref().map_or(0, |m| m.peek());
-        let mut buf = vec![0u32; (w as usize) * (h as usize)];
-        Self::rasterize(
-            &mut self.term,
-            mods,
-            self.magnifier_at,
-            self.ime_bottom_px,
-            &mut buf,
-            w,
-            h,
-        );
-        crate::screendump::maybe_dump(crate::screendump::DUMP_DIR, &buf, w, h);
+    /// 取终端句柄（Arc 克隆）：UI 线程与后台倒帧值守线程共用一把锁。
+    /// 返回 owned Arc 而非 guard——guard 会拖着 &self 借用,挡住块内
+    /// 写 self.dirty 等其他字段;句柄落地后 lock 出的 guard 只借本地
+    fn term_handle(&self) -> Option<crate::screendump::SharedTerm> {
+        self.term.clone()
     }
 
     /// 渲染一帧：终端模式画网格，非终端模式清紫屏
     fn draw_frame(&mut self) {
+        // 先拿终端句柄(owned Arc,借用即还),再借 gfx——顺序反了 E0502
+        let th = self.term_handle();
         let Some(g) = &mut self.gfx else { return };
         let mut buf = g.surface.buffer_mut().expect("取帧缓冲失败");
         let (w, h) = (buf.width().get(), buf.height().get());
         if TERMINAL_MODE {
-            self.last_frame_wh = (w, h);
+            crate::screendump::note_frame_size(w, h); // 给后台倒帧值守记账
             let mods = self.modifiers.as_ref().map_or(0, |m| m.peek());
+            let mut tg = th.as_ref().map(|a| a.lock().unwrap());
             Self::rasterize(
-                &mut self.term,
+                tg.as_mut().map(|t| &mut **t),
                 mods,
                 self.magnifier_at,
                 self.ime_bottom_px,
@@ -886,9 +879,8 @@ impl App {
                 crate::report::report("boot", "首帧 present 完成——紫屏应已亮");
             }
         }
-        // 画面回传（screendump）：触发文件在就把这一帧倒给调试侧——
-        // 倒出来的就是用户看到的整帧（网格/快捷键行/放大镜全在里面）
-        crate::screendump::maybe_dump(crate::screendump::DUMP_DIR, &buf, w, h);
+        // 画面回传由值守线程统一消费(screendump::spawn_dump_watcher)——
+        // 挂起态事件循环叫不醒,前台顺帧消费那套在后台是死路,单一消费者
         buf.present().expect("帧呈现失败");
     }
 }
@@ -985,9 +977,8 @@ impl ApplicationHandler for App {
                             let ((_, x1, y1), (_, x2, y2)) = (self.touches[0], self.touches[1]);
                             let dist0 = ((x2 - x1).powi(2) + (y2 - y1).powi(2)).sqrt().max(1.0);
                             let base = self
-                                .term
-                                .as_ref()
-                                .map(|t| t.cell_size())
+                                .term_handle()
+                                .map(|t| t.lock().unwrap().cell_size())
                                 .unwrap_or((crate::termview::CELL_W, crate::termview::CELL_H));
                             self.pinch = Some((dist0, base));
                             self.touch_scroll = None;
@@ -1003,14 +994,17 @@ impl ApplicationHandler for App {
                         if self.touches.len() > 2 {
                             return; // 第三指起不接管
                         }
-                        let selecting = self.term.as_ref().is_some_and(|t| t.selection_active());
+                        let selecting = self
+                            .term_handle()
+                            .is_some_and(|t| t.lock().unwrap().selection_active());
                         // 选择态按住边界格 → 端点精调（放大镜随触点浮起）；
                         // 不记 press——边界抬手不触发复制
                         if selecting
-                            && let Some(end) = self
-                                .term
-                                .as_ref()
-                                .and_then(|t| t.hit_boundary(touch.location.x, touch.location.y))
+                            && let Some(end) = self.term_handle().and_then(|t| {
+                                t.lock()
+                                    .unwrap()
+                                    .hit_boundary(touch.location.x, touch.location.y)
+                            })
                         {
                             self.sel_drag = Some(end);
                             self.magnifier_at = Some((touch.location.x, touch.location.y));
@@ -1028,9 +1022,8 @@ impl ApplicationHandler for App {
                         });
                         if !selecting {
                             let cell_h = self
-                                .term
-                                .as_ref()
-                                .map(|t| t.cell_size().1)
+                                .term_handle()
+                                .map(|t| t.lock().unwrap().cell_size().1)
                                 .unwrap_or(crate::termview::CELL_H);
                             self.touch_scroll = Some(crate::scroll::TouchScroll::new(
                                 touch.location.y,
@@ -1055,9 +1048,11 @@ impl ApplicationHandler for App {
                                 let dist = ((x2 - x1).powi(2) + (y2 - y1).powi(2)).sqrt();
                                 let (cw, ch) =
                                     crate::termview::pinch_cell_size(base.0, base.1, dist / dist0);
-                                if self.term.as_ref().map(|t| t.cell_size()) != Some((cw, ch)) {
-                                    if let Some(t) = &mut self.term {
-                                        t.set_cell_size(cw, ch);
+                                if self.term_handle().map(|t| t.lock().unwrap().cell_size())
+                                    != Some((cw, ch))
+                                {
+                                    if let Some(t) = self.term_handle() {
+                                        t.lock().unwrap().set_cell_size(cw, ch);
                                     }
                                     if let Some(w) = &self.window {
                                         let s = w.inner_size();
@@ -1073,8 +1068,12 @@ impl ApplicationHandler for App {
                         // 边界拖动：端点跟手指走（跨行/历史区换算在
                         // move_selection_end），放大镜跟着触点浮
                         if let Some(end) = self.sel_drag {
-                            if let Some(t) = &mut self.term {
-                                t.move_selection_end(end, touch.location.x, touch.location.y);
+                            if let Some(t) = self.term_handle() {
+                                t.lock().unwrap().move_selection_end(
+                                    end,
+                                    touch.location.x,
+                                    touch.location.y,
+                                );
                             }
                             self.magnifier_at = Some((touch.location.x, touch.location.y));
                             self.dirty = true;
@@ -1089,9 +1088,14 @@ impl ApplicationHandler for App {
                         }
                         // 选择态：拖动 = 扩选（不滚屏，坐标含 display_offset/边距，
                         // 换算在 termview grid_point_at）
-                        if self.term.as_ref().is_some_and(|t| t.selection_active()) {
-                            if let Some(t) = &mut self.term {
-                                t.extend_selection(touch.location.x, touch.location.y);
+                        if self
+                            .term_handle()
+                            .is_some_and(|t| t.lock().unwrap().selection_active())
+                        {
+                            if let Some(t) = self.term_handle() {
+                                t.lock()
+                                    .unwrap()
+                                    .extend_selection(touch.location.x, touch.location.y);
                             }
                             self.dirty = true;
                             return;
@@ -1103,7 +1107,8 @@ impl ApplicationHandler for App {
                         if lines == 0 {
                             return;
                         }
-                        let Some(t) = &mut self.term else { return };
+                        let Some(t) = self.term_handle() else { return };
+                        let mut t = t.lock().unwrap();
                         if t.mouse_report_active() {
                             // BAR-016②：对端开了鼠标上报（tmux/kimicode 等全屏
                             // TUI）——alt screen 没有本地历史可滚，翻成 SGR 滚轮
@@ -1191,7 +1196,10 @@ impl ApplicationHandler for App {
                         }
                         // 选择态：抬手保持高亮；单击（未拖动扩选、且不是刚触发
                         // 长按的那次抬手）→ 复制 + Toast + 清选。点按唤键盘让路
-                        if self.term.as_ref().is_some_and(|t| t.selection_active()) {
+                        if self
+                            .term_handle()
+                            .is_some_and(|t| t.lock().unwrap().selection_active())
+                        {
                             let tap = press.is_some_and(|p| !p.moved && !p.long_fired);
                             if tap && touch.phase == TouchPhase::Ended {
                                 self.copy_selection();
@@ -1227,8 +1235,8 @@ impl ApplicationHandler for App {
                             if let Some(r) = &self.router {
                                 r.send(TermCmd::Input(text));
                                 // IME 落字 = 用户输入：滚回底部贴最新输出
-                                if let Some(t) = &mut self.term {
-                                    t.scroll_to_bottom();
+                                if let Some(t) = self.term_handle() {
+                                    t.lock().unwrap().scroll_to_bottom();
                                 }
                             }
                         }
@@ -1279,10 +1287,6 @@ impl ApplicationHandler for App {
                 self.dirty = false;
                 self.draw_frame();
             }
-            // 后台画面回传(2026-08-24 与用户定):前台时触发文件由
-            // draw_frame 顺帧消费;退后台/息屏渲染泵歇工,由值守锤锤醒的
-            // 本方法离屏倒帧——draw_frame 先消费则此处探测即空,不重复倒
-            self.offscreen_dump();
         }
         // 事件循环心跳（10s 节流）：忙轮询泵下它在跳 = 循环活着，
         // 它停 = 循环卡死在某个 handler 里（BAR-012③ 诊断分界线）
@@ -1362,27 +1366,20 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
     };
     // blackout 唤醒锤(冗余兜底,2026-08-22 探针拆除案保留):proxy user
     // event 50ms 一锤,把循环锤醒跑 about_to_wait(抽事件/补画脏帧);
-    // 首笔 Redraw 到达后转值守模式(2026-08-24 后台截屏):渲染泵歇工,
-    // shot-req 触发文件在就锤醒循环,由 about_to_wait 离屏倒帧。
-    // (EventLoopProxy 在 Android 上的可靠性即此锤实证——blackout 案后
-    // 注释里「可靠性未验证」的存疑作废)
+    // 首笔 Redraw 到达即收锤。注意:proxy 只在循环跑着时叫得醒,
+    // Activity 挂起态叫不醒(2026-08-24 实拍)——后台倒帧不靠它,
+    // 走 screendump 值守线程
     let wake_proxy = event_loop.create_proxy();
     std::thread::spawn(move || {
         while !FIRST_REDRAW_SEEN.load(std::sync::atomic::Ordering::Relaxed) {
             if wake_proxy.send_event(()).is_err() {
-                return; // 循环已死,收锤
+                break; // 循环已死,收锤
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
-        loop {
-            std::thread::sleep(std::time::Duration::from_millis(300));
-            if crate::screendump::trigger_pending(crate::screendump::DUMP_DIR)
-                && wake_proxy.send_event(()).is_err()
-            {
-                return; // 循环已死,收锤
-            }
-        }
     });
+    // 后台画面回传值守(2026-08-24 与用户定:截图不要求应用在前台)
+    crate::screendump::spawn_dump_watcher();
     let result = event_loop.run_app(&mut app_handler);
     // 同步直报：async 入队后立刻 exit(0) 会吃掉这行（此前历次「静默消失」
     // 的嫌疑——死亡现场被自己的 exit(0) 毁尸灭迹）

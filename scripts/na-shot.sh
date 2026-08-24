@@ -39,7 +39,7 @@ shoot() {
     dim=$(gate "cat $NA_TMP/shot.dim")
     scp -P 8024 -i "$NA_KEY" -o BatchMode=yes -o StrictHostKeyChecking=no \
         "localhost:$NA_TMP/shot.rgb" /tmp/na-shot.rgb >/dev/null
-    "$PY" - "$dim" <<'EOF'
+    "$PY" - $dim <<'EOF'
 import sys
 from PIL import Image
 w, h = int(sys.argv[1]), int(sys.argv[2])
