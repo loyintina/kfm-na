@@ -108,3 +108,37 @@ fn spec_rec_单条超帽留最新() {
     let decoded = rec_decode_all(&compacted).expect("可解");
     assert_eq!(decoded, vec![out(1, "local", &"z".repeat(5000))]);
 }
+
+/// 考题 6(BAR-034):开机轮换——旧带整体搬去 .prev 保全,新带只含魔数;
+/// 无旧带时直接起新带;再开机再轮换(旧 prev 被覆盖,只保最近一世)
+#[test]
+fn spec_rec_开机轮换_旧带保全_新带起线() {
+    use kfm_na::gate::{REC_MAGIC, REC_PREV_FILE, rec_boot_file};
+    let dir = std::env::temp_dir().join(format!("rec-boot-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let cur = dir.join("flight-rec.bin");
+
+    // 无旧带:直接起新带
+    rec_boot_file(&cur).unwrap();
+    assert_eq!(std::fs::read(&cur).unwrap(), REC_MAGIC);
+    assert!(!dir.join(REC_PREV_FILE).exists());
+
+    // 有旧带:轮换——旧内容完整进 .prev,新带只有魔数
+    std::fs::write(&cur, "KFMREC01\n上一世的现场".as_bytes()).unwrap();
+    rec_boot_file(&cur).unwrap();
+    assert_eq!(
+        std::fs::read(dir.join(REC_PREV_FILE)).unwrap(),
+        "KFMREC01\n上一世的现场".as_bytes()
+    );
+    assert_eq!(std::fs::read(&cur).unwrap(), REC_MAGIC);
+
+    // 再开机:新 prev 覆盖旧 prev(只保最近一世)
+    std::fs::write(&cur, "KFMREC01\n这一世".as_bytes()).unwrap();
+    rec_boot_file(&cur).unwrap();
+    assert_eq!(
+        std::fs::read(dir.join(REC_PREV_FILE)).unwrap(),
+        "KFMREC01\n这一世".as_bytes()
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}

@@ -389,6 +389,22 @@ pub const REC_MAGIC: &[u8] = b"KFMREC01\n";
 pub const REC_FILE_CAP: usize = 2 * 1024 * 1024;
 /// 记录文件名（闸门目录下）
 pub const REC_FILE: &str = "flight-rec.bin";
+/// 上一世记录文件名（启动轮换的去处,坠机现场保全）
+pub const REC_PREV_FILE: &str = "flight-rec.prev.bin";
+
+/// 开机备带（可单测的纯文件操作）：旧带轮换成 .prev（坠机现场不丢），
+/// 新带写魔数起新时间线。语义定案（BAR-034,2026-08-25 实拍）：记录带
+/// 代表**当前进程**的屏幕真相,跨重启不追加——追加会让旧时间线的输出
+/// 在回放时堆到新开机屏幕头顶,「回放末屏=读屏」判卷永远对不上
+pub fn rec_boot_file(path: &std::path::Path) -> std::io::Result<()> {
+    use std::io::Write;
+    if path.exists() {
+        let prev = path.with_file_name(REC_PREV_FILE);
+        std::fs::rename(path, prev)?; // 同目录改名,原子;旧 prev 被覆盖
+    }
+    let mut f = std::fs::File::create(path)?;
+    f.write_all(REC_MAGIC)
+}
 
 /// 一条记录（解码侧 owned;ts_ms = 记录仪启动起的毫秒）
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -579,12 +595,10 @@ fn start_recorder(dir: &str) {
     let path = std::path::PathBuf::from(dir).join(REC_FILE);
     std::thread::spawn(move || {
         use std::io::Write;
-        // 新文件先写魔数;已有文件接着录(重启=新时间线,追加不截断——
-        // 时间戳从 0 重计,回放器按魔数后 ts 回退点自知分段,v1 够用)
-        if !path.exists()
-            && let Ok(mut f) = std::fs::File::create(&path)
-        {
-            let _ = f.write_all(REC_MAGIC);
+        // 开机轮换备带(BAR-034):旧带→.prev 保全,新带魔数起线;
+        // 备带失败 = 丢记录不拖垮(观测通道铁律)
+        if rec_boot_file(&path).is_err() {
+            return;
         }
         loop {
             // 阻塞等第一条,再非阻塞排空(批量写,省 IO 次数)
