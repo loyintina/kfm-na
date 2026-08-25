@@ -35,8 +35,17 @@ fn main() {
     let buf = std::fs::read(&file).unwrap_or_else(|e| panic!("读 {file} 失败: {e}"));
     let evs = rec_decode_all(&buf).unwrap_or_else(|e| panic!("解码失败: {e}"));
 
-    // 末值尺寸起手(没有 resize 记录 = 开局占位尺寸,首个 resize 到了再纠)
-    let mut tv = TermView::new(host_font(), None, 120, 40, 8, 16);
+    // 起手几何必须与真机同胚(BOOT_COLS×BOOT_ROWS,build_vendored 同款
+    // 共享常量):开局横幅在 resize 记录到达前落笔,折行点由起手宽度定——
+    // 起手不同,resize 重排与直接落笔不是一回事(BAR-035,2026-08-25 终验实拍)
+    let mut tv = TermView::new(
+        host_font(),
+        None,
+        kfm_na::termview::BOOT_COLS,
+        kfm_na::termview::BOOT_ROWS,
+        kfm_na::termview::CELL_W,
+        kfm_na::termview::CELL_H,
+    );
     let (mut n_out, mut n_resize) = (0u64, 0u64);
     let mut last_ts = 0u64;
     for ev in &evs {

@@ -29,6 +29,12 @@ use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Processor};
 pub const CELL_W: u32 = 18;
 pub const CELL_H: u32 = 36;
 
+/// 起手网格几何（BAR-035）：开机横幅在首个 resize 到达前落笔,折行点
+/// 由它定。真机(build_vendored)与 host 回放器(na-replay)必须同胚——
+/// 各写一份数字迟早漂走,2026-08-25 终验实拍回放恒差 1 行折行
+pub const BOOT_COLS: u32 = 80;
+pub const BOOT_ROWS: u32 = 24;
+
 /// 画面边距（BAR-005）：网格不贴边，边缘字符不再被屏幕圆角/曲面切半。
 /// 纯黑带，不画框——框是装饰，等中央页面定稿再议
 pub const MARGIN_X: u32 = 12;
@@ -1293,7 +1299,7 @@ pub fn build_vendored() -> Option<(TermView, String, Option<String>)> {
         fontdue::Font::from_bytes(VENDORED_MAIN_FONT, fontdue::FontSettings::default()).ok()?;
     let cjk = fontdue::Font::from_bytes(VENDORED_CJK_FONT, fontdue::FontSettings::default()).ok();
     Some((
-        TermView::new(font, cjk, 80, 24, CELL_W, CELL_H),
+        TermView::new(font, cjk, BOOT_COLS, BOOT_ROWS, CELL_W, CELL_H),
         "<内嵌主>".to_string(),
         Some("<内嵌CJK>".to_string()),
     ))

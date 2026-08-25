@@ -16,6 +16,10 @@
   通道不许反咬业务）。host 回放器 `src/bin/na-replay.rs`：按名过滤
   喂 TermView 真渲染，打印末屏文本+统计。一键 `scripts/na-replay.sh`
   = scp 拉回 + 本地回放。判卷法：回放末屏须与 na-text.sh 读屏一致。
+  **终判卷过（2026-08-25 装机实拍，逐行 diff 完全一致）**；判卷过程
+  自抓三虫：BAR-033（开局横幅绕泵未入带）、BAR-034（记录带跨重启
+  追加→开机轮换 .prev）、BAR-035（回放器起手几何与真机不同胚→
+  共享常量 BOOT_COLS×BOOT_ROWS)。
   设计全文 docs/active/调试闸门.md §六。
 - **L2 自远程闸门通车（2026-08-23,等长二进制改写方案）**:服务器
   `ssh -p 8024 localhost`(探针钥匙 /root/.ssh/na_probe_key)经 kalo 反隧

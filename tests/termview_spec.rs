@@ -9,8 +9,8 @@
 
 use alacritty_terminal::vte::ansi::{Color, NamedColor};
 use kfm_na::termview::{
-    self, ANSI_16, CELL_H, CELL_W, DEFAULT_BG, DEFAULT_FG, TermView, cell_origin, color_to_xrgb,
-    grid_dims, indexed_color,
+    self, ANSI_16, BOOT_COLS, BOOT_ROWS, CELL_H, CELL_W, DEFAULT_BG, DEFAULT_FG, TermView,
+    build_vendored, cell_origin, color_to_xrgb, grid_dims, indexed_color,
 };
 
 /// 测试字体夹具双环境解析（档位 2 手机自举，2026-08-15）：服务器在
@@ -1066,4 +1066,36 @@ fn spec_dump_text_视野纯文本导出() {
     let text = tv.dump_text();
     let lines: Vec<&str> = text.lines().collect();
     assert_eq!(lines, ["l3", "l4", "l5"], "回底后视野复原");
+}
+
+/// BAR-035:起手几何钉——build_vendored(真机同款)必须从 BOOT_COLS×BOOT_ROWS
+/// 起手:喂超长行,折行点必须落在 BOOT_COLS;喂超行数,视野行数 = BOOT_ROWS。
+/// 意义:na-replay 与真机共享这对常量,谁把起手几何改了,这里先红,
+/// 「回放=读屏」判卷才不会静默漂走(2026-08-25 终验实拍的漂移路径)
+#[test]
+fn spec_bar035_内嵌终端_起手几何钉() {
+    let (mut tv, _, _) = build_vendored().expect("内嵌字体必须在");
+    // 列:BOOT_COLS+10 个 a,折行点必须恰好 BOOT_COLS
+    tv.feed("a".repeat(BOOT_COLS as usize + 10).as_bytes());
+    tv.feed(b"\r\n");
+    let text = tv.dump_text();
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(
+        lines[0].chars().count(),
+        BOOT_COLS as usize,
+        "折行点=BOOT_COLS"
+    );
+    assert_eq!(lines[1].chars().count(), 10, "余量进第二行");
+
+    // 行:BOOT_ROWS+5 行灌进去,贴底视野必须恰好 BOOT_ROWS 行
+    let mut tv = build_vendored().expect("内嵌字体必须在").0;
+    for i in 0..(BOOT_ROWS + 5) {
+        tv.feed(format!("r{i}\r\n").as_bytes());
+    }
+    let text = tv.dump_text();
+    assert_eq!(
+        text.lines().count(),
+        BOOT_ROWS as usize,
+        "贴底视野行数=BOOT_ROWS"
+    );
 }
