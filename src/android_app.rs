@@ -432,9 +432,15 @@ impl App {
 
         // 上机提示(L1 实拍后用户要「至少一个提示」):app 级快捷键 shell
         // 看不见,开局直接印在网格上(只 feed 视图,不进 PTY 不污染会话)。
-        // 每次冷启动印一次;滚屏可回看
+        // 每次冷启动印一次;滚屏可回看。
+        // 同时 tap 进飞行记录仪(按启动时活跃名)——它上了屏就是屏幕事实,
+        // 不记则「回放末屏=读屏」判卷每次冷启动都差这 5 行(2026-08-25 实拍)
         if let Some(t) = self.term_handle() {
             t.lock().unwrap().feed(HELP_BANNER.as_bytes());
+            let active = self
+                .router_handle()
+                .map_or("local", |r| r.lock().unwrap().active_name());
+            crate::gate::rec_output(active, HELP_BANNER.as_bytes());
         }
 
         // 首发尺寸：Opened 前 outbound 会被 conn 层缓存，绑定后补发
