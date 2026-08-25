@@ -184,6 +184,7 @@ pub fn spawn_gate_watcher() {
             dump_now(DUMP_DIR);
             text_dump(DUMP_DIR);
             inject_keys(DUMP_DIR);
+            watch_loop(DUMP_DIR);
         }
     });
 }
@@ -625,4 +626,140 @@ fn start_recorder(dir: &str) {
             }
         }
     });
+}
+
+// ---- 死亡观测:panic 落盘 + loop 看门狗(2026-08-25 与用户定) ----
+//
+// 补的是自观测最后的瞎区:「它是怎么死的」。记录仪能答死前屏幕什么样
+// (flight-rec.prev.bin 保全现场),但答不了为什么死——panic 信息原本
+// 直接进 logcat 黑洞(线程 panic 更是无声无息),循环卡死/冬眠此前只能
+// 靠人肉推理(blackout 案、BAR-029 冻结案都是这么硬查的)。
+//
+// 两路都守观测铁律:落盘失败静默、自身绝不许 panic、不拖垮本体。
+
+/// panic 落盘文件(闸门目录,追加制——一世可能 panic 多次)
+pub const PANIC_FILE: &str = "panic.log";
+/// loop 看门狗档案(只在状态迁移时写,不刷屏)
+pub const LOOP_STALL_FILE: &str = "loop-stall.log";
+/// 心跳龄期阈值:重绘泵是忙轮询(about_to_wait 无条件 request_redraw,
+/// 正常一秒几十圈),超此即卡死/冬眠。看门狗因此可以纯被动——
+/// 不需要 proxy 探针(proxy 挂起态本来就送不达,实锤过的弯路)
+pub const LOOP_STALL_MS: u64 = 3_000;
+
+static LOOP_BEAT_MS: AtomicU64 = AtomicU64::new(0); // 0 = 未起跳
+static LOOP_BEAT_T0: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+static WATCH_STALLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// UI 循环每圈盖戳(android_app about_to_wait 首行调)
+pub fn note_loop_beat() {
+    let ms = LOOP_BEAT_T0
+        .get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_millis() as u64;
+    LOOP_BEAT_MS.store(ms, Ordering::Relaxed);
+}
+
+/// 心跳龄期(None = 循环还没起跳过)
+pub fn loop_beat_age_ms() -> Option<u64> {
+    let beat = LOOP_BEAT_MS.load(Ordering::Relaxed);
+    if beat == 0 {
+        return None;
+    }
+    let now = LOOP_BEAT_T0.get()?.elapsed().as_millis() as u64;
+    Some(now.saturating_sub(beat))
+}
+
+/// 卡死判定(纯函数,钉边界)
+pub fn is_stall(age_ms: u64) -> bool {
+    age_ms > LOOP_STALL_MS
+}
+
+/// panic 档案行格式(纯函数,钉格式):unix 秒 + 线程名 + 位置 + 消息。
+/// 消息内换行一律换成 ␤——一行一案,grep/awk 友好,不许撕成多行
+pub fn panic_line(unix_secs: u64, thread: &str, loc: &str, msg: &str) -> String {
+    format!(
+        "unix={unix_secs} thread={thread} at={loc} msg={}",
+        msg.replace('\n', "␤")
+    )
+}
+
+/// 装 panic 钩子(android_main 挂,替换旧的「仅 report 异步直报」版):
+/// ①落盘闸门目录(进程死了现场还在,8024 随时可查);②report 异步直报
+/// (尽力而为——冲洗队列随进程死会丢,所以它只是补充不是主道);
+/// ③链默认钩子(logcat 照走)。线程 panic 同样收——记录仪/值守线程
+/// 若死,此前无声无息。三处失败都必须静默(观测铁律):hook 自己
+/// panic = 进程直接 abort
+pub fn install_panic_hook(dir: &str) {
+    let default_hook = std::panic::take_hook();
+    let path = std::path::PathBuf::from(dir).join(PANIC_FILE);
+    std::panic::set_hook(Box::new(move |info| {
+        let thread = std::thread::current();
+        let tname = thread.name().unwrap_or("<无名>").to_owned();
+        let loc = info
+            .location()
+            .map(|l| format!("{}:{}", l.file(), l.line()))
+            .unwrap_or_else(|| "-".into());
+        let msg = if let Some(s) = info.payload().downcast_ref::<&str>() {
+            (*s).to_owned()
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "<非串荷载>".into()
+        };
+        let unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let line = panic_line(unix, &tname, &loc, &msg);
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+        {
+            use std::io::Write;
+            let _ = writeln!(f, "{line}");
+        }
+        crate::report::report("panic", &line);
+        default_hook(info);
+    }));
+}
+
+/// 值守每轮一查:①看门狗——心跳龄期过阈写迁移档(卡死/复活各一行,
+/// 同步 report 让服务器实时看见);②ping 探测——ping-req 触发写
+/// ping-res(8024 侧 na-ping.sh 随查随答)
+fn watch_loop(dir: &str) {
+    let age = loop_beat_age_ms();
+    let stalled = age.is_some_and(is_stall);
+    let was = WATCH_STALLED.swap(stalled, Ordering::Relaxed);
+    if stalled != was {
+        let unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let line = if stalled {
+            format!("unix={unix} STALL beat_age={}ms", age.unwrap_or(0))
+        } else {
+            format!("unix={unix} RECOVERED(恢复盖戳)")
+        };
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(std::path::PathBuf::from(dir).join(LOOP_STALL_FILE))
+        {
+            use std::io::Write;
+            let _ = writeln!(f, "{line}");
+        }
+        crate::report::report("loop", &line);
+    }
+
+    let preq = std::path::PathBuf::from(dir).join("ping-req");
+    if preq.exists() {
+        std::fs::remove_file(&preq).ok();
+        let verdict = match age {
+            None => "loop 未起跳(事件循环还没跑起来)".to_string(),
+            Some(a) if is_stall(a) => format!("stall beat_age={a}ms(>{LOOP_STALL_MS}ms)"),
+            Some(a) => format!("alive beat_age={a}ms"),
+        };
+        std::fs::write(std::path::PathBuf::from(dir).join("ping-res"), verdict).ok();
+    }
 }

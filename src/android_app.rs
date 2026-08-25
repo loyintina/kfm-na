@@ -1272,6 +1272,7 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, _el: &ActiveEventLoop) {
+        crate::gate::note_loop_beat(); // 看门狗心跳:忙轮询每圈盖戳
         if TERMINAL_MODE {
             self.drain_terminal_events();
             self.drain_ime_inject();
@@ -1334,9 +1335,10 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
             option_env!("KFM_NA_VC").unwrap_or("dev")
         ),
     );
-    std::panic::set_hook(Box::new(|info| {
-        crate::report::report("panic", &info.to_string());
-    }));
+    // panic 钩子(2026-08-25 升级):旧版仅 report 异步直报——进程死了
+    // 冲洗队列同归于尽,收不到;且 logcat 链被顶掉。新版落盘闸门目录
+    // panic.log 为主、report 为辅、链默认钩子,线程 panic 也收
+    crate::gate::install_panic_hook(crate::gate::DUMP_DIR);
     // ws 冒烟（尖刺切片 3 对照组）：连服务器 terminal-pty 跑 echo 闭环，
     // 判卷 = field-reports.log 的 [ws] 四格。TERMINAL_MODE=true 时让位给
     // 常驻会话（resumed 里 spawn），冒烟路径保留作回退开关

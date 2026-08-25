@@ -20,6 +20,15 @@
   自抓三虫：BAR-033（开局横幅绕泵未入带）、BAR-034（记录带跨重启
   追加→开机轮换 .prev）、BAR-035（回放器起手几何与真机不同胚→
   共享常量 BOOT_COLS×BOOT_ROWS)。
+- **死亡观测落地（2026-08-25，本提交）**：自观测第二块——「它是怎么死
+  的」。①panic 落盘：install_panic_hook 三件套（闸门目录 panic.log
+  追加为主、report 直报为辅、链默认钩子），行格式钉死一行一案，
+  线程 panic 也收（替换旧的「仅异步直报」版——进程死了队列同归于尽
+  收不到）。②loop 看门狗：about_to_wait 每圈盖心跳戳（忙轮询泵），
+  值守线程比龄期，>3s 卡死/复活迁移写 loop-stall.log + report;
+  ping-req→ping-res 随查（scripts/na-ping.sh）。纯被动，不用 proxy
+  （挂起态送不达是实锤过的弯路）。考题 gate_spec 3 道（卡死边界/
+  panic 行格式/多行压单行）。全文 docs/active/调试闸门.md §八。
   设计全文 docs/active/调试闸门.md §六。
 - **L2 自远程闸门通车（2026-08-23,等长二进制改写方案）**:服务器
   `ssh -p 8024 localhost`(探针钥匙 /root/.ssh/na_probe_key)经 kalo 反隧

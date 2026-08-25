@@ -191,3 +191,42 @@ fn spec_keys_in_原子取走协议() {
     assert_eq!(drain_keys_in(d).as_deref(), Some("你好\x03\r"));
     std::fs::remove_dir_all(&dir).ok();
 }
+
+// ---- 死亡观测考题(2026-08-25,与用户定:panic 落盘 + loop 看门狗) ----
+
+/// 卡死判定边界:龄期 ≤ 阈值不报警,> 阈值才报警(阈值含在「正常」侧,
+/// 忙轮询循环 3s 没盖戳已是铁案,不许误报也不许漏报)
+#[test]
+fn spec_看门狗_卡死判定边界() {
+    use kfm_na::gate::{LOOP_STALL_MS, is_stall};
+    assert!(!is_stall(0));
+    assert!(!is_stall(LOOP_STALL_MS - 1));
+    assert!(!is_stall(LOOP_STALL_MS), "恰达阈值不报警(边界归正常侧)");
+    assert!(is_stall(LOOP_STALL_MS + 1));
+    assert!(is_stall(u64::MAX));
+}
+
+/// panic 档案行格式钉死:unix=秒 thread=名 at=位置 msg=消息,
+/// 单行(消息里哪怕有换行也不许撕成两行——一行一案,grep 友好)
+#[test]
+fn spec_panic行_格式钉() {
+    use kfm_na::gate::panic_line;
+    let line = panic_line(1787654400, "main", "src/gate.rs:100", "boom");
+    assert_eq!(
+        line,
+        "unix=1787654400 thread=main at=src/gate.rs:100 msg=boom"
+    );
+    // 无名线程与缺位置的组合也要成形
+    let line = panic_line(1, "<无名>", "-", "<非串荷载>");
+    assert_eq!(line, "unix=1 thread=<无名> at=- msg=<非串荷载>");
+    assert!(!line.contains('\n'), "一行一案");
+}
+
+/// 多行消息必须压成一行(换行→␤),档案 grep 不被撕碎
+#[test]
+fn spec_panic行_多行消息压单行() {
+    use kfm_na::gate::panic_line;
+    let line = panic_line(2, "t", "x.rs:1", "第一行\n第二行\n第三行");
+    assert_eq!(line, "unix=2 thread=t at=x.rs:1 msg=第一行␤第二行␤第三行");
+    assert_eq!(line.matches('\n').count(), 0);
+}
