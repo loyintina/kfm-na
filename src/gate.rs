@@ -168,6 +168,7 @@ pub fn inject_keys(dir: &str) {
 
 /// 起闸门值守线程（android_main 调一次）：300ms 一轮，泵 + 三通道各查一遍
 pub fn spawn_gate_watcher() {
+    start_recorder(DUMP_DIR); // 飞行记录仪同生同灭
     std::thread::spawn(|| {
         loop {
             std::thread::sleep(std::time::Duration::from_millis(300));
@@ -226,8 +227,15 @@ impl SessionPump {
 
     /// 抽干一轮：活跃方 Output 喂 sink（返回 true = 喂过，调用方置 dirty）；
     /// 待机方 Output 进 replay（限量丢最旧）；控制事件进控制队列等 UI。
+    /// rec = 飞行记录仪见证回调：一切 Output 全量带名经过它（与路由无关），
+    /// 纯回调注入，泵自身零 IO 保持 host 可判卷。
     /// 跨槽顺序不保证（每槽内 FIFO 保序）——会话间本无因果序
-    pub fn pump(&mut self, active: &str, sink: &mut dyn FnMut(&[u8])) -> bool {
+    pub fn pump(
+        &mut self,
+        active: &str,
+        sink: &mut dyn FnMut(&[u8]),
+        rec: &mut dyn FnMut(&str, &[u8]),
+    ) -> bool {
         // 先全槽抽干成批次（借 &self.slots)，再处理（要 &mut self)——
         // 一趟借完再改，不嵌套
         let mut batches: Vec<(&'static str, Vec<SessionEvent>)> = Vec::new();
@@ -245,10 +253,14 @@ impl SessionPump {
             for ev in batch {
                 match ev {
                     SessionEvent::Output { data } if name == active => {
+                        rec(name, data.as_bytes());
                         sink(data.as_bytes());
                         fed = true;
                     }
-                    SessionEvent::Output { data } => self.push_replay(name, data),
+                    SessionEvent::Output { data } => {
+                        rec(name, data.as_bytes());
+                        self.push_replay(name, data);
+                    }
                     ctl => {
                         if self.control.len() >= CONTROL_CAP {
                             self.control.pop_front();
@@ -315,9 +327,12 @@ pub fn pump_register(name: &'static str, rx: Receiver<SessionEvent>) {
 }
 
 /// 抽干一轮（壳每圈 + 值守线程 300ms)。active = 当时活跃会话名；
-/// sink 收活跃方输出字节。返回 true = 喂过（调用方置 dirty)
+/// sink 收活跃方输出字节。返回 true = 喂过（调用方置 dirty)。
+/// rec 见证接飞行记录仪（入队即返回，IO 归记录仪线程）
 pub fn pump_once(active: &str, sink: &mut dyn FnMut(&[u8])) -> bool {
-    PUMP.lock().unwrap().pump(active, sink)
+    PUMP.lock()
+        .unwrap()
+        .pump(active, sink, &mut |name, bytes| rec_output(name, bytes))
 }
 
 /// 控制事件出队（仅 UI 调）
@@ -356,4 +371,244 @@ pub fn maybe_dump(dir: &str, buf: &[u32], w: u32, h: u32) -> bool {
     }
     let _ = std::fs::write(Path::new(dir).join("shot.dim"), format!("{w} {h}"));
     true
+}
+
+// ---- 飞行记录仪（2026-08-24 自观测·确定性回放，与用户定） ----
+//
+// 一切会话 Output 经泵的 rec 见证回调全量带名落带，resize 事件同带——
+// host 回放器（src/bin/na-replay.rs）把字节流喂进同一台 TermView,
+// 渲染现场不用碰手机就能复现。落盘 = 单文件 flight-rec.bin（时间线
+// 保跨会话交错序,切换期的交互现场不丢）。
+//
+// 纪律:tap 入队即返回(零 IO 零分配压力可控),文件写/超帽压缩全在
+// 记录仪线程;进程死在半条记录 = 截尾,解码端容忍(考题 2)。
+
+/// 记录文件魔数（防拿错文件白分析）
+pub const REC_MAGIC: &[u8] = b"KFMREC01\n";
+/// 记录文件帽（超帽保新丢旧,单条超帽也留最新一条——那是案发点）
+pub const REC_FILE_CAP: usize = 2 * 1024 * 1024;
+/// 记录文件名（闸门目录下）
+pub const REC_FILE: &str = "flight-rec.bin";
+
+/// 一条记录（解码侧 owned;ts_ms = 记录仪启动起的毫秒）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RecEvent {
+    Output {
+        ts_ms: u64,
+        name: String,
+        data: Vec<u8>,
+    },
+    Resize {
+        ts_ms: u64,
+        name: String,
+        cols: u32,
+        rows: u32,
+        cell_w: u32,
+        cell_h: u32,
+    },
+}
+
+impl RecEvent {
+    pub fn ts_ms(&self) -> u64 {
+        match self {
+            RecEvent::Output { ts_ms, .. } | RecEvent::Resize { ts_ms, .. } => *ts_ms,
+        }
+    }
+}
+
+// 记录线格式:[u64 ts_ms][u8 kind][u8 name_len][name][u32 a][u32 b]
+//             [u32 payload_len][payload]
+// kind 1 = Output(a=b=0,payload=字节流);kind 2 = Resize(a=cols,b=rows,
+// payload = 8B: cell_w u32 + cell_h u32)。未知 kind 按 payload_len 跳过
+// (前向兼容);截尾(半条记录)安静丢弃。
+
+/// 编码一条记录（纯函数,考题钉死）
+pub fn rec_encode(ev: &RecEvent) -> Vec<u8> {
+    let mut out = Vec::new();
+    let (kind, name, a, b, payload): (u8, &str, u32, u32, Vec<u8>) = match ev {
+        RecEvent::Output { name, data, .. } => (1, name.as_str(), 0, 0, data.clone()),
+        RecEvent::Resize {
+            name,
+            cols,
+            rows,
+            cell_w,
+            cell_h,
+            ..
+        } => {
+            let mut p = Vec::with_capacity(8);
+            p.extend_from_slice(&cell_w.to_le_bytes());
+            p.extend_from_slice(&cell_h.to_le_bytes());
+            (2, name.as_str(), *cols, *rows, p)
+        }
+    };
+    out.extend_from_slice(&ev.ts_ms().to_le_bytes());
+    out.push(kind);
+    out.push(name.len().min(255) as u8);
+    out.extend_from_slice(&name.as_bytes()[..name.len().min(255)]);
+    out.extend_from_slice(&a.to_le_bytes());
+    out.extend_from_slice(&b.to_le_bytes());
+    out.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    out.extend_from_slice(&payload);
+    out
+}
+
+/// 解码整条记录流（须带魔数;截尾容忍——最后半条安静丢;未知 kind 跳过）
+pub fn rec_decode_all(buf: &[u8]) -> Result<Vec<RecEvent>, String> {
+    if !buf.starts_with(REC_MAGIC) {
+        return Err("坏魔数:不是记录仪文件".into());
+    }
+    let mut evs = Vec::new();
+    let mut cur = &buf[REC_MAGIC.len()..];
+    loop {
+        // 固定头:8(ts)+1(kind)+1(nlen),nlen 后才知全长
+        if cur.len() < 10 {
+            break;
+        }
+        let ts_ms = u64::from_le_bytes(cur[..8].try_into().unwrap());
+        let kind = cur[8];
+        let nlen = cur[9] as usize;
+        let rest = &cur[10..];
+        if rest.len() < nlen + 12 {
+            break; // 截尾:名字/定长段不全
+        }
+        let name = String::from_utf8_lossy(&rest[..nlen]).into_owned();
+        let a = u32::from_le_bytes(rest[nlen..nlen + 4].try_into().unwrap());
+        let b = u32::from_le_bytes(rest[nlen + 4..nlen + 8].try_into().unwrap());
+        let plen = u32::from_le_bytes(rest[nlen + 8..nlen + 12].try_into().unwrap()) as usize;
+        if rest.len() < nlen + 12 + plen {
+            break; // 截尾:payload 不全
+        }
+        let payload = &rest[nlen + 12..nlen + 12 + plen];
+        match kind {
+            1 => evs.push(RecEvent::Output {
+                ts_ms,
+                name,
+                data: payload.to_vec(),
+            }),
+            2 if plen == 8 => evs.push(RecEvent::Resize {
+                ts_ms,
+                name,
+                cols: a,
+                rows: b,
+                cell_w: u32::from_le_bytes(payload[..4].try_into().unwrap()),
+                cell_h: u32::from_le_bytes(payload[4..].try_into().unwrap()),
+            }),
+            _ => {} // 未知 kind:跳过
+        }
+        cur = &rest[nlen + 12 + plen..];
+    }
+    Ok(evs)
+}
+
+/// 超帽压缩（纯函数,考题钉死）:保新丢旧、魔数保留;单条超帽也留最新
+/// 一条(宁爆帽不丢案发点)。帽内原样返回。输入坏魔数 = Err 原样上交。
+pub fn rec_compact(buf: &[u8], cap: usize) -> Vec<u8> {
+    if buf.len() <= cap {
+        return buf.to_vec();
+    }
+    let Ok(evs) = rec_decode_all(buf) else {
+        return buf.to_vec(); // 解不开的不动(压缩器不毁尸灭迹)
+    };
+    // 从最新往最旧攒,攒到帽沿停手(至少留最新一条)
+    let mut kept: Vec<&RecEvent> = Vec::new();
+    let mut budget = cap.saturating_sub(REC_MAGIC.len());
+    for ev in evs.iter().rev() {
+        let sz = rec_encode(ev).len();
+        if sz > budget && !kept.is_empty() {
+            break;
+        }
+        budget = budget.saturating_sub(sz);
+        kept.push(ev);
+    }
+    kept.reverse();
+    let mut out = REC_MAGIC.to_vec();
+    for ev in kept {
+        out.extend_from_slice(&rec_encode(ev));
+    }
+    out
+}
+
+// ---- 记录仪线程（生产面) ----
+
+static REC_TX: Mutex<Option<std::sync::mpsc::Sender<RecEvent>>> = Mutex::new(None);
+static REC_T0: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
+fn rec_ts() -> u64 {
+    REC_T0
+        .get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_millis() as u64
+}
+
+/// 输出落带（泵 rec 见证回调经 pump_once 到这里）:入队即返回。
+/// 记录仪没起(单测/早期) = 静默丢,同 report 铁律:观测通道不拖垮本体
+pub fn rec_output(name: &str, data: &[u8]) {
+    let tx = REC_TX.lock().unwrap().clone();
+    if let Some(tx) = tx {
+        let _ = tx.send(RecEvent::Output {
+            ts_ms: rec_ts(),
+            name: name.to_owned(),
+            data: data.to_vec(),
+        });
+    }
+}
+
+/// 尺寸事件落带（壳 apply_window_size 调）:回放网格几何的锚点
+pub fn rec_resize(name: &str, cols: u32, rows: u32, cell_w: u32, cell_h: u32) {
+    let tx = REC_TX.lock().unwrap().clone();
+    if let Some(tx) = tx {
+        let _ = tx.send(RecEvent::Resize {
+            ts_ms: rec_ts(),
+            name: name.to_owned(),
+            cols,
+            rows,
+            cell_w,
+            cell_h,
+        });
+    }
+}
+
+/// 起记录仪线程（spawn_gate_watcher 调一次,幂等）
+fn start_recorder(dir: &str) {
+    let mut guard = REC_TX.lock().unwrap();
+    if guard.is_some() {
+        return;
+    }
+    let (tx, rx) = std::sync::mpsc::channel::<RecEvent>();
+    *guard = Some(tx);
+    let path = std::path::PathBuf::from(dir).join(REC_FILE);
+    std::thread::spawn(move || {
+        use std::io::Write;
+        // 新文件先写魔数;已有文件接着录(重启=新时间线,追加不截断——
+        // 时间戳从 0 重计,回放器按魔数后 ts 回退点自知分段,v1 够用)
+        if !path.exists()
+            && let Ok(mut f) = std::fs::File::create(&path)
+        {
+            let _ = f.write_all(REC_MAGIC);
+        }
+        loop {
+            // 阻塞等第一条,再非阻塞排空(批量写,省 IO 次数)
+            let Ok(first) = rx.recv() else { return };
+            let mut batch = vec![first];
+            while let Ok(ev) = rx.try_recv() {
+                batch.push(ev);
+            }
+            let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(&path) else {
+                continue; // 文件打不开:丢批次不拖垮(观测通道铁律)
+            };
+            for ev in &batch {
+                let _ = f.write_all(&rec_encode(ev));
+            }
+            drop(f);
+            // 超帽压缩(读全量→保新丢旧→重写;2MB 级别,代价可忽略)
+            let Ok(meta) = std::fs::metadata(&path) else {
+                continue;
+            };
+            if meta.len() as usize > REC_FILE_CAP
+                && let Ok(data) = std::fs::read(&path)
+            {
+                let _ = std::fs::write(&path, rec_compact(&data, REC_FILE_CAP));
+            }
+        }
+    });
 }

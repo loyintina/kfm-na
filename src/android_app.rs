@@ -462,6 +462,11 @@ impl App {
         let (cols, rows) = termview::grid_dims(usable_w, usable_h, cw, ch);
         term.lock().unwrap().resize_cells(cols, rows);
         self.last_grid = (cols, rows);
+        // 飞行记录仪:尺寸事件落带(回放网格几何的锚点;名字记当时活跃方)
+        if let Some(r) = self.router_handle() {
+            let name = r.lock().unwrap().active_name();
+            crate::gate::rec_resize(name, cols, rows, cw, ch);
+        }
         if !self.session_over
             && let Some(r) = self.router_handle()
         {

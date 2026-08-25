@@ -3,8 +3,20 @@
 > 纪律：**每个里程碑必更新此页**。接手者冷启动顺序：本页 → bugs.md →
 > AGENTS.md → chain.sh 跑一遍。本页只写「现在进行时」，历史功过在 bugs.md。
 
-## 当前位置（2026-08-24)
+## 当前位置（2026-08-25)
 
+- **飞行记录仪落地（2026-08-25，本提交）**：自观测路线图第一块——
+  确定性回放。泵新增 rec 见证回调（Output 先过记录仪再路由，全部
+  会话带名记录，不只活跃方）;resize 在 apply_window_size 落点旁
+  tap 一条（网格共享，回放时全应用）。格式 `KFMREC01\n` + 定长头
+  变长体记录流（kind 1=Output/2=Resize，未知 kind 按 len 跳过、
+  截尾容忍）,rec_encode/rec_decode_all/rec_compact 三纯函数出题
+  （tests/rec_spec.rs 5 道，含超帽保新丢旧）。记录仪线程独立落盘
+  `$PREFIX/tmp/flight-rec.bin`（帽 2MB，入队即返回、静默丢——观测
+  通道不许反咬业务）。host 回放器 `src/bin/na-replay.rs`：按名过滤
+  喂 TermView 真渲染，打印末屏文本+统计。一键 `scripts/na-replay.sh`
+  = scp 拉回 + 本地回放。判卷法：回放末屏须与 na-text.sh 读屏一致。
+  设计全文 docs/active/调试闸门.md §六。
 - **L2 自远程闸门通车（2026-08-23,等长二进制改写方案）**:服务器
   `ssh -p 8024 localhost`(探针钥匙 /root/.ssh/na_probe_key)经 kalo 反隧
   直入 na 沙箱 sshd(回环only/公钥only)——agent 从此能直接操作 na 终端,
