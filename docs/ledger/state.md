@@ -273,7 +273,16 @@
   三份拷贝：服务器（事实来源）/ 手机 / GitHub。提交后顺手
   `git push github master`。公开化前已过泄密扫描（无私钥/token/口令；
   商业字体有 chain.sh 第 1 步防泄漏闸 + gitignore 双保险）。注意：docs
-  里有服务器 IP 与端口布局，属用户知情同意的公开面。
+  里有服务器 IP 与端口布局，属用户知情同意的公开面（当晚实表已脱敏）。
+- **隧道生命线：kalo v3.13（2026-08-26 晚，手机 ~/bin/kalo，备份
+  kalo.bak-v3.12）**：断线根因定案 = 手机 CGNAT 公网 IP 漂移（auth.log
+  实证 7 分钟内 39.144.207.45→.203.214→.203.47 三换），漂移即黑洞、
+  服务器留僵尸监听挡新 -R 绑定；autossh 指数退避曾滚到 128s+ 拖慢
+  自愈。v3.13 对症：GATETIME=0 关退避 + POLL=15s 匀速重试、探死
+  15×2=30s、`-E ~/kalo-ssh.log` 记 ssh 死因（autossh 日志只记 exit
+  255）、隧道不通且 autossh 活着时主动重启它、判卷放缓 10×3s。
+  实证：完整拆建循环（kalo -x && kalo）秒级恢复。看门狗 = crond
+  每 5 分钟 kalo-watchdog.sh，断线最坏恢复时长 ≈ 5 分钟（通常 <1 分钟）。
 
 ## 日志判读手册（field-reports.log，踩坑攒的）
 
