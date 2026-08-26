@@ -230,3 +230,25 @@ fn spec_panic行_多行消息压单行() {
     assert_eq!(line, "unix=2 thread=t at=x.rs:1 msg=第一行␤第二行␤第三行");
     assert_eq!(line.matches('\n').count(), 0);
 }
+
+/// BAR-036:看门狗四态判决钉——前台门控是前提:挂起态(退后台)循环合法
+/// 停跳,不许报 STALL(首装实拍误报:退后台 5 分钟 beat_age=355s 报警)
+#[test]
+fn spec_bar036_看门狗_前台门控四态() {
+    use kfm_na::gate::{LOOP_STALL_MS, WatchState, watch_verdict};
+    // 退后台:龄期再大也是休假,不判
+    assert_eq!(watch_verdict(false, Some(u64::MAX)), WatchState::Background);
+    assert_eq!(watch_verdict(false, None), WatchState::Background);
+    // 前台未起跳
+    assert_eq!(watch_verdict(true, None), WatchState::NoBeat);
+    // 前台正常/卡死边界
+    assert_eq!(watch_verdict(true, Some(0)), WatchState::Alive(0));
+    assert_eq!(
+        watch_verdict(true, Some(LOOP_STALL_MS)),
+        WatchState::Alive(LOOP_STALL_MS)
+    );
+    assert_eq!(
+        watch_verdict(true, Some(LOOP_STALL_MS + 1)),
+        WatchState::Stall(LOOP_STALL_MS + 1)
+    );
+}

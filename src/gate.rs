@@ -674,6 +674,38 @@ pub fn is_stall(age_ms: u64) -> bool {
     age_ms > LOOP_STALL_MS
 }
 
+/// 前台门控(BAR-036):Activity 挂起态 about_to_wait 合法停跳(闸门
+/// 值守线程存在的理由就是这个),看门狗不认这个状态就每次退后台都
+/// 误报 STALL——首装实拍即踩(退后台 5 分钟 beat_age=355s 报警)。
+/// 壳在 resumed/suspended 喂这个状态
+static APP_FOREGROUND: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+pub fn note_foreground(fg: bool) {
+    APP_FOREGROUND.store(fg, Ordering::Relaxed);
+}
+
+/// 看门狗判决(纯函数,四态钉死)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WatchState {
+    /// 挂起休假:退后台循环合法停跳,不判
+    Background,
+    /// 前台但循环从未盖戳(还没跑起来)
+    NoBeat,
+    Alive(u64),
+    Stall(u64),
+}
+
+pub fn watch_verdict(foreground: bool, age_ms: Option<u64>) -> WatchState {
+    if !foreground {
+        return WatchState::Background;
+    }
+    match age_ms {
+        None => WatchState::NoBeat,
+        Some(a) if is_stall(a) => WatchState::Stall(a),
+        Some(a) => WatchState::Alive(a),
+    }
+}
+
 /// panic 档案行格式(纯函数,钉格式):unix 秒 + 线程名 + 位置 + 消息。
 /// 消息内换行一律换成 ␤——一行一案,grep/awk 友好,不许撕成多行
 pub fn panic_line(unix_secs: u64, thread: &str, loc: &str, msg: &str) -> String {
@@ -728,18 +760,20 @@ pub fn install_panic_hook(dir: &str) {
 /// 同步 report 让服务器实时看见);②ping 探测——ping-req 触发写
 /// ping-res(8024 侧 na-ping.sh 随查随答)
 fn watch_loop(dir: &str) {
-    let age = loop_beat_age_ms();
-    let stalled = age.is_some_and(is_stall);
+    let fg = APP_FOREGROUND.load(Ordering::Relaxed);
+    let state = watch_verdict(fg, loop_beat_age_ms());
+    // 迁移档:只在进出 Stall 时写(Background 不算恢复,算休假销案)
+    let stalled = matches!(state, WatchState::Stall(_));
     let was = WATCH_STALLED.swap(stalled, Ordering::Relaxed);
     if stalled != was {
         let unix = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        let line = if stalled {
-            format!("unix={unix} STALL beat_age={}ms", age.unwrap_or(0))
-        } else {
-            format!("unix={unix} RECOVERED(恢复盖戳)")
+        let line = match state {
+            WatchState::Stall(a) => format!("unix={unix} STALL beat_age={a}ms(前台)"),
+            WatchState::Background => format!("unix={unix} SUSPEND(退后台,挂起休假销案)"),
+            _ => format!("unix={unix} RECOVERED(前台恢复盖戳)"),
         };
         if let Ok(mut f) = std::fs::OpenOptions::new()
             .create(true)
@@ -755,10 +789,11 @@ fn watch_loop(dir: &str) {
     let preq = std::path::PathBuf::from(dir).join("ping-req");
     if preq.exists() {
         std::fs::remove_file(&preq).ok();
-        let verdict = match age {
-            None => "loop 未起跳(事件循环还没跑起来)".to_string(),
-            Some(a) if is_stall(a) => format!("stall beat_age={a}ms(>{LOOP_STALL_MS}ms)"),
-            Some(a) => format!("alive beat_age={a}ms"),
+        let verdict = match state {
+            WatchState::Background => "background(挂起休假中,看门狗不判——循环停跳合法)".to_string(),
+            WatchState::NoBeat => "loop 未起跳(前台但事件循环还没跑起来)".to_string(),
+            WatchState::Stall(a) => format!("stall beat_age={a}ms(前台 >{LOOP_STALL_MS}ms,真卡死)"),
+            WatchState::Alive(a) => format!("alive beat_age={a}ms(前台)"),
         };
         std::fs::write(std::path::PathBuf::from(dir).join("ping-res"), verdict).ok();
     }

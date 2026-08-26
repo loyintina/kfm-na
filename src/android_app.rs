@@ -885,6 +885,7 @@ impl App {
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, el: &ActiveEventLoop) {
+        crate::gate::note_foreground(true); // 看门狗出假(BAR-036)
         if self.window.is_some() {
             return;
         }
@@ -1259,6 +1260,7 @@ impl ApplicationHandler for App {
     }
 
     fn suspended(&mut self, _el: &ActiveEventLoop) {
+        crate::gate::note_foreground(false); // 看门狗休假(BAR-036):挂起停跳合法
         crate::report::report("death", "suspended——Activity 被挂起（退后台/被销毁前奏）");
         // BAR-004：Android 退后台即销毁 native 表面，softbuffer 握着的
         // ANativeWindow 变成死柄——不弃窗则回前台对着死表面画，页面消失
