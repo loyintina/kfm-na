@@ -1371,7 +1371,13 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
                 option_env!("KFM_NA_VC").unwrap_or("dev")
             ),
         );
-        std::process::exit(0);
+        // BAR-038(2026-08-26 实拍):此处直接 exit(0) 会在主线程跑 TLS
+        // 析构 → jni 0.22 sys_detach_current_thread 断言 guard_level==0
+        // 炸(left:2——冻结现场里上一次 android_main 的附着从没归还,
+        // 二次进门又叠一层)。换无线程史的新线程退:它的 TLS 干净,
+        // 断言无从触发;主线程 join 在原地等死(进程先没,join 不返回)。
+        // restart-req 路径天然免疫——它从值守线程退(装机实证干净)。
+        std::thread::spawn(|| std::process::exit(0)).join().ok();
     }
     // ws 冒烟（尖刺切片 3 对照组）：连服务器 terminal-pty 跑 echo 闭环，
     // 判卷 = field-reports.log 的 [ws] 四格。TERMINAL_MODE=true 时让位给
