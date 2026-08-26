@@ -1,0 +1,15 @@
+[package]
+name = "na-loader"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+# cdylib = APK 里被框架加载的壳; rlib 供 host 考题
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+libc = "0.2"
+
+[target.'cfg(target_os = "android")'.dependencies]
+# ANativeActivity 原始结构体(只要 internal_data_path 字段)
+ndk-sys = "0.6"

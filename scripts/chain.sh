@@ -87,7 +87,11 @@ bash scripts/test-overlay.sh || { echo "❌ overlay 考题不过"; exit 1; }
 # 装后校验，zsh 卡死案病根）
 bash scripts/test-kfm-pkg.sh || { echo "❌ kfm-pkg 考题不过"; exit 1; }
 
-echo "=== [chain 9/9] cargo build ==="
+echo "=== [chain 9/9] cargo build + android check ==="
 cargo build || { echo "❌ 构建不过"; exit 1; }
+# android-only 代码在 host 被 cfg 门挡死编不着(na-loader 的 ndk-sys
+# internalDataPath 字段名案,2026-08-26:host 全绿、手机才炸)——
+# check 免链接,服务器直接判 android 目标
+cargo check --target aarch64-linux-android --workspace || { echo "❌ android 目标 check 不过"; exit 1; }
 
 echo "=== [chain] ✅ 全部通过 ==="

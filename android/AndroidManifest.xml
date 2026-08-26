@@ -31,8 +31,11 @@
                  MIUI/OriginOS 启动注入 density/fontScale/uiMode 变化会触发
                  Activity relaunch，surface 在用着时被销毁 → 原生层崩、无
                  Rust panic，2026-08-13 实拍「黑屏再退」即此）。一个都不许删。 -->
-            <!-- NativeActivity 约定：原生库名（libkfm_na.so） -->
-            <meta-data android:name="android.app.lib_name" android:value="kfm_na" />
+            <!-- NativeActivity 约定：原生库名。指向焊死的加载壳
+                 libna_loader.so（热更新，2026-08-26）：它启动时 dlopen
+                 {files}/hot/libkfm_na.so（热更核心），缺失/失败才回落
+                 包内捆绑的 libkfm_na.so——核心迭代不再过安装器 -->
+            <meta-data android:name="android.app.lib_name" android:value="na_loader" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

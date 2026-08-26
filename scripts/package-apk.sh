@@ -73,7 +73,9 @@ export KFM_NA_VC="$VERSION_CODE"
 export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$LINKER"
 
 echo "=== [package 1/6] cargo build --release ($TARGET) ==="
-cargo build --release --target "$TARGET"
+# 双库:kfm_na = 核心(可被热更替换),na_loader = 焊死的加载壳
+# (manifest lib_name 指它,启动时 dlopen 热更/捆绑核心,见 crates/na-loader)
+cargo build --release --target "$TARGET" -p kfm-na -p na-loader
 
 echo "=== [package 2/6] javac（Java 皮） ==="
 rm -rf "$BUILD"
@@ -121,6 +123,7 @@ echo "=== [package 4/6] aapt2 compile+link + 装 dex/lib ==="
     --min-sdk-version "$MIN_API" --target-sdk-version "$TARGET_SDK" \
     --version-code "$VERSION_CODE" --version-name "$VERSION_NAME"
 cp "$BUILD/dex/classes.dex" "$BUILD/stage/"
+cp "target/$TARGET/release/libna_loader.so" "$BUILD/stage/lib/arm64-v8a/"
 cp "target/$TARGET/release/libkfm_na.so" "$BUILD/stage/lib/arm64-v8a/"
 # BAR-013：.so 不压缩（STORED）+ 下方 zipalign -p 页对齐，配 manifest 的
 # extractNativeLibs="false"——.so 直从 APK mmap 加载，与 dex 天然原子，

@@ -19,7 +19,7 @@
   **终判卷过（2026-08-25 装机实拍，逐行 diff 完全一致）**；判卷过程
   自抓三虫：BAR-033（开局横幅绕泵未入带）、BAR-034（记录带跨重启
   追加→开机轮换 .prev）、BAR-035（回放器起手几何与真机不同胚→
-  共享常量 BOOT_COLS×BOOT_ROWS)。
+  共享常量 BOOT_COLS×BOOT_ROWS)。设计全文 docs/active/调试闸门.md §六。
 - **死亡观测落地（2026-08-25，本提交）**：自观测第二块——「它是怎么死
   的」。①panic 落盘：install_panic_hook 三件套（闸门目录 panic.log
   追加为主、report 直报为辅、链默认钩子），行格式钉死一行一案，
@@ -29,7 +29,15 @@
   ping-req→ping-res 随查（scripts/na-ping.sh）。纯被动，不用 proxy
   （挂起态送不达是实锤过的弯路）。考题 gate_spec 3 道（卡死边界/
   panic 行格式/多行压单行）。全文 docs/active/调试闸门.md §八。
-  设计全文 docs/active/调试闸门.md §六。
+- **热更新：loader/核心分离（2026-08-26，本提交）**：manifest lib_name
+  改指焊死的加载壳 libna_loader.so（新 crate crates/na-loader，只做
+  选择+转发），核心 libkfm_na.so 可被 {files}/hot/ 下的热更件替换——
+  改码不再重打 APK 过安装器：na-push-so.sh 推进沙箱 → 重启即生效。
+  回落纪律：热更缺失/dlopen 失败自动回落包内捆绑核心，每次选择落档
+  loader-pick（跑的是谁必须可查）。考题 tests/loader_spec.rs 3 道。
+  这是插件宿主胚胎：壳↔核心只隔 dlopen+固定入口符号。全文
+  docs/active/热更新.md。自动重启通道（restart-req）与 BAR-037
+  重跑防御押后做。
 - **L2 自远程闸门通车（2026-08-23,等长二进制改写方案）**:服务器
   `ssh -p 8024 localhost`(探针钥匙 /root/.ssh/na_probe_key)经 kalo 反隧
   直入 na 沙箱 sshd(回环only/公钥only)——agent 从此能直接操作 na 终端,

@@ -1,6 +1,6 @@
 [workspace]
 # 根包 kfm-na 是隐式成员；cordis-na = 通用运行时（基座搬家，2026-08-17 阶段 1）
-members = ["crates/cordis-na"]
+members = ["crates/cordis-na", "crates/na-loader"]
 
 [package]
 name = "kfm-na"
@@ -61,6 +61,8 @@ opt-level = 2
 
 [dev-dependencies]
 tempfile = "3.27.0"
+# 加载器纯函数考题(tests/loader_spec.rs)
+na-loader = { path = "crates/na-loader" }
 
 # 尖刺期：release 也签 Android 官方 debug keystore（口令公开，配置在
 # scripts/package-apk.sh）；正式发布前必须换正式 keystore 并走密钥管理
