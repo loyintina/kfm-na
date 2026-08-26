@@ -3,8 +3,19 @@
 > 纪律：**每个里程碑必更新此页**。接手者冷启动顺序：本页 → bugs.md →
 > AGENTS.md → chain.sh 跑一遍。本页只写「现在进行时」，历史功过在 bugs.md。
 
-## 当前位置（2026-08-25)
+## 当前位置（2026-08-26)
 
+- **热更新闭环收官：自动重启通道 + BAR-037 重跑防御（2026-08-26，
+  本提交）**：①gate 第五条通道 restart-req——值守线程见触发文件即
+  遗言直报 + `exit(0)`，不经过事件循环（挂起态也杀得死）；②
+  BAR-037 防御——android_main 极早期静态 ANDROID_MAIN_RAN 检测，
+  二次进门遗言 + `exit(0)` 让位（ROM 冻结打断 exit(0) 的窗口期，
+  拉回即重跑的 panic 病根拔除）；③scripts/na-restart.sh 一键闭环：
+  触发→等 8024 断连→am start 拉回（冻结案补第二次）→等新 boot
+  报告→na-ping 判卷；na-push-so.sh 默认联动自动重启（--no-restart
+  可关）。边界诚实写进脚本注释：熄屏/锁屏 am start 可能被系统挡，
+  那时提示手动点图标。考场 = 装机推热更→自动重启→四件套判卷
+  （boot 构建戳/loader-pick hot/ping alive/panic.log 无新行）。
 - **飞行记录仪落地（2026-08-25，本提交）**：自观测路线图第一块——
   确定性回放。泵新增 rec 见证回调（Output 先过记录仪再路由，全部
   会话带名记录，不只活跃方）;resize 在 apply_window_size 落点旁
@@ -37,7 +48,9 @@
   loader-pick（跑的是谁必须可查）。考题 tests/loader_spec.rs 3 道。
   这是插件宿主胚胎：壳↔核心只隔 dlopen+固定入口符号。全文
   docs/active/热更新.md。自动重启通道（restart-req）与 BAR-037
-  重跑防御押后做。
+  重跑防御押后做。**装机实证过（d7f9bab,2026-08-26）**：首启
+  loader-pick = `pick=bundled why=无热更核心`；na-push-so.sh 推核心
+  6MB 入 hot/，划掉重开 = `pick=hot`，读屏/看门狗功能全正常。
 - **L2 自远程闸门通车（2026-08-23,等长二进制改写方案）**:服务器
   `ssh -p 8024 localhost`(探针钥匙 /root/.ssh/na_probe_key)经 kalo 反隧
   直入 na 沙箱 sshd(回环only/公钥only)——agent 从此能直接操作 na 终端,

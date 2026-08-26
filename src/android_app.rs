@@ -46,6 +46,12 @@ use crate::report::boot_ms;
 /// （2026-08-22 探针拆除案保留此机制作冗余兜底；当日「系统扣 Redraw 2.5s」
 /// 后查明是自家主线程同步探针堵出来的假象，见 bugs.md/启动战役通报）
 static FIRST_REDRAW_SEEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// BAR-037 重跑防御：android_main 是否已在本进程跑过。
+/// ROM 会把进程冻在 exit(0) 之前（BAR-029 保活又抬高了存活率），旧进程
+/// 活着但事件循环已毁；再点图标/am start 会同进程重跑 android_main，
+/// 重复起线程 + EventLoop::new 必 panic（RecreationAttempt）。第二次进门
+/// 直接体面 exit(0) 让位——系统随后起的是全新进程。
+static ANDROID_MAIN_RAN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// 终端模式开关：true = 启动即进终端画面；false = 紫屏 + echo 冒烟对照组
 const TERMINAL_MODE: bool = true;
@@ -1341,6 +1347,22 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
     // 冲洗队列同归于尽,收不到;且 logcat 链被顶掉。新版落盘闸门目录
     // panic.log 为主、report 为辅、链默认钩子,线程 panic 也收
     crate::gate::install_panic_hook(crate::gate::DUMP_DIR);
+    // BAR-037 重跑防御：必须卡在任何线程 spawn 与 EventLoop::build 之前。
+    // 旧进程被 ROM 冻结保住（exit(0) 没跑完），循环已毁；同进程二进
+    // android_main 若往下走 = 心跳/值守线程重复起 + EventLoop::new
+    // panic(RecreationAttempt,panic.log 2026-08-26 已捕获)。遗言用
+    // report_sync 同步直报——紧随的 exit(0) 不会给它异步入队的机会。
+    if ANDROID_MAIN_RAN.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        crate::report::report_sync(
+            "death",
+            &format!(
+                "android_main 重跑让位 (构建 {} · vc{})",
+                option_env!("KFM_NA_BUILD").unwrap_or("dev"),
+                option_env!("KFM_NA_VC").unwrap_or("dev")
+            ),
+        );
+        std::process::exit(0);
+    }
     // ws 冒烟（尖刺切片 3 对照组）：连服务器 terminal-pty 跑 echo 闭环，
     // 判卷 = field-reports.log 的 [ws] 四格。TERMINAL_MODE=true 时让位给
     // 常驻会话（resumed 里 spawn），冒烟路径保留作回退开关

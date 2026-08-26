@@ -9,6 +9,15 @@
 //! | shot-req  | 锁终端离屏光栅化当前帧          | shot.rgb + shot.dim |
 //! | text-req  | 锁终端导当前视野纯文本          | screen.txt          |
 //! | keys-in   | 内容当裸字节发活跃会话 PTY      | 无（注入即消费）     |
+//! | ping-req  | 回一行 alive 报告（活性探测）    | 无（报告即回执）     |
+//! | restart-req | 记遗言后 exit(0) 体面退出     | 无（Termux 侧拉回）  |
+//!
+//! restart-req 是热更新闭环的重启腿（2026-08-26 与用户定）：推完热更核心
+//! 后要换进程才生效。值守线程见到触发文件即同步直报遗言、就地退出——
+//! 不经过事件循环，挂起态也杀得死；进程没了由 Termux 侧 am start 拉回
+//! （scripts/na-restart.sh 一键：触发→等死→拉回→等新 boot→ping 判卷）。
+//! 若进程被 ROM 冻结（线程不进片，触发文件没人看），拉回时 android_main
+//! 重跑，BAR-037 防御接住：遗言 + exit(0)，系统另起全新进程。
 //!
 //! 服务器一键入口：scripts/na-shot.sh / na-text.sh / na-type.sh。
 //!
@@ -185,6 +194,7 @@ pub fn spawn_gate_watcher() {
             text_dump(DUMP_DIR);
             inject_keys(DUMP_DIR);
             watch_loop(DUMP_DIR);
+            restart_check(DUMP_DIR);
         }
     });
 }
@@ -797,4 +807,19 @@ fn watch_loop(dir: &str) {
         };
         std::fs::write(std::path::PathBuf::from(dir).join("ping-res"), verdict).ok();
     }
+}
+
+// ---- 通道五：restart-req → 体面退出（热更闭环的重启腿） ----
+
+/// restart-req 触发文件在 → 摘触发、同步直报遗言、exit(0)。
+/// 从值守线程直接退进程，不经过事件循环——挂起态也杀得死。
+/// 遗言必须 report_sync：exit(0) 不给异步入队留活路（同 BAR-022 教训）。
+fn restart_check(dir: &str) {
+    let trigger = std::path::PathBuf::from(dir).join("restart-req");
+    if !trigger.exists() {
+        return;
+    }
+    std::fs::remove_file(&trigger).ok();
+    crate::report::report_sync("death", "restart-req 收到,体面退出(等 Termux 拉回)");
+    std::process::exit(0);
 }
