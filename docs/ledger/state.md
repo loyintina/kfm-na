@@ -14,8 +14,11 @@
   触发→等 8024 断连→am start 拉回（冻结案补第二次）→等新 boot
   报告→na-ping 判卷；na-push-so.sh 默认联动自动重启（--no-restart
   可关）。边界诚实写进脚本注释：熄屏/锁屏 am start 可能被系统挡，
-  那时提示手动点图标。考场 = 装机推热更→自动重启→四件套判卷
-  （boot 构建戳/loader-pick hot/ping alive/panic.log 无新行）。
+  那时提示手动点图标。**装机实证过（cee7cf5，2026-08-26）**：热更推
+  核心 6MB → force-stop+拉回（旧核心无 restart-req，最后一趟手动）
+  → 新核心上位后再跑 na-restart.sh 全闭环：restart-req 触发 →
+  8024 断连 → am start 拉回 → 新 boot 行 → ping 应答，四件套全对，
+  panic.log 无新行（BAR-037 旧案两行即全部）。
 - **飞行记录仪落地（2026-08-25，本提交）**：自观测路线图第一块——
   确定性回放。泵新增 rec 见证回调（Output 先过记录仪再路由，全部
   会话带名记录，不只活跃方）;resize 在 apply_window_size 落点旁
