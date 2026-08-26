@@ -20,6 +20,7 @@ pub mod scroll;
 pub mod session;
 pub mod session_router;
 pub mod termview;
+pub mod trace;
 
 #[cfg(target_os = "android")]
 pub mod android_app;

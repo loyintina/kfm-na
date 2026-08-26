@@ -88,6 +88,7 @@ pub fn start_flusher() {
 /// 全丢,启动归因两度被断供;logcat 环形缓冲在系统侧,进程死了也能捞)
 pub fn report(stage: &str, msg: &str) {
     log::info!("[{stage}] {msg}");
+    crate::trace::tap(stage, msg); // 行踪环旁路（过滤在环侧）
     enqueue(format!(
         "{{\"stage\":\"{}\",\"msg\":\"{}\"}}",
         escape_json(stage),
@@ -101,6 +102,7 @@ pub fn report(stage: &str, msg: &str) {
 /// 约 50%（移动网络抖），重试压掉大部分；最坏 3×(2s+3s) 阻塞上限，可接受。
 pub fn report_sync(stage: &str, msg: &str) {
     log::info!("[{stage}] {msg}");
+    crate::trace::tap(stage, msg);
     let line = format!(
         "{{\"stage\":\"{}\",\"msg\":\"{}\"}}",
         escape_json(stage),
@@ -120,6 +122,7 @@ pub fn report_sync(stage: &str, msg: &str) {
 /// （冲洗队列作载体已实踩不可靠：应用一划掉，队列里的行随进程死全丢）。
 pub fn report_sync_once(stage: &str, msg: &str) {
     log::info!("[{stage}] {msg}");
+    crate::trace::tap(stage, msg);
     let line = format!(
         "{{\"stage\":\"{}\",\"msg\":\"{}\"}}",
         escape_json(stage),

@@ -11,6 +11,8 @@
 //! | keys-in   | 内容当裸字节发活跃会话 PTY      | 无（注入即消费）     |
 //! | ping-req  | 回一行 alive 报告（活性探测）    | 无（报告即回执）     |
 //! | restart-req | 记遗言后 exit(0) 体面退出     | 无（Termux 侧拉回）  |
+//! | trace-req | 行踪环全量落盘（report 流本地副本） | trace.txt        |
+//! | stats-req | 运行时统计快照（帧/泵/闸门计数）  | stats-res          |
 //!
 //! restart-req 是热更新闭环的重启腿（2026-08-26 与用户定）：推完热更核心
 //! 后要换进程才生效。值守线程见到触发文件即同步直报遗言、就地退出——
@@ -90,6 +92,7 @@ pub fn register_gate_router(router: &SharedRouter) {
 /// draw_frame 每帧报尺寸（后台时没有 surface，尺寸只能来自这里）
 pub fn note_frame_size(w: u32, h: u32) {
     DUMP_WH.store(((w as u64) << 32) | h as u64, Ordering::Relaxed);
+    STAT_FRAMES.fetch_add(1, Ordering::Relaxed);
 }
 
 // ---- 通道一：shot-req → 帧倒盘 ----
@@ -110,7 +113,9 @@ pub fn dump_now(dir: &str) {
     let (w, h) = ((wh >> 32) as u32, (wh & 0xFFFF_FFFF) as u32);
     let mut buf = vec![0u32; (w as usize) * (h as usize)];
     term.lock().unwrap().render_into(&mut buf, w, h);
-    maybe_dump(dir, &buf, w, h);
+    if maybe_dump(dir, &buf, w, h) {
+        STAT_SHOTS.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 // ---- 通道二：text-req → 视野纯文本 ----
@@ -126,7 +131,11 @@ pub fn text_dump(dir: &str) -> bool {
     let Some(term) = term else { return false };
     let _ = std::fs::remove_file(&trigger);
     let text = term.lock().unwrap().dump_text();
-    std::fs::write(Path::new(dir).join("screen.txt"), text).is_ok()
+    let ok = std::fs::write(Path::new(dir).join("screen.txt"), text).is_ok();
+    if ok {
+        STAT_TEXTS.fetch_add(1, Ordering::Relaxed);
+    }
+    ok
 }
 
 // ---- 通道三：keys-in → 裸字节注入活跃会话 ----
@@ -154,6 +163,8 @@ pub fn inject_keys(dir: &str) {
         return;
     };
     let len = keys.len();
+    STAT_KEYS.fetch_add(1, Ordering::Relaxed);
+    STAT_KEYS_BYTES.fetch_add(len as u64, Ordering::Relaxed);
     let router = GATE_ROUTER.lock().unwrap().clone();
     let Some(router) = router else {
         crate::report::report(
@@ -195,6 +206,8 @@ pub fn spawn_gate_watcher() {
             inject_keys(DUMP_DIR);
             watch_loop(DUMP_DIR);
             restart_check(DUMP_DIR);
+            trace_dump(DUMP_DIR);
+            stats_answer(DUMP_DIR);
         }
     });
 }
@@ -341,9 +354,18 @@ pub fn pump_register(name: &'static str, rx: Receiver<SessionEvent>) {
 /// sink 收活跃方输出字节。返回 true = 喂过（调用方置 dirty)。
 /// rec 见证接飞行记录仪（入队即返回，IO 归记录仪线程）
 pub fn pump_once(active: &str, sink: &mut dyn FnMut(&[u8])) -> bool {
-    PUMP.lock()
-        .unwrap()
-        .pump(active, sink, &mut |name, bytes| rec_output(name, bytes))
+    let mut nbytes = 0u64;
+    let fed = PUMP.lock().unwrap().pump(
+        active,
+        &mut |b| {
+            nbytes += b.len() as u64;
+            sink(b);
+        },
+        &mut |name, bytes| rec_output(name, bytes),
+    );
+    STAT_PUMP_CALLS.fetch_add(1, Ordering::Relaxed);
+    STAT_PUMP_BYTES.fetch_add(nbytes, Ordering::Relaxed);
+    fed
 }
 
 /// 控制事件出队（仅 UI 调）
@@ -649,6 +671,8 @@ fn start_recorder(dir: &str) {
 
 /// panic 落盘文件(闸门目录,追加制——一世可能 panic 多次)
 pub const PANIC_FILE: &str = "panic.log";
+/// panic 时的行踪环落尾(覆写制——最新一案死前 64 行行踪)
+pub const PANIC_TRACE_FILE: &str = "panic-trace.txt";
 /// loop 看门狗档案(只在状态迁移时写,不刷屏)
 pub const LOOP_STALL_FILE: &str = "loop-stall.log";
 /// 心跳龄期阈值:重绘泵是忙轮询(about_to_wait 无条件 request_redraw,
@@ -734,6 +758,7 @@ pub fn panic_line(unix_secs: u64, thread: &str, loc: &str, msg: &str) -> String 
 pub fn install_panic_hook(dir: &str) {
     let default_hook = std::panic::take_hook();
     let path = std::path::PathBuf::from(dir).join(PANIC_FILE);
+    let trace_path = std::path::PathBuf::from(dir).join(PANIC_TRACE_FILE);
     std::panic::set_hook(Box::new(move |info| {
         let thread = std::thread::current();
         let tname = thread.name().unwrap_or("<无名>").to_owned();
@@ -762,6 +787,9 @@ pub fn install_panic_hook(dir: &str) {
             let _ = writeln!(f, "{line}");
         }
         crate::report::report("panic", &line);
+        // 行踪环落尾(2026-08-26 自观测第二块):panic 一行只答「死在哪」,
+        // 环尾 64 行答「死前干了什么」——覆写制(只要最新一案的现场)
+        let _ = std::fs::write(&trace_path, crate::trace::dump_tail(64));
         default_hook(info);
     }));
 }
@@ -810,7 +838,6 @@ fn watch_loop(dir: &str) {
 }
 
 // ---- 通道五：restart-req → 体面退出（热更闭环的重启腿） ----
-
 /// restart-req 触发文件在 → 摘触发、同步直报遗言、exit(0)。
 /// 从值守线程直接退进程，不经过事件循环——挂起态也杀得死。
 /// 遗言必须 report_sync：exit(0) 不给异步入队留活路（同 BAR-022 教训）。
@@ -822,4 +849,114 @@ fn restart_check(dir: &str) {
     std::fs::remove_file(&trigger).ok();
     crate::report::report_sync("death", "restart-req 收到,体面退出(等 Termux 拉回)");
     std::process::exit(0);
+}
+
+// ---- 自观测第二块:运行时统计随查(2026-08-26,配套 trace.rs) ----
+//
+// trace ring 答「发生了什么」(事件流),本块答「现在什么状态」(计数器)。
+// 计数点散在各通道热路径(帧/泵/shot/text/keys),全是 AtomicU64 加一,
+// 零锁零分配——观测铁律:不许反咬业务。
+
+/// 帧计数(draw_frame 每帧 +1,忙轮询泵下 ≈ 事件循环活度计)
+static STAT_FRAMES: AtomicU64 = AtomicU64::new(0);
+/// 泵调用/喂字节累计(挂起期也走值守线程,所以数字一直会长)
+static STAT_PUMP_CALLS: AtomicU64 = AtomicU64::new(0);
+static STAT_PUMP_BYTES: AtomicU64 = AtomicU64::new(0);
+/// 闸门动作计数(shots/texts/keys 各通道被用了几次、注了多少字节)
+static STAT_SHOTS: AtomicU64 = AtomicU64::new(0);
+static STAT_TEXTS: AtomicU64 = AtomicU64::new(0);
+static STAT_KEYS: AtomicU64 = AtomicU64::new(0);
+static STAT_KEYS_BYTES: AtomicU64 = AtomicU64::new(0);
+
+/// 统计快照(纯数据,host 可判卷)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StatsSnap {
+    pub uptime_ms: u128,
+    pub foreground: bool,
+    pub loop_age_ms: Option<u64>,
+    pub frames: u64,
+    pub pump_calls: u64,
+    pub pump_bytes: u64,
+    pub shots: u64,
+    pub texts: u64,
+    pub keys: u64,
+    pub keys_bytes: u64,
+    pub active: String,
+    pub sessions: String,
+}
+
+/// 拍一张当前快照(各静态即读即还;会话名单过 router 锁,取完即还)
+pub fn stats_snap() -> StatsSnap {
+    let (active, sessions) = match GATE_ROUTER.lock().unwrap().clone() {
+        Some(r) => {
+            let r = r.lock().unwrap();
+            (r.active_name().to_owned(), r.names().join(","))
+        }
+        None => ("-".to_owned(), "-".to_owned()),
+    };
+    StatsSnap {
+        uptime_ms: crate::report::boot_ms(),
+        foreground: APP_FOREGROUND.load(Ordering::Relaxed),
+        loop_age_ms: loop_beat_age_ms(),
+        frames: STAT_FRAMES.load(Ordering::Relaxed),
+        pump_calls: STAT_PUMP_CALLS.load(Ordering::Relaxed),
+        pump_bytes: STAT_PUMP_BYTES.load(Ordering::Relaxed),
+        shots: STAT_SHOTS.load(Ordering::Relaxed),
+        texts: STAT_TEXTS.load(Ordering::Relaxed),
+        keys: STAT_KEYS.load(Ordering::Relaxed),
+        keys_bytes: STAT_KEYS_BYTES.load(Ordering::Relaxed),
+        active,
+        sessions,
+    }
+}
+
+/// 格式化(纯函数,钉死行格式):key=value 一行一项,机器可读
+pub fn format_stats(s: &StatsSnap) -> String {
+    let age = s
+        .loop_age_ms
+        .map(|a| format!("{a}ms"))
+        .unwrap_or_else(|| "未起跳".into());
+    format!(
+        "uptime={}ms\nforeground={}\nloop_beat_age={}\nframes={}\npump_calls={}\npump_bytes={}\nshots={}\ntexts={}\nkeys={}\nkeys_bytes={}\nactive={}\nsessions={}\n",
+        s.uptime_ms,
+        s.foreground,
+        age,
+        s.frames,
+        s.pump_calls,
+        s.pump_bytes,
+        s.shots,
+        s.texts,
+        s.keys,
+        s.keys_bytes,
+        s.active,
+        s.sessions
+    )
+}
+
+/// 通道六:trace-req → 行踪环全量落 trace.txt(覆写制,随查随新)
+fn trace_dump(dir: &str) {
+    let trigger = std::path::PathBuf::from(dir).join("trace-req");
+    if !trigger.exists() {
+        return;
+    }
+    std::fs::remove_file(&trigger).ok();
+    std::fs::write(
+        std::path::PathBuf::from(dir).join("trace.txt"),
+        crate::trace::dump_all(),
+    )
+    .ok();
+}
+
+/// 通道七:stats-req → 统计快照落 stats-res(同 ping-req 一问一答)
+fn stats_answer(dir: &str) {
+    let trigger = std::path::PathBuf::from(dir).join("stats-req");
+    if !trigger.exists() {
+        return;
+    }
+    std::fs::remove_file(&trigger).ok();
+    std::fs::write(
+        std::path::PathBuf::from(dir).join("stats-res"),
+        format_stats(&stats_snap()),
+    )
+    .ok();
 }

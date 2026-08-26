@@ -5,6 +5,15 @@
 
 ## 当前位置（2026-08-26)
 
+- **自观测第二块：行踪环 + 运行时统计（2026-08-26，本提交）**:
+  ①trace ring(src/trace.rs)——report 流本地滚动副本，咽喉单点
+  tap(report/report_sync/... 三函数旁路入环,调用点零改动),环帽
+  256,两类周期心跳 should_trace 滤掉;活着 trace-req→trace.txt
+  随查(na-trace.sh),panic 钩子自动落末 64 行进 panic-trace.txt
+  (覆写制)。②stats-req 通道——帧/泵/闸门计数全 AtomicU64 热路径
+  加一,stats-req→stats-res 快照随查(na-stats.sh),key=value 钉死。
+  SessionRouter 顺手补 names()。考题 tests/trace_spec.rs 4 道全绿。
+  全文 docs/active/调试闸门.md §九。
 - **热更新闭环收官：自动重启通道 + BAR-037 重跑防御（2026-08-26，
   本提交）**：①gate 第五条通道 restart-req——值守线程见触发文件即
   遗言直报 + `exit(0)`，不经过事件循环（挂起态也杀得死）；②

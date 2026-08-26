@@ -48,6 +48,15 @@ impl SessionRouter {
         self.active.1
     }
 
+    /// 全部会话名(活跃在前;stats 快照用)
+    pub fn names(&self) -> Vec<&'static str> {
+        let mut v = vec![self.active.1];
+        if let Some((_, n)) = &self.standby {
+            v.push(n);
+        }
+        v
+    }
+
     pub fn has_standby(&self) -> bool {
         self.standby.is_some()
     }
