@@ -13,9 +13,9 @@
 //! false 时走旧紫屏 + echo 冒烟路径（留作对照组/回退开关）。
 //!
 //! 已知留白（尖刺期）：
-//! - 重绘泵是忙轮询（about_to_wait 无条件 request_redraw）：ws 线程事件经
-//!   mpsc 送达，Android 上没用 EventLoopProxy 唤醒（可靠性未验证），busy loop
-//!   是最朴素的活路。电池不友好，正式版要换 proxy 唤醒
+//! - ~~重绘泵忙轮询~~（2026-08-26 降频治理：WaitUntil 4ms 节拍 + 有脏才
+//!   redraw，空转 57k 圈/s → ≤250 圈/s；事件到达照常即时唤醒。ws 输出
+//!   最坏延迟 4ms，人不可感；proxy 全事件驱动的彻底版留待电耗专题）
 //! - 键盘只翻可打印字符 + Enter/Backspace/Tab/Esc；中文 IME 走 Java 皮
 //!   （KfmInputConnection.commitText → JNI → ime_queue → drain_ime_inject，
 //!   2026-08-13 定案——winit native-activity 后端零 Ime 事件代码，平台层
@@ -146,7 +146,7 @@ struct App {
     /// 任一指抬起即结束并持久化（kfm-zoom）
     pinch: Option<(f64, (u32, u32))>,
     /// 单指按压状态（长按选择计时）：Started 记录，Moved 过阈值/双指出现
-    /// 即 moved 撤 armed；RedrawRequested 每圈查时间戳（忙轮询泵福利，
+    /// 即 moved 撤 armed；about_to_wait 每圈查时间戳（降频泵 4ms 一圈照准，
     /// 免定时器）——≥500ms 未动即进选择模式
     press: Option<Press>,
     /// 选区边界拖动中：Some(端点) = 手指按住了起/止边界（抬手定型后的
@@ -195,7 +195,8 @@ impl App {
         }
     }
 
-    /// 长按计时（忙轮询泵福利：RedrawRequested 每圈查时间戳，免定时器）：
+    /// 长按计时（about_to_wait 每圈查时间戳，免定时器——2026-08-26 从
+    /// RedrawRequested 挪来：降频泵后重绘是条件触发，空圈不再 redraw）：
     /// 单指按压 ≥500ms 未移动 → 进选择模式，选中落点词（termview 选择面）
     fn check_long_press(&mut self) {
         let Some(p) = &mut self.press else { return };
@@ -1251,12 +1252,8 @@ impl ApplicationHandler for App {
             }
             WindowEvent::RedrawRequested => {
                 FIRST_REDRAW_SEEN.store(true, std::sync::atomic::Ordering::Relaxed);
-                if TERMINAL_MODE {
-                    // 长按计时：忙轮询泵下每圈查时间戳（≥500ms 未动 → 选词）
-                    self.check_long_press();
-                    if !self.dirty {
-                        return; // 忙轮询泵下的空圈：不重绘（省电的最后底线）
-                    }
+                if TERMINAL_MODE && !self.dirty {
+                    return; // 空圈不重绘(降频泵后 redraw 已是条件触发,双保险)
                 }
                 self.dirty = false;
                 self.draw_frame();
@@ -1279,12 +1276,16 @@ impl ApplicationHandler for App {
         crate::report::report_sync("death", "exiting——事件循环即将退出");
     }
 
-    fn about_to_wait(&mut self, _el: &ActiveEventLoop) {
-        crate::gate::note_loop_beat(); // 看门狗心跳:忙轮询每圈盖戳
+    fn about_to_wait(&mut self, el: &ActiveEventLoop) {
+        crate::gate::note_loop_beat(); // 看门狗心跳:每圈盖戳(降频后 ≥250/s,3s 阈值不变)
         if TERMINAL_MODE {
             self.drain_terminal_events();
             self.drain_ime_inject();
             self.poll_ime_inset();
+            // 长按计时(从 RedrawRequested 挪来,2026-08-26 降频泵:重绘
+            // 现在是条件触发,空圈不 redraw;每圈 4ms 查一次 500ms 阈值照准,
+            // 触发即置 dirty → 本圈末尾条件重绘接住)
+            self.check_long_press();
             // blackout 期补画(冗余兜底,2026-08-22 探针拆除案保留):
             // 首笔 RedrawRequested 到达前的脏帧由唤醒锤锤醒的本方法直画;
             // 首笔 Redraw 到达后唤醒锤收锤,此路自动关闭归回正道
@@ -1296,7 +1297,7 @@ impl ApplicationHandler for App {
                 self.draw_frame();
             }
         }
-        // 事件循环心跳（10s 节流）：忙轮询泵下它在跳 = 循环活着，
+        // 事件循环心跳（10s 节流）：它在跳 = 循环活着，
         // 它停 = 循环卡死在某个 handler 里（BAR-012③ 诊断分界线）
         let beat_due = match self.last_loop_beat {
             Some(t) => t.elapsed() >= std::time::Duration::from_secs(10),
@@ -1312,9 +1313,18 @@ impl ApplicationHandler for App {
                 &format!("事件循环心跳 jni(commit={ce}/{cp} key={sk} log={il})"),
             );
         }
-        if let Some(w) = &self.window {
+        // 降频泵(2026-08-26,挂单①治理):Poll 全速空转实测 ~57k 圈/s,
+        // 白烧 CPU/电。双闸——①有脏才请求重绘(空圈不 redraw);②节拍改
+        // WaitUntil 4ms:击键/IME/会话事件到达照常即时唤醒不受限,纯轮询
+        // 部分(会话输出抽干)最坏延迟 4ms,人不可感。空转降两个量级。
+        if self.dirty
+            && let Some(w) = &self.window
+        {
             w.request_redraw();
         }
+        el.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(
+            std::time::Instant::now() + std::time::Duration::from_millis(4),
+        ));
     }
 }
 

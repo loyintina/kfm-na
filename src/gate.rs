@@ -675,8 +675,8 @@ pub const PANIC_FILE: &str = "panic.log";
 pub const PANIC_TRACE_FILE: &str = "panic-trace.txt";
 /// loop 看门狗档案(只在状态迁移时写,不刷屏)
 pub const LOOP_STALL_FILE: &str = "loop-stall.log";
-/// 心跳龄期阈值:重绘泵是忙轮询(about_to_wait 无条件 request_redraw,
-/// 正常一秒几十圈),超此即卡死/冬眠。看门狗因此可以纯被动——
+/// 心跳龄期阈值:重绘泵是降频轮询(WaitUntil 4ms,前台正常 ≥250 圈/s),
+/// 超此即卡死/冬眠。看门狗因此可以纯被动——
 /// 不需要 proxy 探针(proxy 挂起态本来就送不达,实锤过的弯路)
 pub const LOOP_STALL_MS: u64 = 3_000;
 
@@ -857,7 +857,7 @@ fn restart_check(dir: &str) {
 // 计数点散在各通道热路径(帧/泵/shot/text/keys),全是 AtomicU64 加一,
 // 零锁零分配——观测铁律:不许反咬业务。
 
-/// 帧计数(draw_frame 每帧 +1,忙轮询泵下 ≈ 事件循环活度计)
+/// 帧计数(draw_frame 每帧 +1,降频泵下 ≈ 真实重绘活度计)
 static STAT_FRAMES: AtomicU64 = AtomicU64::new(0);
 /// 泵调用/喂字节累计(挂起期也走值守线程,所以数字一直会长)
 static STAT_PUMP_CALLS: AtomicU64 = AtomicU64::new(0);
