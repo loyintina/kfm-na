@@ -113,6 +113,8 @@ mod imp {
         if handle.is_null() {
             return None; // 捆绑核心都加载失败 = 包坏了,无药可救
         }
+        // BAR-039:句柄存静态,IME 的 JNI 转发层靠它 dlsym 当前核心
+        CORE_HANDLE.store(handle, std::sync::atomic::Ordering::Release);
         let sym = unsafe { libc::dlsym(handle, c"ANativeActivity_onCreate".as_ptr()) };
         if sym.is_null() {
             return None;
@@ -143,5 +145,76 @@ mod imp {
             unsafe { entry(activity, saved_state, saved_state_size) };
         }
         // 核心全灭:不转发 = 活动自然终结,loader-pick 里留有遗言
+    }
+
+    // ---- BAR-039:IME 的 JNI 符号转发层(2026-08-26 装机实拍定案) ----
+    //
+    // Java 侧(KfmImeView)的 native 方法按 loadLibrary 的库名绑定。
+    // 若让它直接 loadLibrary("kfm_na"),热更核心(hot/ 绝对路径 dlopen)
+    // 与包内捆绑核心是两个实例——IME 敲进捆绑副本的静态队列,运行核心
+    // 抽的是自己的队列,输入全灭(装机实拍:commit 计数恒 0)。
+    // 所以 Java 焊死 loadLibrary("na_loader"),本壳导出同名 JNI 符号,
+    // 原样 tail-call 进当前核心(热更换核心,Java 侧无感)。
+
+    /// 当前核心句柄(load_core 成功后存;dlsym 转发用)
+    static CORE_HANDLE: std::sync::atomic::AtomicPtr<c_void> =
+        std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+
+    /// 从当前核心取同名符号并调用。核心没就位(理论上调不到)或缺符号
+    /// 就静默吞——输入法通道不许反咬 Java 侧(一个 UnsatisfiedLinkError
+    /// 会把整个键盘干碎,比丢一键更糟)
+    macro_rules! forward_to_core {
+        ($fname:literal, ($($arg:expr),*), ($($ty:ty),*)) => {{
+            let h = CORE_HANDLE.load(std::sync::atomic::Ordering::Acquire);
+            if h.is_null() {
+                return;
+            }
+            let sym = unsafe { libc::dlsym(h, $fname.as_ptr()) };
+            if sym.is_null() {
+                return;
+            }
+            let f: unsafe extern "system" fn($($ty),*) =
+                unsafe { std::mem::transmute(sym) };
+            unsafe { f($($arg),*) };
+        }};
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_dev_kfm_na_KfmImeView_nativeCommitText(
+        env: *mut jni_sys::JNIEnv,
+        class: jni_sys::jclass,
+        text: jni_sys::jstring,
+    ) {
+        forward_to_core!(
+            c"Java_dev_kfm_na_KfmImeView_nativeCommitText",
+            (env, class, text),
+            (*mut jni_sys::JNIEnv, jni_sys::jclass, jni_sys::jstring)
+        );
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_dev_kfm_na_KfmImeView_nativeSendKey(
+        env: *mut jni_sys::JNIEnv,
+        class: jni_sys::jclass,
+        key_code: jni_sys::jint,
+    ) {
+        forward_to_core!(
+            c"Java_dev_kfm_na_KfmImeView_nativeSendKey",
+            (env, class, key_code),
+            (*mut jni_sys::JNIEnv, jni_sys::jclass, jni_sys::jint)
+        );
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_dev_kfm_na_KfmImeView_nativeImeLog(
+        env: *mut jni_sys::JNIEnv,
+        class: jni_sys::jclass,
+        msg: jni_sys::jstring,
+    ) {
+        forward_to_core!(
+            c"Java_dev_kfm_na_KfmImeView_nativeImeLog",
+            (env, class, msg),
+            (*mut jni_sys::JNIEnv, jni_sys::jclass, jni_sys::jstring)
+        );
     }
 }

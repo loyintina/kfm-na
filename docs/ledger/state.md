@@ -5,6 +5,15 @@
 
 ## 当前位置（2026-08-26)
 
+- **BAR-039:热更裂脑案——IME 绑错库实例(2026-08-26,本提交)**:
+  loader 分离后 Java loadLibrary("kfm_na") 绑到包内捆绑核心,与 hot/
+  运行核心两个实例,IME 落字进副本队列,输入全灭(用户实拍:键盘
+  弹得出字进不来,commit 计数恒 0)。修复:loader 导出三个 IME JNI
+  符号 tail-call 进当前核心,Java 焊死 loadLibrary("na_loader")。
+  连带提交 818370c 泵降频(WaitUntil 4ms+条件 redraw)与 03c0244
+  BAR-038(exit 换干净线程,两轮重跑让位实拍 panic.log 零新增)。
+  本次改动沾了 Java/dex 与 loader——热更盖不住,要重打 APK 过一回
+  安装器,之后 IME 转发层焊死,核心继续热更。
 - **自观测第二块：行踪环 + 运行时统计（2026-08-26，本提交）**:
   ①trace ring(src/trace.rs)——report 流本地滚动副本，咽喉单点
   tap(report/report_sync/... 三函数旁路入环,调用点零改动),环帽

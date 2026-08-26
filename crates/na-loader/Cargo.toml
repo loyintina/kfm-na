@@ -13,3 +13,6 @@ libc = "0.2"
 [target.'cfg(target_os = "android")'.dependencies]
 # ANativeActivity 原始结构体(只要 internal_data_path 字段)
 ndk-sys = "0.6"
+# JNI 原始类型(JNIEnv/jclass/jstring)——IME 符号转发层的签名用,
+# 纯 FFI 类型定义,无运行时
+jni-sys = "0.3"

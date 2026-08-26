@@ -25,8 +25,14 @@ public class KfmImeView extends View {
         // 静默吞掉（实拍：键盘能弹但三年无一字进 Rust，探针全灭）。
         // 对已加载的库再 loadLibrary 是幂等的，副作用正是把它登记进应用
         // classloader 的库清单——懒解析立刻能命中。
+        //
+        // BAR-039(2026-08-26):loadLibrary 目标焊死为 na_loader——热更核心
+        // (hot/ 绝对路径 dlopen)与包内捆绑 libkfm_na.so 是两个实例,IME 若
+        // 绑到捆绑副本,commit 进它的静态队列,运行核心永远抽不到(装机实拍
+        // commit 计数恒 0)。na_loader 导出同名 JNI 符号原样转发当前核心,
+        // 热更换核 Java 无感。
         try {
-            System.loadLibrary("kfm_na");
+            System.loadLibrary("na_loader");
         } catch (Throwable t) {
             // 吞：登记失败也绝不杀死 Activity（BAR-011 契约）
         }
