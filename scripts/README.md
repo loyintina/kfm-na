@@ -1,0 +1,57 @@
+# scripts/ 索引(2026-08-27 立)
+
+> 20+ 个脚本平铺在此,按用途分五组。每个脚本头部自带用法注释,
+> 本索引只答「我要干什么 → 拿哪件」。排障场景先读
+> `docs/active/排障手册.md` 速查表。
+
+## 纪律链(提交前)
+
+- `chain.sh` — **唯一检查入口**:防泄漏闸 → fmt → clippy →
+  android-check → javac → test → build。pre-commit 自动跑。
+- `check/` — chain 调用的单项检查(提交纪律闸门等)。
+
+## 构建与部署(改 APK 层时)
+
+- `package-apk.sh` — 手工打包 APK(javac→d8→aapt2→zipalign→apksigner)。
+- `build-on-phone.sh` — 手机编译回路:服务器推 master,手机本地编
+  APK + 调安装器。
+- `deploy-phone.sh` — 送包到手机并调起安装器(`--build` 先打包再送)。
+- `font-bake.py` — 字体烘焙管线(子集化/借形/monoify)。
+
+## 热更回路(只改核心 .so 时,日常主力)
+
+- `na-push-so.sh [--no-restart]` — 推核心进沙箱 hot/ → 默认联动
+  自动重启 → ping 判卷,全自动闭环。
+- `na-restart.sh` — 体面重启:restart-req → 等断连 → am start 拉回
+  → 等新 boot → 判卷。
+
+## 观测(看)——8024 闸门配套
+
+- `na-ping.sh` — 事件循环死活四态(alive/stall/background/未起跳)。
+- `na-stats.sh` — 运行时统计快照:帧耗/CPU/RSS/泵与闸门计数/
+  分桶吞吐/会话死亡。
+- `na-trace.sh [行数]` — 行踪环全量或末 N 行(事件流,带毫秒戳)。
+- `na-text.sh` — 当前视野纯文本(读屏)。
+- `na-shot.sh` — 当前帧拍图,落 /tmp/na-shot.png。
+- `na-replay.sh` — 飞行记录仪拉回 host 确定性回放,末屏 diff 判卷。
+- `na-autopsy.sh [备注]` — **一键收尸包**:触发落盘 + 八件档案拉回
+  `autopsy/<时间戳>/` + 摘要。出异常先跑它。
+- `na-case.sh BAR-xxx "现象"` — 开案脚手架:收尸 + bugs.md 案卷骨架
+  + 复现脚本模板(结晶条款配套,见调试闸门.md §十一)。
+
+## 注入(控)
+
+- `na-type.sh 'cmd\r'` — 裸字节注入活跃会话 PTY(远程键盘;
+  `\r`/`\x03` 等转义由 printf '%b' 翻成真字节)。
+
+## 判卷(实证脚本)
+
+- `test-na-type-bytes.sh` — na-type 字节语义(假 ssh 判字节)。
+- `test-bg-survival.sh` — BAR-029:遥控前后台 + 8024 探针判后台存活。
+- `test-kfm-pkg.sh` — kfm-pkg 原子性三案(挂 chain 第 8 步)。
+- `test-overlay.sh` / `test-serve-overlays.sh` — L2 overlay 考题。
+
+## L2 overlay(本地 apt 生态)
+
+- `build-overlay.sh` / `overlay-pack.sh` / `serve-overlays.sh` —
+  在手机 Termux 里跑的打包/文件服务管线,设计见 docs/active/l2-overlay.md。

@@ -105,6 +105,11 @@ bash scripts/deploy-phone.sh --build   # 先打包再送
 
 - `docs/ledger/state.md` — **交接页：现在进行时**（当前位置/待判卷/欠账/日志
   判读手册，里程碑必更新；接手冷启动第一读）
+- `docs/active/排障手册.md` — **用户报 bug 第一读**：症状 → 工具 →
+  字段 → 判卷的速查表与八条走位（操作层；机制原理在调试闸门.md)
+- `docs/active/调试闸门.md` — 8024 闸门机制全集 + §十一 排障闭环六步/
+  逃逸条款/观测矩阵（设计层）
+- `scripts/README.md` — 脚本索引（我要干什么 → 拿哪件）
 - `docs/active/立项.md` — 架构三层 + 尖刺五条验收标准（**动工前必读**）
 - `docs/active/工具卡.md` — 工具即卡设计（四个待拍板项定了才准实现）
 - `docs/ledger/bugs.md` — BAR 账本：每条修复登记编号/病灶/契约/钉位置
