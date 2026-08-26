@@ -361,7 +361,15 @@ pub fn pump_once(active: &str, sink: &mut dyn FnMut(&[u8])) -> bool {
             nbytes += b.len() as u64;
             sink(b);
         },
-        &mut |name, bytes| rec_output(name, bytes),
+        &mut |name, bytes| {
+            // 会话分桶字节账(自观测第三块):local/remote 各吞吐多少
+            match name {
+                "local" => STAT_BYTES_LOCAL.fetch_add(bytes.len() as u64, Ordering::Relaxed),
+                "remote" => STAT_BYTES_REMOTE.fetch_add(bytes.len() as u64, Ordering::Relaxed),
+                _ => STAT_BYTES_OTHER.fetch_add(bytes.len() as u64, Ordering::Relaxed),
+            };
+            rec_output(name, bytes)
+        },
     );
     STAT_PUMP_CALLS.fetch_add(1, Ordering::Relaxed);
     STAT_PUMP_BYTES.fetch_add(nbytes, Ordering::Relaxed);
@@ -867,6 +875,44 @@ static STAT_SHOTS: AtomicU64 = AtomicU64::new(0);
 static STAT_TEXTS: AtomicU64 = AtomicU64::new(0);
 static STAT_KEYS: AtomicU64 = AtomicU64::new(0);
 static STAT_KEYS_BYTES: AtomicU64 = AtomicU64::new(0);
+/// 帧耗时画像:累计毫秒/峰值毫秒(note_draw,自观测第三块)
+static STAT_DRAW_TOTAL_MS: AtomicU64 = AtomicU64::new(0);
+static STAT_DRAW_MAX_MS: AtomicU64 = AtomicU64::new(0);
+/// 会话分桶吞吐(泵 rec 回调按名记账)
+static STAT_BYTES_LOCAL: AtomicU64 = AtomicU64::new(0);
+static STAT_BYTES_REMOTE: AtomicU64 = AtomicU64::new(0);
+static STAT_BYTES_OTHER: AtomicU64 = AtomicU64::new(0);
+/// 会话死亡计数(重连/重孵频度 = 网络与 PTY 健康的温度计)
+static STAT_SESSION_DEATHS: AtomicU64 = AtomicU64::new(0);
+
+/// draw_frame 每帧报耗时(含 present)
+pub fn note_draw(elapsed: std::time::Duration) {
+    let ms = elapsed.as_millis() as u64;
+    STAT_DRAW_TOTAL_MS.fetch_add(ms, Ordering::Relaxed);
+    STAT_DRAW_MAX_MS.fetch_max(ms, Ordering::Relaxed);
+}
+
+/// 会话死亡/重孵计数(on_slot_dead 调)
+pub fn note_session_death() {
+    STAT_SESSION_DEATHS.fetch_add(1, Ordering::Relaxed);
+}
+
+/// /proc/self/stat 解析(纯函数,钉死):utime+stime 总 jiffies。
+/// comm 字段可含空格/括号,必须从最后一个 ')' 之后切
+pub fn parse_self_stat_jiffies(content: &str) -> Option<u64> {
+    let after = content.rsplit_once(')')?.1;
+    let f: Vec<&str> = after.split_whitespace().collect();
+    // ')' 之后第 12/13 项 = utime/stime(原序号 14/15)
+    let utime: u64 = f.get(11)?.parse().ok()?;
+    let stime: u64 = f.get(12)?.parse().ok()?;
+    Some(utime + stime)
+}
+
+/// /proc/self/status 的 VmRSS 解析(纯函数):常驻内存 KB
+pub fn parse_vmrss_kb(content: &str) -> Option<u64> {
+    let line = content.lines().find(|l| l.starts_with("VmRSS:"))?;
+    line.split_whitespace().nth(1)?.parse().ok()
+}
 
 /// 统计快照(纯数据,host 可判卷)
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -883,6 +929,20 @@ pub struct StatsSnap {
     pub keys_bytes: u64,
     pub active: String,
     pub sessions: String,
+    // ---- 自观测第三块:资源画像 ----
+    /// 帧耗时:累计/峰值毫秒(均值由 format 侧算,防除零)
+    pub draw_total_ms: u64,
+    pub draw_max_ms: u64,
+    /// CPU 占用(utime+stime jiffies,读 /proc/self/stat,失败 0)
+    pub cpu_jiffies: u64,
+    /// 常驻内存 KB(/proc/self/status VmRSS,失败 0)
+    pub rss_kb: u64,
+    /// 会话分桶吞吐(泵 rec 回调按名记账)
+    pub bytes_local: u64,
+    pub bytes_remote: u64,
+    pub bytes_other: u64,
+    /// 会话死亡/重孵累计
+    pub session_deaths: u64,
 }
 
 /// 拍一张当前快照(各静态即读即还;会话名单过 router 锁,取完即还)
@@ -894,6 +954,15 @@ pub fn stats_snap() -> StatsSnap {
         }
         None => ("-".to_owned(), "-".to_owned()),
     };
+    // 资源画像:/proc 读取失败静默给 0(观测铁律:不许反咬业务)
+    let cpu_jiffies = std::fs::read_to_string("/proc/self/stat")
+        .ok()
+        .and_then(|c| parse_self_stat_jiffies(&c))
+        .unwrap_or(0);
+    let rss_kb = std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|c| parse_vmrss_kb(&c))
+        .unwrap_or(0);
     StatsSnap {
         uptime_ms: crate::report::boot_ms(),
         foreground: APP_FOREGROUND.load(Ordering::Relaxed),
@@ -907,6 +976,14 @@ pub fn stats_snap() -> StatsSnap {
         keys_bytes: STAT_KEYS_BYTES.load(Ordering::Relaxed),
         active,
         sessions,
+        draw_total_ms: STAT_DRAW_TOTAL_MS.load(Ordering::Relaxed),
+        draw_max_ms: STAT_DRAW_MAX_MS.load(Ordering::Relaxed),
+        cpu_jiffies,
+        rss_kb,
+        bytes_local: STAT_BYTES_LOCAL.load(Ordering::Relaxed),
+        bytes_remote: STAT_BYTES_REMOTE.load(Ordering::Relaxed),
+        bytes_other: STAT_BYTES_OTHER.load(Ordering::Relaxed),
+        session_deaths: STAT_SESSION_DEATHS.load(Ordering::Relaxed),
     }
 }
 
@@ -916,8 +993,10 @@ pub fn format_stats(s: &StatsSnap) -> String {
         .loop_age_ms
         .map(|a| format!("{a}ms"))
         .unwrap_or_else(|| "未起跳".into());
+    // 帧均耗防除零:一帧没画过就报 0
+    let draw_avg = s.draw_total_ms.checked_div(s.frames).unwrap_or(0);
     format!(
-        "uptime={}ms\nforeground={}\nloop_beat_age={}\nframes={}\npump_calls={}\npump_bytes={}\nshots={}\ntexts={}\nkeys={}\nkeys_bytes={}\nactive={}\nsessions={}\n",
+        "uptime={}ms\nforeground={}\nloop_beat_age={}\nframes={}\npump_calls={}\npump_bytes={}\nshots={}\ntexts={}\nkeys={}\nkeys_bytes={}\nactive={}\nsessions={}\ndraw_avg_ms={}\ndraw_max_ms={}\ncpu_jiffies={}\nrss_kb={}\nbytes_local={}\nbytes_remote={}\nbytes_other={}\nsession_deaths={}\n",
         s.uptime_ms,
         s.foreground,
         age,
@@ -929,7 +1008,15 @@ pub fn format_stats(s: &StatsSnap) -> String {
         s.keys,
         s.keys_bytes,
         s.active,
-        s.sessions
+        s.sessions,
+        draw_avg,
+        s.draw_max_ms,
+        s.cpu_jiffies,
+        s.rss_kb,
+        s.bytes_local,
+        s.bytes_remote,
+        s.bytes_other,
+        s.session_deaths
     )
 }
 

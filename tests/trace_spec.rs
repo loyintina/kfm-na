@@ -7,7 +7,7 @@
 //!   探针不是事件，入环只会稀释信号；
 //! ④stats 格式化 = key=value 一行一项，机器可读。
 
-use kfm_na::gate::{StatsSnap, format_stats};
+use kfm_na::gate::{StatsSnap, format_stats, parse_self_stat_jiffies, parse_vmrss_kb};
 use kfm_na::trace::{TraceEntry, TraceRing, should_trace};
 
 fn e(ms: u128, stage: &str, msg: &str) -> TraceEntry {
@@ -68,6 +68,14 @@ fn spec_stats_格式_keyvalue一行一项() {
         keys_bytes: 128,
         active: "local".into(),
         sessions: "local,remote".into(),
+        draw_total_ms: 5000,
+        draw_max_ms: 120,
+        cpu_jiffies: 3210,
+        rss_kb: 45678,
+        bytes_local: 111,
+        bytes_remote: 222,
+        bytes_other: 3,
+        session_deaths: 2,
     };
     let out = format_stats(&s);
     assert!(out.contains("uptime=61000ms\n"));
@@ -75,9 +83,46 @@ fn spec_stats_格式_keyvalue一行一项() {
     assert!(out.contains("loop_beat_age=42ms\n"));
     assert!(out.contains("pump_bytes=9999\n"));
     assert!(out.contains("sessions=local,remote\n"));
+    // 资源画像段(自观测第三块):draw_avg = total/frames = 5000/1000 = 5
+    assert!(out.contains("draw_avg_ms=5\n"));
+    assert!(out.contains("draw_max_ms=120\n"));
+    assert!(out.contains("cpu_jiffies=3210\n"));
+    assert!(out.contains("rss_kb=45678\n"));
+    assert!(out.contains("bytes_local=111\n"));
+    assert!(out.contains("bytes_remote=222\n"));
+    assert!(out.contains("bytes_other=3\n"));
+    assert!(out.contains("session_deaths=2\n"));
     assert!(out.ends_with('\n'));
     // 未起跳的龄期要人话,不是数字
     let mut s2 = s.clone();
     s2.loop_age_ms = None;
     assert!(format_stats(&s2).contains("loop_beat_age=未起跳\n"));
+    // 一帧没画过:均耗防除零报 0
+    let mut s3 = s.clone();
+    s3.frames = 0;
+    s3.draw_total_ms = 0;
+    assert!(format_stats(&s3).contains("draw_avg_ms=0\n"));
+}
+
+// ---- 自观测第三块:/proc 解析器考题 ----
+
+#[test]
+fn spec_proc_stat_jiffies_带括号comm照常切对() {
+    // 真实样本形态:comm 字段可含空格与括号,必须从最后一个 ')' 后切。
+    // ')' 后第 12/13 项(原序号 14/15)= utime/stime
+    let stat = "1234 (weird ) name) S 1 2 3 4 5 6 7 8 9 10 100 25 0 0 20 0 1 0 5 123456 789 0 0 0";
+    assert_eq!(parse_self_stat_jiffies(stat), Some(125)); // 100 + 25
+    // 常规形态
+    let stat2 = "1 (init) S 0 1 1 0 -1 4194560 100 2000 50 0 7 3 0 0 20 0 1 0 1 100 200 10";
+    assert_eq!(parse_self_stat_jiffies(stat2), Some(10)); // 7 + 3
+    // 残缺行 → None,不许 panic
+    assert_eq!(parse_self_stat_jiffies("garbage"), None);
+    assert_eq!(parse_self_stat_jiffies("1 (init) S 0 1"), None);
+}
+
+#[test]
+fn spec_proc_status_vmrss() {
+    let status = "Name:\tkfm-na\nState:\tR (running)\nVmRSS:\t   45678 kB\nThreads:\t9\n";
+    assert_eq!(parse_vmrss_kb(status), Some(45678));
+    assert_eq!(parse_vmrss_kb("Name:\tx\n"), None);
 }

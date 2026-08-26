@@ -675,6 +675,7 @@ impl App {
     /// 一次（用户在盯着，网多半是好的）;待机方死亡只记账不吵（切换那一刻
     /// 再重连——断网期给待机自动重连是烧钱风暴）
     fn on_slot_dead(&mut self, name: &'static str, is_active: bool, why: &str) {
+        crate::gate::note_session_death(); // 会话死亡计数(资源画像)
         // 异步 report:此处在主线程抽干路径上,sync 直报会在断线瞬间
         // 冻 UI(2026-08-21 同步探针堵主线程同案);进程没死,不需要 sync
         crate::report::report(
@@ -857,6 +858,7 @@ impl App {
 
     /// 渲染一帧：终端模式画网格，非终端模式清紫屏
     fn draw_frame(&mut self) {
+        let t0 = std::time::Instant::now(); // 帧耗时画像(自观测第三块)
         // 先拿终端句柄(owned Arc,借用即还),再借 gfx——顺序反了 E0502
         let th = self.term_handle();
         let Some(g) = &mut self.gfx else { return };
@@ -887,6 +889,7 @@ impl App {
         // 画面回传由值守线程统一消费(gate::spawn_gate_watcher)——
         // 挂起态事件循环叫不醒,前台顺帧消费那套在后台是死路,单一消费者
         buf.present().expect("帧呈现失败");
+        crate::gate::note_draw(t0.elapsed()); // 含 present 的全帧耗时
     }
 }
 

@@ -3,7 +3,21 @@
 > 纪律：**每个里程碑必更新此页**。接手者冷启动顺序：本页 → bugs.md →
 > AGENTS.md → chain.sh 跑一遍。本页只写「现在进行时」，历史功过在 bugs.md。
 
-## 当前位置（2026-08-26)
+## 当前位置（2026-08-27)
+
+- **自观测第三块：资源画像 + 一键收尸包（2026-08-27，本提交）**:
+  stats 从「计数」升「画像」——①帧耗时（draw_frame 全帧计时，
+  `draw_avg_ms`/`draw_max_ms`);②CPU/内存（读 /proc/self/stat 的
+  utime+stime jiffies 与 status 的 VmRSS，解析器纯函数钉死，失败
+  静默给 0);③会话分桶吞吐（泵 rec 回调按名记账，
+  bytes_local/remote/other);④会话死亡计数（on_slot_dead 每次
+  +1,重连频度温度计）。②scripts/na-autopsy.sh 一键收尸包：触发
+  trace/stats 落盘 → panic.log/panic-trace.txt/loop-stall.log/
+  trace.txt/stats-res/loader-pick/flight-rec.bin 全量拉回
+  autopsy/<时间戳>/ → 打印摘要。考题 tests/trace_spec.rs 增至
+  6 道。全文 docs/active/调试闸门.md §十。
+
+## 历史位置（2026-08-26)
 
 - **BAR-039:热更裂脑案——IME 绑错库实例(2026-08-26,本提交)**:
   loader 分离后 Java loadLibrary("kfm_na") 绑到包内捆绑核心,与 hot/
