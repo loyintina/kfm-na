@@ -22,7 +22,7 @@ use std::time::Duration;
 
 /// 服务器地址（2026-08-14 拓扑变更）：kfmv4 直连 127.0.0.1:8021（无 nginx、
 /// 无公网）——手机侧 SSH 隧道把两端 8021 对接（Termux ssh -L），APK 打
-/// 本机回环即达。旧拓扑 nginx 80 反代 8.145.46.182 已废弃。
+/// 本机回环即达。旧拓扑 nginx 80 公网反代已废弃(具体 IP 脱敏,不入库)。
 /// PATH 保留 /kfmv4 前缀：服务端 /api 与 /kfmv4/api 双挂载，都能到
 const SERVER_ADDR: SocketAddr = SocketAddr::new(
     std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1)),

@@ -267,12 +267,13 @@
   单调，双机都打包也不会降级拒装；同秒连打/时钟回拨取「上次+1」保底。
   （旧方案「双机各自独立计数」已失信废除：手机 16777497 < 已装 16777519
   被拒装，实踩。）
-- **第三备份 = GitHub（2026-08-26 接通）**:remote `github` →
-  https://github.com/loyintina/kfm-na.git(**private**），凭据走
+- **第三备份 = GitHub（2026-08-26 接通，同日公開化）**:remote `github` →
+  https://github.com/loyintina/kfm-na.git(**public**，跨机传输用），凭据走
   ~/.git-credentials 的 loyintina PAT（credential.helper=store 已配）。
   三份拷贝：服务器（事实来源）/ 手机 / GitHub。提交后顺手
-  `git push github master`。商业字体有 chain.sh 第 1 步防泄漏闸 +
-  gitignore 双保险，公开化也只差翻 private 开关。
+  `git push github master`。公开化前已过泄密扫描（无私钥/token/口令；
+  商业字体有 chain.sh 第 1 步防泄漏闸 + gitignore 双保险）。注意：docs
+  里有服务器 IP 与端口布局，属用户知情同意的公开面。
 
 ## 日志判读手册（field-reports.log，踩坑攒的）
 
