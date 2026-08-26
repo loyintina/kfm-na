@@ -42,6 +42,9 @@ cat > "$CASES/$BAR-repro.sh" <<'EOF'
 #!/bin/bash
 # 复现脚本模板(na-case.sh 生成)——把用户描述翻成注入/观测序列。
 # 判卷法总纲:修复后用本脚本原样再打一遍,同一把尺复验。
+# 契约(逃逸条款机械面):本脚本退出码 = 判卷结果(0=愈/复现未命中,
+# 非零=未愈/复现命中)。结案时案卷「判卷法」栏必须引用本脚本;
+# C 档感官判卷例外,但案卷须写明实拍步骤清单。
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
@@ -54,6 +57,7 @@ cd "$(dirname "$0")/../.."
 # bash scripts/na-shot.sh   # 落 /tmp/na-shot.png
 
 echo "TODO: 把复现序列填进来"
+exit 1  # 模板态恒未愈,防空脚本误判结案
 EOF
 chmod +x "$CASES/$BAR-repro.sh"
 
