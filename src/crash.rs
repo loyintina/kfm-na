@@ -6,10 +6,16 @@
 //! 异步信号安全(只 write 到预开 fd,零分配零锁),写一行后 re-raise
 //! 交还系统(内核 tombstone/logcat 照留,我们不截胡)。
 //!
-//! SIGUSR1 = 测试探针:写行后**继续活**——信号路径端到端可装机判卷
-//! (kill -USR1 $(cat na.pid) → panic.log 应多一行,进程不死)。
+//! SIGURG = 测试探针:写行后**继续活**——信号路径端到端可装机判卷
+//! (kill -URG $(cat na.pid) → panic.log 应多一行,进程不死)。
+//! 初版探针用 SIGUSR1,装机实测被 ART 吃掉(Android 运行时认领它做
+//! 堆转储/GC,libsigchain 截获后不下传用户 handler);SIGURG 无人认领
+//! 且默认动作本就是忽略,天然适合当探针。
 
 use std::sync::atomic::{AtomicI32, Ordering};
+
+/// 测试探针信号(装机实证钉死:不许换成 ART 认领的 SIGUSR1/SIGQUIT)
+pub const PROBE_SIG: i32 = libc::SIGURG;
 
 /// 预开的 panic.log fd(-1 = 未装)。handler 里只许碰这个
 static CRASH_FD: AtomicI32 = AtomicI32::new(-1);
@@ -65,7 +71,7 @@ pub fn format_signal_line(sig: i32, addr: usize, buf: &mut [u8]) -> usize {
     n
 }
 
-/// 信号处理器本体:写行(尽力而为)→ SIGUSR1 返回继续活,其余 re-raise
+/// 信号处理器本体:写行(尽力而为)→ SIGURG 探针返回继续活,其余 re-raise
 unsafe extern "C" fn on_signal(sig: i32, info: *mut libc::siginfo_t, _ctx: *mut libc::c_void) {
     let addr = if info.is_null() {
         0
@@ -81,7 +87,7 @@ unsafe extern "C" fn on_signal(sig: i32, info: *mut libc::siginfo_t, _ctx: *mut 
             libc::write(fd, buf.as_ptr().cast(), n);
         }
     }
-    if sig == libc::SIGUSR1 {
+    if sig == PROBE_SIG {
         return; // 测试探针:写行已证链路活,进程继续
     }
     unsafe {
@@ -94,7 +100,7 @@ unsafe extern "C" fn on_signal(sig: i32, info: *mut libc::siginfo_t, _ctx: *mut 
 /// ①预开 panic.log(append)fd 登记进 CRASH_FD——handler 里现 open 不
 ///   安全,只能先开好;
 /// ②sigaction 挂 SIGSEGV/SIGBUS/SIGILL/SIGABRT(致命,写完 re-raise)
-///   加 SIGUSR1(测试探针,写完继续活);
+///   加 PROBE_SIG(测试探针,写完继续活);
 /// ③pid 落 na.pid——ssh 侧 kill 判卷。
 /// 全部失败静默(观测铁律:信号钩子不许自己成为死因)。
 pub fn install_signal_hook(dir: &str) {
@@ -124,7 +130,7 @@ pub fn install_signal_hook(dir: &str) {
             libc::SIGBUS,
             libc::SIGILL,
             libc::SIGABRT,
-            libc::SIGUSR1,
+            PROBE_SIG,
         ] {
             libc::sigaction(sig, &sa, std::ptr::null_mut());
         }

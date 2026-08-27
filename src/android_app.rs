@@ -1417,7 +1417,7 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
     crate::gate::install_panic_hook(crate::gate::DUMP_DIR);
     // 信号级坠机记录(自观测第四块①):panic 钩子管 Rust 层,SIGSEGV 等
     // native 崩溃绕过它——last-gasp handler 写一行 SIGNAL 后进 panic.log
-    // 再 re-raise 交还系统。SIGUSR1 是装机判卷探针(写行后继续活)
+    // 再 re-raise 交还系统。SIGURG 是装机判卷探针(写行后继续活)
     crate::crash::install_signal_hook(crate::gate::DUMP_DIR);
     // BAR-037 重跑防御：必须卡在任何线程 spawn 与 EventLoop::build 之前。
     // 旧进程被 ROM 冻结保住（exit(0) 没跑完），循环已毁；同进程二进

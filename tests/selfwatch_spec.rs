@@ -68,6 +68,15 @@ fn spec_signal_缓冲截断不越界() {
     assert_eq!(&buf, b"SIGNAL s");
 }
 
+#[test]
+fn spec_signal_探针信号钉死非art认领() {
+    // 装机实证:SIGUSR1 被 Android ART 认领(堆转储/GC),libsigchain
+    // 截获后不下传用户 handler——探针必须钉在无人认领的 SIGURG 上
+    assert_eq!(kfm_na::crash::PROBE_SIG, libc::SIGURG);
+    assert_ne!(kfm_na::crash::PROBE_SIG, libc::SIGUSR1);
+    assert_ne!(kfm_na::crash::PROBE_SIG, libc::SIGQUIT);
+}
+
 // ---- ②告警三规则 ----
 
 #[test]
