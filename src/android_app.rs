@@ -199,18 +199,34 @@ impl App {
     }
 
     /// scroll 语法糖展开:n>0 = 看历史 = 手指下扫(scroll.rs 契约:y 增大
-    /// = 正行数)。从屏上 1/4 处起指,分 4 步模拟真手指的 moved 序列,
-    /// 终点钳在屏内。起点低、终点高——键盘/keybar 带都在底部,碰不到
+    /// = 正行数)。从内容区上 1/4 处起指,分 4 步模拟真手指的 moved 序列,
+    /// 终点钳在内容区内。
+    /// 几何取 last_grid + cell_size,**不取 window**——挂起态窗口已弃
+    /// (BAR-004)但网格活着,注入不许跟着瞎(2026-08-27 实拍:window 早退
+    /// 让 scroll 语法糖在挂起态静默空转,裸事件反而通——钉此防回潮)
     fn inject_scroll(&mut self, lines: i32) {
-        let Some(w) = &self.window else { return };
-        let s = w.inner_size();
+        let (cols, rows) = self.last_grid;
+        if cols == 0 || rows == 0 {
+            return; // 终端还没建几何,空转不如明退
+        }
         let cell_h = self
             .term_handle()
             .map(|t| t.lock().unwrap().cell_size().1)
             .unwrap_or(crate::termview::CELL_H);
-        let cx = f64::from(s.width) / 2.0;
-        let y0 = f64::from(s.height) * 0.25;
-        let y1 = (y0 + f64::from(lines) * f64::from(cell_h)).clamp(10.0, f64::from(s.height) * 0.7);
+        let area_w = f64::from(cols)
+            * f64::from(
+                self.term_handle()
+                    .map(|t| t.lock().unwrap().cell_size().0)
+                    .unwrap_or(crate::termview::CELL_W),
+            );
+        let area_h = f64::from(rows) * f64::from(cell_h);
+        let cx = area_w / 2.0;
+        let y0 = area_h * 0.25;
+        let y1 = (y0 + f64::from(lines) * f64::from(cell_h)).clamp(10.0, area_h * 0.7);
+        crate::report::report(
+            "gate",
+            &format!("scroll 注入 {lines} 行展开: ({cx:.0},{y0:.0})→({cx:.0},{y1:.0})"),
+        );
         self.handle_touch(90, cx, y0, TouchPhase::Started);
         for i in 1..=4 {
             let y = y0 + (y1 - y0) * f64::from(i) / 4.0;

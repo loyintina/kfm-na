@@ -6,9 +6,12 @@
 
 ## 纪律链(提交前)
 
-- `chain.sh` — **唯一检查入口**:防泄漏闸 → fmt → clippy →
-  android-check → javac → test → build。pre-commit 自动跑。
-- `check/` — chain 调用的单项检查(提交纪律闸门等)。
+- `chain.sh` — **唯一检查入口**(10 步)：防泄漏闸 → 零依赖闸 →
+  **stats 字段咬合闸**(check/check-stats-format.sh,StatsSnap 加字段
+  忘进 format! 不许过链，2026-08-27 评审建议落地）→ fmt → clippy →
+  android-check → javac → test → overlay/kfm-pkg 考题 → build。
+  pre-commit 自动跑。
+- `check/` — chain 调用的单项检查（提交纪律闸门、stats 咬合闸等）。
 
 ## 构建与部署(改 APK 层时)
 
