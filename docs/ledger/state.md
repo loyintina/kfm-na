@@ -7,6 +7,17 @@
 
 ## 当前位置（2026-08-27)
 
+- **真机回归套件通车（2026-08-27，本提交）**：自我测试缺口①落地
+  ——已结案案卷的判卷法固化成真机考官，案卷从档案变成站岗的。
+  scripts/cases/*-accept.sh 五卷（BAR-040/PIN-boot/PIN-pump/
+  PIN-touch/PIN-signal)+ 共享库 scripts/lib/gate-lib.sh + runner
+  na-regress.sh(「重启类」自动排尾，报表 + exit 码）+ na-push-so.sh
+  第⑥步冒烟挂钩（SKIP_RESTART 直判当前 boot)。纪律升级：结案
+  硬条件加「判卷法能自动化的必须固化成 accept 脚本」。首验自抓
+  三案（seq 50 零 scrollback 假空转/熄屏 boot 误报/sshd 晚起
+  8024 误伤），全套件真机 5/5 绿、冒烟路径 3/3 绿。全文
+  docs/active/调试闸门.md §十四。
+
 - **scrollback 显式钉值（2026-08-27，本提交）**：两线横向审计漂移 #1
   用户拍板——各线显式钉值，na 保持 10000 行。termview.rs
   `SCROLLBACK_LINES` 常量（此前裸用 `Config::default()` 纯继承上游

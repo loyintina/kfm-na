@@ -53,6 +53,14 @@
 
 ## 判卷(实证脚本)
 
+- `na-regress.sh [名字...]` — **真机回归套件**(调试闸门.md §十四):
+  cases/*-accept.sh 全跑或点名跑,一案/一钉一卷,exit 0 过 / 非 0 挂 /
+  77 跳过;「重启类」自动排尾。热更后必跑(已挂进 na-push-so.sh ⑥)。
+- `cases/BAR-040-accept.sh` — 首屏标题不得被顶出(重启类)。
+- `cases/PIN-boot-accept.sh` — boot 段末行 <3000ms(启动族绊线)。
+- `cases/PIN-pump-accept.sh` — 泵速率 <1000/s(57k 空转回潮闸)。
+- `cases/PIN-touch-accept.sh` — scroll ±5 首行精确往返(通道八)。
+- `cases/PIN-signal-accept.sh` — kill -URG 探针 SIGNAL 行 +1 且活着。
 - `test-na-type-bytes.sh` — na-type 字节语义(假 ssh 判字节)。
 - `test-bg-survival.sh` — BAR-029:遥控前后台 + 8024 探针判后台存活。
 - `test-kfm-pkg.sh` — kfm-pkg 原子性三案(挂 chain 第 8 步)。
