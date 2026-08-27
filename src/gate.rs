@@ -190,8 +190,10 @@ pub fn inject_keys(dir: &str) {
 pub fn spawn_gate_watcher() {
     start_recorder(DUMP_DIR); // 飞行记录仪同生同灭
     std::thread::spawn(|| {
+        let mut tick: u64 = 0;
         loop {
             std::thread::sleep(std::time::Duration::from_millis(300));
+            tick += 1;
             // 数据面泵：挂起态事件循环不抽，值守顶上进料——闸门眼睛看实时
             // 画面。锁序：注册表锁即取即还 → router 取名即还 → pump→term
             // （sink 回调内，单方向）。终端没建好就不抽（事件堆 mpsc,同旧制）
@@ -209,6 +211,8 @@ pub fn spawn_gate_watcher() {
             trace_dump(DUMP_DIR);
             stats_answer(DUMP_DIR);
             touch_check(DUMP_DIR);
+            alert_tick(tick);
+            history_tick(DUMP_DIR, tick);
         }
     });
 }
@@ -1186,4 +1190,216 @@ fn touch_check(dir: &str) {
 /// 主循环抽干(仅 UI 调)
 pub fn touch_take() -> Vec<TouchCmd> {
     TOUCH_IN.lock().unwrap().drain(..).collect()
+}
+
+// ---- 自观测第四块②:异常自报告警(2026-08-27) ----
+//
+// 前七块全是「人来查」:不查不知道。告警把方向反过来——值守线程每 3s
+// 对快照过一遍规则,越线即 report("alert", ...) 自动进 trace 环 +
+// field-reports.log,下次 na-trace.sh 顺手就看见。规则只报「该有人
+// 看一眼」级别,误报宁可少(冷却与窗口全在 AlertState,纯函数可判卷)。
+
+/// 帧耗时报警线(ms):超过且是新峰值才报(峰值单调爬,每爬一档报一次)
+pub const ALERT_DRAW_MS: u64 = 100;
+/// RSS 绝对线(KB):512MB,中低端机上这是「快被杀了」的水位
+pub const ALERT_RSS_ABS_KB: u64 = 512 * 1024;
+/// RSS 窗口净涨线(KB):5 分钟内涨 64MB = 泄漏嫌疑
+pub const ALERT_RSS_GROW_KB: u64 = 64 * 1024;
+/// RSS 窗口长(ms)
+pub const ALERT_RSS_WINDOW_MS: u128 = 300_000;
+/// RSS 报警冷却(ms):报一次歇 10 分钟,不刷屏
+pub const ALERT_RSS_COOLDOWN_MS: u128 = 600_000;
+/// 会话死亡窗口新增线:5 分钟内 ≥3 次 = 网络/PTY 在抽风
+pub const ALERT_DEATHS_NEW: u64 = 3;
+/// 死亡窗口长与冷却(ms):窗 5 分钟,报一次歇 5 分钟
+pub const ALERT_DEATHS_WINDOW_MS: u128 = 300_000;
+pub const ALERT_DEATHS_COOLDOWN_MS: u128 = 300_000;
+
+/// 告警状态机(纯数据;生产实例挂静态,考题自己 new 一把)
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AlertState {
+    /// 已报过的帧耗时峰值(只有刷新峰值才再报)
+    pub draw_peak_ms: u64,
+    /// RSS 窗口基线:(窗起点 ms, 起点 rss_kb)
+    pub rss_base: Option<(u128, u64)>,
+    /// RSS 上次报警时刻(冷却用)
+    pub rss_alerted_ms: Option<u128>,
+    /// 死亡窗口基线:(窗起点 ms, 起点累计死亡数)
+    pub deaths_base: Option<(u128, u64)>,
+    /// 死亡上次报警时刻
+    pub deaths_alerted_ms: Option<u128>,
+}
+
+impl AlertState {
+    pub const fn new() -> Self {
+        AlertState {
+            draw_peak_ms: 0,
+            rss_base: None,
+            rss_alerted_ms: None,
+            deaths_base: None,
+            deaths_alerted_ms: None,
+        }
+    }
+}
+
+/// 告警判定(纯函数,钉死):吃快照 + 旧状态 + 当前时刻,
+/// 出 (警报文案清单, 新状态)。now_ms 由调用方给(s.uptime_ms),
+/// 考题传死数,全程确定性
+pub fn alert_check(s: &StatsSnap, st: &AlertState, now_ms: u128) -> (Vec<String>, AlertState) {
+    let mut out = Vec::new();
+    let mut n = st.clone();
+    // 规则一:帧耗新峰值
+    if s.draw_max_ms > ALERT_DRAW_MS && s.draw_max_ms > st.draw_peak_ms {
+        out.push(format!(
+            "帧耗时新峰值 {}ms(线 {}ms)——卡顿体感可查 trace 环",
+            s.draw_max_ms, ALERT_DRAW_MS
+        ));
+        n.draw_peak_ms = s.draw_max_ms;
+    }
+    // 规则二:RSS 绝线 / 窗口净涨(共用一个冷却)
+    let rss_cooled = st
+        .rss_alerted_ms
+        .map(|t| now_ms.saturating_sub(t) >= ALERT_RSS_COOLDOWN_MS)
+        .unwrap_or(true);
+    if rss_cooled {
+        if s.rss_kb > ALERT_RSS_ABS_KB {
+            out.push(format!(
+                "RSS {}MB 越过绝线 {}MB——内存水位高危",
+                s.rss_kb / 1024,
+                ALERT_RSS_ABS_KB / 1024
+            ));
+            n.rss_alerted_ms = Some(now_ms);
+            n.rss_base = Some((now_ms, s.rss_kb));
+        } else {
+            match st.rss_base {
+                // 窗口过期/未起:重置基线
+                Some((t0, _)) if now_ms.saturating_sub(t0) >= ALERT_RSS_WINDOW_MS => {
+                    n.rss_base = Some((now_ms, s.rss_kb));
+                }
+                Some((_, kb0)) if s.rss_kb.saturating_sub(kb0) > ALERT_RSS_GROW_KB => {
+                    out.push(format!(
+                        "RSS 5 分钟净涨 {}MB(线 {}MB)——泄漏嫌疑",
+                        s.rss_kb.saturating_sub(kb0) / 1024,
+                        ALERT_RSS_GROW_KB / 1024
+                    ));
+                    n.rss_alerted_ms = Some(now_ms);
+                    n.rss_base = Some((now_ms, s.rss_kb));
+                }
+                None => n.rss_base = Some((now_ms, s.rss_kb)),
+                _ => {}
+            }
+        }
+    }
+    // 规则三:会话死亡窗口新增 ≥3(独立冷却)
+    let deaths_cooled = st
+        .deaths_alerted_ms
+        .map(|t| now_ms.saturating_sub(t) >= ALERT_DEATHS_COOLDOWN_MS)
+        .unwrap_or(true);
+    match st.deaths_base {
+        Some((t0, _)) if now_ms.saturating_sub(t0) >= ALERT_DEATHS_WINDOW_MS => {
+            n.deaths_base = Some((now_ms, s.session_deaths));
+        }
+        Some((_, d0))
+            if deaths_cooled && s.session_deaths.saturating_sub(d0) >= ALERT_DEATHS_NEW =>
+        {
+            out.push(format!(
+                "会话 5 分钟内死亡 {} 次——网络/PTY 在抽风",
+                s.session_deaths.saturating_sub(d0)
+            ));
+            n.deaths_alerted_ms = Some(now_ms);
+            n.deaths_base = Some((now_ms, s.session_deaths));
+        }
+        None => n.deaths_base = Some((now_ms, s.session_deaths)),
+        _ => {}
+    }
+    (out, n)
+}
+
+/// 生产状态实例(值守线程专用)
+static ALERT_STATE: Mutex<AlertState> = Mutex::new(AlertState::new());
+
+/// 值守告警节拍:每 10 tick(≈3s)过一遍规则,越线走 report
+/// (report 自动进 trace 环 + field-reports.log,双通道留痕)
+fn alert_tick(tick: u64) {
+    if !tick.is_multiple_of(10) {
+        return;
+    }
+    let s = stats_snap();
+    let now = s.uptime_ms;
+    let msgs = {
+        let mut st = ALERT_STATE.lock().unwrap();
+        let (msgs, new_st) = alert_check(&s, &st, now);
+        *st = new_st;
+        msgs
+    }; // 锁即取即还——report 另有自己的锁,不嵌套
+    for m in msgs {
+        crate::report::report("alert", &m);
+    }
+}
+
+// ---- 自观测第四块③:stats 历史水位环(2026-08-27) ----
+//
+// stats_answer 答「现在」,本环答「这一路」——趋势类 bug(越来越慢/
+// 内存爬坡)靠单点快照看不出坡,要一串。值守每 100 tick(≈30s)压一
+// 张快照进环(帽 48 ≈ 24 分钟),通道九 history-req → history.txt
+// 每张一行紧凑格式,na-history.sh 一拉就是一条曲线。
+
+/// 水位环帽:48 张 × 30s ≈ 24 分钟回望窗
+pub const HISTORY_CAP: usize = 48;
+/// 压环节拍:每 100 tick(≈30s)一张
+pub const HISTORY_EVERY_TICKS: u64 = 100;
+
+static STATS_RING: Mutex<VecDeque<StatsSnap>> = Mutex::new(VecDeque::new());
+
+/// 压环(纯函数,钉死推挤语义):满帽丢最旧
+pub fn ring_push(ring: &mut VecDeque<StatsSnap>, s: StatsSnap) {
+    if ring.len() >= HISTORY_CAP {
+        ring.pop_front();
+    }
+    ring.push_back(s);
+}
+
+/// 历史行格式(纯函数,钉死):一张快照一行,空格分隔 key=value,
+/// 直接可 awk 取列画曲线。均值防除零同 format_stats
+pub fn format_history_line(s: &StatsSnap) -> String {
+    let draw_avg = s.draw_total_ms.checked_div(s.frames).unwrap_or(0);
+    format!(
+        "t={} fg={} fr={} pump={} draw={}/{}ms cpu={} rss={}kb l={} r={} o={} d={} tch={} act={}",
+        s.uptime_ms,
+        u8::from(s.foreground),
+        s.frames,
+        s.pump_calls,
+        draw_avg,
+        s.draw_max_ms,
+        s.cpu_jiffies,
+        s.rss_kb,
+        s.bytes_local,
+        s.bytes_remote,
+        s.bytes_other,
+        s.session_deaths,
+        s.touches,
+        s.active
+    )
+}
+
+/// 值守水位环节拍:到点压快照 + 应答通道九 history-req
+fn history_tick(dir: &str, tick: u64) {
+    if tick.is_multiple_of(HISTORY_EVERY_TICKS) {
+        let s = stats_snap();
+        ring_push(&mut STATS_RING.lock().unwrap(), s);
+    }
+    let trigger = std::path::PathBuf::from(dir).join("history-req");
+    if !trigger.exists() {
+        return;
+    }
+    std::fs::remove_file(&trigger).ok();
+    let body = {
+        let ring = STATS_RING.lock().unwrap();
+        let mut out: Vec<String> = ring.iter().map(format_history_line).collect();
+        if out.is_empty() {
+            out.push("# (环空——启动未满 30s,稍候再查)".into());
+        }
+        out.join("\n") + "\n"
+    };
+    std::fs::write(std::path::PathBuf::from(dir).join("history.txt"), body).ok();
 }

@@ -6,6 +6,7 @@
 pub use cordis_na as base;
 pub mod bootstrap;
 pub mod conn;
+pub mod crash;
 pub mod exec_probe;
 pub mod gate;
 pub mod ime_queue;

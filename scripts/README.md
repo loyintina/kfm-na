@@ -33,6 +33,8 @@
 - `na-ping.sh` — 事件循环死活四态(alive/stall/background/未起跳)。
 - `na-stats.sh` — 运行时统计快照:帧耗/CPU/RSS/泵与闸门计数/
   分桶吞吐/会话死亡。
+- `na-history.sh` — stats 水位环:最近 24 分钟每 30s 一张快照,
+  一行一张(趋势类判卷尺,awk 取列即曲线)。
 - `na-trace.sh [行数]` — 行踪环全量或末 N 行(事件流,带毫秒戳)。
 - `na-text.sh` — 当前视野纯文本(读屏)。
 - `na-shot.sh` — 当前帧拍图,落 /tmp/na-shot.png。

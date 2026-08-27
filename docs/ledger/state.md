@@ -7,6 +7,19 @@
 
 ## 当前位置（2026-08-27)
 
+- **自观测第四块三件套落地（2026-08-27，本提交）**:①crash.rs
+  信号级坠机记录——panic 钩子够不着的 SIGSEGV/SIGBUS/SIGILL/
+  SIGABRT 由 last-gasp handler 写 `SIGNAL sig=N addr=0x...` 进
+  panic.log 再交还系统，SIGUSR1 为装机判卷探针（写行后继续活）;
+  ②异常自报告警——值守每 3s 过三规则（帧耗新峰值/RSS 绝线或窗
+  净涨/会话死亡窗新增），越线自动 report 进 trace 环 + field-
+  reports，方向从「人来查」补了「异常找人」;③stats 历史水位环
+  ——每 30s 一张快照、帽 48（≈24 分钟回望），通道九 history-req
+  + scripts/na-history.sh，趋势类判卷尺。考题 tests/
+  selfwatch_spec.rs 9 道全绿，全文 docs/active/调试闸门.md §十三。
+  装机判卷法：USR1 探针验①、na-history.sh 累积验③、②只验
+  「不误报」（不主动制造异常，诚实标注）。
+
 - **交接盲测终审通过，正式闭案（2026-08-27)**：评审二轮答卷
   (kfm-na-blind-test-round2-verdict.md)——五洞全实证补齐（含
   na-case 脚手架实弹探针，模板态 exit=1 契约兑现），三道排障题
