@@ -1099,3 +1099,50 @@ fn spec_bar035_内嵌终端_起手几何钉() {
         "贴底视野行数=BOOT_ROWS"
     );
 }
+
+// ---- BAR-040(2026-08-27 用户实拍):开局横幅两行被顶出视野 ----
+// 飞行记录仪铁证:横幅 ts=0ms 在 BOOT 80 列印,ts=2ms resize 61 列,
+// 重排折行 +2,标题「── kfm-na 就绪 ──」与次行前半被顶进 scrollback,
+// 用户要上一次滑才能看全。契约:横幅必须在首个真实几何 resize 之后再印。
+
+#[test]
+fn spec_bar040_开局横幅_先印后resize_顶行被顶走() {
+    // 病灶钉(变异见证):错误的时序必须真的丢行——若此题转绿,
+    // 说明 alacritty 重排行为变了,契约题须跟着重审
+    let mut tv = TermView::new(
+        host_font(),
+        Some(host_font()),
+        BOOT_COLS,
+        BOOT_ROWS,
+        CELL_W,
+        CELL_H,
+    );
+    tv.feed(kfm_na::termview::HELP_BANNER.as_bytes());
+    tv.resize_cells(61, 62); // 真机首发几何(flight-rec 实测)
+    assert!(
+        !tv.dump_text().contains("kfm-na 就绪"),
+        "病灶复现:先印后 resize,标题必须被顶出视野"
+    );
+}
+
+#[test]
+fn spec_bar040_开局横幅_先resize后印_顶行完整() {
+    // 契约钉(修复时序):先应用真实几何再印横幅,标题必须留在视野顶,
+    // 且贴底不滚(display_offset=0)
+    let mut tv = TermView::new(
+        host_font(),
+        Some(host_font()),
+        BOOT_COLS,
+        BOOT_ROWS,
+        CELL_W,
+        CELL_H,
+    );
+    tv.resize_cells(61, 62);
+    tv.feed(kfm_na::termview::HELP_BANNER.as_bytes());
+    let text = tv.dump_text();
+    assert!(
+        text.contains("kfm-na 就绪"),
+        "先 resize 后印:标题必须在视野内\n{text}"
+    );
+    assert_eq!(tv.display_offset(), 0, "印完必须贴底,不许自带滚动");
+}

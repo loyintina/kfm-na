@@ -35,6 +35,20 @@ pub const CELL_H: u32 = 36;
 pub const BOOT_COLS: u32 = 80;
 pub const BOOT_ROWS: u32 = 24;
 
+/// 开局上机提示（2026-08-20 用户实拍：快捷键是 app 层的，shell 里 help
+/// 看不见它们，要「至少一个提示」）。青色标题 + 灰说明，只 feed 视图
+/// 不进 PTY；滚屏可回看，每次冷启动印一次。
+/// **BAR-040 契约：必须在首个真实几何 resize 之后再印**（80 列印、61 列
+/// 重排会折行 +2，标题两行被顶进 scrollback——2026-08-27 用户实拍）。
+/// 住 termview 不住 android_app：横幅折行点由 BOOT_COLS 决定，与几何
+/// 常量同文件同审（且 android_app 是 android feature 门控，host 考题
+/// 够不着）
+pub const HELP_BANNER: &str = "\x1b[36m── kfm-na 就绪 ──\x1b[0m\r\n\
+\x1b[90m切换会话: CTRL+] 本地⇄远程 · 触摸: 点按唤键盘 / 滑动滚屏 / 双指缩放字号\x1b[0m\r\n\
+\x1b[90m长按选词: 拖动扩选 / 按住边界精调(带放大镜) / 单击复制 · HOME/END 跳首尾 · PGUP/PGDN 翻页\x1b[0m\r\n\
+\x1b[90m快捷键行: CTRL/ALT/SHIFT 点一下粘住再敲字母\x1b[0m\r\n\
+\x1b[90m本地 HOME: Android/data/dev.kfm.na/files(文件管理器可见,随便读写)\x1b[0m\r\n";
+
 /// 画面边距（BAR-005）：网格不贴边，边缘字符不再被屏幕圆角/曲面切半。
 /// 纯黑带，不画框——框是装饰，等中央页面定稿再议
 pub const MARGIN_X: u32 = 12;

@@ -56,15 +56,6 @@ static ANDROID_MAIN_RAN: std::sync::atomic::AtomicBool = std::sync::atomic::Atom
 /// 终端模式开关：true = 启动即进终端画面；false = 紫屏 + echo 冒烟对照组
 const TERMINAL_MODE: bool = true;
 
-/// 开局上机提示（2026-08-20 用户实拍：快捷键是 app 层的，shell 里 help
-/// 看不见它们，要「至少一个提示」）。青色标题 + 灰说明，只 feed 视图
-/// 不进 PTY；滚屏可回看，每次冷启动印一次
-const HELP_BANNER: &str = "\x1b[36m── kfm-na 就绪 ──\x1b[0m\r\n\
-\x1b[90m切换会话: CTRL+] 本地⇄远程 · 触摸: 点按唤键盘 / 滑动滚屏 / 双指缩放字号\x1b[0m\r\n\
-\x1b[90m长按选词: 拖动扩选 / 按住边界精调(带放大镜) / 单击复制 · HOME/END 跳首尾 · PGUP/PGDN 翻页\x1b[0m\r\n\
-\x1b[90m快捷键行: CTRL/ALT/SHIFT 点一下粘住再敲字母\x1b[0m\r\n\
-\x1b[90m本地 HOME: Android/data/dev.kfm.na/files(文件管理器可见,随便读写)\x1b[0m\r\n";
-
 type SoftContext = softbuffer::Context<Arc<Window>>;
 type SoftSurface = softbuffer::Surface<Arc<Window>, Arc<Window>>;
 
@@ -437,22 +428,27 @@ impl App {
             }
         }
 
+        // 首发尺寸：Opened 前 outbound 会被 conn 层缓存，绑定后补发
+        let size = window.inner_size();
+        self.apply_window_size(size.width, size.height);
+
         // 上机提示(L1 实拍后用户要「至少一个提示」):app 级快捷键 shell
         // 看不见,开局直接印在网格上(只 feed 视图,不进 PTY 不污染会话)。
         // 每次冷启动印一次;滚屏可回看。
         // 同时 tap 进飞行记录仪(按启动时活跃名)——它上了屏就是屏幕事实,
         // 不记则「回放末屏=读屏」判卷每次冷启动都差这 5 行(2026-08-25 实拍)
+        // BAR-040:必须在 apply_window_size 之后印——先在 BOOT 80 列印、
+        // 再 resize 到真机 61 列,重排折行 +2 会把标题顶出视野
+        // (2026-08-27 用户实拍,考题 tests/termview_spec.rs spec_bar040_*)
         if let Some(t) = self.term_handle() {
-            t.lock().unwrap().feed(HELP_BANNER.as_bytes());
+            t.lock()
+                .unwrap()
+                .feed(crate::termview::HELP_BANNER.as_bytes());
             let active = self
                 .router_handle()
                 .map_or("local", |r| r.lock().unwrap().active_name());
-            crate::gate::rec_output(active, HELP_BANNER.as_bytes());
+            crate::gate::rec_output(active, crate::termview::HELP_BANNER.as_bytes());
         }
-
-        // 首发尺寸：Opened 前 outbound 会被 conn 层缓存，绑定后补发
-        let size = window.inner_size();
-        self.apply_window_size(size.width, size.height);
         self.dirty = true;
     }
 
