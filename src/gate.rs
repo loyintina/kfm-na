@@ -208,6 +208,7 @@ pub fn spawn_gate_watcher() {
             restart_check(DUMP_DIR);
             trace_dump(DUMP_DIR);
             stats_answer(DUMP_DIR);
+            touch_check(DUMP_DIR);
         }
     });
 }
@@ -943,6 +944,8 @@ pub struct StatsSnap {
     pub bytes_other: u64,
     /// 会话死亡/重孵累计
     pub session_deaths: u64,
+    /// 触摸注入动作计数(通道八)
+    pub touches: u64,
 }
 
 /// 拍一张当前快照(各静态即读即还;会话名单过 router 锁,取完即还)
@@ -984,6 +987,7 @@ pub fn stats_snap() -> StatsSnap {
         bytes_remote: STAT_BYTES_REMOTE.load(Ordering::Relaxed),
         bytes_other: STAT_BYTES_OTHER.load(Ordering::Relaxed),
         session_deaths: STAT_SESSION_DEATHS.load(Ordering::Relaxed),
+        touches: STAT_TOUCHES.load(Ordering::Relaxed),
     }
 }
 
@@ -996,7 +1000,7 @@ pub fn format_stats(s: &StatsSnap) -> String {
     // 帧均耗防除零:一帧没画过就报 0
     let draw_avg = s.draw_total_ms.checked_div(s.frames).unwrap_or(0);
     format!(
-        "uptime={}ms\nforeground={}\nloop_beat_age={}\nframes={}\npump_calls={}\npump_bytes={}\nshots={}\ntexts={}\nkeys={}\nkeys_bytes={}\nactive={}\nsessions={}\ndraw_avg_ms={}\ndraw_max_ms={}\ncpu_jiffies={}\nrss_kb={}\nbytes_local={}\nbytes_remote={}\nbytes_other={}\nsession_deaths={}\n",
+        "uptime={}ms\nforeground={}\nloop_beat_age={}\nframes={}\npump_calls={}\npump_bytes={}\nshots={}\ntexts={}\nkeys={}\nkeys_bytes={}\ntouches={}\nactive={}\nsessions={}\ndraw_avg_ms={}\ndraw_max_ms={}\ncpu_jiffies={}\nrss_kb={}\nbytes_local={}\nbytes_remote={}\nbytes_other={}\nsession_deaths={}\n",
         s.uptime_ms,
         s.foreground,
         age,
@@ -1007,6 +1011,7 @@ pub fn format_stats(s: &StatsSnap) -> String {
         s.texts,
         s.keys,
         s.keys_bytes,
+        s.touches,
         s.active,
         s.sessions,
         draw_avg,
@@ -1046,4 +1051,139 @@ fn stats_answer(dir: &str) {
         format_stats(&stats_snap()),
     )
     .ok();
+}
+
+// ---- 通道八:touch-in → 触摸注入(2026-08-27,观测矩阵输入侧空格销案) ----
+//
+// 闸门前三条输入通道(keys-in)只能注字节进 PTY;手势类 bug(滚动/选择/
+// 快捷键行)没有复现腿,回回要用户当手。本通道把触摸事件参数化:
+// host 写脚本行进 touch-in,值守线程解析入队,主循环抽干后与真手指
+// 同一入口(handle_touch)——判卷尺与真实手势同一把。
+
+/// 注入触摸指令(平台无关;android_app 侧映射 TouchPhase 双喂)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TouchCmd {
+    /// 按下/移动/抬起(单指默认 id=90;多指捏合可显式给第二 id)
+    Down {
+        id: u64,
+        x: f64,
+        y: f64,
+    },
+    Move {
+        id: u64,
+        x: f64,
+        y: f64,
+    },
+    Up {
+        id: u64,
+        x: f64,
+        y: f64,
+    },
+    /// 点按(down+up 同点,不过阈值 → 走唤键盘/keybar 命中路径)
+    Tap {
+        x: f64,
+        y: f64,
+    },
+    /// 滚屏语法糖:n>0 = 看历史(等效手指下扫 n 行,scroll.rs 契约:
+    /// y 增大 = 正行数);由 App 侧按真实格高展开成 down/move/up 序列
+    Scroll {
+        lines: i32,
+    },
+    /// 脚本节拍:主循环挂起到点再取下一条(长按选择等时序手势用)
+    Sleep {
+        ms: u64,
+    },
+}
+
+/// 注入指令队列(值守线程入,主循环出)
+static TOUCH_IN: Mutex<VecDeque<TouchCmd>> = Mutex::new(VecDeque::new());
+/// 注入动作计数(stats 闸门计数家族添丁)
+static STAT_TOUCHES: AtomicU64 = AtomicU64::new(0);
+
+/// 解析一行(纯函数,钉死)。None = 空行/注释跳过;Some(Err) = 坏行
+pub fn parse_touch_line(line: &str) -> Option<Result<TouchCmd, String>> {
+    let s = line.trim();
+    if s.is_empty() || s.starts_with('#') {
+        return None;
+    }
+    let tok: Vec<&str> = s.split_whitespace().collect();
+    let bad = || Some(Err(format!("坏行(跳过): {s}")));
+    let num = |i: usize| tok.get(i).and_then(|t| t.parse::<f64>().ok());
+    match tok[0] {
+        "tap" => {
+            let (Some(x), Some(y)) = (num(1), num(2)) else {
+                return bad();
+            };
+            Some(Ok(TouchCmd::Tap { x, y }))
+        }
+        "down" | "move" | "up" => {
+            let (Some(x), Some(y)) = (num(1), num(2)) else {
+                return bad();
+            };
+            let id = match tok.get(3) {
+                Some(t) => match t.parse::<u64>() {
+                    Ok(v) => v,
+                    Err(_) => return bad(),
+                },
+                None => 90, // 注入默认指:90(与真手指 id 撞车概率≈0)
+            };
+            let cmd = match tok[0] {
+                "down" => TouchCmd::Down { id, x, y },
+                "move" => TouchCmd::Move { id, x, y },
+                _ => TouchCmd::Up { id, x, y },
+            };
+            Some(Ok(cmd))
+        }
+        "scroll" => match tok.get(1).and_then(|t| t.parse::<i32>().ok()) {
+            Some(lines) if lines != 0 => Some(Ok(TouchCmd::Scroll { lines })),
+            _ => bad(),
+        },
+        "sleep" => match tok.get(1).and_then(|t| t.parse::<u64>().ok()) {
+            // 封顶 10s:注入脚本写错不许把主循环节拍器焊死
+            Some(ms) => Some(Ok(TouchCmd::Sleep { ms: ms.min(10_000) })),
+            None => bad(),
+        },
+        _ => bad(),
+    }
+}
+
+/// 解析整段脚本(纯函数):有效指令序列 + 坏行清单(空行/注释不计)
+pub fn parse_touch_script(content: &str) -> (Vec<TouchCmd>, Vec<String>) {
+    let mut cmds = Vec::new();
+    let mut errs = Vec::new();
+    for line in content.lines() {
+        match parse_touch_line(line) {
+            Some(Ok(c)) => cmds.push(c),
+            Some(Err(e)) => errs.push(e),
+            None => {}
+        }
+    }
+    (cmds, errs)
+}
+
+/// 通道八值守:touch-in 存在即读走(读后即删),解析入队
+fn touch_check(dir: &str) {
+    let trigger = std::path::PathBuf::from(dir).join("touch-in");
+    if !trigger.exists() {
+        return;
+    }
+    let content = std::fs::read_to_string(&trigger).unwrap_or_default();
+    std::fs::remove_file(&trigger).ok();
+    let (cmds, errs) = parse_touch_script(&content);
+    let n = cmds.len();
+    if n > 0 {
+        TOUCH_IN.lock().unwrap().extend(cmds);
+        STAT_TOUCHES.fetch_add(n as u64, Ordering::Relaxed);
+    }
+    if !errs.is_empty() {
+        crate::report::report(
+            "gate",
+            &format!("touch-in 坏行 {} 条: {}", errs.len(), errs[0]),
+        );
+    }
+}
+
+/// 主循环抽干(仅 UI 调)
+pub fn touch_take() -> Vec<TouchCmd> {
+    TOUCH_IN.lock().unwrap().drain(..).collect()
 }

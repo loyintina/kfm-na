@@ -149,6 +149,10 @@ struct App {
     /// 按在快捷键行带上的手势（BAR-017）：Started 记下起点，Ended 命中测试
     /// 发键/翻修饰键。Some = 这手势归快捷键行，不滚屏不唤键盘
     bar_touch: Option<(f64, f64)>,
+    /// 闸门触摸注入队列（通道八 touch-in）：值守线程入，about_to_wait
+    /// 逐条出，sleep 指令挂起到点再取下一条
+    touch_pending: std::collections::VecDeque<crate::gate::TouchCmd>,
+    touch_wait_until: Option<std::time::Instant>,
     /// 插件基座（连接 provider 设计页）：持有它 = 插件服务活着
     base: Option<Base>,
     /// input.modifiers 服务句柄（input-ime 插件，方案 A：修饰键状态挂服务键）
@@ -158,6 +162,318 @@ struct App {
 }
 
 impl App {
+    /// 闸门触摸注入抽干（通道八）：每圈 about_to_wait 调。Sleep 指令
+    /// 挂起节拍（到点再取下一条），其余指令即刻喂 handle_touch——
+    /// 与真手指同一入口，判卷尺同一把
+    fn drain_touch_in(&mut self) {
+        for cmd in crate::gate::touch_take() {
+            self.touch_pending.push_back(cmd);
+        }
+        loop {
+            if let Some(until) = self.touch_wait_until {
+                if std::time::Instant::now() < until {
+                    break; // sleep 节拍未到,剩下的下圈再取
+                }
+                self.touch_wait_until = None;
+            }
+            let Some(cmd) = self.touch_pending.pop_front() else {
+                break;
+            };
+            use crate::gate::TouchCmd as TC;
+            match cmd {
+                TC::Down { id, x, y } => self.handle_touch(id, x, y, TouchPhase::Started),
+                TC::Move { id, x, y } => self.handle_touch(id, x, y, TouchPhase::Moved),
+                TC::Up { id, x, y } => self.handle_touch(id, x, y, TouchPhase::Ended),
+                TC::Tap { x, y } => {
+                    self.handle_touch(90, x, y, TouchPhase::Started);
+                    self.handle_touch(90, x, y, TouchPhase::Ended);
+                }
+                TC::Scroll { lines } => self.inject_scroll(lines),
+                TC::Sleep { ms } => {
+                    self.touch_wait_until =
+                        Some(std::time::Instant::now() + std::time::Duration::from_millis(ms));
+                }
+            }
+            self.dirty = true;
+        }
+    }
+
+    /// scroll 语法糖展开:n>0 = 看历史 = 手指下扫(scroll.rs 契约:y 增大
+    /// = 正行数)。从屏上 1/4 处起指,分 4 步模拟真手指的 moved 序列,
+    /// 终点钳在屏内。起点低、终点高——键盘/keybar 带都在底部,碰不到
+    fn inject_scroll(&mut self, lines: i32) {
+        let Some(w) = &self.window else { return };
+        let s = w.inner_size();
+        let cell_h = self
+            .term_handle()
+            .map(|t| t.lock().unwrap().cell_size().1)
+            .unwrap_or(crate::termview::CELL_H);
+        let cx = f64::from(s.width) / 2.0;
+        let y0 = f64::from(s.height) * 0.25;
+        let y1 = (y0 + f64::from(lines) * f64::from(cell_h)).clamp(10.0, f64::from(s.height) * 0.7);
+        self.handle_touch(90, cx, y0, TouchPhase::Started);
+        for i in 1..=4 {
+            let y = y0 + (y1 - y0) * f64::from(i) / 4.0;
+            self.handle_touch(90, cx, y, TouchPhase::Moved);
+        }
+        self.handle_touch(90, cx, y1, TouchPhase::Ended);
+    }
+
+    /// 触摸统一入口(2026-08-27 通道八 touch-in):真手指(winit Touch)与
+    /// 闸门注入双喂同一函数——判卷尺与真实手势同一把。本体从原
+    /// WindowEvent::Touch 臂机械搬家,一行逻辑未动(fmt 收尾)
+    fn handle_touch(&mut self, id: u64, x: f64, y: f64, phase: TouchPhase) {
+        if !TERMINAL_MODE {
+            return;
+        }
+        match phase {
+            TouchPhase::Started => {
+                static FIRST_TOUCH: std::sync::atomic::AtomicBool =
+                    std::sync::atomic::AtomicBool::new(false);
+                if !FIRST_TOUCH.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    crate::report::report("ime", "首个触摸进 handler（派发活着）");
+                }
+                // 起点在快捷键行带上 → 这手势归行（不滚屏不唤键盘）
+                // BAR-018：判定尺与渲染/hit 一致——减去键盘 inset，
+                // 否则键盘弹起时行带浮在 inset 上方，这里却认屏底
+                let in_bar = self.window.as_ref().is_some_and(|w| {
+                    crate::keybar::in_bar(y, w.inner_size().height, self.ime_bottom_px)
+                });
+                if in_bar {
+                    self.bar_touch = Some((x, y));
+                    return;
+                }
+                // 终端区指头登记（keybar 带上的不进来）
+                self.touches.push((id, x, y));
+                // 双指都在终端区 → 捏合缩放：挂起滚动/点按/长按
+                // （touch_scroll/press 清掉，残余指头抬手前不接管任何手势）
+                if self.touches.len() == 2 && self.bar_touch.is_none() && self.pinch.is_none() {
+                    let ((_, x1, y1), (_, x2, y2)) = (self.touches[0], self.touches[1]);
+                    let dist0 = ((x2 - x1).powi(2) + (y2 - y1).powi(2)).sqrt().max(1.0);
+                    let base = self
+                        .term_handle()
+                        .map(|t| t.lock().unwrap().cell_size())
+                        .unwrap_or((crate::termview::CELL_W, crate::termview::CELL_H));
+                    self.pinch = Some((dist0, base));
+                    self.touch_scroll = None;
+                    self.press = None;
+                    self.sel_drag = None;
+                    self.magnifier_at = None;
+                    crate::report::report(
+                        "zoom",
+                        &format!("捏合开始: dist0={dist0:.0} base={}x{}", base.0, base.1),
+                    );
+                    return;
+                }
+                if self.touches.len() > 2 {
+                    return; // 第三指起不接管
+                }
+                let selecting = self
+                    .term_handle()
+                    .is_some_and(|t| t.lock().unwrap().selection_active());
+                // 选择态按住边界格 → 端点精调（放大镜随触点浮起）；
+                // 不记 press——边界抬手不触发复制
+                if selecting
+                    && let Some(end) = self
+                        .term_handle()
+                        .and_then(|t| t.lock().unwrap().hit_boundary(x, y))
+                {
+                    self.sel_drag = Some(end);
+                    self.magnifier_at = Some((x, y));
+                    crate::report::report("ime", &format!("边界按住: {end:?}"));
+                    return;
+                }
+                // 单指：记按压（长按计时，RedrawRequested 里查）；
+                // 选择态下不建滚动机——拖动 = 扩选
+                self.press = Some(Press {
+                    at: std::time::Instant::now(),
+                    x: x,
+                    y: y,
+                    moved: false,
+                    long_fired: false,
+                });
+                if !selecting {
+                    let cell_h = self
+                        .term_handle()
+                        .map(|t| t.lock().unwrap().cell_size().1)
+                        .unwrap_or(crate::termview::CELL_H);
+                    self.touch_scroll = Some(crate::scroll::TouchScroll::new(y, f64::from(cell_h)));
+                }
+            }
+            TouchPhase::Moved => {
+                // 指头坐标跟新（捏合测距用）
+                for t in &mut self.touches {
+                    if t.0 == id {
+                        t.1 = x;
+                        t.2 = y;
+                    }
+                }
+                // 捏合：dist/dist0 比例 × 起手格尺寸，钳制后整数变化
+                // ≥1px 才应用（防抖）——set_cell_size 重算字几何，
+                // apply_window_size 触发 resize（alacritty 自带 reflow）
+                if let Some((dist0, base)) = self.pinch {
+                    if self.touches.len() >= 2 {
+                        let ((_, x1, y1), (_, x2, y2)) = (self.touches[0], self.touches[1]);
+                        let dist = ((x2 - x1).powi(2) + (y2 - y1).powi(2)).sqrt();
+                        let (cw, ch) =
+                            crate::termview::pinch_cell_size(base.0, base.1, dist / dist0);
+                        if self.term_handle().map(|t| t.lock().unwrap().cell_size())
+                            != Some((cw, ch))
+                        {
+                            if let Some(t) = self.term_handle() {
+                                t.lock().unwrap().set_cell_size(cw, ch);
+                            }
+                            if let Some(w) = &self.window {
+                                let s = w.inner_size();
+                                self.apply_window_size(s.width, s.height);
+                            }
+                        }
+                    }
+                    return;
+                }
+                if self.bar_touch.is_some() {
+                    return; // 快捷键行手势：不支持拖动
+                }
+                // 边界拖动：端点跟手指走（跨行/历史区换算在
+                // move_selection_end），放大镜跟着触点浮
+                if let Some(end) = self.sel_drag {
+                    if let Some(t) = self.term_handle() {
+                        t.lock().unwrap().move_selection_end(end, x, y);
+                    }
+                    self.magnifier_at = Some((x, y));
+                    self.dirty = true;
+                    return;
+                }
+                // 过阈值撤长按 armed（选择态/滚动态同一把尺）
+                if let Some(p) = &mut self.press
+                    && ((x - p.x).abs() >= crate::scroll::TAP_SLOP_PX
+                        || (y - p.y).abs() >= crate::scroll::TAP_SLOP_PX)
+                {
+                    p.moved = true;
+                }
+                // 选择态：拖动 = 扩选（不滚屏，坐标含 display_offset/边距，
+                // 换算在 termview grid_point_at）
+                if self
+                    .term_handle()
+                    .is_some_and(|t| t.lock().unwrap().selection_active())
+                {
+                    if let Some(t) = self.term_handle() {
+                        t.lock().unwrap().extend_selection(x, y);
+                    }
+                    self.dirty = true;
+                    return;
+                }
+                let Some(tracker) = &mut self.touch_scroll else {
+                    return;
+                };
+                let lines = tracker.moved(y);
+                if lines == 0 {
+                    return;
+                }
+                let Some(t) = self.term_handle() else { return };
+                let mut t = t.lock().unwrap();
+                if t.mouse_report_active() {
+                    // BAR-016②：对端开了鼠标上报（tmux/kimicode 等全屏
+                    // TUI）——alt screen 没有本地历史可滚，翻成 SGR 滚轮
+                    // 事件发 PTY，让对方滚自己的视图
+                    let (cw, ch) = t.cell_size();
+                    let col = (x as u32 / cw + 1).max(1);
+                    let row = (y as u32 / ch + 1).max(1);
+                    if let Some(r) = self.router_handle() {
+                        let r = r.lock().unwrap();
+                        // 每次事件按行数发滚轮 tick，封顶防一次猛拖雪崩
+                        for _ in 0..lines.unsigned_abs().min(10) {
+                            r.send(TermCmd::Input(crate::scroll::wheel_seq(
+                                lines > 0,
+                                col,
+                                row,
+                            )));
+                        }
+                    }
+                } else {
+                    t.scroll_lines(lines);
+                    self.dirty = true;
+                }
+            }
+            TouchPhase::Ended | TouchPhase::Cancelled => {
+                self.touches.retain(|t| t.0 != id);
+                // 捏合收尾：任一指抬起即结束，缩放比写盘 + [zoom] 上报。
+                // 残余指头不接管滚动/点按（touch_scroll/press 进捏合时已清）
+                if self.pinch.take().is_some() {
+                    self.persist_zoom();
+                    return;
+                }
+                // 快捷键行手势：抬手命中发键（Cancelled 不发）
+                if self.bar_touch.take().is_some() {
+                    // BAR-018 诊断：进得了这个分支 = Started 的 in_bar
+                    // 判定活着；hit 落空也会留痕（坐标+inset 三数）
+                    crate::report::report(
+                        "ime",
+                        &format!("快捷键行抬手 ({},{}), inset={}", x, y, self.ime_bottom_px),
+                    );
+                    if phase != TouchPhase::Ended {
+                        return;
+                    }
+                    let Some(w) = &self.window else { return };
+                    let s = w.inner_size();
+                    let Some(kd) = crate::keybar::hit(x, y, s.width, s.height, self.ime_bottom_px)
+                    else {
+                        crate::report::report(
+                            "ime",
+                            &format!(
+                                "快捷键行命中落空: 窗 {}x{} inset={}",
+                                s.width, s.height, self.ime_bottom_px
+                            ),
+                        );
+                        return;
+                    };
+                    // BAR-018 诊断：点哪个键报哪个键——实拍「PgUp
+                    // 表现得像↑」必须分清命中错还是对端不认
+                    crate::report::report("ime", &format!("快捷键行点按: {}", kd.label));
+                    match kd.key {
+                        crate::keybar::Key::Direct(code) => {
+                            crate::ime_queue::global().push_key_code(code);
+                        }
+                        crate::keybar::Key::Modifier(bit) => {
+                            let m = self.modifiers.as_ref().map_or(0, |ms| ms.toggle(bit));
+                            crate::report::report("ime", &format!("修饰键粘滞位: {m:03b}"));
+                        }
+                        crate::keybar::Key::None => {}
+                    }
+                    self.dirty = true; // 修饰键变色/下帧重画
+                    return;
+                }
+                let press = self.press.take();
+                // 边界抬手：定型保持高亮，不复制（Cancelled 同样只收尾）
+                if self.sel_drag.take().is_some() {
+                    self.magnifier_at = None;
+                    self.dirty = true;
+                    return;
+                }
+                // 选择态：抬手保持高亮；单击（未拖动扩选、且不是刚触发
+                // 长按的那次抬手）→ 复制 + Toast + 清选。点按唤键盘让路
+                if self
+                    .term_handle()
+                    .is_some_and(|t| t.lock().unwrap().selection_active())
+                {
+                    let tap = press.is_some_and(|p| !p.moved && !p.long_fired);
+                    if tap && phase == TouchPhase::Ended {
+                        self.copy_selection();
+                    }
+                    return;
+                }
+                let was_tap = self.touch_scroll.take().is_some_and(|t| t.was_tap());
+                if was_tap && let Some(w) = &self.window {
+                    w.set_ime_allowed(true);
+                    if let Some(insets) = &self.ime_insets {
+                        insets.force_show();
+                    }
+                    crate::report::report("ime", "点按唤出软键盘");
+                }
+            }
+        }
+    }
+
     /// JNI 轮询真实键盘高度（500ms 节流）：winit 的 Ime::Enabled/Disabled 在
     /// 本机从未触发（全日志零条），事件驱动是死路，轮询才是活路（BAR-006）。
     /// 值变了才 resize + 上报——resize 会抖动服务器 pty，不能跟着轮询抖
@@ -946,281 +1262,8 @@ impl ApplicationHandler for App {
             // SHOW_IMPLICIT，用户收过键盘后 IMM 拒弹（BAR-012）——JNI
             // SHOW_FORCED 强弹兜底
             WindowEvent::Touch(touch) => {
-                if !TERMINAL_MODE {
-                    return;
-                }
-                match touch.phase {
-                    TouchPhase::Started => {
-                        static FIRST_TOUCH: std::sync::atomic::AtomicBool =
-                            std::sync::atomic::AtomicBool::new(false);
-                        if !FIRST_TOUCH.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                            crate::report::report("ime", "首个触摸进 handler（派发活着）");
-                        }
-                        // 起点在快捷键行带上 → 这手势归行（不滚屏不唤键盘）
-                        // BAR-018：判定尺与渲染/hit 一致——减去键盘 inset，
-                        // 否则键盘弹起时行带浮在 inset 上方，这里却认屏底
-                        let in_bar = self.window.as_ref().is_some_and(|w| {
-                            crate::keybar::in_bar(
-                                touch.location.y,
-                                w.inner_size().height,
-                                self.ime_bottom_px,
-                            )
-                        });
-                        if in_bar {
-                            self.bar_touch = Some((touch.location.x, touch.location.y));
-                            return;
-                        }
-                        // 终端区指头登记（keybar 带上的不进来）
-                        self.touches
-                            .push((touch.id, touch.location.x, touch.location.y));
-                        // 双指都在终端区 → 捏合缩放：挂起滚动/点按/长按
-                        // （touch_scroll/press 清掉，残余指头抬手前不接管任何手势）
-                        if self.touches.len() == 2
-                            && self.bar_touch.is_none()
-                            && self.pinch.is_none()
-                        {
-                            let ((_, x1, y1), (_, x2, y2)) = (self.touches[0], self.touches[1]);
-                            let dist0 = ((x2 - x1).powi(2) + (y2 - y1).powi(2)).sqrt().max(1.0);
-                            let base = self
-                                .term_handle()
-                                .map(|t| t.lock().unwrap().cell_size())
-                                .unwrap_or((crate::termview::CELL_W, crate::termview::CELL_H));
-                            self.pinch = Some((dist0, base));
-                            self.touch_scroll = None;
-                            self.press = None;
-                            self.sel_drag = None;
-                            self.magnifier_at = None;
-                            crate::report::report(
-                                "zoom",
-                                &format!("捏合开始: dist0={dist0:.0} base={}x{}", base.0, base.1),
-                            );
-                            return;
-                        }
-                        if self.touches.len() > 2 {
-                            return; // 第三指起不接管
-                        }
-                        let selecting = self
-                            .term_handle()
-                            .is_some_and(|t| t.lock().unwrap().selection_active());
-                        // 选择态按住边界格 → 端点精调（放大镜随触点浮起）；
-                        // 不记 press——边界抬手不触发复制
-                        if selecting
-                            && let Some(end) = self.term_handle().and_then(|t| {
-                                t.lock()
-                                    .unwrap()
-                                    .hit_boundary(touch.location.x, touch.location.y)
-                            })
-                        {
-                            self.sel_drag = Some(end);
-                            self.magnifier_at = Some((touch.location.x, touch.location.y));
-                            crate::report::report("ime", &format!("边界按住: {end:?}"));
-                            return;
-                        }
-                        // 单指：记按压（长按计时，RedrawRequested 里查）；
-                        // 选择态下不建滚动机——拖动 = 扩选
-                        self.press = Some(Press {
-                            at: std::time::Instant::now(),
-                            x: touch.location.x,
-                            y: touch.location.y,
-                            moved: false,
-                            long_fired: false,
-                        });
-                        if !selecting {
-                            let cell_h = self
-                                .term_handle()
-                                .map(|t| t.lock().unwrap().cell_size().1)
-                                .unwrap_or(crate::termview::CELL_H);
-                            self.touch_scroll = Some(crate::scroll::TouchScroll::new(
-                                touch.location.y,
-                                f64::from(cell_h),
-                            ));
-                        }
-                    }
-                    TouchPhase::Moved => {
-                        // 指头坐标跟新（捏合测距用）
-                        for t in &mut self.touches {
-                            if t.0 == touch.id {
-                                t.1 = touch.location.x;
-                                t.2 = touch.location.y;
-                            }
-                        }
-                        // 捏合：dist/dist0 比例 × 起手格尺寸，钳制后整数变化
-                        // ≥1px 才应用（防抖）——set_cell_size 重算字几何，
-                        // apply_window_size 触发 resize（alacritty 自带 reflow）
-                        if let Some((dist0, base)) = self.pinch {
-                            if self.touches.len() >= 2 {
-                                let ((_, x1, y1), (_, x2, y2)) = (self.touches[0], self.touches[1]);
-                                let dist = ((x2 - x1).powi(2) + (y2 - y1).powi(2)).sqrt();
-                                let (cw, ch) =
-                                    crate::termview::pinch_cell_size(base.0, base.1, dist / dist0);
-                                if self.term_handle().map(|t| t.lock().unwrap().cell_size())
-                                    != Some((cw, ch))
-                                {
-                                    if let Some(t) = self.term_handle() {
-                                        t.lock().unwrap().set_cell_size(cw, ch);
-                                    }
-                                    if let Some(w) = &self.window {
-                                        let s = w.inner_size();
-                                        self.apply_window_size(s.width, s.height);
-                                    }
-                                }
-                            }
-                            return;
-                        }
-                        if self.bar_touch.is_some() {
-                            return; // 快捷键行手势：不支持拖动
-                        }
-                        // 边界拖动：端点跟手指走（跨行/历史区换算在
-                        // move_selection_end），放大镜跟着触点浮
-                        if let Some(end) = self.sel_drag {
-                            if let Some(t) = self.term_handle() {
-                                t.lock().unwrap().move_selection_end(
-                                    end,
-                                    touch.location.x,
-                                    touch.location.y,
-                                );
-                            }
-                            self.magnifier_at = Some((touch.location.x, touch.location.y));
-                            self.dirty = true;
-                            return;
-                        }
-                        // 过阈值撤长按 armed（选择态/滚动态同一把尺）
-                        if let Some(p) = &mut self.press
-                            && ((touch.location.x - p.x).abs() >= crate::scroll::TAP_SLOP_PX
-                                || (touch.location.y - p.y).abs() >= crate::scroll::TAP_SLOP_PX)
-                        {
-                            p.moved = true;
-                        }
-                        // 选择态：拖动 = 扩选（不滚屏，坐标含 display_offset/边距，
-                        // 换算在 termview grid_point_at）
-                        if self
-                            .term_handle()
-                            .is_some_and(|t| t.lock().unwrap().selection_active())
-                        {
-                            if let Some(t) = self.term_handle() {
-                                t.lock()
-                                    .unwrap()
-                                    .extend_selection(touch.location.x, touch.location.y);
-                            }
-                            self.dirty = true;
-                            return;
-                        }
-                        let Some(tracker) = &mut self.touch_scroll else {
-                            return;
-                        };
-                        let lines = tracker.moved(touch.location.y);
-                        if lines == 0 {
-                            return;
-                        }
-                        let Some(t) = self.term_handle() else { return };
-                        let mut t = t.lock().unwrap();
-                        if t.mouse_report_active() {
-                            // BAR-016②：对端开了鼠标上报（tmux/kimicode 等全屏
-                            // TUI）——alt screen 没有本地历史可滚，翻成 SGR 滚轮
-                            // 事件发 PTY，让对方滚自己的视图
-                            let (cw, ch) = t.cell_size();
-                            let col = (touch.location.x as u32 / cw + 1).max(1);
-                            let row = (touch.location.y as u32 / ch + 1).max(1);
-                            if let Some(r) = self.router_handle() {
-                                let r = r.lock().unwrap();
-                                // 每次事件按行数发滚轮 tick，封顶防一次猛拖雪崩
-                                for _ in 0..lines.unsigned_abs().min(10) {
-                                    r.send(TermCmd::Input(crate::scroll::wheel_seq(
-                                        lines > 0,
-                                        col,
-                                        row,
-                                    )));
-                                }
-                            }
-                        } else {
-                            t.scroll_lines(lines);
-                            self.dirty = true;
-                        }
-                    }
-                    TouchPhase::Ended | TouchPhase::Cancelled => {
-                        self.touches.retain(|t| t.0 != touch.id);
-                        // 捏合收尾：任一指抬起即结束，缩放比写盘 + [zoom] 上报。
-                        // 残余指头不接管滚动/点按（touch_scroll/press 进捏合时已清）
-                        if self.pinch.take().is_some() {
-                            self.persist_zoom();
-                            return;
-                        }
-                        // 快捷键行手势：抬手命中发键（Cancelled 不发）
-                        if self.bar_touch.take().is_some() {
-                            // BAR-018 诊断：进得了这个分支 = Started 的 in_bar
-                            // 判定活着；hit 落空也会留痕（坐标+inset 三数）
-                            crate::report::report(
-                                "ime",
-                                &format!(
-                                    "快捷键行抬手 ({},{}), inset={}",
-                                    touch.location.x, touch.location.y, self.ime_bottom_px
-                                ),
-                            );
-                            if touch.phase != TouchPhase::Ended {
-                                return;
-                            }
-                            let Some(w) = &self.window else { return };
-                            let s = w.inner_size();
-                            let Some(kd) = crate::keybar::hit(
-                                touch.location.x,
-                                touch.location.y,
-                                s.width,
-                                s.height,
-                                self.ime_bottom_px,
-                            ) else {
-                                crate::report::report(
-                                    "ime",
-                                    &format!(
-                                        "快捷键行命中落空: 窗 {}x{} inset={}",
-                                        s.width, s.height, self.ime_bottom_px
-                                    ),
-                                );
-                                return;
-                            };
-                            // BAR-018 诊断：点哪个键报哪个键——实拍「PgUp
-                            // 表现得像↑」必须分清命中错还是对端不认
-                            crate::report::report("ime", &format!("快捷键行点按: {}", kd.label));
-                            match kd.key {
-                                crate::keybar::Key::Direct(code) => {
-                                    crate::ime_queue::global().push_key_code(code);
-                                }
-                                crate::keybar::Key::Modifier(bit) => {
-                                    let m = self.modifiers.as_ref().map_or(0, |ms| ms.toggle(bit));
-                                    crate::report::report("ime", &format!("修饰键粘滞位: {m:03b}"));
-                                }
-                                crate::keybar::Key::None => {}
-                            }
-                            self.dirty = true; // 修饰键变色/下帧重画
-                            return;
-                        }
-                        let press = self.press.take();
-                        // 边界抬手：定型保持高亮，不复制（Cancelled 同样只收尾）
-                        if self.sel_drag.take().is_some() {
-                            self.magnifier_at = None;
-                            self.dirty = true;
-                            return;
-                        }
-                        // 选择态：抬手保持高亮；单击（未拖动扩选、且不是刚触发
-                        // 长按的那次抬手）→ 复制 + Toast + 清选。点按唤键盘让路
-                        if self
-                            .term_handle()
-                            .is_some_and(|t| t.lock().unwrap().selection_active())
-                        {
-                            let tap = press.is_some_and(|p| !p.moved && !p.long_fired);
-                            if tap && touch.phase == TouchPhase::Ended {
-                                self.copy_selection();
-                            }
-                            return;
-                        }
-                        let was_tap = self.touch_scroll.take().is_some_and(|t| t.was_tap());
-                        if was_tap && let Some(w) = &self.window {
-                            w.set_ime_allowed(true);
-                            if let Some(insets) = &self.ime_insets {
-                                insets.force_show();
-                            }
-                            crate::report::report("ime", "点按唤出软键盘");
-                        }
-                    }
+                if TERMINAL_MODE {
+                    self.handle_touch(touch.id, touch.location.x, touch.location.y, touch.phase);
                 }
             }
             // IME 事件链：Commit = 上屏文本（中文候选词落字也走这），直接注入终端
@@ -1260,7 +1303,6 @@ impl ApplicationHandler for App {
             _ => {}
         }
     }
-
     fn suspended(&mut self, _el: &ActiveEventLoop) {
         crate::gate::note_foreground(false); // 看门狗休假(BAR-036):挂起停跳合法
         crate::report::report("death", "suspended——Activity 被挂起（退后台/被销毁前奏）");
@@ -1280,6 +1322,7 @@ impl ApplicationHandler for App {
         if TERMINAL_MODE {
             self.drain_terminal_events();
             self.drain_ime_inject();
+            self.drain_touch_in(); // 通道八:闸门触摸注入(与真手指同入口)
             self.poll_ime_inset();
             // 长按计时(从 RedrawRequested 挪来,2026-08-26 降频泵:重绘
             // 现在是条件触发,空圈不 redraw;每圈 4ms 查一次 500ms 阈值照准,

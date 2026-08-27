@@ -43,6 +43,8 @@
 
 - `na-type.sh 'cmd\r'` — 裸字节注入活跃会话 PTY(远程键盘;
   `\r`/`\x03` 等转义由 printf '%b' 翻成真字节)。
+- `na-touch.sh 'scroll 3' [...]` — 触摸注入(通道八):tap/down/move/
+  up/scroll/sleep 脚本化,与真手指同一入口;手势类 bug 的复现腿。
 
 ## 判卷(实证脚本)
 

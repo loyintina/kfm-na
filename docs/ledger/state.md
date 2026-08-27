@@ -7,6 +7,17 @@
 
 ## 当前位置（2026-08-27)
 
+- **触摸注入通道通车（2026-08-27，本提交）**：观测矩阵输入侧空格
+  销案。①gate 通道八 touch-in——脚本行协议（tap/down/move/up/
+  scroll/sleep），解析器纯函数 A 档考题 tests/touch_spec.rs 4 道；
+  ②android_app 原 WindowEvent::Touch 臂 278 行机械搬家成
+  handle_touch，真手指与注入**同一入口**（行界切片+词边界断言+
+  编译验证，零逻辑改动）;③App 侧 drain_touch_in 执行器（Sleep
+  节拍挂起、Scroll 按真实格高展开成滑动序列）;④scripts/
+  na-touch.sh（原子写协议同 na-type）;⑤stats 添 touches 字段。
+  「截图→滚动→再截图」路径自此全闸内化，手势类 bug 不再需要
+  用户当手。全文 docs/active/调试闸门.md §十二。
+
 - **交接盲测一轮答卷落地（2026-08-27，本提交）**：评审 agent 冷读
   判卷——三道排障题（输入无反应/后台黑屏/启动慢）经典走位全通，
   结论「经典案例能闭环；趋势+竞态两类缺判据」。洞清单五条全补：

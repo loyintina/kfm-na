@@ -66,6 +66,7 @@ fn spec_stats_格式_keyvalue一行一项() {
         texts: 5,
         keys: 7,
         keys_bytes: 128,
+        touches: 4,
         active: "local".into(),
         sessions: "local,remote".into(),
         draw_total_ms: 5000,
@@ -92,6 +93,7 @@ fn spec_stats_格式_keyvalue一行一项() {
     assert!(out.contains("bytes_remote=222\n"));
     assert!(out.contains("bytes_other=3\n"));
     assert!(out.contains("session_deaths=2\n"));
+    assert!(out.contains("touches=4\n"));
     assert!(out.ends_with('\n'));
     // 未起跳的龄期要人话,不是数字
     let mut s2 = s.clone();
