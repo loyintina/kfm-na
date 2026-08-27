@@ -63,6 +63,8 @@
 - `cases/PIN-signal-accept.sh` — kill -URG 探针 SIGNAL 行 +1 且活着。
 - `cases/PIN-rehatch-accept.sh` — 故障注入:exit 杀会话→自动重孵→回显(§十五)。
 - `test-na-type-bytes.sh` — na-type 字节语义(假 ssh 判字节)。
+- `test-na-regress-meta.sh` — 回归套件的套件:跳过语义/boot 解析/泵速率/重启排尾四元契约(假 ssh 桩,零编译秒级)。
+- `check-spec-coverage.sh` — 考卷覆盖矩阵棘轮闸(调试闸门.md §十六):模块×考题对照表落 docs/ledger/test-coverage-matrix.md,未覆盖数只许降。
 - `test-bg-survival.sh` — BAR-029:遥控前后台 + 8024 探针判后台存活。
 - `test-kfm-pkg.sh` — kfm-pkg 原子性三案(挂 chain 第 8 步)。
 - `test-overlay.sh` / `test-serve-overlays.sh` — L2 overlay 考题。
