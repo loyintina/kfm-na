@@ -7,3 +7,4 @@ field-reports.log
 
 # 收尸包拉回现场(运行时证据,不入库)
 autopsy/
+mutants.out/

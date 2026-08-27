@@ -61,6 +61,7 @@
 - `cases/PIN-pump-accept.sh` — 泵速率 <1000/s(57k 空转回潮闸)。
 - `cases/PIN-touch-accept.sh` — scroll ±5 首行精确往返(通道八)。
 - `cases/PIN-signal-accept.sh` — kill -URG 探针 SIGNAL 行 +1 且活着。
+- `cases/PIN-rehatch-accept.sh` — 故障注入:exit 杀会话→自动重孵→回显(§十五)。
 - `test-na-type-bytes.sh` — na-type 字节语义(假 ssh 判字节)。
 - `test-bg-survival.sh` — BAR-029:遥控前后台 + 8024 探针判后台存活。
 - `test-kfm-pkg.sh` — kfm-pkg 原子性三案(挂 chain 第 8 步)。
