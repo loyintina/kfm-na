@@ -19,6 +19,12 @@
   selfwatch_spec.rs 9 道全绿，全文 docs/active/调试闸门.md §十三。
   装机判卷法：URG 探针验①、na-history.sh 累积验③、②只验
   「不误报」（不主动制造异常，诚实标注）。
+  **实证（f949730 热更后）**:kill -URG → panic.log 落
+  `SIGNAL sig=23 addr=0x...` 且进程活着；水位环 30s 一张正常
+  累积（rss 146-150MB、draw 峰值 16ms、零死亡）；告警侧干净
+  无误报。**首验自抓一案**：初版探针用 SIGUSR1，装机实测被
+  ART 认领（堆转储/GC,libsigchain 不下传用户 handler),panic.log
+  一字未落——改 SIGURG 修复并钉 PROBE_SIG 常量防回退。
 
 - **交接盲测终审通过，正式闭案（2026-08-27)**：评审二轮答卷
   (kfm-na-blind-test-round2-verdict.md)——五洞全实证补齐（含
