@@ -7,6 +7,16 @@
 
 ## 当前位置（2026-08-27)
 
+- **交接盲测终审通过，正式闭案（2026-08-27)**：评审二轮答卷
+  (kfm-na-blind-test-round2-verdict.md)——五洞全实证补齐（含
+  na-case 脚手架实弹探针，模板态 exit=1 契约兑现），三道排障题
+  按手册走位真跑全通（注入对照/touch-in 新通道/trace 归因）。
+  **排障文档体系认定为接手 agent 冷启动级**。微瑕顺手清：
+  na-case.sh heredoc 转义符直出（\" 残留），已修+实弹验证
+  （BAR-999 空弹，产物干净后清场）。
+  另：评审角色转两线审计（kfmv4-review-role-shift-notice.md),
+  na 侧无实质变化，结案质量自扛的纪律不变。
+
 - **触摸注入通道通车（2026-08-27，本提交）**：观测矩阵输入侧空格
   销案。①gate 通道八 touch-in——脚本行协议（tap/down/move/up/
   scroll/sleep），解析器纯函数 A 档考题 tests/touch_spec.rs 4 道；

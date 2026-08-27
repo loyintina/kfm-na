@@ -29,7 +29,7 @@ cat >> "$ROOT/docs/ledger/bugs.md" <<EOF
 
 ### $BAR 案卷:$DESC
 
-- **现象**:$DESC(开案 $(date +%Y-%m-%d);现场 autopsy/ 内 \"$BAR\" 目录)
+- **现象**:$DESC(开案 $(date +%Y-%m-%d);现场 autopsy/ 内 "$BAR" 目录)
 - **复现注入序列**:scripts/cases/$BAR-repro.sh(手势类注明"用户手测")
 - **盲区**:(当时为什么看不见——对照调试闸门.md §十一观测矩阵哪格空)
 - **长出的新观测点**:(计数器/trace 段/通道/脚本;没有就写"考题代替")
@@ -66,7 +66,7 @@ cat <<EOF
 ✅ $BAR 开案完成:
    - 案卷骨架:docs/ledger/bugs.md 案卷区末尾
    - 复现模板:scripts/cases/$BAR-repro.sh
-   - 现场附件:autopsy/ 内最新 \"$BAR\" 目录(若收尸成功)
+   - 现场附件:autopsy/ 内最新 "$BAR" 目录(若收尸成功)
 下一步:排障手册(docs/active/排障手册.md)速查表选尺 → 填复现脚本
 → 复现命中 → 写失败考题 → 修复 → 同尺复验 → 六栏填满结案。
 EOF
