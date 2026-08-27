@@ -1,8 +1,11 @@
 //! keymap.rs — 快捷键行映射（A 档纯逻辑，考题 tests/keymap_spec.rs）
 //!
 //! 两件契约：
-//! ① map_text：修饰键（Ctrl/Alt/Shift，Java 侧一次性粘滞）× commitText
-//!    文本的组合变换。kfmv4 卡片键盘的病根是 Ctrl+字母联动不上——根源是
+//! ① map_text：修饰键（Ctrl/Alt/Shift）× commitText 文本的组合变换。
+//!    一次性粘滞的状态机在 keybar.rs ModifierState(Rust 侧，进程静态
+//!    已于 2026-08-16 删除);Java 仅经 JNI 翻位/读走清零——旧注释写
+//!    「Java 侧粘滞」是状态机迁移前的口径(2026-08-27 审计核对顺手清)。
+//!    kfmv4 卡片键盘的病根是 Ctrl+字母联动不上——根源是
 //!    映射散在前端裸写没人判卷；这里每个组合有题盯着。
 //! ② key_seq：Android 键码 → 终端字节序列。方向键/End 分普通模式与应用
 //!    光标模式（对端开 ?1h 时要发 SS3 的 ESC O A，不是 CSI 的 ESC [ A）——

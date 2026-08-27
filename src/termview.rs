@@ -420,6 +420,14 @@ pub struct TermView {
 }
 
 impl TermView {
+    /// scrollback 容量(行)。2026-08-27 两线横向审计漂移 #1 用户拍板:
+    /// 各线显式钉值——na 保持 10000(alacritty 上游默认原值,实证见
+    /// 信箱 kfmv4-audit-term-parity-na-response.md):手机端核心场景是
+    /// 长输出后上滑找错,1000 行级别是截肢;内存代价水位环实测可控
+    /// (整机 rss ≈146-150MB,网格按行惰性分配)。**不许再悄悄继承
+    /// 上游默认**——钉成常量,改它要走双向评审(term-contract 待立项)
+    pub const SCROLLBACK_LINES: usize = 10_000;
+
     /// 建视图：cols/rows 为初始网格尺寸（窗口未出时给个占位，resize 随后到）。
     /// 任一为 0 会被钳到 1——alacritty Grid 不接受 0 维（会下溢 panic）。
     /// cjk_font 为 CJK 备用字体（可 None）
@@ -448,7 +456,17 @@ impl TermView {
             }
         });
         Self {
-            term: Term::new(Config::default(), &size, VoidListener),
+            // scrollback 显式钉值(SCROLLBACK_LINES 注释有出处)——
+            // Config::default() 裸用 = 上游改默认我们跟着漂,审计漂移 #1
+            // 的病根就是这个,不许回退
+            term: Term::new(
+                Config {
+                    scrolling_history: Self::SCROLLBACK_LINES,
+                    ..Config::default()
+                },
+                &size,
+                VoidListener,
+            ),
             processor: Processor::new(),
             font,
             cjk,
@@ -523,6 +541,12 @@ impl TermView {
     /// 当前显示偏移（行，0 = 贴底）——B 档考题钉 + 实拍上报用
     pub fn display_offset(&self) -> usize {
         self.term.grid().display_offset()
+    }
+
+    /// 当前 scrollback 已存行数（≤ SCROLLBACK_LINES）——容量考题与
+    /// 观测用；内部 is_spacer/选区钳制早就在读它,只是没公开
+    pub fn history_size(&self) -> usize {
+        self.term.grid().history_size()
     }
 
     /// 当前视野纯文本导出（调试闸门 text-req 通道，2026-08-24）：

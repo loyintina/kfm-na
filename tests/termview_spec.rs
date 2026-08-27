@@ -273,6 +273,27 @@ fn spec_渲染_滚屏不panic且新内容在画面() {
 }
 
 #[test]
+fn spec_scrollback_容量钉死显式值() {
+    // 审计漂移 #1 用户拍板(2026-08-27):na 显式钉 10000,不许继承上游
+    // 默认。灌超帽输出,实测量必须正好压在帽上——上游默认若变了而
+    // 有人又退回裸 Config::default(),本题必红
+    let mut tv = host_termview(8, 2);
+    let extra = 50;
+    for i in 0..kfm_na::termview::TermView::SCROLLBACK_LINES + extra {
+        tv.feed(format!("x{i}\r\n").as_bytes());
+    }
+    assert_eq!(
+        tv.history_size(),
+        kfm_na::termview::TermView::SCROLLBACK_LINES,
+        "scrollback 必须正好钉在显式容量上"
+    );
+    // 顺带区分 nz 式 1000 帽:容量必须远大于千行级(编译期钉)
+    const {
+        assert!(kfm_na::termview::TermView::SCROLLBACK_LINES >= 5000);
+    }
+}
+
+#[test]
 fn spec_渲染_resize后正常() {
     let mut tv = host_termview(24, 6);
     tv.feed(b"before");

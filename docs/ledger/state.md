@@ -7,6 +7,15 @@
 
 ## 当前位置（2026-08-27)
 
+- **scrollback 显式钉值（2026-08-27，本提交）**：两线横向审计漂移 #1
+  用户拍板——各线显式钉值，na 保持 10000 行。termview.rs
+  `SCROLLBACK_LINES` 常量（此前裸用 `Config::default()` 纯继承上游
+  默认，审计实锤 alacritty_terminal 0.25 原值 10000),`history_size()`
+  公开，容量考题 spec_scrollback_容量钉死显式值（灌超帽输出实测
+  正好压帽，退回裸默认必红）。顺手清 keymap.rs 粘滞注释旧口径
+  （状态机早迁 Rust keybar.rs,「Java 侧」是迁移前的话）。通报信
+  kfmv4-audit-term-parity-na-landing.md 已落 kfmv4 仓信箱。
+
 - **自观测第四块三件套落地（2026-08-27，本提交）**:①crash.rs
   信号级坠机记录——panic 钩子够不着的 SIGSEGV/SIGBUS/SIGILL/
   SIGABRT 由 last-gasp handler 写 `SIGNAL sig=N addr=0x...` 进
