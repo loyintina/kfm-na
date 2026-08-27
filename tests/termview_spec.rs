@@ -1167,3 +1167,39 @@ fn spec_bar040_开局横幅_先resize后印_顶行完整() {
     );
     assert_eq!(tv.display_offset(), 0, "印完必须贴底,不许自带滚动");
 }
+
+// ---------- term-contract C4:宽字符占格(2026-08-27 立项,两线对照) ----------
+// 判据(评审定,与 nz measureCell 同语义):同串直喂网格 → 光标推进列数。
+// 串表 = term-contract.md §C4 行。教训(评审实拍):经 PTY/shell 注入
+// 测宽度会混入 zsh ZLE 转义回显(E0B0 实测被推 4 列)——必须直喂网格
+// 断 cursor,不许过 shell。辅助尺 dump_text(spacer 已跳)仍用于原子性。
+
+#[test]
+fn spec_c4_光标推进列数_契约串表() {
+    let cases: &[(&str, usize)] = &[
+        ("A中A", 4),     // 1+2+1
+        ("中中", 4),     // 2+2
+        ("\u{E0B0}", 1), // powerline 单宽(BAR-028 家族边界)
+        ("中文A", 5),    // 2+2+1
+    ];
+    for (s, want) in cases {
+        // 每串独立建视图直喂:col0 起,断推进列数——判据就是 cursor 本身
+        let mut tv = host_termview(40, 4);
+        tv.feed(s.as_bytes());
+        assert_eq!(tv.cursor_col(), *want, "C4 违约:{s:?} 应推 {want} 列");
+    }
+}
+
+#[test]
+fn spec_c4_宽字符劈格防御_行尾半格不拆字() {
+    // 一行 8 格,行尾剩 1 格时灌 2 格宽汉字:alacritty 语义 = 换行重排
+    // (字整体挪下行),不许把半个字留在上行(spacer 孤儿 = 渲染 tofu 空
+    // 半格 + dump_text 错位)。此为 C4 的隐含义务:2 格是原子单位
+    let mut tv = host_termview(8, 3);
+    tv.feed(b"1234567"); // 行尾剩 1 格
+    tv.feed("中".as_bytes()); // 要 2 格 → 必须整体到下一行
+    let text = tv.dump_text();
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines[0], "1234567", "第一行塞不下整字不许劈");
+    assert_eq!(lines[1], "中", "汉字原子换行到第二行");
+}

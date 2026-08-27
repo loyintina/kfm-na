@@ -549,6 +549,14 @@ impl TermView {
         self.term.grid().history_size()
     }
 
+    /// 网格光标所在列(0 基)——term-contract C4「同串→光标推进列数」
+    /// 的判卷尺(nz 对拍用 measureCell 同一语义;评审教训:经 PTY/shell
+    /// 注入测宽度会混入 zsh ZLE 转义回显,E0B0 实测被推 4 列,必须
+    /// 直喂网格断 cursor)
+    pub fn cursor_col(&self) -> usize {
+        self.term.grid().cursor.point.column.0
+    }
+
     /// 当前视野纯文本导出（调试闸门 text-req 通道，2026-08-24）：
     /// 可见区 = display_offset 起 screen_lines 行（滚动中跟视野走），
     /// 逐格收字符、跳过宽字符 spacer 半格，行尾 trim，行间 \n。
