@@ -46,7 +46,10 @@ impl TouchScroll {
     /// 手指向下（y 增大）= 看历史 = 正数
     pub fn moved(&mut self, y: f64) -> i32 {
         if !self.dragging {
-            if (y - self.start_y).abs() < TAP_SLOP_PX {
+            // 含边判定(AOSP ViewConfiguration touchSlop 惯例:恰好到位
+            // 仍未开始滚动)——2026-08-27 变异抽检首只存活体实锤此处
+            // 无边界钉(< vs <= 无人判卷),换含边语义+补钉
+            if (y - self.start_y).abs() <= TAP_SLOP_PX {
                 self.last_y = y;
                 return 0; // 阈值内：还在点按嫌疑期，不滚
             }

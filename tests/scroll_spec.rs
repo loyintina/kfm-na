@@ -16,6 +16,9 @@ fn spec_轻点是点按不是滚动() {
     let mut t = TouchScroll::new(500.0, CELL);
     assert_eq!(t.moved(505.0), 0);
     assert_eq!(t.moved(500.0 + TAP_SLOP_PX - 1.0), 0);
+    // 边界钉（2026-08-27 变异抽检存活体：恰好到阈值=仍算轻点，
+    // AOSP touchSlop 含边惯例——此前 < vs <= 无人判卷）
+    assert_eq!(t.moved(500.0 + TAP_SLOP_PX), 0, "恰好到位仍是点按期");
     assert_eq!(t.moved(490.0), 0);
     assert!(t.was_tap(), "没过阈值必须是点按");
 }
