@@ -7,6 +7,14 @@
 
 ## 当前位置（2026-08-28)
 
+- **探针③ PIN-remote-active-death 落地（2026-08-28）**：活跃=远程
+  死亡自动重孵契约入考官——switch-req 切远程 + ss -K 掐 ws,判五步
+  （deaths+1/active 保持 remote/横幅/新 shell 回显/local 不受扰）。
+  可重复无锁存（活跃死亡有自动重孵）。运行代价=弹一次远程,注释
+  醒目。**故障注入探针族至此盖满两种传输×两种会话态**:本地死亡
+  (rehatch)/待机远程死亡(standby-death)/活跃远程死亡(remote-active-
+  death),回归套件九卷。
+
 - **通道九 switch-req 落地（2026-08-28，本提交）**：会话切换注入
   通道——Ctrl-] 缺口（观测矩阵最后一块登记在案的空白）闭合。
   gate SWITCH_IN 标志位+值守 switch_req_check+App about_to_wait

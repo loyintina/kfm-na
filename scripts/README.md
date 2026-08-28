@@ -63,6 +63,7 @@
 - `cases/PIN-signal-accept.sh` — kill -URG 探针 SIGNAL 行 +1 且活着。
 - `cases/PIN-standby-death-accept.sh` — ss -K 掐 ws:远程死亡记账+活跃不受扰+自愈重连。
 - `cases/PIN-switch-accept.sh` — switch-req 切换往返 X→Y→X(通道九)。
+- `cases/PIN-remote-active-death-accept.sh` — 活跃=远程死亡自动重孵(弹一次远程,宜空闲时跑)。
 - `cases/PIN-rehatch-accept.sh` — 故障注入:exit 杀会话→自动重孵→回显(§十五)。
 - `test-na-type-bytes.sh` — na-type 字节语义(假 ssh 判字节)。
 - `test-na-regress-meta.sh` — 回归套件的套件:跳过语义/boot 解析/泵速率/重启排尾四元契约(假 ssh 桩,零编译秒级)。

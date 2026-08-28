@@ -103,3 +103,14 @@
 2026-08-28 19:40:21 | 71 -638000 DISCHARGING 39.2 | uptime=4771102ms foreground=false pump_calls=427162 cpu_jiffies=5358 rss_kb=133884 session_deaths=1 
 2026-08-28 19:45:28 | ? ? ? ? | GAP(8024 失联——冻结/挂起窗口,本身即数据)
 2026-08-28 19:50:40 | 67 -593000 DISCHARGING 41.1 | uptime=5390267ms foreground=false pump_calls=482744 cpu_jiffies=6044 rss_kb=133960 session_deaths=1 
+2026-08-28 19:55:48 | 65 -396000 DISCHARGING 39.8 | uptime=5696367ms foreground=false pump_calls=510535 cpu_jiffies=6388 rss_kb=134040 session_deaths=1 
+2026-08-28 20:00:53 | 62 -201000 DISCHARGING 40.0 | uptime=148764ms foreground=false pump_calls=46323 cpu_jiffies=356 rss_kb=145984 session_deaths=2 
+2026-08-28 20:05:59 | ? ? ? ? | GAP(8024 失联——冻结/挂起窗口,本身即数据)
+2026-08-28 20:10:59 | 61 -179000 DISCHARGING 37.4 | uptime=754784ms foreground=false pump_calls=234736 cpu_jiffies=1663 rss_kb=144272 session_deaths=2 
+2026-08-28 20:16:05 | 60 -168000 DISCHARGING 36.6 | uptime=1061107ms foreground=false pump_calls=329879 cpu_jiffies=2317 rss_kb=143720 session_deaths=2 
+2026-08-28 20:21:11 | 60 -189000 DISCHARGING 35.5 | uptime=1367128ms foreground=false pump_calls=424600 cpu_jiffies=2989 rss_kb=143356 session_deaths=2 
+2026-08-28 20:26:18 | 59 -162000 DISCHARGING 35.1 | GAP(8024 失联——冻结/挂起窗口,本身即数据)
+2026-08-28 20:34:31 | 57 -395000 DISCHARGING 35.7 | uptime=2166347ms foreground=false pump_calls=635328 cpu_jiffies=4655 rss_kb=140048 session_deaths=3 
+=== 采集结束 2026-08-28 20:39:37 ===
+== drain 摘要 ==
+有效拍不足
