@@ -5,7 +5,17 @@
 > (速查表:症状 → 工具 → 字段 → 判卷)。本页只写「现在进行时」,
 > 历史功过在 bugs.md。
 
-## 当前位置（2026-08-27)
+## 当前位置（2026-08-28)
+
+- **电耗专题开局:过夜/昼间画像采集上线（2026-08-28，本提交）**：
+  scripts/probe-overnight-power.sh 双源对账（电池
+  termux-battery-status:电量/电流µA/温度 + na stats:cpu_jiffies/
+  rss/pump/deaths），300s 一拍落 overnight-power-MMDD.log；GAP 行
+  =8024 失联窗口（Doze 冻结）本身即数据；结尾 drain 摘要算 jiffies
+  差分。昼间 12h 档已挂（今日活跃画像），过夜档待挂。首测读数：
+  na 后台 CPU ≈1.8 jiffies/s（单核 2% 量纲）。**首验自抓一处**：
+  stats 键名误写 uptime_ms（实为 uptime=）致采样恒 GAP，修正后
+  双源通。
 
 - **考卷覆盖矩阵棘轮闸上线（2026-08-27，本提交）**：自我测试缺口④
   ——scripts/check/check-spec-coverage.sh 生成「功能×考题」对照表
