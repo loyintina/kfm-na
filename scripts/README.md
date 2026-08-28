@@ -61,6 +61,7 @@
 - `cases/PIN-pump-accept.sh` — 泵速率 <1000/s(57k 空转回潮闸)。
 - `cases/PIN-touch-accept.sh` — scroll ±5 首行精确往返(通道八)。
 - `cases/PIN-signal-accept.sh` — kill -URG 探针 SIGNAL 行 +1 且活着。
+- `cases/PIN-standby-death-accept.sh` — ss -K 掐 ws:远程死亡记账+活跃不受扰+自愈重连。
 - `cases/PIN-rehatch-accept.sh` — 故障注入:exit 杀会话→自动重孵→回显(§十五)。
 - `test-na-type-bytes.sh` — na-type 字节语义(假 ssh 判字节)。
 - `test-na-regress-meta.sh` — 回归套件的套件:跳过语义/boot 解析/泵速率/重启排尾四元契约(假 ssh 桩,零编译秒级)。

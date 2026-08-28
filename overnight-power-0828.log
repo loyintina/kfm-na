@@ -85,3 +85,4 @@
 2026-08-28 18:08:28 | 99 562000 CHARGING 41.7 | uptime=375135ms foreground=false pump_calls=33666 cpu_jiffies=435 rss_kb=141828 session_deaths=0 
 2026-08-28 18:13:35 | 100 -347000 DISCHARGING 40.7 | uptime=681528ms foreground=false pump_calls=61087 cpu_jiffies=770 rss_kb=139352 session_deaths=1 
 2026-08-28 18:18:40 | 100 -459000 DISCHARGING 40.7 | uptime=986729ms foreground=false pump_calls=88372 cpu_jiffies=1103 rss_kb=138928 session_deaths=1 
+2026-08-28 18:23:45 | 98 -514000 DISCHARGING 39.9 | uptime=175066ms foreground=false pump_calls=15479 cpu_jiffies=211 rss_kb=144088 session_deaths=1 
