@@ -78,6 +78,21 @@ bash scripts/deploy-phone.sh --build   # 先打包再送
 
 提交信息语言：中文，格式同 kfmv4（`类型(范围): 主题`，类型 feat/fix/chore/docs/test）。
 
+## 跨线运维公约（2026-08-28 评审裁决，全线生效）
+
+1. **重 IO 窗口制**：连续型重 IO 任务（变异抽检/全仓多轮编译/批量
+   索引）只准 22:00-07:00 空载窗跑，必须 `ionice -c3 nice -n 19`
+   双甲（nice 只挡 CPU 不挡磁盘——08-28 两次 IO 事故的根因）；白天
+   单发离散编译豁免。
+2. **push 遇阻分流**：未提交闸（别线在途活）→留本地+信箱知会当事
+   线，不空转重试；链超时（重活占场）→查 PSI 错峰，不连环重推；
+   机械合规红→当场修当场推。
+3. **信箱计数投影**由 kfmv4 侧 gen-agent-inbox 自动回写，na 侧不再
+   手改计数（改也活不过下一次 gen）。
+
+判例与全文：kfmv4 仓信箱 kfm-na-ops-convention-submission.md +
+kfmv4-review-ops-convention-verdict.md。
+
 ## 分层纪律（2026-08-20 多端分层设计，评审五问全裁落地）
 
 设计页：`/root/kfmv4/experiments/dsh-na/na/multi-end-layering.md`。三条：
