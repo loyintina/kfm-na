@@ -1339,6 +1339,9 @@ impl ApplicationHandler for App {
             self.drain_terminal_events();
             self.drain_ime_inject();
             self.drain_touch_in(); // 通道八:闸门触摸注入(与真手指同入口)
+            if crate::gate::switch_take() {
+                self.switch_session(); // 通道九:switch-req 遥控切换(与 Ctrl-] 同入口)
+            }
             self.poll_ime_inset();
             // 长按计时(从 RedrawRequested 挪来,2026-08-26 降频泵:重绘
             // 现在是条件触发,空圈不 redraw;每圈 4ms 查一次 500ms 阈值照准,

@@ -13,7 +13,7 @@
 | `src/conn.rs` | 4 | 2 | 2 | spawn_smoke ws_spawner |
 | `src/crash.rs` | 3 | 2 | 1 | install_signal_hook |
 | `src/exec_probe.rs` | 1 | 1 | 0 | — |
-| `src/gate.rs` | 67 | 38 | 29 | DUMP_DIR register_gate_router text_dump inject_keys spawn_gate_watcher pump_register pump_once pump_take_control pump_take_replay REC_FILE_CAP REC_FILE rec_output rec_resize PANIC_FILE PANIC_TRACE_FILE LOOP_STALL_FILE note_loop_beat loop_beat_age_ms note_foreground install_panic_hook note_draw note_session_death stats_snap touch_take ALERT_RSS_WINDOW_MS ALERT_RSS_COOLDOWN_MS ALERT_DEATHS_WINDOW_MS ALERT_DEATHS_COOLDOWN_MS HISTORY_EVERY_TICKS |
+| `src/gate.rs` | 69 | 40 | 29 | DUMP_DIR register_gate_router text_dump inject_keys spawn_gate_watcher pump_register pump_once pump_take_control pump_take_replay REC_FILE_CAP REC_FILE rec_output rec_resize PANIC_FILE PANIC_TRACE_FILE LOOP_STALL_FILE note_loop_beat loop_beat_age_ms note_foreground install_panic_hook note_draw note_session_death stats_snap touch_take ALERT_RSS_WINDOW_MS ALERT_RSS_COOLDOWN_MS ALERT_DEATHS_WINDOW_MS ALERT_DEATHS_COOLDOWN_MS HISTORY_EVERY_TICKS |
 | `src/ime_bridge.rs` | 1 | 0 | 1 | jni_counters |
 | `src/ime_queue.rs` | 5 | 5 | 0 | — |
 | `src/insets.rs` | 3 | 1 | 2 | force_show_keyboard query_ime_bottom |

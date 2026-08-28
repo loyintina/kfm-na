@@ -252,3 +252,21 @@ fn spec_bar036_看门狗_前台门控四态() {
         WatchState::Stall(LOOP_STALL_MS + 1)
     );
 }
+
+#[test]
+fn spec_switch_req_置位取走协议() {
+    // 通道九:文件存在=置位,switch_take 取走即清(一次性,toggle 语义)
+    let dir = std::env::temp_dir().join(format!("kfm-switch-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let req = dir.join("switch-req");
+    std::fs::write(&req, b"").unwrap();
+
+    kfm_na::gate::switch_req_check(dir.to_str().unwrap());
+    assert!(kfm_na::gate::switch_take(), "switch-req 存在必须置位");
+    assert!(
+        !kfm_na::gate::switch_take(),
+        "取走即清:第二次必须 false(一次性语义)"
+    );
+    assert!(!req.exists(), "触发文件必须被消费删除");
+    std::fs::remove_dir_all(&dir).ok();
+}

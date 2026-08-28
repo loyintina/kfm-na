@@ -52,7 +52,7 @@
 
 use std::collections::VecDeque;
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 
@@ -211,6 +211,7 @@ pub fn spawn_gate_watcher() {
             trace_dump(DUMP_DIR);
             stats_answer(DUMP_DIR);
             touch_check(DUMP_DIR);
+            switch_req_check(DUMP_DIR);
             alert_tick(tick);
             history_tick(DUMP_DIR, tick);
         }
@@ -1190,6 +1191,29 @@ fn touch_check(dir: &str) {
 /// 主循环抽干(仅 UI 调)
 pub fn touch_take() -> Vec<TouchCmd> {
     TOUCH_IN.lock().unwrap().drain(..).collect()
+}
+
+// ---- 通道九:switch-req → 会话切换注入(2026-08-28,补 Ctrl-] UI 层缺口) ----
+//
+// Ctrl-] 切换是 UI 层拦截( 不落 PTY),keys-in 注不进来——观测矩阵
+// 上最后一块登记在案的缺口。本通道给 switch_session()(与 Ctrl-] 完全
+// 同一入口)配遥控器:v1 双会话只做「切换」开关,toggle 语义。
+// 安全性:切换本身无损(两会话都活着,死的那个切入即自动重连)。
+
+static SWITCH_REQ: AtomicBool = AtomicBool::new(false);
+
+/// 值守:switch-req 文件存在即置标志(读后即删)
+pub fn switch_req_check(dir: &str) {
+    let trigger = std::path::PathBuf::from(dir).join("switch-req");
+    if trigger.exists() {
+        std::fs::remove_file(&trigger).ok();
+        SWITCH_REQ.store(true, Ordering::Relaxed);
+    }
+}
+
+/// 主循环取走并清标志(true=请求一次切换;仅 UI 调,调 switch_session)
+pub fn switch_take() -> bool {
+    SWITCH_REQ.swap(false, Ordering::Relaxed)
 }
 
 // ---- 自观测第四块②:异常自报告警(2026-08-27) ----

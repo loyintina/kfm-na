@@ -86,3 +86,20 @@
 2026-08-28 18:13:35 | 100 -347000 DISCHARGING 40.7 | uptime=681528ms foreground=false pump_calls=61087 cpu_jiffies=770 rss_kb=139352 session_deaths=1 
 2026-08-28 18:18:40 | 100 -459000 DISCHARGING 40.7 | uptime=986729ms foreground=false pump_calls=88372 cpu_jiffies=1103 rss_kb=138928 session_deaths=1 
 2026-08-28 18:23:45 | 98 -514000 DISCHARGING 39.9 | uptime=175066ms foreground=false pump_calls=15479 cpu_jiffies=211 rss_kb=144088 session_deaths=1 
+2026-08-28 18:28:52 | 97 -401000 DISCHARGING 40.6 | uptime=480827ms foreground=false pump_calls=42866 cpu_jiffies=546 rss_kb=143728 session_deaths=1 
+2026-08-28 18:33:57 | 95 -404000 DISCHARGING 40.7 | uptime=786138ms foreground=false pump_calls=70552 cpu_jiffies=956 rss_kb=143476 session_deaths=1 
+2026-08-28 18:39:02 | 94 -341000 DISCHARGING 39.9 | uptime=1092015ms foreground=false pump_calls=97454 cpu_jiffies=1301 rss_kb=141748 session_deaths=1 
+2026-08-28 18:44:08 | 92 -294000 DISCHARGING 40.4 | uptime=1397632ms foreground=false pump_calls=124621 cpu_jiffies=1625 rss_kb=141136 session_deaths=1 
+2026-08-28 18:49:14 | 90 -438000 DISCHARGING 40.7 | uptime=1703516ms foreground=false pump_calls=151818 cpu_jiffies=1947 rss_kb=137372 session_deaths=1 
+2026-08-28 18:54:20 | 88 -301000 DISCHARGING 40.3 | uptime=2008954ms foreground=false pump_calls=179060 cpu_jiffies=2287 rss_kb=137372 session_deaths=1 
+2026-08-28 18:59:27 | 87 -551000 DISCHARGING 40.2 | uptime=2317967ms foreground=false pump_calls=206968 cpu_jiffies=2638 rss_kb=134024 session_deaths=1 
+2026-08-28 19:04:35 | 85 -328000 DISCHARGING 40.3 | uptime=2623721ms foreground=false pump_calls=234403 cpu_jiffies=2976 rss_kb=134256 session_deaths=1 
+2026-08-28 19:09:40 | 83 -908000 DISCHARGING 40.1 | uptime=2929487ms foreground=false pump_calls=261715 cpu_jiffies=3316 rss_kb=134256 session_deaths=1 
+2026-08-28 19:14:48 | 81 -530000 DISCHARGING 40.6 | uptime=3238523ms foreground=false pump_calls=289404 cpu_jiffies=3639 rss_kb=133464 session_deaths=1 
+2026-08-28 19:19:56 | 79 -333000 DISCHARGING 40.6 | uptime=3544959ms foreground=false pump_calls=316819 cpu_jiffies=3971 rss_kb=133368 session_deaths=1 
+2026-08-28 19:25:01 | 77 -723000 DISCHARGING 39.9 | uptime=3851504ms foreground=false pump_calls=344203 cpu_jiffies=4293 rss_kb=133364 session_deaths=1 
+2026-08-28 19:30:08 | 75 -348000 DISCHARGING 39.1 | uptime=4157450ms foreground=false pump_calls=371819 cpu_jiffies=4658 rss_kb=133364 session_deaths=1 
+2026-08-28 19:35:14 | 73 -487000 DISCHARGING 38.3 | uptime=4464810ms foreground=false pump_calls=399710 cpu_jiffies=5030 rss_kb=133984 session_deaths=1 
+2026-08-28 19:40:21 | 71 -638000 DISCHARGING 39.2 | uptime=4771102ms foreground=false pump_calls=427162 cpu_jiffies=5358 rss_kb=133884 session_deaths=1 
+2026-08-28 19:45:28 | ? ? ? ? | GAP(8024 失联——冻结/挂起窗口,本身即数据)
+2026-08-28 19:50:40 | 67 -593000 DISCHARGING 41.1 | uptime=5390267ms foreground=false pump_calls=482744 cpu_jiffies=6044 rss_kb=133960 session_deaths=1 
