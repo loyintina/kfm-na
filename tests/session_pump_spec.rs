@@ -8,6 +8,7 @@
 use std::sync::mpsc::{Sender, channel};
 
 use kfm_na::gate::SessionPump;
+
 use kfm_na::session::SessionEvent;
 
 /// 注册一条假会话,返回发送端
@@ -200,5 +201,78 @@ fn spec_pump_rec全量见证() {
         pump.take_replay("remote"),
         ["b"],
         "rec 分走的不许影响 replay"
+    );
+}
+
+// ---------- 变异 triage r1 补题(2026-08-28):换心脏/replay 取走/帽截断 ----------
+
+#[test]
+fn spec_register_同名重挂_旧遗物不喂() {
+    // 契约:同名 register=换心脏,旧通道遗物一粒不喂,新通道即插即通
+    // (变异 != → == 幸存针:重挂语义此前无断言)
+    let mut pump = SessionPump::new();
+    let old = slot(&mut pump, "s");
+    old.send(out("old1")).unwrap();
+    old.send(out("old2")).unwrap();
+
+    let (tx2, rx2) = channel();
+    pump.register("s", rx2); // 换心脏:旧 rx 整管丢弃
+
+    let mut fed: Vec<String> = Vec::new();
+    let touched = pump.pump(
+        "s",
+        &mut |b| fed.push(String::from_utf8_lossy(b).into_owned()),
+        &mut |_, _| {},
+    );
+    assert!(!touched, "旧通道遗物一粒不喂");
+    assert!(fed.is_empty());
+
+    tx2.send(out("new")).unwrap();
+    let touched = pump.pump(
+        "s",
+        &mut |b| fed.push(String::from_utf8_lossy(b).into_owned()),
+        &mut |_, _| {},
+    );
+    assert!(touched, "新心脏即插即通");
+    assert_eq!(fed, ["new"]);
+}
+
+#[test]
+fn spec_take_replay_取走即清_内容正确() {
+    // 待机输出进 replay;take 取走即清(一次性);二次取=空
+    let mut pump = SessionPump::new();
+    let tx = slot(&mut pump, "s");
+    tx.send(out("r1")).unwrap();
+    tx.send(out("r2")).unwrap();
+
+    pump.pump("other", &mut |_| {}, &mut |_, _| {}); // s 是待机方
+
+    let got = pump.take_replay("s");
+    assert_eq!(got, ["r1", "r2"], "补屏料按序完整");
+    assert!(pump.take_replay("s").is_empty(), "取走即清,二次取=空");
+    assert!(pump.take_replay("不存在").is_empty(), "未知名=空不炸");
+}
+
+#[test]
+fn spec_replay_帽截断_保尾丢头() {
+    // 帽 256KB:超帽丢最旧保最新(字节账漂移由 *→+/÷ 变异暴露)
+    let mut pump = SessionPump::new();
+    let tx = slot(&mut pump, "s");
+    let chunk = "x".repeat(3000);
+    for _ in 0..120 {
+        tx.send(out(&chunk)).unwrap(); // 360KB > 256KB 帽
+    }
+    pump.pump("other", &mut |_| {}, &mut |_, _| {});
+
+    let got = pump.take_replay("s");
+    let total: usize = got.iter().map(|s| s.len()).sum();
+    assert!(
+        total <= kfm_na::gate::REPLAY_CAP_BYTES,
+        "replay 总量必须压在帽内:{total}"
+    );
+    assert_eq!(
+        got.last().map(String::as_str),
+        Some(chunk.as_str()),
+        "最新一块必须保尾"
     );
 }

@@ -9,3 +9,4 @@ field-reports.log
 autopsy/
 mutants.out/
 mutants.out.old/
+overnight-power-*.log

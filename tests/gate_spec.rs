@@ -6,6 +6,7 @@
 //! ③倒出来的字节数必须 = w*h*4（缺斤短两=画面错位）。
 
 use kfm_na::gate::{encode_rgb, maybe_dump, trigger_pending};
+use kfm_na::session::SessionEvent;
 
 #[test]
 fn spec_编码_小端xrgb字节序() {
@@ -269,4 +270,73 @@ fn spec_switch_req_置位取走协议() {
     );
     assert!(!req.exists(), "触发文件必须被消费删除");
     std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn spec_包装层_fed与分桶字节账() {
+    // 通道考题(变异 triage r1 补题):pump_once 包装层的 fed 协议 +
+    // 分桶字节账(match local/remote 臂此前无人判卷,臂删除幸存针)。
+    // 全局 PUMP 单测串行使用,会话名独占避免互相干扰。
+    // 注意:分桶字节账按精确名 "local"/"remote" 匹配——名字带前缀会落 OTHER 桶
+    let (tx_l, rx_l) = std::sync::mpsc::channel();
+    let (tx_r, rx_r) = std::sync::mpsc::channel();
+    kfm_na::gate::pump_register("local", rx_l);
+    kfm_na::gate::pump_register("remote", rx_r);
+
+    let before = kfm_na::gate::stats_snap();
+    tx_l.send(SessionEvent::Output { data: "LL".into() })
+        .unwrap();
+    tx_r.send(SessionEvent::Output { data: "RR".into() })
+        .unwrap();
+
+    // active=wrap-local:活跃进 sink,待机进 replay;分桶账两臂都记
+    let mut got = Vec::new();
+    let fed = kfm_na::gate::pump_once("local", &mut |b| {
+        got.push(String::from_utf8_lossy(b).into_owned())
+    });
+    assert!(fed, "有活跃输出必须报 fed=true");
+    assert_eq!(got, ["LL"], "活跃方输出进 sink");
+
+    let after = kfm_na::gate::stats_snap();
+    assert_eq!(
+        after.bytes_local - before.bytes_local,
+        2,
+        "local 臂删除变异由此断言按住"
+    );
+    assert_eq!(
+        after.bytes_remote - before.bytes_remote,
+        2,
+        "remote 臂删除变异由此断言按住"
+    );
+
+    // 空转一圈:fed=false(无输出不谎报)
+    let fed = kfm_na::gate::pump_once("local", &mut |_| {});
+    assert!(!fed, "无输出必须报 fed=false");
+}
+
+#[test]
+fn spec_包装层_control与take_replay() {
+    // 控制事件出队 + 待机 replay 取走即清(包装层协议)
+    let (tx, rx) = std::sync::mpsc::channel();
+    kfm_na::gate::pump_register("wrap-ctl", rx);
+    tx.send(SessionEvent::Exited { code: 7 }).unwrap();
+    tx.send(SessionEvent::Output {
+        data: "cached".into(),
+    })
+    .unwrap();
+    kfm_na::gate::pump_once("wrap-other", &mut |_| {}); // wrap-ctl 为待机方
+
+    let ctl = kfm_na::gate::pump_take_control();
+    assert!(
+        ctl.iter()
+            .any(|(n, e)| *n == "wrap-ctl" && matches!(e, SessionEvent::Exited { code: 7 })),
+        "控制事件必须一粒不少出队"
+    );
+
+    let replay = kfm_na::gate::pump_take_replay("wrap-ctl");
+    assert_eq!(replay, ["cached"], "待机输出补屏料完整");
+    assert!(
+        kfm_na::gate::pump_take_replay("wrap-ctl").is_empty(),
+        "取走即清"
+    );
 }
