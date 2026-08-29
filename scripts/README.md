@@ -73,6 +73,12 @@
 - `test-kfm-pkg.sh` — kfm-pkg 原子性三案(挂 chain 第 8 步)。
 - `test-overlay.sh` / `test-serve-overlays.sh` — L2 overlay 考题。
 
+## 运维(crond 自动)
+
+- `na-nightly-quiesce.sh` — NA-QUIESCE 夜间熄灯(00:55):na 存活且后台才投
+  restart-req 体面退出不复活;前台活跃/keep-alive 旗豁免。与 `na-restart.sh`
+  的唯一区别=无 am start 拉回腿。判据链:电耗对照夜简报(wake lock 10x 定罪)。
+
 ## L2 overlay(本地 apt 生态)
 
 - `build-overlay.sh` / `overlay-pack.sh` / `serve-overlays.sh` —

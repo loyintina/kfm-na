@@ -126,6 +126,8 @@ kfmv4-review-ops-convention-verdict.md。
   逃逸条款/观测矩阵（设计层）
 - `scripts/README.md` — 脚本索引（我要干什么 → 拿哪件）
 - `docs/active/立项.md` — 架构三层 + 尖刺五条验收标准（**动工前必读**）
+- `docs/active/ui-base.md` — UI 基础层契约（硬切基座+采样缝+动画全插件；
+  含三行块排版纪律。动任何 UI 前必读）
 - `docs/active/工具卡.md` — 工具即卡设计（四个待拍板项定了才准实现）
 - `docs/ledger/bugs.md` — BAR 账本：每条修复登记编号/病灶/契约/钉位置
 - `/root/kfmv4/docs/ledger/agent-inbox/` — **跨线评审信箱**（评审会话维护，2026-08-15 迁入 kfmv4 文档目录）：
