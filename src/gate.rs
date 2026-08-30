@@ -13,6 +13,7 @@
 //! | restart-req | 记遗言后 exit(0) 体面退出     | 无（Termux 侧拉回）  |
 //! | trace-req | 行踪环全量落盘（report 流本地副本） | trace.txt        |
 //! | stats-req | 运行时统计快照（帧/泵/闸门计数）  | stats-res          |
+//! | orb-inject | AI 外显事件注入（tap/drag/run/end/dismiss） | orb-inject-res |
 //!
 //! restart-req 是热更新闭环的重启腿（2026-08-26 与用户定）：推完热更核心
 //! 后要换进程才生效。值守线程见到触发文件即同步直报遗言、就地退出——
@@ -212,6 +213,7 @@ pub fn spawn_gate_watcher() {
             stats_answer(DUMP_DIR);
             touch_check(DUMP_DIR);
             switch_req_check(DUMP_DIR);
+            orb_check(DUMP_DIR); // 通道十:AI 外显事件注入(直调状态核,落回执)
             alert_tick(tick);
             history_tick(DUMP_DIR, tick);
         }
@@ -951,6 +953,14 @@ pub struct StatsSnap {
     pub session_deaths: u64,
     /// 触摸注入动作计数(通道八)
     pub touches: u64,
+    // ---- ai_presence 字段族(2026-08-30,期 0 组件一,D9 机器轨) ----
+    /// 页("terminal"/"ai";服务未登记 = "-")
+    pub ai_page: String,
+    pub ai_running: bool,
+    pub ai_orb_x: i64,
+    pub ai_orb_y: i64,
+    pub ai_pressed: bool,
+    pub ai_overlay: bool,
 }
 
 /// 拍一张当前快照(各静态即读即还;会话名单过 router 锁,取完即还)
@@ -971,6 +981,26 @@ pub fn stats_snap() -> StatsSnap {
         .ok()
         .and_then(|c| parse_vmrss_kb(&c))
         .unwrap_or(0);
+    // AI 外显读数(期 0 组件一):未登记给中性值(观测铁律:不许反咬业务)。
+    // now_ms 与运行侧同一把尺 = boot_ms
+    let (ai_page, ai_running, ai_orb_x, ai_orb_y, ai_pressed, ai_overlay) =
+        match ai_presence_handle() {
+            Some(ai) => {
+                let s = ai.snap(crate::report::boot_ms() as u64);
+                (
+                    match s.page {
+                        crate::ai_presence::Page::Terminal => "terminal".to_owned(),
+                        crate::ai_presence::Page::AiFullscreen => "ai".to_owned(),
+                    },
+                    s.ai_running,
+                    s.x as i64,
+                    s.y as i64,
+                    s.pressed,
+                    s.overlay_visible,
+                )
+            }
+            None => ("-".to_owned(), false, 0, 0, false, false),
+        };
     StatsSnap {
         uptime_ms: crate::report::boot_ms(),
         foreground: APP_FOREGROUND.load(Ordering::Relaxed),
@@ -993,6 +1023,12 @@ pub fn stats_snap() -> StatsSnap {
         bytes_other: STAT_BYTES_OTHER.load(Ordering::Relaxed),
         session_deaths: STAT_SESSION_DEATHS.load(Ordering::Relaxed),
         touches: STAT_TOUCHES.load(Ordering::Relaxed),
+        ai_page,
+        ai_running,
+        ai_orb_x,
+        ai_orb_y,
+        ai_pressed,
+        ai_overlay,
     }
 }
 
@@ -1005,7 +1041,7 @@ pub fn format_stats(s: &StatsSnap) -> String {
     // 帧均耗防除零:一帧没画过就报 0
     let draw_avg = s.draw_total_ms.checked_div(s.frames).unwrap_or(0);
     format!(
-        "uptime={}ms\nforeground={}\nloop_beat_age={}\nframes={}\npump_calls={}\npump_bytes={}\nshots={}\ntexts={}\nkeys={}\nkeys_bytes={}\ntouches={}\nactive={}\nsessions={}\ndraw_avg_ms={}\ndraw_max_ms={}\ncpu_jiffies={}\nrss_kb={}\nbytes_local={}\nbytes_remote={}\nbytes_other={}\nsession_deaths={}\n",
+        "uptime={}ms\nforeground={}\nloop_beat_age={}\nframes={}\npump_calls={}\npump_bytes={}\nshots={}\ntexts={}\nkeys={}\nkeys_bytes={}\ntouches={}\nactive={}\nsessions={}\ndraw_avg_ms={}\ndraw_max_ms={}\ncpu_jiffies={}\nrss_kb={}\nbytes_local={}\nbytes_remote={}\nbytes_other={}\nsession_deaths={}\nai_page={}\nai_running={}\nai_orb_x={}\nai_orb_y={}\nai_pressed={}\nai_overlay={}\n",
         s.uptime_ms,
         s.foreground,
         age,
@@ -1026,7 +1062,13 @@ pub fn format_stats(s: &StatsSnap) -> String {
         s.bytes_local,
         s.bytes_remote,
         s.bytes_other,
-        s.session_deaths
+        s.session_deaths,
+        s.ai_page,
+        s.ai_running,
+        s.ai_orb_x,
+        s.ai_orb_y,
+        s.ai_pressed,
+        s.ai_overlay
     )
 }
 
@@ -1214,6 +1256,138 @@ pub fn switch_req_check(dir: &str) {
 /// 主循环取走并清标志(true=请求一次切换;仅 UI 调,调 switch_session)
 pub fn switch_take() -> bool {
     SWITCH_REQ.swap(false, Ordering::Relaxed)
+}
+
+// ---- 通道十:orb-inject → AI 外显事件注入(2026-08-30,ai-presence 期 0
+// 组件一,规格书 ai-presence.md §八 D9 驱动轨) ----
+//
+// AI 外显状态核的遥控器:host 写脚本行进 orb-inject,值守线程解析后
+// **直调 AiPresenceState 服务方法**——状态核 Sync 内部可变,人走触摸、
+// AI 走服务/注入,同一状态核同一套考题(D9 同源),不需经主循环中转
+// (通道八触摸注入要过 handle_touch 才借得到 UI 态,本通道无此需求)。
+// 处理后落 orb-inject-res 回执(应用条数 + 事后快照),一问一答同
+// stats-req 家族。判卷:na-stats.sh 看 ai_* 字段族翻转 + na-shot.sh 实拍。
+
+/// AI 外显状态核服务句柄(App 装插件时登记;观测/注入同一份)
+static AI_PRESENCE: Mutex<Option<Arc<crate::ai_presence::AiPresenceState>>> = Mutex::new(None);
+
+/// 登记 AI 外显状态核(android_app init_terminal 装插件后调一次)
+pub fn register_ai_presence(ai: &Arc<crate::ai_presence::AiPresenceState>) {
+    *AI_PRESENCE.lock().unwrap() = Some(ai.clone());
+}
+
+/// 取句柄(owned Arc,借用即还——同 GATE_ROUTER 套路);未登记 = None
+fn ai_presence_handle() -> Option<Arc<crate::ai_presence::AiPresenceState>> {
+    AI_PRESENCE.lock().unwrap().clone()
+}
+
+/// 注入 orb 指令(平台无关;值守线程直调状态核服务方法)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum OrbCmd {
+    /// 点球(终端 ↔ AI 全屏往返)
+    Tap,
+    /// 拖球到 (x, y)(状态核钳制)
+    Drag { x: f64, y: f64 },
+    /// 假跑 ms 毫秒(= 长按球的 debug 钩子同款 fake_run)
+    Run { ms: u64 },
+    /// 结束运行(run_end)
+    End,
+    /// 甩掉浮层(per-run dismissed)
+    Dismiss,
+}
+
+/// 解析一行(纯函数,钉死)。None = 空行/注释跳过;Some(Err) = 坏行
+pub fn parse_orb_line(line: &str) -> Option<Result<OrbCmd, String>> {
+    let s = line.trim();
+    if s.is_empty() || s.starts_with('#') {
+        return None;
+    }
+    let tok: Vec<&str> = s.split_whitespace().collect();
+    let bad = || Some(Err(format!("坏行(跳过): {s}")));
+    let num = |i: usize| tok.get(i).and_then(|t| t.parse::<f64>().ok());
+    match tok[0] {
+        "tap" => Some(Ok(OrbCmd::Tap)),
+        "end" => Some(Ok(OrbCmd::End)),
+        "dismiss" => Some(Ok(OrbCmd::Dismiss)),
+        "drag" => {
+            let (Some(x), Some(y)) = (num(1), num(2)) else {
+                return bad();
+            };
+            Some(Ok(OrbCmd::Drag { x, y }))
+        }
+        "run" => match tok.get(1).and_then(|t| t.parse::<u64>().ok()) {
+            // 封顶 60s:注入脚本写错不许把灯焊亮
+            Some(ms) => Some(Ok(OrbCmd::Run { ms: ms.min(60_000) })),
+            None => bad(),
+        },
+        _ => bad(),
+    }
+}
+
+/// 解析整段脚本(纯函数):有效指令序列 + 坏行清单(空行/注释不计)
+pub fn parse_orb_script(content: &str) -> (Vec<OrbCmd>, Vec<String>) {
+    let mut cmds = Vec::new();
+    let mut errs = Vec::new();
+    for line in content.lines() {
+        match parse_orb_line(line) {
+            Some(Ok(c)) => cmds.push(c),
+            Some(Err(e)) => errs.push(e),
+            None => {}
+        }
+    }
+    (cmds, errs)
+}
+
+/// 通道十值守:orb-inject 存在即读走(读后即删),逐条直调状态核,
+/// 落 orb-inject-res 回执(应用条数 + 坏行数 + 事后快照)
+fn orb_check(dir: &str) {
+    let trigger = std::path::PathBuf::from(dir).join("orb-inject");
+    if !trigger.exists() {
+        return;
+    }
+    let content = std::fs::read_to_string(&trigger).unwrap_or_default();
+    std::fs::remove_file(&trigger).ok();
+    let (cmds, errs) = parse_orb_script(&content);
+    let res = std::path::PathBuf::from(dir).join("orb-inject-res");
+    let Some(ai) = ai_presence_handle() else {
+        std::fs::write(&res, "error=ai-presence 服务未登记\n").ok();
+        return;
+    };
+    let now = crate::report::boot_ms() as u64;
+    for cmd in &cmds {
+        match *cmd {
+            OrbCmd::Tap => ai.tap_orb(),
+            OrbCmd::Drag { x, y } => ai.drag_to(x, y),
+            OrbCmd::Run { ms } => ai.fake_run(ms, now),
+            OrbCmd::End => ai.run_end(now),
+            OrbCmd::Dismiss => ai.dismiss_overlay(),
+        }
+    }
+    let s = ai.snap(now);
+    let page = match s.page {
+        crate::ai_presence::Page::Terminal => "terminal",
+        crate::ai_presence::Page::AiFullscreen => "ai",
+    };
+    std::fs::write(
+        &res,
+        format!(
+            "applied={} bad={}\npage={page} running={} x={:.0} y={:.0} pressed={} overlay={}\n",
+            cmds.len(),
+            errs.len(),
+            s.ai_running,
+            s.x,
+            s.y,
+            s.pressed,
+            s.overlay_visible
+        ),
+    )
+    .ok();
+    if !errs.is_empty() {
+        crate::report::report(
+            "gate",
+            &format!("orb-inject 坏行 {} 条: {}", errs.len(), errs[0]),
+        );
+    }
 }
 
 // ---- 自观测第四块②:异常自报告警(2026-08-27) ----

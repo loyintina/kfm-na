@@ -4,6 +4,7 @@
 /// crates/cordis-na)。harness re-export 保持 `kfm_na::base::` 路径可用,
 /// 消费侧零 churn;新代码可直接 `use cordis_na::…`
 pub use cordis_na as base;
+pub mod ai_presence;
 pub mod bootstrap;
 pub mod conn;
 pub mod crash;

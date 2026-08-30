@@ -1095,14 +1095,96 @@ impl TermView {
                 let bg = if active { KEYBAR_MOD_ON } else { KEYBAR_KEY_BG };
                 // 圆角药丸键格（内缩出缝，圆角半径 14px）
                 frame.fill_round_rect(x + 3, y + 3, cell_w - 6, keybar::ROW_H_PX - 6, 14, bg);
-                self.draw_label(&mut frame, kd.label, x, cell_w, y, keybar::ROW_H_PX);
+                self.draw_label(
+                    &mut frame,
+                    kd.label,
+                    x,
+                    cell_w,
+                    y,
+                    keybar::ROW_H_PX,
+                    KEYBAR_LABEL,
+                );
+            }
+        }
+    }
+
+    /// AI 全屏页占位空壳（ai-presence 期 0 组件一；合成网格是组件④）。
+    /// 整屏深紫暗底 + 一行居中标记文字——截图肉眼可分即可（C 档实拍判卷）。
+    /// page=AiFullscreen 时调用方画它代替终端网格
+    pub fn render_ai_page(&self, buf: &mut [u32], buf_w: u32, buf_h: u32) {
+        if buf_w == 0 || buf_h == 0 {
+            return;
+        }
+        buf.fill(AI_PAGE_BG);
+        let mut frame = Frame {
+            buf,
+            w: buf_w,
+            h: buf_h,
+        };
+        const LINE_H: u32 = 72;
+        let cy = (buf_h / 2).saturating_sub(LINE_H / 2);
+        self.draw_label(
+            &mut frame,
+            "AI 页 · 期0 占位",
+            0,
+            buf_w,
+            cy,
+            LINE_H,
+            AI_PAGE_FG,
+        );
+    }
+
+    /// 雾状光球（D8：kfmv4 base.scss:23 血统）：程序化预渲染 sprite 一次
+    /// （orb_sprite 径向渐变查表），运行时纯贴图。整体 alpha 按态缩放——
+    /// 调用方传 ai_presence::orb_alpha 的读数（闲/运行/pressed/AI页 四态
+    /// 硬切，无动画帧）。绘制在终端网格之后（调用方顺序保证）
+    pub fn render_orb(&self, buf: &mut [u32], buf_w: u32, buf_h: u32, x: f64, y: f64, alpha: f32) {
+        if alpha <= 0.0 || buf_w == 0 || buf_h == 0 {
+            return;
+        }
+        let sprite = orb_sprite();
+        let mut frame = Frame {
+            buf,
+            w: buf_w,
+            h: buf_h,
+        };
+        let s = i64::from(sprite.size);
+        let (ox, oy) = (x as i64 - s / 2, y as i64 - s / 2);
+        for sy in 0..s {
+            let py = oy + sy;
+            if py < 0 || py >= i64::from(frame.h) {
+                continue;
+            }
+            for sx in 0..s {
+                let px = ox + sx;
+                if px < 0 || px >= i64::from(frame.w) {
+                    continue;
+                }
+                let (color, a) = sprite.px[(sy * s + sx) as usize];
+                // 整体 alpha 压缩进每像素覆盖率（D8：闲 ~25% 不挡后面内容）
+                let a = (f32::from(a) * alpha).round() as u32;
+                if a == 0 {
+                    continue;
+                }
+                frame.blend_px(px as u32, py as u32, color, a);
             }
         }
     }
 
     /// 快捷键行标签：水平居中 + 垂直居中光栅文本。主字体缺字形走 CJK 备用
-    /// （↑↓←→ 的命），双缺记 tofu 目击名单后跳过（不画方框吓唬人）
-    fn draw_label(&self, frame: &mut Frame<'_>, text: &str, cx: u32, cw: u32, cy: u32, rh: u32) {
+    /// （↑↓←→ 的命），双缺记 tofu 目击名单后跳过（不画方框吓唬人）。
+    /// fg = 文字色（快捷键行 KEYBAR_LABEL / AI 页 AI_PAGE_FG）
+    #[allow(clippy::too_many_arguments)]
+    fn draw_label(
+        &self,
+        frame: &mut Frame<'_>,
+        text: &str,
+        cx: u32,
+        cw: u32,
+        cy: u32,
+        rh: u32,
+        fg: u32,
+    ) {
         let px = rh as f32 * 0.26; // 字号：行高的 1/4 左右（实拍「太大」后收敛）
         let Some(hm) = self.font.horizontal_line_metrics(px) else {
             return;
@@ -1156,7 +1238,7 @@ impl TermView {
                     }
                     let a = u32::from(bmp[(gy * m.width as u32 + gx) as usize]);
                     if a > 0 {
-                        frame.blend_px(x as u32, y as u32, KEYBAR_LABEL, a);
+                        frame.blend_px(x as u32, y as u32, fg, a);
                     }
                 }
             }
@@ -1246,6 +1328,55 @@ pub const MAG_ZOOM: u32 = 2;
 pub const MAG_BORDER: u32 = 0x0006_B6D4;
 /// 浮窗底缘与触点的间距（不挡手）
 pub const MAG_GAP_PX: u32 = 60;
+
+/// AI 页占位空壳配色（ai-presence 期 0 组件一）：深紫暗底 + 浅紫标记文字
+/// （kfmv4 紫色板血统：核 #7C3AED 的暗化/亮化两端）
+pub const AI_PAGE_BG: u32 = 0x0014_0A24;
+pub const AI_PAGE_FG: u32 = 0x00C4_B5FD;
+
+/// 雾状光球 sprite（D8）：颜色 = kfmv4 base.scss:23 原配方 #7C3AED；
+/// 直径余量到 64px 半径（可视半径 48 之外留光晕衰减带）
+pub const ORB_CORE_COLOR: u32 = 0x007C_3AED;
+const ORB_SPRITE_RADIUS: u32 = 64;
+
+/// 预渲染光球：每像素 (颜色, 覆盖率 0-255)。配方 = base.scss:23——
+/// radial-gradient(circle at 30% 30%, #7C3AED 0.9→0.4→transparent 70%)
+/// 加外圈光晕衰减（第二层，圆心居中向外淡）。无轮廓线：球感全靠径向
+/// 亮度落差与光晕对比（D8）
+struct OrbSprite {
+    size: u32,
+    px: Vec<(u32, u8)>,
+}
+
+fn orb_sprite() -> &'static OrbSprite {
+    static SPRITE: std::sync::OnceLock<OrbSprite> = std::sync::OnceLock::new();
+    SPRITE.get_or_init(|| {
+        let size = ORB_SPRITE_RADIUS * 2;
+        let r = f64::from(ORB_SPRITE_RADIUS);
+        let (hx, hy) = (f64::from(size) * 0.3, f64::from(size) * 0.3); // 高光心 30% 30%
+        let mut px = Vec::with_capacity((size * size) as usize);
+        for py in 0..size {
+            for pxx in 0..size {
+                let (fx, fy) = (f64::from(pxx), f64::from(py));
+                // 核：以高光心为圆心的径向渐变（0.9 → 0.4 → 0，70% 半径断）
+                let d_hl = ((fx - hx).powi(2) + (fy - hy).powi(2)).sqrt() / r;
+                let core = if d_hl < 0.5 {
+                    0.9 + (0.4 - 0.9) * (d_hl / 0.5)
+                } else if d_hl < 0.7 {
+                    0.4 * (1.0 - (d_hl - 0.5) / 0.2)
+                } else {
+                    0.0
+                };
+                // 外圈光晕：圆心居中，线性向外衰减（第二层透明度叠加）
+                let d_c = ((fx - r).powi(2) + (fy - r).powi(2)).sqrt() / r;
+                let halo = if d_c < 1.0 { 0.20 * (1.0 - d_c) } else { 0.0 };
+                let a = (core + halo).min(1.0);
+                px.push((ORB_CORE_COLOR, (a * 255.0).round() as u8));
+            }
+        }
+        OrbSprite { size, px }
+    })
+}
 
 /// 选区边界端点：Start = 归一化后的起端（字典序小），End = 止端
 /// （2026-08-21 拖柄废除后改名 SelEnd——柄没了，端点还在）
@@ -1367,6 +1498,10 @@ pub trait TermEmu: Send {
     fn set_cell_size(&mut self, cell_w: u32, cell_h: u32);
     fn render_into(&mut self, buf: &mut [u32], w: u32, h: u32);
     fn render_keybar(&self, buf: &mut [u32], w: u32, h: u32, ime_bottom: u32, mods: u8);
+    /// AI 外显 chrome（ai-presence 期 0 组件一，android_app rasterize 调用方）：
+    /// AI 页占位空壳（page=AiFullscreen 时代替终端网格）/ 雾状光球 sprite
+    fn render_ai_page(&self, buf: &mut [u32], w: u32, h: u32);
+    fn render_orb(&self, buf: &mut [u32], w: u32, h: u32, x: f64, y: f64, alpha: f32);
     fn take_tofu_chars(&self) -> Vec<char>;
     fn scroll_lines(&mut self, lines: i32);
     fn scroll_to_bottom(&mut self);
@@ -1405,6 +1540,12 @@ impl TermEmu for TermView {
     }
     fn render_keybar(&self, buf: &mut [u32], w: u32, h: u32, ime_bottom: u32, mods: u8) {
         TermView::render_keybar(self, buf, w, h, ime_bottom, mods)
+    }
+    fn render_ai_page(&self, buf: &mut [u32], w: u32, h: u32) {
+        TermView::render_ai_page(self, buf, w, h)
+    }
+    fn render_orb(&self, buf: &mut [u32], w: u32, h: u32, x: f64, y: f64, alpha: f32) {
+        TermView::render_orb(self, buf, w, h, x, y, alpha)
     }
     fn take_tofu_chars(&self) -> Vec<char> {
         TermView::take_tofu_chars(self)

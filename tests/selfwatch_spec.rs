@@ -41,6 +41,12 @@ fn snap() -> StatsSnap {
         bytes_other: 0,
         session_deaths: 0,
         touches: 0,
+        ai_page: "terminal".into(),
+        ai_running: false,
+        ai_orb_x: 0,
+        ai_orb_y: 0,
+        ai_pressed: false,
+        ai_overlay: false,
     }
 }
 

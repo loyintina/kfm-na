@@ -50,6 +50,9 @@
   `\r`/`\x03` 等转义由 printf '%b' 翻成真字节)。
 - `na-touch.sh 'scroll 3' [...]` — 触摸注入(通道八):tap/down/move/
   up/scroll/sleep 脚本化,与真手指同一入口;手势类 bug 的复现腿。
+- `na-orb.sh 'tap' [...]` — AI 外显事件注入(通道十):tap/drag/run/end/
+  dismiss,直调 AiPresenceState 状态核,落 orb-inject-res 回执;
+  判卷配 stats 的 ai_* 字段族 + na-shot 实拍。
 
 ## 判卷(实证脚本)
 

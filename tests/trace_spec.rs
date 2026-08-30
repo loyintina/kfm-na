@@ -77,6 +77,12 @@ fn spec_stats_格式_keyvalue一行一项() {
         bytes_remote: 222,
         bytes_other: 3,
         session_deaths: 2,
+        ai_page: "terminal".into(),
+        ai_running: false,
+        ai_orb_x: 0,
+        ai_orb_y: 0,
+        ai_pressed: false,
+        ai_overlay: false,
     };
     let out = format_stats(&s);
     assert!(out.contains("uptime=61000ms\n"));

@@ -71,6 +71,20 @@ struct Press {
     long_fired: bool,
 }
 
+/// 按在光球上的手势（ai-presence 期 0 组件一）：Started 命中球区记下，
+/// 位移超拖动阈值 → 拖动（球跟手）；无位移短按抬起 → tap_orb 切页；
+/// 长按无位移 → fake_run（debug 钩子）。Some 期间终端手势全家让路
+/// （球命中优先级高于终端，D9）
+struct OrbTouch {
+    at: std::time::Instant,
+    x: f64,
+    y: f64,
+    /// 已越过拖动阈值（ai_presence::DRAG_THRESHOLD_PX）——抬手不算 tap
+    dragged: bool,
+    /// 本次按压已触发长按 fake_run——抬手不再补 tap
+    long_fired: bool,
+}
+
 /// 会话健康牌（断线重连 2026-08-21，按名字记账——槽位随切换翻面,
 /// 死活跟名字走）：dead = Failed/Exited 钉死、Opened 复活;
 /// retried = 本次死亡剧集已自动重连过一次（防断网期重连风暴烧钱:
@@ -159,6 +173,14 @@ struct App {
     modifiers: Option<Arc<crate::keybar::ModifierState>>,
     /// ime.insets 服务句柄（键盘高度/强弹；生产 = JniInsets）
     ime_insets: Option<Arc<dyn crate::insets::ImeInsets>>,
+    /// AiPresenceState 服务句柄（ai-presence 插件，期 0 组件一）：
+    /// 光球/AI 页状态同源读数（人走触摸、AI 走服务，D9）
+    ai_presence: Option<Arc<crate::ai_presence::AiPresenceState>>,
+    /// 按在光球上的手势（Some = 这手势归球，终端手势全家让路）
+    orb_touch: Option<OrbTouch>,
+    /// 上一帧的 AI 外显快照（about_to_wait 逐圈比对置脏：
+    /// 探针注入/fake_run 到期等不经触摸的状态变化也要画出帧）
+    last_ai_snap: Option<crate::ai_presence::PresenceSnap>,
 }
 
 impl App {
@@ -248,6 +270,23 @@ impl App {
                     std::sync::atomic::AtomicBool::new(false);
                 if !FIRST_TOUCH.swap(true, std::sync::atomic::Ordering::Relaxed) {
                     crate::report::report("ime", "首个触摸进 handler（派发活着）");
+                }
+                // 光球命中优先级高于终端（ai-presence 期 0 组件一，D9）：
+                // 按下命中球区 → 这手势归球（pressed 置位 = 第四视觉态硬切；
+                // 拖动/点按/长按在 Moved/Ended/check_orb_long_press 分路）
+                if let Some(ai) = &self.ai_presence
+                    && ai.hit_orb(x, y)
+                {
+                    ai.press_down();
+                    self.orb_touch = Some(OrbTouch {
+                        at: std::time::Instant::now(),
+                        x,
+                        y,
+                        dragged: false,
+                        long_fired: false,
+                    });
+                    self.dirty = true;
+                    return;
                 }
                 // 起点在快捷键行带上 → 这手势归行（不滚屏不唤键盘）
                 // BAR-018：判定尺与渲染/hit 一致——减去键盘 inset，
@@ -347,6 +386,22 @@ impl App {
                     }
                     return;
                 }
+                // 光球手势：越过拖动阈值即 dragged，球跟手（边界钳制在
+                // 状态核 drag_to）；未过阈值不动球（等抬手判 tap / 长按）
+                if let Some(ot) = &mut self.orb_touch {
+                    if (x - ot.x).abs() >= crate::ai_presence::DRAG_THRESHOLD_PX
+                        || (y - ot.y).abs() >= crate::ai_presence::DRAG_THRESHOLD_PX
+                    {
+                        ot.dragged = true;
+                    }
+                    if ot.dragged
+                        && let Some(ai) = &self.ai_presence
+                    {
+                        ai.drag_to(x, y);
+                        self.dirty = true;
+                    }
+                    return;
+                }
                 if self.bar_touch.is_some() {
                     return; // 快捷键行手势：不支持拖动
                 }
@@ -417,6 +472,18 @@ impl App {
                 // 残余指头不接管滚动/点按（touch_scroll/press 进捏合时已清）
                 if self.pinch.take().is_some() {
                     self.persist_zoom();
+                    return;
+                }
+                // 光球手势收尾：pressed 复位；无位移短按抬起 → tap 切页
+                // （Cancelled / 拖过 / 长按已发 fake_run 的抬手不补 tap）
+                if let Some(ot) = self.orb_touch.take() {
+                    if let Some(ai) = &self.ai_presence {
+                        ai.press_up();
+                        if phase == TouchPhase::Ended && !ot.dragged && !ot.long_fired {
+                            ai.tap_orb();
+                        }
+                    }
+                    self.dirty = true;
                     return;
                 }
                 // 快捷键行手势：抬手命中发键（Cancelled 不发）
@@ -538,6 +605,39 @@ impl App {
         }
     }
 
+    /// 光球长按计时（与 check_long_press 同制，about_to_wait 每圈查）：
+    /// 按住球 ≥LONG_PRESS_MS 未拖动 → fake_run(3000)。
+    /// **debug 钩子**（规格书 §五：echo-brain 就位后可拆）——假跑一次验证
+    /// 灯亮/浮层/stats 全链，不接任何真 AI
+    fn check_orb_long_press(&mut self) {
+        let Some(ot) = &mut self.orb_touch else {
+            return;
+        };
+        if ot.long_fired || ot.dragged {
+            return;
+        }
+        if ot.at.elapsed() < std::time::Duration::from_millis(crate::ai_presence::LONG_PRESS_MS) {
+            return;
+        }
+        ot.long_fired = true;
+        if let Some(ai) = &self.ai_presence {
+            ai.fake_run(3000, crate::report::boot_ms() as u64);
+        }
+        self.dirty = true;
+        crate::report::report("ai", "长按光球 → fake_run(3000)（debug 钩子）");
+    }
+
+    /// AI 外显快照逐圈比对置脏：探针注入（通道十直调状态核）/fake_run
+    /// 到期/run 驻留翻隐等不经壳层触摸的状态变化也要画出帧
+    fn poll_ai_presence(&mut self) {
+        let Some(ai) = &self.ai_presence else { return };
+        let snap = ai.snap(crate::report::boot_ms() as u64);
+        if self.last_ai_snap != Some(snap) {
+            self.last_ai_snap = Some(snap);
+            self.dirty = true;
+        }
+    }
+
     /// 选择态单击复制：提取选中文字 → JNI 系统剪贴板 + Toast，清高亮。
     /// 提取为空（按在空白格）不打扰剪贴板，只清选区
     fn copy_selection(&mut self) {
@@ -624,13 +724,22 @@ impl App {
         // 「用哪个终端芯、连哪、怎么连」都不归主循环；工厂是服务，实例归调用方。
         // 瞬时返回契约预算 50ms 是 harness 政策(G5 归层:cordis-na 默认关,
         // 这里显式开启,规格书 §4.3)
-        let base = Base::new(vec![PluginEntry {
-            id: crate::plugins::conn_provider_ws::PLUGIN_NAME,
-            disabled: false,
-            config: Some(Box::new(|| {
-                Arc::new(ConnConfig::default()) as Arc<dyn std::any::Any + Send + Sync>
-            })),
-        }])
+        let base = Base::new(vec![
+            PluginEntry {
+                id: crate::plugins::conn_provider_ws::PLUGIN_NAME,
+                disabled: false,
+                config: Some(Box::new(|| {
+                    Arc::new(ConnConfig::default()) as Arc<dyn std::any::Any + Send + Sync>
+                })),
+            },
+            // 新插件上线纪律：disabled 一键关,默认开(回退第一层)——
+            // 翻 true 即整插件不激活,状态核/光球/AI 页全下线
+            PluginEntry {
+                id: crate::plugins::ai_presence::PLUGIN_NAME,
+                disabled: false,
+                config: None,
+            },
+        ])
         .with_apply_budget(std::time::Duration::from_millis(50));
         if let Err(e) = base.load(crate::plugins::term_alacritty::TermAlacritty::new()) {
             crate::report::report_sync("term", &format!("终端插件装载失败: {e:?}"));
@@ -655,6 +764,17 @@ impl App {
             }
         } else {
             crate::report::report_sync("ime", "无 AndroidApp 句柄——输入插件未装");
+        }
+
+        // AI 外显插件（期 0 组件一）：状态核共享实例直挂。壳层（光球绘制/
+        // 触摸路由）与闸门（stats 字段族/通道十注入）同读这一份（D9 同源）；
+        // 装载失败只上报——球没了终端照跑（回退粒度纪律）
+        if let Err(e) = base.load(crate::plugins::ai_presence::AiPresence::new()) {
+            crate::report::report_sync("ai", &format!("AI 外显插件装载失败: {e:?}"));
+        }
+        self.ai_presence = base.ctx().get::<crate::ai_presence::AiPresenceState>().ok();
+        if let Some(ai) = &self.ai_presence {
+            crate::gate::register_ai_presence(ai);
         }
 
         // L3 首启安装(必须在本地会话 spawn 前:装好后 shell_plan 才会
@@ -789,6 +909,10 @@ impl App {
     /// JNI 轮询，insets.rs）- 快捷键行高（BAR-017，Rust 自绘常驻让位）。
     /// 顶带跟当前格高走（margin_top：捏合缩放后格高可变，2026-08-21）
     fn apply_window_size(&mut self, w: u32, h: u32) {
+        // 光球边界钳制原料（首次调用落默认出生位；键盘 inset 变化也走这里）
+        if let Some(ai) = &self.ai_presence {
+            ai.set_bounds(w, h, self.ime_bottom_px);
+        }
         let Some(term) = self.term_handle() else {
             return;
         };
@@ -1126,25 +1250,45 @@ impl App {
         }
     }
 
-    /// 光栅化一帧的内容（终端网格 + 快捷键行 + 放大镜 + tofu 上报）进
-    /// 任意像素缓冲。关联函数按字段传参，避开 buf 借用 self.gfx 时动
-    /// 不了 self 的问题。后台离屏倒帧不走这里——值守线程(screendump)
-    /// 只画终端网格本体，快捷键行/放大镜是 UI 装帧，不在后台视野里
+    /// 光栅化一帧的内容（终端网格 + 快捷键行 + 光球/AI 页 + 放大镜 +
+    /// tofu 上报）进任意像素缓冲。关联函数按字段传参，避开 buf 借用
+    /// self.gfx 时动不了 self 的问题。后台离屏倒帧不走这里——值守线程
+    /// (screendump) 只画终端网格本体，快捷键行/光球/放大镜是 UI 装帧，
+    /// 不在后台视野里
     fn rasterize(
         term: Option<&mut Box<dyn TermEmu>>,
         mods: u8,
         magnifier_at: Option<(f64, f64)>,
         ime_bottom_px: u32,
+        ai_snap: Option<crate::ai_presence::PresenceSnap>,
         buf: &mut [u32],
         w: u32,
         h: u32,
     ) {
         if let Some(term) = term {
-            term.render_into(buf, w, h);
-            // 快捷键行（BAR-017：Rust 自绘覆盖层，画在终端网格之上；
-            // 键盘 inset 之上——键盘弹起时行跟着上浮）。
-            // 修饰键位读 input.modifiers 服务（input-ime 方案 A）
-            term.render_keybar(buf, w, h, ime_bottom_px, mods);
+            if ai_snap.is_some_and(|s| s.page == crate::ai_presence::Page::AiFullscreen) {
+                // AI 全屏页占位空壳（期 0 组件一）：不画终端网格与快捷键行，
+                // 整屏深紫暗底 + 居中标记文字（合成网格是组件④）
+                term.render_ai_page(buf, w, h);
+            } else {
+                term.render_into(buf, w, h);
+                // 快捷键行（BAR-017：Rust 自绘覆盖层，画在终端网格之上；
+                // 键盘 inset 之上——键盘弹起时行跟着上浮）。
+                // 修饰键位读 input.modifiers 服务（input-ime 方案 A）
+                term.render_keybar(buf, w, h, ime_bottom_px, mods);
+            }
+            // 光球（常驻 chrome：画在终端网格/AI 页之后，两页都在）。
+            // alpha 四态硬切读 ai_presence::orb_alpha（闲/运行/pressed/AI页）
+            if let Some(s) = ai_snap {
+                term.render_orb(
+                    buf,
+                    w,
+                    h,
+                    s.x,
+                    s.y,
+                    crate::ai_presence::orb_alpha(s.ai_running, s.pressed, s.page),
+                );
+            }
             // 选区边界拖动中的放大镜浮窗（画在所有内容之上——
             // 帧缓冲源区在主渲染里已就位，这里纯位图放大）
             if let Some((mx, my)) = magnifier_at {
@@ -1201,6 +1345,7 @@ impl App {
                 mods,
                 self.magnifier_at,
                 self.ime_bottom_px,
+                self.last_ai_snap,
                 &mut buf,
                 w,
                 h,
@@ -1347,6 +1492,8 @@ impl ApplicationHandler for App {
             // 现在是条件触发,空圈不 redraw;每圈 4ms 查一次 500ms 阈值照准,
             // 触发即置 dirty → 本圈末尾条件重绘接住)
             self.check_long_press();
+            self.check_orb_long_press(); // 光球长按 → fake_run(debug 钩子)
+            self.poll_ai_presence(); // AI 外显快照比对(注入/到期也要画帧)
             // blackout 期补画(冗余兜底,2026-08-22 探针拆除案保留):
             // 首笔 RedrawRequested 到达前的脏帧由唤醒锤锤醒的本方法直画;
             // 首笔 Redraw 到达后唤醒锤收锤,此路自动关闭归回正道
