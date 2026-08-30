@@ -104,17 +104,30 @@ apply 只注册服务与监听。
   `probe-glm-5.3-flash-20260830.sse`（40 事件）——kfmv4 服务端吐出的真流，
   双 provider 互证分帧形状与上游无关
 
-### 四B·上游 OpenAI 协议（direct-api-brain 对外面；fixture 待抓）
+### 四B·上游 OpenAI 协议（direct-api-brain 对外面；2026-08-30 双路活探针回填）
 
 - chat/completions 流式：`stream:true` + `stream_options.include_usage`；
-  SSE 帧 = `data: {choices:[{delta:{content?/reasoning_content?/tool_calls?}}]}`，
-  终结 = `data: [DONE]`（kfmv4 chat.ts:288-296 为参照实现）
-- 翻译职责（复刻 chat.ts 的角色）：`content` → text_delta；`reasoning_content`
-  → thinking_delta；`delta.tool_calls`（OpenAI 碎片格式）→ tool_use 块 +
-  input_json_delta；**reasoning 归位**（text 空且 reasoning 非空 → 正文，R3）
-- provider 差异登记表：Kimi（k3-256k，thinking）/ 智谱 coding（glm-5.3-flash，
-  thinking）——**待抓**：两路原生 SSE fixture（普通流+thinking 流；tool_calls 流
-  随期 2 手再抓）
+  SSE 帧 = `data: {chunk}\n\n`，终结 = `data: [DONE]`；
+  chunk = `{id,created,object,model,choices[0]{index,delta{…},finish_reason}}`
+- delta 字段：`role`（可忽略）/ `content` → text_delta / `reasoning_content`
+  → thinking_delta / `tool_calls`（OpenAI 碎片格式，期 2 再抓）→ tool_use 块；
+  `finish_reason:"stop"` 帧即收尾；usage 帧只记账不进事件流
+- 翻译职责（复刻 chat.ts 的角色）：外加 **reasoning 归位**（text 空且
+  reasoning 非空 → 正文，R3）
+- **方言差异登记（双 fixture 互证）**：
+  | 维度 | Kimi（k2.7-highspeed） | 智谱（glm-5.3-flash） |
+  |---|---|---|
+  | `role:"assistant"` | 仅首帧 | **每帧都重复**（容忍） |
+  | usage 位置 | stop 帧内联 **+ 独立 `choices:[]` 帧**（双份） | 仅 stop 帧内联 |
+  | `system_fingerprint` | 有 | 无 |
+  | 401 错误体 | `{error:{message,type}}` | `{error:{code:"401",message}}`（code 是字符串） |
+  | `reasoning_content` | 有（39 帧） | 有（37 帧）——两家同字段，统一处理 |
+- 容错判据（解析器考题要吃）：空 `delta:{}` 帧、`choices:[]` 帧、未知字段、
+  role 重复——全是常态不是错误
+- fixture：`upstream-kimi-k2.7-highspeed-20260830.sse`（kimi-for-coding-highspeed，
+  用户 2026-08-30 点名——比 k3-256k 便宜约 3 倍刊例价）/
+  `upstream-glm-5.3-flash-20260830.sse` / `upstream-error-cases-20260830.txt`
+  （双路 401 实录，坏 key 零额度）；tool_calls 流随期 2 手再抓
 - 配置复刻：na 私有目录落 `providers.json` + `.env`，代字 `${VAR}` fuse 语义
   照搬 kfmv4（resolveKey：先 env 后 .env，缺失 → error 事件，绝不裸发代字）
 - TLS：`rustls` + `webpki-roots`（纯 Rust，Android 交叉编译安全，不碰 openssl）；

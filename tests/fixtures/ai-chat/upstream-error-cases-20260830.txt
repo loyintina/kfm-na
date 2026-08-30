@@ -1,0 +1,9 @@
+# 上游原生错误语义实录(2026-08-30,坏 key,零额度消耗)
+
+## Kimi api.kimi.com/coding/v1 401
+{"error":{"message":"The API Key appears to be invalid or may have expired. Please verify your credentials and try again.","type":"invalid_authentication_error"}}
+HTTP 401
+
+## 智谱 open.bigmodel.cn/api/coding/paas/v4 401
+{"error":{"code":"401","message":"令牌已过期或验证不正确"}}
+HTTP 401
