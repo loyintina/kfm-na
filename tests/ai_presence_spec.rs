@@ -29,8 +29,9 @@ fn new_state() -> AiPresenceState {
 }
 
 fn default_pos() -> (f64, f64) {
+    // 新出生位 (0.859, 0.556) 在屏内、钳制不触发（旧「右缘」位才会被钳进半径）
     (
-        f64::from(W) * ai_presence::DEFAULT_X_RATIO - f64::from(ORB_RADIUS_PX),
+        f64::from(W) * ai_presence::DEFAULT_X_RATIO,
         f64::from(H) * ai_presence::DEFAULT_Y_RATIO,
     )
 }

@@ -27,9 +27,11 @@ use crate::keybar;
 pub const ORB_RADIUS_PX: u32 = 60;
 /// 命中半径（px）：触摸落点与球心距离 ≤ 此值即算按住球（1.5·Rs）
 pub const ORB_HIT_RADIUS_PX: u32 = 90;
-/// 默认出生位（D6）：右缘（x = 屏宽 - 半径）× 屏高 60%
-pub const DEFAULT_X_RATIO: f64 = 1.0;
-pub const DEFAULT_Y_RATIO: f64 = 0.6;
+/// 默认出生位（D6；2026-08-30 用户截屏指定点）：屏宽 0.859 × 屏高 0.556
+///（用户真机截屏 Screenshot_20260830_214836 实测球心 (1082,1557)@1260×2800，
+/// 取代原「右缘×60%」——拇指热区内收，避开右缘手势区）
+pub const DEFAULT_X_RATIO: f64 = 0.859;
+pub const DEFAULT_Y_RATIO: f64 = 0.556;
 /// run_end 后浮层驻留时长（ms）：短回复在浮层内读完的窗口
 pub const LINGER_MS: u64 = 3000;
 /// 长按阈值（ms）：长按球 = fake_run（debug 钩子，echo-brain 就位后可拆）
@@ -123,7 +125,7 @@ impl AiPresenceState {
     }
 
     /// 喂屏幕边界（壳层：建窗/resize/键盘 inset 变化时）。首次调用落默认
-    /// 出生位（右缘 × 屏高 60%，钳制后）；之后只把现位钳进新边界
+    /// 出生位（用户指定点 0.859×0.556，钳制后）；之后只把现位钳进新边界
     pub fn set_bounds(&self, w: u32, h: u32, ime_bottom: u32) {
         let mut g = self.inner.lock().unwrap();
         g.bounds = (w, h, ime_bottom);
