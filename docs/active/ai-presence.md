@@ -278,6 +278,11 @@ trait BrainEndpoint {
   ④ 浮层+手：观战增强（此时浮层显示的是真 AI 的真输出，脚手架一次到位）
   ⑤ 合成网格美化：markdown-lite / 样式块 / 浮层数据源换第二视口
   每组件独立考题+热更+实拍。
+  **②进度（2026-08-31）**：协议层落地 `src/brain.rs`（纯逻辑零 IO）——
+  SseParser（碎喂/粘包/半帧/CRLF/注释容忍）+ OpenAiTranslator（上游 chunk→
+  四A 九事件，方言全容忍）+ RunAccumulator（reasoning 归位 R3）+
+  error_event_from_http + build_chat_request；考题 tests/brain_spec.rs
+  **18 题全绿**，变异抽检双发双咬（thinking↔text 换轨咬 4 题、归位删除咬 1 题）。
 - **期 1 眼睛**：视口快照附上下文。验收 = 问「屏幕上有什么」答得对。
 - **期 2 手**：工具执行注入来源会话。验收 = 让 AI 跑一条命令，终端可见。
 - **期 3 打磨**：server-brain（服务器空间数据源，§四C 契约已就位——**服务器

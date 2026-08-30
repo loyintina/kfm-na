@@ -6,6 +6,7 @@
 pub use cordis_na as base;
 pub mod ai_presence;
 pub mod bootstrap;
+pub mod brain;
 pub mod conn;
 pub mod crash;
 pub mod exec_probe;
