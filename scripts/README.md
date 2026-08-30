@@ -38,6 +38,8 @@
 - `na-trace.sh [行数]` — 行踪环全量或末 N 行(事件流,带毫秒戳)。
 - `na-text.sh` — 当前视野纯文本(读屏)。
 - `na-shot.sh` — 当前帧拍图,落 /tmp/na-shot.png。
+- `orb-on-text-measure.py <图> <cx> <cy> <R>` — 光球文字穿透三区指标
+  (球内/球晕/球外 笔画 p90 与底 p10;D8 加法合成校准尺,判据见脚本头)。
 - `na-replay.sh` — 飞行记录仪拉回 host 确定性回放,末屏 diff 判卷。
 - `na-autopsy.sh [备注]` — **一键收尸包**:触发落盘 + 八件档案拉回
   `autopsy/<时间戳>/` + 摘要。出异常先跑它。

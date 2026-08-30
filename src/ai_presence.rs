@@ -22,10 +22,11 @@ use std::sync::Mutex;
 
 use crate::keybar;
 
-/// 球可视半径（px）——sprite 核心亮区；命中半径比它大一圈（拇指友好）
-pub const ORB_RADIUS_PX: u32 = 48;
-/// 命中半径（px）：触摸落点与球心距离 ≤ 此值即算按住球
-pub const ORB_HIT_RADIUS_PX: u32 = 72;
+/// 球可视半径（px，物理像素）——120px 直径，与 kfmv4 36 CSS px × DPR≈3
+/// 同级（2026-08-30 用户实测参考球径）；命中半径比它大一圈（拇指友好）
+pub const ORB_RADIUS_PX: u32 = 60;
+/// 命中半径（px）：触摸落点与球心距离 ≤ 此值即算按住球（1.5·Rs）
+pub const ORB_HIT_RADIUS_PX: u32 = 90;
 /// 默认出生位（D6）：右缘（x = 屏宽 - 半径）× 屏高 60%
 pub const DEFAULT_X_RATIO: f64 = 1.0;
 pub const DEFAULT_Y_RATIO: f64 = 0.6;
@@ -35,12 +36,13 @@ pub const LINGER_MS: u64 = 3000;
 pub const LONG_PRESS_MS: u64 = 600;
 /// 拖动阈值（px）：按下后位移超此值才算拖动（否则抬手 = tap）
 pub const DRAG_THRESHOLD_PX: f64 = 20.0;
-/// 四态增益硬切（D8 定稿 2026-08-30，取代 alpha 增量体系）：整 sprite 增益
-/// 闲/运行/pressed/AI页 + 运行态光晕增益；优先级 pressed > running > AI 页 > 闲
-pub const GAIN_IDLE: f32 = 0.85;
+/// 四态增益硬切（D8；2026-08-30 加法合成后重调——加法语义下增益直接
+/// 缩放光贡献量，alpha 时代旧值不复用）：整 sprite 增益 闲/运行/pressed/
+/// AI页 + 运行态光晕增益；优先级 pressed > running > AI 页 > 闲
+pub const GAIN_IDLE: f32 = 0.7;
 pub const GAIN_RUNNING: f32 = 1.0;
 pub const HALO_GAIN_RUNNING: f32 = 1.2;
-pub const GAIN_PRESSED: f32 = 1.25;
+pub const GAIN_PRESSED: f32 = 1.3;
 pub const GAIN_AI_PAGE: f32 = 1.0;
 
 /// 页：终端 / AI 全屏（两布尔之一）

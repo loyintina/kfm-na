@@ -247,10 +247,11 @@ fn spec_gain_ai页与四态优先级() {
         (ai_presence::GAIN_PRESSED, 1.0)
     );
     // 增益排序钉：pressed 最亮，闲态最暗（几乎透明但确实有球）——
-    // 数值钉死 GAIN_* 常量本体（排序走 orb_gain 读数，避开常量断言 lint）
-    assert_eq!(ai_presence::GAIN_PRESSED, 1.25);
+    // 数值钉死 GAIN_* 常量本体（排序走 orb_gain 读数，避开常量断言 lint）。
+    // 加法语义（2026-08-30 压字反馈后重调，alpha 时代旧值不复用）
+    assert_eq!(ai_presence::GAIN_PRESSED, 1.3);
     assert_eq!(ai_presence::GAIN_RUNNING, 1.0);
-    assert_eq!(ai_presence::GAIN_IDLE, 0.85);
+    assert_eq!(ai_presence::GAIN_IDLE, 0.7);
     assert_eq!(ai_presence::HALO_GAIN_RUNNING, 1.2);
     let (g_idle, _) = ai_presence::orb_gain(false, false, Page::Terminal);
     let (g_run, h_run) = ai_presence::orb_gain(true, false, Page::Terminal);
@@ -458,12 +459,33 @@ fn spec_冒烟_光球sprite画紫晕角落不染色() {
 }
 
 #[test]
+fn spec_d8加法合成_只加光不遮光() {
+    // 压字回归钉（2026-08-30 用户反馈：alpha 混合把球体暗面盖在文字上，
+    // 球内笔画亮度 −32%）：sprite 改加法合成后，画在亮底上任何像素
+    // 任何通道都不许变暗——球只加光不遮光（参考图 orb-on-white-ref.jpg
+    // 的「文字全亮透过+球加光」效果）
+    let sprite = kfm_na::termview::build_orb_sprite(60.0, 1.0);
+    let (w, h) = (660u32, 660u32);
+    let mut buf = vec![0x0060_6060u32; (w * h) as usize]; // 亮灰底（模拟文字笔画）
+    kfm_na::termview::blit_orb_sprite(&mut buf, w, h, &sprite, 330.0, 330.0, 1.0);
+    for (i, &p) in buf.iter().enumerate() {
+        let (x, y) = (i as u32 % w, i as u32 / w);
+        assert!(
+            (p >> 16) & 0xFF >= 0x60 && (p >> 8) & 0xFF >= 0x60 && p & 0xFF >= 0x60,
+            "({x},{y}) 变暗了：{p:#x} < 0x606060——加法合成不许遮光"
+        );
+    }
+}
+
+#[test]
 fn spec_d8光球配方_逐像素钉() {
     // 与 docs/assets/orb-fit-generated.png 逐像素对拍（D8 校准专跑的验收钉）：
     // build_orb_sprite + blit_orb_sprite 与 scripts/orb-fit.py render() 同公式，
     // 9 采样点容差 ±3/255（整型合成量化差 ≤1.5）。采样值 = 拟合产物 PNG 实测
     // （2026-08-30 仲裁：Python 复算公式 vs PNG 最大差 1.4/255，球心 326,330、
-    // Rs=64.25、halo_gain=1.0）
+    // Rs=64.25、halo_gain=1.0）。加法合成后依然成立：sprite 存「拟合合成结果
+    // 减底 (11,10,15)」的加值，BG 底上 底+加值 = 原合成结果，尺度由 rs 显式
+    // 传参（默认球径 48→60 不影响本钉）
     let sprite = kfm_na::termview::build_orb_sprite(64.25, 1.0);
     let (w, h) = (660u32, 660u32);
     // 预填参考图底色 BG=(11,10,15)（0x000B0A0F）
