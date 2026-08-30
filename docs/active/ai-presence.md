@@ -104,7 +104,8 @@ apply 只注册服务与监听。
 - **时钟注入**：所有时间判定吃 `now_ms` 参数，不碰墙钟——考题喂时间戳即判。
 - **组件一落地入口**：状态核 `src/ai_presence.rs`（考题 tests/ai_presence_spec.rs）；
   观测 = stats `ai_*` 字段族（na-stats.sh）；驱动 = 通道十 orb-inject
-  （na-orb.sh 'tap'/'drag x y'/'run ms'/'end'/'dismiss'，回执 orb-inject-res）。
+  （na-orb.sh 'tap'/'drag x y'/'run ms'/'end'/'dismiss'，回执 orb-inject-res）；
+  视觉 = na-shot 实拍（倒帧装帧含光球/AI 页占位——gate dump_now 组件一修订）。
 
 ## 六、分期（每期独立可验收，慢慢来）
 

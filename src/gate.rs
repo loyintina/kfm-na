@@ -99,8 +99,11 @@ pub fn note_frame_size(w: u32, h: u32) {
 // ---- 通道一：shot-req → 帧倒盘 ----
 
 /// 倒一帧（有触发才干活）：锁终端离屏光栅化当前画面进 Vec 写出。
-/// 注意：只画终端网格本体——快捷键行/放大镜是 UI 层装帧，后台调试
-/// 要看的是终端内容，装帧状态反正已知（前台整帧由 draw_frame 负责）。
+/// 装帧口径：终端网格 + **AI 外显**（光球/AI 页占位）——ai-presence 期 0
+/// 组件一起，球是「状态核读数画出来的」，值守线程自有句柄（D9 同源），
+/// na-shot 实拍是光球的视觉判卷轨，倒帧不见球 = 视觉轨瞎。快捷键行/
+/// 放大镜仍是 UI 私有装帧（修饰键粘滞位/放大镜触点不在共享态里），
+/// 后台视野不含它们（2026-08-30 前旧口径：连球也不画，组件一修订）
 pub fn dump_now(dir: &str) {
     if !trigger_pending(dir) {
         return;
@@ -113,7 +116,26 @@ pub fn dump_now(dir: &str) {
     }
     let (w, h) = ((wh >> 32) as u32, (wh & 0xFFFF_FFFF) as u32);
     let mut buf = vec![0u32; (w as usize) * (h as usize)];
-    term.lock().unwrap().render_into(&mut buf, w, h);
+    let ai_snap = ai_presence_handle().map(|ai| ai.snap(crate::report::boot_ms() as u64));
+    {
+        let mut t = term.lock().unwrap();
+        if ai_snap.is_some_and(|s| s.page == crate::ai_presence::Page::AiFullscreen) {
+            // 与前台 rasterize 同一分支规则：AI 页 = 占位空壳盖掉终端网格
+            t.render_ai_page(&mut buf, w, h);
+        } else {
+            t.render_into(&mut buf, w, h);
+        }
+        if let Some(s) = ai_snap {
+            t.render_orb(
+                &mut buf,
+                w,
+                h,
+                s.x,
+                s.y,
+                crate::ai_presence::orb_alpha(s.ai_running, s.pressed, s.page),
+            );
+        }
+    }
     if maybe_dump(dir, &buf, w, h) {
         STAT_SHOTS.fetch_add(1, Ordering::Relaxed);
     }
