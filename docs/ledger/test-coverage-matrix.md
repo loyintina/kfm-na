@@ -8,7 +8,7 @@
 
 | 模块 | pub项 | 已引用 | 未覆盖 | 未覆盖清单 |
 |---|---|---|---|---|
-| `src/ai_presence.rs` | 26 | 26 | 0 | — |
+| `src/ai_presence.rs` | 27 | 27 | 0 | — |
 | `src/bootstrap.rs` | 4 | 2 | 2 | ensure_pkg_tool first_boot_install |
 | `src/clipboard.rs` | 1 | 0 | 1 | copy_and_toast |
 | `src/conn.rs` | 4 | 2 | 2 | spawn_smoke ws_spawner |
@@ -31,5 +31,5 @@
 | `src/scroll.rs` | 5 | 5 | 0 | — |
 | `src/session_router.rs` | 10 | 9 | 1 | names |
 | `src/session.rs` | 8 | 8 | 0 | — |
-| `src/termview.rs` | 81 | 74 | 7 | FONT_CANDIDATES CJK_FONT_CANDIDATES load_cjk_font font_probe KEYBAR_LABEL MAG_HALF_COLS MAG_HALF_ROWS |
+| `src/termview.rs` | 82 | 75 | 7 | FONT_CANDIDATES CJK_FONT_CANDIDATES load_cjk_font font_probe KEYBAR_LABEL MAG_HALF_COLS MAG_HALF_ROWS |
 | `src/trace.rs` | 12 | 8 | 4 | TRACE_CAP format_tail dump_all dump_tail |

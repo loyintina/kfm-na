@@ -1278,16 +1278,11 @@ impl App {
                 term.render_keybar(buf, w, h, ime_bottom_px, mods);
             }
             // 光球（常驻 chrome：画在终端网格/AI 页之后，两页都在）。
-            // alpha 四态硬切读 ai_presence::orb_alpha（闲/运行/pressed/AI页）
+            // 四态增益硬切读 ai_presence::orb_gain（闲/运行/pressed/AI页）
             if let Some(s) = ai_snap {
-                term.render_orb(
-                    buf,
-                    w,
-                    h,
-                    s.x,
-                    s.y,
-                    crate::ai_presence::orb_alpha(s.ai_running, s.pressed, s.page),
-                );
+                let (gain, halo_gain) =
+                    crate::ai_presence::orb_gain(s.ai_running, s.pressed, s.page);
+                term.render_orb(buf, w, h, s.x, s.y, gain, halo_gain);
             }
             // 选区边界拖动中的放大镜浮窗（画在所有内容之上——
             // 帧缓冲源区在主渲染里已就位，这里纯位图放大）

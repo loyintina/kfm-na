@@ -35,11 +35,13 @@ pub const LINGER_MS: u64 = 3000;
 pub const LONG_PRESS_MS: u64 = 600;
 /// 拖动阈值（px）：按下后位移超此值才算拖动（否则抬手 = tap）
 pub const DRAG_THRESHOLD_PX: f64 = 20.0;
-/// 整体 alpha 四态硬切（D8，零动画帧）：闲 / 运行 / pressed 增强 / AI 页核高光增强
-pub const ALPHA_IDLE: f32 = 0.25;
-pub const ALPHA_RUNNING: f32 = 0.50;
-pub const ALPHA_PRESSED_BOOST: f32 = 0.25;
-pub const ALPHA_AI_PAGE_BOOST: f32 = 0.15;
+/// 四态增益硬切（D8 定稿 2026-08-30，取代 alpha 增量体系）：整 sprite 增益
+/// 闲/运行/pressed/AI页 + 运行态光晕增益；优先级 pressed > running > AI 页 > 闲
+pub const GAIN_IDLE: f32 = 0.85;
+pub const GAIN_RUNNING: f32 = 1.0;
+pub const HALO_GAIN_RUNNING: f32 = 1.2;
+pub const GAIN_PRESSED: f32 = 1.25;
+pub const GAIN_AI_PAGE: f32 = 1.0;
 
 /// 页：终端 / AI 全屏（两布尔之一）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,16 +61,18 @@ pub struct PresenceSnap {
     pub overlay_visible: bool,
 }
 
-/// alpha 四态硬切（纯函数，D8）：基态二选一，pressed/AI 页为增量，封顶 1.0
-pub fn orb_alpha(running: bool, pressed: bool, page: Page) -> f32 {
-    let mut a = if running { ALPHA_RUNNING } else { ALPHA_IDLE };
+/// 四态增益（纯函数，D8）：(整 sprite 增益, 光晕增益)。光晕增益只在 running
+/// 态加大（HALO_GAIN_RUNNING），其余 1.0；pressed 优先于一切（硬切无动画帧）
+pub fn orb_gain(running: bool, pressed: bool, page: Page) -> (f32, f32) {
     if pressed {
-        a += ALPHA_PRESSED_BOOST;
+        (GAIN_PRESSED, 1.0)
+    } else if running {
+        (GAIN_RUNNING, HALO_GAIN_RUNNING)
+    } else if page == Page::AiFullscreen {
+        (GAIN_AI_PAGE, 1.0)
+    } else {
+        (GAIN_IDLE, 1.0)
     }
-    if page == Page::AiFullscreen {
-        a += ALPHA_AI_PAGE_BOOST;
-    }
-    a.min(1.0)
 }
 
 struct Inner {

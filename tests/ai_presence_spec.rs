@@ -50,10 +50,10 @@ fn spec_初始态_终端页球在默认位暗浮层隐() {
     // 球心在屏内（右缘内缩一个可视半径）
     assert!(s.x > 0.0 && s.x < f64::from(W));
     assert!(s.y > 0.0 && s.y < f64::from(H));
-    // 闲态 alpha = 暗（D8：几乎透明但可见）
+    // 闲态增益 = 暗（D8 定稿：几乎透明但确实有球）
     assert_eq!(
-        ai_presence::orb_alpha(s.ai_running, s.pressed, s.page),
-        ai_presence::ALPHA_IDLE
+        ai_presence::orb_gain(s.ai_running, s.pressed, s.page),
+        (ai_presence::GAIN_IDLE, 1.0)
     );
 }
 
@@ -68,8 +68,9 @@ fn spec_run_start_浮层现灯亮() {
     assert!(s.overlay_visible, "run_start → 浮层现（D7）");
     assert_eq!(s.page, Page::Terminal, "run_start 不抢全屏（D7）");
     assert_eq!(
-        ai_presence::orb_alpha(s.ai_running, s.pressed, s.page),
-        ai_presence::ALPHA_RUNNING
+        ai_presence::orb_gain(s.ai_running, s.pressed, s.page),
+        (ai_presence::GAIN_RUNNING, ai_presence::HALO_GAIN_RUNNING),
+        "运行态 = 整 sprite 全亮 + 光晕增益（D8 硬切）"
     );
 }
 
@@ -83,9 +84,9 @@ fn spec_run_end_驻留期内仍现灯灭() {
     assert!(!s.ai_running, "run_end 灯灭");
     assert!(s.overlay_visible, "驻留期内浮层仍现");
     assert_eq!(
-        ai_presence::orb_alpha(s.ai_running, s.pressed, s.page),
-        ai_presence::ALPHA_IDLE,
-        "灯灭 = 回闲态 alpha"
+        ai_presence::orb_gain(s.ai_running, s.pressed, s.page),
+        (ai_presence::GAIN_IDLE, 1.0),
+        "灯灭 = 回闲态增益"
     );
 }
 
@@ -219,23 +220,43 @@ fn spec_pressed_置位复位() {
     let s = ai.snap(0);
     assert!(s.pressed, "按下置位");
     assert_eq!(
-        ai_presence::orb_alpha(s.ai_running, s.pressed, s.page),
-        ai_presence::ALPHA_IDLE + ai_presence::ALPHA_PRESSED_BOOST,
-        "pressed = 光晕加大亮（D8 硬切第四态）"
+        ai_presence::orb_gain(s.ai_running, s.pressed, s.page),
+        (ai_presence::GAIN_PRESSED, 1.0),
+        "pressed = 整 sprite 提亮（D8 硬切第四态）"
     );
     ai.press_up();
     assert!(!ai.snap(0).pressed, "抬起复位");
 }
 
 #[test]
-fn spec_alpha_ai页核高光增强() {
-    // D8 四态最后一态：人在 AI 页 = 核高光略增强（硬切，无动画帧）
+fn spec_gain_ai页与四态优先级() {
+    // D8 定稿四态：闲/运行/pressed/AI页 = 整 sprite 增益硬切（无动画帧），
+    // 光晕增益只属运行态
     assert_eq!(
-        ai_presence::orb_alpha(false, false, Page::AiFullscreen),
-        ai_presence::ALPHA_IDLE + ai_presence::ALPHA_AI_PAGE_BOOST
+        ai_presence::orb_gain(false, false, Page::AiFullscreen),
+        (ai_presence::GAIN_AI_PAGE, 1.0)
     );
-    // 全量叠加封顶 1.0
-    assert!(ai_presence::orb_alpha(true, true, Page::AiFullscreen) <= 1.0);
+    // 优先级：pressed > running > AI 页 > 闲
+    assert_eq!(
+        ai_presence::orb_gain(true, true, Page::AiFullscreen),
+        (ai_presence::GAIN_PRESSED, 1.0),
+        "pressed 压过 running 与 AI 页"
+    );
+    assert_eq!(
+        ai_presence::orb_gain(false, true, Page::Terminal),
+        (ai_presence::GAIN_PRESSED, 1.0)
+    );
+    // 增益排序钉：pressed 最亮，闲态最暗（几乎透明但确实有球）——
+    // 数值钉死 GAIN_* 常量本体（排序走 orb_gain 读数，避开常量断言 lint）
+    assert_eq!(ai_presence::GAIN_PRESSED, 1.25);
+    assert_eq!(ai_presence::GAIN_RUNNING, 1.0);
+    assert_eq!(ai_presence::GAIN_IDLE, 0.85);
+    assert_eq!(ai_presence::HALO_GAIN_RUNNING, 1.2);
+    let (g_idle, _) = ai_presence::orb_gain(false, false, Page::Terminal);
+    let (g_run, h_run) = ai_presence::orb_gain(true, false, Page::Terminal);
+    let (g_press, _) = ai_presence::orb_gain(false, true, Page::Terminal);
+    assert!(g_press > g_run && g_run > g_idle, "pressed > running > 闲");
+    assert!(h_run > 1.0, "运行态光晕必须真加大");
 }
 
 #[test]
@@ -424,17 +445,52 @@ fn spec_冒烟_光球sprite画紫晕角落不染色() {
     let (tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必须建得成");
     let (w, h) = (400u32, 300u32);
     let mut buf = vec![0u32; (w * h) as usize];
-    tv.render_orb(&mut buf, w, h, 200.0, 150.0, 0.5);
+    tv.render_orb(&mut buf, w, h, 200.0, 150.0, 1.0, 1.0);
     let center = buf[(150 * w + 200) as usize];
     let (r, g, b) = ((center >> 16) & 0xFF, (center >> 8) & 0xFF, center & 0xFF);
-    assert!(center != 0, "球心必须出墨（闲态压缩后仍可见，D8）");
-    assert!(b > r && r > g, "球心必须是紫的(#7C3AED 血统): {center:#x}");
-    // 黑底上混出的紫不许超过核色本身（混合方向钉：颜色来自 ORB_CORE_COLOR）
-    let core = kfm_na::termview::ORB_CORE_COLOR;
-    assert!(r <= ((core >> 16) & 0xFF) + 1 && b <= (core & 0xFF) + 1);
+    assert!(center != 0, "球心必须出墨（D8：确实有个球）");
+    assert!(b > r && r > g, "球心必须是紫的: {center:#x}");
     assert_eq!(buf[0], 0, "远离球的角落不许染色");
-    // alpha=0 = 不画（闲态压缩到零的防御：透明系数 0 不许出墨）
+    // gain=0 = 不画（透明系数 0 不许出墨）
     let mut buf2 = vec![0u32; (w * h) as usize];
-    tv.render_orb(&mut buf2, w, h, 200.0, 150.0, 0.0);
-    assert!(buf2.iter().all(|&p| p == 0), "alpha=0 不许出墨");
+    tv.render_orb(&mut buf2, w, h, 200.0, 150.0, 0.0, 1.0);
+    assert!(buf2.iter().all(|&p| p == 0), "gain=0 不许出墨");
+}
+
+#[test]
+fn spec_d8光球配方_逐像素钉() {
+    // 与 docs/assets/orb-fit-generated.png 逐像素对拍（D8 校准专跑的验收钉）：
+    // build_orb_sprite + blit_orb_sprite 与 scripts/orb-fit.py render() 同公式，
+    // 9 采样点容差 ±3/255（整型合成量化差 ≤1.5）。采样值 = 拟合产物 PNG 实测
+    // （2026-08-30 仲裁：Python 复算公式 vs PNG 最大差 1.4/255，球心 326,330、
+    // Rs=64.25、halo_gain=1.0）
+    let sprite = kfm_na::termview::build_orb_sprite(64.25, 1.0);
+    let (w, h) = (660u32, 660u32);
+    // 预填参考图底色 BG=(11,10,15)（0x000B0A0F）
+    let mut buf = vec![0x000B_0A0Fu32; (w * h) as usize];
+    kfm_na::termview::blit_orb_sprite(&mut buf, w, h, &sprite, 326.0, 330.0, 1.0);
+    let ch = |x: u32, y: u32| {
+        let p = buf[(y * w + x) as usize];
+        ((p >> 16) & 0xFF, (p >> 8) & 0xFF, p & 0xFF)
+    };
+    // (x, y, 目标 r/g/b)：光晕远点 / 光晕中带 / 球上缘 / 亮侧 / 高光邻 /
+    // 球心 / 暗侧 / 暗面 / 球下缘
+    let samples: [(u32, u32, u32, u32, u32); 9] = [
+        (50, 50, 11, 10, 15),
+        (326, 160, 12, 10, 18),
+        (326, 230, 31, 19, 58),
+        (300, 270, 51, 28, 98),
+        (302, 301, 93, 47, 185),
+        (326, 330, 73, 37, 144),
+        (352, 330, 47, 25, 91),
+        (380, 365, 52, 28, 100),
+        (320, 390, 19, 12, 34),
+    ];
+    for (x, y, tr, tg, tb) in samples {
+        let (r, g, b) = ch(x, y);
+        assert!(
+            r.abs_diff(tr) <= 3 && g.abs_diff(tg) <= 3 && b.abs_diff(tb) <= 3,
+            "({x},{y}) 实测 ({r},{g},{b}) 偏离目标 ({tr},{tg},{tb}) 超 ±3"
+        );
+    }
 }

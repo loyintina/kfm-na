@@ -1134,41 +1134,27 @@ impl TermView {
         );
     }
 
-    /// 雾状光球（D8：kfmv4 base.scss:23 血统）：程序化预渲染 sprite 一次
-    /// （orb_sprite 径向渐变查表），运行时纯贴图。整体 alpha 按态缩放——
-    /// 调用方传 ai_presence::orb_alpha 的读数（闲/运行/pressed/AI页 四态
-    /// 硬切，无动画帧）。绘制在终端网格之后（调用方顺序保证）
-    pub fn render_orb(&self, buf: &mut [u32], buf_w: u32, buf_h: u32, x: f64, y: f64, alpha: f32) {
-        if alpha <= 0.0 || buf_w == 0 || buf_h == 0 {
+    /// 雾状光球（D8 拟合定稿 2026-08-30）：程序化预渲染 sprite 一次
+    /// （build_orb_sprite 三层 Lambert 配方），运行时纯贴图。四态增益硬切
+    /// （调用方传 ai_presence::orb_gain 的读数）：gain = 整 sprite 增益，
+    /// halo_gain > 1.0 选光晕加大变体（运行态）。绘制在终端网格之后（调用方
+    /// 顺序保证）
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_orb(
+        &self,
+        buf: &mut [u32],
+        buf_w: u32,
+        buf_h: u32,
+        x: f64,
+        y: f64,
+        gain: f32,
+        halo_gain: f32,
+    ) {
+        if gain <= 0.0 || buf_w == 0 || buf_h == 0 {
             return;
         }
-        let sprite = orb_sprite();
-        let mut frame = Frame {
-            buf,
-            w: buf_w,
-            h: buf_h,
-        };
-        let s = i64::from(sprite.size);
-        let (ox, oy) = (x as i64 - s / 2, y as i64 - s / 2);
-        for sy in 0..s {
-            let py = oy + sy;
-            if py < 0 || py >= i64::from(frame.h) {
-                continue;
-            }
-            for sx in 0..s {
-                let px = ox + sx;
-                if px < 0 || px >= i64::from(frame.w) {
-                    continue;
-                }
-                let (color, a) = sprite.px[(sy * s + sx) as usize];
-                // 整体 alpha 压缩进每像素覆盖率（D8：闲 ~25% 不挡后面内容）
-                let a = (f32::from(a) * alpha).round() as u32;
-                if a == 0 {
-                    continue;
-                }
-                frame.blend_px(px as u32, py as u32, color, a);
-            }
-        }
+        let sprite = orb_sprite(halo_gain > 1.0);
+        blit_orb_sprite(buf, buf_w, buf_h, sprite, x, y, gain);
     }
 
     /// 快捷键行标签：水平居中 + 垂直居中光栅文本。主字体缺字形走 CJK 备用
@@ -1334,47 +1320,148 @@ pub const MAG_GAP_PX: u32 = 60;
 pub const AI_PAGE_BG: u32 = 0x0014_0A24;
 pub const AI_PAGE_FG: u32 = 0x00C4_B5FD;
 
-/// 雾状光球 sprite（D8）：颜色 = kfmv4 base.scss:23 原配方 #7C3AED；
-/// 直径余量到 64px 半径（可视半径 48 之外留光晕衰减带）
-pub const ORB_CORE_COLOR: u32 = 0x007C_3AED;
-const ORB_SPRITE_RADIUS: u32 = 64;
+/// 雾状光球 sprite（D8 拟合定稿 2026-08-30）：三层参数化模型，常量来自
+/// scripts/orb-fit.py 坐标下降拟合（RMSE 4.66/255，验收基准
+/// docs/assets/orb-fit-generated.png；改动须重跑拟合器并同步
+/// tests/ai_presence_spec.rs 逐像素钉）。长度量均以球半径 Rs 归一，任意
+/// 尺寸可缩放。参考图底 BG=(11,10,15) 不进公式——sprite 存 straight 色 +
+/// 覆盖率，BG 只作钉题缓冲预填值（hardcode 在钉题里）
+const ORB_DARK: (f64, f64, f64) = (9.0, 8.0, 13.0); // 球体暗面色
+const ORB_C_LIT: (f64, f64, f64) = (99.0, 50.0, 198.0); // 受光色 = (100,50,200)*bri 0.99
+const ORB_HALO_RG: f64 = 2.93; // 光晕 (1-r/Rg)^p 的 Rg（Rs 倍数）
+const ORB_HALO_P: f64 = 2.05;
+const ORB_HALO_T_AMP: f64 = 0.12; // 光晕尾部平台幅度
+const ORB_HALO_T_SIG: f64 = 1.02; // 尾部 exp(-r/tsig) 的 tsig（Rs 倍数）
+const ORB_LIGHT: (f64, f64) = (0.37, 0.45); // 光向（左上）
+const ORB_LAMBERT_K: f64 = 2.24;
+const ORB_SPHERE_ALPHA: f64 = 0.77; // 球体整盘 alpha（暗面遮挡光晕 = 球感来源）
+const ORB_SPEC_AMP: f64 = 0.22; // 高光点幅度
+const ORB_SPEC_SIGMA: f64 = 0.10; // 高光高斯 sigma（Rs 倍数）
+const ORB_SPEC_OFF: f64 = 0.55; // 高光心沿光向偏移（Rs 倍数）
+/// sprite 截断半径（Rs 倍数）：光晕尾部在 3.5Rs 处已 <1/255
+const ORB_HALO_CUT: f64 = 3.5;
 
-/// 预渲染光球：每像素 (颜色, 覆盖率 0-255)。配方 = base.scss:23——
-/// radial-gradient(circle at 30% 30%, #7C3AED 0.9→0.4→transparent 70%)
-/// 加外圈光晕衰减（第二层，圆心居中向外淡）。无轮廓线：球感全靠径向
-/// 亮度落差与光晕对比（D8）
-struct OrbSprite {
-    size: u32,
-    px: Vec<(u32, u8)>,
+/// 预渲染光球：每像素 (straight 颜色, 覆盖率 0-255)。光晕/球体两层按
+/// orb-fit.py 词序预合成成单层（球体 over 光晕），绘制时一次 blend——
+/// straight 色 = 层自身色（光晕 C_lit / 球盘混色），覆盖率 A 使
+/// C*A + dst*(1-A) 在 dst=BG 时与 Python 浮点输出逐像素一致（量化差 ≤1）
+pub struct OrbSprite {
+    pub size: u32,
+    pub px: Vec<(u32, u8)>,
 }
 
-fn orb_sprite() -> &'static OrbSprite {
-    static SPRITE: std::sync::OnceLock<OrbSprite> = std::sync::OnceLock::new();
-    SPRITE.get_or_init(|| {
-        let size = ORB_SPRITE_RADIUS * 2;
-        let r = f64::from(ORB_SPRITE_RADIUS);
-        let (hx, hy) = (f64::from(size) * 0.3, f64::from(size) * 0.3); // 高光心 30% 30%
-        let mut px = Vec::with_capacity((size * size) as usize);
-        for py in 0..size {
-            for pxx in 0..size {
-                let (fx, fy) = (f64::from(pxx), f64::from(py));
-                // 核：以高光心为圆心的径向渐变（0.9 → 0.4 → 0，70% 半径断）
-                let d_hl = ((fx - hx).powi(2) + (fy - hy).powi(2)).sqrt() / r;
-                let core = if d_hl < 0.5 {
-                    0.9 + (0.4 - 0.9) * (d_hl / 0.5)
-                } else if d_hl < 0.7 {
-                    0.4 * (1.0 - (d_hl - 0.5) / 0.2)
-                } else {
-                    0.0
-                };
-                // 外圈光晕：圆心居中，线性向外衰减（第二层透明度叠加）
-                let d_c = ((fx - r).powi(2) + (fy - r).powi(2)).sqrt() / r;
-                let halo = if d_c < 1.0 { 0.20 * (1.0 - d_c) } else { 0.0 };
-                let a = (core + halo).min(1.0);
-                px.push((ORB_CORE_COLOR, (a * 255.0).round() as u8));
-            }
+/// 按 D8 配方建 sprite（rs = 球半径 px；halo_gain = 光晕增益，运行态加大）。
+/// 考题与生产同源：逐像素钉（rs=64.25 对拍 orb-fit-generated.png）与
+/// render_orb（rs=ORB_RADIUS_PX）走的都是它
+pub fn build_orb_sprite(rs: f64, halo_gain: f64) -> OrbSprite {
+    let half = (ORB_HALO_CUT * rs).ceil() as i64;
+    let size = (half * 2 + 1) as u32;
+    let (lx, ly) = ORB_LIGHT;
+    let lz = (1.0 - lx * lx - ly * ly).max(0.0).sqrt();
+    let spec_sigma = ORB_SPEC_SIGMA * rs;
+    let (hx, hy) = (-lx * rs * ORB_SPEC_OFF, -ly * rs * ORB_SPEC_OFF); // 高光心（沿光向）
+    let mix = |a: f64, b: f64, t: f64| a * (1.0 - t) + b * t;
+    let mut px = Vec::with_capacity((size * size) as usize);
+    for iy in -half..=half {
+        for ix in -half..=half {
+            let (dx, dy) = (ix as f64, iy as f64);
+            let rn = dx.hypot(dy) / rs;
+            // ① 光晕层（底）：a(r) = clip(clip(1-r/Rg)^p + tamp*exp(-r/tsig))，
+            //    色 = C_lit；halo_gain 烘焙在此（运行态光晕 +20%）
+            let a_h = ((1.0 - rn / ORB_HALO_RG).max(0.0).powf(ORB_HALO_P)
+                + ORB_HALO_T_AMP * (-rn / ORB_HALO_T_SIG).exp())
+            .clamp(0.0, 1.0)
+                * halo_gain;
+            let a_h = a_h.clamp(0.0, 1.0);
+            let (c, a) = if rn <= 1.0 {
+                // ② 球体层：Lambert 明暗 I = max(0, -lx*nx - ly*ny + lz*nz)^k，
+                //    色 = mix(DARK, C_lit, I)；③ 高光点 = 沿光向小高斯，过曝往白
+                let (nx, ny) = (dx / rs, dy / rs);
+                let nz = (1.0 - nx * nx - ny * ny).max(0.0).sqrt();
+                let lam = (-lx * nx - ly * ny + lz * nz).max(0.0).powf(ORB_LAMBERT_K);
+                let d2 = (dx - hx).powi(2) + (dy - hy).powi(2);
+                let spec = ORB_SPEC_AMP * (-d2 / (2.0 * spec_sigma * spec_sigma)).exp();
+                let i2 = (lam + spec).clamp(0.0, 1.6);
+                let t = i2.clamp(0.0, 1.0);
+                let over = (i2 - 1.0).max(0.0);
+                let sph = (
+                    mix(ORB_DARK.0, ORB_C_LIT.0, t) + over * 60.0,
+                    mix(ORB_DARK.1, ORB_C_LIT.1, t) + over * 40.0,
+                    mix(ORB_DARK.2, ORB_C_LIT.2, t) + over * 80.0,
+                );
+                // 球体 over 光晕（预乘单层）：A = As + a_h*(1-As)，
+                // straight C = (C_lit*a_h*(1-As) + sph*As) / A
+                let a = ORB_SPHERE_ALPHA + a_h * (1.0 - ORB_SPHERE_ALPHA);
+                let w_h = a_h * (1.0 - ORB_SPHERE_ALPHA) / a;
+                let w_s = ORB_SPHERE_ALPHA / a;
+                (
+                    (
+                        ORB_C_LIT.0 * w_h + sph.0 * w_s,
+                        ORB_C_LIT.1 * w_h + sph.1 * w_s,
+                        ORB_C_LIT.2 * w_h + sph.2 * w_s,
+                    ),
+                    a,
+                )
+            } else {
+                (ORB_C_LIT, a_h)
+            };
+            let enc =
+                ((c.0.round() as u32) << 16) | ((c.1.round() as u32) << 8) | c.2.round() as u32;
+            px.push((enc, (a * 255.0).round() as u8));
         }
-        OrbSprite { size, px }
+    }
+    OrbSprite { size, px }
+}
+
+/// 把 sprite 以 (cx,cy) 为心贴进帧缓冲：gain = 整 sprite 增益（压缩每像素
+/// 覆盖率），越界裁剪。render_orb 与逐像素钉共用的同源绘制入口
+pub fn blit_orb_sprite(
+    buf: &mut [u32],
+    w: u32,
+    h: u32,
+    sprite: &OrbSprite,
+    cx: f64,
+    cy: f64,
+    gain: f32,
+) {
+    let s = i64::from(sprite.size);
+    let (ox, oy) = (cx as i64 - s / 2, cy as i64 - s / 2);
+    for sy in 0..s {
+        let py = oy + sy;
+        if py < 0 || py >= i64::from(h) {
+            continue;
+        }
+        for sx in 0..s {
+            let px = ox + sx;
+            if px < 0 || px >= i64::from(w) {
+                continue;
+            }
+            let (color, a) = sprite.px[(sy * s + sx) as usize];
+            let a = (f32::from(a) * gain).round() as u32;
+            if a == 0 {
+                continue;
+            }
+            let idx = (py * i64::from(w) + px) as usize;
+            buf[idx] = blend(color, buf[idx], a);
+        }
+    }
+}
+
+/// 生产 sprite 双缓存（rs = ai_presence::ORB_RADIUS_PX）：halo_boost=false
+/// → 光晕增益 1.0；true → 运行态光晕增益（HALO_GAIN_RUNNING）
+fn orb_sprite(halo_boost: bool) -> &'static OrbSprite {
+    static NORMAL: std::sync::OnceLock<OrbSprite> = std::sync::OnceLock::new();
+    static BOOST: std::sync::OnceLock<OrbSprite> = std::sync::OnceLock::new();
+    let slot = if halo_boost { &BOOST } else { &NORMAL };
+    slot.get_or_init(|| {
+        build_orb_sprite(
+            f64::from(crate::ai_presence::ORB_RADIUS_PX),
+            if halo_boost {
+                f64::from(crate::ai_presence::HALO_GAIN_RUNNING)
+            } else {
+                1.0
+            },
+        )
     })
 }
 
@@ -1501,7 +1588,17 @@ pub trait TermEmu: Send {
     /// AI 外显 chrome（ai-presence 期 0 组件一，android_app rasterize 调用方）：
     /// AI 页占位空壳（page=AiFullscreen 时代替终端网格）/ 雾状光球 sprite
     fn render_ai_page(&self, buf: &mut [u32], w: u32, h: u32);
-    fn render_orb(&self, buf: &mut [u32], w: u32, h: u32, x: f64, y: f64, alpha: f32);
+    #[allow(clippy::too_many_arguments)]
+    fn render_orb(
+        &self,
+        buf: &mut [u32],
+        w: u32,
+        h: u32,
+        x: f64,
+        y: f64,
+        gain: f32,
+        halo_gain: f32,
+    );
     fn take_tofu_chars(&self) -> Vec<char>;
     fn scroll_lines(&mut self, lines: i32);
     fn scroll_to_bottom(&mut self);
@@ -1544,8 +1641,18 @@ impl TermEmu for TermView {
     fn render_ai_page(&self, buf: &mut [u32], w: u32, h: u32) {
         TermView::render_ai_page(self, buf, w, h)
     }
-    fn render_orb(&self, buf: &mut [u32], w: u32, h: u32, x: f64, y: f64, alpha: f32) {
-        TermView::render_orb(self, buf, w, h, x, y, alpha)
+    #[allow(clippy::too_many_arguments)]
+    fn render_orb(
+        &self,
+        buf: &mut [u32],
+        w: u32,
+        h: u32,
+        x: f64,
+        y: f64,
+        gain: f32,
+        halo_gain: f32,
+    ) {
+        TermView::render_orb(self, buf, w, h, x, y, gain, halo_gain)
     }
     fn take_tofu_chars(&self) -> Vec<char> {
         TermView::take_tofu_chars(self)
