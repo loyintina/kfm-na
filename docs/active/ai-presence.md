@@ -39,8 +39,9 @@
 
 - **机制层（共享壳，一个就够）**：源无关逻辑——外显 UI、眼睛、手的注入机制、
   渲染。不随数据源拆分。
-- **数据源层（一源一插件一键）**：脑 = `server-brain`（kfmv4 /ai/chat 走隧道）/
-  `direct-api-brain`（本地配 key 直连服务商）/ `echo-brain`（期 0 假 AI），三个插件
+- **数据源层（一源一插件一键）**：脑 = `direct-api-brain`（本地配 key 直连服务商——
+  **默认本地脑，期 0② 主力**）/ `echo-brain`（考题夹具）/ `server-brain`（kfmv4
+  /ai/chat 走隧道——**未来「服务器空间」数据源，非地基**，D11），三个插件
   三个服务键；先例 = 终端连接（`LocalPtyFactory` / `TermFactory`）。粒度与回退纪律
   绝配：某源出 bug，disabled 它一个，其余照常。
 - **路由层（薄）**：按会话所属空间把能力查询路由到对应源。
@@ -48,8 +49,10 @@
 **需新建的本地壳只有三个**：本地脑（echo→direct-api）、本地 tmux 适配器、
 本地文件树适配器；终端本地壳已有（local PTY）；眼/手/外显天然源无关不拆。
 
-**本地壳先行**：任何能力先落本地壳（可闭环可考题），服务器源后插。
-期 0 echo-brain 即首实践。
+**本地壳先行（D11 再确认，曾险些违背）**：任何能力先落本地壳（可闭环可考题），
+服务器源后插。**na = 独立本地软件，服务器只是未来可切换的数据源**——把服务器
+脑当地基 = 变成 nz 的劣化版（用户 2026-08-30 原话：「把服务器上的东西拉到本地
+是 nz 干的事」）。期 0 echo-brain→direct-api-brain 即首实践。
 
 **双源对拍（用户 2026-08-30 提出）**：本地壳 = 天然测试环境（自测自闭环），
 服务器源 = 现成第二环境——**同一套考题跑两个数据源，行为一致性机械可验**，
@@ -79,9 +82,47 @@
 **apply 纪律**：瞬时返回契约（50ms 预算）——网络/流式接收全部自开线程，
 apply 只注册服务与监听。
 
-## 四、协议契约（/ai/chat——2026-08-30 侦察回填：kfmv4 源码 + 活服务器探针双证）
+## 四、协议契约
 
-### 端点（基址 `/api`，镜像 `/kfmv4/api`；服务绑 127.0.0.1:8021）
+§四A = **内部九事件协议**（UI 面，脑无关——任何脑都吐这套事件，UI 零感知换脑）；
+§四B = **上游 OpenAI 协议**（direct-api-brain 的对外面，期 0② 直连主力）；
+§四C = **kfmv4 /ai/chat 协议**（未来 server-brain 数据源的契约，2026-08-30 侦察
+回填：源码 + 活服务器探针双证——注意：这是数据源契约，不是 na 的地基，D11）。
+
+### 四A·内部九事件协议（content-block，kfmv4 血统）
+
+- 事件全集：`message_start` / `content_block_start{index,blockType:text|tool_use,
+  toolUseId?,toolName?}` / `content_block_delta{index,deltaType:text_delta|
+  thinking_delta|input_json_delta,deltaText}` / `content_block_stop{index}` /
+  `tool_result{toolUseId,toolResult{content:[{type,text}],isError?},filesChanged?}` /
+  `message_stop` / `done` / `error{content}` / `rule_warning{content}`
+- block 布局：`index=0` 恒为 text（**thinking+正文同块混排，靠 deltaType 分流**）；
+  tool_use 从 1 起连续编号
+- 一轮工具循环 = message_start → blocks → (rule_warning*/tool_result*) → message_stop；
+  最终 message_stop → done
+- 判卷基准 fixture：`tests/fixtures/ai-chat/probe-kimi-k3-256k-20260830.sse`（44 事件）/
+  `probe-glm-5.3-flash-20260830.sse`（40 事件）——kfmv4 服务端吐出的真流，
+  双 provider 互证分帧形状与上游无关
+
+### 四B·上游 OpenAI 协议（direct-api-brain 对外面；fixture 待抓）
+
+- chat/completions 流式：`stream:true` + `stream_options.include_usage`；
+  SSE 帧 = `data: {choices:[{delta:{content?/reasoning_content?/tool_calls?}}]}`，
+  终结 = `data: [DONE]`（kfmv4 chat.ts:288-296 为参照实现）
+- 翻译职责（复刻 chat.ts 的角色）：`content` → text_delta；`reasoning_content`
+  → thinking_delta；`delta.tool_calls`（OpenAI 碎片格式）→ tool_use 块 +
+  input_json_delta；**reasoning 归位**（text 空且 reasoning 非空 → 正文，R3）
+- provider 差异登记表：Kimi（k3-256k，thinking）/ 智谱 coding（glm-5.3-flash，
+  thinking）——**待抓**：两路原生 SSE fixture（普通流+thinking 流；tool_calls 流
+  随期 2 手再抓）
+- 配置复刻：na 私有目录落 `providers.json` + `.env`，代字 `${VAR}` fuse 语义
+  照搬 kfmv4（resolveKey：先 env 后 .env，缺失 → error 事件，绝不裸发代字）
+- TLS：`rustls` + `webpki-roots`（纯 Rust，Android 交叉编译安全，不碰 openssl）；
+  HTTP/1.1 手写（chunked/SSE 解析器与四C共用考题）
+
+### 四C·kfmv4 /ai/chat 协议（server-brain 数据源契约，暂缓实施）
+
+#### 端点（基址 `/api`，镜像 `/kfmv4/api`；服务绑 127.0.0.1:8021）
 
 | 端点 | 用途 | 响应 |
 |---|---|---|
@@ -92,7 +133,7 @@ apply 只注册服务与监听。
 | `GET /api/ai/chat/active?sessionId=X` | 找回 runId（重连入口） | `{runId,eventCount,done}` 或 `{runId:null}` |
 | `GET /api/ai/tools` | 工具清单 | `{categories,tools}` |
 
-### start body
+#### start body
 
 - `sessionId`（必填；白名单 `^[\p{L}\p{N}_-]{1,128}$/u` + UTF-8 ≤200B——**含中文**）
 - `messages`（必填非空；OpenAI 投影 role/content/tool_calls/tool_call_id/reasoning_content，
@@ -102,7 +143,7 @@ apply 只注册服务与监听。
 - `tools`（可选 string[] 白名单；服务端执行层 fail-closed 再拦一道）
 - roleFile/userText/extraSystem/maxTokens/params/sessionClass/sandboxRoot/readRoot（可选，v1 不用）
 
-### SSE 分帧（实录 fixture：`tests/fixtures/ai-chat/probe-kimi-k3-256k-20260830.sse` 44 事件全程；
+#### SSE 分帧（实录 fixture：`tests/fixtures/ai-chat/probe-kimi-k3-256k-20260830.sse` 44 事件全程；
 第二路互证：`probe-glm-5.3-flash-20260830.sse` 40 事件，分帧形状逐帧一致）
 
 - 帧 = `data: {"index":N,"event":{...}}\n\n`；`index` = 重连 cursor（客户端存 index+1）
@@ -118,7 +159,7 @@ apply 只注册服务与监听。
 - 一轮工具循环 = message_start → blocks → (rule_warning*/tool_result*) → message_stop；
   最终 message_stop → done → `__end__`
 
-### 中断 / 重连 / 缓冲
+#### 中断 / 重连 / 缓冲
 
 - 中断 = POST cancel（服务端 abort；**客户端断开不取消后台生成**）
 - 重连：知 runId → `stream?from=cursor`；丢 runId → `active?sessionId` 找回；
@@ -126,7 +167,7 @@ apply 只注册服务与监听。
 - 缓冲：done/error 后 **5min 淘汰**；6min 无事件看门狗以 error 收尾
 - 同 session 新 start = **取代**旧 run（旧的一律取消）
 
-### 错误语义（实录 fixture：`tests/fixtures/ai-chat/probe-error-cases-20260830.txt`）
+#### 错误语义（实录 fixture：`tests/fixtures/ai-chat/probe-error-cases-20260830.txt`）
 
 - 参数非法 → 400 `{error}`（sessionId 白名单 / 空 messages，均有实录）
 - 跨源 → 403 `{error}`（verifyLocalOrigin；**无 Authorization 概念**，防护 = Origin
@@ -135,7 +176,7 @@ apply 只注册服务与监听。
 - 上游 4xx/5xx → error 事件 `'API 请求失败: <status> — <body前300字>'`；
   网络层重试 2 次后 → `'网络错误…'`；用户取消 → error `'已取消'`
 
-### apiKey 与 provider 配置（复刻要点）
+#### apiKey 与 provider 配置（复刻要点）
 
 - 配置 `~/.kfmv4/providers.json`，条目 `{id,name,baseUrl,apiKey,models[],contextWindow?}`
 - 代字 fuse：`apiKey=${VAR}` → resolveKey 查 process.env 再查 `~/.kfmv4/.env`；
@@ -168,8 +209,8 @@ apply 只注册服务与监听。
 
 ```rust
 /// 一个「脑」= 能开 run、吐事件流、可中断的后端。
-/// server-brain（HTTP/SSE 到 kfmv4）= 第一个实现；echo-brain 回放 fixture 做考题夹具；
-/// direct-api-brain（期 3，na 直连 provider）= 第三个。
+/// direct-api-brain（na 直连 provider，rustls+手写 HTTP）= 默认本地脑，期 0② 主力；
+/// echo-brain 回放 fixture 做考题夹具；server-brain（HTTP/SSE 到 kfmv4）= 期 3 数据源。
 trait BrainEndpoint {
     /// 开一轮对话，返回 run 句柄 + 事件流（自有 content-block 协议，与上游无关）。
     fn start(&self, req: ChatStartReq) -> (RunHandle, BoxStream<ChatEvent>);
@@ -185,7 +226,8 @@ trait BrainEndpoint {
 
 - 解析器 + markdown-lite 转换器 = 纯逻辑，A 档考题先行 + 变异抽检。
   md 范围 v1：代码块/粗体/斜体/列表/标题。
-- 协议实现对 `BrainEndpoint` 接口编程（三层模型），server-brain 只是第一个后端。
+- 协议实现对 `BrainEndpoint` 接口编程（三层模型），**direct-api-brain 是第一个
+  后端，server-brain 只是可插的数据源之一**（D11）。
 
 ## 五、状态机（A 档考题化；D7 两布尔模型，2026-08-30 取代三档）
 
@@ -210,11 +252,14 @@ trait BrainEndpoint {
 
 ## 六、分期（每期独立可验收，慢慢来）
 
-- **期 0（2026-08-30 用户拍板重排 D10：先接通真 AI，浮层/手靠后）**：
+- **期 0（2026-08-30 用户拍板重排 D10 + 纠偏 D11：先接通真 AI，浮层/手靠后；
+  脑 = 本地直连，服务器只是未来数据源）**：
   ① 状态核+光球 ✅（组件一闭环，`b2c4ffa` 在机）
-  ② AI 接通：协议侦察（读 kfmv4 `/ai/chat` 源码 → 契约回填待定②）→
-     `BrainEndpoint` 接口定形 → server-brain（隧道到 kfmv4）；
-     echo-brain 降为**考题夹具**（协议解析器/双源对拍/断网回归的零网络基准，非组件）
+  ② AI 接通（本地直连）：上游协议侦察（curl 直打 Kimi/智谱原生端点抓 SSE
+     fixture，§四B）→ OpenAI SSE→九事件翻译器+解析器考题（四A fixture 当
+     内部协议标准答案）→ `BrainEndpoint` 接口定形 → **direct-api-brain**
+     （rustls+手写 HTTP，providers.json/.env 代字复刻）；
+     echo-brain = **考题夹具**（协议解析器/断网回归的零网络基准，非组件）
   ③ 基本对话页+输入栏：AI 页占位壳 → 真对话页（简版纯文本消息行，
      不做 markdown-lite）+ 全局输入栏发送；验收 = 真机问答一轮
   ④ 浮层+手：观战增强（此时浮层显示的是真 AI 的真输出，脚手架一次到位）
@@ -222,8 +267,9 @@ trait BrainEndpoint {
   每组件独立考题+热更+实拍。
 - **期 1 眼睛**：视口快照附上下文。验收 = 问「屏幕上有什么」答得对。
 - **期 2 手**：工具执行注入来源会话。验收 = 让 AI 跑一条命令，终端可见。
-- **期 3 打磨**：direct-api-brain（本地独立闭环补全）/ 工具调用独立悬浮框 /
-  展开动画（ui-fx 第二插件，缝的首批属性落位）/ 浮层可触摸滚动。
+- **期 3 打磨**：server-brain（服务器空间数据源，§四C 契约已就位——**服务器
+  以数据源身份回归，不再是地基**）/ 工具调用独立悬浮框 / 展开动画（ui-fx
+  第二插件，缝的首批属性落位）/ 浮层可触摸滚动。
 
 ## 七、待定清单（讨论一条落一条，拍板后转正进 §八）
 
@@ -353,5 +399,19 @@ AI 走服务，同一状态核同一套考题；观测闭环 = stats 添 ai_pres
 保留双源对拍基准价值但不再占组件位（零网络夹具服务解析器考题）
 否决案：原序列（先浮层后接通——脚手架建在协议猜测上，返工风险后置）
 标签：成本不对称
+
+【D11】脑的顺序纠偏：本地直连脑是地基，server-brain 降数据源（2026-08-30 用户拍板）
+决定：期 0② 的脑 = **direct-api-brain**（na 本地配 key 直连 Kimi/智谱，rustls
+纯 Rust TLS + 手写 HTTP/1.1，providers.json/.env 代字 fuse 照搬 kfmv4）；
+server-brain（kfmv4 /ai/chat 走隧道）从期 0② 主力**降为期 3「服务器空间」
+数据源插件**（§四C 契约保留备用）；内部九事件协议（§四A）不变——UI 面与脑
+解耦，换脑零改动；direct-api-brain 须复刻 chat.ts 的上游→九事件翻译职责
+（含 reasoning 归位）
+理由：na = **独立安卓本地软件，服务器只是未来可切换的数据源**——把服务器脑
+当地基，na 就退化成 nz（kfmv4 安卓化线）的劣化版，而「把服务器的东西拉到本地」
+恰是 nz 的赛道且其更优（用户 2026-08-30 原话）。§三「本地壳先行」本是文档
+自有纪律，D10 落地时险些违背——纠偏即回到自己的纪律上
+否决案：server-brain 先行（na 变成 kfmv4 远程终端，身份错位；本地闭环无从谈起）
+标签：打脸结晶
 
 ——kfm-na(Kimi Code) · 2026-08-30 立 · v3 两布尔模型+雾球入档 · 实现以期为单位，每期过 chain+regress+实拍
