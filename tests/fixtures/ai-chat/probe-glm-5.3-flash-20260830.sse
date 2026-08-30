@@ -1,0 +1,82 @@
+data: {"index":0,"event":{"type":"message_start"}}
+
+data: {"index":1,"event":{"type":"content_block_start","index":0,"blockType":"text"}}
+
+data: {"index":2,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":"The"}}
+
+data: {"index":3,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":" user"}}
+
+data: {"index":4,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":" is"}}
+
+data: {"index":5,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":" asking"}}
+
+data: {"index":6,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":" me"}}
+
+data: {"index":7,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":" to"}}
+
+data: {"index":8,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":" reply"}}
+
+data: {"index":9,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":" with"}}
+
+data: {"index":10,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":" exactly"}}
+
+data: {"index":11,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":" one"}}
+
+data: {"index":12,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":" word"}}
+
+data: {"index":13,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":":"}}
+
+data: {"index":14,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":" P"}}
+
+data: {"index":15,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":"ONG"}}
+
+data: {"index":16,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":".\n\n"}}
+
+data: {"index":17,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":"This"}}
+
+data: {"index":18,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":" is"}}
+
+data: {"index":19,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":" a"}}
+
+data: {"index":20,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":" simple"}}
+
+data: {"index":21,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":" connectivity"}}
+
+data: {"index":22,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":" test"}}
+
+data: {"index":23,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":"."}}
+
+data: {"index":24,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":" I"}}
+
+data: {"index":25,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":" should"}}
+
+data: {"index":26,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":" reply"}}
+
+data: {"index":27,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":" with"}}
+
+data: {"index":28,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":" exactly"}}
+
+data: {"index":29,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":" one"}}
+
+data: {"index":30,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":" word"}}
+
+data: {"index":31,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":":"}}
+
+data: {"index":32,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":" P"}}
+
+data: {"index":33,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":"ONG"}}
+
+data: {"index":34,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":"."}}
+
+data: {"index":35,"event":{"type":"content_block_delta","index":0,"deltaType":"text_delta","deltaText":"P"}}
+
+data: {"index":36,"event":{"type":"content_block_delta","index":0,"deltaType":"text_delta","deltaText":"ONG"}}
+
+data: {"index":37,"event":{"type":"content_block_stop","index":0}}
+
+data: {"index":38,"event":{"type":"message_stop"}}
+
+data: {"index":39,"event":{"type":"done"}}
+
+data: {"type":"__end__"}
+

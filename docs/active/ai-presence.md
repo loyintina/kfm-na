@@ -102,7 +102,8 @@ apply 只注册服务与监听。
 - `tools`（可选 string[] 白名单；服务端执行层 fail-closed 再拦一道）
 - roleFile/userText/extraSystem/maxTokens/params/sessionClass/sandboxRoot/readRoot（可选，v1 不用）
 
-### SSE 分帧（实录 fixture：`tests/fixtures/ai-chat/probe-kimi-k3-256k-20260830.sse`，44 事件全程）
+### SSE 分帧（实录 fixture：`tests/fixtures/ai-chat/probe-kimi-k3-256k-20260830.sse` 44 事件全程；
+第二路互证：`probe-glm-5.3-flash-20260830.sse` 40 事件，分帧形状逐帧一致）
 
 - 帧 = `data: {"index":N,"event":{...}}\n\n`；`index` = 重连 cursor（客户端存 index+1）
 - 终结帧 = `data: {"type":"__end__"}`（SSE 级收尾非业务事件；不存在/已淘汰 runId
@@ -139,9 +140,15 @@ apply 只注册服务与监听。
 - 配置 `~/.kfmv4/providers.json`，条目 `{id,name,baseUrl,apiKey,models[],contextWindow?}`
 - 代字 fuse：`apiKey=${VAR}` → resolveKey 查 process.env 再查 `~/.kfmv4/.env`；
   缺失 → error 事件，**绝不裸发代字**
-- 用户点名两路（2026-08-30）：Kimi 卡（id `Kimi`，api.kimi.com/coding/v1）model
-  `k3-256k`；智谱 coding plan 卡（id `智谱`，open.bigmodel.cn/api/coding/paas/v4）
-  model `glm-5.3`（用户口述「glm-5.3-flash」，登记表实为 `glm-5.3`）
+- 用户点名两路（2026-08-30 均活探针验证）：Kimi 卡（id `Kimi`，api.kimi.com/coding/v1）
+  model `k3-256k`；智谱 coding plan 卡（id `智谱`，open.bigmodel.cn/api/coding/paas/v4）
+  model `glm-5.3-flash`（即 kimi-code 里的「GLM 5.3 Flash Coding (套餐)」，
+  `bigmodel-coding/glm-5.3-flash`）。**model 字段服务端不校验 models[] 白名单、
+  直接透传上游**（chat.ts:289）——卡上登记模型只是面板可选项
+- 配置事故实录（2026-08-30 修复）：智谱卡原与聚光卡**共用 `${KFM_PROVIDER_KEY}`**
+  （中文 id 经 envNameForProvider 全塌缩成同名代字），.env 里存的是聚光的 key →
+  智谱 401「令牌已过期」。修复：智谱卡改 `${KFM_PROVIDER_ZHIPU}` + .env 独立条目
+  （key 取自 kimi-code `providers.bigmodel-coding`），并补登记 `glm-5.3-flash` 进卡
 
 ### 风险清单（侦察登记）
 
