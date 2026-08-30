@@ -5,8 +5,19 @@
 > (速查表:症状 → 工具 → 字段 → 判卷)。本页只写「现在进行时」,
 > 历史功过在 bugs.md。
 
-## 当前位置（2026-08-28)
+## 当前位置（2026-08-30)
 
+- **ai-presence 期 0 组件一落地（2026-08-30）**：AI 外显状态核+光球。
+  `src/ai_presence.rs` 两布尔状态核（ai_running×page；浮层=f(running,
+  dismissed,驻留3000ms)；球位/pressed/per-run dismissed；时钟注入零墙钟）
+  + cordis-na 插件（provides AiPresenceState，disabled 一键关默认开）
+  + 雾球 sprite 四态 alpha 硬切（kfmv4 base.scss:23 配方）+ AI 页占位空壳
+  + 触摸路由（球命中优先终端/拖动钳制/长按=fake_run debug 钩子）
+  + 观测闭环：stats `ai_*` 六格 + 通道十 orb-inject（na-orb.sh，回执
+  orb-inject-res）+ na-shot 倒帧装帧含球（gate dump_now 组件一修订）。
+  考题 tests/ai_presence_spec.rs 27 道全绿；热更实拍四连（终端页球/
+  drag 移位/灯亮/AI 页占位）通过。后续组件②③④（浮层/输入栏/合成网格）
+  未动工，设计以 ai-presence.md v3 为准。
 - **探针③ PIN-remote-active-death 落地（2026-08-28）**：活跃=远程
   死亡自动重孵契约入考官——switch-req 切远程 + ss -K 掐 ws,判五步
   （deaths+1/active 保持 remote/横幅/新 shell 回显/local 不受扰）。
