@@ -79,9 +79,103 @@
 **apply 纪律**：瞬时返回契约（50ms 预算）——网络/流式接收全部自开线程，
 apply 只注册服务与监听。
 
-## 四、协议契约（待定②——已提为期 0② 关键路径，D10）
+## 四、协议契约（/ai/chat——2026-08-30 侦察回填：kfmv4 源码 + 活服务器探针双证）
 
-- 待定②：/ai/chat 流式协议——读 kfmv4 源码后回填：请求格式/分帧/错误/鉴权/中断。
+### 端点（基址 `/api`，镜像 `/kfmv4/api`；服务绑 127.0.0.1:8021）
+
+| 端点 | 用途 | 响应 |
+|---|---|---|
+| `POST /api/ai/chat/start` | 开 run | 200 `{runId, fromIndex:0, done:false}`；400 `{error}` 参数非法 |
+| `GET /api/ai/chat/:runId/stream?from=N` | SSE 事件流 | `text/event-stream`（**无 `event:` 行**，仅 `data:` 行+空行分隔） |
+| `POST /api/ai/chat/:runId/cancel` | 中断（空 body） | `{ok:bool}`（不存在→`ok:false`，**不 404**） |
+| `GET /api/ai/chat/:runId/status` | 探活 | `{exists,done,eventCount}` |
+| `GET /api/ai/chat/active?sessionId=X` | 找回 runId（重连入口） | `{runId,eventCount,done}` 或 `{runId:null}` |
+| `GET /api/ai/tools` | 工具清单 | `{categories,tools}` |
+
+### start body
+
+- `sessionId`（必填；白名单 `^[\p{L}\p{N}_-]{1,128}$/u` + UTF-8 ≤200B——**含中文**）
+- `messages`（必填非空；OpenAI 投影 role/content/tool_calls/tool_call_id/reasoning_content，
+  **客户端全量上传**；服务端另以会话文件 `~/.kfmv4/sessions/<id>.json` 为真相源落盘）
+- `model`/`provider`（可选，默认 deepseek-v4-flash/deepseek；provider 按 providers.json
+  的 id 或 name 匹配，**无静默回退**，失败 → SSE error 事件）
+- `tools`（可选 string[] 白名单；服务端执行层 fail-closed 再拦一道）
+- roleFile/userText/extraSystem/maxTokens/params/sessionClass/sandboxRoot/readRoot（可选，v1 不用）
+
+### SSE 分帧（实录 fixture：`tests/fixtures/ai-chat/probe-kimi-k3-256k-20260830.sse`，44 事件全程）
+
+- 帧 = `data: {"index":N,"event":{...}}\n\n`；`index` = 重连 cursor（客户端存 index+1）
+- 终结帧 = `data: {"type":"__end__"}`（SSE 级收尾非业务事件；不存在/已淘汰 runId
+  挂 stream 直接只发这一条，**不 404**）
+- 事件全集（`shared/chat-protocol/events.ts:16-44`）：
+  `message_start` / `content_block_start{index,blockType:text|tool_use,toolUseId?,toolName?}` /
+  `content_block_delta{index,deltaType:text_delta|thinking_delta|input_json_delta,deltaText}` /
+  `content_block_stop{index}` / `tool_result{toolUseId,toolResult{content:[{type,text}],isError?},filesChanged?}` /
+  `message_stop` / `done` / `error{content}` / `rule_warning{content}`
+- block 布局：`index=0` 恒为 text（**thinking+正文同块混排，靠 deltaType 分流**）；
+  tool_use 从 1 起连续编号
+- 一轮工具循环 = message_start → blocks → (rule_warning*/tool_result*) → message_stop；
+  最终 message_stop → done → `__end__`
+
+### 中断 / 重连 / 缓冲
+
+- 中断 = POST cancel（服务端 abort；**客户端断开不取消后台生成**）
+- 重连：知 runId → `stream?from=cursor`；丢 runId → `active?sessionId` 找回；
+  attachRun 先同步回放 `events[from:]` 再实时尾随，已完成则回放完即 `__end__`
+- 缓冲：done/error 后 **5min 淘汰**；6min 无事件看门狗以 error 收尾
+- 同 session 新 start = **取代**旧 run（旧的一律取消）
+
+### 错误语义（实录 fixture：`tests/fixtures/ai-chat/probe-error-cases-20260830.txt`）
+
+- 参数非法 → 400 `{error}`（sessionId 白名单 / 空 messages，均有实录）
+- 跨源 → 403 `{error}`（verifyLocalOrigin；**无 Authorization 概念**，防护 = Origin
+  同源或 loopback——na 走 127.0.0.1/ssh 隧道天然过）
+- provider 不存在 / apiKey 代字缺失 → 200 立即返 runId + SSE error 事件（人话 content）
+- 上游 4xx/5xx → error 事件 `'API 请求失败: <status> — <body前300字>'`；
+  网络层重试 2 次后 → `'网络错误…'`；用户取消 → error `'已取消'`
+
+### apiKey 与 provider 配置（复刻要点）
+
+- 配置 `~/.kfmv4/providers.json`，条目 `{id,name,baseUrl,apiKey,models[],contextWindow?}`
+- 代字 fuse：`apiKey=${VAR}` → resolveKey 查 process.env 再查 `~/.kfmv4/.env`；
+  缺失 → error 事件，**绝不裸发代字**
+- 用户点名两路（2026-08-30）：Kimi 卡（id `Kimi`，api.kimi.com/coding/v1）model
+  `k3-256k`；智谱 coding plan 卡（id `智谱`，open.bigmodel.cn/api/coding/paas/v4）
+  model `glm-5.3`（用户口述「glm-5.3-flash」，登记表实为 `glm-5.3`）
+
+### 风险清单（侦察登记）
+
+- **R1 鉴权零成本但零防护**：无 token、绑 loopback——复刻成本≈0，但公网暴露即裸奔，
+  ssh 隧道纪律不能破
+- **R2 cursor 是客户端纪律**：信封 index 必须跟踪，否则重连重复消费（服务端不兜底）
+- **R3 reasoning 归位陷阱**：text 空且 reasoning 非空 → 归位正文（kfmv4 陷阱 10，
+  na 解析器同须处理）
+- **R4 input_json_delta 是碎片**：tool_use 参数须累积到 stop 才 JSON.parse，半截 JSON 是常态
+- **R5 token 成本不可控**：全局 system 预设（prompts/global）在服务端注入，客户端零感知
+- **R6 历史双写**：客户端上传投影 + 服务端文件真相源并存；na v1 = 只上传投影，
+  本地持久化另议（待定③）
+- **R7 WS 旁路独立于 SSE**：眼睛/手/心跳走 WS，对话走 SSE；期 0 只复刻 SSE，
+  WS 是期 1 眼睛的前置
+
+### `BrainEndpoint` trait 草案（从协议反推，非凭空设计）
+
+```rust
+/// 一个「脑」= 能开 run、吐事件流、可中断的后端。
+/// server-brain（HTTP/SSE 到 kfmv4）= 第一个实现；echo-brain 回放 fixture 做考题夹具；
+/// direct-api-brain（期 3，na 直连 provider）= 第三个。
+trait BrainEndpoint {
+    /// 开一轮对话，返回 run 句柄 + 事件流（自有 content-block 协议，与上游无关）。
+    fn start(&self, req: ChatStartReq) -> (RunHandle, BoxStream<ChatEvent>);
+    /// 中断 run（尽力而为；已终结的 run 返回 false）。
+    fn cancel(&self, run: &RunHandle) -> bool;
+    /// 重连接回：从 cursor 回放+尾随。server-brain 有（5min 缓冲）；echo/direct 可空实现。
+    fn attach(&self, run: &RunHandle, from: u64) -> Option<BoxStream<ChatEvent>>;
+}
+// ChatStartReq = {session_id, messages, model, provider, tools}
+// ChatEvent    = 平移 events.ts 九类型；BrainError 二分：传输错误(可重试) vs
+//                业务 error 事件(入流不例外)
+```
+
 - 解析器 + markdown-lite 转换器 = 纯逻辑，A 档考题先行 + 变异抽检。
   md 范围 v1：代码块/粗体/斜体/列表/标题。
 - 协议实现对 `BrainEndpoint` 接口编程（三层模型），server-brain 只是第一个后端。
@@ -127,7 +221,7 @@ apply 只注册服务与监听。
 ## 七、待定清单（讨论一条落一条，拍板后转正进 §八）
 
 ① 会话/焦点/命中的插件化方式（服务键 vs 壳层直挂）
-② /ai/chat 协议契约（读 kfmv4 源码回填——已提为期 0② 关键路径，D10）
+② ~~/ai/chat 协议契约~~ ✅ 已回填（2026-08-30 侦察：源码+活探针双证，见 §四）
 ③ 消息本地持久化格式（飞行记录仪风格）
 ④ 逐能力目标反选（默认跟随空间，显式覆盖待真实场景冒头再立项，parked）
 

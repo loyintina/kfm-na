@@ -1,0 +1,90 @@
+data: {"index":0,"event":{"type":"message_start"}}
+
+data: {"index":1,"event":{"type":"content_block_start","index":0,"blockType":"text"}}
+
+data: {"index":2,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":"We"}}
+
+data: {"index":3,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":" need"}}
+
+data: {"index":4,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":" answer"}}
+
+data: {"index":5,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":" user"}}
+
+data: {"index":6,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":" request"}}
+
+data: {"index":7,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":" exactly"}}
+
+data: {"index":8,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":" one"}}
+
+data: {"index":9,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":" word"}}
+
+data: {"index":10,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":":"}}
+
+data: {"index":11,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":" P"}}
+
+data: {"index":12,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":"ONG"}}
+
+data: {"index":13,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":"."}}
+
+data: {"index":14,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":" Need"}}
+
+data: {"index":15,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":" final"}}
+
+data: {"index":16,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":" exactly"}}
+
+data: {"index":17,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":" P"}}
+
+data: {"index":18,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":"ONG"}}
+
+data: {"index":19,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":"."}}
+
+data: {"index":20,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":" No"}}
+
+data: {"index":21,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":" extra"}}
+
+data: {"index":22,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":"."}}
+
+data: {"index":23,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":" Need"}}
+
+data: {"index":24,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":" be"}}
+
+data: {"index":25,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":" careful"}}
+
+data: {"index":26,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":" system"}}
+
+data: {"index":27,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":" says"}}
+
+data: {"index":28,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":" user"}}
+
+data: {"index":29,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":" message"}}
+
+data: {"index":30,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":" timestamp"}}
+
+data: {"index":31,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":" metadata"}}
+
+data: {"index":32,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":" not"}}
+
+data: {"index":33,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":" in"}}
+
+data: {"index":34,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":" reply"}}
+
+data: {"index":35,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":"."}}
+
+data: {"index":36,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":" Do"}}
+
+data: {"index":37,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":" it"}}
+
+data: {"index":38,"event":{"type":"content_block_delta","index":0,"deltaType":"thinking_delta","deltaText":"."}}
+
+data: {"index":39,"event":{"type":"content_block_delta","index":0,"deltaType":"text_delta","deltaText":"P"}}
+
+data: {"index":40,"event":{"type":"content_block_delta","index":0,"deltaType":"text_delta","deltaText":"ONG"}}
+
+data: {"index":41,"event":{"type":"content_block_stop","index":0}}
+
+data: {"index":42,"event":{"type":"message_stop"}}
+
+data: {"index":43,"event":{"type":"done"}}
+
+data: {"type":"__end__"}
+

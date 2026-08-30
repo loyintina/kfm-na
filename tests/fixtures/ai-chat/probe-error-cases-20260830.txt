@@ -1,0 +1,18 @@
+# kfmv4 /ai/chat 错误语义实录(2026-08-30,127.0.0.1:8021)
+
+## ① 非法 provider → 200 立即返 runId,错误走 SSE error 事件
+POST /api/ai/chat/start {"sessionId":"na_recon_probe2","messages":[{"role":"user","content":"hi"}],"model":"x","provider":"不存在的provider"}
+→ {"runId":"run_mtfwnlzg_dietvf","fromIndex":0,"done":false}
+GET stream?from=0 →
+data: {"index":0,"event":{"type":"error","content":"Provider「不存在的provider」不存在（id/name 均未匹配）——请检查 providers.json 或面板 API 卡。"}}
+data: {"type":"__end__"}
+
+## ② 非法 sessionId → 400
+POST start {"sessionId":"../evil",...} → HTTP 400 {"error":"sessionId 格式不合法"}
+
+## ③ 空 messages → 400
+POST start {"sessionId":"na_recon_probe2","messages":[]} → HTTP 400 {"error":"缺少 sessionId 或 messages 参数"}
+
+## ④ 不存在/已淘汰 runId 挂 stream → 不 404,直接 __end__
+GET /api/ai/chat/run_nonexistent/stream?from=0 →
+data: {"type":"__end__"}
