@@ -38,11 +38,14 @@ pub const LONG_PRESS_MS: u64 = 600;
 pub const DRAG_THRESHOLD_PX: f64 = 20.0;
 /// 四态增益硬切（D8；2026-08-30 加法合成后重调——加法语义下增益直接
 /// 缩放光贡献量，alpha 时代旧值不复用）：整 sprite 增益 闲/运行/pressed/
-/// AI页 + 运行态光晕增益；优先级 pressed > running > AI 页 > 闲
-pub const GAIN_IDLE: f32 = 0.7;
-pub const GAIN_RUNNING: f32 = 1.0;
+/// AI页 + 运行态光晕增益；优先级 pressed > running > AI 页 > 闲。
+/// 闲 = 1.0（2026-08-30 二调：用户实机裁图定量——闲 0.7 时峰值/球区/光晕
+/// 全面为样式参考的 ~60%，「不明显」实锤；闲态即应 = 样式参考基准亮度，
+/// 「几乎透明」由加法结构保证，不靠整体压暗）
+pub const GAIN_IDLE: f32 = 1.0;
+pub const GAIN_RUNNING: f32 = 1.15;
 pub const HALO_GAIN_RUNNING: f32 = 1.2;
-pub const GAIN_PRESSED: f32 = 1.3;
+pub const GAIN_PRESSED: f32 = 1.4;
 pub const GAIN_AI_PAGE: f32 = 1.0;
 
 /// 页：终端 / AI 全屏（两布尔之一）

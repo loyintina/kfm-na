@@ -216,7 +216,11 @@ p=2.05、tamp=0.12、tsig=1.02·Rs，色 = C_lit=(99,50,198)
 px 标准说明——kfmv4 网页用 CSS px（36px × 手机 DPR≈3 ≈ 108-120 物理
 px），na 用物理 px，Rs=60 与 kfmv4 同级且合用户实测。增益按加法语义
 重调：闲 0.7 / 运行 1.0+晕 1.2 / pressed 1.3 / AI 页 1.0（alpha 时代
-旧值不复用），评测尺 `scripts/orb-on-text-measure.py`（球内/球晕/球外
+旧值不复用）；**二调（同日，用户实机裁图定量反馈）**：闲 0.7 时峰值/
+球区/光晕全面为样式参考的 ~60%（「偏暗不明显」实锤）——闲态即应 =
+样式参考基准亮度，「几乎透明」由加法结构（暗面=无光贡献）保证、不靠
+整体压暗：闲 **1.0** / 运行 **1.15**+晕 1.2 / pressed **1.4** / AI 页 1.0。
+评测尺 `scripts/orb-on-text-measure.py`（球内/球晕/球外
 三区笔画 p90 与底 p10）
 校准锚（增补）：`docs/assets/orb-on-white-ref.jpg` /
 `docs/assets/orb-on-gray-ref.jpg`（文字环境参考=穿透可读性对拍基准）

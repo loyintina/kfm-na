@@ -248,10 +248,12 @@ fn spec_gain_ai页与四态优先级() {
     );
     // 增益排序钉：pressed 最亮，闲态最暗（几乎透明但确实有球）——
     // 数值钉死 GAIN_* 常量本体（排序走 orb_gain 读数，避开常量断言 lint）。
-    // 加法语义（2026-08-30 压字反馈后重调，alpha 时代旧值不复用）
-    assert_eq!(ai_presence::GAIN_PRESSED, 1.3);
-    assert_eq!(ai_presence::GAIN_RUNNING, 1.0);
-    assert_eq!(ai_presence::GAIN_IDLE, 0.7);
+    // 加法语义（2026-08-30 压字反馈后重调，alpha 时代旧值不复用）；
+    // 二调（同日）：闲 = 1.0 = 样式参考基准亮度（用户实机裁图定量，
+    // 闲 0.7 全面 ~60% 偏暗实锤），运行/按压顺势抬档保持排序
+    assert_eq!(ai_presence::GAIN_PRESSED, 1.4);
+    assert_eq!(ai_presence::GAIN_RUNNING, 1.15);
+    assert_eq!(ai_presence::GAIN_IDLE, 1.0);
     assert_eq!(ai_presence::HALO_GAIN_RUNNING, 1.2);
     let (g_idle, _) = ai_presence::orb_gain(false, false, Page::Terminal);
     let (g_run, h_run) = ai_presence::orb_gain(true, false, Page::Terminal);
