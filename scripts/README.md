@@ -24,7 +24,7 @@
 ## 热更回路(只改核心 .so 时,日常主力)
 
 - `na-push-so.sh [--no-restart]` — 推核心进沙箱 hot/ → 默认联动
-  自动重启 → ping 判卷,全自动闭环。
+  自动重启 → ping 判卷,全自动闭环;推前留档 `.so.last`(秒级回退)。
 - `na-restart.sh` — 体面重启:restart-req → 等断连 → am start 拉回
   → 等新 boot → 判卷。
 

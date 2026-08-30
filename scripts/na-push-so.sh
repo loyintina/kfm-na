@@ -6,7 +6,8 @@
 #     --no-restart:只推不重启(手动划掉重开生效)
 #
 # 链路:核心 .so → na 沙箱 {files}/hot/libkfm_na.so(先 .new 再 mv 原子
-# 防半读,同 keys-in 协议)→ na-restart.sh 自动体面重启 → na-loader
+# 防半读,同 keys-in 协议;推前留档 .so.last=秒级回退)→ na-restart.sh
+# 自动体面重启 → na-loader
 # dlopen 热更核心。判卷:闸门目录 loader-pick 应有 pick=hot 行 +
 # boot 报告的构建戳对得上 + na-ping alive。
 set -euo pipefail
@@ -41,12 +42,13 @@ fi
 SIZE=$(stat -c%s "$LOCAL_TMP")
 echo "=== 推送核心 ($SIZE 字节) → hot/ ==="
 na "mkdir -p $NA_HOT"
-# 原子防半写:.new → mv(若推送中断,旧核心不受损)
+# 原子防半写:.new → mv(若推送中断,旧核心不受损);
+# 推前留档 .so.last(2026-08-30 回退硬化):mv .last 回原名 + na-restart.sh = 秒级回退
 ssh -p 8024 -i "$NA_KEY" -o BatchMode=yes -o ConnectTimeout=10 \
     -o StrictHostKeyChecking=no localhost \
-    "cat > $NA_HOT/libkfm_na.so.new && mv $NA_HOT/libkfm_na.so.new $NA_HOT/libkfm_na.so" \
+    "cat > $NA_HOT/libkfm_na.so.new && { [ -f $NA_HOT/libkfm_na.so ] && cp $NA_HOT/libkfm_na.so $NA_HOT/libkfm_na.so.last; mv $NA_HOT/libkfm_na.so.new $NA_HOT/libkfm_na.so; }" \
     < "$LOCAL_TMP"
-na "ls -la $NA_HOT/libkfm_na.so"
+na "ls -la $NA_HOT/"
 if [ "$NO_RESTART" = 1 ]; then
     echo "✅ 热更核心已就位(--no-restart:不重启,手动划掉重开生效)"
 else
