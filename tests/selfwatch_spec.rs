@@ -12,8 +12,8 @@
 
 use kfm_na::crash::format_signal_line;
 use kfm_na::gate::{
-    ALERT_DEATHS_NEW, ALERT_DRAW_MS, ALERT_RSS_ABS_KB, ALERT_RSS_GROW_KB, AlertState, StatsSnap,
-    alert_check, format_history_line, ring_push,
+    ALERT_DEATHS_NEW, ALERT_DRAW_MS, ALERT_RSS_ABS_KB, ALERT_RSS_GROW_KB, ALERT_RSS_WINDOW_MS,
+    AlertState, StatsSnap, alert_check, format_history_line, ring_push,
 };
 use std::collections::VecDeque;
 
@@ -138,6 +138,41 @@ fn spec_alert_rss窗口净涨() {
     assert_eq!(msgs.len(), 1);
     assert!(msgs[0].contains("净涨"));
     assert_eq!(st3.rss_base, Some((61_000, s.rss_kb)));
+}
+
+#[test]
+fn spec_alert_rss绝线压线不报() {
+    // 夜班变异漏网①(gate.rs:1479 `>` → `>=`):压线考生缺失
+    let mut s = snap();
+    s.rss_kb = ALERT_RSS_ABS_KB; // 恰好压线——规则是「超过」,不报
+    let (msgs, st) = alert_check(&s, &AlertState::new(), 0);
+    assert!(msgs.is_empty(), "压线不报警(> 非 >=)");
+    // 压线走 else 分支,基线照立(窗口净涨规则照常工作)
+    assert_eq!(st.rss_base, Some((0, s.rss_kb)));
+
+    s.rss_kb = ALERT_RSS_ABS_KB + 1; // 超线 1KB → 报
+    let (msgs, _) = alert_check(&s, &st, 1);
+    assert_eq!(msgs.len(), 1);
+    assert!(msgs[0].contains("绝线"));
+}
+
+#[test]
+fn spec_alert_rss窗口到期基线重置() {
+    // 夜班变异漏网②(gate.rs:1490 窗口过期守卫 → false):重置分支没人走
+    let mut s = snap();
+    let (_, st1) = alert_check(&s, &AlertState::new(), 0); // t=0 立基线
+
+    // 窗口(5 分钟)过期,水位几乎没动 → 不报警,但基线必须跟着时钟重置,
+    // 否则旧基线赖着不走,后续的「净涨」会拿几小时前的水位误判
+    s.rss_kb += 1024; // 涨 1MB,远低于净涨线
+    let now = ALERT_RSS_WINDOW_MS + 1;
+    let (msgs, st2) = alert_check(&s, &st1, now);
+    assert!(msgs.is_empty());
+    assert_eq!(
+        st2.rss_base,
+        Some((now, s.rss_kb)),
+        "窗口过期基线必须重置为 (now, 当前水位)"
+    );
 }
 
 #[test]
