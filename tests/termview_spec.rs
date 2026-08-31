@@ -1233,3 +1233,45 @@ fn spec_lerp_rgb_monotonic_no_wraparound() {
         prev = cur;
     }
 }
+
+// ========== 圆角覆盖率（2026-08-31 质感 v2，SDF 抗锯齿的尺） ==========
+// 判卷点：内心全覆盖 / 远角零覆盖 / 角区过渡带存在且单调。图元本体
+// （描边/发光/高光）走 C 档实拍，尺错了实拍全是错——尺必须先钉
+
+#[test]
+fn spec_rr_cover_interior_full_corner_zero() {
+    use kfm_na::termview::rr_cover;
+    let (w, h, r) = (100, 60, 16);
+    assert_eq!(rr_cover(50, 30, w, h, r), 255, "内心必须全覆盖");
+    assert_eq!(
+        rr_cover(50, 0, w, h, r),
+        255,
+        "直边中点(中心距边 0.5)全覆盖"
+    );
+    assert_eq!(rr_cover(0, 0, w, h, r), 0, "远角外必须零覆盖");
+    assert_eq!(rr_cover(w - 1, h - 1, w, h, r), 0, "对角同样零覆盖");
+}
+
+#[test]
+fn spec_rr_cover_corner_transition_band() {
+    use kfm_na::termview::rr_cover;
+    let (w, h, r) = (100, 60, 16);
+    // 角区 16×16 内必须存在 0<cov<255 的过渡像素（没过渡 = 硬边锯齿回潮）
+    let mut soft = 0u32;
+    for py in 0..r {
+        for px in 0..r {
+            let c = rr_cover(px, py, w, h, r);
+            if c > 0 && c < 255 {
+                soft += 1;
+            }
+        }
+    }
+    assert!(soft >= 8, "角区过渡带太薄: 仅 {soft} 个半覆盖像素");
+    // 沿对角线向角心走,覆盖率单调不回头
+    let mut prev = 0u32;
+    for i in [2u32, 6, 10, 14] {
+        let c = rr_cover(i, i, w, h, r);
+        assert!(c >= prev, "角向心覆盖必须单调: {prev}→{c}");
+        prev = c;
+    }
+}

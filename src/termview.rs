@@ -1110,10 +1110,13 @@ impl TermView {
 
     /// 全局输入栏（ai-presence 期 0 组件三，§二 常驻 chrome 一）：
     /// 压底紧贴键盘（keybar 在其上一层——调用方几何保证）。样式 = kfmv4
-    /// 参考图复刻（2026-08-31，实拍取色）：文本区浮在带内（上下留白、
-    /// 左右离屏边 MARGIN_X_PX），紫→青渐变描边 + 暗蓝底（聚焦亮一档
-    /// 硬切，零动画帧）；右端独立圆角方块发送钮（紫→青对角渐变 +
-    /// 白 ▶ 三角），与文本区隔 GAP_PX 缝隙
+    /// base.css 逐项复刻（2026-08-31 v2 质感版，不再是截图取色近似——
+    /// 直接读 .ai-input-bar/.ai-input/.ai-send-btn 的 CSS 配方）：
+    /// 栏带顶部渐变发丝线（紫→青→紫 α0.4）；文本区 135° 渐变描边
+    /// （1px 物理 3，左缘 3 倍粗）+ 近黑底 + 顶部内阴影，聚焦 = 紫外
+    /// 发光（0 0 20px α0.35）+ 描边提点亮度硬切（零动画帧）；发送钮 =
+    /// 135° 渐变 + 顶部玻璃高光（inset 白 0.15）+ 紫色投影
+    /// （0 4px 12px α0.3）+ 白 ▶。全部图元 SDF 抗锯齿
     pub fn render_inputbar(
         &self,
         buf: &mut [u32],
@@ -1139,7 +1142,22 @@ impl TermView {
             h: buf_h,
         };
         frame.fill_rect(0, top, buf_w, input_bar::HEIGHT_PX, BAR_BG);
-        // 文本区：带内上下各留 32，高 156；描边 3px 渐变（外）套暗底（内）
+        // 带顶渐变发丝线（kfmv4 border-image：紫→青→紫 α0.4，3px 物理）
+        for py in 0..3u32 {
+            for px in 0..buf_w {
+                let c = if px < buf_w / 2 {
+                    lerp_rgb(BAR_BORDER_L, BAR_ACCENT, px * 255 / (buf_w / 2).max(1))
+                } else {
+                    lerp_rgb(
+                        BAR_ACCENT,
+                        BAR_BORDER_L,
+                        (px - buf_w / 2) * 255 / (buf_w / 2).max(1),
+                    )
+                };
+                frame.blend_px(px, top + py, c, 102);
+            }
+        }
+        // 文本区：带内上下各留 32，高 156
         let field_h = input_bar::HEIGHT_PX - 64;
         let field_top = top + 32;
         let send_left = buf_w - input_bar::MARGIN_X_PX - input_bar::SEND_W_PX;
@@ -1150,25 +1168,53 @@ impl TermView {
         } else {
             BAR_FIELD_BG
         };
+        // 聚焦 = 紫外发光（kfmv4 focus box-shadow 0 0 20px α0.35）
+        if snap.focused {
+            frame.glow_round_rect(
+                field_left,
+                field_top,
+                field_w,
+                field_h,
+                40,
+                GlowSpec {
+                    color: BAR_GLOW,
+                    alpha: 89,
+                    spread: 24,
+                    y_off: 0,
+                },
+            );
+        }
+        // 描边：135° 对角渐变（kfmv4 #7c3aed → rgba(0,212,255,0.8)）
         frame.fill_round_rect_grad(
             field_left,
             field_top,
             field_w,
             field_h,
-            48,
+            40,
             GradSpec {
                 c1: BAR_BORDER_L,
                 c2: BAR_BORDER_R,
-                diag: false,
+                diag: true,
             },
         );
-        frame.fill_round_rect(
-            field_left + 3,
-            field_top + 3,
-            field_w - 6,
-            field_h - 6,
-            45,
-            field_bg,
+        // 内芯：近黑底，左缘让 9（3px CSS 加粗描边）其余让 3
+        let core_x = field_left + 9;
+        let core_y = field_top + 3;
+        let core_w = field_w - 12;
+        let core_h = field_h - 6;
+        frame.fill_round_rect(core_x, core_y, core_w, core_h, 36, field_bg);
+        // 顶部内阴影（kfmv4 inset 0 1px 2px 黑 0.2）
+        frame.inner_top_veil(
+            core_x,
+            core_y,
+            core_w,
+            core_h,
+            36,
+            VeilSpec {
+                color: 0,
+                alpha: 51,
+                rows: 4,
+            },
         );
         // 文字左内缩 ~58（draw_text_left 自带 18 起笔）
         let text_cx = field_left + 40;
@@ -1188,9 +1234,23 @@ impl TermView {
                 &mut frame, &snap.text, text_cx, text_cw, field_top, field_h, BAR_TEXT,
             );
         }
-        // 发送钮：独立圆角方块（比文本区矮 16，垂直居中），对角渐变 + 白 ▶
+        // 发送钮：先紫色投影（kfmv4 0 4px 12px α0.3），再 135° 渐变本体，
+        // 再顶部玻璃高光（inset 白 0.15），最后白 ▶
         let send_top = field_top + 8;
         let send_h = field_h - 16;
+        frame.glow_round_rect(
+            send_left,
+            send_top,
+            input_bar::SEND_W_PX,
+            send_h,
+            36,
+            GlowSpec {
+                color: BAR_GLOW,
+                alpha: 77,
+                spread: 14,
+                y_off: 6,
+            },
+        );
         frame.fill_round_rect_grad(
             send_left,
             send_top,
@@ -1201,6 +1261,18 @@ impl TermView {
                 c1: BAR_SEND_TL,
                 c2: BAR_SEND_BR,
                 diag: true,
+            },
+        );
+        frame.inner_top_veil(
+            send_left,
+            send_top,
+            input_bar::SEND_W_PX,
+            send_h,
+            36,
+            VeilSpec {
+                color: 0x00FF_FFFF,
+                alpha: 38,
+                rows: 3,
             },
         );
         frame.fill_triangle_right(
@@ -1473,19 +1545,25 @@ pub const KEYBAR_KEY_BG: u32 = 0x0023_272E;
 pub const KEYBAR_MOD_ON: u32 = 0x003E_6FB4;
 pub const KEYBAR_LABEL: u32 = 0x00E8_EAED;
 
-/// 全局输入栏配色（期 0 组件三；2026-08-31 样式修订 = kfmv4 参考图实拍
-/// 取色复刻：暗蓝文本区 + 紫→青渐变描边/发送钮 + 白 ▶）。聚焦亮一档硬切
-pub const BAR_BG: u32 = 0x0010_1216;
-pub const BAR_FIELD_BG: u32 = 0x0012_2038;
-pub const BAR_FIELD_FOCUS_BG: u32 = 0x001E_3050;
-pub const BAR_TEXT: u32 = 0x00E8_EAED;
-pub const BAR_PLACEHOLDER: u32 = 0x0069_657C;
-/// 文本区描边渐变两端（左紫 → 右青）
-pub const BAR_BORDER_L: u32 = 0x006E_49EB;
-pub const BAR_BORDER_R: u32 = 0x0018_A8D8;
-/// 发送钮对角渐变两端（左上紫 → 右下青蓝）
-pub const BAR_SEND_TL: u32 = 0x006D_49EB;
-pub const BAR_SEND_BR: u32 = 0x0012_9FD5;
+/// 全局输入栏配色（期 0 组件三；2026-08-31 v2 = kfmv4 base.css 配方直译，
+/// 不再是截图取色近似：--primary #7c3aed / --accent #00d4ff / 栏带
+/// rgba(18,18,26,0.85) 叠 #0a0a0f / 文本区 rgba(10,10,15,0.8) 近黑）
+pub const BAR_BG: u32 = 0x0011_1119;
+pub const BAR_FIELD_BG: u32 = 0x000C_0C11;
+pub const BAR_FIELD_FOCUS_BG: u32 = 0x0013_141C;
+pub const BAR_TEXT: u32 = 0x00E0_E0E0;
+/// rgba(224,224,224,0.4) 叠近黑底的事后色
+pub const BAR_PLACEHOLDER: u32 = 0x0061_6165;
+/// 描边/渐变共用品牌紫（--primary #7c3aed）；发光同色
+pub const BAR_BORDER_L: u32 = 0x007C_3AED;
+/// 渐变青端：rgba(0,212,255,0.8) 叠栏带色的事后色
+pub const BAR_BORDER_R: u32 = 0x0003_ADD1;
+/// 带顶发丝线中点（--accent #00d4ff）
+pub const BAR_ACCENT: u32 = 0x0000_D4FF;
+pub const BAR_GLOW: u32 = 0x007C_3AED;
+/// 发送钮对角渐变两端（135°：--primary → 青端事后色，同描边）
+pub const BAR_SEND_TL: u32 = 0x007C_3AED;
+pub const BAR_SEND_BR: u32 = 0x0003_ADD1;
 pub const BAR_SEND_TRI: u32 = 0x00FF_FFFF;
 
 /// 长按选择高亮底色（kfmv4 正蓝 #3B82F6，2026-08-21 品牌色板统一——
@@ -1686,6 +1764,24 @@ struct GradSpec {
     diag: bool,
 }
 
+/// 外发光/投影参数（glow_round_rect 用）
+#[derive(Clone, Copy)]
+struct GlowSpec {
+    color: u32,
+    alpha: u32,
+    spread: u32,
+    /// 投影纵向偏移（0 = 对称光晕，>0 = 向下投影）
+    y_off: u32,
+}
+
+/// 顶内侧高光/内阴影参数（inner_top_veil 用）
+#[derive(Clone, Copy)]
+struct VeilSpec {
+    color: u32,
+    alpha: u32,
+    rows: u32,
+}
+
 impl Frame<'_> {
     /// 画纯色矩形（裁剪到帧缓冲内）
     fn fill_rect(&mut self, x: u32, y: u32, w: u32, h: u32, color: u32) {
@@ -1696,73 +1792,95 @@ impl Frame<'_> {
         }
     }
 
-    /// 画圆角矩形（四角半径 r 的圆外像素跳过），快捷键行药丸键用
+    /// 画圆角矩形（SDF 抗锯齿：边界 1px 覆盖率过渡），快捷键行药丸键用
     fn fill_round_rect(&mut self, x: u32, y: u32, w: u32, h: u32, r: u32, color: u32) {
-        let r = r.min(w / 2).min(h / 2) as i64;
-        for py in 0..h as i64 {
-            for px in 0..w as i64 {
-                // 角区像素：到角圆心的距离超半径即跳过
-                let cx = if px < r {
-                    r
-                } else if px >= w as i64 - r {
-                    w as i64 - r - 1
-                } else {
-                    px
-                };
-                let cy = if py < r {
-                    r
-                } else if py >= h as i64 - r {
-                    h as i64 - r - 1
-                } else {
-                    py
-                };
-                if (px - cx) * (px - cx) + (py - cy) * (py - cy) > r * r {
+        let r = r.min(w / 2).min(h / 2);
+        for py in 0..h {
+            for px in 0..w {
+                let cov = rr_cover(px, py, w, h, r);
+                if cov == 0 {
                     continue;
                 }
-                let (ax, ay) = (x as i64 + px, y as i64 + py);
-                if ax >= 0 && ay >= 0 && ax < i64::from(self.w) && ay < i64::from(self.h) {
-                    self.buf[(ay * i64::from(self.w) + ax) as usize] = color;
+                let (ax, ay) = (x + px, y + py);
+                if ax < self.w && ay < self.h {
+                    if cov == 255 {
+                        self.buf[(ay * self.w + ax) as usize] = color;
+                    } else {
+                        self.blend_px(ax, ay, color, cov);
+                    }
                 }
             }
         }
     }
 
-    /// 渐变圆角矩形（输入栏描边/发送钮用）：与 fill_round_rect 同圆角
-    /// 遮罩，颜色从 g.c1 渐变到 g.c2——g.diag=false 沿横向，true 沿主对角线
-    fn fill_round_rect_grad(&mut self, x: u32, y: u32, w: u32, h: u32, r: u32, g: GradSpec) {
-        let r = r.min(w / 2).min(h / 2) as i64;
-        let (w64, h64) = (i64::from(w), i64::from(h));
-        // t 的分母：横向 = w-1；对角 = 归一到 (w-1)+(h-1)
-        let denom = if g.diag {
-            (w64 - 1) + (h64 - 1)
-        } else {
-            w64 - 1
+    /// 外发光/投影（kfmv4 box-shadow 质感）：沿 SDF 向外 spread px 二次
+    /// 衰减，只画矩形外部（内部归主体）。y_off 模拟投影偏移（正 = 向下）
+    fn glow_round_rect(&mut self, x: u32, y: u32, w: u32, h: u32, r: u32, g: GlowSpec) {
+        let spread = i64::from(g.spread);
+        let (x, y) = (i64::from(x), i64::from(y) + i64::from(g.y_off));
+        let x0 = (x - spread).max(0);
+        let y0 = (y - spread).max(0);
+        let x1 = (x + i64::from(w) + spread).min(i64::from(self.w));
+        let y1 = (y + i64::from(h) + spread).min(i64::from(self.h));
+        for ay in y0..y1 {
+            for ax in x0..x1 {
+                let d = rr_sdf((ax - x) as f32 + 0.5, (ay - y) as f32 + 0.5, w, h, r);
+                if d <= 0.0 {
+                    continue; // 内部归主体画
+                }
+                let t = (1.0 - d / g.spread as f32).max(0.0);
+                let a = (g.alpha as f32 * t * t) as u32;
+                if a > 0 {
+                    self.blend_px(ax as u32, ay as u32, g.color, a);
+                }
+            }
         }
-        .max(1);
-        for py in 0..h64 {
-            for px in 0..w64 {
-                let cx = if px < r {
-                    r
-                } else if px >= w64 - r {
-                    w64 - r - 1
-                } else {
-                    px
-                };
-                let cy = if py < r {
-                    r
-                } else if py >= h64 - r {
-                    h64 - r - 1
-                } else {
-                    py
-                };
-                if (px - cx) * (px - cx) + (py - cy) * (py - cy) > r * r {
+    }
+
+    /// 渐变圆角矩形（输入栏描边/发送钮用）：SDF 抗锯齿，颜色从 g.c1
+    /// 渐变到 g.c2——g.diag=false 沿横向，true 沿主对角线
+    fn fill_round_rect_grad(&mut self, x: u32, y: u32, w: u32, h: u32, r: u32, g: GradSpec) {
+        let r = r.min(w / 2).min(h / 2);
+        // t 的分母：横向 = w-1；对角 = 归一到 (w-1)+(h-1)
+        let denom = if g.diag { (w - 1) + (h - 1) } else { w - 1 }.max(1);
+        for py in 0..h {
+            for px in 0..w {
+                let cov = rr_cover(px, py, w, h, r);
+                if cov == 0 {
                     continue;
                 }
-                let (ax, ay) = (x as i64 + px, y as i64 + py);
-                if ax >= 0 && ay >= 0 && ax < i64::from(self.w) && ay < i64::from(self.h) {
-                    let t = if g.diag { px + py } else { px };
-                    let color = lerp_rgb(g.c1, g.c2, (t * 255 / denom) as u32);
-                    self.buf[(ay * i64::from(self.w) + ax) as usize] = color;
+                let (ax, ay) = (x + px, y + py);
+                if ax >= self.w || ay >= self.h {
+                    continue;
+                }
+                let t = if g.diag { px + py } else { px };
+                let color = lerp_rgb(g.c1, g.c2, (t * 255 / denom).min(255));
+                if cov == 255 {
+                    self.buf[(ay * self.w + ax) as usize] = color;
+                } else {
+                    self.blend_px(ax, ay, color, cov);
+                }
+            }
+        }
+    }
+
+    /// 顶内侧高光/内阴影（kfmv4 inset 质感）：圆角矩形内顶起 rows 高一条，
+    /// 按形状覆盖率混合（color/alpha 调用方定——白 0.15 = 玻璃高光，
+    /// 黑 0.2 = 内阴影）
+    fn inner_top_veil(&mut self, x: u32, y: u32, w: u32, h: u32, r: u32, v: VeilSpec) {
+        let r = r.min(w / 2).min(h / 2);
+        for py in 0..v.rows.min(h) {
+            for px in 0..w {
+                let cov = rr_cover(px, py, w, h, r);
+                if cov == 0 {
+                    continue;
+                }
+                let (ax, ay) = (x + px, y + py);
+                if ax < self.w && ay < self.h {
+                    let a = v.alpha * cov / 255;
+                    if a > 0 {
+                        self.blend_px(ax, ay, v.color, a);
+                    }
                 }
             }
         }
@@ -1812,6 +1930,29 @@ pub fn lerp_rgb(c1: u32, c2: u32, t: u32) -> u32 {
         (a + (b - a) * t as i64 / 255) as u32
     };
     (f(16) << 16) | (f(8) << 8) | f(0)
+}
+
+/// 圆角矩形 SDF（像素中心相对形状的有符号距离，负=内正=外；
+/// iq 圆角盒公式）——AA 覆盖率与外发光衰减的同一把尺。
+/// 快路：双轴都在直边区就不必 hypot（药丸键/描边大面填充的命根，
+/// 全量 hypot 一帧多 ~百毫秒级，2026-08-31 实测量级估算）
+fn rr_sdf(px: f32, py: f32, w: u32, h: u32, r: u32) -> f32 {
+    let (hw, hh) = (w as f32 / 2.0, h as f32 / 2.0);
+    let r = r.min(w / 2).min(h / 2) as f32;
+    let qx = (px - hw).abs() - (hw - r);
+    let qy = (py - hh).abs() - (hh - r);
+    if qx <= 0.0 && qy <= 0.0 {
+        qx.max(qy) - r
+    } else {
+        qx.max(qy).min(0.0) + qx.max(0.0).hypot(qy.max(0.0)) - r
+    }
+}
+
+/// 圆角矩形覆盖率（0..=255，边界 1px 抗锯齿过渡；A 档考题
+/// spec_rr_cover_* 在 tests/termview_spec.rs）
+pub fn rr_cover(px: u32, py: u32, w: u32, h: u32, r: u32) -> u32 {
+    let d = rr_sdf(px as f32 + 0.5, py as f32 + 0.5, w, h, r);
+    ((0.5 - d).clamp(0.0, 1.0) * 255.0) as u32
 }
 
 /// 供 android_app：从候选路径建视图（主字体 + CJK 备用 + 默认 80x24 占位网格），

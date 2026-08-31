@@ -317,7 +317,20 @@ trait BrainEndpoint {
   新图元 fill_round_rect_grad / fill_triangle_right（Frame 私有，不进
   覆盖矩阵），lerp_rgb 进 A 档考题（termview_spec 2 题）；基线
   15→18 = 色板常量净 +3（渐变端色 5 进 2 出，与既有未覆盖色板同类，
-  C 档实拍判卷——像素对错走 na-shot 对照，不是考题引用的活）。**同车排障两案**：①keybar 渲染叠层 bug——render_keybar 的
+  C 档实拍判卷——像素对错走 na-shot 对照，不是考题引用的活）。
+  **③样式 v2 质感版（2026-08-31 晚，用户对比后指「kfmv4 更有质感」）**：
+  不再截图取色近似，直接读 kfmv4 `base.css` 配方逐项直译——栏带顶
+  渐变发丝线（紫→青→紫 α0.4，border-image）；文本区 135° 对角渐变
+  描边（左缘 3 倍粗）+ 近黑底 rgba(10,10,15,0.8)（v1 误取成藏青）+
+  顶部内阴影（inset 0 1px 2px 黑 0.2），聚焦 = 紫外发光
+  （0 0 20px α0.35，v1 只是底色亮一档）；发送钮 = 紫投影
+  （0 4px 12px α0.3）+ 135° 渐变 + 顶部玻璃高光（inset 白 0.15）——
+  **质感三件套 = 外发光/投影 + 内高光/内阴影 + 抗锯齿**，v1 全缺。
+  图元升级：fill_round_rect(_grad) 改 SDF 覆盖率抗锯齿（rr_sdf/
+  rr_cover 一把尺，直边快路免 hypot 保帧率），新增 glow_round_rect/
+  inner_top_veil；rr_cover 进 A 档考题 2 题（内心全覆盖/远角零覆盖/
+  角区过渡带单调）；基线 18→20（BAR_ACCENT/BAR_GLOW 色板常量）。
+  keybar 药丸键走同一 fill_round_rect，白得 AA。**同车排障两案**：①keybar 渲染叠层 bug——render_keybar 的
   inset 漏叠输入栏高（触摸几何早叠了 = 眼手错位，栏盖住行第二排），
   dump 装帧口径补齐后才实拍实锤；②dump_now 装帧补画 keybar（mods
   恒 0，粘滞位无私有共享态）+ 输入栏（读 input_bar_handle），
