@@ -31,16 +31,16 @@ pub struct ChatStartReq {
 /// run 句柄：取消/观测的同源读数。clone 便宜（Arc）。
 pub struct RunHandle {
     pub id: u64,
-    state: Arc<RunState>,
+    pub(crate) state: Arc<RunState>,
 }
 
-struct RunState {
-    done: AtomicBool,
-    cancelled: AtomicBool,
+pub struct RunState {
+    pub(crate) done: AtomicBool,
+    pub(crate) cancelled: AtomicBool,
 }
 
 impl RunHandle {
-    fn new(id: u64) -> Self {
+    pub(crate) fn new(id: u64) -> Self {
         Self {
             id,
             state: Arc::new(RunState {

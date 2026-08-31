@@ -32,6 +32,10 @@ fontdue = "0.9"
 nix = { version = "0.30", features = ["term", "process", "signal"] }
 # winsize/控制终端 ioctl（TIOCSWINSZ/TIOCSCTTY）直调，nix 不包这两个常量
 libc = "0.2"
+# AI 脑直连（direct_api_brain.rs，期 0②）：纯 Rust TLS——ring 后端
+# （aws-lc-rs 要 C 工具链，Android/Termux 交叉编译是坑；ring 全平台稳）
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
+webpki-roots = "1"
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 
 [target.'cfg(target_os = "android")'.dependencies]

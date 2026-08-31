@@ -71,6 +71,14 @@ export KFM_NA_BUILD="$(git rev-parse --short HEAD 2>/dev/null || echo nogit)-$(d
 export KFM_NA_VC="$VERSION_CODE"
 
 export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$LINKER"
+# ring（rustls 后端）要编 C：cc-rs 需要目标 CC/AR（服务器=NDK；Termux=原生 cc/ar）
+if [ -d /data/data/com.termux ]; then
+    export CC_aarch64_linux_android=cc
+    export AR_aarch64_linux_android=ar
+else
+    export CC_aarch64_linux_android="$LINKER"
+    export AR_aarch64_linux_android="$(dirname "$LINKER")/llvm-ar"
+fi
 
 echo "=== [package 1/6] cargo build --release ($TARGET) ==="
 # 双库:kfm_na = 核心(可被热更替换),na_loader = 焊死的加载壳

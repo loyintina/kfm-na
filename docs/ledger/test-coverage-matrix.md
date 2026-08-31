@@ -10,11 +10,15 @@
 |---|---|---|---|---|
 | `src/ai_presence.rs` | 27 | 27 | 0 | — |
 | `src/bootstrap.rs` | 4 | 2 | 2 | ensure_pkg_tool first_boot_install |
+| `src/brain_ep.rs` | 4 | 4 | 0 | — |
+| `src/brain.rs` | 14 | 14 | 0 | — |
 | `src/clipboard.rs` | 1 | 0 | 1 | copy_and_toast |
 | `src/conn.rs` | 4 | 2 | 2 | spawn_smoke ws_spawner |
 | `src/crash.rs` | 3 | 2 | 1 | install_signal_hook |
+| `src/direct_brain.rs` | 2 | 2 | 0 | — |
 | `src/exec_probe.rs` | 1 | 1 | 0 | — |
-| `src/gate.rs` | 72 | 48 | 24 | DUMP_DIR register_gate_router text_dump inject_keys spawn_gate_watcher REC_FILE_CAP REC_FILE rec_output rec_resize PANIC_FILE PANIC_TRACE_FILE LOOP_STALL_FILE note_loop_beat loop_beat_age_ms note_foreground install_panic_hook note_draw note_session_death touch_take ALERT_RSS_WINDOW_MS ALERT_RSS_COOLDOWN_MS ALERT_DEATHS_WINDOW_MS ALERT_DEATHS_COOLDOWN_MS HISTORY_EVERY_TICKS |
+| `src/gate.rs` | 72 | 49 | 23 | DUMP_DIR register_gate_router text_dump inject_keys spawn_gate_watcher REC_FILE_CAP REC_FILE rec_output rec_resize PANIC_FILE PANIC_TRACE_FILE LOOP_STALL_FILE note_loop_beat loop_beat_age_ms note_foreground install_panic_hook note_draw note_session_death touch_take ALERT_RSS_COOLDOWN_MS ALERT_DEATHS_WINDOW_MS ALERT_DEATHS_COOLDOWN_MS HISTORY_EVERY_TICKS |
+| `src/http1.rs` | 10 | 7 | 3 | is_tick_err read_head_hook read_body_hook |
 | `src/ime_bridge.rs` | 1 | 0 | 1 | jni_counters |
 | `src/ime_queue.rs` | 5 | 5 | 0 | — |
 | `src/insets.rs` | 3 | 1 | 2 | force_show_keyboard query_ime_bottom |
@@ -27,6 +31,7 @@
 | `src/plugins/input_ime.rs` | 2 | 2 | 0 | — |
 | `src/plugins/term_alacritty.rs` | 3 | 3 | 0 | — |
 | `src/protocol.rs` | 2 | 2 | 0 | — |
+| `src/providers.rs` | 5 | 5 | 0 | — |
 | `src/report.rs` | 8 | 1 | 7 | set_boot_t0 start_flusher report report_sync report_sync_once http_status_is_200 escape_json |
 | `src/scroll.rs` | 5 | 5 | 0 | — |
 | `src/session_router.rs` | 10 | 9 | 1 | names |

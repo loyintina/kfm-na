@@ -288,7 +288,16 @@ trait BrainEndpoint {
   按 Rust 线程模型改通道）+ EchoBrain 夹具（from_upstream_sse 走真解析管造
   节目单、pace 节奏注入、取消→Error 已取消 收尾、attach 历史后缀回放）；
   考题 tests/brain_ep_spec.rs **6 题全绿**，变异双咬（取消检查删除咬、
-  attach 游标 +1 咬）。
+  attach 游标 +1 咬）。direct-api-brain 落地 `src/direct_brain.rs` +
+  `src/http1.rs`（手写 HTTP/1.1：chunked 分帧状态机碎喂安全，tick 钩子=
+  读超时醒来过取消检查）+ `src/providers.rs`（providers.json/.env 代字
+  fuse 复刻：process env 优先，缺失报错绝不裸发）+ rustls ring 后端
+  （纯 Rust TLS，Android 交叉安全）；考题 http1_spec 8 题 + providers_spec
+  8 题全绿，变异双咬（trailer 跳过不咬=登记盲区：body 已读完不影响，
+  连接复用才有差，一期不做）。**live 双线一次全通**（2026-08-31）：
+  Kimi/kimi-for-coding-highspeed 28 事件 Done 正文暗号咬、
+  智谱/glm-5.3-flash 98 事件同尺咬、坏 provider 立即人话 Error 事件——
+  tests/direct_brain_live_spec.rs（#[ignore]，手动 --ignored）。
 - **期 1 眼睛**：视口快照附上下文。验收 = 问「屏幕上有什么」答得对。
 - **期 2 手**：工具执行注入来源会话。验收 = 让 AI 跑一条命令，终端可见。
 - **期 3 打磨**：server-brain（服务器空间数据源，§四C 契约已就位——**服务器
