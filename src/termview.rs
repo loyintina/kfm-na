@@ -1116,7 +1116,13 @@ impl TermView {
     /// （1px 物理 3，左缘 3 倍粗）+ 近黑底 + 顶部内阴影，聚焦 = 紫外
     /// 发光（0 0 20px α0.35）+ 描边提点亮度硬切（零动画帧）；发送钮 =
     /// 135° 渐变 + 顶部玻璃高光（inset 白 0.15）+ 紫色投影
-    /// （0 4px 12px α0.3）+ 白 ▶。全部图元 SDF 抗锯齿
+    /// （0 4px 12px α0.3）+ 白 ▶（sending = ⏸ 双竖条，跟 AI 运行态硬切）。
+    /// 全部图元 SDF 抗锯齿。
+    /// textarea（2026-08-31 移动端全量复刻）：带高随行数长
+    /// （height_for_lines(snap.lines)，覆盖式悬浮——栏带向上浮盖终端底部
+    /// 行，终端网格几何不动）；文本折行（wrap_starts）多行绘制，超
+    /// MAX_LINES 尾锚显最后几行；行数由调用方量宽写回 snap.lines
+    /// （bar_text_lines → InputBarState::set_lines，眼手同尺单源）
     pub fn render_inputbar(
         &self,
         buf: &mut [u32],
@@ -1124,11 +1130,13 @@ impl TermView {
         buf_h: u32,
         ime_bottom: u32,
         snap: &crate::input_bar::BarSnap,
+        sending: bool,
     ) {
         use crate::input_bar;
+        let bar_h = input_bar::height_for_lines(snap.lines);
         let Some(top) = buf_h
             .checked_sub(ime_bottom)
-            .and_then(|b| b.checked_sub(input_bar::HEIGHT_PX))
+            .and_then(|b| b.checked_sub(bar_h))
         else {
             return;
         };
@@ -1141,7 +1149,7 @@ impl TermView {
             w: buf_w,
             h: buf_h,
         };
-        frame.fill_rect(0, top, buf_w, input_bar::HEIGHT_PX, BAR_BG);
+        frame.fill_rect(0, top, buf_w, bar_h, BAR_BG);
         // 带顶渐变发丝线（kfmv4 border-image：紫→青→紫 α0.4，3px 物理）
         for py in 0..3u32 {
             for px in 0..buf_w {
@@ -1157,8 +1165,8 @@ impl TermView {
                 frame.blend_px(px, top + py, c, 102);
             }
         }
-        // 文本区：带内上下各留 32，高 156
-        let field_h = input_bar::HEIGHT_PX - 64;
+        // 文本区：带内上下各留 32，高随行数长（单行 156）
+        let field_h = bar_h - 64;
         let field_top = top + 32;
         let send_left = buf_w - input_bar::MARGIN_X_PX - input_bar::SEND_W_PX;
         let field_left = input_bar::MARGIN_X_PX;
@@ -1230,7 +1238,7 @@ impl TermView {
                 rows: 4,
             },
         );
-        // 文字左内缩 ~58（draw_text_left 自带 18 起笔）
+        // 文字左内缩 ~58（draw 族自带 18 起笔）
         let text_cx = field_left + 40;
         let text_cw = field_w - 40 - 12;
         if snap.text.is_empty() {
@@ -1241,13 +1249,38 @@ impl TermView {
                 text_cw,
                 field_top,
                 field_h,
+                BAR_TEXT_PX,
                 BAR_PLACEHOLDER,
             );
         } else {
-            // 长文尾锚：正在敲的尾永远可见,头被截左端补 …(2026-08-31 指认)
-            self.draw_text_tail(
-                &mut frame, &snap.text, text_cx, text_cw, field_top, field_h, BAR_TEXT,
-            );
+            // textarea 折行（2026-08-31 移动端全量复刻）：量宽 → 贪心断行
+            // → 垂直居中成块画；超 MAX_LINES 尾锚显最后几行（手动滚动缺口
+            // 记档案）。字号恒定 BAR_TEXT_PX，行高 LINE_STEP_PX
+            let items = self.measure_items(&snap.text, BAR_TEXT_PX);
+            let widths: Vec<f32> = items.iter().map(|i| i.2).collect();
+            let avail = text_cw.saturating_sub(18) as f32;
+            let starts = wrap_starts(&widths, avail);
+            let show = starts.len().min(input_bar::MAX_LINES as usize);
+            let vis = &starts[starts.len() - show..];
+            let block_h = show as u32 * input_bar::LINE_STEP_PX;
+            let block_top = field_top + (field_h.saturating_sub(block_h)) / 2;
+            for (row, &st) in vis.iter().enumerate() {
+                let end = if row + 1 < vis.len() {
+                    vis[row + 1]
+                } else {
+                    items.len()
+                };
+                self.draw_items_left(
+                    &mut frame,
+                    &items[st..end],
+                    text_cx,
+                    text_cw,
+                    block_top + row as u32 * input_bar::LINE_STEP_PX,
+                    input_bar::LINE_STEP_PX,
+                    BAR_TEXT_PX,
+                    BAR_TEXT,
+                );
+            }
         }
         // 发送钮：先紫色投影（kfmv4 0 4px 12px α0.3），再 135° 渐变本体，
         // 再顶部玻璃高光（inset 白 0.15），最后白 ▶
@@ -1290,12 +1323,35 @@ impl TermView {
                 rows: 3,
             },
         );
-        frame.fill_triangle_right(
-            send_left + input_bar::SEND_W_PX / 2,
-            send_top + send_h / 2,
-            54,
-            BAR_SEND_TRI,
-        );
+        // 发送钮图标二态硬切（kfmv4 .ai-send-btn.sending：▶ ↔ ⏸，
+        // 跟 AI 运行态走，零动画帧）
+        let icon_cx = send_left + input_bar::SEND_W_PX / 2;
+        let icon_cy = send_top + send_h / 2;
+        if sending {
+            // ⏸：两条竖圆角矩形（与 ▶ 同视觉重心同白）
+            frame.fill_round_rect(icon_cx - 23, icon_cy - 27, 15, 54, 7, BAR_SEND_TRI);
+            frame.fill_round_rect(icon_cx + 8, icon_cy - 27, 15, 54, 7, BAR_SEND_TRI);
+        } else {
+            frame.fill_triangle_right(icon_cx, icon_cy, 54, BAR_SEND_TRI);
+        }
+    }
+
+    /// 量输入栏文本折行数（眼手同尺单源的量宽端：渲染层有字体，android_app
+    /// 每帧文本/宽度变化时调用 → InputBarState::set_lines 写回，触摸命中与
+    /// dump 读同一份）。buf_w 退化（画不下）按 1 行计
+    pub fn bar_text_lines(&self, text: &str, buf_w: u32) -> u32 {
+        if text.is_empty() {
+            return 1;
+        }
+        let Some(avail) = crate::input_bar::text_avail_w(buf_w) else {
+            return 1;
+        };
+        let widths: Vec<f32> = self
+            .measure_items(text, BAR_TEXT_PX)
+            .iter()
+            .map(|i| i.2)
+            .collect();
+        wrap_starts(&widths, avail).len() as u32
     }
 
     /// AI 全屏页占位空壳（ai-presence 期 0 组件一；合成网格是组件④）。
@@ -1423,8 +1479,41 @@ impl TermView {
         }
     }
 
+    /// 逐字挑字体（输入栏文本规则，与 draw_label 同）：主字体缺走 CJK
+    /// 备用，双缺 = None（调用方记 tofu）
+    fn pick_font(&self, c: char) -> Option<&fontdue::Font> {
+        if self.font.lookup_glyph_index(c) != 0 {
+            Some(&self.font)
+        } else if let Some(k) = &self.cjk {
+            if k.font.lookup_glyph_index(c) != 0 {
+                Some(&k.font)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+
+    /// 文本 → (字体, 字, 步进宽) 序列（px 字号下量宽；缺字记 tofu 跳过）。
+    /// 折行量宽与画字共用这一条序列——眼手同尺的物质基础
+    fn measure_items(&self, text: &str, px: f32) -> Vec<(&fontdue::Font, char, f32)> {
+        let mut items = Vec::new();
+        for c in text.chars() {
+            let Some(f) = self.pick_font(c) else {
+                let mut seen = self.tofu_seen.borrow_mut();
+                if !seen.contains(&c) && seen.len() < 16 {
+                    seen.push(c);
+                }
+                continue;
+            };
+            items.push((f, c, f.metrics(c, px).advance_width));
+        }
+        items
+    }
+
     /// 输入栏文本：左对齐（内缩 18px）+ 垂直居中，右缘按 cw 裁剪。
-    /// 逐字挑字体规则与 draw_label 同（主字体缺走 CJK 备用，双缺记 tofu）
+    /// px = 显式字号（textarea 多行后字号不随行高缩，调用方给 BAR_TEXT_PX）
     #[allow(clippy::too_many_arguments)]
     fn draw_text_left(
         &self,
@@ -1434,128 +1523,38 @@ impl TermView {
         cw: u32,
         cy: u32,
         rh: u32,
+        px: f32,
         fg: u32,
     ) {
-        let px = rh as f32 * 0.26;
-        let Some(hm) = self.font.horizontal_line_metrics(px) else {
-            return;
-        };
-        let pick = |c: char| -> Option<&fontdue::Font> {
-            if self.font.lookup_glyph_index(c) != 0 {
-                Some(&self.font)
-            } else if let Some(k) = &self.cjk {
-                if k.font.lookup_glyph_index(c) != 0 {
-                    Some(&k.font)
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        };
-        let mut pen_x = cx as f32 + 18.0;
-        let clip_right = cx + cw;
-        let baseline = cy as f32 + (rh as f32 - (hm.ascent - hm.descent)) / 2.0 + hm.ascent;
-        for c in text.chars() {
-            let Some(f) = pick(c) else {
-                let mut seen = self.tofu_seen.borrow_mut();
-                if !seen.contains(&c) && seen.len() < 16 {
-                    seen.push(c);
-                }
-                continue;
-            };
-            let adv = f.metrics(c, px).advance_width;
-            if pen_x + adv >= clip_right as f32 {
-                break; // 右缘装不下就停（v1 无横滚，截断即判卷）
-            }
-            let (m, bmp) = f.rasterize(c, px);
-            let top = baseline - m.ymin as f32 - m.height as f32;
-            for gy in 0..m.height as u32 {
-                let y = top as i64 + i64::from(gy);
-                if y < 0 || y >= i64::from(frame.h) {
-                    continue;
-                }
-                for gx in 0..m.width as u32 {
-                    let x = (pen_x + m.xmin as f32) as i64 + i64::from(gx);
-                    if x < 0 || x >= i64::from(clip_right) {
-                        continue;
-                    }
-                    let a = u32::from(bmp[(gy * m.width as u32 + gx) as usize]);
-                    if a > 0 {
-                        frame.blend_px(x as u32, y as u32, fg, a);
-                    }
-                }
-            }
-            pen_x += adv;
-        }
+        let items = self.measure_items(text, px);
+        self.draw_items_left(frame, &items, cx, cw, cy, rh, px, fg);
     }
 
-    /// 输入栏长文尾锚：与 draw_text_left 同渲染规则，但文本超宽时从
-    /// 「刚好放得下的后缀」起画（tail_fit_start 定窗），左端补 … 指示
-    /// 头部被截——正在敲的尾永远可见（2026-08-31 用户长文指认）
+    /// 画一串已量宽的字符（折行后逐行画走这里）：左对齐内缩 18 +
+    /// 垂直居中 + 右缘裁剪，规则与 draw_text_left 一致
     #[allow(clippy::too_many_arguments)]
-    fn draw_text_tail(
+    fn draw_items_left(
         &self,
         frame: &mut Frame<'_>,
-        text: &str,
+        items: &[(&fontdue::Font, char, f32)],
         cx: u32,
         cw: u32,
         cy: u32,
         rh: u32,
+        px: f32,
         fg: u32,
     ) {
-        let px = rh as f32 * 0.26;
         let Some(hm) = self.font.horizontal_line_metrics(px) else {
             return;
         };
-        let pick = |c: char| -> Option<&fontdue::Font> {
-            if self.font.lookup_glyph_index(c) != 0 {
-                Some(&self.font)
-            } else if let Some(k) = &self.cjk {
-                if k.font.lookup_glyph_index(c) != 0 {
-                    Some(&k.font)
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        };
-        let mut items = Vec::new();
-        for c in text.chars() {
-            let Some(f) = pick(c) else {
-                let mut seen = self.tofu_seen.borrow_mut();
-                if !seen.contains(&c) && seen.len() < 16 {
-                    seen.push(c);
-                }
-                continue;
-            };
-            items.push((f, c, f.metrics(c, px).advance_width));
-        }
-        if items.is_empty() {
-            return;
-        }
-        let avail = cw as f32 - 18.0;
-        let widths: Vec<f32> = items.iter().map(|i| i.2).collect();
-        let mut start = tail_fit_start(&widths, avail);
-        // 头被截 → 左端补 …，可用宽先减省略号再重定窗
-        let ell = if start > 0 {
-            let w = pick('…').map(|f| f.metrics('…', px).advance_width);
-            match w {
-                Some(w) => {
-                    start = tail_fit_start(&widths, avail - w);
-                    Some(('…', w))
-                }
-                None => None,
-            }
-        } else {
-            None
-        };
+        let mut pen_x = cx as f32 + 18.0;
         let clip_right = cx + cw;
         let baseline = cy as f32 + (rh as f32 - (hm.ascent - hm.descent)) / 2.0 + hm.ascent;
-        let mut pen_x = cx as f32 + 18.0;
-        let blit = |frame: &mut Frame<'_>, f: &fontdue::Font, c: char, pen_x: f32| {
-            let (m, bmp) = f.rasterize(c, px);
+        for (f, c, adv) in items {
+            if pen_x + adv >= clip_right as f32 {
+                break; // 右缘装不下就停（v1 无横滚，截断即判卷）
+            }
+            let (m, bmp) = f.rasterize(*c, px);
             let top = baseline - m.ymin as f32 - m.height as f32;
             for gy in 0..m.height as u32 {
                 let y = top as i64 + i64::from(gy);
@@ -1573,18 +1572,6 @@ impl TermView {
                     }
                 }
             }
-        };
-        if let Some((c, w)) = ell {
-            if let Some(f) = pick(c) {
-                blit(frame, f, c, pen_x);
-            }
-            pen_x += w;
-        }
-        for (f, c, adv) in &items[start..] {
-            if pen_x + adv >= clip_right as f32 {
-                break;
-            }
-            blit(frame, f, *c, pen_x);
             pen_x += adv;
         }
     }
@@ -1684,6 +1671,10 @@ pub const BAR_GLOW: u32 = 0x007C_3AED;
 pub const BAR_SEND_TL: u32 = 0x007C_3AED;
 pub const BAR_SEND_BR: u32 = 0x0003_ADD1;
 pub const BAR_SEND_TRI: u32 = 0x00FF_FFFF;
+/// 输入栏正文字号（px，物理像素）= 单行文本区高 156 × 0.26（单行时的
+/// 历史配比）。textarea 多行后字号不随行高缩——量宽/折行/画字同用这一把尺
+/// （模块内私有：调用方只管传 snap.lines，字号是渲染内部事）
+const BAR_TEXT_PX: f32 = 156.0 * 0.26;
 
 /// 长按选择高亮底色（kfmv4 正蓝 #3B82F6，2026-08-21 品牌色板统一——
 /// 此前借用的 KEYBAR_MOD_ON 0x3E6FB4 是快捷键行私色，不成套）
@@ -2074,20 +2065,22 @@ pub fn rr_cover(px: u32, py: u32, w: u32, h: u32, r: u32) -> u32 {
     ((0.5 - d).clamp(0.0, 1.0) * 255.0) as u32
 }
 
-/// 尾锚截断窗口（2026-08-31 长文输入指认：头裁切看不到正在敲的尾）：
-/// 给逐字宽度和可用宽，返回「从第几个字起画」——全放得下 = 0（从头画）；
-/// 放不下 = 刚好能放下的后缀起点；末字比可用还宽也照画（交右缘裁剪）。
-/// A 档纯逻辑，考题 spec_tail_fit_start_* 在 tests/termview_spec.rs
-pub fn tail_fit_start(widths: &[f32], max: f32) -> usize {
+/// 换行布局（2026-08-31 移动端 textarea 全量复刻拍板）：给逐字宽度和行
+/// 可用宽，返回每行起始字下标——放得下 = [0]（一行）；贪心断行（满即断，
+/// 刚好放下不断）；超宽单字（比行还宽）独占一行不吞字（交右缘裁剪）；
+/// 空表 = [0] 不炸。A 档纯逻辑，考题 spec_wrap_starts_* 在
+/// tests/termview_spec.rs
+pub fn wrap_starts(widths: &[f32], max_w: f32) -> Vec<usize> {
+    let mut starts = vec![0usize];
     let mut acc = 0.0f32;
-    for (i, w) in widths.iter().enumerate().rev() {
-        // 末字无条件收下（超宽也画,裁右缘不裁尾）；更前的字超宽即止
-        if i + 1 < widths.len() && acc + w > max {
-            return i + 1;
+    for (i, w) in widths.iter().enumerate() {
+        if i > *starts.last().unwrap() && acc + w > max_w {
+            starts.push(i);
+            acc = 0.0;
         }
         acc += w;
     }
-    0
+    starts
 }
 
 /// 供 android_app：从候选路径建视图（主字体 + CJK 备用 + 默认 80x24 占位网格），
@@ -2141,7 +2134,8 @@ pub trait TermEmu: Send {
     /// AI 页占位空壳（page=AiFullscreen 时代替终端网格）/ 雾状光球 sprite
     fn render_ai_page(&self, buf: &mut [u32], w: u32, h: u32);
     /// 全局输入栏 chrome（期 0 组件三，android_app rasterize 调用方）：
-    /// 压底紧贴键盘（栏带 = 屏底 - inset - 栏高），任何会话页都画
+    /// 压底紧贴键盘（栏带 = 屏底 - inset - 栏高），任何会话页都画；
+    /// sending = 发送钮图标态（▶ ↔ ⏸，跟 AI 运行态硬切）
     fn render_inputbar(
         &self,
         buf: &mut [u32],
@@ -2149,7 +2143,11 @@ pub trait TermEmu: Send {
         h: u32,
         ime_bottom: u32,
         snap: &crate::input_bar::BarSnap,
+        sending: bool,
     );
+    /// 量输入栏文本折行数（android_app poll_input_bar 调用方：文本/宽度
+    /// 变了先量行 set_lines 写回状态核，再 snap 再渲染——眼手同尺单源）
+    fn bar_text_lines(&self, text: &str, buf_w: u32) -> u32;
     #[allow(clippy::too_many_arguments)]
     fn render_orb(
         &self,
@@ -2210,8 +2208,12 @@ impl TermEmu for TermView {
         h: u32,
         ime_bottom: u32,
         snap: &crate::input_bar::BarSnap,
+        sending: bool,
     ) {
-        TermView::render_inputbar(self, buf, w, h, ime_bottom, snap)
+        TermView::render_inputbar(self, buf, w, h, ime_bottom, snap, sending)
+    }
+    fn bar_text_lines(&self, text: &str, buf_w: u32) -> u32 {
+        TermView::bar_text_lines(self, text, buf_w)
     }
     #[allow(clippy::too_many_arguments)]
     fn render_orb(

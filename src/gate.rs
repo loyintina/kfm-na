@@ -123,18 +123,24 @@ pub fn dump_now(dir: &str) {
     {
         let mut t = term.lock().unwrap();
         let ai_page = ai_snap.is_some_and(|s| s.page == crate::ai_presence::Page::AiFullscreen);
+        // 当前栏带高（textarea 随行数长高）——keybar inset 与前台同尺
+        let bar_h = bar_snap.as_ref().map_or(crate::input_bar::HEIGHT_PX, |bs| {
+            crate::input_bar::height_for_lines(bs.lines)
+        });
         if ai_page {
             // 与前台 rasterize 同一分支规则：AI 页 = 占位空壳盖掉终端网格
             // （AI 页不画快捷键行，同前台）
             t.render_ai_page(&mut buf, w, h);
         } else {
             t.render_into(&mut buf, w, h);
-            // 快捷键行：前台同规则 inset 叠输入栏高；修饰位无共享态按 0 画
-            t.render_keybar(&mut buf, w, h, crate::input_bar::HEIGHT_PX, 0);
+            // 快捷键行：前台同规则 inset 叠输入栏当前带高；修饰位无共享态按 0 画
+            t.render_keybar(&mut buf, w, h, bar_h, 0);
         }
-        // 输入栏：常驻 chrome，两页都画（同前台 rasterize 规则）
+        // 输入栏：常驻 chrome，两页都画（同前台 rasterize 规则）；
+        // sending 图标态跟 AI 运行态硬切（同前台）
         if let Some(bs) = &bar_snap {
-            t.render_inputbar(&mut buf, w, h, 0, bs);
+            let sending = ai_snap.is_some_and(|s| s.ai_running);
+            t.render_inputbar(&mut buf, w, h, 0, bs, sending);
         }
         if let Some(s) = ai_snap {
             let (gain, halo_gain) = crate::ai_presence::orb_gain(s.ai_running, s.pressed, s.page);

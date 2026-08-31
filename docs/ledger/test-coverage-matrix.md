@@ -21,7 +21,7 @@
 | `src/http1.rs` | 10 | 7 | 3 | is_tick_err read_head_hook read_body_hook |
 | `src/ime_bridge.rs` | 1 | 0 | 1 | jni_counters |
 | `src/ime_queue.rs` | 5 | 5 | 0 | — |
-| `src/input_bar.rs` | 17 | 15 | 2 | MARGIN_X_PX GAP_PX |
+| `src/input_bar.rs` | 23 | 19 | 4 | LINE_STEP_PX text_avail_w MARGIN_X_PX GAP_PX |
 | `src/insets.rs` | 3 | 1 | 2 | force_show_keyboard query_ime_bottom |
 | `src/keybar.rs` | 15 | 11 | 4 | COLS MOD_ALT install_bridge_mods bridge_mods |
 | `src/keymap.rs` | 2 | 2 | 0 | — |
@@ -38,5 +38,5 @@
 | `src/scroll.rs` | 5 | 5 | 0 | — |
 | `src/session_router.rs` | 10 | 9 | 1 | names |
 | `src/session.rs` | 8 | 8 | 0 | — |
-| `src/termview.rs` | 100 | 78 | 22 | FONT_CANDIDATES CJK_FONT_CANDIDATES load_cjk_font font_probe render_inputbar KEYBAR_LABEL BAR_BG BAR_FIELD_BG_L BAR_FIELD_BG_R BAR_FIELD_FOCUS_BG_L BAR_FIELD_FOCUS_BG_R BAR_TEXT BAR_PLACEHOLDER BAR_BORDER_L BAR_BORDER_R BAR_ACCENT BAR_GLOW BAR_SEND_TL BAR_SEND_BR BAR_SEND_TRI MAG_HALF_COLS MAG_HALF_ROWS |
+| `src/termview.rs` | 101 | 79 | 22 | FONT_CANDIDATES CJK_FONT_CANDIDATES load_cjk_font font_probe render_inputbar KEYBAR_LABEL BAR_BG BAR_FIELD_BG_L BAR_FIELD_BG_R BAR_FIELD_FOCUS_BG_L BAR_FIELD_FOCUS_BG_R BAR_TEXT BAR_PLACEHOLDER BAR_BORDER_L BAR_BORDER_R BAR_ACCENT BAR_GLOW BAR_SEND_TL BAR_SEND_BR BAR_SEND_TRI MAG_HALF_COLS MAG_HALF_ROWS |
 | `src/trace.rs` | 12 | 8 | 4 | TRACE_CAP format_tail dump_all dump_tail |

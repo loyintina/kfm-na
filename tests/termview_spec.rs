@@ -1276,26 +1276,51 @@ fn spec_rr_cover_corner_transition_band() {
     }
 }
 
-// ========== 尾锚截断（2026-08-31 长文输入指认:头裁切看不到正在敲的尾） ==========
-// 判卷点:全部放得下 = 从头画;放不下 = 从刚好能放下的后缀起画;
-// 零宽/单字符超宽不炸不绕。渲染本体 C 档实拍,截断窗口是纯逻辑先钉
+// ========== 换行布局（2026-08-31 移动端 textarea 全量复刻拍板） ==========
+// 判卷点:放得下 = 一行;贪心断行(满即断);精确边界;空表不炸。
+// kfmv4 .ai-input 是 textarea 自动换行——渲染本体 C 档实拍,断行窗纯逻辑先钉。
+// (同日取代尾锚方案 spec_tail_fit_start_*:单行截尾被 textarea 折行淘汰,
+// 函数与两题干净移除,git 历史留痕)
 
 #[test]
-fn spec_tail_fit_start_fits_means_zero() {
-    use kfm_na::termview::tail_fit_start;
-    let widths = [10.0, 10.0, 10.0];
-    assert_eq!(tail_fit_start(&widths, 100.0), 0, "全放得下必须从头画");
-    assert_eq!(tail_fit_start(&widths, 30.0), 0, "刚好放下也是从头画");
+fn spec_wrap_starts_single_line_when_fits() {
+    use kfm_na::termview::wrap_starts;
+    assert_eq!(wrap_starts(&[10.0, 10.0, 10.0], 100.0), vec![0]);
+    assert_eq!(
+        wrap_starts(&[10.0, 10.0, 10.0], 30.0),
+        vec![0],
+        "刚好放下不断行"
+    );
+    assert_eq!(wrap_starts(&[], 100.0), vec![0], "空表不炸");
 }
 
 #[test]
-fn spec_tail_fit_start_overflow_keeps_tail() {
-    use kfm_na::termview::tail_fit_start;
-    let widths = [10.0, 10.0, 10.0, 10.0, 10.0]; // 共 50
-    // 只容 35 → 从第 2 个起(20+10=30<=35,前 2 个让位)
-    assert_eq!(tail_fit_start(&widths, 35.0), 2);
-    // 只容 5 → 一个都放不下 → 从末尾起(画最后的能画多少画多少)
-    assert_eq!(tail_fit_start(&widths, 5.0), 4);
-    // 空串/空表不炸
-    assert_eq!(tail_fit_start(&[], 100.0), 0);
+fn spec_wrap_starts_greedy_breaks() {
+    use kfm_na::termview::wrap_starts;
+    // 5×10,max 25:行1=10+10,第 3 个满即断 → [0,2,4]
+    assert_eq!(wrap_starts(&[10.0; 5], 25.0), vec![0, 2, 4]);
+    // 超宽单字(20>15):该行只放它一个也要放(不吞字),随后继续贪心——
+    // 行2={10},第 3 个加上就 20>15 满即断 → [0,1,2]
+    // (原稿误写 [0,1],与「满即断」自相矛盾,2026-08-31 答案生成前勘误)
+    assert_eq!(wrap_starts(&[20.0, 10.0, 10.0], 15.0), vec![0, 1, 2]);
+}
+
+// ========== 量行端（textarea 眼手同尺单源：渲染层量宽 → set_lines 写回） ==========
+// 判卷点:空文/短文 = 一行;同一长文窗越窄行越多(内嵌真字体真量宽,不是 mocks)
+
+#[test]
+fn spec_bar_text_lines_空短文一行() {
+    let (tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必成");
+    assert_eq!(tv.bar_text_lines("", 1080), 1, "空文一行");
+    assert_eq!(tv.bar_text_lines("你好", 1080), 1, "短文一行");
+    assert_eq!(tv.bar_text_lines("随便什么", 10), 1, "窗退化不炸按一行计");
+}
+
+#[test]
+fn spec_bar_text_lines_窗越窄行越多() {
+    let (tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必成");
+    let long = "这是一段足够长的输入文本专门用来触发折行行为abcde12345更多字";
+    let wide = tv.bar_text_lines(long, 1080);
+    let narrow = tv.bar_text_lines(long, 400);
+    assert!(wide >= 1 && narrow > wide, "窄 {narrow} 必须多于宽 {wide}");
 }

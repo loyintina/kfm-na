@@ -5,7 +5,7 @@
 //! 几何命中（文本区 vs 发送钮 vs 栏外，键盘 inset 跟手）。
 //! 纪律：先验证红，答案生成到绿，绿后变异抽检。本文件是考题，生成器不许改。
 
-use kfm_na::input_bar::{BarHit, InputBarState, hit, in_bar};
+use kfm_na::input_bar::{BarHit, HEIGHT_PX, InputBarState, hit, in_bar};
 
 // ========== 焦点二态 ==========
 
@@ -70,16 +70,21 @@ const H: u32 = 2400;
 fn geometry_band_follows_ime() {
     use kfm_na::input_bar::HEIGHT_PX;
     // 键盘收：栏贴屏底
-    assert!(in_bar(f64::from(H - 1), H, 0));
+    assert!(in_bar(f64::from(H - 1), H, 0, HEIGHT_PX));
     assert!(
-        !in_bar(f64::from(H - HEIGHT_PX - 1), H, 0),
+        !in_bar(f64::from(H - HEIGHT_PX - 1), H, 0, HEIGHT_PX),
         "栏上方是终端区"
     );
     // 键盘弹起 900：栏跟手上浮
-    assert!(in_bar(f64::from(H - 900 - 1), H, 900));
-    assert!(!in_bar(f64::from(H - 900 - HEIGHT_PX - 1), H, 900));
+    assert!(in_bar(f64::from(H - 900 - 1), H, 900, HEIGHT_PX));
+    assert!(!in_bar(
+        f64::from(H - 900 - HEIGHT_PX - 1),
+        H,
+        900,
+        HEIGHT_PX
+    ));
     assert!(
-        !in_bar(f64::from(H - 100), H, 900),
+        !in_bar(f64::from(H - 100), H, 900, HEIGHT_PX),
         "被键盘盖住的屏底不算栏内"
     );
 }
@@ -88,20 +93,20 @@ fn geometry_band_follows_ime() {
 fn hit_field_vs_send() {
     use kfm_na::input_bar::{HEIGHT_PX, SEND_W_PX};
     let y = f64::from(H) - f64::from(HEIGHT_PX) / 2.0;
-    assert_eq!(hit(100.0, y, W, H, 0), Some(BarHit::Field));
+    assert_eq!(hit(100.0, y, W, H, 0, HEIGHT_PX), Some(BarHit::Field));
     assert_eq!(
-        hit(f64::from(W - SEND_W_PX) + 10.0, y, W, H, 0),
+        hit(f64::from(W - SEND_W_PX) + 10.0, y, W, H, 0, HEIGHT_PX),
         Some(BarHit::Send),
         "右端固定宽 = 发送钮"
     );
-    assert_eq!(hit(100.0, 100.0, W, H, 0), None, "栏外 = None");
+    assert_eq!(hit(100.0, 100.0, W, H, 0, HEIGHT_PX), None, "栏外 = None");
 }
 
 #[test]
 fn geometry_degenerate_screen_no_panic() {
     // 坏几何（屏比栏矮/ inset 比屏大）不许 panic 不许乱判
-    assert_eq!(hit(10.0, 10.0, 100, 50, 0), None);
-    assert!(!in_bar(10.0, 50, 9999));
+    assert_eq!(hit(10.0, 10.0, 100, 50, 0, HEIGHT_PX), None);
+    assert!(!in_bar(10.0, 50, 9999, HEIGHT_PX));
 }
 
 // ========== submit：取文 + 推进发送口（人/AI 同一路径） ==========
@@ -165,4 +170,31 @@ fn bar_inject_script_parse() {
         ]
     );
     assert_eq!(errs.len(), 1, "坏行进清单（空行/注释不计）");
+}
+
+// ========== textarea 长高几何（2026-08-31 移动端全量复刻拍板） ==========
+// 判卷点:行数→带高单调、MAX_LINES 封顶;长高后命中带跟上(眼手同尺)
+
+#[test]
+fn height_for_lines_monotonic_capped() {
+    use kfm_na::input_bar::{MAX_LINES, height_for_lines};
+    let h1 = height_for_lines(1);
+    let h2 = height_for_lines(2);
+    let h3 = height_for_lines(MAX_LINES);
+    assert!(h1 < h2 && h2 < h3, "带高必须随行数单调涨");
+    assert_eq!(height_for_lines(MAX_LINES + 5), h3, "超高必须封顶");
+    assert_eq!(height_for_lines(0), h1, "0 行按 1 行计(空栏也是一行高)");
+}
+
+#[test]
+fn hit_band_grows_with_lines() {
+    use kfm_na::input_bar::{BarHit, height_for_lines, hit, in_bar};
+    let h3 = height_for_lines(3);
+    let y_top = f64::from(H) - f64::from(h3) + 5.0;
+    assert!(in_bar(y_top, H, 0, h3), "长高后命中带必须跟上(眼手同尺)");
+    assert_eq!(hit(100.0, y_top, W, H, 0, h3), Some(BarHit::Field));
+    assert!(
+        !in_bar(y_top, H, 0, height_for_lines(1)),
+        "单行高时该位置还在终端区——尺必须跟当前行数走"
+    );
 }

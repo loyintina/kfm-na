@@ -190,9 +190,20 @@ struct App {
     brain: Option<Arc<dyn crate::brain_ep::BrainEndpoint>>,
     /// 上一帧的输入栏快照（about_to_wait 逐圈比对置脏）
     last_bar_snap: Option<crate::input_bar::BarSnap>,
+    /// 上次量行时的屏宽（宽度变了要重新量行——捏合/旋转后折行数变）
+    last_bar_w: Option<u32>,
 }
 
 impl App {
+    /// 当前输入栏带高（textarea 随行数长高；栏未装 = 单行默认）
+    fn cur_bar_h(&self) -> u32 {
+        self.input_bar
+            .as_ref()
+            .map_or(crate::input_bar::HEIGHT_PX, |b| {
+                crate::input_bar::height_for_lines(b.lines())
+            })
+    }
+
     /// 闸门触摸注入抽干（通道八）：每圈 about_to_wait 调。Sleep 指令
     /// 挂起节拍（到点再取下一条），其余指令即刻喂 handle_touch——
     /// 与真手指同一入口，判卷尺同一把
@@ -298,9 +309,11 @@ impl App {
                     return;
                 }
                 // 输入栏命中（期 0 组件三）：起点在栏带上 → 这手势归栏
-                // （不滚屏不唤键盘——聚焦/发送在 Ended 分路）
+                // （不滚屏不唤键盘——聚焦/发送在 Ended 分路）。
+                // 带高随行数走（textarea 长高，眼手同尺）
+                let bar_h = self.cur_bar_h();
                 let in_input_bar = self.window.as_ref().is_some_and(|w| {
-                    crate::input_bar::in_bar(y, w.inner_size().height, self.ime_bottom_px)
+                    crate::input_bar::in_bar(y, w.inner_size().height, self.ime_bottom_px, bar_h)
                 });
                 if in_input_bar {
                     self.inputbar_touch = Some((x, y));
@@ -309,13 +322,9 @@ impl App {
                 // 起点在快捷键行带上 → 这手势归行（不滚屏不唤键盘）
                 // BAR-018：判定尺与渲染/hit 一致——减去键盘 inset，
                 // 否则键盘弹起时行带浮在 inset 上方，这里却认屏底。
-                // 期 0 组件三：行上移一层（输入栏压底），有效 inset + 栏高
+                // 期 0 组件三：行上移一层（输入栏压底），有效 inset + 当前栏高
                 let in_bar = self.window.as_ref().is_some_and(|w| {
-                    crate::keybar::in_bar(
-                        y,
-                        w.inner_size().height,
-                        self.ime_bottom_px + crate::input_bar::HEIGHT_PX,
-                    )
+                    crate::keybar::in_bar(y, w.inner_size().height, self.ime_bottom_px + bar_h)
                 });
                 if in_bar {
                     self.bar_touch = Some((x, y));
@@ -515,9 +524,10 @@ impl App {
                     if phase != TouchPhase::Ended {
                         return;
                     }
+                    let bar_h = self.cur_bar_h();
                     let action = self.window.as_ref().and_then(|w| {
                         let s = w.inner_size();
-                        crate::input_bar::hit(x, y, s.width, s.height, self.ime_bottom_px)
+                        crate::input_bar::hit(x, y, s.width, s.height, self.ime_bottom_px, bar_h)
                     });
                     match action {
                         Some(crate::input_bar::BarHit::Field) => {
@@ -561,7 +571,7 @@ impl App {
                         y,
                         s.width,
                         s.height,
-                        self.ime_bottom_px + crate::input_bar::HEIGHT_PX,
+                        self.ime_bottom_px + self.cur_bar_h(),
                     ) else {
                         crate::report::report(
                             "ime",
@@ -707,11 +717,31 @@ impl App {
         }
     }
 
-    /// 输入栏快照逐圈比对置脏（闸门注入/IME 分流改的状态也要画出帧）
+    /// 输入栏快照逐圈比对置脏（闸门注入/IME 分流改的状态也要画出帧）。
+    /// 量行写回（textarea 眼手同尺单源）：文本/屏宽变了先量行 set_lines
+    /// 写回状态核，再 snap——触摸命中/渲染/dump 读的都是同一份行数
     fn poll_input_bar(&mut self) {
-        let Some(bar) = &self.input_bar else {
+        let Some(bar) = self.input_bar.clone() else {
             return;
         };
+        let cur = bar.snap();
+        let w = self
+            .window
+            .as_ref()
+            .map(|w| w.inner_size().width)
+            .unwrap_or(0);
+        let stale = self
+            .last_bar_snap
+            .as_ref()
+            .map_or(true, |p| p.text != cur.text)
+            || self.last_bar_w != Some(w);
+        if stale {
+            if let Some(t) = self.term_handle() {
+                let lines = t.lock().unwrap().bar_text_lines(&cur.text, w);
+                bar.set_lines(lines);
+            }
+            self.last_bar_w = Some(w);
+        }
         let snap = bar.snap();
         if self.last_bar_snap.as_ref() != Some(&snap) {
             self.last_bar_snap = Some(snap);
@@ -1050,6 +1080,8 @@ impl App {
                 + self.ime_bottom_px
                 + crate::keybar::HEIGHT_PX
                 + crate::input_bar::HEIGHT_PX, // 期 0 组件三：输入栏常驻让位
+                                               // （textarea 覆盖式悬浮：网格只让单行带高，栏长高向上浮盖终端
+                                               // 底部行——不触发 resize→SIGWINCH→重绘洪峰链，nz case-002 教训）
         );
         let (cols, rows) = termview::grid_dims(usable_w, usable_h, cw, ch);
         term.lock().unwrap().resize_cells(cols, rows);
@@ -1438,6 +1470,11 @@ impl App {
         h: u32,
     ) {
         if let Some(term) = term {
+            // 当前栏带高（textarea 随行数长高；栏快照缺席 = 单行默认）——
+            // keybar inset 与渲染同尺（眼手同尺，2026-08-31 排障实锤的延伸）
+            let bar_h = bar_snap.map_or(crate::input_bar::HEIGHT_PX, |bs| {
+                crate::input_bar::height_for_lines(bs.lines)
+            });
             if ai_snap.is_some_and(|s| s.page == crate::ai_presence::Page::AiFullscreen) {
                 // AI 全屏页占位空壳（期 0 组件一）：不画终端网格与快捷键行，
                 // 整屏深紫暗底 + 居中标记文字（合成网格是组件④）
@@ -1447,15 +1484,17 @@ impl App {
                 // 快捷键行（BAR-017：Rust 自绘覆盖层，画在终端网格之上；
                 // 键盘 inset 之上——键盘弹起时行跟着上浮）。
                 // 修饰键位读 input.modifiers 服务（input-ime 方案 A）。
-                // 2026-08-31 排障实锤：inset 必须叠 input_bar::HEIGHT_PX——
+                // 2026-08-31 排障实锤：inset 必须叠输入栏当前带高——
                 // 栏带压在行下沿，少这一层行第二排被输入栏盖掉（触摸几何
                 // 早就是叠后的，渲染漏叠 = 眼手错位；dump 对照拍出）
-                term.render_keybar(buf, w, h, ime_bottom_px + crate::input_bar::HEIGHT_PX, mods);
+                term.render_keybar(buf, w, h, ime_bottom_px + bar_h, mods);
             }
             // 全局输入栏（常驻 chrome：任何会话下都在，§二——AI 页也画）。
-            // 压底紧贴键盘（栏带 = 屏底 - inset - 栏高）
+            // 压底紧贴键盘（栏带 = 屏底 - inset - 栏高）；sending 图标态
+            // 跟 AI 运行态硬切（kfmv4 .ai-send-btn.sending ▶ ↔ ⏸）
             if let Some(bs) = bar_snap {
-                term.render_inputbar(buf, w, h, ime_bottom_px, bs);
+                let sending = ai_snap.is_some_and(|s| s.ai_running);
+                term.render_inputbar(buf, w, h, ime_bottom_px, bs, sending);
             }
             // 光球（常驻 chrome：画在终端网格/AI 页之后，两页都在）。
             // 四态增益硬切读 ai_presence::orb_gain（闲/运行/pressed/AI页）
