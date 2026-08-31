@@ -1275,3 +1275,27 @@ fn spec_rr_cover_corner_transition_band() {
         prev = c;
     }
 }
+
+// ========== 尾锚截断（2026-08-31 长文输入指认:头裁切看不到正在敲的尾） ==========
+// 判卷点:全部放得下 = 从头画;放不下 = 从刚好能放下的后缀起画;
+// 零宽/单字符超宽不炸不绕。渲染本体 C 档实拍,截断窗口是纯逻辑先钉
+
+#[test]
+fn spec_tail_fit_start_fits_means_zero() {
+    use kfm_na::termview::tail_fit_start;
+    let widths = [10.0, 10.0, 10.0];
+    assert_eq!(tail_fit_start(&widths, 100.0), 0, "全放得下必须从头画");
+    assert_eq!(tail_fit_start(&widths, 30.0), 0, "刚好放下也是从头画");
+}
+
+#[test]
+fn spec_tail_fit_start_overflow_keeps_tail() {
+    use kfm_na::termview::tail_fit_start;
+    let widths = [10.0, 10.0, 10.0, 10.0, 10.0]; // 共 50
+    // 只容 35 → 从第 2 个起(20+10=30<=35,前 2 个让位)
+    assert_eq!(tail_fit_start(&widths, 35.0), 2);
+    // 只容 5 → 一个都放不下 → 从末尾起(画最后的能画多少画多少)
+    assert_eq!(tail_fit_start(&widths, 5.0), 4);
+    // 空串/空表不炸
+    assert_eq!(tail_fit_start(&[], 100.0), 0);
+}

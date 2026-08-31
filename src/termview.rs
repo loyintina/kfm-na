@@ -1244,7 +1244,8 @@ impl TermView {
                 BAR_PLACEHOLDER,
             );
         } else {
-            self.draw_text_left(
+            // 长文尾锚：正在敲的尾永远可见,头被截左端补 …(2026-08-31 指认)
+            self.draw_text_tail(
                 &mut frame, &snap.text, text_cx, text_cw, field_top, field_h, BAR_TEXT,
             );
         }
@@ -1485,6 +1486,105 @@ impl TermView {
                     }
                 }
             }
+            pen_x += adv;
+        }
+    }
+
+    /// 输入栏长文尾锚：与 draw_text_left 同渲染规则，但文本超宽时从
+    /// 「刚好放得下的后缀」起画（tail_fit_start 定窗），左端补 … 指示
+    /// 头部被截——正在敲的尾永远可见（2026-08-31 用户长文指认）
+    #[allow(clippy::too_many_arguments)]
+    fn draw_text_tail(
+        &self,
+        frame: &mut Frame<'_>,
+        text: &str,
+        cx: u32,
+        cw: u32,
+        cy: u32,
+        rh: u32,
+        fg: u32,
+    ) {
+        let px = rh as f32 * 0.26;
+        let Some(hm) = self.font.horizontal_line_metrics(px) else {
+            return;
+        };
+        let pick = |c: char| -> Option<&fontdue::Font> {
+            if self.font.lookup_glyph_index(c) != 0 {
+                Some(&self.font)
+            } else if let Some(k) = &self.cjk {
+                if k.font.lookup_glyph_index(c) != 0 {
+                    Some(&k.font)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+        let mut items = Vec::new();
+        for c in text.chars() {
+            let Some(f) = pick(c) else {
+                let mut seen = self.tofu_seen.borrow_mut();
+                if !seen.contains(&c) && seen.len() < 16 {
+                    seen.push(c);
+                }
+                continue;
+            };
+            items.push((f, c, f.metrics(c, px).advance_width));
+        }
+        if items.is_empty() {
+            return;
+        }
+        let avail = cw as f32 - 18.0;
+        let widths: Vec<f32> = items.iter().map(|i| i.2).collect();
+        let mut start = tail_fit_start(&widths, avail);
+        // 头被截 → 左端补 …，可用宽先减省略号再重定窗
+        let ell = if start > 0 {
+            let w = pick('…').map(|f| f.metrics('…', px).advance_width);
+            match w {
+                Some(w) => {
+                    start = tail_fit_start(&widths, avail - w);
+                    Some(('…', w))
+                }
+                None => None,
+            }
+        } else {
+            None
+        };
+        let clip_right = cx + cw;
+        let baseline = cy as f32 + (rh as f32 - (hm.ascent - hm.descent)) / 2.0 + hm.ascent;
+        let mut pen_x = cx as f32 + 18.0;
+        let blit = |frame: &mut Frame<'_>, f: &fontdue::Font, c: char, pen_x: f32| {
+            let (m, bmp) = f.rasterize(c, px);
+            let top = baseline - m.ymin as f32 - m.height as f32;
+            for gy in 0..m.height as u32 {
+                let y = top as i64 + i64::from(gy);
+                if y < 0 || y >= i64::from(frame.h) {
+                    continue;
+                }
+                for gx in 0..m.width as u32 {
+                    let x = (pen_x + m.xmin as f32) as i64 + i64::from(gx);
+                    if x < 0 || x >= i64::from(clip_right) {
+                        continue;
+                    }
+                    let a = u32::from(bmp[(gy * m.width as u32 + gx) as usize]);
+                    if a > 0 {
+                        frame.blend_px(x as u32, y as u32, fg, a);
+                    }
+                }
+            }
+        };
+        if let Some((c, w)) = ell {
+            if let Some(f) = pick(c) {
+                blit(frame, f, c, pen_x);
+            }
+            pen_x += w;
+        }
+        for (f, c, adv) in &items[start..] {
+            if pen_x + adv >= clip_right as f32 {
+                break;
+            }
+            blit(frame, f, *c, pen_x);
             pen_x += adv;
         }
     }
@@ -1972,6 +2072,22 @@ fn rr_sdf(px: f32, py: f32, w: u32, h: u32, r: u32) -> f32 {
 pub fn rr_cover(px: u32, py: u32, w: u32, h: u32, r: u32) -> u32 {
     let d = rr_sdf(px as f32 + 0.5, py as f32 + 0.5, w, h, r);
     ((0.5 - d).clamp(0.0, 1.0) * 255.0) as u32
+}
+
+/// 尾锚截断窗口（2026-08-31 长文输入指认：头裁切看不到正在敲的尾）：
+/// 给逐字宽度和可用宽，返回「从第几个字起画」——全放得下 = 0（从头画）；
+/// 放不下 = 刚好能放下的后缀起点；末字比可用还宽也照画（交右缘裁剪）。
+/// A 档纯逻辑，考题 spec_tail_fit_start_* 在 tests/termview_spec.rs
+pub fn tail_fit_start(widths: &[f32], max: f32) -> usize {
+    let mut acc = 0.0f32;
+    for (i, w) in widths.iter().enumerate().rev() {
+        // 末字无条件收下（超宽也画,裁右缘不裁尾）；更前的字超宽即止
+        if i + 1 < widths.len() && acc + w > max {
+            return i + 1;
+        }
+        acc += w;
+    }
+    0
 }
 
 /// 供 android_app：从候选路径建视图（主字体 + CJK 备用 + 默认 80x24 占位网格），
