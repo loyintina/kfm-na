@@ -1118,11 +1118,12 @@ impl TermView {
     /// 135° 渐变 + 顶部玻璃高光（inset 白 0.15）+ 紫色投影
     /// （0 4px 12px α0.3）+ 白 ▶（sending = ⏸ 双竖条，跟 AI 运行态硬切）。
     /// 全部图元 SDF 抗锯齿。
-    /// textarea（2026-08-31 移动端全量复刻）：带高随行数长
-    /// （height_for_lines(snap.lines)，覆盖式悬浮——栏带向上浮盖终端底部
-    /// 行，终端网格几何不动）；文本折行（wrap_starts）多行绘制，超
-    /// MAX_LINES 尾锚显最后几行；行数由调用方量宽写回 snap.lines
-    /// （bar_text_lines → InputBarState::set_lines，眼手同尺单源）
+    /// textarea（2026-08-31 移动端全量复刻）：带高随行数长（覆盖式悬浮——
+    /// 栏带向上浮盖终端底部行，终端网格几何不动）；文本折行（wrap_starts）
+    /// 多行绘制，超 MAX_LINES 尾锚显最后几行。**折行数由本函数从
+    /// snap.text 实测量出**（渲染几何与所画文本同源——后台 dump 无 poll
+    /// 写回也不会带高/文本两张皮，2026-08-31 实拍定罪）；snap.lines 只
+    /// 服务触摸命中（前台 poll 写回，眼手同尺）
     pub fn render_inputbar(
         &self,
         buf: &mut [u32],
@@ -1133,17 +1134,27 @@ impl TermView {
         sending: bool,
     ) {
         use crate::input_bar;
-        let bar_h = input_bar::height_for_lines(snap.lines);
+        let min_w = 2 * input_bar::MARGIN_X_PX + input_bar::GAP_PX + input_bar::SEND_W_PX + 40;
+        if buf_w < min_w {
+            return; // 窗太窄画不下，保命要紧
+        }
+        // 量宽折行（画文本也要用，先量一次两头吃）
+        let items = self.measure_items(&snap.text, BAR_TEXT_PX);
+        let widths: Vec<f32> = items.iter().map(|i| i.2).collect();
+        let avail = input_bar::text_avail_w(buf_w).unwrap_or(1.0);
+        let starts = wrap_starts(&widths, avail);
+        let n_lines = if snap.text.is_empty() {
+            1
+        } else {
+            starts.len() as u32
+        };
+        let bar_h = input_bar::height_for_lines(n_lines);
         let Some(top) = buf_h
             .checked_sub(ime_bottom)
             .and_then(|b| b.checked_sub(bar_h))
         else {
             return;
         };
-        let min_w = 2 * input_bar::MARGIN_X_PX + input_bar::GAP_PX + input_bar::SEND_W_PX + 40;
-        if buf_w < min_w {
-            return; // 窗太窄画不下，保命要紧
-        }
         let mut frame = Frame {
             buf,
             w: buf_w,
@@ -1253,13 +1264,10 @@ impl TermView {
                 BAR_PLACEHOLDER,
             );
         } else {
-            // textarea 折行（2026-08-31 移动端全量复刻）：量宽 → 贪心断行
-            // → 垂直居中成块画；超 MAX_LINES 尾锚显最后几行（手动滚动缺口
-            // 记档案）。字号恒定 BAR_TEXT_PX，行高 LINE_STEP_PX
-            let items = self.measure_items(&snap.text, BAR_TEXT_PX);
-            let widths: Vec<f32> = items.iter().map(|i| i.2).collect();
-            let avail = text_cw.saturating_sub(18) as f32;
-            let starts = wrap_starts(&widths, avail);
+            // textarea 折行（2026-08-31 移动端全量复刻）：用函数头量好的
+            // items/starts（同一次量宽，几何与画字同源）；垂直居中成块画，
+            // 超 MAX_LINES 尾锚显最后几行（手动滚动缺口记档案）。
+            // 字号恒定 BAR_TEXT_PX，行高 LINE_STEP_PX
             let show = starts.len().min(input_bar::MAX_LINES as usize);
             let vis = &starts[starts.len() - show..];
             let block_h = show as u32 * input_bar::LINE_STEP_PX;

@@ -1470,10 +1470,11 @@ impl App {
         h: u32,
     ) {
         if let Some(term) = term {
-            // 当前栏带高（textarea 随行数长高；栏快照缺席 = 单行默认）——
-            // keybar inset 与渲染同尺（眼手同尺，2026-08-31 排障实锤的延伸）
+            // 当前栏带高（与 render_inputbar 同源实测折行——不读 poll 写回
+            // 的 lines，前后台都不得两张皮）——keybar inset 与渲染同尺
+            // （眼手同尺，2026-08-31 排障实锤的延伸）
             let bar_h = bar_snap.map_or(crate::input_bar::HEIGHT_PX, |bs| {
-                crate::input_bar::height_for_lines(bs.lines)
+                crate::input_bar::height_for_lines(term.bar_text_lines(&bs.text, w))
             });
             if ai_snap.is_some_and(|s| s.page == crate::ai_presence::Page::AiFullscreen) {
                 // AI 全屏页占位空壳（期 0 组件一）：不画终端网格与快捷键行，

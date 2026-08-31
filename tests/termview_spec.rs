@@ -1324,3 +1324,31 @@ fn spec_bar_text_lines_窗越窄行越多() {
     let narrow = tv.bar_text_lines(long, 400);
     assert!(wide >= 1 && narrow > wide, "窄 {narrow} 必须多于宽 {wide}");
 }
+
+// ========== BAR-039：渲染带高从文本实测（stale lines 两张皮回归钉） ==========
+
+#[test]
+fn spec_bar039_render_inputbar_带高从文本实测() {
+    // BAR-039：snap.lines 是经 poll 转写的读数（后台挂起无写回 = stale），
+    // 渲染带高必须从文本实测量出——stale lines=1 + 超三行文本注入，
+    // 带顶必须落在三行带高（不许被 stale 压扁成单行带）
+    let (tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必成");
+    let (w, h) = (600u32, 1200u32);
+    let mut buf = vec![0u32; (w * h) as usize];
+    let long = "一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十";
+    let snap = kfm_na::input_bar::BarSnap {
+        text: long.to_string(),
+        focused: false,
+        lines: 1, // stale 转写读数（后台 dump 实景）
+    };
+    tv.render_inputbar(&mut buf, w, h, 0, &snap, false);
+    let band_top = h - kfm_na::input_bar::height_for_lines(3); // 三行带顶
+    let mid = (w / 2) as usize;
+    let inside = (band_top + 1) as usize * w as usize + mid;
+    let above = (band_top - 1) as usize * w as usize + mid;
+    assert_ne!(
+        buf[inside], 0,
+        "带顶发丝线必须在（stale lines 不许压扁带高——两张皮实景）"
+    );
+    assert_eq!(buf[above], 0, "带顶之上是终端区，不许有栏带墨");
+}

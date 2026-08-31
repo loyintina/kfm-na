@@ -123,9 +123,10 @@ pub fn dump_now(dir: &str) {
     {
         let mut t = term.lock().unwrap();
         let ai_page = ai_snap.is_some_and(|s| s.page == crate::ai_presence::Page::AiFullscreen);
-        // 当前栏带高（textarea 随行数长高）——keybar inset 与前台同尺
+        // 当前栏带高（与 render_inputbar 同源实测折行——后台无 poll 写回，
+        // 实测才不得两张皮）——keybar inset 与前台同尺
         let bar_h = bar_snap.as_ref().map_or(crate::input_bar::HEIGHT_PX, |bs| {
-            crate::input_bar::height_for_lines(bs.lines)
+            crate::input_bar::height_for_lines(t.bar_text_lines(&bs.text, w))
         });
         if ai_page {
             // 与前台 rasterize 同一分支规则：AI 页 = 占位空壳盖掉终端网格
