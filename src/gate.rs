@@ -230,6 +230,7 @@ pub fn spawn_gate_watcher() {
             touch_check(DUMP_DIR);
             switch_req_check(DUMP_DIR);
             orb_check(DUMP_DIR); // 通道十:AI 外显事件注入(直调状态核,落回执)
+            bar_check(DUMP_DIR); // 通道十一:输入栏事件注入(直调状态核,落回执)
             alert_tick(tick);
             history_tick(DUMP_DIR, tick);
         }
@@ -977,6 +978,11 @@ pub struct StatsSnap {
     pub ai_orb_y: i64,
     pub ai_pressed: bool,
     pub ai_overlay: bool,
+    // ---- input_bar 字段族(2026-08-31,期 0 组件三,D9 机器轨) ----
+    /// 聚焦态(服务未登记 = false)
+    pub bar_focused: bool,
+    /// 栏内文本字符数
+    pub bar_text_len: i64,
 }
 
 /// 拍一张当前快照(各静态即读即还;会话名单过 router 锁,取完即还)
@@ -1017,6 +1023,14 @@ pub fn stats_snap() -> StatsSnap {
             }
             None => ("-".to_owned(), false, 0, 0, false, false),
         };
+    // 输入栏读数(期 0 组件三):未登记给中性值(观测铁律:不许反咬业务)
+    let (bar_focused, bar_text_len) = match input_bar_handle() {
+        Some(bar) => {
+            let s = bar.snap();
+            (s.focused, s.text.chars().count() as i64)
+        }
+        None => (false, 0),
+    };
     StatsSnap {
         uptime_ms: crate::report::boot_ms(),
         foreground: APP_FOREGROUND.load(Ordering::Relaxed),
@@ -1045,6 +1059,8 @@ pub fn stats_snap() -> StatsSnap {
         ai_orb_y,
         ai_pressed,
         ai_overlay,
+        bar_focused,
+        bar_text_len,
     }
 }
 
@@ -1057,7 +1073,7 @@ pub fn format_stats(s: &StatsSnap) -> String {
     // 帧均耗防除零:一帧没画过就报 0
     let draw_avg = s.draw_total_ms.checked_div(s.frames).unwrap_or(0);
     format!(
-        "uptime={}ms\nforeground={}\nloop_beat_age={}\nframes={}\npump_calls={}\npump_bytes={}\nshots={}\ntexts={}\nkeys={}\nkeys_bytes={}\ntouches={}\nactive={}\nsessions={}\ndraw_avg_ms={}\ndraw_max_ms={}\ncpu_jiffies={}\nrss_kb={}\nbytes_local={}\nbytes_remote={}\nbytes_other={}\nsession_deaths={}\nai_page={}\nai_running={}\nai_orb_x={}\nai_orb_y={}\nai_pressed={}\nai_overlay={}\n",
+        "uptime={}ms\nforeground={}\nloop_beat_age={}\nframes={}\npump_calls={}\npump_bytes={}\nshots={}\ntexts={}\nkeys={}\nkeys_bytes={}\ntouches={}\nactive={}\nsessions={}\ndraw_avg_ms={}\ndraw_max_ms={}\ncpu_jiffies={}\nrss_kb={}\nbytes_local={}\nbytes_remote={}\nbytes_other={}\nsession_deaths={}\nai_page={}\nai_running={}\nai_orb_x={}\nai_orb_y={}\nai_pressed={}\nai_overlay={}\nbar_focused={}\nbar_text_len={}\n",
         s.uptime_ms,
         s.foreground,
         age,
@@ -1084,7 +1100,9 @@ pub fn format_stats(s: &StatsSnap) -> String {
         s.ai_orb_x,
         s.ai_orb_y,
         s.ai_pressed,
-        s.ai_overlay
+        s.ai_overlay,
+        s.bar_focused,
+        s.bar_text_len
     )
 }
 
@@ -1402,6 +1420,129 @@ fn orb_check(dir: &str) {
         crate::report::report(
             "gate",
             &format!("orb-inject 坏行 {} 条: {}", errs.len(), errs[0]),
+        );
+    }
+}
+
+// ---- 通道十一:bar-inject → 全局输入栏事件注入(2026-08-31,期 0 组件三,
+// 规格书 ai-presence.md §二 常驻 chrome 一,D9 驱动轨同通道十先例) ----
+//
+// 输入栏状态核的遥控器:host 写脚本行进 bar-inject,值守线程解析后直调
+// InputBarState 服务方法(状态核 Sync 内部可变,不经主循环)。submit 走
+// 状态核的发送口(壳层装配的脑闭包)——触摸发送钮/IME Enter/本注入
+// 三路同一路径(D9 同源)。处理后落 bar-inject-res 回执。
+
+/// 输入栏状态核服务句柄(App 装插件时登记;观测/注入同一份)
+static INPUT_BAR: Mutex<Option<Arc<crate::input_bar::InputBarState>>> = Mutex::new(None);
+
+/// 登记输入栏状态核(android_app init_terminal 装插件后调一次)
+pub fn register_input_bar(bar: &Arc<crate::input_bar::InputBarState>) {
+    *INPUT_BAR.lock().unwrap() = Some(bar.clone());
+}
+
+/// 取句柄(owned Arc,借用即还);未登记 = None
+fn input_bar_handle() -> Option<Arc<crate::input_bar::InputBarState>> {
+    INPUT_BAR.lock().unwrap().clone()
+}
+
+/// 注入 bar 指令(平台无关;值守线程直调状态核服务方法)
+#[derive(Debug, Clone, PartialEq)]
+pub enum BarCmd {
+    /// 聚焦(等同点文本区;弹键盘是壳层动作,注入不做)
+    Focus,
+    /// 失焦(等同点终端区/Esc)
+    Unfocus,
+    /// 追加文本(原样,含空格中文)
+    Text(String),
+    /// 退格一整字符
+    Backspace,
+    /// 清空栏
+    Clear,
+    /// 发送(= 点发送钮/Enter:取文推进发送口)
+    Submit,
+}
+
+/// 解析一行(纯函数,钉死)。None = 空行/注释跳过;Some(Err) = 坏行
+pub fn parse_bar_line(line: &str) -> Option<Result<BarCmd, String>> {
+    let s = line.trim_end();
+    let t = s.trim();
+    if t.is_empty() || t.starts_with('#') {
+        return None;
+    }
+    let bad = || Some(Err(format!("坏行(跳过): {t}")));
+    if let Some(rest) = t.strip_prefix("text ") {
+        return Some(Ok(BarCmd::Text(rest.to_string()))); // 原文照收(空格保留)
+    }
+    match t {
+        "focus" => Some(Ok(BarCmd::Focus)),
+        "unfocus" => Some(Ok(BarCmd::Unfocus)),
+        "backspace" => Some(Ok(BarCmd::Backspace)),
+        "clear" => Some(Ok(BarCmd::Clear)),
+        "submit" => Some(Ok(BarCmd::Submit)),
+        "text" => bad(), // text 指令必须带内容
+        _ => bad(),
+    }
+}
+
+/// 解析整段脚本(纯函数):有效指令序列 + 坏行清单(空行/注释不计)
+pub fn parse_bar_script(content: &str) -> (Vec<BarCmd>, Vec<String>) {
+    let mut cmds = Vec::new();
+    let mut errs = Vec::new();
+    for line in content.lines() {
+        match parse_bar_line(line) {
+            Some(Ok(c)) => cmds.push(c),
+            Some(Err(e)) => errs.push(e),
+            None => {}
+        }
+    }
+    (cmds, errs)
+}
+
+/// 通道十一值守:bar-inject 存在即读走(读后即删),逐条直调状态核,
+/// 落 bar-inject-res 回执(应用条数 + 坏行数 + 事后快照)
+fn bar_check(dir: &str) {
+    let trigger = std::path::PathBuf::from(dir).join("bar-inject");
+    if !trigger.exists() {
+        return;
+    }
+    let content = std::fs::read_to_string(&trigger).unwrap_or_default();
+    std::fs::remove_file(&trigger).ok();
+    let (cmds, errs) = parse_bar_script(&content);
+    let res = std::path::PathBuf::from(dir).join("bar-inject-res");
+    let Some(bar) = input_bar_handle() else {
+        std::fs::write(&res, "error=input-bar 服务未登记\n").ok();
+        return;
+    };
+    for cmd in &cmds {
+        match cmd {
+            BarCmd::Focus => bar.focus(),
+            BarCmd::Unfocus => bar.unfocus(),
+            BarCmd::Text(t) => bar.insert_text(t),
+            BarCmd::Backspace => bar.backspace(),
+            BarCmd::Clear => bar.clear(),
+            BarCmd::Submit => {
+                let sent = bar.submit();
+                crate::report::report("ai", &format!("bar-inject 发送: {sent:?}"));
+            }
+        }
+    }
+    let s = bar.snap();
+    std::fs::write(
+        &res,
+        format!(
+            "applied={} bad={}\nfocused={} text_len={} text={:?}\n",
+            cmds.len(),
+            errs.len(),
+            s.focused,
+            s.text.chars().count(),
+            s.text
+        ),
+    )
+    .ok();
+    if !errs.is_empty() {
+        crate::report::report(
+            "gate",
+            &format!("bar-inject 坏行 {} 条: {}", errs.len(), errs[0]),
         );
     }
 }

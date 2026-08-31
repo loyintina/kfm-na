@@ -15,6 +15,7 @@ pub mod exec_probe;
 pub mod gate;
 pub mod http1;
 pub mod ime_queue;
+pub mod input_bar;
 pub mod insets;
 pub mod keybar;
 pub mod keymap;

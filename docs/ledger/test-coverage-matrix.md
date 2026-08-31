@@ -17,10 +17,11 @@
 | `src/crash.rs` | 3 | 2 | 1 | install_signal_hook |
 | `src/direct_brain.rs` | 2 | 2 | 0 | — |
 | `src/exec_probe.rs` | 1 | 1 | 0 | — |
-| `src/gate.rs` | 72 | 49 | 23 | DUMP_DIR register_gate_router text_dump inject_keys spawn_gate_watcher REC_FILE_CAP REC_FILE rec_output rec_resize PANIC_FILE PANIC_TRACE_FILE LOOP_STALL_FILE note_loop_beat loop_beat_age_ms note_foreground install_panic_hook note_draw note_session_death touch_take ALERT_RSS_COOLDOWN_MS ALERT_DEATHS_WINDOW_MS ALERT_DEATHS_COOLDOWN_MS HISTORY_EVERY_TICKS |
+| `src/gate.rs` | 75 | 51 | 24 | DUMP_DIR register_gate_router text_dump inject_keys spawn_gate_watcher REC_FILE_CAP REC_FILE rec_output rec_resize PANIC_FILE PANIC_TRACE_FILE LOOP_STALL_FILE note_loop_beat loop_beat_age_ms note_foreground install_panic_hook note_draw note_session_death touch_take register_input_bar ALERT_RSS_COOLDOWN_MS ALERT_DEATHS_WINDOW_MS ALERT_DEATHS_COOLDOWN_MS HISTORY_EVERY_TICKS |
 | `src/http1.rs` | 10 | 7 | 3 | is_tick_err read_head_hook read_body_hook |
 | `src/ime_bridge.rs` | 1 | 0 | 1 | jni_counters |
 | `src/ime_queue.rs` | 5 | 5 | 0 | — |
+| `src/input_bar.rs` | 15 | 15 | 0 | — |
 | `src/insets.rs` | 3 | 1 | 2 | force_show_keyboard query_ime_bottom |
 | `src/keybar.rs` | 15 | 11 | 4 | COLS MOD_ALT install_bridge_mods bridge_mods |
 | `src/keymap.rs` | 2 | 2 | 0 | — |
@@ -28,6 +29,7 @@
 | `src/plugins/ai_presence.rs` | 2 | 2 | 0 | — |
 | `src/plugins/conn_provider_local.rs` | 3 | 3 | 0 | — |
 | `src/plugins/conn_provider_ws.rs` | 3 | 3 | 0 | — |
+| `src/plugins/input_bar.rs` | 2 | 2 | 0 | — |
 | `src/plugins/input_ime.rs` | 2 | 2 | 0 | — |
 | `src/plugins/term_alacritty.rs` | 3 | 3 | 0 | — |
 | `src/protocol.rs` | 2 | 2 | 0 | — |
@@ -36,5 +38,5 @@
 | `src/scroll.rs` | 5 | 5 | 0 | — |
 | `src/session_router.rs` | 10 | 9 | 1 | names |
 | `src/session.rs` | 8 | 8 | 0 | — |
-| `src/termview.rs` | 82 | 75 | 7 | FONT_CANDIDATES CJK_FONT_CANDIDATES load_cjk_font font_probe KEYBAR_LABEL MAG_HALF_COLS MAG_HALF_ROWS |
+| `src/termview.rs` | 90 | 75 | 15 | FONT_CANDIDATES CJK_FONT_CANDIDATES load_cjk_font font_probe render_inputbar KEYBAR_LABEL BAR_BG BAR_FIELD_BG BAR_FIELD_FOCUS_BG BAR_TEXT BAR_PLACEHOLDER BAR_SEND_BG BAR_SEND_LABEL MAG_HALF_COLS MAG_HALF_ROWS |
 | `src/trace.rs` | 12 | 8 | 4 | TRACE_CAP format_tail dump_all dump_tail |

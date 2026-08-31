@@ -4,7 +4,7 @@ src/clipboard.rs 1
 src/conn.rs 2
 src/crash.rs 1
 src/exec_probe.rs 0
-src/gate.rs 23
+src/gate.rs 24
 src/ime_bridge.rs 1
 src/ime_queue.rs 0
 src/insets.rs 2
@@ -21,5 +21,5 @@ src/report.rs 7
 src/scroll.rs 0
 src/session_router.rs 1
 src/session.rs 0
-src/termview.rs 7
+src/termview.rs 15
 src/trace.rs 4

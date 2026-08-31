@@ -16,6 +16,7 @@ use kfm_na::ai_presence::{
     self, AiPresenceState, LINGER_MS, ORB_HIT_RADIUS_PX, ORB_RADIUS_PX, Page,
 };
 use kfm_na::base::{Base, FiberState, GetError, PluginEntry};
+use kfm_na::input_bar;
 use kfm_na::keybar;
 
 // 假想屏 1080x2400（真机净宽量级）；默认位 = 右缘 × 屏高 60%
@@ -199,8 +200,12 @@ fn spec_drag_钳制_上越界() {
 fn spec_drag_钳制_下越界让位快捷键行() {
     let ai = new_state();
     ai.drag_to(500.0, 99999.0);
-    let expect = f64::from(H) - f64::from(keybar::HEIGHT_PX) - f64::from(ORB_RADIUS_PX);
-    assert_eq!(ai.snap(0).y, expect, "下越界让位快捷键行（D9）");
+    // 期 0 组件三：chrome 叠高一层（快捷键行 + 全局输入栏）
+    let expect = f64::from(H)
+        - f64::from(keybar::HEIGHT_PX)
+        - f64::from(input_bar::HEIGHT_PX)
+        - f64::from(ORB_RADIUS_PX);
+    assert_eq!(ai.snap(0).y, expect, "下越界让位快捷键行+输入栏（D9）");
 }
 
 #[test]
@@ -208,7 +213,11 @@ fn spec_drag_钳制_键盘弹起再让位() {
     let ai = new_state();
     ai.set_bounds(W, H, 300); // 键盘 inset 300px
     ai.drag_to(500.0, 99999.0);
-    let expect = f64::from(H) - 300.0 - f64::from(keybar::HEIGHT_PX) - f64::from(ORB_RADIUS_PX);
+    let expect = f64::from(H)
+        - 300.0
+        - f64::from(keybar::HEIGHT_PX)
+        - f64::from(input_bar::HEIGHT_PX)
+        - f64::from(ORB_RADIUS_PX);
     assert_eq!(ai.snap(0).y, expect, "键盘弹起时球不许钻进键盘区");
 }
 

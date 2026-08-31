@@ -255,12 +255,17 @@ impl Default for AiPresenceState {
 }
 
 /// 边界钳制（纯函数）：球心不出屏（四边各内缩一个可视半径）；底边在
-/// 快捷键行与键盘 inset 之上让位。坏几何（屏比球小/未 set_bounds）钳到
-/// 半径点保命，不出负数不出 NaN
+/// 快捷键行 + 全局输入栏（期 0 组件三，chrome 叠高一层）与键盘 inset
+/// 之上让位。坏几何（屏比球小/未 set_bounds）钳到半径点保命，不出负数不出 NaN
 fn clamp_pos(x: f64, y: f64, bounds: (u32, u32, u32)) -> (f64, f64) {
     let (w, h, ime_bottom) = bounds;
     let r = f64::from(ORB_RADIUS_PX);
     let max_x = (f64::from(w) - r).max(r);
-    let max_y = (f64::from(h) - f64::from(ime_bottom) - f64::from(keybar::HEIGHT_PX) - r).max(r);
+    let max_y = (f64::from(h)
+        - f64::from(ime_bottom)
+        - f64::from(keybar::HEIGHT_PX)
+        - f64::from(crate::input_bar::HEIGHT_PX)
+        - r)
+        .max(r);
     (x.clamp(r, max_x), y.clamp(r, max_y))
 }

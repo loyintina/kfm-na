@@ -83,6 +83,8 @@ fn spec_stats_格式_keyvalue一行一项() {
         ai_orb_y: 0,
         ai_pressed: false,
         ai_overlay: false,
+        bar_focused: false,
+        bar_text_len: 0,
     };
     let out = format_stats(&s);
     assert!(out.contains("uptime=61000ms\n"));

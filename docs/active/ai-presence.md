@@ -298,6 +298,18 @@ trait BrainEndpoint {
   Kimi/kimi-for-coding-highspeed 28 事件 Done 正文暗号咬、
   智谱/glm-5.3-flash 98 事件同尺咬、坏 provider 立即人话 Error 事件——
   tests/direct_brain_live_spec.rs（#[ignore]，手动 --ignored）。
+  **③进度（2026-08-31）**：全局输入栏落地 `src/input_bar.rs`（状态核：
+  文本缓冲 UTF-8 安全退格/焦点二态/enter 取文/submit 发送口三路同源）
+  + `src/plugins/input_bar.rs`（共享实例直挂）+ 壳层全链接线（几何：
+  压底紧贴键盘、keybar 上移一层、usable_h/orb 钳制同步让位；触摸：
+  栏带命中→文本区聚焦弹键盘/发送钮 submit；IME 三路分流：
+  drain_ime_inject/handle_key/Ime::Commit 聚焦时按键全归栏）+
+  termview render_inputbar（聚焦亮底硬切，零动画帧）+ 通道十一
+  bar-inject（focus/unfocus/text/backspace/clear/submit，回执
+  bar-inject-res）+ stats bar_* 字段族。**期 0②收尾同车完成**：
+  发送闭包接 echo-brain 真 run——run_start/run_end 驱动光球亮灭
+  （fake_run 仅留长按 debug 钩子）；考题 input_bar_spec **12 题全绿**
+  + 变异双咬（enter 不清空咬/退格撕字节咬）。
 - **期 1 眼睛**：视口快照附上下文。验收 = 问「屏幕上有什么」答得对。
 - **期 2 手**：工具执行注入来源会话。验收 = 让 AI 跑一条命令，终端可见。
 - **期 3 打磨**：server-brain（服务器空间数据源，§四C 契约已就位——**服务器

@@ -1108,6 +1108,68 @@ impl TermView {
         }
     }
 
+    /// 全局输入栏（ai-presence 期 0 组件三，§二 常驻 chrome 一）：
+    /// 压底紧贴键盘（keybar 之上让位由调用方几何保证——栏带 =
+    /// 屏底 - 键盘 inset - 栏高）。左文本区（空 = 占位提示；聚焦换亮底
+    /// 硬切，零动画帧）+ 右端固定宽发送钮
+    pub fn render_inputbar(
+        &self,
+        buf: &mut [u32],
+        buf_w: u32,
+        buf_h: u32,
+        ime_bottom: u32,
+        snap: &crate::input_bar::BarSnap,
+    ) {
+        use crate::input_bar;
+        let Some(top) = buf_h
+            .checked_sub(ime_bottom)
+            .and_then(|b| b.checked_sub(input_bar::HEIGHT_PX))
+        else {
+            return;
+        };
+        if buf_w < input_bar::SEND_W_PX + 40 {
+            return; // 窗太窄画不下，保命要紧
+        }
+        let mut frame = Frame {
+            buf,
+            w: buf_w,
+            h: buf_h,
+        };
+        frame.fill_rect(0, top, buf_w, input_bar::HEIGHT_PX, BAR_BG);
+        let h = input_bar::HEIGHT_PX;
+        // 文本区（聚焦 = 亮底硬切）
+        let field_w = buf_w - input_bar::SEND_W_PX - 12;
+        let field_bg = if snap.focused {
+            BAR_FIELD_FOCUS_BG
+        } else {
+            BAR_FIELD_BG
+        };
+        frame.fill_round_rect(6, top + 6, field_w, h - 12, 14, field_bg);
+        if snap.text.is_empty() {
+            self.draw_text_left(&mut frame, "发给 AI…", 6, field_w, top, h, BAR_PLACEHOLDER);
+        } else {
+            self.draw_text_left(&mut frame, &snap.text, 6, field_w, top, h, BAR_TEXT);
+        }
+        // 发送钮
+        frame.fill_round_rect(
+            buf_w - input_bar::SEND_W_PX - 6,
+            top + 6,
+            input_bar::SEND_W_PX,
+            h - 12,
+            14,
+            BAR_SEND_BG,
+        );
+        self.draw_label(
+            &mut frame,
+            "发送",
+            buf_w - input_bar::SEND_W_PX - 6,
+            input_bar::SEND_W_PX,
+            top,
+            h,
+            BAR_SEND_LABEL,
+        );
+    }
+
     /// AI 全屏页占位空壳（ai-presence 期 0 组件一；合成网格是组件④）。
     /// 整屏深紫暗底 + 一行居中标记文字——截图肉眼可分即可（C 档实拍判卷）。
     /// page=AiFullscreen 时调用方画它代替终端网格
@@ -1233,6 +1295,73 @@ impl TermView {
         }
     }
 
+    /// 输入栏文本：左对齐（内缩 18px）+ 垂直居中，右缘按 cw 裁剪。
+    /// 逐字挑字体规则与 draw_label 同（主字体缺走 CJK 备用，双缺记 tofu）
+    #[allow(clippy::too_many_arguments)]
+    fn draw_text_left(
+        &self,
+        frame: &mut Frame<'_>,
+        text: &str,
+        cx: u32,
+        cw: u32,
+        cy: u32,
+        rh: u32,
+        fg: u32,
+    ) {
+        let px = rh as f32 * 0.26;
+        let Some(hm) = self.font.horizontal_line_metrics(px) else {
+            return;
+        };
+        let pick = |c: char| -> Option<&fontdue::Font> {
+            if self.font.lookup_glyph_index(c) != 0 {
+                Some(&self.font)
+            } else if let Some(k) = &self.cjk {
+                if k.font.lookup_glyph_index(c) != 0 {
+                    Some(&k.font)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+        let mut pen_x = cx as f32 + 18.0;
+        let clip_right = cx + cw;
+        let baseline = cy as f32 + (rh as f32 - (hm.ascent - hm.descent)) / 2.0 + hm.ascent;
+        for c in text.chars() {
+            let Some(f) = pick(c) else {
+                let mut seen = self.tofu_seen.borrow_mut();
+                if !seen.contains(&c) && seen.len() < 16 {
+                    seen.push(c);
+                }
+                continue;
+            };
+            let adv = f.metrics(c, px).advance_width;
+            if pen_x + adv >= clip_right as f32 {
+                break; // 右缘装不下就停（v1 无横滚，截断即判卷）
+            }
+            let (m, bmp) = f.rasterize(c, px);
+            let top = baseline - m.ymin as f32 - m.height as f32;
+            for gy in 0..m.height as u32 {
+                let y = top as i64 + i64::from(gy);
+                if y < 0 || y >= i64::from(frame.h) {
+                    continue;
+                }
+                for gx in 0..m.width as u32 {
+                    let x = (pen_x + m.xmin as f32) as i64 + i64::from(gx);
+                    if x < 0 || x >= i64::from(clip_right) {
+                        continue;
+                    }
+                    let a = u32::from(bmp[(gy * m.width as u32 + gx) as usize]);
+                    if a > 0 {
+                        frame.blend_px(x as u32, y as u32, fg, a);
+                    }
+                }
+            }
+            pen_x += adv;
+        }
+    }
+
     /// 光栅化单字形并 alpha 混合进帧缓冲。基线对齐（BAR-001）：fontdue
     /// y 轴向上，metrics.ymin 是位图底边相对基线的偏移（下伸字母为负），
     /// 位图顶边（屏坐标）= 格顶 + 基线偏移 - (ymin + 位图高)。
@@ -1302,6 +1431,16 @@ pub const KEYBAR_BG: u32 = 0x0010_1216;
 pub const KEYBAR_KEY_BG: u32 = 0x0023_272E;
 pub const KEYBAR_MOD_ON: u32 = 0x003E_6FB4;
 pub const KEYBAR_LABEL: u32 = 0x00E8_EAED;
+
+/// 全局输入栏配色（期 0 组件三）：与快捷键行同族暗底，聚焦亮一档硬切；
+/// 发送钮 = kfmv4 青 #06B6D4（与选中条/放大镜边框同品牌色板）
+pub const BAR_BG: u32 = 0x0010_1216;
+pub const BAR_FIELD_BG: u32 = 0x001B_2027;
+pub const BAR_FIELD_FOCUS_BG: u32 = 0x0023_272E;
+pub const BAR_TEXT: u32 = 0x00E8_EAED;
+pub const BAR_PLACEHOLDER: u32 = 0x0065_6A72;
+pub const BAR_SEND_BG: u32 = 0x0006_B6D4;
+pub const BAR_SEND_LABEL: u32 = 0x00F8_FAFC;
 
 /// 长按选择高亮底色（kfmv4 正蓝 #3B82F6，2026-08-21 品牌色板统一——
 /// 此前借用的 KEYBAR_MOD_ON 0x3E6FB4 是快捷键行私色，不成套）
@@ -1600,6 +1739,16 @@ pub trait TermEmu: Send {
     /// AI 外显 chrome（ai-presence 期 0 组件一，android_app rasterize 调用方）：
     /// AI 页占位空壳（page=AiFullscreen 时代替终端网格）/ 雾状光球 sprite
     fn render_ai_page(&self, buf: &mut [u32], w: u32, h: u32);
+    /// 全局输入栏 chrome（期 0 组件三，android_app rasterize 调用方）：
+    /// 压底紧贴键盘（栏带 = 屏底 - inset - 栏高），任何会话页都画
+    fn render_inputbar(
+        &self,
+        buf: &mut [u32],
+        w: u32,
+        h: u32,
+        ime_bottom: u32,
+        snap: &crate::input_bar::BarSnap,
+    );
     #[allow(clippy::too_many_arguments)]
     fn render_orb(
         &self,
@@ -1652,6 +1801,16 @@ impl TermEmu for TermView {
     }
     fn render_ai_page(&self, buf: &mut [u32], w: u32, h: u32) {
         TermView::render_ai_page(self, buf, w, h)
+    }
+    fn render_inputbar(
+        &self,
+        buf: &mut [u32],
+        w: u32,
+        h: u32,
+        ime_bottom: u32,
+        snap: &crate::input_bar::BarSnap,
+    ) {
+        TermView::render_inputbar(self, buf, w, h, ime_bottom, snap)
     }
     #[allow(clippy::too_many_arguments)]
     fn render_orb(

@@ -181,6 +181,15 @@ struct App {
     /// 上一帧的 AI 外显快照（about_to_wait 逐圈比对置脏：
     /// 探针注入/fake_run 到期等不经触摸的状态变化也要画出帧）
     last_ai_snap: Option<crate::ai_presence::PresenceSnap>,
+    /// 全局输入栏状态核服务句柄（input-bar 插件，期 0 组件三）
+    input_bar: Option<Arc<crate::input_bar::InputBarState>>,
+    /// 按在输入栏带上的手势（Some = 这手势归栏，终端手势全家让路）
+    inputbar_touch: Option<(f64, f64)>,
+    /// 本地脑（期 0②：echo-brain 夹具先行，direct-api 随 key 配置落地换插）：
+    /// 输入栏发送的真 run 来源——run_start/run_end 驱动光球（期 0②收尾）
+    brain: Option<Arc<dyn crate::brain_ep::BrainEndpoint>>,
+    /// 上一帧的输入栏快照（about_to_wait 逐圈比对置脏）
+    last_bar_snap: Option<crate::input_bar::BarSnap>,
 }
 
 impl App {
@@ -288,11 +297,25 @@ impl App {
                     self.dirty = true;
                     return;
                 }
+                // 输入栏命中（期 0 组件三）：起点在栏带上 → 这手势归栏
+                // （不滚屏不唤键盘——聚焦/发送在 Ended 分路）
+                let in_input_bar = self.window.as_ref().is_some_and(|w| {
+                    crate::input_bar::in_bar(y, w.inner_size().height, self.ime_bottom_px)
+                });
+                if in_input_bar {
+                    self.inputbar_touch = Some((x, y));
+                    return;
+                }
                 // 起点在快捷键行带上 → 这手势归行（不滚屏不唤键盘）
                 // BAR-018：判定尺与渲染/hit 一致——减去键盘 inset，
-                // 否则键盘弹起时行带浮在 inset 上方，这里却认屏底
+                // 否则键盘弹起时行带浮在 inset 上方，这里却认屏底。
+                // 期 0 组件三：行上移一层（输入栏压底），有效 inset + 栏高
                 let in_bar = self.window.as_ref().is_some_and(|w| {
-                    crate::keybar::in_bar(y, w.inner_size().height, self.ime_bottom_px)
+                    crate::keybar::in_bar(
+                        y,
+                        w.inner_size().height,
+                        self.ime_bottom_px + crate::input_bar::HEIGHT_PX,
+                    )
                 });
                 if in_bar {
                     self.bar_touch = Some((x, y));
@@ -486,6 +509,40 @@ impl App {
                     self.dirty = true;
                     return;
                 }
+                // 输入栏手势收尾：点文本区 = 聚焦+弹键盘；点发送钮 = submit
+                // （Cancelled 不动作）
+                if self.inputbar_touch.take().is_some() {
+                    if phase != TouchPhase::Ended {
+                        return;
+                    }
+                    let action = self.window.as_ref().and_then(|w| {
+                        let s = w.inner_size();
+                        crate::input_bar::hit(x, y, s.width, s.height, self.ime_bottom_px)
+                    });
+                    match action {
+                        Some(crate::input_bar::BarHit::Field) => {
+                            if let Some(bar) = &self.input_bar {
+                                bar.focus();
+                            }
+                            if let Some(w) = &self.window {
+                                w.set_ime_allowed(true);
+                            }
+                            if let Some(insets) = &self.ime_insets {
+                                insets.force_show();
+                            }
+                            crate::report::report("ime", "输入栏聚焦（弹键盘）");
+                        }
+                        Some(crate::input_bar::BarHit::Send) => {
+                            if let Some(bar) = &self.input_bar {
+                                let sent = bar.submit();
+                                crate::report::report("ai", &format!("输入栏发送: {sent:?}"));
+                            }
+                        }
+                        None => {}
+                    }
+                    self.dirty = true;
+                    return;
+                }
                 // 快捷键行手势：抬手命中发键（Cancelled 不发）
                 if self.bar_touch.take().is_some() {
                     // BAR-018 诊断：进得了这个分支 = Started 的 in_bar
@@ -499,8 +556,13 @@ impl App {
                     }
                     let Some(w) = &self.window else { return };
                     let s = w.inner_size();
-                    let Some(kd) = crate::keybar::hit(x, y, s.width, s.height, self.ime_bottom_px)
-                    else {
+                    let Some(kd) = crate::keybar::hit(
+                        x,
+                        y,
+                        s.width,
+                        s.height,
+                        self.ime_bottom_px + crate::input_bar::HEIGHT_PX,
+                    ) else {
                         crate::report::report(
                             "ime",
                             &format!(
@@ -547,6 +609,13 @@ impl App {
                 }
                 let was_tap = self.touch_scroll.take().is_some_and(|t| t.was_tap());
                 if was_tap && let Some(w) = &self.window {
+                    // 焦点二态（§五）：点终端区 = 输入栏失焦（键盘留给终端）
+                    if self.input_bar.as_ref().is_some_and(|b| b.is_focused()) {
+                        if let Some(bar) = &self.input_bar {
+                            bar.unfocus();
+                        }
+                        crate::report::report("ime", "点终端区：输入栏失焦");
+                    }
                     w.set_ime_allowed(true);
                     if let Some(insets) = &self.ime_insets {
                         insets.force_show();
@@ -634,6 +703,18 @@ impl App {
         let snap = ai.snap(crate::report::boot_ms() as u64);
         if self.last_ai_snap != Some(snap) {
             self.last_ai_snap = Some(snap);
+            self.dirty = true;
+        }
+    }
+
+    /// 输入栏快照逐圈比对置脏（闸门注入/IME 分流改的状态也要画出帧）
+    fn poll_input_bar(&mut self) {
+        let Some(bar) = &self.input_bar else {
+            return;
+        };
+        let snap = bar.snap();
+        if self.last_bar_snap.as_ref() != Some(&snap) {
+            self.last_bar_snap = Some(snap);
             self.dirty = true;
         }
     }
@@ -775,6 +856,51 @@ impl App {
         self.ai_presence = base.ctx().get::<crate::ai_presence::AiPresenceState>().ok();
         if let Some(ai) = &self.ai_presence {
             crate::gate::register_ai_presence(ai);
+        }
+
+        // 全局输入栏插件（期 0 组件三）：状态核共享实例直挂 + 发送口装配。
+        // 脑 = echo-brain 夹具（期 0②收尾：真 run 生命周期驱动光球亮灭，
+        // 断网可验；direct-api 随 key 配置落地换插——BrainEndpoint 同形）。
+        // 发送闭包在触摸/值守线程被调，真 run 自开线程——瞬时返回契约
+        if let Err(e) = base.load(crate::plugins::input_bar::InputBar::new()) {
+            crate::report::report_sync("ai", &format!("输入栏插件装载失败: {e:?}"));
+        }
+        self.input_bar = base.ctx().get::<crate::input_bar::InputBarState>().ok();
+        if let (Some(bar), Some(ai)) = (&self.input_bar, &self.ai_presence) {
+            crate::gate::register_input_bar(bar);
+            let brain: Arc<dyn crate::brain_ep::BrainEndpoint> =
+                Arc::new(crate::brain_ep::EchoBrain::from_upstream_sse(
+                    include_str!(
+                        "../tests/fixtures/ai-chat/upstream-kimi-k2.7-highspeed-20260830.sse"
+                    ),
+                    std::time::Duration::from_millis(15),
+                ));
+            self.brain = Some(brain.clone());
+            let ai2 = ai.clone();
+            bar.install_sender(Arc::new(move |text| {
+                let brain = brain.clone();
+                let ai = ai2.clone();
+                std::thread::spawn(move || {
+                    ai.run_start(crate::report::boot_ms() as u64);
+                    let req = crate::brain_ep::ChatStartReq {
+                        session_id: "local".to_string(),
+                        messages: vec![("user".to_string(), text)],
+                        model: "echo".to_string(),
+                        provider: "echo".to_string(),
+                        tools: vec![],
+                    };
+                    let (_h, rx) = brain.start(req);
+                    while let Ok(ev) = rx.recv() {
+                        if matches!(
+                            ev,
+                            crate::brain::ChatEvent::Done | crate::brain::ChatEvent::Error { .. }
+                        ) {
+                            break;
+                        }
+                    }
+                    ai.run_end(crate::report::boot_ms() as u64);
+                });
+            }));
         }
 
         // L3 首启安装(必须在本地会话 spawn 前:装好后 shell_plan 才会
@@ -922,7 +1048,8 @@ impl App {
             termview::margin_top(ch)
                 + termview::MARGIN_Y
                 + self.ime_bottom_px
-                + crate::keybar::HEIGHT_PX,
+                + crate::keybar::HEIGHT_PX
+                + crate::input_bar::HEIGHT_PX, // 期 0 组件三：输入栏常驻让位
         );
         let (cols, rows) = termview::grid_dims(usable_w, usable_h, cw, ch);
         term.lock().unwrap().resize_cells(cols, rows);
@@ -1173,6 +1300,29 @@ impl App {
         if !FIRST_INJECT.swap(true, std::sync::atomic::Ordering::Relaxed) {
             crate::report::report("ime", "首个 JNI IME 文字注入");
         }
+        // 输入栏聚焦分流（期 0 组件三，§五 焦点二态）：键盘按键全归栏，
+        // 不下终端——Enter=发送、退格删字、Esc 失焦、文本追加，其余特殊键
+        // v1 不管（方向键/Tab 等）
+        if self.input_bar.as_ref().is_some_and(|b| b.is_focused()) {
+            let mut want_submit = false;
+            if let Some(bar) = &self.input_bar {
+                for item in items {
+                    match item {
+                        crate::ime_queue::Inject::Text(s) => bar.insert_text(&s),
+                        crate::ime_queue::Inject::Key(66) => want_submit = true, // KC_ENTER
+                        crate::ime_queue::Inject::Key(67) => bar.backspace(),    // KC_DEL
+                        crate::ime_queue::Inject::Key(111) => bar.unfocus(),     // KC_ESC
+                        _ => {}
+                    }
+                }
+                if want_submit {
+                    let sent = bar.submit();
+                    crate::report::report("ai", &format!("输入栏 Enter 发送: {sent:?}"));
+                }
+            }
+            self.dirty = true;
+            return;
+        }
         let app_cursor = self
             .term_handle()
             .is_some_and(|t| t.lock().unwrap().app_cursor_mode());
@@ -1232,6 +1382,27 @@ impl App {
         if self.session_over {
             self.kick_reconnect();
         }
+        // 输入栏聚焦分流（物理键盘与 IME 同尺）
+        if self.input_bar.as_ref().is_some_and(|b| b.is_focused()) {
+            let mut want_submit = false;
+            if let Some(bar) = &self.input_bar {
+                match &event.logical_key {
+                    Key::Named(NamedKey::Enter) => want_submit = true,
+                    Key::Named(NamedKey::Backspace) => bar.backspace(),
+                    Key::Named(NamedKey::Escape) => bar.unfocus(),
+                    _ => {
+                        if let Some(t) = &event.text {
+                            bar.insert_text(t);
+                        }
+                    }
+                }
+                if want_submit {
+                    bar.submit();
+                }
+            }
+            self.dirty = true;
+            return;
+        }
         let bytes: Option<String> = match &event.logical_key {
             Key::Named(NamedKey::Enter) => Some("\r".into()),
             Key::Named(NamedKey::Backspace) => Some("\x7f".into()),
@@ -1261,6 +1432,7 @@ impl App {
         magnifier_at: Option<(f64, f64)>,
         ime_bottom_px: u32,
         ai_snap: Option<crate::ai_presence::PresenceSnap>,
+        bar_snap: Option<&crate::input_bar::BarSnap>,
         buf: &mut [u32],
         w: u32,
         h: u32,
@@ -1276,6 +1448,11 @@ impl App {
                 // 键盘 inset 之上——键盘弹起时行跟着上浮）。
                 // 修饰键位读 input.modifiers 服务（input-ime 方案 A）
                 term.render_keybar(buf, w, h, ime_bottom_px, mods);
+            }
+            // 全局输入栏（常驻 chrome：任何会话下都在，§二——AI 页也画）。
+            // 压底紧贴键盘（栏带 = 屏底 - inset - 栏高）
+            if let Some(bs) = bar_snap {
+                term.render_inputbar(buf, w, h, ime_bottom_px, bs);
             }
             // 光球（常驻 chrome：画在终端网格/AI 页之后，两页都在）。
             // 四态增益硬切读 ai_presence::orb_gain（闲/运行/pressed/AI页）
@@ -1341,6 +1518,7 @@ impl App {
                 self.magnifier_at,
                 self.ime_bottom_px,
                 self.last_ai_snap,
+                self.last_bar_snap.as_ref(),
                 &mut buf,
                 w,
                 h,
@@ -1433,6 +1611,14 @@ impl ApplicationHandler for App {
                         // Preedit（拼音候选中）尖刺期不上屏
                         Ime::Preedit(_, _) => {}
                         Ime::Commit(text) => {
+                            // 输入栏聚焦分流（winit IME 链与 JNI 链同尺）
+                            if self.input_bar.as_ref().is_some_and(|b| b.is_focused()) {
+                                if let Some(bar) = &self.input_bar {
+                                    bar.insert_text(&text);
+                                }
+                                self.dirty = true;
+                                return;
+                            }
                             // 死会话上落字 = 重连触发器（同 drain_ime_inject 口径）
                             if self.session_over {
                                 self.kick_reconnect();
@@ -1489,6 +1675,7 @@ impl ApplicationHandler for App {
             self.check_long_press();
             self.check_orb_long_press(); // 光球长按 → fake_run(debug 钩子)
             self.poll_ai_presence(); // AI 外显快照比对(注入/到期也要画帧)
+            self.poll_input_bar(); // 输入栏快照比对(注入/分流也要画帧)
             // blackout 期补画(冗余兜底,2026-08-22 探针拆除案保留):
             // 首笔 RedrawRequested 到达前的脏帧由唤醒锤锤醒的本方法直画;
             // 首笔 Redraw 到达后唤醒锤收锤,此路自动关闭归回正道

@@ -47,6 +47,8 @@ fn snap() -> StatsSnap {
         ai_orb_y: 0,
         ai_pressed: false,
         ai_overlay: false,
+        bar_focused: false,
+        bar_text_len: 0,
     }
 }
 
