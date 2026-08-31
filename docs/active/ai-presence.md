@@ -283,6 +283,12 @@ trait BrainEndpoint {
   四A 九事件，方言全容忍）+ RunAccumulator（reasoning 归位 R3）+
   error_event_from_http + build_chat_request；考题 tests/brain_spec.rs
   **18 题全绿**，变异抽检双发双咬（thinking↔text 换轨咬 4 题、归位删除咬 1 题）。
+  脑插座落地 `src/brain_ep.rs`：BrainEndpoint trait（mpsc 通道模型——start/
+  attach 返回 Receiver，脑自开线程推事件，守 apply 50ms 预算；BoxStream 草案
+  按 Rust 线程模型改通道）+ EchoBrain 夹具（from_upstream_sse 走真解析管造
+  节目单、pace 节奏注入、取消→Error 已取消 收尾、attach 历史后缀回放）；
+  考题 tests/brain_ep_spec.rs **6 题全绿**，变异双咬（取消检查删除咬、
+  attach 游标 +1 咬）。
 - **期 1 眼睛**：视口快照附上下文。验收 = 问「屏幕上有什么」答得对。
 - **期 2 手**：工具执行注入来源会话。验收 = 让 AI 跑一条命令，终端可见。
 - **期 3 打磨**：server-brain（服务器空间数据源，§四C 契约已就位——**服务器

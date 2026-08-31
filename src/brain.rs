@@ -243,6 +243,21 @@ impl RunAccumulator {
     }
 }
 
+// ========== 上游 SSE 全文 → 四A 事件序列（echo-brain 与考题共用的直通管） ==========
+
+/// SseParser + OpenAiTranslator 直通：纯逻辑零 IO。
+/// echo-brain 用它把上游 fixture 翻译成回放节目单；考题用它当标准答案。
+pub fn events_from_upstream_sse(raw: &str) -> Vec<ChatEvent> {
+    let mut p = SseParser::new();
+    p.feed(raw.as_bytes());
+    let mut t = OpenAiTranslator::new();
+    let mut out = Vec::new();
+    for f in p.drain_frames() {
+        out.extend(t.translate_payload(&f));
+    }
+    out
+}
+
 // ========== 上游 HTTP 错误体 → Error 事件（kfmv4 chat.ts 口径） ==========
 
 /// 非 200 响应体转人话 Error 事件：`API 请求失败: <status> — <message>`。
