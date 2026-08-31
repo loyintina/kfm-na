@@ -1203,3 +1203,33 @@ fn spec_c4_宽字符劈格防御_行尾半格不拆字() {
     assert_eq!(lines[0], "1234567", "第一行塞不下整字不许劈");
     assert_eq!(lines[1], "中", "汉字原子换行到第二行");
 }
+
+// ========== 渐变插值（2026-08-31 输入栏样式修订，A 档纯逻辑） ==========
+// 判卷点：端点原色 / 中点均值 / 单调不回头。fill_round_rect_grad 本体
+// 走 C 档实拍（na-shot 对照 kfmv4 参考图），像素轨不在这里判
+
+#[test]
+fn spec_lerp_rgb_endpoints_and_midpoint() {
+    use kfm_na::termview::lerp_rgb;
+    let (c1, c2) = (0x006E_49EB, 0x0018_A8D8); // 输入栏描边两端(左紫/右青)
+    assert_eq!(lerp_rgb(c1, c2, 0), c1, "t=0 必须原样出 c1");
+    assert_eq!(lerp_rgb(c1, c2, 255), c2, "t=255 必须原样出 c2");
+    let mid = lerp_rgb(0x0000_0000, 0x00FF_FFFF, 128);
+    let r = (mid >> 16) & 0xFF;
+    assert!((127..=128).contains(&r), "黑白中点应≈128,实得 {r}");
+}
+
+#[test]
+fn spec_lerp_rgb_monotonic_no_wraparound() {
+    use kfm_na::termview::lerp_rgb;
+    // c1 > c2 的下行通道也不许回绕(u32 下溢会炸出亮斑)
+    let mut prev = lerp_rgb(0x00FF_0000, 0x0000_1000, 0);
+    for t in 1..=255u32 {
+        let cur = lerp_rgb(0x00FF_0000, 0x0000_1000, t);
+        assert!(
+            (cur >> 16) <= (prev >> 16),
+            "红通道必须单调不升:t={t} {prev:#x}→{cur:#x}"
+        );
+        prev = cur;
+    }
+}

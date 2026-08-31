@@ -1446,8 +1446,11 @@ impl App {
                 term.render_into(buf, w, h);
                 // 快捷键行（BAR-017：Rust 自绘覆盖层，画在终端网格之上；
                 // 键盘 inset 之上——键盘弹起时行跟着上浮）。
-                // 修饰键位读 input.modifiers 服务（input-ime 方案 A）
-                term.render_keybar(buf, w, h, ime_bottom_px, mods);
+                // 修饰键位读 input.modifiers 服务（input-ime 方案 A）。
+                // 2026-08-31 排障实锤：inset 必须叠 input_bar::HEIGHT_PX——
+                // 栏带压在行下沿，少这一层行第二排被输入栏盖掉（触摸几何
+                // 早就是叠后的，渲染漏叠 = 眼手错位；dump 对照拍出）
+                term.render_keybar(buf, w, h, ime_bottom_px + crate::input_bar::HEIGHT_PX, mods);
             }
             // 全局输入栏（常驻 chrome：任何会话下都在，§二——AI 页也画）。
             // 压底紧贴键盘（栏带 = 屏底 - inset - 栏高）

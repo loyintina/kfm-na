@@ -11,10 +11,15 @@
 
 use std::sync::Mutex;
 
-/// 栏高（px，物理像素）——与 keybar 单排 120 同量级，略高容文本基线
-pub const HEIGHT_PX: u32 = 132;
-/// 发送钮宽（px）：右端固定宽，拇指可击
-pub const SEND_W_PX: u32 = 168;
+/// 栏带高（px，物理像素）= 文本区 156 + 上下留白（kfmv4 参考样式复刻：
+/// 文本区浮在带内，不贴带边——2026-08-31 样式修订，参考图实测比）
+pub const HEIGHT_PX: u32 = 220;
+/// 发送钮宽（px）：右端固定宽圆角方块，拇指可击
+pub const SEND_W_PX: u32 = 140;
+/// 栏左右离屏边留白（px）——参考样式：文本区/发送钮都不贴屏边
+pub const MARGIN_X_PX: u32 = 60;
+/// 文本区与发送钮之间的缝隙（px）
+pub const GAP_PX: u32 = 40;
 
 /// 命中部位
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,12 +41,14 @@ pub fn in_bar(y: f64, win_h: u32, ime_bottom: u32) -> bool {
     y >= f64::from(top) && y < f64::from(bottom)
 }
 
-/// 窗口坐标 → 命中部位；栏外（上方终端区/被键盘盖住的屏底）→ None
+/// 窗口坐标 → 命中部位；栏外（上方终端区/被键盘盖住的屏底）→ None。
+/// 发送钮带 = 右端留白内推 MARGIN_X_PX 的 SEND_W_PX 一条；其余栏内都算
+/// 文本区（缝隙/留白给拇指容错，点了聚焦不亏）
 pub fn hit(x: f64, y: f64, win_w: u32, win_h: u32, ime_bottom: u32) -> Option<BarHit> {
     if !in_bar(y, win_h, ime_bottom) || x < 0.0 || x >= f64::from(win_w) {
         return None;
     }
-    let send_left = win_w.checked_sub(SEND_W_PX)?;
+    let send_left = win_w.checked_sub(MARGIN_X_PX)?.checked_sub(SEND_W_PX)?;
     if x >= f64::from(send_left) {
         Some(BarHit::Send)
     } else {

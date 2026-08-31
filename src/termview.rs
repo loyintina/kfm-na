@@ -1109,9 +1109,11 @@ impl TermView {
     }
 
     /// 全局输入栏（ai-presence 期 0 组件三，§二 常驻 chrome 一）：
-    /// 压底紧贴键盘（keybar 之上让位由调用方几何保证——栏带 =
-    /// 屏底 - 键盘 inset - 栏高）。左文本区（空 = 占位提示；聚焦换亮底
-    /// 硬切，零动画帧）+ 右端固定宽发送钮
+    /// 压底紧贴键盘（keybar 在其上一层——调用方几何保证）。样式 = kfmv4
+    /// 参考图复刻（2026-08-31，实拍取色）：文本区浮在带内（上下留白、
+    /// 左右离屏边 MARGIN_X_PX），紫→青渐变描边 + 暗蓝底（聚焦亮一档
+    /// 硬切，零动画帧）；右端独立圆角方块发送钮（紫→青对角渐变 +
+    /// 白 ▶ 三角），与文本区隔 GAP_PX 缝隙
     pub fn render_inputbar(
         &self,
         buf: &mut [u32],
@@ -1127,7 +1129,8 @@ impl TermView {
         else {
             return;
         };
-        if buf_w < input_bar::SEND_W_PX + 40 {
+        let min_w = 2 * input_bar::MARGIN_X_PX + input_bar::GAP_PX + input_bar::SEND_W_PX + 40;
+        if buf_w < min_w {
             return; // 窗太窄画不下，保命要紧
         }
         let mut frame = Frame {
@@ -1136,37 +1139,75 @@ impl TermView {
             h: buf_h,
         };
         frame.fill_rect(0, top, buf_w, input_bar::HEIGHT_PX, BAR_BG);
-        let h = input_bar::HEIGHT_PX;
-        // 文本区（聚焦 = 亮底硬切）
-        let field_w = buf_w - input_bar::SEND_W_PX - 12;
+        // 文本区：带内上下各留 32，高 156；描边 3px 渐变（外）套暗底（内）
+        let field_h = input_bar::HEIGHT_PX - 64;
+        let field_top = top + 32;
+        let send_left = buf_w - input_bar::MARGIN_X_PX - input_bar::SEND_W_PX;
+        let field_left = input_bar::MARGIN_X_PX;
+        let field_w = send_left - input_bar::GAP_PX - field_left;
         let field_bg = if snap.focused {
             BAR_FIELD_FOCUS_BG
         } else {
             BAR_FIELD_BG
         };
-        frame.fill_round_rect(6, top + 6, field_w, h - 12, 14, field_bg);
-        if snap.text.is_empty() {
-            self.draw_text_left(&mut frame, "发给 AI…", 6, field_w, top, h, BAR_PLACEHOLDER);
-        } else {
-            self.draw_text_left(&mut frame, &snap.text, 6, field_w, top, h, BAR_TEXT);
-        }
-        // 发送钮
-        frame.fill_round_rect(
-            buf_w - input_bar::SEND_W_PX - 6,
-            top + 6,
-            input_bar::SEND_W_PX,
-            h - 12,
-            14,
-            BAR_SEND_BG,
+        frame.fill_round_rect_grad(
+            field_left,
+            field_top,
+            field_w,
+            field_h,
+            48,
+            GradSpec {
+                c1: BAR_BORDER_L,
+                c2: BAR_BORDER_R,
+                diag: false,
+            },
         );
-        self.draw_label(
-            &mut frame,
-            "发送",
-            buf_w - input_bar::SEND_W_PX - 6,
+        frame.fill_round_rect(
+            field_left + 3,
+            field_top + 3,
+            field_w - 6,
+            field_h - 6,
+            45,
+            field_bg,
+        );
+        // 文字左内缩 ~58（draw_text_left 自带 18 起笔）
+        let text_cx = field_left + 40;
+        let text_cw = field_w - 40 - 12;
+        if snap.text.is_empty() {
+            self.draw_text_left(
+                &mut frame,
+                "输入消息…",
+                text_cx,
+                text_cw,
+                field_top,
+                field_h,
+                BAR_PLACEHOLDER,
+            );
+        } else {
+            self.draw_text_left(
+                &mut frame, &snap.text, text_cx, text_cw, field_top, field_h, BAR_TEXT,
+            );
+        }
+        // 发送钮：独立圆角方块（比文本区矮 16，垂直居中），对角渐变 + 白 ▶
+        let send_top = field_top + 8;
+        let send_h = field_h - 16;
+        frame.fill_round_rect_grad(
+            send_left,
+            send_top,
             input_bar::SEND_W_PX,
-            top,
-            h,
-            BAR_SEND_LABEL,
+            send_h,
+            36,
+            GradSpec {
+                c1: BAR_SEND_TL,
+                c2: BAR_SEND_BR,
+                diag: true,
+            },
+        );
+        frame.fill_triangle_right(
+            send_left + input_bar::SEND_W_PX / 2,
+            send_top + send_h / 2,
+            54,
+            BAR_SEND_TRI,
         );
     }
 
@@ -1432,15 +1473,20 @@ pub const KEYBAR_KEY_BG: u32 = 0x0023_272E;
 pub const KEYBAR_MOD_ON: u32 = 0x003E_6FB4;
 pub const KEYBAR_LABEL: u32 = 0x00E8_EAED;
 
-/// 全局输入栏配色（期 0 组件三）：与快捷键行同族暗底，聚焦亮一档硬切；
-/// 发送钮 = kfmv4 青 #06B6D4（与选中条/放大镜边框同品牌色板）
+/// 全局输入栏配色（期 0 组件三；2026-08-31 样式修订 = kfmv4 参考图实拍
+/// 取色复刻：暗蓝文本区 + 紫→青渐变描边/发送钮 + 白 ▶）。聚焦亮一档硬切
 pub const BAR_BG: u32 = 0x0010_1216;
-pub const BAR_FIELD_BG: u32 = 0x001B_2027;
-pub const BAR_FIELD_FOCUS_BG: u32 = 0x0023_272E;
+pub const BAR_FIELD_BG: u32 = 0x0012_2038;
+pub const BAR_FIELD_FOCUS_BG: u32 = 0x001E_3050;
 pub const BAR_TEXT: u32 = 0x00E8_EAED;
-pub const BAR_PLACEHOLDER: u32 = 0x0065_6A72;
-pub const BAR_SEND_BG: u32 = 0x0006_B6D4;
-pub const BAR_SEND_LABEL: u32 = 0x00F8_FAFC;
+pub const BAR_PLACEHOLDER: u32 = 0x0069_657C;
+/// 文本区描边渐变两端（左紫 → 右青）
+pub const BAR_BORDER_L: u32 = 0x006E_49EB;
+pub const BAR_BORDER_R: u32 = 0x0018_A8D8;
+/// 发送钮对角渐变两端（左上紫 → 右下青蓝）
+pub const BAR_SEND_TL: u32 = 0x006D_49EB;
+pub const BAR_SEND_BR: u32 = 0x0012_9FD5;
+pub const BAR_SEND_TRI: u32 = 0x00FF_FFFF;
 
 /// 长按选择高亮底色（kfmv4 正蓝 #3B82F6，2026-08-21 品牌色板统一——
 /// 此前借用的 KEYBAR_MOD_ON 0x3E6FB4 是快捷键行私色，不成套）
@@ -1631,6 +1677,15 @@ struct Frame<'a> {
     h: u32,
 }
 
+/// 渐变填色参数（fill_round_rect_grad 用，同 Frame 的打包纪律）
+#[derive(Clone, Copy)]
+struct GradSpec {
+    c1: u32,
+    c2: u32,
+    /// false = 沿横向，true = 沿主对角线
+    diag: bool,
+}
+
 impl Frame<'_> {
     /// 画纯色矩形（裁剪到帧缓冲内）
     fn fill_rect(&mut self, x: u32, y: u32, w: u32, h: u32, color: u32) {
@@ -1672,6 +1727,65 @@ impl Frame<'_> {
         }
     }
 
+    /// 渐变圆角矩形（输入栏描边/发送钮用）：与 fill_round_rect 同圆角
+    /// 遮罩，颜色从 g.c1 渐变到 g.c2——g.diag=false 沿横向，true 沿主对角线
+    fn fill_round_rect_grad(&mut self, x: u32, y: u32, w: u32, h: u32, r: u32, g: GradSpec) {
+        let r = r.min(w / 2).min(h / 2) as i64;
+        let (w64, h64) = (i64::from(w), i64::from(h));
+        // t 的分母：横向 = w-1；对角 = 归一到 (w-1)+(h-1)
+        let denom = if g.diag {
+            (w64 - 1) + (h64 - 1)
+        } else {
+            w64 - 1
+        }
+        .max(1);
+        for py in 0..h64 {
+            for px in 0..w64 {
+                let cx = if px < r {
+                    r
+                } else if px >= w64 - r {
+                    w64 - r - 1
+                } else {
+                    px
+                };
+                let cy = if py < r {
+                    r
+                } else if py >= h64 - r {
+                    h64 - r - 1
+                } else {
+                    py
+                };
+                if (px - cx) * (px - cx) + (py - cy) * (py - cy) > r * r {
+                    continue;
+                }
+                let (ax, ay) = (x as i64 + px, y as i64 + py);
+                if ax >= 0 && ay >= 0 && ax < i64::from(self.w) && ay < i64::from(self.h) {
+                    let t = if g.diag { px + py } else { px };
+                    let color = lerp_rgb(g.c1, g.c2, (t * 255 / denom) as u32);
+                    self.buf[(ay * i64::from(self.w) + ax) as usize] = color;
+                }
+            }
+        }
+    }
+
+    /// 右指实心三角（发送钮 ▶ 图标）：以 (cx, cy) 为中心、高 size、
+    /// 宽 = size*3/4。逐行扫：该行右端 = 顶点回缩 |dy| 按比例
+    fn fill_triangle_right(&mut self, cx: u32, cy: u32, size: u32, color: u32) {
+        let half_h = (size / 2) as i64;
+        let half_w = (size * 3 / 8) as i64;
+        let (cx, cy) = (i64::from(cx), i64::from(cy));
+        for dy in -half_h..=half_h {
+            // 行右端：中心行抵顶点，向两端按 dy 比例回缩到左竖边
+            let xr = cx + half_w - dy.abs() * (2 * half_w) / half_h.max(1);
+            for x in (cx - half_w)..=xr {
+                let y = cy + dy;
+                if x >= 0 && y >= 0 && x < i64::from(self.w) && y < i64::from(self.h) {
+                    self.buf[(y * i64::from(self.w) + x) as usize] = color;
+                }
+            }
+        }
+    }
+
     /// 单像素按覆盖率 a 混合（调用方保证 x/y 已在界内）
     fn blend_px(&mut self, x: u32, y: u32, fg: u32, a: u32) {
         let dst = &mut self.buf[(y * self.w + x) as usize];
@@ -1687,6 +1801,17 @@ fn blend(fg: u32, dst: u32, a: u32) -> u32 {
     let g = ch((fg >> 8) & 0xFF, (dst >> 8) & 0xFF);
     let b = ch(fg & 0xFF, dst & 0xFF);
     (r << 16) | (g << 8) | b
+}
+
+/// 两色逐通道线性插值（t = 0..255，渐变图元用；A 档考题
+/// spec_lerp_rgb_* 在 tests/termview_spec.rs）
+pub fn lerp_rgb(c1: u32, c2: u32, t: u32) -> u32 {
+    let f = |sh: u32| {
+        let a = ((c1 >> sh) & 0xFF) as i64;
+        let b = ((c2 >> sh) & 0xFF) as i64;
+        (a + (b - a) * t as i64 / 255) as u32
+    };
+    (f(16) << 16) | (f(8) << 8) | f(0)
 }
 
 /// 供 android_app：从候选路径建视图（主字体 + CJK 备用 + 默认 80x24 占位网格），

@@ -99,11 +99,13 @@ pub fn note_frame_size(w: u32, h: u32) {
 // ---- 通道一：shot-req → 帧倒盘 ----
 
 /// 倒一帧（有触发才干活）：锁终端离屏光栅化当前画面进 Vec 写出。
-/// 装帧口径：终端网格 + **AI 外显**（光球/AI 页占位）——ai-presence 期 0
-/// 组件一起，球是「状态核读数画出来的」，值守线程自有句柄（D9 同源），
-/// na-shot 实拍是光球的视觉判卷轨，倒帧不见球 = 视觉轨瞎。快捷键行/
-/// 放大镜仍是 UI 私有装帧（修饰键粘滞位/放大镜触点不在共享态里），
-/// 后台视野不含它们（2026-08-30 前旧口径：连球也不画，组件一修订）
+/// 装帧口径：终端网格 + **AI 外显**（光球/AI 页占位）+ 常驻 chrome
+/// （快捷键行/输入栏）——ai-presence 期 0 组件一起，球是「状态核读数
+/// 画出来的」，值守线程自有句柄（D9 同源），na-shot 实拍是视觉判卷轨，
+/// 倒帧不见球/栏 = 视觉轨瞎。输入栏读 input_bar_handle 快照（与 stats
+/// 同源）；快捷键行修饰粘滞位不在共享态，倒帧恒按 mods=0 画（2026-08-31
+/// 修订：此前行/栏都不画，输入栏样式排障被迫补这条眼；放大镜触点仍是
+/// UI 私有，后台视野不含它）
 pub fn dump_now(dir: &str) {
     if !trigger_pending(dir) {
         return;
@@ -117,13 +119,22 @@ pub fn dump_now(dir: &str) {
     let (w, h) = ((wh >> 32) as u32, (wh & 0xFFFF_FFFF) as u32);
     let mut buf = vec![0u32; (w as usize) * (h as usize)];
     let ai_snap = ai_presence_handle().map(|ai| ai.snap(crate::report::boot_ms() as u64));
+    let bar_snap = input_bar_handle().map(|bar| bar.snap());
     {
         let mut t = term.lock().unwrap();
-        if ai_snap.is_some_and(|s| s.page == crate::ai_presence::Page::AiFullscreen) {
+        let ai_page = ai_snap.is_some_and(|s| s.page == crate::ai_presence::Page::AiFullscreen);
+        if ai_page {
             // 与前台 rasterize 同一分支规则：AI 页 = 占位空壳盖掉终端网格
+            // （AI 页不画快捷键行，同前台）
             t.render_ai_page(&mut buf, w, h);
         } else {
             t.render_into(&mut buf, w, h);
+            // 快捷键行：前台同规则 inset 叠输入栏高；修饰位无共享态按 0 画
+            t.render_keybar(&mut buf, w, h, crate::input_bar::HEIGHT_PX, 0);
+        }
+        // 输入栏：常驻 chrome，两页都画（同前台 rasterize 规则）
+        if let Some(bs) = &bar_snap {
+            t.render_inputbar(&mut buf, w, h, 0, bs);
         }
         if let Some(s) = ai_snap {
             let (gain, halo_gain) = crate::ai_presence::orb_gain(s.ai_running, s.pressed, s.page);
