@@ -38,5 +38,5 @@
 | `src/scroll.rs` | 5 | 5 | 0 | — |
 | `src/session_router.rs` | 10 | 9 | 1 | names |
 | `src/session.rs` | 8 | 8 | 0 | — |
-| `src/termview.rs` | 97 | 77 | 20 | FONT_CANDIDATES CJK_FONT_CANDIDATES load_cjk_font font_probe render_inputbar KEYBAR_LABEL BAR_BG BAR_FIELD_BG BAR_FIELD_FOCUS_BG BAR_TEXT BAR_PLACEHOLDER BAR_BORDER_L BAR_BORDER_R BAR_ACCENT BAR_GLOW BAR_SEND_TL BAR_SEND_BR BAR_SEND_TRI MAG_HALF_COLS MAG_HALF_ROWS |
+| `src/termview.rs` | 99 | 77 | 22 | FONT_CANDIDATES CJK_FONT_CANDIDATES load_cjk_font font_probe render_inputbar KEYBAR_LABEL BAR_BG BAR_FIELD_BG_L BAR_FIELD_BG_R BAR_FIELD_FOCUS_BG_L BAR_FIELD_FOCUS_BG_R BAR_TEXT BAR_PLACEHOLDER BAR_BORDER_L BAR_BORDER_R BAR_ACCENT BAR_GLOW BAR_SEND_TL BAR_SEND_BR BAR_SEND_TRI MAG_HALF_COLS MAG_HALF_ROWS |
 | `src/trace.rs` | 12 | 8 | 4 | TRACE_CAP format_tail dump_all dump_tail |

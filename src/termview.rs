@@ -1163,10 +1163,13 @@ impl TermView {
         let send_left = buf_w - input_bar::MARGIN_X_PX - input_bar::SEND_W_PX;
         let field_left = input_bar::MARGIN_X_PX;
         let field_w = send_left - input_bar::GAP_PX - field_left;
-        let field_bg = if snap.focused {
-            BAR_FIELD_FOCUS_BG
+        // 文本区内芯底色 = 横向暗色渐变（2026-08-31 用户实拍指正：kfmv4
+        // 内芯不是纯黑——左紫调 (29,23,57) → 右青调 (12,40,54)，是半透明
+        // 底叠 backdrop blur 把描边环境色晕进来的效果；取稍沉一档防塑料蓝）
+        let (field_bg_l, field_bg_r) = if snap.focused {
+            (BAR_FIELD_FOCUS_BG_L, BAR_FIELD_FOCUS_BG_R)
         } else {
-            BAR_FIELD_BG
+            (BAR_FIELD_BG_L, BAR_FIELD_BG_R)
         };
         // 聚焦 = 紫外发光（kfmv4 focus box-shadow 0 0 20px α0.35）
         if snap.focused {
@@ -1197,12 +1200,23 @@ impl TermView {
                 diag: true,
             },
         );
-        // 内芯：近黑底，左缘让 9（3px CSS 加粗描边）其余让 3
+        // 内芯：横向暗色渐变底，左缘让 9（3px CSS 加粗描边）其余让 3
         let core_x = field_left + 9;
         let core_y = field_top + 3;
         let core_w = field_w - 12;
         let core_h = field_h - 6;
-        frame.fill_round_rect(core_x, core_y, core_w, core_h, 36, field_bg);
+        frame.fill_round_rect_grad(
+            core_x,
+            core_y,
+            core_w,
+            core_h,
+            36,
+            GradSpec {
+                c1: field_bg_l,
+                c2: field_bg_r,
+                diag: false,
+            },
+        );
         // 顶部内阴影（kfmv4 inset 0 1px 2px 黑 0.2）
         frame.inner_top_veil(
             core_x,
@@ -1549,8 +1563,13 @@ pub const KEYBAR_LABEL: u32 = 0x00E8_EAED;
 /// 不再是截图取色近似：--primary #7c3aed / --accent #00d4ff / 栏带
 /// rgba(18,18,26,0.85) 叠 #0a0a0f / 文本区 rgba(10,10,15,0.8) 近黑）
 pub const BAR_BG: u32 = 0x0011_1119;
-pub const BAR_FIELD_BG: u32 = 0x000C_0C11;
-pub const BAR_FIELD_FOCUS_BG: u32 = 0x0013_141C;
+/// 内芯横向暗色渐变两端（左紫调 → 右青调，参考图实测 (29,23,57)→(12,40,54)
+/// 稍沉一档）——kfmv4 是半透明叠 blur 晕出的环境色，不是纯黑
+pub const BAR_FIELD_BG_L: u32 = 0x0018_1532;
+pub const BAR_FIELD_BG_R: u32 = 0x000D_2231;
+/// 聚焦亮一档（同向同幅）
+pub const BAR_FIELD_FOCUS_BG_L: u32 = 0x0020_1C40;
+pub const BAR_FIELD_FOCUS_BG_R: u32 = 0x0012_2B3E;
 pub const BAR_TEXT: u32 = 0x00E0_E0E0;
 /// rgba(224,224,224,0.4) 叠近黑底的事后色
 pub const BAR_PLACEHOLDER: u32 = 0x0061_6165;
