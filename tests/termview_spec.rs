@@ -1340,9 +1340,15 @@ fn spec_bar039_render_inputbar_带高从文本实测() {
         text: long.to_string(),
         focused: false,
         lines: 1, // stale 转写读数（后台 dump 实景）
+        cursor: 0,
+        handle: false,
     };
-    tv.render_inputbar(&mut buf, w, h, 0, &snap, false);
-    let band_top = h - kfm_na::input_bar::height_for_lines(3); // 三行带顶
+    tv.render_inputbar(&mut buf, w, h, 0, &snap, false, false);
+    // 期望带顶 = 实测行数派生（BAR-039 不变量：渲染带高 == 实测折行带高，
+    // 与 stale lines 无关；MAX_LINES 调 5 后此例 6 行实测量、带高封顶 5 行）
+    let measured = tv.bar_text_lines(long, w);
+    assert!(measured >= 3, "这段文本必须至少折 3 行（30 字×窄窗）");
+    let band_top = h - kfm_na::input_bar::height_for_lines(measured);
     let mid = (w / 2) as usize;
     let inside = (band_top + 1) as usize * w as usize + mid;
     let above = (band_top - 1) as usize * w as usize + mid;
@@ -1351,4 +1357,67 @@ fn spec_bar039_render_inputbar_带高从文本实测() {
         "带顶发丝线必须在（stale lines 不许压扁带高——两张皮实景）"
     );
     assert_eq!(buf[above], 0, "带顶之上是终端区，不许有栏带墨");
+}
+
+// ========== 光标 + 定位柄（2026-08-31 用户指认浏览器控件行为） ==========
+// 判卷点:聚焦+相位亮画光标,相位灭不画,失焦不画;定位柄只跟 handle 走;
+// 点按定位换算与渲染同几何(行向钳尾锚块,列向过半归右)
+
+#[test]
+fn spec_bar_caret_闪烁相位与定位柄() {
+    let (tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必成");
+    let (w, h) = (600u32, 1200u32);
+    let focused = kfm_na::input_bar::BarSnap {
+        text: String::new(),
+        focused: true,
+        lines: 1,
+        cursor: 0,
+        handle: true,
+    };
+    let mut on = vec![0u32; (w * h) as usize];
+    tv.render_inputbar(&mut on, w, h, 0, &focused, false, true);
+    let mut off = vec![0u32; (w * h) as usize];
+    tv.render_inputbar(&mut off, w, h, 0, &focused, false, false);
+    let caret_px = 1089 * w as usize + 120; // 单行带几何:行垂直中心×光标线
+    assert_ne!(on[caret_px], off[caret_px], "闪烁相位翻转必须改光标像素");
+    // 定位柄只跟 handle 走:关掉 handle 再倒一帧,柄区像素必须不同
+    let no_handle = kfm_na::input_bar::BarSnap {
+        handle: false,
+        ..focused.clone()
+    };
+    let mut noh = vec![0u32; (w * h) as usize];
+    tv.render_inputbar(&mut noh, w, h, 0, &no_handle, false, true);
+    let handle_px = 1185 * w as usize + 120; // 文本区下缘的柄身
+    assert_ne!(on[handle_px], noh[handle_px], "定位柄必须悬在文本区下缘");
+    // 失焦不画光标(与相位灭同画素)
+    let unfocused = kfm_na::input_bar::BarSnap {
+        focused: false,
+        ..focused.clone()
+    };
+    let mut unf = vec![0u32; (w * h) as usize];
+    tv.render_inputbar(&mut unf, w, h, 0, &unfocused, false, true);
+    assert_eq!(unf[caret_px], off[caret_px], "失焦无光标");
+}
+
+#[test]
+fn spec_bar_cursor_at_点按定位换算() {
+    let (tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必成");
+    assert_eq!(tv.bar_cursor_at("", 600, 100.0, 30.0), 0, "空文定位 = 0");
+    let short = "你好";
+    assert_eq!(tv.bar_cursor_at(short, 600, 0.0, 30.0), 0, "行首落 0");
+    assert_eq!(
+        tv.bar_cursor_at(short, 600, 10_000.0, 30.0),
+        2,
+        "行尾越界 = 末尾(cursor=字数,插入点在最后)"
+    );
+    // 长文折行:w=400 一行一字,尾锚显末 5 行——行向越往下全局下标越大
+    let long = "一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十";
+    let top = tv.bar_cursor_at(long, 400, 100.0, 0.0);
+    let mid = tv.bar_cursor_at(long, 400, 100.0, 200.0);
+    let bottom = tv.bar_cursor_at(long, 400, 100.0, 10_000.0);
+    assert!(
+        top < mid && mid < bottom,
+        "行向下标单调: {top}<{mid}<{bottom}"
+    );
+    assert_eq!(bottom, long.chars().count(), "末行中列以远 = 插入点在最后");
 }

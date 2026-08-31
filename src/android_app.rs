@@ -192,6 +192,8 @@ struct App {
     last_bar_snap: Option<crate::input_bar::BarSnap>,
     /// 上次量行时的屏宽（宽度变了要重新量行——捏合/旋转后折行数变）
     last_bar_w: Option<u32>,
+    /// 上一圈的光标闪烁相位（聚焦时相位翻转置脏，530ms 节拍）
+    last_caret_on: bool,
 }
 
 impl App {
@@ -533,6 +535,24 @@ impl App {
                         Some(crate::input_bar::BarHit::Field) => {
                             if let Some(bar) = &self.input_bar {
                                 bar.focus();
+                                // 点按定位光标（2026-08-31 浏览器控件行为）：
+                                // 屏坐标 → 文本区本地坐标 → char 下标
+                                // （term::bar_cursor_at 与渲染同几何）
+                                if let Some(w) = &self.window {
+                                    let s = w.inner_size();
+                                    let field_top =
+                                        s.height.saturating_sub(self.ime_bottom_px + bar_h) + 32;
+                                    let x_local = x - f64::from(crate::input_bar::MARGIN_X_PX + 40);
+                                    let y_local = y - f64::from(field_top);
+                                    if let Some(t) = self.term_handle() {
+                                        let text = bar.snap().text;
+                                        let idx = t
+                                            .lock()
+                                            .unwrap()
+                                            .bar_cursor_at(&text, s.width, x_local, y_local);
+                                        bar.set_cursor(idx);
+                                    }
+                                }
                             }
                             if let Some(w) = &self.window {
                                 w.set_ime_allowed(true);
@@ -746,6 +766,15 @@ impl App {
         if self.last_bar_snap.as_ref() != Some(&snap) {
             self.last_bar_snap = Some(snap);
             self.dirty = true;
+        }
+        // 光标闪烁相位逐圈比对置脏（聚焦时 530ms 相位翻转不经触摸也要画帧）
+        if bar.is_focused() {
+            let on = (crate::report::boot_ms() as u64 / crate::input_bar::CARET_BLINK_MS)
+                .is_multiple_of(2);
+            if on != self.last_caret_on {
+                self.last_caret_on = on;
+                self.dirty = true;
+            }
         }
     }
 
@@ -1465,6 +1494,7 @@ impl App {
         ime_bottom_px: u32,
         ai_snap: Option<crate::ai_presence::PresenceSnap>,
         bar_snap: Option<&crate::input_bar::BarSnap>,
+        caret_on: bool,
         buf: &mut [u32],
         w: u32,
         h: u32,
@@ -1492,10 +1522,11 @@ impl App {
             }
             // 全局输入栏（常驻 chrome：任何会话下都在，§二——AI 页也画）。
             // 压底紧贴键盘（栏带 = 屏底 - inset - 栏高）；sending 图标态
-            // 跟 AI 运行态硬切（kfmv4 .ai-send-btn.sending ▶ ↔ ⏸）
+            // 跟 AI 运行态硬切（kfmv4 .ai-send-btn.sending ▶ ↔ ⏸）；
+            // caret_on = 光标闪烁相位（draw_frame 按 CARET_BLINK_MS 算好传入）
             if let Some(bs) = bar_snap {
                 let sending = ai_snap.is_some_and(|s| s.ai_running);
-                term.render_inputbar(buf, w, h, ime_bottom_px, bs, sending);
+                term.render_inputbar(buf, w, h, ime_bottom_px, bs, sending, caret_on);
             }
             // 光球（常驻 chrome：画在终端网格/AI 页之后，两页都在）。
             // 四态增益硬切读 ai_presence::orb_gain（闲/运行/pressed/AI页）
@@ -1554,6 +1585,9 @@ impl App {
         if TERMINAL_MODE {
             crate::gate::note_frame_size(w, h); // 给后台倒帧值守记账
             let mods = self.modifiers.as_ref().map_or(0, |m| m.peek());
+            // 光标闪烁相位（聚焦时每半周期翻转要重画——置脏在 poll_input_bar）
+            let caret_on = (crate::report::boot_ms() as u64 / crate::input_bar::CARET_BLINK_MS)
+                .is_multiple_of(2);
             let mut tg = th.as_ref().map(|a| a.lock().unwrap());
             Self::rasterize(
                 tg.as_mut().map(|t| &mut **t),
@@ -1562,6 +1596,7 @@ impl App {
                 self.ime_bottom_px,
                 self.last_ai_snap,
                 self.last_bar_snap.as_ref(),
+                caret_on,
                 &mut buf,
                 w,
                 h,

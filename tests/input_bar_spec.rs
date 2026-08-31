@@ -198,3 +198,58 @@ fn hit_band_grows_with_lines() {
         "单行高时该位置还在终端区——尺必须跟当前行数走"
     );
 }
+
+// ========== 光标插入点 + 定位柄（2026-08-31 用户指认浏览器控件行为） ==========
+// 判卷点:插入点围绕 cursor 转(中文不撕字节)/退格删 cursor 前一字/
+// 点按定位钳边界/定位柄生命周期(定位亮,打字·清空·发送收)
+
+#[test]
+fn cursor_insert_mid_string_not_byte_tear() {
+    let bar = InputBarState::new();
+    bar.insert_text("中文abc");
+    bar.set_cursor(1); // 「中」之后
+    assert_eq!(bar.cursor(), 1);
+    bar.insert_text("X");
+    assert_eq!(bar.snap().text, "中X文abc", "插入点在中间,不是撕字节追加");
+    assert_eq!(bar.cursor(), 2, "cursor 指下一个字的落点");
+}
+
+#[test]
+fn cursor_backspace_deletes_before_cursor() {
+    let bar = InputBarState::new();
+    bar.insert_text("中文");
+    bar.set_cursor(1);
+    bar.backspace();
+    assert_eq!(bar.snap().text, "文", "删的是 cursor 前一个字");
+    assert_eq!(bar.cursor(), 0);
+    bar.backspace();
+    assert_eq!(bar.snap().text, "文", "cursor=0 无可删,no-op 不炸");
+}
+
+#[test]
+fn cursor_set_clamps_and_handle_lifecycle() {
+    let bar = InputBarState::new();
+    bar.insert_text("abc");
+    bar.set_cursor(99);
+    assert_eq!(bar.cursor(), 3, "越界钳到末尾");
+    assert!(bar.snap().handle, "点按定位 → 定位柄亮");
+    bar.insert_text("d");
+    assert!(!bar.snap().handle, "打字收起定位柄");
+    bar.set_cursor(0);
+    assert!(bar.snap().handle);
+    bar.clear();
+    assert_eq!(bar.cursor(), 0);
+    assert!(!bar.snap().handle, "清空复位定位柄");
+}
+
+#[test]
+fn cursor_submit_resets() {
+    let bar = InputBarState::new();
+    bar.insert_text("待发送");
+    bar.set_cursor(2);
+    assert_eq!(bar.submit().as_deref(), Some("待发送"));
+    let snap = bar.snap();
+    assert_eq!(snap.text, "");
+    assert_eq!(bar.cursor(), 0, "发送后光标复位");
+    assert!(!snap.handle);
+}

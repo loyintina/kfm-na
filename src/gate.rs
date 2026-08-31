@@ -138,10 +138,13 @@ pub fn dump_now(dir: &str) {
             t.render_keybar(&mut buf, w, h, bar_h, 0);
         }
         // 输入栏：常驻 chrome，两页都画（同前台 rasterize 规则）；
-        // sending 图标态跟 AI 运行态硬切（同前台）
+        // sending 图标态跟 AI 运行态硬切；光标闪烁相位按节拍算
+        // （dump 是快照，相位取倒帧那一刻，与前台同尺）
         if let Some(bs) = &bar_snap {
             let sending = ai_snap.is_some_and(|s| s.ai_running);
-            t.render_inputbar(&mut buf, w, h, 0, bs, sending);
+            let caret_on = (crate::report::boot_ms() as u64 / crate::input_bar::CARET_BLINK_MS)
+                .is_multiple_of(2);
+            t.render_inputbar(&mut buf, w, h, 0, bs, sending, caret_on);
         }
         if let Some(s) = ai_snap {
             let (gain, halo_gain) = crate::ai_presence::orb_gain(s.ai_running, s.pressed, s.page);

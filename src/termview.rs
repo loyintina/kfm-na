@@ -1118,12 +1118,16 @@ impl TermView {
     /// 135° 渐变 + 顶部玻璃高光（inset 白 0.15）+ 紫色投影
     /// （0 4px 12px α0.3）+ 白 ▶（sending = ⏸ 双竖条，跟 AI 运行态硬切）。
     /// 全部图元 SDF 抗锯齿。
+    /// 光标（2026-08-31 浏览器控件行为对齐）：聚焦画竖线光标，caret_on =
+    /// 闪烁相位（调用方按 CARET_BLINK_MS 算好传入，渲染纯函数）；定位柄
+    /// 蓝色下坠柄跟 snap.handle 走。
     /// textarea（2026-08-31 移动端全量复刻）：带高随行数长（覆盖式悬浮——
     /// 栏带向上浮盖终端底部行，终端网格几何不动）；文本折行（wrap_starts）
     /// 多行绘制，超 MAX_LINES 尾锚显最后几行。**折行数由本函数从
     /// snap.text 实测量出**（渲染几何与所画文本同源——后台 dump 无 poll
     /// 写回也不会带高/文本两张皮，2026-08-31 实拍定罪）；snap.lines 只
     /// 服务触摸命中（前台 poll 写回，眼手同尺）
+    #[allow(clippy::too_many_arguments)]
     pub fn render_inputbar(
         &self,
         buf: &mut [u32],
@@ -1132,6 +1136,7 @@ impl TermView {
         ime_bottom: u32,
         snap: &crate::input_bar::BarSnap,
         sending: bool,
+        caret_on: bool,
     ) {
         use crate::input_bar;
         let min_w = 2 * input_bar::MARGIN_X_PX + input_bar::GAP_PX + input_bar::SEND_W_PX + 40;
@@ -1252,6 +1257,12 @@ impl TermView {
         // 文字左内缩 ~58（draw 族自带 18 起笔）
         let text_cx = field_left + 40;
         let text_cw = field_w - 40 - 12;
+        // 折行块几何（画字与光标定位同用）：垂直居中成块，超 MAX_LINES
+        // 尾锚显最后几行（手动滚动缺口记档案）
+        let show = starts.len().min(input_bar::MAX_LINES as usize);
+        let vis = &starts[starts.len() - show..];
+        let block_h = show as u32 * input_bar::LINE_STEP_PX;
+        let block_top = field_top + (field_h.saturating_sub(block_h)) / 2;
         if snap.text.is_empty() {
             self.draw_text_left(
                 &mut frame,
@@ -1265,13 +1276,8 @@ impl TermView {
             );
         } else {
             // textarea 折行（2026-08-31 移动端全量复刻）：用函数头量好的
-            // items/starts（同一次量宽，几何与画字同源）；垂直居中成块画，
-            // 超 MAX_LINES 尾锚显最后几行（手动滚动缺口记档案）。
+            // items/starts（同一次量宽，几何与画字同源）。
             // 字号恒定 BAR_TEXT_PX，行高 LINE_STEP_PX
-            let show = starts.len().min(input_bar::MAX_LINES as usize);
-            let vis = &starts[starts.len() - show..];
-            let block_h = show as u32 * input_bar::LINE_STEP_PX;
-            let block_top = field_top + (field_h.saturating_sub(block_h)) / 2;
             for (row, &st) in vis.iter().enumerate() {
                 let end = if row + 1 < vis.len() {
                     vis[row + 1]
@@ -1290,10 +1296,49 @@ impl TermView {
                 );
             }
         }
-        // 发送钮：先紫色投影（kfmv4 0 4px 12px α0.3），再 135° 渐变本体，
+        // 光标（2026-08-31 用户指认浏览器控件行为）：聚焦才画，竖线一条，
+        // 530ms 相位闪烁——相位由调用方算好传入（caret_on，渲染保持纯函数，
+        // dump 快照相位准）；点按定位柄 = 光标线下方蓝色下坠柄，点按定位
+        // 才出现，打字/清空/发送收起（状态核管）
+        if snap.focused && caret_on {
+            let cursor = snap.cursor.min(items.len());
+            // cursor 所在行：可见行里最后一个起点 ≤ cursor 的行
+            let mut row = 0usize;
+            for (k, &st) in vis.iter().enumerate() {
+                if st <= cursor {
+                    row = k;
+                } else {
+                    break;
+                }
+            }
+            let row_start = vis[row];
+            let row_end = if row + 1 < vis.len() {
+                vis[row + 1]
+            } else {
+                items.len()
+            };
+            let x_off: f32 = items[row_start..cursor.min(row_end)]
+                .iter()
+                .map(|i| i.2)
+                .sum();
+            let row_cy =
+                block_top + row as u32 * input_bar::LINE_STEP_PX + input_bar::LINE_STEP_PX / 2;
+            let caret_x = text_cx + 18 + x_off as u32;
+            frame.fill_round_rect(caret_x, row_cy - 26, 4, 52, 2, BAR_TEXT);
+            if snap.handle {
+                // 定位柄：蓝色下坠柄（品牌蓝同选区），悬在文本区下缘
+                let hx = (caret_x + 3).saturating_sub(16);
+                let hy = field_top + field_h + 1;
+                frame.fill_round_rect(hx, hy, 32, 32, 10, SELECT_BG);
+                frame.fill_triangle_up(hx + 16, hy - 1, 20, 12, SELECT_BG);
+            }
+        }
+        // 发送钮：kfmv4 42×42 方钮 align-self:center——定尺居中，不随行数
+        // 拉长（2026-08-31 用户指认「内容多的情况下按钮应该保持不动或者
+        // 居中」）。先紫色投影（kfmv4 0 4px 12px α0.3），再 135° 渐变本体，
         // 再顶部玻璃高光（inset 白 0.15），最后白 ▶
-        let send_top = field_top + 8;
-        let send_h = field_h - 16;
+        let send_h = 140u32;
+        let send_top = top + (bar_h - send_h) / 2;
         frame.glow_round_rect(
             send_left,
             send_top,
@@ -1360,6 +1405,50 @@ impl TermView {
             .map(|i| i.2)
             .collect();
         wrap_starts(&widths, avail).len() as u32
+    }
+
+    /// 点按定位换算（2026-08-31 浏览器控件行为对齐）：文本区本地坐标
+    /// （左上角原点）→ 光标 char 下标。与 render_inputbar 同一套量宽折行
+    /// 几何（眼手同尺）；列向「过半归右」就近取字；行向钳在可见尾锚块内。
+    /// 注：tofu 字（双字体都缺）不计入 items——定位与渲染同一对齐口径
+    pub fn bar_cursor_at(&self, text: &str, buf_w: u32, x_local: f64, y_local: f64) -> usize {
+        use crate::input_bar;
+        let items = self.measure_items(text, BAR_TEXT_PX);
+        if items.is_empty() {
+            return 0;
+        }
+        let widths: Vec<f32> = items.iter().map(|i| i.2).collect();
+        let avail = input_bar::text_avail_w(buf_w).unwrap_or(1.0);
+        let starts = wrap_starts(&widths, avail);
+        let n = starts.len();
+        let show = n.min(input_bar::MAX_LINES as usize);
+        let bar_h = input_bar::height_for_lines(n as u32);
+        let field_h = bar_h - 64;
+        let block_h = show as u32 * input_bar::LINE_STEP_PX;
+        let block_top = (field_h.saturating_sub(block_h)) / 2;
+        // 行：尾锚块内行号 k，全局行号 = 滚出视野的头部分行数 + k
+        let k = if y_local >= f64::from(block_top) {
+            (((y_local - f64::from(block_top)) / f64::from(input_bar::LINE_STEP_PX)) as usize)
+                .min(show - 1)
+        } else {
+            0
+        };
+        let grow = n - show;
+        let row_start = starts[grow + k];
+        let row_end = if grow + k + 1 < n {
+            starts[grow + k + 1]
+        } else {
+            items.len()
+        };
+        // 列：累计步进宽，过半归右（浏览器 tap 落点就近原则）
+        let mut pen = 18.0f32;
+        for (i, item) in items[row_start..row_end].iter().enumerate() {
+            if x_local < f64::from(pen + item.2 * 0.5) {
+                return row_start + i;
+            }
+            pen += item.2;
+        }
+        row_end
     }
 
     /// AI 全屏页占位空壳（ai-presence 期 0 组件一；合成网格是组件④）。
@@ -2027,6 +2116,22 @@ impl Frame<'_> {
         let dst = &mut self.buf[(y * self.w + x) as usize];
         *dst = blend(fg, *dst, a);
     }
+
+    /// 顶点向上的实心三角（定位柄上尖；硬边与 ▶ 同风格，界内裁剪）
+    fn fill_triangle_up(&mut self, cx: u32, y0: u32, w: u32, h: u32, color: u32) {
+        let half_w = (w / 2) as i64;
+        let (cx, y0) = (i64::from(cx), i64::from(y0));
+        for row in 0..i64::from(h) {
+            // 逐行线性展开：顶行一点，底行满宽
+            let half = half_w * (row + 1) / i64::from(h);
+            for x in (cx - half)..=(cx + half) {
+                let y = y0 + row;
+                if x >= 0 && y >= 0 && x < i64::from(self.w) && y < i64::from(self.h) {
+                    self.buf[(y * i64::from(self.w) + x) as usize] = color;
+                }
+            }
+        }
+    }
 }
 
 /// 按覆盖率 a（0-255）把 fg 混合到 dst 上（逐通道线性插值）
@@ -2143,7 +2248,9 @@ pub trait TermEmu: Send {
     fn render_ai_page(&self, buf: &mut [u32], w: u32, h: u32);
     /// 全局输入栏 chrome（期 0 组件三，android_app rasterize 调用方）：
     /// 压底紧贴键盘（栏带 = 屏底 - inset - 栏高），任何会话页都画；
-    /// sending = 发送钮图标态（▶ ↔ ⏸，跟 AI 运行态硬切）
+    /// sending = 发送钮图标态（▶ ↔ ⏸，跟 AI 运行态硬切）；
+    /// caret_on = 光标闪烁相位（CARET_BLINK_MS 节拍，调用方算好传入）
+    #[allow(clippy::too_many_arguments)]
     fn render_inputbar(
         &self,
         buf: &mut [u32],
@@ -2152,10 +2259,14 @@ pub trait TermEmu: Send {
         ime_bottom: u32,
         snap: &crate::input_bar::BarSnap,
         sending: bool,
+        caret_on: bool,
     );
     /// 量输入栏文本折行数（android_app poll_input_bar 调用方：文本/宽度
     /// 变了先量行 set_lines 写回状态核，再 snap 再渲染——眼手同尺单源）
     fn bar_text_lines(&self, text: &str, buf_w: u32) -> u32;
+    /// 点按定位换算（android_app 触摸 Field 调用方：文本区本地坐标 →
+    /// 光标 char 下标，与渲染同几何）
+    fn bar_cursor_at(&self, text: &str, buf_w: u32, x_local: f64, y_local: f64) -> usize;
     #[allow(clippy::too_many_arguments)]
     fn render_orb(
         &self,
@@ -2217,11 +2328,15 @@ impl TermEmu for TermView {
         ime_bottom: u32,
         snap: &crate::input_bar::BarSnap,
         sending: bool,
+        caret_on: bool,
     ) {
-        TermView::render_inputbar(self, buf, w, h, ime_bottom, snap, sending)
+        TermView::render_inputbar(self, buf, w, h, ime_bottom, snap, sending, caret_on)
     }
     fn bar_text_lines(&self, text: &str, buf_w: u32) -> u32 {
         TermView::bar_text_lines(self, text, buf_w)
+    }
+    fn bar_cursor_at(&self, text: &str, buf_w: u32, x_local: f64, y_local: f64) -> usize {
+        TermView::bar_cursor_at(self, text, buf_w, x_local, y_local)
     }
     #[allow(clippy::too_many_arguments)]
     fn render_orb(

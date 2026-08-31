@@ -6,7 +6,8 @@
 //! 终端区失焦；聚焦时键盘按键全归输入栏（分流在壳层 drain_ime_inject），
 //! Enter = 发送（壳层把 enter() 取走的文本推进 AiSendSink）。
 //!
-//! v1 从简：无光标移动，文本只追加+退格；发送后保持聚焦（手机聊天惯例）。
+//! v1 从简：无选区无横滚，编辑 = 光标插入点（2026-08-31 升级：点按定位 +
+//! 插入 + 定位柄，浏览器 textarea 行为对齐）；发送后保持聚焦（手机聊天惯例）。
 //! 形态判别同 AiPresenceState：Sync 内部可变（Mutex），共享实例直挂服务键。
 
 use std::sync::Mutex;
@@ -15,8 +16,11 @@ use std::sync::Mutex;
 /// 文本区浮在带内，不贴带边——2026-08-31 样式修订，参考图实测比）
 /// 这是单行（默认）带高；多行 textarea 用 height_for_lines() 算当前带高。
 pub const HEIGHT_PX: u32 = 220;
-/// textarea 行数上限：超出行数时栏不再长高，文本区内部滚动（尾锚显最后几行）
-pub const MAX_LINES: u32 = 3;
+/// textarea 行数上限：超出行数时栏不再长高，文本区内部滚动（尾锚显最后几行）。
+/// kfmv4 实测参照：浏览器里能见到 6~7 行（用户 2026-08-31 指认「na 只有 3 行
+/// 就超了」）；na 字号大（~40px 物理 vs kfmv4 有效 ~22px），取 5 行 = 带高
+/// 472px 封顶，再多就要吃掉半屏终端了
+pub const MAX_LINES: u32 = 5;
 /// 每多一行带高增量（px）= 行高：字号 ~40px × 1.5（kfmv4 line-height 直译）
 pub const LINE_STEP_PX: u32 = 63;
 
@@ -34,6 +38,10 @@ pub fn text_avail_w(buf_w: u32) -> Option<f32> {
     let field_w = buf_w.checked_sub(2 * MARGIN_X_PX + SEND_W_PX + GAP_PX)?;
     Some(field_w.saturating_sub(70) as f32)
 }
+
+/// 光标闪烁半周期（ms）：Android 系统输入光标节拍——亮 530 灭 530。
+/// 调用方按 (boot_ms / CARET_BLINK_MS) % 2 算相位传渲染
+pub const CARET_BLINK_MS: u64 = 530;
 /// 发送钮宽（px）：右端固定宽圆角方块，拇指可击
 pub const SEND_W_PX: u32 = 140;
 /// 栏左右离屏边留白（px）——参考样式：文本区/发送钮都不贴屏边
@@ -84,6 +92,10 @@ pub struct BarSnap {
     pub focused: bool,
     /// 当前折行数（渲染层量宽断行后写回，眼手同尺单源）
     pub lines: u32,
+    /// 光标插入点（char 下标，0=最前，len=最后）
+    pub cursor: usize,
+    /// 定位柄可见（点按定位后 true，打字/清空/发送收起——浏览器控件行为）
+    pub handle: bool,
 }
 
 struct Inner {
@@ -91,6 +103,10 @@ struct Inner {
     focused: bool,
     /// 当前折行数（渲染层量宽断行后写回；触摸命中/闸门 dump 读同一份）
     lines: u32,
+    /// 光标插入点（char 下标；插入/退格围绕它转）
+    cursor: usize,
+    /// 定位柄可见（点按定位 → true；打字/清空/发送 → false）
+    handle: bool,
     /// 发送出口（壳层装配时装入：接脑 + run_start/run_end）。
     /// 触摸发送钮 / IME Enter / 闸门注入 submit 全走这一个口（D9 同源）
     sender: Option<Sender>,
@@ -112,6 +128,8 @@ impl InputBarState {
                 text: String::new(),
                 focused: false,
                 lines: 1,
+                cursor: 0,
+                handle: false,
                 sender: None,
             }),
         }
@@ -123,6 +141,8 @@ impl InputBarState {
             text: g.text.clone(),
             focused: g.focused,
             lines: g.lines,
+            cursor: g.cursor,
+            handle: g.handle,
         }
     }
 
@@ -144,19 +164,74 @@ impl InputBarState {
         self.inner.lock().unwrap().focused
     }
 
-    /// 追加文本（IME commitText / 物理字符键；v1 无光标只追加）
+    /// 光标插入点（char 下标，读数）
+    pub fn cursor(&self) -> usize {
+        self.inner.lock().unwrap().cursor
+    }
+
+    /// 点按定位光标（触摸端把点按换算成 char 下标后走这里；越界钳到末尾）。
+    /// 定位柄亮起——浏览器控件行为：点到的位置出现光标+下坠柄，打字才收
+    pub fn set_cursor(&self, pos: usize) {
+        let mut g = self.inner.lock().unwrap();
+        g.cursor = pos.min(g.text.chars().count());
+        g.handle = true;
+    }
+
+    /// 在光标插入点插文本（IME commitText / 物理字符键）。打字收起定位柄；
+    /// cursor 恒指「下一个字的落点」——非法越界（状态核外改字）自愈到末尾
     pub fn insert_text(&self, s: &str) {
-        self.inner.lock().unwrap().text.push_str(s);
+        let mut g = self.inner.lock().unwrap();
+        let len = g.text.chars().count();
+        if g.cursor >= len {
+            g.cursor = len; // 自愈
+            g.text.push_str(s);
+            g.cursor += s.chars().count();
+        } else {
+            let byte_at = |i: usize| {
+                g.text
+                    .char_indices()
+                    .nth(i)
+                    .map(|(b, _)| b)
+                    .unwrap_or(g.text.len())
+            };
+            let at = byte_at(g.cursor);
+            g.text.insert_str(at, s);
+            g.cursor += s.chars().count();
+        }
+        g.handle = false; // 打字收起定位柄（浏览器控件行为）
     }
 
-    /// 退格删一整字符（char 边界安全——中文不是撕字节）
+    /// 退格删光标前一个字符（char 边界安全——中文不是撕字节）；
+    /// 光标在最前（0）无可删 = no-op
     pub fn backspace(&self) {
-        self.inner.lock().unwrap().text.pop();
+        let mut g = self.inner.lock().unwrap();
+        if g.cursor == 0 {
+            return;
+        }
+        let idx = g.cursor - 1;
+        let start = g
+            .text
+            .char_indices()
+            .nth(idx)
+            .map(|(b, _)| b)
+            .unwrap_or(g.text.len());
+        let end = g
+            .text
+            .char_indices()
+            .nth(idx + 1)
+            .map(|(b, _)| b)
+            .unwrap_or(g.text.len());
+        g.text.replace_range(start..end, "");
+        g.cursor = idx;
+        g.handle = false; // 打字（含删除）收起定位柄
     }
 
-    /// 清空栏（注入通道 clear；保留聚焦态）
+    /// 清空栏（注入通道 clear；保留聚焦态，光标/定位柄一并复位）
     pub fn clear(&self) {
-        self.inner.lock().unwrap().text.clear();
+        let mut g = self.inner.lock().unwrap();
+        g.text.clear();
+        g.cursor = 0;
+        g.handle = false;
     }
 
     /// Enter = 发送：取走文本（清空栏），空文本 = None（无发送）。
@@ -166,6 +241,8 @@ impl InputBarState {
         if g.text.is_empty() {
             return None;
         }
+        g.cursor = 0;
+        g.handle = false;
         Some(std::mem::take(&mut g.text))
     }
 
@@ -183,6 +260,8 @@ impl InputBarState {
             if g.text.is_empty() {
                 return None;
             }
+            g.cursor = 0;
+            g.handle = false;
             (std::mem::take(&mut g.text), g.sender.clone())
         };
         if let Some(s) = sender {
