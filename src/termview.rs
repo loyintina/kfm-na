@@ -1219,7 +1219,7 @@ impl TermView {
         fg: u32,
     ) {
         let items = self.measure_items(text, px);
-        self.draw_items_left(frame, &items, cx, cw, cy, rh, px, fg);
+        self.draw_items_left(frame, &items, cx, cw, cy, rh, px, fg, None);
     }
 
     /// 画一串已量宽的字符（折行后逐行画走这里）：左对齐内缩 18 +
@@ -1235,6 +1235,7 @@ impl TermView {
         rh: u32,
         px: f32,
         fg: u32,
+        clip_y: Option<(i32, i32)>,
     ) {
         let Some(hm) = self.font.horizontal_line_metrics(px) else {
             return;
@@ -1251,6 +1252,11 @@ impl TermView {
             for gy in 0..m.height as u32 {
                 let y = top as i64 + i64::from(gy);
                 if y < 0 || y >= i64::from(frame.h) {
+                    continue;
+                }
+                if let Some((cy0, cy1)) = clip_y
+                    && (y < i64::from(cy0) || y >= i64::from(cy1))
+                {
                     continue;
                 }
                 for gx in 0..m.width as u32 {

@@ -90,8 +90,6 @@ struct BarTouch {
     start_y: f64,
     last_y: f64,
     dragged: bool,
-    /// 像素余数挂账（scroll.rs 同款:慢拖累计成行）
-    acc_px: f64,
 }
 
 /// 会话健康牌（断线重连 2026-08-21，按名字记账——槽位随切换翻面,
@@ -332,7 +330,6 @@ impl App {
                         start_y: y,
                         last_y: y,
                         dragged: false,
-                        acc_px: 0.0,
                     });
                     return;
                 }
@@ -414,16 +411,11 @@ impl App {
                         bt.dragged = true;
                     }
                     if bt.dragged {
-                        bt.acc_px += dy;
-                        let lines = (bt.acc_px / f64::from(crate::input_bar::LINE_STEP_PX)) as i32;
-                        if lines != 0 {
-                            bt.acc_px -=
-                                f64::from(lines) * f64::from(crate::input_bar::LINE_STEP_PX);
-                            if let Some(bar) = &self.input_bar {
-                                bar.scroll_by(-lines);
-                            }
-                            self.dirty = true;
+                        // 像素级 1:1 跟手:手指位移直进视口偏移(下拖=回头部)
+                        if let Some(bar) = &self.input_bar {
+                            bar.scroll_by_px(-(dy as i32));
                         }
+                        self.dirty = true;
                     }
                 }
                 // 指头坐标跟新（捏合测距用）
@@ -556,105 +548,62 @@ impl App {
                     self.dirty = true;
                     return;
                 }
-                // 输入栏手势：拖动(超 slop)滚动文本视口；未拖动抬手 = 点按
-                // （文本区=聚焦+定位+弹键盘，发送钮=submit；Cancelled 丢弃）
-                if let Some(mut bt) = self.inputbar_touch.take() {
-                    match phase {
-                        TouchPhase::Moved => {
-                            let dy = y - bt.last_y;
-                            bt.last_y = y;
-                            if !bt.dragged && (y - bt.start_y).abs() > crate::scroll::TAP_SLOP_PX {
-                                bt.dragged = true;
-                            }
-                            if bt.dragged {
-                                // 手指上拖 = 内容上移看尾部;下拖 = 回头部。
-                                // 像素余数挂账(scroll.rs 同款),按行高折行
-                                bt.acc_px += dy;
-                                let lines =
-                                    (bt.acc_px / f64::from(crate::input_bar::LINE_STEP_PX)) as i32;
-                                if lines != 0 {
-                                    bt.acc_px -= f64::from(lines)
-                                        * f64::from(crate::input_bar::LINE_STEP_PX);
-                                    if let Some(bar) = &self.input_bar {
-                                        bar.scroll_by(-lines);
-                                    }
-                                    self.dirty = true;
-                                }
-                            }
-                            self.inputbar_touch = Some(bt); // 手势存活,放回
-                            return;
-                        }
-                        TouchPhase::Started => {
-                            return; // 编译期穷尽;运行时 Started 在上文已登记返回
-                        }
-                        TouchPhase::Cancelled => {
-                            return; // 已 take,弃
-                        }
-                        TouchPhase::Ended => {
-                            let dragged = bt.dragged;
-                            if dragged {
-                                self.dirty = true;
-                                return; // 拖动收尾不当点按
-                            }
-                            let bar_h = self.cur_bar_h();
-                            let action = self.window.as_ref().and_then(|w| {
-                                let s = w.inner_size();
-                                crate::input_bar::hit(
-                                    x,
-                                    y,
-                                    s.width,
-                                    s.height,
-                                    self.ime_bottom_px,
-                                    bar_h,
-                                )
-                            });
-                            match action {
-                                Some(crate::input_bar::BarHit::Field) => {
-                                    if let Some(bar) = &self.input_bar {
-                                        bar.focus();
-                                        // 点按定位光标（2026-08-31 浏览器控件行为）：
-                                        // 屏坐标 → 文本区本地坐标 → char 下标
-                                        // （term::bar_cursor_at 与渲染同几何）
-                                        if let Some(w) = &self.window {
-                                            let s = w.inner_size();
-                                            let field_top =
-                                                s.height.saturating_sub(self.ime_bottom_px + bar_h)
-                                                    + 32;
-                                            let x_local =
-                                                x - f64::from(crate::input_bar::MARGIN_X_PX + 40);
-                                            let y_local = y - f64::from(field_top);
-                                            if let Some(t) = self.term_handle() {
-                                                let text = bar.snap().text;
-                                                let idx = t.lock().unwrap().bar_cursor_at(
-                                                    &text, s.width, x_local, y_local,
-                                                );
-                                                bar.set_cursor(idx);
-                                            }
-                                        }
-                                    }
-                                    if let Some(w) = &self.window {
-                                        w.set_ime_allowed(true);
-                                    }
-                                    if let Some(insets) = &self.ime_insets {
-                                        insets.force_show();
-                                    }
-                                    crate::report::report("ime", "输入栏聚焦（弹键盘）");
-                                }
-                                Some(crate::input_bar::BarHit::Send) => {
-                                    if let Some(bar) = &self.input_bar {
-                                        let sent = bar.submit();
-                                        crate::report::report(
-                                            "ai",
-                                            &format!("输入栏发送: {sent:?}"),
-                                        );
-                                    }
-                                }
-                                None => {}
-                            }
-                            self.dirty = true;
-                            return;
-                        }
+                // 输入栏手势收尾(Ended|Cancelled 臂):拖过 = 滚动收尾不当
+                // 点按;未拖 = 点按(文本区聚焦+定位+弹键盘;发送钮=submit)
+                if let Some(bt) = self.inputbar_touch.take() {
+                    if phase == TouchPhase::Cancelled {
+                        return; // 取消:丢弃
                     }
+                    if bt.dragged {
+                        self.dirty = true;
+                        return; // 拖动收尾不当点按
+                    }
+                    let bar_h = self.cur_bar_h();
+                    let action = self.window.as_ref().and_then(|w| {
+                        let s = w.inner_size();
+                        crate::input_bar::hit(x, y, s.width, s.height, self.ime_bottom_px, bar_h)
+                    });
+                    match action {
+                        Some(crate::input_bar::BarHit::Field) => {
+                            if let Some(bar) = &self.input_bar {
+                                bar.focus();
+                                // 点按定位光标（浏览器控件行为）：
+                                // 屏坐标 → 文本区本地坐标 → char 下标
+                                // （term::bar_cursor_at 与渲染同几何）
+                                if let Some(w) = &self.window {
+                                    let s = w.inner_size();
+                                    let field_top =
+                                        s.height.saturating_sub(self.ime_bottom_px + bar_h) + 32;
+                                    let x_local = x - f64::from(crate::input_bar::MARGIN_X_PX + 40);
+                                    let y_local = y - f64::from(field_top);
+                                    if let Some(t) = self.term_handle() {
+                                        let text = bar.snap().text;
+                                        let idx = t
+                                            .lock()
+                                            .unwrap()
+                                            .bar_cursor_at(&text, s.width, x_local, y_local);
+                                        bar.set_cursor(idx);
+                                    }
+                                }
+                            }
+                            if let Some(w) = &self.window {
+                                w.set_ime_allowed(true);
+                            }
+                            if let Some(insets) = &self.ime_insets {
+                                insets.force_show();
+                            }
+                            crate::report::report("ime", "输入栏聚焦（弹键盘）");
+                        }
+                        Some(crate::input_bar::BarHit::Send) => {
+                            if let Some(bar) = &self.input_bar {
+                                let sent = bar.submit();
+                                crate::report::report("ai", &format!("输入栏发送: {sent:?}"));
+                            }
+                        }
+                        None => {}
+                    }
+                    self.dirty = true;
+                    return;
                 }
                 // 快捷键行手势：抬手命中发键（Cancelled 不发）
                 if self.bar_touch.take().is_some() {

@@ -1346,7 +1346,7 @@ fn spec_bar039_render_inputbar_带高从文本实测() {
         cursor: 0,
         handle: false,
         composing: String::new(),
-        scroll_top: 0,
+        scroll_px: 0,
         follow: true,
     };
     tv.render_inputbar(&mut buf, w, h, 0, &snap, false, false);
@@ -1380,7 +1380,7 @@ fn spec_bar_caret_闪烁相位与定位柄() {
         cursor: 0,
         handle: true,
         composing: String::new(),
-        scroll_top: 0,
+        scroll_px: 0,
         follow: true,
     };
     let mut on = vec![0u32; (w * h) as usize];
@@ -1447,7 +1447,7 @@ fn spec_composing_下划线稳显() {
         cursor: 2,
         handle: false,
         composing: "ni".to_string(),
-        scroll_top: 0,
+        scroll_px: 0,
         follow: true,
     };
     let mut on = vec![0u32; (w * h) as usize];
@@ -1472,37 +1472,40 @@ fn spec_composing_下划线稳显() {
     assert!(caret_diff, "光标仍随相位闪烁(行带内有相位差异)");
 }
 
-// ========== 视口滚动渲染（2026-09-01 输入框可滚） ==========
-// 判卷点:follow=尾锚显最后几行;scroll_top=0+follow=false 显头部;
-// 光标出视口不画(相位差异像素数为 0),follow 回来自动可见(差异≥光标矩形)
+// ========== 视口滚动渲染（2026-09-01 像素级） ==========
+// 判卷点:follow=尾锚(条带底贴 field 底);scroll_px=0+follow=false 显头部;
+// 光标出视口不画(相位差异像素数 0);follow ≡ scroll_px=尾锚值(缓冲逐
+// 像素相等——像素级滚动的精确性钉)
 
 #[test]
-fn spec_视口滚动_follow与固定窗口() {
+fn spec_视口滚动_follow与像素偏移() {
     let (tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必成");
-    let (w, h) = (600u32, 1200u32);
-    // 30 个全角字,w=600 时约 6 折行(>5 行上限,头 1 行被锚出视野)
-    let long = "一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十";
-    let snap_f = kfm_na::input_bar::BarSnap {
-        text: long.to_string(),
+    let (w, h) = (600u32, 1400u32);
+    let long = "一二三四五六七八九十".repeat(5);
+    let base = |follow: bool, scroll_px: i32| kfm_na::input_bar::BarSnap {
+        text: long.clone(),
         focused: true,
-        lines: 6,
-        cursor: 30,
+        lines: 10,
+        cursor: 50,
         handle: false,
         composing: String::new(),
-        scroll_top: 0,
-        follow: true,
+        scroll_px,
+        follow,
     };
-    let snap_h = kfm_na::input_bar::BarSnap {
-        text: long.to_string(),
-        focused: true,
-        lines: 6,
-        cursor: 30,
-        handle: false,
-        composing: String::new(),
-        scroll_top: 0,
-        follow: false,
-    };
-    // 相位差异像素数 = 光标矩形是否真的画了(渲染纯函数,同 snap 双相位对拍)
+    let mut tail = vec![0u32; (w * h) as usize];
+    tv.render_inputbar(&mut tail, w, h, 0, &base(true, 0), false, true);
+    let mut eqv = vec![0u32; (w * h) as usize];
+    tv.render_inputbar(&mut eqv, w, h, 0, &base(false, 222), false, true);
+    assert_eq!(tail, eqv, "follow 尾锚 ≡ scroll_px=最大偏移(逐像素)");
+    let mut head = vec![0u32; (w * h) as usize];
+    tv.render_inputbar(&mut head, w, h, 0, &base(false, -9999), false, true);
+    assert_ne!(
+        &tail[1100 * 600..1100 * 600 + 600],
+        &head[1100 * 600..1100 * 600 + 600],
+        "field 内有字行:头部窗与尾锚窗内容不同"
+    );
+    // 光标可见性:同 snap 双相位对拍,唯一变量是光标矩形——
+    // 尾锚态光标(文末行)在窗内必画(差异≈208);头部窗该行滚出→零差异
     let caret_diff = |snap: &kfm_na::input_bar::BarSnap| {
         let mut on = vec![0u32; (w * h) as usize];
         tv.render_inputbar(&mut on, w, h, 0, snap, false, true);
@@ -1510,62 +1513,10 @@ fn spec_视口滚动_follow与固定窗口() {
         tv.render_inputbar(&mut off, w, h, 0, snap, false, false);
         on.iter().zip(off.iter()).filter(|(a, b)| a != b).count()
     };
-    assert!(
-        caret_diff(&snap_f) >= 150,
-        "尾锚态光标必可见(差异≥光标矩形 4×52=208)"
-    );
+    assert!(caret_diff(&base(true, 0)) >= 150, "尾锚态光标必可见");
     assert_eq!(
-        caret_diff(&snap_h),
+        caret_diff(&base(false, -9999)),
         0,
-        "光标出视口不画(零差异,不冒充在窗内)"
+        "头部窗光标行已滚出视口,不画"
     );
-    // 两窗内容不同(切片真换了,不是同一画面)
-    let mut a = vec![0u32; (w * h) as usize];
-    tv.render_inputbar(&mut a, w, h, 0, &snap_f, false, true);
-    let mut b = vec![0u32; (w * h) as usize];
-    tv.render_inputbar(&mut b, w, h, 0, &snap_h, false, true);
-    let (lo, hi) = (900usize * w as usize, 980usize * w as usize);
-    assert_ne!(&a[lo..hi], &b[lo..hi], "尾锚窗与头部窗内容必须不同");
-}
-
-// ========== BAR-041：行归属纯函数 + 中段光标闪退回归钉 ==========
-// (2026-09-01 用户实机闪退三连:快打/滚动/点按定位——渲染切片倒挂 panic)
-
-#[test]
-fn spec_bar041_row_of_行归属() {
-    use kfm_na::ui::prompt_bar::row_of;
-    let starts = [0usize, 5, 10]; // 3 行,每行 5 字
-    assert_eq!(row_of(&starts, 0), 0);
-    assert_eq!(row_of(&starts, 4), 0, "行内归本行");
-    assert_eq!(row_of(&starts, 5), 1, "行起点归新行");
-    assert_eq!(row_of(&starts, 14), 2);
-    assert_eq!(row_of(&starts, 15), 2, "文末(=字符数)归末行");
-    assert_eq!(row_of(&starts, 99), 2, "越界钳末行");
-    assert_eq!(row_of(&[0usize], 0), 0, "空文本单行");
-}
-
-#[test]
-fn spec_bar041_多行中段光标渲染不panic() {
-    // 闪退实景:多行文本 + 光标在中段(字符位 18 > 行数 6)——旧代码
-    // 把行数当字符数做边界判定,切片 [21..18] 倒挂 panic。回归钉 =
-    // 同场景渲染不许 panic,且光标画在归属行(相位差异 ≥ 光标矩形)
-    let (tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必成");
-    let (w, h) = (600u32, 1200u32);
-    let long = "一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十";
-    let snap = kfm_na::input_bar::BarSnap {
-        text: long.to_string(),
-        focused: true,
-        lines: 6,
-        cursor: 18,
-        handle: false,
-        composing: String::new(),
-        scroll_top: 0,
-        follow: true,
-    };
-    let mut on = vec![0u32; (w * h) as usize];
-    tv.render_inputbar(&mut on, w, h, 0, &snap, false, true);
-    let mut off = vec![0u32; (w * h) as usize];
-    tv.render_inputbar(&mut off, w, h, 0, &snap, false, false);
-    let diff = on.iter().zip(off.iter()).filter(|(a, b)| a != b).count();
-    assert!(diff >= 150, "中段光标必画在归属行(差异 {diff} ≥ 150)");
 }

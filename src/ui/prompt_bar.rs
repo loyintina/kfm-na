@@ -182,23 +182,19 @@ impl crate::termview::TermView {
         );
         // 文字左内缩 ~58（draw 族自带 18 起笔）
         let text_cx = field_left + 40;
-        let text_cw = field_w - 40 - 12;
-        // 折行块几何（画字与光标定位同用）：垂直居中成块，超 MAX_LINES
-        // 尾锚显最后几行（手动滚动缺口记档案）
-        // 视口窗口（2026-09-01 输入框可滚）：follow = 尾锚显示最后几行；
-        // 用户拖动后固定视口(scroll_top 渲染侧钳制)。行数不足 = 全显
+        // 视口（2026-09-01 像素级滚动，BAR-042 跟手拍板）：文本条带在
+        // field 内垂直偏移 eff px，内容 1:1 跟手。follow=尾锚（条带底贴
+        // field 底，打字态）；拖动后 scroll_px 钳制固定；条带不足一屏 =
+        // 居中不可滚。几何单源 = input_bar::viewport_geometry（点按换算
+        // 同吃此函数——眼手同尺）
         let n = starts.len();
-        let visible = input_bar::MAX_LINES as usize;
-        let max_top = n.saturating_sub(visible);
-        let eff_top = if snap.follow {
-            max_top
-        } else {
-            snap.scroll_top.clamp(0, max_top as i32) as usize
-        };
-        let vis = &starts[eff_top..(eff_top + visible).min(n)];
-        let show = vis.len();
-        let block_h = show as u32 * input_bar::LINE_STEP_PX;
-        let block_top = field_top + (field_h.saturating_sub(block_h)) / 2;
+        let (_, eff, top_off) =
+            input_bar::viewport_geometry(n as u32, field_h, snap.follow, snap.scroll_px);
+        let text_top = field_top as i32 + top_off as i32 - eff;
+        let line_y = |k: usize| -> i32 { text_top + k as i32 * input_bar::LINE_STEP_PX as i32 };
+        let field_y0 = field_top as i32;
+        let field_y1 = (field_top + field_h) as i32;
+        let text_cw = field_w - 40 - 12;
         if display.is_empty() {
             self.draw_text_left(
                 &mut frame,
@@ -211,12 +207,15 @@ impl crate::termview::TermView {
                 t.placeholder,
             );
         } else {
-            // textarea 折行（2026-08-31 移动端全量复刻）：用函数头量好的
-            // items/starts（同一次量宽，几何与画字同源）。
-            // 字号恒定 BAR_TEXT_PX，行高 LINE_STEP_PX
-            for (row, &st) in vis.iter().enumerate() {
-                let end = if row + 1 < vis.len() {
-                    vis[row + 1]
+            // textarea 折行：只画与 field 有交集的行，行内逐像素垂直裁剪
+            let first = ((field_y0 - text_top).max(0) / input_bar::LINE_STEP_PX as i32) as usize;
+            let last = (((field_y1 - text_top) + input_bar::LINE_STEP_PX as i32 - 1)
+                / input_bar::LINE_STEP_PX as i32)
+                .min(n as i32) as usize;
+            for k in first..last {
+                let st = starts[k];
+                let end = if k + 1 < n {
+                    starts[k + 1]
                 } else {
                     items.len()
                 };
@@ -225,71 +224,72 @@ impl crate::termview::TermView {
                     &items[st..end],
                     text_cx,
                     text_cw,
-                    block_top + row as u32 * input_bar::LINE_STEP_PX,
+                    line_y(k) as u32,
                     input_bar::LINE_STEP_PX,
                     BAR_TEXT_PX,
                     t.text,
+                    Some((field_y0, field_y1)),
                 );
             }
         }
-        // 光标（2026-08-31 用户指认浏览器控件行为）：聚焦才画，竖线一条，
-        // 530ms 相位闪烁——相位由调用方算好传入（caret_on，渲染保持纯函数，
-        // dump 快照相位准）；点按定位柄 = 光标线下方蓝色下坠柄，点按定位
-        // 才出现，打字/清空/发送收起（状态核管）
+        // 光标（2026-08-31 浏览器控件行为）：聚焦才画，竖线一条，530ms
+        // 相位闪烁（caret_on 由调用方算好传入）；点按定位柄 = 蓝色下坠柄
+        // （加大版：正方形承载、上尖三角尖对光标行底），稳显不随闪烁。
+        // 行滚出视口则光标/柄都不画（不冒充在窗内）
         let comp_len = snap.composing.chars().count();
         let caret_idx = (snap.cursor + comp_len).min(items.len());
-        // 光标的全局行号(BAR-041 纯函数;idx=文末归末行)
         let caret_row_all = row_of(&starts, caret_idx);
-        let caret_in_window = caret_row_all >= eff_top && caret_row_all < eff_top + vis.len();
-        if snap.focused && caret_in_window {
-            let cursor = caret_idx;
-            let row = caret_row_all - eff_top; // 窗内行号
-            let row_start = vis[row];
-            let row_end = if row + 1 < vis.len() {
-                vis[row + 1]
+        let caret_y = line_y(caret_row_all);
+        let caret_fully_visible =
+            caret_y >= field_y0 && caret_y + input_bar::LINE_STEP_PX as i32 <= field_y1;
+        if snap.focused && caret_fully_visible {
+            let row_start = starts[caret_row_all];
+            let row_end = if caret_row_all + 1 < n {
+                starts[caret_row_all + 1]
             } else {
                 items.len()
             };
-            let x_off: f32 = items[row_start..cursor.min(row_end)]
+            let x_off: f32 = items[row_start..caret_idx.min(row_end)]
                 .iter()
                 .map(|i| i.2)
                 .sum();
-            let row_cy =
-                block_top + row as u32 * input_bar::LINE_STEP_PX + input_bar::LINE_STEP_PX / 2;
+            let row_cy = caret_y + input_bar::LINE_STEP_PX as i32 / 2;
             let caret_x = text_cx + 18 + x_off as u32;
             if caret_on {
-                frame.fill_round_rect(caret_x, row_cy - 26, 4, 52, 2, t.text);
+                frame.fill_round_rect(caret_x, (row_cy - 26) as u32, 4, 52, 2, t.text);
             }
             if snap.handle {
-                // 定位柄(BAR-042 修正):锚定光标所在行的行底、稳显不闪
-                // (原实现锚死文本区底+随光标闪烁,均违浏览器控件行为)。
-                // 蓝色下坠柄,上尖连行底,品牌蓝同选区
-                let hx = (caret_x + 3).saturating_sub(16);
-                let hy = block_top + (row as u32 + 1) * input_bar::LINE_STEP_PX + 1;
-                frame.fill_round_rect(hx, hy, 32, 32, 10, SELECT_BG);
-                frame.fill_triangle_up(hx + 16, hy - 1, 20, 12, SELECT_BG);
+                // 定位柄(BAR-042 用户复测版):加大——正方形承载、上尖三角
+                // 尖对光标行底;稳显不随闪烁
+                let hx = (caret_x + 2).saturating_sub(22);
+                let tip_y = (caret_y + input_bar::LINE_STEP_PX as i32 - 2) as u32;
+                frame.fill_triangle_up(hx + 22, tip_y - 1, 36, 18, SELECT_BG);
+                frame.fill_round_rect(hx, tip_y + 15, 44, 44, 12, SELECT_BG);
             }
         }
         // 组合态下划线（浏览器 preedit 视觉对齐）：拼音区字底一道品牌青。
-        // 稳显不随光标闪烁——闪烁是插入点的节拍，组合区是持续状态
+        // 稳显不随光标闪烁；组合行滚出视口则不画
         let comp_start = snap.cursor.min(items.len());
         let comp_row_all = row_of(&starts, comp_start);
-        if snap.focused && !snap.composing.is_empty() && comp_row_all >= eff_top {
+        let comp_y = line_y(comp_row_all);
+        if snap.focused
+            && !snap.composing.is_empty()
+            && comp_y >= field_y0
+            && comp_y + input_bar::LINE_STEP_PX as i32 <= field_y1
+        {
             let comp_end = (snap.cursor + comp_len).min(items.len());
-            let urow = comp_row_all - eff_top; // 窗内行号
-            let urow_start = vis[urow];
-            let urow_cy =
-                block_top + urow as u32 * input_bar::LINE_STEP_PX + input_bar::LINE_STEP_PX / 2;
+            let row_start = starts[comp_row_all];
             let ux0 = (text_cx + 18) as f32
-                + items[urow_start..comp_start]
+                + items[row_start..comp_start]
                     .iter()
                     .map(|i| i.2)
                     .sum::<f32>();
-            let ux1 = (text_cx + 18) as f32
-                + items[urow_start..comp_end].iter().map(|i| i.2).sum::<f32>();
+            let ux1 =
+                (text_cx + 18) as f32 + items[row_start..comp_end].iter().map(|i| i.2).sum::<f32>();
+            let urow_cy = comp_y + input_bar::LINE_STEP_PX as i32 / 2;
             frame.fill_rect(
                 ux0 as u32,
-                urow_cy + 22,
+                (urow_cy + 22) as u32,
                 (ux1 - ux0).max(4.0) as u32,
                 4,
                 t.accent,

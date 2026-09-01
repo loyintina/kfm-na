@@ -49,7 +49,7 @@ fn spec_theme_换肤生效_控件只读token() {
         cursor: 0,
         handle: false,
         composing: String::new(),
-        scroll_top: 0,
+        scroll_px: 0,
         follow: true,
     };
     // 默认肤:栏带底 = 0x111119(fill_rect 直写,带内非渐变区逐像素相等)。

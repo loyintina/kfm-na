@@ -363,21 +363,21 @@ fn bar_inject_parse_组合态指令() {
 fn scroll_拖动脱跟随_编辑回跟随() {
     let bar = InputBarState::new();
     bar.insert_text("长文本");
-    bar.scroll_by(-3); // 手指上拖:往头部
+    bar.scroll_by_px(-50); // 手指上拖 50px:往头部(像素 1:1)
     let snap = bar.snap();
     assert!(!snap.follow, "拖动 = 脱离跟随");
-    assert_eq!(snap.scroll_top, -3, "raw 累加(渲染侧钳制到 0)");
+    assert_eq!(snap.scroll_px, -50, "像素 raw 累加(渲染侧钳制到 0)");
     bar.insert_text("字");
     assert!(bar.snap().follow, "编辑回跟随(尾锚,光标可见)");
 }
 
 #[test]
-fn scroll_by_方向语义() {
+fn scroll_by_行单位换算像素() {
     let bar = InputBarState::new();
-    bar.scroll_by(5);
-    assert_eq!(bar.snap().scroll_top, 5, "正 = 往尾部");
-    bar.scroll_by(-2);
-    assert_eq!(bar.snap().scroll_top, 3);
+    bar.scroll_by(2); // 2 行 = 2×63px,负号 = 往尾部
+    assert_eq!(bar.snap().scroll_px, -126);
+    bar.scroll_by(-1);
+    assert_eq!(bar.snap().scroll_px, -63);
 }
 
 #[test]
@@ -385,5 +385,10 @@ fn bar_inject_parse_scroll指令() {
     use kfm_na::gate::{BarCmd, parse_bar_line};
     assert_eq!(parse_bar_line("scroll -2"), Some(Ok(BarCmd::Scroll(-2))));
     assert_eq!(parse_bar_line("scroll 5"), Some(Ok(BarCmd::Scroll(5))));
+    assert_eq!(
+        parse_bar_line("scrollpx -80"),
+        Some(Ok(BarCmd::ScrollPx(-80))),
+        "像素级滚动指令(AI 监控/驱动用)"
+    );
     assert!(matches!(parse_bar_line("scroll abc"), Some(Err(_))));
 }

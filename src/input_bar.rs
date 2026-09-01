@@ -42,6 +42,31 @@ pub fn text_avail_w(buf_w: u32) -> Option<f32> {
 /// 光标闪烁半周期（ms）：Android 系统输入光标节拍——亮 530 灭 530。
 /// 调用方按 (boot_ms / CARET_BLINK_MS) % 2 算相位传渲染
 pub const CARET_BLINK_MS: u64 = 530;
+
+/// 视口几何（BAR-042 像素滚动；渲染与点按换算共用的纯函数——眼手同尺）。
+/// 给定折行行数与 field 高，输出：条带高（N×行高）、有效像素偏移
+/// （follow=尾锚=条带底贴 field 底；否则 scroll_px 钳制到
+/// [0, 条带高-field_h]）、文本顶相对 field_top 的留白（条带不足一屏时居中）
+pub fn viewport_geometry(
+    n_lines: u32,
+    field_h: u32,
+    follow: bool,
+    scroll_px: i32,
+) -> (u32, i32, u32) {
+    let strip_h = n_lines * LINE_STEP_PX;
+    let max_eff = strip_h.saturating_sub(field_h) as i32;
+    let eff = if follow {
+        max_eff
+    } else {
+        scroll_px.clamp(0, max_eff)
+    };
+    let top_off = if strip_h < field_h {
+        (field_h - strip_h) / 2
+    } else {
+        0
+    };
+    (strip_h, eff, top_off)
+}
 /// 发送钮宽（px）：右端固定宽圆角方块，拇指可击
 pub const SEND_W_PX: u32 = 140;
 /// 栏左右离屏边留白（px）——参考样式：文本区/发送钮都不贴屏边
@@ -98,9 +123,9 @@ pub struct BarSnap {
     pub handle: bool,
     /// IME 组合态文本（拼音预编辑；空串 = 无组合态）
     pub composing: String,
-    /// 视口顶行偏移（折行行号，raw 值；渲染侧钳制。follow=true 时忽略此值
-    /// 尾锚显示）
-    pub scroll_top: i32,
+    /// 视口像素偏移（raw 值，可负可超；渲染侧钳制。follow=true 时忽略
+    /// 此值尾锚显示）——像素级滚动：内容 1:1 跟手
+    pub scroll_px: i32,
     /// 视口跟随模式：true = 尾锚（显示最后几行，打字态）；false = 用户拖动
     /// 后的固定视口
     pub follow: bool,
@@ -115,8 +140,8 @@ struct Inner {
     cursor: usize,
     /// IME 组合态（拼音预编辑，虚拟文本——插在 cursor 处显示但未入 text）
     composing: Option<String>,
-    /// 视口顶行偏移（raw；渲染钳制）与跟随模式。任何编辑操作回跟随
-    scroll_top: i32,
+    /// 视口像素偏移（raw；渲染钳制）与跟随模式。任何编辑操作回跟随
+    scroll_px: i32,
     follow: bool,
     /// 定位柄可见（点按定位 → true；打字/清空/发送 → false）
     handle: bool,
@@ -144,7 +169,7 @@ impl InputBarState {
                 cursor: 0,
                 handle: false,
                 composing: None,
-                scroll_top: 0,
+                scroll_px: 0,
                 follow: true,
                 sender: None,
             }),
@@ -160,18 +185,23 @@ impl InputBarState {
             cursor: g.cursor,
             handle: g.handle,
             composing: g.composing.clone().unwrap_or_default(),
-            scroll_top: g.scroll_top,
+            scroll_px: g.scroll_px,
             follow: g.follow,
         }
     }
 
-    /// 视口拖动滚动（输入框内手指上下拖）。lines = 行数增量（正=往尾部/
-    /// 负=往头部），raw 累加、渲染钳制。拖动 = 脱离跟随（不自动回锚），
-    /// 任何编辑操作（插入/退格/组合/清空/发送）回跟随
+    /// 视口拖动滚动·行单位（gate scroll 指令用；1 行 = LINE_STEP_PX）。
+    /// 拖动 = 脱离跟随（不自动回锚），任何编辑操作回跟随
     pub fn scroll_by(&self, lines: i32) {
+        self.scroll_by_px(-lines * crate::input_bar::LINE_STEP_PX as i32);
+    }
+
+    /// 视口拖动滚动·像素单位（真指 1:1 跟手：dy 直接进偏移）。
+    /// px 正 = 往尾部，负 = 往头部；raw 累加、渲染侧钳制
+    pub fn scroll_by_px(&self, px: i32) {
         let mut g = self.inner.lock().unwrap();
         g.follow = false;
-        g.scroll_top += lines;
+        g.scroll_px += px;
     }
 
     /// 组合态显示文本（渲染/量行/点按换算的统一原料）：text 在 cursor 处
