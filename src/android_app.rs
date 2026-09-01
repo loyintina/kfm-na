@@ -376,8 +376,8 @@ impl App {
                 // 选择态下不建滚动机——拖动 = 扩选
                 self.press = Some(Press {
                     at: std::time::Instant::now(),
-                    x: x,
-                    y: y,
+                    x,
+                    y,
                     moved: false,
                     long_fired: false,
                 });
@@ -753,7 +753,7 @@ impl App {
         let stale = self
             .last_bar_snap
             .as_ref()
-            .map_or(true, |p| p.text != cur.text)
+            .is_none_or(|p| p.text != cur.text)
             || self.last_bar_w != Some(w);
         if stale {
             if let Some(t) = self.term_handle() {
@@ -1270,10 +1270,10 @@ impl App {
             .map_or("", |r| r.lock().unwrap().active_name());
         // 终端还没建好就不 pump:Output 堆 mpsc 不丢(同旧制),控制事件
         // 等得起(首轮 about_to_wait 前终端必就位——init_terminal 先跑)
-        if let Some(t) = self.term_handle() {
-            if crate::gate::pump_once(active, &mut |b| t.lock().unwrap().feed(b)) {
-                self.dirty = true;
-            }
+        if let Some(t) = self.term_handle()
+            && crate::gate::pump_once(active, &mut |b| t.lock().unwrap().feed(b))
+        {
+            self.dirty = true;
         }
         for (name, ev) in crate::gate::pump_take_control() {
             self.on_session_event(name, ev, name == active);
@@ -1487,6 +1487,7 @@ impl App {
     /// self.gfx 时动不了 self 的问题。后台离屏倒帧不走这里——值守线程
     /// (screendump) 只画终端网格本体，快捷键行/光球/放大镜是 UI 装帧，
     /// 不在后台视野里
+    #[allow(clippy::too_many_arguments)]
     fn rasterize(
         term: Option<&mut Box<dyn TermEmu>>,
         mods: u8,
@@ -1590,7 +1591,7 @@ impl App {
                 .is_multiple_of(2);
             let mut tg = th.as_ref().map(|a| a.lock().unwrap());
             Self::rasterize(
-                tg.as_mut().map(|t| &mut **t),
+                tg.as_deref_mut(),
                 mods,
                 self.magnifier_at,
                 self.ime_bottom_px,

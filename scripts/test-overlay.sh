@@ -40,7 +40,9 @@ fail() { echo "❌ $1"; exit 1; }
 # 1. 前缀剥净:文件躺在 payload 根(usr 相对)
 [ -f "$out/payload/bin/fixhello" ] || fail "payload/bin/fixhello 不在"
 [ -f "$out/payload/lib/libfix.so.1" ] || fail "payload/lib/libfix.so.1 不在"
-find "$out/payload" -path '*com.termux*' | grep -q . && fail "payload 残留 com.termux 路径"
+( cd "$out/payload" && find . -path '*com.termux*' ) | grep -q . && fail "payload 残留 com.termux 路径"
+# ↑ 2026-09-01 修:必须相对 payload 匹配——find -path 咬含起点全路径,
+#   手机上临时目录在 /data/data/com.termux 下,起点自己就中招(环境泄漏误报)
 
 # 2. 文本改写:脚本里 com.termux 一个不剩,na 前缀落位
 grep -q 'com.termux' "$out/payload/bin/fixhello" && fail "payload 脚本未改写"

@@ -1,5 +1,29 @@
 #!/bin/sh
-# KFM-NA — pre-commit hook：每个提交都必须过 chain（fmt/clippy/test/build 全绿）
-# 安装：git config core.hooksPath .githooks
+# KFM-NA — pre-commit hook（2026-09-01 重载窗口制版）：
+#   夜间窗口(01:00-07:00) → 服务器本地跑全量 chain（重载任务合规时段）；
+#   白天 → 校验手机 chain stamp（scripts/chain-phone.sh 落，补丁哈希必须
+#   与当前暂存区一致且 6h 内）——白天大负载只准手机端，用户 2026-09-01 拍板。
 cd "$(dirname "$0")/.." || exit 1
-bash scripts/chain.sh || exit 1
+HOUR=$(date +%H)
+if [ "$HOUR" -ge 1 ] && [ "$HOUR" -lt 7 ]; then
+    bash scripts/chain.sh || exit 1
+    exit 0
+fi
+STAMP=.git/chain-phone-stamp
+if [ ! -f "$STAMP" ]; then
+    echo "❌ 白天提交需要先在手机跑 chain：bash scripts/chain-phone.sh"
+    echo "   （或等 01:00-07:00 服务器窗口；重载窗口制 AGENTS.md 跨线运维公约 1）"
+    exit 1
+fi
+STAMP_HASH=$(awk '{print $1}' "$STAMP")
+STAMP_AGE=$(( $(date +%s) - $(awk '{print $2}' "$STAMP") ))
+NOW_HASH=$(git add -A >/dev/null 2>&1; git diff --cached HEAD | md5sum | cut -d' ' -f1)
+if [ "$NOW_HASH" != "$STAMP_HASH" ]; then
+    echo "❌ 暂存区与手机 chain 时的补丁不一致（改了代码就重跑）：bash scripts/chain-phone.sh"
+    exit 1
+fi
+if [ "$STAMP_AGE" -gt 21600 ]; then
+    echo "❌ 手机 chain stamp 已过期（>6h）：bash scripts/chain-phone.sh"
+    exit 1
+fi
+echo "✅ chain 闸：手机端已过（stamp ${STAMP_AGE}s 前，哈希咬合）"
