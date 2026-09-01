@@ -44,6 +44,22 @@ pub struct BarTheme {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Theme {
     pub bar: BarTheme,
+    /// 快捷键行配色组（2026-09-01 token 化补全：原 termview KEYBAR_*
+    /// 常量直迁，值不变）
+    pub keybar: KeybarTheme,
+}
+
+/// 快捷键行配色（XRGB，与帧缓冲同格式）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeybarTheme {
+    /// 行带底
+    pub bg: u32,
+    /// 药丸键格底
+    pub key_bg: u32,
+    /// 修饰键粘滞中高亮
+    pub mod_on: u32,
+    /// 键标签文字
+    pub label: u32,
 }
 
 impl Default for Theme {
@@ -66,6 +82,12 @@ impl Default for Theme {
                 send_tl: 0x007C_3AED,
                 send_br: 0x0003_ADD1,
                 send_tri: 0x00FF_FFFF,
+            },
+            keybar: KeybarTheme {
+                bg: 0x0010_1216,
+                key_bg: 0x0023_272E,
+                mod_on: 0x003E_6FB4,
+                label: 0x00E8_EAED,
             },
         }
     }

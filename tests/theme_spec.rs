@@ -71,3 +71,32 @@ fn spec_theme_换肤生效_控件只读token() {
     let fresh: TermView = kfm_na::termview::build_vendored().expect("必成").0;
     assert_eq!(fresh.theme, Theme::default(), "出厂必须挂默认配方");
 }
+
+// ========== 快捷键行配色组（2026-09-01 token 化补全） ==========
+
+#[test]
+fn spec_theme_keybar默认配方_换肤生效() {
+    let t = Theme::default();
+    assert_eq!(
+        t.keybar,
+        kfm_na::theme::KeybarTheme {
+            bg: 0x0010_1216,
+            key_bg: 0x0023_272E,
+            mod_on: 0x003E_6FB4,
+            label: 0x00E8_EAED,
+        },
+        "keybar 配方 = 原 termview KEYBAR_* 常量逐项直迁"
+    );
+    // 换肤生效:改 token 倒帧,行带底像素逐字面值跟 token 走
+    let (mut tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必成");
+    let (w, h) = (600u32, 1200u32);
+    tv.theme.keybar.bg = 0x0000_FF00;
+    let mut buf = vec![0u32; (w * h) as usize];
+    tv.render_keybar(&mut buf, w, h, 0, 0);
+    // 行带在屏底 60px 带(keybar::HEIGHT_PX=120? 取带上缘+4 的纯底区)
+    let sample = (h - kfm_na::keybar::HEIGHT_PX + 2) as usize * w as usize + 2;
+    assert_eq!(
+        buf[sample], 0x0000_FF00,
+        "keybar 行带底必须读 theme.keybar.bg"
+    );
+}

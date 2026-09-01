@@ -695,7 +695,7 @@ fn spec_快捷键行_渲染冒烟() {
     let esc_cy = h - keybar::HEIGHT_PX + keybar::ROW_H_PX / 2;
     assert_eq!(
         buf[(esc_cy * w + esc_cx) as usize],
-        termview::KEYBAR_KEY_BG,
+        kfm_na::theme::Theme::default().keybar.key_bg,
         "键格色必须上屏"
     );
     // 键格里必须有标签墨（非键底色非行底色的像素存在）
@@ -703,7 +703,10 @@ fn spec_快捷键行_渲染冒烟() {
     for y in (h - keybar::HEIGHT_PX)..(h - keybar::HEIGHT_PX + keybar::ROW_H_PX) {
         for x in 0..100u32 {
             let p = buf[(y * w + x) as usize];
-            if p != termview::KEYBAR_KEY_BG && p != termview::KEYBAR_BG && p != DEFAULT_BG {
+            if p != kfm_na::theme::Theme::default().keybar.key_bg
+                && p != kfm_na::theme::Theme::default().keybar.bg
+                && p != DEFAULT_BG
+            {
                 ink = true;
             }
         }
@@ -719,7 +722,7 @@ fn spec_快捷键行_渲染冒烟() {
     );
     assert_eq!(
         buf2[((esc_cy - 300) * w + esc_cx) as usize],
-        termview::KEYBAR_KEY_BG,
+        kfm_na::theme::Theme::default().keybar.key_bg,
         "行必须跟着键盘上浮 300px"
     );
     // 修饰键高亮：点亮 CTRL（局部实例，不碰全局态），下排第 2 列键格必须换色
@@ -730,7 +733,7 @@ fn spec_快捷键行_渲染冒烟() {
     let ctrl_cy = h - keybar::HEIGHT_PX + keybar::ROW_H_PX + keybar::ROW_H_PX / 2;
     assert_eq!(
         buf3[(ctrl_cy * w + 108) as usize],
-        termview::KEYBAR_MOD_ON,
+        kfm_na::theme::Theme::default().keybar.mod_on,
         "粘滞中的修饰键必须高亮"
     );
 }

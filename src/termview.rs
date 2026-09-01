@@ -1054,409 +1054,6 @@ impl TermView {
         }
     }
 
-    /// 快捷键行渲染（BAR-017：Java View 被原生 busy 重绘盖掉，改 Rust 自绘——
-    /// 覆盖层 UI 的统一模式）。画在帧缓冲底部、键盘 inset 之上的 HEIGHT_PX 带
-    /// （键盘弹起时跟着上浮，16777485 实拍：画死在屏底会被键盘盖住）：
-    /// 行底 → 圆角药丸键格（修饰键粘滞中换高亮色）→ 标签字形居中
-    /// mods = 调用方传入的修饰键粘滞位（input-ime 方案 A：不自读静态，
-    /// 状态归 input.modifiers 服务，渲染层只收参数）
-    pub fn render_keybar(
-        &self,
-        buf: &mut [u32],
-        buf_w: u32,
-        buf_h: u32,
-        ime_bottom: u32,
-        mods: u8,
-    ) {
-        use crate::keybar;
-        let Some(top) = buf_h
-            .checked_sub(ime_bottom)
-            .and_then(|b| b.checked_sub(keybar::HEIGHT_PX))
-        else {
-            return;
-        };
-        if buf_w == 0 {
-            return;
-        }
-        let mut frame = Frame {
-            buf,
-            w: buf_w,
-            h: buf_h,
-        };
-        frame.fill_rect(0, top, buf_w, keybar::HEIGHT_PX, KEYBAR_BG);
-        let cell_w = buf_w / keybar::COLS;
-        if cell_w < 8 {
-            return; // 窗太窄画不下，保命要紧
-        }
-        for (row, keys) in keybar::KEYS.iter().enumerate() {
-            for (col, kd) in keys.iter().enumerate() {
-                if matches!(kd.key, keybar::Key::None) {
-                    continue;
-                }
-                let x = col as u32 * cell_w;
-                let y = top + row as u32 * keybar::ROW_H_PX;
-                let active = matches!(kd.key, keybar::Key::Modifier(bit) if mods & bit != 0);
-                let bg = if active { KEYBAR_MOD_ON } else { KEYBAR_KEY_BG };
-                // 圆角药丸键格（内缩出缝，圆角半径 14px）
-                frame.fill_round_rect(x + 3, y + 3, cell_w - 6, keybar::ROW_H_PX - 6, 14, bg);
-                self.draw_label(
-                    &mut frame,
-                    kd.label,
-                    x,
-                    cell_w,
-                    y,
-                    keybar::ROW_H_PX,
-                    KEYBAR_LABEL,
-                );
-            }
-        }
-    }
-
-    /// 全局输入栏（ai-presence 期 0 组件三，§二 常驻 chrome 一）：
-    /// 压底紧贴键盘（keybar 在其上一层——调用方几何保证）。样式 = kfmv4
-    /// base.css 逐项复刻（2026-08-31 v2 质感版，不再是截图取色近似——
-    /// 直接读 .ai-input-bar/.ai-input/.ai-send-btn 的 CSS 配方）：
-    /// 栏带顶部渐变发丝线（紫→青→紫 α0.4）；文本区 135° 渐变描边
-    /// （1px 物理 3，左缘 3 倍粗）+ 近黑底 + 顶部内阴影，聚焦 = 紫外
-    /// 发光（0 0 20px α0.35）+ 描边提点亮度硬切（零动画帧）；发送钮 =
-    /// 135° 渐变 + 顶部玻璃高光（inset 白 0.15）+ 紫色投影
-    /// （0 4px 12px α0.3）+ 白 ▶（sending = ⏸ 双竖条，跟 AI 运行态硬切）。
-    /// 全部图元 SDF 抗锯齿。
-    /// 光标（2026-08-31 浏览器控件行为对齐）：聚焦画竖线光标，caret_on =
-    /// 闪烁相位（调用方按 CARET_BLINK_MS 算好传入，渲染纯函数）；定位柄
-    /// 蓝色下坠柄跟 snap.handle 走。
-    /// textarea（2026-08-31 移动端全量复刻）：带高随行数长（覆盖式悬浮——
-    /// 栏带向上浮盖终端底部行，终端网格几何不动）；文本折行（wrap_starts）
-    /// 多行绘制，超 MAX_LINES 尾锚显最后几行。**折行数由本函数从
-    /// snap.text 实测量出**（渲染几何与所画文本同源——后台 dump 无 poll
-    /// 写回也不会带高/文本两张皮，2026-08-31 实拍定罪）；snap.lines 只
-    /// 服务触摸命中（前台 poll 写回，眼手同尺）
-    #[allow(clippy::too_many_arguments)]
-    pub fn render_inputbar(
-        &self,
-        buf: &mut [u32],
-        buf_w: u32,
-        buf_h: u32,
-        ime_bottom: u32,
-        snap: &crate::input_bar::BarSnap,
-        sending: bool,
-        caret_on: bool,
-    ) {
-        use crate::input_bar;
-        // token 读取（theme.rs 第 2 层）：本函数不许出现字面颜色
-        let t = &self.theme.bar;
-        let min_w = 2 * input_bar::MARGIN_X_PX + input_bar::GAP_PX + input_bar::SEND_W_PX + 40;
-        if buf_w < min_w {
-            return; // 窗太窄画不下，保命要紧
-        }
-        // 量宽折行（画文本也要用，先量一次两头吃）
-        let items = self.measure_items(&snap.text, BAR_TEXT_PX);
-        let widths: Vec<f32> = items.iter().map(|i| i.2).collect();
-        let avail = input_bar::text_avail_w(buf_w).unwrap_or(1.0);
-        let starts = wrap_starts(&widths, avail);
-        let n_lines = if snap.text.is_empty() {
-            1
-        } else {
-            starts.len() as u32
-        };
-        let bar_h = input_bar::height_for_lines(n_lines);
-        let Some(top) = buf_h
-            .checked_sub(ime_bottom)
-            .and_then(|b| b.checked_sub(bar_h))
-        else {
-            return;
-        };
-        let mut frame = Frame {
-            buf,
-            w: buf_w,
-            h: buf_h,
-        };
-        frame.fill_rect(0, top, buf_w, bar_h, t.bg);
-        // 带顶渐变发丝线（kfmv4 border-image：紫→青→紫 α0.4，3px 物理）
-        for py in 0..3u32 {
-            for px in 0..buf_w {
-                let c = if px < buf_w / 2 {
-                    lerp_rgb(t.border_l, t.accent, px * 255 / (buf_w / 2).max(1))
-                } else {
-                    lerp_rgb(
-                        t.accent,
-                        t.border_l,
-                        (px - buf_w / 2) * 255 / (buf_w / 2).max(1),
-                    )
-                };
-                frame.blend_px(px, top + py, c, 102);
-            }
-        }
-        // 文本区：带内上下各留 32，高随行数长（单行 156）
-        let field_h = bar_h - 64;
-        let field_top = top + 32;
-        let send_left = buf_w - input_bar::MARGIN_X_PX - input_bar::SEND_W_PX;
-        let field_left = input_bar::MARGIN_X_PX;
-        let field_w = send_left - input_bar::GAP_PX - field_left;
-        // 文本区内芯底色 = 横向暗色渐变（2026-08-31 用户实拍指正：kfmv4
-        // 内芯不是纯黑——左紫调 (29,23,57) → 右青调 (12,40,54)，是半透明
-        // 底叠 backdrop blur 把描边环境色晕进来的效果；取稍沉一档防塑料蓝）
-        let (field_bg_l, field_bg_r) = if snap.focused {
-            (t.field_focus_bg_l, t.field_focus_bg_r)
-        } else {
-            (t.field_bg_l, t.field_bg_r)
-        };
-        // 聚焦 = 紫外发光（kfmv4 focus box-shadow 0 0 20px α0.35）
-        if snap.focused {
-            frame.glow_round_rect(
-                field_left,
-                field_top,
-                field_w,
-                field_h,
-                40,
-                GlowSpec {
-                    color: t.glow,
-                    alpha: 89,
-                    spread: 24,
-                    y_off: 0,
-                },
-            );
-        }
-        // 描边：135° 对角渐变（kfmv4 #7c3aed → rgba(0,212,255,0.8)）
-        frame.fill_round_rect_grad(
-            field_left,
-            field_top,
-            field_w,
-            field_h,
-            40,
-            GradSpec {
-                c1: t.border_l,
-                c2: t.border_r,
-                diag: true,
-            },
-        );
-        // 内芯：横向暗色渐变底，左缘让 9（3px CSS 加粗描边）其余让 3
-        let core_x = field_left + 9;
-        let core_y = field_top + 3;
-        let core_w = field_w - 12;
-        let core_h = field_h - 6;
-        frame.fill_round_rect_grad(
-            core_x,
-            core_y,
-            core_w,
-            core_h,
-            36,
-            GradSpec {
-                c1: field_bg_l,
-                c2: field_bg_r,
-                diag: false,
-            },
-        );
-        // 顶部内阴影（kfmv4 inset 0 1px 2px 黑 0.2）
-        frame.inner_top_veil(
-            core_x,
-            core_y,
-            core_w,
-            core_h,
-            36,
-            VeilSpec {
-                color: 0,
-                alpha: 51,
-                rows: 4,
-            },
-        );
-        // 文字左内缩 ~58（draw 族自带 18 起笔）
-        let text_cx = field_left + 40;
-        let text_cw = field_w - 40 - 12;
-        // 折行块几何（画字与光标定位同用）：垂直居中成块，超 MAX_LINES
-        // 尾锚显最后几行（手动滚动缺口记档案）
-        let show = starts.len().min(input_bar::MAX_LINES as usize);
-        let vis = &starts[starts.len() - show..];
-        let block_h = show as u32 * input_bar::LINE_STEP_PX;
-        let block_top = field_top + (field_h.saturating_sub(block_h)) / 2;
-        if snap.text.is_empty() {
-            self.draw_text_left(
-                &mut frame,
-                "输入消息…",
-                text_cx,
-                text_cw,
-                field_top,
-                field_h,
-                BAR_TEXT_PX,
-                t.placeholder,
-            );
-        } else {
-            // textarea 折行（2026-08-31 移动端全量复刻）：用函数头量好的
-            // items/starts（同一次量宽，几何与画字同源）。
-            // 字号恒定 BAR_TEXT_PX，行高 LINE_STEP_PX
-            for (row, &st) in vis.iter().enumerate() {
-                let end = if row + 1 < vis.len() {
-                    vis[row + 1]
-                } else {
-                    items.len()
-                };
-                self.draw_items_left(
-                    &mut frame,
-                    &items[st..end],
-                    text_cx,
-                    text_cw,
-                    block_top + row as u32 * input_bar::LINE_STEP_PX,
-                    input_bar::LINE_STEP_PX,
-                    BAR_TEXT_PX,
-                    t.text,
-                );
-            }
-        }
-        // 光标（2026-08-31 用户指认浏览器控件行为）：聚焦才画，竖线一条，
-        // 530ms 相位闪烁——相位由调用方算好传入（caret_on，渲染保持纯函数，
-        // dump 快照相位准）；点按定位柄 = 光标线下方蓝色下坠柄，点按定位
-        // 才出现，打字/清空/发送收起（状态核管）
-        if snap.focused && caret_on {
-            let cursor = snap.cursor.min(items.len());
-            // cursor 所在行：可见行里最后一个起点 ≤ cursor 的行
-            let mut row = 0usize;
-            for (k, &st) in vis.iter().enumerate() {
-                if st <= cursor {
-                    row = k;
-                } else {
-                    break;
-                }
-            }
-            let row_start = vis[row];
-            let row_end = if row + 1 < vis.len() {
-                vis[row + 1]
-            } else {
-                items.len()
-            };
-            let x_off: f32 = items[row_start..cursor.min(row_end)]
-                .iter()
-                .map(|i| i.2)
-                .sum();
-            let row_cy =
-                block_top + row as u32 * input_bar::LINE_STEP_PX + input_bar::LINE_STEP_PX / 2;
-            let caret_x = text_cx + 18 + x_off as u32;
-            frame.fill_round_rect(caret_x, row_cy - 26, 4, 52, 2, t.text);
-            if snap.handle {
-                // 定位柄：蓝色下坠柄（品牌蓝同选区），悬在文本区下缘
-                let hx = (caret_x + 3).saturating_sub(16);
-                let hy = field_top + field_h + 1;
-                frame.fill_round_rect(hx, hy, 32, 32, 10, SELECT_BG);
-                frame.fill_triangle_up(hx + 16, hy - 1, 20, 12, SELECT_BG);
-            }
-        }
-        // 发送钮：kfmv4 42×42 方钮 align-self:center——定尺居中，不随行数
-        // 拉长（2026-08-31 用户指认「内容多的情况下按钮应该保持不动或者
-        // 居中」）。先紫色投影（kfmv4 0 4px 12px α0.3），再 135° 渐变本体，
-        // 再顶部玻璃高光（inset 白 0.15），最后白 ▶
-        let send_h = 140u32;
-        let send_top = top + (bar_h - send_h) / 2;
-        frame.glow_round_rect(
-            send_left,
-            send_top,
-            input_bar::SEND_W_PX,
-            send_h,
-            36,
-            GlowSpec {
-                color: t.glow,
-                alpha: 77,
-                spread: 14,
-                y_off: 6,
-            },
-        );
-        frame.fill_round_rect_grad(
-            send_left,
-            send_top,
-            input_bar::SEND_W_PX,
-            send_h,
-            36,
-            GradSpec {
-                c1: t.send_tl,
-                c2: t.send_br,
-                diag: true,
-            },
-        );
-        frame.inner_top_veil(
-            send_left,
-            send_top,
-            input_bar::SEND_W_PX,
-            send_h,
-            36,
-            VeilSpec {
-                color: 0x00FF_FFFF,
-                alpha: 38,
-                rows: 3,
-            },
-        );
-        // 发送钮图标二态硬切（kfmv4 .ai-send-btn.sending：▶ ↔ ⏸，
-        // 跟 AI 运行态走，零动画帧）
-        let icon_cx = send_left + input_bar::SEND_W_PX / 2;
-        let icon_cy = send_top + send_h / 2;
-        if sending {
-            // ⏸：两条竖圆角矩形（与 ▶ 同视觉重心同白）
-            frame.fill_round_rect(icon_cx - 23, icon_cy - 27, 15, 54, 7, t.send_tri);
-            frame.fill_round_rect(icon_cx + 8, icon_cy - 27, 15, 54, 7, t.send_tri);
-        } else {
-            frame.fill_triangle_right(icon_cx, icon_cy, 54, t.send_tri);
-        }
-    }
-
-    /// 量输入栏文本折行数（眼手同尺单源的量宽端：渲染层有字体，android_app
-    /// 每帧文本/宽度变化时调用 → InputBarState::set_lines 写回，触摸命中与
-    /// dump 读同一份）。buf_w 退化（画不下）按 1 行计
-    pub fn bar_text_lines(&self, text: &str, buf_w: u32) -> u32 {
-        if text.is_empty() {
-            return 1;
-        }
-        let Some(avail) = crate::input_bar::text_avail_w(buf_w) else {
-            return 1;
-        };
-        let widths: Vec<f32> = self
-            .measure_items(text, BAR_TEXT_PX)
-            .iter()
-            .map(|i| i.2)
-            .collect();
-        wrap_starts(&widths, avail).len() as u32
-    }
-
-    /// 点按定位换算（2026-08-31 浏览器控件行为对齐）：文本区本地坐标
-    /// （左上角原点）→ 光标 char 下标。与 render_inputbar 同一套量宽折行
-    /// 几何（眼手同尺）；列向「过半归右」就近取字；行向钳在可见尾锚块内。
-    /// 注：tofu 字（双字体都缺）不计入 items——定位与渲染同一对齐口径
-    pub fn bar_cursor_at(&self, text: &str, buf_w: u32, x_local: f64, y_local: f64) -> usize {
-        use crate::input_bar;
-        let items = self.measure_items(text, BAR_TEXT_PX);
-        if items.is_empty() {
-            return 0;
-        }
-        let widths: Vec<f32> = items.iter().map(|i| i.2).collect();
-        let avail = input_bar::text_avail_w(buf_w).unwrap_or(1.0);
-        let starts = wrap_starts(&widths, avail);
-        let n = starts.len();
-        let show = n.min(input_bar::MAX_LINES as usize);
-        let bar_h = input_bar::height_for_lines(n as u32);
-        let field_h = bar_h - 64;
-        let block_h = show as u32 * input_bar::LINE_STEP_PX;
-        let block_top = (field_h.saturating_sub(block_h)) / 2;
-        // 行：尾锚块内行号 k，全局行号 = 滚出视野的头部分行数 + k
-        let k = if y_local >= f64::from(block_top) {
-            (((y_local - f64::from(block_top)) / f64::from(input_bar::LINE_STEP_PX)) as usize)
-                .min(show - 1)
-        } else {
-            0
-        };
-        let grow = n - show;
-        let row_start = starts[grow + k];
-        let row_end = if grow + k + 1 < n {
-            starts[grow + k + 1]
-        } else {
-            items.len()
-        };
-        // 列：累计步进宽，过半归右（浏览器 tap 落点就近原则）
-        let mut pen = 18.0f32;
-        for (i, item) in items[row_start..row_end].iter().enumerate() {
-            if x_local < f64::from(pen + item.2 * 0.5) {
-                return row_start + i;
-            }
-            pen += item.2;
-        }
-        row_end
-    }
-
     /// AI 全屏页占位空壳（ai-presence 期 0 组件一；合成网格是组件④）。
     /// 整屏深紫暗底 + 一行居中标记文字——截图肉眼可分即可（C 档实拍判卷）。
     /// page=AiFullscreen 时调用方画它代替终端网格
@@ -1503,7 +1100,7 @@ impl TermView {
     /// （↑↓←→ 的命），双缺记 tofu 目击名单后跳过（不画方框吓唬人）。
     /// fg = 文字色（快捷键行 KEYBAR_LABEL / AI 页 AI_PAGE_FG）
     #[allow(clippy::too_many_arguments)]
-    fn draw_label(
+    pub(crate) fn draw_label(
         &self,
         frame: &mut Frame<'_>,
         text: &str,
@@ -1592,7 +1189,7 @@ impl TermView {
 
     /// 文本 → (字体, 字, 步进宽) 序列（px 字号下量宽；缺字记 tofu 跳过）。
     /// 折行量宽与画字共用这一条序列——眼手同尺的物质基础
-    fn measure_items(&self, text: &str, px: f32) -> Vec<(&fontdue::Font, char, f32)> {
+    pub(crate) fn measure_items(&self, text: &str, px: f32) -> Vec<(&fontdue::Font, char, f32)> {
         let mut items = Vec::new();
         for c in text.chars() {
             let Some(f) = self.pick_font(c) else {
@@ -1610,7 +1207,7 @@ impl TermView {
     /// 输入栏文本：左对齐（内缩 18px）+ 垂直居中，右缘按 cw 裁剪。
     /// px = 显式字号（textarea 多行后字号不随行高缩，调用方给 BAR_TEXT_PX）
     #[allow(clippy::too_many_arguments)]
-    fn draw_text_left(
+    pub(crate) fn draw_text_left(
         &self,
         frame: &mut Frame<'_>,
         text: &str,
@@ -1628,7 +1225,7 @@ impl TermView {
     /// 画一串已量宽的字符（折行后逐行画走这里）：左对齐内缩 18 +
     /// 垂直居中 + 右缘裁剪，规则与 draw_text_left 一致
     #[allow(clippy::too_many_arguments)]
-    fn draw_items_left(
+    pub(crate) fn draw_items_left(
         &self,
         frame: &mut Frame<'_>,
         items: &[(&fontdue::Font, char, f32)],
@@ -1735,21 +1332,10 @@ pub fn paintable(c: char) -> bool {
     c != ' ' && !c.is_control()
 }
 
-/// 快捷键行配色（XRGB，与帧缓冲同格式）
-pub const KEYBAR_BG: u32 = 0x0010_1216;
-pub const KEYBAR_KEY_BG: u32 = 0x0023_272E;
-pub const KEYBAR_MOD_ON: u32 = 0x003E_6FB4;
-pub const KEYBAR_LABEL: u32 = 0x00E8_EAED;
-
 // 输入栏配色已迁 theme.rs（2026-09-01 token 化立层）——控件只读
 // self.theme.bar.*，不再认字面颜色；默认配方考题 spec_theme_默认kfmv4配方
 // 在 tests/theme_spec.rs。keybar 配色与 SELECT_BG 终端线暂留此处，
 // token 化跟随各自线的下一次重构。
-
-/// 输入栏正文字号（px，物理像素）= 单行文本区高 156 × 0.26（单行时的
-/// 历史配比）。textarea 多行后字号不随行高缩——量宽/折行/画字同用这一把尺
-/// （模块内私有：调用方只管传 snap.lines，字号是渲染内部事）
-const BAR_TEXT_PX: f32 = 156.0 * 0.26;
 
 /// 长按选择高亮底色（kfmv4 正蓝 #3B82F6，2026-08-21 品牌色板统一——
 /// 此前借用的 KEYBAR_MOD_ON 0x3E6FB4 是快捷键行私色，不成套）
@@ -1782,42 +1368,42 @@ pub enum SelEnd {
 }
 
 /// 帧缓冲视图：把 buf + 尺寸打包，免得每个画图函数都拖一溜参数（clippy 红线）
-struct Frame<'a> {
-    buf: &'a mut [u32],
-    w: u32,
-    h: u32,
+pub(crate) struct Frame<'a> {
+    pub(crate) buf: &'a mut [u32],
+    pub(crate) w: u32,
+    pub(crate) h: u32,
 }
 
 /// 渐变填色参数（fill_round_rect_grad 用，同 Frame 的打包纪律）
 #[derive(Clone, Copy)]
-struct GradSpec {
-    c1: u32,
-    c2: u32,
+pub(crate) struct GradSpec {
+    pub(crate) c1: u32,
+    pub(crate) c2: u32,
     /// false = 沿横向，true = 沿主对角线
-    diag: bool,
+    pub(crate) diag: bool,
 }
 
 /// 外发光/投影参数（glow_round_rect 用）
 #[derive(Clone, Copy)]
-struct GlowSpec {
-    color: u32,
-    alpha: u32,
-    spread: u32,
+pub(crate) struct GlowSpec {
+    pub(crate) color: u32,
+    pub(crate) alpha: u32,
+    pub(crate) spread: u32,
     /// 投影纵向偏移（0 = 对称光晕，>0 = 向下投影）
-    y_off: u32,
+    pub(crate) y_off: u32,
 }
 
 /// 顶内侧高光/内阴影参数（inner_top_veil 用）
 #[derive(Clone, Copy)]
-struct VeilSpec {
-    color: u32,
-    alpha: u32,
-    rows: u32,
+pub(crate) struct VeilSpec {
+    pub(crate) color: u32,
+    pub(crate) alpha: u32,
+    pub(crate) rows: u32,
 }
 
 impl Frame<'_> {
     /// 画纯色矩形（裁剪到帧缓冲内）
-    fn fill_rect(&mut self, x: u32, y: u32, w: u32, h: u32, color: u32) {
+    pub(crate) fn fill_rect(&mut self, x: u32, y: u32, w: u32, h: u32, color: u32) {
         for row in y..(y + h).min(self.h) {
             for col in x..(x + w).min(self.w) {
                 self.buf[(row * self.w + col) as usize] = color;
@@ -1826,7 +1412,7 @@ impl Frame<'_> {
     }
 
     /// 画圆角矩形（SDF 抗锯齿：边界 1px 覆盖率过渡），快捷键行药丸键用
-    fn fill_round_rect(&mut self, x: u32, y: u32, w: u32, h: u32, r: u32, color: u32) {
+    pub(crate) fn fill_round_rect(&mut self, x: u32, y: u32, w: u32, h: u32, r: u32, color: u32) {
         let r = r.min(w / 2).min(h / 2);
         for py in 0..h {
             for px in 0..w {
@@ -1848,7 +1434,7 @@ impl Frame<'_> {
 
     /// 外发光/投影（kfmv4 box-shadow 质感）：沿 SDF 向外 spread px 二次
     /// 衰减，只画矩形外部（内部归主体）。y_off 模拟投影偏移（正 = 向下）
-    fn glow_round_rect(&mut self, x: u32, y: u32, w: u32, h: u32, r: u32, g: GlowSpec) {
+    pub(crate) fn glow_round_rect(&mut self, x: u32, y: u32, w: u32, h: u32, r: u32, g: GlowSpec) {
         let spread = i64::from(g.spread);
         let (x, y) = (i64::from(x), i64::from(y) + i64::from(g.y_off));
         let x0 = (x - spread).max(0);
@@ -1872,7 +1458,15 @@ impl Frame<'_> {
 
     /// 渐变圆角矩形（输入栏描边/发送钮用）：SDF 抗锯齿，颜色从 g.c1
     /// 渐变到 g.c2——g.diag=false 沿横向，true 沿主对角线
-    fn fill_round_rect_grad(&mut self, x: u32, y: u32, w: u32, h: u32, r: u32, g: GradSpec) {
+    pub(crate) fn fill_round_rect_grad(
+        &mut self,
+        x: u32,
+        y: u32,
+        w: u32,
+        h: u32,
+        r: u32,
+        g: GradSpec,
+    ) {
         let r = r.min(w / 2).min(h / 2);
         // t 的分母：横向 = w-1；对角 = 归一到 (w-1)+(h-1)
         let denom = if g.diag { (w - 1) + (h - 1) } else { w - 1 }.max(1);
@@ -1900,7 +1494,7 @@ impl Frame<'_> {
     /// 顶内侧高光/内阴影（kfmv4 inset 质感）：圆角矩形内顶起 rows 高一条，
     /// 按形状覆盖率混合（color/alpha 调用方定——白 0.15 = 玻璃高光，
     /// 黑 0.2 = 内阴影）
-    fn inner_top_veil(&mut self, x: u32, y: u32, w: u32, h: u32, r: u32, v: VeilSpec) {
+    pub(crate) fn inner_top_veil(&mut self, x: u32, y: u32, w: u32, h: u32, r: u32, v: VeilSpec) {
         let r = r.min(w / 2).min(h / 2);
         for py in 0..v.rows.min(h) {
             for px in 0..w {
@@ -1921,7 +1515,7 @@ impl Frame<'_> {
 
     /// 右指实心三角（发送钮 ▶ 图标）：以 (cx, cy) 为中心、高 size、
     /// 宽 = size*3/4。逐行扫：该行右端 = 顶点回缩 |dy| 按比例
-    fn fill_triangle_right(&mut self, cx: u32, cy: u32, size: u32, color: u32) {
+    pub(crate) fn fill_triangle_right(&mut self, cx: u32, cy: u32, size: u32, color: u32) {
         let half_h = (size / 2) as i64;
         let half_w = (size * 3 / 8) as i64;
         let (cx, cy) = (i64::from(cx), i64::from(cy));
@@ -1938,13 +1532,13 @@ impl Frame<'_> {
     }
 
     /// 单像素按覆盖率 a 混合（调用方保证 x/y 已在界内）
-    fn blend_px(&mut self, x: u32, y: u32, fg: u32, a: u32) {
+    pub(crate) fn blend_px(&mut self, x: u32, y: u32, fg: u32, a: u32) {
         let dst = &mut self.buf[(y * self.w + x) as usize];
         *dst = blend(fg, *dst, a);
     }
 
     /// 顶点向上的实心三角（定位柄上尖；硬边与 ▶ 同风格，界内裁剪）
-    fn fill_triangle_up(&mut self, cx: u32, y0: u32, w: u32, h: u32, color: u32) {
+    pub(crate) fn fill_triangle_up(&mut self, cx: u32, y0: u32, w: u32, h: u32, color: u32) {
         let half_w = (w / 2) as i64;
         let (cx, y0) = (i64::from(cx), i64::from(y0));
         for row in 0..i64::from(h) {
