@@ -355,3 +355,35 @@ fn bar_inject_parse_组合态指令() {
         Some(Ok(BarCmd::ComposingEnd))
     );
 }
+
+// ========== 视口滚动（2026-09-01 输入框可滚:拖动看头部,编辑回跟随） ==========
+// 判卷点:scroll_by 脱离跟随/raw 累加(渲染侧钳制)/编辑回跟随
+
+#[test]
+fn scroll_拖动脱跟随_编辑回跟随() {
+    let bar = InputBarState::new();
+    bar.insert_text("长文本");
+    bar.scroll_by(-3); // 手指上拖:往头部
+    let snap = bar.snap();
+    assert!(!snap.follow, "拖动 = 脱离跟随");
+    assert_eq!(snap.scroll_top, -3, "raw 累加(渲染侧钳制到 0)");
+    bar.insert_text("字");
+    assert!(bar.snap().follow, "编辑回跟随(尾锚,光标可见)");
+}
+
+#[test]
+fn scroll_by_方向语义() {
+    let bar = InputBarState::new();
+    bar.scroll_by(5);
+    assert_eq!(bar.snap().scroll_top, 5, "正 = 往尾部");
+    bar.scroll_by(-2);
+    assert_eq!(bar.snap().scroll_top, 3);
+}
+
+#[test]
+fn bar_inject_parse_scroll指令() {
+    use kfm_na::gate::{BarCmd, parse_bar_line};
+    assert_eq!(parse_bar_line("scroll -2"), Some(Ok(BarCmd::Scroll(-2))));
+    assert_eq!(parse_bar_line("scroll 5"), Some(Ok(BarCmd::Scroll(5))));
+    assert!(matches!(parse_bar_line("scroll abc"), Some(Err(_))));
+}

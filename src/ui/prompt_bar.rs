@@ -166,8 +166,18 @@ impl crate::termview::TermView {
         let text_cw = field_w - 40 - 12;
         // 折行块几何（画字与光标定位同用）：垂直居中成块，超 MAX_LINES
         // 尾锚显最后几行（手动滚动缺口记档案）
-        let show = starts.len().min(input_bar::MAX_LINES as usize);
-        let vis = &starts[starts.len() - show..];
+        // 视口窗口（2026-09-01 输入框可滚）：follow = 尾锚显示最后几行；
+        // 用户拖动后固定视口(scroll_top 渲染侧钳制)。行数不足 = 全显
+        let n = starts.len();
+        let visible = input_bar::MAX_LINES as usize;
+        let max_top = n.saturating_sub(visible);
+        let eff_top = if snap.follow {
+            max_top
+        } else {
+            snap.scroll_top.clamp(0, max_top as i32) as usize
+        };
+        let vis = &starts[eff_top..(eff_top + visible).min(n)];
+        let show = vis.len();
         let block_h = show as u32 * input_bar::LINE_STEP_PX;
         let block_top = field_top + (field_h.saturating_sub(block_h)) / 2;
         if display.is_empty() {
@@ -207,18 +217,26 @@ impl crate::termview::TermView {
         // 530ms 相位闪烁——相位由调用方算好传入（caret_on，渲染保持纯函数，
         // dump 快照相位准）；点按定位柄 = 光标线下方蓝色下坠柄，点按定位
         // 才出现，打字/清空/发送收起（状态核管）
-        if snap.focused && caret_on {
-            let comp_len = snap.composing.chars().count();
-            let cursor = (snap.cursor + comp_len).min(items.len());
-            // cursor 所在行：可见行里最后一个起点 ≤ cursor 的行
-            let mut row = 0usize;
-            for (k, &st) in vis.iter().enumerate() {
-                if st <= cursor {
-                    row = k;
+        let comp_len = snap.composing.chars().count();
+        let caret_idx = (snap.cursor + comp_len).min(items.len());
+        // 光标的全局行号(0 基):行起点 ≤ idx < 下一行起点;idx=文末归末行
+        let caret_row_all = if caret_idx >= n {
+            n - 1
+        } else {
+            let mut k = 0;
+            for (kk, &st) in starts.iter().enumerate() {
+                if st <= caret_idx {
+                    k = kk;
                 } else {
                     break;
                 }
             }
+            k
+        };
+        let caret_in_window = caret_row_all >= eff_top && caret_row_all < eff_top + vis.len();
+        if snap.focused && caret_on && caret_in_window {
+            let cursor = caret_idx;
+            let row = caret_row_all - eff_top; // 窗内行号
             let row_start = vis[row];
             let row_end = if row + 1 < vis.len() {
                 vis[row + 1]
@@ -243,18 +261,24 @@ impl crate::termview::TermView {
         }
         // 组合态下划线（浏览器 preedit 视觉对齐）：拼音区字底一道品牌青。
         // 稳显不随光标闪烁——闪烁是插入点的节拍，组合区是持续状态
-        if snap.focused && !snap.composing.is_empty() {
-            let comp_len = snap.composing.chars().count();
-            let comp_start = snap.cursor.min(items.len());
-            let comp_end = (snap.cursor + comp_len).min(items.len());
-            let mut urow = 0usize;
-            for (k, &st) in vis.iter().enumerate() {
+        let comp_start = snap.cursor.min(items.len());
+        // 组合首字的全局行号
+        let comp_row_all = if comp_start >= n {
+            n - 1
+        } else {
+            let mut k = 0;
+            for (kk, &st) in starts.iter().enumerate() {
                 if st <= comp_start {
-                    urow = k;
+                    k = kk;
                 } else {
                     break;
                 }
             }
+            k
+        };
+        if snap.focused && !snap.composing.is_empty() && comp_row_all >= eff_top {
+            let comp_end = (snap.cursor + comp_len).min(items.len());
+            let urow = comp_row_all - eff_top; // 窗内行号
             let urow_start = vis[urow];
             let urow_cy =
                 block_top + urow as u32 * input_bar::LINE_STEP_PX + input_bar::LINE_STEP_PX / 2;

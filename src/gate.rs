@@ -1485,6 +1485,8 @@ pub enum BarCmd {
     Composing(String),
     /// 组合结束(finishComposingText:组合文本落为真字)
     ComposingEnd,
+    /// 视口拖动滚动(行数增量;正=往尾,负=往头;编辑回跟随)
+    Scroll(i32),
 }
 
 /// 解析一行(纯函数,钉死)。None = 空行/注释跳过;Some(Err) = 坏行
@@ -1509,6 +1511,12 @@ pub fn parse_bar_line(line: &str) -> Option<Result<BarCmd, String>> {
         _ => {
             if let Some(rest) = t.strip_prefix("composing ") {
                 return Some(Ok(BarCmd::Composing(rest.to_string()))); // 原文照收(空格保留)
+            }
+            if let Some(rest) = t.strip_prefix("scroll ") {
+                return match rest.parse::<i32>() {
+                    Ok(n) => Some(Ok(BarCmd::Scroll(n))),
+                    Err(_) => bad(),
+                };
             }
             bad()
         }
@@ -1557,6 +1565,7 @@ fn bar_check(dir: &str) {
             }
             BarCmd::Composing(cs) => bar.set_composing(cs),
             BarCmd::ComposingEnd => bar.finish_composing(),
+            BarCmd::Scroll(n) => bar.scroll_by(*n),
         }
     }
     let s = bar.snap();

@@ -1346,6 +1346,8 @@ fn spec_bar039_render_inputbar_带高从文本实测() {
         cursor: 0,
         handle: false,
         composing: String::new(),
+        scroll_top: 0,
+        follow: true,
     };
     tv.render_inputbar(&mut buf, w, h, 0, &snap, false, false);
     // 期望带顶 = 实测行数派生（BAR-039 不变量：渲染带高 == 实测折行带高，
@@ -1378,6 +1380,8 @@ fn spec_bar_caret_闪烁相位与定位柄() {
         cursor: 0,
         handle: true,
         composing: String::new(),
+        scroll_top: 0,
+        follow: true,
     };
     let mut on = vec![0u32; (w * h) as usize];
     tv.render_inputbar(&mut on, w, h, 0, &focused, false, true);
@@ -1441,6 +1445,8 @@ fn spec_composing_下划线稳显() {
         cursor: 2,
         handle: false,
         composing: "ni".to_string(),
+        scroll_top: 0,
+        follow: true,
     };
     let mut on = vec![0u32; (w * h) as usize];
     tv.render_inputbar(&mut on, w, h, 0, &snap, false, true);
@@ -1462,4 +1468,60 @@ fn spec_composing_下划线稳显() {
         }
     }
     assert!(caret_diff, "光标仍随相位闪烁(行带内有相位差异)");
+}
+
+// ========== 视口滚动渲染（2026-09-01 输入框可滚） ==========
+// 判卷点:follow=尾锚显最后几行;scroll_top=0+follow=false 显头部;
+// 光标出视口不画(相位差异像素数为 0),follow 回来自动可见(差异≥光标矩形)
+
+#[test]
+fn spec_视口滚动_follow与固定窗口() {
+    let (tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必成");
+    let (w, h) = (600u32, 1200u32);
+    // 30 个全角字,w=600 时约 6 折行(>5 行上限,头 1 行被锚出视野)
+    let long = "一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十";
+    let snap_f = kfm_na::input_bar::BarSnap {
+        text: long.to_string(),
+        focused: true,
+        lines: 6,
+        cursor: 30,
+        handle: false,
+        composing: String::new(),
+        scroll_top: 0,
+        follow: true,
+    };
+    let snap_h = kfm_na::input_bar::BarSnap {
+        text: long.to_string(),
+        focused: true,
+        lines: 6,
+        cursor: 30,
+        handle: false,
+        composing: String::new(),
+        scroll_top: 0,
+        follow: false,
+    };
+    // 相位差异像素数 = 光标矩形是否真的画了(渲染纯函数,同 snap 双相位对拍)
+    let caret_diff = |snap: &kfm_na::input_bar::BarSnap| {
+        let mut on = vec![0u32; (w * h) as usize];
+        tv.render_inputbar(&mut on, w, h, 0, snap, false, true);
+        let mut off = vec![0u32; (w * h) as usize];
+        tv.render_inputbar(&mut off, w, h, 0, snap, false, false);
+        on.iter().zip(off.iter()).filter(|(a, b)| a != b).count()
+    };
+    assert!(
+        caret_diff(&snap_f) >= 150,
+        "尾锚态光标必可见(差异≥光标矩形 4×52=208)"
+    );
+    assert_eq!(
+        caret_diff(&snap_h),
+        0,
+        "光标出视口不画(零差异,不冒充在窗内)"
+    );
+    // 两窗内容不同(切片真换了,不是同一画面)
+    let mut a = vec![0u32; (w * h) as usize];
+    tv.render_inputbar(&mut a, w, h, 0, &snap_f, false, true);
+    let mut b = vec![0u32; (w * h) as usize];
+    tv.render_inputbar(&mut b, w, h, 0, &snap_h, false, true);
+    let (lo, hi) = (900usize * w as usize, 980usize * w as usize);
+    assert_ne!(&a[lo..hi], &b[lo..hi], "尾锚窗与头部窗内容必须不同");
 }

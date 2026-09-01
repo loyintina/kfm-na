@@ -98,6 +98,12 @@ pub struct BarSnap {
     pub handle: bool,
     /// IME 组合态文本（拼音预编辑；空串 = 无组合态）
     pub composing: String,
+    /// 视口顶行偏移（折行行号，raw 值；渲染侧钳制。follow=true 时忽略此值
+    /// 尾锚显示）
+    pub scroll_top: i32,
+    /// 视口跟随模式：true = 尾锚（显示最后几行，打字态）；false = 用户拖动
+    /// 后的固定视口
+    pub follow: bool,
 }
 
 struct Inner {
@@ -109,6 +115,9 @@ struct Inner {
     cursor: usize,
     /// IME 组合态（拼音预编辑，虚拟文本——插在 cursor 处显示但未入 text）
     composing: Option<String>,
+    /// 视口顶行偏移（raw；渲染钳制）与跟随模式。任何编辑操作回跟随
+    scroll_top: i32,
+    follow: bool,
     /// 定位柄可见（点按定位 → true；打字/清空/发送 → false）
     handle: bool,
     /// 发送出口（壳层装配时装入：接脑 + run_start/run_end）。
@@ -135,6 +144,8 @@ impl InputBarState {
                 cursor: 0,
                 handle: false,
                 composing: None,
+                scroll_top: 0,
+                follow: true,
                 sender: None,
             }),
         }
@@ -149,7 +160,18 @@ impl InputBarState {
             cursor: g.cursor,
             handle: g.handle,
             composing: g.composing.clone().unwrap_or_default(),
+            scroll_top: g.scroll_top,
+            follow: g.follow,
         }
+    }
+
+    /// 视口拖动滚动（输入框内手指上下拖）。lines = 行数增量（正=往尾部/
+    /// 负=往头部），raw 累加、渲染钳制。拖动 = 脱离跟随（不自动回锚），
+    /// 任何编辑操作（插入/退格/组合/清空/发送）回跟随
+    pub fn scroll_by(&self, lines: i32) {
+        let mut g = self.inner.lock().unwrap();
+        g.follow = false;
+        g.scroll_top += lines;
     }
 
     /// 组合态显示文本（渲染/量行/点按换算的统一原料）：text 在 cursor 处
@@ -176,6 +198,7 @@ impl InputBarState {
     /// IME 组合态文本入栏（setComposingText；随打随变）。空串 = 组合清空。
     /// 组合文本是虚拟的——不进 text，插在光标处显示（display_text 拼接）
     pub fn set_composing(&self, s: &str) {
+        self.inner.lock().unwrap().follow = true; // 组合变化也是编辑
         self.inner.lock().unwrap().composing = if s.is_empty() {
             None
         } else {
@@ -187,6 +210,7 @@ impl InputBarState {
     /// 光标跟进）。无组合态 = no-op
     pub fn finish_composing(&self) {
         let mut g = self.inner.lock().unwrap();
+        g.follow = true; // 落字回跟随
         if let Some(cs) = g.composing.take() {
             let len = g.text.chars().count();
             g.cursor = g.cursor.min(len);
@@ -255,6 +279,7 @@ impl InputBarState {
     pub fn insert_text(&self, s: &str) {
         let mut g = self.inner.lock().unwrap();
         g.composing = None; // 组合态下来 commit：虚拟区由落字取代（IME 语义）
+        g.follow = true; // 编辑回跟随
         let len = g.text.chars().count();
         if g.cursor >= len {
             g.cursor = len; // 自愈
@@ -281,6 +306,7 @@ impl InputBarState {
         let mut g = self.inner.lock().unwrap();
         if let Some(cs) = g.composing.take() {
             // 组合态退格删组合尾（删拼音字母，不碰已上屏字）
+            g.follow = true;
             let mut cs = cs;
             cs.pop();
             g.composing = if cs.is_empty() { None } else { Some(cs) };
@@ -305,6 +331,7 @@ impl InputBarState {
         g.text.replace_range(start..end, "");
         g.cursor = idx;
         g.handle = false; // 打字（含删除）收起定位柄
+        g.follow = true; // 编辑回跟随
     }
 
     /// 清空栏（注入通道 clear；保留聚焦态，光标/定位柄一并复位）
@@ -314,6 +341,7 @@ impl InputBarState {
         g.cursor = 0;
         g.handle = false;
         g.composing = None;
+        g.follow = true;
     }
 
     /// Enter = 发送：取走文本（清空栏），空文本 = None（无发送）。

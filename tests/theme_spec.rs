@@ -49,6 +49,8 @@ fn spec_theme_换肤生效_控件只读token() {
         cursor: 0,
         handle: false,
         composing: String::new(),
+        scroll_top: 0,
+        follow: true,
     };
     // 默认肤:栏带底 = 0x111119(fill_rect 直写,带内非渐变区逐像素相等)。
     // 采样点取文本区下缘的带底留白(32px 区),别落进内芯渐变/发光里
