@@ -1525,3 +1525,45 @@ fn spec_视口滚动_follow与固定窗口() {
     let (lo, hi) = (900usize * w as usize, 980usize * w as usize);
     assert_ne!(&a[lo..hi], &b[lo..hi], "尾锚窗与头部窗内容必须不同");
 }
+
+// ========== BAR-041：行归属纯函数 + 中段光标闪退回归钉 ==========
+// (2026-09-01 用户实机闪退三连:快打/滚动/点按定位——渲染切片倒挂 panic)
+
+#[test]
+fn spec_bar041_row_of_行归属() {
+    use kfm_na::ui::prompt_bar::row_of;
+    let starts = [0usize, 5, 10]; // 3 行,每行 5 字
+    assert_eq!(row_of(&starts, 0), 0);
+    assert_eq!(row_of(&starts, 4), 0, "行内归本行");
+    assert_eq!(row_of(&starts, 5), 1, "行起点归新行");
+    assert_eq!(row_of(&starts, 14), 2);
+    assert_eq!(row_of(&starts, 15), 2, "文末(=字符数)归末行");
+    assert_eq!(row_of(&starts, 99), 2, "越界钳末行");
+    assert_eq!(row_of(&[0usize], 0), 0, "空文本单行");
+}
+
+#[test]
+fn spec_bar041_多行中段光标渲染不panic() {
+    // 闪退实景:多行文本 + 光标在中段(字符位 18 > 行数 6)——旧代码
+    // 把行数当字符数做边界判定,切片 [21..18] 倒挂 panic。回归钉 =
+    // 同场景渲染不许 panic,且光标画在归属行(相位差异 ≥ 光标矩形)
+    let (tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必成");
+    let (w, h) = (600u32, 1200u32);
+    let long = "一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十";
+    let snap = kfm_na::input_bar::BarSnap {
+        text: long.to_string(),
+        focused: true,
+        lines: 6,
+        cursor: 18,
+        handle: false,
+        composing: String::new(),
+        scroll_top: 0,
+        follow: true,
+    };
+    let mut on = vec![0u32; (w * h) as usize];
+    tv.render_inputbar(&mut on, w, h, 0, &snap, false, true);
+    let mut off = vec![0u32; (w * h) as usize];
+    tv.render_inputbar(&mut off, w, h, 0, &snap, false, false);
+    let diff = on.iter().zip(off.iter()).filter(|(a, b)| a != b).count();
+    assert!(diff >= 150, "中段光标必画在归属行(差异 {diff} ≥ 150)");
+}

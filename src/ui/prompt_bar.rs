@@ -4,6 +4,25 @@
 //! 系列，档案 = 插件档案-输入栏.md。搬移为零逻辑变化——逐字节原样）。
 use crate::termview::{Frame, GlowSpec, GradSpec, SELECT_BG, VeilSpec, lerp_rgb, wrap_starts};
 
+/// 行归属纯函数（BAR-041）：字符位 idx 落在 starts 的第几行——最后一个
+/// 起点 ≤ idx 的行（idx=文末 items.len() 自动归末行）。2026-09-01 闪退案
+/// 根因修复：原内联双分支把「行数 n」错当「字符数」做边界判定，多行文本
+/// 光标位 > n 即切片倒挂 panic
+pub fn row_of(starts: &[usize], idx: usize) -> usize {
+    let mut k = 0;
+    if std::env::var("KFM_DEBUG_BAR").is_ok() {
+        eprintln!("[dbg row_of] starts={:?} idx={} → 计算", starts, idx);
+    }
+    for (kk, &st) in starts.iter().enumerate() {
+        if st <= idx {
+            k = kk;
+        } else {
+            break;
+        }
+    }
+    k
+}
+
 /// 输入栏正文字号（px，物理像素）= 单行文本区高 156 × 0.26（单行时的
 /// 历史配比）。textarea 多行后字号不随行高缩——量宽/折行/画字同用这一把尺
 /// 输入栏正文字号（px，物理像素）= 单行文本区高 156 × 0.26（单行时的
@@ -219,20 +238,8 @@ impl crate::termview::TermView {
         // 才出现，打字/清空/发送收起（状态核管）
         let comp_len = snap.composing.chars().count();
         let caret_idx = (snap.cursor + comp_len).min(items.len());
-        // 光标的全局行号(0 基):行起点 ≤ idx < 下一行起点;idx=文末归末行
-        let caret_row_all = if caret_idx >= n {
-            n - 1
-        } else {
-            let mut k = 0;
-            for (kk, &st) in starts.iter().enumerate() {
-                if st <= caret_idx {
-                    k = kk;
-                } else {
-                    break;
-                }
-            }
-            k
-        };
+        // 光标的全局行号(BAR-041 纯函数;idx=文末归末行)
+        let caret_row_all = row_of(&starts, caret_idx);
         let caret_in_window = caret_row_all >= eff_top && caret_row_all < eff_top + vis.len();
         if snap.focused && caret_on && caret_in_window {
             let cursor = caret_idx;
@@ -262,20 +269,7 @@ impl crate::termview::TermView {
         // 组合态下划线（浏览器 preedit 视觉对齐）：拼音区字底一道品牌青。
         // 稳显不随光标闪烁——闪烁是插入点的节拍，组合区是持续状态
         let comp_start = snap.cursor.min(items.len());
-        // 组合首字的全局行号
-        let comp_row_all = if comp_start >= n {
-            n - 1
-        } else {
-            let mut k = 0;
-            for (kk, &st) in starts.iter().enumerate() {
-                if st <= comp_start {
-                    k = kk;
-                } else {
-                    break;
-                }
-            }
-            k
-        };
+        let comp_row_all = row_of(&starts, comp_start);
         if snap.focused && !snap.composing.is_empty() && comp_row_all >= eff_top {
             let comp_end = (snap.cursor + comp_len).min(items.len());
             let urow = comp_row_all - eff_top; // 窗内行号
