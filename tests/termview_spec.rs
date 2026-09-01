@@ -1396,8 +1396,10 @@ fn spec_bar_caret_闪烁相位与定位柄() {
     };
     let mut noh = vec![0u32; (w * h) as usize];
     tv.render_inputbar(&mut noh, w, h, 0, &no_handle, false, true);
-    let handle_px = 1185 * w as usize + 120; // 文本区下缘的柄身
-    assert_ne!(on[handle_px], noh[handle_px], "定位柄必须悬在文本区下缘");
+    let handle_px = 1138 * w as usize + 120; // 光标行底的柄身(BAR-042 行锚)
+    assert_ne!(on[handle_px], noh[handle_px], "定位柄必须悬在光标行底");
+    // BAR-042:柄稳显不随光标闪烁(off 相位下柄仍在)
+    assert_eq!(off[handle_px], on[handle_px], "柄不随光标闪烁");
     // 失焦不画光标(与相位灭同画素)
     let unfocused = kfm_na::input_bar::BarSnap {
         focused: false,

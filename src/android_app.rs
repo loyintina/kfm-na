@@ -405,6 +405,27 @@ impl App {
                 }
             }
             TouchPhase::Moved => {
+                // 输入栏带手势(BAR-042 修正:滚动须在 Moved 臂——此前误置
+                // Ended 臂,真指拖动永远无效):拖动超 slop 即滚动文本视口
+                if let Some(bt) = self.inputbar_touch.as_mut() {
+                    let dy = y - bt.last_y;
+                    bt.last_y = y;
+                    if !bt.dragged && (y - bt.start_y).abs() > crate::scroll::TAP_SLOP_PX {
+                        bt.dragged = true;
+                    }
+                    if bt.dragged {
+                        bt.acc_px += dy;
+                        let lines = (bt.acc_px / f64::from(crate::input_bar::LINE_STEP_PX)) as i32;
+                        if lines != 0 {
+                            bt.acc_px -=
+                                f64::from(lines) * f64::from(crate::input_bar::LINE_STEP_PX);
+                            if let Some(bar) = &self.input_bar {
+                                bar.scroll_by(-lines);
+                            }
+                            self.dirty = true;
+                        }
+                    }
+                }
                 // 指头坐标跟新（捏合测距用）
                 for t in &mut self.touches {
                     if t.0 == id {

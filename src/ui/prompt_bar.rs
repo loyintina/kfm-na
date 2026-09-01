@@ -241,7 +241,7 @@ impl crate::termview::TermView {
         // 光标的全局行号(BAR-041 纯函数;idx=文末归末行)
         let caret_row_all = row_of(&starts, caret_idx);
         let caret_in_window = caret_row_all >= eff_top && caret_row_all < eff_top + vis.len();
-        if snap.focused && caret_on && caret_in_window {
+        if snap.focused && caret_in_window {
             let cursor = caret_idx;
             let row = caret_row_all - eff_top; // 窗内行号
             let row_start = vis[row];
@@ -257,11 +257,15 @@ impl crate::termview::TermView {
             let row_cy =
                 block_top + row as u32 * input_bar::LINE_STEP_PX + input_bar::LINE_STEP_PX / 2;
             let caret_x = text_cx + 18 + x_off as u32;
-            frame.fill_round_rect(caret_x, row_cy - 26, 4, 52, 2, t.text);
+            if caret_on {
+                frame.fill_round_rect(caret_x, row_cy - 26, 4, 52, 2, t.text);
+            }
             if snap.handle {
-                // 定位柄：蓝色下坠柄（品牌蓝同选区），悬在文本区下缘
+                // 定位柄(BAR-042 修正):锚定光标所在行的行底、稳显不闪
+                // (原实现锚死文本区底+随光标闪烁,均违浏览器控件行为)。
+                // 蓝色下坠柄,上尖连行底,品牌蓝同选区
                 let hx = (caret_x + 3).saturating_sub(16);
-                let hy = field_top + field_h + 1;
+                let hy = block_top + (row as u32 + 1) * input_bar::LINE_STEP_PX + 1;
                 frame.fill_round_rect(hx, hy, 32, 32, 10, SELECT_BG);
                 frame.fill_triangle_up(hx + 16, hy - 1, 20, 12, SELECT_BG);
             }
