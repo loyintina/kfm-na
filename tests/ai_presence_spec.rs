@@ -476,10 +476,10 @@ fn spec_d8加法合成_只加光不遮光() {
     // 球内笔画亮度 −32%）：sprite 改加法合成后，画在亮底上任何像素
     // 任何通道都不许变暗——球只加光不遮光（参考图 orb-on-white-ref.jpg
     // 的「文字全亮透过+球加光」效果）
-    let sprite = kfm_na::termview::build_orb_sprite(60.0, 1.0);
+    let sprite = kfm_na::ui::orb::build_orb_sprite(60.0, 1.0);
     let (w, h) = (660u32, 660u32);
     let mut buf = vec![0x0060_6060u32; (w * h) as usize]; // 亮灰底（模拟文字笔画）
-    kfm_na::termview::blit_orb_sprite(&mut buf, w, h, &sprite, 330.0, 330.0, 1.0);
+    kfm_na::ui::orb::blit_orb_sprite(&mut buf, w, h, &sprite, 330.0, 330.0, 1.0);
     for (i, &p) in buf.iter().enumerate() {
         let (x, y) = (i as u32 % w, i as u32 / w);
         assert!(
@@ -498,11 +498,11 @@ fn spec_d8光球配方_逐像素钉() {
     // Rs=64.25、halo_gain=1.0）。加法合成后依然成立：sprite 存「拟合合成结果
     // 减底 (11,10,15)」的加值，BG 底上 底+加值 = 原合成结果，尺度由 rs 显式
     // 传参（默认球径 48→60 不影响本钉）
-    let sprite = kfm_na::termview::build_orb_sprite(64.25, 1.0);
+    let sprite = kfm_na::ui::orb::build_orb_sprite(64.25, 1.0);
     let (w, h) = (660u32, 660u32);
     // 预填参考图底色 BG=(11,10,15)（0x000B0A0F）
     let mut buf = vec![0x000B_0A0Fu32; (w * h) as usize];
-    kfm_na::termview::blit_orb_sprite(&mut buf, w, h, &sprite, 326.0, 330.0, 1.0);
+    kfm_na::ui::orb::blit_orb_sprite(&mut buf, w, h, &sprite, 326.0, 330.0, 1.0);
     let ch = |x: u32, y: u32| {
         let p = buf[(y * w + x) as usize];
         ((p >> 16) & 0xFF, (p >> 8) & 0xFF, p & 0xFF)

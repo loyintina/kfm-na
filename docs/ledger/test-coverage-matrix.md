@@ -38,5 +38,6 @@
 | `src/scroll.rs` | 5 | 5 | 0 | — |
 | `src/session_router.rs` | 10 | 9 | 1 | names |
 | `src/session.rs` | 8 | 8 | 0 | — |
-| `src/termview.rs` | 88 | 81 | 7 | FONT_CANDIDATES CJK_FONT_CANDIDATES load_cjk_font font_probe KEYBAR_LABEL MAG_HALF_COLS MAG_HALF_ROWS |
+| `src/termview.rs` | 86 | 79 | 7 | FONT_CANDIDATES CJK_FONT_CANDIDATES load_cjk_font font_probe KEYBAR_LABEL MAG_HALF_COLS MAG_HALF_ROWS |
 | `src/trace.rs` | 12 | 8 | 4 | TRACE_CAP format_tail dump_all dump_tail |
+| `src/ui/orb.rs` | 3 | 3 | 0 | — |

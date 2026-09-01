@@ -30,6 +30,7 @@ pub mod session_router;
 pub mod termview;
 pub mod theme;
 pub mod trace;
+pub mod ui;
 
 #[cfg(target_os = "android")]
 pub mod android_app;
