@@ -81,3 +81,8 @@ else
     echo "       bash scripts/na-push-so.sh 把同版新核推进 hot/ 盖住旧核，"
     echo "       或经 8024 手动 rm hot/libkfm_na.so 再重启"
 fi
+
+# 清旧包(2026-09-01):取包点只留最新 2 个——旧包误装=「已装更高版本」迷惑弹
+if [ -d "$DEST_DIR" ]; then
+    ls -t "$DEST_DIR"/kfm-na-*.apk 2>/dev/null | tail -n +3 | xargs -r rm -f
+fi
