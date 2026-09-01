@@ -417,6 +417,9 @@ pub struct TermView {
     /// 长按选择区（网格坐标，含历史负行）：Some = 选择模式激活，
     /// 渲染高亮 + 单击复制；None = 无选区
     selection: Option<Selection>,
+    /// 设计 token（theme.rs 第 2 层）：控件渲染只读这里，不认字面颜色。
+    /// pub = 主题包插件/考题可直接换肤；生产默认 kfmv4 配方
+    pub theme: crate::theme::Theme,
 }
 
 impl TermView {
@@ -476,6 +479,7 @@ impl TermView {
             font_px,
             baseline_off,
             selection: None,
+            theme: crate::theme::Theme::default(),
         }
     }
 
@@ -1139,6 +1143,8 @@ impl TermView {
         caret_on: bool,
     ) {
         use crate::input_bar;
+        // token 读取（theme.rs 第 2 层）：本函数不许出现字面颜色
+        let t = &self.theme.bar;
         let min_w = 2 * input_bar::MARGIN_X_PX + input_bar::GAP_PX + input_bar::SEND_W_PX + 40;
         if buf_w < min_w {
             return; // 窗太窄画不下，保命要紧
@@ -1165,16 +1171,16 @@ impl TermView {
             w: buf_w,
             h: buf_h,
         };
-        frame.fill_rect(0, top, buf_w, bar_h, BAR_BG);
+        frame.fill_rect(0, top, buf_w, bar_h, t.bg);
         // 带顶渐变发丝线（kfmv4 border-image：紫→青→紫 α0.4，3px 物理）
         for py in 0..3u32 {
             for px in 0..buf_w {
                 let c = if px < buf_w / 2 {
-                    lerp_rgb(BAR_BORDER_L, BAR_ACCENT, px * 255 / (buf_w / 2).max(1))
+                    lerp_rgb(t.border_l, t.accent, px * 255 / (buf_w / 2).max(1))
                 } else {
                     lerp_rgb(
-                        BAR_ACCENT,
-                        BAR_BORDER_L,
+                        t.accent,
+                        t.border_l,
                         (px - buf_w / 2) * 255 / (buf_w / 2).max(1),
                     )
                 };
@@ -1191,9 +1197,9 @@ impl TermView {
         // 内芯不是纯黑——左紫调 (29,23,57) → 右青调 (12,40,54)，是半透明
         // 底叠 backdrop blur 把描边环境色晕进来的效果；取稍沉一档防塑料蓝）
         let (field_bg_l, field_bg_r) = if snap.focused {
-            (BAR_FIELD_FOCUS_BG_L, BAR_FIELD_FOCUS_BG_R)
+            (t.field_focus_bg_l, t.field_focus_bg_r)
         } else {
-            (BAR_FIELD_BG_L, BAR_FIELD_BG_R)
+            (t.field_bg_l, t.field_bg_r)
         };
         // 聚焦 = 紫外发光（kfmv4 focus box-shadow 0 0 20px α0.35）
         if snap.focused {
@@ -1204,7 +1210,7 @@ impl TermView {
                 field_h,
                 40,
                 GlowSpec {
-                    color: BAR_GLOW,
+                    color: t.glow,
                     alpha: 89,
                     spread: 24,
                     y_off: 0,
@@ -1219,8 +1225,8 @@ impl TermView {
             field_h,
             40,
             GradSpec {
-                c1: BAR_BORDER_L,
-                c2: BAR_BORDER_R,
+                c1: t.border_l,
+                c2: t.border_r,
                 diag: true,
             },
         );
@@ -1272,7 +1278,7 @@ impl TermView {
                 field_top,
                 field_h,
                 BAR_TEXT_PX,
-                BAR_PLACEHOLDER,
+                t.placeholder,
             );
         } else {
             // textarea 折行（2026-08-31 移动端全量复刻）：用函数头量好的
@@ -1292,7 +1298,7 @@ impl TermView {
                     block_top + row as u32 * input_bar::LINE_STEP_PX,
                     input_bar::LINE_STEP_PX,
                     BAR_TEXT_PX,
-                    BAR_TEXT,
+                    t.text,
                 );
             }
         }
@@ -1324,7 +1330,7 @@ impl TermView {
             let row_cy =
                 block_top + row as u32 * input_bar::LINE_STEP_PX + input_bar::LINE_STEP_PX / 2;
             let caret_x = text_cx + 18 + x_off as u32;
-            frame.fill_round_rect(caret_x, row_cy - 26, 4, 52, 2, BAR_TEXT);
+            frame.fill_round_rect(caret_x, row_cy - 26, 4, 52, 2, t.text);
             if snap.handle {
                 // 定位柄：蓝色下坠柄（品牌蓝同选区），悬在文本区下缘
                 let hx = (caret_x + 3).saturating_sub(16);
@@ -1346,7 +1352,7 @@ impl TermView {
             send_h,
             36,
             GlowSpec {
-                color: BAR_GLOW,
+                color: t.glow,
                 alpha: 77,
                 spread: 14,
                 y_off: 6,
@@ -1359,8 +1365,8 @@ impl TermView {
             send_h,
             36,
             GradSpec {
-                c1: BAR_SEND_TL,
-                c2: BAR_SEND_BR,
+                c1: t.send_tl,
+                c2: t.send_br,
                 diag: true,
             },
         );
@@ -1382,10 +1388,10 @@ impl TermView {
         let icon_cy = send_top + send_h / 2;
         if sending {
             // ⏸：两条竖圆角矩形（与 ▶ 同视觉重心同白）
-            frame.fill_round_rect(icon_cx - 23, icon_cy - 27, 15, 54, 7, BAR_SEND_TRI);
-            frame.fill_round_rect(icon_cx + 8, icon_cy - 27, 15, 54, 7, BAR_SEND_TRI);
+            frame.fill_round_rect(icon_cx - 23, icon_cy - 27, 15, 54, 7, t.send_tri);
+            frame.fill_round_rect(icon_cx + 8, icon_cy - 27, 15, 54, 7, t.send_tri);
         } else {
-            frame.fill_triangle_right(icon_cx, icon_cy, 54, BAR_SEND_TRI);
+            frame.fill_triangle_right(icon_cx, icon_cy, 54, t.send_tri);
         }
     }
 
@@ -1743,31 +1749,11 @@ pub const KEYBAR_KEY_BG: u32 = 0x0023_272E;
 pub const KEYBAR_MOD_ON: u32 = 0x003E_6FB4;
 pub const KEYBAR_LABEL: u32 = 0x00E8_EAED;
 
-/// 全局输入栏配色（期 0 组件三；2026-08-31 v2 = kfmv4 base.css 配方直译，
-/// 不再是截图取色近似：--primary #7c3aed / --accent #00d4ff / 栏带
-/// rgba(18,18,26,0.85) 叠 #0a0a0f / 文本区 rgba(10,10,15,0.8) 近黑）
-pub const BAR_BG: u32 = 0x0011_1119;
-/// 内芯横向暗色渐变两端（左紫调 → 右青调，参考图实测 (29,23,57)→(12,40,54)
-/// 稍沉一档）——kfmv4 是半透明叠 blur 晕出的环境色，不是纯黑
-pub const BAR_FIELD_BG_L: u32 = 0x0018_1532;
-pub const BAR_FIELD_BG_R: u32 = 0x000D_2231;
-/// 聚焦亮一档（同向同幅）
-pub const BAR_FIELD_FOCUS_BG_L: u32 = 0x0020_1C40;
-pub const BAR_FIELD_FOCUS_BG_R: u32 = 0x0012_2B3E;
-pub const BAR_TEXT: u32 = 0x00E0_E0E0;
-/// rgba(224,224,224,0.4) 叠近黑底的事后色
-pub const BAR_PLACEHOLDER: u32 = 0x0061_6165;
-/// 描边/渐变共用品牌紫（--primary #7c3aed）；发光同色
-pub const BAR_BORDER_L: u32 = 0x007C_3AED;
-/// 渐变青端：rgba(0,212,255,0.8) 叠栏带色的事后色
-pub const BAR_BORDER_R: u32 = 0x0003_ADD1;
-/// 带顶发丝线中点（--accent #00d4ff）
-pub const BAR_ACCENT: u32 = 0x0000_D4FF;
-pub const BAR_GLOW: u32 = 0x007C_3AED;
-/// 发送钮对角渐变两端（135°：--primary → 青端事后色，同描边）
-pub const BAR_SEND_TL: u32 = 0x007C_3AED;
-pub const BAR_SEND_BR: u32 = 0x0003_ADD1;
-pub const BAR_SEND_TRI: u32 = 0x00FF_FFFF;
+// 输入栏配色已迁 theme.rs（2026-09-01 token 化立层）——控件只读
+// self.theme.bar.*，不再认字面颜色；默认配方考题 spec_theme_默认kfmv4配方
+// 在 tests/theme_spec.rs。keybar 配色与 SELECT_BG 终端线暂留此处，
+// token 化跟随各自线的下一次重构。
+
 /// 输入栏正文字号（px，物理像素）= 单行文本区高 156 × 0.26（单行时的
 /// 历史配比）。textarea 多行后字号不随行高缩——量宽/折行/画字同用这一把尺
 /// （模块内私有：调用方只管传 snap.lines，字号是渲染内部事）
