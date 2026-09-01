@@ -77,6 +77,34 @@ pub extern "system" fn Java_dev_kfm_na_KfmImeView_nativeSendKey(
     crate::ime_queue::global().push_key_code(code);
 }
 
+/// dev.kfm.na.KfmImeView.nativeComposingText —— IME 组合态文本
+/// （setComposingText：拼音预编辑，随打随变）。空串 = 组合清空。
+/// 消费侧按焦点分流：输入栏聚焦 → preedit 上栏；终端 → 沿革吞掉
+/// （BAR-012 终端语义不变）
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_kfm_na_KfmImeView_nativeComposingText(
+    mut env: EnvUnowned,
+    _class: JClass,
+    text: JString,
+) {
+    env.with_env(|env| -> jni::errors::Result<()> {
+        let s = text.try_to_string(env)?;
+        crate::ime_queue::global().push_composing(&s);
+        Ok(())
+    })
+    .resolve_with::<LogContextErrorAndDefault, _>(|| "in nativeComposingText".to_string());
+}
+
+/// dev.kfm.na.KfmImeView.nativeFinishComposing —— 组合结束
+/// （finishComposingText：候选词已定，组合区收账）
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_kfm_na_KfmImeView_nativeFinishComposing(
+    _env: EnvUnowned,
+    _class: JClass,
+) {
+    crate::ime_queue::global().push_composing_end();
+}
+
 /// dev.kfm.na.KfmImeView.nativeImeLog —— Java 侧链路探针直送飞鸽传书。
 /// IME 的生死在 IMM 与焦点之间（BAR-009 就死在 IMM 拒弹），Rust 侧看不见，
 /// 让 Java 侧断点自己开口

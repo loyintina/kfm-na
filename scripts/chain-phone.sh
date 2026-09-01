@@ -16,7 +16,8 @@ PATCH=/tmp/kfm-na-day-chain.patch
 STAMP=.git/chain-phone-stamp
 
 git add -A
-PATCH_HASH=$(git diff --cached HEAD | md5sum | cut -d' ' -f1)
+# stamp 只绑代码内容——docs 变更不作废 stamp(docs 耦合由另一闸管)
+PATCH_HASH=$(git diff --cached HEAD -- . ':(exclude)docs' | md5sum | cut -d' ' -f1)
 if [ -z "$PATCH_HASH" ]; then echo "❌ 暂存区为空"; exit 1; fi
 git diff --cached HEAD > "$PATCH"
 echo "[chain-phone] 补丁 $(wc -l < "$PATCH") 行 哈希 $PATCH_HASH"

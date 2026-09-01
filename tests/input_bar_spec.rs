@@ -253,3 +253,105 @@ fn cursor_submit_resets() {
     assert_eq!(bar.cursor(), 0, "发送后光标复位");
     assert!(!snap.handle);
 }
+
+// ========== IME 组合态（2026-09-01 编辑对齐第 1 批：拼音预编辑入栏） ==========
+// 判卷点:display_text 拼接单源/组合尾退格/finish 落字/commit 取代组合/
+// 点按先收组合/清空发送不复读半截拼音
+
+#[test]
+fn composing_display_text_拼接单源() {
+    let bar = InputBarState::new();
+    bar.insert_text("你好");
+    bar.set_cursor(1); // 「你」后
+    bar.set_composing("pinyin");
+    let snap = bar.snap();
+    assert_eq!(snap.composing, "pinyin");
+    assert_eq!(
+        kfm_na::input_bar::InputBarState::display_text(&snap),
+        "你pinyin好",
+        "组合文本插在光标处显示"
+    );
+    bar.set_composing("");
+    assert_eq!(bar.snap().composing, "", "空串 = 组合清空");
+    let snap = bar.snap();
+    assert_eq!(
+        kfm_na::input_bar::InputBarState::display_text(&snap),
+        "你好"
+    );
+}
+
+#[test]
+fn composing_backspace_删组合尾() {
+    let bar = InputBarState::new();
+    bar.insert_text("你");
+    bar.set_composing("pin");
+    bar.backspace();
+    assert_eq!(bar.snap().composing, "pi", "组合态退格删拼音尾字母");
+    bar.backspace();
+    bar.backspace();
+    assert_eq!(bar.snap().composing, "", "组合删空 = 清态");
+    bar.backspace();
+    assert_eq!(bar.snap().text, "", "组合没了才退格删已上屏字(光标在其后)");
+    assert_eq!(bar.cursor(), 0);
+}
+
+#[test]
+fn composing_finish_落字跟进() {
+    let bar = InputBarState::new();
+    bar.insert_text("你");
+    bar.set_composing("hao");
+    bar.finish_composing();
+    let snap = bar.snap();
+    assert_eq!(snap.text, "你hao", "组合文本落为真字");
+    assert_eq!(snap.composing, "");
+    assert_eq!(bar.cursor(), 4, "光标跟进到落字之后");
+    bar.finish_composing();
+    assert_eq!(snap.text, "你hao", "无组合态 finish = no-op");
+}
+
+#[test]
+fn composing_commit_取代虚拟区() {
+    let bar = InputBarState::new();
+    bar.set_composing("nihao");
+    bar.insert_text("你好");
+    let snap = bar.snap();
+    assert_eq!(snap.text, "你好", "落字取代虚拟组合区(拼音不上屏)");
+    assert_eq!(snap.composing, "");
+}
+
+#[test]
+fn composing_点按先收组合() {
+    let bar = InputBarState::new();
+    bar.insert_text("ab");
+    bar.set_cursor(2);
+    bar.set_composing("pin");
+    bar.set_cursor(0); // 点到最前
+    let snap = bar.snap();
+    assert_eq!(snap.text, "abpin", "点按先 finishComposing 再定位");
+    assert_eq!(bar.cursor(), 0);
+    assert!(snap.handle);
+}
+
+#[test]
+fn composing_发送不复读半截拼音() {
+    let bar = InputBarState::new();
+    bar.insert_text("在吗");
+    bar.set_composing("hai");
+    let sent = bar.submit();
+    assert_eq!(sent.as_deref(), Some("在吗"), "半截组合拼音不跟去下游");
+    let snap = bar.snap();
+    assert_eq!(snap.composing, "");
+}
+
+#[test]
+fn bar_inject_parse_组合态指令() {
+    use kfm_na::gate::{BarCmd, parse_bar_line};
+    assert_eq!(
+        parse_bar_line("composing nihao"),
+        Some(Ok(BarCmd::Composing("nihao".to_string())))
+    );
+    assert_eq!(
+        parse_bar_line("composing-end"),
+        Some(Ok(BarCmd::ComposingEnd))
+    );
+}

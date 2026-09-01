@@ -89,3 +89,23 @@ fn spec_全局队列_冒烟() {
         "全局实例 push→drain 闭环断了: {out:?}"
     );
 }
+
+// ---------- 组合态注入（2026-09-01 编辑对齐第 1 批） ----------
+
+#[test]
+fn spec_队列_组合态往返() {
+    let q = ImeQueue::new();
+    q.push_composing("nihao");
+    q.push_composing(""); // 空串 = 组合清空(合法注入,与 Text 空串语义不同)
+    q.push_composing_end();
+    assert_eq!(
+        q.drain(),
+        vec![
+            Inject::Composing("nihao".to_string()),
+            Inject::Composing(String::new()),
+            Inject::ComposingEnd,
+        ],
+        "组合态三连往返:文本/清空/结束,顺序保持"
+    );
+    assert!(q.drain().is_empty(), "排干即空");
+}

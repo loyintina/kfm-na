@@ -48,8 +48,10 @@ impl crate::termview::TermView {
         if buf_w < min_w {
             return; // 窗太窄画不下，保命要紧
         }
-        // 量宽折行（画文本也要用，先量一次两头吃）
-        let items = self.measure_items(&snap.text, BAR_TEXT_PX);
+        // 量宽折行（画文本也要用，先量一次两头吃）。显示文本 = text 在
+        // 光标处拼入组合态（input_bar::display_text 单源，「所见」定义）
+        let display = crate::input_bar::InputBarState::display_text(snap);
+        let items = self.measure_items(&display, BAR_TEXT_PX);
         let widths: Vec<f32> = items.iter().map(|i| i.2).collect();
         let avail = input_bar::text_avail_w(buf_w).unwrap_or(1.0);
         let starts = wrap_starts(&widths, avail);
@@ -168,7 +170,7 @@ impl crate::termview::TermView {
         let vis = &starts[starts.len() - show..];
         let block_h = show as u32 * input_bar::LINE_STEP_PX;
         let block_top = field_top + (field_h.saturating_sub(block_h)) / 2;
-        if snap.text.is_empty() {
+        if display.is_empty() {
             self.draw_text_left(
                 &mut frame,
                 "输入消息…",
@@ -206,7 +208,8 @@ impl crate::termview::TermView {
         // dump 快照相位准）；点按定位柄 = 光标线下方蓝色下坠柄，点按定位
         // 才出现，打字/清空/发送收起（状态核管）
         if snap.focused && caret_on {
-            let cursor = snap.cursor.min(items.len());
+            let comp_len = snap.composing.chars().count();
+            let cursor = (snap.cursor + comp_len).min(items.len());
             // cursor 所在行：可见行里最后一个起点 ≤ cursor 的行
             let mut row = 0usize;
             for (k, &st) in vis.iter().enumerate() {
@@ -237,6 +240,38 @@ impl crate::termview::TermView {
                 frame.fill_round_rect(hx, hy, 32, 32, 10, SELECT_BG);
                 frame.fill_triangle_up(hx + 16, hy - 1, 20, 12, SELECT_BG);
             }
+        }
+        // 组合态下划线（浏览器 preedit 视觉对齐）：拼音区字底一道品牌青。
+        // 稳显不随光标闪烁——闪烁是插入点的节拍，组合区是持续状态
+        if snap.focused && !snap.composing.is_empty() {
+            let comp_len = snap.composing.chars().count();
+            let comp_start = snap.cursor.min(items.len());
+            let comp_end = (snap.cursor + comp_len).min(items.len());
+            let mut urow = 0usize;
+            for (k, &st) in vis.iter().enumerate() {
+                if st <= comp_start {
+                    urow = k;
+                } else {
+                    break;
+                }
+            }
+            let urow_start = vis[urow];
+            let urow_cy =
+                block_top + urow as u32 * input_bar::LINE_STEP_PX + input_bar::LINE_STEP_PX / 2;
+            let ux0 = (text_cx + 18) as f32
+                + items[urow_start..comp_start]
+                    .iter()
+                    .map(|i| i.2)
+                    .sum::<f32>();
+            let ux1 = (text_cx + 18) as f32
+                + items[urow_start..comp_end].iter().map(|i| i.2).sum::<f32>();
+            frame.fill_rect(
+                ux0 as u32,
+                urow_cy + 22,
+                (ux1 - ux0).max(4.0) as u32,
+                4,
+                t.accent,
+            );
         }
         // 发送钮：kfmv4 42×42 方钮 align-self:center——定尺居中，不随行数
         // 拉长（2026-08-31 用户指认「内容多的情况下按钮应该保持不动或者
@@ -298,6 +333,7 @@ impl crate::termview::TermView {
     /// 每帧文本/宽度变化时调用 → InputBarState::set_lines 写回，触摸命中与
     /// dump 读同一份）。buf_w 退化（画不下）按 1 行计
     pub fn bar_text_lines(&self, text: &str, buf_w: u32) -> u32 {
+        // 调用方传 display_text(组合态拼入);此处只管量
         if text.is_empty() {
             return 1;
         }

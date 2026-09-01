@@ -73,6 +73,24 @@ public class KfmImeView extends View {
         }
     }
 
+    // 组合态文本(setComposingText;输入栏 preedit,2026-09-01 编辑对齐)。
+    // 消费侧按焦点分流:输入栏聚焦→上栏,终端→沿革吞掉。空串=清组合
+    static void composingText(String text) {
+        try {
+            nativeComposingText(text);
+        } catch (Throwable t) {
+            // 吞:旧 .so 无此符号(BAR-011),组合预览消失好过崩
+        }
+    }
+
+    static void finishComposing() {
+        try {
+            nativeFinishComposing();
+        } catch (Throwable t) {
+            // 吞
+        }
+    }
+
     @Override
     public boolean onCheckIsTextEditor() {
         return true; // BAR-009：声明「我是文本编辑器」，IMM 才肯弹键盘
@@ -102,6 +120,8 @@ public class KfmImeView extends View {
     static native void nativeCommitText(String text);
 
     static native void nativeSendKey(int keyCode);
+    static native void nativeComposingText(String text);
+    static native void nativeFinishComposing();
 
     // 链路探针：Java 侧断点直送飞鸽传书（B 档平台胶水，判卷 = 上报行）
     static native void nativeImeLog(String msg);

@@ -17,7 +17,7 @@ if [ ! -f "$STAMP" ]; then
 fi
 STAMP_HASH=$(awk '{print $1}' "$STAMP")
 STAMP_AGE=$(( $(date +%s) - $(awk '{print $2}' "$STAMP") ))
-NOW_HASH=$(git add -A >/dev/null 2>&1; git diff --cached HEAD | md5sum | cut -d' ' -f1)
+NOW_HASH=$(git add -A >/dev/null 2>&1; git diff --cached HEAD -- . ':(exclude)docs' | md5sum | cut -d' ' -f1)
 if [ "$NOW_HASH" != "$STAMP_HASH" ]; then
     echo "❌ 暂存区与手机 chain 时的补丁不一致（改了代码就重跑）：bash scripts/chain-phone.sh"
     exit 1

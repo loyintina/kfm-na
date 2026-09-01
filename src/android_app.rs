@@ -757,7 +757,9 @@ impl App {
             || self.last_bar_w != Some(w);
         if stale {
             if let Some(t) = self.term_handle() {
-                let lines = t.lock().unwrap().bar_text_lines(&cur.text, w);
+                // 量行原料 = 显示文本(组合态拼入,行数跟所见走)
+                let display = crate::input_bar::InputBarState::display_text(&cur);
+                let lines = t.lock().unwrap().bar_text_lines(&display, w);
                 bar.set_lines(lines);
             }
             self.last_bar_w = Some(w);
@@ -1373,6 +1375,8 @@ impl App {
                         crate::ime_queue::Inject::Key(66) => want_submit = true, // KC_ENTER
                         crate::ime_queue::Inject::Key(67) => bar.backspace(),    // KC_DEL
                         crate::ime_queue::Inject::Key(111) => bar.unfocus(),     // KC_ESC
+                        crate::ime_queue::Inject::Composing(s) => bar.set_composing(&s),
+                        crate::ime_queue::Inject::ComposingEnd => bar.finish_composing(),
                         _ => {}
                     }
                 }
@@ -1404,6 +1408,9 @@ impl App {
                         );
                     }
                     seq.map(str::to_string)
+                }
+                crate::ime_queue::Inject::Composing(_) | crate::ime_queue::Inject::ComposingEnd => {
+                    None // 终端不画组合态(BAR-012 沿革);消费掉防空转
                 }
             };
             if let Some(bytes) = bytes {

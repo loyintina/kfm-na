@@ -1345,6 +1345,7 @@ fn spec_bar039_render_inputbar_带高从文本实测() {
         lines: 1, // stale 转写读数（后台 dump 实景）
         cursor: 0,
         handle: false,
+        composing: String::new(),
     };
     tv.render_inputbar(&mut buf, w, h, 0, &snap, false, false);
     // 期望带顶 = 实测行数派生（BAR-039 不变量：渲染带高 == 实测折行带高，
@@ -1376,6 +1377,7 @@ fn spec_bar_caret_闪烁相位与定位柄() {
         lines: 1,
         cursor: 0,
         handle: true,
+        composing: String::new(),
     };
     let mut on = vec![0u32; (w * h) as usize];
     tv.render_inputbar(&mut on, w, h, 0, &focused, false, true);
@@ -1423,4 +1425,41 @@ fn spec_bar_cursor_at_点按定位换算() {
         "行向下标单调: {top}<{mid}<{bottom}"
     );
     assert_eq!(bottom, long.chars().count(), "末行中列以远 = 插入点在最后");
+}
+
+// ========== IME 组合态渲染（2026-09-01 编辑对齐第 1 批） ==========
+// 判卷点:组合段字底品牌青下划线(fill_rect 直写=字面值),稳显不随光标闪烁
+
+#[test]
+fn spec_composing_下划线稳显() {
+    let (tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必成");
+    let (w, h) = (600u32, 1200u32);
+    let snap = kfm_na::input_bar::BarSnap {
+        text: "你好".to_string(),
+        focused: true,
+        lines: 1,
+        cursor: 2,
+        handle: false,
+        composing: "ni".to_string(),
+    };
+    let mut on = vec![0u32; (w * h) as usize];
+    tv.render_inputbar(&mut on, w, h, 0, &snap, false, true);
+    let mut off = vec![0u32; (w * h) as usize];
+    tv.render_inputbar(&mut off, w, h, 0, &snap, false, false);
+    // 单行带几何:行中心 y≈1089,下划线在 row_cy+22 → y≈1111..1115
+    let has_accent =
+        |buf: &[u32]| (0..w as usize).any(|x| buf[1113 * w as usize + x] == 0x0000_D4FF);
+    assert!(has_accent(&on), "组合段字底必须有品牌青下划线(字面值)");
+    assert!(has_accent(&off), "下划线稳显,不随光标闪烁相位消失");
+    // 光标本身随相位翻转(行带内找相位差异;组合尾 x 由字体度量定,不硬编码)
+    let mut caret_diff = false;
+    'outer: for y in 1060..1120usize {
+        for x in 0..w as usize {
+            if on[y * w as usize + x] != off[y * w as usize + x] {
+                caret_diff = true;
+                break 'outer;
+            }
+        }
+    }
+    assert!(caret_diff, "光标仍随相位闪烁(行带内有相位差异)");
 }

@@ -21,11 +21,16 @@
 use std::collections::VecDeque;
 use std::sync::Mutex;
 
-/// 一注输入：commitText 落字（文本）或快捷键行的键码（原始值，排干侧翻译）
+/// 一注输入：commitText 落字（文本）、快捷键行键码（原始值，排干侧翻译）、
+/// 或 IME 组合态（输入栏 preedit；2026-09-01 编辑对齐第 1 批）
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Inject {
     Text(String),
     Key(i32),
+    /// 组合态文本（setComposingText；空串 = 组合清空）
+    Composing(String),
+    /// 组合结束（finishComposingText）
+    ComposingEnd,
 }
 
 /// 一次注入会话的 FIFO 队列。push 侧 = JNI 回调线程，drain 侧 = 事件循环
@@ -64,6 +69,23 @@ impl ImeQueue {
             .unwrap_or_else(|e| e.into_inner())
             .push_back(Inject::Key(code));
         true
+    }
+
+    /// 组合态文本入队（输入栏 preedit）。**空串注入合法** = 组合清空
+    /// （与 push_text 的空串语义不同：组合态的「无」是状态不是丢字）
+    pub fn push_composing(&self, text: &str) {
+        self.q
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push_back(Inject::Composing(text.to_string()));
+    }
+
+    /// 组合结束入队（finishComposingText）
+    pub fn push_composing_end(&self) {
+        self.q
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push_back(Inject::ComposingEnd);
     }
 
     /// 事件循环侧排干：一次性取走全部待注入项（FIFO），队列归空

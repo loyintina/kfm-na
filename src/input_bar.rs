@@ -96,6 +96,8 @@ pub struct BarSnap {
     pub cursor: usize,
     /// 定位柄可见（点按定位后 true，打字/清空/发送收起——浏览器控件行为）
     pub handle: bool,
+    /// IME 组合态文本（拼音预编辑；空串 = 无组合态）
+    pub composing: String,
 }
 
 struct Inner {
@@ -105,6 +107,8 @@ struct Inner {
     lines: u32,
     /// 光标插入点（char 下标；插入/退格围绕它转）
     cursor: usize,
+    /// IME 组合态（拼音预编辑，虚拟文本——插在 cursor 处显示但未入 text）
+    composing: Option<String>,
     /// 定位柄可见（点按定位 → true；打字/清空/发送 → false）
     handle: bool,
     /// 发送出口（壳层装配时装入：接脑 + run_start/run_end）。
@@ -130,6 +134,7 @@ impl InputBarState {
                 lines: 1,
                 cursor: 0,
                 handle: false,
+                composing: None,
                 sender: None,
             }),
         }
@@ -143,6 +148,62 @@ impl InputBarState {
             lines: g.lines,
             cursor: g.cursor,
             handle: g.handle,
+            composing: g.composing.clone().unwrap_or_default(),
+        }
+    }
+
+    /// 组合态显示文本（渲染/量行/点按换算的统一原料）：text 在 cursor 处
+    /// 拼入组合文本——「所见」的单源定义，眼手同尺从这里出
+    pub fn display_text(snap: &BarSnap) -> String {
+        match snap.composing.is_empty() {
+            true => snap.text.clone(),
+            false => {
+                let mut out = String::new();
+                for (i, c) in snap.text.chars().enumerate() {
+                    if i == snap.cursor {
+                        out.push_str(&snap.composing);
+                    }
+                    out.push(c);
+                }
+                if snap.cursor >= snap.text.chars().count() {
+                    out.push_str(&snap.composing);
+                }
+                out
+            }
+        }
+    }
+
+    /// IME 组合态文本入栏（setComposingText；随打随变）。空串 = 组合清空。
+    /// 组合文本是虚拟的——不进 text，插在光标处显示（display_text 拼接）
+    pub fn set_composing(&self, s: &str) {
+        self.inner.lock().unwrap().composing = if s.is_empty() {
+            None
+        } else {
+            Some(s.to_string())
+        };
+    }
+
+    /// 组合结束（finishComposingText）：组合文本落为真字（插在光标处，
+    /// 光标跟进）。无组合态 = no-op
+    pub fn finish_composing(&self) {
+        let mut g = self.inner.lock().unwrap();
+        if let Some(cs) = g.composing.take() {
+            let len = g.text.chars().count();
+            g.cursor = g.cursor.min(len);
+            if g.cursor >= len {
+                g.cursor = len;
+                g.text.push_str(&cs);
+                g.cursor = g.text.chars().count();
+            } else {
+                let at = g
+                    .text
+                    .char_indices()
+                    .nth(g.cursor)
+                    .map(|(b, _)| b)
+                    .unwrap_or(g.text.len());
+                g.text.insert_str(at, &cs);
+                g.cursor += cs.chars().count();
+            }
         }
     }
 
@@ -173,6 +234,18 @@ impl InputBarState {
     /// 定位柄亮起——浏览器控件行为：点到的位置出现光标+下坠柄，打字才收
     pub fn set_cursor(&self, pos: usize) {
         let mut g = self.inner.lock().unwrap();
+        // 点按定位先收组合（Android 惯例：点别处 = finishComposingText）
+        if let Some(cs) = g.composing.take() {
+            let len = g.text.chars().count();
+            let cur = g.cursor.min(len);
+            let at = g
+                .text
+                .char_indices()
+                .nth(cur)
+                .map(|(b, _)| b)
+                .unwrap_or(g.text.len());
+            g.text.insert_str(at, &cs);
+        }
         g.cursor = pos.min(g.text.chars().count());
         g.handle = true;
     }
@@ -181,6 +254,7 @@ impl InputBarState {
     /// cursor 恒指「下一个字的落点」——非法越界（状态核外改字）自愈到末尾
     pub fn insert_text(&self, s: &str) {
         let mut g = self.inner.lock().unwrap();
+        g.composing = None; // 组合态下来 commit：虚拟区由落字取代（IME 语义）
         let len = g.text.chars().count();
         if g.cursor >= len {
             g.cursor = len; // 自愈
@@ -205,6 +279,13 @@ impl InputBarState {
     /// 光标在最前（0）无可删 = no-op
     pub fn backspace(&self) {
         let mut g = self.inner.lock().unwrap();
+        if let Some(cs) = g.composing.take() {
+            // 组合态退格删组合尾（删拼音字母，不碰已上屏字）
+            let mut cs = cs;
+            cs.pop();
+            g.composing = if cs.is_empty() { None } else { Some(cs) };
+            return;
+        }
         if g.cursor == 0 {
             return;
         }
@@ -232,6 +313,7 @@ impl InputBarState {
         g.text.clear();
         g.cursor = 0;
         g.handle = false;
+        g.composing = None;
     }
 
     /// Enter = 发送：取走文本（清空栏），空文本 = None（无发送）。
@@ -243,6 +325,7 @@ impl InputBarState {
         }
         g.cursor = 0;
         g.handle = false;
+        g.composing = None; // 发送时组合文本不跟去下游（半截拼音不算话）
         Some(std::mem::take(&mut g.text))
     }
 
@@ -262,6 +345,7 @@ impl InputBarState {
             }
             g.cursor = 0;
             g.handle = false;
+            g.composing = None;
             (std::mem::take(&mut g.text), g.sender.clone())
         };
         if let Some(s) = sender {

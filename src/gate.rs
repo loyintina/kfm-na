@@ -1481,6 +1481,10 @@ pub enum BarCmd {
     Clear,
     /// 发送(= 点发送钮/Enter:取文推进发送口)
     Submit,
+    /// IME 组合态入栏(setComposingText;空串 = 清组合)
+    Composing(String),
+    /// 组合结束(finishComposingText:组合文本落为真字)
+    ComposingEnd,
 }
 
 /// 解析一行(纯函数,钉死)。None = 空行/注释跳过;Some(Err) = 坏行
@@ -1500,8 +1504,14 @@ pub fn parse_bar_line(line: &str) -> Option<Result<BarCmd, String>> {
         "backspace" => Some(Ok(BarCmd::Backspace)),
         "clear" => Some(Ok(BarCmd::Clear)),
         "submit" => Some(Ok(BarCmd::Submit)),
+        "composing-end" => Some(Ok(BarCmd::ComposingEnd)),
         "text" => bad(), // text 指令必须带内容
-        _ => bad(),
+        _ => {
+            if let Some(rest) = t.strip_prefix("composing ") {
+                return Some(Ok(BarCmd::Composing(rest.to_string()))); // 原文照收(空格保留)
+            }
+            bad()
+        }
     }
 }
 
@@ -1545,6 +1555,8 @@ fn bar_check(dir: &str) {
                 let sent = bar.submit();
                 crate::report::report("ai", &format!("bar-inject 发送: {sent:?}"));
             }
+            BarCmd::Composing(cs) => bar.set_composing(cs),
+            BarCmd::ComposingEnd => bar.finish_composing(),
         }
     }
     let s = bar.snap();
