@@ -1540,3 +1540,57 @@ fn spec_视口滚动_follow与像素偏移() {
         "头部窗光标行已滚出视口,不画"
     );
 }
+
+// ========== BAR-043：follow→手动交接播种(视口瞬移根治) ==========
+// 判卷点:尾锚态第一笔滚动必须从「当前显示位(尾)」续算,不许从 raw=0(头)起算。
+// 2026-09-02 装机实锤:scrollpx -200 视口瞬移文本头(scroll_px raw 停 0,
+// clamp 后=0=头)——用户报「第一下失效/比例失真」的真根因,与 BAR-042 死区同族
+
+#[test]
+fn spec_bar043_follow转手动首滚_从尾锚续算() {
+    let bar = kfm_na::input_bar::InputBarState::new();
+    bar.insert_text(&"测滚动文本。".repeat(30));
+    bar.set_lines(15);
+    let field_h = 300u32;
+    let max_eff = (15 * kfm_na::input_bar::LINE_STEP_PX).saturating_sub(field_h) as i32;
+    bar.scroll_by_px(-200, field_h); // 尾锚态第一笔:往头 200px
+    let s = bar.snap();
+    assert!(!s.follow, "滚动后必须脱锚");
+    let (_, eff, _) = kfm_na::input_bar::viewport_geometry(15, field_h, s.follow, s.scroll_px);
+    assert_eq!(
+        eff,
+        max_eff - 200,
+        "交接必须播种:视口=尾锚位-200,不许瞬移到头(eff=0)"
+    );
+}
+
+#[test]
+fn spec_bar043_尾锚续算_连笔累积_到头钳住() {
+    let bar = kfm_na::input_bar::InputBarState::new();
+    bar.insert_text(&"测滚动文本。".repeat(30));
+    bar.set_lines(15);
+    let field_h = 300u32;
+    bar.scroll_by_px(-200, field_h);
+    bar.scroll_by_px(-200, field_h);
+    bar.scroll_by_px(-9999, field_h); // 远超量程 → 钳头
+    let s = bar.snap();
+    let (_, eff, _) = kfm_na::input_bar::viewport_geometry(15, field_h, s.follow, s.scroll_px);
+    assert_eq!(eff, 0, "连笔累积正确,超量程钳头=0");
+}
+
+// ========== BAR-044：bar-inject 空读竞态(写半截被值守撞见=静默吞指令) ==========
+// 2026-09-02 实锤:writer `cat >` 先截断后写,值守撞进截断窗口读到空串,
+// 解析 0 条 applied=0 bad=0 无声无息。空读不许消费,留给下一轮读全量
+
+#[test]
+fn spec_bar044_空内容不消费() {
+    assert!(
+        !kfm_na::gate::bar_should_consume(""),
+        "空读(截断窗口撞见)不许消费"
+    );
+    assert!(!kfm_na::gate::bar_should_consume("  \n "), "纯空白同空读");
+    assert!(
+        kfm_na::gate::bar_should_consume("scrollpx -200\n"),
+        "有指令正常消费"
+    );
+}

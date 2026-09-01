@@ -202,9 +202,14 @@ impl InputBarState {
     /// 「第一下失效/比例失真」的根因）——钳制需要 field_h，调用方给
     pub fn scroll_by_px(&self, px: i32, field_h: u32) {
         let mut g = self.inner.lock().unwrap();
-        g.follow = false;
         let strip_h = g.lines * crate::input_bar::LINE_STEP_PX;
         let max_eff = strip_h.saturating_sub(field_h) as i32;
+        if g.follow {
+            // BAR-043:尾锚→手动交接必须播种。raw 语义=距头顶偏移,
+            // 尾锚显示位=raw max_eff;不播种则首笔从 raw=0(头)起算瞬移
+            g.scroll_px = max_eff;
+        }
+        g.follow = false;
         g.scroll_px = (g.scroll_px + px).clamp(0, max_eff);
     }
 

@@ -1472,6 +1472,12 @@ fn gh_field_h(lines: u32) -> u32 {
     crate::input_bar::height_for_lines(lines).saturating_sub(64)
 }
 
+/// 判卷:bar-inject 内容该不该消费(BAR-044)。空/纯空白 = writer 半截态,不消费,
+/// 留给下一轮读全量——否则 `cat >` 先截断后写撞进值守轮询,指令被静默吞掉
+pub fn bar_should_consume(content: &str) -> bool {
+    !content.trim().is_empty()
+}
+
 /// 注入 bar 指令(平台无关;值守线程直调状态核服务方法)
 #[derive(Debug, Clone, PartialEq)]
 pub enum BarCmd {
@@ -1559,6 +1565,9 @@ fn bar_check(dir: &str) {
         return;
     }
     let content = std::fs::read_to_string(&trigger).unwrap_or_default();
+    if !bar_should_consume(&content) {
+        return; // BAR-044:writer 半截态,留文件等下轮读全量
+    }
     std::fs::remove_file(&trigger).ok();
     let (cmds, errs) = parse_bar_script(&content);
     let res = std::path::PathBuf::from(dir).join("bar-inject-res");

@@ -357,7 +357,7 @@ fn bar_inject_parse_组合态指令() {
 }
 
 // ========== 视口滚动（2026-09-01 输入框可滚:拖动看头部,编辑回跟随） ==========
-// 判卷点:scroll_by 脱离跟随/raw 累加(渲染侧钳制)/编辑回跟随
+// 判卷点:scroll_by 脱离跟随/尾锚→手动交接播种(BAR-043)/写入即钳制/编辑回跟随
 
 #[test]
 fn scroll_拖动脱跟随_编辑回跟随() {
@@ -377,9 +377,11 @@ fn scroll_拖动脱跟随_编辑回跟随() {
 fn scroll_by_行单位换算像素() {
     let bar = InputBarState::new();
     bar.set_lines(10); // 10 行:strip 630,field 408 → 可滚 222px
-    bar.scroll_by(2, 408); // +2 行 = 往尾部 126px
-    assert_eq!(bar.snap().scroll_px, 126);
-    bar.scroll_by(-5, 408); // 往头 5 行:越过头 → 钳 0
+    bar.scroll_by(2, 408); // 尾锚交接播种 222,+2 行往尾 → 钳在尾(BAR-043)
+    assert_eq!(bar.snap().scroll_px, 222, "尾锚态往尾滚=钳尾(交接播种可见)");
+    bar.scroll_by(-2, 408); // 往头 2 行:222-126=96 → 换算 1 行=63px 可见
+    assert_eq!(bar.snap().scroll_px, 96, "行单位换算:2 行=126px(222-96)");
+    bar.scroll_by(-5, 408); // 往头 5 行=315px:96-315<0 → 钳 0
     assert_eq!(bar.snap().scroll_px, 0, "头部边界钳制(不越界)");
 }
 
