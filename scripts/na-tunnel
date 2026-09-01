@@ -1,0 +1,264 @@
+#!/bin/bash
+# na-tunnel —— 隧道不稳环境下的服务端韧性工具(第三层:机制自身健壮)
+#
+# 安全红线(2026-09-01 用户定案):不新增任何公网暴露面。本工具只访问
+# 服务器本机的 127.0.0.1 隧道端口;一切跨设备流量仍只走手机→服务器
+# 22 端口的 SSH 隧道。第一层(公网直开)永不采用。
+#
+# 用法:
+#   na-tunnel probe                          体检:各口通断一览(迁移入断连史)
+#   na-tunnel status                         体检 + 今日断连摘要 + 最近变化
+#   na-tunnel wait <na|termux> [秒]          等某口恢复(默认预算 300s)
+#   na-tunnel ssh  [-p na|termux] [-t 秒] -- 命令...    带重试远程执行
+#   na-tunnel scp  [-p na|termux] [-t 秒] -- 本地 远程   带重试拷贝(双向)
+#   na-tunnel shot [-t 秒]                   na-shot + 新鲜度校验(防拿旧图)
+#
+# 口名: na=8024(APK 内 sshd,na_probe_key)  termux=8022(Termux sshd)
+#
+# 作战条令(隧道会断,断不再伤工作):
+#   1. 跨隧道动作一律走本工具,禁止裸 ssh/scp——断了会静默失败或拿旧数据;
+#   2. 长活(编译/测试链)放手机本地后台(nohup),服务端只发短命令;
+#   3. 拿产物必验新鲜度:shot 已内置 mtime 校验;scp 拉回后自行核对尺寸;
+#   4. 先 probe 后 wait,不盲试;ssh 只对连接层失败(rc=255)重试,
+#      命令自身失败原样返回,不拿重试掩盖真错。
+set -u
+
+NA_PORT=8024
+TERMUX_PORT=8022
+NA_KEY=/root/.ssh/na_probe_key
+SSH_HOST=localhost
+STATE_DIR="$HOME/.na-tunnel"
+HISTORY="$STATE_DIR/history.log"
+DEFAULT_BUDGET=300
+
+die() { echo "[na-tunnel] $*" >&2; exit 2; }
+
+port_of() {
+    case "$1" in
+        na | 8024) echo "$NA_PORT" ;;
+        termux | 8022) echo "$TERMUX_PORT" ;;
+        *) echo "$1" ;;
+    esac
+}
+
+name_of() {
+    case "$1" in
+        "$NA_PORT") echo na ;;
+        "$TERMUX_PORT") echo termux ;;
+        *) echo "port$1" ;;
+    esac
+}
+
+# 状态史:只在迁移时写一行(epoch ISO_时间 端口 口名 ok|down),断连频率可考古
+log_state() {
+    mkdir -p "$STATE_DIR"
+    local last
+    last=$(awk -v p="$1" '$3==p {s=$5} END {print s}' "$HISTORY" 2>/dev/null)
+    [[ "$last" == "$2" ]] && return 0
+    printf '%s %s %s %s %s\n' "$(date +%s)" "$(date +%F_%T)" \
+        "$1" "$(name_of "$1")" "$2" >>"$HISTORY"
+}
+
+# tcp_connect <port> → 通则输出握手毫秒数,不通输出空
+tcp_connect() {
+    local t0 t1
+    t0=$(date +%s%N)
+    timeout 5 bash -c "exec 3<>/dev/tcp/127.0.0.1/$1" 2>/dev/null || return 1
+    t1=$(date +%s%N)
+    echo $(( (t1 - t0) / 1000000 ))
+}
+
+_ssh_base() {
+    if [[ "$1" == "$NA_PORT" ]]; then
+        echo "ssh -p $NA_PORT -i $NA_KEY -o BatchMode=yes -o ConnectTimeout=6 \
+-o ServerAliveInterval=10 -o StrictHostKeyChecking=no $SSH_HOST"
+    else
+        echo "ssh -p $TERMUX_PORT -o BatchMode=yes -o ConnectTimeout=8 \
+-o ServerAliveInterval=10 -o StrictHostKeyChecking=no $SSH_HOST"
+    fi
+}
+
+_scp_base() {
+    if [[ "$1" == "$NA_PORT" ]]; then
+        echo "scp -P $NA_PORT -i $NA_KEY -o BatchMode=yes -o ConnectTimeout=6 \
+-o StrictHostKeyChecking=no"
+    else
+        echo "scp -P $TERMUX_PORT -o BatchMode=yes -o ConnectTimeout=8 \
+-o StrictHostKeyChecking=no"
+    fi
+}
+
+cmd_probe() {
+    local rc=0 ms p
+    for p in "$NA_PORT" "$TERMUX_PORT"; do
+        ms=$(tcp_connect "$p")
+        if [[ -n "$ms" ]]; then
+            echo "$(name_of "$p") ($p): 通 ${ms}ms"
+            log_state "$p" ok
+        else
+            echo "$(name_of "$p") ($p): ❌ 不通"
+            log_state "$p" down
+            rc=1
+        fi
+    done
+    return $rc
+}
+
+cmd_status() {
+    cmd_probe || true
+    echo "── 今日断连统计 ──"
+    if [[ ! -f "$HISTORY" ]]; then
+        echo "(尚无历史)"
+        return 0
+    fi
+    local d n
+    d=$(date +%F)
+    n=$(awk -v d="$d" '$2 ~ "^"d && $5=="down"' "$HISTORY" | wc -l)
+    if (( n > 0 )); then
+        awk -v d="$d" '$2 ~ "^"d && $5=="down" {c[$4]++} END {for (p in c) printf "%s: 断 %d 次\n", p, c[p]}' "$HISTORY"
+    else
+        echo "今日无断连记录"
+    fi
+    echo "── 最近 8 条状态变化 ──"
+    tail -8 "$HISTORY" | awk '{printf "%s  %-6s %s\n", $2, $4, ($5=="down" ? "❌ 断" : "✅ 通")}'
+}
+
+cmd_wait() {
+    [[ ${1:-} ]] || die "用法: na-tunnel wait <na|termux> [预算秒]"
+    local port; port=$(port_of "$1")
+    assert_port "$port"
+    local budget=${2:-$DEFAULT_BUDGET}
+    local start=$SECONDS
+    while :; do
+        if [[ -n $(tcp_connect "$port") ]]; then
+            log_state "$port" ok
+            echo "[na-tunnel] $(name_of "$port")($port) 已通(等了 $((SECONDS - start))s)"
+            return 0
+        fi
+        log_state "$port" down
+        if (( SECONDS - start >= budget )); then
+            echo "[na-tunnel] ❌ 等待超时(${budget}s),$(name_of "$port")($port) 仍不通" >&2
+            return 1
+        fi
+        sleep 5
+    done
+}
+
+# 带重试的 ssh:只对 rc=255(连接层失败)重试,命令自身失败原样返回
+retry_run() {
+    local port=$1; shift
+    local base; base=$(_ssh_base "$port")
+    local start=$SECONDS delay=5 n=0 out rc
+    while :; do
+        out=$($base "$@"); rc=$?
+        if (( rc == 0 )); then
+            log_state "$port" ok
+            printf '%s\n' "$out"
+            return 0
+        fi
+        if (( rc != 255 )); then
+            printf '%s\n' "$out" >&2
+            echo "[na-tunnel] 远程命令自身失败 rc=$rc(非隧道问题,不重试)" >&2
+            return "$rc"
+        fi
+        log_state "$port" down
+        local elapsed=$((SECONDS - start))
+        if (( elapsed >= BUDGET )); then
+            echo "[na-tunnel] ❌ 预算 ${BUDGET}s 内隧道未恢复(试了 $((n + 1)) 次)" >&2
+            return 255
+        fi
+        echo "[na-tunnel] 隧道断,${delay}s 后重试(第 $((n + 1)) 次,已用 ${elapsed}/${BUDGET}s)" >&2
+        sleep "$delay"
+        n=$((n + 1))
+        (( delay < 30 )) && delay=$((delay * 2))
+    done
+}
+
+retry_scp() {
+    local port=$1; shift
+    local base; base=$(_scp_base "$port")
+    local start=$SECONDS delay=5 n=0 rc
+    while :; do
+        $base "$@"; rc=$?
+        if (( rc == 0 )); then
+            log_state "$port" ok
+            return 0
+        fi
+        log_state "$port" down
+        local elapsed=$((SECONDS - start))
+        if (( elapsed >= BUDGET )); then
+            echo "[na-tunnel] ❌ 预算 ${BUDGET}s 内拷贝未成功(试了 $((n + 1)) 次)" >&2
+            return "$rc"
+        fi
+        echo "[na-tunnel] 拷贝失败,${delay}s 后重试(第 $((n + 1)) 次,已用 ${elapsed}/${BUDGET}s)" >&2
+        sleep "$delay"
+        n=$((n + 1))
+        (( delay < 30 )) && delay=$((delay * 2))
+    done
+}
+
+parse_opts() { # → PORT BUDGET REMAIN[](全局)。教训:函数内 shift 动不了
+    PORT=$NA_PORT # 调用方的 "$@",余参必须落全局数组带回(2026-09-02 实锤:
+    BUDGET=$DEFAULT_BUDGET # 原版 -p 漏给 ssh,静默连错目标)
+    REMAIN=()
+    while [[ ${1:-} == -* && ${1:-} != -- ]]; do
+        case "$1" in
+            -p) PORT=$(port_of "$2"); shift 2 ;;
+            -t) BUDGET=$2; shift 2 ;;
+            *) die "未知选项: $1" ;;
+        esac
+    done
+    [[ ${1:-} == -- ]] && shift
+    REMAIN=("$@")
+}
+
+assert_port() { # 端口必须纯数字——防解析残渣漏给 ssh 连错目标
+    [[ "$1" =~ ^[0-9]+$ ]] || die "端口非数字('$1'),参数解析有漏,拒绝执行"
+}
+
+cmd_ssh() {
+    parse_opts "$@"
+    assert_port "$PORT"
+    (( ${#REMAIN[@]} )) || die "用法: na-tunnel ssh [-p 口名] [-t 秒] -- 命令..."
+    retry_run "$PORT" "${REMAIN[@]}"
+}
+
+cmd_scp() {
+    parse_opts "$@"
+    assert_port "$PORT"
+    (( ${#REMAIN[@]} == 2 )) || die "用法: na-tunnel scp [-p 口名] [-t 秒] -- 本地 远程"
+    retry_scp "$PORT" "${REMAIN[@]}"
+}
+
+cmd_shot() {
+    parse_opts "$@"
+    assert_port "$PORT"
+    local dir; dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+    local img=/tmp/na-shot.png before=0
+    [[ -f "$img" ]] && before=$(stat -c %Y "$img")
+    local start=$SECONDS
+    while :; do
+        bash "$dir/na-shot.sh" >/dev/null 2>&1 || true
+        if [[ -f "$img" ]] && (( $(stat -c %Y "$img") > before )) \
+            && (( $(stat -c %s "$img") > 50000 )); then
+            echo "[na-tunnel] ✅ 新截图就绪: $img ($(( $(stat -c %s "$img") / 1024 ))KB, 用时 $((SECONDS - start))s)"
+            return 0
+        fi
+        if (( SECONDS - start >= BUDGET )); then
+            echo "[na-tunnel] ❌ 截图超时:未拿到比之前新的图(应用在前台吗?)" >&2
+            return 1
+        fi
+        sleep 5
+    done
+}
+
+case "${1:-}" in
+    probe) shift; cmd_probe "$@" ;;
+    status) shift; cmd_status "$@" ;;
+    wait) shift; cmd_wait "$@" ;;
+    ssh) shift; cmd_ssh "$@" ;;
+    scp) shift; cmd_scp "$@" ;;
+    shot) shift; cmd_shot "$@" ;;
+    "" | help | -h | --help) sed -n '2,25p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
+    *) die "未知子命令: $1(见 na-tunnel help)" ;;
+esac

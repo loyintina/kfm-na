@@ -13,6 +13,15 @@
   pre-commit 自动跑。
 - `check/` — chain 调用的单项检查（提交纪律闸门、stats 咬合闸等）。
 
+## 隧道韧性(跨隧道动作统一入口,2026-09-02 立)
+
+- `na-tunnel` — 隧道抖动是常态(手机网络特性,已定案不修源头只修韧性),
+  一切跨隧道动作走它:probe/status(体检+断连史,史在
+  `~/.na-tunnel/history.log`)/wait(等恢复)/ssh・scp(带重试,只对
+  连接层失败重试,不拿重试掩盖命令真错)/shot(拍图+mtime 新鲜度校验,
+  防拿旧图)。安全红线:只碰 127.0.0.1 隧道端口,不新增任何公网
+  暴露面(2026-09-01 用户定案,第一层公网直开永不采用)。
+
 ## 构建与部署(改 APK 层时)
 
 - `package-apk.sh` — 手工打包 APK(javac→d8→aapt2→zipalign→apksigner)。
