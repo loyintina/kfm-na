@@ -363,10 +363,12 @@ fn bar_inject_parse_组合态指令() {
 fn scroll_拖动脱跟随_编辑回跟随() {
     let bar = InputBarState::new();
     bar.insert_text("长文本");
-    bar.scroll_by_px(-50); // 手指上拖 50px:往头部(像素 1:1)
+    bar.set_lines(10); // 量行写回(设备上由 poll 做;考题里显式给)
+    bar.scroll_by(5, 408); // 先到尾锚
+    bar.scroll_by_px(-50, 408); // 手指下拖 50px:往头部(1:1 钳制区间内)
     let snap = bar.snap();
     assert!(!snap.follow, "拖动 = 脱离跟随");
-    assert_eq!(snap.scroll_px, -50, "像素 raw 累加(渲染侧钳制到 0)");
+    assert_eq!(snap.scroll_px, 172, "222-50 = 离头 172px(钳制区间内 1:1)");
     bar.insert_text("字");
     assert!(bar.snap().follow, "编辑回跟随(尾锚,光标可见)");
 }
@@ -374,10 +376,11 @@ fn scroll_拖动脱跟随_编辑回跟随() {
 #[test]
 fn scroll_by_行单位换算像素() {
     let bar = InputBarState::new();
-    bar.scroll_by(2); // 2 行 = 2×63px,负号 = 往尾部
-    assert_eq!(bar.snap().scroll_px, -126);
-    bar.scroll_by(-1);
-    assert_eq!(bar.snap().scroll_px, -63);
+    bar.set_lines(10); // 10 行:strip 630,field 408 → 可滚 222px
+    bar.scroll_by(2, 408); // +2 行 = 往尾部 126px
+    assert_eq!(bar.snap().scroll_px, 126);
+    bar.scroll_by(-5, 408); // 往头 5 行:越过头 → 钳 0
+    assert_eq!(bar.snap().scroll_px, 0, "头部边界钳制(不越界)");
 }
 
 #[test]

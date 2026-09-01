@@ -1692,7 +1692,13 @@ pub trait TermEmu: Send {
     fn bar_text_lines(&self, text: &str, buf_w: u32) -> u32;
     /// 点按定位换算（android_app 触摸 Field 调用方：文本区本地坐标 →
     /// 光标 char 下标，与渲染同几何）
-    fn bar_cursor_at(&self, text: &str, buf_w: u32, x_local: f64, y_local: f64) -> usize;
+    fn bar_cursor_at(
+        &self,
+        snap: &crate::input_bar::BarSnap,
+        buf_w: u32,
+        x_local: f64,
+        y_local: f64,
+    ) -> usize;
     #[allow(clippy::too_many_arguments)]
     fn render_orb(
         &self,
@@ -1761,8 +1767,14 @@ impl TermEmu for TermView {
     fn bar_text_lines(&self, text: &str, buf_w: u32) -> u32 {
         TermView::bar_text_lines(self, text, buf_w)
     }
-    fn bar_cursor_at(&self, text: &str, buf_w: u32, x_local: f64, y_local: f64) -> usize {
-        TermView::bar_cursor_at(self, text, buf_w, x_local, y_local)
+    fn bar_cursor_at(
+        &self,
+        snap: &crate::input_bar::BarSnap,
+        buf_w: u32,
+        x_local: f64,
+        y_local: f64,
+    ) -> usize {
+        TermView::bar_cursor_at(self, snap, buf_w, x_local, y_local)
     }
     #[allow(clippy::too_many_arguments)]
     fn render_orb(

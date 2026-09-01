@@ -404,6 +404,7 @@ impl App {
             TouchPhase::Moved => {
                 // 输入栏带手势(BAR-042 修正:滚动须在 Moved 臂——此前误置
                 // Ended 臂,真指拖动永远无效):拖动超 slop 即滚动文本视口
+                let field_h = self.cur_bar_h().saturating_sub(64);
                 if let Some(bt) = self.inputbar_touch.as_mut() {
                     let dy = y - bt.last_y;
                     bt.last_y = y;
@@ -413,7 +414,7 @@ impl App {
                     if bt.dragged {
                         // 像素级 1:1 跟手:手指位移直进视口偏移(下拖=回头部)
                         if let Some(bar) = &self.input_bar {
-                            bar.scroll_by_px(-(dy as i32));
+                            bar.scroll_by_px(-(dy as i32), field_h);
                         }
                         self.dirty = true;
                     }
@@ -577,11 +578,11 @@ impl App {
                                     let x_local = x - f64::from(crate::input_bar::MARGIN_X_PX + 40);
                                     let y_local = y - f64::from(field_top);
                                     if let Some(t) = self.term_handle() {
-                                        let text = bar.snap().text;
+                                        let snap_full = bar.snap();
                                         let idx = t
                                             .lock()
                                             .unwrap()
-                                            .bar_cursor_at(&text, s.width, x_local, y_local);
+                                            .bar_cursor_at(&snap_full, s.width, x_local, y_local);
                                         bar.set_cursor(idx);
                                     }
                                 }

@@ -1413,24 +1413,44 @@ fn spec_bar_caret_闪烁相位与定位柄() {
 #[test]
 fn spec_bar_cursor_at_点按定位换算() {
     let (tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必成");
-    assert_eq!(tv.bar_cursor_at("", 600, 100.0, 30.0), 0, "空文定位 = 0");
-    let short = "你好";
-    assert_eq!(tv.bar_cursor_at(short, 600, 0.0, 30.0), 0, "行首落 0");
+    let snap_of = |t: &str, follow: bool, scroll_px: i32| kfm_na::input_bar::BarSnap {
+        text: t.to_string(),
+        focused: true,
+        lines: 1,
+        cursor: 0,
+        handle: false,
+        composing: String::new(),
+        scroll_px,
+        follow,
+    };
     assert_eq!(
-        tv.bar_cursor_at(short, 600, 10_000.0, 30.0),
+        tv.bar_cursor_at(&snap_of("", true, 0), 600, 100.0, 30.0),
+        0,
+        "空文定位 = 0"
+    );
+    let short = snap_of("你好", true, 0);
+    assert_eq!(tv.bar_cursor_at(&short, 600, 0.0, 30.0), 0, "行首落 0");
+    assert_eq!(
+        tv.bar_cursor_at(&short, 600, 10_000.0, 30.0),
         2,
         "行尾越界 = 末尾(cursor=字数,插入点在最后)"
     );
     // 长文折行:w=400 一行一字,尾锚显末 5 行——行向越往下全局下标越大
-    let long = "一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十";
-    let top = tv.bar_cursor_at(long, 400, 100.0, 0.0);
-    let mid = tv.bar_cursor_at(long, 400, 100.0, 200.0);
-    let bottom = tv.bar_cursor_at(long, 400, 100.0, 10_000.0);
+    let long_text =
+        "一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十";
+    let long = snap_of(long_text, true, 0);
+    let top = tv.bar_cursor_at(&long, 400, 100.0, 0.0);
+    let mid = tv.bar_cursor_at(&long, 400, 100.0, 200.0);
+    let bottom = tv.bar_cursor_at(&long, 400, 100.0, 10_000.0);
     assert!(
         top < mid && mid < bottom,
         "行向下标单调: {top}<{mid}<{bottom}"
     );
-    assert_eq!(bottom, long.chars().count(), "末行中列以远 = 插入点在最后");
+    assert_eq!(
+        bottom,
+        long_text.chars().count(),
+        "末行中列以远 = 插入点在最后"
+    );
 }
 
 // ========== IME 组合态渲染（2026-09-01 编辑对齐第 1 批） ==========

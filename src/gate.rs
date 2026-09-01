@@ -1466,6 +1466,12 @@ fn input_bar_handle() -> Option<Arc<crate::input_bar::InputBarState>> {
     INPUT_BAR.lock().unwrap().clone()
 }
 
+/// 闸门侧 field_h:由当前折行数推 bar_h(input_bar 渲染同款公式),
+/// field = bar_h - 64。供 scroll/scrollpx 指令钳制用
+fn gh_field_h(lines: u32) -> u32 {
+    crate::input_bar::height_for_lines(lines).saturating_sub(64)
+}
+
 /// 注入 bar 指令(平台无关;值守线程直调状态核服务方法)
 #[derive(Debug, Clone, PartialEq)]
 pub enum BarCmd {
@@ -1573,8 +1579,8 @@ fn bar_check(dir: &str) {
             }
             BarCmd::Composing(cs) => bar.set_composing(cs),
             BarCmd::ComposingEnd => bar.finish_composing(),
-            BarCmd::Scroll(n) => bar.scroll_by(*n),
-            BarCmd::ScrollPx(n) => bar.scroll_by_px(*n),
+            BarCmd::Scroll(n) => bar.scroll_by(*n, gh_field_h(bar.lines())),
+            BarCmd::ScrollPx(n) => bar.scroll_by_px(*n, gh_field_h(bar.lines())),
         }
     }
     let s = bar.snap();

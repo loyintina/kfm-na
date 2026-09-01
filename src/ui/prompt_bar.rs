@@ -370,13 +370,19 @@ impl crate::termview::TermView {
         wrap_starts(&widths, avail).len() as u32
     }
 
-    /// 点按定位换算（2026-08-31 浏览器控件行为对齐）：文本区本地坐标
-    /// （左上角原点）→ 光标 char 下标。与 render_inputbar 同一套量宽折行
-    /// 几何（眼手同尺）；列向「过半归右」就近取字；行向钳在可见尾锚块内。
-    /// 注：tofu 字（双字体都缺）不计入 items——定位与渲染同一对齐口径
-    pub fn bar_cursor_at(&self, text: &str, buf_w: u32, x_local: f64, y_local: f64) -> usize {
+    /// 点按定位换算（2026-08-31 浏览器控件行为对齐；BAR-042 像素滚动
+    /// 修订）：文本区本地坐标（左上角原点）→ 光标 char 下标。几何经
+    /// viewport_geometry 单源（眼手同尺——旧版按尾窗假设映射，滚离尾锚
+    /// 后点按会映射到滚出行，光标不可见）。列向「过半归右」就近取字
+    pub fn bar_cursor_at(
+        &self,
+        snap: &crate::input_bar::BarSnap,
+        buf_w: u32,
+        x_local: f64,
+        y_local: f64,
+    ) -> usize {
         use crate::input_bar;
-        let items = self.measure_items(text, BAR_TEXT_PX);
+        let items = self.measure_items(&snap.text, BAR_TEXT_PX);
         if items.is_empty() {
             return 0;
         }
@@ -384,22 +390,19 @@ impl crate::termview::TermView {
         let avail = input_bar::text_avail_w(buf_w).unwrap_or(1.0);
         let starts = wrap_starts(&widths, avail);
         let n = starts.len();
-        let show = n.min(input_bar::MAX_LINES as usize);
         let bar_h = input_bar::height_for_lines(n as u32);
-        let field_h = bar_h - 64;
-        let block_h = show as u32 * input_bar::LINE_STEP_PX;
-        let block_top = (field_h.saturating_sub(block_h)) / 2;
-        // 行：尾锚块内行号 k，全局行号 = 滚出视野的头部分行数 + k
-        let k = if y_local >= f64::from(block_top) {
-            (((y_local - f64::from(block_top)) / f64::from(input_bar::LINE_STEP_PX)) as usize)
-                .min(show - 1)
-        } else {
-            0
-        };
-        let grow = n - show;
-        let row_start = starts[grow + k];
-        let row_end = if grow + k + 1 < n {
-            starts[grow + k + 1]
+        let (_, eff, top_off) =
+            input_bar::viewport_geometry(n as u32, bar_h - 64, snap.follow, snap.scroll_px);
+        // 行:strip 坐标 = field 内 y - 顶留白 + 滚动偏移;行 = strip/行高,
+        // 钳 [0, 行数-1](与渲染视口窗同源:viewport_geometry)
+        let strip_y = y_local - top_off as f64 + eff as f64;
+        let k = ((strip_y / f64::from(input_bar::LINE_STEP_PX))
+            .floor()
+            .max(0.0) as usize)
+            .min(n.saturating_sub(1));
+        let row_start = starts[k];
+        let row_end = if k + 1 < n {
+            starts[k + 1]
         } else {
             items.len()
         };

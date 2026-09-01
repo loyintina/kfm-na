@@ -192,16 +192,20 @@ impl InputBarState {
 
     /// 视口拖动滚动·行单位（gate scroll 指令用；1 行 = LINE_STEP_PX）。
     /// 拖动 = 脱离跟随（不自动回锚），任何编辑操作回跟随
-    pub fn scroll_by(&self, lines: i32) {
-        self.scroll_by_px(-lines * crate::input_bar::LINE_STEP_PX as i32);
+    pub fn scroll_by(&self, lines: i32, field_h: u32) {
+        self.scroll_by_px(lines * crate::input_bar::LINE_STEP_PX as i32, field_h);
     }
 
     /// 视口拖动滚动·像素单位（真指 1:1 跟手：dy 直接进偏移）。
-    /// px 正 = 往尾部，负 = 往头部；raw 累加、渲染侧钳制
-    pub fn scroll_by_px(&self, px: i32) {
+    /// px 正 = 往尾部，负 = 往头部。**写入即钳制**到
+    /// [0, 条带高-field_h]（BAR-041 同族教训：raw 越界累积 = 死区，
+    /// 「第一下失效/比例失真」的根因）——钳制需要 field_h，调用方给
+    pub fn scroll_by_px(&self, px: i32, field_h: u32) {
         let mut g = self.inner.lock().unwrap();
         g.follow = false;
-        g.scroll_px += px;
+        let strip_h = g.lines * crate::input_bar::LINE_STEP_PX;
+        let max_eff = strip_h.saturating_sub(field_h) as i32;
+        g.scroll_px = (g.scroll_px + px).clamp(0, max_eff);
     }
 
     /// 组合态显示文本（渲染/量行/点按换算的统一原料）：text 在 cursor 处
