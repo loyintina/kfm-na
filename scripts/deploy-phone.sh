@@ -83,6 +83,6 @@ else
 fi
 
 # 清旧包(2026-09-01):取包点只留最新 2 个——旧包误装=「已装更高版本」迷惑弹
-if [ -d "$DEST_DIR" ]; then
-    ls -t "$DEST_DIR"/kfm-na-*.apk 2>/dev/null | tail -n +3 | xargs -r rm -f
-fi
+# (2026-09-03 修：DEST_DIR 从未定义,set -u 直接崩,清理从未生效——
+#  目标就是固定取包点,且在手机侧执行)
+$SSH "ls -t $PHONE_PICKUP/kfm-na-*.apk 2>/dev/null | tail -n +3 | xargs -r rm -f" || true
