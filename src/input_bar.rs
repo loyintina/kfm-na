@@ -43,6 +43,14 @@ pub fn text_avail_w(buf_w: u32) -> Option<f32> {
 /// 调用方按 (boot_ms / CARET_BLINK_MS) % 2 算相位传渲染
 pub const CARET_BLINK_MS: u64 = 530;
 
+/// 长按进入选择模式的时间阈值（ms）：与 Android 系统默认值一致。
+pub const SELECT_LONG_PRESS_MS: u64 = 400;
+
+/// 选择锚点视觉尺寸（px，物理像素）：比光标定位柄小，与选区同族。
+pub const ANCHOR_VISUAL_SIZE: u32 = 28;
+/// 选择锚点触摸热区（px）：以锚点中心为原点的正方形边长，单指易拖。
+pub const ANCHOR_HIT_SIZE: u32 = 48;
+
 /// 视口几何（BAR-042 像素滚动；渲染与点按换算共用的纯函数——眼手同尺）。
 /// 给定折行行数与 field 高，输出：条带高（N×行高）、有效像素偏移
 /// （follow=尾锚=条带底贴 field 底；否则 scroll_px 钳制到
@@ -81,6 +89,14 @@ pub enum BarHit {
     Field,
     /// 发送钮（点 = enter 等价：取文发送）
     Send,
+}
+
+/// 当前被拖动的选择锚点
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelAnchor {
+    None,
+    Left,
+    Right,
 }
 
 /// 栏带 = 屏底 - 键盘 inset 之上一条带（keybar 同一把尺，在其之下一层）。
@@ -129,6 +145,12 @@ pub struct BarSnap {
     /// 视口跟随模式：true = 尾锚（显示最后几行，打字态）；false = 用户拖动
     /// 后的固定视口
     pub follow: bool,
+    /// 是否处于文本选择模式
+    pub selecting: bool,
+    /// 选区左锚点（char 下标，含）
+    pub selection_start: usize,
+    /// 选区右锚点（char 下标，不含）
+    pub selection_end: usize,
 }
 
 struct Inner {
@@ -145,6 +167,12 @@ struct Inner {
     follow: bool,
     /// 定位柄可见（点按定位 → true；打字/清空/发送 → false）
     handle: bool,
+    /// 文本选择状态（MVP：单段连续选区）
+    selecting: bool,
+    selection_start: usize,
+    selection_end: usize,
+    /// 当前被拖动的锚点（仅 selecting=true 时有效）
+    sel_anchor: SelAnchor,
     /// 发送出口（壳层装配时装入：接脑 + run_start/run_end）。
     /// 触摸发送钮 / IME Enter / 闸门注入 submit 全走这一个口（D9 同源）
     sender: Option<Sender>,
@@ -171,6 +199,10 @@ impl InputBarState {
                 composing: None,
                 scroll_px: 0,
                 follow: true,
+                selecting: false,
+                selection_start: 0,
+                selection_end: 0,
+                sel_anchor: SelAnchor::None,
                 sender: None,
             }),
         }
@@ -187,10 +219,183 @@ impl InputBarState {
             composing: g.composing.clone().unwrap_or_default(),
             scroll_px: g.scroll_px,
             follow: g.follow,
+            selecting: g.selecting,
+            selection_start: g.selection_start,
+            selection_end: g.selection_end,
         }
     }
 
-    /// 视口拖动滚动·行单位（gate scroll 指令用；1 行 = LINE_STEP_PX）。
+    // ========== 文本选择系统（BAR-046，2026-09-02） ==========
+
+    /// 进入选择模式：先 finish 组合态，光标/定位柄转双锚点
+    pub fn enter_selection(&self, pos: usize) {
+        let mut g = self.inner.lock().unwrap();
+        if let Some(cs) = g.composing.take() {
+            let len = g.text.chars().count();
+            let cur = g.cursor.min(len);
+            let at = g
+                .text
+                .char_indices()
+                .nth(cur)
+                .map(|(b, _)| b)
+                .unwrap_or(g.text.len());
+            g.text.insert_str(at, &cs);
+            g.cursor = cur + cs.chars().count();
+        }
+        let len = g.text.chars().count();
+        let pos = pos.min(len);
+        g.selecting = true;
+        g.selection_start = pos;
+        g.selection_end = pos;
+        g.sel_anchor = SelAnchor::None;
+        g.handle = false;
+        g.follow = true;
+    }
+
+    /// 设置左锚点；禁止越过右锚点
+    pub fn set_selection_start(&self, pos: usize) {
+        let mut g = self.inner.lock().unwrap();
+        if !g.selecting {
+            return;
+        }
+        let len = g.text.chars().count();
+        let pos = pos.min(len);
+        g.selection_start = pos.min(g.selection_end);
+        g.sel_anchor = SelAnchor::Left;
+        g.follow = true;
+    }
+
+    /// 设置右锚点；禁止越过左锚点
+    pub fn set_selection_end(&self, pos: usize) {
+        let mut g = self.inner.lock().unwrap();
+        if !g.selecting {
+            return;
+        }
+        let len = g.text.chars().count();
+        let pos = pos.min(len);
+        g.selection_end = pos.max(g.selection_start);
+        g.sel_anchor = SelAnchor::Right;
+        g.follow = true;
+    }
+
+    /// 设置当前被拖动的锚点（触摸 Down 时调用）
+    pub fn set_sel_anchor(&self, anchor: SelAnchor) {
+        let mut g = self.inner.lock().unwrap();
+        g.sel_anchor = anchor;
+    }
+
+    /// 退出选择模式，光标落在选区尾
+    pub fn clear_selection(&self) {
+        let mut g = self.inner.lock().unwrap();
+        if !g.selecting {
+            return;
+        }
+        g.cursor = g.selection_end;
+        g.selecting = false;
+        g.selection_start = 0;
+        g.selection_end = 0;
+        g.sel_anchor = SelAnchor::None;
+        g.handle = false;
+    }
+
+    /// 全选
+    pub fn select_all(&self) {
+        let mut g = self.inner.lock().unwrap();
+        // 组合态先落字
+        if let Some(cs) = g.composing.take() {
+            let len = g.text.chars().count();
+            let cur = g.cursor.min(len);
+            let at = g
+                .text
+                .char_indices()
+                .nth(cur)
+                .map(|(b, _)| b)
+                .unwrap_or(g.text.len());
+            g.text.insert_str(at, &cs);
+            g.cursor = cur + cs.chars().count();
+        }
+        let len = g.text.chars().count();
+        g.selecting = true;
+        g.selection_start = 0;
+        g.selection_end = len;
+        g.sel_anchor = SelAnchor::None;
+        g.handle = false;
+        g.follow = true;
+    }
+
+    /// 当前选区文本；无选区或空选区返回 None
+    pub fn selected_text(&self) -> Option<String> {
+        let g = self.inner.lock().unwrap();
+        if !g.selecting || g.selection_start >= g.selection_end {
+            return None;
+        }
+        Some(
+            g.text
+                .chars()
+                .skip(g.selection_start)
+                .take(g.selection_end - g.selection_start)
+                .collect(),
+        )
+    }
+
+    /// 删除选区文字；返回是否发生了删除
+    pub fn delete_selection(&self) -> bool {
+        let mut g = self.inner.lock().unwrap();
+        if !g.selecting || g.selection_start >= g.selection_end {
+            return false;
+        }
+        let start = g
+            .text
+            .char_indices()
+            .nth(g.selection_start)
+            .map(|(b, _)| b)
+            .unwrap_or(g.text.len());
+        let end = g
+            .text
+            .char_indices()
+            .nth(g.selection_end)
+            .map(|(b, _)| b)
+            .unwrap_or(g.text.len());
+        g.text.replace_range(start..end, "");
+        g.cursor = g.selection_start;
+        g.selecting = false;
+        g.selection_start = 0;
+        g.selection_end = 0;
+        g.sel_anchor = SelAnchor::None;
+        g.handle = false;
+        g.follow = true;
+        true
+    }
+
+    /// 在 cursor/选区处插入文本；有选区先替换选区
+    pub fn insert_or_replace(&self, s: &str) {
+        let had_selection = self.delete_selection();
+        let mut g = self.inner.lock().unwrap();
+        g.composing = None;
+        g.follow = true;
+        let len = g.text.chars().count();
+        g.cursor = g.cursor.min(len);
+        if g.cursor >= len {
+            g.text.push_str(s);
+            g.cursor += s.chars().count();
+        } else {
+            let at = g
+                .text
+                .char_indices()
+                .nth(g.cursor)
+                .map(|(b, _)| b)
+                .unwrap_or(g.text.len());
+            g.text.insert_str(at, s);
+            g.cursor += s.chars().count();
+        }
+        g.handle = false;
+        if had_selection {
+            // 替换后选区落在插入文本尾部（某些编辑器保留选区，这里先简化）
+            g.selecting = false;
+        }
+    }
+
+    /// 视图拖动滚动·行单位（gate scroll 指令用；1 行 = LINE_STEP_PX）。
     /// 拖动 = 脱离跟随（不自动回锚），任何编辑操作回跟随
     pub fn scroll_by(&self, lines: i32, field_h: u32) {
         self.scroll_by_px(lines * crate::input_bar::LINE_STEP_PX as i32, field_h);
@@ -294,7 +499,8 @@ impl InputBarState {
     }
 
     /// 点按定位光标（触摸端把点按换算成 char 下标后走这里；越界钳到末尾）。
-    /// 定位柄亮起——浏览器控件行为：点到的位置出现光标+下坠柄，打字才收
+    /// 定位柄亮起——浏览器控件行为：点到的位置出现光标+下坠柄，打字才收。
+    /// 选择模式下短按选区外 = 退出选择。
     pub fn set_cursor(&self, pos: usize) {
         let mut g = self.inner.lock().unwrap();
         // 点按定位先收组合（Android 惯例：点别处 = finishComposingText）
@@ -311,14 +517,40 @@ impl InputBarState {
         }
         g.cursor = pos.min(g.text.chars().count());
         g.handle = true;
+        // 退出选择模式
+        g.selecting = false;
+        g.selection_start = 0;
+        g.selection_end = 0;
+        g.sel_anchor = SelAnchor::None;
     }
 
-    /// 在光标插入点插文本（IME commitText / 物理字符键）。打字收起定位柄；
-    /// cursor 恒指「下一个字的落点」——非法越界（状态核外改字）自愈到末尾
+    /// 在光标/选区处插文本（IME commitText / 物理字符键）。有选区先替换选区；
+    /// 打字收起定位柄；cursor 恒指「下一个字的落点」
     pub fn insert_text(&self, s: &str) {
         let mut g = self.inner.lock().unwrap();
         g.composing = None; // 组合态下来 commit：虚拟区由落字取代（IME 语义）
         g.follow = true; // 编辑回跟随
+        // 有选区先删选区
+        if g.selecting && g.selection_start < g.selection_end {
+            let start = g
+                .text
+                .char_indices()
+                .nth(g.selection_start)
+                .map(|(b, _)| b)
+                .unwrap_or(g.text.len());
+            let end = g
+                .text
+                .char_indices()
+                .nth(g.selection_end)
+                .map(|(b, _)| b)
+                .unwrap_or(g.text.len());
+            g.text.replace_range(start..end, "");
+            g.cursor = g.selection_start;
+            g.selecting = false;
+            g.selection_start = 0;
+            g.selection_end = 0;
+            g.sel_anchor = SelAnchor::None;
+        }
         let len = g.text.chars().count();
         if g.cursor >= len {
             g.cursor = len; // 自愈
@@ -339,8 +571,8 @@ impl InputBarState {
         g.handle = false; // 打字收起定位柄（浏览器控件行为）
     }
 
-    /// 退格删光标前一个字符（char 边界安全——中文不是撕字节）；
-    /// 光标在最前（0）无可删 = no-op
+    /// 退格：有选区删选区；无选区删光标前一个字符（char 边界安全）；
+    /// 组合态退格删拼音尾
     pub fn backspace(&self) {
         let mut g = self.inner.lock().unwrap();
         if let Some(cs) = g.composing.take() {
@@ -349,6 +581,30 @@ impl InputBarState {
             let mut cs = cs;
             cs.pop();
             g.composing = if cs.is_empty() { None } else { Some(cs) };
+            return;
+        }
+        // 有选区：整体删除
+        if g.selecting && g.selection_start < g.selection_end {
+            let start = g
+                .text
+                .char_indices()
+                .nth(g.selection_start)
+                .map(|(b, _)| b)
+                .unwrap_or(g.text.len());
+            let end = g
+                .text
+                .char_indices()
+                .nth(g.selection_end)
+                .map(|(b, _)| b)
+                .unwrap_or(g.text.len());
+            g.text.replace_range(start..end, "");
+            g.cursor = g.selection_start;
+            g.selecting = false;
+            g.selection_start = 0;
+            g.selection_end = 0;
+            g.sel_anchor = SelAnchor::None;
+            g.handle = false;
+            g.follow = true;
             return;
         }
         if g.cursor == 0 {
@@ -373,7 +629,7 @@ impl InputBarState {
         g.follow = true; // 编辑回跟随
     }
 
-    /// 清空栏（注入通道 clear；保留聚焦态，光标/定位柄一并复位）
+    /// 清空栏（注入通道 clear；保留聚焦态，光标/定位柄/选区一并复位）
     pub fn clear(&self) {
         let mut g = self.inner.lock().unwrap();
         g.text.clear();
@@ -381,6 +637,10 @@ impl InputBarState {
         g.handle = false;
         g.composing = None;
         g.follow = true;
+        g.selecting = false;
+        g.selection_start = 0;
+        g.selection_end = 0;
+        g.sel_anchor = SelAnchor::None;
     }
 
     /// Enter = 发送：取走文本（清空栏），空文本 = None（无发送）。
@@ -393,6 +653,10 @@ impl InputBarState {
         g.cursor = 0;
         g.handle = false;
         g.composing = None; // 发送时组合文本不跟去下游（半截拼音不算话）
+        g.selecting = false;
+        g.selection_start = 0;
+        g.selection_end = 0;
+        g.sel_anchor = SelAnchor::None;
         Some(std::mem::take(&mut g.text))
     }
 
@@ -413,6 +677,10 @@ impl InputBarState {
             g.cursor = 0;
             g.handle = false;
             g.composing = None;
+            g.selecting = false;
+            g.selection_start = 0;
+            g.selection_end = 0;
+            g.sel_anchor = SelAnchor::None;
             (std::mem::take(&mut g.text), g.sender.clone())
         };
         if let Some(s) = sender {

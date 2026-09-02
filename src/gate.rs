@@ -1501,6 +1501,12 @@ pub enum BarCmd {
     Scroll(i32),
     /// 视口拖动滚动·像素(1:1 跟手;正=往尾,负=往头)
     ScrollPx(i32),
+    /// 全选
+    SelectAll,
+    /// 设置选区 [start, end)
+    Select(usize, usize),
+    /// 退出选择模式
+    Unselect,
 }
 
 /// 解析一行(纯函数,钉死)。None = 空行/注释跳过;Some(Err) = 坏行
@@ -1536,6 +1542,21 @@ pub fn parse_bar_line(line: &str) -> Option<Result<BarCmd, String>> {
                 return match rest.parse::<i32>() {
                     Ok(n) => Some(Ok(BarCmd::ScrollPx(n))),
                     Err(_) => bad(),
+                };
+            }
+            if t == "select-all" {
+                return Some(Ok(BarCmd::SelectAll));
+            }
+            if t == "unselect" {
+                return Some(Ok(BarCmd::Unselect));
+            }
+            if let Some(rest) = t.strip_prefix("select ") {
+                let mut parts = rest.split_whitespace();
+                let a = parts.next().and_then(|p| p.parse::<usize>().ok());
+                let b = parts.next().and_then(|p| p.parse::<usize>().ok());
+                return match (a, b) {
+                    (Some(start), Some(end)) => Some(Ok(BarCmd::Select(start, end))),
+                    _ => bad(),
                 };
             }
             bad()
@@ -1590,6 +1611,12 @@ fn bar_check(dir: &str) {
             BarCmd::ComposingEnd => bar.finish_composing(),
             BarCmd::Scroll(n) => bar.scroll_by(*n, gh_field_h(bar.lines())),
             BarCmd::ScrollPx(n) => bar.scroll_by_px(*n, gh_field_h(bar.lines())),
+            BarCmd::SelectAll => bar.select_all(),
+            BarCmd::Select(start, end) => {
+                bar.enter_selection(*start);
+                bar.set_selection_end(*end);
+            }
+            BarCmd::Unselect => bar.clear_selection(),
         }
     }
     let s = bar.snap();

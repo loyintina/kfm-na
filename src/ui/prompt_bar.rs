@@ -219,6 +219,28 @@ impl crate::termview::TermView {
                 } else {
                     items.len()
                 };
+                // 选区高亮（BAR-046）：画在文字底层，只处理 committed text 空间。
+                // MVP 假设 item 下标与 char 下标 1:1（无 tofu），与光标/定位柄
+                // 现有口径一致；tofu 字场景记诚实边界。
+                if snap.selecting && snap.selection_start < snap.selection_end {
+                    let sel_s = snap.selection_start.max(st);
+                    let sel_e = snap.selection_end.min(end).max(sel_s);
+                    if sel_s < sel_e {
+                        let x0 = items[st..sel_s].iter().map(|i| i.2).sum::<f32>();
+                        let x1 = items[st..sel_e].iter().map(|i| i.2).sum::<f32>();
+                        let sx0 = text_cx + 18 + x0 as u32;
+                        let sx1 = text_cx + 18 + x1 as u32;
+                        let sy = line_y(k);
+                        frame.fill_round_rect(
+                            sx0,
+                            sy as u32,
+                            sx1.saturating_sub(sx0).max(4),
+                            input_bar::LINE_STEP_PX,
+                            4,
+                            t.select_bg,
+                        );
+                    }
+                }
                 self.draw_items_left(
                     &mut frame,
                     &items[st..end.max(st)],
@@ -296,6 +318,41 @@ impl crate::termview::TermView {
                 (ux1 - ux0).max(4.0) as u32,
                 4,
                 t.accent,
+            );
+        }
+        // 选择锚点柄（BAR-046）：选择模式下画在文字之上；行滚出视口不画。
+        // 锚点位置用同一套 row_of/starts/items，与光标/点按换算同源。
+        if snap.selecting {
+            self.draw_selection_anchor(
+                &mut frame,
+                snap.selection_start,
+                text_cx,
+                &starts,
+                &items,
+                &line_y,
+                field_y0,
+                field_y1,
+                t.select_handle,
+                true, // 左锚点尖朝上
+            );
+            self.draw_selection_anchor(
+                &mut frame,
+                snap.selection_end,
+                text_cx,
+                &starts,
+                &items,
+                &line_y,
+                field_y0,
+                field_y1,
+                t.select_handle,
+                false, // 右锚点尖朝上
+            );
+        }
+        // 操作菜单（BAR-046）：选择模式下弹出气泡条；MVP 自绘在栏带内。
+        if snap.selecting {
+            self.draw_selection_menu(
+                &mut frame, snap, &starts, &items, text_cx, &line_y, field_top, field_h, bar_h,
+                top, buf_w,
             );
         }
         // 发送钮：kfmv4 42×42 方钮 align-self:center——定尺居中，不随行数
@@ -421,5 +478,108 @@ impl crate::termview::TermView {
             pen += item.2;
         }
         row_end
+    }
+
+    /// 画单个选择锚点柄（BAR-046）：尖朝上，底边贴对应行底。
+    /// idx=char 下标；left=true 时尖在水平中心，false 同理。
+    #[allow(clippy::too_many_arguments)]
+    fn draw_selection_anchor(
+        &self,
+        frame: &mut Frame,
+        idx: usize,
+        text_cx: u32,
+        starts: &[usize],
+        items: &[(&fontdue::Font, char, f32)],
+        line_y: &dyn Fn(usize) -> i32,
+        field_y0: i32,
+        field_y1: i32,
+        color: u32,
+        _left: bool,
+    ) {
+        use crate::input_bar;
+        let row = row_of(starts, idx.min(items.len()));
+        let row_start = starts[row];
+        let row_y = line_y(row);
+        if row_y + input_bar::LINE_STEP_PX as i32 <= field_y0 || row_y >= field_y1 {
+            return; // 行滚出视口不画
+        }
+        let x_off: f32 = items[row_start..idx.min(items.len()).max(row_start)]
+            .iter()
+            .map(|i| i.2)
+            .sum();
+        let ax = (text_cx + 18 + x_off as u32) as i32;
+        let tip_y = (row_y + input_bar::LINE_STEP_PX as i32 - 2) as u32;
+        let size = 28i32; // ANCHOR_VISUAL_SIZE
+        let half = size / 2;
+        // 上尖三角 + 正方承载（与定位柄同族，缩小版）
+        frame.fill_triangle_up(
+            (ax + half) as u32,
+            tip_y.saturating_sub(1),
+            size as u32,
+            14,
+            color,
+        );
+        frame.fill_round_rect(
+            (ax - half + 4) as u32,
+            tip_y + 11,
+            size as u32,
+            size as u32,
+            8,
+            color,
+        );
+    }
+
+    /// 画选择操作菜单（BAR-046）：气泡条，默认「全选 | 复制 | 剪切 | 粘贴」。
+    /// 位置：优先在选区上方；空间不足则翻到下方。MVP 不自绘文字，只画容器
+    /// 与按钮分隔（文字标签通过后续 SDF 字绘制或视为条形色块占位）。
+    #[allow(clippy::too_many_arguments)]
+    fn draw_selection_menu(
+        &self,
+        frame: &mut Frame,
+        snap: &crate::input_bar::BarSnap,
+        starts: &[usize],
+        items: &[(&fontdue::Font, char, f32)],
+        _text_cx: u32,
+        line_y: &dyn Fn(usize) -> i32,
+        _field_top: u32,
+        _field_h: u32,
+        bar_h: u32,
+        bar_top: u32,
+        buf_w: u32,
+    ) {
+        use crate::input_bar;
+        if snap.selection_start >= snap.selection_end {
+            return;
+        }
+        let row_s = row_of(starts, snap.selection_start.min(items.len()));
+        let row_e = row_of(starts, snap.selection_end.min(items.len()));
+        let y_s = line_y(row_s);
+        let y_e = line_y(row_e);
+        // 选区垂直中心（单选区场景）
+        let sel_mid_y = (y_s + y_e + input_bar::LINE_STEP_PX as i32) / 2;
+        let menu_h = 72u32;
+        let menu_w = 420u32;
+        let menu_x = (buf_w.saturating_sub(menu_w)) / 2;
+        // 优先放选区上方；上方空间不够则放下方
+        let mut menu_y = (sel_mid_y - menu_h as i32 - 20).max(bar_top as i32) as u32;
+        if menu_y < bar_top + 8 {
+            menu_y = (sel_mid_y + input_bar::LINE_STEP_PX as i32 + 20) as u32;
+            if menu_y + menu_h > bar_top + bar_h {
+                menu_y = bar_top + 8; // 兜底：贴顶
+            }
+        }
+        // 气泡底
+        let t = &self.theme.bar;
+        frame.fill_round_rect(menu_x, menu_y, menu_w, menu_h, 16, t.menu_bg);
+        // 投影：简化版底边 4px 黑 α0.25
+        for py in 0..4u32 {
+            frame.blend_px(menu_x + 20, menu_y + menu_h + py, 0, 64);
+        }
+        // 分隔线（3 条竖线分四格）
+        let btn_w = menu_w / 4;
+        for i in 1..4 {
+            let x = menu_x + btn_w * i;
+            frame.fill_rect(x, menu_y + 12, 2, menu_h - 24, t.menu_disabled);
+        }
     }
 }

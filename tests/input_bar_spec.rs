@@ -397,3 +397,119 @@ fn bar_inject_parse_scroll指令() {
     );
     assert!(matches!(parse_bar_line("scroll abc"), Some(Err(_))));
 }
+
+#[test]
+fn bar_inject_parse_selection指令() {
+    use kfm_na::gate::{BarCmd, parse_bar_line};
+    assert_eq!(parse_bar_line("select-all"), Some(Ok(BarCmd::SelectAll)));
+    assert_eq!(parse_bar_line("unselect"), Some(Ok(BarCmd::Unselect)));
+    assert_eq!(parse_bar_line("select 2 5"), Some(Ok(BarCmd::Select(2, 5))));
+    assert!(matches!(parse_bar_line("select 2"), Some(Err(_))));
+    assert!(matches!(parse_bar_line("select a b"), Some(Err(_))));
+}
+
+// ========== 文本选择系统（BAR-046，2026-09-02） ==========
+// 判卷点：选区不越界/替换选区/删除选区/全选/组合态先落字
+
+#[test]
+fn selection_enter_clears_composing() {
+    let bar = InputBarState::new();
+    bar.insert_text("你好");
+    bar.set_composing("ni");
+    bar.enter_selection(1);
+    let snap = bar.snap();
+    assert!(snap.selecting, "进入选择模式");
+    assert_eq!(
+        snap.text, "你好ni",
+        "组合态在光标处落真字（cursor=2 在'你好'后）"
+    );
+    assert_eq!(snap.selection_start, 1, "选区起点=传入位置");
+    assert_eq!(snap.selection_end, 1, "初始选区为空");
+    assert!(snap.composing.is_empty(), "组合态清空");
+}
+
+#[test]
+fn selection_anchors_do_not_cross() {
+    let bar = InputBarState::new();
+    bar.insert_text("一二三四五");
+    bar.enter_selection(2);
+    bar.set_selection_end(4);
+    assert_eq!(bar.snap().selection_end, 4, "右锚点扩展");
+    bar.set_selection_start(5); // 试图越过右锚点
+    assert_eq!(bar.snap().selection_start, 4, "左锚点被钳在右锚点");
+    bar.set_selection_start(1);
+    assert_eq!(bar.snap().selection_start, 1, "左锚点正常收缩");
+    bar.set_selection_end(0); // 试图越过左锚点
+    assert_eq!(bar.snap().selection_end, 1, "右锚点被钳在左锚点");
+}
+
+#[test]
+fn selection_selected_text_and_delete() {
+    let bar = InputBarState::new();
+    bar.insert_text("abcdef");
+    bar.enter_selection(2);
+    bar.set_selection_end(4);
+    assert_eq!(bar.selected_text().as_deref(), Some("cd"), "选区文本正确");
+    assert!(bar.delete_selection(), "发生了删除");
+    let snap = bar.snap();
+    assert_eq!(snap.text, "abef", "选区被删除");
+    assert_eq!(snap.cursor, 2, "光标落在选区起点");
+    assert!(!snap.selecting, "退出选择模式");
+}
+
+#[test]
+fn selection_insert_replaces_selection() {
+    let bar = InputBarState::new();
+    bar.insert_text("abcdef");
+    bar.enter_selection(2);
+    bar.set_selection_end(4);
+    bar.insert_text("XYZ");
+    let snap = bar.snap();
+    assert_eq!(snap.text, "abXYZef", "选区被替换");
+    assert_eq!(snap.cursor, 5, "光标在插入文本后");
+    assert!(!snap.selecting, "退出选择模式");
+}
+
+#[test]
+fn selection_backspace_deletes_selection() {
+    let bar = InputBarState::new();
+    bar.insert_text("abcdef");
+    bar.enter_selection(2);
+    bar.set_selection_end(4);
+    bar.backspace();
+    assert_eq!(bar.snap().text, "abef", "退格删整个选区");
+}
+
+#[test]
+fn selection_select_all() {
+    let bar = InputBarState::new();
+    bar.insert_text("你好世界");
+    bar.set_composing("abc");
+    bar.select_all();
+    let snap = bar.snap();
+    assert!(snap.selecting, "全选后处于选择模式");
+    assert_eq!(snap.selection_start, 0, "从头选");
+    assert_eq!(snap.selection_end, 7, "到尾（4 中文+3 拼音落字后）");
+    assert_eq!(
+        bar.selected_text().as_deref(),
+        Some("你好世界abc"),
+        "全选文本正确"
+    );
+}
+
+#[test]
+fn selection_clear_and_submit_exit_selection() {
+    let bar = InputBarState::new();
+    bar.insert_text("abcdef");
+    bar.enter_selection(1);
+    bar.set_selection_end(3);
+    bar.clear();
+    assert!(!bar.snap().selecting, "clear 退出选择");
+    assert_eq!(bar.snap().selection_end, 0, "选区复位");
+
+    bar.insert_text("xyz");
+    bar.enter_selection(1);
+    bar.set_selection_end(2);
+    assert_eq!(bar.submit().as_deref(), Some("xyz"), "submit 取走全部文本");
+    assert!(!bar.snap().selecting, "submit 后退出选择");
+}
