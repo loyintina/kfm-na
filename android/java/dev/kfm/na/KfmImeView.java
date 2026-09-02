@@ -91,6 +91,16 @@ public class KfmImeView extends View {
         }
     }
 
+    // IME 上下文菜单动作（performContextMenuAction；2026-09-02 曲线救国：
+    // 系统剪贴板被 ROM 锁死，输入法工具栏命令直送 Rust 状态核）
+    static void contextMenuAction(String action) {
+        try {
+            nativeContextMenuAction(action);
+        } catch (Throwable t) {
+            // 吞：旧 .so 无此符号(BAR-011)，菜单哑火好过崩
+        }
+    }
+
     @Override
     public boolean onCheckIsTextEditor() {
         return true; // BAR-009：声明「我是文本编辑器」，IMM 才肯弹键盘
@@ -122,6 +132,7 @@ public class KfmImeView extends View {
     static native void nativeSendKey(int keyCode);
     static native void nativeComposingText(String text);
     static native void nativeFinishComposing();
+    static native void nativeContextMenuAction(String action);
 
     // 链路探针：Java 侧断点直送飞鸽传书（B 档平台胶水，判卷 = 上报行）
     static native void nativeImeLog(String msg);

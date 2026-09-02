@@ -31,6 +31,9 @@ pub enum Inject {
     Composing(String),
     /// 组合结束（finishComposingText）
     ComposingEnd,
+    /// IME 上下文菜单动作（performContextMenuAction；2026-09-02 曲线救国：
+    /// 系统剪贴板被 ROM 锁死，输入法工具栏的复制/粘贴/全选/剪切走这里直抵状态核）
+    ContextMenuAction(String),
 }
 
 /// 一次注入会话的 FIFO 队列。push 侧 = JNI 回调线程，drain 侧 = 事件循环
@@ -86,6 +89,14 @@ impl ImeQueue {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .push_back(Inject::ComposingEnd);
+    }
+
+    /// IME 上下文菜单动作入队（performContextMenuAction）
+    pub fn push_context_menu_action(&self, action: &str) {
+        self.q
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push_back(Inject::ContextMenuAction(action.to_string()));
     }
 
     /// 事件循环侧排干：一次性取走全部待注入项（FIFO），队列归空

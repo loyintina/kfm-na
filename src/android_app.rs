@@ -1623,12 +1623,66 @@ impl App {
             if let Some(bar) = &self.input_bar {
                 for item in items {
                     match item {
-                        crate::ime_queue::Inject::Text(s) => bar.insert_text(&s),
+                        crate::ime_queue::Inject::Text(s) => {
+                            crate::report::report("ime-input", &format!("commit: {s:?}"));
+                            bar.insert_text(&s)
+                        }
                         crate::ime_queue::Inject::Key(66) => want_submit = true, // KC_ENTER
-                        crate::ime_queue::Inject::Key(67) => bar.backspace(),    // KC_DEL
-                        crate::ime_queue::Inject::Key(111) => bar.unfocus(),     // KC_ESC
-                        crate::ime_queue::Inject::Composing(s) => bar.set_composing(&s),
-                        crate::ime_queue::Inject::ComposingEnd => bar.finish_composing(),
+                        crate::ime_queue::Inject::Key(67) => {
+                            crate::report::report("ime-input", "backspace");
+                            bar.backspace()
+                        }
+                        crate::ime_queue::Inject::Key(111) => bar.unfocus(), // KC_ESC
+                        crate::ime_queue::Inject::Composing(s) => {
+                            crate::report::report("ime-input", &format!("composing: {s:?}"));
+                            bar.set_composing(&s)
+                        }
+                        crate::ime_queue::Inject::ComposingEnd => {
+                            crate::report::report("ime-input", "composing-end");
+                            bar.finish_composing()
+                        }
+                        crate::ime_queue::Inject::ContextMenuAction(action) => {
+                            crate::report::report("ime-input", &format!("context-menu: {action}"));
+                            match action.as_str() {
+                                "selectAll" => bar.select_all(),
+                                "copy" => {
+                                    if let Some(text) = bar.selected_text() {
+                                        crate::report::report(
+                                            "ime-input",
+                                            &format!("copy: {} chars", text.chars().count()),
+                                        );
+                                        if let Some(app) = &self.android_app {
+                                            crate::clipboard::copy_and_toast(app, &text);
+                                        }
+                                    }
+                                }
+                                "cut" => {
+                                    if let Some(text) = bar.selected_text() {
+                                        crate::report::report(
+                                            "ime-input",
+                                            &format!("cut: {} chars", text.chars().count()),
+                                        );
+                                        if let Some(app) = &self.android_app {
+                                            crate::clipboard::copy_and_toast(app, &text);
+                                        }
+                                        bar.delete_selection();
+                                    }
+                                }
+                                "paste" => {
+                                    if let Some(app) = &self.android_app
+                                        && let Some(text) =
+                                            crate::clipboard::get_clipboard_text(app)
+                                    {
+                                        crate::report::report(
+                                            "ime-input",
+                                            &format!("paste: {} chars", text.chars().count()),
+                                        );
+                                        bar.insert_or_replace(&text);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -1663,6 +1717,14 @@ impl App {
                 }
                 crate::ime_queue::Inject::Composing(_) | crate::ime_queue::Inject::ComposingEnd => {
                     None // 终端不画组合态(BAR-012 沿革);消费掉防空转
+                }
+                crate::ime_queue::Inject::ContextMenuAction(action) => {
+                    // 终端无选择/剪贴板语义，消费掉防空转（上报保留诊断）
+                    crate::report::report(
+                        "ime-input",
+                        &format!("term context-menu swallowed: {action}"),
+                    );
+                    None
                 }
             };
             if let Some(bytes) = bytes {

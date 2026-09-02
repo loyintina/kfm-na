@@ -109,3 +109,22 @@ fn spec_队列_组合态往返() {
     );
     assert!(q.drain().is_empty(), "排干即空");
 }
+
+// ---------- IME 上下文菜单动作（2026-09-02 曲线救国） ----------
+
+#[test]
+fn spec_队列_上下文菜单动作入队() {
+    let q = ImeQueue::new();
+    q.push_context_menu_action("selectAll");
+    q.push_context_menu_action("copy");
+    q.push_context_menu_action("paste");
+    assert_eq!(
+        q.drain(),
+        vec![
+            Inject::ContextMenuAction("selectAll".into()),
+            Inject::ContextMenuAction("copy".into()),
+            Inject::ContextMenuAction("paste".into()),
+        ],
+        "上下文菜单动作必须原样入队、顺序保持"
+    );
+}

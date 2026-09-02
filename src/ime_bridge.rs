@@ -105,6 +105,23 @@ pub extern "system" fn Java_dev_kfm_na_KfmImeView_nativeFinishComposing(
     crate::ime_queue::global().push_composing_end();
 }
 
+/// dev.kfm.na.KfmImeView.nativeContextMenuAction —— IME 上下文菜单动作
+/// （performContextMenuAction；2026-09-02 曲线救国：系统剪贴板被 ROM 锁死，
+/// 输入法工具栏的复制/剪切/粘贴/全选直送状态核，不走系统剪贴板）
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_kfm_na_KfmImeView_nativeContextMenuAction(
+    mut env: EnvUnowned,
+    _class: JClass,
+    action: JString,
+) {
+    env.with_env(|env| -> jni::errors::Result<()> {
+        let s = action.try_to_string(env)?;
+        crate::ime_queue::global().push_context_menu_action(&s);
+        Ok(())
+    })
+    .resolve_with::<LogContextErrorAndDefault, _>(|| "in nativeContextMenuAction".to_string());
+}
+
 /// dev.kfm.na.KfmImeView.nativeImeLog —— Java 侧链路探针直送飞鸽传书。
 /// IME 的生死在 IMM 与焦点之间（BAR-009 就死在 IMM 拒弹），Rust 侧看不见，
 /// 让 Java 侧断点自己开口

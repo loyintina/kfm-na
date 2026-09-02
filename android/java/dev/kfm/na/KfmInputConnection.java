@@ -73,4 +73,20 @@ final class KfmInputConnection extends BaseInputConnection {
     public boolean performEditorAction(int actionCode) {
         return true;
     }
+
+    @Override
+    public boolean performContextMenuAction(int id) {
+        // 输入法工具栏的复制/剪切/粘贴/全选（2026-09-02 曲线救国：
+        // 系统剪贴板被 ROM 锁死，这些命令直送 Rust 状态核，不走系统剪贴板）
+        String action = null;
+        if (id == android.R.id.selectAll) action = "selectAll";
+        else if (id == android.R.id.cut) action = "cut";
+        else if (id == android.R.id.copy) action = "copy";
+        else if (id == android.R.id.paste) action = "paste";
+        if (action != null) {
+            KfmImeView.contextMenuAction(action);
+            return true;
+        }
+        return super.performContextMenuAction(id);
+    }
 }
