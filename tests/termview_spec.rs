@@ -1537,11 +1537,167 @@ fn spec_selection_高亮与锚点稳显() {
     };
     assert!(has_anchor(&on), "选择锚点必须出现");
     assert!(has_anchor(&off), "锚点稳显不闪烁");
-    // 菜单像素：菜单气泡底 menu_bg 在选区上方出现
+    // 菜单像素：菜单气泡底 menu_bg 必须出现。扫描带由几何给出（2026-09-03
+    // ⑤号迭代后菜单贴选区上方、随选区走位，不再写死屏幕带——眼手同尺）
+    let geo = tv
+        .bar_selection_geometry(&snap, w, h, 0)
+        .expect("选择态几何必须存在");
+    let (my0, my1) = (geo.menu_y as usize, (geo.menu_y + geo.menu_h) as usize);
     let has_menu = |buf: &[u32]| {
-        (1000..1060usize).any(|y| (180..420usize).any(|x| buf[y * w as usize + x] == 0x0020_2028))
+        (my0..my1).any(|y| (180..420usize).any(|x| buf[y * w as usize + x] == 0x0020_2028))
     };
     assert!(has_menu(&on), "选择菜单气泡必须出现");
+}
+
+// BAR-046 2026-09-03 ①②号迭代回归钉：锚点柄两图元（三角/矩形）水平中心
+// 对齐 + 触摸几何（热区中心）≡ 视觉中心。原案：三角中心 ax+14、矩形中心
+// ax+4 静态错位 10px；热区中心取柄左缘 tip 点，与视觉中心错位 14/18px——
+// 指按在看得见的柄上却落热区外，锚点拖不动。判卷：渲染缓冲里锚点色
+// （0x0000_D4FF）像素的包围盒中心 ≡ bar_selection_geometry 锚点坐标（±2px）
+#[test]
+fn spec_bar046_锚点视觉中心等于热区中心() {
+    let (tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必成");
+    let (w, h) = (600u32, 1200u32);
+    // 选区 0..2 控制在同一行内（600 宽每行约 5 个全角字），两个锚点同行
+    // 不同 x：左 idx0→ax≈118，右 idx2→ax≈199，x 带不重叠，按 x<160 分簇
+    let snap = kfm_na::input_bar::BarSnap {
+        text: "一二三四五六七八九十".to_string(),
+        focused: true,
+        lines: 1,
+        cursor: 0,
+        handle: false,
+        composing: String::new(),
+        scroll_px: 0,
+        follow: true,
+        selecting: true,
+        selection_start: 0,
+        selection_end: 2,
+    };
+    let geo = tv
+        .bar_selection_geometry(&snap, w, h, 0)
+        .expect("选择态几何必须存在");
+    // caret_on=false：光标也是青色系，避免污染锚点色像素聚类
+    let mut buf = vec![0u32; (w * h) as usize];
+    tv.render_inputbar(&mut buf, w, h, 0, &snap, false, false);
+    // y>1000 避开栏顶发丝线（accent 同色）
+    let cluster = |x0: u32, x1: u32| -> (f64, f64, u32) {
+        let (mut min_x, mut max_x, mut min_y, mut max_y, mut n) = (u32::MAX, 0, u32::MAX, 0, 0u32);
+        for y in 1000..h {
+            for x in x0..x1 {
+                if buf[(y * w + x) as usize] == 0x0000_D4FF {
+                    min_x = min_x.min(x);
+                    max_x = max_x.max(x);
+                    min_y = min_y.min(y);
+                    max_y = max_y.max(y);
+                    n += 1;
+                }
+            }
+        }
+        (
+            f64::from(min_x + max_x) / 2.0,
+            f64::from(min_y + max_y) / 2.0,
+            n,
+        )
+    };
+    for (name, (x0, x1), anchor) in [
+        ("左", (0u32, 160u32), geo.left_anchor),
+        ("右", (160u32, 320u32), geo.right_anchor),
+    ] {
+        let (cx, cy, n) = cluster(x0, x1);
+        assert!(n > 100, "{name}锚点柄必须有足够像素（n={n}）");
+        assert!(
+            (cx - anchor.0).abs() <= 2.0,
+            "{name}锚点水平：柄视觉中心 {cx} ≡ 热区中心 {}（±2）",
+            anchor.0
+        );
+        assert!(
+            (cy - anchor.1).abs() <= 2.0,
+            "{name}锚点垂直：柄视觉中心 {cy} ≡ 热区中心 {}（±2）",
+            anchor.1
+        );
+    }
+}
+
+// BAR-046 2026-09-03 ⑤号迭代回归钉：菜单贴选区上方 12px（原案取选区垂直
+// 中心再 -20，多行选区时菜单浮在半空离选区老远）。判卷：像素扫描菜单
+// 气泡底缘与选区高亮顶缘的垂直间距 = 12±2
+#[test]
+fn spec_bar046_菜单贴选区上方() {
+    let (tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必成");
+    let (w, h) = (600u32, 1200u32);
+    let snap = kfm_na::input_bar::BarSnap {
+        text: "一二三四五六七八九十".to_string(),
+        focused: true,
+        lines: 1,
+        cursor: 0,
+        handle: false,
+        composing: String::new(),
+        scroll_px: 0,
+        follow: true,
+        selecting: true,
+        selection_start: 2,
+        selection_end: 6,
+    };
+    let mut buf = vec![0u32; (w * h) as usize];
+    tv.render_inputbar(&mut buf, w, h, 0, &snap, false, false);
+    let has = |buf: &[u32], y: u32, color: u32| {
+        (0..w as usize).any(|x| buf[(y * w) as usize + x] == color)
+    };
+    let sel_top = (0..h)
+        .find(|&y| has(&buf, y, 0x0044_88DD))
+        .expect("选区高亮必现");
+    let menu_bot = (0..h)
+        .rev()
+        .find(|&y| has(&buf, y, 0x0020_2028))
+        .expect("菜单气泡必现");
+    assert!(menu_bot < sel_top, "菜单必须在选区上方");
+    let gap = sel_top - menu_bot - 1;
+    assert!(
+        (10..=14).contains(&gap),
+        "菜单贴选区 12px（±2），实测 gap={gap}"
+    );
+}
+
+// BAR-046 2026-09-03 ④号迭代回归钉：菜单四格绘文字标签（原案 MVP 空色块，
+// 实拍菜单条只有分隔线，用户不知道哪格是什么）。判卷：菜单区域内亮像素
+// （文字 menu_text 0xE0E0E0 混合气泡底的结果，三通道 >0x80）数量超阈——
+// 分隔线 0x616165 与纯气泡底都不达此阈，空色块场景本钉必红
+#[test]
+fn spec_bar046_菜单按钮绘文字() {
+    let (tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必成");
+    let (w, h) = (600u32, 1200u32);
+    let snap = kfm_na::input_bar::BarSnap {
+        text: "一二三四五六七八九十".to_string(),
+        focused: true,
+        lines: 1,
+        cursor: 0,
+        handle: false,
+        composing: String::new(),
+        scroll_px: 0,
+        follow: true,
+        selecting: true,
+        selection_start: 2,
+        selection_end: 6,
+    };
+    let geo = tv
+        .bar_selection_geometry(&snap, w, h, 0)
+        .expect("选择态几何必须存在");
+    let mut buf = vec![0u32; (w * h) as usize];
+    tv.render_inputbar(&mut buf, w, h, 0, &snap, false, false);
+    let mut bright = 0u32;
+    for y in geo.menu_y..geo.menu_y + geo.menu_h {
+        for x in geo.menu_x..geo.menu_x + geo.menu_w {
+            let p = buf[(y * w + x) as usize];
+            let (r, g, b) = ((p >> 16) & 0xFF, (p >> 8) & 0xFF, p & 0xFF);
+            if r > 0x80 && g > 0x80 && b > 0x80 {
+                bright += 1;
+            }
+        }
+    }
+    assert!(
+        bright > 200,
+        "菜单四格必须有文字标签（亮像素 {bright} > 200）"
+    );
 }
 
 // BAR-045: prompt_bar.rs 切片倒挂崩溃夜检——防御性切片+display_text 同源

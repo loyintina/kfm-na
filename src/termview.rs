@@ -1222,6 +1222,58 @@ impl TermView {
         self.draw_items_left(frame, &items, cx, cw, cy, rh, px, fg, None);
     }
 
+    /// 居中画一行文字（BAR-046 选择菜单按钮标签，2026-09-03）：水平居中
+    /// 于 (cx,cw)，垂直居中于 (cy,ch)，右缘裁剪。与 draw_items_left 同
+    /// 光栅化路径，只是起笔 = 格心 - 文本半宽、无 18 内缩。
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn draw_text_centered(
+        &self,
+        frame: &mut Frame<'_>,
+        text: &str,
+        cx: u32,
+        cy: u32,
+        cw: u32,
+        ch: u32,
+        px: f32,
+        fg: u32,
+    ) {
+        let items = self.measure_items(text, px);
+        if items.is_empty() {
+            return;
+        }
+        let Some(hm) = self.font.horizontal_line_metrics(px) else {
+            return;
+        };
+        let text_w: f32 = items.iter().map(|i| i.2).sum();
+        let mut pen_x = cx as f32 + (cw as f32 - text_w).max(0.0) / 2.0;
+        let clip_right = cx + cw;
+        let baseline = cy as f32 + (ch as f32 - (hm.ascent - hm.descent)) / 2.0 + hm.ascent;
+        for (f, c, adv) in items {
+            if pen_x + adv >= clip_right as f32 {
+                break; // 格内装不下就停（与 draw_items_left 同判据）
+            }
+            let (m, bmp) = f.rasterize(c, px);
+            let top = baseline - m.ymin as f32 - m.height as f32;
+            for gy in 0..m.height as u32 {
+                let y = top as i64 + i64::from(gy);
+                if y < 0 || y >= i64::from(frame.h) {
+                    continue;
+                }
+                for gx in 0..m.width as u32 {
+                    let x = (pen_x + m.xmin as f32) as i64 + i64::from(gx);
+                    if x < 0 || x >= i64::from(clip_right) {
+                        continue;
+                    }
+                    let a = u32::from(bmp[(gy * m.width as u32 + gx) as usize]);
+                    if a > 0 {
+                        frame.blend_px(x as u32, y as u32, fg, a);
+                    }
+                }
+            }
+            pen_x += adv;
+        }
+    }
+
     /// 画一串已量宽的字符（折行后逐行画走这里）：左对齐内缩 18 +
     /// 垂直居中 + 右缘裁剪，规则与 draw_text_left 一致
     #[allow(clippy::too_many_arguments)]
@@ -1699,7 +1751,7 @@ pub trait TermEmu: Send {
         x_local: f64,
         y_local: f64,
     ) -> usize;
-    /// 选择态屏幕几何（BAR-046）：锚点尖位置 + 菜单气泡边界，触摸命中用
+    /// 选择态屏幕几何（BAR-046）：锚点柄视觉中心 + 菜单气泡边界，触摸命中用
     fn bar_selection_geometry(
         &self,
         snap: &crate::input_bar::BarSnap,

@@ -99,8 +99,10 @@ pub enum SelAnchor {
     Right,
 }
 
-/// 选择态屏幕几何（BAR-046）：锚点尖位置 + 菜单气泡边界。
+/// 选择态屏幕几何（BAR-046）：锚点柄视觉中心 + 菜单气泡边界。
 /// 渲染与触摸命中共用此结构，眼手同尺。
+/// （2026-09-03：left/right_anchor 语义从「柄左缘 tip 点」改为「柄视觉
+/// 中心」——热区中心与视觉中心同点，指按在看得见的柄上必中）
 #[derive(Debug, Clone, Copy)]
 pub struct BarSelectionGeometry {
     pub left_anchor: (f64, f64),

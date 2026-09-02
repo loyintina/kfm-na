@@ -97,6 +97,9 @@ struct BarTouch {
     long_fired: bool,
     /// 当前按在锚点热区上（Some = 拖动锚点；None = 普通栏手势）
     anchor: Option<crate::input_bar::SelAnchor>,
+    /// 按在选择菜单浮层某格上（Some = 抬手执行该动作；BAR-046 ⑤号迭代
+    /// 配套：菜单可浮出栏带，DOWN 分流时优先登记）
+    menu: Option<BarMenuAction>,
 }
 
 /// 输入栏选择操作菜单项（BAR-046）：自绘菜单四键，左→右依次
@@ -334,6 +337,24 @@ impl App {
                     self.dirty = true;
                     return;
                 }
+                // 选择菜单浮层命中（BAR-046 2026-09-03 ⑤号迭代配套）：菜单
+                // 气泡可浮出栏带盖在终端区上（贴选区），不再被栏带几何包住——
+                // 命中检查必须先于栏带/终端分流，否则浮出栏带的菜单格点了
+                // 没反应。仅登记，抬手（Ended 臂 bt.menu 分路）才执行
+                if let Some(menu) = self.hit_selection_menu(x, y) {
+                    self.inputbar_touch = Some(BarTouch {
+                        at: std::time::Instant::now(),
+                        start_x: x,
+                        start_y: y,
+                        last_x: x,
+                        last_y: y,
+                        dragged: false,
+                        long_fired: false,
+                        anchor: None,
+                        menu: Some(menu),
+                    });
+                    return;
+                }
                 // 输入栏命中（期 0 组件三）：起点在栏带上 → 这手势归栏
                 // （不滚屏不唤键盘——聚焦/发送在 Ended 分路）。
                 // 带高随行数走（textarea 长高，眼手同尺）
@@ -353,6 +374,7 @@ impl App {
                         dragged: false,
                         long_fired: false,
                         anchor,
+                        menu: None,
                     });
                     return;
                 }
@@ -466,6 +488,15 @@ impl App {
                             bar.scroll_by_px(8, field_h);
                         }
                         self.dirty = true;
+                    } else if bt.menu.is_some() {
+                        // 菜单浮层手势：滑出 slop 记拖（抬手不执行动作），
+                        // 不滚文本——菜单不是文本区
+                        if !bt.dragged
+                            && ((y - bt.start_y).abs() > crate::scroll::TAP_SLOP_PX
+                                || (x - bt.start_x).abs() > crate::scroll::TAP_SLOP_PX)
+                        {
+                            bt.dragged = true;
+                        }
                     } else {
                         if !bt.dragged
                             && ((y - bt.start_y).abs() > crate::scroll::TAP_SLOP_PX
@@ -622,8 +653,15 @@ impl App {
                         self.dirty = true;
                         return;
                     }
-                    // 拖动结束（滚动/扩选）不当点按
+                    // 拖动结束（滚动/扩选/滑出菜单）不当点按
                     if bt.dragged {
+                        self.dirty = true;
+                        return;
+                    }
+                    // 菜单浮层点按：执行 DOWN 时登记的动作（浮层可出栏带，
+                    // 命中已在 DOWN 分流判过，这里只管执行）
+                    if let Some(menu) = bt.menu {
+                        self.execute_bar_menu(menu);
                         self.dirty = true;
                         return;
                     }
@@ -826,7 +864,7 @@ impl App {
         let Some(bt) = &mut self.inputbar_touch else {
             return;
         };
-        if bt.long_fired || bt.dragged || bt.anchor.is_some() {
+        if bt.long_fired || bt.dragged || bt.anchor.is_some() || bt.menu.is_some() {
             return;
         }
         if bt.at.elapsed()
@@ -881,8 +919,8 @@ impl App {
         )
     }
 
-    /// 判断是否按在选择锚点热区上（BAR-046）。热区以锚点尖为中心、
-    /// ANCHOR_HIT_SIZE 为边长的正方形。
+    /// 判断是否按在选择锚点热区上（BAR-046）。热区以锚点柄视觉中心
+    /// （几何 left/right_anchor）为心、ANCHOR_HIT_SIZE 为边长的正方形。
     fn hit_selection_anchor(&self, x: f64, y: f64) -> Option<crate::input_bar::SelAnchor> {
         let w = self.window.as_ref()?.inner_size().width;
         let h = self.window.as_ref()?.inner_size().height;

@@ -511,16 +511,15 @@ impl crate::termview::TermView {
         let tip_y = (row_y + input_bar::LINE_STEP_PX as i32 - 2) as u32;
         let size = 28i32; // ANCHOR_VISUAL_SIZE
         let half = size / 2;
-        // 上尖三角 + 正方承载（与定位柄同族，缩小版）
-        frame.fill_triangle_up(
-            (ax + half) as u32,
-            tip_y.saturating_sub(1),
-            size as u32,
-            14,
-            color,
-        );
+        // 上尖三角 + 正方承载（与定位柄同族，缩小版）。
+        // 2026-09-03 ①号迭代：两图元水平中心统一锚到 ax（原三角 ax+half、
+        // 矩形 ax-half+4，静态错位 10px，实拍可见尖与块不对齐）。
+        // 柄形合 span：y ∈ [tip-1, tip+38]，中心 ≈ tip+18——几何
+        // （bar_selection_geometry.anchor_at）以 (ax, tip+18) 为柄中心，
+        // 热区同尺，眼手同源
+        frame.fill_triangle_up(ax as u32, tip_y.saturating_sub(1), size as u32, 14, color);
         frame.fill_round_rect(
-            (ax - half + 4) as u32,
+            (ax - half) as u32,
             tip_y + 11,
             size as u32,
             size as u32,
@@ -529,9 +528,36 @@ impl crate::termview::TermView {
         );
     }
 
-    /// 画选择操作菜单（BAR-046）：气泡条，默认「全选 | 复制 | 剪切 | 粘贴」。
-    /// 位置：优先在选区上方；空间不足则翻到下方。MVP 不自绘文字，只画容器
-    /// 与按钮分隔（文字标签通过后续 SDF 字绘制或视为条形色块占位）。
+    /// 选择菜单气泡矩形（BAR-046）：渲染（draw_selection_menu）与触摸几何
+    /// （bar_selection_geometry）共用这一把尺——眼手同尺单源，位置规则改了
+    /// 只改这里。2026-09-03 ⑤号迭代：弃「选区垂直中心-20」改为贴选区——
+    /// 首选首行上方 12px（Android 语境菜单惯例）。气泡是浮层，不受栏带
+    /// 上缘钳制（可浮出栏带盖在终端区上），只守屏顶 8px；上方真放不下
+    /// （选区滚到屏顶）才翻末行下方 12px，再不行贴栏底。
+    fn selection_menu_rect(
+        y_s: i32,
+        y_e: i32,
+        buf_w: u32,
+        bar_top: u32,
+        bar_h: u32,
+    ) -> (u32, u32, u32, u32) {
+        let menu_h = 72u32;
+        let menu_w = 420u32;
+        let menu_x = (buf_w.saturating_sub(menu_w)) / 2;
+        const GAP: i32 = 12;
+        let mut menu_y = y_s - menu_h as i32 - GAP;
+        if menu_y < 8 {
+            menu_y = y_e + crate::input_bar::LINE_STEP_PX as i32 + GAP;
+            if menu_y + menu_h as i32 > (bar_top + bar_h) as i32 {
+                menu_y = (bar_top + bar_h) as i32 - menu_h as i32 - 8; // 兜底：贴栏底
+            }
+        }
+        (menu_x, menu_y.max(8) as u32, menu_w, menu_h)
+    }
+
+    /// 画选择操作菜单（BAR-046）：气泡条「全选 | 复制 | 剪切 | 粘贴」，
+    /// 按钮标签居中自绘（2026-09-03 ④号迭代终结 MVP 空色块）。
+    /// 位置：贴选区首行上方；空间不足翻末行下方（规则见 selection_menu_rect）。
     #[allow(clippy::too_many_arguments)]
     fn draw_selection_menu(
         &self,
@@ -547,7 +573,6 @@ impl crate::termview::TermView {
         bar_top: u32,
         buf_w: u32,
     ) {
-        use crate::input_bar;
         if snap.selection_start >= snap.selection_end {
             return;
         }
@@ -555,19 +580,8 @@ impl crate::termview::TermView {
         let row_e = row_of(starts, snap.selection_end.min(items.len()));
         let y_s = line_y(row_s);
         let y_e = line_y(row_e);
-        // 选区垂直中心（单选区场景）
-        let sel_mid_y = (y_s + y_e + input_bar::LINE_STEP_PX as i32) / 2;
-        let menu_h = 72u32;
-        let menu_w = 420u32;
-        let menu_x = (buf_w.saturating_sub(menu_w)) / 2;
-        // 优先放选区上方；上方空间不够则放下方
-        let mut menu_y = (sel_mid_y - menu_h as i32 - 20).max(bar_top as i32) as u32;
-        if menu_y < bar_top + 8 {
-            menu_y = (sel_mid_y + input_bar::LINE_STEP_PX as i32 + 20) as u32;
-            if menu_y + menu_h > bar_top + bar_h {
-                menu_y = bar_top + 8; // 兜底：贴顶
-            }
-        }
+        let (menu_x, menu_y, menu_w, menu_h) =
+            Self::selection_menu_rect(y_s, y_e, buf_w, bar_top, bar_h);
         // 气泡底
         let t = &self.theme.bar;
         frame.fill_round_rect(menu_x, menu_y, menu_w, menu_h, 16, t.menu_bg);
@@ -581,9 +595,24 @@ impl crate::termview::TermView {
             let x = menu_x + btn_w * i;
             frame.fill_rect(x, menu_y + 12, 2, menu_h - 24, t.menu_disabled);
         }
+        // 按钮文字（2026-09-03 ④号迭代：居中自绘，终结 MVP 空色块——
+        // 实拍菜单条只有分隔线没有标签，用户不知道哪格是什么）
+        const LABELS: [&str; 4] = ["全选", "复制", "剪切", "粘贴"];
+        for (i, label) in LABELS.iter().enumerate() {
+            self.draw_text_centered(
+                frame,
+                label,
+                menu_x + btn_w * i as u32,
+                menu_y,
+                btn_w,
+                menu_h,
+                30.0,
+                t.menu_text,
+            );
+        }
     }
 
-    /// 选择态屏幕几何（BAR-046）：锚点尖位置 + 菜单气泡边界。
+    /// 选择态屏幕几何（BAR-046）：锚点柄视觉中心 + 菜单气泡边界。
     /// 触摸命中与渲染同源，眼手同尺。
     pub fn bar_selection_geometry(
         &self,
@@ -619,6 +648,11 @@ impl crate::termview::TermView {
             input_bar::viewport_geometry(n_lines as u32, field_h, snap.follow, snap.scroll_px);
         let text_top = field_top as i32 + top_off as i32 - eff;
         let line_y = |k: usize| -> i32 { text_top + k as i32 * input_bar::LINE_STEP_PX as i32 };
+        // 锚点柄视觉中心（2026-09-03 ②号迭代）：柄形 = 上尖三角（tip-1 起
+        // 高 14）+ 正方承载（tip+11 起高 28），合 span y∈[tip-1, tip+38]，
+        // 中心 tip+18；水平中心 ax（两图元 2026-09-03 ①号迭代后同锚 ax）。
+        // 热区以此为中心（原返回柄左缘 tip 点，与视觉中心错位 14/18px，
+        // 指按在看得见的柄上却落在热区外——锚点拖不动的根因）
         let anchor_at = |idx: usize| -> (f64, f64) {
             let row = row_of(&starts, idx.min(items.len()));
             let row_start = starts[row];
@@ -627,27 +661,18 @@ impl crate::termview::TermView {
                 .map(|i| i.2)
                 .sum();
             let ax = f64::from(text_cx + 18) + f64::from(x_off);
-            let ay = f64::from(line_y(row) + input_bar::LINE_STEP_PX as i32 - 2);
+            let ay = f64::from(line_y(row) + input_bar::LINE_STEP_PX as i32 - 2 + 18);
             (ax, ay)
         };
         let left = anchor_at(snap.selection_start);
         let right = anchor_at(snap.selection_end);
-        // 菜单位置与 draw_selection_menu 一致
+        // 菜单位置与 draw_selection_menu 同源（单尺 selection_menu_rect）
         let row_s = row_of(&starts, snap.selection_start.min(items.len()));
         let row_e = row_of(&starts, snap.selection_end.min(items.len()));
         let y_s = line_y(row_s);
         let y_e = line_y(row_e);
-        let sel_mid_y = (y_s + y_e + input_bar::LINE_STEP_PX as i32) / 2;
-        let menu_h = 72u32;
-        let menu_w = 420u32;
-        let menu_x = (buf_w.saturating_sub(menu_w)) / 2;
-        let mut menu_y = (sel_mid_y - menu_h as i32 - 20).max(top as i32) as u32;
-        if menu_y < top + 8 {
-            menu_y = (sel_mid_y + input_bar::LINE_STEP_PX as i32 + 20) as u32;
-            if menu_y + menu_h > top + bar_h {
-                menu_y = top + 8;
-            }
-        }
+        let (menu_x, menu_y, menu_w, menu_h) =
+            Self::selection_menu_rect(y_s, y_e, buf_w, top, bar_h);
         Some(crate::input_bar::BarSelectionGeometry {
             left_anchor: left,
             right_anchor: right,
