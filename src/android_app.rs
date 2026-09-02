@@ -2163,3 +2163,5 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
     // （2026-08-13 实拍「白退」次生病灶）。活动结束 = 进程跟着死，重来即全新。
     std::process::exit(0);
 }
+
+// BAR-046: 选择系统+复制粘贴菜单已在手机端 chain 验证通过 (2026-09-02)
