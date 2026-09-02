@@ -221,7 +221,7 @@ impl crate::termview::TermView {
                 };
                 self.draw_items_left(
                     &mut frame,
-                    &items[st..end],
+                    &items[st..end.max(st)],
                     text_cx,
                     text_cw,
                     line_y(k) as u32,
@@ -249,10 +249,8 @@ impl crate::termview::TermView {
             } else {
                 items.len()
             };
-            let x_off: f32 = items[row_start..caret_idx.min(row_end)]
-                .iter()
-                .map(|i| i.2)
-                .sum();
+            let caret_slice_end = caret_idx.min(row_end).max(row_start);
+            let x_off: f32 = items[row_start..caret_slice_end].iter().map(|i| i.2).sum();
             let row_cy = caret_y + input_bar::LINE_STEP_PX as i32 / 2;
             let caret_x = text_cx + 18 + x_off as u32;
             if caret_on {
@@ -279,13 +277,18 @@ impl crate::termview::TermView {
         {
             let comp_end = (snap.cursor + comp_len).min(items.len());
             let row_start = starts[comp_row_all];
+            let comp_start_clamped = comp_start.max(row_start);
+            let comp_end_clamped = comp_end.max(row_start);
             let ux0 = (text_cx + 18) as f32
-                + items[row_start..comp_start]
+                + items[row_start..comp_start_clamped]
                     .iter()
                     .map(|i| i.2)
                     .sum::<f32>();
-            let ux1 =
-                (text_cx + 18) as f32 + items[row_start..comp_end].iter().map(|i| i.2).sum::<f32>();
+            let ux1 = (text_cx + 18) as f32
+                + items[row_start..comp_end_clamped]
+                    .iter()
+                    .map(|i| i.2)
+                    .sum::<f32>();
             let urow_cy = comp_y + input_bar::LINE_STEP_PX as i32 / 2;
             frame.fill_rect(
                 ux0 as u32,
@@ -382,7 +385,10 @@ impl crate::termview::TermView {
         y_local: f64,
     ) -> usize {
         use crate::input_bar;
-        let items = self.measure_items(&snap.text, BAR_TEXT_PX);
+        // 眼手同尺：点按换算与渲染共用 display_text（含组合态），避免
+        // 组合态下布局与光标不同源导致命中错位 / 切片倒挂
+        let display = crate::input_bar::InputBarState::display_text(snap);
+        let items = self.measure_items(&display, BAR_TEXT_PX);
         if items.is_empty() {
             return 0;
         }
@@ -408,7 +414,7 @@ impl crate::termview::TermView {
         };
         // 列：累计步进宽，过半归右（浏览器 tap 落点就近原则）
         let mut pen = 18.0f32;
-        for (i, item) in items[row_start..row_end].iter().enumerate() {
+        for (i, item) in items[row_start..row_end.max(row_start)].iter().enumerate() {
             if x_local < f64::from(pen + item.2 * 0.5) {
                 return row_start + i;
             }

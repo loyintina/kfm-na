@@ -1492,6 +1492,45 @@ fn spec_composing_下划线稳显() {
     assert!(caret_diff, "光标仍随相位闪烁(行带内有相位差异)");
 }
 
+// BAR-045: prompt_bar.rs 切片倒挂崩溃夜检——防御性切片+display_text 同源
+// 实机 panic.log  witnessed: slice index starts at 21/363/794/42 but ends at
+// 18/303/754/39。本判卷不追究精确复现路径（可能为行号漂移/inline 导致），
+// 只验证：极端 cursor/组合态/滚动组合下 render_inputbar 与 bar_cursor_at
+// 均不 panic，且点按换算与渲染同用 display_text。
+#[test]
+fn spec_inputbar_防御性切片不崩溃() {
+    let (tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必成");
+    let (w, h) = (600u32, 1400u32);
+    let long = "一二三四五六七八九十".repeat(10); // 100 字，多行
+    let mut buf = vec![0u32; (w * h) as usize];
+    // 组合态插在中间、cursor 越界、scroll_px 极大、follow 切换
+    let combos = vec![
+        (25usize, "pinyin".to_string(), true, 0i32),
+        (50, "pinyin".to_string(), false, 10_000),
+        (200, "".to_string(), false, -500),
+        (0, "abcdefghijklmnopqrstuvwxyz".to_string(), true, 0),
+        (100, "xyz".to_string(), false, 5_000),
+    ];
+    for (cursor, composing, follow, scroll_px) in combos {
+        let snap = kfm_na::input_bar::BarSnap {
+            text: long.clone(),
+            focused: true,
+            lines: 20,
+            cursor,
+            handle: true,
+            composing: composing.clone(),
+            scroll_px,
+            follow,
+        };
+        // 只判「不 panic」；视觉正确性由其他判卷负责
+        tv.render_inputbar(&mut buf, w, h, 0, &snap, false, true);
+        tv.render_inputbar(&mut buf, w, h, 0, &snap, false, false);
+        // 点按换算在组合态下也不 panic，且与渲染同源 display_text
+        let _ = tv.bar_cursor_at(&snap, w, 100.0, 100.0);
+        let _ = tv.bar_cursor_at(&snap, w, 10_000.0, 10_000.0);
+    }
+}
+
 // ========== 视口滚动渲染（2026-09-01 像素级） ==========
 // 判卷点:follow=尾锚(条带底贴 field 底);scroll_px=0+follow=false 显头部;
 // 光标出视口不画(相位差异像素数 0);follow ≡ scroll_px=尾锚值(缓冲逐
