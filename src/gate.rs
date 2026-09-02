@@ -1461,6 +1461,17 @@ pub fn register_input_bar(bar: &Arc<crate::input_bar::InputBarState>) {
     *INPUT_BAR.lock().unwrap() = Some(bar.clone());
 }
 
+#[cfg(target_os = "android")]
+/// AndroidApp 句柄（剪贴板 JNI 用；android_app init_terminal 时登记）
+static ANDROID_APP: Mutex<Option<winit::platform::android::activity::AndroidApp>> =
+    Mutex::new(None);
+
+#[cfg(target_os = "android")]
+/// 登记 AndroidApp 句柄（剪贴板 JNI 用；android_app init_terminal 时调一次）
+pub(crate) fn register_android_app(app: winit::platform::android::activity::AndroidApp) {
+    *ANDROID_APP.lock().unwrap() = Some(app);
+}
+
 /// 取句柄(owned Arc,借用即还);未登记 = None
 fn input_bar_handle() -> Option<Arc<crate::input_bar::InputBarState>> {
     INPUT_BAR.lock().unwrap().clone()
@@ -1501,6 +1512,18 @@ pub enum BarCmd {
     Scroll(i32),
     /// 视口拖动滚动·像素(1:1 跟手;正=往尾,负=往头)
     ScrollPx(i32),
+    /// 全选
+    SelectAll,
+    /// 设置选区 [start, end)
+    Select(usize, usize),
+    /// 退出选择模式
+    Unselect,
+    /// 复制当前选区到系统剪贴板
+    Copy,
+    /// 剪切当前选区到系统剪贴板
+    Cut,
+    /// 从系统剪贴板粘贴（替换当前选区/插在光标处）
+    Paste,
 }
 
 /// 解析一行(纯函数,钉死)。None = 空行/注释跳过;Some(Err) = 坏行
@@ -1536,6 +1559,30 @@ pub fn parse_bar_line(line: &str) -> Option<Result<BarCmd, String>> {
                 return match rest.parse::<i32>() {
                     Ok(n) => Some(Ok(BarCmd::ScrollPx(n))),
                     Err(_) => bad(),
+                };
+            }
+            if t == "select-all" {
+                return Some(Ok(BarCmd::SelectAll));
+            }
+            if t == "unselect" {
+                return Some(Ok(BarCmd::Unselect));
+            }
+            if t == "copy" {
+                return Some(Ok(BarCmd::Copy));
+            }
+            if t == "cut" {
+                return Some(Ok(BarCmd::Cut));
+            }
+            if t == "paste" {
+                return Some(Ok(BarCmd::Paste));
+            }
+            if let Some(rest) = t.strip_prefix("select ") {
+                let mut parts = rest.split_whitespace();
+                let a = parts.next().and_then(|p| p.parse::<usize>().ok());
+                let b = parts.next().and_then(|p| p.parse::<usize>().ok());
+                return match (a, b) {
+                    (Some(start), Some(end)) => Some(Ok(BarCmd::Select(start, end))),
+                    _ => bad(),
                 };
             }
             bad()
@@ -1590,17 +1637,55 @@ fn bar_check(dir: &str) {
             BarCmd::ComposingEnd => bar.finish_composing(),
             BarCmd::Scroll(n) => bar.scroll_by(*n, gh_field_h(bar.lines())),
             BarCmd::ScrollPx(n) => bar.scroll_by_px(*n, gh_field_h(bar.lines())),
+            BarCmd::SelectAll => bar.select_all(),
+            BarCmd::Select(start, end) => {
+                bar.enter_selection(*start);
+                bar.set_selection_end(*end);
+            }
+            BarCmd::Unselect => bar.clear_selection(),
+            #[cfg(target_os = "android")]
+            BarCmd::Copy => {
+                if let Some(text) = bar.selected_text()
+                    && let Some(app) = ANDROID_APP.lock().unwrap().as_ref()
+                {
+                    crate::clipboard::copy_and_toast(app, &text);
+                }
+            }
+            #[cfg(target_os = "android")]
+            BarCmd::Cut => {
+                if let Some(text) = bar.selected_text()
+                    && let Some(app) = ANDROID_APP.lock().unwrap().as_ref()
+                {
+                    crate::clipboard::copy_and_toast(app, &text);
+                }
+                bar.delete_selection();
+            }
+            #[cfg(target_os = "android")]
+            BarCmd::Paste => {
+                if let Some(app) = ANDROID_APP.lock().unwrap().as_ref()
+                    && let Some(text) = crate::clipboard::get_clipboard_text(app)
+                {
+                    bar.insert_or_replace(&text);
+                }
+            }
+            #[cfg(not(target_os = "android"))]
+            BarCmd::Copy | BarCmd::Cut | BarCmd::Paste => {
+                // host 测试环境无系统剪贴板，指令 no-op（考题仍可用 select/select-all）
+            }
         }
     }
     let s = bar.snap();
     std::fs::write(
         &res,
         format!(
-            "applied={} bad={}\nfocused={} text_len={} text={:?}\n",
+            "applied={} bad={}\nfocused={} text_len={} selecting={} sel={}..{} text={:?}\n",
             cmds.len(),
             errs.len(),
             s.focused,
             s.text.chars().count(),
+            s.selecting,
+            s.selection_start,
+            s.selection_end,
             s.text
         ),
     )

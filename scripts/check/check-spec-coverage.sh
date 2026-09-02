@@ -20,6 +20,7 @@ MATRIX="$ROOT/docs/ledger/test-coverage-matrix.md"
 # B/C 档整模块豁免(A 纯逻辑才进矩阵;理由逐条注明)
 EXEMPT_MODULES=(
     src/android_app.rs      # B 档平台胶水:判卷人=真机考官 na-regress
+    src/clipboard.rs        # B 档平台胶水(JNI 系统剪贴板):判卷人=真机考官
     src/lib.rs              # 模块声明表,无 pub 行为
     src/plugins/mod.rs      # 声明表
 )

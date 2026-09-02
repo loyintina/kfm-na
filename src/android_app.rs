@@ -85,11 +85,27 @@ struct OrbTouch {
     long_fired: bool,
 }
 
-/// 输入栏带手势跟踪（点按 vs 上下拖动滚动文本视口的仲裁状态）
+/// 输入栏带手势跟踪（点按 vs 上下拖动滚动文本视口 vs 长按选区仲裁状态）
 struct BarTouch {
+    at: std::time::Instant,
+    start_x: f64,
     start_y: f64,
+    last_x: f64,
     last_y: f64,
     dragged: bool,
+    /// 已触发长按进入选择模式
+    long_fired: bool,
+    /// 当前按在锚点热区上（Some = 拖动锚点；None = 普通栏手势）
+    anchor: Option<crate::input_bar::SelAnchor>,
+}
+
+/// 输入栏选择操作菜单项（BAR-046）：自绘菜单四键，左→右依次
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BarMenuAction {
+    SelectAll,
+    Copy,
+    Cut,
+    Paste,
 }
 
 /// 会话健康牌（断线重连 2026-08-21，按名字记账——槽位随切换翻面,
@@ -326,10 +342,17 @@ impl App {
                     crate::input_bar::in_bar(y, w.inner_size().height, self.ime_bottom_px, bar_h)
                 });
                 if in_input_bar {
+                    // 选择态下先检查是否按在锚点热区上（锚点命中优先级最高）
+                    let anchor = self.hit_selection_anchor(x, y);
                     self.inputbar_touch = Some(BarTouch {
+                        at: std::time::Instant::now(),
+                        start_x: x,
                         start_y: y,
+                        last_x: x,
                         last_y: y,
                         dragged: false,
+                        long_fired: false,
+                        anchor,
                     });
                     return;
                 }
@@ -402,21 +425,61 @@ impl App {
                 }
             }
             TouchPhase::Moved => {
-                // 输入栏带手势(BAR-042 修正:滚动须在 Moved 臂——此前误置
-                // Ended 臂,真指拖动永远无效):拖动超 slop 即滚动文本视口
+                // 输入栏带手势：锚点拖动 > 滚动 > 长按候选
                 let field_h = self.cur_bar_h().saturating_sub(64);
                 if let Some(bt) = self.inputbar_touch.as_mut() {
+                    let _dx = x - bt.last_x;
                     let dy = y - bt.last_y;
+                    bt.last_x = x;
                     bt.last_y = y;
-                    if !bt.dragged && (y - bt.start_y).abs() > crate::scroll::TAP_SLOP_PX {
-                        bt.dragged = true;
-                    }
-                    if bt.dragged {
-                        // 像素级 1:1 跟手:手指位移直进视口偏移(下拖=回头部)
-                        if let Some(bar) = &self.input_bar {
-                            bar.scroll_by_px(-(dy as i32), field_h);
+                    if let Some(anchor) = bt.anchor {
+                        // 拖动锚点：直接换算 char 下标并更新选区
+                        if let Some(idx) = self.bar_field_char_at(x, y)
+                            && let Some(bar) = &self.input_bar
+                        {
+                            match anchor {
+                                crate::input_bar::SelAnchor::Left => {
+                                    bar.set_selection_start(idx);
+                                }
+                                crate::input_bar::SelAnchor::Right => {
+                                    bar.set_selection_end(idx);
+                                }
+                                _ => {}
+                            }
+                        }
+                        // 拖到 field 上下边缘自动滚屏（每秒 2 行≈每帧 8px）
+                        let bar_h = self.cur_bar_h();
+                        let field_top = self.window.as_ref().map_or(0, |w| {
+                            w.inner_size()
+                                .height
+                                .saturating_sub(self.ime_bottom_px + bar_h)
+                                + 32
+                        }) as f64;
+                        let edge = 12.0;
+                        if y - field_top < edge
+                            && let Some(bar) = &self.input_bar
+                        {
+                            bar.scroll_by_px(-8, field_h);
+                        } else if (field_top + f64::from(field_h)) - y < edge
+                            && let Some(bar) = &self.input_bar
+                        {
+                            bar.scroll_by_px(8, field_h);
                         }
                         self.dirty = true;
+                    } else {
+                        if !bt.dragged
+                            && ((y - bt.start_y).abs() > crate::scroll::TAP_SLOP_PX
+                                || (x - bt.start_x).abs() > crate::scroll::TAP_SLOP_PX)
+                        {
+                            bt.dragged = true;
+                        }
+                        if bt.dragged {
+                            // 像素级 1:1 跟手:手指位移直进视口偏移(下拖=回头部)
+                            if let Some(bar) = &self.input_bar {
+                                bar.scroll_by_px(-(dy as i32), field_h);
+                            }
+                            self.dirty = true;
+                        }
                     }
                 }
                 // 指头坐标跟新（捏合测距用）
@@ -549,42 +612,40 @@ impl App {
                     self.dirty = true;
                     return;
                 }
-                // 输入栏手势收尾(Ended|Cancelled 臂):拖过 = 滚动收尾不当
-                // 点按;未拖 = 点按(文本区聚焦+定位+弹键盘;发送钮=submit)
+                // 输入栏手势收尾(Ended|Cancelled 臂)
                 if let Some(bt) = self.inputbar_touch.take() {
                     if phase == TouchPhase::Cancelled {
                         return; // 取消:丢弃
                     }
+                    // 锚点拖动结束：保持选择，重绘
+                    if bt.anchor.is_some() {
+                        self.dirty = true;
+                        return;
+                    }
+                    // 拖动结束（滚动/扩选）不当点按
                     if bt.dragged {
                         self.dirty = true;
-                        return; // 拖动收尾不当点按
+                        return;
                     }
                     let bar_h = self.cur_bar_h();
                     let action = self.window.as_ref().and_then(|w| {
                         let s = w.inner_size();
                         crate::input_bar::hit(x, y, s.width, s.height, self.ime_bottom_px, bar_h)
                     });
+                    let selecting = self.input_bar.as_ref().is_some_and(|b| b.snap().selecting);
                     match action {
                         Some(crate::input_bar::BarHit::Field) => {
                             if let Some(bar) = &self.input_bar {
                                 bar.focus();
-                                // 点按定位光标（浏览器控件行为）：
-                                // 屏坐标 → 文本区本地坐标 → char 下标
-                                // （term::bar_cursor_at 与渲染同几何）
-                                if let Some(w) = &self.window {
-                                    let s = w.inner_size();
-                                    let field_top =
-                                        s.height.saturating_sub(self.ime_bottom_px + bar_h) + 32;
-                                    let x_local = x - f64::from(crate::input_bar::MARGIN_X_PX + 40);
-                                    let y_local = y - f64::from(field_top);
-                                    if let Some(t) = self.term_handle() {
-                                        let snap_full = bar.snap();
-                                        let idx = t
-                                            .lock()
-                                            .unwrap()
-                                            .bar_cursor_at(&snap_full, s.width, x_local, y_local);
-                                        bar.set_cursor(idx);
-                                    }
+                                // 选择模式下：先检查菜单命中，再检查选区外点按
+                                if selecting && let Some(menu) = self.hit_selection_menu(x, y) {
+                                    self.execute_bar_menu(menu);
+                                    self.dirty = true;
+                                    return;
+                                }
+                                // 点按定位光标（浏览器控件行为）
+                                if let Some(idx) = self.bar_field_char_at(x, y) {
+                                    bar.set_cursor(idx);
                                 }
                             }
                             if let Some(w) = &self.window {
@@ -759,6 +820,162 @@ impl App {
         crate::report::report("ai", "长按光球 → fake_run(3000)（debug 钩子）");
     }
 
+    /// 输入栏长按计时（BAR-046）：按住栏内文本区 ≥SELECT_LONG_PRESS_MS
+    /// 未拖动 → 进入选择模式（光标处空选区，弹出菜单）。锚点命中时不走这里。
+    fn check_inputbar_long_press(&mut self) {
+        let Some(bt) = &mut self.inputbar_touch else {
+            return;
+        };
+        if bt.long_fired || bt.dragged || bt.anchor.is_some() {
+            return;
+        }
+        if bt.at.elapsed()
+            < std::time::Duration::from_millis(crate::input_bar::SELECT_LONG_PRESS_MS)
+        {
+            return;
+        }
+        bt.long_fired = true;
+        let (x, y) = (bt.start_x, bt.start_y);
+        if let Some(idx) = self.bar_field_char_at(x, y)
+            && let Some(bar) = &self.input_bar
+        {
+            bar.enter_selection(idx);
+            self.dirty = true;
+            crate::report::report("ime", "输入栏长按 → 进入选择模式");
+        }
+    }
+
+    /// 屏坐标 → 输入栏文本区 char 下标（BAR-046）。复用 `bar_cursor_at` 几何，
+    /// 点按在 field 外返回 None。
+    fn bar_field_char_at(&self, x: f64, y: f64) -> Option<usize> {
+        let w = self.window.as_ref()?.inner_size().width;
+        let h = self.window.as_ref()?.inner_size().height;
+        let bar_h = self.cur_bar_h();
+        let ime_bottom = self.ime_bottom_px;
+        let top = h.checked_sub(ime_bottom)?.checked_sub(bar_h)?;
+        let field_top = top + 32;
+        let field_h = bar_h.checked_sub(64)?;
+        let field_left = crate::input_bar::MARGIN_X_PX;
+        let send_left = w
+            .checked_sub(crate::input_bar::MARGIN_X_PX)?
+            .checked_sub(crate::input_bar::SEND_W_PX)?;
+        let field_w = send_left
+            .checked_sub(crate::input_bar::GAP_PX)?
+            .checked_sub(field_left)?;
+        if x < f64::from(field_left)
+            || x >= f64::from(field_left + field_w)
+            || y < f64::from(field_top)
+            || y >= f64::from(field_top + field_h)
+        {
+            return None;
+        }
+        let bar = self.input_bar.as_ref()?;
+        let term = self.term_handle()?;
+        let snap = bar.snap();
+        let x_local = x - f64::from(field_left + 40);
+        let y_local = y - f64::from(field_top);
+        Some(
+            term.lock()
+                .unwrap()
+                .bar_cursor_at(&snap, w, x_local, y_local),
+        )
+    }
+
+    /// 判断是否按在选择锚点热区上（BAR-046）。热区以锚点尖为中心、
+    /// ANCHOR_HIT_SIZE 为边长的正方形。
+    fn hit_selection_anchor(&self, x: f64, y: f64) -> Option<crate::input_bar::SelAnchor> {
+        let w = self.window.as_ref()?.inner_size().width;
+        let h = self.window.as_ref()?.inner_size().height;
+        let bar = self.input_bar.as_ref()?;
+        let snap = bar.snap();
+        if !snap.selecting {
+            return None;
+        }
+        let term = self.term_handle()?;
+        let geo = term
+            .lock()
+            .unwrap()
+            .bar_selection_geometry(&snap, w, h, self.ime_bottom_px)?;
+        let half = f64::from(crate::input_bar::ANCHOR_HIT_SIZE) / 2.0;
+        let in_hot =
+            |px: f64, py: f64| x >= px - half && x < px + half && y >= py - half && y < py + half;
+        if in_hot(geo.left_anchor.0, geo.left_anchor.1) {
+            Some(crate::input_bar::SelAnchor::Left)
+        } else if in_hot(geo.right_anchor.0, geo.right_anchor.1) {
+            Some(crate::input_bar::SelAnchor::Right)
+        } else {
+            None
+        }
+    }
+
+    /// 判断是否命中选择操作菜单四键之一（BAR-046）。
+    /// 顺序左→右：全选 | 复制 | 剪切 | 粘贴。
+    fn hit_selection_menu(&self, x: f64, y: f64) -> Option<BarMenuAction> {
+        let w = self.window.as_ref()?.inner_size().width;
+        let h = self.window.as_ref()?.inner_size().height;
+        let bar = self.input_bar.as_ref()?;
+        let snap = bar.snap();
+        if !snap.selecting {
+            return None;
+        }
+        let term = self.term_handle()?;
+        let geo = term
+            .lock()
+            .unwrap()
+            .bar_selection_geometry(&snap, w, h, self.ime_bottom_px)?;
+        let fx = f64::from(geo.menu_x);
+        let fy = f64::from(geo.menu_y);
+        let fw = f64::from(geo.menu_w);
+        let fh = f64::from(geo.menu_h);
+        if x < fx || x >= fx + fw || y < fy || y >= fy + fh {
+            return None;
+        }
+        let btn_w = fw / 4.0;
+        let idx = ((x - fx) / btn_w).floor() as usize;
+        match idx {
+            0 => Some(BarMenuAction::SelectAll),
+            1 => Some(BarMenuAction::Copy),
+            2 => Some(BarMenuAction::Cut),
+            3 => Some(BarMenuAction::Paste),
+            _ => None,
+        }
+    }
+
+    /// 执行输入栏选择菜单动作（BAR-046）。复制/剪切/粘贴都走系统剪贴板。
+    fn execute_bar_menu(&mut self, action: BarMenuAction) {
+        let Some(bar) = &self.input_bar else { return };
+        match action {
+            BarMenuAction::SelectAll => bar.select_all(),
+            BarMenuAction::Copy => {
+                if let Some(text) = bar.selected_text()
+                    && let Some(app) = &self.android_app
+                {
+                    crate::clipboard::copy_and_toast(app, &text);
+                }
+            }
+            BarMenuAction::Cut => {
+                if let Some(text) = bar.selected_text()
+                    && let Some(app) = &self.android_app
+                {
+                    crate::clipboard::copy_and_toast(app, &text);
+                }
+                bar.delete_selection();
+            }
+            BarMenuAction::Paste => {
+                if let Some(text) = self.paste_from_clipboard() {
+                    bar.insert_or_replace(&text);
+                }
+            }
+        }
+        self.dirty = true;
+    }
+
+    /// 从系统剪贴板读文本（BAR-046）。JNI 任一环节失败只返回 None，不 panic。
+    fn paste_from_clipboard(&self) -> Option<String> {
+        let app = self.android_app.as_ref()?;
+        crate::clipboard::get_clipboard_text(app)
+    }
+
     /// AI 外显快照逐圈比对置脏：探针注入（通道十直调状态核）/fake_run
     /// 到期/run 驻留翻隐等不经壳层触摸的状态变化也要画出帧
     fn poll_ai_presence(&mut self) {
@@ -890,6 +1107,8 @@ impl App {
         if let Some(app) = &self.android_app
             && let Some(dir) = app.internal_data_path()
         {
+            // 登记 AndroidApp 句柄供闸门剪贴板 JNI 使用（BAR-046）
+            crate::gate::register_android_app(app.clone());
             std::thread::spawn(move || {
                 crate::exec_probe::run(&dir);
             });
@@ -1793,6 +2012,7 @@ impl ApplicationHandler for App {
             // 触发即置 dirty → 本圈末尾条件重绘接住)
             self.check_long_press();
             self.check_orb_long_press(); // 光球长按 → fake_run(debug 钩子)
+            self.check_inputbar_long_press(); // 输入栏长按 → 选择模式(BAR-046)
             self.poll_ai_presence(); // AI 外显快照比对(注入/到期也要画帧)
             self.poll_input_bar(); // 输入栏快照比对(注入/分流也要画帧)
             // blackout 期补画(冗余兜底,2026-08-22 探针拆除案保留):

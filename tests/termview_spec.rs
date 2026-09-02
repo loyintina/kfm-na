@@ -1348,6 +1348,9 @@ fn spec_bar039_render_inputbar_带高从文本实测() {
         composing: String::new(),
         scroll_px: 0,
         follow: true,
+        selecting: false,
+        selection_start: 0,
+        selection_end: 0,
     };
     tv.render_inputbar(&mut buf, w, h, 0, &snap, false, false);
     // 期望带顶 = 实测行数派生（BAR-039 不变量：渲染带高 == 实测折行带高，
@@ -1382,6 +1385,9 @@ fn spec_bar_caret_闪烁相位与定位柄() {
         composing: String::new(),
         scroll_px: 0,
         follow: true,
+        selecting: false,
+        selection_start: 0,
+        selection_end: 0,
     };
     let mut on = vec![0u32; (w * h) as usize];
     tv.render_inputbar(&mut on, w, h, 0, &focused, false, true);
@@ -1422,6 +1428,9 @@ fn spec_bar_cursor_at_点按定位换算() {
         composing: String::new(),
         scroll_px,
         follow,
+        selecting: false,
+        selection_start: 0,
+        selection_end: 0,
     };
     assert_eq!(
         tv.bar_cursor_at(&snap_of("", true, 0), 600, 100.0, 30.0),
@@ -1469,6 +1478,9 @@ fn spec_composing_下划线稳显() {
         composing: "ni".to_string(),
         scroll_px: 0,
         follow: true,
+        selecting: false,
+        selection_start: 0,
+        selection_end: 0,
     };
     let mut on = vec![0u32; (w * h) as usize];
     tv.render_inputbar(&mut on, w, h, 0, &snap, false, true);
@@ -1490,6 +1502,46 @@ fn spec_composing_下划线稳显() {
         }
     }
     assert!(caret_diff, "光标仍随相位闪烁(行带内有相位差异)");
+}
+
+// BAR-046: 文本选择系统渲染判卷——选区高亮像素+锚点稳显+菜单像素
+#[test]
+fn spec_selection_高亮与锚点稳显() {
+    let (tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必成");
+    let (w, h) = (600u32, 1200u32);
+    let snap = kfm_na::input_bar::BarSnap {
+        text: "一二三四五六七八九十".to_string(),
+        focused: true,
+        lines: 1,
+        cursor: 0,
+        handle: false,
+        composing: String::new(),
+        scroll_px: 0,
+        follow: true,
+        selecting: true,
+        selection_start: 2,
+        selection_end: 6,
+    };
+    let mut on = vec![0u32; (w * h) as usize];
+    tv.render_inputbar(&mut on, w, h, 0, &snap, false, true);
+    let mut off = vec![0u32; (w * h) as usize];
+    tv.render_inputbar(&mut off, w, h, 0, &snap, false, false);
+    // 单行带几何:行中心 y≈1089;选区底=品牌蓝 0x004488DD
+    let has_select_bg =
+        |buf: &[u32]| (0..w as usize).any(|x| buf[1089 * w as usize + x] == 0x0044_88DD);
+    assert!(has_select_bg(&on), "选区必须有品牌蓝高亮底");
+    assert!(has_select_bg(&off), "高亮稳显,不随光标相位消失");
+    // 锚点稳显：行底区域找 brand-cyan 像素（锚点色 = select_handle）
+    let has_anchor = |buf: &[u32]| {
+        (1100..1140usize).any(|y| (0..w as usize).any(|x| buf[y * w as usize + x] == 0x0000_D4FF))
+    };
+    assert!(has_anchor(&on), "选择锚点必须出现");
+    assert!(has_anchor(&off), "锚点稳显不闪烁");
+    // 菜单像素：菜单气泡底 menu_bg 在选区上方出现
+    let has_menu = |buf: &[u32]| {
+        (1000..1060usize).any(|y| (180..420usize).any(|x| buf[y * w as usize + x] == 0x0020_2028))
+    };
+    assert!(has_menu(&on), "选择菜单气泡必须出现");
 }
 
 // BAR-045: prompt_bar.rs 切片倒挂崩溃夜检——防御性切片+display_text 同源
@@ -1521,6 +1573,9 @@ fn spec_inputbar_防御性切片不崩溃() {
             composing: composing.clone(),
             scroll_px,
             follow,
+            selecting: false,
+            selection_start: 0,
+            selection_end: 0,
         };
         // 只判「不 panic」；视觉正确性由其他判卷负责
         tv.render_inputbar(&mut buf, w, h, 0, &snap, false, true);
@@ -1550,6 +1605,9 @@ fn spec_视口滚动_follow与像素偏移() {
         composing: String::new(),
         scroll_px,
         follow,
+        selecting: false,
+        selection_start: 0,
+        selection_end: 0,
     };
     let mut tail = vec![0u32; (w * h) as usize];
     tv.render_inputbar(&mut tail, w, h, 0, &base(true, 0), false, true);

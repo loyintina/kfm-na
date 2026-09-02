@@ -38,6 +38,18 @@ pub struct BarTheme {
     pub send_br: u32,
     /// 发送钮图标白（▶/⏸ 同色）
     pub send_tri: u32,
+    /// 文本选区高亮底（品牌蓝 α0.35 叠近黑底：#0066FF → 0x0044_88DD）
+    pub select_bg: u32,
+    /// 选择锚点柄（与定位柄同族，品牌蓝）
+    pub select_handle: u32,
+    /// 操作菜单气泡底（近黑半透明）
+    pub menu_bg: u32,
+    /// 菜单按钮文字
+    pub menu_text: u32,
+    /// 菜单按钮禁用文字
+    pub menu_disabled: u32,
+    /// 菜单按钮按下态底
+    pub menu_pressed: u32,
 }
 
 /// 全局主题（第 2 层单源；控件各取所需字段组）
@@ -82,6 +94,12 @@ impl Default for Theme {
                 send_tl: 0x007C_3AED,
                 send_br: 0x0003_ADD1,
                 send_tri: 0x00FF_FFFF,
+                select_bg: 0x0044_88DD,
+                select_handle: 0x0000_D4FF,
+                menu_bg: 0x0020_2028,
+                menu_text: 0x00E0_E0E0,
+                menu_disabled: 0x0061_6165,
+                menu_pressed: 0x003A_3A4A,
             },
             keybar: KeybarTheme {
                 bg: 0x0010_1216,

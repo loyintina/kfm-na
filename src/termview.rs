@@ -1699,6 +1699,14 @@ pub trait TermEmu: Send {
         x_local: f64,
         y_local: f64,
     ) -> usize;
+    /// 选择态屏幕几何（BAR-046）：锚点尖位置 + 菜单气泡边界，触摸命中用
+    fn bar_selection_geometry(
+        &self,
+        snap: &crate::input_bar::BarSnap,
+        buf_w: u32,
+        buf_h: u32,
+        ime_bottom: u32,
+    ) -> Option<crate::input_bar::BarSelectionGeometry>;
     #[allow(clippy::too_many_arguments)]
     fn render_orb(
         &self,
@@ -1775,6 +1783,15 @@ impl TermEmu for TermView {
         y_local: f64,
     ) -> usize {
         TermView::bar_cursor_at(self, snap, buf_w, x_local, y_local)
+    }
+    fn bar_selection_geometry(
+        &self,
+        snap: &crate::input_bar::BarSnap,
+        buf_w: u32,
+        buf_h: u32,
+        ime_bottom: u32,
+    ) -> Option<crate::input_bar::BarSelectionGeometry> {
+        TermView::bar_selection_geometry(self, snap, buf_w, buf_h, ime_bottom)
     }
     #[allow(clippy::too_many_arguments)]
     fn render_orb(
