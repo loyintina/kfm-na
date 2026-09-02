@@ -50,23 +50,11 @@ pub fn copy_and_toast(app: &AndroidApp, text: &str) {
             jni_sig!("(Landroid/content/ClipData;)V"),
             &[jni::JValue::Object(&clip)],
         )?;
-        // Toast.makeText(Context, CharSequence, int).show()——LENGTH_SHORT = 0
-        let msg = env.new_string(format!("已复制 {n} 字符"))?;
-        let toast = env
-            .call_static_method(
-                jni_str!("android/widget/Toast"),
-                jni_str!("makeText"),
-                jni_sig!(
-                    "(Landroid/content/Context;Ljava/lang/CharSequence;I)Landroid/widget/Toast;"
-                ),
-                &[
-                    jni::JValue::Object(&activity),
-                    jni::JValue::Object(&msg),
-                    jni::JValue::Int(0),
-                ],
-            )?
-            .l()?;
-        env.call_method(&toast, jni_str!("show"), jni_sig!("()V"), &[])?;
+        // Toast 提示（BAR-046）：makeText 必须在带 Looper 的线程调用，
+        // 而 gate 值守线程没有 Looper——实测抛 NPE「Can't toast on a thread
+        // that has not called Looper.prepare()」。当前先移除 Toast，只保
+        // 剪贴板写入；后续如需要 Toast 提示，应通过 Activity.runOnUiThread
+        // 或 Handler 移到主线程再调。
         Ok(())
     });
     match result {
