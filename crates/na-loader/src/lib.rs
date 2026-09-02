@@ -217,4 +217,42 @@ mod imp {
             (*mut jni_sys::JNIEnv, jni_sys::jclass, jni_sys::jstring)
         );
     }
+
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_dev_kfm_na_KfmImeView_nativeComposingText(
+        env: *mut jni_sys::JNIEnv,
+        class: jni_sys::jclass,
+        text: jni_sys::jstring,
+    ) {
+        forward_to_core!(
+            c"Java_dev_kfm_na_KfmImeView_nativeComposingText",
+            (env, class, text),
+            (*mut jni_sys::JNIEnv, jni_sys::jclass, jni_sys::jstring)
+        );
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_dev_kfm_na_KfmImeView_nativeFinishComposing(
+        env: *mut jni_sys::JNIEnv,
+        class: jni_sys::jclass,
+    ) {
+        forward_to_core!(
+            c"Java_dev_kfm_na_KfmImeView_nativeFinishComposing",
+            (env, class),
+            (*mut jni_sys::JNIEnv, jni_sys::jclass)
+        );
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_dev_kfm_na_KfmImeView_nativeContextMenuAction(
+        env: *mut jni_sys::JNIEnv,
+        class: jni_sys::jclass,
+        action: jni_sys::jstring,
+    ) {
+        forward_to_core!(
+            c"Java_dev_kfm_na_KfmImeView_nativeContextMenuAction",
+            (env, class, action),
+            (*mut jni_sys::JNIEnv, jni_sys::jclass, jni_sys::jstring)
+        );
+    }
 }
