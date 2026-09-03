@@ -1,6 +1,6 @@
 src/ai_presence.rs 0
 src/bootstrap.rs 2
-src/clipboard.rs 1
+src/clipboard.rs 0
 src/conn.rs 2
 src/crash.rs 1
 src/exec_probe.rs 0
@@ -19,7 +19,7 @@ src/plugins/term_alacritty.rs 0
 src/protocol.rs 0
 src/report.rs 7
 src/scroll.rs 0
-src/session_router.rs 1
+src/session_router.rs 0
 src/session.rs 0
 src/termview.rs 6
 src/trace.rs 4

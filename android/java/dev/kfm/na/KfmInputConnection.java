@@ -75,6 +75,8 @@ final class KfmInputConnection extends BaseInputConnection {
 
     @Override
     public boolean performEditorAction(int actionCode) {
+        // BAR-054 探针：动作键经此通道时记下码值（此前静默吞）
+        KfmImeView.imeLog("performEditorAction(" + actionCode + ")");
         return true;
     }
 
@@ -149,6 +151,44 @@ final class KfmInputConnection extends BaseInputConnection {
             KfmImeView.contextMenuAction(action);
             return true;
         }
+        // BAR-054 第四刀：IME 剪切实锤不走标准四 id——未识别 id 此前静默
+        // 漏进 super（默认实现删内部空 Editable = 删个寂寞）。记下数值，
+        // 厂商私有 id 抓到即现形
+        KfmImeView.imeLog("context-menu 未识别 id=" + id);
         return super.performContextMenuAction(id);
+    }
+
+    @Override
+    public boolean beginBatchEdit() {
+        // BAR-054 探针：IME 批量删除/替换常以 begin/end 包裹，单独成环
+        KfmImeView.imeLog("beginBatchEdit");
+        return super.beginBatchEdit();
+    }
+
+    @Override
+    public boolean endBatchEdit() {
+        KfmImeView.imeLog("endBatchEdit");
+        return super.endBatchEdit();
+    }
+
+    @Override
+    public boolean commitCorrection(android.view.inputmethod.CorrectionInfo correctionInfo) {
+        // BAR-054 探针：纠错提交也是潜在的文本改写暗道
+        KfmImeView.imeLog("commitCorrection");
+        return super.commitCorrection(correctionInfo);
+    }
+
+    @Override
+    public boolean performPrivateCommand(String action, android.os.Bundle data) {
+        // BAR-054 探针：厂商私有指令通道——剪切若走这里 action 名即身份
+        KfmImeView.imeLog("performPrivateCommand(\"" + action + "\")");
+        return super.performPrivateCommand(action, data);
+    }
+
+    @Override
+    public boolean setComposingRegion(int start, int end) {
+        // BAR-054 探针：组词区直设——只记不动（默认实现改内部空 Editable 无害）
+        KfmImeView.imeLog("setComposingRegion(" + start + "," + end + ")");
+        return super.setComposingRegion(start, end);
     }
 }
