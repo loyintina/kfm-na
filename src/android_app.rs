@@ -448,7 +448,10 @@ impl App {
             }
             TouchPhase::Moved => {
                 // 输入栏带手势：锚点拖动 > 滚动 > 长按候选
+                // field_h 供边缘判定（框界）；view_h 供滚动钳制（BAR-049
+                // 文本视口高，与渲染同尺）
                 let field_h = self.cur_bar_h().saturating_sub(64);
+                let view_h = crate::input_bar::text_view_h(field_h);
                 if let Some(bt) = self.inputbar_touch.as_mut() {
                     let _dx = x - bt.last_x;
                     let dy = y - bt.last_y;
@@ -481,11 +484,11 @@ impl App {
                         if y - field_top < edge
                             && let Some(bar) = &self.input_bar
                         {
-                            bar.scroll_by_px(-8, field_h);
+                            bar.scroll_by_px(-8, view_h);
                         } else if (field_top + f64::from(field_h)) - y < edge
                             && let Some(bar) = &self.input_bar
                         {
-                            bar.scroll_by_px(8, field_h);
+                            bar.scroll_by_px(8, view_h);
                         }
                         self.dirty = true;
                     } else if bt.menu.is_some() {
@@ -507,7 +510,7 @@ impl App {
                         if bt.dragged {
                             // 像素级 1:1 跟手:手指位移直进视口偏移(下拖=回头部)
                             if let Some(bar) = &self.input_bar {
-                                bar.scroll_by_px(-(dy as i32), field_h);
+                                bar.scroll_by_px(-(dy as i32), view_h);
                             }
                             self.dirty = true;
                         }

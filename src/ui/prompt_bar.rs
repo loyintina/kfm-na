@@ -184,16 +184,20 @@ impl crate::termview::TermView {
         let text_cx = field_left + 40;
         // 视口（2026-09-01 像素级滚动，BAR-042 跟手拍板）：文本条带在
         // field 内垂直偏移 eff px，内容 1:1 跟手。follow=尾锚（条带底贴
-        // field 底，打字态）；拖动后 scroll_px 钳制固定；条带不足一屏 =
+        // 视口底，打字态）；拖动后 scroll_px 钳制固定；条带不足一屏 =
         // 居中不可滚。几何单源 = input_bar::viewport_geometry（点按换算
-        // 同吃此函数——眼手同尺）
+        // 同吃此函数——眼手同尺）。
+        // BAR-049：视口 = field 上下各收 TEXT_PAD_Y 内衬——文字/高亮不贴
+        // field 边框（kfmv4 padding 14px CSS ≈ 40 物理），滚到边界的行在
+        // 内衬带里被裁掉。field_y0/y1 以下一律指「文本视口」边界。
         let n = starts.len();
+        let view_h = input_bar::text_view_h(field_h);
         let (_, eff, top_off) =
-            input_bar::viewport_geometry(n as u32, field_h, snap.follow, snap.scroll_px);
-        let text_top = field_top as i32 + top_off as i32 - eff;
+            input_bar::viewport_geometry(n as u32, view_h, snap.follow, snap.scroll_px);
+        let field_y0 = field_top as i32 + input_bar::TEXT_PAD_Y as i32;
+        let field_y1 = (field_top + field_h) as i32 - input_bar::TEXT_PAD_Y as i32;
+        let text_top = field_y0 + top_off as i32 - eff;
         let line_y = |k: usize| -> i32 { text_top + k as i32 * input_bar::LINE_STEP_PX as i32 };
-        let field_y0 = field_top as i32;
-        let field_y1 = (field_top + field_h) as i32;
         let text_cw = field_w - 40 - 12;
         if display.is_empty() {
             self.draw_text_left(
@@ -355,10 +359,20 @@ impl crate::termview::TermView {
             );
         }
         // 操作菜单（BAR-046）：选择模式下弹出气泡条；MVP 自绘在栏带内。
+        // BAR-049：菜单可见锚也吃文本视口（上下收 TEXT_PAD_Y 内衬后的边界）
         if snap.selecting {
             self.draw_selection_menu(
-                &mut frame, snap, &starts, &items, text_cx, &line_y, field_top, field_h, bar_h,
-                top, buf_w,
+                &mut frame,
+                snap,
+                &starts,
+                &items,
+                text_cx,
+                &line_y,
+                field_y0 as u32,
+                view_h,
+                bar_h,
+                top,
+                buf_w,
             );
         }
         // 发送钮：kfmv4 42×42 方钮 align-self:center——定尺居中，不随行数
@@ -460,11 +474,16 @@ impl crate::termview::TermView {
         let starts = wrap_starts(&widths, avail);
         let n = starts.len();
         let bar_h = input_bar::height_for_lines(n as u32);
-        let (_, eff, top_off) =
-            input_bar::viewport_geometry(n as u32, bar_h - 64, snap.follow, snap.scroll_px);
-        // 行:strip 坐标 = field 内 y - 顶留白 + 滚动偏移;行 = strip/行高,
+        // BAR-049：视口高与渲染同尺（field 上下收 TEXT_PAD_Y 内衬）
+        let (_, eff, top_off) = input_bar::viewport_geometry(
+            n as u32,
+            input_bar::text_view_h(bar_h - 64),
+            snap.follow,
+            snap.scroll_px,
+        );
+        // 行:strip 坐标 = field 内 y - 内衬 - 顶留白 + 滚动偏移;行 = strip/行高,
         // 钳 [0, 行数-1](与渲染视口窗同源:viewport_geometry)
-        let strip_y = y_local - top_off as f64 + eff as f64;
+        let strip_y = y_local - f64::from(input_bar::TEXT_PAD_Y) - top_off as f64 + eff as f64;
         let k = ((strip_y / f64::from(input_bar::LINE_STEP_PX))
             .floor()
             .max(0.0) as usize)
@@ -691,9 +710,15 @@ impl crate::termview::TermView {
         let field_top = top + 32;
         let field_left = input_bar::MARGIN_X_PX;
         let text_cx = field_left + 40;
+        // BAR-049：文本视口 = field 上下收 TEXT_PAD_Y 内衬（与渲染同尺）
+        let view_h = input_bar::text_view_h(field_h);
+        let (vy0, vy1) = (
+            field_top as i32 + input_bar::TEXT_PAD_Y as i32,
+            (field_top + field_h) as i32 - input_bar::TEXT_PAD_Y as i32,
+        );
         let (_, eff, top_off) =
-            input_bar::viewport_geometry(n_lines as u32, field_h, snap.follow, snap.scroll_px);
-        let text_top = field_top as i32 + top_off as i32 - eff;
+            input_bar::viewport_geometry(n_lines as u32, view_h, snap.follow, snap.scroll_px);
+        let text_top = vy0 + top_off as i32 - eff;
         let line_y = |k: usize| -> i32 { text_top + k as i32 * input_bar::LINE_STEP_PX as i32 };
         // 锚点柄视觉中心（2026-09-03 ②号迭代）：柄形 = 上尖三角（tip-1 起
         // 高 14）+ 正方承载（tip+11 起高 28），合 span y∈[tip-1, tip+38]，
@@ -718,14 +743,8 @@ impl crate::termview::TermView {
         // 滚出视口时菜单不画，几何也同步 None（看不见的点不得有触摸热区）
         let row_s = row_of(&starts, snap.selection_start.min(items.len()));
         let row_e = row_of(&starts, snap.selection_end.min(items.len()));
-        let (y_s, y_e) = Self::visible_sel_anchor_y(
-            line_y(0),
-            starts.len(),
-            field_top as i32,
-            (field_top + field_h) as i32,
-            row_s,
-            row_e,
-        )?;
+        let (y_s, y_e) =
+            Self::visible_sel_anchor_y(line_y(0), starts.len(), vy0, vy1, row_s, row_e)?;
         let (menu_x, menu_y, menu_w, menu_h) =
             Self::selection_menu_rect(y_s, y_e, buf_w, top, bar_h);
         Some(crate::input_bar::BarSelectionGeometry {

@@ -24,6 +24,17 @@ pub const MAX_LINES: u32 = 5;
 /// 每多一行带高增量（px）= 行高：字号 ~40px × 1.5（kfmv4 line-height 直译）
 pub const LINE_STEP_PX: u32 = 63;
 
+/// 文本区垂直内衬（px，BAR-049）：文字/高亮不贴 field 上下沿——2026-09-03
+/// 用户对照其他输入框实拍指正：kfmv4 `.ai-input` padding 14px CSS ≈ 40 物理
+/// （1260 屏 3x DPI），全选时高亮也不挨边框，滚到边界的行在内衬带里被裁掉
+/// 而不是顶着框线。渲染/点按换算/滚动钳制/菜单锚共用这一把尺（眼手同尺）。
+pub const TEXT_PAD_Y: u32 = 40;
+
+/// field 高 → 文本视口高（上下各收 TEXT_PAD_Y）
+pub fn text_view_h(field_h: u32) -> u32 {
+    field_h.saturating_sub(2 * TEXT_PAD_Y)
+}
+
 /// 行数 → 带高（px）。0 行按 1 行计（空栏也是一行高）；超 MAX_LINES 封顶。
 /// 覆盖式悬浮：带长高只把栏带向上浮盖终端底部行，终端网格几何不动。
 pub fn height_for_lines(lines: u32) -> u32 {

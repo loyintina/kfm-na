@@ -1700,6 +1700,55 @@ fn spec_bar046_菜单按钮绘文字() {
     );
 }
 
+// BAR-049 2026-09-03 用户对照其他输入框实拍指正：「输入的内容其实并不是
+// 紧贴着栏的上下沿的，而是有一段距离」——kfmv4 `.ai-input` padding 14px
+// CSS ≈ 40 物理（1260 屏 3x DPI）。na 原来文字/高亮贴死 field 上下沿，
+// 全选时高亮顶到框线，视觉上「溢出感」的根子之一。契约：文本视口 =
+// field 上下各收 TEXT_PAD_Y(40) 内衬，文字/高亮/光标/锚点/菜单锚/滚动
+// 钳制全部吃这把尺。判卷：内衬带内不得有选区高亮像素；视口内高亮健在。
+#[test]
+fn spec_bar049_文本内衬_高亮不贴框沿() {
+    let (tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必成");
+    let (w, h) = (600u32, 1400u32);
+    let text: String = "一二三四五六七八九十".repeat(5);
+    let snap = kfm_na::input_bar::BarSnap {
+        text,
+        focused: true,
+        lines: 5,
+        cursor: 50,
+        handle: false,
+        composing: String::new(),
+        scroll_px: 0,
+        follow: true,
+        selecting: true,
+        selection_start: 0,
+        selection_end: 50,
+    };
+    let mut buf = vec![0u32; (w * h) as usize];
+    tv.render_inputbar(&mut buf, w, h, 0, &snap, false, false);
+    let bar_h = kfm_na::input_bar::height_for_lines(5);
+    let field_top = h - bar_h + 32;
+    let field_bottom = field_top + (bar_h - 64);
+    let pad = kfm_na::input_bar::TEXT_PAD_Y;
+    let (mut inner, mut pad_hit) = (0u32, 0u32);
+    for y in 0..h {
+        for x in 0..w {
+            if buf[(y * w + x) as usize] == 0x0044_88DD {
+                if y < field_top + pad || y >= field_bottom - pad {
+                    pad_hit += 1;
+                } else {
+                    inner += 1;
+                }
+            }
+        }
+    }
+    assert!(inner > 1000, "视口内高亮必须健在（inner={inner}）");
+    assert_eq!(
+        pad_hit, 0,
+        "内衬带（上下各 {pad}px）内不得有高亮像素（pad_hit={pad_hit}）"
+    );
+}
+
 // BAR-048 2026-09-03 用户实拍：长文全选后上下滚动输入栏，选择菜单跟着
 // 「被隐藏的选区首行」往页面上方爬——内容滚得越多菜单爬得越高。病灶：
 // 菜单锚定选区首行 line_y(row_s)，全选时首行早滚出栏顶（不可见），菜单
@@ -1727,21 +1776,25 @@ fn spec_bar048_菜单锚可见选区() {
     let geo = tv
         .bar_selection_geometry(&snap, w, h, 0)
         .expect("全选必有可见选区，几何必须存在");
-    // 与渲染同一把尺算期望：field 几何 + 视口几何 → 第一个可见行
+    // 与渲染同一把尺算期望：field 几何 + 文本视口（BAR-049 内衬）→ 钉位
     let n_lines = 10u32; // 50 字 / 每行约 5 字
     let bar_h = kfm_na::input_bar::height_for_lines(5);
     let field_top = h - bar_h + 32;
     let field_h = bar_h - 64;
-    let (_, eff, _) = kfm_na::input_bar::viewport_geometry(n_lines, field_h, true, 0);
-    let text_top = field_top as i32 - eff;
-    let step = kfm_na::input_bar::LINE_STEP_PX as i32;
-    let first_vis = ((field_top as i32 - text_top).max(0) / step) as u32;
-    // 菜单应钉「栏顶上方 12px」固定位（选区起点在视口之上 → 锚 y 钳到栏顶，
-    // 不追部分可见行的连续 y——复测实拍「上下抖动」= 锯齿效应的根治）
-    let expect_y = (field_top as i32 - 72 - 12).max(8) as u32;
+    let ty0 = field_top + kfm_na::input_bar::TEXT_PAD_Y;
+    let (_, eff, _) = kfm_na::input_bar::viewport_geometry(
+        n_lines,
+        kfm_na::input_bar::text_view_h(field_h),
+        true,
+        0,
+    );
+    let text_top = ty0 as i32 - eff;
+    // 菜单应钉「文本视口上缘上方 12px」固定位（选区起点在视口之上 → 锚 y
+    // 钳到视口上缘，不追部分可见行的连续 y——锯齿效应的根治）
+    let expect_y = (ty0 as i32 - 72 - 12).max(8) as u32;
     assert_eq!(
         geo.menu_y, expect_y,
-        "选区起点滚出栏顶时菜单必须钉栏顶固定位（第一个可见行 {first_vis} 半在栏顶之上）"
+        "选区起点滚出视口时菜单必须钉文本视口上缘固定位"
     );
     // 反例钉：若锚的是隐藏首行（row 0），menu_y 会是 text_top-84，远小于此
     let buggy_y = (text_top - 72 - 12).max(8) as u32;
@@ -1803,10 +1856,10 @@ fn spec_bar048_菜单滚动钉死不抖动() {
     let (y1, y2, y3) = (y_at(140), y_at(170), y_at(200));
     assert_eq!(y1, y2, "滚动 30px 菜单不得移动（锯齿抖动）");
     assert_eq!(y2, y3, "滚动跨行边界菜单也不得跳（锯齿抖动）");
-    // 钉的就是栏顶上方 12px 固定位
+    // 钉的就是文本视口上缘上方 12px 固定位（BAR-049 内衬后同尺）
     let bar_h = kfm_na::input_bar::height_for_lines(5);
-    let field_top = h - bar_h + 32;
-    assert_eq!(y1, field_top - 72 - 12, "钉位 = 栏顶上方 12px");
+    let ty0 = h - bar_h + 32 + kfm_na::input_bar::TEXT_PAD_Y;
+    assert_eq!(y1, ty0 - 72 - 12, "钉位 = 文本视口上缘上方 12px");
 }
 
 // BAR-047 2026-09-03 用户实拍：粘贴长文（知乎链接+多段内容）后全选，多行
@@ -1925,8 +1978,12 @@ fn spec_视口滚动_follow与像素偏移() {
     };
     let mut tail = vec![0u32; (w * h) as usize];
     tv.render_inputbar(&mut tail, w, h, 0, &base(true, 0), false, true);
+    // 最大偏移 = 条带高 - 文本视口高（BAR-049 内衬后同尺：10×63=630,
+    // field 408 收 2×40 内衬 = 328，max_eff = 302）
+    let max_eff =
+        (10 * kfm_na::input_bar::LINE_STEP_PX - kfm_na::input_bar::text_view_h(472 - 64)) as i32;
     let mut eqv = vec![0u32; (w * h) as usize];
-    tv.render_inputbar(&mut eqv, w, h, 0, &base(false, 222), false, true);
+    tv.render_inputbar(&mut eqv, w, h, 0, &base(false, max_eff), false, true);
     assert_eq!(tail, eqv, "follow 尾锚 ≡ scroll_px=最大偏移(逐像素)");
     let mut head = vec![0u32; (w * h) as usize];
     tv.render_inputbar(&mut head, w, h, 0, &base(false, -9999), false, true);

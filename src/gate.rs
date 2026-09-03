@@ -1477,10 +1477,12 @@ fn input_bar_handle() -> Option<Arc<crate::input_bar::InputBarState>> {
     INPUT_BAR.lock().unwrap().clone()
 }
 
-/// 闸门侧 field_h:由当前折行数推 bar_h(input_bar 渲染同款公式),
-/// field = bar_h - 64。供 scroll/scrollpx 指令钳制用
+/// 闸门侧滚动钳制高:由当前折行数推 bar_h(input_bar 渲染同款公式),
+/// field = bar_h - 64，再收 TEXT_PAD_Y 内衬 = 文本视口高（BAR-049 与渲染
+/// 同尺——钳制尺若比渲染视口大，滚动行程两端各差 40px 眼手不同尺）。
+/// 供 scroll/scrollpx 指令钳制用
 fn gh_field_h(lines: u32) -> u32 {
-    crate::input_bar::height_for_lines(lines).saturating_sub(64)
+    crate::input_bar::text_view_h(crate::input_bar::height_for_lines(lines).saturating_sub(64))
 }
 
 /// 判卷:bar-inject 内容该不该消费(BAR-044)。空/纯空白 = writer 半截态,不消费,
