@@ -1618,6 +1618,52 @@ fn spec_bar046_锚点视觉中心等于热区中心() {
     }
 }
 
+// BAR-050 2026-09-03 用户实拍放大指认：拖拽柄「脖子」有向内凹的缝隙——
+// 三角形底边平直 28px，下方正方形却是四角全圆（半径 8），上边角内收、
+// 三角底边两角微凸，一凹一凸接缝豁开。契约：正方形上边角改直角（下边角
+// 保持圆角）——三角底边与方形顶边平直 28px 对接（Android 原生柄剪影）。
+// 判卷：方形顶部 8 行（原圆角内收带）每行柄色像素必须满宽（≥26/28），
+// 未修时该区域每行仅中段 ~12px，本钉必红。
+#[test]
+fn spec_bar050_锚点柄接缝无凹口() {
+    let (tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必成");
+    let (w, h) = (600u32, 1200u32);
+    let snap = kfm_na::input_bar::BarSnap {
+        text: "一二三四五六七八九十".to_string(),
+        focused: true,
+        lines: 1,
+        cursor: 0,
+        handle: false,
+        composing: String::new(),
+        scroll_px: 0,
+        follow: true,
+        selecting: true,
+        selection_start: 0,
+        selection_end: 2,
+    };
+    let geo = tv
+        .bar_selection_geometry(&snap, w, h, 0)
+        .expect("选择态几何必须存在");
+    let mut buf = vec![0u32; (w * h) as usize];
+    tv.render_inputbar(&mut buf, w, h, 0, &snap, false, false);
+    // 右锚点（x>160 那枚）：柄视觉中心 (ax, tip+18) → 方形顶边 y = tip+11 =
+    // cy-7，内收带 = 顶边起 8 行。逐行数柄色（0x0000_D4FF）像素宽度。
+    let (ax, cy) = geo.right_anchor;
+    let top_row = (cy - 7.0) as u32;
+    let x0 = (ax - 20.0).max(0.0) as u32;
+    let x1 = ((ax + 20.0) as u32).min(w);
+    for dy in 0..8u32 {
+        let y = top_row + dy;
+        let n = (x0..x1)
+            .filter(|&x| buf[(y * w + x) as usize] == 0x0000_D4FF)
+            .count();
+        assert!(
+            n >= 26,
+            "方形顶边内收带第 {dy} 行柄色像素必须满宽（实测 {n} < 26——接缝凹口未愈）"
+        );
+    }
+}
+
 // BAR-046 2026-09-03 ⑤号迭代回归钉：菜单贴选区上方 12px（原案取选区垂直
 // 中心再 -20，多行选区时菜单浮在半空离选区老远）。判卷：像素扫描菜单
 // 气泡底缘与选区高亮顶缘的垂直间距 = 12±2

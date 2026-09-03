@@ -543,6 +543,10 @@ impl crate::termview::TermView {
         // （bar_selection_geometry.anchor_at）以 (ax, tip+18) 为柄中心，
         // 热区同尺，眼手同源
         frame.fill_triangle_up(ax as u32, tip_y.saturating_sub(1), size as u32, 14, color);
+        // BAR-050：方形上边角改直角（下边角保持圆角）——先圆角矩形再以
+        // 直角矩形平顶 8 行。原四角全圆：上边角内收、三角底边两角微凸，
+        // 接缝处「脖子」凹口（用户放大实拍指认）；平顶后三角底边与方形
+        // 顶边平直 28px 对接（Android 原生柄剪影）
         frame.fill_round_rect(
             (ax - half) as u32,
             tip_y + 11,
@@ -551,6 +555,7 @@ impl crate::termview::TermView {
             8,
             color,
         );
+        frame.fill_rect((ax - half) as u32, tip_y + 11, size as u32, 8, color);
     }
 
     /// 选区的可见锚 y（BAR-048）：菜单只锚「看得见的选区」——长文全选时
