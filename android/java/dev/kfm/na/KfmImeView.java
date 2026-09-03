@@ -112,6 +112,41 @@ public class KfmImeView extends View {
         }
     }
 
+    // 以下四个同属 BAR-054 防护入口（BAR-011 契约：JNI 调用不裸奔）
+    static String textBeforeCursor(int n) {
+        try {
+            String t = nativeTextBeforeCursor(n);
+            return t == null ? "" : t;
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+
+    static String textAfterCursor(int n) {
+        try {
+            String t = nativeTextAfterCursor(n);
+            return t == null ? "" : t;
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+
+    static void setSel(int start, int end) {
+        try {
+            nativeSetSelection(start, end);
+        } catch (Throwable t) {
+            // 吞
+        }
+    }
+
+    static void replaceText(int start, int end, String text) {
+        try {
+            nativeReplaceText(start, end, text);
+        } catch (Throwable t) {
+            // 吞
+        }
+    }
+
     @Override
     public boolean onCheckIsTextEditor() {
         return true; // BAR-009：声明「我是文本编辑器」，IMM 才肯弹键盘
@@ -147,6 +182,15 @@ public class KfmImeView extends View {
 
     // BAR-054：选区文本直问状态核（对侧 src/ime_bridge.rs），无选区/未登记 = null
     static native String nativeSelectedText();
+
+    // BAR-054 续：IME 删除/替换/直设路径——光标前后查询 + setSelection + replaceText
+    static native String nativeTextBeforeCursor(int n);
+
+    static native String nativeTextAfterCursor(int n);
+
+    static native void nativeSetSelection(int start, int end);
+
+    static native void nativeReplaceText(int start, int end, String text);
 
     // 链路探针：Java 侧断点直送飞鸽传书（B 档平台胶水，判卷 = 上报行）
     static native void nativeImeLog(String msg);

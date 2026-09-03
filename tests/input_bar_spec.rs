@@ -691,3 +691,64 @@ fn spec_bar053_长按选词_落选区非空可见() {
     assert_eq!(bar3.enter_selection_word(0), None);
     assert!(!bar3.snap().selecting, "空文本不进选择模式");
 }
+
+// BAR-054 续（2026-09-03 受控实验定案后第三刀）：IME 剪切拿到选区、
+// 复制成功，但删除指令不见——疑似走未覆写的 getTextBeforeCursor/
+// AfterCursor 算范围（默认实现不认状态核，算出 0 长度删个寂寞），或
+// deleteSurroundingTextInCodePoints/replaceText/setSelection 姊妹路径。
+// 契约：前后查询选择态取选区起/终点之外（Android 契约），否则光标前后；
+// set_caret_or_selection start==end=光标定位退出选择、不等=原子选区；
+// replace_range 区间替换+光标落插入尾+退出选择。
+#[test]
+fn spec_bar054_光标前后查询() {
+    let bar = InputBarState::new();
+    bar.insert_text("一二三四五六七八九十");
+    bar.set_cursor(6);
+    assert_eq!(bar.text_before_cursor(3), "四五六", "光标前三字");
+    assert_eq!(bar.text_after_cursor(2), "七八", "光标后两字");
+    assert_eq!(bar.text_before_cursor(99), "一二三四五六", "不足全给");
+    assert_eq!(bar.text_after_cursor(99), "七八九十", "不足全给");
+    // 选择态：before=选区起点前，after=选区终点后
+    bar.enter_selection(3);
+    bar.set_selection_end(7); // 选「四五六七」
+    assert_eq!(
+        bar.text_before_cursor(2),
+        "二三",
+        "选择态 before=选区开始前"
+    );
+    assert_eq!(bar.text_after_cursor(2), "八九", "选择态 after=选区结束后");
+}
+
+#[test]
+fn spec_bar054_直设光标或选区() {
+    let bar = InputBarState::new();
+    bar.insert_text("abcdef");
+    bar.set_caret_or_selection(1, 4);
+    let s = bar.snap();
+    assert!(s.selecting, "不等 = 进选择态");
+    assert_eq!((s.selection_start, s.selection_end), (1, 4));
+    bar.set_caret_or_selection(3, 3);
+    let s = bar.snap();
+    assert!(!s.selecting, "start==end = 光标定位退出选择");
+    assert_eq!(s.cursor, 3);
+    bar.set_caret_or_selection(5, 2);
+    let s = bar.snap();
+    assert_eq!((s.selection_start, s.selection_end), (2, 5), "逆序理序");
+    bar.set_caret_or_selection(0, 99);
+    let s = bar.snap();
+    assert_eq!((s.selection_start, s.selection_end), (0, 6), "越界钳全文");
+}
+
+#[test]
+fn spec_bar054_区间替换() {
+    let bar = InputBarState::new();
+    bar.insert_text("一二三四五六");
+    bar.replace_range(2, 4, "XY");
+    let s = bar.snap();
+    assert_eq!(s.text, "一二XY五六", "区间被替换");
+    assert_eq!(s.cursor, 4, "光标落插入文本尾");
+    assert!(!s.selecting, "退出选择态");
+    // 空串替换 = 删除区间（IME 剪切删除半若走 replaceText 即此形态）
+    bar.replace_range(2, 4, "");
+    assert_eq!(bar.snap().text, "一二五六");
+}

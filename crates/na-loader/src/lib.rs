@@ -291,4 +291,76 @@ mod imp {
             std::ptr::null_mut()
         )
     }
+
+    // ---- BAR-054 续：IME 删除/替换/直设路径四转发（2026-09-03） ----
+
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_dev_kfm_na_KfmImeView_nativeTextBeforeCursor(
+        env: *mut jni_sys::JNIEnv,
+        class: jni_sys::jclass,
+        n: jni_sys::jint,
+    ) -> jni_sys::jstring {
+        forward_to_core_ret!(
+            c"Java_dev_kfm_na_KfmImeView_nativeTextBeforeCursor",
+            (env, class, n),
+            (*mut jni_sys::JNIEnv, jni_sys::jclass, jni_sys::jint),
+            jni_sys::jstring,
+            std::ptr::null_mut()
+        )
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_dev_kfm_na_KfmImeView_nativeTextAfterCursor(
+        env: *mut jni_sys::JNIEnv,
+        class: jni_sys::jclass,
+        n: jni_sys::jint,
+    ) -> jni_sys::jstring {
+        forward_to_core_ret!(
+            c"Java_dev_kfm_na_KfmImeView_nativeTextAfterCursor",
+            (env, class, n),
+            (*mut jni_sys::JNIEnv, jni_sys::jclass, jni_sys::jint),
+            jni_sys::jstring,
+            std::ptr::null_mut()
+        )
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_dev_kfm_na_KfmImeView_nativeSetSelection(
+        env: *mut jni_sys::JNIEnv,
+        class: jni_sys::jclass,
+        start: jni_sys::jint,
+        end: jni_sys::jint,
+    ) {
+        forward_to_core!(
+            c"Java_dev_kfm_na_KfmImeView_nativeSetSelection",
+            (env, class, start, end),
+            (
+                *mut jni_sys::JNIEnv,
+                jni_sys::jclass,
+                jni_sys::jint,
+                jni_sys::jint
+            )
+        );
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_dev_kfm_na_KfmImeView_nativeReplaceText(
+        env: *mut jni_sys::JNIEnv,
+        class: jni_sys::jclass,
+        start: jni_sys::jint,
+        end: jni_sys::jint,
+        text: jni_sys::jstring,
+    ) {
+        forward_to_core!(
+            c"Java_dev_kfm_na_KfmImeView_nativeReplaceText",
+            (env, class, start, end, text),
+            (
+                *mut jni_sys::JNIEnv,
+                jni_sys::jclass,
+                jni_sys::jint,
+                jni_sys::jint,
+                jni_sys::jstring
+            )
+        );
+    }
 }

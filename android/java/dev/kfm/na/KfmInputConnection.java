@@ -79,6 +79,52 @@ final class KfmInputConnection extends BaseInputConnection {
     }
 
     @Override
+    public CharSequence getTextBeforeCursor(int n, int flags) {
+        // BAR-054 续：IME 内部删除/替换靠它算范围，答空算 0 删个寂寞
+        String t = KfmImeView.textBeforeCursor(n);
+        KfmImeView.imeLog("getTextBeforeCursor(" + n + ") → " + t.length() + "字");
+        return t;
+    }
+
+    @Override
+    public CharSequence getTextAfterCursor(int n, int flags) {
+        String t = KfmImeView.textAfterCursor(n);
+        KfmImeView.imeLog("getTextAfterCursor(" + n + ") → " + t.length() + "字");
+        return t;
+    }
+
+    @Override
+    public boolean setSelection(int start, int end) {
+        // BAR-054 续：IME 直设光标/选区转发状态核
+        KfmImeView.imeLog("setSelection(" + start + "," + end + ")");
+        KfmImeView.setSel(start, end);
+        return true;
+    }
+
+    @Override
+    public boolean replaceText(int start, int end, CharSequence text, int newCursorPosition,
+            android.view.inputmethod.TextAttribute textAttribute) {
+        // BAR-054 续：剪切删除半若走 replaceText(start,end,"") 即此形态。
+        // API 35 契约五参（带 TextAttribute，我们不做样式直忽略）；
+        // newCursorPosition 是光标落点意愿（>0 落插入尾），状态核
+        // replace_range 本就落插入尾——同向，直传即可，探针记下原值
+        KfmImeView.imeLog("replaceText(" + start + "," + end + ",\"" + text
+                + "\",ncp=" + newCursorPosition + ")");
+        KfmImeView.replaceText(start, end, text == null ? "" : text.toString());
+        return true;
+    }
+
+    @Override
+    public boolean deleteSurroundingTextInCodePoints(int beforeLength, int afterLength) {
+        // BAR-054 续：deleteSurroundingText 的码点姊妹——IME 剪切删除半
+        // 最可疑的暗道（我们不覆写 = 默认实现删内部空 Editable = 删个寂寞）。
+        // 探针 + 同 deleteSurroundingText 翻 DEL 键（选区删除逻辑在 Rust 侧）
+        KfmImeView.imeLog("deleteSurroundingTextInCodePoints(" + beforeLength
+                + "," + afterLength + ")");
+        return deleteSurroundingText(beforeLength, afterLength);
+    }
+
+    @Override
     public CharSequence getSelectedText(int flags) {
         // BAR-054：输入法工具栏按「剪切」前先探选区，默认实现不认
         // Rust 状态核恒返回空 → 输入法判「无物可剪」不发 cut 事件。

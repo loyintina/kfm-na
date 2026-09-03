@@ -481,6 +481,85 @@ impl InputBarState {
         )
     }
 
+    /// 光标前 n 字（IME getTextBeforeCursor 用，BAR-054）：选择态取选区
+    /// 起点之前（Android 契约：selecting 时 before-cursor = 选区开始前），
+    /// 否则光标前；不足 n 字全给。IME 的内部删除/替换逻辑靠它算范围，
+    /// 答空它就算出 0 长度删个寂寞。
+    pub fn text_before_cursor(&self, n: usize) -> String {
+        let g = self.inner.lock().unwrap();
+        let edge = if g.selecting {
+            g.selection_start
+        } else {
+            g.cursor
+        };
+        let before: Vec<char> = g.text.chars().take(edge).collect();
+        before.iter().skip(before.len().saturating_sub(n)).collect()
+    }
+
+    /// 光标后 n 字（IME getTextAfterCursor 用，BAR-054）：选择态取选区
+    /// 终点之后，否则光标后；不足 n 字全给。
+    pub fn text_after_cursor(&self, n: usize) -> String {
+        let g = self.inner.lock().unwrap();
+        let edge = if g.selecting {
+            g.selection_end
+        } else {
+            g.cursor
+        };
+        g.text.chars().skip(edge).take(n).collect()
+    }
+
+    /// IME setSelection/replaceText 直设（BAR-054）：start==end = 光标定位
+    /// （退出选择态），不等 = 程序侧选区原子落（不走 BAR-056 换锚——换锚
+    /// 是触摸拖柄的交互语义，IME 直设是全文坐标系）。
+    pub fn set_caret_or_selection(&self, start: usize, end: usize) {
+        let mut g = self.inner.lock().unwrap();
+        Self::commit_composing(&mut g);
+        let len = g.text.chars().count();
+        let (s, e) = (start.min(end).min(len), start.max(end).min(len));
+        if s == e {
+            g.selecting = false;
+            g.selection_start = 0;
+            g.selection_end = 0;
+            g.sel_anchor = SelAnchor::None;
+            g.cursor = s;
+        } else {
+            g.selecting = true;
+            g.selection_start = s;
+            g.selection_end = e;
+            g.sel_anchor = SelAnchor::None;
+            g.cursor = e;
+        }
+        g.follow = true;
+    }
+
+    /// IME replaceText 直改（BAR-054）：[start,end) 区间替换为 text，
+    /// 光标落插入文本尾，退出选择态。越界钳到全文。
+    pub fn replace_range(&self, start: usize, end: usize, text: &str) {
+        let mut g = self.inner.lock().unwrap();
+        Self::commit_composing(&mut g);
+        let len = g.text.chars().count();
+        let (s, e) = (start.min(end).min(len), start.max(end).min(len));
+        let bs = g
+            .text
+            .char_indices()
+            .nth(s)
+            .map(|(b, _)| b)
+            .unwrap_or(g.text.len());
+        let be = g
+            .text
+            .char_indices()
+            .nth(e)
+            .map(|(b, _)| b)
+            .unwrap_or(g.text.len());
+        g.text.replace_range(bs..be, text);
+        g.cursor = s + text.chars().count();
+        g.selecting = false;
+        g.selection_start = 0;
+        g.selection_end = 0;
+        g.sel_anchor = SelAnchor::None;
+        g.follow = true;
+    }
+
     /// 删除选区文字；返回是否发生了删除
     pub fn delete_selection(&self) -> bool {
         let mut g = self.inner.lock().unwrap();

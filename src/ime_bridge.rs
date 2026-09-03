@@ -141,6 +141,72 @@ pub extern "system" fn Java_dev_kfm_na_KfmImeView_nativeSelectedText<'local>(
     .resolve_with::<LogContextErrorAndDefault, _>(|| "in nativeSelectedText".to_string())
 }
 
+/// dev.kfm.na.KfmImeView.nativeTextBeforeCursor —— 光标前 n 字（BAR-054：
+/// IME 内部删除/替换逻辑靠 getTextBeforeCursor 算范围，答空它删个寂寞）
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_kfm_na_KfmImeView_nativeTextBeforeCursor<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass,
+    n: jint,
+) -> JString<'local> {
+    env.with_env(|env| -> jni::errors::Result<JString<'local>> {
+        let t = crate::gate::input_bar_handle()
+            .map(|bar| bar.text_before_cursor(n.max(0) as usize))
+            .unwrap_or_default();
+        env.new_string(t)
+    })
+    .resolve_with::<LogContextErrorAndDefault, _>(|| "in nativeTextBeforeCursor".to_string())
+}
+
+/// dev.kfm.na.KfmImeView.nativeTextAfterCursor —— 光标后 n 字（BAR-054）
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_kfm_na_KfmImeView_nativeTextAfterCursor<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass,
+    n: jint,
+) -> JString<'local> {
+    env.with_env(|env| -> jni::errors::Result<JString<'local>> {
+        let t = crate::gate::input_bar_handle()
+            .map(|bar| bar.text_after_cursor(n.max(0) as usize))
+            .unwrap_or_default();
+        env.new_string(t)
+    })
+    .resolve_with::<LogContextErrorAndDefault, _>(|| "in nativeTextAfterCursor".to_string())
+}
+
+/// dev.kfm.na.KfmImeView.nativeSetSelection —— IME setSelection 直设（BAR-054）
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_kfm_na_KfmImeView_nativeSetSelection(
+    _env: EnvUnowned,
+    _class: JClass,
+    start: jint,
+    end: jint,
+) {
+    if let Some(bar) = crate::gate::input_bar_handle() {
+        bar.set_caret_or_selection(start.max(0) as usize, end.max(0) as usize);
+    }
+}
+
+/// dev.kfm.na.KfmImeView.nativeReplaceText —— IME replaceText 直改（BAR-054：
+/// 剪切删除半若走 replaceText(start,end,"") 即此形态）
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_kfm_na_KfmImeView_nativeReplaceText(
+    mut env: EnvUnowned,
+    _class: JClass,
+    start: jint,
+    end: jint,
+    text: JString,
+) {
+    env.with_env(|env| -> jni::errors::Result<()> {
+        let t = text.try_to_string(env)?;
+        if let Some(bar) = crate::gate::input_bar_handle() {
+            bar.replace_range(start.max(0) as usize, end.max(0) as usize, &t);
+        }
+        Ok(())
+    })
+    .resolve_with::<LogContextErrorAndDefault, _>(|| "in nativeReplaceText".to_string());
+}
+
 /// dev.kfm.na.KfmImeView.nativeImeLog —— Java 侧链路探针直送飞鸽传书。
 /// IME 的生死在 IMM 与焦点之间（BAR-009 就死在 IMM 拒弹），Rust 侧看不见，
 /// 让 Java 侧断点自己开口
