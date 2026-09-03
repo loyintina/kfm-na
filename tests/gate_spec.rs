@@ -8,6 +8,13 @@
 use kfm_na::gate::{encode_rgb, maybe_dump, trigger_pending};
 use kfm_na::session::SessionEvent;
 
+/// 全局 PUMP 是进程级单例：凡碰它的考题必须串行进场（BAR-057
+/// 2026-09-03 手机 chain 实拍竞态 flake——fed与分桶字节账 的 "LL"
+/// 被并行考题的 pump_once 截胡进待机 replay → fed=false 误红）。
+/// 文件头注释本就写着「单测串行使用」，但 cargo test 默认并行，
+/// 注释挡不住调度——同一把锁机械执法。
+static PUMP_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[test]
 fn spec_编码_小端xrgb字节序() {
     // 0x00RRGGBB 的小端内存序 = BB GG RR 00
@@ -278,6 +285,7 @@ fn spec_包装层_fed与分桶字节账() {
     // 分桶字节账(match local/remote 臂此前无人判卷,臂删除幸存针)。
     // 全局 PUMP 单测串行使用,会话名独占避免互相干扰。
     // 注意:分桶字节账按精确名 "local"/"remote" 匹配——名字带前缀会落 OTHER 桶
+    let _g = PUMP_LOCK.lock().unwrap();
     let (tx_l, rx_l) = std::sync::mpsc::channel();
     let (tx_r, rx_r) = std::sync::mpsc::channel();
     kfm_na::gate::pump_register("local", rx_l);
@@ -317,6 +325,7 @@ fn spec_包装层_fed与分桶字节账() {
 #[test]
 fn spec_包装层_control与take_replay() {
     // 控制事件出队 + 待机 replay 取走即清(包装层协议)
+    let _g = PUMP_LOCK.lock().unwrap();
     let (tx, rx) = std::sync::mpsc::channel();
     kfm_na::gate::pump_register("wrap-ctl", rx);
     tx.send(SessionEvent::Exited { code: 7 }).unwrap();

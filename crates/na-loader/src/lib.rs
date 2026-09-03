@@ -179,6 +179,25 @@ mod imp {
         }};
     }
 
+    /// 带返回值的转发变体（BAR-054 nativeSelectedText）：核心没就位/缺
+    /// 符号 → 返回 $default（同静默吞契约——null 是「无选区」的合法答复，
+    /// 一个 UnsatisfiedLinkError 才会把键盘干碎）。
+    macro_rules! forward_to_core_ret {
+        ($fname:literal, ($($arg:expr),*), ($($ty:ty),*), $ret:ty, $default:expr) => {{
+            let h = CORE_HANDLE.load(std::sync::atomic::Ordering::Acquire);
+            if h.is_null() {
+                return $default;
+            }
+            let sym = unsafe { libc::dlsym(h, $fname.as_ptr()) };
+            if sym.is_null() {
+                return $default;
+            }
+            let f: unsafe extern "system" fn($($ty),*) -> $ret =
+                unsafe { std::mem::transmute(sym) };
+            unsafe { f($($arg),*) }
+        }};
+    }
+
     #[unsafe(no_mangle)]
     pub extern "system" fn Java_dev_kfm_na_KfmImeView_nativeCommitText(
         env: *mut jni_sys::JNIEnv,
@@ -254,5 +273,22 @@ mod imp {
             (env, class, action),
             (*mut jni_sys::JNIEnv, jni_sys::jclass, jni_sys::jstring)
         );
+    }
+
+    // BAR-054：选区查询转发（IME 剪切第一环 getSelectedText → 这里 →
+    // 核心 ime_bridge）。首个带返回值的转发——缺符号兜底 null（「无选区」
+    // 合法答复），不反咬 Java。
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_dev_kfm_na_KfmImeView_nativeSelectedText(
+        env: *mut jni_sys::JNIEnv,
+        class: jni_sys::jclass,
+    ) -> jni_sys::jstring {
+        forward_to_core_ret!(
+            c"Java_dev_kfm_na_KfmImeView_nativeSelectedText",
+            (env, class),
+            (*mut jni_sys::JNIEnv, jni_sys::jclass),
+            jni_sys::jstring,
+            std::ptr::null_mut()
+        )
     }
 }
