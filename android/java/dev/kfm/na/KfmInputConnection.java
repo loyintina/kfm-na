@@ -30,6 +30,10 @@ final class KfmInputConnection extends BaseInputConnection {
     @Override
     public boolean deleteSurroundingText(int beforeLength, int afterLength) {
         // 软退格：翻成 KEYCODE_DEL 送原生侧映射（ime_queue::key_code_to_bytes）
+        // BAR-054 探针：IME 剪切的删除半走这里——记下调用与当时选区状态
+        String sel = KfmImeView.selectedText();
+        KfmImeView.imeLog("deleteSurroundingText(" + beforeLength + "," + afterLength
+                + ") 选区=" + (sel == null ? "null" : sel.length() + "字"));
         int n = Math.min(beforeLength, 64);
         for (int i = 0; i < n; i++) {
             KfmImeView.sendKey(KeyEvent.KEYCODE_DEL);
@@ -79,7 +83,11 @@ final class KfmInputConnection extends BaseInputConnection {
         // BAR-054：输入法工具栏按「剪切」前先探选区，默认实现不认
         // Rust 状态核恒返回空 → 输入法判「无物可剪」不发 cut 事件。
         // 直问状态核拿真实选区；无选区返回 null（契约：无选区 = null）
-        return KfmImeView.selectedText();
+        CharSequence sel = KfmImeView.selectedText();
+        // 探针：剪切全链路第一环——IME 到底来不来问、问到什么
+        KfmImeView.imeLog("getSelectedText 探询 → "
+                + (sel == null ? "null" : sel.length() + "字"));
+        return sel;
     }
 
     @Override

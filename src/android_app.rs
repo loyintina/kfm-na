@@ -1781,15 +1781,29 @@ impl App {
                                     }
                                 }
                                 "paste" => {
-                                    if let Some(app) = &self.android_app
-                                        && let Some(text) =
-                                            crate::clipboard::get_clipboard_text(app)
-                                    {
-                                        crate::report::report(
-                                            "ime-input",
-                                            &format!("paste: {} chars", text.chars().count()),
-                                        );
-                                        bar.insert_or_replace(&text);
+                                    // BAR-054 探针：粘贴全链路末环——系统剪贴板
+                                    // 里此刻到底有什么（IME 的剪切复制落没落进来）
+                                    let clip = self
+                                        .android_app
+                                        .as_ref()
+                                        .and_then(crate::clipboard::get_clipboard_text);
+                                    match clip {
+                                        Some(text) => {
+                                            crate::report::report(
+                                                "ime-input",
+                                                &format!(
+                                                    "paste: {} chars（系统剪贴板命中）",
+                                                    text.chars().count()
+                                                ),
+                                            );
+                                            bar.insert_or_replace(&text);
+                                        }
+                                        None => {
+                                            crate::report::report(
+                                                "ime-input",
+                                                "paste: 系统剪贴板空/读不到",
+                                            );
+                                        }
                                     }
                                 }
                                 _ => {}
