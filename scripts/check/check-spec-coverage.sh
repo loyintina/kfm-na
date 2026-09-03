@@ -51,7 +51,10 @@ mkdir -p "$(dirname "$MATRIX")"
     echo "| 模块 | pub项 | 已引用 | 未覆盖 | 未覆盖清单 |"
     echo "|---|---|---|---|---|"
 
-    files=$(find "$ROOT/src" -name '*.rs' ! -name 'mod.rs' | sort)
+    # LC_ALL=C 钉死字节序（BAR-061：glibc en_US 排序首趟忽略标点,
+    # brain_ep.rs 会排到 brain.rs 前;Termux C locale 反之——同一代码
+    # 双环境矩阵行序翻烧饼,脏树挡 phone 推送,2026-09-04 夜班实踩）
+    files=$(find "$ROOT/src" -name '*.rs' ! -name 'mod.rs' | LC_ALL=C sort)
     for f in $files; do
         rel=${f#"$ROOT"/}
         is_exempt "${rel}" && continue
