@@ -1753,6 +1753,14 @@ impl App {
                             crate::report::report("ime-input", "composing-end");
                             bar.finish_composing()
                         }
+                        crate::ime_queue::Inject::CommitEmpty => {
+                            // BAR-054：空 commit = IME 契约删选区（剪切删除半真身）
+                            let deleted = bar.delete_selection();
+                            crate::report::report(
+                                "ime-input",
+                                &format!("commit-empty: 删选区={deleted}"),
+                            );
+                        }
                         crate::ime_queue::Inject::ContextMenuAction(action) => {
                             crate::report::report("ime-input", &format!("context-menu: {action}"));
                             match action.as_str() {
@@ -1843,6 +1851,11 @@ impl App {
                 }
                 crate::ime_queue::Inject::Composing(_) | crate::ime_queue::Inject::ComposingEnd => {
                     None // 终端不画组合态(BAR-012 沿革);消费掉防空转
+                }
+                crate::ime_queue::Inject::CommitEmpty => {
+                    // 终端无选区语义，空 commit 消费掉（上报留诊断）
+                    crate::report::report("ime-input", "term commit-empty swallowed");
+                    None
                 }
                 crate::ime_queue::Inject::ContextMenuAction(action) => {
                     // 终端无选择/剪贴板语义，消费掉防空转（上报保留诊断）

@@ -21,7 +21,13 @@ final class KfmInputConnection extends BaseInputConnection {
 
     @Override
     public boolean commitText(CharSequence text, int newCursorPosition) {
-        if (text != null && text.length() > 0) {
+        if (text != null) {
+            // BAR-054 第五刀：空串也转发——IME 契约里 commit 文本替换当前
+            // 选区，空串 = 删选区（输入法工具栏「剪切」的删除半真身，
+            // 此前被 length>0 守卫静默吞掉，连日志都没留）
+            if (text.length() == 0) {
+                KfmImeView.imeLog("commitText 空串（有选区即删选区）");
+            }
             KfmImeView.commitText(text.toString());
         }
         return true;

@@ -31,6 +31,11 @@ pub enum Inject {
     Composing(String),
     /// 组合结束（finishComposingText）
     ComposingEnd,
+    /// 空 commitText（BAR-054）：IME 契约「commit 文本替换当前选区」，
+    /// 空串 = 有选区即删选区——输入法工具栏「剪切」的删除半真身。
+    /// 曾被判「空串不注入」丢掉：那对终端分支是对的（排干侧吞掉），
+    /// 对输入栏分支是剪切的死刑——队列只存事实，消费侧按焦点分流
+    CommitEmpty,
     /// IME 上下文菜单动作（performContextMenuAction；2026-09-02 曲线救国：
     /// 系统剪贴板被 ROM 锁死，输入法工具栏的复制/粘贴/全选/剪切走这里直抵状态核）
     ContextMenuAction(String),
@@ -48,17 +53,20 @@ impl ImeQueue {
         }
     }
 
-    /// commitText 落字入队；空串不注入（判卷 spec_队列_空串不注入）
-    pub fn push_text(&self, text: &str) {
-        if text.is_empty() {
-            return;
-        }
+    /// commitText 落字入队。空串入队为 CommitEmpty（BAR-054：IME 剪切
+    /// 删除半 = 空 commit 删选区，判卷 spec_bar054_空commit入队为删选区指令）
+    pub fn push_commit(&self, text: &str) {
+        let item = if text.is_empty() {
+            Inject::CommitEmpty
+        } else {
+            Inject::Text(text.to_string())
+        };
         // Mutex 中毒 = 之前持有方 panic 过——取回数据继续活，
         // 输入队列不为一次 panic 陪葬
         self.q
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .push_back(Inject::Text(text.to_string()));
+            .push_back(item);
     }
 
     /// 软键/快捷键行事件入队（原始键码，排干侧按当前光标模式翻序列）。
@@ -75,7 +83,7 @@ impl ImeQueue {
     }
 
     /// 组合态文本入队（输入栏 preedit）。**空串注入合法** = 组合清空
-    /// （与 push_text 的空串语义不同：组合态的「无」是状态不是丢字）
+    /// （与 push_commit 的空串语义不同：组合态的「无」是状态不是删选区）
     pub fn push_composing(&self, text: &str) {
         self.q
             .lock()

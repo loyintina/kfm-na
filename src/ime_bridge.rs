@@ -57,7 +57,7 @@ pub extern "system" fn Java_dev_kfm_na_KfmImeView_nativeCommitText(
         } else {
             s
         };
-        crate::ime_queue::global().push_text(&s);
+        crate::ime_queue::global().push_commit(&s);
         COMMIT_PUSHED.fetch_add(1, Ordering::Relaxed);
         Ok(())
     })

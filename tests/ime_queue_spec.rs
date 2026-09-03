@@ -1,7 +1,7 @@
 //! ime_queue_spec.rs — IME 文字注入队列考题（A 档纯逻辑）
 //!
 //! 判卷维度：
-//! - commitText 中文串顺序保持、排干即空、空串不注入
+//! - commitText 中文串顺序保持、排干即空、空 commit 入队为删选区指令（BAR-054）
 //! - Inject 双形态：文本原样、键码存原始值（翻译在排干侧，见 keymap_spec）
 //! - UTF-8 原样透传（CJK/emoji 混合不变形）
 //!
@@ -15,9 +15,9 @@ use kfm_na::ime_queue::{ImeQueue, Inject};
 #[test]
 fn spec_队列_中文提交顺序保持() {
     let q = ImeQueue::new();
-    q.push_text("你好");
-    q.push_text("世界");
-    q.push_text("kfm");
+    q.push_commit("你好");
+    q.push_commit("世界");
+    q.push_commit("kfm");
     assert_eq!(
         q.drain(),
         vec![
@@ -31,23 +31,32 @@ fn spec_队列_中文提交顺序保持() {
 #[test]
 fn spec_队列_排干即空() {
     let q = ImeQueue::new();
-    q.push_text("一次");
+    q.push_commit("一次");
     assert_eq!(q.drain().len(), 1);
     assert!(q.drain().is_empty(), "排干后必须空——重复注入就是鬼打字");
 }
 
 #[test]
-fn spec_队列_空串不注入() {
+fn spec_bar054_空commit入队为删选区指令() {
+    // BAR-054 定案：IME 工具栏「剪切」的删除半 = commitText("")——
+    // Android 契约里 commit 文本替换当前选区，空串即删选区。
+    // Java 侧 length>0 守卫 + 本队列空串丢弃曾把它双重静默吞掉
+    // （第四刀全探针静默的真相：这道指令从没被观测过）。
     let q = ImeQueue::new();
-    q.push_text("");
-    assert!(q.drain().is_empty());
+    q.push_commit("");
+    q.push_commit("落字");
+    assert_eq!(
+        q.drain(),
+        vec![Inject::CommitEmpty, Inject::Text("落字".into())],
+        "空 commit 是「有选区即删选区」的 IME 契约指令，必须入队，不许当垃圾丢"
+    );
 }
 
 #[test]
 fn spec_队列_utf8原样透传() {
     let q = ImeQueue::new();
     let mixed = "a你🦀好";
-    q.push_text(mixed);
+    q.push_commit(mixed);
     let out = q.drain();
     assert_eq!(out.len(), 1);
     assert_eq!(
@@ -81,7 +90,7 @@ fn spec_键码_未知键吞掉() {
 #[test]
 fn spec_全局队列_冒烟() {
     let g = kfm_na::ime_queue::global();
-    g.push_text("全局冒烟一针");
+    g.push_commit("全局冒烟一针");
     let out = g.drain();
     assert!(
         out.iter()
