@@ -65,6 +65,44 @@ pub const CARET_BLINK_MS: u64 = 530;
 /// 长按进入选择模式的时间阈值（ms）：与 Android 系统默认值一致。
 pub const SELECT_LONG_PRESS_MS: u64 = 400;
 
+/// 长按选词词跨度（BAR-053）：is_word_char 连续段（与终端侧同字符集
+/// termview——CJK 连续句读段、ascii/路径串整段拎出）；落点非词字符 →
+/// 该字单选；pos 越界（按在文本尾后）→ 末词。空文本 → None。
+/// char 下标 [start, end) 半开。
+pub fn word_span_at(text: &str, pos: usize) -> Option<(usize, usize)> {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.is_empty() {
+        return None;
+    }
+    let p = pos.min(chars.len() - 1);
+    if !crate::termview::is_word_char(chars[p]) {
+        return Some((p, p + 1));
+    }
+    let mut s = p;
+    while s > 0 && crate::termview::is_word_char(chars[s - 1]) {
+        s -= 1;
+    }
+    let mut e = p + 1;
+    while e < chars.len() && crate::termview::is_word_char(chars[e]) {
+        e += 1;
+    }
+    Some((s, e))
+}
+
+/// 词枢轴拖动扩选（BAR-053）：词恒整选 + 扩向指头一侧；指头入词内 →
+/// 回词本体（同次拖动可缩回）。产出恒 start ≤ pivot.0 ≤ pivot.1 ≤ end，
+/// 与 set_selection_start/end 的钳制方向兼容（不会误钳）。
+pub fn pivot_drag_span(pivot: (usize, usize), idx: usize) -> (usize, usize) {
+    let (ps, pe) = pivot;
+    if idx < ps {
+        (idx, pe)
+    } else if idx > pe {
+        (ps, idx)
+    } else {
+        (ps, pe)
+    }
+}
+
 /// 选择锚点视觉尺寸（px，物理像素）：比光标定位柄小，与选区同族。
 pub const ANCHOR_VISUAL_SIZE: u32 = 28;
 /// 选择锚点触摸热区（px）：以锚点中心为原点的正方形边长，单指易拖。
@@ -260,9 +298,8 @@ impl InputBarState {
 
     // ========== 文本选择系统（BAR-046，2026-09-02） ==========
 
-    /// 进入选择模式：先 finish 组合态，光标/定位柄转双锚点
-    pub fn enter_selection(&self, pos: usize) {
-        let mut g = self.inner.lock().unwrap();
+    /// finish 组合态（拼音落字）——进入选择/点按定位等动作前的共用前奏
+    fn commit_composing(g: &mut Inner) {
         if let Some(cs) = g.composing.take() {
             let len = g.text.chars().count();
             let cur = g.cursor.min(len);
@@ -275,6 +312,12 @@ impl InputBarState {
             g.text.insert_str(at, &cs);
             g.cursor = cur + cs.chars().count();
         }
+    }
+
+    /// 进入选择模式：先 finish 组合态，光标/定位柄转双锚点
+    pub fn enter_selection(&self, pos: usize) {
+        let mut g = self.inner.lock().unwrap();
+        Self::commit_composing(&mut g);
         let len = g.text.chars().count();
         let pos = pos.min(len);
         g.selecting = true;
@@ -283,6 +326,23 @@ impl InputBarState {
         g.sel_anchor = SelAnchor::None;
         g.handle = false;
         g.follow = true;
+    }
+
+    /// 长按选词进入选择模式（BAR-053）：落点词整段选中——非空可见高亮、
+    /// 双锚点、菜单的活选区（空选区刚召唤即不可见、抬手又被点按分路
+    /// 清掉，等于没有长按入口）。活动锚 = 右锚（续滑扩选从词尾起）。
+    /// 返回词跨度供壳层登记枢轴；空文本 → None 不进选择态。
+    pub fn enter_selection_word(&self, pos: usize) -> Option<(usize, usize)> {
+        let mut g = self.inner.lock().unwrap();
+        Self::commit_composing(&mut g);
+        let (s, e) = word_span_at(&g.text, pos)?;
+        g.selecting = true;
+        g.selection_start = s;
+        g.selection_end = e;
+        g.sel_anchor = SelAnchor::Right;
+        g.handle = false;
+        g.follow = true;
+        Some((s, e))
     }
 
     /// 设置左锚点；禁止越过右锚点

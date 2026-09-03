@@ -95,6 +95,9 @@ struct BarTouch {
     dragged: bool,
     /// 已触发长按进入选择模式
     long_fired: bool,
+    /// 长按选词落定的词枢轴（BAR-053）：Some 期间滑指 = 词枢轴扩选
+    /// （词恒整选 + 扩向指头一侧），不走文本滚动
+    sel_pivot: Option<(usize, usize)>,
     /// 当前按在锚点热区上（Some = 拖动锚点；None = 普通栏手势）
     anchor: Option<crate::input_bar::SelAnchor>,
     /// 按在选择菜单浮层某格上（Some = 抬手执行该动作；BAR-046 ⑤号迭代
@@ -350,6 +353,7 @@ impl App {
                         last_y: y,
                         dragged: false,
                         long_fired: false,
+                        sel_pivot: None,
                         anchor: None,
                         menu: Some(menu),
                     });
@@ -373,6 +377,7 @@ impl App {
                         last_y: y,
                         dragged: false,
                         long_fired: false,
+                        sel_pivot: None,
                         anchor,
                         menu: None,
                     });
@@ -472,24 +477,22 @@ impl App {
                                 _ => {}
                             }
                         }
-                        // 拖到 field 上下边缘自动滚屏（每秒 2 行≈每帧 8px）
-                        let bar_h = self.cur_bar_h();
-                        let field_top = self.window.as_ref().map_or(0, |w| {
-                            w.inner_size()
-                                .height
-                                .saturating_sub(self.ime_bottom_px + bar_h)
-                                + 32
-                        }) as f64;
-                        let edge = 12.0;
-                        if y - field_top < edge
+                        // 拖到 field 上下边缘自动滚屏
+                        self.bar_edge_autoscroll(y, field_h, view_h);
+                        self.dirty = true;
+                    } else if bt.long_fired
+                        && let Some(pivot) = bt.sel_pivot
+                    {
+                        // 长按后滑指 = 词枢轴扩选（BAR-053）：词恒整选，
+                        // 扩向指头一侧；与锚点拖动同享边缘自动滚屏
+                        if let Some(idx) = self.bar_field_char_at(x, y)
                             && let Some(bar) = &self.input_bar
                         {
-                            bar.scroll_by_px(-8, view_h);
-                        } else if (field_top + f64::from(field_h)) - y < edge
-                            && let Some(bar) = &self.input_bar
-                        {
-                            bar.scroll_by_px(8, view_h);
+                            let (s, e) = crate::input_bar::pivot_drag_span(pivot, idx);
+                            bar.set_selection_start(s);
+                            bar.set_selection_end(e);
                         }
+                        self.bar_edge_autoscroll(y, field_h, view_h);
                         self.dirty = true;
                     } else if bt.menu.is_some() {
                         // 菜单浮层手势：滑出 slop 记拖（抬手不执行动作），
@@ -653,6 +656,13 @@ impl App {
                     }
                     // 锚点拖动结束：保持选择，重绘
                     if bt.anchor.is_some() {
+                        self.dirty = true;
+                        return;
+                    }
+                    // 长按选词/枢轴扩选结束：保持选择（BAR-053——原案漏这
+                    // 一臂，选区落进 Field 点按分路被 set_cursor 顺手清掉，
+                    // 刚召唤即销毁）
+                    if bt.long_fired {
                         self.dirty = true;
                         return;
                     }
@@ -862,7 +872,9 @@ impl App {
     }
 
     /// 输入栏长按计时（BAR-046）：按住栏内文本区 ≥SELECT_LONG_PRESS_MS
-    /// 未拖动 → 进入选择模式（光标处空选区，弹出菜单）。锚点命中时不走这里。
+    /// 未拖动 → 进入选择模式。锚点命中时不走这里。
+    /// BAR-053：改长按选词（落点词整段高亮）+ 登记词枢轴（续滑扩选用）；
+    /// 空文本/无词可选不点火（保持原滚动/点按行为）。
     fn check_inputbar_long_press(&mut self) {
         let Some(bt) = &mut self.inputbar_touch else {
             return;
@@ -875,14 +887,40 @@ impl App {
         {
             return;
         }
-        bt.long_fired = true;
         let (x, y) = (bt.start_x, bt.start_y);
         if let Some(idx) = self.bar_field_char_at(x, y)
             && let Some(bar) = &self.input_bar
+            && let Some(span) = bar.enter_selection_word(idx)
         {
-            bar.enter_selection(idx);
+            let Some(bt) = &mut self.inputbar_touch else {
+                return;
+            };
+            bt.long_fired = true;
+            bt.sel_pivot = Some(span);
             self.dirty = true;
-            crate::report::report("ime", "输入栏长按 → 进入选择模式");
+            crate::report::report("ime", &format!("输入栏长按 → 选词 {span:?} 进入选择模式"));
+        }
+    }
+
+    /// 拖到 field 上下边缘自动滚屏（BAR-046 锚点拖动/BAR-053 枢轴扩选
+    /// 共用一把尺：每秒 2 行≈每帧 8px）
+    fn bar_edge_autoscroll(&self, y: f64, field_h: u32, view_h: u32) {
+        let bar_h = self.cur_bar_h();
+        let field_top = self.window.as_ref().map_or(0, |w| {
+            w.inner_size()
+                .height
+                .saturating_sub(self.ime_bottom_px + bar_h)
+                + 32
+        }) as f64;
+        let edge = 12.0;
+        if y - field_top < edge
+            && let Some(bar) = &self.input_bar
+        {
+            bar.scroll_by_px(-8, view_h);
+        } else if (field_top + f64::from(field_h)) - y < edge
+            && let Some(bar) = &self.input_bar
+        {
+            bar.scroll_by_px(8, view_h);
         }
     }
 

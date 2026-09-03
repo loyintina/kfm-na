@@ -521,3 +521,77 @@ fn selection_clear_and_submit_exit_selection() {
     assert_eq!(bar.submit().as_deref(), Some("xyz"), "submit 取走全部文本");
     assert!(!bar.snap().selecting, "submit 后退出选择");
 }
+
+// BAR-053 2026-09-03 用户实机指认：拖拽柄只有「全选」一个入口能召唤，
+// 长按触发不了 = 选择功能不可用。病灶链三环：①长按进选择用的是
+// enter_selection（空选区 start=end，无高亮不可见）；②长按抬手落进
+// Field 点按分路 → set_cursor 顺手把选择清了（刚召唤即销毁）；
+// ③长按后滑指走滚动分路（不扩选）。契约：长按 = 选词高亮（词恒整选），
+// 按住滑 = 词枢轴扩选，抬手保持。本钉先验词跨度纯函数（终端侧同字符集
+// is_word_char：CJK 连续句读段、ascii/路径串整段；非词字符单选；
+// 越界按末词）。
+#[test]
+fn spec_bar053_长按选词_词跨度() {
+    use kfm_na::input_bar::word_span_at;
+    // ascii 词：落点词内任意处 → 整词
+    assert_eq!(word_span_at("hello world", 1), Some((0, 5)));
+    assert_eq!(word_span_at("hello world", 4), Some((0, 5)));
+    assert_eq!(word_span_at("hello world", 7), Some((6, 11)));
+    // 空格/标点非词字符 → 单选该字
+    assert_eq!(word_span_at("hello world", 5), Some((5, 6)));
+    // CJK 连续段算一词（标点断句）
+    assert_eq!(word_span_at("你好，世界", 0), Some((0, 2)));
+    assert_eq!(word_span_at("你好，世界", 3), Some((3, 5)));
+    // 路径串整段拎出（_-./:~ 入词字符集）
+    assert_eq!(word_span_at("/tmp/a-b.txt", 5), Some((0, 12)));
+    // 中英连排：词字符连续即同词（中+-+eng+混合 整段一词）
+    assert_eq!(word_span_at("中-eng混合", 2), Some((0, 7)));
+    // 标点才真正断词
+    assert_eq!(word_span_at("中-eng，混合", 2), Some((0, 5)));
+    assert_eq!(word_span_at("中-eng，混合", 6), Some((6, 8)));
+    // 越界（按在文本尾后）→ 末词
+    assert_eq!(word_span_at("hello world", 99), Some((6, 11)));
+    // 空文本 → None
+    assert_eq!(word_span_at("", 0), None);
+}
+
+// BAR-053 ②：词枢轴拖动扩选纯函数——词恒整选 + 扩向指头一侧；
+// 指头入词内 → 回词本体（同次拖动可缩回）；产出 start ≤ ps ≤ pe ≤ end。
+#[test]
+fn spec_bar053_词枢轴扩选() {
+    use kfm_na::input_bar::pivot_drag_span;
+    let pivot = (2, 5);
+    assert_eq!(pivot_drag_span(pivot, 0), (0, 5), "指头在词左 → 向左扩");
+    assert_eq!(pivot_drag_span(pivot, 9), (2, 9), "指头在词右 → 向右扩");
+    assert_eq!(pivot_drag_span(pivot, 3), (2, 5), "指头入词内 → 回词本体");
+    assert_eq!(pivot_drag_span(pivot, 2), (2, 5), "词首边界 = 词内");
+    assert_eq!(pivot_drag_span(pivot, 5), (2, 5), "词尾边界 = 词内");
+}
+
+// BAR-053 ③：状态核落选区——长按选词后选择态非空可见（高亮+双锚点+
+// 菜单的活选区），活动锚 = 右锚（续滑扩选从词尾起）；空文本不进选择态。
+#[test]
+fn spec_bar053_长按选词_落选区非空可见() {
+    let bar = InputBarState::new();
+    bar.insert_text("hello world");
+    let span = bar.enter_selection_word(1);
+    assert_eq!(span, Some((0, 5)), "返回词跨度供枢轴登记");
+    let snap = bar.snap();
+    assert!(snap.selecting, "长按后处于选择模式");
+    assert_eq!(
+        (snap.selection_start, snap.selection_end),
+        (0, 5),
+        "选区 = 整词（非空可见高亮）"
+    );
+    assert!(!snap.handle, "定位柄让位双锚点");
+
+    // 落点越界 → 末词
+    let bar2 = InputBarState::new();
+    bar2.insert_text("你好世界");
+    assert_eq!(bar2.enter_selection_word(99), Some((0, 4)));
+
+    // 空文本 → 不进选择态（长按无词可选 = 无操作）
+    let bar3 = InputBarState::new();
+    assert_eq!(bar3.enter_selection_word(0), None);
+    assert!(!bar3.snap().selecting, "空文本不进选择模式");
+}
