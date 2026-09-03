@@ -1736,12 +1736,12 @@ fn spec_bar048_菜单锚可见选区() {
     let text_top = field_top as i32 - eff;
     let step = kfm_na::input_bar::LINE_STEP_PX as i32;
     let first_vis = ((field_top as i32 - text_top).max(0) / step) as u32;
-    let y_first_vis = text_top + first_vis as i32 * step;
-    // 菜单应贴「第一个可见行」上方 12px（selection_menu_rect 规则）
-    let expect_y = (y_first_vis - 72 - 12).max(8) as u32;
+    // 菜单应钉「栏顶上方 12px」固定位（选区起点在视口之上 → 锚 y 钳到栏顶，
+    // 不追部分可见行的连续 y——复测实拍「上下抖动」= 锯齿效应的根治）
+    let expect_y = (field_top as i32 - 72 - 12).max(8) as u32;
     assert_eq!(
         geo.menu_y, expect_y,
-        "菜单必须锚第一个可见行（行 {first_vis}）上方，而非隐藏的选区首行"
+        "选区起点滚出栏顶时菜单必须钉栏顶固定位（第一个可见行 {first_vis} 半在栏顶之上）"
     );
     // 反例钉：若锚的是隐藏首行（row 0），menu_y 会是 text_top-84，远小于此
     let buggy_y = (text_top - 72 - 12).max(8) as u32;
@@ -1762,6 +1762,51 @@ fn spec_bar048_菜单锚可见选区() {
         tv.bar_selection_geometry(&snap2, w, h, 0).is_none(),
         "选区整段滚出视口，菜单/锚点几何必须消失"
     );
+}
+
+// BAR-048 复测钉（2026-09-03 用户复测：「不会移动了，但是会上下抖动」）：
+// 锯齿效应——锚第一个可见行时，滚动中该行 y 连续移动 63px，跨行边界锚点
+// 跳行又瞬移回 63px，表现为菜单上下抖动。契约：选区起点在视口之上时菜单
+// 钉死栏顶固定位，同一段滚动行程内任意两个滚动位 menu_y 恒等。
+#[test]
+fn spec_bar048_菜单滚动钉死不抖动() {
+    let (tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必成");
+    let (w, h) = (600u32, 1400u32);
+    let text: String = "一二三四五六七八九十".repeat(5);
+    let base = kfm_na::input_bar::BarSnap {
+        text,
+        focused: true,
+        lines: 5,
+        cursor: 50,
+        handle: false,
+        composing: String::new(),
+        scroll_px: 0,
+        follow: false, // 手动滚动态（用户抖动现场）
+        selecting: true,
+        selection_start: 0,
+        selection_end: 50,
+    };
+    // 滚动行程中段两个位置（都在「选区起点滚出栏顶」区段内）
+    let y_at = |px: i32| {
+        tv.bar_selection_geometry(
+            &kfm_na::input_bar::BarSnap {
+                scroll_px: px,
+                ..base.clone()
+            },
+            w,
+            h,
+            0,
+        )
+        .expect("选区有可见部分")
+        .menu_y
+    };
+    let (y1, y2, y3) = (y_at(140), y_at(170), y_at(200));
+    assert_eq!(y1, y2, "滚动 30px 菜单不得移动（锯齿抖动）");
+    assert_eq!(y2, y3, "滚动跨行边界菜单也不得跳（锯齿抖动）");
+    // 钉的就是栏顶上方 12px 固定位
+    let bar_h = kfm_na::input_bar::height_for_lines(5);
+    let field_top = h - bar_h + 32;
+    assert_eq!(y1, field_top - 72 - 12, "钉位 = 栏顶上方 12px");
 }
 
 // BAR-047 2026-09-03 用户实拍：粘贴长文（知乎链接+多段内容）后全选，多行

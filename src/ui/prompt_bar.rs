@@ -534,18 +534,21 @@ impl crate::termview::TermView {
         );
     }
 
-    /// 选区的可见行段（BAR-048）：菜单只锚「看得见的选区」——长文全选时
+    /// 选区的可见锚 y（BAR-048）：菜单只锚「看得见的选区」——长文全选时
     /// 选区首行早滚出栏顶，菜单追隐藏首行会浮出输入栏往屏顶爬（用户实拍：
     /// 上滚内容菜单自己往页面上方走）。返回 None = 选区整段滚出视口，
     /// 菜单不画、几何不返（眼手同尺：看不见的点不得有触摸热区）。
-    fn visible_sel_rows(
+    /// 钉死钳制（BAR-048 复测防抖）：锚 y 钳进视口边界——选区起点滚在视口
+    /// 之上时菜单钉栏顶固定位，不追部分可见行的连续 y（追了就是锯齿：
+    /// 行内连续移 63px、跨行跳回 63px，实拍「上下抖动」）。
+    fn visible_sel_anchor_y(
         line_y0: i32,
         n_rows: usize,
         field_y0: i32,
         field_y1: i32,
         row_s: usize,
         row_e: usize,
-    ) -> Option<(usize, usize)> {
+    ) -> Option<(i32, i32)> {
         let step = crate::input_bar::LINE_STEP_PX as i32;
         if n_rows == 0 || line_y0 >= field_y1 {
             return None;
@@ -554,7 +557,12 @@ impl crate::termview::TermView {
         let last_vis = (((field_y1 - 1 - line_y0).max(0) / step) as usize).min(n_rows - 1);
         let s = row_s.max(first_vis);
         let e = row_e.min(last_vis);
-        if s > e { None } else { Some((s, e)) }
+        if s > e {
+            return None;
+        }
+        let y_s = (line_y0 + s as i32 * step).max(field_y0);
+        let y_e = (line_y0 + e as i32 * step).min(field_y1 - step);
+        Some((y_s, y_e))
     }
 
     /// 选择菜单气泡矩形（BAR-046）：渲染（draw_selection_menu）与触摸几何
@@ -607,9 +615,9 @@ impl crate::termview::TermView {
         }
         let row_s = row_of(starts, snap.selection_start.min(items.len()));
         let row_e = row_of(starts, snap.selection_end.min(items.len()));
-        // BAR-048：只锚可见行段——选区首行滚出栏顶时，菜单锚第一个可见行；
-        // 选区整段滚出视口则菜单不画
-        let Some((rs, re)) = Self::visible_sel_rows(
+        // BAR-048：只锚可见选区+钉死钳制——选区首行滚出栏顶时菜单钉栏顶
+        // 固定位（不追部分可见行的连续 y，防锯齿抖动）；整段滚出视口不画
+        let Some((y_s, y_e)) = Self::visible_sel_anchor_y(
             line_y(0),
             starts.len(),
             field_top as i32,
@@ -619,8 +627,6 @@ impl crate::termview::TermView {
         ) else {
             return;
         };
-        let y_s = line_y(rs);
-        let y_e = line_y(re);
         let (menu_x, menu_y, menu_w, menu_h) =
             Self::selection_menu_rect(y_s, y_e, buf_w, bar_top, bar_h);
         // 气泡底
@@ -708,11 +714,11 @@ impl crate::termview::TermView {
         let left = anchor_at(snap.selection_start);
         let right = anchor_at(snap.selection_end);
         // 菜单位置与 draw_selection_menu 同源（单尺 selection_menu_rect +
-        // visible_sel_rows 可见段钳制，BAR-048）——选区整段滚出视口时
-        // 菜单不画，几何也同步 None（看不见的点不得有触摸热区）
+        // visible_sel_anchor_y 可见段钳制+钉死钳制，BAR-048）——选区整段
+        // 滚出视口时菜单不画，几何也同步 None（看不见的点不得有触摸热区）
         let row_s = row_of(&starts, snap.selection_start.min(items.len()));
         let row_e = row_of(&starts, snap.selection_end.min(items.len()));
-        let (rs, re) = Self::visible_sel_rows(
+        let (y_s, y_e) = Self::visible_sel_anchor_y(
             line_y(0),
             starts.len(),
             field_top as i32,
@@ -720,8 +726,6 @@ impl crate::termview::TermView {
             row_s,
             row_e,
         )?;
-        let y_s = line_y(rs);
-        let y_e = line_y(re);
         let (menu_x, menu_y, menu_w, menu_h) =
             Self::selection_menu_rect(y_s, y_e, buf_w, top, bar_h);
         Some(crate::input_bar::BarSelectionGeometry {
