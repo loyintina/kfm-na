@@ -340,7 +340,7 @@ trait BrainEndpoint {
   后续修改/事故/调参追加到其「闭环后迭代」节；本文仍记功能账本）。
   **③真对话（2026-09-03，BAR-054 收官后回主线）**：假对话换真对话——
   消息状态核 `src/ai_chat.rs`（A 档 6 题：发送入格+全量历史投影/
-  流式混排/半截尾巴/Done 兜底收流/Error 收流成消息/工具事件容忍，
+  流式分账/半截尾巴/Done 兜底收流/Error 收流成消息/工具事件容忍，
   变异双咬：收流不清 streaming 咬 4 题、投影漏 assistant 咬 1 题）+
   换脑接线（echo → DirectApiBrain，配置驱动：私有目录 ai/providers.json
   + ai/.env 齐则直连，缺/坏回退 echo 上报原因——回退粒度纪律）+
@@ -353,6 +353,17 @@ trait BrainEndpoint {
   vision-exp（官网 /models 实查存在，非 opencode 套餐）——
   `scripts/deploy-ai-config.sh` 抽 kfmv4 配置经 8024 闸推私有目录，
   key 不进 git 不上日志；模型选择器 = 未来活（期 3）。
+  **③首验（2026-09-04 凌晨，闸门后台自验一轮闭环）**：bar-inject
+  注入「用一句话介绍你自己」→ submit → na-orb tap 切 AI 页 →
+  na-shot 实拍：用户消息 + Kimi 真回复同屏、光球/输入栏各就其位，
+  真 API 回路全程走通（boot 日志「脑装配：direct-api」实锤非 echo
+  兜底）。首验顺手抓出 **BAR-059：思考流混入可见回复**（Kimi
+  highspeed reasoning_content 被当正文拼进消息，一整段英文内心戏
+  上屏）——当期修复：ai_chat 思考/正文分账独存，期 0 纯文本消息行
+  只画正文，思考折叠块渲染归期 0④⑤（与 markdown 同车）；正文空
+  思考归位为正文（kfmv4 陷阱 10 / R3）。A 档两钉 + 变异双咬。
+  同夜登记 **BAR-058**（am start 打活进程双杀，既存病，临时纪律
+  已落排障手册）。用户手动终验（真机打字问答一轮）待做。
 - **期 1 眼睛**：视口快照附上下文。验收 = 问「屏幕上有什么」答得对。
 - **期 2 手**：工具执行注入来源会话。验收 = 让 AI 跑一条命令，终端可见。
 - **期 3 打磨**：server-brain（服务器空间数据源，§四C 契约已就位——**服务器

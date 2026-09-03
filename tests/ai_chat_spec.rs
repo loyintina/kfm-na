@@ -3,13 +3,15 @@
 //! 判卷维度：
 //! - 发送入格 + 全量历史投影（OpenAI 无状态，每轮全量上传；role 串契约为
 //!   "user"/"assistant"——build_chat_request 直接吃这对串）
-//! - 流式一轮：MessageStart 开流 → TextDelta/ThinkingDelta 累积 →
-//!   MessageStop 收流成消息；thinking+正文同块混排 v1 全收（简版纯文本）
+//! - 流式一轮：MessageStart 开流 → TextDelta 累积正文 → MessageStop 收流
+//!   成消息；ThinkingDelta 分账独存不进可见回复（BAR-059：思考不是回复，
+//!   kfmv4 折叠块另渲染，期 0 纯文本消息行不画）；正文空 → 思考归位
 //! - 收尾兜底：无 MessageStop 直 Done 也收流；Error 成错误消息且先收流
 //! - snap = 已成消息 + 流式中尾巴（渲染读数，流式半截可见）
 //!
 //! 变异抽检：收流不清 streaming（鬼影尾巴）/ 投影漏 assistant 轮次
-//! （多轮失忆）/ Error 不收流（错误后旧流续写）本文件必须红。
+//! （多轮失忆）/ Error 不收流（错误后旧流续写）/ 思考混回正文（BAR-059
+//! 旧行为复活）本文件必须红。
 //! 答案 src/ai_chat.rs；判卷成本倒挂的 getter 不出题。
 
 use kfm_na::ai_chat::AiChatState;
@@ -40,7 +42,11 @@ fn spec_发送入格_历史投影全量有序() {
 }
 
 #[test]
-fn spec_流式一轮_thinking正文混排全收() {
+fn spec_bar059_思考分流不进可见回复() {
+    // BAR-059（2026-09-04 期 0③ 真机首验实拍）：Kimi highspeed 的思考流
+    // （reasoning_content → ThinkingDelta）混进可见回复——用户看见一整段
+    // 英文内心戏。契约：思考不是回复，分账独存；kfmv4 渲染成「已思考」
+    // 折叠块另存，期 0 纯文本消息行只画正文（折叠块是期 0④⑤ 的活）
     let chat = AiChatState::new();
     chat.user_send("问");
     chat.apply(&ChatEvent::MessageStart);
@@ -52,13 +58,41 @@ fn spec_流式一轮_thinking正文混排全收() {
         index: 0,
         text: "答答".into(),
     });
+    // 流式中途：尾巴只许是正文，思考一个字不露
+    let mid = chat.snap();
+    assert_eq!(
+        mid,
+        vec![(true, "问".to_string()), (false, "答答".to_string()),],
+        "流式中途 snap 尾巴 = 正文独占，思考混进来就是 BAR-059 复活"
+    );
     chat.apply(&ChatEvent::MessageStop);
     let snap = chat.snap();
     assert_eq!(
         snap,
-        vec![(true, "问".to_string()), (false, "想想答答".to_string()),],
-        "thinking+正文同块混排（§四A），v1 简版全收进同一条 assistant 消息"
+        vec![(true, "问".to_string()), (false, "答答".to_string()),],
+        "收流成消息 = 正文独占；思考（kfmv4 折叠块素材）期 0 不进消息行"
     );
+}
+
+#[test]
+fn spec_bar059_正文空思考归位为正文() {
+    // 归位判据与 brain.rs RunAccumulator 同源（kfmv4 陷阱 10 / R3）：
+    // 某些模型把回复错放 reasoning——正文空且思考非空时，思考顶上，
+    // 不许产出空回复
+    let chat = AiChatState::new();
+    chat.apply(&ChatEvent::MessageStart);
+    chat.apply(&ChatEvent::ThinkingDelta {
+        index: 0,
+        text: "错放reasoning的真回复".into(),
+    });
+    chat.apply(&ChatEvent::Done);
+    let snap = chat.snap();
+    assert_eq!(
+        snap,
+        vec![(false, "错放reasoning的真回复".to_string()),],
+        "正文空 + 思考非空 → 思考归位为正文（取消残留不归位，期 0 无取消路径）"
+    );
+    assert!(!chat.is_streaming());
 }
 
 #[test]

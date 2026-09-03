@@ -3,8 +3,12 @@
 //! 契约真相源：docs/active/ai-presence.md §五（发送流）/ §四A（九事件）。
 //! v1 简版纯文本：user/assistant 消息列表 + 流式累积 + 全量历史投影
 //! （OpenAI 无状态，每轮全量上传——token 不缺，用户 2026-08-31 拍板）。
-//! thinking+正文同块混排（§四A index=0 恒为 text 块），v1 全收进同一条
-//! assistant 消息；工具事件 v1 纯容忍不入格（tools 白名单全关）。
+//! thinking 与正文分流独存（BAR-059）：§四A 线路上 index=0 同块混排靠
+//! deltaType 分流，本核同样分账——思考不是回复（kfmv4 渲染成「已思考」
+//! 折叠块另存，期 0 纯文本消息行不画思考，折叠块是期 0④⑤ 的活）；
+//! 收流时正文空且思考非空 → 思考归位为正文（kfmv4 陷阱 10 / R3，
+//! 与 brain.rs RunAccumulator 同判据）。工具事件 v1 纯容忍不入格
+//! （tools 白名单全关）。
 //!
 //! 发送方（脑线程）apply 事件、渲染方（事件循环）snap 读数——跨线程，
 //! 与 ai_presence/input_bar 同 pattern：状态核内自持 Mutex。
@@ -17,8 +21,10 @@ use std::sync::Mutex;
 struct Inner {
     /// 已成消息（(is_user, text)）
     messages: Vec<(bool, String)>,
-    /// 流式中的 assistant 半截（MessageStart 开、MessageStop/Done/Error 收）
+    /// 流式中的 assistant 半截正文（MessageStart 开、MessageStop/Done/Error 收）
     streaming: Option<String>,
+    /// 流式中的思考缓冲（BAR-059 与正文分账：不进可见回复，只备收流归位）
+    thinking: String,
 }
 
 pub struct AiChatState {
@@ -59,7 +65,7 @@ impl AiChatState {
             .collect()
     }
 
-    /// 流事件落格（脑线程调用）。九事件里 v1 只消费五个：
+    /// 流事件落格（脑线程调用）。九事件里 v1 只消费六个：
     /// MessageStart/TextDelta/ThinkingDelta/MessageStop/Done/Error——
     /// 工具块（ContentBlockStart tool_use/InputJsonDelta/ToolResult）容忍忽略。
     pub fn apply(&self, ev: &ChatEvent) {
@@ -72,9 +78,15 @@ impl AiChatState {
                 Self::flush(&mut g);
                 g.streaming = Some(String::new());
             }
-            ChatEvent::TextDelta { text, .. } | ChatEvent::ThinkingDelta { text, .. } => {
+            ChatEvent::TextDelta { text, .. } => {
                 // 容忍无 MessageStart 直出 delta（野脑）——隐式开流
                 g.streaming.get_or_insert_with(String::new).push_str(text);
+            }
+            ChatEvent::ThinkingDelta { text, .. } => {
+                // BAR-059：思考与正文分账——隐式开流保 is_streaming 语义
+                // （思考先行阶段 = 回复已在流式），但一个字不进可见正文
+                g.streaming.get_or_insert_with(String::new);
+                g.thinking.push_str(text);
             }
             ChatEvent::MessageStop | ChatEvent::Done => Self::flush(&mut g),
             ChatEvent::Error { content } => {
@@ -105,12 +117,16 @@ impl AiChatState {
             .is_some()
     }
 
-    /// 收流：半截 assistant 成消息（空流不产空消息）
+    /// 收流：半截 assistant 成消息（空流不产空消息）。BAR-059 归位：
+    /// 正文空且思考非空 → 思考归位为正文（kfmv4 陷阱 10 / R3，与
+    /// brain.rs RunAccumulator 同判据）；正文非空则思考整段舍弃
+    /// （期 0 纯文本消息行不画思考，折叠块是期 0④⑤ 的活）
     fn flush(g: &mut Inner) {
-        if let Some(s) = g.streaming.take()
-            && !s.is_empty()
-        {
-            g.messages.push((false, s));
+        let text = g.streaming.take().unwrap_or_default();
+        let thinking = std::mem::take(&mut g.thinking);
+        let msg = if text.is_empty() { thinking } else { text };
+        if !msg.is_empty() {
+            g.messages.push((false, msg));
         }
     }
 }

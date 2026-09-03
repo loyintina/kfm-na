@@ -40,6 +40,17 @@ else
 fi
 
 SIZE=$(stat -c%s "$LOCAL_TMP")
+# 陈核哨兵（2026-09-03 二连踩：默认从手机仓拉的 .so 是旧编核、管道
+# 掩码让失败构建照样推 stale——两次都靠 boot 构建戳人肉抓回）。
+# .so 比 HEAD 还旧 = 推了白推,当场吼;确认就是要推旧核用 ALLOW_STALE=1
+if [ "${ALLOW_STALE:-0}" != 1 ]; then
+    HEAD_TS=$(git log -1 --format=%ct 2>/dev/null || echo 0)
+    SO_TS=$(stat -c%Y "$LOCAL_TMP")
+    if [ "$SO_TS" -lt "$HEAD_TS" ]; then
+        echo "❌ 陈核拒推：.so ($(date -d "@$SO_TS" '+%m-%d %H:%M')) 比 HEAD ($(date -d "@$HEAD_TS" '+%m-%d %H:%M')) 还旧——先编核再推；确认推旧核用 ALLOW_STALE=1" >&2
+        exit 65
+    fi
+fi
 echo "=== 推送核心 ($SIZE 字节) → hot/ ==="
 na "mkdir -p $NA_HOT"
 # 原子防半写:.new → mv(若推送中断,旧核心不受损);
