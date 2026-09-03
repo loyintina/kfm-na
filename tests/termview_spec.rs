@@ -1700,6 +1700,70 @@ fn spec_bar046_菜单按钮绘文字() {
     );
 }
 
+// BAR-048 2026-09-03 用户实拍：长文全选后上下滚动输入栏，选择菜单跟着
+// 「被隐藏的选区首行」往页面上方爬——内容滚得越多菜单爬得越高。病灶：
+// 菜单锚定选区首行 line_y(row_s)，全选时首行早滚出栏顶（不可见），菜单
+// 追着隐藏位置走。原生（Android/浏览器）语境菜单只锚「看得见的选区」，
+// 选区整段滚出视口则菜单消失。判卷：全选+尾锚现场，菜单必须锚在第一个
+// 可见行上方（而不是首行上方）；选区滚出视口时几何返回 None（不画不触）。
+#[test]
+fn spec_bar048_菜单锚可见选区() {
+    let (tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必成");
+    let (w, h) = (600u32, 1400u32);
+    let text: String = "一二三四五六七八九十".repeat(5); // 50 字 ≈ 10 行
+    let snap = kfm_na::input_bar::BarSnap {
+        text: text.clone(),
+        focused: true,
+        lines: 5,
+        cursor: 50,
+        handle: false,
+        composing: String::new(),
+        scroll_px: 0,
+        follow: true, // 全选后尾锚——选区首行滚出栏顶，正是实拍现场
+        selecting: true,
+        selection_start: 0,
+        selection_end: 50,
+    };
+    let geo = tv
+        .bar_selection_geometry(&snap, w, h, 0)
+        .expect("全选必有可见选区，几何必须存在");
+    // 与渲染同一把尺算期望：field 几何 + 视口几何 → 第一个可见行
+    let n_lines = 10u32; // 50 字 / 每行约 5 字
+    let bar_h = kfm_na::input_bar::height_for_lines(5);
+    let field_top = h - bar_h + 32;
+    let field_h = bar_h - 64;
+    let (_, eff, _) = kfm_na::input_bar::viewport_geometry(n_lines, field_h, true, 0);
+    let text_top = field_top as i32 - eff;
+    let step = kfm_na::input_bar::LINE_STEP_PX as i32;
+    let first_vis = ((field_top as i32 - text_top).max(0) / step) as u32;
+    let y_first_vis = text_top + first_vis as i32 * step;
+    // 菜单应贴「第一个可见行」上方 12px（selection_menu_rect 规则）
+    let expect_y = (y_first_vis - 72 - 12).max(8) as u32;
+    assert_eq!(
+        geo.menu_y, expect_y,
+        "菜单必须锚第一个可见行（行 {first_vis}）上方，而非隐藏的选区首行"
+    );
+    // 反例钉：若锚的是隐藏首行（row 0），menu_y 会是 text_top-84，远小于此
+    let buggy_y = (text_top - 72 - 12).max(8) as u32;
+    assert!(
+        geo.menu_y > buggy_y + 100,
+        "菜单不得追隐藏的选区首行（buggy={buggy_y} 实得 {}）",
+        geo.menu_y
+    );
+
+    // 场景二：小选区整段滚出视口 → 菜单消失（几何 None）
+    let snap2 = kfm_na::input_bar::BarSnap {
+        selecting: true,
+        selection_start: 0,
+        selection_end: 2, // 第 1 行，尾锚下远在栏顶之上
+        ..snap
+    };
+    assert!(
+        tv.bar_selection_geometry(&snap2, w, h, 0).is_none(),
+        "选区整段滚出视口，菜单/锚点几何必须消失"
+    );
+}
+
 // BAR-047 2026-09-03 用户实拍：粘贴长文（知乎链接+多段内容）后全选，多行
 // 选区高亮盖穿输入栏圆角框——半滚出栏顶的行拿满行高（63px）高亮矩形，
 // 画出栏框上缘之外压过边框，视觉上蓝色块「溢出」整个栏。病灶：文字有
