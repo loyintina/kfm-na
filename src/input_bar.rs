@@ -35,6 +35,14 @@ pub fn text_view_h(field_h: u32) -> u32 {
     field_h.saturating_sub(2 * TEXT_PAD_Y)
 }
 
+/// 选择菜单气泡尺寸（px，2026-09-03 用户拍板放大）：原 420×72（≈24dp 高，
+/// 实拍「感觉太小」）→ 640×120（40dp 高、每格 160 宽，拇指舒适击区）。
+/// 渲染/触摸几何/考题共用（眼手同尺）。
+pub const MENU_W: u32 = 640;
+pub const MENU_H: u32 = 120;
+/// 菜单按钮标签字号（与输入栏正文同号 40px——原 30 实拍偏小）
+pub const MENU_TEXT_PX: f32 = 40.0;
+
 /// 行数 → 带高（px）。0 行按 1 行计（空栏也是一行高）；超 MAX_LINES 封顶。
 /// 覆盖式悬浮：带长高只把栏带向上浮盖终端底部行，终端网格几何不动。
 pub fn height_for_lines(lines: u32) -> u32 {

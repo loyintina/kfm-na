@@ -1791,13 +1791,13 @@ fn spec_bar048_菜单锚可见选区() {
     let text_top = ty0 as i32 - eff;
     // 菜单应钉「文本视口上缘上方 12px」固定位（选区起点在视口之上 → 锚 y
     // 钳到视口上缘，不追部分可见行的连续 y——锯齿效应的根治）
-    let expect_y = (ty0 as i32 - 72 - 12).max(8) as u32;
+    let expect_y = (ty0 as i32 - kfm_na::input_bar::MENU_H as i32 - 12).max(8) as u32;
     assert_eq!(
         geo.menu_y, expect_y,
         "选区起点滚出视口时菜单必须钉文本视口上缘固定位"
     );
     // 反例钉：若锚的是隐藏首行（row 0），menu_y 会是 text_top-84，远小于此
-    let buggy_y = (text_top - 72 - 12).max(8) as u32;
+    let buggy_y = (text_top - kfm_na::input_bar::MENU_H as i32 - 12).max(8) as u32;
     assert!(
         geo.menu_y > buggy_y + 100,
         "菜单不得追隐藏的选区首行（buggy={buggy_y} 实得 {}）",
@@ -1859,7 +1859,11 @@ fn spec_bar048_菜单滚动钉死不抖动() {
     // 钉的就是文本视口上缘上方 12px 固定位（BAR-049 内衬后同尺）
     let bar_h = kfm_na::input_bar::height_for_lines(5);
     let ty0 = h - bar_h + 32 + kfm_na::input_bar::TEXT_PAD_Y;
-    assert_eq!(y1, ty0 - 72 - 12, "钉位 = 文本视口上缘上方 12px");
+    assert_eq!(
+        y1,
+        ty0 - kfm_na::input_bar::MENU_H - 12,
+        "钉位 = 文本视口上缘上方 12px"
+    );
 }
 
 // BAR-047 2026-09-03 用户实拍：粘贴长文（知乎链接+多段内容）后全选，多行

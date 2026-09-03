@@ -597,8 +597,9 @@ impl crate::termview::TermView {
         bar_top: u32,
         bar_h: u32,
     ) -> (u32, u32, u32, u32) {
-        let menu_h = 72u32;
-        let menu_w = 420u32;
+        let menu_h = crate::input_bar::MENU_H;
+        // 窄窗（含 600 宽考题夹具）内缩守边 8px，防菜单越出屏幕
+        let menu_w = crate::input_bar::MENU_W.min(buf_w.saturating_sub(16));
         let menu_x = (buf_w.saturating_sub(menu_w)) / 2;
         const GAP: i32 = 12;
         let mut menu_y = y_s - menu_h as i32 - GAP;
@@ -672,7 +673,7 @@ impl crate::termview::TermView {
                 menu_y,
                 btn_w,
                 menu_h,
-                30.0,
+                crate::input_bar::MENU_TEXT_PX,
                 t.menu_text,
             );
         }
