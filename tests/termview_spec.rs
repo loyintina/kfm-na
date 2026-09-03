@@ -1664,6 +1664,47 @@ fn spec_bar050_锚点柄接缝无凹口() {
     }
 }
 
+// BAR-050 同族余案（用户：「既然发现了就一起修掉」）：光标定位柄同构画法
+// （36 三角 + 44×44 r12 方块），三角底边窄于方形边长，圆角内收后两腰凹槽
+// 不明显但接缝仍豁。判卷：定位柄方块顶边 12 行（原圆角内收带）逐行满宽
+// ≥42/44；未修时顶带行仅 ~20px，本钉必红。
+#[test]
+fn spec_bar050_定位柄接缝无凹口() {
+    let (tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必成");
+    let (w, h) = (600u32, 1200u32);
+    let snap = kfm_na::input_bar::BarSnap {
+        text: "一二三四五六七八九十".to_string(),
+        focused: true,
+        lines: 1,
+        cursor: 5, // 中段光标，定位柄落光标行底
+        handle: true,
+        composing: String::new(),
+        scroll_px: 0,
+        follow: true,
+        selecting: false,
+        selection_start: 0,
+        selection_end: 0,
+    };
+    let mut buf = vec![0u32; (w * h) as usize];
+    tv.render_inputbar(&mut buf, w, h, 0, &snap, false, false);
+    const HANDLE: u32 = 0x003B_82F6; // SELECT_BG
+    // 定位柄是缓冲里唯一 SELECT_BG 来源：三角尖 = 最顶行，方块顶 = 尖+16
+    let apex = (0..h)
+        .find(|&y| (0..w).any(|x| buf[(y * w + x) as usize] == HANDLE))
+        .expect("定位柄必现");
+    for dy in 16..28u32 {
+        let y = apex + dy;
+        let n = (0..w)
+            .filter(|&x| buf[(y * w + x) as usize] == HANDLE)
+            .count();
+        assert!(
+            n >= 42,
+            "定位柄方块顶带第 {} 行柄色像素必须满宽（实测 {n} < 42——接缝凹口未愈）",
+            dy - 16
+        );
+    }
+}
+
 // BAR-046 2026-09-03 ⑤号迭代回归钉：菜单贴选区上方 12px（原案取选区垂直
 // 中心再 -20，多行选区时菜单浮在半空离选区老远）。判卷：像素扫描菜单
 // 气泡底缘与选区高亮顶缘的垂直间距 = 12±2

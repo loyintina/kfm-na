@@ -291,10 +291,14 @@ impl crate::termview::TermView {
             if snap.handle {
                 // 定位柄(BAR-042 用户复测版):加大——正方形承载、上尖三角
                 // 尖对光标行底;稳显不随闪烁
+                // BAR-050：方形上边角改直角（与选择锚点同一招平顶）——
+                // 原四角全圆 r12，三角底边(36)窄于方形边长(44)，圆角内收
+                // 后两腰凹槽不明显但接缝仍豁；平顶后平直对接
                 let hx = (caret_x + 2).saturating_sub(22);
                 let tip_y = (caret_y + input_bar::LINE_STEP_PX as i32 - 2) as u32;
                 frame.fill_triangle_up(hx + 22, tip_y - 1, 36, 18, SELECT_BG);
                 frame.fill_round_rect(hx, tip_y + 15, 44, 44, 12, SELECT_BG);
+                frame.fill_rect(hx, tip_y + 15, 44, 12, SELECT_BG);
             }
         }
         // 组合态下划线（浏览器 preedit 视觉对齐）：拼音区字底一道品牌青。
