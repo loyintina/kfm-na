@@ -222,23 +222,29 @@ impl crate::termview::TermView {
                 // 选区高亮（BAR-046）：画在文字底层，只处理 committed text 空间。
                 // MVP 假设 item 下标与 char 下标 1:1（无 tofu），与光标/定位柄
                 // 现有口径一致；tofu 字场景记诚实边界。
+                // BAR-047：高亮矩形裁进文本可视区——文字有 per-pixel 垂直裁剪，
+                // 高亮原来什么都没有：半滚出栏顶/底的行拿满行高矩形画出栏框
+                // （实拍：长文全选高亮盖穿圆角框），横向也钳到文本区右缘。
                 if snap.selecting && snap.selection_start < snap.selection_end {
                     let sel_s = snap.selection_start.max(st);
                     let sel_e = snap.selection_end.min(end).max(sel_s);
                     if sel_s < sel_e {
                         let x0 = items[st..sel_s].iter().map(|i| i.2).sum::<f32>();
                         let x1 = items[st..sel_e].iter().map(|i| i.2).sum::<f32>();
-                        let sx0 = text_cx + 18 + x0 as u32;
-                        let sx1 = text_cx + 18 + x1 as u32;
-                        let sy = line_y(k);
-                        frame.fill_round_rect(
-                            sx0,
-                            sy as u32,
-                            sx1.saturating_sub(sx0).max(4),
-                            input_bar::LINE_STEP_PX,
-                            4,
-                            t.select_bg,
-                        );
+                        let clip_x1 = text_cx + text_cw;
+                        let sx0 = (text_cx + 18 + x0 as u32).min(clip_x1);
+                        let sx1 = (text_cx + 18 + x1 as u32).min(clip_x1);
+                        let ry0 = line_y(k).max(field_y0);
+                        let ry1 = (line_y(k) + input_bar::LINE_STEP_PX as i32).min(field_y1);
+                        if sx1 > sx0 && ry1 > ry0 {
+                            frame.fill_rect(
+                                sx0,
+                                ry0 as u32,
+                                sx1 - sx0,
+                                (ry1 - ry0) as u32,
+                                t.select_bg,
+                            );
+                        }
                     }
                 }
                 self.draw_items_left(

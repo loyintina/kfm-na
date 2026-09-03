@@ -1700,6 +1700,55 @@ fn spec_bar046_菜单按钮绘文字() {
     );
 }
 
+// BAR-047 2026-09-03 用户实拍：粘贴长文（知乎链接+多段内容）后全选，多行
+// 选区高亮盖穿输入栏圆角框——半滚出栏顶的行拿满行高（63px）高亮矩形，
+// 画出栏框上缘之外压过边框，视觉上蓝色块「溢出」整个栏。病灶：文字有
+// per-pixel 垂直裁剪（Some((field_y0, field_y1))），选区高亮矩形什么都没有。
+// 判卷：select_bg 像素必须全部落在 field 矩形内（上下左右四向）。
+#[test]
+fn spec_bar047_选区高亮不溢出文本区() {
+    let (tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必成");
+    let (w, h) = (600u32, 1400u32);
+    let text: String = "一二三四五六七八九十".repeat(5); // 50 字 ≈ 10 行，超 5 行封顶
+    let snap = kfm_na::input_bar::BarSnap {
+        text,
+        focused: true,
+        lines: 5,
+        cursor: 50,
+        handle: false,
+        composing: String::new(),
+        scroll_px: 0,
+        follow: true, // 粘贴后跟随尾锚——首行半滚出栏顶，正是实拍现场
+        selecting: true,
+        selection_start: 0,
+        selection_end: 50,
+    };
+    let mut buf = vec![0u32; (w * h) as usize];
+    tv.render_inputbar(&mut buf, w, h, 0, &snap, false, false);
+    // field 几何与 render_inputbar 同一把尺（全用公开常量/函数）
+    let bar_h = kfm_na::input_bar::height_for_lines(5);
+    let field_top = h - bar_h + 32;
+    let field_bottom = field_top + (bar_h - 64);
+    let field_left = kfm_na::input_bar::MARGIN_X_PX;
+    let field_right = w
+        - kfm_na::input_bar::MARGIN_X_PX
+        - kfm_na::input_bar::SEND_W_PX
+        - kfm_na::input_bar::GAP_PX;
+    let (mut n, mut bad) = (0u32, 0u32);
+    for y in 0..h {
+        for x in 0..w {
+            if buf[(y * w + x) as usize] == 0x0044_88DD {
+                n += 1;
+                if y < field_top || y >= field_bottom || x < field_left || x >= field_right {
+                    bad += 1;
+                }
+            }
+        }
+    }
+    assert!(n > 1000, "全选高亮必须有足量像素（n={n}）");
+    assert_eq!(bad, 0, "高亮不得画出 field 矩形（溢出像素 {bad}）");
+}
+
 // BAR-045: prompt_bar.rs 切片倒挂崩溃夜检——防御性切片+display_text 同源
 // 实机 panic.log  witnessed: slice index starts at 21/363/794/42 but ends at
 // 18/303/754/39。本判卷不追究精确复现路径（可能为行号漂移/inline 导致），
