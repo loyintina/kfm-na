@@ -32,20 +32,28 @@ done
 if [ -n "$SRC" ]; then
     [ -f "$SRC" ] || { echo "❌ 找不到 $SRC" >&2; exit 66; }
     LOCAL_TMP="$SRC"
+    SO_TS=""
 else
     # 从手机仓拉刚编的核(Termux 私有目录,经 8022 读)
     LOCAL_TMP=/tmp/libkfm_na-hot.so
+    # 远端 mtime 先拿下(BAR-060：拉下来的副本 mtime=下载时刻,拿它
+    # 比 HEAD 恒新,哨兵形同虚设——09-04 凌晨因此把 9-2 旧核推上机,
+    # 期 0③ 被静默降级,靠人肉读 boot 构建戳抓回)
+    SO_TS=$(ssh -p 8022 -o BatchMode=yes -o ConnectTimeout=8 localhost \
+        'stat -c%Y ~/kfm-na/target/aarch64-linux-android/release/libkfm_na.so' \
+        2>/dev/null || echo 0)
     ssh -p 8022 -o BatchMode=yes -o ConnectTimeout=8 localhost \
         'cat ~/kfm-na/target/aarch64-linux-android/release/libkfm_na.so' > "$LOCAL_TMP"
 fi
 
 SIZE=$(stat -c%s "$LOCAL_TMP")
 # 陈核哨兵（2026-09-03 二连踩：默认从手机仓拉的 .so 是旧编核、管道
-# 掩码让失败构建照样推 stale——两次都靠 boot 构建戳人肉抓回）。
+# 掩码让失败构建照样推 stale——两次都靠 boot 构建戳人肉抓回；
+# BAR-060 补：默认路径必须比远端 mtime,本地副本 mtime 是下载时刻）。
 # .so 比 HEAD 还旧 = 推了白推,当场吼;确认就是要推旧核用 ALLOW_STALE=1
 if [ "${ALLOW_STALE:-0}" != 1 ]; then
     HEAD_TS=$(git log -1 --format=%ct 2>/dev/null || echo 0)
-    SO_TS=$(stat -c%Y "$LOCAL_TMP")
+    [ -z "$SO_TS" ] && SO_TS=$(stat -c%Y "$LOCAL_TMP")
     if [ "$SO_TS" -lt "$HEAD_TS" ]; then
         echo "❌ 陈核拒推：.so ($(date -d "@$SO_TS" '+%m-%d %H:%M')) 比 HEAD ($(date -d "@$HEAD_TS" '+%m-%d %H:%M')) 还旧——先编核再推；确认推旧核用 ALLOW_STALE=1" >&2
         exit 65

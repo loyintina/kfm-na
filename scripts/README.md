@@ -38,7 +38,8 @@
   自动重启 → ping 判卷,全自动闭环;推前留档 `.so.last`(秒级回退)。
   缺省从手机仓拉刚编的核;陈核哨兵:.so 比 HEAD 旧当场拒推
   (ALLOW_STALE=1 豁免)——2026-09-03 二连踩(手机仓旧核/管道掩码
-  推 stale)后的机械闸。
+  推 stale)后的机械闸;BAR-060 补:默认路径比的是远端 .so mtime
+  (本地副本 mtime=下载时刻,比了白比),显式路径比本地文件 mtime。
 - `na-restart.sh` — 体面重启:restart-req → 等断连 → am start 拉回
   → 等新 boot → 判卷。
 
