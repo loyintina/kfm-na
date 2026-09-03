@@ -1595,20 +1595,66 @@ impl Frame<'_> {
         *dst = blend(fg, *dst, a);
     }
 
-    /// 顶点向上的实心三角（定位柄/选择锚点上尖；硬边与 ▶ 同风格，界内裁剪）。
-    /// BAR-051：锚定语义从「cx 对称轴 + 闭区间」改「左缘 x0 + 精确宽度」——
-    /// 底行恰好 w 像素 [x0, x0+w)，与 fill_rect(x0, _, w, _) 同锚，柄形接缝
-    /// 与方块平直对接零偏差。旧语义底行 2*(w/2)+1 奇数宽，与偶数宽方块对缝
-    /// 恒偏半像素且多出的一列在右侧（用户放大实拍：三角比方块偏右约 1px）。
-    pub(crate) fn fill_triangle_up(&mut self, x0: u32, y0: u32, w: u32, h: u32, color: u32) {
-        let half_w = i64::from(w) / 2;
-        let xc = i64::from(x0) + half_w;
-        let y0 = i64::from(y0);
-        for row in 0..i64::from(h) {
-            // 逐行线性展开：顶行收窄，底行满宽（半开区间保精确宽对接）
-            let half = half_w * (row + 1) / i64::from(h);
-            for x in (xc - half)..(xc + half) {
-                let y = y0 + row;
+    /// 图钉柄一体光栅（BAR-052）：尖三角 + 肩部钝角圆角 + 圆角承载块，
+    /// 逐行解析跨度填充，左右按承载块边缘等距镜像（BAR-051 同轴纪律：
+    /// 尖轴 ≡ 块轴，承载块跨 [cx-half_w, cx+half_w)）。
+    /// 肩部 fillet = 斜边与立边的精确切圆：斜率 m=(half_w-1)/(tri_h-1)，
+    /// 圆心 (xl+r, y_v + r(√(1+m²)-1)/m) 同时与立边(x=xl)和斜边相切，
+    /// 过渡摊 4~6 行、逐行 |Δx| ≤ 1——无平顶拼接的接缝台阶（用户实拍
+    /// 「三角和正方形交接生硬」对症；成熟输入法柄同形）。
+    ///   cx      柄轴（承载块 [cx-half_w, cx+half_w)）
+    ///   tip_y   尖顶行
+    ///   half_w  承载块半宽（立边 x = cx-half_w）
+    ///   tri_h   三角行数（尖顶行半宽 1 → 顶点行抵立边）
+    ///   bulb_h  承载块高（顶点行起算，含底角弧）
+    ///   r_sh    肩部 fillet 半径（钝角圆角）
+    ///   r_bot   承载块底角半径
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn fill_pin_handle(
+        &mut self,
+        cx: u32,
+        tip_y: u32,
+        half_w: u32,
+        tri_h: u32,
+        bulb_h: u32,
+        r_sh: u32,
+        r_bot: u32,
+        color: u32,
+    ) {
+        let cx = cx as f32;
+        let xl = cx - half_w as f32; // 立边（承载块左缘）
+        let xr = cx + half_w as f32; // 承载块右缘（半开）
+        let tip_y = tip_y as f32;
+        let y_v = tip_y + tri_h as f32 - 1.0; // 顶点行：斜边抵立边处
+        let y_bot = y_v + bulb_h as f32 - 1.0; // 承载块底边行
+        let m = (half_w as f32 - 1.0) / (tri_h as f32 - 1.0).max(1.0); // 斜边横纵比
+        let r_sh = r_sh as f32;
+        let r_bot = r_bot as f32;
+        // 肩部切圆：T1=斜边切点（垂足投影行），T2=立边切点（圆心正左）
+        let g = (1.0 + m * m).sqrt();
+        let scx = xl + r_sh;
+        let scy = y_v + r_sh * (g - 1.0) / m;
+        let t1y = scy - r_sh * m / g;
+        let t2y = scy;
+        let bcy = y_bot - r_bot; // 底角圆心行
+        let (y0, y1) = (tip_y as i64, y_bot.ceil() as i64);
+        for y in y0..=y1 {
+            let yf = y as f32;
+            let x_left = if yf < t1y {
+                cx - 1.0 - (yf - tip_y) * m // 斜边
+            } else if yf <= t2y {
+                let dy = yf - scy;
+                scx - (r_sh * r_sh - dy * dy).max(0.0).sqrt() // 肩部弧
+            } else if yf <= bcy {
+                xl // 立边
+            } else {
+                let dy = yf - bcy;
+                xl + r_bot - (r_bot * r_bot - dy * dy).max(0.0).sqrt() // 底角弧
+            };
+            // 右缘镜像：与承载块右缘等距（同轴），填 [(xl+off), (xr-off))
+            let off = (x_left - xl).max(0.0);
+            let (x0, x1) = ((xl + off).round() as i64, (xr - off).round() as i64);
+            for x in x0..x1 {
                 if x >= 0 && y >= 0 && x < i64::from(self.w) && y < i64::from(self.h) {
                     self.buf[(y * i64::from(self.w) + x) as usize] = color;
                 }

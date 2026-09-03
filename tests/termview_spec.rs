@@ -1622,6 +1622,9 @@ fn spec_bar046_锚点视觉中心等于热区中心() {
 // 三角形底边平直 28px，下方正方形却是四角全圆（半径 8），上边角内收、
 // 三角底边两角微凸，一凹一凸接缝豁开。契约：正方形上边角改直角（下边角
 // 保持圆角）——三角底边与方形顶边平直 28px 对接（Android 原生柄剪影）。
+// BAR-052 契约承接：三图元拼接改 fill_pin_handle 一体光栅后，肩部为
+// 切弧过渡带（行宽 26→28 渐进），本钉 ≥26 宽度下限继续守凹口不回潮；
+// 平滑硬保证在 spec_bar052。
 // 判卷：方形顶部 8 行（原圆角内收带）每行柄色像素必须满宽（≥26/28），
 // 未修时该区域每行仅中段 ~12px，本钉必红。
 #[test]
@@ -1668,6 +1671,9 @@ fn spec_bar050_锚点柄接缝无凹口() {
 // （36 三角 + 44×44 r12 方块），三角底边窄于方形边长，圆角内收后两腰凹槽
 // 不明显但接缝仍豁。判卷：定位柄方块顶边 12 行（原圆角内收带）逐行满宽
 // ≥42/44；未修时顶带行仅 ~20px，本钉必红。
+// BAR-052 契约承接：一体图钉光栅后肩部是切弧过渡带（行宽 40→44 渐进），
+// 阈值随契约改 ≥40；「无凹口」的硬保证移交 spec_bar052 平滑钉（逐行
+// |Δx| 上限），本钉守宽度下限防凹口回潮。
 #[test]
 fn spec_bar050_定位柄接缝无凹口() {
     let (tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必成");
@@ -1698,8 +1704,8 @@ fn spec_bar050_定位柄接缝无凹口() {
             .filter(|&x| buf[(y * w + x) as usize] == HANDLE)
             .count();
         assert!(
-            n >= 42,
-            "定位柄方块顶带第 {} 行柄色像素必须满宽（实测 {n} < 42——接缝凹口未愈）",
+            n >= 40,
+            "定位柄肩部过渡带第 {} 行柄色像素必须守宽度下限（实测 {n} < 40——凹口回潮）",
             dy - 16
         );
     }
@@ -1810,6 +1816,141 @@ fn spec_bar051_定位柄三角与方块同宽同轴() {
         tlo + thi == slo + shi,
         "定位柄三角与方块必须同轴：三角行 [{tlo},{thi}] 与方块行 [{slo},{shi}] 中心差 {}px",
         (tlo + thi).abs_diff(slo + shi)
+    );
+}
+
+// BAR-052 2026-09-03 用户实拍三指认：两柄三角/方块交接处生硬——成熟输入
+// 法柄（Android 原生图钉柄）此处是钝角圆角（肩部 fillet：斜边与立边用
+// 精确切圆弧过渡），不是平顶直角的硬拼接。病灶实测：平顶拼接让承载块在
+// 接缝行比三角行宽出 2~4px——左缘逐行 |Δx| 出现 2px(锚点)/3px(定位柄)
+// 台阶，且 45° 斜边到立边在一个像素上瞬时转向。
+// 契约（fill_pin_handle 一体光栅）：斜边经半径 r_sh 切弧摊 4~6 行过渡到
+// 立边——①逐行左缘 |Δx| ≤ 1（无台阶）；②全宽立边在顶点行之后才抵达
+// （平顶版接缝行即满宽）。判卷用右锚点（左锚点同构由同代码路径覆盖）。
+#[test]
+fn spec_bar052_锚点柄肩部钝角圆角() {
+    let (tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必成");
+    let (w, h) = (600u32, 1200u32);
+    let snap = kfm_na::input_bar::BarSnap {
+        text: "一二三四五六七八九十".to_string(),
+        focused: true,
+        lines: 1,
+        cursor: 0,
+        handle: false,
+        composing: String::new(),
+        scroll_px: 0,
+        follow: true,
+        selecting: true,
+        selection_start: 0,
+        selection_end: 2,
+    };
+    let geo = tv
+        .bar_selection_geometry(&snap, w, h, 0)
+        .expect("选择态几何必须存在");
+    let mut buf = vec![0u32; (w * h) as usize];
+    tv.render_inputbar(&mut buf, w, h, 0, &snap, false, false);
+    let (ax, cy) = geo.right_anchor;
+    let x0 = (ax - 20.0).max(0.0) as u32;
+    let x1 = ((ax + 20.0) as u32).min(w);
+    // 柄竖跨：尖顶 cy-19 ～ 承载块底 cy+20（几何 tip=cy-18，外沿不变）
+    let span = |y: u32| -> Option<(u32, u32)> {
+        let (mut lo, mut hi) = (u32::MAX, 0u32);
+        for x in x0..x1 {
+            if buf[(y * w + x) as usize] == 0x0000_D4FF {
+                lo = lo.min(x);
+                hi = hi.max(x);
+            }
+        }
+        (lo <= hi).then_some((lo, hi))
+    };
+    let y_v = (cy - 6.0) as u32; // 顶点行（斜边抵立边处）：tip+12 = cy-6
+    let (mut prev, mut first_full, mut max_w) = (None, None, 0u32);
+    // 平滑判卷只扫 斜边+肩弧+立边起点（cy-19..cy-2）；再往下的底角是
+    // 标准圆角矩形收边（末行固有 r-√(2r-1) 跳变，BAR-050 起用户认可的
+    // 既有剪影，不在本契约内）
+    for y in (cy - 19.0) as u32..=(cy - 2.0) as u32 {
+        let Some((lo, hi)) = span(y) else { continue };
+        if let Some(p) = prev {
+            assert!(
+                lo.abs_diff(p) <= 1,
+                "肩部逐行过渡必须平滑：行 {y} 左缘 {lo} 与上行 {p} 差 {}px——硬台阶（钝角圆角未愈）",
+                lo.abs_diff(p)
+            );
+        }
+        if hi - lo + 1 >= 28 && first_full.is_none() {
+            first_full = Some(y);
+        }
+        max_w = max_w.max(hi - lo + 1);
+        prev = Some(lo);
+    }
+    assert_eq!(max_w, 28, "柄身最大宽度必须保持 28px（实测 {max_w}）");
+    assert!(
+        first_full.expect("柄身必达全宽") > y_v,
+        "钝角圆角：全宽立边必须在顶点行 {y_v} 之后抵达（实测第 {} 行即满宽——平顶硬拼接）",
+        first_full.unwrap()
+    );
+}
+
+// BAR-052 ②号：定位柄同契约（斜率 m=21/17 非 45°，切圆按 m 通式）。
+#[test]
+fn spec_bar052_定位柄肩部钝角圆角() {
+    let (tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必成");
+    let (w, h) = (600u32, 1200u32);
+    let snap = kfm_na::input_bar::BarSnap {
+        text: "一二三四五六七八九十".to_string(),
+        focused: true,
+        lines: 1,
+        cursor: 5,
+        handle: true,
+        composing: String::new(),
+        scroll_px: 0,
+        follow: true,
+        selecting: false,
+        selection_start: 0,
+        selection_end: 0,
+    };
+    let mut buf = vec![0u32; (w * h) as usize];
+    tv.render_inputbar(&mut buf, w, h, 0, &snap, false, false);
+    const HANDLE: u32 = 0x003B_82F6; // SELECT_BG
+    let apex = (0..h)
+        .find(|&y| (0..w).any(|x| buf[(y * w + x) as usize] == HANDLE))
+        .expect("定位柄必现");
+    let span = |y: u32| -> Option<(u32, u32)> {
+        let (mut lo, mut hi) = (u32::MAX, 0u32);
+        for x in 0..w {
+            if buf[(y * w + x) as usize] == HANDLE {
+                lo = lo.min(x);
+                hi = hi.max(x);
+            }
+        }
+        (lo <= hi).then_some((lo, hi))
+    };
+    let y_v = apex + 17; // 顶点行（同 spec_bar050/051 几何：尖+17 抵立边）
+    let (mut prev, mut first_full, mut max_w) = (None, None, 0u32);
+    // 平滑判卷只扫 斜边+肩弧+立边起点（apex..y_v+5）；底角标准圆角收边
+    // 不在本契约内（同锚点钉注）。阈值 ≤2：m=21/17 斜边逐行 1.24px，
+    // 取整后固有 1~2px 步进；旧平顶拼接的接缝台阶是 3px（三角行 38px →
+    // 承载块行 44px 突变），本钉以此分界
+    for y in apex..=y_v + 5 {
+        let Some((lo, hi)) = span(y) else { continue };
+        if let Some(p) = prev {
+            assert!(
+                lo.abs_diff(p) <= 2,
+                "肩部逐行过渡必须平滑：行 {y} 左缘 {lo} 与上行 {p} 差 {}px——硬台阶（钝角圆角未愈）",
+                lo.abs_diff(p)
+            );
+        }
+        if hi - lo + 1 >= 44 && first_full.is_none() {
+            first_full = Some(y);
+        }
+        max_w = max_w.max(hi - lo + 1);
+        prev = Some(lo);
+    }
+    assert_eq!(max_w, 44, "柄身最大宽度必须保持 44px（实测 {max_w}）");
+    assert!(
+        first_full.expect("柄身必达全宽") > y_v,
+        "钝角圆角：全宽立边必须在顶点行 {y_v} 之后抵达（实测第 {} 行即满宽——平顶硬拼接）",
+        first_full.unwrap()
     );
 }
 

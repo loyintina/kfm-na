@@ -291,14 +291,13 @@ impl crate::termview::TermView {
             if snap.handle {
                 // 定位柄(BAR-042 用户复测版):加大——正方形承载、上尖三角
                 // 尖对光标行底;稳显不随闪烁
-                // BAR-050：方形上边角改直角（与选择锚点同一招平顶）。
-                // BAR-051：三角底边 36→44 与方块同边长（平顶后窄边接缝由凹
-                // 变凸，用户放大实拍指认），光栅左缘锚定与方块同轴零偏差
+                // BAR-050 平顶 → BAR-052 一体图钉光栅：斜边(m=21/17)经
+                // r=10 肩部切弧过渡立边（钝角圆角，成熟输入法柄同形），
+                // 平顶拼接的 3px 接缝台阶消除。外沿/轴不变：尖轴=块轴=
+                // caret_x+2，跨 [tip_y-1, tip_y+58]
                 let hx = (caret_x + 2).saturating_sub(22);
                 let tip_y = (caret_y + input_bar::LINE_STEP_PX as i32 - 2) as u32;
-                frame.fill_triangle_up(hx, tip_y - 1, 44, 18, SELECT_BG);
-                frame.fill_round_rect(hx, tip_y + 15, 44, 44, 12, SELECT_BG);
-                frame.fill_rect(hx, tip_y + 15, 44, 12, SELECT_BG);
+                frame.fill_pin_handle(hx + 22, tip_y - 1, 22, 18, 43, 10, 12, SELECT_BG);
             }
         }
         // 组合态下划线（浏览器 preedit 视觉对齐）：拼音区字底一道品牌青。
@@ -538,37 +537,18 @@ impl crate::termview::TermView {
             .sum();
         let ax = (text_cx + 18 + x_off as u32) as i32;
         let tip_y = (row_y + input_bar::LINE_STEP_PX as i32 - 2) as u32;
-        let size = 28i32; // ANCHOR_VISUAL_SIZE
-        let half = size / 2;
         // 上尖三角 + 正方承载（与定位柄同族，缩小版）。
         // 2026-09-03 ①号迭代：两图元水平中心统一锚到 ax（原三角 ax+half、
         // 矩形 ax-half+4，静态错位 10px，实拍可见尖与块不对齐）。
         // BAR-051：三角改左缘锚定（ax-half 起恰好 28px），与下方块
-        // fill_rect 同跨——旧 cx 闭区间语义底行 29px 恒偏右半像素
-        // （用户放大实拍：三角比方块偏右约 1px）。
-        // 柄形合 span：y ∈ [tip-1, tip+38]，中心 ≈ tip+18——几何
+        // fill_rect 同跨——旧 cx 闭区间语义底行 29px 恒偏右半像素。
+        // BAR-052：三图元拼接 → fill_pin_handle 一体图钉光栅——45° 斜边
+        // 经 r=7 肩部切弧过渡立边（钝角圆角，成熟输入法柄同形），平顶
+        // 拼接的 2px 接缝台阶消除。外沿/轴不变：柄形合 span
+        // y ∈ [tip-1, tip+38]，中心 ≈ tip+18——几何
         // （bar_selection_geometry.anchor_at）以 (ax, tip+18) 为柄中心，
         // 热区同尺，眼手同源
-        frame.fill_triangle_up(
-            (ax - half) as u32,
-            tip_y.saturating_sub(1),
-            size as u32,
-            14,
-            color,
-        );
-        // BAR-050：方形上边角改直角（下边角保持圆角）——先圆角矩形再以
-        // 直角矩形平顶 8 行。原四角全圆：上边角内收、三角底边两角微凸，
-        // 接缝处「脖子」凹口（用户放大实拍指认）；平顶后三角底边与方形
-        // 顶边平直 28px 对接（Android 原生柄剪影）
-        frame.fill_round_rect(
-            (ax - half) as u32,
-            tip_y + 11,
-            size as u32,
-            size as u32,
-            8,
-            color,
-        );
-        frame.fill_rect((ax - half) as u32, tip_y + 11, size as u32, 8, color);
+        frame.fill_pin_handle(ax as u32, tip_y.saturating_sub(1), 14, 14, 27, 7, 8, color);
     }
 
     /// 选区的可见锚 y（BAR-048）：菜单只锚「看得见的选区」——长文全选时
