@@ -205,6 +205,11 @@ struct App {
     /// AiPresenceState 服务句柄（ai-presence 插件，期 0 组件一）：
     /// 光球/AI 页状态同源读数（人走触摸、AI 走服务，D9）
     ai_presence: Option<Arc<crate::ai_presence::AiPresenceState>>,
+    /// AiChatState 服务句柄（ai-presence 插件，期 0③）：对话消息同源读数——
+    /// 发送闭包（脑线程 apply 事件）与 AI 页渲染（snap）共这份
+    ai_chat: Option<Arc<crate::ai_chat::AiChatState>>,
+    /// 上一圈的对话代际（脑线程流式落格不经触摸，代际变了也要置脏画帧）
+    last_chat_gen: Option<u64>,
     /// 按在光球上的手势（Some = 这手势归球，终端手势全家让路）
     orb_touch: Option<OrbTouch>,
     /// 上一帧的 AI 外显快照（about_to_wait 逐圈比对置脏：
@@ -224,6 +229,49 @@ struct App {
     last_bar_w: Option<u32>,
     /// 上一圈的光标闪烁相位（聚焦时相位翻转置脏，530ms 节拍）
     last_caret_on: bool,
+}
+
+/// 默认脑路（2026-09-03 用户拍板）：Kimi 卡 + k2.7 coding highspeed。
+/// 备选两路已配 key：智谱 coding 套餐 glm-5.3-flash / DeepSeek 官网
+/// deepseek-v4-flash-vision-exp——模型选择器是未来活（期 3 打磨），v1 定死
+const DEFAULT_PROVIDER: &str = "Kimi";
+const DEFAULT_MODEL: &str = "kimi-for-coding-highspeed";
+
+/// 装配本地脑（期 0③ 换脑，D11）：私有目录 ai/providers.json + ai/.env
+/// 齐且可解析 → DirectApiBrain；任一环缺/坏 → echo-brain 夹具兜底 +
+/// 上报原因（未配 key 的机子 run 生命周期仍可验，回退粒度纪律）。
+/// 配置文件不进 git——由 scripts/deploy-ai-config.sh 经 ssh 推送
+fn assemble_brain(
+    app: Option<&winit::platform::android::activity::AndroidApp>,
+) -> Arc<dyn crate::brain_ep::BrainEndpoint> {
+    let echo = |why: String| -> Arc<dyn crate::brain_ep::BrainEndpoint> {
+        crate::report::report_sync("ai", &format!("脑装配回退 echo：{why}"));
+        Arc::new(crate::brain_ep::EchoBrain::from_upstream_sse(
+            include_str!("../tests/fixtures/ai-chat/upstream-kimi-k2.7-highspeed-20260830.sse"),
+            std::time::Duration::from_millis(15),
+        ))
+    };
+    let Some(dir) = app.and_then(|a| a.internal_data_path()) else {
+        return echo("无私有目录句柄".to_string());
+    };
+    let cfg = dir.join("ai");
+    let (json, env) = match (
+        std::fs::read_to_string(cfg.join("providers.json")),
+        std::fs::read_to_string(cfg.join(".env")),
+    ) {
+        (Ok(j), Ok(e)) => (j, e),
+        _ => return echo(format!("{} 下 providers.json/.env 未齐", cfg.display())),
+    };
+    match crate::direct_brain::DirectApiBrain::from_files(&json, &env) {
+        Ok(b) => {
+            crate::report::report_sync(
+                "ai",
+                &format!("脑装配：direct-api（{DEFAULT_PROVIDER}/{DEFAULT_MODEL}）"),
+            );
+            Arc::new(b)
+        }
+        Err(e) => echo(format!("配置解析失败: {e}")),
+    }
 }
 
 impl App {
@@ -1097,6 +1145,15 @@ impl App {
             self.last_ai_snap = Some(snap);
             self.dirty = true;
         }
+        // 对话代际比对（期 0③）：脑线程流式落格不经触摸/快照，
+        // 代际变了也要画出帧（AI 页尾随的命）
+        if let Some(chat) = &self.ai_chat {
+            let g = chat.generation();
+            if self.last_chat_gen != Some(g) {
+                self.last_chat_gen = Some(g);
+                self.dirty = true;
+            }
+        }
     }
 
     /// 输入栏快照逐圈比对置脏（闸门注入/IME 分流改的状态也要画出帧）。
@@ -1279,14 +1336,20 @@ impl App {
             crate::report::report_sync("ai", &format!("AI 外显插件装载失败: {e:?}"));
         }
         self.ai_presence = base.ctx().get::<crate::ai_presence::AiPresenceState>().ok();
+        self.ai_chat = base.ctx().get::<crate::ai_chat::AiChatState>().ok();
         if let Some(ai) = &self.ai_presence {
             crate::gate::register_ai_presence(ai);
         }
+        if let Some(chat) = &self.ai_chat {
+            crate::gate::register_ai_chat(chat);
+        }
 
         // 全局输入栏插件（期 0 组件三）：状态核共享实例直挂 + 发送口装配。
-        // 脑 = echo-brain 夹具（期 0②收尾：真 run 生命周期驱动光球亮灭，
-        // 断网可验；direct-api 随 key 配置落地换插——BrainEndpoint 同形）。
-        // 发送闭包在触摸/值守线程被调，真 run 自开线程——瞬时返回契约
+        // 脑 = 配置驱动（期 0③ 换脑，D11 本地直连是地基）：私有目录
+        // ai/providers.json + ai/.env 齐 → DirectApiBrain；缺/坏 →
+        // echo-brain 夹具兜底并上报（未配 key 也可验 run 生命周期，
+        // 回退粒度纪律）。发送闭包在触摸/值守线程被调，真 run 自开
+        // 线程——瞬时返回契约
         if let Err(e) = base.load(crate::plugins::input_bar::InputBar::new()) {
             crate::report::report_sync("ai", &format!("输入栏插件装载失败: {e:?}"));
         }
@@ -1294,32 +1357,37 @@ impl App {
         if let (Some(bar), Some(ai)) = (&self.input_bar, &self.ai_presence) {
             crate::gate::register_input_bar(bar);
             let brain: Arc<dyn crate::brain_ep::BrainEndpoint> =
-                Arc::new(crate::brain_ep::EchoBrain::from_upstream_sse(
-                    include_str!(
-                        "../tests/fixtures/ai-chat/upstream-kimi-k2.7-highspeed-20260830.sse"
-                    ),
-                    std::time::Duration::from_millis(15),
-                ));
+                assemble_brain(self.android_app.as_ref());
             self.brain = Some(brain.clone());
             let ai2 = ai.clone();
+            let chat = self.ai_chat.clone();
             bar.install_sender(Arc::new(move |text| {
+                let Some(chat) = &chat else {
+                    crate::report::report("ai", "发送被吞：AI 对话状态核未就位");
+                    return;
+                };
+                // 用户消息入格 + 全量历史投影（OpenAI 无状态，每轮全量上传）
+                let history = chat.user_send(&text);
                 let brain = brain.clone();
                 let ai = ai2.clone();
+                let chat = chat.clone();
                 std::thread::spawn(move || {
                     ai.run_start(crate::report::boot_ms() as u64);
                     let req = crate::brain_ep::ChatStartReq {
                         session_id: "local".to_string(),
-                        messages: vec![("user".to_string(), text)],
-                        model: "echo".to_string(),
-                        provider: "echo".to_string(),
+                        messages: history,
+                        model: DEFAULT_MODEL.to_string(),
+                        provider: DEFAULT_PROVIDER.to_string(),
                         tools: vec![],
                     };
                     let (_h, rx) = brain.start(req);
                     while let Ok(ev) = rx.recv() {
-                        if matches!(
+                        let end = matches!(
                             ev,
                             crate::brain::ChatEvent::Done | crate::brain::ChatEvent::Error { .. }
-                        ) {
+                        );
+                        chat.apply(&ev);
+                        if end {
                             break;
                         }
                     }
@@ -1954,6 +2022,7 @@ impl App {
         magnifier_at: Option<(f64, f64)>,
         ime_bottom_px: u32,
         ai_snap: Option<crate::ai_presence::PresenceSnap>,
+        chat_msgs: &[(bool, String)],
         bar_snap: Option<&crate::input_bar::BarSnap>,
         caret_on: bool,
         buf: &mut [u32],
@@ -1968,9 +2037,9 @@ impl App {
                 crate::input_bar::height_for_lines(term.bar_text_lines(&bs.text, w))
             });
             if ai_snap.is_some_and(|s| s.page == crate::ai_presence::Page::AiFullscreen) {
-                // AI 全屏页占位空壳（期 0 组件一）：不画终端网格与快捷键行，
-                // 整屏深紫暗底 + 居中标记文字（合成网格是组件④）
-                term.render_ai_page(buf, w, h);
+                // AI 全屏页（期 0③ 真对话页）：不画终端网格与快捷键行，
+                // 深紫暗底 + 消息行尾随锁定（合成网格美化是期 0⑤）
+                term.render_ai_page(buf, w, h, chat_msgs);
             } else {
                 term.render_into(buf, w, h);
                 // 快捷键行（BAR-017：Rust 自绘覆盖层，画在终端网格之上；
@@ -2049,6 +2118,7 @@ impl App {
             // 光标闪烁相位（聚焦时每半周期翻转要重画——置脏在 poll_input_bar）
             let caret_on = (crate::report::boot_ms() as u64 / crate::input_bar::CARET_BLINK_MS)
                 .is_multiple_of(2);
+            let chat_msgs = self.ai_chat.as_ref().map(|c| c.snap()).unwrap_or_default();
             let mut tg = th.as_ref().map(|a| a.lock().unwrap());
             Self::rasterize(
                 tg.as_deref_mut(),
@@ -2056,6 +2126,7 @@ impl App {
                 self.magnifier_at,
                 self.ime_bottom_px,
                 self.last_ai_snap,
+                &chat_msgs,
                 self.last_bar_snap.as_ref(),
                 caret_on,
                 &mut buf,

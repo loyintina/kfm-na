@@ -12,6 +12,7 @@
 
 use std::sync::Arc;
 
+use crate::ai_chat::AiChatState;
 use crate::ai_presence::AiPresenceState;
 use crate::base::{Ctx, Plugin, ServiceKey};
 
@@ -38,7 +39,12 @@ impl Plugin for AiPresence {
     }
 
     fn provides(&self) -> Vec<ServiceKey> {
-        vec![ServiceKey::of::<AiPresenceState>()]
+        vec![
+            ServiceKey::of::<AiPresenceState>(),
+            // 期 0③：对话消息状态核（AiChatGrid 的 v1 前身，§三 provides）——
+            // AI 页渲染/发送闭包/判卷通道的同源读数
+            ServiceKey::of::<AiChatState>(),
+        ]
     }
 
     /// 无 deps（组件一不碰终端工厂/键盘 inset 服务——inset 由壳层
@@ -48,6 +54,10 @@ impl Plugin for AiPresence {
         let undo = ctx
             .provide::<AiPresenceState>(Arc::new(AiPresenceState::new()))
             .map_err(|e| format!("注册 AI 外显状态核失败: {e:?}"))?;
+        ctx.effect(undo);
+        let undo = ctx
+            .provide::<AiChatState>(Arc::new(AiChatState::new()))
+            .map_err(|e| format!("注册 AI 对话状态核失败: {e:?}"))?;
         ctx.effect(undo);
         Ok(())
     }

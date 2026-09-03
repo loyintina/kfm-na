@@ -338,6 +338,21 @@ trait BrainEndpoint {
   **③档案（2026-08-31，用户拍板沿用 nz dev-flow-case 形式）**：本线
   流程实录+教训沉淀 → `docs/active/插件档案-输入栏.md`（活文档，
   后续修改/事故/调参追加到其「闭环后迭代」节；本文仍记功能账本）。
+  **③真对话（2026-09-03，BAR-054 收官后回主线）**：假对话换真对话——
+  消息状态核 `src/ai_chat.rs`（A 档 6 题：发送入格+全量历史投影/
+  流式混排/半截尾巴/Done 兜底收流/Error 收流成消息/工具事件容忍，
+  变异双咬：收流不清 streaming 咬 4 题、投影漏 assistant 咬 1 题）+
+  换脑接线（echo → DirectApiBrain，配置驱动：私有目录 ai/providers.json
+  + ai/.env 齐则直连，缺/坏回退 echo 上报原因——回退粒度纪律）+
+  AI 页真渲染（纯文本消息行：角色标签行 你=青/AI=浅紫 + wrap_starts
+  折行 + 尾随锁定整行丢旧，滚动/markdown 是期 0④⑤ 的活）+ 置脏
+  代际计数（脑线程流式落格不经触摸，generation 比对补画帧）+
+  gate dump 装帧同步画真消息（AI_CHAT 注册位）。三路 key
+  （2026-09-03 用户拍板）：Kimi 卡默认 kimi-for-coding-highspeed /
+  智谱 coding 套餐 glm-5.3-flash / DeepSeek 官网 deepseek-v4-flash-
+  vision-exp（官网 /models 实查存在，非 opencode 套餐）——
+  `scripts/deploy-ai-config.sh` 抽 kfmv4 配置经 8024 闸推私有目录，
+  key 不进 git 不上日志；模型选择器 = 未来活（期 3）。
 - **期 1 眼睛**：视口快照附上下文。验收 = 问「屏幕上有什么」答得对。
 - **期 2 手**：工具执行注入来源会话。验收 = 让 AI 跑一条命令，终端可见。
 - **期 3 打磨**：server-brain（服务器空间数据源，§四C 契约已就位——**服务器

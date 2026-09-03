@@ -1054,10 +1054,13 @@ impl TermView {
         }
     }
 
-    /// AI 全屏页占位空壳（ai-presence 期 0 组件一；合成网格是组件④）。
-    /// 整屏深紫暗底 + 一行居中标记文字——截图肉眼可分即可（C 档实拍判卷）。
-    /// page=AiFullscreen 时调用方画它代替终端网格
-    pub fn render_ai_page(&self, buf: &mut [u32], buf_w: u32, buf_h: u32) {
+    /// AI 全屏页真对话渲染（期 0③，取代占位空壳；合成网格美化是期 0⑤）。
+    /// 简版纯文本消息行：角色标签行（你=青 / AI=浅紫）+ 正文折行（输入栏
+    /// 同款 wrap_starts 贪心断行），尾随锁定取最后一屏——期 0③ 验收 =
+    /// 真机问答一轮，触摸滚动/markdown-lite 不在本期
+    pub fn render_ai_page(&self, buf: &mut [u32], buf_w: u32, buf_h: u32, msgs: &[(bool, String)]) {
+        // 展示行 = (文字色, 该行的已量宽字符)——measure_items 产物一行一份
+        type Row<'a> = (u32, Vec<(&'a fontdue::Font, char, f32)>);
         if buf_w == 0 || buf_h == 0 {
             return;
         }
@@ -1067,17 +1070,51 @@ impl TermView {
             w: buf_w,
             h: buf_h,
         };
-        const LINE_H: u32 = 72;
-        let cy = (buf_h / 2).saturating_sub(LINE_H / 2);
-        self.draw_label(
-            &mut frame,
-            "AI 页 · 期0 占位",
-            0,
-            buf_w,
-            cy,
-            LINE_H,
-            AI_PAGE_FG,
-        );
+        const MARGIN_X: u32 = 60;
+        const TOP: u32 = 48;
+        const BOTTOM: u32 = 48;
+        const LINE_H: u32 = 64;
+        const PX: f32 = 40.0;
+        if msgs.is_empty() {
+            // 空态：居中提示（占位期的截图判卷点保留——肉眼可分两版）
+            let cy = (buf_h / 2).saturating_sub(LINE_H / 2);
+            self.draw_label(
+                &mut frame,
+                "AI 页 · 发送消息开始对话",
+                0,
+                buf_w,
+                cy,
+                LINE_H,
+                AI_PAGE_FG,
+            );
+            return;
+        }
+        let row_w = buf_w.saturating_sub(MARGIN_X * 2);
+        // draw_items_left 起笔内缩 18，折行可用宽要扣掉
+        let wrap_w = row_w.saturating_sub(18) as f32;
+        // 全部展示行：(fg, 该行的已量宽字符)——角色标签行 + 正文折行
+        let mut rows: Vec<Row> = Vec::new();
+        for (is_user, text) in msgs {
+            let label_fg = if *is_user { MAG_BORDER } else { AI_PAGE_FG };
+            let label = if *is_user { "你" } else { "AI" };
+            rows.push((label_fg, self.measure_items(label, PX)));
+            for body_line in text.split('\n') {
+                let items = self.measure_items(body_line, PX);
+                let widths: Vec<f32> = items.iter().map(|i| i.2).collect();
+                let starts = wrap_starts(&widths, wrap_w);
+                for (li, &st) in starts.iter().enumerate() {
+                    let en = starts.get(li + 1).copied().unwrap_or(items.len());
+                    rows.push((DEFAULT_FG, items[st..en].to_vec()));
+                }
+            }
+        }
+        // 尾随锁定：放不下的旧行整行丢弃（不是半截滚——滚动是期 0④ 的活）
+        let fit = buf_h.saturating_sub(TOP + BOTTOM) / LINE_H;
+        let skip = rows.len().saturating_sub(fit as usize);
+        for (i, (fg, items)) in rows.iter().skip(skip).enumerate() {
+            let y = TOP + i as u32 * LINE_H;
+            self.draw_items_left(&mut frame, items, MARGIN_X, row_w, y, LINE_H, PX, *fg, None);
+        }
     }
 
     /// 雾状光球（D8 拟合定稿 2026-08-30，加法合成）：视图本体在 ui/orb.rs
@@ -1772,9 +1809,9 @@ pub trait TermEmu: Send {
     fn set_cell_size(&mut self, cell_w: u32, cell_h: u32);
     fn render_into(&mut self, buf: &mut [u32], w: u32, h: u32);
     fn render_keybar(&self, buf: &mut [u32], w: u32, h: u32, ime_bottom: u32, mods: u8);
-    /// AI 外显 chrome（ai-presence 期 0 组件一，android_app rasterize 调用方）：
-    /// AI 页占位空壳（page=AiFullscreen 时代替终端网格）/ 雾状光球 sprite
-    fn render_ai_page(&self, buf: &mut [u32], w: u32, h: u32);
+    /// AI 外显 chrome（ai-presence，android_app rasterize 调用方）：
+    /// AI 页真对话渲染（page=AiFullscreen 时代替终端网格）/ 雾状光球 sprite
+    fn render_ai_page(&self, buf: &mut [u32], w: u32, h: u32, msgs: &[(bool, String)]);
     /// 全局输入栏 chrome（期 0 组件三，android_app rasterize 调用方）：
     /// 压底紧贴键盘（栏带 = 屏底 - inset - 栏高），任何会话页都画；
     /// sending = 发送钮图标态（▶ ↔ ⏸，跟 AI 运行态硬切）；
@@ -1860,8 +1897,8 @@ impl TermEmu for TermView {
     fn render_keybar(&self, buf: &mut [u32], w: u32, h: u32, ime_bottom: u32, mods: u8) {
         TermView::render_keybar(self, buf, w, h, ime_bottom, mods)
     }
-    fn render_ai_page(&self, buf: &mut [u32], w: u32, h: u32) {
-        TermView::render_ai_page(self, buf, w, h)
+    fn render_ai_page(&self, buf: &mut [u32], w: u32, h: u32, msgs: &[(bool, String)]) {
+        TermView::render_ai_page(self, buf, w, h, msgs)
     }
     fn render_inputbar(
         &self,

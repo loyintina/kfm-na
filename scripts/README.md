@@ -28,6 +28,8 @@
 - `build-on-phone.sh` — 手机编译回路:服务器推 master,手机本地编
   APK + 调安装器。
 - `deploy-phone.sh` — 送包到手机并调起安装器(`--build` 先打包再送)。
+- `deploy-ai-config.sh` — 三路 key 配置(Kimi 默认/智谱/DeepSeek 官网)
+  抽自服务器 kfmv4,经 8024 闸推 na 私有目录 ai/(key 不进 git)。
 - `font-bake.py` — 字体烘焙管线(子集化/借形/monoify)。
 
 ## 热更回路(只改核心 .so 时,日常主力)

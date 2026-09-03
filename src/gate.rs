@@ -129,9 +129,10 @@ pub fn dump_now(dir: &str) {
             crate::input_bar::height_for_lines(t.bar_text_lines(&bs.text, w))
         });
         if ai_page {
-            // 与前台 rasterize 同一分支规则：AI 页 = 占位空壳盖掉终端网格
-            // （AI 页不画快捷键行，同前台）
-            t.render_ai_page(&mut buf, w, h);
+            // 与前台 rasterize 同一分支规则：AI 页 = 真对话消息盖掉终端网格
+            // （AI 页不画快捷键行，同前台）；消息读 AI_CHAT 注册位（D9 同源）
+            let msgs = ai_chat_handle().map(|c| c.snap()).unwrap_or_default();
+            t.render_ai_page(&mut buf, w, h, &msgs);
         } else {
             t.render_into(&mut buf, w, h);
             // 快捷键行：前台同规则 inset 叠输入栏当前带高；修饰位无共享态按 0 画
@@ -1329,6 +1330,19 @@ static AI_PRESENCE: Mutex<Option<Arc<crate::ai_presence::AiPresenceState>>> = Mu
 /// 登记 AI 外显状态核(android_app init_terminal 装插件后调一次)
 pub fn register_ai_presence(ai: &Arc<crate::ai_presence::AiPresenceState>) {
     *AI_PRESENCE.lock().unwrap() = Some(ai.clone());
+}
+
+/// AI 对话状态核服务句柄（期 0③；dump 装帧画真消息的同源读数）
+static AI_CHAT: Mutex<Option<Arc<crate::ai_chat::AiChatState>>> = Mutex::new(None);
+
+/// 登记 AI 对话状态核(android_app init_terminal 装插件后调一次)
+pub fn register_ai_chat(chat: &Arc<crate::ai_chat::AiChatState>) {
+    *AI_CHAT.lock().unwrap() = Some(chat.clone());
+}
+
+/// 取句柄(owned Arc,借用即还);未登记 = None
+fn ai_chat_handle() -> Option<Arc<crate::ai_chat::AiChatState>> {
+    AI_CHAT.lock().unwrap().clone()
 }
 
 /// 取句柄(owned Arc,借用即还——同 GATE_ROUTER 套路);未登记 = None

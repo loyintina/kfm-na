@@ -112,6 +112,9 @@ fn spec_离屏倒帧_渲染到dump全链路() {
 /// 通道（事件循环叫不醒，实拍验证过）。登记缺失/尺寸为零时不许倒
 #[test]
 fn spec_后台值守_dump_now走注册终端() {
+    // 碰 DUMP_WH/DUMP_TERM 全局账的考题都得串行（BAR-057 教训；
+    // 期 0③ 起又添 spec_dump装帧 同场——不锁就是尺寸账互踩）
+    let _g = PUMP_LOCK.lock().unwrap();
     use kfm_na::gate::{dump_now, note_frame_size, register_dump_term};
     use kfm_na::termview::{CELL_H, CELL_W, TermEmu, TermView};
     use std::sync::{Arc, Mutex};
@@ -161,6 +164,80 @@ fn spec_后台值守_dump_now走注册终端() {
     });
     assert!(has_glyph, "喂了 ok 的终端倒出来必须有字形像素");
     std::fs::remove_dir_all(&dir).ok();
+}
+
+/// dump 装帧对拍（期 0③）：AI 全屏页倒出来的必须是**真消息**不是占位
+/// 空壳——值守线程读 AI_CHAT 注册位（D9 同源：前台 rasterize 与后台
+/// 装帧同一份 AiChatState）。消息区（顶部边距起）无字 = 装帧断了眼
+#[test]
+fn spec_dump装帧_ai页画真消息() {
+    let _g = PUMP_LOCK.lock().unwrap();
+    use kfm_na::ai_chat::AiChatState;
+    use kfm_na::ai_presence::AiPresenceState;
+    use kfm_na::gate::{
+        dump_now, note_frame_size, register_ai_chat, register_ai_presence, register_dump_term,
+    };
+    use kfm_na::termview::{CELL_H, CELL_W, TermEmu, TermView};
+    use std::sync::{Arc, Mutex};
+
+    let font_path = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+        "/data/data/com.termux/files/usr/share/fonts/TTF/DejaVuSansMono.ttf",
+    ]
+    .iter()
+    .find(|p| std::path::Path::new(p).exists())
+    .expect("host 测试字体缺失");
+    let font = fontdue::Font::from_bytes(
+        std::fs::read(font_path).unwrap(),
+        fontdue::FontSettings::default(),
+    )
+    .unwrap();
+    let tv = TermView::new(font, None, 8, 2, CELL_W, CELL_H);
+    let term: Arc<Mutex<Box<dyn TermEmu>>> = Arc::new(Mutex::new(Box::new(tv)));
+    register_dump_term(&term);
+
+    // AI 全屏 + 一条真消息（ASCII——host 无 CJK 备用字体，tofu 会跳过）
+    let ai = Arc::new(AiPresenceState::new());
+    ai.set_bounds(800, 600, 0);
+    ai.tap_orb(); // terminal → AiFullscreen
+    register_ai_presence(&ai);
+    let chat = Arc::new(AiChatState::new());
+    chat.user_send("dump-frame-token");
+    register_ai_chat(&chat);
+
+    let (w, h) = (800u32, 600u32);
+    let dir = std::env::temp_dir().join(format!("kfm-shot6-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let d = dir.to_str().unwrap();
+    note_frame_size(w, h);
+    std::fs::write(dir.join("shot-req"), b"").unwrap();
+    dump_now(d);
+    let raw = std::fs::read(dir.join("shot.rgb")).unwrap();
+    assert_eq!(raw.len(), (w * h * 4) as usize);
+    // 消息区 = y 48..180 × x 60..500（角色标签行+正文行；避开右下光球晕）
+    let mut has_text = false;
+    for y in 48..180u32 {
+        for x in 60..500u32 {
+            let i = ((y * w + x) * 4) as usize;
+            let px = (raw[i + 2] as u32) << 16 | (raw[i + 1] as u32) << 8 | raw[i] as u32;
+            if px != kfm_na::termview::AI_PAGE_BG {
+                has_text = true;
+                break;
+            }
+        }
+        if has_text {
+            break;
+        }
+    }
+    assert!(
+        has_text,
+        "dump 装帧必须画真消息——AI_CHAT 注册位同源读数断了"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+    // 静态复位（同场考题互不累）：page 回终端、尺寸账归零——
+    // spec_后台值守 的「没尺寸记账」前提就是被我打破的（合跑实拍）
+    ai.tap_orb();
+    note_frame_size(0, 0);
 }
 
 // ---------- keys-in 注入通道考题（2026-08-24，三件套之动手） ----------

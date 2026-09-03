@@ -432,17 +432,17 @@ fn spec_stats_ai_presence字段族() {
 // ---- B 档冒烟钉：chrome 真画进帧缓冲 ----
 
 #[test]
-fn spec_冒烟_ai页占位画紫底与文字() {
+fn spec_冒烟_ai页空态画紫底与提示() {
     let (tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必须建得成");
     let (w, h) = (400u32, 300u32);
     let mut buf = vec![0u32; (w * h) as usize];
-    tv.render_ai_page(&mut buf, w, h);
+    tv.render_ai_page(&mut buf, w, h, &[]);
     assert_eq!(buf[0], kfm_na::termview::AI_PAGE_BG, "整屏深紫暗底");
-    // 居中标记文字：屏心一带必须出现非底色的文字像素（浅紫 AI_PAGE_FG）
+    // 空态居中提示：屏心一带必须出现非底色的文字像素（浅紫 AI_PAGE_FG）
     let mid = &buf[((h / 2 - 20) * w) as usize..((h / 2 + 20) * w) as usize];
     assert!(
         mid.iter().any(|&p| p != kfm_na::termview::AI_PAGE_BG),
-        "标记文字必须真画出来"
+        "空态提示必须真画出来"
     );
     assert!(
         mid.iter().any(|&p| {
@@ -450,6 +450,30 @@ fn spec_冒烟_ai页占位画紫底与文字() {
                 && (p >> 16) & 0xFF > (kfm_na::termview::AI_PAGE_BG >> 16) & 0xFF
         }),
         "文字色必须亮于底色（AI_PAGE_FG 方向）"
+    );
+}
+
+#[test]
+fn spec_冒烟_ai页真消息行画在顶部区() {
+    // 期 0③ 真对话页：消息行从顶部边距起画（尾随锁定前的短对话形态）——
+    // 顶部区必须出现文字像素，屏心反而该是纯底（与空态提示分居两区）
+    let (tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必须建得成");
+    let (w, h) = (800u32, 600u32);
+    let mut buf = vec![0u32; (w * h) as usize];
+    let msgs = vec![
+        (true, "你好".to_string()),
+        (false, "你好，有什么可以帮你？".to_string()),
+    ];
+    tv.render_ai_page(&mut buf, w, h, &msgs);
+    let top = &buf[(48 * w) as usize..(180 * w) as usize];
+    assert!(
+        top.iter().any(|&p| p != kfm_na::termview::AI_PAGE_BG),
+        "消息行必须真画在顶部区"
+    );
+    let mid = &buf[((h / 2) * w) as usize..((h / 2 + 40) * w) as usize];
+    assert!(
+        mid.iter().all(|&p| p == kfm_na::termview::AI_PAGE_BG),
+        "短对话屏心必须是纯底（尾随锁定前不会有字）"
     );
 }
 
