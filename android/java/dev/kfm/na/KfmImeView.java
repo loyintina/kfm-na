@@ -101,6 +101,17 @@ public class KfmImeView extends View {
         }
     }
 
+    // 当前选区文本直问 Rust 状态核（BAR-054：输入法按「剪切」前先
+    // getSelectedText() 探选区，默认实现不认我们的状态核恒返回空，
+    // 输入法判「无物可剪」根本不发 cut 事件——工具栏剪切哑火根源）
+    static String selectedText() {
+        try {
+            return nativeSelectedText();
+        } catch (Throwable t) {
+            return null; // 吞：旧 .so 无此符号，哑火返回无选区
+        }
+    }
+
     @Override
     public boolean onCheckIsTextEditor() {
         return true; // BAR-009：声明「我是文本编辑器」，IMM 才肯弹键盘
@@ -133,6 +144,9 @@ public class KfmImeView extends View {
     static native void nativeComposingText(String text);
     static native void nativeFinishComposing();
     static native void nativeContextMenuAction(String action);
+
+    // BAR-054：选区文本直问状态核（对侧 src/ime_bridge.rs），无选区/未登记 = null
+    static native String nativeSelectedText();
 
     // 链路探针：Java 侧断点直送飞鸽传书（B 档平台胶水，判卷 = 上报行）
     static native void nativeImeLog(String msg);

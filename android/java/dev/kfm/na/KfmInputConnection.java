@@ -75,6 +75,14 @@ final class KfmInputConnection extends BaseInputConnection {
     }
 
     @Override
+    public CharSequence getSelectedText(int flags) {
+        // BAR-054：输入法工具栏按「剪切」前先探选区，默认实现不认
+        // Rust 状态核恒返回空 → 输入法判「无物可剪」不发 cut 事件。
+        // 直问状态核拿真实选区；无选区返回 null（契约：无选区 = null）
+        return KfmImeView.selectedText();
+    }
+
+    @Override
     public boolean performContextMenuAction(int id) {
         // 输入法工具栏的复制/剪切/粘贴/全选（2026-09-02 曲线救国：
         // 系统剪贴板被 ROM 锁死，这些命令直送 Rust 状态核，不走系统剪贴板）

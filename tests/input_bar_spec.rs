@@ -5,7 +5,7 @@
 //! 几何命中（文本区 vs 发送钮 vs 栏外，键盘 inset 跟手）。
 //! 纪律：先验证红，答案生成到绿，绿后变异抽检。本文件是考题，生成器不许改。
 
-use kfm_na::input_bar::{BarHit, HEIGHT_PX, InputBarState, hit, in_bar};
+use kfm_na::input_bar::{BarHit, HEIGHT_PX, InputBarState, SelAnchor, clamp_to_field, hit, in_bar};
 
 // ========== 焦点二态 ==========
 
@@ -436,19 +436,115 @@ fn selection_enter_clears_composing() {
     assert!(snap.composing.is_empty(), "组合态清空");
 }
 
+// BAR-056 2026-09-03 用户实机：把一端的拖拽柄拖过另一端（上面那行的柄
+// 拖到下面那行柄的下方）→ 整个选择框消失。病灶：set_selection_start/end
+// 旧钳制语义——越过对端即被钳死在原地，选区压成零宽不可见。契约：换锚
+// （Android/浏览器标准）——拖过界两锚交换，旧对端定身为新端点，指头改持
+// 新锚继续拖；贴合（pos == 对端）不算交叉，零宽停留不换锚。程序侧双端
+// 同设走 set_selection_span 原子落，不被换锚截胡。
 #[test]
-fn selection_anchors_do_not_cross() {
+fn spec_bar056_拖锚交叉换锚() {
     let bar = InputBarState::new();
-    bar.insert_text("一二三四五");
+    bar.insert_text("一二三四五六七八九十");
     bar.enter_selection(2);
-    bar.set_selection_end(4);
-    assert_eq!(bar.snap().selection_end, 4, "右锚点扩展");
-    bar.set_selection_start(5); // 试图越过右锚点
-    assert_eq!(bar.snap().selection_start, 4, "左锚点被钳在右锚点");
-    bar.set_selection_start(1);
-    assert_eq!(bar.snap().selection_start, 1, "左锚点正常收缩");
-    bar.set_selection_end(0); // 试图越过左锚点
-    assert_eq!(bar.snap().selection_end, 1, "右锚点被钳在左锚点");
+    bar.set_selection_end(4); // 选区 (2,4)，指头持右锚
+
+    // 右锚向左拖过左锚：换锚——旧左锚(2)定身为新右锚，指头改持新左锚
+    let held = bar.set_selection_end(1);
+    let snap = bar.snap();
+    assert_eq!(
+        (snap.selection_start, snap.selection_end),
+        (1, 2),
+        "右锚左越 → 换锚成 (1,2)，不压零宽"
+    );
+    assert_eq!(held, SelAnchor::Left, "指头改持左锚");
+
+    // 继续向左拖：新左锚正常收缩，不换锚
+    let held = bar.set_selection_start(0);
+    assert_eq!(held, SelAnchor::Left, "未交叉方向不变");
+    assert_eq!(
+        (bar.snap().selection_start, bar.snap().selection_end),
+        (0, 2),
+        "新左锚正常收缩"
+    );
+
+    // 左锚向右拖过右锚：换回——旧右锚(2)定身为新左锚，指头改持新右锚
+    let held = bar.set_selection_start(5);
+    let snap = bar.snap();
+    assert_eq!(
+        (snap.selection_start, snap.selection_end),
+        (2, 5),
+        "左锚右越 → 换锚成 (2,5)"
+    );
+    assert_eq!(held, SelAnchor::Right, "指头改持右锚");
+
+    // 不交叉的扩展/收缩：原语义不变
+    bar.set_selection_end(8);
+    assert_eq!(
+        (bar.snap().selection_start, bar.snap().selection_end),
+        (2, 8),
+        "右锚正常扩展"
+    );
+    let held = bar.set_selection_start(3);
+    assert_eq!(held, SelAnchor::Left);
+    assert_eq!(
+        (bar.snap().selection_start, bar.snap().selection_end),
+        (3, 8),
+        "左锚正常收缩"
+    );
+
+    // 贴合（pos == 对端）不触发换锚：零宽停留，方向不变
+    let held = bar.set_selection_end(3);
+    let snap = bar.snap();
+    assert_eq!(
+        (snap.selection_start, snap.selection_end),
+        (3, 3),
+        "贴合 = 零宽停留"
+    );
+    assert_eq!(held, SelAnchor::Right, "贴合不换锚");
+}
+
+#[test]
+fn spec_bar056_程序侧双端同设不换锚() {
+    let bar = InputBarState::new();
+    bar.insert_text("abcdefghij");
+    bar.enter_selection(5);
+    bar.set_selection_end(8); // (5,8)
+    // 枢轴扩选要落 (0,3)：若拆成 set_start(0)+set_end(3) 两发，第二发
+    // 3 < 5 触发换锚会错成 (3,8)；原子设必须精准落 (0,3)
+    bar.set_selection_span(0, 3);
+    assert_eq!(
+        (bar.snap().selection_start, bar.snap().selection_end),
+        (0, 3),
+        "双端原子设不被换锚截胡"
+    );
+    // 逆序入参自动理序
+    bar.set_selection_span(7, 2);
+    assert_eq!(
+        (bar.snap().selection_start, bar.snap().selection_end),
+        (2, 7),
+        "逆序入参理序"
+    );
+}
+
+// BAR-055 2026-09-03 用户实机：抓拖拽柄时在同一行里上下挪动就「断触」。
+// 病灶：拖动连续态沿用点按的严格命中尺（bar_field_char_at），指头纵坐标
+// 一出文本框（抓柄时指心本就在框下沿外）返回 None → 选区冻结，挪回界内
+// 又复活 = 断触感。契约：拖动连续态专用 clamp_to_field 钳制尺——框内
+// 原样、框外按最近边；点按/命中判定仍用严格尺（钳制尺会误中，禁混用）。
+#[test]
+fn spec_bar055_拖动钳制尺() {
+    // 框: left=60 top=100 w=200 h=50 → x∈[60,259] y∈[100,149]
+    let (x, y) = clamp_to_field(150.0, 120.0, 60, 100, 200, 50);
+    assert_eq!((x, y), (150.0, 120.0), "框内原样");
+    let (_x, y) = clamp_to_field(150.0, 500.0, 60, 100, 200, 50);
+    assert_eq!(y, 149.0, "下出界钳到下沿内（抓柄指心在框下）");
+    let (_x, y) = clamp_to_field(150.0, -30.0, 60, 100, 200, 50);
+    assert_eq!(y, 100.0, "上出界钳到顶行");
+    let (x, _y) = clamp_to_field(0.0, 120.0, 60, 100, 200, 50);
+    assert_eq!(x, 60.0, "左出界钳到左缘");
+    let (x, _y) = clamp_to_field(9999.0, 120.0, 60, 100, 200, 50);
+    assert_eq!(x, 259.0, "右出界钳到右缘");
 }
 
 #[test]

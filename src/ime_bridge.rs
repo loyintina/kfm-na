@@ -122,6 +122,25 @@ pub extern "system" fn Java_dev_kfm_na_KfmImeView_nativeContextMenuAction(
     .resolve_with::<LogContextErrorAndDefault, _>(|| "in nativeContextMenuAction".to_string());
 }
 
+/// dev.kfm.na.KfmImeView.nativeSelectedText —— 当前选区文本直答（BAR-054）：
+/// 输入法按「剪切」前先 getSelectedText() 探选区，答空它就不发 cut。
+/// 无选区/栏未登记/出错 = null（JString::default()；哑火返回无选区，
+/// 同 Java 侧 try/catch 契约）。
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_kfm_na_KfmImeView_nativeSelectedText<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass,
+) -> JString<'local> {
+    env.with_env(|env| -> jni::errors::Result<JString<'local>> {
+        let sel = crate::gate::input_bar_handle().and_then(|bar| bar.selected_text());
+        match sel {
+            Some(text) => Ok(env.new_string(text)?),
+            None => Ok(JString::default()),
+        }
+    })
+    .resolve_with::<LogContextErrorAndDefault, _>(|| "in nativeSelectedText".to_string())
+}
+
 /// dev.kfm.na.KfmImeView.nativeImeLog —— Java 侧链路探针直送飞鸽传书。
 /// IME 的生死在 IMM 与焦点之间（BAR-009 就死在 IMM 拒弹），Rust 侧看不见，
 /// 让 Java 侧断点自己开口

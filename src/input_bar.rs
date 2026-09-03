@@ -90,8 +90,9 @@ pub fn word_span_at(text: &str, pos: usize) -> Option<(usize, usize)> {
 }
 
 /// 词枢轴拖动扩选（BAR-053）：词恒整选 + 扩向指头一侧；指头入词内 →
-/// 回词本体（同次拖动可缩回）。产出恒 start ≤ pivot.0 ≤ pivot.1 ≤ end，
-/// 与 set_selection_start/end 的钳制方向兼容（不会误钳）。
+/// 回词本体（同次拖动可缩回）。产出恒 start ≤ pivot.0 ≤ pivot.1 ≤ end。
+/// 2026-09-03 BAR-056：调用方须用 set_selection_span 落跨度（双端原子），
+/// 不能拆成 set_selection_start/end 两发——换锚语义会截胡第二发。
 pub fn pivot_drag_span(pivot: (usize, usize), idx: usize) -> (usize, usize) {
     let (ps, pe) = pivot;
     if idx < ps {
@@ -180,6 +181,19 @@ pub fn in_bar(y: f64, win_h: u32, ime_bottom: u32, bar_h: u32) -> bool {
         return false;
     };
     y >= f64::from(top) && y < f64::from(bottom)
+}
+
+/// 窗口坐标钳进文本框矩形（拖动态专用，BAR-055）：框内原样；框外按
+/// 最近边——拖锚点/枢轴扩选时指头滑出框界（上下飘、抓柄时指心在框
+/// 下沿外）按最近行列换算，不再 None 冻结断触。点按/命中判定不许用
+/// 这把钳制尺（会误中），只准拖动连续态用。
+pub fn clamp_to_field(x: f64, y: f64, left: u32, top: u32, w: u32, h: u32) -> (f64, f64) {
+    let right = f64::from(left.saturating_add(w).saturating_sub(1));
+    let bottom = f64::from(top.saturating_add(h).saturating_sub(1));
+    (
+        x.clamp(f64::from(left), right),
+        y.clamp(f64::from(top), bottom),
+    )
 }
 
 /// 窗口坐标 → 命中部位；栏外（上方终端区/被键盘盖住的屏底）→ None。
@@ -345,29 +359,65 @@ impl InputBarState {
         Some((s, e))
     }
 
-    /// 设置左锚点；禁止越过右锚点
-    pub fn set_selection_start(&self, pos: usize) {
+    /// 拖动左锚点（触摸拖柄专用，BAR-056 换锚语义）：拖过右锚点不钳死，
+    /// 两锚交换——原右锚变新左锚，指头继续拖着新右锚走（Android/浏览器
+    /// 标准行为；旧钳制语义会把选区压成零宽，实拍「选择框消失」）。
+    /// 返回指头此刻持有的锚（未交叉=Left，交叉换锚=Right），调用方据此
+    /// 更新拖动状态。非选择态 = 无操作（返回 None 保持调用方原锚）。
+    pub fn set_selection_start(&self, pos: usize) -> SelAnchor {
         let mut g = self.inner.lock().unwrap();
         if !g.selecting {
-            return;
+            return SelAnchor::Left;
         }
         let len = g.text.chars().count();
         let pos = pos.min(len);
-        g.selection_start = pos.min(g.selection_end);
-        g.sel_anchor = SelAnchor::Left;
+        if pos > g.selection_end {
+            // 交叉：换锚——旧右锚定身为新左锚，指头改持新右锚
+            g.selection_start = g.selection_end;
+            g.selection_end = pos;
+            g.sel_anchor = SelAnchor::Right;
+        } else {
+            g.selection_start = pos;
+            g.sel_anchor = SelAnchor::Left;
+        }
         g.follow = true;
+        g.sel_anchor
     }
 
-    /// 设置右锚点；禁止越过左锚点
-    pub fn set_selection_end(&self, pos: usize) {
+    /// 拖动右锚点（触摸拖柄专用，BAR-056 换锚语义）：拖过左锚点两锚
+    /// 交换，指头改持新左锚。语义与返回值约定同 set_selection_start。
+    pub fn set_selection_end(&self, pos: usize) -> SelAnchor {
+        let mut g = self.inner.lock().unwrap();
+        if !g.selecting {
+            return SelAnchor::Right;
+        }
+        let len = g.text.chars().count();
+        let pos = pos.min(len);
+        if pos < g.selection_start {
+            // 交叉：换锚——旧左锚定身为新右锚，指头改持新左锚
+            g.selection_end = g.selection_start;
+            g.selection_start = pos;
+            g.sel_anchor = SelAnchor::Left;
+        } else {
+            g.selection_end = pos;
+            g.sel_anchor = SelAnchor::Right;
+        }
+        g.follow = true;
+        g.sel_anchor
+    }
+
+    /// 程序侧原子设选区（枢轴扩选/闸门注入用）：恒 start ≤ end 直接落，
+    /// 不走 BAR-056 换锚——换锚是单锚拖动的交互语义，双端同设被它截胡
+    /// 会得到错误跨度（钉 spec_bar056_程序侧双端同设不换锚）。
+    pub fn set_selection_span(&self, start: usize, end: usize) {
         let mut g = self.inner.lock().unwrap();
         if !g.selecting {
             return;
         }
         let len = g.text.chars().count();
-        let pos = pos.min(len);
-        g.selection_end = pos.max(g.selection_start);
-        g.sel_anchor = SelAnchor::Right;
+        let (s, e) = (start.min(end), start.max(end));
+        g.selection_start = s.min(len);
+        g.selection_end = e.min(len);
         g.follow = true;
     }
 

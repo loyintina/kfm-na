@@ -1473,7 +1473,8 @@ pub(crate) fn register_android_app(app: winit::platform::android::activity::Andr
 }
 
 /// 取句柄(owned Arc,借用即还);未登记 = None
-fn input_bar_handle() -> Option<Arc<crate::input_bar::InputBarState>> {
+/// pub(crate)：ime_bridge 的 nativeSelectedText（BAR-054）同用这一格
+pub(crate) fn input_bar_handle() -> Option<Arc<crate::input_bar::InputBarState>> {
     INPUT_BAR.lock().unwrap().clone()
 }
 

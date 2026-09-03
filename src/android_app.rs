@@ -463,18 +463,18 @@ impl App {
                     bt.last_x = x;
                     bt.last_y = y;
                     if let Some(anchor) = bt.anchor {
-                        // 拖动锚点：直接换算 char 下标并更新选区
-                        if let Some(idx) = self.bar_field_char_at(x, y)
+                        // 拖动锚点：钳制版换算 char 下标（BAR-055 出界不冻结），
+                        // 换锚语义 setter 回传指头和前持有的锚（BAR-056 交叉不断）
+                        if let Some(idx) = self.bar_field_char_at_clamped(x, y)
                             && let Some(bar) = &self.input_bar
                         {
-                            match anchor {
-                                crate::input_bar::SelAnchor::Left => {
-                                    bar.set_selection_start(idx);
-                                }
-                                crate::input_bar::SelAnchor::Right => {
-                                    bar.set_selection_end(idx);
-                                }
-                                _ => {}
+                            let held = match anchor {
+                                crate::input_bar::SelAnchor::Left => bar.set_selection_start(idx),
+                                crate::input_bar::SelAnchor::Right => bar.set_selection_end(idx),
+                                _ => anchor,
+                            };
+                            if let Some(bt) = self.inputbar_touch.as_mut() {
+                                bt.anchor = Some(held);
                             }
                         }
                         // 拖到 field 上下边缘自动滚屏
@@ -484,13 +484,13 @@ impl App {
                         && let Some(pivot) = bt.sel_pivot
                     {
                         // 长按后滑指 = 词枢轴扩选（BAR-053）：词恒整选，
-                        // 扩向指头一侧；与锚点拖动同享边缘自动滚屏
-                        if let Some(idx) = self.bar_field_char_at(x, y)
+                        // 扩向指头一侧；与锚点拖动同享边缘自动滚屏。
+                        // 双端原子落跨度（BAR-056：拆两发会被换锚截胡）
+                        if let Some(idx) = self.bar_field_char_at_clamped(x, y)
                             && let Some(bar) = &self.input_bar
                         {
                             let (s, e) = crate::input_bar::pivot_drag_span(pivot, idx);
-                            bar.set_selection_start(s);
-                            bar.set_selection_end(e);
+                            bar.set_selection_span(s, e);
                         }
                         self.bar_edge_autoscroll(y, field_h, view_h);
                         self.dirty = true;
@@ -953,6 +953,39 @@ impl App {
         let snap = bar.snap();
         let x_local = x - f64::from(field_left + 40);
         let y_local = y - f64::from(field_top);
+        Some(
+            term.lock()
+                .unwrap()
+                .bar_cursor_at(&snap, w, x_local, y_local),
+        )
+    }
+
+    /// bar_field_char_at 的拖动连续态钳制版（BAR-055）：指头滑出文本框
+    /// 上下沿/抓柄拖到框外时按最近边换算（clamp_to_field），不再 None
+    /// 冻结——旧尺在拖动中指头一越界就停更，实拍「上下挪一下断触」。
+    /// 仅拖锚点/枢轴扩选的 Moved 连续态用；点按/命中判定仍用严格版。
+    fn bar_field_char_at_clamped(&self, x: f64, y: f64) -> Option<usize> {
+        let w = self.window.as_ref()?.inner_size().width;
+        let h = self.window.as_ref()?.inner_size().height;
+        let bar_h = self.cur_bar_h();
+        let ime_bottom = self.ime_bottom_px;
+        let top = h.checked_sub(ime_bottom)?.checked_sub(bar_h)?;
+        let field_top = top + 32;
+        let field_h = bar_h.checked_sub(64)?;
+        let field_left = crate::input_bar::MARGIN_X_PX;
+        let send_left = w
+            .checked_sub(crate::input_bar::MARGIN_X_PX)?
+            .checked_sub(crate::input_bar::SEND_W_PX)?;
+        let field_w = send_left
+            .checked_sub(crate::input_bar::GAP_PX)?
+            .checked_sub(field_left)?;
+        let (cx, cy) =
+            crate::input_bar::clamp_to_field(x, y, field_left, field_top, field_w, field_h);
+        let bar = self.input_bar.as_ref()?;
+        let term = self.term_handle()?;
+        let snap = bar.snap();
+        let x_local = cx - f64::from(field_left + 40);
+        let y_local = cy - f64::from(field_top);
         Some(
             term.lock()
                 .unwrap()
