@@ -1595,14 +1595,19 @@ impl Frame<'_> {
         *dst = blend(fg, *dst, a);
     }
 
-    /// 顶点向上的实心三角（定位柄上尖；硬边与 ▶ 同风格，界内裁剪）
-    pub(crate) fn fill_triangle_up(&mut self, cx: u32, y0: u32, w: u32, h: u32, color: u32) {
-        let half_w = (w / 2) as i64;
-        let (cx, y0) = (i64::from(cx), i64::from(y0));
+    /// 顶点向上的实心三角（定位柄/选择锚点上尖；硬边与 ▶ 同风格，界内裁剪）。
+    /// BAR-051：锚定语义从「cx 对称轴 + 闭区间」改「左缘 x0 + 精确宽度」——
+    /// 底行恰好 w 像素 [x0, x0+w)，与 fill_rect(x0, _, w, _) 同锚，柄形接缝
+    /// 与方块平直对接零偏差。旧语义底行 2*(w/2)+1 奇数宽，与偶数宽方块对缝
+    /// 恒偏半像素且多出的一列在右侧（用户放大实拍：三角比方块偏右约 1px）。
+    pub(crate) fn fill_triangle_up(&mut self, x0: u32, y0: u32, w: u32, h: u32, color: u32) {
+        let half_w = i64::from(w) / 2;
+        let xc = i64::from(x0) + half_w;
+        let y0 = i64::from(y0);
         for row in 0..i64::from(h) {
-            // 逐行线性展开：顶行一点，底行满宽
+            // 逐行线性展开：顶行收窄，底行满宽（半开区间保精确宽对接）
             let half = half_w * (row + 1) / i64::from(h);
-            for x in (cx - half)..=(cx + half) {
+            for x in (xc - half)..(xc + half) {
                 let y = y0 + row;
                 if x >= 0 && y >= 0 && x < i64::from(self.w) && y < i64::from(self.h) {
                     self.buf[(y * i64::from(self.w) + x) as usize] = color;

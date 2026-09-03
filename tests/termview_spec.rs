@@ -1705,6 +1705,114 @@ fn spec_bar050_定位柄接缝无凹口() {
     }
 }
 
+// BAR-051 2026-09-03 用户放大实拍再指认两条柄形对位：①选择锚点三角比下方
+// 方块偏右约 1px——fill_triangle_up 旧语义以 cx 为对称轴画闭区间（底行
+// 2*(w/2)+1 奇数宽），与偶数宽 fill_rect 方块对缝必差半像素，多出的那一
+// 列恒在右侧；②定位柄 BAR-050 平顶后三角底边(37)窄于方块边长(44)，接缝
+// 由凹变凸。修复：光栅改左缘 x0+精确宽度语义（底行恰好 [x0,x0+w)，与
+// fill_rect 同锚），定位柄三角加宽 36→44 与方块同边长。
+// 判卷：三角最底可见行（方块顶上一行）x 跨度中心 ≡ 方块行 x 跨度中心；
+// 定位柄加判三角底行宽 ≥36（旧 33 必红）。
+#[test]
+fn spec_bar051_锚点三角与方块同轴() {
+    let (tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必成");
+    let (w, h) = (600u32, 1200u32);
+    let snap = kfm_na::input_bar::BarSnap {
+        text: "一二三四五六七八九十".to_string(),
+        focused: true,
+        lines: 1,
+        cursor: 0,
+        handle: false,
+        composing: String::new(),
+        scroll_px: 0,
+        follow: true,
+        selecting: true,
+        selection_start: 0,
+        selection_end: 2,
+    };
+    let geo = tv
+        .bar_selection_geometry(&snap, w, h, 0)
+        .expect("选择态几何必须存在");
+    let mut buf = vec![0u32; (w * h) as usize];
+    tv.render_inputbar(&mut buf, w, h, 0, &snap, false, false);
+    // 窗内柄色像素的 x 跨度 [lo,hi]（窗 = 锚点中心 ±20，同 spec_bar050）
+    let span = |y: u32, x0: u32, x1: u32| -> (u32, u32) {
+        let (mut lo, mut hi) = (u32::MAX, 0);
+        for x in x0..x1 {
+            if buf[(y * w + x) as usize] == 0x0000_D4FF {
+                lo = lo.min(x);
+                hi = hi.max(x);
+            }
+        }
+        (lo, hi)
+    };
+    for (name, anchor) in [("左", geo.left_anchor), ("右", geo.right_anchor)] {
+        let (ax, cy) = anchor;
+        let top_row = (cy - 7.0) as u32; // 方块顶边（同 spec_bar050 几何推导）
+        let x0 = (ax - 20.0).max(0.0) as u32;
+        let x1 = ((ax + 20.0) as u32).min(w);
+        // 三角最底可见行 = 方块顶上一行；方块参照行取平顶带中位
+        let (tlo, thi) = span(top_row - 1, x0, x1);
+        let (slo, shi) = span(top_row + 4, x0, x1);
+        assert!(
+            tlo + thi == slo + shi,
+            "{name}锚点三角与方块必须同轴：三角行 [{tlo},{thi}] 与方块行 [{slo},{shi}] 中心差 {}px",
+            (tlo + thi).abs_diff(slo + shi)
+        );
+    }
+}
+
+// BAR-051 ②号对位：定位柄三角底边加宽至与方块同边长（44）且同轴。
+// 判卷：方块顶上一行（三角最底可见行）宽 ≥36 且跨度中心 ≡ 方块行中心。
+#[test]
+fn spec_bar051_定位柄三角与方块同宽同轴() {
+    let (tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必成");
+    let (w, h) = (600u32, 1200u32);
+    let snap = kfm_na::input_bar::BarSnap {
+        text: "一二三四五六七八九十".to_string(),
+        focused: true,
+        lines: 1,
+        cursor: 5, // 中段光标，定位柄落光标行底
+        handle: true,
+        composing: String::new(),
+        scroll_px: 0,
+        follow: true,
+        selecting: false,
+        selection_start: 0,
+        selection_end: 0,
+    };
+    let mut buf = vec![0u32; (w * h) as usize];
+    tv.render_inputbar(&mut buf, w, h, 0, &snap, false, false);
+    const HANDLE: u32 = 0x003B_82F6; // SELECT_BG
+    // 定位柄是缓冲里唯一 SELECT_BG 来源（同 spec_bar050 前提）
+    let apex = (0..h)
+        .find(|&y| (0..w).any(|x| buf[(y * w + x) as usize] == HANDLE))
+        .expect("定位柄必现");
+    let span = |y: u32| -> (u32, u32) {
+        let (mut lo, mut hi) = (u32::MAX, 0);
+        for x in 0..w {
+            if buf[(y * w + x) as usize] == HANDLE {
+                lo = lo.min(x);
+                hi = hi.max(x);
+            }
+        }
+        (lo, hi)
+    };
+    // 方块顶 = 尖+16（同 spec_bar050 几何）；三角最底可见行 = 顶上一行
+    let (tlo, thi) = span(apex + 15);
+    let (slo, shi) = span(apex + 20);
+    assert!(
+        thi - tlo + 1 >= 36,
+        "定位柄三角底边必须加宽对接方块：实测 {}px < 36",
+        thi - tlo + 1
+    );
+    assert!(
+        tlo + thi == slo + shi,
+        "定位柄三角与方块必须同轴：三角行 [{tlo},{thi}] 与方块行 [{slo},{shi}] 中心差 {}px",
+        (tlo + thi).abs_diff(slo + shi)
+    );
+}
+
 // BAR-046 2026-09-03 ⑤号迭代回归钉：菜单贴选区上方 12px（原案取选区垂直
 // 中心再 -20，多行选区时菜单浮在半空离选区老远）。判卷：像素扫描菜单
 // 气泡底缘与选区高亮顶缘的垂直间距 = 12±2
