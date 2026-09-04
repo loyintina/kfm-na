@@ -14,6 +14,7 @@ pub mod crash;
 pub mod direct_brain;
 pub mod exec_probe;
 pub mod gate;
+pub mod glyph_atlas;
 pub mod http1;
 pub mod ime_queue;
 pub mod input_bar;
