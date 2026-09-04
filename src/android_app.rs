@@ -170,8 +170,14 @@ struct App {
     health_local: SessHealth,
     health_remote: SessHealth,
     /// 真实软键盘底部 inset（px，JNI 轮询得来，BAR-006）。0 = 未弹/未知。
-    /// 快捷键行的让位是 Rust 常量（keybar::HEIGHT_PX），不进本字段
+    /// 快捷键行的让位是 Rust 常量（keybar::HEIGHT_PX），不进本字段。
+    /// 本字段是「目标值」：终端 resize / pty 永远吃它（resize 抖动红线，
+    /// 不过缝）；chrome（栏带渲染与触摸命中）吃过缝后的 chrome_inset_px
     ime_bottom_px: u32,
+    /// chrome 跟随 inset（px，2026-09-04 键盘 inset 缝的采样值）：
+    /// 输入栏/快捷键行渲染与触摸命中、AI 页视口下沿吃这份——眼手同尺。
+    /// 无 ui-fx 占槽时 == ime_bottom_px（硬切基座）；有占槽 = 弹簧平滑
+    chrome_inset_px: u32,
     /// 上次 JNI 轮询时刻（500ms 节流）
     last_inset_poll: Option<std::time::Instant>,
     /// AndroidApp 句柄（JNI 用；android_main 里 clone 进来）
@@ -298,6 +304,12 @@ impl App {
             .map_or(crate::input_bar::HEIGHT_PX, |b| {
                 crate::input_bar::height_for_lines(b.lines())
             })
+    }
+
+    /// chrome 跟随 inset（眼手同尺：触摸命中与渲染吃同一份采样值）。
+    /// 采样在 draw_frame 每帧写回；无 ui-fx 占槽时 == 真实 inset（硬切）
+    fn chrome_inset(&self) -> u32 {
+        self.chrome_inset_px
     }
 
     /// 闸门触摸注入抽干（通道八）：每圈 about_to_wait 调。Sleep 指令
@@ -428,7 +440,7 @@ impl App {
                 // 带高随行数走（textarea 长高，眼手同尺）
                 let bar_h = self.cur_bar_h();
                 let in_input_bar = self.window.as_ref().is_some_and(|w| {
-                    crate::input_bar::in_bar(y, w.inner_size().height, self.ime_bottom_px, bar_h)
+                    crate::input_bar::in_bar(y, w.inner_size().height, self.chrome_inset(), bar_h)
                 });
                 if in_input_bar {
                     // 选择态下先检查是否按在锚点热区上（锚点命中优先级最高）
@@ -468,7 +480,7 @@ impl App {
                 // 否则键盘弹起时行带浮在 inset 上方，这里却认屏底。
                 // 期 0 组件三：行上移一层（输入栏压底），有效 inset + 当前栏高
                 let in_bar = self.window.as_ref().is_some_and(|w| {
-                    crate::keybar::in_bar(y, w.inner_size().height, self.ime_bottom_px + bar_h)
+                    crate::keybar::in_bar(y, w.inner_size().height, self.chrome_inset() + bar_h)
                 });
                 if in_bar {
                     self.bar_touch = Some((x, y));
@@ -784,7 +796,7 @@ impl App {
                     let bar_h = self.cur_bar_h();
                     let action = self.window.as_ref().and_then(|w| {
                         let s = w.inner_size();
-                        crate::input_bar::hit(x, y, s.width, s.height, self.ime_bottom_px, bar_h)
+                        crate::input_bar::hit(x, y, s.width, s.height, self.chrome_inset(), bar_h)
                     });
                     let selecting = self.input_bar.as_ref().is_some_and(|b| b.snap().selecting);
                     match action {
@@ -848,7 +860,7 @@ impl App {
                     // 判定活着；hit 落空也会留痕（坐标+inset 三数）
                     crate::report::report(
                         "ime",
-                        &format!("快捷键行抬手 ({},{}), inset={}", x, y, self.ime_bottom_px),
+                        &format!("快捷键行抬手 ({},{}), inset={}", x, y, self.chrome_inset()),
                     );
                     if phase != TouchPhase::Ended {
                         return;
@@ -860,13 +872,15 @@ impl App {
                         y,
                         s.width,
                         s.height,
-                        self.ime_bottom_px + self.cur_bar_h(),
+                        self.chrome_inset() + self.cur_bar_h(),
                     ) else {
                         crate::report::report(
                             "ime",
                             &format!(
                                 "快捷键行命中落空: 窗 {}x{} inset={}",
-                                s.width, s.height, self.ime_bottom_px
+                                s.width,
+                                s.height,
+                                self.chrome_inset()
                             ),
                         );
                         return;
@@ -1035,7 +1049,7 @@ impl App {
         let field_top = self.window.as_ref().map_or(0, |w| {
             w.inner_size()
                 .height
-                .saturating_sub(self.ime_bottom_px + bar_h)
+                .saturating_sub(self.chrome_inset() + bar_h)
                 + 32
         }) as f64;
         let edge = 12.0;
@@ -1056,7 +1070,7 @@ impl App {
         let w = self.window.as_ref()?.inner_size().width;
         let h = self.window.as_ref()?.inner_size().height;
         let bar_h = self.cur_bar_h();
-        let ime_bottom = self.ime_bottom_px;
+        let ime_bottom = self.chrome_inset();
         let top = h.checked_sub(ime_bottom)?.checked_sub(bar_h)?;
         let field_top = top + 32;
         let field_h = bar_h.checked_sub(64)?;
@@ -1094,7 +1108,7 @@ impl App {
         let w = self.window.as_ref()?.inner_size().width;
         let h = self.window.as_ref()?.inner_size().height;
         let bar_h = self.cur_bar_h();
-        let ime_bottom = self.ime_bottom_px;
+        let ime_bottom = self.chrome_inset();
         let top = h.checked_sub(ime_bottom)?.checked_sub(bar_h)?;
         let field_top = top + 32;
         let field_h = bar_h.checked_sub(64)?;
@@ -1133,7 +1147,7 @@ impl App {
         let geo = term
             .lock()
             .unwrap()
-            .bar_selection_geometry(&snap, w, h, self.ime_bottom_px)?;
+            .bar_selection_geometry(&snap, w, h, self.chrome_inset())?;
         let half = f64::from(crate::input_bar::ANCHOR_HIT_SIZE) / 2.0;
         let in_hot =
             |px: f64, py: f64| x >= px - half && x < px + half && y >= py - half && y < py + half;
@@ -1160,7 +1174,7 @@ impl App {
         let geo = term
             .lock()
             .unwrap()
-            .bar_selection_geometry(&snap, w, h, self.ime_bottom_px)?;
+            .bar_selection_geometry(&snap, w, h, self.chrome_inset())?;
         let fx = f64::from(geo.menu_x);
         let fy = f64::from(geo.menu_y);
         let fw = f64::from(geo.menu_w);
@@ -2257,13 +2271,22 @@ impl App {
                 panel_target,
                 crate::report::boot_ms() as u64,
             ) as i32;
+            // 键盘 inset chrome 跟随过缝（ui-base §二 第二道缝）：目标值 =
+            // 真实 inset（BAR-006 轮询）；无 ui-fx 占槽 = 直通（硬切）。
+            // 采样值写回字段——触摸命中下一拍吃同一份（眼手同尺）。
+            // 终端 resize 不在这里：永远吃真实值（pty resize 抖动红线）
+            self.chrome_inset_px = crate::ui::seam::sample_chrome_ime_inset(
+                self.ime_bottom_px as f32,
+                crate::report::boot_ms() as u64,
+            )
+            .max(0.0) as u32;
             let chat_scroll = self.ai_chat.as_ref().map_or(0, |c| c.scroll_offset());
             let chat_live = self.ai_chat.as_ref().is_some_and(|c| c.is_streaming());
             let ai_layout = Self::rasterize(
                 tg.as_deref_mut(),
                 mods,
                 self.magnifier_at,
-                self.ime_bottom_px,
+                self.chrome_inset_px,
                 self.last_ai_snap,
                 &chat_msgs,
                 chat_scroll,
@@ -2436,7 +2459,7 @@ impl ApplicationHandler for App {
             self.poll_input_bar(); // 输入栏快照比对(注入/分流也要画帧)
             // 采样缝动画帧时钟(ui-base §四 按需启停):缝上有活跃动画
             // 且距上帧 ≥16ms 才置脏——无动画零额外帧,有动画 ≤60fps
-            if crate::ui::fx_spring::panel_frame_due(crate::report::boot_ms() as u64) {
+            if crate::ui::fx_spring::fx_frame_due(crate::report::boot_ms() as u64) {
                 self.dirty = true;
             }
             // blackout 期补画(冗余兜底,2026-08-22 探针拆除案保留):

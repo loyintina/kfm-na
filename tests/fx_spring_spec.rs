@@ -226,3 +226,58 @@ fn spec_帧时钟_无动画零帧有动画限频() {
     assert!(!fx_spring::panel_frame_due(2916), "动画停即停表");
     seam::release_ai_panel_offset_y();
 }
+
+// ---- 第二道缝：键盘 inset（chrome 跟随，2026-09-04） ----
+
+#[test]
+fn spec_chrome缝_无占槽直通目标值() {
+    let _g = SEAM_LOCK.lock().unwrap();
+    seam::release_chrome_ime_inset(); // 防前题残槽
+    assert_eq!(
+        seam::sample_chrome_ime_inset(0.0, 0),
+        0.0,
+        "无占槽 = 硬切直通"
+    );
+    assert_eq!(seam::sample_chrome_ime_inset(900.0, 123), 900.0);
+    assert!(!seam::chrome_ime_inset_active(), "无占槽恒无活跃动画");
+}
+
+#[test]
+fn spec_chrome缝_弹簧占槽与拔槽回硬切() {
+    let _g = SEAM_LOCK.lock().unwrap();
+    seam::release_chrome_ime_inset();
+    seam::occupy_chrome_ime_inset(fx_spring::spring_occupier());
+    // 首采样直通（primed）；键盘弹开 0→900 = 目标翻转起弹
+    assert_eq!(seam::sample_chrome_ime_inset(0.0, 0), 0.0);
+    let p0 = seam::sample_chrome_ime_inset(900.0, 100);
+    assert!(p0.abs() < 1.0, "起弹当刻必须还在起点附近，实测 {p0}");
+    assert!(seam::chrome_ime_inset_active(), "目标变了 = 动画开始");
+    // 中途在行程内（栏带正在上移）
+    let p_mid = seam::sample_chrome_ime_inset(900.0, 200);
+    assert!(
+        (-1.0..901.0).contains(&p_mid),
+        "中途必须在行程内，实测 {p_mid}"
+    );
+    // 收敛贴死 + 拔槽回硬切
+    let p_end = seam::sample_chrome_ime_inset(900.0, 900);
+    assert_eq!(p_end, 900.0, "超时必贴死");
+    assert!(!seam::chrome_ime_inset_active());
+    seam::release_chrome_ime_inset();
+    assert_eq!(seam::sample_chrome_ime_inset(300.0, 1000), 300.0);
+}
+
+#[test]
+fn spec_帧时钟_键盘缝活跃也产帧() {
+    let _g = SEAM_LOCK.lock().unwrap();
+    seam::release_ai_panel_offset_y();
+    seam::release_chrome_ime_inset();
+    assert!(!fx_spring::fx_frame_due(0), "两道缝全空 = 零帧");
+    // 只占键盘缝：帧时钟一样要转（fx_frame_due 是任一缝语义）
+    seam::occupy_chrome_ime_inset(fx_spring::spring_occupier());
+    assert_eq!(seam::sample_chrome_ime_inset(0.0, 2000), 0.0); // primed
+    seam::sample_chrome_ime_inset(900.0, 2000); // 目标翻转 = 动画开始
+    assert!(fx_spring::fx_frame_due(2000), "键盘缝活跃即产帧");
+    seam::sample_chrome_ime_inset(900.0, 2900); // 超时贴死
+    assert!(!fx_spring::fx_frame_due(2916), "动画停即停表");
+    seam::release_chrome_ime_inset();
+}

@@ -48,3 +48,40 @@ pub fn ai_panel_offset_y_active() -> bool {
         .as_ref()
         .is_some_and(|o| (o.is_active)())
 }
+
+// ---- 第二道缝：键盘 inset（chrome 跟随，2026-09-04）----
+// 目标值语义在基础层（真实键盘 inset，BAR-006 轮询）；动画只许插值。
+// 消费方 = 输入栏/快捷键行渲染与触摸命中（眼手同尺吃同一份采样值）、
+// AI 页视口下沿。ui-fx 弹簧平滑：100ms 轮询轨迹是阶梯，纯镜像实看
+// 太硬（用户拍板改 ui-base §五 旧判据「只许镜像逐帧 insets」）。
+// 注意：终端网格 resize 不过缝——pty resize 抖动红线，永远吃真实值。
+
+static CHROME_IME_INSET: Mutex<Option<Occupier>> = Mutex::new(None);
+
+/// 占槽（后占者赢，ui-base §三 v1）
+pub fn occupy_chrome_ime_inset(o: Occupier) {
+    *CHROME_IME_INSET.lock().unwrap() = Some(o);
+}
+
+/// 拔槽回硬切（插件卸载/禁用）
+pub fn release_chrome_ime_inset() {
+    *CHROME_IME_INSET.lock().unwrap() = None;
+}
+
+/// 采样（渲染/触摸几何时过缝）：无占槽直通目标值——硬切基座语义
+pub fn sample_chrome_ime_inset(target: f32, now_ms: u64) -> f32 {
+    let g = CHROME_IME_INSET.lock().unwrap();
+    match g.as_ref() {
+        Some(o) => (o.sampler)(target, now_ms),
+        None => target,
+    }
+}
+
+/// 该槽有活跃动画（帧时钟启停判据）
+pub fn chrome_ime_inset_active() -> bool {
+    CHROME_IME_INSET
+        .lock()
+        .unwrap()
+        .as_ref()
+        .is_some_and(|o| (o.is_active)())
+}

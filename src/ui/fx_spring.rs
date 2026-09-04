@@ -99,10 +99,13 @@ pub fn spring_occupier() -> crate::ui::seam::Occupier {
 
 static LAST_FRAME_MS: AtomicU64 = AtomicU64::new(0);
 
-/// 该画动画帧了：缝上有活跃动画且距上帧 ≥16ms（约 60fps 上限）；
-/// 无活跃动画恒 false——零额外帧零唤醒（夜判据 0.45% 单核红线）
-pub fn panel_frame_due(now_ms: u64) -> bool {
-    if !crate::ui::seam::ai_panel_offset_y_active() {
+/// 该画动画帧了：任一缝上有活跃动画且距上帧 ≥16ms（约 60fps 上限）；
+/// 无活跃动画恒 false——零额外帧零唤醒（夜判据 0.45% 单核红线）。
+/// 两道缝共用一只钟（2026-09-04 键盘 inset 缝入册：同窗同帧不双泵）
+pub fn fx_frame_due(now_ms: u64) -> bool {
+    let active =
+        crate::ui::seam::ai_panel_offset_y_active() || crate::ui::seam::chrome_ime_inset_active();
+    if !active {
         LAST_FRAME_MS.store(0, Ordering::Relaxed);
         return false;
     }
@@ -112,4 +115,9 @@ pub fn panel_frame_due(now_ms: u64) -> bool {
     }
     LAST_FRAME_MS.store(now_ms, Ordering::Relaxed);
     true
+}
+
+/// 旧名委托（AI 面板缝独存时代的考题还在用——语义已泛化成「任一缝」）
+pub fn panel_frame_due(now_ms: u64) -> bool {
+    fx_frame_due(now_ms)
 }

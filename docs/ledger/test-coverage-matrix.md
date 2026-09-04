@@ -22,7 +22,7 @@
 | `src/ime_bridge.rs` | 1 | 0 | 1 | jni_counters |
 | `src/ime_queue.rs` | 8 | 8 | 0 | — |
 | `src/input_bar.rs` | 58 | 49 | 9 | MENU_W MENU_TEXT_PX text_avail_w CARET_BLINK_MS SELECT_LONG_PRESS_MS ANCHOR_VISUAL_SIZE ANCHOR_HIT_SIZE set_sel_anchor insert_or_replace |
-| `src/insets.rs` | 4 | 1 | 3 | force_show_keyboard force_hide_keyboard query_ime_bottom |
+| `src/insets.rs` | 5 | 2 | 3 | force_show_keyboard force_hide_keyboard query_ime_bottom |
 | `src/keybar.rs` | 15 | 11 | 4 | COLS MOD_ALT install_bridge_mods bridge_mods |
 | `src/keymap.rs` | 2 | 2 | 0 | — |
 | `src/local_pty.rs` | 5 | 4 | 1 | android_prefix |
@@ -41,9 +41,9 @@
 | `src/session_router.rs` | 10 | 10 | 0 | — |
 | `src/termview.rs` | 86 | 79 | 7 | AI_THINK_COLLAPSED FONT_CANDIDATES CJK_FONT_CANDIDATES load_cjk_font font_probe MAG_HALF_COLS MAG_HALF_ROWS |
 | `src/trace.rs` | 12 | 8 | 4 | TRACE_CAP format_tail dump_all dump_tail |
-| `src/ui/ai_page.rs` | 6 | 6 | 0 | — |
-| `src/ui/fx_spring.rs` | 3 | 3 | 0 | — |
+| `src/ui/ai_page.rs` | 7 | 7 | 0 | — |
+| `src/ui/fx_spring.rs` | 4 | 4 | 0 | — |
 | `src/ui/keybar.rs` | 1 | 1 | 0 | — |
 | `src/ui/orb.rs` | 3 | 3 | 0 | — |
 | `src/ui/prompt_bar.rs` | 5 | 4 | 1 | row_of |
-| `src/ui/seam.rs` | 4 | 4 | 0 | — |
+| `src/ui/seam.rs` | 8 | 8 | 0 | — |
