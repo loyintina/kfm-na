@@ -128,3 +128,21 @@ CPU 优化线顶上（§六分流）。
 - **流程坑**：chain-phone.sh 会把手机工作树回齐到 HEAD——scp 直改手机
   源码后若先跑 chain 闸，改动被冲掉。正确序：改码 → 提交落账 → 手机
   重编打包（或 scp 后立刻编包再补账）。
+- **上报协议坑**：/na-report 只认 JSON `{stage, msg}`——spike_report 首版
+  text/plain 裸发，内容全落成空 `[?]` 行（首跑 14 条报告只剩行数可数）。
+  但「同毫秒 12 条 + 2 秒后断流」本身已是证据：进程活了 ~2s 死在早帧段。
+- **ROM 包名拉黑实锤**：vc=...378（hasCode=false 首包）装上跑了 2 秒
+  暴毙，用户卸载后，紧接的 ...763（同管线同证书同结构，仅 .so 与 vc
+  不同）被 vivo 判「软件包无效」——zipalign -c/apksigner verify/md5
+  三验全过、file:// 与 content://（termux-open）双通道同拒、主 app
+  对照组同刻装得上。换包名 gpuspike→gpuspikeb 即装即走。**尖刺纪律：
+  每次暴毙卸载后换包名重生**（manifest b/c/… 尾缀递增）。
+- **期 0① 判决书（双后端验尸）**：wgpu 30 × NativeActivity——
+  Vulkan 轮 adapter（Mali-G720 Immortalis，r44p1）/device 全过，
+  +89ms 死 `surface.configure()`；GL 轮（OpenGL ES 3.2 同驱动）
+  adapter/device 全过，+72ms 死同一行。零 panic，与 2026-08-13 判词
+  **同一个死亡点**。**wgpu 版本变量排除**——病灶不在 wgpu API 层，
+  在 wgpu-hal configure 路径 × Mali r44p1 × OriginOS 的交汇处。
+  ①封档。按分流进 ②③；③（glow/GLES 直连）另有一个诊断价值：
+  它不过 wgpu-hal——若裸 EGL/GLES 能 configure 上屏，病灶即坐实在
+  wgpu-hal 而非驱动，GPU 化路线就还有「绕开 wgpu」这条命。

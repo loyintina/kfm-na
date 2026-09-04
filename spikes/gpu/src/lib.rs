@@ -28,9 +28,12 @@ static FRAMES: AtomicU64 = AtomicU64::new(0);
 
 /// 飞鸽传书（report.rs 同款通道，spike 简化版：一线程一报，2s 超时，
 /// best-effort 吞错——上报通道自己绝不能炸成二次事故）
+/// 协议：JSON {stage, msg}（files.ts /na-report 只认这两个字段——
+/// 2026-09-04 教训：text/plain 裸发会落成空 [?] 行，内容全丢）
 fn spike_report(msg: &str) {
     let ms = BOOT_T0.get().map_or(0, |t| t.elapsed().as_millis());
-    let body = format!("[gpu-spike] +{ms}ms {msg}");
+    let esc = msg.replace('\\', "\\\\").replace('"', "\\\"");
+    let body = format!("{{\"stage\":\"gpu-spike\",\"msg\":\"+{ms}ms {esc}\"}}");
     std::thread::spawn(move || {
         use std::io::Write;
         let Ok(mut s) = std::net::TcpStream::connect_timeout(
@@ -40,7 +43,7 @@ fn spike_report(msg: &str) {
             return;
         };
         let req = format!(
-            "POST /kfmv4/api/na-report HTTP/1.1\r\nHost: 127.0.0.1:8021\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            "POST /kfmv4/api/na-report HTTP/1.1\r\nHost: 127.0.0.1:8021\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             body.len(),
             body
         );
@@ -58,8 +61,10 @@ struct Gfx {
 
 /// wgpu 初始化——每步一个里程碑（死亡点定位器，2026-08-13 同款打法）
 fn init_gfx(window: &Arc<Window>) -> Gfx {
-    spike_report("wgpu instance 开始");
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    spike_report("wgpu instance 开始（GL 后端验尸轮——Vulkan 已判死 configure）");
+    let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+    desc.backends = wgpu::Backends::GL;
+    let instance = wgpu::Instance::new(desc);
 
     spike_report("surface 开始");
     let surface = instance

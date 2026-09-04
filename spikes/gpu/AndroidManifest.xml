@@ -2,7 +2,10 @@
 <!-- GPU 期 0 复活尖刺①（gpu-render.md §四）：裸 NativeActivity 无 Java 皮
      （无输入需求，打包零 javac/d8）。独立包名与主 app 并存不互杀。 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="dev.kfm.na.gpuspike">
+    package="dev.kfm.na.gpuspikeb">
+    <!-- b 尾缀（2026-09-04）：原包名 gpuspike 首包 2 秒暴毙卸载后被 vivo
+         判「软件包无效」拒装（三验全过、主 app 对照组装得上——ROM 按
+         包名拉黑的实锤），尖刺期每次暴毙后换名重生的纪律 -->
 
     <!-- 飞鸽传书回传通道（lib.rs spike_report） -->
     <uses-permission android:name="android.permission.INTERNET" />
