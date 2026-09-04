@@ -71,6 +71,8 @@ CPU 优化线顶上（§六分流）。
   桌面端 GPU 另行立项。
 
 **期 1 · 终端网格 GPU 化**
+- 渲染底座 = 期 0③ 尖刺骨架（glow/GLES 直连定案，§九——wgpu 本机
+  铁案犯冲已封档，② GameActivity 封存不用）；
 - 字形图集（atlas）+ instanced quad；终端页帧耗 <8ms；
 - 与 softbuffer 同屏像素对拍（眼手同尺：网格眼睛读数两后端一致）。
 
@@ -85,7 +87,7 @@ CPU 优化线顶上（§六分流）。
 
 ## 五、架构纪律
 
-- 分层不变：渲染归壳，核心不见 wgpu/softbuffer；
+- 分层不变：渲染归壳，核心不见 GPU 后端（glow/wgpu/softbuffer 皆壳）；
 - **renderer 抽象是期 1 的真正难点**：现状 `Frame{buf,w,h}` 像素直写
   是全部控件的物质基础（termview SDF 图元族/draw_items/orb sprite/
   blit_panel）——抽象设计要先回答「逐像素 SDF 的墨怎么进 GPU」，
@@ -146,3 +148,25 @@ CPU 优化线顶上（§六分流）。
   ①封档。按分流进 ②③；③（glow/GLES 直连）另有一个诊断价值：
   它不过 wgpu-hal——若裸 EGL/GLES 能 configure 上屏，病灶即坐实在
   wgpu-hal 而非驱动，GPU 化路线就还有「绕开 wgpu」这条命。
+
+## 九、期 0③ 判决书（2026-09-04，glow/GLES 直连 × NativeActivity）——**活**
+
+- **全链路通关**：dlopen libEGL.so → eglInitialize v1.5 → choose_config
+  （RGB888 ES3 window）→ GLES3 context → **eglCreateWindowSurface 过了**
+  → **eglMakeCurrent 过了（wgpu 双后端从未活着走到这）** → shader/VAO
+  → **首帧 eglSwapBuffers 过了（+138ms）**，紫底橙三角上屏（肉眼对拍
+  与①同视觉判据）。
+- **帧率**：首秒 107 帧（catch-up）后稳锁 60fps（vsync），suspend/resume
+  两轮实测：拆 surface/context+窗 → 重建全栈 → 帧计数续走无暴毙。
+- **病灶坐实**：同机同驱动（Mali-G720 r44p1）同 ROM，裸 EGL 一遍活、
+  wgpu-hal 两个大版本四个组合全死 configure——**wgpu 抽象层与该机
+  犯冲是铁案，驱动无罪**。
+- **路线定案**：GPU 化走 **glow/GLES 直连**（khronos-egl dlopen
+  libEGL.so + glow）——依赖纯 Rust crates.io，手工打包管线零改动；
+  **② GameActivity 变量封存不用**（窗体供给层无罪，不必为它引
+  gradle/AAR 链）。期 1 终端网格 GPU 化的渲染底座 = 本尖刺骨架
+  （EGL 生命周期 + suspend/resume 拆建纪律）+ 字形图集纹理 + 网格
+  实例化绘制。
+- **链接坑实录**：Termux 的 libEGL.so SONAME 是 libEGL.so.1，静态链
+  会把 .so.1 写进 NEEDED 而 app 命名空间只有 libEGL.so——必须
+  khronos-egl dynamic（libloading dlopen）路线。

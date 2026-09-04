@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- GPU 期 0 复活尖刺③（gpu-render.md §四）：glow/GLES 直连，裸
+     NativeActivity 无 Java 皮无 wgpu。独立包名与主 app 并存不互杀。
+     c 尾缀：gpuspike 暴毙后被 ROM 拉黑（§八实锤），尖刺换名重生纪律 -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="dev.kfm.na.gpuspikec">
+
+    <!-- 飞鸽传书回传通道（lib.rs spike_report） -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <application
+        android:label="GLES尖刺"
+        android:hasCode="false"
+        android:extractNativeLibs="false"
+        android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen">
+        <!-- hasCode=false（①实锤：纯 NativeActivity 无 dex，默认 true 被
+             vivo 安装器判软件包无效）；extractNativeLibs=false 配 STORED +
+             zipalign -p（BAR-013 同款） -->
+
+        <activity
+            android:name="android.app.NativeActivity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density|fontScale">
+            <!-- configChanges 全集一个都不许删（2026-08-13 国产 ROM 实锤坑） -->
+            <meta-data android:name="android.app.lib_name" android:value="gles_spike" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

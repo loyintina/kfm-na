@@ -1,0 +1,24 @@
+[package]
+name = "gles-spike"
+version = "0.1.0"
+edition = "2021"
+
+# 独立于主 workspace（尖刺可弃，不压 chain 与覆盖矩阵）
+[workspace]
+
+[lib]
+name = "gles_spike"
+crate-type = ["cdylib"]
+
+[dependencies]
+winit = { version = "0.30", default-features = false, features = ["android-native-activity", "rwh_06"] }
+# dlopen 路线（dynamic）：Termux 的 libEGL.so SONAME 是 libEGL.so.1，
+# 静态链会写进 NEEDED 而 app 命名空间没有 .so.1——必须运行时 dlopen libEGL.so
+khronos-egl = { version = "6", features = ["dynamic"] }
+glow = "0.17"
+libloading = "0.8"
+raw-window-handle = "0.6"
+
+[profile.release]
+lto = true
+strip = true
