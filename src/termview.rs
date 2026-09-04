@@ -100,9 +100,12 @@ pub fn prefer_cjk(primary: &fontdue::Font, cjk: &fontdue::Font, c: char) -> bool
 }
 
 /// AI 面板整页移位压盖（采样缝过渡帧专用，2026-09-04 弹簧落下）。
-/// src = 整页面板渲染产物，y_off ∈ [-h, 0] 上移压盖到 dst：
-/// dst 的 [max(y_off,0), h) 行从 src 顶部对应行整行拷贝；y_off=0 即
-/// 原样全盖（与直接渲染像素等价），y_off=-h 即完全屏外不动 dst。
+/// src = 整页面板渲染产物，y_off ∈ [-h, 0]：面板顶在屏上 y_off 行处
+/// （负 = 屏外上方）——dst 的 [0, h+y_off) 行从 src **底部**对应行整行
+/// 拷贝（面板底边从屏顶一路落下来）；y_off=0 即原样全盖（与直接渲染
+/// 像素等价），y_off=-h 即完全屏外不动 dst。
+/// BAR-062：初版把 src 顶部拷进 dst 底部（方向写反），真机实看是「从
+/// 下往上升」——考题同谋钉了反方向，C 档实看才逮住。
 pub fn blit_panel_shifted(dst: &mut [u32], src: &[u32], w: u32, h: u32, y_off: i32) {
     if w == 0 || h == 0 {
         return;
@@ -114,7 +117,7 @@ pub fn blit_panel_shifted(dst: &mut [u32], src: &[u32], w: u32, h: u32, y_off: i
     if rows == 0 {
         return;
     }
-    dst[skip * w..(skip + rows) * w].copy_from_slice(&src[..rows * w]);
+    dst[..rows * w].copy_from_slice(&src[skip * w..(skip + rows) * w]);
 }
 
 /// 默认前景白 / 背景黑（softbuffer XRGB：高字节不用）

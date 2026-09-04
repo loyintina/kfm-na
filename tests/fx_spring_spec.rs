@@ -175,7 +175,7 @@ fn spec_插件_ui_fx_disabled一键关不占槽() {
 // ---- blit 移位压盖（渲染合成原子） ----
 
 #[test]
-fn spec_blit_移位压盖三态() {
+fn spec_bar062_blit_移位压盖三态() {
     let (w, h) = (2u32, 4u32);
     let src: Vec<u32> = (1..=8).collect(); // 行 [1,2] [3,4] [5,6] [7,8]
     // y_off=0：原样全盖（与直接渲染像素等价——靠泊帧不许多一分一毫）
@@ -186,11 +186,16 @@ fn spec_blit_移位压盖三态() {
     let mut dst = vec![99u32; 8];
     blit_panel_shifted(&mut dst, &src, w, h, -(h as i32));
     assert_eq!(dst, vec![99u32; 8], "屏外压盖 = 不动 dst");
-    // y_off=-2（半程）：上截下补——dst 前 2 行保持（终端内容），
-    // 后 2 行 = src 前 2 行（面板顶落进屏心）
+    // y_off=-2（半程）：下落方向——dst 前 2 行 = src 后 2 行（面板底边
+    // 落到屏心），后 2 行保持（终端内容还没被盖到）。
+    // BAR-062：反方向（dst 底部 = src 顶部）= 面板从屏底往上升，错
     let mut dst = vec![99u32; 8];
     blit_panel_shifted(&mut dst, &src, w, h, -2);
-    assert_eq!(dst, vec![99, 99, 99, 99, 1, 2, 3, 4], "半程 = 上截下补");
+    assert_eq!(
+        dst,
+        vec![5, 6, 7, 8, 99, 99, 99, 99],
+        "半程 = 面板从上往下落"
+    );
     // 越界钳制：比 -h 还小按屏外算，不许 panic 不许动 dst
     let mut dst = vec![99u32; 8];
     blit_panel_shifted(&mut dst, &src, w, h, -100);
