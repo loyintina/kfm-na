@@ -61,6 +61,9 @@ pub const AI_PAGE_LINE_H: u32 = 64;
 pub const AI_PAGE_PX: f32 = 40.0;
 /// 思考块文字色（期 0④½）：比正文暗的灰紫——能读到思考在流，但不抢戏
 pub const AI_THINK_FG: u32 = 0x007E_7A9E;
+/// 收流后思考块的折叠占位行（2026-09-04 用户拍板：输出完自动折叠——
+/// 思考往往不重要但必须存在；全文随消息存档，展开查看是未来的活）
+pub const AI_THINK_COLLAPSED: &str = "· 已思考 ·";
 pub const MARGIN_Y: u32 = 12;
 
 /// 顶边距（BAR-010）：圆角屏吃掉首行首字符（2026-08-13 实拍）——
@@ -1095,6 +1098,12 @@ impl TermView {
     /// 0 = 尾随锁定贴底；>0 = 视口上移看历史。返回（总行数, 一屏行数）
     /// ——调用方写回 AiChatState.scroll_sync_layout（眼手同尺：手势钳制
     /// 与渲染用同一份布局）。
+    /// bottom_inset = 视口下沿让位（键盘高 + 输入栏当前带高，2026-09-04
+    /// 用户拍板：键盘弹起时追底追到输入栏上沿，不许越过栏带往下画）；
+    /// live_tail = 末条消息是流式中的 AI 回复（思考块 ≤3 行活窗）；
+    /// false = 全部消息已收流，思考折叠成一行暗色「已思考」（存档不丢，
+    /// 用户拍板：思考往往不重要但必须存在）
+    #[allow(clippy::too_many_arguments)]
     pub fn render_ai_page(
         &self,
         buf: &mut [u32],
@@ -1102,6 +1111,8 @@ impl TermView {
         buf_h: u32,
         msgs: &[(bool, String, String)],
         scroll_rows: u32,
+        bottom_inset: u32,
+        live_tail: bool,
     ) -> (u32, u32) {
         if buf_w == 0 || buf_h == 0 {
             return (0, 0);
@@ -1112,13 +1123,14 @@ impl TermView {
             w: buf_w,
             h: buf_h,
         };
-        let fit = buf_h.saturating_sub(AI_PAGE_TOP + AI_PAGE_BOTTOM) / AI_PAGE_LINE_H;
+        let fit =
+            buf_h.saturating_sub(AI_PAGE_TOP + AI_PAGE_BOTTOM + bottom_inset) / AI_PAGE_LINE_H;
         if msgs.is_empty() {
             // 空态 = 纯底零墨（2026-09-04 用户拍板撤占位提示：对话框没
             // 说话时就是空的——游戏对话框语言；占位期那行小字已退役）
             return (0, fit);
         }
-        let rows = self.build_ai_rows(msgs, buf_w);
+        let rows = self.build_ai_rows(msgs, buf_w, live_tail);
         // 视口：贴底基线 - 距底行数（期 0④——期 0③ 是整行丢弃没有视口）
         let base_skip = rows.len().saturating_sub(fit as usize);
         let skip = base_skip.saturating_sub(scroll_rows as usize);
@@ -1140,28 +1152,40 @@ impl TermView {
     }
 
     /// 全部展示行：(文字色, 该行的已量宽字符)——角色标签行 + 思考块
-    /// （AI 消息有思考时：≤3 行暗色尾随窗，流式增长自动滚——期 0④½）
+    /// （流式中的末条：≤3 行暗色尾随活窗；已收流：折叠成一行暗色
+    /// 「已思考」——2026-09-04 用户拍板：思考往往不重要但必须存在）
     /// + 正文折行（渲染与布局测量共用这一份：眼手同尺的单源）
     fn build_ai_rows<'a>(
         &'a self,
         msgs: &'a [(bool, String, String)],
         buf_w: u32,
+        live_tail: bool,
     ) -> Vec<AiRow<'a>> {
         let row_w = buf_w.saturating_sub(AI_PAGE_MARGIN_X * 2);
         // draw_items_left 起笔内缩 18，折行可用宽要扣掉
         let wrap_w = row_w.saturating_sub(18) as f32;
         // 折行辅助改方法（闭包推不出 'a 生命周期）
         let mut rows = Vec::new();
-        for (is_user, text, thinking) in msgs {
+        let last = msgs.len().saturating_sub(1);
+        for (i, (is_user, text, thinking)) in msgs.iter().enumerate() {
             let label_fg = if *is_user { MAG_BORDER } else { AI_PAGE_FG };
             let label = if *is_user { "你" } else { "AI" };
             rows.push((label_fg, self.measure_items(label, AI_PAGE_PX)));
             if !is_user && !thinking.is_empty() {
-                // 思考块：尾随窗 ≤3 行（thinking_window 纯函数钉计数与
-                // 尾随语义）——块高恒定，流式时窗口跟尾 = 自己滚动
-                let think_rows = self.wrap_ai_lines(thinking, wrap_w);
-                for items in &think_rows[crate::ui::ai_page::thinking_window(think_rows.len())] {
-                    rows.push((AI_THINK_FG, items.clone()));
+                if live_tail && i == last {
+                    // 活窗：尾随窗 ≤3 行（thinking_window 纯函数钉计数与
+                    // 尾随语义）——块高恒定，流式时窗口跟尾 = 自己滚动
+                    let think_rows = self.wrap_ai_lines(thinking, wrap_w);
+                    for items in &think_rows[crate::ui::ai_page::thinking_window(think_rows.len())]
+                    {
+                        rows.push((AI_THINK_FG, items.clone()));
+                    }
+                } else {
+                    // 收流折叠：一行暗色占位（思考全文随消息存档，不丢）
+                    rows.push((
+                        AI_THINK_FG,
+                        self.measure_items(AI_THINK_COLLAPSED, AI_PAGE_PX),
+                    ));
                 }
             }
             for items in self.wrap_ai_lines(text, wrap_w) {
@@ -1884,8 +1908,11 @@ pub trait TermEmu: Send {
     fn render_keybar(&self, buf: &mut [u32], w: u32, h: u32, ime_bottom: u32, mods: u8);
     /// AI 外显 chrome（ai-presence，android_app rasterize 调用方）：
     /// AI 页真对话渲染（page=AiFullscreen 时代替终端网格）/ 雾状光球 sprite。
-    /// scroll_rows = 距底行数（期 0④ 视口）；返回（总行数, 一屏行数）
-    /// 供调用方写回视口状态机（眼手同尺）
+    /// scroll_rows = 距底行数（期 0④ 视口）；bottom_inset = 键盘+输入栏
+    /// 让位（追底追到栏带上沿）；live_tail = 末条流式中（思考活窗，
+    /// 否则折叠一行）；返回（总行数, 一屏行数）供调用方写回视口状态机
+    /// （眼手同尺）
+    #[allow(clippy::too_many_arguments)]
     fn render_ai_page(
         &self,
         buf: &mut [u32],
@@ -1893,6 +1920,8 @@ pub trait TermEmu: Send {
         h: u32,
         msgs: &[(bool, String, String)],
         scroll_rows: u32,
+        bottom_inset: u32,
+        live_tail: bool,
     ) -> (u32, u32);
     /// 全局输入栏 chrome（期 0 组件三，android_app rasterize 调用方）：
     /// 压底紧贴键盘（栏带 = 屏底 - inset - 栏高），任何会话页都画；
@@ -1979,6 +2008,7 @@ impl TermEmu for TermView {
     fn render_keybar(&self, buf: &mut [u32], w: u32, h: u32, ime_bottom: u32, mods: u8) {
         TermView::render_keybar(self, buf, w, h, ime_bottom, mods)
     }
+    #[allow(clippy::too_many_arguments)]
     fn render_ai_page(
         &self,
         buf: &mut [u32],
@@ -1986,8 +2016,10 @@ impl TermEmu for TermView {
         h: u32,
         msgs: &[(bool, String, String)],
         scroll_rows: u32,
+        bottom_inset: u32,
+        live_tail: bool,
     ) -> (u32, u32) {
-        TermView::render_ai_page(self, buf, w, h, msgs, scroll_rows)
+        TermView::render_ai_page(self, buf, w, h, msgs, scroll_rows, bottom_inset, live_tail)
     }
     fn render_inputbar(
         &self,

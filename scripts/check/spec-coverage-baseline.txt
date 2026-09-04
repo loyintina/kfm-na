@@ -30,7 +30,7 @@ src/report.rs 7
 src/scroll.rs 0
 src/session.rs 0
 src/session_router.rs 0
-src/termview.rs 6
+src/termview.rs 7
 src/trace.rs 4
 src/ui/ai_page.rs 0
 src/ui/fx_spring.rs 0

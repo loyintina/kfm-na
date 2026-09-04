@@ -1447,6 +1447,10 @@ impl App {
                 };
                 // 用户消息入格 + 全量历史投影（OpenAI 无状态，每轮全量上传）
                 let history = chat.user_send(&text);
+                // 发送即跳 AI 全屏页（2026-09-04 用户拍板：输入栏发完
+                // 直接转进面板看生成，不许停在终端页等手动点球）。
+                // 幂等——已在 AI 页 = 无效果
+                ai2.tap_overlay();
                 let brain = brain.clone();
                 let ai = ai2.clone();
                 let chat = chat.clone();
@@ -2103,6 +2107,7 @@ impl App {
         ai_snap: Option<crate::ai_presence::PresenceSnap>,
         chat_msgs: &[(bool, String, String)],
         chat_scroll: u32,
+        chat_live: bool,
         bar_snap: Option<&crate::input_bar::BarSnap>,
         caret_on: bool,
         buf: &mut [u32],
@@ -2131,8 +2136,19 @@ impl App {
                 term.render_keybar(buf, w, h, ime_bottom_px + bar_h, mods);
             } else if panel_off == 0 {
                 // 面板靠泊（AI 全屏页稳态，期 0③ 真对话页）：不画终端
-                // 网格与快捷键行，深紫暗底 + 消息行视口（期 0④ 滚动）
-                ai_layout = Some(term.render_ai_page(buf, w, h, chat_msgs, chat_scroll));
+                // 网格与快捷键行，深紫暗底 + 消息行视口（期 0④ 滚动）。
+                // 视口下沿让位键盘 + 输入栏带高（2026-09-04 用户拍板：
+                // 追底追到栏带上沿，不越过栏带）；live = 末条流式中
+                // （思考活窗，收流折叠）
+                ai_layout = Some(term.render_ai_page(
+                    buf,
+                    w,
+                    h,
+                    chat_msgs,
+                    chat_scroll,
+                    ime_bottom_px + bar_h,
+                    chat_live,
+                ));
             } else {
                 // 过渡帧：终端 + 快捷键行在下（照画——快捷键行层级低于
                 // 面板，被落下来的面板盖住是自然结果，用户 2026-09-04
@@ -2142,7 +2158,15 @@ impl App {
                 term.render_keybar(buf, w, h, ime_bottom_px + bar_h, mods);
                 panel_scratch.clear();
                 panel_scratch.resize((w as usize) * (h as usize), 0);
-                ai_layout = Some(term.render_ai_page(panel_scratch, w, h, chat_msgs, chat_scroll));
+                ai_layout = Some(term.render_ai_page(
+                    panel_scratch,
+                    w,
+                    h,
+                    chat_msgs,
+                    chat_scroll,
+                    ime_bottom_px + bar_h,
+                    chat_live,
+                ));
                 crate::termview::blit_panel_shifted(buf, panel_scratch, w, h, panel_off);
             }
             // 全局输入栏（常驻 chrome：任何会话下都在，§二——AI 页也画）。
@@ -2229,6 +2253,7 @@ impl App {
                 crate::report::boot_ms() as u64,
             ) as i32;
             let chat_scroll = self.ai_chat.as_ref().map_or(0, |c| c.scroll_offset());
+            let chat_live = self.ai_chat.as_ref().is_some_and(|c| c.is_streaming());
             let ai_layout = Self::rasterize(
                 tg.as_deref_mut(),
                 mods,
@@ -2237,6 +2262,7 @@ impl App {
                 self.last_ai_snap,
                 &chat_msgs,
                 chat_scroll,
+                chat_live,
                 self.last_bar_snap.as_ref(),
                 caret_on,
                 &mut buf,

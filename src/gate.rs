@@ -146,7 +146,8 @@ pub fn dump_now(dir: &str) {
             let chat = ai_chat_handle();
             let msgs = chat.as_ref().map(|c| c.snap()).unwrap_or_default();
             let off = chat.as_ref().map_or(0, |c| c.scroll_offset());
-            let (total, fit) = t.render_ai_page(&mut buf, w, h, &msgs, off);
+            let live = chat.as_ref().is_some_and(|c| c.is_streaming());
+            let (total, fit) = t.render_ai_page(&mut buf, w, h, &msgs, off, bar_h, live);
             if let Some(c) = &chat {
                 c.scroll_sync_layout(total, fit);
             }
@@ -160,8 +161,9 @@ pub fn dump_now(dir: &str) {
             let chat = ai_chat_handle();
             let msgs = chat.as_ref().map(|c| c.snap()).unwrap_or_default();
             let off = chat.as_ref().map_or(0, |c| c.scroll_offset());
+            let live = chat.as_ref().is_some_and(|c| c.is_streaming());
             let mut scratch = vec![0u32; (w as usize) * (h as usize)];
-            let (total, fit) = t.render_ai_page(&mut scratch, w, h, &msgs, off);
+            let (total, fit) = t.render_ai_page(&mut scratch, w, h, &msgs, off, bar_h, live);
             if let Some(c) = &chat {
                 c.scroll_sync_layout(total, fit);
             }

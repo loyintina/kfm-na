@@ -39,7 +39,7 @@
 | `src/scroll.rs` | 5 | 5 | 0 | — |
 | `src/session.rs` | 8 | 8 | 0 | — |
 | `src/session_router.rs` | 10 | 10 | 0 | — |
-| `src/termview.rs` | 85 | 79 | 6 | FONT_CANDIDATES CJK_FONT_CANDIDATES load_cjk_font font_probe MAG_HALF_COLS MAG_HALF_ROWS |
+| `src/termview.rs` | 86 | 79 | 7 | AI_THINK_COLLAPSED FONT_CANDIDATES CJK_FONT_CANDIDATES load_cjk_font font_probe MAG_HALF_COLS MAG_HALF_ROWS |
 | `src/trace.rs` | 12 | 8 | 4 | TRACE_CAP format_tail dump_all dump_tail |
 | `src/ui/ai_page.rs` | 6 | 6 | 0 | — |
 | `src/ui/fx_spring.rs` | 3 | 3 | 0 | — |

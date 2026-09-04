@@ -438,7 +438,7 @@ fn spec_冒烟_ai页空态纯底零墨() {
     let (tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必须建得成");
     let (w, h) = (400u32, 300u32);
     let mut buf = vec![0u32; (w * h) as usize];
-    tv.render_ai_page(&mut buf, w, h, &[], 0);
+    tv.render_ai_page(&mut buf, w, h, &[], 0, 0, false);
     assert_eq!(buf[0], kfm_na::termview::AI_PAGE_BG, "整屏深紫暗底");
     assert!(
         buf.iter().all(|&p| p == kfm_na::termview::AI_PAGE_BG),
@@ -457,7 +457,7 @@ fn spec_冒烟_ai页真消息行画在顶部区() {
         (true, "你好".to_string(), String::new()),
         (false, "你好，有什么可以帮你？".to_string(), String::new()),
     ];
-    tv.render_ai_page(&mut buf, w, h, &msgs, 0);
+    tv.render_ai_page(&mut buf, w, h, &msgs, 0, 0, false);
     let top = &buf[(48 * w) as usize..(180 * w) as usize];
     assert!(
         top.iter().any(|&p| p != kfm_na::termview::AI_PAGE_BG),
@@ -481,7 +481,7 @@ fn spec_冒烟_ai页角色标签配色钉() {
         (true, "你好".to_string(), String::new()),
         (false, "你好，有什么可以帮你？".to_string(), String::new()),
     ];
-    tv.render_ai_page(&mut buf, w, h, &msgs, 0);
+    tv.render_ai_page(&mut buf, w, h, &msgs, 0, 0, false);
     assert!(
         buf.contains(&kfm_na::termview::AI_PAGE_FG),
         "AI 标签必须用 AI_PAGE_FG 画"
@@ -508,7 +508,7 @@ fn spec_冒烟_ai页视口滚动_追底与翻顶() {
     }
     // 追底：返回布局 (60, 7)；msg0 的用户标签不可见
     let mut buf = vec![0u32; (w * h) as usize];
-    let (total, got_fit) = tv.render_ai_page(&mut buf, w, h, &msgs, 0);
+    let (total, got_fit) = tv.render_ai_page(&mut buf, w, h, &msgs, 0, 0, false);
     assert_eq!((total, got_fit), (60, 7), "30 条消息 = 60 展示行");
     assert!(
         !buf.contains(&kfm_na::termview::MAG_BORDER),
@@ -516,7 +516,7 @@ fn spec_冒烟_ai页视口滚动_追底与翻顶() {
     );
     // 翻到顶（offset 拉满 = total - fit = 53）：msg0 标签必须在顶部区
     let mut buf = vec![0u32; (w * h) as usize];
-    tv.render_ai_page(&mut buf, w, h, &msgs, 53);
+    tv.render_ai_page(&mut buf, w, h, &msgs, 53, 0, false);
     let top = &buf[..(200 * w) as usize];
     assert!(
         top.contains(&kfm_na::termview::MAG_BORDER),
@@ -524,7 +524,7 @@ fn spec_冒烟_ai页视口滚动_追底与翻顶() {
     );
     // offset 超上界不许 panic 不许画错位（钳制语义同状态机）
     let mut buf = vec![0u32; (w * h) as usize];
-    tv.render_ai_page(&mut buf, w, h, &msgs, 10_000);
+    tv.render_ai_page(&mut buf, w, h, &msgs, 10_000, 0, false);
     let top = &buf[..(200 * w) as usize];
     assert!(
         top.contains(&kfm_na::termview::MAG_BORDER),
@@ -610,8 +610,8 @@ fn spec_d8光球配方_逐像素钉() {
 
 #[test]
 fn spec_冒烟_ai页思考块_三行钳制暗色() {
-    // 期 0④½：思考折成 8 行（短行不折），渲染只许出 3 行暗色（尾随
-    // 自滚：正文行必须紧跟在第 3 行思考后，不是第 8 行后）
+    // 期 0④½：思考折成 8 行（短行不折），流式中（live_tail=true）渲染
+    // 只许出 3 行暗色（尾随自滚：正文行必须紧跟在第 3 行思考后）
     let (tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必须建得成");
     let (w, h) = (800u32, 600u32);
     let mut buf = vec![0u32; (w * h) as usize];
@@ -620,7 +620,7 @@ fn spec_冒烟_ai页思考块_三行钳制暗色() {
         .collect::<Vec<_>>()
         .join("\n");
     let msgs = vec![(false, "正文一句话".to_string(), thinking)];
-    tv.render_ai_page(&mut buf, w, h, &msgs, 0);
+    tv.render_ai_page(&mut buf, w, h, &msgs, 0, 0, true);
     // 暗色像素聚在几个行桶里？>3 = 钳制漏了
     let line_h = kfm_na::termview::AI_PAGE_LINE_H;
     let mut buckets = std::collections::BTreeSet::new();
@@ -659,4 +659,69 @@ fn spec_常量_ai页排版尺家族钉死() {
     assert_eq!(AI_PAGE_BOTTOM, 48);
     assert_eq!(AI_PAGE_MARGIN_X, 60);
     assert_eq!(AI_PAGE_PX, 40.0);
+}
+
+#[test]
+fn spec_冒烟_ai页思考块_收流折叠一行() {
+    // 2026-09-04 用户拍板：输出完成后思考自动折叠——全文存档不丢，
+    // 渲染只留一行暗色占位（live_tail=false）。8 行思考只许出 1 行暗色
+    let (tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必须建得成");
+    let (w, h) = (800u32, 600u32);
+    let mut buf = vec![0u32; (w * h) as usize];
+    let thinking = (0..8)
+        .map(|i| format!("think-{i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let msgs = vec![(false, "正文一句话".to_string(), thinking)];
+    let (total, _) = tv.render_ai_page(&mut buf, w, h, &msgs, 0, 0, false);
+    assert_eq!(
+        total, 3,
+        "标签1 + 折叠占位1 + 正文1 = 3 行（8 行思考必须折没）"
+    );
+    let line_h = kfm_na::termview::AI_PAGE_LINE_H;
+    let top = kfm_na::termview::AI_PAGE_TOP;
+    let mut rowset = std::collections::BTreeSet::new();
+    for (i, &p) in buf.iter().enumerate() {
+        if p == kfm_na::termview::AI_THINK_FG {
+            let y = i as u32 / w;
+            assert!(y >= top, "暗色墨不许画到顶边距里");
+            rowset.insert((y - top) / line_h); // 第几展示行（顶边距起算）
+        }
+    }
+    assert_eq!(
+        rowset.iter().copied().collect::<Vec<_>>(),
+        vec![1],
+        "折叠占位只许占第 2 展示行（标签行之后），实测 {:?}",
+        rowset
+    );
+}
+
+#[test]
+fn spec_冒烟_ai页键盘让位_视口下沿收紧() {
+    // 2026-09-04 用户拍板：键盘+输入栏弹起时，AI 内容追底追到栏带上沿，
+    // 不许越过栏带往下画。bottom_inset=192（3 行高）→ fit 7→4，
+    // 让位区必须零墨
+    let (tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必须建得成");
+    let (w, h) = (800u32, 600u32);
+    let inset = 3 * kfm_na::termview::AI_PAGE_LINE_H; // 192
+    let mut msgs = vec![(true, "first".to_string(), String::new())];
+    for i in 1..30 {
+        msgs.push((false, format!("reply-{i:02}"), String::new()));
+    }
+    let mut buf = vec![0u32; (w * h) as usize];
+    let (total, fit) = tv.render_ai_page(&mut buf, w, h, &msgs, 0, inset, false);
+    assert_eq!(total, 60, "30 条消息 = 60 展示行（inset 不动总行数）");
+    assert_eq!(fit, 4, "600 高 - 192 inset = 4 行视口（无 inset 是 7）");
+    // 让位区（屏底 192px）零墨——任何非底色像素 = 越过栏带往下画
+    let zone = &buf[((h - inset) * w) as usize..];
+    assert!(
+        zone.iter().all(|&p| p == kfm_na::termview::AI_PAGE_BG),
+        "键盘让位区必须零墨（追底追到栏带上沿为止）"
+    );
+    // 追底语义保住：最新的 reply-28 必须画出来（视野里有字才算追到底）
+    let view = &buf[..((h - inset) * w) as usize];
+    assert!(
+        view.iter().any(|&p| p != kfm_na::termview::AI_PAGE_BG),
+        "收紧后的视口必须仍贴底画出最新消息"
+    );
 }
