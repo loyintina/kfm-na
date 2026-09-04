@@ -6,3 +6,4 @@ pub mod conn_provider_ws;
 pub mod input_bar;
 pub mod input_ime;
 pub mod term_alacritty;
+pub mod ui_fx;

@@ -8,6 +8,10 @@
 //!
 //! 成员与登记：src/ui/registry.md（名字/状态核/token 字段/通道/考题）。
 //! TermEmu trait 的 render_* 方法转发到这里各控件的 render 本体。
+//! seam/fx_spring 是采样缝与第一动画件（ui-base.md §三/§五），
+//! 不属控件不登记 registry。
+pub mod fx_spring;
 pub mod keybar;
 pub mod orb;
 pub mod prompt_bar;
+pub mod seam;

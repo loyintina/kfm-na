@@ -99,6 +99,24 @@ pub fn prefer_cjk(primary: &fontdue::Font, cjk: &fontdue::Font, c: char) -> bool
     primary.lookup_glyph_index(c) == 0 && cjk.lookup_glyph_index(c) != 0
 }
 
+/// AI 面板整页移位压盖（采样缝过渡帧专用，2026-09-04 弹簧落下）。
+/// src = 整页面板渲染产物，y_off ∈ [-h, 0] 上移压盖到 dst：
+/// dst 的 [max(y_off,0), h) 行从 src 顶部对应行整行拷贝；y_off=0 即
+/// 原样全盖（与直接渲染像素等价），y_off=-h 即完全屏外不动 dst。
+pub fn blit_panel_shifted(dst: &mut [u32], src: &[u32], w: u32, h: u32, y_off: i32) {
+    if w == 0 || h == 0 {
+        return;
+    }
+    let (w, h) = (w as usize, h as usize);
+    let y_off = y_off.clamp(-(h as i32), 0);
+    let skip = (-y_off) as usize; // 屏外行数（面板顶被推到屏上多少行）
+    let rows = h - skip; // 可见行数
+    if rows == 0 {
+        return;
+    }
+    dst[skip * w..(skip + rows) * w].copy_from_slice(&src[..rows * w]);
+}
+
 /// 默认前景白 / 背景黑（softbuffer XRGB：高字节不用）
 pub const DEFAULT_FG: u32 = 0x00FF_FFFF;
 pub const DEFAULT_BG: u32 = 0x0000_0000;
@@ -1076,17 +1094,8 @@ impl TermView {
         const LINE_H: u32 = 64;
         const PX: f32 = 40.0;
         if msgs.is_empty() {
-            // 空态：居中提示（占位期的截图判卷点保留——肉眼可分两版）
-            let cy = (buf_h / 2).saturating_sub(LINE_H / 2);
-            self.draw_label(
-                &mut frame,
-                "AI 页 · 发送消息开始对话",
-                0,
-                buf_w,
-                cy,
-                LINE_H,
-                AI_PAGE_FG,
-            );
+            // 空态 = 纯底零墨（2026-09-04 用户拍板撤占位提示：对话框没
+            // 说话时就是空的——游戏对话框语言；占位期那行小字已退役）
             return;
         }
         let row_w = buf_w.saturating_sub(MARGIN_X * 2);

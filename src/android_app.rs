@@ -229,6 +229,9 @@ struct App {
     last_bar_w: Option<u32>,
     /// 上一圈的光标闪烁相位（聚焦时相位翻转置脏，530ms 节拍）
     last_caret_on: bool,
+    /// AI 面板过渡帧离屏缓冲（采样缝 blit 用，复用免逐帧分配）：
+    /// 仅在动画进行中的帧真用，硬切路径零成本
+    panel_scratch: Vec<u32>,
 }
 
 /// 默认脑路（2026-09-03 用户拍板）：Kimi 卡 + k2.7 coding highspeed。
@@ -1353,6 +1356,12 @@ impl App {
         if let Err(e) = base.load(crate::plugins::input_bar::InputBar::new()) {
             crate::report::report_sync("ai", &format!("输入栏插件装载失败: {e:?}"));
         }
+        // ui-fx 动画插件（ui-base §五，采样缝第一消费者）：占「AI 面板
+        // Y 偏移」缝播弹簧落下；装载失败/禁用 = 不占槽 = 全局硬切
+        // （功能等价只是变糙——纪律条款「拔动画插件功能等价」）
+        if let Err(e) = base.load(crate::plugins::ui_fx::UiFx::new()) {
+            crate::report::report_sync("ui", &format!("ui-fx 插件装载失败: {e:?}"));
+        }
         self.input_bar = base.ctx().get::<crate::input_bar::InputBarState>().ok();
         if let (Some(bar), Some(ai)) = (&self.input_bar, &self.ai_presence) {
             crate::gate::register_input_bar(bar);
@@ -2016,6 +2025,7 @@ impl App {
     /// (screendump) 只画终端网格本体，快捷键行/光球/放大镜是 UI 装帧，
     /// 不在后台视野里
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     fn rasterize(
         term: Option<&mut Box<dyn TermEmu>>,
         mods: u8,
@@ -2028,6 +2038,8 @@ impl App {
         buf: &mut [u32],
         w: u32,
         h: u32,
+        panel_off: i32,
+        panel_scratch: &mut Vec<u32>,
     ) {
         if let Some(term) = term {
             // 当前栏带高（与 render_inputbar 同源实测折行——不读 poll 写回
@@ -2036,19 +2048,29 @@ impl App {
             let bar_h = bar_snap.map_or(crate::input_bar::HEIGHT_PX, |bs| {
                 crate::input_bar::height_for_lines(term.bar_text_lines(&bs.text, w))
             });
-            if ai_snap.is_some_and(|s| s.page == crate::ai_presence::Page::AiFullscreen) {
-                // AI 全屏页（期 0③ 真对话页）：不画终端网格与快捷键行，
-                // 深紫暗底 + 消息行尾随锁定（合成网格美化是期 0⑤）
+            // AI 面板三分支（采样缝 2026-09-04）：panel_off 是缝采样值——
+            // 无 ui-fx 占槽时恒等于目标值（0 或 -h），退化为原硬切两分支；
+            // 中间值 = 弹簧过渡帧：终端在下，面板移位压上
+            if panel_off <= -(h as i32) {
+                // 面板完全屏外（终端页稳态）：画终端网格 + 快捷键行
+                // （快捷键行 = BAR-017 Rust 自绘覆盖层；inset 必须叠输入栏
+                // 当前带高——栏带压在行下沿，漏叠 = 眼手错位，2026-08-31
+                // 排障实锤，触摸几何早就是叠后的）
+                term.render_into(buf, w, h);
+                term.render_keybar(buf, w, h, ime_bottom_px + bar_h, mods);
+            } else if panel_off == 0 {
+                // 面板靠泊（AI 全屏页稳态，期 0③ 真对话页）：不画终端
+                // 网格与快捷键行，深紫暗底 + 消息行尾随锁定
                 term.render_ai_page(buf, w, h, chat_msgs);
             } else {
+                // 过渡帧：终端 + 快捷键行在下（原位不动），AI 面板整页
+                // 离屏渲染后按偏移压盖——与直接渲染像素等价（blit 钉）
                 term.render_into(buf, w, h);
-                // 快捷键行（BAR-017：Rust 自绘覆盖层，画在终端网格之上；
-                // 键盘 inset 之上——键盘弹起时行跟着上浮）。
-                // 修饰键位读 input.modifiers 服务（input-ime 方案 A）。
-                // 2026-08-31 排障实锤：inset 必须叠输入栏当前带高——
-                // 栏带压在行下沿，少这一层行第二排被输入栏盖掉（触摸几何
-                // 早就是叠后的，渲染漏叠 = 眼手错位；dump 对照拍出）
                 term.render_keybar(buf, w, h, ime_bottom_px + bar_h, mods);
+                panel_scratch.clear();
+                panel_scratch.resize((w as usize) * (h as usize), 0);
+                term.render_ai_page(panel_scratch, w, h, chat_msgs);
+                crate::termview::blit_panel_shifted(buf, panel_scratch, w, h, panel_off);
             }
             // 全局输入栏（常驻 chrome：任何会话下都在，§二——AI 页也画）。
             // 压底紧贴键盘（栏带 = 屏底 - inset - 栏高）；sending 图标态
@@ -2120,6 +2142,17 @@ impl App {
                 .is_multiple_of(2);
             let chat_msgs = self.ai_chat.as_ref().map(|c| c.snap()).unwrap_or_default();
             let mut tg = th.as_ref().map(|a| a.lock().unwrap());
+            // AI 面板 Y 偏移过缝（ui-base §三）：目标值 = AI 页 0 靠泊 /
+            // 终端页 -屏高屏外（目标值语义在基础层，缝只许插值不许改）。
+            // 无 ui-fx 占槽 = 直通目标值（硬切，与改前像素等价）
+            let ai_page = self
+                .last_ai_snap
+                .is_some_and(|s| s.page == crate::ai_presence::Page::AiFullscreen);
+            let panel_target = if ai_page { 0.0 } else { -(h as f32) };
+            let panel_off = crate::ui::seam::sample_ai_panel_offset_y(
+                panel_target,
+                crate::report::boot_ms() as u64,
+            ) as i32;
             Self::rasterize(
                 tg.as_deref_mut(),
                 mods,
@@ -2132,6 +2165,8 @@ impl App {
                 &mut buf,
                 w,
                 h,
+                panel_off,
+                &mut self.panel_scratch,
             );
         } else {
             buf.fill(KFM_PURPLE);
@@ -2287,6 +2322,11 @@ impl ApplicationHandler for App {
             self.check_inputbar_long_press(); // 输入栏长按 → 选择模式(BAR-046)
             self.poll_ai_presence(); // AI 外显快照比对(注入/到期也要画帧)
             self.poll_input_bar(); // 输入栏快照比对(注入/分流也要画帧)
+            // 采样缝动画帧时钟(ui-base §四 按需启停):缝上有活跃动画
+            // 且距上帧 ≥16ms 才置脏——无动画零额外帧,有动画 ≤60fps
+            if crate::ui::fx_spring::panel_frame_due(crate::report::boot_ms() as u64) {
+                self.dirty = true;
+            }
             // blackout 期补画(冗余兜底,2026-08-22 探针拆除案保留):
             // 首笔 RedrawRequested 到达前的脏帧由唤醒锤锤醒的本方法直画;
             // 首笔 Redraw 到达后唤醒锤收锤,此路自动关闭归回正道

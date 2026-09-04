@@ -128,15 +128,30 @@ pub fn dump_now(dir: &str) {
         let bar_h = bar_snap.as_ref().map_or(crate::input_bar::HEIGHT_PX, |bs| {
             crate::input_bar::height_for_lines(t.bar_text_lines(&bs.text, w))
         });
-        if ai_page {
+        // AI 面板 Y 偏移与前台同尺过缝（2026-09-04 弹簧落下）：dump 是
+        // 快照，采到中间值就画过渡帧——实拍判卷与前台同一画面
+        let panel_target = if ai_page { 0.0 } else { -(h as f32) };
+        let panel_off = crate::ui::seam::sample_ai_panel_offset_y(
+            panel_target,
+            crate::report::boot_ms() as u64,
+        ) as i32;
+        if panel_off <= -(h as i32) {
+            t.render_into(&mut buf, w, h);
+            // 快捷键行：前台同规则 inset 叠输入栏当前带高；修饰位无共享态按 0 画
+            t.render_keybar(&mut buf, w, h, bar_h, 0);
+        } else if panel_off == 0 {
             // 与前台 rasterize 同一分支规则：AI 页 = 真对话消息盖掉终端网格
             // （AI 页不画快捷键行，同前台）；消息读 AI_CHAT 注册位（D9 同源）
             let msgs = ai_chat_handle().map(|c| c.snap()).unwrap_or_default();
             t.render_ai_page(&mut buf, w, h, &msgs);
         } else {
+            // 过渡帧：终端在下，面板离屏渲染后按偏移压盖（与前台同规则）
             t.render_into(&mut buf, w, h);
-            // 快捷键行：前台同规则 inset 叠输入栏当前带高；修饰位无共享态按 0 画
             t.render_keybar(&mut buf, w, h, bar_h, 0);
+            let msgs = ai_chat_handle().map(|c| c.snap()).unwrap_or_default();
+            let mut scratch = vec![0u32; (w as usize) * (h as usize)];
+            t.render_ai_page(&mut scratch, w, h, &msgs);
+            crate::termview::blit_panel_shifted(&mut buf, &scratch, w, h, panel_off);
         }
         // 输入栏：常驻 chrome，两页都画（同前台 rasterize 规则）；
         // sending 图标态跟 AI 运行态硬切；光标闪烁相位按节拍算

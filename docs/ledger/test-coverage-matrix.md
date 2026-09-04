@@ -32,14 +32,17 @@
 | `src/plugins/input_bar.rs` | 2 | 2 | 0 | — |
 | `src/plugins/input_ime.rs` | 2 | 2 | 0 | — |
 | `src/plugins/term_alacritty.rs` | 3 | 3 | 0 | — |
+| `src/plugins/ui_fx.rs` | 2 | 2 | 0 | — |
 | `src/protocol.rs` | 2 | 2 | 0 | — |
 | `src/providers.rs` | 5 | 5 | 0 | — |
 | `src/report.rs` | 8 | 1 | 7 | set_boot_t0 start_flusher report report_sync report_sync_once http_status_is_200 escape_json |
 | `src/scroll.rs` | 5 | 5 | 0 | — |
 | `src/session.rs` | 8 | 8 | 0 | — |
 | `src/session_router.rs` | 10 | 10 | 0 | — |
-| `src/termview.rs` | 78 | 72 | 6 | FONT_CANDIDATES CJK_FONT_CANDIDATES load_cjk_font font_probe MAG_HALF_COLS MAG_HALF_ROWS |
+| `src/termview.rs` | 79 | 73 | 6 | FONT_CANDIDATES CJK_FONT_CANDIDATES load_cjk_font font_probe MAG_HALF_COLS MAG_HALF_ROWS |
 | `src/trace.rs` | 12 | 8 | 4 | TRACE_CAP format_tail dump_all dump_tail |
+| `src/ui/fx_spring.rs` | 3 | 3 | 0 | — |
 | `src/ui/keybar.rs` | 1 | 1 | 0 | — |
 | `src/ui/orb.rs` | 3 | 3 | 0 | — |
 | `src/ui/prompt_bar.rs` | 5 | 4 | 1 | row_of |
+| `src/ui/seam.rs` | 4 | 4 | 0 | — |
