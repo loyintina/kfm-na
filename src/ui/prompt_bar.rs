@@ -2,7 +2,7 @@
 //! 物理搬移立形：状态核 = input_bar.rs，视图 = 本文件 impl TermView 块，
 //! 注入通道 = bar-inject，考题 = input_bar_spec + termview_spec caret/bar
 //! 系列，档案 = 插件档案-输入栏.md。搬移为零逻辑变化——逐字节原样）。
-use crate::termview::{Frame, GlowSpec, GradSpec, SELECT_BG, VeilSpec, lerp_rgb, wrap_starts};
+use crate::termview::{Frame, GlowSpec, GradSpec, SELECT_BG, VeilSpec, lerp_rgb};
 
 /// 行归属纯函数（BAR-041）：字符位 idx 落在 starts 的第几行——最后一个
 /// 起点 ≤ idx 的行（idx=文末 items.len() 自动归末行）。2026-09-01 闪退案
@@ -44,7 +44,8 @@ impl crate::termview::TermView {
     /// 闪烁相位（调用方按 CARET_BLINK_MS 算好传入，渲染纯函数）；定位柄
     /// 蓝色下坠柄跟 snap.handle 走。
     /// textarea（2026-08-31 移动端全量复刻）：带高随行数长（覆盖式悬浮——
-    /// 栏带向上浮盖终端底部行，终端网格几何不动）；文本折行（wrap_starts）
+    /// 栏带向上浮盖终端底部行，终端网格几何不动）；文本折行（2026-09-04
+    /// 起 multiline_starts：'\n' 硬换行 + 行内软折同尺）
     /// 多行绘制，超 MAX_LINES 尾锚显最后几行。**折行数由本函数从
     /// snap.text 实测量出**（渲染几何与所画文本同源——后台 dump 无 poll
     /// 写回也不会带高/文本两张皮，2026-08-31 实拍定罪）；snap.lines 只
@@ -68,12 +69,15 @@ impl crate::termview::TermView {
             return; // 窗太窄画不下，保命要紧
         }
         // 量宽折行（画文本也要用，先量一次两头吃）。显示文本 = text 在
-        // 光标处拼入组合态（input_bar::display_text 单源，「所见」定义）
+        // 光标处拼入组合态（input_bar::display_text 单源，「所见」定义）。
+        // 2026-09-04 Enter 换行：items 走 measure_bar_items（'\n' 零宽条目
+        // 保 1:1），折行走 multiline_starts（硬换行 + 软折同尺）
         let display = crate::input_bar::InputBarState::display_text(snap);
-        let items = self.measure_items(&display, BAR_TEXT_PX);
+        let items = self.measure_bar_items(&display, BAR_TEXT_PX);
         let widths: Vec<f32> = items.iter().map(|i| i.2).collect();
         let avail = input_bar::text_avail_w(buf_w).unwrap_or(1.0);
-        let starts = wrap_starts(&widths, avail);
+        let chars: Vec<char> = display.chars().collect();
+        let starts = input_bar::multiline_starts(&chars, &widths, avail);
         let n_lines = if snap.text.is_empty() {
             1
         } else {
@@ -436,7 +440,8 @@ impl crate::termview::TermView {
 
     /// 量输入栏文本折行数（眼手同尺单源的量宽端：渲染层有字体，android_app
     /// 每帧文本/宽度变化时调用 → InputBarState::set_lines 写回，触摸命中与
-    /// dump 读同一份）。buf_w 退化（画不下）按 1 行计
+    /// dump 读同一份）。buf_w 退化（画不下）按 1 行计。
+    /// 2026-09-04 Enter 换行：硬换行计入行数（multiline_starts）
     pub fn bar_text_lines(&self, text: &str, buf_w: u32) -> u32 {
         // 调用方传 display_text(组合态拼入);此处只管量
         if text.is_empty() {
@@ -446,11 +451,12 @@ impl crate::termview::TermView {
             return 1;
         };
         let widths: Vec<f32> = self
-            .measure_items(text, BAR_TEXT_PX)
+            .measure_bar_items(text, BAR_TEXT_PX)
             .iter()
             .map(|i| i.2)
             .collect();
-        wrap_starts(&widths, avail).len() as u32
+        let chars: Vec<char> = text.chars().collect();
+        crate::input_bar::multiline_starts(&chars, &widths, avail).len() as u32
     }
 
     /// 点按定位换算（2026-08-31 浏览器控件行为对齐；BAR-042 像素滚动
@@ -468,13 +474,14 @@ impl crate::termview::TermView {
         // 眼手同尺：点按换算与渲染共用 display_text（含组合态），避免
         // 组合态下布局与光标不同源导致命中错位 / 切片倒挂
         let display = crate::input_bar::InputBarState::display_text(snap);
-        let items = self.measure_items(&display, BAR_TEXT_PX);
+        let items = self.measure_bar_items(&display, BAR_TEXT_PX);
         if items.is_empty() {
             return 0;
         }
         let widths: Vec<f32> = items.iter().map(|i| i.2).collect();
         let avail = input_bar::text_avail_w(buf_w).unwrap_or(1.0);
-        let starts = wrap_starts(&widths, avail);
+        let chars: Vec<char> = display.chars().collect();
+        let starts = input_bar::multiline_starts(&chars, &widths, avail);
         let n = starts.len();
         let bar_h = input_bar::height_for_lines(n as u32);
         // BAR-049：视口高与渲染同尺（field 上下收 TEXT_PAD_Y 内衬）
@@ -497,6 +504,13 @@ impl crate::termview::TermView {
         } else {
             items.len()
         };
+        // 2026-09-04 Enter 换行：行末跟 '\n' 时，点该行右侧空白 = 行尾
+        // （'\n' 之前的位置），不是 row_end（下一行首）
+        let content_end = if row_end > row_start && items[row_end - 1].1 == '\n' {
+            row_end - 1
+        } else {
+            row_end
+        };
         // 列：累计步进宽，过半归右（浏览器 tap 落点就近原则）
         let mut pen = 18.0f32;
         for (i, item) in items[row_start..row_end.max(row_start)].iter().enumerate() {
@@ -505,7 +519,7 @@ impl crate::termview::TermView {
             }
             pen += item.2;
         }
-        row_end
+        content_end
     }
 
     /// 画单个选择锚点柄（BAR-046）：尖朝上，底边贴对应行底。
@@ -695,13 +709,14 @@ impl crate::termview::TermView {
             return None;
         }
         let display = crate::input_bar::InputBarState::display_text(snap);
-        let items = self.measure_items(&display, BAR_TEXT_PX);
+        let items = self.measure_bar_items(&display, BAR_TEXT_PX);
         if items.is_empty() {
             return None;
         }
         let widths: Vec<f32> = items.iter().map(|i| i.2).collect();
         let avail = input_bar::text_avail_w(buf_w)?;
-        let starts = wrap_starts(&widths, avail);
+        let chars: Vec<char> = display.chars().collect();
+        let starts = input_bar::multiline_starts(&chars, &widths, avail);
         let n_lines = starts.len();
         let bar_h = input_bar::height_for_lines(n_lines as u32);
         let top = buf_h.checked_sub(ime_bottom)?.checked_sub(bar_h)?;

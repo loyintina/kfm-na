@@ -4,7 +4,8 @@
 //! 常驻 chrome：压底紧贴键盘（快捷键行上移一层让位），任何会话下都在。
 //! 焦点二态：终端 / 输入栏——点文本区聚焦（壳层顺带弹键盘），Esc 或点
 //! 终端区失焦；聚焦时键盘按键全归输入栏（分流在壳层 drain_ime_inject），
-//! Enter = 发送（壳层把 enter() 取走的文本推进 AiSendSink）。
+//! Enter = 栏内换行（2026-09-04 用户拍板：多逻辑行排版，发送只走 ▶ 钮
+//! 或 gate submit 注入）。
 //!
 //! v1 从简：无选区无横滚，编辑 = 光标插入点（2026-08-31 升级：点按定位 +
 //! 插入 + 定位柄，浏览器 textarea 行为对齐）；发送后保持聚焦（手机聊天惯例）。
@@ -56,6 +57,33 @@ pub fn height_for_lines(lines: u32) -> u32 {
 pub fn text_avail_w(buf_w: u32) -> Option<f32> {
     let field_w = buf_w.checked_sub(2 * MARGIN_X_PX + SEND_W_PX + GAP_PX)?;
     Some(field_w.saturating_sub(70) as f32)
+}
+
+/// 多逻辑行折行（2026-09-04 Enter 换行拍板）：与 termview::wrap_starts
+/// 同贪心断行算法，但遇 '\n' 无条件断行——'\n' 是它终止行的最后一字
+/// （零宽条目，termview::measure_bar_items 保留在 items 里，保
+/// 「item 下标 == char 下标 1:1」全家假设）。chars/widths 必须等长 1:1。
+/// 无 '\n' 时与 wrap_starts 逐字节一致（旧软折行为不退化）；
+/// 连续/行尾 '\n' 产空行（starts 可等于 items.len()，切片 [len..len]
+/// 安全）。A 档纯逻辑，考题 spec_multiline_starts_* 在
+/// tests/input_bar_spec.rs（含变异抽检：删 '\n' 分支考题必须红）。
+pub fn multiline_starts(chars: &[char], widths: &[f32], max_w: f32) -> Vec<usize> {
+    debug_assert_eq!(chars.len(), widths.len(), "chars/widths 必须 1:1");
+    let mut starts = vec![0usize];
+    let mut acc = 0.0f32;
+    for (i, (&c, &w)) in chars.iter().zip(widths.iter()).enumerate() {
+        if c == '\n' {
+            starts.push(i + 1);
+            acc = 0.0;
+            continue;
+        }
+        if i > *starts.last().unwrap() && acc + w > max_w {
+            starts.push(i);
+            acc = 0.0;
+        }
+        acc += w;
+    }
+    starts
 }
 
 /// 光标闪烁半周期（ms）：Android 系统输入光标节拍——亮 530 灭 530。

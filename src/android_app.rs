@@ -1898,10 +1898,10 @@ impl App {
             crate::report::report("ime", "首个 JNI IME 文字注入");
         }
         // 输入栏聚焦分流（期 0 组件三，§五 焦点二态）：键盘按键全归栏，
-        // 不下终端——Enter=发送、退格删字、Esc 失焦、文本追加，其余特殊键
+        // 不下终端——Enter=栏内换行（2026-09-04 用户拍板：发送只走 ▶ 钮/
+        // gate submit 注入）、退格删字、Esc 失焦、文本追加，其余特殊键
         // v1 不管（方向键/Tab 等）
         if self.input_bar.as_ref().is_some_and(|b| b.is_focused()) {
-            let mut want_submit = false;
             if let Some(bar) = &self.input_bar {
                 for item in items {
                     match item {
@@ -1909,7 +1909,11 @@ impl App {
                             crate::report::report("ime-input", &format!("commit: {s:?}"));
                             bar.insert_text(&s)
                         }
-                        crate::ime_queue::Inject::Key(66) => want_submit = true, // KC_ENTER
+                        crate::ime_queue::Inject::Key(66) => {
+                            // KC_ENTER：栏内换行（2026-09-04 拍板，发送只走 ▶）
+                            crate::report::report("ime-input", "enter: 栏内换行");
+                            bar.insert_text("\n");
+                        }
                         crate::ime_queue::Inject::Key(67) => {
                             crate::report::report("ime-input", "backspace");
                             bar.backspace()
@@ -1989,10 +1993,6 @@ impl App {
                         }
                         _ => {}
                     }
-                }
-                if want_submit {
-                    let sent = bar.submit();
-                    crate::report::report("ai", &format!("输入栏 Enter 发送: {sent:?}"));
                 }
             }
             self.dirty = true;
@@ -2075,10 +2075,10 @@ impl App {
         }
         // 输入栏聚焦分流（物理键盘与 IME 同尺）
         if self.input_bar.as_ref().is_some_and(|b| b.is_focused()) {
-            let mut want_submit = false;
             if let Some(bar) = &self.input_bar {
                 match &event.logical_key {
-                    Key::Named(NamedKey::Enter) => want_submit = true,
+                    // Enter=栏内换行（2026-09-04 拍板，发送只走 ▶ 钮）
+                    Key::Named(NamedKey::Enter) => bar.insert_text("\n"),
                     Key::Named(NamedKey::Backspace) => bar.backspace(),
                     Key::Named(NamedKey::Escape) => bar.unfocus(),
                     _ => {
@@ -2086,9 +2086,6 @@ impl App {
                             bar.insert_text(t);
                         }
                     }
-                }
-                if want_submit {
-                    bar.submit();
                 }
             }
             self.dirty = true;

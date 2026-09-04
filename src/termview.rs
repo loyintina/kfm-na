@@ -1338,6 +1338,34 @@ impl TermView {
         items
     }
 
+    /// 输入栏量宽（2026-09-04 Enter 换行多逻辑行排版）：与 measure_items
+    /// 唯一差异——'\n' 保留为零宽条目，不被 pick_font 跳过。下游全家
+    /// （starts/光标/选区/锚点柄/菜单）建立在「item 下标 == char 下标
+    /// 1:1」假设上，'\n' 进序列才能一处不破。零宽光栅零面积，
+    /// draw_items_left 对它天然安全（循环不执行，不进墨）。
+    pub(crate) fn measure_bar_items(
+        &self,
+        text: &str,
+        px: f32,
+    ) -> Vec<(&fontdue::Font, char, f32)> {
+        let mut items = Vec::new();
+        for c in text.chars() {
+            if c == '\n' {
+                items.push((&self.font, '\n', 0.0));
+                continue;
+            }
+            let Some(f) = self.pick_font(c) else {
+                let mut seen = self.tofu_seen.borrow_mut();
+                if !seen.contains(&c) && seen.len() < 16 {
+                    seen.push(c);
+                }
+                continue;
+            };
+            items.push((f, c, f.metrics(c, px).advance_width));
+        }
+        items
+    }
+
     /// 输入栏文本：左对齐（内缩 18px）+ 垂直居中，右缘按 cw 裁剪。
     /// px = 显式字号（textarea 多行后字号不随行高缩，调用方给 BAR_TEXT_PX）
     #[allow(clippy::too_many_arguments)]

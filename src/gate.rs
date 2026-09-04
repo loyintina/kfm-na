@@ -1495,8 +1495,8 @@ fn orb_check(dir: &str) {
 //
 // 输入栏状态核的遥控器:host 写脚本行进 bar-inject,值守线程解析后直调
 // InputBarState 服务方法(状态核 Sync 内部可变,不经主循环)。submit 走
-// 状态核的发送口(壳层装配的脑闭包)——触摸发送钮/IME Enter/本注入
-// 三路同一路径(D9 同源)。处理后落 bar-inject-res 回执。
+// 状态核的发送口(壳层装配的脑闭包)——2026-09-04 Enter 改判栏内换行后,
+// 发送口 = 触摸发送钮/本注入两路(D9 同源)。处理后落 bar-inject-res 回执。
 
 /// 输入栏状态核服务句柄(App 装插件时登记;观测/注入同一份)
 static INPUT_BAR: Mutex<Option<Arc<crate::input_bar::InputBarState>>> = Mutex::new(None);

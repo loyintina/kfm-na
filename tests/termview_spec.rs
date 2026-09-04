@@ -1328,6 +1328,16 @@ fn spec_bar_text_lines_窗越窄行越多() {
     assert!(wide >= 1 && narrow > wide, "窄 {narrow} 必须多于宽 {wide}");
 }
 
+#[test]
+fn spec_bar_text_lines_硬换行计入行数() {
+    // 2026-09-04 Enter 换行：'\n' 硬断行进量行（真字体真量宽，不是 mocks）
+    let (tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必成");
+    assert_eq!(tv.bar_text_lines("a\nb", 1080), 2, "硬换行 = 两行");
+    assert_eq!(tv.bar_text_lines("a\n\nb", 1080), 3, "空逻辑行也算行");
+    assert_eq!(tv.bar_text_lines("a\n", 1080), 2, "行尾换行产空行");
+    assert_eq!(tv.bar_text_lines("ab", 1080), 1, "无换行仍一行（不退化）");
+}
+
 // ========== BAR-039：渲染带高从文本实测（stale lines 两张皮回归钉） ==========
 
 #[test]

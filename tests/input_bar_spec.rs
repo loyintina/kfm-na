@@ -752,3 +752,79 @@ fn spec_bar054_区间替换() {
     bar.replace_range(2, 4, "");
     assert_eq!(bar.snap().text, "一二五六");
 }
+
+// ========== multiline_starts（2026-09-04 Enter 换行：多逻辑行折行） ==========
+// 判卷点：'\n' 硬断行 + 行内软折同尺；无 '\n' 与 wrap_starts 逐字节一致
+// （旧行为不退化）；空逻辑行/行尾换行产空行（starts 可 == items.len()）。
+// 变异抽检：删掉 '\n' 分支后，除「无换行等价」外全部考题必须红。
+
+#[test]
+fn spec_multiline_starts_无换行与wrap等价() {
+    use kfm_na::input_bar::multiline_starts;
+    use kfm_na::termview::wrap_starts;
+    // 无 '\n' 时必须退化成纯软折，与 wrap_starts 逐字节一致
+    for (widths, max_w) in [
+        (vec![10.0, 10.0, 10.0], 100.0),
+        (vec![10.0, 10.0, 10.0], 30.0),
+        (vec![10.0; 5], 25.0),
+        (vec![20.0, 10.0, 10.0], 15.0),
+        (vec![], 100.0),
+    ] {
+        let chars: Vec<char> = widths.iter().map(|_| 'a').collect();
+        assert_eq!(
+            multiline_starts(&chars, &widths, max_w),
+            wrap_starts(&widths, max_w),
+            "widths={widths:?} max_w={max_w} 必须与 wrap_starts 一致"
+        );
+    }
+}
+
+#[test]
+fn spec_multiline_starts_硬换行断行() {
+    use kfm_na::input_bar::multiline_starts;
+    // "a\nb"：'\n' 是行 0 最后一字（零宽），行 1 从 2 起 → [0,2]
+    let chars: Vec<char> = "a\nb".chars().collect();
+    assert_eq!(
+        multiline_starts(&chars, &[10.0, 0.0, 10.0], 100.0),
+        vec![0, 2]
+    );
+}
+
+#[test]
+fn spec_multiline_starts_空逻辑行产空行() {
+    use kfm_na::input_bar::multiline_starts;
+    // "a\n\nb"：连续两个 '\n' → 中间一空行，三行 [0,2,3]
+    let chars: Vec<char> = "a\n\nb".chars().collect();
+    assert_eq!(
+        multiline_starts(&chars, &[10.0, 0.0, 0.0, 10.0], 100.0),
+        vec![0, 2, 3]
+    );
+    // "\na"：首字即换行 → 行 0 只有 '\n'，[0,1]
+    let chars: Vec<char> = "\na".chars().collect();
+    assert_eq!(multiline_starts(&chars, &[0.0, 10.0], 100.0), vec![0, 1]);
+}
+
+#[test]
+fn spec_multiline_starts_行尾换行产空行() {
+    use kfm_na::input_bar::multiline_starts;
+    // "a\n"：行尾换行 → 末行是空行，starts=[0,2]（== items.len()，切片
+    // [2..2] 安全——光标落在新空行是 Enter 换行的核心体感）
+    let chars: Vec<char> = "a\n".chars().collect();
+    let starts = multiline_starts(&chars, &[10.0, 0.0], 100.0);
+    assert_eq!(starts, vec![0, 2]);
+    assert_eq!(
+        *starts.last().unwrap(),
+        chars.len(),
+        "末行起点 == 文末（空行）"
+    );
+}
+
+#[test]
+fn spec_multiline_starts_逻辑行内软折() {
+    use kfm_na::input_bar::multiline_starts;
+    // "aaa\nbbb" max 25：行 0 "aaa" 里软折（2 起断），'\n' 硬断（4 起），
+    // 逻辑行 "bbb" 内再软折（6 起）→ [0,2,4,6]；'\n' 所在行不被软折吞并
+    let chars: Vec<char> = "aaa\nbbb".chars().collect();
+    let widths = [10.0, 10.0, 10.0, 0.0, 10.0, 10.0, 10.0];
+    assert_eq!(multiline_starts(&chars, &widths, 25.0), vec![0, 2, 4, 6]);
+}
