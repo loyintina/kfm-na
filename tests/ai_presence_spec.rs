@@ -433,17 +433,78 @@ fn spec_stats_ai_presence字段族() {
 
 #[test]
 fn spec_冒烟_ai页空态纯底零墨() {
-    // 空态 = 纯底零墨（2026-09-04 用户拍板撤占位提示：对话框没说话时
-    // 就是空的——游戏对话框语言；占位期小字已退役）
+    // 空态内容区 = 纯底零墨（2026-09-04 用户拍板撤占位提示：对话框没说话
+    // 时就是空的——游戏对话框语言；占位期小字已退役）。
+    // 2026-09-04 装修修订：边框（仿 kfmv4 orb-panel）是页面装修不是占位
+    // 提示——边框带必须有墨，框内内容区零墨的契约不变
     let (tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必须建得成");
     let (w, h) = (400u32, 300u32);
     let mut buf = vec![0u32; (w * h) as usize];
     tv.render_ai_page(&mut buf, w, h, &[], 0, 0, false);
     assert_eq!(buf[0], kfm_na::termview::AI_PAGE_BG, "整屏深紫暗底");
-    assert!(
-        buf.iter().all(|&p| p == kfm_na::termview::AI_PAGE_BG),
-        "空态必须零墨——任何非底色像素都是占位提示复活"
+    // 框内内容区（远离边框带与发光晕）必须零墨——任何非底色像素都是
+    // 占位提示复活
+    for y in 80..(h - 80) {
+        let row = &buf[(y * w + 80) as usize..(y * w + w - 80) as usize];
+        assert!(
+            row.iter().all(|&p| p == kfm_na::termview::AI_PAGE_BG),
+            "空态内容区必须零墨（y={y} 见非底色）"
+        );
+    }
+    // 边框带必须有墨（装修契约：空态也画框）——左缘粗边中点必非底色
+    let left_edge = buf[((h / 2) * w + 18) as usize];
+    assert_ne!(
+        left_edge,
+        kfm_na::termview::AI_PAGE_BG,
+        "边框左缘必须有墨（空态也画框）"
     );
+}
+
+#[test]
+fn spec_冒烟_ai页边框配方钉() {
+    // 2026-09-04 装修：边框几何/渐变的像素级配方钉（kfmv4 orb-panel 直译
+    // 的判卷）——探测点全部从常量推导（改配方必红），渐变期望值用同款
+    // lerp_rgb 从 C1/C2 现算（不猜死值）
+    use kfm_na::termview as tvv;
+    let (tv, _, _) = tvv::build_vendored().expect("内嵌字体必须建得成");
+    let (w, h) = (800u32, 600u32);
+    let (m, fw) = (tvv::AI_PAGE_FRAME_MARGIN, tvv::AI_PAGE_FRAME_W);
+    let mut buf = vec![0u32; (w * h) as usize];
+    tv.render_ai_page(&mut buf, w, h, &[], 0, 0, false);
+    let bg = tvv::AI_PAGE_BG;
+    let px = |x: u32, y: u32| buf[(y * w + x) as usize];
+    let (ow, oh) = (w - 2 * m, h - 2 * m); // 外环尺寸（bottom_inset=0）
+    let denom = (ow - 1) + (oh - 1); // 与 fill_round_rect_grad diag 同尺
+    let grad = |lx: u32, ly: u32| {
+        tvv::lerp_rgb(
+            tvv::AI_PAGE_FRAME_C1,
+            tvv::AI_PAGE_FRAME_C2,
+            ((lx + ly) * 255 / denom).min(255),
+        )
+    };
+    // 屏边留白（发光晕之外）无墨
+    assert_eq!(px(1, h / 2), bg, "边框外留白必须纯底");
+    // 左缘 3 倍粗（kfmv4 border-left-width:3px）：x ∈ [m, m+3W) 通墨，
+    // x = m+3W 起是内芯底色
+    let mid_y = h / 2;
+    let ly = mid_y - m;
+    assert_eq!(px(m + 2, mid_y), grad(2, ly), "左缘粗边内点必须是渐变墨");
+    assert_eq!(
+        px(m + 3 * fw - 1, mid_y),
+        grad(3 * fw - 1, ly),
+        "左缘粗边末列仍是墨"
+    );
+    assert_eq!(px(m + 3 * fw, mid_y), bg, "左缘粗边到此为止（内芯 punch）");
+    // 上缘单倍厚：y ∈ [m, m+W) 通墨，y = m+W 起内芯
+    let mid_x = w / 2;
+    let lx = mid_x - m;
+    assert_eq!(px(mid_x, m + fw - 1), grad(lx, fw - 1), "上缘描边末行是墨");
+    assert_eq!(px(mid_x, m + fw), bg, "上缘描边到此为止");
+    // 圆角（AI_PAGE_FRAME_R > 0 的判据：直角配方角点必有墨）
+    assert_eq!(px(m, m), bg, "圆角必须切掉外环角点");
+    // 圆角弧起点（角点正下 R 处）回到描边上——弧参数真参与配方的判据
+    let fr = tvv::AI_PAGE_FRAME_R;
+    assert_eq!(px(m, m + fr), grad(0, fr), "圆角弧起点必须是渐变墨");
 }
 
 #[test]
@@ -458,16 +519,26 @@ fn spec_冒烟_ai页真消息行画在顶部区() {
         (false, "你好，有什么可以帮你？".to_string(), String::new()),
     ];
     tv.render_ai_page(&mut buf, w, h, &msgs, 0, 0, false);
-    let top = &buf[(48 * w) as usize..(180 * w) as usize];
-    assert!(
-        top.iter().any(|&p| p != kfm_na::termview::AI_PAGE_BG),
-        "消息行必须真画在顶部区"
-    );
-    let mid = &buf[((h / 2) * w) as usize..((h / 2 + 40) * w) as usize];
-    assert!(
-        mid.iter().all(|&p| p == kfm_na::termview::AI_PAGE_BG),
-        "短对话屏心必须是纯底（尾随锁定前不会有字）"
-    );
+    // 顶部区探针收窄到框内内容区（2026-09-04 装修：边框墨会让全宽探针
+    // 的 any!=BG 恒真，失去「消息行真画了」的判别力）
+    let mut top_has_ink = false;
+    for y in 48..180 {
+        let row = &buf[(y * w + 80) as usize..(y * w + w - 80) as usize];
+        if row.iter().any(|&p| p != kfm_na::termview::AI_PAGE_BG) {
+            top_has_ink = true;
+            break;
+        }
+    }
+    assert!(top_has_ink, "消息行必须真画在顶部区");
+    // 屏心探针只框内内容区（2026-09-04 装修：左右边框竖边全高通墨，
+    // 探针要避开边框带）
+    for y in (h / 2)..(h / 2 + 40) {
+        let row = &buf[(y * w + 80) as usize..(y * w + w - 80) as usize];
+        assert!(
+            row.iter().all(|&p| p == kfm_na::termview::AI_PAGE_BG),
+            "短对话屏心必须是纯底（尾随锁定前不会有字，y={y}）"
+        );
+    }
 }
 
 #[test]

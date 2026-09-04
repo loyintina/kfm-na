@@ -1123,6 +1123,55 @@ impl TermView {
             w: buf_w,
             h: buf_h,
         };
+        // 边框（2026-09-04 用户拍板装修，仿 kfmv4 orb-panel）：先紫外
+        // 发光，再 135° 渐变外环，最后页面底色 punch 内芯（左缘让 9 =
+        // 3 倍粗，其余让 3）。下缘停在输入栏带上沿之上（bottom_inset
+        // 含键盘+栏带高）——对话框坐在输入栏上的游戏对话框语言。
+        // 空态也画：框是页面装修不是内容。画在文字之前（内芯 punch
+        // 区域与文本边距 60/48 不相交，互不挡墨）。
+        let fx0 = AI_PAGE_FRAME_MARGIN;
+        let fy0 = AI_PAGE_FRAME_MARGIN;
+        let fx1 = buf_w.saturating_sub(AI_PAGE_FRAME_MARGIN);
+        let fy1 = buf_h.saturating_sub(bottom_inset + AI_PAGE_FRAME_MARGIN);
+        if fx1 > fx0 + 2 * AI_PAGE_FRAME_R && fy1 > fy0 + 2 * AI_PAGE_FRAME_R {
+            frame.glow_round_rect(
+                fx0,
+                fy0,
+                fx1 - fx0,
+                fy1 - fy0,
+                AI_PAGE_FRAME_R,
+                GlowSpec {
+                    color: AI_PAGE_FRAME_C2,
+                    alpha: 64,
+                    spread: 14,
+                    y_off: 0,
+                },
+            );
+            frame.fill_round_rect_grad(
+                fx0,
+                fy0,
+                fx1 - fx0,
+                fy1 - fy0,
+                AI_PAGE_FRAME_R,
+                GradSpec {
+                    c1: AI_PAGE_FRAME_C1,
+                    c2: AI_PAGE_FRAME_C2,
+                    diag: true,
+                },
+            );
+            let ix = fx0 + AI_PAGE_FRAME_W * 3; // 左缘 3 倍粗（kfmv4 同款）
+            let iy = fy0 + AI_PAGE_FRAME_W;
+            let iw = (fx1 - AI_PAGE_FRAME_W).saturating_sub(ix);
+            let ih = (fy1 - AI_PAGE_FRAME_W).saturating_sub(iy);
+            frame.fill_round_rect(
+                ix,
+                iy,
+                iw,
+                ih,
+                AI_PAGE_FRAME_R - AI_PAGE_FRAME_W,
+                AI_PAGE_BG,
+            );
+        }
         let fit =
             buf_h.saturating_sub(AI_PAGE_TOP + AI_PAGE_BOTTOM + bottom_inset) / AI_PAGE_LINE_H;
         if msgs.is_empty() {
@@ -1574,6 +1623,19 @@ pub const MAG_GAP_PX: u32 = 60;
 /// （kfmv4 紫色板血统：核 #7C3AED 的暗化/亮化两端）
 pub const AI_PAGE_BG: u32 = 0x0014_0A24;
 pub const AI_PAGE_FG: u32 = 0x00C4_B5FD;
+
+/// AI 页边框（2026-09-04 用户拍板「装修」：仿 kfmv4 对话面板 orb-panel
+/// ——orb.ts createPanel 的 CSS 配方直译）：135° 渐变描边（青 .8 → 紫 .7，
+/// kfmv4 中段靛 = 两端 50% 混合的天然近似）+ 左缘 3 倍粗 + 圆角 12 CSS
+/// px + 紫外发光（0 0 24px α0.25 → spread 14 α64）。物理像素 = CSS × 3。
+pub const AI_PAGE_FRAME_C1: u32 = 0x0000_D4FF; // 青 rgba(0,212,255,~.8)
+pub const AI_PAGE_FRAME_C2: u32 = 0x007C_3AED; // 紫 rgba(124,58,237,~.7)
+/// 边框外缘距屏幕边的留白（左/右/上；下缘距输入栏带上沿同此）
+pub const AI_PAGE_FRAME_MARGIN: u32 = 16;
+/// 描边厚（上/右/下；左缘 3 倍 = 9，kfmv4 border-left-width:3px）
+pub const AI_PAGE_FRAME_W: u32 = 3;
+/// 圆角半径（kfmv4 border-radius:12px × 3）
+pub const AI_PAGE_FRAME_R: u32 = 36;
 
 // 光球 sprite 机制已迁 ui/orb.rs（2026-09-01 控件库立形）——配方常量/
 // build_orb_sprite/blit_orb_sprite/双缓存/绘制本体全部随迁，零逻辑变化；
