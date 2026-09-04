@@ -166,6 +166,81 @@ fn spec_后台值守_dump_now走注册终端() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// BAR-063 回归钉：过渡帧（面板半途）里快捷键行必须**照画**——它在
+/// 层级上低于 AI 面板，被落下来的面板盖住是自然结果；把快捷键行从
+/// 过渡帧里拿掉 = 动画两端各一次硬切 pop-out/pop-in = 用户实看的闪烁
+/// （2026-09-04）。观测手段：缝占一个固定 -300 偏移的假动画 → dump
+/// 倒过渡帧 → 快捷键行带内必须有非背景像素。
+#[test]
+fn spec_bar063_dump过渡帧快捷键行照画() {
+    let _g = PUMP_LOCK.lock().unwrap();
+    use kfm_na::gate::{dump_now, note_frame_size, register_dump_term};
+    use kfm_na::termview::{CELL_H, CELL_W, TermEmu, TermView};
+    use kfm_na::ui::seam::{self, Occupier};
+    use std::sync::{Arc, Mutex};
+
+    let font_path = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+        "/data/data/com.termux/files/usr/share/fonts/TTF/DejaVuSansMono.ttf",
+    ]
+    .iter()
+    .find(|p| std::path::Path::new(p).exists())
+    .expect("host 测试字体缺失");
+    let font = fontdue::Font::from_bytes(
+        std::fs::read(font_path).unwrap(),
+        fontdue::FontSettings::default(),
+    )
+    .unwrap();
+    let tv = TermView::new(font, None, 8, 2, CELL_W, CELL_H);
+    let term: Arc<Mutex<Box<dyn TermEmu>>> = Arc::new(Mutex::new(Box::new(tv)));
+    register_dump_term(&term);
+
+    // 假动画占槽：固定 -300 偏移（面板落了 1/4 屏左右），活性恒真——
+    // dump 必走过渡帧分支；不收 ai_presence → 目标值 -h（终端页方向）
+    seam::occupy_ai_panel_offset_y(Occupier {
+        sampler: Arc::new(|_, _| -300.0),
+        is_active: Arc::new(|| true),
+    });
+
+    let (w, h) = (800u32, 1200u32);
+    let dir = std::env::temp_dir().join(format!("kfm-shot7-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let d = dir.to_str().unwrap();
+    note_frame_size(w, h);
+    std::fs::write(dir.join("shot-req"), b"").unwrap();
+    dump_now(d);
+    let raw = std::fs::read(dir.join("shot.rgb")).unwrap();
+    assert_eq!(raw.len(), (w * h * 4) as usize);
+
+    // 快捷键行带 = [h - 输入栏高 - 行高, h - 输入栏高)；本帧屏外行 300，
+    // 带内可见行 = [h-300, h-220)。带内无非背景像素 = 快捷键行被硬切
+    // 拿走了（闪烁元凶）；有 = 层级方案在（面板盖它是自然结果）
+    let band_top = h - 300;
+    let keybar_band_bottom = h - kfm_na::input_bar::HEIGHT_PX;
+    let mut has_keybar = false;
+    for y in band_top..keybar_band_bottom {
+        for x in 0..w {
+            let i = ((y * w + x) * 4) as usize;
+            let px = (raw[i + 2] as u32) << 16 | (raw[i + 1] as u32) << 8 | raw[i] as u32;
+            if px != kfm_na::termview::DEFAULT_BG {
+                has_keybar = true;
+                break;
+            }
+        }
+        if has_keybar {
+            break;
+        }
+    }
+    assert!(
+        has_keybar,
+        "BAR-063：过渡帧快捷键行必须照画（层级低于面板），硬切拿走 = 闪烁"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+    seam::release_ai_panel_offset_y(); // 拔槽还硬切，不留残槽给后题
+    note_frame_size(0, 0);
+}
+
 /// dump 装帧对拍（期 0③）：AI 全屏页倒出来的必须是**真消息**不是占位
 /// 空壳——值守线程读 AI_CHAT 注册位（D9 同源：前台 rasterize 与后台
 /// 装帧同一份 AiChatState）。消息区（顶部边距起）无字 = 装帧断了眼

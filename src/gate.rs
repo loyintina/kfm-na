@@ -145,9 +145,12 @@ pub fn dump_now(dir: &str) {
             let msgs = ai_chat_handle().map(|c| c.snap()).unwrap_or_default();
             t.render_ai_page(&mut buf, w, h, &msgs);
         } else {
-            // 过渡帧：终端网格在下（快捷键行不画——属终端页 chrome，离站
-            // 即离场，与前台同规则），面板离屏渲染后按偏移压盖
+            // 过渡帧：终端 + 快捷键行在下（照画——层级低于面板，被落
+            // 下来的面板盖住是自然结果；BAR-063：把快捷键行从过渡帧
+            // 拿掉 = 动画两端硬切 pop-out/pop-in = 用户实看的闪烁），
+            // 面板离屏渲染后按偏移压盖（与前台同规则）
             t.render_into(&mut buf, w, h);
+            t.render_keybar(&mut buf, w, h, bar_h, 0);
             let msgs = ai_chat_handle().map(|c| c.snap()).unwrap_or_default();
             let mut scratch = vec![0u32; (w as usize) * (h as usize)];
             t.render_ai_page(&mut scratch, w, h, &msgs);
