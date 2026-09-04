@@ -1091,6 +1091,107 @@ impl TermView {
         }
     }
 
+    /// GPU 网格收集（期 1 第 2 层）：把 render_into 的收集段（颜色决策
+    /// ——INVERSE/选择高亮/光标 swap——与几何裁剪原样复制）产成 GpuCell，
+    /// 供 GLES 路径 grid_to_instances 用。与 render_into 的字形/背景
+    /// 两遍制逐语义对齐——对拍验收就在这两份代码的咬合上。
+    /// 注意：只收集，不光栅化（光栅化归 rasterize_for_atlas，图集未
+    /// 命中才调，命中走缓存——第 2 层的性能来源）。
+    pub fn collect_gpu_cells(&mut self, w: u32, h: u32) -> Vec<crate::glyph_atlas::GpuCell> {
+        use crate::glyph_atlas::GpuCell;
+        let mut out = Vec::new();
+        if w == 0 || h == 0 {
+            return out;
+        }
+        let content = self.term.renderable_content();
+        let cursor = content.cursor;
+        let selection = self.selection;
+        let offset = content.display_offset as i32;
+        let margin_top = margin_top(self.cell_h);
+        for indexed in content.display_iter {
+            let line = indexed.point.line.0 + offset;
+            if !(0..self.term.grid().screen_lines() as i32).contains(&line) {
+                continue;
+            }
+            let (mut fg, mut bg) = (
+                color_to_xrgb(indexed.cell.fg),
+                color_to_xrgb(indexed.cell.bg),
+            );
+            if indexed.cell.flags.contains(Flags::INVERSE) {
+                std::mem::swap(&mut fg, &mut bg);
+            }
+            if let Some(sel) = selection {
+                let (line0, col0) = (indexed.point.line.0, indexed.point.column.0 as u32);
+                let selected = in_selection(sel.anchor, sel.cursor, line0, col0)
+                    || (col0 > 0
+                        && indexed.cell.flags.contains(Flags::WIDE_CHAR_SPACER)
+                        && in_selection(sel.anchor, sel.cursor, line0, col0 - 1))
+                    || (indexed.cell.flags.contains(Flags::WIDE_CHAR)
+                        && in_selection(sel.anchor, sel.cursor, line0, col0 + 1));
+                if selected {
+                    bg = SELECT_BG;
+                }
+            }
+            let is_cursor = cursor.shape != CursorShape::Hidden && indexed.point == cursor.point;
+            if is_cursor {
+                std::mem::swap(&mut fg, &mut bg);
+            }
+            let (px, py) = cell_origin(
+                indexed.point.column.0 as u32,
+                line as u32,
+                self.cell_w,
+                self.cell_h,
+            );
+            let (px, py) = (px + MARGIN_X, py + margin_top);
+            if px >= w || py >= h {
+                continue;
+            }
+            out.push(GpuCell {
+                px,
+                py,
+                fg,
+                bg,
+                c: indexed.cell.c,
+                wide: indexed.cell.flags.contains(Flags::WIDE_CHAR),
+                spacer: indexed.cell.flags.contains(Flags::WIDE_CHAR_SPACER),
+            });
+        }
+        out
+    }
+
+    /// 图集供墨（期 1 第 2 层）：字体路由（prefer_cjk）+ 光栅化 + 放置
+    /// 偏移一次给出；tofu 目击记账与 draw_glyph 同款（主字体缺字形且
+    /// CJK 也不覆盖 → 上报名单）。None = 空字形（fontdue 空 位图），
+    /// 调用方跳过装载（图集契约：空字形不进）。
+    pub fn rasterize_for_atlas(
+        &self,
+        c: char,
+    ) -> Option<(u8, fontdue::Metrics, Vec<u8>, i16, i16)> {
+        if self.font.lookup_glyph_index(c) == 0 {
+            let covered = self
+                .cjk
+                .as_ref()
+                .is_some_and(|k| k.font.lookup_glyph_index(c) != 0);
+            let mut seen = self.tofu_seen.borrow_mut();
+            if !covered && !seen.contains(&c) && seen.len() < 16 {
+                seen.push(c);
+            }
+        }
+        let (font_id, font, font_px, baseline) = match &self.cjk {
+            Some(cjk) if prefer_cjk(&self.font, &cjk.font, c) => {
+                (1u8, &cjk.font, cjk.px, cjk.baseline_off)
+            }
+            _ => (0u8, &self.font, self.font_px, self.baseline_off),
+        };
+        let (metrics, bitmap) = font.rasterize(c, font_px);
+        if metrics.width == 0 || metrics.height == 0 {
+            return None;
+        }
+        // off_y 与 draw_glyph 的 top 推导同式：top = py + baseline - ymin - h
+        let off_y = baseline - metrics.ymin as f32 - metrics.height as f32;
+        Some((font_id, metrics, bitmap, metrics.xmin as i16, off_y as i16))
+    }
+
     /// AI 全屏页真对话渲染（期 0③，取代占位空壳；合成网格美化是期 0⑤）。
     /// 简版纯文本消息行：角色标签行（你=青 / AI=浅紫）+ 正文折行（输入栏
     /// 同款 wrap_starts 贪心断行）。
@@ -1995,6 +2096,13 @@ pub trait TermEmu: Send {
     /// 运行期改格尺寸（捏合缩放，android_app 双指手势调用方）
     fn set_cell_size(&mut self, cell_w: u32, cell_h: u32);
     fn render_into(&mut self, buf: &mut [u32], w: u32, h: u32);
+    /// GPU 网格收集（期 1 第 2 层，android_app GLES 分支调用方）：格子
+    /// 的纯数据镜像（颜色决策/几何裁剪与 render_into 同源）——GLES 后端
+    /// grid_to_instances 的进料；CPU 路径不调
+    fn gpu_cells(&mut self, w: u32, h: u32) -> Vec<crate::glyph_atlas::GpuCell>;
+    /// 图集供墨（同上调用方）：字体路由（prefer_cjk）+ 光栅化 + 放置
+    /// 偏移（xmin / baseline-ymin-h）；None = 空字形跳装载
+    fn rasterize_for_atlas(&self, c: char) -> Option<(u8, fontdue::Metrics, Vec<u8>, i16, i16)>;
     fn render_keybar(&self, buf: &mut [u32], w: u32, h: u32, ime_bottom: u32, mods: u8);
     /// AI 外显 chrome（ai-presence，android_app rasterize 调用方）：
     /// AI 页真对话渲染（page=AiFullscreen 时代替终端网格）/ 雾状光球 sprite。
@@ -2094,6 +2202,12 @@ impl TermEmu for TermView {
     }
     fn render_into(&mut self, buf: &mut [u32], w: u32, h: u32) {
         TermView::render_into(self, buf, w, h)
+    }
+    fn gpu_cells(&mut self, w: u32, h: u32) -> Vec<crate::glyph_atlas::GpuCell> {
+        TermView::collect_gpu_cells(self, w, h)
+    }
+    fn rasterize_for_atlas(&self, c: char) -> Option<(u8, fontdue::Metrics, Vec<u8>, i16, i16)> {
+        TermView::rasterize_for_atlas(self, c)
     }
     fn render_keybar(&self, buf: &mut [u32], w: u32, h: u32, ime_bottom: u32, mods: u8) {
         TermView::render_keybar(self, buf, w, h, ime_bottom, mods)

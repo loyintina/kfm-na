@@ -57,6 +57,11 @@ fn host_termview(cols: u32, rows: u32) -> TermView {
     TermView::new(host_font(), None, cols, rows, CELL_W, CELL_H)
 }
 
+/// 顶带高（termview::margin_top 是 pub const fn——GPU 收集口考题用）
+fn margin_top_of() -> u32 {
+    kfm_na::termview::margin_top(kfm_na::termview::CELL_H)
+}
+
 // ---------- A 档：布局数学 ----------
 
 #[test]
@@ -2411,4 +2416,58 @@ fn spec_bar044_空内容不消费() {
         kfm_na::gate::bar_should_consume("scrollpx -200\n"),
         "有指令正常消费"
     );
+}
+
+// ---------- 期 1 第 2 层：GPU 收集口（trait TermEmu 委托钉） ----------
+#[test]
+fn spec_gpu_收集口_空网格空格子_字形供墨可装载() {
+    use kfm_na::glyph_atlas::GlyphKey;
+    use kfm_na::termview::TermEmu;
+    let mut tv = host_termview(8, 2);
+    // 空网格（全空格）：格子产出但字符是空格——收集口照样给格（背景决策
+    // 归 grid_to_instances）。缓冲高 = 顶带(margin_top 吃一整行，BAR-010)
+    // + 两行网格，少给一行第二行就被顶带裁掉（A 档裁剪语义的副产物）
+    let cells = TermEmu::gpu_cells(&mut tv, CELL_W * 8, CELL_H * 2 + margin_top_of());
+    assert_eq!(cells.len(), 16);
+    assert!(cells.iter().all(|c| c.c == ' ' && !c.wide && !c.spacer));
+    // 图集供墨：'A' 主字体可路由（font 0），位图非空，off_y = 基线 - ymin - h
+    let (fid, m, bmp, ox, oy) = TermEmu::rasterize_for_atlas(&tv, 'A').expect("DejaVu 有 A 字形");
+    assert_eq!(fid, 0);
+    assert_eq!(bmp.len(), m.width * m.height);
+    assert!(m.width >= 1 && m.height >= 1);
+    let _ = (ox, oy);
+    // 空格 → None（空字形不进图集，图集契约）
+    assert!(TermEmu::rasterize_for_atlas(&tv, ' ').is_none());
+    // 装载后图集能查到（GlyphAtlas 契约串接）
+    let mut atlas = kfm_na::glyph_atlas::GlyphAtlas::new(256, 256);
+    atlas.insert(
+        GlyphKey { font: 0, c: 'A' },
+        m.width as u32,
+        m.height as u32,
+        &bmp,
+        ox,
+        oy,
+    );
+    assert!(atlas.slot(&GlyphKey { font: 0, c: 'A' }).is_some());
+}
+
+#[test]
+fn spec_gpu_收集口_喂字后有真格_宽字符标宽() {
+    use kfm_na::termview::TermEmu;
+    let mut tv = host_termview(8, 2);
+    TermEmu::feed(&mut tv, "A中B\n".as_bytes());
+    let cells = TermEmu::gpu_cells(&mut tv, CELL_W * 8, CELL_H * 2 + margin_top_of());
+    // trait 委托与固有实现同源（同一份收集逻辑，两入口一字不差）
+    let direct = TermView::collect_gpu_cells(&mut tv, CELL_W * 8, CELL_H * 2 + margin_top_of());
+    assert_eq!(direct.len(), cells.len());
+    // 第一行：A + 中(宽) + spacer + B = 4 格有字，第二行空格
+    let a = cells.iter().find(|c| c.c == 'A').expect("A 格在");
+    assert!(!a.wide && !a.spacer);
+    let zhong = cells.iter().find(|c| c.c == '中').expect("中格在");
+    assert!(zhong.wide, "中应标宽字符（DejaVu 无中→宽度判 2 格）");
+    assert!(cells.iter().any(|c| c.spacer), "宽字符第二格应标 spacer");
+    assert!(cells.iter().any(|c| c.c == 'B'));
+    // 中：主字体无字形 → 供墨走 CJK？本夹具 cjk=None → tofu，None 亦可（契约：
+    // 双字体都缺 → None 跳装载，GPU 端 misses 常驻不炸）
+    let _ = TermEmu::rasterize_for_atlas(&tv, '中');
 }

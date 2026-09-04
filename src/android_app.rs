@@ -175,14 +175,7 @@ impl std::ops::DerefMut for FrameBuf<'_> {
     }
 }
 
-impl FrameBuf<'_> {
-    fn present(self) {
-        match self {
-            FrameBuf::Soft(b) => b.present().expect("帧呈现失败"),
-            FrameBuf::Gles(g) => g.present(),
-        }
-    }
-}
+impl FrameBuf<'_> {}
 
 #[derive(Default)]
 struct App {
@@ -2169,13 +2162,16 @@ impl App {
     }
 
     /// 光栅化一帧的内容（终端网格 + 快捷键行 + 光球/AI 页 + 放大镜 +
-    /// tofu 上报）进任意像素缓冲。关联函数按字段传参，避开 buf 借用
+    /// tofu 上报）进任意像素缓冲。gpu_term = 终端网格归 GPU 图集/实例
+    /// （期 1 第 2 层）——CPU 只画 chrome 层（栏带/输入栏/AI 页/放大镜），
+    /// buf 由调用方清透明底并在收尾 |= alpha 标记。关联函数按字段传参，避开 buf 借用
     /// self.gfx 时动不了 self 的问题。后台离屏倒帧不走这里——值守线程
     /// (screendump) 只画终端网格本体，快捷键行/光球/放大镜是 UI 装帧，
     /// 不在后台视野里
     #[allow(clippy::too_many_arguments)]
     fn rasterize(
         term: Option<&mut Box<dyn TermEmu>>,
+        gpu_term: bool,
         mods: u8,
         magnifier_at: Option<(f64, f64)>,
         ime_bottom_px: u32,
@@ -2207,7 +2203,9 @@ impl App {
                 // （快捷键行 = BAR-017 Rust 自绘覆盖层；inset 必须叠输入栏
                 // 当前带高——栏带压在行下沿，漏叠 = 眼手错位，2026-08-31
                 // 排障实锤，触摸几何早就是叠后的）
-                term.render_into(buf, w, h);
+                if !gpu_term {
+                    term.render_into(buf, w, h);
+                }
                 term.render_keybar(buf, w, h, ime_bottom_px + bar_h, mods);
             } else if panel_off == 0 {
                 // 面板靠泊（AI 全屏页稳态，期 0③ 真对话页）：不画终端
@@ -2229,7 +2227,9 @@ impl App {
                 // 面板，被落下来的面板盖住是自然结果，用户 2026-09-04
                 // 拍板；BAR-063：过渡帧不画它 = 动画两端硬切 = 闪烁），
                 // AI 面板整页离屏渲染后按偏移压盖——与直接渲染像素等价
-                term.render_into(buf, w, h);
+                if !gpu_term {
+                    term.render_into(buf, w, h);
+                }
                 term.render_keybar(buf, w, h, ime_bottom_px + bar_h, mods);
                 panel_scratch.clear();
                 panel_scratch.resize((w as usize) * (h as usize), 0);
@@ -2306,6 +2306,9 @@ impl App {
         // 先拿终端句柄(owned Arc,借用即还),再借 gfx——顺序反了 E0502
         let th = self.term_handle();
         let Some(g) = &mut self.gfx else { return };
+        let gpu_mode = matches!(g, Gfx::Gles(_));
+        let mut bg_inst: Vec<crate::glyph_atlas::BgInstance> = Vec::new();
+        let mut glyphs_by_page: Vec<Vec<crate::glyph_atlas::GlyphInstance>> = Vec::new();
         let (mut buf, w, h) = match g {
             Gfx::Soft { surface, .. } => {
                 let b = surface.buffer_mut().expect("取帧缓冲失败");
@@ -2314,6 +2317,74 @@ impl App {
             }
             Gfx::Gles(g) => {
                 let (w, h) = g.size();
+                // chrome 层画布清透明（term 区不画，GPU 网格层透出）
+                g.pixels_mut().fill(0);
+                // GPU 网格层进料：收集 + 图集供墨（misses 两轮生成）+ 实例
+                let cells = th
+                    .as_ref()
+                    .map(|t| t.lock().unwrap().gpu_cells(w, h))
+                    .unwrap_or_default();
+                let (cell_w, cell_h) = th
+                    .as_ref()
+                    .map(|t| t.lock().unwrap().cell_size())
+                    .unwrap_or((8, 16));
+                let mut inst = crate::glyph_atlas::grid_to_instances(
+                    &cells,
+                    g.atlas(),
+                    cell_w,
+                    cell_h,
+                    crate::termview::DEFAULT_BG,
+                    |c| {
+                        let k0 = crate::glyph_atlas::GlyphKey { font: 0, c };
+                        if let Some(s) = g.atlas().slot(&k0) {
+                            return (k0, Some(s));
+                        }
+                        let k1 = crate::glyph_atlas::GlyphKey { font: 1, c };
+                        if let Some(s) = g.atlas().slot(&k1) {
+                            return (k1, Some(s));
+                        }
+                        (k0, None)
+                    },
+                );
+                if !inst.misses.is_empty()
+                    && let Some(t) = th.as_ref()
+                {
+                    let t = t.lock().unwrap();
+                    for k in &inst.misses {
+                        if let Some((fid, m, bmp, ox, oy)) = t.rasterize_for_atlas(k.c) {
+                            let key = crate::glyph_atlas::GlyphKey { font: fid, c: k.c };
+                            g.atlas_insert(key, m.width as u32, m.height as u32, &bmp, ox, oy);
+                        }
+                    }
+                    let inst2 = crate::glyph_atlas::grid_to_instances(
+                        &cells,
+                        g.atlas(),
+                        cell_w,
+                        cell_h,
+                        crate::termview::DEFAULT_BG,
+                        |c| {
+                            let k0 = crate::glyph_atlas::GlyphKey { font: 0, c };
+                            if let Some(s) = g.atlas().slot(&k0) {
+                                return (k0, Some(s));
+                            }
+                            let k1 = crate::glyph_atlas::GlyphKey { font: 1, c };
+                            if let Some(s) = g.atlas().slot(&k1) {
+                                return (k1, Some(s));
+                            }
+                            (k0, None)
+                        },
+                    );
+                    inst = inst2;
+                }
+                // 按图集页分组（每页一次 draw）
+                bg_inst = inst.bg;
+                glyphs_by_page = vec![Vec::new(); g.atlas().pages().len()];
+                for gi in inst.glyph {
+                    let p = gi.page as usize;
+                    if p < glyphs_by_page.len() {
+                        glyphs_by_page[p].push(gi);
+                    }
+                }
                 (FrameBuf::Gles(g.as_mut()), w, h)
             }
         };
@@ -2349,6 +2420,7 @@ impl App {
             let chat_live = self.ai_chat.as_ref().is_some_and(|c| c.thinking_live());
             let ai_layout = Self::rasterize(
                 tg.as_deref_mut(),
+                gpu_mode,
                 mods,
                 self.magnifier_at,
                 self.chrome_inset_px,
@@ -2377,9 +2449,20 @@ impl App {
                 crate::report::report("boot", "首帧 present 完成——紫屏应已亮");
             }
         }
+        // GPU 路径：chrome 像素打 alpha 标记（chrome 画的是 0x00RRGGBB，
+        // 画布已清 0——| 高位让 chrome 不透明、term 区保持全 0 透明，
+        // chrome 纹理 alpha 混合时网格层透出）
+        if gpu_mode {
+            for p in buf.iter_mut() {
+                *p |= 0xFF00_0000;
+            }
+        }
         // 画面回传由值守线程统一消费(gate::spawn_gate_watcher)——
         // 挂起态事件循环叫不醒,前台顺帧消费那套在后台是死路,单一消费者
-        buf.present();
+        match buf {
+            FrameBuf::Soft(b) => b.present().expect("帧呈现失败"),
+            FrameBuf::Gles(g) => g.present_frame(&bg_inst, &glyphs_by_page),
+        }
         crate::gate::note_draw(t0.elapsed()); // 含 present 的全帧耗时
     }
 }

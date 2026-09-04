@@ -186,7 +186,8 @@ pub struct BgInstance {
     pub color: u32,
 }
 
-/// 字形四边形实例（UV 归一化坐标；右/下裁剪已折进 w/h/du/dv）
+/// 字形四边形实例（UV 归一化坐标；右/下裁剪已折进 w/h/du/dv；
+/// page = 图集页号——每页一次 draw，页内实例连续）
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GlyphInstance {
@@ -199,6 +200,7 @@ pub struct GlyphInstance {
     pub du: f32,
     pub dv: f32,
     pub fg: u32,
+    pub page: u32,
 }
 
 /// 实例化产出：两遍制（背景块在前、字形块在后）+ 图集未命中名单
@@ -276,6 +278,7 @@ pub fn grid_to_instances(
             du: draw_w as f32 / page.w as f32,
             dv: f32::from(slot.h) / page.h as f32,
             fg: cell.fg,
+            page: u32::from(slot.page),
         });
     }
     out

@@ -190,6 +190,15 @@ CPU 优化线顶上（§六分流）。
   反转背景过滤）。
 - 待办（B 档）：GL 侧图集纹理 + 双实例流绘制接入 gles_present，
   实拍对拍 + 动画场景 <8ms 验收。
+- **B 档落地（2026-09-05）**：gles_present 扩为分层合成——清屏 →
+  网格背景实例（不透明）→ 图集字形实例（R8 采样 × 前景色 alpha 混合，
+  按图集页分组 draw）→ chrome 层（CPU 画栏带/输入栏/AI 页/放大镜，
+  透明底 + `|= 0xFF000000` alpha 标记，RGBA 上传 alpha 混合叠上）。
+  实例四边形 = 3 倍超界大三角（整格全覆盖无半像素缝）；attrib divisor
+  1 每实例；图集页纹理增量上传。TermEmu trait 扩 gpu_cells/
+  rasterize_for_atlas 两方法（调用方先例 = android_app GLES 分支）；
+  字体路由闭包双键回退（主缺 → CJK 顶）。rasterize 加 gpu_term 开关
+  ——CPU 不再画终端网格（第 2 层的省，就在这一刀）。
 
 ## 十、期 1 第 1 层：壳内 EGL 基建（2026-09-04）
 
