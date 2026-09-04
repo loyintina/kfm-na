@@ -110,3 +110,34 @@ fn spec_思考窗_超三行只给尾三行() {
     assert_eq!(thinking_window(10), 7..10);
     assert_eq!(thinking_window(999), 996..999);
 }
+
+#[test]
+fn spec_bar064_手势方向_下滑看更早() {
+    // BAR-064：AI 页滚动手势反了（2026-09-04 用户实看：手指上滑居然
+    // 翻出更早的消息）。主流手感 = 内容跟手：下滑 dy>0 拉内容向下
+    // 露出更早消息 = 正行增量；上滑看更新 = 负
+    use kfm_na::ui::ai_page::drag_accum_rows;
+    let lh = 64.0;
+    let (_acc, rows) = drag_accum_rows(0.0, 100.0, lh); // 手指下滑 100px
+    assert_eq!(rows, 1, "下滑 100px = 看更早 1 行");
+    let (_acc, rows) = drag_accum_rows(0.0, -200.0, lh); // 手指上滑 200px
+    assert_eq!(rows, -3, "上滑 200px = 看更新 3 行（trunc 去尾）");
+}
+
+#[test]
+fn spec_bar064_像素累积_余数不丢() {
+    // 像素级跟手：两次半行滑动必须各出 0 行后第三下凑满出行——
+    // 行增量取整的余数留在累积里，不丢小数（丢了就发涩）
+    use kfm_na::ui::ai_page::drag_accum_rows;
+    let lh = 64.0;
+    let (acc, rows) = drag_accum_rows(0.0, 40.0, lh);
+    assert_eq!(rows, 0);
+    let (acc, rows) = drag_accum_rows(acc, 40.0, lh);
+    assert_eq!(rows, 1, "40+40=80 ≥ 64 出 1 行");
+    assert!((acc - 16.0).abs() < 1e-9, "余数 16 必须留账");
+    // 反向同理：负余数也留账
+    let (acc, rows) = drag_accum_rows(0.0, -40.0, lh);
+    assert_eq!(rows, 0);
+    let (_acc, rows) = drag_accum_rows(acc, -40.0, lh);
+    assert_eq!(rows, -1);
+}

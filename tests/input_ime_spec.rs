@@ -208,3 +208,14 @@ fn spec_注册冲突_后者failed且先到者服务不变() {
     let mods = base.ctx().get::<ModifierState>().unwrap();
     assert_eq!(mods.peek(), 0, "服务仍是先到者的实例（无占位者印记）");
 }
+
+#[test]
+fn spec_bar065_键盘轮询间隔_钉死上限() {
+    // BAR-065：输入栏/快捷键行跟键盘开合慢半拍（2026-09-04 用户实看：
+    // 召唤后栏带延迟才上来，收起也延迟才落下）。病灶 = BAR-006 轮询
+    // 节流 500ms——间隔就是感知延迟本身。契约：轮询间隔 ≤150ms
+    // （100ms 现值；钉上限防随手调回大数，轮询只在循环醒着时跑）
+    // 绑局部变量：clippy assertions_on_constants 不许直接断言常量（手机 1.97 新 lint）
+    let ms = kfm_na::insets::IME_POLL_MS;
+    assert!(ms <= 150, "键盘轮询间隔不许超 150ms，实测 {ms}ms");
+}

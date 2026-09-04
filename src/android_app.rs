@@ -600,18 +600,21 @@ impl App {
                     }
                 }
                 // AI 面板手势：拖动 = 对话页滚行（像素级累积跟手，行高
-                // 与渲染同尺 AI_PAGE_LINE_H；上滑 = 看更早 = 偏移+）
+                // 与渲染同尺 AI_PAGE_LINE_H；方向契约在 ui/ai_page.rs
+                // drag_accum_rows——下滑 = 看更早，BAR-064）
                 if let Some(apt) = self.ai_page_touch.as_mut() {
                     let dy = y - apt.last_y;
                     apt.last_y = y;
                     if (y - apt.start_y).abs() > crate::scroll::TAP_SLOP_PX {
                         apt.dragged = true;
                     }
-                    apt.acc_px -= dy; // 手指上滑 dy<0 → 累积为正 = 看更早
-                    let line_h = f64::from(crate::termview::AI_PAGE_LINE_H);
-                    let rows = (apt.acc_px / line_h).trunc() as i32;
+                    let (acc, rows) = crate::ui::ai_page::drag_accum_rows(
+                        apt.acc_px,
+                        dy,
+                        f64::from(crate::termview::AI_PAGE_LINE_H),
+                    );
+                    apt.acc_px = acc;
                     if rows != 0 {
-                        apt.acc_px -= f64::from(rows) * line_h;
                         if let Some(chat) = &self.ai_chat {
                             chat.scroll_drag_rows(rows);
                         }
@@ -922,13 +925,15 @@ impl App {
         }
     }
 
-    /// JNI 轮询真实键盘高度（500ms 节流）：winit 的 Ime::Enabled/Disabled 在
+    /// JNI 轮询真实键盘高度（100ms 节流）：winit 的 Ime::Enabled/Disabled 在
     /// 本机从未触发（全日志零条），事件驱动是死路，轮询才是活路（BAR-006）。
-    /// 值变了才 resize + 上报——resize 会抖动服务器 pty，不能跟着轮询抖
+    /// 值变了才 resize + 上报——resize 会抖动服务器 pty，不能跟着轮询抖。
+    /// 节流从 500ms 降到 100ms（BAR-065：输入栏/快捷键行跟键盘开合慢半拍——
+    /// 轮询间隔就是感知延迟本身；轮询只在事件循环醒着时跑，100ms 成本可忽略）
     fn poll_ime_inset(&mut self) {
         let now = std::time::Instant::now();
         if let Some(t) = self.last_inset_poll
-            && now.duration_since(t) < std::time::Duration::from_millis(500)
+            && now.duration_since(t) < std::time::Duration::from_millis(crate::insets::IME_POLL_MS)
         {
             return;
         }

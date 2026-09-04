@@ -17,6 +17,11 @@
 //! （考题喂假实现），JNI 胶水与 `JniInsets` 薄壳 cfg(android)。形态 =
 //! 共享实例直挂（Sync），不是工厂——判别准则见规格书 v1.2 §4.2。
 
+/// 键盘 inset 轮询间隔（BAR-065：500→100ms——间隔就是栏带跟键盘的
+/// 感知延迟本身；轮询只在事件循环醒着时跑，100ms 成本可忽略）。
+/// 家在 insets 而非 android_app：后者 cfg(android) 考题够不着
+pub const IME_POLL_MS: u64 = 100;
+
 /// 键盘来源服务（服务键 `dyn ImeInsets`，共享实例直挂）。
 /// 生产 = JniInsets（JNI 直调 WindowInsets）；考题 = 假实现。
 pub trait ImeInsets: Send + Sync {

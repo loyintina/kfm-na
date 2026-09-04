@@ -80,3 +80,14 @@ pub fn thinking_window(total_wrapped: usize) -> std::ops::Range<usize> {
     let start = total_wrapped.saturating_sub(3);
     start..total_wrapped
 }
+
+/// 手势像素累积 → 行增量换算（BAR-064：方向契约的唯一出处）。
+/// 手指下滑 dy>0 = 拉内容向下 = 看更早 = 正行增量；手指上滑 = 看更新 = 负
+/// ——主流对话 App 手感。行高与渲染同尺（调用方传
+/// termview::AI_PAGE_LINE_H）。返回（新累积, 本轮行增量）：满一行才吐
+/// 行，余数留累积里下次接着算（像素级跟手不丢小数）
+pub fn drag_accum_rows(acc_px: f64, dy: f64, line_h: f64) -> (f64, i32) {
+    let acc = acc_px + dy;
+    let rows = (acc / line_h).trunc() as i32;
+    (acc - f64::from(rows) * line_h, rows)
+}
