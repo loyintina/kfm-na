@@ -190,3 +190,17 @@ CPU 优化线顶上（§六分流）。
   不堵 vsync（条件帧泵怕堵输入派发，帧率治理在 fx_frame_due）。
 - **判卷**（C 档实拍）：GLES 起得来、亮得对（na-shot 与 softbuffer
   同屏对拍）、后台切回不崩、stats 帧耗画像对照。
+- **判卷闭环（2026-09-04 深夜，全绿）**：构建戳 ccf988a-09041525 上屏；
+  na-shot 双包截图 md5 逐字节一致；后台往返一轮——suspended → resumed
+  GLES 全栈重建（+50ms）、会话保留零暴毙；全帧画像基线 avg 12ms /
+  max 20ms（第 2 层字形图集的靶子）。
+- **热更核遮蔽案（排障新钉，两小时教训）**：装新包后启动报告仍是旧
+  构建戳 → 先查 `files/hot/libkfm_na.so`（na-push-so 热更通道，na-loader
+  优先 dlopen 它）与 `usr/tmp/loader-pick`——APK md5 对 ≠ 加载的核对。
+  今晚 hot 目录躺着 20:06 推入的旧核，四轮重装全被遮蔽。处置：
+  hot 旧核移名清场（.so.stale-* 留档），loader 回 bundled。
+- **versionCode 计数器双线撞车（叠加案，真实存在）**：`build/`
+  gitignore 跨机不同步，kfm-na 线与 nz hotfix 线共用同一计数器文件，
+  三轮同数互拒（「已安装更高版本」「相同版本」）。过渡：kfm-na 线
+  暂占 1789600000+ 段；分治提案见信箱
+  kfm-na-versioncode-counter-collision-notice.md。
