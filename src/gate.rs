@@ -145,9 +145,9 @@ pub fn dump_now(dir: &str) {
             let msgs = ai_chat_handle().map(|c| c.snap()).unwrap_or_default();
             t.render_ai_page(&mut buf, w, h, &msgs);
         } else {
-            // 过渡帧：终端在下，面板离屏渲染后按偏移压盖（与前台同规则）
+            // 过渡帧：终端网格在下（快捷键行不画——属终端页 chrome，离站
+            // 即离场，与前台同规则），面板离屏渲染后按偏移压盖
             t.render_into(&mut buf, w, h);
-            t.render_keybar(&mut buf, w, h, bar_h, 0);
             let msgs = ai_chat_handle().map(|c| c.snap()).unwrap_or_default();
             let mut scratch = vec![0u32; (w as usize) * (h as usize)];
             t.render_ai_page(&mut scratch, w, h, &msgs);

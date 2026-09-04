@@ -2063,10 +2063,11 @@ impl App {
                 // 网格与快捷键行，深紫暗底 + 消息行尾随锁定
                 term.render_ai_page(buf, w, h, chat_msgs);
             } else {
-                // 过渡帧：终端 + 快捷键行在下（原位不动），AI 面板整页
-                // 离屏渲染后按偏移压盖——与直接渲染像素等价（blit 钉）
+                // 过渡帧：终端网格在下（不画快捷键行——快捷键行属终端页
+                // chrome，页面离站即离场：2026-09-04 用户拍板「落下的面板
+                // 要把两行快捷键也盖住」，手机端不需要终端交互悬在过渡里），
+                // AI 面板整页离屏渲染后按偏移压盖——与直接渲染像素等价
                 term.render_into(buf, w, h);
-                term.render_keybar(buf, w, h, ime_bottom_px + bar_h, mods);
                 panel_scratch.clear();
                 panel_scratch.resize((w as usize) * (h as usize), 0);
                 term.render_ai_page(panel_scratch, w, h, chat_msgs);
