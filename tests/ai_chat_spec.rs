@@ -45,8 +45,8 @@ fn spec_发送入格_历史投影全量有序() {
 fn spec_bar059_思考分流不进可见回复() {
     // BAR-059（2026-09-04 期 0③ 真机首验实拍）：Kimi highspeed 的思考流
     // （reasoning_content → ThinkingDelta）混进可见回复——用户看见一整段
-    // 英文内心戏。契约：思考不是回复，分账独存；kfmv4 渲染成「已思考」
-    // 折叠块另存，期 0 纯文本消息行只画正文（折叠块是期 0④⑤ 的活）
+    // 英文内心戏。契约：思考不是回复，分账独存（第三字段）；期 0④½ 起
+    // 渲染成 ≤3 行暗色尾随块（用户拍板：限制行数自己滚动，不许占满屏）
     let chat = AiChatState::new();
     chat.user_send("问");
     chat.apply(&ChatEvent::MessageStart);
@@ -58,19 +58,25 @@ fn spec_bar059_思考分流不进可见回复() {
         index: 0,
         text: "答答".into(),
     });
-    // 流式中途：尾巴只许是正文，思考一个字不露
+    // 流式中途：正文/思考分账各就各位（第三字段 = 思考独存账户）
     let mid = chat.snap();
     assert_eq!(
         mid,
-        vec![(true, "问".to_string()), (false, "答答".to_string()),],
-        "流式中途 snap 尾巴 = 正文独占，思考混进来就是 BAR-059 复活"
+        vec![
+            (true, "问".to_string(), String::new()),
+            (false, "答答".to_string(), "想想".to_string()),
+        ],
+        "流式中途 snap 尾巴 = 正文/思考分账；思考混进正文字段就是 BAR-059 复活"
     );
     chat.apply(&ChatEvent::MessageStop);
     let snap = chat.snap();
     assert_eq!(
         snap,
-        vec![(true, "问".to_string()), (false, "答答".to_string()),],
-        "收流成消息 = 正文独占；思考（kfmv4 折叠块素材）期 0 不进消息行"
+        vec![
+            (true, "问".to_string(), String::new()),
+            (false, "答答".to_string(), "想想".to_string()),
+        ],
+        "收流成消息 = 分账随消息存档（期 0④½ 起渲染成 ≤3 行暗色块，不再舍弃）"
     );
 }
 
@@ -89,7 +95,7 @@ fn spec_bar059_正文空思考归位为正文() {
     let snap = chat.snap();
     assert_eq!(
         snap,
-        vec![(false, "错放reasoning的真回复".to_string()),],
+        vec![(false, "错放reasoning的真回复".to_string(), String::new())],
         "正文空 + 思考非空 → 思考归位为正文（取消残留不归位，期 0 无取消路径）"
     );
     assert!(!chat.is_streaming());
@@ -106,7 +112,7 @@ fn spec_流式半截_snap带尾巴() {
     let snap = chat.snap();
     assert_eq!(
         snap,
-        vec![(false, "半截".to_string())],
+        vec![(false, "半截".to_string(), String::new())],
         "流式进行中 snap 必须带半截尾巴——渲染尾随的读数"
     );
 }
@@ -121,7 +127,7 @@ fn spec_done兜底收流() {
     });
     chat.apply(&ChatEvent::Done);
     let snap = chat.snap();
-    assert_eq!(snap, vec![(false, "没等到stop".to_string())]);
+    assert_eq!(snap, vec![(false, "没等到stop".to_string(), String::new())]);
     assert!(
         !chat.is_streaming(),
         "Done 后 streaming 必清——不清就是下一条消息的鬼影开头"
@@ -143,8 +149,12 @@ fn spec_error收流且成错误消息() {
     assert_eq!(
         snap,
         vec![
-            (false, "写了一半".to_string()),
-            (false, "【错误】API 请求失败: 401".to_string()),
+            (false, "写了一半".to_string(), String::new()),
+            (
+                false,
+                "【错误】API 请求失败: 401".to_string(),
+                String::new()
+            ),
         ],
         "Error 先收流（半截不丢）再成人话错误消息——kfmv4 语义"
     );
@@ -179,7 +189,22 @@ fn spec_工具事件_v1忽略不崩() {
     let snap = chat.snap();
     assert_eq!(
         snap,
-        vec![(false, "正文".to_string())],
+        vec![(false, "正文".to_string(), String::new())],
         "工具事件 v1 纯显示不入格，正文不落"
     );
+}
+
+#[test]
+fn spec_视口接线_状态机挂在chat上() {
+    // 期 0④：手势/渲染不直接摸 AiPageScroll，走 AiChatState 三件套——
+    // 这题钉的是接线本身（drag 改了 offset、sync 喂了上界、follow 读数真）
+    let chat = AiChatState::new();
+    assert!(chat.scroll_follow(), "出厂追底");
+    chat.scroll_sync_layout(100, 10);
+    chat.scroll_drag_rows(7);
+    assert_eq!(chat.scroll_offset(), 7);
+    assert!(!chat.scroll_follow());
+    chat.scroll_drag_rows(-7);
+    assert_eq!(chat.scroll_offset(), 0);
+    assert!(chat.scroll_follow(), "滑回底恢复追底");
 }

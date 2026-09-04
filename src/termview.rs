@@ -52,6 +52,15 @@ pub const HELP_BANNER: &str = "\x1b[36m── kfm-na 就绪 ──\x1b[0m\r\n\
 /// 画面边距（BAR-005）：网格不贴边，边缘字符不再被屏幕圆角/曲面切半。
 /// 纯黑带，不画框——框是装饰，等中央页面定稿再议
 pub const MARGIN_X: u32 = 12;
+
+/// AI 对话页排版尺（期 0④ 提升为模块级：手势 px→行换算与渲染同尺）
+pub const AI_PAGE_MARGIN_X: u32 = 60;
+pub const AI_PAGE_TOP: u32 = 48;
+pub const AI_PAGE_BOTTOM: u32 = 48;
+pub const AI_PAGE_LINE_H: u32 = 64;
+pub const AI_PAGE_PX: f32 = 40.0;
+/// 思考块文字色（期 0④½）：比正文暗的灰紫——能读到思考在流，但不抢戏
+pub const AI_THINK_FG: u32 = 0x007E_7A9E;
 pub const MARGIN_Y: u32 = 12;
 
 /// 顶边距（BAR-010）：圆角屏吃掉首行首字符（2026-08-13 实拍）——
@@ -442,6 +451,10 @@ pub struct TermView {
     /// pub = 主题包插件/考题可直接换肤；生产默认 kfmv4 配方
     pub theme: crate::theme::Theme,
 }
+
+/// AI 页一行展示行：(文字色, 该行的已量宽字符)——build_ai_rows 返回值的
+/// 类型别名（clippy type_complexity 要求；inherent 关联类型不稳定，只能放模块级）
+type AiRow<'a> = (u32, Vec<(&'a fontdue::Font, char, f32)>);
 
 impl TermView {
     /// scrollback 容量(行)。2026-08-27 两线横向审计漂移 #1 用户拍板:
@@ -1077,13 +1090,21 @@ impl TermView {
 
     /// AI 全屏页真对话渲染（期 0③，取代占位空壳；合成网格美化是期 0⑤）。
     /// 简版纯文本消息行：角色标签行（你=青 / AI=浅紫）+ 正文折行（输入栏
-    /// 同款 wrap_starts 贪心断行），尾随锁定取最后一屏——期 0③ 验收 =
-    /// 真机问答一轮，触摸滚动/markdown-lite 不在本期
-    pub fn render_ai_page(&self, buf: &mut [u32], buf_w: u32, buf_h: u32, msgs: &[(bool, String)]) {
-        // 展示行 = (文字色, 该行的已量宽字符)——measure_items 产物一行一份
-        type Row<'a> = (u32, Vec<(&'a fontdue::Font, char, f32)>);
+    /// 同款 wrap_starts 贪心断行）。
+    /// scroll_rows = 距底行数（期 0④ 视口，ui/ai_page.rs 状态机的读数）：
+    /// 0 = 尾随锁定贴底；>0 = 视口上移看历史。返回（总行数, 一屏行数）
+    /// ——调用方写回 AiChatState.scroll_sync_layout（眼手同尺：手势钳制
+    /// 与渲染用同一份布局）。
+    pub fn render_ai_page(
+        &self,
+        buf: &mut [u32],
+        buf_w: u32,
+        buf_h: u32,
+        msgs: &[(bool, String, String)],
+        scroll_rows: u32,
+    ) -> (u32, u32) {
         if buf_w == 0 || buf_h == 0 {
-            return;
+            return (0, 0);
         }
         buf.fill(AI_PAGE_BG);
         let mut frame = Frame {
@@ -1091,42 +1112,82 @@ impl TermView {
             w: buf_w,
             h: buf_h,
         };
-        const MARGIN_X: u32 = 60;
-        const TOP: u32 = 48;
-        const BOTTOM: u32 = 48;
-        const LINE_H: u32 = 64;
-        const PX: f32 = 40.0;
+        let fit = buf_h.saturating_sub(AI_PAGE_TOP + AI_PAGE_BOTTOM) / AI_PAGE_LINE_H;
         if msgs.is_empty() {
             // 空态 = 纯底零墨（2026-09-04 用户拍板撤占位提示：对话框没
             // 说话时就是空的——游戏对话框语言；占位期那行小字已退役）
-            return;
+            return (0, fit);
         }
-        let row_w = buf_w.saturating_sub(MARGIN_X * 2);
+        let rows = self.build_ai_rows(msgs, buf_w);
+        // 视口：贴底基线 - 距底行数（期 0④——期 0③ 是整行丢弃没有视口）
+        let base_skip = rows.len().saturating_sub(fit as usize);
+        let skip = base_skip.saturating_sub(scroll_rows as usize);
+        for (i, (fg, items)) in rows.iter().skip(skip).take(fit as usize).enumerate() {
+            let y = AI_PAGE_TOP + i as u32 * AI_PAGE_LINE_H;
+            self.draw_items_left(
+                &mut frame,
+                items,
+                AI_PAGE_MARGIN_X,
+                buf_w.saturating_sub(AI_PAGE_MARGIN_X * 2),
+                y,
+                AI_PAGE_LINE_H,
+                AI_PAGE_PX,
+                *fg,
+                None,
+            );
+        }
+        (rows.len() as u32, fit)
+    }
+
+    /// 全部展示行：(文字色, 该行的已量宽字符)——角色标签行 + 思考块
+    /// （AI 消息有思考时：≤3 行暗色尾随窗，流式增长自动滚——期 0④½）
+    /// + 正文折行（渲染与布局测量共用这一份：眼手同尺的单源）
+    fn build_ai_rows<'a>(
+        &'a self,
+        msgs: &'a [(bool, String, String)],
+        buf_w: u32,
+    ) -> Vec<AiRow<'a>> {
+        let row_w = buf_w.saturating_sub(AI_PAGE_MARGIN_X * 2);
         // draw_items_left 起笔内缩 18，折行可用宽要扣掉
         let wrap_w = row_w.saturating_sub(18) as f32;
-        // 全部展示行：(fg, 该行的已量宽字符)——角色标签行 + 正文折行
-        let mut rows: Vec<Row> = Vec::new();
-        for (is_user, text) in msgs {
+        // 折行辅助改方法（闭包推不出 'a 生命周期）
+        let mut rows = Vec::new();
+        for (is_user, text, thinking) in msgs {
             let label_fg = if *is_user { MAG_BORDER } else { AI_PAGE_FG };
             let label = if *is_user { "你" } else { "AI" };
-            rows.push((label_fg, self.measure_items(label, PX)));
-            for body_line in text.split('\n') {
-                let items = self.measure_items(body_line, PX);
-                let widths: Vec<f32> = items.iter().map(|i| i.2).collect();
-                let starts = wrap_starts(&widths, wrap_w);
-                for (li, &st) in starts.iter().enumerate() {
-                    let en = starts.get(li + 1).copied().unwrap_or(items.len());
-                    rows.push((DEFAULT_FG, items[st..en].to_vec()));
+            rows.push((label_fg, self.measure_items(label, AI_PAGE_PX)));
+            if !is_user && !thinking.is_empty() {
+                // 思考块：尾随窗 ≤3 行（thinking_window 纯函数钉计数与
+                // 尾随语义）——块高恒定，流式时窗口跟尾 = 自己滚动
+                let think_rows = self.wrap_ai_lines(thinking, wrap_w);
+                for items in &think_rows[crate::ui::ai_page::thinking_window(think_rows.len())] {
+                    rows.push((AI_THINK_FG, items.clone()));
                 }
             }
+            for items in self.wrap_ai_lines(text, wrap_w) {
+                rows.push((DEFAULT_FG, items));
+            }
         }
-        // 尾随锁定：放不下的旧行整行丢弃（不是半截滚——滚动是期 0④ 的活）
-        let fit = buf_h.saturating_sub(TOP + BOTTOM) / LINE_H;
-        let skip = rows.len().saturating_sub(fit as usize);
-        for (i, (fg, items)) in rows.iter().skip(skip).enumerate() {
-            let y = TOP + i as u32 * LINE_H;
-            self.draw_items_left(&mut frame, items, MARGIN_X, row_w, y, LINE_H, PX, *fg, None);
+        rows
+    }
+
+    /// 折行辅助：一段文本 → 若干展示行（与正文同尺贪心断行）
+    fn wrap_ai_lines<'a>(
+        &'a self,
+        text: &str,
+        wrap_w: f32,
+    ) -> Vec<Vec<(&'a fontdue::Font, char, f32)>> {
+        let mut out = Vec::new();
+        for line in text.split('\n') {
+            let items = self.measure_items(line, AI_PAGE_PX);
+            let widths: Vec<f32> = items.iter().map(|i| i.2).collect();
+            let starts = wrap_starts(&widths, wrap_w);
+            for (li, &st) in starts.iter().enumerate() {
+                let en = starts.get(li + 1).copied().unwrap_or(items.len());
+                out.push(items[st..en].to_vec());
+            }
         }
+        out
     }
 
     /// 雾状光球（D8 拟合定稿 2026-08-30，加法合成）：视图本体在 ui/orb.rs
@@ -1822,8 +1883,17 @@ pub trait TermEmu: Send {
     fn render_into(&mut self, buf: &mut [u32], w: u32, h: u32);
     fn render_keybar(&self, buf: &mut [u32], w: u32, h: u32, ime_bottom: u32, mods: u8);
     /// AI 外显 chrome（ai-presence，android_app rasterize 调用方）：
-    /// AI 页真对话渲染（page=AiFullscreen 时代替终端网格）/ 雾状光球 sprite
-    fn render_ai_page(&self, buf: &mut [u32], w: u32, h: u32, msgs: &[(bool, String)]);
+    /// AI 页真对话渲染（page=AiFullscreen 时代替终端网格）/ 雾状光球 sprite。
+    /// scroll_rows = 距底行数（期 0④ 视口）；返回（总行数, 一屏行数）
+    /// 供调用方写回视口状态机（眼手同尺）
+    fn render_ai_page(
+        &self,
+        buf: &mut [u32],
+        w: u32,
+        h: u32,
+        msgs: &[(bool, String, String)],
+        scroll_rows: u32,
+    ) -> (u32, u32);
     /// 全局输入栏 chrome（期 0 组件三，android_app rasterize 调用方）：
     /// 压底紧贴键盘（栏带 = 屏底 - inset - 栏高），任何会话页都画；
     /// sending = 发送钮图标态（▶ ↔ ⏸，跟 AI 运行态硬切）；
@@ -1909,8 +1979,15 @@ impl TermEmu for TermView {
     fn render_keybar(&self, buf: &mut [u32], w: u32, h: u32, ime_bottom: u32, mods: u8) {
         TermView::render_keybar(self, buf, w, h, ime_bottom, mods)
     }
-    fn render_ai_page(&self, buf: &mut [u32], w: u32, h: u32, msgs: &[(bool, String)]) {
-        TermView::render_ai_page(self, buf, w, h, msgs)
+    fn render_ai_page(
+        &self,
+        buf: &mut [u32],
+        w: u32,
+        h: u32,
+        msgs: &[(bool, String, String)],
+        scroll_rows: u32,
+    ) -> (u32, u32) {
+        TermView::render_ai_page(self, buf, w, h, msgs, scroll_rows)
     }
     fn render_inputbar(
         &self,

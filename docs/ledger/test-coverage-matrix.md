@@ -8,7 +8,7 @@
 
 | 模块 | pub项 | 已引用 | 未覆盖 | 未覆盖清单 |
 |---|---|---|---|---|
-| `src/ai_chat.rs` | 6 | 5 | 1 | generation |
+| `src/ai_chat.rs` | 10 | 9 | 1 | generation |
 | `src/ai_presence.rs` | 27 | 27 | 0 | — |
 | `src/bootstrap.rs` | 4 | 2 | 2 | ensure_pkg_tool first_boot_install |
 | `src/brain.rs` | 14 | 14 | 0 | — |
@@ -22,7 +22,7 @@
 | `src/ime_bridge.rs` | 1 | 0 | 1 | jni_counters |
 | `src/ime_queue.rs` | 8 | 8 | 0 | — |
 | `src/input_bar.rs` | 58 | 49 | 9 | MENU_W MENU_TEXT_PX text_avail_w CARET_BLINK_MS SELECT_LONG_PRESS_MS ANCHOR_VISUAL_SIZE ANCHOR_HIT_SIZE set_sel_anchor insert_or_replace |
-| `src/insets.rs` | 3 | 1 | 2 | force_show_keyboard query_ime_bottom |
+| `src/insets.rs` | 4 | 1 | 3 | force_show_keyboard force_hide_keyboard query_ime_bottom |
 | `src/keybar.rs` | 15 | 11 | 4 | COLS MOD_ALT install_bridge_mods bridge_mods |
 | `src/keymap.rs` | 2 | 2 | 0 | — |
 | `src/local_pty.rs` | 5 | 4 | 1 | android_prefix |
@@ -39,8 +39,9 @@
 | `src/scroll.rs` | 5 | 5 | 0 | — |
 | `src/session.rs` | 8 | 8 | 0 | — |
 | `src/session_router.rs` | 10 | 10 | 0 | — |
-| `src/termview.rs` | 79 | 73 | 6 | FONT_CANDIDATES CJK_FONT_CANDIDATES load_cjk_font font_probe MAG_HALF_COLS MAG_HALF_ROWS |
+| `src/termview.rs` | 85 | 79 | 6 | FONT_CANDIDATES CJK_FONT_CANDIDATES load_cjk_font font_probe MAG_HALF_COLS MAG_HALF_ROWS |
 | `src/trace.rs` | 12 | 8 | 4 | TRACE_CAP format_tail dump_all dump_tail |
+| `src/ui/ai_page.rs` | 6 | 6 | 0 | — |
 | `src/ui/fx_spring.rs` | 3 | 3 | 0 | — |
 | `src/ui/keybar.rs` | 1 | 1 | 0 | — |
 | `src/ui/orb.rs` | 3 | 3 | 0 | — |

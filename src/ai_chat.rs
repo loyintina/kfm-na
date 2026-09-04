@@ -19,11 +19,13 @@ use std::sync::Mutex;
 
 #[derive(Default)]
 struct Inner {
-    /// 已成消息（(is_user, text)）
-    messages: Vec<(bool, String)>,
+    /// 已成消息（(is_user, text, thinking)——思考分账随消息存档，
+    /// 期 0④½ 起渲染成 ≤3 行暗色尾随块，不再是收流即弃）
+    messages: Vec<(bool, String, String)>,
     /// 流式中的 assistant 半截正文（MessageStart 开、MessageStop/Done/Error 收）
     streaming: Option<String>,
-    /// 流式中的思考缓冲（BAR-059 与正文分账：不进可见回复，只备收流归位）
+    /// 流式中的思考缓冲（BAR-059 与正文分账：不进正文行，渲染走
+    /// ≤3 行暗色尾随块——期 0④½；收流归位判据不变）
     thinking: String,
 }
 
@@ -32,6 +34,8 @@ pub struct AiChatState {
     /// 代际计数：每次 user_send/apply +1——置脏比对用（脑线程流式落格
     /// 不经触摸/快照，事件循环拿它判「该画帧了」）
     generation: std::sync::atomic::AtomicU64,
+    /// 对话页视口（期 0④：滚动/追底状态机，ui/ai_page.rs 纯逻辑）
+    scroll: Mutex<crate::ui::ai_page::AiPageScroll>,
 }
 
 impl AiChatState {
@@ -39,7 +43,38 @@ impl AiChatState {
         Self {
             inner: Mutex::new(Inner::default()),
             generation: std::sync::atomic::AtomicU64::new(0),
+            scroll: Mutex::new(crate::ui::ai_page::AiPageScroll::new()),
         }
+    }
+
+    /// 对话页视口三件套（期 0④）：手势拖行 / 布局写回 / 渲染读偏移。
+    /// 判卷成本倒挂（转发）不出题——状态机本身的考题在 ai_page_scroll_spec
+    pub fn scroll_drag_rows(&self, delta: i32) {
+        self.scroll
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .drag_rows(delta);
+    }
+
+    pub fn scroll_sync_layout(&self, total: u32, fit: u32) {
+        self.scroll
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .sync_layout(total, fit);
+    }
+
+    pub fn scroll_offset(&self) -> u32 {
+        self.scroll
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .offset()
+    }
+
+    pub fn scroll_follow(&self) -> bool {
+        self.scroll
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .follow()
     }
 
     /// 代际读数（置脏比对；判卷成本倒挂不出题）
@@ -53,10 +88,10 @@ impl AiChatState {
         let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         self.generation
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        g.messages.push((true, text.to_string()));
+        g.messages.push((true, text.to_string(), String::new()));
         g.messages
             .iter()
-            .map(|(is_user, t)| {
+            .map(|(is_user, t, _)| {
                 (
                     if *is_user { "user" } else { "assistant" }.to_string(),
                     t.clone(),
@@ -92,18 +127,21 @@ impl AiChatState {
             ChatEvent::Error { content } => {
                 // 先收流（半截不丢）再成人话错误消息——kfmv4 error 事件语义
                 Self::flush(&mut g);
-                g.messages.push((false, format!("【错误】{content}")));
+                g.messages
+                    .push((false, format!("【错误】{content}"), String::new()));
             }
             _ => {} // 工具事件 v1 不入格
         }
     }
 
-    /// 渲染快照：已成消息 + 流式中尾巴（(is_user, text)，出生序）
-    pub fn snap(&self) -> Vec<(bool, String)> {
+    /// 渲染快照：已成消息 + 流式中尾巴（(is_user, text, thinking)，
+    /// 出生序）。流式尾巴带活思考——思考先行的阶段这就是可见的
+    /// 「自己滚动」暗色块（期 0④½）
+    pub fn snap(&self) -> Vec<(bool, String, String)> {
         let g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let mut out = g.messages.clone();
         if let Some(s) = &g.streaming {
-            out.push((false, s.clone()));
+            out.push((false, s.clone(), g.thinking.clone()));
         }
         out
     }
@@ -119,14 +157,17 @@ impl AiChatState {
 
     /// 收流：半截 assistant 成消息（空流不产空消息）。BAR-059 归位：
     /// 正文空且思考非空 → 思考归位为正文（kfmv4 陷阱 10 / R3，与
-    /// brain.rs RunAccumulator 同判据）；正文非空则思考整段舍弃
-    /// （期 0 纯文本消息行不画思考，折叠块是期 0④⑤ 的活）
+    /// brain.rs RunAccumulator 同判据）；正文非空则思考随消息存档
+    /// （期 0④½ 起渲染成 ≤3 行暗色尾随块——不再整段舍弃）
     fn flush(g: &mut Inner) {
         let text = g.streaming.take().unwrap_or_default();
         let thinking = std::mem::take(&mut g.thinking);
-        let msg = if text.is_empty() { thinking } else { text };
-        if !msg.is_empty() {
-            g.messages.push((false, msg));
+        if text.is_empty() {
+            if !thinking.is_empty() {
+                g.messages.push((false, thinking, String::new()));
+            }
+        } else {
+            g.messages.push((false, text, thinking));
         }
     }
 }

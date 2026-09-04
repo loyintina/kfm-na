@@ -105,6 +105,15 @@ struct BarTouch {
     menu: Option<BarMenuAction>,
 }
 
+/// AI 面板手势跟踪（期 0④）：拖动滚行 + 点按收键盘的仲裁
+struct AiPageTouch {
+    start_y: f64,
+    last_y: f64,
+    /// 行高余量累积（px）——跨 Moved 事件攒够一行才滚一行（像素级跟手）
+    acc_px: f64,
+    dragged: bool,
+}
+
 /// 输入栏选择操作菜单项（BAR-046）：自绘菜单四键，左→右依次
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BarMenuAction {
@@ -220,6 +229,10 @@ struct App {
     /// 按在输入栏带上的手势（Some = 这手势归栏，终端手势全家让路）。
     /// 拖动超 slop = 滚动文本视口；未超 = 点按（聚焦/定位/发送）
     inputbar_touch: Option<BarTouch>,
+    /// 按在 AI 面板上的手势（期 0④，page=AiFullscreen 时终端手势全家
+    /// 让路——不穿透）：拖动 = 对话页滚行（追底状态机），未超 slop
+    /// 抬手 = 点按（输入栏失焦 + 收键盘，不召唤终端输入法）
+    ai_page_touch: Option<AiPageTouch>,
     /// 本地脑（期 0②：echo-brain 夹具先行，direct-api 随 key 配置落地换插）：
     /// 输入栏发送的真 run 来源——run_start/run_end 驱动光球（期 0②收尾）
     brain: Option<Arc<dyn crate::brain_ep::BrainEndpoint>>,
@@ -434,6 +447,22 @@ impl App {
                     });
                     return;
                 }
+                // AI 面板靠泊中（期 0④）：面板上只有输入栏是活区——其余
+                // 位置手势归对话页（拖动滚行/点按收键盘），终端手势全家
+                // 让路（快捷键行热区也不许穿透：面板盖着它，点得着看不
+                // 见 = 幽灵键）
+                let ai_page = self
+                    .last_ai_snap
+                    .is_some_and(|s| s.page == crate::ai_presence::Page::AiFullscreen);
+                if ai_page {
+                    self.ai_page_touch = Some(AiPageTouch {
+                        start_y: y,
+                        last_y: y,
+                        acc_px: 0.0,
+                        dragged: false,
+                    });
+                    return;
+                }
                 // 起点在快捷键行带上 → 这手势归行（不滚屏不唤键盘）
                 // BAR-018：判定尺与渲染/hit 一致——减去键盘 inset，
                 // 否则键盘弹起时行带浮在 inset 上方，这里却认屏底。
@@ -569,6 +598,26 @@ impl App {
                             self.dirty = true;
                         }
                     }
+                }
+                // AI 面板手势：拖动 = 对话页滚行（像素级累积跟手，行高
+                // 与渲染同尺 AI_PAGE_LINE_H；上滑 = 看更早 = 偏移+）
+                if let Some(apt) = self.ai_page_touch.as_mut() {
+                    let dy = y - apt.last_y;
+                    apt.last_y = y;
+                    if (y - apt.start_y).abs() > crate::scroll::TAP_SLOP_PX {
+                        apt.dragged = true;
+                    }
+                    apt.acc_px -= dy; // 手指上滑 dy<0 → 累积为正 = 看更早
+                    let line_h = f64::from(crate::termview::AI_PAGE_LINE_H);
+                    let rows = (apt.acc_px / line_h).trunc() as i32;
+                    if rows != 0 {
+                        apt.acc_px -= f64::from(rows) * line_h;
+                        if let Some(chat) = &self.ai_chat {
+                            chat.scroll_drag_rows(rows);
+                        }
+                        self.dirty = true;
+                    }
+                    return;
                 }
                 // 指头坐标跟新（捏合测距用）
                 for t in &mut self.touches {
@@ -765,6 +814,27 @@ impl App {
                             }
                         }
                         None => {}
+                    }
+                    self.dirty = true;
+                    return;
+                }
+                // AI 面板手势收尾：点按（未拖过 slop）= 输入栏失焦 +
+                // 收键盘——面板不是输入区，绝不穿透召唤终端输入法（期 0④
+                // 用户拍板两条：不穿透 + 点非输入区自动收键盘）
+                if let Some(apt) = self.ai_page_touch.take() {
+                    if phase == TouchPhase::Ended && !apt.dragged {
+                        if self.input_bar.as_ref().is_some_and(|b| b.is_focused())
+                            && let Some(bar) = &self.input_bar
+                        {
+                            bar.unfocus();
+                        }
+                        if let Some(w) = &self.window {
+                            w.set_ime_allowed(false);
+                        }
+                        if let Some(insets) = &self.ime_insets {
+                            insets.force_hide();
+                        }
+                        crate::report::report("ime", "AI 页点按：收键盘不穿透");
                     }
                     self.dirty = true;
                     return;
@@ -2025,14 +2095,14 @@ impl App {
     /// (screendump) 只画终端网格本体，快捷键行/光球/放大镜是 UI 装帧，
     /// 不在后台视野里
     #[allow(clippy::too_many_arguments)]
-    #[allow(clippy::too_many_arguments)]
     fn rasterize(
         term: Option<&mut Box<dyn TermEmu>>,
         mods: u8,
         magnifier_at: Option<(f64, f64)>,
         ime_bottom_px: u32,
         ai_snap: Option<crate::ai_presence::PresenceSnap>,
-        chat_msgs: &[(bool, String)],
+        chat_msgs: &[(bool, String, String)],
+        chat_scroll: u32,
         bar_snap: Option<&crate::input_bar::BarSnap>,
         caret_on: bool,
         buf: &mut [u32],
@@ -2040,7 +2110,8 @@ impl App {
         h: u32,
         panel_off: i32,
         panel_scratch: &mut Vec<u32>,
-    ) {
+    ) -> Option<(u32, u32)> {
+        let mut ai_layout = None; // AI 页渲染过 = Some(总行数, 一屏行数)
         if let Some(term) = term {
             // 当前栏带高（与 render_inputbar 同源实测折行——不读 poll 写回
             // 的 lines，前后台都不得两张皮）——keybar inset 与渲染同尺
@@ -2060,8 +2131,8 @@ impl App {
                 term.render_keybar(buf, w, h, ime_bottom_px + bar_h, mods);
             } else if panel_off == 0 {
                 // 面板靠泊（AI 全屏页稳态，期 0③ 真对话页）：不画终端
-                // 网格与快捷键行，深紫暗底 + 消息行尾随锁定
-                term.render_ai_page(buf, w, h, chat_msgs);
+                // 网格与快捷键行，深紫暗底 + 消息行视口（期 0④ 滚动）
+                ai_layout = Some(term.render_ai_page(buf, w, h, chat_msgs, chat_scroll));
             } else {
                 // 过渡帧：终端 + 快捷键行在下（照画——快捷键行层级低于
                 // 面板，被落下来的面板盖住是自然结果，用户 2026-09-04
@@ -2071,7 +2142,7 @@ impl App {
                 term.render_keybar(buf, w, h, ime_bottom_px + bar_h, mods);
                 panel_scratch.clear();
                 panel_scratch.resize((w as usize) * (h as usize), 0);
-                term.render_ai_page(panel_scratch, w, h, chat_msgs);
+                ai_layout = Some(term.render_ai_page(panel_scratch, w, h, chat_msgs, chat_scroll));
                 crate::termview::blit_panel_shifted(buf, panel_scratch, w, h, panel_off);
             }
             // 全局输入栏（常驻 chrome：任何会话下都在，§二——AI 页也画）。
@@ -2106,7 +2177,9 @@ impl App {
             }
         } else {
             buf.fill(KFM_PURPLE); // 字体全灭的降级画面：紫屏 + 已有上报
+            return None;
         }
+        ai_layout
     }
 
     /// 装配路由：Arc 化 + 登记闸门注册表（keys-in 注入的唯一入口）
@@ -2155,13 +2228,15 @@ impl App {
                 panel_target,
                 crate::report::boot_ms() as u64,
             ) as i32;
-            Self::rasterize(
+            let chat_scroll = self.ai_chat.as_ref().map_or(0, |c| c.scroll_offset());
+            let ai_layout = Self::rasterize(
                 tg.as_deref_mut(),
                 mods,
                 self.magnifier_at,
                 self.ime_bottom_px,
                 self.last_ai_snap,
                 &chat_msgs,
+                chat_scroll,
                 self.last_bar_snap.as_ref(),
                 caret_on,
                 &mut buf,
@@ -2170,6 +2245,10 @@ impl App {
                 panel_off,
                 &mut self.panel_scratch,
             );
+            // 布局写回视口状态机（眼手同尺：手势钳制与渲染同一份布局）
+            if let (Some(chat), Some((total, fit))) = (&self.ai_chat, ai_layout) {
+                chat.scroll_sync_layout(total, fit);
+            }
         } else {
             buf.fill(KFM_PURPLE);
             // 首帧呈现里程碑：紫屏真亮了才算雷 1 排除

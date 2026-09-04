@@ -33,6 +33,7 @@ impl ImeInsets for FakeInsets {
     fn force_show(&self) {
         self.shown.fetch_add(1, Ordering::Relaxed);
     }
+    fn force_hide(&self) {} // 收键盘本科目用不到（期 0④ 加的 trait 方法）
 }
 
 fn load_plugin(base: &Base, insets: Arc<FakeInsets>) {

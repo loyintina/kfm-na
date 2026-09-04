@@ -13,7 +13,7 @@ src/http1.rs 3
 src/ime_bridge.rs 1
 src/ime_queue.rs 0
 src/input_bar.rs 9
-src/insets.rs 2
+src/insets.rs 3
 src/keybar.rs 4
 src/keymap.rs 0
 src/local_pty.rs 1
@@ -32,6 +32,7 @@ src/session.rs 0
 src/session_router.rs 0
 src/termview.rs 6
 src/trace.rs 4
+src/ui/ai_page.rs 0
 src/ui/fx_spring.rs 0
 src/ui/keybar.rs 0
 src/ui/orb.rs 0

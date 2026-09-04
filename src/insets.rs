@@ -24,10 +24,13 @@ pub trait ImeInsets: Send + Sync {
     fn ime_bottom_px(&self) -> Option<u32>;
     /// 强制弹出软键盘（BAR-012：SHOW_FORCED 无视 IMM 拒弹策略）
     fn force_show(&self);
+    /// 强制收起软键盘（期 0④：点非输入区 = 失焦收键盘；
+    /// hideSoftInputFromWindow(decorView.windowToken, 0)）
+    fn force_hide(&self);
 }
 
 #[cfg(target_os = "android")]
-pub use imp::{JniInsets, force_show_keyboard, query_ime_bottom};
+pub use imp::{JniInsets, force_hide_keyboard, force_show_keyboard, query_ime_bottom};
 
 #[cfg(target_os = "android")]
 mod imp {
@@ -55,6 +58,9 @@ mod imp {
         }
         fn force_show(&self) {
             force_show_keyboard(&self.app)
+        }
+        fn force_hide(&self) {
+            force_hide_keyboard(&self.app)
         }
     }
 
@@ -134,6 +140,65 @@ mod imp {
         match result {
             Ok(msg) => crate::report::report("ime", &format!("强弹诊断: {msg}")),
             Err(_) => crate::report::report("ime", "强弹诊断: JNI 链路失败"),
+        }
+    }
+
+    /// 强制收起软键盘（期 0④：点 AI 面板等非输入区 = 失焦收键盘）。
+    /// hideSoftInputFromWindow 要的是 windowToken——decorView 恒在，
+    /// 不依赖当前焦点（焦点那套在 force_show 里是诊断必需，收键盘不用）
+    pub fn force_hide_keyboard(app: &AndroidApp) {
+        // SAFETY: 同 query_ime_bottom
+        let vm = unsafe { JavaVM::from_raw(app.vm_as_ptr().cast()) };
+        let raw_activity = app.activity_as_ptr() as jni::sys::jobject;
+        let result = vm.attach_current_thread(|env| -> jni::errors::Result<String> {
+            // SAFETY: 同 query_ime_bottom
+            let activity = unsafe { JObject::from_raw(env, raw_activity) };
+            let window = env
+                .call_method(
+                    &activity,
+                    jni_str!("getWindow"),
+                    jni_sig!("()Landroid/view/Window;"),
+                    &[],
+                )?
+                .l()?;
+            let decor = env
+                .call_method(
+                    window,
+                    jni_str!("getDecorView"),
+                    jni_sig!("()Landroid/view/View;"),
+                    &[],
+                )?
+                .l()?;
+            let token = env
+                .call_method(
+                    &decor,
+                    jni_str!("getWindowToken"),
+                    jni_sig!("()Landroid/os/IBinder;"),
+                    &[],
+                )?
+                .l()?;
+            let service_name = env.new_string("input_method")?;
+            let imm = env
+                .call_method(
+                    &activity,
+                    jni_str!("getSystemService"),
+                    jni_sig!("(Ljava/lang/String;)Ljava/lang/Object;"),
+                    &[jni::JValue::Object(&service_name)],
+                )?
+                .l()?;
+            let hidden = env
+                .call_method(
+                    imm,
+                    jni_str!("hideSoftInputFromWindow"),
+                    jni_sig!("(Landroid/os/IBinder;I)Z"),
+                    &[jni::JValue::Object(&token), jni::JValue::Int(0)],
+                )?
+                .z()?;
+            Ok(format!("收键盘={hidden}"))
+        });
+        match result {
+            Ok(msg) => crate::report::report("ime", &msg),
+            Err(_) => crate::report::report("ime", "收键盘: JNI 链路失败"),
         }
     }
 

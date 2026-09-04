@@ -141,9 +141,15 @@ pub fn dump_now(dir: &str) {
             t.render_keybar(&mut buf, w, h, bar_h, 0);
         } else if panel_off == 0 {
             // 与前台 rasterize 同一分支规则：AI 页 = 真对话消息盖掉终端网格
-            // （AI 页不画快捷键行，同前台）；消息读 AI_CHAT 注册位（D9 同源）
-            let msgs = ai_chat_handle().map(|c| c.snap()).unwrap_or_default();
-            t.render_ai_page(&mut buf, w, h, &msgs);
+            // （AI 页不画快捷键行，同前台）；消息与视口读 AI_CHAT 注册位
+            // （D9 同源），布局写回同前台（眼手同尺）
+            let chat = ai_chat_handle();
+            let msgs = chat.as_ref().map(|c| c.snap()).unwrap_or_default();
+            let off = chat.as_ref().map_or(0, |c| c.scroll_offset());
+            let (total, fit) = t.render_ai_page(&mut buf, w, h, &msgs, off);
+            if let Some(c) = &chat {
+                c.scroll_sync_layout(total, fit);
+            }
         } else {
             // 过渡帧：终端 + 快捷键行在下（照画——层级低于面板，被落
             // 下来的面板盖住是自然结果；BAR-063：把快捷键行从过渡帧
@@ -151,9 +157,14 @@ pub fn dump_now(dir: &str) {
             // 面板离屏渲染后按偏移压盖（与前台同规则）
             t.render_into(&mut buf, w, h);
             t.render_keybar(&mut buf, w, h, bar_h, 0);
-            let msgs = ai_chat_handle().map(|c| c.snap()).unwrap_or_default();
+            let chat = ai_chat_handle();
+            let msgs = chat.as_ref().map(|c| c.snap()).unwrap_or_default();
+            let off = chat.as_ref().map_or(0, |c| c.scroll_offset());
             let mut scratch = vec![0u32; (w as usize) * (h as usize)];
-            t.render_ai_page(&mut scratch, w, h, &msgs);
+            let (total, fit) = t.render_ai_page(&mut scratch, w, h, &msgs, off);
+            if let Some(c) = &chat {
+                c.scroll_sync_layout(total, fit);
+            }
             crate::termview::blit_panel_shifted(&mut buf, &scratch, w, h, panel_off);
         }
         // 输入栏：常驻 chrome，两页都画（同前台 rasterize 规则）；
