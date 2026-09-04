@@ -1,11 +1,11 @@
 //! android_app.rs — Android 壳（B 档：平台胶水，冒烟钉防退化）
 //!
-//! 渲染路线定案（2026-08-13，用户拍板）：**软渲染 softbuffer**。
-//! 背景：本机 GPU 驱动栈（Mali-G720 Immortalis r44p1 + OriginOS）与 wgpu
-//! 双后端（Vulkan/GLES）随机原生暴毙——六次实拍，死亡点在 adapter/surface/
-//! configure 间漂移、零 Rust panic，非代码逻辑病；裸 winit 窗对照组稳定。
-//! 终端负载（字符网格 + 光标）本就是 CPU 教科书级场景，softbuffer 零驱动
-//! 依赖、行为确定。GPU 路线留档后查（git 历史 ENABLE_GFX/wgpu 时代）。
+//! 渲染路线（2026-09-04 修订）：**GLES present 优先，softbuffer 兜底**。
+//! 原 2026-08-13 定案（纯 softbuffer）的背景：本机 GPU 驱动栈
+//! （Mali-G720 Immortalis r44p1 + OriginOS）与 wgpu 双后端随机原生暴毙。
+//! 期 0③ 尖刺判活（gpu-render.md §九）：病灶坐实在 wgpu-hal 而非驱动，
+//! 裸 EGL/GLES 全链路通关——壳内 GLES 基建（期 1 第 1 层）据此落地，
+//! init 失败自动回退 softbuffer（立项书红线：永久保留）。
 //!
 //! 切片「终端渲染」（2026-08-13）：TERMINAL_MODE=true 时启动即进终端——
 //! 建窗口 → softbuffer → 加载字体建 TermView → spawn 常驻 ws 会话
@@ -135,9 +135,53 @@ struct SessHealth {
     connecting: bool,
 }
 
-struct Gfx {
-    _context: SoftContext,
-    surface: SoftSurface,
+/// 渲染后端（期 1 第 1 层）：GLES present 优先，init 失败回退 softbuffer
+/// （GLES_FIRST 开关；立项书红线——softbuffer 永久保留做兜底与老设备保险）
+enum Gfx {
+    Soft {
+        _context: SoftContext,
+        surface: SoftSurface,
+    },
+    Gles(Box<crate::gles_present::GlesPresent>),
+}
+
+/// GLES 优先开关：true = init_gfx 先试 GLES present 后端（失败自动回退
+/// softbuffer，照常可用）；false = 纯 softbuffer（对照组/排障开关）
+const GLES_FIRST: bool = true;
+
+/// 帧缓冲借用（双后端同尺）：rasterize 只吃 &mut [u32]（deref 拿），
+/// present 各回各家——softbuffer 推原生窗，GLES 纹理上传 + swap
+enum FrameBuf<'a> {
+    Soft(softbuffer::Buffer<'a, Arc<Window>, Arc<Window>>),
+    Gles(&'a mut crate::gles_present::GlesPresent),
+}
+
+impl std::ops::Deref for FrameBuf<'_> {
+    type Target = [u32];
+    fn deref(&self) -> &[u32] {
+        match self {
+            FrameBuf::Soft(b) => b,
+            FrameBuf::Gles(g) => g.pixels(),
+        }
+    }
+}
+
+impl std::ops::DerefMut for FrameBuf<'_> {
+    fn deref_mut(&mut self) -> &mut [u32] {
+        match self {
+            FrameBuf::Soft(b) => b,
+            FrameBuf::Gles(g) => g.pixels_mut(),
+        }
+    }
+}
+
+impl FrameBuf<'_> {
+    fn present(self) {
+        match self {
+            FrameBuf::Soft(b) => b.present().expect("帧呈现失败"),
+            FrameBuf::Gles(g) => g.present(),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -1334,8 +1378,23 @@ impl App {
         }
     }
 
-    /// 初始化 softbuffer（上下文 + 表面），按窗口尺寸配置
+    /// 初始化渲染后端：GLES present 优先（期 1 第 1 层），失败回退
+    /// softbuffer（上下文 + 表面），按窗口尺寸配置
     fn init_gfx(window: &Arc<Window>) -> Gfx {
+        if GLES_FIRST {
+            match crate::gles_present::GlesPresent::new(window) {
+                Ok(g) => {
+                    crate::report::report(
+                        "boot",
+                        &format!("GLES present 后端上线 +{}ms", boot_ms()),
+                    );
+                    return Gfx::Gles(Box::new(g));
+                }
+                Err(e) => {
+                    crate::report::report("boot", &format!("GLES 初始化失败，回退 softbuffer: {e}"))
+                }
+            }
+        }
         let context = softbuffer::Context::new(window.clone()).expect("创建 softbuffer 上下文失败");
         crate::report::report("boot", "softbuffer 上下文建成");
         let mut surface =
@@ -1345,7 +1404,7 @@ impl App {
         if let (Some(w), Some(h)) = (NonZeroU32::new(size.width), NonZeroU32::new(size.height)) {
             surface.resize(w, h).expect("surface resize 失败");
         }
-        Gfx {
+        Gfx::Soft {
             _context: context,
             surface,
         }
@@ -2247,8 +2306,17 @@ impl App {
         // 先拿终端句柄(owned Arc,借用即还),再借 gfx——顺序反了 E0502
         let th = self.term_handle();
         let Some(g) = &mut self.gfx else { return };
-        let mut buf = g.surface.buffer_mut().expect("取帧缓冲失败");
-        let (w, h) = (buf.width().get(), buf.height().get());
+        let (mut buf, w, h) = match g {
+            Gfx::Soft { surface, .. } => {
+                let b = surface.buffer_mut().expect("取帧缓冲失败");
+                let (w, h) = (b.width().get(), b.height().get());
+                (FrameBuf::Soft(b), w, h)
+            }
+            Gfx::Gles(g) => {
+                let (w, h) = g.size();
+                (FrameBuf::Gles(g.as_mut()), w, h)
+            }
+        };
         if TERMINAL_MODE {
             crate::gate::note_frame_size(w, h); // 给后台倒帧值守记账
             let mods = self.modifiers.as_ref().map_or(0, |m| m.peek());
@@ -2311,7 +2379,7 @@ impl App {
         }
         // 画面回传由值守线程统一消费(gate::spawn_gate_watcher)——
         // 挂起态事件循环叫不醒,前台顺帧消费那套在后台是死路,单一消费者
-        buf.present().expect("帧呈现失败");
+        buf.present();
         crate::gate::note_draw(t0.elapsed()); // 含 present 的全帧耗时
     }
 }
@@ -2353,11 +2421,18 @@ impl ApplicationHandler for App {
                 el.exit();
             }
             WindowEvent::Resized(sz) => {
-                if let Some(g) = &mut self.gfx
-                    && let (Some(w), Some(h)) =
-                        (NonZeroU32::new(sz.width), NonZeroU32::new(sz.height))
-                {
-                    g.surface.resize(w, h).expect("surface resize 失败");
+                if let Some(g) = &mut self.gfx {
+                    match g {
+                        Gfx::Soft { surface, .. } => {
+                            if let (Some(w), Some(h)) =
+                                (NonZeroU32::new(sz.width), NonZeroU32::new(sz.height))
+                            {
+                                surface.resize(w, h).expect("surface resize 失败");
+                            }
+                        }
+                        // EGL 窗表面随系统自调，只同步 CPU 帧缓冲尺寸
+                        Gfx::Gles(g) => g.set_size(sz.width, sz.height),
+                    }
                 }
                 if TERMINAL_MODE {
                     self.apply_window_size(sz.width, sz.height);

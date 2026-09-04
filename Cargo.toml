@@ -44,6 +44,13 @@ winit = { version = "0.30", default-features = false, features = ["android-nativ
 # 软渲染路线（2026-08-13 定案）：GPU 驱动栈双后端随机原生暴毙，终端负载
 # 本就是 CPU 场景。softbuffer 与 winit 同门（rwh_06），CPU 位图直推原生窗
 softbuffer = "0.4"
+# GLES present 后端（期 1 第 1 层，gles_present.rs）：期 0③ 尖刺判活
+# （gpu-render.md §九）后的壳内移植——dlopen libEGL.so（Termux SONAME
+# 坑：必须 khronos-egl dynamic 路线）+ glow 全屏三角纹理 present
+khronos-egl = { version = "6", features = ["dynamic"] }
+glow = "0.17"
+libloading = "0.8"
+raw-window-handle = "0.6"
 android_logger = "0.15"
 # JNI 直取真实软键盘高度（insets.rs，BAR-006）——与 android-activity 0.6 同版本线
 jni = "0.22"

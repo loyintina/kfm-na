@@ -174,3 +174,19 @@ CPU 优化线顶上（§六分流）。
   每次拆建后帧计数续走零暴毙；前台连续心跳 **15.8 分钟每秒一条零断流**
   （全程累计 714 条心跳 / 存活 25 分钟）；前台稳锁 ~60fps（vsync）。
   期 0 三项验收标准全绿，GPU 化地基打完，期 1 可动工。
+
+## 十、期 1 第 1 层：壳内 EGL 基建（2026-09-04）
+
+- **切法**：先换「present」不换「墨」——全部光栅化照旧 CPU 进帧缓冲，
+  仅把呈现从 softbuffer 换成 `gles_present::GlesPresent`（纹理上传 +
+  全屏三角 + eglSwapBuffers）。尖刺③骨架移植：EGL 生命周期、
+  suspend/resume 拆建纪律照搬。字形图集是第 2 层的事，不在本层。
+- **后端开关**：`Gfx` 枚举化（Soft/Gles），`GLES_FIRST=true` 优先试
+  GLES，init 任何一步 Err 自动回退 softbuffer（立项书红线「永久保留」
+  在此兑现）；`FrameBuf` 借用层统一 `&mut [u32]` 喂 rasterize，present
+  各回各家——rasterize 与全部控件零改动。
+- **像素格式**：XRGB u32 小端按 RGBA8 上传，片元 swizzle（b,g,r），
+  零 CPU 转换零扩展依赖；NEAREST 采样保字形/SDF 边；`swap_interval(0)`
+  不堵 vsync（条件帧泵怕堵输入派发，帧率治理在 fx_frame_due）。
+- **判卷**（C 档实拍）：GLES 起得来、亮得对（na-shot 与 softbuffer
+  同屏对拍）、后台切回不崩、stats 帧耗画像对照。
