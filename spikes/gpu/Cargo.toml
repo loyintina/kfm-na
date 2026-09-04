@@ -1,0 +1,20 @@
+[package]
+name = "gpu-spike"
+version = "0.1.0"
+edition = "2024"
+
+# 独立于主 workspace（尖刺可弃，不压 chain 与覆盖矩阵）
+[workspace]
+
+[lib]
+name = "gpu_spike"
+crate-type = ["cdylib"]
+
+[dependencies]
+winit = { version = "0.30", default-features = false, features = ["android-native-activity", "rwh_06"] }
+wgpu = "30"
+pollster = "0.4"
+
+[profile.release]
+lto = true
+strip = true

@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- GPU 期 0 复活尖刺①（gpu-render.md §四）：裸 NativeActivity 无 Java 皮
+     （无输入需求，打包零 javac/d8）。独立包名与主 app 并存不互杀。 -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="dev.kfm.na.gpuspike">
+
+    <!-- 飞鸽传书回传通道（lib.rs spike_report） -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <application
+        android:label="GPU尖刺"
+        android:extractNativeLibs="false"
+        android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen">
+        <!-- extractNativeLibs=false（BAR-013 同款）：.so 直从 APK mmap，
+             配 package-spike.sh 的 STORED + zipalign -p -->
+
+        <activity
+            android:name="android.app.NativeActivity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density|fontScale">
+            <!-- configChanges 全集一个都不许删（2026-08-13 国产 ROM 实锤坑：
+                 OriginOS 启动注入配置变化触发 relaunch 杀使用中的 surface） -->
+            <meta-data android:name="android.app.lib_name" android:value="gpu_spike" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
