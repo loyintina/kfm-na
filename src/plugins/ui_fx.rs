@@ -2,8 +2,8 @@
 //! 占槽驱动插值，拔掉后功能等价只是变糙）。
 //!
 //! 两道缝两件曲线（2026-09-04 用户拍板分档）：
-//! - 「AI 面板 Y 偏移」缝 = 定时缓动（src/ui/fx_ease.rs）：落下 500ms
-//!   ease-out / 收起 400ms ease-in（CSS transition 语言）。
+//! - 「AI 面板 Y 偏移」缝 = 定时缓动（src/ui/fx_ease.rs）：落下 ease-out
+//!   / 收起 ease-in（CSS transition 语言；同日实测定档 350ms/250ms）。
 //! - 「键盘 inset」缝 = 弹簧平滑（src/ui/fx_spring.rs）：100ms 轮询
 //!   轨迹是阶梯，纯镜像太硬。
 //!

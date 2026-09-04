@@ -1,10 +1,11 @@
 //! fx_ease_spec.rs — AI 面板定时缓动考题（A 档纯逻辑，2026-09-04 用户
-//! 拍板：下落 500ms ease-out / 收起 400ms ease-in；答案
+//! 拍板：下落 ease-out / 收起 ease-in，同日实测定档 350ms/250ms；答案
 //! src/ui/fx_ease.rs + src/plugins/ui_fx.rs 装配）
 //!
 //! 判卷维度：
 //! - 端点精确：t=0 在起点、elapsed ≥ 时长贴死目标（帧时钟停表的判据）
-//! - 时长分档：进场 500ms（400ms 时不许提前贴死）/ 离场 400ms
+//! - 时长分档：进场更长（EXIT_MS 处不许贴死）/ 离场更短（ENTER_MS 处
+//!   早已贴死）——探测点全部从常量推导，改时长常量考题自动跟随
 //! - 曲线形状：ease-out 前半程 >50%（开头快）/ ease-in 前半程 <50%
 //!   （开头慢）——CSS transition 手感与弹簧墩感的分野
 //! - 单调性：全程不向反方向走（无弹簧式过冲）
@@ -58,21 +59,33 @@ fn spec_ease_端点精确() {
 
 #[test]
 fn spec_ease_时长分档() {
-    // 进场 500ms：400ms 处不许贴死（变异：时长对调会在这里露馅）
-    let mid = fx_ease::panel_ease_pos(-2800.0, 0.0, 400);
-    assert!(mid < 0.0, "进场 400ms 时必须还在路上（500ms 档），得 {mid}");
-    // 离场 400ms：399ms 在路上、400ms 贴死
-    let almost = fx_ease::panel_ease_pos(0.0, -2800.0, 399);
-    assert!(almost > -2800.0, "离场 399ms 必须还在路上，得 {almost}");
+    // 两档交界处：EXIT_MS 处进场必须还在路上（ENTER 更长）、ENTER_MS 处
+    // 离场早已贴死（变异：时长对调会在这里露馅）
+    let mid = fx_ease::panel_ease_pos(-2800.0, 0.0, fx_ease::EXIT_MS);
+    assert!(
+        mid < 0.0,
+        "EXIT_MS 处进场必须还在路上（ENTER 更长档），得 {mid}"
+    );
+    assert_eq!(
+        fx_ease::panel_ease_pos(0.0, -2800.0, fx_ease::ENTER_MS),
+        -2800.0,
+        "ENTER_MS 处离场必须早已贴死（EXIT 更短档）"
+    );
+    // 离场贴死前一刻必须还在路上（不许提前收表）
+    let almost = fx_ease::panel_ease_pos(0.0, -2800.0, fx_ease::EXIT_MS - 10);
+    assert!(
+        almost > -2800.0,
+        "离场末段前 10ms 必须还在路上，得 {almost}"
+    );
 }
 
 #[test]
 fn spec_ease_曲线形状() {
     // ease-out（进场落下）：开头快——半程时刻进度必须 >50%
-    let half = fx_ease::panel_ease_pos(-2800.0, 0.0, 250);
+    let half = fx_ease::panel_ease_pos(-2800.0, 0.0, fx_ease::ENTER_MS / 2);
     assert!(half > -1400.0, "ease-out 半程必须过半（开头快），得 {half}");
     // ease-in（离场收起）：开头慢——半程时刻进度必须 <50%
-    let half_up = fx_ease::panel_ease_pos(0.0, -2800.0, 200);
+    let half_up = fx_ease::panel_ease_pos(0.0, -2800.0, fx_ease::EXIT_MS / 2);
     assert!(
         half_up > -1400.0,
         "ease-in 半程必须未过半（开头慢），得 {half_up}"

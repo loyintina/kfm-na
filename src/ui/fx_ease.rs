@@ -1,7 +1,7 @@
 //! fx_ease.rs — ui-fx 的定时缓动件：AI 面板落下/收起曲线（2026-09-04
-//! 用户拍板：下落用 500ms ease-out、收起用 400ms ease-in——CSS transition
-//! 语言，取代弹簧的物理墩感。弹簧退役到键盘 inset 缝独占，见
-//! fx_spring.rs）。
+//! 用户拍板：下落 ease-out、收起 ease-in——CSS transition 语言，取代
+//! 弹簧的物理墩感；同日实测定档 350ms/250ms。弹簧退役到键盘 inset
+//! 缝独占，见 fx_spring.rs）。
 //!
 //! 方向分档：目标 > 起点（向 0 靠泊 = 进场落下）= ease-out；反之为离场
 //! 收起 = ease-in。纯函数零墙钟（A 档钉）；占缝采样自给自足——目标值
@@ -11,9 +11,11 @@
 use std::sync::{Arc, Mutex};
 
 /// 进场（落下）时长 ms：ease-out——开头快结尾慢，落位有「到位感」
-pub const ENTER_MS: u64 = 500;
+/// （2026-09-04 实测定档：500 偏拖 → 350）
+pub const ENTER_MS: u64 = 350;
 /// 离场（收起）时长 ms：ease-in——开头慢结尾快，让位不拖泥
-pub const EXIT_MS: u64 = 400;
+/// （2026-09-04 实测定档：400 偏拖 → 250）
+pub const EXIT_MS: u64 = 250;
 
 /// 三次 ease-out：1-(1-t)³（CSS cubic-bezier 的常用等价）
 pub fn ease_out_cubic(t: f32) -> f32 {
