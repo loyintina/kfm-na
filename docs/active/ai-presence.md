@@ -348,9 +348,11 @@ trait BrainEndpoint {
   折行 + 尾随锁定整行丢旧，滚动/markdown 是期 0④⑤ 的活）+ 置脏
   代际计数（脑线程流式落格不经触摸，generation 比对补画帧）+
   gate dump 装帧同步画真消息（AI_CHAT 注册位）。三路 key
-  （2026-09-03 用户拍板）：Kimi 卡默认 kimi-for-coding-highspeed /
+  （2026-09-03 配齐）：Kimi 卡 kimi-for-coding-highspeed /
   智谱 coding 套餐 glm-5.3-flash / DeepSeek 官网 deepseek-v4-flash-
   vision-exp（官网 /models 实查存在，非 opencode 套餐）——
+  **默认 = 智谱 glm-5.3-flash（2026-09-04 用户拍板改路，原默认
+  Kimi highspeed 退为备选）**；
   `scripts/deploy-ai-config.sh` 抽 kfmv4 配置经 8024 闸推私有目录，
   key 不进 git 不上日志；模型选择器 = 未来活（期 3）。
   **③首验（2026-09-04 凌晨，闸门后台自验一轮闭环）**：bar-inject

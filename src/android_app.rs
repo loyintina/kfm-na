@@ -253,11 +253,11 @@ struct App {
     panel_scratch: Vec<u32>,
 }
 
-/// 默认脑路（2026-09-03 用户拍板）：Kimi 卡 + k2.7 coding highspeed。
-/// 备选两路已配 key：智谱 coding 套餐 glm-5.3-flash / DeepSeek 官网
+/// 默认脑路（2026-09-04 用户拍板改路）：智谱 coding 套餐 glm-5.3-flash。
+/// 备选两路已配 key：Kimi 卡 kimi-for-coding-highspeed / DeepSeek 官网
 /// deepseek-v4-flash-vision-exp——模型选择器是未来活（期 3 打磨），v1 定死
-const DEFAULT_PROVIDER: &str = "Kimi";
-const DEFAULT_MODEL: &str = "kimi-for-coding-highspeed";
+const DEFAULT_PROVIDER: &str = "智谱";
+const DEFAULT_MODEL: &str = "glm-5.3-flash";
 
 /// 装配本地脑（期 0③ 换脑，D11）：私有目录 ai/providers.json + ai/.env
 /// 齐且可解析 → DirectApiBrain；任一环缺/坏 → echo-brain 夹具兜底 +
