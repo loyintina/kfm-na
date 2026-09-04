@@ -2281,7 +2281,7 @@ impl App {
             )
             .max(0.0) as u32;
             let chat_scroll = self.ai_chat.as_ref().map_or(0, |c| c.scroll_offset());
-            let chat_live = self.ai_chat.as_ref().is_some_and(|c| c.is_streaming());
+            let chat_live = self.ai_chat.as_ref().is_some_and(|c| c.thinking_live());
             let ai_layout = Self::rasterize(
                 tg.as_deref_mut(),
                 mods,

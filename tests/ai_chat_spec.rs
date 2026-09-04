@@ -208,3 +208,37 @@ fn spec_视口接线_状态机挂在chat上() {
     assert_eq!(chat.scroll_offset(), 0);
     assert!(chat.scroll_follow(), "滑回底恢复追底");
 }
+
+#[test]
+fn spec_思考相位_正文一出立即翻折() {
+    // 2026-09-04 用户拍板：三行滚动思考一结束就折叠，不等整轮收流
+    // （kfmv4 同判据：首块正文到 → 思考框折）。thinking_live = 渲染
+    // live_tail 的唯一数据源：思考先行期 true，首个 TextDelta 落地
+    // 即 false，收流后恒 false
+    let chat = AiChatState::new();
+    assert!(!chat.thinking_live(), "空闲恒 false");
+    chat.apply(&ChatEvent::MessageStart);
+    assert!(!chat.thinking_live(), "刚开流还没思考 = false");
+    chat.apply(&ChatEvent::ThinkingDelta {
+        index: 0,
+        text: "想".into(),
+    });
+    assert!(chat.thinking_live(), "思考先行期 = true（活窗）");
+    chat.apply(&ChatEvent::ThinkingDelta {
+        index: 0,
+        text: "更多".into(),
+    });
+    assert!(chat.thinking_live(), "思考累积中仍 true");
+    chat.apply(&ChatEvent::TextDelta {
+        index: 1,
+        text: "正".into(),
+    });
+    assert!(!chat.thinking_live(), "首个正文落地 = 思考结束立即折");
+    chat.apply(&ChatEvent::TextDelta {
+        index: 1,
+        text: "文".into(),
+    });
+    assert!(!chat.thinking_live(), "正文流式中恒 false");
+    chat.apply(&ChatEvent::Done);
+    assert!(!chat.thinking_live(), "收流后恒 false");
+}

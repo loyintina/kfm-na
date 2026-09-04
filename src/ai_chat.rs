@@ -155,6 +155,15 @@ impl AiChatState {
             .is_some()
     }
 
+    /// 思考相位进行中（2026-09-04 用户拍板：思考一结束就折叠，不等
+    /// 整轮收流——kfmv4 同判据：首块正文到 → 思考框折）。判据 = 流式
+    /// 开着且正文还一个字没来（思考先行阶段）；首个 TextDelta 落地
+    /// 即翻 false → 渲染折成「· 已思考 ·」
+    pub fn thinking_live(&self) -> bool {
+        let g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        g.streaming.as_ref().is_some_and(|s| s.is_empty()) && !g.thinking.is_empty()
+    }
+
     /// 收流：半截 assistant 成消息（空流不产空消息）。BAR-059 归位：
     /// 正文空且思考非空 → 思考归位为正文（kfmv4 陷阱 10 / R3，与
     /// brain.rs RunAccumulator 同判据）；正文非空则思考随消息存档

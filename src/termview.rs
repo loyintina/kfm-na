@@ -1100,9 +1100,9 @@ impl TermView {
     /// 与渲染用同一份布局）。
     /// bottom_inset = 视口下沿让位（键盘高 + 输入栏当前带高，2026-09-04
     /// 用户拍板：键盘弹起时追底追到输入栏上沿，不许越过栏带往下画）；
-    /// live_tail = 末条消息是流式中的 AI 回复（思考块 ≤3 行活窗）；
-    /// false = 全部消息已收流，思考折叠成一行暗色「已思考」（存档不丢，
-    /// 用户拍板：思考往往不重要但必须存在）
+    /// live_tail = 末条思考相位进行中（思考块 ≤3 行活窗）；false =
+    /// 思考已结束（正文开始或整轮收流），折叠成一行暗色「已思考」
+    /// （存档不丢，用户拍板：思考一结束立即折，不等整轮收流）
     #[allow(clippy::too_many_arguments)]
     pub fn render_ai_page(
         &self,
@@ -1909,9 +1909,9 @@ pub trait TermEmu: Send {
     /// AI 外显 chrome（ai-presence，android_app rasterize 调用方）：
     /// AI 页真对话渲染（page=AiFullscreen 时代替终端网格）/ 雾状光球 sprite。
     /// scroll_rows = 距底行数（期 0④ 视口）；bottom_inset = 键盘+输入栏
-    /// 让位（追底追到栏带上沿）；live_tail = 末条流式中（思考活窗，
-    /// 否则折叠一行）；返回（总行数, 一屏行数）供调用方写回视口状态机
-    /// （眼手同尺）
+    /// 让位（追底追到栏带上沿）；live_tail = 末条思考相位中（思考活窗，
+    /// 正文一出即折叠一行）；返回（总行数, 一屏行数）供调用方写回视口
+    /// 状态机（眼手同尺）
     #[allow(clippy::too_many_arguments)]
     fn render_ai_page(
         &self,
