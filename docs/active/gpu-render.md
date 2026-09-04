@@ -109,3 +109,22 @@ CPU 优化线顶上（§六分流）。
 - GameActivity 引入 gradle/AAR 链，与手工打包管线（package-apk.sh）
   冲突——②启用前先评打包改造（或 xbuild）；
 - 电耗：GPU 常驻渲染 vs CPU 间歇渲染，期 2 验收挂电耗对账，超标回评。
+
+## 八、期 0① 实录（2026-09-04，wgpu 30 × NativeActivity）
+
+- **API 漂移实锤**（风险登记第二条兑现，照 wgpu-types 30.0.1 源码修）：
+  `InstanceDescriptor::default()` 构造器化（`new_without_display_handle()`，
+  `Instance::new` 改传值）；`RequestAdapterOptions` 增 `apply_limit_buckets`；
+  `DeviceDescriptor` 增 `experimental_features`；`SurfaceConfiguration` 增
+  `color_space`；`RenderPipelineDescriptor.multiview` 改名 `multiview_mask`；
+  **`get_current_texture()` 去 Result 化改返 `CurrentSurfaceTexture` 枚举**
+  （Success/Suboptimal/Timeout/Occluded/Outdated/Lost/Validation——表面
+  丢失语义被类型系统整个接管，老防御逻辑的接力点在这）；
+  **`present()` 从 `SurfaceTexture` 挪到 `Queue::present(frame)`**。
+  期 1 GPU 化时 renderer 抽象必须把版本漂移计入接口设计。
+- **打包坑**：纯 NativeActivity 无 classes.dex 的包，manifest 必须显式
+  `android:hasCode="false"`——默认 true 被 vivo 安装器判「软件包无效」
+  （主包有 dex 不受影响，cargo-apk 时代它自动写 false）。
+- **流程坑**：chain-phone.sh 会把手机工作树回齐到 HEAD——scp 直改手机
+  源码后若先跑 chain 闸，改动被冲掉。正确序：改码 → 提交落账 → 手机
+  重编打包（或 scp 后立刻编包再补账）。

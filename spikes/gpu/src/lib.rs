@@ -59,7 +59,7 @@ struct Gfx {
 /// wgpu 初始化——每步一个里程碑（死亡点定位器，2026-08-13 同款打法）
 fn init_gfx(window: &Arc<Window>) -> Gfx {
     spike_report("wgpu instance 开始");
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
 
     spike_report("surface 开始");
     let surface = instance
@@ -71,6 +71,7 @@ fn init_gfx(window: &Arc<Window>) -> Gfx {
         power_preference: wgpu::PowerPreference::LowPower,
         compatible_surface: Some(&surface),
         force_fallback_adapter: false,
+        ..Default::default()
     }))
     .expect("无可用适配器（2026-08-13 雷 1 爆点）");
     spike_report(&format!("adapter 成了: {:?}", adapter.get_info()));
@@ -80,6 +81,7 @@ fn init_gfx(window: &Arc<Window>) -> Gfx {
         label: Some("gpu-spike"),
         required_features: wgpu::Features::empty(),
         required_limits: wgpu::Limits::downlevel_defaults(),
+        experimental_features: wgpu::ExperimentalFeatures::disabled(),
         memory_hints: wgpu::MemoryHints::Performance,
         trace: wgpu::Trace::Off,
     }))
@@ -96,6 +98,7 @@ fn init_gfx(window: &Arc<Window>) -> Gfx {
     let config = wgpu::SurfaceConfiguration {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         format,
+        color_space: wgpu::SurfaceColorSpace::default(),
         width: size.width.max(1),
         height: size.height.max(1),
         present_mode: wgpu::PresentMode::Fifo,
@@ -148,7 +151,7 @@ fn fs_main() -> @location(0) vec4<f32> {
         primitive: wgpu::PrimitiveState::default(),
         depth_stencil: None,
         multisample: wgpu::MultisampleState::default(),
-        multiview: None,
+        multiview_mask: None,
         cache: None,
     });
     spike_report("pipeline 成了");
@@ -163,12 +166,15 @@ fn fs_main() -> @location(0) vec4<f32> {
 
 /// 一帧：紫底清屏 + 橙三角（KFM 紫 #8B5CF6 垫底，三角证 draw 链路）
 fn draw(g: &Gfx) {
+    // wgpu 30：get_current_texture 去 Result 化，改返 CurrentSurfaceTexture
+    // 枚举——Lost/Outdated 重配，Timeout/Occluded/Validation 丢帧跳过
     let frame = match g.surface.get_current_texture() {
-        Ok(f) => f,
-        Err(_) => {
+        wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
+        wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
             g.surface.configure(&g.device, &g.config); // 表面丢失：重配跳过本帧
             return;
         }
+        _ => return,
     };
     let view = frame
         .texture
@@ -200,7 +206,7 @@ fn draw(g: &Gfx) {
         rp.draw(0..3, 0..1);
     }
     g.queue.submit([enc.finish()]);
-    frame.present();
+    g.queue.present(frame); // wgpu 30：present 从 SurfaceTexture 挪到 Queue
     let n = FRAMES.fetch_add(1, Ordering::Relaxed) + 1;
     if n == 1 {
         spike_report("首帧 present 过了（当年死亡段全程通关）");

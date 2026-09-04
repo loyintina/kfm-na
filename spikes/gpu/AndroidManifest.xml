@@ -9,8 +9,11 @@
 
     <application
         android:label="GPU尖刺"
+        android:hasCode="false"
         android:extractNativeLibs="false"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen">
+        <!-- hasCode=false（软件包无效实锤：纯 NativeActivity 无 classes.dex，
+             默认 true 被 vivo 安装器拒） -->
         <!-- extractNativeLibs=false（BAR-013 同款）：.so 直从 APK mmap，
              配 package-spike.sh 的 STORED + zipalign -p -->
 
