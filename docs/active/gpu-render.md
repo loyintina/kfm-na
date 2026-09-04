@@ -170,3 +170,7 @@ CPU 优化线顶上（§六分流）。
 - **链接坑实录**：Termux 的 libEGL.so SONAME 是 libEGL.so.1，静态链
   会把 .so.1 写进 NEEDED 而 app 命名空间只有 libEGL.so——必须
   khronos-egl dynamic（libloading dlopen）路线。
+- **验收闭环（期 0③ 正式封卷）**：suspend/resume **15 循环**（标准 10）
+  每次拆建后帧计数续走零暴毙；前台连续心跳 **15.8 分钟每秒一条零断流**
+  （全程累计 714 条心跳 / 存活 25 分钟）；前台稳锁 ~60fps（vsync）。
+  期 0 三项验收标准全绿，GPU 化地基打完，期 1 可动工。
