@@ -2385,6 +2385,18 @@ impl App {
                         glyphs_by_page[p].push(gi);
                     }
                 }
+                let total_glyphs: usize = glyphs_by_page.iter().map(|v| v.len()).sum();
+                crate::report::report(
+                    "gles-dbg",
+                    &format!(
+                        "cells={} bg={} glyphs={} pages={} misses={} cw={cell_w} ch={cell_h}",
+                        cells.len(),
+                        bg_inst.len(),
+                        total_glyphs,
+                        g.atlas().pages().len(),
+                        inst.misses.len(),
+                    ),
+                );
                 (FrameBuf::Gles(g.as_mut()), w, h)
             }
         };
