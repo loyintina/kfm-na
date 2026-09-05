@@ -69,6 +69,9 @@ pub struct GlesPresent {
     atlas_tex: Vec<glow::NativeTexture>,
     /// 已呈现帧数（回读探针判卷用）
     frames_presented: u64,
+    /// 已上传的图集版本（图集 revision 变化 → 全页重传——首帧上传后
+    /// 新字形只进 CPU coverage 不重传 = 字形全隐形的黑屏案 2026-09-05）
+    atlas_rev: u64,
     /// 终极对照探针：常量绿三角（零属性零 uniform——绕开一切实例机制）
     probe_prog: glow::NativeProgram,
     /// 字形图集（数据所有权在此，跨帧缓存——第 2 层性能来源）
@@ -187,6 +190,7 @@ impl GlesPresent {
             atlas_tex: Vec::new(),
             frames_presented: 0,
             probe_prog,
+            atlas_rev: 0,
             atlas: crate::glyph_atlas::GlyphAtlas::new(2048, 2048),
         })
     }
@@ -618,17 +622,21 @@ impl GlesPresent {
                 &format!("canvas rgb非零={rgb_nz} mid={mid:#010x} keybar={keybar:#010x}"),
             );
         }
-        // 图集页增量上传（新页出现即补；同页重装由调用方触发全页重传）
-        let need: Vec<(u32, u32, u32, Vec<u8>)> = self
-            .atlas
-            .pages()
-            .iter()
-            .enumerate()
-            .filter(|(i, _p)| self.atlas_tex.len() <= *i)
-            .map(|(i, p)| (i as u32, p.w, p.h, p.coverage.clone()))
-            .collect();
-        for (i, w, h, cov) in need {
-            self.upload_atlas_page(i, w, h, &cov);
+        // 图集纹理同步：版本变化（新字形装载）→ 全页重传（4MB/页 R8，
+        // 仅新字形帧发生）；新页出现即补
+        let rev = self.atlas.revision();
+        if rev != self.atlas_rev {
+            let pages: Vec<(u32, u32, u32, Vec<u8>)> = self
+                .atlas
+                .pages()
+                .iter()
+                .enumerate()
+                .map(|(i, p)| (i as u32, p.w, p.h, p.coverage.clone()))
+                .collect();
+            for (i, w, h, cov) in pages {
+                self.upload_atlas_page(i, w, h, &cov);
+            }
+            self.atlas_rev = rev;
         }
         let gl = &self.gl;
         unsafe {

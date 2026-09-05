@@ -73,6 +73,8 @@ impl AtlasPage {
 pub struct GlyphAtlas {
     pages: Vec<AtlasPage>,
     slots: HashMap<GlyphKey, GlyphSlot>,
+    /// 每次装载自增——壳侧据此判定「图集内容变了要重传纹理」
+    revision: u64,
 }
 
 impl GlyphAtlas {
@@ -80,6 +82,7 @@ impl GlyphAtlas {
         Self {
             pages: vec![AtlasPage::new(page_w.max(1), page_h.max(1))],
             slots: HashMap::new(),
+            revision: 0,
         }
     }
 
@@ -156,7 +159,13 @@ impl GlyphAtlas {
             off_y,
         };
         self.slots.insert(key, slot);
+        self.revision += 1;
         slot
+    }
+
+    /// 内容版本（壳侧纹理缓存失效判据）
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 }
 
