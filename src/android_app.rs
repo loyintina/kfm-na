@@ -2470,19 +2470,16 @@ impl App {
                 crate::report::report("boot", "首帧 present 完成——紫屏应已亮");
             }
         }
-        // GPU 路径：chrome 像素打 alpha 标记（chrome 画的是 0x00RRGGBB，
-        // 画布已清 0——| 高位让 chrome 不透明、term 区保持全 0 透明，
-        // chrome 纹理 alpha 混合时网格层透出）
+        // GPU 路径：chrome 像素条件 alpha——「纯黑=空白」约定（keybar/
+        // 输入栏/AI 页的可见内容全为深灰/渐变/彩色，无纯黑；黑底与网格
+        // 层黑底视觉同色）：RGB 非零 → 不透明，纯零 → 透明（网格层透出）。
+        // 黑屏案 2026-09-05 教训：一刀切 |= alpha 会让 chrome 变成不透明
+        // 黑膜盖死整个画面
         if gpu_mode {
-            let mut nnz = 0usize;
             for p in buf.iter_mut() {
-                if *p != 0 {
-                    nnz += 1;
+                if *p & 0x00FF_FFFF != 0 {
+                    *p = 0xFF00_0000 | (*p & 0x00FF_FFFF);
                 }
-                *p |= 0xFF00_0000;
-            }
-            if nnz == 0 {
-                crate::report::report("gles-dbg", "cpu画布全零——rasterize 没画 chrome");
             }
         }
         // 画面回传由值守线程统一消费(gate::spawn_gate_watcher)——
