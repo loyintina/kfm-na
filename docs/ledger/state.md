@@ -7,15 +7,22 @@
 
 ## 当前位置（2026-09-05)
 
-- **期 1 第 2 层 C 档（2026-09-05，工作树待闸）**：AI 页文字接入
-  图集管线（ras 48ms 病根拆除）+ GLES 双层合成（下层=键行+AI 面板底，
-  上层=输入栏/光球，两层夹 AI 文字 GPU 实例；过渡帧 scratch+blit
-  整条删除）。考题 6 道全绿（含整帧逐像素对拍——逮住 UV 假凶与
-  off_y 截断两案）；全量 462/0、clippy 干净。设计全文 =
-  gpu-render.md §十二。**待办**：chain-phone 闸 → 提交 → 三仓推 →
-  deploy 实机验收（AI 页稳态 ras 靶 <10ms、过渡动画不掉帧、双层
-  无回归）。上探次序（若实测仍超靶）：chrome 脏 hash/带状上传
-  （双层化后收益翻倍）→ chrome GPU 原生化（期 2）。
+- **期 1 第 2 层 C 档落账（2026-09-05，d014d77，三仓推 ✓）**：AI 页
+  文字接入图集管线（ras 48ms 病根拆除）+ GLES 双层合成（下层=键行+
+  AI 面板底，上层=输入栏/光球，两层夹 AI 文字 GPU 实例；过渡帧
+  scratch+blit 整条删除，FrameBuf 退役）。考题 7 道全绿（整帧逐像素
+  对拍逮住 UV 假凶与 off_y 截断两案）；棘轮 termview 7 维持，新模块
+  入账 gles_present=9 / glyph_atlas=1。设计全文 = gpu-render.md §十二。
+  **装机包 kfm-na-1789600036.apk 已调起安装器，待用户点装**。实机
+  验收判据：①AI 页稳态 gles-stage ras <10ms（原 48ms）②过渡动画无
+  卡顿（scratch 已删）③双层合成无回归（键行被面板盖住、输入栏/光球
+  浮在 AI 文字上、中英 CJK 混排正常）。上探次序（若仍超靶）：chrome
+  脏 hash/带状上传（双层化后收益翻倍）→ chrome GPU 原生化（期 2）。
+- **手机工具链适配教训（本轮 6 轮闸的学费，后续写码前置规避）**：
+  新 rustc/clippy 不做的三件事——①跨 &mut 借用的闭包提升（slot_of
+  要内联成临时）②&mut Box<dyn T> 参数（borrowed_box，用 &mut dyn T）
+  ③两段 deref 强转（MutexGuard<Box<dyn>> → &dyn 须显式 &**）。死代码
+  棘轮：专线化后无构造点的枚举变体（FrameBuf::Gles）会红，删净。
 - **夜班一行（2026-09-05 01:43 窗）**:期 1 第 2 层 B 档落账
   f117ec3（GPU 图集管线接入主 app：终端网格归 GPU 实例绘制，CPU 只
   画 chrome 层；考题 3 道钉收集口契约，棘轮闸咬出顶带裁剪语义）。
