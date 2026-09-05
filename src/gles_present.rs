@@ -79,12 +79,19 @@ pub struct GlesPresent {
     _vao: glow::NativeVertexArray,
     /// CPU 侧帧缓冲（chrome 层画布——终端网格已归 GPU 图集/实例，见第 2 层）
     pixels: Vec<u32>,
+    /// 上层 chrome 画布（2026-09-05 双层合成：下层 pixels = 键行 + AI
+    /// 面板底（面板要盖住键行），上层 = 输入栏/光球/放大镜（要浮在
+    /// AI 文字上）——两层夹住 AI 文字 GPU 实例，z 序与 scratch 时代等价）
+    pixels_over: Vec<u32>,
     w: u32,
     h: u32,
     // ---- 期 1 第 2 层：终端网格 GPU 化 ----
     /// chrome 层纹理（栏带/输入栏/AI 页/放大镜，CPU 画 → RGBA 上传）
     chrome_tex: glow::NativeTexture,
     chrome_size: (u32, u32),
+    /// 上层 chrome 纹理（同上配方；upload 与下层共用 upload_chrome_layer）
+    chrome_tex_over: glow::NativeTexture,
+    chrome_size_over: (u32, u32),
     /// chrome 全屏四边形（RGBA 采样，alpha 混合叠在网格层上）
     chrome_prog: glow::NativeProgram,
     /// 网格背景实色实例
@@ -196,6 +203,7 @@ impl GlesPresent {
         // 不可感；帧率治理在泵侧（fx_frame_due ≤60fps）
         let _ = egl.swap_interval(display, 0);
         crate::report::report("boot", &format!("GLES: present 后端上线 {w}x{h}"));
+        let chrome_tex_over = unsafe { gl.create_texture() }?;
         Ok(Self {
             egl,
             display,
@@ -205,10 +213,13 @@ impl GlesPresent {
             prog,
             _vao: vao,
             pixels: vec![0; (w * h) as usize],
+            pixels_over: vec![0; (w * h) as usize],
             w,
             h,
             chrome_tex,
             chrome_size: (0, 0),
+            chrome_tex_over,
+            chrome_size_over: (0, 0),
             chrome_prog,
             bg_prog,
             glyph_prog,
@@ -459,6 +470,10 @@ impl GlesPresent {
             self.w = w;
             self.h = h;
             self.pixels.resize((w * h) as usize, 0);
+            self.pixels_over.resize((w * h) as usize, 0);
+            // 纹理尺寸缓存一并作废（下层/上层都全量重传）
+            self.chrome_size = (0, 0);
+            self.chrome_size_over = (0, 0);
         }
     }
 
@@ -467,9 +482,19 @@ impl GlesPresent {
         &mut self.pixels
     }
 
-    /// 只读半（FrameBuf 的 Deref 用）
+    /// 只读半（下层画布；GLES 专线外已无 Deref 消费者，留作探针/调试用）
     pub fn pixels(&self) -> &[u32] {
         &self.pixels
+    }
+
+    /// 上层 chrome 画布（over 层：输入栏/光球/放大镜，2026-09-05 双层合成）
+    pub fn pixels_over_mut(&mut self) -> &mut [u32] {
+        &mut self.pixels_over
+    }
+
+    /// 上层 chrome 只读
+    pub fn pixels_over(&self) -> &[u32] {
+        &self.pixels_over
     }
 
     /// 图集只读（grid_to_instances 进料）
@@ -506,10 +531,29 @@ impl GlesPresent {
 
     /// chrome 层纹理上传（尺寸变化重分配，否则子更新）
     fn upload_chrome(&mut self) {
+        self.upload_chrome_layer(false);
+    }
+
+    /// 单层 chrome 上传（2026-09-05 双层合成：false = 下层 pixels
+    /// （键行+AI 面板底），true = 上层 pixels_over（输入栏/光球/放大镜）。
+    /// NEAREST+CLAMP 黑屏案教训对两层同样生效——新纹理首传前必须配齐
+    fn upload_chrome_layer(&mut self, over: bool) {
         let t0_up = std::time::Instant::now();
+        let (tex, cached) = if over {
+            (self.chrome_tex_over, self.chrome_size_over)
+        } else {
+            (self.chrome_tex, self.chrome_size)
+        };
+        let target = (self.w, self.h);
+        let realloc = cached != target;
         let gl = &self.gl;
+        let px: &[u32] = if over {
+            &self.pixels_over
+        } else {
+            &self.pixels
+        };
         unsafe {
-            gl.bind_texture(glow::TEXTURE_2D, Some(self.chrome_tex));
+            gl.bind_texture(glow::TEXTURE_2D, Some(tex));
             // 黑屏案终凶（2026-09-05）：默认 MIN_FILTER = NEAREST_MIPMAP_LINEAR
             // 而本纹理无 mipmap → 纹理不完整 → 采样恒 (0,0,0,1) 黑不透明，
             // chrome 全屏四边形每帧涂黑全屏盖死所有层。NEAREST + CLAMP 补上
@@ -534,11 +578,8 @@ impl GlesPresent {
                 glow::CLAMP_TO_EDGE as i32,
             );
             gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
-            let bytes: &[u8] = std::slice::from_raw_parts(
-                self.pixels.as_ptr() as *const u8,
-                self.pixels.len() * 4,
-            );
-            if self.chrome_size != (self.w, self.h) {
+            let bytes: &[u8] = std::slice::from_raw_parts(px.as_ptr() as *const u8, px.len() * 4);
+            if realloc {
                 gl.tex_image_2d(
                     glow::TEXTURE_2D,
                     0,
@@ -550,7 +591,6 @@ impl GlesPresent {
                     glow::UNSIGNED_BYTE,
                     glow::PixelUnpackData::Slice(Some(bytes)),
                 );
-                self.chrome_size = (self.w, self.h);
             } else {
                 gl.tex_sub_image_2d(
                     glow::TEXTURE_2D,
@@ -568,6 +608,13 @@ impl GlesPresent {
                 t0_up.elapsed().as_micros() as u64,
                 std::sync::atomic::Ordering::Relaxed,
             );
+        }
+        if realloc {
+            if over {
+                self.chrome_size_over = target;
+            } else {
+                self.chrome_size = target;
+            }
         }
     }
 
@@ -617,18 +664,23 @@ impl GlesPresent {
         }
     }
 
-    /// 期 1 第 2 层组合帧：清屏 → 网格背景实例 → 图集字形实例（按页）
-    /// → chrome 层（alpha 混合）→ swap。chrome 画布 = pixels（调用方
-    /// 已做透明底 + 不透明 chrome 的 |= alpha 标记）。
+    /// 期 1 第 2 层组合帧（2026-09-05 双层合成版）：清屏 → 网格背景实例
+    /// → 网格字形实例（按页）→ 下层 chrome（键行 + AI 面板底，alpha 混合）
+    /// → AI 文字字形实例（按页）→ 上层 chrome（输入栏/光球/放大镜）→
+    /// swap。z 序与 scratch+blit 时代像素等价：面板底盖住键行与网格，
+    /// 输入栏/光球浮在 AI 文字上。两层 chrome 画布由调用方先画好
+    /// （pixels / pixels_over，已做透明底 + 不透明 chrome 的 |= alpha 标记）
     pub fn present_frame(
         &mut self,
         bg: &[crate::glyph_atlas::BgInstance],
         glyphs_by_page: &[Vec<crate::glyph_atlas::GlyphInstance>],
+        ai_glyphs_by_page: &[Vec<crate::glyph_atlas::GlyphInstance>],
     ) {
         let t0_draw = std::time::Instant::now();
-        // chrome 层纹理上传（黑屏案 2026-09-05：漏了这步 = 不完整纹理
+        // 两层 chrome 纹理上传（黑屏案 2026-09-05：漏了这步 = 不完整纹理
         // 采样恒 (0,0,0,1) 黑不透明，全屏 chrome 四边形把画面涂成一片黑）
-        self.upload_chrome();
+        self.upload_chrome_layer(false);
+        self.upload_chrome_layer(true);
         // CPU 画布直接测量（rgb 非零计数 + 样本原值）——「画没画」的铁证
         if GLS_READBACK_PROBE {
             let rgb_nz = self.pixels.iter().filter(|p| *p & 0x00FF_FFFF != 0).count();
@@ -679,37 +731,31 @@ impl GlesPresent {
             // 字形（alpha 混合，按图集页分组 draw——每页一次上传+绘制）
             gl.enable(glow::BLEND);
             gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
-            gl.use_program(Some(self.glyph_prog));
-            gl.uniform_1_i32(
-                gl.get_uniform_location(self.glyph_prog, "u_tex").as_ref(),
-                0,
+            draw_glyph_pages(
+                gl,
+                self.glyph_prog,
+                self.glyph_vao,
+                self.glyph_vbo,
+                &self.atlas_tex,
+                glyphs_by_page,
             );
-            gl.active_texture(glow::TEXTURE0);
-            gl.bind_vertex_array(Some(self.glyph_vao));
-            gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.glyph_vbo));
-            for (page, insts) in glyphs_by_page.iter().enumerate() {
-                if insts.is_empty() || page >= self.atlas_tex.len() {
-                    continue;
-                }
-                gl.bind_texture(glow::TEXTURE_2D, Some(self.atlas_tex[page]));
-                gl.buffer_data_u8_slice(
-                    glow::ARRAY_BUFFER,
-                    std::slice::from_raw_parts(insts.as_ptr() as *const u8, insts.len() * 40),
-                    glow::DYNAMIC_DRAW,
-                );
-                gl.draw_arrays_instanced(glow::TRIANGLES, 0, 3, insts.len() as i32);
-            }
 
-            // chrome 层（alpha 混合叠上）。黑屏判卷二分：左半屏走新
-            // chrome_prog，右半屏走上一代已验证管线（viewport 裁剪对照）
-            gl.bind_texture(glow::TEXTURE_2D, Some(self.chrome_tex));
-            gl.uniform_1_i32(
-                gl.get_uniform_location(self.chrome_prog, "u_tex").as_ref(),
-                0,
+            // 下层 chrome（键行 + AI 面板底——面板未靠泊时的键行在这里，
+            // 被紧随其后的 AI 文字实例「压住」：文字属于面板刚体）
+            draw_chrome_layer(gl, self.chrome_prog, self._vao, self.chrome_tex);
+
+            // AI 文字实例（面板刚体的墨——z 序在面板底之上、输入栏之下）
+            draw_glyph_pages(
+                gl,
+                self.glyph_prog,
+                self.glyph_vao,
+                self.glyph_vbo,
+                &self.atlas_tex,
+                ai_glyphs_by_page,
             );
-            gl.use_program(Some(self.chrome_prog));
-            gl.bind_vertex_array(Some(self._vao));
-            gl.draw_arrays(glow::TRIANGLES, 0, 3);
+
+            // 上层 chrome（输入栏/光球/放大镜——浮在一切内容之上）
+            draw_chrome_layer(gl, self.chrome_prog, self._vao, self.chrome_tex_over);
             gl.disable(glow::BLEND);
             STAGE_DRAW_US.fetch_add(
                 t0_draw.elapsed().as_micros() as u64,
@@ -864,6 +910,53 @@ impl GlesPresent {
         self.egl
             .swap_buffers(self.display, self.surface)
             .expect("eglSwapBuffers 失败");
+    }
+}
+
+/// 字形实例按图集页绘制（网格层与 AI 文字层共用——同一 prog/vao/vbo，
+/// 只差调用点的 z 序与实例内容）。每页绑纹理 + 传实例 + instanced draw
+unsafe fn draw_glyph_pages(
+    gl: &glow::Context,
+    prog: glow::NativeProgram,
+    vao: glow::NativeVertexArray,
+    vbo: glow::NativeBuffer,
+    atlas_tex: &[glow::NativeTexture],
+    pages: &[Vec<crate::glyph_atlas::GlyphInstance>],
+) {
+    unsafe {
+        gl.use_program(Some(prog));
+        gl.uniform_1_i32(gl.get_uniform_location(prog, "u_tex").as_ref(), 0);
+        gl.active_texture(glow::TEXTURE0);
+        gl.bind_vertex_array(Some(vao));
+        gl.bind_buffer(glow::ARRAY_BUFFER, Some(vbo));
+        for (page, insts) in pages.iter().enumerate() {
+            if insts.is_empty() || page >= atlas_tex.len() {
+                continue;
+            }
+            gl.bind_texture(glow::TEXTURE_2D, Some(atlas_tex[page]));
+            gl.buffer_data_u8_slice(
+                glow::ARRAY_BUFFER,
+                std::slice::from_raw_parts(insts.as_ptr() as *const u8, insts.len() * 40),
+                glow::DYNAMIC_DRAW,
+            );
+            gl.draw_arrays_instanced(glow::TRIANGLES, 0, 3, insts.len() as i32);
+        }
+    }
+}
+
+/// 单层 chrome 全屏四边形（alpha 混合；under/over 共用，纹理不同）
+unsafe fn draw_chrome_layer(
+    gl: &glow::Context,
+    prog: glow::NativeProgram,
+    vao: glow::NativeVertexArray,
+    tex: glow::NativeTexture,
+) {
+    unsafe {
+        gl.bind_texture(glow::TEXTURE_2D, Some(tex));
+        gl.uniform_1_i32(gl.get_uniform_location(prog, "u_tex").as_ref(), 0);
+        gl.use_program(Some(prog));
+        gl.bind_vertex_array(Some(vao));
+        gl.draw_arrays(glow::TRIANGLES, 0, 3);
     }
 }
 

@@ -796,3 +796,275 @@ fn spec_冒烟_ai页键盘让位_视口下沿收紧() {
         "收紧后的视口必须仍贴底画出最新消息"
     );
 }
+
+// ---- 期 1 第 2 层 C 档：AI 页文字接入图集管线（GPU 实例） ----
+// 病根：CPU 逐字 fontdue 光栅化每帧 ~48ms。答案 = ai_page_glyphs 收集
+// + ai_glyphs_to_instances 转换 + paint_ai_page_chrome 底装修。判卷：
+// 与 CPU 画字路径逐像素咬合（vendored 像素字体 coverage ∈ {0,255}）。
+
+#[test]
+fn spec_gpu_ai页布局读数_cpu与gpu同尺() {
+    // 眼手同尺：render_ai_page 的返回布局与 ai_page_glyphs 的读数，
+    // 在 scroll × inset 全组合下逐条相等（scroll_sync_layout 只吃一份）
+    let (tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必须建得成");
+    let (w, h) = (800u32, 600u32);
+    let mut msgs = vec![(true, "first".to_string(), String::new())];
+    for i in 1..30 {
+        msgs.push((false, format!("reply-{i:02}"), String::new()));
+    }
+    for scroll in [0u32, 10, 53, 10_000] {
+        for inset in [0u32, 150, 400] {
+            let mut buf = vec![0u32; (w * h) as usize];
+            let cpu = tv.render_ai_page(&mut buf, w, h, &msgs, scroll, inset, false);
+            let (gpu, glyphs) = tv.ai_page_glyphs(w, h, &msgs, scroll, inset, false, 0);
+            assert_eq!(cpu, gpu, "scroll={scroll} inset={inset} 布局读数必须同尺");
+            assert!(!glyphs.is_empty(), "有消息必有墨");
+        }
+    }
+    // 空消息：读数 (0, fit)，零实例（空态对话框语言）
+    let mut buf = vec![0u32; (w * h) as usize];
+    let cpu = tv.render_ai_page(&mut buf, w, h, &[], 0, 0, false);
+    let (gpu, glyphs) = tv.ai_page_glyphs(w, h, &[], 0, 0, false, 0);
+    assert_eq!(cpu, gpu);
+    assert!(glyphs.is_empty(), "空对话零实例");
+    assert_eq!(cpu.0, 0, "空态总行数 0");
+}
+
+#[test]
+fn spec_gpu_ai页字形几何_行栅格与笔位() {
+    // y = 行顶 + panel_off 刚体平移，行距恒 LINE_H；x = 边距 + 18 起笔
+    // （draw_items_left 同式），推进 = 逐字步进宽累加
+    let (tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必须建得成");
+    let (w, h) = (800u32, 600u32);
+    let off = -123i32;
+    let (_, glyphs) = tv.ai_page_glyphs(
+        w,
+        h,
+        &[(false, "AB你好".to_string(), String::new())],
+        0,
+        0,
+        false,
+        off,
+    );
+    assert!(!glyphs.is_empty());
+    for g in &glyphs {
+        let rel = g.y as i32 - off - kfm_na::termview::AI_PAGE_TOP as i32;
+        assert_eq!(
+            rel % kfm_na::termview::AI_PAGE_LINE_H as i32,
+            0,
+            "字形必须落在行栅格上（y={}）",
+            g.y
+        );
+    }
+    let first = &glyphs[0];
+    assert_eq!(
+        first.x,
+        kfm_na::termview::AI_PAGE_MARGIN_X as f32 + 18.0,
+        "起笔 = 边距 + 18 内缩（draw_items_left 同式）"
+    );
+    // panel_off 进 y：同输入不同平移，x 不动 y 平移
+    let (_, glyphs0) = tv.ai_page_glyphs(
+        w,
+        h,
+        &[(false, "AB你好".to_string(), String::new())],
+        0,
+        0,
+        false,
+        0,
+    );
+    assert_eq!(glyphs.len(), glyphs0.len(), "平移不改实例数");
+    for (a, b) in glyphs.iter().zip(&glyphs0) {
+        assert_eq!(a.x, b.x, "x 与平移无关");
+        assert_eq!(a.y, b.y + off as f32, "y = 行顶 + 刚体平移");
+    }
+}
+
+#[test]
+fn spec_gpu_ai页底装修_刚体平移与直画逐像素咬合() {
+    // chrome 路径（平移 k）与 CPU 直画路径（off=0）必须逐像素咬合：
+    // 渐变相位/圆角弧/发光衰减全是「面板刚体」——行 y ≡ 直画行 y+k。
+    // 相位若被钳原点破坏（i64 裁剪语义丢了），这题必红
+    let (tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必须建得成");
+    let (w, h) = (400u32, 500u32);
+    let inset = 120u32;
+    let mut base = vec![0u32; (w * h) as usize];
+    tv.render_ai_page(&mut base, w, h, &[], 0, inset, false);
+    // k=0：chrome 与直画（空消息）完全等价
+    let mut b0 = vec![0u32; (w * h) as usize];
+    let fit = kfm_na::termview::paint_ai_page_chrome(&mut b0, w, h, inset, 0);
+    assert_eq!(fit, (h - 48 - 48 - inset) / 64, "fit 读数同尺");
+    assert_eq!(b0, base, "off=0 时底装修与直画逐像素等价");
+    // k=137：面板整体上移，可见区行行咬合
+    let k = 137i32;
+    let mut bk = vec![0u32; (w * h) as usize];
+    kfm_na::termview::paint_ai_page_chrome(&mut bk, w, h, inset, -k);
+    assert_eq!(
+        &bk[..((h - k as u32) * w) as usize],
+        &base[(k as u32 * w) as usize..],
+        "平移后的可见区必须与直画逐像素咬合（相位保持）"
+    );
+    // 屏外余部（面板底边之下）不落墨
+    assert!(
+        bk[((h - k as u32) * w) as usize..].iter().all(|&p| p == 0),
+        "面板底边之下必须透明（GPU 网格层透出的前提）"
+    );
+}
+
+#[test]
+fn spec_gpu_ai页文字实例_与cpu画字逐像素咬合() {
+    // 终审判卷：GPU 实例路径（底装修 + 图集实例软件合成）与 CPU 全路径
+    // 的整帧像素必须完全相等——折行/视口/路由/放置/裁剪任何一处语义
+    // 漂移都会在这里现形
+    use kfm_na::glyph_atlas::{GLYPH_SIZE_AI, GlyphAtlas, GlyphKey, ai_glyphs_to_instances};
+    let (tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必须建得成");
+    let (w, h) = (600u32, 500u32);
+    let msgs = vec![
+        (true, "你好 HELLO 123".to_string(), String::new()),
+        (
+            false,
+            "像素逐字节对拍 ABC xyz[神]".to_string(),
+            String::new(),
+        ),
+    ];
+    let mut cpu = vec![0u32; (w * h) as usize];
+    tv.render_ai_page(&mut cpu, w, h, &msgs, 0, 0, false);
+    // GPU 路径：chrome 底装修 + 实例收集 + 图集装载（同 android_app 顺序）
+    let mut gpu = vec![0u32; (w * h) as usize];
+    kfm_na::termview::paint_ai_page_chrome(&mut gpu, w, h, 0, 0);
+    let (_, glyphs) = tv.ai_page_glyphs(w, h, &msgs, 0, 0, false, 0);
+    assert!(!glyphs.is_empty());
+    let mut atlas = GlyphAtlas::new(2048, 2048);
+    let baseline = tv.ai_text_baseline_off();
+    // 装载遍（同 android_app：misses 补墨），转换遍只查表——借用两清
+    for g in &glyphs {
+        let k0 = GlyphKey {
+            font: g.font,
+            c: g.c,
+            size: GLYPH_SIZE_AI,
+        };
+        if atlas.slot(&k0).is_some() {
+            continue;
+        }
+        let (fid, m, bmp) = tv
+            .rasterize_for_atlas_px(
+                g.c,
+                kfm_na::termview::AI_PAGE_PX,
+                kfm_na::termview::AI_PAGE_PX,
+            )
+            .unwrap_or_else(|| panic!("字符 {} 必须可路由", g.c));
+        let off_y = kfm_na::termview::ai_glyph_off_y(baseline, m.ymin as f32, m.height as f32);
+        let k = GlyphKey {
+            font: fid,
+            c: g.c,
+            size: GLYPH_SIZE_AI,
+        };
+        atlas.insert(
+            k,
+            m.width as u32,
+            m.height as u32,
+            &bmp,
+            m.xmin as i16,
+            off_y,
+        );
+    }
+    let out = ai_glyphs_to_instances(&glyphs, &atlas, |c, font| {
+        let k0 = GlyphKey {
+            font,
+            c,
+            size: GLYPH_SIZE_AI,
+        };
+        match atlas.slot(&k0) {
+            Some(s) => (k0, Some(s)),
+            None => {
+                let k1 = GlyphKey {
+                    font: 1 - font,
+                    c,
+                    size: GLYPH_SIZE_AI,
+                };
+                (k0, atlas.slot(&k1))
+            }
+        }
+    });
+    assert!(out.misses.is_empty(), "装载后不许再缺墨");
+    // 软件合成（GPU 语义的逐像素直译：x/y 截断同 GPU 实例公式；混合 =
+    // blend_px 同款整数公式 blend(fg, dst, cov)——40px 下像素字体轮廓
+    // 缩放会出反锯齿中间 coverage，判卷按真公式不复述 {0,255} 假设）
+    let blend = |fg: u32, dst: u32, a: u32| {
+        let inv = 255 - a;
+        let ch = |f: u32, d: u32| (f * a + d * inv) / 255;
+        (ch((fg >> 16) & 0xFF, (dst >> 16) & 0xFF) << 16)
+            | (ch((fg >> 8) & 0xFF, (dst >> 8) & 0xFF) << 8)
+            | ch(fg & 0xFF, dst & 0xFF)
+    };
+    for gi in &out.glyph {
+        let page = &atlas.pages()[gi.page as usize];
+        // 实例的 u0/v0 是归一化 UV（GPU shader 直接采样）；软件合成要还
+        // 原成像素坐标（as usize 截断会把 39/2048 砍成 0——拿邻字位图
+        // 画本字，2026-09-05 对拍考题逮住的第一个假凶）
+        let u0 = (gi.u0 * page.w as f32).round() as usize;
+        let v0 = (gi.v0 * page.h as f32).round() as usize;
+        for gy in 0..gi.h as usize {
+            for gx in 0..gi.w as usize {
+                let cov = page.coverage[(v0 + gy) * page.w as usize + u0 + gx] as u32;
+                if cov == 0 {
+                    continue;
+                }
+                let px = gi.x as i64 + gx as i64;
+                let py = gi.y as i64 + gy as i64;
+                if px < 0 || py < 0 || px >= w as i64 || py >= h as i64 {
+                    continue; // 视口裁（GPU 自然裁的同款）
+                }
+                let dst = &mut gpu[py as usize * w as usize + px as usize];
+                *dst = blend(gi.fg, *dst, cov);
+            }
+        }
+    }
+    // 差异定位（首 8 个不咬合像素）——判卷失败直接给凶手坐标
+    let mut diffs = String::new();
+    let mut n = 0usize;
+    for (i, (a, b)) in cpu.iter().zip(&gpu).enumerate() {
+        if a != b {
+            let (x, y) = (i % w as usize, i / w as usize);
+            diffs.push_str(&format!("({x},{y},cpu={a:#010x},gpu={b:#010x}) "));
+            n += 1;
+        }
+        if n >= 8 {
+            break;
+        }
+    }
+    assert!(diffs.is_empty(), "CPU 与 GPU 整帧咬合失败: {diffs}");
+}
+
+#[test]
+fn spec_gpu_ai供墨_字号类真实生效() {
+    // rasterize_for_atlas_px 的字号参数必须真实生效（图集键的 size 维
+    // 就是为此而生——AI 页 40px 与终端字号两套位图共存）
+    let (tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必须建得成");
+    let (_, m_big, _) = tv
+        .rasterize_for_atlas_px(
+            'A',
+            kfm_na::termview::AI_PAGE_PX,
+            kfm_na::termview::AI_PAGE_PX,
+        )
+        .expect("A 必有字形");
+    let (_, m_small, _) = tv
+        .rasterize_for_atlas_px('A', 20.0, 20.0)
+        .expect("A 必有字形");
+    assert_ne!(
+        (m_big.width, m_big.height),
+        (m_small.width, m_small.height),
+        "不同 px 光栅化必须产出不同位图"
+    );
+    // 同 px 两次调用确定性一致（图集缓存的正确性前提）
+    let (_, m_again, _) = tv
+        .rasterize_for_atlas_px(
+            'A',
+            kfm_na::termview::AI_PAGE_PX,
+            kfm_na::termview::AI_PAGE_PX,
+        )
+        .unwrap();
+    assert_eq!((m_big.width, m_big.height), (m_again.width, m_again.height));
+    // AI 行基线：行内正偏移、小于两倍行高（放置合理性）
+    let bl = tv.ai_text_baseline_off();
+    assert!(bl > 0.0 && bl < kfm_na::termview::AI_PAGE_LINE_H as f32 * 2.0);
+}

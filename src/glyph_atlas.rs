@@ -17,12 +17,23 @@
 
 use std::collections::HashMap;
 
-/// 图集键：字体槽 + 字符（0 = 主字体，1 = CJK 备用；字体路由归调用方）
+/// 图集键：字体槽 + 字符 + 字号类（font：0 = 主字体，1 = CJK 备用，
+/// 路由归调用方）。size 维（期 1 第 2 层 C 档）：图集只按字符缓存，
+/// AI 页文字（AI_PAGE_PX=40/LINE_H=64）与终端网格字号不同——同一
+/// 字符两套位图必须共存，键里没有字号维就会拿终端小字画 AI 页大字。
+/// 字号类是常量冻结的代号不是自由参数：改 AI_PAGE_PX/LINE_H 必须
+/// 同步换类号（off_y 按 LINE_H 折算烤进槽位，键对不上字号 = 错位）
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct GlyphKey {
     pub font: u8,
     pub c: char,
+    /// 字号类：GLYPH_SIZE_TERM = 终端网格，GLYPH_SIZE_AI = AI 页正文
+    pub size: u8,
 }
+
+/// 字号类代号（见 GlyphKey.size——常量冻结，改字号必换号）
+pub const GLYPH_SIZE_TERM: u8 = 0;
+pub const GLYPH_SIZE_AI: u8 = 1;
 
 /// 图集中一个字形的落位与相对格原点的偏移
 #[derive(Clone, Copy, Debug)]
@@ -287,6 +298,68 @@ pub fn grid_to_instances(
             du: draw_w as f32 / page.w as f32,
             dv: f32::from(slot.h) / page.h as f32,
             fg: cell.fg,
+            page: u32::from(slot.page),
+        });
+    }
+    out
+}
+
+/// AI 页文字的 GPU 中立镜像（render_ai_page 画字段的纯数据版：布局/
+/// 视口/折行/右缘截断归收集方 ai_page_glyphs，这里只见结果——画在哪、
+/// 画什么字、哪个字体槽、什么颜色）。x 是笔位（xmin/off_y 归图集槽位
+/// ——与网格路径同规：GpuCell 带格原点，槽位带偏移）
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AiGlyph {
+    /// 笔位 x（像素；实例 x = x + slot.off_x）
+    pub x: f32,
+    /// 行顶 y（已含 panel_off 平移；实例 y = y + slot.off_y）
+    pub y: f32,
+    pub c: char,
+    /// 字体槽（0 = 主，1 = CJK——ai_page_glyphs 已按 prefer_cjk 路由）
+    pub font: u8,
+    pub fg: u32,
+}
+
+/// AI 文字实例化产出（无背景层——AI 页紫底/边框环是 CPU chrome 画，
+/// 见 paint_ai_page_chrome；GPU 只出文字）。misses 语义同 Instanced。
+pub struct AiInstanced {
+    pub glyph: Vec<GlyphInstance>,
+    pub misses: Vec<GlyphKey>,
+}
+
+/// AI 页文字 → GPU 实例（与 draw_items_left 的画字语义逐条对齐，
+/// 验收就在这两份代码的咬合上）：
+/// - 放置：left = x + slot.off_x（= xmin，斜体左探可为负），top =
+///   y + slot.off_y（= 基线 - ymin - 高，装载方按 AI 行尺折算）；
+/// - 右缘截断已由收集方折进 AiGlyph（break 语义），此处不再裁——
+///   字形探出 clip_right 的边缘墨交给视口（AI 页边距 60px，无格界）；
+/// - 图集未命中：不落实例，记键，调用方补装载后重生成（两遍制同规）。
+pub fn ai_glyphs_to_instances(
+    glyphs: &[AiGlyph],
+    atlas: &GlyphAtlas,
+    slot_of: impl Fn(char, u8) -> (GlyphKey, Option<GlyphSlot>),
+) -> AiInstanced {
+    let mut out = AiInstanced {
+        glyph: Vec::new(),
+        misses: Vec::new(),
+    };
+    for g in glyphs {
+        let (key, slot) = slot_of(g.c, g.font);
+        let Some(slot) = slot else {
+            out.misses.push(key);
+            continue;
+        };
+        let page = &atlas.pages()[slot.page as usize];
+        out.glyph.push(GlyphInstance {
+            x: g.x + f32::from(slot.off_x),
+            y: g.y + f32::from(slot.off_y),
+            w: f32::from(slot.w),
+            h: f32::from(slot.h),
+            u0: f32::from(slot.u0) / page.w as f32,
+            v0: f32::from(slot.v0) / page.h as f32,
+            du: f32::from(slot.w) / page.w as f32,
+            dv: f32::from(slot.h) / page.h as f32,
+            fg: g.fg,
             page: u32::from(slot.page),
         });
     }

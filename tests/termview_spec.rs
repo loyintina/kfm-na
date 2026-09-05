@@ -2441,14 +2441,26 @@ fn spec_gpu_收集口_空网格空格子_字形供墨可装载() {
     // 装载后图集能查到（GlyphAtlas 契约串接）
     let mut atlas = kfm_na::glyph_atlas::GlyphAtlas::new(256, 256);
     atlas.insert(
-        GlyphKey { font: 0, c: 'A' },
+        GlyphKey {
+            font: 0,
+            c: 'A',
+            size: kfm_na::glyph_atlas::GLYPH_SIZE_TERM,
+        },
         m.width as u32,
         m.height as u32,
         &bmp,
         ox,
         oy,
     );
-    assert!(atlas.slot(&GlyphKey { font: 0, c: 'A' }).is_some());
+    assert!(
+        atlas
+            .slot(&GlyphKey {
+                font: 0,
+                c: 'A',
+                size: kfm_na::glyph_atlas::GLYPH_SIZE_TERM,
+            })
+            .is_some()
+    );
 }
 
 #[test]
@@ -2470,4 +2482,37 @@ fn spec_gpu_收集口_喂字后有真格_宽字符标宽() {
     // 中：主字体无字形 → 供墨走 CJK？本夹具 cjk=None → tofu，None 亦可（契约：
     // 双字体都缺 → None 跳装载，GPU 端 misses 常驻不炸）
     let _ = TermEmu::rasterize_for_atlas(&tv, '中');
+}
+
+// ---------- 期 1 第 2 层 C 档：AI 页接入图集管线（GPU 文字） ----------
+
+#[test]
+fn spec_gpu_panel_split_真值表() {
+    // 分支判定唯一裁决处（panel_split）：三分支语义收成真值对——
+    // softbuffer 与 GLES 两路径都从这里取判定，漂移 = 眼手两张皮
+    let h = 1000u32;
+    // 终端页稳态：键行/网格在，面板不在
+    assert_eq!(
+        kfm_na::termview::panel_split(-1000, h),
+        (true, false),
+        "-h = 面板底边压在屏顶，不可见"
+    );
+    assert_eq!(kfm_na::termview::panel_split(-5000, h), (true, false));
+    // AI 页靠泊：面板在，键行/网格不在
+    assert_eq!(kfm_na::termview::panel_split(0, h), (false, true));
+    // 过渡帧：两者都在（终端在下、面板移位压上）
+    assert_eq!(kfm_na::termview::panel_split(-1, h), (true, true));
+    assert_eq!(kfm_na::termview::panel_split(-999, h), (true, true));
+}
+
+#[test]
+fn spec_ai页fit公式_饱和与裁剪() {
+    // AI 页布局尺单源（ai_page_fit）：一屏行数 = (h - 顶 - 底 - inset)/64
+    // 向下取整；余量不足饱和为 0。render_ai_page / ai_page_glyphs /
+    // paint_ai_page_chrome 三方都吃这一把尺——公式漂移 = 视口错位
+    let f = kfm_na::termview::ai_page_fit;
+    assert_eq!(f(600, 0), 7, "(600-48-48-0)/64 = 7（与既有视口考题同尺）");
+    assert_eq!(f(500, 120), 4, "(500-48-48-120)/64 = 4.4 → 4 向下取整");
+    assert_eq!(f(96, 0), 0, "恰好零内容高（只有顶底边距）");
+    assert_eq!(f(50, 100), 0, "负余量 saturating 饱和为 0，不许下溢");
 }

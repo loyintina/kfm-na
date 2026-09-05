@@ -132,6 +132,159 @@ pub fn blit_panel_shifted(dst: &mut [u32], src: &[u32], w: u32, h: u32, y_off: i
     dst[..rows * w].copy_from_slice(&src[skip * w..(skip + rows) * w]);
 }
 
+/// AI 面板分层判定（唯一裁决处，2026-09-05 GLES 双层合成立此为据）：
+/// 三分支语义从 rasterize 的 if/else 链抽成真值表——
+/// - 网格+快捷键行（下层可见）：panel_off != 0（原分支一/分支三）；
+/// - 面板可见：panel_off > -h（原分支二/分支三）；
+/// - 两者都真 = 过渡帧（终端在下、面板移位压上）；都不真不可能
+///   （off <= -h 时必有键行，off == 0 时必有面板）。
+///
+/// softbuffer 路径与 GLES 路径都从这里取判定——分支语义漂移 = 眼手
+/// 两张皮，BAR-063 级事故的温床
+pub fn panel_split(panel_off: i32, h: u32) -> (bool, bool) {
+    (panel_off != 0, panel_off > -(h as i32))
+}
+
+/// AI 页视口一屏行数（布局尺：render_ai_page / ai_page_glyphs / 底装修
+/// 共用——原是 render_ai_page 里的一行算式，chrome 路径空态也要给
+/// scroll_sync_layout 同尺读数，抽出来单源）
+pub fn ai_page_fit(buf_h: u32, bottom_inset: u32) -> u32 {
+    buf_h.saturating_sub(AI_PAGE_TOP + AI_PAGE_BOTTOM + bottom_inset) / AI_PAGE_LINE_H
+}
+
+/// AI 页底装修（2026-09-05 GLES 双层合成）：整页紫底 + 边框环，文字
+/// 不在这层——GPU 路径的 z 序是 终端网格 → 下层（键行 + 本层）→
+/// AI 文字实例 → 上层（输入栏/光球）。panel_off = 面板刚体平移（过渡
+/// 帧整体移位，与 scratch+blit 时代像素等价；屏外部分裁剪零成本）。
+/// 返回 fit（空态也要给 scroll_sync_layout 同尺读数）
+pub fn paint_ai_page_chrome(
+    buf: &mut [u32],
+    buf_w: u32,
+    buf_h: u32,
+    bottom_inset: u32,
+    panel_off: i32,
+) -> u32 {
+    if buf_w == 0 || buf_h == 0 {
+        return 0;
+    }
+    let mut frame = Frame {
+        buf,
+        w: buf_w,
+        h: buf_h,
+    };
+    // 整页紫底 = 面板刚体矩形（全屏）与屏求交后画。fill 一定盖住环的
+    // 全部行（环下缘之上还有 bottom_inset+margin 的紫底），环/发光在其
+    // 上按原配方叠加——混合底色与 scratch 时代一致
+    let py0 = panel_off.clamp(0, buf_h as i32) as u32;
+    let py1 = (buf_h as i32 + panel_off).clamp(0, buf_h as i32) as u32;
+    if py1 > py0 {
+        frame.fill_rect(0, py0, buf_w, py1 - py0, AI_PAGE_BG);
+    }
+    paint_ai_frame_ring(&mut frame, buf_w, buf_h, bottom_inset, panel_off);
+    ai_page_fit(buf_h, bottom_inset)
+}
+
+/// AI 页边框环（2026-09-04 装修配方的唯一实体，2026-09-05 平移参数化）：
+/// 先紫外发光，再 135° 渐变外环，最后页面底色 punch 内芯（左缘让 9 =
+/// 3 倍粗，其余让 3）。panel_off 整体平移（render_ai_page 传 0，
+/// paint_ai_page_chrome 传面板偏移）——环是面板装修，跟面板一起动。
+/// 空态也画：框是页面装修不是内容
+fn paint_ai_frame_ring(
+    frame: &mut Frame<'_>,
+    buf_w: u32,
+    buf_h: u32,
+    bottom_inset: u32,
+    panel_off: i32,
+) {
+    let fx0 = AI_PAGE_FRAME_MARGIN as i64;
+    let fy0 = AI_PAGE_FRAME_MARGIN as i64 + i64::from(panel_off);
+    let fx1 = (buf_w - AI_PAGE_FRAME_MARGIN) as i64;
+    let fy1 = (buf_h - bottom_inset - AI_PAGE_FRAME_MARGIN) as i64 + i64::from(panel_off);
+    if fx1 <= fx0 + 2 * i64::from(AI_PAGE_FRAME_R) || fy1 <= fy0 + 2 * i64::from(AI_PAGE_FRAME_R) {
+        return;
+    }
+    let (fw, fh) = ((fx1 - fx0) as u32, (fy1 - fy0) as u32);
+    // 发光（矩形外部，沿 SDF 向外二次衰减）——glow_round_rect 同款配方
+    // （r 不钳、内部 d<=0 归主体、alpha*t² 衰减），只换裁剪 iteration
+    let r = AI_PAGE_FRAME_R;
+    let spread = 14u32;
+    let (gc, ga) = (AI_PAGE_FRAME_C2, 64u32);
+    paint_rr_clipped(frame, fx0, fy0, fw, fh, r, |cov, lx, ly| {
+        let _ = cov;
+        let d = rr_sdf(lx as f32 + 0.5, ly as f32 + 0.5, fw, fh, r);
+        if d <= 0.0 {
+            return None; // 内部归主体画
+        }
+        let t = (1.0 - d / spread as f32).max(0.0);
+        let a = (ga as f32 * t * t) as u32;
+        if a > 0 { Some((gc, a)) } else { None }
+    });
+    // 135° 渐变外环（fill_round_rect_grad diag 同式：t = lx+ly 归一）
+    let denom = ((fw - 1) + (fh - 1)).max(1);
+    let (c1, c2) = (AI_PAGE_FRAME_C1, AI_PAGE_FRAME_C2);
+    paint_rr_clipped(frame, fx0, fy0, fw, fh, r, |cov, lx, ly| {
+        if cov == 0 {
+            return None;
+        }
+        let color = lerp_rgb(c1, c2, ((lx + ly) * 255 / denom).min(255));
+        Some((color, cov))
+    });
+    // 内芯 punch（左缘 3 倍粗：x 让 3W，其余让 W）——fill_round_rect
+    // 同款（cov==255 直写底色，弧边 blend）
+    let w = AI_PAGE_FRAME_W;
+    let ix = fx0 + i64::from(w) * 3;
+    let iy = fy0 + i64::from(w);
+    let iw = ((fx1 - i64::from(w)) - ix).max(0) as u32;
+    let ih = ((fy1 - i64::from(w)) - iy).max(0) as u32;
+    let punch_r = r - w;
+    paint_rr_clipped(frame, ix, iy, iw, ih, punch_r, |cov, _lx, _ly| {
+        if cov == 0 {
+            None
+        } else {
+            Some((AI_PAGE_BG, cov))
+        }
+    });
+}
+
+/// i64 原点裁剪版圆角矩形墨刷（面板过渡帧专用）：ink(cov, lx, ly) →
+/// Some((颜色, alpha))；cov==255 && alpha==255 直写，其余 blend_px
+/// （与 Frame 同规）。相位保持——局部坐标 (lx, ly) 相对真实原点折算，
+/// 只迭代屏内行；直接钳原点调 Frame 系列会把圆角弧与渐变相位一起
+/// 错位（用户逐帧看动画，不许）
+fn paint_rr_clipped(
+    frame: &mut Frame<'_>,
+    rx: i64,
+    ry: i64,
+    rw: u32,
+    rh: u32,
+    r_cover: u32,
+    ink: impl Fn(u32, u32, u32) -> Option<(u32, u32)>,
+) {
+    let r = r_cover.min(rw / 2).min(rh / 2);
+    let x0 = rx.max(0);
+    let y0 = ry.max(0);
+    let x1 = (rx + i64::from(rw)).min(i64::from(frame.w));
+    let y1 = (ry + i64::from(rh)).min(i64::from(frame.h));
+    if x1 <= x0 || y1 <= y0 {
+        return;
+    }
+    for ay in y0..y1 {
+        let ly = (ay - ry) as u32;
+        for ax in x0..x1 {
+            let lx = (ax - rx) as u32;
+            if let Some((color, a)) = ink(rr_cover(lx, ly, rw, rh, r), lx, ly)
+                && a > 0
+            {
+                if a == 255 {
+                    frame.buf[ay as usize * frame.w as usize + ax as usize] = color;
+                } else {
+                    frame.blend_px(ax as u32, ay as u32, color, a);
+                }
+            }
+        }
+    }
+}
+
 /// 默认前景白 / 背景黑（softbuffer XRGB：高字节不用）
 pub const DEFAULT_FG: u32 = 0x00FF_FFFF;
 pub const DEFAULT_BG: u32 = 0x0000_0000;
@@ -1167,6 +1320,33 @@ impl TermView {
         &self,
         c: char,
     ) -> Option<(u8, fontdue::Metrics, Vec<u8>, i16, i16)> {
+        let cjk_px = self.cjk.as_ref().map_or(0.0, |k| k.px);
+        let (font_id, metrics, bitmap) = self.rasterize_for_atlas_px(c, self.font_px, cjk_px)?;
+        // off_y 与 draw_glyph 的 top 推导同式：top = py + baseline - ymin - h
+        // （终端约定：每字体各自的格基线）
+        let baseline = if font_id == 1 {
+            self.cjk
+                .as_ref()
+                .map_or(self.baseline_off, |k| k.baseline_off)
+        } else {
+            self.baseline_off
+        };
+        let off_y = baseline - metrics.ymin as f32 - metrics.height as f32;
+        Some((font_id, metrics, bitmap, metrics.xmin as i16, off_y as i16))
+    }
+
+    /// 泛化供墨核心（2026-09-05 C 档字号参数化）：路由（prefer_cjk）+
+    /// tofu 记账与终端供墨同款，光栅字号由调用方给——终端（font_px /
+    /// cjk.px 各归各）与 AI 页（AI_PAGE_PX 一刀切，draw_items_left 画
+    /// AI 文字就是单一 px）共用这一份。off 不在这算：终端烤格基线、
+    /// AI 页烤行基线（ai_text_baseline_off），两种约定调用方各自折算
+    /// 后走 atlas_insert。None = 空字形（图集契约：空字形不进）
+    pub fn rasterize_for_atlas_px(
+        &self,
+        c: char,
+        px: f32,
+        px_cjk: f32,
+    ) -> Option<(u8, fontdue::Metrics, Vec<u8>)> {
         if self.font.lookup_glyph_index(c) == 0 {
             let covered = self
                 .cjk
@@ -1177,19 +1357,25 @@ impl TermView {
                 seen.push(c);
             }
         }
-        let (font_id, font, font_px, baseline) = match &self.cjk {
-            Some(cjk) if prefer_cjk(&self.font, &cjk.font, c) => {
-                (1u8, &cjk.font, cjk.px, cjk.baseline_off)
-            }
-            _ => (0u8, &self.font, self.font_px, self.baseline_off),
+        let (font_id, font, size_px) = match &self.cjk {
+            Some(cjk) if prefer_cjk(&self.font, &cjk.font, c) => (1u8, &cjk.font, px_cjk),
+            _ => (0u8, &self.font, px),
         };
-        let (metrics, bitmap) = font.rasterize(c, font_px);
+        let (metrics, bitmap) = font.rasterize(c, size_px);
         if metrics.width == 0 || metrics.height == 0 {
             return None;
         }
-        // off_y 与 draw_glyph 的 top 推导同式：top = py + baseline - ymin - h
-        let off_y = baseline - metrics.ymin as f32 - metrics.height as f32;
-        Some((font_id, metrics, bitmap, metrics.xmin as i16, off_y as i16))
+        Some((font_id, metrics, bitmap))
+    }
+
+    /// AI 页行基线（相对行顶）：draw_items_left 的 baseline 公式在
+    /// (AI_PAGE_PX, AI_PAGE_LINE_H) 下的读数——off_y 装载折算的唯一
+    /// 尺子（实例收集只管行顶，基线归槽位偏移，两处各算各的 = 错位）
+    pub fn ai_text_baseline_off(&self) -> f32 {
+        match self.font.horizontal_line_metrics(AI_PAGE_PX) {
+            Some(hm) => (AI_PAGE_LINE_H as f32 - (hm.ascent - hm.descent)) / 2.0 + hm.ascent,
+            None => 0.0,
+        }
     }
 
     /// AI 全屏页真对话渲染（期 0③，取代占位空壳；合成网格美化是期 0⑤）。
@@ -1224,66 +1410,12 @@ impl TermView {
             w: buf_w,
             h: buf_h,
         };
-        // 边框（2026-09-04 用户拍板装修，仿 kfmv4 orb-panel）：先紫外
-        // 发光，再 135° 渐变外环，最后页面底色 punch 内芯（左缘让 9 =
-        // 3 倍粗，其余让 3）。下缘停在输入栏带上沿之上（bottom_inset
-        // 含键盘+栏带高）——对话框坐在输入栏上的游戏对话框语言。
-        // 空态也画：框是页面装修不是内容。画在文字之前（内芯 punch
-        // 区域与文本边距 60/48 不相交，互不挡墨）。
-        let fx0 = AI_PAGE_FRAME_MARGIN;
-        let fy0 = AI_PAGE_FRAME_MARGIN;
-        let fx1 = buf_w.saturating_sub(AI_PAGE_FRAME_MARGIN);
-        let fy1 = buf_h.saturating_sub(bottom_inset + AI_PAGE_FRAME_MARGIN);
-        if fx1 > fx0 + 2 * AI_PAGE_FRAME_R && fy1 > fy0 + 2 * AI_PAGE_FRAME_R {
-            frame.glow_round_rect(
-                fx0,
-                fy0,
-                fx1 - fx0,
-                fy1 - fy0,
-                AI_PAGE_FRAME_R,
-                GlowSpec {
-                    color: AI_PAGE_FRAME_C2,
-                    alpha: 64,
-                    spread: 14,
-                    y_off: 0,
-                },
-            );
-            frame.fill_round_rect_grad(
-                fx0,
-                fy0,
-                fx1 - fx0,
-                fy1 - fy0,
-                AI_PAGE_FRAME_R,
-                GradSpec {
-                    c1: AI_PAGE_FRAME_C1,
-                    c2: AI_PAGE_FRAME_C2,
-                    diag: true,
-                },
-            );
-            let ix = fx0 + AI_PAGE_FRAME_W * 3; // 左缘 3 倍粗（kfmv4 同款）
-            let iy = fy0 + AI_PAGE_FRAME_W;
-            let iw = (fx1 - AI_PAGE_FRAME_W).saturating_sub(ix);
-            let ih = (fy1 - AI_PAGE_FRAME_W).saturating_sub(iy);
-            frame.fill_round_rect(
-                ix,
-                iy,
-                iw,
-                ih,
-                AI_PAGE_FRAME_R - AI_PAGE_FRAME_W,
-                AI_PAGE_BG,
-            );
-        }
-        let fit =
-            buf_h.saturating_sub(AI_PAGE_TOP + AI_PAGE_BOTTOM + bottom_inset) / AI_PAGE_LINE_H;
-        if msgs.is_empty() {
-            // 空态 = 纯底零墨（2026-09-04 用户拍板撤占位提示：对话框没
-            // 说话时就是空的——游戏对话框语言；占位期那行小字已退役）
-            return (0, fit);
-        }
-        let rows = self.build_ai_rows(msgs, buf_w, live_tail);
-        // 视口：贴底基线 - 距底行数（期 0④——期 0③ 是整行丢弃没有视口）
-        let base_skip = rows.len().saturating_sub(fit as usize);
-        let skip = base_skip.saturating_sub(scroll_rows as usize);
+        // 边框（2026-09-04 用户拍板装修，仿 kfmv4 orb-panel）：配方在
+        // paint_ai_frame_ring（GPU chrome 路径 paint_ai_page_chrome 共用
+        // 这一份——修配方两处一起修）。off=0：CPU 路径不平移
+        paint_ai_frame_ring(&mut frame, buf_w, buf_h, bottom_inset, 0);
+        let (rows, fit, skip) =
+            self.ai_page_layout(buf_w, buf_h, msgs, scroll_rows, bottom_inset, live_tail);
         for (i, (fg, items)) in rows.iter().skip(skip).take(fit as usize).enumerate() {
             let y = AI_PAGE_TOP + i as u32 * AI_PAGE_LINE_H;
             self.draw_items_left(
@@ -1299,6 +1431,84 @@ impl TermView {
             );
         }
         (rows.len() as u32, fit)
+    }
+
+    /// AI 页视口布局（单源，2026-09-05 从 render_ai_page 抽出）：折行 +
+    /// 思考活窗/折叠 + 视口 skip——CPU 画（render_ai_page）与 GPU 实例
+    /// 收集（ai_page_glyphs）共用这一份，眼手同尺的物质基础。返回
+    /// （全部展示行，一屏行数，跳过行数）
+    fn ai_page_layout<'a>(
+        &'a self,
+        buf_w: u32,
+        buf_h: u32,
+        msgs: &'a [(bool, String, String)],
+        scroll_rows: u32,
+        bottom_inset: u32,
+        live_tail: bool,
+    ) -> (Vec<AiRow<'a>>, u32, usize) {
+        let fit = ai_page_fit(buf_h, bottom_inset);
+        let rows = self.build_ai_rows(msgs, buf_w, live_tail);
+        // 视口：贴底基线 - 距底行数（期 0④——期 0③ 是整行丢弃没有视口）
+        let base_skip = rows.len().saturating_sub(fit as usize);
+        let skip = base_skip.saturating_sub(scroll_rows as usize);
+        (rows, fit, skip)
+    }
+
+    /// AI 页文字 → GPU 字形收集（期 1 第 2 层 C 档：AI 页接入图集管线，
+    /// 病根是 CPU 逐字 fontdue 光栅化每帧 48ms）。布局与 render_ai_page
+    /// 同源（ai_page_layout）；画字语义与 draw_items_left 逐条对齐——
+    /// 起笔内缩 18、主字体行尺垂直居中、右缘装不下即 break、不可上屏
+    /// 字符（空格/控制符，BAR-015）不落墨只推笔。返回（布局读数, 字形
+    /// 列表）：读数喂 scroll_sync_layout（眼手同尺），列表归调用方经
+    /// 图集转实例（xmin/off_y 槽位偏移在 ai_glyphs_to_instances 补）。
+    /// panel_off 直接加进行 y（面板刚体平移——2026-09-05 拍板：过渡帧
+    /// 不再 scratch 全页渲染 + blit）
+    #[allow(clippy::too_many_arguments)]
+    pub fn ai_page_glyphs(
+        &self,
+        buf_w: u32,
+        buf_h: u32,
+        msgs: &[(bool, String, String)],
+        scroll_rows: u32,
+        bottom_inset: u32,
+        live_tail: bool,
+        panel_off: i32,
+    ) -> ((u32, u32), Vec<crate::glyph_atlas::AiGlyph>) {
+        let (rows, fit, skip) =
+            self.ai_page_layout(buf_w, buf_h, msgs, scroll_rows, bottom_inset, live_tail);
+        let mut out = Vec::new();
+        // 行尺 None（字体无横向量尺）= draw_items_left 同款空转，零实例
+        if self.font.horizontal_line_metrics(AI_PAGE_PX).is_some() {
+            let clip_right = buf_w.saturating_sub(AI_PAGE_MARGIN_X) as f32;
+            for (i, (fg, items)) in rows.iter().skip(skip).take(fit as usize).enumerate() {
+                // y = 行顶 + 刚体平移（垂直居中基线归图集槽位 off_y，
+                // 装载方按 ai_text_baseline_off 折算——收集只管行顶）
+                let y = (AI_PAGE_TOP + i as u32 * AI_PAGE_LINE_H) as f32 + panel_off as f32;
+                let mut pen = AI_PAGE_MARGIN_X as f32 + 18.0;
+                for (_, c, adv) in items {
+                    if pen + adv >= clip_right {
+                        break; // 右缘装不下就停（draw_items_left 同判据）
+                    }
+                    if paintable(*c) {
+                        // 字体路由与 rasterize_for_atlas_px 同判据
+                        // （prefer_cjk）——收集键与装载键必须同一槽
+                        let font_id = match &self.cjk {
+                            Some(cjk) if prefer_cjk(&self.font, &cjk.font, *c) => 1u8,
+                            _ => 0u8,
+                        };
+                        out.push(crate::glyph_atlas::AiGlyph {
+                            x: pen,
+                            y,
+                            c: *c,
+                            font: font_id,
+                            fg: *fg,
+                        });
+                    }
+                    pen += adv;
+                }
+            }
+        }
+        ((rows.len() as u32, fit), out)
     }
 
     /// 全部展示行：(文字色, 该行的已量宽字符)——角色标签行 + 思考块
@@ -1998,6 +2208,15 @@ fn blend(fg: u32, dst: u32, a: u32) -> u32 {
     (r << 16) | (g << 8) | b
 }
 
+/// AI 文字装载的 off_y 折算（唯一公式）：floor 语义与 CPU 画字的
+/// `top as i64` 逐像素对齐——行顶是整数，trunc(行 + x) = 行 +
+/// floor(x)；负分数偏移（高字形上探）按 `as i16` 向零截断会错
+/// 1px（2026-09-05 对拍考题 spec_gpu_ai页文字实例 逮住）。
+/// android_app 装载与考题软件合成共用这一份
+pub fn ai_glyph_off_y(baseline_off: f32, ymin: f32, height: f32) -> i16 {
+    (baseline_off - ymin - height).floor() as i16
+}
+
 /// 两色逐通道线性插值（t = 0..255，渐变图元用；A 档考题
 /// spec_lerp_rgb_* 在 tests/termview_spec.rs）
 pub fn lerp_rgb(c1: u32, c2: u32, t: u32) -> u32 {
@@ -2103,6 +2322,31 @@ pub trait TermEmu: Send {
     /// 图集供墨（同上调用方）：字体路由（prefer_cjk）+ 光栅化 + 放置
     /// 偏移（xmin / baseline-ymin-h）；None = 空字形跳装载
     fn rasterize_for_atlas(&self, c: char) -> Option<(u8, fontdue::Metrics, Vec<u8>, i16, i16)>;
+    /// 泛化供墨核心（字号参数化，android_app GLES AI 文字装载调用方）：
+    /// 路由/tofu 记账同上，字号调用方定——终端与 AI 页（AI_PAGE_PX）
+    /// 共用；off 归调用方按各自基线约定折算
+    fn rasterize_for_atlas_px(
+        &self,
+        c: char,
+        px: f32,
+        px_cjk: f32,
+    ) -> Option<(u8, fontdue::Metrics, Vec<u8>)>;
+    /// AI 页文字 → GPU 字形收集（android_app GLES paint_under 调用方）：
+    /// 布局与 render_ai_page 同源，画字语义对齐 draw_items_left；返回
+    /// （布局读数, 字形列表——panel_off 已进行 y）
+    #[allow(clippy::too_many_arguments)]
+    fn ai_page_glyphs(
+        &self,
+        w: u32,
+        h: u32,
+        msgs: &[(bool, String, String)],
+        scroll_rows: u32,
+        bottom_inset: u32,
+        live_tail: bool,
+        panel_off: i32,
+    ) -> ((u32, u32), Vec<crate::glyph_atlas::AiGlyph>);
+    /// AI 页行基线（相对行顶；AI 文字装载 off_y 折算的唯一尺子）
+    fn ai_text_baseline_off(&self) -> f32;
     fn render_keybar(&self, buf: &mut [u32], w: u32, h: u32, ime_bottom: u32, mods: u8);
     /// AI 外显 chrome（ai-presence，android_app rasterize 调用方）：
     /// AI 页真对话渲染（page=AiFullscreen 时代替终端网格）/ 雾状光球 sprite。
@@ -2208,6 +2452,39 @@ impl TermEmu for TermView {
     }
     fn rasterize_for_atlas(&self, c: char) -> Option<(u8, fontdue::Metrics, Vec<u8>, i16, i16)> {
         TermView::rasterize_for_atlas(self, c)
+    }
+    fn rasterize_for_atlas_px(
+        &self,
+        c: char,
+        px: f32,
+        px_cjk: f32,
+    ) -> Option<(u8, fontdue::Metrics, Vec<u8>)> {
+        TermView::rasterize_for_atlas_px(self, c, px, px_cjk)
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn ai_page_glyphs(
+        &self,
+        w: u32,
+        h: u32,
+        msgs: &[(bool, String, String)],
+        scroll_rows: u32,
+        bottom_inset: u32,
+        live_tail: bool,
+        panel_off: i32,
+    ) -> ((u32, u32), Vec<crate::glyph_atlas::AiGlyph>) {
+        TermView::ai_page_glyphs(
+            self,
+            w,
+            h,
+            msgs,
+            scroll_rows,
+            bottom_inset,
+            live_tail,
+            panel_off,
+        )
+    }
+    fn ai_text_baseline_off(&self) -> f32 {
+        TermView::ai_text_baseline_off(self)
     }
     fn render_keybar(&self, buf: &mut [u32], w: u32, h: u32, ime_bottom: u32, mods: u8) {
         TermView::render_keybar(self, buf, w, h, ime_bottom, mods)

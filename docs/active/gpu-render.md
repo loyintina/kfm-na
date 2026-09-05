@@ -208,6 +208,54 @@ CPU 优化线顶上（§六分流）。
   字体路由闭包双键回退（主缺 → CJK 顶）。rasterize 加 gpu_term 开关
   ——CPU 不再画终端网格（第 2 层的省，就在这一刀）。
 
+## 十二、期 1 第 2 层 C 档：AI 页文字接入图集管线（2026-09-05）
+
+- **病根**：终端网格 GPU 化后 ras 仍 48ms——AI 页文字还是 CPU 逐字
+  fontdue 光栅化（每帧几百次零缓存），过渡帧另加全屏 scratch 重渲染
+  + blit。本段把 AI 页文字搬上图集管线，过渡帧 scratch/blit 整条删除。
+- **双层合成（gles_present）**：chrome 层一分为二——下层 pixels =
+  快捷键行 + AI 面板底（紫底+边框环，`paint_ai_page_chrome`，
+  panel_off 刚体平移），上层 pixels_over = 输入栏/光球/放大镜；两层
+  夹住 AI 文字 GPU 实例。z 序与 scratch 时代像素等价：面板底盖住键行
+  与网格，输入栏/光球浮在 AI 文字上。present_frame z 序 = 网格 bg →
+  网格字形 → 下层 chrome → AI 文字实例（按图集页）→ 上层 chrome。
+- **架构落点（termview）**：`panel_split`（分支判定唯一裁决处，
+  softbuffer 与 GLES 两路径共用）；`ai_page_layout`（布局单源，
+  render_ai_page 与 ai_page_glyphs 共用——眼手同尺不断）；`ai_page_glyphs`
+  （画字语义与 draw_items_left 逐条对齐：起笔内缩 18/主字体行尺居中/
+  右缘 break/paintable 过滤）；`rasterize_for_atlas_px`（供墨核心字号
+  参数化，终端与 AI 页共用路由+tofu 记账）；`ai_glyph_off_y`（off_y
+  折算唯一公式，**floor 语义**——见判卷②）。android_app 侧 rasterize
+  拆成 paint_under/paint_over 两件（softbuffer 单层路径与 GLES 双层
+  路径共享），GLES 装配 = `draw_frame_gles`；rasterize 的 gpu_term
+  开关随之退役。面板靠泊（panel_off==0）时终端网格零生成（整页被
+  不透明面板盖住）。
+- **GlyphKey 加 size 维**：AI 页 40px 与终端字号两套位图共存——键里
+  没有字号维就会拿终端小字画 AI 页大字。size 是常量冻结的代号
+  （GLYPH_SIZE_TERM/GLYPH_SIZE_AI），改 AI_PAGE_PX/LINE_H 必须换号
+  （off_y 按 LINE_H 折算烤进槽位）。
+- **判卷（考题 6 道，全绿）**：
+  ①真值表 panel_split；②布局同尺（render_ai_page 返回与
+  ai_page_glyphs 读数在 scroll×inset 全组合相等）；③底装修刚体平移
+  （paint_ai_page_chrome(-k) 与直画逐像素咬合——i64 裁剪相位保持的
+  判卷，钳原点实现在此必红）；④**整帧逐像素对拍**（CPU 全路径 vs
+  chrome+图集实例软件合成，vendored 像素字体 + blend 同式）；⑤供墨
+  字号类真实生效；⑥实例转换 A 档（放置偏移/未命中记键/双字号共存）。
+- **对拍考题逮住的两案（都真凶，非考题自错）**：
+  ① **UV 假凶**：考题软件合成把实例的归一化 u0/v0 当像素坐标
+  `as usize`——39/2048 砍成 0，拿邻字（'你'）位图画 '好'。教训：
+  GlyphInstance 的 uv 是归一化域，软件直译必须 ×page.w 还原。真 GPU
+  管线（shader 采样）无此坑。
+  ② **off_y 截断语义**：装载折算 `as i16` 向零截断，CPU 画字的
+  `top as i64`（行顶整数）等效 floor——负分数偏移（高字形上探）错
+  1px。修 = `ai_glyph_off_y` 单源 floor 公式，android_app 装载与考题
+  合成共用。
+- **微损伤备忘（对拍考题之外的已知差异）**：双层化后每帧 2 次
+  10MB chrome 上传 + 2 次全画布 alpha 遍历（原 1 次）——chrome 脏
+  hash/带状上传（§十一修复路径①）的收益翻倍，优先级上调。
+- softbuffer 兜底路径行为不变（单层全 CPU，scratch+blit 保留——
+  立项书红线；该路径性能不再投入）。
+
 ## 十、期 1 第 1 层：壳内 EGL 基建（2026-09-04）
 
 - **切法**：先换「present」不换「墨」——全部光栅化照旧 CPU 进帧缓冲，
