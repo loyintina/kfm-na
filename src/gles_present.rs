@@ -817,6 +817,59 @@ impl GlesPresent {
                 gl.draw_arrays(glow::TRIANGLES, 0, 3);
             }
 
+            // GPU 合成缩略图回传（黑屏案判卷仪器）：整帧逐行回读 →
+            // 1/10 抽样 → hex 分块飞鸽传书 → 服务器拼图转 PNG 亲眼看。
+            // 仅第 3 帧拍一次（内容已稳定）
+            if GLS_READBACK_PROBE && self.frames_presented == 3 {
+                let tw = (self.w / 10) as usize;
+                let th = (self.h / 10) as usize;
+                let mut thumb = vec![0u8; tw * th * 3];
+                for ty in 0..th {
+                    let mut row = vec![0u8; (self.w as usize) * 4];
+                    gl.read_pixels(
+                        0,
+                        (ty * 10) as i32,
+                        self.w as i32,
+                        1,
+                        glow::RGBA,
+                        glow::UNSIGNED_BYTE,
+                        glow::PixelPackData::Slice(Some(&mut row)),
+                    );
+                    for tx in 0..tw {
+                        let s = tx * 10 * 4;
+                        let d = (ty * tw + tx) * 3;
+                        thumb[d] = row[s];
+                        thumb[d + 1] = row[s + 1];
+                        thumb[d + 2] = row[s + 2];
+                    }
+                }
+                let hex: String = thumb.iter().map(|b| format!("{b:02x}")).collect();
+                let total = hex.len().div_ceil(1400);
+                std::thread::spawn(move || {
+                    use std::io::Write;
+                    for (i, chunk) in hex.as_bytes().chunks(1400).enumerate() {
+                        let _ = std::net::TcpStream::connect_timeout(
+                            &std::net::SocketAddr::from(([127, 0, 0, 1], 8021)),
+                            std::time::Duration::from_secs(2),
+                        )
+                        .and_then(|mut s| {
+                            let body =
+                                format!("{{\"stage\":\"gles-thumb\",\"msg\":\"{}|{}|{}\"}}",
+                                    i, total, String::from_utf8_lossy(chunk));
+                            s.write_all(
+                                format!(
+                                    "POST /kfmv4/api/na-report HTTP/1.1\r\nHost: 127.0.0.1:8021\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                                    body.len(),
+                                    body
+                                )
+                                .as_bytes(),
+                            )
+                        });
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                    }
+                });
+            }
+
             // 终审实验：品红实例挪到所有层之后重画——它若现身，
             // 实例化/属性/u_vp 全部无罪，凶手是绘制顺序/覆盖；仍黑 =
             // 实例化路径本身有病（属性指针/instanced 调用）
