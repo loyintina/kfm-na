@@ -638,49 +638,34 @@ impl GlesPresent {
             // 回读探针（黑屏案 2026-09-05）：swap 前采样三屏点 + GL 错误
             // 全扫——值直接飞鸽传书，GPU 真实输出不再靠肉眼转述
             if GLS_READBACK_PROBE {
-                let errs: Vec<u32> = [
-                    gl.get_error(),
-                    gl.get_error(),
-                    gl.get_error(),
-                    gl.get_error(),
-                ]
-                .into_iter()
-                .filter(|e| *e != glow::NO_ERROR)
-                .collect();
-                // 快捷键栏整行回读：非黑像素计数 + 最大通道
-                let y = (self.h as i32) - 400;
-                let mut row = vec![0u8; (self.w as usize) * 4];
-                gl.read_pixels(
-                    0,
-                    y,
-                    self.w as i32,
-                    1,
-                    glow::RGBA,
-                    glow::UNSIGNED_BYTE,
-                    glow::PixelPackData::Slice(Some(&mut row)),
-                );
-                let nonblack = row.chunks(4).filter(|p| p[0] + p[1] + p[2] > 12).count();
-                let maxc = row
-                    .chunks(4)
-                    .map(|p| p[0].max(p[1]).max(p[2]))
-                    .max()
-                    .unwrap_or(0);
-                // 左右半屏各一点（二分判卷）
-                let l = row[(self.w as usize / 4) * 4..(self.w as usize / 4) * 4 + 4].to_vec();
-                let r =
-                    row[(self.w as usize * 3 / 4) * 4..(self.w as usize * 3 / 4) * 4 + 4].to_vec();
-                // CPU 画布内容统计（rasterize 到底画没画）
-                let nnz = self.pixels.iter().filter(|p| **p != 0).count();
-                let alpha_tagged = self
-                    .pixels
-                    .iter()
-                    .filter(|p| (*p & 0xFF00_0000) != 0)
-                    .count();
+                let errs: Vec<u32> = [gl.get_error(), gl.get_error()]
+                    .into_iter()
+                    .filter(|e| *e != glow::NO_ERROR)
+                    .collect();
+                // 五横行回读：横幅/终端上/终端中/快捷键行/输入栏
+                // （单点采样会落在合法黑区——整行非黑计数才判得准）
+                let rows = [140i32, 300, 1400, 2350, 2700];
+                let mut stats = Vec::new();
+                for y in rows {
+                    let mut row = vec![0u8; (self.w as usize) * 4];
+                    gl.read_pixels(
+                        0,
+                        y,
+                        self.w as i32,
+                        1,
+                        glow::RGBA,
+                        glow::UNSIGNED_BYTE,
+                        glow::PixelPackData::Slice(Some(&mut row)),
+                    );
+                    let nb = row.chunks(4).filter(|p| p[0] + p[1] + p[2] > 24).count();
+                    stats.push(format!("y{y}={nb}/{}", self.w));
+                }
                 crate::report::report(
                     "gles-dbg",
                     &format!(
-                        "row2400 非黑={nonblack}/{} max={maxc} L={l:?} R={r:?} cpu画布非零={nnz} alpha位={alpha_tagged} errs={errs:?} pass_e={e1} n={}",
-                        self.w, self.frames_presented
+                        "{} errs={errs:?} pass_e={e1} n={}",
+                        stats.join(" "),
+                        self.frames_presented
                     ),
                 );
             }
