@@ -283,10 +283,12 @@ impl GlesPresent {
                      layout(location=0) in vec4 a_rect;\n\
                      layout(location=1) in vec4 a_color;\n\
                      out vec4 v_color;\n\
+                     out vec2 v_local;\n\
                      uniform vec2 u_vp;\n\
                      void main(){\n\
                      vec2 c=vec2[](vec2(0.,0.),vec2(0.,3.),vec2(3.,0.))[gl_VertexID];\n\
                      vec2 px=a_rect.xy+c*a_rect.zw;\n\
+                     v_local=c/3.;\n\
                      v_color=a_color;\n\
                      gl_Position=vec4(px.x/u_vp.x*2.-1.,1.-px.y/u_vp.y*2.,0.,1.);\n\
                      }",
@@ -294,8 +296,8 @@ impl GlesPresent {
                 )?;
                 let f = fs(
                     "#version 300 es\nprecision mediump float;\n\
-                     in vec4 v_color; out vec4 o;\n\
-                     void main(){ o=vec4(v_color.bgr,1.); }",
+                     in vec4 v_color; in vec2 v_local; out vec4 o;\n\
+                     void main(){ if(v_local.x<0.||v_local.y<0.||v_local.x>1.||v_local.y>1.) discard; o=vec4(v_color.bgr,1.); }",
                     "bg",
                 )?;
                 link(gl, v, f)?
@@ -309,11 +311,13 @@ impl GlesPresent {
                      layout(location=1) in vec4 a_uv;\n\
                      layout(location=2) in vec4 a_fg;\n\
                      out vec2 v_uv;\n\
+                     out vec2 v_local;\n\
                      out vec4 v_fg;\n\
                      uniform vec2 u_vp;\n\
                      void main(){\n\
                      vec2 c=vec2[](vec2(0.,0.),vec2(0.,3.),vec2(3.,0.))[gl_VertexID];\n\
                      v_uv=a_uv.xy+c*a_uv.zw;\n\
+                     v_local=c/3.;\n\
                      v_fg=a_fg;\n\
                      vec2 px=a_rect.xy+c*a_rect.zw;\n\
                      gl_Position=vec4(px.x/u_vp.x*2.-1.,1.-px.y/u_vp.y*2.,0.,1.);\n\
@@ -322,9 +326,9 @@ impl GlesPresent {
                 )?;
                 let f = fs(
                     "#version 300 es\nprecision mediump float;\n\
-                     in vec2 v_uv; in vec4 v_fg; out vec4 o;\n\
+                     in vec2 v_uv; in vec2 v_local; in vec4 v_fg; out vec4 o;\n\
                      uniform sampler2D u_tex;\n\
-                     void main(){ float cov=texture(u_tex,v_uv).r; o=vec4(v_fg.bgr,cov); }",
+                     void main(){ if(v_local.x<0.||v_local.y<0.||v_local.x>1.||v_local.y>1.) discard; float cov=texture(u_tex,v_uv).r; o=vec4(v_fg.bgr,cov); }",
                     "glyph",
                 )?;
                 link(gl, v, f)?
