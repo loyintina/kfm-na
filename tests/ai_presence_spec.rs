@@ -1162,3 +1162,68 @@ fn spec_bar066_条件alpha_自带透明度直通() {
     assert_eq!(px[2], 0x3030_1020, "自带 α 的光球像素必须直通");
     assert_eq!(px[3], 0xFF14_0A24);
 }
+
+// ---- BAR-068：光球雾尾在半透带上不许整像素替换（2026-09-06 装机实看） ----
+// 病灶：(α,E) 写出整像素替换栏带——雾尾微小 α（1%雾+99%背后）盖掉栏带
+// 85% 底，背后是网格空行（GPU 清屏黑）→ 光球下缘拖出纯黑半圆盖住输入栏。
+// 修：加量叠加——底有效 α（条件 alpha 三态）×E = 底已带加量，与本
+// sprite 加量求和再去预乘；不透明底退化为饱和加法（与旧加法逐像素等价）。
+
+#[test]
+fn spec_bar068_光球叠加_半透带贡献不丢() {
+    use kfm_na::ui::orb::{OrbSprite, blit_orb_sprite_alpha};
+    // 底 = 栏带半透像素（BAR-067 写出形态）；sprite = 已知弱加量
+    let mut buf = vec![0xD911_1119; 4];
+    let sprite = OrbSprite {
+        size: 2,
+        px: vec![0x0000_0000, 0x0010_1020, 0x0000_0000, 0x0000_0000],
+    };
+    blit_orb_sprite_alpha(&mut buf, 2, 2, &sprite, 1.0, 1.0, 1.0);
+    let out = buf[1]; // 弱加量落点
+    let (a, r, g, b) = (
+        (out >> 24) & 0xFF,
+        (out >> 16) & 0xFF,
+        (out >> 8) & 0xFF,
+        out & 0xFF,
+    );
+    // 总加量 = 底贡献(α·E/255，同款整数舍入) + sprite 加量：
+    //   r: (0x11×0xD9+127)/255 + 0x10 = 14 + 16 = 0x1E
+    //   g: 同上 = 0x1E
+    //   b: (0x19×0xD9+127)/255 + 0x20 = 21 + 32 = 0x35
+    let band = |e: u32| (e * 0xD9 + 127) / 255;
+    let (tr, tg, tb) = (band(0x11) + 0x10, band(0x11) + 0x10, band(0x19) + 0x20);
+    assert_eq!(a, tb, "α = 叠加后总加量最大通道");
+    assert_eq!(
+        (r, g, b),
+        (tr * 255 / tb, tg * 255 / tb, tb * 255 / tb),
+        "E = 去预乘"
+    );
+    // 守恒：α·E == 总加量（底贡献 + 雾，逐通道 ±1）
+    let recover = |e: u32| (a * e + 127) / 255;
+    assert!((recover(r) as i32 - tr as i32).abs() <= 1);
+    assert!((recover(g) as i32 - tg as i32).abs() <= 1);
+    assert!((recover(b) as i32 - tb as i32).abs() <= 1);
+    // 透明底像素不落墨照旧
+    assert_eq!(buf[0], 0xD911_1119, "零加量像素保持底样");
+}
+
+#[test]
+fn spec_bar068_光球叠加_不透明底退化饱和加法() {
+    use kfm_na::ui::orb::{OrbSprite, blit_orb_sprite_alpha};
+    // 底 = 无 α 但 RGB 非零（条件 alpha 语义 = 不透明，如内芯渐变像素）
+    // → 退化为旧饱和加法：dst + add（逐通道钳 255）
+    let mut buf = vec![0x0018_1532, 0x0018_1532, 0x0018_1532, 0x0018_1532];
+    let sprite = OrbSprite {
+        size: 2,
+        px: vec![0x0000_0000, 0x00FF_F0F0, 0x0000_0000, 0x0000_0000],
+    };
+    blit_orb_sprite_alpha(&mut buf, 2, 2, &sprite, 1.0, 1.0, 1.0);
+    let out = buf[1];
+    // (0x18+0xFF, 0x15+0xF0, 0x32+0xF0) 全饱和 → 白
+    assert_eq!(
+        out & 0x00FF_FFFF,
+        0x00FF_FFFF,
+        "不透明底 = 旧饱和加法（逐像素等价）"
+    );
+    assert_eq!((out >> 24) & 0xFF, 0xFF, "饱和加出全亮 = α 满");
+}

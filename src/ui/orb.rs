@@ -215,13 +215,28 @@ pub fn blit_orb_sprite_alpha(
                 let a = ((add >> shift) & 0xFF) as f32 * gain;
                 (a.round() as u32).min(0xFF)
             };
-            let (r, g, b) = (ch(16), ch(8), ch(0));
+            let idx = (py * i64::from(w) + px) as usize;
+            let dst = buf[idx];
+            // 底像素的有效透明度（条件 alpha 语义，BAR-066 mark 同规）：
+            // 高字节非 0 = 自带 α；高字节 0 且 RGB 非零 = 不透明（此刻还
+            // 没被 mark_chrome_alpha 打 α 的内芯/描边，先按 255 结算）；
+            // 纯零 = 透明画布
+            let mut da = (dst >> 24) & 0xFF;
+            if da == 0 && (dst & 0x00FF_FFFF) != 0 {
+                da = 255;
+            }
+            // 加量叠加（BAR-068）：本 sprite 加量 + 底已携带的加量
+            // （α_d·E_d/255）→ 总加量再去预乘。对不透明底（da=255）这
+            // 退化为饱和加法（与 blit_orb_sprite 逐像素等价）；对半透带
+            // 则雾积在带上，不再整像素替换出黑盘
+            let base = |shift: u32| ((dst >> shift) & 0xFF) * da;
+            let mix = |shift: u32| (base(shift) + 127) / 255 + ch(shift);
+            let (r, g, b) = (mix(16).min(0xFF), mix(8).min(0xFF), mix(0).min(0xFF));
             let alpha = r.max(g).max(b);
             if alpha == 0 {
                 continue;
             }
             let e = |v: u32| v * 255 / alpha;
-            let idx = (py * i64::from(w) + px) as usize;
             buf[idx] = (alpha << 24) | (e(r) << 16) | (e(g) << 8) | e(b);
         }
     }
