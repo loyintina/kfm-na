@@ -783,14 +783,13 @@ impl GlesPresent {
                     );
                     p
                 };
-                gl.bind_texture(glow::TEXTURE_2D, Some(self.chrome_tex));
+                // T3 三连：同一全屏 quad，三种纹理/内容逐一回读
                 gl.use_program(Some(self.chrome_prog));
                 gl.uniform_1_i32(
                     gl.get_uniform_location(self.chrome_prog, "u_tex").as_ref(),
                     0,
                 );
-                gl.draw_arrays(glow::TRIANGLES, 0, 3);
-                let r3 = {
+                let read = |gl: &glow::Context| {
                     let mut p = [0u8; 4];
                     gl.read_pixels(
                         630,
@@ -803,11 +802,24 @@ impl GlesPresent {
                     );
                     p
                 };
+                gl.active_texture(glow::TEXTURE0);
+                // T3a: chrome 纹理（现状）
+                gl.bind_texture(glow::TEXTURE_2D, Some(self.chrome_tex));
+                gl.draw_arrays(glow::TRIANGLES, 0, 3);
+                let r3a = read(gl);
+                // T3b: 换绑图集页纹理（已知有字形 coverage 内容）
+                gl.bind_texture(glow::TEXTURE_2D, Some(self.atlas_tex[0]));
+                gl.draw_arrays(glow::TRIANGLES, 0, 3);
+                let r3b = read(gl);
+                // T3c: 无纹理常量绿（quad+blend+程序本身健康性）
+                gl.bind_texture(glow::TEXTURE_2D, None);
+                gl.draw_arrays(glow::TRIANGLES, 0, 3);
+                let r3c = read(gl);
                 gl.disable(glow::BLEND);
                 crate::report::report(
                     "gles-dbg",
                     &format!(
-                        "T1无纹理={r1:?} T2混合白={r2:?} T3纹理={r3:?} n={}",
+                        "T1={r1:?} T2={r2:?} T3achrome={r3a:?} T3batlas={r3b:?} T3c常量绿={r3c:?} n={}",
                         self.frames_presented
                     ),
                 );
