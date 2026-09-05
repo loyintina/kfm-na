@@ -673,18 +673,8 @@ impl GlesPresent {
                 0,
             );
             gl.use_program(Some(self.chrome_prog));
-            gl.viewport(0, 0, (self.w / 2) as i32, self.h as i32);
             gl.bind_vertex_array(Some(self._vao));
             gl.draw_arrays(glow::TRIANGLES, 0, 3);
-            gl.use_program(Some(self.prog));
-            gl.viewport(
-                (self.w / 2) as i32,
-                0,
-                self.w as i32 - (self.w / 2) as i32,
-                self.h as i32,
-            );
-            gl.draw_arrays(glow::TRIANGLES, 0, 3);
-            gl.viewport(0, 0, self.w as i32, self.h as i32);
             gl.disable(glow::BLEND);
 
             // GPU 合成缩略图回传（黑屏案判卷仪器）：整帧逐行回读 →
