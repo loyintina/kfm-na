@@ -2320,6 +2320,7 @@ impl App {
                 // chrome 层画布清透明（term 区不画，GPU 网格层透出）
                 g.pixels_mut().fill(0);
                 // GPU 网格层进料：收集 + 图集供墨（misses 两轮生成）+ 实例
+                let t_gen = std::time::Instant::now();
                 let cells = th
                     .as_ref()
                     .map(|t| t.lock().unwrap().gpu_cells(w, h))
@@ -2385,6 +2386,10 @@ impl App {
                         glyphs_by_page[p].push(gi);
                     }
                 }
+                crate::gles_present::STAGE_GEN_US.fetch_add(
+                    t_gen.elapsed().as_micros() as u64,
+                    std::sync::atomic::Ordering::Relaxed,
+                );
                 (FrameBuf::Gles(g.as_mut()), w, h)
             }
         };

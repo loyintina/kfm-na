@@ -45,6 +45,7 @@ pub static STAGE_RAS_US: std::sync::atomic::AtomicU64 = std::sync::atomic::Atomi
 pub static STAGE_ALPHA_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 pub static STAGE_UPLOAD_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 pub static STAGE_DRAW_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static STAGE_GEN_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 pub static STAGE_N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 fn stage_report() {
@@ -58,8 +59,9 @@ fn stage_report() {
     crate::report::report(
         "gles-stage",
         &format!(
-            "ras={}ms alpha={}ms upload={}ms draw={}ms /{n}帧",
+            "ras={}ms gen={}ms alpha={}ms upload={}ms draw={}ms /{n}帧",
             avg(&STAGE_RAS_US),
+            avg(&STAGE_GEN_US),
             avg(&STAGE_ALPHA_US),
             avg(&STAGE_UPLOAD_US),
             avg(&STAGE_DRAW_US),
