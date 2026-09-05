@@ -700,6 +700,30 @@ impl GlesPresent {
             }
             let e1 = gl.get_error();
 
+            // 终审实验：品红实例挪到所有层之后重画——它若现身，
+            // 实例化/属性/u_vp 全部无罪，凶手是绘制顺序/覆盖；仍黑 =
+            // 实例化路径本身有病（属性指针/instanced 调用）
+            if GLS_READBACK_PROBE {
+                gl.use_program(Some(self.bg_prog));
+                gl.bind_vertex_array(Some(self.bg_vao));
+                gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.bg_vbo));
+                gl.buffer_data_u8_slice(
+                    glow::ARRAY_BUFFER,
+                    &{
+                        let mut b = [0u8; 20];
+                        b[0..4].copy_from_slice(&300.0f32.to_ne_bytes());
+                        b[4..8].copy_from_slice(&1400.0f32.to_ne_bytes());
+                        b[8..12].copy_from_slice(&300.0f32.to_ne_bytes());
+                        b[12..16].copy_from_slice(&300.0f32.to_ne_bytes());
+                        b[16..20].copy_from_slice(&0x00FF_00FFu32.to_ne_bytes());
+                        b
+                    },
+                    glow::DYNAMIC_DRAW,
+                );
+                gl.draw_arrays_instanced(glow::TRIANGLES, 0, 3, 1);
+            }
+            let e2 = gl.get_error();
+
             // 回读探针（黑屏案 2026-09-05）：swap 前采样三屏点 + GL 错误
             // 全扫——值直接飞鸽传书，GPU 真实输出不再靠肉眼转述
             if GLS_READBACK_PROBE {
@@ -716,13 +740,23 @@ impl GlesPresent {
                 // 绿三角中心：clip(-0.667,-0.267) → px(210, GL y1026)
                 let mut probe_px = [0u8; 4];
                 gl.read_pixels(
+                    200,
+                    1700,
+                    1,
+                    1,
+                    glow::RGBA,
+                    glow::UNSIGNED_BYTE,
+                    glow::PixelPackData::Slice(Some(&mut probe_px)),
+                );
+                let mut green_px = [0u8; 4];
+                gl.read_pixels(
                     210,
                     1026,
                     1,
                     1,
                     glow::RGBA,
                     glow::UNSIGNED_BYTE,
-                    glow::PixelPackData::Slice(Some(&mut probe_px)),
+                    glow::PixelPackData::Slice(Some(&mut green_px)),
                 );
                 let mut stats = Vec::new();
                 for y in rows {
@@ -742,7 +776,7 @@ impl GlesPresent {
                 crate::report::report(
                     "gles-dbg",
                     &format!(
-                        "probe={probe_px:?} {} errs={errs:?} pass_e={e1} n={}",
+                        "品红={probe_px:?} 绿={green_px:?} {} errs={errs:?} e1={e1} e2={e2} n={}",
                         stats.join(" "),
                         self.frames_presented
                     ),
