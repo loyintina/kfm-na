@@ -608,7 +608,7 @@ fn spec_冒烟_光球sprite画紫晕角落不染色() {
     let (tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必须建得成");
     let (w, h) = (400u32, 300u32);
     let mut buf = vec![0u32; (w * h) as usize];
-    tv.render_orb(&mut buf, w, h, 200.0, 150.0, 1.0, 1.0);
+    tv.render_orb(&mut buf, w, h, 200.0, 150.0, 1.0, 1.0, false);
     let center = buf[(150 * w + 200) as usize];
     let (r, g, b) = ((center >> 16) & 0xFF, (center >> 8) & 0xFF, center & 0xFF);
     assert!(center != 0, "球心必须出墨（D8：确实有个球）");
@@ -616,7 +616,7 @@ fn spec_冒烟_光球sprite画紫晕角落不染色() {
     assert_eq!(buf[0], 0, "远离球的角落不许染色");
     // gain=0 = 不画（透明系数 0 不许出墨）
     let mut buf2 = vec![0u32; (w * h) as usize];
-    tv.render_orb(&mut buf2, w, h, 200.0, 150.0, 0.0, 1.0);
+    tv.render_orb(&mut buf2, w, h, 200.0, 150.0, 0.0, 1.0, false);
     assert!(buf2.iter().all(|&p| p == 0), "gain=0 不许出墨");
 }
 
@@ -1067,4 +1067,98 @@ fn spec_gpu_ai供墨_字号类真实生效() {
     // AI 行基线：行内正偏移、小于两倍行高（放置合理性）
     let bl = tv.ai_text_baseline_off();
     assert!(bl > 0.0 && bl < kfm_na::termview::AI_PAGE_LINE_H as f32 * 2.0);
+}
+
+// ---- BAR-066：光球半透写出 + chrome 条件 alpha 直通（2026-09-05） ----
+// 病灶：加法 sprite 画进透明 chrome 画布（dst=黑），条件 alpha 又把暗
+// 色增量强转不透明——光球背后一整块黑。修法：(α,E) 半透写出 + 扫描
+// 对自带 α 的像素直通。
+
+#[test]
+fn spec_bar066_光球半透写出_守恒与透形() {
+    use kfm_na::ui::orb::{OrbSprite, blit_orb_sprite_alpha};
+    // 合成 sprite：已知加量（饱和加的增量语义），判 (α,E) 写出契约
+    let sprite = OrbSprite {
+        size: 2,
+        px: vec![
+            0x0000_0000, // 全黑增量 = 不贡献
+            0x0030_1020, // 弱增量（α 小）
+            0x00FF_8040, // 强增量（红通道满 → α=255）
+            0x0040_4040, // 等值增量
+        ],
+    };
+    let mut buf = vec![0u32; 4];
+    blit_orb_sprite_alpha(&mut buf, 2, 2, &sprite, 1.0, 1.0, 1.0);
+    // 弱增量像素：α = 最大通道 0x30，E = 去预乘满亮色相
+    let weak = buf[1]; // (sx1,sy0) 行主序
+    let a = (weak >> 24) & 0xFF;
+    let (r, g, b) = ((weak >> 16) & 0xFF, (weak >> 8) & 0xFF, weak & 0xFF);
+    assert_eq!(a, 0x30, "α = 加量最大通道");
+    assert_eq!(
+        (r, g, b),
+        (0xFF, 0x10 * 255 / 0x30, 0x20 * 255 / 0x30),
+        "E = 去预乘满亮色相（整除）"
+    );
+    // 守恒：α·E == 原加量（GPU 标准混合的加亮项逐像素还原增量）
+    let recover = |a: u32, e: u32| (a * e + 127) / 255;
+    assert!(
+        (recover(a, r) as i32 - 0x30).abs() <= 1
+            && (recover(a, g) as i32 - 0x10).abs() <= 1
+            && (recover(a, b) as i32 - 0x20).abs() <= 1,
+        "α·E 必须逐像素还原加量（加亮项守恒）"
+    );
+    // 强增量像素：α=255 直写满色（球心等价区）
+    let strong = buf[2]; // (sx0,sy1) 行主序
+    assert_eq!((strong >> 24) & 0xFF, 0xFF, "满增量 α=255");
+    // 全黑增量不落墨（雾外透形）
+    assert_eq!(buf[0], 0, "零增量像素保持透明");
+    // 雾形存在：buffer 里必须有 α<255 的像素（全不透明 = 黑块病复发）
+    assert!(
+        buf.iter().any(|p| *p != 0 && (*p >> 24) < 0xFF),
+        "半透雾必须存在（强转不透明 = BAR-066 复发）"
+    );
+}
+
+#[test]
+fn spec_bar066_光球over层入口_实弹契约() {
+    // render_alpha（over 层入口）实弹：真 D8 sprite 写进画布，判四条——
+    // 有墨、雾外透明、画出的像素全部 α=最大通道（写出契约）、半透雾存在
+    let (tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必须建得成");
+    let _ = &tv;
+    let (w, h) = (400u32, 400u32);
+    let mut buf = vec![0u32; (w * h) as usize];
+    kfm_na::ui::orb::render_alpha(&mut buf, w, h, 200.0, 200.0, 1.0, 1.0);
+    let painted: Vec<u32> = buf.iter().copied().filter(|p| *p != 0).collect();
+    assert!(!painted.is_empty(), "光球必须出墨");
+    // 去预乘契约：E 的最大通道恒为 255（α = 原加量最大通道已挪进高字节）
+    assert!(
+        painted.iter().all(|p| {
+            let (r, g, b) = ((p >> 16) & 0xFF, (p >> 8) & 0xFF, p & 0xFF);
+            r.max(g).max(b) == 0xFF
+        }),
+        "E 必须是满亮色相（去预乘契约）"
+    );
+    assert!(
+        painted.iter().any(|p| (*p >> 24) < 0xFF),
+        "半透雾必须存在（黑块病复发探针）"
+    );
+    // 远角不染色
+    assert_eq!(buf[0], 0, "远离球的角落不许染色");
+}
+
+#[test]
+fn spec_bar066_条件alpha_自带透明度直通() {
+    // mark_chrome_alpha 契约：纯零→透明；RGB 非零且无 α→强转不透明；
+    // 自带 α（光球）→原样直通（一刀切 |= 是黑块病根）
+    let mut px = vec![
+        0x0000_0000, // 纯黑 → 透明
+        0x0014_0a24, // AI 页暗紫（无 α）→ 强转不透明
+        0x3030_1020, // 光球半透（自带 α）→ 原样
+        0xFF14_0A24, // 已不透明 → 原样
+    ];
+    kfm_na::termview::mark_chrome_alpha(&mut px);
+    assert_eq!(px[0], 0);
+    assert_eq!(px[1], 0xFF14_0A24, "无 α 的可见内容必须不透明");
+    assert_eq!(px[2], 0x3030_1020, "自带 α 的光球像素必须直通");
+    assert_eq!(px[3], 0xFF14_0A24);
 }

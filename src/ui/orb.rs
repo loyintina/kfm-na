@@ -174,3 +174,72 @@ pub fn render(buf: &mut [u32], buf_w: u32, buf_h: u32, x: f64, y: f64, gain: f32
     let sprite = orb_sprite(halo_gain > 1.0);
     blit_orb_sprite(buf, buf_w, buf_h, sprite, x, y, gain);
 }
+
+/// 把 sprite 以 (cx,cy) 为心写进 chrome 层画布（BAR-066 半透出版，
+/// 2026-09-05 双层合成专用）：加法 sprite 在独立透明画布上没有真背景
+/// 可加，条件 alpha（纯黑=空白）又把暗色增量强转成不透明像素——实机
+/// 表现 = 光球背后一整块黑。这里改写 (α, E) 对：α = 加量最大通道，
+/// E = 去预乘满亮色相。GPU 标准混合的加亮项 α·E ≡ add·gain（逐像素
+/// 守恒），与加法合成的差异只剩雾尾 (1-α)·dst 的轻微压暗——球心
+/// α→1 逐像素等价，雾尾视觉即普通 UI 辉光。softbuffer 单层路径仍走
+/// blit_orb_sprite（真背景饱和加，不受此病）
+pub fn blit_orb_sprite_alpha(
+    buf: &mut [u32],
+    w: u32,
+    h: u32,
+    sprite: &OrbSprite,
+    cx: f64,
+    cy: f64,
+    gain: f32,
+) {
+    if gain <= 0.0 {
+        return;
+    }
+    let s = i64::from(sprite.size);
+    let (ox, oy) = (cx as i64 - s / 2, cy as i64 - s / 2);
+    for sy in 0..s {
+        let py = oy + sy;
+        if py < 0 || py >= i64::from(h) {
+            continue;
+        }
+        for sx in 0..s {
+            let px = ox + sx;
+            if px < 0 || px >= i64::from(w) {
+                continue;
+            }
+            let add = sprite.px[(sy * s + sx) as usize];
+            if add == 0 {
+                continue;
+            }
+            let ch = |shift: u32| {
+                let a = ((add >> shift) & 0xFF) as f32 * gain;
+                (a.round() as u32).min(0xFF)
+            };
+            let (r, g, b) = (ch(16), ch(8), ch(0));
+            let alpha = r.max(g).max(b);
+            if alpha == 0 {
+                continue;
+            }
+            let e = |v: u32| v * 255 / alpha;
+            let idx = (py * i64::from(w) + px) as usize;
+            buf[idx] = (alpha << 24) | (e(r) << 16) | (e(g) << 8) | e(b);
+        }
+    }
+}
+
+/// chrome 层半透渲染入口（render 的 over 层版，见 blit_orb_sprite_alpha）
+pub fn render_alpha(
+    buf: &mut [u32],
+    buf_w: u32,
+    buf_h: u32,
+    x: f64,
+    y: f64,
+    gain: f32,
+    halo_gain: f32,
+) {
+    if gain <= 0.0 || buf_w == 0 || buf_h == 0 {
+        return;
+    }
+    let sprite = orb_sprite(halo_gain > 1.0);
+    blit_orb_sprite_alpha(buf, buf_w, buf_h, sprite, x, y, gain);
+}

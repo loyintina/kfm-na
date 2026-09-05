@@ -180,7 +180,7 @@ pub fn dump_now(dir: &str) {
         }
         if let Some(s) = ai_snap {
             let (gain, halo_gain) = crate::ai_presence::orb_gain(s.ai_running, s.pressed, s.page);
-            t.render_orb(&mut buf, w, h, s.x, s.y, gain, halo_gain);
+            t.render_orb(&mut buf, w, h, s.x, s.y, gain, halo_gain, false);
         }
     }
     if maybe_dump(dir, &buf, w, h) {

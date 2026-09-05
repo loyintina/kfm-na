@@ -255,6 +255,12 @@ CPU 优化线顶上（§六分流）。
   hash/带状上传（§十一修复路径①）的收益翻倍，优先级上调。
 - softbuffer 兜底路径行为不变（单层全 CPU，scratch+blit 保留——
   立项书红线；该路径性能不再投入）。
+- **chrome 条件 alpha 契约扩版（BAR-066，2026-09-05 装机实看）**：
+  加法光球 sprite 画进透明 over 画布后，「纯黑=空白」一刀切强转把
+  暗色增量压成不透明黑块。扩版：mark_chrome_alpha（termview，纯逻辑）
+  只强转「RGB 非零且高字节为 0」的像素——光球改走 blit_orb_sprite_alpha
+  的 (α,E) 半透写出（α·E ≡ add·gain 加亮守恒，雾尾即普通辉光），
+  softbuffer 真背景饱和加不变。详见 bugs.md BAR-066。
 
 ## 十、期 1 第 1 层：壳内 EGL 基建（2026-09-04）
 

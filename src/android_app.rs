@@ -2293,6 +2293,7 @@ impl App {
         caret_on: bool,
         ai_snap: Option<crate::ai_presence::PresenceSnap>,
         magnifier_at: Option<(f64, f64)>,
+        orb_alpha_out: bool,
     ) {
         if let Some(bs) = bar_snap {
             term.render_inputbar(buf, w, h, ime_bottom_px, bs, sending, caret_on);
@@ -2300,7 +2301,7 @@ impl App {
         // 光球：四态增益硬切读 ai_presence::orb_gain（闲/运行/pressed/AI页）
         if let Some(s) = ai_snap {
             let (gain, halo_gain) = crate::ai_presence::orb_gain(s.ai_running, s.pressed, s.page);
-            term.render_orb(buf, w, h, s.x, s.y, gain, halo_gain);
+            term.render_orb(buf, w, h, s.x, s.y, gain, halo_gain, orb_alpha_out);
         }
         // 选区边界拖动中的放大镜浮窗
         if let Some((mx, my)) = magnifier_at {
@@ -2366,6 +2367,7 @@ impl App {
             caret_on,
             ai_snap,
             magnifier_at,
+            false,
         );
         Self::report_tofu(&mut **term);
         ai_layout
@@ -2538,11 +2540,7 @@ impl App {
                 panel_scratch,
                 Some(&mut ai_glyphs),
             );
-            for p in px.iter_mut() {
-                if *p & 0x00FF_FFFF != 0 {
-                    *p = 0xFF00_0000 | (*p & 0x00FF_FFFF);
-                }
-            }
+            crate::termview::mark_chrome_alpha(px);
             layout
         };
         let ras0_us = t_ras.elapsed().as_micros() as u64;
@@ -2624,13 +2622,10 @@ impl App {
                 caret_on,
                 ai_snap,
                 magnifier_at,
+                true,
             );
             Self::report_tofu(&mut **term);
-            for p in px.iter_mut() {
-                if *p & 0x00FF_FFFF != 0 {
-                    *p = 0xFF00_0000 | (*p & 0x00FF_FFFF);
-                }
-            }
+            crate::termview::mark_chrome_alpha(px);
             ras_us += t_over.elapsed().as_micros() as u64;
         }
         crate::gles_present::STAGE_GEN_US

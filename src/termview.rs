@@ -1586,8 +1586,16 @@ impl TermView {
         y: f64,
         gain: f32,
         halo_gain: f32,
+        alpha_out: bool,
     ) {
-        crate::ui::orb::render(buf, buf_w, buf_h, x, y, gain, halo_gain);
+        if alpha_out {
+            // chrome 层半透写出（GLES over 层——BAR-066：加法 sprite 在
+            // 透明画布上没有真背景可加，改 (α, E) 走 GPU 标准混合）
+            crate::ui::orb::render_alpha(buf, buf_w, buf_h, x, y, gain, halo_gain);
+        } else {
+            // 真背景饱和加（softbuffer 单层，画在已就位的页面之上）
+            crate::ui::orb::render(buf, buf_w, buf_h, x, y, gain, halo_gain);
+        }
     }
 
     /// 快捷键行标签：水平居中 + 垂直居中光栅文本。主字体缺字形走 CJK 备用
@@ -1898,6 +1906,21 @@ impl TermView {
                 }
                 frame.blend_px(x as u32, y as u32, fg, a);
             }
+        }
+    }
+}
+
+/// chrome 层条件 alpha（「纯黑=空白」契约，BAR-066 扩版）：RGB 非零且
+/// 高字节为 0 → 强转不透明（keybar/输入栏/AI 页底色的可见内容全为
+/// 非纯黑）；高字节非 0（光球半透像素自带 alpha）→ 原样直通；纯零 →
+/// 透明（网格层透出）。黑屏案 2026-09-05 教训：一刀切 |= alpha 会把
+/// chrome 变成不透明黑膜；光球半透案：一刀切会把 (alpha,E) 压成不
+/// 透明暗块。纯逻辑（A 档），android_app GLES 双层扫描调用方
+pub fn mark_chrome_alpha(px: &mut [u32]) {
+    for p in px.iter_mut() {
+        let rgb = *p & 0x00FF_FFFF;
+        if rgb != 0 && *p & 0xFF00_0000 == 0 {
+            *p = 0xFF00_0000 | rgb;
         }
     }
 }
@@ -2410,6 +2433,9 @@ pub trait TermEmu: Send {
         y: f64,
         gain: f32,
         halo_gain: f32,
+        // alpha_out：true = chrome 层半透写出（GLES over 层，BAR-066）；
+        // false = 真背景饱和加（softbuffer 单层 / screendump）
+        alpha_out: bool,
     );
     fn take_tofu_chars(&self) -> Vec<char>;
     fn scroll_lines(&mut self, lines: i32);
@@ -2545,8 +2571,9 @@ impl TermEmu for TermView {
         y: f64,
         gain: f32,
         halo_gain: f32,
+        alpha_out: bool,
     ) {
-        TermView::render_orb(self, buf, w, h, x, y, gain, halo_gain)
+        TermView::render_orb(self, buf, w, h, x, y, gain, halo_gain, alpha_out)
     }
     fn take_tofu_chars(&self) -> Vec<char> {
         TermView::take_tofu_chars(self)

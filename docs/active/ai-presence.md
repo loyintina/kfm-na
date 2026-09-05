@@ -563,3 +563,10 @@ px + 紫外发光，外缘距屏边 16px、下缘停在输入栏带上沿之上�
 考题：tests/fx_ease_spec.rs 七题（端点/时长分档/曲线形状/单调无过冲/
 占槽三通）——变异抽检：时长对调咬时长题、曲线对调咬形状题
 标签：C 档实拍改判
+2026-09-05 曲线升级：裸 ease-out 起步即峰值速度，大幅面实看不适
+（用户实看「动画用的不太对」）——换 Material emphasized 族（Android
+12+ 大面板转场用曲）：enter=emphasized cubic-bezier(0.2,0,0,1)（慢起-
+快中-缓收）、exit=emphasized-accelerate cubic-bezier(0.3,0,0.8,0.15)
+（MD3 离场规范值），时长照旧 350/250。求解器 cubic_bezier_y（二分
+24 轮）A 档钉：解析锚点 0.875@x=0.5（控制点 (0,1,1,1)）+ 单调扫。
+考题增至九题。

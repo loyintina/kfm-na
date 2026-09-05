@@ -154,3 +154,48 @@ fn spec_ease_占槽收敛停表() {
     assert_eq!(end, 0.0, "满时长贴死");
     assert!(!(o.is_active)(), "收敛后停表（夜判据红线：零额外帧）");
 }
+
+// ---- emphasized 族（2026-09-05 曲线升级：Material 大面板转场用曲） ----
+
+#[test]
+fn spec_ease_emphasized端点与形状() {
+    // 端点
+    assert_eq!(fx_ease::emphasized(0.0), 0.0);
+    assert_eq!(fx_ease::emphasized(1.0), 1.0);
+    assert_eq!(fx_ease::emphasized_accelerate(0.0), 0.0);
+    assert_eq!(fx_ease::emphasized_accelerate(1.0), 1.0);
+    // 形状签名：emphasized 慢起（t=0.1 进度 <25%）+ 前中段快（半程 >80%）
+    let early = fx_ease::emphasized(0.1);
+    assert!(early > 0.05 && early < 0.30, "慢起但非零速起步，得 {early}");
+    let half = fx_ease::emphasized(0.5);
+    assert!(half > 0.8, "emphasized 半程必须大幅过半，得 {half}");
+    // accelerate：慢起（半程 <25%）+ 末段呼啸（t=0.9 仍未到 0.75 的镜像位）
+    let ah = fx_ease::emphasized_accelerate(0.5);
+    assert!(ah < 0.25, "离场开头必须迟疑，得 {ah}");
+    let a9 = fx_ease::emphasized_accelerate(0.9);
+    assert!(a9 > ah && a9 < 0.95, "加速中段真在加速，得 {a9}");
+    // 单调扫（贝塞尔求解器不许产生回环）
+    let mut prev = 0.0;
+    for i in 1..=100 {
+        let t = i as f32 / 100.0;
+        let y = fx_ease::emphasized(t);
+        assert!(y >= prev - 1e-4 && y <= 1.0 + 1e-4, "emphasized t={t} 回环");
+        prev = y;
+    }
+    // 求解器直测（解析锚点）：bezier(0,1,1,1) 在 x=0.5 处 u=0.5 恰好，
+    // y = 3(1-u)u²·1 + 3(1-u)²u·1 + u³ = 0.875——二分 24 轮必须咬进 1e-3
+    let y = fx_ease::cubic_bezier_y(0.5, 0.0, 1.0, 1.0, 1.0);
+    assert!((y - 0.875).abs() < 1e-3, "求解器精度锚点，得 {y}");
+    let y0 = fx_ease::cubic_bezier_y(0.5, 0.5, 0.5, 0.5, 0.5);
+    assert!((y0 - 0.5).abs() < 1e-3, "恒等控制点 = 直线，得 {y0}");
+}
+
+#[test]
+fn spec_ease_面板用新曲线_半程判定仍在() {
+    // 换装后 panel_ease_pos 的既有形状契约不破：进场半程大幅过半、
+    // 离场半程未过半（与 spec_ease_曲线形状 同判据，曲线换了尺不换）
+    let half = fx_ease::panel_ease_pos(-2800.0, 0.0, fx_ease::ENTER_MS / 2);
+    assert!(half > -1400.0, "进场半程必须过半，得 {half}");
+    let half_up = fx_ease::panel_ease_pos(0.0, -2800.0, fx_ease::EXIT_MS / 2);
+    assert!(half_up > -1400.0, "离场半程必须未过半，得 {half_up}");
+}
