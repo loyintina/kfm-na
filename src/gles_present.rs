@@ -74,6 +74,8 @@ pub struct GlesPresent {
     atlas_rev: u64,
     /// 终极对照探针：常量绿三角（零属性零 uniform——绕开一切实例机制）
     probe_prog: glow::NativeProgram,
+    /// 缩略图已拍标记（墙钟触发，一次性）
+    thumb_sent: bool,
     /// 字形图集（数据所有权在此，跨帧缓存——第 2 层性能来源）
     atlas: crate::glyph_atlas::GlyphAtlas,
 }
@@ -189,6 +191,7 @@ impl GlesPresent {
             glyph_vbo,
             atlas_tex: Vec::new(),
             frames_presented: 0,
+            thumb_sent: false,
             probe_prog,
             atlas_rev: 0,
             atlas: crate::glyph_atlas::GlyphAtlas::new(2048, 2048),
@@ -820,7 +823,8 @@ impl GlesPresent {
             // GPU 合成缩略图回传（黑屏案判卷仪器）：整帧逐行回读 →
             // 1/10 抽样 → hex 分块飞鸽传书 → 服务器拼图转 PNG 亲眼看。
             // 仅第 3 帧拍一次（内容已稳定）
-            if GLS_READBACK_PROBE && self.frames_presented == 90 {
+            if GLS_READBACK_PROBE && !self.thumb_sent && crate::report::boot_ms() > 20_000 {
+                self.thumb_sent = true;
                 let tw = (self.w / 10) as usize;
                 let th = (self.h / 10) as usize;
                 let mut thumb = vec![0u8; tw * th * 3];
