@@ -820,7 +820,7 @@ impl GlesPresent {
             // GPU 合成缩略图回传（黑屏案判卷仪器）：整帧逐行回读 →
             // 1/10 抽样 → hex 分块飞鸽传书 → 服务器拼图转 PNG 亲眼看。
             // 仅第 3 帧拍一次（内容已稳定）
-            if GLS_READBACK_PROBE && self.frames_presented == 3 {
+            if GLS_READBACK_PROBE && self.frames_presented == 90 {
                 let tw = (self.w / 10) as usize;
                 let th = (self.h / 10) as usize;
                 let mut thumb = vec![0u8; tw * th * 3];
