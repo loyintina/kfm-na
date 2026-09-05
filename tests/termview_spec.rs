@@ -2516,3 +2516,51 @@ fn spec_ai页fit公式_饱和与裁剪() {
     assert_eq!(f(96, 0), 0, "恰好零内容高（只有顶底边距）");
     assert_eq!(f(50, 100), 0, "负余量 saturating 饱和为 0，不许下溢");
 }
+
+// ---- BAR-067：栏带半透契约（2026-09-05，chrome 层真 alpha 直通后还原
+// kfmv4 rgba(18,18,26,.85)——CPU 时代压平的不透明暗板在多行带高下成
+// 黑墙）----
+
+#[test]
+fn spec_bar067_栏带底_半透写出() {
+    // 栏带底色必须携带 CHROME_BAND_ALPHA（kfmv4 .85 半透还原）——
+    // 条件 alpha 直通后终端内容 15% 透出；不透明暗板 = 黑墙复发
+    let (tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必成");
+    let (w, h) = (600u32, 1200u32);
+    let mut buf = vec![0u32; (w * h) as usize];
+    let snap = kfm_na::input_bar::BarSnap {
+        text: "hi".to_string(),
+        focused: false,
+        lines: 1,
+        cursor: 0,
+        handle: false,
+        composing: String::new(),
+        scroll_px: 0,
+        follow: true,
+        selecting: false,
+        selection_start: 0,
+        selection_end: 0,
+    };
+    tv.render_inputbar(&mut buf, w, h, 0, &snap, false, false);
+    // 探针 = 带内左缘（MARGIN_X_PX 之外的带底区，避开键帽/发丝线/内芯）
+    let band_h = kfm_na::input_bar::height_for_lines(1);
+    let probe = buf[((h - band_h / 2) * w + 8) as usize];
+    assert_eq!(
+        (probe >> 24) & 0xFF,
+        kfm_na::theme::CHROME_BAND_ALPHA,
+        "栏带底必须携带半透 α"
+    );
+    assert_eq!(
+        probe & 0x00FF_FFFF,
+        0x0011_1119,
+        "RGB = 主题 bg（kfmv4 事后色）"
+    );
+    // 发丝线探针（带顶第 2 行，blend_px α=102 叠半透带上）：α 必须仍是
+    // 0xD9——blend_px 打掉 α 的旧病在此必红（装饰混合保透明度契约）
+    let hair = buf[((h - band_h + 1) * w + w / 2) as usize];
+    assert_eq!(
+        (hair >> 24) & 0xFF,
+        kfm_na::theme::CHROME_BAND_ALPHA,
+        "发丝线混合必须保留底 α（blend_px 保 α 契约）"
+    );
+}

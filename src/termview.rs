@@ -2150,7 +2150,12 @@ impl Frame<'_> {
     /// 单像素按覆盖率 a 混合（调用方保证 x/y 已在界内）
     pub(crate) fn blend_px(&mut self, x: u32, y: u32, fg: u32, a: u32) {
         let dst = &mut self.buf[(y * self.w + x) as usize];
-        *dst = blend(fg, *dst, a);
+        // BAR-067：装饰混合不改目标的透明度——chrome 层半透像素（栏带
+        // (α,E) 底）上叠发丝线/发光/veil 时，α 必须原样保留（否则掉回
+        // 0 被条件 alpha 强转成不透明补丁）。softbuffer 路径高字节恒 0，
+        // 保留位运算无影响
+        let keep = *dst & 0xFF00_0000;
+        *dst = keep | blend(fg, *dst, a);
     }
 
     /// 图钉柄一体光栅（BAR-052）：尖三角 + 肩部钝角圆角 + 圆角承载块，

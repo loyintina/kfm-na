@@ -61,22 +61,35 @@ fn spec_theme_换肤生效_控件只读token() {
         selection_start: 0,
         selection_end: 0,
     };
-    // 默认肤:栏带底 = 0x111119(fill_rect 直写,带内非渐变区逐像素相等)。
-    // 采样点取文本区下缘的带底留白(32px 区),别落进内芯渐变/发光里
+    // 默认肤:栏带底 RGB = 0x111119 + 高字节 = CHROME_BAND_ALPHA(BAR-067
+    // 半透契约,kfmv4 rgba(18,18,26,.85) 还原)。采样点取文本区下缘的带底
+    // 留白(32px 区),别落进内芯渐变/发光里
     let mut buf = vec![0u32; (w * h) as usize];
     tv.render_inputbar(&mut buf, w, h, 0, &snap, false, false);
     let band_mid = (h - 15) as usize * w as usize + (w / 2) as usize;
     assert_eq!(
-        buf[band_mid], 0x0011_1119,
-        "默认肤栏带底必须是 theme.bar.bg 的字面值"
+        buf[band_mid] & 0x00FF_FFFF,
+        0x0011_1119,
+        "默认肤栏带底 RGB 必须是 theme.bar.bg 的字面值"
+    );
+    assert_eq!(
+        (buf[band_mid] >> 24) & 0xFF,
+        kfm_na::theme::CHROME_BAND_ALPHA,
+        "栏带底必须携带半透 α(BAR-067)"
     );
     // 换肤:改 token 再倒帧,同一像素跟着变——渲染没偷读常量
     tv.theme.bar.bg = 0x00FF_8800;
     let mut buf2 = vec![0u32; (w * h) as usize];
     tv.render_inputbar(&mut buf2, w, h, 0, &snap, false, false);
     assert_eq!(
-        buf2[band_mid], 0x00FF_8800,
+        buf2[band_mid] & 0x00FF_FFFF,
+        0x00FF_8800,
         "换肤后栏带必须跟 token 走(控件只读 token 的存在理由)"
+    );
+    assert_eq!(
+        (buf2[band_mid] >> 24) & 0xFF,
+        kfm_na::theme::CHROME_BAND_ALPHA,
+        "换肤不动半透 α"
     );
     assert_ne!(buf[band_mid], buf2[band_mid]);
     // TermView 出厂默认肤 = Theme::default()(零行为变化的锚)

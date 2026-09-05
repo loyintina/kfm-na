@@ -10,6 +10,13 @@
 //! 终端选区 SELECT_BG 暂留 termview（终端线，28 道像素钉着），
 //! 后续 token 化跟随选择系统重构一起走。
 
+/// chrome 层栏带半透度（BAR-067，2026-09-05）：kfmv4 栏带原设计
+/// rgba(18,18,26,.85)——CPU 画布时代没有真 alpha 只能压平成「事后色」
+/// 不透明暗板，GLES 双层合成有真 alpha 直通后还原半透（终端内容 15%
+/// 透出，栏带不再是黑墙）。softbuffer 路径高字节被忽略 = 退化不透明，
+/// 可接受（兜底路径）
+pub const CHROME_BAND_ALPHA: u32 = 0xD9;
+
 /// 输入栏配色组（期 0 组件三）
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BarTheme {

@@ -95,7 +95,16 @@ impl crate::termview::TermView {
             w: buf_w,
             h: buf_h,
         };
-        frame.fill_rect(0, top, buf_w, bar_h, t.bg);
+        // 栏带底 = 半透（BAR-067）：kfmv4 rgba(18,18,26,.85) 还原——
+        // 高字节携带 α，GLES 条件 alpha 直通（mark_chrome_alpha），
+        // 终端内容 15% 透出；后续装饰 blend_px 保 α 不掉
+        frame.fill_rect(
+            0,
+            top,
+            buf_w,
+            bar_h,
+            (crate::theme::CHROME_BAND_ALPHA << 24) | t.bg,
+        );
         // 带顶渐变发丝线（kfmv4 border-image：紫→青→紫 α0.4，3px 物理）
         for py in 0..3u32 {
             for px in 0..buf_w {
