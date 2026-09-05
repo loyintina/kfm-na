@@ -2453,8 +2453,15 @@ impl App {
         // 画布已清 0——| 高位让 chrome 不透明、term 区保持全 0 透明，
         // chrome 纹理 alpha 混合时网格层透出）
         if gpu_mode {
+            let mut nnz = 0usize;
             for p in buf.iter_mut() {
+                if *p != 0 {
+                    nnz += 1;
+                }
                 *p |= 0xFF00_0000;
+            }
+            if nnz == 0 {
+                crate::report::report("gles-dbg", "cpu画布全零——rasterize 没画 chrome");
             }
         }
         // 画面回传由值守线程统一消费(gate::spawn_gate_watcher)——

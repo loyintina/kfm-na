@@ -612,47 +612,75 @@ impl GlesPresent {
                 gl.draw_arrays_instanced(glow::TRIANGLES, 0, 3, insts.len() as i32);
             }
 
-            // chrome 层（alpha 混合叠上）
+            // chrome 层（alpha 混合叠上）。黑屏判卷二分：左半屏走新
+            // chrome_prog，右半屏走上一代已验证管线（viewport 裁剪对照）
             gl.bind_texture(glow::TEXTURE_2D, Some(self.chrome_tex));
-            gl.use_program(Some(self.chrome_prog));
             gl.uniform_1_i32(
                 gl.get_uniform_location(self.chrome_prog, "u_tex").as_ref(),
                 0,
             );
+            gl.use_program(Some(self.chrome_prog));
+            gl.viewport(0, 0, (self.w / 2) as i32, self.h as i32);
             gl.bind_vertex_array(Some(self._vao));
             gl.draw_arrays(glow::TRIANGLES, 0, 3);
+            gl.use_program(Some(self.prog));
+            gl.viewport(
+                (self.w / 2) as i32,
+                0,
+                self.w as i32 - (self.w / 2) as i32,
+                self.h as i32,
+            );
+            gl.draw_arrays(glow::TRIANGLES, 0, 3);
+            gl.viewport(0, 0, self.w as i32, self.h as i32);
             gl.disable(glow::BLEND);
+            let e1 = gl.get_error();
 
             // 回读探针（黑屏案 2026-09-05）：swap 前采样三屏点 + GL 错误
             // 全扫——值直接飞鸽传书，GPU 真实输出不再靠肉眼转述
             if GLS_READBACK_PROBE {
-                let mut err = gl.get_error();
-                let mut errs = Vec::new();
-                while err != glow::NO_ERROR {
-                    errs.push(err);
-                    err = gl.get_error();
-                }
-                let sample = |x: i32, y: i32| -> [u8; 4] {
-                    let mut px = [0u8; 4];
-                    gl.read_pixels(
-                        x,
-                        y,
-                        1,
-                        1,
-                        glow::RGBA,
-                        glow::UNSIGNED_BYTE,
-                        glow::PixelPackData::Slice(Some(&mut px)),
-                    );
-                    px
-                };
-                let mid = sample((self.w / 2) as i32, (self.h / 2) as i32);
-                let keybar = sample((self.w / 2) as i32, (self.h as i32) - 400);
-                let top = sample((self.w / 2) as i32, 60);
+                let errs: Vec<u32> = [
+                    gl.get_error(),
+                    gl.get_error(),
+                    gl.get_error(),
+                    gl.get_error(),
+                ]
+                .into_iter()
+                .filter(|e| *e != glow::NO_ERROR)
+                .collect();
+                // 快捷键栏整行回读：非黑像素计数 + 最大通道
+                let y = (self.h as i32) - 400;
+                let mut row = vec![0u8; (self.w as usize) * 4];
+                gl.read_pixels(
+                    0,
+                    y,
+                    self.w as i32,
+                    1,
+                    glow::RGBA,
+                    glow::UNSIGNED_BYTE,
+                    glow::PixelPackData::Slice(Some(&mut row)),
+                );
+                let nonblack = row.chunks(4).filter(|p| p[0] + p[1] + p[2] > 12).count();
+                let maxc = row
+                    .chunks(4)
+                    .map(|p| p[0].max(p[1]).max(p[2]))
+                    .max()
+                    .unwrap_or(0);
+                // 左右半屏各一点（二分判卷）
+                let l = row[(self.w as usize / 4) * 4..(self.w as usize / 4) * 4 + 4].to_vec();
+                let r =
+                    row[(self.w as usize * 3 / 4) * 4..(self.w as usize * 3 / 4) * 4 + 4].to_vec();
+                // CPU 画布内容统计（rasterize 到底画没画）
+                let nnz = self.pixels.iter().filter(|p| **p != 0).count();
+                let alpha_tagged = self
+                    .pixels
+                    .iter()
+                    .filter(|p| (*p & 0xFF00_0000) != 0)
+                    .count();
                 crate::report::report(
                     "gles-dbg",
                     &format!(
-                        "mid={mid:?} keybar={keybar:?} top={top:?} gl_errs={errs:?} n={}",
-                        self.frames_presented
+                        "row2400 非黑={nonblack}/{} max={maxc} L={l:?} R={r:?} cpu画布非零={nnz} alpha位={alpha_tagged} errs={errs:?} pass_e={e1} n={}",
+                        self.w, self.frames_presented
                     ),
                 );
             }
