@@ -2418,6 +2418,7 @@ impl App {
             .max(0.0) as u32;
             let chat_scroll = self.ai_chat.as_ref().map_or(0, |c| c.scroll_offset());
             let chat_live = self.ai_chat.as_ref().is_some_and(|c| c.thinking_live());
+            let t_ras = std::time::Instant::now();
             let ai_layout = Self::rasterize(
                 tg.as_deref_mut(),
                 gpu_mode,
@@ -2436,6 +2437,12 @@ impl App {
                 panel_off,
                 &mut self.panel_scratch,
             );
+            if gpu_mode {
+                crate::gles_present::STAGE_RAS_US.fetch_add(
+                    t_ras.elapsed().as_micros() as u64,
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+            }
             // 布局写回视口状态机（眼手同尺：手势钳制与渲染同一份布局）
             if let (Some(chat), Some((total, fit))) = (&self.ai_chat, ai_layout) {
                 chat.scroll_sync_layout(total, fit);
@@ -2455,11 +2462,16 @@ impl App {
         // 黑屏案 2026-09-05 教训：一刀切 |= alpha 会让 chrome 变成不透明
         // 黑膜盖死整个画面
         if gpu_mode {
+            let t_alpha = std::time::Instant::now();
             for p in buf.iter_mut() {
                 if *p & 0x00FF_FFFF != 0 {
                     *p = 0xFF00_0000 | (*p & 0x00FF_FFFF);
                 }
             }
+            crate::gles_present::STAGE_ALPHA_US.fetch_add(
+                t_alpha.elapsed().as_micros() as u64,
+                std::sync::atomic::Ordering::Relaxed,
+            );
         }
         // 画面回传由值守线程统一消费(gate::spawn_gate_watcher)——
         // 挂起态事件循环叫不醒,前台顺帧消费那套在后台是死路,单一消费者

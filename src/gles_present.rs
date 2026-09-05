@@ -40,6 +40,33 @@ type Layer2 = (
 /// （五横行回读/品红实例/T3 三连/缩略图回传全套基础设施保留）
 const GLS_READBACK_PROBE: bool = false;
 
+// ---- 阶段耗时累计（微秒。性能优化判卷仪表：每 300 帧上报一次均值）----
+pub static STAGE_RAS_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static STAGE_ALPHA_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static STAGE_UPLOAD_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static STAGE_DRAW_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static STAGE_N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn stage_report() {
+    let n = STAGE_N.swap(0, std::sync::atomic::Ordering::Relaxed);
+    if n == 0 {
+        return;
+    }
+    let avg = |c: &std::sync::atomic::AtomicU64| {
+        c.swap(0, std::sync::atomic::Ordering::Relaxed) / n.max(1) / 1000
+    };
+    crate::report::report(
+        "gles-stage",
+        &format!(
+            "ras={}ms alpha={}ms upload={}ms draw={}ms /{n}帧",
+            avg(&STAGE_RAS_US),
+            avg(&STAGE_ALPHA_US),
+            avg(&STAGE_UPLOAD_US),
+            avg(&STAGE_DRAW_US),
+        ),
+    );
+}
+
 pub struct GlesPresent {
     egl: Egl,
     display: egl::Display,
@@ -477,6 +504,7 @@ impl GlesPresent {
 
     /// chrome 层纹理上传（尺寸变化重分配，否则子更新）
     fn upload_chrome(&mut self) {
+        let t0_up = std::time::Instant::now();
         let gl = &self.gl;
         unsafe {
             gl.bind_texture(glow::TEXTURE_2D, Some(self.chrome_tex));
@@ -534,6 +562,10 @@ impl GlesPresent {
                     glow::PixelUnpackData::Slice(Some(bytes)),
                 );
             }
+            STAGE_UPLOAD_US.fetch_add(
+                t0_up.elapsed().as_micros() as u64,
+                std::sync::atomic::Ordering::Relaxed,
+            );
         }
     }
 
@@ -591,6 +623,7 @@ impl GlesPresent {
         bg: &[crate::glyph_atlas::BgInstance],
         glyphs_by_page: &[Vec<crate::glyph_atlas::GlyphInstance>],
     ) {
+        let t0_draw = std::time::Instant::now();
         // chrome 层纹理上传（黑屏案 2026-09-05：漏了这步 = 不完整纹理
         // 采样恒 (0,0,0,1) 黑不透明，全屏 chrome 四边形把画面涂成一片黑）
         self.upload_chrome();
@@ -676,6 +709,14 @@ impl GlesPresent {
             gl.bind_vertex_array(Some(self._vao));
             gl.draw_arrays(glow::TRIANGLES, 0, 3);
             gl.disable(glow::BLEND);
+            STAGE_DRAW_US.fetch_add(
+                t0_draw.elapsed().as_micros() as u64,
+                std::sync::atomic::Ordering::Relaxed,
+            );
+            let n = STAGE_N.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            if n.is_multiple_of(300) {
+                stage_report();
+            }
 
             // GPU 合成缩略图回传（黑屏案判卷仪器）：整帧逐行回读 →
             // 1/10 抽样 → hex 分块飞鸽传书 → 服务器拼图转 PNG 亲眼看。
