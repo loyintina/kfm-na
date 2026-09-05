@@ -603,6 +603,17 @@ impl GlesPresent {
         // chrome 层纹理上传（黑屏案 2026-09-05：漏了这步 = 不完整纹理
         // 采样恒 (0,0,0,1) 黑不透明，全屏 chrome 四边形把画面涂成一片黑）
         self.upload_chrome();
+        // CPU 画布直接测量（rgb 非零计数 + 样本原值）——「画没画」的铁证
+        if GLS_READBACK_PROBE {
+            let rgb_nz = self.pixels.iter().filter(|p| *p & 0x00FF_FFFF != 0).count();
+            let mid = self.pixels[(self.h / 2) as usize * self.w as usize + (self.w / 2) as usize];
+            let keybar =
+                self.pixels[((self.h - 400) as usize) * self.w as usize + (self.w / 2) as usize];
+            crate::report::report(
+                "gles-dbg",
+                &format!("canvas rgb非零={rgb_nz} mid={mid:#010x} keybar={keybar:#010x}"),
+            );
+        }
         // 图集页增量上传（新页出现即补；同页重装由调用方触发全页重传）
         let need: Vec<(u32, u32, u32, Vec<u8>)> = self
             .atlas
