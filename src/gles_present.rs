@@ -36,8 +36,9 @@ type Layer2 = (
     glow::NativeTexture,
 );
 
-/// 回读探针开关（黑屏案 2026-09-05）：判卷期开，收队后关
-const GLS_READBACK_PROBE: bool = true;
+/// 回读探针开关（黑屏案 2026-09-05）：判卷仪器已收队，翻 true 可再开
+/// （五横行回读/品红实例/T3 三连/缩略图回传全套基础设施保留）
+const GLS_READBACK_PROBE: bool = false;
 
 pub struct GlesPresent {
     egl: Egl,
@@ -72,8 +73,6 @@ pub struct GlesPresent {
     /// 已上传的图集版本（图集 revision 变化 → 全页重传——首帧上传后
     /// 新字形只进 CPU coverage 不重传 = 字形全隐形的黑屏案 2026-09-05）
     atlas_rev: u64,
-    /// 终极对照探针：常量绿三角（零属性零 uniform——绕开一切实例机制）
-    probe_prog: glow::NativeProgram,
     /// 缩略图已拍标记（墙钟触发，一次性）
     thumb_sent: bool,
     /// 字形图集（数据所有权在此，跨帧缓存——第 2 层性能来源）
@@ -168,7 +167,6 @@ impl GlesPresent {
         // 不可感；帧率治理在泵侧（fx_frame_due ≤60fps）
         let _ = egl.swap_interval(display, 0);
         crate::report::report("boot", &format!("GLES: present 后端上线 {w}x{h}"));
-        let probe_prog = Self::build_probe(&gl)?;
         Ok(Self {
             egl,
             display,
@@ -192,50 +190,9 @@ impl GlesPresent {
             atlas_tex: Vec::new(),
             frames_presented: 0,
             thumb_sent: false,
-            probe_prog,
             atlas_rev: 0,
             atlas: crate::glyph_atlas::GlyphAtlas::new(2048, 2048),
         })
-    }
-
-    /// 终极对照探针：常量绿三角，零属性零 uniform 零实例——
-    /// 它不亮 = 帧缓冲/绘制调用层的问题；它亮 = 问题在实例/u_vp 链
-    fn build_probe(gl: &glow::Context) -> Result<glow::NativeProgram, String> {
-        unsafe {
-            let vs = gl.create_shader(glow::VERTEX_SHADER)?;
-            gl.shader_source(
-                vs,
-                "#version 300 es\n\
-                 void main(){\n\
-                 vec2 c=vec2[](vec2(-0.8,-0.4),vec2(-0.8,0.0),vec2(-0.4,-0.4))[gl_VertexID];\n\
-                 gl_Position=vec4(c,0.,1.);}",
-            );
-            gl.compile_shader(vs);
-            if !gl.get_shader_compile_status(vs) {
-                return Err(format!("probe VS: {}", gl.get_shader_info_log(vs)));
-            }
-            let fs = gl.create_shader(glow::FRAGMENT_SHADER)?;
-            gl.shader_source(
-                fs,
-                "#version 300 es\nprecision mediump float;\n\
-                 out vec4 o;\n\
-                 void main(){ o=vec4(0.,1.,0.,1.); }",
-            );
-            gl.compile_shader(fs);
-            if !gl.get_shader_compile_status(fs) {
-                return Err(format!("probe FS: {}", gl.get_shader_info_log(fs)));
-            }
-            let prog = gl.create_program()?;
-            gl.attach_shader(prog, vs);
-            gl.attach_shader(prog, fs);
-            gl.link_program(prog);
-            if !gl.get_program_link_status(prog) {
-                return Err(format!("probe link: {}", gl.get_program_info_log(prog)));
-            }
-            gl.delete_shader(vs);
-            gl.delete_shader(fs);
-            Ok(prog)
-        }
     }
 
     /// 期 1 第 2 层管线：chrome 全屏四边形 + 网格背景/字形实例化。
@@ -730,108 +687,6 @@ impl GlesPresent {
             gl.viewport(0, 0, self.w as i32, self.h as i32);
             gl.disable(glow::BLEND);
 
-            let e1 = gl.get_error();
-
-            // 三变量分离判卷（黑屏案 2026-09-05）：同一屏幕矩形
-            // (530..730, 2300..2500) 三种画法逐一回读——
-            // T1 无纹理品红(无混合) / T2 无纹理白(混合) / T3 chrome纹理(混合)
-            if GLS_READBACK_PROBE {
-                let rect: [u8; 20] = {
-                    let mut b = [0u8; 20];
-                    b[0..4].copy_from_slice(&530.0f32.to_ne_bytes());
-                    b[4..8].copy_from_slice(&2300.0f32.to_ne_bytes());
-                    b[8..12].copy_from_slice(&200.0f32.to_ne_bytes());
-                    b[12..16].copy_from_slice(&200.0f32.to_ne_bytes());
-                    b
-                };
-                gl.use_program(Some(self.bg_prog));
-                gl.bind_vertex_array(Some(self.bg_vao));
-                gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.bg_vbo));
-                let mut t1 = rect;
-                t1[16..20].copy_from_slice(&0x00FF_00FFu32.to_ne_bytes());
-                gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, &t1, glow::DYNAMIC_DRAW);
-                gl.draw_arrays_instanced(glow::TRIANGLES, 0, 3, 1);
-                let r1 = {
-                    let mut p = [0u8; 4];
-                    gl.read_pixels(
-                        630,
-                        400,
-                        1,
-                        1,
-                        glow::RGBA,
-                        glow::UNSIGNED_BYTE,
-                        glow::PixelPackData::Slice(Some(&mut p)),
-                    );
-                    p
-                };
-                let mut t2 = rect;
-                t2[16..20].copy_from_slice(&0x00FF_FFFFu32.to_ne_bytes());
-                gl.enable(glow::BLEND);
-                gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
-                gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, &t2, glow::DYNAMIC_DRAW);
-                gl.draw_arrays_instanced(glow::TRIANGLES, 0, 3, 1);
-                let r2 = {
-                    let mut p = [0u8; 4];
-                    gl.read_pixels(
-                        630,
-                        400,
-                        1,
-                        1,
-                        glow::RGBA,
-                        glow::UNSIGNED_BYTE,
-                        glow::PixelPackData::Slice(Some(&mut p)),
-                    );
-                    p
-                };
-                // T3 三连：同一全屏 quad，三种纹理/内容逐一回读
-                gl.use_program(Some(self.chrome_prog));
-                gl.uniform_1_i32(
-                    gl.get_uniform_location(self.chrome_prog, "u_tex").as_ref(),
-                    0,
-                );
-                let read = |gl: &glow::Context| {
-                    let mut p = [0u8; 4];
-                    gl.read_pixels(
-                        630,
-                        400,
-                        1,
-                        1,
-                        glow::RGBA,
-                        glow::UNSIGNED_BYTE,
-                        glow::PixelPackData::Slice(Some(&mut p)),
-                    );
-                    p
-                };
-                gl.active_texture(glow::TEXTURE0);
-                // T3a: chrome 纹理（现状）
-                gl.bind_texture(glow::TEXTURE_2D, Some(self.chrome_tex));
-                gl.draw_arrays(glow::TRIANGLES, 0, 3);
-                let r3a = read(gl);
-                // T3b: 换绑图集页纹理（已知有字形 coverage 内容）
-                gl.bind_texture(glow::TEXTURE_2D, Some(self.atlas_tex[0]));
-                gl.draw_arrays(glow::TRIANGLES, 0, 3);
-                let r3b = read(gl);
-                // T3c: 无纹理常量绿（quad+blend+程序本身健康性）
-                gl.bind_texture(glow::TEXTURE_2D, None);
-                gl.draw_arrays(glow::TRIANGLES, 0, 3);
-                let r3c = read(gl);
-                gl.disable(glow::BLEND);
-                crate::report::report(
-                    "gles-dbg",
-                    &format!(
-                        "T1={r1:?} T2={r2:?} T3achrome={r3a:?} T3batlas={r3b:?} T3c常量绿={r3c:?} n={}",
-                        self.frames_presented
-                    ),
-                );
-            }
-
-            // 终极对照：常量绿三角（最后画——不被任何层盖住）
-            if GLS_READBACK_PROBE {
-                gl.use_program(Some(self.probe_prog));
-                gl.bind_vertex_array(None);
-                gl.draw_arrays(glow::TRIANGLES, 0, 3);
-            }
-
             // GPU 合成缩略图回传（黑屏案判卷仪器）：整帧逐行回读 →
             // 1/10 抽样 → hex 分块飞鸽传书 → 服务器拼图转 PNG 亲眼看。
             // 仅第 3 帧拍一次（内容已稳定）
@@ -908,7 +763,6 @@ impl GlesPresent {
                 );
                 gl.draw_arrays_instanced(glow::TRIANGLES, 0, 3, 1);
             }
-            let e2 = gl.get_error();
 
             // 回读探针（黑屏案 2026-09-05）：swap 前采样三屏点 + GL 错误
             // 全扫——值直接飞鸽传书，GPU 真实输出不再靠肉眼转述
@@ -962,7 +816,7 @@ impl GlesPresent {
                 crate::report::report(
                     "gles-dbg",
                     &format!(
-                        "品红={probe_px:?} 绿={green_px:?} {} errs={errs:?} e1={e1} e2={e2} n={}",
+                        "品红={probe_px:?} 绿={green_px:?} {} errs={errs:?} n={}",
                         stats.join(" "),
                         self.frames_presented
                     ),
