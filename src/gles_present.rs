@@ -36,6 +36,9 @@ type Layer2 = (
     glow::NativeTexture,
 );
 
+/// 回读探针开关（黑屏案 2026-09-05）：判卷期开，收队后关
+const GLS_READBACK_PROBE: bool = true;
+
 pub struct GlesPresent {
     egl: Egl,
     display: egl::Display,
@@ -64,6 +67,8 @@ pub struct GlesPresent {
     glyph_vbo: glow::NativeBuffer,
     /// 图集页纹理（页索引对齐 GlyphAtlas.pages()）
     atlas_tex: Vec<glow::NativeTexture>,
+    /// 已呈现帧数（回读探针判卷用）
+    frames_presented: u64,
     /// 字形图集（数据所有权在此，跨帧缓存——第 2 层性能来源）
     atlas: crate::glyph_atlas::GlyphAtlas,
 }
@@ -175,6 +180,7 @@ impl GlesPresent {
             glyph_vao,
             glyph_vbo,
             atlas_tex: Vec::new(),
+            frames_presented: 0,
             atlas: crate::glyph_atlas::GlyphAtlas::new(2048, 2048),
         })
     }
@@ -613,8 +619,43 @@ impl GlesPresent {
             gl.bind_vertex_array(Some(self._vao));
             gl.draw_arrays(glow::TRIANGLES, 0, 3);
             gl.disable(glow::BLEND);
+
+            // 回读探针（黑屏案 2026-09-05）：swap 前采样三屏点 + GL 错误
+            // 全扫——值直接飞鸽传书，GPU 真实输出不再靠肉眼转述
+            if GLS_READBACK_PROBE {
+                let mut err = gl.get_error();
+                let mut errs = Vec::new();
+                while err != glow::NO_ERROR {
+                    errs.push(err);
+                    err = gl.get_error();
+                }
+                let sample = |x: i32, y: i32| -> [u8; 4] {
+                    let mut px = [0u8; 4];
+                    gl.read_pixels(
+                        x,
+                        y,
+                        1,
+                        1,
+                        glow::RGBA,
+                        glow::UNSIGNED_BYTE,
+                        glow::PixelPackData::Slice(Some(&mut px)),
+                    );
+                    px
+                };
+                let mid = sample((self.w / 2) as i32, (self.h / 2) as i32);
+                let keybar = sample((self.w / 2) as i32, (self.h as i32) - 400);
+                let top = sample((self.w / 2) as i32, 60);
+                crate::report::report(
+                    "gles-dbg",
+                    &format!(
+                        "mid={mid:?} keybar={keybar:?} top={top:?} gl_errs={errs:?} n={}",
+                        self.frames_presented
+                    ),
+                );
+            }
         }
         self.swap();
+        self.frames_presented += 1;
     }
 
     fn swap(&mut self) {
