@@ -151,8 +151,10 @@ impl GlesPresent {
         };
 
         let (prog, _tex_unused, vao) = Self::build_pipeline(&gl)?;
+        let size = window.inner_size();
+        let (w, h) = (size.width.max(1), size.height.max(1));
         let (chrome_prog, bg_prog, glyph_prog, bg_vao, bg_vbo, glyph_vao, glyph_vbo, chrome_tex) =
-            Self::build_layer2(&gl)?;
+            Self::build_layer2(&gl, w, h)?;
 
         let size = window.inner_size();
         let (w, h) = (size.width.max(1), size.height.max(1));
@@ -232,7 +234,7 @@ impl GlesPresent {
     /// 期 1 第 2 层管线：chrome 全屏四边形 + 网格背景/字形实例化。
     /// 四边形全用 3 倍超界大三角（角 (0,0),(0,3),(3,0)——目标矩形
     /// (W,H) 落在斜线 x/3W+y/3H=1 内侧 2/3 处，整格全覆盖无半像素缝）。
-    fn build_layer2(gl: &glow::Context) -> Result<Layer2, String> {
+    fn build_layer2(gl: &glow::Context, w: u32, h: u32) -> Result<Layer2, String> {
         unsafe {
             let vs = |src: &str, tag: &str| -> Result<glow::NativeShader, String> {
                 let s = gl.create_shader(glow::VERTEX_SHADER)?;
@@ -329,6 +331,18 @@ impl GlesPresent {
             };
 
             let chrome_tex = gl.create_texture()?;
+
+            // u_vp 就地写死（Gfx 生命周期 = 窗口尺寸生命周期，resize 即
+            // 重建管线）——黑屏案 2026-09-05：每帧 uniform 设置疑似静默
+            // 失效，改链接期一次写入
+            gl.use_program(Some(bg_prog));
+            let loc = gl.get_uniform_location(bg_prog, "u_vp");
+            crate::report::report("boot", &format!("GLES: bg u_vp loc={loc:?}"));
+            gl.uniform_2_f32(loc.as_ref(), w as f32, h as f32);
+            gl.use_program(Some(glyph_prog));
+            let loc2 = gl.get_uniform_location(glyph_prog, "u_vp");
+            crate::report::report("boot", &format!("GLES: glyph u_vp loc={loc2:?}"));
+            gl.uniform_2_f32(loc2.as_ref(), w as f32, h as f32);
 
             // 实例 VAO/VBO：bg（rect+color = 5×f32 = 20B）/glyph（+uv+fg = 9×f32 + page 对齐 = 40B）
             let bg_vao = gl.create_vertex_array()?;
@@ -606,17 +620,11 @@ impl GlesPresent {
             gl.viewport(0, 0, self.w as i32, self.h as i32);
             gl.clear_color(0.0, 0.0, 0.0, 1.0);
             gl.clear(glow::COLOR_BUFFER_BIT);
-            let vp = (self.w as f32, self.h as f32);
             gl.disable(glow::BLEND);
 
             // 背景
             if !bg.is_empty() {
                 gl.use_program(Some(self.bg_prog));
-                gl.uniform_2_f32(
-                    gl.get_uniform_location(self.bg_prog, "u_vp").as_ref(),
-                    vp.0,
-                    vp.1,
-                );
                 gl.bind_vertex_array(Some(self.bg_vao));
                 gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.bg_vbo));
                 gl.buffer_data_u8_slice(
@@ -631,11 +639,6 @@ impl GlesPresent {
             gl.enable(glow::BLEND);
             gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
             gl.use_program(Some(self.glyph_prog));
-            gl.uniform_2_f32(
-                gl.get_uniform_location(self.glyph_prog, "u_vp").as_ref(),
-                vp.0,
-                vp.1,
-            );
             gl.uniform_1_i32(
                 gl.get_uniform_location(self.glyph_prog, "u_tex").as_ref(),
                 0,
