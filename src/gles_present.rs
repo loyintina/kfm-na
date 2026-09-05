@@ -292,7 +292,7 @@ impl GlesPresent {
                      void main(){\n\
                      vec2 c=vec2[](vec2(0.,0.),vec2(0.,3.),vec2(3.,0.))[gl_VertexID];\n\
                      vec2 px=a_rect.xy+c*a_rect.zw;\n\
-                     v_local=c/3.;\n\
+                     v_local=c;\n\
                      v_color=a_color;\n\
                      gl_Position=vec4(px.x/u_vp.x*2.-1.,1.-px.y/u_vp.y*2.,0.,1.);\n\
                      }",
@@ -321,7 +321,7 @@ impl GlesPresent {
                      void main(){\n\
                      vec2 c=vec2[](vec2(0.,0.),vec2(0.,3.),vec2(3.,0.))[gl_VertexID];\n\
                      v_uv=a_uv.xy+c*a_uv.zw;\n\
-                     v_local=c/3.;\n\
+                     v_local=c;\n\
                      v_fg=a_fg;\n\
                      vec2 px=a_rect.xy+c*a_rect.zw;\n\
                      gl_Position=vec4(px.x/u_vp.x*2.-1.,1.-px.y/u_vp.y*2.,0.,1.);\n\
