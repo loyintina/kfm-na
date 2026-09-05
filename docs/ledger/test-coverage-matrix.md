@@ -41,7 +41,7 @@
 | `src/scroll.rs` | 5 | 5 | 0 | — |
 | `src/session.rs` | 8 | 8 | 0 | — |
 | `src/session_router.rs` | 10 | 10 | 0 | — |
-| `src/termview.rs` | 93 | 85 | 8 | AI_THINK_COLLAPSED FONT_CANDIDATES CJK_FONT_CANDIDATES load_cjk_font font_probe collect_gpu_cells MAG_HALF_COLS MAG_HALF_ROWS |
+| `src/termview.rs` | 93 | 86 | 7 | AI_THINK_COLLAPSED FONT_CANDIDATES CJK_FONT_CANDIDATES load_cjk_font font_probe MAG_HALF_COLS MAG_HALF_ROWS |
 | `src/trace.rs` | 12 | 8 | 4 | TRACE_CAP format_tail dump_all dump_tail |
 | `src/ui/ai_page.rs` | 7 | 7 | 0 | — |
 | `src/ui/fx_ease.rs` | 6 | 6 | 0 | — |

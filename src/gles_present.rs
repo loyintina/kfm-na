@@ -285,15 +285,15 @@ impl GlesPresent {
             let bg_vbo = gl.create_buffer()?;
             gl.bind_vertex_array(Some(bg_vao));
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(bg_vbo));
-            stride_attrib(gl, 0, 0, 20, true);
-            stride_attrib(gl, 1, 16, 20, true);
+            stride_attrib(gl, 0, 0, 20, true, true);
+            stride_attrib(gl, 1, 16, 20, false, true); // 颜色 = 归一化 ubyte
             let glyph_vao = gl.create_vertex_array()?;
             let glyph_vbo = gl.create_buffer()?;
             gl.bind_vertex_array(Some(glyph_vao));
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(glyph_vbo));
-            stride_attrib(gl, 0, 0, 40, true);
-            stride_attrib(gl, 1, 16, 40, true);
-            stride_attrib(gl, 2, 32, 40, true);
+            stride_attrib(gl, 0, 0, 40, true, true);
+            stride_attrib(gl, 1, 16, 40, true, true);
+            stride_attrib(gl, 2, 32, 40, false, true); // 前景色 = 归一化 ubyte
             gl.bind_vertex_array(None);
 
             Ok((
@@ -624,11 +624,26 @@ impl GlesPresent {
     }
 }
 
-/// 实例属性：归一化 ubyte/浮点通吃，stride 字节，divisor=1（每实例一次）
-unsafe fn stride_attrib(gl: &glow::Context, loc: u32, off: usize, stride: usize, instanced: bool) {
+/// 实例属性：float=true 读 4×f32；false 读 4×ubyte 归一化（颜色）
+/// stride 字节，divisor=1（每实例一次）。BAR-0xx 教训（2026-09-05 黑屏
+/// 案）：颜色槽按 FLOAT 配指针会读穿结构体边界——rect 16B + color 4B，
+/// FLOAT 版多吃的 12B 全是下一实例的垃圾。
+unsafe fn stride_attrib(
+    gl: &glow::Context,
+    loc: u32,
+    off: usize,
+    stride: usize,
+    float: bool,
+    instanced: bool,
+) {
     unsafe {
         gl.enable_vertex_attrib_array(loc);
-        gl.vertex_attrib_pointer_f32(loc, 4, glow::FLOAT, false, stride as i32, off as i32);
+        let ty = if float {
+            glow::FLOAT
+        } else {
+            glow::UNSIGNED_BYTE
+        };
+        gl.vertex_attrib_pointer_f32(loc, 4, ty, !float, stride as i32, off as i32);
         if instanced {
             gl.vertex_attrib_divisor(loc, 1);
         }
