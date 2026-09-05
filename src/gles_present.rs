@@ -520,6 +520,29 @@ impl GlesPresent {
         let gl = &self.gl;
         unsafe {
             gl.bind_texture(glow::TEXTURE_2D, Some(self.chrome_tex));
+            // 黑屏案终凶（2026-09-05）：默认 MIN_FILTER = NEAREST_MIPMAP_LINEAR
+            // 而本纹理无 mipmap → 纹理不完整 → 采样恒 (0,0,0,1) 黑不透明，
+            // chrome 全屏四边形每帧涂黑全屏盖死所有层。NEAREST + CLAMP 补上
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MIN_FILTER,
+                glow::NEAREST as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MAG_FILTER,
+                glow::NEAREST as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_WRAP_S,
+                glow::CLAMP_TO_EDGE as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_WRAP_T,
+                glow::CLAMP_TO_EDGE as i32,
+            );
             gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
             let bytes: &[u8] = std::slice::from_raw_parts(
                 self.pixels.as_ptr() as *const u8,
