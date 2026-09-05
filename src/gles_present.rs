@@ -644,7 +644,18 @@ impl GlesPresent {
                     .collect();
                 // 五横行回读：横幅/终端上/终端中/快捷键行/输入栏
                 // （单点采样会落在合法黑区——整行非黑计数才判得准）
-                let rows = [140i32, 300, 1400, 2350, 2700];
+                let rows = [1050i32, 140, 300, 1400, 2350, 2700];
+                // 探针点：品红方块中心 (150,1050)——RGBA 应读 [255,0,255,255]
+                let mut probe_px = [0u8; 4];
+                gl.read_pixels(
+                    150,
+                    1050,
+                    1,
+                    1,
+                    glow::RGBA,
+                    glow::UNSIGNED_BYTE,
+                    glow::PixelPackData::Slice(Some(&mut probe_px)),
+                );
                 let mut stats = Vec::new();
                 for y in rows {
                     let mut row = vec![0u8; (self.w as usize) * 4];
@@ -663,7 +674,7 @@ impl GlesPresent {
                 crate::report::report(
                     "gles-dbg",
                     &format!(
-                        "{} errs={errs:?} pass_e={e1} n={}",
+                        "probe={probe_px:?} {} errs={errs:?} pass_e={e1} n={}",
                         stats.join(" "),
                         self.frames_presented
                     ),
