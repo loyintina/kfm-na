@@ -69,6 +69,8 @@ pub struct GlesPresent {
     atlas_tex: Vec<glow::NativeTexture>,
     /// 已呈现帧数（回读探针判卷用）
     frames_presented: u64,
+    /// 终极对照探针：常量绿三角（零属性零 uniform——绕开一切实例机制）
+    probe_prog: glow::NativeProgram,
     /// 字形图集（数据所有权在此，跨帧缓存——第 2 层性能来源）
     atlas: crate::glyph_atlas::GlyphAtlas,
 }
@@ -159,6 +161,7 @@ impl GlesPresent {
         // 不可感；帧率治理在泵侧（fx_frame_due ≤60fps）
         let _ = egl.swap_interval(display, 0);
         crate::report::report("boot", &format!("GLES: present 后端上线 {w}x{h}"));
+        let probe_prog = Self::build_probe(&gl)?;
         Ok(Self {
             egl,
             display,
@@ -181,8 +184,49 @@ impl GlesPresent {
             glyph_vbo,
             atlas_tex: Vec::new(),
             frames_presented: 0,
+            probe_prog,
             atlas: crate::glyph_atlas::GlyphAtlas::new(2048, 2048),
         })
+    }
+
+    /// 终极对照探针：常量绿三角，零属性零 uniform 零实例——
+    /// 它不亮 = 帧缓冲/绘制调用层的问题；它亮 = 问题在实例/u_vp 链
+    fn build_probe(gl: &glow::Context) -> Result<glow::NativeProgram, String> {
+        unsafe {
+            let vs = gl.create_shader(glow::VERTEX_SHADER)?;
+            gl.shader_source(
+                vs,
+                "#version 300 es\n\
+                 void main(){\n\
+                 vec2 c=vec2[](vec2(-0.8,-0.4),vec2(-0.8,0.0),vec2(-0.4,-0.4))[gl_VertexID];\n\
+                 gl_Position=vec4(c,0.,1.);}",
+            );
+            gl.compile_shader(vs);
+            if !gl.get_shader_compile_status(vs) {
+                return Err(format!("probe VS: {}", gl.get_shader_info_log(vs)));
+            }
+            let fs = gl.create_shader(glow::FRAGMENT_SHADER)?;
+            gl.shader_source(
+                fs,
+                "#version 300 es\nprecision mediump float;\n\
+                 out vec4 o;\n\
+                 void main(){ o=vec4(0.,1.,0.,1.); }",
+            );
+            gl.compile_shader(fs);
+            if !gl.get_shader_compile_status(fs) {
+                return Err(format!("probe FS: {}", gl.get_shader_info_log(fs)));
+            }
+            let prog = gl.create_program()?;
+            gl.attach_shader(prog, vs);
+            gl.attach_shader(prog, fs);
+            gl.link_program(prog);
+            if !gl.get_program_link_status(prog) {
+                return Err(format!("probe link: {}", gl.get_program_info_log(prog)));
+            }
+            gl.delete_shader(vs);
+            gl.delete_shader(fs);
+            Ok(prog)
+        }
     }
 
     /// 期 1 第 2 层管线：chrome 全屏四边形 + 网格背景/字形实例化。
@@ -633,6 +677,13 @@ impl GlesPresent {
             gl.draw_arrays(glow::TRIANGLES, 0, 3);
             gl.viewport(0, 0, self.w as i32, self.h as i32);
             gl.disable(glow::BLEND);
+
+            // 终极对照：常量绿三角（最后画——不被任何层盖住）
+            if GLS_READBACK_PROBE {
+                gl.use_program(Some(self.probe_prog));
+                gl.bind_vertex_array(None);
+                gl.draw_arrays(glow::TRIANGLES, 0, 3);
+            }
             let e1 = gl.get_error();
 
             // 回读探针（黑屏案 2026-09-05）：swap 前采样三屏点 + GL 错误
@@ -648,10 +699,11 @@ impl GlesPresent {
                 // 探针点：品红方块中心。glReadPixels y 从底部起算——
                 // 屏幕 (200,1100) = GL (200,1700)。上轮读 (150,1050) =
                 // 屏幕 y1750，在方块外——探针自身坐标翻转教训
+                // 绿三角中心：clip(-0.667,-0.267) → px(210, GL y1026)
                 let mut probe_px = [0u8; 4];
                 gl.read_pixels(
-                    200,
-                    1700,
+                    210,
+                    1026,
                     1,
                     1,
                     glow::RGBA,
