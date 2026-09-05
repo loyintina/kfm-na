@@ -542,6 +542,9 @@ impl GlesPresent {
         bg: &[crate::glyph_atlas::BgInstance],
         glyphs_by_page: &[Vec<crate::glyph_atlas::GlyphInstance>],
     ) {
+        // chrome 层纹理上传（黑屏案 2026-09-05：漏了这步 = 不完整纹理
+        // 采样恒 (0,0,0,1) 黑不透明，全屏 chrome 四边形把画面涂成一片黑）
+        self.upload_chrome();
         // 图集页增量上传（新页出现即补；同页重装由调用方触发全页重传）
         let need: Vec<(u32, u32, u32, Vec<u8>)> = self
             .atlas
