@@ -704,13 +704,95 @@ impl GlesPresent {
             gl.viewport(0, 0, self.w as i32, self.h as i32);
             gl.disable(glow::BLEND);
 
+            let e1 = gl.get_error();
+
+            // 三变量分离判卷（黑屏案 2026-09-05）：同一屏幕矩形
+            // (530..730, 2300..2500) 三种画法逐一回读——
+            // T1 无纹理品红(无混合) / T2 无纹理白(混合) / T3 chrome纹理(混合)
+            if GLS_READBACK_PROBE {
+                let rect: [u8; 20] = {
+                    let mut b = [0u8; 20];
+                    b[0..4].copy_from_slice(&530.0f32.to_ne_bytes());
+                    b[4..8].copy_from_slice(&2300.0f32.to_ne_bytes());
+                    b[8..12].copy_from_slice(&200.0f32.to_ne_bytes());
+                    b[12..16].copy_from_slice(&200.0f32.to_ne_bytes());
+                    b
+                };
+                gl.use_program(Some(self.bg_prog));
+                gl.bind_vertex_array(Some(self.bg_vao));
+                gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.bg_vbo));
+                let mut t1 = rect;
+                t1[16..20].copy_from_slice(&0x00FF_00FFu32.to_ne_bytes());
+                gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, &t1, glow::DYNAMIC_DRAW);
+                gl.draw_arrays_instanced(glow::TRIANGLES, 0, 3, 1);
+                let r1 = {
+                    let mut p = [0u8; 4];
+                    gl.read_pixels(
+                        630,
+                        400,
+                        1,
+                        1,
+                        glow::RGBA,
+                        glow::UNSIGNED_BYTE,
+                        glow::PixelPackData::Slice(Some(&mut p)),
+                    );
+                    p
+                };
+                let mut t2 = rect;
+                t2[16..20].copy_from_slice(&0x00FF_FFFFu32.to_ne_bytes());
+                gl.enable(glow::BLEND);
+                gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
+                gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, &t2, glow::DYNAMIC_DRAW);
+                gl.draw_arrays_instanced(glow::TRIANGLES, 0, 3, 1);
+                let r2 = {
+                    let mut p = [0u8; 4];
+                    gl.read_pixels(
+                        630,
+                        400,
+                        1,
+                        1,
+                        glow::RGBA,
+                        glow::UNSIGNED_BYTE,
+                        glow::PixelPackData::Slice(Some(&mut p)),
+                    );
+                    p
+                };
+                gl.bind_texture(glow::TEXTURE_2D, Some(self.chrome_tex));
+                gl.use_program(Some(self.chrome_prog));
+                gl.uniform_1_i32(
+                    gl.get_uniform_location(self.chrome_prog, "u_tex").as_ref(),
+                    0,
+                );
+                gl.draw_arrays(glow::TRIANGLES, 0, 3);
+                let r3 = {
+                    let mut p = [0u8; 4];
+                    gl.read_pixels(
+                        630,
+                        400,
+                        1,
+                        1,
+                        glow::RGBA,
+                        glow::UNSIGNED_BYTE,
+                        glow::PixelPackData::Slice(Some(&mut p)),
+                    );
+                    p
+                };
+                gl.disable(glow::BLEND);
+                crate::report::report(
+                    "gles-dbg",
+                    &format!(
+                        "T1无纹理={r1:?} T2混合白={r2:?} T3纹理={r3:?} n={}",
+                        self.frames_presented
+                    ),
+                );
+            }
+
             // 终极对照：常量绿三角（最后画——不被任何层盖住）
             if GLS_READBACK_PROBE {
                 gl.use_program(Some(self.probe_prog));
                 gl.bind_vertex_array(None);
                 gl.draw_arrays(glow::TRIANGLES, 0, 3);
             }
-            let e1 = gl.get_error();
 
             // 终审实验：品红实例挪到所有层之后重画——它若现身，
             // 实例化/属性/u_vp 全部无罪，凶手是绘制顺序/覆盖；仍黑 =
