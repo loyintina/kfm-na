@@ -45,7 +45,7 @@
 | `src/theme.rs` | 1 | 1 | 0 | — |
 | `src/trace.rs` | 12 | 8 | 4 | TRACE_CAP format_tail dump_all dump_tail |
 | `src/ui/ai_page.rs` | 7 | 7 | 0 | — |
-| `src/ui/fx_ease.rs` | 9 | 9 | 0 | — |
+| `src/ui/fx_ease.rs` | 8 | 8 | 0 | — |
 | `src/ui/fx_spring.rs` | 4 | 4 | 0 | — |
 | `src/ui/keybar.rs` | 1 | 1 | 0 | — |
 | `src/ui/orb.rs` | 5 | 5 | 0 | — |

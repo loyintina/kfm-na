@@ -1,13 +1,12 @@
 //! fx_ease.rs — ui-fx 的定时缓动件：AI 面板落下/收起曲线（2026-09-04
 //! 用户拍板：下落 ease-out、收起 ease-in——CSS transition 语言，取代
 //! 弹簧的物理墩感；同日实测定档 350ms/250ms。弹簧退役到键盘 inset
-//! 缝独占，见 fx_spring.rs。2026-09-05 曲线升级：裸 ease-out 起步即
-//! 峰值速度，大幅面实看不适——换 Material emphasized 族（Android 12+
-//! 大面板转场用曲），enter=emphasized(0.2,0,0,1) / exit=
-//! emphasized-accelerate(0.3,0,0.8,0.15)，时长照旧 350/250）。
+//! 缝独占，见 fx_spring.rs。曲线沿革：09-05 裸 ease-out → Material
+//! emphasized（起步即峰值速度，用户判「不符合直觉」）；09-06 定稿
+//! **物理重力**——落下 t²（自由落体精确解：起步静止、线性加速、砸到
+//! 底），收起 1-(1-t)²（镜像旅程），时长 350/250 照旧）。
 //!
-//! 方向分档：目标 > 起点（向 0 靠泊 = 进场落下）= ease-out；反之为离场
-//! 收起 = ease-in。纯函数零墙钟（A 档钉）；占缝采样自给自足——目标值
+//! 方向分档：进场落下 = 重力 t²；离场收起 = 镜像减速。纯函数零墙钟（A 档钉）；占缝采样自给自足——目标值
 //! 变化即从当前值重定基续走（来回狂点位置不跳变）；首采样直通不重放
 //! （冷启动/插件热装不补演一场）。
 
@@ -30,47 +29,16 @@ pub fn ease_in_cubic(t: f32) -> f32 {
     t.powi(3)
 }
 
-/// 三次贝塞尔单分量：B(u) = 3(1-u)²u·P1 + 3(1-u)u²·P2 + u³
-fn bezier_component(u: f32, p1: f32, p2: f32) -> f32 {
-    let om = 1.0 - u;
-    3.0 * om * om * u * p1 + 3.0 * om * u * u * p2 + u * u * u
+/// 物理重力落下（2026-09-06 用户拍板「换符合直觉的」）：大面板从上方
+/// 落下 = 自由落体——起步静止、线性加速、砸到底。位移 ∝ t² 是匀加速
+/// 运动的精确解，不是近似
+pub fn gravity_fall(t: f32) -> f32 {
+    t * t
 }
 
-/// CSS cubic-bezier(x1,y1,x2,y2) 求值（A 档纯函数）：x(u) 单调
-/// （x1,x2 ∈ (0,1)）→ 二分解 u（24 轮，亚 1e-4 px 精度）→ 代入 y(u)。
-/// Material Design 3 emphasized 曲线的实现底座
-pub fn cubic_bezier_y(x: f32, x1: f32, y1: f32, x2: f32, y2: f32) -> f32 {
-    if x <= 0.0 {
-        return 0.0;
-    }
-    if x >= 1.0 {
-        return 1.0;
-    }
-    let mut lo = 0.0_f32;
-    let mut hi = 1.0_f32;
-    for _ in 0..24 {
-        let mid = (lo + hi) / 2.0;
-        if bezier_component(mid, x1, x2) < x {
-            lo = mid;
-        } else {
-            hi = mid;
-        }
-    }
-    let u = (lo + hi) / 2.0;
-    bezier_component(u, y1, y2)
-}
-
-/// Material emphasized（cubic-bezier(0.2, 0, 0, 1)）：Android 12+ 全系统
-/// 大面板转场用曲——慢起、快中、缓收，两端都缓（裸 ease-out 的起步即
-/// 峰值速度在大幅面上显得「突然起跳」，2026-09-05 用户实看不适换装）
-pub fn emphasized(t: f32) -> f32 {
-    cubic_bezier_y(t, 0.2, 0.0, 0.0, 1.0)
-}
-
-/// Material emphasized-accelerate（cubic-bezier(0.3, 0, 0.8, 0.15)）：
-/// 离场加速——开头迟疑、末段呼啸离屏（MD3 规范值）
-pub fn emphasized_accelerate(t: f32) -> f32 {
-    cubic_bezier_y(t, 0.3, 0.0, 0.8, 0.15)
+/// 收起 = 落下的镜像旅程（面板原路回去）：减速上升，1-(1-t)²
+pub fn rise_release(t: f32) -> f32 {
+    1.0 - (1.0 - t) * (1.0 - t)
 }
 
 /// 方向分档定时缓动（纯函数）：from → target，elapsed_ms 时刻的位置。
@@ -82,9 +50,9 @@ pub fn panel_ease_pos(from: f32, target: f32, elapsed_ms: u64) -> f32 {
         return target;
     }
     let (dur, ease) = if d > 0.0 {
-        (ENTER_MS, emphasized as fn(f32) -> f32)
+        (ENTER_MS, gravity_fall as fn(f32) -> f32)
     } else {
-        (EXIT_MS, emphasized_accelerate as fn(f32) -> f32)
+        (EXIT_MS, rise_release as fn(f32) -> f32)
     };
     if elapsed_ms >= dur {
         return target;

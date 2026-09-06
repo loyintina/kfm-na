@@ -204,81 +204,125 @@ fn paint_ai_frame_ring(
         return;
     }
     let (fw, fh) = ((fx1 - fx0) as u32, (fy1 - fy0) as u32);
-    // 发光（矩形外部，沿 SDF 向外二次衰减）——glow_round_rect 同款配方
-    // （r 不钳、内部 d<=0 归主体、alpha*t² 衰减），只换裁剪 iteration
-    let r = AI_PAGE_FRAME_R;
-    let spread = 14u32;
+    let r = i64::from(AI_PAGE_FRAME_R);
+    let rc = r.min((fw / 2).min(fh / 2) as i64);
+    let w = i64::from(AI_PAGE_FRAME_W);
+    let spread = 14i64;
     let (gc, ga) = (AI_PAGE_FRAME_C2, 64u32);
-    paint_rr_clipped(frame, fx0, fy0, fw, fh, r, |cov, lx, ly| {
-        let _ = cov;
-        let d = rr_sdf(lx as f32 + 0.5, ly as f32 + 0.5, fw, fh, r);
-        if d <= 0.0 {
-            return None; // 内部归主体画
-        }
-        let t = (1.0 - d / spread as f32).max(0.0);
-        let a = (ga as f32 * t * t) as u32;
-        if a > 0 { Some((gc, a)) } else { None }
-    });
-    // 135° 渐变外环（fill_round_rect_grad diag 同式：t = lx+ly 归一）
     let denom = ((fw - 1) + (fh - 1)).max(1);
     let (c1, c2) = (AI_PAGE_FRAME_C1, AI_PAGE_FRAME_C2);
-    paint_rr_clipped(frame, fx0, fy0, fw, fh, r, |cov, lx, ly| {
-        if cov == 0 {
-            return None;
-        }
-        let color = lerp_rgb(c1, c2, ((lx + ly) * 255 / denom).min(255));
-        Some((color, cov))
-    });
-    // 内芯 punch（左缘 3 倍粗：x 让 3W，其余让 W）——fill_round_rect
-    // 同款（cov==255 直写底色，弧边 blend）
-    let w = AI_PAGE_FRAME_W;
-    let ix = fx0 + i64::from(w) * 3;
-    let iy = fy0 + i64::from(w);
-    let iw = ((fx1 - i64::from(w)) - ix).max(0) as u32;
-    let ih = ((fy1 - i64::from(w)) - iy).max(0) as u32;
-    let punch_r = r - w;
-    paint_rr_clipped(frame, ix, iy, iw, ih, punch_r, |cov, _lx, _ly| {
-        if cov == 0 {
-            None
-        } else {
-            Some((AI_PAGE_BG, cov))
-        }
-    });
-}
 
-/// i64 原点裁剪版圆角矩形墨刷（面板过渡帧专用）：ink(cov, lx, ly) →
-/// Some((颜色, alpha))；cov==255 && alpha==255 直写，其余 blend_px
-/// （与 Frame 同规）。相位保持——局部坐标 (lx, ly) 相对真实原点折算，
-/// 只迭代屏内行；直接钳原点调 Frame 系列会把圆角弧与渐变相位一起
-/// 错位（用户逐帧看动画，不许）
-fn paint_rr_clipped(
-    frame: &mut Frame<'_>,
-    rx: i64,
-    ry: i64,
-    rw: u32,
-    rh: u32,
-    r_cover: u32,
-    ink: impl Fn(u32, u32, u32) -> Option<(u32, u32)>,
-) {
-    let r = r_cover.min(rw / 2).min(rh / 2);
-    let x0 = rx.max(0);
-    let y0 = ry.max(0);
-    let x1 = (rx + i64::from(rw)).min(i64::from(frame.w));
-    let y1 = (ry + i64::from(rh)).min(i64::from(frame.h));
-    if x1 <= x0 || y1 <= y0 {
+    // 带切（2026-09-06 ras 40ms→8ms）：三种墨的可能墨域都只是矩形周边
+    // 的薄带——整包围盒逐像素 SDF 的 95% 是零墨或被 punch 覆盖的废访。
+    // 各层给「每行列跨度」安全超集，墨函数一字不动（配方钉判逐像素）。
+    //   发光：角带行（±spread）全宽，中带行只左右缘条；
+    //   渐变：角带行（rc+w）全宽，中带行左缘 3w/右缘 w 条；
+    //   punch：中带是纯底色 fill_rect（一次调用），只有上下角带逐像素。
+    let mut spans = Vec::with_capacity(2);
+    let row_spans = |ly: i64, spans: &mut Vec<(i64, i64)>| {
+        spans.clear();
+        // 发光行带
+        if ly >= -spread && ly < i64::from(fh) + spread {
+            if ly < rc + spread || ly >= i64::from(fh) - rc - spread {
+                spans.push((fx0 - spread - 1, fx0 + i64::from(fw) + spread + 1));
+            } else {
+                spans.push((fx0 - spread - 1, fx0 + 1));
+                spans.push((fx0 + i64::from(fw) - 1, fx0 + i64::from(fw) + spread + 1));
+            }
+        }
+        // 渐变行带
+        if ly >= 0 && ly < i64::from(fh) {
+            if ly < rc + w || ly >= i64::from(fh) - rc - w {
+                spans.push((fx0, fx0 + i64::from(fw)));
+            } else {
+                spans.push((fx0, fx0 + w * 3));
+                spans.push((fx0 + i64::from(fw) - w, fx0 + i64::from(fw)));
+            }
+        }
+    };
+
+    let y0 = (fy0 - spread).max(0);
+    let y1 = (fy0 + i64::from(fh) + spread).min(i64::from(frame.h));
+    let mut cur_row = i64::MIN;
+    for ay in y0..y1 {
+        let ly = ay - fy0;
+        if cur_row != ly {
+            cur_row = ly;
+            row_spans(ly, &mut spans);
+        }
+        for (sx0, sx1) in &spans {
+            let ax0 = (*sx0).max(0).max(fx0 - spread - 1);
+            let ax1 = (*sx1).min(i64::from(frame.w));
+            for ax in ax0..ax1 {
+                let lx = (ax - fx0) as u32;
+                let lyy = ly.max(0).min(i64::from(fh) - 1) as u32;
+                let cov = rr_cover(lx, lyy, fw, fh, rc as u32);
+                // 发光（矩形外部，沿 SDF 向外二次衰减）
+                let d = rr_sdf(lx as f32 + 0.5, lyy as f32 + 0.5, fw, fh, r as u32);
+                if d > 0.0 {
+                    let t = (1.0 - d / spread as f32).max(0.0);
+                    let a = (ga as f32 * t * t) as u32;
+                    if a > 0 {
+                        frame.blend_px(ax as u32, ay as u32, gc, a);
+                    }
+                }
+                // 渐变外环（135° 对角，t = lx+ly 归一）
+                if cov > 0 {
+                    let color = lerp_rgb(c1, c2, ((lx + lyy) * 255 / denom).min(255));
+                    if cov == 255 {
+                        frame.buf[ay as usize * frame.w as usize + ax as usize] = color;
+                    } else {
+                        frame.blend_px(ax as u32, ay as u32, color, cov);
+                    }
+                }
+            }
+        }
+    }
+    // 内芯 punch：左缘 3 倍粗（x 让 3W，其余让 W）——中带纯底色一次
+    // fill_rect，上下角带逐像素（弧边 blend）
+    let ix = fx0 + w * 3;
+    let iy = fy0 + w;
+    let iw = ((fx1 - w) - ix).max(0) as u32;
+    let ih = ((fy1 - w) - iy).max(0) as u32;
+    let punch_r = (r - w).min((iw / 2).min(ih / 2) as i64);
+    if iw == 0 || ih == 0 {
         return;
     }
-    for ay in y0..y1 {
-        let ly = (ay - ry) as u32;
-        for ax in x0..x1 {
-            let lx = (ax - rx) as u32;
-            if let Some((color, a)) = ink(rr_cover(lx, ly, rw, rh, r), lx, ly)
-                && a > 0
-            {
-                if a == 255 {
-                    frame.buf[ay as usize * frame.w as usize + ax as usize] = color;
+    if i64::from(ih) > 2 * punch_r {
+        let my0 = (iy + punch_r).max(0);
+        let my1 = (iy + i64::from(ih) - punch_r).min(i64::from(frame.h));
+        if my1 > my0 {
+            let rx0 = ix.max(0);
+            let rx1 = (ix + i64::from(iw)).min(i64::from(frame.w));
+            if rx1 > rx0 {
+                frame.fill_rect(
+                    rx0 as u32,
+                    my0 as u32,
+                    (rx1 - rx0) as u32,
+                    (my1 - my0) as u32,
+                    AI_PAGE_BG,
+                );
+            }
+        }
+    }
+    let py0 = (iy).max(0);
+    let py1 = (iy + i64::from(ih)).min(i64::from(frame.h));
+    for ay in py0..py1 {
+        let lyy = (ay - iy) as u32;
+        let in_corner = lyy < punch_r as u32 || lyy >= ih - punch_r as u32;
+        if !in_corner {
+            continue; // 中带已 fill_rect
+        }
+        let ax0 = ix.max(0);
+        let ax1 = (ix + i64::from(iw)).min(i64::from(frame.w));
+        for ax in ax0..ax1 {
+            let lx = (ax - ix) as u32;
+            let cov = rr_cover(lx, lyy, iw, ih, punch_r as u32);
+            if cov > 0 {
+                if cov == 255 {
+                    frame.buf[ay as usize * frame.w as usize + ax as usize] = AI_PAGE_BG;
                 } else {
-                    frame.blend_px(ax as u32, ay as u32, color, a);
+                    frame.blend_px(ax as u32, ay as u32, AI_PAGE_BG, cov);
                 }
             }
         }
@@ -2057,8 +2101,19 @@ impl Frame<'_> {
         let y0 = (y - spread).max(0);
         let x1 = (x + i64::from(w) + spread).min(i64::from(self.w));
         let y1 = (y + i64::from(h) + spread).min(i64::from(self.h));
+        // 带切（2026-09-06）：中带行（矩形竖直中段）的墨只存在于左右
+        // spread 缘条——内部像素 d<=0 全是零墨废访（输入栏 field 光晕
+        // 480k 次 SDF 的 ~85%）。角带行（含上下外扩）保持全宽
+        let rc = i64::from(r)
+            .min(w.max(1) as i64 / 2)
+            .min(h.max(1) as i64 / 2);
         for ay in y0..y1 {
+            let ly = ay - y;
+            let corner_row = ly < rc + spread || ly >= i64::from(h) - rc - spread;
             for ax in x0..x1 {
+                if !corner_row && ax >= x && ax < x + i64::from(w) {
+                    continue; // 中带行的矩形内部：零墨
+                }
                 let d = rr_sdf((ax - x) as f32 + 0.5, (ay - y) as f32 + 0.5, w, h, r);
                 if d <= 0.0 {
                     continue; // 内部归主体画
