@@ -255,10 +255,9 @@ fn paint_ai_frame_ring(
             let ax1 = (*sx1).min(i64::from(frame.w));
             for ax in ax0..ax1 {
                 let lx = (ax - fx0) as u32;
-                let lyy = ly.max(0).min(i64::from(fh) - 1) as u32;
-                let cov = rr_cover(lx, lyy, fw, fh, rc as u32);
-                // 发光（矩形外部，沿 SDF 向外二次衰减）
-                let d = rr_sdf(lx as f32 + 0.5, lyy as f32 + 0.5, fw, fh, r as u32);
+                // 发光：真实 ly（可为负——矩形外的辉光带；钳 0 会把框外
+                // 误判成框缘，铸成上下粗边，2026-09-06 装机实看 BAR-069）
+                let d = rr_sdf(lx as f32 + 0.5, ly as f32 + 0.5, fw, fh, r as u32);
                 if d > 0.0 {
                     let t = (1.0 - d / spread as f32).max(0.0);
                     let a = (ga as f32 * t * t) as u32;
@@ -266,13 +265,17 @@ fn paint_ai_frame_ring(
                         frame.blend_px(ax as u32, ay as u32, gc, a);
                     }
                 }
-                // 渐变外环（135° 对角，t = lx+ly 归一）
-                if cov > 0 {
-                    let color = lerp_rgb(c1, c2, ((lx + lyy) * 255 / denom).min(255));
-                    if cov == 255 {
-                        frame.buf[ay as usize * frame.w as usize + ax as usize] = color;
-                    } else {
-                        frame.blend_px(ax as u32, ay as u32, color, cov);
+                // 渐变外环（135° 对角，t = lx+ly 归一）——只在矩形行内：
+                // 框外行没有渐变墨（发光带不是边框）
+                if ly >= 0 && ly < i64::from(fh) {
+                    let cov = rr_cover(lx, ly as u32, fw, fh, rc as u32);
+                    if cov > 0 {
+                        let color = lerp_rgb(c1, c2, ((lx + ly as u32) * 255 / denom).min(255));
+                        if cov == 255 {
+                            frame.buf[ay as usize * frame.w as usize + ax as usize] = color;
+                        } else {
+                            frame.blend_px(ax as u32, ay as u32, color, cov);
+                        }
                     }
                 }
             }

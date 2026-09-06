@@ -1227,3 +1227,41 @@ fn spec_bar068_光球叠加_不透明底退化饱和加法() {
     );
     assert_eq!((out >> 24) & 0xFF, 0xFF, "饱和加出全亮 = α 满");
 }
+
+// ---- 带切回归钉（2026-09-06）：框外行不得有渐变墨 ----
+// 带切版环一度把发光行的 lyy 钳 0，框外 14px 被刷成渐变 C1/C2 厚边
+//（用户实看「上下两个粗边」）。钉：框顶上方/框底下方 spread 带内，
+// 中线处必须是底色或低 α 辉光，绝不允许出现满 α 渐变墨。
+
+#[test]
+fn spec_冒烟_ai页框外_无渐变厚边() {
+    use kfm_na::termview as tvv;
+    let (tv, _, _) = tvv::build_vendored().expect("内嵌字体必须建得成");
+    let (w, h) = (800u32, 600u32);
+    let mut buf = vec![0u32; (w * h) as usize];
+    tv.render_ai_page(&mut buf, w, h, &[], 0, 0, false);
+    let m = tvv::AI_PAGE_FRAME_MARGIN;
+    let s = 14u32; // 发光 spread
+    let mid_x = w / 2;
+    // 框顶上方 spread 带内（不含发光正常衰减区）：不许出现满 α 渐变墨
+    // ——发光最多 α64 且随距离衰减，任何「等于 C1/C2 纯色」的像素即回归
+    let bad = |p: u32| p == tvv::AI_PAGE_FRAME_C1 || p == tvv::AI_PAGE_FRAME_C2;
+    for y in (m - s - 2)..m {
+        assert!(
+            !bad(buf[(y * w + mid_x) as usize]),
+            "框顶上方 y={y} 出现满 α 渐变墨（带切回归：框外刷边）"
+        );
+    }
+    for y in (h - m + 1)..(h - m + s + 2).min(h) {
+        assert!(
+            !bad(buf[(y * w + mid_x) as usize]),
+            "框底下方 y={y} 出现满 α 渐变墨（带切回归：框外刷边）"
+        );
+    }
+    // 框缘本身照旧：缘内 1px 必须是渐变墨（配方不因带切而丢）
+    assert_ne!(
+        buf[((m + 1) * w + mid_x) as usize],
+        tvv::AI_PAGE_BG,
+        "框缘渐变墨必须在"
+    );
+}
