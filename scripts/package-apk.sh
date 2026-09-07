@@ -29,6 +29,9 @@ else
     BT="$SDK/build-tools/34.0.0"
     AJAR="$SDK/platforms/android-35/android.jar"
     JAVAC=/root/kfm-na-toolchain/jdk/bin/javac
+    # d8 包装脚本内部裸调 `java`（2026-09-08 实拍：javac 全路径过了，
+    # d8 却 exec: java: not found）——jdk bin 进 PATH 治本
+    export PATH="/root/kfm-na-toolchain/jdk/bin:$PATH"
     D8="$BT/d8"
     AAPT2="$BT/aapt2"
     ZIPALIGN="$BT/zipalign"

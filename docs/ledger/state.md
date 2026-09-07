@@ -23,6 +23,12 @@
   毛刺 28~37→15~25ms（减半未根除，归因推测=动画首帧 CPU 提频爬坡，
   非烘焙成本——均值证明动画期零光栅零上传成立）。遗留≤1 掉帧/
   动画，用户手感再议；fps 推算 208~472 为预算口径（pump 封顶 60）。
+- **versionCode 段位修正（2026-09-08）**：计数器文件被更早时钟写歪
+  （1,789,300,033=未来日期残留），低于装机版 1,789,600,041 →「已安装
+  更高版本」拒装。已种回过渡段（=装机版值，下一包 +1 严格递增）；
+  epoch 自动计数在段位过渡期失效，以计数器文件为唯一事实源。
+  另：服务器打包分支 jdk bin 进 PATH（d8 裸调 java 不在 PATH 曾断
+  打包）。
 - **B 软件内录（2026-09-08，P2 显示真相）**：KfmRecService（MediaProjection
   + MediaCodec Surface 编码 + MediaMuxer → rec.mp4 落 files/usr/tmp）；
   Android 14+ 纪律=mediaProjection 类型前台服务+授权弹窗一次（token
