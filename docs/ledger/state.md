@@ -23,6 +23,13 @@
   毛刺 28~37→15~25ms（减半未根除，归因推测=动画首帧 CPU 提频爬坡，
   非烘焙成本——均值证明动画期零光栅零上传成立）。遗留≤1 掉帧/
   动画，用户手感再议；fps 推算 208~472 为预算口径（pump 封顶 60）。
+- **软件内截屏（2026-09-08，观测完备性第一步）**：shot-gles-req 双触发
+  文件协议——GLES 帧路径消费时倒「真·GPU 合成帧」（pre-swap
+  readPixels 全分辨率，含图层/AI 文字最终 z 序），na-shot.sh 优先取
+  gl 版、静态屏回退 CPU 重画版（零竞态）；换序对偶 rgba_bytes_to_xrgb
+  纯函数落 gate（host 考题钉）。**na-shot 从此看见的是用户眼睛看到的
+  帧内容**（撕裂线除外——那属于 B 软件内录 MediaProjection 的辖区，
+  Java 皮+APK 重打，立项待排）。
 - **呈现节奏观测基建（2026-09-07 晚，用户报「拖影变多」三路径判卷）**：
   P1=panel-anim 扩容（swap 间隔 min/avg/max + Choreographer vsync 对表
   dlsym libandroid——真刷新率/相位对齐，动画期挂表守零空转纪律）；

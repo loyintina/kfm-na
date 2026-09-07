@@ -501,3 +501,47 @@ fn spec_包装层_control与take_replay() {
         "取走即清"
     );
 }
+
+// 软件内截屏通道（2026-09-07）：RGBA→XRGB 换序对偶——glReadPixels 逐像
+// 素 [R,G,B,A]，encode_rgb 吃 XRGB u32 出 [B,G,R,X'] 文件序，na-shot 的
+// PIL 'BGRA' 直读。round-trip 钉：换序→encode 必须还原原始字节序。
+#[test]
+fn spec_软件内截屏_rgba换序对偶() {
+    use kfm_na::gate::{encode_rgb, rgba_bytes_to_xrgb};
+    // 一个像素的端到端：gl 给 [R,G,B,A] → 换序 u32 → encode 出 [B,G,R,A]
+    let rgba = [0x11u8, 0x22, 0x33, 0xAA];
+    let px = rgba_bytes_to_xrgb(&rgba);
+    assert_eq!(px, vec![0xAA11_2233]);
+    assert_eq!(encode_rgb(&px), vec![0x33, 0x22, 0x11, 0xAA]);
+    // 多像素 + 已知值：纯红 [FF,00,00,FF] → 文件序 [00,00,FF,FF]
+    let reds = vec![0xFFu8, 0x00, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF];
+    let out = encode_rgb(&rgba_bytes_to_xrgb(&reds));
+    assert_eq!(out, vec![0x00, 0x00, 0xFF, 0xFF, 0x00, 0xFF, 0x00, 0xFF]);
+    // 非整像素长度不动它（chunks_exact 容忍尾巴——GPU 回读恒 4 对齐）
+    assert!(rgba_bytes_to_xrgb(&[1, 2, 3]).is_empty());
+}
+
+// 软件内截屏文件通道（B 档冒烟钉）：shot-gles-req 触发/摘除/拒无触发
+// 三态，写盘协议与 maybe_dump 同构（rgb+dim 成对）。
+#[test]
+fn spec_软件内截屏_gl触发通道三态() {
+    let dir = std::env::temp_dir().join(format!("shotgl-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let d = dir.to_str().unwrap();
+    // ① 无触发文件 = 拒
+    assert!(!kfm_na::gate::shot_gl_requested(d));
+    assert!(!kfm_na::gate::write_shot_gl(d, &[0], 1, 1));
+    // ② 有触发 = 倒盘成对 + 摘触发（单次触发单次倒）
+    std::fs::write(dir.join("shot-gles-req"), b"").unwrap();
+    assert!(kfm_na::gate::shot_gl_requested(d));
+    assert!(kfm_na::gate::write_shot_gl(d, &[0xAA11_2233], 1, 1));
+    assert!(!kfm_na::gate::shot_gl_requested(d), "倒完必须摘触发");
+    assert_eq!(
+        std::fs::read(dir.join("shot-gl.rgb")).unwrap(),
+        vec![0x33, 0x22, 0x11, 0xAA]
+    );
+    assert_eq!(std::fs::read(dir.join("shot-gl.dim")).unwrap(), b"1 1");
+    // ③ 再倒 = 拒（触发已摘，不会拿旧帧顶包）
+    assert!(!kfm_na::gate::write_shot_gl(d, &[0], 1, 1));
+    let _ = std::fs::remove_dir_all(&dir);
+}

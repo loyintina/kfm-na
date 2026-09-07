@@ -20,26 +20,37 @@ gate() {
 }
 
 shoot() {
-    # 先清场再触发:等待信号 = shot.rgb 和 shot.dim「重新出现」(不存在秒级时间戳 race)
-    gate "rm -f $NA_TMP/shot.rgb $NA_TMP/shot.dim; touch $NA_TMP/shot-req" >/dev/null
-    local ok=""
-    for _ in $(seq 1 30); do
+    # 先清场再触发:等待信号 = 「重新出现」（不存在秒级时间戳 race）。
+    # 双触发零竞态（2026-09-07 软件内截屏）：shot-gles-req = 真·GLES 合成
+    # 帧（前台画帧时消费，观测真相）；静态屏无帧可消费 → 回退 shot.rgb
+    # （值守 CPU 重画，画面没动过内容等价，后台也活）
+    gate "rm -f $NA_TMP/shot.rgb $NA_TMP/shot.dim $NA_TMP/shot-gl.rgb $NA_TMP/shot-gl.dim; touch $NA_TMP/shot-req $NA_TMP/shot-gles-req" >/dev/null
+    local which=rgb ok=""
+    for _ in $(seq 1 16); do
         sleep 0.5
-        if gate "test -f $NA_TMP/shot.rgb -a -f $NA_TMP/shot.dim"; then
-            ok=1; break
+        if gate "test -f $NA_TMP/shot-gl.rgb -a -f $NA_TMP/shot-gl.dim"; then
+            which=gl; ok=1; break
         fi
     done
     if [ -z "$ok" ]; then
-        echo "❌ 15 秒内没等到 na 倒帧 —— 触发器没被消费"
+        for _ in $(seq 1 30); do
+            sleep 0.5
+            if gate "test -f $NA_TMP/shot.rgb -a -f $NA_TMP/shot.dim"; then
+                ok=1; break
+            fi
+        done
+    fi
+    if [ -z "$ok" ]; then
+        echo "❌ 23 秒内没等到 na 倒帧 —— 触发器没被消费"
         gate "test -f $NA_TMP/shot-req" >/dev/null \
             && echo "   触发文件还在:na 没有在画帧。应用在前台吗?把它切到前台再拍。"
         return 1
     fi
     local dim
-    dim=$(gate "cat $NA_TMP/shot.dim")
+    dim=$(gate "cat $NA_TMP/shot-$which.dim")
     scp -P 8024 -i "$NA_KEY" -o BatchMode=yes -o StrictHostKeyChecking=no \
-        "localhost:$NA_TMP/shot.rgb" /tmp/na-shot.rgb >/dev/null
-    "$PY" - $dim <<'EOF'
+        "localhost:$NA_TMP/shot-$which.rgb" /tmp/na-shot.rgb >/dev/null
+    "$PY" - $dim <<EOF
 import sys
 from PIL import Image
 w, h = int(sys.argv[1]), int(sys.argv[2])
@@ -47,6 +58,7 @@ raw = open('/tmp/na-shot.rgb', 'rb').read()
 assert len(raw) == w * h * 4, f"尺寸对不上: {len(raw)} != {w}*{h}*4"
 img = Image.frombytes('RGBA', (w, h), raw, 'raw', 'BGRA')
 img.convert('RGB').save('/tmp/na-shot.png')
+print('来源: shot-$which (gl=GPU 合成帧 / rgb=CPU 重画)')
 EOF
     echo "✅ /tmp/na-shot.png($dim)"
 }

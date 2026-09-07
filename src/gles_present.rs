@@ -1185,6 +1185,14 @@ impl GlesPresent {
                 );
             }
         }
+        // A 软件内截屏（shot-gles-req，2026-09-07）：倒的是真·GLES 合成
+        // 帧（pre-swap readPixels 全分辨率，含图层槽位/AI 文字最终 z 序）
+        // ——CPU 重画通道的真相升级。静态屏无帧可消费时 na-shot 回退
+        // shot.rgb（画面没动过，内容等价）
+        if crate::gate::shot_gl_requested(crate::gate::DUMP_DIR) {
+            let buf = self.capture_full();
+            crate::gate::write_shot_gl(crate::gate::DUMP_DIR, &buf, self.w, self.h);
+        }
         // P3 渲染源采样（偶数轮武装）：readPixels 有停顿只落采样轮；
         // 每 5 帧一拍（21 帧动画取 ~4 帧），1/14 缩略
         if CAPTURE_ON.load(std::sync::atomic::Ordering::Relaxed)
@@ -1264,6 +1272,26 @@ impl GlesPresent {
             }
         }
         Some((tw as u32, th as u32, thumb))
+    }
+
+    /// 全分辨率合成帧回读（shot-gles-req 消费方，swap 前调用——读的
+    /// 是本帧 GL 合成结果；1260×2800 RGBA ≈ 14MB，仅触发帧付此代价）
+    fn capture_full(&self) -> Vec<u32> {
+        let n = (self.w * self.h) as usize;
+        let mut rgba = vec![0u8; n * 4];
+        let gl = &self.gl;
+        unsafe {
+            gl.read_pixels(
+                0,
+                0,
+                self.w as i32,
+                self.h as i32,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelPackData::Slice(Some(&mut rgba)),
+            );
+        }
+        crate::gate::rgba_bytes_to_xrgb(&rgba)
     }
 
     fn swap(&mut self) {

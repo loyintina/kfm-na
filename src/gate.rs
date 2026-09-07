@@ -492,6 +492,43 @@ pub fn maybe_dump(dir: &str, buf: &[u32], w: u32, h: u32) -> bool {
     true
 }
 
+// ---- 通道一·GLES 分册（2026-09-07 软件内截屏）：shot-gles-req →
+// 真·合成帧倒盘。与 shot-req 双文件并行零竞态：GLES 前台画帧时消费
+// gl 版（真 GPU 合成帧，含图层槽位/AI 文字实例的最终 z 序），静态屏
+// 无帧可消费时 na-shot 回退 CPU 重画版（内容等价——画面没动过）。
+
+/// glReadPixels 逐像素 [R,G,B,A] → XRGB u32 帧（to_le_bytes 后即
+/// [B,G,R,A'] 文件序，na-shot 的 PIL 'BGRA' 直读）。纯函数放这：
+/// host 考题可钉，GLES 侧只调用
+pub fn rgba_bytes_to_xrgb(rgba: &[u8]) -> Vec<u32> {
+    rgba.chunks_exact(4)
+        .map(|p| {
+            u32::from(p[3]) << 24 | u32::from(p[0]) << 16 | u32::from(p[1]) << 8 | u32::from(p[2])
+        })
+        .collect()
+}
+
+/// shot-gles-req 触发文件在不在（GLES 帧路径每帧轻探）
+pub fn shot_gl_requested(dir: &str) -> bool {
+    Path::new(dir).join("shot-gles-req").exists()
+}
+
+/// GLES 合成帧倒盘（协议与 maybe_dump 同构：shot-gl.rgb + shot-gl.dim，
+/// 单次触发单次倒，倒完摘触发；文件 IO 失败不致命）
+pub fn write_shot_gl(dir: &str, buf: &[u32], w: u32, h: u32) -> bool {
+    let trigger = Path::new(dir).join("shot-gles-req");
+    if !trigger.exists() {
+        return false;
+    }
+    let _ = std::fs::remove_file(&trigger);
+    let rgb = encode_rgb(buf);
+    if std::fs::write(Path::new(dir).join("shot-gl.rgb"), rgb).is_err() {
+        return false;
+    }
+    let _ = std::fs::write(Path::new(dir).join("shot-gl.dim"), format!("{w} {h}"));
+    true
+}
+
 // ---- 飞行记录仪（2026-08-24 自观测·确定性回放，与用户定） ----
 //
 // 一切会话 Output 经泵的 rec 见证回调全量带名落带，resize 事件同带——
