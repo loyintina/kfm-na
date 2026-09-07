@@ -42,6 +42,16 @@ impl<S: PartialEq> DirtyGuard<S> {
     }
 }
 
+/// 每帧槽位可见性（纯逻辑单源，BAR-070 回归钉）：GLES 图层化首版
+/// 漏设上层槽 visible（默认 false 恒不画）→ 输入栏/光球/放大镜集体
+/// 隐身（2026-09-07 用户实看）。三个槽的可见性判定从这一处出——
+/// 上层 chrome（输入栏/光球/放大镜）是常驻层，任何状态都可见；
+/// na-shot（值守 CPU 路径）看不见这类槽位病，判卷人=用户眼睛。
+/// 返回 [键行, 面板, 上层]
+pub fn slot_visibility(grid_keybar: bool, panel_visible: bool) -> [bool; 3] {
+    [grid_keybar, panel_visible, true]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

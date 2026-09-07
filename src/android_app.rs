@@ -2561,9 +2561,14 @@ impl App {
         // 2026-09-05 教训：一刀切 |= alpha 会变成不透明黑膜）
         let t_ras = std::time::Instant::now();
         let bottom_inset = ime + bar_h;
-        // 键行槽：面板未靠泊才可见（靠泊时被面板盖住；烘焙物常驻纹理，
-        // 面板收起重现身零成本）。sig=render_keybar 读的每个输入
-        g.set_slot_visible(crate::gles_present::ChromeSlot::Keybar, grid_keybar);
+        // 三槽可见性单源（BAR-070：图层化首版漏设上层槽 → 输入栏/光球/
+        // 放大镜集体隐身——可见性判定收进纯逻辑，每帧三槽都从这出）
+        let slot_vis = crate::ui::stage::slot_visibility(grid_keybar, panel_visible);
+        g.set_slot_visible(crate::gles_present::ChromeSlot::Keybar, slot_vis[0]);
+        g.set_slot_visible(crate::gles_present::ChromeSlot::Panel, slot_vis[1]);
+        g.set_slot_visible(crate::gles_present::ChromeSlot::Over, slot_vis[2]);
+        // 键行槽烘焙：sig=render_keybar 读的每个输入（靠泊时槽隐藏，
+        // 烘焙物常驻纹理，面板收起重现身零成本）
         if grid_keybar && sigs.keybar.feed((mods, ime, bar_h, w, h)) {
             let px = g.slot_canvas(crate::gles_present::ChromeSlot::Keybar);
             px.fill(0);
@@ -2575,7 +2580,6 @@ impl App {
         }
         // 面板槽：烘焙画布恒为靠泊位（panel_off=0 画），位移交给合成
         // placement——这就是「动画零光栅」的承载点
-        g.set_slot_visible(crate::gles_present::ChromeSlot::Panel, panel_visible);
         if panel_visible && sigs.panel.feed((w, h, ime, bar_h)) {
             let px = g.slot_canvas(crate::gles_present::ChromeSlot::Panel);
             px.fill(0);
