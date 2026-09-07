@@ -85,11 +85,281 @@ static ANIM_TOTAL_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU6
 static ANIM_MAX_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// 动画期逐帧记账 + 收尾上报（android_app draw_frame GLES 每帧调用方）：
-/// active=true 记账；active=false 且有在记的账 = 动画刚结束 → 上报清账
+/// active=true 记账；active=false 且有在记的账 = 动画刚结束 → 上报清账。
+/// 2026-09-07 扩展（用户报「拖影变多」的观测基建，三路径判卷）：
+/// ①swap 间隔（送帧节奏）②Choreographer vsync 对表（显示真实刷新率 +
+/// swap 相位）③动画期回读抽帧（渲染源真相，偶数轮采样奇数轮净跑——
+/// readPixels 有停顿会污染节奏数据）。撕裂的最终裁决在系统录屏（P2，
+/// 人工路径）——送帧齐 + 显示侧撕 = 呈现侧病（vsync 实验）
+static SWAP_LAST_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static SWAP_GAP_MIN_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static SWAP_GAP_MAX_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static SWAP_GAP_TOTAL_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static SWAP_GAP_N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static ANIM_WAS_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// 动画轮次计数（奇偶分流：偶数轮带采样帧，奇数轮纯节奏数据）
+static RUN_TICK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static CAPTURE_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static CAPTURE_TICK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// (w, h, rgb) 缩略帧仓——run 收尾统一外发
+static CAPTURE_FRAMES: std::sync::Mutex<Vec<(u32, u32, Vec<u8>)>> =
+    std::sync::Mutex::new(Vec::new());
+
+// vsync 对表（dlsym libandroid.so 的 NDK API29+ 符号——targetSdk 28 不便
+// 静态链接，运行期 dlsym，libEGL dlopen 先例；句柄存静态保符号有效）
+static VSYNC_ARMED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static VSYNC_LAST_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static VSYNC_GAP_MIN_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static VSYNC_GAP_MAX_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static VSYNC_GAP_TOTAL_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static VSYNC_GAP_N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static VSYNC_PHASE_MIN_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static VSYNC_PHASE_MAX_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static VSYNC_PHASE_TOTAL_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static VSYNC_PHASE_N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+#[repr(C)]
+struct AChoreographer {
+    _opaque: [u8; 0],
+}
+type ChoreoCallback = unsafe extern "C" fn(*const AChoreographer, i64, *mut std::ffi::c_void);
+#[repr(C)]
+struct ChoreoFns {
+    get_instance: unsafe extern "C" fn() -> *const AChoreographer,
+    post_cb64: unsafe extern "C" fn(*const AChoreographer, ChoreoCallback, *mut std::ffi::c_void),
+}
+static CHOREO: std::sync::Mutex<Option<(libloading::Library, ChoreoFns)>> =
+    std::sync::Mutex::new(None);
+
+/// 单调时钟（ns，OnceLock 基点——swap/vsync 间隔只吃差值，起点无所谓）
+fn now_ns() -> u64 {
+    static BASE: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    let base = BASE.get_or_init(std::time::Instant::now);
+    base.elapsed().as_nanos() as u64
+}
+
+/// 动画轮开表：节奏/相位记账清零 + 奇偶采样分流 + vsync 挂表
+fn anim_run_start() {
+    use std::sync::atomic::Ordering;
+    for a in [
+        &SWAP_GAP_N,
+        &SWAP_GAP_TOTAL_US,
+        &VSYNC_GAP_N,
+        &VSYNC_GAP_TOTAL_US,
+        &VSYNC_PHASE_N,
+        &VSYNC_PHASE_TOTAL_US,
+    ] {
+        a.store(0, Ordering::Relaxed);
+    }
+    SWAP_GAP_MIN_US.store(u64::MAX, Ordering::Relaxed);
+    SWAP_GAP_MAX_US.store(0, Ordering::Relaxed);
+    VSYNC_GAP_MIN_US.store(u64::MAX, Ordering::Relaxed);
+    VSYNC_GAP_MAX_US.store(0, Ordering::Relaxed);
+    VSYNC_PHASE_MIN_US.store(u64::MAX, Ordering::Relaxed);
+    VSYNC_PHASE_MAX_US.store(0, Ordering::Relaxed);
+    VSYNC_LAST_NS.store(0, Ordering::Relaxed);
+    let run = RUN_TICK.fetch_add(1, Ordering::Relaxed);
+    CAPTURE_ON.store(run.is_multiple_of(2), Ordering::Relaxed);
+    CAPTURE_TICK.store(0, Ordering::Relaxed);
+    vsync_arm();
+}
+
+/// Choreographer 挂表（懒 dlsym；回调链自续，vsync_disarm 收表——
+/// 零空转纪律：非动画期零回调零唤醒）
+fn vsync_arm() {
+    let mut guard = CHOREO.lock().unwrap();
+    if guard.is_none() {
+        let lib = match unsafe { libloading::Library::new("libandroid.so") } {
+            Ok(l) => l,
+            Err(_) => {
+                crate::report::report("boot", "vsync对表: libandroid.so 打不开，降级纯 swap 间隔");
+                return;
+            }
+        };
+        // 先解出函数指针再 move lib（Symbol 借用与所有权的借序——E0505）
+        let gi: unsafe extern "C" fn() -> *const AChoreographer = {
+            match unsafe { lib.get(b"AChoreographer_getInstance\0") } {
+                Ok(s) => *s,
+                Err(_) => {
+                    crate::report::report("boot", "vsync对表: AChoreographer_getInstance 缺席");
+                    return;
+                }
+            }
+        };
+        let pc: unsafe extern "C" fn(*const AChoreographer, ChoreoCallback, *mut std::ffi::c_void) = {
+            match unsafe { lib.get(b"AChoreographer_postFrameCallback64\0") } {
+                Ok(s) => *s,
+                Err(_) => {
+                    crate::report::report("boot", "vsync对表: postFrameCallback64 缺席");
+                    return;
+                }
+            }
+        };
+        *guard = Some((
+            lib,
+            ChoreoFns {
+                get_instance: gi,
+                post_cb64: pc,
+            },
+        ));
+    }
+    VSYNC_ARMED.store(true, std::sync::atomic::Ordering::Relaxed);
+    if let Some((_, fns)) = guard.as_ref() {
+        unsafe {
+            let c = (fns.get_instance)();
+            (fns.post_cb64)(c, vsync_cb, std::ptr::null_mut());
+        }
+    }
+}
+
+/// vsync 跳记账回调：逐跳记周期；仍武装则自续（回调链）
+unsafe extern "C" fn vsync_cb(c: *const AChoreographer, ts: i64, _d: *mut std::ffi::c_void) {
+    unsafe {
+        use std::sync::atomic::Ordering;
+        let ns = ts as u64;
+        let last = VSYNC_LAST_NS.swap(ns, Ordering::Relaxed);
+        if last != 0 {
+            let gap = ns.saturating_sub(last) / 1000;
+            VSYNC_GAP_N.fetch_add(1, Ordering::Relaxed);
+            VSYNC_GAP_TOTAL_US.fetch_add(gap, Ordering::Relaxed);
+            VSYNC_GAP_MIN_US.fetch_min(gap, Ordering::Relaxed);
+            VSYNC_GAP_MAX_US.fetch_max(gap, Ordering::Relaxed);
+        }
+        if VSYNC_ARMED.load(Ordering::Relaxed)
+            && let Some((_, fns)) = CHOREO.lock().unwrap().as_ref()
+        {
+            (fns.post_cb64)(c, vsync_cb, std::ptr::null_mut());
+        }
+    }
+}
+
+/// swap 间隔小账（present_frame 每帧喂：now=本帧 swap 时刻）
+pub fn note_swap(now: u64) {
+    use std::sync::atomic::Ordering;
+    let last = SWAP_LAST_NS.swap(now, Ordering::Relaxed);
+    if last == 0 || !ANIM_WAS_ACTIVE.load(Ordering::Relaxed) {
+        return;
+    }
+    let gap = now.saturating_sub(last) / 1000;
+    SWAP_GAP_N.fetch_add(1, Ordering::Relaxed);
+    SWAP_GAP_TOTAL_US.fetch_add(gap, Ordering::Relaxed);
+    SWAP_GAP_MIN_US.fetch_min(gap, Ordering::Relaxed);
+    SWAP_GAP_MAX_US.fetch_max(gap, Ordering::Relaxed);
+    // 相位：本帧 swap 落在 vsync 周期内的位置（对齐质量——稳=齐，飘=抖）
+    let vlast = VSYNC_LAST_NS.load(Ordering::Relaxed);
+    if VSYNC_ARMED.load(Ordering::Relaxed) && vlast != 0 && now > vlast {
+        let phase = (now - vlast) / 1000;
+        VSYNC_PHASE_N.fetch_add(1, Ordering::Relaxed);
+        VSYNC_PHASE_TOTAL_US.fetch_add(phase, Ordering::Relaxed);
+        VSYNC_PHASE_MIN_US.fetch_min(phase, Ordering::Relaxed);
+        VSYNC_PHASE_MAX_US.fetch_max(phase, Ordering::Relaxed);
+    }
+}
+
+fn swap_gap_report() -> String {
+    let n = SWAP_GAP_N.load(std::sync::atomic::Ordering::Relaxed);
+    if n == 0 {
+        return String::new();
+    }
+    use std::sync::atomic::Ordering;
+    let total = SWAP_GAP_TOTAL_US.swap(0, Ordering::Relaxed);
+    let min = SWAP_GAP_MIN_US.swap(0, Ordering::Relaxed);
+    let max = SWAP_GAP_MAX_US.swap(0, Ordering::Relaxed);
+    SWAP_GAP_N.store(0, Ordering::Relaxed);
+    let avg = total.checked_div(n).unwrap_or(0);
+    format!(
+        " swap间隔 min/avg/max {}ms/{}ms/{}ms",
+        min / 1000,
+        avg / 1000,
+        max / 1000
+    )
+}
+
+fn vsync_report() -> String {
+    let n = VSYNC_GAP_N.load(std::sync::atomic::Ordering::Relaxed);
+    if n == 0 {
+        return " vsync无样本".into();
+    }
+    use std::sync::atomic::Ordering;
+    let total = VSYNC_GAP_TOTAL_US.swap(0, Ordering::Relaxed);
+    let vmin = VSYNC_GAP_MIN_US.swap(0, Ordering::Relaxed);
+    let vmax = VSYNC_GAP_MAX_US.swap(0, Ordering::Relaxed);
+    VSYNC_GAP_N.store(0, Ordering::Relaxed);
+    let avg = total.checked_div(n).unwrap_or(1).max(1);
+    // Hz ×10（整数域一位小数）：10_000_000us / 周期us
+    let hz10 = 10_000_000_u64.checked_div(avg).unwrap_or(0);
+    let pn = VSYNC_PHASE_N.swap(0, Ordering::Relaxed);
+    let phase = if pn > 0 {
+        let pmin = VSYNC_PHASE_MIN_US.swap(0, Ordering::Relaxed);
+        let pmax = VSYNC_PHASE_MAX_US.swap(0, Ordering::Relaxed);
+        let pavg = VSYNC_PHASE_TOTAL_US
+            .swap(0, Ordering::Relaxed)
+            .checked_div(pn)
+            .unwrap_or(0);
+        format!(
+            " 相位 min/avg/max {}ms/{}ms/{}ms",
+            pmin / 1000,
+            pavg / 1000,
+            pmax / 1000
+        )
+    } else {
+        String::new()
+    };
+    format!(
+        " vsync {}.{n2}Hz 样本{n} 周期 min/avg/max {}ms/{}ms/{}ms{phase}",
+        hz10 / 10,
+        vmin / 1000,
+        avg / 1000,
+        vmax / 1000,
+        n2 = hz10 % 10,
+    )
+}
+
+/// 采样帧外发（run 收尾：hex 分块飞鸽传书，服务器拼 PNG——渲染源真相）
+fn capture_report() -> String {
+    let frames: Vec<(u32, u32, Vec<u8>)> = CAPTURE_FRAMES.lock().unwrap().drain(..).collect();
+    if frames.is_empty() {
+        return " 采样0".into();
+    }
+    let label = format!(" 采样{}帧", frames.len());
+    std::thread::spawn(move || {
+        use std::io::Write;
+        for (i, (w, h, rgb)) in frames.iter().enumerate() {
+            let hex: String = rgb.iter().map(|b| format!("{b:02x}")).collect();
+            let total = hex.len().div_ceil(1400);
+            for (ci, chunk) in hex.as_bytes().chunks(1400).enumerate() {
+                let body = format!(
+                    "{{\"stage\":\"anim-strip\",\"msg\":\"{i}|{w}|{h}|{ci}|{total}|{}\"}}",
+                    String::from_utf8_lossy(chunk)
+                );
+                let _ = std::net::TcpStream::connect_timeout(
+                    &std::net::SocketAddr::from(([127, 0, 0, 1], 8021)),
+                    std::time::Duration::from_secs(2),
+                )
+                .and_then(|mut s| {
+                    s.write_all(
+                        format!(
+                            "POST /kfmv4/api/na-report HTTP/1.1\r\nHost: 127.0.0.1:8021\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        )
+                        .as_bytes(),
+                    )
+                });
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        }
+    });
+    label
+}
+
 pub fn note_anim_frame(active: bool, elapsed: std::time::Duration) {
     use std::sync::atomic::Ordering;
     let us = elapsed.as_micros() as u64;
+    let was = ANIM_WAS_ACTIVE.swap(active, Ordering::Relaxed);
     if active {
+        if !was {
+            anim_run_start();
+        }
         ANIM_FRAMES.fetch_add(1, Ordering::Relaxed);
         ANIM_TOTAL_US.fetch_add(us, Ordering::Relaxed);
         ANIM_MAX_US.fetch_max(us, Ordering::Relaxed);
@@ -103,11 +373,18 @@ pub fn note_anim_frame(active: bool, elapsed: std::time::Duration) {
         let avg_ms = avg_us / 1000;
         let max_ms = max / 1000;
         let fps = 1_000_000_u64.checked_div(avg_us).unwrap_or(0);
-        crate::report::report(
-            "panel-anim",
-            &format!("{n}帧 均值{avg_us}us({avg_ms}ms) 最大{max_ms}ms 推算fps={fps}"),
-        );
+        let mut line = format!("{n}帧 均值{avg_us}us({avg_ms}ms) 最大{max_ms}ms 推算fps={fps}");
+        line.push_str(&swap_gap_report());
+        line.push_str(&vsync_report());
+        line.push_str(&capture_report());
+        vsync_disarm();
+        CAPTURE_ON.store(false, Ordering::Relaxed);
+        crate::report::report("panel-anim", &line);
     }
+}
+
+fn vsync_disarm() {
+    VSYNC_ARMED.store(false, std::sync::atomic::Ordering::Relaxed);
 }
 
 fn stage_report() {
@@ -908,6 +1185,18 @@ impl GlesPresent {
                 );
             }
         }
+        // P3 渲染源采样（偶数轮武装）：readPixels 有停顿只落采样轮；
+        // 每 5 帧一拍（21 帧动画取 ~4 帧），1/14 缩略
+        if CAPTURE_ON.load(std::sync::atomic::Ordering::Relaxed)
+            && CAPTURE_TICK
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                .is_multiple_of(5)
+            && let Some(t) = self.capture_thumb()
+        {
+            CAPTURE_FRAMES.lock().unwrap().push(t);
+        }
+        // P1 送帧节奏记账（swap 间隔 + vsync 相位）
+        crate::gles_present::note_swap(now_ns());
         self.swap();
         self.frames_presented += 1;
     }
@@ -943,6 +1232,38 @@ impl GlesPresent {
         }
         self.swap();
         self.frames_presented += 1;
+    }
+
+    /// 1/14 缩略回读（P3 渲染源真相：动画期抽帧——读的是本帧 GL 合成
+    /// 结果，swap 前；1260/14≈90 宽，hex 分块走报表通道，服务器拼 PNG）
+    fn capture_thumb(&self) -> Option<(u32, u32, Vec<u8>)> {
+        const SS: usize = 14;
+        let tw = (self.w as usize / SS).max(1);
+        let th = (self.h as usize / SS).max(1);
+        let mut thumb = vec![0u8; tw * th * 3];
+        let gl = &self.gl;
+        unsafe {
+            for ty in 0..th {
+                let mut row = vec![0u8; (self.w as usize) * 4];
+                gl.read_pixels(
+                    0,
+                    (ty * SS) as i32,
+                    self.w as i32,
+                    1,
+                    glow::RGBA,
+                    glow::UNSIGNED_BYTE,
+                    glow::PixelPackData::Slice(Some(&mut row)),
+                );
+                for tx in 0..tw {
+                    let s = tx * SS * 4;
+                    let d = (ty * tw + tx) * 3;
+                    thumb[d] = row[s];
+                    thumb[d + 1] = row[s + 1];
+                    thumb[d + 2] = row[s + 2];
+                }
+            }
+        }
+        Some((tw as u32, th as u32, thumb))
     }
 
     fn swap(&mut self) {
