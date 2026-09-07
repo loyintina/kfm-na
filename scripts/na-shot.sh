@@ -46,10 +46,15 @@ shoot() {
             && echo "   触发文件还在:na 没有在画帧。应用在前台吗?把它切到前台再拍。"
         return 1
     fi
-    local dim
-    dim=$(gate "cat $NA_TMP/shot-$which.dim")
+    local dim rgbpath dimpath
+    if [ "$which" = gl ]; then
+        rgbpath=$NA_TMP/shot-gl.rgb; dimpath=$NA_TMP/shot-gl.dim
+    else
+        rgbpath=$NA_TMP/shot.rgb; dimpath=$NA_TMP/shot.dim
+    fi
+    dim=$(gate "cat $dimpath")
     scp -P 8024 -i "$NA_KEY" -o BatchMode=yes -o StrictHostKeyChecking=no \
-        "localhost:$NA_TMP/shot-$which.rgb" /tmp/na-shot.rgb >/dev/null
+        "localhost:$rgbpath" /tmp/na-shot.rgb >/dev/null
     "$PY" - $dim <<EOF
 import sys
 from PIL import Image
