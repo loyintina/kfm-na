@@ -3124,8 +3124,39 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
         .with_android_app(app.clone())
         .build()
         .expect("创建事件循环失败");
+    // P2 软件内实录钩子（2026-09-08）：gate rec-req-ms → JNI 甩
+    // MainActivity.startRecordingFromGate。android-activity 0.6 不露 jni
+    // 面（只有 vm_as_ptr/activity_as_ptr 裸指针）——自己 from_raw 拼
+    // jni 0.22 类型；GlobalRef 一次建立长期持有；attach 是回调式 API
+    // （0.22 无 guard 形态），Java 侧 runOnUiThread 接管（授权弹窗只能
+    // Activity 发起）
+    {
+        let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr() as *mut _) };
+        let gref = vm
+            .attach_current_thread(|env| {
+                let act = unsafe {
+                    jni::objects::JObject::from_raw(env, app.activity_as_ptr() as *mut _)
+                };
+                env.new_global_ref(&act)
+            })
+            .expect("MainActivity GlobalRef 建立失败（attach+全局引用）");
+        crate::gate::register_rec_hook(Box::new(move |ms: i32| {
+            let r = vm.attach_current_thread(|env| {
+                env.call_method(
+                    &gref,
+                    jni::jni_str!("startRecordingFromGate"),
+                    jni::jni_sig!((int) -> void),
+                    &[jni::objects::JValue::Int(ms)],
+                )
+                .map(|_| ())
+            });
+            if let Err(e) = r {
+                crate::report::report_sync("rec", &format!("JNI startRecordingFromGate 失败: {e}"));
+            }
+        }));
+    }
     let mut app_handler = App {
-        android_app: Some(app),
+        android_app: Some(app.clone()),
         ..Default::default()
     };
     // blackout 唤醒锤(冗余兜底,2026-08-22 探针拆除案保留):proxy user

@@ -1,6 +1,8 @@
 package dev.kfm.na;
 
 import android.app.NativeActivity;
+import android.content.Intent;
+import android.media.projection.MediaProjectionManager;
 import android.os.Bundle;
 import android.widget.FrameLayout;
 
@@ -18,10 +20,12 @@ import android.widget.FrameLayout;
  */
 public class MainActivity extends NativeActivity {
     private KfmImeView mIme;
+    private static MainActivity sInstance;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        sInstance = this;
         // targetSdk 28 域降级（exec 探针放行）的副作用：系统按「旧应用」把窗口
         // 压到状态栏下面（实拍 16777514：终端不再满屏）。运行时调用不受
         // targetSdk 门控——decorFitsSystemWindows(false) 把内容铺回状态栏下，
@@ -59,5 +63,33 @@ public class MainActivity extends NativeActivity {
         if (hasFocus && mIme != null) {
             mIme.requestFocus();
         }
+    }
+
+    // ---- 软件内实录（P2，2026-09-08）：gate hook 的 Java 着陆点 ----
+
+    /** 原生 gate 线程经 JNI 调（hook 注册在 android_app）——甩 UI 线程 */
+    public void startRecordingFromGate(final int ms) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                KfmRecService.request(MainActivity.this, ms);
+            }
+        });
+    }
+
+    /** KfmRecService 起前台后回调：起授权对话框（只能 Activity 发起） */
+    public void launchConsent() {
+        MediaProjectionManager mpm = (MediaProjectionManager)
+                getSystemService(MEDIA_PROJECTION_SERVICE);
+        startActivityForResult(mpm.createScreenCaptureIntent(), 7001);
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode == 7001) {
+            KfmRecService.onConsent(resultCode, data);
+            return;
+        }
+        super.onActivityResult(requestCode, resultCode, data);
     }
 }

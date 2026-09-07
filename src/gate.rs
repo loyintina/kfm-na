@@ -284,6 +284,7 @@ pub fn spawn_gate_watcher() {
             switch_req_check(DUMP_DIR);
             orb_check(DUMP_DIR); // 通道十:AI 外显事件注入(直调状态核,落回执)
             bar_check(DUMP_DIR); // 通道十一:输入栏事件注入(直调状态核,落回执)
+            rec_req_check(DUMP_DIR); // 通道十二:软件内实录(P2,2026-09-08)
             alert_tick(tick);
             history_tick(DUMP_DIR, tick);
         }
@@ -527,6 +528,37 @@ pub fn write_shot_gl(dir: &str, buf: &[u32], w: u32, h: u32) -> bool {
     }
     let _ = std::fs::write(Path::new(dir).join("shot-gl.dim"), format!("{w} {h}"));
     true
+}
+
+// ---- 通道十二:rec-req-ms → 软件内实录（P2，2026-09-08）----
+// 文件内容=录制毫秒数。钩子由 android_app 注册（JNI 甩 MainActivity，
+// 系统授权弹窗一次性）；host 侧无钩子=只摘文件+上报（考题可测）。
+
+/// 读 rec-req-ms：有则摘除并返回 Some(毫秒)；无/内容坏 = None（摘除原则：
+/// 坏文件也摘，不让值守线程每 300ms 反复吃同一份垃圾）
+pub fn take_rec_req(dir: &str) -> Option<i32> {
+    let p = Path::new(dir).join("rec-req-ms");
+    let s = std::fs::read_to_string(&p).ok()?;
+    let _ = std::fs::remove_file(&p);
+    s.trim().parse::<i32>().ok()
+}
+
+type RecHook = Box<dyn Fn(i32) + Send>;
+static REC_HOOK: std::sync::Mutex<Option<RecHook>> = std::sync::Mutex::new(None);
+
+/// 注册实录钩子（android_app 启动时注册一次；host 不注册=空转合法）
+pub fn register_rec_hook(f: RecHook) {
+    *REC_HOOK.lock().unwrap() = Some(f);
+}
+
+/// 值守循环消费（300ms 一轮）：有请求就甩钩子
+pub fn rec_req_check(dir: &str) {
+    if let Some(ms) = take_rec_req(dir) {
+        match REC_HOOK.lock().unwrap().as_ref() {
+            Some(f) => f(ms),
+            None => crate::report::report("rec", "rec-req 无钩子（host 或未注册），丢弃"),
+        }
+    }
 }
 
 // ---- 飞行记录仪（2026-08-24 自观测·确定性回放，与用户定） ----

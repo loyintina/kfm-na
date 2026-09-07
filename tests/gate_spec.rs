@@ -545,3 +545,49 @@ fn spec_软件内截屏_gl触发通道三态() {
     assert!(!kfm_na::gate::write_shot_gl(d, &[0], 1, 1));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// 软件内实录触发通道（B 档冒烟钉）：rec-req-ms 读取/摘除/坏内容容忍。
+#[test]
+fn spec_软件内录_rec触发读取() {
+    let dir = std::env::temp_dir().join(format!("recreq-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let d = dir.to_str().unwrap();
+    // ① 无文件 = None
+    assert_eq!(kfm_na::gate::take_rec_req(d), None);
+    // ② 正常毫秒数 = Some + 摘除（单次触发单次消费）
+    std::fs::write(dir.join("rec-req-ms"), "8000\n").unwrap();
+    assert_eq!(kfm_na::gate::take_rec_req(d), Some(8000));
+    assert!(!dir.join("rec-req-ms").exists(), "消费后必须摘除");
+    // ③ 坏内容也摘（不让值守线程反复吃垃圾）
+    std::fs::write(dir.join("rec-req-ms"), "abc").unwrap();
+    assert_eq!(kfm_na::gate::take_rec_req(d), None);
+    assert!(!dir.join("rec-req-ms").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// 软件内实录钩子消费链（P2）：rec_req_check 吃 rec-req-ms → 甩钩子 →
+// 摘文件。register/消费/一次性三件事一条链钉住。
+#[test]
+fn spec_软件内录_rec钩子消费链() {
+    use std::sync::{Arc, Mutex};
+    let dir = std::env::temp_dir().join(format!("rechook-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let d = dir.to_str().unwrap();
+    let got = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&got);
+    kfm_na::gate::register_rec_hook(Box::new(move |ms: i32| {
+        sink.lock().unwrap().push(ms);
+    }));
+    // 无请求 = 钩子不响
+    kfm_na::gate::rec_req_check(d);
+    assert!(got.lock().unwrap().is_empty());
+    // 有请求 = 钩子拿到毫秒数 + 文件摘除
+    std::fs::write(dir.join("rec-req-ms"), "5000").unwrap();
+    kfm_na::gate::rec_req_check(d);
+    assert_eq!(*got.lock().unwrap(), vec![5000]);
+    assert!(!dir.join("rec-req-ms").exists());
+    // 再跑一圈 = 不重复消费
+    kfm_na::gate::rec_req_check(d);
+    assert_eq!(got.lock().unwrap().len(), 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}

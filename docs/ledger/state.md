@@ -23,6 +23,12 @@
   毛刺 28~37→15~25ms（减半未根除，归因推测=动画首帧 CPU 提频爬坡，
   非烘焙成本——均值证明动画期零光栅零上传成立）。遗留≤1 掉帧/
   动画，用户手感再议；fps 推算 208~472 为预算口径（pump 封顶 60）。
+- **B 软件内录（2026-09-08，P2 显示真相）**：KfmRecService（MediaProjection
+  + MediaCodec Surface 编码 + MediaMuxer → rec.mp4 落 files/usr/tmp）；
+  Android 14+ 纪律=mediaProjection 类型前台服务+授权弹窗一次（token
+  一次性）。gate 通道十二 rec-req-ms → JNI hook（android_app 注册，
+  attach_current_thread 甩 MainActivity）。入口 scripts/na-rec.sh。
+  **需 APK 重打装机**（Java 皮热更运不动）——装机后 P2 才算上线。
 - **软件内截屏（2026-09-08，观测完备性第一步）**：shot-gles-req 双触发
   文件协议——GLES 帧路径消费时倒「真·GPU 合成帧」（pre-swap
   readPixels 全分辨率，含图层/AI 文字最终 z 序），na-shot.sh 优先取

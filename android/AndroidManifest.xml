@@ -12,6 +12,10 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- P2 软件内实录（2026-09-08）：Android 14+ 投影会话必须挂
+         mediaProjection 类型前台服务，此权限与服务的 foregroundServiceType
+         配对，缺一即 SecurityException -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
 
     <application
         android:label="KFM-NA"
@@ -47,5 +51,12 @@
         <service
             android:name=".KfmKeepAliveService"
             android:exported="false" />
+
+        <!-- P2 软件内实录：投影必须挂 mediaProjection 类型前台服务
+             （Android 14+ 运行时强制，见 KfmRecService 文件头） -->
+        <service
+            android:name=".KfmRecService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
     </application>
 </manifest>
