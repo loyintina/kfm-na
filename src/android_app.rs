@@ -260,7 +260,50 @@ struct App {
     /// AI 面板过渡帧离屏缓冲（采样缝 blit 用，复用免逐帧分配）：
     /// 仅在动画进行中的帧真用，硬切路径零成本
     panel_scratch: Vec<u32>,
+    /// 图层烘焙判定（ui-base §八 渲染成本模型，2026-09-07）：三槽 sig
+    /// 记账——动画帧（panel_off 变）不进任何槽的重烘焙
+    layer_sigs: LayerSigs,
 }
+
+/// 图层烘焙 sig 记账（ui-base §八）。判据纪律：**sig 必须列全该槽
+/// paint 读过的每一个输入**——漏一个 = 陈旧像素（鬼影），比慢更严重。
+///   键行槽：render_keybar(mods, ime_bottom=ime+bar_h, w, h)
+///   面板槽：paint_ai_page_chrome(w, h, bottom_inset=ime+bar_h)——
+///           panel_off 是合成期 placement，不进 sig（烘焙画布恒靠泊位）
+///   上层槽：render_inputbar(bar_snap,sending,caret_on,ime,w,h) +
+///           render_orb(ai_snap) + render_magnifier——orb_alpha_out 在
+///           GLES 路径恒 true 不进 sig；放大镜内容跟终端网格活（网格
+///           变化不进 sig），拖选期调用方强制重烘焙
+#[derive(Default)]
+struct LayerSigs {
+    keybar: crate::ui::stage::DirtyGuard<(u8, u32, u32, u32, u32)>,
+    panel: crate::ui::stage::DirtyGuard<(u32, u32, u32, u32)>,
+    over: crate::ui::stage::DirtyGuard<OverSig>,
+}
+
+impl LayerSigs {
+    /// GL 上下文重建（resumed 换 Gfx）后烘焙物全死——判定器全失效，
+    /// 下一帧必然全量重烘焙（漏了这步 = 槽不画，画面缺层）
+    fn invalidate_all(&mut self) {
+        self.keybar.invalidate();
+        self.panel.invalidate();
+        self.over.invalidate();
+    }
+}
+
+/// 上层槽 sig（derive PartialEq 深比较——BarSnap/PresenceSnap 均已
+/// derive，逐帧比对成本可忽略）
+#[derive(PartialEq)]
+struct OverSig(
+    bool,                                     // caret_on
+    bool,                                     // sending
+    Option<crate::input_bar::BarSnap>,        // bar_snap
+    Option<crate::ai_presence::PresenceSnap>, // ai_snap（光球位置/增益）
+    Option<(f64, f64)>,                       // magnifier_at
+    u32,                                      // ime（chrome inset）
+    u32,                                      // w
+    u32,                                      // h
+);
 
 /// 默认脑路（2026-09-04 用户拍板改路）：智谱 coding 套餐 glm-5.3-flash。
 /// 备选两路已配 key：Kimi 卡 kimi-for-coding-highspeed / DeepSeek 官网
@@ -2188,12 +2231,13 @@ impl App {
         }
     }
 
-    /// 下层 chrome（快捷键行 + AI 面板底，2026-09-05 双层合成）：softbuffer
-    /// 单层路径与 GLES under 层共用。ai_glyphs = Some(GLES)：面板只画底
-    /// 装修（紫底 + 边框环，panel_off 刚体平移），文字实例收集进列表
-    /// （GPU 图集管线）；None（softbuffer）：面板全 CPU——稳态直画，
-    /// 过渡帧整页离屏渲染后按偏移压盖（BAR-062 考题区）。返回 ai_layout
-    /// （布局读数，调用方写回 scroll_sync_layout——眼手同尺）
+    /// 下层 chrome（快捷键行 + AI 面板底）：**softbuffer 兜底路径专用**
+    /// （2026-09-07 起 GLES 走图层槽位，见 draw_frame_gles——本函数不再
+    /// 参与 GLES 帧装配，性能不再投入，立项书红线保留）。ai_glyphs =
+    /// Some(GLES)：面板只画底装修（紫底 + 边框环，panel_off 刚体平移），
+    /// 文字实例收集进列表（GPU 图集管线）；None（softbuffer）：面板全
+    /// CPU——稳态直画，过渡帧整页离屏渲染后按偏移压盖（BAR-062 考题区）。
+    /// 返回 ai_layout（布局读数，调用方写回 scroll_sync_layout——眼手同尺）
     #[allow(clippy::too_many_arguments)]
     fn paint_under(
         term: &mut dyn TermEmu,
@@ -2373,13 +2417,10 @@ impl App {
         ai_layout
     }
 
-    /// GLES 一帧的双层装配（期 1 第 2 层 C 档，2026-09-05）：终端网格
-    /// GPU 实例 → 下层 chrome（键行 + AI 面板底）→ AI 文字 GPU 实例 →
-    /// 上层 chrome（输入栏/光球/放大镜）。AI 页文字从此走图集管线
-    /// （病根：CPU 逐字 fontdue 光栅化，AI 页稳态 ras 48ms）；过渡帧
-    /// 不再 scratch 全页渲染 + blit（面板 = 底装修 CPU + 文字实例，
-    /// panel_off 进实例 y——刚体平移）。关联函数按字段传参，避开 buf
-    /// 借用 gfx 时动不了 self 的问题（rasterize 同款纪律）。返回
+    /// GLES 一帧的图层装配（2026-09-07 槽位化，ui-base §八）：终端网格
+    /// GPU 实例 → 键行槽 → 面板槽（placement.y=panel_off）→ AI 文字
+    /// GPU 实例 → 上层槽。chrome 三槽置脏烘焙（LayerSigs 记账），动画帧
+    /// 零光栅零上传；AI 页文字走图集管线（panel_off 进实例 y）。返回
     /// ai_layout（调用方写回 scroll_sync_layout——眼手同尺）
     #[allow(clippy::too_many_arguments)]
     fn draw_frame_gles(
@@ -2395,12 +2436,11 @@ impl App {
         magnifier_at: Option<(f64, f64)>,
         ime_bottom_px_raw: u32,
         chrome_inset_px: &mut u32,
-        panel_scratch: &mut Vec<u32>,
+        sigs: &mut LayerSigs,
     ) -> Option<(u32, u32)> {
         let (w, h) = g.size();
         if !TERMINAL_MODE {
-            g.pixels_mut().fill(KFM_PURPLE);
-            g.present_frame(&[], &[], &[]);
+            g.present_solid(KFM_PURPLE);
             return None;
         }
         crate::gate::note_frame_size(w, h); // 给后台倒帧值守记账
@@ -2423,8 +2463,7 @@ impl App {
         let (grid_keybar, panel_visible) = crate::termview::panel_split(panel_off, h);
         let Some(term_arc) = th else {
             // 字体全灭的降级画面：紫屏（与 soft 路径同规）
-            g.pixels_mut().fill(KFM_PURPLE);
-            g.present_frame(&[], &[], &[]);
+            g.present_solid(KFM_PURPLE);
             return None;
         };
         let ime = *chrome_inset_px;
@@ -2516,32 +2555,49 @@ impl App {
         }
         let gen_us = t_gen.elapsed().as_micros() as u64;
 
-        // 2) 下层 chrome（键行 + AI 面板底）+ AI 文字收集 + 条件 alpha
-        // （「纯黑=空白」约定——黑屏案 2026-09-05 教训：一刀切 |= alpha
-        // 会让 chrome 变成不透明黑膜盖死整个画面）
+        // 2) 三槽烘焙（ui-base §八 渲染成本模型）：置脏才光栅+上传——
+        // 动画帧（panel_off 逐帧变）只动合成期 placement，零光栅零上传。
+        // slot_bake 内做 mark_chrome_alpha（「纯黑=空白」约定——黑屏案
+        // 2026-09-05 教训：一刀切 |= alpha 会变成不透明黑膜）
         let t_ras = std::time::Instant::now();
-        let mut ai_glyphs: Vec<crate::glyph_atlas::AiGlyph> = Vec::new();
-        let ai_layout = {
-            let px = g.pixels_mut();
+        let bottom_inset = ime + bar_h;
+        // 键行槽：面板未靠泊才可见（靠泊时被面板盖住；烘焙物常驻纹理，
+        // 面板收起重现身零成本）。sig=render_keybar 读的每个输入
+        g.set_slot_visible(crate::gles_present::ChromeSlot::Keybar, grid_keybar);
+        if grid_keybar && sigs.keybar.feed((mods, ime, bar_h, w, h)) {
+            let px = g.slot_canvas(crate::gles_present::ChromeSlot::Keybar);
             px.fill(0);
-            let mut term = term_arc.lock().unwrap();
-            let layout = Self::paint_under(
-                &mut **term,
-                px,
+            term_arc
+                .lock()
+                .unwrap()
+                .render_keybar(px, w, h, bottom_inset, mods);
+            g.slot_bake(crate::gles_present::ChromeSlot::Keybar);
+        }
+        // 面板槽：烘焙画布恒为靠泊位（panel_off=0 画），位移交给合成
+        // placement——这就是「动画零光栅」的承载点
+        g.set_slot_visible(crate::gles_present::ChromeSlot::Panel, panel_visible);
+        if panel_visible && sigs.panel.feed((w, h, ime, bar_h)) {
+            let px = g.slot_canvas(crate::gles_present::ChromeSlot::Panel);
+            px.fill(0);
+            crate::termview::paint_ai_page_chrome(px, w, h, bottom_inset, 0);
+            g.slot_bake(crate::gles_present::ChromeSlot::Panel);
+        }
+        // AI 文字（每帧实例——消息/滚动/panel_off 逐帧变，永不进烘焙；
+        // panel_off 进实例 y=刚体平移，2026-09-05 拍板不变）
+        let (ai_layout, ai_glyphs) = if panel_visible {
+            let term = term_arc.lock().unwrap();
+            let (layout, glyphs) = term.ai_page_glyphs(
                 w,
                 h,
-                ime,
-                bar_h,
-                mods,
-                panel_off,
                 chat_msgs,
                 chat_scroll,
+                bottom_inset,
                 chat_live,
-                panel_scratch,
-                Some(&mut ai_glyphs),
+                panel_off,
             );
-            crate::termview::mark_chrome_alpha(px);
-            layout
+            (Some(layout), glyphs)
+        } else {
+            (None, Vec::new())
         };
         let ras0_us = t_ras.elapsed().as_micros() as u64;
 
@@ -2603,14 +2659,28 @@ impl App {
         }
         let gen2_us = t_gen2.elapsed().as_micros() as u64;
 
-        // 4) 上层 chrome（输入栏/光球/放大镜）+ tofu 上报 + 条件 alpha
+        // 4) 上层槽（输入栏/光球/放大镜）+ tofu 上报。sig 列全 paint_over
+        // 的每个输入（orb_alpha_out 恒 true 不进 sig）；放大镜内容跟终端
+        // 网格活（网格变化不进 sig）——拖选期强制重烘焙（与改前每帧
+        // 全画布重画等价）
         let mut ras_us = ras0_us;
-        {
-            let t_over = std::time::Instant::now();
-            let px = g.pixels_over_mut();
+        let sending = ai_snap.is_some_and(|s| s.ai_running);
+        let t_over = std::time::Instant::now();
+        let over_dirty = magnifier_at.is_some()
+            || sigs.over.feed(OverSig(
+                caret_on,
+                sending,
+                bar_snap.cloned(),
+                ai_snap,
+                magnifier_at,
+                ime,
+                w,
+                h,
+            ));
+        if over_dirty {
+            let px = g.slot_canvas(crate::gles_present::ChromeSlot::Over);
             px.fill(0);
             let mut term = term_arc.lock().unwrap();
-            let sending = ai_snap.is_some_and(|s| s.ai_running);
             Self::paint_over(
                 &mut **term,
                 px,
@@ -2624,16 +2694,17 @@ impl App {
                 magnifier_at,
                 true,
             );
-            Self::report_tofu(&mut **term);
-            crate::termview::mark_chrome_alpha(px);
-            ras_us += t_over.elapsed().as_micros() as u64;
+            g.slot_bake(crate::gles_present::ChromeSlot::Over);
         }
+        Self::report_tofu(&mut **term_arc.lock().unwrap());
+        ras_us += t_over.elapsed().as_micros() as u64;
         crate::gles_present::STAGE_GEN_US
             .fetch_add(gen_us + gen2_us, std::sync::atomic::Ordering::Relaxed);
         crate::gles_present::STAGE_RAS_US.fetch_add(ras_us, std::sync::atomic::Ordering::Relaxed);
 
-        // 5) 组合呈现（z 序见 present_frame——与 scratch+blit 时代像素等价）
-        g.present_frame(&bg_inst, &glyphs_by_page, &ai_glyphs_by_page);
+        // 5) 组合呈现（z 序见 present_frame——与双层合成时代像素等价；
+        // panel_off 只进面板槽的 placement，烘焙物不动）
+        g.present_frame(&bg_inst, &glyphs_by_page, &ai_glyphs_by_page, panel_off);
         ai_layout
     }
 
@@ -2663,8 +2734,8 @@ impl App {
         // 先拿终端句柄(owned Arc,借用即还),再借 gfx——顺序反了 E0502
         let th = self.term_handle();
         let Some(g) = &mut self.gfx else { return };
-        // GLES（期 1 第 2 层 C 档）：终端网格实例 → 下层 chrome（键行+
-        // AI 面板底）→ AI 文字实例 → 上层 chrome（输入栏/光球/放大镜）。
+        // GLES（2026-09-07 图层槽位版）：网格实例 → 键行槽 → 面板槽
+        // （placement 动画）→ AI 文字实例 → 上层槽。槽位置脏烘焙。
         // 关联函数按字段传参，避开 buf 借用 gfx 时动不了 self 的问题
         if let Gfx::Gles(g) = g {
             let mods = self.modifiers.as_ref().map_or(0, |m| m.peek());
@@ -2687,7 +2758,7 @@ impl App {
                 self.magnifier_at,
                 self.ime_bottom_px,
                 &mut self.chrome_inset_px,
-                &mut self.panel_scratch,
+                &mut self.layer_sigs,
             );
             // 布局写回视口状态机（眼手同尺：手势钳制与渲染同一份布局）
             if let (Some(chat), Some((total, fit))) = (&self.ai_chat, ai_layout) {
@@ -2787,6 +2858,9 @@ impl ApplicationHandler for App {
         let window = Arc::new(el.create_window(attrs).expect("创建窗口失败"));
         let gfx = Self::init_gfx(&window);
         self.gfx = Some(gfx);
+        // 新 Gfx = 新纹理 = 烘焙物全死：判定器全失效，下帧全量重烘焙
+        // （漏了这步 = 后台往返后键行/面板/上层消失，BAR 级视觉事故）
+        self.layer_sigs.invalidate_all();
         self.window = Some(window.clone());
         if TERMINAL_MODE {
             // BAR-004 后台往返：Term/会话还活着就只重建窗口表面，别重开会话

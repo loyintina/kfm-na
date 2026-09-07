@@ -8,9 +8,9 @@
 //!
 //! 成员与登记：src/ui/registry.md（名字/状态核/token 字段/通道/考题）。
 //! TermEmu trait 的 render_* 方法转发到这里各控件的 render 本体。
-//! seam/fx_spring/fx_ease 是采样缝与动画件（ui-base.md §三/§五），
-//! 不属控件不登记 registry。ai_page 是对话页视口状态机（期 0④），
-//! 纯逻辑无视图，同样不登记。
+//! seam/fx_spring/fx_ease/stage 是采样缝、动画件与图层状态机
+//! （ui-base.md §三/§五/§八），不属控件不登记 registry。ai_page 是对话
+//! 页视口状态机（期 0④），纯逻辑无视图，同样不登记。
 pub mod ai_page;
 pub mod fx_ease;
 pub mod fx_spring;
@@ -18,3 +18,4 @@ pub mod keybar;
 pub mod orb;
 pub mod prompt_bar;
 pub mod seam;
+pub mod stage;

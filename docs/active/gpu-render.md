@@ -291,3 +291,20 @@ CPU 优化线顶上（§六分流）。
   三轮同数互拒（「已安装更高版本」「相同版本」）。过渡：kfm-na 线
   暂占 1789600000+ 段；分治提案见信箱
   kfm-na-versioncode-counter-collision-notice.md。
+
+## 十三、图层槽位合成器（2026-09-07）——渲染成本模型落地
+
+> 用户拍板「先把引擎做好，未来做 UI 减少重复劳动」。契约载体
+> ui-base.md §七；本节记 GPU 侧设施与判卷口径。
+
+- **病根**：chrome 双画布每帧无条件全屏上传 + 动画期全画布重光栅
+  （panel-anim 基线：均值 14.6ms/68fps，毛刺 1~2 帧 28~37ms）。
+- **设施**：ChromeSlot 三槽（键行/面板底/上层）= 画布+纹理+可见性；
+  layer_prog 实例化四边形（rect+uv+tint，placement 进 rect，u_vp
+  链接期写死——黑屏案纪律）；slot_bake=mark_chrome_alpha+全画布上传
+  （只置脏帧调用）。两画布体系（pixels/pixels_over/upload_chrome_*/
+  build_pipeline/legacy present）整体退役。
+- **面板 panel_off = 第一实例**：烘焙画布恒靠泊位（panel_off 不进
+  sig），合成期 placement.y=panel_off——动画帧零光栅零上传。
+- **判卷**：panel-anim 对照基线（期望 ≤5ms 且毛刺消失）；用户 C 档
+  实看动画手感。退化路径 present_solid（紫屏）换 bg 单实例实现。
