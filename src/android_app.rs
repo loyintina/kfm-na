@@ -2693,6 +2693,10 @@ impl App {
             if let (Some(chat), Some((total, fit))) = (&self.ai_chat, ai_layout) {
                 chat.scroll_sync_layout(total, fit);
             }
+            crate::gles_present::note_anim_frame(
+                crate::ui::seam::ai_panel_offset_y_active(),
+                t0.elapsed(),
+            );
             crate::gate::note_draw(t0.elapsed()); // 含 present 的全帧耗时
             return;
         }

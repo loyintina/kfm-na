@@ -48,6 +48,39 @@ pub static STAGE_DRAW_US: std::sync::atomic::AtomicU64 = std::sync::atomic::Atom
 pub static STAGE_GEN_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 pub static STAGE_N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+// ---- 面板动画期帧率仪表（2026-09-06）：缝活性为真时逐帧记账，
+// 动画收尾（活性转假）一次性上报 N 帧/均值/最大——stage 计数是 300
+// 帧滚动平均，动画帧被空闲帧稀释，判不了动画手感 ----
+static ANIM_FRAMES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static ANIM_TOTAL_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static ANIM_MAX_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// 动画期逐帧记账 + 收尾上报（android_app draw_frame GLES 每帧调用方）：
+/// active=true 记账；active=false 且有在记的账 = 动画刚结束 → 上报清账
+pub fn note_anim_frame(active: bool, elapsed: std::time::Duration) {
+    use std::sync::atomic::Ordering;
+    let us = elapsed.as_micros() as u64;
+    if active {
+        ANIM_FRAMES.fetch_add(1, Ordering::Relaxed);
+        ANIM_TOTAL_US.fetch_add(us, Ordering::Relaxed);
+        ANIM_MAX_US.fetch_max(us, Ordering::Relaxed);
+        return;
+    }
+    let n = ANIM_FRAMES.swap(0, Ordering::Relaxed);
+    if n > 0 {
+        let total = ANIM_TOTAL_US.swap(0, Ordering::Relaxed);
+        let max = ANIM_MAX_US.swap(0, Ordering::Relaxed);
+        let avg_us = total / n.max(1);
+        let avg_ms = avg_us / 1000;
+        let max_ms = max / 1000;
+        let fps = 1_000_000_u64.checked_div(avg_us).unwrap_or(0);
+        crate::report::report(
+            "panel-anim",
+            &format!("{n}帧 均值{avg_us}us({avg_ms}ms) 最大{max_ms}ms 推算fps={fps}"),
+        );
+    }
+}
+
 fn stage_report() {
     let n = STAGE_N.swap(0, std::sync::atomic::Ordering::Relaxed);
     if n == 0 {
