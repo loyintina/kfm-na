@@ -65,31 +65,49 @@ public class MainActivity extends NativeActivity {
         }
     }
 
-    // ---- 软件内实录（P2，2026-09-08）：gate hook 的 Java 着陆点 ----
+    // ---- 软件内实录（P2，2026-09-08）：gate hook 的 Java 着陆点。
+    // Android 14+ 授权必须先行（旧序 FGS 在前 = SecurityException 闪退）：
+    // hook → 弹授权 → 同意才起 FGS（extras 带授权）→ 服务建投影 ----
+    private static int sRecMs;
 
     /** 原生 gate 线程经 JNI 调（hook 注册在 android_app）——甩 UI 线程 */
     public void startRecordingFromGate(final int ms) {
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
-                KfmRecService.request(MainActivity.this, ms);
+                sRecMs = ms;
+                MediaProjectionManager mpm = (MediaProjectionManager)
+                        getSystemService(MEDIA_PROJECTION_SERVICE);
+                startActivityForResult(mpm.createScreenCaptureIntent(), 7001);
             }
         });
-    }
-
-    /** KfmRecService 起前台后回调：起授权对话框（只能 Activity 发起） */
-    public void launchConsent() {
-        MediaProjectionManager mpm = (MediaProjectionManager)
-                getSystemService(MEDIA_PROJECTION_SERVICE);
-        startActivityForResult(mpm.createScreenCaptureIntent(), 7001);
     }
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         if (requestCode == 7001) {
-            KfmRecService.onConsent(resultCode, data);
+            if (resultCode == android.app.Activity.RESULT_OK) {
+                android.content.Intent svc = new android.content.Intent(this, KfmRecService.class);
+                svc.putExtra("resultCode", resultCode);
+                svc.putExtra("data", data);
+                svc.putExtra("durationMs", sRecMs);
+                startForegroundService(svc);
+            } else {
+                status("denied");
+            }
             return;
         }
         super.onActivityResult(requestCode, resultCode, data);
+    }
+
+    private void status(String s) {
+        try {
+            java.io.File f = new java.io.File(getFilesDir(), "usr/tmp/rec-status");
+            f.getParentFile().mkdirs();
+            java.io.FileWriter w = new java.io.FileWriter(f, false);
+            w.write(s);
+            w.close();
+        } catch (Exception ignored) {
+        }
     }
 }

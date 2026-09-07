@@ -40,10 +40,7 @@ import java.nio.ByteBuffer;
 public class KfmRecService extends Service {
     private static final String CH = "kfm-rec";
     private static final int NOTIF_ID = 7002;
-    private static final long CONSENT_TIMEOUT_MS = 30_000;
 
-    private static int sDurationMs;
-    private static MainActivity sActivity;
     private static KfmRecService sInstance;
 
     private MediaProjection mProjection;
@@ -56,32 +53,6 @@ public class KfmRecService extends Service {
     private volatile boolean mEosSent;
     private int mTrack = -1;
 
-    /** gate hook 入口（原生线程调，甩 UI 线程起服务） */
-    public static void request(MainActivity act, int ms) {
-        sActivity = act;
-        sDurationMs = ms;
-        act.startForegroundService(new Intent(act, KfmRecService.class));
-    }
-
-    /** 授权对话框回投（MainActivity.onActivityResult 调） */
-    public static void onConsent(int resultCode, Intent data) {
-        if (sInstance == null) return;
-        if (resultCode != android.app.Activity.RESULT_OK) {
-            sInstance.status("denied");
-            sInstance.finishEncode();
-            return;
-        }
-        MediaProjectionManager mpm = (MediaProjectionManager)
-                sInstance.getSystemService(Context.MEDIA_PROJECTION_SERVICE);
-        try {
-            MediaProjection projection = mpm.getMediaProjection(resultCode, data);
-            sInstance.begin(projection, sDurationMs);
-        } catch (Exception e) {
-            sInstance.status("error:" + e.getClass().getSimpleName());
-            sInstance.finishEncode();
-        }
-    }
-
     @Override
     public IBinder onBind(Intent intent) {
         return null;
@@ -91,21 +62,18 @@ public class KfmRecService extends Service {
     public int onStartCommand(Intent intent, int flags, int startId) {
         sInstance = this;
         startAsForeground();
-        status("await");
-        // 超时看门狗：授权弹窗 30s 没点 = 放弃（前台服务不悬挂）
-        mHandler.postDelayed(new Runnable() {
-            @Override
-            public void run() {
-                if (mProjection == null) {
-                    status("timeout");
-                    finishEncode();
-                }
-            }
-        }, CONSENT_TIMEOUT_MS);
-        if (sActivity != null) {
-            sActivity.launchConsent();
-        } else {
-            status("denied");
+        // Android 14+ 唯一合法顺序（2026-09-08 闪退案根因）：用户先授权，
+        // 服务后 startForeground(mediaProjection)，再建投影——反序即
+        // SecurityException 闪退（旧版把 FGS 放授权前，一触即崩）
+        try {
+            int resultCode = intent.getIntExtra("resultCode", -1);
+            Intent data = intent.getParcelableExtra("data");
+            MediaProjectionManager mpm = (MediaProjectionManager)
+                    getSystemService(Context.MEDIA_PROJECTION_SERVICE);
+            MediaProjection projection = mpm.getMediaProjection(resultCode, data);
+            begin(projection, intent.getIntExtra("durationMs", 8000));
+        } catch (Exception e) {
+            status("error:" + e.getClass().getSimpleName());
             finishEncode();
         }
         return START_NOT_STICKY;
@@ -281,7 +249,9 @@ public class KfmRecService extends Service {
 
     private void status(String s) {
         try {
-            FileWriter w = new FileWriter(new File(getFilesDir(), "usr/tmp/rec-status"), false);
+            File f = new File(getFilesDir(), "usr/tmp/rec-status");
+            f.getParentFile().mkdirs();
+            FileWriter w = new FileWriter(f, false);
             w.write(s);
             w.close();
         } catch (Exception ignored) {
