@@ -34,6 +34,9 @@
   epoch 自动计数在段位过渡期失效，以计数器文件为唯一事实源。
   另：服务器打包分支 jdk bin 进 PATH（d8 裸调 java 不在 PATH 曾断
   打包）。
+- **尸检二次升级（同日）**：首例 PC 报 in=foreign（PC=0x6cf0782d35f,
+  库外野地址）——handler 增配崩溃瞬间 /proc/self/maps 全图转存
+  （crash-maps,装机预埋路径,有界 512KB),凶手库名可指认。
 - **尸检升级（2026-09-08，面板动画 SIGSEGV 六例无函数定位）**：crash.rs
   换 SA_SIGINFO 上下文取 PC（aarch64 ucontext+304）+/proc/self/maps
   登记 libkfm_na 段——panic.log 新增 PC 行（pc/off/in=libkfm_na），

@@ -26,6 +26,11 @@ static CRASH_FD: AtomicI32 = AtomicI32::new(-1);
 static SO_BASE: AtomicUsize = AtomicUsize::new(0);
 static SO_END: AtomicUsize = AtomicUsize::new(0);
 
+/// 崩溃瞬间 /proc/self/maps 转存路径(C 串+NUL,装机时格式化好)——
+/// PC in=foreign 时,这张图指认凶手住在哪座库
+static CRASH_MAPS_PATH: AtomicUsize = AtomicUsize::new(0);
+static CRASH_MAPS_PATH_BUF: std::sync::Mutex<[u8; 128]> = std::sync::Mutex::new([0u8; 128]);
+
 /// 十六进制写入(hex 推进 *n;format_signal_line/format_pc_line 共用)
 fn push_hex(v: usize, buf: &mut [u8], n: &mut usize) {
     let mut tmp = [0u8; 16];
@@ -136,6 +141,7 @@ unsafe extern "C" fn on_signal(sig: i32, info: *mut libc::siginfo_t, ctx: *mut l
         return; // 测试探针:写行已证链路活,进程继续
     }
     unsafe {
+        dump_maps_for_autopsy();
         libc::signal(sig, libc::SIG_DFL);
         libc::raise(sig);
     }
@@ -183,6 +189,19 @@ pub fn install_signal_hook(dir: &str) {
         format!("{}\n", std::process::id()),
     )
     .ok();
+    // crash-maps 路径预格式化成 C 串(handler 里零格式化)
+    {
+        let cpath = format!(
+            "{}/crash-maps\x00",
+            std::path::Path::new(dir).join("crash-maps").display()
+        );
+        let mut guard = CRASH_MAPS_PATH_BUF.lock().unwrap();
+        let bytes = cpath.as_bytes();
+        let n = bytes.len().min(127);
+        guard[..n].copy_from_slice(&bytes[..n]);
+        guard[n] = 0;
+        CRASH_MAPS_PATH.store(guard.as_ptr() as usize, Ordering::Relaxed);
+    }
     unsafe {
         let mut sa: libc::sigaction = std::mem::zeroed();
         sa.sa_sigaction = on_signal as *const () as usize;
@@ -199,5 +218,50 @@ pub fn install_signal_hook(dir: &str) {
         ] {
             libc::sigaction(sig, &sa, std::ptr::null_mut());
         }
+    }
+}
+
+/// 崩溃瞬间转存 /proc/self/maps(last-gasp:进程将死,读写全套豁免
+/// 异步信号安全洁癖;有界 512KB,零分配——路径/缓冲全是装机预埋的静态)
+unsafe fn dump_maps_for_autopsy() {
+    unsafe {
+        let path_ptr = CRASH_MAPS_PATH.load(Ordering::Relaxed);
+        if path_ptr == 0 {
+            return;
+        }
+        let out = libc::open(
+            path_ptr as *const libc::c_char,
+            libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC,
+            0o644,
+        );
+        if out < 0 {
+            return;
+        }
+        let maps = libc::open(c"/proc/self/maps".as_ptr(), libc::O_RDONLY);
+        if maps >= 0 {
+            let mut buf = [0u8; 8192];
+            let mut total = 0usize;
+            loop {
+                let r = libc::read(maps, buf.as_mut_ptr().cast(), buf.len());
+                if r <= 0 || total > 512 * 1024 {
+                    break;
+                }
+                let mut off = 0usize;
+                while off < r as usize {
+                    let w = libc::write(
+                        out,
+                        buf.as_ptr().add(off) as *const libc::c_void,
+                        r as usize - off,
+                    );
+                    if w <= 0 {
+                        break;
+                    }
+                    off += w as usize;
+                    total += w as usize;
+                }
+            }
+            libc::close(maps);
+        }
+        libc::close(out);
     }
 }
