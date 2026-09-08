@@ -34,6 +34,10 @@
   epoch 自动计数在段位过渡期失效，以计数器文件为唯一事实源。
   另：服务器打包分支 jdk bin 进 PATH（d8 裸调 java 不在 PATH 曾断
   打包）。
+- **PC 偏移修正（同日三补）**：SIGURG 探针实证 304 偏移读到 x16 野值
+  （bionic aarch64 的 sigmask+unused 卡在中间）——真 PC 在 ucontext+432
+  （NDK sysroot 头文件为尺）。教训：跨 libc 的结构体偏移必须读本机
+  sysroot 头文件，不许照搬 glibc 直觉。
 - **crash-maps 路径修复（同日再补）**：装机路径拼接重复段
   （…/tmp/crash-maps/crash-maps）致转存静默失败（父目录不存在）——
   一行修正。教训第三次重踩：fix 提交被钩子拒后 && 链继续跑部署，

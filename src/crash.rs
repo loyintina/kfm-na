@@ -107,10 +107,13 @@ pub fn format_pc_line(pc: usize, base: usize, end: usize, buf: &mut [u8]) -> usi
 }
 
 /// 信号处理器本体:写两行(信号行+PC 行,尽力而为)→ SIGURG 探针返回
-/// 继续活,其余 re-raise。PC 从 ucontext 提取——aarch64 布局:uc_flags(8)
-/// +uc_link(8)+uc_stack(24)=40 进 sigcontext(fault_address+0/regs[31]
-/// +8/sp+256/pc+264),即 ucontext+304。设备钉死 aarch64,勿移植
-const UCTX_PC_OFF: usize = 304;
+/// 继续活,其余 re-raise。PC 从 ucontext 提取——bionic aarch64 布局
+/// (NDK sysroot asm-arm64/asm/{ucontext,sigcontext}.h 为准,2026-09-08
+/// SIGURG 探针实证 304 读到的是 uc_sigmask/unused 区=x16 寄存器野值):
+/// uc_flags(8)+uc_link(8)+uc_stack(24)+uc_sigmask(8)+__linux_unused(120)
+/// =168 进 sigcontext;fault_address@168/regs[31]@176/sp@424/**pc@432**。
+/// 设备钉死 aarch64,勿移植
+const UCTX_PC_OFF: usize = 432;
 unsafe extern "C" fn on_signal(sig: i32, info: *mut libc::siginfo_t, ctx: *mut libc::c_void) {
     let addr = if info.is_null() {
         0
