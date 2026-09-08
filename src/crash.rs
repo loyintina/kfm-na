@@ -192,7 +192,7 @@ pub fn install_signal_hook(dir: &str) {
     // crash-maps 路径预格式化成 C 串(handler 里零格式化)
     {
         let cpath = format!(
-            "{}/crash-maps\x00",
+            "{}\x00",
             std::path::Path::new(dir).join("crash-maps").display()
         );
         let mut guard = CRASH_MAPS_PATH_BUF.lock().unwrap();
