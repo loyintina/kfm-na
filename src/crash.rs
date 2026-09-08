@@ -12,7 +12,7 @@
 //! 堆转储/GC,libsigchain 截获后不下传用户 handler);SIGURG 无人认领
 //! 且默认动作本就是忽略,天然适合当探针。
 
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 
 /// 测试探针信号(装机实证钉死:不许换成 ART 认领的 SIGUSR1/SIGQUIT)
 pub const PROBE_SIG: i32 = libc::SIGURG;
@@ -20,20 +20,49 @@ pub const PROBE_SIG: i32 = libc::SIGURG;
 /// 预开的 panic.log fd(-1 = 未装)。handler 里只许碰这个
 static CRASH_FD: AtomicI32 = AtomicI32::new(-1);
 
+/// libkfm_na.so 的首映射基址/末映射末址(装机的 /proc/self/maps 解析,
+/// 0 = 未解析)。handler 里只读:PC 落在段内 → 报库内偏移,服务器
+/// addr2line 直达函数——尸检从「知道死哪条街」升级到「哪个门牌号」
+static SO_BASE: AtomicUsize = AtomicUsize::new(0);
+static SO_END: AtomicUsize = AtomicUsize::new(0);
+
+/// 十六进制写入(hex 推进 *n;format_signal_line/format_pc_line 共用)
+fn push_hex(v: usize, buf: &mut [u8], n: &mut usize) {
+    let mut tmp = [0u8; 16];
+    let mut m = 0;
+    let mut v = v;
+    loop {
+        let d = (v & 0xf) as u8;
+        tmp[m] = if d < 10 { b'0' + d } else { b'a' + d - 10 };
+        m += 1;
+        v >>= 4;
+        if v == 0 {
+            break;
+        }
+    }
+    while m > 0 {
+        m -= 1;
+        if *n < buf.len() {
+            buf[*n] = tmp[m];
+            *n += 1;
+        }
+    }
+}
+
+fn push_bytes(bytes: &[u8], buf: &mut [u8], n: &mut usize) {
+    for &b in bytes {
+        if *n < buf.len() {
+            buf[*n] = b;
+            *n += 1;
+        }
+    }
+}
+
 /// 坠机行格式(纯函数,钉死):`SIGNAL sig=11 addr=0xdeadbeef\n`。
-/// 手写十/十六进制进固定栈缓冲——handler 里 format! 会分配,不许用;
-/// 这函数是全模块唯一 formatting,也是唯一需要考题的地方
+/// 手写十/十六进制进固定栈缓冲——handler 里 format! 会分配,不许用
 pub fn format_signal_line(sig: i32, addr: usize, buf: &mut [u8]) -> usize {
     let mut n = 0;
-    let mut push = |bytes: &[u8], n: &mut usize| {
-        for &b in bytes {
-            if *n < buf.len() {
-                buf[*n] = b;
-                *n += 1;
-            }
-        }
-    };
-    push(b"SIGNAL sig=", &mut n);
+    push_bytes(b"SIGNAL sig=", buf, &mut n);
     // 十进制信号号(倒序入临时,再倒回来)
     let mut tmp = [0u8; 20];
     let mut m = 0;
@@ -48,43 +77,59 @@ pub fn format_signal_line(sig: i32, addr: usize, buf: &mut [u8]) -> usize {
     }
     while m > 0 {
         m -= 1;
-        push(&[tmp[m]], &mut n);
+        push_bytes(&[tmp[m]], buf, &mut n);
     }
-    push(b" addr=0x", &mut n);
-    // 十六进制地址(同上倒序;0 也要出一个 0)
-    let mut m = 0;
-    let mut v = addr;
-    loop {
-        let d = (v & 0xf) as u8;
-        tmp[m] = if d < 10 { b'0' + d } else { b'a' + d - 10 };
-        m += 1;
-        v >>= 4;
-        if v == 0 {
-            break;
-        }
-    }
-    while m > 0 {
-        m -= 1;
-        push(&[tmp[m]], &mut n);
-    }
-    push(b"\n", &mut n);
+    push_bytes(b" addr=0x", buf, &mut n);
+    push_hex(addr, buf, &mut n);
+    push_bytes(b"\n", buf, &mut n);
     n
 }
 
-/// 信号处理器本体:写行(尽力而为)→ SIGURG 探针返回继续活,其余 re-raise
-unsafe extern "C" fn on_signal(sig: i32, info: *mut libc::siginfo_t, _ctx: *mut libc::c_void) {
+/// PC 行格式(纯函数,2026-09-08 新增):`PC pc=0x… in=libkfm_na off=0x…\n`
+/// 或库外 `PC pc=0x… in=foreign\n`。base/end 全零(未解析)按 foreign 报
+pub fn format_pc_line(pc: usize, base: usize, end: usize, buf: &mut [u8]) -> usize {
+    let mut n = 0;
+    push_bytes(b"PC pc=0x", buf, &mut n);
+    push_hex(pc, buf, &mut n);
+    if base != 0 && pc >= base && pc < end {
+        push_bytes(b" in=libkfm_na off=0x", buf, &mut n);
+        push_hex(pc - base, buf, &mut n);
+    } else {
+        push_bytes(b" in=foreign", buf, &mut n);
+    }
+    push_bytes(b"\n", buf, &mut n);
+    n
+}
+
+/// 信号处理器本体:写两行(信号行+PC 行,尽力而为)→ SIGURG 探针返回
+/// 继续活,其余 re-raise。PC 从 ucontext 提取——aarch64 布局:uc_flags(8)
+/// +uc_link(8)+uc_stack(24)=40 进 sigcontext(fault_address+0/regs[31]
+/// +8/sp+256/pc+264),即 ucontext+304。设备钉死 aarch64,勿移植
+const UCTX_PC_OFF: usize = 304;
+unsafe extern "C" fn on_signal(sig: i32, info: *mut libc::siginfo_t, ctx: *mut libc::c_void) {
     let addr = if info.is_null() {
         0
     } else {
         // si_addr:故障地址(SIGSEGV/SIGBUS 有,其余为 null)
         unsafe { (*info).si_addr() as usize }
     };
+    let pc = if ctx.is_null() {
+        0
+    } else {
+        unsafe { *((ctx as *const u8).add(UCTX_PC_OFF) as *const usize) }
+    };
     let fd = CRASH_FD.load(Ordering::Relaxed);
     if fd >= 0 {
-        let mut buf = [0u8; 128];
-        let n = format_signal_line(sig, addr, &mut buf);
+        let mut buf = [0u8; 256];
+        let n1 = format_signal_line(sig, addr, &mut buf);
+        let n2 = format_pc_line(
+            pc,
+            SO_BASE.load(Ordering::Relaxed),
+            SO_END.load(Ordering::Relaxed),
+            &mut buf[n1..],
+        );
         unsafe {
-            libc::write(fd, buf.as_ptr().cast(), n);
+            libc::write(fd, buf.as_ptr().cast(), n1 + n2);
         }
     }
     if sig == PROBE_SIG {
@@ -112,6 +157,26 @@ pub fn install_signal_hook(dir: &str) {
         .open(&path)
     {
         CRASH_FD.store(f.into_raw_fd(), Ordering::Relaxed);
+    }
+    // libkfm_na 映射段登记(PC→库内偏移换算的尺子;解析失败留 0=foreign)
+    if let Ok(maps) = std::fs::read_to_string("/proc/self/maps") {
+        let (mut lo, mut hi) = (usize::MAX, 0usize);
+        for line in maps.lines() {
+            if !line.contains("libkfm_na.so") {
+                continue;
+            }
+            if let Some((rng, _)) = line.split_once(' ')
+                && let Some((a, b)) = rng.split_once('-')
+                && let (Ok(a), Ok(b)) = (usize::from_str_radix(a, 16), usize::from_str_radix(b, 16))
+            {
+                lo = lo.min(a);
+                hi = hi.max(b);
+            }
+        }
+        if lo != usize::MAX && hi > lo {
+            SO_BASE.store(lo, Ordering::Relaxed);
+            SO_END.store(hi, Ordering::Relaxed);
+        }
     }
     std::fs::write(
         std::path::PathBuf::from(dir).join("na.pid"),

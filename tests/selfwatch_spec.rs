@@ -238,3 +238,23 @@ fn spec_history_行格式钉死与防除零() {
     assert!(line.contains("draw=0/20ms"));
     assert!(line.starts_with("t=30000 fg=1 fr=0 "));
 }
+
+// ---- ②PC 行格式(2026-09-08 尸检升级) ----
+
+#[test]
+fn spec_pc_行_库内报偏移() {
+    let mut buf = [0u8; 128];
+    let n = kfm_na::crash::format_pc_line(0x1000_0042, 0x1000_0000, 0x1001_0000, &mut buf);
+    assert_eq!(&buf[..n], b"PC pc=0x10000042 in=libkfm_na off=0x42\n");
+}
+
+#[test]
+fn spec_pc_行_库外报foreign() {
+    let mut buf = [0u8; 128];
+    let n = kfm_na::crash::format_pc_line(0x7fab_cafe, 0x1000_0000, 0x1001_0000, &mut buf);
+    assert_eq!(&buf[..n], b"PC pc=0x7fabcafe in=foreign\n");
+    // 未解析(基址 0)一律 foreign——不许拿 0 当基址算出负偏移
+    let mut buf2 = [0u8; 128];
+    let n2 = kfm_na::crash::format_pc_line(0x42, 0, 0, &mut buf2);
+    assert_eq!(&buf2[..n2], b"PC pc=0x42 in=foreign\n");
+}

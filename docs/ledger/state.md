@@ -34,6 +34,11 @@
   epoch 自动计数在段位过渡期失效，以计数器文件为唯一事实源。
   另：服务器打包分支 jdk bin 进 PATH（d8 裸调 java 不在 PATH 曾断
   打包）。
+- **尸检升级（2026-09-08，面板动画 SIGSEGV 六例无函数定位）**：crash.rs
+  换 SA_SIGINFO 上下文取 PC（aarch64 ucontext+304）+/proc/self/maps
+  登记 libkfm_na 段——panic.log 新增 PC 行（pc/off/in=libkfm_na），
+  addr2line 一步到函数。复现路径：面板动画首帧必崩（录制无辜，纯动画
+  即崩，嫌疑=昨晚新仪表 vsync 对表/抽帧与动画交互）。
 - **B 软件内录（2026-09-08，P2 显示真相）**：KfmRecService（MediaProjection
   + MediaCodec Surface 编码 + MediaMuxer → rec.mp4 落 files/usr/tmp）；
   Android 14+ 纪律=mediaProjection 类型前台服务+授权弹窗一次（token
