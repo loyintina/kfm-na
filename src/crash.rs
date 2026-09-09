@@ -258,12 +258,13 @@ pub fn install_signal_hook(dir: &str) {
     {
         CRASH_FD.store(f.into_raw_fd(), Ordering::Relaxed);
     }
-    // crash-stack.bin 预开(truncate:每进程只留自己这份料)
+    // crash-stack.bin 预开(append:崩溃后新 boot 不得抹掉死者的料——
+    // 2026-09-09 实踩:truncate 让重启把刚倒的栈料清空;DUMP 头自带
+    // 定界,离线取最后一条即最新)
     let spath = std::path::PathBuf::from(dir).join("crash-stack.bin");
     if let Ok(f) = std::fs::OpenOptions::new()
         .create(true)
-        .write(true)
-        .truncate(true)
+        .append(true)
         .open(&spath)
     {
         CRASH_STACK_FD.store(f.into_raw_fd(), Ordering::Relaxed);
