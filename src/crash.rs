@@ -132,16 +132,17 @@ pub fn format_reg_line(
 }
 
 /// 信号处理器本体:写两行(信号行+PC 行,尽力而为)→ SIGURG 探针返回
-/// 继续活,其余 re-raise。PC 从 ucontext 提取——bionic aarch64 布局
-/// (NDK sysroot asm-arm64/asm/{ucontext,sigcontext}.h 为准,2026-09-08
-/// SIGURG 探针实证 304 读到的是 uc_sigmask/unused 区=x16 寄存器野值):
-/// uc_flags(8)+uc_link(8)+uc_stack(24)+uc_sigmask(8)+__linux_unused(120)
-/// =168 进 sigcontext;sigcontext 内: fault_address@+0/regs[31]@+8/
-/// sp@+256/pc@+264/pstate@+272。故 ucontext 绝对偏移: fault@168/
-/// regs@176/lr(regs[30])@424/sp@424+8×?…——逐项: regs[i]=176+8i,
-/// lr=regs[30]=424+0x1f8?→424?——绝对值: sp=168+256=424, pc=168+264=432。
-/// 设备钉死 aarch64,勿移植;SIGURG 探针可实证
-const UCTX_SC_OFF: usize = 168; // sigcontext 首址(fault_address)
+/// 继续活,其余 re-raise。PC 从 ucontext 提取——aarch64 sigcontext 内
+/// 布局: fault_address@+0/regs[31]@+8(x_i=+8+8i,lr=+248)/sp@+256/
+/// pc@+264/pstate@+272。
+/// BAR-071(2026-09-09):uc_mcontext 首址=176,不是书本值 168——本机
+/// 内核在 sigcontext 前多垫 8 字节。实证链(三条独立记录全自洽):
+/// ①按 168 读出的 "x0" 恒等于 si_addr——那其实是 fault_address;
+/// ②按 176 重读:fp/sp 落栈区、"lr" 落 libc++.so 代码段,区域类型
+/// 全对;③旧 "PC@432" 在 SIGURG 探针里落进 [stack] 非代码页——探针
+/// 当时给出的是反证,被误读成背书(钉:
+/// spec_bar071_sigcontext首址_实测值176)。设备钉死 aarch64,勿移植
+pub const UCTX_SC_OFF: usize = 176; // sigcontext 首址(fault_address)
 const SC_SP_OFF: usize = 256; // sigcontext 内 sp
 const SC_PC_OFF: usize = 264; // sigcontext 内 pc(lr=regs[30]=sigcontext+248)
 unsafe extern "C" fn on_signal(sig: i32, info: *mut libc::siginfo_t, ctx: *mut libc::c_void) {

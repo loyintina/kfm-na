@@ -277,3 +277,13 @@ fn spec_reg_行_零值照写() {
     let n = kfm_na::crash::format_reg_line(0, 0, 0, 0, 0, &mut buf);
     assert_eq!(&buf[..n], b"REG sp=0x0 lr=0x0 x0=0x0 x1=0x0 x2=0x0\n");
 }
+
+// ---- ④sigcontext 首址实测值(BAR-071) ----
+
+#[test]
+fn spec_bar071_sigcontext首址_实测值176() {
+    // BAR-071: 书本值 168 在本机读出全字段偏 8 字节——"x0" 恒=si_addr
+    // (实为 fault_address),"PC" 落栈非代码页。真首址 176 经三条独立
+    // 记录自洽实证。此钉锁死实测值,防后人"按手册改回 168"。
+    assert_eq!(kfm_na::crash::UCTX_SC_OFF, 176);
+}
