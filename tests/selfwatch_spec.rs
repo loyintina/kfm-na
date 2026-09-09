@@ -287,3 +287,15 @@ fn spec_bar071_sigcontext首址_实测值176() {
     // 记录自洽实证。此钉锁死实测值,防后人"按手册改回 168"。
     assert_eq!(kfm_na::crash::UCTX_SC_OFF, 176);
 }
+
+// ---- ⑤栈料头格式(2026-09-09 尸检再升级) ----
+
+#[test]
+fn spec_dump头_tid_sp_len钉死() {
+    let mut buf = [0u8; 80];
+    let len = kfm_na::crash::STACK_DUMP_BYTES;
+    assert_eq!(len, 16384, "倾倒量改动=离线解析器同步改,钉死防漂移");
+    let n = kfm_na::crash::format_dump_header(26018, 0x77a6_bf7a70, len, &mut buf);
+    assert_eq!(&buf[..n], b"DUMP tid=26018 sp=0x77a6bf7a70 len=16384\n");
+    // 头后紧跟裸栈料——头是这堆二进制里唯一的锚,格式一个字不许动
+}

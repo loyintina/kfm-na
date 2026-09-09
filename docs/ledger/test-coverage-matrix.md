@@ -14,7 +14,7 @@
 | `src/brain.rs` | 14 | 14 | 0 | — |
 | `src/brain_ep.rs` | 4 | 4 | 0 | — |
 | `src/conn.rs` | 4 | 2 | 2 | spawn_smoke ws_spawner |
-| `src/crash.rs` | 4 | 3 | 1 | install_signal_hook |
+| `src/crash.rs` | 8 | 6 | 2 | STACK_DUMP_BYTES install_signal_hook |
 | `src/direct_brain.rs` | 2 | 2 | 0 | — |
 | `src/exec_probe.rs` | 1 | 1 | 0 | — |
 | `src/gate.rs` | 83 | 59 | 24 | DUMP_DIR register_gate_router text_dump inject_keys spawn_gate_watcher REC_FILE_CAP REC_FILE rec_output rec_resize PANIC_FILE PANIC_TRACE_FILE LOOP_STALL_FILE note_loop_beat loop_beat_age_ms note_foreground install_panic_hook note_draw note_session_death touch_take register_input_bar ALERT_RSS_COOLDOWN_MS ALERT_DEATHS_WINDOW_MS ALERT_DEATHS_COOLDOWN_MS HISTORY_EVERY_TICKS |

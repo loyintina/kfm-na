@@ -38,6 +38,17 @@
   epoch 自动计数在段位过渡期失效，以计数器文件为唯一事实源。
   另：服务器打包分支 jdk bin 进 PATH（d8 裸调 java 不在 PATH 曾断
   打包）。
+- **BAR-071 尸检仪校准（2026-09-09， offsets 全偏 8 字节）**：书本值
+  uc_mcontext@168 在本机全字段错位——"x0"恒=si_addr（实为 fault_address）、
+  "PC"落线程栈非代码页；实测真首址 176。旧"PC@432"实为 sp，SIGURG
+  探针当时是反证被误读成背书。校准后探针三字段全落对区（pc→libc
+  r-xp/sp→[stack]/lr→libutils r-xp）。钉 spec_bar071_sigcontext首址_实测值176。
+  随之真凶现形：PC=pthread_mutex_lock(libc)，LR=libc++ to_wstring 族，
+  x0=故障地址=野互斥锁指针。
+- **栈料倾倒（同日，尸检四次升级）**：handler 新增 crash-stack.bin——
+  崩溃瞬间从 sp 向上倒 16KB（DUMP 头 tid/sp/len + 裸字节，fd 装机预开，
+  SIGURG 探针顺带端到端验链）。离线拿 crash-maps 当尺筛代码指针
+  符号化全调用链——PC 只说他死在哪，栈料说谁带他去的。
 - **PC 偏移修正（同日三补）**：SIGURG 探针实证 304 偏移读到 x16 野值
   （bionic aarch64 的 sigmask+unused 卡在中间）——真 PC 在 ucontext+432
   （NDK sysroot 头文件为尺）。教训：跨 libc 的结构体偏移必须读本机

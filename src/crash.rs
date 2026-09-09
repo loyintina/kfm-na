@@ -31,6 +31,15 @@ static SO_END: AtomicUsize = AtomicUsize::new(0);
 static CRASH_MAPS_PATH: AtomicUsize = AtomicUsize::new(0);
 static CRASH_MAPS_PATH_BUF: std::sync::Mutex<[u8; 128]> = std::sync::Mutex::new([0u8; 128]);
 
+/// 预开的 crash-stack.bin fd(-1 = 未装)——崩溃瞬间从 sp 向上倒
+/// 16KB 栈料;离线拿 crash-maps 当尺子筛代码指针,符号化出完整
+/// 调用链(pthread_mutex_lock 只说他死在哪,栈料才说谁带他去的)
+static CRASH_STACK_FD: AtomicI32 = AtomicI32::new(-1);
+
+/// 栈料倾倒字节数(sp 向上=旧帧方向,全是活跃映射页;单次 write
+/// 尽力而为,页未映射 EFAULT 静默——不许自己成为死因)
+pub const STACK_DUMP_BYTES: usize = 16384;
+
 /// 十六进制写入(hex 推进 *n;format_signal_line/format_pc_line 共用)
 fn push_hex(v: usize, buf: &mut [u8], n: &mut usize) {
     let mut tmp = [0u8; 16];
@@ -61,6 +70,39 @@ fn push_bytes(bytes: &[u8], buf: &mut [u8], n: &mut usize) {
             *n += 1;
         }
     }
+}
+
+/// 十进制写入(dec 推进 *n;dump 头用)
+fn push_dec(mut v: usize, buf: &mut [u8], n: &mut usize) {
+    let mut tmp = [0u8; 20];
+    let mut m = 0;
+    loop {
+        tmp[m] = b'0' + (v % 10) as u8;
+        m += 1;
+        v /= 10;
+        if v == 0 {
+            break;
+        }
+    }
+    while m > 0 {
+        m -= 1;
+        push_bytes(&[tmp[m]], buf, n);
+    }
+}
+
+/// 栈料头格式(纯函数,钉死):`DUMP tid=26018 sp=0x77a6bf7a70 len=16384\n`。
+/// tid=崩溃线程归属(判凶手是不是我们的线程),sp=倾倒起点,
+/// 头后紧跟 len 字节裸栈料
+pub fn format_dump_header(tid: i32, sp: usize, len: usize, buf: &mut [u8]) -> usize {
+    let mut n = 0;
+    push_bytes(b"DUMP tid=", buf, &mut n);
+    push_dec(tid.unsigned_abs() as usize, buf, &mut n);
+    push_bytes(b" sp=0x", buf, &mut n);
+    push_hex(sp, buf, &mut n);
+    push_bytes(b" len=", buf, &mut n);
+    push_dec(len, buf, &mut n);
+    push_bytes(b"\n", buf, &mut n);
+    n
 }
 
 /// 坠机行格式(纯函数,钉死):`SIGNAL sig=11 addr=0xdeadbeef\n`。
@@ -179,6 +221,16 @@ unsafe extern "C" fn on_signal(sig: i32, info: *mut libc::siginfo_t, ctx: *mut l
             libc::write(fd, buf.as_ptr().cast(), n1 + n2 + n3);
         }
     }
+    // 栈料倾倒(探针也倒——SIGURG 冒烟顺带端到端验这条链)
+    let sfd = CRASH_STACK_FD.load(Ordering::Relaxed);
+    if sfd >= 0 && sp != 0 {
+        let mut hbuf = [0u8; 80];
+        let hn = format_dump_header(unsafe { libc::gettid() }, sp, STACK_DUMP_BYTES, &mut hbuf);
+        unsafe {
+            libc::write(sfd, hbuf.as_ptr().cast(), hn);
+            libc::write(sfd, sp as *const libc::c_void, STACK_DUMP_BYTES);
+        }
+    }
     if sig == PROBE_SIG {
         return; // 测试探针:写行已证链路活,进程继续
     }
@@ -205,6 +257,16 @@ pub fn install_signal_hook(dir: &str) {
         .open(&path)
     {
         CRASH_FD.store(f.into_raw_fd(), Ordering::Relaxed);
+    }
+    // crash-stack.bin 预开(truncate:每进程只留自己这份料)
+    let spath = std::path::PathBuf::from(dir).join("crash-stack.bin");
+    if let Ok(f) = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&spath)
+    {
+        CRASH_STACK_FD.store(f.into_raw_fd(), Ordering::Relaxed);
     }
     // libkfm_na 映射段登记(PC→库内偏移换算的尺子;解析失败留 0=foreign)
     if let Ok(maps) = std::fs::read_to_string("/proc/self/maps") {
