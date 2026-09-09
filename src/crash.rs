@@ -148,11 +148,14 @@ pub fn format_pc_line(pc: usize, base: usize, end: usize, buf: &mut [u8]) -> usi
     n
 }
 
-/// 寄存器行格式(纯函数):`REG sp=0x… lr=0x… x0=0x… x1=0x… x2=0x…\n`
-/// LR(x30)=野跳转的调用者指纹——addr2line 直达肇事调用点
+/// 寄存器行格式(纯函数):`REG sp=0x… lr=0x… fp=0x… x0=0x… x1=0x… x2=0x…\n`
+/// LR(x30)=野跳转的调用者指纹——addr2line 直达肇事调用点;
+/// FP(x29)=帧链锚(2026-09-09 加):栈料里化石与活帧混杂,fp 链
+/// ( [fp]=旧fp / [fp+8]=返回址 )离线逐帧走,把活调用链从化石里滤出来
 pub fn format_reg_line(
     sp: usize,
     lr: usize,
+    fp: usize,
     x0: usize,
     x1: usize,
     x2: usize,
@@ -163,6 +166,8 @@ pub fn format_reg_line(
     push_hex(sp, buf, &mut n);
     push_bytes(b" lr=0x", buf, &mut n);
     push_hex(lr, buf, &mut n);
+    push_bytes(b" fp=0x", buf, &mut n);
+    push_hex(fp, buf, &mut n);
     push_bytes(b" x0=0x", buf, &mut n);
     push_hex(x0, buf, &mut n);
     push_bytes(b" x1=0x", buf, &mut n);
@@ -194,8 +199,8 @@ unsafe extern "C" fn on_signal(sig: i32, info: *mut libc::siginfo_t, ctx: *mut l
         // si_addr:故障地址(SIGSEGV/SIGBUS 有,其余为 null)
         unsafe { (*info).si_addr() as usize }
     };
-    let (pc, sp, lr, x0, x1, x2) = if ctx.is_null() {
-        (0, 0, 0, 0, 0, 0)
+    let (pc, sp, lr, fp, x0, x1, x2) = if ctx.is_null() {
+        (0, 0, 0, 0, 0, 0, 0)
     } else {
         unsafe {
             let sc = (ctx as *const u8).add(UCTX_SC_OFF); // sigcontext 首
@@ -203,7 +208,7 @@ unsafe extern "C" fn on_signal(sig: i32, info: *mut libc::siginfo_t, ctx: *mut l
             let reg = |i: usize| *((sc.add(8 + i * 8)) as *const usize);
             let spv = *((sc.add(SC_SP_OFF)) as *const usize);
             let pcv = *((sc.add(SC_PC_OFF)) as *const usize);
-            (pcv, spv, reg(30), reg(0), reg(1), reg(2))
+            (pcv, spv, reg(30), reg(29), reg(0), reg(1), reg(2))
         }
     };
     let fd = CRASH_FD.load(Ordering::Relaxed);
@@ -216,7 +221,7 @@ unsafe extern "C" fn on_signal(sig: i32, info: *mut libc::siginfo_t, ctx: *mut l
             SO_END.load(Ordering::Relaxed),
             &mut buf[n1..],
         );
-        let n3 = format_reg_line(sp, lr, x0, x1, x2, &mut buf[n1 + n2..]);
+        let n3 = format_reg_line(sp, lr, fp, x0, x1, x2, &mut buf[n1 + n2..]);
         unsafe {
             libc::write(fd, buf.as_ptr().cast(), n1 + n2 + n3);
         }

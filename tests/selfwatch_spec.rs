@@ -264,18 +264,29 @@ fn spec_pc_行_库外报foreign() {
 #[test]
 fn spec_reg_行_lr指纹钉死() {
     let mut buf = [0u8; 256];
-    let n = kfm_na::crash::format_reg_line(0x7fe_1000, 0x77a6_bf7a70, 0x1, 0x2, 0x3, &mut buf);
+    let n = kfm_na::crash::format_reg_line(
+        0x7fe_1000,
+        0x77a6_bf7a70,
+        0x77a6_bf8000,
+        0x1,
+        0x2,
+        0x3,
+        &mut buf,
+    );
     assert_eq!(
         &buf[..n],
-        b"REG sp=0x7fe1000 lr=0x77a6bf7a70 x0=0x1 x1=0x2 x2=0x3\n"
+        b"REG sp=0x7fe1000 lr=0x77a6bf7a70 fp=0x77a6bf8000 x0=0x1 x1=0x2 x2=0x3\n"
     );
 }
 
 #[test]
 fn spec_reg_行_零值照写() {
     let mut buf = [0u8; 256];
-    let n = kfm_na::crash::format_reg_line(0, 0, 0, 0, 0, &mut buf);
-    assert_eq!(&buf[..n], b"REG sp=0x0 lr=0x0 x0=0x0 x1=0x0 x2=0x0\n");
+    let n = kfm_na::crash::format_reg_line(0, 0, 0, 0, 0, 0, &mut buf);
+    assert_eq!(
+        &buf[..n],
+        b"REG sp=0x0 lr=0x0 fp=0x0 x0=0x0 x1=0x0 x2=0x0\n"
+    );
 }
 
 // ---- ④sigcontext 首址实测值(BAR-071) ----

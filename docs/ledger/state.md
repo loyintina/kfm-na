@@ -722,3 +722,7 @@ IO 挤兑（some=0.93/full=0.76），编译进程被外部冻结，负载自然�
 - **crash-stack 开法修正（同日四补）**：truncate → append——崩溃后新 boot
   的 truncate 把刚倒的栈料抹了（09-09 实踩：远程注入 tap 复现成功，
   料却被重启清场）。DUMP 头自带定界，离线取最后一条即最新。
+- **尸检五次升级（同日）**：REG 行加 fp(x29) 帧链锚——栈料里化石与活帧
+  混杂（符号化后目击 android_logger/regex Cache 化石），fp 链离线逐帧走
+  才能滤出活链；线程普查 threads.txt（每 3s tid:comm 花名册）给死者
+  发姓名。REG 格式钉同步换版。

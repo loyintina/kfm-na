@@ -287,8 +287,27 @@ pub fn spawn_gate_watcher() {
             rec_req_check(DUMP_DIR); // 通道十二:软件内实录(P2,2026-09-08)
             alert_tick(tick);
             history_tick(DUMP_DIR, tick);
+            thread_census(DUMP_DIR, tick);
         }
     });
+}
+
+/// 线程普查（尸检配套 2026-09-09）：每 ~3s 把 /proc/self/task 的
+/// tid:comm 花名册落盘——崩溃栈料只有 tid，生者名册给死者发姓名
+fn thread_census(dir: &str, tick: u64) {
+    if !tick.is_multiple_of(10) {
+        return;
+    }
+    let mut out = String::new();
+    if let Ok(rd) = std::fs::read_dir("/proc/self/task") {
+        for e in rd.flatten() {
+            let tid = e.file_name().to_string_lossy().into_owned();
+            if let Ok(comm) = std::fs::read_to_string(e.path().join("comm")) {
+                out.push_str(&format!("{}:{}\n", tid, comm.trim_end()));
+            }
+        }
+    }
+    let _ = std::fs::write(std::path::Path::new(dir).join("threads.txt"), out);
 }
 
 // ---- 会话泵（Output 数据面与生命周期控制面分家） ----
