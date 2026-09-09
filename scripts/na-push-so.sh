@@ -39,11 +39,24 @@ else
     # 远端 mtime 先拿下(BAR-060：拉下来的副本 mtime=下载时刻,拿它
     # 比 HEAD 恒新,哨兵形同虚设——09-04 凌晨因此把 9-2 旧核推上机,
     # 期 0③ 被静默降级,靠人肉读 boot 构建戳抓回)
-    SO_TS=$(ssh -p 8022 -o BatchMode=yes -o ConnectTimeout=8 localhost \
-        'stat -c%Y ~/kfm-na/target/aarch64-linux-android/release/libkfm_na.so' \
-        2>/dev/null || echo 0)
+    # BAR-073(2026-09-09)：双候选路径自适应——手机原生编核落
+    # target/release/,交叉链落 target/aarch64-linux-android/release/;
+    # 写死交叉路径会把残留旧核当事实源(哨兵比对/拉取同源同错)。
+    # 取较新者,哨兵与拉取用同一份挑选结果。
+    SO_PICK=$(ssh -p 8022 -o BatchMode=yes -o ConnectTimeout=8 localhost \
+        'a=$HOME/kfm-na/target/release/libkfm_na.so
+         b=$HOME/kfm-na/target/aarch64-linux-android/release/libkfm_na.so
+         s=$a
+         if [ -f "$b" ] && { [ ! -f "$a" ] || [ "$b" -nt "$a" ]; }; then s=$b; fi
+         if [ -f "$s" ]; then stat -c"%Y %n" "$s"; fi' 2>/dev/null || true)
+    SO_TS="${SO_PICK%% *}"
+    SO_PATH="${SO_PICK#* }"
+    [ -z "$SO_TS" ] && SO_TS=0
+    [ -z "$SO_PATH" ] || [ "$SO_PATH" = "$SO_TS" ] && {
+        echo "❌ 手机仓两条候选路径都没有 libkfm_na.so——先编核" >&2; exit 66; }
+    echo "远端核: $SO_PATH ($(date -d "@$SO_TS" '+%m-%d %H:%M'))"
     ssh -p 8022 -o BatchMode=yes -o ConnectTimeout=8 localhost \
-        'cat ~/kfm-na/target/aarch64-linux-android/release/libkfm_na.so' > "$LOCAL_TMP"
+        "cat $SO_PATH" > "$LOCAL_TMP"
 fi
 
 SIZE=$(stat -c%s "$LOCAL_TMP")
