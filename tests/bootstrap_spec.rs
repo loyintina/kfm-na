@@ -117,3 +117,18 @@ fn spec_l3_second_stage命令组装() {
         format!("{}/lib", prefix.display())
     );
 }
+
+// BAR-074 钉：幂等闸谓词三态——不存在/空目录/非空。壳靠它在读 32MB
+// 资产之前就跳过（旧序读完才问 ensure_prefix，启动关键路径每启裸读
+// 32MB，IO 挤兑期 boot 段 3s+，PIN-boot 挂卷族）。
+// 变异抽检：谓词改成恒 true/恒 false 各咬一端。
+#[test]
+fn spec_bar074_幂等闸谓词_三态() {
+    let tmp = tempfile::tempdir().unwrap();
+    let prefix = tmp.path().join("files/usr");
+    assert!(!kfm_na::bootstrap::prefix_ready(&prefix), "不存在=false");
+    fs::create_dir_all(&prefix).unwrap();
+    assert!(!kfm_na::bootstrap::prefix_ready(&prefix), "空目录=false");
+    fs::write(prefix.join("marker"), b"x").unwrap();
+    assert!(kfm_na::bootstrap::prefix_ready(&prefix), "非空=true");
+}

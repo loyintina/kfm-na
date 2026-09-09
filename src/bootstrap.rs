@@ -23,13 +23,23 @@ pub enum InstallStatus {
     AlreadyPresent,
 }
 
+/// 幂等闸谓词：prefix 存在且非空 = 环境已装好（BAR-074 剥给壳前置用——
+/// 壳必须先问它再决定读不读 32MB 资产；ensure_prefix 内部同闸双保险，
+/// 语义单源在此，不许各写一份）
+pub fn prefix_ready(prefix: &Path) -> bool {
+    if !prefix.is_dir() {
+        return false;
+    }
+    match fs::read_dir(prefix) {
+        Ok(mut it) => it.next().is_some(),
+        Err(_) => false,
+    }
+}
+
 /// 首启安装入口:prefix 非空则跳过;否则 staging 解包 + 补链 + rename
 pub fn ensure_prefix(prefix: &Path, zip_bytes: &[u8]) -> Result<InstallStatus, String> {
     // 幂等闸:prefix 存在且非空 = 环境已装好,zip 看都不看
-    if prefix.is_dir()
-        && let Ok(mut it) = fs::read_dir(prefix)
-        && it.next().is_some()
-    {
+    if prefix_ready(prefix) {
         return Ok(InstallStatus::AlreadyPresent);
     }
 
@@ -224,6 +234,15 @@ mod android_shell {
             return;
         };
         let prefix = files.join("usr");
+        // BAR-074：幂等闸前置——已装好就一个字节都不读。旧序把 32MB
+        // 资产全读进内存才调 ensure_prefix(它内部第一行就跳过)——启动
+        // 关键路径每启裸读 32MB,IO 一挤 boot 段 3s+(PIN-boot 挂卷族,
+        // field-reports 实测 08-21 起震荡至今)。模块文档原契约即
+        // 「zip 字节都不解析」,壳把闸挪到读之前才算兑现。
+        if super::prefix_ready(&prefix) {
+            crate::report::report("boot", "L3: 环境已装——跳过(幂等闸前置)");
+            return;
+        }
         let assets = app.asset_manager();
         let name = std::ffi::CString::new(BOOTSTRAP_ASSET).unwrap();
         let Some(mut asset) = assets.open(&name) else {
