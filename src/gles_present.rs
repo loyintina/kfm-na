@@ -106,13 +106,9 @@ static CAPTURE_FRAMES: std::sync::Mutex<Vec<(u32, u32, Vec<u8>)>> =
     std::sync::Mutex::new(Vec::new());
 
 // vsync 对表（dlsym libandroid.so 的 NDK API29+ 符号——targetSdk 28 不便
-// 静态链接，运行期 dlsym，libEGL dlopen 先例；句柄存静态保符号有效）
-static VSYNC_ARMED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-static VSYNC_LAST_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-static VSYNC_GAP_MIN_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-static VSYNC_GAP_MAX_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-static VSYNC_GAP_TOTAL_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-static VSYNC_GAP_N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+// 静态链接，运行期 dlsym，libEGL dlopen 先例；句柄存静态保符号有效）。
+// BAR-072：账本（ARMED/last_ns/gap 五原子）归核心层 vsync_book 册——
+// host 可判卷；本壳只管 dlsym/回调 ABI/相位。
 static VSYNC_PHASE_MIN_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static VSYNC_PHASE_MAX_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static VSYNC_PHASE_TOTAL_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -122,7 +118,13 @@ static VSYNC_PHASE_N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU6
 struct AChoreographer {
     _opaque: [u8; 0],
 }
-type ChoreoCallback = unsafe extern "C" fn(*const AChoreographer, i64, *mut std::ffi::c_void);
+// BAR-072（2026-09-09 面板闪退案真凶）：NDK 契约 AChoreographer_frameCallback64
+// 是**两参** (int64_t frameTimeNanos, void* data)——本类型曾凭空多画了
+// 一个首位 *const AChoreographer 形参，于是回调里读到的 "c" 实际是帧时间戳，
+// 自续挂表把它当 Choreographer 指针回 post → postFrameCallbackDelayed 对
+// 时间戳+0x58 做 mutex::lock → SIGSEGV（三案故障地址低 48 位=同段开机时长
+// 纳秒数，铁证）。cb 体内要回 post 就重新 getInstance，不许缓存/伪造 this。
+type ChoreoCallback = unsafe extern "C" fn(i64, *mut std::ffi::c_void);
 #[repr(C)]
 struct ChoreoFns {
     get_instance: unsafe extern "C" fn() -> *const AChoreographer,
@@ -144,8 +146,6 @@ fn anim_run_start() {
     for a in [
         &SWAP_GAP_N,
         &SWAP_GAP_TOTAL_US,
-        &VSYNC_GAP_N,
-        &VSYNC_GAP_TOTAL_US,
         &VSYNC_PHASE_N,
         &VSYNC_PHASE_TOTAL_US,
     ] {
@@ -153,11 +153,9 @@ fn anim_run_start() {
     }
     SWAP_GAP_MIN_US.store(u64::MAX, Ordering::Relaxed);
     SWAP_GAP_MAX_US.store(0, Ordering::Relaxed);
-    VSYNC_GAP_MIN_US.store(u64::MAX, Ordering::Relaxed);
-    VSYNC_GAP_MAX_US.store(0, Ordering::Relaxed);
     VSYNC_PHASE_MIN_US.store(u64::MAX, Ordering::Relaxed);
     VSYNC_PHASE_MAX_US.store(0, Ordering::Relaxed);
-    VSYNC_LAST_NS.store(0, Ordering::Relaxed);
+    crate::vsync_book::reset_run(); // gap 账+基线归 vsync_book（BAR-072）
     let run = RUN_TICK.fetch_add(1, Ordering::Relaxed);
     CAPTURE_ON.store(run.is_multiple_of(2), Ordering::Relaxed);
     CAPTURE_TICK.store(0, Ordering::Relaxed);
@@ -203,34 +201,42 @@ fn vsync_arm() {
             },
         ));
     }
-    VSYNC_ARMED.store(true, std::sync::atomic::Ordering::Relaxed);
+    crate::vsync_book::arm();
     if let Some((_, fns)) = guard.as_ref() {
         unsafe {
             let c = (fns.get_instance)();
-            (fns.post_cb64)(c, vsync_cb, std::ptr::null_mut());
+            // 当前线程无 ALooper 时 getInstance 返回空（getForThread 判空实锤）——
+            // 空指针进 post = 0x58 处暴毙，拦在门外
+            if !c.is_null() {
+                (fns.post_cb64)(c, vsync_cb, std::ptr::null_mut());
+            }
         }
     }
 }
 
-/// vsync 跳记账回调：逐跳记周期；仍武装则自续（回调链）
-unsafe extern "C" fn vsync_cb(c: *const AChoreographer, ts: i64, _d: *mut std::ffi::c_void) {
+/// vsync 跳记账回调：逐跳记周期；仍武装则自续（回调链）。
+/// NDK 两参契约 (frameTimeNanos, data)——签名钉见 ChoreoCallback（BAR-072）；
+/// 回 post 的 this 现场 getInstance 重取，不吃任何外来指针
+unsafe extern "C" fn vsync_cb(ts: i64, _d: *mut std::ffi::c_void) {
     unsafe {
-        use std::sync::atomic::Ordering;
-        let ns = ts as u64;
-        let last = VSYNC_LAST_NS.swap(ns, Ordering::Relaxed);
-        if last != 0 {
-            let gap = ns.saturating_sub(last) / 1000;
-            VSYNC_GAP_N.fetch_add(1, Ordering::Relaxed);
-            VSYNC_GAP_TOTAL_US.fetch_add(gap, Ordering::Relaxed);
-            VSYNC_GAP_MIN_US.fetch_min(gap, Ordering::Relaxed);
-            VSYNC_GAP_MAX_US.fetch_max(gap, Ordering::Relaxed);
-        }
-        if VSYNC_ARMED.load(Ordering::Relaxed)
+        crate::vsync_book::note_tick(ts as u64);
+        if crate::vsync_book::armed()
             && let Some((_, fns)) = CHOREO.lock().unwrap().as_ref()
         {
-            (fns.post_cb64)(c, vsync_cb, std::ptr::null_mut());
+            let c = (fns.get_instance)();
+            if !c.is_null() {
+                (fns.post_cb64)(c, vsync_cb, std::ptr::null_mut());
+            }
         }
     }
+}
+
+/// BAR-072 ABI 钉：以 NDK 契约型导出真回调。考题拿这枚指针按
+/// (frameTimeNanos, data) 直接喂——谁把 vsync_cb 改回三参「带
+/// Choreographer 指针」的幻觉版本，本函数类型不匹配当场编译红
+#[doc(hidden)]
+pub fn vsync_cb_for_ndk() -> ChoreoCallback {
+    vsync_cb
 }
 
 /// swap 间隔小账（present_frame 每帧喂：now=本帧 swap 时刻）
@@ -246,8 +252,8 @@ pub fn note_swap(now: u64) {
     SWAP_GAP_MIN_US.fetch_min(gap, Ordering::Relaxed);
     SWAP_GAP_MAX_US.fetch_max(gap, Ordering::Relaxed);
     // 相位：本帧 swap 落在 vsync 周期内的位置（对齐质量——稳=齐，飘=抖）
-    let vlast = VSYNC_LAST_NS.load(Ordering::Relaxed);
-    if VSYNC_ARMED.load(Ordering::Relaxed) && vlast != 0 && now > vlast {
+    let vlast = crate::vsync_book::last_ns();
+    if crate::vsync_book::armed() && vlast != 0 && now > vlast {
         let phase = (now - vlast) / 1000;
         VSYNC_PHASE_N.fetch_add(1, Ordering::Relaxed);
         VSYNC_PHASE_TOTAL_US.fetch_add(phase, Ordering::Relaxed);
@@ -276,15 +282,10 @@ fn swap_gap_report() -> String {
 }
 
 fn vsync_report() -> String {
-    let n = VSYNC_GAP_N.load(std::sync::atomic::Ordering::Relaxed);
-    if n == 0 {
+    let Some((n, vmin, vmax, total)) = crate::vsync_book::take_gap() else {
         return " vsync无样本".into();
-    }
+    };
     use std::sync::atomic::Ordering;
-    let total = VSYNC_GAP_TOTAL_US.swap(0, Ordering::Relaxed);
-    let vmin = VSYNC_GAP_MIN_US.swap(0, Ordering::Relaxed);
-    let vmax = VSYNC_GAP_MAX_US.swap(0, Ordering::Relaxed);
-    VSYNC_GAP_N.store(0, Ordering::Relaxed);
     let avg = total.checked_div(n).unwrap_or(1).max(1);
     // Hz ×10（整数域一位小数）：10_000_000us / 周期us
     let hz10 = 10_000_000_u64.checked_div(avg).unwrap_or(0);
@@ -384,7 +385,7 @@ pub fn note_anim_frame(active: bool, elapsed: std::time::Duration) {
 }
 
 fn vsync_disarm() {
-    VSYNC_ARMED.store(false, std::sync::atomic::Ordering::Relaxed);
+    crate::vsync_book::disarm();
 }
 
 fn stage_report() {

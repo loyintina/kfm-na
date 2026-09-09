@@ -33,6 +33,7 @@ pub mod termview;
 pub mod theme;
 pub mod trace;
 pub mod ui;
+pub mod vsync_book;
 
 #[cfg(target_os = "android")]
 pub mod android_app;
