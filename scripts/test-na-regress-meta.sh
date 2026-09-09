@@ -42,14 +42,21 @@ out=$(FAKE_MODE=unreachable PATH="$tmp:$PATH" bash "$here/na-regress.sh" PIN-boo
 case "$out" in *"跳过 1"*) : ;; *) fail "元契约①:报表应记跳过 1\n$out";; esac
 
 # ---- 元契约②:PIN-boot awk 判卷(样本直接喂给 awk 内核) ----
-boot_core() {  # 复刻 PIN-boot 的解析内核:$1=trace 文本 → 最大 ms 或空
+boot_core() {  # 复刻 PIN-boot 的解析内核:$1=trace 文本 → "FROZEN n"/最大 ms/空
     printf '%s' "$1" | awk '
-        /android_main 进入/ { boot=1; next }
+        /android_main 进入/ { boot=1; stall=0; m=0; next }
+        boot && /STALL beat_age=[0-9]+ms/ {
+            s=$0; sub(/.*STALL beat_age=/, "", s); sub(/ms.*/, "", s);
+            if (s+0 >= 1000) stall=s
+        }
         boot && /^\[\+[0-9]+ms boot\]/ {
             ms=$1; gsub(/^\[\+0*|ms.*$/, "", ms);
             if (ms+0 > m) m = ms+0
         }
-        END { if (m > 0) print m }'
+        END {
+            if (stall) { print "FROZEN " stall }
+            else if (m > 0) { print m }
+        }'
 }
 T='[+00000000ms boot] android_main 进入 (构建 x)
 [+00000021ms boot] softbuffer 上下文建成
@@ -59,6 +66,22 @@ T2="[+00053000ms boot] android_main 进入 (x)
 [+00460000ms boot] 族病样本:460 秒级塞启动路径"
 [ "$(boot_core "$T2")" = 460000 ] || fail "元契约②:族病样本应出 460000"
 [ -z "$(boot_core 'android_main 进入 无段行')" ] || fail "元契约②:无段行应出空(触发跳过路径)"
+# BAR-075 熄屏冻结:段内 STALL beat_age≥1000 = FROZEN 跳过;<1000 不触发
+TF='[+00000000ms boot] android_main 进入 (构建 x)
+[+00000068ms boot] init: 插件全装完
+[+00003278ms loop] unix=1 STALL beat_age=3278ms(前台)
+[+00003308ms boot] L3: 环境已装——跳过(幂等闸前置)'
+[ "$(boot_core "$TF")" = "FROZEN 3278" ] || fail "元契约②:冻结样本应出 FROZEN 3278,实得 $(boot_core "$TF")"
+TF2='[+00000000ms boot] android_main 进入 (构建 x)
+[+00000120ms loop] unix=1 STALL beat_age=320ms(前台)
+[+00000200ms boot] L3: 环境已装——跳过'
+[ "$(boot_core "$TF2")" = 200 ] || fail "元契约②:小 stall 不应触发冻结,实得 $(boot_core "$TF2")"
+# 旧 boot 的 STALL 不污染新 boot(末次 android_main 后窗口复位)
+TF3='[+00000000ms boot] android_main 进入 (构建 old)
+[+00003000ms loop] unix=1 STALL beat_age=2900ms(前台)
+[+00004000ms boot] android_main 进入 (构建 new)
+[+00000090ms boot] L3: 环境已装——跳过'
+[ "$(boot_core "$TF3")" = 90 ] || fail "元契约②:旧 boot 冻结不应污染新 boot,实得 $(boot_core "$TF3")"
 
 # ---- 元契约③:PIN-pump 差分速率(样本喂算法) ----
 pump_rate() {  # 复刻 PIN-pump:末两行 t/pump → 速率/s

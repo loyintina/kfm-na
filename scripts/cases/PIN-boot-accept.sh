@@ -15,6 +15,13 @@
 # 判热更刚完成的 boot。standalone 跑 = 判环里最后一次,证据行带
 # 构建戳,误报时人对戳自知。
 #
+# 熄屏冻结机检(BAR-075,2026-09-09):灭屏 am start 的 boot 会被系统
+# freezer 中段冻结 2~3.5s(埋点实锤:主线程 +68ms 插件装完后凭空消失
+# 2171ms,锁/资产/装帧逐项排除——纯系统冻线程,非码病;灭屏远程重启
+# 做实验的日子本卷恒红,亮屏期恒绿,field-reports 双簇分布互证)。
+# 段内出现 STALL beat_age≥1000ms = 冻结证物 → 跳过(77)不判,
+# 与「环被顶出→跳过」同哲学:判不了就不判,不把环境账记到码上。
+#
 # 局限(诚实版):trace 环帽 256,开机久了 boot 行会被顶出环——
 # 那时判不了,跳过(exit 77),不算挂。要新鲜判卷先跑 BAR-040(它重启)。
 set -uo pipefail
@@ -24,19 +31,31 @@ need_device PIN-boot
 
 trace=$(bash "$NA_ROOT/scripts/na-trace.sh" 2>/dev/null) \
     || fail PIN-boot "trace 拉不到"
-# 末次 android_main 进入之后的 boot 段行,取最大毫秒戳
-max_ms=$(echo "$trace" | awk '
-    /android_main 进入/ { boot=1; next }
+# 末次 android_main 进入之后的 boot 段:冻结证物与最大毫秒戳一趟扫出
+verdict=$(echo "$trace" | awk '
+    /android_main 进入/ { boot=1; stall=0; m=0; next }
+    boot && /STALL beat_age=[0-9]+ms/ {
+        s=$0; sub(/.*STALL beat_age=/, "", s); sub(/ms.*/, "", s);
+        if (s+0 >= 1000) stall=s
+    }
     boot && /^\[\+[0-9]+ms boot\]/ {
         ms=$1; gsub(/^\[\+0*|ms.*$/, "", ms);
         if (ms+0 > m) m = ms+0
     }
-    END { if (m > 0) print m }')
-if [ -z "$max_ms" ]; then
+    END {
+        if (stall) { print "FROZEN " stall }
+        else if (m > 0) { print m }
+    }')
+if [ -z "$verdict" ]; then
     echo "⏭ PIN-boot | trace 环里已没有 boot 行(开机太久被顶出),跳过" >&2
     exit 77
 fi
-vc=$(echo "$trace" | grep -a "android_main 进入" | tail -1 | grep -o "vc[0-9]*")
+if [[ "$verdict" == FROZEN* ]]; then
+    echo "⏭ PIN-boot | 末次 boot 段带熄屏冻结证物(STALL beat_age=${verdict#FROZEN }ms)——环境产物不判码,跳过" >&2
+    exit 77
+fi
+max_ms=$verdict
+vc=$(echo "$trace" | grep -a "android_main 进入" | tail -1 | grep -o "vc[0-9a-z]*")
 if [ "$max_ms" -lt 3000 ]; then
     pass PIN-boot "末次 boot($vc)段末行 ${max_ms}ms < 3000ms(启动族回归闸)"
 else

@@ -236,9 +236,9 @@ mod android_shell {
         let prefix = files.join("usr");
         // BAR-074：幂等闸前置——已装好就一个字节都不读。旧序把 32MB
         // 资产全读进内存才调 ensure_prefix(它内部第一行就跳过)——启动
-        // 关键路径每启裸读 32MB,IO 一挤 boot 段 3s+(PIN-boot 挂卷族,
-        // field-reports 实测 08-21 起震荡至今)。模块文档原契约即
-        // 「zip 字节都不解析」,壳把闸挪到读之前才算兑现。
+        // 关键路径每启裸读 32MB。模块文档原契约即「zip 字节都不解析」,
+        // 壳把闸挪到读之前才算兑现。(注:PIN-boot 挂卷族真凶后查明是
+        // 熄屏 freezer 中段冻结,见 BAR-075——本修复仍成立:白读该摘)
         if super::prefix_ready(&prefix) {
             crate::report::report("boot", "L3: 环境已装——跳过(幂等闸前置)");
             return;
