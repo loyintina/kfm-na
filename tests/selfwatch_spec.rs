@@ -258,3 +258,22 @@ fn spec_pc_行_库外报foreign() {
     let n2 = kfm_na::crash::format_pc_line(0x42, 0, 0, &mut buf2);
     assert_eq!(&buf2[..n2], b"PC pc=0x42 in=foreign\n");
 }
+
+// ---- ③寄存器行格式(2026-09-08 LR 指纹) ----
+
+#[test]
+fn spec_reg_行_lr指纹钉死() {
+    let mut buf = [0u8; 256];
+    let n = kfm_na::crash::format_reg_line(0x7fe_1000, 0x77a6_bf7a70, 0x1, 0x2, 0x3, &mut buf);
+    assert_eq!(
+        &buf[..n],
+        b"REG sp=0x7fe1000 lr=0x77a6bf7a70 x0=0x1 x1=0x2 x2=0x3\n"
+    );
+}
+
+#[test]
+fn spec_reg_行_零值照写() {
+    let mut buf = [0u8; 256];
+    let n = kfm_na::crash::format_reg_line(0, 0, 0, 0, 0, &mut buf);
+    assert_eq!(&buf[..n], b"REG sp=0x0 lr=0x0 x0=0x0 x1=0x0 x2=0x0\n");
+}

@@ -46,6 +46,10 @@
   （…/tmp/crash-maps/crash-maps）致转存静默失败（父目录不存在）——
   一行修正。教训第三次重踩：fix 提交被钩子拒后 && 链继续跑部署，
   部署的核不含修复；今后钩子红 = 当场停链。
+- **尸检三件套收齐（同日）**：SIG 行+PC 行+REG 行（sp/lr/x0-x2）——
+  闪退病灶已锁定「跳进线程栈当代码执行」（PC 落在
+  [anon:stack_and_tls]），REG 行的 LR(x30)=调用者返回地址指纹，
+  addr2line 直达肇事调用点。
 - **尸检二次升级（同日）**：首例 PC 报 in=foreign（PC=0x6cf0782d35f,
   库外野地址）——handler 增配崩溃瞬间 /proc/self/maps 全图转存
   （crash-maps,装机预埋路径,有界 512KB),凶手库名可指认。

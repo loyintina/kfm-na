@@ -106,14 +106,44 @@ pub fn format_pc_line(pc: usize, base: usize, end: usize, buf: &mut [u8]) -> usi
     n
 }
 
+/// 寄存器行格式(纯函数):`REG sp=0x… lr=0x… x0=0x… x1=0x… x2=0x…\n`
+/// LR(x30)=野跳转的调用者指纹——addr2line 直达肇事调用点
+pub fn format_reg_line(
+    sp: usize,
+    lr: usize,
+    x0: usize,
+    x1: usize,
+    x2: usize,
+    buf: &mut [u8],
+) -> usize {
+    let mut n = 0;
+    push_bytes(b"REG sp=0x", buf, &mut n);
+    push_hex(sp, buf, &mut n);
+    push_bytes(b" lr=0x", buf, &mut n);
+    push_hex(lr, buf, &mut n);
+    push_bytes(b" x0=0x", buf, &mut n);
+    push_hex(x0, buf, &mut n);
+    push_bytes(b" x1=0x", buf, &mut n);
+    push_hex(x1, buf, &mut n);
+    push_bytes(b" x2=0x", buf, &mut n);
+    push_hex(x2, buf, &mut n);
+    push_bytes(b"\n", buf, &mut n);
+    n
+}
+
 /// 信号处理器本体:写两行(信号行+PC 行,尽力而为)→ SIGURG 探针返回
 /// 继续活,其余 re-raise。PC 从 ucontext 提取——bionic aarch64 布局
 /// (NDK sysroot asm-arm64/asm/{ucontext,sigcontext}.h 为准,2026-09-08
 /// SIGURG 探针实证 304 读到的是 uc_sigmask/unused 区=x16 寄存器野值):
 /// uc_flags(8)+uc_link(8)+uc_stack(24)+uc_sigmask(8)+__linux_unused(120)
-/// =168 进 sigcontext;fault_address@168/regs[31]@176/sp@424/**pc@432**。
-/// 设备钉死 aarch64,勿移植
-const UCTX_PC_OFF: usize = 432;
+/// =168 进 sigcontext;sigcontext 内: fault_address@+0/regs[31]@+8/
+/// sp@+256/pc@+264/pstate@+272。故 ucontext 绝对偏移: fault@168/
+/// regs@176/lr(regs[30])@424/sp@424+8×?…——逐项: regs[i]=176+8i,
+/// lr=regs[30]=424+0x1f8?→424?——绝对值: sp=168+256=424, pc=168+264=432。
+/// 设备钉死 aarch64,勿移植;SIGURG 探针可实证
+const UCTX_SC_OFF: usize = 168; // sigcontext 首址(fault_address)
+const SC_SP_OFF: usize = 256; // sigcontext 内 sp
+const SC_PC_OFF: usize = 264; // sigcontext 内 pc(lr=regs[30]=sigcontext+248)
 unsafe extern "C" fn on_signal(sig: i32, info: *mut libc::siginfo_t, ctx: *mut libc::c_void) {
     let addr = if info.is_null() {
         0
@@ -121,14 +151,21 @@ unsafe extern "C" fn on_signal(sig: i32, info: *mut libc::siginfo_t, ctx: *mut l
         // si_addr:故障地址(SIGSEGV/SIGBUS 有,其余为 null)
         unsafe { (*info).si_addr() as usize }
     };
-    let pc = if ctx.is_null() {
-        0
+    let (pc, sp, lr, x0, x1, x2) = if ctx.is_null() {
+        (0, 0, 0, 0, 0, 0)
     } else {
-        unsafe { *((ctx as *const u8).add(UCTX_PC_OFF) as *const usize) }
+        unsafe {
+            let sc = (ctx as *const u8).add(UCTX_SC_OFF); // sigcontext 首
+            // 布局: fault@+0 regs[31]@+8(x_i=+8+8i,lr=+248) sp@+256 pc@+264
+            let reg = |i: usize| *((sc.add(8 + i * 8)) as *const usize);
+            let spv = *((sc.add(SC_SP_OFF)) as *const usize);
+            let pcv = *((sc.add(SC_PC_OFF)) as *const usize);
+            (pcv, spv, reg(30), reg(0), reg(1), reg(2))
+        }
     };
     let fd = CRASH_FD.load(Ordering::Relaxed);
     if fd >= 0 {
-        let mut buf = [0u8; 256];
+        let mut buf = [0u8; 384];
         let n1 = format_signal_line(sig, addr, &mut buf);
         let n2 = format_pc_line(
             pc,
@@ -136,8 +173,9 @@ unsafe extern "C" fn on_signal(sig: i32, info: *mut libc::siginfo_t, ctx: *mut l
             SO_END.load(Ordering::Relaxed),
             &mut buf[n1..],
         );
+        let n3 = format_reg_line(sp, lr, x0, x1, x2, &mut buf[n1 + n2..]);
         unsafe {
-            libc::write(fd, buf.as_ptr().cast(), n1 + n2);
+            libc::write(fd, buf.as_ptr().cast(), n1 + n2 + n3);
         }
     }
     if sig == PROBE_SIG {
