@@ -533,6 +533,19 @@ pub fn shot_gl_requested(dir: &str) -> bool {
     Path::new(dir).join("shot-gles-req").exists()
 }
 
+/// anim-cap-req 点播触发：在则摘下返真（单次点播单次采样）。
+/// BAR-076：P3 渲染源采样改点播制——奇偶轮播时代每两轮动画就有一轮
+/// 被 readPixels 压到 16fps，仪器噪音变成用户体验税；要采样先投触发
+/// （scripts/na-anim-cap.sh），不投 = 零开销
+pub fn take_anim_cap_req(dir: &str) -> bool {
+    let trigger = Path::new(dir).join("anim-cap-req");
+    if !trigger.exists() {
+        return false;
+    }
+    let _ = std::fs::remove_file(&trigger);
+    true
+}
+
 /// GLES 合成帧倒盘（协议与 maybe_dump 同构：shot-gl.rgb + shot-gl.dim，
 /// 单次触发单次倒，倒完摘触发；文件 IO 失败不致命）
 pub fn write_shot_gl(dir: &str, buf: &[u32], w: u32, h: u32) -> bool {

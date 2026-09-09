@@ -70,6 +70,9 @@
 - `na-orb.sh 'tap' [...]` — AI 外显事件注入(通道十):tap/drag/run/end/
   dismiss,直调 AiPresenceState 状态核,落 orb-inject-res 回执;
   判卷配 stats 的 ai_* 字段族 + na-shot 实拍。
+- `na-anim-cap.sh` — 点播下一轮动画的渲染源采样(BAR-076 起点播制):
+  投 anim-cap-req,动画开表消费,采样帧走 [anim-strip] 报表,
+  服务器 anim-strip-png.py 拼 PNG。不点播 = 动画零 readPixels 开销。
 
 ## 判卷(实证脚本)
 

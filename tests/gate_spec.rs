@@ -591,3 +591,22 @@ fn spec_软件内录_rec钩子消费链() {
     assert_eq!(got.lock().unwrap().len(), 1);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// BAR-076 钉：动画采样点播触发两态——无触发=false 不摘空气；
+// 有触发=true 且即摘（单次点播单次采样，下一轮动画不再带采样）。
+// 变异抽检：take 改只读不摘 → 第二次取仍 true 必红。
+#[test]
+fn spec_bar076_采样点播_触发消费两态() {
+    let dir = std::env::temp_dir().join(format!("animcap-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let d = dir.to_str().unwrap();
+    // ① 无触发 = false
+    assert!(!kfm_na::gate::take_anim_cap_req(d));
+    // ② 有触发 = true + 即摘（单次点播单次采样）
+    std::fs::write(dir.join("anim-cap-req"), b"").unwrap();
+    assert!(kfm_na::gate::take_anim_cap_req(d));
+    assert!(!dir.join("anim-cap-req").exists(), "点播即摘");
+    // ③ 再取 = false（不重复采样）
+    assert!(!kfm_na::gate::take_anim_cap_req(d));
+    let _ = std::fs::remove_dir_all(&dir);
+}

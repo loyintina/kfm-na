@@ -97,8 +97,6 @@ static SWAP_GAP_MAX_US: std::sync::atomic::AtomicU64 = std::sync::atomic::Atomic
 static SWAP_GAP_TOTAL_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static SWAP_GAP_N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static ANIM_WAS_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-/// 动画轮次计数（奇偶分流：偶数轮带采样帧，奇数轮纯节奏数据）
-static RUN_TICK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static CAPTURE_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static CAPTURE_TICK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 /// (w, h, rgb) 缩略帧仓——run 收尾统一外发
@@ -140,7 +138,7 @@ fn now_ns() -> u64 {
     base.elapsed().as_nanos() as u64
 }
 
-/// 动画轮开表：节奏/相位记账清零 + 奇偶采样分流 + vsync 挂表
+/// 动画轮开表：节奏/相位记账清零 + 采样点播 + vsync 挂表
 fn anim_run_start() {
     use std::sync::atomic::Ordering;
     for a in [
@@ -156,8 +154,13 @@ fn anim_run_start() {
     VSYNC_PHASE_MIN_US.store(u64::MAX, Ordering::Relaxed);
     VSYNC_PHASE_MAX_US.store(0, Ordering::Relaxed);
     crate::vsync_book::reset_run(); // gap 账+基线归 vsync_book（BAR-072）
-    let run = RUN_TICK.fetch_add(1, Ordering::Relaxed);
-    CAPTURE_ON.store(run.is_multiple_of(2), Ordering::Relaxed);
+    // BAR-076：采样改点播——奇偶轮播时代每两轮动画就有一轮被 readPixels
+    // 压到 16fps（61ms/帧实测），仪器噪音成了用户体验税。要采样先投
+    // anim-cap-req 触发（na-anim-cap.sh），不投 = 零开销
+    CAPTURE_ON.store(
+        crate::gate::take_anim_cap_req(crate::gate::DUMP_DIR),
+        Ordering::Relaxed,
+    );
     CAPTURE_TICK.store(0, Ordering::Relaxed);
     vsync_arm();
 }
@@ -1194,7 +1197,8 @@ impl GlesPresent {
             let buf = self.capture_full();
             crate::gate::write_shot_gl(crate::gate::DUMP_DIR, &buf, self.w, self.h);
         }
-        // P3 渲染源采样（偶数轮武装）：readPixels 有停顿只落采样轮；
+        // P3 渲染源采样（点播武装，BAR-076：anim-cap-req 触发才开，
+        // 不投 = 零 readPixels 开销）：readPixels 有停顿只落采样轮；
         // 每 5 帧一拍（21 帧动画取 ~4 帧），1/14 缩略
         if CAPTURE_ON.load(std::sync::atomic::Ordering::Relaxed)
             && CAPTURE_TICK

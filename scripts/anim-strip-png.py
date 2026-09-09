@@ -6,7 +6,8 @@
 capture_report 分块外发），按 run 拼回原始 RGB，落 PNG 到 /tmp/anim-strip/。
 
 行格式: ts [anim-strip] frameIdx|w|h|chunkIdx|total|hexchunk
-判定新 run: frameIdx==0 且 chunkIdx==0（轮次奇偶分流，一拍 4~5 帧）。
+判定新 run: frameIdx==0 且 chunkIdx==0（点播制，BAR-076：na-anim-cap.sh
+投触发后下一轮动画带采样，一拍 4~5 帧；不点播无采样行）。
 PNG 为纯 stdlib 写出（zlib+struct，无 PIL 依赖），RGB8。
 """
 
