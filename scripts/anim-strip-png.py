@@ -58,19 +58,24 @@ def main() -> None:
     OUT.mkdir(exist_ok=True)
     made = 0
     for r_idx, r in enumerate(runs):
-        # 重组：按 (帧, 块) 排序后顺序填（分块等长+尾块短，排序即偏移序）
-        ordered = sorted(r["chunks"].items())
-        got = bytearray()
-        for (_fi, _ci), data in ordered:
-            got += data
-        if len(got) != r["size"]:
-            print(f"run{r_idx}: 缺块 {len(got)}/{r['size']}——跳过")
-            continue
-        p = OUT / f"run{r_idx}.png"
-        p.write_bytes(write_png(r["w"], r["h"], bytes(got)))
-        print(f"✅ {p} ({r['w']}x{r['h']})")
-        made += 1
-    print(f"共 {made}/{len(runs)} run 拼图 → {OUT}")
+        # 重组：一帧一张 PNG（2026-09-10 修：旧版把 run 内所有帧拼进
+        # 同一缓冲——多帧 run 必然「缺块 2×size」跳过；同一 (帧,块)
+        # 重复行由 dict 键天然去重，后到的覆盖）
+        by_frame: dict[int, dict[int, bytes]] = {}
+        for (fi, ci), data in r["chunks"].items():
+            by_frame.setdefault(fi, {})[ci] = data
+        for fi in sorted(by_frame):
+            got = bytearray()
+            for ci in sorted(by_frame[fi]):
+                got += by_frame[fi][ci]
+            if len(got) != r["size"]:
+                print(f"run{r_idx} f{fi}: 缺块 {len(got)}/{r['size']}——跳过")
+                continue
+            p = OUT / f"run{r_idx}-f{fi}.png"
+            p.write_bytes(write_png(r["w"], r["h"], bytes(got)))
+            print(f"✅ {p} ({r['w']}x{r['h']})")
+            made += 1
+    print(f"共 {made} 帧拼图 → {OUT}（{len(runs)} run）")
 
 
 if __name__ == "__main__":
