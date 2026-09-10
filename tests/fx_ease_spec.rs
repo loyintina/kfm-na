@@ -203,3 +203,63 @@ fn spec_ease_面板重力曲线_半程判定() {
         "收起半程必须已过半（起步快），得 {half_up}"
     );
 }
+
+// ---- 滑动淡入（2026-09-10 用户拍板试方：alpha 从 placement 推导） ----
+
+#[test]
+fn spec_fade_端点与硬切等价() {
+    // 靠泊 = 全实；屏外 = 全隐——硬切基座下 off 只取这两值，
+    // alpha 恒 1/0，与硬切像素等价（无 fx 占槽不引入新行为）
+    assert_eq!(fx_ease::panel_fade_alpha(0.0, 2800.0), 1.0, "靠泊全实");
+    assert_eq!(fx_ease::panel_fade_alpha(-2800.0, 2800.0), 0.0, "屏外全隐");
+    // 越界钳制：off 冲出 [-h, 0] 不许 NaN/负 alpha/超 1
+    assert_eq!(
+        fx_ease::panel_fade_alpha(-9999.0, 2800.0),
+        0.0,
+        "屏外越界钳 0"
+    );
+    assert_eq!(
+        fx_ease::panel_fade_alpha(100.0, 2800.0),
+        1.0,
+        "靠泊越界钳 1"
+    );
+    // 病态尺寸直通全实（不许黑屏）
+    assert_eq!(fx_ease::panel_fade_alpha(-100.0, 0.0), 1.0, "零高直通");
+    assert_eq!(fx_ease::panel_fade_alpha(-100.0, -5.0), 1.0, "负高直通");
+}
+
+#[test]
+fn spec_fade_淡入窗与单调() {
+    let h = 2800.0;
+    // 淡入窗内：落程 10%（off=-0.9h）→ alpha = 0.10/0.35 ≈ 0.286
+    // （变异抽检：FADE_PORTION 改 1.0 得 0.10 必红；恒返 1 必红）
+    let a = fx_ease::panel_fade_alpha(-0.9 * h, h);
+    assert!((a - 0.10 / 0.35).abs() < 1e-4, "窗内线性显影，得 {a}");
+    // 窗沿：落程恰好 FADE_PORTION → 恰全实
+    let edge = fx_ease::panel_fade_alpha(-(1.0 - fx_ease::FADE_PORTION) * h, h);
+    assert!((edge - 1.0).abs() < 1e-4, "窗沿恰全实，得 {edge}");
+    // 窗外：落程过半早已全实（残余高速段满对比落地）
+    assert_eq!(fx_ease::panel_fade_alpha(-0.4 * h, h), 1.0, "窗外全实");
+    // 单调：从屏外到靠泊全程不降（显影不许回头）
+    let mut prev = 0.0_f32;
+    for i in 0..=100 {
+        let off = -h * (1.0 - i as f32 / 100.0);
+        let a = fx_ease::panel_fade_alpha(off, h);
+        assert!(a >= prev, "off={off} 显影回头：{prev}→{a}");
+        prev = a;
+    }
+}
+
+#[test]
+fn spec_fade_与重力曲线咬合() {
+    // 配方语义：落下起步慢段半透明（遮拖影），落地前全实（保留砸底
+    // 手感）。重力 t² 下淡入窗 √0.35≈0.59——进场 59% 时长处必须
+    // 已全实；10% 时长处（落程 1%）必须近乎全隐
+    let h = 2800.0;
+    let t_early = fx_ease::gravity_fall(0.1); // 落程 1%
+    let a_early = fx_ease::panel_fade_alpha(-h * (1.0 - t_early), h);
+    assert!(a_early < 0.1, "起步慢段必须近乎全隐，得 {a_early}");
+    let t_done = fx_ease::gravity_fall(0.59); // 落程 ≈35%
+    let a_done = fx_ease::panel_fade_alpha(-h * (1.0 - t_done), h);
+    assert!(a_done > 0.95, "59% 时长处必须近乎全实，得 {a_done}");
+}

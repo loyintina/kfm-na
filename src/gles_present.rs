@@ -692,7 +692,8 @@ impl GlesPresent {
                     "#version 300 es\nprecision mediump float;\n\
                      in vec2 v_uv; in vec2 v_local; in vec4 v_fg; out vec4 o;\n\
                      uniform sampler2D u_tex;\n\
-                     void main(){ if(v_local.x<0.||v_local.y<0.||v_local.x>1.||v_local.y>1.) discard; float cov=texture(u_tex,v_uv).r; o=vec4(v_fg.bgr,cov); }",
+                     uniform float u_alpha;\n\
+                     void main(){ if(v_local.x<0.||v_local.y<0.||v_local.x>1.||v_local.y>1.) discard; float cov=texture(u_tex,v_uv).r; o=vec4(v_fg.bgr,cov*u_alpha); }",
                     "glyph",
                 )?;
                 link(gl, v, f)?
@@ -913,17 +914,19 @@ impl GlesPresent {
     }
 
     /// 期 1 第 2 层组合帧（2026-09-07 图层槽位版）：清屏 → 网格背景实例
-    /// → 网格字形实例（按页）→ 键行槽 → 面板槽（placement.y = panel_off
-    /// ——动画帧唯一变的东西，零上传）→ AI 文字字形实例（按页）→ 上层
-    /// 槽（输入栏/光球/放大镜）→ swap。z 序与双层合成时代像素等价：面板
-    /// 盖住键行与网格，输入栏/光球浮在 AI 文字上。槽画布由调用方置脏
-    /// 烘焙（slot_bake），未烘焙的槽不上屏（不完整纹理=黑屏案）
+    /// → 网格字形实例（按页）→ 键行槽 → 面板槽（placement.y = panel_off、
+    /// tint.α = panel_alpha——动画帧唯二变的东西，零上传）→ AI 文字字形
+    /// 实例（按页，u_alpha = panel_alpha 随面板显影）→ 上层槽（输入栏/
+    /// 光球/放大镜）→ swap。z 序与双层合成时代像素等价：面板盖住键行与
+    /// 网格，输入栏/光球浮在 AI 文字上。槽画布由调用方置脏烘焙
+    /// （slot_bake），未烘焙的槽不上屏（不完整纹理=黑屏案）
     pub fn present_frame(
         &mut self,
         bg: &[crate::glyph_atlas::BgInstance],
         glyphs_by_page: &[Vec<crate::glyph_atlas::GlyphInstance>],
         ai_glyphs_by_page: &[Vec<crate::glyph_atlas::GlyphInstance>],
         panel_off: i32,
+        panel_alpha: f32,
     ) {
         let t0_draw = std::time::Instant::now();
         // CPU 画布直接测量（rgb 非零计数 + 样本原值）——「画没画」的铁证
@@ -973,7 +976,8 @@ impl GlesPresent {
                 gl.draw_arrays_instanced(glow::TRIANGLES, 0, 3, bg.len() as i32);
             }
 
-            // 字形（alpha 混合，按图集页分组 draw——每页一次上传+绘制）
+            // 字形（alpha 混合，按图集页分组 draw——每页一次上传+绘制；
+            // 终端网格显影恒 1.0——「终端格子内容永不动画」红线）
             gl.enable(glow::BLEND);
             gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
             draw_glyph_pages(
@@ -983,6 +987,7 @@ impl GlesPresent {
                 self.glyph_vbo,
                 &self.atlas_tex,
                 glyphs_by_page,
+                1.0,
             );
 
             // 键行槽（面板未靠泊时可见；烘焙物常驻纹理，重现身零成本）
@@ -998,11 +1003,13 @@ impl GlesPresent {
                     0.0,
                     self.w as f32,
                     self.h as f32,
+                    1.0,
                 );
             }
 
-            // 面板槽（placement.y = panel_off——动画帧唯一变化的输入，
-            // 零光栅零上传；屏外部分 viewport 裁剪零成本）
+            // 面板槽（placement.y = panel_off + tint.α = panel_alpha——
+            // 动画帧唯二变化的输入，零光栅零上传；屏外部分 viewport
+            // 裁剪零成本）
             let pn = &self.layers[ChromeSlot::Panel as usize];
             if pn.visible && pn.baked {
                 draw_slot_layer(
@@ -1015,10 +1022,12 @@ impl GlesPresent {
                     panel_off as f32,
                     self.w as f32,
                     self.h as f32,
+                    panel_alpha,
                 );
             }
 
-            // AI 文字实例（面板刚体的墨——z 序在面板底之上、输入栏之下）
+            // AI 文字实例（面板刚体的墨——z 序在面板底之上、输入栏之下；
+            // u_alpha 随面板显影，墨不游离于底）
             draw_glyph_pages(
                 gl,
                 self.glyph_prog,
@@ -1026,6 +1035,7 @@ impl GlesPresent {
                 self.glyph_vbo,
                 &self.atlas_tex,
                 ai_glyphs_by_page,
+                panel_alpha,
             );
 
             // 上层槽（输入栏/光球/放大镜——浮在一切内容之上）
@@ -1041,6 +1051,7 @@ impl GlesPresent {
                     0.0,
                     self.w as f32,
                     self.h as f32,
+                    1.0,
                 );
             }
             gl.disable(glow::BLEND);
@@ -1308,6 +1319,9 @@ impl GlesPresent {
 
 /// 字形实例按图集页绘制（网格层与 AI 文字层共用——同一 prog/vao/vbo，
 /// 只差调用点的 z 序与实例内容）。每页绑纹理 + 传实例 + instanced draw
+/// 按图集页分组 draw（每页一次上传+绘制）。alpha = 整批显影系数
+/// （滑动淡入：AI 文字随面板 placement 显影；终端网格恒 1.0——
+/// 「终端格子内容永不动画」红线，ui-base §五）
 unsafe fn draw_glyph_pages(
     gl: &glow::Context,
     prog: glow::NativeProgram,
@@ -1315,10 +1329,12 @@ unsafe fn draw_glyph_pages(
     vbo: glow::NativeBuffer,
     atlas_tex: &[glow::NativeTexture],
     pages: &[Vec<crate::glyph_atlas::GlyphInstance>],
+    alpha: f32,
 ) {
     unsafe {
         gl.use_program(Some(prog));
         gl.uniform_1_i32(gl.get_uniform_location(prog, "u_tex").as_ref(), 0);
+        gl.uniform_1_f32(gl.get_uniform_location(prog, "u_alpha").as_ref(), alpha);
         gl.active_texture(glow::TEXTURE0);
         gl.bind_vertex_array(Some(vao));
         gl.bind_buffer(glow::ARRAY_BUFFER, Some(vbo));
@@ -1338,7 +1354,8 @@ unsafe fn draw_glyph_pages(
 }
 
 /// 单槽图层四边形（可见+烘焙过才画；placement 进实例 rect，
-/// uv 恒全幅、tint 恒 1——v1 槽画布=全屏尺寸）
+/// uv 恒全幅——v1 槽画布=全屏尺寸）。alpha = 整槽显影系数（滑动
+/// 淡入：面板槽随 placement 显影；其余槽恒 1.0）
 #[allow(clippy::too_many_arguments)]
 unsafe fn draw_slot_layer(
     gl: &glow::Context,
@@ -1350,6 +1367,7 @@ unsafe fn draw_slot_layer(
     y: f32,
     w: f32,
     h: f32,
+    alpha: f32,
 ) {
     unsafe {
         gl.bind_texture(glow::TEXTURE_2D, Some(tex));
@@ -1360,7 +1378,7 @@ unsafe fn draw_slot_layer(
         let inst = [
             x, y, w, h, // a_rect（px，placement 在这）
             0.0, 0.0, 1.0, 1.0, // a_uv
-            1.0, 1.0, 1.0, 1.0, // a_tint（α=1；主题/转场留槽）
+            1.0, 1.0, 1.0, alpha, // a_tint（α=整槽显影——转场/主题槽位）
         ];
         gl.buffer_data_u8_slice(
             glow::ARRAY_BUFFER,

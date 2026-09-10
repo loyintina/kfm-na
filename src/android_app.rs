@@ -269,7 +269,8 @@ struct App {
 /// paint 读过的每一个输入**——漏一个 = 陈旧像素（鬼影），比慢更严重。
 ///   键行槽：render_keybar(mods, ime_bottom=ime+bar_h, w, h)
 ///   面板槽：paint_ai_page_chrome(w, h, bottom_inset=ime+bar_h)——
-///           panel_off 是合成期 placement，不进 sig（烘焙画布恒靠泊位）
+///           panel_off/panel_fade 是合成期 placement/alpha，不进 sig
+///           （烘焙画布恒靠泊位恒全实）
 ///   上层槽：render_inputbar(bar_snap,sending,caret_on,ime,w,h) +
 ///           render_orb(ai_snap) + render_magnifier——orb_alpha_out 在
 ///           GLES 路径恒 true 不进 sig；放大镜内容跟终端网格活（网格
@@ -2418,10 +2419,11 @@ impl App {
     }
 
     /// GLES 一帧的图层装配（2026-09-07 槽位化，ui-base §八）：终端网格
-    /// GPU 实例 → 键行槽 → 面板槽（placement.y=panel_off）→ AI 文字
-    /// GPU 实例 → 上层槽。chrome 三槽置脏烘焙（LayerSigs 记账），动画帧
-    /// 零光栅零上传；AI 页文字走图集管线（panel_off 进实例 y）。返回
-    /// ai_layout（调用方写回 scroll_sync_layout——眼手同尺）
+    /// GPU 实例 → 键行槽 → 面板槽（placement.y=panel_off，tint.α=panel_fade）
+    /// → AI 文字 GPU 实例（u_alpha=panel_fade 随面板显影）→ 上层槽。
+    /// chrome 三槽置脏烘焙（LayerSigs 记账），动画帧零光栅零上传；AI 页
+    /// 文字走图集管线（panel_off 进实例 y）。返回 ai_layout（调用方写回
+    /// scroll_sync_layout——眼手同尺）
     #[allow(clippy::too_many_arguments)]
     fn draw_frame_gles(
         g: &mut crate::gles_present::GlesPresent,
@@ -2460,6 +2462,9 @@ impl App {
             panel_target,
             crate::report::boot_ms() as u64,
         ) as i32;
+        // 滑动淡入（2026-09-10 用户拍板试方）：alpha 从 placement 纯函数
+        // 推导——零状态，打断/反转自动一致；硬切下恒 1/0 与旧版像素等价
+        let panel_fade = crate::ui::fx_ease::panel_fade_alpha(panel_off as f32, h as f32);
         let (grid_keybar, panel_visible) = crate::termview::panel_split(panel_off, h);
         let Some(term_arc) = th else {
             // 字体全灭的降级画面：紫屏（与 soft 路径同规）
@@ -2707,8 +2712,14 @@ impl App {
         crate::gles_present::STAGE_RAS_US.fetch_add(ras_us, std::sync::atomic::Ordering::Relaxed);
 
         // 5) 组合呈现（z 序见 present_frame——与双层合成时代像素等价；
-        // panel_off 只进面板槽的 placement，烘焙物不动）
-        g.present_frame(&bg_inst, &glyphs_by_page, &ai_glyphs_by_page, panel_off);
+        // panel_off/panel_fade 只进面板槽的 placement 与显影，烘焙物不动）
+        g.present_frame(
+            &bg_inst,
+            &glyphs_by_page,
+            &ai_glyphs_by_page,
+            panel_off,
+            panel_fade,
+        );
         ai_layout
     }
 
