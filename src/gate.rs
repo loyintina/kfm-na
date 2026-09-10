@@ -99,13 +99,14 @@ pub fn note_frame_size(w: u32, h: u32) {
 // ---- 通道一：shot-req → 帧倒盘 ----
 
 /// 倒一帧（有触发才干活）：锁终端离屏光栅化当前画面进 Vec 写出。
-/// 装帧口径：终端网格 + **AI 外显**（光球/AI 页占位）+ 常驻 chrome
-/// （快捷键行/输入栏）——ai-presence 期 0 组件一起，球是「状态核读数
-/// 画出来的」，值守线程自有句柄（D9 同源），na-shot 实拍是视觉判卷轨，
-/// 倒帧不见球/栏 = 视觉轨瞎。输入栏读 input_bar_handle 快照（与 stats
-/// 同源）；快捷键行修饰粘滞位不在共享态，倒帧恒按 mods=0 画（2026-08-31
-/// 修订：此前行/栏都不画，输入栏样式排障被迫补这条眼；放大镜触点仍是
-/// UI 私有，后台视野不含它）
+/// 装帧口径：终端网格 + **AI 外显**（光球/AI 页占位）+ 面板栈
+/// （配置页，§五B 2026-09-10——不识配置页 = 视觉轨对它全瞎，实机
+/// 自验实踩）+ 常驻 chrome（快捷键行/输入栏）——ai-presence 期 0
+/// 组件一起，球是「状态核读数画出来的」，值守线程自有句柄（D9 同源），
+/// na-shot 实拍是视觉判卷轨，倒帧不见球/栏 = 视觉轨瞎。输入栏读
+/// input_bar_handle 快照（与 stats 同源）；快捷键行修饰粘滞位不在共享态，
+/// 倒帧恒按 mods=0 画（2026-08-31 修订：此前行/栏都不画，输入栏样式
+/// 排障被迫补这条眼；放大镜触点仍是 UI 私有，后台视野不含它）
 pub fn dump_now(dir: &str) {
     if !trigger_pending(dir) {
         return;
@@ -135,39 +136,61 @@ pub fn dump_now(dir: &str) {
             panel_target,
             crate::report::boot_ms() as u64,
         ) as i32;
-        if panel_off <= -(h as i32) {
+        // 配置面板 X 偏移同尺过缝（面板栈 §五B 2026-09-10）：装帧口径
+        // 扩到面板栈——dump 不识配置页 = 视觉轨对配置页全瞎（09-10 实机
+        // 自验实踩：stats 报 config 在顶，CPU 倒帧却只见终端）。z 序与
+        // 前台 paint_under 同规：被覆盖者画在 AI 面板之下，在顶者压顶
+        let cfg_on_top = ai_snap.is_some_and(|s| s.top == Some(crate::ai_presence::Panel::Config));
+        let cfg_present = cfg_on_top
+            || ai_snap.is_some_and(|s| s.covered == Some(crate::ai_presence::Panel::Config));
+        let cfg_target = if cfg_present { 0.0 } else { w as f32 };
+        let cfg_off = crate::ui::seam::sample_config_panel_offset_x(
+            cfg_target,
+            crate::report::boot_ms() as u64,
+        ) as i32;
+        let (ai_grid, panel_visible) = crate::termview::panel_split(panel_off, h);
+        let (cfg_grid, cfg_visible) = crate::termview::cfg_split(cfg_off, w);
+        let grid_keybar = ai_grid && cfg_grid;
+        if grid_keybar {
             t.render_into(&mut buf, w, h);
             // 快捷键行：前台同规则 inset 叠输入栏当前带高；修饰位无共享态按 0 画
             t.render_keybar(&mut buf, w, h, bar_h, 0);
-        } else if panel_off == 0 {
-            // 与前台 rasterize 同一分支规则：AI 页 = 真对话消息盖掉终端网格
-            // （AI 页不画快捷键行，同前台）；消息与视口读 AI_CHAT 注册位
-            // （D9 同源），布局写回同前台（眼手同尺）
-            let chat = ai_chat_handle();
-            let msgs = chat.as_ref().map(|c| c.snap()).unwrap_or_default();
-            let off = chat.as_ref().map_or(0, |c| c.scroll_offset());
-            let live = chat.as_ref().is_some_and(|c| c.thinking_live());
-            let (total, fit) = t.render_ai_page(&mut buf, w, h, &msgs, off, bar_h, live);
-            if let Some(c) = &chat {
-                c.scroll_sync_layout(total, fit);
+        }
+        if cfg_visible && !cfg_on_top {
+            crate::termview::paint_cfg_page_chrome(&mut buf, w, h, bar_h, cfg_off);
+        }
+        if panel_visible {
+            if panel_off == 0 {
+                // 与前台 rasterize 同一分支规则：AI 页 = 真对话消息盖掉终端
+                // 网格（AI 页不画快捷键行，同前台）；消息与视口读 AI_CHAT
+                // 注册位（D9 同源），布局写回同前台（眼手同尺）
+                let chat = ai_chat_handle();
+                let msgs = chat.as_ref().map(|c| c.snap()).unwrap_or_default();
+                let off = chat.as_ref().map_or(0, |c| c.scroll_offset());
+                let live = chat.as_ref().is_some_and(|c| c.thinking_live());
+                let (total, fit) = t.render_ai_page(&mut buf, w, h, &msgs, off, bar_h, live);
+                if let Some(c) = &chat {
+                    c.scroll_sync_layout(total, fit);
+                }
+            } else {
+                // 过渡帧：终端 + 快捷键行在下（照画——层级低于面板，被落
+                // 下来的面板盖住是自然结果；BAR-063：把快捷键行从过渡帧
+                // 拿掉 = 动画两端硬切 pop-out/pop-in = 用户实看的闪烁），
+                // 面板离屏渲染后按偏移压盖（与前台同规则）
+                let chat = ai_chat_handle();
+                let msgs = chat.as_ref().map(|c| c.snap()).unwrap_or_default();
+                let off = chat.as_ref().map_or(0, |c| c.scroll_offset());
+                let live = chat.as_ref().is_some_and(|c| c.thinking_live());
+                let mut scratch = vec![0u32; (w as usize) * (h as usize)];
+                let (total, fit) = t.render_ai_page(&mut scratch, w, h, &msgs, off, bar_h, live);
+                if let Some(c) = &chat {
+                    c.scroll_sync_layout(total, fit);
+                }
+                crate::termview::blit_panel_shifted(&mut buf, &scratch, w, h, panel_off);
             }
-        } else {
-            // 过渡帧：终端 + 快捷键行在下（照画——层级低于面板，被落
-            // 下来的面板盖住是自然结果；BAR-063：把快捷键行从过渡帧
-            // 拿掉 = 动画两端硬切 pop-out/pop-in = 用户实看的闪烁），
-            // 面板离屏渲染后按偏移压盖（与前台同规则）
-            t.render_into(&mut buf, w, h);
-            t.render_keybar(&mut buf, w, h, bar_h, 0);
-            let chat = ai_chat_handle();
-            let msgs = chat.as_ref().map(|c| c.snap()).unwrap_or_default();
-            let off = chat.as_ref().map_or(0, |c| c.scroll_offset());
-            let live = chat.as_ref().is_some_and(|c| c.thinking_live());
-            let mut scratch = vec![0u32; (w as usize) * (h as usize)];
-            let (total, fit) = t.render_ai_page(&mut scratch, w, h, &msgs, off, bar_h, live);
-            if let Some(c) = &chat {
-                c.scroll_sync_layout(total, fit);
-            }
-            crate::termview::blit_panel_shifted(&mut buf, &scratch, w, h, panel_off);
+        }
+        if cfg_visible && cfg_on_top {
+            crate::termview::paint_cfg_page_chrome(&mut buf, w, h, bar_h, cfg_off);
         }
         // 输入栏：常驻 chrome，两页都画（同前台 rasterize 规则）；
         // sending 图标态跟 AI 运行态硬切；光标闪烁相位按节拍算

@@ -287,7 +287,9 @@ trait BrainEndpoint {
   > 面板页 > 键行 > 终端区）；配置页渲染 `paint_cfg_page_chrome`
   （青底 0x0A1A20 + 青系边框环，与 AI 紫底 0x140A24 机器判卷可区分）；
   GLES 第四槽 ChromeSlot::Config，z 序逐帧跟 snap.top；机器轨 =
-  stats 字段 `panel_top`/`panel_cov`（none/ai/config）。
+  stats 字段 `panel_top`/`panel_cov`（none/ai/config）+ na-shot 倒帧
+  装帧含配置页（gate dump_now 与前台 paint_under 同 z 序——首日实机
+  自验即实踩「dump 不识配置页 = 视觉轨全瞎」，BAR-070 盲区教训同族）。
 
 ## 六、分期（每期独立可验收，慢慢来）
 
