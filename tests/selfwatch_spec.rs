@@ -49,6 +49,8 @@ fn snap() -> StatsSnap {
         ai_overlay: false,
         panel_top: "none".into(),
         panel_cov: "none".into(),
+        ai_epoch: 0,
+        cfg_epoch: 0,
         bar_focused: false,
         bar_text_len: 0,
     }

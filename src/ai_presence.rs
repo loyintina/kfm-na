@@ -113,6 +113,12 @@ pub struct PresenceSnap {
     pub top: Option<Panel>,
     /// 被覆盖面板（至多一层；None = 无）
     pub covered: Option<Panel>,
+    /// AI 面板的入场代（BAR-079）：被覆盖再召唤/被挤出时 bump——同一栈态
+    /// 有两种历史（新鲜召唤/覆盖再召唤），目标值纯函数算不出「该动」，代
+    /// 就是这一比特历史；壳层见代变把缝重定基到屏外位 → 重播入场
+    pub ai_epoch: u64,
+    /// 配置面板的入场代（语义同 ai_epoch）
+    pub cfg_epoch: u64,
 }
 
 /// 四态增益（纯函数，D8）：(整 sprite 增益, 光晕增益)。光晕增益只在 running
@@ -133,6 +139,11 @@ struct Inner {
     ai_running: bool,
     /// 面板栈（§五B）：末位 = 顶，其余 = 被覆盖；至多两格，空 = 终端页
     stack: Vec<Panel>,
+    /// 入场代（BAR-079）：AI/配置各一枚。只在「被覆盖者离被覆盖位」时
+    /// bump——再召唤（坍缩②重播入场）与被挤出（坍缩③静默瞬移）；新鲜
+    /// 召唤/退场/露出都不 bump（目标值翻转自足/打断不跳变/零动画露出）
+    epoch_ai: u64,
+    epoch_cfg: u64,
     x: f64,
     y: f64,
     /// 首次 set_bounds 落默认出生位的标记（之后 set_bounds 只钳制不搬家）
@@ -160,6 +171,8 @@ impl AiPresenceState {
             inner: Mutex::new(Inner {
                 ai_running: false,
                 stack: Vec::new(),
+                epoch_ai: 0,
+                epoch_cfg: 0,
                 x: 0.0,
                 y: 0.0,
                 positioned: false,
@@ -217,19 +230,19 @@ impl AiPresenceState {
         if g.stack.last() == Some(&Panel::Ai) {
             g.stack.pop();
         } else {
-            summon_locked(&mut g.stack, Panel::Ai);
+            summon_locked(&mut g, Panel::Ai);
         }
     }
 
     /// 点浮层：跳 AI 全屏（单向——返回走 tap_orb）；栈语义 = 召唤 AI 到顶
     pub fn tap_overlay(&self) {
-        summon_locked(&mut self.inner.lock().unwrap().stack, Panel::Ai);
+        summon_locked(&mut self.inner.lock().unwrap(), Panel::Ai);
     }
 
     /// 召唤面板到顶（§五B）：摘出重放（幂等且保序），栈满两格先静默
     /// 挤出栈底（叠加态坍缩为收起——不可见者被丢弃无感）
     pub fn summon_panel(&self, p: Panel) {
-        summon_locked(&mut self.inner.lock().unwrap().stack, p);
+        summon_locked(&mut self.inner.lock().unwrap(), p);
     }
 
     /// 收起顶面板（抽屉对称：只许收顶——被覆盖者不可见，无手势够得着）；
@@ -249,7 +262,7 @@ impl AiPresenceState {
     pub fn swipe_left(&self) {
         let mut g = self.inner.lock().unwrap();
         if g.stack.last() != Some(&Panel::Config) {
-            summon_locked(&mut g.stack, Panel::Config);
+            summon_locked(&mut g, Panel::Config);
         }
     }
 
@@ -349,6 +362,8 @@ impl AiPresenceState {
             } else {
                 None
             },
+            ai_epoch: g.epoch_ai,
+            cfg_epoch: g.epoch_cfg,
         }
     }
 }
@@ -359,15 +374,29 @@ impl Default for AiPresenceState {
     }
 }
 
-/// 召唤核心（纯函数，栈规的唯一实体）：摘出重放顶——重复召唤幂等、
-/// 被覆盖者再召唤 = 摘下重放（叠加态坍缩为收起后再入场）；栈满两格
-/// 先静默挤出栈底（第三面板入场，叠加态坍缩为收起）
-fn summon_locked(stack: &mut Vec<Panel>, p: Panel) {
-    stack.retain(|&x| x != p);
-    if stack.len() == 2 {
-        stack.remove(0); // 挤出栈底被覆盖者
+/// 召唤核心（栈规的唯一实体）：摘出重放顶——重复召唤幂等、被覆盖者再
+/// 召唤 = 摘下重放（叠加态坍缩为收起后再入场，BAR-079：入场代 bump 让
+/// 缝重播动画）；栈满两格先静默挤出栈底（第三面板入场，叠加态坍缩为
+/// 收起——入场代 bump 让缝瞬移屏外，零帧空烧）
+fn summon_locked(g: &mut Inner, p: Panel) {
+    let was_covered = g.stack.len() == 2 && g.stack[0] == p;
+    g.stack.retain(|&x| x != p);
+    if g.stack.len() == 2 {
+        let ejected = g.stack.remove(0); // 挤出栈底被覆盖者
+        bump_epoch(g, ejected);
     }
-    stack.push(p);
+    if was_covered {
+        bump_epoch(g, p);
+    }
+    g.stack.push(p);
+}
+
+/// 入场代 bump（BAR-079）：壳层见代变 = 该面板缝重定基到屏外位
+fn bump_epoch(g: &mut Inner, p: Panel) {
+    match p {
+        Panel::Ai => g.epoch_ai += 1,
+        Panel::Config => g.epoch_cfg += 1,
+    }
 }
 
 /// 边界钳制（纯函数）：球心不出屏（四边各内缩一个可视半径）；底边在

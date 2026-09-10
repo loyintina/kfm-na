@@ -1339,6 +1339,20 @@ impl App {
         let Some(ai) = &self.ai_presence else { return };
         let snap = ai.snap(crate::report::boot_ms() as u64);
         if self.last_ai_snap != Some(snap) {
+            // BAR-079 中继：入场代 bump = 覆盖再召唤（坍缩②）/静默挤出（③）
+            // ——把该面板的缝重定基到屏外位：目标不动则重播入场，目标已屏外
+            // 则瞬移落定。纯机械中继：bump 与否的契约判定全在状态核（A 档钉）
+            if let Some(prev) = self.last_ai_snap {
+                let now = crate::report::boot_ms() as u64;
+                if let Some(size) = self.window.as_ref().map(|w| w.inner_size()) {
+                    if snap.ai_epoch != prev.ai_epoch && size.height > 0 {
+                        crate::ui::seam::replay_ai_panel_offset_y(-(size.height as f32), now);
+                    }
+                    if snap.cfg_epoch != prev.cfg_epoch && size.width > 0 {
+                        crate::ui::seam::replay_config_panel_offset_x(size.width as f32, now);
+                    }
+                }
+            }
             self.last_ai_snap = Some(snap);
             self.dirty = true;
         }

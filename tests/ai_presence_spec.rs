@@ -1329,6 +1329,69 @@ fn spec_panel_再召唤坍缩为重入场() {
 }
 
 #[test]
+fn spec_bar079_覆盖再召唤_入场代bump() {
+    // BAR-079：坍缩②「再召唤=重播入场动画」的物质基础——同一栈态有两种
+    // 历史（新鲜召唤/覆盖再召唤），目标值纯函数算不出「该动」，必须把这一
+    // 比特历史显式编码进状态核：入场代。被覆盖者再召唤 = 代 bump；壳层见
+    // 代变把缝重定基到屏外位 → 重播入场（2026-09-10 实机帧级仪器实踩：
+    // 覆盖再召唤帧差分 +1、anim-cap 触发未消费 = 动画没播）
+    let ai = new_state();
+    ai.summon_panel(Panel::Ai);
+    let e0 = ai.snap(0).ai_epoch;
+    ai.summon_panel(Panel::Config); // AI 转被覆盖
+    assert_eq!(ai.snap(0).ai_epoch, e0, "转被覆盖不 bump（它没走过）");
+    let ec0 = ai.snap(0).cfg_epoch;
+    ai.summon_panel(Panel::Ai); // 被覆盖者再召唤（变异：去掉 was_covered bump 咬此）
+    let s = ai.snap(0);
+    assert_eq!(s.top, Some(Panel::Ai));
+    assert_eq!(
+        s.ai_epoch,
+        e0 + 1,
+        "被覆盖再召唤 = 坍缩收起再入场：入场代必须 bump"
+    );
+    assert_eq!(s.cfg_epoch, ec0, "无关者代不动");
+}
+
+#[test]
+fn spec_bar079_入场代_幂等退场露出不bump() {
+    let ai = new_state();
+    assert_eq!(ai.snap(0).ai_epoch, 0, "初生代 0");
+    ai.summon_panel(Panel::Ai); // 新鲜召唤：目标值翻转自足，不 bump
+    assert_eq!(ai.snap(0).ai_epoch, 0, "新鲜召唤不 bump（目标变化即入场）");
+    ai.summon_panel(Panel::Ai); // 顶再召唤 = 幂等
+    assert_eq!(ai.snap(0).ai_epoch, 0, "顶再召唤幂等：不 bump");
+    assert!(ai.dismiss_top(Panel::Ai));
+    assert_eq!(
+        ai.snap(0).ai_epoch,
+        0,
+        "退场不 bump（退出从当前位置续走，保留打断不跳变；变异：退场也 bump 咬此）"
+    );
+    // 覆盖露出：被覆盖者被动成顶，零动画 —— 不 bump
+    ai.summon_panel(Panel::Ai);
+    ai.summon_panel(Panel::Config);
+    assert!(ai.dismiss_top(Panel::Config));
+    assert_eq!(
+        ai.snap(0).ai_epoch,
+        0,
+        "遮盖撤走露出：不 bump（零动画露出）"
+    );
+}
+
+#[test]
+fn spec_bar079_tap_orb_覆盖再召唤_入场代bump() {
+    // 用户手势路径（实机 S3 翻车现场）：点球召 AI → 左滑召配置页盖住 →
+    // 再点球 = 被覆盖再召唤，必须 bump
+    let ai = new_state();
+    ai.tap_orb();
+    ai.swipe_left();
+    assert_eq!(ai.snap(0).covered, Some(Panel::Ai));
+    ai.tap_orb();
+    let s = ai.snap(0);
+    assert_eq!(s.top, Some(Panel::Ai));
+    assert_eq!(s.ai_epoch, 1, "点球再召唤被覆盖 AI：入场代 bump");
+}
+
+#[test]
 fn spec_panel_只许收顶() {
     let ai = new_state();
     ai.summon_panel(Panel::Ai);

@@ -49,6 +49,6 @@
 | `src/ui/keybar.rs` | 1 | 1 | 0 | — |
 | `src/ui/orb.rs` | 5 | 5 | 0 | — |
 | `src/ui/prompt_bar.rs` | 5 | 4 | 1 | row_of |
-| `src/ui/seam.rs` | 12 | 12 | 0 | — |
+| `src/ui/seam.rs` | 14 | 14 | 0 | — |
 | `src/ui/stage.rs` | 4 | 4 | 0 | — |
 | `src/vsync_book.rs` | 9 | 4 | 5 | arm disarm armed last_ns reset_run |

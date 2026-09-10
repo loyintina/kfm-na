@@ -102,11 +102,15 @@ impl EaseState {
     }
 }
 
-/// 装配一对缝占槽件（采样器 + 活性探针，共享同一份状态）——结构同
-/// fx_spring::spring_occupier，只换曲线核
+/// 装配一对缝占槽件（采样器 + 活性探针，共享同一份状态）+ 入场重播踢
+/// （BAR-079 坍缩②：覆盖再召唤时壳层踢来屏外位——重定基 from=屏外位、
+/// 目标不动 → 重播入场；被覆盖者不可见，踢跳变不可见。未首采忽略：
+/// 冷启动/插件热装直通语义不破）——结构同 fx_spring::spring_occupier，
+/// 只换曲线核
 pub fn ease_occupier() -> crate::ui::seam::Occupier {
     let st = Arc::new(Mutex::new(EaseState::new()));
     let st2 = Arc::clone(&st);
+    let st3 = Arc::clone(&st);
     crate::ui::seam::Occupier {
         sampler: Arc::new(move |target: f32, now_ms: u64| {
             let mut g = st.lock().unwrap();
@@ -133,5 +137,14 @@ pub fn ease_occupier() -> crate::ui::seam::Occupier {
             pos
         }),
         is_active: Arc::new(move || !st2.lock().unwrap().settled),
+        replay: Some(Arc::new(move |offscreen: f32, now_ms: u64| {
+            let mut g = st3.lock().unwrap();
+            if !g.primed {
+                return; // 未首采 = 直通态，无需重播（冷启动语义）
+            }
+            g.from = offscreen;
+            g.start_ms = now_ms;
+            g.settled = false;
+        })),
     }
 }

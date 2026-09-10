@@ -1159,6 +1159,11 @@ pub struct StatsSnap {
     pub panel_top: String,
     /// 被覆盖面板(同值域;无 = "none")
     pub panel_cov: String,
+    /// AI 面板入场代(BAR-079:覆盖再召唤/被挤出时 +1——「重播入场发生了」
+    /// 的机器轨实证;服务未登记 = 0)
+    pub ai_epoch: i64,
+    /// 配置面板入场代(同 ai_epoch)
+    pub cfg_epoch: i64,
     // ---- input_bar 字段族(2026-08-31,期 0 组件三,D9 机器轨) ----
     /// 聚焦态(服务未登记 = false)
     pub bar_focused: bool,
@@ -1191,35 +1196,49 @@ pub fn stats_snap() -> StatsSnap {
         Some(crate::ai_presence::Panel::Ai) => "ai".to_owned(),
         Some(crate::ai_presence::Panel::Config) => "config".to_owned(),
     };
-    let (ai_page, ai_running, ai_orb_x, ai_orb_y, ai_pressed, ai_overlay, panel_top, panel_cov) =
-        match ai_presence_handle() {
-            Some(ai) => {
-                let s = ai.snap(crate::report::boot_ms() as u64);
-                (
-                    match s.page {
-                        crate::ai_presence::Page::Terminal => "terminal".to_owned(),
-                        crate::ai_presence::Page::AiFullscreen => "ai".to_owned(),
-                    },
-                    s.ai_running,
-                    s.x as i64,
-                    s.y as i64,
-                    s.pressed,
-                    s.overlay_visible,
-                    panel_name(s.top),
-                    panel_name(s.covered),
-                )
-            }
-            None => (
-                "-".to_owned(),
-                false,
-                0,
-                0,
-                false,
-                false,
-                "-".to_owned(),
-                "-".to_owned(),
-            ),
-        };
+    let (
+        ai_page,
+        ai_running,
+        ai_orb_x,
+        ai_orb_y,
+        ai_pressed,
+        ai_overlay,
+        panel_top,
+        panel_cov,
+        ai_epoch,
+        cfg_epoch,
+    ) = match ai_presence_handle() {
+        Some(ai) => {
+            let s = ai.snap(crate::report::boot_ms() as u64);
+            (
+                match s.page {
+                    crate::ai_presence::Page::Terminal => "terminal".to_owned(),
+                    crate::ai_presence::Page::AiFullscreen => "ai".to_owned(),
+                },
+                s.ai_running,
+                s.x as i64,
+                s.y as i64,
+                s.pressed,
+                s.overlay_visible,
+                panel_name(s.top),
+                panel_name(s.covered),
+                s.ai_epoch as i64,
+                s.cfg_epoch as i64,
+            )
+        }
+        None => (
+            "-".to_owned(),
+            false,
+            0,
+            0,
+            false,
+            false,
+            "-".to_owned(),
+            "-".to_owned(),
+            0,
+            0,
+        ),
+    };
     // 输入栏读数(期 0 组件三):未登记给中性值(观测铁律:不许反咬业务)
     let (bar_focused, bar_text_len) = match input_bar_handle() {
         Some(bar) => {
@@ -1258,6 +1277,8 @@ pub fn stats_snap() -> StatsSnap {
         ai_overlay,
         panel_top,
         panel_cov,
+        ai_epoch,
+        cfg_epoch,
         bar_focused,
         bar_text_len,
     }
@@ -1272,7 +1293,7 @@ pub fn format_stats(s: &StatsSnap) -> String {
     // 帧均耗防除零:一帧没画过就报 0
     let draw_avg = s.draw_total_ms.checked_div(s.frames).unwrap_or(0);
     format!(
-        "uptime={}ms\nforeground={}\nloop_beat_age={}\nframes={}\npump_calls={}\npump_bytes={}\nshots={}\ntexts={}\nkeys={}\nkeys_bytes={}\ntouches={}\nactive={}\nsessions={}\ndraw_avg_ms={}\ndraw_max_ms={}\ncpu_jiffies={}\nrss_kb={}\nbytes_local={}\nbytes_remote={}\nbytes_other={}\nsession_deaths={}\nai_page={}\nai_running={}\nai_orb_x={}\nai_orb_y={}\nai_pressed={}\nai_overlay={}\npanel_top={}\npanel_cov={}\nbar_focused={}\nbar_text_len={}\n",
+        "uptime={}ms\nforeground={}\nloop_beat_age={}\nframes={}\npump_calls={}\npump_bytes={}\nshots={}\ntexts={}\nkeys={}\nkeys_bytes={}\ntouches={}\nactive={}\nsessions={}\ndraw_avg_ms={}\ndraw_max_ms={}\ncpu_jiffies={}\nrss_kb={}\nbytes_local={}\nbytes_remote={}\nbytes_other={}\nsession_deaths={}\nai_page={}\nai_running={}\nai_orb_x={}\nai_orb_y={}\nai_pressed={}\nai_overlay={}\npanel_top={}\npanel_cov={}\nai_epoch={}\ncfg_epoch={}\nbar_focused={}\nbar_text_len={}\n",
         s.uptime_ms,
         s.foreground,
         age,
@@ -1302,6 +1323,8 @@ pub fn format_stats(s: &StatsSnap) -> String {
         s.ai_overlay,
         s.panel_top,
         s.panel_cov,
+        s.ai_epoch,
+        s.cfg_epoch,
         s.bar_focused,
         s.bar_text_len
     )

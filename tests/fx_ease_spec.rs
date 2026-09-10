@@ -158,6 +158,92 @@ fn spec_ease_占槽收敛停表() {
     assert!(!(o.is_active)(), "收敛后停表（夜判据红线：零额外帧）");
 }
 
+// ---- 入场重播踢（BAR-079：面板栈坍缩②「覆盖再召唤=重播入场」的缝侧原语） ----
+
+#[test]
+fn spec_bar079_入场重播踢_从屏外位起播() {
+    let o = fx_ease::ease_occupier();
+    let kick = o.replay.as_ref().expect("面板缝必须带重播踢");
+    assert_eq!((o.sampler)(0.0, 0), 0.0); // 首采直通靠泊（被覆盖稳态）
+    assert!(!(o.is_active)());
+    kick(-2800.0, 1000); // 覆盖再召唤：坍缩为屏外收起（变异：不重置 start_ms 咬此）
+    assert!(
+        (o.is_active)(),
+        "踢后采样前活性探针必须已 true——帧时钟即刻起表（变异：不置 settled=false 咬此）"
+    );
+    let mid = (o.sampler)(0.0, 1000 + 100); // 目标没变，但必须从屏外位起播
+    assert_eq!(
+        mid,
+        fx_ease::panel_ease_pos(-2800.0, 0.0, 100),
+        "踢后采样 = 从屏外位重播入场（变异：不设 from 咬此）"
+    );
+    assert!(mid < -1000.0, "100ms 处必须还在落程前段，得 {mid}");
+    assert!(
+        (o.is_active)(),
+        "重播期间活性探针必须 true——帧时钟起表（变异：不置 settled=false 咬此）"
+    );
+    let end = (o.sampler)(0.0, 1000 + fx_ease::ENTER_MS);
+    assert_eq!(end, 0.0, "重播满时长贴死靠泊");
+    assert!(!(o.is_active)(), "重播收敛停表");
+}
+
+#[test]
+fn spec_bar079_入场重播踢_目标即屏外位静默瞬移() {
+    // 静默挤出（坍缩③）语义：被覆盖者离栈，目标=屏外位——踢后 from==target
+    // 即刻落定，不许空烧一轮隐形动画帧
+    let o = fx_ease::ease_occupier();
+    let kick = o.replay.as_ref().unwrap();
+    assert_eq!((o.sampler)(0.0, 0), 0.0);
+    kick(-2800.0, 1000);
+    let pos = (o.sampler)(-2800.0, 1000);
+    assert_eq!(pos, -2800.0);
+    assert!(
+        !(o.is_active)(),
+        "from==target 必须即刻停表（静默挤出零帧空烧）"
+    );
+}
+
+#[test]
+fn spec_bar079_重播踢_未首采忽略() {
+    let o = fx_ease::ease_occupier();
+    let kick = o.replay.as_ref().unwrap();
+    kick(-2800.0, 500); // 冷启动未首采：踢必须忽略
+    assert_eq!((o.sampler)(0.0, 1000), 0.0, "首采样仍直通（不补演历史）");
+    assert!(!(o.is_active)());
+}
+
+#[test]
+fn spec_bar079_缝重播踢_中继三态() {
+    // 缝层 replay_* 中继（覆盖矩阵入账）：①占槽带踢=必达且参数原样；
+    // ②占槽无踢（弹簧件形态）=空操作不 panic；③拔槽=空操作
+    use kfm_na::ui::seam;
+    use std::sync::{Arc, Mutex};
+    let got = Arc::new(Mutex::new(None));
+    let got2 = Arc::clone(&got);
+    seam::occupy_ai_panel_offset_y(seam::Occupier {
+        sampler: Arc::new(|t, _| t),
+        is_active: Arc::new(|| false),
+        replay: Some(Arc::new(move |off: f32, now: u64| {
+            *got2.lock().unwrap() = Some((off, now));
+        })),
+    });
+    seam::replay_ai_panel_offset_y(-2800.0, 777);
+    assert_eq!(
+        *got.lock().unwrap(),
+        Some((-2800.0, 777)),
+        "踢必达占槽件，(屏外位, 时刻) 原样"
+    );
+    seam::occupy_ai_panel_offset_y(seam::Occupier {
+        sampler: Arc::new(|t, _| t),
+        is_active: Arc::new(|| false),
+        replay: None, // 弹簧件形态：无入场概念
+    });
+    seam::replay_ai_panel_offset_y(-2800.0, 778); // 空操作不 panic 即过
+    seam::release_ai_panel_offset_y();
+    seam::replay_ai_panel_offset_y(-2800.0, 779); // 拔槽空操作
+    seam::replay_config_panel_offset_x(1260.0, 100); // 无占槽空操作（入账）
+}
+
 // ---- 物理重力族（2026-09-06 定稿：落下=自由落体 t²，收起=镜像） ----
 
 #[test]

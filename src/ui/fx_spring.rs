@@ -93,6 +93,7 @@ pub fn spring_occupier() -> crate::ui::seam::Occupier {
             pos
         }),
         is_active: Arc::new(move || !st2.lock().unwrap().settled),
+        replay: None, // 键盘 inset 无「入场」概念（BAR-079：重播踢归面板缝）
     }
 }
 

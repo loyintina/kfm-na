@@ -12,10 +12,16 @@
 use std::sync::{Arc, Mutex};
 
 /// 占槽件：采样器（目标值, 时刻 → 当前渲染值）+ 活性探针
-/// （帧时钟按需启停的判据——ui-base §四：无活跃动画 = 零额外帧）
+/// （帧时钟按需启停的判据——ui-base §四：无活跃动画 = 零额外帧）+
+/// 入场重播踢（可选，BAR-079）：面板栈坍缩②「覆盖再召唤=重播入场」——
+/// 同一栈态有两种历史，目标值纯函数算不出「该动」；壳层见状态核入场代
+/// bump 即踢：(屏外位, 时刻) → 采样器重定基从屏外位起播。动画仍在缝内
+/// 插值（铁律不破），踢的只是采样器的重定基输入。无入场概念的缝
+/// （键盘 inset）= None
 pub struct Occupier {
     pub sampler: Arc<dyn Fn(f32, u64) -> f32 + Send + Sync>,
     pub is_active: Arc<dyn Fn() -> bool + Send + Sync>,
+    pub replay: Option<Arc<dyn Fn(f32, u64) + Send + Sync>>,
 }
 
 static AI_PANEL_OFFSET_Y: Mutex<Option<Occupier>> = Mutex::new(None);
@@ -47,6 +53,19 @@ pub fn ai_panel_offset_y_active() -> bool {
         .unwrap()
         .as_ref()
         .is_some_and(|o| (o.is_active)())
+}
+
+/// 入场重播踢（BAR-079，坍缩②）：壳层见 AI 入场代 bump 即踢——采样器
+/// 重定基到屏外位（目标不变）→ 重播入场动画。无占槽/无 replay = 空操作
+pub fn replay_ai_panel_offset_y(offscreen: f32, now_ms: u64) {
+    if let Some(r) = AI_PANEL_OFFSET_Y
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|o| o.replay.as_ref())
+    {
+        r(offscreen, now_ms);
+    }
 }
 
 // ---- 第二道缝：键盘 inset（chrome 跟随，2026-09-04）----
@@ -120,4 +139,17 @@ pub fn config_panel_offset_x_active() -> bool {
         .unwrap()
         .as_ref()
         .is_some_and(|o| (o.is_active)())
+}
+
+/// 入场重播踢（BAR-079，坍缩②）：壳层见配置入场代 bump 即踢——采样器
+/// 重定基到屏外右缘（目标不变）→ 重播抽屉入场。无占槽/无 replay = 空操作
+pub fn replay_config_panel_offset_x(offscreen: f32, now_ms: u64) {
+    if let Some(r) = CONFIG_PANEL_OFFSET_X
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|o| o.replay.as_ref())
+    {
+        r(offscreen, now_ms);
+    }
 }

@@ -200,6 +200,7 @@ fn spec_bar063_dump过渡帧快捷键行照画() {
     seam::occupy_ai_panel_offset_y(Occupier {
         sampler: Arc::new(|_, _| -300.0),
         is_active: Arc::new(|| true),
+        replay: None,
     });
 
     let (w, h) = (800u32, 1200u32);
