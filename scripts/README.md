@@ -45,6 +45,10 @@
 
 ## 观测(看)——8024 闸门配套
 
+- `na-front.sh` / `na-back.sh` — 前台拉起/退回后台并确认（2026-09-11
+  用户拍板工作流：agent 自拉前台自测，退回后台 = 完成信号。熄屏时
+  vivo 限制拉不起会报红；回后台必须走 launcher intent——KEYCODE_HOME
+  会被 NA 当终端按键吃掉）。
 - `na-ping.sh` — 事件循环死活四态(alive/stall/background/未起跳)。
 - `na-stats.sh` — 运行时统计快照:帧耗/CPU/RSS/泵与闸门计数/
   分桶吞吐/会话死亡。
