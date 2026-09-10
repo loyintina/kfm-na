@@ -13,6 +13,13 @@
 //! 方法同时服务人（android_app 触摸路由）与 AI（服务调用/探针注入）——
 //! 同一状态核同一套考题（D9 同源）。
 //!
+//! 面板栈（§五B/D12，2026-09-10 用户拍板）：终端恒底，其上至多两格
+//! （末位=顶，其余=被覆盖）。召唤 = 摘出重放顶（重复召唤幂等），栈满
+//! 挤出栈底（静默坍缩为收起）；收起只许顶（被覆盖者不可见，无手势能
+//! 收它）；遮盖者退场被覆盖者直接露出（placement 从未离靠泊位，零动画）。
+//! 抽屉对称手势：swipe_left = 召唤配置页（配置页在顶时空操作）；
+//! swipe_right = 配置页在顶则推回，否则空操作（留给右滑家文件树）。
+//!
 //! 时钟注入铁律：一切时间判定吃 `now_ms` 参数，不碰墙钟——考题喂时间戳即判。
 //! 生产侧 now_ms = report::boot_ms()（进程单钟，stats/绘制/注入同一把尺）。
 //!
@@ -50,11 +57,47 @@ pub const HALO_GAIN_RUNNING: f32 = 1.2;
 pub const GAIN_PRESSED: f32 = 1.4;
 pub const GAIN_AI_PAGE: f32 = 1.0;
 
-/// 页：终端 / AI 全屏（两布尔之一）
+/// 页：终端 / AI 全屏（两布尔之一；栈模型下 = 「AI 面板在栈」的派生读数，
+/// 保留给旧消费方——新逻辑请读 snap.top/covered）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Page {
     Terminal,
     AiFullscreen,
+}
+
+/// 面板公民（§五B/D12）：v1 两公民；右滑家（文件树）未来同规入栈
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Panel {
+    Ai,
+    Config,
+}
+
+/// 水平滑向（抽屉手势识别结果，§五B）：左 = 召唤配置页（配置页来向 =
+/// 右缘，滑向来向=推回）；右 = 推回配置页 / 未来右滑家（文件树）召唤
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SwipeDir {
+    Left,
+    Right,
+}
+
+/// 抽屉手势最小水平位移（px，物理像素——1260 宽屏上 ≈7% 屏宽，小于
+/// 屏宽 1/4 的「半页翻动」惯例：这是召唤/推回开关不是翻页）
+pub const SWIPE_MIN_PX: f64 = 90.0;
+
+/// 抽屉手势识别（纯函数，A 档钉）：水平位移够幅且方向锁（|dx| > 1.8|dy|
+/// ——纵向滚屏/对话页滚行不冲突，斜滑按主轴归类）；否则 None = 不是抽屉
+/// 手势，走原分路（滚屏/点按）。Started 落在哪个手势上下文由调用方仲裁
+/// （球/菜单/输入栏/锚点优先），本函数只管位移几何
+pub fn decide_swipe(dx: f64, dy: f64) -> Option<SwipeDir> {
+    if dx.abs() >= SWIPE_MIN_PX && dx.abs() > 1.8 * dy.abs() {
+        Some(if dx < 0.0 {
+            SwipeDir::Left
+        } else {
+            SwipeDir::Right
+        })
+    } else {
+        None
+    }
 }
 
 /// 状态快照（绘制/stats/探针回执的同源读数；Copy 便于逐帧比对置脏）
@@ -66,6 +109,10 @@ pub struct PresenceSnap {
     pub y: f64,
     pub pressed: bool,
     pub overlay_visible: bool,
+    /// 栈顶面板（None = 终端页裸奔）
+    pub top: Option<Panel>,
+    /// 被覆盖面板（至多一层；None = 无）
+    pub covered: Option<Panel>,
 }
 
 /// 四态增益（纯函数，D8）：(整 sprite 增益, 光晕增益)。光晕增益只在 running
@@ -84,7 +131,8 @@ pub fn orb_gain(running: bool, pressed: bool, page: Page) -> (f32, f32) {
 
 struct Inner {
     ai_running: bool,
-    page: Page,
+    /// 面板栈（§五B）：末位 = 顶，其余 = 被覆盖；至多两格，空 = 终端页
+    stack: Vec<Panel>,
     x: f64,
     y: f64,
     /// 首次 set_bounds 落默认出生位的标记（之后 set_bounds 只钳制不搬家）
@@ -111,7 +159,7 @@ impl AiPresenceState {
         AiPresenceState {
             inner: Mutex::new(Inner {
                 ai_running: false,
-                page: Page::Terminal,
+                stack: Vec::new(),
                 x: 0.0,
                 y: 0.0,
                 positioned: false,
@@ -161,18 +209,63 @@ impl AiPresenceState {
         g.fake_end_ms = None;
     }
 
-    /// 点球：终端 ↔ AI 全屏往返（光球唯一职责之一，D7）
+    /// 点球：AI 面板的召唤/收起开关（光球唯一职责之一，D7）——栈语义
+    /// （§五B）：AI 在顶 → 收起（被覆盖者露出或露终端）；否则召唤
+    /// （无论它收起还是被覆盖，一律重播入场动画盖到顶）
     pub fn tap_orb(&self) {
         let mut g = self.inner.lock().unwrap();
-        g.page = match g.page {
-            Page::Terminal => Page::AiFullscreen,
-            Page::AiFullscreen => Page::Terminal,
-        };
+        if g.stack.last() == Some(&Panel::Ai) {
+            g.stack.pop();
+        } else {
+            summon_locked(&mut g.stack, Panel::Ai);
+        }
     }
 
-    /// 点浮层：跳 AI 全屏（单向——返回走 tap_orb）
+    /// 点浮层：跳 AI 全屏（单向——返回走 tap_orb）；栈语义 = 召唤 AI 到顶
     pub fn tap_overlay(&self) {
-        self.inner.lock().unwrap().page = Page::AiFullscreen;
+        summon_locked(&mut self.inner.lock().unwrap().stack, Panel::Ai);
+    }
+
+    /// 召唤面板到顶（§五B）：摘出重放（幂等且保序），栈满两格先静默
+    /// 挤出栈底（叠加态坍缩为收起——不可见者被丢弃无感）
+    pub fn summon_panel(&self, p: Panel) {
+        summon_locked(&mut self.inner.lock().unwrap().stack, p);
+    }
+
+    /// 收起顶面板（抽屉对称：只许收顶——被覆盖者不可见，无手势够得着）；
+    /// 顶不是它 = 空操作。返回是否真收
+    pub fn dismiss_top(&self, p: Panel) -> bool {
+        let mut g = self.inner.lock().unwrap();
+        if g.stack.last() == Some(&p) {
+            g.stack.pop();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// 左滑（抽屉对称 §五B）：召唤配置页——除非它已在顶（一滑一义：
+    /// 配置页在顶时左滑留给未来右滑家的推回，v1 空操作）
+    pub fn swipe_left(&self) {
+        let mut g = self.inner.lock().unwrap();
+        if g.stack.last() != Some(&Panel::Config) {
+            summon_locked(&mut g.stack, Panel::Config);
+        }
+    }
+
+    /// 右滑（抽屉对称 §五B）：配置页在顶 = 推回它的来向（右缘）；
+    /// 否则空操作（留给右滑家文件树的召唤，v1 未装）
+    pub fn swipe_right(&self) {
+        let mut g = self.inner.lock().unwrap();
+        if g.stack.last() == Some(&Panel::Config) {
+            g.stack.pop();
+        }
+    }
+
+    /// 面板在栈（顶或被覆盖）：渲染目标值语义——在栈 = 靠泊位，
+    /// 不在 = 屏外位（被覆盖者 placement 不动，遮盖撤走零动画露出）
+    pub fn panel_present(&self, p: Panel) -> bool {
+        self.inner.lock().unwrap().stack.contains(&p)
     }
 
     /// 按下/抬起（pressed = 第四视觉态硬切，D8）
@@ -238,12 +331,24 @@ impl AiPresenceState {
                 .is_some_and(|end| now_ms.saturating_sub(end) < LINGER_MS)
         };
         PresenceSnap {
-            page: g.page,
+            // page 是栈的派生读数（AI 在栈=顶或覆盖皆 AiFullscreen——placement
+            // 目标值语义）：旧消费方零改动；新逻辑读 top/covered
+            page: if g.stack.contains(&Panel::Ai) {
+                Page::AiFullscreen
+            } else {
+                Page::Terminal
+            },
             ai_running: g.ai_running,
             x: g.x,
             y: g.y,
             pressed: g.pressed,
             overlay_visible,
+            top: g.stack.last().copied(),
+            covered: if g.stack.len() == 2 {
+                Some(g.stack[0])
+            } else {
+                None
+            },
         }
     }
 }
@@ -252,6 +357,17 @@ impl Default for AiPresenceState {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// 召唤核心（纯函数，栈规的唯一实体）：摘出重放顶——重复召唤幂等、
+/// 被覆盖者再召唤 = 摘下重放（叠加态坍缩为收起后再入场）；栈满两格
+/// 先静默挤出栈底（第三面板入场，叠加态坍缩为收起）
+fn summon_locked(stack: &mut Vec<Panel>, p: Panel) {
+    stack.retain(|&x| x != p);
+    if stack.len() == 2 {
+        stack.remove(0); // 挤出栈底被覆盖者
+    }
+    stack.push(p);
 }
 
 /// 边界钳制（纯函数）：球心不出屏（四边各内缩一个可视半径）；底边在

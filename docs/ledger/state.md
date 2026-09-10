@@ -7,6 +7,19 @@
 
 ## 当前位置（2026-09-05)
 
+- **配置页壳 + 面板栈落地（2026-09-10，§五B/D12 实现期）**：三公民
+  两槽栈状态核（ai_presence.rs：Panel 枚举 + stack:Vec<Panel> +
+  summon/dismiss/swipe_left/swipe_right，叠加态坍缩全规）+ A 档 9 题
+  全绿 + 四变异抽检全咬。渲染：第三道缝 config_panel_offset_x
+  （fx_ease 同曲线族方向分档：入场 +w→0 减速臂、立场 0→+w 加速臂）；
+  GLES 第四槽 ChromeSlot::Config（青底青环，与 AI 紫区分机器判卷），
+  present_frame z 序跟 snap.top 动态排（AI 文字紧跟 AI 面板槽——
+  Config 在顶时连墨带底一起盖）；softbuffer 兜底同规直画。手势：
+  decide_swipe 纯函数（90px 阈值 + 1.8 方向锁，A 档钉），路由 =
+  面板在顶走 panel_touch（抽屉识别在抬手），终端区水平快滑在
+  Ended 臂召/推；任一面板在顶终端手势全家让路（幽灵键防线泛化）。
+  stats 新字段族 panel_top/panel_cov（机器轨判卷）。配置页 v1 =
+  全屏框+空白骨架，内容（provider 管理/会话存档）后填。
 - **滑动淡入配方落地（2026-09-10，BAR-077 残余拖影的遮丑层）**：
   用户拍板试方——alpha 从 placement 纯函数推导
   （fx_ease::panel_fade_alpha，FADE_PORTION=0.35：重力 t² 下 ≈ 进场

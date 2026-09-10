@@ -85,3 +85,39 @@ pub fn chrome_ime_inset_active() -> bool {
         .as_ref()
         .is_some_and(|o| (o.is_active)())
 }
+
+// ---- 第三道缝：配置面板 X 偏移（面板栈 §五B，2026-09-10）----
+// 目标值语义在基础层（配置页在栈=0 靠泊 / 不在栈=+屏宽 屏外右缘——
+// 左滑召唤、右滑推回，抽屉对称的来向）。动画只许在缝内插值。
+// 方向分档吃 fx_ease 同一对臂：入场（+w→0）走减速臂，立场（0→+w）
+// 走加速臂——与 AI 面板 Y 缝同一条曲线族，零新曲线。
+
+static CONFIG_PANEL_OFFSET_X: Mutex<Option<Occupier>> = Mutex::new(None);
+
+/// 占槽（后占者赢，ui-base §三 v1）
+pub fn occupy_config_panel_offset_x(o: Occupier) {
+    *CONFIG_PANEL_OFFSET_X.lock().unwrap() = Some(o);
+}
+
+/// 拔槽回硬切（插件卸载/禁用）
+pub fn release_config_panel_offset_x() {
+    *CONFIG_PANEL_OFFSET_X.lock().unwrap() = None;
+}
+
+/// 采样（渲染时过缝）：无占槽直通目标值——硬切基座语义
+pub fn sample_config_panel_offset_x(target: f32, now_ms: u64) -> f32 {
+    let g = CONFIG_PANEL_OFFSET_X.lock().unwrap();
+    match g.as_ref() {
+        Some(o) => (o.sampler)(target, now_ms),
+        None => target,
+    }
+}
+
+/// 该槽有活跃动画（帧时钟启停判据；无占槽恒 false = 零额外帧）
+pub fn config_panel_offset_x_active() -> bool {
+    CONFIG_PANEL_OFFSET_X
+        .lock()
+        .unwrap()
+        .as_ref()
+        .is_some_and(|o| (o.is_active)())
+}

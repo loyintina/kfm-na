@@ -180,26 +180,86 @@ pub fn paint_ai_page_chrome(
     if py1 > py0 {
         frame.fill_rect(0, py0, buf_w, py1 - py0, AI_PAGE_BG);
     }
-    paint_ai_frame_ring(&mut frame, buf_w, buf_h, bottom_inset, panel_off);
+    paint_page_frame_ring(
+        &mut frame,
+        buf_w,
+        buf_h,
+        bottom_inset,
+        0,
+        panel_off,
+        AI_PAGE_BG,
+        AI_PAGE_FRAME_C1,
+        AI_PAGE_FRAME_C2,
+    );
     ai_page_fit(buf_h, bottom_inset)
 }
 
-/// AI 页边框环（2026-09-04 装修配方的唯一实体，2026-09-05 平移参数化）：
-/// 先紫外发光，再 135° 渐变外环，最后页面底色 punch 内芯（左缘让 9 =
-/// 3 倍粗，其余让 3）。panel_off 整体平移（render_ai_page 传 0，
-/// paint_ai_page_chrome 传面板偏移）——环是面板装修，跟面板一起动。
+/// 配置页底装修（面板栈 §五B，2026-09-10）：整页青底 + 边框环（配方与
+/// AI 页同源 paint_page_frame_ring，色相换青系便于截图区分两面板的
+/// 机器判卷）。cfg_off_x = 面板刚体水平平移（+w=屏外右缘 → 0 靠泊）。
+/// v1 = 空白骨架，无内容墨
+pub fn paint_cfg_page_chrome(
+    buf: &mut [u32],
+    buf_w: u32,
+    buf_h: u32,
+    bottom_inset: u32,
+    cfg_off_x: i32,
+) {
+    if buf_w == 0 || buf_h == 0 {
+        return;
+    }
+    let mut frame = Frame {
+        buf,
+        w: buf_w,
+        h: buf_h,
+    };
+    // 整页底色 = 面板刚体矩形（全屏）与屏求交后画（X 向平移，左右裁剪）
+    let px0 = cfg_off_x.clamp(0, buf_w as i32) as u32;
+    let px1 = (buf_w as i32 + cfg_off_x).clamp(0, buf_w as i32) as u32;
+    if px1 > px0 {
+        frame.fill_rect(px0, 0, px1 - px0, buf_h, CFG_PAGE_BG);
+    }
+    paint_page_frame_ring(
+        &mut frame,
+        buf_w,
+        buf_h,
+        bottom_inset,
+        cfg_off_x,
+        0,
+        CFG_PAGE_BG,
+        CFG_FRAME_C1,
+        CFG_FRAME_C2,
+    );
+}
+
+/// 配置页分层判定（对照 panel_split，裁决语义同构）：
+/// - 网格+快捷键行（下层可见）：cfg_off != 0；
+/// - 配置页可见：cfg_off < w（off ∈ [0, +w]，=w 即完全屏外右缘）
+pub fn cfg_split(cfg_off: i32, w: u32) -> (bool, bool) {
+    (cfg_off != 0, cfg_off < w as i32)
+}
+
+/// 页面边框环（2026-09-04 装修配方的唯一实体，09-05 平移参数化，
+/// 09-10 双色相化+双轴平移供配置页复用）：先外发光，再 135° 渐变
+/// 外环，最后页面底色 punch 内芯（左缘让 9 = 3 倍粗，其余让 3）。
+/// (off_x, off_y) 整体平移——环是面板装修，跟面板一起动。
 /// 空态也画：框是页面装修不是内容
-fn paint_ai_frame_ring(
+#[allow(clippy::too_many_arguments)]
+fn paint_page_frame_ring(
     frame: &mut Frame<'_>,
     buf_w: u32,
     buf_h: u32,
     bottom_inset: u32,
-    panel_off: i32,
+    off_x: i32,
+    off_y: i32,
+    bg: u32,
+    c1: u32,
+    c2: u32,
 ) {
-    let fx0 = AI_PAGE_FRAME_MARGIN as i64;
-    let fy0 = AI_PAGE_FRAME_MARGIN as i64 + i64::from(panel_off);
-    let fx1 = (buf_w - AI_PAGE_FRAME_MARGIN) as i64;
-    let fy1 = (buf_h - bottom_inset - AI_PAGE_FRAME_MARGIN) as i64 + i64::from(panel_off);
+    let fx0 = AI_PAGE_FRAME_MARGIN as i64 + i64::from(off_x);
+    let fy0 = AI_PAGE_FRAME_MARGIN as i64 + i64::from(off_y);
+    let fx1 = (buf_w - AI_PAGE_FRAME_MARGIN) as i64 + i64::from(off_x);
+    let fy1 = (buf_h - bottom_inset - AI_PAGE_FRAME_MARGIN) as i64 + i64::from(off_y);
     if fx1 <= fx0 + 2 * i64::from(AI_PAGE_FRAME_R) || fy1 <= fy0 + 2 * i64::from(AI_PAGE_FRAME_R) {
         return;
     }
@@ -208,9 +268,8 @@ fn paint_ai_frame_ring(
     let rc = r.min((fw / 2).min(fh / 2) as i64);
     let w = i64::from(AI_PAGE_FRAME_W);
     let spread = 14i64;
-    let (gc, ga) = (AI_PAGE_FRAME_C2, 64u32);
+    let (gc, ga) = (c2, 64u32);
     let denom = ((fw - 1) + (fh - 1)).max(1);
-    let (c1, c2) = (AI_PAGE_FRAME_C1, AI_PAGE_FRAME_C2);
 
     // 带切（2026-09-06 ras 40ms→8ms）：三种墨的可能墨域都只是矩形周边
     // 的薄带——整包围盒逐像素 SDF 的 95% 是零墨或被 punch 覆盖的废访。
@@ -303,7 +362,7 @@ fn paint_ai_frame_ring(
                     my0 as u32,
                     (rx1 - rx0) as u32,
                     (my1 - my0) as u32,
-                    AI_PAGE_BG,
+                    bg,
                 );
             }
         }
@@ -323,9 +382,9 @@ fn paint_ai_frame_ring(
             let cov = rr_cover(lx, lyy, iw, ih, punch_r as u32);
             if cov > 0 {
                 if cov == 255 {
-                    frame.buf[ay as usize * frame.w as usize + ax as usize] = AI_PAGE_BG;
+                    frame.buf[ay as usize * frame.w as usize + ax as usize] = bg;
                 } else {
-                    frame.blend_px(ax as u32, ay as u32, AI_PAGE_BG, cov);
+                    frame.blend_px(ax as u32, ay as u32, bg, cov);
                 }
             }
         }
@@ -1458,9 +1517,19 @@ impl TermView {
             h: buf_h,
         };
         // 边框（2026-09-04 用户拍板装修，仿 kfmv4 orb-panel）：配方在
-        // paint_ai_frame_ring（GPU chrome 路径 paint_ai_page_chrome 共用
+        // paint_page_frame_ring（GPU chrome 路径 paint_ai_page_chrome 共用
         // 这一份——修配方两处一起修）。off=0：CPU 路径不平移
-        paint_ai_frame_ring(&mut frame, buf_w, buf_h, bottom_inset, 0);
+        paint_page_frame_ring(
+            &mut frame,
+            buf_w,
+            buf_h,
+            bottom_inset,
+            0,
+            0,
+            AI_PAGE_BG,
+            AI_PAGE_FRAME_C1,
+            AI_PAGE_FRAME_C2,
+        );
         let (rows, fit, skip) =
             self.ai_page_layout(buf_w, buf_h, msgs, scroll_rows, bottom_inset, live_tail);
         for (i, (fg, items)) in rows.iter().skip(skip).take(fit as usize).enumerate() {
@@ -2017,6 +2086,12 @@ pub const AI_PAGE_FRAME_MARGIN: u32 = 16;
 pub const AI_PAGE_FRAME_W: u32 = 3;
 /// 圆角半径（kfmv4 border-radius:12px × 3）
 pub const AI_PAGE_FRAME_R: u32 = 36;
+
+/// 配置页底色/边框（面板栈 §五B，2026-09-10）：与 AI 页同配方不同色相
+/// ——青系（截图机器判卷两面板可区分：AI 紫底 0x140A24 vs 配置青底）
+pub const CFG_PAGE_BG: u32 = 0x000A_1A20;
+pub const CFG_FRAME_C1: u32 = 0x0000_F0C8; // 青绿 rgba(0,240,200,~.8)
+pub const CFG_FRAME_C2: u32 = 0x0020_90D0; // 青蓝 rgba(32,144,208,~.7)
 
 // 光球 sprite 机制已迁 ui/orb.rs（2026-09-01 控件库立形）——配方常量/
 // build_orb_sprite/blit_orb_sprite/双缓存/绘制本体全部随迁，零逻辑变化；

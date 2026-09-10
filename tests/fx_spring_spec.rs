@@ -318,3 +318,67 @@ fn spec_帧时钟_键盘缝活跃也产帧() {
     assert!(!fx_spring::fx_frame_due(2916), "动画停即停表");
     seam::release_chrome_ime_inset();
 }
+
+// ---- 第三道缝：配置面板 X 偏移（面板栈 §五B，2026-09-10） ----
+
+#[test]
+fn spec_cfg缝_无占槽直通目标值() {
+    let _g = SEAM_LOCK.lock().unwrap();
+    seam::release_config_panel_offset_x(); // 防前题残槽
+    assert_eq!(
+        seam::sample_config_panel_offset_x(0.0, 0),
+        0.0,
+        "无占槽 = 硬切直通"
+    );
+    assert_eq!(seam::sample_config_panel_offset_x(1260.0, 123), 1260.0);
+    assert!(!seam::config_panel_offset_x_active(), "无占槽恒无活跃动画");
+}
+
+#[test]
+fn spec_cfg缝_缓动占槽与拔槽回硬切() {
+    let _g = SEAM_LOCK.lock().unwrap();
+    seam::release_config_panel_offset_x();
+    seam::occupy_config_panel_offset_x(kfm_na::ui::fx_ease::ease_occupier());
+    // 首采样直通（primed）；召唤 +w→0 = 入场起滑（重定基当刻 = 起点）
+    assert_eq!(seam::sample_config_panel_offset_x(1260.0, 0), 1260.0);
+    let p0 = seam::sample_config_panel_offset_x(0.0, 100);
+    assert_eq!(p0, 1260.0, "目标翻转当刻必须还在起点");
+    assert!(seam::config_panel_offset_x_active(), "目标变了 = 动画开始");
+    // 入场中途（减速臂 250ms 窗内）：在行程内
+    let p_mid = seam::sample_config_panel_offset_x(0.0, 200);
+    assert!(
+        (0.0..1260.0).contains(&p_mid),
+        "入场中途必须在行程内，实测 {p_mid}"
+    );
+    // 立场 0→+w（加速臂 350ms 窗内）：翻转当刻在起点，中途在行程内
+    let q0 = seam::sample_config_panel_offset_x(1260.0, 500);
+    assert_eq!(q0, 0.0, "立场翻转当刻必须还在起点");
+    let q_mid = seam::sample_config_panel_offset_x(1260.0, 600);
+    assert!(
+        (0.0..1260.0).contains(&q_mid),
+        "立场中途必须在行程内，实测 {q_mid}"
+    );
+    // 收敛贴死 + 拔槽回硬切
+    let q_end = seam::sample_config_panel_offset_x(1260.0, 5000);
+    assert_eq!(q_end, 1260.0, "定时缓动到期必贴死");
+    assert!(!seam::config_panel_offset_x_active());
+    seam::release_config_panel_offset_x();
+    assert_eq!(seam::sample_config_panel_offset_x(300.0, 6000), 300.0);
+}
+
+#[test]
+fn spec_帧时钟_配置缝活跃也产帧() {
+    let _g = SEAM_LOCK.lock().unwrap();
+    seam::release_ai_panel_offset_y();
+    seam::release_chrome_ime_inset();
+    seam::release_config_panel_offset_x();
+    assert!(!fx_spring::fx_frame_due(0), "三道缝全空 = 零帧");
+    // 只占配置缝：帧时钟一样要转（fx_frame_due 是任一缝语义）
+    seam::occupy_config_panel_offset_x(kfm_na::ui::fx_ease::ease_occupier());
+    assert_eq!(seam::sample_config_panel_offset_x(1260.0, 2000), 1260.0); // primed
+    seam::sample_config_panel_offset_x(0.0, 2000); // 目标翻转 = 动画开始
+    assert!(fx_spring::fx_frame_due(2000), "配置缝活跃即产帧");
+    seam::sample_config_panel_offset_x(0.0, 5000); // 到期贴死
+    assert!(!fx_spring::fx_frame_due(5016), "动画停即停表");
+    seam::release_config_panel_offset_x();
+}

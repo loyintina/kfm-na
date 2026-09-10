@@ -13,7 +13,7 @@
 use std::sync::Arc;
 
 use kfm_na::ai_presence::{
-    self, AiPresenceState, LINGER_MS, ORB_HIT_RADIUS_PX, ORB_RADIUS_PX, Page,
+    self, AiPresenceState, LINGER_MS, ORB_HIT_RADIUS_PX, ORB_RADIUS_PX, Page, Panel,
 };
 use kfm_na::base::{Base, FiberState, GetError, PluginEntry};
 use kfm_na::input_bar;
@@ -1263,5 +1263,233 @@ fn spec_冒烟_ai页框外_无渐变厚边() {
         buf[((m + 1) * w + mid_x) as usize],
         tvv::AI_PAGE_BG,
         "框缘渐变墨必须在"
+    );
+}
+
+// ---- 面板栈（§五B/D12，2026-09-10 用户拍板：三态+两格栈+叠加态坍缩
+// +抽屉对称手势；配置页壳先行，右滑家文件树入栈同规） ----
+// 变异抽检锚点：summon 不摘重（重复进栈）咬「幂等保序」；dismiss_top 不看
+// 顶咬「只许收顶」；swipe_right 无脑 pop 咬「抽屉对称」；panel_present 只看
+// 顶咬「被覆盖者 placement 不离靠泊位（露出零动画的物质基础）」。
+// 注：「第三面板入场静默挤出栈底」在 v1 两公民下不可达（retain 去重后
+// 栈长恒 ≤2）——右滑家入栈时由其考题激活，勿删 summon_locked 的挤出臂。
+
+#[test]
+fn spec_panel_召唤与派生读数() {
+    let ai = new_state();
+    let s = ai.snap(0);
+    assert_eq!(s.top, None, "出生裸终端");
+    assert_eq!(s.covered, None);
+    assert_eq!(s.page, Page::Terminal);
+    ai.summon_panel(Panel::Config);
+    let s = ai.snap(0);
+    assert_eq!(s.top, Some(Panel::Config), "召唤到顶");
+    assert_eq!(s.covered, None);
+    assert_eq!(s.page, Page::Terminal, "配置页不含 AI——page 派生不变");
+    assert!(ai.panel_present(Panel::Config) && !ai.panel_present(Panel::Ai));
+}
+
+#[test]
+fn spec_panel_互斥覆盖与露出零动画() {
+    let ai = new_state();
+    ai.summon_panel(Panel::Ai);
+    ai.summon_panel(Panel::Config);
+    let s = ai.snap(0);
+    assert_eq!(s.top, Some(Panel::Config));
+    assert_eq!(s.covered, Some(Panel::Ai), "原顶转被覆盖");
+    // 露出零动画的物质基础：被覆盖者 placement 从未离靠泊位（在栈=靠泊）
+    assert!(
+        ai.panel_present(Panel::Ai),
+        "被覆盖者必须还在栈（placement 不动，遮盖撤走直接露出）"
+    );
+    assert_eq!(s.page, Page::AiFullscreen, "AI 被覆盖仍在栈，派生不变");
+    // 遮盖者退场 → 被覆盖者露出成顶（状态核不播动画——渲染侧零插值）
+    assert!(ai.dismiss_top(Panel::Config));
+    let s = ai.snap(0);
+    assert_eq!(s.top, Some(Panel::Ai), "遮盖撤走 AI 露出");
+    assert_eq!(s.covered, None);
+}
+
+#[test]
+fn spec_panel_再召唤坍缩为重入场() {
+    let ai = new_state();
+    ai.summon_panel(Panel::Ai);
+    ai.summon_panel(Panel::Config);
+    // 被覆盖的 AI 再被召唤：视作收起→重新入场盖到顶（变异：不 retain
+    // 会留下重复 Ai 或顺序错）
+    ai.summon_panel(Panel::Ai);
+    let s = ai.snap(0);
+    assert_eq!(s.top, Some(Panel::Ai), "被覆盖者再召唤回顶");
+    assert_eq!(s.covered, Some(Panel::Config), "原顶转被覆盖");
+    // 幂等：顶再召唤自己 = 无操作
+    ai.summon_panel(Panel::Ai);
+    let s = ai.snap(0);
+    assert_eq!(s.top, Some(Panel::Ai));
+    assert_eq!(s.covered, Some(Panel::Config), "幂等：栈不变");
+}
+
+#[test]
+fn spec_panel_只许收顶() {
+    let ai = new_state();
+    ai.summon_panel(Panel::Ai);
+    ai.summon_panel(Panel::Config);
+    assert!(
+        !ai.dismiss_top(Panel::Ai),
+        "被覆盖者无手势够得着——不许收（变异：不看顶就 pop 咬此）"
+    );
+    let s = ai.snap(0);
+    assert_eq!(s.top, Some(Panel::Config));
+    assert_eq!(s.covered, Some(Panel::Ai), "空操作栈不变");
+}
+
+#[test]
+fn spec_panel_tap_orb_栈语义开关() {
+    let ai = new_state();
+    ai.tap_orb();
+    assert_eq!(ai.snap(0).top, Some(Panel::Ai), "空栈点球 = 召唤 AI");
+    ai.summon_panel(Panel::Config);
+    ai.tap_orb();
+    let s = ai.snap(0);
+    assert_eq!(s.top, Some(Panel::Ai), "AI 被覆盖时点球 = 再召唤重入场");
+    assert_eq!(s.covered, Some(Panel::Config));
+    ai.tap_orb();
+    let s = ai.snap(0);
+    assert_eq!(
+        s.top,
+        Some(Panel::Config),
+        "AI 在顶点球 = 收起，被覆盖者露出"
+    );
+    ai.tap_orb();
+    assert_eq!(ai.snap(0).top, Some(Panel::Ai), "再点再盖");
+}
+
+#[test]
+fn spec_panel_swipe_抽屉对称() {
+    let ai = new_state();
+    // 终端页左滑 = 召唤配置页
+    ai.swipe_left();
+    assert_eq!(ai.snap(0).top, Some(Panel::Config));
+    // 配置页在顶左滑 = 空操作（一滑一义；留给未来右滑家推回）
+    ai.swipe_left();
+    let s = ai.snap(0);
+    assert_eq!(s.top, Some(Panel::Config));
+    assert_eq!(s.covered, None, "幂等不复制");
+    // 配置页在顶右滑 = 推回（来向=右缘）
+    ai.swipe_right();
+    assert_eq!(ai.snap(0).top, None, "推回后露终端");
+    // 终端页右滑 = 空操作（右滑家 v1 未装）
+    ai.swipe_right();
+    assert_eq!(ai.snap(0).top, None);
+    // AI 页上左滑 = 召唤配置页盖之；再右滑推回 → AI 露出
+    ai.tap_orb();
+    ai.swipe_left();
+    assert_eq!(ai.snap(0).covered, Some(Panel::Ai));
+    ai.swipe_right();
+    assert_eq!(ai.snap(0).top, Some(Panel::Ai), "推回配置页 AI 露出");
+    // AI 页上右滑 = 空操作（留给文件树）
+    ai.swipe_right();
+    assert_eq!(ai.snap(0).top, Some(Panel::Ai), "AI 页右滑不动栈");
+}
+
+#[test]
+fn spec_panel_用户场景走查() {
+    // 2026-09-10 用户原例的两公民版（文件树未装，用配置页走查同构路径）：
+    // 终端→点球→AI 顶；左滑→配置盖 AI；右滑→推回，AI 露出；点球→收 AI
+    // 露终端
+    let ai = new_state();
+    ai.tap_orb();
+    ai.swipe_left();
+    ai.swipe_right();
+    ai.tap_orb();
+    let s = ai.snap(0);
+    assert_eq!(s.top, None, "全收后必须露出终端");
+    assert_eq!(s.covered, None);
+    assert_eq!(s.page, Page::Terminal);
+}
+
+#[test]
+fn spec_panel_不变量任意序列() {
+    // 无规则拍操作序列：栈长恒 ≤2、无重复公民、top 恒为末位
+    let ai = new_state();
+    let ops: &[fn(&AiPresenceState)] = &[
+        |a| a.tap_orb(),
+        |a| a.swipe_left(),
+        |a| a.swipe_right(),
+        |a| a.summon_panel(Panel::Ai),
+        |a| a.summon_panel(Panel::Config),
+        |a| {
+            a.dismiss_top(Panel::Ai);
+        },
+        |a| {
+            a.dismiss_top(Panel::Config);
+        },
+    ];
+    let mut seed = 0x9e3779b9u32;
+    for _ in 0..500 {
+        // xorshift 伪随机——确定性可复现，不碰墙钟
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        ops[(seed as usize) % ops.len()](&ai);
+        let s = ai.snap(0);
+        let len = s.top.is_some() as usize + s.covered.is_some() as usize;
+        assert!(len <= 2, "栈长超标 {len}");
+        assert!(
+            !(s.top.is_some() && s.top == s.covered),
+            "同公民两格：top={:?} covered={:?}",
+            s.top,
+            s.covered
+        );
+    }
+}
+
+#[test]
+fn spec_panel_旧契约不破_tap_overlay_与浮层() {
+    // tap_overlay = 召唤 AI 到顶（单向）；配置页在顶时点浮层同样盖到顶
+    let ai = new_state();
+    ai.summon_panel(Panel::Config);
+    ai.tap_overlay();
+    let s = ai.snap(0);
+    assert_eq!(s.top, Some(Panel::Ai));
+    assert_eq!(s.covered, Some(Panel::Config));
+    // 浮层可见性与栈正交：run_start 现、甩掉隐——面板栈不影响
+    let ai2 = new_state();
+    ai2.run_start(1000);
+    ai2.swipe_left();
+    assert!(ai2.snap(1000).overlay_visible, "配置页在顶浮层照样现");
+}
+
+// ---- 面板栈 §五B：抽屉手势识别（decide_swipe 纯函数，2026-09-10） ----
+
+#[test]
+fn spec_decide_swipe_方向锁与幅度阈() {
+    use kfm_na::ai_presence::{SWIPE_MIN_PX, SwipeDir, decide_swipe};
+    // 够幅且水平主导：左右归类
+    assert_eq!(decide_swipe(-200.0, 30.0), Some(SwipeDir::Left));
+    assert_eq!(decide_swipe(200.0, -30.0), Some(SwipeDir::Right));
+    // 幅度不足 = 不是抽屉手势（走点按/滚屏原分路）
+    assert_eq!(
+        decide_swipe(-(SWIPE_MIN_PX) + 1.0, 0.0),
+        None,
+        "差 1px 不到阈值"
+    );
+    assert_eq!(decide_swipe(0.0, 0.0), None);
+    // 方向锁：|dx| 必须 > 1.8|dy|——纵向滚屏/斜滑纵向主轴不吞
+    assert_eq!(
+        decide_swipe(-200.0, 120.0),
+        None,
+        "200 < 1.8×120=216 斜滑不吞"
+    );
+    assert_eq!(decide_swipe(-100.0, -400.0), None, "纵向主轴不是抽屉");
+    // 边界咬死：恰好阈值 + 恰好 1.8 倍之上
+    assert_eq!(
+        decide_swipe(-SWIPE_MIN_PX, 0.0),
+        Some(SwipeDir::Left),
+        "阈值含等号"
+    );
+    assert_eq!(
+        decide_swipe(200.0, 100.0),
+        Some(SwipeDir::Right),
+        "200 > 180 咬边"
     );
 }

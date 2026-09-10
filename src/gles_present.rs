@@ -41,8 +41,9 @@ type Layer2 = (
 
 /// 图层槽位（ui-base §八）：每槽 = 独立画布 + 纹理 + 可见性。动画
 /// （placement 变化）不触碰槽内容——合成期只挪矩形；内容变化由调用方
-/// 置脏重烘焙（slot_bake）。z 序固定：Keybar（网格之上）→ Panel
-/// （placement.y 跟 panel_off）→ Over（一切之上）。
+/// 置脏重烘焙（slot_bake）。z 序由 present_frame 按面板栈动态排：
+/// 键行恒在网格之上，两面板的上下关系跟 snap.top 走（被覆盖者在下，
+/// placement 不动、遮盖撤走零动画露出），Over 恒在一切之上。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChromeSlot {
     /// 快捷键行带（终端页）
@@ -52,6 +53,9 @@ pub enum ChromeSlot {
     Panel = 1,
     /// 上层 chrome（输入栏/光球/放大镜，浮在 AI 文字之上）
     Over = 2,
+    /// 配置面板底装修（青底+边框环；placement.x 跟 cfg_off，面板栈
+    /// §五B 左滑抽屉——被覆盖时仍烘焙仍可见，AI 面板盖在它上面）
+    Config = 3,
 }
 
 /// 单槽烘焙物。baked=false 的槽不许上屏——采样未上传过的纹理得到
@@ -421,9 +425,9 @@ pub struct GlesPresent {
     w: u32,
     h: u32,
     // ---- 期 1 第 2 层：终端网格 GPU 化 ----
-    /// 图层槽位（ui-base §八 渲染成本模型）：键行/面板/上层三槽，
+    /// 图层槽位（ui-base §八 渲染成本模型）：键行/AI面板/上层/配置四槽，
     /// 置脏烘焙 + placement 合成——动画帧零光栅零上传
-    layers: [ChromeLayer; 3],
+    layers: [ChromeLayer; 4],
     /// 图层实例程序（rect+uv+tint 四边形；placement 逐槽进实例数据）
     layer_prog: glow::NativeProgram,
     layer_vao: glow::NativeVertexArray,
@@ -554,7 +558,7 @@ impl GlesPresent {
             }
         };
         // 先建槽数组再 move gl 进结构体（E0382：字段初始化按书写序移动）
-        let layers = [mk_layer(&gl), mk_layer(&gl), mk_layer(&gl)];
+        let layers = [mk_layer(&gl), mk_layer(&gl), mk_layer(&gl), mk_layer(&gl)];
         Ok(Self {
             egl,
             display,
@@ -913,13 +917,16 @@ impl GlesPresent {
         }
     }
 
-    /// 期 1 第 2 层组合帧（2026-09-07 图层槽位版）：清屏 → 网格背景实例
-    /// → 网格字形实例（按页）→ 键行槽 → 面板槽（placement.y = panel_off、
-    /// tint.α = panel_alpha——动画帧唯二变的东西，零上传）→ AI 文字字形
-    /// 实例（按页，u_alpha = panel_alpha 随面板显影）→ 上层槽（输入栏/
-    /// 光球/放大镜）→ swap。z 序与双层合成时代像素等价：面板盖住键行与
-    /// 网格，输入栏/光球浮在 AI 文字上。槽画布由调用方置脏烘焙
-    /// （slot_bake），未烘焙的槽不上屏（不完整纹理=黑屏案）
+    /// 期 1 第 2 层组合帧（2026-09-07 图层槽位版，09-10 面板栈双面板化）：
+    /// 清屏 → 网格背景实例 → 网格字形实例（按页）→ 键行槽 → 被覆盖面板槽
+    /// → 在顶面板槽（placement 跟缝采样、alpha 随落程显影——动画帧唯二
+    /// 变的东西，零上传）→ AI 文字字形实例（按页，u_alpha = panel_alpha
+    /// 随 AI 面板显影）→ 上层槽（输入栏/光球/放大镜）→ swap。
+    /// 两面板 z 序由 cfg_on_top 裁决（= snap.top，§五B：被覆盖者在下，
+    /// placement 不动、遮盖撤走零动画露出）；AI 文字是 AI 面板的墨，
+    /// 必须紧跟 AI 面板槽画（Config 在顶时压在 AI 文字上）。槽画布由
+    /// 调用方置脏烘焙（slot_bake），未烘焙的槽不上屏（不完整纹理=黑屏案）
+    #[allow(clippy::too_many_arguments)]
     pub fn present_frame(
         &mut self,
         bg: &[crate::glyph_atlas::BgInstance],
@@ -927,6 +934,9 @@ impl GlesPresent {
         ai_glyphs_by_page: &[Vec<crate::glyph_atlas::GlyphInstance>],
         panel_off: i32,
         panel_alpha: f32,
+        cfg_off: i32,
+        cfg_alpha: f32,
+        cfg_on_top: bool,
     ) {
         let t0_draw = std::time::Instant::now();
         // CPU 画布直接测量（rgb 非零计数 + 样本原值）——「画没画」的铁证
@@ -1007,10 +1017,31 @@ impl GlesPresent {
                 );
             }
 
-            // 面板槽（placement.y = panel_off + tint.α = panel_alpha——
+            // 两面板槽 + AI 文字：z 序跟面板栈顶走（§五B）。AI 文字是
+            // AI 面板的墨——必须紧跟 AI 面板槽画，Config 在顶时它被
+            // 配置页连墨带底一起盖住
+            let pn = &self.layers[ChromeSlot::Panel as usize];
+            let cf = &self.layers[ChromeSlot::Config as usize];
+            if !cfg_on_top {
+                // 配置页在下（被覆盖或不在栈）：先画它
+                if cf.visible && cf.baked {
+                    draw_slot_layer(
+                        gl,
+                        self.layer_prog,
+                        self.layer_vao,
+                        self.layer_vbo,
+                        cf.tex,
+                        cfg_off as f32,
+                        0.0,
+                        self.w as f32,
+                        self.h as f32,
+                        cfg_alpha,
+                    );
+                }
+            }
+            // AI 面板槽（placement.y = panel_off + tint.α = panel_alpha——
             // 动画帧唯二变化的输入，零光栅零上传；屏外部分 viewport
             // 裁剪零成本）
-            let pn = &self.layers[ChromeSlot::Panel as usize];
             if pn.visible && pn.baked {
                 draw_slot_layer(
                     gl,
@@ -1025,8 +1056,7 @@ impl GlesPresent {
                     panel_alpha,
                 );
             }
-
-            // AI 文字实例（面板刚体的墨——z 序在面板底之上、输入栏之下；
+            // AI 文字实例（面板刚体的墨——z 序紧跟面板底之上；
             // u_alpha 随面板显影，墨不游离于底）
             draw_glyph_pages(
                 gl,
@@ -1037,6 +1067,23 @@ impl GlesPresent {
                 ai_glyphs_by_page,
                 panel_alpha,
             );
+            if cfg_on_top {
+                // 配置页在顶：压在 AI 面板与 AI 文字之上
+                if cf.visible && cf.baked {
+                    draw_slot_layer(
+                        gl,
+                        self.layer_prog,
+                        self.layer_vao,
+                        self.layer_vbo,
+                        cf.tex,
+                        cfg_off as f32,
+                        0.0,
+                        self.w as f32,
+                        self.h as f32,
+                        cfg_alpha,
+                    );
+                }
+            }
 
             // 上层槽（输入栏/光球/放大镜——浮在一切内容之上）
             let ov = &self.layers[ChromeSlot::Over as usize];

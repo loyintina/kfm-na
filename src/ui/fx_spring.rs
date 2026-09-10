@@ -123,10 +123,12 @@ pub fn frame_budget_ms() -> u64 {
 /// 该画动画帧了：任一缝上有活跃动画且距上帧 ≥帧预算（默认约 60fps 上限，
 /// 壳喂真实刷新周期后跟屏走）；
 /// 无活跃动画恒 false——零额外帧零唤醒（夜判据 0.45% 单核红线）。
-/// 两道缝共用一只钟（2026-09-04 键盘 inset 缝入册：同窗同帧不双泵）
+/// 三道缝共用一只钟（2026-09-04 键盘 inset 缝入册、09-10 配置面板 X
+/// 缝入册：同窗同帧不双泵）
 pub fn fx_frame_due(now_ms: u64) -> bool {
-    let active =
-        crate::ui::seam::ai_panel_offset_y_active() || crate::ui::seam::chrome_ime_inset_active();
+    let active = crate::ui::seam::ai_panel_offset_y_active()
+        || crate::ui::seam::chrome_ime_inset_active()
+        || crate::ui::seam::config_panel_offset_x_active();
     if !active {
         LAST_FRAME_MS.store(0, Ordering::Relaxed);
         return false;

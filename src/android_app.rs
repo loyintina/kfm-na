@@ -105,8 +105,11 @@ struct BarTouch {
     menu: Option<BarMenuAction>,
 }
 
-/// AI 面板手势跟踪（期 0④）：拖动滚行 + 点按收键盘的仲裁
-struct AiPageTouch {
+/// 面板页手势跟踪（期 0④ AI 页起手，2026-09-10 泛化成面板栈顶§五B）：
+/// 在顶面板（AI/配置）的手势仲裁——拖动滚行（仅 AI 页有内容可滚）+
+/// 点按收键盘 + 水平抽屉滑（召唤/推回）
+struct PanelTouch {
+    start_x: f64,
     start_y: f64,
     last_y: f64,
     /// 行高余量累积（px）——跨 Moved 事件攒够一行才滚一行（像素级跟手）
@@ -244,10 +247,11 @@ struct App {
     /// 按在输入栏带上的手势（Some = 这手势归栏，终端手势全家让路）。
     /// 拖动超 slop = 滚动文本视口；未超 = 点按（聚焦/定位/发送）
     inputbar_touch: Option<BarTouch>,
-    /// 按在 AI 面板上的手势（期 0④，page=AiFullscreen 时终端手势全家
-    /// 让路——不穿透）：拖动 = 对话页滚行（追底状态机），未超 slop
-    /// 抬手 = 点按（输入栏失焦 + 收键盘，不召唤终端输入法）
-    ai_page_touch: Option<AiPageTouch>,
+    /// 按在面板页上的手势（期 0④ 起手，2026-09-10 泛化面板栈顶§五B：
+    /// 任一面板在顶时终端手势全家让路——不穿透）：AI 页拖动 = 对话页
+    /// 滚行（追底状态机）；水平快滑 = 抽屉召唤/推回；未超 slop 抬手 =
+    /// 点按（输入栏失焦 + 收键盘，不召唤终端输入法）
+    panel_touch: Option<PanelTouch>,
     /// 本地脑（期 0②：echo-brain 夹具先行，direct-api 随 key 配置落地换插）：
     /// 输入栏发送的真 run 来源——run_start/run_end 驱动光球（期 0②收尾）
     brain: Option<Arc<dyn crate::brain_ep::BrainEndpoint>>,
@@ -271,6 +275,8 @@ struct App {
 ///   面板槽：paint_ai_page_chrome(w, h, bottom_inset=ime+bar_h)——
 ///           panel_off/panel_fade 是合成期 placement/alpha，不进 sig
 ///           （烘焙画布恒靠泊位恒全实）
+///   配置槽：paint_cfg_page_chrome(w, h, bottom_inset=ime+bar_h)——
+///           同上，cfg_off/cfg_fade 是合成期 placement/alpha 不进 sig
 ///   上层槽：render_inputbar(bar_snap,sending,caret_on,ime,w,h) +
 ///           render_orb(ai_snap) + render_magnifier——orb_alpha_out 在
 ///           GLES 路径恒 true 不进 sig；放大镜内容跟终端网格活（网格
@@ -280,6 +286,7 @@ struct LayerSigs {
     keybar: crate::ui::stage::DirtyGuard<(u8, u32, u32, u32, u32)>,
     panel: crate::ui::stage::DirtyGuard<(u32, u32, u32, u32)>,
     over: crate::ui::stage::DirtyGuard<OverSig>,
+    config: crate::ui::stage::DirtyGuard<(u32, u32, u32, u32)>,
 }
 
 impl LayerSigs {
@@ -289,6 +296,7 @@ impl LayerSigs {
         self.keybar.invalidate();
         self.panel.invalidate();
         self.over.invalidate();
+        self.config.invalidate();
     }
 }
 
@@ -512,15 +520,16 @@ impl App {
                     });
                     return;
                 }
-                // AI 面板靠泊中（期 0④）：面板上只有输入栏是活区——其余
-                // 位置手势归对话页（拖动滚行/点按收键盘），终端手势全家
-                // 让路（快捷键行热区也不许穿透：面板盖着它，点得着看不
-                // 见 = 幽灵键）
-                let ai_page = self
-                    .last_ai_snap
-                    .is_some_and(|s| s.page == crate::ai_presence::Page::AiFullscreen);
-                if ai_page {
-                    self.ai_page_touch = Some(AiPageTouch {
+                // 面板在顶（期 0④ 起手，2026-09-10 泛化面板栈 §五B）：
+                // 在顶面板上只有输入栏是活区——其余位置手势归面板页
+                // （AI 页拖动滚行/两页点按收键盘/水平快滑抽屉召唤推回），
+                // 终端手势全家让路（快捷键行热区也不许穿透：面板盖着它，
+                // 点得着看不见 = 幽灵键；被覆盖面板同样吃不到手势——
+                // 路由按逻辑栈顶，不按 placement 过渡帧）
+                let panel_top = self.last_ai_snap.and_then(|s| s.top);
+                if panel_top.is_some() {
+                    self.panel_touch = Some(PanelTouch {
+                        start_x: x,
                         start_y: y,
                         last_y: y,
                         acc_px: 0.0,
@@ -664,26 +673,35 @@ impl App {
                         }
                     }
                 }
-                // AI 面板手势：拖动 = 对话页滚行（像素级累积跟手，行高
-                // 与渲染同尺 AI_PAGE_LINE_H；方向契约在 ui/ai_page.rs
-                // drag_accum_rows——下滑 = 看更早，BAR-064）
-                if let Some(apt) = self.ai_page_touch.as_mut() {
+                // 面板页手势：AI 页拖动 = 对话页滚行（像素级累积跟手，
+                // 行高与渲染同尺 AI_PAGE_LINE_H；方向契约在 ui/ai_page.rs
+                // drag_accum_rows——下滑 = 看更早，BAR-064）；配置页 v1
+                // 空白骨架无内容可滚，只记 dragged（抬手不归点按）；
+                // 水平位移只攒着，抽屉识别在抬手（decide_swipe）
+                if let Some(apt) = self.panel_touch.as_mut() {
                     let dy = y - apt.last_y;
                     apt.last_y = y;
-                    if (y - apt.start_y).abs() > crate::scroll::TAP_SLOP_PX {
+                    if (y - apt.start_y).abs() > crate::scroll::TAP_SLOP_PX
+                        || (x - apt.start_x).abs() > crate::scroll::TAP_SLOP_PX
+                    {
                         apt.dragged = true;
                     }
-                    let (acc, rows) = crate::ui::ai_page::drag_accum_rows(
-                        apt.acc_px,
-                        dy,
-                        f64::from(crate::termview::AI_PAGE_LINE_H),
-                    );
-                    apt.acc_px = acc;
-                    if rows != 0 {
-                        if let Some(chat) = &self.ai_chat {
-                            chat.scroll_drag_rows(rows);
+                    let top_is_ai = self
+                        .last_ai_snap
+                        .is_some_and(|s| s.top == Some(crate::ai_presence::Panel::Ai));
+                    if top_is_ai {
+                        let (acc, rows) = crate::ui::ai_page::drag_accum_rows(
+                            apt.acc_px,
+                            dy,
+                            f64::from(crate::termview::AI_PAGE_LINE_H),
+                        );
+                        apt.acc_px = acc;
+                        if rows != 0 {
+                            if let Some(chat) = &self.ai_chat {
+                                chat.scroll_drag_rows(rows);
+                            }
+                            self.dirty = true;
                         }
-                        self.dirty = true;
                     }
                     return;
                 }
@@ -886,10 +904,26 @@ impl App {
                     self.dirty = true;
                     return;
                 }
-                // AI 面板手势收尾：点按（未拖过 slop）= 输入栏失焦 +
+                // 面板页手势收尾：水平快滑 = 抽屉（§五B：左滑召唤配置页
+                // ——除非它已在顶；配置页在顶右滑 = 推回；其余组合空操作
+                // 留给右滑家文件树）；点按（未拖过 slop）= 输入栏失焦 +
                 // 收键盘——面板不是输入区，绝不穿透召唤终端输入法（期 0④
                 // 用户拍板两条：不穿透 + 点非输入区自动收键盘）
-                if let Some(apt) = self.ai_page_touch.take() {
+                if let Some(apt) = self.panel_touch.take() {
+                    if phase == TouchPhase::Ended
+                        && let Some(dir) =
+                            crate::ai_presence::decide_swipe(x - apt.start_x, y - apt.start_y)
+                    {
+                        if let Some(ai) = &self.ai_presence {
+                            match dir {
+                                crate::ai_presence::SwipeDir::Left => ai.swipe_left(),
+                                crate::ai_presence::SwipeDir::Right => ai.swipe_right(),
+                            }
+                        }
+                        crate::report::report("ui", &format!("抽屉手势: {dir:?}"));
+                        self.dirty = true;
+                        return;
+                    }
                     if phase == TouchPhase::Ended && !apt.dragged {
                         if self.input_bar.as_ref().is_some_and(|b| b.is_focused())
                             && let Some(bar) = &self.input_bar
@@ -902,7 +936,7 @@ impl App {
                         if let Some(insets) = &self.ime_insets {
                             insets.force_hide();
                         }
-                        crate::report::report("ime", "AI 页点按：收键盘不穿透");
+                        crate::report::report("ime", "面板页点按：收键盘不穿透");
                     }
                     self.dirty = true;
                     return;
@@ -971,6 +1005,24 @@ impl App {
                     if tap && phase == TouchPhase::Ended {
                         self.copy_selection();
                     }
+                    return;
+                }
+                // 抽屉手势（§五B）：终端区水平快滑 = 面板召唤/推回（方向锁
+                // 1.8，纵向滚屏不冲突——decide_swipe 纯函数单源；手势起点
+                // 在 press 里，滚屏轨迹在 touch_scroll 里，同一指）
+                if phase == TouchPhase::Ended
+                    && let Some(p) = press.as_ref()
+                    && let Some(dir) = crate::ai_presence::decide_swipe(x - p.x, y - p.y)
+                {
+                    if let Some(ai) = &self.ai_presence {
+                        match dir {
+                            crate::ai_presence::SwipeDir::Left => ai.swipe_left(),
+                            crate::ai_presence::SwipeDir::Right => ai.swipe_right(),
+                        }
+                    }
+                    crate::report::report("ui", &format!("抽屉手势: {dir:?}"));
+                    self.touch_scroll.take();
+                    self.dirty = true;
                     return;
                 }
                 let was_tap = self.touch_scroll.take().is_some_and(|t| t.was_tap());
@@ -2232,12 +2284,14 @@ impl App {
         }
     }
 
-    /// 下层 chrome（快捷键行 + AI 面板底）：**softbuffer 兜底路径专用**
+    /// 下层 chrome（快捷键行 + 面板底装修）：**softbuffer 兜底路径专用**
     /// （2026-09-07 起 GLES 走图层槽位，见 draw_frame_gles——本函数不再
     /// 参与 GLES 帧装配，性能不再投入，立项书红线保留）。ai_glyphs =
     /// Some(GLES)：面板只画底装修（紫底 + 边框环，panel_off 刚体平移），
     /// 文字实例收集进列表（GPU 图集管线）；None（softbuffer）：面板全
     /// CPU——稳态直画，过渡帧整页离屏渲染后按偏移压盖（BAR-062 考题区）。
+    /// 配置页（§五B）两路径同规：栈顶裁决画在 AI 面板之上或之下，
+    /// X 平移直画带裁剪（无淡出——alpha 是 GLES 合成期 tint）。
     /// 返回 ai_layout（布局读数，调用方写回 scroll_sync_layout——眼手同尺）
     #[allow(clippy::too_many_arguments)]
     fn paint_under(
@@ -2249,29 +2303,39 @@ impl App {
         bar_h: u32,
         mods: u8,
         panel_off: i32,
+        cfg_off: i32,
+        cfg_on_top: bool,
         chat_msgs: &[(bool, String, String)],
         chat_scroll: u32,
         chat_live: bool,
         panel_scratch: &mut Vec<u32>,
         ai_glyphs: Option<&mut Vec<crate::glyph_atlas::AiGlyph>>,
     ) -> Option<(u32, u32)> {
-        // 分支判定唯一裁决处（panel_split）——softbuffer 与 GLES 两路径
-        // 都从这里取，分支语义漂移 = 眼手两张皮（BAR-063 级事故温床）
-        let (grid_keybar, panel_visible) = crate::termview::panel_split(panel_off, h);
+        // 分支判定唯一裁决处（panel_split/cfg_split）——softbuffer 与
+        // GLES 两路径都从这里取，分支语义漂移 = 眼手两张皮（BAR-063 级
+        // 事故温床）。网格+键行让位 = 两面板都没靠泊（§五B）
+        let (ai_grid, panel_visible) = crate::termview::panel_split(panel_off, h);
+        let (cfg_grid, cfg_visible) = crate::termview::cfg_split(cfg_off, w);
+        let grid_keybar = ai_grid && cfg_grid;
+        let bottom_inset = ime_bottom_px + bar_h;
         let mut ai_layout = None;
         // 快捷键行（BAR-017 Rust 自绘覆盖层；inset 必须叠输入栏当前带高
         // ——栏带压在行下沿，漏叠 = 眼手错位，2026-08-31 排障实锤，触摸
         // 几何早就是叠后的）。面板未靠泊才画：靠泊时被面板盖住，画了
         // 白画（GPU 路径还省一次上传带宽）
         if grid_keybar {
-            term.render_keybar(buf, w, h, ime_bottom_px + bar_h, mods);
+            term.render_keybar(buf, w, h, bottom_inset, mods);
+        }
+        // 配置页被覆盖（AI 在顶）：画在 AI 面板之下——placement 冻结，
+        // AI 面板滑开时它零动画露出（§五B）；X 平移直画带裁剪
+        if cfg_visible && !cfg_on_top {
+            crate::termview::paint_cfg_page_chrome(buf, w, h, bottom_inset, cfg_off);
         }
         // AI 面板（三分支，panel_off 是缝采样值——无 ui-fx 占槽时恒等于
         // 目标值 0 或 -h，退化为硬切；中间值 = 弹簧过渡帧）。视口下沿
         // 让位键盘 + 输入栏带高（2026-09-04 用户拍板：追底追到栏带上沿，
         // 不越过栏带）；live = 末条流式中（思考活窗，收流折叠）
         if panel_visible {
-            let bottom_inset = ime_bottom_px + bar_h;
             if let Some(out) = ai_glyphs {
                 // GPU：文字实例收集（panel_off 已进行 y）+ 底装修
                 let (layout, glyphs) = term.ai_page_glyphs(
@@ -2317,6 +2381,10 @@ impl App {
                 ));
                 crate::termview::blit_panel_shifted(buf, panel_scratch, w, h, panel_off);
             }
+        }
+        // 配置页在顶：压在 AI 面板与 AI 文字之上（§五B 栈顶裁决）
+        if cfg_visible && cfg_on_top {
+            crate::termview::paint_cfg_page_chrome(buf, w, h, bottom_inset, cfg_off);
         }
         ai_layout
     }
@@ -2377,6 +2445,8 @@ impl App {
         w: u32,
         h: u32,
         panel_off: i32,
+        cfg_off: i32,
+        cfg_on_top: bool,
         panel_scratch: &mut Vec<u32>,
     ) -> Option<(u32, u32)> {
         let Some(term) = term else {
@@ -2394,6 +2464,8 @@ impl App {
             bar_h,
             mods,
             panel_off,
+            cfg_off,
+            cfg_on_top,
             chat_msgs,
             chat_scroll,
             chat_live,
@@ -2454,8 +2526,9 @@ impl App {
             crate::report::boot_ms() as u64,
         )
         .max(0.0) as u32;
-        // AI 面板 Y 偏移过缝（ui-base §三）：目标值 = AI 页 0 靠泊 /
-        // 终端页 -屏高屏外；无 ui-fx 占槽 = 直通目标值（硬切）
+        // AI 面板 Y 偏移过缝（ui-base §三）：目标值 = AI 在栈 0 靠泊 /
+        // 不在栈 -屏高屏外；无 ui-fx 占槽 = 直通目标值（硬切）。
+        // 被覆盖时 placement 冻结在靠泊位（§五B：遮盖撤走零动画露出）
         let ai_page = ai_snap.is_some_and(|s| s.page == crate::ai_presence::Page::AiFullscreen);
         let panel_target = if ai_page { 0.0 } else { -(h as f32) };
         let panel_off = crate::ui::seam::sample_ai_panel_offset_y(
@@ -2465,7 +2538,22 @@ impl App {
         // 滑动淡入（2026-09-10 用户拍板试方）：alpha 从 placement 纯函数
         // 推导——零状态，打断/反转自动一致；硬切下恒 1/0 与旧版像素等价
         let panel_fade = crate::ui::fx_ease::panel_fade_alpha(panel_off as f32, h as f32);
-        let (grid_keybar, panel_visible) = crate::termview::panel_split(panel_off, h);
+        // 配置面板 X 偏移过缝（§五B 第三道缝）：目标值 = 在栈 0 靠泊 /
+        // 不在栈 +屏宽屏外右缘（左滑召唤来向）；alpha 同一把纯函数尺
+        // （X 取负喂入，与 Y 缝数学等价）
+        let cfg_on_top = ai_snap.is_some_and(|s| s.top == Some(crate::ai_presence::Panel::Config));
+        let cfg_present = cfg_on_top
+            || ai_snap.is_some_and(|s| s.covered == Some(crate::ai_presence::Panel::Config));
+        let cfg_target = if cfg_present { 0.0 } else { w as f32 };
+        let cfg_off = crate::ui::seam::sample_config_panel_offset_x(
+            cfg_target,
+            crate::report::boot_ms() as u64,
+        ) as i32;
+        let cfg_fade = crate::ui::fx_ease::panel_fade_alpha(-(cfg_off as f32), w as f32);
+        let (ai_grid, panel_visible) = crate::termview::panel_split(panel_off, h);
+        let (cfg_grid, cfg_visible) = crate::termview::cfg_split(cfg_off, w);
+        // 网格+键行让位 = 两面板都没靠泊（任一靠泊在顶即整页盖住终端）
+        let grid_keybar = ai_grid && cfg_grid;
         let Some(term_arc) = th else {
             // 字体全灭的降级画面：紫屏（与 soft 路径同规）
             g.present_solid(KFM_PURPLE);
@@ -2566,12 +2654,13 @@ impl App {
         // 2026-09-05 教训：一刀切 |= alpha 会变成不透明黑膜）
         let t_ras = std::time::Instant::now();
         let bottom_inset = ime + bar_h;
-        // 三槽可见性单源（BAR-070：图层化首版漏设上层槽 → 输入栏/光球/
-        // 放大镜集体隐身——可见性判定收进纯逻辑，每帧三槽都从这出）
-        let slot_vis = crate::ui::stage::slot_visibility(grid_keybar, panel_visible);
+        // 四槽可见性单源（BAR-070：图层化首版漏设上层槽 → 输入栏/光球/
+        // 放大镜集体隐身——可见性判定收进纯逻辑，每帧四槽都从这出）
+        let slot_vis = crate::ui::stage::slot_visibility(grid_keybar, panel_visible, cfg_visible);
         g.set_slot_visible(crate::gles_present::ChromeSlot::Keybar, slot_vis[0]);
         g.set_slot_visible(crate::gles_present::ChromeSlot::Panel, slot_vis[1]);
-        g.set_slot_visible(crate::gles_present::ChromeSlot::Over, slot_vis[2]);
+        g.set_slot_visible(crate::gles_present::ChromeSlot::Config, slot_vis[2]);
+        g.set_slot_visible(crate::gles_present::ChromeSlot::Over, slot_vis[3]);
         // 键行槽烘焙：sig=render_keybar 读的每个输入（靠泊时槽隐藏，
         // 烘焙物常驻纹理，面板收起重现身零成本）
         if grid_keybar && sigs.keybar.feed((mods, ime, bar_h, w, h)) {
@@ -2591,9 +2680,19 @@ impl App {
             crate::termview::paint_ai_page_chrome(px, w, h, bottom_inset, 0);
             g.slot_bake(crate::gles_present::ChromeSlot::Panel);
         }
+        // 配置槽（§五B）：同规——画布恒靠泊位（cfg_off=0），X 位移在合成期
+        if cfg_visible && sigs.config.feed((w, h, ime, bar_h)) {
+            let px = g.slot_canvas(crate::gles_present::ChromeSlot::Config);
+            px.fill(0);
+            crate::termview::paint_cfg_page_chrome(px, w, h, bottom_inset, 0);
+            g.slot_bake(crate::gles_present::ChromeSlot::Config);
+        }
         // AI 文字（每帧实例——消息/滚动/panel_off 逐帧变，永不进烘焙；
-        // panel_off 进实例 y=刚体平移，2026-09-05 拍板不变）
-        let (ai_layout, ai_glyphs) = if panel_visible {
+        // panel_off 进实例 y=刚体平移，2026-09-05 拍板不变）。配置页靠泊
+        // 在顶时 AI 被整页盖住：零生成零绘制（布局写回暂停，露出后下一帧
+        // 自愈——被覆盖面板无手势够得着，眼手同尺不缺这份读数）
+        let ai_fully_covered = cfg_on_top && cfg_off == 0;
+        let (ai_layout, ai_glyphs) = if panel_visible && !ai_fully_covered {
             let term = term_arc.lock().unwrap();
             let (layout, glyphs) = term.ai_page_glyphs(
                 w,
@@ -2711,14 +2810,18 @@ impl App {
             .fetch_add(gen_us + gen2_us, std::sync::atomic::Ordering::Relaxed);
         crate::gles_present::STAGE_RAS_US.fetch_add(ras_us, std::sync::atomic::Ordering::Relaxed);
 
-        // 5) 组合呈现（z 序见 present_frame——与双层合成时代像素等价；
-        // panel_off/panel_fade 只进面板槽的 placement 与显影，烘焙物不动）
+        // 5) 组合呈现（z 序见 present_frame——面板栈顶裁决两面板上下；
+        // panel_off/panel_fade/cfg_off/cfg_fade 只进合成期 placement 与
+        // 显影，烘焙物不动）
         g.present_frame(
             &bg_inst,
             &glyphs_by_page,
             &ai_glyphs_by_page,
             panel_off,
             panel_fade,
+            cfg_off,
+            cfg_fade,
+            cfg_on_top,
         );
         ai_layout
     }
@@ -2780,7 +2883,8 @@ impl App {
                 chat.scroll_sync_layout(total, fit);
             }
             crate::gles_present::note_anim_frame(
-                crate::ui::seam::ai_panel_offset_y_active(),
+                crate::ui::seam::ai_panel_offset_y_active()
+                    || crate::ui::seam::config_panel_offset_x_active(),
                 t0.elapsed(),
             );
             crate::gate::note_draw(t0.elapsed()); // 含 present 的全帧耗时
@@ -2814,6 +2918,20 @@ impl App {
                 panel_target,
                 crate::report::boot_ms() as u64,
             ) as i32;
+            // 配置面板 X 偏移过缝（§五B 第三道缝）：目标值 = 在栈 0 靠泊 /
+            // 不在栈 +屏宽屏外右缘；无 ui-fx 占槽 = 直通（硬切）
+            let cfg_on_top = self
+                .last_ai_snap
+                .is_some_and(|s| s.top == Some(crate::ai_presence::Panel::Config));
+            let cfg_present = cfg_on_top
+                || self
+                    .last_ai_snap
+                    .is_some_and(|s| s.covered == Some(crate::ai_presence::Panel::Config));
+            let cfg_target = if cfg_present { 0.0 } else { w as f32 };
+            let cfg_off = crate::ui::seam::sample_config_panel_offset_x(
+                cfg_target,
+                crate::report::boot_ms() as u64,
+            ) as i32;
             // 键盘 inset chrome 跟随过缝（ui-base §二 第二道缝）：目标值 =
             // 真实 inset（BAR-006 轮询）；无 ui-fx 占槽 = 直通（硬切）。
             // 采样值写回字段——触摸命中下一拍吃同一份（眼手同尺）。
@@ -2840,6 +2958,8 @@ impl App {
                 w,
                 h,
                 panel_off,
+                cfg_off,
+                cfg_on_top,
                 &mut self.panel_scratch,
             );
             // 布局写回视口状态机（眼手同尺：手势钳制与渲染同一份布局）

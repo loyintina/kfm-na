@@ -9,7 +9,7 @@
 | 模块 | pub项 | 已引用 | 未覆盖 | 未覆盖清单 |
 |---|---|---|---|---|
 | `src/ai_chat.rs` | 11 | 10 | 1 | generation |
-| `src/ai_presence.rs` | 27 | 27 | 0 | — |
+| `src/ai_presence.rs` | 34 | 34 | 0 | — |
 | `src/bootstrap.rs` | 5 | 3 | 2 | ensure_pkg_tool first_boot_install |
 | `src/brain.rs` | 14 | 14 | 0 | — |
 | `src/brain_ep.rs` | 4 | 4 | 0 | — |
@@ -40,15 +40,15 @@
 | `src/scroll.rs` | 5 | 5 | 0 | — |
 | `src/session.rs` | 8 | 8 | 0 | — |
 | `src/session_router.rs` | 10 | 10 | 0 | — |
-| `src/termview.rs` | 101 | 94 | 7 | AI_THINK_COLLAPSED FONT_CANDIDATES CJK_FONT_CANDIDATES load_cjk_font font_probe MAG_HALF_COLS MAG_HALF_ROWS |
+| `src/termview.rs` | 106 | 99 | 7 | AI_THINK_COLLAPSED FONT_CANDIDATES CJK_FONT_CANDIDATES load_cjk_font font_probe MAG_HALF_COLS MAG_HALF_ROWS |
 | `src/theme.rs` | 1 | 1 | 0 | — |
 | `src/trace.rs` | 12 | 8 | 4 | TRACE_CAP format_tail dump_all dump_tail |
 | `src/ui/ai_page.rs` | 7 | 7 | 0 | — |
-| `src/ui/fx_ease.rs` | 8 | 8 | 0 | — |
-| `src/ui/fx_spring.rs` | 4 | 4 | 0 | — |
+| `src/ui/fx_ease.rs` | 10 | 10 | 0 | — |
+| `src/ui/fx_spring.rs` | 6 | 6 | 0 | — |
 | `src/ui/keybar.rs` | 1 | 1 | 0 | — |
 | `src/ui/orb.rs` | 5 | 5 | 0 | — |
 | `src/ui/prompt_bar.rs` | 5 | 4 | 1 | row_of |
-| `src/ui/seam.rs` | 8 | 8 | 0 | — |
+| `src/ui/seam.rs` | 12 | 12 | 0 | — |
 | `src/ui/stage.rs` | 4 | 4 | 0 | — |
 | `src/vsync_book.rs` | 9 | 4 | 5 | arm disarm armed last_ns reset_run |
