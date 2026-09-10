@@ -96,11 +96,32 @@ pub fn spring_occupier() -> crate::ui::seam::Occupier {
     }
 }
 
-// ---- 帧时钟（ui-base §四：按需启停，≤60fps，动画停即停表） ----
+// ---- 帧时钟（ui-base §四：按需启停，帧预算=显示刷新周期，动画停即停表） ----
 
 static LAST_FRAME_MS: AtomicU64 = AtomicU64::new(0);
 
-/// 该画动画帧了：任一缝上有活跃动画且距上帧 ≥16ms（约 60fps 上限）；
+/// 帧预算（一次动画帧的最小间隔，BAR-077）：默认 16ms（≈60fps 保守基线——
+/// 核心层零平台依赖，壳没喂数字前必须能活）。壳每次 resumed 经 JNI 读
+/// `Display.getMode().getRefreshRate()` 写真实刷新周期（120Hz 屏 → 8ms）。
+/// 拍板存档：本机屏 120Hz（vsync 账本实测 110-120Hz），写死 16ms =
+/// 屏幕每刷两次画面才动一次 = 用户实看的「落下拖影」。
+static FRAME_BUDGET_MS: AtomicU64 = AtomicU64::new(16);
+
+/// 写帧预算并回生效值：钳 4~33ms 防病态——4ms（250fps）封顶防烧 CPU，
+/// 33ms（30fps）托底防动画冻死；离谱读数（0/负/千级）不许进系统
+pub fn set_frame_budget_ms(ms: u64) -> u64 {
+    let v = ms.clamp(4, 33);
+    FRAME_BUDGET_MS.store(v, Ordering::Relaxed);
+    v
+}
+
+/// 当前帧预算（考题探视口/壳层回报用）
+pub fn frame_budget_ms() -> u64 {
+    FRAME_BUDGET_MS.load(Ordering::Relaxed)
+}
+
+/// 该画动画帧了：任一缝上有活跃动画且距上帧 ≥帧预算（默认约 60fps 上限，
+/// 壳喂真实刷新周期后跟屏走）；
 /// 无活跃动画恒 false——零额外帧零唤醒（夜判据 0.45% 单核红线）。
 /// 两道缝共用一只钟（2026-09-04 键盘 inset 缝入册：同窗同帧不双泵）
 pub fn fx_frame_due(now_ms: u64) -> bool {
@@ -111,7 +132,7 @@ pub fn fx_frame_due(now_ms: u64) -> bool {
         return false;
     }
     let last = LAST_FRAME_MS.load(Ordering::Relaxed);
-    if last != 0 && now_ms.saturating_sub(last) < 16 {
+    if last != 0 && now_ms.saturating_sub(last) < FRAME_BUDGET_MS.load(Ordering::Relaxed) {
         return false;
     }
     LAST_FRAME_MS.store(now_ms, Ordering::Relaxed);

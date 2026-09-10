@@ -2852,9 +2852,45 @@ impl App {
     }
 }
 
+/// fx 帧预算同步（BAR-077，2026-09-10 用户拍板：动画节拍跟显示真实刷新
+/// 率走——120Hz 屏写死 16ms=60fps 硬钳=「落下拖影」真凶，vsync 账本
+/// 实测 110-120Hz 定罪，渲染均耗 3-6ms 证明管线跑得起 120fps）。
+/// JNI 直调 MainActivity.displayRefreshHz()（attach 范式同 rec hook）；
+/// 读数离谱/查询失败 = 维持旧预算（默认 16ms 保守基线），不许带病进系统。
+fn sync_fx_frame_budget(app: &winit::platform::android::activity::AndroidApp) {
+    // SAFETY: 同 insets.rs imp——vm_as_ptr/activity_as_ptr 是 android-activity
+    // 保证有效的裸指针，attach 回调内即用即弃
+    let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr().cast()) };
+    let raw = app.activity_as_ptr() as jni::sys::jobject;
+    let r = vm.attach_current_thread(|env| -> jni::errors::Result<f32> {
+        let act = unsafe { jni::objects::JObject::from_raw(env, raw) };
+        env.call_method(
+            &act,
+            jni::jni_str!("displayRefreshHz"),
+            jni::jni_sig!(() -> float),
+            &[],
+        )?
+        .f()
+    });
+    match r {
+        // 24Hz 下限：低于此不是正常显示屏（读数串味），不许进系统
+        Ok(hz) if (24.0..=480.0).contains(&hz) => {
+            let v = crate::ui::fx_spring::set_frame_budget_ms((1000.0 / hz).round() as u64);
+            crate::report::report("fx", &format!("帧预算跟随刷新率: {hz:.1}Hz → {v}ms"));
+        }
+        Ok(hz) => crate::report::report("fx", &format!("刷新率读数离谱({hz})——维持旧预算")),
+        Err(e) => crate::report::report("fx", &format!("刷新率查询失败: {e}——维持旧预算")),
+    }
+}
+
 impl ApplicationHandler for App {
     fn resumed(&mut self, el: &ActiveEventLoop) {
         crate::gate::note_foreground(true); // 看门狗出假(BAR-036)
+        // BAR-077：fx 帧预算跟真实刷新率走（每次 resumed 一问，系统设置
+        // 切 60/120 档跟手）——写死 16ms 在 120Hz 屏上 = 落下拖影
+        if let Some(app) = &self.android_app {
+            sync_fx_frame_budget(app);
+        }
         if self.window.is_some() {
             return;
         }

@@ -70,6 +70,22 @@ public class MainActivity extends NativeActivity {
     // hook → 弹授权 → 同意才起 FGS（extras 带授权）→ 服务建投影 ----
     private static int sRecMs;
 
+    /** 真实显示刷新率(Hz)——Rust fx 帧预算的单源（BAR-077，2026-09-10
+     * 拍板：动画节拍跟 vsync 走；120Hz 屏写死 16ms=60fps 硬钳=「落下
+     * 拖影」真凶，vsync 账本实测 110-120Hz 定罪）。0=查询失败（Rust
+     * 侧维持旧预算）。每次 resumed 一问，系统设置切 60/120 档跟手。 */
+    public float displayRefreshHz() {
+        try {
+            android.view.Display d = getWindowManager().getDefaultDisplay();
+            if (d == null) {
+                return 0f;
+            }
+            return d.getMode().getRefreshRate();
+        } catch (Throwable t) {
+            return 0f;
+        }
+    }
+
     /** 原生 gate 线程经 JNI 调（hook 注册在 android_app）——甩 UI 线程 */
     public void startRecordingFromGate(final int ms) {
         runOnUiThread(new Runnable() {

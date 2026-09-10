@@ -9,11 +9,13 @@
 //!   不跳变 / 拔槽回直通 / 插件 disabled 一键关不占槽
 //! - blit 移位压盖三态：0=原样全盖（与直接渲染像素等价）/ -h=屏外不动 /
 //!   中间值=上截下补
-//! - 帧时钟：无活跃动画零帧（夜判据红线）/ 有动画 ≤60fps
+//! - 帧时钟：无活跃动画零帧（夜判据红线）/ 帧预算跟随显示刷新率
+//!   （BAR-077：默认 16ms 保守基线，壳喂真实刷新周期后跟屏走，
+//!   钳 4~33ms 防病态）
 //!
 //! 变异抽检：ζ→0.99 过冲消失咬曲线题；收敛贴死删除（无限渐近）咬
 //! 收敛题与重定基题；缝 None 臂返回非目标值咬直通题；primed 删除
-//! （首采样重放）咬占槽题。
+//! （首采样重放）咬占槽题；帧预算写回 16 硬编码咬 BAR-077 题。
 
 use kfm_na::base::{Base, PluginEntry};
 use kfm_na::termview::blit_panel_shifted;
@@ -203,6 +205,41 @@ fn spec_bar062_blit_移位压盖三态() {
 }
 
 // ---- 帧时钟（ui-base §四 按需启停） ----
+
+#[test]
+fn spec_bar077_帧预算_跟随刷新率可配() {
+    let _g = SEAM_LOCK.lock().unwrap();
+    seam::release_ai_panel_offset_y();
+    seam::release_chrome_ime_inset();
+    // 默认：未设置 = 16ms（60fps 保守基线——核心层零平台依赖，壳没喂
+    // 数字前必须能活）
+    assert_eq!(fx_spring::frame_budget_ms(), 16, "默认预算必须是 16ms");
+    // 起一只活跃动画（帧时钟的前提）
+    seam::occupy_ai_panel_offset_y(fx_spring::spring_occupier());
+    assert_eq!(seam::sample_ai_panel_offset_y(-100.0, 2000), -100.0); // primed
+    seam::sample_ai_panel_offset_y(0.0, 2000); // 目标翻转 = 动画开始
+    // 设 8ms（120Hz 屏）：距上帧 7ms 不产，8ms 即产——BAR-077 主契约：
+    // 120Hz 屏动画帧率跟屏走，不吃 60fps 硬钳（变异咬点：预算写回
+    // 16 硬编码，本题 2008 臂必红）
+    fx_spring::set_frame_budget_ms(8);
+    assert!(fx_spring::fx_frame_due(2000), "动画开始即产首帧");
+    assert!(
+        !fx_spring::fx_frame_due(2007),
+        "8ms 预算下 7ms 间隔不许产帧"
+    );
+    assert!(fx_spring::fx_frame_due(2008), "8ms 预算到点必须产帧");
+    assert!(!fx_spring::fx_frame_due(2015), "再 7ms 仍不许");
+    assert!(fx_spring::fx_frame_due(2016), "再 8ms 到点必须产");
+    // 钳制防病态：0 → 4ms（250fps 上限防烧 CPU）；1000 → 33ms
+    // （30fps 下限防动画冻死）
+    assert_eq!(fx_spring::set_frame_budget_ms(0), 4, "下钳必须咬住");
+    assert_eq!(fx_spring::frame_budget_ms(), 4);
+    assert_eq!(fx_spring::set_frame_budget_ms(1000), 33, "上钳必须咬住");
+    assert_eq!(fx_spring::frame_budget_ms(), 33);
+    // 还原：默认 16ms + 清槽，不污染同文件后题（它们按 16ms 判卷）
+    fx_spring::set_frame_budget_ms(16);
+    seam::release_ai_panel_offset_y();
+}
 
 #[test]
 fn spec_帧时钟_无动画零帧有动画限频() {
