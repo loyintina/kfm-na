@@ -38,9 +38,11 @@ bash scripts/deploy-phone.sh --build   # 先打包再送
 `receive.denyCurrentBranch=updateInstead` 工作树自动更新）。
 
 - 工具链：cargo/rustc/aapt2/apksigner/zipalign/openjdk-21 全部来自 termux 包；
-  `d8.jar` + `android.jar` + `debug.keystore` 拷自服务器（`~/kfm-na-toolchain/`，
-  d8 是纯 Java，bin/d8 是 wrapper）；.so 链接用 Termux 原生 cc
-  （宿主即 aarch64-linux-android，免 NDK 交叉链）
+  `android.jar` + `debug.keystore` 拷自服务器（`~/kfm-na-toolchain/`）；
+  d8 是纯 Java，bin/d8 是 wrapper——**核已换 R8 8.5.27**（BAR-078，
+  2026-09-10：旧 d8.jar R8 8.2.2-dev 吃 javac 21 产物必 NPE，
+  r8-8.5.27.jar 来自 Google 官方 maven，旧 jar 留档同目录）；.so 链接用
+  Termux 原生 cc（宿主即 aarch64-linux-android，免 NDK 交叉链）
 - 脚本双环境自适应：`package-apk.sh`/`chain.sh`/`deploy-phone.sh` 检测
   `/data/data/com.termux` 自动切路径；测试字体夹具（DejaVu/Nimbus）在
   `tests/termview_spec.rs` 按候选路径解析
