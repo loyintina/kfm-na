@@ -7,6 +7,32 @@
 
 ## 当前位置（2026-09-05)
 
+- **redroid 云安卓环境落地（2026-09-11 凌晨，用户拍板）**：服务器上
+  跑 NA 的模拟安卓——永远前台、永不熄屏、仪器全开，补真机后台受限
+  （vivo 拉起限制/进程回收）的短板。定位：**自动化回归 + 帧级仪器
+  常驻**；C 档手感判卷与帧率/性能数据仍归真机（swiftshader 软渲染
+  失真，不作判卷依据）。
+  **基建**：内核 binder（`modprobe binder_linux` + 挂 binderfs，
+  重启后丢，需重做）+ docker 镜像源（/etc/docker/daemon.json：
+  docker.m.daocloud.io + docker.1ms.run）+ 镜像
+  `redroid/redroid:12.0.0_64only-latest`（Android 12 x86_64）。
+  **一键起场：`scripts/redroid-up.sh`**（幂等：binder → 容器 →
+  adb connect → 等 boot → adbd root；`--recreate` 清盘重建）。
+  **打包**：`WITH_X86=1 bash scripts/package-apk.sh` 出 arm64+x86_64
+  胖包（48M；不带开关日常手机包不变）。
+  **闸门验证（三轨全绿）**：云安卓没有 8024 sshd（overlay 是
+  aarch64 核跑不了）——但 adbd root 后**直读直写沙箱闸门目录**
+  （/data/data/dev.kfm.na/files/usr/tmp），协议不变（写 .new 再 mv
+  原子触发），比真机还稳（无隧道断连）。stats 往返/CPU+GL 倒帧/
+  orb+touch 注入全过，AI 面板实拍渲染正常。
+  **平台差异两条（判卷前必读）**：①shot-gl(GPU 回读)在云安卓出来
+  **180° 翻转**，shot.rgb(CPU 重画)正常——云安卓判卷取 CPU 路或
+  后处理翻转，不是 app 渲染错（系统 screencap 可见画面为正）；
+  ②local 终端起不来：bootstrap 是 aarch64 核，镜像虽带
+  ndk_translation 但 libz 混 ABI 链接失败，会话死亡每帧重试
+  （stats 里 session_deaths≈frames 即此签名）——闸门/远程会话/
+  UI 仪器不受影响；要 local shell 需 x86_64 bootstrap（Termux 有
+  x86_64 debs，overlay-pack 换料即可，未做）。
 - **配置页壳 + 面板栈落地（2026-09-10，§五B/D12 实现期）**：三公民
   两槽栈状态核（ai_presence.rs：Panel 枚举 + stack:Vec<Panel> +
   summon/dismiss/swipe_left/swipe_right，叠加态坍缩全规）+ A 档 9 题

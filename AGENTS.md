@@ -23,6 +23,8 @@ cargo fmt                # fmt --check 红了的自救
 # 手工管线 javac → d8 → aapt2 → zipalign → apksigner，全本地工具零网络，
 # 签名沿用 Android 官方 debug keystore，与旧包同证书可覆盖安装）
 bash scripts/package-apk.sh   # 产物：target/release/apk/kfm-na.apk
+# （WITH_X86=1 出 arm64+x86_64 胖包——redroid 云安卓用，见 state.md
+#  redroid 条；一键起场 scripts/redroid-up.sh）
 
 # 送包到手机（ssh 隧道 localhost:8022 → Termux；scp 到共享存储 + am start
 # 调起系统安装器，用户在手机上点「安装」完成最后一步——普通 uid 无

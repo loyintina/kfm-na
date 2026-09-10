@@ -88,6 +88,22 @@ echo "=== [package 1/6] cargo build --release ($TARGET) ==="
 # (manifest lib_name 指它,启动时 dlopen 热更/捆绑核心,见 crates/na-loader)
 cargo build --release --target "$TARGET" -p kfm-na -p na-loader
 
+# WITH_X86=1：追加 x86_64 核成胖包（redroid 云安卓线，2026-09-11 立项）——
+# 服务器 NDK 交叉链；Termux 端无 x86_64 需求（redroid 不在手机上跑），
+# 日常手机包保持 arm 单核不增体积
+X86_TARGET=x86_64-linux-android
+if [ "${WITH_X86:-0}" = "1" ]; then
+    if [ -d /data/data/com.termux ]; then
+        echo "❌ WITH_X86 只在服务器环境可用（Termux 无 x86_64 交叉链需求）"; exit 1
+    fi
+    X86_LINKER="$SDK/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android24-clang"
+    export CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER="$X86_LINKER"
+    export CC_x86_64_linux_android="$X86_LINKER"
+    export AR_x86_64_linux_android="$(dirname "$X86_LINKER")/llvm-ar"
+    echo "=== [package 1b/6] cargo build --release ($X86_TARGET, redroid 线) ==="
+    cargo build --release --target "$X86_TARGET" -p kfm-na -p na-loader
+fi
+
 echo "=== [package 2/6] javac（Java 皮） ==="
 rm -rf "$BUILD"
 mkdir -p "$BUILD/classes" "$BUILD/dex" "$BUILD/stage/lib/arm64-v8a" target/release/apk
@@ -136,6 +152,11 @@ echo "=== [package 4/6] aapt2 compile+link + 装 dex/lib ==="
 cp "$BUILD/dex/classes.dex" "$BUILD/stage/"
 cp "target/$TARGET/release/libna_loader.so" "$BUILD/stage/lib/arm64-v8a/"
 cp "target/$TARGET/release/libkfm_na.so" "$BUILD/stage/lib/arm64-v8a/"
+if [ "${WITH_X86:-0}" = "1" ]; then
+    mkdir -p "$BUILD/stage/lib/x86_64"
+    cp "target/$X86_TARGET/release/libna_loader.so" "$BUILD/stage/lib/x86_64/"
+    cp "target/$X86_TARGET/release/libkfm_na.so" "$BUILD/stage/lib/x86_64/"
+fi
 # BAR-013：.so 不压缩（STORED）+ 下方 zipalign -p 页对齐，配 manifest 的
 # extractNativeLibs="false"——.so 直从 APK mmap 加载，与 dex 天然原子，
 # 「重解压被跳过 → dex 新 so 旧」整条错配链连根拔掉
