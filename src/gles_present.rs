@@ -102,6 +102,8 @@ static SWAP_GAP_MAX_US: std::sync::atomic::AtomicU64 = std::sync::atomic::Atomic
 static SWAP_GAP_TOTAL_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static SWAP_GAP_N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static ANIM_WAS_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// 本轮动画开表戳（now_ns 同钟）——逐帧环形账的相对毫秒零点
+static RUN_START_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static CAPTURE_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static CAPTURE_TICK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 /// (w, h, rgb) 缩略帧仓——run 收尾统一外发
@@ -158,6 +160,8 @@ fn anim_run_start() {
     SWAP_GAP_MAX_US.store(0, Ordering::Relaxed);
     VSYNC_PHASE_MIN_US.store(u64::MAX, Ordering::Relaxed);
     VSYNC_PHASE_MAX_US.store(0, Ordering::Relaxed);
+    RUN_START_NS.store(now_ns(), Ordering::Relaxed);
+    crate::vsync_book::trace_reset();
     crate::vsync_book::reset_run(crate::report::boot_ms() as u64); // gap 账+基线归 vsync_book（BAR-072）；武装戳 = 看门狗零跳基线（BAR-082）
     // BAR-076：采样改点播——奇偶轮播时代每两轮动画就有一轮被 readPixels
     // 压到 16fps（61ms/帧实测），仪器噪音成了用户体验税。要采样先投
@@ -374,29 +378,60 @@ pub fn note_anim_frame(active: bool, elapsed: std::time::Duration) {
     let was = ANIM_WAS_ACTIVE.swap(active, Ordering::Relaxed);
     if active {
         if !was {
+            // 防并账（2026-09-11 动画监控实踩：撤+召间隔 5.7s 只结出一行
+            // 24 帧 = 两轮合并——旧账靠「下一帧 active=false」结账，静息期
+            // 无帧可结，新轮开表就静默吞掉旧轮）。新轮开表时旧账未结 =
+            // 先强制结账再开新账
+            if ANIM_FRAMES.load(Ordering::Relaxed) > 0 {
+                anim_run_flush("并账防丢");
+            }
             anim_run_start();
         }
         ANIM_FRAMES.fetch_add(1, Ordering::Relaxed);
         ANIM_TOTAL_US.fetch_add(us, Ordering::Relaxed);
         ANIM_MAX_US.fetch_max(us, Ordering::Relaxed);
+        // 逐帧环形账：相对轮首毫秒 + 帧耗时（相位结构判卷——汇总行的
+        // min/max 看不出「堵在哪一环」）
+        let rel_ms = now_ns().saturating_sub(RUN_START_NS.load(Ordering::Relaxed)) / 1_000_000;
+        crate::vsync_book::trace_frame(
+            rel_ms.min(u32::MAX as u64) as u32,
+            us.min(u32::MAX as u64) as u32,
+        );
         return;
     }
-    let n = ANIM_FRAMES.swap(0, Ordering::Relaxed);
-    if n > 0 {
-        let total = ANIM_TOTAL_US.swap(0, Ordering::Relaxed);
-        let max = ANIM_MAX_US.swap(0, Ordering::Relaxed);
-        let avg_us = total / n.max(1);
-        let avg_ms = avg_us / 1000;
-        let max_ms = max / 1000;
-        let fps = 1_000_000_u64.checked_div(avg_us).unwrap_or(0);
-        let mut line = format!("{n}帧 均值{avg_us}us({avg_ms}ms) 最大{max_ms}ms 推算fps={fps}");
-        line.push_str(&swap_gap_report());
-        line.push_str(&vsync_report());
-        line.push_str(&capture_report());
-        vsync_disarm();
-        CAPTURE_ON.store(false, Ordering::Relaxed);
-        crate::report::report("panel-anim", &line);
+    if ANIM_FRAMES.load(Ordering::Relaxed) > 0 {
+        anim_run_flush("");
     }
+}
+
+/// 一轮动画结账外发（note_anim_frame 两个分支共用：active=false 的
+/// 正常收尾 + 新轮开表时的强制防并账）。tag 非空 = 强结标记
+fn anim_run_flush(tag: &str) {
+    use std::sync::atomic::Ordering;
+    let n = ANIM_FRAMES.swap(0, Ordering::Relaxed);
+    if n == 0 {
+        return;
+    }
+    let total = ANIM_TOTAL_US.swap(0, Ordering::Relaxed);
+    let max = ANIM_MAX_US.swap(0, Ordering::Relaxed);
+    let avg_us = total / n.max(1);
+    let avg_ms = avg_us / 1000;
+    let max_ms = max / 1000;
+    let fps = 1_000_000_u64.checked_div(avg_us).unwrap_or(0);
+    let mut line = format!("{n}帧 均值{avg_us}us({avg_ms}ms) 最大{max_ms}ms 推算fps={fps}");
+    if !tag.is_empty() {
+        line.push_str(&format!(" [{tag}]"));
+    }
+    line.push_str(&swap_gap_report());
+    line.push_str(&vsync_report());
+    line.push_str(&capture_report());
+    line.push_str(&format!(
+        " 帧列={}",
+        crate::vsync_book::render_trace(&crate::vsync_book::take_trace())
+    ));
+    vsync_disarm();
+    CAPTURE_ON.store(false, Ordering::Relaxed);
+    crate::report::report("panel-anim", &line);
 }
 
 fn vsync_disarm() {

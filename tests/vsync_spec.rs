@@ -195,3 +195,32 @@ fn spec_bar082_锁相_零基线首跳丢失看门狗() {
     vsync_book::disarm();
     vsync_book::reset_for_test();
 }
+
+// 逐帧环形账（2026-09-11 动画监控升级）：汇总行看不出掉档轮的相位
+// 结构，环形账记每帧（相对ms, 帧耗时ms）。单题串行——FRAME_TRACE 是
+// 进程级单例，并行进场会互相截胡（BAR-057 教训）。
+#[test]
+fn spec_逐帧环形账_容量驱逐渲染取清() {
+    use kfm_na::vsync_book as vb;
+    vb::trace_reset();
+    // 基本记账与渲染格式：[+rel:ms ...]
+    vb::trace_frame(0, 2_000);
+    vb::trace_frame(16, 3_500); // 3500us → 3ms（整除截断）
+    vb::trace_frame(33, 25_000);
+    let t = vb::take_trace();
+    assert_eq!(t, vec![(0, 2), (16, 3), (33, 25)]);
+    assert_eq!(vb::render_trace(&t), "[+0:2 +16:3 +33:25]");
+    // 取账即清——下一轮不得见旧帧（并账防丢的第二半）
+    assert!(vb::take_trace().is_empty());
+    // 空账渲染
+    assert_eq!(vb::render_trace(&[]), "[]");
+    // 容量封顶驱逐最老：灌 CAP+10 帧，剩 CAP 帧且首帧是被挤后的第 10 帧
+    vb::trace_reset();
+    for i in 0..(vb::FRAME_TRACE_CAP + 10) {
+        vb::trace_frame(i as u32, 1_000);
+    }
+    let t = vb::take_trace();
+    assert_eq!(t.len(), vb::FRAME_TRACE_CAP);
+    assert_eq!(t[0].0, 10, "最老的 10 帧必须被挤掉");
+    assert_eq!(t.last().unwrap().0, (vb::FRAME_TRACE_CAP + 9) as u32);
+}

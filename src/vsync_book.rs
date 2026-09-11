@@ -153,3 +153,48 @@ pub fn reset_for_test() {
     CHAIN_DEAD.store(false, Ordering::Relaxed);
     ARM_MS.store(0, Ordering::Relaxed);
 }
+
+/// ---- 逐帧环形账（2026-09-11 动画监控升级）----
+/// 为什么加：panel-anim 汇总行（帧数/均值/min-max）看不出掉档轮的
+/// **相位结构**——「每帧等跳 16ms」与「前 3 帧堵 90ms 后全顺」汇总
+/// 后长得一样，但病灶完全不同。环形账记每帧 (相对轮首 ms, 帧耗时 ms)，
+/// 收尾外发。壳（gles_present）管时钟，本册管容器与渲染——host 可判卷。
+static FRAME_TRACE: std::sync::Mutex<Vec<(u32, u32)>> = std::sync::Mutex::new(Vec::new());
+/// 环形账容量：120Hz × 250ms 动画 ≈ 30 帧，96 封顶三倍冗余；
+/// 溢出丢最老（最新帧是收尾相位的判卷主体）
+pub const FRAME_TRACE_CAP: usize = 96;
+
+/// 记一帧（rel_ms = 距本轮开表毫秒，frame_us = 帧全耗时微秒）
+pub fn trace_frame(rel_ms: u32, frame_us: u32) {
+    let mut t = FRAME_TRACE.lock().unwrap();
+    if t.len() >= FRAME_TRACE_CAP {
+        t.remove(0);
+    }
+    t.push((rel_ms, frame_us / 1000));
+}
+
+/// 开表清零（壳 anim_run_start 调用）
+pub fn trace_reset() {
+    FRAME_TRACE.lock().unwrap().clear();
+}
+
+/// 收尾取账并清（壳报表行渲染调用）
+pub fn take_trace() -> Vec<(u32, u32)> {
+    std::mem::take(&mut *FRAME_TRACE.lock().unwrap())
+}
+
+/// 渲染紧凑帧列：`[+0:2 +16:3 +33:25]`（相对ms:帧耗时ms）。
+/// 空账渲染 `[]`；判卷读法：相邻 rel 差 = 帧间隔（节奏），冒号后 =
+/// 帧自身耗时（堵塞）。掉档轮两者必有一环现形
+pub fn render_trace(trace: &[(u32, u32)]) -> String {
+    let mut s = String::with_capacity(trace.len() * 8 + 2);
+    s.push('[');
+    for (i, (rel, ms)) in trace.iter().enumerate() {
+        if i > 0 {
+            s.push(' ');
+        }
+        s.push_str(&format!("+{rel}:{ms}"));
+    }
+    s.push(']');
+    s
+}
