@@ -136,68 +136,112 @@ pub fn dump_now(dir: &str) {
             panel_target,
             crate::report::boot_ms() as u64,
         ) as i32;
-        // 配置面板 X 偏移同尺过缝（面板栈 §五B 2026-09-10）：装帧口径
-        // 扩到面板栈——dump 不识配置页 = 视觉轨对配置页全瞎（09-10 实机
-        // 自验实踩：stats 报 config 在顶，CPU 倒帧却只见终端）。z 序与
-        // 前台 paint_under 同规：被覆盖者画在 AI 面板之下，在顶者压顶
-        // z 序与前台同一单源（stage::panel_z_cfg_on_top，BAR-083 动者在
-        // 上）——实拍判卷与前台同一画面。dump 线程摸不到 panel_drag
-        // 句柄，拖拽锁定期（亚秒级）z 序滞后一拍缝动画，判卷可容
-        let cfg_on_top = crate::ui::stage::panel_z_cfg_on_top(
-            ai_snap.is_some_and(|s| s.top == Some(crate::ai_presence::Panel::Config)),
-            crate::ui::seam::ai_panel_offset_y_active(),
-            crate::ui::seam::config_panel_offset_x_active(),
+        // 面板栈 X 偏移同尺过缝（面板栈 §五B 三公民 2026-09-11）：装帧口径
+        // 扩到全栈——dump 不识面板 = 视觉轨对它全瞎（09-10 实机自验实踩：
+        // stats 报 config 在顶，CPU 倒帧却只见终端）。target 只问栈
+        // （BAR-084 单源 panel_target_and_draw：活性泄漏进 target = 退场
+        // 回粘）；z 序与前台同一单源（stage::panel_z_order，BAR-083 动者
+        // 在上三公民泛化）——实拍判卷与前台同一画面。dump 线程摸不到
+        // panel_drag 句柄，拖拽锁定期（亚秒级）z 序滞后一拍缝动画，判卷可容
+        use crate::ai_presence::Panel;
+        let mut stack_vec: Vec<Panel> = Vec::new();
+        if let Some(s) = ai_snap {
+            if let Some(c) = s.covered {
+                stack_vec.push(c);
+            }
+            if let Some(t) = s.top {
+                stack_vec.push(t);
+            }
+        }
+        let cfg_active = crate::ui::seam::config_panel_offset_x_active();
+        let ft_active = crate::ui::seam::filetree_panel_offset_x_active();
+        let (cfg_target, cfg_draw) = crate::ui::stage::panel_target_and_draw(
+            stack_vec.contains(&Panel::Config),
+            cfg_active,
+            w as f32,
         );
-        let cfg_present = cfg_on_top
-            || ai_snap.is_some_and(|s| s.covered == Some(crate::ai_presence::Panel::Config));
-        let cfg_target = if cfg_present { 0.0 } else { w as f32 };
+        let (ft_target, ft_draw) = crate::ui::stage::panel_target_and_draw(
+            stack_vec.contains(&Panel::FileTree),
+            ft_active,
+            -(w as f32),
+        );
+        let z_order = crate::ui::stage::panel_z_order(
+            &stack_vec,
+            [
+                crate::ui::seam::ai_panel_offset_y_active(),
+                cfg_active,
+                ft_active,
+            ],
+        );
         let cfg_off = crate::ui::seam::sample_config_panel_offset_x(
             cfg_target,
             crate::report::boot_ms() as u64,
         ) as i32;
+        let ft_off = crate::ui::seam::sample_filetree_panel_offset_x(
+            ft_target,
+            crate::report::boot_ms() as u64,
+        ) as i32;
         let (ai_grid, panel_visible) = crate::termview::panel_split(panel_off, h);
-        let (cfg_grid, cfg_visible) = crate::termview::cfg_split(cfg_off, w);
-        let grid_keybar = ai_grid && cfg_grid;
+        let (cfg_grid, cfg_visible0) = crate::termview::cfg_split(cfg_off, w);
+        let (ft_grid, ft_visible0) = crate::termview::ft_split(ft_off, w);
+        let cfg_visible = cfg_visible0 && cfg_draw;
+        let ft_visible = ft_visible0 && ft_draw;
+        let grid_keybar = ai_grid && cfg_grid && ft_grid;
         if grid_keybar {
             t.render_into(&mut buf, w, h);
             // 快捷键行：前台同规则 inset 叠输入栏当前带高；修饰位无共享态按 0 画
             t.render_keybar(&mut buf, w, h, bar_h, 0);
         }
-        if cfg_visible && !cfg_on_top {
-            crate::termview::paint_cfg_page_chrome(&mut buf, w, h, bar_h, cfg_off);
-        }
-        if panel_visible {
-            if panel_off == 0 {
-                // 与前台 rasterize 同一分支规则：AI 页 = 真对话消息盖掉终端
-                // 网格（AI 页不画快捷键行，同前台）；消息与视口读 AI_CHAT
-                // 注册位（D9 同源），布局写回同前台（眼手同尺）
-                let chat = ai_chat_handle();
-                let msgs = chat.as_ref().map(|c| c.snap()).unwrap_or_default();
-                let off = chat.as_ref().map_or(0, |c| c.scroll_offset());
-                let live = chat.as_ref().is_some_and(|c| c.thinking_live());
-                let (total, fit) = t.render_ai_page(&mut buf, w, h, &msgs, off, bar_h, live);
-                if let Some(c) = &chat {
-                    c.scroll_sync_layout(total, fit);
+        // 三面板按 z_order 底→顶逐槽画（与前台 paint_under 同规）
+        for slot in z_order {
+            match slot {
+                Panel::Config => {
+                    if cfg_visible {
+                        crate::termview::paint_cfg_page_chrome(&mut buf, w, h, bar_h, cfg_off);
+                    }
                 }
-            } else {
-                // 过渡帧：终端 + 快捷键行在下（照画——层级低于面板，被落
-                // 下来的面板盖住是自然结果；BAR-063：把快捷键行从过渡帧
-                // 拿掉 = 动画两端硬切 pop-out/pop-in = 用户实看的闪烁），
-                // 面板离屏渲染后按偏移压盖（与前台同规则）
-                let chat = ai_chat_handle();
-                let msgs = chat.as_ref().map(|c| c.snap()).unwrap_or_default();
-                let off = chat.as_ref().map_or(0, |c| c.scroll_offset());
-                let live = chat.as_ref().is_some_and(|c| c.thinking_live());
-                let mut scratch = vec![0u32; (w as usize) * (h as usize)];
-                let (total, fit) = t.render_ai_page(&mut scratch, w, h, &msgs, off, bar_h, live);
-                if let Some(c) = &chat {
-                    c.scroll_sync_layout(total, fit);
+                Panel::FileTree => {
+                    if ft_visible {
+                        crate::termview::paint_ft_page_chrome(&mut buf, w, h, bar_h, ft_off);
+                    }
                 }
-                crate::termview::blit_panel_shifted(&mut buf, &scratch, w, h, panel_off);
+                Panel::Ai => {
+                    if panel_visible {
+                        if panel_off == 0 {
+                            // 与前台 rasterize 同一分支规则：AI 页 = 真对话消息
+                            // 盖掉终端网格（AI 页不画快捷键行，同前台）；消息与
+                            // 视口读 AI_CHAT 注册位（D9 同源），布局写回同前台
+                            let chat = ai_chat_handle();
+                            let msgs = chat.as_ref().map(|c| c.snap()).unwrap_or_default();
+                            let off = chat.as_ref().map_or(0, |c| c.scroll_offset());
+                            let live = chat.as_ref().is_some_and(|c| c.thinking_live());
+                            let (total, fit) =
+                                t.render_ai_page(&mut buf, w, h, &msgs, off, bar_h, live);
+                            if let Some(c) = &chat {
+                                c.scroll_sync_layout(total, fit);
+                            }
+                        } else {
+                            // 过渡帧：终端 + 快捷键行在下（照画——层级低于面板，
+                            // 被落下来的面板盖住是自然结果；BAR-063：把快捷键行
+                            // 从过渡帧拿掉 = 动画两端硬切 = 用户实看的闪烁），
+                            // 面板离屏渲染后按偏移压盖（与前台同规则）
+                            let chat = ai_chat_handle();
+                            let msgs = chat.as_ref().map(|c| c.snap()).unwrap_or_default();
+                            let off = chat.as_ref().map_or(0, |c| c.scroll_offset());
+                            let live = chat.as_ref().is_some_and(|c| c.thinking_live());
+                            let mut scratch = vec![0u32; (w as usize) * (h as usize)];
+                            let (total, fit) =
+                                t.render_ai_page(&mut scratch, w, h, &msgs, off, bar_h, live);
+                            if let Some(c) = &chat {
+                                c.scroll_sync_layout(total, fit);
+                            }
+                            crate::termview::blit_panel_shifted(
+                                &mut buf, &scratch, w, h, panel_off,
+                            );
+                        }
+                    }
+                }
             }
-        }
-        if cfg_visible && cfg_on_top {
-            crate::termview::paint_cfg_page_chrome(&mut buf, w, h, bar_h, cfg_off);
         }
         // 输入栏：常驻 chrome，两页都画（同前台 rasterize 规则）；
         // sending 图标态跟 AI 运行态硬切；光标闪烁相位按节拍算
@@ -1190,6 +1234,8 @@ pub struct StatsSnap {
     pub ai_epoch: i64,
     /// 配置面板入场代(同 ai_epoch)
     pub cfg_epoch: i64,
+    /// 文件树面板入场代(同 ai_epoch；面板栈三公民 2026-09-11)
+    pub ft_epoch: i64,
     // ---- input_bar 字段族(2026-08-31,期 0 组件三,D9 机器轨) ----
     /// 聚焦态(服务未登记 = false)
     pub bar_focused: bool,
@@ -1221,6 +1267,7 @@ pub fn stats_snap() -> StatsSnap {
         None => "none".to_owned(),
         Some(crate::ai_presence::Panel::Ai) => "ai".to_owned(),
         Some(crate::ai_presence::Panel::Config) => "config".to_owned(),
+        Some(crate::ai_presence::Panel::FileTree) => "filetree".to_owned(),
     };
     let (
         ai_page,
@@ -1233,6 +1280,7 @@ pub fn stats_snap() -> StatsSnap {
         panel_cov,
         ai_epoch,
         cfg_epoch,
+        ft_epoch,
     ) = match ai_presence_handle() {
         Some(ai) => {
             let s = ai.snap(crate::report::boot_ms() as u64);
@@ -1250,6 +1298,7 @@ pub fn stats_snap() -> StatsSnap {
                 panel_name(s.covered),
                 s.ai_epoch as i64,
                 s.cfg_epoch as i64,
+                s.ft_epoch as i64,
             )
         }
         None => (
@@ -1261,6 +1310,7 @@ pub fn stats_snap() -> StatsSnap {
             false,
             "-".to_owned(),
             "-".to_owned(),
+            0,
             0,
             0,
         ),
@@ -1307,6 +1357,7 @@ pub fn stats_snap() -> StatsSnap {
         panel_cov,
         ai_epoch,
         cfg_epoch,
+        ft_epoch,
         bar_focused,
         bar_text_len,
     }
@@ -1321,7 +1372,7 @@ pub fn format_stats(s: &StatsSnap) -> String {
     // 帧均耗防除零:一帧没画过就报 0
     let draw_avg = s.draw_total_ms.checked_div(s.frames).unwrap_or(0);
     format!(
-        "uptime={}ms\nforeground={}\nloop_beat_age={}\nframes={}\npump_calls={}\npump_bytes={}\nshots={}\ntexts={}\nkeys={}\nkeys_bytes={}\ntouches={}\nactive={}\nsessions={}\ndraw_avg_ms={}\ndraw_max_ms={}\ncpu_jiffies={}\nrss_kb={}\nbytes_local={}\nbytes_remote={}\nbytes_other={}\nsession_deaths={}\nlocal_dead={}\nremote_dead={}\nai_page={}\nai_running={}\nai_orb_x={}\nai_orb_y={}\nai_pressed={}\nai_overlay={}\npanel_top={}\npanel_cov={}\nai_epoch={}\ncfg_epoch={}\nbar_focused={}\nbar_text_len={}\n",
+        "uptime={}ms\nforeground={}\nloop_beat_age={}\nframes={}\npump_calls={}\npump_bytes={}\nshots={}\ntexts={}\nkeys={}\nkeys_bytes={}\ntouches={}\nactive={}\nsessions={}\ndraw_avg_ms={}\ndraw_max_ms={}\ncpu_jiffies={}\nrss_kb={}\nbytes_local={}\nbytes_remote={}\nbytes_other={}\nsession_deaths={}\nlocal_dead={}\nremote_dead={}\nai_page={}\nai_running={}\nai_orb_x={}\nai_orb_y={}\nai_pressed={}\nai_overlay={}\npanel_top={}\npanel_cov={}\nai_epoch={}\ncfg_epoch={}\nft_epoch={}\nbar_focused={}\nbar_text_len={}\n",
         s.uptime_ms,
         s.foreground,
         age,
@@ -1355,6 +1406,7 @@ pub fn format_stats(s: &StatsSnap) -> String {
         s.panel_cov,
         s.ai_epoch,
         s.cfg_epoch,
+        s.ft_epoch,
         s.bar_focused,
         s.bar_text_len
     )

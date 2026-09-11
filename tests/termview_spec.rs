@@ -2639,3 +2639,75 @@ fn spec_cfg页底装修_平移与色相钉() {
         assert!(g > r && b > r, "配置页渐变端色必须青系，实测 #{c:06x}");
     }
 }
+
+#[test]
+fn spec_ft_split_真值表() {
+    // 文件树页分层判定（ft_split，三公民 §五B 2026-09-11）：cfg_split 的
+    // 左缘家镜像——off ∈ [-w, 0]，=-w 即完全屏外左缘；softbuffer 与 GLES
+    // 两路径都从这里取判定
+    let w = 1260u32;
+    // 文件树靠泊在顶：文件树在，键行/网格不在
+    assert_eq!(kfm_na::termview::ft_split(0, w), (false, true));
+    // 屏外左缘稳态：键行/网格在，文件树不在
+    assert_eq!(
+        kfm_na::termview::ft_split(-1260, w),
+        (true, false),
+        "-w = 完全屏外"
+    );
+    assert_eq!(kfm_na::termview::ft_split(-5000, w), (true, false));
+    // 过渡帧：两者都在（终端在下、文件树从左缘滑入）
+    assert_eq!(kfm_na::termview::ft_split(-1, w), (true, true));
+    assert_eq!(kfm_na::termview::ft_split(-1259, w), (true, true));
+}
+
+#[test]
+fn spec_ft页底装修_平移与色相钉() {
+    // 文件树页底装修（paint_ft_page_chrome，三公民 §五B 2026-09-11）：
+    // 配置页镜像——①靠泊位（off=0）整页底色 = FT_PAGE_BG，边框环带墨
+    //   （绿系色相与 AI 紫/配置青区分 = 机器判卷三面板的前提）；
+    // ②X 平移负向语义：off<0 时右缘 [w+off, w) 列透明（终端透出的
+    //   前提），可见列底色咬合；off≤-w 完全屏外不落墨
+    let (w, h) = (400u32, 500u32);
+    let inset = 120u32;
+    let mut b0 = vec![0u32; (w * h) as usize];
+    kfm_na::termview::paint_ft_page_chrome(&mut b0, w, h, inset, 0);
+    // 内芯（边框 punch 区里）必须恒底色
+    assert_eq!(
+        b0[(h / 2 * w + w / 2) as usize],
+        kfm_na::termview::FT_PAGE_BG,
+        "靠泊位内芯必须是文件树页底色"
+    );
+    // 边框环带墨 ≠ 底色 ≠ 透明（左缘 3 倍粗带内取点，margin16+1 列）
+    let ring = b0[((h - inset) / 2 * w + 18) as usize];
+    assert_ne!(ring, 0, "边框环必须有墨");
+    assert_ne!(ring, kfm_na::termview::FT_PAGE_BG, "边框环必须异于底色");
+    // 绿系色相钉：绿分量主导、红蓝低（与配置青环的 b>=r 相区分）
+    let (r, g, b) = ((ring >> 16) & 0xFF, (ring >> 8) & 0xFF, ring & 0xFF);
+    assert!(
+        g > r && g > b,
+        "文件树页环必须绿系（g 主导），实测 #{ring:06x}"
+    );
+    // X 平移：off=-137 → 右缘 137 列透明，第 0..w-137 列底色咬合
+    let k = 137i32;
+    let mut bk = vec![0u32; (w * h) as usize];
+    kfm_na::termview::paint_ft_page_chrome(&mut bk, w, h, inset, -k);
+    let mid_row = &bk[((h / 2) * w) as usize..((h / 2) * w + w) as usize];
+    assert!(
+        mid_row[(w as i32 - k) as usize..].iter().all(|&p| p == 0),
+        "面板右缘之右必须透明（终端透出的前提）"
+    );
+    assert_eq!(
+        mid_row[100],
+        kfm_na::termview::FT_PAGE_BG,
+        "平移后可见区底色必须咬合"
+    );
+    // 完全屏外不落墨
+    let mut bw = vec![0u32; (w * h) as usize];
+    kfm_na::termview::paint_ft_page_chrome(&mut bw, w, h, inset, -(w as i32));
+    assert!(bw.iter().all(|&p| p == 0), "off=-w 必须零墨");
+    // 常量色相自钉（渐变两端都须绿系，防配方改漂）
+    for c in [kfm_na::termview::FT_FRAME_C1, kfm_na::termview::FT_FRAME_C2] {
+        let (r, g, b) = ((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF);
+        assert!(g > r && g > b, "文件树渐变端色必须绿系，实测 #{c:06x}");
+    }
+}

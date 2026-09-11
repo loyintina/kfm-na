@@ -40,7 +40,7 @@
 | `src/scroll.rs` | 5 | 5 | 0 | — |
 | `src/session.rs` | 10 | 10 | 0 | — |
 | `src/session_router.rs` | 10 | 10 | 0 | — |
-| `src/termview.rs` | 106 | 99 | 7 | AI_THINK_COLLAPSED FONT_CANDIDATES CJK_FONT_CANDIDATES load_cjk_font font_probe MAG_HALF_COLS MAG_HALF_ROWS |
+| `src/termview.rs` | 111 | 104 | 7 | AI_THINK_COLLAPSED FONT_CANDIDATES CJK_FONT_CANDIDATES load_cjk_font font_probe MAG_HALF_COLS MAG_HALF_ROWS |
 | `src/theme.rs` | 1 | 1 | 0 | — |
 | `src/trace.rs` | 12 | 8 | 4 | TRACE_CAP format_tail dump_all dump_tail |
 | `src/ui/ai_page.rs` | 7 | 7 | 0 | — |
@@ -48,7 +48,8 @@
 | `src/ui/fx_spring.rs` | 7 | 7 | 0 | — |
 | `src/ui/keybar.rs` | 1 | 1 | 0 | — |
 | `src/ui/orb.rs` | 5 | 5 | 0 | — |
+| `src/ui/panel_drag.rs` | 12 | 7 | 5 | DRAG_DIR_LOCK RELEASE_PROGRESS VELOCITY_WINDOW_MS locked current_offset |
 | `src/ui/prompt_bar.rs` | 5 | 4 | 1 | row_of |
-| `src/ui/seam.rs` | 14 | 14 | 0 | — |
-| `src/ui/stage.rs` | 4 | 4 | 0 | — |
-| `src/vsync_book.rs` | 14 | 9 | 5 | armed last_due_ms chain_dead mark_chain_dead last_ns |
+| `src/ui/seam.rs` | 19 | 19 | 0 | — |
+| `src/ui/stage.rs` | 7 | 7 | 0 | — |
+| `src/vsync_book.rs` | 20 | 15 | 5 | armed last_due_ms chain_dead mark_chain_dead last_ns |

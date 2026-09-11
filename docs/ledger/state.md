@@ -7,6 +7,22 @@
 
 ## 当前位置（2026-09-05)
 
+- **三公民面板栈落地（2026-09-11 傍晚，用户拍板「占位页也先做出来」）**：
+  文件树占位页（墨绿底 0x000A1A0F+绿系边框环，paint_ft_page_chrome）
+  与滑向契约同批落地——任意栈态每个滑向唯一归宿（契约表 ai-presence
+  §五B）；z 序泛化 `stage::panel_z_order`（不动者栈序/动者压顶/多动者
+  栈序）；GLES 第五槽 FileTree；第四道缝 filetree_panel_offset_x
+  （左缘家镜像，-w 屏外）；panel_drag 两新角色 + DragTop 枚举。
+  **同批根治 BAR-084**：redroid 实测栈空但配置页满屏停住——BAR-083
+  的 z 序活性泄漏进 presence→target 回路（退场面板回粘靠泊位）；修法
+  target/draw 单源 `panel_target_and_draw`（target 只问栈、draw 才看
+  活性）。另补账洞留痕：面板页手势 Cancelled 收尾 [gest] 日志（此前
+  全静默=无疾而终）。考题：stage_spec 三题全重写（五槽/z 序三公民/
+  BAR-084 四象限）+ai_presence_spec 六向契约+栈挤出专项+不变量序列
+  加文件树公民，变异抽检双咬（target 改 in_stack‖active / 召唤错公民）
+  实咬红。待：chain 手机闸 → 提交 → redroid 三面板矩阵实测（重点
+  BAR-084 回归：撤配置后截图必须真黑）→ 真机热更请用户 C 档复验。
+
 - **手势追踪 [gest] 报表（2026-09-11 午后，「配置卡无法收回」案）**：
   用户实拍配置页召唤后推回手势零响应，我的注入复现不了（单指干净
   手势永远健康）——日志实锤用户的推回尝试零痕迹（07:56 只有一条

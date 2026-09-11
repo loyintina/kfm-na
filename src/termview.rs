@@ -239,6 +239,52 @@ pub fn cfg_split(cfg_off: i32, w: u32) -> (bool, bool) {
     (cfg_off != 0, cfg_off < w as i32)
 }
 
+/// 文件树页底装修（面板栈 §五B 三公民，2026-09-11）：整页绿底 + 边框环
+/// （配方与配置页同源，色相换绿系便于截图机器判卷区分三面板）。
+/// ft_off_x = 面板刚体水平平移（-w=屏外左缘 → 0 靠泊，与配置家镜像——
+/// 底色求交公式 px0=off.clamp(0,w) / px1=(w+off).clamp(0,w) 对负偏移
+/// 天然成立）。v1 = 空白骨架，无内容墨
+pub fn paint_ft_page_chrome(
+    buf: &mut [u32],
+    buf_w: u32,
+    buf_h: u32,
+    bottom_inset: u32,
+    ft_off_x: i32,
+) {
+    if buf_w == 0 || buf_h == 0 {
+        return;
+    }
+    let mut frame = Frame {
+        buf,
+        w: buf_w,
+        h: buf_h,
+    };
+    // 整页底色 = 面板刚体矩形（全屏）与屏求交后画（X 向平移，左右裁剪）
+    let px0 = ft_off_x.clamp(0, buf_w as i32) as u32;
+    let px1 = (buf_w as i32 + ft_off_x).clamp(0, buf_w as i32) as u32;
+    if px1 > px0 {
+        frame.fill_rect(px0, 0, px1 - px0, buf_h, FT_PAGE_BG);
+    }
+    paint_page_frame_ring(
+        &mut frame,
+        buf_w,
+        buf_h,
+        bottom_inset,
+        ft_off_x,
+        0,
+        FT_PAGE_BG,
+        FT_FRAME_C1,
+        FT_FRAME_C2,
+    );
+}
+
+/// 文件树页分层判定（对照 cfg_split，镜像同构）：
+/// - 网格+快捷键行（下层可见）：ft_off != 0；
+/// - 文件树页可见：ft_off > -w（off ∈ [-w, 0]，=-w 即完全屏外左缘）
+pub fn ft_split(ft_off: i32, w: u32) -> (bool, bool) {
+    (ft_off != 0, ft_off > -(w as i32))
+}
+
 /// 页面边框环（2026-09-04 装修配方的唯一实体，09-05 平移参数化，
 /// 09-10 双色相化+双轴平移供配置页复用）：先外发光，再 135° 渐变
 /// 外环，最后页面底色 punch 内芯（左缘让 9 = 3 倍粗，其余让 3）。
@@ -2092,6 +2138,12 @@ pub const AI_PAGE_FRAME_R: u32 = 36;
 pub const CFG_PAGE_BG: u32 = 0x000A_1A20;
 pub const CFG_FRAME_C1: u32 = 0x0000_F0C8; // 青绿 rgba(0,240,200,~.8)
 pub const CFG_FRAME_C2: u32 = 0x0020_90D0; // 青蓝 rgba(32,144,208,~.7)
+
+/// 文件树页底色/边框（面板栈 §五B 三公民，2026-09-11）：同配方绿系
+/// ——截图机器判卷三面板可区分（紫 0x140A24 / 青 0x0A1A20 / 绿 0x0A1A0F）
+pub const FT_PAGE_BG: u32 = 0x000A_1A0F;
+pub const FT_FRAME_C1: u32 = 0x0040_E080; // 翠绿 rgba(64,224,128,~.8)
+pub const FT_FRAME_C2: u32 = 0x0020_7040; // 墨绿 rgba(32,112,64,~.7)
 
 // 光球 sprite 机制已迁 ui/orb.rs（2026-09-01 控件库立形）——配方常量/
 // build_orb_sprite/blit_orb_sprite/双缓存/绘制本体全部随迁，零逻辑变化；

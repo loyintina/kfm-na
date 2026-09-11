@@ -47,27 +47,68 @@ impl<S: PartialEq> DirtyGuard<S> {
 /// 隐身（2026-09-07 用户实看）。槽位可见性判定从这一处出——
 /// 上层 chrome（输入栏/光球/放大镜）是常驻层，任何状态都可见；
 /// na-shot（值守 CPU 路径）看不见这类槽位病，判卷人=用户眼睛。
-/// 返回 [键行, AI面板, 配置页, 上层]（2026-09-10 面板栈 §五B 第四槽：
-/// 被覆盖的面板仍 visible=true——placement 不动，遮盖撤走零动画露出）
-pub fn slot_visibility(grid_keybar: bool, panel_visible: bool, cfg_visible: bool) -> [bool; 4] {
-    [grid_keybar, panel_visible, cfg_visible, true]
+/// 返回 [键行, AI面板, 配置页, 文件树页, 上层]（2026-09-10 面板栈 §五B
+/// 第四槽、09-11 三公民第五槽：被覆盖的面板仍 visible=true——placement
+/// 不动，遮盖撤走零动画露出）
+pub fn slot_visibility(
+    grid_keybar: bool,
+    panel_visible: bool,
+    cfg_visible: bool,
+    ft_visible: bool,
+) -> [bool; 5] {
+    [grid_keybar, panel_visible, cfg_visible, ft_visible, true]
 }
 
-/// 两面板 z 序裁决（BAR-083 单源，§五B 修订）：**正在动的面板在上**。
-/// 旧规「逐帧跟栈顶」的洞：撤 AI 瞬 AI 出栈 → top=配置 → 不透明配置页
-/// 当场压在 AI 面板槽之上，AI 退出动画在它背后播完 = 用户见瞬消
-/// （2026-09-11 用户实机：先配置后 AI，撤 AI 无动画）。新规：
-/// AI 缝活跃（入场/退场/replay 中）→ AI 在上；配置缝活跃或拖拽锁定中
-/// → 配置在上；双活跃拿栈顶 tie-break；都不动跟栈顶。安全论证：动画
-/// 结束时动者必在端点（靠泊=栈顶本身 / 屏外=不可见），z 序回落栈顶
-/// 那一帧被画的一方要么本来就是顶要么不可见——零像素跳变。
-/// 返回值语义：true = 配置页画在 AI 面板之上。
-pub fn panel_z_cfg_on_top(snap_top_is_cfg: bool, ai_active: bool, cfg_active: bool) -> bool {
-    match (ai_active, cfg_active) {
-        (true, false) => false, // AI 在动：AI 压顶（退场滑出全程可见）
-        (false, true) => true,  // 配置在动：配置压顶
-        _ => snap_top_is_cfg,   // 双活跃/双静止：跟栈顶
-    }
+/// 三面板 z 序裁决（BAR-083「动者在上」的三公民泛化，§五B 2026-09-11）。
+/// 旧二面板版（panel_z_cfg_on_top）的洞与它修掉的洞同构：撤顶面板瞬
+/// 栈顶翻成底下的不透明面板 → 退场动画在背后播完 = 用户见瞬消。规则：
+/// **不动者按栈序（底→顶），动者（缝活跃/拖拽锁定）压到一切不动者
+/// 之上；多动者之间仍按栈序**。不在栈的面板垫最底（屏外不可见，次序
+/// 无关但要确定——按 PANELS 声明序）。安全论证同 BAR-083：动画结束时
+/// 动者必在端点（靠泊=栈顶本身 / 屏外=不可见），z 序回落栈序那一帧
+/// 被画的一方要么本来就是顶要么不可见——零像素跳变。
+/// 入参 active 与 PANELS 同序对齐；返回底→顶次序（合成器按序画）。
+/// 红线：本函数的活性读数只许进 z 序，**不许进 target/presence**——
+/// 那是 BAR-084 的回粘回路（见 panel_target_and_draw）
+pub const PANELS: [crate::ai_presence::Panel; 3] = [
+    crate::ai_presence::Panel::Ai,
+    crate::ai_presence::Panel::Config,
+    crate::ai_presence::Panel::FileTree,
+];
+
+pub fn panel_z_order(
+    stack: &[crate::ai_presence::Panel],
+    active: [bool; 3],
+) -> [crate::ai_presence::Panel; 3] {
+    // 栈位阶：在栈 = 位置下标（0 底）；不在栈 = -3+声明序（确定的垫底序）
+    let rank = |p: crate::ai_presence::Panel| -> i32 {
+        stack
+            .iter()
+            .position(|&x| x == p)
+            .map(|i| i as i32)
+            .unwrap_or_else(|| -3 + PANELS.iter().position(|&x| x == p).unwrap_or(0) as i32)
+    };
+    let mut order = PANELS;
+    // 稳定排序键：（活性, 栈位阶）升序 = 底→顶；同组内栈序不动
+    order.sort_by_key(|&p| {
+        (
+            active[PANELS.iter().position(|&x| x == p).unwrap_or(0)] as i32,
+            rank(p),
+        )
+    });
+    order
+}
+
+/// 面板目标偏移与绘制可见性（纯逻辑单源，BAR-084）：**target 只问栈**
+/// （在栈 = 靠泊 0 / 不在栈 = 屏外 offscreen），**draw 才看活性**（在栈
+/// 或缝动画/拖拽锁定中——退场动画必须画完）。BAR-084 病灶：BAR-083 把
+/// z 序的活性读数泄漏进 presence→target 回路——退场中的面板被算成
+/// present → target 翻回靠泊 → 采样器掉头回粘，出栈的面板视觉上永远
+/// 停在靠泊位（2026-09-11 redroid 实锤：stats 栈空、截图配置页满屏，
+/// 状态与画面两张皮）。offscreen 带符号（配置家 +w / 文件树家 -w /
+/// AI 家 -h）。返回 (target, draw)
+pub fn panel_target_and_draw(in_stack: bool, active: bool, offscreen: f32) -> (f32, bool) {
+    (if in_stack { 0.0 } else { offscreen }, in_stack || active)
 }
 
 #[cfg(test)]

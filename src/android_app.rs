@@ -298,6 +298,7 @@ struct LayerSigs {
     panel: crate::ui::stage::DirtyGuard<(u32, u32, u32, u32)>,
     over: crate::ui::stage::DirtyGuard<OverSig>,
     config: crate::ui::stage::DirtyGuard<(u32, u32, u32, u32)>,
+    filetree: crate::ui::stage::DirtyGuard<(u32, u32, u32, u32)>,
 }
 
 impl LayerSigs {
@@ -308,6 +309,7 @@ impl LayerSigs {
         self.panel.invalidate();
         self.over.invalidate();
         self.config.invalidate();
+        self.filetree.invalidate();
     }
 }
 
@@ -460,18 +462,20 @@ impl App {
     /// 触摸统一入口(2026-08-27 通道八 touch-in):真手指(winit Touch)与
     /// 闸门注入双喂同一函数——判卷尺与真实手势同一把。本体从原
     /// WindowEvent::Touch 臂机械搬家,一行逻辑未动(fmt 收尾)
-    /// 面板跟手拖拽喂轨迹（§五B 手势升级）：锁定瞬把配置面板召入栈
+    /// 面板跟手拖拽喂轨迹（§五B 手势升级）：锁定瞬把目标面板召入栈
     /// （目标值翻 0，渲染偏移由拖拽旁路接管不播自动动画）。返回 true =
     /// 本事件被拖拽消费（调用方直接 return）
     fn feed_panel_drag(&mut self, x: f64, y: f64) -> bool {
         use crate::ai_presence::Panel;
-        use crate::ui::panel_drag::DragRole;
+        use crate::ui::panel_drag::DragTop;
         let Some(d) = &mut self.panel_drag else {
             return false;
         };
-        let top_cfg = self
-            .last_ai_snap
-            .is_some_and(|s| s.top == Some(Panel::Config));
+        let top = match self.last_ai_snap.and_then(|s| s.top) {
+            Some(Panel::Config) => DragTop::Config,
+            Some(Panel::FileTree) => DragTop::FileTree,
+            _ => DragTop::Other,
+        };
         let w = self
             .window
             .as_ref()
@@ -482,19 +486,25 @@ impl App {
         }
         let now = crate::report::boot_ms() as u64;
         let was = d.locked();
-        if let Some((role, _off)) = d.on_move(x, y, now, w, top_cfg) {
+        if let Some((role, _off)) = d.on_move(x, y, now, w, top) {
             if !was {
                 // 手势追踪（「配置卡无法收回」案侦查）：锁定瞬间留痕
                 crate::report::report(
                     "gest",
-                    &format!("拖拽锁定: {role:?} 于({x:.0},{y:.0}) top_cfg={top_cfg}"),
+                    &format!(
+                        "拖拽锁定: {role:?} 于({x:.0},{y:.0}) top={:?}",
+                        self.last_ai_snap.and_then(|s| s.top)
+                    ),
                 );
-            }
-            if !was && role == DragRole::SummonConfig {
                 // 召唤拖拽锁定 = 立即入栈（拖拽期渲染靠栈存在性；
                 // 新鲜召唤不 bump 入场代 → 无 replay 踢，不竞态）
-                if let Some(ai) = &self.ai_presence {
-                    ai.summon_panel(Panel::Config);
+                let summon = match role {
+                    crate::ui::panel_drag::DragRole::SummonConfig => Some(Panel::Config),
+                    crate::ui::panel_drag::DragRole::SummonFileTree => Some(Panel::FileTree),
+                    _ => None,
+                };
+                if let (Some(ai), Some(p)) = (&self.ai_presence, summon) {
+                    ai.summon_panel(p);
                 }
             }
             self.dirty = true;
@@ -531,26 +541,44 @@ impl App {
         } else {
             d.on_release(now, w)
         };
+        // 角色 → 目标面板（三公民：配置家右缘/文件树家左缘，栈操作同规）
+        let role_panel = match d.role() {
+            Some(DragRole::SummonConfig) | Some(DragRole::DismissConfig) => Some(Panel::Config),
+            Some(DragRole::SummonFileTree) | Some(DragRole::DismissFileTree) => {
+                Some(Panel::FileTree)
+            }
+            None => None,
+        };
         match (d.role(), decision) {
             // 召唤锁定时已入栈：完成 = 保持（目标 0）；取消 = 推回出栈
-            (Some(DragRole::SummonConfig), ReleaseDecision::Complete) => {}
-            (Some(DragRole::SummonConfig), ReleaseDecision::Cancel) => {
-                if let Some(ai) = &self.ai_presence {
-                    ai.dismiss_top(Panel::Config);
+            (Some(DragRole::SummonConfig), ReleaseDecision::Complete)
+            | (Some(DragRole::SummonFileTree), ReleaseDecision::Complete) => {}
+            (Some(DragRole::SummonConfig), ReleaseDecision::Cancel)
+            | (Some(DragRole::SummonFileTree), ReleaseDecision::Cancel) => {
+                if let (Some(ai), Some(p)) = (&self.ai_presence, role_panel) {
+                    ai.dismiss_top(p);
                 }
             }
             // 推回：完成 = 出栈；取消 = 保持（目标回 0）
-            (Some(DragRole::DismissConfig), ReleaseDecision::Complete) => {
-                if let Some(ai) = &self.ai_presence {
-                    ai.dismiss_top(Panel::Config);
+            (Some(DragRole::DismissConfig), ReleaseDecision::Complete)
+            | (Some(DragRole::DismissFileTree), ReleaseDecision::Complete) => {
+                if let (Some(ai), Some(p)) = (&self.ai_presence, role_panel) {
+                    ai.dismiss_top(p);
                 }
             }
-            (Some(DragRole::DismissConfig), ReleaseDecision::Cancel) => {}
+            (Some(DragRole::DismissConfig), ReleaseDecision::Cancel)
+            | (Some(DragRole::DismissFileTree), ReleaseDecision::Cancel) => {}
             (None, _) => {}
         }
         // 收尾续播：从跟手偏移重定基到翻转后的目标值（方向分档曲线
-        // 自动选臂——靠泊方向 250ms / 屏外方向 350ms，均减速到位）
-        crate::ui::seam::replay_config_panel_offset_x(cur, now);
+        // 自动选臂——靠泊方向 250ms / 屏外方向 350ms，均减速到位）。
+        // 按家踢各自的缝（配置右缘 +w / 文件树左缘 -w，cur 是距靠泊
+        // 的距离，折符号后进 replay）
+        match role_panel {
+            Some(Panel::Config) => crate::ui::seam::replay_config_panel_offset_x(cur, now),
+            Some(Panel::FileTree) => crate::ui::seam::replay_filetree_panel_offset_x(-cur, now),
+            _ => {}
+        }
         let after = self.ai_presence.as_ref().and_then(|ai| ai.snap(now).top);
         crate::report::report(
             "ui",
@@ -1071,12 +1099,30 @@ impl App {
                     self.dirty = true;
                     return;
                 }
-                // 面板页手势收尾：水平快滑 = 抽屉（§五B：左滑召唤配置页
-                // ——除非它已在顶；配置页在顶右滑 = 推回；其余组合空操作
-                // 留给右滑家文件树）；点按（未拖过 slop）= 输入栏失焦 +
-                // 收键盘——面板不是输入区，绝不穿透召唤终端输入法（期 0④
-                // 用户拍板两条：不穿透 + 点非输入区自动收键盘）
+                // 面板页手势收尾：水平快滑 = 抽屉（三公民 §五B 2026-09-11：
+                // 左滑——顶=文件树推回/顶=配置空操作/否则召唤配置；右滑——
+                // 顶=配置推回/顶=文件树空操作/否则召唤文件树）；点按（未拖
+                // 过 slop）= 输入栏失焦 + 收键盘——面板不是输入区，绝不穿透
+                // 召唤终端输入法（期 0④ 用户拍板两条：不穿透 + 点非输入区
+                // 自动收键盘）
                 if let Some(apt) = self.panel_touch.take() {
+                    // 账洞留痕（2026-09-11）：Cancelled 此前全静默——起手行
+                    // 「起手→面板页」无收尾，日志流上就是一次无疾而终的手势，
+                    // 与「手势落空」无从区分。强制取消同样记一行（系统抢手势，
+                    // 不做任何栈/焦点动作）
+                    if phase == TouchPhase::Cancelled {
+                        crate::report::report(
+                            "gest",
+                            &format!(
+                                "面板页手势取消: dx={:.0} dy={:.0} dragged={}（系统抢手势，零动作）",
+                                x - apt.start_x,
+                                y - apt.start_y,
+                                apt.dragged
+                            ),
+                        );
+                        self.dirty = true;
+                        return;
+                    }
                     if phase == TouchPhase::Ended
                         && let Some(dir) =
                             crate::ai_presence::decide_swipe(x - apt.start_x, y - apt.start_y)
@@ -1552,6 +1598,9 @@ impl App {
                     }
                     if snap.cfg_epoch != prev.cfg_epoch && size.width > 0 {
                         crate::ui::seam::replay_config_panel_offset_x(size.width as f32, now);
+                    }
+                    if snap.ft_epoch != prev.ft_epoch && size.width > 0 {
+                        crate::ui::seam::replay_filetree_panel_offset_x(-(size.width as f32), now);
                     }
                 }
             }
@@ -2513,8 +2562,8 @@ impl App {
     /// Some(GLES)：面板只画底装修（紫底 + 边框环，panel_off 刚体平移），
     /// 文字实例收集进列表（GPU 图集管线）；None（softbuffer）：面板全
     /// CPU——稳态直画，过渡帧整页离屏渲染后按偏移压盖（BAR-062 考题区）。
-    /// 配置页（§五B）两路径同规：z 序单源 panel_z_cfg_on_top（BAR-083
-    /// 动者在上）裁决画在 AI 面板之上或之下，
+    /// 三面板（§五B 三公民）两路径同规：z 序单源 panel_z_order（BAR-083
+    /// 动者在上泛化）给底→顶次序，逐槽画；
     /// X 平移直画带裁剪（无淡出——alpha 是 GLES 合成期 tint）。
     /// 返回 ai_layout（布局读数，调用方写回 scroll_sync_layout——眼手同尺）
     #[allow(clippy::too_many_arguments)]
@@ -2528,19 +2577,21 @@ impl App {
         mods: u8,
         panel_off: i32,
         cfg_off: i32,
-        cfg_on_top: bool,
+        ft_off: i32,
+        z_order: [crate::ai_presence::Panel; 3],
         chat_msgs: &[(bool, String, String)],
         chat_scroll: u32,
         chat_live: bool,
         panel_scratch: &mut Vec<u32>,
-        ai_glyphs: Option<&mut Vec<crate::glyph_atlas::AiGlyph>>,
+        mut ai_glyphs: Option<&mut Vec<crate::glyph_atlas::AiGlyph>>,
     ) -> Option<(u32, u32)> {
-        // 分支判定唯一裁决处（panel_split/cfg_split）——softbuffer 与
-        // GLES 两路径都从这里取，分支语义漂移 = 眼手两张皮（BAR-063 级
-        // 事故温床）。网格+键行让位 = 两面板都没靠泊（§五B）
+        // 分支判定唯一裁决处（panel_split/cfg_split/ft_split）——softbuffer
+        // 与 GLES 两路径都从这里取，分支语义漂移 = 眼手两张皮（BAR-063 级
+        // 事故温床）。网格+键行让位 = 三面板都没靠泊（§五B 三公民）
         let (ai_grid, panel_visible) = crate::termview::panel_split(panel_off, h);
         let (cfg_grid, cfg_visible) = crate::termview::cfg_split(cfg_off, w);
-        let grid_keybar = ai_grid && cfg_grid;
+        let (ft_grid, ft_visible) = crate::termview::ft_split(ft_off, w);
+        let grid_keybar = ai_grid && cfg_grid && ft_grid;
         let bottom_inset = ime_bottom_px + bar_h;
         let mut ai_layout = None;
         // 快捷键行（BAR-017 Rust 自绘覆盖层；inset 必须叠输入栏当前带高
@@ -2550,65 +2601,86 @@ impl App {
         if grid_keybar {
             term.render_keybar(buf, w, h, bottom_inset, mods);
         }
-        // 配置页被覆盖（AI 在顶）：画在 AI 面板之下——placement 冻结，
-        // AI 面板滑开时它零动画露出（§五B）；X 平移直画带裁剪
-        if cfg_visible && !cfg_on_top {
-            crate::termview::paint_cfg_page_chrome(buf, w, h, bottom_inset, cfg_off);
-        }
-        // AI 面板（三分支，panel_off 是缝采样值——无 ui-fx 占槽时恒等于
-        // 目标值 0 或 -h，退化为硬切；中间值 = 弹簧过渡帧）。视口下沿
-        // 让位键盘 + 输入栏带高（2026-09-04 用户拍板：追底追到栏带上沿，
-        // 不越过栏带）；live = 末条流式中（思考活窗，收流折叠）
-        if panel_visible {
-            if let Some(out) = ai_glyphs {
-                // GPU：文字实例收集（panel_off 已进行 y）+ 底装修
-                let (layout, glyphs) = term.ai_page_glyphs(
-                    w,
-                    h,
-                    chat_msgs,
-                    chat_scroll,
-                    bottom_inset,
-                    chat_live,
-                    panel_off,
-                );
-                *out = glyphs;
-                crate::termview::paint_ai_page_chrome(buf, w, h, bottom_inset, panel_off);
-                ai_layout = Some(layout);
-            } else if panel_off == 0 {
-                // 面板靠泊（AI 全屏页稳态，期 0③ 真对话页）：不画终端
-                // 网格与快捷键行，深紫暗底 + 消息行视口（期 0④ 滚动）
-                ai_layout = Some(term.render_ai_page(
-                    buf,
-                    w,
-                    h,
-                    chat_msgs,
-                    chat_scroll,
-                    bottom_inset,
-                    chat_live,
-                ));
-            } else {
-                // softbuffer 过渡帧：终端 + 快捷键行在下（照画——快捷键行
-                // 层级低于面板，被落下来的面板盖住是自然结果，用户
-                // 2026-09-04 拍板；BAR-063：过渡帧不画它 = 动画两端硬切
-                // = 闪烁），AI 面板整页离屏渲染后按偏移压盖——与直接
-                // 渲染像素等价
-                panel_scratch.clear();
-                panel_scratch.resize((w as usize) * (h as usize), 0);
-                ai_layout = Some(term.render_ai_page(
-                    panel_scratch,
-                    w,
-                    h,
-                    chat_msgs,
-                    chat_scroll,
-                    bottom_inset,
-                    chat_live,
-                ));
-                crate::termview::blit_panel_shifted(buf, panel_scratch, w, h, panel_off);
+        // 三面板按 z_order 底→顶逐槽画（BAR-083 动者在上，调用方算好传入）。
+        // 被覆盖者 placement 冻结——遮盖撤走零动画露出（§五B）
+        for slot in z_order {
+            match slot {
+                crate::ai_presence::Panel::Config => {
+                    if cfg_visible {
+                        crate::termview::paint_cfg_page_chrome(buf, w, h, bottom_inset, cfg_off);
+                    }
+                }
+                crate::ai_presence::Panel::FileTree => {
+                    if ft_visible {
+                        crate::termview::paint_ft_page_chrome(buf, w, h, bottom_inset, ft_off);
+                    }
+                }
+                crate::ai_presence::Panel::Ai => {
+                    // AI 面板（三分支，panel_off 是缝采样值——无 ui-fx 占槽
+                    // 时恒等于目标值 0 或 -h，退化为硬切；中间值 = 弹簧过渡帧）。
+                    // 视口下沿让位键盘 + 输入栏带高（2026-09-04 用户拍板：追底
+                    // 追到栏带上沿，不越过栏带）；live = 末条流式中
+                    if panel_visible {
+                        if let Some(out) = &mut ai_glyphs {
+                            // GPU：文字实例收集（panel_off 已进行 y）+ 底装修
+                            let (layout, glyphs) = term.ai_page_glyphs(
+                                w,
+                                h,
+                                chat_msgs,
+                                chat_scroll,
+                                bottom_inset,
+                                chat_live,
+                                panel_off,
+                            );
+                            **out = glyphs;
+                            crate::termview::paint_ai_page_chrome(
+                                buf,
+                                w,
+                                h,
+                                bottom_inset,
+                                panel_off,
+                            );
+                            ai_layout = Some(layout);
+                        } else if panel_off == 0 {
+                            // 面板靠泊（AI 全屏页稳态，期 0③ 真对话页）：不画
+                            // 终端网格与快捷键行，深紫暗底 + 消息行视口
+                            ai_layout = Some(term.render_ai_page(
+                                buf,
+                                w,
+                                h,
+                                chat_msgs,
+                                chat_scroll,
+                                bottom_inset,
+                                chat_live,
+                            ));
+                        } else {
+                            // softbuffer 过渡帧：终端 + 快捷键行在下（照画——
+                            // 快捷键行层级低于面板，被落下来的面板盖住是自然
+                            // 结果，用户 2026-09-04 拍板；BAR-063：过渡帧不画
+                            // 它 = 动画两端硬切 = 闪烁），AI 面板整页离屏渲染
+                            // 后按偏移压盖——与直接渲染像素等价
+                            panel_scratch.clear();
+                            panel_scratch.resize((w as usize) * (h as usize), 0);
+                            ai_layout = Some(term.render_ai_page(
+                                panel_scratch,
+                                w,
+                                h,
+                                chat_msgs,
+                                chat_scroll,
+                                bottom_inset,
+                                chat_live,
+                            ));
+                            crate::termview::blit_panel_shifted(
+                                buf,
+                                panel_scratch,
+                                w,
+                                h,
+                                panel_off,
+                            );
+                        }
+                    }
+                }
             }
-        }
-        // 配置页在顶：压在 AI 面板与 AI 文字之上（BAR-083 动者在上裁决）
-        if cfg_visible && cfg_on_top {
-            crate::termview::paint_cfg_page_chrome(buf, w, h, bottom_inset, cfg_off);
         }
         ai_layout
     }
@@ -2670,7 +2742,8 @@ impl App {
         h: u32,
         panel_off: i32,
         cfg_off: i32,
-        cfg_on_top: bool,
+        ft_off: i32,
+        z_order: [crate::ai_presence::Panel; 3],
         panel_scratch: &mut Vec<u32>,
     ) -> Option<(u32, u32)> {
         let Some(term) = term else {
@@ -2689,7 +2762,8 @@ impl App {
             mods,
             panel_off,
             cfg_off,
-            cfg_on_top,
+            ft_off,
+            z_order,
             chat_msgs,
             chat_scroll,
             chat_live,
@@ -2735,7 +2809,7 @@ impl App {
         ime_bottom_px_raw: u32,
         chrome_inset_px: &mut u32,
         sigs: &mut LayerSigs,
-        cfg_drag_off: Option<f32>,
+        drag: Option<(crate::ai_presence::Panel, f32)>,
     ) -> Option<(u32, u32)> {
         let (w, h) = g.size();
         if !TERMINAL_MODE {
@@ -2763,22 +2837,46 @@ impl App {
         // 淡入淡出已取消（2026-09-11 用户拍板「不好看」）：面板全程恒实，
         // panel_fade_alpha 退役备查（fx_ease.rs 内考题钉住）
         let panel_fade = 1.0_f32;
-        // 配置面板 X 偏移过缝（§五B 第三道缝）：目标值 = 在栈 0 靠泊 /
-        // 不在栈 +屏宽屏外右缘（左滑召唤来向）；alpha 同规恒 1.0
-        // z 序单源（stage::panel_z_cfg_on_top，BAR-083「动者在上」）：
-        // 撤 AI 时栈顶虽瞬翻成配置，AI 缝活跃期 AI 仍压顶滑出可见；
-        // 配置活跃 = 缝动画中或拖拽锁定中（跟手期手指压着的面板在顶）
-        let cfg_on_top = crate::ui::stage::panel_z_cfg_on_top(
-            ai_snap.is_some_and(|s| s.top == Some(crate::ai_presence::Panel::Config)),
-            crate::ui::seam::ai_panel_offset_y_active(),
-            crate::ui::seam::config_panel_offset_x_active() || cfg_drag_off.is_some(),
+        // 面板栈读数重建（底→顶；snap 只露 top/covered 两格，栈规 ≤2）
+        use crate::ai_presence::Panel;
+        let mut stack_vec: Vec<Panel> = Vec::new();
+        if let Some(s) = ai_snap {
+            if let Some(c) = s.covered {
+                stack_vec.push(c);
+            }
+            if let Some(t) = s.top {
+                stack_vec.push(t);
+            }
+        }
+        // 配置/文件树面板 X 偏移过缝（§五B 第三/四道缝）。target 只问栈
+        // （BAR-084 单源 panel_target_and_draw：活性泄漏进 target = 退场
+        // 回粘）；draw = 在栈或缝/拖拽活跃（退场动画画完）。配置家屏外
+        // +w（右缘来向），文件树家屏外 -w（左缘来向）
+        let cfg_in = stack_vec.contains(&Panel::Config);
+        let ft_in = stack_vec.contains(&Panel::FileTree);
+        let drag_cfg = drag.filter(|(p, _)| *p == Panel::Config).map(|(_, o)| o);
+        let drag_ft = drag.filter(|(p, _)| *p == Panel::FileTree).map(|(_, o)| o);
+        let cfg_active = crate::ui::seam::config_panel_offset_x_active() || drag_cfg.is_some();
+        let ft_active = crate::ui::seam::filetree_panel_offset_x_active() || drag_ft.is_some();
+        let (cfg_target, cfg_draw) =
+            crate::ui::stage::panel_target_and_draw(cfg_in, cfg_active, w as f32);
+        let (ft_target, ft_draw) =
+            crate::ui::stage::panel_target_and_draw(ft_in, ft_active, -(w as f32));
+        // z 序单源（stage::panel_z_order，BAR-083「动者在上」三公民泛化）：
+        // 撤顶面板瞬栈顶翻成底下的不透明面板，动者仍压顶滑出可见；
+        // 活性 = 缝动画中或拖拽锁定中（跟手期手指压着的面板在顶）
+        let z_order = crate::ui::stage::panel_z_order(
+            &stack_vec,
+            [
+                crate::ui::seam::ai_panel_offset_y_active(),
+                cfg_active,
+                ft_active,
+            ],
         );
-        let cfg_present = cfg_on_top
-            || ai_snap.is_some_and(|s| s.covered == Some(crate::ai_presence::Panel::Config));
-        let cfg_target = if cfg_present { 0.0 } else { w as f32 };
         // 跟手拖拽锁定期旁路缝采样（panel_drag：直接操纵不是动画——
-        // 手指停画面停，零插值滞后；缝底下的自动动画采样被盖住不可见）
-        let cfg_off = match cfg_drag_off {
+        // 手指停画面停，零插值滞后；缝底下的自动动画采样被盖住不可见）。
+        // 拖拽偏移是「距靠泊距离」，按家折符号（配置 +/文件树 -）
+        let cfg_off = match drag_cfg {
             Some(off) => off as i32,
             None => crate::ui::seam::sample_config_panel_offset_x(
                 cfg_target,
@@ -2786,10 +2884,21 @@ impl App {
             ) as i32,
         };
         let cfg_fade = 1.0_f32;
+        let ft_off = match drag_ft {
+            Some(off) => -(off as i32),
+            None => crate::ui::seam::sample_filetree_panel_offset_x(
+                ft_target,
+                crate::report::boot_ms() as u64,
+            ) as i32,
+        };
+        let ft_fade = 1.0_f32;
         let (ai_grid, panel_visible) = crate::termview::panel_split(panel_off, h);
         let (cfg_grid, cfg_visible) = crate::termview::cfg_split(cfg_off, w);
-        // 网格+键行让位 = 两面板都没靠泊（任一靠泊在顶即整页盖住终端）
-        let grid_keybar = ai_grid && cfg_grid;
+        let (ft_grid, ft_visible) = crate::termview::ft_split(ft_off, w);
+        let cfg_visible = cfg_visible && cfg_draw;
+        let ft_visible = ft_visible && ft_draw;
+        // 网格+键行让位 = 三面板都没靠泊（任一靠泊在顶即整页盖住终端）
+        let grid_keybar = ai_grid && cfg_grid && ft_grid;
         let Some(term_arc) = th else {
             // 字体全灭的降级画面：紫屏（与 soft 路径同规）
             g.present_solid(KFM_PURPLE);
@@ -2884,19 +2993,21 @@ impl App {
         }
         let gen_us = t_gen.elapsed().as_micros() as u64;
 
-        // 2) 三槽烘焙（ui-base §八 渲染成本模型）：置脏才光栅+上传——
+        // 2) 槽位烘焙（ui-base §八 渲染成本模型）：置脏才光栅+上传——
         // 动画帧（panel_off 逐帧变）只动合成期 placement，零光栅零上传。
         // slot_bake 内做 mark_chrome_alpha（「纯黑=空白」约定——黑屏案
         // 2026-09-05 教训：一刀切 |= alpha 会变成不透明黑膜）
         let t_ras = std::time::Instant::now();
         let bottom_inset = ime + bar_h;
-        // 四槽可见性单源（BAR-070：图层化首版漏设上层槽 → 输入栏/光球/
-        // 放大镜集体隐身——可见性判定收进纯逻辑，每帧四槽都从这出）
-        let slot_vis = crate::ui::stage::slot_visibility(grid_keybar, panel_visible, cfg_visible);
+        // 五槽可见性单源（BAR-070：图层化首版漏设上层槽 → 输入栏/光球/
+        // 放大镜集体隐身——可见性判定收进纯逻辑，每帧五槽都从这出）
+        let slot_vis =
+            crate::ui::stage::slot_visibility(grid_keybar, panel_visible, cfg_visible, ft_visible);
         g.set_slot_visible(crate::gles_present::ChromeSlot::Keybar, slot_vis[0]);
         g.set_slot_visible(crate::gles_present::ChromeSlot::Panel, slot_vis[1]);
         g.set_slot_visible(crate::gles_present::ChromeSlot::Config, slot_vis[2]);
-        g.set_slot_visible(crate::gles_present::ChromeSlot::Over, slot_vis[3]);
+        g.set_slot_visible(crate::gles_present::ChromeSlot::FileTree, slot_vis[3]);
+        g.set_slot_visible(crate::gles_present::ChromeSlot::Over, slot_vis[4]);
         // 键行槽烘焙：sig=render_keybar 读的每个输入（靠泊时槽隐藏，
         // 烘焙物常驻纹理，面板收起重现身零成本）
         if grid_keybar && sigs.keybar.feed((mods, ime, bar_h, w, h)) {
@@ -2923,11 +3034,22 @@ impl App {
             crate::termview::paint_cfg_page_chrome(px, w, h, bottom_inset, 0);
             g.slot_bake(crate::gles_present::ChromeSlot::Config);
         }
+        // 文件树槽（§五B 三公民）：同规——画布恒靠泊位（ft_off=0）
+        if ft_visible && sigs.filetree.feed((w, h, ime, bar_h)) {
+            let px = g.slot_canvas(crate::gles_present::ChromeSlot::FileTree);
+            px.fill(0);
+            crate::termview::paint_ft_page_chrome(px, w, h, bottom_inset, 0);
+            g.slot_bake(crate::gles_present::ChromeSlot::FileTree);
+        }
         // AI 文字（每帧实例——消息/滚动/panel_off 逐帧变，永不进烘焙；
-        // panel_off 进实例 y=刚体平移，2026-09-05 拍板不变）。配置页靠泊
+        // panel_off 进实例 y=刚体平移，2026-09-05 拍板不变）。别家面板靠泊
         // 在顶时 AI 被整页盖住：零生成零绘制（布局写回暂停，露出后下一帧
         // 自愈——被覆盖面板无手势够得着，眼手同尺不缺这份读数）
-        let ai_fully_covered = cfg_on_top && cfg_off == 0;
+        let ai_fully_covered = match z_order[2] {
+            Panel::Config => cfg_off == 0 && cfg_draw,
+            Panel::FileTree => ft_off == 0 && ft_draw,
+            Panel::Ai => false,
+        };
         let (ai_layout, ai_glyphs) = if panel_visible && !ai_fully_covered {
             let term = term_arc.lock().unwrap();
             let (layout, glyphs) = term.ai_page_glyphs(
@@ -3057,7 +3179,9 @@ impl App {
             panel_fade,
             cfg_off,
             cfg_fade,
-            cfg_on_top,
+            ft_off,
+            ft_fade,
+            z_order,
         );
         ai_layout
     }
@@ -3113,7 +3237,20 @@ impl App {
                 self.ime_bottom_px,
                 &mut self.chrome_inset_px,
                 &mut self.layer_sigs,
-                self.panel_drag.as_ref().and_then(|d| d.current_offset()),
+                self.panel_drag.as_ref().and_then(|d| {
+                    let off = d.current_offset()?;
+                    let p = match d.role()? {
+                        crate::ui::panel_drag::DragRole::SummonConfig
+                        | crate::ui::panel_drag::DragRole::DismissConfig => {
+                            crate::ai_presence::Panel::Config
+                        }
+                        crate::ui::panel_drag::DragRole::SummonFileTree
+                        | crate::ui::panel_drag::DragRole::DismissFileTree => {
+                            crate::ai_presence::Panel::FileTree
+                        }
+                    };
+                    Some((p, off))
+                }),
             );
             // 布局写回视口状态机（眼手同尺：手势钳制与渲染同一份布局）
             if let (Some(chat), Some((total, fit))) = (&self.ai_chat, ai_layout) {
@@ -3121,7 +3258,8 @@ impl App {
             }
             crate::gles_present::note_anim_frame(
                 crate::ui::seam::ai_panel_offset_y_active()
-                    || crate::ui::seam::config_panel_offset_x_active(),
+                    || crate::ui::seam::config_panel_offset_x_active()
+                    || crate::ui::seam::filetree_panel_offset_x_active(),
                 t0.elapsed(),
             );
             crate::gate::note_draw(t0.elapsed()); // 含 present 的全帧耗时
@@ -3155,30 +3293,67 @@ impl App {
                 panel_target,
                 crate::report::boot_ms() as u64,
             ) as i32;
-            // 配置面板 X 偏移过缝（§五B 第三道缝）：目标值 = 在栈 0 靠泊 /
-            // 不在栈 +屏宽屏外右缘；无 ui-fx 占槽 = 直通（硬切）
-            // z 序单源（BAR-083 动者在上，同 GLES 路径）
-            let cfg_on_top = crate::ui::stage::panel_z_cfg_on_top(
-                self.last_ai_snap
-                    .is_some_and(|s| s.top == Some(crate::ai_presence::Panel::Config)),
-                crate::ui::seam::ai_panel_offset_y_active(),
-                crate::ui::seam::config_panel_offset_x_active()
-                    || self
-                        .panel_drag
-                        .as_ref()
-                        .and_then(|d| d.current_offset())
-                        .is_some(),
+            // 面板栈读数重建（底→顶）+ 配置/文件树 X 偏移过缝（§五B
+            // 第三/四道缝）：target 只问栈（BAR-084 单源 panel_target_and_draw
+            // ——活性泄漏进 target = 退场回粘）；draw = 在栈或缝/拖拽活跃。
+            // 无 ui-fx 占槽 = 直通目标值（硬切）。配置家屏外 +w / 文件树 -w
+            use crate::ai_presence::Panel;
+            let mut stack_vec: Vec<Panel> = Vec::new();
+            if let Some(s) = self.last_ai_snap {
+                if let Some(c) = s.covered {
+                    stack_vec.push(c);
+                }
+                if let Some(t) = s.top {
+                    stack_vec.push(t);
+                }
+            }
+            let drag = self.panel_drag.as_ref().and_then(|d| {
+                let off = d.current_offset()?;
+                let p = match d.role()? {
+                    crate::ui::panel_drag::DragRole::SummonConfig
+                    | crate::ui::panel_drag::DragRole::DismissConfig => Panel::Config,
+                    crate::ui::panel_drag::DragRole::SummonFileTree
+                    | crate::ui::panel_drag::DragRole::DismissFileTree => Panel::FileTree,
+                };
+                Some((p, off))
+            });
+            let drag_cfg = drag.filter(|(p, _)| *p == Panel::Config).map(|(_, o)| o);
+            let drag_ft = drag.filter(|(p, _)| *p == Panel::FileTree).map(|(_, o)| o);
+            let cfg_active = crate::ui::seam::config_panel_offset_x_active() || drag_cfg.is_some();
+            let ft_active = crate::ui::seam::filetree_panel_offset_x_active() || drag_ft.is_some();
+            let (cfg_target, _cfg_draw) = crate::ui::stage::panel_target_and_draw(
+                stack_vec.contains(&Panel::Config),
+                cfg_active,
+                w as f32,
             );
-            let cfg_present = cfg_on_top
-                || self
-                    .last_ai_snap
-                    .is_some_and(|s| s.covered == Some(crate::ai_presence::Panel::Config));
-            let cfg_target = if cfg_present { 0.0 } else { w as f32 };
-            // 跟手拖拽锁定期旁路缝采样（同 GLES 路径）
-            let cfg_off = match self.panel_drag.as_ref().and_then(|d| d.current_offset()) {
+            let (ft_target, _ft_draw) = crate::ui::stage::panel_target_and_draw(
+                stack_vec.contains(&Panel::FileTree),
+                ft_active,
+                -(w as f32),
+            );
+            // z 序单源（stage::panel_z_order，BAR-083 动者在上三公民泛化，
+            // 同 GLES 路径）
+            let z_order = crate::ui::stage::panel_z_order(
+                &stack_vec,
+                [
+                    crate::ui::seam::ai_panel_offset_y_active(),
+                    cfg_active,
+                    ft_active,
+                ],
+            );
+            // 跟手拖拽锁定期旁路缝采样（同 GLES 路径；拖拽偏移=距靠泊
+            // 距离，按家折符号）
+            let cfg_off = match drag_cfg {
                 Some(off) => off as i32,
                 None => crate::ui::seam::sample_config_panel_offset_x(
                     cfg_target,
+                    crate::report::boot_ms() as u64,
+                ) as i32,
+            };
+            let ft_off = match drag_ft {
+                Some(off) => -(off as i32),
+                None => crate::ui::seam::sample_filetree_panel_offset_x(
+                    ft_target,
                     crate::report::boot_ms() as u64,
                 ) as i32,
             };
@@ -3209,7 +3384,8 @@ impl App {
                 h,
                 panel_off,
                 cfg_off,
-                cfg_on_top,
+                ft_off,
+                z_order,
                 &mut self.panel_scratch,
             );
             // 布局写回视口状态机（眼手同尺：手势钳制与渲染同一份布局）

@@ -153,3 +153,51 @@ pub fn replay_config_panel_offset_x(offscreen: f32, now_ms: u64) {
         r(offscreen, now_ms);
     }
 }
+
+// ---- 第四道缝：文件树面板 X 偏移（面板栈 §五B 三公民，2026-09-11）----
+// 目标值语义在基础层（文件树在栈=0 靠泊 / 不在栈=-屏宽 屏外左缘——
+// 右滑召唤、左滑推回，与配置家镜像对称的来向）。动画只许在缝内插值。
+// 曲线族复用 fx_ease 同一对减速臂，零新曲线（同配置缝纪律）。
+
+static FILETREE_PANEL_OFFSET_X: Mutex<Option<Occupier>> = Mutex::new(None);
+
+/// 占槽（后占者赢，ui-base §三 v1）
+pub fn occupy_filetree_panel_offset_x(o: Occupier) {
+    *FILETREE_PANEL_OFFSET_X.lock().unwrap() = Some(o);
+}
+
+/// 拔槽回硬切（插件卸载/禁用）
+pub fn release_filetree_panel_offset_x() {
+    *FILETREE_PANEL_OFFSET_X.lock().unwrap() = None;
+}
+
+/// 采样（渲染时过缝）：无占槽直通目标值——硬切基座语义
+pub fn sample_filetree_panel_offset_x(target: f32, now_ms: u64) -> f32 {
+    let g = FILETREE_PANEL_OFFSET_X.lock().unwrap();
+    match g.as_ref() {
+        Some(o) => (o.sampler)(target, now_ms),
+        None => target,
+    }
+}
+
+/// 该槽有活跃动画（帧时钟启停判据；无占槽恒 false = 零额外帧）
+pub fn filetree_panel_offset_x_active() -> bool {
+    FILETREE_PANEL_OFFSET_X
+        .lock()
+        .unwrap()
+        .as_ref()
+        .is_some_and(|o| (o.is_active)())
+}
+
+/// 入场重播踢（BAR-079，坍缩②）：壳层见文件树入场代 bump 即踢——采样器
+/// 重定基到屏外左缘（目标不变）→ 重播抽屉入场。无占槽/无 replay = 空操作
+pub fn replay_filetree_panel_offset_x(offscreen: f32, now_ms: u64) {
+    if let Some(r) = FILETREE_PANEL_OFFSET_X
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|o| o.replay.as_ref())
+    {
+        r(offscreen, now_ms);
+    }
+}
