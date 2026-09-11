@@ -465,25 +465,32 @@ fn spec_字体_体积闸跳过巨物() {
 fn spec_边距_首格不贴边() {
     // BAR-005 病灶：网格从 (0,0) 画起，边缘字符被屏幕圆角/曲面切半。
     // 2026-09-11 终端卡片壳改造：边距语义由壳继承——几何单源
-    // MARGIN = 壳外缘(16) + 环粗(3) + 净垫(12) = 31，四边同尺常量化；
+    // 纵尺 = 壳外缘(16) + 环粗(3) + 净垫(12) = 31；横尺同日晚用户实拍
+    // 拍板再让一整格字宽（「直接贴上了显得太紧」）= 16+3+30 = 49。
     // BAR-010「顶带下探一整行」的防圆角切字意图由壳环靠泊距离接管
     // （顶带不再随格高走，反转旧契约，见 spec_缩放_顶带恒定不随格高）。
     // 契约：①几何单源关系钉死；②壳环与首格之间的净垫带必须纯壳内芯色
-    // （字墨不许贴环——变异抽检：MARGIN_X 改小/TERM_CARD_PAD 归零必须红）；
+    // （字墨不许贴环——变异抽检：MARGIN_X 改小/TERM_CARD_PAD_X 改小必须红）；
     // ③壳外缘列纯黑；④网格区必须有真字墨（防「全帧涂黑」式假绿）
     assert_eq!(
         termview::MARGIN_X,
-        termview::AI_PAGE_FRAME_MARGIN + termview::AI_PAGE_FRAME_W + termview::TERM_CARD_PAD,
-        "边距必须是壳几何单源：外缘+环粗+净垫"
+        termview::AI_PAGE_FRAME_MARGIN + termview::AI_PAGE_FRAME_W + termview::TERM_CARD_PAD_X,
+        "横边距必须是壳几何单源：外缘+环粗+横向净垫"
     );
-    // 显式值钉（防关系式跟着常量一起漂——16+3+12=31 是拍板值）
     assert_eq!(
-        termview::MARGIN_X,
-        31,
-        "边距拍板值 31 = 16 外缘 + 3 环 + 12 净垫"
+        termview::MARGIN_Y,
+        termview::AI_PAGE_FRAME_MARGIN + termview::AI_PAGE_FRAME_W + termview::TERM_CARD_PAD,
+        "纵边距必须是壳几何单源：外缘+环粗+净垫"
     );
-    assert_eq!(termview::MARGIN_TOP, termview::MARGIN_X);
-    assert_eq!(termview::MARGIN_Y, termview::MARGIN_X);
+    assert_eq!(
+        termview::TERM_CARD_PAD_X,
+        termview::TERM_CARD_PAD + CELL_W,
+        "横向净垫 = 纵净垫 + 一整格字宽（2026-09-11 晚用户拍板）"
+    );
+    // 显式值钉（防关系式跟着常量一起漂——49/31 是拍板值）
+    assert_eq!(termview::MARGIN_X, 49, "横边距拍板值 49 = 16+3+(12+18)");
+    assert_eq!(termview::MARGIN_Y, 31, "纵边距拍板值 31 = 16+3+12");
+    assert_eq!(termview::MARGIN_TOP, termview::MARGIN_Y);
     let mut tv = host_termview(8, 2);
     tv.feed(b"A");
     let buf_w = 2 * termview::MARGIN_X + 8 * CELL_W;
@@ -1058,13 +1065,13 @@ fn spec_bar032_powerline箭头_实心阶梯三角() {
 
 #[test]
 fn spec_缩放_顶带恒定不随格高() {
-    // 2026-09-11 终端卡片壳改造：顶带并入壳几何单源，恒定 MARGIN_X(31)——
+    // 2026-09-11 终端卡片壳改造：顶带并入壳几何单源，恒定纵尺 MARGIN_Y(31)——
     // BAR-010「顶带随格高走（MARGIN_Y+CELL_H）」的旧契约就此反转，
     // 防圆角切字的意图由壳环靠泊距离接管（格再怎么大，壳环位置不动）。
     // 变异抽检：margin_top 改回随格高走（MARGIN_Y + cell_h）本考题必须红
     assert_eq!(termview::margin_top(CELL_H), termview::MARGIN_TOP);
-    assert_eq!(termview::margin_top(20), termview::MARGIN_X);
-    assert_eq!(termview::margin_top(90), termview::MARGIN_X);
+    assert_eq!(termview::margin_top(20), termview::MARGIN_Y);
+    assert_eq!(termview::margin_top(90), termview::MARGIN_Y);
 }
 
 #[test]

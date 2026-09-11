@@ -50,14 +50,18 @@ pub const HELP_BANNER: &str = "\x1b[36m── kfm-na 就绪 ──\x1b[0m\r\n\
 \x1b[90m本地 HOME: Android/data/dev.kfm.na/files(文件管理器可见,随便读写)\x1b[0m\r\n";
 
 /// 终端卡片壳几何（2026-09-11 用户拍板：终端页与三面板同配方装修，
-/// 四页同骨架——外缘距屏边 16 + 环粗 3 + 环内留白 12 = 网格原点 31）。
+/// 四页同骨架——外缘距屏边 16 + 环粗 3 + 环内留白 = 网格原点）。
 /// 取代 BAR-005 的 12px 裸边距与 BAR-010 的动态顶带：壳环自带圆角屏
-/// 语义（环在 16px 处先挡一圈，文字再让 12px 不贴环），顶带常量化
+/// 语义（环在 16px 处先挡一圈，文字再让一段净垫不贴环），顶带常量化
 /// 不再跟格高走（捏合缩放不再挪动网格原点，眼手两把尺永不打架）
 pub const TERM_CARD_PAD: u32 = 12;
 
-/// 网格原点 X（= 卡片壳左边距）：BAR-005 语义由壳环继承
-pub const MARGIN_X: u32 = AI_PAGE_FRAME_MARGIN + AI_PAGE_FRAME_W + TERM_CARD_PAD;
+/// 横向净垫（2026-09-11 晚用户实拍拍板：纵垫 12 之外左右再让一整格
+/// 字宽——「直接贴上了显得太紧」）。= 12 + 18 = 30
+pub const TERM_CARD_PAD_X: u32 = TERM_CARD_PAD + CELL_W;
+
+/// 网格原点 X（= 卡片壳左边距 16+3+30=49）：BAR-005 语义由壳环继承
+pub const MARGIN_X: u32 = AI_PAGE_FRAME_MARGIN + AI_PAGE_FRAME_W + TERM_CARD_PAD_X;
 
 /// AI 对话页排版尺（期 0④ 提升为模块级：手势 px→行换算与渲染同尺）
 pub const AI_PAGE_MARGIN_X: u32 = 60;
@@ -70,18 +74,18 @@ pub const AI_THINK_FG: u32 = 0x007E_7A9E;
 /// 收流后思考块的折叠占位行（2026-09-04 用户拍板：输出完自动折叠——
 /// 思考往往不重要但必须存在；全文随消息存档，展开查看是未来的活）
 pub const AI_THINK_COLLAPSED: &str = "· 已思考 ·";
-/// 网格底缘留白（= 壳几何同尺）：卡片底环之上不再贴字
-pub const MARGIN_Y: u32 = MARGIN_X;
+/// 网格底缘留白（= 壳几何纵尺 16+3+12=31）：卡片底环之上不再贴字
+pub const MARGIN_Y: u32 = AI_PAGE_FRAME_MARGIN + AI_PAGE_FRAME_W + TERM_CARD_PAD;
 
-/// 顶边距（壳几何恒值；BAR-010 的圆角屏语义由壳环继承）。保留常量名
-/// 供旧调用点/考题引用——语义已从「边距+一整行」变为「壳左边距同尺」
-pub const MARGIN_TOP: u32 = MARGIN_X;
+/// 顶边距（壳几何恒值 = 纵尺 31；BAR-010 的圆角屏语义由壳环继承）。
+/// 保留常量名供旧调用点/考题引用——语义已从「边距+一整行」变为「壳纵边距」
+pub const MARGIN_TOP: u32 = MARGIN_Y;
 
 /// 顶边距（常量化，2026-09-11）：不再跟随格高——壳环位置固定，网格原点
 /// 固定，缩放任一档下原点不动（旧动态版会随格高挪原点，眼手两尺打架
 /// 的温床）。参数保留只为调用点零改动
 pub const fn margin_top(_cell_h: u32) -> u32 {
-    MARGIN_X
+    MARGIN_Y
 }
 
 /// 捏合缩放格尺寸钳制区间（A 档考题钉死）：10x20 = 还能认出字的下限，

@@ -2013,9 +2013,12 @@ impl App {
     }
 
     /// 窗口 px 尺寸 → cols/rows → Term resize + terminal-resize 出向。
-    /// 可用区域 = 窗口 - 四周边距（BAR-005）- 真实软键盘 inset（BAR-006，
-    /// JNI 轮询，insets.rs）- 快捷键行高（BAR-017，Rust 自绘常驻让位）。
-    /// 顶带跟当前格高走（margin_top：捏合缩放后格高可变，2026-08-21）
+    /// 可用区域 = 窗口
+    /// - 四周边距（卡片壳几何：横 49 / 纵 31，2026-09-11）
+    /// - 真实软键盘 inset（BAR-006，JNI 轮询，insets.rs）
+    /// - 快捷键行高（BAR-017，Rust 自绘常驻让位）
+    ///
+    /// 顶带恒定（margin_top：壳环靠泊接管防切，不跟格高走，2026-09-11）
     fn apply_window_size(&mut self, w: u32, h: u32) {
         // 光球边界钳制原料（首次调用落默认出生位；键盘 inset 变化也走这里）
         if let Some(ai) = &self.ai_presence {
