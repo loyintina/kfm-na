@@ -178,6 +178,21 @@ impl GlyphAtlas {
     pub fn revision(&self) -> u64 {
         self.revision
     }
+
+    /// 整册清空（2026-09-11 捏合缩放字号不跟案）：字号类代号无 px 维，
+    /// 格尺寸变 = font_px 变 = 册内字形全成陈墨——slots 清空、页回第 0
+    /// 页行架归零、coverage 清零、revision  bump（壳侧纹理全页重传）。
+    /// 清空后装载照常（行架从头排）
+    pub fn clear(&mut self) {
+        self.slots.clear();
+        self.pages.truncate(1);
+        let p = &mut self.pages[0];
+        p.shelf_y = 0;
+        p.shelf_h = 0;
+        p.cursor_x = 0;
+        p.coverage.fill(0);
+        self.revision += 1;
+    }
 }
 
 /// 网格格子的 GPU 中立镜像（render_into 收集段的纯数据版：颜色决策

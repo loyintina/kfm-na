@@ -2926,6 +2926,10 @@ impl App {
         if grid_keybar {
             let cells = term_arc.lock().unwrap().gpu_cells(w, h);
             let (cell_w, cell_h) = term_arc.lock().unwrap().cell_size();
+            // 格尺寸变 → 图集终端字形全成陈墨，先冲刷再进料
+            // （2026-09-11 捏合缩放字号不跟案；gles_present 侧单点，
+            //  捏合/缩放读回/未来一切 set_cell_size 路径自动全覆盖）
+            g.sync_term_glyph_size(cell_w, cell_h);
             let mut inst = crate::glyph_atlas::grid_to_instances(
                 &cells,
                 g.atlas(),

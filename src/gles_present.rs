@@ -501,6 +501,10 @@ pub struct GlesPresent {
     thumb_sent: bool,
     /// 字形图集（数据所有权在此，跨帧缓存——第 2 层性能来源）
     atlas: crate::glyph_atlas::GlyphAtlas,
+    /// 图集内 GLYPH_SIZE_TERM 类字形的光栅化时格尺寸（2026-09-11 捏合
+    /// 缩放字号不跟案）：字号类代号无 px 维，格尺寸变 = 册内终端字形
+    /// 全成陈墨——sync_term_glyph_size 检出变化即整册清空逼重光栅
+    atlas_cell: Option<(u32, u32)>,
 }
 
 impl GlesPresent {
@@ -639,6 +643,7 @@ impl GlesPresent {
             thumb_sent: false,
             atlas_rev: 0,
             atlas: crate::glyph_atlas::GlyphAtlas::new(2048, 2048),
+            atlas_cell: None,
         })
     }
 
@@ -913,6 +918,21 @@ impl GlesPresent {
     /// 图集只读（grid_to_instances 进料）
     pub fn atlas(&self) -> &crate::glyph_atlas::GlyphAtlas {
         &self.atlas
+    }
+
+    /// 终端格尺寸同步（每帧绘制前调用）：格尺寸变 = 终端字形光栅字号
+    /// 变，而图集键的字号类代号无 px 维——不冲刷就永远拿旧字号位图
+    /// 贴新格（2026-09-11 用户实拍：放大格变字不变，缩小字堆叠）。
+    /// 整册清空（AI 类字形陪葬，下一帧 misses 路径按恒字号重光栅，
+    /// 一帧成本换契约简单）；首次调用只记尺寸不清空（册本来就是空的）
+    pub fn sync_term_glyph_size(&mut self, cell_w: u32, cell_h: u32) {
+        if self.atlas_cell == Some((cell_w, cell_h)) {
+            return;
+        }
+        if self.atlas_cell.is_some() {
+            self.atlas.clear();
+        }
+        self.atlas_cell = Some((cell_w, cell_h));
     }
 
     /// 图集装载（misses 补墨；同键幂等由图集保证）

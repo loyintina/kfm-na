@@ -1091,7 +1091,11 @@ fn spec_缩放_捏合钳制纯函数() {
         pinch_cell_size(CELL_W, CELL_H, 0.01),
         (CELL_W_MIN, CELL_H_MIN)
     );
-    assert_eq!(pinch_cell_size(CELL_W, CELL_H, 100.0), (45, 90));
+    assert_eq!(
+        pinch_cell_size(CELL_W, CELL_H, 100.0),
+        (CELL_W_MAX, CELL_H_MAX),
+        "百倍暴捏也钳在 6 倍上限（2026-09-11 放宽 Termux 级夸张档）"
+    );
     assert_eq!(pinch_cell_size(CELL_W, CELL_H, 0.001), (10, 20));
     // 非法输入（NaN/0/负/无穷）落基准钳制值，不许把字号打飞
     assert_eq!(pinch_cell_size(CELL_W, CELL_H, f64::NAN), (CELL_W, CELL_H));

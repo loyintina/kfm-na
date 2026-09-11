@@ -66,6 +66,34 @@ fn spec_atlas_装载后槽位与覆盖逐字节() {
 }
 
 #[test]
+fn spec_atlas_清空_槽位归零行架重排() {
+    // 2026-09-11 捏合缩放字号不跟案：格尺寸变 = 光栅字号变，而 GlyphKey
+    // 的字号类代号无 px 维——不清册，GLES 侧永远拿旧字号位图贴新格
+    // （用户实拍：放大格变字不变、缩小字堆叠）。契约：①清空后旧键全灭；
+    // ②revision 递增（壳侧纹理全页重传的判据）；③行架归零——同尺寸
+    // 重新装载落回原点；④coverage 清零（陈墨字节不许残留）；⑤页收编
+    // 回第 0 页。变异抽检：clear 摘除/漏清 slots/漏 bump revision 必红
+    let mut a = GlyphAtlas::new(PAGE_W, PAGE_H);
+    let rev0 = a.revision();
+    a.insert(key('A'), 8, 16, &solid(8, 16), 2, -3);
+    a.insert(key('B'), 8, 16, &solid(8, 16), 0, 0);
+    assert!(a.slot(&key('A')).is_some());
+    a.clear();
+    assert!(a.slot(&key('A')).is_none(), "清空后旧槽位必须灭");
+    assert!(a.slot(&key('B')).is_none());
+    assert!(a.revision() > rev0 + 1, "清空必须 bump revision");
+    assert_eq!(a.pages().len(), 1, "页必须收编回第 0 页");
+    assert!(
+        a.pages()[0].coverage.iter().all(|&b| b == 0),
+        "coverage 必须清零（陈墨不许残留）"
+    );
+    // 行架归零：重新装载落回原点（不归零会接着旧游标往后排）
+    let s = a.insert(key('A'), 8, 16, &solid(8, 16), 2, -3);
+    assert_eq!((s.page, s.u0, s.v0), (0, 0, 0), "清空后重装必须落回原点");
+    assert_eq!(a.pages()[0].coverage[0], 0xA7, "新墨必须真写进页");
+}
+
+#[test]
 fn spec_atlas_同键幂等_不重占位() {
     let mut a = GlyphAtlas::new(PAGE_W, PAGE_H);
     let s1 = a.insert(key('A'), 8, 16, &solid(8, 16), 0, 0);

@@ -7,6 +7,16 @@
 
 ## 当前位置（2026-09-05)
 
+- **BAR-086 捏合缩放字号不跟（2026-09-11 深夜，用户实拍+redroid GLES
+  真帧复现）**：格变字不变/缩小堆叠。真凶 = 图集 GlyphKey 字号维是
+  冻结类代号无 px 维 + 无失效路径（CPU 逐帧光栅天然正确 → na-shot
+  CPU 重画判不了，GLES 合成帧才看得见——取证法已钉进排障手册：
+  shot-gles-req + scroll 造帧 + FLIP_TOP_BOTTOM）。修法：
+  GlyphAtlas::clear + GlesPresent::sync_term_glyph_size 绘制链单点
+  对账（一切 set_cell_size 路径自动覆盖）。顺带把捏合上限放宽到
+  6 倍档 108x216（用户对标本 Termux 夸张档）。待：修后 redroid
+  GLES 真帧复验 + 真机热更用户 C 档。
+
 - **终端卡片壳（2026-09-11 傍晚，用户拍板「终端也包全屏卡片壳，样式
   统一；无色相碳灰环——终端是基座不是卡」）**：几何单源重定义——
   `MARGIN_X = AI_PAGE_FRAME_MARGIN(16) + AI_PAGE_FRAME_W(3) +
