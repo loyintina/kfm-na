@@ -2,13 +2,14 @@
 //! 用户拍板：下落 ease-out、收起 ease-in——CSS transition 语言，取代
 //! 弹簧的物理墩感；同日实测定档 350ms/250ms。弹簧退役到键盘 inset
 //! 缝独占，见 fx_spring.rs。曲线沿革：09-05 裸 ease-out → Material
-//! emphasized（起步即峰值速度，用户判「不符合直觉」）；09-06 定稿
-//! **物理重力**——落下 t²（自由落体精确解：起步静止、线性加速、砸到
-//! 底），收起 1-(1-t)²（镜像旅程），时长 350/250 照旧；09-10 加配
-//! **滑动淡入**（用户拍板试方：alpha 从 placement 推导，遮采样保持
-//! 屏高速段的拖影感知，见 panel_fade_alpha）。
+//! emphasized；09-06 重力 t²；09-10 加配滑动淡入；**09-11 定稿
+//! power2.out（1-(1-t)²，nz/kfmv4 的 GSAP 同款）**——重力 t² 被用户
+//! 录屏逐帧实锤判「冻结→跳变」：起步亚像素蠕动 + alpha 从落程推导
+//! 跟着 t² 走，前 100ms 面板近乎不可见，显影时已在加速段。power2.out
+//! 起步即快（10% 时间走 19% 路程），第一帧就有可见位移；alpha 机制
+//! 不变（仍从落程推导），落程快涨带动 alpha 前 ~19% 时长即全实。
 //!
-//! 方向分档：进场落下 = 重力 t²；离场收起 = 镜像减速。纯函数零墙钟（A 档钉）；占缝采样自给自足——目标值
+//! 方向分档：进场落下 = power2.out 减速；离场收起 = 镜像减速。纯函数零墙钟（A 档钉）；占缝采样自给自足——目标值
 //! 变化即从当前值重定基续走（来回狂点位置不跳变）；首采样直通不重放
 //! （冷启动/插件热装不补演一场）。
 
@@ -31,11 +32,12 @@ pub fn ease_in_cubic(t: f32) -> f32 {
     t.powi(3)
 }
 
-/// 物理重力落下（2026-09-06 用户拍板「换符合直觉的」）：大面板从上方
-/// 落下 = 自由落体——起步静止、线性加速、砸到底。位移 ∝ t² 是匀加速
-/// 运动的精确解，不是近似
-pub fn gravity_fall(t: f32) -> f32 {
-    t * t
+/// power2.out 落下（2026-09-11 定稿，nz/kfmv4 GSAP 同款）：减速曲线
+/// 1-(1-t)²——起步即快（第一帧就有可见位移）、缓停到位。前身重力 t²
+/// （自由落体）退役：起步亚像素蠕动 + alpha 随落程平方显影，被录屏
+/// 逐帧实锤读作「冻结→跳变」
+pub fn power2_out(t: f32) -> f32 {
+    1.0 - (1.0 - t) * (1.0 - t)
 }
 
 /// 收起 = 落下的镜像旅程（面板原路回去）：减速上升，1-(1-t)²
@@ -44,9 +46,9 @@ pub fn rise_release(t: f32) -> f32 {
 }
 
 /// 淡入窗（滑动淡入配方，2026-09-10 用户拍板试方）：落程走过这段
-/// 比例即全实。重力落下 t² 映射下 √0.35≈0.59——进场约前 59% 时长
-/// 内完成淡入（对齐 Material「进场内容前 ~60% 时长淡入」），残余
-/// 高速段满对比落地保留「砸到底」的重力手感；C 档实拍可调
+/// 比例即全实。power2.out 映射下 1-√(1-0.35)≈0.19——进场约前 19%
+/// 时长内完成淡入（起步即显影，比 Material「~60% 时长淡入」更快，
+/// 与 nz 的线性 0.3s 淡入观感同族）；C 档实拍可调
 pub const FADE_PORTION: f32 = 0.35;
 
 /// 滑动淡入显影（纯函数零状态，A 档钉）：alpha 从 placement 推导——
@@ -62,7 +64,7 @@ pub fn panel_fade_alpha(off: f32, screen_h: f32) -> f32 {
 }
 
 /// 方向分档定时缓动（纯函数）：from → target，elapsed_ms 时刻的位置。
-/// 进场（target > from）= emphasized；离场 = emphasized-accelerate；
+/// 进场（target > from）= power2.out 减速；离场 = 镜像减速；
 /// elapsed 超时贴死 target——返回值 == target 即终态。
 pub fn panel_ease_pos(from: f32, target: f32, elapsed_ms: u64) -> f32 {
     let d = target - from;
@@ -70,7 +72,7 @@ pub fn panel_ease_pos(from: f32, target: f32, elapsed_ms: u64) -> f32 {
         return target;
     }
     let (dur, ease) = if d > 0.0 {
-        (ENTER_MS, gravity_fall as fn(f32) -> f32)
+        (ENTER_MS, power2_out as fn(f32) -> f32)
     } else {
         (EXIT_MS, rise_release as fn(f32) -> f32)
     };

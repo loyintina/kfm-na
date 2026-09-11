@@ -81,11 +81,13 @@ fn spec_ease_时长分档() {
 
 #[test]
 fn spec_ease_曲线形状() {
-    // 重力落下（进场）：起步静止——半程时刻进度必须 <50%（后段加速砸底）
+    // power2.out 落下（进场）：起步即快——半程时刻进度必须 >50%
+    // （2026-09-11 定稿换曲线：重力 t² 起步亚像素蠕动+alpha 双加速
+    // 被用户逐帧实锤判「冻结→跳变」，对齐 nz 的 GSAP power2.out）
     let half = fx_ease::panel_ease_pos(-2800.0, 0.0, fx_ease::ENTER_MS / 2);
     assert!(
-        half < -1400.0,
-        "重力落下半程必须未过半（后段加速），得 {half}"
+        half >= -1400.0,
+        "power2.out 落下半程必须已过半（起步即快），得 {half}"
     );
     // 镜像收起（离场）：起步快——半程时刻进度必须 >50%（减速上升）
     let half_up = fx_ease::panel_ease_pos(0.0, -2800.0, fx_ease::EXIT_MS / 2);
@@ -244,22 +246,26 @@ fn spec_bar079_缝重播踢_中继三态() {
     seam::replay_config_panel_offset_x(1260.0, 100); // 无占槽空操作（入账）
 }
 
-// ---- 物理重力族（2026-09-06 定稿：落下=自由落体 t²，收起=镜像） ----
+// ---- 落下曲线族（2026-09-11 定稿：落下=power2.out 减速，nz 同款；
+// 前身重力 t² 被逐帧实锤判「冻结→跳变」，退役） ----
 
 #[test]
-fn spec_ease_重力落下_端点与物理签名() {
-    assert_eq!(fx_ease::gravity_fall(0.0), 0.0);
-    assert_eq!(fx_ease::gravity_fall(1.0), 1.0);
+fn spec_ease_落下曲线_端点与签名() {
+    assert_eq!(fx_ease::power2_out(0.0), 0.0);
+    assert_eq!(fx_ease::power2_out(1.0), 1.0);
     assert_eq!(fx_ease::rise_release(0.0), 0.0);
     assert_eq!(fx_ease::rise_release(1.0), 1.0);
-    // 物理签名：t² 在 10% 时间只走 1% 路程（起步静止），
-    // 90% 时间走 81%（加速砸底）——匀加速运动的精确解
-    let early = fx_ease::gravity_fall(0.1);
-    assert!(early < 0.05, "落下起步必须近乎静止，得 {early}");
-    let late = fx_ease::gravity_fall(0.9);
+    // 减速签名：1-(1-t)² 在 10% 时间已走 19% 路程（起步即快，第一帧
+    // 就有可见位移），90% 时间走 99%（缓停到位）
+    let early = fx_ease::power2_out(0.1);
     assert!(
-        (late - 0.81).abs() < 1e-4,
-        "t² 落体 90% 时间 = 81% 路程，得 {late}"
+        (early - 0.19).abs() < 1e-4,
+        "power2.out 起步必须已经在走，得 {early}"
+    );
+    let late = fx_ease::power2_out(0.9);
+    assert!(
+        (late - 0.99).abs() < 1e-4,
+        "power2.out 90% 时间 = 99% 路程，得 {late}"
     );
     // 镜像：收起 10% 时间走 19%（起步快，减速上升）
     let r_early = fx_ease::rise_release(0.1);
@@ -271,18 +277,18 @@ fn spec_ease_重力落下_端点与物理签名() {
     let mut prev = 0.0;
     for i in 1..=100 {
         let t = i as f32 / 100.0;
-        let y = fx_ease::gravity_fall(t);
+        let y = fx_ease::power2_out(t);
         assert!(y >= prev && y <= 1.0, "落下 t={t} 回环");
         prev = y;
     }
 }
 
 #[test]
-fn spec_ease_面板重力曲线_半程判定() {
-    // 换装后面板行为契约：落下半程必须「未过半」（重力前段慢）——
-    // 与 09-05 emphasized 的「半程大幅过半」相反，此题锁住直觉方向
+fn spec_ease_面板曲线_半程判定() {
+    // 落下的行为契约：半程必须「已过半」（起步即快）——
+    // 与 09-06 重力 t² 的「半程未过半」相反，此题锁住曲线性格
     let half = fx_ease::panel_ease_pos(-2800.0, 0.0, fx_ease::ENTER_MS / 2);
-    assert!(half < -1400.0, "重力落下半程必须未过半，得 {half}");
+    assert!(half >= -1400.0, "落下半程必须已过半，得 {half}");
     let half_up = fx_ease::panel_ease_pos(0.0, -2800.0, fx_ease::EXIT_MS / 2);
     assert!(
         half_up < -1400.0,
@@ -337,15 +343,17 @@ fn spec_fade_淡入窗与单调() {
 }
 
 #[test]
-fn spec_fade_与重力曲线咬合() {
-    // 配方语义：落下起步慢段半透明（遮拖影），落地前全实（保留砸底
-    // 手感）。重力 t² 下淡入窗 √0.35≈0.59——进场 59% 时长处必须
-    // 已全实；10% 时长处（落程 1%）必须近乎全隐
+fn spec_fade_与落下曲线咬合() {
+    // 配方语义：落下起步即显影，落地前全实（保留砸底手感）。
+    // power2.out 下 t=0.1 落程已达 0.19 → alpha≈0.54（起步即显影，
+    // 不许近乎全隐——这正是重力 t² 时代「冻结→跳变」的病灶反面）；
+    // alpha 全实点 = 落程 FADE_PORTION=0.35 处即 t=1-√0.65≈0.194，
+    // t=0.2（落程 0.36）必须已全实
     let h = 2800.0;
-    let t_early = fx_ease::gravity_fall(0.1); // 落程 1%
+    let t_early = fx_ease::power2_out(0.1); // 落程 0.19
     let a_early = fx_ease::panel_fade_alpha(-h * (1.0 - t_early), h);
-    assert!(a_early < 0.1, "起步慢段必须近乎全隐，得 {a_early}");
-    let t_done = fx_ease::gravity_fall(0.59); // 落程 ≈35%
+    assert!(a_early > 0.5, "起步必须即显影，得 {a_early}");
+    let t_done = fx_ease::power2_out(0.2); // 落程 0.36 > FADE_PORTION
     let a_done = fx_ease::panel_fade_alpha(-h * (1.0 - t_done), h);
-    assert!(a_done > 0.95, "59% 时长处必须近乎全实，得 {a_done}");
+    assert!(a_done > 0.95, "20% 时长处必须近乎全实，得 {a_done}");
 }
