@@ -2441,7 +2441,8 @@ impl App {
     /// Some(GLES)：面板只画底装修（紫底 + 边框环，panel_off 刚体平移），
     /// 文字实例收集进列表（GPU 图集管线）；None（softbuffer）：面板全
     /// CPU——稳态直画，过渡帧整页离屏渲染后按偏移压盖（BAR-062 考题区）。
-    /// 配置页（§五B）两路径同规：栈顶裁决画在 AI 面板之上或之下，
+    /// 配置页（§五B）两路径同规：z 序单源 panel_z_cfg_on_top（BAR-083
+    /// 动者在上）裁决画在 AI 面板之上或之下，
     /// X 平移直画带裁剪（无淡出——alpha 是 GLES 合成期 tint）。
     /// 返回 ai_layout（布局读数，调用方写回 scroll_sync_layout——眼手同尺）
     #[allow(clippy::too_many_arguments)]
@@ -2533,7 +2534,7 @@ impl App {
                 crate::termview::blit_panel_shifted(buf, panel_scratch, w, h, panel_off);
             }
         }
-        // 配置页在顶：压在 AI 面板与 AI 文字之上（§五B 栈顶裁决）
+        // 配置页在顶：压在 AI 面板与 AI 文字之上（BAR-083 动者在上裁决）
         if cfg_visible && cfg_on_top {
             crate::termview::paint_cfg_page_chrome(buf, w, h, bottom_inset, cfg_off);
         }
@@ -2692,7 +2693,14 @@ impl App {
         let panel_fade = 1.0_f32;
         // 配置面板 X 偏移过缝（§五B 第三道缝）：目标值 = 在栈 0 靠泊 /
         // 不在栈 +屏宽屏外右缘（左滑召唤来向）；alpha 同规恒 1.0
-        let cfg_on_top = ai_snap.is_some_and(|s| s.top == Some(crate::ai_presence::Panel::Config));
+        // z 序单源（stage::panel_z_cfg_on_top，BAR-083「动者在上」）：
+        // 撤 AI 时栈顶虽瞬翻成配置，AI 缝活跃期 AI 仍压顶滑出可见；
+        // 配置活跃 = 缝动画中或拖拽锁定中（跟手期手指压着的面板在顶）
+        let cfg_on_top = crate::ui::stage::panel_z_cfg_on_top(
+            ai_snap.is_some_and(|s| s.top == Some(crate::ai_presence::Panel::Config)),
+            crate::ui::seam::ai_panel_offset_y_active(),
+            crate::ui::seam::config_panel_offset_x_active() || cfg_drag_off.is_some(),
+        );
         let cfg_present = cfg_on_top
             || ai_snap.is_some_and(|s| s.covered == Some(crate::ai_presence::Panel::Config));
         let cfg_target = if cfg_present { 0.0 } else { w as f32 };
@@ -2966,7 +2974,7 @@ impl App {
             .fetch_add(gen_us + gen2_us, std::sync::atomic::Ordering::Relaxed);
         crate::gles_present::STAGE_RAS_US.fetch_add(ras_us, std::sync::atomic::Ordering::Relaxed);
 
-        // 5) 组合呈现（z 序见 present_frame——面板栈顶裁决两面板上下；
+        // 5) 组合呈现（z 序见 present_frame——动者在上裁决两面板上下；
         // panel_off/panel_fade/cfg_off/cfg_fade 只进合成期 placement 与
         // 显影，烘焙物不动）
         g.present_frame(
@@ -3077,9 +3085,18 @@ impl App {
             ) as i32;
             // 配置面板 X 偏移过缝（§五B 第三道缝）：目标值 = 在栈 0 靠泊 /
             // 不在栈 +屏宽屏外右缘；无 ui-fx 占槽 = 直通（硬切）
-            let cfg_on_top = self
-                .last_ai_snap
-                .is_some_and(|s| s.top == Some(crate::ai_presence::Panel::Config));
+            // z 序单源（BAR-083 动者在上，同 GLES 路径）
+            let cfg_on_top = crate::ui::stage::panel_z_cfg_on_top(
+                self.last_ai_snap
+                    .is_some_and(|s| s.top == Some(crate::ai_presence::Panel::Config)),
+                crate::ui::seam::ai_panel_offset_y_active(),
+                crate::ui::seam::config_panel_offset_x_active()
+                    || self
+                        .panel_drag
+                        .as_ref()
+                        .and_then(|d| d.current_offset())
+                        .is_some(),
+            );
             let cfg_present = cfg_on_top
                 || self
                     .last_ai_snap

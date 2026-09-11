@@ -42,8 +42,9 @@ type Layer2 = (
 /// 图层槽位（ui-base §八）：每槽 = 独立画布 + 纹理 + 可见性。动画
 /// （placement 变化）不触碰槽内容——合成期只挪矩形；内容变化由调用方
 /// 置脏重烘焙（slot_bake）。z 序由 present_frame 按面板栈动态排：
-/// 键行恒在网格之上，两面板的上下关系跟 snap.top 走（被覆盖者在下，
-/// placement 不动、遮盖撤走零动画露出），Over 恒在一切之上。
+/// 键行恒在网格之上，两面板的上下关系由 panel_z_cfg_on_top 裁决
+/// （BAR-083 动者在上：动画/拖拽中的面板压顶，双静止跟栈顶），
+/// Over 恒在一切之上。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChromeSlot {
     /// 快捷键行带（终端页）
@@ -929,8 +930,8 @@ impl GlesPresent {
     /// → 在顶面板槽（placement 跟缝采样、alpha 随落程显影——动画帧唯二
     /// 变的东西，零上传）→ AI 文字字形实例（按页，u_alpha = panel_alpha
     /// 随 AI 面板显影）→ 上层槽（输入栏/光球/放大镜）→ swap。
-    /// 两面板 z 序由 cfg_on_top 裁决（= snap.top，§五B：被覆盖者在下，
-    /// placement 不动、遮盖撤走零动画露出）；AI 文字是 AI 面板的墨，
+    /// 两面板 z 序由 cfg_on_top 裁决（stage::panel_z_cfg_on_top 单源，
+    /// BAR-083「动者在上」：动画/拖拽中的面板压顶，双静止跟栈顶）；AI 文字是 AI 面板的墨，
     /// 必须紧跟 AI 面板槽画（Config 在顶时压在 AI 文字上）。槽画布由
     /// 调用方置脏烘焙（slot_bake），未烘焙的槽不上屏（不完整纹理=黑屏案）
     #[allow(clippy::too_many_arguments)]
@@ -1024,7 +1025,8 @@ impl GlesPresent {
                 );
             }
 
-            // 两面板槽 + AI 文字：z 序跟面板栈顶走（§五B）。AI 文字是
+            // 两面板槽 + AI 文字：z 序动者在上（BAR-083，调用方算好
+            // cfg_on_top 传入）。AI 文字是
             // AI 面板的墨——必须紧跟 AI 面板槽画，Config 在顶时它被
             // 配置页连墨带底一起盖住
             let pn = &self.layers[ChromeSlot::Panel as usize];

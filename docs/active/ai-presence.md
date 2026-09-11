@@ -304,7 +304,11 @@ trait BrainEndpoint {
   1.8 方向锁，抬手判定——Started 分流优先级：球 > 选择菜单 > 输入栏
   > 面板页 > 键行 > 终端区）；配置页渲染 `paint_cfg_page_chrome`
   （青底 0x0A1A20 + 青系边框环，与 AI 紫底 0x140A24 机器判卷可区分）；
-  GLES 第四槽 ChromeSlot::Config，z 序逐帧跟 snap.top；机器轨 =
+  GLES 第四槽 ChromeSlot::Config，z 序单源 `stage::panel_z_cfg_on_top`
+  （**BAR-083 修订：动者在上**——旧规逐帧跟 snap.top，撤 AI 瞬 AI
+  出栈、不透明配置页当场压顶，AI 退出动画在它背后播完 = 瞬消；
+  新规：动画/拖拽中的面板压顶，双活跃栈顶 tie-break，双静止跟栈顶
+  露出零动画承载不变）；机器轨 =
   stats 字段 `panel_top`/`panel_cov`（none/ai/config）+ na-shot 倒帧
   装帧含配置页（gate dump_now 与前台 paint_under 同 z 序——首日实机
   自验即实踩「dump 不识配置页 = 视觉轨全瞎」，BAR-070 盲区教训同族）。

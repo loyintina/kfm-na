@@ -53,6 +53,23 @@ pub fn slot_visibility(grid_keybar: bool, panel_visible: bool, cfg_visible: bool
     [grid_keybar, panel_visible, cfg_visible, true]
 }
 
+/// 两面板 z 序裁决（BAR-083 单源，§五B 修订）：**正在动的面板在上**。
+/// 旧规「逐帧跟栈顶」的洞：撤 AI 瞬 AI 出栈 → top=配置 → 不透明配置页
+/// 当场压在 AI 面板槽之上，AI 退出动画在它背后播完 = 用户见瞬消
+/// （2026-09-11 用户实机：先配置后 AI，撤 AI 无动画）。新规：
+/// AI 缝活跃（入场/退场/replay 中）→ AI 在上；配置缝活跃或拖拽锁定中
+/// → 配置在上；双活跃拿栈顶 tie-break；都不动跟栈顶。安全论证：动画
+/// 结束时动者必在端点（靠泊=栈顶本身 / 屏外=不可见），z 序回落栈顶
+/// 那一帧被画的一方要么本来就是顶要么不可见——零像素跳变。
+/// 返回值语义：true = 配置页画在 AI 面板之上。
+pub fn panel_z_cfg_on_top(snap_top_is_cfg: bool, ai_active: bool, cfg_active: bool) -> bool {
+    match (ai_active, cfg_active) {
+        (true, false) => false, // AI 在动：AI 压顶（退场滑出全程可见）
+        (false, true) => true,  // 配置在动：配置压顶
+        _ => snap_top_is_cfg,   // 双活跃/双静止：跟栈顶
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

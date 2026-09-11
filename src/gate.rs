@@ -140,7 +140,14 @@ pub fn dump_now(dir: &str) {
         // 扩到面板栈——dump 不识配置页 = 视觉轨对配置页全瞎（09-10 实机
         // 自验实踩：stats 报 config 在顶，CPU 倒帧却只见终端）。z 序与
         // 前台 paint_under 同规：被覆盖者画在 AI 面板之下，在顶者压顶
-        let cfg_on_top = ai_snap.is_some_and(|s| s.top == Some(crate::ai_presence::Panel::Config));
+        // z 序与前台同一单源（stage::panel_z_cfg_on_top，BAR-083 动者在
+        // 上）——实拍判卷与前台同一画面。dump 线程摸不到 panel_drag
+        // 句柄，拖拽锁定期（亚秒级）z 序滞后一拍缝动画，判卷可容
+        let cfg_on_top = crate::ui::stage::panel_z_cfg_on_top(
+            ai_snap.is_some_and(|s| s.top == Some(crate::ai_presence::Panel::Config)),
+            crate::ui::seam::ai_panel_offset_y_active(),
+            crate::ui::seam::config_panel_offset_x_active(),
+        );
         let cfg_present = cfg_on_top
             || ai_snap.is_some_and(|s| s.covered == Some(crate::ai_presence::Panel::Config));
         let cfg_target = if cfg_present { 0.0 } else { w as f32 };

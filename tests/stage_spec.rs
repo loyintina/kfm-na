@@ -47,3 +47,24 @@ fn spec_置脏判定_同sig复用_变化重烘() {
     g.invalidate(); // GL 重建：烘焙物全死
     assert!(g.feed((7, true)));
 }
+
+// BAR-083：z 序「动者在上」——旧规逐帧跟栈顶，撤 AI 瞬 AI 出栈、
+// 不透明配置页当场压顶，AI 退出动画在它背后播完 = 用户见瞬消
+// （2026-09-11 用户实机：先配置后 AI，撤 AI 无动画；反向撤配置有）。
+// 变异抽检：活跃优先级改反（(true,false)=>true）本卷第一条即红；
+// 删掉活跃分支退化为恒跟栈顶，前四条全红。
+#[test]
+fn spec_bar083_z序_动者在上() {
+    use kfm_na::ui::stage::panel_z_cfg_on_top as z;
+    // 撤 AI（AI 缝活跃、配置静止）：哪怕栈顶已翻成配置，AI 仍在上
+    assert!(!z(true, true, false));
+    // 撤配置（配置缝活跃/拖拽锁定、AI 静止）：配置在上滑出可见
+    assert!(z(false, false, true));
+    // AI 入场盖配置：AI 在动压顶（与栈序同向，行为不变）
+    assert!(!z(true, true, false));
+    // 双活跃 tie-break 跟栈顶；双静止跟栈顶（露出零动画的承载）
+    assert!(z(true, true, true));
+    assert!(!z(false, true, true));
+    assert!(z(true, false, false));
+    assert!(!z(false, false, false));
+}
