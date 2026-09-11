@@ -100,7 +100,7 @@ fn spec_bar081_锁相_一跳一帧() {
     assert!(!fx_spring::fx_frame_due(2004), "预算路 4ms 不许产");
     // 武装（动画开表）→ 锁相：信任窗内预算早到点也不许产，只认 vsync 跳
     // （32ms 信任窗 = 看门狗地盘，锁相断言全部收在窗内）
-    vsync_book::reset_run();
+    vsync_book::reset_run(2020);
     vsync_book::arm();
     assert!(!fx_spring::fx_frame_due(2020), "锁相后无跳不许产帧");
     // 一跳 → 一帧；消费清零 → 同跳不再产
@@ -137,7 +137,8 @@ fn spec_bar081_锁相_看门狗防卡死() {
     seam::sample_ai_panel_offset_y(0.0, 3000);
     assert!(fx_spring::fx_frame_due(3000), "预算路首帧");
     // 死法一：武装后从未跳——信任期 32ms 内不产，超时看门狗放帧
-    vsync_book::reset_run();
+    // （基线 = 预算路首帧 3000 与武装戳 3000 的较晚者）
+    vsync_book::reset_run(3000);
     vsync_book::arm();
     assert!(!fx_spring::fx_frame_due(3032), "信任期内无跳不产");
     assert!(
@@ -154,6 +155,42 @@ fn spec_bar081_锁相_看门狗防卡死() {
     // 死法二：跳到一半链断——最后一帧 33ms 后看门狗再放行
     assert!(!fx_spring::fx_frame_due(3083), "链断信任期不产");
     assert!(fx_spring::fx_frame_due(3084), "链断 33ms 后看门狗放帧");
+    seam::release_ai_panel_offset_y();
+    vsync_book::disarm();
+    vsync_book::reset_for_test();
+}
+
+// BAR-082 钉（2026-09-11 栈叠收回「无动画直接消失」案）：产线开局 =
+// 脏帧先画（tap→poll→dirty 直画，不经 fx_frame_due）→ LAST_FRAME=0；
+// 武装后首跳丢失 → 旧版参考点 last_due×LAST_FRAME 皆 0 → ref==0 永久
+// 信任 = 动画冻结，用户读作「一松手直接消失」（panel-anim 实锤：2 帧 /
+// swap 88-175ms / vsync 样本 1）。修法：武装戳入参考点三元组——零跳
+// 零帧也以开表时刻为基线，33ms 后看门狗照样放帧。
+// 变异抽检：arm_ms 从参考点摘除（退回二元 max），5033 臂当场红。
+#[test]
+fn spec_bar082_锁相_零基线首跳丢失看门狗() {
+    let _g = VSYNC_TEST_LOCK.lock().unwrap();
+    vsync_book::reset_for_test();
+    vsync_book::disarm();
+    fx_spring::reset_frame_clock_for_test(); // LAST_FRAME=0 = 产线脏帧开局
+    seam::occupy_ai_panel_offset_y(fx_spring::spring_occupier());
+    assert_eq!(seam::sample_ai_panel_offset_y(-100.0, 5000), -100.0); // primed
+    seam::sample_ai_panel_offset_y(0.0, 5000); // 目标翻转 = 动画开始（脏帧直画）
+    // 武装开表于 5000，零跳零 fx 帧（产线病况复刻）
+    vsync_book::reset_run(5000);
+    vsync_book::arm();
+    assert!(!fx_spring::fx_frame_due(5032), "信任期内无跳不产");
+    assert!(
+        fx_spring::fx_frame_due(5033),
+        "零基线（LAST_FRAME=0+零跳）33ms 后看门狗必须照样放帧"
+    );
+    // 放帧后链死期按预算节流续走（动画不卡死不跳变）
+    assert!(!fx_spring::fx_frame_due(5040), "看门狗后仍受预算节流");
+    assert!(fx_spring::fx_frame_due(5049), "看门狗后预算到点续产");
+    // 迟到的首跳到达 → 链复活立即重锁
+    vsync_book::note_due(5060);
+    assert!(fx_spring::fx_frame_due(5061), "迟到首跳到达即重锁产帧");
+    assert!(!fx_spring::fx_frame_due(5062), "重锁后同跳不续产");
     seam::release_ai_panel_offset_y();
     vsync_book::disarm();
     vsync_book::reset_for_test();

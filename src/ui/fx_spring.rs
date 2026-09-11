@@ -160,10 +160,13 @@ pub fn fx_frame_due(now_ms: u64) -> bool {
         // 链死闩已上 = 回调链死后整体退预算节奏（落下方节流），
         // 新跳到由 note_due 解闩即重锁
         if !crate::vsync_book::chain_dead() {
-            // 看门狗：参考点 = 最近一跳 与 最近一帧 的较晚者（从未跳过 =
-            // 以上帧为基线）——超阈上闩落预算路，未超信任期等跳
-            let ref_ms =
-                crate::vsync_book::last_due_ms().max(LAST_FRAME_MS.load(Ordering::Relaxed));
+            // 看门狗：参考点 = 最近一跳 / 最近一帧 / 本轮武装戳 的较晚者
+            // （BAR-082：武装戳入列——「武装后零跳」时前两者皆 0，旧版
+            // ref==0 永久信任 = 首跳丢失即动画冻结，栈叠收回「无动画
+            // 直接消失」案真凶）；超阈上闩落预算路，未超信任期等跳
+            let ref_ms = crate::vsync_book::last_due_ms()
+                .max(LAST_FRAME_MS.load(Ordering::Relaxed))
+                .max(crate::vsync_book::arm_ms());
             if ref_ms == 0 || now_ms.saturating_sub(ref_ms) <= VSYNC_WATCHDOG_MS {
                 return false;
             }

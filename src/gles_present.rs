@@ -157,7 +157,7 @@ fn anim_run_start() {
     SWAP_GAP_MAX_US.store(0, Ordering::Relaxed);
     VSYNC_PHASE_MIN_US.store(u64::MAX, Ordering::Relaxed);
     VSYNC_PHASE_MAX_US.store(0, Ordering::Relaxed);
-    crate::vsync_book::reset_run(); // gap 账+基线归 vsync_book（BAR-072）
+    crate::vsync_book::reset_run(crate::report::boot_ms() as u64); // gap 账+基线归 vsync_book（BAR-072）；武装戳 = 看门狗零跳基线（BAR-082）
     // BAR-076：采样改点播——奇偶轮播时代每两轮动画就有一轮被 readPixels
     // 压到 16fps（61ms/帧实测），仪器噪音成了用户体验税。要采样先投
     // anim-cap-req 触发（na-anim-cap.sh），不投 = 零开销

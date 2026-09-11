@@ -43,6 +43,11 @@ static LAST_DUE_MS: AtomicU64 = AtomicU64::new(0);
 /// 整体退成预算节流节奏（不是放一帧又憋 32ms）；新跳到（note_due）
 /// 自动解闩重锁。复位归 reset_run/reset_for_test
 static CHAIN_DEAD: AtomicBool = AtomicBool::new(false);
+/// 本轮武装时刻（BAR-082 看门狗基线）：动画开表（reset_run）落戳——
+/// 「武装后零跳」时看门狗以此为参考点（旧版参考点只有 last_due×
+/// LAST_FRAME，两者皆 0 = 永久信任 = 首跳丢失即动画冻结，栈叠收回
+/// 「无动画直接消失」案的真凶）
+static ARM_MS: AtomicU64 = AtomicU64::new(0);
 
 /// vsync 一跳记账（壳 vsync_cb 专用入口）——顺带解链死闩（链复活即重锁）
 pub fn note_due(now_ms: u64) {
@@ -69,6 +74,12 @@ pub fn mark_chain_dead() {
     CHAIN_DEAD.store(true, Ordering::Relaxed);
 }
 
+/// 本轮武装时刻（BAR-082：fx_frame_due 看门狗参考点三元组之一；
+/// 0 = 本轮还没开表——老代码路径/考题零基线语义）
+pub fn arm_ms() -> u64 {
+    ARM_MS.load(Ordering::Relaxed)
+}
+
 /// 相位判卷用：最近一次回调的帧时间戳（0=还没收到过）
 pub fn last_ns() -> u64 {
     LAST_NS.load(Ordering::Relaxed)
@@ -88,8 +99,10 @@ pub fn note_tick(ns: u64) {
     }
 }
 
-/// 动画轮开表清账（壳 anim_run_start 调用）
-pub fn reset_run() {
+/// 动画轮开表清账（壳 anim_run_start 调用）。now_ms = 武装基线戳
+/// （BAR-082：看门狗「从未跳」死法的参考点，report::boot_ms 同钟）
+pub fn reset_run(now_ms: u64) {
+    ARM_MS.store(now_ms, Ordering::Relaxed);
     GAP_N.store(0, Ordering::Relaxed);
     GAP_TOTAL_US.store(0, Ordering::Relaxed);
     GAP_MIN_US.store(u64::MAX, Ordering::Relaxed);
@@ -138,4 +151,5 @@ pub fn reset_for_test() {
     DUE_N.store(0, Ordering::Relaxed);
     LAST_DUE_MS.store(0, Ordering::Relaxed);
     CHAIN_DEAD.store(false, Ordering::Relaxed);
+    ARM_MS.store(0, Ordering::Relaxed);
 }
