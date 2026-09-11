@@ -33,11 +33,13 @@ pub const VELOCITY_WINDOW_MS: u64 = 100;
 /// 半程手势走完全程）
 pub const DRAG_GAIN: f64 = 2.0;
 
-/// 拖拽角色（锁定瞬间仲裁，四象限见考题钉②；2026-09-11 文件树两格入列
-/// ——三公民手势闭环：左滑家=配置（右缘进出），右滑家=文件树（左缘进出））
+/// 拖拽角色（锁定瞬间仲裁，四象限见考题钉②；2026-09-11 文件树两格入列，
+/// 2026-09-12 左滑召唤位让位按钮入口——SummonConfig 仲裁不再产出，
+/// 保留备浏览器卡解冻复用；配置页进场动画走 summon_panel 的入场代
+/// bump → 缝 replay，不经过跟手拖拽）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DragRole {
-    /// 左滑拉配置页进场：偏移从 屏宽（屏外右）→ 0（靠泊）
+    /// 左滑拉配置页进场：偏移从 屏宽（屏外右）→ 0（靠泊）——冻结（2026-09-12）
     SummonConfig,
     /// 右滑推配置页回右缘：偏移从 0 → 屏宽
     DismissConfig,
@@ -132,12 +134,14 @@ impl PanelDrag {
             if dx.abs() < DRAG_LOCK_PX || dx.abs() <= DRAG_DIR_LOCK * dy.abs() {
                 return None; // 未过阈值或斜率不够横——让路
             }
-            // 角色仲裁（一滑一义 §五B 三公民）
+            // 角色仲裁（一滑一义 §五B；2026-09-12 用户拍板：左滑召唤位
+            // 让位按钮入口——配置页只认 ui/gear 设置钮，左滑槽冻结留给
+            // 浏览器卡 SPKE-web，冻结期 Other+左滑 = 不锁）
             let role = if dx < 0.0 {
                 match top {
                     DragTop::FileTree => DragRole::DismissFileTree,
                     DragTop::Config => return None, // 本家已在顶：左滑空操作
-                    DragTop::Other => DragRole::SummonConfig,
+                    DragTop::Other => return None,  // 左滑槽冻结（浏览器卡位）
                 }
             } else {
                 match top {

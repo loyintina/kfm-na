@@ -7,6 +7,36 @@
 
 ## 当前位置（2026-09-05)
 
+- **配置页按钮入口落地（2026-09-12 凌晨，用户拍板 + redroid 复验绿）**：
+  设置钮控件立形——`src/ui/gear.rs` 齿轮（极坐标解析掩码：环带 +
+  八齿 + 中孔全透，GEAR_INK 0x008A93A3 α0.85，命中盒同心外扩 96px），
+  画进终卡槽（paint_term_card_chrome 末尾，面板靠泊随整层隐，可见性
+  白拿 slot_visibility）。android_app 触摸分流：裸终端页 Started 命中
+  → gear_touch 记指 → Moved 超 slop 记拖过 → Ended 未拖 =
+  `summon_panel(Config)` + gest 留痕。panel_drag 仲裁 Other+左滑改
+  return None（SummonConfig 枚举保留，槽冻结留给浏览器卡 SPKE-web）。
+  swipe_left 重定：只剩顶=FileTree 推回，其余空操作。
+  考题：gear_spec 3 钉 + panel_drag_spec 全面镜像重写 6 钉 +
+  ai_presence_spec 五处改 summon_panel 路径（62/62 绿）+ host 全量绿。
+  **redroid 复验（双通道取证）**：①右滑推回配置→终端露出+齿轮渲染
+  正确（八齿环带干净，浮文字上协调）；②裸终端左滑=空操作（前后
+  截图像素级同一，148018B 逐字节等）；③点钮召配置——截图 +
+  `[gest] 设置钮点按: 栈顶 None→Some(Config)` 双通道互证；④入场
+  动画判卷 = anim-strip 采样帧（面板从右缘滑入中帧，非跳变）+
+  panel-anim 时序（5 帧连续推进）。redroid 帧率 28fps/vsync 15Hz
+  是 swiftshader 环境税（脚本头已声明不作判卷依据；真机昨日实测
+  119.6Hz/27-31 帧）——动画手感 C 档归真机。
+  **顺带：redroid 报表通道修复**——adb reverse 数据面死亡（adb
+  37.0.1 ↔ redroid12 adbd：注册成功、监听在、accept 正常、数据永不
+  转发 host；重加 reverse/kill-server/ctl.restart adbd/docker restart
+  四复位全黑孔），改 nc 接力：容器 `nc -L`（inetd 式）→ docker 网桥
+  172.18.0.1:8021（scripts/redroid-report-relay.py，只听网桥 IP）→
+  kfmv4 8021。两臂已编进 redroid-up.sh ④.5 幂等保活。排障教训：
+  跨三层 shell 的 printf 转义会吃掉 JSON 引号——e2e 探针一律文件
+  push + cat 注入（/tmp/na-req.bin 范式）。
+  判卷待：用户真机 C 档（齿轮观感/点钮入场手感/右滑收起/左滑确实
+  没反应）。
+
 - **浏览器卡尖刺 SPKE-web 双钉判卷（2026-09-12 凌晨，redroid 实拍）**：
   用户拍板方向——左滑槽给内置浏览器卡（agent 手机侧第二操作面：登录/
   签到/资料/代点页面），配置池卡挪独立按钮入口。钉一：targetSdk28 下

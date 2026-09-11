@@ -8,7 +8,9 @@
 //! 契约要点：
 //! - 方向锁：横向 ≥24px 且 |dx|>1.8|dy| 才接管（比 SWIPE_MIN_PX 90 小——
 //!   拖拽要尽早接管；纵向滚屏/AI 页滚行不冲突）
-//! - 角色：左滑+顶非配置 = 召唤拖拽；右滑+顶是配置 = 推回拖拽；其余不锁
+//! - 角色（2026-09-12 重钉：配置页让位 ui/gear 设置钮，左滑召唤槽冻结
+//!   留给浏览器卡）：右滑+顶 Other = 召唤文件树；左滑+顶文件树 = 推回；
+//!   右滑+顶配置 = 推回；左滑+顶 Other/配置 = 不锁（冻结空操作）
 //! - 跟手映射零跳变：锁定瞬间偏移 = 角色基位（锁定阈值位移被吃掉），
 //!   其后偏移 = 基位 + 手指相对锁点位移 ×DRAG_GAIN(2.0，手指不从屏缘
 //!   起手的补偿，2026-09-11 拍板)，钳 [0, 屏宽]
@@ -20,9 +22,10 @@ use kfm_na::ui::panel_drag::{
     DRAG_GAIN, DRAG_LOCK_PX, DragRole, DragTop, FLING_PX_PER_MS, PanelDrag, ReleaseDecision,
 };
 
-/// 起手式：顶非抽屉面板（Other = 终端裸奔或 AI 在顶）的拖拽会话（召唤候选）
+/// 起手式：顶非抽屉面板（Other = 终端裸奔或 AI 在顶）的右滑拖拽会话
+/// （召唤文件树候选——2026-09-12 左滑槽冻结后，Other 顶的唯一召唤向=右滑）
 fn summon_session() -> PanelDrag {
-    PanelDrag::new(1000.0, 900.0, 10_000)
+    PanelDrag::new(300.0, 900.0, 10_000)
 }
 
 // 钉①：方向锁——横向 24px 起锁；斜率不过 1.8 不锁（纵向滚屏让路）；
@@ -33,35 +36,37 @@ fn spec_拖拽_方向锁() {
     let mut d = summon_session();
     // 未过阈值：23px 纯横移不锁
     assert!(
-        d.on_move(977.0, 900.0, 10_010, 1200.0, DragTop::Other)
+        d.on_move(323.0, 900.0, 10_010, 1200.0, DragTop::Other)
             .is_none()
     );
     // 斜滑（斜率 1.0 < 1.8）：位移再大也不锁——纵向手势让路
     assert!(
-        d.on_move(900.0, 800.0, 10_020, 1200.0, DragTop::Other)
+        d.on_move(400.0, 800.0, 10_020, 1200.0, DragTop::Other)
             .is_none()
     );
     // 过阈值且方向锁：24px 纯横移锁定位移
     assert!(
-        d.on_move(976.0, 900.0, 10_030, 1200.0, DragTop::Other)
+        d.on_move(324.0, 900.0, 10_030, 1200.0, DragTop::Other)
             .is_some()
     );
 }
 
-// 钉②：角色仲裁六象限（2026-09-11 三公民化重钉）——左滑+顶 Other =
-// SummonConfig；右滑+顶 Config = DismissConfig；左滑+顶 Config = 不锁
-// （本家已在顶，一滑一义）；右滑+顶 Other = SummonFileTree（右滑家落地，
-// 不再有「留给未来」的空操作）；左滑+顶 FileTree = DismissFileTree；
-// 右滑+顶 FileTree = 不锁。
-// 变异抽检：角色判反（左滑给 Dismiss）/DragTop 映射错一家，六象限必红。
+// 钉②：角色仲裁六象限（2026-09-12 重钉：左滑召唤位让位 ui/gear 设置钮，
+// 左滑槽冻结留给浏览器卡 SPKE-web）——右滑+顶 Other = SummonFileTree；
+// 右滑+顶 Config = DismissConfig；左滑+顶 Config = 不锁（本家已在顶）；
+// 左滑+顶 Other = 不锁（冻结：浏览器卡解冻前左滑无召唤目标）；
+// 左滑+顶 FileTree = DismissFileTree；右滑+顶 FileTree = 不锁。
+// 变异抽检：角色判反（右滑给 Dismiss）/DragTop 映射错一家，六象限必红；
+// 左滑+Other 复活召唤 → 第四臂必红。
 #[test]
 fn spec_拖拽_角色仲裁六象限() {
-    // 左滑，顶非抽屉面板（终端裸奔或 AI 在顶）→ 召唤配置
+    // 左滑，顶非抽屉面板 → 不锁（2026-09-12 冻结：配置召唤归设置钮）
     let mut d = PanelDrag::new(1000.0, 900.0, 0);
-    match d.on_move(960.0, 900.0, 10, 1200.0, DragTop::Other) {
-        Some((DragRole::SummonConfig, _)) => {}
-        other => panic!("左滑+顶Other应为召唤配置锁定，得 {other:?}"),
-    }
+    assert!(
+        d.on_move(960.0, 900.0, 10, 1200.0, DragTop::Other)
+            .is_none(),
+        "左滑+顶Other 必须不锁（左滑槽冻结留给浏览器卡）"
+    );
     // 右滑，顶是配置 → 推回配置
     let mut d = PanelDrag::new(300.0, 900.0, 0);
     match d.on_move(340.0, 900.0, 10, 1200.0, DragTop::Config) {
@@ -94,32 +99,34 @@ fn spec_拖拽_角色仲裁六象限() {
     );
 }
 
-// 钉③：跟手映射零跳变 + 钳制。召唤：锁定瞬偏移≈屏宽（屏外右），手指
-// 继续左移偏移等幅减小（面板跟进），到 0 钳死不许负（面板不许越过
-// 靠泊位左缘飞出）；推回：0 起右移等幅增大，到屏宽钳死。
+// 钉③：跟手映射零跳变 + 钳制。召唤：锁定瞬偏移≈屏宽（屏外位），手指
+// 继续朝完成向移动偏移等幅减小（面板跟进），到 0 钳死不许负（面板不许
+// 越过靠泊位飞出）；推回：0 起等幅增大，到屏宽钳死。
+// （2026-09-12：召唤象限从左滑配置家换成右滑文件树家——左滑槽冻结）
 // 变异抽检：clamp 摘掉，越界臂必红；映射符号反，跟进方向臂必红。
 #[test]
 fn spec_拖拽_跟手映射与钳制() {
     let w = 1200.0;
-    // 召唤：down@1000，锁点应在 1000-24=976，锁定瞬偏移=屏宽（还没跟手位移）
+    // 召唤（2026-09-12 起用右滑文件树家充当召唤象限——左滑家冻结）：
+    // down@300，锁点应在 300+24=324，锁定瞬偏移≈屏宽（还没跟手位移）
     let mut d = summon_session();
-    let (_, off0) = d.on_move(970.0, 900.0, 10_030, w, DragTop::Other).unwrap();
+    let (_, off0) = d.on_move(330.0, 900.0, 10_030, w, DragTop::Other).unwrap();
     assert!(
         (off0 - (w - DRAG_LOCK_PX as f32)).abs() < 40.0,
         "锁定瞬偏移应≈屏外位（阈值位移被吃掉防跳变），得 {off0}"
     );
-    // 继续左移 200px → 偏移减 400（×2 增益）
+    // 继续右移 200px → 偏移减 400（×2 增益）
     let off1 = d
-        .on_move(770.0, 900.0, 10_060, w, DragTop::Other)
+        .on_move(530.0, 900.0, 10_060, w, DragTop::Other)
         .map(|(_, o)| o)
         .unwrap_or(off0);
     assert!(
         (off0 - off1 - 200.0 * DRAG_GAIN as f32).abs() < 1.0,
-        "手指左移 200 偏移应减 400（增益×2）：{off0}→{off1}"
+        "手指右移 200 偏移应减 400（增益×2）：{off0}→{off1}"
     );
-    // 左移过界（锁点 - 屏宽之外，越过靠泊位）→ 钳 0
+    // 右移过界（锁点 + 屏宽之外，越过靠泊位）→ 钳 0
     let off2 = d
-        .on_move(-300.0, 900.0, 10_090, w, DragTop::Other)
+        .on_move(300.0 + 24.0 + 5000.0, 900.0, 10_090, w, DragTop::Other)
         .map(|(_, o)| o)
         .unwrap_or(off1);
     assert_eq!(off2, 0.0, "越过靠泊位必须钳 0，得 {off2}");
@@ -150,10 +157,11 @@ fn spec_拖拽_跟手映射与钳制() {
 fn spec_拖拽_松手裁决表() {
     let w = 1200.0;
     // 进度 60% 静止松手 → 完成（×2 增益下手指只需拖 0.3w）
+    // （2026-09-12 起召唤象限用右滑文件树家：坐标全部镜像到 down@300 右移）
     let mut d = summon_session();
-    d.on_move(970.0, 900.0, 10_030, w, DragTop::Other);
+    d.on_move(330.0, 900.0, 10_030, w, DragTop::Other);
     d.on_move(
-        1000.0 - DRAG_LOCK_PX - 0.6 * 1200.0 / DRAG_GAIN,
+        300.0 + DRAG_LOCK_PX + 0.6 * 1200.0 / DRAG_GAIN,
         900.0,
         10_200,
         w,
@@ -167,9 +175,9 @@ fn spec_拖拽_松手裁决表() {
     );
     // 进度 30% 静止松手 → 取消
     let mut d = summon_session();
-    d.on_move(970.0, 900.0, 20_030, w, DragTop::Other);
+    d.on_move(330.0, 900.0, 20_030, w, DragTop::Other);
     d.on_move(
-        1000.0 - DRAG_LOCK_PX - 0.3 * 1200.0 / DRAG_GAIN,
+        300.0 + DRAG_LOCK_PX + 0.3 * 1200.0 / DRAG_GAIN,
         900.0,
         20_200,
         w,
@@ -180,18 +188,18 @@ fn spec_拖拽_松手裁决表() {
         ReleaseDecision::Cancel,
         "进度 30% 静止松手应取消"
     );
-    // 进度 30% 但末段猛甩（100ms 内左移 200px = 2px/ms ≥ 0.8）→ 完成
+    // 进度 30% 但末段猛甩（100ms 内右移 200px = 2px/ms ≥ 0.8）→ 完成
     let mut d = summon_session();
-    d.on_move(970.0, 900.0, 30_030, w, DragTop::Other);
+    d.on_move(330.0, 900.0, 30_030, w, DragTop::Other);
     d.on_move(
-        1000.0 - DRAG_LOCK_PX - 0.3 * 1200.0 / DRAG_GAIN + 200.0,
+        300.0 + DRAG_LOCK_PX + 0.3 * 1200.0 / DRAG_GAIN - 200.0,
         900.0,
         30_100,
         w,
         DragTop::Other,
     );
     d.on_move(
-        1000.0 - DRAG_LOCK_PX - 0.3 * 1200.0 / DRAG_GAIN,
+        300.0 + DRAG_LOCK_PX + 0.3 * 1200.0 / DRAG_GAIN,
         900.0,
         30_180,
         w,
@@ -203,18 +211,18 @@ fn spec_拖拽_松手裁决表() {
         "进度 30% 猛甩（{}px/ms 窗内实测超阈）应完成",
         FLING_PX_PER_MS
     );
-    // 进度 70% 但反甩（100ms 内右移 200px）→ 取消
+    // 进度 70% 但反甩（100ms 内左移 200px）→ 取消
     let mut d = summon_session();
-    d.on_move(970.0, 900.0, 40_030, w, DragTop::Other);
+    d.on_move(330.0, 900.0, 40_030, w, DragTop::Other);
     d.on_move(
-        1000.0 - DRAG_LOCK_PX - 0.7 * 1200.0 / DRAG_GAIN - 200.0,
+        300.0 + DRAG_LOCK_PX + 0.7 * 1200.0 / DRAG_GAIN + 200.0,
         900.0,
         40_100,
         w,
         DragTop::Other,
     );
     d.on_move(
-        1000.0 - DRAG_LOCK_PX - 0.7 * 1200.0 / DRAG_GAIN,
+        300.0 + DRAG_LOCK_PX + 0.7 * 1200.0 / DRAG_GAIN,
         900.0,
         40_180,
         w,
@@ -229,9 +237,9 @@ fn spec_拖拽_松手裁决表() {
     // 进度 30% 取消（旧实现按推送时刻剪窗，松手时仍读旧甩速误判完成
     // ——clippy unused 参数顺手钓出的陈样本 bug，此题钉住新语义）
     let mut d = summon_session();
-    d.on_move(970.0, 900.0, 60_030, w, DragTop::Other);
+    d.on_move(330.0, 900.0, 60_030, w, DragTop::Other);
     d.on_move(
-        1000.0 - DRAG_LOCK_PX - 0.3 * 1200.0 / DRAG_GAIN,
+        300.0 + DRAG_LOCK_PX + 0.3 * 1200.0 / DRAG_GAIN,
         900.0,
         60_100,
         w,
@@ -260,15 +268,16 @@ fn spec_拖拽_松手裁决表() {
 }
 
 // 钉⑤：反悔回拉——拖拽中反向滑回起点，进度归零，静止松手必取消
-// （用户点名场景：「左滑没离开屏幕又右滑，页面不会出场而是回去」）。
+// （用户点名场景：「左滑没离开屏幕又右滑，页面不会出场而是回去」；
+// 2026-09-12 起用右滑文件树家镜像坐标复刻同一场景）。
 #[test]
 fn spec_拖拽_反悔回拉必取消() {
     let w = 1200.0;
     let mut d = summon_session();
-    d.on_move(970.0, 900.0, 10_030, w, DragTop::Other);
+    d.on_move(330.0, 900.0, 10_030, w, DragTop::Other);
     // 拉到 50% 开
     d.on_move(
-        1000.0 - DRAG_LOCK_PX - 0.5 * 1200.0 / DRAG_GAIN,
+        300.0 + DRAG_LOCK_PX + 0.5 * 1200.0 / DRAG_GAIN,
         900.0,
         10_100,
         w,
@@ -276,15 +285,14 @@ fn spec_拖拽_反悔回拉必取消() {
     );
     // 反悔：原路滑回起点
     d.on_move(
-        1000.0 - DRAG_LOCK_PX - 0.2 * 1200.0 / DRAG_GAIN,
+        300.0 + DRAG_LOCK_PX + 0.2 * 1200.0 / DRAG_GAIN,
         900.0,
         10_200,
         w,
         DragTop::Other,
     );
-    d.on_move(1000.0 - DRAG_LOCK_PX, 900.0, 10_300, w, DragTop::Other);
-    // 回拉速度 0.2w/100ms 在反向上……但末 100ms 窗内位移 =
-    // (锁点→锁点) ≈ 0，静止；进度≈0 → 必取消
+    d.on_move(300.0 + DRAG_LOCK_PX, 900.0, 10_300, w, DragTop::Other);
+    // 末 100ms 窗内位移 = (锁点→锁点) ≈ 0，静止；进度≈0 → 必取消
     assert_eq!(
         d.on_release(10_460, w),
         ReleaseDecision::Cancel,

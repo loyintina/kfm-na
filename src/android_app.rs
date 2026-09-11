@@ -263,6 +263,11 @@ struct App {
     /// 方向锁一锁即接管（召唤锁=立即入栈，渲染偏移旁路缝采样直读）；
     /// Ended 裁决完成/取消 + replay 踢收尾续播；Cancelled 强制取消
     panel_drag: Option<crate::ui::panel_drag::PanelDrag>,
+    /// 按在设置钮上的手势（2026-09-12 配置池卡按钮入口，ui/gear.rs）：
+    /// (指 id, 起点 x, 起点 y, 拖过 slop)。只在裸终端页可达——Started
+    /// 分流里面板在顶先于它 return，互斥从路由自然推出（栈零新规则）。
+    /// 点按抬手 = summon_panel(Config)；拖过 slop = 不触发
+    gear_touch: Option<(u64, f64, f64, bool)>,
     /// 本地脑（期 0②：echo-brain 夹具先行，direct-api 随 key 配置落地换插）：
     /// 输入栏发送的真 run 来源——run_start/run_end 驱动光球（期 0②收尾）
     brain: Option<Arc<dyn crate::brain_ep::BrainEndpoint>>,
@@ -693,6 +698,16 @@ impl App {
                     ));
                     return;
                 }
+                // 设置钮命中（2026-09-12 配置池卡按钮入口，ui/gear.rs）：
+                // 只在裸终端页走到这（面板在顶上面已 return）——「文件树/
+                // 浏览器在顶时设置不出现」从路由自然推出，栈零新规则。
+                // 登记即归钮，点按抬手才召唤（拖过 slop 不触发）
+                if let Some(w) = &self.window
+                    && crate::ui::gear::hit(x, y, w.inner_size().width)
+                {
+                    self.gear_touch = Some((id, x, y, false));
+                    return;
+                }
                 // 起点在快捷键行带上 → 这手势归行（不滚屏不唤键盘）
                 // BAR-018：判定尺与渲染/hit 一致——减去键盘 inset，
                 // 否则键盘弹起时行带浮在 inset 上方，这里却认屏底。
@@ -771,6 +786,18 @@ impl App {
                 }
             }
             TouchPhase::Moved => {
+                // 设置钮手势（2026-09-12）：只认本指——超 slop 记拖过
+                // （抬手不触发召唤），它指事件放行走原分路
+                if let Some(gt) = &mut self.gear_touch {
+                    if gt.0 == id {
+                        if (x - gt.1).abs() > f64::from(crate::scroll::TAP_SLOP_PX)
+                            || (y - gt.2).abs() > f64::from(crate::scroll::TAP_SLOP_PX)
+                        {
+                            gt.3 = true;
+                        }
+                        return;
+                    }
+                }
                 // 面板跟手拖拽优先（§五B 升级）：已锁定/本事件锁定的
                 // 手势归拖拽——面板偏移直跟手指，原分路（滚屏/滚行/
                 // 点按候选）全部让路。未锁定 = 旁观者，零影响
@@ -1009,6 +1036,25 @@ impl App {
                 // 残余指头不接管滚动/点按（touch_scroll/press 进捏合时已清）
                 if self.pinch.take().is_some() {
                     self.persist_zoom();
+                    return;
+                }
+                // 设置钮手势收尾（2026-09-12 配置池卡按钮入口）：本指
+                // 抬起且未拖过 slop = 点按 → 召唤配置页（栈操作留痕，
+                // 「配置卡无法收回」案教训：栈动作必须日志可见）
+                if self.gear_touch.as_ref().is_some_and(|g| g.0 == id) {
+                    let gt = self.gear_touch.take().unwrap();
+                    if phase == TouchPhase::Ended && !gt.3 {
+                        if let Some(ai) = &self.ai_presence {
+                            let before = self.last_ai_snap.and_then(|s| s.top);
+                            ai.summon_panel(crate::ai_presence::Panel::Config);
+                            let after = ai.snap(crate::report::boot_ms() as u64).top;
+                            crate::report::report(
+                                "gest",
+                                &format!("设置钮点按: 栈顶 {before:?}→{after:?}"),
+                            );
+                        }
+                    }
+                    self.dirty = true;
                     return;
                 }
                 // 光球手势收尾：pressed 复位；无位移短按抬起 → tap 切页

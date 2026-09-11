@@ -268,16 +268,13 @@ impl AiPresenceState {
         }
     }
 
-    /// 左滑（三公民 §五B，2026-09-11）：顶是文件树 = 推回它的来向（左缘）；
-    /// 顶是配置 = 空操作（本家已在顶，一滑一义）；其余 = 召唤配置页
+    /// 左滑（2026-09-12 重定，用户拍板）：配置页退出手势槽改按钮入口
+    /// （ui/gear.rs 设置钮），左滑槽冻结预留给浏览器卡（SPKE-web 解冻
+    /// 前无召唤目标 = 空操作）；顶是文件树 = 推回它的来向（左缘）
     pub fn swipe_left(&self) {
         let mut g = self.inner.lock().unwrap();
-        match g.stack.last() {
-            Some(&Panel::FileTree) => {
-                g.stack.pop();
-            }
-            Some(&Panel::Config) => {}
-            _ => summon_locked(&mut g, Panel::Config),
+        if g.stack.last() == Some(&Panel::FileTree) {
+            g.stack.pop();
         }
     }
 

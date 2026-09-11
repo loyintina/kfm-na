@@ -332,6 +332,9 @@ pub fn paint_term_card_chrome(buf: &mut [u32], buf_w: u32, buf_h: u32, bottom_in
         TERM_FRAME_C1,
         TERM_FRAME_C2,
     );
+    // 设置钮（2026-09-12 配置池卡按钮入口）：画进终卡槽——面板靠泊时
+    // 本槽整层隐（slot_visibility），「只在裸终端页出现」白拿零新逻辑
+    crate::ui::gear::paint(frame.buf, buf_w, buf_h);
 }
 
 /// 页面边框环（2026-09-04 装修配方的唯一实体，09-05 平移参数化，

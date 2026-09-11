@@ -11,3 +11,4 @@
 | keybar 快捷键行 | 无状态核（直绘+keymap 服务） | `ui/keybar.rs`（impl TermView） | keys-in | keybar_spec 6 + theme_spec keybar | `theme.keybar.*` | docs/ledger/bugs.md BAR-017/018 |
 | ai_page 全屏占位 | `ai_presence::Page` | `termview::render_ai_page`（期0 组件④将替换） | — | ai_presence_spec 冒烟 | AI_PAGE_*（待 token 化） | docs/active/ai-presence.md |
 | selection 选择/放大镜 | `termview.selection` | `termview`（与终端网格耦合，随选择系统重构入册） | touch-in | select_spec 28 | SELECT_BG | docs/ledger/bugs.md BAR-025 |
+| gear 设置钮 | 无（栈归 ai_presence） | `ui/gear.rs`（termview 终卡槽内 paint） | touch-in（android_app Started 命中分流） | gear_spec 3 | GEAR_INK（随终卡族待 token 化） | docs/active/ai-presence.md §五B |

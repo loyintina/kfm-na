@@ -14,6 +14,7 @@
 pub mod ai_page;
 pub mod fx_ease;
 pub mod fx_spring;
+pub mod gear;
 pub mod keybar;
 pub mod orb;
 pub mod panel_drag;

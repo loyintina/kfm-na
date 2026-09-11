@@ -28,8 +28,13 @@
   `WITH_X86=1` 出 arm64+x86_64 胖包(redroid 云安卓用;不带开关=日常
   手机包,体积不变)。
 - `redroid-up.sh` — 云安卓(redroid)一键起场(幂等:binder 内核件 →
-  容器 → adb connect → 等 boot → adbd root)。起完后闸门走 adb 直读
-  沙箱(无 sshd/无隧道,协议不变);判卷平台差异见 state.md redroid 条。
+  容器 → adb connect → 等 boot → adbd root → ④.5 报表接力保活)。
+  起完后闸门走 adb 直读沙箱(无 sshd/无隧道,协议不变);判卷平台差异
+  见 state.md redroid 条。
+- `redroid-report-relay.py` + `redroid-loop-relay.sh` — redroid 报表
+  通道接力(2026-09-12:adb reverse 数据面死亡的兜底,容器 8021 →
+  网桥 172.18.0.1:8021 → kfmv4 8021;由 redroid-up.sh ④.5 自动保活,
+  一般不用手跑;病灶与拓扑见两脚本头注释)。
 - `build-on-phone.sh` — 手机编译回路:服务器推 master,手机本地编
   APK + 调安装器。
 - `deploy-phone.sh` — 送包到手机并调起安装器(`--build` 先打包再送)。
