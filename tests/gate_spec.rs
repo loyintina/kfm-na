@@ -594,6 +594,61 @@ fn spec_软件内录_rec钩子消费链() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+// 浏览器卡尖刺触发通道（SPKE-web，B 档冒烟钉）：web-req 读取/摘除/空内容容忍。
+#[test]
+fn spec_浏览器尖刺_web触发读取() {
+    let dir = std::env::temp_dir().join(format!("webreq-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let d = dir.to_str().unwrap();
+    // ① 无文件 = None
+    assert_eq!(kfm_na::gate::take_web_req(d), None);
+    // ② 正常 URL = Some + 摘除（单次触发单次消费）
+    std::fs::write(dir.join("web-req"), "https://example.com\n").unwrap();
+    assert_eq!(
+        kfm_na::gate::take_web_req(d),
+        Some("https://example.com".into())
+    );
+    assert!(!dir.join("web-req").exists(), "消费后必须摘除");
+    // ③ close 指令原样透传（Java 侧语义：收起）
+    std::fs::write(dir.join("web-req"), "close").unwrap();
+    assert_eq!(kfm_na::gate::take_web_req(d), Some("close".into()));
+    // ④ 空内容 = None 且摘除（不让值守线程反复吃垃圾）
+    std::fs::write(dir.join("web-req"), "  \n").unwrap();
+    assert_eq!(kfm_na::gate::take_web_req(d), None);
+    assert!(!dir.join("web-req").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// 浏览器卡尖刺钩子消费链（SPKE-web）：web_req_check 吃 web-req → 甩钩子 →
+// 摘文件。register/消费/一次性三件事一条链钉住。
+#[test]
+fn spec_浏览器尖刺_web钩子消费链() {
+    use std::sync::{Arc, Mutex};
+    let dir = std::env::temp_dir().join(format!("webhook-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let d = dir.to_str().unwrap();
+    let got = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&got);
+    kfm_na::gate::register_web_hook(Box::new(move |u: String| {
+        sink.lock().unwrap().push(u);
+    }));
+    // 无请求 = 钩子不响
+    kfm_na::gate::web_req_check(d);
+    assert!(got.lock().unwrap().is_empty());
+    // 有请求 = 钩子拿到 URL + 文件摘除
+    std::fs::write(dir.join("web-req"), "https://example.com").unwrap();
+    kfm_na::gate::web_req_check(d);
+    assert_eq!(
+        *got.lock().unwrap(),
+        vec!["https://example.com".to_string()]
+    );
+    assert!(!dir.join("web-req").exists());
+    // 再跑一圈 = 不重复消费
+    kfm_na::gate::web_req_check(d);
+    assert_eq!(got.lock().unwrap().len(), 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 // BAR-076 钉：动画采样点播触发两态——无触发=false 不摘空气；
 // 有触发=true 且即摘（单次点播单次采样，下一轮动画不再带采样）。
 // 变异抽检：take 改只读不摘 → 第二次取仍 true 必红。

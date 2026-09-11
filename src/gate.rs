@@ -361,6 +361,7 @@ pub fn spawn_gate_watcher() {
             orb_check(DUMP_DIR); // 通道十:AI 外显事件注入(直调状态核,落回执)
             bar_check(DUMP_DIR); // 通道十一:输入栏事件注入(直调状态核,落回执)
             rec_req_check(DUMP_DIR); // 通道十二:软件内实录(P2,2026-09-08)
+            web_req_check(DUMP_DIR); // 通道十三:浏览器卡尖刺(SPKE-web,2026-09-12)
             alert_tick(tick);
             history_tick(DUMP_DIR, tick);
             thread_census(DUMP_DIR, tick);
@@ -665,6 +666,38 @@ pub fn rec_req_check(dir: &str) {
         match REC_HOOK.lock().unwrap().as_ref() {
             Some(f) => f(ms),
             None => crate::report::report("rec", "rec-req 无钩子（host 或未注册），丢弃"),
+        }
+    }
+}
+
+// ---- 通道十三:web-req → 浏览器卡尖刺（SPKE-web，2026-09-12，用户拍板立项）----
+// 文件内容=URL（"close"=收起）。钩子由 android_app 注册（JNI 甩 MainActivity，
+// WebView 只能 UI 线程建）。判卷双轨：web-status 状态文件（Java 侧落地结果/
+// 异常栈——targetSdk28 兼容性在此定罪）+ 真屏截图（合成可见性在此定罪）。
+
+/// 读 web-req：有则摘除并返回 Some(URL)；无 = None
+pub fn take_web_req(dir: &str) -> Option<String> {
+    let p = Path::new(dir).join("web-req");
+    let s = std::fs::read_to_string(&p).ok()?;
+    let _ = std::fs::remove_file(&p);
+    let u = s.trim().to_string();
+    if u.is_empty() { None } else { Some(u) }
+}
+
+type WebHook = Box<dyn Fn(String) + Send>;
+static WEB_HOOK: std::sync::Mutex<Option<WebHook>> = std::sync::Mutex::new(None);
+
+/// 注册浏览器钩子（android_app 启动时注册一次；host 不注册=空转合法）
+pub fn register_web_hook(f: WebHook) {
+    *WEB_HOOK.lock().unwrap() = Some(f);
+}
+
+/// 值守循环消费：有请求就甩钩子
+pub fn web_req_check(dir: &str) {
+    if let Some(url) = take_web_req(dir) {
+        match WEB_HOOK.lock().unwrap().as_ref() {
+            Some(f) => f(url),
+            None => crate::report::report("web", "web-req 无钩子（host 或未注册），丢弃"),
         }
     }
 }

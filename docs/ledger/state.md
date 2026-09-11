@@ -7,6 +7,21 @@
 
 ## 当前位置（2026-09-05)
 
+- **浏览器卡尖刺 SPKE-web 双钉判卷（2026-09-12 凌晨，redroid 实拍）**：
+  用户拍板方向——左滑槽给内置浏览器卡（agent 手机侧第二操作面：登录/
+  签到/资料/代点页面），配置池卡挪独立按钮入口。钉一：targetSdk28 下
+  WebView 建成加载全程无异常（✓ 兼容性，本地 exec 生态不用让位），但
+  塞进 content FrameLayout 不可见——BAR-017 同死法（原生 busy-loop 每帧
+  盖掉同窗 View 层）第二次实锤。钉二绿：**WindowManager.addView +
+  TYPE_APPLICATION_PANEL 独立窗口**（自带 surface 合成于主窗之上，原生
+  重绘够不着；挂 activity token 免悬浮窗权限）——整宽×屏高 3/5 顶部
+  靠泊，上方网页完整渲染、下方终端/键行/输入栏照常活；close 收起还原
+  干净。触发通道 = gate 十三 web-req（内容=URL/close）→ JNI 甩
+  MainActivity.startWebViewFromGate（UI 线程建撤）；判卷双轨
+  web-status 状态文件 + 真屏截图。考题 gate_spec 双钉（读取/摘除/
+  消费链）。下一步：立项设计（面板栈接入 + agent 观测/操作通道——
+  DOM 读取/JS 注入/截图）。
+
 - **快捷键行药丸隐形（2026-09-11 深夜，用户拍板「按钮颜色跟背景一样，
   点击高亮保持圆角」）**：theme.keybar.key_bg 0x0023272E → 0x00101216
   （= 行带底 bg，药丸融入底带）；修饰键粘滞高亮 mod_on 圆角药丸不动。

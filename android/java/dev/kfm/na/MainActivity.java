@@ -126,4 +126,76 @@ public class MainActivity extends NativeActivity {
         } catch (Exception ignored) {
         }
     }
+
+    // ---- 浏览器卡尖刺（SPKE-web，2026-09-12，用户拍板立项）：gate hook 的
+    // Java 着陆点。判卷双轨：web-status 状态文件（建成/异常栈）+ 真屏截图。
+    // 第一钉已定罪（2026-09-12 实拍）：WebView 建成不崩（targetSdk28 兼容✓）
+    // 但塞进 content FrameLayout 不可见——与 BAR-017 键行同死法：原生
+    // busy-loop 每帧盖掉同窗 View。第二钉走独立窗口：WindowManager.addView
+    // + TYPE_APPLICATION_PANEL（自带 surface 合成于主窗之上，原生重绘够不
+    // 着；挂 activity token 免 SYSTEM_ALERT_WINDOW 权限）。
+    // url="close" 收起（removeView + destroy）。----
+    private android.webkit.WebView mWeb;
+
+    /** 原生 gate 线程经 JNI 调（与 startRecordingFromGate 同槽注册） */
+    public void startWebViewFromGate(final String url) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    android.view.WindowManager wm = getWindowManager();
+                    if ("close".equals(url)) {
+                        if (mWeb != null) {
+                            wm.removeView(mWeb);
+                            mWeb.destroy();
+                            mWeb = null;
+                        }
+                        webStatus("closed");
+                        return;
+                    }
+                    if (mWeb == null) {
+                        android.webkit.WebView wv = new android.webkit.WebView(MainActivity.this);
+                        android.webkit.WebSettings s = wv.getSettings();
+                        s.setJavaScriptEnabled(true);
+                        s.setDomStorageEnabled(true);
+                        wv.setWebViewClient(new android.webkit.WebViewClient());
+                        // 尖刺定版几何：整宽 × 屏高 3/5，顶部靠泊——刻意不全屏，
+                        // 好让截图一次判两事（上方 WebView 活没活 + 下方原生
+                        // 终端画面是否还在正常重绘）
+                        int h = getResources().getDisplayMetrics().heightPixels * 3 / 5;
+                        android.view.WindowManager.LayoutParams lp =
+                                new android.view.WindowManager.LayoutParams(
+                                        android.view.WindowManager.LayoutParams.MATCH_PARENT,
+                                        h,
+                                        android.view.WindowManager.LayoutParams.TYPE_APPLICATION_PANEL,
+                                        0,
+                                        android.graphics.PixelFormat.TRANSLUCENT);
+                        lp.token = getWindow().getDecorView().getWindowToken();
+                        lp.gravity = android.view.Gravity.TOP;
+                        wm.addView(wv, lp);
+                        mWeb = wv;
+                        webStatus("added-panel h=" + h + " token=" + (lp.token != null));
+                    }
+                    mWeb.loadUrl(url);
+                    webStatus("loading " + url);
+                } catch (Throwable t) {
+                    // targetSdk28 兼容性/缺 WebView 提供者/token 空等死法都在此落证
+                    java.io.StringWriter sw = new java.io.StringWriter();
+                    t.printStackTrace(new java.io.PrintWriter(sw));
+                    webStatus("CRASH " + sw.toString());
+                }
+            }
+        });
+    }
+
+    private void webStatus(String s) {
+        try {
+            java.io.File f = new java.io.File(getFilesDir(), "usr/tmp/web-status");
+            f.getParentFile().mkdirs();
+            java.io.FileWriter w = new java.io.FileWriter(f, false);
+            w.write(s);
+            w.close();
+        } catch (Exception ignored) {
+        }
+    }
 }

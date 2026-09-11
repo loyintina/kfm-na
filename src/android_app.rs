@@ -3777,6 +3777,33 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
                 crate::report::report_sync("rec", &format!("JNI startRecordingFromGate 失败: {e}"));
             }
         }));
+        // SPKE-web（2026-09-12）：gate web-req → JNI 甩 MainActivity
+        // .startWebViewFromGate(URL)。vm/gref 已被 rec 闭包 move 走，
+        // 另建一对（from_raw 不持所有权，GlobalRef 再 new 一枚）
+        let vm2 = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr() as *mut _) };
+        let gref2 = vm2
+            .attach_current_thread(|env| {
+                let act = unsafe {
+                    jni::objects::JObject::from_raw(env, app.activity_as_ptr() as *mut _)
+                };
+                env.new_global_ref(&act)
+            })
+            .expect("MainActivity GlobalRef#2 建立失败");
+        crate::gate::register_web_hook(Box::new(move |url: String| {
+            let r = vm2.attach_current_thread(|env| {
+                let ju = env.new_string(&url)?;
+                env.call_method(
+                    &gref2,
+                    jni::jni_str!("startWebViewFromGate"),
+                    jni::jni_sig!((java.lang.String) -> void),
+                    &[jni::objects::JValue::Object(&ju)],
+                )
+                .map(|_| ())
+            });
+            if let Err(e) = r {
+                crate::report::report_sync("web", &format!("JNI startWebViewFromGate 失败: {e}"));
+            }
+        }));
     }
     let mut app_handler = App {
         android_app: Some(app.clone()),
