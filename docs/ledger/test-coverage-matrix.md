@@ -38,7 +38,7 @@
 | `src/providers.rs` | 5 | 5 | 0 | — |
 | `src/report.rs` | 8 | 1 | 7 | set_boot_t0 start_flusher report report_sync report_sync_once http_status_is_200 escape_json |
 | `src/scroll.rs` | 5 | 5 | 0 | — |
-| `src/session.rs` | 8 | 8 | 0 | — |
+| `src/session.rs` | 10 | 10 | 0 | — |
 | `src/session_router.rs` | 10 | 10 | 0 | — |
 | `src/termview.rs` | 106 | 99 | 7 | AI_THINK_COLLAPSED FONT_CANDIDATES CJK_FONT_CANDIDATES load_cjk_font font_probe MAG_HALF_COLS MAG_HALF_ROWS |
 | `src/theme.rs` | 1 | 1 | 0 | — |

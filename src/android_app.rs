@@ -128,13 +128,14 @@ enum BarMenuAction {
 
 /// 会话健康牌（断线重连 2026-08-21，按名字记账——槽位随切换翻面,
 /// 死活跟名字走）：dead = Failed/Exited 钉死、Opened 复活;
-/// retried = 本次死亡剧集已自动重连过一次（防断网期重连风暴烧钱:
-/// 第一次自动,再死就得用户敲键/切换触发）;connecting = 重连在途
-/// （Opened/再死才清——在途再触发 = 重孵,在途会话的输入缓存通道被丢）
+/// connecting = 重连在途
+/// （Opened/再死才清——在途再触发 = 重孵,在途会话的输入缓存通道被丢）。
+/// 自动重孵的放行判据 = crate::session::auto_respawn_due 时间闸
+///（2026-09-11 redroid 瞬死案后升级；原「每剧集一次」retried 语义
+/// 被 Opened 清牌击穿，已退役）
 #[derive(Clone, Copy, Debug, Default)]
 struct SessHealth {
     dead: bool,
-    retried: bool,
     connecting: bool,
 }
 
@@ -181,6 +182,11 @@ struct App {
     /// 会话健康牌 ×2（断线重连）：字段语义见 SessHealth
     health_local: SessHealth,
     health_remote: SessHealth,
+    /// 上次自动重孵时刻（boot_ms 口径；None = 本进程还没自动重孵过）。
+    /// 自动重孵的时间闸依据，见 crate::session::auto_respawn_due；
+    /// 一切重孵（含手动）都在 respawn_session 里刷新本字段——
+    /// 闸量的是「真实重孵密度」
+    last_auto_respawn_ms: Option<u64>,
     /// 真实软键盘底部 inset（px，JNI 轮询得来，BAR-006）。0 = 未弹/未知。
     /// 快捷键行的让位是 Rust 常量（keybar::HEIGHT_PX），不进本字段。
     /// 本字段是「目标值」：终端 resize / pty 永远吃它（resize 抖动红线，
@@ -1893,9 +1899,12 @@ impl App {
         };
         {
             let health = self.health_mut(name);
-            health.retried = true;
             health.connecting = true;
         }
+        // 重孵真实发生即记账——时间闸量的是重孵密度
+        // （crate::session::auto_respawn_due），手动触发
+        // （kick_reconnect）也算一次重孵，同样刷新
+        self.last_auto_respawn_ms = Some(boot_ms() as u64);
         if self
             .router_handle()
             .is_some_and(|r| r.lock().unwrap().active_name() == name)
@@ -1958,7 +1967,6 @@ impl App {
                 {
                     let h = self.health_mut(name);
                     h.dead = false;
-                    h.retried = false;
                     h.connecting = false;
                 }
                 if is_active {
@@ -1981,9 +1989,10 @@ impl App {
         }
     }
 
-    /// 会话死亡登记：钉健康牌;活跃方死亡且本剧集未自动重连过 → 立即重孵
-    /// 一次（用户在盯着，网多半是好的）;待机方死亡只记账不吵（切换那一刻
-    /// 再重连——断网期给待机自动重连是烧钱风暴）
+    /// 会话死亡登记：钉健康牌;活跃方死亡 → 过自动重孵时间闸
+    /// （session::auto_respawn_due：首次立即，其后 ≥MIN_AUTO_RESPAWN_MS
+    /// 才再放行——瞬死循环节流，redroid 案）;待机方死亡只记账不吵
+    /// （切换那一刻再重连——断网期给待机自动重连是烧钱风暴）
     fn on_slot_dead(&mut self, name: &'static str, is_active: bool, why: &str) {
         crate::gate::note_session_death(); // 会话死亡计数(资源画像)
         // 异步 report:此处在主线程抽干路径上,sync 直报会在断线瞬间
@@ -2007,7 +2016,9 @@ impl App {
             h.dead = true;
             h.connecting = false;
         }
-        if is_active && !self.health(name).retried {
+        if is_active
+            && crate::session::auto_respawn_due(self.last_auto_respawn_ms, boot_ms() as u64)
+        {
             self.respawn_session(name);
         }
     }

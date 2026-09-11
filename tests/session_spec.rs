@@ -215,3 +215,42 @@ fn spec_open_msg_带命令与全空() {
         }
     );
 }
+
+// ---- 自动重孵时间闸（2026-09-11 redroid 瞬死案，BAR-080，A 档）----
+// 约束 src/session.rs auto_respawn_due：云安卓 local 会话
+// 「Opened 即 Failed」瞬死循环击穿旧「每剧集只自动重孵一次」语义
+// （Opened 清牌 = 新剧集新第一次），死亡↔重孵每帧一轮实烧 2.5 核。
+// 纯时间闸：首次立即放行，其后 ≥MIN_AUTO_RESPAWN_MS 才再放行。
+
+use kfm_na::session::{MIN_AUTO_RESPAWN_MS, auto_respawn_due};
+
+#[test]
+fn spec_首次自动重孵立即放行() {
+    assert!(auto_respawn_due(None, 0));
+    assert!(auto_respawn_due(None, 999_999));
+}
+
+#[test]
+fn spec_间隔内压住() {
+    assert!(!auto_respawn_due(Some(1000), 1000));
+    assert!(!auto_respawn_due(
+        Some(1000),
+        1000 + MIN_AUTO_RESPAWN_MS - 1
+    ));
+}
+
+#[test]
+fn spec_到点放行() {
+    assert!(auto_respawn_due(Some(1000), 1000 + MIN_AUTO_RESPAWN_MS));
+    assert!(auto_respawn_due(
+        Some(1000),
+        1000 + MIN_AUTO_RESPAWN_MS * 10
+    ));
+}
+
+#[test]
+fn spec_时钟回拨压住不炸() {
+    // saturating_sub：回拨当 0 间隔 = 压住，不透支也不 panic
+    assert!(!auto_respawn_due(Some(5000), 1000));
+    assert!(!auto_respawn_due(Some(u64::MAX), 0));
+}

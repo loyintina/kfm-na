@@ -33,13 +33,14 @@
   （stats 里 session_deaths≈frames 即此签名）——闸门/远程会话/
   UI 仪器不受影响；要 local shell 需 x86_64 bootstrap（Termux 有
   x86_64 debs，overlay-pack 换料即可，未做）。
-  **资源红线（09-11 晨实测定案）**：local 会话在云安卓上「瞬死」
-  （spawn 即链接失败）→ 防风暴阀「每剧集只自动重孵一次」被瞬死
-  击穿（新剧集每次都有第一次）→ 死亡重孵每帧一轮，实烧 2.5 核
-  （7h 帧数 718118 ≈ 死亡 717320）。**闲置时务必
-  `adb -s localhost:5555 shell am force-stop dev.kfm.na`**，
-  用时起动即可（容器本身待机 ~0.8% CPU）。治本 = 自动重孵加最小
-  间隔/退避（A 档可钉），待排期。
+  **资源红线（09-11 晨实测定案，同日治本落地 BAR-080）**：local 会话
+  在云安卓上「瞬死」（spawn 即链接失败）→ 旧防风暴阀「每剧集只自动
+  重孵一次」被瞬死击穿（Opened 清牌 = 新剧集新第一次）→ 死亡重孵
+  每帧一轮，实烧 2.5 核（7h 帧数 718118 ≈ 死亡 717320）。
+  **治本 = 自动重孵纯时间闸**（session::auto_respawn_due，首次立即/
+  其后 ≥5s，A 档四钉 + 变异双咬）。闲置仍可
+  `adb -s localhost:5555 shell am force-stop dev.kfm.na` 省底噪
+  （容器待机 ~0.8% CPU）。
 - **配置页壳 + 面板栈落地（2026-09-10，§五B/D12 实现期）**：三公民
   两槽栈状态核（ai_presence.rs：Panel 枚举 + stack:Vec<Panel> +
   summon/dismiss/swipe_left/swipe_right，叠加态坍缩全规）+ A 档 9 题

@@ -137,3 +137,22 @@ impl Session {
         }
     }
 }
+
+/// 自动重孵最小间隔（2026-09-11 redroid 瞬死案）：死亡驱动的自动重孵
+/// 改纯时间闸节流。云安卓 local 会话「Opened 即 Failed」瞬死（aarch64
+/// bootstrap 在 x86_64 链接即败）击穿旧「每剧集只自动重孵一次」的语义
+/// ——每次 Opened 清牌就是新剧集新第一次，死亡↔重孵每帧一轮实烧
+/// 2.5 核。时间闸不吃这套：首次（None）立即放行，其后距上次重孵
+/// ≥ 本间隔才再放行。手动触发（敲键/切入死会话）不过此闸。
+/// 调用方：android_app（壳；本模块宿主可编 = A 档考题可达）。
+pub const MIN_AUTO_RESPAWN_MS: u64 = 5000;
+
+/// 自动重孵闸门（纯函数，A 档考题 tests/session_spec.rs）：
+/// 从未自动重孵过 → 立即放行；否则距上次够钟才放行。
+/// 时钟回拨按 0 间隔处理 = 压住（saturating_sub，不透支不 panic）。
+pub fn auto_respawn_due(last_auto_respawn_ms: Option<u64>, now_ms: u64) -> bool {
+    match last_auto_respawn_ms {
+        None => true,
+        Some(t) => now_ms.saturating_sub(t) >= MIN_AUTO_RESPAWN_MS,
+    }
+}
