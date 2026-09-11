@@ -483,6 +483,13 @@ impl App {
         let now = crate::report::boot_ms() as u64;
         let was = d.locked();
         if let Some((role, _off)) = d.on_move(x, y, now, w, top_cfg) {
+            if !was {
+                // 手势追踪（「配置卡无法收回」案侦查）：锁定瞬间留痕
+                crate::report::report(
+                    "gest",
+                    &format!("拖拽锁定: {role:?} 于({x:.0},{y:.0}) top_cfg={top_cfg}"),
+                );
+            }
             if !was && role == DragRole::SummonConfig {
                 // 召唤拖拽锁定 = 立即入栈（拖拽期渲染靠栈存在性；
                 // 新鲜召唤不 bump 入场代 → 无 replay 踢，不竞态）
@@ -507,6 +514,10 @@ impl App {
             return;
         };
         if !d.locked() {
+            // 静默死点留痕（2026-09-11「配置卡无法收回」案侦查：本臂只从
+            // 捏合第二指强取消路径可达——Ended 臂已先查 locked。旁观者被
+            // 第二指收走 = 真手指持机干扰拖拽的头号嫌疑路径）
+            crate::report::report("gest", "拖拽旁观者被第二指收走（捏合抢占）");
             return;
         }
         let w = self
@@ -623,6 +634,15 @@ impl App {
                 // 路由按逻辑栈顶，不按 placement 过渡帧）
                 let panel_top = self.last_ai_snap.and_then(|s| s.top);
                 if panel_top.is_some() {
+                    // 手势追踪：第二指落在面板页会盖掉第一指的手势状态
+                    // （panel_touch/panel_drag 单槽）——留痕取证
+                    if self.panel_touch.is_some() {
+                        crate::report::report("gest", "面板页第二指落下：第一指手势状态被盖");
+                    }
+                    crate::report::report(
+                        "gest",
+                        &format!("起手→面板页 ({x:.0},{y:.0}) top={panel_top:?}"),
+                    );
                     self.panel_touch = Some(PanelTouch {
                         start_x: x,
                         start_y: y,
@@ -1054,6 +1074,19 @@ impl App {
                         self.dirty = true;
                         return;
                     }
+                    // 静默死点留痕（「配置卡无法收回」案侦查）：面板页位移
+                    // 手势既没锁拖拽（24px/1.8 斜率）也没过抽屉阈（90px）
+                    // = 动作落空零响应——两阈之间的死区全在这一行现形
+                    if phase == TouchPhase::Ended && apt.dragged {
+                        crate::report::report(
+                            "gest",
+                            &format!(
+                                "面板页手势落空: dx={:.0} dy={:.0}（拖拽锁24px/抽屉90px 之间死区）",
+                                x - apt.start_x,
+                                y - apt.start_y
+                            ),
+                        );
+                    }
                     if phase == TouchPhase::Ended && !apt.dragged {
                         if self.input_bar.as_ref().is_some_and(|b| b.is_focused())
                             && let Some(bar) = &self.input_bar
@@ -1154,6 +1187,20 @@ impl App {
                     self.touch_scroll.take();
                     self.dirty = true;
                     return;
+                }
+                // 静默死点留痕：终端区横向位移手势（≥24px 且横过纵）既没
+                // 锁拖拽也没过 90px 抽屉阈——被滚屏/点按分路吞掉的横向
+                // 意图在此现形（「配置卡无法收回」案侦查）
+                if phase == TouchPhase::Ended
+                    && let Some(p) = press.as_ref()
+                {
+                    let (dx, dy) = (x - p.x, y - p.y);
+                    if dx.abs() >= 24.0 && dx.abs() > dy.abs() {
+                        crate::report::report(
+                            "gest",
+                            &format!("终端横向手势无人认领: dx={dx:.0} dy={dy:.0}"),
+                        );
+                    }
                 }
                 let was_tap = self.touch_scroll.take().is_some_and(|t| t.was_tap());
                 if was_tap && let Some(w) = &self.window {
