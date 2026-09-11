@@ -19,8 +19,29 @@
   干净。触发通道 = gate 十三 web-req（内容=URL/close）→ JNI 甩
   MainActivity.startWebViewFromGate（UI 线程建撤）；判卷双轨
   web-status 状态文件 + 真屏截图。考题 gate_spec 双钉（读取/摘除/
-  消费链）。下一步：立项设计（面板栈接入 + agent 观测/操作通道——
-  DOM 读取/JS 注入/截图）。
+  消费链）。
+  **冻结拍板（2026-09-12 凌晨，用户拍板）**：架构层风险已钉死，剩下
+  的全是运营层坑（后台 reload 推迟/双 WebView 世界会话配对/CDP 中继
+  断连细节/IME 与网页表单纠缠）——恰是 nz 线正在一线实机踩的浏览器
+  专题，等其判词沉淀连坑单一起收编，自己不再重踩。nz 借鉴结论：
+  ①nz「Rust 浏览器壳」真相=壳自有、引擎仍是系统 WebView（Chromium）
+  ——wry 被 nz 实证否决（拖进 cargo-mobile2+Kotlin+androidx AAR 链=
+  kfm-na 特意逃离的 gradle 世界），拍板纯 Java 壳，两线独立收敛同一
+  答案；②CDP 通道图纸现成可借（setWebContentsDebuggingEnabled +
+  localabstract webview_devtools_remote_<pid> 中继 ⇄ 反隧道 8025/
+  8026，零 adb 零 root，nz/lab/device-agent/ + nz/scripts/cdp-relay.ts
+  全验收过）；③坑单预收：WebViewClient 必设（nz 热更收口真根因）、
+  targetSdk28 起明文 http 默认禁（本地 http 页需 manifest 加
+  usesCleartextTraffic，我们还没有）、后台 reload 被系统推迟。
+  契约方向拍板：「契约在手、引擎可换」——开卡/读 DOM/注入 JS/截图/
+  关卡 API 是我们的，WebView 只是第一个后端；自研引擎远期线（Blitz
+  答卷+html5ever/Stylo/taffy/parley/rquickjs 零件生态，范围限静态
+  渲染）不进主线。解冻条件：nz 浏览器专题判词沉淀或用户再拍。
+
+- **配置池卡立项（2026-09-12 凌晨，主线接替浏览器卡）**：低频多池
+  （API/角色/工具/session/脚本，对标 kfmv4 池族），独立按钮召唤页面
+  不占手势槽——AI 本地化主线堵点（密钥/session 管理还躺在
+  provider.json）。首批待拍板：按钮入口位置、第一池内容。
 
 - **快捷键行药丸隐形（2026-09-11 深夜，用户拍板「按钮颜色跟背景一样，
   点击高亮保持圆角」）**：theme.keybar.key_bg 0x0023272E → 0x00101216
