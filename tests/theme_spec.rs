@@ -106,11 +106,12 @@ fn spec_theme_keybar默认配方_换肤生效() {
         t.keybar,
         kfm_na::theme::KeybarTheme {
             bg: 0x0010_1216,
-            key_bg: 0x0023_272E,
+            key_bg: 0x0010_1216,
             mod_on: 0x003E_6FB4,
             label: 0x00E8_EAED,
         },
-        "keybar 配方 = 原 termview KEYBAR_* 常量逐项直迁"
+        "keybar 配方 = 原 termview KEYBAR_* 常量直迁（2026-09-11 用户拍板：\
+         key_bg 与行带底同色，药丸隐形融入底带）"
     );
     // 换肤生效:改 token 倒帧,行带底像素逐字面值跟 token 走
     let (mut tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必成");

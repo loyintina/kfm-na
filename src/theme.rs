@@ -64,7 +64,8 @@ pub struct BarTheme {
 pub struct Theme {
     pub bar: BarTheme,
     /// 快捷键行配色组（2026-09-01 token 化补全：原 termview KEYBAR_*
-    /// 常量直迁，值不变）
+    /// 常量直迁；2026-09-11 用户拍板：key_bg 与行带底同色——药丸隐形
+    /// 融入底带，修饰键粘滞高亮（圆角药丸）保留）
     pub keybar: KeybarTheme,
 }
 
@@ -73,7 +74,7 @@ pub struct Theme {
 pub struct KeybarTheme {
     /// 行带底
     pub bg: u32,
-    /// 药丸键格底
+    /// 药丸键格底（2026-09-11 起 = bg 同色，药丸隐形；粘滞高亮仍圆角）
     pub key_bg: u32,
     /// 修饰键粘滞中高亮
     pub mod_on: u32,
@@ -110,7 +111,7 @@ impl Default for Theme {
             },
             keybar: KeybarTheme {
                 bg: 0x0010_1216,
-                key_bg: 0x0023_272E,
+                key_bg: 0x0010_1216,
                 mod_on: 0x003E_6FB4,
                 label: 0x00E8_EAED,
             },
