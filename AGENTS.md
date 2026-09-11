@@ -159,6 +159,12 @@ kfmv4-review-ops-convention-verdict.md。
 
 - `kfmv4/docs/active/眼睛与手.md` — 眼睛/手设计思想（NA 落地为网格眼睛 + 按键注入的手）
 - kfmv4 服务端协议：terminal-pty ws、/ai/chat、文件树接口（对接时读 kfmv4 源码为准）
+- **nz 可直抄规格索引（2026-09-11 nz 结项通报移交，维护态）**：`/root/kfmv4/nz/docs/`
+  file-tree-v1-design.md（文件树+@引用全套，含 §七 实施定案：右滑仲裁/纯色行底 α 公式/长按复制三级链）/
+  ai-chat-a1-design.md / config-pool-a2a-design.md / keybar-v3-state-machine.md /
+  tmux-tabs-v2-state-machine.md / plugin-contract.md / dev-flow-case-001~006——
+  参数全实证，Rust 本地化照抄得同一手感。避坑：注册 tmux 钩子必加
+  NZ_NO_BELL_HOOK 式闸（临时实例禁注册；退出时钩子指向自己则摘除）
 
 ## 当前阶段
 
