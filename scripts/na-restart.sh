@@ -14,34 +14,34 @@
 # - 熄屏/锁屏时 am start 可能被系统挡(到不了前台),那时会提示手动点图标。
 set -euo pipefail
 
-NA_KEY=/root/.ssh/na_probe_key
-NA_TMP=/data/data/dev.kfm.na/files/usr/tmp
+source "$(dirname "$0")/lib/gate-lib.sh"
 REPORTS=/root/kfm-na/field-reports.log
 
-gate() {
-    ssh -p 8024 -i "$NA_KEY" -o BatchMode=yes -o ConnectTimeout=4 \
-        -o StrictHostKeyChecking=no localhost "$1"
-}
-
-termux() {
-    ssh -p 8022 -o BatchMode=yes -o ConnectTimeout=6 localhost "$1"
+# 死活探针分传输：ssh 路 = 8024 断连即死透；adb 路 adbd 常连，
+# 改看 pidof（2026-09-11 redroid 接线）
+alive_probe() {
+    if [[ $NA_TRANSPORT == adb ]]; then
+        [[ -n $("$NA_ADB" -s "$NA_ADB_SERIAL" shell pidof dev.kfm.na 2>/dev/null) ]]
+    else
+        gate "true" >/dev/null 2>&1
+    fi
 }
 
 boot_count() {
     grep -ac 'android_main 进入' "$REPORTS" 2>/dev/null || echo 0
 }
 
-wait_dead() {  # $1=秒数上限;8024 探活失败 = 死透
+wait_dead() {  # $1=秒数上限;探活失败 = 死透
     local i
     for i in $(seq 1 "$(( $1 * 2 ))"); do
-        gate "true" >/dev/null 2>&1 || return 0
+        alive_probe || return 0
         sleep 0.5
     done
     return 1
 }
 
 pull_foreground() {
-    termux 'am start -n dev.kfm.na/.MainActivity >/dev/null 2>&1'
+    gate_am_start
 }
 
 BEFORE=$(boot_count)
@@ -69,15 +69,23 @@ fi
 
 echo "=== ④ 等新 boot 报告 ==="
 ok=""
-for _ in $(seq 1 60); do
-    sleep 0.5
-    if [ "$(boot_count)" -gt "$BEFORE" ]; then ok=1; break; fi
-done
+if [[ $NA_TRANSPORT == adb ]]; then
+    # adb 路:field-reports 不过云安卓——改等新进程现身,ping 在 ⑤ 判活
+    for _ in $(seq 1 60); do
+        sleep 0.5
+        if alive_probe; then ok=1; break; fi
+    done
+else
+    for _ in $(seq 1 60); do
+        sleep 0.5
+        if [ "$(boot_count)" -gt "$BEFORE" ]; then ok=1; break; fi
+    done
+fi
 if [ -z "$ok" ]; then
-    echo "❌ 30 秒没有新 boot 行——熄屏/锁屏可能挡住了 am start,请点一下桌面图标" >&2
+    echo "❌ 30 秒没有新 boot 迹象——熄屏/锁屏可能挡住了 am start,请点一下桌面图标" >&2
     exit 1
 fi
-grep -a 'android_main 进入' "$REPORTS" | tail -1
+[[ $NA_TRANSPORT == adb ]] || grep -a 'android_main 进入' "$REPORTS" | tail -1
 
 echo "=== ⑤ ping 判卷 ==="
 sleep 2

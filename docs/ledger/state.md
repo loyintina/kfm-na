@@ -38,9 +38,17 @@
   重孵一次」被瞬死击穿（Opened 清牌 = 新剧集新第一次）→ 死亡重孵
   每帧一轮，实烧 2.5 核（7h 帧数 718118 ≈ 死亡 717320）。
   **治本 = 自动重孵纯时间闸**（session::auto_respawn_due，首次立即/
-  其后 ≥5s，A 档四钉 + 变异双咬）。闲置仍可
+  其后 ≥5s，A 档四钉 + 变异双咬，0d3a32d）。闲置仍可
   `adb -s localhost:5555 shell am force-stop dev.kfm.na` 省底噪
   （容器待机 ~0.8% CPU）。
+  **回归套件接线（同日上午）**：`NA_TRANSPORT=adb bash
+  scripts/na-regress.sh` 整条上云安卓——gate-lib.sh 传输层单源
+  （gate/gate_pull/gate_am_start），12 个 na-*.sh 全迁移；
+  stats 新字段族 local_dead/remote_dead（壳层 Opened/死亡同步）
+  做考官前置探针（need_alive/need_any_alive），平台不适用卷跳过
+  不挂卷。**首跑定案：过 4 / 挂 0 / 跳过 5**——5 卷跳过全是环境
+  依赖（云安卓无 local shell、无 remote 服务端），真机不受影响；
+  云安卓特判：na-shot 走 CPU 倒帧、na-restart 死活探针看 pidof。
 - **配置页壳 + 面板栈落地（2026-09-10，§五B/D12 实现期）**：三公民
   两槽栈状态核（ai_presence.rs：Panel 枚举 + stack:Vec<Panel> +
   summon/dismiss/swipe_left/swipe_right，叠加态坍缩全规）+ A 档 9 题

@@ -9,8 +9,14 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-ssh -p 8022 -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=no localhost \
-    "am start -a android.intent.action.MAIN -c android.intent.category.HOME" >/dev/null
+source scripts/lib/gate-lib.sh
+if [[ $NA_TRANSPORT == adb ]]; then
+    "$NA_ADB" -s "$NA_ADB_SERIAL" shell \
+        "am start -a android.intent.action.MAIN -c android.intent.category.HOME" >/dev/null
+else
+    ssh -p 8022 -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=no localhost \
+        "am start -a android.intent.action.MAIN -c android.intent.category.HOME" >/dev/null
+fi
 
 for i in $(seq 1 8); do
     sleep 2

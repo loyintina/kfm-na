@@ -1099,6 +1099,22 @@ pub fn note_session_death() {
     STAT_SESSION_DEATHS.fetch_add(1, Ordering::Relaxed);
 }
 
+/// 会话死活现况(2026-09-11 redroid 接线):壳层 Opened/死亡时同步——
+/// 考官的「本卷依赖活的 local/remote」前置探针取数处(云安卓 local
+/// 起不来、remote 没服务端,依赖卷据此跳过而非挂卷)
+static SESS_LOCAL_DEAD: AtomicBool = AtomicBool::new(false);
+static SESS_REMOTE_DEAD: AtomicBool = AtomicBool::new(false);
+
+/// 登记会话死活(android_app 壳调:Opened=false,on_slot_dead=true)
+pub fn note_session_alive(name: &str, dead: bool) {
+    let slot = match name {
+        "local" => &SESS_LOCAL_DEAD,
+        "remote" => &SESS_REMOTE_DEAD,
+        _ => return, // 未来新会话名:不记也不炸(观测铁律)
+    };
+    slot.store(dead, Ordering::Relaxed);
+}
+
 /// /proc/self/stat 解析(纯函数,钉死):utime+stime 总 jiffies。
 /// comm 字段可含空格/括号,必须从最后一个 ')' 之后切
 pub fn parse_self_stat_jiffies(content: &str) -> Option<u64> {
@@ -1145,6 +1161,9 @@ pub struct StatsSnap {
     pub bytes_other: u64,
     /// 会话死亡/重孵累计
     pub session_deaths: u64,
+    /// local/remote 会话死活现况(考官前置探针;note_session_alive 登记)
+    pub local_dead: bool,
+    pub remote_dead: bool,
     /// 触摸注入动作计数(通道八)
     pub touches: u64,
     // ---- ai_presence 字段族(2026-08-30,期 0 组件一,D9 机器轨) ----
@@ -1268,6 +1287,8 @@ pub fn stats_snap() -> StatsSnap {
         bytes_remote: STAT_BYTES_REMOTE.load(Ordering::Relaxed),
         bytes_other: STAT_BYTES_OTHER.load(Ordering::Relaxed),
         session_deaths: STAT_SESSION_DEATHS.load(Ordering::Relaxed),
+        local_dead: SESS_LOCAL_DEAD.load(Ordering::Relaxed),
+        remote_dead: SESS_REMOTE_DEAD.load(Ordering::Relaxed),
         touches: STAT_TOUCHES.load(Ordering::Relaxed),
         ai_page,
         ai_running,
@@ -1293,7 +1314,7 @@ pub fn format_stats(s: &StatsSnap) -> String {
     // 帧均耗防除零:一帧没画过就报 0
     let draw_avg = s.draw_total_ms.checked_div(s.frames).unwrap_or(0);
     format!(
-        "uptime={}ms\nforeground={}\nloop_beat_age={}\nframes={}\npump_calls={}\npump_bytes={}\nshots={}\ntexts={}\nkeys={}\nkeys_bytes={}\ntouches={}\nactive={}\nsessions={}\ndraw_avg_ms={}\ndraw_max_ms={}\ncpu_jiffies={}\nrss_kb={}\nbytes_local={}\nbytes_remote={}\nbytes_other={}\nsession_deaths={}\nai_page={}\nai_running={}\nai_orb_x={}\nai_orb_y={}\nai_pressed={}\nai_overlay={}\npanel_top={}\npanel_cov={}\nai_epoch={}\ncfg_epoch={}\nbar_focused={}\nbar_text_len={}\n",
+        "uptime={}ms\nforeground={}\nloop_beat_age={}\nframes={}\npump_calls={}\npump_bytes={}\nshots={}\ntexts={}\nkeys={}\nkeys_bytes={}\ntouches={}\nactive={}\nsessions={}\ndraw_avg_ms={}\ndraw_max_ms={}\ncpu_jiffies={}\nrss_kb={}\nbytes_local={}\nbytes_remote={}\nbytes_other={}\nsession_deaths={}\nlocal_dead={}\nremote_dead={}\nai_page={}\nai_running={}\nai_orb_x={}\nai_orb_y={}\nai_pressed={}\nai_overlay={}\npanel_top={}\npanel_cov={}\nai_epoch={}\ncfg_epoch={}\nbar_focused={}\nbar_text_len={}\n",
         s.uptime_ms,
         s.foreground,
         age,
@@ -1315,6 +1336,8 @@ pub fn format_stats(s: &StatsSnap) -> String {
         s.bytes_remote,
         s.bytes_other,
         s.session_deaths,
+        s.local_dead,
+        s.remote_dead,
         s.ai_page,
         s.ai_running,
         s.ai_orb_x,

@@ -32,6 +32,7 @@ act=$(stats_field active)
 [ "$act" = "local" ] || { echo "⏭ PIN-standby-death | 活跃会话=$act(非 local),跳过" >&2; exit 77; }
 sess=$(stats_field sessions)
 case "$sess" in *remote*) : ;; *) echo "⏭ PIN-standby-death | sessions 无 remote($sess),跳过" >&2; exit 77 ;; esac
+need_alive PIN-standby-death remote   # 本卷掐 remote 的 ws 看记账,云安卓没服务端(remote 本就死)
 
 # ⓪ 一生一发锁存
 marker="$NA_TMP/pin-standby-marker"

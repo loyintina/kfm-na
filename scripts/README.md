@@ -50,6 +50,16 @@
 
 ## 观测(看)——8024 闸门配套
 
+**传输层开关（2026-09-11 redroid 接线）**：以下 na-*.sh 全部经
+`lib/gate-lib.sh` 单源传输——默认 ssh（真机 8024）；
+`NA_TRANSPORT=adb` 时走云安卓 adbd root 直读沙箱（串口
+`NA_ADB_SERIAL` 默认 localhost:5555），文件触发协议不变。
+整条回归套件上云安卓：`NA_TRANSPORT=adb bash scripts/na-regress.sh`。
+依赖活会话的卷用 `need_alive`/`need_any_alive` 前置探针
+（stats 的 local_dead/remote_dead 字段是事实源），平台不适用
+自动跳过不挂卷。云安卓特判两处：na-shot 走 CPU 倒帧路（GL 回读
+翻转）、na-restart 死活探针看 pidof（adbd 常连无断连语义）。
+
 - `na-front.sh` / `na-back.sh` — 前台拉起/退回后台并确认（2026-09-11
   用户拍板工作流：agent 自拉前台自测，退回后台 = 完成信号。熄屏时
   vivo 限制拉不起会报红；回后台必须走 launcher intent——KEYCODE_HOME

@@ -8,13 +8,7 @@
 # 钩子自动落的末 64 行)。答的问题:「死前/刚才发生了什么」。
 set -euo pipefail
 
-NA_KEY=/root/.ssh/na_probe_key
-NA_TMP=/data/data/dev.kfm.na/files/usr/tmp
-
-gate() {
-    ssh -p 8024 -i "$NA_KEY" -o BatchMode=yes -o ConnectTimeout=6 \
-        -o StrictHostKeyChecking=no localhost "$1"
-}
+source "$(dirname "$0")/lib/gate-lib.sh"
 
 gate "rm -f $NA_TMP/trace.txt; touch $NA_TMP/trace-req" >/dev/null
 ok=""

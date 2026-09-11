@@ -1969,6 +1969,7 @@ impl App {
                     h.dead = false;
                     h.connecting = false;
                 }
+                crate::gate::note_session_alive(name, false); // 复活同步进 stats
                 if is_active {
                     self.session_over = false; // 重连复活：输出面解开
                 }
@@ -2016,6 +2017,7 @@ impl App {
             h.dead = true;
             h.connecting = false;
         }
+        crate::gate::note_session_alive(name, true); // 死活现况进 stats(考官前置探针)
         if is_active
             && crate::session::auto_respawn_due(self.last_auto_respawn_ms, boot_ms() as u64)
         {

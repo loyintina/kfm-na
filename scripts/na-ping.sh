@@ -8,13 +8,7 @@
 # panic 档案在 panic.log(追加制,一行一案)。
 set -euo pipefail
 
-NA_KEY=/root/.ssh/na_probe_key
-NA_TMP=/data/data/dev.kfm.na/files/usr/tmp
-
-gate() {
-    ssh -p 8024 -i "$NA_KEY" -o BatchMode=yes -o ConnectTimeout=6 \
-        -o StrictHostKeyChecking=no localhost "$1"
-}
+source "$(dirname "$0")/lib/gate-lib.sh"
 
 gate "rm -f $NA_TMP/ping-res; touch $NA_TMP/ping-req" >/dev/null
 ok=""

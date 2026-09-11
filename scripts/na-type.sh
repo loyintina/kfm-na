@@ -10,19 +10,16 @@
 # 应用退后台也能注入(BAR-029 保活 + 值守线程不归事件循环管)。
 set -euo pipefail
 
-NA_KEY=/root/.ssh/na_probe_key
-NA_TMP=/data/data/dev.kfm.na/files/usr/tmp
+source "$(dirname "$0")/lib/gate-lib.sh"
 
 if [ $# -ne 1 ]; then
     echo "用法: bash scripts/na-type.sh '命令字节串(\r 结尾=回车)'" >&2
     exit 64
 fi
 
-# 经 stdin 过 SSH 写字节(防引号/转义在两条 shell 间走样),远端 cat 落盘再 mv。
+# 经 stdin 过闸门写字节(防引号/转义在两条 shell 间走样),对端 cat 落盘再 mv。
 # printf '%b':把 \r \x03 等转义翻成真字节——'%s' 会当字面两字符发出去
 # (2026-08-24 实拍:四条注入命令带字面 "\r" 全堆在提示符上,零执行)
-printf '%b' "$1" | ssh -p 8024 -i "$NA_KEY" -o BatchMode=yes -o ConnectTimeout=6 \
-    -o StrictHostKeyChecking=no localhost \
-    "cat > $NA_TMP/keys-in.new && mv $NA_TMP/keys-in.new $NA_TMP/keys-in"
+printf '%b' "$1" | gate "cat > $NA_TMP/keys-in.new && mv $NA_TMP/keys-in.new $NA_TMP/keys-in"
 n=$(printf '%b' "$1" | wc -c)
 echo "✅ 已注入 ${n} 字节(300ms 内落地;na-text.sh 可读屏核对)"

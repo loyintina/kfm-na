@@ -9,8 +9,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-ssh -p 8022 -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=no localhost \
-    "am start -n dev.kfm.na/.MainActivity" >/dev/null
+source scripts/lib/gate-lib.sh
+gate_am_start
 
 for i in $(seq 1 8); do
     sleep 2

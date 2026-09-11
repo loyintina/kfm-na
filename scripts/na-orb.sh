@@ -16,13 +16,7 @@
 # 协议同 na-type:先写 .new 再 mv(原子防半读),值守线程 300ms 内消费。
 set -euo pipefail
 
-NA_KEY=/root/.ssh/na_probe_key
-NA_TMP=/data/data/dev.kfm.na/files/usr/tmp
-
-gate() {
-    ssh -p 8024 -i "$NA_KEY" -o BatchMode=yes -o ConnectTimeout=6 \
-        -o StrictHostKeyChecking=no localhost "$1"
-}
+source "$(dirname "$0")/lib/gate-lib.sh"
 
 if [ $# -lt 1 ]; then
     echo "用法: bash scripts/na-orb.sh 'tap' ['drag 500 800' ...](每参数一行指令)" >&2
@@ -31,9 +25,7 @@ fi
 
 script="$(printf '%s\n' "$@")"
 gate "rm -f $NA_TMP/orb-inject-res" >/dev/null
-printf '%s\n' "$script" | ssh -p 8024 -i "$NA_KEY" -o BatchMode=yes -o ConnectTimeout=6 \
-    -o StrictHostKeyChecking=no localhost \
-    "cat > $NA_TMP/orb-inject.new && mv $NA_TMP/orb-inject.new $NA_TMP/orb-inject"
+printf '%s\n' "$script" | gate "cat > $NA_TMP/orb-inject.new && mv $NA_TMP/orb-inject.new $NA_TMP/orb-inject"
 ok=""
 for _ in $(seq 1 30); do
     sleep 0.3

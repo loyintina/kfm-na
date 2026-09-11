@@ -15,6 +15,7 @@ set -uo pipefail
 source "$(dirname "$0")/../lib/gate-lib.sh"
 
 need_device BAR-040
+need_alive BAR-040 local   # 判卷「kfm-na 就绪」标题来自 local shell 启动横幅
 
 if [ "${SKIP_RESTART:-0}" != 1 ]; then
     # 冷启动(na-restart 自带 boot 行等待 + ping 判卷)

@@ -13,6 +13,7 @@ set -uo pipefail
 source "$(dirname "$0")/../lib/gate-lib.sh"
 
 need_device PIN-touch
+need_any_alive PIN-touch   # 滚动判卷要活会话内容,云安卓双灭无可滚
 
 first_line() {
     bash "$NA_ROOT/scripts/na-text.sh" 2>/dev/null | grep -m1 -v '^[[:space:]]*$'

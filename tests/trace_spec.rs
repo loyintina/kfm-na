@@ -77,6 +77,8 @@ fn spec_stats_格式_keyvalue一行一项() {
         bytes_remote: 222,
         bytes_other: 3,
         session_deaths: 2,
+        local_dead: false,
+        remote_dead: true,
         ai_page: "terminal".into(),
         ai_running: false,
         ai_orb_x: 0,
@@ -105,6 +107,8 @@ fn spec_stats_格式_keyvalue一行一项() {
     assert!(out.contains("bytes_remote=222\n"));
     assert!(out.contains("bytes_other=3\n"));
     assert!(out.contains("session_deaths=2\n"));
+    assert!(out.contains("local_dead=false\n"));
+    assert!(out.contains("remote_dead=true\n"));
     assert!(out.contains("touches=4\n"));
     assert!(out.ends_with('\n'));
     // 未起跳的龄期要人话,不是数字
@@ -139,4 +143,23 @@ fn spec_proc_status_vmrss() {
     let status = "Name:\tkfm-na\nState:\tR (running)\nVmRSS:\t   45678 kB\nThreads:\t9\n";
     assert_eq!(parse_vmrss_kb(status), Some(45678));
     assert_eq!(parse_vmrss_kb("Name:\tx\n"), None);
+}
+
+// ---- 会话死活现况字段族（2026-09-11 redroid 接线：考官前置探针） ----
+
+#[test]
+fn spec_死活登记进快照() {
+    // 全局原子,测完还原(观测铁律:考题不许污染别的卷)
+    kfm_na::gate::note_session_alive("local", true);
+    kfm_na::gate::note_session_alive("remote", false);
+    let snap = kfm_na::gate::stats_snap();
+    assert!(snap.local_dead, "local 死亡 stats 看得到");
+    assert!(!snap.remote_dead, "remote 活着 stats 看得到");
+    let out = format_stats(&snap);
+    assert!(out.contains("local_dead=true\n"));
+    assert!(out.contains("remote_dead=false\n"));
+    // 未知会话名:不记也不炸
+    kfm_na::gate::note_session_alive("nobody", true);
+    kfm_na::gate::note_session_alive("local", false);
+    assert!(!kfm_na::gate::stats_snap().local_dead, "还原后复活");
 }

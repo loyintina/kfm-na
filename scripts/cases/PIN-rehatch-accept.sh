@@ -11,6 +11,7 @@ set -uo pipefail
 source "$(dirname "$0")/../lib/gate-lib.sh"
 
 need_device PIN-rehatch
+need_alive PIN-rehatch local   # 本卷往 local 注入 exit,云安卓 local 起不来
 
 deaths() {
     bash "$NA_ROOT/scripts/na-stats.sh" 2>/dev/null | grep '^session_deaths=' \

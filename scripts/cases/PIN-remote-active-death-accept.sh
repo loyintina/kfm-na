@@ -16,6 +16,7 @@ set -uo pipefail
 source "$(dirname "$0")/../lib/gate-lib.sh"
 
 need_device PIN-remote-active-death
+need_alive PIN-remote-active-death remote   # 本卷杀活跃 remote 看重孵,云安卓没服务端
 
 stats_field() {
     bash "$NA_ROOT/scripts/na-stats.sh" 2>/dev/null | grep "^$1=" | cut -d= -f2

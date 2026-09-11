@@ -8,14 +8,8 @@
 # v1 只有当前屏,不含 scrollback(要历史用 tmux)。
 set -euo pipefail
 
-NA_KEY=/root/.ssh/na_probe_key
-NA_TMP=/data/data/dev.kfm.na/files/usr/tmp
+source "$(dirname "$0")/lib/gate-lib.sh"
 OUT=${1:-/tmp/na-screen.txt}
-
-gate() {
-    ssh -p 8024 -i "$NA_KEY" -o BatchMode=yes -o ConnectTimeout=6 \
-        -o StrictHostKeyChecking=no localhost "$1"
-}
 
 # 等 screen.txt「重新出现」(先清场,不存在时间戳 race)
 gate "rm -f $NA_TMP/screen.txt; touch $NA_TMP/text-req" >/dev/null
@@ -30,6 +24,5 @@ if [ -z "$ok" ]; then
     echo "❌ 9 秒内没等到 na 倒文本——na 活着吗(终端装上了吗)?" >&2
     exit 1
 fi
-scp -P 8024 -i "$NA_KEY" -o BatchMode=yes -o StrictHostKeyChecking=no \
-    "localhost:$NA_TMP/screen.txt" "$OUT" >/dev/null
+gate_pull "$NA_TMP/screen.txt" "$OUT"
 [ "$OUT" = /tmp/na-screen.txt ] && cat "$OUT" || echo "✅ $OUT"

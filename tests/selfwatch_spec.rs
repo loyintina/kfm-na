@@ -40,6 +40,8 @@ fn snap() -> StatsSnap {
         bytes_remote: 200,
         bytes_other: 0,
         session_deaths: 0,
+        local_dead: false,
+        remote_dead: false,
         touches: 0,
         ai_page: "terminal".into(),
         ai_running: false,

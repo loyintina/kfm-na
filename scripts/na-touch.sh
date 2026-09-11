@@ -16,8 +16,7 @@
 # 协议同 na-type:先写 .new 再 mv(原子防半读),值守线程 300ms 内消费。
 set -euo pipefail
 
-NA_KEY=/root/.ssh/na_probe_key
-NA_TMP=/data/data/dev.kfm.na/files/usr/tmp
+source "$(dirname "$0")/lib/gate-lib.sh"
 
 if [ $# -lt 1 ]; then
     echo "用法: bash scripts/na-touch.sh 'scroll 3' ['sleep 600' ...](每参数一行指令)" >&2
@@ -25,7 +24,5 @@ if [ $# -lt 1 ]; then
 fi
 
 script="$(printf '%s\n' "$@")"
-printf '%s\n' "$script" | ssh -p 8024 -i "$NA_KEY" -o BatchMode=yes -o ConnectTimeout=6 \
-    -o StrictHostKeyChecking=no localhost \
-    "cat > $NA_TMP/touch-in.new && mv $NA_TMP/touch-in.new $NA_TMP/touch-in"
+printf '%s\n' "$script" | gate "cat > $NA_TMP/touch-in.new && mv $NA_TMP/touch-in.new $NA_TMP/touch-in"
 echo "✅ 已注入 $# 条触摸指令(300ms 内落地;na-text.sh/na-shot.sh 核对)"

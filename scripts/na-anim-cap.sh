@@ -9,9 +9,7 @@
 # 触发在动画开表时消费(摘文件,单次点播单次采样)。
 set -euo pipefail
 
-NA_KEY=/root/.ssh/na_probe_key
-NA_TMP=/data/data/dev.kfm.na/files/usr/tmp
+source "$(dirname "$0")/lib/gate-lib.sh"
 
-ssh -p 8024 -i "$NA_KEY" -o BatchMode=yes -o ConnectTimeout=6 \
-    -o StrictHostKeyChecking=no localhost "touch $NA_TMP/anim-cap-req"
+gate "touch $NA_TMP/anim-cap-req"
 echo "✅ 已点播:下一轮动画带渲染源采样([anim-strip] 报表通道回收)"

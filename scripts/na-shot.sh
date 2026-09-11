@@ -10,28 +10,34 @@
 # PIL 用 /root/.venvs/font/bin/python。
 set -euo pipefail
 
-NA_KEY=/root/.ssh/na_probe_key
-NA_TMP=/data/data/dev.kfm.na/files/usr/tmp
+source "$(dirname "$0")/lib/gate-lib.sh"
 PY=/root/.venvs/font/bin/python
 
-gate() {
-    ssh -p 8024 -i "$NA_KEY" -o BatchMode=yes -o ConnectTimeout=6 \
-        -o StrictHostKeyChecking=no localhost "$1"
-}
+# redroid 云安卓平台差异（2026-09-11 实测，state.md redroid 条）：
+# shot-gl(GPU 回读)出来 180° 翻转，shot.rgb(CPU 重画)正常——
+# adb 传输下直接走 CPU 路，不碰 GL 回读
+PREFER_CPU=0
+[[ $NA_TRANSPORT == adb ]] && PREFER_CPU=1
 
 shoot() {
     # 先清场再触发:等待信号 = 「重新出现」（不存在秒级时间戳 race）。
     # 双触发零竞态（2026-09-07 软件内截屏）：shot-gles-req = 真·GLES 合成
     # 帧（前台画帧时消费，观测真相）；静态屏无帧可消费 → 回退 shot.rgb
     # （值守 CPU 重画，画面没动过内容等价，后台也活）
-    gate "rm -f $NA_TMP/shot.rgb $NA_TMP/shot.dim $NA_TMP/shot-gl.rgb $NA_TMP/shot-gl.dim; touch $NA_TMP/shot-req $NA_TMP/shot-gles-req" >/dev/null
+    if [[ $PREFER_CPU == 1 ]]; then
+        gate "rm -f $NA_TMP/shot.rgb $NA_TMP/shot.dim; touch $NA_TMP/shot-req" >/dev/null
+    else
+        gate "rm -f $NA_TMP/shot.rgb $NA_TMP/shot.dim $NA_TMP/shot-gl.rgb $NA_TMP/shot-gl.dim; touch $NA_TMP/shot-req $NA_TMP/shot-gles-req" >/dev/null
+    fi
     local which=rgb ok=""
-    for _ in $(seq 1 16); do
-        sleep 0.5
-        if gate "test -f $NA_TMP/shot-gl.rgb -a -f $NA_TMP/shot-gl.dim"; then
-            which=gl; ok=1; break
-        fi
-    done
+    if [[ $PREFER_CPU == 0 ]]; then
+        for _ in $(seq 1 16); do
+            sleep 0.5
+            if gate "test -f $NA_TMP/shot-gl.rgb -a -f $NA_TMP/shot-gl.dim"; then
+                which=gl; ok=1; break
+            fi
+        done
+    fi
     if [ -z "$ok" ]; then
         for _ in $(seq 1 30); do
             sleep 0.5
@@ -53,8 +59,7 @@ shoot() {
         rgbpath=$NA_TMP/shot.rgb; dimpath=$NA_TMP/shot.dim
     fi
     dim=$(gate "cat $dimpath")
-    scp -P 8024 -i "$NA_KEY" -o BatchMode=yes -o StrictHostKeyChecking=no \
-        "localhost:$rgbpath" /tmp/na-shot.rgb >/dev/null
+    gate_pull "$rgbpath" /tmp/na-shot.rgb
     "$PY" - $dim <<EOF
 import sys
 from PIL import Image
