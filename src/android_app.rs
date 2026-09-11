@@ -551,7 +551,11 @@ impl App {
         // 收尾续播：从跟手偏移重定基到翻转后的目标值（方向分档曲线
         // 自动选臂——靠泊方向 250ms / 屏外方向 350ms，均减速到位）
         crate::ui::seam::replay_config_panel_offset_x(cur, now);
-        crate::report::report("ui", &format!("拖拽收尾: {decision:?} 从偏移 {cur:.0}"));
+        let after = self.ai_presence.as_ref().and_then(|ai| ai.snap(now).top);
+        crate::report::report(
+            "ui",
+            &format!("拖拽收尾: {decision:?} 从偏移 {cur:.0} → 栈顶 {after:?}"),
+        );
         self.dirty = true;
     }
 
@@ -964,6 +968,10 @@ impl App {
                 // 不可信末段速度）
                 if self.panel_drag.as_ref().is_some_and(|d| d.locked()) {
                     self.finish_panel_drag(matches!(phase, TouchPhase::Cancelled));
+                    // 同一指的面板页手势状态同生同灭——残留态会被下一指
+                    // 的 Started 误判成「第二指落下」（08:18 实机误报实踩），
+                    // 旧起点坐标还有骗出幽灵抽屉手势的风险
+                    self.panel_touch = None;
                     return;
                 }
                 self.panel_drag = None;
@@ -979,7 +987,16 @@ impl App {
                     if let Some(ai) = &self.ai_presence {
                         ai.press_up();
                         if phase == TouchPhase::Ended && !ot.dragged && !ot.long_fired {
+                            // 手势追踪：光球点按是栈操作（召唤/收起 AI 面板）
+                            // 却一直零日志——「配置卡无法收回」案的盲区实锤
+                            // （用户两球门间右滑全空操作，就因为顶被点翻了）
+                            let before = self.last_ai_snap.and_then(|s| s.top);
                             ai.tap_orb();
+                            let after = ai.snap(crate::report::boot_ms() as u64).top;
+                            crate::report::report(
+                                "gest",
+                                &format!("光球点按: 栈顶 {before:?}→{after:?}"),
+                            );
                         }
                     }
                     self.dirty = true;
@@ -1070,7 +1087,11 @@ impl App {
                                 crate::ai_presence::SwipeDir::Right => ai.swipe_right(),
                             }
                         }
-                        crate::report::report("ui", &format!("抽屉手势: {dir:?}"));
+                        let after = self
+                            .ai_presence
+                            .as_ref()
+                            .and_then(|ai| ai.snap(crate::report::boot_ms() as u64).top);
+                        crate::report::report("ui", &format!("抽屉手势: {dir:?} → 栈顶 {after:?}"));
                         self.dirty = true;
                         return;
                     }
@@ -1183,7 +1204,11 @@ impl App {
                             crate::ai_presence::SwipeDir::Right => ai.swipe_right(),
                         }
                     }
-                    crate::report::report("ui", &format!("抽屉手势: {dir:?}"));
+                    let after = self
+                        .ai_presence
+                        .as_ref()
+                        .and_then(|ai| ai.snap(crate::report::boot_ms() as u64).top);
+                    crate::report::report("ui", &format!("抽屉手势: {dir:?} → 栈顶 {after:?}"));
                     self.touch_scroll.take();
                     self.dirty = true;
                     return;
