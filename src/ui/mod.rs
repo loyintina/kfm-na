@@ -16,6 +16,7 @@ pub mod fx_ease;
 pub mod fx_spring;
 pub mod keybar;
 pub mod orb;
+pub mod panel_drag;
 pub mod prompt_bar;
 pub mod seam;
 pub mod stage;

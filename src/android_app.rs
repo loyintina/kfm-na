@@ -258,6 +258,11 @@ struct App {
     /// 滚行（追底状态机）；水平快滑 = 抽屉召唤/推回；未超 slop 抬手 =
     /// 点按（输入栏失焦 + 收键盘，不召唤终端输入法）
     panel_touch: Option<PanelTouch>,
+    /// 面板跟手拖拽会话（2026-09-11 §五B 手势升级，panel_drag.rs）：
+    /// Started 在两上下文（终端裸奔/面板在顶）创建旁观者；Moved 喂轨迹，
+    /// 方向锁一锁即接管（召唤锁=立即入栈，渲染偏移旁路缝采样直读）；
+    /// Ended 裁决完成/取消 + replay 踢收尾续播；Cancelled 强制取消
+    panel_drag: Option<crate::ui::panel_drag::PanelDrag>,
     /// 本地脑（期 0②：echo-brain 夹具先行，direct-api 随 key 配置落地换插）：
     /// 输入栏发送的真 run 来源——run_start/run_end 驱动光球（期 0②收尾）
     brain: Option<Arc<dyn crate::brain_ep::BrainEndpoint>>,
@@ -455,6 +460,90 @@ impl App {
     /// 触摸统一入口(2026-08-27 通道八 touch-in):真手指(winit Touch)与
     /// 闸门注入双喂同一函数——判卷尺与真实手势同一把。本体从原
     /// WindowEvent::Touch 臂机械搬家,一行逻辑未动(fmt 收尾)
+    /// 面板跟手拖拽喂轨迹（§五B 手势升级）：锁定瞬把配置面板召入栈
+    /// （目标值翻 0，渲染偏移由拖拽旁路接管不播自动动画）。返回 true =
+    /// 本事件被拖拽消费（调用方直接 return）
+    fn feed_panel_drag(&mut self, x: f64, y: f64) -> bool {
+        use crate::ai_presence::Panel;
+        use crate::ui::panel_drag::DragRole;
+        let Some(d) = &mut self.panel_drag else {
+            return false;
+        };
+        let top_cfg = self
+            .last_ai_snap
+            .is_some_and(|s| s.top == Some(Panel::Config));
+        let w = self
+            .window
+            .as_ref()
+            .map(|w| w.inner_size().width)
+            .unwrap_or(0) as f32;
+        if w <= 0.0 {
+            return false;
+        }
+        let now = crate::report::boot_ms() as u64;
+        let was = d.locked();
+        if let Some((role, _off)) = d.on_move(x, y, now, w, top_cfg) {
+            if !was && role == DragRole::SummonConfig {
+                // 召唤拖拽锁定 = 立即入栈（拖拽期渲染靠栈存在性；
+                // 新鲜召唤不 bump 入场代 → 无 replay 踢，不竞态）
+                if let Some(ai) = &self.ai_presence {
+                    ai.summon_panel(Panel::Config);
+                }
+            }
+            self.dirty = true;
+            return true;
+        }
+        false
+    }
+
+    /// 面板拖拽收尾（Ended/Cancelled）：裁决完成/取消 → 栈操作 +
+    /// 缝 replay 踢从当前跟手偏移重定基续播（BAR-079 原语复用）。
+    /// Cancelled 强制取消（系统抢手势不可信末段速度）
+    fn finish_panel_drag(&mut self, cancelled: bool) {
+        use crate::ai_presence::Panel;
+        use crate::ui::panel_drag::{DragRole, ReleaseDecision};
+        let now = crate::report::boot_ms() as u64;
+        let Some(d) = self.panel_drag.take() else {
+            return;
+        };
+        if !d.locked() {
+            return;
+        }
+        let w = self
+            .window
+            .as_ref()
+            .map(|w| w.inner_size().width)
+            .unwrap_or(0) as f32;
+        let cur = d.current_offset().unwrap_or(w);
+        let decision = if cancelled {
+            ReleaseDecision::Cancel
+        } else {
+            d.on_release(now, w)
+        };
+        match (d.role(), decision) {
+            // 召唤锁定时已入栈：完成 = 保持（目标 0）；取消 = 推回出栈
+            (Some(DragRole::SummonConfig), ReleaseDecision::Complete) => {}
+            (Some(DragRole::SummonConfig), ReleaseDecision::Cancel) => {
+                if let Some(ai) = &self.ai_presence {
+                    ai.dismiss_top(Panel::Config);
+                }
+            }
+            // 推回：完成 = 出栈；取消 = 保持（目标回 0）
+            (Some(DragRole::DismissConfig), ReleaseDecision::Complete) => {
+                if let Some(ai) = &self.ai_presence {
+                    ai.dismiss_top(Panel::Config);
+                }
+            }
+            (Some(DragRole::DismissConfig), ReleaseDecision::Cancel) => {}
+            (None, _) => {}
+        }
+        // 收尾续播：从跟手偏移重定基到翻转后的目标值（方向分档曲线
+        // 自动选臂——靠泊方向 250ms / 屏外方向 350ms，均减速到位）
+        crate::ui::seam::replay_config_panel_offset_x(cur, now);
+        crate::report::report("ui", &format!("拖拽收尾: {decision:?} 从偏移 {cur:.0}"));
+        self.dirty = true;
+    }
+
     fn handle_touch(&mut self, id: u64, x: f64, y: f64, phase: TouchPhase) {
         if !TERMINAL_MODE {
             return;
@@ -541,6 +630,13 @@ impl App {
                         acc_px: 0.0,
                         dragged: false,
                     });
+                    // 跟手拖拽旁观者（§五B 升级）：锁定前零行为，
+                    // 横向一锁即接管本手势
+                    self.panel_drag = Some(crate::ui::panel_drag::PanelDrag::new(
+                        x,
+                        y,
+                        crate::report::boot_ms() as u64,
+                    ));
                     return;
                 }
                 // 起点在快捷键行带上 → 这手势归行（不滚屏不唤键盘）
@@ -570,6 +666,9 @@ impl App {
                     self.press = None;
                     self.sel_drag = None;
                     self.magnifier_at = None;
+                    // 拖拽中第二指落下 = 系统级手势变更：强制取消跟手
+                    // 拖拽（收尾续播回起点），捏合接管
+                    self.finish_panel_drag(true);
                     crate::report::report(
                         "zoom",
                         &format!("捏合开始: dist0={dist0:.0} base={}x{}", base.0, base.1),
@@ -603,6 +702,12 @@ impl App {
                     moved: false,
                     long_fired: false,
                 });
+                // 跟手拖拽旁观者（§五B 升级：终端裸奔左滑拉配置页）
+                self.panel_drag = Some(crate::ui::panel_drag::PanelDrag::new(
+                    x,
+                    y,
+                    crate::report::boot_ms() as u64,
+                ));
                 if !selecting {
                     let cell_h = self
                         .term_handle()
@@ -612,6 +717,16 @@ impl App {
                 }
             }
             TouchPhase::Moved => {
+                // 面板跟手拖拽优先（§五B 升级）：已锁定/本事件锁定的
+                // 手势归拖拽——面板偏移直跟手指，原分路（滚屏/滚行/
+                // 点按候选）全部让路。未锁定 = 旁观者，零影响
+                if self.panel_drag.is_some() && self.feed_panel_drag(x, y) {
+                    // 拖拽一旦接管，滚动机/按压计时作废（防拖拽中滚屏
+                    // 或长按走火）
+                    self.touch_scroll = None;
+                    self.press = None;
+                    return;
+                }
                 // 输入栏带手势：锚点拖动 > 滚动 > 长按候选
                 // field_h 供边缘判定（框界）；view_h 供滚动钳制（BAR-049
                 // 文本视口高，与渲染同尺）
@@ -823,6 +938,15 @@ impl App {
             }
             TouchPhase::Ended | TouchPhase::Cancelled => {
                 self.touches.retain(|t| t.0 != id);
+                // 面板跟手拖拽收尾（§五B 升级）：已锁定 = 裁决完成/取消
+                // + replay 踢续播，其后分路（点按/抽屉快滑/选择）全让路；
+                // 未锁定的旁观者清掉（Cancelled 强制取消——系统抢手势
+                // 不可信末段速度）
+                if self.panel_drag.as_ref().is_some_and(|d| d.locked()) {
+                    self.finish_panel_drag(matches!(phase, TouchPhase::Cancelled));
+                    return;
+                }
+                self.panel_drag = None;
                 // 捏合收尾：任一指抬起即结束，缩放比写盘 + [zoom] 上报。
                 // 残余指头不接管滚动/点按（touch_scroll/press 进捏合时已清）
                 if self.pinch.take().is_some() {
@@ -2538,6 +2662,7 @@ impl App {
         ime_bottom_px_raw: u32,
         chrome_inset_px: &mut u32,
         sigs: &mut LayerSigs,
+        cfg_drag_off: Option<f32>,
     ) -> Option<(u32, u32)> {
         let (w, h) = g.size();
         if !TERMINAL_MODE {
@@ -2572,10 +2697,15 @@ impl App {
         let cfg_present = cfg_on_top
             || ai_snap.is_some_and(|s| s.covered == Some(crate::ai_presence::Panel::Config));
         let cfg_target = if cfg_present { 0.0 } else { w as f32 };
-        let cfg_off = crate::ui::seam::sample_config_panel_offset_x(
-            cfg_target,
-            crate::report::boot_ms() as u64,
-        ) as i32;
+        // 跟手拖拽锁定期旁路缝采样（panel_drag：直接操纵不是动画——
+        // 手指停画面停，零插值滞后；缝底下的自动动画采样被盖住不可见）
+        let cfg_off = match cfg_drag_off {
+            Some(off) => off as i32,
+            None => crate::ui::seam::sample_config_panel_offset_x(
+                cfg_target,
+                crate::report::boot_ms() as u64,
+            ) as i32,
+        };
         let cfg_fade = crate::ui::fx_ease::panel_fade_alpha(-(cfg_off as f32), w as f32);
         let (ai_grid, panel_visible) = crate::termview::panel_split(panel_off, h);
         let (cfg_grid, cfg_visible) = crate::termview::cfg_split(cfg_off, w);
@@ -2904,6 +3034,7 @@ impl App {
                 self.ime_bottom_px,
                 &mut self.chrome_inset_px,
                 &mut self.layer_sigs,
+                self.panel_drag.as_ref().and_then(|d| d.current_offset()),
             );
             // 布局写回视口状态机（眼手同尺：手势钳制与渲染同一份布局）
             if let (Some(chat), Some((total, fit))) = (&self.ai_chat, ai_layout) {
@@ -2955,10 +3086,14 @@ impl App {
                     .last_ai_snap
                     .is_some_and(|s| s.covered == Some(crate::ai_presence::Panel::Config));
             let cfg_target = if cfg_present { 0.0 } else { w as f32 };
-            let cfg_off = crate::ui::seam::sample_config_panel_offset_x(
-                cfg_target,
-                crate::report::boot_ms() as u64,
-            ) as i32;
+            // 跟手拖拽锁定期旁路缝采样（同 GLES 路径）
+            let cfg_off = match self.panel_drag.as_ref().and_then(|d| d.current_offset()) {
+                Some(off) => off as i32,
+                None => crate::ui::seam::sample_config_panel_offset_x(
+                    cfg_target,
+                    crate::report::boot_ms() as u64,
+                ) as i32,
+            };
             // 键盘 inset chrome 跟随过缝（ui-base §二 第二道缝）：目标值 =
             // 真实 inset（BAR-006 轮询）；无 ui-fx 占槽 = 直通（硬切）。
             // 采样值写回字段——触摸命中下一拍吃同一份（眼手同尺）。
