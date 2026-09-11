@@ -7,6 +7,24 @@
 
 ## 当前位置（2026-09-05)
 
+- **终端卡片壳（2026-09-11 傍晚，用户拍板「终端也包全屏卡片壳，样式
+  统一；无色相碳灰环——终端是基座不是卡」）**：几何单源重定义——
+  `MARGIN_X = AI_PAGE_FRAME_MARGIN(16) + AI_PAGE_FRAME_W(3) +
+  TERM_CARD_PAD(12) = 31`，四边同尺常量化（margin_top 不再随格高走，
+  BAR-010 旧契约反转由壳环靠泊接管，顶带 50→31 的圆角切字风险待真机
+  C 档实拍打分，不行调大 TERM_CARD_PAD）。新涂装
+  `paint_term_card_chrome`（近黑内芯 TERM_CARD_BG=0x000D0F13 + 碳灰
+  渐变环 TERM_FRAME_C1/C2，复用 paint_page_frame_ring 与三面板同配方）；
+  GLES 第六槽 TermCard（可见性跟 grid_keybar），softbuffer 路径同涂装。
+  **同批根治 BAR-085**：8fd907b 槽位化误删 paint_under 的 render_into
+  调用，softbuffer 兜底路径网格整个不画（GLES 恒在无人看见）——恢复
+  调用+根修连带案 paint_page_frame_ring u32 下溢（小缓冲 buf_w-MARGIN
+  减法 panic → i64 算术，所有调用方共享）。考题：旧几何钉连锁红 8 枚
+  全重写（is_ink 判墨尺——壳内芯透出色不算墨，逐格/逐行判墨点全换；
+  顶带钉语义反转；首格不贴边改钉净垫带纯壳内芯+壳外纯黑+显式值 31），
+  新钉两枚（涂装冒烟：内芯/碳灰低饱和环/纯黑壳外带/小缓冲巨 inset
+  不 panic；默认底格透出壳内芯）。host cargo test 全绿+fmt+clippy 绿。
+
 - **三公民面板栈落地（2026-09-11 傍晚，用户拍板「占位页也先做出来」）**：
   文件树占位页（墨绿底 0x000A1A0F+绿系边框环，paint_ft_page_chrome）
   与滑向契约同批落地——任意栈态每个滑向唯一归宿（契约表 ai-presence

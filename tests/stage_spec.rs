@@ -8,22 +8,23 @@ use kfm_na::ui::stage;
 // BAR-070：上层槽恒可见——图层化首版漏设 Over.visible（默认 false），
 // 输入栏/光球/放大镜集体隐身（2026-09-07 用户实看）。可见性槽位单源，
 // 上层那条翻 false 即本考题红。2026-09-11 三公民第五槽：被覆盖面板仍
-// 可见（placement 不动，遮盖撤走零动画露出）。
-// 变异抽检：返回数组第 5 槽改 false → 全部断言红；槽位次序换序即红。
+// 可见（placement 不动，遮盖撤走零动画露出）；同日第六槽终端卡片壳：
+// 与键行同规跟 grid_keybar 走（基座壳恒靠泊，面板靠泊即整页盖住）。
+// 变异抽检：返回数组第 5/6 槽改 false → 断言红；槽位次序换序即红。
 #[test]
 fn spec_bar070_上层槽恒可见() {
-    // 槽序：[键行, AI, 配置, 文件树, 上层]，上层恒 true
+    // 槽序：[键行, AI, 配置, 文件树, 上层, 终端卡]
     assert_eq!(
         stage::slot_visibility(true, true, true, true),
-        [true, true, true, true, true]
+        [true, true, true, true, true, true]
     );
     assert_eq!(
         stage::slot_visibility(false, false, false, false),
-        [false, false, false, false, true]
+        [false, false, false, false, true, false]
     );
-    // 显式锁五条语义：键行跟 AI 未靠泊走，三面板各跟各的 visible 走
+    // 显式锁六条语义：键行/终端卡跟网格未靠泊走，三面板各跟各的 visible 走
     let v = stage::slot_visibility(false, true, true, false);
-    assert!(!v[0] && v[1] && v[2] && !v[3] && v[4]);
+    assert!(!v[0] && v[1] && v[2] && !v[3] && v[4] && !v[5]);
     // 被覆盖的面板：在栈（visible=true）哪怕顶是别家——露出零动画的承载
     let v = stage::slot_visibility(true, true, true, true);
     assert!(v[2] && v[3]);

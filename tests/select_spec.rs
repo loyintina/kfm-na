@@ -252,7 +252,7 @@ fn spec_选择_高亮渲染盖底色() {
     let buf_w = 2 * termview::MARGIN_X + 40 * CELL_W;
     let buf_h = termview::margin_top(CELL_H) + 4 * CELL_H + termview::MARGIN_Y;
     let mut buf = vec![0u32; (buf_w * buf_h) as usize];
-    tv.render_into(&mut buf, buf_w, buf_h);
+    tv.render_into(&mut buf, buf_w, buf_h, 0);
     // 选中格（列 0..4）整格盖 SELECT_BG：格内过半像素必须是选择底色
     // （字形墨 alpha 混合在上，边角大块还是底色）
     let cell_sel_px = |col: u32| -> usize {
@@ -281,7 +281,7 @@ fn spec_选择_高亮渲染盖底色() {
     // 清选后高亮消失
     tv.clear_selection();
     let mut buf2 = vec![0u32; (buf_w * buf_h) as usize];
-    tv.render_into(&mut buf2, buf_w, buf_h);
+    tv.render_into(&mut buf2, buf_w, buf_h, 0);
     assert!(!buf2.contains(&SELECT_BG), "清选后帧缓冲不许再有选择底色");
 }
 
@@ -329,7 +329,7 @@ fn spec_bar025_选择_高亮_cjk双宽字两格完整() {
     let buf_w = 2 * termview::MARGIN_X + 20 * CELL_W;
     let buf_h = termview::margin_top(CELL_H) + 4 * CELL_H + termview::MARGIN_Y;
     let mut buf = vec![0u32; (buf_w * buf_h) as usize];
-    tv.render_into(&mut buf, buf_w, buf_h);
+    tv.render_into(&mut buf, buf_w, buf_h, 0);
     // 格内 (SELECT_BG 像素数, 墨像素数)：墨 = 非高亮非背景的混合像素
     let stats = |col: u32| -> (usize, usize) {
         let x0 = termview::MARGIN_X + col * CELL_W;
@@ -452,7 +452,7 @@ fn spec_选择_边界无柄渲染钉() {
     let buf_w = 2 * termview::MARGIN_X + 20 * CELL_W;
     let buf_h = termview::margin_top(CELL_H) + 4 * CELL_H + termview::MARGIN_Y;
     let mut buf = vec![0u32; (buf_w * buf_h) as usize];
-    tv.render_into(&mut buf, buf_w, buf_h);
+    tv.render_into(&mut buf, buf_w, buf_h, 0);
     assert!(buf.contains(&SELECT_BG), "选区高亮必须在");
     assert!(
         !buf.contains(&0x0006_B6D4),
@@ -469,7 +469,7 @@ fn spec_放大镜_两倍最近邻与边框钳制() {
     tv.feed(b"ABCDEFGHIJ\r\nKLMNOPQRST\r\nUVWXYZabcd");
     let (buf_w, buf_h) = (500u32, 700u32);
     let mut buf = vec![0u32; (buf_w * buf_h) as usize];
-    tv.render_into(&mut buf, buf_w, buf_h);
+    tv.render_into(&mut buf, buf_w, buf_h, 0);
     // 触点 = 格 (5,1)（'P'）格心；源区中心对齐该格心
     let (tx, ty) = cell_center(5, 1);
     let (cx, cy) = (tx as u32, ty as u32);
@@ -530,13 +530,13 @@ fn spec_放大镜_贴边翻转() {
     };
     // ① 触点低位（y=600，上方 600-60-432=108 ≥0）→ 维持上方
     let mut buf = vec![0u32; (buf_w * buf_h) as usize];
-    tv.render_into(&mut buf, buf_w, buf_h);
+    tv.render_into(&mut buf, buf_w, buf_h, 0);
     tv.render_magnifier(&mut buf, buf_w, buf_h, 250.0, 600.0);
     let win_y = 600 - gap - win_h;
     border_at(&buf, 70, win_y, "触点低位：浮窗必须仍在触点上方");
     // ② 触点贴顶（y=66，上方放不下）→ 翻下方 y=66+60=126
     let mut buf = vec![0u32; (buf_w * buf_h) as usize];
-    tv.render_into(&mut buf, buf_w, buf_h);
+    tv.render_into(&mut buf, buf_w, buf_h, 0);
     tv.render_magnifier(&mut buf, buf_w, buf_h, 250.0, 66.0);
     border_at(&buf, 70, 66 + gap, "触点贴顶：浮窗必须翻转到触点下方");
     // ③ 极端矮屏（buf_h=500：上方 250-60-432<0，下方 250+60+432=742>500）
@@ -544,7 +544,7 @@ fn spec_放大镜_贴边翻转() {
     //   不被内容踩——内容区 x 从 win_x=70 起，取 x=69）
     let buf_h2 = 500u32;
     let mut buf = vec![0u32; (buf_w * buf_h2) as usize];
-    tv.render_into(&mut buf, buf_w, buf_h2);
+    tv.render_into(&mut buf, buf_w, buf_h2, 0);
     tv.render_magnifier(&mut buf, buf_w, buf_h2, 250.0, 250.0);
     assert_eq!(
         buf[(250 * buf_w + 69) as usize],
@@ -693,14 +693,14 @@ fn spec_选择_宽字符_渲染整字扩边() {
     // 只选 '中' 的格 0（探针绕钳）→ spacer 格 2 必须随格 0 同亮
     tv.set_selection_raw((0, 1), (0, 1));
     let mut buf = vec![0u32; (buf_w * buf_h) as usize];
-    tv.render_into(&mut buf, buf_w, buf_h);
+    tv.render_into(&mut buf, buf_w, buf_h, 0);
     assert!(lit(&buf, 1), "格 0 必须亮");
     assert!(lit(&buf, 2), "spacer 格必须随格 0 同亮（扩边）");
     assert!(!lit(&buf, 3), "选区外的 'b' 不许亮");
     // 反向：选区从 spacer 起 → 格 0 必须随 spacer 同亮
     tv.set_selection_raw((0, 2), (0, 4));
     let mut buf2 = vec![0u32; (buf_w * buf_h) as usize];
-    tv.render_into(&mut buf2, buf_w, buf_h);
+    tv.render_into(&mut buf2, buf_w, buf_h, 0);
     assert!(lit(&buf2, 1), "格 0 必须随 spacer 同亮（扩边）");
     assert!(lit(&buf2, 2) && lit(&buf2, 4));
     assert!(!lit(&buf2, 0), "选区外的 'a' 不许亮");

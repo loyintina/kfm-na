@@ -49,9 +49,15 @@ pub const HELP_BANNER: &str = "\x1b[36m── kfm-na 就绪 ──\x1b[0m\r\n\
 \x1b[90m快捷键行: CTRL/ALT/SHIFT 点一下粘住再敲字母\x1b[0m\r\n\
 \x1b[90m本地 HOME: Android/data/dev.kfm.na/files(文件管理器可见,随便读写)\x1b[0m\r\n";
 
-/// 画面边距（BAR-005）：网格不贴边，边缘字符不再被屏幕圆角/曲面切半。
-/// 纯黑带，不画框——框是装饰，等中央页面定稿再议
-pub const MARGIN_X: u32 = 12;
+/// 终端卡片壳几何（2026-09-11 用户拍板：终端页与三面板同配方装修，
+/// 四页同骨架——外缘距屏边 16 + 环粗 3 + 环内留白 12 = 网格原点 31）。
+/// 取代 BAR-005 的 12px 裸边距与 BAR-010 的动态顶带：壳环自带圆角屏
+/// 语义（环在 16px 处先挡一圈，文字再让 12px 不贴环），顶带常量化
+/// 不再跟格高走（捏合缩放不再挪动网格原点，眼手两把尺永不打架）
+pub const TERM_CARD_PAD: u32 = 12;
+
+/// 网格原点 X（= 卡片壳左边距）：BAR-005 语义由壳环继承
+pub const MARGIN_X: u32 = AI_PAGE_FRAME_MARGIN + AI_PAGE_FRAME_W + TERM_CARD_PAD;
 
 /// AI 对话页排版尺（期 0④ 提升为模块级：手势 px→行换算与渲染同尺）
 pub const AI_PAGE_MARGIN_X: u32 = 60;
@@ -64,17 +70,18 @@ pub const AI_THINK_FG: u32 = 0x007E_7A9E;
 /// 收流后思考块的折叠占位行（2026-09-04 用户拍板：输出完自动折叠——
 /// 思考往往不重要但必须存在；全文随消息存档，展开查看是未来的活）
 pub const AI_THINK_COLLAPSED: &str = "· 已思考 ·";
-pub const MARGIN_Y: u32 = 12;
+/// 网格底缘留白（= 壳几何同尺）：卡片底环之上不再贴字
+pub const MARGIN_Y: u32 = MARGIN_X;
 
-/// 顶边距（BAR-010）：圆角屏吃掉首行首字符（2026-08-13 实拍）——
-/// 顶部在常规边距之上再下探一整行。这是基准格高（CELL_H）下的常量值；
-/// 格高随捏合缩放变后必须走 margin_top(cell_h) 动态版
-pub const MARGIN_TOP: u32 = MARGIN_Y + CELL_H;
+/// 顶边距（壳几何恒值；BAR-010 的圆角屏语义由壳环继承）。保留常量名
+/// 供旧调用点/考题引用——语义已从「边距+一整行」变为「壳左边距同尺」
+pub const MARGIN_TOP: u32 = MARGIN_X;
 
-/// 顶边距动态版（A 档考题钉死）：跟随当前格高——缩放任一档下顶带都是
-/// 「常规边距 + 一整行」，圆角屏语义不随缩放漂移
-pub const fn margin_top(cell_h: u32) -> u32 {
-    MARGIN_Y + cell_h
+/// 顶边距（常量化，2026-09-11）：不再跟随格高——壳环位置固定，网格原点
+/// 固定，缩放任一档下原点不动（旧动态版会随格高挪原点，眼手两尺打架
+/// 的温床）。参数保留只为调用点零改动
+pub const fn margin_top(_cell_h: u32) -> u32 {
+    MARGIN_X
 }
 
 /// 捏合缩放格尺寸钳制区间（A 档考题钉死）：10x20 = 还能认出字的下限，
@@ -285,6 +292,41 @@ pub fn ft_split(ft_off: i32, w: u32) -> (bool, bool) {
     (ft_off != 0, ft_off > -(w as i32))
 }
 
+/// 终端卡片壳底装修（2026-09-11 用户拍板「终端也包全屏卡片壳」）：
+/// 与三面板同配方 paint_page_frame_ring，无色相碳灰环 + 近黑内芯底
+/// （卡片感 = 壳内略亮于壳外纯黑）。无平移无动画——基座页恒靠泊；
+/// 网格从 (MARGIN_X, MARGIN_Y) 起画，壳内芯留白带与右/下余量露出
+/// TERM_CARD_BG。bottom_inset = 键盘 + 快捷键行 + 输入栏带（壳下缘
+/// 停在快捷键行上沿之上 16px——与三面板停输入栏带上沿同尺）
+pub fn paint_term_card_chrome(buf: &mut [u32], buf_w: u32, buf_h: u32, bottom_inset: u32) {
+    if buf_w == 0 || buf_h == 0 {
+        return;
+    }
+    // 小缓冲安全归 paint_page_frame_ring 的 i64 算术+早退（根修见彼处），
+    // 这里不再钳 inset——环画不下时它自己退，内芯 fill 有 y1>m 闸
+    let mut frame = Frame {
+        buf,
+        w: buf_w,
+        h: buf_h,
+    };
+    let m = AI_PAGE_FRAME_MARGIN;
+    let y1 = buf_h.saturating_sub(bottom_inset.saturating_add(m));
+    if y1 > m && buf_w > 2 * m {
+        frame.fill_rect(m, m, buf_w - 2 * m, y1 - m, TERM_CARD_BG);
+    }
+    paint_page_frame_ring(
+        &mut frame,
+        buf_w,
+        buf_h,
+        bottom_inset,
+        0,
+        0,
+        TERM_CARD_BG,
+        TERM_FRAME_C1,
+        TERM_FRAME_C2,
+    );
+}
+
 /// 页面边框环（2026-09-04 装修配方的唯一实体，09-05 平移参数化，
 /// 09-10 双色相化+双轴平移供配置页复用）：先外发光，再 135° 渐变
 /// 外环，最后页面底色 punch 内芯（左缘让 9 = 3 倍粗，其余让 3）。
@@ -304,8 +346,12 @@ fn paint_page_frame_ring(
 ) {
     let fx0 = AI_PAGE_FRAME_MARGIN as i64 + i64::from(off_x);
     let fy0 = AI_PAGE_FRAME_MARGIN as i64 + i64::from(off_y);
-    let fx1 = (buf_w - AI_PAGE_FRAME_MARGIN) as i64 + i64::from(off_x);
-    let fy1 = (buf_h - bottom_inset - AI_PAGE_FRAME_MARGIN) as i64 + i64::from(off_y);
+    // i64 算术（2026-09-11 根修：终端卡片壳小缓冲实踩 u32 减法下溢——
+    // buf_w/h 或 inset 小于边距时 (buf_w - MARGIN) 直接 panic；先转 i64
+    // 再减，下面的早退检查才有意义，所有调用方共享这份安全）
+    let fx1 = i64::from(buf_w) - i64::from(AI_PAGE_FRAME_MARGIN) + i64::from(off_x);
+    let fy1 = i64::from(buf_h) - i64::from(bottom_inset) - i64::from(AI_PAGE_FRAME_MARGIN)
+        + i64::from(off_y);
     if fx1 <= fx0 + 2 * i64::from(AI_PAGE_FRAME_R) || fy1 <= fy0 + 2 * i64::from(AI_PAGE_FRAME_R) {
         return;
     }
@@ -1288,13 +1334,19 @@ impl TermView {
         }
     }
 
-    /// 把当前可见网格渲染进 XRGB 帧缓冲（黑底，满幅重绘）。
+    /// 把当前可见网格渲染进 XRGB 帧缓冲（满幅重绘）。
     /// buf 尺寸必须与 buf_w*buf_h 一致（调用方 softbuffer 保证；不一致只画放得下的部分）。
-    pub fn render_into(&mut self, buf: &mut [u32], buf_w: u32, buf_h: u32) {
+    /// 2026-09-11 终端卡片壳：清屏纯黑（壳外）→ 卡片壳内芯+碳灰环 → 网格
+    /// 单元（默认底色的格不补色块 = 透出壳内芯 TERM_CARD_BG，与 GLES 路径
+    /// 「clear 黑 + 卡片槽 + 非默认底实例」逐像素同构）。card_bottom_inset
+    /// = 壳下缘让位高度（前台 = 键盘+快捷键行+输入栏带；后台值守倒帧无
+    /// chrome 视野传 0）
+    pub fn render_into(&mut self, buf: &mut [u32], buf_w: u32, buf_h: u32, card_bottom_inset: u32) {
         buf.fill(DEFAULT_BG);
         if buf_w == 0 || buf_h == 0 {
             return;
         }
+        paint_term_card_chrome(buf, buf_w, buf_h, card_bottom_inset);
         let mut frame = Frame {
             buf,
             w: buf_w,
@@ -2145,6 +2197,14 @@ pub const FT_PAGE_BG: u32 = 0x000A_1A0F;
 pub const FT_FRAME_C1: u32 = 0x0040_E080; // 翠绿 rgba(64,224,128,~.8)
 pub const FT_FRAME_C2: u32 = 0x0020_7040; // 墨绿 rgba(32,112,64,~.7)
 
+/// 终端卡片壳底色/边框（2026-09-11 用户拍板「终端也包一个全屏卡片壳，
+/// 样式统一」）：同配方**无色相碳灰**——终端是基座不是卡，一眼看出
+/// 「这是底」。低饱和钉：r≈g≈b（与三面板的彩色相机器可区分）；底色
+/// 近黑微蓝灰，比屏外纯黑略亮（卡片感 = 壳内略亮于壳外）
+pub const TERM_CARD_BG: u32 = 0x000D_0F13;
+pub const TERM_FRAME_C1: u32 = 0x00AE_B6C2; // 亮银灰 rgba(174,182,194,~.8)
+pub const TERM_FRAME_C2: u32 = 0x0046_4C55; // 暗碳灰 rgba(70,76,85,~.7)
+
 // 光球 sprite 机制已迁 ui/orb.rs（2026-09-01 控件库立形）——配方常量/
 // build_orb_sprite/blit_orb_sprite/双缓存/绘制本体全部随迁，零逻辑变化；
 // 考题同源路径 tests/ai_presence_spec.rs（kfm_na::ui::orb::）
@@ -2527,7 +2587,7 @@ pub trait TermEmu: Send {
     fn cell_size(&self) -> (u32, u32);
     /// 运行期改格尺寸（捏合缩放，android_app 双指手势调用方）
     fn set_cell_size(&mut self, cell_w: u32, cell_h: u32);
-    fn render_into(&mut self, buf: &mut [u32], w: u32, h: u32);
+    fn render_into(&mut self, buf: &mut [u32], w: u32, h: u32, card_bottom_inset: u32);
     /// GPU 网格收集（期 1 第 2 层，android_app GLES 分支调用方）：格子
     /// 的纯数据镜像（颜色决策/几何裁剪与 render_into 同源）——GLES 后端
     /// grid_to_instances 的进料；CPU 路径不调
@@ -2660,8 +2720,8 @@ impl TermEmu for TermView {
     fn set_cell_size(&mut self, cell_w: u32, cell_h: u32) {
         TermView::set_cell_size(self, cell_w, cell_h)
     }
-    fn render_into(&mut self, buf: &mut [u32], w: u32, h: u32) {
-        TermView::render_into(self, buf, w, h)
+    fn render_into(&mut self, buf: &mut [u32], w: u32, h: u32, card_bottom_inset: u32) {
+        TermView::render_into(self, buf, w, h, card_bottom_inset)
     }
     fn gpu_cells(&mut self, w: u32, h: u32) -> Vec<crate::glyph_atlas::GpuCell> {
         TermView::collect_gpu_cells(self, w, h)

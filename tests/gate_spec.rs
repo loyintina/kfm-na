@@ -86,10 +86,11 @@ fn spec_离屏倒帧_渲染到dump全链路() {
     let mut tv = TermView::new(font, None, cols, rows, CELL_W, CELL_H);
     tv.feed(b"hi");
     let mut buf = vec![0u32; (w * h) as usize];
-    tv.render_into(&mut buf, w, h);
+    tv.render_into(&mut buf, w, h, 0);
     assert!(
-        buf.iter().any(|&px| px != DEFAULT_BG),
-        "喂了 hi 的帧里必须有非背景像素"
+        buf.iter()
+            .any(|&px| px != DEFAULT_BG && px != kfm_na::termview::TERM_CARD_BG),
+        "喂了 hi 的帧里必须有字墨像素（壳内芯透出色不算墨）"
     );
 
     let dir = std::env::temp_dir().join(format!("kfm-shot3-{}", std::process::id()));

@@ -188,9 +188,16 @@ fn spec_颜色_indexed分段边界() {
 
 // ---------- B 档：渲染冒烟钉（真 Term + 真字体） ----------
 
-/// 帧缓冲里存在非背景色像素
+/// 字墨判别（2026-09-11 终端卡片壳改造）：默认底色的格不再重刷黑，
+/// 透出壳内芯 TERM_CARD_BG——「不是黑」不等于「有墨」，判墨必须同时
+/// 排除纯黑壳外带与壳内芯色（变异抽检语义：缺字形/不渲染必须仍能抓红）
+fn is_ink(p: u32) -> bool {
+    p != DEFAULT_BG && p != termview::TERM_CARD_BG
+}
+
+/// 帧缓冲里存在字墨像素
 fn has_non_bg(buf: &[u32]) -> bool {
-    !buf.iter().all(|&p| p == DEFAULT_BG)
+    buf.iter().any(|&p| is_ink(p))
 }
 
 #[test]
@@ -198,7 +205,7 @@ fn spec_渲染_feed文字后帧缓冲有字形像素() {
     let mut tv = host_termview(24, 6);
     tv.feed(b"hello");
     let mut buf = vec![DEFAULT_FG; (24 * CELL_W * 6 * CELL_H) as usize]; // 污染初值防假绿
-    tv.render_into(&mut buf, 24 * CELL_W, 6 * CELL_H);
+    tv.render_into(&mut buf, 24 * CELL_W, 6 * CELL_H, 0);
     assert!(has_non_bg(&buf), "feed hello 后必须画出非背景像素");
     // 且必须有背景像素（黑底真刷了）——防「全帧涂满」式假实现
     assert!(buf.contains(&DEFAULT_BG), "黑底必须存在");
@@ -209,7 +216,7 @@ fn spec_渲染_ansi红色出红像素() {
     let mut tv = host_termview(24, 6);
     tv.feed(b"\x1b[31mR");
     let mut buf = vec![0u32; (24 * CELL_W * 6 * CELL_H) as usize];
-    tv.render_into(&mut buf, 24 * CELL_W, 6 * CELL_H);
+    tv.render_into(&mut buf, 24 * CELL_W, 6 * CELL_H, 0);
     // 红像素：R 通道显著高于 G/B
     assert!(
         buf.iter().any(|&p| {
@@ -225,10 +232,10 @@ fn spec_渲染_光标格反色() {
     let mut tv = host_termview(24, 6);
     tv.feed(b"hello"); // 光标落在 (0行, 5列)——空字符格，无字形
     let mut buf = vec![0u32; (24 * CELL_W * 6 * CELL_H) as usize];
-    tv.render_into(&mut buf, 24 * CELL_W, 6 * CELL_H);
+    tv.render_into(&mut buf, 24 * CELL_W, 6 * CELL_H, 0);
     // 光标格（5列, 0行）反色后背景为白——该格矩形内必须有接近白的像素；
-    // 相邻的空格（6列）不是光标，应全黑
-    // 渲染的格原点 = cell_origin + 边距（BAR-005）+ 顶部下探（BAR-010）
+    // 相邻的空格（6列）不是光标，整格透出壳内芯 TERM_CARD_BG
+    // 渲染的格原点 = cell_origin + 边距（BAR-005）+ 壳环靠泊（2026-09-11 卡片壳）
     let (cx, cy) = cell_origin(5, 0, CELL_W, CELL_H);
     let (cx, cy) = (cx + termview::MARGIN_X, cy + termview::MARGIN_TOP);
     let buf_w = 24 * CELL_W;
@@ -246,13 +253,14 @@ fn spec_渲染_光标格反色() {
     let nx = nx + termview::MARGIN_X;
     for y in cy..cy + CELL_H {
         for x in nx..nx + CELL_W {
-            if buf[(y * buf_w + x) as usize] != DEFAULT_BG {
+            if buf[(y * buf_w + x) as usize] != termview::TERM_CARD_BG {
                 neighbor_dark = false;
             }
         }
     }
     assert!(cursor_white, "光标格必须反色（白底）");
-    assert!(neighbor_dark, "非光标的空格必须保持黑底");
+    // 卡片壳契约：非光标的空格不反色——整格透出壳内芯 TERM_CARD_BG
+    assert!(neighbor_dark, "非光标的空格必须透出壳内芯（不反色）");
 }
 
 #[test]
@@ -261,7 +269,7 @@ fn spec_渲染_cjk缺字形不panic() {
     // DejaVuSansMono 无 CJK 字形——tofu 方框或空位图，绝不许 panic
     tv.feed("中文混排 English 123".as_bytes());
     let mut buf = vec![0u32; (24 * CELL_W * 6 * CELL_H) as usize];
-    tv.render_into(&mut buf, 24 * CELL_W, 6 * CELL_H);
+    tv.render_into(&mut buf, 24 * CELL_W, 6 * CELL_H, 0);
     assert!(has_non_bg(&buf), "英文部分必须画出来");
 }
 
@@ -273,7 +281,7 @@ fn spec_渲染_滚屏不panic且新内容在画面() {
         tv.feed(format!("line-{i}\r\n").as_bytes());
     }
     let mut buf = vec![0u32; (10 * CELL_W * 3 * CELL_H) as usize];
-    tv.render_into(&mut buf, 10 * CELL_W, 3 * CELL_H);
+    tv.render_into(&mut buf, 10 * CELL_W, 3 * CELL_H, 0);
     assert!(has_non_bg(&buf));
 }
 
@@ -305,25 +313,26 @@ fn spec_渲染_resize后正常() {
     tv.resize_cells(10, 2);
     tv.feed(b"\r\nafter");
     let mut buf = vec![0u32; (10 * CELL_W * 2 * CELL_H) as usize];
-    tv.render_into(&mut buf, 10 * CELL_W, 2 * CELL_H);
+    tv.render_into(&mut buf, 10 * CELL_W, 2 * CELL_H, 0);
     assert!(has_non_bg(&buf));
     // 0 维钳 1 不 panic
     tv.resize_cells(0, 0);
-    tv.render_into(&mut buf, 10 * CELL_W, 2 * CELL_H);
+    tv.render_into(&mut buf, 10 * CELL_W, 2 * CELL_H, 0);
 }
 
 // ---------- A 档：字体加载 ----------
 
-/// 帧缓冲里某格的墨水纵向跨度 → (最上, 最下) 非背景像素行（相对格原点）。
+/// 帧缓冲里某格的字墨纵向跨度 → (最上, 最下) 字墨像素行（相对格原点）。
 /// 无墨水的格返回 (CELL_H, 0)（上下颠倒即为空）。
-/// 注意含边距偏移——渲染的格原点 = cell_origin + (MARGIN_X, MARGIN_TOP)
+/// 注意含边距偏移——渲染的格原点 = cell_origin + (MARGIN_X, MARGIN_TOP)；
+/// 壳内芯色不算墨（is_ink，卡片壳后空格透壳底）
 fn cell_ink_span(buf: &[u32], buf_w: u32, col: u32, row: u32) -> (u32, u32) {
     let (ox, oy) = cell_origin(col, row, CELL_W, CELL_H);
     let (ox, oy) = (ox + termview::MARGIN_X, oy + termview::MARGIN_TOP);
     let (mut top, mut bot) = (CELL_H, 0);
     for y in 0..CELL_H {
         for x in 0..CELL_W {
-            if buf[((oy + y) * buf_w + ox + x) as usize] != DEFAULT_BG {
+            if is_ink(buf[((oy + y) * buf_w + ox + x) as usize]) {
                 top = top.min(y);
                 bot = bot.max(y);
             }
@@ -339,7 +348,7 @@ fn spec_bar001_基线对齐_同基线字母底边对齐() {
     let buf_w = 2 * termview::MARGIN_X + 8 * CELL_W;
     let buf_h = termview::MARGIN_TOP + 2 * CELL_H + termview::MARGIN_Y;
     let mut buf = vec![0u32; (buf_w * buf_h) as usize];
-    tv.render_into(&mut buf, buf_w, buf_h);
+    tv.render_into(&mut buf, buf_w, buf_h, 0);
     let (top_a, bot_a) = cell_ink_span(&buf, buf_w, 0, 0);
     let (top_x, bot_x) = cell_ink_span(&buf, buf_w, 1, 0);
     let (_, bot_p) = cell_ink_span(&buf, buf_w, 2, 0);
@@ -455,42 +464,163 @@ fn spec_字体_体积闸跳过巨物() {
 #[test]
 fn spec_边距_首格不贴边() {
     // BAR-005 病灶：网格从 (0,0) 画起，边缘字符被屏幕圆角/曲面切半。
-    // BAR-010：顶带再下探一整行（MARGIN_TOP = MARGIN_Y + CELL_H）——
-    // 圆角屏吃首行首字符（2026-08-13 实拍）。
-    // 契约：帧缓冲四周一圈边距带内必须是纯背景，字形墨水全部在带内之后；
-    // 顶带必须是一整行高（变异抽检：MARGIN_TOP 改回 MARGIN_Y 本考题必须红）
-    assert_eq!(termview::MARGIN_TOP, termview::MARGIN_Y + CELL_H);
+    // 2026-09-11 终端卡片壳改造：边距语义由壳继承——几何单源
+    // MARGIN = 壳外缘(16) + 环粗(3) + 净垫(12) = 31，四边同尺常量化；
+    // BAR-010「顶带下探一整行」的防圆角切字意图由壳环靠泊距离接管
+    // （顶带不再随格高走，反转旧契约，见 spec_缩放_顶带恒定不随格高）。
+    // 契约：①几何单源关系钉死；②壳环与首格之间的净垫带必须纯壳内芯色
+    // （字墨不许贴环——变异抽检：MARGIN_X 改小/TERM_CARD_PAD 归零必须红）；
+    // ③壳外缘列纯黑；④网格区必须有真字墨（防「全帧涂黑」式假绿）
+    assert_eq!(
+        termview::MARGIN_X,
+        termview::AI_PAGE_FRAME_MARGIN + termview::AI_PAGE_FRAME_W + termview::TERM_CARD_PAD,
+        "边距必须是壳几何单源：外缘+环粗+净垫"
+    );
+    // 显式值钉（防关系式跟着常量一起漂——16+3+12=31 是拍板值）
+    assert_eq!(
+        termview::MARGIN_X,
+        31,
+        "边距拍板值 31 = 16 外缘 + 3 环 + 12 净垫"
+    );
+    assert_eq!(termview::MARGIN_TOP, termview::MARGIN_X);
+    assert_eq!(termview::MARGIN_Y, termview::MARGIN_X);
     let mut tv = host_termview(8, 2);
     tv.feed(b"A");
     let buf_w = 2 * termview::MARGIN_X + 8 * CELL_W;
     let buf_h = termview::MARGIN_TOP + termview::MARGIN_Y + 2 * CELL_H;
     let mut buf = vec![0u32; (buf_w * buf_h) as usize];
-    tv.render_into(&mut buf, buf_w, buf_h);
-    for y in 0..buf_h {
-        for x in 0..buf_w {
-            if x < termview::MARGIN_X
-                || y < termview::MARGIN_TOP
-                || x >= buf_w - termview::MARGIN_X
-                || y >= buf_h - termview::MARGIN_Y
-            {
-                assert_eq!(
-                    buf[(y * buf_w + x) as usize],
-                    DEFAULT_BG,
-                    "边距带 ({x},{y}) 必须是纯背景"
-                );
-            }
+    tv.render_into(&mut buf, buf_w, buf_h, 0);
+    // ②净垫带：环内缘到网格原点之间，只查四边中段的直行带（角带弧区
+    // 是环墨几何主场，不在此处判）。环的左缘 3 倍粗（装修配方），
+    // 故左垫带从 MARGIN+3W 起，其余三边从 MARGIN+W 起
+    let ring_l = termview::AI_PAGE_FRAME_MARGIN + 3 * termview::AI_PAGE_FRAME_W;
+    let ring_r = termview::AI_PAGE_FRAME_MARGIN + termview::AI_PAGE_FRAME_W;
+    let mid_y = buf_h / 2;
+    let mid_x = buf_w / 2;
+    for y in mid_y - 10..mid_y + 10 {
+        for x in ring_l..termview::MARGIN_X {
+            assert_eq!(
+                buf[(y * buf_w + x) as usize],
+                termview::TERM_CARD_BG,
+                "左净垫带 ({x},{y}) 必须纯壳内芯"
+            );
+        }
+        for x in buf_w - termview::MARGIN_X..buf_w - ring_r {
+            assert_eq!(
+                buf[(y * buf_w + x) as usize],
+                termview::TERM_CARD_BG,
+                "右净垫带 ({x},{y}) 必须纯壳内芯"
+            );
         }
     }
-    // 墨水必须真的出现在边距之后的首格区域（防「全帧涂黑」式假绿）
+    for y in ring_r..termview::MARGIN_TOP {
+        for x in mid_x - 10..mid_x + 10 {
+            assert_eq!(
+                buf[(y * buf_w + x) as usize],
+                termview::TERM_CARD_BG,
+                "顶净垫带 ({x},{y}) 必须纯壳内芯"
+            );
+        }
+    }
+    // ③壳外缘列纯黑（发光 spread 从外缘 1px 起，0 列必须无墨）
+    for y in 0..buf_h {
+        assert_eq!(
+            buf[(y * buf_w) as usize],
+            DEFAULT_BG,
+            "壳外左缘列 (0,{y}) 必须纯黑"
+        );
+        assert_eq!(
+            buf[(y * buf_w + buf_w - 1) as usize],
+            DEFAULT_BG,
+            "壳外右缘列 ({},{y}) 必须纯黑",
+            buf_w - 1
+        );
+    }
+    // ④字墨必须真的出现在边距之后的网格区（防「全帧涂壳色」式假绿）
     let mut ink = false;
     for y in termview::MARGIN_TOP..buf_h {
         for x in termview::MARGIN_X..buf_w {
-            if buf[(y * buf_w + x) as usize] != DEFAULT_BG {
+            if is_ink(buf[(y * buf_w + x) as usize]) {
                 ink = true;
             }
         }
     }
     assert!(ink, "边距之后必须有字形墨水");
+}
+
+// ---------- A 档：终端卡片壳（2026-09-11，终端包壳与三面板同尺同配方） ----------
+
+#[test]
+fn spec_终端卡片壳_涂装冒烟() {
+    // 壳 = 近黑微蓝灰内芯 + 碳灰渐变环（无色相，与三面板彩色相区分——
+    // 终端是基座不是卡）。契约：①内芯 TERM_CARD_BG；②环带直行段有墨且
+    // 低饱和（变异抽检：环换彩色相/纯黑环必须红）；③壳外带纯黑；
+    // ④小缓冲/巨 inset 不 panic（paint_page_frame_ring i64 根修前
+    // 这里实踩 u32 下溢）
+    let (w, h) = (200u32, 300u32);
+    let mut buf = vec![0u32; (w * h) as usize];
+    termview::paint_term_card_chrome(&mut buf, w, h, 0);
+    // ①内芯
+    assert_eq!(
+        buf[(150 * w + 100) as usize],
+        termview::TERM_CARD_BG,
+        "壳内芯必须是 TERM_CARD_BG"
+    );
+    // ②环带：左缘中段（左缘 3 倍粗配方，x=20 必在 16..25 环带上）
+    let ring_p = buf[(150 * w + 20) as usize];
+    assert!(
+        ring_p != termview::TERM_CARD_BG && ring_p != DEFAULT_BG,
+        "环带必须有墨（x=20,y=150 实得 {ring_p:#010x}）"
+    );
+    let (r, g, b) = ((ring_p >> 16) & 0xFF, (ring_p >> 8) & 0xFF, ring_p & 0xFF);
+    assert!(
+        r.abs_diff(g) <= 20 && g.abs_diff(b) <= 20,
+        "环必须碳灰低饱和无色相（实得 r={r} g={g} b={b}）"
+    );
+    assert!(r >= 0x40, "环必须显著亮于内芯（读得出边界）");
+    // ③壳外带纯黑（发光 spread 够不到 0 列与 0 行）
+    assert_eq!(buf[0], DEFAULT_BG, "壳外角必须纯黑");
+    assert_eq!(buf[(150 * w) as usize], DEFAULT_BG, "壳外左缘列必须纯黑");
+    // ④小缓冲 + 巨 inset 不 panic
+    let mut tiny = vec![0u32; 64];
+    termview::paint_term_card_chrome(&mut tiny, 8, 8, 0);
+    termview::paint_term_card_chrome(&mut tiny, 8, 8, u32::MAX);
+    // ⑤环色相钉：两端色本身都必须碳灰低饱和（无色相）——与三面板
+    // 彩色相的区分线钉在常量上（变异抽检：任一端换彩色相必须红）
+    for (name, c) in [
+        ("C1", termview::TERM_FRAME_C1),
+        ("C2", termview::TERM_FRAME_C2),
+    ] {
+        let (r, g, b) = ((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF);
+        assert!(
+            r.abs_diff(g) <= 16 && g.abs_diff(b) <= 16,
+            "{name} 必须碳灰低饱和（实得 r={r} g={g} b={b}）"
+        );
+    }
+}
+
+#[test]
+fn spec_终端卡片壳_默认底格透出壳内芯() {
+    // 眼手同源的渲染层证据：feed 文字后无字格 = TERM_CARD_BG（不是黑），
+    // 壳外 = 纯黑——终端坐在卡里，卡外是虚空（变异抽检：默认底格改回
+    // 重刷 DEFAULT_BG，或壳内芯换色，本考题必须红）
+    let mut tv = host_termview(8, 2);
+    tv.feed(b"A");
+    let buf_w = 2 * termview::MARGIN_X + 8 * CELL_W;
+    let buf_h = termview::MARGIN_TOP + termview::MARGIN_Y + 2 * CELL_H;
+    let mut buf = vec![0u32; (buf_w * buf_h) as usize];
+    tv.render_into(&mut buf, buf_w, buf_h, 0);
+    let (cx, cy) = cell_origin(4, 1, CELL_W, CELL_H);
+    let (cx, cy) = (
+        cx + termview::MARGIN_X + CELL_W / 2,
+        cy + termview::MARGIN_TOP + CELL_H / 2,
+    );
+    assert_eq!(
+        buf[(cy * buf_w + cx) as usize],
+        termview::TERM_CARD_BG,
+        "无字格必须透出壳内芯"
+    );
+    assert_eq!(buf[0], DEFAULT_BG, "壳外必须纯黑");
 }
 
 // ---------- A 档：CJK 判定与备用字体 ----------
@@ -536,8 +666,8 @@ fn spec_渲染_cjk备用字体上屏() {
     let buf_w = 2 * termview::MARGIN_X + 8 * CELL_W;
     let buf_h = termview::MARGIN_TOP + termview::MARGIN_Y + 2 * CELL_H;
     let mut buf = vec![0u32; (buf_w * buf_h) as usize];
-    tv.render_into(&mut buf, buf_w, buf_h);
-    assert!(buf.iter().any(|&p| p != DEFAULT_BG), "CJK 必须有墨");
+    tv.render_into(&mut buf, buf_w, buf_h, 0);
+    assert!(buf.iter().any(|&p| is_ink(p)), "CJK 必须有墨");
 }
 
 #[test]
@@ -549,7 +679,7 @@ fn spec_渲染_tofu目击名单() {
     let buf_w = 2 * termview::MARGIN_X + 8 * CELL_W;
     let buf_h = termview::MARGIN_TOP + termview::MARGIN_Y + 2 * CELL_H;
     let mut buf = vec![0u32; (buf_w * buf_h) as usize];
-    tv.render_into(&mut buf, buf_w, buf_h);
+    tv.render_into(&mut buf, buf_w, buf_h, 0);
     let tofu = tv.take_tofu_chars();
     assert!(tofu.contains(&'\u{E000}'), "PUA 私用区字符必须目击");
     assert!(tofu.contains(&'\u{280B}'), "双缺的盲文必须目击");
@@ -581,7 +711,7 @@ fn spec_渲染_tab控制符不落墨不进目击名单() {
     let buf_w = 2 * termview::MARGIN_X + 16 * CELL_W;
     let buf_h = termview::MARGIN_TOP + termview::MARGIN_Y + 2 * CELL_H;
     let mut buf = vec![0u32; (buf_w * buf_h) as usize];
-    tv.render_into(&mut buf, buf_w, buf_h);
+    tv.render_into(&mut buf, buf_w, buf_h, 0);
     assert!(!tv.take_tofu_chars().contains(&'\t'), "tab 不许进目击名单");
     let cell_ink = |buf: &[u32], col: u32| -> usize {
         let (x0, y0) = cell_origin(col, 0, CELL_W, CELL_H);
@@ -589,7 +719,7 @@ fn spec_渲染_tab控制符不落墨不进目击名单() {
         let mut n = 0;
         for y in y0..y0 + CELL_H {
             for x in x0..x0 + CELL_W {
-                if buf[(y * buf_w + x) as usize] != DEFAULT_BG {
+                if is_ink(buf[(y * buf_w + x) as usize]) {
                     n += 1;
                 }
             }
@@ -642,13 +772,13 @@ fn spec_滚动_历史行必须画上屏() {
     let buf_w = 2 * termview::MARGIN_X + 8 * CELL_W;
     let buf_h = termview::MARGIN_TOP + termview::MARGIN_Y + 10 * CELL_H;
     let mut buf = vec![0u32; (buf_w * buf_h) as usize];
-    tv.render_into(&mut buf, buf_w, buf_h);
+    tv.render_into(&mut buf, buf_w, buf_h, 0);
     let row_ink = |row: u32| -> usize {
         let y0 = termview::MARGIN_TOP + row * CELL_H;
         let mut n = 0;
         for y in y0..y0 + CELL_H {
             for x in termview::MARGIN_X..buf_w - termview::MARGIN_X {
-                if buf[(y * buf_w + x) as usize] != DEFAULT_BG {
+                if is_ink(buf[(y * buf_w + x) as usize]) {
                     n += 1;
                 }
             }
@@ -927,14 +1057,14 @@ fn spec_bar032_powerline箭头_实心阶梯三角() {
 // ---------- A 档：捏合缩放（2026-08-21，用户两次抱怨「太小」+ 双指调字号） ----------
 
 #[test]
-fn spec_缩放_顶边距随格高走() {
-    // BAR-010 语义动态化：顶带 = 常规边距 + 一整行，格高变顶带跟着变。
-    // 基准格高下动态版必须等于常量版（旧考题 spec_边距_首格不贴边 的
-    // MARGIN_TOP == MARGIN_Y + CELL_H 钉继续有效）
-    // 变异抽检：margin_top 改回恒定 MARGIN_Y 本考题必须红
+fn spec_缩放_顶带恒定不随格高() {
+    // 2026-09-11 终端卡片壳改造：顶带并入壳几何单源，恒定 MARGIN_X(31)——
+    // BAR-010「顶带随格高走（MARGIN_Y+CELL_H）」的旧契约就此反转，
+    // 防圆角切字的意图由壳环靠泊距离接管（格再怎么大，壳环位置不动）。
+    // 变异抽检：margin_top 改回随格高走（MARGIN_Y + cell_h）本考题必须红
     assert_eq!(termview::margin_top(CELL_H), termview::MARGIN_TOP);
-    assert_eq!(termview::margin_top(20), termview::MARGIN_Y + 20);
-    assert_eq!(termview::margin_top(90), termview::MARGIN_Y + 90);
+    assert_eq!(termview::margin_top(20), termview::MARGIN_X);
+    assert_eq!(termview::margin_top(90), termview::MARGIN_X);
 }
 
 #[test]
@@ -966,18 +1096,18 @@ fn spec_缩放_捏合钳制纯函数() {
     );
 }
 
-/// 数一格内的非背景墨像素（set_cell_size 重算字号的判卷尺：
-/// 格放大 → 字号重算 → 同字符墨变多）
+/// 数一格内的字墨像素（set_cell_size 重算字号的判卷尺：
+/// 格放大 → 字号重算 → 同字符墨变多）；壳内芯透出色不算墨
 fn cell_ink_count(tv: &mut TermView, buf_w: u32, buf_h: u32, col: u32, row: u32) -> usize {
     let (cw, ch) = tv.cell_size();
     let mut buf = vec![0u32; (buf_w * buf_h) as usize];
-    tv.render_into(&mut buf, buf_w, buf_h);
+    tv.render_into(&mut buf, buf_w, buf_h, 0);
     let (x0, y0) = cell_origin(col, row, cw, ch);
     let (x0, y0) = (x0 + termview::MARGIN_X, y0 + termview::margin_top(ch));
     let mut n = 0;
     for y in y0..y0 + ch {
         for x in x0..x0 + cw {
-            if buf[(y * buf_w + x) as usize] != DEFAULT_BG {
+            if is_ink(buf[(y * buf_w + x) as usize]) {
                 n += 1;
             }
         }
@@ -1012,13 +1142,13 @@ fn spec_缩放_set_cell_size重算字几何() {
     tv.set_cell_size(0, 0);
     assert_eq!(tv.cell_size(), (1, 1));
     let mut tiny = vec![0u32; 64];
-    tv.render_into(&mut tiny, 8, 8);
+    tv.render_into(&mut tiny, 8, 8, 0);
     // 设回不 panic + resize 跟随不 panic（android_app 链路：set_cell_size
     // 后必跟 apply_window_size → resize_cells）
     tv.set_cell_size(CELL_W, CELL_H);
     tv.resize_cells(20, 5);
     tv.resize_cells(0, 0);
-    tv.render_into(&mut tiny, 8, 8);
+    tv.render_into(&mut tiny, 8, 8, 0);
 }
 
 // ---------- A 档：单格 CJK 字形格宽裁剪（2026-08-21 实拍 ⇄ 溢出） ----------
@@ -1045,14 +1175,14 @@ fn spec_bar026_渲染_单格cjk字形按格宽裁剪() {
     let buf_w = 2 * termview::MARGIN_X + 10 * CELL_W;
     let buf_h = termview::margin_top(CELL_H) + 3 * CELL_H + termview::MARGIN_Y;
     let mut buf = vec![0u32; (buf_w * buf_h) as usize];
-    tv.render_into(&mut buf, buf_w, buf_h);
+    tv.render_into(&mut buf, buf_w, buf_h, 0);
     let cell_ink = |col: u32| -> usize {
         let x0 = termview::MARGIN_X + col * CELL_W;
         let y0 = termview::margin_top(CELL_H);
         let mut n = 0;
         for y in y0..y0 + CELL_H {
             for x in x0..x0 + CELL_W {
-                if buf[(y * buf_w + x) as usize] != DEFAULT_BG {
+                if is_ink(buf[(y * buf_w + x) as usize]) {
                     n += 1;
                 }
             }
@@ -2425,9 +2555,13 @@ fn spec_gpu_收集口_空网格空格子_字形供墨可装载() {
     use kfm_na::termview::TermEmu;
     let mut tv = host_termview(8, 2);
     // 空网格（全空格）：格子产出但字符是空格——收集口照样给格（背景决策
-    // 归 grid_to_instances）。缓冲高 = 顶带(margin_top 吃一整行，BAR-010)
-    // + 两行网格，少给一行第二行就被顶带裁掉（A 档裁剪语义的副产物）
-    let cells = TermEmu::gpu_cells(&mut tv, CELL_W * 8, CELL_H * 2 + margin_top_of());
+    // 归 grid_to_instances）。缓冲必须含四边边距（卡片壳几何 31px）——
+    // 格原点 = 边距 + 格坐标，少给边距末行末列就被裁剪漏收
+    let cells = TermEmu::gpu_cells(
+        &mut tv,
+        CELL_W * 8 + 2 * kfm_na::termview::MARGIN_X,
+        CELL_H * 2 + margin_top_of() + kfm_na::termview::MARGIN_Y,
+    );
     assert_eq!(cells.len(), 16);
     assert!(cells.iter().all(|c| c.c == ' ' && !c.wide && !c.spacer));
     // 图集供墨：'A' 主字体可路由（font 0），位图非空，off_y = 基线 - ymin - h
@@ -2468,9 +2602,13 @@ fn spec_gpu_收集口_喂字后有真格_宽字符标宽() {
     use kfm_na::termview::TermEmu;
     let mut tv = host_termview(8, 2);
     TermEmu::feed(&mut tv, "A中B\n".as_bytes());
-    let cells = TermEmu::gpu_cells(&mut tv, CELL_W * 8, CELL_H * 2 + margin_top_of());
+    let (gw, gh) = (
+        CELL_W * 8 + 2 * kfm_na::termview::MARGIN_X,
+        CELL_H * 2 + margin_top_of() + kfm_na::termview::MARGIN_Y,
+    );
+    let cells = TermEmu::gpu_cells(&mut tv, gw, gh);
     // trait 委托与固有实现同源（同一份收集逻辑，两入口一字不差）
-    let direct = TermView::collect_gpu_cells(&mut tv, CELL_W * 8, CELL_H * 2 + margin_top_of());
+    let direct = TermView::collect_gpu_cells(&mut tv, gw, gh);
     assert_eq!(direct.len(), cells.len());
     // 第一行：A + 中(宽) + spacer + B = 4 格有字，第二行空格
     let a = cells.iter().find(|c| c.c == 'A').expect("A 格在");

@@ -64,7 +64,7 @@ fn spec_trait对象面_feed后渲染出墨() {
     let (cw, ch) = emu.cell_size();
     let (w, h) = ((cw * 5) as usize, (ch * 2) as usize);
     let mut buf = vec![0u32; w * h];
-    emu.render_into(&mut buf, w as u32, h as u32);
+    emu.render_into(&mut buf, w as u32, h as u32, 0);
     let inked = buf.iter().filter(|&&p| p != termview::DEFAULT_BG).count();
     assert!(inked > 0, "feed 'hi' 后应有字形像素上屏");
 }
@@ -92,7 +92,7 @@ fn spec_卸载后_工厂消失但实例存活() {
     emu.feed(b"still alive");
     let (cw, ch) = emu.cell_size();
     let mut buf = vec![0u32; (cw * 80 * ch * 24) as usize];
-    emu.render_into(&mut buf, cw * 80, ch * 24);
+    emu.render_into(&mut buf, cw * 80, ch * 24, 0);
     assert!(
         buf.iter().any(|&p| p != termview::DEFAULT_BG),
         "卸载后已建终端照常渲染"

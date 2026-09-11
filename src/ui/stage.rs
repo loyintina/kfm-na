@@ -47,16 +47,24 @@ impl<S: PartialEq> DirtyGuard<S> {
 /// 隐身（2026-09-07 用户实看）。槽位可见性判定从这一处出——
 /// 上层 chrome（输入栏/光球/放大镜）是常驻层，任何状态都可见；
 /// na-shot（值守 CPU 路径）看不见这类槽位病，判卷人=用户眼睛。
-/// 返回 [键行, AI面板, 配置页, 文件树页, 上层]（2026-09-10 面板栈 §五B
-/// 第四槽、09-11 三公民第五槽：被覆盖的面板仍 visible=true——placement
-/// 不动，遮盖撤走零动画露出）
+/// 返回 [键行, AI面板, 配置页, 文件树页, 上层, 终端卡片壳]（2026-09-10
+/// 面板栈 §五B 第四槽、09-11 三公民第五槽：被覆盖的面板仍 visible=true
+/// ——placement 不动，遮盖撤走零动画露出；09-11 第六槽终端卡：与键行
+/// 同规——三面板都没靠泊才可见，基座壳永不动画）
 pub fn slot_visibility(
     grid_keybar: bool,
     panel_visible: bool,
     cfg_visible: bool,
     ft_visible: bool,
-) -> [bool; 5] {
-    [grid_keybar, panel_visible, cfg_visible, ft_visible, true]
+) -> [bool; 6] {
+    [
+        grid_keybar,
+        panel_visible,
+        cfg_visible,
+        ft_visible,
+        true,
+        grid_keybar,
+    ]
 }
 
 /// 三面板 z 序裁决（BAR-083「动者在上」的三公民泛化，§五B 2026-09-11）。

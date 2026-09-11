@@ -188,7 +188,9 @@ pub fn dump_now(dir: &str) {
         let ft_visible = ft_visible0 && ft_draw;
         let grid_keybar = ai_grid && cfg_grid && ft_grid;
         if grid_keybar {
-            t.render_into(&mut buf, w, h);
+            // 卡片壳下缘让位 = 快捷键行 + 输入栏带高（值守倒帧无键盘视野），
+            // 与前台 paint_under 同尺（前景 ime_bottom_px 恒 0 于后台）
+            t.render_into(&mut buf, w, h, crate::keybar::HEIGHT_PX + bar_h);
             // 快捷键行：前台同规则 inset 叠输入栏当前带高；修饰位无共享态按 0 画
             t.render_keybar(&mut buf, w, h, bar_h, 0);
         }

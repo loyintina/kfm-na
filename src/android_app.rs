@@ -299,6 +299,7 @@ struct LayerSigs {
     over: crate::ui::stage::DirtyGuard<OverSig>,
     config: crate::ui::stage::DirtyGuard<(u32, u32, u32, u32)>,
     filetree: crate::ui::stage::DirtyGuard<(u32, u32, u32, u32)>,
+    termcard: crate::ui::stage::DirtyGuard<(u32, u32, u32, u32)>,
 }
 
 impl LayerSigs {
@@ -310,6 +311,7 @@ impl LayerSigs {
         self.over.invalidate();
         self.config.invalidate();
         self.filetree.invalidate();
+        self.termcard.invalidate();
     }
 }
 
@@ -2599,6 +2601,12 @@ impl App {
         // 几何早就是叠后的）。面板未靠泊才画：靠泊时被面板盖住，画了
         // 白画（GPU 路径还省一次上传带宽）
         if grid_keybar {
+            // BAR-085：softbuffer 兜底路径的网格绘制在 8fd907b（图层槽位
+            // 化）被连同 gpu_term 形参一起误删——兜底帧只剩 chrome 没有
+            // 终端本体（GLES 恒在无人看见，立项书红线「兜底功能等价」
+            // 悄悄失守）。恢复：render_into 内含卡片壳涂装+清屏+网格。
+            // 壳下缘让位 = 键盘+输入栏带+快捷键行（与 GLES 卡片槽同尺）
+            term.render_into(buf, w, h, bottom_inset + crate::keybar::HEIGHT_PX);
             term.render_keybar(buf, w, h, bottom_inset, mods);
         }
         // 三面板按 z_order 底→顶逐槽画（BAR-083 动者在上，调用方算好传入）。
@@ -2999,8 +3007,8 @@ impl App {
         // 2026-09-05 教训：一刀切 |= alpha 会变成不透明黑膜）
         let t_ras = std::time::Instant::now();
         let bottom_inset = ime + bar_h;
-        // 五槽可见性单源（BAR-070：图层化首版漏设上层槽 → 输入栏/光球/
-        // 放大镜集体隐身——可见性判定收进纯逻辑，每帧五槽都从这出）
+        // 六槽可见性单源（BAR-070：图层化首版漏设上层槽 → 输入栏/光球/
+        // 放大镜集体隐身——可见性判定收进纯逻辑，每帧六槽都从这出）
         let slot_vis =
             crate::ui::stage::slot_visibility(grid_keybar, panel_visible, cfg_visible, ft_visible);
         g.set_slot_visible(crate::gles_present::ChromeSlot::Keybar, slot_vis[0]);
@@ -3008,6 +3016,21 @@ impl App {
         g.set_slot_visible(crate::gles_present::ChromeSlot::Config, slot_vis[2]);
         g.set_slot_visible(crate::gles_present::ChromeSlot::FileTree, slot_vis[3]);
         g.set_slot_visible(crate::gles_present::ChromeSlot::Over, slot_vis[4]);
+        g.set_slot_visible(crate::gles_present::ChromeSlot::TermCard, slot_vis[5]);
+        // 终端卡片壳槽烘焙（2026-09-11）：恒靠泊零 placement——sig 含
+        // ime/bar_h 是因为壳下缘停在快捷键行上沿（键盘开合期逐帧重烘焙
+        // 加入 ui-base §八 期 2 债同族清单，不单独立项）
+        if grid_keybar && sigs.termcard.feed((w, h, ime, bar_h)) {
+            let px = g.slot_canvas(crate::gles_present::ChromeSlot::TermCard);
+            px.fill(0);
+            crate::termview::paint_term_card_chrome(
+                px,
+                w,
+                h,
+                bottom_inset + crate::keybar::HEIGHT_PX,
+            );
+            g.slot_bake(crate::gles_present::ChromeSlot::TermCard);
+        }
         // 键行槽烘焙：sig=render_keybar 读的每个输入（靠泊时槽隐藏，
         // 烘焙物常驻纹理，面板收起重现身零成本）
         if grid_keybar && sigs.keybar.feed((mods, ime, bar_h, w, h)) {

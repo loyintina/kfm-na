@@ -60,6 +60,10 @@ pub enum ChromeSlot {
     /// 文件树面板底装修（绿底+边框环；placement.x 跟 ft_off，面板栈
     /// §五B 三公民右滑抽屉——屏外左缘进出，与配置家镜像）
     FileTree = 4,
+    /// 终端卡片壳（碳灰环+近黑内芯；2026-09-11 用户拍板终端页同配方
+    /// 装修）。恒靠泊无 placement 动画，合成期最先画（clear 之后、
+    /// 网格实例之前）——终端页可见 = 三面板都没靠泊（同键行槽规）
+    TermCard = 5,
 }
 
 /// 单槽烘焙物。baked=false 的槽不许上屏——采样未上传过的纹理得到
@@ -473,7 +477,7 @@ pub struct GlesPresent {
     // ---- 期 1 第 2 层：终端网格 GPU 化 ----
     /// 图层槽位（ui-base §八 渲染成本模型）：键行/AI面板/上层/配置/文件树
     /// 五槽，置脏烘焙 + placement 合成——动画帧零光栅零上传
-    layers: [ChromeLayer; 5],
+    layers: [ChromeLayer; 6],
     /// 图层实例程序（rect+uv+tint 四边形；placement 逐槽进实例数据）
     layer_prog: glow::NativeProgram,
     layer_vao: glow::NativeVertexArray,
@@ -605,6 +609,7 @@ impl GlesPresent {
         };
         // 先建槽数组再 move gl 进结构体（E0382：字段初始化按书写序移动）
         let layers = [
+            mk_layer(&gl),
             mk_layer(&gl),
             mk_layer(&gl),
             mk_layer(&gl),
@@ -1026,6 +1031,28 @@ impl GlesPresent {
             gl.clear_color(0.0, 0.0, 0.0, 1.0);
             gl.clear(glow::COLOR_BUFFER_BIT);
             gl.disable(glow::BLEND);
+
+            // 终端卡片壳槽（最底层：clear 之后、网格实例之前。恒靠泊
+            // 零 placement——壳内芯 TERM_CARD_BG 是默认底色格的透出底，
+            // 与 softbuffer 路径 render_into 的清屏+壳+网格同构）
+            let tc = &self.layers[ChromeSlot::TermCard as usize];
+            if tc.visible && tc.baked {
+                gl.enable(glow::BLEND);
+                gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
+                draw_slot_layer(
+                    gl,
+                    self.layer_prog,
+                    self.layer_vao,
+                    self.layer_vbo,
+                    tc.tex,
+                    0.0,
+                    0.0,
+                    self.w as f32,
+                    self.h as f32,
+                    1.0,
+                );
+                gl.disable(glow::BLEND);
+            }
 
             // 背景
             if !bg.is_empty() {
