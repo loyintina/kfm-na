@@ -45,10 +45,10 @@
 | `src/trace.rs` | 12 | 8 | 4 | TRACE_CAP format_tail dump_all dump_tail |
 | `src/ui/ai_page.rs` | 7 | 7 | 0 | — |
 | `src/ui/fx_ease.rs` | 10 | 10 | 0 | — |
-| `src/ui/fx_spring.rs` | 6 | 6 | 0 | — |
+| `src/ui/fx_spring.rs` | 7 | 7 | 0 | — |
 | `src/ui/keybar.rs` | 1 | 1 | 0 | — |
 | `src/ui/orb.rs` | 5 | 5 | 0 | — |
 | `src/ui/prompt_bar.rs` | 5 | 4 | 1 | row_of |
 | `src/ui/seam.rs` | 14 | 14 | 0 | — |
 | `src/ui/stage.rs` | 4 | 4 | 0 | — |
-| `src/vsync_book.rs` | 9 | 4 | 5 | arm disarm armed last_ns reset_run |
+| `src/vsync_book.rs` | 14 | 9 | 5 | armed last_due_ms chain_dead mark_chain_dead last_ns |

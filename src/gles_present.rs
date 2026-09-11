@@ -213,9 +213,13 @@ fn vsync_arm() {
         unsafe {
             let c = (fns.get_instance)();
             // 当前线程无 ALooper 时 getInstance 返回空（getForThread 判空实锤）——
-            // 空指针进 post = 0x58 处暴毙，拦在门外
+            // 空指针进 post = 0x58 处暴毙，拦在门外；BAR-081：空 = 回调链
+            // 根本起不来，不落武装（否则锁相泵等一跳永远不来的表——靠 32ms
+            // 看门狗兜底是下策，不武装直接走预算路才是正路）
             if !c.is_null() {
                 (fns.post_cb64)(c, vsync_cb, std::ptr::null_mut());
+            } else {
+                crate::vsync_book::disarm();
             }
         }
     }
@@ -223,10 +227,13 @@ fn vsync_arm() {
 
 /// vsync 跳记账回调：逐跳记周期；仍武装则自续（回调链）。
 /// NDK 两参契约 (frameTimeNanos, data)——签名钉见 ChoreoCallback（BAR-072）；
-/// 回 post 的 this 现场 getInstance 重取，不吃任何外来指针
+/// 回 post 的 this 现场 getInstance 重取，不吃任何外来指针。
+/// BAR-081：每跳顺带记一笔 due（锁相泵的产帧许可，fx_frame_due 消费）——
+/// 消费端在 4ms 轮询圈上，最坏延迟 4ms < vsync 周期，一跳一帧不破
 unsafe extern "C" fn vsync_cb(ts: i64, _d: *mut std::ffi::c_void) {
     unsafe {
         crate::vsync_book::note_tick(ts as u64);
+        crate::vsync_book::note_due(crate::report::boot_ms() as u64);
         if crate::vsync_book::armed()
             && let Some((_, fns)) = CHOREO.lock().unwrap().as_ref()
         {

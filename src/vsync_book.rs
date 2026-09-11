@@ -30,6 +30,45 @@ pub fn armed() -> bool {
     ARMED.load(Ordering::Relaxed)
 }
 
+/// ---- BAR-081 锁相泵 due 账（2026-09-11）----
+/// 动画期帧时钟的产帧许可：Choreographer 每跳由壳（gles_present::vsync_cb）
+/// 记一笔 due，fx_frame_due 消费一笔产一帧——一跳一帧、相位跟屏（旧定时器
+/// 泵与 vsync 互不锁相的残影病灶根治，案卷见 tests/vsync_spec.rs BAR-081）。
+/// 连跳合并：消费前积 N 跳也只产一帧（跳帧合并，采样吃最新时刻）。
+static DUE_N: AtomicU64 = AtomicU64::new(0);
+/// 最近一次 due 的壳层毫秒戳（report::boot_ms 同钟）——看门狗判链死用；
+/// 0 = 本轮武装以来还没跳过
+static LAST_DUE_MS: AtomicU64 = AtomicU64::new(0);
+/// 链死闩锁（BAR-081 看门狗）：fx_frame_due 判死即上闩——链死期帧时钟
+/// 整体退成预算节流节奏（不是放一帧又憋 32ms）；新跳到（note_due）
+/// 自动解闩重锁。复位归 reset_run/reset_for_test
+static CHAIN_DEAD: AtomicBool = AtomicBool::new(false);
+
+/// vsync 一跳记账（壳 vsync_cb 专用入口）——顺带解链死闩（链复活即重锁）
+pub fn note_due(now_ms: u64) {
+    DUE_N.fetch_add(1, Ordering::Relaxed);
+    LAST_DUE_MS.store(now_ms, Ordering::Relaxed);
+    CHAIN_DEAD.store(false, Ordering::Relaxed);
+}
+
+/// 消费全部积欠（返回跳数；0 = 本跳周期还没来——无跳不帧）
+pub fn take_due() -> u64 {
+    DUE_N.swap(0, Ordering::Relaxed)
+}
+
+/// 最近一跳时刻（看门狗：now - last_due_ms > 32 = 回调链死）
+pub fn last_due_ms() -> u64 {
+    LAST_DUE_MS.load(Ordering::Relaxed)
+}
+
+/// 链死闩锁探视/上闩（fx_frame_due 看门狗专用）
+pub fn chain_dead() -> bool {
+    CHAIN_DEAD.load(Ordering::Relaxed)
+}
+pub fn mark_chain_dead() {
+    CHAIN_DEAD.store(true, Ordering::Relaxed);
+}
+
 /// 相位判卷用：最近一次回调的帧时间戳（0=还没收到过）
 pub fn last_ns() -> u64 {
     LAST_NS.load(Ordering::Relaxed)
@@ -56,6 +95,10 @@ pub fn reset_run() {
     GAP_MIN_US.store(u64::MAX, Ordering::Relaxed);
     GAP_MAX_US.store(0, Ordering::Relaxed);
     LAST_NS.store(0, Ordering::Relaxed);
+    // BAR-081：due 账+链死闩同清——上轮回调整链的尾随跳不许污染新一轮锁相
+    DUE_N.store(0, Ordering::Relaxed);
+    LAST_DUE_MS.store(0, Ordering::Relaxed);
+    CHAIN_DEAD.store(false, Ordering::Relaxed);
 }
 
 /// 动画收尾取账并清（壳 vsync_report 调用；无样本返回 None）
@@ -92,4 +135,7 @@ pub fn reset_for_test() {
     GAP_MIN_US.store(u64::MAX, Ordering::Relaxed);
     GAP_MAX_US.store(0, Ordering::Relaxed);
     GAP_TOTAL_US.store(0, Ordering::Relaxed);
+    DUE_N.store(0, Ordering::Relaxed);
+    LAST_DUE_MS.store(0, Ordering::Relaxed);
+    CHAIN_DEAD.store(false, Ordering::Relaxed);
 }

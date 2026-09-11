@@ -19,6 +19,7 @@
 //! 串行纪律：两题都碰进程级静态账本，VSYNC_TEST_LOCK 串行进场
 //! （BAR-057 并行截胡教训）。
 
+use kfm_na::ui::{fx_spring, seam};
 use kfm_na::vsync_book;
 
 static VSYNC_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -69,4 +70,91 @@ fn spec_bar072_记账_60hz三跳_取账清零() {
     let (n2, _, _, _) = vsync_book::snapshot_for_test();
     assert_eq!(n2, 0, "take_gap 后账本已清");
     assert_eq!(vsync_book::take_gap(), None, "无样本取账=None");
+}
+
+// ---- BAR-081（2026-09-11 残影定案：双钟不锁相）锁相泵考题 ----
+//
+// 案情：面板落下「好几帧同位置→突然跳变」，用户录屏逐帧实锤。仪器定罪
+// （panel-anim 报表）：渲染均耗 3ms（管线跑得起 120fps）、vsync 116Hz
+// （8.6ms/跳），但 swap 间隔 min/avg/max=1/9/25ms——有的 vsync 周期塞
+// 两帧（一帧白画=同位置），有的周期零帧（25ms 冻结）。真凶 = 帧时钟
+// 是 4ms 轮询+预算节流的定时器，与 8.6ms vsync 两个时钟互不锁相。
+// 修法：动画期 fx_frame_due 改吃 vsync due 账（一跳一帧），Choreographer
+// 缺席/链死自动回退预算路（看门狗 32ms）。
+
+// BAR-081 钉①：锁相——武装后无跳不产帧；一跳产一帧、消费清零同跳
+// 不续产；连跳合并产一帧（跳帧合并，不许连产）；收表回预算路。
+// 变异抽检：take_due 只读不清（load 不换出），「同跳不许产第二帧」当场红。
+#[test]
+fn spec_bar081_锁相_一跳一帧() {
+    let _g = VSYNC_TEST_LOCK.lock().unwrap();
+    vsync_book::reset_for_test();
+    vsync_book::disarm();
+    fx_spring::reset_frame_clock_for_test(); // 跨题钟面归零（进程级静态账）
+    // 起一只活跃动画（帧时钟的前提，同 fx_spring_spec 起手式）
+    seam::occupy_ai_panel_offset_y(fx_spring::spring_occupier());
+    assert_eq!(seam::sample_ai_panel_offset_y(-100.0, 2000), -100.0); // primed
+    seam::sample_ai_panel_offset_y(0.0, 2000); // 目标翻转 = 动画开始
+    // 未武装 = 预算路照旧（向后兼容钉：Choreographer 缺席平台的活法）
+    assert!(fx_spring::fx_frame_due(2000), "未武装=预算路首帧");
+    assert!(!fx_spring::fx_frame_due(2004), "预算路 4ms 不许产");
+    // 武装（动画开表）→ 锁相：信任窗内预算早到点也不许产，只认 vsync 跳
+    // （32ms 信任窗 = 看门狗地盘，锁相断言全部收在窗内）
+    vsync_book::reset_run();
+    vsync_book::arm();
+    assert!(!fx_spring::fx_frame_due(2020), "锁相后无跳不许产帧");
+    // 一跳 → 一帧；消费清零 → 同跳不再产
+    vsync_book::note_due(2024);
+    assert!(fx_spring::fx_frame_due(2025), "一跳必须产一帧");
+    assert!(!fx_spring::fx_frame_due(2026), "同跳不许产第二帧");
+    assert!(!fx_spring::fx_frame_due(2028), "同跳任何时候都不许续产");
+    // 跳帧合并：消费前连来 3 跳 = 产一帧（合并不是丢失：位置采样吃
+    // 最新时刻，画面跟上最新 vsync），产完即干
+    vsync_book::note_due(2033);
+    vsync_book::note_due(2041);
+    vsync_book::note_due(2050);
+    assert!(fx_spring::fx_frame_due(2051), "合并跳必须产一帧");
+    assert!(!fx_spring::fx_frame_due(2052), "合并跳不许续产");
+    // 收表 → 回预算路（动画收尾/测量仪表下班后的退路）
+    vsync_book::disarm();
+    assert!(fx_spring::fx_frame_due(2100), "收表必须回预算路产帧");
+    seam::release_ai_panel_offset_y();
+    vsync_book::reset_for_test();
+}
+
+// BAR-081 钉②：看门狗——挂表但回调链死（>32ms 无跳）→ 预算节流兜底
+// 防动画卡死；链复活（新跳到）立即重锁。覆盖两种死法：武装后从未跳
+// （getInstance 空/首跳丢失）+ 跳到一半链断。
+// 变异抽检：看门狗支路删掉（无跳恒 false），本题 3033/3084 臂当场红。
+#[test]
+fn spec_bar081_锁相_看门狗防卡死() {
+    let _g = VSYNC_TEST_LOCK.lock().unwrap();
+    vsync_book::reset_for_test();
+    vsync_book::disarm();
+    fx_spring::reset_frame_clock_for_test(); // 跨题钟面归零
+    seam::occupy_ai_panel_offset_y(fx_spring::spring_occupier());
+    assert_eq!(seam::sample_ai_panel_offset_y(-100.0, 3000), -100.0);
+    seam::sample_ai_panel_offset_y(0.0, 3000);
+    assert!(fx_spring::fx_frame_due(3000), "预算路首帧");
+    // 死法一：武装后从未跳——信任期 32ms 内不产，超时看门狗放帧
+    vsync_book::reset_run();
+    vsync_book::arm();
+    assert!(!fx_spring::fx_frame_due(3032), "信任期内无跳不产");
+    assert!(
+        fx_spring::fx_frame_due(3033),
+        "从未跳 33ms 后看门狗必须放帧"
+    );
+    // 看门狗放帧后按预算节流续走（链死期退化=定时器模式，不是放一帧又死）
+    assert!(!fx_spring::fx_frame_due(3040), "看门狗后仍受预算节流");
+    assert!(fx_spring::fx_frame_due(3049), "看门狗后预算到点续产");
+    // 链复活：新跳到 → 立即重锁（一跳一帧，不等预算）
+    vsync_book::note_due(3050);
+    assert!(fx_spring::fx_frame_due(3051), "链复活立即重锁产帧");
+    assert!(!fx_spring::fx_frame_due(3052), "重锁后同跳不续产");
+    // 死法二：跳到一半链断——最后一帧 33ms 后看门狗再放行
+    assert!(!fx_spring::fx_frame_due(3083), "链断信任期不产");
+    assert!(fx_spring::fx_frame_due(3084), "链断 33ms 后看门狗放帧");
+    seam::release_ai_panel_offset_y();
+    vsync_book::disarm();
+    vsync_book::reset_for_test();
 }

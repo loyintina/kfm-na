@@ -121,11 +121,28 @@ pub fn frame_budget_ms() -> u64 {
     FRAME_BUDGET_MS.load(Ordering::Relaxed)
 }
 
-/// 该画动画帧了：任一缝上有活跃动画且距上帧 ≥帧预算（默认约 60fps 上限，
-/// 壳喂真实刷新周期后跟屏走）；
-/// 无活跃动画恒 false——零额外帧零唤醒（夜判据 0.45% 单核红线）。
-/// 三道缝共用一只钟（2026-09-04 键盘 inset 缝入册、09-10 配置面板 X
-/// 缝入册：同窗同帧不双泵）
+/// BAR-081 考题清钟（vsync_spec 锁相考题串行进场用）：LAST_FRAME_MS 归 0。
+/// 归 0 语义 = 「动画刚开始」——下一笔 fx_frame_due 直通首帧，与产线一致
+#[doc(hidden)]
+pub fn reset_frame_clock_for_test() {
+    LAST_FRAME_MS.store(0, Ordering::Relaxed);
+}
+
+/// 锁相看门狗阈值（BAR-081）：挂表后超过这么久没收到 vsync 跳 =
+/// 回调链死（getInstance 空/首跳丢失/链半路断）——预算节流兜底防动画
+/// 卡死。取 32ms ≈ 30fps 两跳：正常 120Hz 屏 8.6ms 一跳绝不会误伤，
+/// 60Hz 屏 16.7ms 一跳也够不着
+const VSYNC_WATCHDOG_MS: u64 = 32;
+
+/// 该画动画帧了：无活跃动画恒 false——零额外帧零唤醒（夜判据 0.45%
+/// 单核红线）。三道缝共用一只钟（2026-09-04 键盘 inset 缝入册、09-10
+/// 配置面板 X 缝入册：同窗同帧不双泵）。
+/// 产帧许可双模（BAR-081，2026-09-11 残影定案）：
+/// - **vsync 挂表期 = 锁相**：只认 due 账一跳一帧（定时器泵与 8.6ms
+///   vsync 双钟不锁相 = swap 间隔 1/9/25ms 的残影真凶，锁相后相位跟屏）；
+///   连跳合并产一帧；链死 >32ms 看门狗落预算节流兜底，链复活立即重锁
+/// - **未挂表 = 预算节流**（旧路保留）：距上帧 ≥帧预算产一帧，壳喂真实
+///   刷新周期后跟屏走（BAR-077）
 pub fn fx_frame_due(now_ms: u64) -> bool {
     let active = crate::ui::seam::ai_panel_offset_y_active()
         || crate::ui::seam::chrome_ime_inset_active()
@@ -133,6 +150,25 @@ pub fn fx_frame_due(now_ms: u64) -> bool {
     if !active {
         LAST_FRAME_MS.store(0, Ordering::Relaxed);
         return false;
+    }
+    if crate::vsync_book::armed() {
+        // 锁相支路：一跳一帧，消费清零
+        if crate::vsync_book::take_due() > 0 {
+            LAST_FRAME_MS.store(now_ms, Ordering::Relaxed);
+            return true;
+        }
+        // 链死闩已上 = 回调链死后整体退预算节奏（落下方节流），
+        // 新跳到由 note_due 解闩即重锁
+        if !crate::vsync_book::chain_dead() {
+            // 看门狗：参考点 = 最近一跳 与 最近一帧 的较晚者（从未跳过 =
+            // 以上帧为基线）——超阈上闩落预算路，未超信任期等跳
+            let ref_ms =
+                crate::vsync_book::last_due_ms().max(LAST_FRAME_MS.load(Ordering::Relaxed));
+            if ref_ms == 0 || now_ms.saturating_sub(ref_ms) <= VSYNC_WATCHDOG_MS {
+                return false;
+            }
+            crate::vsync_book::mark_chain_dead();
+        }
     }
     let last = LAST_FRAME_MS.load(Ordering::Relaxed);
     if last != 0 && now_ms.saturating_sub(last) < FRAME_BUDGET_MS.load(Ordering::Relaxed) {
