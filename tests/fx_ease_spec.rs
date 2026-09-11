@@ -1,6 +1,6 @@
 //! fx_ease_spec.rs — AI 面板定时缓动考题（A 档纯逻辑，2026-09-04 用户
-//! 拍板：下落 ease-out / 收起 ease-in，同日实测定档 350ms/250ms；答案
-//! src/ui/fx_ease.rs + src/plugins/ui_fx.rs 装配）
+//! 拍板：下落 ease-out / 收起 ease-in；时长沿革 350/250 → 09-11 提速
+//! 250/180；答案 src/ui/fx_ease.rs + src/plugins/ui_fx.rs 装配）
 //!
 //! 判卷维度：
 //! - 端点精确：t=0 在起点、elapsed ≥ 时长贴死目标（帧时钟停表的判据）
@@ -137,11 +137,12 @@ fn spec_ease_占槽重定基不跳变() {
     let o = fx_ease::ease_occupier();
     assert_eq!((o.sampler)(-2800.0, 0), -2800.0); // 首采样直通（屏外稳态）
     (o.sampler)(0.0, 100); // 目标改 0 = 开始落下
-    let mid = (o.sampler)(0.0, 350); // 250ms 处，路上某点
+    let mid_ms = 100 + fx_ease::ENTER_MS / 2;
+    let mid = (o.sampler)(0.0, mid_ms); // 半程处，路上某点
     assert!(mid > -2800.0 && mid < 0.0, "中途必须在路上，得 {mid}");
     // 半路反目标（点光球收起）：重定基从当前值续走——下一采样位置
     // 必须紧邻 mid（位置不跳变），方向掉头向 -2800
-    let back1 = (o.sampler)(-2800.0, 366);
+    let back1 = (o.sampler)(-2800.0, mid_ms + 16);
     assert!(
         (back1 - mid).abs() < 400.0,
         "重定基位置必须连续（mid={mid} 下一步 {back1}）"

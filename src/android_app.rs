@@ -2687,12 +2687,11 @@ impl App {
             panel_target,
             crate::report::boot_ms() as u64,
         ) as i32;
-        // 滑动淡入（2026-09-10 用户拍板试方）：alpha 从 placement 纯函数
-        // 推导——零状态，打断/反转自动一致；硬切下恒 1/0 与旧版像素等价
-        let panel_fade = crate::ui::fx_ease::panel_fade_alpha(panel_off as f32, h as f32);
+        // 淡入淡出已取消（2026-09-11 用户拍板「不好看」）：面板全程恒实，
+        // panel_fade_alpha 退役备查（fx_ease.rs 内考题钉住）
+        let panel_fade = 1.0_f32;
         // 配置面板 X 偏移过缝（§五B 第三道缝）：目标值 = 在栈 0 靠泊 /
-        // 不在栈 +屏宽屏外右缘（左滑召唤来向）；alpha 同一把纯函数尺
-        // （X 取负喂入，与 Y 缝数学等价）
+        // 不在栈 +屏宽屏外右缘（左滑召唤来向）；alpha 同规恒 1.0
         let cfg_on_top = ai_snap.is_some_and(|s| s.top == Some(crate::ai_presence::Panel::Config));
         let cfg_present = cfg_on_top
             || ai_snap.is_some_and(|s| s.covered == Some(crate::ai_presence::Panel::Config));
@@ -2706,7 +2705,7 @@ impl App {
                 crate::report::boot_ms() as u64,
             ) as i32,
         };
-        let cfg_fade = crate::ui::fx_ease::panel_fade_alpha(-(cfg_off as f32), w as f32);
+        let cfg_fade = 1.0_f32;
         let (ai_grid, panel_visible) = crate::termview::panel_split(panel_off, h);
         let (cfg_grid, cfg_visible) = crate::termview::cfg_split(cfg_off, w);
         // 网格+键行让位 = 两面板都没靠泊（任一靠泊在顶即整页盖住终端）

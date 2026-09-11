@@ -344,13 +344,13 @@ fn spec_cfg缝_缓动占槽与拔槽回硬切() {
     let p0 = seam::sample_config_panel_offset_x(0.0, 100);
     assert_eq!(p0, 1260.0, "目标翻转当刻必须还在起点");
     assert!(seam::config_panel_offset_x_active(), "目标变了 = 动画开始");
-    // 入场中途（减速臂 250ms 窗内）：在行程内
+    // 入场中途（减速臂 250ms 档窗内）：在行程内
     let p_mid = seam::sample_config_panel_offset_x(0.0, 200);
     assert!(
         (0.0..1260.0).contains(&p_mid),
         "入场中途必须在行程内，实测 {p_mid}"
     );
-    // 立场 0→+w（加速臂 350ms 窗内）：翻转当刻在起点，中途在行程内
+    // 立场 0→+w（加速臂 180ms 档窗内）：翻转当刻在起点，中途在行程内
     let q0 = seam::sample_config_panel_offset_x(1260.0, 500);
     assert_eq!(q0, 0.0, "立场翻转当刻必须还在起点");
     let q_mid = seam::sample_config_panel_offset_x(1260.0, 600);

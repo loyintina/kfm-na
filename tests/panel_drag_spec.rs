@@ -10,12 +10,15 @@
 //!   拖拽要尽早接管；纵向滚屏/AI 页滚行不冲突）
 //! - 角色：左滑+顶非配置 = 召唤拖拽；右滑+顶是配置 = 推回拖拽；其余不锁
 //! - 跟手映射零跳变：锁定瞬间偏移 = 角色基位（锁定阈值位移被吃掉），
-//!   其后偏移 = 基位 + 手指相对锁点位移，钳 [0, 屏宽]
+//!   其后偏移 = 基位 + 手指相对锁点位移 ×DRAG_GAIN(2.0，手指不从屏缘
+//!   起手的补偿，2026-09-11 拍板)，钳 [0, 屏宽]
 //! - 松手裁决：甩速优先（朝完成 ≥0.8px/ms 完成；反甩 ≤-0.8 取消），
 //!   静止松手看进度（≥50% 完成）
 //! - 速度窗 100ms；窗内不足两样本 = 速度 0（退进度判）
 
-use kfm_na::ui::panel_drag::{DRAG_LOCK_PX, DragRole, FLING_PX_PER_MS, PanelDrag, ReleaseDecision};
+use kfm_na::ui::panel_drag::{
+    DRAG_GAIN, DRAG_LOCK_PX, DragRole, FLING_PX_PER_MS, PanelDrag, ReleaseDecision,
+};
 
 /// 起手式：顶非配置的拖拽会话（ summon 候选）
 fn summon_session() -> PanelDrag {
@@ -76,14 +79,14 @@ fn spec_拖拽_跟手映射与钳制() {
         (off0 - (w - DRAG_LOCK_PX as f32)).abs() < 40.0,
         "锁定瞬偏移应≈屏外位（阈值位移被吃掉防跳变），得 {off0}"
     );
-    // 继续左移 200px → 偏移等幅减 200
+    // 继续左移 200px → 偏移减 400（×2 增益）
     let off1 = d
         .on_move(770.0, 900.0, 10_060, w, false)
         .map(|(_, o)| o)
         .unwrap_or(off0);
     assert!(
-        (off0 - off1 - 200.0).abs() < 1.0,
-        "手指左移 200 偏移应减 200：{off0}→{off1}"
+        (off0 - off1 - 200.0 * DRAG_GAIN as f32).abs() < 1.0,
+        "手指左移 200 偏移应减 400（增益×2）：{off0}→{off1}"
     );
     // 左移过界（锁点 - 屏宽之外，越过靠泊位）→ 钳 0
     let off2 = d
@@ -100,8 +103,8 @@ fn spec_拖拽_跟手映射与钳制() {
         .map(|(_, o)| o)
         .unwrap_or(off3);
     assert!(
-        (off4 - 500.0).abs() < 1.0,
-        "推回跟手：锁点后右移 500 偏移应 500，得 {off4}"
+        (off4 - 500.0 * DRAG_GAIN as f32).abs() < 1.0,
+        "推回跟手：锁点后右移 500 偏移应 1000（增益×2），得 {off4}"
     );
     let off5 = d
         .on_move(300.0 + 24.0 + 5000.0, 900.0, 20_090, w, true)
@@ -117,12 +120,11 @@ fn spec_拖拽_跟手映射与钳制() {
 #[test]
 fn spec_拖拽_松手裁决表() {
     let w = 1200.0;
-    // 进度 60% 静止松手 → 完成（召唤：手指从 1000 拖到 1000-24-0.6*w+24）
-    // 位移 -0.6w+24 锁点吃掉 24 → 拖 0.6w = 偏移 0.4w = 进度 0.6
+    // 进度 60% 静止松手 → 完成（×2 增益下手指只需拖 0.3w）
     let mut d = summon_session();
     d.on_move(970.0, 900.0, 10_030, w, false);
     d.on_move(
-        1000.0 - DRAG_LOCK_PX - 0.6 * 1200.0,
+        1000.0 - DRAG_LOCK_PX - 0.6 * 1200.0 / DRAG_GAIN,
         900.0,
         10_200,
         w,
@@ -138,7 +140,7 @@ fn spec_拖拽_松手裁决表() {
     let mut d = summon_session();
     d.on_move(970.0, 900.0, 20_030, w, false);
     d.on_move(
-        1000.0 - DRAG_LOCK_PX - 0.3 * 1200.0,
+        1000.0 - DRAG_LOCK_PX - 0.3 * 1200.0 / DRAG_GAIN,
         900.0,
         20_200,
         w,
@@ -153,14 +155,14 @@ fn spec_拖拽_松手裁决表() {
     let mut d = summon_session();
     d.on_move(970.0, 900.0, 30_030, w, false);
     d.on_move(
-        1000.0 - DRAG_LOCK_PX - 0.3 * 1200.0 + 200.0,
+        1000.0 - DRAG_LOCK_PX - 0.3 * 1200.0 / DRAG_GAIN + 200.0,
         900.0,
         30_100,
         w,
         false,
     );
     d.on_move(
-        1000.0 - DRAG_LOCK_PX - 0.3 * 1200.0,
+        1000.0 - DRAG_LOCK_PX - 0.3 * 1200.0 / DRAG_GAIN,
         900.0,
         30_180,
         w,
@@ -176,14 +178,14 @@ fn spec_拖拽_松手裁决表() {
     let mut d = summon_session();
     d.on_move(970.0, 900.0, 40_030, w, false);
     d.on_move(
-        1000.0 - DRAG_LOCK_PX - 0.7 * 1200.0 - 200.0,
+        1000.0 - DRAG_LOCK_PX - 0.7 * 1200.0 / DRAG_GAIN - 200.0,
         900.0,
         40_100,
         w,
         false,
     );
     d.on_move(
-        1000.0 - DRAG_LOCK_PX - 0.7 * 1200.0,
+        1000.0 - DRAG_LOCK_PX - 0.7 * 1200.0 / DRAG_GAIN,
         900.0,
         40_180,
         w,
@@ -200,7 +202,7 @@ fn spec_拖拽_松手裁决表() {
     let mut d = summon_session();
     d.on_move(970.0, 900.0, 60_030, w, false);
     d.on_move(
-        1000.0 - DRAG_LOCK_PX - 0.3 * 1200.0,
+        1000.0 - DRAG_LOCK_PX - 0.3 * 1200.0 / DRAG_GAIN,
         900.0,
         60_100,
         w,
@@ -214,7 +216,13 @@ fn spec_拖拽_松手裁决表() {
     // 推回对称：进度=推出比例。推 60% 静止松手 → 完成（推出）
     let mut d = PanelDrag::new(300.0, 900.0, 50_000);
     d.on_move(330.0, 900.0, 50_030, w, true);
-    d.on_move(300.0 + DRAG_LOCK_PX + 0.6 * 1200.0, 900.0, 50_200, w, true);
+    d.on_move(
+        300.0 + DRAG_LOCK_PX + 0.6 * 1200.0 / DRAG_GAIN,
+        900.0,
+        50_200,
+        w,
+        true,
+    );
     assert_eq!(
         d.on_release(50_400, w),
         ReleaseDecision::Complete,
@@ -231,7 +239,7 @@ fn spec_拖拽_反悔回拉必取消() {
     d.on_move(970.0, 900.0, 10_030, w, false);
     // 拉到 50% 开
     d.on_move(
-        1000.0 - DRAG_LOCK_PX - 0.5 * 1200.0,
+        1000.0 - DRAG_LOCK_PX - 0.5 * 1200.0 / DRAG_GAIN,
         900.0,
         10_100,
         w,
@@ -239,7 +247,7 @@ fn spec_拖拽_反悔回拉必取消() {
     );
     // 反悔：原路滑回起点
     d.on_move(
-        1000.0 - DRAG_LOCK_PX - 0.2 * 1200.0,
+        1000.0 - DRAG_LOCK_PX - 0.2 * 1200.0 / DRAG_GAIN,
         900.0,
         10_200,
         w,

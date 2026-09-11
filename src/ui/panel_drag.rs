@@ -1,8 +1,9 @@
 //! panel_drag.rs — 面板跟手拖拽状态机（核心层纯逻辑，A 档钉）。
 //!
 //! 模式（interactive gesture-driven transition，2026-09-11 用户拍板手势
-//! 升级）：拖拽期面板位置绑手指位移（不绑时间不绑曲线），松手瞬间按
-//! 「进度+甩速」裁决完成/取消；收尾动画不在本册——壳层用缝 replay 踢
+//! 升级）：拖拽期面板位置绑手指位移 ×DRAG_GAIN（手指不从屏缘起手，
+//! 增益 2 补偿；不绑时间不绑曲线），松手瞬间按「进度+甩速」裁决完成/
+//! 取消；收尾动画不在本册——壳层用缝 replay 踢
 //! （BAR-079 原语）从当前偏移重定基续播。
 //!
 //! 分层：本册只管几何与裁决（位移→锁定→偏移→裁决），栈操作（召唤/
@@ -27,6 +28,10 @@ pub const RELEASE_PROGRESS: f32 = 0.5;
 pub const FLING_PX_PER_MS: f64 = 0.8;
 /// 甩速采样窗（ms）：窗太长发呆期的老样本拖慢读数，太短抖
 pub const VELOCITY_WINDOW_MS: u64 = 100;
+/// 跟手增益（2026-09-11 用户拍板）：手指不从屏边缘起手，1:1 全程要拖
+/// 整个屏宽不现实——面板位移 = 手指位移 × 2（手指 10px 面板 20px，
+/// 半程手势走完全程）
+pub const DRAG_GAIN: f64 = 2.0;
 
 /// 拖拽角色（锁定瞬间仲裁，四象限见考题钉②）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -138,10 +143,11 @@ impl PanelDrag {
         self.role.map(|r| (r, self.offset))
     }
 
-    /// 跟手映射：召唤 = 屏宽 +（负位移）→ 减；推回 = 0 +（正位移）→ 增。
+    /// 跟手映射：位移先乘 DRAG_GAIN（手指不从屏缘起手的补偿），召唤 =
+    /// 屏宽 +（负位移×2）→ 减；推回 = 0 +（正位移×2）→ 增。
     /// 钳 [0, w]：面板不许越过靠泊位飞出左缘，也不许拖出屏外更深
     fn map_offset(&self, x: f64, w: f32) -> f32 {
-        let d = (x - self.lock_x) as f32;
+        let d = ((x - self.lock_x) * DRAG_GAIN) as f32;
         match self.role {
             Some(DragRole::SummonConfig) => (w + d).clamp(0.0, w),
             Some(DragRole::DismissConfig) => d.clamp(0.0, w),
