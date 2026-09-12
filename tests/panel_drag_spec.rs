@@ -8,7 +8,11 @@
 //! 契约要点：
 //! - 方向锁：横向 ≥24px 且 |dx|>1.8|dy| 才接管（比 SWIPE_MIN_PX 90 小——
 //!   拖拽要尽早接管；纵向滚屏/AI 页滚行不冲突）
-//! - 角色：左滑+顶非配置 = 召唤拖拽；右滑+顶是配置 = 推回拖拽；其余不锁
+//! - 角色（2026-09-12 四公民·三缘语义）：左滑+顶非右缘家 = 召唤解析页
+//!   拖拽；右滑+顶是右缘家（配置/解析）= 推回拖拽；右滑+顶非左缘家 =
+//!   召唤文件树拖拽；左滑+顶是文件树 = 推回拖拽；本家在顶反向滑 = 不锁。
+//!   **设置页永不走手势召唤**（SummonConfig 变体已删除——齿轮钮唯一
+//!   召唤口，右滑唯一关闭口）
 //! - 跟手映射零跳变：锁定瞬间偏移 = 角色基位（锁定阈值位移被吃掉），
 //!   其后偏移 = 基位 + 手指相对锁点位移 ×DRAG_GAIN(2.0，手指不从屏缘
 //!   起手的补偿，2026-09-11 拍板)，钳 [0, 屏宽]
@@ -48,43 +52,57 @@ fn spec_拖拽_方向锁() {
     );
 }
 
-// 钉②：角色仲裁六象限（2026-09-11 三公民化重钉）——左滑+顶 Other =
-// SummonConfig；右滑+顶 Config = DismissConfig；左滑+顶 Config = 不锁
-// （本家已在顶，一滑一义）；右滑+顶 Other = SummonFileTree（右滑家落地，
-// 不再有「留给未来」的空操作）；左滑+顶 FileTree = DismissFileTree；
-// 右滑+顶 FileTree = 不锁。
-// 变异抽检：角色判反（左滑给 Dismiss）/DragTop 映射错一家，六象限必红。
+// 钉②：角色仲裁八臂全表（2026-09-12 四公民·三缘语义重钉，4 顶×2 向）——
+// 左滑：顶 FileTree = DismissFileTree / 顶 Config = 不锁 / 顶 Parser =
+// 不锁 / 顶 Other = SummonParser（设置页永不走手势召唤：SummonConfig 已删，
+// 原位是 SummonParser——右缘家，偏移/甩速/裁决符号语义与旧配置系完全
+// 一致）；右滑：顶 Config = DismissConfig（设置页唯一关闭路径）/ 顶
+// Parser = DismissParser / 顶 FileTree = 不锁 / 顶 Other = SummonFileTree。
+// 变异抽检：角色判反（左滑给 Dismiss）/DragTop 映射错一家/Other+左给错
+// 公民，对应臂必红。
 #[test]
-fn spec_拖拽_角色仲裁六象限() {
-    // 左滑，顶非抽屉面板（终端裸奔或 AI 在顶）→ 召唤配置
+fn spec_拖拽_角色仲裁八臂全表() {
+    // 左滑，顶非抽屉面板（终端裸奔或 AI 在顶）→ 召唤解析页
     let mut d = PanelDrag::new(1000.0, 900.0, 0);
     match d.on_move(960.0, 900.0, 10, 1200.0, DragTop::Other) {
-        Some((DragRole::SummonConfig, _)) => {}
-        other => panic!("左滑+顶Other应为召唤配置锁定，得 {other:?}"),
-    }
-    // 右滑，顶是配置 → 推回配置
-    let mut d = PanelDrag::new(300.0, 900.0, 0);
-    match d.on_move(340.0, 900.0, 10, 1200.0, DragTop::Config) {
-        Some((DragRole::DismissConfig, _)) => {}
-        other => panic!("右滑+顶是配置应为推回锁定，得 {other:?}"),
-    }
-    // 左滑，顶已是配置 → 不锁
-    let mut d = PanelDrag::new(1000.0, 900.0, 0);
-    assert!(
-        d.on_move(960.0, 900.0, 10, 1200.0, DragTop::Config)
-            .is_none()
-    );
-    // 右滑，顶非抽屉面板 → 召唤文件树（右滑家）
-    let mut d = PanelDrag::new(300.0, 900.0, 0);
-    match d.on_move(340.0, 900.0, 10, 1200.0, DragTop::Other) {
-        Some((DragRole::SummonFileTree, _)) => {}
-        other => panic!("右滑+顶Other应为召唤文件树锁定，得 {other:?}"),
+        Some((DragRole::SummonParser, _)) => {}
+        other => panic!("左滑+顶Other应为召唤解析页锁定，得 {other:?}"),
     }
     // 左滑，顶是文件树 → 推回文件树
     let mut d = PanelDrag::new(600.0, 900.0, 0);
     match d.on_move(560.0, 900.0, 10, 1200.0, DragTop::FileTree) {
         Some((DragRole::DismissFileTree, _)) => {}
         other => panic!("左滑+顶是文件树应为推回锁定，得 {other:?}"),
+    }
+    // 左滑，顶已是配置 → 不锁（右缘本家在顶）
+    let mut d = PanelDrag::new(1000.0, 900.0, 0);
+    assert!(
+        d.on_move(960.0, 900.0, 10, 1200.0, DragTop::Config)
+            .is_none()
+    );
+    // 左滑，顶已是解析页 → 不锁（本家在顶）
+    let mut d = PanelDrag::new(1000.0, 900.0, 0);
+    assert!(
+        d.on_move(960.0, 900.0, 10, 1200.0, DragTop::Parser)
+            .is_none()
+    );
+    // 右滑，顶是配置 → 推回配置（设置页唯一关闭路径）
+    let mut d = PanelDrag::new(300.0, 900.0, 0);
+    match d.on_move(340.0, 900.0, 10, 1200.0, DragTop::Config) {
+        Some((DragRole::DismissConfig, _)) => {}
+        other => panic!("右滑+顶是配置应为推回锁定，得 {other:?}"),
+    }
+    // 右滑，顶是解析页 → 推回解析页
+    let mut d = PanelDrag::new(300.0, 900.0, 0);
+    match d.on_move(340.0, 900.0, 10, 1200.0, DragTop::Parser) {
+        Some((DragRole::DismissParser, _)) => {}
+        other => panic!("右滑+顶是解析页应为推回锁定，得 {other:?}"),
+    }
+    // 右滑，顶非抽屉面板 → 召唤文件树（左缘家）
+    let mut d = PanelDrag::new(300.0, 900.0, 0);
+    match d.on_move(340.0, 900.0, 10, 1200.0, DragTop::Other) {
+        Some((DragRole::SummonFileTree, _)) => {}
+        other => panic!("右滑+顶Other应为召唤文件树锁定，得 {other:?}"),
     }
     // 右滑，顶已是文件树 → 不锁
     let mut d = PanelDrag::new(300.0, 900.0, 0);
@@ -94,16 +112,19 @@ fn spec_拖拽_角色仲裁六象限() {
     );
 }
 
-// 钉③：跟手映射零跳变 + 钳制。召唤：锁定瞬偏移≈屏宽（屏外右），手指
-// 继续左移偏移等幅减小（面板跟进），到 0 钳死不许负（面板不许越过
-// 靠泊位左缘飞出）；推回：0 起右移等幅增大，到屏宽钳死。
+// 钉③：跟手映射零跳变 + 钳制（载具 = SummonParser，2026-09-12 三缘语义
+// 换载具——原 SummonConfig 已删；右缘家符号语义完全一致）。召唤：锁定瞬
+// 偏移≈屏宽（屏外右），手指继续左移偏移等幅减小（面板跟进），到 0 钳死
+// 不许负（面板不许越过靠泊位左缘飞出）；推回：0 起右移等幅增大，到屏宽
+// 钳死。
 // 变异抽检：clamp 摘掉，越界臂必红；映射符号反，跟进方向臂必红。
 #[test]
 fn spec_拖拽_跟手映射与钳制() {
     let w = 1200.0;
-    // 召唤：down@1000，锁点应在 1000-24=976，锁定瞬偏移=屏宽（还没跟手位移）
+    // 召唤解析页：down@1000，锁点应在 1000-24=976，锁定瞬偏移=屏宽（还没跟手位移）
     let mut d = summon_session();
-    let (_, off0) = d.on_move(970.0, 900.0, 10_030, w, DragTop::Other).unwrap();
+    let (role, off0) = d.on_move(970.0, 900.0, 10_030, w, DragTop::Other).unwrap();
+    assert_eq!(role, DragRole::SummonParser, "载具必须是召唤解析页");
     assert!(
         (off0 - (w - DRAG_LOCK_PX as f32)).abs() < 40.0,
         "锁定瞬偏移应≈屏外位（阈值位移被吃掉防跳变），得 {off0}"
@@ -384,5 +405,102 @@ fn spec_拖拽_文件树家镜像() {
         d.on_release(130, w),
         ReleaseDecision::Cancel,
         "召唤FT进度70%但反甩应取消"
+    );
+}
+
+// 钉⑦：解析家右缘镜像（2026-09-12 四公民·三缘语义）——与旧配置家符号
+// 语义完全一致：召唤解析页手指左移、偏移（距靠泊距离）从屏宽递减，末段
+// 左甩 = 朝完成；推回解析页手指右移、偏移从 0 递增，末段右甩 = 朝完成、
+// 反甩（左甩）= 取消。SummonParser/DismissParser 就是 SummonConfig/
+// DismissConfig 符号语义的原位继承人（设置页退手势召唤后的右缘新家）。
+// 变异抽检：SummonParser/DismissParser 的 map_offset 或 velocity_toward
+// 符号反一个，本题对应臂必红。
+#[test]
+fn spec_拖拽_解析家右缘镜像() {
+    let w = 1200.0;
+    // 召唤 PT：down@1000，锁点 1000-24=976，锁定瞬偏移≈屏宽（屏外右）
+    let mut d = PanelDrag::new(1000.0, 900.0, 0);
+    let (role, off0) = d.on_move(960.0, 900.0, 10, w, DragTop::Other).unwrap();
+    assert_eq!(role, DragRole::SummonParser);
+    assert!(
+        (off0 - (w - DRAG_LOCK_PX as f32)).abs() < 40.0,
+        "召唤PT锁定瞬偏移应≈屏外位，得 {off0}"
+    );
+    // 继续左移 200px → 偏移减 400（×2 增益）
+    let off1 = d
+        .on_move(760.0, 900.0, 40, w, DragTop::Other)
+        .map(|(_, o)| o)
+        .unwrap_or(off0);
+    assert!(
+        (off0 - off1 - 200.0 * DRAG_GAIN as f32).abs() < 1.0,
+        "手指左移 200 偏移应减 400（增益×2）：{off0}→{off1}"
+    );
+    // 甩速：召唤 PT 末段猛左甩 = 朝完成（100ms 窗内左移 200px = 2px/ms）
+    let mut d = PanelDrag::new(1000.0, 900.0, 0);
+    d.on_move(960.0, 900.0, 10, w, DragTop::Other);
+    d.on_move(
+        1000.0 - DRAG_LOCK_PX - 0.3 * w as f64 / DRAG_GAIN + 200.0,
+        900.0,
+        50,
+        w,
+        DragTop::Other,
+    );
+    d.on_move(
+        1000.0 - DRAG_LOCK_PX - 0.3 * w as f64 / DRAG_GAIN,
+        900.0,
+        130,
+        w,
+        DragTop::Other,
+    );
+    assert_eq!(
+        d.on_release(130, w),
+        ReleaseDecision::Complete,
+        "召唤PT进度30%但末段左甩应完成"
+    );
+    // 推回 PT：顶=Parser 右滑锁定瞬≈0，右移等幅增；末段右甩 = 朝完成
+    let mut d = PanelDrag::new(300.0, 900.0, 0);
+    let (role, off2) = d.on_move(340.0, 900.0, 10, w, DragTop::Parser).unwrap();
+    assert_eq!(role, DragRole::DismissParser);
+    assert!(off2.abs() < 40.0, "推回PT锁定瞬偏移应≈0，得 {off2}");
+    d.on_move(
+        300.0 + DRAG_LOCK_PX + 0.3 * w as f64 / DRAG_GAIN - 200.0,
+        900.0,
+        50,
+        w,
+        DragTop::Parser,
+    );
+    d.on_move(
+        300.0 + DRAG_LOCK_PX + 0.3 * w as f64 / DRAG_GAIN,
+        900.0,
+        130,
+        w,
+        DragTop::Parser,
+    );
+    assert_eq!(
+        d.on_release(130, w),
+        ReleaseDecision::Complete,
+        "推回PT进度30%但末段右甩应完成"
+    );
+    // 反甩取消镜像：召唤 PT 进度 70% 但末段右甩（反甩）→ 取消
+    let mut d = PanelDrag::new(1000.0, 900.0, 0);
+    d.on_move(960.0, 900.0, 10, w, DragTop::Other);
+    d.on_move(
+        1000.0 - DRAG_LOCK_PX - 0.7 * w as f64 / DRAG_GAIN - 200.0,
+        900.0,
+        50,
+        w,
+        DragTop::Other,
+    );
+    d.on_move(
+        1000.0 - DRAG_LOCK_PX - 0.7 * w as f64 / DRAG_GAIN,
+        900.0,
+        130,
+        w,
+        DragTop::Other,
+    );
+    assert_eq!(
+        d.on_release(130, w),
+        ReleaseDecision::Cancel,
+        "召唤PT进度70%但反甩应取消"
     );
 }

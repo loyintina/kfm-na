@@ -1267,12 +1267,13 @@ fn spec_冒烟_ai页框外_无渐变厚边() {
 }
 
 // ---- 面板栈（§五B/D12，2026-09-10 用户拍板：三态+两格栈+叠加态坍缩
-// +抽屉对称手势；配置页壳先行，右滑家文件树入栈同规） ----
+// +抽屉对称手势；配置页壳先行，右滑家文件树入栈同规，2026-09-12 四公民·
+// 三缘语义：右缘=解析器家族，设置页独立第四页齿轮单入口） ----
 // 变异抽检锚点：summon 不摘重（重复进栈）咬「幂等保序」；dismiss_top 不看
 // 顶咬「只许收顶」；swipe_right 无脑 pop 咬「抽屉对称」；panel_present 只看
 // 顶咬「被覆盖者 placement 不离靠泊位（露出零动画的物质基础）」。
-// 注：「第三面板入场静默挤出栈底」在 v1 两公民下不可达（retain 去重后
-// 栈长恒 ≤2）——右滑家入栈时由其考题激活，勿删 summon_locked 的挤出臂。
+// 注：「第三面板入场静默挤出栈底」的挤出臂在三公民起即可达；四公民
+// 走查/挤出题例行覆盖，勿删 summon_locked 的挤出臂。
 
 #[test]
 fn spec_panel_召唤与派生读数() {
@@ -1379,8 +1380,8 @@ fn spec_bar079_入场代_幂等退场露出不bump() {
 
 #[test]
 fn spec_bar079_tap_orb_覆盖再召唤_入场代bump() {
-    // 用户手势路径（实机 S3 翻车现场）：点球召 AI → 左滑召配置页盖住 →
-    // 再点球 = 被覆盖再召唤，必须 bump
+    // 用户手势路径（实机 S3 翻车现场）：点球召 AI → 左滑召面板盖住（四公民
+    // 起 = 解析页；机制同） → 再点球 = 被覆盖再召唤，必须 bump
     let ai = new_state();
     ai.tap_orb();
     ai.swipe_left();
@@ -1427,39 +1428,54 @@ fn spec_panel_tap_orb_栈语义开关() {
 }
 
 #[test]
-fn spec_panel_swipe_三公民六向契约() {
-    // 滑向契约（§五B 2026-09-11 三公民落地）：swipe_left：顶=FileTree→
-    // 推回左缘 / 顶=Config→空操作（本家在顶，一滑一义）/ 否则召唤配置；
-    // swipe_right：顶=Config→推回右缘 / 顶=FileTree→空操作 / 否则召唤
-    // 文件树。任意栈态每个滑向有唯一归宿——无洞。
-    // 变异抽检：swipe_left 的 FileTree 臂删了 → 第 4 条红；swipe_right
-    // 召唤错公民 → 第 3 条红。
+fn spec_panel_swipe_四公民八臂契约() {
+    // 滑向全表（§五B 2026-09-12 四公民·三缘语义，4 顶×2 向共八臂）：
+    // 左滑：顶=FileTree→推回左缘 / 顶=Config→空操作 / 顶=Parser→空操作 /
+    //   否则召唤解析页；右滑：顶=Config→推回右缘 / 顶=Parser→推回右缘 /
+    //   顶=FileTree→空操作 / 否则召唤文件树。任意栈态每个滑向有唯一归宿
+    // ——无洞（设置页不占召唤滑槽：召唤走齿轮钮，关闭只走右滑）。
+    // 变异抽检：swipe_left 召唤臂写错公民（Config/FileTree）→ 第 1 条红；
+    // swipe_right 漏 Parser 推回臂 → 第 5 条红；swipe_left 漏 FileTree
+    // 推回臂 → 第 6 条红；swipe_left 在 Parser 顶不空操作 → 第 2 条红。
     let ai = new_state();
-    // 1. 终端页左滑 = 召唤配置页（右缘家）
+    // 1. 终端页左滑 = 召唤解析页（右缘家·解析器家族）
     ai.swipe_left();
-    assert_eq!(ai.snap(0).top, Some(Panel::Config));
-    // 2. 配置页在顶左滑 = 空操作（幂等不复制）
+    assert_eq!(ai.snap(0).top, Some(Panel::Parser), "左滑召唤解析页");
+    // 2. 解析页在顶左滑 = 空操作（本家在顶，一滑一义；幂等不复制）
     ai.swipe_left();
     let s = ai.snap(0);
-    assert_eq!(s.top, Some(Panel::Config));
+    assert_eq!(s.top, Some(Panel::Parser));
     assert_eq!(s.covered, None, "幂等不复制");
-    // 3. 配置页在顶右滑 = 推回右缘（来向），露终端
+    // 3. 解析页在顶右滑 = 推回右缘（来向），露终端
     ai.swipe_right();
-    assert_eq!(ai.snap(0).top, None, "推回后露终端");
-    // 4. 终端页右滑 = 召唤文件树（左缘家）——v1 空操作态已消亡
+    assert_eq!(ai.snap(0).top, None, "推回解析页后露终端");
+    // 4. 设置页在顶左滑 = 空操作（不占召唤滑槽）
+    ai.summon_panel(Panel::Config); // 设置页唯一召唤口 = 齿轮钮（编程入场）
+    ai.swipe_left();
+    let s = ai.snap(0);
+    assert_eq!(s.top, Some(Panel::Config), "配置顶左滑空操作");
+    assert_eq!(s.covered, None);
+    // 5. 设置页在顶右滑 = 推回右缘（唯一关闭路径）
     ai.swipe_right();
+    assert_eq!(ai.snap(0).top, None, "右滑推回设置页");
+    // 6. 文件树在顶左滑 = 推回左缘，露终端
+    ai.swipe_right(); // 先召文件树
     assert_eq!(ai.snap(0).top, Some(Panel::FileTree));
-    // 5. 文件树在顶右滑 = 空操作；左滑 = 推回左缘，露终端
-    ai.swipe_right();
-    assert_eq!(ai.snap(0).top, Some(Panel::FileTree), "本家在顶幂等");
     ai.swipe_left();
     assert_eq!(ai.snap(0).top, None, "推回文件树露终端");
-    // 6. AI 页上两向各有归宿：左滑盖配置、右滑盖文件树
+    // 7. 文件树在顶右滑 = 空操作（本家在顶）
+    ai.swipe_right();
+    ai.swipe_right();
+    let s = ai.snap(0);
+    assert_eq!(s.top, Some(Panel::FileTree), "本家在顶幂等");
+    assert_eq!(s.covered, None);
+    ai.dismiss_top(Panel::FileTree);
+    // 8. AI 页上两向各有归宿：左滑盖解析、右滑盖文件树
     ai.tap_orb();
     ai.swipe_left();
-    assert_eq!(ai.snap(0).top, Some(Panel::Config));
+    assert_eq!(ai.snap(0).top, Some(Panel::Parser), "AI 顶左滑召唤解析页");
     assert_eq!(ai.snap(0).covered, Some(Panel::Ai));
-    ai.swipe_right(); // 推回配置 → AI 露出
+    ai.swipe_right(); // 推回解析 → AI 露出
     assert_eq!(ai.snap(0).top, Some(Panel::Ai));
     ai.swipe_right(); // AI 顶右滑 = 召唤文件树盖之
     let s = ai.snap(0);
@@ -1468,18 +1484,36 @@ fn spec_panel_swipe_三公民六向契约() {
 }
 
 #[test]
+fn spec_panel_设置页_只召不收_右滑唯一关闭() {
+    // 三缘语义（2026-09-12 用户拍板）：设置页是独立第四页——齿轮钮唯一
+    // 召唤口（壳层 summon_panel(Config) 编程入场，顶=Config 再点 = 幂等
+    // 空操作，**不许 toggle 收**）；右滑唯一关闭口，不占任何滑槽。
+    // 变异抽检：summon_panel 在顶改 toggle（pop）→ 第 2 条红。
+    let ai = new_state();
+    ai.summon_panel(Panel::Config);
+    ai.summon_panel(Panel::Config); // 顶=Config 再点钮
+    let s = ai.snap(0);
+    assert_eq!(s.top, Some(Panel::Config), "再点钮只召不收");
+    assert_eq!(s.covered, None, "幂等不复制");
+    ai.swipe_left(); // 左滑 = 空操作（设置页不占召唤滑槽）
+    assert_eq!(ai.snap(0).top, Some(Panel::Config));
+    ai.swipe_right(); // 右滑 = 唯一关闭路径
+    assert_eq!(ai.snap(0).top, None, "右滑推出设置页露终端");
+}
+
+#[test]
 fn spec_panel_用户场景走查() {
-    // 2026-09-11 用户拍板原例（三公民版）：终端右滑→文件树顶；点球→AI
-    // 顶文件树被盖；左滑→配置盖 AI、栈满两格文件树被静默挤出；右滑→推回
-    // 配置 AI 露出；点球→收 AI **直接露终端**（文件树早已出栈，不许诈尸）
+    // 2026-09-12 四公民版走查（三缘语义）：终端右滑→文件树顶；点球→AI
+    // 顶文件树被盖；左滑→解析页盖 AI、栈满两格文件树被静默挤出；右滑→推回
+    // 解析页 AI 露出；点球→收 AI **直接露终端**（文件树早已出栈，不许诈尸）
     let ai = new_state();
     ai.swipe_right(); // 文件树
     ai.tap_orb(); // AI 顶，文件树被盖
-    ai.swipe_left(); // 配置顶，AI 被盖，文件树挤出
+    ai.swipe_left(); // 解析页顶，AI 被盖，文件树挤出
     let s = ai.snap(0);
-    assert_eq!(s.top, Some(Panel::Config));
+    assert_eq!(s.top, Some(Panel::Parser));
     assert_eq!(s.covered, Some(Panel::Ai));
-    ai.swipe_right(); // 推回配置 → AI 露出
+    ai.swipe_right(); // 推回解析页 → AI 露出
     assert_eq!(ai.snap(0).top, Some(Panel::Ai));
     ai.tap_orb(); // 收 AI → 露终端（栈空）
     let s = ai.snap(0);
@@ -1488,17 +1522,17 @@ fn spec_panel_用户场景走查() {
     assert_eq!(s.page, Page::Terminal);
 }
 
-// 三公民栈挤出专项：栈满第三公民入场静默挤栈底；挤出者视同收起——
+// 四公民栈挤出专项：栈满新公民入场静默挤栈底；挤出者视同收起——
 // 再被召唤 = 重新入场（幂等坍缩语义），不是「恢复被盖位」
 #[test]
-fn spec_panel_三公民栈挤出_挤出者视同收起() {
+fn spec_panel_四公民栈挤出_挤出者视同收起() {
     let ai = new_state();
     ai.swipe_right(); // [FileTree]
     ai.tap_orb(); // [FileTree, Ai]
-    ai.swipe_left(); // 满 → 挤 FileTree：[Ai, Config]
+    ai.swipe_left(); // 满 → 挤 FileTree：[Ai, Parser]
     assert_eq!(ai.snap(0).covered, Some(Panel::Ai));
-    assert_eq!(ai.snap(0).top, Some(Panel::Config));
-    // 文件树已出栈：此刻右滑顶=配置 = 推回配置（不是召唤文件树）
+    assert_eq!(ai.snap(0).top, Some(Panel::Parser));
+    // 文件树已出栈：此刻右滑顶=解析页 = 推回解析页（不是召唤文件树）
     ai.swipe_right();
     assert_eq!(ai.snap(0).top, Some(Panel::Ai), "挤出不诈尸");
     // 再召唤文件树 = 重放顶（AI 被盖），不是回到被盖位
@@ -1519,6 +1553,7 @@ fn spec_panel_不变量任意序列() {
         |a| a.summon_panel(Panel::Ai),
         |a| a.summon_panel(Panel::Config),
         |a| a.summon_panel(Panel::FileTree),
+        |a| a.summon_panel(Panel::Parser),
         |a| {
             a.dismiss_top(Panel::Ai);
         },
@@ -1527,6 +1562,9 @@ fn spec_panel_不变量任意序列() {
         },
         |a| {
             a.dismiss_top(Panel::FileTree);
+        },
+        |a| {
+            a.dismiss_top(Panel::Parser);
         },
     ];
     let mut seed = 0x9e3779b9u32;
@@ -1560,8 +1598,8 @@ fn spec_panel_旧契约不破_tap_overlay_与浮层() {
     // 浮层可见性与栈正交：run_start 现、甩掉隐——面板栈不影响
     let ai2 = new_state();
     ai2.run_start(1000);
-    ai2.swipe_left();
-    assert!(ai2.snap(1000).overlay_visible, "配置页在顶浮层照样现");
+    ai2.swipe_left(); // 四公民起 = 召唤解析页在顶
+    assert!(ai2.snap(1000).overlay_visible, "解析页在顶浮层照样现");
 }
 
 // ---- 面板栈 §五B：抽屉手势识别（decide_swipe 纯函数，2026-09-10） ----

@@ -135,9 +135,10 @@ pub fn reset_frame_clock_for_test() {
 const VSYNC_WATCHDOG_MS: u64 = 32;
 
 /// 该画动画帧了：无活跃动画恒 false——零额外帧零唤醒（夜判据 0.45%
-/// 单核红线）。四道缝共用一只钟（2026-09-04 键盘 inset 缝入册、09-10
-/// 配置面板 X 缝入册、09-11 文件树面板 X 缝入册：同窗同帧不双泵。
-/// 09-12 Q 弹形变弹簧曾入册为第四路活性源，同日二审取消退役）。
+/// 单核红线）。五道缝共用一只钟（2026-09-04 键盘 inset 缝入册、09-10
+/// 配置面板 X 缝入册、09-11 文件树面板 X 缝入册、09-12 解析面板 X 缝
+/// 入册：同窗同帧不双泵。09-12 Q 弹形变弹簧曾入册为第四路活性源，
+/// 同日二审取消退役）。
 /// 产帧许可双模（BAR-081，2026-09-11 残影定案）：
 /// - **vsync 挂表期 = 锁相**：只认 due 账一跳一帧（定时器泵与 8.6ms
 ///   vsync 双钟不锁相 = swap 间隔 1/9/25ms 的残影真凶，锁相后相位跟屏）；
@@ -148,7 +149,8 @@ pub fn fx_frame_due(now_ms: u64) -> bool {
     let active = crate::ui::seam::ai_panel_offset_y_active()
         || crate::ui::seam::chrome_ime_inset_active()
         || crate::ui::seam::config_panel_offset_x_active()
-        || crate::ui::seam::filetree_panel_offset_x_active();
+        || crate::ui::seam::filetree_panel_offset_x_active()
+        || crate::ui::seam::parser_panel_offset_x_active();
     if !active {
         LAST_FRAME_MS.store(0, Ordering::Relaxed);
         return false;

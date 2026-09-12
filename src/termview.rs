@@ -299,6 +299,51 @@ pub fn ft_split(ft_off: i32, w: u32) -> (bool, bool) {
     (ft_off != 0, ft_off > -(w as i32))
 }
 
+/// 解析页底装修（面板栈 §五B 四公民·三缘语义，2026-09-12）：整页深靛蓝底加
+/// 青蓝边框环。配方与配置页同源——右缘家符号约定完全相同：pt_off_x = 面板
+/// 刚体水平平移（+w=屏外右缘 → 0 靠泊）；占位壳阶段区分只有颜色不同。
+/// v1 = 空白骨架，无内容墨
+pub fn paint_parser_page_chrome(
+    buf: &mut [u32],
+    buf_w: u32,
+    buf_h: u32,
+    bottom_inset: u32,
+    pt_off_x: i32,
+) {
+    if buf_w == 0 || buf_h == 0 {
+        return;
+    }
+    let mut frame = Frame {
+        buf,
+        w: buf_w,
+        h: buf_h,
+    };
+    // 整页底色 = 面板刚体矩形（全屏）与屏求交后画（X 向平移，左右裁剪）
+    let px0 = pt_off_x.clamp(0, buf_w as i32) as u32;
+    let px1 = (buf_w as i32 + pt_off_x).clamp(0, buf_w as i32) as u32;
+    if px1 > px0 {
+        frame.fill_rect(px0, 0, px1 - px0, buf_h, PT_PAGE_BG);
+    }
+    paint_page_frame_ring(
+        &mut frame,
+        buf_w,
+        buf_h,
+        bottom_inset,
+        pt_off_x,
+        0,
+        PT_PAGE_BG,
+        PT_FRAME_C1,
+        PT_FRAME_C2,
+    );
+}
+
+/// 解析页分层判定（右缘家，与 cfg_split 同构同尺）：
+/// - 网格+快捷键行（下层可见）：pt_off != 0；
+/// - 解析页可见：pt_off < w（off ∈ [0, +w]，=w 即完全屏外右缘）
+pub fn pt_split(pt_off: i32, w: u32) -> (bool, bool) {
+    cfg_split(pt_off, w)
+}
+
 /// 终端卡片壳底装修（2026-09-11 用户拍板「终端也包全屏卡片壳」）：
 /// 与三面板同配方 paint_page_frame_ring，无色相碳灰环 + 近黑内芯底
 /// （卡片感 = 壳内略亮于壳外纯黑）。无平移无动画——基座页恒靠泊；
@@ -2206,6 +2251,13 @@ pub const CFG_FRAME_C2: u32 = 0x0020_90D0; // 青蓝 rgba(32,144,208,~.7)
 pub const FT_PAGE_BG: u32 = 0x000A_1A0F;
 pub const FT_FRAME_C1: u32 = 0x0040_E080; // 翠绿 rgba(64,224,128,~.8)
 pub const FT_FRAME_C2: u32 = 0x0020_7040; // 墨绿 rgba(32,112,64,~.7)
+
+/// 解析页底色/边框（面板栈 §五B 四公民·三缘语义，2026-09-12）：同配方
+/// 青蓝系——深靛蓝底 + 青色边框环（b 主导，与配置青环的 g 主导区分：
+/// 占位壳阶段「区分只有颜色不同」，一眼可辨是第四页）
+pub const PT_PAGE_BG: u32 = 0x0008_1026;
+pub const PT_FRAME_C1: u32 = 0x0020_C0F0; // 青蓝 rgba(32,192,240,~.8)
+pub const PT_FRAME_C2: u32 = 0x0014_3868; // 深靛蓝 rgba(20,56,104,~.7)
 
 /// 终端卡片壳底色/边框（2026-09-11 用户拍板「终端也包一个全屏卡片壳，
 /// 样式统一」）：同配方**无色相碳灰**——终端是基座不是卡，一眼看出

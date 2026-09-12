@@ -90,6 +90,7 @@ fn spec_stats_格式_keyvalue一行一项() {
         ai_epoch: 0,
         cfg_epoch: 0,
         ft_epoch: 0,
+        pt_epoch: 0,
         bar_focused: false,
         bar_text_len: 0,
     };

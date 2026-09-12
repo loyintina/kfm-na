@@ -54,6 +54,7 @@ fn snap() -> StatsSnap {
         ai_epoch: 0,
         cfg_epoch: 0,
         ft_epoch: 0,
+        pt_epoch: 0,
         bar_focused: false,
         bar_text_len: 0,
     }

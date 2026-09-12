@@ -211,6 +211,9 @@ fn spec_bar077_帧预算_跟随刷新率可配() {
     let _g = SEAM_LOCK.lock().unwrap();
     seam::release_ai_panel_offset_y();
     seam::release_chrome_ime_inset();
+    seam::release_config_panel_offset_x();
+    seam::release_filetree_panel_offset_x();
+    seam::release_parser_panel_offset_x();
     // 默认：未设置 = 16ms（60fps 保守基线——核心层零平台依赖，壳没喂
     // 数字前必须能活）
     assert_eq!(fx_spring::frame_budget_ms(), 16, "默认预算必须是 16ms");
@@ -245,6 +248,10 @@ fn spec_bar077_帧预算_跟随刷新率可配() {
 fn spec_帧时钟_无动画零帧有动画限频() {
     let _g = SEAM_LOCK.lock().unwrap();
     seam::release_ai_panel_offset_y();
+    seam::release_chrome_ime_inset();
+    seam::release_config_panel_offset_x();
+    seam::release_filetree_panel_offset_x();
+    seam::release_parser_panel_offset_x();
     // 无占槽：恒不产帧（0.45% 单核夜判据红线——动画系统不许抬升基线）
     assert!(!fx_spring::panel_frame_due(0));
     assert!(!fx_spring::panel_frame_due(1000));
@@ -308,7 +315,10 @@ fn spec_帧时钟_键盘缝活跃也产帧() {
     let _g = SEAM_LOCK.lock().unwrap();
     seam::release_ai_panel_offset_y();
     seam::release_chrome_ime_inset();
-    assert!(!fx_spring::fx_frame_due(0), "两道缝全空 = 零帧");
+    seam::release_config_panel_offset_x();
+    seam::release_filetree_panel_offset_x();
+    seam::release_parser_panel_offset_x();
+    assert!(!fx_spring::fx_frame_due(0), "五道缝全空 = 零帧");
     // 只占键盘缝：帧时钟一样要转（fx_frame_due 是任一缝语义）
     seam::occupy_chrome_ime_inset(fx_spring::spring_occupier());
     assert_eq!(seam::sample_chrome_ime_inset(0.0, 2000), 0.0); // primed
@@ -373,7 +383,8 @@ fn spec_帧时钟_配置缝活跃也产帧() {
     seam::release_chrome_ime_inset();
     seam::release_config_panel_offset_x();
     seam::release_filetree_panel_offset_x();
-    assert!(!fx_spring::fx_frame_due(0), "四道缝全空 = 零帧");
+    seam::release_parser_panel_offset_x();
+    assert!(!fx_spring::fx_frame_due(0), "五道缝全空 = 零帧");
     // 只占配置缝：帧时钟一样要转（fx_frame_due 是任一缝语义）
     seam::occupy_config_panel_offset_x(kfm_na::ui::fx_ease::ease_occupier());
     assert_eq!(seam::sample_config_panel_offset_x(1260.0, 2000), 1260.0); // primed
@@ -447,7 +458,8 @@ fn spec_帧时钟_文件树缝活跃也产帧() {
     seam::release_chrome_ime_inset();
     seam::release_config_panel_offset_x();
     seam::release_filetree_panel_offset_x();
-    assert!(!fx_spring::fx_frame_due(0), "四道缝全空 = 零帧");
+    seam::release_parser_panel_offset_x();
+    assert!(!fx_spring::fx_frame_due(0), "五道缝全空 = 零帧");
     // 只占文件树缝：帧时钟一样要转（fx_frame_due 是任一缝语义）
     seam::occupy_filetree_panel_offset_x(kfm_na::ui::fx_ease::ease_occupier());
     assert_eq!(seam::sample_filetree_panel_offset_x(-1260.0, 2000), -1260.0); // primed
@@ -480,4 +492,97 @@ fn spec_ft缝_replay中继_入账() {
         "踢必达占槽件，(屏外位, 时刻) 原样带符号"
     );
     seam::release_filetree_panel_offset_x();
+}
+
+// ---- 第五道缝：解析面板 X 偏移（四公民·三缘语义 §五B，2026-09-12） ----
+// 右缘家与配置缝符号约定完全相同：屏外位 = +w（正向），曲线同一件
+// fx_ease。变异抽检：fx_frame_due 活性读数漏 parser 臂 → 产帧题红
+// （第四缝同款病灶 2026-09-11 实抓：缝忘入帧时钟 = 动画零泵）。
+
+#[test]
+fn spec_pt缝_无占槽直通目标值() {
+    let _g = SEAM_LOCK.lock().unwrap();
+    seam::release_parser_panel_offset_x(); // 防前题残槽
+    assert_eq!(
+        seam::sample_parser_panel_offset_x(0.0, 0),
+        0.0,
+        "无占槽 = 硬切直通"
+    );
+    assert_eq!(seam::sample_parser_panel_offset_x(1260.0, 123), 1260.0);
+    assert!(!seam::parser_panel_offset_x_active(), "无占槽恒无活跃动画");
+}
+
+#[test]
+fn spec_pt缝_缓动占槽与拔槽回硬切() {
+    let _g = SEAM_LOCK.lock().unwrap();
+    seam::release_parser_panel_offset_x();
+    seam::occupy_parser_panel_offset_x(kfm_na::ui::fx_ease::ease_occupier());
+    // 首采样直通（primed）；召唤 +w→0 = 入场起滑（重定基当刻 = 起点）
+    assert_eq!(seam::sample_parser_panel_offset_x(1260.0, 0), 1260.0);
+    let p0 = seam::sample_parser_panel_offset_x(0.0, 100);
+    assert_eq!(p0, 1260.0, "目标翻转当刻必须还在起点");
+    assert!(seam::parser_panel_offset_x_active(), "目标变了 = 动画开始");
+    // 入场中途（减速臂档窗内）：在行程内
+    let p_mid = seam::sample_parser_panel_offset_x(0.0, 200);
+    assert!(
+        (0.0..1260.0).contains(&p_mid),
+        "入场中途必须在行程内，实测 {p_mid}"
+    );
+    // 立场 0→+w：翻转当刻在起点，中途在行程内
+    let q0 = seam::sample_parser_panel_offset_x(1260.0, 500);
+    assert_eq!(q0, 0.0, "立场翻转当刻必须还在起点");
+    let q_mid = seam::sample_parser_panel_offset_x(1260.0, 600);
+    assert!(
+        (0.0..1260.0).contains(&q_mid),
+        "立场中途必须在行程内，实测 {q_mid}"
+    );
+    // 收敛贴死 + 拔槽回硬切
+    let q_end = seam::sample_parser_panel_offset_x(1260.0, 5000);
+    assert_eq!(q_end, 1260.0, "定时缓动到期必贴死");
+    assert!(!seam::parser_panel_offset_x_active());
+    seam::release_parser_panel_offset_x();
+    assert_eq!(seam::sample_parser_panel_offset_x(300.0, 6000), 300.0);
+}
+
+#[test]
+fn spec_帧时钟_解析缝活跃也产帧() {
+    let _g = SEAM_LOCK.lock().unwrap();
+    seam::release_ai_panel_offset_y();
+    seam::release_chrome_ime_inset();
+    seam::release_config_panel_offset_x();
+    seam::release_filetree_panel_offset_x();
+    seam::release_parser_panel_offset_x();
+    assert!(!fx_spring::fx_frame_due(0), "五道缝全空 = 零帧");
+    // 只占解析缝：帧时钟一样要转（fx_frame_due 是任一缝语义）
+    seam::occupy_parser_panel_offset_x(kfm_na::ui::fx_ease::ease_occupier());
+    assert_eq!(seam::sample_parser_panel_offset_x(1260.0, 2000), 1260.0); // primed
+    seam::sample_parser_panel_offset_x(0.0, 2000); // 目标翻转 = 动画开始
+    assert!(fx_spring::fx_frame_due(2000), "解析缝活跃即产帧");
+    seam::sample_parser_panel_offset_x(0.0, 5000); // 到期贴死
+    assert!(!fx_spring::fx_frame_due(5016), "动画停即停表");
+    seam::release_parser_panel_offset_x();
+}
+
+#[test]
+fn spec_pt缝_replay中继_入账() {
+    let _g = SEAM_LOCK.lock().unwrap();
+    seam::release_parser_panel_offset_x();
+    seam::replay_parser_panel_offset_x(1260.0, 100); // 无占槽空操作（入账）
+    use std::sync::{Arc, Mutex};
+    let got = Arc::new(Mutex::new(None));
+    let got2 = Arc::clone(&got);
+    seam::occupy_parser_panel_offset_x(seam::Occupier {
+        sampler: Arc::new(|t, _| t),
+        is_active: Arc::new(|| false),
+        replay: Some(Arc::new(move |off: f32, now: u64| {
+            *got2.lock().unwrap() = Some((off, now));
+        })),
+    });
+    seam::replay_parser_panel_offset_x(1260.0, 777);
+    assert_eq!(
+        *got.lock().unwrap(),
+        Some((1260.0, 777)),
+        "踢必达占槽件，(屏外位, 时刻) 原样带符号（右缘家 +w）"
+    );
+    seam::release_parser_panel_offset_x();
 }

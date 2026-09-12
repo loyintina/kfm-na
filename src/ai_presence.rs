@@ -17,9 +17,10 @@
 //! （末位=顶，其余=被覆盖）。召唤 = 摘出重放顶（重复召唤幂等），栈满
 //! 挤出栈底（静默坍缩为收起）；收起只许顶（被覆盖者不可见，无手势能
 //! 收它）；遮盖者退场被覆盖者直接露出（placement 从未离靠泊位，零动画）。
-//! 抽屉对称手势（三公民 2026-09-11）：swipe_left：顶=文件树推回 /
-//! 顶=配置空操作 / 否则召唤配置；swipe_right：顶=配置推回 / 顶=文件树
-//! 空操作 / 否则召唤文件树——任意栈态每个滑向有唯一归宿。
+//! 抽屉对称手势（四公民 2026-09-12 三缘语义）：swipe_left：顶=文件树推回 /
+//! 顶=配置空操作 / 顶=解析空操作 / 否则召唤解析页；swipe_right：顶=配置
+//! 推回 / 顶=解析推回 / 顶=文件树空操作 / 否则召唤文件树——任意栈态每个
+//! 滑向有唯一归宿。
 //!
 //! 时钟注入铁律：一切时间判定吃 `now_ms` 参数，不碰墙钟——考题喂时间戳即判。
 //! 生产侧 now_ms = report::boot_ms()（进程单钟，stats/绘制/注入同一把尺）。
@@ -66,19 +67,23 @@ pub enum Page {
     AiFullscreen,
 }
 
-/// 面板公民（§五B/D12，2026-09-11 三公民化）：AI（光球垂直落）/ 配置
-/// （左滑家，右缘进出）/ 文件树（右滑家，左缘进出，占位页先行——手势
-/// 语义闭环：每个滑向在任意栈态都有唯一归宿，不再有「留给未来」的空操作）
+/// 面板公民（§五B/D12，2026-09-12 四公民化·三缘语义）：AI（光球垂直落，
+/// 顶缘家=全局 AI）/ 配置（右缘家——设置页=独立第四页，齿轮钮唯一召唤口
+/// +右滑唯一关闭口，不占任何滑槽）/ 文件树（左缘家=路由，右滑召唤、左滑
+/// 推回）/ 解析（右缘家=解析器家族，左滑召唤、右滑推回，占位页先行——
+/// 手势语义闭环：每个滑向在任意栈态都有唯一归宿）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Panel {
     Ai,
     Config,
     FileTree,
+    Parser,
 }
 
-/// 水平滑向（抽屉手势识别结果，§五B 三公民）：左 = 配置家（顶是文件树则
-/// 推回它——滑向来向=推回；否则召唤配置）；右 = 文件树家（顶是配置则
-/// 推回它，否则召唤文件树）。顶是本家面板时反向外滑 = 空操作（一滑一义）
+/// 水平滑向（抽屉手势识别结果，§五B 四公民）：左 = 解析家（顶是文件树则
+/// 推回它——滑向来向=推回；顶是配置/解析则空操作；否则召唤解析页）；
+/// 右 = 文件树家（顶是配置/解析则推回它，顶是文件树则空操作，否则召唤
+/// 文件树）。顶是本家面板时反向外滑 = 空操作（一滑一义）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SwipeDir {
     Left,
@@ -126,6 +131,8 @@ pub struct PresenceSnap {
     pub cfg_epoch: u64,
     /// 文件树面板的入场代（语义同 ai_epoch）
     pub ft_epoch: u64,
+    /// 解析面板的入场代（语义同 ai_epoch）
+    pub pt_epoch: u64,
 }
 
 /// 四态增益（纯函数，D8）：(整 sprite 增益, 光晕增益)。光晕增益只在 running
@@ -145,15 +152,16 @@ pub fn orb_gain(running: bool, pressed: bool, page: Page) -> (f32, f32) {
 struct Inner {
     ai_running: bool,
     /// 面板栈（§五B）：末位 = 顶，其余 = 被覆盖；至多两格，空 = 终端页
-    /// （三公民不升三格：2026-09-11 用户场景序「文件树→AI→配置」关两层
-    /// 直接露终端——左右两家完全隔离，第三公民入场照样挤栈底）
+    /// （四公民不升四格：2026-09-11 用户场景序「文件树→AI→配置」关两层
+    /// 直接露终端——各家完全隔离，新公民入场照样挤栈底）
     stack: Vec<Panel>,
-    /// 入场代（BAR-079）：AI/配置/文件树各一枚。只在「被覆盖者离被覆盖位」时
+    /// 入场代（BAR-079）：AI/配置/文件树/解析各一枚。只在「被覆盖者离被覆盖位」时
     /// bump——再召唤（坍缩②重播入场）与被挤出（坍缩③静默瞬移）；新鲜
     /// 召唤/退场/露出都不 bump（目标值翻转自足/打断不跳变/零动画露出）
     epoch_ai: u64,
     epoch_cfg: u64,
     epoch_ft: u64,
+    epoch_pt: u64,
     x: f64,
     y: f64,
     /// 首次 set_bounds 落默认出生位的标记（之后 set_bounds 只钳制不搬家）
@@ -184,6 +192,7 @@ impl AiPresenceState {
                 epoch_ai: 0,
                 epoch_cfg: 0,
                 epoch_ft: 0,
+                epoch_pt: 0,
                 x: 0.0,
                 y: 0.0,
                 positioned: false,
@@ -268,26 +277,27 @@ impl AiPresenceState {
         }
     }
 
-    /// 左滑（三公民 §五B，2026-09-11）：顶是文件树 = 推回它的来向（左缘）；
-    /// 顶是配置 = 空操作（本家已在顶，一滑一义）；其余 = 召唤配置页
+    /// 左滑（四公民 §五B 三缘语义，2026-09-12）：顶是文件树 = 推回它的来向
+    /// （左缘）；顶是配置/解析 = 空操作（右缘本家已在顶，一滑一义——设置页
+    /// 手势全退位只留关闭，解析页是本方向的新家）；其余 = 召唤解析页
     pub fn swipe_left(&self) {
         let mut g = self.inner.lock().unwrap();
         match g.stack.last() {
             Some(&Panel::FileTree) => {
                 g.stack.pop();
             }
-            Some(&Panel::Config) => {}
-            _ => summon_locked(&mut g, Panel::Config),
+            Some(&Panel::Config) | Some(&Panel::Parser) => {}
+            _ => summon_locked(&mut g, Panel::Parser),
         }
     }
 
-    /// 右滑（三公民 §五B，2026-09-11）：顶是配置 = 推回它的来向（右缘）；
-    /// 顶是文件树 = 空操作（本家已在顶）；其余 = 召唤文件树（右滑家落地，
-    /// 「顶=Ai 右滑零响应」的空操作态从此不存在）
+    /// 右滑（四公民 §五B 三缘语义，2026-09-12）：顶是配置/解析 = 推回它们的
+    /// 来向（右缘——设置页唯一关闭路径）；顶是文件树 = 空操作（本家已在顶）；
+    /// 其余 = 召唤文件树
     pub fn swipe_right(&self) {
         let mut g = self.inner.lock().unwrap();
         match g.stack.last() {
-            Some(&Panel::Config) => {
+            Some(&Panel::Config) | Some(&Panel::Parser) => {
                 g.stack.pop();
             }
             Some(&Panel::FileTree) => {}
@@ -385,6 +395,7 @@ impl AiPresenceState {
             ai_epoch: g.epoch_ai,
             cfg_epoch: g.epoch_cfg,
             ft_epoch: g.epoch_ft,
+            pt_epoch: g.epoch_pt,
         }
     }
 }
@@ -418,6 +429,7 @@ fn bump_epoch(g: &mut Inner, p: Panel) {
         Panel::Ai => g.epoch_ai += 1,
         Panel::Config => g.epoch_cfg += 1,
         Panel::FileTree => g.epoch_ft += 1,
+        Panel::Parser => g.epoch_pt += 1,
     }
 }
 

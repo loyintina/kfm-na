@@ -136,7 +136,7 @@ pub fn dump_now(dir: &str) {
             panel_target,
             crate::report::boot_ms() as u64,
         ) as i32;
-        // 面板栈 X 偏移同尺过缝（面板栈 §五B 三公民 2026-09-11）：装帧口径
+        // 面板栈 X 偏移同尺过缝（面板栈 §五B 四公民 2026-09-12）：装帧口径
         // 扩到全栈——dump 不识面板 = 视觉轨对它全瞎（09-10 实机自验实踩：
         // stats 报 config 在顶，CPU 倒帧却只见终端）。target 只问栈
         // （BAR-084 单源 panel_target_and_draw：活性泄漏进 target = 退场
@@ -155,6 +155,7 @@ pub fn dump_now(dir: &str) {
         }
         let cfg_active = crate::ui::seam::config_panel_offset_x_active();
         let ft_active = crate::ui::seam::filetree_panel_offset_x_active();
+        let pt_active = crate::ui::seam::parser_panel_offset_x_active();
         let (cfg_target, cfg_draw) = crate::ui::stage::panel_target_and_draw(
             stack_vec.contains(&Panel::Config),
             cfg_active,
@@ -165,12 +166,18 @@ pub fn dump_now(dir: &str) {
             ft_active,
             -(w as f32),
         );
+        let (pt_target, pt_draw) = crate::ui::stage::panel_target_and_draw(
+            stack_vec.contains(&Panel::Parser),
+            pt_active,
+            w as f32,
+        );
         let z_order = crate::ui::stage::panel_z_order(
             &stack_vec,
             [
                 crate::ui::seam::ai_panel_offset_y_active(),
                 cfg_active,
                 ft_active,
+                pt_active,
             ],
         );
         let cfg_off = crate::ui::seam::sample_config_panel_offset_x(
@@ -181,12 +188,18 @@ pub fn dump_now(dir: &str) {
             ft_target,
             crate::report::boot_ms() as u64,
         ) as i32;
+        let pt_off = crate::ui::seam::sample_parser_panel_offset_x(
+            pt_target,
+            crate::report::boot_ms() as u64,
+        ) as i32;
         let (ai_grid, panel_visible) = crate::termview::panel_split(panel_off, h);
         let (cfg_grid, cfg_visible0) = crate::termview::cfg_split(cfg_off, w);
         let (ft_grid, ft_visible0) = crate::termview::ft_split(ft_off, w);
+        let (pt_grid, pt_visible0) = crate::termview::pt_split(pt_off, w);
         let cfg_visible = cfg_visible0 && cfg_draw;
         let ft_visible = ft_visible0 && ft_draw;
-        let grid_keybar = ai_grid && cfg_grid && ft_grid;
+        let pt_visible = pt_visible0 && pt_draw;
+        let grid_keybar = ai_grid && cfg_grid && ft_grid && pt_grid;
         if grid_keybar {
             // 卡片壳下缘让位 = 快捷键行 + 输入栏带高（值守倒帧无键盘视野），
             // 与前台 paint_under 同尺（前景 ime_bottom_px 恒 0 于后台）
@@ -194,7 +207,7 @@ pub fn dump_now(dir: &str) {
             // 快捷键行：前台同规则 inset 叠输入栏当前带高；修饰位无共享态按 0 画
             t.render_keybar(&mut buf, w, h, bar_h, 0);
         }
-        // 三面板按 z_order 底→顶逐槽画（与前台 paint_under 同规）
+        // 四面板按 z_order 底→顶逐槽画（与前台 paint_under 同规）
         for slot in z_order {
             match slot {
                 Panel::Config => {
@@ -205,6 +218,11 @@ pub fn dump_now(dir: &str) {
                 Panel::FileTree => {
                     if ft_visible {
                         crate::termview::paint_ft_page_chrome(&mut buf, w, h, bar_h, ft_off);
+                    }
+                }
+                Panel::Parser => {
+                    if pt_visible {
+                        crate::termview::paint_parser_page_chrome(&mut buf, w, h, bar_h, pt_off);
                     }
                 }
                 Panel::Ai => {
@@ -1271,6 +1289,8 @@ pub struct StatsSnap {
     pub cfg_epoch: i64,
     /// 文件树面板入场代(同 ai_epoch；面板栈三公民 2026-09-11)
     pub ft_epoch: i64,
+    /// 解析面板入场代(同 ai_epoch；面板栈四公民·三缘语义 2026-09-12)
+    pub pt_epoch: i64,
     // ---- input_bar 字段族(2026-08-31,期 0 组件三,D9 机器轨) ----
     /// 聚焦态(服务未登记 = false)
     pub bar_focused: bool,
@@ -1303,6 +1323,7 @@ pub fn stats_snap() -> StatsSnap {
         Some(crate::ai_presence::Panel::Ai) => "ai".to_owned(),
         Some(crate::ai_presence::Panel::Config) => "config".to_owned(),
         Some(crate::ai_presence::Panel::FileTree) => "filetree".to_owned(),
+        Some(crate::ai_presence::Panel::Parser) => "parser".to_owned(),
     };
     let (
         ai_page,
@@ -1316,6 +1337,7 @@ pub fn stats_snap() -> StatsSnap {
         ai_epoch,
         cfg_epoch,
         ft_epoch,
+        pt_epoch,
     ) = match ai_presence_handle() {
         Some(ai) => {
             let s = ai.snap(crate::report::boot_ms() as u64);
@@ -1334,6 +1356,7 @@ pub fn stats_snap() -> StatsSnap {
                 s.ai_epoch as i64,
                 s.cfg_epoch as i64,
                 s.ft_epoch as i64,
+                s.pt_epoch as i64,
             )
         }
         None => (
@@ -1345,6 +1368,7 @@ pub fn stats_snap() -> StatsSnap {
             false,
             "-".to_owned(),
             "-".to_owned(),
+            0,
             0,
             0,
             0,
@@ -1393,6 +1417,7 @@ pub fn stats_snap() -> StatsSnap {
         ai_epoch,
         cfg_epoch,
         ft_epoch,
+        pt_epoch,
         bar_focused,
         bar_text_len,
     }
@@ -1407,7 +1432,7 @@ pub fn format_stats(s: &StatsSnap) -> String {
     // 帧均耗防除零:一帧没画过就报 0
     let draw_avg = s.draw_total_ms.checked_div(s.frames).unwrap_or(0);
     format!(
-        "uptime={}ms\nforeground={}\nloop_beat_age={}\nframes={}\npump_calls={}\npump_bytes={}\nshots={}\ntexts={}\nkeys={}\nkeys_bytes={}\ntouches={}\nactive={}\nsessions={}\ndraw_avg_ms={}\ndraw_max_ms={}\ncpu_jiffies={}\nrss_kb={}\nbytes_local={}\nbytes_remote={}\nbytes_other={}\nsession_deaths={}\nlocal_dead={}\nremote_dead={}\nai_page={}\nai_running={}\nai_orb_x={}\nai_orb_y={}\nai_pressed={}\nai_overlay={}\npanel_top={}\npanel_cov={}\nai_epoch={}\ncfg_epoch={}\nft_epoch={}\nbar_focused={}\nbar_text_len={}\n",
+        "uptime={}ms\nforeground={}\nloop_beat_age={}\nframes={}\npump_calls={}\npump_bytes={}\nshots={}\ntexts={}\nkeys={}\nkeys_bytes={}\ntouches={}\nactive={}\nsessions={}\ndraw_avg_ms={}\ndraw_max_ms={}\ncpu_jiffies={}\nrss_kb={}\nbytes_local={}\nbytes_remote={}\nbytes_other={}\nsession_deaths={}\nlocal_dead={}\nremote_dead={}\nai_page={}\nai_running={}\nai_orb_x={}\nai_orb_y={}\nai_pressed={}\nai_overlay={}\npanel_top={}\npanel_cov={}\nai_epoch={}\ncfg_epoch={}\nft_epoch={}\npt_epoch={}\nbar_focused={}\nbar_text_len={}\n",
         s.uptime_ms,
         s.foreground,
         age,
@@ -1442,6 +1467,7 @@ pub fn format_stats(s: &StatsSnap) -> String {
         s.ai_epoch,
         s.cfg_epoch,
         s.ft_epoch,
+        s.pt_epoch,
         s.bar_focused,
         s.bar_text_len
     )

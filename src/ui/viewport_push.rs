@@ -1,7 +1,7 @@
 //! ui/viewport_push.rs — 视口推移（2026-09-12 用户拍板：面板交互从
 //! 「覆盖」改「视口平移」——原内容平移走、新页面移过来）。
 //!
-//! 推移是纯合成期派生：三面板 off（缝采样/拖拽旁路之后的渲染值）唯一
+//! 推移是纯合成期派生：四面板 off（缝采样/拖拽旁路之后的渲染值）唯一
 //! 决定各层 placement，**状态核目标值体系零改动**——§五B「被覆盖者
 //! placement 冻结」由此改写为「被压者随动」，遮盖撤走从「零动画露出」
 //! 变成「随推移滑回」。手势跟手的底页随动零新机制：拖拽旁路改写的就
@@ -24,26 +24,44 @@ pub struct Push {
     pub dy: f32,
 }
 
-/// 三面板 off → 基座页推移 + 最大进度（纯函数）。
+/// 四面板 off → 基座页推移 + 最大进度（纯函数）。
 /// off 语义：AI ∈ [-h, 0]（屏外顶→靠泊）、配置 ∈ [0, +w]（靠泊→屏外右）、
-/// 文件树 ∈ [-w, 0]（屏外左→靠泊）。推移方向：AI 落 → 基座下移；
-/// 配置进 → 基座左移；文件树进 → 基座右移。
-pub fn viewport_push(panel_off: i32, cfg_off: i32, ft_off: i32, w: u32, h: u32) -> (Push, f32) {
+/// 文件树 ∈ [-w, 0]（屏外左→靠泊）、解析 ∈ [0, +w]（靠泊→屏外右，
+/// 右缘家与配置同约定）。推移方向：AI 落 → 基座下移；右缘家进 → 基座
+/// 左移；文件树进 → 基座右移。
+pub fn viewport_push(
+    panel_off: i32,
+    cfg_off: i32,
+    ft_off: i32,
+    pt_off: i32,
+    w: u32,
+    h: u32,
+) -> (Push, f32) {
     let (w, h) = (w as f32, h as f32);
     let p_ai = ((h + panel_off as f32) / h).clamp(0.0, 1.0);
     let p_cfg = ((w - cfg_off as f32) / w).clamp(0.0, 1.0);
     let p_ft = ((w + ft_off as f32) / w).clamp(0.0, 1.0);
+    let p_pt = ((w - pt_off as f32) / w).clamp(0.0, 1.0);
     (
         Push {
-            dx: p_ft * w - p_cfg * w,
+            dx: p_ft * w - p_cfg * w - p_pt * w,
             dy: p_ai * h,
         },
-        p_ai.max(p_cfg).max(p_ft),
+        p_ai.max(p_cfg).max(p_ft).max(p_pt),
     )
 }
 
 /// 单面板 off → 自身推进度的推移量（纯函数，与 viewport_push 同源）
-fn panel_progress(panel: Panel, panel_off: i32, cfg_off: i32, ft_off: i32, w: f32, h: f32) -> Push {
+#[allow(clippy::too_many_arguments)]
+fn panel_progress(
+    panel: Panel,
+    panel_off: i32,
+    cfg_off: i32,
+    ft_off: i32,
+    pt_off: i32,
+    w: f32,
+    h: f32,
+) -> Push {
     match panel {
         Panel::Ai => Push {
             dx: 0.0,
@@ -57,17 +75,24 @@ fn panel_progress(panel: Panel, panel_off: i32, cfg_off: i32, ft_off: i32, w: f3
             dx: ((w + ft_off as f32) / w).clamp(0.0, 1.0) * w,
             dy: 0.0,
         },
+        // 右缘家与配置同支路（三缘语义 2026-09-12：解析页镜像配置推移）
+        Panel::Parser => Push {
+            dx: -((w - pt_off as f32) / w).clamp(0.0, 1.0) * w,
+            dy: 0.0,
+        },
     }
 }
 
 /// 被压面板（栈内非顶）的额外位移 = 其上各面板推移之和（纯函数）。
 /// 顶面板/不在栈 = 零额外。栈底→顶序传入
+#[allow(clippy::too_many_arguments)]
 pub fn covered_extra(
     stack: &[Panel],
     panel: Panel,
     panel_off: i32,
     cfg_off: i32,
     ft_off: i32,
+    pt_off: i32,
     w: u32,
     h: u32,
 ) -> Push {
@@ -77,7 +102,7 @@ pub fn covered_extra(
     };
     let mut acc = Push { dx: 0.0, dy: 0.0 };
     for above in &stack[pos + 1..] {
-        let p = panel_progress(*above, panel_off, cfg_off, ft_off, w, h);
+        let p = panel_progress(*above, panel_off, cfg_off, ft_off, pt_off, w, h);
         acc.dx += p.dx;
         acc.dy += p.dy;
     }

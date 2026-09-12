@@ -33,27 +33,32 @@ pub const VELOCITY_WINDOW_MS: u64 = 100;
 /// 半程手势走完全程）
 pub const DRAG_GAIN: f64 = 2.0;
 
-/// 拖拽角色（锁定瞬间仲裁，四象限见考题钉②；2026-09-11 文件树两格入列
-/// ——三公民手势闭环：左滑家=配置（右缘进出），右滑家=文件树（左缘进出））
+/// 拖拽角色（锁定瞬间仲裁，四公民全表见考题钉②；2026-09-12 三缘语义——
+/// 左缘家=文件树（路由），右缘家=解析页（解析器家族）。设置页（配置面板）
+/// 是独立第四页：齿轮钮唯一召唤口、右滑唯一关闭口，永不走手势召唤——
+/// 故 SummonConfig 变体删除，原位是 SummonParser）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DragRole {
-    /// 左滑拉配置页进场：偏移从 屏宽（屏外右）→ 0（靠泊）
-    SummonConfig,
-    /// 右滑推配置页回右缘：偏移从 0 → 屏宽
+    /// 右滑推配置页回右缘：偏移从 0 → 屏宽（设置页唯一关闭路径）
     DismissConfig,
     /// 右滑拉文件树进场：偏移从 屏宽（屏外左）→ 0（靠泊）
     SummonFileTree,
     /// 左滑推文件树回左缘：偏移从 0 → 屏宽
     DismissFileTree,
+    /// 左滑拉解析页进场：偏移从 屏宽（屏外右）→ 0（靠泊）
+    SummonParser,
+    /// 右滑推解析页回右缘：偏移从 0 → 屏宽
+    DismissParser,
 }
 
-/// 锁定瞬间的栈顶读数（角色仲裁的唯一栈依赖）：三家面板或都不是。
-/// 2026-09-11 升枚举（原 top_is_config 布尔——右滑家落地，布尔装不下
-/// 三种顶）。Ai 不参与抽屉仲裁（垂直缝光球家），与空栈同归 Other
+/// 锁定瞬间的栈顶读数（角色仲裁的唯一栈依赖）：四家面板或都不是。
+/// 2026-09-12 四公民加 Parser（三缘语义：右缘=解析器家族）。
+/// Ai 不参与抽屉仲裁（垂直缝光球家），与空栈同归 Other
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DragTop {
     Config,
     FileTree,
+    Parser,
     Other,
 }
 
@@ -113,10 +118,11 @@ impl PanelDrag {
 
     /// 手指移动。返回 Some((角色, 新偏移)) = 面板跟手（含锁定瞬）；
     /// None = 不是面板拖拽（壳层走原分路：纵向滚屏/点按等）。
-    /// top = 锁定瞬间的栈顶读数（角色仲裁的唯一栈依赖——三公民一滑一义：
-    /// 左滑在文件树顶=推回文件树、在配置顶=空操作、其余=召唤配置；
-    /// 右滑镜像）。偏移语义统一为「距靠泊的px距离」∈[0,w]：壳层按家
-    /// 折算符号（配置家 +off 屏外右 / 文件树家 -off 屏外左）
+    /// top = 锁定瞬间的栈顶读数（角色仲裁的唯一栈依赖——四公民一滑一义：
+    /// 左滑在文件树顶=推回文件树、在配置/解析顶=空操作、其余=召唤解析页；
+    /// 右滑在配置/解析顶=推回、在文件树顶=空操作、其余=召唤文件树）。
+    /// 偏移语义统一为「距靠泊的px距离」∈[0,w]：壳层按家
+    /// 折算符号（右缘家 +off 屏外右 / 文件树家 -off 屏外左）
     pub fn on_move(
         &mut self,
         x: f64,
@@ -132,16 +138,17 @@ impl PanelDrag {
             if dx.abs() < DRAG_LOCK_PX || dx.abs() <= DRAG_DIR_LOCK * dy.abs() {
                 return None; // 未过阈值或斜率不够横——让路
             }
-            // 角色仲裁（一滑一义 §五B 三公民）
+            // 角色仲裁（一滑一义 §五B 四公民·三缘语义）
             let role = if dx < 0.0 {
                 match top {
                     DragTop::FileTree => DragRole::DismissFileTree,
-                    DragTop::Config => return None, // 本家已在顶：左滑空操作
-                    DragTop::Other => DragRole::SummonConfig,
+                    DragTop::Config | DragTop::Parser => return None, // 右缘本家已在顶：左滑空操作
+                    DragTop::Other => DragRole::SummonParser,
                 }
             } else {
                 match top {
                     DragTop::Config => DragRole::DismissConfig,
+                    DragTop::Parser => DragRole::DismissParser,
                     DragTop::FileTree => return None, // 本家已在顶：右滑空操作
                     DragTop::Other => DragRole::SummonFileTree,
                 }
@@ -165,12 +172,12 @@ impl PanelDrag {
     /// 跟手映射：位移先乘 DRAG_GAIN（手指不从屏缘起手的补偿），再折算成
     /// 「距靠泊的距离」：召唤 = 从 w 递减（手指朝来向的反方向拖 = 拉近），
     /// 推回 = 从 0 递增。钳 [0, w]：面板不许越过靠泊位飞出去，也不许拖
-    /// 出屏外更深。四家共用同一把尺，符号折算在壳层（配置 +/文件树 -）
+    /// 出屏外更深。四家共用同一把尺，符号折算在壳层（右缘家 +/文件树家 -）
     fn map_offset(&self, x: f64, w: f32) -> f32 {
         let d = ((x - self.lock_x) * DRAG_GAIN) as f32;
         match self.role {
-            Some(DragRole::SummonConfig) => (w + d).clamp(0.0, w),
-            Some(DragRole::DismissConfig) => d.clamp(0.0, w),
+            Some(DragRole::SummonParser) => (w + d).clamp(0.0, w),
+            Some(DragRole::DismissConfig) | Some(DragRole::DismissParser) => d.clamp(0.0, w),
             Some(DragRole::SummonFileTree) => (w - d).clamp(0.0, w),
             Some(DragRole::DismissFileTree) => (-d).clamp(0.0, w),
             None => 0.0,
@@ -183,12 +190,12 @@ impl PanelDrag {
             return 0.0;
         }
         match self.role {
-            Some(DragRole::SummonConfig) | Some(DragRole::SummonFileTree) => {
+            Some(DragRole::SummonFileTree) | Some(DragRole::SummonParser) => {
                 ((w - self.offset) / w).clamp(0.0, 1.0)
             }
-            Some(DragRole::DismissConfig) | Some(DragRole::DismissFileTree) => {
-                (self.offset / w).clamp(0.0, 1.0)
-            }
+            Some(DragRole::DismissConfig)
+            | Some(DragRole::DismissFileTree)
+            | Some(DragRole::DismissParser) => (self.offset / w).clamp(0.0, 1.0),
             None => 0.0,
         }
     }
@@ -215,8 +222,8 @@ impl PanelDrag {
         }
         let v = (x1 - x0) / (t1 - t0) as f64; // px/ms，右为正
         match self.role {
-            Some(DragRole::SummonConfig) => -v, // 左移 = 朝完成
-            Some(DragRole::DismissConfig) => v,
+            Some(DragRole::SummonParser) => -v, // 左移 = 朝完成
+            Some(DragRole::DismissConfig) | Some(DragRole::DismissParser) => v,
             Some(DragRole::SummonFileTree) => v, // 右移 = 朝完成
             Some(DragRole::DismissFileTree) => -v,
             None => 0.0,

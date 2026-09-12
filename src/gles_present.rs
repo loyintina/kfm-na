@@ -42,8 +42,8 @@ type Layer2 = (
 /// 图层槽位（ui-base §八）：每槽 = 独立画布 + 纹理 + 可见性。动画
 /// （placement 变化）不触碰槽内容——合成期只挪矩形；内容变化由调用方
 /// 置脏重烘焙（slot_bake）。z 序由 present_frame 按面板栈动态排：
-/// 键行恒在网格之上，三面板的上下关系由 stage::panel_z_order 裁决
-/// （BAR-083 动者在上三公民泛化：动画/拖拽中的面板压顶，双静止跟栈序），
+/// 键行恒在网格之上，四面板的上下关系由 stage::panel_z_order 裁决
+/// （BAR-083 动者在上四公民泛化：动画/拖拽中的面板压顶，双静止跟栈序），
 /// Over 恒在一切之上。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChromeSlot {
@@ -60,10 +60,13 @@ pub enum ChromeSlot {
     /// 文件树面板底装修（绿底+边框环；placement.x 跟 ft_off，面板栈
     /// §五B 三公民右滑抽屉——屏外左缘进出，与配置家镜像）
     FileTree = 4,
+    /// 解析面板底装修（深靛蓝底+青蓝边框环；placement.x 跟 pt_off，面板栈
+    /// §五B 四公民·三缘语义左滑抽屉——右缘家，屏外右缘进出，与配置家同约定）
+    Parser = 5,
     /// 终端卡片壳（碳灰环+近黑内芯；2026-09-11 用户拍板终端页同配方
     /// 装修）。恒靠泊无 placement 动画，合成期最先画（clear 之后、
-    /// 网格实例之前）——终端页可见 = 三面板都没靠泊（同键行槽规）
-    TermCard = 5,
+    /// 网格实例之前）——终端页可见 = 四面板都没靠泊（同键行槽规）
+    TermCard = 6,
 }
 
 /// 单槽烘焙物。baked=false 的槽不许上屏——采样未上传过的纹理得到
@@ -477,7 +480,7 @@ pub struct GlesPresent {
     // ---- 期 1 第 2 层：终端网格 GPU 化 ----
     /// 图层槽位（ui-base §八 渲染成本模型）：键行/AI面板/上层/配置/文件树
     /// 五槽，置脏烘焙 + placement 合成——动画帧零光栅零上传
-    layers: [ChromeLayer; 6],
+    layers: [ChromeLayer; 7],
     /// 图层实例程序（rect+uv+tint 四边形；placement 逐槽进实例数据）
     layer_prog: glow::NativeProgram,
     layer_vao: glow::NativeVertexArray,
@@ -613,6 +616,7 @@ impl GlesPresent {
         };
         // 先建槽数组再 move gl 进结构体（E0382：字段初始化按书写序移动）
         let layers = [
+            mk_layer(&gl),
             mk_layer(&gl),
             mk_layer(&gl),
             mk_layer(&gl),
@@ -998,12 +1002,12 @@ impl GlesPresent {
     /// 09-11 三公民化）：清屏 → 网格背景实例 → 网格字形实例（按页）→ 键行槽
     /// → 三面板槽按 z_order 底→顶依序画（placement 跟缝采样——动画帧唯二
     /// 变的东西，零上传）→ 上层槽（输入栏/光球/放大镜）→ swap。
-    /// 三面板 z 序由 z_order 传入（stage::panel_z_order 单源，BAR-083
-    /// 「动者在上」三公民泛化：动画/拖拽中的面板压顶，双静止跟栈序）；
+    /// 四面板 z 序由 z_order 传入（stage::panel_z_order 单源，BAR-083
+    /// 「动者在上」四公民泛化：动画/拖拽中的面板压顶，双静止跟栈序）；
     /// AI 文字是 AI 面板的墨，必须紧跟 AI 面板槽画（别家在顶时压在 AI
     /// 文字上）。槽画布由调用方置脏烘焙（slot_bake），未烘焙的槽不上屏
     /// （不完整纹理=黑屏案）。
-    /// 2026-09-12 视口推移（viewport_push）：panel/cfg/ft 三 placement 是
+    /// 2026-09-12 视口推移（viewport_push）：panel/cfg/ft/pt 四 placement 是
     /// 调用方算好的**终值**（off + 被压额外位移）；term_place =
     /// 基座页（终端卡槽+键行槽+网格实例）的 (dx, dy, scale)——
     /// 网格实例的仿射在调用方（glyph_atlas::push_*），这里只管两槽
@@ -1019,11 +1023,14 @@ impl GlesPresent {
         cfg_alpha: f32,
         ft_off: i32,
         ft_alpha: f32,
-        z_order: [crate::ai_presence::Panel; 3],
+        pt_off: i32,
+        pt_alpha: f32,
+        z_order: [crate::ai_presence::Panel; 4],
         term_place: (f32, f32, f32),
         panel_dy_extra: f32,
         cfg_dy_extra: f32,
         ft_dy_extra: f32,
+        pt_dy_extra: f32,
     ) {
         let t0_draw = std::time::Instant::now();
         // CPU 画布直接测量（rgb 非零计数 + 样本原值）——「画没画」的铁证
@@ -1132,7 +1139,7 @@ impl GlesPresent {
                 );
             }
 
-            // 三面板槽：z 序动者在上（BAR-083 三公民泛化，调用方算好
+            // 四面板槽：z 序动者在上（BAR-083 四公民泛化，调用方算好
             // z_order 底→顶传入）。AI 文字是 AI 面板槽的墨——紧跟 AI 面板
             // 槽画，别家在顶时被连墨带底一起盖住
             for slot in z_order {
@@ -1168,6 +1175,23 @@ impl GlesPresent {
                                 self.w as f32,
                                 self.h as f32,
                                 ft_alpha,
+                            );
+                        }
+                    }
+                    crate::ai_presence::Panel::Parser => {
+                        let pt = &self.layers[ChromeSlot::Parser as usize];
+                        if pt.visible && pt.baked {
+                            draw_slot_layer(
+                                gl,
+                                self.layer_prog,
+                                self.layer_vao,
+                                self.layer_vbo,
+                                pt.tex,
+                                pt_off as f32,
+                                pt_dy_extra,
+                                self.w as f32,
+                                self.h as f32,
+                                pt_alpha,
                             );
                         }
                     }

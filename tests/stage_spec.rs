@@ -9,25 +9,26 @@ use kfm_na::ui::stage;
 // 输入栏/光球/放大镜集体隐身（2026-09-07 用户实看）。可见性槽位单源，
 // 上层那条翻 false 即本考题红。2026-09-11 三公民第五槽：被覆盖面板仍
 // 可见（placement 不动，遮盖撤走零动画露出）；同日第六槽终端卡片壳：
-// 与键行同规跟 grid_keybar 走（基座壳恒靠泊，面板靠泊即整页盖住）。
-// 变异抽检：返回数组第 5/6 槽改 false → 断言红；槽位次序换序即红。
+// 与键行同规跟 grid_keybar 走（基座壳恒靠泊，面板靠泊即整页盖住）；
+// 2026-09-12 四公民解析页槽入列（右缘家，与配置同规）。
+// 变异抽检：返回数组第 6/7 槽改 false → 断言红；槽位次序换序即红。
 #[test]
 fn spec_bar070_上层槽恒可见() {
-    // 槽序：[键行, AI, 配置, 文件树, 上层, 终端卡]
+    // 槽序：[键行, AI, 配置, 文件树, 解析, 上层, 终端卡]
     assert_eq!(
-        stage::slot_visibility(true, true, true, true),
-        [true, true, true, true, true, true]
+        stage::slot_visibility(true, true, true, true, true),
+        [true, true, true, true, true, true, true]
     );
     assert_eq!(
-        stage::slot_visibility(false, false, false, false),
-        [false, false, false, false, true, false]
+        stage::slot_visibility(false, false, false, false, false),
+        [false, false, false, false, false, true, false]
     );
-    // 显式锁六条语义：键行/终端卡跟网格未靠泊走，三面板各跟各的 visible 走
-    let v = stage::slot_visibility(false, true, true, false);
-    assert!(!v[0] && v[1] && v[2] && !v[3] && v[4] && !v[5]);
-    // 被覆盖的面板：在栈（visible=true）哪怕顶是别家——露出零动画的承载
-    let v = stage::slot_visibility(true, true, true, true);
-    assert!(v[2] && v[3]);
+    // 显式锁七条语义：键行/终端卡跟网格未靠泊走，四面板各跟各的 visible 走
+    let v = stage::slot_visibility(false, true, true, false, true);
+    assert!(!v[0] && v[1] && v[2] && !v[3] && v[4] && v[5] && !v[6]);
+    // 被覆盖的面板：在栈（visible=true）哪怕顶是别家——露出随推移滑回的承载
+    let v = stage::slot_visibility(true, true, true, true, true);
+    assert!(v[2] && v[3] && v[4]);
 }
 
 // DirtyGuard 复用契约跨卷再钉：同 sig 复喂=照用烘焙（动画帧零光栅
@@ -43,45 +44,63 @@ fn spec_置脏判定_同sig复用_变化重烘() {
     assert!(g.feed((7, true)));
 }
 
-// BAR-083/三公民泛化：z 序「动者在上，不动者按栈序」——旧规逐帧跟栈顶，
+// BAR-083/四公民泛化：z 序「动者在上，不动者按栈序」——旧规逐帧跟栈顶，
 // 撤 AI 瞬 AI 出栈、不透明配置页当场压顶，AI 退出动画在它背后播完 =
 // 用户见瞬消（2026-09-11 用户实机：先配置后 AI，撤 AI 无动画；反向撤
-// 配置有）。三公民版：多动者之间仍按栈序，不在栈者垫最底按声明序。
+// 配置有）。四公民版（2026-09-12 三缘语义：解析页入列，PANELS 声明序
+// [Ai, Config, FileTree, Parser]）：多动者之间仍按栈序，不在栈者垫最底
+// 按声明序。
 // 变异抽检：活性权重删了（排序键只剩栈位阶）→ 第 1/3 条红；
-// 动者间 tie-break 改反 → 第 5 条红。
+// 动者间 tie-break 改反 → 第 5 条红；PANELS 漏 Parser → 第 7 条红。
 #[test]
-fn spec_bar083_z序_动者在上_三公民() {
+fn spec_bar083_z序_动者在上_四公民() {
     use kfm_na::ui::stage::panel_z_order as z;
     // 1. 撤 AI（AI 缝活跃、配置静止在栈）：哪怕栈顶已翻成配置，AI 仍压顶
-    //    active 与 PANELS=[Ai,Config,FileTree] 对齐
+    //    active 与 PANELS=[Ai,Config,FileTree,Parser] 对齐
     assert_eq!(
-        z(&[Panel::Config, Panel::Ai], [true, false, false]),
-        [Panel::FileTree, Panel::Config, Panel::Ai]
+        z(&[Panel::Config, Panel::Ai], [true, false, false, false]),
+        [Panel::FileTree, Panel::Parser, Panel::Config, Panel::Ai]
     );
     // 2. 撤配置（配置缝活跃、AI 静止在栈顶）：配置在上滑出可见
     assert_eq!(
-        z(&[Panel::Config, Panel::Ai], [false, true, false]),
-        [Panel::FileTree, Panel::Ai, Panel::Config]
+        z(&[Panel::Config, Panel::Ai], [false, true, false, false]),
+        [Panel::FileTree, Panel::Parser, Panel::Ai, Panel::Config]
     );
     // 3. 文件树家镜像：撤文件树（缝活跃）时它压过栈顶 AI
     assert_eq!(
-        z(&[Panel::FileTree, Panel::Ai], [false, false, true]),
-        [Panel::Config, Panel::Ai, Panel::FileTree]
+        z(&[Panel::FileTree, Panel::Ai], [false, false, true, false]),
+        [Panel::Config, Panel::Parser, Panel::Ai, Panel::FileTree]
     );
-    // 4. 双静止纯栈序：底→顶原样（露出零动画的承载）
+    // 4. 双静止纯栈序：底→顶原样（露出随推移滑回的承载）
     assert_eq!(
-        z(&[Panel::Config, Panel::Ai], [false, false, false]),
-        [Panel::FileTree, Panel::Config, Panel::Ai]
+        z(&[Panel::Config, Panel::Ai], [false, false, false, false]),
+        [Panel::FileTree, Panel::Parser, Panel::Config, Panel::Ai]
     );
     // 5. 多动者按栈序：AI 撤+配置撤同帧（双活跃），栈序 Config<Ai 不变
     assert_eq!(
-        z(&[Panel::Config, Panel::Ai], [true, true, false]),
-        [Panel::FileTree, Panel::Config, Panel::Ai]
+        z(&[Panel::Config, Panel::Ai], [true, true, false, false]),
+        [Panel::FileTree, Panel::Parser, Panel::Config, Panel::Ai]
     );
-    // 6. 不在栈者垫最底且次序确定（按 PANELS 声明序 Ai<Config<FileTree）
+    // 6. 不在栈者垫最底且次序确定（按 PANELS 声明序 Ai<Config<FileTree<Parser）
     assert_eq!(
-        z(&[Panel::Ai], [false, false, false]),
-        [Panel::Config, Panel::FileTree, Panel::Ai]
+        z(&[Panel::Ai], [false, false, false, false]),
+        [Panel::Config, Panel::FileTree, Panel::Parser, Panel::Ai]
+    );
+    // 7. 解析页入题：撤解析页（缝活跃）压过栈顶文件树；解析在栈被压时
+    //    双静止跟栈序
+    assert_eq!(
+        z(
+            &[Panel::FileTree, Panel::Parser],
+            [false, false, false, true]
+        ),
+        [Panel::Ai, Panel::Config, Panel::FileTree, Panel::Parser]
+    );
+    assert_eq!(
+        z(
+            &[Panel::Parser, Panel::FileTree],
+            [false, false, true, false]
+        ),
+        [Panel::Ai, Panel::Config, Panel::Parser, Panel::FileTree]
     );
 }
 

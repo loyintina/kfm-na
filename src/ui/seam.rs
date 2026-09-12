@@ -201,3 +201,51 @@ pub fn replay_filetree_panel_offset_x(offscreen: f32, now_ms: u64) {
         r(offscreen, now_ms);
     }
 }
+
+// ---- 第五道缝：解析面板 X 偏移（面板栈 §五B 四公民，2026-09-12 三缘语义）----
+// 目标值语义在基础层（解析页在栈=0 靠泊 / 不在栈=+屏宽 屏外右缘——左滑
+// 召唤、右滑推回，右缘家与配置缝符号约定完全相同）。动画只许在缝内插值。
+// 曲线族复用 fx_ease 同一对减速臂，零新曲线（同配置缝纪律）。
+
+static PARSER_PANEL_OFFSET_X: Mutex<Option<Occupier>> = Mutex::new(None);
+
+/// 占槽（后占者赢，ui-base §三 v1）
+pub fn occupy_parser_panel_offset_x(o: Occupier) {
+    *PARSER_PANEL_OFFSET_X.lock().unwrap() = Some(o);
+}
+
+/// 拔槽回硬切（插件卸载/禁用）
+pub fn release_parser_panel_offset_x() {
+    *PARSER_PANEL_OFFSET_X.lock().unwrap() = None;
+}
+
+/// 采样（渲染时过缝）：无占槽直通目标值——硬切基座语义
+pub fn sample_parser_panel_offset_x(target: f32, now_ms: u64) -> f32 {
+    let g = PARSER_PANEL_OFFSET_X.lock().unwrap();
+    match g.as_ref() {
+        Some(o) => (o.sampler)(target, now_ms),
+        None => target,
+    }
+}
+
+/// 该槽有活跃动画（帧时钟启停判据；无占槽恒 false = 零额外帧）
+pub fn parser_panel_offset_x_active() -> bool {
+    PARSER_PANEL_OFFSET_X
+        .lock()
+        .unwrap()
+        .as_ref()
+        .is_some_and(|o| (o.is_active)())
+}
+
+/// 入场重播踢（BAR-079，坍缩②）：壳层见解析入场代 bump 即踢——采样器
+/// 重定基到屏外右缘（目标不变）→ 重播抽屉入场。无占槽/无 replay = 空操作
+pub fn replay_parser_panel_offset_x(offscreen: f32, now_ms: u64) {
+    if let Some(r) = PARSER_PANEL_OFFSET_X
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|o| o.replay.as_ref())
+    {
+        r(offscreen, now_ms);
+    }
+}

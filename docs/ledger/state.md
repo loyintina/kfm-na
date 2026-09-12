@@ -7,6 +7,28 @@
 
 ## 当前位置（2026-09-05)
 
+- **四公民落地+设置页独立化（2026-09-12 晚，用户拍板语义规格逐臂钉死后实现）**：
+  解析页（Panel::Parser）升第四面板公民 + 设置页（配置面板）退出滑槽改
+  齿轮单入口。改动面：seam 第五道 `parser_panel_offset_x`（右缘家 +w 符号
+  同配置家）/ GLES 第七槽 ChromeSlot::Parser（z 序单源 [Panel;4]）/
+  swipe 八臂仲裁 + panel_drag 仲裁全表重写（SummonConfig 角色删除、原位
+  SummonParser；设置页右滑关闭臂保留）/ 青蓝占位壳（termview
+  paint_parser_page_chrome，底 0x00081026 深靛蓝 + 环 0x0020C0F0→
+  0x00143868 青蓝 b 主导，与配置 g 主导/文件树绿区分）/ 视口推移第三臂
+  （viewport_push 加 pt_off，被压随动与配置同式）/ stats 加 pt_epoch。
+  文档：ai-presence §五B 层级条/设置页独立条/抽屉对称手势表 4 顶×2 向/
+  实现锚点条；ui-base §二注册表解析页缝行 + §八 D7 三缘语义标准（左缘=
+  路由 / 右缘=解析器家族 / 顶缘=全局 AI；浏览器未来=中央对象入口在路由侧）。
+  **考题**：ai_presence_spec 八臂契约重写+设置页只召不收钉、panel_drag_spec
+  钉②八臂全表+钉⑦解析家右缘镜像、stage_spec BAR-070 七槽/BAR-083 四公民、
+  fx_spring_spec pt 缝四钉、viewport_push_spec 解析镜像钉、termview_spec
+  pt 色相钉（b 主导）。**变异抽检三咬全中**：①swipe_left 召唤臂改 Config →
+  三题红；②panel_drag Other+左给 SummonFileTree → 四题红；③fx_frame_due
+  parser 臂改 false → 帧时钟题红。全绿后复跑六套件确认恢复。
+  **欠账**：解析页仅占位壳无内容墨（真解析器 UI 待立项）；真机 C 档手感
+  未验；softbuffer 兜底路径保留旧覆盖语义（既有档位，非本批新增）。
+  **未 commit，待审查**。
+
 - **左右滑双槽解冻（2026-09-12 中午，用户拍板，同日第三拍）**：
   早批两次冻结（左滑槽留浏览器卡 64208b3 / 右滑槽关文件树 3330088）
   当日一并解冻——用户要实测三公民叠加交互全链。恢复 = 四文件直取
