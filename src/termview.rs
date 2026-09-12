@@ -665,9 +665,11 @@ fn paint_open_cursor(
 }
 
 /// 开口光标圆角弧（paint_open_cursor 的件）：弧带 SDF 覆盖率，线宽
-/// 沿角渐变。edge_y = 弧所在框缘（top=上缘，弧心 y0+R；否则下缘，
-/// 弧心 y1−R）；弧只画圆心左侧象限（dx≤0），角度归一后左上弧
-/// [π, 3π/2] 宽 9→3、左下弧 [π/2, π] 宽 3→9
+/// 沿角渐变。**弧带外缘贴框缘向内铺**（BAR-087：dist=R 满覆盖、
+/// dist>R 零墨，与直线段框内缘贴边同源同尺，不跨框）。edge_y = 弧
+/// 所在框缘（top=上缘，弧心 y0+R；否则下缘，弧心 y1−R）；弧只画
+/// 圆心左侧象限（dx≤0），角度归一后左上弧 [π, 3π/2] 宽 9→3、左下弧
+/// [π/2, π] 宽 3→9
 #[allow(clippy::too_many_arguments)]
 fn paint_cursor_arc(
     frame: &mut Frame<'_>,
@@ -725,7 +727,17 @@ fn paint_cursor_arc(
                 w3 + (w9 - w3) * t
             };
             let dist = (dx * dx + dy * dy).sqrt();
-            let cov = (wpx / 2.0 + 0.5 - (dist - rf).abs()).clamp(0.0, 1.0);
+            // 弧带外缘贴框缘（BAR-087，用户实机截图像素实测）：dist=R 满
+            // 覆盖、向内铺 wpx、内缘 0.5px 羽化、dist>R 零墨——与直线段
+            // 同源同尺（发丝线行带 [y0, y0+3)、左线列带 [x0, x0+9) 都是
+            // 框内缘贴边），旧居中弧带（dist=R 对半跨边）在角区外凸
+            // 4px/上凸 1px，三条线在角上肉眼错位
+            let inward = rf - dist;
+            let cov = if inward < 0.0 {
+                0.0
+            } else {
+                (wpx - inward + 0.5).clamp(0.0, 1.0)
+            };
             if cov > 0.0 {
                 frame.blend_px(ax as u32, ay as u32, line, (f64::from(la) * cov) as u32);
             }
