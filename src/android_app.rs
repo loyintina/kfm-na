@@ -282,6 +282,9 @@ struct App {
     /// 弹簧。共享句柄注册给 gate 值守倒帧（D9 同源——后台截图/倒帧
     /// 与前台帧同一份标签栏读数）
     tab_bar: Option<crate::ui::tab_bar::SharedTabBar>,
+    /// 配置卡双池状态（主题宪法 §五）：上池内容高 + 可用区 → 动态高度
+    /// 布局。共享句柄注册给 gate 值守倒帧（D9 同源，与标签栏同规）
+    dual_pool: Option<crate::ui::dual_pool::SharedDualPool>,
     /// 按在标签行带上的手势（宪法 §四 仲裁条款：行上横向滑动不触发
     /// 面板拖拽/页面滑向）——配置页靠泊且起点在行带才建
     tab_touch: Option<TabTouch>,
@@ -314,10 +317,11 @@ struct App {
 ///           render_orb(ai_snap) + render_magnifier——orb_alpha_out 在
 ///           GLES 路径恒 true 不进 sig；放大镜内容跟终端网格活（网格
 ///           变化不进 sig），拖选期调用方强制重烘焙
-/// 配置槽 sig（2026-09-12 标签栏落地后 9 维：w/h/ime/bar_h + accent
-/// c1/c2 + 标签栏选中/横滚/光标 x）——别名喂手机端新 clippy 的
-/// type_complexity 闸（09-12 实踩：服务器旧版不报，手机 1.97 报）
-type ConfigSig = (u32, u32, u32, u32, u32, u32, u32, i32, i32);
+/// 配置槽 sig（2026-09-12 双池骨架后 10 维：w/h/ime/bar_h + accent
+/// c1/c2 + 标签栏选中/横滚/光标 x + 双池上池高）——别名喂手机端新
+/// clippy 的 type_complexity 闸（09-12 实踩：服务器旧版不报，
+/// 手机 1.97 报）
+type ConfigSig = (u32, u32, u32, u32, u32, u32, u32, i32, i32, u32);
 
 #[derive(Default)]
 struct LayerSigs {
@@ -2007,6 +2011,17 @@ impl App {
             self.tab_bar = Some(bar);
         }
 
+        // 配置卡双池（主题宪法 §五，2026-09-12 骨架）：上池内容高骨架期
+        // 恒 0 = 空占位（A2）；共享句柄注册给 gate 值守倒帧（D9 同源）。
+        // 初始视口 720x1280 占位，draw_frame 每帧按真实屏尺寸 set_viewport 纠
+        {
+            let pool = std::sync::Arc::new(std::sync::Mutex::new(
+                crate::ui::dual_pool::DualPool::new(720, 1280),
+            ));
+            crate::ui::dual_pool::register_dual_pool(pool.clone());
+            self.dual_pool = Some(pool);
+        }
+
         // 全局输入栏插件（期 0 组件三）：状态核共享实例直挂 + 发送口装配。
         // 脑 = 配置驱动（期 0③ 换脑，D11 本地直连是地基）：私有目录
         // ai/providers.json + ai/.env 齐 → DirectApiBrain；缺/坏 →
@@ -2778,6 +2793,7 @@ impl App {
         panel_scratch: &mut Vec<u32>,
         mut ai_glyphs: Option<&mut Vec<crate::glyph_atlas::AiGlyph>>,
         tab_snap: Option<&crate::ui::tab_bar::TabBarSnap>,
+        pool_snap: Option<&crate::ui::dual_pool::DualPoolSnap>,
     ) -> Option<(u32, u32)> {
         // 分支判定唯一裁决处（panel_split/cfg_split/ft_split/pt_split）——softbuffer
         // 与 GLES 两路径都从这里取，分支语义漂移 = 眼手两张皮（BAR-063 级
@@ -2832,6 +2848,17 @@ impl App {
                                 w,
                                 h,
                                 ts,
+                                cfg_off,
+                                acc_of(crate::ai_presence::Panel::Config),
+                            );
+                        }
+                        // 双池（宪法 §五）：兜底路径同源同参
+                        if let Some(ps) = pool_snap {
+                            term.paint_cfg_dual_pool(
+                                buf,
+                                w,
+                                h,
+                                ps,
                                 cfg_off,
                                 acc_of(crate::ai_presence::Panel::Config),
                             );
@@ -2994,6 +3021,7 @@ impl App {
         z_order: [crate::ai_presence::Panel; 4],
         panel_scratch: &mut Vec<u32>,
         tab_snap: Option<&crate::ui::tab_bar::TabBarSnap>,
+        pool_snap: Option<&crate::ui::dual_pool::DualPoolSnap>,
     ) -> Option<(u32, u32)> {
         let Some(term) = term else {
             buf.fill(KFM_PURPLE); // 字体全灭的降级画面：紫屏 + 已有上报
@@ -3024,6 +3052,7 @@ impl App {
             panel_scratch,
             None,
             tab_snap,
+            pool_snap,
         );
         let sending = ai_snap.is_some_and(|s| s.ai_running);
         Self::paint_over(
@@ -3065,6 +3094,7 @@ impl App {
         chrome_inset_px: &mut u32,
         sigs: &mut LayerSigs,
         tab_snap: Option<&crate::ui::tab_bar::TabBarSnap>,
+        pool_snap: Option<&crate::ui::dual_pool::DualPoolSnap>,
         drag: Option<(crate::ai_presence::Panel, f32)>,
     ) -> Option<(u32, u32)> {
         let (w, h) = g.size();
@@ -3392,9 +3422,21 @@ impl App {
         let (tab_sel, tab_scroll, tab_cx) = tab_snap.map_or((0, 0, 0), |ts| {
             (ts.selected as u32, ts.scroll_px as i32, ts.cursor_x as i32)
         });
+        // 双池 sig 一维（宪法 §五）：上池高——内容进出/屏尺寸变（w/h 已在
+        // sig）触发布局重算时必须重烘焙
+        let pool_upper_h = pool_snap.map_or(0, |ps| ps.upper.h);
         if cfg_visible
             && sigs.config.feed((
-                w, h, ime, bar_h, acc_cfg.c1, acc_cfg.c2, tab_sel, tab_scroll, tab_cx,
+                w,
+                h,
+                ime,
+                bar_h,
+                acc_cfg.c1,
+                acc_cfg.c2,
+                tab_sel,
+                tab_scroll,
+                tab_cx,
+                pool_upper_h,
             ))
         {
             let px = g.slot_canvas(crate::gles_present::ChromeSlot::Config);
@@ -3404,6 +3446,13 @@ impl App {
                 t.lock()
                     .unwrap()
                     .paint_cfg_tab_bar(px, w, h, ts, 0, acc_cfg);
+            }
+            // 双池（宪法 §五）：与标签栏同槽同 accent——内卡反转在涂装
+            // 内部兑现（c2→c1），调用方无感
+            if let (Some(ps), Some(t)) = (pool_snap, th) {
+                t.lock()
+                    .unwrap()
+                    .paint_cfg_dual_pool(px, w, h, ps, 0, acc_cfg);
             }
             g.slot_bake(crate::gles_present::ChromeSlot::Config);
         }
@@ -3631,6 +3680,16 @@ impl App {
             }
             g2.snap(crate::report::boot_ms() as u64)
         });
+        // 配置卡双池快照（宪法 §五）：可用区按真实屏尺寸逐帧纠（与标签栏
+        // 同规）；骨架期上池内容恒 0 = 空占位（A2）
+        let pool_snap = self.dual_pool.as_ref().map(|p| {
+            let mut g3 = p.lock().unwrap();
+            if let Some(win) = &self.window {
+                let sz = win.inner_size();
+                g3.set_viewport(sz.width, sz.height);
+            }
+            g3.layout()
+        });
         // GLES（2026-09-07 图层槽位版）：网格实例 → 键行槽 → 面板槽
         // （placement 动画）→ AI 文字实例 → 上层槽。槽位置脏烘焙。
         // 关联函数按字段传参，避开 buf 借用 gfx 时动不了 self 的问题
@@ -3657,6 +3716,7 @@ impl App {
                 &mut self.chrome_inset_px,
                 &mut self.layer_sigs,
                 tab_snap.as_ref(),
+                pool_snap.as_ref(),
                 self.panel_drag.as_ref().and_then(|d| {
                     let off = d.current_offset()?;
                     let p = match d.role()? {
@@ -3830,6 +3890,7 @@ impl App {
                 z_order,
                 &mut self.panel_scratch,
                 tab_snap.as_ref(),
+                pool_snap.as_ref(),
             );
             // 布局写回视口状态机（眼手同尺：手势钳制与渲染同一份布局）
             if let (Some(chat), Some((total, fit))) = (&self.ai_chat, ai_layout) {

@@ -76,6 +76,9 @@ pub const TAB_TEXT_PX: f32 = 24.0;
 /// 初标 12（kfmv4 R4:厚缘3 ≈1.33 比例）实测偏硬，二标 16；
 /// 远小于短边一半时短边钳不参与，页环 36 不受影响）
 pub const TAB_CURSOR_R: u32 = 16;
+/// 双池框圆角半径（宪法 §五，2026-09-12 骨架标定）：与光标框同尺 16——
+/// 同屏装修件半径同源，禁止逐卡手抄（§六）
+pub const POOL_FRAME_R: u32 = 16;
 /// 思考块文字色（期 0④½）：比正文暗的灰紫——能读到思考在流，但不抢戏
 pub const AI_THINK_FG: u32 = 0x007E_7A9E;
 /// 收流后思考块的折叠占位行（2026-09-04 用户拍板：输出完自动折叠——
@@ -2210,6 +2213,50 @@ impl TermView {
         );
     }
 
+    /// 双池涂装（宪法 §五）：上池/下池两枚二级卡片框，paint_rect_ring
+    /// 同配方；内卡渐变反转 c2→c1（§三 多级嵌套逐层反转，外壳页环是
+    /// c1→c2）。骨架期无内容——框即全部（空池也画：A2 占位条款）
+    pub(crate) fn paint_cfg_dual_pool_impl(
+        &self,
+        buf: &mut [u32],
+        w: u32,
+        h: u32,
+        snap: &crate::ui::dual_pool::DualPoolSnap,
+        cfg_off_x: i32,
+        accent: crate::ui::accent::AccentPair,
+    ) {
+        if w == 0 || h == 0 {
+            return;
+        }
+        let mut frame = Frame { buf, w, h };
+        let off = i64::from(cfg_off_x);
+        let (ox, _oy) = crate::ui::tab_bar::content_origin();
+        // 内容裁剪带与标签栏同源（眼手同尺：带外看不见也点不着）
+        let clip_l = i64::from(ox) + off;
+        let clip_r =
+            i64::from(w) - i64::from(AI_PAGE_FRAME_MARGIN + AI_PAGE_FRAME_W + CELL_W) + off;
+        for r in [&snap.upper, &snap.lower] {
+            if r.w < 2 || r.h < 2 {
+                continue;
+            }
+            let x0 = r.x + off;
+            let y0 = r.y;
+            paint_rect_ring(
+                &mut frame,
+                x0,
+                y0,
+                x0 + i64::from(r.w),
+                y0 + i64::from(r.h),
+                clip_l,
+                clip_r,
+                crate::ui::accent::CARD_PAGE_BG,
+                accent.c2,
+                accent.c1,
+                POOL_FRAME_R,
+            );
+        }
+    }
+
     /// 画一串已量宽的字符（折行后逐行画走这里）：左对齐内缩 18 +
     /// 垂直居中 + 右缘裁剪，规则与 draw_text_left 一致
     #[allow(clippy::too_many_arguments)]
@@ -2820,6 +2867,19 @@ pub trait TermEmu: Send {
         cfg_off_x: i32,
         accent: crate::ui::accent::AccentPair,
     );
+    /// 配置卡双池涂装（主题宪法 §五，2026-09-12）：上池/下池两个二级
+    /// 卡片框（paint_rect_ring 同配方；内卡渐变反转 c2→c1，§三 多级
+    /// 嵌套逐层反转）。cfg_off_x 语义同 paint_cfg_tab_bar；画在配置页
+    /// 底装修之上、标签栏同层
+    fn paint_cfg_dual_pool(
+        &self,
+        buf: &mut [u32],
+        w: u32,
+        h: u32,
+        snap: &crate::ui::dual_pool::DualPoolSnap,
+        cfg_off_x: i32,
+        accent: crate::ui::accent::AccentPair,
+    );
     /// AI 外显 chrome（ai-presence，android_app rasterize 调用方）：
     /// AI 页真对话渲染（page=AiFullscreen 时代替终端网格）/ 雾状光球 sprite。
     /// scroll_rows = 距底行数（期 0④ 视口）；bottom_inset = 键盘+输入栏
@@ -2974,6 +3034,17 @@ impl TermEmu for TermView {
         accent: crate::ui::accent::AccentPair,
     ) {
         TermView::paint_cfg_tab_bar_impl(self, buf, w, h, snap, cfg_off_x, accent)
+    }
+    fn paint_cfg_dual_pool(
+        &self,
+        buf: &mut [u32],
+        w: u32,
+        h: u32,
+        snap: &crate::ui::dual_pool::DualPoolSnap,
+        cfg_off_x: i32,
+        accent: crate::ui::accent::AccentPair,
+    ) {
+        TermView::paint_cfg_dual_pool_impl(self, buf, w, h, snap, cfg_off_x, accent)
     }
     #[allow(clippy::too_many_arguments)]
     fn render_ai_page(

@@ -37,6 +37,7 @@ src/theme.rs 0
 src/trace.rs 4
 src/ui/accent.rs 1
 src/ui/ai_page.rs 0
+src/ui/dual_pool.rs 0
 src/ui/fx_ease.rs 0
 src/ui/fx_spring.rs 0
 src/ui/gear.rs 0

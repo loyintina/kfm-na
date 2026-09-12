@@ -3013,3 +3013,87 @@ fn spec_cfg标签栏_涂装钉() {
     }
     assert!(text_ink > 20, "选中标签格心必须有文字墨（{text_ink} px）");
 }
+
+#[test]
+fn spec_cfg双池_涂装钉() {
+    // 宪法 §五（2026-09-12 骨架）：①上池/下池两枚二级卡框都有环墨；
+    // ②内卡渐变反转 c2→c1（§三 多级嵌套逐层反转——外壳页环 c1→c2）：
+    // 取样点逐像素判 lerp(c2,c1,t)，正转变异即红；③内芯 punch 回底；
+    // ④两池直接衔接（上池底缘墨与下池顶缘墨相邻无空行）；⑤accent 驱动
+    use kfm_na::termview::{POOL_FRAME_R, lerp_rgb};
+    use kfm_na::ui::dual_pool::{DualPool, POOL_EMPTY_H};
+    let (w, h) = (400u32, 500u32);
+    let inset = 120u32;
+    let acc_a = kfm_na::ui::accent::AccentPair {
+        c1: 0x00FF_6000,
+        c2: 0x0000_80FF,
+    };
+    let acc_b = kfm_na::ui::accent::AccentPair {
+        c1: 0x0000_FF00,
+        c2: 0x00FF_00FF,
+    };
+    let bg = kfm_na::ui::accent::CARD_PAGE_BG;
+    let tv = TermView::new(host_font(), None, 8, 2, CELL_W, CELL_H);
+    let pool = DualPool::new(400, 500);
+    let snap = pool.layout();
+    // 骨架期空占位：upper = (43,163,320,72)，lower = (43,235,320,210)
+    assert_eq!(snap.upper.h, POOL_EMPTY_H, "夹具前提：骨架期上池空占位");
+    assert_eq!(POOL_FRAME_R, 16, "池框圆角与光标框同源（§六 禁手抄）");
+
+    let mut b0 = vec![0u32; (w * h) as usize];
+    termview::paint_cfg_page_chrome(&mut b0, w, h, inset, 0, acc_a);
+    tv.paint_cfg_dual_pool(&mut b0, w, h, &snap, 0, acc_a);
+
+    // ①+②上池左缘中带（满覆盖）：逐像素 = lerp(c2→c1, t)——反转钉
+    let ux = snap.upper.x as usize;
+    let uy = snap.upper.y as usize;
+    let uw = snap.upper.w as usize;
+    let uh = snap.upper.h as usize;
+    let t_up = ((2 + uh / 2) * 255 / ((uw - 1) + (uh - 1))) as u32;
+    let up_ring = b0[(uy + uh / 2) * w as usize + ux + 2];
+    assert_eq!(
+        up_ring,
+        lerp_rgb(acc_a.c2, acc_a.c1, t_up.min(255)),
+        "上池环墨 = c2→c1 反转渐变（§三 内卡反转；正转变异即红）"
+    );
+    assert_ne!(
+        up_ring,
+        lerp_rgb(acc_a.c1, acc_a.c2, t_up.min(255)),
+        "与正转色必须不同（反转不是口号）"
+    );
+    // 下池左缘中带同规
+    let ly2 = snap.lower.y as usize;
+    let lh2 = snap.lower.h as usize;
+    let t_lo = ((2 + lh2 / 2) * 255 / ((uw - 1) + (lh2 - 1))) as u32;
+    assert_eq!(
+        b0[(ly2 + lh2 / 2) * w as usize + ux + 2],
+        lerp_rgb(acc_a.c2, acc_a.c1, t_lo.min(255)),
+        "下池环墨 = 同一份反转配方（样式唯一来源）"
+    );
+
+    // ③内芯 punch 回底
+    assert_eq!(
+        b0[(uy + uh / 2) * w as usize + ux + 20],
+        bg,
+        "上池内芯必须 punch 回页底"
+    );
+
+    // ④直接衔接：上池底缘墨（uy+uh−1）与下池顶缘墨（ly2）相邻
+    assert_ne!(
+        b0[(uy + uh - 1) * w as usize + ux + 100],
+        bg,
+        "上池底缘必须有墨"
+    );
+    assert_ne!(b0[ly2 * w as usize + ux + 100], bg, "下池顶缘必须有墨");
+    assert_eq!(uy + uh, ly2, "两池直接衔接无空行（§四 二层双框）");
+
+    // ⑤accent 驱动：换 accent 同位必变色
+    let mut b1 = vec![0u32; (w * h) as usize];
+    termview::paint_cfg_page_chrome(&mut b1, w, h, inset, 0, acc_b);
+    tv.paint_cfg_dual_pool(&mut b1, w, h, &snap, 0, acc_b);
+    assert_ne!(
+        b1[(uy + uh / 2) * w as usize + ux + 2],
+        up_ring,
+        "accent 换了池框色必须变（驱动钉）"
+    );
+}
