@@ -13,6 +13,7 @@
 //! 页视口状态机（期 0④），纯逻辑无视图，同样不登记。
 pub mod accent;
 pub mod ai_page;
+pub mod cursor;
 pub mod dual_pool;
 pub mod fx_ease;
 pub mod fx_spring;

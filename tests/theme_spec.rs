@@ -7,7 +7,7 @@
 //! 纪律：先验证红，答案生成到绿。本文件是考题，生成器不许改。
 
 use kfm_na::termview::TermView;
-use kfm_na::theme::{BarTheme, Theme};
+use kfm_na::theme::{BarTheme, CursorTheme, Theme};
 
 // ========== 默认配方 = kfmv4 紫-青暗色系（逐项钉值，防手滑） ==========
 
@@ -124,5 +124,20 @@ fn spec_theme_keybar默认配方_换肤生效() {
     assert_eq!(
         buf[sample], 0x0000_FF00,
         "keybar 行带底必须读 theme.keybar.bg"
+    );
+}
+// ========== 功能光标配色组（宪法 §三 功能光标条款，2026-09-12 三修） ==========
+
+#[test]
+fn spec_theme_cursor默认配方_固定不随机() {
+    let t = Theme::default();
+    assert_eq!(
+        t.cursor,
+        CursorTheme {
+            line: 0x0000_D4FF, // kfmv4 rgba(0,212,255,0.7) 色部
+            bg: 0x002E_D5A3,   // kfmv4 rgba(46,213,163,0.15) 色部
+        },
+        "功能光标 = kfmv4 canvas-cursor 配方直译（宪法 §三：光标是主题色，\
+         永不随机不吃 accent——改值要走换肤流程不许顺手改）"
     );
 }

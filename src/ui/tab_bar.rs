@@ -1,11 +1,12 @@
 //! tab_bar.rs — 配置卡标签栏（主题宪法 §四 首行布局区，核心层纯逻辑，A 档钉）。
 //!
 //! 条款兑现：无标题栏——整张卡都是内容区，标签行在首行自开布局区；
-//! 标签行 = 1 格高（§七）；选中态 = 可移动光标框（左粗渐变框样式归
-//! 涂装侧 termview，本册只管几何：弹簧移动、落点咬格）；横滑区（内容
-//! 超出可横滚，pan clamp）；**手势仲裁边界单源**——`in_row`/`hit` 是
-//! 壳层「标签行上的横向滑动不触发面板拖拽/页面滑向」的判定尺
-//! （眼手同尺：涂装侧 tab_rects 与命中判定同一份几何）。
+//! 标签行 = 2 格高（§七）；选中态 = 功能光标开口框（宪法 §三/§四
+//! 三修：形态/涂装归 cursor.rs 与 termview，本册只管几何——弹簧移动、
+//! 落点咬格、**线长随机机制**：选中切换重掷顶/底线长，同标重按不重掷）；
+//! 横滑区（内容超出可横滚，pan clamp）；**手势仲裁边界单源**——
+//! `in_row`/`hit` 是壳层「标签行上的横向滑动不触发面板拖拽/页面滑向」
+//! 的判定尺（眼手同尺：涂装侧 tab_rects 与命中判定同一份几何）。
 //!
 //! 光标框移动 = fx_spring 欠阻尼弹簧（键盘 inset 同核）：select 瞬间从
 //! 当前位置重定基续弹（来回狂点不跳变），600ms 兜底贴死。
@@ -60,8 +61,9 @@ pub struct TabRect {
     pub h: u32,
 }
 
-/// 标签栏状态：池名表 + 选中 + 横滚 + 光标弹簧。壳层持有一份（配置卡
-/// 常驻，不随召唤重置——召唤即随机的只是 accent，标签是内容不是装修）
+/// 标签栏状态：池名表 + 选中 + 横滚 + 光标弹簧 + 开口光标几何。
+/// 壳层持有一份（配置卡常驻，不随召唤重置——召唤即随机的只是 accent，
+/// 标签是内容不是装修）
 pub struct TabBar {
     tabs: Vec<String>,
     selected: usize,
@@ -72,10 +74,26 @@ pub struct TabBar {
     /// 光标弹簧：select 瞬间 from = 当时位置（重定基）
     cursor_from: f32,
     cursor_start_ms: u64,
+    /// 开口光标随机源（宪法 §四 线长随机机制；种子壳层注时间戳）
+    rng: crate::ui::accent::AccentRng,
+    /// 当前一付线长（选中切换时重掷；同标重按不重掷——没移动不换装）
+    geom: crate::ui::cursor::OpenCursorGeom,
 }
 
 impl TabBar {
+    /// 定种子构造（考题/兜底用——开口光标线长每 boot 同一付，确定性复现）
     pub fn new(tabs: &[&str], viewport_w: u32) -> Self {
+        Self::new_seeded(tabs, viewport_w, 0x5EED_5EED_5EED_5EED)
+    }
+
+    /// 注种子构造（生产装配用——壳层喂时间戳，线长每 boot 重新随机，
+    /// 宪法 §四 线长随机机制）
+    pub fn new_seeded(tabs: &[&str], viewport_w: u32, seed: u64) -> Self {
+        let mut rng = crate::ui::accent::AccentRng::new(seed);
+        let geom = tabs
+            .first()
+            .map(|t| crate::ui::cursor::roll((text_cells(t) + 2) * CELL_W, &mut rng))
+            .unwrap_or(crate::ui::cursor::OpenCursorGeom { top_w: 0, bot_w: 0 });
         TabBar {
             tabs: tabs.iter().map(|s| s.to_string()).collect(),
             selected: 0,
@@ -83,6 +101,8 @@ impl TabBar {
             viewport_w,
             cursor_from: content_origin().0 as f32,
             cursor_start_ms: 0,
+            rng,
+            geom,
         }
     }
 
@@ -152,12 +172,17 @@ impl TabBar {
     }
 
     /// 选中（点按抬手调用）：弹簧从当前位置重定基 + 滚动保证完整可见
+    /// + 真换标时重掷开口光标线长（宪法 §四 随机机制：移动才换装）
     pub fn select(&mut self, i: usize, now_ms: u64) {
         if i >= self.tabs.len() {
             return;
         }
         self.cursor_from = self.cursor_x(now_ms);
         self.cursor_start_ms = now_ms;
+        if i != self.selected {
+            self.geom =
+                crate::ui::cursor::roll((text_cells(&self.tabs[i]) + 2) * CELL_W, &mut self.rng);
+        }
         self.selected = i;
         // 可见性：把选中标签完整拉进视口（左出界右拉、右出界左拉）。
         // scroll 突变不进弹簧——from 补 scroll 差（与 pan 同规：
@@ -199,6 +224,8 @@ impl TabBar {
             selected: self.selected,
             scroll_px: self.scroll_px,
             cursor_x: self.cursor_x(now_ms),
+            cursor_top_w: self.geom.top_w,
+            cursor_bot_w: self.geom.bot_w,
         }
     }
 }
@@ -209,6 +236,9 @@ pub struct TabBarSnap {
     pub selected: usize,
     pub scroll_px: i64,
     pub cursor_x: f32,
+    /// 开口光标顶/底线长（宪法 §四 随机机制产物，涂装照抄不许自算）
+    pub cursor_top_w: i64,
+    pub cursor_bot_w: i64,
 }
 
 /// 标签矩形序列（自由函数版：涂装侧从快照算，状态侧从 self 算——

@@ -2930,11 +2930,14 @@ fn spec_pt页底装修_accent与平移钉() {
 
 #[test]
 fn spec_cfg标签栏_涂装钉() {
-    // 宪法 §四（2026-09-12）：①标签行带内有文字墨（标签不是空色块）；
-    // ②光标框 = 左粗渐变框——左缘 3 倍粗于细缘（左带 9px 有墨、
-    //   内芯 punch 回底；上缘 3px 有墨、其下回底）；
-    // ③光标框色 = accent 驱动（换 accent 必变色；变异：写死常量即红）；
-    // ④顺序钉——punch 内芯不许盖掉选中标签文字（字必须在框之上）
+    // 宪法 §三/§四（2026-09-12 三修，功能光标开口框）：
+    // ①标签行带内有文字墨（标签不是空色块）；
+    // ②开口形态——左强调线有墨 / 右缘无墨（内芯=底垫、框外=页底）/
+    //   顶底线长逐像素 = 快照线长（眼手同尺，涂装照抄不许自算）；
+    // ③固定 token 色——换 accent 光标像素逐位不变（变异：吃 accent
+    //   即红）；线色蓝青（B 高 R 低）；
+    // ④底垫钉——内芯非字区 = blend(绿青, 页底, 38) 精确事后色；
+    // ⑤无浮空钉——框上一行零墨（发丝线单行不跨边，刻意偏差条款）
     let (w, h) = (400u32, 500u32);
     let inset = 120u32;
     let acc_a = kfm_na::ui::accent::AccentPair {
@@ -2946,6 +2949,16 @@ fn spec_cfg标签栏_涂装钉() {
         c2: 0x00FF_00FF,
     };
     let bg = kfm_na::ui::accent::CARD_PAGE_BG;
+    let cur = kfm_na::theme::Theme::default().cursor;
+    // blend 公式与 termview 私有 blend 逐字一致（事后色判卷尺）
+    let blend = |fg: u32, dst: u32, a: u32| {
+        let inv = 255 - a;
+        let ch = |f: u32, d: u32| (f * a + d * inv) / 255;
+        (ch((fg >> 16) & 0xFF, (dst >> 16) & 0xFF) << 16)
+            | (ch((fg >> 8) & 0xFF, (dst >> 8) & 0xFF) << 8)
+            | ch(fg & 0xFF, dst & 0xFF)
+    };
+    let pad = blend(cur.bg, bg, kfm_na::ui::cursor::BG_ALPHA); // 底垫事后色
     let tv = TermView::new(host_font(), None, 8, 2, CELL_W, CELL_H);
     let bar = kfm_na::ui::tab_bar::TabBar::new(&["API", "B"], 320);
     let snap = bar.snap(0);
@@ -2957,56 +2970,89 @@ fn spec_cfg标签栏_涂装钉() {
     termview::paint_cfg_page_chrome(&mut b0, w, h, inset, 0, acc_a);
     tv.paint_cfg_tab_bar(&mut b0, w, h, &snap, 0, acc_a);
 
-    // ②左粗：左缘带（+2）有环墨，+12 已 punch 回底；上缘带（+1）有墨，
-    // +8 回底
-    let left_ring = b0[mid_y * w as usize + cx + 2];
-    assert_ne!(left_ring, bg, "光标框左缘必须有墨");
-    assert_ne!(left_ring, 0, "光标框左缘必须有墨");
-    assert_eq!(
-        b0[mid_y * w as usize + cx + 12],
-        bg,
-        "左缘 3 倍粗带之内芯必须 punch 回底（9px 带 +2 取样）"
+    // ②左强调线：中带行 cx-1 列满 α 墨（异于底垫/页底），cx+2 已只剩底垫
+    let left_line = b0[mid_y * w as usize + cx - 1];
+    assert_ne!(left_line, pad, "左强调线必须有墨");
+    assert_ne!(left_line, bg, "左强调线必须有墨");
+    let (lr, lb) = ((left_line >> 16) & 0xFF, left_line & 0xFF);
+    assert!(
+        lb > 0x80 && lr < 0x40,
+        "线色必须蓝青（token #00D4FF 族）——{left_line:#010x}"
     );
-    let top_ring = b0[(oy + 1) * w as usize + cx + cw / 2];
-    assert_ne!(top_ring, bg, "光标框上缘必须有墨");
     assert_eq!(
-        b0[(oy + 8) * w as usize + cx + cw / 2],
-        bg,
-        "上缘细带之内芯必须 punch 回底（取样在顶中——两侧圆角半径外、文字区上方）"
+        b0[mid_y * w as usize + cx + 2],
+        pad,
+        "左线 3px 带以右必须只剩底垫（无左粗渐变框的 9px 带了）"
     );
+    // ②右缘无墨：框内右缘 = 底垫，框外右邻 = 页底（开口框没有右边）
+    assert_eq!(
+        b0[mid_y * w as usize + cx + cw - 1],
+        pad,
+        "框内右缘必须只剩底垫（开口框无右边）"
+    );
+    assert_eq!(
+        b0[mid_y * w as usize + cx + cw],
+        bg,
+        "框外右邻必须页底（底垫不外溢）"
+    );
+    // ②顶/底线长逐像素 = 快照线长（眼手同尺）：从 cx+4 起连续异于
+    // 底垫的行墨，长度必须 == snap 字段；线尾之后回底垫
+    let run = |buf: &[u32], y: usize| {
+        let mut n = 0i64;
+        while buf[y * w as usize + cx + 4 + n as usize] != pad {
+            n += 1;
+        }
+        n
+    };
+    assert_eq!(
+        run(&b0, oy),
+        snap.cursor_top_w,
+        "顶线像素长必须 = 快照 cursor_top_w（涂装不自算）"
+    );
+    assert_eq!(
+        run(&b0, oy + 71),
+        snap.cursor_bot_w,
+        "底线像素长必须 = 快照 cursor_bot_w"
+    );
+    assert!(snap.cursor_top_w > 0, "夹具前提：定种子初态有顶线");
 
-    // ③accent 驱动：同位取样换 accent 必变色
+    // ③固定 token 色：换 accent 重画，光标像素逐位不变（功能光标 vs
+    // 装修框分家；变异：吃 accent 即红）
     let mut b1 = vec![0u32; (w * h) as usize];
     termview::paint_cfg_page_chrome(&mut b1, w, h, inset, 0, acc_b);
     tv.paint_cfg_tab_bar(&mut b1, w, h, &snap, 0, acc_b);
-    assert_ne!(
-        b1[mid_y * w as usize + cx + 2],
-        left_ring,
-        "accent 换了光标框色必须变（驱动钉）"
-    );
-
-    // ⑤小圆角钉（2026-09-12 拍板：胶囊 36 → 小圆角偏方，初标 12 偏硬
-    // 二标 16）：常量钉死 + 行为交叉证——顶缘近角（右 12px、下 2px 处）
-    // 必须仍是环墨本体（红通道远高于底）；胶囊 36 会把这里切出矩形，
-    // 只剩 c2 辉光薄墨（c2 红通道 = 0，blend 后红 ≈ 底 0x14）
     assert_eq!(
-        kfm_na::termview::TAB_CURSOR_R,
-        16,
-        "光标框半径 = 16（12 实测偏硬，二标）"
+        b1[mid_y * w as usize + cx - 1],
+        left_line,
+        "accent 换了左线色也必须不变（固定 token 色）"
     );
-    let near_corner = b0[(oy + 2) * w as usize + cx + cw - 12];
-    assert!(
-        (near_corner >> 16) & 0xFF > 0x60,
-        "顶缘近角必须是渐变环墨（小圆角不切到这里；胶囊变异会只剩辉光）——{near_corner:#010x}"
+    assert_eq!(
+        b1[oy * w as usize + cx + 10],
+        b0[oy * w as usize + cx + 10],
+        "accent 换了顶线色也必须不变"
     );
 
-    // ①+④文字墨：选中标签格心区（框内芯）必须有非底非环的字形墨
-    // （2 格行高：文字垂直居中于 oy+36，扫带罩住字区上下裕量）
+    // ④底垫钉：内芯非字区（右 1/4 安静带，避开字形与左右线）= 精确事后色
+    assert_eq!(
+        b0[(oy + 60) * w as usize + cx + cw - 20],
+        pad,
+        "底垫必须 = blend(绿青, 页底, 38) 精确事后色"
+    );
+
+    // ⑤无浮空钉：框上一行零墨（发丝线画单行不跨边——刻意偏差条款；
+    // 变异：学 kfmv4 跨边半透会在这里落墨即红）
+    assert_eq!(
+        b0[(oy - 1) * w as usize + cx + cw / 2],
+        bg,
+        "框上一行必须零墨（不跨边浮空）"
+    );
+
+    // ①文字墨：选中标签格心区必须有非底垫非页底的字形墨（字在垫之上）
     let mut text_ink = 0usize;
     for y in (oy + 20)..(oy + 52) {
         for x in (cx + 20)..(cx + cw - 20) {
             let p = b0[y * w as usize + x];
-            if p != bg && p != 0 {
+            if p != pad && p != bg && p != 0 {
                 text_ink += 1;
             }
         }
