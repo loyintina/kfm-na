@@ -531,7 +531,7 @@ fn paint_rect_ring(
                 if ly >= 0 && ly < i64::from(fh) {
                     let cov = rr_cover(lx, ly as u32, fw, fh, rc as u32);
                     if cov > 0 {
-                        let color = lerp_rgb(c1, c2, ((lx + ly as u32) * 255 / denom).min(255));
+                        let color = ring_gradient_rgb(c1, c2, i64::from(lx), ly, denom as i64);
                         if cov == 255 {
                             frame.buf[ay as usize * frame.w as usize + ax as usize] = color;
                         } else {
@@ -593,15 +593,16 @@ fn paint_rect_ring(
     }
 }
 
-/// 功能光标开口框涂装（宪法 §三/§四 三修立、四修标定，2026-09-12；
-/// kfmv4 `renderer.ts _drawCursorBorder` 复刻 + NA 装修框同尺标定）：
-/// ①绿青半透明底垫整个框体；②左强调线 9px 画在**框内缘**（上下跳过
+/// 功能光标开口框涂装（宪法 §三/§四 三修立、四修标定、五修宽+色，
+/// 2026-09-13；kfmv4 `renderer.ts _drawCursorBorder` 复刻 + NA 标定）：
+/// ①绿青半透明底垫整个框体；②左强调线 8px 画在**框内缘**（上下跳过
 /// 圆角区；kfmv4 的 1.65px 突出不移植——装修框左缘都在框内，光标同规，
 /// 与双池左框逐像素一线）；③左上/左下圆角 R=12 线宽沿弧渐变
-/// （角顶 9px→角尾 3px，SDF 弧带覆盖率抗锯齿）；④顶线/底线 3px 锚左
+/// （角顶 8px→角尾 3px，SDF 弧带覆盖率抗锯齿）；④顶线/底线 3px 锚左
 /// （行带铺满 3 行），长度由调用方喂（cursor.rs 随机机制产物，涂装
 /// 不自算）。**无右边、无发光、无 punch**——开口框的观感本体就是
-/// 「缺的那一边」。
+/// 「缺的那一边」。线色 = 本卡 accent 双色渐变（五修）：grad 渐变框
+/// 必须与页环同源（同原点同分母），光标像从页环渐变布上剪下来。
 /// clip_x0/x1 = X 向内容裁剪带（与标签文字同一条带，眼手同尺：
 /// 带外看不见也点不着；左线已收进框内，无需额外放宽）
 #[allow(clippy::too_many_arguments)]
@@ -615,7 +616,7 @@ fn paint_open_cursor(
     bot_w: i64,
     clip_x0: i64,
     clip_x1: i64,
-    line: u32,
+    grad: RingGradient,
     bg: u32,
 ) {
     use crate::ui::cursor as cur;
@@ -634,16 +635,16 @@ fn paint_open_cursor(
             frame.blend_px(ax as u32, ay as u32, bg, cur::BG_ALPHA);
         }
     }
-    // ②左强调线：框内缘 [x0, x0+9) 满 α，上下跳过圆角区
+    // ②左强调线：框内缘 [x0, x0+8) 满 α，上下跳过圆角区
     let lx1 = (x0 + cur::EMPHASIS_W).min(clip_x1).min(fw);
     for cx in x0.max(clip_x0).max(0)..lx1 {
         for ay in (y0 + r).max(0)..(y1 - r).min(fh) {
-            frame.blend_px(cx as u32, ay as u32, line, la);
+            frame.blend_px(cx as u32, ay as u32, grad.sample(cx, ay), la);
         }
     }
-    // ③圆角（弧心 = 框缘内收 R；top=左上 9→3，false=左下 3→9）
-    paint_cursor_arc(frame, x0, y0, r, true, clip_x0, clip_x1, line, la);
-    paint_cursor_arc(frame, x0, y1, r, false, clip_x0, clip_x1, line, la);
+    // ③圆角（弧心 = 框缘内收 R；top=左上 8→3，false=左下 3→8）
+    paint_cursor_arc(frame, x0, y0, r, true, clip_x0, clip_x1, grad, la);
+    paint_cursor_arc(frame, x0, y1, r, false, clip_x0, clip_x1, grad, la);
     // ④细线（3px 锚左，行带铺满 HAIR_W 行）
     let hair = |hx0: i64, len: i64, hy0: i64, frame: &mut Frame<'_>| {
         if len <= 0 {
@@ -656,7 +657,7 @@ fn paint_open_cursor(
                 continue;
             }
             for ax in sx..ex {
-                frame.blend_px(ax as u32, hy as u32, line, la);
+                frame.blend_px(ax as u32, hy as u32, grad.sample(ax, hy), la);
             }
         }
     };
@@ -668,8 +669,8 @@ fn paint_open_cursor(
 /// 沿角渐变。**弧带外缘贴框缘向内铺**（BAR-087：dist=R 满覆盖、
 /// dist>R 零墨，与直线段框内缘贴边同源同尺，不跨框）。edge_y = 弧
 /// 所在框缘（top=上缘，弧心 y0+R；否则下缘，弧心 y1−R）；弧只画
-/// 圆心左侧象限（dx≤0），角度归一后左上弧 [π, 3π/2] 宽 9→3、左下弧
-/// [π/2, π] 宽 3→9
+/// 圆心左侧象限（dx≤0），角度归一后左上弧 [π, 3π/2] 宽 8→3、左下弧
+/// [π/2, π] 宽 3→8。线色 = grad 渐变框逐像素采样（五修，页环同尺）
 #[allow(clippy::too_many_arguments)]
 fn paint_cursor_arc(
     frame: &mut Frame<'_>,
@@ -679,7 +680,7 @@ fn paint_cursor_arc(
     top: bool,
     clip_x0: i64,
     clip_x1: i64,
-    line: u32,
+    grad: RingGradient,
     la: u32,
 ) {
     use crate::ui::cursor as cur;
@@ -710,7 +711,7 @@ fn paint_cursor_arc(
             if dx > 0.0 || (top && dy > 0.0) || (!top && dy < 0.0) {
                 continue;
             }
-            // 角度归一 [0, 2π)：左上弧 π→3π/2 宽 9→3；左下弧 π/2→π 宽 3→9
+            // 角度归一 [0, 2π)：左上弧 π→3π/2 宽 8→3；左下弧 π/2→π 宽 3→8
             let mut ang = dy.atan2(dx);
             if ang < 0.0 {
                 ang += 2.0 * std::f64::consts::PI;
@@ -729,7 +730,7 @@ fn paint_cursor_arc(
             let dist = (dx * dx + dy * dy).sqrt();
             // 弧带外缘贴框缘（BAR-087，用户实机截图像素实测）：dist=R 满
             // 覆盖、向内铺 wpx、内缘 0.5px 羽化、dist>R 零墨——与直线段
-            // 同源同尺（发丝线行带 [y0, y0+3)、左线列带 [x0, x0+9) 都是
+            // 同源同尺（发丝线行带 [y0, y0+3)、左线列带 [x0, x0+8) 都是
             // 框内缘贴边），旧居中弧带（dist=R 对半跨边）在角区外凸
             // 4px/上凸 1px，三条线在角上肉眼错位
             let inward = rf - dist;
@@ -739,7 +740,12 @@ fn paint_cursor_arc(
                 (wpx - inward + 0.5).clamp(0.0, 1.0)
             };
             if cov > 0.0 {
-                frame.blend_px(ax as u32, ay as u32, line, (f64::from(la) * cov) as u32);
+                frame.blend_px(
+                    ax as u32,
+                    ay as u32,
+                    grad.sample(ax, ay),
+                    (f64::from(la) * cov) as u32,
+                );
             }
         }
     }
@@ -2284,11 +2290,13 @@ impl TermView {
         }
     }
 
-    /// 配置卡标签栏涂装（主题宪法 §四，2026-09-12）：标签文字（格内
-    /// 居中，内容带左右缘裁剪——横滚滑出不污染页环带）+ 选中光标框
-    /// （左粗渐变框，paint_rect_ring 同页环配方；框色 = 本页 accent）。
+    /// 配置卡标签栏涂装（主题宪法 §四，2026-09-13 五修）：标签文字（格内
+    /// 居中，内容带左右缘裁剪——横滚滑出不污染页环带）+ 选中光标开口框
+    /// （线色 = 本页 accent 双色渐变，与页环同一把 135° 渐变尺同源采样
+    /// ——渐变框原点/分母就是页环的，光标像从页环渐变布上剪下来）。
     /// 文字色 = 三档透明度条款：选中 0.85 白、未选中 0.5 白。
     /// 空态也画光标框：框是装修不是内容（与页环同规）
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn paint_cfg_tab_bar_impl(
         &self,
         buf: &mut [u32],
@@ -2296,7 +2304,8 @@ impl TermView {
         h: u32,
         snap: &crate::ui::tab_bar::TabBarSnap,
         cfg_off_x: i32,
-        _accent: crate::ui::accent::AccentPair, // 功能光标固定 token 色不吃 accent（宪法 §三）；形参保留 = 调用方零改动
+        bottom_inset: u32,
+        accent: crate::ui::accent::AccentPair,
     ) {
         if w == 0 || h == 0 || snap.tabs.is_empty() {
             return;
@@ -2310,10 +2319,20 @@ impl TermView {
         let clip_r =
             i64::from(w) - i64::from(AI_PAGE_FRAME_MARGIN + AI_PAGE_FRAME_W + CELL_W) + off;
         let rects = crate::ui::tab_bar::rects_of(&snap.tabs, snap.scroll_px);
-        // 功能光标开口框（宪法 §三/§四 三修立、四修标定）先画：底垫+三线
-        // 在文字之下（内容在装修之上；开口框无 punch，文字一遍画成无需
-        // 补画）。颜色固定 token 蓝绿组，不吃 accent（功能光标 vs 装修框
-        // 分家）。裁剪带与文字同源——左线已收进框内缘（四修），无需放宽
+        // 功能光标开口框（宪法 §三/§四，五修）先画：底垫+三线在文字之下
+        // （内容在装修之上；开口框无 punch，文字一遍画成无需补画）。线色
+        // = 本页 accent 渐变——渐变框与 paint_page_frame_ring 同原点同
+        // 分母（§六 禁手抄，眼手同尺）。裁剪带与文字同源——左线已收进
+        // 框内缘（四修），无需放宽
+        let gw = i64::from(w) - 2 * i64::from(AI_PAGE_FRAME_MARGIN);
+        let gh = i64::from(h) - i64::from(bottom_inset) - 2 * i64::from(AI_PAGE_FRAME_MARGIN);
+        let grad = RingGradient {
+            c1: accent.c1,
+            c2: accent.c2,
+            x0: i64::from(AI_PAGE_FRAME_MARGIN) + off,
+            y0: i64::from(AI_PAGE_FRAME_MARGIN),
+            denom: ((gw - 1) + (gh - 1)).max(1),
+        };
         let sel = &rects[snap.selected];
         let cx = snap.cursor_x as i64 + off;
         paint_open_cursor(
@@ -2326,7 +2345,7 @@ impl TermView {
             snap.cursor_bot_w,
             clip_l,
             clip_r,
-            self.theme.cursor.line,
+            grad,
             self.theme.cursor.bg,
         );
         for (i, r) in rects.iter().enumerate() {
@@ -2870,6 +2889,34 @@ pub fn lerp_rgb(c1: u32, c2: u32, t: u32) -> u32 {
     (f(16) << 16) | (f(8) << 8) | f(0)
 }
 
+/// 135° 对角渐变采样（paint_rect_ring 配方抽核，宪法 §六 禁手抄）：
+/// t = (lx + ly)·255/denom——lx/ly = 采样点相对渐变框原点（框内恒
+/// 非负），denom = (框宽−1)+(框高−1)。页环/池框/功能光标（五修起
+/// 吃 accent 渐变）同一把尺：光标像素 = 从页环渐变布上剪下来的
+pub fn ring_gradient_rgb(c1: u32, c2: u32, lx: i64, ly: i64, denom: i64) -> u32 {
+    let d = denom.max(1) as u64;
+    let t = (((lx + ly).max(0) as u64 * 255) / d).min(255) as u32;
+    lerp_rgb(c1, c2, t)
+}
+
+/// 渐变框（ring_gradient_rgb 的采样坐标系打包）：双色 + 框原点 +
+/// 分母。涂装函数间传递用，采样 = 同一坐标系里的绝对像素点
+#[derive(Debug, Clone, Copy)]
+pub struct RingGradient {
+    pub c1: u32,
+    pub c2: u32,
+    pub x0: i64,
+    pub y0: i64,
+    pub denom: i64,
+}
+
+impl RingGradient {
+    /// 采样绝对像素点 (ax, ay) 的渐变色
+    pub fn sample(&self, ax: i64, ay: i64) -> u32 {
+        ring_gradient_rgb(self.c1, self.c2, ax - self.x0, ay - self.y0, self.denom)
+    }
+}
+
 /// 圆角矩形 SDF（像素中心相对形状的有符号距离，负=内正=外；
 /// iq 圆角盒公式）——AA 覆盖率与外发光衰减的同一把尺。
 /// 快路：双轴都在直边区就不必 hypot（药丸键/描边大面填充的命根，
@@ -2990,11 +3037,13 @@ pub trait TermEmu: Send {
     /// AI 页行基线（相对行顶；AI 文字装载 off_y 折算的唯一尺子）
     fn ai_text_baseline_off(&self) -> f32;
     fn render_keybar(&self, buf: &mut [u32], w: u32, h: u32, ime_bottom: u32, mods: u8);
-    /// 配置卡标签栏涂装（主题宪法 §四，2026-09-12；同日三修）：标签文字
+    /// 配置卡标签栏涂装（主题宪法 §四，2026-09-13 五修）：标签文字
     /// （格内居中、内容带左缘裁剪）+ 选中功能光标开口框（ui/cursor.rs
-    /// 规格——固定 token 蓝绿组不吃 accent；accent 形参保留仅为调用方
-    /// 零改动）。cfg_off_x = 面板刚体平移（GLES 烘焙调用恒 0，位移在合成
-    /// 期；softbuffer/值守倒帧传真值）。画在配置页底装修之上
+    /// 规格——线色吃本页 accent 双色渐变，渐变框与页环同原点同分母；
+    /// bottom_inset 即页环 inset，渐变分母同源的关键）。cfg_off_x =
+    /// 面板刚体平移（GLES 烘焙调用恒 0，位移在合成期；softbuffer/值守
+    /// 倒帧传真值）。画在配置页底装修之上
+    #[allow(clippy::too_many_arguments)]
     fn paint_cfg_tab_bar(
         &self,
         buf: &mut [u32],
@@ -3002,6 +3051,7 @@ pub trait TermEmu: Send {
         h: u32,
         snap: &crate::ui::tab_bar::TabBarSnap,
         cfg_off_x: i32,
+        bottom_inset: u32,
         accent: crate::ui::accent::AccentPair,
     );
     /// 配置卡双池涂装（主题宪法 §五，2026-09-12）：上池/下池两个二级
@@ -3168,9 +3218,10 @@ impl TermEmu for TermView {
         h: u32,
         snap: &crate::ui::tab_bar::TabBarSnap,
         cfg_off_x: i32,
+        bottom_inset: u32,
         accent: crate::ui::accent::AccentPair,
     ) {
-        TermView::paint_cfg_tab_bar_impl(self, buf, w, h, snap, cfg_off_x, accent)
+        TermView::paint_cfg_tab_bar_impl(self, buf, w, h, snap, cfg_off_x, bottom_inset, accent)
     }
     fn paint_cfg_dual_pool(
         &self,

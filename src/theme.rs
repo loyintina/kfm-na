@@ -67,17 +67,16 @@ pub struct Theme {
     /// 常量直迁；2026-09-11 用户拍板：key_bg 与行带底同色——药丸隐形
     /// 融入底带，修饰键粘滞高亮（圆角药丸）保留）
     pub keybar: KeybarTheme,
-    /// 功能光标配色组（theme.md 宪法 §三 功能光标条款，2026-09-12 三修：
-    /// kfmv4 canvas-cursor 复刻——光标是主题色的一部分，永不随机，
-    /// 不吃 accent 不吃渐变；α 归 ui/cursor.rs 规格常量）
+    /// 功能光标配色组（theme.md 宪法 §三 功能光标条款，2026-09-13 五修：
+    /// 线色跟随本卡随机 accent 双色渐变——推翻 09-12 固定纯蓝决策，
+    /// 线色 token 随之退役；α 归 ui/cursor.rs 规格常量）
     pub cursor: CursorTheme,
 }
 
-/// 功能光标配色（XRGB；宪法 §三——固定纯蓝，与随机 accent 体系分家）
+/// 功能光标配色（XRGB；线色不归 token——吃本卡 accent 渐变，涂装层
+/// 与页环同尺采样；这里只剩固定底垫）
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CursorTheme {
-    /// 框线：kfmv4 rgba(0,212,255,0.7) 的色部 #00D4FF
-    pub line: u32,
     /// 底垫：kfmv4 rgba(46,213,163,0.15) 的色部
     pub bg: u32,
 }
@@ -128,10 +127,7 @@ impl Default for Theme {
                 mod_on: 0x003E_6FB4,
                 label: 0x00E8_EAED,
             },
-            cursor: CursorTheme {
-                line: 0x0000_D4FF,
-                bg: 0x002E_D5A3,
-            },
+            cursor: CursorTheme { bg: 0x002E_D5A3 },
         }
     }
 }

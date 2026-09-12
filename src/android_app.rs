@@ -2865,6 +2865,7 @@ impl App {
                                 h,
                                 ts,
                                 cfg_off,
+                                bottom_inset,
                                 acc_of(crate::ai_presence::Panel::Config),
                             );
                         }
@@ -3472,7 +3473,7 @@ impl App {
             if let (Some(ts), Some(t)) = (tab_snap, th) {
                 t.lock()
                     .unwrap()
-                    .paint_cfg_tab_bar(px, w, h, ts, 0, acc_cfg);
+                    .paint_cfg_tab_bar(px, w, h, ts, 0, bottom_inset, acc_cfg);
             }
             // 双池（宪法 §五）：与标签栏同槽同 accent——内卡反转在涂装
             // 内部兑现（c2→c1），调用方无感

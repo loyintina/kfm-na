@@ -2930,13 +2930,13 @@ fn spec_pt页底装修_accent与平移钉() {
 
 #[test]
 fn spec_cfg标签栏_涂装钉() {
-    // 宪法 §三/§四（2026-09-12 四修标定，功能光标开口框）：
+    // 宪法 §三/§四（2026-09-13 五修，功能光标开口框）：
     // ①标签行带内有文字墨（标签不是空色块）；
-    // ②开口形态——左强调线 9px 带画框内缘有墨 / 右缘无墨（内芯=底垫、
+    // ②开口形态——左强调线 8px 带画框内缘有墨 / 右缘无墨（内芯=底垫、
     //   框外=页底）/ 顶底线 3px 厚、长逐像素 = 快照线长（眼手同尺，
     //   涂装照抄不许自算）；
-    // ③固定 token 色——换 accent 光标像素逐位不变（变异：吃 accent
-    //   即红）；线色蓝青（B 高 R 低）；
+    // ③渐变同源钉——线色 = 本页 accent 双色渐变与页环同尺采样（精确
+    //   事后色；换 accent 光标像素跟着变——变异：改回固定色即红）；
     // ④底垫钉——内芯非字区 = blend(绿青, 页底, 38) 精确事后色；
     // ⑤无浮空钉——框上一行零墨（发丝线单行不跨边，刻意偏差条款）
     let (w, h) = (400u32, 500u32);
@@ -2969,28 +2969,23 @@ fn spec_cfg标签栏_涂装钉() {
 
     let mut b0 = vec![0u32; (w * h) as usize];
     termview::paint_cfg_page_chrome(&mut b0, w, h, inset, 0, acc_a);
-    tv.paint_cfg_tab_bar(&mut b0, w, h, &snap, 0, acc_a);
+    tv.paint_cfg_tab_bar(&mut b0, w, h, &snap, 0, inset, acc_a);
 
-    // ②左强调线：中带行 [cx, cx+9) 满 α 墨（带心 cx+4 / 带尾 cx+8，
-    // 变异 EW=3 带尾回底垫必红），cx+9 已只剩底垫，cx-1 必须页底
-    // （左线画框内缘不出框——四修标定，与双池左框逐像素一线）
+    // ②左强调线：中带行 [cx, cx+8) 满 α 墨（带心 cx+4 / 带尾 cx+7，
+    // 变异 EW=3 带尾回底垫必红），cx+8 已只剩底垫，cx-1 必须页底
+    // （左线画框内缘不出框——四修/五修标定，与双池左框逐像素一线）
     let left_line = b0[mid_y * w as usize + cx + 4];
     assert_ne!(left_line, pad, "左强调线必须有墨");
     assert_ne!(left_line, bg, "左强调线必须有墨");
-    let (lr, lb) = ((left_line >> 16) & 0xFF, left_line & 0xFF);
-    assert!(
-        lb > 0x80 && lr < 0x40,
-        "线色必须蓝青（token #00D4FF 族）——{left_line:#010x}"
-    );
     assert_ne!(
-        b0[mid_y * w as usize + cx + 8],
+        b0[mid_y * w as usize + cx + 7],
         pad,
-        "左线 9px 带尾也必须有墨（变异 EW=3 必红）"
+        "左线 8px 带尾也必须有墨（变异 EW=3 必红）"
     );
     assert_eq!(
-        b0[mid_y * w as usize + cx + 9],
+        b0[mid_y * w as usize + cx + 8],
         pad,
-        "左线 9px 带以右必须只剩底垫"
+        "左线 8px 带以右必须只剩底垫"
     );
     assert_eq!(
         b0[mid_y * w as usize + cx - 1],
@@ -3046,20 +3041,52 @@ fn spec_cfg标签栏_涂装钉() {
     );
     assert!(snap.cursor_top_w > 0, "夹具前提：定种子初态有顶线");
 
-    // ③固定 token 色：换 accent 重画，光标像素逐位不变（功能光标 vs
-    // 装修框分家；变异：吃 accent 即红）
+    // ③渐变同源钉（五修）：线色 = 本页 accent 双色渐变与页环同一把
+    // 135° 尺采样——采样点事后色必须 = blend(渐变采样, 底垫, 178) 精确
+    // 值（眼手同尺：涂装与考题共读 ring_gradient_rgb 单源）；换 accent
+    // 重画，光标像素必须跟着变（变异：改回固定色即红）
+    let grad_a = kfm_na::termview::RingGradient {
+        c1: acc_a.c1,
+        c2: acc_a.c2,
+        x0: 16,
+        y0: 16,
+        // 页环分母 = (368−1)+(348−1)（屏 400×500 inset 120 边距 16 同源）
+        denom: 714,
+    };
+    let la = kfm_na::ui::cursor::LINE_ALPHA;
+    let want_left = blend(grad_a.sample((cx + 4) as i64, mid_y as i64), pad, la);
+    assert_eq!(
+        b0[mid_y * w as usize + cx + 4],
+        want_left,
+        "左线色必须 = 页环渐变同尺采样事后色（涂装与页环一把尺）"
+    );
+    let want_top = blend(grad_a.sample((cx + 20) as i64, oy as i64), pad, la);
+    assert_eq!(
+        b0[oy * w as usize + cx + 20],
+        want_top,
+        "顶线色必须 = 页环渐变同尺采样事后色"
+    );
     let mut b1 = vec![0u32; (w * h) as usize];
     termview::paint_cfg_page_chrome(&mut b1, w, h, inset, 0, acc_b);
-    tv.paint_cfg_tab_bar(&mut b1, w, h, &snap, 0, acc_b);
-    assert_eq!(
+    tv.paint_cfg_tab_bar(&mut b1, w, h, &snap, 0, inset, acc_b);
+    assert_ne!(
         b1[mid_y * w as usize + cx + 4],
         left_line,
-        "accent 换了左线色也必须不变（固定 token 色）"
+        "accent 换了左线色必须跟着变（变异：改回固定色即红）"
     );
     assert_eq!(
-        b1[oy * w as usize + cx + 20],
-        b0[oy * w as usize + cx + 20],
-        "accent 换了顶线色也必须不变"
+        b1[mid_y * w as usize + cx + 4],
+        blend(
+            kfm_na::termview::RingGradient {
+                c1: acc_b.c1,
+                c2: acc_b.c2,
+                ..grad_a
+            }
+            .sample((cx + 4) as i64, mid_y as i64),
+            pad,
+            la
+        ),
+        "换 accent 后左线色也必须 = 新渐变同尺采样事后色"
     );
 
     // ④底垫钉：内芯非字区（右 1/4 安静带，避开字形与左右线）= 精确事后色

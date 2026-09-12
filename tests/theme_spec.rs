@@ -126,18 +126,17 @@ fn spec_theme_keybar默认配方_换肤生效() {
         "keybar 行带底必须读 theme.keybar.bg"
     );
 }
-// ========== 功能光标配色组（宪法 §三 功能光标条款，2026-09-12 三修） ==========
+// ========== 功能光标配色组（宪法 §三 功能光标条款，2026-09-13 五修） ==========
 
 #[test]
-fn spec_theme_cursor默认配方_固定不随机() {
+fn spec_theme_cursor默认配方_底垫固定() {
     let t = Theme::default();
     assert_eq!(
         t.cursor,
         CursorTheme {
-            line: 0x0000_D4FF, // kfmv4 rgba(0,212,255,0.7) 色部
-            bg: 0x002E_D5A3,   // kfmv4 rgba(46,213,163,0.15) 色部
+            bg: 0x002E_D5A3, // kfmv4 rgba(46,213,163,0.15) 色部
         },
-        "功能光标 = kfmv4 canvas-cursor 配方直译（宪法 §三：光标是主题色，\
-         永不随机不吃 accent——改值要走换肤流程不许顺手改）"
+        "功能光标底垫 = kfmv4 canvas-cursor 配方直译（固定；线色五修起\
+         吃本卡 accent 渐变不归 token——改值要走换肤流程不许顺手改）"
     );
 }

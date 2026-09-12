@@ -236,6 +236,7 @@ pub fn dump_now(dir: &str) {
                                 h,
                                 &ts,
                                 cfg_off,
+                                bar_h,
                                 acc_of(Panel::Config),
                             );
                         }
