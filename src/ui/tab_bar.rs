@@ -17,8 +17,9 @@
 
 use crate::termview::{AI_PAGE_FRAME_MARGIN, AI_PAGE_FRAME_W, CELL_H, CELL_W};
 
-/// 标签行高 = 1 格（§七 相对比例条款）
-pub const TAB_ROW_H: u32 = CELL_H;
+/// 标签行高 = 2 格（§七 相对比例条款；2026-09-12 真机实测拍板：
+/// 1 格太扁——24px 字贴边，2 格留白才像可点目标；咬格不破，不用 2.5）
+pub const TAB_ROW_H: u32 = CELL_H * 2;
 /// 标签文字两侧 padding 各 1 格
 pub const TAB_PAD_X: u32 = CELL_W;
 /// 标签间距 1 格

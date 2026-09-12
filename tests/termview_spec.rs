@@ -2949,9 +2949,9 @@ fn spec_cfg标签栏_涂装钉() {
     let tv = TermView::new(host_font(), None, 8, 2, CELL_W, CELL_H);
     let bar = kfm_na::ui::tab_bar::TabBar::new(&["API", "B"], 320);
     let snap = bar.snap(0);
-    // 游标初态 = 标签 0：x=43, oy=55, w=90, h=36（咬格钉同源读数）
+    // 游标初态 = 标签 0：x=43, oy=55, w=90, h=72（咬格钉同源读数，行高 2 格）
     let (cx, oy, cw) = (43usize, 55usize, 90usize);
-    let mid_y = oy + 18;
+    let mid_y = oy + 36;
 
     let mut b0 = vec![0u32; (w * h) as usize];
     termview::paint_cfg_page_chrome(&mut b0, w, h, inset, 0, acc_a);
@@ -2970,9 +2970,9 @@ fn spec_cfg标签栏_涂装钉() {
     let top_ring = b0[(oy + 1) * w as usize + cx + cw / 2];
     assert_ne!(top_ring, bg, "光标框上缘必须有墨");
     assert_eq!(
-        b0[(oy + 8) * w as usize + cx + cw - 8],
+        b0[(oy + 8) * w as usize + cx + cw / 2],
         bg,
-        "上缘细带之内芯必须 punch 回底（取样在右侧内芯圆角覆盖内、文字区外）"
+        "上缘细带之内芯必须 punch 回底（取样在顶中——两侧圆角半径外、文字区上方）"
     );
 
     // ③accent 驱动：同位取样换 accent 必变色
@@ -2986,8 +2986,9 @@ fn spec_cfg标签栏_涂装钉() {
     );
 
     // ①+④文字墨：选中标签格心区（框内芯）必须有非底非环的字形墨
+    // （2 格行高：文字垂直居中于 oy+36，扫带罩住字区上下裕量）
     let mut text_ink = 0usize;
-    for y in (oy + 10)..(oy + 28) {
+    for y in (oy + 20)..(oy + 52) {
         for x in (cx + 20)..(cx + cw - 20) {
             let p = b0[y * w as usize + x];
             if p != bg && p != 0 {

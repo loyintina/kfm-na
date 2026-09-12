@@ -23,8 +23,8 @@ fn spec_tab_bar_咬格几何钉() {
     let r = &bar.tab_rects()[0];
     assert_eq!(
         (r.x, r.y, r.w, r.h),
-        (43i64, 55i64, 10 * CELL_W, CELL_H),
-        "系统管理 = 8 文字格 + 2  padding 格"
+        (43i64, 55i64, 10 * CELL_W, CELL_H * 2),
+        "系统管理 = 8 文字格 + 2  padding 格，行高 2 格"
     );
 
     let bar2 = TabBar::new(&["系统管理", "API"], 720);
@@ -40,9 +40,9 @@ fn spec_tab_bar_咬格几何钉() {
 /// 钉②：行带命中钉（手势仲裁边界）——行内/行外/标签间隙三路
 #[test]
 fn spec_tab_bar_行带命中钉() {
-    assert!(in_row(55.0) && in_row(90.9), "行带内");
+    assert!(in_row(55.0) && in_row(126.9), "行带内（2 格高）");
     assert!(
-        !in_row(54.9) && !in_row(91.0),
+        !in_row(54.9) && !in_row(127.0),
         "行带外（上 1px / 下缘排他）"
     );
 
@@ -53,7 +53,7 @@ fn spec_tab_bar_行带命中钉() {
         None,
         "标签尾后间隙不命中"
     );
-    assert_eq!(bar.hit(50.0, 100.0), None, "行带下不命中");
+    assert_eq!(bar.hit(50.0, 130.0), None, "行带下不命中");
 }
 
 /// 钉③：select 弹簧钉——目标 = 新标签 x；从当前位置重定基；收敛贴死
@@ -125,7 +125,11 @@ fn spec_tab_bar_文字格宽钉() {
 #[test]
 fn spec_tab_bar_常量与视口钉() {
     use kfm_na::ui::tab_bar::{TAB_GAP, TAB_PAD_X, TAB_ROW_H, content_viewport_w};
-    assert_eq!(TAB_ROW_H, CELL_H, "标签行 = 1 格（§七）");
+    assert_eq!(
+        TAB_ROW_H,
+        CELL_H * 2,
+        "标签行 = 2 格（§七，2026-09-12 实测拍板）"
+    );
     assert_eq!(TAB_PAD_X, CELL_W, "标签文字两侧各 1 格");
     assert_eq!(TAB_GAP, CELL_W, "标签间距 1 格");
     assert_eq!(
