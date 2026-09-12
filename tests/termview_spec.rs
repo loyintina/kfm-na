@@ -9,7 +9,7 @@
 
 use alacritty_terminal::vte::ansi::{Color, NamedColor};
 use kfm_na::termview::{
-    self, ANSI_16, BOOT_COLS, BOOT_ROWS, CELL_H, CELL_W, DEFAULT_BG, DEFAULT_FG, TermView,
+    self, ANSI_16, BOOT_COLS, BOOT_ROWS, CELL_H, CELL_W, DEFAULT_BG, DEFAULT_FG, TermEmu, TermView,
     build_vendored, cell_origin, color_to_xrgb, grid_dims, indexed_color,
 };
 
@@ -2926,4 +2926,74 @@ fn spec_pt页底装修_accent与平移钉() {
     let mut bw = vec![0u32; (w * h) as usize];
     kfm_na::termview::paint_parser_page_chrome(&mut bw, w, h, inset, w as i32, acc_a);
     assert!(bw.iter().all(|&p| p == 0), "完全屏外必须零墨");
+}
+
+#[test]
+fn spec_cfg标签栏_涂装钉() {
+    // 宪法 §四（2026-09-12）：①标签行带内有文字墨（标签不是空色块）；
+    // ②光标框 = 左粗渐变框——左缘 3 倍粗于细缘（左带 9px 有墨、
+    //   内芯 punch 回底；上缘 3px 有墨、其下回底）；
+    // ③光标框色 = accent 驱动（换 accent 必变色；变异：写死常量即红）；
+    // ④顺序钉——punch 内芯不许盖掉选中标签文字（字必须在框之上）
+    let (w, h) = (400u32, 500u32);
+    let inset = 120u32;
+    let acc_a = kfm_na::ui::accent::AccentPair {
+        c1: 0x00FF_6000,
+        c2: 0x0000_80FF,
+    };
+    let acc_b = kfm_na::ui::accent::AccentPair {
+        c1: 0x0000_FF00,
+        c2: 0x00FF_00FF,
+    };
+    let bg = kfm_na::ui::accent::CARD_PAGE_BG;
+    let tv = TermView::new(host_font(), None, 8, 2, CELL_W, CELL_H);
+    let bar = kfm_na::ui::tab_bar::TabBar::new(&["API", "B"], 320);
+    let snap = bar.snap(0);
+    // 游标初态 = 标签 0：x=43, oy=55, w=90, h=36（咬格钉同源读数）
+    let (cx, oy, cw) = (43usize, 55usize, 90usize);
+    let mid_y = oy + 18;
+
+    let mut b0 = vec![0u32; (w * h) as usize];
+    termview::paint_cfg_page_chrome(&mut b0, w, h, inset, 0, acc_a);
+    tv.paint_cfg_tab_bar(&mut b0, w, h, &snap, 0, acc_a);
+
+    // ②左粗：左缘带（+2）有环墨，+12 已 punch 回底；上缘带（+1）有墨，
+    // +8 回底
+    let left_ring = b0[mid_y * w as usize + cx + 2];
+    assert_ne!(left_ring, bg, "光标框左缘必须有墨");
+    assert_ne!(left_ring, 0, "光标框左缘必须有墨");
+    assert_eq!(
+        b0[mid_y * w as usize + cx + 12],
+        bg,
+        "左缘 3 倍粗带之内芯必须 punch 回底（9px 带 +2 取样）"
+    );
+    let top_ring = b0[(oy + 1) * w as usize + cx + cw / 2];
+    assert_ne!(top_ring, bg, "光标框上缘必须有墨");
+    assert_eq!(
+        b0[(oy + 8) * w as usize + cx + cw - 8],
+        bg,
+        "上缘细带之内芯必须 punch 回底（取样在右侧内芯圆角覆盖内、文字区外）"
+    );
+
+    // ③accent 驱动：同位取样换 accent 必变色
+    let mut b1 = vec![0u32; (w * h) as usize];
+    termview::paint_cfg_page_chrome(&mut b1, w, h, inset, 0, acc_b);
+    tv.paint_cfg_tab_bar(&mut b1, w, h, &snap, 0, acc_b);
+    assert_ne!(
+        b1[mid_y * w as usize + cx + 2],
+        left_ring,
+        "accent 换了光标框色必须变（驱动钉）"
+    );
+
+    // ①+④文字墨：选中标签格心区（框内芯）必须有非底非环的字形墨
+    let mut text_ink = 0usize;
+    for y in (oy + 10)..(oy + 28) {
+        for x in (cx + 20)..(cx + cw - 20) {
+            let p = b0[y * w as usize + x];
+            if p != bg && p != 0 {
+                text_ink += 1;
+            }
+        }
+    }
+    assert!(text_ink > 20, "选中标签格心必须有文字墨（{text_ink} px）");
 }

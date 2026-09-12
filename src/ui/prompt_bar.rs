@@ -690,12 +690,13 @@ impl crate::termview::TermView {
             self.draw_text_centered(
                 frame,
                 label,
-                menu_x + btn_w * i as u32,
-                menu_y,
+                (menu_x + btn_w * i as u32) as i64,
+                menu_y as i64,
                 btn_w,
                 menu_h,
                 crate::input_bar::MENU_TEXT_PX,
                 t.menu_text,
+                (menu_x + btn_w * i as u32) as i64, // clip_x0 = 左缘即格左（行为不变）
             );
         }
     }

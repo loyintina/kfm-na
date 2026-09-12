@@ -117,6 +117,16 @@ struct PanelTouch {
     dragged: bool,
 }
 
+/// 配置卡标签栏手势（主题宪法 §四，2026-09-12）：按在标签行带上 =
+/// 手势归标签栏（仲裁条款——横向滑动滚标签不触发面板拖拽/页面滑向）。
+/// 拖过 slop = 横滚标签（pan 像素级跟手）；未超抬手 = 点按选池
+struct TabTouch {
+    start_x: f64,
+    start_y: f64,
+    last_x: f64,
+    dragged: bool,
+}
+
 /// 输入栏选择操作菜单项（BAR-046）：自绘菜单四键，左→右依次
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BarMenuAction {
@@ -268,6 +278,13 @@ struct App {
     /// 分流里面板在顶先于它 return，互斥从路由自然推出（栈零新规则）。
     /// 点按抬手 = summon_panel(Config)；拖过 slop = 不触发
     gear_touch: Option<(u64, f64, f64, bool)>,
+    /// 配置卡标签栏状态（主题宪法 §四）：池名表 + 选中 + 横滚 + 光标
+    /// 弹簧。共享句柄注册给 gate 值守倒帧（D9 同源——后台截图/倒帧
+    /// 与前台帧同一份标签栏读数）
+    tab_bar: Option<crate::ui::tab_bar::SharedTabBar>,
+    /// 按在标签行带上的手势（宪法 §四 仲裁条款：行上横向滑动不触发
+    /// 面板拖拽/页面滑向）——配置页靠泊且起点在行带才建
+    tab_touch: Option<TabTouch>,
     /// 本地脑（期 0②：echo-brain 夹具先行，direct-api 随 key 配置落地换插）：
     /// 输入栏发送的真 run 来源——run_start/run_end 驱动光球（期 0②收尾）
     brain: Option<Arc<dyn crate::brain_ep::BrainEndpoint>>,
@@ -297,12 +314,17 @@ struct App {
 ///           render_orb(ai_snap) + render_magnifier——orb_alpha_out 在
 ///           GLES 路径恒 true 不进 sig；放大镜内容跟终端网格活（网格
 ///           变化不进 sig），拖选期调用方强制重烘焙
+/// 配置槽 sig（2026-09-12 标签栏落地后 9 维：w/h/ime/bar_h + accent
+/// c1/c2 + 标签栏选中/横滚/光标 x）——别名喂手机端新 clippy 的
+/// type_complexity 闸（09-12 实踩：服务器旧版不报，手机 1.97 报）
+type ConfigSig = (u32, u32, u32, u32, u32, u32, u32, i32, i32);
+
 #[derive(Default)]
 struct LayerSigs {
     keybar: crate::ui::stage::DirtyGuard<(u8, u32, u32, u32, u32)>,
     panel: crate::ui::stage::DirtyGuard<(u32, u32, u32, u32)>,
     over: crate::ui::stage::DirtyGuard<OverSig>,
-    config: crate::ui::stage::DirtyGuard<(u32, u32, u32, u32, u32, u32)>,
+    config: crate::ui::stage::DirtyGuard<ConfigSig>,
     filetree: crate::ui::stage::DirtyGuard<(u32, u32, u32, u32, u32, u32)>,
     parser: crate::ui::stage::DirtyGuard<(u32, u32, u32, u32, u32, u32)>,
     termcard: crate::ui::stage::DirtyGuard<(u32, u32, u32, u32)>,
@@ -681,6 +703,27 @@ impl App {
                 // 路由按逻辑栈顶，不按 placement 过渡帧）
                 let panel_top = self.last_ai_snap.and_then(|s| s.top);
                 if panel_top.is_some() {
+                    // 标签栏仲裁（主题宪法 §四，2026-09-12）：配置页靠泊
+                    // （cfg_off==0——过渡帧中不仲裁，手势归面板全家）且
+                    // 起点在标签行带 → 手势归标签栏：横滑滚标签不触发
+                    // 面板拖拽/页面滑向，点按选池
+                    if panel_top == Some(crate::ai_presence::Panel::Config)
+                        && crate::ui::tab_bar::in_row(y)
+                        && crate::ui::seam::sample_config_panel_offset_x(
+                            0.0,
+                            crate::report::boot_ms() as u64,
+                        ) as i32
+                            == 0
+                    {
+                        crate::report::report("gest", &format!("起手→标签栏 ({x:.0},{y:.0})"));
+                        self.tab_touch = Some(TabTouch {
+                            start_x: x,
+                            start_y: y,
+                            last_x: x,
+                            dragged: false,
+                        });
+                        return;
+                    }
                     // 手势追踪：第二指落在面板页会盖掉第一指的手势状态
                     // （panel_touch/panel_drag 单槽）——留痕取证
                     if self.panel_touch.is_some() {
@@ -882,6 +925,24 @@ impl App {
                             self.dirty = true;
                         }
                     }
+                }
+                // 标签栏手势：拖过 slop = 横滚标签（pan 像素级跟手，
+                // clamp 在核心 tab_bar）；横向位移不喂面板拖拽（仲裁条款）
+                if let Some(tt) = self.tab_touch.as_mut() {
+                    if !tt.dragged
+                        && ((x - tt.start_x).abs() > crate::scroll::TAP_SLOP_PX
+                            || (y - tt.start_y).abs() > crate::scroll::TAP_SLOP_PX)
+                    {
+                        tt.dragged = true;
+                    }
+                    if tt.dragged {
+                        if let Some(bar) = &self.tab_bar {
+                            bar.lock().unwrap().pan(x - tt.last_x);
+                        }
+                        self.dirty = true;
+                    }
+                    tt.last_x = x;
+                    return;
                 }
                 // 面板页手势：AI 页拖动 = 对话页滚行（像素级累积跟手，
                 // 行高与渲染同尺 AI_PAGE_LINE_H；方向契约在 ui/ai_page.rs
@@ -1152,6 +1213,49 @@ impl App {
                             }
                         }
                         None => {}
+                    }
+                    self.dirty = true;
+                    return;
+                }
+                // 标签栏手势收尾：未拖抬手 = 点按选池（hit/select/弹簧
+                // 重定基全在核心 tab_bar）；收键盘同面板点按（标签栏不是
+                // 输入区）；Cancelled = 系统抢手势零动作留痕
+                if let Some(tt) = self.tab_touch.take() {
+                    if phase == TouchPhase::Cancelled {
+                        crate::report::report(
+                            "gest",
+                            &format!(
+                                "标签栏手势取消: dx={:.0} dragged={}（系统抢手势，零动作）",
+                                x - tt.start_x,
+                                tt.dragged
+                            ),
+                        );
+                        self.dirty = true;
+                        return;
+                    }
+                    if phase == TouchPhase::Ended && !tt.dragged {
+                        if let Some(bar) = &self.tab_bar {
+                            let mut g = bar.lock().unwrap();
+                            if let Some(i) = g.hit(x, y) {
+                                g.select(i, crate::report::boot_ms() as u64);
+                                crate::report::report(
+                                    "ui",
+                                    &format!("标签栏点按: 选中池 {}（{}）", i, g.tabs()[i]),
+                                );
+                                self.dirty = true;
+                            }
+                        }
+                        if self.input_bar.as_ref().is_some_and(|b| b.is_focused())
+                            && let Some(bar) = &self.input_bar
+                        {
+                            bar.unfocus();
+                        }
+                        if let Some(w) = &self.window {
+                            w.set_ime_allowed(false);
+                        }
+                        if let Some(insets) = &self.ime_insets {
+                            insets.force_hide();
+                        }
                     }
                     self.dirty = true;
                     return;
@@ -1676,6 +1780,15 @@ impl App {
                 self.dirty = true;
             }
         }
+        // 标签栏游标弹簧（宪法 §四）：动画进行中逐圈置脏——弹簧收敛
+        // 后 cursor_x == target 自然停脏（零空烧）
+        if let Some(bar) = &self.tab_bar {
+            let g = bar.lock().unwrap();
+            let now = crate::report::boot_ms() as u64;
+            if (g.cursor_x(now) - g.cursor_target()).abs() > 0.5 {
+                self.dirty = true;
+            }
+        }
     }
 
     /// 输入栏快照逐圈比对置脏（闸门注入/IME 分流改的状态也要画出帧）。
@@ -1879,6 +1992,19 @@ impl App {
         }
         if let Some(chat) = &self.ai_chat {
             crate::gate::register_ai_chat(chat);
+        }
+
+        // 配置卡标签栏（主题宪法 §四，2026-09-12）：池名表 v1 单池
+        // 「系统管理」（API 池随后追加——表是 Vec 天然可扩）；共享句柄
+        // 注册给 gate 值守倒帧（D9 同源）。初始视口 720 占位，draw_frame
+        // 每帧按真实屏宽 set_viewport_w 纠
+        {
+            let bar = std::sync::Arc::new(std::sync::Mutex::new(crate::ui::tab_bar::TabBar::new(
+                &["系统管理"],
+                720,
+            )));
+            crate::ui::tab_bar::register_tab_bar(bar.clone());
+            self.tab_bar = Some(bar);
         }
 
         // 全局输入栏插件（期 0 组件三）：状态核共享实例直挂 + 发送口装配。
@@ -2651,6 +2777,7 @@ impl App {
         chat_live: bool,
         panel_scratch: &mut Vec<u32>,
         mut ai_glyphs: Option<&mut Vec<crate::glyph_atlas::AiGlyph>>,
+        tab_snap: Option<&crate::ui::tab_bar::TabBarSnap>,
     ) -> Option<(u32, u32)> {
         // 分支判定唯一裁决处（panel_split/cfg_split/ft_split/pt_split）——softbuffer
         // 与 GLES 两路径都从这里取，分支语义漂移 = 眼手两张皮（BAR-063 级
@@ -2697,6 +2824,18 @@ impl App {
                             cfg_off,
                             acc_of(crate::ai_presence::Panel::Config),
                         );
+                        // 标签栏叠在底装修之上（宪法 §四；兜底路径与
+                        // GLES 烘焙同源同参——刚体平移传真值 cfg_off）
+                        if let Some(ts) = tab_snap {
+                            term.paint_cfg_tab_bar(
+                                buf,
+                                w,
+                                h,
+                                ts,
+                                cfg_off,
+                                acc_of(crate::ai_presence::Panel::Config),
+                            );
+                        }
                     }
                 }
                 crate::ai_presence::Panel::FileTree => {
@@ -2854,6 +2993,7 @@ impl App {
         pt_off: i32,
         z_order: [crate::ai_presence::Panel; 4],
         panel_scratch: &mut Vec<u32>,
+        tab_snap: Option<&crate::ui::tab_bar::TabBarSnap>,
     ) -> Option<(u32, u32)> {
         let Some(term) = term else {
             buf.fill(KFM_PURPLE); // 字体全灭的降级画面：紫屏 + 已有上报
@@ -2883,6 +3023,7 @@ impl App {
             chat_live,
             panel_scratch,
             None,
+            tab_snap,
         );
         let sending = ai_snap.is_some_and(|s| s.ai_running);
         Self::paint_over(
@@ -2923,6 +3064,7 @@ impl App {
         ime_bottom_px_raw: u32,
         chrome_inset_px: &mut u32,
         sigs: &mut LayerSigs,
+        tab_snap: Option<&crate::ui::tab_bar::TabBarSnap>,
         drag: Option<(crate::ai_presence::Panel, f32)>,
     ) -> Option<(u32, u32)> {
         let (w, h) = g.size();
@@ -3245,10 +3387,24 @@ impl App {
             ),
             |s| (s.accent_cfg, s.accent_ft, s.accent_pt),
         );
-        if cfg_visible && sigs.config.feed((w, h, ime, bar_h, acc_cfg.c1, acc_cfg.c2)) {
+        // 标签栏 sig 三维（宪法 §四）：选中/横滚/光标 x——游标弹簧动画
+        // 逐帧新值逐帧重烘焙（键盘 inset 同族成本，已记 ui-base §八债单）
+        let (tab_sel, tab_scroll, tab_cx) = tab_snap.map_or((0, 0, 0), |ts| {
+            (ts.selected as u32, ts.scroll_px as i32, ts.cursor_x as i32)
+        });
+        if cfg_visible
+            && sigs.config.feed((
+                w, h, ime, bar_h, acc_cfg.c1, acc_cfg.c2, tab_sel, tab_scroll, tab_cx,
+            ))
+        {
             let px = g.slot_canvas(crate::gles_present::ChromeSlot::Config);
             px.fill(0);
             crate::termview::paint_cfg_page_chrome(px, w, h, bottom_inset, 0, acc_cfg);
+            if let (Some(ts), Some(t)) = (tab_snap, th) {
+                t.lock()
+                    .unwrap()
+                    .paint_cfg_tab_bar(px, w, h, ts, 0, acc_cfg);
+            }
             g.slot_bake(crate::gles_present::ChromeSlot::Config);
         }
         // 文件树槽（§五B 三公民）：同规——画布恒靠泊位（ft_off=0）
@@ -3464,6 +3620,17 @@ impl App {
         // 先拿终端句柄(owned Arc,借用即还),再借 gfx——顺序反了 E0502
         let th = self.term_handle();
         let Some(g) = &mut self.gfx else { return };
+        // 配置卡标签栏快照（宪法 §四）：视口宽按真实屏宽逐帧纠（捏合/
+        // 旋转后内容带宽度变）；弹簧读数随快照——游标动画帧自带新值
+        let tab_snap = self.tab_bar.as_ref().map(|b| {
+            let mut g2 = b.lock().unwrap();
+            if let Some(win) = &self.window {
+                g2.set_viewport_w(crate::ui::tab_bar::content_viewport_w(
+                    win.inner_size().width,
+                ));
+            }
+            g2.snap(crate::report::boot_ms() as u64)
+        });
         // GLES（2026-09-07 图层槽位版）：网格实例 → 键行槽 → 面板槽
         // （placement 动画）→ AI 文字实例 → 上层槽。槽位置脏烘焙。
         // 关联函数按字段传参，避开 buf 借用 gfx 时动不了 self 的问题
@@ -3489,6 +3656,7 @@ impl App {
                 self.ime_bottom_px,
                 &mut self.chrome_inset_px,
                 &mut self.layer_sigs,
+                tab_snap.as_ref(),
                 self.panel_drag.as_ref().and_then(|d| {
                     let off = d.current_offset()?;
                     let p = match d.role()? {
@@ -3661,6 +3829,7 @@ impl App {
                 pt_off,
                 z_order,
                 &mut self.panel_scratch,
+                tab_snap.as_ref(),
             );
             // 布局写回视口状态机（眼手同尺：手势钳制与渲染同一份布局）
             if let (Some(chat), Some((total, fit))) = (&self.ai_chat, ai_layout) {

@@ -226,6 +226,19 @@ pub fn dump_now(dir: &str) {
                             cfg_off,
                             acc_of(Panel::Config),
                         );
+                        // 标签栏（宪法 §四）：D9 同源句柄取快照——值守
+                        // 倒帧与前台帧同一份标签栏读数
+                        if let Some(bar) = crate::ui::tab_bar::tab_bar_handle() {
+                            let ts = bar.lock().unwrap().snap(crate::report::boot_ms() as u64);
+                            t.paint_cfg_tab_bar(
+                                &mut buf,
+                                w,
+                                h,
+                                &ts,
+                                cfg_off,
+                                acc_of(Panel::Config),
+                            );
+                        }
                     }
                 }
                 Panel::FileTree => {

@@ -69,6 +69,9 @@ pub const AI_PAGE_TOP: u32 = 48;
 pub const AI_PAGE_BOTTOM: u32 = 48;
 pub const AI_PAGE_LINE_H: u32 = 64;
 pub const AI_PAGE_PX: f32 = 40.0;
+/// 标签栏文字字号（宪法 §四，标定值 2026-09-12）：1 格行高（36）内
+/// 容 24 = 内嵌像素体 12px 的整数倍，网格原生不虚化
+pub const TAB_TEXT_PX: f32 = 24.0;
 /// 思考块文字色（期 0④½）：比正文暗的灰紫——能读到思考在流，但不抢戏
 pub const AI_THINK_FG: u32 = 0x007E_7A9E;
 /// 收流后思考块的折叠占位行（2026-09-04 用户拍板：输出完自动折叠——
@@ -388,8 +391,8 @@ pub fn paint_term_card_chrome(buf: &mut [u32], buf_w: u32, buf_h: u32, bottom_in
 }
 
 /// 页面边框环（2026-09-04 装修配方的唯一实体，09-05 平移参数化，
-/// 09-10 双色相化+双轴平移供配置页复用）：先外发光，再 135° 渐变
-/// 外环，最后页面底色 punch 内芯（左缘让 9 = 3 倍粗，其余让 3）。
+/// 09-10 双色相化+双轴平移供配置页复用）：页矩形（margin/inset/off）
+/// 算好后转 paint_rect_ring——配方本体在矩形核里。
 /// (off_x, off_y) 整体平移——环是面板装修，跟面板一起动。
 /// 空态也画：框是页面装修不是内容
 #[allow(clippy::too_many_arguments)]
@@ -412,12 +415,40 @@ fn paint_page_frame_ring(
     let fx1 = i64::from(buf_w) - i64::from(AI_PAGE_FRAME_MARGIN) + i64::from(off_x);
     let fy1 = i64::from(buf_h) - i64::from(bottom_inset) - i64::from(AI_PAGE_FRAME_MARGIN)
         + i64::from(off_y);
-    if fx1 <= fx0 + 2 * i64::from(AI_PAGE_FRAME_R) || fy1 <= fy0 + 2 * i64::from(AI_PAGE_FRAME_R) {
+    // 页环不裁（clip 全宽——它自己就是边境）
+    paint_rect_ring(frame, fx0, fy0, fx1, fy1, 0, i64::MAX, bg, c1, c2);
+}
+
+/// 圆角矩形边框环（2026-09-12 从页环抽核，配置卡标签栏光标框复用——
+/// 宪法 §六 样式唯一来源，禁止逐卡手抄）：先外发光，再 135° 渐变外环，
+/// 最后页面底色 punch 内芯（左缘让 9 = 3 倍粗，其余让 3）。
+/// clip_x0/x1 = X 向内容裁剪带（光标框横滚滑出内容带时不许污染页环带；
+/// 页环自己传 [0, i64::MAX] 不裁）。空态也画：框是装修不是内容
+#[allow(clippy::too_many_arguments)]
+fn paint_rect_ring(
+    frame: &mut Frame<'_>,
+    fx0: i64,
+    fy0: i64,
+    fx1: i64,
+    fy1: i64,
+    clip_x0: i64,
+    clip_x1: i64,
+    bg: u32,
+    c1: u32,
+    c2: u32,
+) {
+    let (fw, fh) = ((fx1 - fx0) as u32, (fy1 - fy0) as u32);
+    if fw < 2 || fh < 2 {
         return;
     }
-    let (fw, fh) = ((fx1 - fx0) as u32, (fy1 - fy0) as u32);
-    let r = i64::from(AI_PAGE_FRAME_R);
-    let rc = r.min((fw / 2).min(fh / 2) as i64);
+    // 半径按短边钳（小矩形 = 体育场端帽——标签栏光标框 36px 高实踩：
+    // 早退拿满 R=36 判会把 1 格高的框整个吞掉）。页环尺寸下 rc==R
+    // 恒成立，老行为不变
+    let r = i64::from(AI_PAGE_FRAME_R).min((fw / 2).min(fh / 2) as i64);
+    if fx1 < fx0 + 2 * r || fy1 < fy0 + 2 * r {
+        return;
+    }
+    let rc = r;
     let w = i64::from(AI_PAGE_FRAME_W);
     let spread = 14i64;
     let (gc, ga) = (c2, 64u32);
@@ -462,8 +493,8 @@ fn paint_page_frame_ring(
             row_spans(ly, &mut spans);
         }
         for (sx0, sx1) in &spans {
-            let ax0 = (*sx0).max(0).max(fx0 - spread - 1);
-            let ax1 = (*sx1).min(i64::from(frame.w));
+            let ax0 = (*sx0).max(0).max(fx0 - spread - 1).max(clip_x0);
+            let ax1 = (*sx1).min(i64::from(frame.w)).min(clip_x1);
             for ax in ax0..ax1 {
                 let lx = (ax - fx0) as u32;
                 // 发光：真实 ly（可为负——矩形外的辉光带；钳 0 会把框外
@@ -506,8 +537,8 @@ fn paint_page_frame_ring(
         let my0 = (iy + punch_r).max(0);
         let my1 = (iy + i64::from(ih) - punch_r).min(i64::from(frame.h));
         if my1 > my0 {
-            let rx0 = ix.max(0);
-            let rx1 = (ix + i64::from(iw)).min(i64::from(frame.w));
+            let rx0 = ix.max(0).max(clip_x0);
+            let rx1 = (ix + i64::from(iw)).min(i64::from(frame.w)).min(clip_x1);
             if rx1 > rx0 {
                 frame.fill_rect(
                     rx0 as u32,
@@ -527,8 +558,8 @@ fn paint_page_frame_ring(
         if !in_corner {
             continue; // 中带已 fill_rect
         }
-        let ax0 = ix.max(0);
-        let ax1 = (ix + i64::from(iw)).min(i64::from(frame.w));
+        let ax0 = ix.max(0).max(clip_x0);
+        let ax1 = (ix + i64::from(iw)).min(i64::from(frame.w)).min(clip_x1);
         for ax in ax0..ax1 {
             let lx = (ax - ix) as u32;
             let cov = rr_cover(lx, lyy, iw, ih, punch_r as u32);
@@ -2027,19 +2058,23 @@ impl TermView {
     }
 
     /// 居中画一行文字（BAR-046 选择菜单按钮标签，2026-09-03）：水平居中
-    /// 于 (cx,cw)，垂直居中于 (cy,ch)，右缘裁剪。与 draw_items_left 同
-    /// 光栅化路径，只是起笔 = 格心 - 文本半宽、无 18 内缩。
+    /// 于 (cx,cw)，垂直居中于 (cy,ch)，右缘裁剪 + clip_x0 左缘裁剪
+    /// （2026-09-12 标签栏横滚滑出内容带左缘时不许污染页环带——坐标
+    /// 改 i64 收负 x；菜单老调用方传 cx 当 clip_x0 = 行为不变）。
+    /// 与 draw_items_left 同光栅化路径，只是起笔 = 格心 - 文本半宽、
+    /// 无 18 内缩。
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn draw_text_centered(
         &self,
         frame: &mut Frame<'_>,
         text: &str,
-        cx: u32,
-        cy: u32,
+        cx: i64,
+        cy: i64,
         cw: u32,
         ch: u32,
         px: f32,
         fg: u32,
+        clip_x0: i64,
     ) {
         let items = self.measure_items(text, px);
         if items.is_empty() {
@@ -2050,7 +2085,7 @@ impl TermView {
         };
         let text_w: f32 = items.iter().map(|i| i.2).sum();
         let mut pen_x = cx as f32 + (cw as f32 - text_w).max(0.0) / 2.0;
-        let clip_right = cx + cw;
+        let clip_right = cx + cw as i64;
         let baseline = cy as f32 + (ch as f32 - (hm.ascent - hm.descent)) / 2.0 + hm.ascent;
         for (f, c, adv) in items {
             if pen_x + adv >= clip_right as f32 {
@@ -2065,7 +2100,7 @@ impl TermView {
                 }
                 for gx in 0..m.width as u32 {
                     let x = (pen_x + m.xmin as f32) as i64 + i64::from(gx);
-                    if x < 0 || x >= i64::from(clip_right) {
+                    if x < clip_x0 || x >= clip_right {
                         continue;
                     }
                     let a = u32::from(bmp[(gy * m.width as u32 + gx) as usize]);
@@ -2076,6 +2111,83 @@ impl TermView {
             }
             pen_x += adv;
         }
+    }
+
+    /// 配置卡标签栏涂装（主题宪法 §四，2026-09-12）：标签文字（格内
+    /// 居中，内容带左右缘裁剪——横滚滑出不污染页环带）+ 选中光标框
+    /// （左粗渐变框，paint_rect_ring 同页环配方；框色 = 本页 accent）。
+    /// 文字色 = 三档透明度条款：选中 0.85 白、未选中 0.5 白。
+    /// 空态也画光标框：框是装修不是内容（与页环同规）
+    pub(crate) fn paint_cfg_tab_bar_impl(
+        &self,
+        buf: &mut [u32],
+        w: u32,
+        h: u32,
+        snap: &crate::ui::tab_bar::TabBarSnap,
+        cfg_off_x: i32,
+        accent: crate::ui::accent::AccentPair,
+    ) {
+        if w == 0 || h == 0 || snap.tabs.is_empty() {
+            return;
+        }
+        let mut frame = Frame { buf, w, h };
+        let off = i64::from(cfg_off_x);
+        let (ox, oy) = crate::ui::tab_bar::content_origin();
+        // 内容带 = [原点 x, 右内缘 - 1 格]（随面板平移）——文字与光标框
+        // 同一条裁剪带（眼手同尺：带外的东西用户看不见也点不着）
+        let clip_l = i64::from(ox) + off;
+        let clip_r =
+            i64::from(w) - i64::from(AI_PAGE_FRAME_MARGIN + AI_PAGE_FRAME_W + CELL_W) + off;
+        let rects = crate::ui::tab_bar::rects_of(&snap.tabs, snap.scroll_px);
+        for (i, r) in rects.iter().enumerate() {
+            let fg = if i == snap.selected {
+                0x00D9_D9D9
+            } else {
+                0x0080_8080
+            };
+            self.draw_text_centered(
+                &mut frame,
+                &snap.tabs[i],
+                r.x + off,
+                r.y,
+                r.w,
+                r.h,
+                TAB_TEXT_PX,
+                fg,
+                clip_l,
+            );
+        }
+        // 光标框：左粗渐变框（矩形核 punch 内芯 = 页底同色——框内文字
+        // 已先画，punch 会盖掉框内文字？不会：punch 只盖到框内芯，
+        // 文字画在框之前会被 punch 覆盖——所以光标框先画、文字后画
+        // 才对。这里先画框再补一遍选中标签文字（顺序钉见考题）
+        let sel = &rects[snap.selected];
+        let cx = snap.cursor_x as i64 + off;
+        paint_rect_ring(
+            &mut frame,
+            cx,
+            i64::from(oy),
+            cx + i64::from(sel.w),
+            i64::from(oy) + i64::from(sel.h),
+            clip_l,
+            clip_r,
+            crate::ui::accent::CARD_PAGE_BG,
+            accent.c1,
+            accent.c2,
+        );
+        // punch 内芯把选中标签文字盖掉了——补画一遍（框是装修，字是内容，
+        // 内容必须在装修之上）
+        self.draw_text_centered(
+            &mut frame,
+            &snap.tabs[snap.selected],
+            sel.x + off,
+            sel.y,
+            sel.w,
+            sel.h,
+            TAB_TEXT_PX,
+            0x00D9_D9D9,
+            clip_l,
+        );
     }
 
     /// 画一串已量宽的字符（折行后逐行画走这里）：左对齐内缩 18 +
@@ -2675,6 +2787,19 @@ pub trait TermEmu: Send {
     /// AI 页行基线（相对行顶；AI 文字装载 off_y 折算的唯一尺子）
     fn ai_text_baseline_off(&self) -> f32;
     fn render_keybar(&self, buf: &mut [u32], w: u32, h: u32, ime_bottom: u32, mods: u8);
+    /// 配置卡标签栏涂装（主题宪法 §四，2026-09-12）：标签文字（格内居中、
+    /// 内容带左缘裁剪）+ 选中光标框（左粗渐变框，paint_rect_ring 同页环
+    /// 配方）。cfg_off_x = 面板刚体平移（GLES 烘焙调用恒 0，位移在合成
+    /// 期；softbuffer/值守倒帧传真值）。画在配置页底装修之上
+    fn paint_cfg_tab_bar(
+        &self,
+        buf: &mut [u32],
+        w: u32,
+        h: u32,
+        snap: &crate::ui::tab_bar::TabBarSnap,
+        cfg_off_x: i32,
+        accent: crate::ui::accent::AccentPair,
+    );
     /// AI 外显 chrome（ai-presence，android_app rasterize 调用方）：
     /// AI 页真对话渲染（page=AiFullscreen 时代替终端网格）/ 雾状光球 sprite。
     /// scroll_rows = 距底行数（期 0④ 视口）；bottom_inset = 键盘+输入栏
@@ -2818,6 +2943,17 @@ impl TermEmu for TermView {
     }
     fn render_keybar(&self, buf: &mut [u32], w: u32, h: u32, ime_bottom: u32, mods: u8) {
         TermView::render_keybar(self, buf, w, h, ime_bottom, mods)
+    }
+    fn paint_cfg_tab_bar(
+        &self,
+        buf: &mut [u32],
+        w: u32,
+        h: u32,
+        snap: &crate::ui::tab_bar::TabBarSnap,
+        cfg_off_x: i32,
+        accent: crate::ui::accent::AccentPair,
+    ) {
+        TermView::paint_cfg_tab_bar_impl(self, buf, w, h, snap, cfg_off_x, accent)
     }
     #[allow(clippy::too_many_arguments)]
     fn render_ai_page(
