@@ -113,11 +113,29 @@ impl PanelDrag {
         self.role.map(|_| self.offset)
     }
 
+    /// 【仅考题用】冻结期召唤角色无手势入口（2026-09-12 双槽冻结：
+    /// 配置归 ui/gear 设置钮、文件树右滑槽关闭）——机制钉（跟手映射/
+    /// 松手裁决/镜像）仍需召唤角色当载具，从手势层旁路注入；锁点摆到
+    /// 与真实锁定一致的位置（start ± 阈值，按角色移动向取号），考题
+    /// 既有坐标系不用动。解冻后本方法与考题侧注入点一并退役。
+    #[doc(hidden)]
+    pub fn force_role_for_spec(&mut self, role: DragRole) {
+        self.role = Some(role);
+        self.lock_x = self.start_x
+            + match role {
+                // 右移家（召文件树/推配置）锁点在右；左移家镜像
+                DragRole::SummonFileTree | DragRole::DismissConfig => DRAG_LOCK_PX,
+                DragRole::SummonConfig | DragRole::DismissFileTree => -DRAG_LOCK_PX,
+            };
+        self.offset = 0.0;
+    }
+
     /// 手指移动。返回 Some((角色, 新偏移)) = 面板跟手（含锁定瞬）；
     /// None = 不是面板拖拽（壳层走原分路：纵向滚屏/点按等）。
     /// top = 锁定瞬间的栈顶读数（角色仲裁的唯一栈依赖——三公民一滑一义：
-    /// 左滑在文件树顶=推回文件树、在配置顶=空操作、其余=召唤配置；
-    /// 右滑镜像）。偏移语义统一为「距靠泊的px距离」∈[0,w]：壳层按家
+    /// 左滑在文件树顶=推回文件树、右滑在配置顶=推回配置；
+    /// 2026-09-12 双槽冻结：两个「其余」召唤臂都关闭，只余推回臂）。
+    /// 偏移语义统一为「距靠泊的px距离」∈[0,w]：壳层按家
     /// 折算符号（配置家 +off 屏外右 / 文件树家 -off 屏外左）
     pub fn on_move(
         &mut self,
@@ -136,7 +154,9 @@ impl PanelDrag {
             }
             // 角色仲裁（一滑一义 §五B；2026-09-12 用户拍板：左滑召唤位
             // 让位按钮入口——配置页只认 ui/gear 设置钮，左滑槽冻结留给
-            // 浏览器卡 SPKE-web，冻结期 Other+左滑 = 不锁）
+            // 浏览器卡 SPKE-web，冻结期 Other+左滑 = 不锁；同日再拍：
+            // 文件树页也冻结——面板公民保留在栈模型里，右滑召唤槽关掉，
+            // 冻结期 Other+右滑 = 不锁）
             let role = if dx < 0.0 {
                 match top {
                     DragTop::FileTree => DragRole::DismissFileTree,
@@ -147,7 +167,7 @@ impl PanelDrag {
                 match top {
                     DragTop::Config => DragRole::DismissConfig,
                     DragTop::FileTree => return None, // 本家已在顶：右滑空操作
-                    DragTop::Other => DragRole::SummonFileTree,
+                    DragTop::Other => return None,    // 右滑槽冻结（文件树位）
                 }
             };
             // 锁点 = 阈值跨越点（方向上的 start ± DRAG_LOCK_PX）：

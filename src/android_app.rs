@@ -788,15 +788,15 @@ impl App {
             TouchPhase::Moved => {
                 // 设置钮手势（2026-09-12）：只认本指——超 slop 记拖过
                 // （抬手不触发召唤），它指事件放行走原分路
-                if let Some(gt) = &mut self.gear_touch {
-                    if gt.0 == id {
-                        if (x - gt.1).abs() > f64::from(crate::scroll::TAP_SLOP_PX)
-                            || (y - gt.2).abs() > f64::from(crate::scroll::TAP_SLOP_PX)
-                        {
-                            gt.3 = true;
-                        }
-                        return;
+                if let Some(gt) = &mut self.gear_touch
+                    && gt.0 == id
+                {
+                    if (x - gt.1).abs() > crate::scroll::TAP_SLOP_PX
+                        || (y - gt.2).abs() > crate::scroll::TAP_SLOP_PX
+                    {
+                        gt.3 = true;
                     }
+                    return;
                 }
                 // 面板跟手拖拽优先（§五B 升级）：已锁定/本事件锁定的
                 // 手势归拖拽——面板偏移直跟手指，原分路（滚屏/滚行/
@@ -1043,16 +1043,17 @@ impl App {
                 // 「配置卡无法收回」案教训：栈动作必须日志可见）
                 if self.gear_touch.as_ref().is_some_and(|g| g.0 == id) {
                     let gt = self.gear_touch.take().unwrap();
-                    if phase == TouchPhase::Ended && !gt.3 {
-                        if let Some(ai) = &self.ai_presence {
-                            let before = self.last_ai_snap.and_then(|s| s.top);
-                            ai.summon_panel(crate::ai_presence::Panel::Config);
-                            let after = ai.snap(crate::report::boot_ms() as u64).top;
-                            crate::report::report(
-                                "gest",
-                                &format!("设置钮点按: 栈顶 {before:?}→{after:?}"),
-                            );
-                        }
+                    if phase == TouchPhase::Ended
+                        && !gt.3
+                        && let Some(ai) = &self.ai_presence
+                    {
+                        let before = self.last_ai_snap.and_then(|s| s.top);
+                        ai.summon_panel(crate::ai_presence::Panel::Config);
+                        let after = ai.snap(crate::report::boot_ms() as u64).top;
+                        crate::report::report(
+                            "gest",
+                            &format!("设置钮点按: 栈顶 {before:?}→{after:?}"),
+                        );
                     }
                     self.dirty = true;
                     return;

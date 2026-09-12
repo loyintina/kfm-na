@@ -8,9 +8,10 @@
 //! 契约要点：
 //! - 方向锁：横向 ≥24px 且 |dx|>1.8|dy| 才接管（比 SWIPE_MIN_PX 90 小——
 //!   拖拽要尽早接管；纵向滚屏/AI 页滚行不冲突）
-//! - 角色（2026-09-12 重钉：配置页让位 ui/gear 设置钮，左滑召唤槽冻结
-//!   留给浏览器卡）：右滑+顶 Other = 召唤文件树；左滑+顶文件树 = 推回；
-//!   右滑+顶配置 = 推回；左滑+顶 Other/配置 = 不锁（冻结空操作）
+//! - 角色（2026-09-12 两拍：配置页让位 ui/gear 设置钮，左滑召唤槽冻结
+//!   留给浏览器卡；同日文件树也冻结，右滑召唤槽关闭）：左滑+顶文件树 =
+//!   推回；右滑+顶配置 = 推回；其余象限一律不锁（冻结空操作）。
+//!   召唤角色的机制钉用 force_role_for_spec 旁路注入（手势层到不了）
 //! - 跟手映射零跳变：锁定瞬间偏移 = 角色基位（锁定阈值位移被吃掉），
 //!   其后偏移 = 基位 + 手指相对锁点位移 ×DRAG_GAIN(2.0，手指不从屏缘
 //!   起手的补偿，2026-09-11 拍板)，钳 [0, 屏宽]
@@ -22,19 +23,24 @@ use kfm_na::ui::panel_drag::{
     DRAG_GAIN, DRAG_LOCK_PX, DragRole, DragTop, FLING_PX_PER_MS, PanelDrag, ReleaseDecision,
 };
 
-/// 起手式：顶非抽屉面板（Other = 终端裸奔或 AI 在顶）的右滑拖拽会话
-/// （召唤文件树候选——2026-09-12 左滑槽冻结后，Other 顶的唯一召唤向=右滑）
+/// 起手式：召唤文件树的拖拽会话（2026-09-12 双槽冻结：右滑召唤槽已关，
+/// 手势层到不了召唤角色——机制钉用 force_role_for_spec 旁路注入，
+/// 锁点位置与真实锁定一致（300+24=324），下面各题坐标系不用动。
+/// 解冻后本注入退役，回到纯手势驱动）
 fn summon_session() -> PanelDrag {
-    PanelDrag::new(300.0, 900.0, 10_000)
+    let mut d = PanelDrag::new(300.0, 900.0, 10_000);
+    d.force_role_for_spec(DragRole::SummonFileTree);
+    d
 }
 
 // 钉①：方向锁——横向 24px 起锁；斜率不过 1.8 不锁（纵向滚屏让路）；
-// 锁定前 on_move 不回拉面板（None）。
+// 锁定前 on_move 不回拉面板（None）。（2026-09-12 双槽冻结后锁定臂
+// 改用活体角色：配置顶的右滑=推回锁定）
 // 变异抽检：DRAG_LOCK_PX 调小，23px 臂必红；斜率 1.8 改小，斜滑臂必红。
 #[test]
 fn spec_拖拽_方向锁() {
-    let mut d = summon_session();
     // 未过阈值：23px 纯横移不锁
+    let mut d = PanelDrag::new(300.0, 900.0, 10_000);
     assert!(
         d.on_move(323.0, 900.0, 10_010, 1200.0, DragTop::Other)
             .is_none()
@@ -44,20 +50,22 @@ fn spec_拖拽_方向锁() {
         d.on_move(400.0, 800.0, 10_020, 1200.0, DragTop::Other)
             .is_none()
     );
-    // 过阈值且方向锁：24px 纯横移锁定位移
+    // 过阈值且方向锁：24px 纯横移锁定（活体角色=配置顶右滑推回）
+    let mut d = PanelDrag::new(300.0, 900.0, 10_000);
     assert!(
-        d.on_move(324.0, 900.0, 10_030, 1200.0, DragTop::Other)
+        d.on_move(324.0, 900.0, 10_030, 1200.0, DragTop::Config)
             .is_some()
     );
 }
 
 // 钉②：角色仲裁六象限（2026-09-12 重钉：左滑召唤位让位 ui/gear 设置钮，
-// 左滑槽冻结留给浏览器卡 SPKE-web）——右滑+顶 Other = SummonFileTree；
-// 右滑+顶 Config = DismissConfig；左滑+顶 Config = 不锁（本家已在顶）；
-// 左滑+顶 Other = 不锁（冻结：浏览器卡解冻前左滑无召唤目标）；
-// 左滑+顶 FileTree = DismissFileTree；右滑+顶 FileTree = 不锁。
+// 左滑槽冻结留给浏览器卡 SPKE-web；同日再拍文件树也冻结，右滑召唤槽
+// 关闭）——右滑+顶 Other = 不锁（冻结：文件树位）；右滑+顶 Config =
+// DismissConfig；左滑+顶 Config = 不锁（本家已在顶）；左滑+顶 Other =
+// 不锁（冻结：浏览器卡位）；左滑+顶 FileTree = DismissFileTree；
+// 右滑+顶 FileTree = 不锁。
 // 变异抽检：角色判反（右滑给 Dismiss）/DragTop 映射错一家，六象限必红；
-// 左滑+Other 复活召唤 → 第四臂必红。
+// 左滑+Other 或右滑+Other 复活召唤 → 对应臂必红。
 #[test]
 fn spec_拖拽_角色仲裁六象限() {
     // 左滑，顶非抽屉面板 → 不锁（2026-09-12 冻结：配置召唤归设置钮）
@@ -79,12 +87,13 @@ fn spec_拖拽_角色仲裁六象限() {
         d.on_move(960.0, 900.0, 10, 1200.0, DragTop::Config)
             .is_none()
     );
-    // 右滑，顶非抽屉面板 → 召唤文件树（右滑家）
+    // 右滑，顶非抽屉面板 → 不锁（2026-09-12 冻结：文件树召唤槽关闭）
     let mut d = PanelDrag::new(300.0, 900.0, 0);
-    match d.on_move(340.0, 900.0, 10, 1200.0, DragTop::Other) {
-        Some((DragRole::SummonFileTree, _)) => {}
-        other => panic!("右滑+顶Other应为召唤文件树锁定，得 {other:?}"),
-    }
+    assert!(
+        d.on_move(340.0, 900.0, 10, 1200.0, DragTop::Other)
+            .is_none(),
+        "右滑+顶Other 必须不锁（右滑槽冻结留给文件树解冻）"
+    );
     // 左滑，顶是文件树 → 推回文件树
     let mut d = PanelDrag::new(600.0, 900.0, 0);
     match d.on_move(560.0, 900.0, 10, 1200.0, DragTop::FileTree) {
@@ -309,7 +318,10 @@ fn spec_拖拽_反悔回拉必取消() {
 fn spec_拖拽_文件树家镜像() {
     let w = 1200.0;
     // 召唤 FT：down@300，锁点 300+24=324，锁定瞬偏移≈屏宽（屏外左）
+    // （2026-09-12 双槽冻结：召唤角色无手势入口，force_role_for_spec
+    // 旁路注入——锁点与真实锁定一致，坐标系不动）
     let mut d = PanelDrag::new(300.0, 900.0, 0);
+    d.force_role_for_spec(DragRole::SummonFileTree);
     let (role, off0) = d.on_move(340.0, 900.0, 10, w, DragTop::Other).unwrap();
     assert_eq!(role, DragRole::SummonFileTree);
     assert!(
@@ -327,6 +339,7 @@ fn spec_拖拽_文件树家镜像() {
     );
     // 甩速：召唤 FT 末段猛右甩 = 朝完成（100ms 窗内右移 200px = 2px/ms）
     let mut d = PanelDrag::new(300.0, 900.0, 0);
+    d.force_role_for_spec(DragRole::SummonFileTree);
     d.on_move(340.0, 900.0, 10, w, DragTop::Other);
     d.on_move(
         300.0 + DRAG_LOCK_PX + 0.3 * w as f64 / DRAG_GAIN - 200.0,
@@ -373,6 +386,7 @@ fn spec_拖拽_文件树家镜像() {
     );
     // 反甩取消镜像：召唤 FT 进度 70% 但末段左甩（反甩）→ 取消
     let mut d = PanelDrag::new(300.0, 900.0, 0);
+    d.force_role_for_spec(DragRole::SummonFileTree);
     d.on_move(340.0, 900.0, 10, w, DragTop::Other);
     d.on_move(
         300.0 + DRAG_LOCK_PX + 0.7 * w as f64 / DRAG_GAIN + 200.0,

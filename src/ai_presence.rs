@@ -279,17 +279,16 @@ impl AiPresenceState {
     }
 
     /// 右滑（三公民 §五B，2026-09-11）：顶是配置 = 推回它的来向（右缘）；
-    /// 顶是文件树 = 空操作（本家已在顶）；其余 = 召唤文件树（右滑家落地，
-    /// 「顶=Ai 右滑零响应」的空操作态从此不存在）
+    /// 顶是文件树 = 空操作（本家已在顶）。
+    /// 2026-09-12 用户拍板冻结：文件树页召唤槽关闭（面板公民保留，
+    /// 槽位留档——解冻即恢复 `_ => summon_locked(..FileTree)` 一支），
+    /// 冻结期其余栈态右滑 = 空操作。
     pub fn swipe_right(&self) {
         let mut g = self.inner.lock().unwrap();
-        match g.stack.last() {
-            Some(&Panel::Config) => {
-                g.stack.pop();
-            }
-            Some(&Panel::FileTree) => {}
-            _ => summon_locked(&mut g, Panel::FileTree),
+        if g.stack.last() == Some(&Panel::Config) {
+            g.stack.pop();
         }
+        // 冻结：右滑召唤文件树槽关闭（2026-09-12 用户拍板），其余栈态空操作
     }
 
     /// 面板在栈（顶或被覆盖）：渲染目标值语义——在栈 = 靠泊位，
