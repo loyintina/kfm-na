@@ -149,6 +149,8 @@ kfmv4-review-ops-convention-verdict.md。
   含三行块排版纪律。动任何 UI 前必读）
 - `docs/active/ai-presence.md` — AI 外显插件唯一设计文档（living；
   光球/浮层/AI页/输入栏+眼睛手嘴。动 AI 对话前必读）
+- `docs/active/theme.md` — **KFM 主题宪法**（唯一来源：网格×像素总则/
+  随机 accent/边框反转/双池/标签栏。动任何 UI 视觉前先修宪）
 - `docs/active/工具卡.md` — 工具即卡设计（四个待拍板项定了才准实现）
 - `docs/ledger/bugs.md` — BAR 账本：每条修复登记编号/病灶/契约/钉位置
 - `/root/kfmv4/docs/ledger/agent-inbox/` — **跨线评审信箱**（评审会话维护，2026-08-15 迁入 kfmv4 文档目录）：
