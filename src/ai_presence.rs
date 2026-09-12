@@ -133,6 +133,11 @@ pub struct PresenceSnap {
     pub ft_epoch: u64,
     /// 解析面板的入场代（语义同 ai_epoch）
     pub pt_epoch: u64,
+    /// 三公民页面随机 accent（宪法 §2.2）：随快照同行——壳层静态装配函数
+    /// （无 self 直读状态核）与烘焙 sig 的唯一来源；AI 页不纳入（主题色恒定）
+    pub accent_cfg: crate::ui::accent::AccentPair,
+    pub accent_ft: crate::ui::accent::AccentPair,
+    pub accent_pt: crate::ui::accent::AccentPair,
 }
 
 /// 四态增益（纯函数，D8）：(整 sprite 增益, 光晕增益)。光晕增益只在 running
@@ -175,6 +180,12 @@ struct Inner {
     fake_end_ms: Option<u64>,
     /// 屏幕边界 (w, h, ime_bottom)：钳制原料，壳层 resize/键盘变化时喂
     bounds: (u32, u32, u32),
+    /// 随机 accent（宪法 §2.2）：Config/FileTree/Parser 三页各一对，
+    /// 每次召唤重新生成（AI 页不纳入，主题色蓝紫恒定）
+    accent_rng: crate::ui::accent::AccentRng,
+    accent_cfg: crate::ui::accent::AccentPair,
+    accent_ft: crate::ui::accent::AccentPair,
+    accent_pt: crate::ui::accent::AccentPair,
 }
 
 /// AI 外显状态核。Sync 内部可变（Mutex），形态判别同 ModifierState：
@@ -185,6 +196,12 @@ pub struct AiPresenceState {
 
 impl AiPresenceState {
     pub fn new() -> Self {
+        // 种子 = 系统时间纳秒（壳层不注——核自给自足；零种子模块内兜底）
+        let seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos() as u64 ^ d.as_secs())
+            .unwrap_or(0x9E37_79B9_7F4A_7C15);
+        let mut accent_rng = crate::ui::accent::AccentRng::new(seed);
         AiPresenceState {
             inner: Mutex::new(Inner {
                 ai_running: false,
@@ -201,7 +218,23 @@ impl AiPresenceState {
                 run_ended_ms: None,
                 fake_end_ms: None,
                 bounds: (0, 0, 0),
+                accent_cfg: accent_rng.generate(),
+                accent_ft: accent_rng.generate(),
+                accent_pt: accent_rng.generate(),
+                accent_rng,
             }),
+        }
+    }
+
+    /// 读某面板的 accent（宪法 §2.2；Ai 页不纳入，返回 None——
+    /// 壳层 AI 页走自己的主题蓝紫 token）
+    pub fn accent_of(&self, p: Panel) -> Option<crate::ui::accent::AccentPair> {
+        let g = self.inner.lock().unwrap();
+        match p {
+            Panel::Ai => None,
+            Panel::Config => Some(g.accent_cfg),
+            Panel::FileTree => Some(g.accent_ft),
+            Panel::Parser => Some(g.accent_pt),
         }
     }
 
@@ -396,6 +429,9 @@ impl AiPresenceState {
             cfg_epoch: g.epoch_cfg,
             ft_epoch: g.epoch_ft,
             pt_epoch: g.epoch_pt,
+            accent_cfg: g.accent_cfg,
+            accent_ft: g.accent_ft,
+            accent_pt: g.accent_pt,
         }
     }
 }
@@ -410,6 +446,11 @@ impl Default for AiPresenceState {
 /// 召唤 = 摘下重放（叠加态坍缩为收起后再入场，BAR-079：入场代 bump 让
 /// 缝重播动画）；栈满两格先静默挤出栈底（第三面板入场，叠加态坍缩为
 /// 收起——入场代 bump 让缝瞬移屏外，零帧空烧）
+///
+/// accent 语义（宪法 §2.2 召唤即随机）：被召唤者**重新生成** accent
+/// （新鲜召唤与被覆盖再召唤都算召唤）；被挤出的栈底不是召唤不重生。
+/// 反向重开（拖拽取消/关到一半拉开）不经过本函数 = 沿用本次配色
+/// （BAR-CARD-ACCENT-01 条款的结构性兑现）
 fn summon_locked(g: &mut Inner, p: Panel) {
     let was_covered = g.stack.len() == 2 && g.stack[0] == p;
     g.stack.retain(|&x| x != p);
@@ -420,7 +461,18 @@ fn summon_locked(g: &mut Inner, p: Panel) {
     if was_covered {
         bump_epoch(g, p);
     }
+    regen_accent(g, p);
     g.stack.push(p);
+}
+
+/// 召唤即重随 accent（AI 页不纳入卡片体系，恒主题色）
+fn regen_accent(g: &mut Inner, p: Panel) {
+    match p {
+        Panel::Ai => {}
+        Panel::Config => g.accent_cfg = g.accent_rng.generate(),
+        Panel::FileTree => g.accent_ft = g.accent_rng.generate(),
+        Panel::Parser => g.accent_pt = g.accent_rng.generate(),
+    }
 }
 
 /// 入场代 bump（BAR-079）：壳层见代变 = 该面板缝重定基到屏外位

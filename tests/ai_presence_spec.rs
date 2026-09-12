@@ -1636,3 +1636,37 @@ fn spec_decide_swipe_方向锁与幅度阈() {
         "200 > 180 咬边"
     );
 }
+
+#[test]
+fn spec_accent_召唤即随机钉() {
+    // 宪法 §2.2（2026-09-12 修宪拍板）：Config/FileTree/Parser 三页每次
+    // 召唤重新生成 accent；AI 页不纳入（None）；xorshift 是状态双射，
+    // 连续两次 generate 必产出不同对（机制保证非概率）
+    let ai = AiPresenceState::new();
+    assert_eq!(ai.accent_of(Panel::Ai), None, "AI 页不纳入随机体系");
+    let a1 = ai.accent_of(Panel::Config).expect("Config 必有 accent");
+    ai.summon_panel(Panel::Config);
+    let a2 = ai.accent_of(Panel::Config).unwrap();
+    assert_ne!(a1, a2, "召唤必须重随 accent");
+    // 收起重召同样重随；未召唤的邻居不动
+    let f1 = ai.accent_of(Panel::FileTree).unwrap();
+    ai.dismiss_top(Panel::Config);
+    ai.summon_panel(Panel::Config);
+    let a3 = ai.accent_of(Panel::Config).unwrap();
+    assert_ne!(a2, a3, "收起再召也必须重随");
+    assert_eq!(
+        ai.accent_of(Panel::FileTree).unwrap(),
+        f1,
+        "邻居面板的 accent 不受他人召唤影响"
+    );
+    // 反向重开沿用（结构性）：拖拽取消不经过 summon_locked——
+    // 栈内面板不被重新召唤时 accent 保持不变（本钉锁定现状语义，
+    // 变更须修宪）
+    let before = ai.accent_of(Panel::Parser).unwrap();
+    ai.summon_panel(Panel::Parser);
+    let after = ai.accent_of(Panel::Parser).unwrap();
+    assert_ne!(before, after);
+    let keep = ai.accent_of(Panel::Parser).unwrap();
+    // 栈内读多少次都不变（露出/被盖都不是召唤）
+    assert_eq!(ai.accent_of(Panel::Parser).unwrap(), keep);
+}

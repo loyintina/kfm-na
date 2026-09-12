@@ -207,22 +207,49 @@ pub fn dump_now(dir: &str) {
             // 快捷键行：前台同规则 inset 叠输入栏当前带高；修饰位无共享态按 0 画
             t.render_keybar(&mut buf, w, h, bar_h, 0);
         }
-        // 四面板按 z_order 底→顶逐槽画（与前台 paint_under 同规）
+        // 四面板按 z_order 底→顶逐槽画（与前台 paint_under 同规；
+        // accent 同源于 presence——值守倒帧与前台帧同色的前提）
+        let acc_of = |p: Panel| {
+            ai_presence_handle()
+                .and_then(|a| a.accent_of(p))
+                .unwrap_or(crate::ui::accent::FALLBACK)
+        };
         for slot in z_order {
             match slot {
                 Panel::Config => {
                     if cfg_visible {
-                        crate::termview::paint_cfg_page_chrome(&mut buf, w, h, bar_h, cfg_off);
+                        crate::termview::paint_cfg_page_chrome(
+                            &mut buf,
+                            w,
+                            h,
+                            bar_h,
+                            cfg_off,
+                            acc_of(Panel::Config),
+                        );
                     }
                 }
                 Panel::FileTree => {
                     if ft_visible {
-                        crate::termview::paint_ft_page_chrome(&mut buf, w, h, bar_h, ft_off);
+                        crate::termview::paint_ft_page_chrome(
+                            &mut buf,
+                            w,
+                            h,
+                            bar_h,
+                            ft_off,
+                            acc_of(Panel::FileTree),
+                        );
                     }
                 }
                 Panel::Parser => {
                     if pt_visible {
-                        crate::termview::paint_parser_page_chrome(&mut buf, w, h, bar_h, pt_off);
+                        crate::termview::paint_parser_page_chrome(
+                            &mut buf,
+                            w,
+                            h,
+                            bar_h,
+                            pt_off,
+                            acc_of(Panel::Parser),
+                        );
                     }
                 }
                 Panel::Ai => {

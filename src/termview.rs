@@ -208,9 +208,10 @@ pub fn paint_ai_page_chrome(
     ai_page_fit(buf_h, bottom_inset)
 }
 
-/// 配置页底装修（面板栈 §五B，2026-09-10）：整页青底 + 边框环（配方与
-/// AI 页同源 paint_page_frame_ring，色相换青系便于截图区分两面板的
-/// 机器判卷）。cfg_off_x = 面板刚体水平平移（+w=屏外右缘 → 0 靠泊）。
+/// 配置页底装修（面板栈 §五B，2026-09-10）：整页 CARD_PAGE_BG 深底 +
+/// 边框环（配方与 AI 页同源 paint_page_frame_ring；2026-09-12 宪法
+/// §2.2 起环色 = 召唤即随机的 accent 入参，不再固定青系）。
+/// cfg_off_x = 面板刚体水平平移（+w=屏外右缘 → 0 靠泊）。
 /// v1 = 空白骨架，无内容墨
 pub fn paint_cfg_page_chrome(
     buf: &mut [u32],
@@ -218,6 +219,7 @@ pub fn paint_cfg_page_chrome(
     buf_h: u32,
     bottom_inset: u32,
     cfg_off_x: i32,
+    accent: crate::ui::accent::AccentPair,
 ) {
     if buf_w == 0 || buf_h == 0 {
         return;
@@ -231,7 +233,7 @@ pub fn paint_cfg_page_chrome(
     let px0 = cfg_off_x.clamp(0, buf_w as i32) as u32;
     let px1 = (buf_w as i32 + cfg_off_x).clamp(0, buf_w as i32) as u32;
     if px1 > px0 {
-        frame.fill_rect(px0, 0, px1 - px0, buf_h, CFG_PAGE_BG);
+        frame.fill_rect(px0, 0, px1 - px0, buf_h, crate::ui::accent::CARD_PAGE_BG);
     }
     paint_page_frame_ring(
         &mut frame,
@@ -240,9 +242,9 @@ pub fn paint_cfg_page_chrome(
         bottom_inset,
         cfg_off_x,
         0,
-        CFG_PAGE_BG,
-        CFG_FRAME_C1,
-        CFG_FRAME_C2,
+        crate::ui::accent::CARD_PAGE_BG,
+        accent.c1,
+        accent.c2,
     );
 }
 
@@ -253,8 +255,9 @@ pub fn cfg_split(cfg_off: i32, w: u32) -> (bool, bool) {
     (cfg_off != 0, cfg_off < w as i32)
 }
 
-/// 文件树页底装修（面板栈 §五B 三公民，2026-09-11）：整页绿底 + 边框环
-/// （配方与配置页同源，色相换绿系便于截图机器判卷区分三面板）。
+/// 文件树页底装修（面板栈 §五B 三公民，2026-09-11）：整页 CARD_PAGE_BG
+/// 深底 + 边框环（配方与配置页同源；2026-09-12 宪法 §2.2 起环色 =
+/// 召唤即随机的 accent 入参，不再固定绿系）。
 /// ft_off_x = 面板刚体水平平移（-w=屏外左缘 → 0 靠泊，与配置家镜像——
 /// 底色求交公式 px0=off.clamp(0,w) / px1=(w+off).clamp(0,w) 对负偏移
 /// 天然成立）。v1 = 空白骨架，无内容墨
@@ -264,6 +267,7 @@ pub fn paint_ft_page_chrome(
     buf_h: u32,
     bottom_inset: u32,
     ft_off_x: i32,
+    accent: crate::ui::accent::AccentPair,
 ) {
     if buf_w == 0 || buf_h == 0 {
         return;
@@ -277,7 +281,7 @@ pub fn paint_ft_page_chrome(
     let px0 = ft_off_x.clamp(0, buf_w as i32) as u32;
     let px1 = (buf_w as i32 + ft_off_x).clamp(0, buf_w as i32) as u32;
     if px1 > px0 {
-        frame.fill_rect(px0, 0, px1 - px0, buf_h, FT_PAGE_BG);
+        frame.fill_rect(px0, 0, px1 - px0, buf_h, crate::ui::accent::CARD_PAGE_BG);
     }
     paint_page_frame_ring(
         &mut frame,
@@ -286,9 +290,9 @@ pub fn paint_ft_page_chrome(
         bottom_inset,
         ft_off_x,
         0,
-        FT_PAGE_BG,
-        FT_FRAME_C1,
-        FT_FRAME_C2,
+        crate::ui::accent::CARD_PAGE_BG,
+        accent.c1,
+        accent.c2,
     );
 }
 
@@ -299,16 +303,17 @@ pub fn ft_split(ft_off: i32, w: u32) -> (bool, bool) {
     (ft_off != 0, ft_off > -(w as i32))
 }
 
-/// 解析页底装修（面板栈 §五B 四公民·三缘语义，2026-09-12）：整页深靛蓝底加
-/// 青蓝边框环。配方与配置页同源——右缘家符号约定完全相同：pt_off_x = 面板
-/// 刚体水平平移（+w=屏外右缘 → 0 靠泊）；占位壳阶段区分只有颜色不同。
-/// v1 = 空白骨架，无内容墨
+/// 解析页底装修（面板栈 §五B 四公民·三缘语义，2026-09-12）：整页
+/// CARD_PAGE_BG 深底 + 边框环（配方与配置页同源，环色 = 召唤即随机
+/// accent 入参）——右缘家符号约定完全相同：pt_off_x = 面板刚体水平
+/// 平移（+w=屏外右缘 → 0 靠泊）。v1 = 空白骨架，无内容墨
 pub fn paint_parser_page_chrome(
     buf: &mut [u32],
     buf_w: u32,
     buf_h: u32,
     bottom_inset: u32,
     pt_off_x: i32,
+    accent: crate::ui::accent::AccentPair,
 ) {
     if buf_w == 0 || buf_h == 0 {
         return;
@@ -322,7 +327,7 @@ pub fn paint_parser_page_chrome(
     let px0 = pt_off_x.clamp(0, buf_w as i32) as u32;
     let px1 = (buf_w as i32 + pt_off_x).clamp(0, buf_w as i32) as u32;
     if px1 > px0 {
-        frame.fill_rect(px0, 0, px1 - px0, buf_h, PT_PAGE_BG);
+        frame.fill_rect(px0, 0, px1 - px0, buf_h, crate::ui::accent::CARD_PAGE_BG);
     }
     paint_page_frame_ring(
         &mut frame,
@@ -331,9 +336,9 @@ pub fn paint_parser_page_chrome(
         bottom_inset,
         pt_off_x,
         0,
-        PT_PAGE_BG,
-        PT_FRAME_C1,
-        PT_FRAME_C2,
+        crate::ui::accent::CARD_PAGE_BG,
+        accent.c1,
+        accent.c2,
     );
 }
 
@@ -2240,24 +2245,11 @@ pub const AI_PAGE_FRAME_W: u32 = 3;
 /// 圆角半径（kfmv4 border-radius:12px × 3）
 pub const AI_PAGE_FRAME_R: u32 = 36;
 
-/// 配置页底色/边框（面板栈 §五B，2026-09-10）：与 AI 页同配方不同色相
-/// ——青系（截图机器判卷两面板可区分：AI 紫底 0x140A24 vs 配置青底）
-pub const CFG_PAGE_BG: u32 = 0x000A_1A20;
-pub const CFG_FRAME_C1: u32 = 0x0000_F0C8; // 青绿 rgba(0,240,200,~.8)
-pub const CFG_FRAME_C2: u32 = 0x0020_90D0; // 青蓝 rgba(32,144,208,~.7)
-
-/// 文件树页底色/边框（面板栈 §五B 三公民，2026-09-11）：同配方绿系
-/// ——截图机器判卷三面板可区分（紫 0x140A24 / 青 0x0A1A20 / 绿 0x0A1A0F）
-pub const FT_PAGE_BG: u32 = 0x000A_1A0F;
-pub const FT_FRAME_C1: u32 = 0x0040_E080; // 翠绿 rgba(64,224,128,~.8)
-pub const FT_FRAME_C2: u32 = 0x0020_7040; // 墨绿 rgba(32,112,64,~.7)
-
-/// 解析页底色/边框（面板栈 §五B 四公民·三缘语义，2026-09-12）：同配方
-/// 青蓝系——深靛蓝底 + 青色边框环（b 主导，与配置青环的 g 主导区分：
-/// 占位壳阶段「区分只有颜色不同」，一眼可辨是第四页）
-pub const PT_PAGE_BG: u32 = 0x0008_1026;
-pub const PT_FRAME_C1: u32 = 0x0020_C0F0; // 青蓝 rgba(32,192,240,~.8)
-pub const PT_FRAME_C2: u32 = 0x0014_3868; // 深靛蓝 rgba(20,56,104,~.7)
+// 三公民页面（文件树/解析/配置）底色/边框已迁随机 accent 体系
+// （theme.md 宪法 §2.2，2026-09-12）：底色统一 `ui::accent::CARD_PAGE_BG`
+// 深底，边框环色由 `ui::accent::AccentRng` 召唤即随机生成（kfmv4
+// `_generateRandomAccents` 约束区间 HSL 移植），涂装函数 accent 入参。
+// 旧固定色常量（CFG/FT/PT_PAGE_BG + FRAME_C1/C2）同日删除。
 
 /// 终端卡片壳底色/边框（2026-09-11 用户拍板「终端也包一个全屏卡片壳，
 /// 样式统一」）：同配方**无色相碳灰**——终端是基座不是卡，一眼看出

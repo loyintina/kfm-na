@@ -302,9 +302,9 @@ struct LayerSigs {
     keybar: crate::ui::stage::DirtyGuard<(u8, u32, u32, u32, u32)>,
     panel: crate::ui::stage::DirtyGuard<(u32, u32, u32, u32)>,
     over: crate::ui::stage::DirtyGuard<OverSig>,
-    config: crate::ui::stage::DirtyGuard<(u32, u32, u32, u32)>,
-    filetree: crate::ui::stage::DirtyGuard<(u32, u32, u32, u32)>,
-    parser: crate::ui::stage::DirtyGuard<(u32, u32, u32, u32)>,
+    config: crate::ui::stage::DirtyGuard<(u32, u32, u32, u32, u32, u32)>,
+    filetree: crate::ui::stage::DirtyGuard<(u32, u32, u32, u32, u32, u32)>,
+    parser: crate::ui::stage::DirtyGuard<(u32, u32, u32, u32, u32, u32)>,
     termcard: crate::ui::stage::DirtyGuard<(u32, u32, u32, u32)>,
 }
 
@@ -2643,6 +2643,9 @@ impl App {
         ft_off: i32,
         pt_off: i32,
         z_order: [crate::ai_presence::Panel; 4],
+        // 三公民页面 accent（[cfg, ft, pt]，来自 PresenceSnap——静态装配
+        // 无 self，快照同行是唯一来源；调用方 None 时给 FALLBACK）
+        accents: [crate::ui::accent::AccentPair; 3],
         chat_msgs: &[(bool, String, String)],
         chat_scroll: u32,
         chat_live: bool,
@@ -2676,21 +2679,48 @@ impl App {
         // softbuffer 兜底路径保留旧「覆盖」语义（被覆盖者 placement 冻结、
         // 遮盖撤走零动画露出）——视口推移只实装在 GLES 主路（2026-09-12，
         // 兜底不再投入的既有档位，欠账记 state.md）
+        let acc_of = |p: crate::ai_presence::Panel| match p {
+            crate::ai_presence::Panel::Config => accents[0],
+            crate::ai_presence::Panel::FileTree => accents[1],
+            crate::ai_presence::Panel::Parser => accents[2],
+            crate::ai_presence::Panel::Ai => crate::ui::accent::FALLBACK,
+        };
         for slot in z_order {
             match slot {
                 crate::ai_presence::Panel::Config => {
                     if cfg_visible {
-                        crate::termview::paint_cfg_page_chrome(buf, w, h, bottom_inset, cfg_off);
+                        crate::termview::paint_cfg_page_chrome(
+                            buf,
+                            w,
+                            h,
+                            bottom_inset,
+                            cfg_off,
+                            acc_of(crate::ai_presence::Panel::Config),
+                        );
                     }
                 }
                 crate::ai_presence::Panel::FileTree => {
                     if ft_visible {
-                        crate::termview::paint_ft_page_chrome(buf, w, h, bottom_inset, ft_off);
+                        crate::termview::paint_ft_page_chrome(
+                            buf,
+                            w,
+                            h,
+                            bottom_inset,
+                            ft_off,
+                            acc_of(crate::ai_presence::Panel::FileTree),
+                        );
                     }
                 }
                 crate::ai_presence::Panel::Parser => {
                     if pt_visible {
-                        crate::termview::paint_parser_page_chrome(buf, w, h, bottom_inset, pt_off);
+                        crate::termview::paint_parser_page_chrome(
+                            buf,
+                            w,
+                            h,
+                            bottom_inset,
+                            pt_off,
+                            acc_of(crate::ai_presence::Panel::Parser),
+                        );
                     }
                 }
                 crate::ai_presence::Panel::Ai => {
@@ -2831,6 +2861,9 @@ impl App {
         };
         // 当前栏带高（眼手同尺单源，见 current_bar_h）
         let bar_h = Self::current_bar_h(&**term, bar_snap, w);
+        let accents = ai_snap.map_or([crate::ui::accent::FALLBACK; 3], |s| {
+            [s.accent_cfg, s.accent_ft, s.accent_pt]
+        });
         let ai_layout = Self::paint_under(
             &mut **term,
             buf,
@@ -2844,6 +2877,7 @@ impl App {
             ft_off,
             pt_off,
             z_order,
+            accents,
             chat_msgs,
             chat_scroll,
             chat_live,
@@ -3199,25 +3233,36 @@ impl App {
             crate::termview::paint_ai_page_chrome(px, w, h, bottom_inset, 0);
             g.slot_bake(crate::gles_present::ChromeSlot::Panel);
         }
-        // 配置槽（§五B）：同规——画布恒靠泊位（cfg_off=0），X 位移在合成期
-        if cfg_visible && sigs.config.feed((w, h, ime, bar_h)) {
+        // 配置槽（§五B）：同规——画布恒靠泊位（cfg_off=0），X 位移在合成期。
+        // sig 带 accent 两维（宪法 §2.2 召唤即随机：重随必触发重烘焙，
+        // 漏维 = 新色不进纹理，满屏旧色——2026-09-12 accent 落地即钉）。
+        // accent 来源 = PresenceSnap 三字段（静态装配无 self，快照同行）
+        let (acc_cfg, acc_ft, acc_pt) = ai_snap.map_or(
+            (
+                crate::ui::accent::FALLBACK,
+                crate::ui::accent::FALLBACK,
+                crate::ui::accent::FALLBACK,
+            ),
+            |s| (s.accent_cfg, s.accent_ft, s.accent_pt),
+        );
+        if cfg_visible && sigs.config.feed((w, h, ime, bar_h, acc_cfg.c1, acc_cfg.c2)) {
             let px = g.slot_canvas(crate::gles_present::ChromeSlot::Config);
             px.fill(0);
-            crate::termview::paint_cfg_page_chrome(px, w, h, bottom_inset, 0);
+            crate::termview::paint_cfg_page_chrome(px, w, h, bottom_inset, 0, acc_cfg);
             g.slot_bake(crate::gles_present::ChromeSlot::Config);
         }
         // 文件树槽（§五B 三公民）：同规——画布恒靠泊位（ft_off=0）
-        if ft_visible && sigs.filetree.feed((w, h, ime, bar_h)) {
+        if ft_visible && sigs.filetree.feed((w, h, ime, bar_h, acc_ft.c1, acc_ft.c2)) {
             let px = g.slot_canvas(crate::gles_present::ChromeSlot::FileTree);
             px.fill(0);
-            crate::termview::paint_ft_page_chrome(px, w, h, bottom_inset, 0);
+            crate::termview::paint_ft_page_chrome(px, w, h, bottom_inset, 0, acc_ft);
             g.slot_bake(crate::gles_present::ChromeSlot::FileTree);
         }
         // 解析槽（§五B 四公民·三缘语义）：同规——画布恒靠泊位（pt_off=0）
-        if pt_visible && sigs.parser.feed((w, h, ime, bar_h)) {
+        if pt_visible && sigs.parser.feed((w, h, ime, bar_h, acc_pt.c1, acc_pt.c2)) {
             let px = g.slot_canvas(crate::gles_present::ChromeSlot::Parser);
             px.fill(0);
-            crate::termview::paint_parser_page_chrome(px, w, h, bottom_inset, 0);
+            crate::termview::paint_parser_page_chrome(px, w, h, bottom_inset, 0, acc_pt);
             g.slot_bake(crate::gles_present::ChromeSlot::Parser);
         }
         // AI 文字（每帧实例——消息/滚动/panel_off 逐帧变，永不进烘焙；

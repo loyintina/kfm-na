@@ -336,12 +336,14 @@ trait BrainEndpoint {
 - **实现锚点**（2026-09-10 落地，09-11 三公民泛化，09-12 四公民）：状态核
   `ai_presence.rs`（stack: Vec<Panel>，末位=顶）；手势识别纯函数
   `decide_swipe`（90px 阈值 + 1.8 方向锁，抬手判定——Started 分流优先级：
-  球 > 选择菜单 > 输入栏 > 面板页 > 键行 > 终端区）；配置页渲染
-  `paint_cfg_page_chrome`（青底 0x0A1A20 + 青系边框环）、文件树页渲染
-  `paint_ft_page_chrome`（墨绿底 0x000A1A0F + 绿系边框环）、解析页渲染
-  `paint_parser_page_chrome`（深靛蓝底 0x00081026 + 青蓝边框环——占位壳
-  阶段区分只有颜色不同），与 AI 紫底 0x140A24 四页机器判卷可区分；
-  GLES 第四~六槽 ChromeSlot::Config/FileTree/Parser，z 序单源
+  球 > 选择菜单 > 输入栏 > 面板页 > 键行 > 终端区）；三公民页面渲染
+  `paint_cfg_page_chrome`/`paint_ft_page_chrome`/`paint_parser_page_chrome`
+  ——**2026-09-12 宪法 §2.2 起：底色统一 CARD_PAGE_BG 深底，边框环色 =
+  accent 入参（召唤即随机，`ui/accent.rs` 生成器 + presence 内
+  regen_accent 挂 summon_locked；AI 页紫底 0x140A24 恒主题色不纳入）**，
+  占位期页面区分靠滑向/位置不再靠固定色；GLES 第四~六槽
+  ChromeSlot::Config/FileTree/Parser（烘焙 sig 带 accent 两维，重随
+  必触发重烘焙），z 序单源
   `stage::panel_z_order`（**BAR-083 修订：动者在上**——动画/拖拽中的
   面板压顶，多动者按栈序，双静止跟栈顶露出零动画承载不变）；
   **BAR-084 配套红线：z 序活性读数只许进 z 序，target/presence 走

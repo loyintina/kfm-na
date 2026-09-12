@@ -2736,37 +2736,40 @@ fn spec_bar067_栏带底_半透写出() {
 }
 
 #[test]
-fn spec_cfg页底装修_平移与色相钉() {
-    // 配置页底装修（paint_cfg_page_chrome，面板栈 §五B 2026-09-10）：
-    // ①靠泊位（off=0）整页底色 = CFG_PAGE_BG，边框环带墨（青系色相与
-    //   AI 紫区分 = 机器判卷两面板的前提）；
-    // ②X 平移语义：off>0 时左缘 [0,off) 列透明（终端透出的前提），
-    //   可见列底色咬合；off≥w 完全屏外不落墨
+fn spec_cfg页底装修_accent与平移钉() {
+    // accent 入参时代（宪法 §2.2 召唤即随机，2026-09-12）：
+    // ①靠泊位内芯 = CARD_PAGE_BG（深底不随 accent），边框环有墨 ≠ 底色；
+    // ②环色由 accent 驱动——换 accent 重画同位取样必须变色（不变 =
+    //   accent 没接进涂装，满屏固定色；变异抽检：涂装写死常量 → 此钉红）；
+    // ③X 平移语义不变：透明缘/可见区底色咬合/完全屏外零墨
     let (w, h) = (400u32, 500u32);
     let inset = 120u32;
+    let acc_a = kfm_na::ui::accent::AccentPair {
+        c1: 0x00FF_6000,
+        c2: 0x0000_80FF,
+    };
+    let acc_b = kfm_na::ui::accent::AccentPair {
+        c1: 0x0000_FF00,
+        c2: 0x00FF_00FF,
+    };
     let mut b0 = vec![0u32; (w * h) as usize];
-    kfm_na::termview::paint_cfg_page_chrome(&mut b0, w, h, inset, 0);
-    // 内芯（边框 punch 区里）必须恒底色
+    kfm_na::termview::paint_cfg_page_chrome(&mut b0, w, h, inset, 0, acc_a);
     assert_eq!(
         b0[(h / 2 * w + w / 2) as usize],
-        kfm_na::termview::CFG_PAGE_BG,
-        "靠泊位内芯必须是配置页底色"
+        kfm_na::ui::accent::CARD_PAGE_BG,
+        "靠泊位内芯必须恒卡片深底（不随 accent）"
     );
-    // 边框环带墨 ≠ 底色 ≠ 透明（左缘 3 倍粗带内取点，margin16+1 列）
-    let ring = b0[((h - inset) / 2 * w + 18) as usize];
+    let ring_idx = ((h - inset) / 2 * w + 18) as usize;
+    let ring = b0[ring_idx];
     assert_ne!(ring, 0, "边框环必须有墨");
-    assert_ne!(ring, kfm_na::termview::CFG_PAGE_BG, "边框环必须异于底色");
-    // 青系色相钉：环色必须是 CFG_FRAME_C1/C2 渐变族（蓝绿分量主导、
-    // 红分量低——与 AI 紫环的红蓝主导相区分）
-    let (r, gc, b) = ((ring >> 16) & 0xFF, (ring >> 8) & 0xFF, ring & 0xFF);
-    assert!(
-        gc > r && b >= r,
-        "配置页环必须青系（g/b 主导），实测 #{ring:06x}"
-    );
-    // X 平移：off=137 → 左缘 137 列透明，第 137 列起底色咬合
+    assert_ne!(ring, kfm_na::ui::accent::CARD_PAGE_BG, "边框环必须异于底色");
+    let mut b1 = vec![0u32; (w * h) as usize];
+    kfm_na::termview::paint_cfg_page_chrome(&mut b1, w, h, inset, 0, acc_b);
+    assert_ne!(b1[ring_idx], ring, "accent 换了环色必须变（驱动钉）");
+    // 平移钉
     let k = 137i32;
     let mut bk = vec![0u32; (w * h) as usize];
-    kfm_na::termview::paint_cfg_page_chrome(&mut bk, w, h, inset, k);
+    kfm_na::termview::paint_cfg_page_chrome(&mut bk, w, h, inset, k, acc_a);
     let mid_row = &bk[((h / 2) * w) as usize..((h / 2) * w + w) as usize];
     assert!(
         mid_row[..k as usize].iter().all(|&p| p == 0),
@@ -2774,21 +2777,13 @@ fn spec_cfg页底装修_平移与色相钉() {
     );
     assert_eq!(
         mid_row[(k as usize) + 100],
-        kfm_na::termview::CFG_PAGE_BG,
+        kfm_na::ui::accent::CARD_PAGE_BG,
         "平移后可见区底色必须咬合"
     );
     // 完全屏外不落墨
     let mut bw = vec![0u32; (w * h) as usize];
-    kfm_na::termview::paint_cfg_page_chrome(&mut bw, w, h, inset, w as i32);
-    assert!(bw.iter().all(|&p| p == 0), "off=+w 必须零墨");
-    // 常量色相自钉（渐变两端都须青系，防配方改漂）
-    for c in [
-        kfm_na::termview::CFG_FRAME_C1,
-        kfm_na::termview::CFG_FRAME_C2,
-    ] {
-        let (r, g, b) = ((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF);
-        assert!(g > r && b > r, "配置页渐变端色必须青系，实测 #{c:06x}");
-    }
+    kfm_na::termview::paint_cfg_page_chrome(&mut bw, w, h, inset, w as i32, acc_a);
+    assert!(bw.iter().all(|&p| p == 0), "完全屏外必须零墨");
 }
 
 #[test]
@@ -2812,36 +2807,40 @@ fn spec_ft_split_真值表() {
 }
 
 #[test]
-fn spec_ft页底装修_平移与色相钉() {
-    // 文件树页底装修（paint_ft_page_chrome，三公民 §五B 2026-09-11）：
-    // 配置页镜像——①靠泊位（off=0）整页底色 = FT_PAGE_BG，边框环带墨
-    //   （绿系色相与 AI 紫/配置青区分 = 机器判卷三面板的前提）；
-    // ②X 平移负向语义：off<0 时右缘 [w+off, w) 列透明（终端透出的
-    //   前提），可见列底色咬合；off≤-w 完全屏外不落墨
+fn spec_ft页底装修_accent与平移钉() {
+    // accent 入参时代（宪法 §2.2 召唤即随机，2026-09-12）：
+    // ①靠泊位内芯 = CARD_PAGE_BG（深底不随 accent），边框环有墨 ≠ 底色；
+    // ②环色由 accent 驱动——换 accent 重画同位取样必须变色（不变 =
+    //   accent 没接进涂装，满屏固定色；变异抽检：涂装写死常量 → 此钉红）；
+    // ③X 平移语义不变：透明缘/可见区底色咬合/完全屏外零墨
     let (w, h) = (400u32, 500u32);
     let inset = 120u32;
+    let acc_a = kfm_na::ui::accent::AccentPair {
+        c1: 0x00FF_6000,
+        c2: 0x0000_80FF,
+    };
+    let acc_b = kfm_na::ui::accent::AccentPair {
+        c1: 0x0000_FF00,
+        c2: 0x00FF_00FF,
+    };
     let mut b0 = vec![0u32; (w * h) as usize];
-    kfm_na::termview::paint_ft_page_chrome(&mut b0, w, h, inset, 0);
-    // 内芯（边框 punch 区里）必须恒底色
+    kfm_na::termview::paint_ft_page_chrome(&mut b0, w, h, inset, 0, acc_a);
     assert_eq!(
         b0[(h / 2 * w + w / 2) as usize],
-        kfm_na::termview::FT_PAGE_BG,
-        "靠泊位内芯必须是文件树页底色"
+        kfm_na::ui::accent::CARD_PAGE_BG,
+        "靠泊位内芯必须恒卡片深底（不随 accent）"
     );
-    // 边框环带墨 ≠ 底色 ≠ 透明（左缘 3 倍粗带内取点，margin16+1 列）
-    let ring = b0[((h - inset) / 2 * w + 18) as usize];
+    let ring_idx = ((h - inset) / 2 * w + 18) as usize;
+    let ring = b0[ring_idx];
     assert_ne!(ring, 0, "边框环必须有墨");
-    assert_ne!(ring, kfm_na::termview::FT_PAGE_BG, "边框环必须异于底色");
-    // 绿系色相钉：绿分量主导、红蓝低（与配置青环的 b>=r 相区分）
-    let (r, g, b) = ((ring >> 16) & 0xFF, (ring >> 8) & 0xFF, ring & 0xFF);
-    assert!(
-        g > r && g > b,
-        "文件树页环必须绿系（g 主导），实测 #{ring:06x}"
-    );
-    // X 平移：off=-137 → 右缘 137 列透明，第 0..w-137 列底色咬合
+    assert_ne!(ring, kfm_na::ui::accent::CARD_PAGE_BG, "边框环必须异于底色");
+    let mut b1 = vec![0u32; (w * h) as usize];
+    kfm_na::termview::paint_ft_page_chrome(&mut b1, w, h, inset, 0, acc_b);
+    assert_ne!(b1[ring_idx], ring, "accent 换了环色必须变（驱动钉）");
+    // 平移钉
     let k = 137i32;
     let mut bk = vec![0u32; (w * h) as usize];
-    kfm_na::termview::paint_ft_page_chrome(&mut bk, w, h, inset, -k);
+    kfm_na::termview::paint_ft_page_chrome(&mut bk, w, h, inset, -k, acc_a);
     let mid_row = &bk[((h / 2) * w) as usize..((h / 2) * w + w) as usize];
     assert!(
         mid_row[(w as i32 - k) as usize..].iter().all(|&p| p == 0),
@@ -2849,18 +2848,13 @@ fn spec_ft页底装修_平移与色相钉() {
     );
     assert_eq!(
         mid_row[100],
-        kfm_na::termview::FT_PAGE_BG,
+        kfm_na::ui::accent::CARD_PAGE_BG,
         "平移后可见区底色必须咬合"
     );
     // 完全屏外不落墨
     let mut bw = vec![0u32; (w * h) as usize];
-    kfm_na::termview::paint_ft_page_chrome(&mut bw, w, h, inset, -(w as i32));
-    assert!(bw.iter().all(|&p| p == 0), "off=-w 必须零墨");
-    // 常量色相自钉（渐变两端都须绿系，防配方改漂）
-    for c in [kfm_na::termview::FT_FRAME_C1, kfm_na::termview::FT_FRAME_C2] {
-        let (r, g, b) = ((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF);
-        assert!(g > r && g > b, "文件树渐变端色必须绿系，实测 #{c:06x}");
-    }
+    kfm_na::termview::paint_ft_page_chrome(&mut bw, w, h, inset, -(w as i32), acc_a);
+    assert!(bw.iter().all(|&p| p == 0), "完全屏外必须零墨");
 }
 
 #[test]
@@ -2884,45 +2878,40 @@ fn spec_pt_split_真值表() {
 }
 
 #[test]
-fn spec_pt页底装修_平移与色相钉() {
-    // 解析页底装修（paint_parser_page_chrome，四公民·三缘语义 2026-09-12）：
-    // 配置页同配方——①靠泊位（off=0）整页底色 = PT_PAGE_BG（深靛蓝），
-    //   边框环带墨（青蓝系 b 主导，与配置青环的 g 主导、文件树绿环、AI 紫
-    //   区分 = 占位壳「区分只有颜色不同」的机器判卷前提）；
-    // ②X 平移正向语义（右缘家）：off>0 时左缘 [0, off) 列透明（终端透出
-    //   的前提），可见列底色咬合；off≥+w 完全屏外不落墨
+fn spec_pt页底装修_accent与平移钉() {
+    // accent 入参时代（宪法 §2.2 召唤即随机，2026-09-12）：
+    // ①靠泊位内芯 = CARD_PAGE_BG（深底不随 accent），边框环有墨 ≠ 底色；
+    // ②环色由 accent 驱动——换 accent 重画同位取样必须变色（不变 =
+    //   accent 没接进涂装，满屏固定色；变异抽检：涂装写死常量 → 此钉红）；
+    // ③X 平移语义不变：透明缘/可见区底色咬合/完全屏外零墨
     let (w, h) = (400u32, 500u32);
     let inset = 120u32;
+    let acc_a = kfm_na::ui::accent::AccentPair {
+        c1: 0x00FF_6000,
+        c2: 0x0000_80FF,
+    };
+    let acc_b = kfm_na::ui::accent::AccentPair {
+        c1: 0x0000_FF00,
+        c2: 0x00FF_00FF,
+    };
     let mut b0 = vec![0u32; (w * h) as usize];
-    kfm_na::termview::paint_parser_page_chrome(&mut b0, w, h, inset, 0);
-    // 内芯（边框 punch 区里）必须恒底色
+    kfm_na::termview::paint_parser_page_chrome(&mut b0, w, h, inset, 0, acc_a);
     assert_eq!(
         b0[(h / 2 * w + w / 2) as usize],
-        kfm_na::termview::PT_PAGE_BG,
-        "靠泊位内芯必须是解析页底色（深靛蓝）"
+        kfm_na::ui::accent::CARD_PAGE_BG,
+        "靠泊位内芯必须恒卡片深底（不随 accent）"
     );
-    // 底色色相钉：b 主导（靛蓝），与配置底（g≈b）、文件树底（g 主导）区分
-    let bg = kfm_na::termview::PT_PAGE_BG;
-    let (r, g, b) = ((bg >> 16) & 0xFF, (bg >> 8) & 0xFF, bg & 0xFF);
-    assert!(
-        b > g && b > r,
-        "解析页底色必须靛蓝系（b 主导），实测 #{bg:06x}"
-    );
-    // 边框环带墨 ≠ 底色 ≠ 透明（左缘 3 倍粗带内取点，margin16+1 列）
-    let ring = b0[((h - inset) / 2 * w + 18) as usize];
+    let ring_idx = ((h - inset) / 2 * w + 18) as usize;
+    let ring = b0[ring_idx];
     assert_ne!(ring, 0, "边框环必须有墨");
-    assert_ne!(ring, kfm_na::termview::PT_PAGE_BG, "边框环必须异于底色");
-    // 青蓝色相钉：蓝分量主导（b > g > r——与配置环 g≥b、文件树环 g 主导
-    // 相区分，占位壳唯一区分就是颜色）
-    let (r, g, b) = ((ring >> 16) & 0xFF, (ring >> 8) & 0xFF, ring & 0xFF);
-    assert!(
-        b > g && g > r,
-        "解析页环必须青蓝系（b 主导），实测 #{ring:06x}"
-    );
-    // X 平移：off=+137 → 左缘 137 列透明，可见列底色咬合
+    assert_ne!(ring, kfm_na::ui::accent::CARD_PAGE_BG, "边框环必须异于底色");
+    let mut b1 = vec![0u32; (w * h) as usize];
+    kfm_na::termview::paint_parser_page_chrome(&mut b1, w, h, inset, 0, acc_b);
+    assert_ne!(b1[ring_idx], ring, "accent 换了环色必须变（驱动钉）");
+    // 平移钉
     let k = 137i32;
     let mut bk = vec![0u32; (w * h) as usize];
-    kfm_na::termview::paint_parser_page_chrome(&mut bk, w, h, inset, k);
+    kfm_na::termview::paint_parser_page_chrome(&mut bk, w, h, inset, k, acc_a);
     let mid_row = &bk[((h / 2) * w) as usize..((h / 2) * w + w) as usize];
     assert!(
         mid_row[..k as usize].iter().all(|&p| p == 0),
@@ -2930,16 +2919,11 @@ fn spec_pt页底装修_平移与色相钉() {
     );
     assert_eq!(
         mid_row[(k as usize) + 100],
-        kfm_na::termview::PT_PAGE_BG,
+        kfm_na::ui::accent::CARD_PAGE_BG,
         "平移后可见区底色必须咬合"
     );
     // 完全屏外不落墨
     let mut bw = vec![0u32; (w * h) as usize];
-    kfm_na::termview::paint_parser_page_chrome(&mut bw, w, h, inset, w as i32);
-    assert!(bw.iter().all(|&p| p == 0), "off=+w 必须零墨");
-    // 常量色相自钉（渐变两端都须青蓝系 b 主导，防配方改漂）
-    for c in [kfm_na::termview::PT_FRAME_C1, kfm_na::termview::PT_FRAME_C2] {
-        let (r, g, b) = ((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF);
-        assert!(b > g && g > r, "解析页渐变端色必须青蓝系，实测 #{c:06x}");
-    }
+    kfm_na::termview::paint_parser_page_chrome(&mut bw, w, h, inset, w as i32, acc_a);
+    assert!(bw.iter().all(|&p| p == 0), "完全屏外必须零墨");
 }

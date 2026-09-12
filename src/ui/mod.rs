@@ -11,6 +11,7 @@
 //! seam/fx_spring/fx_ease/stage 是采样缝、动画件与图层状态机
 //! （ui-base.md §三/§五/§八），不属控件不登记 registry。ai_page 是对话
 //! 页视口状态机（期 0④），纯逻辑无视图，同样不登记。
+pub mod accent;
 pub mod ai_page;
 pub mod fx_ease;
 pub mod fx_spring;

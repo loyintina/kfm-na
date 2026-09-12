@@ -7,6 +7,21 @@
 
 ## 当前位置（2026-09-05)
 
+- **随机 accent 落地（2026-09-12 下午，宪法 §2.2 首个兑现）**：三公民
+  页面（文件树/解析/配置）边框环色从固定色改**召唤即随机**——新模块
+  `src/ui/accent.rs`（kfmv4 `_generateRandomAccents` 约束区间 HSL 移植：
+  c1 随机 0–360°、c2 偏 ±30–120°、sat 45–70/lit 50–65 双色共享，
+  xorshift64* 零依赖；底色统一 CARD_PAGE_BG 深底不随 accent）。接线：
+  presence Inner 存三对 accent + `regen_accent` 挂 summon_locked（召唤
+  重随/挤出不随/反向重开结构性沿用）；**accent 三对随 PresenceSnap
+  同行**（壳层 paint_under/draw_frame_gles 是静态装配无 self，快照是
+  唯一读数口——首版闭包直读 self 在服务器 clippy 绿、手机 chain 红：
+  android cfg 代码只编安卓目标，服务器检查覆盖不到，手机闸兜住）；
+  涂装三函数改 accent 入参；GLES 烘焙 sig 加 c1/c2 两维（漏维=满屏
+  旧色）；gate 值守倒帧同源。
+  考题：accent_spec 四钉（区间/确定性/端点互证/零种子兜底）+
+  ai_presence_spec 召唤即随机钉 + termview 三涂装题改 accent 驱动钉
+  （换 accent 必变色——变异：写死常量即红）。
 - **四公民落地+设置页独立化（2026-09-12 晚，用户拍板语义规格逐臂钉死后实现）**：
   解析页（Panel::Parser）升第四面板公民 + 设置页（配置面板）退出滑槽改
   齿轮单入口。改动面：seam 第五道 `parser_panel_offset_x`（右缘家 +w 符号
