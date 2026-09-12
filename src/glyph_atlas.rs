@@ -319,6 +319,44 @@ pub fn grid_to_instances(
     out
 }
 
+/// 视口推移（viewport_push，2026-09-12 用户拍板「覆盖改平移+Q 弹」）：
+/// 实例整批仿射——绕 (cx, cy) 缩放 s 再平移 (dx, dy)。终端网格实例本就
+/// 每帧 CPU 重建（grid_to_instances 逐帧喂），推移只是生成后多过一道
+/// 变换，零额外上传零光栅。恒等（s=1 且无平移）早退零成本。uv/颜色
+/// 不动（同一张图集，同一墨色）
+pub fn push_bg_instances(inst: &mut [BgInstance], dx: f32, dy: f32, s: f32, cx: f32, cy: f32) {
+    if s == 1.0 && dx == 0.0 && dy == 0.0 {
+        return;
+    }
+    for i in inst {
+        i.x = cx + (i.x - cx) * s + dx;
+        i.y = cy + (i.y - cy) * s + dy;
+        i.w *= s;
+        i.h *= s;
+    }
+}
+
+/// 字形实例版（语义同 push_bg_instances；w/h/du/dv 的右缘裁剪在生成期
+/// 已折进几何，缩放只动四边形不动 UV——按比例缩样由纹理采样器完成）
+pub fn push_glyph_instances(
+    inst: &mut [GlyphInstance],
+    dx: f32,
+    dy: f32,
+    s: f32,
+    cx: f32,
+    cy: f32,
+) {
+    if s == 1.0 && dx == 0.0 && dy == 0.0 {
+        return;
+    }
+    for i in inst {
+        i.x = cx + (i.x - cx) * s + dx;
+        i.y = cy + (i.y - cy) * s + dy;
+        i.w *= s;
+        i.h *= s;
+    }
+}
+
 /// AI 页文字的 GPU 中立镜像（render_ai_page 画字段的纯数据版：布局/
 /// 视口/折行/右缘截断归收集方 ai_page_glyphs，这里只见结果——画在哪、
 /// 画什么字、哪个字体槽、什么颜色）。x 是笔位（xmin/off_y 归图集槽位

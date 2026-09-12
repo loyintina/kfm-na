@@ -2660,7 +2660,9 @@ impl App {
             term.render_keybar(buf, w, h, bottom_inset, mods);
         }
         // 三面板按 z_order 底→顶逐槽画（BAR-083 动者在上，调用方算好传入）。
-        // 被覆盖者 placement 冻结——遮盖撤走零动画露出（§五B）
+        // softbuffer 兜底路径保留旧「覆盖」语义（被覆盖者 placement 冻结、
+        // 遮盖撤走零动画露出）——视口推移只实装在 GLES 主路（2026-09-12，
+        // 兜底不再投入的既有档位，欠账记 state.md）
         for slot in z_order {
             match slot {
                 crate::ai_presence::Panel::Config => {
@@ -2885,7 +2887,8 @@ impl App {
         .max(0.0) as u32;
         // AI 面板 Y 偏移过缝（ui-base §三）：目标值 = AI 在栈 0 靠泊 /
         // 不在栈 -屏高屏外；无 ui-fx 占槽 = 直通目标值（硬切）。
-        // 被覆盖时 placement 冻结在靠泊位（§五B：遮盖撤走零动画露出）
+        // 被覆盖时自身 off 恒靠泊位（目标值只问栈），上方推移经
+        // viewport_push::covered_extra 合成期另加（§五B 2026-09-12 改写）
         let ai_page = ai_snap.is_some_and(|s| s.page == crate::ai_presence::Page::AiFullscreen);
         let panel_target = if ai_page { 0.0 } else { -(h as f32) };
         let panel_off = crate::ui::seam::sample_ai_panel_offset_y(
@@ -2950,6 +2953,46 @@ impl App {
             ) as i32,
         };
         let ft_fade = 1.0_f32;
+        // 视口推移 + Q 弹形变（2026-09-12 用户拍板，ui/viewport_push.rs）：
+        // 基座页（终端卡槽/网格实例/键行槽）随面板 off 平移+绕心缩放；
+        // 被压面板吃上方推移（交叉轴叠加 [配置,AI]：配置随 AI 下移）。
+        // off 已含缝采样与拖拽旁路——跟手期底页随动零新机制。
+        // §五B「被盖 placement 冻结」就此改写为「被压随动」：遮盖撤走
+        // 从「零动画露出」变成「随推移滑回」
+        let (vpush, p_max) =
+            crate::ui::viewport_push::viewport_push(panel_off, cfg_off, ft_off, w, h);
+        let squash = crate::ui::viewport_push::squash_sample(
+            crate::ui::viewport_push::squash_target(p_max),
+            crate::report::boot_ms() as u64,
+        );
+        let term_place = (vpush.dx, vpush.dy, 1.0 - squash);
+        let ai_extra = crate::ui::viewport_push::covered_extra(
+            &stack_vec,
+            Panel::Ai,
+            panel_off,
+            cfg_off,
+            ft_off,
+            w,
+            h,
+        );
+        let cfg_extra = crate::ui::viewport_push::covered_extra(
+            &stack_vec,
+            Panel::Config,
+            panel_off,
+            cfg_off,
+            ft_off,
+            w,
+            h,
+        );
+        let ft_extra = crate::ui::viewport_push::covered_extra(
+            &stack_vec,
+            Panel::FileTree,
+            panel_off,
+            cfg_off,
+            ft_off,
+            w,
+            h,
+        );
         let (ai_grid, panel_visible) = crate::termview::panel_split(panel_off, h);
         let (cfg_grid, cfg_visible) = crate::termview::cfg_split(cfg_off, w);
         let (ft_grid, ft_visible) = crate::termview::ft_split(ft_off, w);
@@ -3247,7 +3290,27 @@ impl App {
 
         // 5) 组合呈现（z 序见 present_frame——动者在上裁决两面板上下；
         // panel_off/panel_fade/cfg_off/cfg_fade 只进合成期 placement 与
-        // 显影，烘焙物不动）
+        // 显影，烘焙物不动。视口推移：基座实例过仿射（恒等早退），
+        // 面板 placement 加被压额外位移）
+        let (cx, cy) = (w as f32 / 2.0, h as f32 / 2.0);
+        crate::glyph_atlas::push_bg_instances(
+            &mut bg_inst,
+            vpush.dx,
+            vpush.dy,
+            term_place.2,
+            cx,
+            cy,
+        );
+        for page in &mut glyphs_by_page {
+            crate::glyph_atlas::push_glyph_instances(
+                page,
+                vpush.dx,
+                vpush.dy,
+                term_place.2,
+                cx,
+                cy,
+            );
+        }
         g.present_frame(
             &bg_inst,
             &glyphs_by_page,
@@ -3259,6 +3322,10 @@ impl App {
             ft_off,
             ft_fade,
             z_order,
+            term_place,
+            ai_extra.dy,
+            cfg_extra.dy,
+            ft_extra.dy,
         );
         ai_layout
     }

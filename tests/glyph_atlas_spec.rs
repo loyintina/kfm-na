@@ -384,6 +384,51 @@ fn spec_atlas_双字号类共存_同字符两套位图() {
     assert_eq!((again.u0, again.v0), (s1.u0, s1.v0), "同键幂等");
 }
 
+#[test]
+fn spec_push_实例推移_恒等早退与绕心缩放() {
+    use kfm_na::glyph_atlas::{BgInstance, push_bg_instances, push_glyph_instances};
+    let mk_bg = || BgInstance {
+        x: 100.0,
+        y: 200.0,
+        w: 18.0,
+        h: 36.0,
+        color: 7,
+    };
+    let mk_g = || kfm_na::glyph_atlas::GlyphInstance {
+        x: 100.0,
+        y: 200.0,
+        w: 18.0,
+        h: 36.0,
+        u0: 0.25,
+        v0: 0.5,
+        du: 0.01,
+        dv: 0.02,
+        fg: 9,
+        page: 1,
+    };
+    // 恒等早退：一字不动
+    let mut b = [mk_bg()];
+    push_bg_instances(&mut b, 0.0, 0.0, 1.0, 360.0, 640.0);
+    assert_eq!(b[0], mk_bg(), "恒等变换必须一字不动");
+    // 纯平移：s=1 时尺寸不动、坐标平移
+    let mut b = [mk_bg()];
+    push_bg_instances(&mut b, 30.0, -40.0, 1.0, 360.0, 640.0);
+    assert_eq!((b[0].x, b[0].y, b[0].w, b[0].h), (130.0, 160.0, 18.0, 36.0));
+    // 绕屏心缩放：屏心不动点，尺寸同比
+    let mut b = [mk_bg()];
+    push_bg_instances(&mut b, 0.0, 0.0, 0.5, 360.0, 640.0);
+    assert_eq!(b[0].x, 360.0 + (100.0 - 360.0) * 0.5, "绕心缩放 x");
+    assert_eq!(b[0].y, 640.0 + (200.0 - 640.0) * 0.5, "绕心缩放 y");
+    assert_eq!((b[0].w, b[0].h), (9.0, 18.0), "尺寸同比缩");
+    // 字形实例同规 + UV/颜色/页号不动（变异：动 UV → 此行红）
+    let mut g = [mk_g()];
+    push_glyph_instances(&mut g, 10.0, 20.0, 0.5, 360.0, 640.0);
+    assert_eq!(g[0].u0, 0.25);
+    assert_eq!(g[0].du, 0.01, "缩放不碰 UV 宽");
+    assert_eq!((g[0].fg, g[0].page), (9, 1));
+    assert_eq!(g[0].x, 360.0 + (100.0 - 360.0) * 0.5 + 10.0);
+}
+
 // 变异抽检（纪律：改坏答案看考题抓不抓得住）：
 // 1. ai_glyphs_to_instances 把 x 写成 g.x（漏加 off_x）→ spec_ai_inst_放置偏移 红
 // 2. misses 落实例不记键 → spec_ai_inst_放置偏移与未命中记键 红

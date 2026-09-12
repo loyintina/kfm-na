@@ -1002,7 +1002,11 @@ impl GlesPresent {
     /// 「动者在上」三公民泛化：动画/拖拽中的面板压顶，双静止跟栈序）；
     /// AI 文字是 AI 面板的墨，必须紧跟 AI 面板槽画（别家在顶时压在 AI
     /// 文字上）。槽画布由调用方置脏烘焙（slot_bake），未烘焙的槽不上屏
-    /// （不完整纹理=黑屏案）
+    /// （不完整纹理=黑屏案）。
+    /// 2026-09-12 视口推移（viewport_push）：panel/cfg/ft 三 placement 是
+    /// 调用方算好的**终值**（off + 被压额外位移）；term_place =
+    /// 基座页（终端卡槽+键行槽+网格实例）的 (dx, dy, scale)——
+    /// 网格实例的仿射在调用方（glyph_atlas::push_*），这里只管两槽
     #[allow(clippy::too_many_arguments)]
     pub fn present_frame(
         &mut self,
@@ -1016,6 +1020,10 @@ impl GlesPresent {
         ft_off: i32,
         ft_alpha: f32,
         z_order: [crate::ai_presence::Panel; 3],
+        term_place: (f32, f32, f32),
+        panel_dy_extra: f32,
+        cfg_dy_extra: f32,
+        ft_dy_extra: f32,
     ) {
         let t0_draw = std::time::Instant::now();
         // CPU 画布直接测量（rgb 非零计数 + 样本原值）——「画没画」的铁证
@@ -1052,11 +1060,14 @@ impl GlesPresent {
             gl.clear(glow::COLOR_BUFFER_BIT);
             gl.disable(glow::BLEND);
 
-            // 终端卡片壳槽（最底层：clear 之后、网格实例之前。恒靠泊
-            // 零 placement——壳内芯 TERM_CARD_BG 是默认底色格的透出底，
-            // 与 softbuffer 路径 render_into 的清屏+壳+网格同构）
+            // 终端卡片壳槽（最底层：clear 之后、网格实例之前。视口推移
+            // 2026-09-12：placement 跟 term_place（dx, dy, scale）——
+            // 面板进场的推移/形变与网格实例同参；恒等时与旧零 placement
+            // 逐像素等价。壳内芯 TERM_CARD_BG 是默认底色格的透出底）
             let tc = &self.layers[ChromeSlot::TermCard as usize];
             if tc.visible && tc.baked {
+                let (tdx, tdy, ts) = term_place;
+                let (fw, fh) = (self.w as f32, self.h as f32);
                 gl.enable(glow::BLEND);
                 gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
                 draw_slot_layer(
@@ -1065,10 +1076,10 @@ impl GlesPresent {
                     self.layer_vao,
                     self.layer_vbo,
                     tc.tex,
-                    0.0,
-                    0.0,
-                    self.w as f32,
-                    self.h as f32,
+                    tdx + (fw - fw * ts) / 2.0,
+                    tdy + (fh - fh * ts) / 2.0,
+                    fw * ts,
+                    fh * ts,
                     1.0,
                 );
                 gl.disable(glow::BLEND);
@@ -1101,19 +1112,22 @@ impl GlesPresent {
                 1.0,
             );
 
-            // 键行槽（面板未靠泊时可见；烘焙物常驻纹理，重现身零成本）
+            // 键行槽（面板未靠泊时可见；烘焙物常驻纹理，重现身零成本；
+            // 视口推移：与终端卡槽同 term_place——键行是终端页的家具）
             let kb = &self.layers[ChromeSlot::Keybar as usize];
             if kb.visible && kb.baked {
+                let (tdx, tdy, ts) = term_place;
+                let (fw, fh) = (self.w as f32, self.h as f32);
                 draw_slot_layer(
                     gl,
                     self.layer_prog,
                     self.layer_vao,
                     self.layer_vbo,
                     kb.tex,
-                    0.0,
-                    0.0,
-                    self.w as f32,
-                    self.h as f32,
+                    tdx + (fw - fw * ts) / 2.0,
+                    tdy + (fh - fh * ts) / 2.0,
+                    fw * ts,
+                    fh * ts,
                     1.0,
                 );
             }
@@ -1133,7 +1147,7 @@ impl GlesPresent {
                                 self.layer_vbo,
                                 cf.tex,
                                 cfg_off as f32,
-                                0.0,
+                                cfg_dy_extra,
                                 self.w as f32,
                                 self.h as f32,
                                 cfg_alpha,
@@ -1150,7 +1164,7 @@ impl GlesPresent {
                                 self.layer_vbo,
                                 ft.tex,
                                 ft_off as f32,
-                                0.0,
+                                ft_dy_extra,
                                 self.w as f32,
                                 self.h as f32,
                                 ft_alpha,
@@ -1170,7 +1184,7 @@ impl GlesPresent {
                                 self.layer_vbo,
                                 pn.tex,
                                 0.0,
-                                panel_off as f32,
+                                panel_off as f32 + panel_dy_extra,
                                 self.w as f32,
                                 self.h as f32,
                                 panel_alpha,
