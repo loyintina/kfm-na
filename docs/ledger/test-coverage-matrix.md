@@ -45,7 +45,7 @@
 | `src/trace.rs` | 12 | 8 | 4 | TRACE_CAP format_tail dump_all dump_tail |
 | `src/ui/accent.rs` | 6 | 5 | 1 | FALLBACK |
 | `src/ui/ai_page.rs` | 7 | 7 | 0 | — |
-| `src/ui/dual_pool.rs` | 11 | 11 | 0 | — |
+| `src/ui/dual_pool.rs` | 13 | 13 | 0 | — |
 | `src/ui/fx_ease.rs` | 10 | 10 | 0 | — |
 | `src/ui/fx_spring.rs` | 7 | 7 | 0 | — |
 | `src/ui/gear.rs` | 6 | 6 | 0 | — |

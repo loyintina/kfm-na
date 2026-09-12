@@ -3681,13 +3681,21 @@ impl App {
             g2.snap(crate::report::boot_ms() as u64)
         });
         // 配置卡双池快照（宪法 §五）：可用区按真实屏尺寸逐帧纠（与标签栏
-        // 同规）；骨架期上池内容恒 0 = 空占位（A2）
+        // 同规）；底内缘必须含键盘+输入栏带（漏算 = 下池顶穿页环，
+        // 2026-09-12 真机实踩）。锁序：先取 term 算栏带高再锁池——gate
+        // 倒帧是 term→pool，这里不许反向
         let pool_snap = self.dual_pool.as_ref().map(|p| {
+            let view = match (&self.window, &th) {
+                (Some(win), Some(t)) => {
+                    let sz = win.inner_size();
+                    let tg = t.lock().unwrap();
+                    let bar_h = Self::current_bar_h(&**tg, self.last_bar_snap.as_ref(), sz.width);
+                    (sz.width, sz.height, self.ime_bottom_px + bar_h)
+                }
+                _ => (720, 1280, 0),
+            };
             let mut g3 = p.lock().unwrap();
-            if let Some(win) = &self.window {
-                let sz = win.inner_size();
-                g3.set_viewport(sz.width, sz.height);
-            }
+            g3.set_viewport(view.0, view.1, view.2);
             g3.layout()
         });
         // GLES（2026-09-07 图层槽位版）：网格实例 → 键行槽 → 面板槽

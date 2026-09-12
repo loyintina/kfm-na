@@ -3016,13 +3016,14 @@ fn spec_cfg标签栏_涂装钉() {
 
 #[test]
 fn spec_cfg双池_涂装钉() {
-    // 宪法 §五（2026-09-12 骨架）：①上池/下池两枚二级卡框都有环墨；
-    // ②内卡渐变反转 c2→c1（§三 多级嵌套逐层反转——外壳页环 c1→c2）：
-    // 取样点逐像素判 lerp(c2,c1,t)，正转变异即红；③内芯 punch 回底；
-    // ④两池直接衔接（上池底缘墨与下池顶缘墨相邻无空行）；⑤accent 驱动
+    // 宪法 §五（2026-09-12 骨架；同日实测二标：池间距 1 格/左右各 2 格
+    // 内边距/空占位 4 格/圆角 = 卡片框 36 与光标分家）：①两枚二级卡框
+    // 都有环墨；②内卡渐变反转 c2→c1（§三）逐像素判，正转变异即红；
+    // ③内芯 punch 回底；④两池 1 格间距——上池底缘墨与下池顶缘墨之间
+    // 有净底行；⑤底内缘含 inset（下池不顶穿页环底）；⑥accent 驱动
     use kfm_na::termview::{POOL_FRAME_R, lerp_rgb};
-    use kfm_na::ui::dual_pool::{DualPool, POOL_EMPTY_H};
-    let (w, h) = (400u32, 500u32);
+    use kfm_na::ui::dual_pool::{DualPool, POOL_EMPTY_H, POOL_GAP};
+    let (w, h) = (400u32, 700u32);
     let inset = 120u32;
     let acc_a = kfm_na::ui::accent::AccentPair {
         c1: 0x00FF_6000,
@@ -3034,11 +3035,13 @@ fn spec_cfg双池_涂装钉() {
     };
     let bg = kfm_na::ui::accent::CARD_PAGE_BG;
     let tv = TermView::new(host_font(), None, 8, 2, CELL_W, CELL_H);
-    let pool = DualPool::new(400, 500);
+    let mut pool = DualPool::new(400, 700);
+    pool.set_viewport(400, 700, inset); // 与页环 chrome 同 inset（顶穿钉前提）
     let snap = pool.layout();
-    // 骨架期空占位：upper = (43,163,320,72)，lower = (43,235,320,210)
+    // 骨架期空占位：upper = (61,163,284,144)，lower = (61,343,284,182)
     assert_eq!(snap.upper.h, POOL_EMPTY_H, "夹具前提：骨架期上池空占位");
-    assert_eq!(POOL_FRAME_R, 16, "池框圆角与光标框同源（§六 禁手抄）");
+    assert_eq!(snap.upper.x, 61, "夹具前提：左右各 2 格内边距");
+    assert_eq!(POOL_FRAME_R, 36, "池框圆角 = 卡片框 36（光标 16 分家）");
 
     let mut b0 = vec![0u32; (w * h) as usize];
     termview::paint_cfg_page_chrome(&mut b0, w, h, inset, 0, acc_a);
@@ -3073,21 +3076,35 @@ fn spec_cfg双池_涂装钉() {
 
     // ③内芯 punch 回底
     assert_eq!(
-        b0[(uy + uh / 2) * w as usize + ux + 20],
+        b0[(uy + uh / 2) * w as usize + ux + 40],
         bg,
         "上池内芯必须 punch 回页底"
     );
 
-    // ④直接衔接：上池底缘墨（uy+uh−1）与下池顶缘墨（ly2）相邻
+    // ④池间距：上池底缘墨（uy+uh−1）与下池顶缘墨（ly2）之间是净底行
     assert_ne!(
         b0[(uy + uh - 1) * w as usize + ux + 100],
         bg,
         "上池底缘必须有墨"
     );
     assert_ne!(b0[ly2 * w as usize + ux + 100], bg, "下池顶缘必须有墨");
-    assert_eq!(uy + uh, ly2, "两池直接衔接无空行（§四 二层双框）");
+    assert_eq!(uy + uh + POOL_GAP as usize, ly2, "两池间距 = 1 格");
+    let gap_mid = uy + uh + POOL_GAP as usize / 2;
+    assert_eq!(
+        b0[gap_mid * w as usize + ux + 100],
+        bg,
+        "间距中带必须净底（两环辉光够不到中行）"
+    );
 
-    // ⑤accent 驱动：换 accent 同位必变色
+    // ⑤顶穿钉：下池底缘 = 页环底内缘之上（底内缘 = h − inset − 55）
+    let ring_bottom_inner = h as usize - inset as usize - 55;
+    assert_eq!(
+        ly2 + lh2,
+        ring_bottom_inner,
+        "下池底必须贴页环底内缘（含 inset）"
+    );
+
+    // ⑥accent 驱动：换 accent 同位必变色
     let mut b1 = vec![0u32; (w * h) as usize];
     termview::paint_cfg_page_chrome(&mut b1, w, h, inset, 0, acc_b);
     tv.paint_cfg_dual_pool(&mut b1, w, h, &snap, 0, acc_b);

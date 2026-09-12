@@ -4,23 +4,32 @@
 //! 条款兑现：首行布局区之下两个二级卡片，动态高度——
 //!   上池高 = min(上池内容高, H/2)（内容几行跟几行；多了不越半，超出
 //!     部分上池内滚动——滚动是内容的事，骨架只报 upper_scroll 旗）；
-//!   下池高 = H − 上池高（恒撑满剩余，内容少也撑到卡底）；
-//!   两池直接衔接无分隔线（§四 二层双框），与首行留 1 格标准间距；
-//!   上池空也占位（A2 拍板）：空内容按 2 格占位高计——池页切换时双池
-//!     高度生长动画需要它，骨架期占位就是全部内容。
+//!   下池高 = H − 上池高 − 池间距（恒撑满剩余，内容少也撑到卡底）；
+//!   两池间距 1 格（2026-09-12 实测修订：直接衔接太密），与首行留
+//!     1 格标准间距；
+//!   上池空也占位（A2 拍板）：空内容按 4 格占位高计（二标 2026-09-12：
+//!     2 格太矮）——池页切换时双池高度生长动画需要它。
 //!
-//! 下池内容高不参与布局（下池恒 = H − 上池高）——签名即契约。
+//! 下池内容高不参与布局（下池恒 = H − 上池 − 间距）——签名即契约。
+//!
+//! bottom_inset：池区底缘 = 页环底内缘，必须含键盘+输入栏带——漏算
+//! 下池顶穿页环/压键行（2026-09-12 真机实踩）。
 //!
 //! 时间戳/墙钟：本册零墙钟，纯函数+状态。
 
-use crate::termview::{AI_PAGE_FRAME_MARGIN, AI_PAGE_FRAME_W, CELL_H};
-use crate::ui::tab_bar::{TAB_ROW_H, content_origin, content_viewport_w};
+use crate::termview::{AI_PAGE_FRAME_MARGIN, AI_PAGE_FRAME_W, CELL_H, CELL_W};
+use crate::ui::tab_bar::{TAB_ROW_H, content_origin};
 
 /// 首行布局区 → 上池标准间距 = 1 格（§四 二层双框「与首行留标准间距」）
 pub const POOL_TOP_GAP: u32 = CELL_H;
-/// 上池空占位高 = 2 格（A2 拍板：占位不消失；2 格 = 一行池行高，
-/// §五 池行双行结构 = 2 格同尺）
-pub const POOL_EMPTY_H: u32 = CELL_H * 2;
+/// 两池间距 = 1 格（2026-09-12 实测修订：0 格直接衔接太密）
+pub const POOL_GAP: u32 = CELL_H;
+/// 池区左右内边距各 = 2 格（2026-09-12 实测拍板：1 格太窄——池是卡片，
+/// 不是标签栏那种贴缘内容带）
+pub const POOL_SIDE_PAD: u32 = CELL_W * 2;
+/// 上池空占位高 = 4 格（A2 拍板占位不消失；二标 2026-09-12：2 格太矮，
+/// 4 格 = 两行池行高）
+pub const POOL_EMPTY_H: u32 = CELL_H * 4;
 
 /// 池框矩形（x/y 可随面板平移由涂装侧加偏移；涂装/命中共用——眼手同尺）
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,17 +40,22 @@ pub struct PoolRect {
     pub h: u32,
 }
 
-/// 双池可用区（首行之下 → 卡底内缘）：x/w 与标签栏内容带同源（眼手
-/// 同尺：原点 43、右内缘 −37）；底内缘 = 屏底 − (MARGIN + 细缘 + 1 格)，
-/// 与内容原点 y = 55 上下对称
-pub fn pool_area(screen_w: u32, screen_h: u32) -> PoolRect {
-    let (ox, oy) = content_origin();
+/// 双池可用区（首行之下 → 页环底内缘）：左右各让 2 格内边距（左起自
+/// 粗环内缘、右止自细环内缘）；底内缘 = 屏底 − bottom_inset −
+/// (MARGIN + 细缘 + 1 格)——与页环底缘同尺（bottom_inset = 键盘 +
+/// 输入栏带，漏算 = 下池顶穿页环）
+pub fn pool_area(screen_w: u32, screen_h: u32, bottom_inset: u32) -> PoolRect {
+    let (_ox, oy) = content_origin();
+    let x = AI_PAGE_FRAME_MARGIN + AI_PAGE_FRAME_W * 3 + POOL_SIDE_PAD;
     let y = oy + TAB_ROW_H + POOL_TOP_GAP;
-    let bottom = screen_h.saturating_sub(AI_PAGE_FRAME_MARGIN + AI_PAGE_FRAME_W + CELL_H);
+    let bottom = screen_h
+        .saturating_sub(bottom_inset)
+        .saturating_sub(AI_PAGE_FRAME_MARGIN + AI_PAGE_FRAME_W + CELL_H);
+    let right = screen_w.saturating_sub(AI_PAGE_FRAME_MARGIN + AI_PAGE_FRAME_W + POOL_SIDE_PAD);
     PoolRect {
-        x: i64::from(ox),
+        x: i64::from(x),
         y: i64::from(y),
-        w: content_viewport_w(screen_w),
+        w: right.saturating_sub(x),
         h: bottom.saturating_sub(y),
     }
 }
@@ -65,12 +79,12 @@ impl DualPool {
     pub fn new(screen_w: u32, screen_h: u32) -> Self {
         DualPool {
             upper_content_h: 0,
-            area: pool_area(screen_w, screen_h),
+            area: pool_area(screen_w, screen_h, 0),
         }
     }
 
-    pub fn set_viewport(&mut self, screen_w: u32, screen_h: u32) {
-        self.area = pool_area(screen_w, screen_h);
+    pub fn set_viewport(&mut self, screen_w: u32, screen_h: u32, bottom_inset: u32) {
+        self.area = pool_area(screen_w, screen_h, bottom_inset);
     }
 
     pub fn set_upper_content_h(&mut self, h: u32) {
@@ -86,7 +100,7 @@ impl DualPool {
     }
 
     /// 布局（数学钉主体）：上池 = min(max(内容, 空占位), H/2)，
-    /// 下池 = H − 上池 直接衔接；upper_scroll = 内容被截断旗
+    /// 下池 = H − 上池 − 池间距；upper_scroll = 内容被截断旗
     pub fn layout(&self) -> DualPoolSnap {
         let h = self.area.h;
         let half = h / 2;
@@ -100,9 +114,9 @@ impl DualPool {
         };
         let lower = PoolRect {
             x: self.area.x,
-            y: self.area.y + i64::from(upper_h),
+            y: self.area.y + i64::from(upper_h + POOL_GAP),
             w: self.area.w,
-            h: h - upper_h,
+            h: h.saturating_sub(upper_h).saturating_sub(POOL_GAP),
         };
         DualPoolSnap {
             upper_scroll: self.upper_content_h > upper_h,

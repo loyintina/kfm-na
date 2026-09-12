@@ -240,10 +240,11 @@ pub fn dump_now(dir: &str) {
                             );
                         }
                         // 双池（宪法 §五）：D9 同源句柄取布局快照——值守
-                        // 倒帧与前台帧同一份双池读数。可用区按倒帧屏尺寸纠
+                        // 倒帧与前台帧同一份双池读数。可用区按倒帧屏尺寸纠，
+                        // 底内缘含输入栏带（与上行页环 chrome 同尺）
                         if let Some(pool) = crate::ui::dual_pool::dual_pool_handle() {
                             let mut p = pool.lock().unwrap();
-                            p.set_viewport(w, h);
+                            p.set_viewport(w, h, bar_h);
                             let ps = p.layout();
                             t.paint_cfg_dual_pool(
                                 &mut buf,
