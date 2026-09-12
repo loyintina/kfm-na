@@ -2953,19 +2953,16 @@ impl App {
             ) as i32,
         };
         let ft_fade = 1.0_f32;
-        // 视口推移 + Q 弹形变（2026-09-12 用户拍板，ui/viewport_push.rs）：
-        // 基座页（终端卡槽/网格实例/键行槽）随面板 off 平移+绕心缩放；
-        // 被压面板吃上方推移（交叉轴叠加 [配置,AI]：配置随 AI 下移）。
-        // off 已含缝采样与拖拽旁路——跟手期底页随动零新机制。
-        // §五B「被盖 placement 冻结」就此改写为「被压随动」：遮盖撤走
-        // 从「零动画露出」变成「随推移滑回」
-        let (vpush, p_max) =
+        // 视口推移（2026-09-12 用户拍板，ui/viewport_push.rs）：基座页
+        // （终端卡槽/网格实例/键行槽）随面板 off 平移；被压面板吃上方
+        // 推移（交叉轴叠加 [配置,AI]：配置随 AI 下移）。off 已含缝采样
+        // 与拖拽旁路——跟手期底页随动零新机制。§五B「被盖 placement
+        // 冻结」就此改写为「被压随动」：遮盖撤走从「零动画露出」变成
+        // 「随推移滑回」。Q 弹形变同日二审取消（实拍不合预期）——scale
+        // 恒 1.0，仿射管线保留
+        let (vpush, _p_max) =
             crate::ui::viewport_push::viewport_push(panel_off, cfg_off, ft_off, w, h);
-        let squash = crate::ui::viewport_push::squash_sample(
-            crate::ui::viewport_push::squash_target(p_max),
-            crate::report::boot_ms() as u64,
-        );
-        let term_place = (vpush.dx, vpush.dy, 1.0 - squash);
+        let term_place = (vpush.dx, vpush.dy, 1.0);
         let ai_extra = crate::ui::viewport_push::covered_extra(
             &stack_vec,
             Panel::Ai,

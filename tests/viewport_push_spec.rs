@@ -1,6 +1,7 @@
-//! viewport_push_spec.rs — 视口推移+Q 弹形变考题（2026-09-12 用户拍板：
-//! 面板交互从「覆盖」改「视口平移」，被挤走的页先轻微整体形变再出场，
-//! 回来时用弹簧「墩一下」。A 档纯逻辑，答案 src/ui/viewport_push.rs）。
+//! viewport_push_spec.rs — 视口推移考题（2026-09-12 用户拍板：面板交互
+//! 从「覆盖」改「视口平移」。A 档纯逻辑，答案 src/ui/viewport_push.rs）。
+//! Q 弹形变同日二审取消（实拍不合预期）——squash 机械与考题③④一并
+//! 退役，git 历史可查。
 //!
 //! 契约：
 //! ①推移纯函数——三面板 off（已含缝采样/拖拽旁路）唯一决定基座页位移：
@@ -8,17 +9,11 @@
 //!   面板全收（off 全在屏外位）= 基座回原位（零漂移）。
 //! ②被压面板额外位移 = 其上各面板推移之和（交叉轴叠加 [配置,AI]：
 //!   配置被 AI 压时随 AI 推移下移；顶面板永不受推）。
-//! ③形变目标：进度 0 → 不压；进度 ≥ RAMP → 压满 SQUASH_MAX；中间线性。
-//! ④Q 弹积分器：目标骤降时速度惯性带过零（scale 短暂 >1 = 回弹）；
-//!   目标恒定时有限步内收敛贴死（不许永动烧帧）。
 //! 变异抽检：①里把 push_y 写成 -（方向反）→ 题①红；②漏加上方面板 →
-//! 题②红；③clamp 删掉 → 题③红；④速度项丢 dt → 题④红。
+//! 题②红。
 
 use kfm_na::ai_presence::Panel;
-use kfm_na::ui::viewport_push::{
-    SQUASH_MAX, SQUASH_RAMP, covered_extra, squash_settled, squash_step, squash_target,
-    viewport_push,
-};
+use kfm_na::ui::viewport_push::{covered_extra, viewport_push};
 
 const W: u32 = 720;
 const H: u32 = 1280;
@@ -87,55 +82,4 @@ fn spec_被压面板_只吃上方面板的推移() {
     let e = covered_extra(&stack, Panel::Ai, offs.0, offs.1, offs.2, W, H);
     assert_eq!((e.dx, e.dy), (0.0, 0.0), "不在栈零额外");
     let _ = offs;
-}
-
-#[test]
-fn spec_形变目标_斜坡与饱和() {
-    assert_eq!(squash_target(0.0), 0.0, "没动不压");
-    assert_eq!(squash_target(SQUASH_RAMP), SQUASH_MAX, "斜坡顶压满");
-    assert_eq!(squash_target(1.0), SQUASH_MAX, "过斜坡恒压满（clamp）");
-    let half = squash_target(SQUASH_RAMP / 2.0);
-    assert!((half - SQUASH_MAX / 2.0).abs() < 1e-6, "斜坡中点线性");
-}
-
-#[test]
-fn spec_q弹_回弹过冲与收敛() {
-    // 场景：压满（s=SQUASH_MAX）后目标骤降 0（面板收尾部）——
-    // 欠阻尼惯性必须带 s 冲过 0（scale = 1-s 短暂 >1 = 「墩一下」）
-    let mut s = SQUASH_MAX;
-    let mut v = 0.0;
-    let mut overshot = false;
-    let mut steps = 0;
-    loop {
-        let (ns, nv) = squash_step(s, v, 0.0, 8); // 120Hz 帧步
-        s = ns;
-        v = nv;
-        steps += 1;
-        if s < -0.002 {
-            overshot = true; // 冲过零 ≥0.2% 屏尺 = 可感回弹
-        }
-        if squash_settled(s, v, 0.0) {
-            break;
-        }
-        assert!(steps < 500, "4 秒内必须收敛（500×8ms），不许永动");
-    }
-    assert!(overshot, "目标骤降必须过冲（Q 弹的「墩」），无过冲 = 硬");
-    assert!(s.abs() < 0.001, "收敛后贴死目标");
-    // 反向：从 0 追压满目标 = 平滑压缩不过冲过量（入场不「鼓包」）
-    let mut s = 0.0;
-    let mut v = 0.0;
-    let mut peak = 0.0_f32;
-    for _ in 0..500 {
-        let (ns, nv) = squash_step(s, v, SQUASH_MAX, 8);
-        s = ns;
-        v = nv;
-        peak = peak.max(s);
-        if squash_settled(s, v, SQUASH_MAX) {
-            break;
-        }
-    }
-    assert!(
-        peak <= SQUASH_MAX * 1.35,
-        "入场过冲不许超 35%（实际 {peak:.4}）——压缩是配角不是主角"
-    );
 }
