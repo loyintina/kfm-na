@@ -617,7 +617,9 @@ fn spec_终端卡片壳_默认底格透出壳内芯() {
     let buf_h = termview::MARGIN_TOP + termview::MARGIN_Y + 2 * CELL_H;
     let mut buf = vec![0u32; (buf_w * buf_h) as usize];
     tv.render_into(&mut buf, buf_w, buf_h, 0);
-    let (cx, cy) = cell_origin(4, 1, CELL_W, CELL_H);
+    // 取样格避开右上角的设置钮（2026-09-12 齿轮放大到 72px 后，
+    // 小缓冲里 (4,1) 格落入字形盒——控件浮文字上是设计语义，换 (2,1)）
+    let (cx, cy) = cell_origin(2, 1, CELL_W, CELL_H);
     let (cx, cy) = (
         cx + termview::MARGIN_X + CELL_W / 2,
         cy + termview::MARGIN_TOP + CELL_H / 2,
