@@ -69,9 +69,13 @@ pub const AI_PAGE_TOP: u32 = 48;
 pub const AI_PAGE_BOTTOM: u32 = 48;
 pub const AI_PAGE_LINE_H: u32 = 64;
 pub const AI_PAGE_PX: f32 = 40.0;
-/// 标签栏文字字号（宪法 §四，标定值 2026-09-12）：1 格行高（36）内
+/// 标签栏文字字号（宪法 §四，标定值 2026-09-12）：2 格行高（72）内
 /// 容 24 = 内嵌像素体 12px 的整数倍，网格原生不虚化
 pub const TAB_TEXT_PX: f32 = 24.0;
+/// 标签栏光标框圆角半径（2026-09-12 用户拍板：胶囊 36 → 小圆角偏方——
+/// kfmv4 文件树光标 R4:厚缘3 ≈ 1.33 比例，我们厚缘 9 → 12；
+/// 远小于短边一半时短边钳不参与，页环 36 不受影响）
+pub const TAB_CURSOR_R: u32 = 12;
 /// 思考块文字色（期 0④½）：比正文暗的灰紫——能读到思考在流，但不抢戏
 pub const AI_THINK_FG: u32 = 0x007E_7A9E;
 /// 收流后思考块的折叠占位行（2026-09-04 用户拍板：输出完自动折叠——
@@ -416,14 +420,28 @@ fn paint_page_frame_ring(
     let fy1 = i64::from(buf_h) - i64::from(bottom_inset) - i64::from(AI_PAGE_FRAME_MARGIN)
         + i64::from(off_y);
     // 页环不裁（clip 全宽——它自己就是边境）
-    paint_rect_ring(frame, fx0, fy0, fx1, fy1, 0, i64::MAX, bg, c1, c2);
+    paint_rect_ring(
+        frame,
+        fx0,
+        fy0,
+        fx1,
+        fy1,
+        0,
+        i64::MAX,
+        bg,
+        c1,
+        c2,
+        AI_PAGE_FRAME_R,
+    );
 }
 
 /// 圆角矩形边框环（2026-09-12 从页环抽核，配置卡标签栏光标框复用——
 /// 宪法 §六 样式唯一来源，禁止逐卡手抄）：先外发光，再 135° 渐变外环，
 /// 最后页面底色 punch 内芯（左缘让 9 = 3 倍粗，其余让 3）。
 /// clip_x0/x1 = X 向内容裁剪带（光标框横滚滑出内容带时不许污染页环带；
-/// 页环自己传 [0, i64::MAX] 不裁）。空态也画：框是装修不是内容
+/// 页环自己传 [0, i64::MAX] 不裁）。空态也画：框是装修不是内容。
+/// r_max = 调用方半径上限（页环 36 / 光标框 12——胶囊→小圆角偏方，
+/// 2026-09-12 用户拍板），仍按短边一半钳
 #[allow(clippy::too_many_arguments)]
 fn paint_rect_ring(
     frame: &mut Frame<'_>,
@@ -436,15 +454,16 @@ fn paint_rect_ring(
     bg: u32,
     c1: u32,
     c2: u32,
+    r_max: u32,
 ) {
     let (fw, fh) = ((fx1 - fx0) as u32, (fy1 - fy0) as u32);
     if fw < 2 || fh < 2 {
         return;
     }
     // 半径按短边钳（小矩形 = 体育场端帽——标签栏光标框 36px 高实踩：
-    // 早退拿满 R=36 判会把 1 格高的框整个吞掉）。页环尺寸下 rc==R
+    // 早退拿满 R=36 判会把 1 格高的框整个吞掉）。页环尺寸下 rc==r_max
     // 恒成立，老行为不变
-    let r = i64::from(AI_PAGE_FRAME_R).min((fw / 2).min(fh / 2) as i64);
+    let r = i64::from(r_max).min((fw / 2).min(fh / 2) as i64);
     if fx1 < fx0 + 2 * r || fy1 < fy0 + 2 * r {
         return;
     }
@@ -2174,6 +2193,7 @@ impl TermView {
             crate::ui::accent::CARD_PAGE_BG,
             accent.c1,
             accent.c2,
+            TAB_CURSOR_R,
         );
         // punch 内芯把选中标签文字盖掉了——补画一遍（框是装修，字是内容，
         // 内容必须在装修之上）
