@@ -593,17 +593,17 @@ fn paint_rect_ring(
     }
 }
 
-/// 功能光标开口框涂装（宪法 §三/§四 三修，2026-09-12；kfmv4
-/// `renderer.ts _drawCursorBorder` 复刻）：①绿青半透明底垫整个框体；
-/// ②左强调线 3px（向左突出 1.65px——亚像素用列覆盖率兑现，上下跳过
-/// 圆角区）；③左上/左下圆角 R=4 线宽沿弧渐变（角顶 3px→角尾 1px，
-/// SDF 弧带覆盖率抗锯齿）；④顶线/底线 1px 锚左，长度由调用方喂
-/// （cursor.rs 随机机制产物，涂装不自算）。**无右边、无发光、无
-/// punch**——开口框的观感本体就是「缺的那一边」。
-/// 与 kfmv4 的两处刻意偏差（描边层精度自由，§一）：发丝线画单行满 α
-/// 不跨边半透两行（我们的底垫就到框缘，跨出去会浮空）；左线列覆盖
-/// 取整像素带。clip_x0/x1 = X 向内容裁剪带（与标签文字同一条带，
-/// 眼手同尺：带外看不见也点不着）
+/// 功能光标开口框涂装（宪法 §三/§四 三修立、四修标定，2026-09-12；
+/// kfmv4 `renderer.ts _drawCursorBorder` 复刻 + NA 装修框同尺标定）：
+/// ①绿青半透明底垫整个框体；②左强调线 9px 画在**框内缘**（上下跳过
+/// 圆角区；kfmv4 的 1.65px 突出不移植——装修框左缘都在框内，光标同规，
+/// 与双池左框逐像素一线）；③左上/左下圆角 R=12 线宽沿弧渐变
+/// （角顶 9px→角尾 3px，SDF 弧带覆盖率抗锯齿）；④顶线/底线 3px 锚左
+/// （行带铺满 3 行），长度由调用方喂（cursor.rs 随机机制产物，涂装
+/// 不自算）。**无右边、无发光、无 punch**——开口框的观感本体就是
+/// 「缺的那一边」。
+/// clip_x0/x1 = X 向内容裁剪带（与标签文字同一条带，眼手同尺：
+/// 带外看不见也点不着；左线已收进框内，无需额外放宽）
 #[allow(clippy::too_many_arguments)]
 fn paint_open_cursor(
     frame: &mut Frame<'_>,
@@ -634,38 +634,40 @@ fn paint_open_cursor(
             frame.blend_px(ax as u32, ay as u32, bg, cur::BG_ALPHA);
         }
     }
-    // ②左强调线：[x0−1.65, x0+1.35) → 列覆盖率 0.65/1/1/0.35
-    for (cx, cov) in [(x0 - 2, 0.65f64), (x0 - 1, 1.0), (x0, 1.0), (x0 + 1, 0.35)] {
-        if cx < clip_x0 || cx >= clip_x1 || cx < 0 || cx >= fw {
-            continue;
-        }
-        let a = (f64::from(la) * cov) as u32;
+    // ②左强调线：框内缘 [x0, x0+9) 满 α，上下跳过圆角区
+    let lx1 = (x0 + cur::EMPHASIS_W).min(clip_x1).min(fw);
+    for cx in x0.max(clip_x0).max(0)..lx1 {
         for ay in (y0 + r).max(0)..(y1 - r).min(fh) {
-            frame.blend_px(cx as u32, ay as u32, line, a);
+            frame.blend_px(cx as u32, ay as u32, line, la);
         }
     }
-    // ③圆角（弧心 = 框缘内收 R；top=左上 3→1，false=左下 1→3）
+    // ③圆角（弧心 = 框缘内收 R；top=左上 9→3，false=左下 3→9）
     paint_cursor_arc(frame, x0, y0, r, true, clip_x0, clip_x1, line, la);
     paint_cursor_arc(frame, x0, y1, r, false, clip_x0, clip_x1, line, la);
-    // ④发丝线（锚左，单行满 α——刻意偏差见函数头）
-    let hair = |hx0: i64, len: i64, hy: i64, frame: &mut Frame<'_>| {
-        if len <= 0 || hy < 0 || hy >= fh {
+    // ④细线（3px 锚左，行带铺满 HAIR_W 行）
+    let hair = |hx0: i64, len: i64, hy0: i64, frame: &mut Frame<'_>| {
+        if len <= 0 {
             return;
         }
         let sx = (hx0 + r).max(clip_x0).max(0);
         let ex = (hx0 + r + len).min(clip_x1).min(fw);
-        for ax in sx..ex {
-            frame.blend_px(ax as u32, hy as u32, line, la);
+        for hy in hy0..hy0 + cur::HAIR_W {
+            if hy < 0 || hy >= fh {
+                continue;
+            }
+            for ax in sx..ex {
+                frame.blend_px(ax as u32, hy as u32, line, la);
+            }
         }
     };
     hair(x0, top_w, y0, frame);
-    hair(x0, bot_w, y1 - 1, frame);
+    hair(x0, bot_w, y1 - cur::HAIR_W, frame);
 }
 
 /// 开口光标圆角弧（paint_open_cursor 的件）：弧带 SDF 覆盖率，线宽
 /// 沿角渐变。edge_y = 弧所在框缘（top=上缘，弧心 y0+R；否则下缘，
 /// 弧心 y1−R）；弧只画圆心左侧象限（dx≤0），角度归一后左上弧
-/// [π, 3π/2] 宽 3→1、左下弧 [π/2, π] 宽 1→3
+/// [π, 3π/2] 宽 9→3、左下弧 [π/2, π] 宽 3→9
 #[allow(clippy::too_many_arguments)]
 fn paint_cursor_arc(
     frame: &mut Frame<'_>,
@@ -706,7 +708,7 @@ fn paint_cursor_arc(
             if dx > 0.0 || (top && dy > 0.0) || (!top && dy < 0.0) {
                 continue;
             }
-            // 角度归一 [0, 2π)：左上弧 π→3π/2 宽 3→1；左下弧 π/2→π 宽 1→3
+            // 角度归一 [0, 2π)：左上弧 π→3π/2 宽 9→3；左下弧 π/2→π 宽 3→9
             let mut ang = dy.atan2(dx);
             if ang < 0.0 {
                 ang += 2.0 * std::f64::consts::PI;
@@ -716,11 +718,11 @@ fn paint_cursor_arc(
             } else {
                 (ang - std::f64::consts::FRAC_PI_2) / std::f64::consts::FRAC_PI_2
             };
-            let (w3, w1) = (cur::EMPHASIS_W as f64, cur::HAIR_W as f64);
+            let (w9, w3) = (cur::EMPHASIS_W as f64, cur::HAIR_W as f64);
             let wpx = if top {
-                w3 + (w1 - w3) * t
+                w9 + (w3 - w9) * t
             } else {
-                w1 + (w3 - w1) * t
+                w3 + (w9 - w3) * t
             };
             let dist = (dx * dx + dy * dy).sqrt();
             let cov = (wpx / 2.0 + 0.5 - (dist - rf).abs()).clamp(0.0, 1.0);
@@ -2296,11 +2298,10 @@ impl TermView {
         let clip_r =
             i64::from(w) - i64::from(AI_PAGE_FRAME_MARGIN + AI_PAGE_FRAME_W + CELL_W) + off;
         let rects = crate::ui::tab_bar::rects_of(&snap.tabs, snap.scroll_px);
-        // 功能光标开口框（宪法 §三/§四 三修）先画：底垫+三线在文字之下
-        // （内容在装修之上；开口框无 punch，文字一遍画成无需补画）。
-        // 颜色固定 token 蓝绿组，不吃 accent（功能光标 vs 装修框分家）。
-        // 左裁剪带放宽 PROTRUDE 上取整 px：左线突出 1.65px 是装饰性的，
-        // 落进内容带左缘的 1 格 padding 里，不进命中不违眼手同尺
+        // 功能光标开口框（宪法 §三/§四 三修立、四修标定）先画：底垫+三线
+        // 在文字之下（内容在装修之上；开口框无 punch，文字一遍画成无需
+        // 补画）。颜色固定 token 蓝绿组，不吃 accent（功能光标 vs 装修框
+        // 分家）。裁剪带与文字同源——左线已收进框内缘（四修），无需放宽
         let sel = &rects[snap.selected];
         let cx = snap.cursor_x as i64 + off;
         paint_open_cursor(
@@ -2311,7 +2312,7 @@ impl TermView {
             i64::from(sel.h),
             snap.cursor_top_w,
             snap.cursor_bot_w,
-            clip_l - crate::ui::cursor::PROTRUDE.ceil() as i64,
+            clip_l,
             clip_r,
             self.theme.cursor.line,
             self.theme.cursor.bg,

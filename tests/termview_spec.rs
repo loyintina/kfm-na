@@ -2930,10 +2930,11 @@ fn spec_pt页底装修_accent与平移钉() {
 
 #[test]
 fn spec_cfg标签栏_涂装钉() {
-    // 宪法 §三/§四（2026-09-12 三修，功能光标开口框）：
+    // 宪法 §三/§四（2026-09-12 四修标定，功能光标开口框）：
     // ①标签行带内有文字墨（标签不是空色块）；
-    // ②开口形态——左强调线有墨 / 右缘无墨（内芯=底垫、框外=页底）/
-    //   顶底线长逐像素 = 快照线长（眼手同尺，涂装照抄不许自算）；
+    // ②开口形态——左强调线 9px 带画框内缘有墨 / 右缘无墨（内芯=底垫、
+    //   框外=页底）/ 顶底线 3px 厚、长逐像素 = 快照线长（眼手同尺，
+    //   涂装照抄不许自算）；
     // ③固定 token 色——换 accent 光标像素逐位不变（变异：吃 accent
     //   即红）；线色蓝青（B 高 R 低）；
     // ④底垫钉——内芯非字区 = blend(绿青, 页底, 38) 精确事后色；
@@ -2962,16 +2963,18 @@ fn spec_cfg标签栏_涂装钉() {
     let tv = TermView::new(host_font(), None, 8, 2, CELL_W, CELL_H);
     let bar = kfm_na::ui::tab_bar::TabBar::new(&["API", "B"], 320);
     let snap = bar.snap(0);
-    // 游标初态 = 标签 0：x=43, oy=55, w=90, h=72（咬格钉同源读数，行高 2 格）
-    let (cx, oy, cw) = (43usize, 55usize, 90usize);
+    // 游标初态 = 标签 0：x=61, oy=55, w=90, h=72（咬格钉同源读数，行高 2 格）
+    let (cx, oy, cw) = (61usize, 55usize, 90usize);
     let mid_y = oy + 36;
 
     let mut b0 = vec![0u32; (w * h) as usize];
     termview::paint_cfg_page_chrome(&mut b0, w, h, inset, 0, acc_a);
     tv.paint_cfg_tab_bar(&mut b0, w, h, &snap, 0, acc_a);
 
-    // ②左强调线：中带行 cx-1 列满 α 墨（异于底垫/页底），cx+2 已只剩底垫
-    let left_line = b0[mid_y * w as usize + cx - 1];
+    // ②左强调线：中带行 [cx, cx+9) 满 α 墨（带心 cx+4 / 带尾 cx+8，
+    // 变异 EW=3 带尾回底垫必红），cx+9 已只剩底垫，cx-1 必须页底
+    // （左线画框内缘不出框——四修标定，与双池左框逐像素一线）
+    let left_line = b0[mid_y * w as usize + cx + 4];
     assert_ne!(left_line, pad, "左强调线必须有墨");
     assert_ne!(left_line, bg, "左强调线必须有墨");
     let (lr, lb) = ((left_line >> 16) & 0xFF, left_line & 0xFF);
@@ -2979,10 +2982,20 @@ fn spec_cfg标签栏_涂装钉() {
         lb > 0x80 && lr < 0x40,
         "线色必须蓝青（token #00D4FF 族）——{left_line:#010x}"
     );
-    assert_eq!(
-        b0[mid_y * w as usize + cx + 2],
+    assert_ne!(
+        b0[mid_y * w as usize + cx + 8],
         pad,
-        "左线 3px 带以右必须只剩底垫（无左粗渐变框的 9px 带了）"
+        "左线 9px 带尾也必须有墨（变异 EW=3 必红）"
+    );
+    assert_eq!(
+        b0[mid_y * w as usize + cx + 9],
+        pad,
+        "左线 9px 带以右必须只剩底垫"
+    );
+    assert_eq!(
+        b0[mid_y * w as usize + cx - 1],
+        bg,
+        "左线画框内缘不出框（四修：kfmv4 的 1.65px 突出不移植）"
     );
     // ②右缘无墨：框内右缘 = 底垫，框外右邻 = 页底（开口框没有右边）
     assert_eq!(
@@ -2995,11 +3008,13 @@ fn spec_cfg标签栏_涂装钉() {
         bg,
         "框外右邻必须页底（底垫不外溢）"
     );
-    // ②顶/底线长逐像素 = 快照线长（眼手同尺）：从 cx+4 起连续异于
-    // 底垫的行墨，长度必须 == snap 字段；线尾之后回底垫
+    // ②顶/底线长逐像素 = 快照线长（眼手同尺）：从 cx+CORNER_R(=12) 起
+    // 连续异于底垫的行墨，长度必须 == snap 字段；线尾之后回底垫。
+    // 厚度钉：行带铺满 HAIR_W=3 行（oy+2 行同长；oy+3 行回底垫——
+    // 变异 HAIR=1 时 oy+2 行零墨必红）
     let run = |buf: &[u32], y: usize| {
         let mut n = 0i64;
-        while buf[y * w as usize + cx + 4 + n as usize] != pad {
+        while buf[y * w as usize + cx + 12 + n as usize] != pad {
             n += 1;
         }
         n
@@ -3010,9 +3025,24 @@ fn spec_cfg标签栏_涂装钉() {
         "顶线像素长必须 = 快照 cursor_top_w（涂装不自算）"
     );
     assert_eq!(
+        run(&b0, oy + 2),
+        snap.cursor_top_w,
+        "顶线行带必须铺满 3 行（oy+2 行同长；变异 HAIR=1 必红）"
+    );
+    assert_eq!(
+        b0[(oy + 3) * w as usize + cx + 20],
+        pad,
+        "顶线行带第 4 行必须回底垫（厚度恰好 3 行）"
+    );
+    assert_eq!(
         run(&b0, oy + 71),
         snap.cursor_bot_w,
         "底线像素长必须 = 快照 cursor_bot_w"
+    );
+    assert_eq!(
+        run(&b0, oy + 69),
+        snap.cursor_bot_w,
+        "底线行带必须铺满 3 行（锚框底向上铺；变异 HAIR=1 必红）"
     );
     assert!(snap.cursor_top_w > 0, "夹具前提：定种子初态有顶线");
 
@@ -3022,13 +3052,13 @@ fn spec_cfg标签栏_涂装钉() {
     termview::paint_cfg_page_chrome(&mut b1, w, h, inset, 0, acc_b);
     tv.paint_cfg_tab_bar(&mut b1, w, h, &snap, 0, acc_b);
     assert_eq!(
-        b1[mid_y * w as usize + cx - 1],
+        b1[mid_y * w as usize + cx + 4],
         left_line,
         "accent 换了左线色也必须不变（固定 token 色）"
     );
     assert_eq!(
-        b1[oy * w as usize + cx + 10],
-        b0[oy * w as usize + cx + 10],
+        b1[oy * w as usize + cx + 20],
+        b0[oy * w as usize + cx + 20],
         "accent 换了顶线色也必须不变"
     );
 

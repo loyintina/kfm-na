@@ -45,6 +45,14 @@ pub fn content_origin() -> (u32, u32) {
     )
 }
 
+/// 标签行原点 x（宪法 §四 四修 左缘对齐条款）：= 双池左框左缘
+/// （环粗左缘 + 2 格内边距，与 dual_pool pool_area 的 x 同源同值）——
+/// 光标左粗线与上下双池左框逐像素一线。内容带/命中带仍用
+/// content_origin（43），标签行整体右让 1 格是对齐不是缩带
+pub fn tab_row_origin_x() -> u32 {
+    AI_PAGE_FRAME_MARGIN + AI_PAGE_FRAME_W * 3 + CELL_W * 2
+}
+
 /// 标签行带命中（仲裁边界）：y ∈ [oy, oy+1格)。x 不设限——行带是横滑区，
 /// 整个行高带上的手势都归标签栏（滑动不穿透给面板拖拽）
 pub fn in_row(y: f64) -> bool {
@@ -99,7 +107,7 @@ impl TabBar {
             selected: 0,
             scroll_px: 0,
             viewport_w,
-            cursor_from: content_origin().0 as f32,
+            cursor_from: tab_row_origin_x() as f32,
             cursor_start_ms: 0,
             rng,
             geom,
@@ -126,9 +134,10 @@ impl TabBar {
         rects_of(&self.tabs, self.scroll_px)
     }
 
-    /// 未加 scroll 的基准 x（select 可见性/光标目标的计算尺）
+    /// 未加 scroll 的基准 x（select 可见性/光标目标的计算尺）；
+    /// 起点 = 标签行原点 61（四修 左缘对齐，§四）
     fn base_x(&self, i: usize) -> i64 {
-        let ox = content_origin().0 as i64;
+        let ox = tab_row_origin_x() as i64;
         self.tabs[..i].iter().fold(ox, |x, t| {
             x + ((text_cells(t) + 2) * CELL_W) as i64 + TAB_GAP as i64
         })
@@ -148,9 +157,10 @@ impl TabBar {
     }
 
     fn min_scroll(&self) -> i64 {
-        // 内容右缘（原点 ox + 总宽）对齐视口右缘为下限——漏算 ox 会让
-        // 末标签尾巴永远停在视口外（钉④⑤实踩）
-        (self.viewport_w as i64 - content_origin().0 as i64 - self.content_w() as i64).min(0)
+        // 内容右缘（标签行原点 + 总宽）对齐视口右缘为下限——漏算原点
+        // 会让末标签尾巴永远停在视口外（钉④⑤实踩）；四修：原点从
+        // 内容带 43 换标签行 61（左缘对齐条款），公式同构换尺
+        (self.viewport_w as i64 - tab_row_origin_x() as i64 - self.content_w() as i64).min(0)
     }
 
     /// 命中标签（y 先过行带闸，x 查 scroll 平移后的矩形）
@@ -242,10 +252,11 @@ pub struct TabBarSnap {
 }
 
 /// 标签矩形序列（自由函数版：涂装侧从快照算，状态侧从 self 算——
-/// 同一实体，眼手同尺）
+/// 同一实体，眼手同尺）。x 起点 = 标签行原点 61（四修 左缘对齐）；
+/// y 仍取内容原点行（55）
 pub fn rects_of(tabs: &[String], scroll_px: i64) -> Vec<TabRect> {
-    let (ox, oy) = content_origin();
-    let mut x = ox as i64 + scroll_px;
+    let oy = content_origin().1;
+    let mut x = tab_row_origin_x() as i64 + scroll_px;
     tabs.iter()
         .map(|t| {
             let w = (text_cells(t) + 2) * CELL_W;

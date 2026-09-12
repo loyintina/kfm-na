@@ -12,18 +12,32 @@
 use kfm_na::termview::{CELL_H, CELL_W};
 use kfm_na::ui::tab_bar::{TabBar, content_origin, in_row, text_cells};
 
-/// 钉①：咬格几何钉——单标签/双标签的矩形全按格钉死（原点、宽、间距）
+/// 钉①：咬格几何钉——单标签/双标签的矩形全按格钉死（原点、宽、间距）；
+/// 标签行原点 61 = 双池左框左缘（§四 四修对齐条款，跨源钉死防各自漂移）
 #[test]
 fn spec_tab_bar_咬格几何钉() {
+    use kfm_na::ui::tab_bar::tab_row_origin_x;
     let (ox, oy) = content_origin();
     assert_eq!(ox, 43, "内容原点 x = 环左内缘(16+9) + 1 格(18)");
     assert_eq!(oy, 55, "内容原点 y = 环上内缘(16+3) + 1 格(36)");
+    assert_eq!(
+        tab_row_origin_x(),
+        61,
+        "标签行原点 x = 环左内缘(16+9) + 2 格(36) = 双池左框左缘"
+    );
+    assert_eq!(
+        tab_row_origin_x(),
+        kfm_na::termview::AI_PAGE_FRAME_MARGIN
+            + kfm_na::termview::AI_PAGE_FRAME_W * 3
+            + kfm_na::ui::dual_pool::POOL_SIDE_PAD,
+        "眼手同尺：标签行原点与 dual_pool::pool_area 的 x 公式同源"
+    );
 
     let bar = TabBar::new(&["系统管理"], 720);
     let r = &bar.tab_rects()[0];
     assert_eq!(
         (r.x, r.y, r.w, r.h),
-        (43i64, 55i64, 10 * CELL_W, CELL_H * 2),
+        (61i64, 55i64, 10 * CELL_W, CELL_H * 2),
         "系统管理 = 8 文字格 + 2  padding 格，行高 2 格"
     );
 
@@ -31,7 +45,7 @@ fn spec_tab_bar_咬格几何钉() {
     let r2 = &bar2.tab_rects();
     assert_eq!(
         r2[1].x,
-        43i64 + (10 * CELL_W + CELL_W) as i64,
+        61i64 + (10 * CELL_W + CELL_W) as i64,
         "第二标签 = 前一标签尾 + 1 格间距"
     );
     assert_eq!(r2[1].w, 5 * CELL_W, "API = 3 文字格 + 2 padding 格");
@@ -47,34 +61,39 @@ fn spec_tab_bar_行带命中钉() {
     );
 
     let bar = TabBar::new(&["系统管理"], 720);
-    assert_eq!(bar.hit(50.0, 60.0), Some(0), "标签体命中");
+    assert_eq!(bar.hit(70.0, 60.0), Some(0), "标签体命中");
     assert_eq!(
-        bar.hit(43.0 + 180.0 + 5.0, 60.0),
+        bar.hit(50.0, 60.0),
+        None,
+        "标签行原点前的让位带不命中（61 起排，§四 四修）"
+    );
+    assert_eq!(
+        bar.hit(61.0 + 180.0 + 5.0, 60.0),
         None,
         "标签尾后间隙不命中"
     );
-    assert_eq!(bar.hit(50.0, 130.0), None, "行带下不命中");
+    assert_eq!(bar.hit(70.0, 130.0), None, "行带下不命中");
 }
 
 /// 钉③：select 弹簧钉——目标 = 新标签 x；从当前位置重定基；收敛贴死
 #[test]
 fn spec_tab_bar_select弹簧钉() {
     let mut bar = TabBar::new(&["系统管理", "API"], 720);
-    assert_eq!(bar.cursor_x(0), 43.0, "初态光标在标签 0");
+    assert_eq!(bar.cursor_x(0), 61.0, "初态光标在标签 0");
     bar.select(1, 1000);
     assert_eq!(bar.selected(), 1);
-    assert_eq!(bar.cursor_x(1000), 43.0, "切换瞬间从当前位置续弹（不跳变）");
+    assert_eq!(bar.cursor_x(1000), 61.0, "切换瞬间从当前位置续弹（不跳变）");
     let mid = bar.cursor_x(1150);
     assert!(
-        (mid - 43.0).abs() > 1.0,
+        (mid - 61.0).abs() > 1.0,
         "弹簧途中必须离开起点（过冲也算在路上）"
     );
-    assert_eq!(bar.cursor_x(1600), 241.0, "600ms 兜底贴死目标");
+    assert_eq!(bar.cursor_x(1600), 259.0, "600ms 兜底贴死目标");
     // 途中再切换 = 从途中位置重定基（不闪回起点）
     bar.select(0, 1150);
     let back = bar.cursor_x(1150);
     assert!(
-        (back - 43.0).abs() > 1.0,
+        (back - 61.0).abs() > 1.0,
         "途中反向 = 当前位置重定基（不回起点）"
     );
 }
@@ -88,8 +107,8 @@ fn spec_tab_bar_pan_clamp钉() {
     bar.pan(-10000.0);
     assert_eq!(
         bar.scroll_px(),
-        -((content_w + 43 - 200) as i64),
-        "左滚到底 = 内容右缘（含原点 43）对齐视口右缘"
+        -((content_w + 61 - 200) as i64),
+        "左滚到底 = 内容右缘（含原点 61）对齐视口右缘"
     );
     bar.pan(10000.0);
     assert_eq!(bar.scroll_px(), 0, "右滚回家即钳（不许正滚）");
@@ -179,13 +198,13 @@ fn spec_tab_bar_视口放宽钳钉() {
     bar.pan(-1000.0);
     assert_eq!(
         bar.scroll_px(),
-        300 - 43 - bar.content_w() as i64,
+        300 - 61 - bar.content_w() as i64,
         "夹具前提：窄视口滚到底（内容右缘贴视口右缘）"
     );
     bar.set_viewport_w(500);
     assert_eq!(
         bar.scroll_px(),
-        500 - 43 - bar.content_w() as i64,
+        500 - 61 - bar.content_w() as i64,
         "放宽后 scroll 钳到新下限"
     );
 }

@@ -45,7 +45,7 @@
 | `src/trace.rs` | 12 | 8 | 4 | TRACE_CAP format_tail dump_all dump_tail |
 | `src/ui/accent.rs` | 6 | 5 | 1 | FALLBACK |
 | `src/ui/ai_page.rs` | 7 | 7 | 0 | — |
-| `src/ui/cursor.rs` | 10 | 10 | 0 | — |
+| `src/ui/cursor.rs` | 9 | 9 | 0 | — |
 | `src/ui/dual_pool.rs` | 13 | 13 | 0 | — |
 | `src/ui/fx_ease.rs` | 10 | 10 | 0 | — |
 | `src/ui/fx_spring.rs` | 7 | 7 | 0 | — |
@@ -56,6 +56,6 @@
 | `src/ui/prompt_bar.rs` | 5 | 4 | 1 | row_of |
 | `src/ui/seam.rs` | 24 | 24 | 0 | — |
 | `src/ui/stage.rs` | 7 | 7 | 0 | — |
-| `src/ui/tab_bar.rs` | 24 | 24 | 0 | — |
+| `src/ui/tab_bar.rs` | 25 | 25 | 0 | — |
 | `src/ui/viewport_push.rs` | 2 | 2 | 0 | — |
 | `src/vsync_book.rs` | 20 | 15 | 5 | armed last_due_ms chain_dead mark_chain_dead last_ns |
