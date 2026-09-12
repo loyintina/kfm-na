@@ -1379,12 +1379,11 @@ fn spec_bar079_入场代_幂等退场露出不bump() {
 
 #[test]
 fn spec_bar079_tap_orb_覆盖再召唤_入场代bump() {
-    // 用户手势路径（实机 S3 翻车现场；2026-09-12 起配置页由设置钮
-    // summon_panel 召唤，左滑槽冻结）：点球召 AI → 设置钮召配置页盖住 →
+    // 用户手势路径（实机 S3 翻车现场）：点球召 AI → 左滑召配置页盖住 →
     // 再点球 = 被覆盖再召唤，必须 bump
     let ai = new_state();
     ai.tap_orb();
-    ai.summon_panel(Panel::Config);
+    ai.swipe_left();
     assert_eq!(ai.snap(0).covered, Some(Panel::Ai));
     ai.tap_orb();
     let s = ai.snap(0);
@@ -1429,19 +1428,17 @@ fn spec_panel_tap_orb_栈语义开关() {
 
 #[test]
 fn spec_panel_swipe_三公民六向契约() {
-    // 滑向契约（2026-09-12 重钉，用户两拍：配置页让位设置钮，左滑槽
-    // 冻结留给浏览器卡；文件树页也冻结，右滑召唤槽关闭——文件树公民
-    // 保留在栈模型里，测试用 summon_panel 直接入场）：
-    // swipe_left：顶=FileTree→推回左缘 / 其余→空操作；
-    // swipe_right：顶=Config→推回右缘 / 其余→空操作。
-    // 变异抽检：swipe_left 的 FileTree 臂删了 → 第 5 条红；左滑/右滑
-    // 召唤复活 → 第 1/4/6 条红。
+    // 滑向契约（§五B 2026-09-11 三公民落地）：swipe_left：顶=FileTree→
+    // 推回左缘 / 顶=Config→空操作（本家在顶，一滑一义）/ 否则召唤配置；
+    // swipe_right：顶=Config→推回右缘 / 顶=FileTree→空操作 / 否则召唤
+    // 文件树。任意栈态每个滑向有唯一归宿——无洞。
+    // 变异抽检：swipe_left 的 FileTree 臂删了 → 第 4 条红；swipe_right
+    // 召唤错公民 → 第 3 条红。
     let ai = new_state();
-    // 1. 终端页左滑 = 空操作（左滑槽冻结，浏览器卡解冻前无召唤目标）
+    // 1. 终端页左滑 = 召唤配置页（右缘家）
     ai.swipe_left();
-    assert_eq!(ai.snap(0).top, None, "左滑槽冻结：裸终端左滑零响应");
-    // 2. 配置页在顶（设置钮 summon_panel 召唤）左滑 = 空操作（幂等）
-    ai.summon_panel(Panel::Config);
+    assert_eq!(ai.snap(0).top, Some(Panel::Config));
+    // 2. 配置页在顶左滑 = 空操作（幂等不复制）
     ai.swipe_left();
     let s = ai.snap(0);
     assert_eq!(s.top, Some(Panel::Config));
@@ -1449,40 +1446,36 @@ fn spec_panel_swipe_三公民六向契约() {
     // 3. 配置页在顶右滑 = 推回右缘（来向），露终端
     ai.swipe_right();
     assert_eq!(ai.snap(0).top, None, "推回后露终端");
-    // 4. 终端页右滑 = 空操作（右滑槽冻结：文件树召唤关闭）
+    // 4. 终端页右滑 = 召唤文件树（左缘家）——v1 空操作态已消亡
     ai.swipe_right();
-    assert_eq!(ai.snap(0).top, None, "右滑槽冻结：裸终端右滑零响应");
-    // 5. 文件树在顶（冻结期只能 summon_panel 入场）右滑 = 空操作；
-    //    左滑 = 推回左缘，露终端
-    ai.summon_panel(Panel::FileTree);
+    assert_eq!(ai.snap(0).top, Some(Panel::FileTree));
+    // 5. 文件树在顶右滑 = 空操作；左滑 = 推回左缘，露终端
     ai.swipe_right();
     assert_eq!(ai.snap(0).top, Some(Panel::FileTree), "本家在顶幂等");
     ai.swipe_left();
     assert_eq!(ai.snap(0).top, None, "推回文件树露终端");
-    // 6. AI 页上：左滑 = 空操作；右滑 = 也是空操作（文件树槽冻结）
+    // 6. AI 页上两向各有归宿：左滑盖配置、右滑盖文件树
     ai.tap_orb();
     ai.swipe_left();
+    assert_eq!(ai.snap(0).top, Some(Panel::Config));
+    assert_eq!(ai.snap(0).covered, Some(Panel::Ai));
+    ai.swipe_right(); // 推回配置 → AI 露出
+    assert_eq!(ai.snap(0).top, Some(Panel::Ai));
+    ai.swipe_right(); // AI 顶右滑 = 召唤文件树盖之
     let s = ai.snap(0);
-    assert_eq!(s.top, Some(Panel::Ai), "AI 顶左滑零响应（左滑槽冻结）");
-    assert_eq!(s.covered, None);
-    ai.swipe_right();
-    let s = ai.snap(0);
-    assert_eq!(s.top, Some(Panel::Ai), "AI 顶右滑零响应（右滑槽冻结）");
-    assert_eq!(s.covered, None);
+    assert_eq!(s.top, Some(Panel::FileTree), "AI 顶右滑有归宿");
+    assert_eq!(s.covered, Some(Panel::Ai));
 }
 
 #[test]
 fn spec_panel_用户场景走查() {
-    // 2026-09-11 用户拍板原例（三公民版；2026-09-12 起配置由设置钮
-    // summon_panel 入场，左滑槽冻结；同日再拍文件树也冻结——走查里
-    // 文件树由 summon_panel 直接入场，手势槽不参与）：文件树顶；点球→AI
-    // 顶文件树被盖；设置钮→配置盖 AI、栈满两格文件树被静默挤出；右滑→
-    // 推回配置 AI 露出；点球→收 AI **直接露终端**（文件树早已出栈，
-    // 不许诈尸）
+    // 2026-09-11 用户拍板原例（三公民版）：终端右滑→文件树顶；点球→AI
+    // 顶文件树被盖；左滑→配置盖 AI、栈满两格文件树被静默挤出；右滑→推回
+    // 配置 AI 露出；点球→收 AI **直接露终端**（文件树早已出栈，不许诈尸）
     let ai = new_state();
-    ai.summon_panel(Panel::FileTree); // 文件树（冻结期 summon_panel 入场）
+    ai.swipe_right(); // 文件树
     ai.tap_orb(); // AI 顶，文件树被盖
-    ai.summon_panel(Panel::Config); // 设置钮：配置顶，AI 被盖，文件树挤出
+    ai.swipe_left(); // 配置顶，AI 被盖，文件树挤出
     let s = ai.snap(0);
     assert_eq!(s.top, Some(Panel::Config));
     assert_eq!(s.covered, Some(Panel::Ai));
@@ -1499,19 +1492,17 @@ fn spec_panel_用户场景走查() {
 // 再被召唤 = 重新入场（幂等坍缩语义），不是「恢复被盖位」
 #[test]
 fn spec_panel_三公民栈挤出_挤出者视同收起() {
-    // 2026-09-12 冻结修订：文件树入场全部走 summon_panel（手势槽冻结），
-    // 挤出语义本身不变。
     let ai = new_state();
-    ai.summon_panel(Panel::FileTree); // [FileTree]
+    ai.swipe_right(); // [FileTree]
     ai.tap_orb(); // [FileTree, Ai]
-    ai.summon_panel(Panel::Config); // 设置钮：满 → 挤 FileTree：[Ai, Config]
+    ai.swipe_left(); // 满 → 挤 FileTree：[Ai, Config]
     assert_eq!(ai.snap(0).covered, Some(Panel::Ai));
     assert_eq!(ai.snap(0).top, Some(Panel::Config));
-    // 文件树已出栈：此刻右滑顶=配置 = 推回配置
+    // 文件树已出栈：此刻右滑顶=配置 = 推回配置（不是召唤文件树）
     ai.swipe_right();
     assert_eq!(ai.snap(0).top, Some(Panel::Ai), "挤出不诈尸");
     // 再召唤文件树 = 重放顶（AI 被盖），不是回到被盖位
-    ai.summon_panel(Panel::FileTree);
+    ai.swipe_right();
     let s = ai.snap(0);
     assert_eq!(s.top, Some(Panel::FileTree));
     assert_eq!(s.covered, Some(Panel::Ai));
@@ -1569,7 +1560,7 @@ fn spec_panel_旧契约不破_tap_overlay_与浮层() {
     // 浮层可见性与栈正交：run_start 现、甩掉隐——面板栈不影响
     let ai2 = new_state();
     ai2.run_start(1000);
-    ai2.summon_panel(Panel::Config); // 设置钮路径（2026-09-12 起左滑不召配置）
+    ai2.swipe_left();
     assert!(ai2.snap(1000).overlay_visible, "配置页在顶浮层照样现");
 }
 

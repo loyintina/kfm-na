@@ -268,27 +268,31 @@ impl AiPresenceState {
         }
     }
 
-    /// 左滑（2026-09-12 重定，用户拍板）：配置页退出手势槽改按钮入口
-    /// （ui/gear.rs 设置钮），左滑槽冻结预留给浏览器卡（SPKE-web 解冻
-    /// 前无召唤目标 = 空操作）；顶是文件树 = 推回它的来向（左缘）
+    /// 左滑（三公民 §五B，2026-09-11）：顶是文件树 = 推回它的来向（左缘）；
+    /// 顶是配置 = 空操作（本家已在顶，一滑一义）；其余 = 召唤配置页
     pub fn swipe_left(&self) {
         let mut g = self.inner.lock().unwrap();
-        if g.stack.last() == Some(&Panel::FileTree) {
-            g.stack.pop();
+        match g.stack.last() {
+            Some(&Panel::FileTree) => {
+                g.stack.pop();
+            }
+            Some(&Panel::Config) => {}
+            _ => summon_locked(&mut g, Panel::Config),
         }
     }
 
     /// 右滑（三公民 §五B，2026-09-11）：顶是配置 = 推回它的来向（右缘）；
-    /// 顶是文件树 = 空操作（本家已在顶）。
-    /// 2026-09-12 用户拍板冻结：文件树页召唤槽关闭（面板公民保留，
-    /// 槽位留档——解冻即恢复 `_ => summon_locked(..FileTree)` 一支），
-    /// 冻结期其余栈态右滑 = 空操作。
+    /// 顶是文件树 = 空操作（本家已在顶）；其余 = 召唤文件树（右滑家落地，
+    /// 「顶=Ai 右滑零响应」的空操作态从此不存在）
     pub fn swipe_right(&self) {
         let mut g = self.inner.lock().unwrap();
-        if g.stack.last() == Some(&Panel::Config) {
-            g.stack.pop();
+        match g.stack.last() {
+            Some(&Panel::Config) => {
+                g.stack.pop();
+            }
+            Some(&Panel::FileTree) => {}
+            _ => summon_locked(&mut g, Panel::FileTree),
         }
-        // 冻结：右滑召唤文件树槽关闭（2026-09-12 用户拍板），其余栈态空操作
     }
 
     /// 面板在栈（顶或被覆盖）：渲染目标值语义——在栈 = 靠泊位，
