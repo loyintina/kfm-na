@@ -2930,15 +2930,15 @@ fn spec_pt页底装修_accent与平移钉() {
 
 #[test]
 fn spec_cfg标签栏_涂装钉() {
-    // 宪法 §三/§四（2026-09-13 五修，功能光标开口框）：
+    // 宪法 §四（2026-09-13 八修换案，填色标签页组件）：
     // ①标签行带内有文字墨（标签不是空色块）；
-    // ②开口形态——左强调线 8px 带画框内缘有墨 / 右缘无墨（内芯=底垫、
-    //   框外=页底）/ 顶底线 3px 厚、长逐像素 = 快照线长（眼手同尺，
-    //   涂装照抄不许自算）；
-    // ③渐变同源钉——线色 = 本页 accent 双色渐变与页环同尺采样（精确
-    //   事后色；换 accent 光标像素跟着变——变异：改回固定色即红）；
-    // ④底垫钉——内芯非字区 = blend(绿青, 页底, 38) 精确事后色；
-    // ⑤无浮空钉——框上一行零墨（发丝线单行不跨边，刻意偏差条款）
+    // ②标签块形态——选中 = accent 渐变满填（α255 页环同尺采样精确值），
+    //   未选中 = 6% 白薄填；上两角圆角（角外零墨）、下缘直边（末行靠左
+    //   有墨——变异：下缘也圆角必红）；
+    // ③底线钉——标签行下缘紧挨 1px 渐变细线，池区同宽、色向 = 内卡反转
+    //   c2→c1（精确采样值；单行不跨边、不越池区缘）；空态也画；
+    // ④渐变同源钉——换 accent 重画，选中块/底线像素跟着变（变异：改回
+    //   固定色即红）
     let (w, h) = (400u32, 500u32);
     let inset = 120u32;
     let acc_a = kfm_na::ui::accent::AccentPair {
@@ -2950,7 +2950,6 @@ fn spec_cfg标签栏_涂装钉() {
         c2: 0x00FF_00FF,
     };
     let bg = kfm_na::ui::accent::CARD_PAGE_BG;
-    let cur = kfm_na::theme::Theme::default().cursor;
     // blend 公式与 termview 私有 blend 逐字一致（事后色判卷尺）
     let blend = |fg: u32, dst: u32, a: u32| {
         let inv = 255 - a;
@@ -2959,172 +2958,143 @@ fn spec_cfg标签栏_涂装钉() {
             | (ch((fg >> 8) & 0xFF, (dst >> 8) & 0xFF) << 8)
             | ch(fg & 0xFF, dst & 0xFF)
     };
-    let pad = blend(cur.bg, bg, kfm_na::ui::cursor::BG_ALPHA); // 底垫事后色
     let tv = TermView::new(host_font(), None, 8, 2, CELL_W, CELL_H);
     let bar = kfm_na::ui::tab_bar::TabBar::new(&["API", "B"], 320);
     let snap = bar.snap(0);
-    // 游标初态 = 标签 0：x=61, oy=55, w=90, h=72（咬格钉同源读数，行高 2 格）
+    // 选中块初态 = 标签 0：x=61, oy=55, w=90, h=72（咬格钉同源读数，
+    // 行高 2 格）；标签 B：x=169（61+90+18 间距 1 格）
     let (cx, oy, cw) = (61usize, 55usize, 90usize);
+    let ux = 169usize;
     let mid_y = oy + 36;
 
     let mut b0 = vec![0u32; (w * h) as usize];
     termview::paint_cfg_page_chrome(&mut b0, w, h, inset, 0, acc_a);
     tv.paint_cfg_tab_bar(&mut b0, w, h, &snap, 0, inset, acc_a);
 
-    // ②左强调线：中带行 [cx, cx+8) 满 α 墨（带心 cx+4 / 带尾 cx+7，
-    // 变异 EW=3 带尾回底垫必红），cx+8 已只剩底垫，cx-1 必须页底
-    // （左线画框内缘不出框——四修/五修标定，与双池左框逐像素一线）
-    let left_line = b0[mid_y * w as usize + cx + 4];
-    assert_ne!(left_line, pad, "左强调线必须有墨");
-    assert_ne!(left_line, bg, "左强调线必须有墨");
-    assert_ne!(
-        b0[mid_y * w as usize + cx + 7],
-        pad,
-        "左线 8px 带尾也必须有墨（变异 EW=3 必红）"
-    );
-    assert_eq!(
-        b0[mid_y * w as usize + cx + 8],
-        pad,
-        "左线 8px 带以右必须只剩底垫"
-    );
-    assert_eq!(
-        b0[mid_y * w as usize + cx - 1],
-        bg,
-        "左线画框内缘不出框（四修：kfmv4 的 1.65px 突出不移植）"
-    );
-    // ②右缘无墨：框内右缘 = 底垫，框外右邻 = 页底（开口框没有右边）
-    assert_eq!(
-        b0[mid_y * w as usize + cx + cw - 1],
-        pad,
-        "框内右缘必须只剩底垫（开口框无右边）"
-    );
-    assert_eq!(
-        b0[mid_y * w as usize + cx + cw],
-        bg,
-        "框外右邻必须页底（底垫不外溢）"
-    );
-    // ②顶/底线长逐像素 = 快照线长（眼手同尺）：从 cx+CORNER_R(=12) 起
-    // 连续异于底垫的行墨，长度必须 == snap 字段；线尾之后回底垫。
-    // 厚度钉：行带铺满 HAIR_W=3 行（oy+2 行同长；oy+3 行回底垫——
-    // 变异 HAIR=1 时 oy+2 行零墨必红）
-    let run = |buf: &[u32], y: usize| {
-        let mut n = 0i64;
-        while buf[y * w as usize + cx + 12 + n as usize] != pad {
-            n += 1;
-        }
-        n
-    };
-    assert_eq!(
-        run(&b0, oy),
-        snap.cursor_top_w,
-        "顶线像素长必须 = 快照 cursor_top_w（涂装不自算）"
-    );
-    assert_eq!(
-        run(&b0, oy + 2),
-        snap.cursor_top_w,
-        "顶线行带必须铺满 3 行（oy+2 行同长；变异 HAIR=1 必红）"
-    );
-    assert_eq!(
-        b0[(oy + 3) * w as usize + cx + 20],
-        pad,
-        "顶线行带第 4 行必须回底垫（厚度恰好 3 行）"
-    );
-    assert_eq!(
-        run(&b0, oy + 71),
-        snap.cursor_bot_w,
-        "底线像素长必须 = 快照 cursor_bot_w"
-    );
-    assert_eq!(
-        run(&b0, oy + 69),
-        snap.cursor_bot_w,
-        "底线行带必须铺满 3 行（锚框底向上铺；变异 HAIR=1 必红）"
-    );
-    assert!(snap.cursor_top_w > 0, "夹具前提：定种子初态有顶线");
-
-    // ③渐变同源钉（五修）：线色 = 本页 accent 双色渐变与页环同一把
-    // 135° 尺采样——采样点事后色必须 = blend(渐变采样, 底垫, 178) 精确
-    // 值（眼手同尺：涂装与考题共读 ring_gradient_rgb 单源）；换 accent
-    // 重画，光标像素必须跟着变（变异：改回固定色即红）
+    // 页环同尺渐变框（涂装与考题共读 RingGradient/ring_gradient_rgb
+    // 单源）：屏 400×500 inset 120 边距 16 同源，分母 (368−1)+(348−1)
     let grad_a = kfm_na::termview::RingGradient {
         c1: acc_a.c1,
         c2: acc_a.c2,
         x0: 16,
         y0: 16,
-        // 页环分母 = (368−1)+(348−1)（屏 400×500 inset 120 边距 16 同源）
         denom: 714,
     };
-    let la = kfm_na::ui::cursor::LINE_ALPHA;
-    let want_left = blend(grad_a.sample((cx + 4) as i64, mid_y as i64), pad, la);
+
+    // ②选中标签块：中带行块内（避开字形区）= 渐变满填精确值（α255
+    // 直出）；上左角及角盒近角点 = 页底（上圆角裁外）；下缘末行靠左
+    // 有墨（下缘直边——变异：下缘也圆角则角盒点零墨必红）
     assert_eq!(
-        b0[mid_y * w as usize + cx + 4],
-        want_left,
-        "左线色必须 = 页环渐变同尺采样事后色（涂装与页环一把尺）"
+        b0[mid_y * w as usize + cx + 8],
+        grad_a.sample((cx + 8) as i64, mid_y as i64),
+        "选中块中带必须 = accent 渐变满填（页环同尺采样 α255）"
     );
-    let want_top = blend(grad_a.sample((cx + 20) as i64, oy as i64), pad, la);
+    assert_eq!(b0[oy * w as usize + cx], bg, "上左角外必须零墨（上圆角）");
     assert_eq!(
-        b0[oy * w as usize + cx + 20],
-        want_top,
-        "顶线色必须 = 页环渐变同尺采样事后色"
+        b0[(oy + 2) * w as usize + cx + 2],
+        bg,
+        "角盒近角点必须零墨（圆弧裁外；变异：上角直角化必红）"
     );
+    assert_eq!(
+        b0[oy * w as usize + cx + 18],
+        grad_a.sample((cx + 18) as i64, oy as i64),
+        "顶行弧尾以右必须有墨（圆角只吃角盒）"
+    );
+    assert_ne!(
+        b0[(oy + 71) * w as usize + cx + 2],
+        bg,
+        "下缘末行靠左必须有墨（下缘直边不圆角——变异：下缘圆角化必红）"
+    );
+
+    // ②未选中标签块：中带 = 6% 白薄填精确事后色（无渐变、无框）
+    assert_eq!(
+        b0[mid_y * w as usize + ux + 4],
+        blend(0x00FF_FFFF, bg, 15),
+        "未选中块必须 = 6% 白薄填（变异：不画/换色即红）"
+    );
+    assert_eq!(
+        b0[mid_y * w as usize + ux - 1],
+        bg,
+        "未选中块不外溢（块外即页底）"
+    );
+
+    // ③底线钉：uy = 标签行下缘紧挨 1px，池区同宽、不越缘；色向 =
+    // 内卡反转 c2→c1（精确采样值）；uy+1 行零墨（单行不跨边）
+    let pa = kfm_na::ui::dual_pool::pool_area(w, h, inset);
+    let uy = oy + 72;
+    let grad_inv_a = kfm_na::termview::RingGradient {
+        c1: acc_a.c2,
+        c2: acc_a.c1,
+        ..grad_a
+    };
+    assert_eq!(
+        b0[uy * w as usize + (pa.x + 4) as usize],
+        grad_inv_a.sample(pa.x + 4, uy as i64),
+        "底线色必须 = 反转色向（c2→c1）页环同尺采样（二级组件）"
+    );
+    assert_eq!(
+        b0[uy * w as usize + (pa.x + pa.w as i64 - 4) as usize],
+        grad_inv_a.sample(pa.x + pa.w as i64 - 4, uy as i64),
+        "底线必须铺满池区宽（右缘内 4px 也有墨）"
+    );
+    assert_eq!(
+        b0[uy * w as usize + (pa.x - 1) as usize],
+        bg,
+        "底线不越池区左缘"
+    );
+    assert_eq!(
+        b0[uy * w as usize + (pa.x + pa.w as i64) as usize],
+        bg,
+        "底线不越池区右缘"
+    );
+    assert_eq!(
+        b0[(uy + 1) * w as usize + (pa.x + 4) as usize],
+        bg,
+        "底线单行不跨边（uy+1 零墨）"
+    );
+    // 空态也画底线（装修不是内容，与页环同规）
+    let bar_empty = kfm_na::ui::tab_bar::TabBar::new(&[], 320);
+    let mut b2 = vec![0u32; (w * h) as usize];
+    termview::paint_cfg_page_chrome(&mut b2, w, h, inset, 0, acc_a);
+    tv.paint_cfg_tab_bar(&mut b2, w, h, &bar_empty.snap(0), 0, inset, acc_a);
+    assert_eq!(
+        b2[uy * w as usize + (pa.x + 4) as usize],
+        grad_inv_a.sample(pa.x + 4, uy as i64),
+        "空态也必须画底线（装修不是内容）"
+    );
+
+    // ④渐变同源钉：换 accent 重画，选中块与底线像素必须跟着变
     let mut b1 = vec![0u32; (w * h) as usize];
     termview::paint_cfg_page_chrome(&mut b1, w, h, inset, 0, acc_b);
     tv.paint_cfg_tab_bar(&mut b1, w, h, &snap, 0, inset, acc_b);
-    assert_ne!(
-        b1[mid_y * w as usize + cx + 4],
-        left_line,
-        "accent 换了左线色必须跟着变（变异：改回固定色即红）"
-    );
+    let grad_b = kfm_na::termview::RingGradient {
+        c1: acc_b.c1,
+        c2: acc_b.c2,
+        ..grad_a
+    };
     assert_eq!(
-        b1[mid_y * w as usize + cx + 4],
-        blend(
-            kfm_na::termview::RingGradient {
-                c1: acc_b.c1,
-                c2: acc_b.c2,
-                ..grad_a
-            }
-            .sample((cx + 4) as i64, mid_y as i64),
-            pad,
-            la
-        ),
-        "换 accent 后左线色也必须 = 新渐变同尺采样事后色"
+        b1[mid_y * w as usize + cx + 8],
+        grad_b.sample((cx + 8) as i64, mid_y as i64),
+        "换 accent 后选中块必须 = 新渐变同尺采样（变异：固定色即红）"
+    );
+    let grad_inv_b = kfm_na::termview::RingGradient {
+        c1: acc_b.c2,
+        c2: acc_b.c1,
+        ..grad_a
+    };
+    assert_eq!(
+        b1[uy * w as usize + (pa.x + 4) as usize],
+        grad_inv_b.sample(pa.x + 4, uy as i64),
+        "换 accent 后底线必须 = 新反转色向采样"
     );
 
-    // ④底垫钉：内芯非字区（右 1/4 安静带，避开字形与左右线）= 精确事后色
-    assert_eq!(
-        b0[(oy + 60) * w as usize + cx + cw - 20],
-        pad,
-        "底垫必须 = blend(绿青, 页底, 38) 精确事后色"
-    );
-
-    // ⑤无浮空钉：框上一行零墨（发丝线画单行不跨边——刻意偏差条款；
-    // 变异：学 kfmv4 跨边半透会在这里落墨即红）
-    assert_eq!(
-        b0[(oy - 1) * w as usize + cx + cw / 2],
-        bg,
-        "框上一行必须零墨（不跨边浮空）"
-    );
-    // ⑤b弧带不跨框钉（BAR-087，用户实机截图像素实测抓获）：弧带必须
-    // 外缘贴框缘向内铺（与直线段同源同尺），四角带外 1px 必须零墨——
-    // 居中弧带（dist=R 对半跨边）会在角区外凸 4px/上凸 1px 即红
-    for (py, px, name) in [
-        (oy - 1, cx + 6, "上角上溢"),
-        (oy + 6, cx - 1, "上角左溢"),
-        (oy + 72, cx + 6, "下角下溢"),
-        (oy + 66, cx - 1, "下角左溢"),
-    ] {
-        assert_eq!(
-            b0[py * w as usize + px],
-            bg,
-            "弧带跨框外凸（{name}）——弧带必须外缘贴框缘不跨框（BAR-087）"
-        );
-    }
-
-    // ①文字墨：选中标签格心区必须有非底垫非页底的字形墨（字在垫之上）
+    // ①文字墨：选中标签格心区必须有异于纯渐变填充的字形墨（深色字
+    // 压在浅底上）
     let mut text_ink = 0usize;
     for y in (oy + 20)..(oy + 52) {
         for x in (cx + 20)..(cx + cw - 20) {
             let p = b0[y * w as usize + x];
-            if p != pad && p != bg && p != 0 {
+            if p != grad_a.sample(x as i64, y as i64) && p != bg && p != 0 {
                 text_ink += 1;
             }
         }

@@ -356,10 +356,6 @@ struct ConfigSig {
     tab_scroll: i32,
     /// 光标 x
     tab_cx: i32,
-    /// 开口光标顶线长（§四 三修：重掷必须触发重烘焙）
-    tab_top_w: i32,
-    /// 开口光标底线长
-    tab_bot_w: i32,
     /// 双池上池高
     pool_upper_h: u32,
     /// 池内容代际（cfg_page epoch，§五 目录语义）
@@ -2254,13 +2250,10 @@ impl App {
         // 注册给 gate 值守倒帧（D9 同源）。初始视口 720 占位，draw_frame
         // 每帧按真实屏宽 set_viewport_w 纠
         {
-            let bar = std::sync::Arc::new(std::sync::Mutex::new(
-                crate::ui::tab_bar::TabBar::new_seeded(
-                    &["系统管理"],
-                    720,
-                    crate::report::boot_ms() as u64, // 开口光标线长随机种子（§四）
-                ),
-            ));
+            let bar = std::sync::Arc::new(std::sync::Mutex::new(crate::ui::tab_bar::TabBar::new(
+                &["系统管理"],
+                720,
+            )));
             crate::ui::tab_bar::register_tab_bar(bar.clone());
             self.tab_bar = Some(bar);
         }
@@ -3847,20 +3840,12 @@ impl App {
             ),
             |s| (s.accent_cfg, s.accent_ft, s.accent_pt),
         );
-        // 标签栏 sig 五维（宪法 §四）：选中/横滚/光标 x/开口光标顶线长/
-        // 底线长——游标弹簧动画逐帧新值逐帧重烘焙（键盘 inset 同族成本，
-        // 已记 ui-base §八债单）；线长重掷（选中切换）也必须触发重烘焙，
-        // 漏维 = 新线长不进纹理
-        let (tab_sel, tab_scroll, tab_cx, tab_top_w, tab_bot_w) =
-            tab_snap.map_or((0, 0, 0, 0, 0), |ts| {
-                (
-                    ts.selected as u32,
-                    ts.scroll_px as i32,
-                    ts.cursor_x as i32,
-                    ts.cursor_top_w as i32,
-                    ts.cursor_bot_w as i32,
-                )
-            });
+        // 标签栏 sig 三维（宪法 §四）：选中/横滚/光标 x——游标弹簧动画
+        // 逐帧新值逐帧重烘焙（键盘 inset 同族成本，已记 ui-base §八债单）。
+        // 八修换案（开口框→填色标签块）后线长两维随组件退役
+        let (tab_sel, tab_scroll, tab_cx) = tab_snap.map_or((0, 0, 0), |ts| {
+            (ts.selected as u32, ts.scroll_px as i32, ts.cursor_x as i32)
+        });
         // 双池 sig 一维（宪法 §五）：上池高——内容进出/屏尺寸变（w/h 已在
         // sig）触发布局重算时必须重烘焙
         let pool_upper_h = pool_snap.map_or(0, |ps| ps.upper.h);
@@ -3878,8 +3863,6 @@ impl App {
                 tab_sel,
                 tab_scroll,
                 tab_cx,
-                tab_top_w,
-                tab_bot_w,
                 pool_upper_h,
                 cfg_epoch,
             })

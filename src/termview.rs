@@ -692,6 +692,57 @@ fn paint_row_frame(
     }
 }
 
+/// 标签页块涂装（宪法 §四 八修新立，2026-09-13；文件级共享组件，
+/// §六 样式唯一来源）：**无边框色块标签**——上两角圆角 R=1 格、
+/// 下缘直边（标签坐在行底，下接底线组件）。sel=true = accent 渐变
+/// 满填（grad 页环同尺采样，α255）；sel=false = 6% 白薄填。
+/// clip_x0/x1 = X 向内容裁剪带（横滚滑出不污染页环带）
+#[allow(clippy::too_many_arguments)]
+fn paint_tab_chip(
+    frame: &mut Frame<'_>,
+    x: i64,
+    y: i64,
+    w: u32,
+    h: u32,
+    sel: bool,
+    grad: RingGradient,
+    clip_x0: i64,
+    clip_x1: i64,
+) {
+    let r = (CELL_W as i64).min((w / 2).min(h / 2) as i64); // 上圆角 1 格
+    for dy in 0..h as i64 {
+        let yy = y + dy;
+        if yy < 0 || yy >= i64::from(frame.h) {
+            continue;
+        }
+        for dx in 0..w as i64 {
+            let xx = x + dx;
+            if xx < 0 || xx >= i64::from(frame.w) || xx < clip_x0 || xx >= clip_x1 {
+                continue;
+            }
+            // 上两角圆角：角盒内按圆弧裁（采样 +0.5 与 rr_sdf 同规）；
+            // 下缘直边不裁
+            if dy < r {
+                let in_tl = dx < r;
+                let in_tr = dx >= w as i64 - r;
+                if in_tl || in_tr {
+                    let cx = if in_tl { r } else { w as i64 - r };
+                    let (px, py) = (dx as f64 + 0.5 - cx as f64, dy as f64 + 0.5 - r as f64);
+                    if (px * px + py * py).sqrt() > r as f64 {
+                        continue; // 角外不画
+                    }
+                }
+            }
+            if sel {
+                let c = grad.sample(xx, yy);
+                frame.blend_px(xx as u32, yy as u32, c, 255);
+            } else {
+                frame.blend_px(xx as u32, yy as u32, 0x00FF_FFFF, 15); // 6% 白薄填
+            }
+        }
+    }
+}
+
 /// 功能光标开口框涂装（宪法 §三/§四 三修立、四修标定、五修宽+色，
 /// 2026-09-13；kfmv4 `renderer.ts _drawCursorBorder` 复刻 + NA 标定）：
 /// ①绿青半透明底垫整个框体；②左强调线 8px 画在**框内缘**（上下跳过
@@ -704,6 +755,10 @@ fn paint_row_frame(
 /// 必须与页环同源（同原点同分母），光标像从页环渐变布上剪下来。
 /// clip_x0/x1 = X 向内容裁剪带（与标签文字同一条带，眼手同尺：
 /// 带外看不见也点不着；左线已收进框内，无需额外放宽）
+///
+/// **封存（2026-09-13 八修）**：标签栏换案填色标签块后本涂装退役，
+/// 保留待文件树光标复用（kfmv4 开口框是文件树光标的指定形态）
+#[allow(dead_code)]
 #[allow(clippy::too_many_arguments)]
 fn paint_open_cursor(
     frame: &mut Frame<'_>,
@@ -770,6 +825,7 @@ fn paint_open_cursor(
 /// 所在框缘（top=上缘，弧心 y0+R；否则下缘，弧心 y1−R）；弧只画
 /// 圆心左侧象限（dx≤0），角度归一后左上弧 [π, 3π/2] 宽 8→3、左下弧
 /// [π/2, π] 宽 3→8。线色 = grad 渐变框逐像素采样（五修，页环同尺）
+#[allow(dead_code)] // 随 paint_open_cursor 封存（八修，待文件树光标复用）
 #[allow(clippy::too_many_arguments)]
 fn paint_cursor_arc(
     frame: &mut Frame<'_>,
@@ -2409,12 +2465,13 @@ impl TermView {
         }
     }
 
-    /// 配置卡标签栏涂装（主题宪法 §四，2026-09-13 五修）：标签文字（格内
-    /// 居中，内容带左右缘裁剪——横滚滑出不污染页环带）+ 选中光标开口框
-    /// （线色 = 本页 accent 双色渐变，与页环同一把 135° 渐变尺同源采样
-    /// ——渐变框原点/分母就是页环的，光标像从页环渐变布上剪下来）。
-    /// 文字色 = 三档透明度条款：选中 0.85 白、未选中 0.5 白。
-    /// 空态也画光标框：框是装修不是内容（与页环同规）
+    /// 配置卡标签栏涂装（主题宪法 §四，2026-09-13 八修换案）：**填色
+    /// 标签页组件**（paint_tab_chip：无边框色块、上两角圆角下缘直边；
+    /// 选中 = accent 渐变满填 + 文字换深色反差，未选中 = 6% 白薄填 +
+    /// 文字 0.5 白）+ 标签行下缘紧挨一条**池区同宽的 1px 渐变细线**
+    /// （二级组件：色向 = 内卡反转 c2→c1，页环同一把 135° 尺采样）。
+    /// 选中块 x 吃快照 cursor_x（弹簧滑块；文字不随弹簧，各就各位）。
+    /// 空态也画底线：装修不是内容（与页环同规）
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn paint_cfg_tab_bar_impl(
         &self,
@@ -2426,23 +2483,19 @@ impl TermView {
         bottom_inset: u32,
         accent: crate::ui::accent::AccentPair,
     ) {
-        if w == 0 || h == 0 || snap.tabs.is_empty() {
+        if w == 0 || h == 0 {
             return;
         }
         let mut frame = Frame { buf, w, h };
         let off = i64::from(cfg_off_x);
         let (ox, oy) = crate::ui::tab_bar::content_origin();
-        // 内容带 = [原点 x, 右内缘 - 1 格]（随面板平移）——文字与光标框
-        // 同一条裁剪带（眼手同尺：带外的东西用户看不见也点不着）
+        // 内容带（随面板平移）——标签块/底线/文字同一条裁剪带
+        // （眼手同尺：带外的东西用户看不见也点不着）
         let clip_l = i64::from(ox) + off;
         let clip_r =
             i64::from(w) - i64::from(AI_PAGE_FRAME_MARGIN + AI_PAGE_FRAME_W + CELL_W) + off;
-        let rects = crate::ui::tab_bar::rects_of(&snap.tabs, snap.scroll_px);
-        // 功能光标开口框（宪法 §三/§四，五修）先画：底垫+三线在文字之下
-        // （内容在装修之上；开口框无 punch，文字一遍画成无需补画）。线色
-        // = 本页 accent 渐变——渐变框与 paint_page_frame_ring 同原点同
-        // 分母（§六 禁手抄，眼手同尺）。裁剪带与文字同源——左线已收进
-        // 框内缘（四修），无需放宽
+        // 页环同尺渐变框（同原点同分母，§六 禁手抄）；底线用反转色向
+        // （c2→c1 = 内卡反转，§三 多级嵌套逐层反转——底线是二级组件）
         let gw = i64::from(w) - 2 * i64::from(AI_PAGE_FRAME_MARGIN);
         let gh = i64::from(h) - i64::from(bottom_inset) - 2 * i64::from(AI_PAGE_FRAME_MARGIN);
         let grad = RingGradient {
@@ -2452,24 +2505,47 @@ impl TermView {
             y0: i64::from(AI_PAGE_FRAME_MARGIN),
             denom: ((gw - 1) + (gh - 1)).max(1),
         };
-        let sel = &rects[snap.selected];
-        let cx = snap.cursor_x as i64 + off;
-        paint_open_cursor(
-            &mut frame,
-            cx,
-            i64::from(oy),
-            i64::from(sel.w),
-            i64::from(sel.h),
-            snap.cursor_top_w,
-            snap.cursor_bot_w,
-            clip_l,
-            clip_r,
-            grad,
-            self.theme.cursor.bg,
-        );
+        let grad_inv = RingGradient {
+            c1: accent.c2,
+            c2: accent.c1,
+            ..grad
+        };
+        let rects = crate::ui::tab_bar::rects_of(&snap.tabs, snap.scroll_px);
+        // 标签块先画（装修在文字之下）：选中块随弹簧 x，未选中各就各位
+        for (i, r) in rects.iter().enumerate() {
+            let cx = if i == snap.selected {
+                snap.cursor_x as i64 + off
+            } else {
+                r.x + off
+            };
+            paint_tab_chip(
+                &mut frame,
+                cx,
+                r.y,
+                r.w,
+                r.h,
+                i == snap.selected,
+                grad,
+                clip_l,
+                clip_r,
+            );
+        }
+        // 底线：1px 渐变细线，池区同宽，紧挨标签行下缘（空态也画）
+        let pa = crate::ui::dual_pool::pool_area(w, h, bottom_inset);
+        let uy = i64::from(oy) + i64::from(crate::ui::tab_bar::TAB_ROW_H);
+        if uy >= 0 && uy < i64::from(h) {
+            for ax in (pa.x + off)..(pa.x + off + i64::from(pa.w)) {
+                if ax < 0 || ax >= i64::from(w) || ax < clip_l || ax >= clip_r {
+                    continue;
+                }
+                let c = grad_inv.sample(ax, uy);
+                frame.blend_px(ax as u32, uy as u32, c, 255);
+            }
+        }
+        // 文字：选中块上深色（浅底反差），未选中 0.5 白；文字不随弹簧
         for (i, r) in rects.iter().enumerate() {
             let fg = if i == snap.selected {
-                0x00D9_D9D9
+                crate::ui::accent::CARD_PAGE_BG
             } else {
                 0x0080_8080
             };

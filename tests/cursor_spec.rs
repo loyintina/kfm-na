@@ -149,34 +149,7 @@ fn spec_cursor_窄框退化钉() {
     assert_eq!(g.bot_w, 8, "w=30 域幅 0：相等是域内唯一解（不算违齐）");
 }
 
-// ========== TabBar 集成钉：选中切换重掷，同标重按不重掷 ==========
-
-#[test]
-fn spec_cursor_tabbar集成_移动才换装() {
-    let mut bar = kfm_na::ui::tab_bar::TabBar::new_seeded(&["系统管理", "API"], 720, 99);
-    let s0 = bar.snap(0);
-    let (t0, b0) = (s0.cursor_top_w, s0.cursor_bot_w);
-    assert!(t0 > 0 && b0 > 0, "初态必须有一付线长（标签 0 宽 90）");
-    // 同标重按：没移动不换装
-    bar.select(0, 100);
-    let s1 = bar.snap(100);
-    assert_eq!(
-        (s1.cursor_top_w, s1.cursor_bot_w),
-        (t0, b0),
-        "同标重按不许重掷（没移动不换装）"
-    );
-    // 真换标：重掷（宽度不同域不同，值几乎必变；且不齐闸仍成立）
-    bar.select(1, 200);
-    let s2 = bar.snap(200);
-    assert!(
-        (s2.cursor_top_w - s2.cursor_bot_w).abs() >= MIN_SKEW,
-        "换标后新付也必须过不齐闸（API 宽 90：skew = min(18, 48/2) = 18）"
-    );
-    assert_ne!(
-        (s2.cursor_top_w, s2.cursor_bot_w),
-        (t0, b0),
-        "seed=99 换标必须重掷出新付（定种子钉死这付快照）"
-    );
-    // 快照字段 = 状态单源（涂装照抄不许自算的眼手同尺钉）
-    assert_eq!(s2.cursor_top_w, bar.snap(300).cursor_top_w, "快照必须稳定");
-}
+// ========== TabBar 集成钉已退役（2026-09-13 八修）==========
+// 标签栏换案填色标签块后，TabBar 不再持开口光标几何（线长随机机制
+// 随案退役）；cursor.rs 几何与本文件上述考题保留——文件树光标预定
+// 复用同一形态，复活时回补集成钉。
