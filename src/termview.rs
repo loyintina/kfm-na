@@ -2484,7 +2484,9 @@ impl TermView {
             accent: crate::ui::accent::AccentPair,
             denom: i64,
         ) {
-            const R: i64 = 12; // §七 标定：三级框圆角 12px
+            // §七 标定三版：三级框圆角 = 池框同尺 36px（12px 是标签光标
+            // 专用样式，未来文件树光标用——其他场合禁用，用户拍板）
+            const R: i64 = POOL_FRAME_R as i64;
             for dy in 0..rh as i64 {
                 let yy = y + dy;
                 if yy < 0 || yy >= i64::from(frame.h) {

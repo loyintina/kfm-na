@@ -31,8 +31,9 @@ pub const LOWER_ROW_H: u32 = CELL_H * 3;
 pub const FIELD_ROW_H: u32 = CELL_H * 2;
 /// 池内容距池框缘的内缩 = 1 格（布局层咬格）
 pub const POOL_CONTENT_INSET: i64 = CELL_W as i64;
-/// 行间留隙（三级框不贴边，kfmv4 实证样式）
-pub const ROW_GAP: i64 = 10;
+/// 行间留隙 = 1 格（三级框间隔与两池间隔同尺——用户拍板：三级框跟
+/// 二级框一样得有间隔；10px 实机太挤）
+pub const ROW_GAP: i64 = CELL_W as i64;
 /// 字段框标签列宽 = 8 格（值框在其右，二版 §七 标定；6 格实机截断
 /// 5 字标签——「默认服务器」5×20px+内缩 18 = 118 > 108）
 pub const LABEL_COL_W: i64 = CELL_W as i64 * 8;
