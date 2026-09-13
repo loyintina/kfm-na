@@ -8,8 +8,9 @@
 use kfm_na::termview::{CELL_H, CELL_W};
 use kfm_na::ui::comp_registry::COMPONENTS;
 use kfm_na::ui::modal::{
-    MODAL_CLOSE_H, MODAL_FIELD_GAP, MODAL_LINE_H, MODAL_PAD_X, MODAL_PAD_Y, MODAL_SIDE_MARGIN,
-    MODAL_TITLE_H, ModalHit, card_rect, close_btn_rect, content_cells, fields_of, hit, wrap_text,
+    MODAL_CLOSE_H, MODAL_FIELD_GAP, MODAL_LINE_H, MODAL_PAD_X, MODAL_PAD_Y, MODAL_PREVIEW_H,
+    MODAL_SIDE_MARGIN, MODAL_TITLE_H, ModalHit, card_rect, close_btn_rect, content_cells,
+    fields_of, fields_top, hit, preview_rect, wrap_text,
 };
 
 const SCR_W: u32 = 1221;
@@ -165,4 +166,46 @@ fn line_heights_match_constitution() {
     assert_eq!(MODAL_FIELD_GAP, CELL_H / 2, "字段隙 0.5 格");
     assert_eq!(MODAL_CLOSE_H, CELL_H * 3, "关闭钮 3 格（最小容量律下限）");
     assert_eq!(MODAL_PAD_X, CELL_W as i64 * 2, "卡内边距 2 格");
+    assert_eq!(MODAL_PREVIEW_H, CELL_H * 6, "预览画板 6 格（十修条款）");
+}
+
+// ---- 预览画板（§六 十修：画板在分隔线与字段区之间，是内容不是档案）----
+
+#[test]
+fn preview_rect_between_divider_and_fields() {
+    let entry = &COMPONENTS[0];
+    let fields = fields_of(entry, content_cells(SCR_W));
+    let card = card_rect(SCR_W, SCR_H, &fields);
+    let prev = preview_rect(&card);
+    // 画板紧贴分隔线带下缘（上 0.5 格 + 1px + 下 0.5 格之后）
+    let divider_bottom =
+        card.y + i64::from(MODAL_PAD_Y + MODAL_TITLE_H + MODAL_FIELD_GAP + 1 + MODAL_FIELD_GAP);
+    assert_eq!(prev.y, divider_bottom, "画板在分隔线带正下方");
+    assert_eq!(prev.h, MODAL_PREVIEW_H, "画板 6 格高");
+    assert_eq!(prev.x, card.x + MODAL_PAD_X, "画板吃卡内边距");
+    assert_eq!(prev.w as i64, card.w as i64 - MODAL_PAD_X * 2, "画板全内宽");
+    // 字段区起点 = 画板下缘 + 0.5 格呼吸
+    assert_eq!(
+        fields_top(&card),
+        prev.y + i64::from(MODAL_PREVIEW_H + MODAL_FIELD_GAP),
+        "字段区在画板下 0.5 格"
+    );
+    // 画板不压关闭钮
+    let btn = close_btn_rect(&card);
+    assert!(prev.y + i64::from(prev.h) < btn.y, "画板带整体在关闭钮之上");
+}
+
+#[test]
+fn card_height_includes_preview_band() {
+    // 空字段时卡高 = 固定带之和（含 6 格画板带）——抽掉/改矮画板必咬
+    let c = card_rect(SCR_W, SCR_H, &[]);
+    let expect = MODAL_PAD_Y
+        + MODAL_TITLE_H
+        + (MODAL_FIELD_GAP + 1 + MODAL_FIELD_GAP)
+        + MODAL_PREVIEW_H
+        + MODAL_FIELD_GAP
+        + MODAL_FIELD_GAP
+        + MODAL_CLOSE_H
+        + MODAL_PAD_Y;
+    assert_eq!(c.h, expect, "卡高公式含画板带（空字段 = 全固定带）");
 }

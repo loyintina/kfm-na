@@ -40,22 +40,26 @@
 | `src/scroll.rs` | 5 | 5 | 0 | — |
 | `src/session.rs` | 10 | 10 | 0 | — |
 | `src/session_router.rs` | 10 | 10 | 0 | — |
+| `src/settings.rs` | 6 | 5 | 1 | terminal_to_json |
 | `src/termview.rs` | 117 | 110 | 7 | AI_THINK_COLLAPSED FONT_CANDIDATES CJK_FONT_CANDIDATES load_cjk_font font_probe MAG_HALF_COLS MAG_HALF_ROWS |
 | `src/theme.rs` | 1 | 1 | 0 | — |
 | `src/trace.rs` | 12 | 8 | 4 | TRACE_CAP format_tail dump_all dump_tail |
 | `src/ui/accent.rs` | 6 | 5 | 1 | FALLBACK |
 | `src/ui/ai_page.rs` | 7 | 7 | 0 | — |
+| `src/ui/cfg_page.rs` | 40 | 37 | 3 | POOL_CONTENT_INSET register_cfg_page cfg_page_handle |
+| `src/ui/comp_registry.rs` | 5 | 5 | 0 | — |
 | `src/ui/cursor.rs` | 9 | 9 | 0 | — |
 | `src/ui/dual_pool.rs` | 13 | 13 | 0 | — |
 | `src/ui/fx_ease.rs` | 10 | 10 | 0 | — |
 | `src/ui/fx_spring.rs` | 7 | 7 | 0 | — |
-| `src/ui/gear.rs` | 6 | 6 | 0 | — |
+| `src/ui/gear.rs` | 7 | 7 | 0 | — |
 | `src/ui/keybar.rs` | 1 | 1 | 0 | — |
+| `src/ui/modal.rs` | 18 | 16 | 2 | MODAL_LABEL_H MODAL_MAX_MARGIN_Y |
 | `src/ui/orb.rs` | 5 | 5 | 0 | — |
 | `src/ui/panel_drag.rs` | 12 | 7 | 5 | DRAG_DIR_LOCK RELEASE_PROGRESS VELOCITY_WINDOW_MS locked current_offset |
 | `src/ui/prompt_bar.rs` | 5 | 4 | 1 | row_of |
 | `src/ui/seam.rs` | 24 | 24 | 0 | — |
 | `src/ui/stage.rs` | 7 | 7 | 0 | — |
-| `src/ui/tab_bar.rs` | 25 | 25 | 0 | — |
+| `src/ui/tab_bar.rs` | 24 | 24 | 0 | — |
 | `src/ui/viewport_push.rs` | 2 | 2 | 0 | — |
 | `src/vsync_book.rs` | 20 | 15 | 5 | armed last_due_ms chain_dead mark_chain_dead last_ns |

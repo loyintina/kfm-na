@@ -6,6 +6,10 @@
 //! (symbol, file) = 实现坐标，考题棘轮核对 symbol 字符串真实出现在
 //! file 里（tests/comp_registry_spec.rs）——表与代码漂移 = 考题红。
 //!
+//! 十修增订（同日，用户拍板「重点是这个内容，而不是档案」）：
+//! 条目加 **preview 维**——跳框预览画板的渲染种类（宪法 §六 跳框
+//! 预览画板条款）；涂装归 termview 预览段，原语全复用共享件。
+//!
 //! 分类（大类 = 组件池页下池行）：
 //! - 装修框：页面的装饰骨架（宪法 §三 装修框家）
 //! - 组件：无边框的文字容器（§六 组件条款）
@@ -36,7 +40,46 @@ impl CompStatus {
     }
 }
 
-/// 组件条目（跳框字段区的数据源：名/状态/位置/规范/考题/说明）
+/// 预览画板渲染种类（十修 §六 跳框预览画板条款）：涂装侧 match 本枚举
+/// 出微缩实时渲染；命名即语义，涂装实现归 termview 预览段
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Preview {
+    /// 圆角矩形边框环（页环/池框同配方微缩）
+    Ring,
+    /// 三级框行：选中（accent 描边+左粗）与未选中各一条
+    RowFrame,
+    /// 跳框自指：迷你压暗区 + 小卡 + 小关闭钮
+    ModalMini,
+    /// 标签页块：选中（渐变满填）+ 未选中 + 底线（标签栏同此预览）
+    TabChip,
+    /// 底线组件：一条 1px 渐变细线（c2→c1）
+    Underline,
+    /// 下拉面板：触发器 + 下弹 panel 两项
+    Dropdown,
+    /// 字段标签列：标签（36 亮）+ 值框（30 灰）mini 行
+    FieldLabel,
+    /// 功能光标开口框（封存件复活展出）
+    OpenCursor,
+    /// 光球真渲染（orb sprite 加法合成微缩）
+    Orb,
+    /// 输入栏 mini：栏框 + 占位灰字 + 发送钮
+    InputBar,
+    /// 快捷键行 mini：两排键格
+    Keybar,
+    /// 设置钮：程序化齿轮（gear paint_at 共享件）
+    Gear,
+    /// 弹簧响应曲线（过冲可见）
+    CurveSpring,
+    /// 缓动曲线（ease-out/in 两族）
+    CurveEase,
+    /// 手势仲裁示意：圆点 + 水平轨迹 + 方向箭头
+    Swipe,
+    /// 视口平移示意：新页推入旧页挤出
+    ViewportPush,
+}
+
+/// 组件条目（跳框字段区+预览画板的数据源：名/状态/位置/规范/考题/
+/// 说明/预览种类）
 pub struct CompEntry {
     /// 组件名（上池行 label + 跳框标题）
     pub name: &'static str,
@@ -52,6 +95,8 @@ pub struct CompEntry {
     pub tests: &'static str,
     /// 一句话说明（跳框折行显示）
     pub desc: &'static str,
+    /// 预览画板渲染种类（十修）
+    pub preview: Preview,
 }
 
 /// 大类表（顺序 = 组件池页下池行序）
@@ -69,6 +114,7 @@ pub const COMPONENTS: &[CompEntry] = &[
         spec: "宪法 §三/§四",
         tests: "tests/termview_spec.rs",
         desc: "全屏页面的外框环：左粗三边细、135° 双色渐变、外发光。三公民页面与终端卡片壳同源同配方。",
+        preview: Preview::Ring,
     },
     CompEntry {
         name: "池框",
@@ -79,6 +125,7 @@ pub const COMPONENTS: &[CompEntry] = &[
         spec: "宪法 §三/§五",
         tests: "tests/termview_spec.rs",
         desc: "圆角矩形边框环核：外发光 + 渐变外环 + 底色 punch 内芯。双池、跳框卡、页环本体全从这里出。",
+        preview: Preview::Ring,
     },
     CompEntry {
         name: "三级框行",
@@ -89,6 +136,7 @@ pub const COMPONENTS: &[CompEntry] = &[
         spec: "宪法 §五 池行",
         tests: "tests/termview_spec.rs",
         desc: "圆角深色框行：4% 白填、左粗缘在角部渐细入 8% 白细边。下池目录行、上池值框、下拉项、跳框关闭钮共用。",
+        preview: Preview::RowFrame,
     },
     CompEntry {
         name: "跳框",
@@ -99,6 +147,7 @@ pub const COMPONENTS: &[CompEntry] = &[
         spec: "宪法 §六 跳框",
         tests: "tests/modal_spec.rs",
         desc: "模态详情卡：压暗层 + 居中卡 + 题注/内容字段区 + 全宽关闭钮。点框外或关闭钮收起。",
+        preview: Preview::ModalMini,
     },
     // ---- 组件 ----
     CompEntry {
@@ -110,6 +159,7 @@ pub const COMPONENTS: &[CompEntry] = &[
         spec: "宪法 §四 八修",
         tests: "tests/tab_bar_spec.rs",
         desc: "无边框色块标签：上两角圆角、下缘直边。选中 = accent 渐变满填 + 深色字，未选中 = 6% 白薄填。",
+        preview: Preview::TabChip,
     },
     CompEntry {
         name: "底线",
@@ -120,6 +170,7 @@ pub const COMPONENTS: &[CompEntry] = &[
         spec: "宪法 §四 八修",
         tests: "tests/tab_bar_spec.rs",
         desc: "标签行下缘紧挨的 1px 渐变细线，池区同宽，色向 = 内卡反转 c2→c1。空态也画——装修不是内容。",
+        preview: Preview::Underline,
     },
     CompEntry {
         name: "下拉面板",
@@ -130,6 +181,7 @@ pub const COMPONENTS: &[CompEntry] = &[
         spec: "宪法 §六 下拉栏",
         tests: "tests/cfg_page_spec.rs",
         desc: "自绘下拉：触发器 6% 白底，面板 96% 近黑 + 选中项 accent 描边。顶部栏向下弹——方向反了会弹出屏外。",
+        preview: Preview::Dropdown,
     },
     CompEntry {
         name: "字段标签列",
@@ -140,6 +192,7 @@ pub const COMPONENTS: &[CompEntry] = &[
         spec: "宪法 §六 组件条款",
         tests: "tests/cfg_page_spec.rs",
         desc: "上池字段行的标签列：无边框文字容器，36px 亮——标签是行的标题，字大且亮（七修字档反转）。",
+        preview: Preview::FieldLabel,
     },
     // ---- 功能光标 ----
     CompEntry {
@@ -151,6 +204,7 @@ pub const COMPONENTS: &[CompEntry] = &[
         spec: "宪法 §三 功能光标",
         tests: "tests/cursor_spec.rs",
         desc: "左强调线 + 顶底随机长发丝 + 绿青底垫的选中光标。标签栏八修改用填色标签块后封存，待文件树光标复用。",
+        preview: Preview::OpenCursor,
     },
     // ---- 控件 ----
     CompEntry {
@@ -162,6 +216,7 @@ pub const COMPONENTS: &[CompEntry] = &[
         spec: "ai-presence.md",
         tests: "tests/ai_presence_spec.rs",
         desc: "雾状光球 sprite + 呼吸光晕，AI 外显入口。点击召唤 AI 对话面板（上缘下落动画）。",
+        preview: Preview::Orb,
     },
     CompEntry {
         name: "输入栏",
@@ -172,6 +227,7 @@ pub const COMPONENTS: &[CompEntry] = &[
         spec: "ai-presence.md 期 0",
         tests: "tests/input_bar_spec.rs",
         desc: "全局输入栏：压键盘顶，多行折行、像素级滚动、长按选区与拖动锚点、发送口直进 AI 面板。",
+        preview: Preview::InputBar,
     },
     CompEntry {
         name: "快捷键行",
@@ -182,6 +238,7 @@ pub const COMPONENTS: &[CompEntry] = &[
         spec: "ui-base.md",
         tests: "tests/keybar_spec.rs",
         desc: "终端两行快捷键：Ctrl/Alt 修饰 + Esc/Tab/方向键。手机端没有物理键盘的补偿层。",
+        preview: Preview::Keybar,
     },
     CompEntry {
         name: "设置钮",
@@ -192,6 +249,7 @@ pub const COMPONENTS: &[CompEntry] = &[
         spec: "宪法 §四 配置卡入口",
         tests: "tests/gear_spec.rs",
         desc: "终端页右上角齿轮，两行高。配置卡的唯一入口——画进终卡槽，面板靠泊时整层自隐。",
+        preview: Preview::Gear,
     },
     CompEntry {
         name: "标签栏",
@@ -202,6 +260,7 @@ pub const COMPONENTS: &[CompEntry] = &[
         spec: "宪法 §四 标签栏",
         tests: "tests/tab_bar_spec.rs",
         desc: "配置卡首行标签行：横滑 + 点选 + 弹簧滑块。手势仲裁边界单源——行带上的横向滑动不触发面板拖拽。",
+        preview: Preview::TabChip,
     },
     // ---- 动效引擎 ----
     CompEntry {
@@ -213,6 +272,7 @@ pub const COMPONENTS: &[CompEntry] = &[
         spec: "ui-base.md §八",
         tests: "tests/fx_spring_spec.rs",
         desc: "欠阻尼弹簧：标签滑块、键盘 inset 同核。select 瞬间从当前位置重定基续弹，600ms 兜底贴死。",
+        preview: Preview::CurveSpring,
     },
     CompEntry {
         name: "缓动",
@@ -223,6 +283,7 @@ pub const COMPONENTS: &[CompEntry] = &[
         spec: "ui-base.md §八",
         tests: "tests/fx_ease_spec.rs",
         desc: "面板入场/出场曲线库：ease-out 下落 350ms、ease-in 收起 250ms（真机逐帧标定）。",
+        preview: Preview::CurveEase,
     },
     CompEntry {
         name: "手势仲裁",
@@ -233,6 +294,7 @@ pub const COMPONENTS: &[CompEntry] = &[
         spec: "ui-base.md §五B",
         tests: "tests/panel_drag_spec.rs",
         desc: "面板跟手拖拽：横向锁定制，松手按完成度+速度裁决去留。一滑一义——纵向滚动时横向锁未起。",
+        preview: Preview::Swipe,
     },
     CompEntry {
         name: "视口平移",
@@ -243,6 +305,7 @@ pub const COMPONENTS: &[CompEntry] = &[
         spec: "ui-base.md §五B",
         tests: "tests/viewport_push_spec.rs",
         desc: "四公民页面视口平移合成：新页推入、旧页挤出。被覆盖面板保持覆盖态，收起覆盖者即露出。",
+        preview: Preview::ViewportPush,
     },
 ];
 

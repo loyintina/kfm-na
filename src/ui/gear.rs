@@ -54,6 +54,13 @@ pub fn paint(buf: &mut [u32], buf_w: u32, buf_h: u32) {
     }
     let (hx, hy, hw, _) = hit_rect(buf_w);
     let (cx, cy) = (hx + hw / 2, hy + hw / 2); // 字形心 = 命中盒心（单源）
+    paint_at(buf, buf_w, buf_h, cx, cy);
+}
+
+/// 任意心位涂装（2026-09-13 十修：跳框预览画板复用——宪法 §六 样式
+/// 唯一来源，预览不许手抄第二份掩码；极坐标解析掩码 = 环带 + 八齿 +
+/// 中孔，与 orb 同族工艺）。掩码外一字节不动
+pub fn paint_at(buf: &mut [u32], buf_w: u32, buf_h: u32, cx: u32, cy: u32) {
     let r_out = f64::from(GEAR_GLYPH_PX) / 2.0 - 1.0;
     let (ir, ig, ib) = (
         (GEAR_INK >> 16) & 0xFF,

@@ -32,6 +32,8 @@ pub const MODAL_LINE_H: u32 = CELL_H;
 pub const MODAL_FIELD_GAP: u32 = CELL_H / 2;
 /// 关闭钮高 3 格（§三 最小容量律下限）
 pub const MODAL_CLOSE_H: u32 = CELL_H * 3;
+/// 预览画板高 6 格（十修 §六 跳框预览画板条款）
+pub const MODAL_PREVIEW_H: u32 = CELL_H * 6;
 /// 卡高封顶余量：屏高 − 8 格（上下各 4 格，压暗层仍可见可点）
 pub const MODAL_MAX_MARGIN_Y: u32 = CELL_H * 4;
 
@@ -102,14 +104,37 @@ fn fields_h(fields: &[ModalField]) -> u32 {
         .sum()
 }
 
+/// 预览画板矩形（十修 §六：分隔线下 0.5 格 → 画板 6 格 → 0.5 格 →
+/// 字段区；卡内宽，涂装/卡高计算同读——眼手同尺）
+pub fn preview_rect(card: &PoolRect) -> PoolRect {
+    PoolRect {
+        x: card.x + MODAL_PAD_X,
+        y: card.y
+            + i64::from(MODAL_PAD_Y)
+            + i64::from(MODAL_TITLE_H)
+            + i64::from(MODAL_FIELD_GAP)
+            + 1
+            + i64::from(MODAL_FIELD_GAP),
+        w: (card.w as i64 - MODAL_PAD_X * 2).max(0) as u32,
+        h: MODAL_PREVIEW_H,
+    }
+}
+
+/// 字段区起始 y（画板下缘再留 0.5 格呼吸）
+pub fn fields_top(card: &PoolRect) -> i64 {
+    preview_rect(card).y + i64::from(MODAL_PREVIEW_H) + i64::from(MODAL_FIELD_GAP)
+}
+
 /// 居中卡片矩形（高随内容，封顶屏高−8 格；v1 超出截断不滚动）
 pub fn card_rect(screen_w: u32, screen_h: u32, fields: &[ModalField]) -> PoolRect {
     let w = screen_w.saturating_sub(MODAL_SIDE_MARGIN * 2);
-    // 顶留白 + 标题 + 分隔线带（上 0.5 格 + 1px + 下 1 格）+ 字段区
-    // + 关闭钮前隙 0.5 格 + 关闭钮 + 底留白
+    // 顶留白 + 标题 + 分隔线带（上 0.5 格 + 1px + 下 0.5 格）+ 预览画板
+    // + 0.5 格呼吸 + 字段区 + 关闭钮前隙 0.5 格 + 关闭钮 + 底留白
     let want = MODAL_PAD_Y
         + MODAL_TITLE_H
-        + (MODAL_FIELD_GAP + 1 + CELL_H)
+        + (MODAL_FIELD_GAP + 1 + MODAL_FIELD_GAP)
+        + MODAL_PREVIEW_H
+        + MODAL_FIELD_GAP
         + fields_h(fields)
         + MODAL_FIELD_GAP
         + MODAL_CLOSE_H

@@ -7,6 +7,19 @@
 
 ## 当前位置（2026-09-13)
 
+- **设置页 v1b-2 十修：跳框预览画板+池区手势让回（2026-09-13，
+  用户拍板）**：①跳框加**预览画板**——分隔线下字段区上 6 格
+  展台（三级框工艺），按 comp_registry 新 preview 枚举维（16
+  变体）实涂装微缩实时渲染（光球/齿轮真渲染、开口框封存复活、
+  弹簧/缓动曲线、手势轨迹/视口平推示意）；gear 抽 paint_at
+  共享核（§六 禁手抄）。几何单源 modal.rs 加 MODAL_PREVIEW_H/
+  preview_rect/fields_top，卡高公式含画板带。考题 modal_spec
+  +2 + gear_spec +1（paint≡paint_at 同一掩码钉），变异四咬
+  全中。②**bug 根修**：设置页池区起手右滑回不到
+  终端页——池区手势槽拖过 slop 只记账不交出 → 让回面板页全家
+  （补建 panel_touch+panel_drag 并 feed 当前点，Ended 通路白拿
+  finish_panel_drag/decide_swipe），B 档无考题，实机回归判卷。
+  实机判卷待办（画板逐类看 + 右滑回归）。
 - **设置页 v1b-1 九修：组件池页+跳框（2026-09-13，用户拍板）**：
   配置卡第二标签「组件池」= 组件库实机花名册，唯一信息源 =
   comp_registry.rs 常量表（symbol 实存棘轮考题钉表码一致）；

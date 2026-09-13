@@ -1130,16 +1130,42 @@ impl App {
                     tt.last_x = x;
                     return;
                 }
-                // 池区手势（宪法 §五 目录语义）：拖过 slop 只记账——
-                // 抬手不归点按（不聚焦不开合；v1a 池内无滚动，
-                // 拖动手势在抬手段落回面板页语义）
-                if let Some(ct) = self.cfg_pool_touch.as_mut() {
+                // 池区手势（宪法 §五 目录语义）：起手槽只是点按候选的
+                // 扣留席——拖过 slop 即**让回面板页全家**（2026-09-13 用户
+                // 实机案：「下池右滑回不去页面」——病灶 = 槽只记账不把
+                // 手势交出去，横向锁/快滑裁决永远轮不到它）。让回 = 补建
+                // panel_drag 旁观者（从起手点建，立即补喂当前点——横向
+                // 一锁就跟手推回）+ panel_touch（dragged=true 点按作废，
+                // 纵向续上池滚动、抬手 decide_swipe 抽屉裁决）
+                if let Some(ct) = self.cfg_pool_touch.take() {
                     if !ct.2
                         && ((x - ct.0).abs() > crate::scroll::TAP_SLOP_PX
                             || (y - ct.1).abs() > crate::scroll::TAP_SLOP_PX)
                     {
-                        ct.2 = true;
+                        crate::report::report(
+                            "gest",
+                            &format!("池区手势让回面板页 ({x:.0},{y:.0})"),
+                        );
+                        self.panel_touch = Some(PanelTouch {
+                            start_x: ct.0,
+                            start_y: ct.1,
+                            last_y: y,
+                            acc_px: 0.0,
+                            dragged: true,
+                        });
+                        self.panel_drag = Some(crate::ui::panel_drag::PanelDrag::new(
+                            ct.0,
+                            ct.1,
+                            crate::report::boot_ms() as u64,
+                        ));
+                        if self.feed_panel_drag(x, y) {
+                            return;
+                        }
+                        // 本事件不补滚动（防 slop 跳变），下事件起续
+                        self.dirty = true;
+                        return;
                     }
+                    self.cfg_pool_touch = Some(ct); // 未过 slop：槽放回去继续扣留
                     return;
                 }
                 // 面板页手势：AI 页拖动 = 对话页滚行（像素级累积跟手，

@@ -756,9 +756,8 @@ fn paint_tab_chip(
 /// clip_x0/x1 = X 向内容裁剪带（与标签文字同一条带，眼手同尺：
 /// 带外看不见也点不着；左线已收进框内，无需额外放宽）
 ///
-/// **封存（2026-09-13 八修）**：标签栏换案填色标签块后本涂装退役，
-/// 保留待文件树光标复用（kfmv4 开口框是文件树光标的指定形态）
-#[allow(dead_code)]
+/// **封存复活（2026-09-13 十修）**：标签栏换案填色标签块后本涂装退役，
+/// 十修跳框预览画板（Preview::OpenCursor）重新调用；文件树光标仍待用
 #[allow(clippy::too_many_arguments)]
 fn paint_open_cursor(
     frame: &mut Frame<'_>,
@@ -825,7 +824,6 @@ fn paint_open_cursor(
 /// 所在框缘（top=上缘，弧心 y0+R；否则下缘，弧心 y1−R）；弧只画
 /// 圆心左侧象限（dx≤0），角度归一后左上弧 [π, 3π/2] 宽 8→3、左下弧
 /// [π/2, π] 宽 3→8。线色 = grad 渐变框逐像素采样（五修，页环同尺）
-#[allow(dead_code)] // 随 paint_open_cursor 封存（八修，待文件树光标复用）
 #[allow(clippy::too_many_arguments)]
 fn paint_cursor_arc(
     frame: &mut Frame<'_>,
@@ -2964,8 +2962,30 @@ impl TermView {
             }
         }
 
+        // 预览画板（宪法 §六 跳框预览画板条款，十修）：展台框（三级框
+        // 工艺 bar=false）+ 组件实涂装微缩实时渲染（种类 = 条目 preview
+        // 维，原语全复用共享件——§六 样式唯一来源）
+        let prev = md::preview_rect(&card);
+        paint_row_frame(
+            &mut frame,
+            prev.x + off,
+            prev.y,
+            prev.w,
+            prev.h,
+            false,
+            false,
+            accent,
+            denom,
+            (0, i64::from(h)),
+        );
+        let prev_screen = crate::ui::dual_pool::PoolRect {
+            x: prev.x + off,
+            ..prev.clone()
+        };
+        self.paint_preview_impl(&mut frame, entry.preview, &prev_screen, accent, denom);
+
         // 字段区：题注（30px 灰）在上 + 内容行（36px 亮）在下
-        let mut pen = line_y + 1 + i64::from(CELL_H);
+        let mut pen = md::fields_top(&card);
         for f in &fields {
             if pen + i64::from(md::MODAL_LABEL_H) > ink_bottom {
                 break;
@@ -3028,6 +3048,502 @@ impl TermView {
             title_fg,
             btn.x + off,
         );
+    }
+
+    /// 跳框预览画板涂装（宪法 §六 跳框预览画板条款，2026-09-13 十修）：
+    /// 按条目的 preview 维把**组件实涂装微缩实时渲染**进展台——原语全
+    /// 复用共享件（paint_rect_ring/paint_row_frame/paint_tab_chip/
+    /// paint_open_cursor/orb sprite/gear paint_at），动效引擎类画函数
+    /// 曲线/示意图。r = 展台矩形（屏坐标，含面板 off）；展品画在展台
+    /// 内缩 1 格的内区，纵向按展台裁剪
+    #[allow(clippy::too_many_lines)]
+    fn paint_preview_impl(
+        &self,
+        frame: &mut Frame<'_>,
+        pv: crate::ui::comp_registry::Preview,
+        r: &crate::ui::dual_pool::PoolRect,
+        accent: crate::ui::accent::AccentPair,
+        denom: i64,
+    ) {
+        use crate::ui::comp_registry::Preview;
+        let grad = RingGradient {
+            c1: accent.c1,
+            c2: accent.c2,
+            x0: 0,
+            y0: 0,
+            denom,
+        };
+        let clip = (r.y, r.y + i64::from(r.h)); // 展品不出展台（纵向裁剪带）
+        // 展台内区：四向各让 1 格
+        let ix = r.x + i64::from(CELL_W);
+        let iy = r.y + i64::from(CELL_H / 2);
+        let iw = r.w.saturating_sub(CELL_W * 2);
+        let ih = r.h.saturating_sub(CELL_H);
+        if iw < 8 || ih < 8 {
+            return;
+        }
+        let icx = ix + i64::from(iw) / 2; // 内区心 x
+        let title_fg = 0x00D9_D9D9;
+        let meta_fg = 0x0080_8080;
+        match pv {
+            Preview::Ring => {
+                // 小页环：池框同配方（c1→c2 外壳向），宽 ≈ 内区 2/3
+                let rw = (i64::from(iw) * 2 / 3) as u32;
+                let x0 = icx - i64::from(rw) / 2;
+                paint_rect_ring(
+                    frame,
+                    x0,
+                    iy,
+                    x0 + i64::from(rw),
+                    iy + i64::from(ih),
+                    0,
+                    i64::MAX,
+                    crate::ui::accent::CARD_PAGE_BG,
+                    accent.c1,
+                    accent.c2,
+                    24,
+                );
+            }
+            Preview::RowFrame => {
+                // 选中 + 未选中各一条（行高 2 格微缩，间距 0.5 格）
+                let rh = CELL_H * 2;
+                let gap = CELL_H / 2;
+                let y0 = iy + (i64::from(ih) - i64::from(rh * 2 + gap)) / 2;
+                for (k, sel) in [true, false].into_iter().enumerate() {
+                    paint_row_frame(
+                        frame,
+                        ix,
+                        y0 + k as i64 * i64::from(rh + gap),
+                        iw,
+                        rh,
+                        sel,
+                        true,
+                        accent,
+                        denom,
+                        clip,
+                    );
+                }
+            }
+            Preview::ModalMini => {
+                // 自指：迷你页底 + 压暗 + 小卡 + 小关闭钮
+                for dy in 0..ih as i64 {
+                    for dx in 0..iw as i64 {
+                        frame.blend_px((ix + dx) as u32, (iy + dy) as u32, 0x00FF_FFFF, 8);
+                    }
+                }
+                for dy in 0..ih as i64 {
+                    for dx in 0..iw as i64 {
+                        frame.blend_px((ix + dx) as u32, (iy + dy) as u32, 0x0000_0000, 120);
+                    }
+                }
+                let cw = i64::from(iw) * 2 / 3;
+                let ch = i64::from(ih) * 3 / 4;
+                let cx0 = icx - cw / 2;
+                let cy0 = iy + (i64::from(ih) - ch) / 2;
+                paint_rect_ring(
+                    frame,
+                    cx0,
+                    cy0,
+                    cx0 + cw,
+                    cy0 + ch,
+                    0,
+                    i64::MAX,
+                    crate::ui::accent::CARD_PAGE_BG,
+                    accent.c2,
+                    accent.c1,
+                    18,
+                );
+                let bw = cw - 2 * i64::from(CELL_W);
+                paint_row_frame(
+                    frame,
+                    cx0 + i64::from(CELL_W),
+                    cy0 + ch - i64::from(CELL_H / 2) - 24,
+                    bw as u32,
+                    24,
+                    false,
+                    false,
+                    accent,
+                    denom,
+                    clip,
+                );
+            }
+            Preview::TabChip => {
+                // 选中块 + 未选中块 + 底线（标签行微缩语境）
+                let ch = 54u32;
+                let y0 = iy + (i64::from(ih) - i64::from(ch)) / 2 - 9;
+                let w0 = 10 * CELL_W; // 「选中」2 字 + padding 微缩定宽
+                paint_tab_chip(
+                    frame,
+                    icx - i64::from(w0) - 9,
+                    y0,
+                    w0,
+                    ch,
+                    true,
+                    grad,
+                    0,
+                    i64::MAX,
+                );
+                paint_tab_chip(frame, icx + 9, y0, w0, ch, false, grad, 0, i64::MAX);
+                self.draw_text_centered(
+                    frame,
+                    "选中",
+                    icx - i64::from(w0) - 9,
+                    y0,
+                    w0,
+                    ch,
+                    30.0,
+                    crate::ui::accent::CARD_PAGE_BG,
+                    icx - i64::from(w0) - 9,
+                );
+                self.draw_text_centered(frame, "未选", icx + 9, y0, w0, ch, 30.0, meta_fg, icx + 9);
+                // 底线：1px 渐变细线 c2→c1，内区同宽
+                let uy = y0 + i64::from(ch);
+                for ax in ix..(ix + i64::from(iw)) {
+                    if ax < 0 || ax >= i64::from(frame.w) || uy < 0 || uy >= i64::from(frame.h) {
+                        continue;
+                    }
+                    let c = ring_gradient_rgb(accent.c2, accent.c1, ax, uy, denom);
+                    frame.blend_px(ax as u32, uy as u32, c, 255);
+                }
+            }
+            Preview::Underline => {
+                let uy = iy + i64::from(ih) / 2;
+                for ax in ix..(ix + i64::from(iw)) {
+                    if ax < 0 || ax >= i64::from(frame.w) || uy < 0 || uy >= i64::from(frame.h) {
+                        continue;
+                    }
+                    let c = ring_gradient_rgb(accent.c2, accent.c1, ax, uy, denom);
+                    frame.blend_px(ax as u32, uy as u32, c, 255);
+                }
+            }
+            Preview::Dropdown => {
+                // 触发器（值框+▼）+ 下弹 panel 两项（第二项选中）
+                let th = 54u32;
+                let y0 = iy + 6;
+                paint_row_frame(frame, ix, y0, iw, th, false, false, accent, denom, clip);
+                self.draw_text_left_ex(
+                    frame,
+                    "选项甲",
+                    ix as u32,
+                    iw.saturating_sub(72),
+                    y0 as u32,
+                    th,
+                    30.0,
+                    meta_fg,
+                    18.0,
+                    None,
+                );
+                let tri_cx = ix + i64::from(iw) - 27;
+                let tri_y = y0 + i64::from(th) / 2 - 4;
+                for dy in 0..9u32 {
+                    let half_w = 8 - dy;
+                    for dx in 0..(half_w * 2 + 1) as i64 {
+                        let xx = tri_cx - i64::from(half_w) + dx;
+                        let yy = tri_y + i64::from(dy);
+                        if xx >= 0 && xx < i64::from(frame.w) && yy >= 0 && yy < i64::from(frame.h)
+                        {
+                            frame.blend_px(xx as u32, yy as u32, title_fg, 255);
+                        }
+                    }
+                }
+                let py0 = y0 + i64::from(th);
+                for dy in 0..(th * 2) as i64 {
+                    for dx in 0..iw as i64 {
+                        let (xx, yy) = (ix + dx, py0 + dy);
+                        if xx >= 0 && xx < i64::from(frame.w) && yy >= 0 && yy < i64::from(frame.h)
+                        {
+                            frame.blend_px(xx as u32, yy as u32, 0x0000_0000, 245);
+                        }
+                    }
+                }
+                for (k, sel) in [false, true].into_iter().enumerate() {
+                    let oy = py0 + k as i64 * i64::from(th);
+                    paint_row_frame(frame, ix, oy, iw, th, sel, true, accent, denom, clip);
+                }
+            }
+            Preview::FieldLabel => {
+                // 标签列（36 亮）+ 值框（30 灰）mini 行
+                let y0 = iy + (i64::from(ih) - i64::from(CELL_H * 2)) / 2;
+                self.draw_text_left_ex(
+                    frame,
+                    "标签",
+                    ix as u32,
+                    216,
+                    y0 as u32,
+                    CELL_H * 2,
+                    36.0,
+                    title_fg,
+                    18.0,
+                    None,
+                );
+                paint_row_frame(
+                    frame,
+                    ix + 216,
+                    y0 + i64::from(CELL_H / 2),
+                    iw.saturating_sub(216),
+                    CELL_H,
+                    false,
+                    false,
+                    accent,
+                    denom,
+                    clip,
+                );
+                self.draw_text_left_ex(
+                    frame,
+                    "值",
+                    (ix + 216) as u32,
+                    iw.saturating_sub(216 + 18),
+                    (y0 + i64::from(CELL_H / 2)) as u32,
+                    CELL_H,
+                    30.0,
+                    meta_fg,
+                    18.0,
+                    None,
+                );
+            }
+            Preview::OpenCursor => {
+                // 封存件复活展出：开口框（左强调线+顶底发丝+绿青底垫）
+                let cw = i64::from(iw) * 2 / 3;
+                let chh = i64::from(CELL_H * 2);
+                let cx0 = icx - cw / 2;
+                let cy0 = iy + (i64::from(ih) - chh) / 2;
+                paint_open_cursor(
+                    frame,
+                    cx0,
+                    cy0,
+                    cw,
+                    chh,
+                    cw * 2 / 5,
+                    cw * 3 / 5,
+                    0,
+                    i64::MAX,
+                    grad,
+                    0x002E_D5A3,
+                );
+            }
+            Preview::Orb => {
+                // 真渲染：sprite 加法合成微缩（rs 48 = 半屏光球的 3/4）
+                let sprite = crate::ui::orb::build_orb_sprite(48.0, 1.0);
+                crate::ui::orb::blit_orb_sprite(
+                    frame.buf,
+                    frame.w,
+                    frame.h,
+                    &sprite,
+                    icx as f64,
+                    (iy + i64::from(ih) / 2) as f64,
+                    1.0,
+                );
+            }
+            Preview::InputBar => {
+                // 栏框 + 占位灰字 + 发送钮（accent 实底 + ▶ 三角像素）
+                let bh = 54u32;
+                let y0 = iy + (i64::from(ih) - i64::from(bh)) / 2;
+                let sw = 54u32;
+                paint_row_frame(
+                    frame,
+                    ix,
+                    y0,
+                    iw.saturating_sub(sw + 12),
+                    bh,
+                    false,
+                    false,
+                    accent,
+                    denom,
+                    clip,
+                );
+                self.draw_text_left_ex(
+                    frame,
+                    "输入消息…",
+                    ix as u32,
+                    iw.saturating_sub(sw + 12),
+                    y0 as u32,
+                    bh,
+                    30.0,
+                    meta_fg,
+                    18.0,
+                    None,
+                );
+                let sx0 = ix + i64::from(iw) - i64::from(sw);
+                for dy in 0..bh as i64 {
+                    for dx in 0..sw as i64 {
+                        let (xx, yy) = (sx0 + dx, y0 + dy);
+                        if xx >= 0
+                            && xx < i64::from(frame.w)
+                            && yy >= 0
+                            && yy < i64::from(frame.h)
+                            && rr_sdf(dx as f32 + 0.5, dy as f32 + 0.5, sw, bh, 18) < 0.0
+                        {
+                            let c = grad.sample(xx, yy);
+                            frame.blend_px(xx as u32, yy as u32, c, 255);
+                        }
+                    }
+                }
+                let tcy = y0 + i64::from(bh) / 2;
+                let tcx = sx0 + i64::from(sw) / 2 - 4;
+                for dy in 0..15i64 {
+                    let hw = (15 - dy) / 2;
+                    for dx in 0..=hw {
+                        let (xx, yy) = (tcx + dy * 2 / 2 + dx, tcy - 7 + dy);
+                        if xx >= 0 && xx < i64::from(frame.w) && yy >= 0 && yy < i64::from(frame.h)
+                        {
+                            frame.blend_px(xx as u32, yy as u32, 0x00FF_FFFF, 255);
+                        }
+                    }
+                }
+            }
+            Preview::Keybar => {
+                // 两排键格微缩（5 列 ×2 排，键 = 8% 白细线圆角格）
+                let cols = 5u32;
+                let kg = 12u32;
+                let kw = iw.saturating_sub((cols - 1) * kg) / cols;
+                let kh = 48u32;
+                let rows_y = iy + (i64::from(ih) - i64::from(kh * 2 + kg)) / 2;
+                for row in 0..2u32 {
+                    for col in 0..cols {
+                        paint_row_frame(
+                            frame,
+                            ix + i64::from(col * (kw + kg)),
+                            rows_y + i64::from(row * (kh + kg)),
+                            kw,
+                            kh,
+                            false,
+                            false,
+                            accent,
+                            denom,
+                            clip,
+                        );
+                    }
+                }
+            }
+            Preview::Gear => {
+                crate::ui::gear::paint_at(
+                    frame.buf,
+                    frame.w,
+                    frame.h,
+                    icx as u32,
+                    (iy + i64::from(ih) / 2) as u32,
+                );
+            }
+            Preview::CurveSpring => {
+                // spring_pos 响应曲线（0→100 目标，过冲可见）+ 目标虚线
+                let span_ms = 600u32;
+                let target_y = iy + i64::from(ih) - i64::from(ih) * 100 / 130;
+                for ax in ix..(ix + i64::from(iw)) {
+                    if ax % 6 < 3 && ax >= 0 && ax < i64::from(frame.w) && target_y >= 0 {
+                        frame.blend_px(ax as u32, target_y as u32, 0x00FF_FFFF, 40);
+                    }
+                }
+                let mut prev: Option<(i64, i64)> = None;
+                for step in 0..iw {
+                    let t = u64::from(step) * u64::from(span_ms) / u64::from(iw);
+                    let pos = crate::ui::fx_spring::spring_pos(0.0, 100.0, t);
+                    let px_x = ix + i64::from(step);
+                    let px_y = iy + i64::from(ih) - (pos / 130.0 * ih as f32) as i64;
+                    if let Some((_, ly)) = prev {
+                        // 折线补间（逐列画点，斜率大处竖向连点）
+                        let (ya, yb) = if ly <= px_y { (ly, px_y) } else { (px_y, ly) };
+                        for yy in ya..=yb {
+                            if px_x >= 0 && px_x < i64::from(frame.w) && yy >= clip.0 && yy < clip.1
+                            {
+                                let c = grad.sample(px_x, yy);
+                                frame.blend_px(px_x as u32, yy as u32, c, 255);
+                            }
+                        }
+                    }
+                    prev = Some((px_x, px_y));
+                }
+            }
+            Preview::CurveEase => {
+                // 两族同图：ease-out（c1）与 ease-in（c2）
+                for step in 0..iw {
+                    let t = step as f32 / iw as f32;
+                    let yo = crate::ui::fx_ease::ease_out_cubic(t);
+                    let yi = crate::ui::fx_ease::ease_in_cubic(t);
+                    let px_x = ix + i64::from(step);
+                    for (v, c) in [(yo, accent.c1), (yi, accent.c2)] {
+                        let px_y = iy + i64::from(ih) - (v * ih as f32) as i64;
+                        if px_x >= 0 && px_x < i64::from(frame.w) && px_y >= clip.0 && px_y < clip.1
+                        {
+                            frame.blend_px(px_x as u32, px_y as u32, c, 255);
+                        }
+                    }
+                }
+            }
+            Preview::Swipe => {
+                // 轨迹线 + 起点圆 + 终点箭头（横向锁定制示意）
+                let my = iy + i64::from(ih) / 2;
+                let x0 = ix + 30;
+                let x1 = ix + i64::from(iw) - 60;
+                for xx in x0..x1 {
+                    for dy in -1..=1i64 {
+                        let yy = my + dy;
+                        if xx >= 0 && xx < i64::from(frame.w) && yy >= 0 && yy < i64::from(frame.h)
+                        {
+                            let c = grad.sample(xx, yy);
+                            frame.blend_px(xx as u32, yy as u32, c, 200);
+                        }
+                    }
+                }
+                // 起点圆（c1 实填 r10）
+                for dy in -10..=10i64 {
+                    for dx in -10..=10i64 {
+                        if dx * dx + dy * dy <= 100 {
+                            let (xx, yy) = (x0 + dx, my + dy);
+                            if xx >= 0
+                                && xx < i64::from(frame.w)
+                                && yy >= 0
+                                && yy < i64::from(frame.h)
+                            {
+                                frame.blend_px(xx as u32, yy as u32, accent.c1, 255);
+                            }
+                        }
+                    }
+                }
+                // 终点箭头（c2 实心三角，尖朝右）
+                for k in 0..21i64 {
+                    let half = 10 - k / 2;
+                    for dy in -half..=half {
+                        let (xx, yy) = (x1 + k, my + dy);
+                        if xx >= 0 && xx < i64::from(frame.w) && yy >= 0 && yy < i64::from(frame.h)
+                        {
+                            frame.blend_px(xx as u32, yy as u32, accent.c2, 255);
+                        }
+                    }
+                }
+            }
+            Preview::ViewportPush => {
+                // 旧页半挤出（左，8% 白框）+ 新页推入（右，accent 框）
+                let ph = ih * 3 / 4;
+                let py0 = iy + (i64::from(ih) - i64::from(ph)) / 2;
+                let pw = i64::from(iw) / 2;
+                paint_rect_ring(
+                    frame,
+                    ix - pw / 3,
+                    py0,
+                    ix + pw / 2,
+                    py0 + i64::from(ph),
+                    ix,
+                    i64::MAX,
+                    crate::ui::accent::CARD_PAGE_BG,
+                    0x0040_4040,
+                    0x0060_6060,
+                    18,
+                );
+                paint_rect_ring(
+                    frame,
+                    icx,
+                    py0,
+                    icx + pw,
+                    py0 + i64::from(ph),
+                    0,
+                    ix + i64::from(iw),
+                    crate::ui::accent::CARD_PAGE_BG,
+                    accent.c2,
+                    accent.c1,
+                    18,
+                );
+            }
+        }
     }
 
     /// 画一串已量宽的字符（折行后逐行画走这里）：左对齐内缩 18 +

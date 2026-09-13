@@ -6,7 +6,7 @@
 //! 齿带着墨，中孔与盒外一字不动（终端文字透出）；④小缓冲早退不 panic。
 //! 变异抽检：hit 与 paint 各自私算中心 → 题①必红；掩码中孔删了 → 题③红。
 
-use kfm_na::ui::gear::{GEAR_GLYPH_PX, GEAR_HIT_PX, GEAR_INK, hit, hit_rect, paint};
+use kfm_na::ui::gear::{GEAR_GLYPH_PX, GEAR_HIT_PX, GEAR_INK, hit, hit_rect, paint, paint_at};
 
 const W: u32 = 800;
 const H: u32 = 600;
@@ -73,4 +73,20 @@ fn spec_gear_小缓冲早退() {
     let mut tiny = vec![0u32; 16];
     paint(&mut tiny, 4, 4);
     assert!(tiny.iter().all(|&p| p == 0), "小缓冲早退一字不写");
+}
+
+#[test]
+fn spec_gear_paint与paint_at同一掩码() {
+    // 宪法 §六 禁手抄（十修跳框画板复用齿轮）：paint = paint_at 在
+    // 命中盒心的调用——两份缓冲必须逐像素一致（paint 私算心位/掩码
+    // 即红）；对照组：异心位必须真移动字形（防恒等粉饰）
+    let mut a = vec![BG; (W * H) as usize];
+    let mut b = vec![BG; (W * H) as usize];
+    paint(&mut a, W, H);
+    let (hx, hy, hw, hh) = hit_rect(W);
+    paint_at(&mut b, W, H, hx + hw / 2, hy + hh / 2);
+    assert_eq!(a, b, "paint ≡ paint_at(命中盒心)——掩码唯一来源");
+    let mut c = vec![BG; (W * H) as usize];
+    paint_at(&mut c, W, H, W / 2, H / 2);
+    assert_ne!(a, c, "异心位必须画出不同结果");
 }
