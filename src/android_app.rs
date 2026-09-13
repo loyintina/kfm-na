@@ -303,6 +303,15 @@ struct App {
     /// 图层烘焙判定（ui-base §八 渲染成本模型，2026-09-07）：三槽 sig
     /// 记账——动画帧（panel_off 变）不进任何槽的重烘焙
     layer_sigs: LayerSigs,
+    /// 设置（设置页 v1，docs/active/设置页.md）：servers.json 条目表 +
+    /// terminal.json 全局项。冷启动由壳读盘解析（缺/坏 → 现状默认 +
+    /// 上报，配置文件不许炸终端）；切换键拦截/默认会话/ConnConfig/
+    /// 配置页 UI 共用这份
+    settings_servers: Vec<crate::settings::ServerEntry>,
+    terminal_cfg: crate::settings::TerminalConfig,
+    /// 全局切换键的拦截字节（= terminal_cfg.switch_hotkey 经 keymap
+    /// 同一把尺产出的缓存，逐键比对免换算；空 = 不拦截）
+    switch_hotkey_bytes: Vec<u8>,
 }
 
 /// 图层烘焙 sig 记账（ui-base §八）。判据纪律：**sig 必须列全该槽
@@ -380,6 +389,39 @@ struct OverSig(
 /// deepseek-v4-flash-vision-exp——模型选择器是未来活（期 3 打磨），v1 定死
 const DEFAULT_PROVIDER: &str = "智谱";
 const DEFAULT_MODEL: &str = "glm-5.3-flash";
+
+/// 读设置文件（设置页 v1，docs/active/设置页.md §2.5）：私有目录
+/// settings/servers.json + settings/terminal.json。缺文件 = 现状默认
+/// （空服务器表 → ConnConfig 走 8021 锚；terminal.json 缺 → 本地起步
+/// + Ctrl-]）；坏文件 = 上报 + 回退默认——配置文件不许炸终端。
+///
+/// 配置文件不进 git——由脚本经隧道推送（ai/providers.json 同款纪律）
+fn load_settings(
+    app: Option<&winit::platform::android::activity::AndroidApp>,
+) -> (
+    Vec<crate::settings::ServerEntry>,
+    crate::settings::TerminalConfig,
+) {
+    let mut servers = Vec::new();
+    let mut term_cfg = crate::settings::TerminalConfig::default();
+    let Some(dir) = app.and_then(|a| a.internal_data_path()) else {
+        return (servers, term_cfg);
+    };
+    let cfg = dir.join("settings");
+    if let Ok(j) = std::fs::read_to_string(cfg.join("servers.json")) {
+        match crate::settings::parse_servers(&j) {
+            Ok(v) => servers = v,
+            Err(e) => crate::report::report_sync("term", &format!("servers.json 解析失败: {e}")),
+        }
+    }
+    if let Ok(j) = std::fs::read_to_string(cfg.join("terminal.json")) {
+        match crate::settings::parse_terminal(&j) {
+            Ok(t) => term_cfg = t,
+            Err(e) => crate::report::report_sync("term", &format!("terminal.json 解析失败: {e}")),
+        }
+    }
+    (servers, term_cfg)
+}
 
 /// 装配本地脑（期 0③ 换脑，D11）：私有目录 ai/providers.json + ai/.env
 /// 齐且可解析 → DirectApiBrain；任一环缺/坏 → echo-brain 夹具兜底 +
@@ -1950,6 +1992,48 @@ impl App {
             });
         }
 
+        // 设置读盘（设置页 v1）：servers.json/terminal.json → App 字段 +
+        // ws 连接插件的默认 ConnConfig。默认会话指向的服务器优先，
+        // 否则第一条；wsUrl 空则按 tunnel.localPort 拼回环地址；
+        // 无条目 = ConnConfig::default()（8021 现状锚，行为零变化）
+        let (servers, term_cfg) = load_settings(self.android_app.as_ref());
+        // 索引先行（借还瞬清，servers 之后整体 move 进 App 字段不打架）
+        let default_idx = match &term_cfg.default_session {
+            crate::settings::DefaultSession::Server(id) => servers
+                .iter()
+                .position(|s| &s.id == id || &s.name == id)
+                .or_else(|| {
+                    crate::report::report_sync(
+                        "term",
+                        &format!("defaultSession 指向的服务器「{id}」不存在，回退第一条"),
+                    );
+                    (!servers.is_empty()).then_some(0)
+                }),
+            crate::settings::DefaultSession::Local => (!servers.is_empty()).then_some(0),
+        };
+        let prefer_remote = default_idx.is_some()
+            && matches!(
+                term_cfg.default_session,
+                crate::settings::DefaultSession::Server(_)
+            );
+        let conn_cfg = match default_idx {
+            Some(i) => {
+                let s = &servers[i];
+                ConnConfig {
+                    url: if s.ws_url.is_empty() {
+                        format!("ws://127.0.0.1:{}/ws", s.tunnel.local_port)
+                    } else {
+                        s.ws_url.clone()
+                    },
+                    command: s.command.clone(),
+                }
+            }
+            None => ConnConfig::default(),
+        };
+        self.switch_hotkey_bytes = term_cfg.switch_hotkey.bytes();
+        self.terminal_cfg = term_cfg;
+        self.settings_servers = servers;
+
         // 插件基座：终端模拟器 + 连接 provider（边界手术第一/二刀）——
         // 「用哪个终端芯、连哪、怎么连」都不归主循环；工厂是服务，实例归调用方。
         // 瞬时返回契约预算 50ms 是 harness 政策(G5 归层:cordis-na 默认关,
@@ -1958,8 +2042,8 @@ impl App {
             PluginEntry {
                 id: crate::plugins::conn_provider_ws::PLUGIN_NAME,
                 disabled: false,
-                config: Some(Box::new(|| {
-                    Arc::new(ConnConfig::default()) as Arc<dyn std::any::Any + Send + Sync>
+                config: Some(Box::new(move || {
+                    Arc::new(conn_cfg.clone()) as Arc<dyn std::any::Any + Send + Sync>
                 })),
             },
             // 新插件上线纪律：disabled 一键关,默认开(回退第一层)——
@@ -2130,8 +2214,17 @@ impl App {
         };
         match (local, remote) {
             (Some(l), Some(r)) => {
-                let mut router = crate::session_router::SessionRouter::new(l.outbound, "local");
-                if let Err(e) = router.add_standby(r.outbound, "remote") {
+                // 默认会话（设置页 v1 terminal.json defaultSession）：
+                // Server(id 解析成功) → 远程为活跃槽、本地待机；
+                // 否则维持现状锚（本地活跃，远程待机）。prefer_remote
+                // 在设置读盘段已算好（解析成功才 true）
+                let (active_tx, active_name, standby_tx, standby_name) = if prefer_remote {
+                    (r.outbound, "remote", l.outbound, "local")
+                } else {
+                    (l.outbound, "local", r.outbound, "remote")
+                };
+                let mut router = crate::session_router::SessionRouter::new(active_tx, active_name);
+                if let Err(e) = router.add_standby(standby_tx, standby_name) {
                     crate::report::report_sync("term", &format!("路由装配失败: {e}"));
                 }
                 crate::gate::pump_register("local", l.events);
@@ -2296,8 +2389,9 @@ impl App {
             router.lock().unwrap().send(TermCmd::Resize { cols, rows });
         }
         if let Some(t) = self.term_handle() {
+            let hk = self.terminal_cfg.switch_hotkey.display();
             let banner =
-                format!("\r\n\x1b[36m[kfm-na → {name_s} 会话（Ctrl-] 切回 {name_a}）]\x1b[0m\r\n");
+                format!("\r\n\x1b[36m[kfm-na → {name_s} 会话（{hk} 切回 {name_a}）]\x1b[0m\r\n");
             t.lock().unwrap().feed(banner.as_bytes());
         }
         self.session_over = self.health(name_s).dead;
@@ -2657,9 +2751,12 @@ impl App {
             if bytes.is_empty() {
                 continue;
             }
-            // L1 会话切换闸：Ctrl-]（keymap 把 Ctrl+] 落成 \x1d）不发对端，
+            // L1 会话切换闸：切换键（默认 Ctrl-]=\x1d，terminal.json
+            // switchHotkey 可配，keymap 同一把尺落成字节）不发对端，
             // 活跃/待机槽互换（telnet 转义符惯例）
-            if bytes == "\u{1d}" {
+            if !self.switch_hotkey_bytes.is_empty()
+                && bytes.as_bytes() == self.switch_hotkey_bytes.as_slice()
+            {
                 self.switch_session();
                 continue;
             }

@@ -29,6 +29,7 @@ pub mod report;
 pub mod scroll;
 pub mod session;
 pub mod session_router;
+pub mod settings;
 pub mod termview;
 pub mod theme;
 pub mod trace;
