@@ -2504,10 +2504,13 @@ impl TermView {
             (ox * ox + oy * oy).sqrt() + px.max(py).min(0.0) - r as f64
         }
 
-        // 三级框行涂装（四版 §五 池行条款：左粗三边细通用化）——
-        // 左缘 = 10px accent 渐变竖胶囊条（条心贴左缘内铺，竖跨 R/2
-        // 收边，只吃框剪影内像素；kfmv4 实证选中行左边 ≈11px @1260）；
-        // 其余三边细描边（未选中 8% 白，选中 = accent 渐变）+ 4% 白填充
+        // 三级框行涂装（§五 池行条款四版立/六修收窄）——bar=true：
+        // 可选列表行（下池行/下拉选项行）左缘 = 10px accent 渐变竖胶囊
+        // 条（条心贴左缘内铺，竖跨 R/2 收边，只吃框剪影内像素；kfmv4
+        // 实证选中行左边 ≈11px @1260）；bar=false：展示型值框（上池字段
+        // 框）四边均匀细线（六修用户拍板：值框左竖条太丑——左粗条是
+        // 选择语言的视觉载荷，不是通用装修）。三边细描边（未选中 8%
+        // 白，选中 = accent 渐变）+ 4% 白填充
         #[allow(clippy::too_many_arguments)]
         fn row_frame(
             frame: &mut Frame<'_>,
@@ -2516,6 +2519,7 @@ impl TermView {
             rw: u32,
             rh: u32,
             sel: bool,
+            bar: bool,
             accent: crate::ui::accent::AccentPair,
             denom: i64,
             clip: (i64, i64),
@@ -2542,8 +2546,9 @@ impl TermView {
                     // d < 0.5 = 不出框剪影（盖住左缘细描边带是预期——条即左缘）
                     let seg_y = yy.clamp(bar_top, bar_bot);
                     let (bdx, bdy) = (xx - bar_cx, yy - seg_y);
-                    let in_bar =
-                        d < 0.5 && ((bdx * bdx + bdy * bdy) as f64).sqrt() < BAR_W as f64 / 2.0;
+                    let in_bar = bar
+                        && d < 0.5
+                        && ((bdx * bdx + bdy * bdy) as f64).sqrt() < BAR_W as f64 / 2.0;
                     if in_bar {
                         let c = ring_gradient_rgb(accent.c1, accent.c2, xx, yy, denom);
                         frame.blend_px(xx as u32, yy as u32, c, 255);
@@ -2580,6 +2585,7 @@ impl TermView {
                 r.w,
                 r.h,
                 i == page.focus,
+                true,
                 accent,
                 denom,
                 no_clip,
@@ -2636,7 +2642,7 @@ impl TermView {
                 continue;
             }
             let clip32 = Some((uclip.0 as i32, uclip.1 as i32));
-            // 标签列（左 12 格，meta 档）
+            // 标签列（左 12 格，title 档——六修字档反转：标签是行的标题）
             self.draw_text_left_ex(
                 &mut frame,
                 &ur.label,
@@ -2645,11 +2651,12 @@ impl TermView {
                 r.y as u32,
                 r.h,
                 px_meta,
-                meta_fg,
+                title_fg,
                 text_inset,
                 clip32,
             );
-            // 值框（左粗三边细圆角深色框）+ 值文本
+            // 值框（四边 8% 白细线圆角深色框，六修取消左粗条——左粗条
+            // 收窄为可选列表行专属）+ 值文本
             let vb = cp::value_box_rect(&r);
             row_frame(
                 &mut frame,
@@ -2658,12 +2665,13 @@ impl TermView {
                 vb.w,
                 vb.h,
                 false,
+                false,
                 accent,
                 denom,
                 uclip,
             );
             // 值文本右缘留呼吸位（kfmv4 实证：文字不贴框缘；下拉行
-            // 再多留三角位 45+27）
+            // 再多留三角位 45+27）；六修字档反转：值改 meta 档灰
             let right_pad = if ur.is_dropdown { 72 } else { 27 };
             self.draw_text_left_ex(
                 &mut frame,
@@ -2673,7 +2681,7 @@ impl TermView {
                 vb.y as u32,
                 vb.h,
                 px_title,
-                title_fg,
+                meta_fg,
                 text_inset,
                 clip32,
             );
@@ -2700,7 +2708,7 @@ impl TermView {
         // ---- 下拉 panel（开着才画，叠在最后 = 盖住字段行/下池）----
         if page.dropdown_open {
             let t = cp::trigger_rect(&ps.upper, scroll);
-            let max_h = h.saturating_sub(t.y.max(0) as u32 + cp::FIELD_ROW_H + 40);
+            let max_h = h.saturating_sub(t.y.max(0) as u32 + t.h + 40);
             let pr = cp::dropdown_panel_rect(page.options.len(), &ps.upper, max_h, scroll);
             let px0 = pr.x + off;
             if px0 >= 0 {
@@ -2717,6 +2725,7 @@ impl TermView {
                         pr.w,
                         cp::FIELD_ROW_H,
                         i == page.option_sel,
+                        true,
                         accent,
                         denom,
                         no_clip,

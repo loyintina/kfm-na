@@ -3,12 +3,13 @@
 //! 契约真相源：docs/active/theme.md §五「双池的目录语义」二版（2026-09-13
 //! 修宪：下拉服务上池内容自身选项集不与下池联动/下池行框/上池字段框行
 //! 标签列+值框）+ 四版（同日：字段框行 4 格/下池行 4.5 格/行隙 1.5 格/
-//! 内边距 2 格/标签列 12 格/上池像素滚动）。纪律：先验证红，答案生成到
-//! 绿，绿后变异抽检。本文件是考题，生成器不许改。
+//! 内边距 2 格/标签列 12 格/上池像素滚动）+ 六修（同日：值框 3 格居中
+//! 于行无左粗条/字档反转标签亮值灰/下拉 panel 从值框下缘起弹）。纪律：
+//! 先验证红，答案生成到绿，绿后变异抽检。本文件是考题，生成器不许改。
 
 use kfm_na::ui::cfg_page::{
-    CfgPage, FIELD_ROW_H, LOWER_ROW_H, ROW_GAP, RowView, UpperRow, lower_row_rect, upper_row_rect,
-    value_box_rect,
+    CfgPage, FIELD_BOX_H, FIELD_ROW_H, LABEL_COL_W, LOWER_ROW_H, ROW_GAP, RowView, UpperRow,
+    lower_row_rect, upper_row_rect, value_box_rect,
 };
 use kfm_na::ui::dual_pool::PoolRect;
 
@@ -210,13 +211,36 @@ fn trigger_is_first_rows_value_box_right_of_label_col() {
 }
 
 #[test]
+fn value_box_is_3_cells_centered_in_row() {
+    // 六修：值框上下线各往中心缩半格——3 格高居中于 4 格行，横向不动
+    let row = upper_row_rect(0, &UPPER, 0);
+    let vb = value_box_rect(&row);
+    assert_eq!(vb.h, FIELD_BOX_H, "值框 = 3 格高");
+    assert_eq!(
+        vb.y,
+        row.y + (FIELD_ROW_H - FIELD_BOX_H) as i64 / 2,
+        "垂直居中：上缩 = 下缩 = 半格"
+    );
+    assert_eq!(
+        row.y + row.h as i64 - (vb.y + vb.h as i64),
+        vb.y - row.y,
+        "上下呼吸位等宽"
+    );
+    assert_eq!(
+        (vb.x, vb.w),
+        (row.x + LABEL_COL_W, row.w - LABEL_COL_W as u32),
+        "横向不动"
+    );
+}
+
+#[test]
 fn dropdown_panel_opens_downward() {
     // 宪法 §六：顶部栏向下弹（反了弹出屏外——kfmv4 教训）
     let mut p = CfgPage::new();
     p.set_options(opts(3), 0); // 4 项
     let t = p.trigger_rect(&UPPER);
     let panel = p.dropdown_panel_rect(&UPPER, 10_000);
-    assert_eq!(panel.y, t.y + FIELD_ROW_H as i64);
+    assert_eq!(panel.y, t.y + t.h as i64, "panel 从值框下缘起弹（六修）");
     assert_eq!(panel.x, t.x, "panel 与触发器同宽同左缘");
     assert_eq!(panel.h, 4 * FIELD_ROW_H);
     let clamped = p.dropdown_panel_rect(&UPPER, 3 * FIELD_ROW_H);
@@ -305,7 +329,7 @@ fn trigger_and_dropdown_follow_scroll() {
     assert_eq!(t1.y, t0.y - 120, "触发器随内容一起滚");
     // 下拉命中同尺：panel 跟触发器走，项命中必须带滚动维
     let panel = p.dropdown_panel_rect(&UPPER, 10_000);
-    assert_eq!(panel.y, t1.y + FIELD_ROW_H as i64);
+    assert_eq!(panel.y, t1.y + t1.h as i64);
     assert_eq!(p.dropdown_item_at_y(panel.y + 1, &UPPER, 10_000), Some(0));
     assert_eq!(
         p.dropdown_item_at_y(t1.y + 1, &UPPER, 10_000),

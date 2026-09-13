@@ -37,6 +37,9 @@ pub const LOWER_ROW_H: u32 = CELL_H * 9 / 2;
 /// 上池字段框行高 = 4 格（四版：2 格 ×2，行高 ×2 后 36px 圆角比例 0.25
 /// 与 kfmv4 实证偏方正观感同源）
 pub const FIELD_ROW_H: u32 = CELL_H * 4;
+/// 字段行内值框高 = 3 格，居中于行（六修：上下线各往中心缩半格——
+/// 正合 §三 最小容量律：字 1 格 + 上下各 1 格 ≥0.5 格）
+pub const FIELD_BOX_H: u32 = CELL_H * 3;
 /// 池内容距池框缘的内缩 = 2 格（四版：1 格实机太窄，kfmv4 实证 ≈40px）
 pub const POOL_CONTENT_INSET: i64 = CELL_W as i64 * 2;
 /// 行间留隙 = 1.5 格（四版 ×1.5；三版 1 格拍板「三级框跟二级框一样
@@ -298,13 +301,14 @@ pub fn upper_row_rect(i: usize, upper: &PoolRect, scroll: i64) -> PoolRect {
     }
 }
 
-/// 字段框的值框位（标签列之右；下拉触发器/值文本都画这里）
+/// 字段框的值框位（标签列之右；下拉触发器/值文本都画这里）——
+/// 六修：值框 3 格高居中于 4 格行（上下各缩半格）
 pub fn value_box_rect(row: &PoolRect) -> PoolRect {
     PoolRect {
         x: row.x + LABEL_COL_W,
-        y: row.y,
+        y: row.y + (FIELD_ROW_H - FIELD_BOX_H) as i64 / 2,
         w: row.w.saturating_sub(LABEL_COL_W as u32),
-        h: row.h,
+        h: FIELD_BOX_H,
     }
 }
 
@@ -313,7 +317,7 @@ pub fn trigger_rect(upper: &PoolRect, scroll: i64) -> PoolRect {
     value_box_rect(&upper_row_rect(0, upper, scroll))
 }
 
-/// 下拉 panel 矩形（顶部栏向下弹）：触发器下缘起，行数 = 选项数，
+/// 下拉 panel 矩形（顶部栏向下弹）：触发器值框下缘起，行数 = 选项数，
 /// 最高不出配置页可视区（调用方喂 max_h）；scroll = 上池滚动 px
 pub fn dropdown_panel_rect(
     opt_count: usize,
@@ -325,7 +329,7 @@ pub fn dropdown_panel_rect(
     let want = (opt_count as u32) * FIELD_ROW_H;
     PoolRect {
         x: t.x,
-        y: t.y + FIELD_ROW_H as i64,
+        y: t.y + t.h as i64,
         w: t.w,
         h: want.min(max_h),
     }
