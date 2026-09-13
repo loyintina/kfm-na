@@ -186,6 +186,10 @@ struct Inner {
     accent_cfg: crate::ui::accent::AccentPair,
     accent_ft: crate::ui::accent::AccentPair,
     accent_pt: crate::ui::accent::AccentPair,
+    /// 配置卡标签栏绑定（宪法 §四 十一修：每标签独立随机双色）——
+    /// 召唤配置卡时逐标签重随色列喂进标签栏，accent_cfg 取选中项；
+    /// 未绑定 = 旧路兜底（accent_cfg 单对重随，色列不动）
+    tab_bar: Option<crate::ui::tab_bar::SharedTabBar>,
 }
 
 /// AI 外显状态核。Sync 内部可变（Mutex），形态判别同 ModifierState：
@@ -222,8 +226,22 @@ impl AiPresenceState {
                 accent_ft: accent_rng.generate(),
                 accent_pt: accent_rng.generate(),
                 accent_rng,
+                tab_bar: None,
             }),
         }
+    }
+
+    /// 绑定配置卡标签栏（壳层装配时调一次，与 register_tab_bar 同一
+    /// Arc）：召唤配置卡 = 全标签色列重随 + accent 取选中项（§四 十一修）
+    pub fn bind_tab_bar(&self, bar: crate::ui::tab_bar::SharedTabBar) {
+        self.inner.lock().unwrap().tab_bar = Some(bar);
+    }
+
+    /// 点选标签的瞬时换色（§四 十一修：页 accent ≡ 选中标签的双色）——
+    /// 只换 accent_cfg，**不重随**（色列是标签栏状态，归 TabBar 持有；
+    /// 颜色过渡不做，留待卡片内页面拖动切换统一设计）
+    pub fn retint_cfg(&self, pair: crate::ui::accent::AccentPair) {
+        self.inner.lock().unwrap().accent_cfg = pair;
     }
 
     /// 读某面板的 accent（宪法 §2.2；Ai 页不纳入，返回 None——
@@ -465,11 +483,27 @@ fn summon_locked(g: &mut Inner, p: Panel) {
     g.stack.push(p);
 }
 
-/// 召唤即重随 accent（AI 页不纳入卡片体系，恒主题色）
+/// 召唤即重随 accent（AI 页不纳入卡片体系，恒主题色）。
+/// 配置卡有绑定标签栏时（§四 十一修）：全标签色列逐标签重随喂进
+/// TabBar，accent_cfg ≡ 选中标签的双色；未绑定 = 旧路单对重随兜底
 fn regen_accent(g: &mut Inner, p: Panel) {
     match p {
         Panel::Ai => {}
-        Panel::Config => g.accent_cfg = g.accent_rng.generate(),
+        Panel::Config => {
+            let bar = g.tab_bar.clone();
+            if let Some(bar) = bar {
+                let mut b = bar.lock().unwrap();
+                let n = b.tabs().len();
+                if n > 0 {
+                    let pairs: Vec<crate::ui::accent::AccentPair> =
+                        (0..n).map(|_| g.accent_rng.generate()).collect();
+                    b.set_colors(pairs.clone());
+                    g.accent_cfg = pairs[b.selected().min(n - 1)];
+                    return;
+                }
+            }
+            g.accent_cfg = g.accent_rng.generate();
+        }
         Panel::FileTree => g.accent_ft = g.accent_rng.generate(),
         Panel::Parser => g.accent_pt = g.accent_rng.generate(),
     }

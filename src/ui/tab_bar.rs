@@ -2,10 +2,14 @@
 //!
 //! 条款兑现：无标题栏——整张卡都是内容区，标签行在首行自开布局区；
 //! 标签行 = 2 格高（§七）；选中态 = **填色标签页组件**（宪法 §四 八修，
-//! 2026-09-13 用户拍板换案：无边框色块标签——上两角圆角下缘直边，
-//! 选中 = accent 渐变满填，标签下缘紧挨一条池区同宽的 1px 渐变细线，
-//! 色向 = 内卡反转 c2→c1；涂装归 termview::paint_tab_chip，本册只管
-//! 几何——弹簧移动、落点咬格。**开口框/线长随机机制退役**：cursor.rs
+//! 2026-09-13 用户拍板换案：无边框色块标签——上两角圆角下缘直边；
+//! **同日十一修入随机色体系**：每标签独立随机双色（本册持色列
+//! `colors`，presence 召唤时逐标签 generate 喂入，页 accent ≡ 选中
+//! 标签的双色——selected_pair 取数口），选中 = 上 2/3 c1 + 下 1/3 c2
+//! 满填两截短渐变，未选中 = 上/下 1/3 条带薄态 + 中 1/3 6% 白底；
+//! 标签下缘紧挨一条池区同宽的 1px 细线（配合标签模式 = 选中标签
+//! c2 纯色）；涂装归 termview::paint_tab_chip，本册管几何 + 色列——
+//! 弹簧移动、落点咬格。**开口框/线长随机机制退役**：cursor.rs
 //! 几何与 paint_open_cursor 涂装封存待文件树光标复用）；
 //! 横滑区（内容超出可横滚，pan clamp）；**手势仲裁边界单源**——
 //! `in_row`/`hit` 是壳层「标签行上的横向滑动不触发面板拖拽/页面滑向」
@@ -20,6 +24,7 @@
 //! 1 格 padding；标签宽 = 文字格 + 2 padding 格；标签间距 1 格。
 
 use crate::termview::{AI_PAGE_FRAME_MARGIN, AI_PAGE_FRAME_W, CELL_H, CELL_W};
+use crate::ui::accent::{AccentPair, FALLBACK};
 
 /// 标签行高 = 2 格（§七 相对比例条款；2026-09-12 真机实测拍板：
 /// 1 格太扁——24px 字贴边，2 格留白才像可点目标；咬格不破，不用 2.5）
@@ -85,6 +90,10 @@ pub struct TabBar {
     /// 光标弹簧：select 瞬间 from = 当时位置（重定基）
     cursor_from: f32,
     cursor_start_ms: u64,
+    /// 每标签独立随机双色（宪法 §四 十一修）：presence 召唤配置卡时
+    /// 逐标签 generate 喂入（set_colors）；未喂前 FALLBACK 兜底。
+    /// 页 accent ≡ 选中标签的双色（selected_pair 是取数口）
+    colors: Vec<AccentPair>,
 }
 
 impl TabBar {
@@ -98,7 +107,22 @@ impl TabBar {
             viewport_w,
             cursor_from: tab_row_origin_x() as f32,
             cursor_start_ms: 0,
+            colors: vec![FALLBACK; tabs.len()],
         }
+    }
+
+    /// 喂标签色列（presence 召唤配置卡时逐标签 generate 的产物）；
+    /// 容错：短 vec 缺位补 FALLBACK、长 vec 截断——色列恒与标签等长
+    pub fn set_colors(&mut self, mut colors: Vec<AccentPair>) {
+        colors.resize(self.tabs.len(), FALLBACK);
+        colors.truncate(self.tabs.len());
+        self.colors = colors;
+    }
+
+    /// 选中标签的双色（宪法 §四：页 accent ≡ 选中标签的双色——
+    /// 壳层点选后 retint 的取数口；召唤时 presence 也从此取）
+    pub fn selected_pair(&self) -> AccentPair {
+        self.colors.get(self.selected).copied().unwrap_or(FALLBACK)
     }
 
     pub fn set_viewport_w(&mut self, w: u32) {
@@ -209,23 +233,26 @@ impl TabBar {
         )
     }
 
-    /// 涂装快照（壳层逐帧/值守倒帧取数；tabs 克隆——涂装无权碰状态）
+    /// 涂装快照（壳层逐帧/值守倒帧取数；tabs/colors 克隆——涂装无权碰状态）
     pub fn snap(&self, now_ms: u64) -> TabBarSnap {
         TabBarSnap {
             tabs: self.tabs.clone(),
             selected: self.selected,
             scroll_px: self.scroll_px,
             cursor_x: self.cursor_x(now_ms),
+            colors: self.colors.clone(),
         }
     }
 }
 
-/// 涂装快照（眼手同尺：rects_of 与 TabBar::tab_rects 同一份几何）
+/// 涂装快照（眼手同尺：rects_of 与 TabBar::tab_rects 同一份几何）；
+/// colors = 每标签独立随机双色（§四 十一修，涂装色源——不是页 accent）
 pub struct TabBarSnap {
     pub tabs: Vec<String>,
     pub selected: usize,
     pub scroll_px: i64,
     pub cursor_x: f32,
+    pub colors: Vec<AccentPair>,
 }
 
 /// 标签矩形序列（自由函数版：涂装侧从快照算，状态侧从 self 算——

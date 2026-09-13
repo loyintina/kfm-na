@@ -1670,3 +1670,68 @@ fn spec_accent_召唤即随机钉() {
     // 栈内读多少次都不变（露出/被盖都不是召唤）
     assert_eq!(ai.accent_of(Panel::Parser).unwrap(), keep);
 }
+
+#[test]
+fn spec_accent_标签色列钉() {
+    // 宪法 §四（2026-09-13 十一修，用户拍板）：配置卡**每标签独立随机
+    // 双色**——召唤 = 全标签色列重随（同一 AccentRng 序列逐标签 generate）
+    // + 页 accent ≡ 选中标签的双色；点选标签 = retint 瞬时换（色列不动，
+    // 不重随）。未绑定标签栏的核走旧路（召唤重随单个 accent 兜底）。
+    // 变异锚点：regen 不喂色列 → 钉①红；retint 顺手重随 → 钉③红；
+    // accent 不取选中项 → 钉②红
+    use kfm_na::ui::accent::FALLBACK;
+    use kfm_na::ui::tab_bar::TabBar;
+    use std::sync::Mutex;
+    let ai = AiPresenceState::new();
+    let bar = Arc::new(Mutex::new(TabBar::new(&["系统管理", "组件池"], 720)));
+    ai.bind_tab_bar(bar.clone());
+    // 钉①召唤 = 全标签色列重随（默认 FALLBACK 必须被换掉）
+    ai.summon_panel(Panel::Config);
+    let colors1 = bar.lock().unwrap().snap(0).colors;
+    assert_eq!(colors1.len(), 2, "色列与标签等长");
+    assert!(
+        colors1.iter().all(|&p| p != FALLBACK),
+        "召唤必须重随全标签色列（变异：regen 不喂色列即红）"
+    );
+    // 钉②页 accent ≡ 选中标签的双色
+    let sel = bar.lock().unwrap().selected();
+    assert_eq!(
+        ai.accent_of(Panel::Config),
+        Some(colors1[sel]),
+        "页 accent ≡ 选中标签的双色"
+    );
+    // 钉③点选 = retint 瞬时换：accent 换成新标签色，色列本身不动
+    {
+        let mut b = bar.lock().unwrap();
+        b.select(1, 0);
+        ai.retint_cfg(b.selected_pair());
+    }
+    assert_eq!(
+        ai.accent_of(Panel::Config),
+        Some(colors1[1]),
+        "retint = 瞬时换成该标签双色"
+    );
+    assert_eq!(
+        bar.lock().unwrap().snap(0).colors,
+        colors1,
+        "retint 不许重随色列（变异：retint 顺手 generate 即红）"
+    );
+    // 钉④再召唤 = 全色列重随，accent 仍 ≡ 选中项（选中 1 保持）
+    ai.summon_panel(Panel::Config);
+    let colors2 = bar.lock().unwrap().snap(0).colors;
+    assert_ne!(colors1, colors2, "再召唤必须重随全标签色列");
+    assert_eq!(
+        ai.accent_of(Panel::Config),
+        Some(colors2[1]),
+        "重随后 accent 仍 ≡ 选中项（选中 1 是标签栏状态，不随召唤复位）"
+    );
+    // 钉⑤未绑定兜底：旧行为不变（召唤重随单个 accent）
+    let ai2 = AiPresenceState::new();
+    let p1 = ai2.accent_of(Panel::Config).unwrap();
+    ai2.summon_panel(Panel::Config);
+    assert_ne!(
+        p1,
+        ai2.accent_of(Panel::Config).unwrap(),
+        "未绑定标签栏的核走旧路"
+    );
+}

@@ -222,3 +222,48 @@ fn spec_tab_bar_共享句柄钉() {
     let bar_tabs = bar.lock().unwrap().tabs().to_vec();
     assert_eq!(h_tabs, bar_tabs, "句柄与注册同一份");
 }
+
+/// 钉⑪：标签色列钉（十一修，宪法 §四「每标签独立随机双色」）——
+/// ①构造默认 = 每标签 FALLBACK 兜底（presence 未喂色列前的早期帧不裸奔）；
+/// ②set_colors 后 snap 带色列（涂装唯一来源，涂装无权碰状态）；
+/// ③selected_pair 随 select 跟变（页 accent ≡ 选中标签双色的取数口）；
+/// ④短 vec 容错：缺位补 FALLBACK，色列恒与标签等长不 panic。
+/// 变异锚点：snap 漏带 colors → termview_spec 标签栏涂装钉红；
+/// selected_pair 恒取 [0] → 本钉③红；set_colors 不补长 → ④红
+#[test]
+fn spec_tab_bar_标签色列钉() {
+    use kfm_na::ui::accent::{AccentPair, FALLBACK};
+    let pair_a = AccentPair {
+        c1: 0x00FF_6000,
+        c2: 0x0000_80FF,
+    };
+    let pair_b = AccentPair {
+        c1: 0x0000_FF00,
+        c2: 0x00FF_00FF,
+    };
+    let mut bar = TabBar::new(&["系统管理", "组件池"], 720);
+    // ①默认兜底
+    assert!(
+        bar.snap(0).colors.iter().all(|&p| p == FALLBACK),
+        "默认色列 = 每标签 FALLBACK"
+    );
+    assert_eq!(bar.selected_pair(), FALLBACK);
+    // ②+③喂色列 + select 跟变
+    bar.set_colors(vec![pair_a, pair_b]);
+    assert_eq!(bar.selected_pair(), pair_a, "选中 0 → 色列[0]");
+    bar.select(1, 0);
+    assert_eq!(
+        bar.selected_pair(),
+        pair_b,
+        "select 后 selected_pair 必须跟变"
+    );
+    assert_eq!(
+        bar.snap(0).colors,
+        vec![pair_a, pair_b],
+        "snap 必须带色列（涂装唯一来源）"
+    );
+    // ④短 vec 容错补 FALLBACK
+    bar.set_colors(vec![pair_a]);
+    assert_eq!(bar.selected_pair(), FALLBACK, "选中 1 缺色 → FALLBACK 兜底");
+    assert_eq!(bar.snap(0).colors.len(), 2, "色列恒与标签等长");
+}

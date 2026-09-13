@@ -1517,16 +1517,23 @@ impl App {
                     }
                     if phase == TouchPhase::Ended && !tt.dragged {
                         let mut picked = None;
+                        let mut picked_pair = None;
                         if let Some(bar) = &self.tab_bar {
                             let mut g = bar.lock().unwrap();
                             if let Some(i) = g.hit(x, y) {
                                 g.select(i, crate::report::boot_ms() as u64);
+                                picked_pair = Some(g.selected_pair());
                                 crate::report::report(
                                     "ui",
                                     &format!("标签栏点按: 选中池 {}（{}）", i, g.tabs()[i]),
                                 );
                                 picked = Some(i);
                             }
+                        }
+                        // 十一修（§四）：点选 = 整页瞬时换成该标签双色
+                        // （retint 只换 accent 不重随；弹簧移动在核心自走）
+                        if let (Some(pair), Some(ai)) = (picked_pair, &self.ai_presence) {
+                            ai.retint_cfg(pair);
                         }
                         // 切标签 = 切池页（九修：组件池入列）：核心记 tab 维
                         // + 切页清零，内容重建归壳（rebuild 按 tab 分流）
@@ -2393,6 +2400,11 @@ impl App {
                 720,
             )));
             crate::ui::tab_bar::register_tab_bar(bar.clone());
+            // 十一修（宪法 §四 每标签独立随机双色）：presence 召唤配置卡时
+            // 逐标签重随色列喂进标签栏，accent 取选中项——绑定同一份 Arc
+            if let Some(ai) = &self.ai_presence {
+                ai.bind_tab_bar(bar.clone());
+            }
             self.tab_bar = Some(bar);
         }
 

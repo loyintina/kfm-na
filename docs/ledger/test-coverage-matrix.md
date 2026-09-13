@@ -9,7 +9,7 @@
 | 模块 | pub项 | 已引用 | 未覆盖 | 未覆盖清单 |
 |---|---|---|---|---|
 | `src/ai_chat.rs` | 11 | 10 | 1 | generation |
-| `src/ai_presence.rs` | 35 | 35 | 0 | — |
+| `src/ai_presence.rs` | 37 | 37 | 0 | — |
 | `src/bootstrap.rs` | 5 | 3 | 2 | ensure_pkg_tool first_boot_install |
 | `src/brain.rs` | 14 | 14 | 0 | — |
 | `src/brain_ep.rs` | 4 | 4 | 0 | — |
@@ -41,10 +41,10 @@
 | `src/session.rs` | 10 | 10 | 0 | — |
 | `src/session_router.rs` | 10 | 10 | 0 | — |
 | `src/settings.rs` | 6 | 5 | 1 | terminal_to_json |
-| `src/termview.rs` | 117 | 110 | 7 | AI_THINK_COLLAPSED FONT_CANDIDATES CJK_FONT_CANDIDATES load_cjk_font font_probe MAG_HALF_COLS MAG_HALF_ROWS |
+| `src/termview.rs` | 118 | 111 | 7 | AI_THINK_COLLAPSED FONT_CANDIDATES CJK_FONT_CANDIDATES load_cjk_font font_probe MAG_HALF_COLS MAG_HALF_ROWS |
 | `src/theme.rs` | 1 | 1 | 0 | — |
 | `src/trace.rs` | 12 | 8 | 4 | TRACE_CAP format_tail dump_all dump_tail |
-| `src/ui/accent.rs` | 6 | 5 | 1 | FALLBACK |
+| `src/ui/accent.rs` | 6 | 6 | 0 | — |
 | `src/ui/ai_page.rs` | 7 | 7 | 0 | — |
 | `src/ui/cfg_page.rs` | 40 | 37 | 3 | POOL_CONTENT_INSET register_cfg_page cfg_page_handle |
 | `src/ui/comp_registry.rs` | 5 | 5 | 0 | — |
@@ -60,6 +60,6 @@
 | `src/ui/prompt_bar.rs` | 5 | 4 | 1 | row_of |
 | `src/ui/seam.rs` | 24 | 24 | 0 | — |
 | `src/ui/stage.rs` | 7 | 7 | 0 | — |
-| `src/ui/tab_bar.rs` | 24 | 24 | 0 | — |
+| `src/ui/tab_bar.rs` | 26 | 26 | 0 | — |
 | `src/ui/viewport_push.rs` | 2 | 2 | 0 | — |
 | `src/vsync_book.rs` | 20 | 15 | 5 | armed last_due_ms chain_dead mark_chain_dead last_ns |
