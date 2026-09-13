@@ -246,6 +246,11 @@ pub fn dump_now(dir: &str) {
                         if let Some(pool) = crate::ui::dual_pool::dual_pool_handle() {
                             let mut p = pool.lock().unwrap();
                             p.set_viewport(w, h, bar_h);
+                            // 上池内容高（§五 高度数学钉输入）：三层目录
+                            // 状态核唯一来源（锁序 term→pool→cfg_page 与前台同）
+                            if let Some(page) = crate::ui::cfg_page::cfg_page_handle() {
+                                p.set_upper_content_h(page.lock().unwrap().upper_content_h());
+                            }
                             let ps = p.layout();
                             t.paint_cfg_dual_pool(
                                 &mut buf,
@@ -255,6 +260,19 @@ pub fn dump_now(dir: &str) {
                                 cfg_off,
                                 acc_of(Panel::Config),
                             );
+                            // 池内容（§五 目录语义）：D9 同源句柄取快照
+                            if let Some(page) = crate::ui::cfg_page::cfg_page_handle() {
+                                let cs = page.lock().unwrap().snap();
+                                t.paint_cfg_pool_content(
+                                    &mut buf,
+                                    w,
+                                    h,
+                                    &ps,
+                                    &cs,
+                                    cfg_off,
+                                    acc_of(Panel::Config),
+                                );
+                            }
                         }
                     }
                 }

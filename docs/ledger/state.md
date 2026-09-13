@@ -7,6 +7,19 @@
 
 ## 当前位置（2026-09-05)
 
+- **设置页 v1a 三刀全落笔（2026-09-13，ccc8c54+本提交）**：第一卡
+  「系统管理/服务器配置」实现分三刀。**已闭环**：①解析核
+  src/settings.rs（servers.json/terminal.json，A 档 13 题+变异三咬；
+  hotkey→字节直调 keymap::map_text 同源）；②壳接线（冷启动读
+  settings/*.json；切换键拦截吃 switchHotkey、横幅展示串跟配置；
+  defaultSession=Server → 远程装活跃槽；ConnConfig 来自默认服务器，
+  无条目=8021 现状锚）；③三层目录 UI（数据核 src/ui/cfg_page.rs
+  12 题+变异两咬、termview 涂装、触摸路由、配置槽 sig 增维
+  cfg_epoch；ConfigSig 13 维超元组 trait 上限改具名结构——手机
+  1.97 E0277 实踩）。设计档 docs/active/设置页.md §2.7 台账。
+  **待办：实机判卷**（推 servers.json 切 9021 + 热更 + 闸门
+  一链到底实拍判卷，行高/观感/触摸命中 C 档终审在用户）；
+  字段编辑/+新增/三级全屏页 = v1b。
 - **NA 自持通联通道实证（2026-09-13，9021/9022 双向全通）**：用户
   定调「NA = 干净设备上的独立项目，通联与双向调试必须自持」。
   实证链：①沙箱内 OpenSSH 10.5p1 客户端直连服务器——**坑：

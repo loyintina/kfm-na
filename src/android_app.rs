@@ -285,6 +285,14 @@ struct App {
     /// 配置卡双池状态（主题宪法 §五）：上池内容高 + 可用区 → 动态高度
     /// 布局。共享句柄注册给 gate 值守倒帧（D9 同源，与标签栏同规）
     dual_pool: Option<crate::ui::dual_pool::SharedDualPool>,
+    /// 配置页三层目录状态核（宪法 §五 目录语义，2026-09-13）：下池
+    /// 子目录行表/聚焦 + 上池字段行/联动下拉。共享句柄注册给 gate
+    /// 值守倒帧（D9 同源）；行表/字段由 rebuild_cfg_rows 重建
+    cfg_page: Option<crate::ui::cfg_page::SharedCfgPage>,
+    /// 按在配置页池区上的手势（2026-09-13 三层目录）：(起点 x, 起点 y,
+    /// 拖过 slop)。只在配置页靠泊在顶且起点在池区时建——点按抬手 =
+    /// 下池行聚焦/触发器开合；拖过 slop = 手势归面板页全家（不聚焦）
+    cfg_pool_touch: Option<(f64, f64, bool)>,
     /// 按在标签行带上的手势（宪法 §四 仲裁条款：行上横向滑动不触发
     /// 面板拖拽/页面滑向）——配置页靠泊且起点在行带才建
     tab_touch: Option<TabTouch>,
@@ -327,23 +335,36 @@ struct App {
 ///           GLES 路径恒 true 不进 sig；放大镜内容跟终端网格活（网格
 ///           变化不进 sig），拖选期调用方强制重烘焙
 /// 配置槽 sig（2026-09-12 双池骨架后 10 维：w/h/ime/bar_h + accent
-/// c1/c2 + 标签栏选中/横滚/光标 x + 双池上池高）——别名喂手机端新
-/// clippy 的 type_complexity 闸（09-12 实踩：服务器旧版不报，
-/// 手机 1.97 报）
-type ConfigSig = (
-    u32, // w
-    u32, // h
-    u32, // ime
-    u32, // bar_h
-    u32, // accent c1
-    u32, // accent c2
-    u32, // 标签选中
-    i32, // 标签横滚
-    i32, // 光标 x
-    i32, // 开口光标顶线长（§四 三修：重掷必须触发重烘焙）
-    i32, // 开口光标底线长
-    u32, // 双池上池高
-);
+/// c1/c2 + 标签栏选中/横滚/光标 x + 双池上池高；2026-09-13 三层目录
+/// +1 维：池内容代际 epoch——聚焦/下拉/行表重建都必触发重烘焙，
+/// 漏维 = 旧行表新聚焦鬼影）。
+/// 13 维超元组 trait 上限（PartialEq/Default 只到 12 元），改具名
+/// 结构——字段即注释，手机 1.97 的 E0277/E0599 就是踩在这上面
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+struct ConfigSig {
+    w: u32,
+    h: u32,
+    ime: u32,
+    bar_h: u32,
+    /// accent c1
+    c1: u32,
+    /// accent c2
+    c2: u32,
+    /// 标签选中
+    tab_sel: u32,
+    /// 标签横滚
+    tab_scroll: i32,
+    /// 光标 x
+    tab_cx: i32,
+    /// 开口光标顶线长（§四 三修：重掷必须触发重烘焙）
+    tab_top_w: i32,
+    /// 开口光标底线长
+    tab_bot_w: i32,
+    /// 双池上池高
+    pool_upper_h: u32,
+    /// 池内容代际（cfg_page epoch，§五 目录语义）
+    cfg_epoch: u64,
+}
 
 #[derive(Default)]
 struct LayerSigs {
@@ -783,6 +804,67 @@ impl App {
                         });
                         return;
                     }
+                    // 池区仲裁（宪法 §五 目录语义，2026-09-13）：配置页
+                    // 靠泊（同标签栏的缝采样判据）时——
+                    // ① 下拉开着：命中 panel 项 = 点选（上→下联动），
+                    //    其他位置 = 收 panel；都吃掉本手势
+                    // ② 起点在下拉触发器/下池区 → 建 cfg_pool_touch 槽：
+                    //    点按抬手 = 触发器开合 / 下池行聚焦；拖过 slop
+                    //    = 手势让回面板页（不聚焦不开合）
+                    if panel_top == Some(crate::ai_presence::Panel::Config)
+                        && crate::ui::seam::sample_config_panel_offset_x(
+                            0.0,
+                            crate::report::boot_ms() as u64,
+                        ) as i32
+                            == 0
+                        && let (Some(pool), Some(page)) = (
+                            crate::ui::dual_pool::dual_pool_handle(),
+                            crate::ui::cfg_page::cfg_page_handle(),
+                        )
+                    {
+                        let (ps, lower, upper) = {
+                            let p = pool.lock().unwrap();
+                            let ps = p.layout();
+                            (ps.upper.y, ps.lower.clone(), ps.upper.clone())
+                        };
+                        let _ = ps;
+                        let (yi, xi) = (y as i64, x as i64);
+                        let mut pg = page.lock().unwrap();
+                        if pg.dropdown_open() {
+                            let max_h = 10_000; // 命中只问行号，钳高由涂装侧管
+                            if let Some(i) = pg.dropdown_item_at_y(yi, &upper, max_h) {
+                                pg.dropdown_pick(i);
+                                drop(pg);
+                                self.rebuild_cfg_rows();
+                                crate::report::report("gest", &format!("下拉点选→行 {i}"));
+                            } else {
+                                pg.dismiss_dropdown();
+                                crate::report::report("gest", "下拉外点按→收 panel");
+                            }
+                            self.dirty = true;
+                            return;
+                        }
+                        let tr = crate::ui::cfg_page::trigger_rect(&upper);
+                        let in_trigger = xi >= tr.x
+                            && xi < tr.x + tr.w as i64
+                            && yi >= tr.y
+                            && yi < tr.y + tr.h as i64;
+                        let in_lower = xi >= lower.x
+                            && xi < lower.x + lower.w as i64
+                            && yi >= lower.y
+                            && yi < lower.y + lower.h as i64;
+                        if in_trigger || in_lower {
+                            crate::report::report(
+                                "gest",
+                                &format!(
+                                    "起手→池区 ({x:.0},{y:.0}) {}",
+                                    if in_trigger { "触发器" } else { "下池" }
+                                ),
+                            );
+                            self.cfg_pool_touch = Some((x, y, false));
+                            return;
+                        }
+                    }
                     // 手势追踪：第二指落在面板页会盖掉第一指的手势状态
                     // （panel_touch/panel_drag 单槽）——留痕取证
                     if self.panel_touch.is_some() {
@@ -1001,6 +1083,18 @@ impl App {
                         self.dirty = true;
                     }
                     tt.last_x = x;
+                    return;
+                }
+                // 池区手势（宪法 §五 目录语义）：拖过 slop 只记账——
+                // 抬手不归点按（不聚焦不开合；v1a 池内无滚动，
+                // 拖动手势在抬手段落回面板页语义）
+                if let Some(ct) = self.cfg_pool_touch.as_mut() {
+                    if !ct.2
+                        && ((x - ct.0).abs() > crate::scroll::TAP_SLOP_PX
+                            || (y - ct.1).abs() > crate::scroll::TAP_SLOP_PX)
+                    {
+                        ct.2 = true;
+                    }
                     return;
                 }
                 // 面板页手势：AI 页拖动 = 对话页滚行（像素级累积跟手，
@@ -1319,9 +1413,41 @@ impl App {
                     self.dirty = true;
                     return;
                 }
-                // 面板页手势收尾：水平快滑 = 抽屉（三公民 §五B 2026-09-11：
-                // 左滑——顶=文件树推回/顶=配置空操作/否则召唤配置；右滑——
-                // 顶=配置推回/顶=文件树空操作/否则召唤文件树）；点按（未拖
+                // 池区手势收尾：未拖抬手 = 点按——起点在触发器 = 开合
+                // 下拉；起点在下池 = 行命中聚焦（下→上联动，字段行重建）；
+                // 拖过 slop / Cancelled = 零动作
+                if let Some(ct) = self.cfg_pool_touch.take() {
+                    if phase == TouchPhase::Ended && !ct.2 {
+                        let (xi, yi) = (ct.0 as i64, ct.1 as i64);
+                        if let (Some(pool), Some(page)) = (
+                            crate::ui::dual_pool::dual_pool_handle(),
+                            crate::ui::cfg_page::cfg_page_handle(),
+                        ) {
+                            let (lower, upper) = {
+                                let ps = pool.lock().unwrap().layout();
+                                (ps.lower.clone(), ps.upper.clone())
+                            };
+                            let tr = crate::ui::cfg_page::trigger_rect(&upper);
+                            let in_trigger = xi >= tr.x
+                                && xi < tr.x + tr.w as i64
+                                && yi >= tr.y
+                                && yi < tr.y + tr.h as i64;
+                            let mut pg = page.lock().unwrap();
+                            if in_trigger {
+                                pg.toggle_dropdown();
+                                crate::report::report("gest", "下拉触发器点按→开合");
+                                self.dirty = true;
+                            } else if let Some(i) = pg.row_at_y(yi, &lower) {
+                                pg.select(i);
+                                drop(pg);
+                                self.rebuild_cfg_rows();
+                                crate::report::report("ui", &format!("下池点按: 聚焦行 {i}"));
+                                self.dirty = true;
+                            }
+                        }
+                    }
+                    return;
+                }
                 // 过 slop）= 输入栏失焦 + 收键盘——面板不是输入区，绝不穿透
                 // 召唤终端输入法（期 0④ 用户拍板两条：不穿透 + 点非输入区
                 // 自动收键盘）
@@ -2122,6 +2248,17 @@ impl App {
             self.dual_pool = Some(pool);
         }
 
+        // 配置页三层目录状态核（宪法 §五 目录语义，2026-09-13）：
+        // 行表/字段由 rebuild_cfg_rows 按 settings 数据重建；共享句柄
+        // 注册给 gate 值守倒帧（D9 同源，与标签栏/双池同规）
+        {
+            let page =
+                std::sync::Arc::new(std::sync::Mutex::new(crate::ui::cfg_page::CfgPage::new()));
+            crate::ui::cfg_page::register_cfg_page(page.clone());
+            self.cfg_page = Some(page);
+            self.rebuild_cfg_rows();
+        }
+
         // 全局输入栏插件（期 0 组件三）：状态核共享实例直挂 + 发送口装配。
         // 脑 = 配置驱动（期 0③ 换脑，D11 本地直连是地基）：私有目录
         // ai/providers.json + ai/.env 齐 → DirectApiBrain；缺/坏 →
@@ -2360,6 +2497,102 @@ impl App {
             r.lock().unwrap().send(TermCmd::Resize { cols, rows });
         }
         self.dirty = true;
+    }
+
+    /// 配置页行表/字段重建（宪法 §五 目录语义）：下池 = [全局] +
+    /// servers.json 各服务器 + [+ 新增]；上池字段 = 聚焦子目录的
+    /// 二级选项。数据变更/聚焦切换后必调（set_rows/set_fields 内部
+    /// 判等，没变不空涨代际）
+    fn rebuild_cfg_rows(&mut self) {
+        let Some(page) = &self.cfg_page else { return };
+        let mut rows = vec![crate::ui::cfg_page::RowView {
+            title: "全局".into(),
+            meta: "默认终端 / 切换快捷键".into(),
+        }];
+        for s in &self.settings_servers {
+            rows.push(crate::ui::cfg_page::RowView {
+                title: if s.name.is_empty() {
+                    s.id.clone()
+                } else {
+                    s.name.clone()
+                },
+                meta: s.ssh.host.clone(),
+            });
+        }
+        rows.push(crate::ui::cfg_page::RowView {
+            title: "+ 新增服务器".into(),
+            meta: String::new(),
+        });
+        let focus;
+        {
+            let mut p = page.lock().unwrap();
+            p.set_rows(rows);
+            focus = p.focus();
+        }
+        // 上池字段 = 聚焦子目录的二级选项（三层目录 §五.3）
+        let n = self.settings_servers.len();
+        let fields: Vec<(String, String)> = if focus == 0 {
+            let ds = match &self.terminal_cfg.default_session {
+                crate::settings::DefaultSession::Local => "本地".to_string(),
+                crate::settings::DefaultSession::Server(id) => self
+                    .settings_servers
+                    .iter()
+                    .find(|s| &s.id == id || &s.name == id)
+                    .map_or(id.clone(), |s| {
+                        if s.name.is_empty() {
+                            s.id.clone()
+                        } else {
+                            s.name.clone()
+                        }
+                    }),
+            };
+            vec![
+                ("默认终端".into(), ds),
+                (
+                    "切换快捷键".into(),
+                    self.terminal_cfg.switch_hotkey.display(),
+                ),
+            ]
+        } else if focus <= n {
+            let s = &self.settings_servers[focus - 1];
+            vec![
+                ("名称".into(), s.name.clone()),
+                ("服务器 IP".into(), s.ssh.host.clone()),
+                ("端口".into(), s.ssh.port.to_string()),
+                ("用户".into(), s.ssh.user.clone()),
+                (
+                    "密钥地址".into(),
+                    if s.ssh.key_path.is_empty() {
+                        "（未配）".into()
+                    } else {
+                        s.ssh.key_path.clone()
+                    },
+                ),
+                (
+                    "密码".into(),
+                    if s.ssh.password.is_empty() {
+                        "（空 = 密钥登录）".into()
+                    } else {
+                        "已配置".into()
+                    },
+                ),
+                (
+                    "wsUrl".into(),
+                    if s.ws_url.is_empty() {
+                        format!("ws://127.0.0.1:{}/ws", s.tunnel.local_port)
+                    } else {
+                        s.ws_url.clone()
+                    },
+                ),
+                (
+                    "切换快捷键".into(),
+                    s.hotkey.as_ref().map_or("未绑定".into(), |h| h.display()),
+                ),
+            ]
+        } else {
+            vec![("新增服务器".into(), "未来版本开放".into())]
+        };
+        page.lock().unwrap().set_fields(fields);
     }
 
     /// 会话切换（L1）：Ctrl-] 触达——router 换出向活跃槽；入向不换槽
@@ -2907,6 +3140,7 @@ impl App {
         mut ai_glyphs: Option<&mut Vec<crate::glyph_atlas::AiGlyph>>,
         tab_snap: Option<&crate::ui::tab_bar::TabBarSnap>,
         pool_snap: Option<&crate::ui::dual_pool::DualPoolSnap>,
+        cfg_snap: Option<&crate::ui::cfg_page::CfgPageSnap>,
     ) -> Option<(u32, u32)> {
         // 分支判定唯一裁决处（panel_split/cfg_split/ft_split/pt_split）——softbuffer
         // 与 GLES 两路径都从这里取，分支语义漂移 = 眼手两张皮（BAR-063 级
@@ -2976,6 +3210,19 @@ impl App {
                                 cfg_off,
                                 acc_of(crate::ai_presence::Panel::Config),
                             );
+                            // 池内容（宪法 §五 目录语义：下池子目录行表/
+                            // 上池联动下拉+字段行）——双池框之上同层
+                            if let Some(cs) = cfg_snap {
+                                term.paint_cfg_pool_content(
+                                    buf,
+                                    w,
+                                    h,
+                                    ps,
+                                    cs,
+                                    cfg_off,
+                                    acc_of(crate::ai_presence::Panel::Config),
+                                );
+                            }
                         }
                     }
                 }
@@ -3136,6 +3383,7 @@ impl App {
         panel_scratch: &mut Vec<u32>,
         tab_snap: Option<&crate::ui::tab_bar::TabBarSnap>,
         pool_snap: Option<&crate::ui::dual_pool::DualPoolSnap>,
+        cfg_snap: Option<&crate::ui::cfg_page::CfgPageSnap>,
     ) -> Option<(u32, u32)> {
         let Some(term) = term else {
             buf.fill(KFM_PURPLE); // 字体全灭的降级画面：紫屏 + 已有上报
@@ -3167,6 +3415,7 @@ impl App {
             None,
             tab_snap,
             pool_snap,
+            cfg_snap,
         );
         let sending = ai_snap.is_some_and(|s| s.ai_running);
         Self::paint_over(
@@ -3209,6 +3458,7 @@ impl App {
         sigs: &mut LayerSigs,
         tab_snap: Option<&crate::ui::tab_bar::TabBarSnap>,
         pool_snap: Option<&crate::ui::dual_pool::DualPoolSnap>,
+        cfg_snap: Option<&crate::ui::cfg_page::CfgPageSnap>,
         drag: Option<(crate::ai_presence::Panel, f32)>,
     ) -> Option<(u32, u32)> {
         let (w, h) = g.size();
@@ -3548,21 +3798,25 @@ impl App {
         // 双池 sig 一维（宪法 §五）：上池高——内容进出/屏尺寸变（w/h 已在
         // sig）触发布局重算时必须重烘焙
         let pool_upper_h = pool_snap.map_or(0, |ps| ps.upper.h);
+        // 池内容 sig 一维（宪法 §五 目录语义）：cfg_page 代际——聚焦切换/
+        // 下拉开合/行表字段重建都 bump（漏维 = 旧行表新聚焦鬼影）
+        let cfg_epoch = cfg_snap.map_or(0, |cs| cs.epoch);
         if cfg_visible
-            && sigs.config.feed((
+            && sigs.config.feed(ConfigSig {
                 w,
                 h,
                 ime,
                 bar_h,
-                acc_cfg.c1,
-                acc_cfg.c2,
+                c1: acc_cfg.c1,
+                c2: acc_cfg.c2,
                 tab_sel,
                 tab_scroll,
                 tab_cx,
                 tab_top_w,
                 tab_bot_w,
                 pool_upper_h,
-            ))
+                cfg_epoch,
+            })
         {
             let px = g.slot_canvas(crate::gles_present::ChromeSlot::Config);
             px.fill(0);
@@ -3578,6 +3832,12 @@ impl App {
                 t.lock()
                     .unwrap()
                     .paint_cfg_dual_pool(px, w, h, ps, 0, acc_cfg);
+                // 池内容（§五 目录语义）：双池框之上同槽
+                if let Some(cs) = cfg_snap {
+                    t.lock()
+                        .unwrap()
+                        .paint_cfg_pool_content(px, w, h, ps, cs, 0, acc_cfg);
+                }
             }
             g.slot_bake(crate::gles_present::ChromeSlot::Config);
         }
@@ -3821,8 +4081,15 @@ impl App {
             };
             let mut g3 = p.lock().unwrap();
             g3.set_viewport(view.0, view.1, view.2);
+            // 上池内容高（宪法 §五 高度数学钉的输入）：触发器 + 字段行，
+            // 三层目录状态核唯一来源（锁序 term→pool→cfg_page 与 gate 同）
+            if let Some(page) = &self.cfg_page {
+                g3.set_upper_content_h(page.lock().unwrap().upper_content_h());
+            }
             g3.layout()
         });
+        // 配置页内容快照（三层目录）：涂装/命中同一份（D9）
+        let cfg_snap = self.cfg_page.as_ref().map(|p| p.lock().unwrap().snap());
         // GLES（2026-09-07 图层槽位版）：网格实例 → 键行槽 → 面板槽
         // （placement 动画）→ AI 文字实例 → 上层槽。槽位置脏烘焙。
         // 关联函数按字段传参，避开 buf 借用 gfx 时动不了 self 的问题
@@ -3850,6 +4117,7 @@ impl App {
                 &mut self.layer_sigs,
                 tab_snap.as_ref(),
                 pool_snap.as_ref(),
+                cfg_snap.as_ref(),
                 self.panel_drag.as_ref().and_then(|d| {
                     let off = d.current_offset()?;
                     let p = match d.role()? {
@@ -4024,6 +4292,7 @@ impl App {
                 &mut self.panel_scratch,
                 tab_snap.as_ref(),
                 pool_snap.as_ref(),
+                cfg_snap.as_ref(),
             );
             // 布局写回视口状态机（眼手同尺：手势钳制与渲染同一份布局）
             if let (Some(chat), Some((total, fit))) = (&self.ai_chat, ai_layout) {

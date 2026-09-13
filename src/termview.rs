@@ -2412,6 +2412,163 @@ impl TermView {
         }
     }
 
+    /// 双池内容涂装（宪法 §五 目录语义，2026-09-13 三层目录落地）：
+    /// 下池 = 子目录行表（聚焦行 6% 白底，§五 池行 hover/聚焦条款）；
+    /// 上池 = 联动下拉触发器（§六：6% 白底 + 右缘下拉三角）+ 聚焦
+    /// 子目录的字段行（标题 0.85 白 / 元信息 0.5 白，§2.3）；
+    /// 下拉开着 = 触发器下方下弹 panel（§六：96% 近黑底，聚焦项
+    /// 6% 白底——✓ 标记留 v1b，内嵌像素体字库无此 glyph 待验）。
+    /// 几何一律吃 cfg_page 自由函数（眼手同尺）；出池底的行不画
+    /// （v1a 无池内滚动，upper_scroll 旗已记账）；off≠0 的过渡帧里
+    /// 行左缘出屏即整行不画（softbuffer/值守兜底路径的取舍，GLES
+    /// 主路径烘焙恒 off=0 不受影响）
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn paint_cfg_pool_content_impl(
+        &self,
+        buf: &mut [u32],
+        w: u32,
+        h: u32,
+        ps: &crate::ui::dual_pool::DualPoolSnap,
+        page: &crate::ui::cfg_page::CfgPageSnap,
+        cfg_off_x: i32,
+        accent: crate::ui::accent::AccentPair,
+    ) {
+        use crate::ui::cfg_page as cp;
+        if w == 0 || h == 0 {
+            return;
+        }
+        let mut frame = Frame { buf, w, h };
+        let off = i64::from(cfg_off_x);
+        let title_fg = 0x00D9_D9D9; // 0.85 白（§2.3 标题档）
+        let meta_fg = 0x0080_8080; // 0.5 白（次级档）
+        let px_title = 24.0; // 标签字号同尺（§七 标定）
+        let px_meta = 20.0;
+        let half = cp::POOL_ROW_H / 2;
+
+        // 矩形覆盖率混合小助手（6% 白底/96% 黑底都是 blend_px 的活）
+        fn blend_rect(frame: &mut Frame<'_>, x: i64, y: i64, rw: u32, rh: u32, fg: u32, a: u32) {
+            for dy in 0..rh as i64 {
+                let yy = y + dy;
+                if yy < 0 || yy >= i64::from(frame.h) {
+                    continue;
+                }
+                for dx in 0..rw as i64 {
+                    let xx = x + dx;
+                    if xx < 0 || xx >= i64::from(frame.w) {
+                        continue;
+                    }
+                    frame.blend_px(xx as u32, yy as u32, fg, a);
+                }
+            }
+        }
+
+        // ---- 下池：子目录行表 ----
+        for (i, row) in page.rows.iter().enumerate() {
+            let r = cp::row_rect(i, &ps.lower);
+            if r.y + r.h as i64 > ps.lower.y + ps.lower.h as i64 {
+                break; // 出池底的行不画（v1a 无滚动）
+            }
+            let rx = r.x + off;
+            if rx < 0 {
+                continue; // 过渡帧行左缘出屏整行不画
+            }
+            let (rx, ry) = (rx as u32, r.y as u32);
+            if i == page.focus {
+                blend_rect(&mut frame, rx as i64, ry as i64, r.w, r.h, 0x00FF_FFFF, 15);
+            }
+            self.draw_text_left(
+                &mut frame, &row.title, rx, r.w, ry, half, px_title, title_fg,
+            );
+            if !row.meta.is_empty() {
+                self.draw_text_left(
+                    &mut frame,
+                    &row.meta,
+                    rx,
+                    r.w,
+                    ry + half,
+                    half,
+                    px_meta,
+                    meta_fg,
+                );
+            }
+        }
+
+        // ---- 上池：联动下拉触发器 + 字段行 ----
+        let t = cp::trigger_rect(&ps.upper);
+        let tx = t.x + off;
+        if tx >= 0 {
+            let (tx, ty) = (tx as u32, t.y as u32);
+            blend_rect(&mut frame, tx as i64, ty as i64, t.w, t.h, 0x00FF_FFFF, 15);
+            let cur = page.rows.get(page.focus).map_or("", |r| r.title.as_str());
+            self.draw_text_left(
+                &mut frame,
+                cur,
+                tx,
+                t.w,
+                ty,
+                cp::POOL_ROW_H,
+                px_title,
+                title_fg,
+            );
+            // 右缘下拉三角（逐行 11/9/7/5/3/1 覆盖率满混）
+            let tri_cx = tx + t.w - 30;
+            let tri_y = ty + cp::POOL_ROW_H / 2 - 3;
+            for dy in 0..6u32 {
+                let half_w = 5 - dy;
+                blend_rect(
+                    &mut frame,
+                    (tri_cx - half_w) as i64,
+                    (tri_y + dy) as i64,
+                    half_w * 2 + 1,
+                    1,
+                    0x00D9_D9D9,
+                    255,
+                );
+            }
+            // 字段行（触发器之下逐行）
+            for (i, (ft, fm)) in page.fields.iter().enumerate() {
+                let r = cp::field_rect(i, &ps.upper);
+                if r.y + r.h as i64 > ps.upper.y + ps.upper.h as i64 {
+                    break;
+                }
+                let fx = (r.x + off) as u32;
+                let fy = r.y as u32;
+                self.draw_text_left(&mut frame, ft, fx, r.w, fy, half, px_title, title_fg);
+                self.draw_text_left(&mut frame, fm, fx, r.w, fy + half, half, px_meta, meta_fg);
+            }
+        }
+
+        // ---- 下拉 panel（开着才画，叠在最后 = 盖住字段行/下池）----
+        if page.dropdown_open {
+            let max_h = h.saturating_sub(t.y as u32 + cp::POOL_ROW_H + 40);
+            let pr = cp::dropdown_panel_rect(page.rows.len(), &ps.upper, max_h);
+            let px0 = pr.x + off;
+            if px0 >= 0 {
+                blend_rect(&mut frame, px0, pr.y, pr.w, pr.h, 0x0000_0000, 245);
+                for (i, row) in page.rows.iter().enumerate() {
+                    let iy = pr.y + (i as i64) * cp::POOL_ROW_H as i64;
+                    if iy + cp::POOL_ROW_H as i64 > pr.y + pr.h as i64 {
+                        break;
+                    }
+                    if i == page.focus {
+                        blend_rect(&mut frame, px0, iy, pr.w, cp::POOL_ROW_H, 0x00FF_FFFF, 15);
+                    }
+                    self.draw_text_left(
+                        &mut frame,
+                        &row.title,
+                        px0 as u32,
+                        pr.w,
+                        iy as u32,
+                        cp::POOL_ROW_H,
+                        px_title,
+                        title_fg,
+                    );
+                }
+            }
+        }
+        let _ = accent; // 行内容不吃 accent（§2.3：accent 永不用于文字）
+    }
+
     /// 画一串已量宽的字符（折行后逐行画走这里）：左对齐内缩 18 +
     /// 垂直居中 + 右缘裁剪，规则与 draw_text_left 一致
     #[allow(clippy::too_many_arguments)]
@@ -3067,6 +3224,20 @@ pub trait TermEmu: Send {
         cfg_off_x: i32,
         accent: crate::ui::accent::AccentPair,
     );
+    /// 配置卡双池内容涂装（宪法 §五 目录语义，2026-09-13 三层目录）：
+    /// 下池子目录行表 + 上池联动下拉触发器/字段行/下拉 panel。
+    /// cfg_off_x 语义同 paint_cfg_dual_pool；画在双池框之上
+    #[allow(clippy::too_many_arguments)]
+    fn paint_cfg_pool_content(
+        &self,
+        buf: &mut [u32],
+        w: u32,
+        h: u32,
+        ps: &crate::ui::dual_pool::DualPoolSnap,
+        page: &crate::ui::cfg_page::CfgPageSnap,
+        cfg_off_x: i32,
+        accent: crate::ui::accent::AccentPair,
+    );
     /// AI 外显 chrome（ai-presence，android_app rasterize 调用方）：
     /// AI 页真对话渲染（page=AiFullscreen 时代替终端网格）/ 雾状光球 sprite。
     /// scroll_rows = 距底行数（期 0④ 视口）；bottom_inset = 键盘+输入栏
@@ -3233,6 +3404,19 @@ impl TermEmu for TermView {
         accent: crate::ui::accent::AccentPair,
     ) {
         TermView::paint_cfg_dual_pool_impl(self, buf, w, h, snap, cfg_off_x, accent)
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn paint_cfg_pool_content(
+        &self,
+        buf: &mut [u32],
+        w: u32,
+        h: u32,
+        ps: &crate::ui::dual_pool::DualPoolSnap,
+        page: &crate::ui::cfg_page::CfgPageSnap,
+        cfg_off_x: i32,
+        accent: crate::ui::accent::AccentPair,
+    ) {
+        TermView::paint_cfg_pool_content_impl(self, buf, w, h, ps, page, cfg_off_x, accent)
     }
     #[allow(clippy::too_many_arguments)]
     fn render_ai_page(
