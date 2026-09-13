@@ -32,7 +32,7 @@
 use crate::termview::{CELL_H, CELL_W};
 use crate::ui::dual_pool::PoolRect;
 
-/// 下池池行高 = 4.5 格（四版 §五 池行条款：3 格 ×1.5，半格特许 §一）
+/// 下池池行高 = 4.5 格（四版 §五 池行条款：3 格 ×1.5，半格网 §一）
 pub const LOWER_ROW_H: u32 = CELL_H * 9 / 2;
 /// 上池字段框行高 = 4 格（四版：2 格 ×2，行高 ×2 后 36px 圆角比例 0.25
 /// 与 kfmv4 实证偏方正观感同源）
