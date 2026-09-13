@@ -2662,11 +2662,14 @@ impl TermView {
                 denom,
                 uclip,
             );
+            // 值文本右缘留呼吸位（kfmv4 实证：文字不贴框缘；下拉行
+            // 再多留三角位 45+27）
+            let right_pad = if ur.is_dropdown { 72 } else { 27 };
             self.draw_text_left_ex(
                 &mut frame,
                 &ur.value,
                 (vb.x + off) as u32,
-                vb.w,
+                vb.w.saturating_sub(right_pad),
                 vb.y as u32,
                 vb.h,
                 px_title,
@@ -2722,7 +2725,7 @@ impl TermView {
                         &mut frame,
                         opt,
                         px0 as u32,
-                        pr.w,
+                        pr.w.saturating_sub(27),
                         iy as u32,
                         cp::FIELD_ROW_H,
                         px_title,
