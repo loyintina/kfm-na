@@ -4,12 +4,14 @@
 //! 修宪：下拉服务上池内容自身选项集不与下池联动/下池行框/上池字段框行
 //! 标签列+值框）+ 四版（同日：字段框行 4 格/下池行 4.5 格/行隙 1.5 格/
 //! 内边距 2 格/标签列 12 格/上池像素滚动）+ 六修（同日：值框 3 格居中
-//! 于行无左粗条/字档反转标签亮值灰/下拉 panel 从值框下缘起弹）。纪律：
-//! 先验证红，答案生成到绿，绿后变异抽检。本文件是考题，生成器不许改。
+//! 于行无左粗条/字档反转标签亮值灰/下拉 panel 从值框下缘起弹）+ 七修
+//! （同日：上池行隙减半格=1 格/字号反转标签 36 值 30/三级框角部渐细
+//! 同源页环）。纪律：先验证红，答案生成到绿，绿后变异抽检。本文件是
+//! 考题，生成器不许改。
 
 use kfm_na::ui::cfg_page::{
-    CfgPage, FIELD_BOX_H, FIELD_ROW_H, LABEL_COL_W, LOWER_ROW_H, ROW_GAP, RowView, UpperRow,
-    lower_row_rect, upper_row_rect, value_box_rect,
+    CfgPage, FIELD_BOX_H, FIELD_ROW_GAP, FIELD_ROW_H, LABEL_COL_W, LOWER_ROW_H, ROW_GAP, RowView,
+    UpperRow, lower_row_rect, upper_row_rect, value_box_rect,
 };
 use kfm_na::ui::dual_pool::PoolRect;
 
@@ -185,7 +187,11 @@ fn upper_field_rows_stack_4_cells_with_gap() {
     let r0 = upper_row_rect(0, &UPPER, 0);
     let r1 = upper_row_rect(1, &UPPER, 0);
     assert_eq!(r0.h, FIELD_ROW_H, "字段框行 = 4 格高（四版 ×2）");
-    assert_eq!(r1.y - r0.y, FIELD_ROW_H as i64 + ROW_GAP);
+    assert_eq!(
+        r1.y - r0.y,
+        FIELD_ROW_H as i64 + FIELD_ROW_GAP,
+        "上池行隙 = 1 格（七修减半格）"
+    );
 }
 
 #[test]
@@ -274,7 +280,7 @@ fn upper_content_h_counts_rows_and_gaps() {
     let h2 = p.upper_content_h();
     p.set_upper(upper(2)); // 4 行
     let h4 = p.upper_content_h();
-    assert_eq!(h4 - h2, 2 * FIELD_ROW_H + 2 * ROW_GAP as u32);
+    assert_eq!(h4 - h2, 2 * FIELD_ROW_H + 2 * FIELD_ROW_GAP as u32);
 }
 
 #[test]

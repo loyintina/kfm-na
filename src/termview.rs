@@ -593,6 +593,105 @@ fn paint_rect_ring(
     }
 }
 
+/// 三级框行涂装（宪法 §五 池行条款：四版立、六修收窄、七修角部渐细，
+/// 2026-09-13）——**文件级共享组件**（§六 样式唯一来源：三级框禁止
+/// 逐卡手抄，从 paint_cfg_pool_content_impl 局部函数提升；下池行/
+/// 上池值框/下拉选项行三处共用这一份）。
+/// bar=true（可选列表行：下池行/下拉选项行）：左缘 10px accent 渐变
+/// 粗缘，**角部弧线上厚度渐细入 3px 细边、颜色同步渐混入 8% 白**——
+/// 页环非对称内芯同配方（内芯原点 (x+BAR, y+THIN)、半径 R−THIN，
+/// 角心偏移 = 渐细来源），取代「胶囊条贴均匀细环」的两张皮（用户
+/// 拍板：角部要跟其他框一样是渐细的，不是一根细条贴边上）。
+/// bar=false（展示型值框）：四边 3px 均匀细线（六修：左粗条是选择
+/// 语言的视觉载荷，不挂展示框）。内部 4% 白填充；
+/// sel=true：整环 accent 渐变（135° 尺 denom 与页环同源）。
+/// clip = Y 向裁剪带（上池滚动出池内缘断墨）。
+#[allow(clippy::too_many_arguments)]
+fn paint_row_frame(
+    frame: &mut Frame<'_>,
+    x: i64,
+    y: i64,
+    rw: u32,
+    rh: u32,
+    sel: bool,
+    bar: bool,
+    accent: crate::ui::accent::AccentPair,
+    denom: i64,
+    clip: (i64, i64),
+) {
+    const THIN: i64 = 3; // 细边宽（左粗：细 ≈ 3:1）
+    let bar_l = if bar { 10 } else { THIN }; // 左缘粗边宽（六修标定 10px）
+    // §七 标定三版：三级框圆角 = 池框同尺 36px（12px 是标签光标专用），
+    // 仍按短边一半钳（与 paint_rect_ring 同规）
+    let r = (POOL_FRAME_R as i64).min((rw / 2).min(rh / 2) as i64);
+    // 非对称内芯：左让 bar_l、其余让 THIN，半径 r−THIN——角心相对外
+    // 角心偏 (bar_l−THIN, 0)，角部厚度从左缘 bar_l 平滑收到 THIN
+    // （paint_rect_ring punch 的 (3w, w) 让位同配方，只是比例搬到行内）
+    let (ix, iy) = (x + bar_l, y + THIN);
+    let iw = rw.saturating_sub((bar_l + THIN) as u32);
+    let ih = rh.saturating_sub((2 * THIN) as u32);
+    if iw < 2 || ih < 2 {
+        return;
+    }
+    let ir = (r - THIN).max(0) as u32;
+    let (fw, fh) = (i64::from(frame.w), i64::from(frame.h));
+    for dy in 0..rh as i64 {
+        let yy = y + dy;
+        if yy < 0 || yy >= fh || yy < clip.0 || yy >= clip.1 {
+            continue;
+        }
+        for dx in 0..rw as i64 {
+            let xx = x + dx;
+            if xx < 0 || xx >= fw {
+                continue;
+            }
+            if rr_sdf(dx as f32 + 0.5, dy as f32 + 0.5, rw, rh, r as u32) >= 0.0 {
+                continue; // 外剪影外
+            }
+            if rr_sdf((xx - ix) as f32 + 0.5, (yy - iy) as f32 + 0.5, iw, ih, ir) < 0.0 {
+                frame.blend_px(xx as u32, yy as u32, 0x00FF_FFFF, 10); // 4% 白填充
+                continue;
+            }
+            // 环带像素
+            let grad = ring_gradient_rgb(accent.c1, accent.c2, xx, yy, denom);
+            if sel {
+                frame.blend_px(xx as u32, yy as u32, grad, 255);
+                continue;
+            }
+            if !bar {
+                frame.blend_px(xx as u32, yy as u32, 0x00FF_FFFF, 20); // 8% 白细线
+                continue;
+            }
+            // 左粗缘：直段全 accent；左角区（dx<r）沿弧把厚度与颜色同步
+            // 渐混入 8% 白——角顶（接上/下细边）全白、角尾（接左粗缘）全
+            // accent，弧中线性过渡
+            let in_tl = dx < r && dy < r;
+            let in_bl = dx < r && dy >= rh as i64 - r;
+            if !in_tl && !in_bl {
+                if dx < bar_l {
+                    frame.blend_px(xx as u32, yy as u32, grad, 255);
+                } else {
+                    frame.blend_px(xx as u32, yy as u32, 0x00FF_FFFF, 20);
+                }
+                continue;
+            }
+            let cy = if in_tl { y + r } else { y + rh as i64 - r };
+            let theta = ((yy - cy) as f64).atan2((xx - (x + r)) as f64);
+            // tl：θ∈(−π,−π/2)，左端 −π = 全 accent、上端 −π/2 = 全白；
+            // bl：θ∈[π/2,π]，下端 π/2 = 全白、左端 π = 全 accent
+            let t = if in_tl {
+                (theta + std::f64::consts::PI) / std::f64::consts::FRAC_PI_2
+            } else {
+                (std::f64::consts::PI - theta) / std::f64::consts::FRAC_PI_2
+            }
+            .clamp(0.0, 1.0);
+            let c = lerp_rgb(grad, 0x00FF_FFFF, (t * 255.0) as u32);
+            let a = (255.0 * (1.0 - t) + 20.0 * t) as u32;
+            frame.blend_px(xx as u32, yy as u32, c, a);
+        }
+    }
+}
+
 /// 功能光标开口框涂装（宪法 §三/§四 三修立、四修标定、五修宽+色，
 /// 2026-09-13；kfmv4 `renderer.ts _drawCursorBorder` 复刻 + NA 标定）：
 /// ①绿青半透明底垫整个框体；②左强调线 8px 画在**框内缘**（上下跳过
@@ -2460,8 +2559,8 @@ impl TermView {
         let off = i64::from(cfg_off_x);
         let title_fg = 0x00D9_D9D9; // 0.85 白（§2.3 标题档）
         let meta_fg = 0x0080_8080; // 0.5 白（次级档）
-        let px_title = 36.0; // 池行标题/字段值（四版 ×1.5：= CELL_H）
-        let px_meta = 30.0; // meta/标签列（四版 ×1.5：= CELL_H×5/6）
+        let px_title = 36.0; // 池行标题/字段标签列（四版 ×1.5：= CELL_H）
+        let px_meta = 30.0; // meta/字段值（四版 ×1.5：= CELL_H×5/6）
         let text_inset = 27.0; // 框内文字起笔内缩（18 ×1.5）
         // accent 渐变描边与页环同一把 135° 尺（同原点同分母，§五 光标条款同规）
         let denom = ((w - 1) + (h - 1)).max(1) as i64;
@@ -2494,78 +2593,6 @@ impl TermView {
             }
         }
 
-        // 圆角盒 SDF（负 = 内部，0 = 边界；标准圆角矩距离场）
-        fn round_d(dx: i64, dy: i64, rw: u32, rh: u32, r: i64) -> f64 {
-            let (w, h) = (rw as f64, rh as f64);
-            let (cx, cy) = ((w - 1.0) / 2.0, (h - 1.0) / 2.0);
-            let px = (dx as f64 - cx).abs() - (cx - r as f64);
-            let py = (dy as f64 - cy).abs() - (cy - r as f64);
-            let (ox, oy) = (px.max(0.0), py.max(0.0));
-            (ox * ox + oy * oy).sqrt() + px.max(py).min(0.0) - r as f64
-        }
-
-        // 三级框行涂装（§五 池行条款四版立/六修收窄）——bar=true：
-        // 可选列表行（下池行/下拉选项行）左缘 = 10px accent 渐变竖胶囊
-        // 条（条心贴左缘内铺，竖跨 R/2 收边，只吃框剪影内像素；kfmv4
-        // 实证选中行左边 ≈11px @1260）；bar=false：展示型值框（上池字段
-        // 框）四边均匀细线（六修用户拍板：值框左竖条太丑——左粗条是
-        // 选择语言的视觉载荷，不是通用装修）。三边细描边（未选中 8%
-        // 白，选中 = accent 渐变）+ 4% 白填充
-        #[allow(clippy::too_many_arguments)]
-        fn row_frame(
-            frame: &mut Frame<'_>,
-            x: i64,
-            y: i64,
-            rw: u32,
-            rh: u32,
-            sel: bool,
-            bar: bool,
-            accent: crate::ui::accent::AccentPair,
-            denom: i64,
-            clip: (i64, i64),
-        ) {
-            // §七 标定三版：三级框圆角 = 池框同尺 36px（12px 是标签光标
-            // 专用样式，未来文件树光标用——其他场合禁用，用户拍板）
-            const R: i64 = POOL_FRAME_R as i64;
-            const BAR_W: i64 = 10; // 左粗条宽（左粗：细 ≈ 3:1，细边 3px）
-            let bar_cx = x + 1 + BAR_W / 2;
-            let bar_top = y + R / 2;
-            let bar_bot = y + rh as i64 - R / 2;
-            for dy in 0..rh as i64 {
-                let yy = y + dy;
-                if yy < 0 || yy >= i64::from(frame.h) || yy < clip.0 || yy >= clip.1 {
-                    continue;
-                }
-                for dx in 0..rw as i64 {
-                    let xx = x + dx;
-                    if xx < 0 || xx >= i64::from(frame.w) {
-                        continue;
-                    }
-                    let d = round_d(dx, dy, rw, rh, R);
-                    // 左粗条：竖胶囊（半径 BAR_W/2，段 [bar_top, bar_bot]），
-                    // d < 0.5 = 不出框剪影（盖住左缘细描边带是预期——条即左缘）
-                    let seg_y = yy.clamp(bar_top, bar_bot);
-                    let (bdx, bdy) = (xx - bar_cx, yy - seg_y);
-                    let in_bar = bar
-                        && d < 0.5
-                        && ((bdx * bdx + bdy * bdy) as f64).sqrt() < BAR_W as f64 / 2.0;
-                    if in_bar {
-                        let c = ring_gradient_rgb(accent.c1, accent.c2, xx, yy, denom);
-                        frame.blend_px(xx as u32, yy as u32, c, 255);
-                    } else if d < -3.0 {
-                        frame.blend_px(xx as u32, yy as u32, 0x00FF_FFFF, 10); // 4% 白填充
-                    } else if d < 0.0 {
-                        if sel {
-                            let c = ring_gradient_rgb(accent.c1, accent.c2, xx, yy, denom);
-                            frame.blend_px(xx as u32, yy as u32, c, 255);
-                        } else {
-                            frame.blend_px(xx as u32, yy as u32, 0x00FF_FFFF, 20); // 8% 白描边
-                        }
-                    }
-                }
-            }
-        }
-
         // ---- 下池：子目录行表（4.5 格框行，左粗条恒在 + 选中三边渐变）----
         let no_clip = (0, i64::from(h));
         for (i, row) in page.rows.iter().enumerate() {
@@ -2578,7 +2605,7 @@ impl TermView {
                 continue; // 过渡帧行左缘出屏整行不画
             }
             let (rx, ry) = (rx as u32, r.y as u32);
-            row_frame(
+            paint_row_frame(
                 &mut frame,
                 r.x + off,
                 r.y,
@@ -2642,7 +2669,8 @@ impl TermView {
                 continue;
             }
             let clip32 = Some((uclip.0 as i32, uclip.1 as i32));
-            // 标签列（左 12 格，title 档——六修字档反转：标签是行的标题）
+            // 标签列（左 12 格，title 档 36px 亮——六修字档反转（色）+
+            // 七修补齐（号）：标签是行的标题，字大且亮）
             self.draw_text_left_ex(
                 &mut frame,
                 &ur.label,
@@ -2650,7 +2678,7 @@ impl TermView {
                 cp::LABEL_COL_W as u32,
                 r.y as u32,
                 r.h,
-                px_meta,
+                px_title,
                 title_fg,
                 text_inset,
                 clip32,
@@ -2658,7 +2686,7 @@ impl TermView {
             // 值框（四边 8% 白细线圆角深色框，六修取消左粗条——左粗条
             // 收窄为可选列表行专属）+ 值文本
             let vb = cp::value_box_rect(&r);
-            row_frame(
+            paint_row_frame(
                 &mut frame,
                 vb.x + off,
                 vb.y,
@@ -2671,7 +2699,7 @@ impl TermView {
                 uclip,
             );
             // 值文本右缘留呼吸位（kfmv4 实证：文字不贴框缘；下拉行
-            // 再多留三角位 45+27）；六修字档反转：值改 meta 档灰
+            // 再多留三角位 45+27）；字档反转：值 = meta 档 30px 灰
             let right_pad = if ur.is_dropdown { 72 } else { 27 };
             self.draw_text_left_ex(
                 &mut frame,
@@ -2680,7 +2708,7 @@ impl TermView {
                 vb.w.saturating_sub(right_pad),
                 vb.y as u32,
                 vb.h,
-                px_title,
+                px_meta,
                 meta_fg,
                 text_inset,
                 clip32,
@@ -2718,7 +2746,7 @@ impl TermView {
                     if iy + cp::FIELD_ROW_H as i64 > pr.y + pr.h as i64 {
                         break;
                     }
-                    row_frame(
+                    paint_row_frame(
                         &mut frame,
                         px0,
                         iy,

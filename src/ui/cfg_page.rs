@@ -43,8 +43,11 @@ pub const FIELD_BOX_H: u32 = CELL_H * 3;
 /// 池内容距池框缘的内缩 = 2 格（四版：1 格实机太窄，kfmv4 实证 ≈40px）
 pub const POOL_CONTENT_INSET: i64 = CELL_W as i64 * 2;
 /// 行间留隙 = 1.5 格（四版 ×1.5；三版 1 格拍板「三级框跟二级框一样
-/// 得有间隔」不变，行高放大后同比例跟放）
+/// 得有间隔」不变，行高放大后同比例跟放）——下池行专用
 pub const ROW_GAP: i64 = CELL_W as i64 * 3 / 2;
+/// 上池字段框行留隙 = 1 格（七修 2026-09-13 用户拍板：1.5 格减半格——
+/// 字段行是同质表项，比下池目录行可密半格）
+pub const FIELD_ROW_GAP: i64 = CELL_W as i64;
 /// 字段框标签列宽 = 12 格（四版：字号 1.5 倍后 8 格截断 5 字标签复发
 /// 防——「默认服务器」5×30px+内缩 27 = 177 < 216）
 pub const LABEL_COL_W: i64 = CELL_W as i64 * 12;
@@ -255,7 +258,7 @@ impl CfgPage {
         if n == 0 {
             return 0;
         }
-        POOL_CONTENT_INSET as u32 + n * FIELD_ROW_H + (n - 1) * ROW_GAP as u32
+        POOL_CONTENT_INSET as u32 + n * FIELD_ROW_H + (n - 1) * FIELD_ROW_GAP as u32
     }
 
     pub fn snap(&self) -> CfgPageSnap {
@@ -290,12 +293,14 @@ pub fn lower_row_rect(i: usize, lower: &PoolRect) -> PoolRect {
     }
 }
 
-/// 上池第 i 行字段框矩形（池内缘内缩 2 格，逐行 4 格高 + 留隙）——
+/// 上池第 i 行字段框矩形（池内缘内缩 2 格，逐行 4 格高 + 留隙 1 格
+/// ——七修：上池行隙减半格 ROW_GAP→FIELD_ROW_GAP）——
 /// scroll = 上池滚动 px（四版：内容随滚动整体上移，触发器不例外）
 pub fn upper_row_rect(i: usize, upper: &PoolRect, scroll: i64) -> PoolRect {
     PoolRect {
         x: upper.x + POOL_CONTENT_INSET,
-        y: upper.y + POOL_CONTENT_INSET + (i as i64) * (FIELD_ROW_H as i64 + ROW_GAP) - scroll,
+        y: upper.y + POOL_CONTENT_INSET + (i as i64) * (FIELD_ROW_H as i64 + FIELD_ROW_GAP)
+            - scroll,
         w: upper.w.saturating_sub((POOL_CONTENT_INSET * 2) as u32),
         h: FIELD_ROW_H,
     }
