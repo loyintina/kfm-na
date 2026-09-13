@@ -41,7 +41,7 @@
 | `src/session.rs` | 10 | 10 | 0 | — |
 | `src/session_router.rs` | 10 | 10 | 0 | — |
 | `src/settings.rs` | 6 | 5 | 1 | terminal_to_json |
-| `src/termview.rs` | 118 | 111 | 7 | AI_THINK_COLLAPSED FONT_CANDIDATES CJK_FONT_CANDIDATES load_cjk_font font_probe MAG_HALF_COLS MAG_HALF_ROWS |
+| `src/termview.rs` | 119 | 112 | 7 | AI_THINK_COLLAPSED FONT_CANDIDATES CJK_FONT_CANDIDATES load_cjk_font font_probe MAG_HALF_COLS MAG_HALF_ROWS |
 | `src/theme.rs` | 1 | 1 | 0 | — |
 | `src/trace.rs` | 12 | 8 | 4 | TRACE_CAP format_tail dump_all dump_tail |
 | `src/ui/accent.rs` | 6 | 6 | 0 | — |

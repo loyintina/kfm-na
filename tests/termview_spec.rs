@@ -2738,7 +2738,9 @@ fn spec_bar067_栏带底_半透写出() {
 #[test]
 fn spec_cfg页底装修_accent与平移钉() {
     // accent 入参时代（宪法 §2.2 召唤即随机，2026-09-12）：
-    // ①靠泊位内芯 = CARD_PAGE_BG（深底不随 accent），边框环有墨 ≠ 底色；
+    // ①靠泊位内芯 = **渐变暗底**（十二修 §三 渐变暗背景：dark(c1)→dark(c2)
+    //   页环同尺 135° 不透明直出，dark(c)=lerp(c,黑,200)——取代 CARD_PAGE_BG
+    //   平填；平填回潮即红），边框环有墨 ≠ 底色；
     // ②环色由 accent 驱动——换 accent 重画同位取样必须变色（不变 =
     //   accent 没接进涂装，满屏固定色；变异抽检：涂装写死常量 → 此钉红）；
     // ③X 平移语义不变：透明缘/可见区底色咬合/完全屏外零墨
@@ -2752,17 +2754,32 @@ fn spec_cfg页底装修_accent与平移钉() {
         c1: 0x0000_FF00,
         c2: 0x00FF_00FF,
     };
+    // 页环渐变尺：原点 (16,16)，框 368×348（w/h−margin×2−inset），denom 714
+    let dark = |c: u32| kfm_na::termview::lerp_rgb(c, 0, 200);
+    let page_bg = |px: i64, py: i64, off_x: i64| {
+        kfm_na::termview::ring_gradient_rgb(
+            dark(acc_a.c1),
+            dark(acc_a.c2),
+            px - (16 + off_x),
+            py - 16,
+            714,
+        )
+    };
     let mut b0 = vec![0u32; (w * h) as usize];
     kfm_na::termview::paint_cfg_page_chrome(&mut b0, w, h, inset, 0, acc_a);
     assert_eq!(
         b0[(h / 2 * w + w / 2) as usize],
-        kfm_na::ui::accent::CARD_PAGE_BG,
-        "靠泊位内芯必须恒卡片深底（不随 accent）"
+        page_bg(200, 250, 0),
+        "靠泊位内芯必须 = 渐变暗底精确值（十二修；平填回潮即红）"
     );
     let ring_idx = ((h - inset) / 2 * w + 18) as usize;
     let ring = b0[ring_idx];
     assert_ne!(ring, 0, "边框环必须有墨");
-    assert_ne!(ring, kfm_na::ui::accent::CARD_PAGE_BG, "边框环必须异于底色");
+    assert_ne!(
+        ring,
+        page_bg(18, ((h - inset) / 2) as i64, 0),
+        "边框环必须异于内芯暗底"
+    );
     let mut b1 = vec![0u32; (w * h) as usize];
     kfm_na::termview::paint_cfg_page_chrome(&mut b1, w, h, inset, 0, acc_b);
     assert_ne!(b1[ring_idx], ring, "accent 换了环色必须变（驱动钉）");
@@ -2777,8 +2794,8 @@ fn spec_cfg页底装修_accent与平移钉() {
     );
     assert_eq!(
         mid_row[(k as usize) + 100],
-        kfm_na::ui::accent::CARD_PAGE_BG,
-        "平移后可见区底色必须咬合"
+        page_bg(237, 250, i64::from(k)),
+        "平移后可见区内芯 = 同尺渐变暗底（随面板刚体平移）"
     );
     // 完全屏外不落墨
     let mut bw = vec![0u32; (w * h) as usize];
@@ -2809,7 +2826,8 @@ fn spec_ft_split_真值表() {
 #[test]
 fn spec_ft页底装修_accent与平移钉() {
     // accent 入参时代（宪法 §2.2 召唤即随机，2026-09-12）：
-    // ①靠泊位内芯 = CARD_PAGE_BG（深底不随 accent），边框环有墨 ≠ 底色；
+    // ①靠泊位内芯 = **渐变暗底**（十二修 §三，与 cfg 页同规——平填回潮
+    //   即红），边框环有墨 ≠ 内芯；
     // ②环色由 accent 驱动——换 accent 重画同位取样必须变色（不变 =
     //   accent 没接进涂装，满屏固定色；变异抽检：涂装写死常量 → 此钉红）；
     // ③X 平移语义不变：透明缘/可见区底色咬合/完全屏外零墨
@@ -2823,17 +2841,31 @@ fn spec_ft页底装修_accent与平移钉() {
         c1: 0x0000_FF00,
         c2: 0x00FF_00FF,
     };
+    let dark = |c: u32| kfm_na::termview::lerp_rgb(c, 0, 200);
+    let page_bg = |px: i64, py: i64, off_x: i64| {
+        kfm_na::termview::ring_gradient_rgb(
+            dark(acc_a.c1),
+            dark(acc_a.c2),
+            px - (16 + off_x),
+            py - 16,
+            714,
+        )
+    };
     let mut b0 = vec![0u32; (w * h) as usize];
     kfm_na::termview::paint_ft_page_chrome(&mut b0, w, h, inset, 0, acc_a);
     assert_eq!(
         b0[(h / 2 * w + w / 2) as usize],
-        kfm_na::ui::accent::CARD_PAGE_BG,
-        "靠泊位内芯必须恒卡片深底（不随 accent）"
+        page_bg(200, 250, 0),
+        "靠泊位内芯必须 = 渐变暗底精确值（十二修；平填回潮即红）"
     );
     let ring_idx = ((h - inset) / 2 * w + 18) as usize;
     let ring = b0[ring_idx];
     assert_ne!(ring, 0, "边框环必须有墨");
-    assert_ne!(ring, kfm_na::ui::accent::CARD_PAGE_BG, "边框环必须异于底色");
+    assert_ne!(
+        ring,
+        page_bg(18, ((h - inset) / 2) as i64, 0),
+        "边框环必须异于内芯暗底"
+    );
     let mut b1 = vec![0u32; (w * h) as usize];
     kfm_na::termview::paint_ft_page_chrome(&mut b1, w, h, inset, 0, acc_b);
     assert_ne!(b1[ring_idx], ring, "accent 换了环色必须变（驱动钉）");
@@ -2848,8 +2880,8 @@ fn spec_ft页底装修_accent与平移钉() {
     );
     assert_eq!(
         mid_row[100],
-        kfm_na::ui::accent::CARD_PAGE_BG,
-        "平移后可见区底色必须咬合"
+        page_bg(100, 250, -i64::from(k)),
+        "平移后可见区内芯 = 同尺渐变暗底（随面板刚体平移）"
     );
     // 完全屏外不落墨
     let mut bw = vec![0u32; (w * h) as usize];
@@ -2880,7 +2912,8 @@ fn spec_pt_split_真值表() {
 #[test]
 fn spec_pt页底装修_accent与平移钉() {
     // accent 入参时代（宪法 §2.2 召唤即随机，2026-09-12）：
-    // ①靠泊位内芯 = CARD_PAGE_BG（深底不随 accent），边框环有墨 ≠ 底色；
+    // ①靠泊位内芯 = **渐变暗底**（十二修 §三，与 cfg 页同规——平填回潮
+    //   即红），边框环有墨 ≠ 内芯；
     // ②环色由 accent 驱动——换 accent 重画同位取样必须变色（不变 =
     //   accent 没接进涂装，满屏固定色；变异抽检：涂装写死常量 → 此钉红）；
     // ③X 平移语义不变：透明缘/可见区底色咬合/完全屏外零墨
@@ -2894,17 +2927,31 @@ fn spec_pt页底装修_accent与平移钉() {
         c1: 0x0000_FF00,
         c2: 0x00FF_00FF,
     };
+    let dark = |c: u32| kfm_na::termview::lerp_rgb(c, 0, 200);
+    let page_bg = |px: i64, py: i64, off_x: i64| {
+        kfm_na::termview::ring_gradient_rgb(
+            dark(acc_a.c1),
+            dark(acc_a.c2),
+            px - (16 + off_x),
+            py - 16,
+            714,
+        )
+    };
     let mut b0 = vec![0u32; (w * h) as usize];
     kfm_na::termview::paint_parser_page_chrome(&mut b0, w, h, inset, 0, acc_a);
     assert_eq!(
         b0[(h / 2 * w + w / 2) as usize],
-        kfm_na::ui::accent::CARD_PAGE_BG,
-        "靠泊位内芯必须恒卡片深底（不随 accent）"
+        page_bg(200, 250, 0),
+        "靠泊位内芯必须 = 渐变暗底精确值（十二修；平填回潮即红）"
     );
     let ring_idx = ((h - inset) / 2 * w + 18) as usize;
     let ring = b0[ring_idx];
     assert_ne!(ring, 0, "边框环必须有墨");
-    assert_ne!(ring, kfm_na::ui::accent::CARD_PAGE_BG, "边框环必须异于底色");
+    assert_ne!(
+        ring,
+        page_bg(18, ((h - inset) / 2) as i64, 0),
+        "边框环必须异于内芯暗底"
+    );
     let mut b1 = vec![0u32; (w * h) as usize];
     kfm_na::termview::paint_parser_page_chrome(&mut b1, w, h, inset, 0, acc_b);
     assert_ne!(b1[ring_idx], ring, "accent 换了环色必须变（驱动钉）");
@@ -2919,8 +2966,8 @@ fn spec_pt页底装修_accent与平移钉() {
     );
     assert_eq!(
         mid_row[(k as usize) + 100],
-        kfm_na::ui::accent::CARD_PAGE_BG,
-        "平移后可见区底色必须咬合"
+        page_bg(237, 250, i64::from(k)),
+        "平移后可见区内芯 = 同尺渐变暗底（随面板刚体平移）"
     );
     // 完全屏外不落墨
     let mut bw = vec![0u32; (w * h) as usize];
@@ -2930,12 +2977,16 @@ fn spec_pt页底装修_accent与平移钉() {
 
 #[test]
 fn spec_cfg标签栏_涂装钉() {
-    // 宪法 §四（2026-09-13 十一修，标签随机双色体系）：
+    // 宪法 §四（2026-09-13 十一修，标签随机双色体系；2026-09-14 十二修
+    // 选中块均匀渐变 + 渐变暗底）：
     // ①标签行带内有文字墨（标签不是空色块）；
-    // ②标签块形态——选中 = 上 2/3 c1 + 下 1/3 c2 满填 α255、两截交界
-    //   ±3px 短渐变（精确 lerp 值）；未选中 = 上 1/3 条带 c1（α48）+
-    //   中 1/3 留 6% 白底 + 下 1/3 条带 c2（α48）；上两角圆角（角外零墨）、
-    //   下缘直边（末行靠左有墨——变异：下缘也圆角必红）；
+    // ②标签块形态——选中 = **c1(顶)→c2(底) 竖向均匀渐变满填 α255**
+    //   （十二修推翻两截硬切：dy 行色 = lerp(c1,c2,dy·255/(h−1)) 精确值——
+    //   变异：两截/短渐变回潮即红，dy=12 处必已离 c1）；未选中 = 上 1/3
+    //   条带 c1（α48）+ 中 1/3 留 6% 白底 + 下 1/3 条带 c2（α48），全部
+    //   叠在**页内芯渐变暗底**上（十二修：dst 不再是平色 CARD_PAGE_BG）；
+    //   上两角圆角（角外 = 页暗底）、下缘直边（末行靠左有墨——变异：
+    //   下缘也圆角必红）；
     // ③每标签独立双色钉——未选中块的条带色 = **该标签自己的**双色
     //   （snap 色列），不是页 accent（变异：块色吃 paint 时 accent 参数即红；
     //   换页 accent 重画块色不变）；
@@ -2958,6 +3009,12 @@ fn spec_cfg标签栏_涂装钉() {
         c2: 0x0040_00FF,
     };
     let bg = kfm_na::ui::accent::CARD_PAGE_BG;
+    // 页内芯渐变暗底（十二修 §三）：dark = lerp(c,黑,200)，页环同尺
+    // 原点 (16,16) denom 714（框 368×348）
+    let dark = |c: u32| kfm_na::termview::lerp_rgb(c, 0, 200);
+    let page_bg = |px: i64, py: i64| {
+        kfm_na::termview::ring_gradient_rgb(dark(acc_a.c1), dark(acc_a.c2), px - 16, py - 16, 714)
+    };
     // blend 公式与 termview 私有 blend 逐字一致（事后色判卷尺）
     let blend = |fg: u32, dst: u32, a: u32| {
         let inv = 255 - a;
@@ -2979,67 +3036,77 @@ fn spec_cfg标签栏_涂装钉() {
     termview::paint_cfg_page_chrome(&mut b0, w, h, inset, 0, acc_a);
     tv.paint_cfg_tab_bar(&mut b0, w, h, &snap, 0, inset, acc_a);
 
-    // ②选中标签块：上截（dy<45）= c1 精确直出；下截（dy>51）= c2 精确
-    // 直出；交界带中点（dy=48，split=72*2/3=48，t=(48−45)*255/6=127）
-    // = lerp(c1,c2,127) 精确值（变异：砍短渐变即红——交界处必为两端色之一）
+    // ②选中标签块：竖向均匀渐变——逐行精确值（t = dy·255/71）；
+    // dy=12 必须已离 c1（变异：两截硬切/短渐变回潮 → 该点 = c1 即红）
+    let grad_at =
+        |dy: usize| kfm_na::termview::lerp_rgb(acc_a.c1, acc_a.c2, (dy as u32 * 255) / 71);
     assert_eq!(
         b0[(oy + 12) * w as usize + cx + 8],
+        grad_at(12),
+        "选中块 dy=12 = 均匀渐变精确值（非 c1 直出）"
+    );
+    assert_ne!(
+        b0[(oy + 12) * w as usize + cx + 8],
         acc_a.c1,
-        "选中块上 2/3 必须 = 该标签 c1 满填（α255 直出）"
+        "dy=12 必须已离 c1（变异：两截硬切回潮即红）"
+    );
+    assert_eq!(
+        b0[(oy + 36) * w as usize + cx + 8],
+        grad_at(36),
+        "选中块中行 = 均匀渐变中点精确值"
     );
     assert_eq!(
         b0[(oy + 60) * w as usize + cx + 8],
-        acc_a.c2,
-        "选中块下 1/3 必须 = 该标签 c2 满填"
+        grad_at(60),
+        "选中块 dy=60 = 均匀渐变精确值"
     );
     assert_eq!(
-        b0[(oy + 48) * w as usize + cx + 8],
-        kfm_na::termview::lerp_rgb(acc_a.c1, acc_a.c2, 127),
-        "两截交界 = 短渐变中点精确值（变异：硬切无渐变即红）"
+        b0[oy * w as usize + cx],
+        page_bg(61, 55),
+        "上左角外 = 页暗底零墨（上圆角）"
     );
-    assert_eq!(b0[oy * w as usize + cx], bg, "上左角外必须零墨（上圆角）");
     assert_eq!(
         b0[(oy + 2) * w as usize + cx + 2],
-        bg,
-        "角盒近角点必须零墨（圆弧裁外；变异：上角直角化必红）"
+        page_bg(63, 57),
+        "角盒近角点必须零墨（圆弧裁外 = 页暗底；变异：上角直角化必红）"
     );
     assert_eq!(
         b0[oy * w as usize + cx + 18],
         acc_a.c1,
-        "顶行弧尾以右必须 = c1（圆角只吃角盒）"
+        "顶行弧尾以右必须 = c1（t=0；圆角只吃角盒）"
     );
     assert_eq!(
         b0[(oy + 71) * w as usize + cx + 2],
         acc_a.c2,
-        "下缘末行靠左必须 = c2（下缘直边不圆角——变异：下缘圆角化必红）"
+        "下缘末行靠左必须 = c2（t=255，下缘直边不圆角——变异：下缘圆角化必红）"
     );
 
-    // ②+③未选中标签块：上条带 = 该标签 c1 薄态 α48；中带 = 6% 白底；
-    // 下条带 = 该标签 c2 薄态 α48——色源是色列[1] 不是页 accent
+    // ②+③未选中标签块：条带叠在页暗底上——上条带 = 该标签 c1 薄态 α48；
+    // 中带 = 6% 白；下条带 = 该标签 c2 薄态 α48——色源是色列[1] 不是页 accent
     assert_eq!(
         b0[(oy + 6) * w as usize + ux + 4],
-        blend(pair_b.c1, bg, 48),
-        "未选中块上 1/3 条带 = 该标签 c1 薄态 α48"
+        blend(pair_b.c1, page_bg(173, 61), 48),
+        "未选中块上 1/3 条带 = 该标签 c1 薄态 α48（叠渐变暗底）"
     );
     assert_ne!(
         b0[(oy + 6) * w as usize + ux + 4],
-        blend(acc_a.c1, bg, 48),
+        blend(acc_a.c1, page_bg(173, 61), 48),
         "条带色必须不是页 accent（变异：块色吃 paint 时 accent 参数即红）"
     );
     assert_eq!(
         b0[(oy + 36) * w as usize + ux + 4],
-        blend(0x00FF_FFFF, bg, 15),
-        "未选中块中 1/3 = 6% 白底（变异：整截填色即红）"
+        blend(0x00FF_FFFF, page_bg(173, 91), 15),
+        "未选中块中 1/3 = 6% 白叠渐变暗底（变异：整截填色即红）"
     );
     assert_eq!(
         b0[(oy + 66) * w as usize + ux + 4],
-        blend(pair_b.c2, bg, 48),
+        blend(pair_b.c2, page_bg(173, 121), 48),
         "未选中块下 1/3 条带 = 该标签 c2 薄态 α48"
     );
     assert_eq!(
         b0[(oy + 36) * w as usize + ux - 1],
-        bg,
-        "未选中块不外溢（块外即页底）"
+        page_bg(168, 91),
+        "未选中块不外溢（块外即页暗底）"
     );
 
     // ④底线钉：uy = 标签行下缘紧挨 1px，池区同宽、不越缘；整根 =
@@ -3063,18 +3130,18 @@ fn spec_cfg标签栏_涂装钉() {
     );
     assert_eq!(
         b0[uy * w as usize + (pa.x - 1) as usize],
-        bg,
-        "底线不越池区左缘"
+        page_bg(60, 127),
+        "底线不越池区左缘（缘外 = 页暗底）"
     );
     assert_eq!(
         b0[uy * w as usize + (pa.x + pa.w as i64) as usize],
-        bg,
-        "底线不越池区右缘"
+        page_bg(345, 127),
+        "底线不越池区右缘（缘外 = 页暗底）"
     );
     assert_eq!(
         b0[(uy + 1) * w as usize + (pa.x + 4) as usize],
-        bg,
-        "底线单行不跨边（uy+1 零墨）"
+        page_bg(65, 128),
+        "底线单行不跨边（uy+1 = 页暗底）"
     );
     // 空态也画底线（装修不是内容，与页环同规）：色列空 = 兜底 accent.c2
     let bar_empty = kfm_na::ui::tab_bar::TabBar::new(&[], 320);
@@ -3094,7 +3161,7 @@ fn spec_cfg标签栏_涂装钉() {
     tv.paint_cfg_tab_bar(&mut b1, w, h, &snap, 0, inset, acc_b);
     assert_eq!(
         b1[(oy + 12) * w as usize + cx + 8],
-        acc_a.c1,
+        grad_at(12),
         "换页 accent 块色不变（色列驱动；变异：吃 paint accent 即红）"
     );
     assert_eq!(
@@ -3103,13 +3170,12 @@ fn spec_cfg标签栏_涂装钉() {
         "换页 accent 底线不变（色列驱动）"
     );
 
-    // ①文字墨：选中标签格心区必须有异于纯 c1 填充的字形墨（深色字
-    // 压在浅底上）
+    // ①文字墨：选中标签格心区必须有文字字形墨——深色字（CARD_PAGE_BG）
+    // 压在渐变块上（渐变带色永≠CARD_PAGE_BG：G 通道 20→26 不经过 14）
     let mut text_ink = 0usize;
     for y in (oy + 20)..(oy + 44) {
         for x in (cx + 20)..(cx + cw - 20) {
-            let p = b0[y * w as usize + x];
-            if p != acc_a.c1 && p != bg && p != 0 {
+            if b0[y * w as usize + x] == bg {
                 text_ink += 1;
             }
         }
@@ -3119,17 +3185,18 @@ fn spec_cfg标签栏_涂装钉() {
 
 #[test]
 fn spec_三级框_涂装钉() {
-    // 宪法 §五 池行条款（2026-09-13 十一修，渐变色归位 + 两形态）：
-    // ①全包框（下池行/下拉项，bar=true）：左粗竖线 10px + 三细边 3px
-    //   **全框 135° 双色渐变**（与页环同向 c1→c2 同一把尺）；左粗缘恒
-    //   α255，未选中细边 = 渐变薄态 α140（不再是 8% 白——变异：细边画回
-    //   白色即红）；选中 = 整环渐变 α255；
-    // ②角部只渐形状不渐色——角部弧线上颜色全程渐变采样，alpha 沿弧
-    //   255→140 线性收（变异：颜色渐混入白即红）；
-    // ③只有左竖线（上池值框，bar=false）：右缘/上缘**零框墨**（4% 白
-    //   填充直到剪影缘），左竖线渐变 α255（变异：四边细框回潮即红）
-    use kfm_na::termview::{ROW_FRAME_THIN_A, lerp_rgb, ring_gradient_rgb};
-    use kfm_na::ui::accent::CARD_PAGE_BG;
+    // 宪法 §五 池行条款 + §三 渐变暗背景（2026-09-14 十二修，未选中去框 +
+    // 值框无边框化 + 渐变暗底）：
+    // ①选中行（下池 focus 行）= 全包框：左粗缘 10px/三细边 3px = 135°
+    //   渐变 α255 直出（色向 c1→c2 与页环同向同尺；角部只渐形状不渐色）；
+    // ②未选中行 = **无框**：左粗缘位/顶边/右边/角部全部 = 渐变暗底不透明
+    //   直出（任何框墨即红——α140 薄态/8% 白/左竖线回潮全被抓）；
+    // ③上池值框 = 无边框组件：左竖线位/右缘/上缘全 = 渐变暗底（十一修
+    //   形态②退役——变异：左竖线回潮即红）；
+    // ④渐变暗底配方钉：dark(c) = lerp(c, 黑, 200)（字面量钉，实现侧常量
+    //   漂移即红），行内芯同一把 135° 尺（页原点 (0,0)、页 denom）不透明
+    //   直出——4% 白平填回潮即红
+    use kfm_na::termview::{lerp_rgb, ring_gradient_rgb};
     use kfm_na::ui::cfg_page::{self, CfgPage, RowView, UpperRow};
     use kfm_na::ui::dual_pool::DualPool;
     let (w, h) = (1260u32, 2400u32);
@@ -3138,14 +3205,18 @@ fn spec_三级框_涂装钉() {
         c1: 0x00FF_6000,
         c2: 0x0000_80FF,
     };
-    let bg = CARD_PAGE_BG;
-    let blend = |fg: u32, dst: u32, a: u32| {
-        let inv = 255 - a;
-        let ch = |f: u32, d: u32| (f * a + d * inv) / 255;
-        (ch((fg >> 16) & 0xFF, (dst >> 16) & 0xFF) << 16)
-            | (ch((fg >> 8) & 0xFF, (dst >> 8) & 0xFF) << 8)
-            | ch(fg & 0xFF, dst & 0xFF)
-    };
+    let bg = kfm_na::ui::accent::CARD_PAGE_BG;
+    let dark = |c: u32| lerp_rgb(c, 0, 200); // 字面量 200 = 配方钉本体
+    let denom = (i64::from(w) - 1) + (i64::from(h) - 1); // 与涂装同一把 135° 尺
+    let row_bg = |px: i64, py: i64| ring_gradient_rgb(dark(acc.c1), dark(acc.c2), px, py, denom);
+    // 单源钉：实现侧 frame_bg_rgb/FRAME_BG_DIM 必须 ≡ 本钉字面量配方
+    // （实现常量漂移/暗底函数配方跑偏均即红）
+    assert_eq!(kfm_na::termview::FRAME_BG_DIM, 200, "暗度常量 = 配方 200");
+    assert_eq!(
+        kfm_na::termview::frame_bg_rgb(acc.c1, acc.c2, 40, 72, denom),
+        ring_gradient_rgb(dark(acc.c1), dark(acc.c2), 40, 72, denom),
+        "frame_bg_rgb ≡ ring_gradient(dark,dark) 单源等价"
+    );
     let tv = TermView::new(host_font(), None, 8, 2, CELL_W, CELL_H);
     let mut pool = DualPool::new(w, h);
     pool.set_viewport(w, h, inset);
@@ -3168,7 +3239,6 @@ fn spec_三级框_涂装钉() {
         is_dropdown: false,
     }]);
     let pg = page.snap(); // focus=0 → 行 0 选中、行 1 未选中
-    let denom = (i64::from(w) - 1) + (i64::from(h) - 1); // 与涂装同一把 135° 尺
 
     let mut b0 = vec![0u32; (w * h) as usize];
     termview::paint_cfg_page_chrome(&mut b0, w, h, inset, 0, acc);
@@ -3182,85 +3252,89 @@ fn spec_三级框_涂装钉() {
         "夹具前提：行 1 完整在池内"
     );
 
-    // ①左粗缘中带：选中/未选中都 = 渐变 α255 精确直出
-    for (r, name) in [(&r0, "选中行"), (&r1, "未选中行")] {
-        let (px, py) = (r.x + 4, r.y + r.h as i64 / 2);
+    // ①选中行全包框：左粗缘中带/顶边中点/右边中点 = 渐变 α255 精确直出
+    let sel_band = [
+        (r0.x + 4, r0.y + r0.h as i64 / 2, "选中行左粗缘"),
+        (r0.x + r0.w as i64 / 2, r0.y + 1, "选中行顶边"),
+        (r0.x + r0.w as i64 - 2, r0.y + r0.h as i64 / 2, "选中行右边"),
+    ];
+    for (px, py, name) in sel_band {
         assert_eq!(
             b0[py as usize * w as usize + px as usize],
             ring_gradient_rgb(acc.c1, acc.c2, px, py, denom),
-            "{name}左粗缘必须 = 渐变 α255 直出"
+            "{name}必须 = 渐变 α255 直出"
         );
     }
-    // ①细边中带（顶边中点/右边中点）：选中 = 渐变 α255 直出；
-    // 未选中 = 渐变薄态 α140 事后色（变异：画回 8% 白即红）
-    let thin_pts = [
-        (r0.x + r0.w as i64 / 2, r0.y + 1, true, "选中行顶边"),
-        (
-            r0.x + r0.w as i64 - 2,
-            r0.y + r0.h as i64 / 2,
-            true,
-            "选中行右边",
-        ),
-        (r1.x + r1.w as i64 / 2, r1.y + 1, false, "未选中行顶边"),
-        (
-            r1.x + r1.w as i64 - 2,
-            r1.y + r1.h as i64 / 2,
-            false,
-            "未选中行右边",
-        ),
-    ];
-    for (px, py, sel, name) in thin_pts {
-        let g = ring_gradient_rgb(acc.c1, acc.c2, px, py, denom);
-        let want = if sel {
-            g
-        } else {
-            blend(g, bg, ROW_FRAME_THIN_A)
-        };
-        assert_eq!(
-            b0[py as usize * w as usize + px as usize],
-            want,
-            "{name}必须 = 渐变{}（十一修：细边不再是 8% 白）",
-            if sel { " α255 直出" } else { "薄态 α140" }
-        );
-        if !sel {
-            assert_ne!(
-                b0[py as usize * w as usize + px as usize],
-                blend(0x00FF_FFFF, bg, 20),
-                "{name}画回 8% 白 = 回潮（变异钉）"
-            );
-        }
-    }
-    // ②角部不渐白：未选中行左上弧线中点（局部 (13,13)，θ=−3π/4 → t=0.5）
-    // 颜色 = 纯渐变采样，alpha = 255·0.5+140·0.5 截断 = 197
-    let (px, py) = (r1.x + 13, r1.y + 13);
-    let g = ring_gradient_rgb(acc.c1, acc.c2, px, py, denom);
-    let corner_a = (255.0f64 * 0.5 + f64::from(ROW_FRAME_THIN_A) * 0.5) as u32;
-    assert_eq!(
-        b0[py as usize * w as usize + px as usize],
-        blend(g, bg, corner_a),
-        "角部颜色必须全程渐变采样不混白（变异：lerp 进 8% 白即红），\
-         alpha 沿弧 255→140 过渡"
-    );
-    assert_ne!(g, 0x00FF_FFFF, "夹具前提：该点渐变色不是白");
-    // ③上池值框（bar=false = 只有左竖线）：左竖线渐变 α255；
-    // 右缘/上缘零框墨——填充 4% 白直到剪影缘
-    let ur = cfg_page::upper_row_rect(0, &ps.upper, 0);
-    let vb = cfg_page::value_box_rect(&ur);
-    let (px, py) = (vb.x + 4, vb.y + vb.h as i64 / 2);
+    // ①选中行角部：弧线中点（局部 (13,13)）颜色 = 纯渐变采样 α255
+    // （只渐形状不渐色；变异：混白/降 alpha 即红）
+    let (px, py) = (r0.x + 13, r0.y + 13);
     assert_eq!(
         b0[py as usize * w as usize + px as usize],
         ring_gradient_rgb(acc.c1, acc.c2, px, py, denom),
-        "值框左竖线 = 渐变 α255（形态②本体）"
+        "选中行角部 = 渐变 α255（渐细只渐形状）"
+    );
+    // ①选中行内芯 = 渐变暗底不透明直出（4% 白平填回潮即红）
+    let (ix, iy) = (r0.x + r0.w as i64 / 2, r0.y + r0.h as i64 / 2);
+    assert_eq!(
+        b0[iy as usize * w as usize + ix as usize],
+        row_bg(ix, iy),
+        "选中行内芯 = 渐变暗底（不透明直出）"
+    );
+
+    // ②未选中行无框：原左粗缘位/顶边/右边/角部全部 = 渐变暗底
+    // （框墨全退；变异：薄态 α140/8% 白/任何框线回潮即红）
+    let unsel = [
+        (r1.x + 4, r1.y + r1.h as i64 / 2, "未选中行原左粗缘位"),
+        (r1.x + r1.w as i64 / 2, r1.y + 1, "未选中行顶边"),
+        (
+            r1.x + r1.w as i64 - 2,
+            r1.y + r1.h as i64 / 2,
+            "未选中行右边",
+        ),
+        (r1.x + 13, r1.y + 13, "未选中行角部"),
+        (
+            r1.x + r1.w as i64 / 2,
+            r1.y + r1.h as i64 / 2,
+            "未选中行内芯",
+        ),
+    ];
+    for (px, py, name) in unsel {
+        assert_eq!(
+            b0[py as usize * w as usize + px as usize],
+            row_bg(px, py),
+            "{name}必须 = 渐变暗底（无框；任何框墨即红）"
+        );
+    }
+
+    // ③上池值框无边框：左竖线位/右缘/上缘全 = 渐变暗底
+    // （变异：左竖线/四边细框回潮即红）
+    let ur = cfg_page::upper_row_rect(0, &ps.upper, 0);
+    let vb = cfg_page::value_box_rect(&ur);
+    let vb_pts = [
+        (vb.x + 4, vb.y + vb.h as i64 / 2, "值框原左竖线位"),
+        (vb.x + vb.w as i64 - 2, vb.y + vb.h as i64 / 2, "值框右缘"),
+        (vb.x + vb.w as i64 / 2, vb.y + 1, "值框上缘"),
+        (vb.x + vb.w as i64 / 2, vb.y + vb.h as i64 / 2, "值框内芯"),
+    ];
+    for (px, py, name) in vb_pts {
+        assert_eq!(
+            b0[py as usize * w as usize + px as usize],
+            row_bg(px, py),
+            "{name}必须 = 渐变暗底（无边框；任何框墨即红）"
+        );
+    }
+    // ④暗底不是平色：同一行内芯左/右取样必须异色（渐变尺的铁证；
+    // 变异：暗底写平色即红）
+    let (lx, rx, my) = (r0.x + 40, r0.x + r0.w as i64 - 40, r0.y + r0.h as i64 / 2);
+    assert_ne!(
+        b0[my as usize * w as usize + lx as usize],
+        b0[my as usize * w as usize + rx as usize],
+        "暗底必须随 135° 尺渐变（平色变異即红）"
     );
     assert_eq!(
-        b0[(vb.y + vb.h as i64 / 2) as usize * w as usize + (vb.x + vb.w as i64 - 2) as usize],
-        blend(0x00FF_FFFF, bg, 10),
-        "值框右缘零框墨 = 4% 白填充直到剪影缘（变异：四边细框回潮即红）"
-    );
-    assert_eq!(
-        b0[(vb.y + 1) as usize * w as usize + (vb.x + vb.w as i64 / 2) as usize],
-        blend(0x00FF_FFFF, bg, 10),
-        "值框上缘零框墨（只有左竖线，没有三条细边）"
+        b0[my as usize * w as usize + lx as usize],
+        row_bg(lx, my),
+        "暗底左取样 = 尺上精确值"
     );
     // 渐变色向钉：三级框与页环同向 c1→c2（同一采样函数同一分母——
     // 反转变异即全钉红，此处补一刀直证：左粗缘色 ≠ 反转采样）
@@ -3274,15 +3348,19 @@ fn spec_三级框_涂装钉() {
         ),
         "左粗缘色向 = c1→c2 正转（与页环同向；反转变异即红）"
     );
+    // bg 变量防未用告警（夹具底色仅注释用）
+    let _ = bg;
 }
 
 #[test]
 fn spec_cfg双池_涂装钉() {
     // 宪法 §五（2026-09-12 骨架；同日实测二标：池间距 1 格/左右各 2 格
-    // 内边距/空占位 4 格/圆角 = 卡片框 36 与光标分家）：①两枚二级卡框
+    // 内边距/空占位 4 格/圆角 = 卡片框 36 与光标分家；2026-09-14 十二修：
+    // 内芯渐变暗底）：①两枚二级卡框
     // 都有环墨；②内卡渐变反转 c2→c1（§三）逐像素判，正转变异即红；
-    // ③内芯 punch 回底；④两池 1 格间距——上池底缘墨与下池顶缘墨之间
-    // 有净底行；⑤底内缘含 inset（下池不顶穿页环底）；⑥accent 驱动
+    // ③内芯 = 反转渐变暗底（平填回潮即红）；④两池 1 格间距——上池底缘墨
+    // 与下池顶缘墨之间是页暗底行；⑤底内缘含 inset（下池不顶穿页环底）；
+    // ⑥accent 驱动
     use kfm_na::termview::{POOL_FRAME_R, lerp_rgb};
     use kfm_na::ui::dual_pool::{DualPool, POOL_EMPTY_H, POOL_GAP};
     let (w, h) = (400u32, 700u32);
@@ -3336,11 +3414,13 @@ fn spec_cfg双池_涂装钉() {
         "下池环墨 = 同一份反转配方（样式唯一来源）"
     );
 
-    // ③内芯 punch 回底
+    // ③内芯 = 渐变暗底（十二修 §三：池框内芯 = dark(c2)→dark(c1) 反转
+    // 暗渐变，池框本地尺 原点(61,163) denom 426——平填回底回潮即红）
+    let dark = |c: u32| lerp_rgb(c, 0, 200);
     assert_eq!(
         b0[(uy + uh / 2) * w as usize + ux + 40],
-        bg,
-        "上池内芯必须 punch 回页底"
+        kfm_na::termview::ring_gradient_rgb(dark(acc_a.c2), dark(acc_a.c1), 40, 72, 426),
+        "上池内芯必须 = 反转渐变暗底精确值（十二修）"
     );
 
     // ④池间距：上池底缘墨（uy+uh−1）与下池顶缘墨（ly2）之间是净底行
@@ -3354,8 +3434,14 @@ fn spec_cfg双池_涂装钉() {
     let gap_mid = uy + uh + POOL_GAP as usize / 2;
     assert_eq!(
         b0[gap_mid * w as usize + ux + 100],
-        bg,
-        "间距中带必须净底（两环辉光够不到中行）"
+        kfm_na::termview::ring_gradient_rgb(
+            dark(acc_a.c1),
+            dark(acc_a.c2),
+            145,
+            gap_mid as i64 - 16,
+            914
+        ),
+        "间距中带 = 页暗底（页尺原点(16,16) denom 914；两环辉光够不到中行）"
     );
 
     // ⑤顶穿钉：下池底缘 = 页环底内缘之上（底内缘 = h − inset − 55）

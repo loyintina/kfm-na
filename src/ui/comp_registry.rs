@@ -46,14 +46,15 @@ impl CompStatus {
 pub enum Preview {
     /// 圆角矩形边框环（页环/池框同配方微缩）
     Ring,
-    /// 三级框行：选中（整环渐变 α255+左粗）与未选中（细边薄态）各一条
+    /// 三级框行：选中（全包框：左粗 10+三细 3 整环渐变 α255）与未选中
+    /// （无框纯渐变暗底）各一条
     RowFrame,
     /// 均匀细框：四边 3px 渐变细框两条（非池行场合通用件）
     ThinFrame,
     /// 跳框自指：迷你压暗区 + 小卡 + 小关闭钮
     ModalMini,
-    /// 标签页块：选中（两截满填）+ 未选中（条带薄态，异色演示每标签
-    /// 独立双色）+ 底线（配合标签模式纯色）
+    /// 标签页块：选中（c1→c2 竖向均匀渐变满填）+ 未选中（条带薄态，
+    /// 异色演示每标签独立双色）+ 底线（配合标签模式纯色）
     TabChip,
     /// 底线组件：模式①自身反转渐变细线（c2→c1；模式②配合标签纯色
     /// 在 TabChip 预览里展出）
@@ -128,7 +129,7 @@ pub const COMPONENTS: &[CompEntry] = &[
         file: "src/termview.rs",
         spec: "宪法 §三/§五",
         tests: "tests/termview_spec.rs",
-        desc: "圆角矩形边框环核：外发光 + 渐变外环 + 底色 punch 内芯。双池、跳框卡、页环本体全从这里出。",
+        desc: "圆角矩形边框环核：外发光 + 渐变外环 + 内芯分路（grad_fill：平色 punch / 渐变暗底，十二修）。双池、跳框卡、页环本体全从这里出；终端卡壳与 AI 页主题基座走平色。",
         preview: Preview::Ring,
     },
     CompEntry {
@@ -139,7 +140,7 @@ pub const COMPONENTS: &[CompEntry] = &[
         file: "src/termview.rs",
         spec: "宪法 §五 池行",
         tests: "tests/termview_spec.rs",
-        desc: "圆角深色框行：4% 白填、整框 135° 双色渐变（与页环同向 c1→c2）。两形态：全包框（左粗竖线 10px+三细边 3px，下池目录行/下拉项）/只有左竖线（上池值框）。角部渐细只渐形状不渐色（十一修）。",
+        desc: "圆角深色框行（十二修）：内芯渐变暗底（dark(c1)→dark(c2) 135°，不透明直写）。选中 = 全包框（左粗竖线 10px+三细边 3px 整环渐变 α255，下池目录行/下拉项）；未选中 = 无框纯渐变暗底剪影。角部渐细只渐形状不渐色（十一修）。",
         preview: Preview::RowFrame,
     },
     CompEntry {
@@ -150,7 +151,7 @@ pub const COMPONENTS: &[CompEntry] = &[
         file: "src/termview.rs",
         spec: "宪法 §五 池行",
         tests: "tests/termview_spec.rs",
-        desc: "四边 3px 渐变均匀细框 + 4% 白填：跳框关闭钮、预览展台等非池行场合的通用细框。不挂左粗缘——左粗是选择语言的视觉载荷（十一修新立）。",
+        desc: "四边 3px 渐变均匀细框 + 渐变暗底内芯（十二修：4% 白填退役）：跳框关闭钮、预览展台等非池行场合的通用细框。不挂左粗缘——左粗是选择语言的视觉载荷（十一修新立）。",
         preview: Preview::ThinFrame,
     },
     CompEntry {
@@ -173,7 +174,7 @@ pub const COMPONENTS: &[CompEntry] = &[
         file: "src/termview.rs",
         spec: "宪法 §四 十一修",
         tests: "tests/tab_bar_spec.rs",
-        desc: "无边框色块标签：上两角圆角、下缘直边。每标签独立随机双色：选中 = 上 2/3 c1 + 下 1/3 c2 满填两截短渐变 + 深色字；未选中 = 上/下 1/3 条带薄态 + 中 1/3 6% 白底。",
+        desc: "无边框色块标签：上两角圆角、下缘直边。每标签独立随机双色：选中 = c1→c2 竖向均匀渐变满填（十二修：两截硬切退役）+ 深色字；未选中 = 上/下 1/3 条带薄态 + 中 1/3 6% 白底。",
         preview: Preview::TabChip,
     },
     CompEntry {
