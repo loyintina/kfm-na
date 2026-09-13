@@ -835,8 +835,9 @@ impl App {
                             if let Some(i) = pg.dropdown_item_at_y(yi, &upper, max_h) {
                                 pg.dropdown_pick(i);
                                 drop(pg);
-                                self.rebuild_cfg_rows();
-                                crate::report::report("gest", &format!("下拉点选→行 {i}"));
+                                // 下拉换选 = 默认服务器变更（二版：写盘+重建归壳）
+                                self.apply_default_server_pick();
+                                crate::report::report("gest", &format!("下拉点选→项 {i}"));
                             } else {
                                 pg.dismiss_dropdown();
                                 crate::report::report("gest", "下拉外点按→收 panel");
@@ -1437,7 +1438,7 @@ impl App {
                                 pg.toggle_dropdown();
                                 crate::report::report("gest", "下拉触发器点按→开合");
                                 self.dirty = true;
-                            } else if let Some(i) = pg.row_at_y(yi, &lower) {
+                            } else if let Some(i) = pg.lower_row_at_y(yi, &lower) {
                                 pg.select(i);
                                 drop(pg);
                                 self.rebuild_cfg_rows();
@@ -2499,69 +2500,65 @@ impl App {
         self.dirty = true;
     }
 
-    /// 配置页行表/字段重建（宪法 §五 目录语义）：下池 = [全局] +
-    /// servers.json 各服务器 + [+ 新增]；上池字段 = 聚焦子目录的
-    /// 二级选项。数据变更/聚焦切换后必调（set_rows/set_fields 内部
-    /// 判等，没变不空涨代际）
+    /// 配置页行表/上池/下拉重建（宪法 §五 目录语义二版，设置页 §2.3）：
+    /// 下池 = 子目录（系统管理大类目前仅一行「系统管理」——服务器列表
+    /// 不进下池，用户拍板）；上池 = 服务器配置表单（默认服务器下拉行 +
+    /// 服务器切换行 + 下拉选中服务器的字段框行）；下拉选项 = 本地终端 +
+    /// 服务器池，选中位从 terminal_cfg.default_session 解析。数据变更/
+    /// 换选后必调（set_* 内部判等，没变不空涨代际）
     fn rebuild_cfg_rows(&mut self) {
         let Some(page) = &self.cfg_page else { return };
-        let mut rows = vec![crate::ui::cfg_page::RowView {
-            title: "全局".into(),
-            meta: "默认终端 / 切换快捷键".into(),
+        let rows = vec![crate::ui::cfg_page::RowView {
+            title: "系统管理".into(),
+            meta: "服务器配置".into(),
         }];
+        // 下拉选项 = 本地终端 + 服务器池；选中位 = 当前默认会话
+        let mut options = vec!["本地终端".to_string()];
         for s in &self.settings_servers {
-            rows.push(crate::ui::cfg_page::RowView {
-                title: if s.name.is_empty() {
-                    s.id.clone()
-                } else {
-                    s.name.clone()
-                },
-                meta: s.ssh.host.clone(),
+            options.push(if s.name.is_empty() {
+                s.id.clone()
+            } else {
+                s.name.clone()
             });
         }
-        rows.push(crate::ui::cfg_page::RowView {
-            title: "+ 新增服务器".into(),
-            meta: String::new(),
-        });
-        let focus;
+        let sel = match &self.terminal_cfg.default_session {
+            crate::settings::DefaultSession::Local => 0,
+            crate::settings::DefaultSession::Server(id) => self
+                .settings_servers
+                .iter()
+                .position(|s| &s.id == id || &s.name == id)
+                .map_or(0, |i| i + 1),
+        };
+        // 上池字段框行：默认服务器下拉行 + 服务器切换行 + 选中服务器字段
+        let mut upper = vec![
+            crate::ui::cfg_page::UpperRow {
+                label: "默认服务器".into(),
+                value: options.get(sel).cloned().unwrap_or_default(),
+                is_dropdown: true,
+            },
+            crate::ui::cfg_page::UpperRow {
+                label: "服务器切换".into(),
+                value: self.terminal_cfg.switch_hotkey.display(),
+                is_dropdown: false,
+            },
+        ];
+        if sel > 0
+            && let Some(s) = self.settings_servers.get(sel - 1)
         {
-            let mut p = page.lock().unwrap();
-            p.set_rows(rows);
-            focus = p.focus();
-        }
-        // 上池字段 = 聚焦子目录的二级选项（三层目录 §五.3）
-        let n = self.settings_servers.len();
-        let fields: Vec<(String, String)> = if focus == 0 {
-            let ds = match &self.terminal_cfg.default_session {
-                crate::settings::DefaultSession::Local => "本地".to_string(),
-                crate::settings::DefaultSession::Server(id) => self
-                    .settings_servers
-                    .iter()
-                    .find(|s| &s.id == id || &s.name == id)
-                    .map_or(id.clone(), |s| {
-                        if s.name.is_empty() {
-                            s.id.clone()
-                        } else {
-                            s.name.clone()
-                        }
-                    }),
-            };
-            vec![
-                ("默认终端".into(), ds),
+            let fields: [(&str, String); 8] = [
                 (
-                    "切换快捷键".into(),
-                    self.terminal_cfg.switch_hotkey.display(),
+                    "名称",
+                    if s.name.is_empty() {
+                        s.id.clone()
+                    } else {
+                        s.name.clone()
+                    },
                 ),
-            ]
-        } else if focus <= n {
-            let s = &self.settings_servers[focus - 1];
-            vec![
-                ("名称".into(), s.name.clone()),
-                ("服务器 IP".into(), s.ssh.host.clone()),
-                ("端口".into(), s.ssh.port.to_string()),
-                ("用户".into(), s.ssh.user.clone()),
+                ("服务器 IP", s.ssh.host.clone()),
+                ("端口", s.ssh.port.to_string()),
+                ("用户", s.ssh.user.clone()),
                 (
-                    "密钥地址".into(),
+                    "密钥地址",
                     if s.ssh.key_path.is_empty() {
                         "（未配）".into()
                     } else {
@@ -2569,7 +2566,7 @@ impl App {
                     },
                 ),
                 (
-                    "密码".into(),
+                    "密码",
                     if s.ssh.password.is_empty() {
                         "（空 = 密钥登录）".into()
                     } else {
@@ -2577,7 +2574,7 @@ impl App {
                     },
                 ),
                 (
-                    "wsUrl".into(),
+                    "wsUrl",
                     if s.ws_url.is_empty() {
                         format!("ws://127.0.0.1:{}/ws", s.tunnel.local_port)
                     } else {
@@ -2585,14 +2582,56 @@ impl App {
                     },
                 ),
                 (
-                    "切换快捷键".into(),
+                    "切换快捷键",
                     s.hotkey.as_ref().map_or("未绑定".into(), |h| h.display()),
                 ),
-            ]
+            ];
+            for (label, value) in fields {
+                upper.push(crate::ui::cfg_page::UpperRow {
+                    label: label.into(),
+                    value,
+                    is_dropdown: false,
+                });
+            }
+        }
+        let mut p = page.lock().unwrap();
+        p.set_rows(rows);
+        p.set_options(options, sel);
+        p.set_upper(upper);
+    }
+
+    /// 下拉换选 = 默认服务器变更（设置页 §2.3 二版）：terminal.json
+    /// defaultSession 写盘（冷启动生效）+ 内存同步 + 上池重建。
+    /// 写盘失败 = 上报不炸（配置文件纪律：坏了回退，不许炸终端）
+    fn apply_default_server_pick(&mut self) {
+        let Some(page) = &self.cfg_page else { return };
+        let sel = page.lock().unwrap().option_sel();
+        self.terminal_cfg.default_session = if sel == 0 {
+            crate::settings::DefaultSession::Local
         } else {
-            vec![("新增服务器".into(), "未来版本开放".into())]
+            self.settings_servers
+                .get(sel - 1)
+                .map_or(crate::settings::DefaultSession::Local, |s| {
+                    crate::settings::DefaultSession::Server(s.id.clone())
+                })
         };
-        page.lock().unwrap().set_fields(fields);
+        let ds_display = match &self.terminal_cfg.default_session {
+            crate::settings::DefaultSession::Local => "本地终端".to_string(),
+            crate::settings::DefaultSession::Server(id) => id.clone(),
+        };
+        if let Some(dir) = self
+            .android_app
+            .as_ref()
+            .and_then(|a| a.internal_data_path())
+        {
+            let path = dir.join("settings").join("terminal.json");
+            let json = crate::settings::terminal_to_json(&self.terminal_cfg);
+            if let Err(e) = std::fs::write(&path, json) {
+                crate::report::report("term", &format!("terminal.json 写盘失败: {e}"));
+            }
+        }
+        crate::report::report("ui", &format!("默认服务器换选→{ds_display}（已落盘）"));
+        self.rebuild_cfg_rows();
     }
 
     /// 会话切换（L1）：Ctrl-] 触达——router 换出向活跃槽；入向不换槽

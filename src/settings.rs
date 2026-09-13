@@ -154,6 +154,29 @@ pub fn parse_servers(json: &str) -> Result<Vec<ServerEntry>, String> {
     Ok(out)
 }
 
+/// terminal.json 落盘序列化（设置页 v1 二版：默认服务器下拉换选写盘）。
+/// 与 parse_terminal 同一份字段口径（defaultSession/switchHotkey{mod,key}；
+/// 无修饰键 = 「-」宪法短线）
+pub fn terminal_to_json(t: &TerminalConfig) -> String {
+    let ds = match &t.default_session {
+        DefaultSession::Local => "local".to_string(),
+        DefaultSession::Server(id) => id.clone(),
+    };
+    let modifier = match t.switch_hotkey.modifier {
+        Some(Mod::Ctrl) => "ctrl",
+        Some(Mod::Alt) => "alt",
+        Some(Mod::Shift) => "shift",
+        None => "-",
+    };
+    let esc = |s: &str| serde_json::to_string(s).unwrap_or_else(|_| "\"\"".into());
+    format!(
+        "{{\"defaultSession\":{},\"switchHotkey\":{{\"mod\":{},\"key\":{}}}}}",
+        esc(&ds),
+        esc(modifier),
+        esc(&t.switch_hotkey.key)
+    )
+}
+
 fn parse_hotkey_value(v: &serde_json::Value) -> Option<Hotkey> {
     let key = v.get("key").and_then(|k| k.as_str())?.to_string();
     let modifier = match v.get("mod").and_then(|m| m.as_str()) {

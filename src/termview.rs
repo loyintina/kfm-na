@@ -2412,12 +2412,11 @@ impl TermView {
         }
     }
 
-    /// 双池内容涂装（宪法 §五 目录语义，2026-09-13 三层目录落地）：
-    /// 下池 = 子目录行表（聚焦行 6% 白底，§五 池行 hover/聚焦条款）；
-    /// 上池 = 联动下拉触发器（§六：6% 白底 + 右缘下拉三角）+ 聚焦
-    /// 子目录的字段行（标题 0.85 白 / 元信息 0.5 白，§2.3）；
-    /// 下拉开着 = 触发器下方下弹 panel（§六：96% 近黑底，聚焦项
-    /// 6% 白底——✓ 标记留 v1b，内嵌像素体字库无此 glyph 待验）。
+    /// 双池内容涂装（宪法 §五 目录语义二版，2026-09-13 修宪落地）：
+    /// 下池 = 子目录行表（3 格圆角框行，选中 = accent 渐变描边 3px）；
+    /// 上池 = 字段框行表（标签列 + 值框；首行 = 下拉行，值框 + 右缘
+    /// 下拉三角）；下拉开着 = 触发器下方下弹 panel（§六：96% 近黑底，
+    /// 选中项 accent 描边——✓ 标记留 v1b，内嵌像素体字库无此 glyph 待验）。
     /// 几何一律吃 cfg_page 自由函数（眼手同尺）；出池底的行不画
     /// （v1a 无池内滚动，upper_scroll 旗已记账）；off≠0 的过渡帧里
     /// 行左缘出屏即整行不画（softbuffer/值守兜底路径的取舍，GLES
@@ -2441,11 +2440,12 @@ impl TermView {
         let off = i64::from(cfg_off_x);
         let title_fg = 0x00D9_D9D9; // 0.85 白（§2.3 标题档）
         let meta_fg = 0x0080_8080; // 0.5 白（次级档）
-        let px_title = 24.0; // 标签字号同尺（§七 标定）
-        let px_meta = 20.0;
-        let half = cp::POOL_ROW_H / 2;
+        let px_title = 24.0; // 池行标题/字段值（§七 标定：像素体 12×2 不虚化）
+        let px_meta = 20.0; // meta/标签列
+        // accent 渐变描边与页环同一把 135° 尺（同原点同分母，§五 光标条款同规）
+        let denom = ((w - 1) + (h - 1)).max(1) as i64;
 
-        // 矩形覆盖率混合小助手（6% 白底/96% 黑底都是 blend_px 的活）
+        // 矩形覆盖率混合小助手（panel 96% 黑底等满混/混色块）
         fn blend_rect(frame: &mut Frame<'_>, x: i64, y: i64, rw: u32, rh: u32, fg: u32, a: u32) {
             for dy in 0..rh as i64 {
                 let yy = y + dy;
@@ -2462,9 +2462,57 @@ impl TermView {
             }
         }
 
-        // ---- 下池：子目录行表 ----
+        // 圆角盒 SDF（负 = 内部，0 = 边界；标准圆角矩距离场）
+        fn round_d(dx: i64, dy: i64, rw: u32, rh: u32, r: i64) -> f64 {
+            let (w, h) = (rw as f64, rh as f64);
+            let (cx, cy) = ((w - 1.0) / 2.0, (h - 1.0) / 2.0);
+            let px = (dx as f64 - cx).abs() - (cx - r as f64);
+            let py = (dy as f64 - cy).abs() - (cy - r as f64);
+            let (ox, oy) = (px.max(0.0), py.max(0.0));
+            (ox * ox + oy * oy).sqrt() + px.max(py).min(0.0) - r as f64
+        }
+
+        // 三级框行涂装（二版 §五 池行条款）：圆角深色框——填充 4% 白 +
+        // 描边 8% 白；选中 = accent 双色渐变描边 3px（页环同尺采样）
+        fn row_frame(
+            frame: &mut Frame<'_>,
+            x: i64,
+            y: i64,
+            rw: u32,
+            rh: u32,
+            sel: bool,
+            accent: crate::ui::accent::AccentPair,
+            denom: i64,
+        ) {
+            const R: i64 = 12; // §七 标定：三级框圆角 12px
+            for dy in 0..rh as i64 {
+                let yy = y + dy;
+                if yy < 0 || yy >= i64::from(frame.h) {
+                    continue;
+                }
+                for dx in 0..rw as i64 {
+                    let xx = x + dx;
+                    if xx < 0 || xx >= i64::from(frame.w) {
+                        continue;
+                    }
+                    let d = round_d(dx, dy, rw, rh, R);
+                    if d < -3.0 {
+                        frame.blend_px(xx as u32, yy as u32, 0x00FF_FFFF, 10); // 4% 白填充
+                    } else if d < 0.0 {
+                        if sel {
+                            let c = ring_gradient_rgb(accent.c1, accent.c2, xx, yy, denom);
+                            frame.blend_px(xx as u32, yy as u32, c, 255);
+                        } else {
+                            frame.blend_px(xx as u32, yy as u32, 0x00FF_FFFF, 20); // 8% 白描边
+                        }
+                    }
+                }
+            }
+        }
+
+        // ---- 下池：子目录行表（3 格框行，选中 accent 描边）----
         for (i, row) in page.rows.iter().enumerate() {
-            let r = cp::row_rect(i, &ps.lower);
+            let r = cp::lower_row_rect(i, &ps.lower);
             if r.y + r.h as i64 > ps.lower.y + ps.lower.h as i64 {
                 break; // 出池底的行不画（v1a 无滚动）
             }
@@ -2473,11 +2521,30 @@ impl TermView {
                 continue; // 过渡帧行左缘出屏整行不画
             }
             let (rx, ry) = (rx as u32, r.y as u32);
-            if i == page.focus {
-                blend_rect(&mut frame, rx as i64, ry as i64, r.w, r.h, 0x00FF_FFFF, 15);
-            }
+            row_frame(
+                &mut frame,
+                r.x + off,
+                r.y,
+                r.w,
+                r.h,
+                i == page.focus,
+                accent,
+                denom,
+            );
+            // 标题 faux-bold（像素体无粗体档：双画偏 1px）+ meta，行内垂直分布
+            let title_band = 60;
             self.draw_text_left(
-                &mut frame, &row.title, rx, r.w, ry, half, px_title, title_fg,
+                &mut frame, &row.title, rx, r.w, ry, title_band, px_title, title_fg,
+            );
+            self.draw_text_left(
+                &mut frame,
+                &row.title,
+                rx + 1,
+                r.w,
+                ry,
+                title_band,
+                px_title,
+                title_fg,
             );
             if !row.meta.is_empty() {
                 self.draw_text_left(
@@ -2485,88 +2552,112 @@ impl TermView {
                     &row.meta,
                     rx,
                     r.w,
-                    ry + half,
-                    half,
+                    ry + title_band,
+                    r.h - title_band,
                     px_meta,
                     meta_fg,
                 );
             }
         }
 
-        // ---- 上池：联动下拉触发器 + 字段行 ----
-        let t = cp::trigger_rect(&ps.upper);
-        let tx = t.x + off;
-        if tx >= 0 {
-            let (tx, ty) = (tx as u32, t.y as u32);
-            blend_rect(&mut frame, tx as i64, ty as i64, t.w, t.h, 0x00FF_FFFF, 15);
-            let cur = page.rows.get(page.focus).map_or("", |r| r.title.as_str());
+        // ---- 上池：字段框行表（标签列 + 值框；首行 = 下拉行）----
+        for (i, ur) in page.upper.iter().enumerate() {
+            let r = cp::upper_row_rect(i, &ps.upper);
+            if r.y + r.h as i64 > ps.upper.y + ps.upper.h as i64 {
+                break; // 出池底的行不画（v1a 无滚动）
+            }
+            let rx = r.x + off;
+            if rx < 0 {
+                continue;
+            }
+            // 标签列（左 6 格，meta 档）
             self.draw_text_left(
                 &mut frame,
-                cur,
-                tx,
-                t.w,
-                ty,
-                cp::POOL_ROW_H,
+                &ur.label,
+                rx as u32,
+                cp::LABEL_COL_W as u32,
+                r.y as u32,
+                r.h,
+                px_meta,
+                meta_fg,
+            );
+            // 值框（圆角深色框）+ 值文本
+            let vb = cp::value_box_rect(&r);
+            row_frame(
+                &mut frame,
+                vb.x + off,
+                vb.y,
+                vb.w,
+                vb.h,
+                false,
+                accent,
+                denom,
+            );
+            self.draw_text_left(
+                &mut frame,
+                &ur.value,
+                (vb.x + off) as u32,
+                vb.w,
+                vb.y as u32,
+                vb.h,
                 px_title,
                 title_fg,
             );
-            // 右缘下拉三角（逐行 11/9/7/5/3/1 覆盖率满混）
-            let tri_cx = tx + t.w - 30;
-            let tri_y = ty + cp::POOL_ROW_H / 2 - 3;
-            for dy in 0..6u32 {
-                let half_w = 5 - dy;
-                blend_rect(
-                    &mut frame,
-                    (tri_cx - half_w) as i64,
-                    (tri_y + dy) as i64,
-                    half_w * 2 + 1,
-                    1,
-                    0x00D9_D9D9,
-                    255,
-                );
-            }
-            // 字段行（触发器之下逐行）
-            for (i, (ft, fm)) in page.fields.iter().enumerate() {
-                let r = cp::field_rect(i, &ps.upper);
-                if r.y + r.h as i64 > ps.upper.y + ps.upper.h as i64 {
-                    break;
+            if ur.is_dropdown {
+                // 右缘下拉三角（逐行 11/9/7/5/3/1 覆盖率满混）
+                let tri_cx = (vb.x + off) as u32 + vb.w - 30;
+                let tri_y = vb.y as u32 + vb.h / 2 - 3;
+                for dy in 0..6u32 {
+                    let half_w = 5 - dy;
+                    blend_rect(
+                        &mut frame,
+                        (tri_cx - half_w) as i64,
+                        (tri_y + dy) as i64,
+                        half_w * 2 + 1,
+                        1,
+                        0x00D9_D9D9,
+                        255,
+                    );
                 }
-                let fx = (r.x + off) as u32;
-                let fy = r.y as u32;
-                self.draw_text_left(&mut frame, ft, fx, r.w, fy, half, px_title, title_fg);
-                self.draw_text_left(&mut frame, fm, fx, r.w, fy + half, half, px_meta, meta_fg);
             }
         }
 
         // ---- 下拉 panel（开着才画，叠在最后 = 盖住字段行/下池）----
         if page.dropdown_open {
-            let max_h = h.saturating_sub(t.y as u32 + cp::POOL_ROW_H + 40);
-            let pr = cp::dropdown_panel_rect(page.rows.len(), &ps.upper, max_h);
+            let t = cp::trigger_rect(&ps.upper);
+            let max_h = h.saturating_sub(t.y as u32 + cp::FIELD_ROW_H + 40);
+            let pr = cp::dropdown_panel_rect(page.options.len(), &ps.upper, max_h);
             let px0 = pr.x + off;
             if px0 >= 0 {
                 blend_rect(&mut frame, px0, pr.y, pr.w, pr.h, 0x0000_0000, 245);
-                for (i, row) in page.rows.iter().enumerate() {
-                    let iy = pr.y + (i as i64) * cp::POOL_ROW_H as i64;
-                    if iy + cp::POOL_ROW_H as i64 > pr.y + pr.h as i64 {
+                for (i, opt) in page.options.iter().enumerate() {
+                    let iy = pr.y + (i as i64) * cp::FIELD_ROW_H as i64;
+                    if iy + cp::FIELD_ROW_H as i64 > pr.y + pr.h as i64 {
                         break;
                     }
-                    if i == page.focus {
-                        blend_rect(&mut frame, px0, iy, pr.w, cp::POOL_ROW_H, 0x00FF_FFFF, 15);
-                    }
+                    row_frame(
+                        &mut frame,
+                        px0,
+                        iy,
+                        pr.w,
+                        cp::FIELD_ROW_H,
+                        i == page.option_sel,
+                        accent,
+                        denom,
+                    );
                     self.draw_text_left(
                         &mut frame,
-                        &row.title,
+                        opt,
                         px0 as u32,
                         pr.w,
                         iy as u32,
-                        cp::POOL_ROW_H,
+                        cp::FIELD_ROW_H,
                         px_title,
                         title_fg,
                     );
                 }
             }
         }
-        let _ = accent; // 行内容不吃 accent（§2.3：accent 永不用于文字）
     }
 
     /// 画一串已量宽的字符（折行后逐行画走这里）：左对齐内缩 18 +
