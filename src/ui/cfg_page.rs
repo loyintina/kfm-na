@@ -33,8 +33,9 @@ pub const FIELD_ROW_H: u32 = CELL_H * 2;
 pub const POOL_CONTENT_INSET: i64 = CELL_W as i64;
 /// 行间留隙（三级框不贴边，kfmv4 实证样式）
 pub const ROW_GAP: i64 = 10;
-/// 字段框标签列宽 = 6 格（值框在其右，二版 §七 标定）
-pub const LABEL_COL_W: i64 = CELL_W as i64 * 6;
+/// 字段框标签列宽 = 8 格（值框在其右，二版 §七 标定；6 格实机截断
+/// 5 字标签——「默认服务器」5×20px+内缩 18 = 118 > 108）
+pub const LABEL_COL_W: i64 = CELL_W as i64 * 8;
 
 /// 下池行（子目录）
 #[derive(Debug, Clone, PartialEq, Eq)]
