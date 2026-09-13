@@ -71,7 +71,7 @@ pub const AI_PAGE_LINE_H: u32 = 64;
 pub const AI_PAGE_PX: f32 = 40.0;
 /// 标签栏文字字号（宪法 §四，标定值 2026-09-12）：2 格行高（72）内
 /// 容 24 = 内嵌像素体 12px 的整数倍，网格原生不虚化
-pub const TAB_TEXT_PX: f32 = 24.0;
+pub const TAB_TEXT_PX: f32 = 36.0;
 /// 双池框圆角半径（宪法 §五，2026-09-12 二标）：= 页环卡片框 36——
 /// 池是通用卡片（与页环同尺）；功能光标是开口框（ui/cursor.rs），
 /// 两者分家不同源（用户拍板：光标不是卡片）
@@ -2234,6 +2234,26 @@ impl TermView {
         self.draw_items_left(frame, &items, cx, cw, cy, rh, px, fg, None);
     }
 
+    /// draw_text_left 全参版（四版配置页用）：显式内缩 + 纵裁剪带
+    /// （池内滚动内容出池内缘即断墨——框/文字同一裁剪带，眼手同尺）
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn draw_text_left_ex(
+        &self,
+        frame: &mut Frame<'_>,
+        text: &str,
+        cx: u32,
+        cw: u32,
+        cy: u32,
+        rh: u32,
+        px: f32,
+        fg: u32,
+        inset: f32,
+        clip_y: Option<(i32, i32)>,
+    ) {
+        let items = self.measure_items(text, px);
+        self.draw_items_left_inset(frame, &items, cx, cw, cy, rh, px, fg, clip_y, inset);
+    }
+
     /// 居中画一行文字（BAR-046 选择菜单按钮标签，2026-09-03）：水平居中
     /// 于 (cx,cw)，垂直居中于 (cy,ch)，右缘裁剪 + clip_x0 左缘裁剪
     /// （2026-09-12 标签栏横滚滑出内容带左缘时不许污染页环带——坐标
@@ -2412,15 +2432,15 @@ impl TermView {
         }
     }
 
-    /// 双池内容涂装（宪法 §五 目录语义二版，2026-09-13 修宪落地）：
-    /// 下池 = 子目录行表（3 格圆角框行，选中 = accent 渐变描边 3px）；
-    /// 上池 = 字段框行表（标签列 + 值框；首行 = 下拉行，值框 + 右缘
-    /// 下拉三角）；下拉开着 = 触发器下方下弹 panel（§六：96% 近黑底，
-    /// 选中项 accent 描边——✓ 标记留 v1b，内嵌像素体字库无此 glyph 待验）。
-    /// 几何一律吃 cfg_page 自由函数（眼手同尺）；出池底的行不画
-    /// （v1a 无池内滚动，upper_scroll 旗已记账）；off≠0 的过渡帧里
-    /// 行左缘出屏即整行不画（softbuffer/值守兜底路径的取舍，GLES
-    /// 主路径烘焙恒 off=0 不受影响）
+    /// 双池内容涂装（宪法 §五 目录语义四版，2026-09-13 修宪落地）：
+    /// 下池 = 子目录行表（4.5 格左粗三边细框行，选中 = 三边 accent 渐变
+    /// 描边 3px）；上池 = 字段框行表（4 格，标签列 + 值框；首行 = 下拉
+    /// 行，值框 + 右缘下拉三角）；下拉开着 = 触发器下方下弹 panel
+    /// （§六：96% 近黑底，选中项 accent 描边——✓ 标记留 v1b，内嵌像素
+    /// 体字库无此 glyph 待验）。**上池像素滚动**（§五 滚动条款兑现）：
+    /// 行矩形吃 snap.upper_scroll，出池内缘裁剪带断墨（框/文字/三角
+    /// 同一带）；off≠0 的过渡帧里行左缘出屏即整行不画（softbuffer/
+    /// 值守兜底路径的取舍，GLES 主路径烘焙恒 off=0 不受影响）
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn paint_cfg_pool_content_impl(
         &self,
@@ -2440,16 +2460,28 @@ impl TermView {
         let off = i64::from(cfg_off_x);
         let title_fg = 0x00D9_D9D9; // 0.85 白（§2.3 标题档）
         let meta_fg = 0x0080_8080; // 0.5 白（次级档）
-        let px_title = 24.0; // 池行标题/字段值（§七 标定：像素体 12×2 不虚化）
-        let px_meta = 20.0; // meta/标签列
+        let px_title = 36.0; // 池行标题/字段值（四版 ×1.5：= CELL_H）
+        let px_meta = 30.0; // meta/标签列（四版 ×1.5：= CELL_H×5/6）
+        let text_inset = 27.0; // 框内文字起笔内缩（18 ×1.5）
         // accent 渐变描边与页环同一把 135° 尺（同原点同分母，§五 光标条款同规）
         let denom = ((w - 1) + (h - 1)).max(1) as i64;
 
-        // 矩形覆盖率混合小助手（panel 96% 黑底等满混/混色块）
-        fn blend_rect(frame: &mut Frame<'_>, x: i64, y: i64, rw: u32, rh: u32, fg: u32, a: u32) {
+        // 矩形覆盖率混合小助手（panel 96% 黑底等满混/混色块）；
+        // 裁剪带外的像素断墨（池内滚动内容出池内缘即裁）
+        #[allow(clippy::too_many_arguments)]
+        fn blend_rect(
+            frame: &mut Frame<'_>,
+            x: i64,
+            y: i64,
+            rw: u32,
+            rh: u32,
+            fg: u32,
+            a: u32,
+            clip: (i64, i64),
+        ) {
             for dy in 0..rh as i64 {
                 let yy = y + dy;
-                if yy < 0 || yy >= i64::from(frame.h) {
+                if yy < 0 || yy >= i64::from(frame.h) || yy < clip.0 || yy >= clip.1 {
                     continue;
                 }
                 for dx in 0..rw as i64 {
@@ -2472,8 +2504,11 @@ impl TermView {
             (ox * ox + oy * oy).sqrt() + px.max(py).min(0.0) - r as f64
         }
 
-        // 三级框行涂装（二版 §五 池行条款）：圆角深色框——填充 4% 白 +
-        // 描边 8% 白；选中 = accent 双色渐变描边 3px（页环同尺采样）
+        // 三级框行涂装（四版 §五 池行条款：左粗三边细通用化）——
+        // 左缘 = 10px accent 渐变竖胶囊条（条心贴左缘内铺，竖跨 R/2
+        // 收边，只吃框剪影内像素；kfmv4 实证选中行左边 ≈11px @1260）；
+        // 其余三边细描边（未选中 8% 白，选中 = accent 渐变）+ 4% 白填充
+        #[allow(clippy::too_many_arguments)]
         fn row_frame(
             frame: &mut Frame<'_>,
             x: i64,
@@ -2483,13 +2518,18 @@ impl TermView {
             sel: bool,
             accent: crate::ui::accent::AccentPair,
             denom: i64,
+            clip: (i64, i64),
         ) {
             // §七 标定三版：三级框圆角 = 池框同尺 36px（12px 是标签光标
             // 专用样式，未来文件树光标用——其他场合禁用，用户拍板）
             const R: i64 = POOL_FRAME_R as i64;
+            const BAR_W: i64 = 10; // 左粗条宽（左粗：细 ≈ 3:1，细边 3px）
+            let bar_cx = x + 1 + BAR_W / 2;
+            let bar_top = y + R / 2;
+            let bar_bot = y + rh as i64 - R / 2;
             for dy in 0..rh as i64 {
                 let yy = y + dy;
-                if yy < 0 || yy >= i64::from(frame.h) {
+                if yy < 0 || yy >= i64::from(frame.h) || yy < clip.0 || yy >= clip.1 {
                     continue;
                 }
                 for dx in 0..rw as i64 {
@@ -2498,7 +2538,16 @@ impl TermView {
                         continue;
                     }
                     let d = round_d(dx, dy, rw, rh, R);
-                    if d < -3.0 {
+                    // 左粗条：竖胶囊（半径 BAR_W/2，段 [bar_top, bar_bot]），
+                    // d < 0.5 = 不出框剪影（盖住左缘细描边带是预期——条即左缘）
+                    let seg_y = yy.clamp(bar_top, bar_bot);
+                    let (bdx, bdy) = (xx - bar_cx, yy - seg_y);
+                    let in_bar =
+                        d < 0.5 && ((bdx * bdx + bdy * bdy) as f64).sqrt() < BAR_W as f64 / 2.0;
+                    if in_bar {
+                        let c = ring_gradient_rgb(accent.c1, accent.c2, xx, yy, denom);
+                        frame.blend_px(xx as u32, yy as u32, c, 255);
+                    } else if d < -3.0 {
                         frame.blend_px(xx as u32, yy as u32, 0x00FF_FFFF, 10); // 4% 白填充
                     } else if d < 0.0 {
                         if sel {
@@ -2512,11 +2561,12 @@ impl TermView {
             }
         }
 
-        // ---- 下池：子目录行表（3 格框行，选中 accent 描边）----
+        // ---- 下池：子目录行表（4.5 格框行，左粗条恒在 + 选中三边渐变）----
+        let no_clip = (0, i64::from(h));
         for (i, row) in page.rows.iter().enumerate() {
             let r = cp::lower_row_rect(i, &ps.lower);
             if r.y + r.h as i64 > ps.lower.y + ps.lower.h as i64 {
-                break; // 出池底的行不画（v1a 无滚动）
+                break; // 出池底的行不画（下池宪法不滚动——内容少恒撑满）
             }
             let rx = r.x + off;
             if rx < 0 {
@@ -2532,13 +2582,15 @@ impl TermView {
                 i == page.focus,
                 accent,
                 denom,
+                no_clip,
             );
             // 标题 faux-bold（像素体无粗体档：双画偏 1px）+ meta，行内垂直分布
-            let title_band = 60;
-            self.draw_text_left(
-                &mut frame, &row.title, rx, r.w, ry, title_band, px_title, title_fg,
+            let title_band = 90; // 四版 ×1.5（60 → 90）
+            self.draw_text_left_ex(
+                &mut frame, &row.title, rx, r.w, ry, title_band, px_title, title_fg, text_inset,
+                None,
             );
-            self.draw_text_left(
+            self.draw_text_left_ex(
                 &mut frame,
                 &row.title,
                 rx + 1,
@@ -2547,9 +2599,11 @@ impl TermView {
                 title_band,
                 px_title,
                 title_fg,
+                text_inset,
+                None,
             );
             if !row.meta.is_empty() {
-                self.draw_text_left(
+                self.draw_text_left_ex(
                     &mut frame,
                     &row.meta,
                     rx,
@@ -2558,22 +2612,32 @@ impl TermView {
                     r.h - title_band,
                     px_meta,
                     meta_fg,
+                    text_inset,
+                    None,
                 );
             }
         }
 
         // ---- 上池：字段框行表（标签列 + 值框；首行 = 下拉行）----
+        // 四版滚动：行矩形吃 snap.upper_scroll；出池内缘裁剪带断墨
+        // （框/文字/下拉三角同一带），完全滚出池顶的行跳过
+        let scroll = page.upper_scroll;
+        let uclip = (ps.upper.y + 12, ps.upper.y + ps.upper.h as i64 - 12);
         for (i, ur) in page.upper.iter().enumerate() {
-            let r = cp::upper_row_rect(i, &ps.upper);
-            if r.y + r.h as i64 > ps.upper.y + ps.upper.h as i64 {
-                break; // 出池底的行不画（v1a 无滚动）
+            let r = cp::upper_row_rect(i, &ps.upper, scroll);
+            if r.y + r.h as i64 <= uclip.0 {
+                continue; // 完全滚出池顶
+            }
+            if r.y >= uclip.1 {
+                break; // 出池底（行有序，后续更靠下）
             }
             let rx = r.x + off;
             if rx < 0 {
                 continue;
             }
-            // 标签列（左 6 格，meta 档）
-            self.draw_text_left(
+            let clip32 = Some((uclip.0 as i32, uclip.1 as i32));
+            // 标签列（左 12 格，meta 档）
+            self.draw_text_left_ex(
                 &mut frame,
                 &ur.label,
                 rx as u32,
@@ -2582,8 +2646,10 @@ impl TermView {
                 r.h,
                 px_meta,
                 meta_fg,
+                text_inset,
+                clip32,
             );
-            // 值框（圆角深色框）+ 值文本
+            // 值框（左粗三边细圆角深色框）+ 值文本
             let vb = cp::value_box_rect(&r);
             row_frame(
                 &mut frame,
@@ -2594,8 +2660,9 @@ impl TermView {
                 false,
                 accent,
                 denom,
+                uclip,
             );
-            self.draw_text_left(
+            self.draw_text_left_ex(
                 &mut frame,
                 &ur.value,
                 (vb.x + off) as u32,
@@ -2604,13 +2671,15 @@ impl TermView {
                 vb.h,
                 px_title,
                 title_fg,
+                text_inset,
+                clip32,
             );
             if ur.is_dropdown {
-                // 右缘下拉三角（逐行 11/9/7/5/3/1 覆盖率满混）
-                let tri_cx = (vb.x + off) as u32 + vb.w - 30;
-                let tri_y = vb.y as u32 + vb.h / 2 - 3;
-                for dy in 0..6u32 {
-                    let half_w = 5 - dy;
+                // 右缘下拉三角（四版 ×1.5：逐行 17/15/…/1 覆盖率满混）
+                let tri_cx = (vb.x + off) as u32 + vb.w - 45;
+                let tri_y = vb.y as u32 + vb.h / 2 - 4;
+                for dy in 0..9u32 {
+                    let half_w = 8 - dy;
                     blend_rect(
                         &mut frame,
                         (tri_cx - half_w) as i64,
@@ -2619,6 +2688,7 @@ impl TermView {
                         1,
                         0x00D9_D9D9,
                         255,
+                        uclip,
                     );
                 }
             }
@@ -2626,12 +2696,12 @@ impl TermView {
 
         // ---- 下拉 panel（开着才画，叠在最后 = 盖住字段行/下池）----
         if page.dropdown_open {
-            let t = cp::trigger_rect(&ps.upper);
-            let max_h = h.saturating_sub(t.y as u32 + cp::FIELD_ROW_H + 40);
-            let pr = cp::dropdown_panel_rect(page.options.len(), &ps.upper, max_h);
+            let t = cp::trigger_rect(&ps.upper, scroll);
+            let max_h = h.saturating_sub(t.y.max(0) as u32 + cp::FIELD_ROW_H + 40);
+            let pr = cp::dropdown_panel_rect(page.options.len(), &ps.upper, max_h, scroll);
             let px0 = pr.x + off;
             if px0 >= 0 {
-                blend_rect(&mut frame, px0, pr.y, pr.w, pr.h, 0x0000_0000, 245);
+                blend_rect(&mut frame, px0, pr.y, pr.w, pr.h, 0x0000_0000, 245, no_clip);
                 for (i, opt) in page.options.iter().enumerate() {
                     let iy = pr.y + (i as i64) * cp::FIELD_ROW_H as i64;
                     if iy + cp::FIELD_ROW_H as i64 > pr.y + pr.h as i64 {
@@ -2646,8 +2716,9 @@ impl TermView {
                         i == page.option_sel,
                         accent,
                         denom,
+                        no_clip,
                     );
-                    self.draw_text_left(
+                    self.draw_text_left_ex(
                         &mut frame,
                         opt,
                         px0 as u32,
@@ -2656,6 +2727,8 @@ impl TermView {
                         cp::FIELD_ROW_H,
                         px_title,
                         title_fg,
+                        text_inset,
+                        None,
                     );
                 }
             }
@@ -2677,10 +2750,29 @@ impl TermView {
         fg: u32,
         clip_y: Option<(i32, i32)>,
     ) {
+        self.draw_items_left_inset(frame, items, cx, cw, cy, rh, px, fg, clip_y, 18.0);
+    }
+
+    /// draw_items_left 全参版：显式起笔内缩（18 是输入栏标定，四版
+    /// 配置页 ×1.5 = 27；老调用方走 draw_items_left 行为不变）
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn draw_items_left_inset(
+        &self,
+        frame: &mut Frame<'_>,
+        items: &[(&fontdue::Font, char, f32)],
+        cx: u32,
+        cw: u32,
+        cy: u32,
+        rh: u32,
+        px: f32,
+        fg: u32,
+        clip_y: Option<(i32, i32)>,
+        inset: f32,
+    ) {
         let Some(hm) = self.font.horizontal_line_metrics(px) else {
             return;
         };
-        let mut pen_x = cx as f32 + 18.0;
+        let mut pen_x = cx as f32 + inset;
         let clip_right = cx + cw;
         let baseline = cy as f32 + (rh as f32 - (hm.ascent - hm.descent)) / 2.0 + hm.ascent;
         for (f, c, adv) in items {

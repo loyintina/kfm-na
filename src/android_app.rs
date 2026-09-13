@@ -845,7 +845,7 @@ impl App {
                             self.dirty = true;
                             return;
                         }
-                        let tr = crate::ui::cfg_page::trigger_rect(&upper);
+                        let tr = pg.trigger_rect(&upper);
                         let in_trigger = xi >= tr.x
                             && xi < tr.x + tr.w as i64
                             && yi >= tr.y
@@ -1100,8 +1100,8 @@ impl App {
                 }
                 // 面板页手势：AI 页拖动 = 对话页滚行（像素级累积跟手，
                 // 行高与渲染同尺 AI_PAGE_LINE_H；方向契约在 ui/ai_page.rs
-                // drag_accum_rows——下滑 = 看更早，BAR-064）；配置页 v1
-                // 空白骨架无内容可滚，只记 dragged（抬手不归点按）；
+                // drag_accum_rows——下滑 = 看更早，BAR-064）；配置页拖动
+                // = 上池像素滚动（§五 四版，起手落上池才滚，下分支）；
                 // 水平位移只攒着，抽屉识别在抬手（decide_swipe）
                 if let Some(apt) = self.panel_touch.as_mut() {
                     let dy = y - apt.last_y;
@@ -1126,6 +1126,33 @@ impl App {
                                 chat.scroll_drag_rows(rows);
                             }
                             self.dirty = true;
+                        }
+                    } else {
+                        // 配置页在顶 + 起手落上池 + 纵向 = 上池像素滚动
+                        // （§五 四版滚动条款：1:1 跟手，手指上推 = 内容
+                        // 上移）。横向不冲突——panel_drag 横向一锁即让路
+                        // 页面跟手（四公民一滑一义 §五B 仲裁不变）；
+                        // 触发器/下池起手走 cfg_pool_touch 槽不到这
+                        let top_is_cfg = self
+                            .last_ai_snap
+                            .is_some_and(|s| s.top == Some(crate::ai_presence::Panel::Config));
+                        if top_is_cfg
+                            && dy != 0.0
+                            && !self.panel_drag.as_ref().is_some_and(|d| d.locked())
+                            && let (Some(pool), Some(page)) = (
+                                crate::ui::dual_pool::dual_pool_handle(),
+                                crate::ui::cfg_page::cfg_page_handle(),
+                            )
+                        {
+                            let upper = pool.lock().unwrap().layout().upper;
+                            let in_upper = apt.start_x >= upper.x as f64
+                                && apt.start_x < (upper.x + i64::from(upper.w)) as f64
+                                && apt.start_y >= upper.y as f64
+                                && apt.start_y < (upper.y + i64::from(upper.h)) as f64;
+                            if in_upper && page.lock().unwrap().scroll_upper_by(-dy as i64, upper.h)
+                            {
+                                self.dirty = true;
+                            }
                         }
                     }
                     return;
@@ -1428,12 +1455,12 @@ impl App {
                                 let ps = pool.lock().unwrap().layout();
                                 (ps.lower.clone(), ps.upper.clone())
                             };
-                            let tr = crate::ui::cfg_page::trigger_rect(&upper);
+                            let mut pg = page.lock().unwrap();
+                            let tr = pg.trigger_rect(&upper);
                             let in_trigger = xi >= tr.x
                                 && xi < tr.x + tr.w as i64
                                 && yi >= tr.y
                                 && yi < tr.y + tr.h as i64;
-                            let mut pg = page.lock().unwrap();
                             if in_trigger {
                                 pg.toggle_dropdown();
                                 crate::report::report("gest", "下拉触发器点按→开合");

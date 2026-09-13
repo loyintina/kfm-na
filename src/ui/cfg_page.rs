@@ -1,6 +1,13 @@
 //! cfg_page.rs — 配置页三层目录状态核（主题宪法 §五「双池的目录语义」
 //! 二版，2026-09-13 用户拍板；核心层纯逻辑零 IO，A 档钉）。
 //!
+//! 四版增订（2026-09-13，kfmv4 实证 4 图量化拍板）：
+//! - 字段框行 4 格 / 下池行 4.5 格 / 行隙 1.5 格 / 内边距 2 格 /
+//!   标签列 12 格（字号行高 ×1.5、三级框 ×2）
+//! - **上池像素滚动**（§五「超出部分上池内滚动」条款兑现，v1a 欠账）：
+//!   upper_scroll px 状态 + scroll_upper_by（clamp [0, 内容高−池高]，
+//!   到位不空涨代际）；几何自由函数全带 scroll 维（眼手同尺不漏维）
+//!
 //! 二版条款兑现（kfmv4 池卡实证 4 图对齐）：
 //! - 根目录（大类）= 首行标签栏（tab_bar.rs 已有，本册不管）
 //! - **子目录选择 = 下池**：行表由壳喂（系统管理大类目前仅一行
@@ -25,18 +32,19 @@
 use crate::termview::{CELL_H, CELL_W};
 use crate::ui::dual_pool::PoolRect;
 
-/// 下池池行高 = 3 格（二版 §五 池行条款：2 格实机太挤）
-pub const LOWER_ROW_H: u32 = CELL_H * 3;
-/// 上池字段框行高 = 2 格（二版 §七 标定）
-pub const FIELD_ROW_H: u32 = CELL_H * 2;
-/// 池内容距池框缘的内缩 = 1 格（布局层咬格）
-pub const POOL_CONTENT_INSET: i64 = CELL_W as i64;
-/// 行间留隙 = 1 格（三级框间隔与两池间隔同尺——用户拍板：三级框跟
-/// 二级框一样得有间隔；10px 实机太挤）
-pub const ROW_GAP: i64 = CELL_W as i64;
-/// 字段框标签列宽 = 8 格（值框在其右，二版 §七 标定；6 格实机截断
-/// 5 字标签——「默认服务器」5×20px+内缩 18 = 118 > 108）
-pub const LABEL_COL_W: i64 = CELL_W as i64 * 8;
+/// 下池池行高 = 4.5 格（四版 §五 池行条款：3 格 ×1.5，半格特许 §一）
+pub const LOWER_ROW_H: u32 = CELL_H * 9 / 2;
+/// 上池字段框行高 = 4 格（四版：2 格 ×2，行高 ×2 后 36px 圆角比例 0.25
+/// 与 kfmv4 实证偏方正观感同源）
+pub const FIELD_ROW_H: u32 = CELL_H * 4;
+/// 池内容距池框缘的内缩 = 2 格（四版：1 格实机太窄，kfmv4 实证 ≈40px）
+pub const POOL_CONTENT_INSET: i64 = CELL_W as i64 * 2;
+/// 行间留隙 = 1.5 格（四版 ×1.5；三版 1 格拍板「三级框跟二级框一样
+/// 得有间隔」不变，行高放大后同比例跟放）
+pub const ROW_GAP: i64 = CELL_W as i64 * 3 / 2;
+/// 字段框标签列宽 = 12 格（四版：字号 1.5 倍后 8 格截断 5 字标签复发
+/// 防——「默认服务器」5×30px+内缩 27 = 177 < 216）
+pub const LABEL_COL_W: i64 = CELL_W as i64 * 12;
 
 /// 下池行（子目录）
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,6 +70,8 @@ pub struct CfgPageSnap {
     pub options: Vec<String>,
     pub option_sel: usize,
     pub dropdown_open: bool,
+    /// 上池滚动 px（四版 §五 滚动条款兑现；0 = 顶）
+    pub upper_scroll: i64,
     pub epoch: u64,
 }
 
@@ -72,6 +82,7 @@ pub struct CfgPage {
     options: Vec<String>,
     option_sel: usize,
     dropdown_open: bool,
+    upper_scroll: i64,
     epoch: u64,
 }
 
@@ -84,6 +95,7 @@ impl CfgPage {
             options: Vec::new(),
             option_sel: 0,
             dropdown_open: false,
+            upper_scroll: 0,
             epoch: 0,
         }
     }
@@ -180,6 +192,25 @@ impl CfgPage {
         }
     }
 
+    /// 上池滚动 px（0 = 顶；四版 §五 滚动条款）
+    pub fn upper_scroll(&self) -> i64 {
+        self.upper_scroll
+    }
+
+    /// 上池像素滚动（四版：1:1 跟手；dy>0 = 内容上移看更后）。
+    /// clamp [0, 内容高−池高]；到位 = false 不空涨代际（回弹感留 v1b）
+    pub fn scroll_upper_by(&mut self, dy: i64, pool_h: u32) -> bool {
+        let max = self.upper_content_h().saturating_sub(pool_h) as i64;
+        let new = (self.upper_scroll + dy).clamp(0, max.max(0));
+        if new != self.upper_scroll {
+            self.upper_scroll = new;
+            self.epoch += 1;
+            true
+        } else {
+            false
+        }
+    }
+
     // ---- 几何（眼手同尺唯一来源）----
 
     /// 下池命中：y 落第几行（出池/行间隙 = None）
@@ -193,20 +224,21 @@ impl CfgPage {
         None
     }
 
-    /// 上池下拉触发器矩形（首行字段框的值框位，§六 触发器条款）
+    /// 上池下拉触发器矩形（首行字段框的值框位，§六 触发器条款）——
+    /// 触发器随上池内容一起滚（本页 scroll 喂 self.upper_scroll）
     pub fn trigger_rect(&self, upper: &PoolRect) -> PoolRect {
-        trigger_rect(upper)
+        trigger_rect(upper, self.upper_scroll)
     }
 
     /// 下拉 panel 矩形（顶部栏向下弹——宪法 §六：方向反了会弹出屏外）：
     /// 触发器下缘起，行数 = 选项数，最高不出配置页可视区（壳喂 max_h）
     pub fn dropdown_panel_rect(&self, upper: &PoolRect, max_h: u32) -> PoolRect {
-        dropdown_panel_rect(self.options.len(), upper, max_h)
+        dropdown_panel_rect(self.options.len(), upper, max_h, self.upper_scroll)
     }
 
     /// 下拉 panel 命中：y 落第几行（panel 外 = None）
     pub fn dropdown_item_at_y(&self, y: i64, upper: &PoolRect, max_h: u32) -> Option<usize> {
-        let p = dropdown_panel_rect(self.options.len(), upper, max_h);
+        let p = dropdown_panel_rect(self.options.len(), upper, max_h, self.upper_scroll);
         if y < p.y || y >= p.y + p.h as i64 {
             return None;
         }
@@ -231,6 +263,7 @@ impl CfgPage {
             options: self.options.clone(),
             option_sel: self.option_sel,
             dropdown_open: self.dropdown_open,
+            upper_scroll: self.upper_scroll,
             epoch: self.epoch,
         }
     }
@@ -254,11 +287,12 @@ pub fn lower_row_rect(i: usize, lower: &PoolRect) -> PoolRect {
     }
 }
 
-/// 上池第 i 行字段框矩形（池内缘内缩 1 格，逐行 2 格高 + 留隙）
-pub fn upper_row_rect(i: usize, upper: &PoolRect) -> PoolRect {
+/// 上池第 i 行字段框矩形（池内缘内缩 2 格，逐行 4 格高 + 留隙）——
+/// scroll = 上池滚动 px（四版：内容随滚动整体上移，触发器不例外）
+pub fn upper_row_rect(i: usize, upper: &PoolRect, scroll: i64) -> PoolRect {
     PoolRect {
         x: upper.x + POOL_CONTENT_INSET,
-        y: upper.y + POOL_CONTENT_INSET + (i as i64) * (FIELD_ROW_H as i64 + ROW_GAP),
+        y: upper.y + POOL_CONTENT_INSET + (i as i64) * (FIELD_ROW_H as i64 + ROW_GAP) - scroll,
         w: upper.w.saturating_sub((POOL_CONTENT_INSET * 2) as u32),
         h: FIELD_ROW_H,
     }
@@ -275,14 +309,19 @@ pub fn value_box_rect(row: &PoolRect) -> PoolRect {
 }
 
 /// 上池下拉触发器矩形 = 首行字段框的值框位
-pub fn trigger_rect(upper: &PoolRect) -> PoolRect {
-    value_box_rect(&upper_row_rect(0, upper))
+pub fn trigger_rect(upper: &PoolRect, scroll: i64) -> PoolRect {
+    value_box_rect(&upper_row_rect(0, upper, scroll))
 }
 
 /// 下拉 panel 矩形（顶部栏向下弹）：触发器下缘起，行数 = 选项数，
-/// 最高不出配置页可视区（调用方喂 max_h）
-pub fn dropdown_panel_rect(opt_count: usize, upper: &PoolRect, max_h: u32) -> PoolRect {
-    let t = trigger_rect(upper);
+/// 最高不出配置页可视区（调用方喂 max_h）；scroll = 上池滚动 px
+pub fn dropdown_panel_rect(
+    opt_count: usize,
+    upper: &PoolRect,
+    max_h: u32,
+    scroll: i64,
+) -> PoolRect {
+    let t = trigger_rect(upper, scroll);
     let want = (opt_count as u32) * FIELD_ROW_H;
     PoolRect {
         x: t.x,

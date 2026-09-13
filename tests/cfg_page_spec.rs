@@ -1,9 +1,10 @@
 //! tests/cfg_page_spec.rs — A 档考题：配置页三层目录状态核（src/ui/cfg_page.rs）
 //!
 //! 契约真相源：docs/active/theme.md §五「双池的目录语义」二版（2026-09-13
-//! 修宪：下拉服务上池内容自身选项集不与下池联动/下池行 3 格框/上池字段框
-//! 行 2 格标签列+值框）。纪律：先验证红，答案生成到绿，绿后变异抽检。
-//! 本文件是考题，生成器不许改。
+//! 修宪：下拉服务上池内容自身选项集不与下池联动/下池行框/上池字段框行
+//! 标签列+值框）+ 四版（同日：字段框行 4 格/下池行 4.5 格/行隙 1.5 格/
+//! 内边距 2 格/标签列 12 格/上池像素滚动）。纪律：先验证红，答案生成到
+//! 绿，绿后变异抽检。本文件是考题，生成器不许改。
 
 use kfm_na::ui::cfg_page::{
     CfgPage, FIELD_ROW_H, LOWER_ROW_H, ROW_GAP, RowView, UpperRow, lower_row_rect, upper_row_rect,
@@ -142,16 +143,16 @@ fn set_options_clamps_sel() {
 // ---- 几何（眼手同尺：涂装/命中同一份）----
 
 #[test]
-fn lower_rows_stack_3_cells_with_gap() {
+fn lower_rows_stack_4_5_cells_with_gap() {
     let r0 = lower_row_rect(0, &LOWER);
     let r1 = lower_row_rect(1, &LOWER);
-    assert_eq!(r0.h, LOWER_ROW_H, "下池行 = 3 格高");
+    assert_eq!(r0.h, LOWER_ROW_H, "下池行 = 4.5 格高（四版 ×1.5）");
     assert_eq!(
         r1.y - r0.y,
         LOWER_ROW_H as i64 + ROW_GAP,
-        "逐行 3 格 + 留隙叠放"
+        "逐行 4.5 格 + 留隙叠放"
     );
-    assert!(r0.x > LOWER.x && r0.y > LOWER.y, "内容内缩池框缘 1 格");
+    assert!(r0.x > LOWER.x && r0.y > LOWER.y, "内容内缩池框缘 2 格");
     assert!(r0.x + r0.w as i64 <= LOWER.x + LOWER.w as i64);
 }
 
@@ -179,18 +180,30 @@ fn lower_row_hit_roundtrip() {
 }
 
 #[test]
-fn upper_field_rows_stack_2_cells_with_gap() {
-    let r0 = upper_row_rect(0, &UPPER);
-    let r1 = upper_row_rect(1, &UPPER);
-    assert_eq!(r0.h, FIELD_ROW_H, "字段框行 = 2 格高");
+fn upper_field_rows_stack_4_cells_with_gap() {
+    let r0 = upper_row_rect(0, &UPPER, 0);
+    let r1 = upper_row_rect(1, &UPPER, 0);
+    assert_eq!(r0.h, FIELD_ROW_H, "字段框行 = 4 格高（四版 ×2）");
     assert_eq!(r1.y - r0.y, FIELD_ROW_H as i64 + ROW_GAP);
+}
+
+#[test]
+fn upper_rows_shift_with_scroll() {
+    let r0 = upper_row_rect(0, &UPPER, 0);
+    let r0s = upper_row_rect(0, &UPPER, 40);
+    assert_eq!(r0s.y, r0.y - 40, "滚动 = 内容整体上移同额 px");
+    assert_eq!(
+        (r0s.x, r0s.w, r0s.h),
+        (r0.x, r0.w, r0.h),
+        "滚动不动横向与行高"
+    );
 }
 
 #[test]
 fn trigger_is_first_rows_value_box_right_of_label_col() {
     let p = CfgPage::new();
     let t = p.trigger_rect(&UPPER);
-    let row0 = upper_row_rect(0, &UPPER);
+    let row0 = upper_row_rect(0, &UPPER, 0);
     assert_eq!(t, value_box_rect(&row0));
     assert!(t.x > row0.x, "值框在标签列之右");
     assert_eq!(t.x + t.w as i64, row0.x + row0.w as i64, "值框右缘贴行右缘");
@@ -246,4 +259,57 @@ fn upper_change_bumps_epoch() {
     let e = p.epoch();
     p.set_upper(upper(0));
     assert!(p.epoch() > e);
+}
+
+// ---- 上池滚动（四版 §五「超出部分上池内滚动」兑现）----
+
+#[test]
+fn scroll_clamps_to_content_and_bumps_epoch() {
+    let mut p = CfgPage::new();
+    p.set_upper(upper(8)); // 10 行：内容高 >> 池高
+    let pool_h = 400;
+    let max = (p.upper_content_h() - pool_h) as i64;
+    assert!(max > 0, "夹具内容必须溢出池高");
+    assert!(!p.scroll_upper_by(-50, pool_h), "顶再往上 = 到位不动");
+    assert_eq!(p.upper_scroll(), 0);
+    let e0 = p.epoch();
+    assert!(p.scroll_upper_by(120, pool_h));
+    assert_eq!(p.upper_scroll(), 120);
+    assert!(p.epoch() > e0, "滚动必须 bump 代际（sig 防鬼影）");
+    let e1 = p.epoch();
+    assert!(p.scroll_upper_by(999_999, pool_h), "越底 clamp 到 max");
+    assert_eq!(p.upper_scroll(), max);
+    let _ = e1;
+    let e2 = p.epoch();
+    assert!(!p.scroll_upper_by(1, pool_h), "已在底 = 到位不空涨代际");
+    assert_eq!(p.epoch(), e2);
+}
+
+#[test]
+fn scroll_zero_when_content_fits() {
+    let mut p = CfgPage::new();
+    p.set_upper(upper(0)); // 2 行装得下
+    assert!(!p.scroll_upper_by(120, 10_000), "装得下 = 恒 0 不动");
+    assert_eq!(p.upper_scroll(), 0);
+}
+
+#[test]
+fn trigger_and_dropdown_follow_scroll() {
+    let mut p = CfgPage::new();
+    p.set_upper(upper(8));
+    p.set_options(opts(3), 0);
+    let pool_h = 400;
+    let t0 = p.trigger_rect(&UPPER);
+    p.scroll_upper_by(120, pool_h);
+    let t1 = p.trigger_rect(&UPPER);
+    assert_eq!(t1.y, t0.y - 120, "触发器随内容一起滚");
+    // 下拉命中同尺：panel 跟触发器走，项命中必须带滚动维
+    let panel = p.dropdown_panel_rect(&UPPER, 10_000);
+    assert_eq!(panel.y, t1.y + FIELD_ROW_H as i64);
+    assert_eq!(p.dropdown_item_at_y(panel.y + 1, &UPPER, 10_000), Some(0));
+    assert_eq!(
+        p.dropdown_item_at_y(t1.y + 1, &UPPER, 10_000),
+        None,
+        "panel 上方一格（触发器位）不算 panel 项"
+    );
 }
