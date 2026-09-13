@@ -17,6 +17,12 @@
 //!   **不与下池联动**（推翻初版双向联动条款）
 //! - 三级展开 = 全屏页（v1b，本册不及）
 //!
+//! 九修增订（2026-09-13，宪法 §五 目录语义 7 + §六 跳框条款）：
+//! - tab 维（0=系统管理 1=组件池）+ set_tab 切页副作用清零
+//!   （聚焦/滚动/下拉/跳框归初态，内容重建归壳）
+//! - modal 维（COMPONENTS 下标）= 跳框开合；upper_row_at_y 上池命中
+//!   （组件池页点行开跳框，眼手同尺吃 scroll 维）
+//!
 //! 眼手同尺：涂装与触摸命中读本册同一份几何（lower_row_rect/
 //! upper_row_rect/value_box_rect/trigger_rect/dropdown_panel_rect），
 //! 壳层不许另算。
@@ -78,6 +84,10 @@ pub struct CfgPageSnap {
     pub dropdown_open: bool,
     /// 上池滚动 px（四版 §五 滚动条款兑现；0 = 顶）
     pub upper_scroll: i64,
+    /// 当前标签（九修：0=系统管理 1=组件池；宪法 §五 目录语义 7）
+    pub tab: usize,
+    /// 开着的跳框 = COMPONENTS 下标（九修 §六 跳框条款；None = 无模态）
+    pub modal: Option<usize>,
     pub epoch: u64,
 }
 
@@ -89,6 +99,8 @@ pub struct CfgPage {
     option_sel: usize,
     dropdown_open: bool,
     upper_scroll: i64,
+    tab: usize,
+    modal: Option<usize>,
     epoch: u64,
 }
 
@@ -102,6 +114,8 @@ impl CfgPage {
             option_sel: 0,
             dropdown_open: false,
             upper_scroll: 0,
+            tab: 0,
+            modal: None,
             epoch: 0,
         }
     }
@@ -148,6 +162,47 @@ impl CfgPage {
 
     pub fn dropdown_open(&self) -> bool {
         self.dropdown_open
+    }
+
+    /// 当前标签（九修：0=系统管理 1=组件池）
+    pub fn tab(&self) -> usize {
+        self.tab
+    }
+
+    /// 切标签（标签栏点选后壳调用）：内容重建归壳（set_rows/set_upper
+    /// 判等不空涨）；本册负责切页副作用清零——聚焦归首行、上池滚动
+    /// 归零、下拉/跳框全收（新页不继承旧页的浮层）。同标重点不空涨
+    pub fn set_tab(&mut self, i: usize) {
+        if i == self.tab {
+            return;
+        }
+        self.tab = i;
+        self.focus = 0;
+        self.upper_scroll = 0;
+        self.dropdown_open = false;
+        self.modal = None;
+        self.epoch += 1;
+    }
+
+    /// 开着的跳框（COMPONENTS 下标；None = 无模态）
+    pub fn modal(&self) -> Option<usize> {
+        self.modal
+    }
+
+    /// 开跳框（组件池页上池行点按；宪法 §六 跳框条款）
+    pub fn open_modal(&mut self, i: usize) {
+        if self.modal != Some(i) {
+            self.modal = Some(i);
+            self.epoch += 1;
+        }
+    }
+
+    /// 收跳框（点框外/关闭钮）；关着再关 = 不空涨代际
+    pub fn close_modal(&mut self) {
+        if self.modal.is_some() {
+            self.modal = None;
+            self.epoch += 1;
+        }
     }
 
     pub fn epoch(&self) -> u64 {
@@ -230,6 +285,18 @@ impl CfgPage {
         None
     }
 
+    /// 上池命中：y 落第几行字段框（九修，组件池页点行开跳框用；
+    /// 吃 upper_scroll 同一维——眼手同尺；行间隙/池外 = None）
+    pub fn upper_row_at_y(&self, y: i64, upper: &PoolRect, scroll: i64) -> Option<usize> {
+        for i in 0..self.upper.len() {
+            let r = upper_row_rect(i, upper, scroll);
+            if y >= r.y && y < r.y + r.h as i64 {
+                return Some(i);
+            }
+        }
+        None
+    }
+
     /// 上池下拉触发器矩形（首行字段框的值框位，§六 触发器条款）——
     /// 触发器随上池内容一起滚（本页 scroll 喂 self.upper_scroll）
     pub fn trigger_rect(&self, upper: &PoolRect) -> PoolRect {
@@ -270,6 +337,8 @@ impl CfgPage {
             option_sel: self.option_sel,
             dropdown_open: self.dropdown_open,
             upper_scroll: self.upper_scroll,
+            tab: self.tab,
+            modal: self.modal,
             epoch: self.epoch,
         }
     }

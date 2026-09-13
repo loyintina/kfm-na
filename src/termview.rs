@@ -2849,6 +2849,185 @@ impl TermView {
                 }
             }
         }
+
+        // ---- 跳框（宪法 §六 跳框条款，九修）：模态盖在配置页最上层——
+        // 压暗层 + 居中卡 + 关闭钮。本体在 paint_modal_impl（§六 样式
+        // 唯一来源：压暗层/字段排版之外的涂装原语全复用共享件）
+        if let Some(mi) = page.modal {
+            self.paint_modal_impl(frame.buf, w, h, mi, cfg_off_x, accent);
+        }
+    }
+
+    /// 跳框涂装（宪法 §六 跳框条款，2026-09-13 九修新立；kfmv4 跳框三
+    /// 截图实证）：压暗层 α150 盖本页区（随面板平移）+ 居中卡
+    /// （paint_rect_ring 池框同尺 R36、内卡反转 c2→c1）+ 标题 36px
+    /// faux-bold 亮居中 + 1px 渐变分隔线（c2→c1，池内容同一把 135°
+    /// 尺）+ 字段区（题注 30px 灰在上、内容 36px 亮在下——有意反向，
+    /// 题注是内容的脚注）+ 底部全宽「关闭」钮（paint_row_frame
+    /// bar=false 同配方）。几何/折行全吃 ui/modal.rs（眼手同尺）；
+    /// 卡高封顶截断：画出关闭钮上缘的内容断墨（v1 不滚动）
+    pub(crate) fn paint_modal_impl(
+        &self,
+        buf: &mut [u32],
+        w: u32,
+        h: u32,
+        mi: usize,
+        cfg_off_x: i32,
+        accent: crate::ui::accent::AccentPair,
+    ) {
+        use crate::ui::modal as md;
+        if w == 0 || h == 0 {
+            return;
+        }
+        let comps = crate::ui::comp_registry::COMPONENTS;
+        if comps.is_empty() {
+            return;
+        }
+        let entry = &comps[mi.min(comps.len() - 1)];
+        let mut frame = Frame { buf, w, h };
+        let off = i64::from(cfg_off_x);
+        let title_fg = 0x00D9_D9D9; // 0.85 亮
+        let meta_fg = 0x0080_8080; // 0.5 灰
+        let denom = ((w - 1) + (h - 1)).max(1) as i64; // 池内容同一把渐变尺
+
+        // 压暗层：本页可见区整层混黑 α150（随面板平移，左右求交）
+        let dx0 = off.clamp(0, i64::from(w)) as u32;
+        let dx1 = (i64::from(w) + off).clamp(0, i64::from(w)) as u32;
+        for yy in 0..h {
+            for xx in dx0..dx1 {
+                frame.blend_px(xx, yy, 0x0000_0000, 150);
+            }
+        }
+
+        // 居中卡（几何 = modal.rs；折行吃 content_cells 同尺）
+        let fields = md::fields_of(entry, md::content_cells(w));
+        let card = md::card_rect(w, h, &fields);
+        let cx0 = card.x + off;
+        if cx0 < 0 {
+            return; // 过渡帧卡左缘出屏整卡不画（与池行同规取舍）
+        }
+        let cx1 = cx0 + i64::from(card.w);
+        paint_rect_ring(
+            &mut frame,
+            cx0,
+            card.y,
+            cx1,
+            card.y + i64::from(card.h),
+            0,
+            i64::MAX,
+            crate::ui::accent::CARD_PAGE_BG,
+            accent.c2,
+            accent.c1,
+            POOL_FRAME_R,
+        );
+
+        // 内容断墨线：关闭钮上缘（含钮前隙）——超出的内容不画
+        let btn = md::close_btn_rect(&card);
+        let ink_bottom = btn.y - i64::from(md::MODAL_FIELD_GAP);
+        let text_x = (cx0 + md::MODAL_PAD_X) as u32;
+        let text_w = (card.w as i64 - md::MODAL_PAD_X * 2).max(0) as u32;
+
+        // 标题（2 格带居中，faux-bold 双画偏 1px）
+        let title_y = card.y + i64::from(md::MODAL_PAD_Y);
+        self.draw_text_centered(
+            &mut frame,
+            entry.name,
+            cx0,
+            title_y,
+            card.w,
+            md::MODAL_TITLE_H,
+            36.0,
+            title_fg,
+            cx0,
+        );
+        self.draw_text_centered(
+            &mut frame,
+            entry.name,
+            cx0 + 1,
+            title_y,
+            card.w,
+            md::MODAL_TITLE_H,
+            36.0,
+            title_fg,
+            cx0,
+        );
+
+        // 分隔线：标题下 0.5 格处 1px 渐变细线，卡内宽，c2→c1
+        let line_y = title_y + i64::from(md::MODAL_TITLE_H) + i64::from(md::MODAL_FIELD_GAP);
+        if line_y >= 0 && line_y < i64::from(h) {
+            for ax in (cx0 + md::MODAL_PAD_X)..(cx1 - md::MODAL_PAD_X) {
+                if ax < 0 || ax >= i64::from(w) {
+                    continue;
+                }
+                let c = ring_gradient_rgb(accent.c2, accent.c1, ax, line_y, denom);
+                frame.blend_px(ax as u32, line_y as u32, c, 255);
+            }
+        }
+
+        // 字段区：题注（30px 灰）在上 + 内容行（36px 亮）在下
+        let mut pen = line_y + 1 + i64::from(CELL_H);
+        for f in &fields {
+            if pen + i64::from(md::MODAL_LABEL_H) > ink_bottom {
+                break;
+            }
+            self.draw_text_left_ex(
+                &mut frame,
+                &f.label,
+                text_x,
+                text_w,
+                pen as u32,
+                md::MODAL_LABEL_H,
+                30.0,
+                meta_fg,
+                0.0,
+                None,
+            );
+            pen += i64::from(md::MODAL_LABEL_H);
+            for line in &f.lines {
+                if pen + i64::from(md::MODAL_LINE_H) > ink_bottom {
+                    break;
+                }
+                self.draw_text_left_ex(
+                    &mut frame,
+                    line,
+                    text_x,
+                    text_w,
+                    pen as u32,
+                    md::MODAL_LINE_H,
+                    36.0,
+                    title_fg,
+                    0.0,
+                    None,
+                );
+                pen += i64::from(md::MODAL_LINE_H);
+            }
+            pen += i64::from(md::MODAL_FIELD_GAP);
+        }
+
+        // 关闭钮：卡底全内宽 3 格，8% 白细线框 + 居中 36px 亮字
+        paint_row_frame(
+            &mut frame,
+            btn.x + off,
+            btn.y,
+            btn.w,
+            btn.h,
+            false,
+            false,
+            accent,
+            denom,
+            (0, i64::from(h)),
+        );
+        self.draw_text_centered(
+            &mut frame,
+            "关闭",
+            btn.x + off,
+            btn.y,
+            btn.w,
+            btn.h,
+            36.0,
+            title_fg,
+            btn.x + off,
+        );
     }
 
     /// 画一串已量宽的字符（折行后逐行画走这里）：左对齐内缩 18 +

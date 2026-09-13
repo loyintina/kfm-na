@@ -12,3 +12,7 @@
 | ai_page 全屏占位 | `ai_presence::Page` | `termview::render_ai_page`（期0 组件④将替换） | — | ai_presence_spec 冒烟 | AI_PAGE_*（待 token 化） | docs/active/ai-presence.md |
 | selection 选择/放大镜 | `termview.selection` | `termview`（与终端网格耦合，随选择系统重构入册） | touch-in | select_spec 28 | SELECT_BG | docs/ledger/bugs.md BAR-025 |
 | gear 设置钮 | 无（栈归 ai_presence） | `ui/gear.rs`（termview 终卡槽内 paint） | touch-in（android_app Started 命中分流） | gear_spec 3 | GEAR_INK（随终卡族待 token 化） | docs/active/ai-presence.md §五B |
+| tab_bar 标签栏 | `ui/tab_bar.rs`（弹簧滑块） | `termview::paint_cfg_tab_bar_impl` | touch-in（Started 行带仲裁） | tab_bar_spec + theme_spec | TAB_*（termview 标定） | docs/active/theme.md §四 |
+| cfg_page 配置页 | `ui/cfg_page.rs`（目录核+tab/modal 维） | `termview::paint_cfg_pool_content_impl` | touch-in（池区手势槽） | cfg_page_spec 23 | CELL_* 网格标定 | docs/active/theme.md §五 + 设置页.md |
+| modal 跳框 | `ui/cfg_page.rs` modal 维 + `ui/modal.rs` 几何 | `termview::paint_modal_impl` | touch-in（模态手势槽吃下层） | modal_spec 10 | CELL_* 网格标定 | docs/active/theme.md §六 跳框 |
+| comp_registry 组件池 | `ui/comp_registry.rs`（常量表=唯一信息源） | 读表渲染（复用双池行+跳框） | — | comp_registry_spec 7（symbol 实存棘轮） | 无 | docs/active/theme.md §五 目录语义 7 |

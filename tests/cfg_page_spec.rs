@@ -343,3 +343,101 @@ fn trigger_and_dropdown_follow_scroll() {
         "panel 上方一格（触发器位）不算 panel 项"
     );
 }
+
+// ---- 九修：tab 维（宪法 §五 目录语义 7 组件池页）----
+
+#[test]
+fn set_tab_switches_and_resets_page_state() {
+    let mut p = CfgPage::new();
+    p.set_rows(rows());
+    p.set_upper(upper(8));
+    p.set_options(opts(2), 0);
+    p.select(0);
+    p.scroll_upper_by(120, 400);
+    p.toggle_dropdown();
+    p.open_modal(3);
+    let e0 = p.epoch();
+    p.set_tab(1);
+    assert_eq!(p.tab(), 1);
+    assert!(p.epoch() > e0, "切页必须 bump 代际（sig 防鬼影）");
+    assert_eq!(p.upper_scroll(), 0, "切页上池滚动归零——新页不继承旧滚动");
+    assert!(!p.dropdown_open(), "切页下拉收");
+    assert_eq!(p.modal(), None, "切页跳框收");
+    let e1 = p.epoch();
+    p.set_tab(1); // 同页重点不空涨
+    assert_eq!(p.epoch(), e1);
+}
+
+#[test]
+fn set_tab_back_and_forth() {
+    let mut p = CfgPage::new();
+    p.set_tab(1);
+    p.set_tab(0);
+    assert_eq!(p.tab(), 0);
+    assert_eq!(p.focus(), 0, "切页聚焦归首行（壳重建前的安全态）");
+}
+
+// ---- 九修：跳框开合（§六 跳框条款）----
+
+#[test]
+fn modal_open_close_bumps_epoch_idempotent() {
+    let mut p = CfgPage::new();
+    assert_eq!(p.modal(), None);
+    let e0 = p.epoch();
+    p.open_modal(2);
+    assert_eq!(p.modal(), Some(2));
+    assert!(p.epoch() > e0, "开框必须 bump 代际");
+    let e1 = p.epoch();
+    p.open_modal(2); // 同框重开不空涨
+    assert_eq!(p.epoch(), e1);
+    p.open_modal(5); // 换框 = 变更
+    assert_eq!(p.modal(), Some(5));
+    assert!(p.epoch() > e1);
+    let e2 = p.epoch();
+    p.close_modal();
+    assert_eq!(p.modal(), None);
+    assert!(p.epoch() > e2, "收框必须 bump 代际");
+    let e3 = p.epoch();
+    p.close_modal(); // 关着再关不空涨
+    assert_eq!(p.epoch(), e3);
+}
+
+// ---- 九修：上池行命中（组件池页点行开跳框）----
+
+#[test]
+fn upper_row_hit_roundtrip_with_scroll() {
+    let mut p = CfgPage::new();
+    p.set_upper(upper(3)); // 5 行
+    let r1 = upper_row_rect(1, &UPPER, 0);
+    assert_eq!(p.upper_row_at_y(r1.y + 5, &UPPER, 0), Some(1));
+    assert_eq!(
+        p.upper_row_at_y(r1.y - FIELD_ROW_GAP / 2, &UPPER, 0),
+        None,
+        "行间隙不算行"
+    );
+    // 滚动后命中必须带 scroll 维（眼手同尺：行随内容上移）
+    let r1s = upper_row_rect(1, &UPPER, 40);
+    assert_eq!(p.upper_row_at_y(r1s.y + 5, &UPPER, 40), Some(1));
+    // 同一个屏 y：scroll=0 是行间隙，scroll=40 落进上移后的行 1
+    let gap_y = r1.y - FIELD_ROW_GAP / 2;
+    assert_eq!(p.upper_row_at_y(gap_y, &UPPER, 0), None);
+    assert_eq!(
+        p.upper_row_at_y(gap_y, &UPPER, 40),
+        Some(1),
+        "滚动 40px 后间隙位已变成行 1 的行体"
+    );
+    assert!(
+        p.upper_row_at_y(UPPER.y - 1, &UPPER, 0).is_none(),
+        "池外不算行"
+    );
+}
+
+#[test]
+fn snap_carries_tab_and_modal_dims() {
+    let mut p = CfgPage::new();
+    p.set_tab(1);
+    p.open_modal(4);
+    let s = p.snap();
+    assert_eq!(s.tab, 1, "快照必须带 tab 维（涂装分流读它）");
+    assert_eq!(s.modal, Some(4), "快照必须带 modal 维（跳框涂装读它）");
+}

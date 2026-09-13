@@ -293,6 +293,9 @@ struct App {
     /// 拖过 slop)。只在配置页靠泊在顶且起点在池区时建——点按抬手 =
     /// 下池行聚焦/触发器开合；拖过 slop = 手势归面板页全家（不聚焦）
     cfg_pool_touch: Option<(f64, f64, bool)>,
+    /// 跳框模态手势槽（宪法 §六 跳框条款，九修）：
+    /// (起手x, 起手y, 已拖过slop)——模态开着时配置页手势全归它
+    modal_touch: Option<(f64, f64, bool)>,
     /// 按在标签行带上的手势（宪法 §四 仲裁条款：行上横向滑动不触发
     /// 面板拖拽/页面滑向）——配置页靠泊且起点在行带才建
     tab_touch: Option<TabTouch>,
@@ -779,6 +782,23 @@ impl App {
                 // 路由按逻辑栈顶，不按 placement 过渡帧）
                 let panel_top = self.last_ai_snap.and_then(|s| s.top);
                 if panel_top.is_some() {
+                    // 跳框模态仲裁（宪法 §六 跳框条款，九修）：配置页靠泊
+                    // 且跳框开着 → 本手势全归跳框——压暗层吃下层全部触摸
+                    // （标签栏/池区/面板拖拽全家让路）；抬手命中判定在
+                    // Completed（几何吃 ui/modal.rs，眼手同尺）
+                    if panel_top == Some(crate::ai_presence::Panel::Config)
+                        && crate::ui::seam::sample_config_panel_offset_x(
+                            0.0,
+                            crate::report::boot_ms() as u64,
+                        ) as i32
+                            == 0
+                        && let Some(page) = crate::ui::cfg_page::cfg_page_handle()
+                        && page.lock().unwrap().modal().is_some()
+                    {
+                        crate::report::report("gest", &format!("起手→跳框模态 ({x:.0},{y:.0})"));
+                        self.modal_touch = Some((x, y, false));
+                        return;
+                    }
                     // 标签栏仲裁（主题宪法 §四，2026-09-12）：配置页靠泊
                     // （cfg_off==0——过渡帧中不仲裁，手势归面板全家）且
                     // 起点在标签行带 → 手势归标签栏：横滑滚标签不触发
@@ -842,7 +862,11 @@ impl App {
                             return;
                         }
                         let tr = pg.trigger_rect(&upper);
-                        let in_trigger = xi >= tr.x
+                        let tab1 = pg.tab() == 1;
+                        // 触发器是系统管理页家具——组件池页首行不是下拉行，
+                        // 坐标重合也不许误判（九修：tab 维分流）
+                        let in_trigger = !tab1
+                            && xi >= tr.x
                             && xi < tr.x + tr.w as i64
                             && yi >= tr.y
                             && yi < tr.y + tr.h as i64;
@@ -850,12 +874,25 @@ impl App {
                             && xi < lower.x + lower.w as i64
                             && yi >= lower.y
                             && yi < lower.y + lower.h as i64;
-                        if in_trigger || in_lower {
+                        // 组件池页：上池行可点开跳框（§五 目录语义 7）——
+                        // 上池区也建池区手势槽
+                        let in_upper = tab1
+                            && xi >= upper.x
+                            && xi < upper.x + upper.w as i64
+                            && yi >= upper.y
+                            && yi < upper.y + upper.h as i64;
+                        if in_trigger || in_lower || in_upper {
                             crate::report::report(
                                 "gest",
                                 &format!(
                                     "起手→池区 ({x:.0},{y:.0}) {}",
-                                    if in_trigger { "触发器" } else { "下池" }
+                                    if in_trigger {
+                                        "触发器"
+                                    } else if in_upper {
+                                        "上池"
+                                    } else {
+                                        "下池"
+                                    }
                                 ),
                             );
                             self.cfg_pool_touch = Some((x, y, false));
@@ -1063,6 +1100,17 @@ impl App {
                             self.dirty = true;
                         }
                     }
+                }
+                // 跳框模态手势：拖过 slop 只记账（抬手不归点按不收框）；
+                // 模态期间手势不出本槽（压暗层吃下层，宪法 §六）
+                if let Some(mt) = self.modal_touch.as_mut() {
+                    if !mt.2
+                        && ((x - mt.0).abs() > crate::scroll::TAP_SLOP_PX
+                            || (y - mt.1).abs() > crate::scroll::TAP_SLOP_PX)
+                    {
+                        mt.2 = true;
+                    }
+                    return;
                 }
                 // 标签栏手势：拖过 slop = 横滚标签（pan 像素级跟手，
                 // clamp 在核心 tab_bar）；横向位移不喂面板拖拽（仲裁条款）
@@ -1394,6 +1442,37 @@ impl App {
                     self.dirty = true;
                     return;
                 }
+                // 跳框模态收尾（宪法 §六，九修）：未拖抬手 = 命中判定
+                // （几何吃 ui/modal.rs 同一份——眼手同尺）：关闭钮/框外 =
+                // 收起；框内其他 = 无操作吃手势。Cancelled/拖过 slop 零动作
+                if let Some(mt) = self.modal_touch.take() {
+                    if phase == TouchPhase::Ended
+                        && !mt.2
+                        && let (Some(page), Some(win)) =
+                            (crate::ui::cfg_page::cfg_page_handle(), self.window.as_ref())
+                    {
+                        let size = win.inner_size();
+                        let mut pg = page.lock().unwrap();
+                        if let Some(mi) = pg.modal() {
+                            use crate::ui::modal as md;
+                            let comps = crate::ui::comp_registry::COMPONENTS;
+                            let entry = &comps[mi.min(comps.len() - 1)];
+                            let fields = md::fields_of(entry, md::content_cells(size.width));
+                            let card = md::card_rect(size.width, size.height, &fields);
+                            match md::hit(mt.0 as i64, mt.1 as i64, &card) {
+                                md::ModalHit::Close | md::ModalHit::Outside => {
+                                    pg.close_modal();
+                                    crate::report::report("ui", "跳框收起（关闭钮/框外）");
+                                }
+                                md::ModalHit::Card => {
+                                    crate::report::report("ui", "跳框卡内点按（无操作，吃手势）");
+                                }
+                            }
+                        }
+                    }
+                    self.dirty = true;
+                    return;
+                }
                 // 标签栏手势收尾：未拖抬手 = 点按选池（hit/select/弹簧
                 // 重定基全在核心 tab_bar）；收键盘同面板点按（标签栏不是
                 // 输入区）；Cancelled = 系统抢手势零动作留痕
@@ -1411,6 +1490,7 @@ impl App {
                         return;
                     }
                     if phase == TouchPhase::Ended && !tt.dragged {
+                        let mut picked = None;
                         if let Some(bar) = &self.tab_bar {
                             let mut g = bar.lock().unwrap();
                             if let Some(i) = g.hit(x, y) {
@@ -1419,8 +1499,17 @@ impl App {
                                     "ui",
                                     &format!("标签栏点按: 选中池 {}（{}）", i, g.tabs()[i]),
                                 );
-                                self.dirty = true;
+                                picked = Some(i);
                             }
+                        }
+                        // 切标签 = 切池页（九修：组件池入列）：核心记 tab 维
+                        // + 切页清零，内容重建归壳（rebuild 按 tab 分流）
+                        if let Some(i) = picked {
+                            if let Some(page) = &self.cfg_page {
+                                page.lock().unwrap().set_tab(i);
+                            }
+                            self.rebuild_cfg_rows();
+                            self.dirty = true;
                         }
                         if self.input_bar.as_ref().is_some_and(|b| b.is_focused())
                             && let Some(bar) = &self.input_bar
@@ -1453,7 +1542,9 @@ impl App {
                             };
                             let mut pg = page.lock().unwrap();
                             let tr = pg.trigger_rect(&upper);
-                            let in_trigger = xi >= tr.x
+                            let tab1 = pg.tab() == 1;
+                            let in_trigger = !tab1
+                                && xi >= tr.x
                                 && xi < tr.x + tr.w as i64
                                 && yi >= tr.y
                                 && yi < tr.y + tr.h as i64;
@@ -1467,6 +1558,26 @@ impl App {
                                 self.rebuild_cfg_rows();
                                 crate::report::report("ui", &format!("下池点按: 聚焦行 {i}"));
                                 self.dirty = true;
+                            } else if tab1 {
+                                // 组件池页：上池行点按 = 开跳框（宪法 §六
+                                // 跳框条款；行号 → COMPONENTS 下标走
+                                // entries_of 同一份表——眼手同尺）
+                                let scroll = pg.upper_scroll();
+                                if let Some(i) = pg.upper_row_at_y(yi, &upper, scroll) {
+                                    use crate::ui::comp_registry as cr;
+                                    let cat = cr::CATEGORIES
+                                        .get(pg.focus())
+                                        .copied()
+                                        .unwrap_or(cr::CATEGORIES[0]);
+                                    if let Some(&ci) = cr::entries_of(cat).get(i) {
+                                        pg.open_modal(ci);
+                                        crate::report::report(
+                                            "ui",
+                                            &format!("组件池点按: 开跳框 #{ci}"),
+                                        );
+                                        self.dirty = true;
+                                    }
+                                }
                             }
                         }
                     }
@@ -2245,13 +2356,14 @@ impl App {
             crate::gate::register_ai_chat(chat);
         }
 
-        // 配置卡标签栏（主题宪法 §四，2026-09-12）：池名表 v1 单池
-        // 「系统管理」（API 池随后追加——表是 Vec 天然可扩）；共享句柄
-        // 注册给 gate 值守倒帧（D9 同源）。初始视口 720 占位，draw_frame
-        // 每帧按真实屏宽 set_viewport_w 纠
+        // 配置卡标签栏（主题宪法 §四，2026-09-12）：池名表 v1b 两池——
+        // 「系统管理」+「组件池」（九修 2026-09-13：组件库实机花名册，
+        // 宪法 §五 目录语义 7；表是 Vec 天然可扩——API 池随后追加）；
+        // 共享句柄注册给 gate 值守倒帧（D9 同源）。初始视口 720 占位，
+        // draw_frame 每帧按真实屏宽 set_viewport_w 纠
         {
             let bar = std::sync::Arc::new(std::sync::Mutex::new(crate::ui::tab_bar::TabBar::new(
-                &["系统管理"],
+                &["系统管理", "组件池"],
                 720,
             )));
             crate::ui::tab_bar::register_tab_bar(bar.clone());
@@ -2524,10 +2636,43 @@ impl App {
     /// 下池 = 子目录（系统管理大类目前仅一行「系统管理」——服务器列表
     /// 不进下池，用户拍板）；上池 = 服务器配置表单（默认服务器下拉行 +
     /// 服务器切换行 + 下拉选中服务器的字段框行）；下拉选项 = 本地终端 +
-    /// 服务器池，选中位从 terminal_cfg.default_session 解析。数据变更/
-    /// 换选后必调（set_* 内部判等，没变不空涨代际）
+    /// 配置页内容重建（九修 tab 维分流）：tab 0 系统管理 = 服务器配置
+    /// 行表（服务器池选中位从 terminal_cfg.default_session 解析）；
+    /// tab 1 组件池 = comp_registry 常量表直读（唯一信息源纪律——大类
+    /// = 下池行、类内组件 = 上池行，宪法 §五 目录语义 7）。数据变更/
+    /// 换选/切页后必调（set_* 内部判等，没变不空涨代际）
     fn rebuild_cfg_rows(&mut self) {
         let Some(page) = &self.cfg_page else { return };
+        if page.lock().unwrap().tab() == 1 {
+            use crate::ui::comp_registry as cr;
+            let focus = page.lock().unwrap().focus();
+            let rows: Vec<crate::ui::cfg_page::RowView> = cr::CATEGORIES
+                .iter()
+                .map(|c| crate::ui::cfg_page::RowView {
+                    title: (*c).into(),
+                    meta: format!("{} 个组件", cr::count_of(c)),
+                })
+                .collect();
+            let cat = cr::CATEGORIES
+                .get(focus)
+                .copied()
+                .unwrap_or(cr::CATEGORIES[0]);
+            let upper: Vec<crate::ui::cfg_page::UpperRow> = cr::entries_of(cat)
+                .iter()
+                .map(|&i| {
+                    let e = &cr::COMPONENTS[i];
+                    crate::ui::cfg_page::UpperRow {
+                        label: e.name.into(),
+                        value: e.status.label().into(),
+                        is_dropdown: false,
+                    }
+                })
+                .collect();
+            let mut p = page.lock().unwrap();
+            p.set_rows(rows);
+            p.set_upper(upper);
+            return;
+        }
         let rows = vec![crate::ui::cfg_page::RowView {
             title: "系统管理".into(),
             meta: "服务器配置".into(),

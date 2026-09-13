@@ -14,12 +14,14 @@
 pub mod accent;
 pub mod ai_page;
 pub mod cfg_page;
+pub mod comp_registry;
 pub mod cursor;
 pub mod dual_pool;
 pub mod fx_ease;
 pub mod fx_spring;
 pub mod gear;
 pub mod keybar;
+pub mod modal;
 pub mod orb;
 pub mod panel_drag;
 pub mod prompt_bar;
