@@ -82,6 +82,13 @@ MANIFEST             # name=<名> / packages=<闭包列表> / built=<时间戳>
   - 私钥 = 复用 Termux `moliy_key`(用户拍板),经 8027 传递后落
     `$PREFIX/etc/ssh/id_ed25519`(**私有区,不进共享存储 HOME**),
     传递副本用后已删。
+  - **非交互壳补记（2026-09-13 实证）**：alias 只在交互 bash 生效。
+    sshd 闸门执行/app 原生拉起等**非交互路径必须显式
+    `ssh -F $HOME/.ssh/config`**——getpwuid 家目录
+    (`$PREFIX/../home/.ssh`)≠ $HOME，不显式 -F 则 IdentityFile/
+    IPQoS 全丢，症状 = Permission denied (publickey)（verbose 可见
+    只读系统 ssh_config、身份文件全 type -1）。na-tunnel.sh 看守
+    已照此写死。
 
 ## 6.5 运行时安装的铁律(2026-08-22 实拍)
 
