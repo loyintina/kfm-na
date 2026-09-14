@@ -7,6 +7,44 @@
 
 ## 当前位置（2026-09-15)
 
+- **设置页 v1g-4 十八修：上池平移三修（BAR-091，2026-09-15 凌晨，
+  用户实机录屏逐帧报三条）**：①切下池上池平移把**池框一起带跑**
+  （要只移内容行）②曲线 ease-out 起步满速读感「太块」③双代紧贴
+  是「挤」，视觉语言应为视口平移——页面外有隐藏布局状态，双代
+  间留隙。**修宪 theme.md §七**：上池级平移裁剪带=上池**内容矩形**
+  （POOL_CONTENT_INSET 内缩，池框/左粗竖条 9px 一像素不进带——
+  旧带左缘 x+4 吞粗条右半=BAR-091 病灶）；**留隙律**：内容轴恒
+  「旧代|隙 G|新代」隐藏布局，G=2×静态内容缘距视口缘（页面级
+  G=PAN_GAP_PAGE=POOL_SIDE_PAD=2 格=54px；上池级 G=PAN_GAP_UPPER
+  =2×POOL_CONTENT_INSET=4 格=108px），平移距=视口宽+G，双代缘
+  距全程恒 G；曲线 250ms **ease-in-out cubic**。落码：fx_ease
+  +ease_in_out_cubic；cfg_page pan_snap 换曲线+PAN_GAP_PAGE/
+  PAN_GAP_UPPER 两常量；termview Page 分支 travel=pw+G、Upper
+  分支裁剪带改 POOL_CONTENT_INSET 内缩+travel=带宽+G。考题：
+  cfg_page 45 钉（pan 钉改 ease-in-out 1/4 程 0.0625/半程 0.5）
+  +termview 115 钉（双代同画钉改 T=travel、新 spec_上池平移_框
+  静止留隙_涂装钉=带外四点静物逐像素等+间隙带=池内芯静物参照）
+  +fx_ease 17 钉（补裸曲线钉过覆盖闸）；**变异四咬全中**（曲线
+  回 ease_out/Page travel 删 G/Upper 带左缘回+4/Upper travel 删
+  G，复原 cp 备份纪律）。**提交 258e261 三端齐推**（服务器夜间
+  窗口 chain 三跑：fmt→覆盖闸 fx_ease→全绿）。**redroid 热更戳
+  258e261-09141759·vc425**（logcat boot 实证；x86_64 编核教训：
+  变量名是 CC_x86_64_linux_android/AR_x86_64_linux_android——
+  CARGO_TARGET_..._CC 系 cc-rs 不认，报错 failed to find tool
+  "x86_64-linux-android-clang"，LINKER 才走 CARGO_TARGET 系）。
+  **判卷**：三标准涂装层全钉+变异咬；活渲染层跳框「视口平移」
+  循环预览实录 51 帧密集（fD425/f0011@988ms 双代同帧白球拖页
+  中帧）证 live 涂装链+redroid 采集链双通；**250ms 点触发平移在
+  redroid 抓不到中帧=采集物理极限非回归**（合成率实测 ~2-6fps，
+  静止期整秒零合成；vc424 fC0012 中帧属运气帧——合成时刻≠渲染
+  时刻，两帧「秒切」与 250ms 动画完全相容。oracle 取证教训：
+  判渐变锚别手推——paint_rect_ring 的 ring_gradient 用**本地
+  坐标**锚、paint_row_frame 用全局锚，用静物参照缓冲对照法一次
+  取准）。**真机 vc425 热更挂起**：8022 隧道连续 refused（kalo
+  watchdog 每 5 分钟自愈，两轮未愈）；隧道愈后跑手机编核（手机
+  仓已在 258e261，KFM_NA_VC=425，补 export KFM_NA_BUILD）→
+  服务器 na-push-so.sh→闭环冒烟→实机终验三标准。判毕道具已清
+  （rec 三件+wd.xml+scr mp4，force-stop 重启回终端页截图实证）。
 - **设置页 v1g-3 十七修：「面与内容一体」动效四件+BAR-090 修复
   （2026-09-15 凌晨，用户拍板设计思路写进宪法 theme.md §六/§七）**：
   ①视口平移切页通则（三实例：标签切页 Page 平移/下池选行 Upper
