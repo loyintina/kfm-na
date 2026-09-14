@@ -5,8 +5,58 @@
 > (速查表:症状 → 工具 → 字段 → 判卷)。本页只写「现在进行时」,
 > 历史功过在 bugs.md。
 
-## 当前位置（2026-09-14)
+## 当前位置（2026-09-15)
 
+- **设置页 v1g-3 十七修：「面与内容一体」动效四件+BAR-090 修复
+  （2026-09-15 凌晨，用户拍板设计思路写进宪法 theme.md §六/§七）**：
+  ①视口平移切页通则（三实例：标签切页 Page 平移/下池选行 Upper
+  平移；方向律——控件从左到右或从上到下移动，内容向左平移；双代
+  同画 250ms ease-out cubic，视口=最外层框/上池框，标签不动）
+  ②抽屉随面（下拉内容固定在面板背景上：展开下方选项先入场、
+  收起上方先没入，drawer_dy=cur_h−full_h）③▼三角旋转动效
+  （θ=progress×π 逆旋转采样，展开▼→▲收起反向）④BAR-090
+  下拉面板宽=max(触发器宽,最长选项文宽+2×FIELD_TEXT_INSET)、
+  右缘与触发器右缘对齐加宽向左长（钉考题实锤：触发器右缘≡池
+  内容内缘，初稿「左对齐+右钳」几何锁死，修宪文本同步修正）。
+  落码：cfg_page pan 账（PanScope::Page/Upper×dir×PAN_MS=250×
+  EpochSnap 惰式求值、pan_active）+dropdown_panel_rect 第 8 参
+  content_w_min；termview pool_content 拆四块（paint_pool_lower/
+  upper/dropdown_panel/frames），双代同画走 pan_temps/copy_frame/
+  blit_shift 自由函数；android_app ConfigSig+pan_q、Page 域跳
+  paint_cfg_dual_pool、set_tab retint 前取旧 accent（EpochSnap
+  防新旧代同色）、cfg_dropdown_content_w_min 助手；gate.rs 同
+  跳框规则；dual_pool DualPoolSnap derive Debug,Clone；
+  comp_registry 动效引擎+「视口平移切页」（借 ViewportPush 预览）
+  +下拉开合 desc 补两件。考题：cfg_page 45 钉（pan 四钉+bar090
+  三钉）+termview 114 钉（spec_cfg下拉_抽屉随面钉=矮面板裁剪
+  钉改写/spec_下拉三角旋转_涂装钉=B/C/E/G 四采样点解析推导/
+  spec_视口平移双代同画_涂装钉）；**变异五咬全中**（max 改回
+  t.w/cfg_page dir 反号/termview d_old,d_new 反号/drawer_dy=0/
+  θ=0，复原 cp 备份纪律）。**提交 74fb640 三端齐推**；
+  chain-phone 第四跑绿（前三跑分别红在 fmt、手机 Rust 1.97 新
+  lint manual_range_contains——改 `(-4.5..=4.5).contains(&ly)`、
+  一次瞬时状态；服务器直跑 clippy 可能绿而手机红，以 chain-phone
+  为准）。**vc424 双端热更**：构建戳 74fb640-09142351·vc424；
+  真机 na-push-so 闭环冒烟 3/3（**na-push-so.sh 必须在服务器跑**，
+  它自己 ssh 手机拉核——误在手机跑报「没有 libkfm_na.so」）；
+  redroid adb 原子热更 pid 513516 logcat 戳实证。**redroid 实录
+  判卷五场景全过**（三段实录 recA 20 帧/recB 14 帧/recC 14 帧，
+  VFR 帧稀疏≠没播，帧名嵌 POS_MSEC 对账）：①抽屉随面
+  fA0011@1034ms 展开中帧（面板半高、内容随面：末行已就位=下方
+  先入场）+fA0015@3234ms 收起中帧（上方先没入）；②▼旋转中间
+  相位 fA0011=▶/fA0015=◀；③BAR-090 fA0012/fA0019「阿里云主站」
+  「备用二号机」全文不裁（对十六修 f013 裁字实锤复判过）；
+  ④Page 平移 fB0009@891ms 双代同帧（旧代左出+新代右缘进场，
+  方向向左合方向律）；⑤Upper 平移 fC0012@2910ms 双代同帧
+  （下池不动，上池旧代左出+新代右进）。判卷道具 servers.json
+  两机长名判毕已撤+rec 三件清+force-stop 重启恢复默认（截图
+  实证终端页）。**判卷纪律新增三条**：①Bash auto 权限模式禁
+  变量赋值/heredoc 混 adb——全写字面全路径（adb=
+  /root/kfm-na-toolchain/sdk/platform-tools/adb）；②服务器无
+  ffprobe，playwright ffmpeg 只解 webm——mp4 抽帧用
+  /root/.venvs/recjudge（opencv-python-headless）+/tmp/dumpframes.py；
+  ③redroid monkey 调不起应用（SYS_KEYS no physical keys），用
+  am start -n dev.kfm.na/.MainActivity。
 - **设置页 v1g-2 十六修：BAR-089 四问题修复（2026-09-14 深夜，
   用户实机反馈四条当日修）**：①下池选中态三级框内没文字
   ②新增四动效没登记进组件池动效引擎 ③下拉收起留一行黑余影
