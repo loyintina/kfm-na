@@ -442,6 +442,53 @@ fn paint_page_frame_ring(
     );
 }
 
+/// 视口平移双代同画（十七修 §六「面与内容一体」）：借两枚 thread_local
+/// 复用帧尺 temp 给闭包（旧代/新代各一，免逐帧 10MB 分配）。调用纪律：
+/// 闭包内先 copy_frame 铺底（页环/池内芯是静物，随代整体平移），再画
+/// 本代内容，最后 blit_shift 带偏移贴回主帧
+fn pan_temps(w: u32, h: u32, f: impl FnOnce(&mut Vec<u32>, &mut Vec<u32>)) {
+    thread_local! {
+        static PAN_TEMP_A: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
+        static PAN_TEMP_B: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+    PAN_TEMP_A.with(|ta| {
+        PAN_TEMP_B.with(|tb| {
+            let mut a = ta.borrow_mut();
+            let mut b = tb.borrow_mut();
+            let n = (w as usize) * (h as usize);
+            a.resize(n, 0);
+            b.resize(n, 0);
+            f(&mut a, &mut b);
+        });
+    });
+}
+
+/// 整帧铺底拷贝（双代 temp 的静物底：页环/池内芯不动部分随代平移）
+fn copy_frame(src: &[u32], dst: &mut [u32]) {
+    let n = src.len().min(dst.len());
+    dst[..n].copy_from_slice(&src[..n]);
+}
+
+/// 水平移位不透明贴回：src[(y, x−dx)] → frame[(y, x)]，x 与 x−dx 都钳在
+/// band 的 x 带内（带外 = 视口外，主帧静物原样保留）；y 带同理（无竖向
+/// 移位，带即上下裁剪）。内容出视口缘断墨 = 旧代滑出、新代滑入的边界
+fn blit_shift(frame: &mut Frame<'_>, src: &[u32], dx: i64, band: (i64, i64, i64, i64)) {
+    let (x0, y0, x1, y1) = band;
+    let (fw, fh) = (i64::from(frame.w), i64::from(frame.h));
+    let (xa, xb) = (x0.max(0), x1.min(fw));
+    let (ya, yb) = (y0.max(0), y1.min(fh));
+    for y in ya..yb {
+        let row = y as usize * fw as usize;
+        for x in xa..xb {
+            let sx = x - dx;
+            if sx < x0 || sx >= x1 || sx < 0 || sx >= fw {
+                continue; // 来源在视口带外 = 该处无内容滑到，主帧静物保留
+            }
+            frame.buf[row + x as usize] = src[row + sx as usize];
+        }
+    }
+}
+
 /// 圆角矩形边框环（2026-09-12 从页环抽核，配置卡标签栏光标框复用——
 /// 宪法 §六 样式唯一来源，禁止逐卡手抄）：先外发光，再 135° 渐变外环，
 /// 最后内芯填充（左缘让 9 = 3 倍粗，其余让 3）。**内芯两路（十二修
@@ -2681,7 +2728,10 @@ impl TermView {
     /// 体字库无此 glyph 待验）。**上池像素滚动**（§五 滚动条款兑现）：
     /// 行矩形吃 snap.upper_scroll，出池内缘裁剪带断墨（框/文字/三角
     /// 同一带）；off≠0 的过渡帧里行左缘出屏即整行不画（softbuffer/
-    /// 值守兜底路径的取舍，GLES 主路径烘焙恒 off=0 不受影响）
+    /// 值守兜底路径的取舍，GLES 主路径烘焙恒 off=0 不受影响）。
+    /// 十七修 §六「面与内容一体」：page.pan = Some 时双代同画——
+    /// Page 域 = 双池框+内容整体平移（本函数自带框，调用方须跳过
+    /// paint_cfg_dual_pool）；Upper 域 = 仅上池内容平移（框/下池照常）
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn paint_cfg_pool_content_impl(
         &self,
@@ -2700,86 +2750,240 @@ impl TermView {
         }
         let mut frame = Frame { buf, w, h };
         let off = i64::from(cfg_off_x);
-        let title_fg = 0x00D9_D9D9; // 0.85 白（§2.3 标题档）
-        let meta_fg = 0x0080_8080; // 0.5 白（次级档）
-        let px_title = 36.0; // 池行标题/字段标签列（四版 ×1.5：= CELL_H）
-        let px_meta = 30.0; // meta/字段值（四版 ×1.5：= CELL_H×5/6）
-        let text_inset = 27.0; // 框内文字起笔内缩（18 ×1.5）
-        // accent 渐变描边与页环同一把 135° 尺（同原点同分母，§五 光标条款同规）
-        let denom = ((w - 1) + (h - 1)).max(1) as i64;
 
-        // 矩形覆盖率混合小助手（panel 96% 黑底等满混/混色块）；
-        // 裁剪带外的像素断墨（池内滚动内容出池内缘即裁）
-        #[allow(clippy::too_many_arguments)]
-        fn blend_rect(
-            frame: &mut Frame<'_>,
-            x: i64,
-            y: i64,
-            rw: u32,
-            rh: u32,
-            fg: u32,
-            a: u32,
-            clip: (i64, i64),
-        ) {
-            for dy in 0..rh as i64 {
-                let yy = y + dy;
-                if yy < 0 || yy >= i64::from(frame.h) || yy < clip.0 || yy >= clip.1 {
-                    continue;
-                }
-                for dx in 0..rw as i64 {
-                    let xx = x + dx;
-                    if xx < 0 || xx >= i64::from(frame.w) {
-                        continue;
+        match page.pan.as_ref().map(|p| p.scope) {
+            Some(cp::PanScope::Page) => {
+                let pan = page.pan.as_ref().unwrap();
+                // 页面级：旧代（冻结快照，含双池框/旧页色）带偏移出，
+                // 新代（活态）带偏移进；视口 = 页内容裁剪带（页环不动）
+                let pw = ps.upper.w as i64;
+                let d_old = -i64::from(pan.dir) * (pan.t * pw as f32).round() as i64;
+                let d_new = i64::from(pan.dir) * ((1.0 - pan.t) * pw as f32).round() as i64;
+                let (ox, _oy) = crate::ui::tab_bar::content_origin();
+                let band = (
+                    i64::from(ox) + off,
+                    pan.old.pool.upper.y.min(ps.upper.y),
+                    i64::from(w) - i64::from(AI_PAGE_FRAME_MARGIN + AI_PAGE_FRAME_W + CELL_W) + off,
+                    (pan.old.pool.lower.y + pan.old.pool.lower.h as i64)
+                        .max(ps.lower.y + ps.lower.h as i64),
+                );
+                pan_temps(w, h, |a, b| {
+                    copy_frame(frame.buf, a);
+                    copy_frame(frame.buf, b);
+                    {
+                        let mut fa = Frame { buf: a, w, h };
+                        self.paint_pool_frames(&mut fa, &pan.old.pool, pan.old.accent, off);
+                        self.paint_pool_lower(
+                            &mut fa,
+                            &pan.old.pool.lower,
+                            &pan.old.rows,
+                            pan.old.cursor_row,
+                            pan.old.accent,
+                            off,
+                        );
+                        self.paint_pool_upper(
+                            &mut fa,
+                            &pan.old.pool.upper,
+                            &pan.old.upper,
+                            pan.old.upper_scroll,
+                            pan.old.accent,
+                            off,
+                            0.0,
+                        );
                     }
-                    frame.blend_px(xx as u32, yy as u32, fg, a);
-                }
+                    {
+                        let mut fb = Frame { buf: b, w, h };
+                        self.paint_pool_frames(&mut fb, ps, accent, off);
+                        self.paint_pool_lower(
+                            &mut fb,
+                            &ps.lower,
+                            &page.rows,
+                            page.cursor_row,
+                            accent,
+                            off,
+                        );
+                        self.paint_pool_upper(
+                            &mut fb,
+                            &ps.upper,
+                            &page.upper,
+                            page.upper_scroll,
+                            accent,
+                            off,
+                            page.dropdown_progress,
+                        );
+                    }
+                    blit_shift(&mut frame, a, d_old, band);
+                    blit_shift(&mut frame, b, d_new, band);
+                });
+            }
+            Some(cp::PanScope::Upper) => {
+                let pan = page.pan.as_ref().unwrap();
+                // 上池级：双池框/下池照常（当前态），仅上池内容双代平移；
+                // 视口 = 上池内缘矩形
+                self.paint_pool_lower(
+                    &mut frame,
+                    &ps.lower,
+                    &page.rows,
+                    page.cursor_row,
+                    accent,
+                    off,
+                );
+                let pw = ps.upper.w as i64;
+                let d_old = -i64::from(pan.dir) * (pan.t * pw as f32).round() as i64;
+                let d_new = i64::from(pan.dir) * ((1.0 - pan.t) * pw as f32).round() as i64;
+                let band = (
+                    ps.upper.x + 4 + off,
+                    ps.upper.y + 12,
+                    ps.upper.x + ps.upper.w as i64 - 4 + off,
+                    ps.upper.y + ps.upper.h as i64 - 12,
+                );
+                pan_temps(w, h, |a, b| {
+                    copy_frame(frame.buf, a);
+                    copy_frame(frame.buf, b);
+                    {
+                        let mut fa = Frame { buf: a, w, h };
+                        self.paint_pool_upper(
+                            &mut fa,
+                            &pan.old.pool.upper,
+                            &pan.old.upper,
+                            pan.old.upper_scroll,
+                            pan.old.accent,
+                            off,
+                            0.0,
+                        );
+                    }
+                    {
+                        let mut fb = Frame { buf: b, w, h };
+                        self.paint_pool_upper(
+                            &mut fb,
+                            &ps.upper,
+                            &page.upper,
+                            page.upper_scroll,
+                            accent,
+                            off,
+                            page.dropdown_progress,
+                        );
+                    }
+                    blit_shift(&mut frame, a, d_old, band);
+                    blit_shift(&mut frame, b, d_new, band);
+                });
+            }
+            None => {
+                self.paint_pool_lower(
+                    &mut frame,
+                    &ps.lower,
+                    &page.rows,
+                    page.cursor_row,
+                    accent,
+                    off,
+                );
+                self.paint_pool_upper(
+                    &mut frame,
+                    &ps.upper,
+                    &page.upper,
+                    page.upper_scroll,
+                    accent,
+                    off,
+                    page.dropdown_progress,
+                );
             }
         }
+
+        self.paint_dropdown_panel(&mut frame, ps, page, accent, off);
+
+        // ---- 跳框（宪法 §六 跳框条款，九修）：模态盖在配置页最上层——
+        // 压暗层 + 居中卡 + 关闭钮。本体在 paint_modal_impl（§六 样式
+        // 唯一来源：压暗层/字段排版之外的涂装原语全复用共享件）
+        if let Some(mi) = page.modal {
+            self.paint_modal_impl(frame.buf, w, h, mi, cfg_off_x, accent, now_ms);
+        }
+    }
+
+    /// 双池框涂装（十七修从 paint_cfg_dual_pool_impl 抽出的 Frame 版——
+    /// Page 域平移时双池框随内容进 temp 双代同画；内卡反转 c2→c1）
+    fn paint_pool_frames(
+        &self,
+        frame: &mut Frame<'_>,
+        ps: &crate::ui::dual_pool::DualPoolSnap,
+        accent: crate::ui::accent::AccentPair,
+        off: i64,
+    ) {
+        let (ox, _oy) = crate::ui::tab_bar::content_origin();
+        let clip_l = i64::from(ox) + off;
+        let clip_r =
+            i64::from(frame.w) - i64::from(AI_PAGE_FRAME_MARGIN + AI_PAGE_FRAME_W + CELL_W) + off;
+        for r in [&ps.upper, &ps.lower] {
+            if r.w < 2 || r.h < 2 {
+                continue;
+            }
+            let x0 = r.x + off;
+            let y0 = r.y;
+            paint_rect_ring(
+                frame,
+                x0,
+                y0,
+                x0 + i64::from(r.w),
+                y0 + i64::from(r.h),
+                clip_l,
+                clip_r,
+                crate::ui::accent::CARD_PAGE_BG,
+                accent.c2,
+                accent.c1,
+                POOL_FRAME_R,
+                true,
+            );
+        }
+    }
+
+    /// 下池块（十七修抽出）：行循环（未选中态）→ 光标选中框 → 文字三遍
+    /// 顺序不动（BAR-089 先框后字钉保持）
+    fn paint_pool_lower(
+        &self,
+        frame: &mut Frame<'_>,
+        lower: &crate::ui::dual_pool::PoolRect,
+        rows: &[crate::ui::cfg_page::RowView],
+        cursor_row: f32,
+        accent: crate::ui::accent::AccentPair,
+        off: i64,
+    ) {
+        use crate::ui::cfg_page as cp;
+        let title_fg = 0x00D9_D9D9; // 0.85 白（§2.3 标题档）
+        let meta_fg = 0x0080_8080; // 0.5 白（次级档）
+        let px_title = 36.0;
+        let px_meta = 30.0;
+        let text_inset = 27.0;
+        let denom = ((frame.w - 1) + (frame.h - 1)).max(1) as i64;
+        let no_clip = (0, i64::from(frame.h));
 
         // ---- 下池：子目录行表（4.5 格框行，左粗条恒在；选中框单独滑行）----
         // 十五修 §五：行本体恒按未选中画——选中全包框在循环后按光标弹簧
         // 瞬时值（行号小数）单独落墨，内容与页色即时切换不等光标。
         // 2026-09-14 实踩修：选中框内芯不透明渐变暗底，文字必须最后画——
         // 「行循环画字→选中框后画」= 选中行文字被框芯盖没（用户实机抓）
-        let no_clip = (0, i64::from(h));
-        for i in 0..page.rows.len() {
-            let r = cp::lower_row_rect(i, &ps.lower);
-            if r.y + r.h as i64 > ps.lower.y + ps.lower.h as i64 {
+        for i in 0..rows.len() {
+            let r = cp::lower_row_rect(i, lower);
+            if r.y + r.h as i64 > lower.y + lower.h as i64 {
                 break; // 出池底的行不画（下池宪法不滚动——内容少恒撑满）
             }
             let rx = r.x + off;
             if rx < 0 {
                 continue; // 过渡帧行左缘出屏整行不画
             }
-            paint_row_frame(
-                &mut frame,
-                r.x + off,
-                r.y,
-                r.w,
-                r.h,
-                false,
-                accent,
-                denom,
-                no_clip,
-            );
+            paint_row_frame(frame, rx, r.y, r.w, r.h, false, accent, denom, no_clip);
         }
 
         // 十五修 §五：选中全包框吃光标弹簧瞬时值（行号小数 → 像素）——
         // 与 lower_row_rect 同一份几何（内缩/步进同源），只是 y 吃滑行值
-        if !page.rows.is_empty() {
+        if !rows.is_empty() {
             let stride = cp::LOWER_ROW_H as i64 + cp::ROW_GAP;
-            let cy = ps.lower.y
-                + cp::POOL_CONTENT_INSET
-                + (page.cursor_row * stride as f32).round() as i64;
-            let crx = ps.lower.x + cp::POOL_CONTENT_INSET + off;
-            if crx >= 0 && cy + cp::LOWER_ROW_H as i64 <= ps.lower.y + ps.lower.h as i64 {
+            let cy = lower.y + cp::POOL_CONTENT_INSET + (cursor_row * stride as f32).round() as i64;
+            let crx = lower.x + cp::POOL_CONTENT_INSET + off;
+            if crx >= 0 && cy + cp::LOWER_ROW_H as i64 <= lower.y + lower.h as i64 {
                 paint_row_frame(
-                    &mut frame,
+                    frame,
                     crx,
                     cy,
-                    ps.lower
-                        .w
-                        .saturating_sub((cp::POOL_CONTENT_INSET * 2) as u32),
+                    lower.w.saturating_sub((cp::POOL_CONTENT_INSET * 2) as u32),
                     cp::LOWER_ROW_H,
                     true,
                     accent,
@@ -2791,9 +2995,9 @@ impl TermView {
 
         // 文字最后一遍（盖过选中框内芯）：标题 faux-bold（像素体无粗体
         // 档：双画偏 1px）+ meta，行内垂直分布
-        for (i, row) in page.rows.iter().enumerate() {
-            let r = cp::lower_row_rect(i, &ps.lower);
-            if r.y + r.h as i64 > ps.lower.y + ps.lower.h as i64 {
+        for (i, row) in rows.iter().enumerate() {
+            let r = cp::lower_row_rect(i, lower);
+            if r.y + r.h as i64 > lower.y + lower.h as i64 {
                 break;
             }
             let rx = r.x + off;
@@ -2803,11 +3007,10 @@ impl TermView {
             let (rx, ry) = (rx as u32, r.y as u32);
             let title_band = 90; // 四版 ×1.5（60 → 90）
             self.draw_text_left_ex(
-                &mut frame, &row.title, rx, r.w, ry, title_band, px_title, title_fg, text_inset,
-                None,
+                frame, &row.title, rx, r.w, ry, title_band, px_title, title_fg, text_inset, None,
             );
             self.draw_text_left_ex(
-                &mut frame,
+                frame,
                 &row.title,
                 rx + 1,
                 r.w,
@@ -2820,7 +3023,7 @@ impl TermView {
             );
             if !row.meta.is_empty() {
                 self.draw_text_left_ex(
-                    &mut frame,
+                    frame,
                     &row.meta,
                     rx,
                     r.w,
@@ -2833,14 +3036,35 @@ impl TermView {
                 );
             }
         }
+    }
+
+    /// 上池块（十七修抽出）：字段框行表（标签列 + 值框；首行 = 下拉行）。
+    /// dd_progress = 下拉开合进度——▼ 三角旋转角（十七修 §六④：展开
+    /// 180° 旋到 ▲，两段时序Ⅰ段冻结在 180°）
+    #[allow(clippy::too_many_arguments)]
+    fn paint_pool_upper(
+        &self,
+        frame: &mut Frame<'_>,
+        upper: &crate::ui::dual_pool::PoolRect,
+        rows: &[crate::ui::cfg_page::UpperRow],
+        scroll: i64,
+        accent: crate::ui::accent::AccentPair,
+        off: i64,
+        dd_progress: f32,
+    ) {
+        use crate::ui::cfg_page as cp;
+        let title_fg = 0x00D9_D9D9;
+        let meta_fg = 0x0080_8080;
+        let px_title = 36.0;
+        let px_meta = 30.0;
+        let denom = ((frame.w - 1) + (frame.h - 1)).max(1) as i64;
 
         // ---- 上池：字段框行表（标签列 + 值框；首行 = 下拉行）----
-        // 四版滚动：行矩形吃 snap.upper_scroll；出池内缘裁剪带断墨
+        // 四版滚动：行矩形吃 upper_scroll；出池内缘裁剪带断墨
         // （框/文字/下拉三角同一带），完全滚出池顶的行跳过
-        let scroll = page.upper_scroll;
-        let uclip = (ps.upper.y + 12, ps.upper.y + ps.upper.h as i64 - 12);
-        for (i, ur) in page.upper.iter().enumerate() {
-            let r = cp::upper_row_rect(i, &ps.upper, scroll);
+        let uclip = (upper.y + 12, upper.y + upper.h as i64 - 12);
+        for (i, ur) in rows.iter().enumerate() {
+            let r = cp::upper_row_rect(i, upper, scroll);
             if r.y + r.h as i64 <= uclip.0 {
                 continue; // 完全滚出池顶
             }
@@ -2889,7 +3113,7 @@ impl TermView {
             // 标签文字（title 档 36px 亮——六修字档反转（色）+ 七修补齐
             // （号）；十四修：逐行左对齐，超长贪心换行 ≤2 行）
             self.draw_field_lines(
-                &mut frame,
+                frame,
                 &l_items,
                 rx as u32,
                 lb.w,
@@ -2904,7 +3128,7 @@ impl TermView {
             // 形态②「只有左竖线」实机判丑退役；十三修：下拉行值框 =
             // 三级框全包框——触发器是选择控件）+ 值文本
             paint_row_frame(
-                &mut frame,
+                frame,
                 vb.x + off,
                 vb.y,
                 vb.w,
@@ -2923,7 +3147,7 @@ impl TermView {
                 0
             };
             self.draw_field_lines(
-                &mut frame,
+                frame,
                 &v_items,
                 (vb.x + off) as u32,
                 vb.w.saturating_sub(tri_pad),
@@ -2935,112 +3159,159 @@ impl TermView {
                 false,
             );
             if ur.is_dropdown {
-                // 右缘下拉三角（四版 ×1.5：逐行 17/15/…/1 覆盖率满混）
-                let tri_cx = (vb.x + off) as u32 + vb.w - 45;
-                let tri_y = vb.y as u32 + vb.h / 2 - 4;
-                for dy in 0..9u32 {
-                    let half_w = 8 - dy;
-                    blend_rect(
-                        &mut frame,
-                        (tri_cx - half_w) as i64,
-                        (tri_y + dy) as i64,
-                        half_w * 2 + 1,
-                        1,
-                        0x00D9_D9D9,
-                        255,
-                        uclip,
-                    );
+                // 右缘下拉三角（十七修 §六④：矢量三角随开合进度旋转——
+                // θ = progress×180°，关 ▼ → 开 ▲；基三角 17×9 同尺，
+                // 逐像素逆旋转采样，uclip 同带）
+                let cx = (vb.x + off) as f32 + vb.w as f32 - 37.0;
+                let cy = vb.y as f32 + vb.h as f32 / 2.0;
+                let theta = dd_progress * std::f32::consts::PI;
+                let (sn, cs) = theta.sin_cos();
+                for py in -12i32..=12 {
+                    for px in -12i32..=12 {
+                        let (fx, fy) = (px as f32 + 0.5, py as f32 + 0.5);
+                        let lx = fx * cs + fy * sn;
+                        let ly = -fx * sn + fy * cs;
+                        let inside =
+                            (-4.5..=4.5).contains(&ly) && lx.abs() <= 8.5 * (4.5 - ly) / 9.0;
+                        if !inside {
+                            continue;
+                        }
+                        let xx = cx as i64 + i64::from(px);
+                        let yy = cy as i64 + i64::from(py);
+                        if xx < 0
+                            || xx >= i64::from(frame.w)
+                            || yy < uclip.0
+                            || yy >= uclip.1
+                            || yy < 0
+                            || yy >= i64::from(frame.h)
+                        {
+                            continue;
+                        }
+                        frame.blend_px(xx as u32, yy as u32, 0x00D9_D9D9, 255);
+                    }
                 }
             }
         }
+    }
 
-        // ---- 下拉 panel（进度 >0 就画，叠在最后 = 盖住字段行/下池）----
-        // 十三修 §六：整面圆角无边框深底（近黑 α252）+ 选项行方形无个体
-        // 背景 + 选中行均匀细框。十五修 §六：面板高吃开合进度（展开生长
-        // 0→全高 250ms ease-out；选中收起 180ms ease-in——dropdown_open
-        // 已 false 而 progress >0 时照画渐缩，选项行随当前高裁剪）
-        if page.dropdown_progress > 0.001 {
-            // 十四修：触发器几何吃首行实量宽（与字段行涂装同尺）
-            let (lw, vw) = match page.upper.first() {
-                Some(ur) => (
-                    self.text_width(&ur.label, px_title),
-                    self.text_width(&ur.value, px_meta),
-                ),
-                None => (0, 0),
-            };
-            let dd = page.upper.first().is_none_or(|ur| ur.is_dropdown);
-            let t = cp::trigger_rect(&ps.upper, scroll, dd, lw, vw);
-            let max_h = h.saturating_sub(t.y.max(0) as u32 + t.h + 40);
-            let pr =
-                cp::dropdown_panel_rect(page.options.len(), &ps.upper, max_h, scroll, dd, lw, vw);
-            let pr = crate::ui::dual_pool::PoolRect {
-                h: ((pr.h as f32) * page.dropdown_progress).round() as u32,
-                ..pr
-            };
-            let px0 = pr.x + off;
-            if px0 >= 0 {
-                let prr = (POOL_FRAME_R as i64).min((pr.w / 2).min(pr.h / 2) as i64) as u32;
-                let (fw, fh) = (i64::from(frame.w), i64::from(frame.h));
-                for dy in 0..pr.h as i64 {
-                    let yy = pr.y + dy;
-                    if yy < 0 || yy >= fh {
-                        continue;
-                    }
-                    for dx in 0..pr.w as i64 {
-                        let xx = px0 + dx;
-                        if xx < 0 || xx >= fw {
-                            continue;
-                        }
-                        if rr_sdf(dx as f32 + 0.5, dy as f32 + 0.5, pr.w, pr.h, prr) >= 0.0 {
-                            continue;
-                        }
-                        frame.blend_px(xx as u32, yy as u32, 0, 252);
-                    }
+    /// 下拉 panel 块（十七修抽出；§六）：整面圆角无边框深底（近黑
+    /// α252）+ 选中行均匀细框。**抽屉随面**（十七修 §六③）：选项行与
+    /// 选中细框是钉在面板全高刚体上的——y 偏移 = 当前高−全高，展开
+    /// = 刚体从触发器后滑出（下方选项先入场），收起 = 整体滑回（上方
+    /// 先没入）；帘幕式（内容钉顶只裁底）退役。BAR-090：面板宽 =
+    /// max(触发器宽, 选项最长文+双侧边距)，右缘钳上池内容内缘
+    fn paint_dropdown_panel(
+        &self,
+        frame: &mut Frame<'_>,
+        ps: &crate::ui::dual_pool::DualPoolSnap,
+        page: &crate::ui::cfg_page::CfgPageSnap,
+        accent: crate::ui::accent::AccentPair,
+        off: i64,
+    ) {
+        use crate::ui::cfg_page as cp;
+        if page.dropdown_progress <= 0.001 {
+            return;
+        }
+        let title_fg = 0x00D9_D9D9;
+        let px_title = 36.0;
+        let px_meta = 30.0;
+        let text_inset = 27.0;
+        let denom = ((frame.w - 1) + (frame.h - 1)).max(1) as i64;
+        let scroll = page.upper_scroll;
+        // 十四修：触发器几何吃首行实量宽（与字段行涂装同尺）
+        let (lw, vw) = match page.upper.first() {
+            Some(ur) => (
+                self.text_width(&ur.label, px_title),
+                self.text_width(&ur.value, px_meta),
+            ),
+            None => (0, 0),
+        };
+        let dd = page.upper.first().is_none_or(|ur| ur.is_dropdown);
+        let t = cp::trigger_rect(&ps.upper, scroll, dd, lw, vw);
+        let max_h = frame.h.saturating_sub(t.y.max(0) as u32 + t.h + 40);
+        // BAR-090：选项最长文实量宽 + 双侧文内边距 = 内容最小宽
+        let cw = page
+            .options
+            .iter()
+            .map(|o| self.text_width(o, px_title))
+            .max()
+            .unwrap_or(0)
+            + cp::FIELD_TEXT_INSET * 2;
+        let pr =
+            cp::dropdown_panel_rect(page.options.len(), &ps.upper, max_h, scroll, dd, lw, vw, cw);
+        let full_h = pr.h; // 全高（progress=1 的高）——抽屉刚体尺
+        let pr = crate::ui::dual_pool::PoolRect {
+            h: ((pr.h as f32) * page.dropdown_progress).round() as u32,
+            ..pr
+        };
+        // 抽屉随面：刚体（全高坐标系）随面板当前高上移——展开时下方
+        // 选项先露，收起时上方先没入面板顶缘
+        let drawer_dy = pr.h as i64 - full_h as i64;
+        let panel_clip = (pr.y, pr.y + pr.h as i64);
+        let px0 = pr.x + off;
+        if px0 < 0 {
+            return;
+        }
+        let prr = (POOL_FRAME_R as i64).min((pr.w / 2).min(pr.h / 2) as i64) as u32;
+        let (fw, fh) = (i64::from(frame.w), i64::from(frame.h));
+        for dy in 0..pr.h as i64 {
+            let yy = pr.y + dy;
+            if yy < 0 || yy >= fh {
+                continue;
+            }
+            for dx in 0..pr.w as i64 {
+                let xx = px0 + dx;
+                if xx < 0 || xx >= fw {
+                    continue;
                 }
-                // 选中行均匀细框（两段时序 2026-09-14：吃 option_sel_f
-                // 滑行瞬时值——Ⅰ段可见滑动，滑到才收面板）；随面板
-                // 当前高裁剪（Ⅱ段收起中行出底即断墨）。**先框后字**——
-                // 细框内芯不透明渐变暗底，后画会盖没选项文字（下池
-                // 选中行同款实踩）
-                let sel_y = pr.y + (page.option_sel_f * cp::FIELD_ROW_H as f32).round() as i64;
-                if sel_y >= pr.y && sel_y + cp::FIELD_ROW_H as i64 <= pr.y + pr.h as i64 {
-                    paint_thin_frame(
-                        &mut frame,
-                        px0,
-                        sel_y,
-                        pr.w,
-                        cp::FIELD_ROW_H,
-                        accent,
-                        denom,
-                        no_clip,
-                    );
+                if rr_sdf(dx as f32 + 0.5, dy as f32 + 0.5, pr.w, pr.h, prr) >= 0.0 {
+                    continue;
                 }
-                for (i, opt) in page.options.iter().enumerate() {
-                    let iy = pr.y + (i as i64) * cp::FIELD_ROW_H as i64;
-                    if iy + cp::FIELD_ROW_H as i64 > pr.y + pr.h as i64 {
-                        break;
-                    }
-                    self.draw_text_left_ex(
-                        &mut frame,
-                        opt,
-                        px0 as u32,
-                        pr.w.saturating_sub(27),
-                        iy as u32,
-                        cp::FIELD_ROW_H,
-                        px_title,
-                        title_fg,
-                        text_inset,
-                        None,
-                    );
-                }
+                frame.blend_px(xx as u32, yy as u32, 0, 252);
             }
         }
-
-        // ---- 跳框（宪法 §六 跳框条款，九修）：模态盖在配置页最上层——
-        // 压暗层 + 居中卡 + 关闭钮。本体在 paint_modal_impl（§六 样式
-        // 唯一来源：压暗层/字段排版之外的涂装原语全复用共享件）
-        if let Some(mi) = page.modal {
-            self.paint_modal_impl(frame.buf, w, h, mi, cfg_off_x, accent, now_ms);
+        // 选中行均匀细框（两段时序 2026-09-14：吃 option_sel_f
+        // 滑行瞬时值——Ⅰ段可见滑动，滑到才收面板）；随面板
+        // 当前高裁剪（Ⅱ段收起中行出底即断墨）。**先框后字**——
+        // 细框内芯不透明渐变暗底，后画会盖没选项文字（下池
+        // 选中行同款实踩）
+        let sel_y = pr.y + (page.option_sel_f * cp::FIELD_ROW_H as f32).round() as i64 + drawer_dy;
+        if sel_y >= pr.y && sel_y + cp::FIELD_ROW_H as i64 <= pr.y + pr.h as i64 {
+            paint_thin_frame(
+                frame,
+                px0,
+                sel_y,
+                pr.w,
+                cp::FIELD_ROW_H,
+                accent,
+                denom,
+                panel_clip,
+            );
+        }
+        let clip32 = Some((panel_clip.0 as i32, panel_clip.1 as i32));
+        for (i, opt) in page.options.iter().enumerate() {
+            let iy = pr.y + (i as i64) * cp::FIELD_ROW_H as i64 + drawer_dy;
+            if iy + cp::FIELD_ROW_H as i64 <= pr.y {
+                continue; // 整体没入面板顶缘之上（收起中上方先没）
+            }
+            if iy >= pr.y + pr.h as i64 {
+                break; // 出面板底（行有序，后续更靠下）
+            }
+            if iy < 0 {
+                continue;
+            }
+            self.draw_text_left_ex(
+                frame,
+                opt,
+                px0 as u32,
+                pr.w.saturating_sub(27),
+                iy as u32,
+                cp::FIELD_ROW_H,
+                px_title,
+                title_fg,
+                text_inset,
+                clip32,
+            );
         }
     }
 

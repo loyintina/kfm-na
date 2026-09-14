@@ -124,7 +124,50 @@ pub struct CfgPageSnap {
     /// 下拉面板开合进度 0..1（十五修 §六：1 = 全开展开毕；收起动画
     /// 中途 dropdown_open 已 false 而 progress > 0——面板照画渐缩）
     pub dropdown_progress: f32,
+    /// 视口平移切页（十七修 §六「面与内容一体」通则）：Some = 平移
+    /// 进行中——涂装双代同画（旧代冻结快照带偏移出、新代活态带偏
+    /// 移进）；None = 稳态单代
+    pub pan: Option<PanSnap>,
 }
+
+/// 视口平移域（十七修 §六）：Page = 页面级（标签切换：双池框+内容
+/// 整体平移，视口 = 页环）；Upper = 上池级（下池选行：上池内容平移，
+/// 视口 = 上池框，双池框不动）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PanScope {
+    Page,
+    Upper,
+}
+
+/// 旧代冻结快照（十七修 §六 双代同画：旧代 = 切换瞬间的状态封存）
+#[derive(Debug, Clone)]
+pub struct EpochSnap {
+    pub rows: Vec<RowView>,
+    pub upper: Vec<UpperRow>,
+    pub options: Vec<String>,
+    pub option_sel: usize,
+    pub upper_scroll: i64,
+    pub focus: usize,
+    pub cursor_row: f32,
+    /// 页面级专用：旧双池几何（新代池框可随池高弹簧变，旧代冻结）
+    pub pool: crate::ui::dual_pool::DualPoolSnap,
+    /// 页面级专用：旧页色（整页换色瞬时随新代，旧代带旧色出）
+    pub accent: crate::ui::accent::AccentPair,
+}
+
+/// 平移瞬时值（snap 按 now 求值后的涂装读数）
+#[derive(Debug, Clone)]
+pub struct PanSnap {
+    pub scope: PanScope,
+    /// +1 = 选择前进（内容左移：旧左出、新右进）；−1 = 后退（右移）
+    pub dir: i8,
+    /// 缓动后进度 0..1（ease-out cubic；1 = 贴死收敛）
+    pub t: f32,
+    pub old: Box<EpochSnap>,
+}
+
+/// 视口平移切页时长 ms（十七修 §六：250ms ease-out，与下拉展开同族）
+pub const PAN_MS: u64 = 250;
 
 /// 下拉展开时长 ms（十五修 §六：生长 0→全高 ease-out）
 pub const DROPDOWN_ENTER_MS: u64 = 250;
@@ -157,6 +200,10 @@ pub struct CfgPage {
     /// Ⅱ段收起账挂在这条上（惰式求值：progress/sel_f/fx 全从 now
     /// 推，不收尾归一化——收起终点恒 0、sel 终点恒 option_sel）
     pick_move: Option<(f32, f32, u64)>,
+    /// 视口平移切页（十七修 §六）：Some((scope, dir, start_ms, 旧代
+    /// 冻结快照)) = 平移账；惰式求值同 pick_move（snap/fx 从 now 推，
+    /// 贴死后 snap 出 None，账留待下一次切换覆盖）
+    pan: Option<(PanScope, i8, u64, EpochSnap)>,
 }
 
 impl CfgPage {
@@ -177,6 +224,7 @@ impl CfgPage {
             dd_from: 0.0,
             dd_start_ms: 0,
             pick_move: None,
+            pan: None,
         }
     }
 
@@ -235,11 +283,22 @@ impl CfgPage {
     /// 切标签（标签栏点选后壳调用）：内容重建归壳（set_rows/set_upper
     /// 判等不空涨）；本册负责切页副作用清零——聚焦归首行（十五修：
     /// 光标直接落首行不滑行）、上池滚动归零、下拉/跳框全收（新页不
-    /// 继承旧页的浮层，下拉余影也即时清零）。同标重点不空涨
-    pub fn set_tab(&mut self, i: usize) {
+    /// 继承旧页的浮层，下拉余影也即时清零）。同标重点不空涨。
+    /// 十七修 §六「面与内容一体」：切标签 = **页面级视口平移**——
+    /// 旧代（行表/上池/选项/滚动/双池几何/页色）冻结挂账，涂装双代
+    /// 同画；方向律：标签右移（i 变大）= 前进 = 内容左移（dir +1）
+    pub fn set_tab(
+        &mut self,
+        i: usize,
+        now_ms: u64,
+        pool: crate::ui::dual_pool::DualPoolSnap,
+        accent: crate::ui::accent::AccentPair,
+    ) {
         if i == self.tab {
             return;
         }
+        let dir: i8 = if i > self.tab { 1 } else { -1 };
+        let old = self.epoch_snap(now_ms, pool, accent);
         self.tab = i;
         self.focus = 0;
         self.cursor_from = 0.0;
@@ -248,7 +307,29 @@ impl CfgPage {
         self.dd_from = 0.0;
         self.pick_move = None;
         self.modal = None;
+        self.pan = Some((PanScope::Page, dir, now_ms, old));
         self.epoch += 1;
+    }
+
+    /// 当前状态冻结成旧代快照（十七修 §六；光标/滚动吃 now 瞬时值，
+    /// 下拉面板不进快照——切页前已收）
+    fn epoch_snap(
+        &self,
+        now_ms: u64,
+        pool: crate::ui::dual_pool::DualPoolSnap,
+        accent: crate::ui::accent::AccentPair,
+    ) -> EpochSnap {
+        EpochSnap {
+            rows: self.rows.clone(),
+            upper: self.upper.clone(),
+            options: self.options.clone(),
+            option_sel: self.option_sel,
+            upper_scroll: self.upper_scroll,
+            focus: self.focus,
+            cursor_row: self.cursor_row(now_ms),
+            pool,
+            accent,
+        }
     }
 
     /// 开着的跳框（COMPONENTS 下标；None = 无模态）
@@ -278,17 +359,29 @@ impl CfgPage {
 
     /// 点选下池行（子目录切换 = 上池内容跟换，重建归壳）。
     /// 同标重点不重掷（代际不空涨）。十五修 §五：光标行号弹簧从当前
-    /// 位置重定基续弹滑向新行（内容/页色即时切换不等光标）
-    pub fn select(&mut self, i: usize, now_ms: u64) {
+    /// 位置重定基续弹滑向新行（内容/页色即时切换不等光标）。
+    /// 十七修 §六「面与内容一体」：选行 = **上池级视口平移**——旧
+    /// 上池内容冻结挂账双代同画，双池框/下池不动；方向律同切标签
+    /// （光标下移 = 前进 = 内容左移）
+    pub fn select(
+        &mut self,
+        i: usize,
+        now_ms: u64,
+        pool: crate::ui::dual_pool::DualPoolSnap,
+        accent: crate::ui::accent::AccentPair,
+    ) {
         if self.rows.is_empty() {
             return;
         }
         let i = i.min(self.rows.len() - 1);
         if i != self.focus {
+            let dir: i8 = if i > self.focus { 1 } else { -1 };
+            let old = self.epoch_snap(now_ms, pool, accent);
             let stride = (LOWER_ROW_H as i64 + ROW_GAP) as f32;
             self.cursor_from = self.cursor_row(now_ms) * stride;
             self.cursor_start_ms = now_ms;
             self.focus = i;
+            self.pan = Some((PanScope::Upper, dir, now_ms, old));
             self.epoch += 1;
         }
     }
@@ -500,13 +593,15 @@ impl CfgPage {
     }
 
     /// 下拉 panel 矩形（顶部栏向下弹——宪法 §六：方向反了会弹出屏外）：
-    /// 触发器下缘起，行数 = 选项数，最高不出配置页可视区（壳喂 max_h）
+    /// 触发器下缘起，行数 = 选项数，最高不出配置页可视区（壳喂 max_h）。
+    /// 十七修 BAR-090：content_w_min = 选项最长文实量宽 + 双侧边距
     pub fn dropdown_panel_rect(
         &self,
         upper: &PoolRect,
         max_h: u32,
         label_tw: u32,
         value_tw: u32,
+        content_w_min: u32,
     ) -> PoolRect {
         let dd = self.upper.first().is_none_or(|r| r.is_dropdown);
         dropdown_panel_rect(
@@ -517,6 +612,7 @@ impl CfgPage {
             dd,
             label_tw,
             value_tw,
+            content_w_min,
         )
     }
 
@@ -528,8 +624,9 @@ impl CfgPage {
         max_h: u32,
         label_tw: u32,
         value_tw: u32,
+        content_w_min: u32,
     ) -> Option<usize> {
-        let p = self.dropdown_panel_rect(upper, max_h, label_tw, value_tw);
+        let p = self.dropdown_panel_rect(upper, max_h, label_tw, value_tw, content_w_min);
         if y < p.y || y >= p.y + p.h as i64 {
             return None;
         }
@@ -566,7 +663,33 @@ impl CfgPage {
             epoch: self.epoch,
             cursor_row: self.cursor_row(now_ms),
             dropdown_progress: self.dropdown_progress(now_ms),
+            pan: self.pan_snap(now_ms),
         }
+    }
+
+    /// 平移瞬时值求值（十七修 §六：250ms ease-out cubic；贴死出 None，
+    /// 账留待下一次切换覆盖——fresh 账直接换掉旧账不续弹）
+    fn pan_snap(&self, now_ms: u64) -> Option<PanSnap> {
+        self.pan.as_ref().and_then(|(scope, dir, start, old)| {
+            let raw = (now_ms.saturating_sub(*start)).min(PAN_MS) as f32 / PAN_MS as f32;
+            if raw >= 1.0 {
+                None
+            } else {
+                Some(PanSnap {
+                    scope: *scope,
+                    dir: *dir,
+                    t: crate::ui::fx_ease::ease_out_cubic(raw),
+                    old: Box::new(old.clone()),
+                })
+            }
+        })
+    }
+
+    /// 平移活性探针（帧泵闸）：账未贴死 = true
+    pub fn pan_active(&self, now_ms: u64) -> bool {
+        self.pan
+            .as_ref()
+            .is_some_and(|(_, _, start, _)| now_ms < *start + PAN_MS)
     }
 }
 
@@ -679,7 +802,11 @@ pub fn trigger_rect(
 }
 
 /// 下拉 panel 矩形（顶部栏向下弹）：触发器值框下缘起，行数 = 选项数，
-/// 最高不出配置页可视区（调用方喂 max_h）；scroll = 上池滚动 px
+/// 最高不出配置页可视区（调用方喂 max_h）；scroll = 上池滚动 px。
+/// 十七修 BAR-090：宽 = max(触发器宽, content_w_min)（选项最长文
+/// 不裁剪），**右缘与触发器右缘对齐、加宽向左长**——触发器右缘 ≡
+/// 池内容内缘（值框锚行右缘恒等式），「左对齐 + 右钳」会把宽度
+/// 锁死成触发器宽（钉考题实锤修宪）；左缘钳池内容左内缘
 #[allow(clippy::too_many_arguments)]
 pub fn dropdown_panel_rect(
     opt_count: usize,
@@ -689,13 +816,17 @@ pub fn dropdown_panel_rect(
     is_dropdown: bool,
     label_tw: u32,
     value_tw: u32,
+    content_w_min: u32,
 ) -> PoolRect {
     let t = trigger_rect(upper, scroll, is_dropdown, label_tw, value_tw);
     let want = (opt_count as u32) * FIELD_ROW_H;
+    let right = t.x + t.w as i64; // 触发器右缘 ≡ 池内容右内缘
+    let left_min = upper.x + POOL_CONTENT_INSET;
+    let w = t.w.max(content_w_min).min((right - left_min).max(0) as u32);
     PoolRect {
-        x: t.x,
+        x: right - w as i64,
         y: t.y + t.h as i64,
-        w: t.w,
+        w,
         h: want.min(max_h),
     }
 }

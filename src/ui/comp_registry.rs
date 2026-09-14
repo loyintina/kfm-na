@@ -353,8 +353,19 @@ pub const COMPONENTS: &[CompEntry] = &[
         file: "src/ui/cfg_page.rs",
         spec: "宪法 §六 开合动画两件",
         tests: "tests/cfg_page_spec.rs",
-        desc: "下拉面板开合（十五修+两段时序）：展开 250ms ease-out 生长；点选他行 = 选中细框 160ms ease-out 滑行（面板冻结等它）→ 180ms ease-in 收起；点当前行/外点直接收。预览借用缓动件面板。",
+        desc: "下拉面板开合（十五修+两段时序+十七修两件）：展开 250ms ease-out 生长；点选他行 = 选中细框 160ms ease-out 滑行（面板冻结等它）→ 180ms ease-in 收起；点当前行/外点直接收。十七修：①抽屉随面——选项行/选中细框钉在全高刚体上随面板滑出滑回（下方先入场、上方先没入）；②▼三角矢量旋转 progress×180°。预览借用缓动件面板。",
         preview: Preview::CurveEase,
+    },
+    CompEntry {
+        name: "视口平移切页",
+        cat: "动效引擎",
+        status: CompStatus::Active,
+        symbol: "pan_active",
+        file: "src/ui/cfg_page.rs",
+        spec: "宪法 §六 面与内容一体",
+        tests: "tests/cfg_page_spec.rs",
+        desc: "面与内容一体平移（十七修通则）：①标签切换 = 页面级（双池框+内容整体平移，视口 = 页环）；②下池选行 = 上池级（上池内容平移，视口 = 上池框）；③下拉 = 垂直实例（抽屉随面）。方向律：选择前进 = 内容左移。双代同画（旧代冻结快照带偏移出、新代活态带偏移进，禁两拍），250ms ease-out cubic。预览借用视口平移件面板。",
+        preview: Preview::ViewportPush,
     },
 ];
 

@@ -252,17 +252,28 @@ pub fn dump_now(dir: &str) {
                                 p.set_upper_content_h(page.lock().unwrap().upper_content_h());
                             }
                             let ps = p.layout(crate::report::boot_ms() as u64);
-                            t.paint_cfg_dual_pool(
-                                &mut buf,
-                                w,
-                                h,
-                                &ps,
-                                cfg_off,
-                                acc_of(Panel::Config),
-                            );
+                            // 十七修 §六：页面级平移中双池框由 pool_content
+                            // 双代自理（先取快照判域，再决定画不画框）
+                            let cs = crate::ui::cfg_page::cfg_page_handle().map(|page| {
+                                page.lock().unwrap().snap(crate::report::boot_ms() as u64)
+                            });
+                            let page_pan = cs.as_ref().is_some_and(|c| {
+                                c.pan.as_ref().is_some_and(|pp| {
+                                    pp.scope == crate::ui::cfg_page::PanScope::Page
+                                })
+                            });
+                            if !page_pan {
+                                t.paint_cfg_dual_pool(
+                                    &mut buf,
+                                    w,
+                                    h,
+                                    &ps,
+                                    cfg_off,
+                                    acc_of(Panel::Config),
+                                );
+                            }
                             // 池内容（§五 目录语义）：D9 同源句柄取快照
-                            if let Some(page) = crate::ui::cfg_page::cfg_page_handle() {
-                                let cs = page.lock().unwrap().snap(crate::report::boot_ms() as u64);
+                            if let Some(cs) = cs {
                                 t.paint_cfg_pool_content(
                                     &mut buf,
                                     w,

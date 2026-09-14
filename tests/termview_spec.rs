@@ -3584,7 +3584,9 @@ fn spec_下拉面板_涂装钉() {
 
     let t = cfg_page::trigger_rect(&ps.upper, 0, true, lw, vw);
     let max_h = h.saturating_sub(t.y.max(0) as u32 + t.h + 40);
-    let pr = cfg_page::dropdown_panel_rect(2, &ps.upper, max_h, 0, true, lw, vw);
+    // 十七修 BAR-090：几何复算吃与实现同尺的内容最小宽（眼手同尺）
+    let cw = tv.text_width("本地终端", 36.0) + cfg_page::FIELD_TEXT_INSET * 2;
+    let pr = cfg_page::dropdown_panel_rect(2, &ps.upper, max_h, 0, true, lw, vw, cw);
     let row_h = cfg_page::FIELD_ROW_H as i64;
 
     // ②面板深底：未选中行（行 0）内避字取样 = blend(黑, before, 252)
@@ -3780,7 +3782,12 @@ fn paint_modal_frame(
         value: "现役".into(),
         is_dropdown: false,
     }]);
-    page.set_tab(1); // 组件池页
+    page.set_tab(
+        1,
+        1000,
+        ps.clone(),
+        kfm_na::ui::accent::AccentPair { c1: 0, c2: 0 },
+    ); // 组件池页
     page.open_modal(mi);
     let pg = page.snap(1000);
     assert_eq!(pg.modal, Some(mi), "夹具前提：跳框开着");
@@ -4068,8 +4075,13 @@ fn spec_cfg下池_光标滑行涂装钉() {
         value: "本地终端".into(),
         is_dropdown: false,
     }]);
-    page.select(1, 1000);
-    let mut pg = page.snap(1000);
+    page.select(
+        1,
+        1000,
+        ps.clone(),
+        kfm_na::ui::accent::AccentPair { c1: 0, c2: 0 },
+    );
+    let mut pg = page.snap(2000); // 弹簧 1s 后贴死（手搓相位下一行覆盖）
     pg.cursor_row = 0.5; // 手搓滑行中途相位（弹簧时值钉在 cfg_page_spec）
 
     let mut buf = vec![0u32; (w * h) as usize];
@@ -4104,10 +4116,14 @@ fn spec_cfg下池_光标滑行涂装钉() {
 }
 
 #[test]
-fn spec_cfg下拉_矮面板裁剪钉() {
-    // 十五修 §六：面板高吃开合进度——progress=0.5 时 2 项面板只露半高
-    // （行 0 完整露出、行 1 整行被裁）。变异：展开瞬开回潮（忽略进度
-    // 画全高）/裁剪缺失（矮面板仍画行 1）即红。
+fn spec_cfg下拉_抽屉随面钉() {
+    // 十七修 §六③（「面与内容一体」垂直实例，2026-09-14 用户拍板）：
+    // 选项行/选中细框钉在面板**全高刚体**上随当前高滑出滑回——涂装
+    // y 偏移 = 当前高 − 全高。progress=0.5（2 项面板半高）：露出末行
+    // （下方选项先入场），行 0 没入面板顶缘。帘幕式（内容钉顶只裁底）
+    // 退役。变异：drawer_dy 删（回帘幕钉顶）即红——半高时行 0 钉在
+    // 面板顶（无细框深底）、末行细框出底被裁。
+    use kfm_na::termview::{frame_bg_rgb, ring_gradient_rgb};
     use kfm_na::ui::cfg_page::{self, CfgPage, RowView, UpperRow};
     use kfm_na::ui::dual_pool::DualPool;
     let (w, h) = (1260u32, 2400u32);
@@ -4116,13 +4132,7 @@ fn spec_cfg下拉_矮面板裁剪钉() {
         c1: 0x00FF_6000,
         c2: 0x0000_80FF,
     };
-    let blend = |fg: u32, dst: u32, a: u32| {
-        let inv = 255 - a;
-        let ch = |f: u32, d: u32| (f * a + d * inv) / 255;
-        (ch((fg >> 16) & 0xFF, (dst >> 16) & 0xFF) << 16)
-            | (ch((fg >> 8) & 0xFF, (dst >> 8) & 0xFF) << 8)
-            | ch(fg & 0xFF, dst & 0xFF)
-    };
+    let denom = (i64::from(w) - 1) + (i64::from(h) - 1);
     let tv = TermView::new(host_font(), None, 8, 2, CELL_W, CELL_H);
     let mut pool = DualPool::new(w, h);
     pool.set_viewport(w, h, inset);
@@ -4130,15 +4140,15 @@ fn spec_cfg下拉_矮面板裁剪钉() {
     let ps = pool.layout(1000);
     let mut page = CfgPage::new();
     page.set_rows(vec![RowView {
-        title: "系统管理".into(),
-        meta: "1 项".into(),
+        title: "SYS".into(),
+        meta: String::new(),
     }]);
     page.set_upper(vec![UpperRow {
-        label: "默认服务器".into(),
-        value: "本地终端".into(),
+        label: "server".into(),
+        value: "LOCAL".into(),
         is_dropdown: true,
     }]);
-    page.set_options(vec!["本地终端".into(), "服务器".into()], 1);
+    page.set_options(vec!["LOCAL".into(), "SRV0".into()], 1);
 
     // before：合着画一遍（下层原样取证）
     let pg0 = page.snap(1000);
@@ -4156,33 +4166,53 @@ fn spec_cfg下拉_矮面板裁剪钉() {
     tv.paint_cfg_dual_pool(&mut b1, w, h, &ps, 0, acc);
     tv.paint_cfg_pool_content(&mut b1, w, h, &ps, &pg1, 0, acc, 0);
 
-    let lw = tv.text_width("默认服务器", 36.0);
-    let vw = tv.text_width("本地终端", 30.0);
+    let lw = tv.text_width("server", 36.0);
+    let vw = tv.text_width("LOCAL", 30.0);
+    let cw = tv
+        .text_width("LOCAL", 36.0)
+        .max(tv.text_width("SRV0", 36.0))
+        + cfg_page::FIELD_TEXT_INSET * 2;
     let t = cfg_page::trigger_rect(&ps.upper, 0, true, lw, vw);
     let max_h = h.saturating_sub(t.y.max(0) as u32 + t.h + 40);
-    let pr = cfg_page::dropdown_panel_rect(2, &ps.upper, max_h, 0, true, lw, vw);
+    let pr = cfg_page::dropdown_panel_rect(2, &ps.upper, max_h, 0, true, lw, vw, cw);
     let row_h = cfg_page::FIELD_ROW_H as i64;
 
-    // ①行 0 区（半高内）= 面板深底（与全高钉同一判式）
-    let (bx, by) = (pr.x + pr.w as i64 - 30, pr.y + row_h / 2);
-    assert_eq!(
-        b1[by as usize * w as usize + bx as usize],
-        blend(0, b0[by as usize * w as usize + bx as usize], 252),
-        "半高内行 0 必须 = 面板深底（面板没按进度长出即红）"
-    );
-    // ②行 1 区（半高外）= 下层原样（裁剪缺失/瞬开回潮即红）
-    let (cx2, cy2) = (pr.x + pr.w as i64 - 30, pr.y + row_h + row_h / 2);
-    assert_eq!(
-        b1[cy2 as usize * w as usize + cx2 as usize],
-        b0[cy2 as usize * w as usize + cx2 as usize],
-        "半高面板行 1 必须被裁（展开瞬开回潮即红）"
-    );
-    // ③选中细框（sel=1 在行 1）随高裁不露
-    let (fx, fy) = (pr.x + 1, pr.y + row_h + row_h / 2);
+    // ①抽屉：半高面板内露**末行**（sel=1）——选中细框左缘中带 =
+    // 渐变 α255 直出（帘幕钉顶回潮 = 此处是行 0 无细框深底，即红）
+    let (fx, fy) = (pr.x + 1, pr.y + row_h / 2);
     assert_eq!(
         b1[fy as usize * w as usize + fx as usize],
-        b0[fy as usize * w as usize + fx as usize],
-        "被裁行的选中细框不许出露"
+        ring_gradient_rgb(acc.c1, acc.c2, fx, fy, denom),
+        "抽屉随面：末行细框必须落在半高面板内（drawer_dy 被删即红）"
+    );
+    // ②末行芯 = 渐变暗底不透明直写（≠ 面板深底）
+    let (ix, iy) = (pr.x + pr.w as i64 - 30, pr.y + row_h / 2);
+    assert_eq!(
+        b1[iy as usize * w as usize + ix as usize],
+        frame_bg_rgb(acc.c1, acc.c2, ix, iy, denom),
+        "末行芯 = 渐变暗底不透明直写"
+    );
+    // ③面板半高外 = 下层原样（面板按进度长出；展开瞬开回潮即红）
+    let (bx, by) = (pr.x + pr.w as i64 - 30, pr.y + row_h + row_h / 2);
+    assert_eq!(
+        b1[by as usize * w as usize + bx as usize],
+        b0[by as usize * w as usize + bx as usize],
+        "半高面板外必须 = 下层原样（瞬开回潮即红）"
+    );
+    // ④先框后字（BAR-089 同规）：细框芯条带上必须有末行文字落墨
+    let mut ink = 0usize;
+    for py in pr.y + 10..pr.y + row_h - 10 {
+        for px in pr.x + 20..pr.x + 120 {
+            if b1[py as usize * w as usize + px as usize]
+                != frame_bg_rgb(acc.c1, acc.c2, px, py, denom)
+            {
+                ink += 1;
+            }
+        }
+    }
+    assert!(
+        ink > 30,
+        "选中细框芯上必须有末行文字落墨（实得 {ink} px——「字先框后」回潮 = 0）"
     );
 }
 
@@ -4226,7 +4256,12 @@ fn spec_cfg下池_选中行文字落墨钉() {
         value: "local".into(),
         is_dropdown: false,
     }]);
-    page.select(1, 1000);
+    page.select(
+        1,
+        1000,
+        ps.clone(),
+        kfm_na::ui::accent::AccentPair { c1: 0, c2: 0 },
+    );
     let pg = page.snap(2000); // 弹簧 600ms 兜底贴死 → 收敛在行 1
     assert_eq!(pg.cursor_row, 1.0, "夹具前提：光标收敛在选中行");
 
@@ -4294,9 +4329,10 @@ fn spec_cfg下拉_选中细框滑行涂装钉() {
 
     let lw = tv.text_width("server", 36.0);
     let vw = tv.text_width("LOCAL", 30.0);
+    let cw = tv.text_width("SRV1", 36.0) + cfg_page::FIELD_TEXT_INSET * 2;
     let t = cfg_page::trigger_rect(&ps.upper, 0, true, lw, vw);
     let max_h = h.saturating_sub(t.y.max(0) as u32 + t.h + 40);
-    let pr = cfg_page::dropdown_panel_rect(3, &ps.upper, max_h, 0, true, lw, vw);
+    let pr = cfg_page::dropdown_panel_rect(3, &ps.upper, max_h, 0, true, lw, vw, cw);
     let row_h = cfg_page::FIELD_ROW_H as i64;
 
     // ①细框左缘中带（0.5 相位 = 两行之间）= 渐变 α255 直出
@@ -4329,5 +4365,201 @@ fn spec_cfg下拉_选中细框滑行涂装钉() {
     assert!(
         ink > 30,
         "选中细框芯上必须有选项文字落墨（实得 {ink} px——「字先框后」回潮 = 0）"
+    );
+}
+
+#[test]
+fn spec_下拉三角旋转_涂装钉() {
+    // 十七修 §六④：▼ 矢量三角绕中心随开合进度旋转 θ = progress×180°
+    // （展开 ▼→▲，收起回 ▼；两段时序Ⅰ段冻结在 180°）。基三角 17×9：
+    // ly∈[-4.5,4.5]，|lx| ≤ 8.5×(4.5−ly)/9，逐像素中心逆旋转采样。
+    // 采样点解析推导（像素中心 +0.5）：
+    //   B(-7,-4)：▼ 有（|−6.5|≤7.56）▲ 无（界 0.94）——翻转铁证
+    //   C(-7, 3)：▼ 无（界 0.94）▲ 有（|6.5|≤7.56）——翻转铁证
+    //   E(-3,-3)：▼ 有（界 6.61）半转无（θ90° 界 1.89）——旋转铁证
+    //   G( 2, 4)：▼ 无（界 0）   半转有（|4.5|≤6.61）——旋转铁证
+    // 变异：旋转角恒 0（半转 ≡ ▼）/退回逐行静态三角即红。
+    use kfm_na::ui::cfg_page::{self, CfgPage, RowView, UpperRow};
+    use kfm_na::ui::dual_pool::DualPool;
+    let (w, h) = (1260u32, 2400u32);
+    let inset = 120u32;
+    let acc = kfm_na::ui::accent::AccentPair {
+        c1: 0x00FF_6000,
+        c2: 0x0000_80FF,
+    };
+    let tv = TermView::new(host_font(), None, 8, 2, CELL_W, CELL_H);
+    let mut pool = DualPool::new(w, h);
+    pool.set_viewport(w, h, inset);
+    pool.set_upper_content_h(72 + cfg_page::FIELD_ROW_H);
+    let ps = pool.layout(1000);
+    let mut page = CfgPage::new();
+    page.set_rows(vec![RowView {
+        title: "SYS".into(),
+        meta: String::new(),
+    }]);
+    page.set_upper(vec![UpperRow {
+        label: "server".into(),
+        value: "LOCAL".into(),
+        is_dropdown: true,
+    }]);
+    page.set_options(vec!["LOCAL".into()], 0);
+
+    // 三角中心（与涂装同尺复算：值框右缘 −37，行中带）
+    let lw = tv.text_width("server", 36.0);
+    let vw = tv.text_width("LOCAL", 30.0);
+    let vb = cfg_page::trigger_rect(&ps.upper, 0, true, lw, vw);
+    let (cx, cy) = (vb.x + vb.w as i64 - 37, vb.y + vb.h as i64 / 2);
+
+    let ink = |buf: &[u32], dx: i64, dy: i64| {
+        buf[(cy + dy) as usize * w as usize + (cx + dx) as usize] == 0x00D9_D9D9
+    };
+    let paint = |page: &CfgPage, progress: f32| {
+        let mut pg = page.snap(2000);
+        pg.dropdown_progress = progress; // 手搓相位（时值钉在 cfg_page_spec）
+        let mut b = vec![0u32; (w * h) as usize];
+        termview::paint_cfg_page_chrome(&mut b, w, h, inset, 0, acc);
+        tv.paint_cfg_dual_pool(&mut b, w, h, &ps, 0, acc);
+        tv.paint_cfg_pool_content(&mut b, w, h, &ps, &pg, 0, acc, 0);
+        b
+    };
+    let b_down = paint(&page, 0.0); // ▼
+    let b_half = paint(&page, 0.5); // 旋转 90°
+    let b_up = paint(&page, 1.0); // ▲
+
+    // 翻转铁证（▼ vs ▲）
+    assert!(ink(&b_down, -7, -4), "▼ 顶边左必须有墨");
+    assert!(!ink(&b_up, -7, -4), "▲ 同位必须无墨（旋转 180° 翻转）");
+    assert!(!ink(&b_down, -7, 3), "▼ 下侧左必须无墨");
+    assert!(ink(&b_up, -7, 3), "▲ 同位必须有墨（底边宽）");
+    // 旋转铁证（半转 90° 与 ▼ 形同异）
+    assert!(ink(&b_down, -3, -3), "▼ 斜带必须有墨");
+    assert!(
+        !ink(&b_half, -3, -3),
+        "半转 90° 同位必须无墨（旋转角恒 0 即红）"
+    );
+    assert!(!ink(&b_down, 2, 4), "▼ 尖下偏右必须无墨");
+    assert!(ink(&b_half, 2, 4), "半转 90° 同位必须有墨（旋转移墨）");
+    // 稳态前提：▼/▲ 中心列恒有墨（三角没丢）
+    assert!(ink(&b_down, 0, 0) && ink(&b_up, 0, 0), "三角中心恒有墨");
+}
+
+#[test]
+fn spec_视口平移双代同画_涂装钉() {
+    // 十七修 §六「面与内容一体」页面级（标签切换）：双池框+内容**双代
+    // 同画**——旧代冻结快照带偏移出（dir+1 = 内容左移）、新代活态带
+    // 偏移进，视口 = 页内容裁剪带（页环带外零墨）。
+    // ①同帧双代：t≈0.41 帧——旧代未选中行内芯（**旧 accent** 渐变暗底，
+    //   渐变锚 temp 原坐标）左移 0.41×池宽落带内；同帧新代选中行内芯
+    //   （新 accent）从右进，左部已落带内——一帧两代各带各色 = 铁证；
+    // ②方向律：t≈0.80 帧新代选中框左粗缘 = 原左缘 + 0.20×池宽（右进），
+    //   渐变锚 temp 原坐标——dir 反号变异（新代左进）即红；
+    // ③视口裁剪：带右缘外像素 = chrome 原样（clip 缺失即红）。
+    // 调用方纪律同步钉：Page 域平移中**不**调 paint_cfg_dual_pool（框
+    // 由 pool_content 双代自理）。
+    use kfm_na::termview::{frame_bg_rgb, ring_gradient_rgb};
+    use kfm_na::ui::cfg_page::{self, CfgPage, RowView, UpperRow};
+    use kfm_na::ui::dual_pool::DualPool;
+    let (w, h) = (1260u32, 2400u32);
+    let inset = 120u32;
+    let acc_old = kfm_na::ui::accent::AccentPair {
+        c1: 0x0020_C040,
+        c2: 0x0040_20C0,
+    };
+    let acc = kfm_na::ui::accent::AccentPair {
+        c1: 0x00FF_6000,
+        c2: 0x0000_80FF,
+    };
+    let denom = (i64::from(w) - 1) + (i64::from(h) - 1);
+    let tv = TermView::new(host_font(), None, 8, 2, CELL_W, CELL_H);
+    let mut pool = DualPool::new(w, h);
+    pool.set_viewport(w, h, inset);
+    pool.set_upper_content_h(72 + cfg_page::FIELD_ROW_H);
+    let ps = pool.layout(1000);
+    let pw = ps.upper.w as i64;
+    let mut page = CfgPage::new();
+    page.set_rows(vec![
+        RowView {
+            title: "OLD0".into(),
+            meta: String::new(),
+        },
+        RowView {
+            title: "OLD1".into(),
+            meta: String::new(),
+        },
+    ]);
+    page.set_upper(vec![UpperRow {
+        label: "server".into(),
+        value: "LOCAL".into(),
+        is_dropdown: true,
+    }]);
+    page.set_tab(1, 1000, ps.clone(), acc_old); // dir +1（前进）
+    page.set_rows(vec![RowView {
+        title: "NEW0".into(),
+        meta: String::new(),
+    }]); // 壳 rebuild 模拟：新代行表
+
+    // ---- ①同帧双代（t≈0.41：旧代未全出、新代左部已进）----
+    let pg = page.snap(1040);
+    let pan = pg.pan.clone().expect("夹具前提：中帧平移账在");
+    assert_eq!(pan.dir, 1, "夹具前提：前进方向");
+    assert!(
+        pan.t > 0.3 && pan.t < 0.6,
+        "夹具前提：t≈0.41（实得 {})",
+        pan.t
+    );
+    let d_old = -(pan.t * pw as f32).round() as i64;
+    let d_new = ((1.0 - pan.t) * pw as f32).round() as i64;
+    let mut b1 = vec![0u32; (w * h) as usize];
+    termview::paint_cfg_page_chrome(&mut b1, w, h, inset, 0, acc);
+    // Page 域：不调 paint_cfg_dual_pool（调用方纪律——框随内容双代）
+    tv.paint_cfg_pool_content(&mut b1, w, h, &ps, &pg, 0, acc, 1040);
+
+    let r1 = cfg_page::lower_row_rect(1, &ps.lower); // 旧代行 1（未选中）
+    let (ix, py1) = (r1.x + r1.w as i64 / 2, r1.y + r1.h as i64 / 2);
+    let x_old = ix + d_old;
+    assert!(x_old > 60, "夹具前提：旧代采样点仍在视口带内（{x_old}）");
+    assert_eq!(
+        b1[py1 as usize * w as usize + x_old as usize],
+        frame_bg_rgb(acc_old.c1, acc_old.c2, ix, py1, denom),
+        "旧代行内芯必须带**旧 accent** 左移落位（渐变锚 temp 原坐标；单代/换色即红）"
+    );
+    // 同帧新代：行 0（选中）内芯左部已进带（temp 原坐标 224 处无字）
+    let r0 = cfg_page::lower_row_rect(0, &ps.lower);
+    let py0 = r0.y + r0.h as i64 / 2;
+    let (sx_new, x_new) = (r0.x + 160, r0.x + 160 + d_new);
+    assert!(
+        x_new < i64::from(w) - 60 && x_new > 60,
+        "夹具前提：新代采样点在视口带内（{x_new}）"
+    );
+    assert_eq!(
+        b1[py0 as usize * w as usize + x_new as usize],
+        frame_bg_rgb(acc.c1, acc.c2, sx_new, py0, denom),
+        "新代行内芯必须带**新 accent** 右进落位（同帧双代铁证）"
+    );
+
+    // ---- ②方向律（t≈0.80：新代选中框左粗缘 = 原左缘 + 0.20×池宽）----
+    let pg_b = page.snap(1104);
+    let pan_b = pg_b.pan.clone().expect("夹具前提：后段平移账在");
+    assert!(pan_b.t > 0.7, "夹具前提：t≈0.80（实得 {})", pan_b.t);
+    let d_new_b = ((1.0 - pan_b.t) * pw as f32).round() as i64;
+    let mut b2 = vec![0u32; (w * h) as usize];
+    termview::paint_cfg_page_chrome(&mut b2, w, h, inset, 0, acc);
+    tv.paint_cfg_pool_content(&mut b2, w, h, &ps, &pg_b, 0, acc, 1104);
+    let edge_temp = ps.lower.x + cfg_page::POOL_CONTENT_INSET + 4; // 左粗缘 temp 原位
+    let edge_x = edge_temp + d_new_b;
+    assert_eq!(
+        b2[py0 as usize * w as usize + edge_x as usize],
+        ring_gradient_rgb(acc.c1, acc.c2, edge_temp, py0, denom),
+        "新代选中框左粗缘必须 = 原左缘 + (1−t)×池宽（方向律；dir 反号即红）"
+    );
+
+    // ---- ③视口裁剪：带右缘外 = chrome 原样 ----
+    let mut bc = vec![0u32; (w * h) as usize];
+    termview::paint_cfg_page_chrome(&mut bc, w, h, inset, 0, acc);
+    let ox = (i64::from(w) - 2) as usize;
+    assert_eq!(
+        b2[py0 as usize * w as usize + ox],
+        bc[py0 as usize * w as usize + ox],
+        "视口带右缘外不许有双代墨（clip 缺失即红）"
     );
 }

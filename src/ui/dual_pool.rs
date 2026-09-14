@@ -83,7 +83,8 @@ pub struct DualPool {
 }
 
 /// 布局快照（涂装唯一读数口；upper_scroll = 上池内容被半高钳截断旗，
-/// 骨架期只读不滚）
+/// 骨架期只读不滚）。十七修：Clone/Debug——旧代冻结快照要封存整份几何
+#[derive(Debug, Clone)]
 pub struct DualPoolSnap {
     pub upper: PoolRect,
     pub lower: PoolRect,

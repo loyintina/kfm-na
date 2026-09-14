@@ -9,13 +9,14 @@
 //! 同源页环）。纪律：先验证红，答案生成到绿，绿后变异抽检。本文件是
 //! 考题，生成器不许改。
 
+use kfm_na::ui::accent::AccentPair;
 use kfm_na::ui::cfg_page::{
     CfgPage, FIELD_BOTTOM_PAD, FIELD_BOX_GAP, FIELD_BOX_H, FIELD_ROW_GAP, FIELD_ROW_H,
-    FIELD_TEXT_INSET, FIELD_TRIANGLE_PAD, FIELD_VALUE_MIN_W, LOWER_ROW_H, POOL_CONTENT_INSET,
-    ROW_GAP, RowView, UpperRow, field_label_rect, field_value_rect, lower_row_rect, upper_row_rect,
-    wrap_field_lines,
+    FIELD_TEXT_INSET, FIELD_TRIANGLE_PAD, FIELD_VALUE_MIN_W, LOWER_ROW_H, PAN_MS,
+    POOL_CONTENT_INSET, PanScope, ROW_GAP, RowView, UpperRow, dropdown_panel_rect,
+    field_label_rect, field_value_rect, lower_row_rect, upper_row_rect, wrap_field_lines,
 };
-use kfm_na::ui::dual_pool::PoolRect;
+use kfm_na::ui::dual_pool::{DualPoolSnap, PoolRect};
 
 fn rows() -> Vec<RowView> {
     // 系统管理大类目前仅一行（壳喂表同款构造）
@@ -69,6 +70,29 @@ const UPPER: PoolRect = PoolRect {
     h: 264,
 };
 
+/// 十七修：set_tab/select 吃旧代冻结用的池几何+页色——考题 stub 单源
+fn pool_stub() -> DualPoolSnap {
+    DualPoolSnap {
+        upper: UPPER,
+        lower: LOWER,
+        upper_scroll: false,
+    }
+}
+
+fn acc() -> AccentPair {
+    AccentPair {
+        c1: 0x0011_2233,
+        c2: 0x0044_5566,
+    }
+}
+
+fn acc2() -> AccentPair {
+    AccentPair {
+        c1: 0x00AA_BBCC,
+        c2: 0x00DD_EEFF,
+    }
+}
+
 // ---- 下池聚焦 ----
 
 #[test]
@@ -85,11 +109,11 @@ fn select_moves_focus_and_bumps_epoch() {
         },
     ]);
     let e0 = p.epoch();
-    p.select(1, 1000);
+    p.select(1, 1000, pool_stub(), acc());
     assert_eq!(p.focus(), 1);
     assert!(p.epoch() > e0, "聚焦变更必须 bump 代际（sig 防鬼影）");
     let e1 = p.epoch();
-    p.select(1, 2000); // 同标重点不重掷
+    p.select(1, 2000, pool_stub(), acc()); // 同标重点不重掷
     assert_eq!(p.epoch(), e1);
 }
 
@@ -331,11 +355,11 @@ fn dropdown_panel_opens_downward() {
     p.set_upper(upper(0));
     p.set_options(opts(3), 0); // 4 项
     let t = p.trigger_rect(&UPPER, LW, VW);
-    let panel = p.dropdown_panel_rect(&UPPER, 10_000, LW, VW);
+    let panel = p.dropdown_panel_rect(&UPPER, 10_000, LW, VW, 0);
     assert_eq!(panel.y, t.y + t.h as i64, "panel 从值框下缘起弹（六修）");
     assert_eq!(panel.x, t.x, "panel 与触发器同宽同左缘");
     assert_eq!(panel.h, 4 * FIELD_ROW_H);
-    let clamped = p.dropdown_panel_rect(&UPPER, 3 * FIELD_ROW_H, LW, VW);
+    let clamped = p.dropdown_panel_rect(&UPPER, 3 * FIELD_ROW_H, LW, VW, 0);
     assert_eq!(clamped.h, 3 * FIELD_ROW_H, "max_h 钳制");
 }
 
@@ -344,21 +368,28 @@ fn dropdown_item_hit() {
     let mut p = CfgPage::new();
     p.set_upper(upper(0));
     p.set_options(opts(3), 0);
-    let panel = p.dropdown_panel_rect(&UPPER, 10_000, LW, VW);
+    let panel = p.dropdown_panel_rect(&UPPER, 10_000, LW, VW, 0);
     assert_eq!(
-        p.dropdown_item_at_y(panel.y + 1, &UPPER, 10_000, LW, VW),
+        p.dropdown_item_at_y(panel.y + 1, &UPPER, 10_000, LW, VW, 0),
         Some(0)
     );
     assert_eq!(
-        p.dropdown_item_at_y(panel.y + 3 * FIELD_ROW_H as i64 + 1, &UPPER, 10_000, LW, VW),
+        p.dropdown_item_at_y(
+            panel.y + 3 * FIELD_ROW_H as i64 + 1,
+            &UPPER,
+            10_000,
+            LW,
+            VW,
+            0
+        ),
         Some(3)
     );
     assert_eq!(
-        p.dropdown_item_at_y(panel.y - 1, &UPPER, 10_000, LW, VW),
+        p.dropdown_item_at_y(panel.y - 1, &UPPER, 10_000, LW, VW, 0),
         None
     );
     assert_eq!(
-        p.dropdown_item_at_y(panel.y + panel.h as i64 + 1, &UPPER, 10_000, LW, VW),
+        p.dropdown_item_at_y(panel.y + panel.h as i64 + 1, &UPPER, 10_000, LW, VW, 0),
         None
     );
 }
@@ -430,14 +461,14 @@ fn trigger_and_dropdown_follow_scroll() {
     let t1 = p.trigger_rect(&UPPER, LW, VW);
     assert_eq!(t1.y, t0.y - 120, "触发器随内容一起滚");
     // 下拉命中同尺：panel 跟触发器走，项命中必须带滚动维
-    let panel = p.dropdown_panel_rect(&UPPER, 10_000, LW, VW);
+    let panel = p.dropdown_panel_rect(&UPPER, 10_000, LW, VW, 0);
     assert_eq!(panel.y, t1.y + t1.h as i64);
     assert_eq!(
-        p.dropdown_item_at_y(panel.y + 1, &UPPER, 10_000, LW, VW),
+        p.dropdown_item_at_y(panel.y + 1, &UPPER, 10_000, LW, VW, 0),
         Some(0)
     );
     assert_eq!(
-        p.dropdown_item_at_y(t1.y + 1, &UPPER, 10_000, LW, VW),
+        p.dropdown_item_at_y(t1.y + 1, &UPPER, 10_000, LW, VW, 0),
         None,
         "panel 上方一格（触发器位）不算 panel 项"
     );
@@ -451,27 +482,27 @@ fn set_tab_switches_and_resets_page_state() {
     p.set_rows(rows());
     p.set_upper(upper(8));
     p.set_options(opts(2), 0);
-    p.select(0, 1000);
+    p.select(0, 1000, pool_stub(), acc());
     p.scroll_upper_by(120, 400);
     p.toggle_dropdown(1000);
     p.open_modal(3);
     let e0 = p.epoch();
-    p.set_tab(1);
+    p.set_tab(1, 1000, pool_stub(), acc());
     assert_eq!(p.tab(), 1);
     assert!(p.epoch() > e0, "切页必须 bump 代际（sig 防鬼影）");
     assert_eq!(p.upper_scroll(), 0, "切页上池滚动归零——新页不继承旧滚动");
     assert!(!p.dropdown_open(), "切页下拉收");
     assert_eq!(p.modal(), None, "切页跳框收");
     let e1 = p.epoch();
-    p.set_tab(1); // 同页重点不空涨
+    p.set_tab(1, 1000, pool_stub(), acc()); // 同页重点不空涨
     assert_eq!(p.epoch(), e1);
 }
 
 #[test]
 fn set_tab_back_and_forth() {
     let mut p = CfgPage::new();
-    p.set_tab(1);
-    p.set_tab(0);
+    p.set_tab(1, 1000, pool_stub(), acc());
+    p.set_tab(0, 2000, pool_stub(), acc());
     assert_eq!(p.tab(), 0);
     assert_eq!(p.focus(), 0, "切页聚焦归首行（壳重建前的安全态）");
 }
@@ -534,7 +565,7 @@ fn upper_row_hit_roundtrip_with_scroll() {
 #[test]
 fn snap_carries_tab_and_modal_dims() {
     let mut p = CfgPage::new();
-    p.set_tab(1);
+    p.set_tab(1, 1000, pool_stub(), acc());
     p.open_modal(4);
     let s = p.snap(1000);
     assert_eq!(s.tab, 1, "快照必须带 tab 维（涂装分流读它）");
@@ -557,7 +588,7 @@ fn three_rows() -> Vec<RowView> {
 fn select_cursor_spring_slides_and_settles() {
     let mut p = CfgPage::new();
     p.set_rows(three_rows());
-    p.select(2, 1000);
+    p.select(2, 1000, pool_stub(), acc());
     // 弹簧起步：瞬时值在起点（重定基连续性——elapsed 0 位置 = from）
     assert_eq!(p.cursor_row(1000), 0.0, "点选瞬间光标在旧行不跳变");
     assert!(p.cursor_fx_active(1000), "未收敛 = 活性探针真（帧泵闸）");
@@ -574,9 +605,9 @@ fn select_cursor_spring_slides_and_settles() {
 fn select_cursor_rebase_no_jump() {
     let mut p = CfgPage::new();
     p.set_rows(three_rows());
-    p.select(2, 1000);
+    p.select(2, 1000, pool_stub(), acc());
     let mid = p.cursor_row(1050);
-    p.select(1, 1050); // 滑行中途改目标
+    p.select(1, 1050, pool_stub(), acc()); // 滑行中途改目标
     assert_eq!(
         p.cursor_row(1050),
         mid,
@@ -589,8 +620,8 @@ fn select_cursor_rebase_no_jump() {
 fn set_tab_cursor_lands_first_row_directly() {
     let mut p = CfgPage::new();
     p.set_rows(three_rows());
-    p.select(2, 1000);
-    p.set_tab(1); // 滑行中途切标签页
+    p.select(2, 1000, pool_stub(), acc());
+    p.set_tab(1, 1000, pool_stub(), acc()); // 滑行中途切标签页
     assert_eq!(
         p.cursor_row(1001),
         0.0,
@@ -603,7 +634,7 @@ fn set_tab_cursor_lands_first_row_directly() {
 fn set_rows_clamp_cursor_follows_without_animation() {
     let mut p = CfgPage::new();
     p.set_rows(three_rows());
-    p.select(2, 1000);
+    p.select(2, 1000, pool_stub(), acc());
     assert_eq!(p.cursor_row(1700), 2.0);
     p.set_rows(vec![RowView {
         title: "only".into(),
@@ -759,10 +790,139 @@ fn set_tab_clears_dropdown_afterimage() {
     p.set_options(opts(2), 0);
     p.toggle_dropdown(1000);
     p.dismiss_dropdown(1300);
-    p.set_tab(1); // 收起中途切页
+    p.set_tab(1, 1000, pool_stub(), acc()); // 收起中途切页
     assert_eq!(
         p.dropdown_progress(1301),
         0.0,
         "切标签页下拉余影即时清零（新页不继承浮层）"
     );
+}
+
+// ---- 十七修 §六「面与内容一体」：视口平移切页 ----
+
+#[test]
+fn set_tab_hangs_page_pan_with_dir_and_frozen_epoch() {
+    let mut p = CfgPage::new();
+    p.set_rows(rows());
+    p.set_upper(upper(0));
+    p.set_options(opts(1), 1);
+    p.scroll_upper_by(50, UPPER.h);
+    let before_opts = opts(1);
+    let before_scroll = p.upper_scroll();
+    // 0 → 1 = 前进 = dir +1（内容左移）
+    p.set_tab(1, 1000, pool_stub(), acc());
+    let s = p.snap(1000);
+    let pan = s.pan.as_ref().expect("切标签必须挂页面级平移账");
+    assert_eq!(pan.scope, PanScope::Page);
+    assert_eq!(pan.dir, 1, "标签右移 = 前进 = dir +1（方向律）");
+    assert_eq!(pan.t, 0.0, "起点帧 t=0");
+    // 旧代冻结：选项/滚动/页色/池几何全是切换瞬间的封存
+    assert_eq!(pan.old.options, before_opts);
+    assert_eq!(pan.old.upper_scroll, before_scroll);
+    assert_eq!(pan.old.accent, acc());
+    assert_eq!(pan.old.pool.upper, UPPER);
+    // 时序：中帧 ease-out 进度，贴死后出 None
+    let mid = p.snap(1000 + PAN_MS / 2).pan.expect("中帧账在");
+    assert!(
+        mid.t > 0.8 && mid.t < 1.0,
+        "ease-out cubic 中帧应已过大半（t={})",
+        mid.t
+    );
+    assert!(
+        p.snap(1000 + PAN_MS).pan.is_none(),
+        "250ms 贴死 = 稳态单代（pan None）"
+    );
+}
+
+#[test]
+fn set_tab_backward_dir_negative_and_same_tab_no_pan() {
+    let mut p = CfgPage::new();
+    p.set_tab(1, 1000, pool_stub(), acc());
+    p.set_tab(0, 2000, pool_stub(), acc2());
+    let pan = p.snap(2000).pan.expect("回切也挂账");
+    assert_eq!(pan.dir, -1, "标签左移 = 后退 = dir −1（内容右移）");
+    assert_eq!(
+        pan.old.accent,
+        acc2(),
+        "旧代封的是回切前的页色（调用方喂入的当前页色）"
+    );
+    // 同页重点：不挂账不空涨
+    let settled = 2000 + PAN_MS + 100;
+    let e = p.epoch();
+    p.set_tab(0, settled + 1000, pool_stub(), acc());
+    assert_eq!(p.epoch(), e);
+    assert!(p.snap(settled + 1000).pan.is_none());
+}
+
+#[test]
+fn select_hangs_upper_pan_and_same_focus_no_pan() {
+    let mut p = CfgPage::new();
+    p.set_rows(vec![
+        RowView {
+            title: "a".into(),
+            meta: String::new(),
+        },
+        RowView {
+            title: "b".into(),
+            meta: String::new(),
+        },
+        RowView {
+            title: "c".into(),
+            meta: String::new(),
+        },
+    ]);
+    p.select(2, 1000, pool_stub(), acc());
+    let s = p.snap(1000);
+    let pan = s.pan.as_ref().expect("选行必须挂上池级平移账");
+    assert_eq!(pan.scope, PanScope::Upper, "下池选行 = 上池级平移");
+    assert_eq!(pan.dir, 1, "光标下移 = 前进 = dir +1");
+    // 上溯 = 后退
+    p.select(0, 2000, pool_stub(), acc());
+    assert_eq!(p.snap(2000).pan.as_ref().unwrap().dir, -1);
+    // 同标重点：不挂账（账贴死后）
+    let settled = 2000 + PAN_MS + 100;
+    let e = p.epoch();
+    p.select(0, settled, pool_stub(), acc());
+    assert_eq!(p.epoch(), e);
+    assert!(p.snap(settled).pan.is_none());
+}
+
+#[test]
+fn pan_active_probe_drives_frame_pump() {
+    let mut p = CfgPage::new();
+    p.set_tab(1, 1000, pool_stub(), acc());
+    assert!(p.pan_active(1000), "账起 = 活性（帧泵必须续帧）");
+    assert!(p.pan_active(1000 + PAN_MS - 1));
+    assert!(!p.pan_active(1000 + PAN_MS), "贴死 = 活性灭（零空烧）");
+}
+
+// ---- 十七修 BAR-090：下拉面板宽 = max(触发器, 最长选项文+边距)，钳右缘 ----
+
+#[test]
+fn bar090_dropdown_panel_widens_to_longest_option() {
+    // 触发器宽按实量；内容最小宽 480 → 面板加宽到 480——右缘与触发器
+    // 右缘对齐（值框锚行右缘 ≡ 池内容内缘，加宽只能向左长）
+    let p = dropdown_panel_rect(3, &UPPER, 10_000, 0, true, 100, 50, 480);
+    let t = kfm_na::ui::cfg_page::trigger_rect(&UPPER, 0, true, 100, 50);
+    assert_eq!(p.x + p.w as i64, t.x + t.w as i64, "右缘与触发器右缘对齐");
+    assert_eq!(p.w, t.w.max(480), "宽 = max(触发器, 内容最小宽)");
+    assert!(p.x < t.x, "加宽向左长（左缘 < 触发器左缘）");
+}
+
+#[test]
+fn bar090_dropdown_panel_not_narrower_than_trigger() {
+    // 内容最小宽小于触发器 → 面板 = 触发器宽（不收缩），左右缘全对齐
+    let p = dropdown_panel_rect(2, &UPPER, 10_000, 0, true, 100, 50, 10);
+    let t = kfm_na::ui::cfg_page::trigger_rect(&UPPER, 0, true, 100, 50);
+    assert_eq!(p.w, t.w);
+    assert_eq!(p.x, t.x);
+}
+
+#[test]
+fn bar090_dropdown_panel_left_edge_clamped_to_pool_inner() {
+    // 内容最小宽天价 → 左缘钳上池内容左内缘（不越池框），右缘不动
+    let p = dropdown_panel_rect(2, &UPPER, 10_000, 0, true, 100, 50, 100_000);
+    let t = kfm_na::ui::cfg_page::trigger_rect(&UPPER, 0, true, 100, 50);
+    assert_eq!(p.x, UPPER.x + POOL_CONTENT_INSET, "左缘钳池内容左内缘");
+    assert_eq!(p.x + p.w as i64, t.x + t.w as i64, "右缘不动");
 }

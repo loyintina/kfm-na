@@ -368,6 +368,9 @@ struct ConfigSig {
     cursor_row_q: i32,
     /// 下拉进度 ×1000 量化（十五修 §六：开合动画逐帧新值逐帧重烘焙）
     dd_progress_q: u32,
+    /// 视口平移进度 ×1000 量化（十七修 §六：双代同画逐帧新偏移逐帧
+    /// 重烘焙；无平移恒 0）
+    pan_q: i32,
     /// 动效预览时间桶（十四修 §六：动画展品开着 = boot_ms/33 逐帧
     /// 新值逐帧重烘焙；关着恒 0 不挤烘焙闸）
     anim_bucket: u64,
@@ -857,6 +860,7 @@ impl App {
                         // 十四修：下拉命中/触发器几何吃首行实量宽
                         // （先量后锁——锁序 term→cfg_page 不倒持）
                         let (lw, vw) = self.cfg_row0_text_widths();
+                        let cw = self.cfg_dropdown_content_w_min();
                         let mut pg = page.lock().unwrap();
                         if pg.dropdown_open() {
                             // 十五修 §六：展开中选项不命中——点按 = 收
@@ -868,7 +872,7 @@ impl App {
                                 return;
                             }
                             let max_h = 10_000; // 命中只问行号，钳高由涂装侧管
-                            if let Some(i) = pg.dropdown_item_at_y(yi, &upper, max_h, lw, vw) {
+                            if let Some(i) = pg.dropdown_item_at_y(yi, &upper, max_h, lw, vw, cw) {
                                 pg.dropdown_pick(i, now);
                                 drop(pg);
                                 // 下拉换选 = 默认服务器变更（二版：写盘+重建归壳）
@@ -1561,6 +1565,14 @@ impl App {
                                 picked = Some(i);
                             }
                         }
+                        // 十七修 §六：页面级平移旧代冻结要「换色前」的
+                        // 旧 accent——retint 后 accent_of 已是新色，先取
+                        let old_cfg_accent = self
+                            .ai_presence
+                            .as_ref()
+                            .and_then(|ai| ai.accent_of(crate::ai_presence::Panel::Config))
+                            .or(picked_pair)
+                            .unwrap_or(crate::ui::accent::FALLBACK);
                         // 十一修（§四）：点选 = 整页瞬时换成该标签双色
                         // （retint 只换 accent 不重随；弹簧移动在核心自走）
                         if let (Some(pair), Some(ai)) = (picked_pair, &self.ai_presence) {
@@ -1570,7 +1582,11 @@ impl App {
                         // + 切页清零，内容重建归壳（rebuild 按 tab 分流）
                         if let Some(i) = picked {
                             if let Some(page) = &self.cfg_page {
-                                page.lock().unwrap().set_tab(i);
+                                let now = crate::report::boot_ms() as u64;
+                                if let Some(pool) = crate::ui::dual_pool::dual_pool_handle() {
+                                    let ps = pool.lock().unwrap().layout(now);
+                                    page.lock().unwrap().set_tab(i, now, ps, old_cfg_accent);
+                                }
                             }
                             self.rebuild_cfg_rows();
                             self.dirty = true;
@@ -1600,10 +1616,10 @@ impl App {
                             crate::ui::dual_pool::dual_pool_handle(),
                             crate::ui::cfg_page::cfg_page_handle(),
                         ) {
-                            let (lower, upper) = {
+                            let (ps, lower, upper) = {
                                 let now = crate::report::boot_ms() as u64;
                                 let ps = pool.lock().unwrap().layout(now);
-                                (ps.lower.clone(), ps.upper.clone())
+                                (ps.clone(), ps.lower.clone(), ps.upper.clone())
                             };
                             // 十四修：触发器命中吃首行实量宽（先量后锁）
                             let (lw, vw) = self.cfg_row0_text_widths();
@@ -1621,7 +1637,15 @@ impl App {
                                 crate::report::report("gest", "下拉触发器点按→开合");
                                 self.dirty = true;
                             } else if let Some(i) = pg.lower_row_at_y(yi, &lower) {
-                                pg.select(i, now);
+                                // 十七修 §六：上池级平移旧代冻结吃当前池几何
+                                // 与页色（选行不换色，accent 仍要入快照——
+                                // 旧代上池内容带当时页色出）
+                                let acc = self
+                                    .ai_presence
+                                    .as_ref()
+                                    .and_then(|ai| ai.accent_of(crate::ai_presence::Panel::Config))
+                                    .unwrap_or(crate::ui::accent::FALLBACK);
+                                pg.select(i, now, ps, acc);
                                 drop(pg);
                                 self.rebuild_cfg_rows();
                                 crate::report::report("ui", &format!("下池点按: 聚焦行 {i}"));
@@ -3477,16 +3501,24 @@ impl App {
                                 acc_of(crate::ai_presence::Panel::Config),
                             );
                         }
-                        // 双池（宪法 §五）：兜底路径同源同参
+                        // 双池（宪法 §五）：兜底路径同源同参。十七修
+                        // §六：页面级平移中框由 pool_content 双代自理
+                        let page_pan = cfg_snap.is_some_and(|cs| {
+                            cs.pan
+                                .as_ref()
+                                .is_some_and(|p| p.scope == crate::ui::cfg_page::PanScope::Page)
+                        });
                         if let Some(ps) = pool_snap {
-                            term.paint_cfg_dual_pool(
-                                buf,
-                                w,
-                                h,
-                                ps,
-                                cfg_off,
-                                acc_of(crate::ai_presence::Panel::Config),
-                            );
+                            if !page_pan {
+                                term.paint_cfg_dual_pool(
+                                    buf,
+                                    w,
+                                    h,
+                                    ps,
+                                    cfg_off,
+                                    acc_of(crate::ai_presence::Panel::Config),
+                                );
+                            }
                             // 池内容（宪法 §五 目录语义：下池子目录行表/
                             // 上池联动下拉+字段行）——双池框之上同层
                             if let Some(cs) = cfg_snap {
@@ -4076,6 +4108,11 @@ impl App {
         // 槽重烘焙，收敛后值稳零空烧（同 §四 纪律）
         let cursor_row_q = cfg_snap.map_or(0, |cs| (cs.cursor_row * 64.0).round() as i32);
         let dd_progress_q = cfg_snap.map_or(0, |cs| (cs.dropdown_progress * 1000.0).round() as u32);
+        // 平移一维（十七修 §六）：双代同画偏移逐帧变——漏维 = 平移冻在
+        // 槽纹理里（同 §四 动画逐帧重烘焙纪律）
+        let pan_q = cfg_snap.map_or(0, |cs| {
+            cs.pan.as_ref().map_or(0, |p| (p.t * 1000.0).round() as i32)
+        });
         // 动效预览 sig 一维（十四修 §六）：动画展品开着 = 33ms 时间桶
         // 逐帧变 → 槽逐帧重烘焙；关着恒 0（无动画零烘焙同 §四纪律）
         let anim_bucket = if cfg_visible && Self::cfg_anim_modal_open() {
@@ -4098,6 +4135,7 @@ impl App {
                 cfg_epoch,
                 cursor_row_q,
                 dd_progress_q,
+                pan_q,
                 anim_bucket,
             })
         {
@@ -4110,11 +4148,20 @@ impl App {
                     .paint_cfg_tab_bar(px, w, h, ts, 0, bottom_inset, acc_cfg);
             }
             // 双池（宪法 §五）：与标签栏同槽同 accent——内卡反转在涂装
-            // 内部兑现（c2→c1），调用方无感
+            // 内部兑现（c2→c1），调用方无感。十七修 §六：页面级平移中
+            // 双池框随内容双代同画，由 pool_content 内部自理（这里再画
+            // = 框不动内容动，两张皮）
+            let page_pan = cfg_snap.is_some_and(|cs| {
+                cs.pan
+                    .as_ref()
+                    .is_some_and(|p| p.scope == crate::ui::cfg_page::PanScope::Page)
+            });
             if let (Some(ps), Some(t)) = (pool_snap, th) {
-                t.lock()
-                    .unwrap()
-                    .paint_cfg_dual_pool(px, w, h, ps, 0, acc_cfg);
+                if !page_pan {
+                    t.lock()
+                        .unwrap()
+                        .paint_cfg_dual_pool(px, w, h, ps, 0, acc_cfg);
+                }
                 // 池内容（§五 目录语义）：双池框之上同槽
                 if let Some(cs) = cfg_snap {
                     t.lock().unwrap().paint_cfg_pool_content(
@@ -4360,6 +4407,30 @@ impl App {
         }
     }
 
+    /// 下拉 panel 内容最小宽（十七修 BAR-090）：选项最长文实量宽 +
+    /// 双侧文内边距——命中与涂装同一条尺（眼手同尺不漏维）。
+    /// 锁序同 cfg_row0_text_widths（先 snap 取文再量，不嵌套持锁）
+    fn cfg_dropdown_content_w_min(&self) -> u32 {
+        let Some(page) = crate::ui::cfg_page::cfg_page_handle() else {
+            return 0;
+        };
+        let opts = {
+            let pg = page.lock().unwrap();
+            pg.snap(crate::report::boot_ms() as u64).options
+        };
+        match self.term_handle() {
+            Some(t) => {
+                let t = t.lock().unwrap();
+                opts.iter()
+                    .map(|o| t.text_width(o, 36.0))
+                    .max()
+                    .unwrap_or(0)
+                    + crate::ui::cfg_page::FIELD_TEXT_INSET * 2
+            }
+            None => 0,
+        }
+    }
+
     /// 组件池跳框动效预览开着（十四修 §六）：当前 modal 条目是动效
     /// 引擎四件之一 = 帧泵/烘焙 sig 的动画维开关。无 self——
     /// draw_frame_gles（关联函数无 self 接收者）也调
@@ -4389,7 +4460,7 @@ impl App {
         }
         crate::ui::cfg_page::cfg_page_handle().is_some_and(|pg| {
             let g = pg.lock().unwrap();
-            g.cursor_fx_active(now) || g.dropdown_fx_active(now)
+            g.cursor_fx_active(now) || g.dropdown_fx_active(now) || g.pan_active(now)
         })
     }
 
