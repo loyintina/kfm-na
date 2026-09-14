@@ -59,9 +59,9 @@ pub enum Preview {
     /// 底线组件：模式①自身反转渐变细线（c2→c1；模式②配合标签纯色
     /// 在 TabChip 预览里展出）
     Underline,
-    /// 下拉面板：触发器 + 下弹 panel 两项
+    /// 下拉面板：触发器（三级框）+ 圆角深底下弹 panel（选中项均匀细框）
     Dropdown,
-    /// 字段标签列：标签（36 亮）+ 值框（30 灰）mini 行
+    /// 字段标签列：标签（36 亮+提亮背衬）+ 值框（30 灰）mini 行
     FieldLabel,
     /// 功能光标开口框（封存件复活展出）
     OpenCursor,
@@ -174,7 +174,7 @@ pub const COMPONENTS: &[CompEntry] = &[
         file: "src/termview.rs",
         spec: "宪法 §四 十一修",
         tests: "tests/tab_bar_spec.rs",
-        desc: "无边框色块标签：上两角圆角、下缘直边。每标签独立随机双色：选中 = c1→c2 竖向均匀渐变满填（十二修：两截硬切退役）+ 深色字；未选中 = 上/下 1/3 条带薄态 + 中 1/3 6% 白底。",
+        desc: "无边框色块标签：上两角圆角、下缘直边。每标签独立随机双色：选中 = c1→c2 竖向均匀渐变满填 α255（十二修）+ 深色字；未选中 = 同一把 t 尺均匀渐变薄态 α48 满块（十三修：三段条带硬切退役，只降 alpha 不降连续性）。",
         preview: Preview::TabChip,
     },
     CompEntry {
@@ -196,7 +196,7 @@ pub const COMPONENTS: &[CompEntry] = &[
         file: "src/termview.rs",
         spec: "宪法 §六 下拉栏",
         tests: "tests/cfg_page_spec.rs",
-        desc: "自绘下拉：触发器 6% 白底，面板 96% 近黑 + 选中项 accent 描边。顶部栏向下弹——方向反了会弹出屏外。",
+        desc: "自绘下拉（十三修重订）：触发器 = 三级框全包框 + 右缘 ▼；展开面板 = 整面圆角无边框深底（近黑 α252）；选项行方形无个体背景，选中行 = 均匀细框。顶部栏向下弹——方向反了会弹出屏外。",
         preview: Preview::Dropdown,
     },
     CompEntry {
@@ -207,7 +207,7 @@ pub const COMPONENTS: &[CompEntry] = &[
         file: "src/ui/cfg_page.rs",
         spec: "宪法 §六 组件条款",
         tests: "tests/cfg_page_spec.rs",
-        desc: "上池字段行的标签列：无边框文字容器，36px 亮——标签是行的标题，字大且亮（七修字档反转）。",
+        desc: "上池字段行的标签列：无边框组件，36px 亮（七修字档反转）+ 圆角背衬 = 渐变暗底 + 8% 白提亮（α20，十三修——去框后背景辨识度靠这层）。",
         preview: Preview::FieldLabel,
     },
     // ---- 功能光标 ----

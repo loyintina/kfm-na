@@ -2982,9 +2982,10 @@ fn spec_cfg标签栏_涂装钉() {
     // ①标签行带内有文字墨（标签不是空色块）；
     // ②标签块形态——选中 = **c1(顶)→c2(底) 竖向均匀渐变满填 α255**
     //   （十二修推翻两截硬切：dy 行色 = lerp(c1,c2,dy·255/(h−1)) 精确值——
-    //   变异：两截/短渐变回潮即红，dy=12 处必已离 c1）；未选中 = 上 1/3
-    //   条带 c1（α48）+ 中 1/3 留 6% 白底 + 下 1/3 条带 c2（α48），全部
-    //   叠在**页内芯渐变暗底**上（十二修：dst 不再是平色 CARD_PAGE_BG）；
+    //   变异：两截/短渐变回潮即红，dy=12 处必已离 c1）；未选中 = **同一
+    //   把 t 尺的均匀渐变薄态 α48 满块**（十三修推翻三段条带硬切——实机
+    //   判「暗块依然硬切」），叠在**页内芯渐变暗底**上（十二修：dst 不再
+    //   是平色 CARD_PAGE_BG）；
     //   上两角圆角（角外 = 页暗底）、下缘直边（末行靠左有墨——变异：
     //   下缘也圆角必红）；
     // ③每标签独立双色钉——未选中块的条带色 = **该标签自己的**双色
@@ -3081,27 +3082,40 @@ fn spec_cfg标签栏_涂装钉() {
         "下缘末行靠左必须 = c2（t=255，下缘直边不圆角——变异：下缘圆角化必红）"
     );
 
-    // ②+③未选中标签块：条带叠在页暗底上——上条带 = 该标签 c1 薄态 α48；
-    // 中带 = 6% 白；下条带 = 该标签 c2 薄态 α48——色源是色列[1] 不是页 accent
+    // ②+③未选中标签块：竖向均匀渐变薄态 α48 满块（十三修推翻三段
+    // 条带硬切——与选中同一把 t = dy·255/71 尺只降 alpha），叠在页暗
+    // 底上；色源是色列[1] 不是页 accent
+    let thin_at = |dy: usize, px: i64, py: i64| {
+        blend(
+            kfm_na::termview::lerp_rgb(pair_b.c1, pair_b.c2, (dy as u32 * 255) / 71),
+            page_bg(px, py),
+            48,
+        )
+    };
     assert_eq!(
         b0[(oy + 6) * w as usize + ux + 4],
+        thin_at(6, 173, 61),
+        "未选中块 dy=6 = 均匀渐变薄态精确值"
+    );
+    assert_ne!(
+        b0[(oy + 6) * w as usize + ux + 4],
         blend(pair_b.c1, page_bg(173, 61), 48),
-        "未选中块上 1/3 条带 = 该标签 c1 薄态 α48（叠渐变暗底）"
+        "dy=6 必须已离 c1（变异：条带硬切回潮即红）"
     );
     assert_ne!(
         b0[(oy + 6) * w as usize + ux + 4],
         blend(acc_a.c1, page_bg(173, 61), 48),
-        "条带色必须不是页 accent（变异：块色吃 paint 时 accent 参数即红）"
+        "薄态色必须不是页 accent（变异：块色吃 paint 时 accent 参数即红）"
     );
     assert_eq!(
         b0[(oy + 36) * w as usize + ux + 4],
-        blend(0x00FF_FFFF, page_bg(173, 91), 15),
-        "未选中块中 1/3 = 6% 白叠渐变暗底（变异：整截填色即红）"
+        thin_at(36, 173, 91),
+        "未选中块中行 = 均匀渐变薄态中点精确值（变异：6% 白底回潮即红）"
     );
     assert_eq!(
         b0[(oy + 66) * w as usize + ux + 4],
-        blend(pair_b.c2, page_bg(173, 121), 48),
-        "未选中块下 1/3 条带 = 该标签 c2 薄态 α48"
+        thin_at(66, 173, 121),
+        "未选中块 dy=66 = 均匀渐变薄态精确值"
     );
     assert_eq!(
         b0[(oy + 36) * w as usize + ux - 1],
@@ -3323,6 +3337,41 @@ fn spec_三级框_涂装钉() {
             "{name}必须 = 渐变暗底（无边框；任何框墨即红）"
         );
     }
+    // ⑤标签列背衬（十三修 §五）：圆角 36 无边框背衬块（与值框同高
+    // 对齐）= 渐变暗底 + 8% 白提亮（blend 白 α20）——无背衬/不提亮/
+    // 提错量即红。取样避字形带（贴背衬顶条）
+    let blend = |fg: u32, dst: u32, a: u32| {
+        let inv = 255 - a;
+        let ch = |f: u32, d: u32| (f * a + d * inv) / 255;
+        (ch((fg >> 16) & 0xFF, (dst >> 16) & 0xFF) << 16)
+            | (ch((fg >> 8) & 0xFF, (dst >> 8) & 0xFF) << 8)
+            | ch(fg & 0xFF, dst & 0xFF)
+    };
+    let label_pts = [
+        (ur.x + 40, vb.y + 10, "标签列背衬左顶"),
+        (
+            ur.x + cfg_page::LABEL_COL_W - 40,
+            vb.y + 10,
+            "标签列背衬右顶",
+        ),
+    ];
+    for (px, py, name) in label_pts {
+        assert_eq!(
+            b0[py as usize * w as usize + px as usize],
+            blend(0x00FF_FFFF, row_bg(px, py), 20),
+            "{name}必须 = 渐变暗底 + 8% 白提亮精确值"
+        );
+        assert_ne!(
+            b0[py as usize * w as usize + px as usize],
+            row_bg(px, py),
+            "{name}不提亮即红（变异：背衬回退纯暗底）"
+        );
+    }
+    assert_ne!(
+        b0[(vb.y + 10) as usize * w as usize + (ur.x + 40) as usize],
+        blend(0x00FF_FFFF, row_bg(ur.x + 40, vb.y + 10), 40),
+        "提亮量必须是 8%（α20；提错量即红）"
+    );
     // ④暗底不是平色：同一行内芯左/右取样必须异色（渐变尺的铁证；
     // 变异：暗底写平色即红）
     let (lx, rx, my) = (r0.x + 40, r0.x + r0.w as i64 - 40, r0.y + r0.h as i64 / 2);
@@ -3350,6 +3399,137 @@ fn spec_三级框_涂装钉() {
     );
     // bg 变量防未用告警（夹具底色仅注释用）
     let _ = bg;
+}
+
+#[test]
+fn spec_下拉面板_涂装钉() {
+    // 宪法 §六 下拉栏（2026-09-14 十三修重订，用户拍板）：
+    // ①触发器 = 三级框全包框（左粗缘/三细边 = 渐变 α255 直出 + 渐变暗
+    //   底芯——变异：画回无边框值框即红）；
+    // ②展开面板 = 整面圆角无边框深底：近黑 α252（after = blend(黑,
+    //   before, 252) 精确值——旧 α245 深度回潮即红）；角外 = 下层原样
+    //   （圆角不吃直角即红）；
+    // ③选项行 = 方形无个体背景（未选中行内 = 与面板同一块深底）；
+    //   选中行 = 均匀细框（四边 3px 渐变 α255 直出 + 渐变暗底芯不透明
+    //   直写——变异：画回逐行圆角行框/无框即红）
+    use kfm_na::termview::{frame_bg_rgb, ring_gradient_rgb};
+    use kfm_na::ui::cfg_page::{self, CfgPage, RowView, UpperRow};
+    use kfm_na::ui::dual_pool::DualPool;
+    let (w, h) = (1260u32, 2400u32);
+    let inset = 120u32;
+    let acc = kfm_na::ui::accent::AccentPair {
+        c1: 0x00FF_6000,
+        c2: 0x0000_80FF,
+    };
+    let denom = (i64::from(w) - 1) + (i64::from(h) - 1);
+    let blend = |fg: u32, dst: u32, a: u32| {
+        let inv = 255 - a;
+        let ch = |f: u32, d: u32| (f * a + d * inv) / 255;
+        (ch((fg >> 16) & 0xFF, (dst >> 16) & 0xFF) << 16)
+            | (ch((fg >> 8) & 0xFF, (dst >> 8) & 0xFF) << 8)
+            | ch(fg & 0xFF, dst & 0xFF)
+    };
+    let tv = TermView::new(host_font(), None, 8, 2, CELL_W, CELL_H);
+    let mut pool = DualPool::new(w, h);
+    pool.set_viewport(w, h, inset);
+    pool.set_upper_content_h(72 + cfg_page::FIELD_ROW_H);
+    let ps = pool.layout();
+    let mut page = CfgPage::new();
+    page.set_rows(vec![RowView {
+        title: "系统管理".into(),
+        meta: "1 项".into(),
+    }]);
+    page.set_upper(vec![UpperRow {
+        label: "默认服务器".into(),
+        value: "本地终端".into(),
+        is_dropdown: true,
+    }]);
+    page.set_options(vec!["本地终端".into(), "服务器".into()], 1);
+
+    // before：合着画一遍（下层原样取证）
+    let pg0 = page.snap();
+    let mut b0 = vec![0u32; (w * h) as usize];
+    termview::paint_cfg_page_chrome(&mut b0, w, h, inset, 0, acc);
+    tv.paint_cfg_dual_pool(&mut b0, w, h, &ps, 0, acc);
+    tv.paint_cfg_pool_content(&mut b0, w, h, &ps, &pg0, 0, acc);
+
+    // ①触发器 = 三级框全包框
+    let vb = cfg_page::trigger_rect(&ps.upper, 0);
+    let trig = [
+        (vb.x + 4, vb.y + vb.h as i64 / 2, "触发器左粗缘"),
+        (vb.x + vb.w as i64 / 2, vb.y + 1, "触发器顶边"),
+        (vb.x + vb.w as i64 - 2, vb.y + vb.h as i64 / 2, "触发器右边"),
+    ];
+    for (px, py, name) in trig {
+        assert_eq!(
+            b0[py as usize * w as usize + px as usize],
+            ring_gradient_rgb(acc.c1, acc.c2, px, py, denom),
+            "{name}必须 = 渐变 α255 直出（三级框；无边框回潮即红）"
+        );
+    }
+    assert_eq!(
+        b0[(vb.y + vb.h as i64 - 8) as usize * w as usize + (vb.x + 40) as usize],
+        frame_bg_rgb(acc.c1, acc.c2, vb.x + 40, vb.y + vb.h as i64 - 8, denom),
+        "触发器内芯 = 渐变暗底不透明直出"
+    );
+
+    // after：展开画一遍
+    page.toggle_dropdown();
+    let pg1 = page.snap();
+    assert!(pg1.dropdown_open, "夹具前提：展开态");
+    let mut b1 = vec![0u32; (w * h) as usize];
+    termview::paint_cfg_page_chrome(&mut b1, w, h, inset, 0, acc);
+    tv.paint_cfg_dual_pool(&mut b1, w, h, &ps, 0, acc);
+    tv.paint_cfg_pool_content(&mut b1, w, h, &ps, &pg1, 0, acc);
+
+    let t = cfg_page::trigger_rect(&ps.upper, 0);
+    let max_h = h.saturating_sub(t.y.max(0) as u32 + t.h + 40);
+    let pr = cfg_page::dropdown_panel_rect(2, &ps.upper, max_h, 0);
+    let row_h = cfg_page::FIELD_ROW_H as i64;
+
+    // ②面板深底：未选中行（行 0）内避字取样 = blend(黑, before, 252)
+    let (bx, by) = (pr.x + pr.w as i64 - 30, pr.y + row_h / 2);
+    let before = b0[by as usize * w as usize + bx as usize];
+    assert_eq!(
+        b1[by as usize * w as usize + bx as usize],
+        blend(0, before, 252),
+        "面板深底 = 近黑 α252 精确值（α245 旧深度回潮即红）"
+    );
+    assert_ne!(
+        b1[by as usize * w as usize + bx as usize],
+        blend(0, before, 245),
+        "深度必须是 252 不是旧 245"
+    );
+    // ②角外 = 下层原样（整面圆角：角盒外不吃深底）
+    let (cx0, cy0) = (pr.x + 1, pr.y + 1);
+    assert_eq!(
+        b1[cy0 as usize * w as usize + cx0 as usize],
+        b0[cy0 as usize * w as usize + cx0 as usize],
+        "面板左上圆角外必须 = 下层原样（直角化/方角深底即红）"
+    );
+    // ③选中行（option_sel = 1）= 均匀细框：边 = 渐变 α255 直出；
+    // 芯 = 渐变暗底不透明直写（≠ 面板深底）
+    let iy1 = pr.y + row_h;
+    let (fx, fy) = (pr.x + 1, iy1 + row_h / 2);
+    assert_eq!(
+        b1[fy as usize * w as usize + fx as usize],
+        ring_gradient_rgb(acc.c1, acc.c2, fx, fy, denom),
+        "选中行细框边 = 渐变 α255 直出（无框/行框回潮即红）"
+    );
+    let (ix2, iy2) = (pr.x + pr.w as i64 - 30, iy1 + row_h / 2);
+    assert_eq!(
+        b1[iy2 as usize * w as usize + ix2 as usize],
+        frame_bg_rgb(acc.c1, acc.c2, ix2, iy2, denom),
+        "选中行芯 = 渐变暗底不透明直写（≠ 深底；逐行圆角行框回潮即红）"
+    );
+    // ③未选中行无个体背景：行 0 芯色 = 面板深底（与 ②同点互证，
+    // 这里再取行中另一点钉「行内处处深底」）
+    let (ux2, uy2) = (pr.x + 60, pr.y + row_h - 8);
+    assert_eq!(
+        b1[uy2 as usize * w as usize + ux2 as usize],
+        blend(0, b0[uy2 as usize * w as usize + ux2 as usize], 252),
+        "未选中行 = 纯深底无个体背景（逐行圆角回潮即红）"
+    );
 }
 
 #[test]

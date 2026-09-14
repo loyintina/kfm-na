@@ -749,11 +749,11 @@ fn paint_thin_frame(
 /// **无边框色块标签**——上两角圆角 R=1 格、下缘直边（标签坐在行底，
 /// 下接底线组件）。竖向分色：sel=true = **c1（顶）→c2（底）竖向均匀
 /// 渐变满填 α255**（十二修推翻十一修两截硬切——实机判「硬切换」，
-/// t = dy·255/(h−1) 逐行精确）；sel=false = 上 1/3 条带 c1 薄态（α48）
-/// 与下 1/3 条带 c2 薄态（α48），中 1/3 留 6% 白底。色源 = **该标签
-/// 自己的双色**（pair 参数 = 标签栏色列条目，每标签独立随机——§四
-/// 十一修；不是页 accent）。clip_x0/x1 = X 向内容裁剪带（横滚滑出
-/// 不污染页环带）
+/// t = dy·255/(h−1) 逐行精确）；sel=false = **同一把 t 尺的均匀渐变
+/// 薄态 α48 满块**（十三修推翻三段条带硬切——实机判「暗块依然硬切」，
+/// 只降 alpha 不降连续性）。色源 = **该标签自己的双色**（pair 参数 =
+/// 标签栏色列条目，每标签独立随机——§四十一修；不是页 accent）。
+/// clip_x0/x1 = X 向内容裁剪带（横滚滑出不污染页环带）
 #[allow(clippy::too_many_arguments)]
 fn paint_tab_chip(
     frame: &mut Frame<'_>,
@@ -767,8 +767,6 @@ fn paint_tab_chip(
     clip_x1: i64,
 ) {
     let r = (CELL_W as i64).min((w / 2).min(h / 2) as i64); // 上圆角 1 格
-    let band1 = i64::from(h) / 3; // 未选中条带分界：上 1/3 | 中 1/3 | 下 1/3
-    let band2 = i64::from(h) * 2 / 3;
     for dy in 0..h as i64 {
         let yy = y + dy;
         if yy < 0 || yy >= i64::from(frame.h) {
@@ -796,12 +794,12 @@ fn paint_tab_chip(
                 // 竖向均匀渐变（十二修）：t = dy·255/(h−1)，顶 c1 底 c2
                 let t = (dy as u32 * 255) / (h - 1).max(1);
                 frame.blend_px(xx as u32, yy as u32, lerp_rgb(pair.c1, pair.c2, t), 255);
-            } else if dy < band1 {
-                frame.blend_px(xx as u32, yy as u32, pair.c1, 48); // 上条带薄态
-            } else if dy < band2 {
-                frame.blend_px(xx as u32, yy as u32, 0x00FF_FFFF, 15); // 中 1/3 留 6% 白底
             } else {
-                frame.blend_px(xx as u32, yy as u32, pair.c2, 48); // 下条带薄态
+                // 未选中 = 同一把 t 尺的均匀渐变薄态 α48（十三修：三段
+                // 条带硬切实机判「暗块依然硬切」退役——只降 alpha 不降
+                // 连续性）
+                let t = (dy as u32 * 255) / (h - 1).max(1);
+                frame.blend_px(xx as u32, yy as u32, lerp_rgb(pair.c1, pair.c2, t), 48);
             }
         }
     }
@@ -2802,6 +2800,33 @@ impl TermView {
                 continue;
             }
             let clip32 = Some((uclip.0 as i32, uclip.1 as i32));
+            let vb = cp::value_box_rect(&r);
+            // 标签列背衬（十三修 §五）：圆角 36 无边框块（与值框同高
+            // 对齐）= 渐变暗底不透明直写 + 8% 白提亮（blend 白 α20）——
+            // 去框后标签列背景辨识度靠这一层
+            {
+                let lw = cp::LABEL_COL_W as u32;
+                let lr = (POOL_FRAME_R as i64).min((lw / 2).min(vb.h / 2) as i64) as u32;
+                let fw = i64::from(frame.w);
+                for dy in 0..vb.h as i64 {
+                    let yy = vb.y + dy;
+                    if yy < 0 || yy >= i64::from(frame.h) || yy < uclip.0 || yy >= uclip.1 {
+                        continue;
+                    }
+                    for dx in 0..lw as i64 {
+                        let xx = rx + dx;
+                        if xx < 0 || xx >= fw {
+                            continue;
+                        }
+                        if rr_sdf(dx as f32 + 0.5, dy as f32 + 0.5, lw, vb.h, lr) >= 0.0 {
+                            continue;
+                        }
+                        frame.buf[yy as usize * fw as usize + xx as usize] =
+                            frame_bg_rgb(accent.c1, accent.c2, xx, yy, denom);
+                        frame.blend_px(xx as u32, yy as u32, 0x00FF_FFFF, 20);
+                    }
+                }
+            }
             // 标签列（左 12 格，title 档 36px 亮——六修字档反转（色）+
             // 七修补齐（号）：标签是行的标题，字大且亮）
             self.draw_text_left_ex(
@@ -2817,15 +2842,15 @@ impl TermView {
                 clip32,
             );
             // 值框（十二修无边框化：渐变暗底圆角块、零框墨——十一修
-            // 形态②「只有左竖线」实机判丑退役）+ 值文本
-            let vb = cp::value_box_rect(&r);
+            // 形态②「只有左竖线」实机判丑退役；十三修：下拉行值框 =
+            // 三级框全包框——触发器是选择控件）+ 值文本
             paint_row_frame(
                 &mut frame,
                 vb.x + off,
                 vb.y,
                 vb.w,
                 vb.h,
-                false,
+                ur.is_dropdown,
                 accent,
                 denom,
                 uclip,
@@ -2866,29 +2891,49 @@ impl TermView {
         }
 
         // ---- 下拉 panel（开着才画，叠在最后 = 盖住字段行/下池）----
+        // 十三修 §六：整面圆角无边框深底（近黑 α252）+ 选项行方形无个体
+        // 背景 + 选中行均匀细框
         if page.dropdown_open {
             let t = cp::trigger_rect(&ps.upper, scroll);
             let max_h = h.saturating_sub(t.y.max(0) as u32 + t.h + 40);
             let pr = cp::dropdown_panel_rect(page.options.len(), &ps.upper, max_h, scroll);
             let px0 = pr.x + off;
             if px0 >= 0 {
-                blend_rect(&mut frame, px0, pr.y, pr.w, pr.h, 0x0000_0000, 245, no_clip);
+                let prr = (POOL_FRAME_R as i64).min((pr.w / 2).min(pr.h / 2) as i64) as u32;
+                let (fw, fh) = (i64::from(frame.w), i64::from(frame.h));
+                for dy in 0..pr.h as i64 {
+                    let yy = pr.y + dy;
+                    if yy < 0 || yy >= fh {
+                        continue;
+                    }
+                    for dx in 0..pr.w as i64 {
+                        let xx = px0 + dx;
+                        if xx < 0 || xx >= fw {
+                            continue;
+                        }
+                        if rr_sdf(dx as f32 + 0.5, dy as f32 + 0.5, pr.w, pr.h, prr) >= 0.0 {
+                            continue;
+                        }
+                        frame.blend_px(xx as u32, yy as u32, 0, 252);
+                    }
+                }
                 for (i, opt) in page.options.iter().enumerate() {
                     let iy = pr.y + (i as i64) * cp::FIELD_ROW_H as i64;
                     if iy + cp::FIELD_ROW_H as i64 > pr.y + pr.h as i64 {
                         break;
                     }
-                    paint_row_frame(
-                        &mut frame,
-                        px0,
-                        iy,
-                        pr.w,
-                        cp::FIELD_ROW_H,
-                        i == page.option_sel,
-                        accent,
-                        denom,
-                        no_clip,
-                    );
+                    if i == page.option_sel {
+                        paint_thin_frame(
+                            &mut frame,
+                            px0,
+                            iy,
+                            pr.w,
+                            cp::FIELD_ROW_H,
+                            accent,
+                            denom,
+                            no_clip,
+                        );
+                    }
                     self.draw_text_left_ex(
                         &mut frame,
                         opt,
@@ -3301,10 +3346,11 @@ impl TermView {
                 }
             }
             Preview::Dropdown => {
-                // 触发器（值框+▼）+ 下弹 panel 两项（第二项选中）
+                // 十三修：触发器（三级框+▼）+ 圆角深底下弹 panel 两项
+                // （第二项选中 = 均匀细框）
                 let th = 54u32;
                 let y0 = iy + 6;
-                paint_row_frame(frame, ix, y0, iw, th, false, accent, denom, clip);
+                paint_row_frame(frame, ix, y0, iw, th, true, accent, denom, clip);
                 self.draw_text_left_ex(
                     frame,
                     "选项甲",
@@ -3331,23 +3377,51 @@ impl TermView {
                     }
                 }
                 let py0 = y0 + i64::from(th);
+                let prr = (POOL_FRAME_R as i64).min((iw / 2).min(th) as i64) as u32;
                 for dy in 0..(th * 2) as i64 {
                     for dx in 0..iw as i64 {
                         let (xx, yy) = (ix + dx, py0 + dy);
-                        if xx >= 0 && xx < i64::from(frame.w) && yy >= 0 && yy < i64::from(frame.h)
+                        if xx >= 0
+                            && xx < i64::from(frame.w)
+                            && yy >= 0
+                            && yy < i64::from(frame.h)
+                            && rr_sdf(dx as f32 + 0.5, dy as f32 + 0.5, iw, th * 2, prr) < 0.0
                         {
-                            frame.blend_px(xx as u32, yy as u32, 0x0000_0000, 245);
+                            frame.blend_px(xx as u32, yy as u32, 0x0000_0000, 252);
                         }
                     }
                 }
-                for (k, sel) in [false, true].into_iter().enumerate() {
-                    let oy = py0 + k as i64 * i64::from(th);
-                    paint_row_frame(frame, ix, oy, iw, th, sel, accent, denom, clip);
-                }
+                // 选中项（第二项）= 均匀细框；未选中项纯深底
+                let oy1 = py0 + i64::from(th);
+                paint_thin_frame(frame, ix, oy1, iw, th, accent, denom, clip);
             }
             Preview::FieldLabel => {
-                // 标签列（36 亮）+ 值框（30 灰）mini 行
+                // 标签列（36 亮 + 十三修背衬：渐变暗底+8% 白提亮）+
+                // 值框（30 灰）mini 行
                 let y0 = iy + (i64::from(ih) - i64::from(CELL_H * 2)) / 2;
+                {
+                    // 背衬块：与值框同高对齐（CELL_H 高，圆角钳半高）
+                    let (bx, by, bw, bh) = (ix, y0 + i64::from(CELL_H / 2), 216u32, CELL_H);
+                    let br = (POOL_FRAME_R as i64).min((bw / 2).min(bh / 2) as i64) as u32;
+                    for dy in 0..bh as i64 {
+                        let yy = by + dy;
+                        if yy < clip.0 || yy >= clip.1 {
+                            continue;
+                        }
+                        for dx in 0..bw as i64 {
+                            let xx = bx + dx;
+                            if xx < 0 || xx >= i64::from(frame.w) {
+                                continue;
+                            }
+                            if rr_sdf(dx as f32 + 0.5, dy as f32 + 0.5, bw, bh, br) >= 0.0 {
+                                continue;
+                            }
+                            frame.buf[yy as usize * i64::from(frame.w) as usize + xx as usize] =
+                                frame_bg_rgb(accent.c1, accent.c2, xx, yy, denom);
+                            frame.blend_px(xx as u32, yy as u32, 0x00FF_FFFF, 20);
+                        }
+                    }
+                }
                 self.draw_text_left_ex(
                     frame,
                     "标签",
