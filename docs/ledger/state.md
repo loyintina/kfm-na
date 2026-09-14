@@ -7,6 +7,46 @@
 
 ## 当前位置（2026-09-14)
 
+- **设置页 v1g 十五修：池区动画两件+下拉开合两件（2026-09-14，
+  用户拍板，修宪 theme.md §五「池区动画两件」/§六「开合动画
+  两件」）**：①上池高度变化 = 弹簧续弹（DualPool 加 h_from/
+  h_start_ms/h_target/h_primed，layout(now) 逐帧侦测目标变即
+  重定基续弹、首喂直通防开场蹦；upper_scroll 吃目标不吃瞬时
+  值）；②下池换属性标签 = 选中光标**像素域**弹簧滑行
+  （cursor_from 存 px=cursor_row×189，对外报行号——SETTLE_PX
+  =0.5 是像素尺，行号域 0.5=半行≈94px 会提前贴死剪尾，实踩
+  已记 theme.md 实现注）；③下拉展开 = 250ms ease_out_cubic 生长
+  （dd_from/dd_start_ms，涂装 pr.h=full×progress）；④选中即收 =
+  180ms ease_in_cubic，展开中点按=收、收起中余影点按=dismiss_now
+  +return。接线：termview 下池行循环恒画未选中、循环后按
+  cursor_row×189 单独画选中全包框；android_app 全部 layout/snap/
+  select/toggle/pick/dismiss 传 boot_ms，ConfigSig 加 cursor_row_q
+  /dd_progress_q 两维，帧泵条件 cfg_anim_modal_open()||
+  cfg_fx_active()（两把短锁 pool→cfg_page 锁序不倒持）。考题：
+  dual_pool 10 钉/cfg_page 36 钉/termview 110 钉+全量 52+ 套绿；
+  变异四咬全中（直通回潮 h_primed/光标瞬移 elapsed=0/下拉瞬开
+  ease=1.0/涂装全高回潮——咬涂装须咬缩放行，闸条件手搓快照可绕）。
+  **已热更 vc422 双端+redroid 判卷全通（2026-09-14，3f2dcf4
+  三端齐推）**：boot 戳 3f2dcf4-09141046·vc422 双端一致；真机
+  na-push-so 闭环（冒烟 2 过 1 熄屏环境跳过）；redroid adb 原子
+  热更同戳（pid 472021 logcat 实证）。**判卷实录（软件内实录
+  P2 通道十二 rec_req_check 首次全案判卷，四轮）**：轮1 授权链
+  路通（MediaProjectionPermissionActivity 每发必重新弹，
+  uiautomator 拿「START NOW」bounds input tap）；轮2 脚本迟到
+  （15000ms 窗只录到尾巴，34 帧全程静态）；轮3 ffprobe pts 对账
+  （全片仅 14 实帧）+logcat 对时——脚本首 tap 在录制开始后
+  13.7s 才落地，祸根 = 授权与注入分两次 Bash 调用间隔 13s；
+  轮4 一条链（预状态→rec-req→授权→立即注入，20000ms 窗）23
+  实帧全场景五连：下拉收起 f010 全开→f011 半收→闭合三相位、
+  展开 f022 闭→f023 半生长→全开三相位、切页上池高度弹簧
+  f055 高→f056 中间高度+标签选中态淡变同帧→回落三相位、光标
+  滑行 f046 行0→f047 行2 跨行在飞。**判卷通过**。实录判卷三
+  纪律立案：①na-shot 走值守 300ms tick 网格（dump_now 先于
+  touch_check 同 tick 消费），弹簧 350ms/展开 250ms 全在网格内
+  收敛，**抓中间帧必须走实录通道不走 na-shot**；②授权→注入
+  必须同一条 Bash 链，拆调用必迟到；③redroid MediaProjection
+  是 VFR 只在画面变化出帧，ffprobe packet pts_time 才是真帧账，
+  帧数稀疏≠动画没播。
 - **BAR-088 字段行末字丢失根修（2026-09-14，用户实机反馈当日修）**：
   draw_items_left_inset 右缘判停 `>=` 误杀恰好满宽末字（CJK 整数
   步进和 == 内宽必咬；host DejaVu 非整数步进天然漏网——十四修
