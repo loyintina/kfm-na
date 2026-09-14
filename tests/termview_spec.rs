@@ -4185,3 +4185,149 @@ fn spec_cfg下拉_矮面板裁剪钉() {
         "被裁行的选中细框不许出露"
     );
 }
+
+#[test]
+fn spec_cfg下池_选中行文字落墨钉() {
+    // 2026-09-14 用户实机抓「选中态三级框里没有文字」：选中框内芯 =
+    // 不透明渐变暗底，涂装序「行字→选中框」把选中行文字盖没。宪法
+    // 语义：选中框是光标不是蒙版，行内容恒可见（先框后字）。
+    // 变异：文字画回选中框之前（涂装序回潮）即红。
+    use kfm_na::termview::{lerp_rgb, ring_gradient_rgb};
+    use kfm_na::ui::cfg_page::{self, CfgPage, RowView, UpperRow};
+    use kfm_na::ui::dual_pool::DualPool;
+    let (w, h) = (1260u32, 2400u32);
+    let inset = 120u32;
+    let acc = kfm_na::ui::accent::AccentPair {
+        c1: 0x00FF_6000,
+        c2: 0x0000_80FF,
+    };
+    let dark = |c: u32| lerp_rgb(c, 0, 200);
+    let denom = (i64::from(w) - 1) + (i64::from(h) - 1);
+    let row_bg = |px: i64, py: i64| ring_gradient_rgb(dark(acc.c1), dark(acc.c2), px, py, denom);
+    let tv = TermView::new(host_font(), None, 8, 2, CELL_W, CELL_H);
+    let mut pool = DualPool::new(w, h);
+    pool.set_viewport(w, h, inset);
+    pool.set_upper_content_h(72 + cfg_page::FIELD_ROW_H);
+    let ps = pool.layout(1000);
+    let mut page = CfgPage::new();
+    // host 字体无 CJK 字形——落墨钉必须 ASCII 夹具（state.md 夹具教训）
+    page.set_rows(vec![
+        RowView {
+            title: "SYS".into(),
+            meta: "1 item".into(),
+        },
+        RowView {
+            title: "NET".into(),
+            meta: String::new(),
+        },
+    ]);
+    page.set_upper(vec![UpperRow {
+        label: "server".into(),
+        value: "local".into(),
+        is_dropdown: false,
+    }]);
+    page.select(1, 1000);
+    let pg = page.snap(2000); // 弹簧 600ms 兜底贴死 → 收敛在行 1
+    assert_eq!(pg.cursor_row, 1.0, "夹具前提：光标收敛在选中行");
+
+    let mut buf = vec![0u32; (w * h) as usize];
+    termview::paint_cfg_page_chrome(&mut buf, w, h, inset, 0, acc);
+    tv.paint_cfg_dual_pool(&mut buf, w, h, &ps, 0, acc);
+    tv.paint_cfg_pool_content(&mut buf, w, h, &ps, &pg, 0, acc, 0);
+
+    let r1 = cfg_page::lower_row_rect(1, &ps.lower); // 选中行
+    let mut ink = 0usize;
+    for py in r1.y + 10..r1.y + 80 {
+        for px in r1.x + 20..r1.x + 140 {
+            if buf[py as usize * w as usize + px as usize] != row_bg(px, py) {
+                ink += 1;
+            }
+        }
+    }
+    assert!(
+        ink > 50,
+        "选中行标题带必须有文字落墨（实得 {ink} px——「字先框后」回潮 = 0）"
+    );
+}
+
+#[test]
+fn spec_cfg下拉_选中细框滑行涂装钉() {
+    // 两段时序（2026-09-14 用户拍板）涂装侧：选中细框吃 option_sel_f
+    // 瞬时值——手搓 0.5（行 0/1 正中相位），细框必须落在两行之间；
+    // 且先框后字（细框芯不透明渐变暗底，选项文字画在芯上不被盖没）。
+    // 变异：细框画回 option_sel 整行（瞬移回潮）/字先框后回潮即红。
+    use kfm_na::termview::ring_gradient_rgb;
+    use kfm_na::ui::cfg_page::{self, CfgPage, RowView, UpperRow};
+    use kfm_na::ui::dual_pool::DualPool;
+    let (w, h) = (1260u32, 2400u32);
+    let inset = 120u32;
+    let acc = kfm_na::ui::accent::AccentPair {
+        c1: 0x00FF_6000,
+        c2: 0x0000_80FF,
+    };
+    let denom = (i64::from(w) - 1) + (i64::from(h) - 1);
+    let tv = TermView::new(host_font(), None, 8, 2, CELL_W, CELL_H);
+    let mut pool = DualPool::new(w, h);
+    pool.set_viewport(w, h, inset);
+    pool.set_upper_content_h(72 + cfg_page::FIELD_ROW_H);
+    let ps = pool.layout(1000);
+    let mut page = CfgPage::new();
+    page.set_rows(vec![RowView {
+        title: "SYS".into(),
+        meta: "1 item".into(),
+    }]);
+    page.set_upper(vec![UpperRow {
+        label: "server".into(),
+        value: "LOCAL".into(),
+        is_dropdown: true,
+    }]);
+    page.set_options(vec!["LOCAL".into(), "SRV0".into(), "SRV1".into()], 0);
+    page.toggle_dropdown(1000);
+    let mut pg = page.snap(1250); // 展开毕
+    pg.dropdown_progress = 1.0;
+    pg.option_sel_f = 0.5; // 手搓Ⅰ段滑行正中相位（时值钉在 cfg_page_spec）
+
+    let mut buf = vec![0u32; (w * h) as usize];
+    termview::paint_cfg_page_chrome(&mut buf, w, h, inset, 0, acc);
+    tv.paint_cfg_dual_pool(&mut buf, w, h, &ps, 0, acc);
+    tv.paint_cfg_pool_content(&mut buf, w, h, &ps, &pg, 0, acc, 0);
+
+    let lw = tv.text_width("server", 36.0);
+    let vw = tv.text_width("LOCAL", 30.0);
+    let t = cfg_page::trigger_rect(&ps.upper, 0, true, lw, vw);
+    let max_h = h.saturating_sub(t.y.max(0) as u32 + t.h + 40);
+    let pr = cfg_page::dropdown_panel_rect(3, &ps.upper, max_h, 0, true, lw, vw);
+    let row_h = cfg_page::FIELD_ROW_H as i64;
+
+    // ①细框左缘中带（0.5 相位 = 两行之间）= 渐变 α255 直出
+    let sel_y = pr.y + (0.5f32 * row_h as f32).round() as i64;
+    let (fx, fy) = (pr.x + 1, sel_y + row_h / 2);
+    assert_eq!(
+        buf[fy as usize * w as usize + fx as usize],
+        ring_gradient_rgb(acc.c1, acc.c2, fx, fy, denom),
+        "选中细框必须落在滑行瞬时值位（画回 option_sel 整行 = 瞬移回潮即红）"
+    );
+    // ②行 0 整相位处（sel_f=0 的旧位）不许有细框左缘——对照
+    let (ox, oy) = (pr.x + 1, pr.y + row_h / 2);
+    assert_ne!(
+        buf[oy as usize * w as usize + ox as usize],
+        ring_gradient_rgb(acc.c1, acc.c2, ox, oy, denom),
+        "细框旧位不许残留（瞬移回潮对照）"
+    );
+    // ③选项文字盖过细框内芯：扫描细框芯条带（上下芯内各让 10px，
+    // 跨行 0 下半与行 1 上半的字形区），非芯底色像素 = 文字墨
+    use kfm_na::termview::frame_bg_rgb;
+    let mut ink = 0usize;
+    for py in sel_y + 10..sel_y + row_h - 10 {
+        for px in pr.x + 20..pr.x + 120 {
+            let pxv = buf[py as usize * w as usize + px as usize];
+            if pxv != frame_bg_rgb(acc.c1, acc.c2, px, py, denom) {
+                ink += 1;
+            }
+        }
+    }
+    assert!(
+        ink > 30,
+        "选中细框芯上必须有选项文字落墨（实得 {ink} px——「字先框后」回潮 = 0）"
+    );
+}

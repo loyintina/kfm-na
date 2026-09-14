@@ -2738,9 +2738,11 @@ impl TermView {
 
         // ---- 下池：子目录行表（4.5 格框行，左粗条恒在；选中框单独滑行）----
         // 十五修 §五：行本体恒按未选中画——选中全包框在循环后按光标弹簧
-        // 瞬时值（行号小数）单独落墨，内容与页色即时切换不等光标
+        // 瞬时值（行号小数）单独落墨，内容与页色即时切换不等光标。
+        // 2026-09-14 实踩修：选中框内芯不透明渐变暗底，文字必须最后画——
+        // 「行循环画字→选中框后画」= 选中行文字被框芯盖没（用户实机抓）
         let no_clip = (0, i64::from(h));
-        for (i, row) in page.rows.iter().enumerate() {
+        for i in 0..page.rows.len() {
             let r = cp::lower_row_rect(i, &ps.lower);
             if r.y + r.h as i64 > ps.lower.y + ps.lower.h as i64 {
                 break; // 出池底的行不画（下池宪法不滚动——内容少恒撑满）
@@ -2749,7 +2751,6 @@ impl TermView {
             if rx < 0 {
                 continue; // 过渡帧行左缘出屏整行不画
             }
-            let (rx, ry) = (rx as u32, r.y as u32);
             paint_row_frame(
                 &mut frame,
                 r.x + off,
@@ -2761,7 +2762,45 @@ impl TermView {
                 denom,
                 no_clip,
             );
-            // 标题 faux-bold（像素体无粗体档：双画偏 1px）+ meta，行内垂直分布
+        }
+
+        // 十五修 §五：选中全包框吃光标弹簧瞬时值（行号小数 → 像素）——
+        // 与 lower_row_rect 同一份几何（内缩/步进同源），只是 y 吃滑行值
+        if !page.rows.is_empty() {
+            let stride = cp::LOWER_ROW_H as i64 + cp::ROW_GAP;
+            let cy = ps.lower.y
+                + cp::POOL_CONTENT_INSET
+                + (page.cursor_row * stride as f32).round() as i64;
+            let crx = ps.lower.x + cp::POOL_CONTENT_INSET + off;
+            if crx >= 0 && cy + cp::LOWER_ROW_H as i64 <= ps.lower.y + ps.lower.h as i64 {
+                paint_row_frame(
+                    &mut frame,
+                    crx,
+                    cy,
+                    ps.lower
+                        .w
+                        .saturating_sub((cp::POOL_CONTENT_INSET * 2) as u32),
+                    cp::LOWER_ROW_H,
+                    true,
+                    accent,
+                    denom,
+                    no_clip,
+                );
+            }
+        }
+
+        // 文字最后一遍（盖过选中框内芯）：标题 faux-bold（像素体无粗体
+        // 档：双画偏 1px）+ meta，行内垂直分布
+        for (i, row) in page.rows.iter().enumerate() {
+            let r = cp::lower_row_rect(i, &ps.lower);
+            if r.y + r.h as i64 > ps.lower.y + ps.lower.h as i64 {
+                break;
+            }
+            let rx = r.x + off;
+            if rx < 0 {
+                continue;
+            }
+            let (rx, ry) = (rx as u32, r.y as u32);
             let title_band = 90; // 四版 ×1.5（60 → 90）
             self.draw_text_left_ex(
                 &mut frame, &row.title, rx, r.w, ry, title_band, px_title, title_fg, text_inset,
@@ -2791,31 +2830,6 @@ impl TermView {
                     meta_fg,
                     text_inset,
                     None,
-                );
-            }
-        }
-
-        // 十五修 §五：选中全包框吃光标弹簧瞬时值（行号小数 → 像素）——
-        // 与 lower_row_rect 同一份几何（内缩/步进同源），只是 y 吃滑行值
-        if !page.rows.is_empty() {
-            let stride = cp::LOWER_ROW_H as i64 + cp::ROW_GAP;
-            let cy = ps.lower.y
-                + cp::POOL_CONTENT_INSET
-                + (page.cursor_row * stride as f32).round() as i64;
-            let crx = ps.lower.x + cp::POOL_CONTENT_INSET + off;
-            if crx >= 0 && cy + cp::LOWER_ROW_H as i64 <= ps.lower.y + ps.lower.h as i64 {
-                paint_row_frame(
-                    &mut frame,
-                    crx,
-                    cy,
-                    ps.lower
-                        .w
-                        .saturating_sub((cp::POOL_CONTENT_INSET * 2) as u32),
-                    cp::LOWER_ROW_H,
-                    true,
-                    accent,
-                    denom,
-                    no_clip,
                 );
             }
         }
@@ -2983,22 +2997,28 @@ impl TermView {
                         frame.blend_px(xx as u32, yy as u32, 0, 252);
                     }
                 }
+                // 选中行均匀细框（两段时序 2026-09-14：吃 option_sel_f
+                // 滑行瞬时值——Ⅰ段可见滑动，滑到才收面板）；随面板
+                // 当前高裁剪（Ⅱ段收起中行出底即断墨）。**先框后字**——
+                // 细框内芯不透明渐变暗底，后画会盖没选项文字（下池
+                // 选中行同款实踩）
+                let sel_y = pr.y + (page.option_sel_f * cp::FIELD_ROW_H as f32).round() as i64;
+                if sel_y >= pr.y && sel_y + cp::FIELD_ROW_H as i64 <= pr.y + pr.h as i64 {
+                    paint_thin_frame(
+                        &mut frame,
+                        px0,
+                        sel_y,
+                        pr.w,
+                        cp::FIELD_ROW_H,
+                        accent,
+                        denom,
+                        no_clip,
+                    );
+                }
                 for (i, opt) in page.options.iter().enumerate() {
                     let iy = pr.y + (i as i64) * cp::FIELD_ROW_H as i64;
                     if iy + cp::FIELD_ROW_H as i64 > pr.y + pr.h as i64 {
                         break;
-                    }
-                    if i == page.option_sel {
-                        paint_thin_frame(
-                            &mut frame,
-                            px0,
-                            iy,
-                            pr.w,
-                            cp::FIELD_ROW_H,
-                            accent,
-                            denom,
-                            no_clip,
-                        );
                     }
                     self.draw_text_left_ex(
                         &mut frame,

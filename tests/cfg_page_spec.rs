@@ -638,26 +638,82 @@ fn dropdown_progress_grows_ease_out_and_settles() {
 }
 
 #[test]
-fn dropdown_pick_closes_ease_in_with_instant_sel() {
+fn dropdown_pick_two_phase_sel_slide_then_panel_close() {
+    // 2026-09-14 用户拍板两段时序（宪法 §六②）：点他行 = Ⅰ段选中
+    // 细框 160ms 滑行（面板冻结等它）→ Ⅱ段面板 180ms ease-in 收
+    let mut p = CfgPage::new();
+    p.set_options(opts(2), 0); // 3 项
+    p.toggle_dropdown(1000);
+    assert_eq!(p.dropdown_progress(1250), 1.0);
+    p.dropdown_pick(2, 1300);
+    assert_eq!(p.option_sel(), 2, "换选即时生效（触发器值即换）");
+    assert!(
+        !p.dropdown_open(),
+        "点选即翻有效关态——收敛后点触发器必须能重开，账面不许骗人"
+    );
+    // Ⅰ段：面板全程冻结，选中细框滑行
+    assert_eq!(p.dropdown_progress(1300), 1.0, "Ⅰ段起点面板冻结在全开");
+    assert_eq!(p.dropdown_progress(1459), 1.0, "Ⅰ段全程面板冻结");
+    assert!(p.dropdown_fx_active(1400), "Ⅰ段活性在");
+    let sel_mid = p.option_sel_f(1380); // 半程 80/160
+    assert!(
+        (sel_mid - 1.75).abs() < 1e-4,
+        "细框滑行半程 = 2×ease_out(0.5) = 1.75（精确值），实得 {sel_mid}"
+    );
+    assert_eq!(p.option_sel_f(1460), 2.0, "160ms 细框贴死新行");
+    assert_eq!(p.snap(1380).option_sel_f, sel_mid, "快照同一份滑行读数");
+    // Ⅱ段：面板 ease-in 收
+    let mid = p.dropdown_progress(1550); // 半程 90/180
+    assert!(
+        (mid - 0.875).abs() < 1e-4,
+        "Ⅱ段半程 = 1-ease_in(0.5) = 0.875，实得 {mid}"
+    );
+    assert_eq!(p.dropdown_progress(1640), 0.0, "160+180ms 贴死全收");
+    assert!(!p.dropdown_fx_active(1640), "两段全毕活性探针假");
+    // 收敛后点触发器 = 重开 fresh（账面烂账不许把重开误判成收）
+    p.toggle_dropdown(2000);
+    assert!(p.dropdown_open(), "收敛后重开必须真开");
+    assert_eq!(p.dropdown_progress(2000), 0.0, "重开从 0 长（续自烂账）");
+}
+
+#[test]
+fn dropdown_dismiss_mid_pick_move_cancels_and_closes() {
+    // Ⅰ段滑行中点他处 = 取消滑行从冻结进度直接收（换选不换回答案）
     let mut p = CfgPage::new();
     p.set_options(opts(2), 0);
     p.toggle_dropdown(1000);
-    assert_eq!(p.dropdown_progress(1250), 1.0);
     p.dropdown_pick(1, 1300);
-    assert_eq!(p.option_sel(), 1, "选中细框即时落新行（不等面板收完）");
-    assert!(!p.dropdown_open());
+    p.dismiss_dropdown(1400); // Ⅰ段中
+    assert_eq!(p.option_sel(), 1, "取消滑行不换回——换选已生效");
     assert_eq!(
-        p.dropdown_progress(1300),
+        p.dropdown_progress(1400),
         1.0,
-        "收起起点 = 当前展开度（不瞬消）"
+        "取消点进度 = 冻结值续收（不瞬消）"
     );
-    let mid = p.dropdown_progress(1390); // 半程 90/180
+    assert_eq!(p.dropdown_progress(1580), 0.0, "180ms 收尽");
+    assert!(!p.dropdown_fx_active(1580));
+    let e = p.epoch();
+    p.dismiss_dropdown(2000); // 收敛后再 dismiss = 不空涨代际
+    assert_eq!(p.epoch(), e, "挂账收敛后 dismiss 必须零代际变化");
+}
+
+#[test]
+fn dropdown_pick_retarget_mid_move_rebases() {
+    // Ⅰ段滑行中改主意点别的行 = 从当时滑行位置重定基滑向新目标
+    let mut p = CfgPage::new();
+    p.set_options(opts(3), 0); // 4 项
+    p.toggle_dropdown(1000);
+    p.dropdown_pick(2, 1300);
+    p.dropdown_pick(3, 1380); // Ⅰ段半程改选
+    assert_eq!(p.option_sel(), 3);
+    let s = p.option_sel_f(1380);
     assert!(
-        (mid - 0.875).abs() < 1e-4,
-        "收起半程 = 1-ease_in(0.5) = 0.875，实得 {mid}"
+        s > 0.0 && s < 2.0,
+        "重定基起点 = 当时滑行位置（0..2 之间），实得 {s}"
     );
-    assert_eq!(p.dropdown_progress(1480), 0.0, "180ms 贴死全收");
-    assert!(!p.dropdown_fx_active(1480));
+    assert_eq!(p.dropdown_progress(1380), 1.0, "面板仍冻结等滑行");
+    assert_eq!(p.option_sel_f(1540), 3.0, "重定基 160ms 贴死新行");
+    assert_eq!(p.dropdown_progress(1720), 0.0, "Ⅱ段 180ms 收尽");
 }
 
 #[test]

@@ -107,6 +107,9 @@ pub struct CfgPageSnap {
     pub upper: Vec<UpperRow>,
     pub options: Vec<String>,
     pub option_sel: usize,
+    /// 选中细框行号浮点位置（两段时序Ⅰ段滑行的瞬时值；收敛后 ==
+    /// option_sel as f32）。涂装选中细框吃这维
+    pub option_sel_f: f32,
     pub dropdown_open: bool,
     /// 上池滚动 px（四版 §五 滚动条款兑现；0 = 顶）
     pub upper_scroll: i64,
@@ -127,6 +130,9 @@ pub struct CfgPageSnap {
 pub const DROPDOWN_ENTER_MS: u64 = 250;
 /// 下拉收起时长 ms（十五修 §六：选中细框即时落新行，面板 ease-in 收）
 pub const DROPDOWN_EXIT_MS: u64 = 180;
+/// 下拉点选Ⅰ段：选中细框滑向新行的时长 ms（2026-09-14 用户拍板两段
+/// 时序：Ⅰ段滑行（面板冻结）→ Ⅱ段面板才收；点当前行/外点无Ⅰ段）
+pub const DROPDOWN_PICK_MOVE_MS: u64 = 160;
 
 pub struct CfgPage {
     rows: Vec<RowView>,
@@ -146,6 +152,11 @@ pub struct CfgPage {
     /// 下拉进度弹簧（十五修 §六）：起点进度（重定基时 = 当时进度）
     dd_from: f32,
     dd_start_ms: u64,
+    /// 下拉点选两段时序（2026-09-14 用户拍板）：Some((sel_from 行号
+    /// 浮点, panel_from 冻结进度, start_ms)) = Ⅰ段选中细框滑行中或
+    /// Ⅱ段收起账挂在这条上（惰式求值：progress/sel_f/fx 全从 now
+    /// 推，不收尾归一化——收起终点恒 0、sel 终点恒 option_sel）
+    pick_move: Option<(f32, f32, u64)>,
 }
 
 impl CfgPage {
@@ -165,6 +176,7 @@ impl CfgPage {
             cursor_start_ms: 0,
             dd_from: 0.0,
             dd_start_ms: 0,
+            pick_move: None,
         }
     }
 
@@ -198,6 +210,7 @@ impl CfgPage {
         if options != self.options || sel != self.option_sel {
             self.options = options;
             self.option_sel = sel;
+            self.pick_move = None; // 选项表换版，挂账的两段时序作废
             self.epoch += 1;
         }
     }
@@ -233,6 +246,7 @@ impl CfgPage {
         self.upper_scroll = 0;
         self.dropdown_open = false;
         self.dd_from = 0.0;
+        self.pick_move = None;
         self.modal = None;
         self.epoch += 1;
     }
@@ -297,19 +311,43 @@ impl CfgPage {
         self.cursor_row(now_ms) != self.focus as f32
     }
 
+    /// 两段时序挂账未收敛 = true（Ⅰ段滑行中或Ⅱ段收起中）——
+    /// toggle/pick/dismiss 的有效开合态判定单源
+    fn pick_move_live(&self, now_ms: u64) -> bool {
+        self.pick_move
+            .is_some_and(|(_, _, s)| now_ms < s + DROPDOWN_PICK_MOVE_MS + DROPDOWN_EXIT_MS)
+    }
+
     /// 上池下拉框开合（十五修 §六：进度从当前值重定基续走——开着
-    /// 再点 = 从当前展开度收，关着再点 = 从当前余影长）
+    /// 再点 = 从当前展开度收，关着再点 = 从当前余影长）。两段时序
+    /// 挂账未收敛时 = 取消挂账按收处理（挂账已收敛 = 关着，重开
+    /// fresh——账面烂账不许把重开误判成收；普通收起中途无挂账，
+    /// raw 关态重开续自余影，与旧契一致）
     pub fn toggle_dropdown(&mut self, now_ms: u64) {
-        self.dd_from = self.dropdown_progress(now_ms);
+        let p = self.dropdown_progress(now_ms);
+        let was_open = self.dropdown_open || self.pick_move_live(now_ms);
+        self.dd_from = p;
         self.dd_start_ms = now_ms;
-        self.dropdown_open = !self.dropdown_open;
+        self.dropdown_open = !was_open;
+        self.pick_move = None;
         self.epoch += 1;
     }
 
     /// 下拉面板开合进度 0..1（十五修 §六）：开着 = 从 dd_from 长向 1
     /// （250ms ease-out），关着 = 从 dd_from 收向 0（180ms ease-in）；
-    /// 超时贴死端点
+    /// 超时贴死端点。两段时序挂账中（2026-09-14 用户拍板）：Ⅰ段
+    /// （选中细框滑行 160ms）面板**冻结**在点选时进度，Ⅱ段从冻结
+    /// 进度 180ms ease-in 收向 0
     pub fn dropdown_progress(&self, now_ms: u64) -> f32 {
+        if let Some((_, panel_from, start)) = self.pick_move {
+            let move_end = start + DROPDOWN_PICK_MOVE_MS;
+            if now_ms < move_end {
+                return panel_from; // Ⅰ段：面板冻结等选中细框滑到
+            }
+            let e = now_ms - move_end;
+            let t = (e.min(DROPDOWN_EXIT_MS)) as f32 / DROPDOWN_EXIT_MS as f32;
+            return panel_from * (1.0 - crate::ui::fx_ease::ease_in_cubic(t));
+        }
         let elapsed = now_ms.saturating_sub(self.dd_start_ms);
         if self.dropdown_open {
             let t = (elapsed.min(DROPDOWN_ENTER_MS)) as f32 / DROPDOWN_ENTER_MS as f32;
@@ -328,47 +366,81 @@ impl CfgPage {
         }
     }
 
-    /// 下拉开合活性探针（帧泵闸）：展开未满 / 收起未尽 = true
+    /// 选中细框的行号浮点位置（两段时序：Ⅰ段从旧行 ease-out 滑向
+    /// 新行；无挂账/收敛后 == option_sel）。涂装选中细框吃这维
+    pub fn option_sel_f(&self, now_ms: u64) -> f32 {
+        if let Some((sel_from, _, start)) = self.pick_move {
+            let t = (now_ms.saturating_sub(start).min(DROPDOWN_PICK_MOVE_MS)) as f32
+                / DROPDOWN_PICK_MOVE_MS as f32;
+            sel_from + (self.option_sel as f32 - sel_from) * crate::ui::fx_ease::ease_out_cubic(t)
+        } else {
+            self.option_sel as f32
+        }
+    }
+
+    /// 下拉开合活性探针（帧泵闸）：展开未满 / 收起未尽 / 两段时序
+    /// Ⅰ段滑行中或Ⅱ段未收尽 = true
     pub fn dropdown_fx_active(&self, now_ms: u64) -> bool {
+        if let Some((_, _, start)) = self.pick_move {
+            if now_ms < start + DROPDOWN_PICK_MOVE_MS {
+                return true; // Ⅰ段滑行中
+            }
+            return self.dropdown_progress(now_ms) > 0.0; // Ⅱ段未收尽
+        }
         let p = self.dropdown_progress(now_ms);
         if self.dropdown_open { p < 1.0 } else { p > 0.0 }
     }
 
-    /// 下拉框点选：换选 + 收 panel（十五修 §六：选中细框即时落新行，
-    /// 面板从当前进度 180ms ease-in 收起——不瞬消）。业务动作（写配置/
-    /// 重建上池）归壳——壳在本调用后读 `option_sel()` 执行
+    /// 下拉框点选（2026-09-14 用户拍板两段时序，宪法 §六②）：
+    /// 点**其他**行 = 换选 + dropdown_open 即翻 false（壳的触发器
+    /// 重开路由不被账面欺骗）+ 挂账两段——Ⅰ段选中细框 160ms 滑向
+    /// 新行（面板冻结等它），Ⅱ段面板 180ms ease-in 自动收；点
+    /// **当前**行 = 无Ⅰ段直接收（挂账已收敛的重点 = 不空涨代际）。
+    /// 业务动作（写配置/重建上池）归壳——壳在本调用后读
+    /// `option_sel()` 执行
     pub fn dropdown_pick(&mut self, i: usize, now_ms: u64) {
         if self.options.is_empty() {
             return;
         }
         let i = i.min(self.options.len() - 1);
         if i != self.option_sel {
+            let panel_from = self.dropdown_progress(now_ms);
+            let sel_from = self.option_sel_f(now_ms);
             self.option_sel = i;
+            self.dropdown_open = false; // 有效态即关，动画账全挂 pick_move
+            self.pick_move = Some((sel_from, panel_from, now_ms));
             self.epoch += 1;
-        }
-        if self.dropdown_open {
+        } else if self.dropdown_open || self.pick_move_live(now_ms) {
             self.dd_from = self.dropdown_progress(now_ms);
             self.dd_start_ms = now_ms;
             self.dropdown_open = false;
+            self.pick_move = None;
             self.epoch += 1;
         }
     }
 
     /// 下拉框开着时点别处 = 收（宪法 §六 下拉栏常规语义；十五修：
-    /// 同选中收起的 180ms ease-in 动画）
+    /// 同选中收起的 180ms ease-in 动画）。两段时序挂账中 = 取消滑行
+    /// 从当前进度直接收；挂账已收敛/普通收起中途 = 不空涨代际
     pub fn dismiss_dropdown(&mut self, now_ms: u64) {
-        if self.dropdown_open {
+        if self.dropdown_open || self.pick_move_live(now_ms) {
             self.dd_from = self.dropdown_progress(now_ms);
             self.dd_start_ms = now_ms;
             self.dropdown_open = false;
+            self.pick_move = None;
             self.epoch += 1;
         }
     }
 
     /// 收起中余影被点 = 即时清零（十五修 §六：余影不穿透触摸——面板
-    /// 已判定收，余影只是视觉尾巴，点按处交互必须立即让位）
+    /// 已判定收，余影只是视觉尾巴，点按处交互必须立即让位）。两段
+    /// 时序挂账残留一并作废
     pub fn dropdown_dismiss_now(&mut self) {
-        if !self.dropdown_open && self.dd_from > 0.0 {
+        if self.pick_move.take().is_some() {
+            self.dropdown_open = false;
+            self.dd_from = 0.0;
+            self.epoch += 1;
+        } else if !self.dropdown_open && self.dd_from > 0.0 {
             self.dd_from = 0.0;
             self.epoch += 1;
         }
@@ -486,6 +558,7 @@ impl CfgPage {
             upper: self.upper.clone(),
             options: self.options.clone(),
             option_sel: self.option_sel,
+            option_sel_f: self.option_sel_f(now_ms),
             dropdown_open: self.dropdown_open,
             upper_scroll: self.upper_scroll,
             tab: self.tab,

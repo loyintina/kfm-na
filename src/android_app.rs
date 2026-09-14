@@ -4857,9 +4857,16 @@ impl ApplicationHandler for App {
             // 组件池跳框动效预览帧泵(十四修 §六)+池区/下拉动画帧泵
             // (十五修 §五/§六):动画在播且配置页在顶 → ≤30fps 置脏
             // (ConfigSig 时间桶/光标行号/下拉进度三维触发槽重烘焙);
-            // 收敛/盖住零帧——无动画零成本纪律同 §四
+            // 收敛/盖住零帧——无动画零成本纪律同 §四。
+            // 收敛补终帧(ui-base §四,2026-09-14 用户实机抓下拉余影):
+            // 活性翻 false 那圈必须再脏一帧擦终态,否则屏幕定格在收敛
+            // 前最后一帧(进度≈0.02 的一行黑余影)——闸 = prev||curr
+            let cfg_fx = Self::cfg_anim_modal_open() || Self::cfg_fx_active();
+            static CFG_FX_PREV: std::sync::atomic::AtomicBool =
+                std::sync::atomic::AtomicBool::new(false);
+            let cfg_fx_prev = CFG_FX_PREV.swap(cfg_fx, std::sync::atomic::Ordering::Relaxed);
             if self.last_ai_snap.and_then(|s| s.top) == Some(crate::ai_presence::Panel::Config)
-                && (Self::cfg_anim_modal_open() || Self::cfg_fx_active())
+                && (cfg_fx || cfg_fx_prev)
             {
                 static LAST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
                 let now = crate::report::boot_ms() as u64;
