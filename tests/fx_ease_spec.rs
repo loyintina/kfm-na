@@ -28,6 +28,15 @@ fn spec_ease_裸曲线端点与形状() {
     // 形状签名：ease-out 前半跑赢直线（开头快）；ease-in 反之
     assert!(fx_ease::ease_out_cubic(0.5) > 0.5);
     assert!(fx_ease::ease_in_cubic(0.5) < 0.5);
+    // ease-in-out（十八修，视口平移定稿曲线）：端点 + 对称中点 +
+    // 解析钉（1/4 程 = 4×0.25³ = 0.0625；起步收步皆柔 = 两端都输直线）
+    assert_eq!(fx_ease::ease_in_out_cubic(0.0), 0.0);
+    assert_eq!(fx_ease::ease_in_out_cubic(1.0), 1.0);
+    assert_eq!(fx_ease::ease_in_out_cubic(0.5), 0.5);
+    assert!((fx_ease::ease_in_out_cubic(0.25) - 0.0625).abs() < 1e-6);
+    assert!((fx_ease::ease_in_out_cubic(0.75) - 0.9375).abs() < 1e-6);
+    assert!(fx_ease::ease_in_out_cubic(0.25) < 0.25);
+    assert!(fx_ease::ease_in_out_cubic(0.75) > 0.75);
 }
 
 // ---- 曲线端点与时长分档（纯函数零墙钟） ----

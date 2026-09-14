@@ -4447,13 +4447,20 @@ fn spec_下拉三角旋转_涂装钉() {
 fn spec_视口平移双代同画_涂装钉() {
     // 十七修 §六「面与内容一体」页面级（标签切换）：双池框+内容**双代
     // 同画**——旧代冻结快照带偏移出（dir+1 = 内容左移）、新代活态带
-    // 偏移进，视口 = 页内容裁剪带（页环带外零墨）。
-    // ①同帧双代：t≈0.41 帧——旧代未选中行内芯（**旧 accent** 渐变暗底，
-    //   渐变锚 temp 原坐标）左移 0.41×池宽落带内；同帧新代选中行内芯
-    //   （新 accent）从右进，左部已落带内——一帧两代各带各色 = 铁证；
-    // ②方向律：t≈0.80 帧新代选中框左粗缘 = 原左缘 + 0.20×池宽（右进），
-    //   渐变锚 temp 原坐标——dir 反号变异（新代左进）即红；
-    // ③视口裁剪：带右缘外像素 = chrome 原样（clip 缺失即红）。
+    // 偏移进，视口 = 页内容裁剪带（页环带外零墨）。十八修 §七：平移
+    // 距 = 视口宽 + 留隙 G（PAN_GAP_PAGE = 2 格——隐藏布局轴上
+    // 「旧代 | 隙 G | 新代」）；曲线 ease-in-out cubic。
+    // ①同帧双代：t≈0.26 帧（raw 0.4）——旧代未选中行内芯（**旧
+    //   accent** 渐变暗底，渐变锚 temp 原坐标）左移 t×(池宽+G) 落带
+    //   内；同帧新代选中行内芯（新 accent）从右进，左部已落带内——
+    //   一帧两代各带各色 = 铁证；
+    // ②方向律：t≈0.97 帧（raw 0.8）新代选中框左粗缘 = 原左缘 +
+    //   (1−t)×(池宽+G)（右进），渐变锚 temp 原坐标——dir 反号变异
+    //   （新代左进）即红；
+    // ③视口裁剪：带右缘外像素 = chrome 原样（clip 缺失即红）；
+    // ④留隙律：t=0.5 帧——旧代池框右粗缘与新一代池框左粗缘同帧
+    //   相隔 G，间隙带像素 = 隐藏布局轴上的页背景（temp 源坐标锚
+    //   取证；T 改回池宽「贴挤」即红）。
     // 调用方纪律同步钉：Page 域平移中**不**调 paint_cfg_dual_pool（框
     // 由 pool_content 双代自理）。
     use kfm_na::termview::{frame_bg_rgb, ring_gradient_rgb};
@@ -4498,21 +4505,22 @@ fn spec_视口平移双代同画_涂装钉() {
         meta: String::new(),
     }]); // 壳 rebuild 模拟：新代行表
 
-    // ---- ①同帧双代（t≈0.41：旧代未全出、新代左部已进）----
-    let pg = page.snap(1040);
+    // ---- ①同帧双代（t≈0.26：旧代未全出、新代左部已进）----
+    let travel = pw + cfg_page::PAN_GAP_PAGE; // 十八修留隙律：平移距 = 视口宽+G
+    let pg = page.snap(1100); // raw 0.4 → ease-in-out t = 4×0.4³ ≈ 0.256
     let pan = pg.pan.clone().expect("夹具前提：中帧平移账在");
     assert_eq!(pan.dir, 1, "夹具前提：前进方向");
     assert!(
-        pan.t > 0.3 && pan.t < 0.6,
-        "夹具前提：t≈0.41（实得 {})",
+        pan.t > 0.15 && pan.t < 0.45,
+        "夹具前提：t≈0.26（实得 {})",
         pan.t
     );
-    let d_old = -(pan.t * pw as f32).round() as i64;
-    let d_new = ((1.0 - pan.t) * pw as f32).round() as i64;
+    let d_old = -(pan.t * travel as f32).round() as i64;
+    let d_new = ((1.0 - pan.t) * travel as f32).round() as i64;
     let mut b1 = vec![0u32; (w * h) as usize];
     termview::paint_cfg_page_chrome(&mut b1, w, h, inset, 0, acc);
     // Page 域：不调 paint_cfg_dual_pool（调用方纪律——框随内容双代）
-    tv.paint_cfg_pool_content(&mut b1, w, h, &ps, &pg, 0, acc, 1040);
+    tv.paint_cfg_pool_content(&mut b1, w, h, &ps, &pg, 0, acc, 1100);
 
     let r1 = cfg_page::lower_row_rect(1, &ps.lower); // 旧代行 1（未选中）
     let (ix, py1) = (r1.x + r1.w as i64 / 2, r1.y + r1.h as i64 / 2);
@@ -4537,20 +4545,20 @@ fn spec_视口平移双代同画_涂装钉() {
         "新代行内芯必须带**新 accent** 右进落位（同帧双代铁证）"
     );
 
-    // ---- ②方向律（t≈0.80：新代选中框左粗缘 = 原左缘 + 0.20×池宽）----
-    let pg_b = page.snap(1104);
+    // ---- ②方向律（t≈0.97：新代选中框左粗缘 = 原左缘 + (1−t)×(池宽+G)）----
+    let pg_b = page.snap(1200); // raw 0.8 → ease-in-out t ≈ 0.968
     let pan_b = pg_b.pan.clone().expect("夹具前提：后段平移账在");
-    assert!(pan_b.t > 0.7, "夹具前提：t≈0.80（实得 {})", pan_b.t);
-    let d_new_b = ((1.0 - pan_b.t) * pw as f32).round() as i64;
+    assert!(pan_b.t > 0.9, "夹具前提：t≈0.97（实得 {})", pan_b.t);
+    let d_new_b = ((1.0 - pan_b.t) * travel as f32).round() as i64;
     let mut b2 = vec![0u32; (w * h) as usize];
     termview::paint_cfg_page_chrome(&mut b2, w, h, inset, 0, acc);
-    tv.paint_cfg_pool_content(&mut b2, w, h, &ps, &pg_b, 0, acc, 1104);
+    tv.paint_cfg_pool_content(&mut b2, w, h, &ps, &pg_b, 0, acc, 1200);
     let edge_temp = ps.lower.x + cfg_page::POOL_CONTENT_INSET + 4; // 左粗缘 temp 原位
     let edge_x = edge_temp + d_new_b;
     assert_eq!(
         b2[py0 as usize * w as usize + edge_x as usize],
         ring_gradient_rgb(acc.c1, acc.c2, edge_temp, py0, denom),
-        "新代选中框左粗缘必须 = 原左缘 + (1−t)×池宽（方向律；dir 反号即红）"
+        "新代选中框左粗缘必须 = 原左缘 + (1−t)×(池宽+G)（方向律；dir 反号即红）"
     );
 
     // ---- ③视口裁剪：带右缘外 = chrome 原样 ----
@@ -4561,5 +4569,194 @@ fn spec_视口平移双代同画_涂装钉() {
         b2[py0 as usize * w as usize + ox],
         bc[py0 as usize * w as usize + ox],
         "视口带右缘外不许有双代墨（clip 缺失即红）"
+    );
+
+    // ---- ④留隙律（t=0.5：双代池框缘相隔 G，间隙 = 隐藏布局轴页背景）----
+    let pg_c = page.snap(1125); // raw 0.5 → ease-in-out t = 0.5
+    let pan_c = pg_c.pan.clone().expect("夹具前提：半程平移账在");
+    assert!(
+        (pan_c.t - 0.5).abs() < 0.01,
+        "夹具前提：t=0.5（实得 {})",
+        pan_c.t
+    );
+    let d5 = (0.5 * travel as f32).round() as i64; // |d_old| = d_new = 半程
+    let mut b4 = vec![0u32; (w * h) as usize];
+    termview::paint_cfg_page_chrome(&mut b4, w, h, inset, 0, acc);
+    tv.paint_cfg_pool_content(&mut b4, w, h, &ps, &pg_c, 0, acc, 1125);
+    let fy = ps.upper.y + ps.upper.h as i64 / 2; // 上池框腰（无内容墨处）
+    // 静物 oracle：旧/新 accent 各画一遍双池框（渐变锚公式件内细节
+    // 不手推——参照缓冲同路径涂装，逐像素即铁证）
+    let mut bref_old = vec![0u32; (w * h) as usize];
+    termview::paint_cfg_page_chrome(&mut bref_old, w, h, inset, 0, acc_old);
+    tv.paint_cfg_dual_pool(&mut bref_old, w, h, &ps, 0, acc_old);
+    let mut bref_new = vec![0u32; (w * h) as usize];
+    termview::paint_cfg_page_chrome(&mut bref_new, w, h, inset, 0, acc);
+    tv.paint_cfg_dual_pool(&mut bref_new, w, h, &ps, 0, acc);
+    // 旧代池框右粗缘（temp 原位 pool右−2）左出半程，带**旧** accent
+    let xr_temp = ps.upper.x + pw - 2;
+    assert_eq!(
+        b4[fy as usize * w as usize + (xr_temp - d5) as usize],
+        bref_old[fy as usize * w as usize + xr_temp as usize],
+        "旧代池框右粗缘必须带旧 accent 左出（留隙轴上旧代右端）"
+    );
+    // 新代池框左粗缘（temp 原位 pool左+1）右进半程，带**新** accent
+    let xl_temp = ps.upper.x + 1;
+    assert_eq!(
+        b4[fy as usize * w as usize + (xl_temp + d5) as usize],
+        bref_new[fy as usize * w as usize + xl_temp as usize],
+        "新代池框左粗缘必须带新 accent 右进（留隙轴上新代左端）"
+    );
+    // 间隙带中点：两代源坐标都在各自布局的池外空白 → temp 里是 chrome
+    // 页背景原样——取证 = chrome-only 参照的源锚像素（T 改回池宽即红）
+    let x_g = ps.upper.x + pw / 2 + 3;
+    let sx_g = x_g - d5;
+    assert_eq!(
+        b4[fy as usize * w as usize + x_g as usize],
+        bc[fy as usize * w as usize + sx_g as usize],
+        "双代间隙带必须 = 隐藏布局轴上的页背景（留隙 G 被删即贴挤，红）"
+    );
+}
+
+#[test]
+fn spec_上池平移_框静止留隙_涂装钉() {
+    // 十八修 §七 上池级实例（2026-09-15 用户实机录屏三条）：
+    // ①**框静止**——平移裁剪带 = 上池**内容矩形**（POOL_CONTENT_INSET
+    //   内缩），池框左粗竖条（9px）一像素不进带（旧带左缘 x+4 吞了粗
+    //   条右半 = 框随内容滑，用户判「视觉断裂」）；带外采样 = 静物
+    //   参照逐像素相等（带左缘改回 +4 即红）；
+    // ②**留隙 G = PAN_GAP_UPPER**（2×POOL_CONTENT_INSET）+ 双代同画：
+    //   t=0.5 帧旧代值框左粗缘带旧 accent 左出、新代标签块背衬带新
+    //   accent 右进同帧；间隙带像素 = 池内芯静物原样（两代在源轴上都
+    //   够不到 = 隐藏布局「旧代 | 隙 | 新代」；T 改回内容宽即红）。
+    use kfm_na::termview::{frame_bg_rgb, ring_gradient_rgb};
+    use kfm_na::ui::cfg_page::{self, CfgPage, RowView, UpperRow};
+    use kfm_na::ui::dual_pool::DualPool;
+    let (w, h) = (1260u32, 2400u32);
+    let inset = 120u32;
+    let acc_old = kfm_na::ui::accent::AccentPair {
+        c1: 0x0020_C040,
+        c2: 0x0040_20C0,
+    };
+    let acc = kfm_na::ui::accent::AccentPair {
+        c1: 0x00FF_6000,
+        c2: 0x0000_80FF,
+    };
+    let denom = (i64::from(w) - 1) + (i64::from(h) - 1);
+    let tv = TermView::new(host_font(), None, 8, 2, CELL_W, CELL_H);
+    let mut pool = DualPool::new(w, h);
+    pool.set_viewport(w, h, inset);
+    pool.set_upper_content_h(72 + cfg_page::FIELD_ROW_H);
+    let ps = pool.layout(1000);
+    let mut page = CfgPage::new();
+    page.set_rows(vec![
+        RowView {
+            title: "a".into(),
+            meta: String::new(),
+        },
+        RowView {
+            title: "b".into(),
+            meta: String::new(),
+        },
+        RowView {
+            title: "c".into(),
+            meta: String::new(),
+        },
+    ]);
+    page.set_upper(vec![UpperRow {
+        label: "server".into(),
+        value: "LOCAL".into(),
+        is_dropdown: true,
+    }]);
+    page.select(2, 1000, ps.clone(), acc_old); // dir+1，旧代冻结（行表/页色/池几何）
+    page.set_upper(vec![UpperRow {
+        // 壳 rebuild 模拟：新代上池行表
+        label: "NEWL".into(),
+        value: "NEWV".into(),
+        is_dropdown: true,
+    }]);
+
+    let pg = page.snap(1125); // raw 0.5 → ease-in-out t = 0.5
+    let pan = pg.pan.clone().expect("夹具前提：上池平移账在");
+    assert_eq!(pan.scope, cfg_page::PanScope::Upper);
+    assert_eq!(pan.dir, 1, "夹具前提：前进方向");
+    assert!(
+        (pan.t - 0.5).abs() < 0.01,
+        "夹具前提：t=0.5（实得 {})",
+        pan.t
+    );
+
+    let mut b1 = vec![0u32; (w * h) as usize];
+    termview::paint_cfg_page_chrome(&mut b1, w, h, inset, 0, acc);
+    tv.paint_cfg_dual_pool(&mut b1, w, h, &ps, 0, acc); // Upper 域：框静物照常
+    tv.paint_cfg_pool_content(&mut b1, w, h, &ps, &pg, 0, acc, 1125);
+    // 静物参照（无内容）：chrome + 双池框
+    let mut bref = vec![0u32; (w * h) as usize];
+    termview::paint_cfg_page_chrome(&mut bref, w, h, inset, 0, acc);
+    tv.paint_cfg_dual_pool(&mut bref, w, h, &ps, 0, acc);
+
+    // ---- ①框静止：池框左粗竖条/右细缘/下细缘 = 参照逐像素相等 ----
+    for (sx, sy) in [
+        (ps.upper.x + 5, ps.upper.y + 30),
+        (ps.upper.x + 5, ps.upper.y + ps.upper.h as i64 - 30),
+        (ps.upper.x + ps.upper.w as i64 - 2, ps.upper.y + 40),
+        (
+            ps.upper.x + ps.upper.w as i64 / 2,
+            ps.upper.y + ps.upper.h as i64 - 2,
+        ),
+    ] {
+        assert_eq!(
+            b1[sy as usize * w as usize + sx as usize],
+            bref[sy as usize * w as usize + sx as usize],
+            "上池框/粗竖条不许进平移带（带左缘吞条即红）：({sx},{sy})"
+        );
+    }
+
+    // ---- ②双代同画 + 留隙 G ----
+    let x0c = ps.upper.x + cfg_page::POOL_CONTENT_INSET;
+    let x1c = ps.upper.x + ps.upper.w as i64 - cfg_page::POOL_CONTENT_INSET;
+    let pw_c = x1c - x0c;
+    let travel = pw_c + cfg_page::PAN_GAP_UPPER;
+    let d5 = (0.5 * travel as f32).round() as i64;
+    // 旧代：值框（下拉行 = 三级框全包框）左粗缘左出半程，带旧 accent
+    let lw_o = tv.text_width("server", 36.0);
+    let vw_o = tv.text_width("LOCAL", 30.0);
+    let vb_o = cfg_page::trigger_rect(&ps.upper, 0, true, lw_o, vw_o);
+    let (ax, ay) = (vb_o.x + 1, vb_o.y + vb_o.h as i64 / 2);
+    assert!(
+        ax - d5 > x0c,
+        "夹具前提：旧代值框采样点仍在带内（{}）",
+        ax - d5
+    );
+    assert_eq!(
+        b1[ay as usize * w as usize + (ax - d5) as usize],
+        ring_gradient_rgb(acc_old.c1, acc_old.c2, ax, ay, denom),
+        "旧代值框左粗缘必须带旧 accent 左出（渐变锚 temp 原坐标）"
+    );
+    // 新代：标签块背衬右进半程，带新 accent（背衬 = 渐变暗底 + 白 α20
+    // 提亮——blend_px 配方镜像，配方改方 = 有意红）
+    let blend_white20 = |bg: u32| -> u32 {
+        let ch = |f: u32, d: u32| (f * 20 + d * 235) / 255;
+        (ch(255, (bg >> 16) & 0xFF) << 16) | (ch(255, (bg >> 8) & 0xFF) << 8) | ch(255, bg & 0xFF)
+    };
+    let row0 = cfg_page::upper_row_rect(0, &ps.upper, 0);
+    let lb_n = cfg_page::field_label_rect(&row0, tv.text_width("NEWL", 36.0));
+    let (bx, by) = (lb_n.x + 2, lb_n.y + lb_n.h as i64 / 2);
+    assert!(
+        bx + d5 < x1c,
+        "夹具前提：新代标签采样点在带内（{}）",
+        bx + d5
+    );
+    assert_eq!(
+        b1[by as usize * w as usize + (bx + d5) as usize],
+        blend_white20(frame_bg_rgb(acc.c1, acc.c2, bx, by, denom)),
+        "新代标签块背衬必须带新 accent 右进（同帧双代）"
+    );
+    // 间隙带中点：两代源坐标都出带 → 池内芯静物原样（留隙被删即红）
+    let x_g = x0c + pw_c / 2 + 3;
+    let y_g = ps.upper.y + ps.upper.h as i64 / 2;
+    assert_eq!(
+        b1[y_g as usize * w as usize + x_g as usize],
+        bref[y_g as usize * w as usize + x_g as usize],
+        "双代间隙带必须 = 上池内芯静物（留隙 G 被删即贴挤，红）"
     );
 }

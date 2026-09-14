@@ -161,13 +161,21 @@ pub struct PanSnap {
     pub scope: PanScope,
     /// +1 = 选择前进（内容左移：旧左出、新右进）；−1 = 后退（右移）
     pub dir: i8,
-    /// 缓动后进度 0..1（ease-out cubic；1 = 贴死收敛）
+    /// 缓动后进度 0..1（十八修：ease-in-out cubic；1 = 贴死收敛）
     pub t: f32,
     pub old: Box<EpochSnap>,
 }
 
-/// 视口平移切页时长 ms（十七修 §六：250ms ease-out，与下拉展开同族）
+/// 视口平移切页时长 ms（十七修 §六：250ms；十八修 §七：曲线换
+/// ease-in-out cubic——ease-out 起步即满速读感「太块」，用户实机
+/// 录屏拍板）
 pub const PAN_MS: u64 = 250;
+/// 视口平移双代留隙 G（十八修 §七 留隙律）：页面级 = 2 格（静态时
+/// 池卡外缘距页内容带缘 1 格的两倍）；平移距 = 视口宽 + G——内容
+/// 轴上恒为「旧代 | 隙 G | 新代」隐藏布局
+pub const PAN_GAP_PAGE: i64 = crate::ui::dual_pool::POOL_SIDE_PAD as i64;
+/// 上池级留隙 G = 2×POOL_CONTENT_INSET（内容缘距池框缘 2 格的两倍）
+pub const PAN_GAP_UPPER: i64 = POOL_CONTENT_INSET * 2;
 
 /// 下拉展开时长 ms（十五修 §六：生长 0→全高 ease-out）
 pub const DROPDOWN_ENTER_MS: u64 = 250;
@@ -667,8 +675,9 @@ impl CfgPage {
         }
     }
 
-    /// 平移瞬时值求值（十七修 §六：250ms ease-out cubic；贴死出 None，
-    /// 账留待下一次切换覆盖——fresh 账直接换掉旧账不续弹）
+    /// 平移瞬时值求值（十七修 §六：250ms；十八修 §七：ease-in-out
+    /// cubic；贴死出 None，账留待下一次切换覆盖——fresh 账直接换掉
+    /// 旧账不续弹）
     fn pan_snap(&self, now_ms: u64) -> Option<PanSnap> {
         self.pan.as_ref().and_then(|(scope, dir, start, old)| {
             let raw = (now_ms.saturating_sub(*start)).min(PAN_MS) as f32 / PAN_MS as f32;
@@ -678,7 +687,7 @@ impl CfgPage {
                 Some(PanSnap {
                     scope: *scope,
                     dir: *dir,
-                    t: crate::ui::fx_ease::ease_out_cubic(raw),
+                    t: crate::ui::fx_ease::ease_in_out_cubic(raw),
                     old: Box::new(old.clone()),
                 })
             }

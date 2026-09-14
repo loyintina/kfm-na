@@ -2731,7 +2731,10 @@ impl TermView {
     /// 值守兜底路径的取舍，GLES 主路径烘焙恒 off=0 不受影响）。
     /// 十七修 §六「面与内容一体」：page.pan = Some 时双代同画——
     /// Page 域 = 双池框+内容整体平移（本函数自带框，调用方须跳过
-    /// paint_cfg_dual_pool）；Upper 域 = 仅上池内容平移（框/下池照常）
+    /// paint_cfg_dual_pool）；Upper 域 = 仅上池内容平移（框/下池
+    /// 照常）。十八修 §七：平移距 = 视口宽 + 留隙 G（内容轴隐藏
+    /// 布局「旧代 | 隙 | 新代」），Upper 域裁剪带 = 上池内容矩形
+    /// （池框一像素不进带），曲线 ease-in-out cubic
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn paint_cfg_pool_content_impl(
         &self,
@@ -2755,10 +2758,14 @@ impl TermView {
             Some(cp::PanScope::Page) => {
                 let pan = page.pan.as_ref().unwrap();
                 // 页面级：旧代（冻结快照，含双池框/旧页色）带偏移出，
-                // 新代（活态）带偏移进；视口 = 页内容裁剪带（页环不动）
+                // 新代（活态）带偏移进；视口 = 页内容裁剪带（页环不动）。
+                // 十八修 §七留隙律：平移距 = 视口宽 + G（PAN_GAP_PAGE）——
+                // 内容轴上恒为「旧代 | 隙 G | 新代」隐藏布局，双代缘距
+                // 全程 = G（贴挤 = 元素替换读感，非视口平移）
                 let pw = ps.upper.w as i64;
-                let d_old = -i64::from(pan.dir) * (pan.t * pw as f32).round() as i64;
-                let d_new = i64::from(pan.dir) * ((1.0 - pan.t) * pw as f32).round() as i64;
+                let travel = pw + cp::PAN_GAP_PAGE;
+                let d_old = -i64::from(pan.dir) * (pan.t * travel as f32).round() as i64;
+                let d_new = i64::from(pan.dir) * ((1.0 - pan.t) * travel as f32).round() as i64;
                 let (ox, _oy) = crate::ui::tab_bar::content_origin();
                 let band = (
                     i64::from(ox) + off,
@@ -2818,8 +2825,11 @@ impl TermView {
             }
             Some(cp::PanScope::Upper) => {
                 let pan = page.pan.as_ref().unwrap();
-                // 上池级：双池框/下池照常（当前态），仅上池内容双代平移；
-                // 视口 = 上池内缘矩形
+                // 上池级：双池框/下池照常（当前态），仅上池内容双代平移。
+                // 十八修 §七：①裁剪带 = 上池**内容矩形**（POOL_CONTENT_
+                // INSET 内缩）——池框/左粗竖条一像素不进带（旧带左缘
+                // x+4 吞了 9px 粗条右半 = 框随内容滑，用户实机判「视觉
+                // 断裂」）；②留隙律同 Page 域（G = PAN_GAP_UPPER）
                 self.paint_pool_lower(
                     &mut frame,
                     &ps.lower,
@@ -2828,15 +2838,17 @@ impl TermView {
                     accent,
                     off,
                 );
-                let pw = ps.upper.w as i64;
-                let d_old = -i64::from(pan.dir) * (pan.t * pw as f32).round() as i64;
-                let d_new = i64::from(pan.dir) * ((1.0 - pan.t) * pw as f32).round() as i64;
+                let bx0 = ps.upper.x + cp::POOL_CONTENT_INSET + off;
+                let bx1 = ps.upper.x + ps.upper.w as i64 - cp::POOL_CONTENT_INSET + off;
                 let band = (
-                    ps.upper.x + 4 + off,
+                    bx0,
                     ps.upper.y + 12,
-                    ps.upper.x + ps.upper.w as i64 - 4 + off,
+                    bx1,
                     ps.upper.y + ps.upper.h as i64 - 12,
                 );
+                let travel = (bx1 - bx0) + cp::PAN_GAP_UPPER;
+                let d_old = -i64::from(pan.dir) * (pan.t * travel as f32).round() as i64;
+                let d_new = i64::from(pan.dir) * ((1.0 - pan.t) * travel as f32).round() as i64;
                 pan_temps(w, h, |a, b| {
                     copy_frame(frame.buf, a);
                     copy_frame(frame.buf, b);

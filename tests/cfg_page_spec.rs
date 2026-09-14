@@ -821,11 +821,18 @@ fn set_tab_hangs_page_pan_with_dir_and_frozen_epoch() {
     assert_eq!(pan.old.upper_scroll, before_scroll);
     assert_eq!(pan.old.accent, acc());
     assert_eq!(pan.old.pool.upper, UPPER);
-    // 时序：中帧 ease-out 进度，贴死后出 None
+    // 时序（十八修：ease-in-out cubic——起步收步皆柔，取代 ease-out 的
+    // 起步满速「太块」读感）：1/4 程 = 0.0625、半程 = 0.5，贴死后出 None
+    let q = p.snap(1000 + PAN_MS / 4).pan.expect("前段账在");
+    assert!(
+        (q.t - 0.0625).abs() < 0.01,
+        "ease-in-out cubic 1/4 程 = 0.0625（t={}）",
+        q.t
+    );
     let mid = p.snap(1000 + PAN_MS / 2).pan.expect("中帧账在");
     assert!(
-        mid.t > 0.8 && mid.t < 1.0,
-        "ease-out cubic 中帧应已过大半（t={})",
+        (mid.t - 0.5).abs() < 0.01,
+        "ease-in-out cubic 半程 = 0.5（t={}）",
         mid.t
     );
     assert!(
