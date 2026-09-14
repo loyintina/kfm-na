@@ -3908,6 +3908,28 @@ impl TermView {
         self.draw_items_left_inset(frame, items, cx, cw, cy, rh, px, fg, clip_y, 18.0);
     }
 
+    /// 考题专用通道（BAR-088 钉：恰好满宽末字必须落墨）——集成测试
+    /// 摸不到 pub(crate) Frame，经此薄壳直打 draw_items_left_inset
+    /// 本体（单源不抄实现，同 pub text_width 先例）
+    #[doc(hidden)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn spec_draw_items_left(
+        &self,
+        buf: &mut [u32],
+        w: u32,
+        h: u32,
+        items: &[(&fontdue::Font, char, f32)],
+        cx: u32,
+        cw: u32,
+        cy: u32,
+        rh: u32,
+        px: f32,
+        fg: u32,
+    ) {
+        let mut frame = Frame { buf, w, h };
+        self.draw_items_left_inset(&mut frame, items, cx, cw, cy, rh, px, fg, None, 0.0);
+    }
+
     /// draw_items_left 全参版：显式起笔内缩（18 是输入栏标定，四版
     /// 配置页 ×1.5 = 27；老调用方走 draw_items_left 行为不变）
     #[allow(clippy::too_many_arguments)]
@@ -3931,7 +3953,11 @@ impl TermView {
         let clip_right = cx + cw;
         let baseline = cy as f32 + (rh as f32 - (hm.ascent - hm.descent)) / 2.0 + hm.ascent;
         for (f, c, adv) in items {
-            if pen_x + adv >= clip_right as f32 {
+            // BAR-088：恰好满宽 = 装得下（> 才 break）——像素字体步进
+            // 整数和 == 内宽时 >= 必误杀末字（CJK 实机字段行集体少一字；
+            // host DejaVu 非整数步进永远打不中此边界，考题靠手搓整数
+            // 步进 items 钉死，见 termview_spec）
+            if pen_x + adv > clip_right as f32 {
                 break; // 右缘装不下就停（v1 无横滚，截断即判卷）
             }
             let (m, bmp) = f.rasterize(*c, px);

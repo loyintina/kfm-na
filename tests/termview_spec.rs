@@ -3987,3 +3987,39 @@ fn spec_动效预览_视口平移_动画钉() {
     let edge = b_b[my as usize * w as usize + (icx + 1) as usize] & 0x00FF_FFFF;
     assert_ne!(edge, 0, "t=1800 新页左缘必须靠泊到 icx（有墨）");
 }
+
+#[test]
+fn spec_bar088_恰好满宽_末字落墨钉() {
+    // BAR-088：draw_items_left_inset 右缘判停 `>=` 误杀恰好满宽的末字——
+    // 像素字体（CJK）步进整数和 == 内宽时，字段行集体少一字（redroid
+    // 实机实证：弹簧→弹/手势仲裁→手势仲/现役→现）。host DejaVu 步进
+    // 非整数永远打不中此边界（这正是考题全绿行为全错的漏网口），故
+    // 手搓整数步进 items（排笔只吃 item.2 步进，与字形无关）复现：
+    // 两字符各 10px 步进、内宽 20 = 恰好满宽，末字必须落墨。
+    // 变异：判停回 >= 即红（右半带断墨）。
+    let tv = host_termview(8, 2);
+    let font = host_font();
+    let items: [(&fontdue::Font, char, f32); 2] = [(&font, 'k', 10.0), (&font, 'e', 10.0)];
+    let (w, h) = (64u32, 64u32);
+    let ink_in = |buf: &[u32], x0: u32, x1: u32| {
+        (x0..x1)
+            .flat_map(|x| (0..h).map(move |y| (x, y)))
+            .any(|(x, y)| buf[(y * w + x) as usize] & 0x00FF_FFFF != 0)
+    };
+    // 恰好满宽：两字都必须落墨（末字在右半带）
+    let mut b0 = vec![0u32; (w * h) as usize];
+    tv.spec_draw_items_left(&mut b0, w, h, &items, 0, 20, 0, 64, 14.0, 0x00FF_FFFF);
+    assert!(ink_in(&b0, 0, 10), "首字带必须有墨（夹具前提）");
+    assert!(
+        ink_in(&b0, 10, 20),
+        "恰好满宽末字必须落墨（BAR-088：>= 判停误杀即红）"
+    );
+    // 真装不下对照：内宽 15 < 两字步进和 20 → 末字不许起笔
+    let mut b1 = vec![0u32; (w * h) as usize];
+    tv.spec_draw_items_left(&mut b1, w, h, &items, 0, 15, 0, 64, 14.0, 0x00FF_FFFF);
+    assert!(ink_in(&b1, 0, 10), "对照组首字带必须有墨");
+    assert!(
+        !ink_in(&b1, 15, 20),
+        "真装不下仍须截断（> 判停不许放成无裁剪）"
+    );
+}
