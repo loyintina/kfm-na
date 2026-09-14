@@ -10,8 +10,10 @@
 //! 考题，生成器不许改。
 
 use kfm_na::ui::cfg_page::{
-    CfgPage, FIELD_BOX_H, FIELD_ROW_GAP, FIELD_ROW_H, LABEL_COL_W, LOWER_ROW_H, ROW_GAP, RowView,
-    UpperRow, lower_row_rect, upper_row_rect, value_box_rect,
+    CfgPage, FIELD_BOTTOM_PAD, FIELD_BOX_GAP, FIELD_BOX_H, FIELD_ROW_GAP, FIELD_ROW_H,
+    FIELD_TEXT_INSET, FIELD_TRIANGLE_PAD, FIELD_VALUE_MIN_W, LOWER_ROW_H, POOL_CONTENT_INSET,
+    ROW_GAP, RowView, UpperRow, field_label_rect, field_value_rect, lower_row_rect, upper_row_rect,
+    wrap_field_lines,
 };
 use kfm_na::ui::dual_pool::PoolRect;
 
@@ -206,66 +208,157 @@ fn upper_rows_shift_with_scroll() {
     );
 }
 
+// 夹具量宽（十四修动态宽度：几何吃实量宽参数；测试喂定值，涂装侧
+// measure_items 实量）——「默认服务器」按 5×30、「本地终端」按 4×30
+const LW: u32 = 150;
+const VW: u32 = 120;
+
 #[test]
-fn trigger_is_first_rows_value_box_right_of_label_col() {
-    let p = CfgPage::new();
-    let t = p.trigger_rect(&UPPER);
+fn trigger_is_first_rows_value_box() {
+    let mut p = CfgPage::new();
+    p.set_upper(upper(0)); // 首行 is_dropdown = true
+    let t = p.trigger_rect(&UPPER, LW, VW);
     let row0 = upper_row_rect(0, &UPPER, 0);
-    assert_eq!(t, value_box_rect(&row0));
-    assert!(t.x > row0.x, "值框在标签列之右");
-    assert_eq!(t.x + t.w as i64, row0.x + row0.w as i64, "值框右缘贴行右缘");
+    let lb = field_label_rect(&row0, LW);
+    assert_eq!(t, field_value_rect(&row0, lb.w, VW, true));
+    assert_eq!(
+        t.x + t.w as i64,
+        row0.x + row0.w as i64,
+        "值框锚行右缘（十四修）"
+    );
+}
+
+// ---- 字段框行动态宽度（十四修 §五：宽随文字，标签锚左/值锚右，
+// 间隔 ≥3 格，超长换行 ≤2 行）----
+
+#[test]
+fn field_label_rect_anchors_left_hugging_text() {
+    let row = upper_row_rect(0, &UPPER, 0);
+    let lb = field_label_rect(&row, LW);
+    assert_eq!(lb.x, row.x, "标签块锚行左缘");
+    assert_eq!(
+        lb.w,
+        LW + FIELD_TEXT_INSET * 2,
+        "宽 = 实量宽 + 双侧文内边距（固定 12 格列退役）"
+    );
+    assert_eq!(lb.h, FIELD_BOX_H, "标签块与值框同高 = 3 格");
+    assert_eq!(
+        lb.y,
+        row.y + (FIELD_ROW_H - FIELD_BOX_H) as i64 / 2,
+        "3 格高居中于 4 格行（上下各缩半格）"
+    );
 }
 
 #[test]
-fn value_box_is_3_cells_centered_in_row() {
-    // 六修：值框上下线各往中心缩半格——3 格高居中于 4 格行，横向不动
+fn field_value_rect_anchors_right_hugging_text() {
     let row = upper_row_rect(0, &UPPER, 0);
-    let vb = value_box_rect(&row);
-    assert_eq!(vb.h, FIELD_BOX_H, "值框 = 3 格高");
+    let lb = field_label_rect(&row, LW);
+    let vb = field_value_rect(&row, lb.w, VW, false);
+    assert_eq!(vb.x + vb.w as i64, row.x + row.w as i64, "值框锚行右缘");
     assert_eq!(
-        vb.y,
-        row.y + (FIELD_ROW_H - FIELD_BOX_H) as i64 / 2,
-        "垂直居中：上缩 = 下缩 = 半格"
+        vb.w,
+        VW + FIELD_TEXT_INSET * 2,
+        "宽 = 实量宽 + 双侧文内边距"
     );
+    assert!(
+        vb.x - (lb.x + lb.w as i64) >= FIELD_BOX_GAP as i64,
+        "两框间隔 ≥3 格（十四修拍板）"
+    );
+    // 上下呼吸位等宽（六修居中不变）
     assert_eq!(
         row.y + row.h as i64 - (vb.y + vb.h as i64),
         vb.y - row.y,
         "上下呼吸位等宽"
     );
+}
+
+#[test]
+fn field_value_rect_dropdown_adds_triangle_pad() {
+    let row = upper_row_rect(0, &UPPER, 0);
+    let a = field_value_rect(&row, 204, VW, false);
+    let b = field_value_rect(&row, 204, VW, true);
+    assert_eq!(b.w, a.w + FIELD_TRIANGLE_PAD, "下拉行值宽 +▼ 三角位");
+    assert_eq!(b.x + b.w as i64, a.x + a.w as i64, "加宽向左吃，右缘不动");
+}
+
+#[test]
+fn field_value_rect_min_width_and_label_caps() {
+    let row = upper_row_rect(0, &UPPER, 0);
+    // 空值 = 值框最小宽（收缩顺序：先保值框下限）
+    let vb = field_value_rect(&row, 204, 0, false);
+    assert_eq!(vb.w, FIELD_VALUE_MIN_W, "值框最小 = 4 格 + 双侧文内边距");
+    // 标签超长：让到上限 = 行宽 − 3 格间隔 − 值框最小宽
+    let lb = field_label_rect(&row, 100_000);
     assert_eq!(
-        (vb.x, vb.w),
-        (row.x + LABEL_COL_W, row.w - LABEL_COL_W as u32),
-        "横向不动"
+        lb.w,
+        row.w - FIELD_BOX_GAP - FIELD_VALUE_MIN_W,
+        "标签块上限 = 给值框留最小位 + 3 格间隔"
     );
+    // 值超长：上限 = 行宽 − 3 格间隔 − 标签块实际宽
+    let vb2 = field_value_rect(&row, lb.w, 100_000, false);
+    assert_eq!(
+        vb2.w,
+        row.w - FIELD_BOX_GAP - lb.w,
+        "值框上限 = 行宽 − 间隔 − 标签块实际宽"
+    );
+    assert_eq!(
+        vb2.x,
+        lb.x + lb.w as i64 + FIELD_BOX_GAP as i64,
+        "顶满时间隔恰好 3 格"
+    );
+}
+
+#[test]
+fn wrap_field_lines_greedy_max_two() {
+    // 10 字各 20px、单行容量 105 → 5 字/行
+    let widths = [20.0; 10];
+    let lines = wrap_field_lines(&widths, 105.0);
+    assert_eq!(lines.len(), 2, "最多 2 行（十四修拍板）");
+    assert_eq!(lines[0], (0, 5, 100.0), "首行贪心装满");
+    assert_eq!(lines[1], (5, 10, 100.0), "余量全进末段（再超 = 涂装裁剪）");
+    // 装得下不换行
+    assert_eq!(wrap_field_lines(&widths[..4], 105.0), vec![(0, 4, 80.0)]);
+    // 空串 = 零行
+    assert!(wrap_field_lines(&[], 105.0).is_empty());
+    // 单字超宽也成行（裁剪归涂装）
+    assert_eq!(wrap_field_lines(&[200.0], 105.0), vec![(0, 1, 200.0)]);
 }
 
 #[test]
 fn dropdown_panel_opens_downward() {
     // 宪法 §六：顶部栏向下弹（反了弹出屏外——kfmv4 教训）
     let mut p = CfgPage::new();
+    p.set_upper(upper(0));
     p.set_options(opts(3), 0); // 4 项
-    let t = p.trigger_rect(&UPPER);
-    let panel = p.dropdown_panel_rect(&UPPER, 10_000);
+    let t = p.trigger_rect(&UPPER, LW, VW);
+    let panel = p.dropdown_panel_rect(&UPPER, 10_000, LW, VW);
     assert_eq!(panel.y, t.y + t.h as i64, "panel 从值框下缘起弹（六修）");
     assert_eq!(panel.x, t.x, "panel 与触发器同宽同左缘");
     assert_eq!(panel.h, 4 * FIELD_ROW_H);
-    let clamped = p.dropdown_panel_rect(&UPPER, 3 * FIELD_ROW_H);
+    let clamped = p.dropdown_panel_rect(&UPPER, 3 * FIELD_ROW_H, LW, VW);
     assert_eq!(clamped.h, 3 * FIELD_ROW_H, "max_h 钳制");
 }
 
 #[test]
 fn dropdown_item_hit() {
     let mut p = CfgPage::new();
+    p.set_upper(upper(0));
     p.set_options(opts(3), 0);
-    let panel = p.dropdown_panel_rect(&UPPER, 10_000);
-    assert_eq!(p.dropdown_item_at_y(panel.y + 1, &UPPER, 10_000), Some(0));
+    let panel = p.dropdown_panel_rect(&UPPER, 10_000, LW, VW);
     assert_eq!(
-        p.dropdown_item_at_y(panel.y + 3 * FIELD_ROW_H as i64 + 1, &UPPER, 10_000),
+        p.dropdown_item_at_y(panel.y + 1, &UPPER, 10_000, LW, VW),
+        Some(0)
+    );
+    assert_eq!(
+        p.dropdown_item_at_y(panel.y + 3 * FIELD_ROW_H as i64 + 1, &UPPER, 10_000, LW, VW),
         Some(3)
     );
-    assert_eq!(p.dropdown_item_at_y(panel.y - 1, &UPPER, 10_000), None);
     assert_eq!(
-        p.dropdown_item_at_y(panel.y + panel.h as i64 + 1, &UPPER, 10_000),
+        p.dropdown_item_at_y(panel.y - 1, &UPPER, 10_000, LW, VW),
+        None
+    );
+    assert_eq!(
+        p.dropdown_item_at_y(panel.y + panel.h as i64 + 1, &UPPER, 10_000, LW, VW),
         None
     );
 }
@@ -273,14 +366,17 @@ fn dropdown_item_hit() {
 // ---- 上池内容高（喂双池数学钉）----
 
 #[test]
-fn upper_content_h_counts_rows_and_gaps() {
+fn upper_content_h_exact_with_bottom_pad() {
+    // 十四修：末行距池底框线 1 格——内容高末尾 +CELL_H（变异：删掉即红）
     let mut p = CfgPage::new();
     assert_eq!(p.upper_content_h(), 0, "空上池内容高 0（占位归双池）");
     p.set_upper(upper(0)); // 2 行
-    let h2 = p.upper_content_h();
-    p.set_upper(upper(2)); // 4 行
-    let h4 = p.upper_content_h();
-    assert_eq!(h4 - h2, 2 * FIELD_ROW_H + 2 * FIELD_ROW_GAP as u32);
+    assert_eq!(
+        p.upper_content_h(),
+        POOL_CONTENT_INSET as u32 + 2 * FIELD_ROW_H + FIELD_ROW_GAP as u32 + FIELD_BOTTOM_PAD,
+        "内容高 = 内边距 + 行 + 隙 + 末行底距 1 格"
+    );
+    assert_eq!(FIELD_BOTTOM_PAD, kfm_na::termview::CELL_H, "底距 = 1 格");
 }
 
 #[test]
@@ -329,16 +425,19 @@ fn trigger_and_dropdown_follow_scroll() {
     p.set_upper(upper(8));
     p.set_options(opts(3), 0);
     let pool_h = 400;
-    let t0 = p.trigger_rect(&UPPER);
+    let t0 = p.trigger_rect(&UPPER, LW, VW);
     p.scroll_upper_by(120, pool_h);
-    let t1 = p.trigger_rect(&UPPER);
+    let t1 = p.trigger_rect(&UPPER, LW, VW);
     assert_eq!(t1.y, t0.y - 120, "触发器随内容一起滚");
     // 下拉命中同尺：panel 跟触发器走，项命中必须带滚动维
-    let panel = p.dropdown_panel_rect(&UPPER, 10_000);
+    let panel = p.dropdown_panel_rect(&UPPER, 10_000, LW, VW);
     assert_eq!(panel.y, t1.y + t1.h as i64);
-    assert_eq!(p.dropdown_item_at_y(panel.y + 1, &UPPER, 10_000), Some(0));
     assert_eq!(
-        p.dropdown_item_at_y(t1.y + 1, &UPPER, 10_000),
+        p.dropdown_item_at_y(panel.y + 1, &UPPER, 10_000, LW, VW),
+        Some(0)
+    );
+    assert_eq!(
+        p.dropdown_item_at_y(t1.y + 1, &UPPER, 10_000, LW, VW),
         None,
         "panel 上方一格（触发器位）不算 panel 项"
     );

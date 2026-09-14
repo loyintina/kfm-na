@@ -2404,6 +2404,16 @@ impl TermView {
         items
     }
 
+    /// 文本实量宽 px（十四修字段框动态宽度：涂装/触摸命中/考题三方
+    /// 同一条尺——integration test 是外部 crate 只能走 pub 口）
+    pub fn text_width(&self, text: &str, px: f32) -> u32 {
+        self.measure_items(text, px)
+            .iter()
+            .map(|it| it.2)
+            .sum::<f32>()
+            .ceil() as u32
+    }
+
     /// 输入栏量宽（2026-09-04 Enter 换行多逻辑行排版）：与 measure_items
     /// 唯一差异——'\n' 保留为零宽条目，不被 pick_font 跳过。下游全家
     /// （starts/光标/选区/锚点柄/菜单）建立在「item 下标 == char 下标
@@ -2682,6 +2692,7 @@ impl TermView {
         page: &crate::ui::cfg_page::CfgPageSnap,
         cfg_off_x: i32,
         accent: crate::ui::accent::AccentPair,
+        now_ms: u64,
     ) {
         use crate::ui::cfg_page as cp;
         if w == 0 || h == 0 {
@@ -2800,25 +2811,32 @@ impl TermView {
                 continue;
             }
             let clip32 = Some((uclip.0 as i32, uclip.1 as i32));
-            let vb = cp::value_box_rect(&r);
+            // 十四修动态宽度：实量宽喂几何（与触摸命中同一条
+            // measure_items 尺——眼手同尺）；标签块锚左、值框锚右
+            let l_items = self.measure_items(&ur.label, px_title);
+            let v_items = self.measure_items(&ur.value, px_meta);
+            let lw = l_items.iter().map(|it| it.2).sum::<f32>().ceil() as u32;
+            let vw = v_items.iter().map(|it| it.2).sum::<f32>().ceil() as u32;
+            let lb = cp::field_label_rect(&r, lw);
+            let vb = cp::field_value_rect(&r, lb.w, vw, ur.is_dropdown);
             // 标签列背衬（十三修 §五）：圆角 36 无边框块（与值框同高
             // 对齐）= 渐变暗底不透明直写 + 8% 白提亮（blend 白 α20）——
-            // 去框后标签列背景辨识度靠这一层
+            // 去框后标签列背景辨识度靠这一层；十四修：宽随标签文字动态
             {
-                let lw = cp::LABEL_COL_W as u32;
-                let lr = (POOL_FRAME_R as i64).min((lw / 2).min(vb.h / 2) as i64) as u32;
+                let lw2 = lb.w;
+                let lr = (POOL_FRAME_R as i64).min((lw2 / 2).min(vb.h / 2) as i64) as u32;
                 let fw = i64::from(frame.w);
                 for dy in 0..vb.h as i64 {
                     let yy = vb.y + dy;
                     if yy < 0 || yy >= i64::from(frame.h) || yy < uclip.0 || yy >= uclip.1 {
                         continue;
                     }
-                    for dx in 0..lw as i64 {
+                    for dx in 0..lw2 as i64 {
                         let xx = rx + dx;
                         if xx < 0 || xx >= fw {
                             continue;
                         }
-                        if rr_sdf(dx as f32 + 0.5, dy as f32 + 0.5, lw, vb.h, lr) >= 0.0 {
+                        if rr_sdf(dx as f32 + 0.5, dy as f32 + 0.5, lw2, vb.h, lr) >= 0.0 {
                             continue;
                         }
                         frame.buf[yy as usize * fw as usize + xx as usize] =
@@ -2827,19 +2845,19 @@ impl TermView {
                     }
                 }
             }
-            // 标签列（左 12 格，title 档 36px 亮——六修字档反转（色）+
-            // 七修补齐（号）：标签是行的标题，字大且亮）
-            self.draw_text_left_ex(
+            // 标签文字（title 档 36px 亮——六修字档反转（色）+ 七修补齐
+            // （号）；十四修：逐行左对齐，超长贪心换行 ≤2 行）
+            self.draw_field_lines(
                 &mut frame,
-                &ur.label,
+                &l_items,
                 rx as u32,
-                cp::LABEL_COL_W as u32,
-                r.y as u32,
-                r.h,
+                lb.w,
+                vb.y as u32,
+                vb.h,
                 px_title,
                 title_fg,
-                text_inset,
                 clip32,
+                true,
             );
             // 值框（十二修无边框化：渐变暗底圆角块、零框墨——十一修
             // 形态②「只有左竖线」实机判丑退役；十三修：下拉行值框 =
@@ -2855,20 +2873,25 @@ impl TermView {
                 denom,
                 uclip,
             );
-            // 值文本右缘留呼吸位（kfmv4 实证：文字不贴框缘；下拉行
-            // 再多留三角位 45+27）；字档反转：值 = meta 档 30px 灰
-            let right_pad = if ur.is_dropdown { 72 } else { 27 };
-            self.draw_text_left_ex(
+            // 值文本逐行右对齐（十四修）；右缘呼吸位 = 文内边距 1.5 格，
+            // 下拉行再让 ▼ 三角位 45px（kfmv4 实证：文字不贴框缘）；
+            // 字档反转：值 = meta 档 30px 灰
+            let tri_pad = if ur.is_dropdown {
+                cp::FIELD_TRIANGLE_PAD
+            } else {
+                0
+            };
+            self.draw_field_lines(
                 &mut frame,
-                &ur.value,
+                &v_items,
                 (vb.x + off) as u32,
-                vb.w.saturating_sub(right_pad),
+                vb.w.saturating_sub(tri_pad),
                 vb.y as u32,
                 vb.h,
                 px_meta,
                 meta_fg,
-                text_inset,
                 clip32,
+                false,
             );
             if ur.is_dropdown {
                 // 右缘下拉三角（四版 ×1.5：逐行 17/15/…/1 覆盖率满混）
@@ -2894,9 +2917,19 @@ impl TermView {
         // 十三修 §六：整面圆角无边框深底（近黑 α252）+ 选项行方形无个体
         // 背景 + 选中行均匀细框
         if page.dropdown_open {
-            let t = cp::trigger_rect(&ps.upper, scroll);
+            // 十四修：触发器几何吃首行实量宽（与字段行涂装同尺）
+            let (lw, vw) = match page.upper.first() {
+                Some(ur) => (
+                    self.text_width(&ur.label, px_title),
+                    self.text_width(&ur.value, px_meta),
+                ),
+                None => (0, 0),
+            };
+            let dd = page.upper.first().is_none_or(|ur| ur.is_dropdown);
+            let t = cp::trigger_rect(&ps.upper, scroll, dd, lw, vw);
             let max_h = h.saturating_sub(t.y.max(0) as u32 + t.h + 40);
-            let pr = cp::dropdown_panel_rect(page.options.len(), &ps.upper, max_h, scroll);
+            let pr =
+                cp::dropdown_panel_rect(page.options.len(), &ps.upper, max_h, scroll, dd, lw, vw);
             let px0 = pr.x + off;
             if px0 >= 0 {
                 let prr = (POOL_FRAME_R as i64).min((pr.w / 2).min(pr.h / 2) as i64) as u32;
@@ -2954,7 +2987,7 @@ impl TermView {
         // 压暗层 + 居中卡 + 关闭钮。本体在 paint_modal_impl（§六 样式
         // 唯一来源：压暗层/字段排版之外的涂装原语全复用共享件）
         if let Some(mi) = page.modal {
-            self.paint_modal_impl(frame.buf, w, h, mi, cfg_off_x, accent);
+            self.paint_modal_impl(frame.buf, w, h, mi, cfg_off_x, accent, now_ms);
         }
     }
 
@@ -2966,6 +2999,7 @@ impl TermView {
     /// 题注是内容的脚注）+ 底部全宽「关闭」钮（paint_thin_frame 均匀
     /// 细框——非池行场合，十一修起不属三级框）。几何/折行全吃 ui/modal.rs（眼手同尺）；
     /// 卡高封顶截断：画出关闭钮上缘的内容断墨（v1 不滚动）
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn paint_modal_impl(
         &self,
         buf: &mut [u32],
@@ -2974,6 +3008,7 @@ impl TermView {
         mi: usize,
         cfg_off_x: i32,
         accent: crate::ui::accent::AccentPair,
+        now_ms: u64,
     ) {
         use crate::ui::modal as md;
         if w == 0 || h == 0 {
@@ -3084,7 +3119,14 @@ impl TermView {
             x: prev.x + off,
             ..prev.clone()
         };
-        self.paint_preview_impl(&mut frame, entry.preview, &prev_screen, accent, denom);
+        self.paint_preview_impl(
+            &mut frame,
+            entry.preview,
+            &prev_screen,
+            accent,
+            denom,
+            now_ms,
+        );
 
         // 字段区：题注（30px 灰）在上 + 内容行（36px 亮）在下
         let mut pen = md::fields_top(&card);
@@ -3156,7 +3198,11 @@ impl TermView {
     /// 复用共享件（paint_rect_ring/paint_row_frame/paint_tab_chip/
     /// paint_open_cursor/orb sprite/gear paint_at），动效引擎类画函数
     /// 曲线/示意图。r = 展台矩形（屏坐标，含面板 off）；展品画在展台
-    /// 内缩 1 格的内区，纵向按展台裁剪
+    /// 内缩 1 格的内区，纵向按展台裁剪。
+    /// **十四修：动效引擎四件 = 动画演示**——静态底图上叠动画层：
+    /// 白球（r10 α220）= 手指触摸，拖动/点触驱动展品按引擎实函数
+    /// 运动；相位 = now_ms % 2400 循环（相位表即考题钉，见
+    /// termview_spec 动效预览四条）
     #[allow(clippy::too_many_lines)]
     fn paint_preview_impl(
         &self,
@@ -3165,6 +3211,7 @@ impl TermView {
         r: &crate::ui::dual_pool::PoolRect,
         accent: crate::ui::accent::AccentPair,
         denom: i64,
+        now_ms: u64,
     ) {
         use crate::ui::comp_registry::Preview;
         let grad = RingGradient {
@@ -3186,6 +3233,25 @@ impl TermView {
         let icx = ix + i64::from(iw) / 2; // 内区心 x
         let title_fg = 0x00D9_D9D9;
         let meta_fg = 0x0080_8080;
+        // 白球 = 手指（十四修 §六 动效预览动画条款）：r10 覆盖率圆，
+        // alpha 入参（0 = 不画）；相位表见各动画臂与考题钉
+        fn finger_ball(frame: &mut Frame<'_>, cx: i64, cy: i64, alpha: u32) {
+            if alpha == 0 {
+                return;
+            }
+            for dy in -10..=10i64 {
+                for dx in -10..=10i64 {
+                    if dx * dx + dy * dy <= 100 {
+                        let (xx, yy) = (cx + dx, cy + dy);
+                        if xx >= 0 && xx < i64::from(frame.w) && yy >= 0 && yy < i64::from(frame.h)
+                        {
+                            frame.blend_px(xx as u32, yy as u32, 0x00FF_FFFF, alpha);
+                        }
+                    }
+                }
+            }
+        }
+        let at = now_ms % 2400; // 动画相位（循环 2400ms，十四修拍板）
         match pv {
             Preview::Ring => {
                 // 小页环：池框同配方（c1→c2 外壳向），宽 ≈ 内区 2/3
@@ -3606,9 +3672,39 @@ impl TermView {
                     }
                     prev = Some((px_x, px_y));
                 }
+                // 动画层（十四修 §六）：白球在曲线原点淡入→按住→淡出；
+                // 响应点 300 起沿 spring_pos 实曲线骑行，900 停终点
+                let origin_y = iy + i64::from(ih);
+                let ball_a = if at < 200 {
+                    at as u32 * 220 / 200
+                } else if at < 300 {
+                    220
+                } else if at < 500 {
+                    220 - (at - 300) as u32 * 220 / 200
+                } else {
+                    0
+                };
+                finger_ball(frame, ix, origin_y, ball_a);
+                if at >= 300 {
+                    let prog = (at - 300).min(600);
+                    let pos = crate::ui::fx_spring::spring_pos(0.0, 100.0, prog);
+                    let dx = ix + i64::from(iw) * prog as i64 / 600;
+                    let dyy = origin_y - (pos / 130.0 * ih as f32) as i64;
+                    for ddy in -6..=6i64 {
+                        for ddx in -6..=6i64 {
+                            if ddx * ddx + ddy * ddy <= 36 {
+                                let (xx, yy) = (dx + ddx, dyy + ddy);
+                                if xx >= 0 && xx < i64::from(frame.w) && yy >= clip.0 && yy < clip.1
+                                {
+                                    frame.blend_px(xx as u32, yy as u32, 0x00FF_FFFF, 255);
+                                }
+                            }
+                        }
+                    }
+                }
             }
             Preview::CurveEase => {
-                // 两族同图：ease-out（c1）与 ease-in（c2）
+                // 两族同图：ease-out（c1）与 ease-in（c2）= 静态底图
                 for step in 0..iw {
                     let t = step as f32 / iw as f32;
                     let yo = crate::ui::fx_ease::ease_out_cubic(t);
@@ -3622,6 +3718,36 @@ impl TermView {
                         }
                     }
                 }
+                // 动画层（十四修 §六）：白球点触小面板顶心→面板
+                // ease_out 350ms 下落（= AI 面板实节奏）→停底→
+                // ease_in 250ms 收起；球按住到 650 后淡出
+                let pw2 = i64::from(iw) * 2 / 3;
+                let ph2 = 54i64;
+                let px0 = ix + i64::from(iw) / 6;
+                let span = i64::from(ih) - ph2;
+                let p = if at < 300 {
+                    0.0
+                } else if at < 650 {
+                    crate::ui::fx_ease::ease_out_cubic((at - 300) as f32 / 350.0)
+                } else if at < 1500 {
+                    1.0
+                } else if at < 1750 {
+                    1.0 - crate::ui::fx_ease::ease_in_cubic((at - 1500) as f32 / 250.0)
+                } else {
+                    0.0
+                };
+                let py = iy + (p * span as f32) as i64;
+                paint_thin_frame(frame, px0, py, pw2 as u32, ph2 as u32, accent, denom, clip);
+                let ball_a = if at < 200 {
+                    at as u32 * 220 / 200
+                } else if at < 650 {
+                    220
+                } else if at < 850 {
+                    220 - (at - 650) as u32 * 220 / 200
+                } else {
+                    0
+                };
+                finger_ball(frame, px0 + pw2 / 2, py + 27, ball_a);
             }
             Preview::Swipe => {
                 // 轨迹线 + 起点圆 + 终点箭头（横向锁定制示意）
@@ -3664,17 +3790,64 @@ impl TermView {
                         }
                     }
                 }
+                // 动画层（十四修 §六）：白球起点淡入→1:1 拖到轨道 70%
+                // （小卡片跟手）→松手卡片 ease_out 500ms 滑到终点、球淡出
+                let cw2 = i64::from(iw) / 4;
+                let ch2 = i64::from(ih) / 3;
+                let release_x = x0 + (x1 - x0) * 7 / 10;
+                let slide = |t0: u64| {
+                    release_x
+                        + (crate::ui::fx_ease::ease_out_cubic((t0 - 1200) as f32 / 500.0)
+                            * (x1 - release_x) as f32) as i64
+                };
+                let (ball_x, card_cx, ball_a) = if at < 200 {
+                    (x0, x0, at as u32 * 220 / 200)
+                } else if at < 1200 {
+                    let bx = x0 + (at - 200) as i64 * (release_x - x0) / 1000;
+                    (bx, bx, 220)
+                } else if at < 1400 {
+                    (release_x, slide(at), 220 - (at - 1200) as u32 * 220 / 200)
+                } else if at < 1700 {
+                    (release_x, slide(at), 0)
+                } else {
+                    (release_x, x1, 0)
+                };
+                let cx0 = (card_cx - cw2 / 2).clamp(ix, ix + i64::from(iw) - cw2);
+                paint_thin_frame(
+                    frame,
+                    cx0,
+                    my - ch2 / 2,
+                    cw2 as u32,
+                    ch2 as u32,
+                    accent,
+                    denom,
+                    clip,
+                );
+                finger_ball(frame, ball_x, my, ball_a);
             }
             Preview::ViewportPush => {
-                // 旧页半挤出（左，8% 白框）+ 新页推入（右，accent 框）
+                // 旧页挤出（左，灰框）+ 新页推入（右，accent 框）——
+                // 十四修动画层：白球右缘淡入→左拖，新页 1:1 跟手推入、
+                // 旧页同比挤出；1100 松手 ease_out 500ms 补到靠泊
                 let ph = ih * 3 / 4;
                 let py0 = iy + (i64::from(ih) - i64::from(ph)) / 2;
                 let pw = i64::from(iw) / 2;
+                let p = if at < 300 {
+                    0.0f32
+                } else if at < 1100 {
+                    (at - 300) as f32 / 800.0 * 0.8
+                } else if at < 1600 {
+                    0.8 + crate::ui::fx_ease::ease_out_cubic((at - 1100) as f32 / 500.0) * 0.2
+                } else {
+                    1.0
+                };
+                let new_left = icx + ((1.0 - p) * pw as f32) as i64;
+                let old_left = ix - pw / 3 - (p * (pw / 2) as f32) as i64;
                 paint_rect_ring(
                     frame,
-                    ix - pw / 3,
+                    old_left,
                     py0,
-                    ix + pw / 2,
+                    old_left + pw * 5 / 6,
                     py0 + i64::from(ph),
                     ix,
                     i64::MAX,
@@ -3686,9 +3859,9 @@ impl TermView {
                 );
                 paint_rect_ring(
                     frame,
-                    icx,
+                    new_left,
                     py0,
-                    icx + pw,
+                    new_left + pw,
                     py0 + i64::from(ph),
                     0,
                     ix + i64::from(iw),
@@ -3698,6 +3871,21 @@ impl TermView {
                     18,
                     true,
                 );
+                let ball_a = if at < 200 {
+                    at as u32 * 220 / 200
+                } else if at < 1100 {
+                    220
+                } else if at < 1300 {
+                    220 - (at - 1100) as u32 * 220 / 200
+                } else {
+                    0
+                };
+                let ball_x = if at < 300 {
+                    ix + i64::from(iw) - 20
+                } else {
+                    new_left.max(ix + 10)
+                };
+                finger_ball(frame, ball_x, py0 + i64::from(ph) / 2, ball_a);
             }
         }
     }
@@ -3770,6 +3958,71 @@ impl TermView {
                 }
             }
             pen_x += adv;
+        }
+    }
+
+    /// 字段框文涂装（十四修 §五 动态宽度条款）：measure 序列按
+    /// cfg_page::wrap_field_lines 贪心折行（≤2 行，余量进末行靠右缘
+    /// 裁剪），逐行整体垂直居中于 (cy, rh)；align_left = 标签（逐行
+    /// 左对齐，起笔 cx+1.5 格），否则 = 值（逐行右对齐，末笔贴
+    /// cx+cw−1.5 格）
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn draw_field_lines(
+        &self,
+        frame: &mut Frame<'_>,
+        items: &[(&fontdue::Font, char, f32)],
+        cx: u32,
+        cw: u32,
+        cy: u32,
+        rh: u32,
+        px: f32,
+        fg: u32,
+        clip_y: Option<(i32, i32)>,
+        align_left: bool,
+    ) {
+        let inset = crate::ui::cfg_page::FIELD_TEXT_INSET;
+        let inner = cw.saturating_sub(inset * 2);
+        if inner == 0 || items.is_empty() {
+            return;
+        }
+        let widths: Vec<f32> = items.iter().map(|it| it.2).collect();
+        let lines = crate::ui::cfg_page::wrap_field_lines(&widths, inner as f32);
+        let line_h = (px * 4.0 / 3.0).ceil() as u32;
+        let total = line_h * lines.len() as u32;
+        let top = cy + rh.saturating_sub(total) / 2;
+        for (k, (s, e, line_w)) in lines.iter().enumerate() {
+            let lcy = top + k as u32 * line_h;
+            if align_left {
+                self.draw_items_left_inset(
+                    frame,
+                    &items[*s..*e],
+                    cx + inset,
+                    inner,
+                    lcy,
+                    line_h,
+                    px,
+                    fg,
+                    clip_y,
+                    0.0,
+                );
+            } else {
+                // 右对齐：起笔 = 右内缘 − 行宽；行超内宽时左贴内缘
+                // （右缘裁剪归 draw_items_left_inset 的 clip_right）
+                let right = cx + cw - inset;
+                let x0 = ((right as f32) - line_w).max(cx as f32 + inset as f32) as u32;
+                self.draw_items_left_inset(
+                    frame,
+                    &items[*s..*e],
+                    x0,
+                    right.saturating_sub(x0),
+                    lcy,
+                    line_h,
+                    px,
+                    fg,
+                    clip_y,
+                    0.0,
+                );
+            }
         }
     }
 
@@ -4364,6 +4617,9 @@ pub trait TermEmu: Send {
     ) -> ((u32, u32), Vec<crate::glyph_atlas::AiGlyph>);
     /// AI 页行基线（相对行顶；AI 文字装载 off_y 折算的唯一尺子）
     fn ai_text_baseline_off(&self) -> f32;
+    /// 文本实量宽 px（十四修 §五 字段框动态宽度：触摸命中量宽与涂装
+    /// 同一条 measure_items 尺——android_app 池区手势命中调用方）
+    fn text_width(&self, text: &str, px: f32) -> u32;
     fn render_keybar(&self, buf: &mut [u32], w: u32, h: u32, ime_bottom: u32, mods: u8);
     /// 配置卡标签栏涂装（主题宪法 §四，2026-09-13 五修）：标签文字
     /// （格内居中、内容带左缘裁剪）+ 选中功能光标开口框（ui/cursor.rs
@@ -4397,7 +4653,9 @@ pub trait TermEmu: Send {
     );
     /// 配置卡双池内容涂装（宪法 §五 目录语义，2026-09-13 三层目录）：
     /// 下池子目录行表 + 上池联动下拉触发器/字段行/下拉 panel。
-    /// cfg_off_x 语义同 paint_cfg_dual_pool；画在双池框之上
+    /// cfg_off_x 语义同 paint_cfg_dual_pool；画在双池框之上。
+    /// now_ms = 动画时钟（十四修 §六：跳框动效预览的相位源；无动画
+    /// 预览时本参不读）
     #[allow(clippy::too_many_arguments)]
     fn paint_cfg_pool_content(
         &self,
@@ -4408,6 +4666,7 @@ pub trait TermEmu: Send {
         page: &crate::ui::cfg_page::CfgPageSnap,
         cfg_off_x: i32,
         accent: crate::ui::accent::AccentPair,
+        now_ms: u64,
     );
     /// AI 外显 chrome（ai-presence，android_app rasterize 调用方）：
     /// AI 页真对话渲染（page=AiFullscreen 时代替终端网格）/ 雾状光球 sprite。
@@ -4550,6 +4809,9 @@ impl TermEmu for TermView {
     fn ai_text_baseline_off(&self) -> f32 {
         TermView::ai_text_baseline_off(self)
     }
+    fn text_width(&self, text: &str, px: f32) -> u32 {
+        TermView::text_width(self, text, px)
+    }
     fn render_keybar(&self, buf: &mut [u32], w: u32, h: u32, ime_bottom: u32, mods: u8) {
         TermView::render_keybar(self, buf, w, h, ime_bottom, mods)
     }
@@ -4586,8 +4848,9 @@ impl TermEmu for TermView {
         page: &crate::ui::cfg_page::CfgPageSnap,
         cfg_off_x: i32,
         accent: crate::ui::accent::AccentPair,
+        now_ms: u64,
     ) {
-        TermView::paint_cfg_pool_content_impl(self, buf, w, h, ps, page, cfg_off_x, accent)
+        TermView::paint_cfg_pool_content_impl(self, buf, w, h, ps, page, cfg_off_x, accent, now_ms)
     }
     #[allow(clippy::too_many_arguments)]
     fn render_ai_page(

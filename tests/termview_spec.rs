@@ -3257,7 +3257,7 @@ fn spec_三级框_涂装钉() {
     let mut b0 = vec![0u32; (w * h) as usize];
     termview::paint_cfg_page_chrome(&mut b0, w, h, inset, 0, acc);
     tv.paint_cfg_dual_pool(&mut b0, w, h, &ps, 0, acc);
-    tv.paint_cfg_pool_content(&mut b0, w, h, &ps, &pg, 0, acc);
+    tv.paint_cfg_pool_content(&mut b0, w, h, &ps, &pg, 0, acc, 0);
 
     let r0 = cfg_page::lower_row_rect(0, &ps.lower); // 选中
     let r1 = cfg_page::lower_row_rect(1, &ps.lower); // 未选中
@@ -3322,8 +3322,17 @@ fn spec_三级框_涂装钉() {
 
     // ③上池值框无边框：左竖线位/右缘/上缘全 = 渐变暗底
     // （变异：左竖线/四边细框回潮即红）
+    // 十四修动态宽度：几何吃实量宽（与涂装同一条 measure_items 尺）
     let ur = cfg_page::upper_row_rect(0, &ps.upper, 0);
-    let vb = cfg_page::value_box_rect(&ur);
+    let lw = tv.text_width("默认服务器", 36.0);
+    let vw = tv.text_width("本地终端", 30.0);
+    let lb = cfg_page::field_label_rect(&ur, lw);
+    let vb = cfg_page::field_value_rect(&ur, lb.w, vw, false);
+    assert_eq!(
+        vb.x + vb.w as i64,
+        ur.x + ur.w as i64,
+        "值框锚行右缘（十四修）"
+    );
     let vb_pts = [
         (vb.x + 4, vb.y + vb.h as i64 / 2, "值框原左竖线位"),
         (vb.x + vb.w as i64 - 2, vb.y + vb.h as i64 / 2, "值框右缘"),
@@ -3349,11 +3358,7 @@ fn spec_三级框_涂装钉() {
     };
     let label_pts = [
         (ur.x + 40, vb.y + 10, "标签列背衬左顶"),
-        (
-            ur.x + cfg_page::LABEL_COL_W - 40,
-            vb.y + 10,
-            "标签列背衬右顶",
-        ),
+        (lb.x + lb.w as i64 - 40, vb.y + 10, "标签列背衬右顶"),
     ];
     for (px, py, name) in label_pts {
         assert_eq!(
@@ -3399,6 +3404,99 @@ fn spec_三级框_涂装钉() {
     );
     // bg 变量防未用告警（夹具底色仅注释用）
     let _ = bg;
+}
+
+#[test]
+fn spec_字段行_右对齐与动态宽涂装钉() {
+    // 十四修 §五：值文本逐行右对齐（末笔贴框右内缘 1.5 格），标签逐行
+    // 左对齐（起笔 = 块左 + 1.5 格）；短值吃最小框宽时对齐方向才有
+    // 像素级可观性（贴字框左右对齐不可辨——钉必须吃最小宽形态）。
+    // 变异：值画回左对齐 / 标签画回右对齐即红
+    use kfm_na::termview::frame_bg_rgb;
+    use kfm_na::ui::cfg_page::{self, CfgPage, RowView, UpperRow};
+    use kfm_na::ui::dual_pool::DualPool;
+    let (w, h) = (1260u32, 2400u32);
+    let inset = 120u32;
+    let acc = kfm_na::ui::accent::AccentPair {
+        c1: 0x00FF_6000,
+        c2: 0x0000_80FF,
+    };
+    let denom = (i64::from(w) - 1) + (i64::from(h) - 1);
+    let tv = TermView::new(host_font(), None, 8, 2, CELL_W, CELL_H);
+    let mut pool = DualPool::new(w, h);
+    pool.set_viewport(w, h, inset);
+    pool.set_upper_content_h(72 + cfg_page::FIELD_ROW_H);
+    let ps = pool.layout();
+    let mut page = CfgPage::new();
+    page.set_rows(vec![RowView {
+        title: "系统管理".into(),
+        meta: String::new(),
+    }]);
+    page.set_upper(vec![UpperRow {
+        label: "key".into(),
+        value: "v".into(),  // 短值 → 值框吃最小宽，右对齐可观
+        is_dropdown: false, // （ASCII 夹具：host 测试字体无 CJK 字形）
+    }]);
+    let pg = page.snap();
+    let mut b0 = vec![0u32; (w * h) as usize];
+    termview::paint_cfg_page_chrome(&mut b0, w, h, inset, 0, acc);
+    tv.paint_cfg_dual_pool(&mut b0, w, h, &ps, 0, acc);
+    tv.paint_cfg_pool_content(&mut b0, w, h, &ps, &pg, 0, acc, 0);
+
+    let ur = cfg_page::upper_row_rect(0, &ps.upper, 0);
+    let lb = cfg_page::field_label_rect(&ur, tv.text_width("key", 36.0));
+    let vb = cfg_page::field_value_rect(&ur, lb.w, tv.text_width("v", 30.0), false);
+    assert_eq!(
+        vb.w,
+        cfg_page::FIELD_VALUE_MIN_W,
+        "夹具前提：短值吃最小框宽"
+    );
+    let inset_g = cfg_page::FIELD_TEXT_INSET as i64;
+    let ink_at = |x: i64, y: i64| {
+        let p = b0[y as usize * w as usize + x as usize] & 0x00FF_FFFF;
+        let bg = frame_bg_rgb(acc.c1, acc.c2, x, y, denom) & 0x00FF_FFFF;
+        // 值灰/标签亮叠在渐变暗底上：任一通道差 >40 判墨
+        let d = |a: u32, b: u32| a.abs_diff(b);
+        d(p >> 16 & 0xFF, bg >> 16 & 0xFF) > 40
+            || d(p >> 8 & 0xFF, bg >> 8 & 0xFF) > 40
+            || d(p & 0xFF, bg & 0xFF) > 40
+    };
+    // 值带扫描（盒垂直中带避上下框缘）：找最左/最右墨位
+    let (mut v_min, mut v_max) = (i64::MAX, i64::MIN);
+    for y in vb.y + 20..vb.y + vb.h as i64 - 20 {
+        for x in vb.x + 2..vb.x + vb.w as i64 - 2 {
+            if ink_at(x, y) {
+                v_min = v_min.min(x);
+                v_max = v_max.max(x);
+            }
+        }
+    }
+    assert!(v_max > 0, "夹具前提：值文本必须落墨");
+    assert!(
+        v_max >= vb.x + vb.w as i64 - inset_g - 4,
+        "值末笔必须贴右内缘 1.5 格（右对齐；实采 v_max={v_max} 右内缘={})",
+        vb.x + vb.w as i64 - inset_g
+    );
+    assert!(
+        v_min > vb.x + inset_g + 20,
+        "短值左部必须留白（右对齐的铁证；左对齐变异即红；实采 v_min={v_min}）"
+    );
+    // 标签带：起笔贴块左 + 1.5 格
+    let (mut l_min, mut l_max) = (i64::MAX, i64::MIN);
+    for y in lb.y + 20..lb.y + lb.h as i64 - 20 {
+        for x in lb.x + 2..lb.x + lb.w as i64 - 2 {
+            if ink_at(x, y) {
+                l_min = l_min.min(x);
+                l_max = l_max.max(x);
+            }
+        }
+    }
+    assert!(l_max > 0, "夹具前提：标签必须落墨");
+    assert!(
+        l_min <= lb.x + inset_g + 4,
+        "标签起笔必须贴块左内缘（左对齐；实采 l_min={l_min} 左内缘={})",
+        lb.x + inset_g
+    );
 }
 
 #[test]
@@ -3451,10 +3549,12 @@ fn spec_下拉面板_涂装钉() {
     let mut b0 = vec![0u32; (w * h) as usize];
     termview::paint_cfg_page_chrome(&mut b0, w, h, inset, 0, acc);
     tv.paint_cfg_dual_pool(&mut b0, w, h, &ps, 0, acc);
-    tv.paint_cfg_pool_content(&mut b0, w, h, &ps, &pg0, 0, acc);
+    tv.paint_cfg_pool_content(&mut b0, w, h, &ps, &pg0, 0, acc, 0);
 
-    // ①触发器 = 三级框全包框
-    let vb = cfg_page::trigger_rect(&ps.upper, 0);
+    // ①触发器 = 三级框全包框（十四修动态宽度：实量宽喂几何）
+    let lw = tv.text_width("默认服务器", 36.0);
+    let vw = tv.text_width("本地终端", 30.0);
+    let vb = cfg_page::trigger_rect(&ps.upper, 0, true, lw, vw);
     let trig = [
         (vb.x + 4, vb.y + vb.h as i64 / 2, "触发器左粗缘"),
         (vb.x + vb.w as i64 / 2, vb.y + 1, "触发器顶边"),
@@ -3480,11 +3580,11 @@ fn spec_下拉面板_涂装钉() {
     let mut b1 = vec![0u32; (w * h) as usize];
     termview::paint_cfg_page_chrome(&mut b1, w, h, inset, 0, acc);
     tv.paint_cfg_dual_pool(&mut b1, w, h, &ps, 0, acc);
-    tv.paint_cfg_pool_content(&mut b1, w, h, &ps, &pg1, 0, acc);
+    tv.paint_cfg_pool_content(&mut b1, w, h, &ps, &pg1, 0, acc, 0);
 
-    let t = cfg_page::trigger_rect(&ps.upper, 0);
+    let t = cfg_page::trigger_rect(&ps.upper, 0, true, lw, vw);
     let max_h = h.saturating_sub(t.y.max(0) as u32 + t.h + 40);
-    let pr = cfg_page::dropdown_panel_rect(2, &ps.upper, max_h, 0);
+    let pr = cfg_page::dropdown_panel_rect(2, &ps.upper, max_h, 0, true, lw, vw);
     let row_h = cfg_page::FIELD_ROW_H as i64;
 
     // ②面板深底：未选中行（行 0）内避字取样 = blend(黑, before, 252)
@@ -3641,4 +3741,249 @@ fn spec_cfg双池_涂装钉() {
         up_ring,
         "accent 换了池框色必须变（驱动钉）"
     );
+}
+
+// ---- 十四修：动效引擎预览 = 动画演示（宪法 §六 预览画板条款十四修段）----
+
+/// 动画预览钉共用夹具：开指定 preview 的跳框，喂 now_ms 画一帧
+#[allow(clippy::too_many_arguments)]
+fn paint_modal_frame(
+    pv_match: kfm_na::ui::comp_registry::Preview,
+    now_ms: u64,
+) -> (Vec<u32>, u32, u32, kfm_na::ui::dual_pool::PoolRect) {
+    use kfm_na::ui::cfg_page::{self, CfgPage, RowView, UpperRow};
+    use kfm_na::ui::comp_registry as cr;
+    use kfm_na::ui::dual_pool::DualPool;
+    use kfm_na::ui::modal as md;
+    let (w, h) = (1260u32, 2400u32);
+    let inset = 120u32;
+    let acc = kfm_na::ui::accent::AccentPair {
+        c1: 0x00FF_6000,
+        c2: 0x0000_80FF,
+    };
+    let mi = cr::COMPONENTS
+        .iter()
+        .position(|e| e.preview == pv_match)
+        .expect("组件表必须有该 preview 的条目");
+    let tv = TermView::new(host_font(), None, 8, 2, CELL_W, CELL_H);
+    let mut pool = DualPool::new(w, h);
+    pool.set_viewport(w, h, inset);
+    pool.set_upper_content_h(72 + cfg_page::FIELD_ROW_H);
+    let ps = pool.layout();
+    let mut page = CfgPage::new();
+    page.set_rows(vec![RowView {
+        title: "动效引擎".into(),
+        meta: "4 件".into(),
+    }]);
+    page.set_upper(vec![UpperRow {
+        label: "弹簧".into(),
+        value: "现役".into(),
+        is_dropdown: false,
+    }]);
+    page.set_tab(1); // 组件池页
+    page.open_modal(mi);
+    let pg = page.snap();
+    assert_eq!(pg.modal, Some(mi), "夹具前提：跳框开着");
+
+    let mut buf = vec![0u32; (w * h) as usize];
+    termview::paint_cfg_page_chrome(&mut buf, w, h, inset, 0, acc);
+    tv.paint_cfg_dual_pool(&mut buf, w, h, &ps, 0, acc);
+    tv.paint_cfg_pool_content(&mut buf, w, h, &ps, &pg, 0, acc, now_ms);
+
+    // 展台内区（与 paint_preview_impl 同一份几何：内缩 1 格/半格）
+    let entry = &cr::COMPONENTS[mi];
+    let card = md::card_rect(w, h, &md::fields_of(entry, md::content_cells(w)));
+    let prev = md::preview_rect(&card);
+    (buf, w, h, prev)
+}
+
+/// 统计矩形内「近白」像素数（白球 α220 叠暗底 ≈ ≥220；渐变 accent
+/// 夹具色 FF6000/0080FF 全通道不过 180——球在/不在的判别尺）
+fn near_white_count(buf: &[u32], w: u32, x0: i64, y0: i64, x1: i64, y1: i64) -> usize {
+    let h = (buf.len() as i64) / i64::from(w);
+    let mut n = 0;
+    for y in y0.max(0)..y1.min(h) {
+        for x in x0.max(0)..x1.min(i64::from(w)) {
+            let p = buf[y as usize * w as usize + x as usize] & 0x00FF_FFFF;
+            let (r, g, b) = ((p >> 16) & 0xFF, (p >> 8) & 0xFF, p & 0xFF);
+            if r > 180 && g > 180 && b > 180 {
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
+#[test]
+fn spec_动效预览_弹簧_动画钉() {
+    // 宪法 §六 十四修：弹簧预览 = 白球点触 + 响应点沿 spring_pos 实曲线
+    // 移动（循环 2400ms）。相位表（实现唯一依据）：
+    //   0..200    球在曲线原点 (ix, iy+ih) 淡入
+    //   200..300  球原点按住（α220 满）
+    //   300..900  响应点沿线：x = ix + iw·(t−300)/600，
+    //             y 由 spring_pos(0,100,t−300) 出；球淡出
+    //   900..2400 响应点停终点
+    use kfm_na::ui::comp_registry::Preview;
+    let (b_a, w, _h, prev) = paint_modal_frame(Preview::CurveSpring, 250);
+    let (b_b, _, _, _) = paint_modal_frame(Preview::CurveSpring, 500);
+    let (b_c, _, _, _) = paint_modal_frame(Preview::CurveSpring, 850);
+    let (b_d, _, _, _) = paint_modal_frame(Preview::CurveSpring, 2000);
+
+    let (ix, iy) = (prev.x + CELL_W as i64, prev.y + (CELL_H / 2) as i64);
+    let (iw, ih) = (prev.w - CELL_W * 2, prev.h - CELL_H);
+    let origin = (ix, iy + i64::from(ih));
+
+    // ①球在：t=250 原点窗内近白像素 ≥80（r10 球 ≈ 314px 盘面）
+    let n_ball = near_white_count(
+        &b_a,
+        w,
+        origin.0 - 12,
+        origin.1 - 12,
+        origin.0 + 12,
+        origin.1 + 12,
+    );
+    assert!(n_ball >= 80, "t=250 白球必须在曲线原点（实采 {n_ball}）");
+    // ②球走：t=2000（停点相位）原点窗内近白像素必须归零——球不淡出/
+    // 常住原点即红（变异：动画层删掉淡出没红 = 钉弱）
+    let n_gone = near_white_count(
+        &b_d,
+        w,
+        origin.0 - 12,
+        origin.1 - 12,
+        origin.0 + 12,
+        origin.1 + 12,
+    );
+    assert_eq!(n_gone, 0, "t=2000 原点不许再有白球（实采 {n_gone}）");
+    // ③点在动：t=500 与 t=850 两帧响应点位不同（变异：忽略 now_ms
+    // 静态化 → 两帧全等即红）
+    let dot_x = |t: u64| ix + i64::from(iw) * (t as i64 - 300) / 600;
+    let (x_a, x_b) = (dot_x(500), dot_x(850));
+    assert!(x_b > x_a, "夹具前提：相位表单调");
+    let mut diff = 0usize;
+    let scan_y0 = prev.y;
+    let scan_y1 = prev.y + i64::from(prev.h);
+    for y in scan_y0..scan_y1 {
+        for x in prev.x..prev.x + i64::from(prev.w) {
+            if b_b[y as usize * w as usize + x as usize]
+                != b_c[y as usize * w as usize + x as usize]
+            {
+                diff += 1;
+            }
+        }
+    }
+    assert!(diff > 0, "两相位帧必须异（响应点移动；静态化变异即红）");
+}
+
+#[test]
+fn spec_动效预览_缓动_动画钉() {
+    // 相位表：0..200 球在小面板顶心淡入；300..650 面板 ease_out_cubic
+    // 下落（跨度 = ih−54）；650..1500 停底；1500..1750 ease_in_cubic
+    // 收起；球 650 起淡出
+    use kfm_na::ui::comp_registry::Preview;
+    let (b_a, w, _h, prev) = paint_modal_frame(Preview::CurveEase, 250);
+    let (b_b, _, _, _) = paint_modal_frame(Preview::CurveEase, 500);
+    let (b_c, _, _, _) = paint_modal_frame(Preview::CurveEase, 1000);
+
+    let (ix, iy) = (prev.x + CELL_W as i64, prev.y + (CELL_H / 2) as i64);
+    let (iw, ih) = (prev.w - CELL_W * 2, prev.h - CELL_H);
+    // 面板几何（相位表定值）：宽 iw·2/3、高 54、左缘 ix+iw/6
+    let panel_cx = ix + i64::from(iw) / 6 + i64::from(iw) / 3;
+    // t=250：球在面板顶（未落，y ≈ iy+27）
+    let n_ball = near_white_count(&b_a, w, panel_cx - 14, iy + 10, panel_cx + 14, iy + 45);
+    assert!(n_ball >= 80, "t=250 白球必须在小面板顶（实采 {n_ball}）");
+    // t=500 vs t=1000：下落中 vs 停底——面板区位必须异
+    let mut diff = 0usize;
+    for y in prev.y..prev.y + i64::from(prev.h) {
+        for x in prev.x..prev.x + i64::from(prev.w) {
+            if b_b[y as usize * w as usize + x as usize]
+                != b_c[y as usize * w as usize + x as usize]
+            {
+                diff += 1;
+            }
+        }
+    }
+    assert!(diff > 0, "下落中帧与停底帧必须异（缓动实跑；静态化即红）");
+    // 停底钉：t=1000 面板应已到底（y0 = iy + ih − 54）——细框上缘有墨
+    let top_y = iy + i64::from(ih) - 54;
+    let mut ink = 0usize;
+    for x in ix + i64::from(iw) / 6 + 4..ix + i64::from(iw) / 6 + i64::from(iw) * 2 / 3 - 4 {
+        let p = b_c[(top_y + 1) as usize * w as usize + x as usize] & 0x00FF_FFFF;
+        if p != 0 {
+            ink += 1;
+        }
+    }
+    assert!(ink > 10, "t=1000 面板必须落到底（顶缘墨 {ink}）");
+}
+
+#[test]
+fn spec_动效预览_手势仲裁_动画钉() {
+    // 相位表：0..200 球在起点淡入；200..1200 球 1:1 拖到轨道 70%，
+    // 小卡片跟手；1200..1700 松手，卡片 ease_out 滑到终点；球 1200 起
+    // 淡出；1700..2400 停
+    use kfm_na::ui::comp_registry::Preview;
+    let (b_a, w, _h, prev) = paint_modal_frame(Preview::Swipe, 250);
+    let (b_b, _, _, _) = paint_modal_frame(Preview::Swipe, 700);
+    let (b_c, _, _, _) = paint_modal_frame(Preview::Swipe, 1100);
+    let (b_d, _, _, _) = paint_modal_frame(Preview::Swipe, 2200);
+
+    let (ix, iy) = (prev.x + CELL_W as i64, prev.y + (CELL_H / 2) as i64);
+    let (iw, ih) = (prev.w - CELL_W * 2, prev.h - CELL_H);
+    let my = iy + i64::from(ih) / 2;
+    let x0 = ix + 30;
+    let x1 = ix + i64::from(iw) - 60;
+    let release_x = x0 + (x1 - x0) * 7 / 10;
+    // t=250：拖动相位 50ms/1000ms——球位必须 = 相位表精确值（位置钉：
+    // 淡入/按住相位画错位置也红）
+    let bx250 = x0 + 50 * (release_x - x0) / 1000;
+    let n_ball = near_white_count(&b_a, w, bx250 - 8, my - 12, bx250 + 8, my + 12);
+    assert!(
+        n_ball >= 60,
+        "t=250 白球必须在相位表位 (bx={bx250})（实采 {n_ball}）"
+    );
+    // t=700 vs t=1100：拖动中球位必须不同（1:1 跟手）
+    let mut diff = 0usize;
+    for y in prev.y..prev.y + i64::from(prev.h) {
+        for x in prev.x..prev.x + i64::from(prev.w) {
+            if b_b[y as usize * w as usize + x as usize]
+                != b_c[y as usize * w as usize + x as usize]
+            {
+                diff += 1;
+            }
+        }
+    }
+    assert!(diff > 0, "拖动两相位帧必须异（跟手实跑；静态化即红）");
+    // t=2200：球已退场——起点窗内不许有白
+    let n_gone = near_white_count(&b_d, w, x0 - 12, my - 12, x0 + 12, my + 12);
+    assert_eq!(n_gone, 0, "t=2200 起点不许再有白球（实采 {n_gone}）");
+}
+
+#[test]
+fn spec_动效预览_视口平移_动画钉() {
+    // 相位表：0..200 球在右缘起淡入；300..1100 球左拖，新页跟手推入
+    // （新页左缘 = icx + (1−p)·pw，p = 拖动进度）；1100..1600 松手
+    // ease_out 补到 p=1；1600..2400 靠泊停
+    use kfm_na::ui::comp_registry::Preview;
+    let (b_a, w, _h, prev) = paint_modal_frame(Preview::ViewportPush, 700);
+    let (b_b, _, _, _) = paint_modal_frame(Preview::ViewportPush, 1800);
+    // 拖动中 vs 靠泊：新页位必须不同
+    let mut diff = 0usize;
+    for y in prev.y..prev.y + i64::from(prev.h) {
+        for x in prev.x..prev.x + i64::from(prev.w) {
+            if b_a[y as usize * w as usize + x as usize]
+                != b_b[y as usize * w as usize + x as usize]
+            {
+                diff += 1;
+            }
+        }
+    }
+    assert!(diff > 0, "拖动中帧与靠泊帧必须异（推入实跑；静态化即红）");
+    // 靠泊钉：t=1800 新页左缘应停在 icx（accent 细框左边有墨）
+    let (ix, iy) = (prev.x + CELL_W as i64, prev.y + (CELL_H / 2) as i64);
+    let (iw, ih) = (prev.w - CELL_W * 2, prev.h - CELL_H);
+    let icx = ix + i64::from(iw) / 2;
+    let py0 = iy + (i64::from(ih) - i64::from(ih) * 3 / 4) / 2;
+    let py1 = py0 + i64::from(ih) * 3 / 4;
+    let my = (py0 + py1) / 2;
+    let edge = b_b[my as usize * w as usize + (icx + 1) as usize] & 0x00FF_FFFF;
+    assert_ne!(edge, 0, "t=1800 新页左缘必须靠泊到 icx（有墨）");
 }

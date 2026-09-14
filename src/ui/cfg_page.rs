@@ -2,11 +2,18 @@
 //! 二版，2026-09-13 用户拍板；核心层纯逻辑零 IO，A 档钉）。
 //!
 //! 四版增订（2026-09-13，kfmv4 实证 4 图量化拍板）：
-//! - 字段框行 4 格 / 下池行 4.5 格 / 行隙 1.5 格 / 内边距 2 格 /
-//!   标签列 12 格（字号行高 ×1.5、三级框 ×2）
+//! - 字段框行 4 格 / 下池行 4.5 格 / 行隙 1.5 格 / 内边距 2 格
+//!   （标签列 12 格已于十四修退役——见下）
 //! - **上池像素滚动**（§五「超出部分上池内滚动」条款兑现，v1a 欠账）：
 //!   upper_scroll px 状态 + scroll_upper_by（clamp [0, 内容高−池高]，
 //!   到位不空涨代际）；几何自由函数全带 scroll 维（眼手同尺不漏维）
+//!
+//! 十四修增订（2026-09-14，宪法 §五 字段框行条款重订，用户拍板）：
+//! - **标签块/值框宽随文字动态**（实量宽入参 + 双侧文内边距 1.5 格；
+//!   标签锚左、值锚右、间隔 ≥3 格、值框最小 4 格+边距、下拉行 +▼ 位
+//!   45px）——固定 12 格标签列退役
+//! - 超长**逐字贪心换行 ≤2 行**（wrap_field_lines），再超涂装裁剪
+//! - **末行距池底 1 格**（upper_content_h 末尾 +FIELD_BOTTOM_PAD）
 //!
 //! 二版条款兑现（kfmv4 池卡实证 4 图对齐）：
 //! - 根目录（大类）= 首行标签栏（tab_bar.rs 已有，本册不管）
@@ -24,8 +31,8 @@
 //!   （组件池页点行开跳框，眼手同尺吃 scroll 维）
 //!
 //! 眼手同尺：涂装与触摸命中读本册同一份几何（lower_row_rect/
-//! upper_row_rect/value_box_rect/trigger_rect/dropdown_panel_rect），
-//! 壳层不许另算。
+//! upper_row_rect/field_label_rect/field_value_rect/trigger_rect/
+//! dropdown_panel_rect），壳层不许另算。
 //!
 //! 数据流：壳持有 settings 解析结果（servers.json/terminal.json），
 //! 重建时喂 `set_rows`（下池行）+ `set_upper`（上池字段框行）+
@@ -54,9 +61,19 @@ pub const ROW_GAP: i64 = CELL_W as i64 * 3 / 2;
 /// 上池字段框行留隙 = 1 格（七修 2026-09-13 用户拍板：1.5 格减半格——
 /// 字段行是同质表项，比下池目录行可密半格）
 pub const FIELD_ROW_GAP: i64 = CELL_W as i64;
-/// 字段框标签列宽 = 12 格（四版：字号 1.5 倍后 8 格截断 5 字标签复发
-/// 防——「默认服务器」5×30px+内缩 27 = 177 < 216）
-pub const LABEL_COL_W: i64 = CELL_W as i64 * 12;
+/// 字段框文内边距（单侧）= 1.5 格（十四修：动态宽度的双侧留白，
+/// 与涂装 text_inset 同尺）
+pub const FIELD_TEXT_INSET: u32 = CELL_W * 3 / 2;
+/// 标签块与值框最小间隔 = 3 格（十四修 2026-09-14 用户拍板）
+pub const FIELD_BOX_GAP: u32 = CELL_W * 3;
+/// 值框最小宽 = 4 格 + 双侧文内边距（收缩顺序：先保值框下限，
+/// 标签块让到上限）
+pub const FIELD_VALUE_MIN_W: u32 = CELL_W * 4 + FIELD_TEXT_INSET * 2;
+/// 下拉行值框附加宽（右缘 ▼ 三角位；加宽向左吃，右缘不动）
+pub const FIELD_TRIANGLE_PAD: u32 = 45;
+/// 上池末行距池底框线 = 1 格（十四修用户拍板；upper_content_h 末尾
+/// 加上，池高跟随与滚动 clamp 自动多吃这一格）
+pub const FIELD_BOTTOM_PAD: u32 = CELL_H;
 
 /// 下池行（子目录）
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -298,20 +315,45 @@ impl CfgPage {
     }
 
     /// 上池下拉触发器矩形（首行字段框的值框位，§六 触发器条款）——
-    /// 触发器随上池内容一起滚（本页 scroll 喂 self.upper_scroll）
-    pub fn trigger_rect(&self, upper: &PoolRect) -> PoolRect {
-        trigger_rect(upper, self.upper_scroll)
+    /// 触发器随上池内容一起滚（本页 scroll 喂 self.upper_scroll）。
+    /// 十四修动态宽度：label_tw/value_tw = 首行标签/值的实量宽
+    /// （调用方 measure_items 同尺量出——眼手同尺不漏维）
+    pub fn trigger_rect(&self, upper: &PoolRect, label_tw: u32, value_tw: u32) -> PoolRect {
+        let dd = self.upper.first().is_none_or(|r| r.is_dropdown);
+        trigger_rect(upper, self.upper_scroll, dd, label_tw, value_tw)
     }
 
     /// 下拉 panel 矩形（顶部栏向下弹——宪法 §六：方向反了会弹出屏外）：
     /// 触发器下缘起，行数 = 选项数，最高不出配置页可视区（壳喂 max_h）
-    pub fn dropdown_panel_rect(&self, upper: &PoolRect, max_h: u32) -> PoolRect {
-        dropdown_panel_rect(self.options.len(), upper, max_h, self.upper_scroll)
+    pub fn dropdown_panel_rect(
+        &self,
+        upper: &PoolRect,
+        max_h: u32,
+        label_tw: u32,
+        value_tw: u32,
+    ) -> PoolRect {
+        let dd = self.upper.first().is_none_or(|r| r.is_dropdown);
+        dropdown_panel_rect(
+            self.options.len(),
+            upper,
+            max_h,
+            self.upper_scroll,
+            dd,
+            label_tw,
+            value_tw,
+        )
     }
 
     /// 下拉 panel 命中：y 落第几行（panel 外 = None）
-    pub fn dropdown_item_at_y(&self, y: i64, upper: &PoolRect, max_h: u32) -> Option<usize> {
-        let p = dropdown_panel_rect(self.options.len(), upper, max_h, self.upper_scroll);
+    pub fn dropdown_item_at_y(
+        &self,
+        y: i64,
+        upper: &PoolRect,
+        max_h: u32,
+        label_tw: u32,
+        value_tw: u32,
+    ) -> Option<usize> {
+        let p = self.dropdown_panel_rect(upper, max_h, label_tw, value_tw);
         if y < p.y || y >= p.y + p.h as i64 {
             return None;
         }
@@ -320,12 +362,16 @@ impl CfgPage {
     }
 
     /// 上池内容高（喂 dual_pool.set_upper_content_h）：字段框行 + 留隙
+    /// + 末行底距 1 格（十四修：末行不许贴池底框线）
     pub fn upper_content_h(&self) -> u32 {
         let n = self.upper.len() as u32;
         if n == 0 {
             return 0;
         }
-        POOL_CONTENT_INSET as u32 + n * FIELD_ROW_H + (n - 1) * FIELD_ROW_GAP as u32
+        POOL_CONTENT_INSET as u32
+            + n * FIELD_ROW_H
+            + (n - 1) * FIELD_ROW_GAP as u32
+            + FIELD_BOTTOM_PAD
     }
 
     pub fn snap(&self) -> CfgPageSnap {
@@ -375,31 +421,96 @@ pub fn upper_row_rect(i: usize, upper: &PoolRect, scroll: i64) -> PoolRect {
     }
 }
 
-/// 字段框的值框位（标签列之右；下拉触发器/值文本都画这里）——
-/// 六修：值框 3 格高居中于 4 格行（上下各缩半格）
-pub fn value_box_rect(row: &PoolRect) -> PoolRect {
+/// 字段框的标签块矩形（十四修动态宽度，宪法 §五 字段框行条款）：
+/// 锚行左缘，宽 = 标签实量宽 + 双侧文内边距，上限 = 行宽 − 3 格间隔
+/// − 值框最小宽（收缩顺序：先保值框下限）；3 格高居中于行
+pub fn field_label_rect(row: &PoolRect, label_text_w: u32) -> PoolRect {
+    let min = FIELD_TEXT_INSET * 2;
+    let max = row
+        .w
+        .saturating_sub(FIELD_BOX_GAP + FIELD_VALUE_MIN_W)
+        .max(min);
+    let w = (label_text_w + FIELD_TEXT_INSET * 2).clamp(min, max);
     PoolRect {
-        x: row.x + LABEL_COL_W,
+        x: row.x,
         y: row.y + (FIELD_ROW_H - FIELD_BOX_H) as i64 / 2,
-        w: row.w.saturating_sub(LABEL_COL_W as u32),
+        w,
         h: FIELD_BOX_H,
     }
 }
 
-/// 上池下拉触发器矩形 = 首行字段框的值框位
-pub fn trigger_rect(upper: &PoolRect, scroll: i64) -> PoolRect {
-    value_box_rect(&upper_row_rect(0, upper, scroll))
+/// 字段框的值框矩形（十四修动态宽度）：锚行右缘，宽 = 值实量宽 +
+/// 双侧文内边距（+ 下拉行 ▼ 三角位），下限 FIELD_VALUE_MIN_W，
+/// 上限 = 行宽 − 3 格间隔 − 标签块实际宽；3 格高居中于行（六修不变）
+pub fn field_value_rect(
+    row: &PoolRect,
+    label_w: u32,
+    value_text_w: u32,
+    is_dropdown: bool,
+) -> PoolRect {
+    let tri = if is_dropdown { FIELD_TRIANGLE_PAD } else { 0 };
+    let min = FIELD_VALUE_MIN_W + tri;
+    let max = row.w.saturating_sub(FIELD_BOX_GAP + label_w).max(min);
+    let w = (value_text_w + FIELD_TEXT_INSET * 2 + tri).clamp(min, max);
+    PoolRect {
+        x: row.x + row.w as i64 - w as i64,
+        y: row.y + (FIELD_ROW_H - FIELD_BOX_H) as i64 / 2,
+        w,
+        h: FIELD_BOX_H,
+    }
+}
+
+/// 字段框文逐字贪心换行（十四修 §五：单行装不下换行，最多 2 行，
+/// 再超进末段由涂装裁剪——行数不爆炸）。widths = 逐字步进宽
+/// （measure_items 同尺）；返回 (起, 止, 行宽) 段表，空入 = 零行
+pub fn wrap_field_lines(widths: &[f32], max_w: f32) -> Vec<(usize, usize, f32)> {
+    const MAX_LINES: usize = 2;
+    if widths.is_empty() {
+        return Vec::new();
+    }
+    let mut lines = Vec::new();
+    let (mut start, mut acc) = (0usize, 0.0f32);
+    for (i, &wd) in widths.iter().enumerate() {
+        let full = lines.len() + 1 >= MAX_LINES; // 末段不再断行
+        if !full && acc + wd > max_w && i > start {
+            lines.push((start, i, acc));
+            start = i;
+            acc = wd;
+        } else {
+            acc += wd;
+        }
+    }
+    lines.push((start, widths.len(), acc));
+    lines
+}
+
+/// 上池下拉触发器矩形 = 首行字段框的值框位（十四修：吃首行标签/值
+/// 实量宽与 is_dropdown 维）
+pub fn trigger_rect(
+    upper: &PoolRect,
+    scroll: i64,
+    is_dropdown: bool,
+    label_tw: u32,
+    value_tw: u32,
+) -> PoolRect {
+    let row0 = upper_row_rect(0, upper, scroll);
+    let lb = field_label_rect(&row0, label_tw);
+    field_value_rect(&row0, lb.w, value_tw, is_dropdown)
 }
 
 /// 下拉 panel 矩形（顶部栏向下弹）：触发器值框下缘起，行数 = 选项数，
 /// 最高不出配置页可视区（调用方喂 max_h）；scroll = 上池滚动 px
+#[allow(clippy::too_many_arguments)]
 pub fn dropdown_panel_rect(
     opt_count: usize,
     upper: &PoolRect,
     max_h: u32,
     scroll: i64,
+    is_dropdown: bool,
+    label_tw: u32,
+    value_tw: u32,
 ) -> PoolRect {
-    let t = trigger_rect(upper, scroll);
+    let t = trigger_rect(upper, scroll, is_dropdown, label_tw, value_tw);
     let want = (opt_count as u32) * FIELD_ROW_H;
     PoolRect {
         x: t.x,

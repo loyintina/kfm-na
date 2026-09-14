@@ -203,11 +203,11 @@ pub const COMPONENTS: &[CompEntry] = &[
         name: "字段标签列",
         cat: "组件",
         status: CompStatus::Active,
-        symbol: "LABEL_COL_W",
+        symbol: "field_label_rect",
         file: "src/ui/cfg_page.rs",
-        spec: "宪法 §六 组件条款",
+        spec: "宪法 §五 字段框行条款",
         tests: "tests/cfg_page_spec.rs",
-        desc: "上池字段行的标签列：无边框组件，36px 亮（七修字档反转）+ 圆角背衬 = 渐变暗底 + 8% 白提亮（α20，十三修——去框后背景辨识度靠这层）。",
+        desc: "上池字段行的标签块：无边框组件，36px 亮（七修字档反转）+ 圆角背衬 = 渐变暗底 + 8% 白提亮（α20，十三修）。十四修动态宽度：块宽随标签文字实量宽，锚行左缘；值框锚右缘，间隔 ≥3 格，超长换行 ≤2 行。",
         preview: Preview::FieldLabel,
     },
     // ---- 功能光标 ----
@@ -287,7 +287,7 @@ pub const COMPONENTS: &[CompEntry] = &[
         file: "src/ui/fx_spring.rs",
         spec: "ui-base.md §八",
         tests: "tests/fx_spring_spec.rs",
-        desc: "欠阻尼弹簧：标签滑块、键盘 inset 同核。select 瞬间从当前位置重定基续弹，600ms 兜底贴死。",
+        desc: "欠阻尼弹簧：标签滑块、键盘 inset 同核。select 瞬间从当前位置重定基续弹，600ms 兜底贴死。预览 = 动画演示（十四修）：白球点触，响应点沿实曲线骑行。",
         preview: Preview::CurveSpring,
     },
     CompEntry {
@@ -298,7 +298,7 @@ pub const COMPONENTS: &[CompEntry] = &[
         file: "src/ui/fx_ease.rs",
         spec: "ui-base.md §八",
         tests: "tests/fx_ease_spec.rs",
-        desc: "面板入场/出场曲线库：ease-out 下落 350ms、ease-in 收起 250ms（真机逐帧标定）。",
+        desc: "面板入场/出场曲线库：ease-out 下落 350ms、ease-in 收起 250ms（真机逐帧标定）。预览 = 动画演示（十四修）：白球点触，小面板实节奏下落/收起。",
         preview: Preview::CurveEase,
     },
     CompEntry {
@@ -309,7 +309,7 @@ pub const COMPONENTS: &[CompEntry] = &[
         file: "src/ui/panel_drag.rs",
         spec: "ui-base.md §五B",
         tests: "tests/panel_drag_spec.rs",
-        desc: "面板跟手拖拽：横向锁定制，松手按完成度+速度裁决去留。一滑一义——纵向滚动时横向锁未起。",
+        desc: "面板跟手拖拽：横向锁定制，松手按完成度+速度裁决去留。一滑一义——纵向滚动时横向锁未起。预览 = 动画演示（十四修）：白球 1:1 拖小卡片，松手滑到终点。",
         preview: Preview::Swipe,
     },
     CompEntry {
@@ -320,10 +320,19 @@ pub const COMPONENTS: &[CompEntry] = &[
         file: "src/ui/viewport_push.rs",
         spec: "ui-base.md §五B",
         tests: "tests/viewport_push_spec.rs",
-        desc: "四公民页面视口平移合成：新页推入、旧页挤出。被覆盖面板保持覆盖态，收起覆盖者即露出。",
+        desc: "四公民页面视口平移合成：新页推入、旧页挤出。被覆盖面板保持覆盖态，收起覆盖者即露出。预览 = 动画演示（十四修）：白球左拖，新页跟手推入，松手补到靠泊。",
         preview: Preview::ViewportPush,
     },
 ];
+
+/// 预览是否动效演示（十四修 §六：弹簧/缓动/手势仲裁/视口平移四件
+/// 预览 = 动画，帧泵与烘焙 sig 时间桶维的开关单源）
+pub fn preview_is_animated(p: Preview) -> bool {
+    matches!(
+        p,
+        Preview::CurveSpring | Preview::CurveEase | Preview::Swipe | Preview::ViewportPush
+    )
+}
 
 /// 某大类的条目下标表（组件池页：下池聚焦大类 → 上池行表；
 /// 返回 COMPONENTS 下标——跳框按它取详情，眼手同尺）

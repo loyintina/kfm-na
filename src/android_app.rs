@@ -363,6 +363,9 @@ struct ConfigSig {
     pool_upper_h: u32,
     /// 池内容代际（cfg_page epoch，§五 目录语义）
     cfg_epoch: u64,
+    /// 动效预览时间桶（十四修 §六：动画展品开着 = boot_ms/33 逐帧
+    /// 新值逐帧重烘焙；关着恒 0 不挤烘焙闸）
+    anim_bucket: u64,
 }
 
 #[derive(Default)]
@@ -845,10 +848,13 @@ impl App {
                         };
                         let _ = ps;
                         let (yi, xi) = (y as i64, x as i64);
+                        // 十四修：下拉命中/触发器几何吃首行实量宽
+                        // （先量后锁——锁序 term→cfg_page 不倒持）
+                        let (lw, vw) = self.cfg_row0_text_widths();
                         let mut pg = page.lock().unwrap();
                         if pg.dropdown_open() {
                             let max_h = 10_000; // 命中只问行号，钳高由涂装侧管
-                            if let Some(i) = pg.dropdown_item_at_y(yi, &upper, max_h) {
+                            if let Some(i) = pg.dropdown_item_at_y(yi, &upper, max_h, lw, vw) {
                                 pg.dropdown_pick(i);
                                 drop(pg);
                                 // 下拉换选 = 默认服务器变更（二版：写盘+重建归壳）
@@ -861,7 +867,7 @@ impl App {
                             self.dirty = true;
                             return;
                         }
-                        let tr = pg.trigger_rect(&upper);
+                        let tr = pg.trigger_rect(&upper, lw, vw);
                         let tab1 = pg.tab() == 1;
                         // 触发器是系统管理页家具——组件池页首行不是下拉行，
                         // 坐标重合也不许误判（九修：tab 维分流）
@@ -1573,8 +1579,10 @@ impl App {
                                 let ps = pool.lock().unwrap().layout();
                                 (ps.lower.clone(), ps.upper.clone())
                             };
+                            // 十四修：触发器命中吃首行实量宽（先量后锁）
+                            let (lw, vw) = self.cfg_row0_text_widths();
                             let mut pg = page.lock().unwrap();
-                            let tr = pg.trigger_rect(&upper);
+                            let tr = pg.trigger_rect(&upper, lw, vw);
                             let tab1 = pg.tab() == 1;
                             let in_trigger = !tab1
                                 && xi >= tr.x
@@ -3463,6 +3471,7 @@ impl App {
                                     cs,
                                     cfg_off,
                                     acc_of(crate::ai_presence::Panel::Config),
+                                    crate::report::boot_ms() as u64,
                                 );
                             }
                         }
@@ -4035,6 +4044,13 @@ impl App {
         // 池内容 sig 一维（宪法 §五 目录语义）：cfg_page 代际——聚焦切换/
         // 下拉开合/行表字段重建都 bump（漏维 = 旧行表新聚焦鬼影）
         let cfg_epoch = cfg_snap.map_or(0, |cs| cs.epoch);
+        // 动效预览 sig 一维（十四修 §六）：动画展品开着 = 33ms 时间桶
+        // 逐帧变 → 槽逐帧重烘焙；关着恒 0（无动画零烘焙同 §四纪律）
+        let anim_bucket = if cfg_visible && Self::cfg_anim_modal_open() {
+            crate::report::boot_ms() as u64 / 33
+        } else {
+            0
+        };
         if cfg_visible
             && sigs.config.feed(ConfigSig {
                 w,
@@ -4048,6 +4064,7 @@ impl App {
                 tab_cx,
                 pool_upper_h,
                 cfg_epoch,
+                anim_bucket,
             })
         {
             let px = g.slot_canvas(crate::gles_present::ChromeSlot::Config);
@@ -4066,9 +4083,16 @@ impl App {
                     .paint_cfg_dual_pool(px, w, h, ps, 0, acc_cfg);
                 // 池内容（§五 目录语义）：双池框之上同槽
                 if let Some(cs) = cfg_snap {
-                    t.lock()
-                        .unwrap()
-                        .paint_cfg_pool_content(px, w, h, ps, cs, 0, acc_cfg);
+                    t.lock().unwrap().paint_cfg_pool_content(
+                        px,
+                        w,
+                        h,
+                        ps,
+                        cs,
+                        0,
+                        acc_cfg,
+                        crate::report::boot_ms() as u64,
+                    );
                 }
             }
             g.slot_bake(crate::gles_present::ChromeSlot::Config);
@@ -4277,6 +4301,45 @@ impl App {
     /// 写 self.dirty 等其他字段;句柄落地后 lock 出的 guard 只借本地
     fn term_handle(&self) -> Option<crate::gate::SharedTerm> {
         self.term.clone()
+    }
+
+    /// 配置页首行字段实量宽（十四修动态宽度：触发器/panel 触摸命中
+    /// 与涂装同一条 measure_items 尺）。先 snap 取文再量，逐段借还
+    /// 不嵌套持锁（锁序 term→cfg_page，倒持 = 死锁）
+    fn cfg_row0_text_widths(&self) -> (u32, u32) {
+        let Some(page) = crate::ui::cfg_page::cfg_page_handle() else {
+            return (0, 0);
+        };
+        let (lbl, val) = {
+            let pg = page.lock().unwrap();
+            match pg.snap().upper.first() {
+                Some(ur) => (ur.label.clone(), ur.value.clone()),
+                None => (String::new(), String::new()),
+            }
+        };
+        match self.term_handle() {
+            Some(t) => {
+                let t = t.lock().unwrap();
+                (t.text_width(&lbl, 36.0), t.text_width(&val, 30.0))
+            }
+            None => (0, 0),
+        }
+    }
+
+    /// 组件池跳框动效预览开着（十四修 §六）：当前 modal 条目是动效
+    /// 引擎四件之一 = 帧泵/烘焙 sig 的动画维开关。无 self——
+    /// draw_frame_gles（关联函数无 self 接收者）也调
+    fn cfg_anim_modal_open() -> bool {
+        let Some(page) = crate::ui::cfg_page::cfg_page_handle() else {
+            return false;
+        };
+        let pg = page.lock().unwrap();
+        match pg.modal() {
+            Some(mi) => crate::ui::comp_registry::COMPONENTS
+                .get(mi)
+                .is_some_and(|e| crate::ui::comp_registry::preview_is_animated(e.preview)),
+            None => false,
+        }
     }
 
     /// 渲染一帧：GLES 双层装配（专线，AI 文字 GPU 化）或 softbuffer 单层
@@ -4735,6 +4798,19 @@ impl ApplicationHandler for App {
             // 且距上帧 ≥16ms 才置脏——无动画零额外帧,有动画 ≤60fps
             if crate::ui::fx_spring::fx_frame_due(crate::report::boot_ms() as u64) {
                 self.dirty = true;
+            }
+            // 组件池跳框动效预览帧泵(十四修 §六):动画展品开着且配置页
+            // 在顶 → ≤30fps 置脏(ConfigSig 时间桶维触发槽重烘焙);
+            // 关着/盖住零帧——无动画零成本纪律同 §四
+            if self.last_ai_snap.and_then(|s| s.top) == Some(crate::ai_presence::Panel::Config)
+                && Self::cfg_anim_modal_open()
+            {
+                static LAST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+                let now = crate::report::boot_ms() as u64;
+                if now.saturating_sub(LAST.load(std::sync::atomic::Ordering::Relaxed)) >= 33 {
+                    LAST.store(now, std::sync::atomic::Ordering::Relaxed);
+                    self.dirty = true;
+                }
             }
             // blackout 期补画(冗余兜底,2026-08-22 探针拆除案保留):
             // 首笔 RedrawRequested 到达前的脏帧由唤醒锤锤醒的本方法直画;
