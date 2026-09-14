@@ -2,7 +2,8 @@
 //!
 //! 钉什么：动态高度数学（上池 min(内容, H/2) / 下池撑满 / 空占位 4 格）+
 //! 可用区几何（左右各 2 格内边距、底内缘含 bottom_inset——漏算 = 下池
-//! 顶穿页环，2026-09-12 真机实踩）+ 两池 1 格间距 + D9 共享句柄。
+//! 顶穿页环，2026-09-12 真机实踩）+ 两池 1 格间距 + D9 共享句柄 +
+//! 十五修高度弹簧（中间值/重定基连续/首喂直通/活性探针）。
 //! 涂装侧的反转渐变/环墨钉在 termview_spec。
 
 use kfm_na::termview::{AI_PAGE_FRAME_MARGIN, AI_PAGE_FRAME_W, CELL_H, CELL_W};
@@ -59,8 +60,8 @@ fn spec_dual_pool_常量钉() {
 /// 钉③：空占位钉（A2 拍板）——上池无内容也占位 4 格不消失，下池撑满
 #[test]
 fn spec_dual_pool_空占位钉() {
-    let pool = DualPool::new(720, 1280);
-    let s = pool.layout();
+    let mut pool = DualPool::new(720, 1280);
+    let s = pool.layout(1000);
     assert_eq!(s.upper.h, POOL_EMPTY_H, "空内容上池 = 占位高（不消失）");
     assert!(!s.upper_scroll, "空内容无滚动");
     assert_eq!(
@@ -80,7 +81,7 @@ fn spec_dual_pool_空占位钉() {
 fn spec_dual_pool_内容跟随钉() {
     let mut pool = DualPool::new(720, 1280);
     pool.set_upper_content_h(216); // 6 行
-    let s = pool.layout();
+    let s = pool.layout(1000); // 首喂直通（十五修：冷启动不补演）
     assert_eq!(s.upper.h, 216, "内容 < H/2：上池跟随内容高");
     assert!(!s.upper_scroll);
     assert_eq!(
@@ -90,7 +91,8 @@ fn spec_dual_pool_内容跟随钉() {
     );
 
     pool.set_upper_content_h(10); // 不足占位高
-    let s2 = pool.layout();
+    pool.layout(1001); // 登记新目标（重定基点；动画起点 = 首见帧）
+    let s2 = pool.layout(2000); // 收敛后读终态
     assert_eq!(s2.upper.h, POOL_EMPTY_H, "内容不足占位按占位抬（A2）");
     assert!(!s2.upper_scroll, "10px 内容在占位框内无需滚动");
     assert_eq!(pool.upper_content_h(), 10, "内容高读回（状态咬口）");
@@ -102,7 +104,7 @@ fn spec_dual_pool_半高钳钉() {
     let mut pool = DualPool::new(720, 1280);
     let half = pool.area().h / 2;
     pool.set_upper_content_h(100_000);
-    let s = pool.layout();
+    let s = pool.layout(1000); // 首喂直通
     assert_eq!(s.upper.h, half, "内容爆量：上池钳到 H/2（不越下池）");
     assert!(s.upper_scroll, "被截断必须报滚动旗");
     assert_eq!(
@@ -111,8 +113,8 @@ fn spec_dual_pool_半高钳钉() {
         "两池都多 = 上池半高、下池撑满"
     );
 
-    pool.set_upper_content_h(half); // 恰好半高
-    let s2 = pool.layout();
+    pool.set_upper_content_h(half); // 恰好半高（目标不变 = 无动画）
+    let s2 = pool.layout(2000);
     assert_eq!(s2.upper.h, half);
     assert!(!s2.upper_scroll, "恰好装满不滚（> 才算截断）");
 }
@@ -130,7 +132,7 @@ fn spec_dual_pool_视口重算钉() {
         800 - 100 - 55 - (55 + TAB_ROW_H + POOL_TOP_GAP),
         "底内缘含 inset"
     );
-    let s = pool.layout();
+    let s = pool.layout(1000);
     assert_eq!(s.upper.h + POOL_GAP + s.lower.h, a.h, "新视口下下池仍撑满");
 }
 
@@ -145,4 +147,63 @@ fn spec_dual_pool_共享句柄钉() {
     let h_area = h.lock().unwrap().area().clone();
     let pool_area_owned = pool.lock().unwrap().area().clone();
     assert_eq!(h_area, pool_area_owned, "句柄与注册同一份");
+}
+
+/// 钉⑧：高度弹簧中间值钉（十五修 §五 池区动画条款）——目标变化后
+/// 弹簧滑行（中间帧 = 中间高，瞬切回潮钉），收敛贴死目标，下池随
+/// 布局数学自动互补；活性探针收敛前真/收敛后假（帧泵闸）
+#[test]
+fn spec_dual_pool_高度弹簧中间值钉() {
+    let mut pool = DualPool::new(720, 1280);
+    pool.set_upper_content_h(216);
+    let s0 = pool.layout(1000); // 首喂直通
+    assert_eq!(s0.upper.h, 216);
+    assert!(!pool.h_fx_active(1000), "直通后无动画 = 探针假");
+
+    pool.set_upper_content_h(480); // 目标变高（720×1280 半高钳 531 之下）
+    pool.layout(1001); // 登记新目标（重定基点）
+    let mid = pool.layout(1050);
+    assert!(
+        mid.upper.h > 216 && mid.upper.h != 480,
+        "滑行中途 = 中间高（瞬切回潮钉），实得 {}",
+        mid.upper.h
+    );
+    assert!(pool.h_fx_active(1050), "未收敛 = 探针真");
+    assert_eq!(
+        mid.upper.h + POOL_GAP + mid.lower.h,
+        pool.area().h,
+        "动画中途下池恒互补（恒到卡底）"
+    );
+    let fin = pool.layout(1700); // 600ms 超时兜底贴死
+    assert_eq!(fin.upper.h, 480, "收敛贴死目标高");
+    assert!(!pool.h_fx_active(1700), "收敛停脏（零空烧）");
+}
+
+/// 钉⑨：弹簧重定基连续钉——滑行中途再改目标，从当前位置续弹不跳变
+#[test]
+fn spec_dual_pool_弹簧重定基连续钉() {
+    let mut pool = DualPool::new(720, 1280);
+    pool.set_upper_content_h(216);
+    pool.layout(1000);
+    pool.set_upper_content_h(480);
+    pool.layout(1001); // 登记新目标（重定基点）
+    let mid = pool.layout(1050).upper.h;
+    pool.set_upper_content_h(300); // 滑行中途改目标
+    let cont = pool.layout(1050).upper.h;
+    assert_eq!(
+        cont, mid,
+        "重定基瞬间高度连续（elapsed 0 位置 = 当时弹簧位置）"
+    );
+    assert_eq!(pool.layout(1700).upper.h, 300, "续弹收敛到新目标");
+}
+
+/// 钉⑩：首喂直通钉（十五修）——新建池第一次 layout 直接落目标，
+/// 不补演一场（冷启动/插件热装无历史重放）
+#[test]
+fn spec_dual_pool_首喂直通钉() {
+    let mut pool = DualPool::new(720, 1280);
+    pool.set_upper_content_h(500);
+    let s = pool.layout(50_000); // 假钟任意大：直通不看钟
+    assert_eq!(s.upper.h, 500, "首喂直通目标高（无动画）");
+    assert!(!pool.h_fx_active(50_000));
 }

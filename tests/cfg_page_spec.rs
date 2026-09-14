@@ -85,11 +85,11 @@ fn select_moves_focus_and_bumps_epoch() {
         },
     ]);
     let e0 = p.epoch();
-    p.select(1);
+    p.select(1, 1000);
     assert_eq!(p.focus(), 1);
     assert!(p.epoch() > e0, "聚焦变更必须 bump 代际（sig 防鬼影）");
     let e1 = p.epoch();
-    p.select(1); // 同标重点不重掷
+    p.select(1, 2000); // 同标重点不重掷
     assert_eq!(p.epoch(), e1);
 }
 
@@ -100,9 +100,9 @@ fn dropdown_pick_sets_option_and_closes_without_touching_lower_focus() {
     let mut p = CfgPage::new();
     p.set_rows(rows());
     p.set_options(opts(2), 0);
-    p.toggle_dropdown();
+    p.toggle_dropdown(1000);
     assert!(p.dropdown_open());
-    p.dropdown_pick(2);
+    p.dropdown_pick(2, 2000);
     assert_eq!(p.option_sel(), 2, "点选 = 选项选中位变更");
     assert_eq!(p.focus(), 0, "下拉换选不许动下池聚焦（二版：不联动）");
     assert!(!p.dropdown_open(), "点选后 panel 必须收");
@@ -112,15 +112,15 @@ fn dropdown_pick_sets_option_and_closes_without_touching_lower_focus() {
 fn dropdown_pick_clamps_and_same_pick_no_extra_bump() {
     let mut p = CfgPage::new();
     p.set_options(opts(1), 0); // 2 项
-    p.toggle_dropdown();
+    p.toggle_dropdown(1000);
     let e0 = p.epoch();
-    p.dropdown_pick(99);
+    p.dropdown_pick(99, 2000);
     assert_eq!(p.option_sel(), 1, "越界点选 clamp 到末项");
     assert!(p.epoch() > e0);
     // 同项重点：只收 panel 时 bump 一次，sel 不空涨——再点同项（panel
     // 已收）必须零代际变化
     let e1 = p.epoch();
-    p.dropdown_pick(1);
+    p.dropdown_pick(1, 3000);
     assert_eq!(p.epoch(), e1);
 }
 
@@ -128,11 +128,11 @@ fn dropdown_pick_clamps_and_same_pick_no_extra_bump() {
 fn dismiss_on_outside_tap() {
     let mut p = CfgPage::new();
     p.set_options(opts(1), 0);
-    p.toggle_dropdown();
-    p.dismiss_dropdown();
+    p.toggle_dropdown(1000);
+    p.dismiss_dropdown(2000);
     assert!(!p.dropdown_open());
     let e = p.epoch();
-    p.dismiss_dropdown();
+    p.dismiss_dropdown(3000);
     assert_eq!(p.epoch(), e, "收着时 dismiss 不空涨代际");
 }
 
@@ -451,9 +451,9 @@ fn set_tab_switches_and_resets_page_state() {
     p.set_rows(rows());
     p.set_upper(upper(8));
     p.set_options(opts(2), 0);
-    p.select(0);
+    p.select(0, 1000);
     p.scroll_upper_by(120, 400);
-    p.toggle_dropdown();
+    p.toggle_dropdown(1000);
     p.open_modal(3);
     let e0 = p.epoch();
     p.set_tab(1);
@@ -536,7 +536,177 @@ fn snap_carries_tab_and_modal_dims() {
     let mut p = CfgPage::new();
     p.set_tab(1);
     p.open_modal(4);
-    let s = p.snap();
+    let s = p.snap(1000);
     assert_eq!(s.tab, 1, "快照必须带 tab 维（涂装分流读它）");
     assert_eq!(s.modal, Some(4), "快照必须带 modal 维（跳框涂装读它）");
+}
+
+// ---- 十五修：下池光标滑行（宪法 §五 池区动画条款）----
+
+fn three_rows() -> Vec<RowView> {
+    ["a", "b", "c"]
+        .iter()
+        .map(|t| RowView {
+            title: t.to_string(),
+            meta: String::new(),
+        })
+        .collect()
+}
+
+#[test]
+fn select_cursor_spring_slides_and_settles() {
+    let mut p = CfgPage::new();
+    p.set_rows(three_rows());
+    p.select(2, 1000);
+    // 弹簧起步：瞬时值在起点（重定基连续性——elapsed 0 位置 = from）
+    assert_eq!(p.cursor_row(1000), 0.0, "点选瞬间光标在旧行不跳变");
+    assert!(p.cursor_fx_active(1000), "未收敛 = 活性探针真（帧泵闸）");
+    let mid = p.cursor_row(1050);
+    assert!(mid > 0.0 && mid != 2.0, "滑行中途是中间值（瞬移回潮钉）");
+    // 快照必须吃同一维（涂装选中框的唯一读数口）
+    assert_eq!(p.snap(1050).cursor_row, mid, "快照与探针同一份读数");
+    // 收敛贴死（弹簧 600ms 超时兜底）
+    assert_eq!(p.cursor_row(1700), 2.0, "收敛后 == focus");
+    assert!(!p.cursor_fx_active(1700), "收敛停脏（零空烧）");
+}
+
+#[test]
+fn select_cursor_rebase_no_jump() {
+    let mut p = CfgPage::new();
+    p.set_rows(three_rows());
+    p.select(2, 1000);
+    let mid = p.cursor_row(1050);
+    p.select(1, 1050); // 滑行中途改目标
+    assert_eq!(
+        p.cursor_row(1050),
+        mid,
+        "重定基瞬间位置连续（来回狂点不跳变）"
+    );
+    assert_eq!(p.cursor_row(1700), 1.0, "续弹收敛到新目标");
+}
+
+#[test]
+fn set_tab_cursor_lands_first_row_directly() {
+    let mut p = CfgPage::new();
+    p.set_rows(three_rows());
+    p.select(2, 1000);
+    p.set_tab(1); // 滑行中途切标签页
+    assert_eq!(
+        p.cursor_row(1001),
+        0.0,
+        "切标签页光标直接落首行不滑行（十五修拍板）"
+    );
+    assert!(!p.cursor_fx_active(1001));
+}
+
+#[test]
+fn set_rows_clamp_cursor_follows_without_animation() {
+    let mut p = CfgPage::new();
+    p.set_rows(three_rows());
+    p.select(2, 1000);
+    assert_eq!(p.cursor_row(1700), 2.0);
+    p.set_rows(vec![RowView {
+        title: "only".into(),
+        meta: String::new(),
+    }]);
+    assert_eq!(p.focus(), 0, "行表缩水 focus clamp");
+    assert_eq!(
+        p.cursor_row(1701),
+        0.0,
+        "clamp 光标同步落点不动画（非用户点选）"
+    );
+}
+
+// ---- 十五修：下拉开合动画（宪法 §六 开合两件）----
+
+#[test]
+fn dropdown_progress_grows_ease_out_and_settles() {
+    let mut p = CfgPage::new();
+    p.set_options(opts(2), 0);
+    assert_eq!(p.dropdown_progress(500), 0.0, "未开过 = 进度 0");
+    p.toggle_dropdown(1000);
+    assert_eq!(p.dropdown_progress(1000), 0.0, "开合瞬间进度 0（生长起点）");
+    assert!(p.dropdown_fx_active(1000));
+    let mid = p.dropdown_progress(1125); // 半程 125/250
+    assert!(
+        (mid - 0.875).abs() < 1e-4,
+        "展开半程 = ease_out(0.5) = 0.875（三次缓出精确值），实得 {mid}"
+    );
+    assert_eq!(p.dropdown_progress(1250), 1.0, "250ms 贴死全高");
+    assert!(!p.dropdown_fx_active(1250), "展开毕活性探针假");
+    assert_eq!(p.snap(1125).dropdown_progress, mid, "快照同一份读数");
+}
+
+#[test]
+fn dropdown_pick_closes_ease_in_with_instant_sel() {
+    let mut p = CfgPage::new();
+    p.set_options(opts(2), 0);
+    p.toggle_dropdown(1000);
+    assert_eq!(p.dropdown_progress(1250), 1.0);
+    p.dropdown_pick(1, 1300);
+    assert_eq!(p.option_sel(), 1, "选中细框即时落新行（不等面板收完）");
+    assert!(!p.dropdown_open());
+    assert_eq!(
+        p.dropdown_progress(1300),
+        1.0,
+        "收起起点 = 当前展开度（不瞬消）"
+    );
+    let mid = p.dropdown_progress(1390); // 半程 90/180
+    assert!(
+        (mid - 0.875).abs() < 1e-4,
+        "收起半程 = 1-ease_in(0.5) = 0.875，实得 {mid}"
+    );
+    assert_eq!(p.dropdown_progress(1480), 0.0, "180ms 贴死全收");
+    assert!(!p.dropdown_fx_active(1480));
+}
+
+#[test]
+fn dropdown_reopen_mid_close_continues_from_current() {
+    let mut p = CfgPage::new();
+    p.set_options(opts(2), 0);
+    p.toggle_dropdown(1000);
+    p.dismiss_dropdown(1300); // 展开满后点外收
+    let mid = p.dropdown_progress(1390);
+    assert!(mid > 0.0 && mid < 1.0, "收起中途是中间进度");
+    p.toggle_dropdown(1390); // 收起中途再点触发器 = 重开
+    assert!(p.dropdown_open());
+    assert_eq!(
+        p.dropdown_progress(1390),
+        mid,
+        "重开瞬间进度连续（从余影处长）"
+    );
+    assert_eq!(p.dropdown_progress(1640), 1.0, "续长 250ms 贴死全高");
+}
+
+#[test]
+fn dropdown_dismiss_now_zeroes_afterimage() {
+    let mut p = CfgPage::new();
+    p.set_options(opts(2), 0);
+    p.toggle_dropdown(1000);
+    p.dismiss_dropdown(1300);
+    assert!(p.dropdown_progress(1390) > 0.0, "收起中途余影在");
+    p.dropdown_dismiss_now();
+    assert_eq!(
+        p.dropdown_progress(1390),
+        0.0,
+        "余影点按即时清零（不穿透触摸）"
+    );
+    assert!(!p.dropdown_fx_active(1390));
+    let e = p.epoch();
+    p.dropdown_dismiss_now(); // 已清零重点不空涨
+    assert_eq!(p.epoch(), e);
+}
+
+#[test]
+fn set_tab_clears_dropdown_afterimage() {
+    let mut p = CfgPage::new();
+    p.set_options(opts(2), 0);
+    p.toggle_dropdown(1000);
+    p.dismiss_dropdown(1300);
+    p.set_tab(1); // 收起中途切页
+    assert_eq!(
+        p.dropdown_progress(1301),
+        0.0,
+        "切标签页下拉余影即时清零（新页不继承浮层）"
+    );
 }

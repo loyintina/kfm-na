@@ -15,6 +15,15 @@
 //! - 超长**逐字贪心换行 ≤2 行**（wrap_field_lines），再超涂装裁剪
 //! - **末行距池底 1 格**（upper_content_h 末尾 +FIELD_BOTTOM_PAD）
 //!
+//! 十五修增订（2026-09-14，宪法 §五/§六 动画条款，用户拍板）：
+//! - **下池光标滑行**：点选聚焦 = 光标行号弹簧滑向新行（fx_spring
+//!   欠阻尼同核）；内容与页色即时切换不等光标；切标签页光标直接落
+//!   首行不滑行；set_rows clamp 同步落点不动画
+//! - **下拉开合两件**：展开生长 0→全高 250ms ease-out（fx_ease
+//!   同族）；选中收起 = 选中细框即时落新行 + 面板 180ms ease-in 收起；
+//!   开合中选项不命中（壳侧闸），收起中余影不穿透触摸
+//!   （dropdown_dismiss_now 归零）
+//!
 //! 二版条款兑现（kfmv4 池卡实证 4 图对齐）：
 //! - 根目录（大类）= 首行标签栏（tab_bar.rs 已有，本册不管）
 //! - **子目录选择 = 下池**：行表由壳喂（系统管理大类目前仅一行
@@ -106,7 +115,18 @@ pub struct CfgPageSnap {
     /// 开着的跳框 = COMPONENTS 下标（九修 §六 跳框条款；None = 无模态）
     pub modal: Option<usize>,
     pub epoch: u64,
+    /// 下池光标行号（十五修 §五：弹簧滑行的瞬时值，涂装选中框吃这维；
+    /// 收敛后 == focus as f32）
+    pub cursor_row: f32,
+    /// 下拉面板开合进度 0..1（十五修 §六：1 = 全开展开毕；收起动画
+    /// 中途 dropdown_open 已 false 而 progress > 0——面板照画渐缩）
+    pub dropdown_progress: f32,
 }
+
+/// 下拉展开时长 ms（十五修 §六：生长 0→全高 ease-out）
+pub const DROPDOWN_ENTER_MS: u64 = 250;
+/// 下拉收起时长 ms（十五修 §六：选中细框即时落新行，面板 ease-in 收）
+pub const DROPDOWN_EXIT_MS: u64 = 180;
 
 pub struct CfgPage {
     rows: Vec<RowView>,
@@ -119,6 +139,13 @@ pub struct CfgPage {
     tab: usize,
     modal: Option<usize>,
     epoch: u64,
+    /// 下池光标弹簧（十五修 §五）：起点位（像素域——重定基时 = 当时
+    /// 弹簧位置 × 行步进；见 cursor_row 注）
+    cursor_from: f32,
+    cursor_start_ms: u64,
+    /// 下拉进度弹簧（十五修 §六）：起点进度（重定基时 = 当时进度）
+    dd_from: f32,
+    dd_start_ms: u64,
 }
 
 impl CfgPage {
@@ -134,11 +161,16 @@ impl CfgPage {
             tab: 0,
             modal: None,
             epoch: 0,
+            cursor_from: 0.0,
+            cursor_start_ms: 0,
+            dd_from: 0.0,
+            dd_start_ms: 0,
         }
     }
 
     /// 喂下池行表（壳重建：大类切换后）。focus 越界 clamp；
-    /// 行表变了 bump 代际
+    /// 行表变了 bump 代际。clamp 落点不动画（十五修：光标弹簧同步
+    /// 落点——clamp 不是用户点选，不播滑行）
     pub fn set_rows(&mut self, rows: Vec<RowView>) {
         if rows != self.rows {
             self.rows = rows;
@@ -146,6 +178,7 @@ impl CfgPage {
         }
         if self.focus >= self.rows.len() {
             self.focus = self.rows.len().saturating_sub(1);
+            self.cursor_from = self.focus as f32 * (LOWER_ROW_H as i64 + ROW_GAP) as f32;
             self.epoch += 1;
         }
     }
@@ -187,16 +220,19 @@ impl CfgPage {
     }
 
     /// 切标签（标签栏点选后壳调用）：内容重建归壳（set_rows/set_upper
-    /// 判等不空涨）；本册负责切页副作用清零——聚焦归首行、上池滚动
-    /// 归零、下拉/跳框全收（新页不继承旧页的浮层）。同标重点不空涨
+    /// 判等不空涨）；本册负责切页副作用清零——聚焦归首行（十五修：
+    /// 光标直接落首行不滑行）、上池滚动归零、下拉/跳框全收（新页不
+    /// 继承旧页的浮层，下拉余影也即时清零）。同标重点不空涨
     pub fn set_tab(&mut self, i: usize) {
         if i == self.tab {
             return;
         }
         self.tab = i;
         self.focus = 0;
+        self.cursor_from = 0.0;
         self.upper_scroll = 0;
         self.dropdown_open = false;
+        self.dd_from = 0.0;
         self.modal = None;
         self.epoch += 1;
     }
@@ -227,27 +263,81 @@ impl CfgPage {
     }
 
     /// 点选下池行（子目录切换 = 上池内容跟换，重建归壳）。
-    /// 同标重点不重掷（代际不空涨）
-    pub fn select(&mut self, i: usize) {
+    /// 同标重点不重掷（代际不空涨）。十五修 §五：光标行号弹簧从当前
+    /// 位置重定基续弹滑向新行（内容/页色即时切换不等光标）
+    pub fn select(&mut self, i: usize, now_ms: u64) {
         if self.rows.is_empty() {
             return;
         }
         let i = i.min(self.rows.len() - 1);
         if i != self.focus {
+            let stride = (LOWER_ROW_H as i64 + ROW_GAP) as f32;
+            self.cursor_from = self.cursor_row(now_ms) * stride;
+            self.cursor_start_ms = now_ms;
             self.focus = i;
             self.epoch += 1;
         }
     }
 
-    /// 上池下拉框开合
-    pub fn toggle_dropdown(&mut self) {
+    /// 下池光标行号（十五修 §五）：弹簧瞬时值，收敛后 == focus。
+    /// 弹簧在像素域跑（SETTLE_PX=0.5px 才配像素尺；行号域 0.5 = 半行
+    /// ≈94px 提前贴死会把收尾剪成跳变——实踩）——内部乘行步进，对外
+    /// 仍报行号（涂装/快照零改尺）
+    pub fn cursor_row(&self, now_ms: u64) -> f32 {
+        let stride = (LOWER_ROW_H as i64 + ROW_GAP) as f32;
+        crate::ui::fx_spring::spring_pos(
+            self.cursor_from,
+            self.focus as f32 * stride,
+            now_ms.saturating_sub(self.cursor_start_ms),
+        ) / stride
+    }
+
+    /// 光标弹簧活性探针（帧泵闸）：未收敛 = true
+    pub fn cursor_fx_active(&self, now_ms: u64) -> bool {
+        self.cursor_row(now_ms) != self.focus as f32
+    }
+
+    /// 上池下拉框开合（十五修 §六：进度从当前值重定基续走——开着
+    /// 再点 = 从当前展开度收，关着再点 = 从当前余影长）
+    pub fn toggle_dropdown(&mut self, now_ms: u64) {
+        self.dd_from = self.dropdown_progress(now_ms);
+        self.dd_start_ms = now_ms;
         self.dropdown_open = !self.dropdown_open;
         self.epoch += 1;
     }
 
-    /// 下拉框点选：换选 + 收 panel。业务动作（写配置/重建上池）归壳——
-    /// 壳在本调用后读 `option_sel()` 执行
-    pub fn dropdown_pick(&mut self, i: usize) {
+    /// 下拉面板开合进度 0..1（十五修 §六）：开着 = 从 dd_from 长向 1
+    /// （250ms ease-out），关着 = 从 dd_from 收向 0（180ms ease-in）；
+    /// 超时贴死端点
+    pub fn dropdown_progress(&self, now_ms: u64) -> f32 {
+        let elapsed = now_ms.saturating_sub(self.dd_start_ms);
+        if self.dropdown_open {
+            let t = (elapsed.min(DROPDOWN_ENTER_MS)) as f32 / DROPDOWN_ENTER_MS as f32;
+            if t >= 1.0 {
+                1.0
+            } else {
+                self.dd_from + (1.0 - self.dd_from) * crate::ui::fx_ease::ease_out_cubic(t)
+            }
+        } else {
+            let t = (elapsed.min(DROPDOWN_EXIT_MS)) as f32 / DROPDOWN_EXIT_MS as f32;
+            if t >= 1.0 {
+                0.0
+            } else {
+                self.dd_from * (1.0 - crate::ui::fx_ease::ease_in_cubic(t))
+            }
+        }
+    }
+
+    /// 下拉开合活性探针（帧泵闸）：展开未满 / 收起未尽 = true
+    pub fn dropdown_fx_active(&self, now_ms: u64) -> bool {
+        let p = self.dropdown_progress(now_ms);
+        if self.dropdown_open { p < 1.0 } else { p > 0.0 }
+    }
+
+    /// 下拉框点选：换选 + 收 panel（十五修 §六：选中细框即时落新行，
+    /// 面板从当前进度 180ms ease-in 收起——不瞬消）。业务动作（写配置/
+    /// 重建上池）归壳——壳在本调用后读 `option_sel()` 执行
+    pub fn dropdown_pick(&mut self, i: usize, now_ms: u64) {
         if self.options.is_empty() {
             return;
         }
@@ -257,15 +347,29 @@ impl CfgPage {
             self.epoch += 1;
         }
         if self.dropdown_open {
+            self.dd_from = self.dropdown_progress(now_ms);
+            self.dd_start_ms = now_ms;
             self.dropdown_open = false;
             self.epoch += 1;
         }
     }
 
-    /// 下拉框开着时点别处 = 收（宪法 §六 下拉栏常规语义）
-    pub fn dismiss_dropdown(&mut self) {
+    /// 下拉框开着时点别处 = 收（宪法 §六 下拉栏常规语义；十五修：
+    /// 同选中收起的 180ms ease-in 动画）
+    pub fn dismiss_dropdown(&mut self, now_ms: u64) {
         if self.dropdown_open {
+            self.dd_from = self.dropdown_progress(now_ms);
+            self.dd_start_ms = now_ms;
             self.dropdown_open = false;
+            self.epoch += 1;
+        }
+    }
+
+    /// 收起中余影被点 = 即时清零（十五修 §六：余影不穿透触摸——面板
+    /// 已判定收，余影只是视觉尾巴，点按处交互必须立即让位）
+    pub fn dropdown_dismiss_now(&mut self) {
+        if !self.dropdown_open && self.dd_from > 0.0 {
+            self.dd_from = 0.0;
             self.epoch += 1;
         }
     }
@@ -374,7 +478,8 @@ impl CfgPage {
             + FIELD_BOTTOM_PAD
     }
 
-    pub fn snap(&self) -> CfgPageSnap {
+    /// 快照（十五修：吃 now_ms——光标弹簧/下拉进度是时间函数）
+    pub fn snap(&self, now_ms: u64) -> CfgPageSnap {
         CfgPageSnap {
             rows: self.rows.clone(),
             focus: self.focus,
@@ -386,6 +491,8 @@ impl CfgPage {
             tab: self.tab,
             modal: self.modal,
             epoch: self.epoch,
+            cursor_row: self.cursor_row(now_ms),
+            dropdown_progress: self.dropdown_progress(now_ms),
         }
     }
 }

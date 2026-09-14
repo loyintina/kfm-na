@@ -3235,7 +3235,7 @@ fn spec_三级框_涂装钉() {
     let mut pool = DualPool::new(w, h);
     pool.set_viewport(w, h, inset);
     pool.set_upper_content_h(72 + cfg_page::FIELD_ROW_H); // 内边距 2 格×2 + 1 字段行
-    let ps = pool.layout();
+    let ps = pool.layout(1000);
     let mut page = CfgPage::new();
     page.set_rows(vec![
         RowView {
@@ -3252,7 +3252,7 @@ fn spec_三级框_涂装钉() {
         value: "本地终端".into(),
         is_dropdown: false,
     }]);
-    let pg = page.snap(); // focus=0 → 行 0 选中、行 1 未选中
+    let pg = page.snap(1000); // focus=0 → 行 0 选中、行 1 未选中
 
     let mut b0 = vec![0u32; (w * h) as usize];
     termview::paint_cfg_page_chrome(&mut b0, w, h, inset, 0, acc);
@@ -3426,7 +3426,7 @@ fn spec_字段行_右对齐与动态宽涂装钉() {
     let mut pool = DualPool::new(w, h);
     pool.set_viewport(w, h, inset);
     pool.set_upper_content_h(72 + cfg_page::FIELD_ROW_H);
-    let ps = pool.layout();
+    let ps = pool.layout(1000);
     let mut page = CfgPage::new();
     page.set_rows(vec![RowView {
         title: "系统管理".into(),
@@ -3437,7 +3437,7 @@ fn spec_字段行_右对齐与动态宽涂装钉() {
         value: "v".into(),  // 短值 → 值框吃最小宽，右对齐可观
         is_dropdown: false, // （ASCII 夹具：host 测试字体无 CJK 字形）
     }]);
-    let pg = page.snap();
+    let pg = page.snap(1000);
     let mut b0 = vec![0u32; (w * h) as usize];
     termview::paint_cfg_page_chrome(&mut b0, w, h, inset, 0, acc);
     tv.paint_cfg_dual_pool(&mut b0, w, h, &ps, 0, acc);
@@ -3531,7 +3531,7 @@ fn spec_下拉面板_涂装钉() {
     let mut pool = DualPool::new(w, h);
     pool.set_viewport(w, h, inset);
     pool.set_upper_content_h(72 + cfg_page::FIELD_ROW_H);
-    let ps = pool.layout();
+    let ps = pool.layout(1000);
     let mut page = CfgPage::new();
     page.set_rows(vec![RowView {
         title: "系统管理".into(),
@@ -3545,7 +3545,7 @@ fn spec_下拉面板_涂装钉() {
     page.set_options(vec!["本地终端".into(), "服务器".into()], 1);
 
     // before：合着画一遍（下层原样取证）
-    let pg0 = page.snap();
+    let pg0 = page.snap(1000);
     let mut b0 = vec![0u32; (w * h) as usize];
     termview::paint_cfg_page_chrome(&mut b0, w, h, inset, 0, acc);
     tv.paint_cfg_dual_pool(&mut b0, w, h, &ps, 0, acc);
@@ -3574,8 +3574,8 @@ fn spec_下拉面板_涂装钉() {
     );
 
     // after：展开画一遍
-    page.toggle_dropdown();
-    let pg1 = page.snap();
+    page.toggle_dropdown(1000);
+    let pg1 = page.snap(1300);
     assert!(pg1.dropdown_open, "夹具前提：展开态");
     let mut b1 = vec![0u32; (w * h) as usize];
     termview::paint_cfg_page_chrome(&mut b1, w, h, inset, 0, acc);
@@ -3657,7 +3657,7 @@ fn spec_cfg双池_涂装钉() {
     let tv = TermView::new(host_font(), None, 8, 2, CELL_W, CELL_H);
     let mut pool = DualPool::new(400, 700);
     pool.set_viewport(400, 700, inset); // 与页环 chrome 同 inset（顶穿钉前提）
-    let snap = pool.layout();
+    let snap = pool.layout(1000);
     // 骨架期空占位：upper = (61,163,284,144)，lower = (61,343,284,182)
     assert_eq!(snap.upper.h, POOL_EMPTY_H, "夹具前提：骨架期上池空占位");
     assert_eq!(snap.upper.x, 61, "夹具前提：左右各 2 格内边距");
@@ -3769,7 +3769,7 @@ fn paint_modal_frame(
     let mut pool = DualPool::new(w, h);
     pool.set_viewport(w, h, inset);
     pool.set_upper_content_h(72 + cfg_page::FIELD_ROW_H);
-    let ps = pool.layout();
+    let ps = pool.layout(1000);
     let mut page = CfgPage::new();
     page.set_rows(vec![RowView {
         title: "动效引擎".into(),
@@ -3782,7 +3782,7 @@ fn paint_modal_frame(
     }]);
     page.set_tab(1); // 组件池页
     page.open_modal(mi);
-    let pg = page.snap();
+    let pg = page.snap(1000);
     assert_eq!(pg.modal, Some(mi), "夹具前提：跳框开着");
 
     let mut buf = vec![0u32; (w * h) as usize];
@@ -4021,5 +4021,167 @@ fn spec_bar088_恰好满宽_末字落墨钉() {
     assert!(
         !ink_in(&b1, 15, 20),
         "真装不下仍须截断（> 判停不许放成无裁剪）"
+    );
+}
+
+// ---- 十五修：池区/下拉动画的涂装侧钉（宪法 §五/§六；弹簧/缓动数学钉
+// 在 cfg_page_spec / dual_pool_spec，本组钉涂装吃动画几何）----
+
+#[test]
+fn spec_cfg下池_光标滑行涂装钉() {
+    // 十五修 §五：选中全包框吃光标弹簧瞬时值（行号小数 → 像素）——
+    // 手搓 cursor_row=0.5（行 0/1 正中相位），框必须落在两行之间；
+    // 两行本体恒按未选中画（内容/页色即时切换不等光标）。
+    // 变异：选中框画回 focus 行（瞬移回潮）/行本体带选中态回潮即红。
+    use kfm_na::termview::{lerp_rgb, ring_gradient_rgb};
+    use kfm_na::ui::cfg_page::{
+        self, CfgPage, LOWER_ROW_H, POOL_CONTENT_INSET, ROW_GAP, RowView, UpperRow,
+    };
+    use kfm_na::ui::dual_pool::DualPool;
+    let (w, h) = (1260u32, 2400u32);
+    let inset = 120u32;
+    let acc = kfm_na::ui::accent::AccentPair {
+        c1: 0x00FF_6000,
+        c2: 0x0000_80FF,
+    };
+    let dark = |c: u32| lerp_rgb(c, 0, 200);
+    let denom = (i64::from(w) - 1) + (i64::from(h) - 1);
+    let row_bg = |px: i64, py: i64| ring_gradient_rgb(dark(acc.c1), dark(acc.c2), px, py, denom);
+    let tv = TermView::new(host_font(), None, 8, 2, CELL_W, CELL_H);
+    let mut pool = DualPool::new(w, h);
+    pool.set_viewport(w, h, inset);
+    pool.set_upper_content_h(72 + cfg_page::FIELD_ROW_H);
+    let ps = pool.layout(1000);
+    let mut page = CfgPage::new();
+    page.set_rows(vec![
+        RowView {
+            title: "系统管理".into(),
+            meta: "1 项".into(),
+        },
+        RowView {
+            title: "网络".into(),
+            meta: String::new(),
+        },
+    ]);
+    page.set_upper(vec![UpperRow {
+        label: "默认服务器".into(),
+        value: "本地终端".into(),
+        is_dropdown: false,
+    }]);
+    page.select(1, 1000);
+    let mut pg = page.snap(1000);
+    pg.cursor_row = 0.5; // 手搓滑行中途相位（弹簧时值钉在 cfg_page_spec）
+
+    let mut buf = vec![0u32; (w * h) as usize];
+    termview::paint_cfg_page_chrome(&mut buf, w, h, inset, 0, acc);
+    tv.paint_cfg_dual_pool(&mut buf, w, h, &ps, 0, acc);
+    tv.paint_cfg_pool_content(&mut buf, w, h, &ps, &pg, 0, acc, 0);
+
+    let stride = LOWER_ROW_H as i64 + ROW_GAP;
+    let cy = ps.lower.y + POOL_CONTENT_INSET + (0.5f32 * stride as f32).round() as i64;
+    let crx = ps.lower.x + POOL_CONTENT_INSET;
+    // ①滑行框左粗缘中带 = 渐变 α255 直出（框落在两行之间）
+    let (px, py) = (crx + 4, cy + LOWER_ROW_H as i64 / 2);
+    assert_eq!(
+        buf[py as usize * w as usize + px as usize],
+        ring_gradient_rgb(acc.c1, acc.c2, px, py, denom),
+        "滑行框左粗缘必须 = 渐变 α255（框不在弹簧瞬时值位即红）"
+    );
+    // ②行 0 本体无选中框（内容即时切换不等光标——行本体恒未选中）
+    let r0 = cfg_page::lower_row_rect(0, &ps.lower);
+    assert_eq!(
+        buf[(r0.y + 30) as usize * w as usize + (r0.x + 4) as usize],
+        row_bg(r0.x + 4, r0.y + 30),
+        "行 0 本体不许带选中框（瞬移回潮即红）"
+    );
+    // ③行 1（focus 行）本体同样无框——选中框在 0.5 相位不在 focus 行
+    let r1 = cfg_page::lower_row_rect(1, &ps.lower);
+    assert_eq!(
+        buf[(r1.y + LOWER_ROW_H as i64 / 2) as usize * w as usize + (r1.x + 4) as usize],
+        row_bg(r1.x + 4, r1.y + LOWER_ROW_H as i64 / 2),
+        "focus 行本体不许带选中框（框画回 focus 行 = 瞬移回潮即红）"
+    );
+}
+
+#[test]
+fn spec_cfg下拉_矮面板裁剪钉() {
+    // 十五修 §六：面板高吃开合进度——progress=0.5 时 2 项面板只露半高
+    // （行 0 完整露出、行 1 整行被裁）。变异：展开瞬开回潮（忽略进度
+    // 画全高）/裁剪缺失（矮面板仍画行 1）即红。
+    use kfm_na::ui::cfg_page::{self, CfgPage, RowView, UpperRow};
+    use kfm_na::ui::dual_pool::DualPool;
+    let (w, h) = (1260u32, 2400u32);
+    let inset = 120u32;
+    let acc = kfm_na::ui::accent::AccentPair {
+        c1: 0x00FF_6000,
+        c2: 0x0000_80FF,
+    };
+    let blend = |fg: u32, dst: u32, a: u32| {
+        let inv = 255 - a;
+        let ch = |f: u32, d: u32| (f * a + d * inv) / 255;
+        (ch((fg >> 16) & 0xFF, (dst >> 16) & 0xFF) << 16)
+            | (ch((fg >> 8) & 0xFF, (dst >> 8) & 0xFF) << 8)
+            | ch(fg & 0xFF, dst & 0xFF)
+    };
+    let tv = TermView::new(host_font(), None, 8, 2, CELL_W, CELL_H);
+    let mut pool = DualPool::new(w, h);
+    pool.set_viewport(w, h, inset);
+    pool.set_upper_content_h(72 + cfg_page::FIELD_ROW_H);
+    let ps = pool.layout(1000);
+    let mut page = CfgPage::new();
+    page.set_rows(vec![RowView {
+        title: "系统管理".into(),
+        meta: "1 项".into(),
+    }]);
+    page.set_upper(vec![UpperRow {
+        label: "默认服务器".into(),
+        value: "本地终端".into(),
+        is_dropdown: true,
+    }]);
+    page.set_options(vec!["本地终端".into(), "服务器".into()], 1);
+
+    // before：合着画一遍（下层原样取证）
+    let pg0 = page.snap(1000);
+    let mut b0 = vec![0u32; (w * h) as usize];
+    termview::paint_cfg_page_chrome(&mut b0, w, h, inset, 0, acc);
+    tv.paint_cfg_dual_pool(&mut b0, w, h, &ps, 0, acc);
+    tv.paint_cfg_pool_content(&mut b0, w, h, &ps, &pg0, 0, acc, 0);
+
+    // 手搓半高相位（缓动时值钉在 cfg_page_spec；涂装只吃 progress 维）
+    page.toggle_dropdown(1000);
+    let mut pg1 = page.snap(1125);
+    pg1.dropdown_progress = 0.5;
+    let mut b1 = vec![0u32; (w * h) as usize];
+    termview::paint_cfg_page_chrome(&mut b1, w, h, inset, 0, acc);
+    tv.paint_cfg_dual_pool(&mut b1, w, h, &ps, 0, acc);
+    tv.paint_cfg_pool_content(&mut b1, w, h, &ps, &pg1, 0, acc, 0);
+
+    let lw = tv.text_width("默认服务器", 36.0);
+    let vw = tv.text_width("本地终端", 30.0);
+    let t = cfg_page::trigger_rect(&ps.upper, 0, true, lw, vw);
+    let max_h = h.saturating_sub(t.y.max(0) as u32 + t.h + 40);
+    let pr = cfg_page::dropdown_panel_rect(2, &ps.upper, max_h, 0, true, lw, vw);
+    let row_h = cfg_page::FIELD_ROW_H as i64;
+
+    // ①行 0 区（半高内）= 面板深底（与全高钉同一判式）
+    let (bx, by) = (pr.x + pr.w as i64 - 30, pr.y + row_h / 2);
+    assert_eq!(
+        b1[by as usize * w as usize + bx as usize],
+        blend(0, b0[by as usize * w as usize + bx as usize], 252),
+        "半高内行 0 必须 = 面板深底（面板没按进度长出即红）"
+    );
+    // ②行 1 区（半高外）= 下层原样（裁剪缺失/瞬开回潮即红）
+    let (cx2, cy2) = (pr.x + pr.w as i64 - 30, pr.y + row_h + row_h / 2);
+    assert_eq!(
+        b1[cy2 as usize * w as usize + cx2 as usize],
+        b0[cy2 as usize * w as usize + cx2 as usize],
+        "半高面板行 1 必须被裁（展开瞬开回潮即红）"
+    );
+    // ③选中细框（sel=1 在行 1）随高裁不露
+    let (fx, fy) = (pr.x + 1, pr.y + row_h + row_h / 2);
+    assert_eq!(
+        b1[fy as usize * w as usize + fx as usize],
+        b0[fy as usize * w as usize + fx as usize],
+        "被裁行的选中细框不许出露"
     );
 }

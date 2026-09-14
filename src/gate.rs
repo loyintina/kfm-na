@@ -251,7 +251,7 @@ pub fn dump_now(dir: &str) {
                             if let Some(page) = crate::ui::cfg_page::cfg_page_handle() {
                                 p.set_upper_content_h(page.lock().unwrap().upper_content_h());
                             }
-                            let ps = p.layout();
+                            let ps = p.layout(crate::report::boot_ms() as u64);
                             t.paint_cfg_dual_pool(
                                 &mut buf,
                                 w,
@@ -262,7 +262,7 @@ pub fn dump_now(dir: &str) {
                             );
                             // 池内容（§五 目录语义）：D9 同源句柄取快照
                             if let Some(page) = crate::ui::cfg_page::cfg_page_handle() {
-                                let cs = page.lock().unwrap().snap();
+                                let cs = page.lock().unwrap().snap(crate::report::boot_ms() as u64);
                                 t.paint_cfg_pool_content(
                                     &mut buf,
                                     w,

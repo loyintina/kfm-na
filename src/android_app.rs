@@ -363,6 +363,11 @@ struct ConfigSig {
     pool_upper_h: u32,
     /// 池内容代际（cfg_page epoch，§五 目录语义）
     cfg_epoch: u64,
+    /// 下池光标行号 ×64 量化（十五修 §五：光标弹簧滑行逐帧新值逐帧
+    /// 重烘焙——漏维 = 选中框动画冻在槽纹理里）
+    cursor_row_q: i32,
+    /// 下拉进度 ×1000 量化（十五修 §六：开合动画逐帧新值逐帧重烘焙）
+    dd_progress_q: u32,
     /// 动效预览时间桶（十四修 §六：动画展品开着 = boot_ms/33 逐帧
     /// 新值逐帧重烘焙；关着恒 0 不挤烘焙闸）
     anim_bucket: u64,
@@ -841,9 +846,10 @@ impl App {
                             crate::ui::cfg_page::cfg_page_handle(),
                         )
                     {
+                        let now = crate::report::boot_ms() as u64;
                         let (ps, lower, upper) = {
-                            let p = pool.lock().unwrap();
-                            let ps = p.layout();
+                            let mut p = pool.lock().unwrap();
+                            let ps = p.layout(now);
                             (ps.upper.y, ps.lower.clone(), ps.upper.clone())
                         };
                         let _ = ps;
@@ -853,17 +859,32 @@ impl App {
                         let (lw, vw) = self.cfg_row0_text_widths();
                         let mut pg = page.lock().unwrap();
                         if pg.dropdown_open() {
+                            // 十五修 §六：展开中选项不命中——点按 = 收
+                            // （从当前展开度续收，不瞬消）
+                            if pg.dropdown_progress(now) < 1.0 {
+                                pg.dismiss_dropdown(now);
+                                crate::report::report("gest", "下拉展开中点按→收 panel");
+                                self.dirty = true;
+                                return;
+                            }
                             let max_h = 10_000; // 命中只问行号，钳高由涂装侧管
                             if let Some(i) = pg.dropdown_item_at_y(yi, &upper, max_h, lw, vw) {
-                                pg.dropdown_pick(i);
+                                pg.dropdown_pick(i, now);
                                 drop(pg);
                                 // 下拉换选 = 默认服务器变更（二版：写盘+重建归壳）
                                 self.apply_default_server_pick();
                                 crate::report::report("gest", &format!("下拉点选→项 {i}"));
                             } else {
-                                pg.dismiss_dropdown();
+                                pg.dismiss_dropdown(now);
                                 crate::report::report("gest", "下拉外点按→收 panel");
                             }
+                            self.dirty = true;
+                            return;
+                        }
+                        // 十五修 §六：收起中余影不穿透触摸——点按即时清零
+                        if pg.dropdown_progress(now) > 0.0 {
+                            pg.dropdown_dismiss_now();
+                            crate::report::report("gest", "下拉余影点按→即时清零");
                             self.dirty = true;
                             return;
                         }
@@ -1220,7 +1241,11 @@ impl App {
                                 crate::ui::cfg_page::cfg_page_handle(),
                             )
                         {
-                            let upper = pool.lock().unwrap().layout().upper;
+                            let upper = pool
+                                .lock()
+                                .unwrap()
+                                .layout(crate::report::boot_ms() as u64)
+                                .upper;
                             let in_upper = apt.start_x >= upper.x as f64
                                 && apt.start_x < (upper.x + i64::from(upper.w)) as f64
                                 && apt.start_y >= upper.y as f64
@@ -1576,7 +1601,8 @@ impl App {
                             crate::ui::cfg_page::cfg_page_handle(),
                         ) {
                             let (lower, upper) = {
-                                let ps = pool.lock().unwrap().layout();
+                                let now = crate::report::boot_ms() as u64;
+                                let ps = pool.lock().unwrap().layout(now);
                                 (ps.lower.clone(), ps.upper.clone())
                             };
                             // 十四修：触发器命中吃首行实量宽（先量后锁）
@@ -1589,12 +1615,13 @@ impl App {
                                 && xi < tr.x + tr.w as i64
                                 && yi >= tr.y
                                 && yi < tr.y + tr.h as i64;
+                            let now = crate::report::boot_ms() as u64;
                             if in_trigger {
-                                pg.toggle_dropdown();
+                                pg.toggle_dropdown(now);
                                 crate::report::report("gest", "下拉触发器点按→开合");
                                 self.dirty = true;
                             } else if let Some(i) = pg.lower_row_at_y(yi, &lower) {
-                                pg.select(i);
+                                pg.select(i, now);
                                 drop(pg);
                                 self.rebuild_cfg_rows();
                                 crate::report::report("ui", &format!("下池点按: 聚焦行 {i}"));
@@ -4044,6 +4071,11 @@ impl App {
         // 池内容 sig 一维（宪法 §五 目录语义）：cfg_page 代际——聚焦切换/
         // 下拉开合/行表字段重建都 bump（漏维 = 旧行表新聚焦鬼影）
         let cfg_epoch = cfg_snap.map_or(0, |cs| cs.epoch);
+        // 动画两维（十五修 §五/§六）：光标行号 ×64 量化（1/64 行 ≈ 2.5px
+        // 精度够肉眼无缝）+ 下拉进度 ×1000 量化——动画在播逐帧新值触发
+        // 槽重烘焙，收敛后值稳零空烧（同 §四 纪律）
+        let cursor_row_q = cfg_snap.map_or(0, |cs| (cs.cursor_row * 64.0).round() as i32);
+        let dd_progress_q = cfg_snap.map_or(0, |cs| (cs.dropdown_progress * 1000.0).round() as u32);
         // 动效预览 sig 一维（十四修 §六）：动画展品开着 = 33ms 时间桶
         // 逐帧变 → 槽逐帧重烘焙；关着恒 0（无动画零烘焙同 §四纪律）
         let anim_bucket = if cfg_visible && Self::cfg_anim_modal_open() {
@@ -4064,6 +4096,8 @@ impl App {
                 tab_cx,
                 pool_upper_h,
                 cfg_epoch,
+                cursor_row_q,
+                dd_progress_q,
                 anim_bucket,
             })
         {
@@ -4312,7 +4346,7 @@ impl App {
         };
         let (lbl, val) = {
             let pg = page.lock().unwrap();
-            match pg.snap().upper.first() {
+            match pg.snap(crate::report::boot_ms() as u64).upper.first() {
                 Some(ur) => (ur.label.clone(), ur.value.clone()),
                 None => (String::new(), String::new()),
             }
@@ -4340,6 +4374,23 @@ impl App {
                 .is_some_and(|e| crate::ui::comp_registry::preview_is_animated(e.preview)),
             None => false,
         }
+    }
+
+    /// 配置页池区/下拉动画活性探针（十五修 §五/§六 帧泵闸）：
+    /// 上池高度弹簧 / 下池光标弹簧 / 下拉开合 任一未收敛 = true。
+    /// 锁序 term→pool→cfg_page 不倒持嵌套（本探针不碰 term，两把
+    /// 短锁先后取，互不嵌套）
+    fn cfg_fx_active() -> bool {
+        let now = crate::report::boot_ms() as u64;
+        if crate::ui::dual_pool::dual_pool_handle()
+            .is_some_and(|p| p.lock().unwrap().h_fx_active(now))
+        {
+            return true;
+        }
+        crate::ui::cfg_page::cfg_page_handle().is_some_and(|pg| {
+            let g = pg.lock().unwrap();
+            g.cursor_fx_active(now) || g.dropdown_fx_active(now)
+        })
     }
 
     /// 渲染一帧：GLES 双层装配（专线，AI 文字 GPU 化）或 softbuffer 单层
@@ -4381,10 +4432,14 @@ impl App {
             if let Some(page) = &self.cfg_page {
                 g3.set_upper_content_h(page.lock().unwrap().upper_content_h());
             }
-            g3.layout()
+            g3.layout(crate::report::boot_ms() as u64)
         });
-        // 配置页内容快照（三层目录）：涂装/命中同一份（D9）
-        let cfg_snap = self.cfg_page.as_ref().map(|p| p.lock().unwrap().snap());
+        // 配置页内容快照（三层目录）：涂装/命中同一份（D9；十五修：
+        // 吃 now——光标弹簧/下拉进度是时间函数）
+        let cfg_snap = self
+            .cfg_page
+            .as_ref()
+            .map(|p| p.lock().unwrap().snap(crate::report::boot_ms() as u64));
         // GLES（2026-09-07 图层槽位版）：网格实例 → 键行槽 → 面板槽
         // （placement 动画）→ AI 文字实例 → 上层槽。槽位置脏烘焙。
         // 关联函数按字段传参，避开 buf 借用 gfx 时动不了 self 的问题
@@ -4799,11 +4854,12 @@ impl ApplicationHandler for App {
             if crate::ui::fx_spring::fx_frame_due(crate::report::boot_ms() as u64) {
                 self.dirty = true;
             }
-            // 组件池跳框动效预览帧泵(十四修 §六):动画展品开着且配置页
-            // 在顶 → ≤30fps 置脏(ConfigSig 时间桶维触发槽重烘焙);
-            // 关着/盖住零帧——无动画零成本纪律同 §四
+            // 组件池跳框动效预览帧泵(十四修 §六)+池区/下拉动画帧泵
+            // (十五修 §五/§六):动画在播且配置页在顶 → ≤30fps 置脏
+            // (ConfigSig 时间桶/光标行号/下拉进度三维触发槽重烘焙);
+            // 收敛/盖住零帧——无动画零成本纪律同 §四
             if self.last_ai_snap.and_then(|s| s.top) == Some(crate::ai_presence::Panel::Config)
-                && Self::cfg_anim_modal_open()
+                && (Self::cfg_anim_modal_open() || Self::cfg_fx_active())
             {
                 static LAST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
                 let now = crate::report::boot_ms() as u64;

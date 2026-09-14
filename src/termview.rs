@@ -2736,7 +2736,9 @@ impl TermView {
             }
         }
 
-        // ---- 下池：子目录行表（4.5 格框行，左粗条恒在 + 选中三边渐变）----
+        // ---- 下池：子目录行表（4.5 格框行，左粗条恒在；选中框单独滑行）----
+        // 十五修 §五：行本体恒按未选中画——选中全包框在循环后按光标弹簧
+        // 瞬时值（行号小数）单独落墨，内容与页色即时切换不等光标
         let no_clip = (0, i64::from(h));
         for (i, row) in page.rows.iter().enumerate() {
             let r = cp::lower_row_rect(i, &ps.lower);
@@ -2754,7 +2756,7 @@ impl TermView {
                 r.y,
                 r.w,
                 r.h,
-                i == page.focus,
+                false,
                 accent,
                 denom,
                 no_clip,
@@ -2789,6 +2791,31 @@ impl TermView {
                     meta_fg,
                     text_inset,
                     None,
+                );
+            }
+        }
+
+        // 十五修 §五：选中全包框吃光标弹簧瞬时值（行号小数 → 像素）——
+        // 与 lower_row_rect 同一份几何（内缩/步进同源），只是 y 吃滑行值
+        if !page.rows.is_empty() {
+            let stride = cp::LOWER_ROW_H as i64 + cp::ROW_GAP;
+            let cy = ps.lower.y
+                + cp::POOL_CONTENT_INSET
+                + (page.cursor_row * stride as f32).round() as i64;
+            let crx = ps.lower.x + cp::POOL_CONTENT_INSET + off;
+            if crx >= 0 && cy + cp::LOWER_ROW_H as i64 <= ps.lower.y + ps.lower.h as i64 {
+                paint_row_frame(
+                    &mut frame,
+                    crx,
+                    cy,
+                    ps.lower
+                        .w
+                        .saturating_sub((cp::POOL_CONTENT_INSET * 2) as u32),
+                    cp::LOWER_ROW_H,
+                    true,
+                    accent,
+                    denom,
+                    no_clip,
                 );
             }
         }
@@ -2913,10 +2940,12 @@ impl TermView {
             }
         }
 
-        // ---- 下拉 panel（开着才画，叠在最后 = 盖住字段行/下池）----
+        // ---- 下拉 panel（进度 >0 就画，叠在最后 = 盖住字段行/下池）----
         // 十三修 §六：整面圆角无边框深底（近黑 α252）+ 选项行方形无个体
-        // 背景 + 选中行均匀细框
-        if page.dropdown_open {
+        // 背景 + 选中行均匀细框。十五修 §六：面板高吃开合进度（展开生长
+        // 0→全高 250ms ease-out；选中收起 180ms ease-in——dropdown_open
+        // 已 false 而 progress >0 时照画渐缩，选项行随当前高裁剪）
+        if page.dropdown_progress > 0.001 {
             // 十四修：触发器几何吃首行实量宽（与字段行涂装同尺）
             let (lw, vw) = match page.upper.first() {
                 Some(ur) => (
@@ -2930,6 +2959,10 @@ impl TermView {
             let max_h = h.saturating_sub(t.y.max(0) as u32 + t.h + 40);
             let pr =
                 cp::dropdown_panel_rect(page.options.len(), &ps.upper, max_h, scroll, dd, lw, vw);
+            let pr = crate::ui::dual_pool::PoolRect {
+                h: ((pr.h as f32) * page.dropdown_progress).round() as u32,
+                ..pr
+            };
             let px0 = pr.x + off;
             if px0 >= 0 {
                 let prr = (POOL_FRAME_R as i64).min((pr.w / 2).min(pr.h / 2) as i64) as u32;
