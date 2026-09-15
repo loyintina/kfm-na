@@ -572,7 +572,7 @@ fn snap_carries_tab_and_modal_dims() {
     assert_eq!(s.modal, Some(4), "快照必须带 modal 维（跳框涂装读它）");
 }
 
-// ---- 十五修：下池光标滑行（宪法 §五 池区动画条款）----
+// ---- 十五修：下池光标滑行（宪法 §五 池区动画条款；BAR-094 改缓动核）----
 
 fn three_rows() -> Vec<RowView> {
     ["a", "b", "c"]
@@ -585,20 +585,50 @@ fn three_rows() -> Vec<RowView> {
 }
 
 #[test]
-fn select_cursor_spring_slides_and_settles() {
+fn select_cursor_eases_slides_and_settles() {
     let mut p = CfgPage::new();
     p.set_rows(three_rows());
     p.select(2, 1000, pool_stub(), acc());
-    // 弹簧起步：瞬时值在起点（重定基连续性——elapsed 0 位置 = from）
+    // 缓动起步：瞬时值在起点（重定基连续性——elapsed 0 位置 = from）
     assert_eq!(p.cursor_row(1000), 0.0, "点选瞬间光标在旧行不跳变");
     assert!(p.cursor_fx_active(1000), "未收敛 = 活性探针真（帧泵闸）");
     let mid = p.cursor_row(1050);
     assert!(mid > 0.0 && mid != 2.0, "滑行中途是中间值（瞬移回潮钉）");
     // 快照必须吃同一维（涂装选中框的唯一读数口）
     assert_eq!(p.snap(1050).cursor_row, mid, "快照与探针同一份读数");
-    // 收敛贴死（弹簧 600ms 超时兜底）
-    assert_eq!(p.cursor_row(1700), 2.0, "收敛后 == focus");
-    assert!(!p.cursor_fx_active(1700), "收敛停脏（零空烧）");
+    // BAR-094：PAN_MS 同钟——250ms 整点贴死（弹簧 600ms 兜底已废）
+    assert_eq!(p.cursor_row(1250), 2.0, "缓动时长 = PAN_MS，贴死 == focus");
+    assert!(!p.cursor_fx_active(1250), "收敛停脏（零空烧）");
+}
+
+/// BAR-094 钉：光标缓动**无过冲** + 与上池平移**同钟同曲线**。
+/// 欠阻尼弹簧会越过目标 ≈2.5% 再回摆（用户真机逐帧判「瞬移+过冲」，
+/// 未经用户要求——除名）；缓动全程单调夹在 [from, target] 内，且
+/// 相对进度与 pan t 每一采样点恒等（select 同刻挂账）
+#[test]
+fn bar094_cursor_no_overshoot_and_in_sync_with_pan() {
+    let mut p = CfgPage::new();
+    p.set_rows(three_rows());
+    p.select(2, 1000, pool_stub(), acc());
+    // 无过冲：全程 10ms 步进采样，行号恒 ∈ [0, 2]（弹簧过冲会 >2）
+    for ms in (0..=250).step_by(10) {
+        let row = p.cursor_row(1000 + ms);
+        assert!(
+            (0.0..=2.0).contains(&row),
+            "t={ms}ms 光标出界（过冲回潮）：{row}"
+        );
+    }
+    // 同步钉：任一时刻光标相对进度 == 平移 t（同刻挂账同曲线）
+    for ms in [25, 62, 125, 187, 240] {
+        let Some(pan) = p.snap(1000 + ms).pan else {
+            panic!("平移账 {ms}ms 内必须在场");
+        };
+        let progress = p.cursor_row(1000 + ms) / 2.0; // 0→2 行的相对进度
+        assert_eq!(
+            progress, pan.t,
+            "t={ms}ms 光标进度与平移进度必须恒等（同步律）"
+        );
+    }
 }
 
 #[test]
@@ -613,7 +643,7 @@ fn select_cursor_rebase_no_jump() {
         mid,
         "重定基瞬间位置连续（来回狂点不跳变）"
     );
-    assert_eq!(p.cursor_row(1700), 1.0, "续弹收敛到新目标");
+    assert_eq!(p.cursor_row(1300), 1.0, "续滑（PAN_MS 内重定基）收敛新目标");
 }
 
 #[test]

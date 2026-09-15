@@ -4576,16 +4576,12 @@ impl App {
     }
 
     /// 配置页池区/下拉动画活性探针（十五修 §五/§六 帧泵闸）：
-    /// 上池高度弹簧 / 下池光标弹簧 / 下拉开合 任一未收敛 = true。
+    /// 下池光标缓动 / 下拉开合 / 视口平移 任一未收敛 = true。
+    /// BAR-094：池高弹簧除名（废除后恒直通，无活性可言）。
     /// 锁序 term→pool→cfg_page 不倒持嵌套（本探针不碰 term，两把
     /// 短锁先后取，互不嵌套）
     fn cfg_fx_active() -> bool {
         let now = crate::report::boot_ms() as u64;
-        if crate::ui::dual_pool::dual_pool_handle()
-            .is_some_and(|p| p.lock().unwrap().h_fx_active(now))
-        {
-            return true;
-        }
         crate::ui::cfg_page::cfg_page_handle().is_some_and(|pg| {
             let g = pg.lock().unwrap();
             g.cursor_fx_active(now) || g.dropdown_fx_active(now) || g.pan_active(now)
@@ -4628,15 +4624,12 @@ impl App {
             g3.set_viewport(view.0, view.1, view.2);
             // 上池内容高（宪法 §五 高度数学钉的输入）：触发器 + 字段行，
             // 三层目录状态核唯一来源（锁序 term→pool→cfg_page 与 gate 同）。
-            // BAR-092 三咬补：平移进行中冻结喂入——池高弹簧逐帧改
-            // pool_upper_h = 逐帧全页重烘（redroid 遥测实咬 Upper 平移
-            // 只出 2 帧），弹簧挪到贴死后续弹（视觉=滑完再落高）
-            let pan_freeze = self.cfg_page.as_ref().is_some_and(|p| {
-                p.lock()
-                    .unwrap()
-                    .pan_active(crate::report::boot_ms() as u64)
-            });
-            if !pan_freeze && let Some(page) = &self.cfg_page {
+            // BAR-094：pan_freeze 撤销（BAR-093 立的「平移期冻结喂入，
+            // 弹簧贴死后续弹」正是「新页面带旧行高平移+到位后二次高度
+            // 动画+过冲」的根源）——池高弹簧已灭，目标值喂入即到位
+            // （sig 起步帧变一次 = 一烘），平移期 sig 恒定无逐帧重烘，
+            // PanMove 新代烘的就是目标池高
+            if let Some(page) = &self.cfg_page {
                 g3.set_upper_content_h(page.lock().unwrap().upper_content_h());
             }
             g3.layout(crate::report::boot_ms() as u64)

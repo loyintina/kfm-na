@@ -13,9 +13,11 @@
 //! 下池内容高不参与布局（下池恒 = H − 上池 − 间距）——签名即契约。
 //!
 //! 十五修增订（2026-09-14，宪法 §五 池区动画条款）：上池高度弹簧——
-//! 目标高变化即从当前高度重定基续弹（fx_spring 欠阻尼同核 ≈350ms），
-//! 下池随布局数学自动互补；首喂/冷启动直通。layout 吃 now_ms（壳喂
-//! report::boot_ms 同钟）。
+//! ~~目标高变化即从当前高度重定基续弹（fx_spring 欠阻尼同核
+//! ≈350ms）~~ **BAR-094 废除（2026-09-15 用户拍板）**：池高 = 目标值
+//! 硬切零动画——「新页面就是新页面，整个平移过去后不要再有任何动画」；
+//! 弹簧的可见过冲从未被用户要求过，且与平移异步（光标先到、高度后弹）。
+//! layout 仍吃 now_ms（壳喂 report::boot_ms 同钟——签名留稳，几何纯函数）。
 //!
 //! bottom_inset：池区底缘 = 页环底内缘，必须含键盘+输入栏带——漏算
 //! 下池顶穿页环/压键行（2026-09-12 真机实踩）。
@@ -65,21 +67,13 @@ pub fn pool_area(screen_w: u32, screen_h: u32, bottom_inset: u32) -> PoolRect {
     }
 }
 
-/// 双池布局状态：上池内容高 + 可用区 + 高度弹簧。壳层持有一份（配置卡
+/// 双池布局状态：上池内容高 + 可用区。壳层持有一份（配置卡
 /// 常驻，与标签栏同规）；内容高由池页内容侧喂（骨架期恒 0 = 空占位）。
-/// 高度弹簧（十五修宪法 §五 池区动画条款）：目标高变化即从当前高度
-/// 重定基续弹（fx_spring 欠阻尼同核 ≈350ms 收敛），下池随布局数学自动
-/// 互补；首喂/冷启动直通不补演
+/// 池高 = 目标值硬切（BAR-094：十五修弹簧废除——可见过冲未经用户
+/// 要求、与平移异步；「新页面就是新页面，平移到位后无任何动画」）
 pub struct DualPool {
     upper_content_h: u32,
     area: PoolRect,
-    /// 高度弹簧：起点高（重定基时 = 当时弹簧位置）
-    h_from: f32,
-    h_start_ms: u64,
-    /// 上次布局的目标高（目标变化侦测 = 与 target_h() 比对）
-    h_target: u32,
-    /// 首喂直通旗（冷启动不补演一场）
-    h_primed: bool,
 }
 
 /// 布局快照（涂装唯一读数口；upper_scroll = 上池内容被半高钳截断旗，
@@ -96,10 +90,6 @@ impl DualPool {
         DualPool {
             upper_content_h: 0,
             area: pool_area(screen_w, screen_h, 0),
-            h_from: 0.0,
-            h_start_ms: 0,
-            h_target: 0,
-            h_primed: false,
         }
     }
 
@@ -119,54 +109,18 @@ impl DualPool {
         &self.area
     }
 
-    /// 目标上池高（弹簧的靶）：min(max(内容, 空占位), H/2)
+    /// 目标上池高：min(max(内容, 空占位), H/2)
     fn target_h(&self) -> u32 {
         let content = self.upper_content_h.max(POOL_EMPTY_H);
         content.min(self.area.h / 2)
     }
 
-    /// 高度弹簧活性探针（帧泵闸）：未收敛 = true（首喂前恒 false）
-    pub fn h_fx_active(&self, now_ms: u64) -> bool {
-        if !self.h_primed {
-            return false;
-        }
-        let target = self.h_target as f32;
-        crate::ui::fx_spring::spring_pos(
-            self.h_from,
-            target,
-            now_ms.saturating_sub(self.h_start_ms),
-        ) != target
-    }
-
-    /// 布局（数学钉主体）：上池高 = 弹簧当前值（靶 = min(max(内容, 空
-    /// 占位), H/2)），下池 = H − 上池 − 池间距随动画自动互补；
-    /// upper_scroll = 内容被目标高截断旗（吃靶不吃瞬时值——动画中途
-    /// 不闪旗）。目标变化（内容进出/视口变）即从当前高度重定基续弹
+    /// 布局（数学钉主体）：上池高 = 目标值硬切（BAR-094：十五修弹簧
+    /// 废除——喂入即到位，零动画零过冲），下池 = H − 上池 − 池间距
+    /// 随布局数学自动互补；upper_scroll = 内容被目标高截断旗
     pub fn layout(&mut self, now_ms: u64) -> DualPoolSnap {
-        let target = self.target_h();
-        if !self.h_primed {
-            // 首喂直通：冷启动不补演
-            self.h_primed = true;
-            self.h_from = target as f32;
-            self.h_target = target;
-            self.h_start_ms = now_ms;
-        } else if target != self.h_target {
-            // 重定基：从当前弹簧位置续弹（来回狂点不跳变）
-            self.h_from = crate::ui::fx_spring::spring_pos(
-                self.h_from,
-                self.h_target as f32,
-                now_ms.saturating_sub(self.h_start_ms),
-            );
-            self.h_target = target;
-            self.h_start_ms = now_ms;
-        }
-        let upper_h = crate::ui::fx_spring::spring_pos(
-            self.h_from,
-            self.h_target as f32,
-            now_ms.saturating_sub(self.h_start_ms),
-        )
-        .round()
-        .max(0.0) as u32;
+        let _ = now_ms; // 历史签名留稳（弹簧时代吃 now_ms；BAR-094 后恒直通）
+        let upper_h = self.target_h();
         let h = self.area.h;
         let upper = PoolRect {
             x: self.area.x,
@@ -181,7 +135,7 @@ impl DualPool {
             h: h.saturating_sub(upper_h).saturating_sub(POOL_GAP),
         };
         DualPoolSnap {
-            upper_scroll: self.upper_content_h > target,
+            upper_scroll: self.upper_content_h > self.target_h(),
             upper,
             lower,
         }

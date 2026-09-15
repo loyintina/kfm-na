@@ -17,8 +17,11 @@
 //!
 //! 十五修增订（2026-09-14，宪法 §五/§六 动画条款，用户拍板）：
 //! - **下池光标滑行**：点选聚焦 = 光标行号弹簧滑向新行（fx_spring
-//!   欠阻尼同核）；内容与页色即时切换不等光标；切标签页光标直接落
-//!   首行不滑行；set_rows clamp 同步落点不动画
+//!   欠阻尼同核）——**BAR-094 改判（2026-09-15 用户拍板）**：弹簧
+//!   换 250ms ease-in-out cubic 定时缓动（与视口平移同钟同曲线，
+//!   光标滑行与上池内容平移严格同步；欠阻尼过冲从未被用户要求）；
+//!   内容与页色即时切换不等光标；切标签页光标直接落首行不滑行；
+//!   set_rows clamp 同步落点不动画
 //! - **下拉开合两件**：展开生长 0→全高 250ms ease-out（fx_ease
 //!   同族）；选中收起 = 选中细框即时落新行 + 面板 180ms ease-in 收起；
 //!   开合中选项不命中（壳侧闸），收起中余影不穿透触摸
@@ -207,8 +210,8 @@ pub struct CfgPage {
     tab: usize,
     modal: Option<usize>,
     epoch: u64,
-    /// 下池光标弹簧（十五修 §五）：起点位（像素域——重定基时 = 当时
-    /// 弹簧位置 × 行步进；见 cursor_row 注）
+    /// 下池光标缓动起点（十五修立，BAR-094 改缓动核）：起点位（像素
+    /// 域——重定基时 = 当时缓动瞬时值 × 行步进；见 cursor_row 注）
     cursor_from: f32,
     cursor_start_ms: u64,
     /// 下拉进度弹簧（十五修 §六）：起点进度（重定基时 = 当时进度）
@@ -248,8 +251,8 @@ impl CfgPage {
     }
 
     /// 喂下池行表（壳重建：大类切换后）。focus 越界 clamp；
-    /// 行表变了 bump 代际。clamp 落点不动画（十五修：光标弹簧同步
-    /// 落点——clamp 不是用户点选，不播滑行）
+    /// 行表变了 bump 代际。clamp 落点不动画（十五修：光标同步落点
+    /// ——clamp 不是用户点选，不播滑行）
     pub fn set_rows(&mut self, rows: Vec<RowView>) {
         if rows != self.rows {
             self.rows = rows;
@@ -377,8 +380,10 @@ impl CfgPage {
     }
 
     /// 点选下池行（子目录切换 = 上池内容跟换，重建归壳）。
-    /// 同标重点不重掷（代际不空涨）。十五修 §五：光标行号弹簧从当前
-    /// 位置重定基续弹滑向新行（内容/页色即时切换不等光标）。
+    /// 同标重点不重掷（代际不空涨）。十五修 §五：光标从当前位置
+    /// 重定基缓动滑向新行（内容/页色即时切换不等光标）；BAR-094：
+    /// 缓动核 = 250ms ease-in-out 与本刻挂账的平移同钟同曲线（同步
+    /// 滑行，无过冲）。
     /// 十七修 §六「面与内容一体」：选行 = **上池级视口平移**——旧
     /// 上池内容冻结挂账双代同画，双池框/下池不动；方向律同切标签
     /// （光标下移 = 前进 = 内容左移）
@@ -405,22 +410,30 @@ impl CfgPage {
         }
     }
 
-    /// 下池光标行号（十五修 §五）：弹簧瞬时值，收敛后 == focus。
-    /// 弹簧在像素域跑（SETTLE_PX=0.5px 才配像素尺；行号域 0.5 = 半行
-    /// ≈94px 提前贴死会把收尾剪成跳变——实踩）——内部乘行步进，对外
-    /// 仍报行号（涂装/快照零改尺）
+    /// 下池光标行号（十五修 §五 立滑行；BAR-094 改判 2026-09-15）：
+    /// 250ms ease-in-out cubic 定时缓动（PAN_MS 同钟同曲线——点选时
+    /// select 同刻挂平移账，光标滑行与上池内容平移严格同步），收敛后
+    /// == focus。缓动在像素域跑（from 起点像素域，对外仍报行号——
+    /// 涂装/快照零改尺）。**无过冲**：ease-in-out 全程单调不过靶，
+    /// 欠阻尼弹簧的回弹（≈2.5% 屏高「墩一下」）从未被用户要求，
+    /// 真机逐帧判「瞬移+过冲」即此病灶
     pub fn cursor_row(&self, now_ms: u64) -> f32 {
         let stride = (LOWER_ROW_H as i64 + ROW_GAP) as f32;
-        crate::ui::fx_spring::spring_pos(
-            self.cursor_from,
-            self.focus as f32 * stride,
-            now_ms.saturating_sub(self.cursor_start_ms),
-        ) / stride
+        let from = self.cursor_from;
+        let target = self.focus as f32 * stride;
+        if from == target {
+            return self.focus as f32;
+        }
+        let elapsed = now_ms.saturating_sub(self.cursor_start_ms);
+        let t = (elapsed.min(PAN_MS)) as f32 / PAN_MS as f32;
+        (from + (target - from) * crate::ui::fx_ease::ease_in_out_cubic(t)) / stride
     }
 
-    /// 光标弹簧活性探针（帧泵闸）：未收敛 = true
+    /// 光标滑行活性探针（帧泵闸）：缓动未到时长且确有位移 = true
     pub fn cursor_fx_active(&self, now_ms: u64) -> bool {
-        self.cursor_row(now_ms) != self.focus as f32
+        let stride = (LOWER_ROW_H as i64 + ROW_GAP) as f32;
+        self.cursor_from != self.focus as f32 * stride
+            && now_ms.saturating_sub(self.cursor_start_ms) < PAN_MS
     }
 
     /// 两段时序挂账未收敛 = true（Ⅰ段滑行中或Ⅱ段收起中）——
