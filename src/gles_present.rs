@@ -71,6 +71,11 @@ pub enum ChromeSlot {
     /// 整幅拷贝 = 旧代冻结封存（每代一次拷贝+上传）；动画期合成期
     /// 偏移出（−t·travel），scissor 到裁剪带。贴死即隐
     PanOld = 7,
+    /// 平移新代（BAR-092 三咬补：Upper hold 期配置槽无上池行——
+    /// 新行必须有自己的滑动层，否则「新内容不跟随，贴死闪现」）。
+    /// 起步帧烘新代稳态（框+行，无 chrome——带外全裁），连环平移时
+    /// 上一笔 PanMove 即下一笔旧代（PanOld 捕获源接力）
+    PanMove = 8,
 }
 
 /// 视口平移合成参数（十九修 D8）：调用方逐帧从 cfg_snap.pan 求值——
@@ -81,6 +86,8 @@ pub struct PanComp {
     /// 裁剪带（屏像素，top-down，x0/y0/x1/y1）——Page=页内容带 /
     /// Upper=上池内容矩形（BAR-091 语义：池框不进带）
     pub band: (i32, i32, i32, i32),
+    /// 缓动后进度（遥测用：panc 行对账逐帧 t）
+    pub t: f32,
     /// 旧代 X 偏移（=−dir·t·travel）
     pub old_dx: f32,
     /// 新代 X 偏移（=dir·(1−t)·travel）
@@ -501,7 +508,7 @@ pub struct GlesPresent {
     // ---- 期 1 第 2 层：终端网格 GPU 化 ----
     /// 图层槽位（ui-base §八 渲染成本模型）：键行/AI面板/上层/配置/文件树
     /// 五槽，置脏烘焙 + placement 合成——动画帧零光栅零上传
-    layers: [ChromeLayer; 8],
+    layers: [ChromeLayer; 9],
     /// 图层实例程序（rect+uv+tint 四边形；placement 逐槽进实例数据）
     layer_prog: glow::NativeProgram,
     layer_vao: glow::NativeVertexArray,
@@ -637,6 +644,7 @@ impl GlesPresent {
         };
         // 先建槽数组再 move gl 进结构体（E0382：字段初始化按书写序移动）
         let layers = [
+            mk_layer(&gl),
             mk_layer(&gl),
             mk_layer(&gl),
             mk_layer(&gl),
@@ -867,6 +875,12 @@ impl GlesPresent {
     /// 槽位可见性（合成期跳过不画；烘焙物保留，重现身零成本）
     pub fn set_slot_visible(&mut self, s: ChromeSlot, v: bool) {
         self.layers[s as usize].visible = v;
+    }
+
+    /// 槽位（可见,已烘）旗标（BAR-092 遥测：panc 行对账 PanOld 状态）
+    pub fn slot_flags(&self, s: ChromeSlot) -> (bool, bool) {
+        let l = &self.layers[s as usize];
+        (l.visible, l.baked)
     }
 
     /// 烘焙一槽：mark_chrome_alpha（「纯黑=空白」约定）+ 全画布上传。
@@ -1246,19 +1260,22 @@ impl GlesPresent {
                                             uv,
                                         );
                                     }
-                                    draw_slot_layer_src(
-                                        gl,
-                                        self.layer_prog,
-                                        self.layer_vao,
-                                        self.layer_vbo,
-                                        cf.tex,
-                                        cfg_off as f32 + pc.new_dx,
-                                        by0 as f32 + cfg_dy_extra,
-                                        (bx1 - bx0) as f32,
-                                        (by1 - by0) as f32,
-                                        cfg_alpha,
-                                        uv,
-                                    );
+                                    let pm = &self.layers[ChromeSlot::PanMove as usize];
+                                    if pm.visible && pm.baked {
+                                        draw_slot_layer_src(
+                                            gl,
+                                            self.layer_prog,
+                                            self.layer_vao,
+                                            self.layer_vbo,
+                                            pm.tex,
+                                            cfg_off as f32 + pc.new_dx,
+                                            by0 as f32 + cfg_dy_extra,
+                                            (bx1 - bx0) as f32,
+                                            (by1 - by0) as f32,
+                                            cfg_alpha,
+                                            uv,
+                                        );
+                                    }
                                     gl.disable(glow::SCISSOR_TEST);
                                 }
                             }

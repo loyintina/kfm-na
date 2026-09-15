@@ -15,25 +15,26 @@ use kfm_na::ui::stage;
 // 变异抽检：返回数组第 6/7 槽改 false → 断言红；槽位次序换序即红。
 #[test]
 fn spec_bar070_上层槽恒可见() {
-    // 槽序：[键行, AI, 配置, 文件树, 解析, 上层, 终端卡, 平移旧代]
+    // 槽序：[键行, AI, 配置, 文件树, 解析, 上层, 终端卡, 平移旧代, 平移新代]
     assert_eq!(
         stage::slot_visibility(true, true, true, true, true, false),
-        [true, true, true, true, true, true, true, false]
+        [true, true, true, true, true, true, true, false, false]
     );
     assert_eq!(
         stage::slot_visibility(false, false, false, false, false, true),
-        [false, false, false, false, false, true, false, false]
+        [false, false, false, false, false, true, false, false, false]
     );
-    // 显式锁八条语义：键行/终端卡跟网格未靠泊走，四面板各跟各的 visible 走
+    // 显式锁九条语义：键行/终端卡跟网格未靠泊走，四面板各跟各的 visible 走
     let v = stage::slot_visibility(false, true, true, false, true, true);
-    assert!(!v[0] && v[1] && v[2] && !v[3] && v[4] && v[5] && !v[6] && v[7]);
+    assert!(!v[0] && v[1] && v[2] && !v[3] && v[4] && v[5] && !v[6] && v[7] && v[8]);
     // 被覆盖的面板：在栈（visible=true）哪怕顶是别家——露出随推移滑回的承载
     let v = stage::slot_visibility(true, true, true, true, true, true);
     assert!(v[2] && v[3] && v[4]);
-    // 十九修 D8：平移旧代槽 = 配置可见 ∧ 平移进行中（贴死即隐/页隐即隐）
+    // 十九修 D8：平移双槽 = 配置可见 ∧ 平移进行中（贴死即隐/页隐即隐）
     assert!(!stage::slot_visibility(true, false, true, false, false, false)[7]);
     assert!(stage::slot_visibility(true, false, true, false, false, true)[7]);
     assert!(!stage::slot_visibility(true, false, false, false, false, true)[7]);
+    assert!(stage::slot_visibility(true, false, true, false, false, true)[8]);
 }
 
 // DirtyGuard 复用契约跨卷再钉：同 sig 复喂=照用烘焙（动画帧零光栅

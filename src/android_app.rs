@@ -3784,6 +3784,7 @@ impl App {
         let (d_old, d_new) = crate::ui::cfg_page::pan_offsets(p.dir, p.t, travel);
         Some(crate::gles_present::PanComp {
             band: (band.0 as i32, band.1 as i32, band.2 as i32, band.3 as i32),
+            t: p.t,
             old_dx: d_old as f32,
             new_dx: d_new as f32,
             // 隙底语义分域（十八修钉）：Page 间隙带=页背景（填）；
@@ -4096,6 +4097,7 @@ impl App {
         g.set_slot_visible(crate::gles_present::ChromeSlot::Over, slot_vis[5]);
         g.set_slot_visible(crate::gles_present::ChromeSlot::TermCard, slot_vis[6]);
         g.set_slot_visible(crate::gles_present::ChromeSlot::PanOld, slot_vis[7]);
+        g.set_slot_visible(crate::gles_present::ChromeSlot::PanMove, slot_vis[7]);
         // 终端卡片壳槽烘焙（2026-09-11）：恒靠泊零 placement——sig 含
         // ime/bar_h 是因为壳下缘停在快捷键行上沿（键盘开合期逐帧重烘焙
         // 加入 ui-base §八 期 2 债同族清单，不单独立项）
@@ -4180,12 +4182,41 @@ impl App {
             cfg_snap.and_then(|cs| cs.pan.as_ref().map(|p| (cs.epoch, p.scope as u8, p.dir)));
         if let Some(k) = pan_now {
             if sigs.pan_cap != Some(k) {
-                let src = g
-                    .slot_canvas(crate::gles_present::ChromeSlot::Config)
-                    .to_vec();
+                // 旧代捕获接力：首笔从配置画布拷（旧代像素在此）；连环
+                // 平移（上一笔未清账）配置画布已是 hold 烘焙（Upper 无
+                // 上池行）——旧代的行在上一笔 PanMove 里，从它接
+                let src_slot = if sigs.pan_cap.is_some() {
+                    crate::gles_present::ChromeSlot::PanMove
+                } else {
+                    crate::gles_present::ChromeSlot::Config
+                };
+                let src = g.slot_canvas(src_slot).to_vec();
                 g.slot_canvas(crate::gles_present::ChromeSlot::PanOld)
                     .copy_from_slice(&src);
                 g.slot_bake(crate::gles_present::ChromeSlot::PanOld);
+                // 新代滑动层（BAR-092 三咬：Upper hold 期配置槽无行，
+                // 新行必须独立成层——贴死闪现病灶的根治）
+                let pmx = g.slot_canvas(crate::gles_present::ChromeSlot::PanMove);
+                pmx.fill(0);
+                if let (Some(ps), Some(t), Some(cs)) = (pool_snap, th, cfg_snap) {
+                    let mut settled = cs.clone();
+                    settled.pan = None;
+                    t.lock()
+                        .unwrap()
+                        .paint_cfg_dual_pool(pmx, w, h, ps, 0, acc_cfg);
+                    t.lock().unwrap().paint_cfg_pool_content(
+                        pmx,
+                        w,
+                        h,
+                        ps,
+                        &settled,
+                        0,
+                        acc_cfg,
+                        crate::report::boot_ms() as u64,
+                        false,
+                    );
+                }
+                g.slot_bake(crate::gles_present::ChromeSlot::PanMove);
                 sigs.pan_cap = Some(k);
             }
         } else {
@@ -4414,6 +4445,31 @@ impl App {
                 cy,
             );
         }
+        // 平移遥测（BAR-092 观测升级：逐帧位置对账，用户终验实报
+        // 「新内容不跟随/过冲」——涂装无法自证的合成期，位置先行）
+        let pan_comp = Self::pan_composite(cfg_snap, pool_snap, w);
+        if let Some(pc) = &pan_comp {
+            let (po_v, po_b) = g.slot_flags(crate::gles_present::ChromeSlot::PanOld);
+            let (pm_v, pm_b) = g.slot_flags(crate::gles_present::ChromeSlot::PanMove);
+            crate::report::report(
+                "panc",
+                &format!(
+                    "t={:.3} old={:+.0} new={:+.0} band=({},{},{},{}) clear={} po_v={} po_b={} pm_v={} pm_b={}",
+                    pc.t,
+                    pc.old_dx,
+                    pc.new_dx,
+                    pc.band.0,
+                    pc.band.1,
+                    pc.band.2,
+                    pc.band.3,
+                    pc.clear_bg,
+                    po_v,
+                    po_b,
+                    pm_v,
+                    pm_b
+                ),
+            );
+        }
         g.present_frame(
             &bg_inst,
             &glyphs_by_page,
@@ -4432,7 +4488,7 @@ impl App {
             cfg_extra.dy,
             ft_extra.dy,
             pt_extra.dy,
-            Self::pan_composite(cfg_snap, pool_snap, w),
+            pan_comp,
         );
         ai_layout
     }
@@ -4571,8 +4627,16 @@ impl App {
             let mut g3 = p.lock().unwrap();
             g3.set_viewport(view.0, view.1, view.2);
             // 上池内容高（宪法 §五 高度数学钉的输入）：触发器 + 字段行，
-            // 三层目录状态核唯一来源（锁序 term→pool→cfg_page 与 gate 同）
-            if let Some(page) = &self.cfg_page {
+            // 三层目录状态核唯一来源（锁序 term→pool→cfg_page 与 gate 同）。
+            // BAR-092 三咬补：平移进行中冻结喂入——池高弹簧逐帧改
+            // pool_upper_h = 逐帧全页重烘（redroid 遥测实咬 Upper 平移
+            // 只出 2 帧），弹簧挪到贴死后续弹（视觉=滑完再落高）
+            let pan_freeze = self.cfg_page.as_ref().is_some_and(|p| {
+                p.lock()
+                    .unwrap()
+                    .pan_active(crate::report::boot_ms() as u64)
+            });
+            if !pan_freeze && let Some(page) = &self.cfg_page {
                 g3.set_upper_content_h(page.lock().unwrap().upper_content_h());
             }
             g3.layout(crate::report::boot_ms() as u64)
