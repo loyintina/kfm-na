@@ -162,10 +162,15 @@ impl DualPool {
                     to
                 } else {
                     let t = elapsed as f32 / crate::ui::cfg_page::PAN_MS as f32;
-                    (*from as f32
-                        + ((*to - *from) as f32) * crate::ui::fx_ease::ease_in_out_cubic(t))
+                    // 有符号中间量（BAR-095 咬：u32 相减在变小方向下溢
+                    // 成 4e9 级巨值 → upper.h 天文数字 → band/池框错乱，
+                    // 真机遥测实录 t=0.678 band=(97,175,1169,-1385067369)）
+                    let from_i = i64::from(*from);
+                    let to_i = i64::from(*to);
+                    (from_i as f32
+                        + (to_i - from_i) as f32 * crate::ui::fx_ease::ease_in_out_cubic(t))
                     .round()
-                    .max(0.0) as u32
+                    .clamp(0.0, to_i.max(from_i) as f32) as u32
                 }
             }
             None => target,

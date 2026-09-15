@@ -245,3 +245,31 @@ fn bar095_dual_pool_glide_idempotent_and_set_overrides() {
     assert_eq!(pool.layout(1100).upper.h, 300, "set 打断缓动立即到位");
     assert!(!pool.glide_fx_active(1100), "打断后账清（无残留滑行）");
 }
+
+/// 钉⑬：缩小方向钉（BAR-095 真机遥测咬出的漏网维度）——池高**变小**
+/// 时缓动全程夹在 [to, from] 内且无溢出：u32 相减在变小方向下溢成
+/// 4e9 级巨值 → upper.h 天文数字 → band 垃圾负数（真机实录
+/// t=0.678 band=(97,175,1169,-1385067369)），有符号中间量+夹紧为钉
+#[test]
+fn bar095_dual_pool_glide_shrink_no_underflow() {
+    let mut pool = DualPool::new(720, 1280);
+    pool.set_upper_content_h(480);
+    pool.layout(1000);
+    pool.glide_upper_content_h(216, 1000); // 缩小方向（to < from）
+    let half = pool.area().h / 2;
+    for ms in (0..=250).step_by(10) {
+        let s = pool.layout(1000 + ms);
+        assert!(
+            (216..=480).contains(&s.upper.h),
+            "t=+{ms}ms 缩小方向出界（下溢回潮）：{}",
+            s.upper.h
+        );
+        assert!(s.upper.h <= half, "上池不许越过半高钳（{half}）");
+        assert_eq!(
+            s.upper.h + POOL_GAP + s.lower.h,
+            pool.area().h,
+            "缩小方向下池恒互补（下池不溢出）"
+        );
+    }
+    assert_eq!(pool.layout(1250).upper.h, 216, "贴死目标高");
+}
