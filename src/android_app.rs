@@ -368,6 +368,11 @@ struct ConfigSig {
     cursor_row_q: i32,
     /// 下拉进度 ×1000 量化（十五修 §六：开合动画逐帧新值逐帧重烘焙）
     dd_progress_q: u32,
+    /// 平移 hold 模式（十九修 D8/BAR-092 补丁）：pan 进行中=true——
+    /// 模式开关只翻转两次（起步/贴死各一烘），不是动画进度，不违
+    /// 合成期优先律；漏维 = 贴死后 hold 烘焙滞留（上池行消失到下次
+    /// 交互，redroid rd427 f0008 实咬）
+    pan_hold: bool,
     /// 动效预览时间桶（十四修 §六：动画展品开着 = boot_ms/33 逐帧
     /// 新值逐帧重烘焙；关着恒 0 不挤烘焙闸）
     anim_bucket: u64,
@@ -4155,6 +4160,10 @@ impl App {
         // 是真机掉帧病灶——平移呈现全在合成期，烘焙恒画新代稳态）
         let cursor_row_q = cfg_snap.map_or(0, |cs| (cs.cursor_row * 64.0).round() as i32);
         let dd_progress_q = cfg_snap.map_or(0, |cs| (cs.dropdown_progress * 1000.0).round() as u32);
+        // 平移 hold 模式维（BAR-092 补丁）：起步 true / 贴死 false 各翻
+        // 转一次 = 各一烘。漏维 = 贴死后 hold 烘焙滞留（上池行消失到
+        // 下次交互，rd427 f0008 实咬）
+        let pan_hold = cfg_snap.is_some_and(|cs| cs.pan.is_some());
         // 动效预览 sig 一维（十四修 §六）：动画展品开着 = 33ms 时间桶
         // 逐帧变 → 槽逐帧重烘焙；关着恒 0（无动画零烘焙同 §四纪律）
         let anim_bucket = if cfg_visible && Self::cfg_anim_modal_open() {
@@ -4197,6 +4206,7 @@ impl App {
                 cfg_epoch,
                 cursor_row_q,
                 dd_progress_q,
+                pan_hold,
                 anim_bucket,
             })
         {
