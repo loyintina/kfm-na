@@ -68,6 +68,52 @@ pub fn pool_area(screen_w: u32, screen_h: u32, bottom_inset: u32) -> PoolRect {
     }
 }
 
+/// BAR-097 池层合成期几何（纯函数，考题先行件）：拆层后池高动画期
+/// **不重烘任何大画布**——上池层按「最大高」烘、合成期 rect.h 裁剪；
+/// 上池框底缘独立小层；下池层整体走合成期 y 位移。
+/// 入参 upper_h = 当前（缓动瞬时）上池高，area = 池区可用区。
+/// 返回：上池层可见矩形（屏幕坐标 + 高度）、底缘层中心 y、下池层矩形。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PoolLayerGeom {
+    /// 上池层：x/w 同池区，y 同池区顶，h = 当前池高（uv 取顶部 h/最大高）
+    pub upper: PoolRect,
+    /// 上池最大高（层画布高度基准 = 池区高/2；uv 分母）
+    pub upper_max_h: u32,
+    /// 底缘层中心 y（层高 EDGE_LAYER_H 居中于此）
+    pub edge_center_y: i64,
+    /// 下池层：y = 上池底 + 池间距；h = 剩余（撑满到池区底）
+    pub lower: PoolRect,
+}
+
+/// 底缘层高 = 圆角半径 × 2（60px 起，容下 POOL_FRAME_R=36 的圆角两侧）
+pub const EDGE_LAYER_H: u32 = 72;
+
+/// 池层合成期几何（BAR-097；与 §五 布局数学同源：下池 = H − 上池 −
+/// 间距，恒撑满池区底）
+pub fn pool_layer_geometry(area: &PoolRect, upper_h: u32) -> PoolLayerGeom {
+    let upper_max_h = area.h / 2;
+    let upper_h = upper_h.min(upper_max_h);
+    let upper = PoolRect {
+        x: area.x,
+        y: area.y,
+        w: area.w,
+        h: upper_h,
+    };
+    let edge_center_y = area.y + i64::from(upper_h) - i64::from(EDGE_LAYER_H / 2);
+    let lower = PoolRect {
+        x: area.x,
+        y: area.y + i64::from(upper_h + POOL_GAP),
+        w: area.w,
+        h: area.h.saturating_sub(upper_h).saturating_sub(POOL_GAP),
+    };
+    PoolLayerGeom {
+        upper,
+        upper_max_h,
+        edge_center_y,
+        lower,
+    }
+}
+
 /// 双池布局状态：上池内容高 + 可用区 + 池高缓动账。壳层持有一份（配置卡
 /// 常驻，与标签栏同规）；内容高由池页内容侧喂（骨架期恒 0 = 空占位）。
 /// 池高动画 = BAR-095 分域律：Upper 域 glide 250ms ease-in-out（与光标/

@@ -49,7 +49,7 @@
 | `src/ui/cfg_page.rs` | 61 | 56 | 5 | DROPDOWN_ENTER_MS DROPDOWN_EXIT_MS DROPDOWN_PICK_MOVE_MS register_cfg_page cfg_page_handle |
 | `src/ui/comp_registry.rs` | 6 | 5 | 1 | preview_is_animated |
 | `src/ui/cursor.rs` | 9 | 9 | 0 | — |
-| `src/ui/dual_pool.rs` | 15 | 15 | 0 | — |
+| `src/ui/dual_pool.rs` | 17 | 17 | 0 | — |
 | `src/ui/fx_ease.rs` | 11 | 11 | 0 | — |
 | `src/ui/fx_spring.rs` | 7 | 7 | 0 | — |
 | `src/ui/gear.rs` | 7 | 7 | 0 | — |

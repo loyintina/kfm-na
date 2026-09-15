@@ -273,3 +273,52 @@ fn bar095_dual_pool_glide_shrink_no_underflow() {
     }
     assert_eq!(pool.layout(1250).upper.h, 216, "贴死目标高");
 }
+
+/// BAR-097 考题先行钉：池层合成期几何（`pool_layer_geometry`）——
+/// 拆层后池高动画期零重烘的几何底座：①上池层高 = 当前池高（钳最大
+/// 高/2）②下池层 y = 上池底+间距、h 恒撑满池区底（与 §五 布局数学
+/// 同源）③底缘层中心 y = 上池底 − 层半高。变异：下池漏间距/上池不
+/// 钳最大高 → 红。
+#[test]
+fn bar097_dual_pool_layer_geometry() {
+    use kfm_na::ui::dual_pool::{EDGE_LAYER_H, pool_layer_geometry};
+    let pool = DualPool::new(720, 1280);
+    let area = pool.area().clone();
+    // 常态：池高 = 216
+    let g = pool_layer_geometry(&area, 216);
+    assert_eq!(g.upper.y, area.y, "上池层顶 = 池区顶");
+    assert_eq!(g.upper.h, 216, "上池层高 = 当前池高");
+    assert_eq!(
+        g.lower.y,
+        area.y + i64::from(216 + POOL_GAP),
+        "下池层 y = 上池底 + 池间距"
+    );
+    assert_eq!(
+        g.upper.h + POOL_GAP + g.lower.h,
+        area.h,
+        "下池层恒撑满池区底（与布局数学同源）"
+    );
+    assert_eq!(
+        g.edge_center_y,
+        area.y + i64::from(216) - i64::from(EDGE_LAYER_H / 2),
+        "底缘层中心 = 上池底 − 层半高"
+    );
+    // 半高钳：池高不许越最大高（池区高/2）
+    let g2 = pool_layer_geometry(&area, 100_000);
+    assert_eq!(g2.upper.h, area.h / 2, "上池层高钳到最大高（uv 分母）");
+    assert_eq!(g2.upper_max_h, area.h / 2, "最大高 = 池区高/2");
+    assert_eq!(g2.upper.h + POOL_GAP + g2.lower.h, area.h, "钳后下池仍撑满");
+    // 缓动全程：几何随池高单调、恒互补
+    let mut last = 0;
+    for h in (0..=area.h / 2).step_by(17) {
+        let gh = pool_layer_geometry(&area, h);
+        assert!(gh.upper.h >= last, "上池层高随喂入单调不减");
+        last = gh.upper.h;
+        assert_eq!(gh.upper.h + POOL_GAP + gh.lower.h, area.h, "全程互补");
+        assert_eq!(
+            gh.edge_center_y,
+            area.y + i64::from(gh.upper.h) - i64::from(EDGE_LAYER_H / 2),
+            "底缘层恒贴上池底"
+        );
+    }
+}
