@@ -631,6 +631,22 @@ fn bar094_cursor_no_overshoot_and_in_sync_with_pan() {
     }
 }
 
+/// BAR-095 分域探针钉：Upper 平移在场 → pan_upper_active 真（壳层喂
+/// glide 缓动）；Page 平移/无平移/贴死 → 假（壳层喂 set 直通——新页
+/// 池高起步帧就位）
+#[test]
+fn bar095_pan_upper_scope_probe() {
+    let mut p = CfgPage::new();
+    p.set_rows(three_rows());
+    p.select(2, 1000, pool_stub(), acc()); // Upper 域挂账
+    assert!(p.pan_upper_active(1000), "Upper 平移期内 = 真（glide 域）");
+    assert!(p.pan_upper_active(1249), "贴死前一刻仍真");
+    assert!(!p.pan_upper_active(1250), "贴死 = 假（回直通域）");
+    p.set_tab(1, 2000, pool_stub(), acc()); // Page 域挂账
+    assert!(!p.pan_upper_active(2000), "Page 平移期内也是假（直通域）");
+    assert!(p.pan_active(2000), "但平移账本身在场（活性探针不混淆）");
+}
+
 #[test]
 fn select_cursor_rebase_no_jump() {
     let mut p = CfgPage::new();

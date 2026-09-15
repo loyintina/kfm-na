@@ -198,3 +198,50 @@ fn bar094_dual_pool_layout_clock_free() {
     let s = pool.layout(50_000); // 假钟任意大：直通不看钟
     assert_eq!(s.upper.h, 500, "任意时刻喂入直落目标高（无动画）");
 }
+
+/// 钉⑪：池高缓动钉（BAR-095 分域律 Upper 域）——glide 喂入后中间帧
+/// = 中间高（单调夹在 [from, target]，零过冲），PAN_MS 250ms 贴死；
+/// 下池随布局数学自动互补
+#[test]
+fn bar095_dual_pool_glide_eases_no_overshoot() {
+    let mut pool = DualPool::new(720, 1280);
+    pool.set_upper_content_h(216);
+    pool.layout(1000); // 基态 216
+    pool.glide_upper_content_h(480, 1000);
+    let mid = pool.layout(1125).upper.h; // 半程（先取——采样循环会跑完贴死）
+    assert!(
+        mid > 216 && mid < 480,
+        "半程必须是中间高（瞬切回潮钉）：{mid}"
+    );
+    // 无过冲 + 单调：全程采样夹在 [216, 480]
+    for ms in (0..=250).step_by(10) {
+        let h = pool.layout(1000 + ms).upper.h;
+        assert!((216..=480).contains(&h), "t=+{ms}ms 出界（过冲回潮）：{h}");
+    }
+    assert_eq!(pool.layout(1250).upper.h, 480, "PAN_MS 贴死目标高");
+    assert!(!pool.glide_fx_active(1250), "贴死停脏（零空烧）");
+    let fin = pool.layout(1250);
+    assert_eq!(
+        fin.upper.h + POOL_GAP + fin.lower.h,
+        pool.area().h,
+        "缓动全程下池恒互补"
+    );
+}
+
+/// 钉⑫：分域幂等钉（BAR-095）——glide 同目标每帧重喂不重演（平移期
+/// 壳层逐帧喂）；set 直通随时打断缓动（Page 域贴死语义）
+#[test]
+fn bar095_dual_pool_glide_idempotent_and_set_overrides() {
+    let mut pool = DualPool::new(720, 1280);
+    pool.set_upper_content_h(216);
+    pool.layout(1000);
+    pool.glide_upper_content_h(480, 1000);
+    let a = pool.layout(1100).upper.h;
+    pool.glide_upper_content_h(480, 1050); // 平移期壳层每帧重喂同目标
+    let b = pool.layout(1100).upper.h;
+    assert_eq!(a, b, "同目标重喂幂等（不重定基重演）");
+    // set 直通随时打断：立即落目标（Page 域贴死语义）
+    pool.set_upper_content_h(300);
+    assert_eq!(pool.layout(1100).upper.h, 300, "set 打断缓动立即到位");
+    assert!(!pool.glide_fx_active(1100), "打断后账清（无残留滑行）");
+}

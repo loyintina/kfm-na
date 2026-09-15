@@ -4576,12 +4576,16 @@ impl App {
     }
 
     /// 配置页池区/下拉动画活性探针（十五修 §五/§六 帧泵闸）：
-    /// 下池光标缓动 / 下拉开合 / 视口平移 任一未收敛 = true。
-    /// BAR-094：池高弹簧除名（废除后恒直通，无活性可言）。
-    /// 锁序 term→pool→cfg_page 不倒持嵌套（本探针不碰 term，两把
-    /// 短锁先后取，互不嵌套）
+    /// 下池光标缓动 / 下拉开合 / 视口平移 / 池高缓动（BAR-095）任一
+    /// 未收敛 = true。锁序 term→pool→cfg_page 不倒持嵌套（本探针不
+    /// 碰 term，两把短锁先后取，互不嵌套）
     fn cfg_fx_active() -> bool {
         let now = crate::report::boot_ms() as u64;
+        if crate::ui::dual_pool::dual_pool_handle()
+            .is_some_and(|p| p.lock().unwrap().glide_fx_active(now))
+        {
+            return true;
+        }
         crate::ui::cfg_page::cfg_page_handle().is_some_and(|pg| {
             let g = pg.lock().unwrap();
             g.cursor_fx_active(now) || g.dropdown_fx_active(now) || g.pan_active(now)
@@ -4624,13 +4628,25 @@ impl App {
             g3.set_viewport(view.0, view.1, view.2);
             // 上池内容高（宪法 §五 高度数学钉的输入）：触发器 + 字段行，
             // 三层目录状态核唯一来源（锁序 term→pool→cfg_page 与 gate 同）。
-            // BAR-094：pan_freeze 撤销（BAR-093 立的「平移期冻结喂入，
-            // 弹簧贴死后续弹」正是「新页面带旧行高平移+到位后二次高度
-            // 动画+过冲」的根源）——池高弹簧已灭，目标值喂入即到位
-            // （sig 起步帧变一次 = 一烘），平移期 sig 恒定无逐帧重烘，
-            // PanMove 新代烘的就是目标池高
+            // BAR-095 分域律：Upper 平移中 = glide 缓动（池高与光标/
+            // 平移同钟同曲线——「光标到位池高也到位」）；Page 平移/无
+            // 平移 = set 直通（新页池高起步帧就位，贴死零二次动画）。
+            // BAR-093 的 pan_freeze 不复辟：glide 是真同步动画，不是
+            // 冻结喂入（PanMove 新代行布局与池高无关，带外静物逐帧重
+            // 烘跟随，贴死连续）
             if let Some(page) = &self.cfg_page {
-                g3.set_upper_content_h(page.lock().unwrap().upper_content_h());
+                let now = crate::report::boot_ms() as u64;
+                // 单次锁内拿两样（锁序 term→pool→cfg_page 不倒持；分
+                // 两次锁有挂账竞态窗口）
+                let (h, gliding) = {
+                    let pg = page.lock().unwrap();
+                    (pg.upper_content_h(), pg.pan_upper_active(now))
+                };
+                if gliding {
+                    g3.glide_upper_content_h(h, now);
+                } else {
+                    g3.set_upper_content_h(h);
+                }
             }
             g3.layout(crate::report::boot_ms() as u64)
         });

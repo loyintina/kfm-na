@@ -75,23 +75,28 @@ fn spec_tab_bar_行带命中钉() {
     assert_eq!(bar.hit(70.0, 130.0), None, "行带下不命中");
 }
 
-/// 钉③：select 弹簧钉——目标 = 新标签 x；从当前位置重定基；收敛贴死
+/// 钉③：select 缓动钉（BAR-095 曲线单一源）——目标 = 新标签 x；从
+/// 当前位置重定基；250ms 贴死；全程单调无过冲（欠阻尼弹簧废除）
 #[test]
-fn spec_tab_bar_select弹簧钉() {
+fn spec_tab_bar_select缓动钉() {
     let mut bar = TabBar::new(&["系统管理", "API"], 720);
     assert_eq!(bar.cursor_x(0), 61.0, "初态光标在标签 0");
     bar.select(1, 1000);
     assert_eq!(bar.selected(), 1);
-    assert_eq!(bar.cursor_x(1000), 61.0, "切换瞬间从当前位置续弹（不跳变）");
-    let mid = bar.cursor_x(1150);
+    assert_eq!(bar.cursor_x(1000), 61.0, "切换瞬间从当前位置续滑（不跳变）");
+    let mid = bar.cursor_x(1125); // PAN_MS/2 = 半程
     assert!(
-        (mid - 61.0).abs() > 1.0,
-        "弹簧途中必须离开起点（过冲也算在路上）"
+        (mid - 61.0).abs() > 1.0 && mid < 259.0,
+        "缓动途中必须离开起点且未过靶（半程中间值）"
     );
-    assert_eq!(bar.cursor_x(1600), 259.0, "600ms 兜底贴死目标");
+    assert_eq!(bar.cursor_x(1250), 259.0, "PAN_MS 250ms 贴死目标");
+    assert!(
+        !((1000..1250).any(|ms| bar.cursor_x(ms) > 259.0)),
+        "全程无过冲（越过 259 即回潮）"
+    );
     // 途中再切换 = 从途中位置重定基（不闪回起点）
-    bar.select(0, 1150);
-    let back = bar.cursor_x(1150);
+    bar.select(0, 1125);
+    let back = bar.cursor_x(1125);
     assert!(
         (back - 61.0).abs() > 1.0,
         "途中反向 = 当前位置重定基（不回起点）"

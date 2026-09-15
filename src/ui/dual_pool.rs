@@ -12,12 +12,13 @@
 //!
 //! 下池内容高不参与布局（下池恒 = H − 上池 − 间距）——签名即契约。
 //!
-//! 十五修增订（2026-09-14，宪法 §五 池区动画条款）：上池高度弹簧——
-//! ~~目标高变化即从当前高度重定基续弹（fx_spring 欠阻尼同核
-//! ≈350ms）~~ **BAR-094 废除（2026-09-15 用户拍板）**：池高 = 目标值
-//! 硬切零动画——「新页面就是新页面，整个平移过去后不要再有任何动画」；
-//! 弹簧的可见过冲从未被用户要求过，且与平移异步（光标先到、高度后弹）。
-//! layout 仍吃 now_ms（壳喂 report::boot_ms 同钟——签名留稳，几何纯函数）。
+//! 十五修增订（2026-09-14，宪法 §五 池区动画条款）：上池高度动画——
+//! 欠阻尼弹簧（BAR-094 废除）→ **BAR-095 分域律缓动核**（2026-09-15
+//! 用户拍板「不要过冲，不是把动画搞没——光标到位池高也到位」）：
+//! `glide_upper_content_h` = 250ms ease-in-out cubic 缓动（PAN_MS
+//! 同钟同曲线，与光标滑行/上池平移严格同步，Upper 域点下池用）；
+//! `set_upper_content_h` = 目标值直通（Page 域切标签——新页自己的
+//! 池高起步帧就位，与非平移变更的基座语义）。layout 吃 now_ms。
 //!
 //! bottom_inset：池区底缘 = 页环底内缘，必须含键盘+输入栏带——漏算
 //! 下池顶穿页环/压键行（2026-09-12 真机实踩）。
@@ -67,13 +68,19 @@ pub fn pool_area(screen_w: u32, screen_h: u32, bottom_inset: u32) -> PoolRect {
     }
 }
 
-/// 双池布局状态：上池内容高 + 可用区。壳层持有一份（配置卡
+/// 双池布局状态：上池内容高 + 可用区 + 池高缓动账。壳层持有一份（配置卡
 /// 常驻，与标签栏同规）；内容高由池页内容侧喂（骨架期恒 0 = 空占位）。
-/// 池高 = 目标值硬切（BAR-094：十五修弹簧废除——可见过冲未经用户
-/// 要求、与平移异步；「新页面就是新页面，平移到位后无任何动画」）
+/// 池高动画 = BAR-095 分域律：Upper 域 glide 250ms ease-in-out（与光标/
+/// 平移同钟同曲线零过冲——BAR-094 弹簧废除不复辟）；Page 域/非平移
+/// 变更 set 直通（新页面自己的池高起步帧就位）
 pub struct DualPool {
     upper_content_h: u32,
     area: PoolRect,
+    /// 池高缓动账：Some((起点高, 目标高, start_ms))，贴死即清
+    glide: Option<(u32, u32, u64)>,
+    /// 最近一次 layout 的瞬时池高（重定基起点——滑行中再喂目标从
+    /// 当前位置续滑不跳变）
+    last_upper_h: u32,
 }
 
 /// 布局快照（涂装唯一读数口；upper_scroll = 上池内容被半高钳截断旗，
@@ -90,6 +97,8 @@ impl DualPool {
         DualPool {
             upper_content_h: 0,
             area: pool_area(screen_w, screen_h, 0),
+            glide: None,
+            last_upper_h: 0,
         }
     }
 
@@ -97,8 +106,31 @@ impl DualPool {
         self.area = pool_area(screen_w, screen_h, bottom_inset);
     }
 
+    /// 目标值直通（BAR-095 分域律 Page 域/非平移变更）：池高立即落
+    /// 目标（缓动账清掉——「新页面就是新页面」，起步帧就位零动画）
     pub fn set_upper_content_h(&mut self, h: u32) {
         self.upper_content_h = h;
+        self.glide = None;
+    }
+
+    /// 缓动喂入（BAR-095 分域律 Upper 域）：目标变化即从当前瞬时值
+    /// 重定基续滑 250ms ease-in-out（与光标/平移同钟同曲线，零过冲）；
+    /// 目标未变幂等（平移期壳层每帧喂同一目标不重演）
+    pub fn glide_upper_content_h(&mut self, h: u32, now_ms: u64) {
+        self.upper_content_h = h;
+        let target = self.target_h();
+        match &self.glide {
+            Some((_, to, _)) if *to == target => {} // 幂等：滑行中同目标
+            _ => {
+                self.glide = Some((self.last_upper_h, target, now_ms));
+            }
+        }
+    }
+
+    /// 池高缓动活性探针（帧泵闸）：账未贴死 = true
+    pub fn glide_fx_active(&self, now_ms: u64) -> bool {
+        self.glide
+            .is_some_and(|(_, _, start)| now_ms.saturating_sub(start) < crate::ui::cfg_page::PAN_MS)
     }
 
     pub fn upper_content_h(&self) -> u32 {
@@ -115,12 +147,30 @@ impl DualPool {
         content.min(self.area.h / 2)
     }
 
-    /// 布局（数学钉主体）：上池高 = 目标值硬切（BAR-094：十五修弹簧
-    /// 废除——喂入即到位，零动画零过冲），下池 = H − 上池 − 池间距
-    /// 随布局数学自动互补；upper_scroll = 内容被目标高截断旗
+    /// 布局（数学钉主体）：上池高 = 缓动瞬时值（有账）或目标值直通
+    /// （无账），下池 = H − 上池 − 池间距随布局数学自动互补；
+    /// upper_scroll = 内容被**目标**高截断旗（吃靶不吃瞬时值——动画
+    /// 中途不闪旗）
     pub fn layout(&mut self, now_ms: u64) -> DualPoolSnap {
-        let _ = now_ms; // 历史签名留稳（弹簧时代吃 now_ms；BAR-094 后恒直通）
-        let upper_h = self.target_h();
+        let target = self.target_h();
+        let upper_h = match &mut self.glide {
+            Some((from, to, start)) => {
+                let elapsed = now_ms.saturating_sub(*start);
+                if elapsed >= crate::ui::cfg_page::PAN_MS {
+                    let to = *to;
+                    self.glide = None; // 贴死清账
+                    to
+                } else {
+                    let t = elapsed as f32 / crate::ui::cfg_page::PAN_MS as f32;
+                    (*from as f32
+                        + ((*to - *from) as f32) * crate::ui::fx_ease::ease_in_out_cubic(t))
+                    .round()
+                    .max(0.0) as u32
+                }
+            }
+            None => target,
+        };
+        self.last_upper_h = upper_h;
         let h = self.area.h;
         let upper = PoolRect {
             x: self.area.x,
@@ -135,7 +185,7 @@ impl DualPool {
             h: h.saturating_sub(upper_h).saturating_sub(POOL_GAP),
         };
         DualPoolSnap {
-            upper_scroll: self.upper_content_h > self.target_h(),
+            upper_scroll: self.upper_content_h > target,
             upper,
             lower,
         }

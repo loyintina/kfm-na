@@ -15,8 +15,10 @@
 //! `in_row`/`hit` 是壳层「标签行上的横向滑动不触发面板拖拽/页面滑向」
 //! 的判定尺（眼手同尺：涂装侧 tab_rects 与命中判定同一份几何）。
 //!
-//! 光标框移动 = fx_spring 欠阻尼弹簧（键盘 inset 同核）：select 瞬间从
-//! 当前位置重定基续弹（来回狂点不跳变），600ms 兜底贴死。
+//! 光标框移动 = **250ms ease-in-out cubic 定时缓动**（BAR-095 改判，
+//! theme §五 曲线单一源——原 fx_spring 欠阻尼弹簧的过冲回摆从未被
+//! 用户要求，2026-09-15 用户逐帧点名废除）：select 瞬间从当前位置
+//! 重定基续滑（来回狂点不跳变），PAN_MS 贴死。
 //!
 //! 时间戳：壳层喂 report::boot_ms 同钟毫秒；本册零墙钟（考题喂假钟）。
 //!
@@ -224,13 +226,19 @@ impl TabBar {
         (self.base_x(self.selected) + self.scroll_px) as f32
     }
 
-    /// 光标框当前 x（欠阻尼弹簧采样；收敛/超时 = target 即终态）
+    /// 光标框当前 x（BAR-095：250ms ease-in-out cubic 缓动——与配置页
+    /// 池平移/下池光标/池高同一把尺（theme §五 曲线单一源）；欠阻尼
+    /// 弹簧的过冲回摆从未被用户要求，2026-09-15 点名废除。收敛 ==
+    /// target 即终态）
     pub fn cursor_x(&self, now_ms: u64) -> f32 {
-        crate::ui::fx_spring::spring_pos(
-            self.cursor_from,
-            self.cursor_target(),
-            now_ms.saturating_sub(self.cursor_start_ms),
-        )
+        let target = self.cursor_target();
+        if self.cursor_from == target {
+            return target;
+        }
+        let elapsed = now_ms.saturating_sub(self.cursor_start_ms);
+        let t =
+            (elapsed.min(crate::ui::cfg_page::PAN_MS)) as f32 / crate::ui::cfg_page::PAN_MS as f32;
+        self.cursor_from + (target - self.cursor_from) * crate::ui::fx_ease::ease_in_out_cubic(t)
     }
 
     /// 涂装快照（壳层逐帧/值守倒帧取数；tabs/colors 克隆——涂装无权碰状态）

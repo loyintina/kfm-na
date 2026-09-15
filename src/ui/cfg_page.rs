@@ -724,6 +724,15 @@ impl CfgPage {
             .as_ref()
             .is_some_and(|(_, _, start, _)| now_ms < *start + PAN_MS)
     }
+
+    /// Upper 域平移进行中（BAR-095 分域律）：壳层据此选池高喂入
+    /// 方式——Upper 域 = glide 缓动（池高与光标/平移同步），Page 域
+    /// 与无平移 = set 直通（新页池高起步帧就位）
+    pub fn pan_upper_active(&self, now_ms: u64) -> bool {
+        self.pan.as_ref().is_some_and(|(scope, _, start, _)| {
+            *scope == PanScope::Upper && now_ms < *start + PAN_MS
+        })
+    }
 }
 
 impl Default for CfgPage {

@@ -4193,7 +4193,8 @@ impl TermView {
             Preview::ViewportPush => {
                 // 旧页挤出（左，灰框）+ 新页推入（右，accent 框）——
                 // 十四修动画层：白球右缘淡入→左拖，新页 1:1 跟手推入、
-                // 旧页同比挤出；1100 松手 ease_out 500ms 补到靠泊
+                // 旧页同比挤出；1100 松手 rise_release 180ms 补到靠泊
+                //（BAR-095：与实机面板召唤同款，预览不得自编曲线）
                 let ph = ih * 3 / 4;
                 let py0 = iy + (i64::from(ih) - i64::from(ph)) / 2;
                 let pw = i64::from(iw) / 2;
@@ -4201,8 +4202,8 @@ impl TermView {
                     0.0f32
                 } else if at < 1100 {
                     (at - 300) as f32 / 800.0 * 0.8
-                } else if at < 1600 {
-                    0.8 + crate::ui::fx_ease::ease_out_cubic((at - 1100) as f32 / 500.0) * 0.2
+                } else if at < 1280 {
+                    0.8 + crate::ui::fx_ease::rise_release((at - 1100) as f32 / 180.0) * 0.2
                 } else {
                     1.0
                 };
