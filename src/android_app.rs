@@ -3531,6 +3531,7 @@ impl App {
                                     cfg_off,
                                     acc_of(crate::ai_presence::Panel::Config),
                                     crate::report::boot_ms() as u64,
+                                    false,
                                 );
                             }
                         }
@@ -3780,6 +3781,9 @@ impl App {
             band: (band.0 as i32, band.1 as i32, band.2 as i32, band.3 as i32),
             old_dx: d_old as f32,
             new_dx: d_new as f32,
+            // 隙底语义分域（十八修钉）：Page 间隙带=页背景（填）；
+            // Upper 静物=稳态涂装的池内芯（不填，带外静物原样透出）
+            clear_bg: p.scope == crate::ui::cfg_page::PanScope::Page,
         })
     }
 
@@ -4206,8 +4210,12 @@ impl App {
             }
             // 双池（宪法 §五）：与标签栏同槽同 accent——内卡反转在涂装
             // 内部兑现（c2→c1），调用方无感。十九修 D8：烘焙恒画新代
-            // 稳态（pan 剥离）——Page 域平移中带内像素会被合成期 band
-            // fill 覆盖，静态多画一份无害且免分支；双代呈现全在合成期
+            // 稳态（pan 剥离）——Page 域带内像素被 band fill 覆盖、
+            // Upper 域带内上池行不画（pan_upper_hold，静物=池内芯）；
+            // 双代呈现全在合成期
+            let pan_upper = cfg_snap
+                .and_then(|cs| cs.pan.as_ref())
+                .is_some_and(|p| p.scope == crate::ui::cfg_page::PanScope::Upper);
             if let (Some(ps), Some(t)) = (pool_snap, th) {
                 t.lock()
                     .unwrap()
@@ -4225,6 +4233,7 @@ impl App {
                         0,
                         acc_cfg,
                         crate::report::boot_ms() as u64,
+                        pan_upper,
                     );
                 }
             }

@@ -283,6 +283,7 @@ pub fn dump_now(dir: &str) {
                                     cfg_off,
                                     acc_of(Panel::Config),
                                     crate::report::boot_ms() as u64,
+                                    false,
                                 );
                             }
                         }

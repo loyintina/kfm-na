@@ -85,6 +85,9 @@ pub struct PanComp {
     pub old_dx: f32,
     /// 新代 X 偏移（=dir·(1−t)·travel）
     pub new_dx: f32,
+    /// 隙底是否填页底色（Page=true：间隙带=页背景，十八修钉；
+    /// Upper=false：静物=稳态涂装的池内芯，与 vc425 涂装域逐像素同语义）
+    pub clear_bg: bool,
 }
 
 /// 单槽烘焙物。baked=false 的槽不许上屏——采样未上传过的纹理得到
@@ -1180,13 +1183,14 @@ impl GlesPresent {
                                     self.h as f32,
                                     cfg_alpha,
                                 ),
-                                // 十九修 D8 视口平移合成四连（烘焙零光栅，
-                                // 纯 placement+scissor）：①配置槽@0 全幅
-                                // （画布=新代稳态，带内稍后被覆盖）②带内
-                                // 隙底填色（scissored clear = 页内芯底）
-                                // ③PanOld@old_dx 旧代带偏移出 ④配置槽第
-                                // 二遍@new_dx——同一张纹理在带内即新代
-                                // 进场，不设新代槽（省一张全屏纹理）
+                                // 十九修 D8 视口平移合成（烘焙零光栅，
+                                // 纯 placement+scissor+源钳制）：①配置
+                                // 槽@0 全幅（画布=新代稳态）②Page 域带
+                                // 内隙底填色（页背景，十八修钉）③
+                                // PanOld 源带钳制@old_dx 旧代出 ④配置槽
+                                // 源带钳制第二遍@new_dx——同一张纹理带
+                                // 内即新代。源钳制=blit_shift「带内源→
+                                // 带内目标」语义（带外池框竖条不滑进带）
                                 Some(pc) => {
                                     let (fw, fh) = (self.w as i32, self.h as i32);
                                     draw_slot_layer(
@@ -1208,17 +1212,27 @@ impl GlesPresent {
                                     let sh = (by1 - by0).clamp(0, fh - sy);
                                     gl.enable(glow::SCISSOR_TEST);
                                     gl.scissor(sx, sy, sw.max(0), sh.max(0));
-                                    let bg = crate::ui::accent::CARD_PAGE_BG;
-                                    gl.clear_color(
-                                        f32::from(((bg >> 16) & 0xFF) as u8) / 255.0,
-                                        f32::from(((bg >> 8) & 0xFF) as u8) / 255.0,
-                                        f32::from((bg & 0xFF) as u8) / 255.0,
-                                        1.0,
+                                    if pc.clear_bg {
+                                        let bg = crate::ui::accent::CARD_PAGE_BG;
+                                        gl.clear_color(
+                                            f32::from(((bg >> 16) & 0xFF) as u8) / 255.0,
+                                            f32::from(((bg >> 8) & 0xFF) as u8) / 255.0,
+                                            f32::from((bg & 0xFF) as u8) / 255.0,
+                                            1.0,
+                                        );
+                                        gl.clear(glow::COLOR_BUFFER_BIT);
+                                    }
+                                    // 源带 uv（纹理像素→归一）
+                                    let (uw, uh) = (self.w as f32, self.h as f32);
+                                    let uv = (
+                                        bx0 as f32 / uw,
+                                        by0 as f32 / uh,
+                                        (bx1 - bx0) as f32 / uw,
+                                        (by1 - by0) as f32 / uh,
                                     );
-                                    gl.clear(glow::COLOR_BUFFER_BIT);
                                     let po = &self.layers[ChromeSlot::PanOld as usize];
                                     if po.visible && po.baked {
-                                        draw_slot_layer(
+                                        draw_slot_layer_src(
                                             gl,
                                             self.layer_prog,
                                             self.layer_vao,
@@ -1226,12 +1240,13 @@ impl GlesPresent {
                                             po.tex,
                                             cfg_off as f32 + pc.old_dx,
                                             cfg_dy_extra,
-                                            self.w as f32,
-                                            self.h as f32,
+                                            (bx1 - bx0) as f32,
+                                            (by1 - by0) as f32,
                                             cfg_alpha,
+                                            uv,
                                         );
                                     }
-                                    draw_slot_layer(
+                                    draw_slot_layer_src(
                                         gl,
                                         self.layer_prog,
                                         self.layer_vao,
@@ -1239,9 +1254,10 @@ impl GlesPresent {
                                         cf.tex,
                                         cfg_off as f32 + pc.new_dx,
                                         cfg_dy_extra,
-                                        self.w as f32,
-                                        self.h as f32,
+                                        (bx1 - bx0) as f32,
+                                        (by1 - by0) as f32,
                                         cfg_alpha,
+                                        uv,
                                     );
                                     gl.disable(glow::SCISSOR_TEST);
                                 }
@@ -1648,6 +1664,40 @@ unsafe fn draw_slot_layer(
     alpha: f32,
 ) {
     unsafe {
+        draw_slot_layer_src(
+            gl,
+            prog,
+            vao,
+            vbo,
+            tex,
+            x,
+            y,
+            w,
+            h,
+            alpha,
+            (0.0, 0.0, 1.0, 1.0),
+        );
+    }
+}
+
+/// 源矩形限定的图层 draw（十九修 D8）：uv 取 src 子矩形（全纹理归一
+/// 值）——平移偏移 draw 用它复刻 blit_shift 的「带内源→带内目标」钳
+/// 制语义：带外源像素（池框竖条/页环）永不进带，否则框随内容滑
+#[allow(clippy::too_many_arguments)]
+unsafe fn draw_slot_layer_src(
+    gl: &glow::Context,
+    prog: glow::NativeProgram,
+    vao: glow::NativeVertexArray,
+    vbo: glow::NativeBuffer,
+    tex: glow::NativeTexture,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    alpha: f32,
+    uv: (f32, f32, f32, f32),
+) {
+    unsafe {
         gl.bind_texture(glow::TEXTURE_2D, Some(tex));
         gl.use_program(Some(prog));
         gl.bind_vertex_array(Some(vao));
@@ -1655,7 +1705,7 @@ unsafe fn draw_slot_layer(
         // rect(4)+uv(4)+tint(4) = 12×f32 = 48B，与 layer_vao 配置咬合
         let inst = [
             x, y, w, h, // a_rect（px，placement 在这）
-            0.0, 0.0, 1.0, 1.0, // a_uv
+            uv.0, uv.1, uv.2, uv.3, // a_uv（源子矩形）
             1.0, 1.0, 1.0, alpha, // a_tint（α=整槽显影——转场/主题槽位）
         ];
         gl.buffer_data_u8_slice(

@@ -2778,6 +2778,7 @@ impl TermView {
         cfg_off_x: i32,
         accent: crate::ui::accent::AccentPair,
         now_ms: u64,
+        pan_upper_hold: bool,
     ) {
         use crate::ui::cfg_page as cp;
         if w == 0 || h == 0 {
@@ -2912,15 +2913,20 @@ impl TermView {
                     accent,
                     off,
                 );
-                self.paint_pool_upper(
-                    &mut frame,
-                    &ps.upper,
-                    &page.upper,
-                    page.upper_scroll,
-                    accent,
-                    off,
-                    page.dropdown_progress,
-                );
+                // 十九修 D8：Upper 平移 hold 期上池行不进主画布——带内
+                // 静物=池内芯渐变（vc425 涂装域同语义：行只活在双代里，
+                // 隙底透出的是内芯不是定格行）
+                if !pan_upper_hold {
+                    self.paint_pool_upper(
+                        &mut frame,
+                        &ps.upper,
+                        &page.upper,
+                        page.upper_scroll,
+                        accent,
+                        off,
+                        page.dropdown_progress,
+                    );
+                }
             }
         }
 
@@ -5040,7 +5046,9 @@ pub trait TermEmu: Send {
     /// 下池子目录行表 + 上池联动下拉触发器/字段行/下拉 panel。
     /// cfg_off_x 语义同 paint_cfg_dual_pool；画在双池框之上。
     /// now_ms = 动画时钟（十四修 §六：跳框动效预览的相位源；无动画
-    /// 预览时本参不读）
+    /// 预览时本参不读）。pan_upper_hold（十九修 D8）：Upper 平移 hold
+    /// 期上池行不进主画布——带内静物=池内芯（GLES 烘焙路径用；
+    /// softbuffer 双代同画路径恒 false 不受影响）
     #[allow(clippy::too_many_arguments)]
     fn paint_cfg_pool_content(
         &self,
@@ -5052,6 +5060,7 @@ pub trait TermEmu: Send {
         cfg_off_x: i32,
         accent: crate::ui::accent::AccentPair,
         now_ms: u64,
+        pan_upper_hold: bool,
     );
     /// AI 外显 chrome（ai-presence，android_app rasterize 调用方）：
     /// AI 页真对话渲染（page=AiFullscreen 时代替终端网格）/ 雾状光球 sprite。
@@ -5234,8 +5243,20 @@ impl TermEmu for TermView {
         cfg_off_x: i32,
         accent: crate::ui::accent::AccentPair,
         now_ms: u64,
+        pan_upper_hold: bool,
     ) {
-        TermView::paint_cfg_pool_content_impl(self, buf, w, h, ps, page, cfg_off_x, accent, now_ms)
+        TermView::paint_cfg_pool_content_impl(
+            self,
+            buf,
+            w,
+            h,
+            ps,
+            page,
+            cfg_off_x,
+            accent,
+            now_ms,
+            pan_upper_hold,
+        )
     }
     #[allow(clippy::too_many_arguments)]
     fn render_ai_page(
