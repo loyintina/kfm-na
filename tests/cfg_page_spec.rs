@@ -12,7 +12,7 @@
 use kfm_na::ui::accent::AccentPair;
 use kfm_na::ui::cfg_page::{
     CfgPage, FIELD_BOTTOM_PAD, FIELD_BOX_GAP, FIELD_BOX_H, FIELD_ROW_GAP, FIELD_ROW_H,
-    FIELD_TEXT_INSET, FIELD_TRIANGLE_PAD, FIELD_VALUE_MIN_W, LOWER_ROW_H, PAN_MS,
+    FIELD_TEXT_INSET, FIELD_TRIANGLE_PAD, FIELD_VALUE_MIN_W, LOWER_ROW_H, PAN_GAP_PAGE, PAN_MS,
     POOL_CONTENT_INSET, PanScope, ROW_GAP, RowView, UpperRow, dropdown_panel_rect,
     field_label_rect, field_value_rect, lower_row_rect, upper_row_rect, wrap_field_lines,
 };
@@ -932,4 +932,45 @@ fn bar090_dropdown_panel_left_edge_clamped_to_pool_inner() {
     let t = kfm_na::ui::cfg_page::trigger_rect(&UPPER, 0, true, 100, 50);
     assert_eq!(p.x, UPPER.x + POOL_CONTENT_INSET, "左缘钳池内容左内缘");
     assert_eq!(p.x + p.w as i64, t.x + t.w as i64, "右缘不动");
+}
+
+// ---- 十九修 D8：平移升合成期——偏移纯函数（涂装域与合成域同尺唯一来源） ----
+
+#[test]
+fn pan_offsets_forward_backward_and_gap_law() {
+    use kfm_na::ui::cfg_page::pan_offsets;
+    let pw = 1000_i64;
+    let travel = pw + PAN_GAP_PAGE; // 视口宽 + 留隙 G（theme §七留隙律）
+    // 前进 dir=+1：起点旧在位/新在 travel 外；终点旧出尽/新在位
+    assert_eq!(
+        pan_offsets(1, 0.0, travel),
+        (0, travel),
+        "起点帧旧在位新屏外"
+    );
+    assert_eq!(
+        pan_offsets(1, 1.0, travel),
+        (-travel, 0),
+        "终点帧旧出尽新就位"
+    );
+    assert_eq!(
+        pan_offsets(1, 0.5, travel),
+        (-travel / 2, travel / 2),
+        "半程对称各走半程"
+    );
+    // 后退 dir=−1 镜像（新代从左缘进）
+    assert_eq!(pan_offsets(-1, 0.0, travel), (0, -travel));
+    assert_eq!(pan_offsets(-1, 1.0, travel), (travel, 0));
+    // 留隙律：任意时刻双代左缘距 = travel（= 视口宽 + G），减去池宽
+    // 即净隙 G——挤贴 = 元素替换读感，十八修 §七用户实机判非视口平移，
+    // 合成域必须保同一律（两方向对称取绝对值）
+    for t in [0.0_f32, 0.25, 0.5, 0.75, 1.0] {
+        let (d_old, d_new) = pan_offsets(1, t, travel);
+        assert_eq!(
+            (d_new - d_old).abs() - pw,
+            PAN_GAP_PAGE,
+            "t={t} 双代净隙恒 G"
+        );
+        let (d_old, d_new) = pan_offsets(-1, t, travel);
+        assert_eq!((d_new - d_old).abs() - pw, PAN_GAP_PAGE, "t={t} 后退同律");
+    }
 }

@@ -67,6 +67,24 @@ pub enum ChromeSlot {
     /// 装修）。恒靠泊无 placement 动画，合成期最先画（clear 之后、
     /// 网格实例之前）——终端页可见 = 四面板都没靠泊（同键行槽规）
     TermCard = 6,
+    /// 平移旧代（十九修 D8 平移升合成期）：平移起步帧从配置槽画布
+    /// 整幅拷贝 = 旧代冻结封存（每代一次拷贝+上传）；动画期合成期
+    /// 偏移出（−t·travel），scissor 到裁剪带。贴死即隐
+    PanOld = 7,
+}
+
+/// 视口平移合成参数（十九修 D8）：调用方逐帧从 cfg_snap.pan 求值——
+/// 带/偏移与涂装域同尺（page_pan_band/upper_pan_band/pan_offsets 单
+/// 源）， GLES 合成四连的输入。None = 无平移，配置槽单 draw 照旧
+#[derive(Clone, Copy, Debug)]
+pub struct PanComp {
+    /// 裁剪带（屏像素，top-down，x0/y0/x1/y1）——Page=页内容带 /
+    /// Upper=上池内容矩形（BAR-091 语义：池框不进带）
+    pub band: (i32, i32, i32, i32),
+    /// 旧代 X 偏移（=−dir·t·travel）
+    pub old_dx: f32,
+    /// 新代 X 偏移（=dir·(1−t)·travel）
+    pub new_dx: f32,
 }
 
 /// 单槽烘焙物。baked=false 的槽不许上屏——采样未上传过的纹理得到
@@ -480,7 +498,7 @@ pub struct GlesPresent {
     // ---- 期 1 第 2 层：终端网格 GPU 化 ----
     /// 图层槽位（ui-base §八 渲染成本模型）：键行/AI面板/上层/配置/文件树
     /// 五槽，置脏烘焙 + placement 合成——动画帧零光栅零上传
-    layers: [ChromeLayer; 7],
+    layers: [ChromeLayer; 8],
     /// 图层实例程序（rect+uv+tint 四边形；placement 逐槽进实例数据）
     layer_prog: glow::NativeProgram,
     layer_vao: glow::NativeVertexArray,
@@ -616,6 +634,7 @@ impl GlesPresent {
         };
         // 先建槽数组再 move gl 进结构体（E0382：字段初始化按书写序移动）
         let layers = [
+            mk_layer(&gl),
             mk_layer(&gl),
             mk_layer(&gl),
             mk_layer(&gl),
@@ -1031,6 +1050,7 @@ impl GlesPresent {
         cfg_dy_extra: f32,
         ft_dy_extra: f32,
         pt_dy_extra: f32,
+        pan_comp: Option<crate::gles_present::PanComp>,
     ) {
         let t0_draw = std::time::Instant::now();
         // CPU 画布直接测量（rgb 非零计数 + 样本原值）——「画没画」的铁证
@@ -1147,18 +1167,85 @@ impl GlesPresent {
                     crate::ai_presence::Panel::Config => {
                         let cf = &self.layers[ChromeSlot::Config as usize];
                         if cf.visible && cf.baked {
-                            draw_slot_layer(
-                                gl,
-                                self.layer_prog,
-                                self.layer_vao,
-                                self.layer_vbo,
-                                cf.tex,
-                                cfg_off as f32,
-                                cfg_dy_extra,
-                                self.w as f32,
-                                self.h as f32,
-                                cfg_alpha,
-                            );
+                            match pan_comp {
+                                None => draw_slot_layer(
+                                    gl,
+                                    self.layer_prog,
+                                    self.layer_vao,
+                                    self.layer_vbo,
+                                    cf.tex,
+                                    cfg_off as f32,
+                                    cfg_dy_extra,
+                                    self.w as f32,
+                                    self.h as f32,
+                                    cfg_alpha,
+                                ),
+                                // 十九修 D8 视口平移合成四连（烘焙零光栅，
+                                // 纯 placement+scissor）：①配置槽@0 全幅
+                                // （画布=新代稳态，带内稍后被覆盖）②带内
+                                // 隙底填色（scissored clear = 页内芯底）
+                                // ③PanOld@old_dx 旧代带偏移出 ④配置槽第
+                                // 二遍@new_dx——同一张纹理在带内即新代
+                                // 进场，不设新代槽（省一张全屏纹理）
+                                Some(pc) => {
+                                    let (fw, fh) = (self.w as i32, self.h as i32);
+                                    draw_slot_layer(
+                                        gl,
+                                        self.layer_prog,
+                                        self.layer_vao,
+                                        self.layer_vbo,
+                                        cf.tex,
+                                        cfg_off as f32,
+                                        cfg_dy_extra,
+                                        self.w as f32,
+                                        self.h as f32,
+                                        cfg_alpha,
+                                    );
+                                    let (bx0, by0, bx1, by1) = pc.band;
+                                    let sx = bx0.clamp(0, fw);
+                                    let sy = (fh - by1).clamp(0, fh);
+                                    let sw = (bx1 - bx0).clamp(0, fw - sx);
+                                    let sh = (by1 - by0).clamp(0, fh - sy);
+                                    gl.enable(glow::SCISSOR_TEST);
+                                    gl.scissor(sx, sy, sw.max(0), sh.max(0));
+                                    let bg = crate::ui::accent::CARD_PAGE_BG;
+                                    gl.clear_color(
+                                        f32::from(((bg >> 16) & 0xFF) as u8) / 255.0,
+                                        f32::from(((bg >> 8) & 0xFF) as u8) / 255.0,
+                                        f32::from((bg & 0xFF) as u8) / 255.0,
+                                        1.0,
+                                    );
+                                    gl.clear(glow::COLOR_BUFFER_BIT);
+                                    let po = &self.layers[ChromeSlot::PanOld as usize];
+                                    if po.visible && po.baked {
+                                        draw_slot_layer(
+                                            gl,
+                                            self.layer_prog,
+                                            self.layer_vao,
+                                            self.layer_vbo,
+                                            po.tex,
+                                            cfg_off as f32 + pc.old_dx,
+                                            cfg_dy_extra,
+                                            self.w as f32,
+                                            self.h as f32,
+                                            cfg_alpha,
+                                        );
+                                    }
+                                    draw_slot_layer(
+                                        gl,
+                                        self.layer_prog,
+                                        self.layer_vao,
+                                        self.layer_vbo,
+                                        cf.tex,
+                                        cfg_off as f32 + pc.new_dx,
+                                        cfg_dy_extra,
+                                        self.w as f32,
+                                        self.h as f32,
+                                        cfg_alpha,
+                                    );
+                                    gl.disable(glow::SCISSOR_TEST);
+                                }
+                            }
                         }
                     }
                     crate::ai_presence::Panel::FileTree => {

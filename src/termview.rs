@@ -489,6 +489,38 @@ fn blit_shift(frame: &mut Frame<'_>, src: &[u32], dx: i64, band: (i64, i64, i64,
     }
 }
 
+/// 页面级平移裁剪带（十九修 D8 函数化提取：涂装域 softbuffer 与合成域
+/// GLES scissor 同吃一把尺，像素语义 = 十七/十八修原式样不变）。y 取
+/// 两代池几何并集——旧代池高弹簧中几何可异，带必须罩住两代，否则
+/// 合成域 band fill 擦不净旧帧
+pub fn page_pan_band(
+    w: u32,
+    off: i64,
+    old_up_y: i64,
+    new_up_y: i64,
+    old_low_b: i64,
+    new_low_b: i64,
+) -> (i64, i64, i64, i64) {
+    let (ox, _oy) = crate::ui::tab_bar::content_origin();
+    (
+        i64::from(ox) + off,
+        old_up_y.min(new_up_y),
+        i64::from(w) - i64::from(AI_PAGE_FRAME_MARGIN + AI_PAGE_FRAME_W + CELL_W) + off,
+        old_low_b.max(new_low_b),
+    )
+}
+
+/// 上池级平移裁剪带（十八修 §七内容矩形：POOL_CONTENT_INSET 内缩，
+/// 池框/左粗竖条一像素不进带——BAR-091 语义，合成域 scissor 同尺）
+pub fn upper_pan_band(upper: &crate::ui::dual_pool::PoolRect, off: i64) -> (i64, i64, i64, i64) {
+    (
+        upper.x + crate::ui::cfg_page::POOL_CONTENT_INSET + off,
+        upper.y + 12,
+        upper.x + upper.w as i64 - crate::ui::cfg_page::POOL_CONTENT_INSET + off,
+        upper.y + upper.h as i64 - 12,
+    )
+}
+
 /// 圆角矩形边框环（2026-09-12 从页环抽核，配置卡标签栏光标框复用——
 /// 宪法 §六 样式唯一来源，禁止逐卡手抄）：先外发光，再 135° 渐变外环，
 /// 最后内芯填充（左缘让 9 = 3 倍粗，其余让 3）。**内芯两路（十二修
@@ -2764,15 +2796,14 @@ impl TermView {
                 // 全程 = G（贴挤 = 元素替换读感，非视口平移）
                 let pw = ps.upper.w as i64;
                 let travel = pw + cp::PAN_GAP_PAGE;
-                let d_old = -i64::from(pan.dir) * (pan.t * travel as f32).round() as i64;
-                let d_new = i64::from(pan.dir) * ((1.0 - pan.t) * travel as f32).round() as i64;
-                let (ox, _oy) = crate::ui::tab_bar::content_origin();
-                let band = (
-                    i64::from(ox) + off,
-                    pan.old.pool.upper.y.min(ps.upper.y),
-                    i64::from(w) - i64::from(AI_PAGE_FRAME_MARGIN + AI_PAGE_FRAME_W + CELL_W) + off,
-                    (pan.old.pool.lower.y + pan.old.pool.lower.h as i64)
-                        .max(ps.lower.y + ps.lower.h as i64),
+                let (d_old, d_new) = cp::pan_offsets(pan.dir, pan.t, travel);
+                let band = page_pan_band(
+                    w,
+                    off,
+                    pan.old.pool.upper.y,
+                    ps.upper.y,
+                    pan.old.pool.lower.y + pan.old.pool.lower.h as i64,
+                    ps.lower.y + ps.lower.h as i64,
                 );
                 pan_temps(w, h, |a, b| {
                     copy_frame(frame.buf, a);
@@ -2838,17 +2869,9 @@ impl TermView {
                     accent,
                     off,
                 );
-                let bx0 = ps.upper.x + cp::POOL_CONTENT_INSET + off;
-                let bx1 = ps.upper.x + ps.upper.w as i64 - cp::POOL_CONTENT_INSET + off;
-                let band = (
-                    bx0,
-                    ps.upper.y + 12,
-                    bx1,
-                    ps.upper.y + ps.upper.h as i64 - 12,
-                );
-                let travel = (bx1 - bx0) + cp::PAN_GAP_UPPER;
-                let d_old = -i64::from(pan.dir) * (pan.t * travel as f32).round() as i64;
-                let d_new = i64::from(pan.dir) * ((1.0 - pan.t) * travel as f32).round() as i64;
+                let band = upper_pan_band(&ps.upper, off);
+                let travel = (band.2 - band.0) + cp::PAN_GAP_UPPER;
+                let (d_old, d_new) = cp::pan_offsets(pan.dir, pan.t, travel);
                 pan_temps(w, h, |a, b| {
                     copy_frame(frame.buf, a);
                     copy_frame(frame.buf, b);

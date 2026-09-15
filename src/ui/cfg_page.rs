@@ -177,6 +177,17 @@ pub const PAN_GAP_PAGE: i64 = crate::ui::dual_pool::POOL_SIDE_PAD as i64;
 /// 上池级留隙 G = 2×POOL_CONTENT_INSET（内容缘距池框缘 2 格的两倍）
 pub const PAN_GAP_UPPER: i64 = POOL_CONTENT_INSET * 2;
 
+/// 平移双代偏移（十九修 D8：合成域换算唯一来源，涂装域 softbuffer
+/// 兜底同吃这把尺）：dir=+1 前进（旧左出新右进）、−1 后退镜像；
+/// 返回 (d_old, d_new) 屏像素。留隙律：任意时刻 新代左缘 − 旧代右缘
+/// = dir×G（考题 pan_offsets_forward_backward_and_gap_law 钉死）
+pub fn pan_offsets(dir: i8, t: f32, travel: i64) -> (i64, i64) {
+    (
+        -i64::from(dir) * (t * travel as f32).round() as i64,
+        i64::from(dir) * ((1.0 - t) * travel as f32).round() as i64,
+    )
+}
+
 /// 下拉展开时长 ms（十五修 §六：生长 0→全高 ease-out）
 pub const DROPDOWN_ENTER_MS: u64 = 250;
 /// 下拉收起时长 ms（十五修 §六：选中细框即时落新行，面板 ease-in 收）

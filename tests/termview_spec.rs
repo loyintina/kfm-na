@@ -4760,3 +4760,51 @@ fn spec_上池平移_框静止留隙_涂装钉() {
         "双代间隙带必须 = 上池内芯静物（留隙 G 被删即贴挤，红）"
     );
 }
+
+// ---- 十九修 D8：平移升合成期——裁剪带纯函数（涂装域与合成域同尺） ----
+
+#[test]
+fn pan_band_upper_inset_and_page_union_epochs() {
+    use kfm_na::termview::{page_pan_band, upper_pan_band};
+    use kfm_na::ui::cfg_page::POOL_CONTENT_INSET;
+    // 上池带 = 内容矩形（十八修 §七 BAR-091 语义：池框/左粗竖条一像素
+    // 不进带——合成域 scissor 吃同一把尺，粗条被吞 = 框随内容滑回归）
+    let up = kfm_na::ui::dual_pool::PoolRect {
+        x: 100,
+        y: 200,
+        w: 800,
+        h: 600,
+    };
+    let b = upper_pan_band(&up, 0);
+    assert_eq!(
+        b.0,
+        up.x + POOL_CONTENT_INSET,
+        "带左缘 = 内缩（9px 粗条在外）"
+    );
+    assert_eq!(
+        b.2,
+        up.x + up.w as i64 - POOL_CONTENT_INSET,
+        "带右缘 = 内缩"
+    );
+    assert_eq!(b.1, up.y + 12, "带上缘 12px 留隙");
+    assert_eq!(b.3, up.y + up.h as i64 - 12, "带下缘 12px 留隙");
+    // off 平移随尺（与涂装域同参）
+    let b2 = upper_pan_band(&up, 50);
+    assert_eq!((b2.0, b2.2), (b.0 + 50, b.2 + 50), "off 只平移 x");
+    // 页面带：x = 内容带两缘；y = 两代池几何并集（旧代池高弹簧中
+    // 几何可异——带必须罩住两代，否则 band fill 擦不净旧帧）
+    let pb = page_pan_band(1260, 0, 300, 280, 2000, 1900);
+    assert_eq!(pb.1, 280, "y0 = 两代上缘取小");
+    assert_eq!(pb.3, 2000, "y1 = 两代下缘取大");
+    let (ox, _oy) = kfm_na::ui::tab_bar::content_origin();
+    let pb2 = page_pan_band(1260, 30, 300, 300, 2000, 2000);
+    assert_eq!(pb2.0, ox as i64 + 30, "x0 = 内容带左缘 + off");
+    assert_eq!(
+        pb2.2,
+        1260 - (kfm_na::termview::AI_PAGE_FRAME_MARGIN
+            + kfm_na::termview::AI_PAGE_FRAME_W
+            + kfm_na::termview::CELL_W) as i64
+            + 30,
+        "x1 = 内容带右缘 + off"
+    );
+}

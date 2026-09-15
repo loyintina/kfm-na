@@ -58,7 +58,8 @@ pub fn slot_visibility(
     cfg_visible: bool,
     ft_visible: bool,
     pt_visible: bool,
-) -> [bool; 7] {
+    pan_active: bool,
+) -> [bool; 8] {
     [
         grid_keybar,
         panel_visible,
@@ -67,6 +68,9 @@ pub fn slot_visibility(
         pt_visible,
         true,
         grid_keybar,
+        // 平移旧代（十九修 D8）：配置可见 ∧ 平移进行中——贴死即隐，
+        // 烘焙物保留纹理，下次平移起步重捕获
+        cfg_visible && pan_active,
     ]
 }
 

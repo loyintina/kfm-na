@@ -10,25 +10,30 @@ use kfm_na::ui::stage;
 // 上层那条翻 false 即本考题红。2026-09-11 三公民第五槽：被覆盖面板仍
 // 可见（placement 不动，遮盖撤走零动画露出）；同日第六槽终端卡片壳：
 // 与键行同规跟 grid_keybar 走（基座壳恒靠泊，面板靠泊即整页盖住）；
-// 2026-09-12 四公民解析页槽入列（右缘家，与配置同规）。
+// 2026-09-12 四公民解析页槽入列（右缘家，与配置同规）；2026-09-15
+// 十九修 D8 第七槽平移旧代入列（平移升合成期：配置可见 ∧ 平移进行中）。
 // 变异抽检：返回数组第 6/7 槽改 false → 断言红；槽位次序换序即红。
 #[test]
 fn spec_bar070_上层槽恒可见() {
-    // 槽序：[键行, AI, 配置, 文件树, 解析, 上层, 终端卡]
+    // 槽序：[键行, AI, 配置, 文件树, 解析, 上层, 终端卡, 平移旧代]
     assert_eq!(
-        stage::slot_visibility(true, true, true, true, true),
-        [true, true, true, true, true, true, true]
+        stage::slot_visibility(true, true, true, true, true, false),
+        [true, true, true, true, true, true, true, false]
     );
     assert_eq!(
-        stage::slot_visibility(false, false, false, false, false),
-        [false, false, false, false, false, true, false]
+        stage::slot_visibility(false, false, false, false, false, true),
+        [false, false, false, false, false, true, false, false]
     );
-    // 显式锁七条语义：键行/终端卡跟网格未靠泊走，四面板各跟各的 visible 走
-    let v = stage::slot_visibility(false, true, true, false, true);
-    assert!(!v[0] && v[1] && v[2] && !v[3] && v[4] && v[5] && !v[6]);
+    // 显式锁八条语义：键行/终端卡跟网格未靠泊走，四面板各跟各的 visible 走
+    let v = stage::slot_visibility(false, true, true, false, true, true);
+    assert!(!v[0] && v[1] && v[2] && !v[3] && v[4] && v[5] && !v[6] && v[7]);
     // 被覆盖的面板：在栈（visible=true）哪怕顶是别家——露出随推移滑回的承载
-    let v = stage::slot_visibility(true, true, true, true, true);
+    let v = stage::slot_visibility(true, true, true, true, true, true);
     assert!(v[2] && v[3] && v[4]);
+    // 十九修 D8：平移旧代槽 = 配置可见 ∧ 平移进行中（贴死即隐/页隐即隐）
+    assert!(!stage::slot_visibility(true, false, true, false, false, false)[7]);
+    assert!(stage::slot_visibility(true, false, true, false, false, true)[7]);
+    assert!(!stage::slot_visibility(true, false, false, false, false, true)[7]);
 }
 
 // DirtyGuard 复用契约跨卷再钉：同 sig 复喂=照用烘焙（动画帧零光栅

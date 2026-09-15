@@ -368,9 +368,6 @@ struct ConfigSig {
     cursor_row_q: i32,
     /// 下拉进度 ×1000 量化（十五修 §六：开合动画逐帧新值逐帧重烘焙）
     dd_progress_q: u32,
-    /// 视口平移进度 ×1000 量化（十七修 §六：双代同画逐帧新偏移逐帧
-    /// 重烘焙；无平移恒 0）
-    pan_q: i32,
     /// 动效预览时间桶（十四修 §六：动画展品开着 = boot_ms/33 逐帧
     /// 新值逐帧重烘焙；关着恒 0 不挤烘焙闸）
     anim_bucket: u64,
@@ -385,6 +382,9 @@ struct LayerSigs {
     filetree: crate::ui::stage::DirtyGuard<(u32, u32, u32, u32, u32, u32)>,
     parser: crate::ui::stage::DirtyGuard<(u32, u32, u32, u32, u32, u32)>,
     termcard: crate::ui::stage::DirtyGuard<(u32, u32, u32, u32)>,
+    /// 平移旧代捕获账（十九修 D8）：Some((epoch, scope, dir)) = 当前
+    /// PanOld 纹理属于哪笔平移账——新账才重新拷贝画布
+    pan_cap: Option<(u64, u8, i8)>,
 }
 
 impl LayerSigs {
@@ -3745,6 +3745,44 @@ impl App {
         ai_layout
     }
 
+    /// 平移合成参数求值（十九修 D8）：带/偏移与涂装域同尺的纯函数
+    /// （page_pan_band/upper_pan_band/pan_offsets）的 GLES 装配；无
+    /// 平移出 None（配置槽单 draw 照旧）。关联函数无 self——
+    /// draw_frame_gles 同款按参传
+    fn pan_composite(
+        cfg_snap: Option<&crate::ui::cfg_page::CfgPageSnap>,
+        pool_snap: Option<&crate::ui::dual_pool::DualPoolSnap>,
+        w: u32,
+    ) -> Option<crate::gles_present::PanComp> {
+        let cs = cfg_snap?;
+        let p = cs.pan.as_ref()?;
+        let ps = pool_snap?;
+        let (band, travel) = match p.scope {
+            crate::ui::cfg_page::PanScope::Page => {
+                let band = crate::termview::page_pan_band(
+                    w,
+                    0,
+                    p.old.pool.upper.y,
+                    ps.upper.y,
+                    p.old.pool.lower.y + p.old.pool.lower.h as i64,
+                    ps.lower.y + ps.lower.h as i64,
+                );
+                (band, ps.upper.w as i64 + crate::ui::cfg_page::PAN_GAP_PAGE)
+            }
+            crate::ui::cfg_page::PanScope::Upper => {
+                let band = crate::termview::upper_pan_band(&ps.upper, 0);
+                let travel = (band.2 - band.0) + crate::ui::cfg_page::PAN_GAP_UPPER;
+                (band, travel)
+            }
+        };
+        let (d_old, d_new) = crate::ui::cfg_page::pan_offsets(p.dir, p.t, travel);
+        Some(crate::gles_present::PanComp {
+            band: (band.0 as i32, band.1 as i32, band.2 as i32, band.3 as i32),
+            old_dx: d_old as f32,
+            new_dx: d_new as f32,
+        })
+    }
+
     /// GLES 一帧的图层装配（2026-09-07 槽位化，ui-base §八）：终端网格
     /// GPU 实例 → 键行槽 → 面板槽（placement.y=panel_off，tint.α=panel_fade）
     /// → AI 文字 GPU 实例（u_alpha=panel_fade 随面板显影）→ 上层槽。
@@ -4030,14 +4068,16 @@ impl App {
         // 2026-09-05 教训：一刀切 |= alpha 会变成不透明黑膜）
         let t_ras = std::time::Instant::now();
         let bottom_inset = ime + bar_h;
-        // 七槽可见性单源（BAR-070：图层化首版漏设上层槽 → 输入栏/光球/
-        // 放大镜集体隐身——可见性判定收进纯逻辑，每帧七槽都从这出）
+        // 八槽可见性单源（BAR-070：图层化首版漏设上层槽 → 输入栏/光球/
+        // 放大镜集体隐身——可见性判定收进纯逻辑，每帧八槽都从这出）
+        let pan_active = cfg_snap.as_ref().is_some_and(|cs| cs.pan.is_some());
         let slot_vis = crate::ui::stage::slot_visibility(
             grid_keybar,
             panel_visible,
             cfg_visible,
             ft_visible,
             pt_visible,
+            pan_active,
         );
         g.set_slot_visible(crate::gles_present::ChromeSlot::Keybar, slot_vis[0]);
         g.set_slot_visible(crate::gles_present::ChromeSlot::Panel, slot_vis[1]);
@@ -4046,6 +4086,7 @@ impl App {
         g.set_slot_visible(crate::gles_present::ChromeSlot::Parser, slot_vis[4]);
         g.set_slot_visible(crate::gles_present::ChromeSlot::Over, slot_vis[5]);
         g.set_slot_visible(crate::gles_present::ChromeSlot::TermCard, slot_vis[6]);
+        g.set_slot_visible(crate::gles_present::ChromeSlot::PanOld, slot_vis[7]);
         // 终端卡片壳槽烘焙（2026-09-11）：恒靠泊零 placement——sig 含
         // ime/bar_h 是因为壳下缘停在快捷键行上沿（键盘开合期逐帧重烘焙
         // 加入 ui-base §八 期 2 债同族清单，不单独立项）
@@ -4105,14 +4146,11 @@ impl App {
         let cfg_epoch = cfg_snap.map_or(0, |cs| cs.epoch);
         // 动画两维（十五修 §五/§六）：光标行号 ×64 量化（1/64 行 ≈ 2.5px
         // 精度够肉眼无缝）+ 下拉进度 ×1000 量化——动画在播逐帧新值触发
-        // 槽重烘焙，收敛后值稳零空烧（同 §四 纪律）
+        // 槽重烘焙，收敛后值稳零空烧（同 §四 纪律）。平移不再进 sig
+        // （十九修 D8 合成期优先律：pan_q 逐帧重烘焙 = 全页双代重光栅
+        // 是真机掉帧病灶——平移呈现全在合成期，烘焙恒画新代稳态）
         let cursor_row_q = cfg_snap.map_or(0, |cs| (cs.cursor_row * 64.0).round() as i32);
         let dd_progress_q = cfg_snap.map_or(0, |cs| (cs.dropdown_progress * 1000.0).round() as u32);
-        // 平移一维（十七修 §六）：双代同画偏移逐帧变——漏维 = 平移冻在
-        // 槽纹理里（同 §四 动画逐帧重烘焙纪律）
-        let pan_q = cfg_snap.map_or(0, |cs| {
-            cs.pan.as_ref().map_or(0, |p| (p.t * 1000.0).round() as i32)
-        });
         // 动效预览 sig 一维（十四修 §六）：动画展品开着 = 33ms 时间桶
         // 逐帧变 → 槽逐帧重烘焙；关着恒 0（无动画零烘焙同 §四纪律）
         let anim_bucket = if cfg_visible && Self::cfg_anim_modal_open() {
@@ -4120,6 +4158,26 @@ impl App {
         } else {
             0
         };
+        // 十九修 D8 平移升合成期两件（顺序敏感）：
+        // ①PanOld 捕获——平移起步帧把当前配置画布整幅拷过来 = 旧代
+        // 冻结封存（此刻画布还是旧代像素，必须抢在下面重烘焙之前）。
+        // 账键 = (epoch, scope, dir)：新账才捕（同账不重复 12MB 拷贝
+        // 上传），账清（贴死/离页）即释放
+        let pan_now =
+            cfg_snap.and_then(|cs| cs.pan.as_ref().map(|p| (cs.epoch, p.scope as u8, p.dir)));
+        if let Some(k) = pan_now {
+            if sigs.pan_cap != Some(k) {
+                let src = g
+                    .slot_canvas(crate::gles_present::ChromeSlot::Config)
+                    .to_vec();
+                g.slot_canvas(crate::gles_present::ChromeSlot::PanOld)
+                    .copy_from_slice(&src);
+                g.slot_bake(crate::gles_present::ChromeSlot::PanOld);
+                sigs.pan_cap = Some(k);
+            }
+        } else {
+            sigs.pan_cap = None;
+        }
         if cfg_visible
             && sigs.config.feed(ConfigSig {
                 w,
@@ -4135,7 +4193,6 @@ impl App {
                 cfg_epoch,
                 cursor_row_q,
                 dd_progress_q,
-                pan_q,
                 anim_bucket,
             })
         {
@@ -4148,28 +4205,23 @@ impl App {
                     .paint_cfg_tab_bar(px, w, h, ts, 0, bottom_inset, acc_cfg);
             }
             // 双池（宪法 §五）：与标签栏同槽同 accent——内卡反转在涂装
-            // 内部兑现（c2→c1），调用方无感。十七修 §六：页面级平移中
-            // 双池框随内容双代同画，由 pool_content 内部自理（这里再画
-            // = 框不动内容动，两张皮）
-            let page_pan = cfg_snap.is_some_and(|cs| {
-                cs.pan
-                    .as_ref()
-                    .is_some_and(|p| p.scope == crate::ui::cfg_page::PanScope::Page)
-            });
+            // 内部兑现（c2→c1），调用方无感。十九修 D8：烘焙恒画新代
+            // 稳态（pan 剥离）——Page 域平移中带内像素会被合成期 band
+            // fill 覆盖，静态多画一份无害且免分支；双代呈现全在合成期
             if let (Some(ps), Some(t)) = (pool_snap, th) {
-                if !page_pan {
-                    t.lock()
-                        .unwrap()
-                        .paint_cfg_dual_pool(px, w, h, ps, 0, acc_cfg);
-                }
+                t.lock()
+                    .unwrap()
+                    .paint_cfg_dual_pool(px, w, h, ps, 0, acc_cfg);
                 // 池内容（§五 目录语义）：双池框之上同槽
                 if let Some(cs) = cfg_snap {
+                    let mut settled = cs.clone();
+                    settled.pan = None;
                     t.lock().unwrap().paint_cfg_pool_content(
                         px,
                         w,
                         h,
                         ps,
-                        cs,
+                        &settled,
                         0,
                         acc_cfg,
                         crate::report::boot_ms() as u64,
@@ -4361,6 +4413,7 @@ impl App {
             cfg_extra.dy,
             ft_extra.dy,
             pt_extra.dy,
+            Self::pan_composite(cfg_snap, pool_snap, w),
         );
         ai_layout
     }
