@@ -3027,7 +3027,13 @@ fn spec_cfg标签栏_涂装钉() {
     let tv = TermView::new(host_font(), None, 8, 2, CELL_W, CELL_H);
     let mut bar = kfm_na::ui::tab_bar::TabBar::new(&["API", "B"], 320);
     bar.set_colors(vec![acc_a, pair_b]); // 选中 0 → 页 accent ≡ acc_a
-    let snap = bar.snap(0);
+    let mut snap = bar.snap(0);
+    // BAR-096 拆层：底线 span（池区左右内缘）改由壳层每帧喂——钉侧
+    // 按池区几何补上（缺省 None = 不画底线）
+    {
+        let pa = kfm_na::ui::dual_pool::pool_area(w, h, inset);
+        snap.line_span = Some((pa.x, pa.x + i64::from(pa.w)));
+    }
     // 选中块初态 = 标签 0：x=61, oy=55, w=90, h=72（咬格钉同源读数，
     // 行高 2 格）；标签 B：x=169（61+90+18 间距 1 格），w=54
     let (cx, oy, cw) = (61usize, 55usize, 90usize);
@@ -3257,7 +3263,7 @@ fn spec_三级框_涂装钉() {
     let mut b0 = vec![0u32; (w * h) as usize];
     termview::paint_cfg_page_chrome(&mut b0, w, h, inset, 0, acc);
     tv.paint_cfg_dual_pool(&mut b0, w, h, &ps, 0, acc);
-    tv.paint_cfg_pool_content(&mut b0, w, h, &ps, &pg, 0, acc, 0, false);
+    tv.paint_cfg_pool_content(&mut b0, w, h, &ps, &pg, 0, acc, 0, false, false);
 
     let r0 = cfg_page::lower_row_rect(0, &ps.lower); // 选中
     let r1 = cfg_page::lower_row_rect(1, &ps.lower); // 未选中
@@ -3441,7 +3447,7 @@ fn spec_字段行_右对齐与动态宽涂装钉() {
     let mut b0 = vec![0u32; (w * h) as usize];
     termview::paint_cfg_page_chrome(&mut b0, w, h, inset, 0, acc);
     tv.paint_cfg_dual_pool(&mut b0, w, h, &ps, 0, acc);
-    tv.paint_cfg_pool_content(&mut b0, w, h, &ps, &pg, 0, acc, 0, false);
+    tv.paint_cfg_pool_content(&mut b0, w, h, &ps, &pg, 0, acc, 0, false, false);
 
     let ur = cfg_page::upper_row_rect(0, &ps.upper, 0);
     let lb = cfg_page::field_label_rect(&ur, tv.text_width("key", 36.0));
@@ -3549,7 +3555,7 @@ fn spec_下拉面板_涂装钉() {
     let mut b0 = vec![0u32; (w * h) as usize];
     termview::paint_cfg_page_chrome(&mut b0, w, h, inset, 0, acc);
     tv.paint_cfg_dual_pool(&mut b0, w, h, &ps, 0, acc);
-    tv.paint_cfg_pool_content(&mut b0, w, h, &ps, &pg0, 0, acc, 0, false);
+    tv.paint_cfg_pool_content(&mut b0, w, h, &ps, &pg0, 0, acc, 0, false, false);
 
     // ①触发器 = 三级框全包框（十四修动态宽度：实量宽喂几何）
     let lw = tv.text_width("默认服务器", 36.0);
@@ -3580,7 +3586,7 @@ fn spec_下拉面板_涂装钉() {
     let mut b1 = vec![0u32; (w * h) as usize];
     termview::paint_cfg_page_chrome(&mut b1, w, h, inset, 0, acc);
     tv.paint_cfg_dual_pool(&mut b1, w, h, &ps, 0, acc);
-    tv.paint_cfg_pool_content(&mut b1, w, h, &ps, &pg1, 0, acc, 0, false);
+    tv.paint_cfg_pool_content(&mut b1, w, h, &ps, &pg1, 0, acc, 0, false, false);
 
     let t = cfg_page::trigger_rect(&ps.upper, 0, true, lw, vw);
     let max_h = h.saturating_sub(t.y.max(0) as u32 + t.h + 40);
@@ -3795,7 +3801,7 @@ fn paint_modal_frame(
     let mut buf = vec![0u32; (w * h) as usize];
     termview::paint_cfg_page_chrome(&mut buf, w, h, inset, 0, acc);
     tv.paint_cfg_dual_pool(&mut buf, w, h, &ps, 0, acc);
-    tv.paint_cfg_pool_content(&mut buf, w, h, &ps, &pg, 0, acc, now_ms, false);
+    tv.paint_cfg_pool_content(&mut buf, w, h, &ps, &pg, 0, acc, now_ms, false, false);
 
     // 展台内区（与 paint_preview_impl 同一份几何：内缩 1 格/半格）
     let entry = &cr::COMPONENTS[mi];
@@ -4087,7 +4093,7 @@ fn spec_cfg下池_光标滑行涂装钉() {
     let mut buf = vec![0u32; (w * h) as usize];
     termview::paint_cfg_page_chrome(&mut buf, w, h, inset, 0, acc);
     tv.paint_cfg_dual_pool(&mut buf, w, h, &ps, 0, acc);
-    tv.paint_cfg_pool_content(&mut buf, w, h, &ps, &pg, 0, acc, 0, false);
+    tv.paint_cfg_pool_content(&mut buf, w, h, &ps, &pg, 0, acc, 0, false, false);
 
     let stride = LOWER_ROW_H as i64 + ROW_GAP;
     let cy = ps.lower.y + POOL_CONTENT_INSET + (0.5f32 * stride as f32).round() as i64;
@@ -4155,7 +4161,7 @@ fn spec_cfg下拉_抽屉随面钉() {
     let mut b0 = vec![0u32; (w * h) as usize];
     termview::paint_cfg_page_chrome(&mut b0, w, h, inset, 0, acc);
     tv.paint_cfg_dual_pool(&mut b0, w, h, &ps, 0, acc);
-    tv.paint_cfg_pool_content(&mut b0, w, h, &ps, &pg0, 0, acc, 0, false);
+    tv.paint_cfg_pool_content(&mut b0, w, h, &ps, &pg0, 0, acc, 0, false, false);
 
     // 手搓半高相位（缓动时值钉在 cfg_page_spec；涂装只吃 progress 维）
     page.toggle_dropdown(1000);
@@ -4164,7 +4170,7 @@ fn spec_cfg下拉_抽屉随面钉() {
     let mut b1 = vec![0u32; (w * h) as usize];
     termview::paint_cfg_page_chrome(&mut b1, w, h, inset, 0, acc);
     tv.paint_cfg_dual_pool(&mut b1, w, h, &ps, 0, acc);
-    tv.paint_cfg_pool_content(&mut b1, w, h, &ps, &pg1, 0, acc, 0, false);
+    tv.paint_cfg_pool_content(&mut b1, w, h, &ps, &pg1, 0, acc, 0, false, false);
 
     let lw = tv.text_width("server", 36.0);
     let vw = tv.text_width("LOCAL", 30.0);
@@ -4268,7 +4274,7 @@ fn spec_cfg下池_选中行文字落墨钉() {
     let mut buf = vec![0u32; (w * h) as usize];
     termview::paint_cfg_page_chrome(&mut buf, w, h, inset, 0, acc);
     tv.paint_cfg_dual_pool(&mut buf, w, h, &ps, 0, acc);
-    tv.paint_cfg_pool_content(&mut buf, w, h, &ps, &pg, 0, acc, 0, false);
+    tv.paint_cfg_pool_content(&mut buf, w, h, &ps, &pg, 0, acc, 0, false, false);
 
     let r1 = cfg_page::lower_row_rect(1, &ps.lower); // 选中行
     let mut ink = 0usize;
@@ -4325,7 +4331,7 @@ fn spec_cfg下拉_选中细框滑行涂装钉() {
     let mut buf = vec![0u32; (w * h) as usize];
     termview::paint_cfg_page_chrome(&mut buf, w, h, inset, 0, acc);
     tv.paint_cfg_dual_pool(&mut buf, w, h, &ps, 0, acc);
-    tv.paint_cfg_pool_content(&mut buf, w, h, &ps, &pg, 0, acc, 0, false);
+    tv.paint_cfg_pool_content(&mut buf, w, h, &ps, &pg, 0, acc, 0, false, false);
 
     let lw = tv.text_width("server", 36.0);
     let vw = tv.text_width("LOCAL", 30.0);
@@ -4419,7 +4425,7 @@ fn spec_下拉三角旋转_涂装钉() {
         let mut b = vec![0u32; (w * h) as usize];
         termview::paint_cfg_page_chrome(&mut b, w, h, inset, 0, acc);
         tv.paint_cfg_dual_pool(&mut b, w, h, &ps, 0, acc);
-        tv.paint_cfg_pool_content(&mut b, w, h, &ps, &pg, 0, acc, 0, false);
+        tv.paint_cfg_pool_content(&mut b, w, h, &ps, &pg, 0, acc, 0, false, false);
         b
     };
     let b_down = paint(&page, 0.0); // ▼
@@ -4520,7 +4526,7 @@ fn spec_视口平移双代同画_涂装钉() {
     let mut b1 = vec![0u32; (w * h) as usize];
     termview::paint_cfg_page_chrome(&mut b1, w, h, inset, 0, acc);
     // Page 域：不调 paint_cfg_dual_pool（调用方纪律——框随内容双代）
-    tv.paint_cfg_pool_content(&mut b1, w, h, &ps, &pg, 0, acc, 1100, false);
+    tv.paint_cfg_pool_content(&mut b1, w, h, &ps, &pg, 0, acc, 1100, false, false);
 
     let r1 = cfg_page::lower_row_rect(1, &ps.lower); // 旧代行 1（未选中）
     let (ix, py1) = (r1.x + r1.w as i64 / 2, r1.y + r1.h as i64 / 2);
@@ -4552,7 +4558,7 @@ fn spec_视口平移双代同画_涂装钉() {
     let d_new_b = ((1.0 - pan_b.t) * travel as f32).round() as i64;
     let mut b2 = vec![0u32; (w * h) as usize];
     termview::paint_cfg_page_chrome(&mut b2, w, h, inset, 0, acc);
-    tv.paint_cfg_pool_content(&mut b2, w, h, &ps, &pg_b, 0, acc, 1200, false);
+    tv.paint_cfg_pool_content(&mut b2, w, h, &ps, &pg_b, 0, acc, 1200, false, false);
     let edge_temp = ps.lower.x + cfg_page::POOL_CONTENT_INSET + 4; // 左粗缘 temp 原位
     let edge_x = edge_temp + d_new_b;
     assert_eq!(
@@ -4582,7 +4588,7 @@ fn spec_视口平移双代同画_涂装钉() {
     let d5 = (0.5 * travel as f32).round() as i64; // |d_old| = d_new = 半程
     let mut b4 = vec![0u32; (w * h) as usize];
     termview::paint_cfg_page_chrome(&mut b4, w, h, inset, 0, acc);
-    tv.paint_cfg_pool_content(&mut b4, w, h, &ps, &pg_c, 0, acc, 1125, false);
+    tv.paint_cfg_pool_content(&mut b4, w, h, &ps, &pg_c, 0, acc, 1125, false, false);
     let fy = ps.upper.y + ps.upper.h as i64 / 2; // 上池框腰（无内容墨处）
     // 静物 oracle：旧/新 accent 各画一遍双池框（渐变锚公式件内细节
     // 不手推——参照缓冲同路径涂装，逐像素即铁证）
@@ -4688,7 +4694,7 @@ fn spec_上池平移_框静止留隙_涂装钉() {
     let mut b1 = vec![0u32; (w * h) as usize];
     termview::paint_cfg_page_chrome(&mut b1, w, h, inset, 0, acc);
     tv.paint_cfg_dual_pool(&mut b1, w, h, &ps, 0, acc); // Upper 域：框静物照常
-    tv.paint_cfg_pool_content(&mut b1, w, h, &ps, &pg, 0, acc, 1125, false);
+    tv.paint_cfg_pool_content(&mut b1, w, h, &ps, &pg, 0, acc, 1125, false, false);
     // 静物参照（无内容）：chrome + 双池框
     let mut bref = vec![0u32; (w * h) as usize];
     termview::paint_cfg_page_chrome(&mut bref, w, h, inset, 0, acc);
@@ -4852,7 +4858,7 @@ fn spec_bar092_upper_hold_rows_out_of_canvas() {
         let mut b = vec![0u32; (w * h) as usize];
         termview::paint_cfg_page_chrome(&mut b, w, h, inset, 0, acc);
         tv.paint_cfg_dual_pool(&mut b, w, h, &ps, 0, acc);
-        tv.paint_cfg_pool_content(&mut b, w, h, &ps, &pg2, 0, acc, 1000, hold);
+        tv.paint_cfg_pool_content(&mut b, w, h, &ps, &pg2, 0, acc, 1000, hold, false);
         b[sy as usize * w as usize + sx as usize]
     };
     let with_rows = paint(
@@ -4879,5 +4885,88 @@ fn spec_bar092_upper_hold_rows_out_of_canvas() {
     assert_eq!(
         held, norows,
         "hold 静物 = 无行内芯（池内芯渐变，非页底/非定格行）"
+    );
+}
+
+/// BAR-096 钉①（帧饥饿根治件一）：标签栏**层**与整页版逐像素等价——
+/// 层坐标 = 页坐标 − y_shift 的等价性。拆层的正确性前提：不许改任何
+/// 像素（游标滑行只脏 0.65MB 小层，画面必须与整页版完全一致）。
+/// 变异：层函数漏减/多减 y_shift、clip 用页尺 → 红。
+#[test]
+fn spec_bar096_标签栏层_与整页逐像素等价() {
+    use kfm_na::termview::TermEmu;
+    use kfm_na::ui::accent::AccentPair;
+    use kfm_na::ui::tab_bar::{TAB_LAYER_H, TabBar, content_origin};
+    let (w, h) = (1260u32, 2400u32);
+    let acc = AccentPair {
+        c1: 0x00FF_6000,
+        c2: 0x0000_80FF,
+    };
+    let tv = TermView::new(host_font(), None, 8, 2, CELL_W, CELL_H);
+    let mut bar = TabBar::new(&["SYS", "NET"], w);
+    bar.select(1, 1000); // 游标滑到标签 1
+    let mut snap = bar.snap(1250);
+    snap.line_span = Some((100, 1100)); // 池区带（壳层每帧喂）
+    // 整页版（y_shift = 0）
+    let mut full = vec![0u32; (w * h) as usize];
+    tv.paint_tab_bar_layer(&mut full, w, h, 0, &snap, acc);
+    // 层版（y_shift = 内容原点）
+    let oy = i64::from(content_origin().1);
+    let mut layer = vec![0u32; (w * TAB_LAYER_H) as usize];
+    tv.paint_tab_bar_layer(&mut layer, w, TAB_LAYER_H, oy, &snap, acc);
+    let mut diffs = 0usize;
+    for y in 0..TAB_LAYER_H as usize {
+        for x in 0..w as usize {
+            let a = layer[y * w as usize + x];
+            let b = full[(y + oy as usize) * w as usize + x];
+            if a != b {
+                diffs += 1;
+            }
+        }
+    }
+    assert_eq!(
+        diffs, 0,
+        "标签栏层与整页版必须逐像素等价（差 {diffs} 像素）"
+    );
+    let nz = layer.iter().filter(|p| **p & 0x00FF_FFFF != 0).count();
+    assert!(nz > 1000, "标签栏层必须真落墨（非零像素 {nz}）");
+}
+
+/// BAR-096 钉②（帧饥饿根治件二）：下池光标层**渐变保真**——层像素必须
+/// 采出「框在页上原位」的色（页坐标 + 页分母），不许漂成层画布尺
+/// （层 1000×162 的 denom ≪ 页 1260×2400 的 denom，混用 = 颜色整体
+/// 变调）。独立复算锚：ring_gradient_rgb/frame_bg_rgb 按页坐标重算。
+/// 变异：paint_lower_cursor_layer 传 (0,0,层denom) → 红。
+#[test]
+fn spec_bar096_光标层_渐变保真钉() {
+    use kfm_na::termview::{TermEmu, frame_bg_rgb, ring_gradient_rgb};
+    use kfm_na::ui::accent::AccentPair;
+    let (w, h) = (1260u32, 2400u32);
+    let acc = AccentPair {
+        c1: 0x00FF_6000,
+        c2: 0x0000_80FF,
+    };
+    let tv = TermView::new(host_font(), None, 8, 2, CELL_W, CELL_H);
+    let (cw, ch) = (1000u32, 162u32);
+    let (px0, py0) = (102i64, 777i64);
+    let denom = (i64::from(w) - 1) + (i64::from(h) - 1);
+    let mut layer = vec![0u32; (cw * ch) as usize];
+    tv.paint_lower_cursor_layer(&mut layer, cw, ch, px0, py0, denom, acc);
+    // 左粗竖条内（x=5）——环带 = 渐变实色 α255
+    let y_mid = (ch / 2) as i64;
+    let got = layer[(ch / 2) as usize * cw as usize + 5];
+    let want = ring_gradient_rgb(acc.c1, acc.c2, px0 + 5, py0 + y_mid, denom);
+    assert_eq!(
+        got & 0x00FF_FFFF,
+        want & 0x00FF_FFFF,
+        "左粗条颜色必须按页坐标页尺采（保真条）"
+    );
+    // 内芯（中心点）——渐变暗底不透明直出
+    let got_c = layer[(ch / 2) as usize * cw as usize + (cw / 2) as usize];
+    let want_c = frame_bg_rgb(acc.c1, acc.c2, px0 + (cw / 2) as i64, py0 + y_mid, denom);
+    assert_eq!(
+        got_c & 0x00FF_FFFF,
+        want_c & 0x00FF_FFFF,
+        "内芯颜色必须按页坐标页尺采（保真条）"
     );
 }

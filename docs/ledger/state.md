@@ -7,6 +7,30 @@
 
 ## 当前位置（2026-09-15)
 
+- **二十二修：池区帧饥饿根治件一件二（BAR-096，2026-09-16 凌晨，
+  用户拍板「就剩下你说的那个了」）**：病灶=光标滑行/标签游标/池高
+  三路的动画值都进配置槽 sig → 每帧全页重光栅+14MB 上传（draw_avg
+  47ms ≈21fps），即用户逐帧所见「跳变/过冲感」真凶（曲线数学单调
+  已由 panc 遥测+钉双证）。**件一**=标签栏独立小画布层
+  （ChromeSlot::TabBar=9，屏宽×TAB_LAYER_H≈0.65MB）；**件二**=下池
+  光标独立小画布层（LowerCursor=10，池内容宽×行高≈0.69MB）；槽位
+  机制加「自有 dims」（ChromeLayer.dims + set_slot_dims + bake 按
+  dims 上传）；ConfigSig 摘 tab_sel/tab_scroll/tab_cx/cursor_row_q
+  四维 → 配置槽从此不逐帧重烘；光标位置进合成期（LayeredPlace；
+  Page 平移期带内双代=旧代位 pan.old.cursor_row+old_dx，标签栏层不
+  进带=十八修语义）。**保真条两钉**：标签栏层与整页版逐像素等价
+  （y_shift 语义；钉实锤咬出并修正真 bug——底线丢内容原点，页版
+  底线画到 y=110 而非 165）；光标层渐变参照吃页坐标页尺
+  （paint_row_frame_gradref 的 grad_ref 参数，防 1000×162 与
+  1260×2400 的 denom 混用漂色）。**遗留 BAR-097**：池高一路
+  （pool_upper_h）未拆——上池框底缘/下池 y 位移/圆角需三层几何×
+  平移双代全组合，独立一轮做扎实（不塞进本轮以免又出 u32 下溢那类
+  新病）。**流程教训两枚**：①手机 Rust 的 clippy 比服务器新——本轮
+  四跑 chain-phone 才绿（unused_mut/too_many_arguments/collapsible_if
+  逐个咬），**改完码先「补丁推手机 + 手机跑 clippy」预检**再跑 chain
+  省往返；②合成段落插入位置必须落在 match arm 块内（插在 arm 列表
+  里 = fmt 语法错）。
+
 - **二十一修：池区分域律+曲线单一源（BAR-095，2026-09-15 晚，用户
   终验 vc431 三连报→当日回修）**：①BAR-094 把「无过冲」误执行成
   「无动画」（用户原话「不是把动画搞没——光标到位池高也到位」）→

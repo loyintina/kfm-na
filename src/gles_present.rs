@@ -76,6 +76,17 @@ pub enum ChromeSlot {
     /// 起步帧烘新代稳态（框+行，无 chrome——带外全裁），连环平移时
     /// 上一笔 PanMove 即下一笔旧代（PanOld 捕获源接力）
     PanMove = 8,
+    /// 标签栏层（BAR-096 拆槽，2026-09-15）：标签行区（块+文字+底线）
+    /// 独立小画布（屏宽 × 标签区高 ≈ 0.65MB）——游标滑行只脏这一层，
+    /// 对比配置槽全页 14MB 重烘省 ~22 倍（帧饥饿根治件一）。
+    /// 标签栏不在平移带内（十八修语义：标签静止、内容动）——平移期
+    /// 不参与双代，恒 @0 单画
+    TabBar = 9,
+    /// 下池光标层（BAR-096 拆槽）：单个选中全包框，画布 = 池内容宽 ×
+    /// 下池行高（≈0.69MB）——光标滑行逐帧只脏这一层（原配置槽每帧
+    /// 14MB 重烘）；位移进合成期 rect.y（画布内容仅选框形状，与行
+    /// 内容无关——选中行的文字留在配置槽）
+    LowerCursor = 10,
 }
 
 /// 视口平移合成参数（十九修 D8）：调用方逐帧从 cfg_snap.pan 求值——
@@ -97,6 +108,20 @@ pub struct PanComp {
     pub clear_bg: bool,
 }
 
+/// BAR-096 拆层合成参数：标签栏层与下池光标层的屏幕位置（top-down 像素）。
+/// 两层都是「小画布槽」——内容自己一副画布，位置全在合成期给
+#[derive(Clone, Copy, Debug, Default)]
+pub struct LayeredPlace {
+    /// 标签栏层 (x, y)：随面板 cfg_off，**不进平移带**（十八修语义：
+    /// 标签静止、内容动）；None = 配置页不可见
+    pub tabbar: Option<(f32, f32)>,
+    /// 下池光标层 (x, y)：非平移/Upper 平移 = 实时缓动位；Page 平移期
+    /// 走 band 内双代（cursor_old 给旧代位），None = 不画
+    pub cursor: Option<(f32, f32)>,
+    /// Page 平移期旧代光标位置（带内双代画；None = 单次画）
+    pub cursor_old: Option<(f32, f32)>,
+}
+
 /// 单槽烘焙物。baked=false 的槽不许上屏——采样未上传过的纹理得到
 /// 不完整纹理恒黑（黑屏案 2026-09-05 教训的图层版）
 struct ChromeLayer {
@@ -104,6 +129,10 @@ struct ChromeLayer {
     tex: glow::NativeTexture,
     /// 已上传尺寸（与画布尺寸不符 → 下次 bake 重分配）
     size: (u32, u32),
+    /// 画布逻辑尺寸（BAR-096 拆槽：小画布槽只覆盖自己的区域——
+    /// 标签栏层=屏宽×标签区高、光标层=池内容宽×行高；默认全屏）。
+    /// 重烘成本 ∝ 面积：动画所在层越小，逐帧重烘越便宜
+    dims: (u32, u32),
     visible: bool,
     baked: bool,
 }
@@ -507,8 +536,9 @@ pub struct GlesPresent {
     h: u32,
     // ---- 期 1 第 2 层：终端网格 GPU 化 ----
     /// 图层槽位（ui-base §八 渲染成本模型）：键行/AI面板/上层/配置/文件树
-    /// 五槽，置脏烘焙 + placement 合成——动画帧零光栅零上传
-    layers: [ChromeLayer; 9],
+    /// /终端卡/平移双代 + BAR-096 拆槽两件（标签栏层/下池光标层——小画布
+    /// 逐帧重烘便宜），置脏烘焙 + placement 合成——动画帧零光栅零上传
+    layers: [ChromeLayer; 11],
     /// 图层实例程序（rect+uv+tint 四边形；placement 逐槽进实例数据）
     layer_prog: glow::NativeProgram,
     layer_vao: glow::NativeVertexArray,
@@ -638,12 +668,15 @@ impl GlesPresent {
                 canvas: vec![0; (w * h) as usize],
                 tex,
                 size: (0, 0),
+                dims: (w, h),
                 visible: false,
                 baked: false,
             }
         };
         // 先建槽数组再 move gl 进结构体（E0382：字段初始化按书写序移动）
         let layers = [
+            mk_layer(&gl),
+            mk_layer(&gl),
             mk_layer(&gl),
             mk_layer(&gl),
             mk_layer(&gl),
@@ -853,18 +886,38 @@ impl GlesPresent {
         (self.w, self.h)
     }
 
-    /// Resized 事件同步（EGL 窗表面随系统自调，这里只跟帧缓冲尺寸）
+    /// Resized 事件同步（EGL 窗表面随系统自调，这里只跟帧缓冲尺寸）。
+    /// 全屏槽随尺寸 resize；小画布槽（BAR-096）由壳层下次 bake 前经
+    /// set_slot_dims 重设——这里只作废上传缓存逼重分配
     pub fn set_size(&mut self, w: u32, h: u32) {
         let (w, h) = (w.max(1), h.max(1));
         if (w, h) != (self.w, self.h) {
             self.w = w;
             self.h = h;
             for l in &mut self.layers {
+                l.dims = (w, h);
                 l.canvas.resize((w * h) as usize, 0);
                 // 尺寸缓存作废（下次 bake 重分配；sig 侧含 w/h 必然重烘焙）
                 l.size = (0, 0);
             }
         }
+    }
+
+    /// 槽画布逻辑尺寸（BAR-096 拆槽）：小画布槽只覆盖自己的区域——
+    /// 尺寸变化即重分配画布 + 作废上传缓存（调用方紧接着 bake）
+    pub fn set_slot_dims(&mut self, s: ChromeSlot, cw: u32, ch: u32) {
+        let l = &mut self.layers[s as usize];
+        let (cw, ch) = (cw.max(1), ch.max(1));
+        if l.dims != (cw, ch) {
+            l.dims = (cw, ch);
+            l.canvas.resize((cw * ch) as usize, 0);
+            l.size = (0, 0);
+        }
+    }
+
+    /// 槽画布逻辑尺寸读数（考题/壳层对账）
+    pub fn slot_dims(&self, s: ChromeSlot) -> (u32, u32) {
+        self.layers[s as usize].dims
     }
 
     /// 槽位画布（供调用方 paint；不置脏不上传——bake 才算数）
@@ -884,15 +937,17 @@ impl GlesPresent {
     }
 
     /// 烘焙一槽：mark_chrome_alpha（「纯黑=空白」约定）+ 全画布上传。
-    /// 只在置脏帧调用——这是图层引擎的成本闸门（动画帧不进这里）
+    /// 只在置脏帧调用——这是图层引擎的成本闸门（动画帧不进这里）。
+    /// BAR-096：上传尺寸吃槽自己的 dims（小画布槽只传自己那块）
     pub fn slot_bake(&mut self, s: ChromeSlot) {
         let idx = s as usize;
         let t0_up = std::time::Instant::now();
         crate::termview::mark_chrome_alpha(&mut self.layers[idx].canvas);
-        let target = (self.w, self.h);
+        let target = self.layers[idx].dims;
         let realloc = self.layers[idx].size != target;
         let tex = self.layers[idx].tex;
         let px: &[u32] = &self.layers[idx].canvas;
+        let (cw, ch) = target;
         let gl = &self.gl;
         unsafe {
             gl.bind_texture(glow::TEXTURE_2D, Some(tex));
@@ -926,8 +981,8 @@ impl GlesPresent {
                     glow::TEXTURE_2D,
                     0,
                     glow::RGBA as i32,
-                    self.w as i32,
-                    self.h as i32,
+                    cw as i32,
+                    ch as i32,
                     0,
                     glow::RGBA,
                     glow::UNSIGNED_BYTE,
@@ -939,8 +994,8 @@ impl GlesPresent {
                     0,
                     0,
                     0,
-                    self.w as i32,
-                    self.h as i32,
+                    cw as i32,
+                    ch as i32,
                     glow::RGBA,
                     glow::UNSIGNED_BYTE,
                     glow::PixelUnpackData::Slice(Some(bytes)),
@@ -1068,6 +1123,7 @@ impl GlesPresent {
         ft_dy_extra: f32,
         pt_dy_extra: f32,
         pan_comp: Option<crate::gles_present::PanComp>,
+        layered: LayeredPlace,
     ) {
         let t0_draw = std::time::Instant::now();
         // CPU 画布直接测量（rgb 非零计数 + 样本原值）——「画没画」的铁证
@@ -1277,6 +1333,88 @@ impl GlesPresent {
                                         );
                                     }
                                     gl.disable(glow::SCISSOR_TEST);
+                                }
+                            }
+                            // BAR-096 拆层合成（在配置槽之上）：下池光标层 +
+                            // 标签栏层。光标层位置全在合成期（画布内容=框形状，
+                            // 与行内容/位置无关）——Page 平移期走带内双代（旧代
+                            // 位置由 cursor_old 给：旧页光标行 + old_dx），
+                            // 非平移/Upper 平移单次画（Upper 带=上池内容矩形，
+                            // 光标在下池带外，实时缓动位正确）；标签栏层不进
+                            // 平移带（十八修语义：标签静止、内容动）恒单次画
+                            if let Some((cxp, cyp)) = layered.cursor {
+                                let cl = &self.layers[ChromeSlot::LowerCursor as usize];
+                                if cl.visible && cl.baked {
+                                    let (cw, chh) = cl.dims;
+                                    let (fw, fh) = (self.w as i32, self.h as i32);
+                                    match (pan_comp, layered.cursor_old) {
+                                        (Some(pc), Some((oxp, oyp))) => {
+                                            let (bx0, by0, bx1, by1) = pc.band;
+                                            let sx = bx0.clamp(0, fw);
+                                            let sy = (fh - by1).clamp(0, fh);
+                                            let sw = (bx1 - bx0).clamp(0, fw - sx);
+                                            let sh = (by1 - by0).clamp(0, fh - sy);
+                                            gl.enable(glow::SCISSOR_TEST);
+                                            gl.scissor(sx, sy, sw.max(0), sh.max(0));
+                                            draw_slot_layer(
+                                                gl,
+                                                self.layer_prog,
+                                                self.layer_vao,
+                                                self.layer_vbo,
+                                                cl.tex,
+                                                oxp + pc.old_dx + cfg_off as f32,
+                                                oyp + cfg_dy_extra,
+                                                cw as f32,
+                                                chh as f32,
+                                                cfg_alpha,
+                                            );
+                                            draw_slot_layer(
+                                                gl,
+                                                self.layer_prog,
+                                                self.layer_vao,
+                                                self.layer_vbo,
+                                                cl.tex,
+                                                cxp + pc.new_dx + cfg_off as f32,
+                                                cyp + cfg_dy_extra,
+                                                cw as f32,
+                                                chh as f32,
+                                                cfg_alpha,
+                                            );
+                                            gl.disable(glow::SCISSOR_TEST);
+                                        }
+                                        _ => {
+                                            draw_slot_layer(
+                                                gl,
+                                                self.layer_prog,
+                                                self.layer_vao,
+                                                self.layer_vbo,
+                                                cl.tex,
+                                                cxp + cfg_off as f32,
+                                                cyp + cfg_dy_extra,
+                                                cw as f32,
+                                                chh as f32,
+                                                cfg_alpha,
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            if let Some((txp, typ)) = layered.tabbar {
+                                let tl = &self.layers[ChromeSlot::TabBar as usize];
+                                if tl.visible && tl.baked {
+                                    let (tw, thh) = tl.dims;
+                                    draw_slot_layer(
+                                        gl,
+                                        self.layer_prog,
+                                        self.layer_vao,
+                                        self.layer_vbo,
+                                        tl.tex,
+                                        txp + cfg_off as f32,
+                                        typ + cfg_dy_extra,
+                                        tw as f32,
+                                        thh as f32,
+                                        cfg_alpha,
+                                    );
                                 }
                             }
                         }

@@ -353,19 +353,15 @@ struct ConfigSig {
     c1: u32,
     /// accent c2
     c2: u32,
-    /// 标签选中
-    tab_sel: u32,
-    /// 标签横滚
-    tab_scroll: i32,
-    /// 光标 x
-    tab_cx: i32,
     /// 双池上池高
     pool_upper_h: u32,
     /// 池内容代际（cfg_page epoch，§五 目录语义）
     cfg_epoch: u64,
-    /// 下池光标行号 ×64 量化（十五修 §五：光标弹簧滑行逐帧新值逐帧
-    /// 重烘焙——漏维 = 选中框动画冻在槽纹理里）
-    cursor_row_q: i32,
+    // BAR-096 拆层：标签栏三维（sel/scroll/cx）与下池光标一维
+    // （cursor_row_q）已移出本槽——它们各自的层（TabBar/LowerCursor）
+    // 持小画布享自己的 sig。本槽从此**不再逐帧重烘**（动画期零光栅
+    // 零上传）：游标滑行只脏 0.65MB 标签栏层、光标滑行只脏 0.69MB
+    // 光标层（原三路逐帧 14MB 全页重烘 = draw_avg 47ms/21fps 真凶）
     /// 下拉进度 ×1000 量化（十五修 §六：开合动画逐帧新值逐帧重烘焙）
     dd_progress_q: u32,
     /// 平移 hold 模式（十九修 D8/BAR-092 补丁）：pan 进行中=true——
@@ -387,6 +383,10 @@ struct LayerSigs {
     filetree: crate::ui::stage::DirtyGuard<(u32, u32, u32, u32, u32, u32)>,
     parser: crate::ui::stage::DirtyGuard<(u32, u32, u32, u32, u32, u32)>,
     termcard: crate::ui::stage::DirtyGuard<(u32, u32, u32, u32)>,
+    /// 标签栏层（BAR-096 拆槽）
+    tabbar: crate::ui::stage::DirtyGuard<TabBarSig>,
+    /// 下池光标层（BAR-096 拆槽）
+    cursor: crate::ui::stage::DirtyGuard<CursorSig>,
     /// 平移旧代捕获账（十九修 D8）：Some((epoch, scope, dir)) = 当前
     /// PanOld 纹理属于哪笔平移账——新账才重新拷贝画布
     pan_cap: Option<(u64, u8, i8)>,
@@ -403,7 +403,40 @@ impl LayerSigs {
         self.filetree.invalidate();
         self.parser.invalidate();
         self.termcard.invalidate();
+        self.tabbar.invalidate();
+        self.cursor.invalidate();
     }
+}
+
+/// 标签栏层 sig（BAR-096 拆槽）：层画布 = 屏宽 × TAB_LAYER_H——游标
+/// 滑行（cx_q 逐帧变）只脏这一层（0.65MB vs 配置槽 14MB）
+#[derive(PartialEq)]
+struct TabBarSig {
+    w: u32,
+    layer_h: u32,
+    sel: u32,
+    scroll: i32,
+    cx_q: i32,
+    c1: u32,
+    c2: u32,
+    line_span: (i32, i32),
+    /// 标签文本 + 每标签随机双色的哈希（内容变必重烘，漏 = 旧标签鬼影）
+    tabs_hash: u64,
+}
+
+/// 下池光标层 sig（BAR-096 拆槽）：层画布 = 池内容宽 × 下池行高。
+/// 位置（px/py）进 sig 而非合成期：渐变参照吃「框在页上原位」的页坐标
+/// （BAR-096 保真条——颜色不随层画布尺漂移），故位置变即重烘；小画布
+/// 0.69MB ≈1-2ms，替代配置槽每次 14MB（帧饥饿根治）
+#[derive(PartialEq)]
+struct CursorSig {
+    w: u32,
+    h: u32,
+    c1: u32,
+    c2: u32,
+    px: i32,
+    py: i32,
+    denom: i64,
 }
 
 /// 上层槽 sig（derive PartialEq 深比较——BarSnap/PresenceSnap 均已
@@ -3537,6 +3570,7 @@ impl App {
                                     acc_of(crate::ai_presence::Panel::Config),
                                     crate::report::boot_ms() as u64,
                                     false,
+                                    false, // 兜底整页自带光标
                                 );
                             }
                         }
@@ -4098,6 +4132,13 @@ impl App {
         g.set_slot_visible(crate::gles_present::ChromeSlot::TermCard, slot_vis[6]);
         g.set_slot_visible(crate::gles_present::ChromeSlot::PanOld, slot_vis[7]);
         g.set_slot_visible(crate::gles_present::ChromeSlot::PanMove, slot_vis[7]);
+        // BAR-096 拆层：标签栏层与光标层都属配置页（cfg_visible 一票）；
+        // 光标层另有"无行不画"（空池无光标）
+        g.set_slot_visible(crate::gles_present::ChromeSlot::TabBar, slot_vis[2]);
+        g.set_slot_visible(
+            crate::gles_present::ChromeSlot::LowerCursor,
+            slot_vis[2] && cfg_snap.as_ref().is_some_and(|cs| !cs.rows.is_empty()),
+        );
         // 终端卡片壳槽烘焙（2026-09-11）：恒靠泊零 placement——sig 含
         // ime/bar_h 是因为壳下缘停在快捷键行上沿（键盘开合期逐帧重烘焙
         // 加入 ui-base §八 期 2 债同族清单，不单独立项）
@@ -4146,9 +4187,7 @@ impl App {
         // 标签栏 sig 三维（宪法 §四）：选中/横滚/光标 x——游标弹簧动画
         // 逐帧新值逐帧重烘焙（键盘 inset 同族成本，已记 ui-base §八债单）。
         // 八修换案（开口框→填色标签块）后线长两维随组件退役
-        let (tab_sel, tab_scroll, tab_cx) = tab_snap.map_or((0, 0, 0), |ts| {
-            (ts.selected as u32, ts.scroll_px as i32, ts.cursor_x as i32)
-        });
+        // BAR-096：标签栏三维随标签栏层走（本槽不再吃）
         // 双池 sig 一维（宪法 §五）：上池高——内容进出/屏尺寸变（w/h 已在
         // sig）触发布局重算时必须重烘焙
         let pool_upper_h = pool_snap.map_or(0, |ps| ps.upper.h);
@@ -4160,7 +4199,7 @@ impl App {
         // 槽重烘焙，收敛后值稳零空烧（同 §四 纪律）。平移不再进 sig
         // （十九修 D8 合成期优先律：pan_q 逐帧重烘焙 = 全页双代重光栅
         // 是真机掉帧病灶——平移呈现全在合成期，烘焙恒画新代稳态）
-        let cursor_row_q = cfg_snap.map_or(0, |cs| (cs.cursor_row * 64.0).round() as i32);
+        // BAR-096：光标行号随下池光标层走（本槽不再吃）
         let dd_progress_q = cfg_snap.map_or(0, |cs| (cs.dropdown_progress * 1000.0).round() as u32);
         // 平移 hold 模式维（BAR-092 补丁）：起步 true / 贴死 false 各翻
         // 转一次 = 各一烘。漏维 = 贴死后 hold 烘焙滞留（上池行消失到
@@ -4214,6 +4253,7 @@ impl App {
                         acc_cfg,
                         crate::report::boot_ms() as u64,
                         false,
+                        true, // BAR-096：选中框由下池光标层合成期提供
                     );
                 }
                 g.slot_bake(crate::gles_present::ChromeSlot::PanMove);
@@ -4230,12 +4270,8 @@ impl App {
                 bar_h,
                 c1: acc_cfg.c1,
                 c2: acc_cfg.c2,
-                tab_sel,
-                tab_scroll,
-                tab_cx,
                 pool_upper_h,
                 cfg_epoch,
-                cursor_row_q,
                 dd_progress_q,
                 pan_hold,
                 anim_bucket,
@@ -4244,11 +4280,8 @@ impl App {
             let px = g.slot_canvas(crate::gles_present::ChromeSlot::Config);
             px.fill(0);
             crate::termview::paint_cfg_page_chrome(px, w, h, bottom_inset, 0, acc_cfg);
-            if let (Some(ts), Some(t)) = (tab_snap, th) {
-                t.lock()
-                    .unwrap()
-                    .paint_cfg_tab_bar(px, w, h, ts, 0, bottom_inset, acc_cfg);
-            }
+            // BAR-096 拆层：标签栏不再进配置槽（改由 TabBar 层绘制——
+            // 游标滑行只脏 0.65MB 小层）；此处留空 = 页背景，层画在其上
             // 双池（宪法 §五）：与标签栏同槽同 accent——内卡反转在涂装
             // 内部兑现（c2→c1），调用方无感。十九修 D8：烘焙恒画新代
             // 稳态（pan 剥离）——Page 域带内像素被 band fill 覆盖、
@@ -4275,10 +4308,89 @@ impl App {
                         acc_cfg,
                         crate::report::boot_ms() as u64,
                         pan_upper,
+                        true, // BAR-096：选中框由下池光标层合成期提供
                     );
                 }
             }
             g.slot_bake(crate::gles_present::ChromeSlot::Config);
+        }
+        // BAR-096 拆层烘焙（帧饥饿根治）：标签栏层 + 下池光标层——
+        // 各持小画布（标签栏 屏宽×TAB_LAYER_H ≈0.65MB / 光标 池内容宽×
+        // 行高 ≈0.69MB）；动画期只脏这两层，替代配置槽每次 14MB 全页
+        // 重光栅+上传（draw_avg 47ms → 21fps 的三路真凶：光标/游标/池高）
+        if cfg_visible {
+            if let (Some(ts), Some(t)) = (tab_snap, th) {
+                use std::hash::{Hash, Hasher};
+                let tw = w;
+                let thh = crate::ui::tab_bar::TAB_LAYER_H;
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                for tb in &ts.tabs {
+                    tb.hash(&mut hasher);
+                }
+                for p in &ts.colors {
+                    (p.c1, p.c2).hash(&mut hasher);
+                }
+                let tabs_hash = hasher.finish();
+                let ls = ts.line_span.unwrap_or((0, 0));
+                let sig = TabBarSig {
+                    w: tw,
+                    layer_h: thh,
+                    sel: ts.selected as u32,
+                    scroll: ts.scroll_px as i32,
+                    cx_q: (ts.cursor_x * 64.0).round() as i32,
+                    c1: acc_cfg.c1,
+                    c2: acc_cfg.c2,
+                    line_span: (ls.0 as i32, ls.1 as i32),
+                    tabs_hash,
+                };
+                if sigs.tabbar.feed(sig) {
+                    g.set_slot_dims(crate::gles_present::ChromeSlot::TabBar, tw, thh);
+                    let bx = g.slot_canvas(crate::gles_present::ChromeSlot::TabBar);
+                    bx.fill(0);
+                    t.lock().unwrap().paint_tab_bar_layer(
+                        bx,
+                        tw,
+                        thh,
+                        i64::from(crate::ui::tab_bar::content_origin().1),
+                        ts,
+                        acc_cfg,
+                    );
+                    g.slot_bake(crate::gles_present::ChromeSlot::TabBar);
+                }
+            }
+            if let (Some(ps), Some(cs), Some(t)) = (pool_snap, cfg_snap, th) {
+                use crate::ui::cfg_page as cp;
+                let cw = ps
+                    .lower
+                    .w
+                    .saturating_sub((cp::POOL_CONTENT_INSET * 2) as u32);
+                let chh = cp::LOWER_ROW_H;
+                let px0 = ps.lower.x + cp::POOL_CONTENT_INSET;
+                let stride = cp::LOWER_ROW_H as i64 + cp::ROW_GAP;
+                let py0 = ps.lower.y
+                    + cp::POOL_CONTENT_INSET
+                    + (cs.cursor_row * stride as f32).round() as i64;
+                let page_denom =
+                    (i64::from(w.saturating_sub(1)) + i64::from(h.saturating_sub(1))).max(1);
+                let sig = CursorSig {
+                    w: cw,
+                    h: chh,
+                    c1: acc_cfg.c1,
+                    c2: acc_cfg.c2,
+                    px: px0 as i32,
+                    py: py0 as i32,
+                    denom: page_denom,
+                };
+                if sigs.cursor.feed(sig) {
+                    g.set_slot_dims(crate::gles_present::ChromeSlot::LowerCursor, cw, chh);
+                    let cxp = g.slot_canvas(crate::gles_present::ChromeSlot::LowerCursor);
+                    cxp.fill(0);
+                    t.lock()
+                        .unwrap()
+                        .paint_lower_cursor_layer(cxp, cw, chh, px0, py0, page_denom, acc_cfg);
+                    g.slot_bake(crate::gles_present::ChromeSlot::LowerCursor);
+                }
+            }
         }
         // 文件树槽（§五B 三公民）：同规——画布恒靠泊位（ft_off=0）
         if ft_visible && sigs.filetree.feed((w, h, ime, bar_h, acc_ft.c1, acc_ft.c2)) {
@@ -4448,6 +4560,41 @@ impl App {
         // 平移遥测（BAR-092 观测升级：逐帧位置对账，用户终验实报
         // 「新内容不跟随/过冲」——涂装无法自证的合成期，位置先行）
         let pan_comp = Self::pan_composite(cfg_snap, pool_snap, w);
+        // BAR-096 拆层位置（合成期唯一位置源）：标签栏层（静止，随
+        // cfg_off——十八修语义标签不进平移带）+ 下池光标层（实时缓动位；
+        // Page 平移期另给旧代位做带内双代）。越池底/池外不画（与整页
+        // 涂装同判据）
+        let layered = {
+            let mut lp = crate::gles_present::LayeredPlace::default();
+            if cfg_visible {
+                lp.tabbar = Some((0.0, crate::ui::tab_bar::content_origin().1 as f32));
+                if let (Some(ps), Some(cs)) = (pool_snap, cfg_snap) {
+                    use crate::ui::cfg_page as cp;
+                    if !cs.rows.is_empty() && ps.lower.w > (cp::POOL_CONTENT_INSET * 2) as u32 {
+                        let stride = (cp::LOWER_ROW_H as i64 + cp::ROW_GAP) as f32;
+                        let cx = (ps.lower.x + cp::POOL_CONTENT_INSET) as f32;
+                        let cy = ps.lower.y as f32
+                            + cp::POOL_CONTENT_INSET as f32
+                            + (cs.cursor_row * stride).round();
+                        if cy + f32::from(cp::LOWER_ROW_H as u16)
+                            <= (ps.lower.y + ps.lower.h as i64) as f32
+                        {
+                            lp.cursor = Some((cx, cy));
+                        }
+                        if let Some(pan) = cs.pan.as_ref()
+                            && pan.scope == cp::PanScope::Page
+                        {
+                            let ox = (pan.old.pool.lower.x + cp::POOL_CONTENT_INSET) as f32;
+                            let oy = pan.old.pool.lower.y as f32
+                                + cp::POOL_CONTENT_INSET as f32
+                                + (pan.old.cursor_row * stride).round();
+                            lp.cursor_old = Some((ox, oy));
+                        }
+                    }
+                }
+            }
+            lp
+        };
         if let Some(pc) = &pan_comp {
             let (po_v, po_b) = g.slot_flags(crate::gles_present::ChromeSlot::PanOld);
             let (pm_v, pm_b) = g.slot_flags(crate::gles_present::ChromeSlot::PanMove);
@@ -4489,6 +4636,7 @@ impl App {
             ft_extra.dy,
             pt_extra.dy,
             pan_comp,
+            layered,
         );
         ai_layout
     }
@@ -4601,7 +4749,7 @@ impl App {
         let Some(g) = &mut self.gfx else { return };
         // 配置卡标签栏快照（宪法 §四）：视口宽按真实屏宽逐帧纠（捏合/
         // 旋转后内容带宽度变）；弹簧读数随快照——游标动画帧自带新值
-        let tab_snap = self.tab_bar.as_ref().map(|b| {
+        let mut tab_snap = self.tab_bar.as_ref().map(|b| {
             let mut g2 = b.lock().unwrap();
             if let Some(win) = &self.window {
                 g2.set_viewport_w(crate::ui::tab_bar::content_viewport_w(
@@ -4650,6 +4798,11 @@ impl App {
             }
             g3.layout(crate::report::boot_ms() as u64)
         });
+        // BAR-096 拆层：标签栏层画布不知屏高/键盘 inset——底线 span
+        // （池区左右内缘）由壳层补进快照（层画布只画自己那块）
+        if let (Some(ts), Some(ps)) = (tab_snap.as_mut(), pool_snap.as_ref()) {
+            ts.line_span = Some((ps.upper.x, ps.upper.x + i64::from(ps.upper.w)));
+        }
         // 配置页内容快照（三层目录）：涂装/命中同一份（D9；十五修：
         // 吃 now——光标弹簧/下拉进度是时间函数）
         let cfg_snap = self

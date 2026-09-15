@@ -284,6 +284,7 @@ pub fn dump_now(dir: &str) {
                                     acc_of(Panel::Config),
                                     crate::report::boot_ms() as u64,
                                     false,
+                                    false, // CPU 重画自带光标（BAR-096 层只走 GLES）
                                 );
                             }
                         }

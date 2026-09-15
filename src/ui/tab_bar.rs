@@ -31,6 +31,10 @@ use crate::ui::accent::{AccentPair, FALLBACK};
 /// 标签行高 = 2 格（§七 相对比例条款；2026-09-12 真机实测拍板：
 /// 1 格太扁——24px 字贴边，2 格留白才像可点目标；咬格不破，不用 2.5）
 pub const TAB_ROW_H: u32 = CELL_H * 2;
+/// 标签栏**层**画布高（BAR-096 拆槽）= 标签行高 + 底线带余量 8px——
+/// 层只覆盖标签行区域（y 原点 = content_origin().1），游标滑行只脏
+/// 这一层（≈0.65MB vs 配置槽全页 14MB）
+pub const TAB_LAYER_H: u32 = TAB_ROW_H + 8;
 /// 标签文字两侧 padding 各 1 格
 pub const TAB_PAD_X: u32 = CELL_W;
 /// 标签间距 1 格
@@ -241,7 +245,8 @@ impl TabBar {
         self.cursor_from + (target - self.cursor_from) * crate::ui::fx_ease::ease_in_out_cubic(t)
     }
 
-    /// 涂装快照（壳层逐帧/值守倒帧取数；tabs/colors 克隆——涂装无权碰状态）
+    /// 涂装快照（壳层逐帧/值守倒帧取数；tabs/colors 克隆——涂装无权碰状态）。
+    /// line_span 由壳层补（池区几何要屏高/键盘 inset，状态核不知）
     pub fn snap(&self, now_ms: u64) -> TabBarSnap {
         TabBarSnap {
             tabs: self.tabs.clone(),
@@ -249,6 +254,7 @@ impl TabBar {
             scroll_px: self.scroll_px,
             cursor_x: self.cursor_x(now_ms),
             colors: self.colors.clone(),
+            line_span: None,
         }
     }
 }
@@ -261,6 +267,9 @@ pub struct TabBarSnap {
     pub scroll_px: i64,
     pub cursor_x: f32,
     pub colors: Vec<AccentPair>,
+    /// 底线 x 起止（池区左右内缘，屏像素）——BAR-096 拆层后层画布
+    /// 不知屏高/键盘 inset，此维由壳层每帧填（缺省 = 内容带）
+    pub line_span: Option<(i64, i64)>,
 }
 
 /// 标签矩形序列（自由函数版：涂装侧从快照算，状态侧从 self 算——

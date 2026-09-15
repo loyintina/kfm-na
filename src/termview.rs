@@ -715,7 +715,7 @@ fn paint_rect_ring(
 /// 无边框组件（十一修形态②「只有左竖线」退役）。
 /// clip = Y 向裁剪带（上池滚动出池内缘断墨）。
 #[allow(clippy::too_many_arguments)]
-fn paint_row_frame(
+fn paint_row_frame_gradref(
     frame: &mut Frame<'_>,
     x: i64,
     y: i64,
@@ -723,8 +723,11 @@ fn paint_row_frame(
     rh: u32,
     sel: bool,
     accent: crate::ui::accent::AccentPair,
-    denom: i64,
     clip: (i64, i64),
+    // 渐变参照（x 偏移, y 偏移, 分母）——BAR-096 拆层保真：小画布上的
+    // 框必须采出「它在页上原位」的颜色（偏移=层在页上的原点、分母=
+    // 页尺）；整页内绘制传 (0, 0, denom) 即恒等
+    grad_ref: (i64, i64, i64),
 ) {
     const THIN: i64 = 3; // 细边宽（左粗：细 ≈ 3:1）
     const BAR_L: i64 = 10; // 左粗竖线宽（六修标定 10px）
@@ -760,15 +763,43 @@ fn paint_row_frame(
             }
             if sel && rr_sdf((xx - ix) as f32 + 0.5, (yy - iy) as f32 + 0.5, iw, ih, ir) >= 0.0 {
                 // 选中框环带：颜色全程 = 渐变采样 α255（只渐形状不渐色）
-                let grad = ring_gradient_rgb(accent.c1, accent.c2, xx, yy, denom);
+                let grad = ring_gradient_rgb(
+                    accent.c1,
+                    accent.c2,
+                    xx + grad_ref.0,
+                    yy + grad_ref.1,
+                    grad_ref.2,
+                );
                 frame.blend_px(xx as u32, yy as u32, grad, 255);
                 continue;
             }
             // 内芯（或未选中整剪影）= 渐变暗底不透明直出（十二修 §三）
-            frame.buf[yy as usize * fw as usize + xx as usize] =
-                frame_bg_rgb(accent.c1, accent.c2, xx, yy, denom);
+            frame.buf[yy as usize * fw as usize + xx as usize] = frame_bg_rgb(
+                accent.c1,
+                accent.c2,
+                xx + grad_ref.0,
+                yy + grad_ref.1,
+                grad_ref.2,
+            );
         }
     }
+}
+
+/// 三级框行涂装（源签名薄包装）：渐变参照 = 画布自身尺——整页内绘制
+/// 语义与历史逐像素一致；拆层绘制走 paint_row_frame_gradref 显式给参照
+#[allow(clippy::too_many_arguments)]
+fn paint_row_frame(
+    frame: &mut Frame<'_>,
+    x: i64,
+    y: i64,
+    rw: u32,
+    rh: u32,
+    sel: bool,
+    accent: crate::ui::accent::AccentPair,
+    denom: i64,
+    clip: (i64, i64),
+) {
+    paint_row_frame_gradref(frame, x, y, rw, rh, sel, accent, clip, (0, 0, denom));
 }
 
 /// 均匀细框涂装（宪法 §五 十一修新立：**非池行场合的通用细框**，不属
@@ -2615,52 +2646,55 @@ impl TermView {
         }
     }
 
-    /// 配置卡标签栏涂装（主题宪法 §四，2026-09-13 八修换案、十一修
-    /// 随机色体系）：**填色标签页组件**（paint_tab_chip：无边框色块、
-    /// 上两角圆角下缘直边；**每标签独立双色吃快照色列**——选中 = 上
-    /// 2/3 c1 + 下 1/3 c2 满填两截短渐变 + 文字换深色反差，未选中 =
-    /// 上/下 1/3 条带薄态 + 中 1/3 6% 白底 + 文字 0.5 白）+ 标签行
-    /// 下缘紧挨一条**池区同宽的 1px 细线**（§四 底线组件两模式之
-    /// 「配合标签」：整根 = 选中标签 c2 纯色 α255——选中块下 1/3 与
-    /// 底线同色一体；色列空 = 兜底 accent.c2）。
+    /// 标签栏**层**涂装（BAR-096 拆槽；原整页版退役）：层画布 =
+    /// 屏宽 × 标签区高（TAB_LAYER_H），y 原点 = 标签行顶
+    /// （content_origin().1）——内容与整页版逐像素等价（仅 y 平移一个
+    /// 常量），**游标滑行只脏这一层**（0.65MB vs 配置槽 14MB ≈ 省 22 倍，
+    /// 帧饥饿根治件一）。恒靠泊位（cfg_off 在合成期 placement）。
+    ///
+    /// 主题宪法 §四，2026-09-13 八修换案、十一修随机色体系）：**填色
+    /// 标签页组件**（paint_tab_chip：无边框色块、上两角圆角下缘直边；
+    /// **每标签独立双色吃快照色列**——选中 = 上 2/3 c1 + 下 1/3 c2 满填
+    /// 两截短渐变 + 文字换深色反差，未选中 = 上/下 1/3 条带薄态 + 中
+    /// 1/3 6% 白底 + 文字 0.5 白）+ 标签行下缘紧挨一条**池区同宽的
+    /// 1px 细线**（§四 底线组件两模式之「配合标签」：整根 = 选中标签
+    /// c2 纯色 α255；色列空 = 兜底 accent.c2）。
     /// 选中块 x 吃快照 cursor_x（弹簧滑块；文字不随弹簧，各就各位）。
     /// 空态也画底线：装修不是内容（与页环同规）
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn paint_cfg_tab_bar_impl(
+    pub(crate) fn paint_tab_bar_layer(
         &self,
         buf: &mut [u32],
-        w: u32,
-        h: u32,
+        cw: u32,
+        ch: u32,
+        y_shift: i64,
         snap: &crate::ui::tab_bar::TabBarSnap,
-        cfg_off_x: i32,
-        bottom_inset: u32,
         accent: crate::ui::accent::AccentPair,
     ) {
-        if w == 0 || h == 0 {
+        if cw == 0 || ch == 0 {
             return;
         }
-        let mut frame = Frame { buf, w, h };
-        let off = i64::from(cfg_off_x);
-        let (ox, oy) = crate::ui::tab_bar::content_origin();
-        // 内容带（随面板平移）——标签块/底线/文字同一条裁剪带
-        // （眼手同尺：带外的东西用户看不见也点不着）
-        let clip_l = i64::from(ox) + off;
-        let clip_r =
-            i64::from(w) - i64::from(AI_PAGE_FRAME_MARGIN + AI_PAGE_FRAME_W + CELL_W) + off;
+        let mut frame = Frame { buf, w: cw, h: ch };
+        let (ox, oy_abs) = crate::ui::tab_bar::content_origin();
+        // y_shift = 绘制缓冲的 y 原点相对标签行顶的位置：GLES 层缓冲从
+        // 标签行顶起算（传内容原点 55），softbuffer 兜底整页缓冲传 0
+        let oy = y_shift;
+        // 内容带（x 向）——层恒靠泊，off=0；带外的东西用户看不见也点不着
+        let clip_l = i64::from(ox);
+        let clip_r = i64::from(cw) - i64::from(AI_PAGE_FRAME_MARGIN + AI_PAGE_FRAME_W + CELL_W);
         let rects = crate::ui::tab_bar::rects_of(&snap.tabs, snap.scroll_px);
         // 标签块先画（装修在文字之下）：选中块随弹簧 x，未选中各就各位；
         // 色源 = 快照色列该标签自己的双色（缺位兜底页 accent，§四 十一修）
         for (i, r) in rects.iter().enumerate() {
             let cx = if i == snap.selected {
-                snap.cursor_x as i64 + off
+                snap.cursor_x as i64
             } else {
-                r.x + off
+                r.x
             };
             let pair = snap.colors.get(i).copied().unwrap_or(accent);
             paint_tab_chip(
                 &mut frame,
                 cx,
-                r.y,
+                r.y - oy,
                 r.w,
                 r.h,
                 i == snap.selected,
@@ -2670,17 +2704,21 @@ impl TermView {
             );
         }
         // 底线：1px 细线，池区同宽，紧挨标签行下缘（空态也画）——
-        // 配合标签模式：整根 = 选中标签 c2 纯色 α255（色列空 = accent.c2）
+        // 配合标签模式：整根 = 选中标签 c2 纯色 α255（色列空 = accent.c2）。
+        // 层宽 = 屏宽，池区几何仍需屏高—底账（bottom_inset 由壳层喂）
         let line_c = snap
             .colors
             .get(snap.selected)
             .map(|p| p.c2)
             .unwrap_or(accent.c2);
-        let pa = crate::ui::dual_pool::pool_area(w, h, bottom_inset);
-        let uy = i64::from(oy) + i64::from(crate::ui::tab_bar::TAB_ROW_H);
-        if uy >= 0 && uy < i64::from(h) {
-            for ax in (pa.x + off)..(pa.x + off + i64::from(pa.w)) {
-                if ax < 0 || ax >= i64::from(w) || ax < clip_l || ax >= clip_r {
+        // 底线世界坐标 = 内容原点 y + 标签行高；绘制 y 再减 y_shift
+        // （层版：55+110−55 = 110；整页版：165−0 = 165——两版等价）
+        let uy = i64::from(oy_abs) + i64::from(crate::ui::tab_bar::TAB_ROW_H) - y_shift;
+        if uy < i64::from(ch) {
+            // 底线 x 起止吃池区左右内缘（层坐标 = 线坐标 − oy 无关 x）
+            let pa = snap.line_span.unwrap_or((clip_l, clip_r)); // 壳层喂池区带；缺省=内容带
+            for ax in pa.0..pa.1 {
+                if ax < 0 || ax >= i64::from(cw) || ax < clip_l || ax >= clip_r {
                     continue;
                 }
                 frame.blend_px(ax as u32, uy as u32, line_c, 255);
@@ -2696,8 +2734,8 @@ impl TermView {
             self.draw_text_centered(
                 &mut frame,
                 &snap.tabs[i],
-                r.x + off,
-                r.y,
+                r.x,
+                r.y - oy,
                 r.w,
                 r.h,
                 TAB_TEXT_PX,
@@ -2705,6 +2743,41 @@ impl TermView {
                 clip_l,
             );
         }
+    }
+
+    /// 下池光标**层**涂装（BAR-096 拆槽，帧饥饿根治件二）：层画布 =
+    /// 池内容宽 × 下池行高，内容 = 选中全包框满态铺满整层——
+    /// **框形状与行内容无关**，故层内容只随 accent/宽变（一次烘焙），
+    /// 位置（行号小数 → 像素 y）全部进合成期 placement：滑行逐帧零重烘
+    /// （原配置槽每帧 14MB 重光栅+上传）。
+    /// 渐变保真：grad_ref 吃「框在页上原位」的页坐标与页分母 → 与整页内
+    /// 绘制逐像素同色（BAR-096 保真条；颜色不随层画布尺漂移）
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn paint_lower_cursor_layer(
+        &self,
+        buf: &mut [u32],
+        cw: u32,
+        ch: u32,
+        page_x: i64,
+        page_y: i64,
+        page_denom: i64,
+        accent: crate::ui::accent::AccentPair,
+    ) {
+        if cw < 4 || ch < 4 {
+            return;
+        }
+        let mut frame = Frame { buf, w: cw, h: ch };
+        paint_row_frame_gradref(
+            &mut frame,
+            0,
+            0,
+            cw,
+            ch,
+            true,
+            accent,
+            (0, i64::from(ch)),
+            (page_x, page_y, page_denom),
+        );
     }
 
     /// 双池涂装（宪法 §五）：上池/下池两枚二级卡片框，paint_rect_ring
@@ -2779,6 +2852,9 @@ impl TermView {
         accent: crate::ui::accent::AccentPair,
         now_ms: u64,
         pan_upper_hold: bool,
+        // BAR-096 拆层：true = 选中全包框不由本画布画（改由下池光标层
+        // 合成期 placement——GLES 路径）；softbuffer 兜底传 false
+        skip_cursor: bool,
     ) {
         use crate::ui::cfg_page as cp;
         if w == 0 || h == 0 {
@@ -2819,6 +2895,7 @@ impl TermView {
                             pan.old.cursor_row,
                             pan.old.accent,
                             off,
+                            skip_cursor,
                         );
                         self.paint_pool_upper(
                             &mut fa,
@@ -2840,6 +2917,7 @@ impl TermView {
                             page.cursor_row,
                             accent,
                             off,
+                            skip_cursor,
                         );
                         self.paint_pool_upper(
                             &mut fb,
@@ -2869,6 +2947,7 @@ impl TermView {
                     page.cursor_row,
                     accent,
                     off,
+                    skip_cursor,
                 );
                 let band = upper_pan_band(&ps.upper, off);
                 let travel = (band.2 - band.0) + cp::PAN_GAP_UPPER;
@@ -2912,6 +2991,7 @@ impl TermView {
                     page.cursor_row,
                     accent,
                     off,
+                    skip_cursor,
                 );
                 // 十九修 D8：Upper 平移 hold 期上池行不进主画布——带内
                 // 静物=池内芯渐变（vc425 涂装域同语义：行只活在双代里，
@@ -2978,6 +3058,7 @@ impl TermView {
 
     /// 下池块（十七修抽出）：行循环（未选中态）→ 光标选中框 → 文字三遍
     /// 顺序不动（BAR-089 先框后字钉保持）
+    #[allow(clippy::too_many_arguments)]
     fn paint_pool_lower(
         &self,
         frame: &mut Frame<'_>,
@@ -2986,6 +3067,8 @@ impl TermView {
         cursor_row: f32,
         accent: crate::ui::accent::AccentPair,
         off: i64,
+        // BAR-096 拆层：true = 选中全包框不由本画布画（下池光标层承担）
+        skip_cursor: bool,
     ) {
         use crate::ui::cfg_page as cp;
         let title_fg = 0x00D9_D9D9; // 0.85 白（§2.3 标题档）
@@ -3013,9 +3096,11 @@ impl TermView {
             paint_row_frame(frame, rx, r.y, r.w, r.h, false, accent, denom, no_clip);
         }
 
-        // 十五修 §五：选中全包框吃光标弹簧瞬时值（行号小数 → 像素）——
-        // 与 lower_row_rect 同一份几何（内缩/步进同源），只是 y 吃滑行值
-        if !rows.is_empty() {
+        // 十五修 §五：选中全包框吃光标缓动瞬时值（行号小数 → 像素）——
+        // 与 lower_row_rect 同一份几何（内缩/步进同源），只是 y 吃滑行值。
+        // BAR-096 拆层：GLES 路径（skip_cursor）不在此画——下池光标层
+        // 合成期 placement 承担，滑行不再脏本画布
+        if !rows.is_empty() && !skip_cursor {
             let stride = cp::LOWER_ROW_H as i64 + cp::ROW_GAP;
             let cy = lower.y + cp::POOL_CONTENT_INSET + (cursor_row * stride as f32).round() as i64;
             let crx = lower.x + cp::POOL_CONTENT_INSET + off;
@@ -5044,6 +5129,32 @@ pub trait TermEmu: Send {
         accent: crate::ui::accent::AccentPair,
     );
     /// 配置卡双池内容涂装（宪法 §五 目录语义，2026-09-13 三层目录）：
+    /// 标签栏**层**涂装（BAR-096 拆槽，考题/壳层门面）：层缓冲 = 屏宽 ×
+    /// TAB_LAYER_H，y_shift = 内容原点（层坐标）；整页语义传 0
+    #[allow(clippy::too_many_arguments)]
+    fn paint_tab_bar_layer(
+        &self,
+        buf: &mut [u32],
+        cw: u32,
+        ch: u32,
+        y_shift: i64,
+        snap: &crate::ui::tab_bar::TabBarSnap,
+        accent: crate::ui::accent::AccentPair,
+    );
+    /// 下池光标**层**涂装（BAR-096 拆槽，考题/壳层门面）：层缓冲 =
+    /// 池内容宽 × 下池行高；page_x/page_y/page_denom = 框在页上原位坐标
+    /// 与页渐变分母（保真参照）
+    #[allow(clippy::too_many_arguments)]
+    fn paint_lower_cursor_layer(
+        &self,
+        buf: &mut [u32],
+        cw: u32,
+        ch: u32,
+        page_x: i64,
+        page_y: i64,
+        page_denom: i64,
+        accent: crate::ui::accent::AccentPair,
+    );
     /// 下池子目录行表 + 上池联动下拉触发器/字段行/下拉 panel。
     /// cfg_off_x 语义同 paint_cfg_dual_pool；画在双池框之上。
     /// now_ms = 动画时钟（十四修 §六：跳框动效预览的相位源；无动画
@@ -5062,6 +5173,9 @@ pub trait TermEmu: Send {
         accent: crate::ui::accent::AccentPair,
         now_ms: u64,
         pan_upper_hold: bool,
+        // BAR-096 拆层：true = 选中全包框由下池光标层提供（GLES）；
+        // softbuffer 兜底传 false（整页自带光标）
+        skip_cursor: bool,
     );
     /// AI 外显 chrome（ai-presence，android_app rasterize 调用方）：
     /// AI 页真对话渲染（page=AiFullscreen 时代替终端网格）/ 雾状光球 sprite。
@@ -5220,7 +5334,11 @@ impl TermEmu for TermView {
         bottom_inset: u32,
         accent: crate::ui::accent::AccentPair,
     ) {
-        TermView::paint_cfg_tab_bar_impl(self, buf, w, h, snap, cfg_off_x, bottom_inset, accent)
+        // BAR-096 拆层：整页语义 = y_shift 0（标签行顶就是页坐标）——
+        // cfg_off 由合成期 placement 承担、bottom_inset 经 snap.line_span
+        // 由壳层预填（层缓冲不知屏高）
+        let _ = (cfg_off_x, bottom_inset);
+        TermView::paint_tab_bar_layer(self, buf, w, h, 0, snap, accent)
     }
     fn paint_cfg_dual_pool(
         &self,
@@ -5234,6 +5352,31 @@ impl TermEmu for TermView {
         TermView::paint_cfg_dual_pool_impl(self, buf, w, h, snap, cfg_off_x, accent)
     }
     #[allow(clippy::too_many_arguments)]
+    fn paint_tab_bar_layer(
+        &self,
+        buf: &mut [u32],
+        cw: u32,
+        ch: u32,
+        y_shift: i64,
+        snap: &crate::ui::tab_bar::TabBarSnap,
+        accent: crate::ui::accent::AccentPair,
+    ) {
+        TermView::paint_tab_bar_layer(self, buf, cw, ch, y_shift, snap, accent)
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn paint_lower_cursor_layer(
+        &self,
+        buf: &mut [u32],
+        cw: u32,
+        ch: u32,
+        page_x: i64,
+        page_y: i64,
+        page_denom: i64,
+        accent: crate::ui::accent::AccentPair,
+    ) {
+        TermView::paint_lower_cursor_layer(self, buf, cw, ch, page_x, page_y, page_denom, accent)
+    }
+    #[allow(clippy::too_many_arguments)]
     fn paint_cfg_pool_content(
         &self,
         buf: &mut [u32],
@@ -5245,6 +5388,7 @@ impl TermEmu for TermView {
         accent: crate::ui::accent::AccentPair,
         now_ms: u64,
         pan_upper_hold: bool,
+        skip_cursor: bool,
     ) {
         TermView::paint_cfg_pool_content_impl(
             self,
@@ -5257,6 +5401,7 @@ impl TermEmu for TermView {
             accent,
             now_ms,
             pan_upper_hold,
+            skip_cursor,
         )
     }
     #[allow(clippy::too_many_arguments)]
