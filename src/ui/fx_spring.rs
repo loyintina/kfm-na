@@ -189,3 +189,15 @@ pub fn fx_frame_due(now_ms: u64) -> bool {
 pub fn panel_frame_due(now_ms: u64) -> bool {
     fx_frame_due(now_ms)
 }
+
+/// 池区动画帧泵产帧判定（BAR-098，2026-09-16 真机残影定案）：**活性翻
+/// false 那圈的收敛补终帧不许被 33ms 节流吃掉**。病：活性期刚画过一帧
+/// （距上帧 <33ms）时节流把补帧跳过，而活性探针同瞬关门 → 末帧永是
+/// t<1 的中帧——Page 平移带内新代（PanMove@new_dx）与下池光标层冻在
+/// 残余偏移（120Hz ≈13px / 60Hz ≈44px / 掉帧更狠）= 真机「选中行残字
+/// +池框右缘探出」的病根；redroid 帧饥饿末帧天然落在贴死之后 = 判卷
+/// 盲区（云安卓 A/B 两版「逐像素一致」全是贴死帧，咬不到这病）。
+/// 契约：翻 false（prev&&!curr）恒产帧；否则 33ms 节流。
+pub fn cfg_fx_frame_due(fx_prev: bool, fx_curr: bool, since_last_ms: u64) -> bool {
+    (fx_prev && !fx_curr) || since_last_ms >= 33
+}

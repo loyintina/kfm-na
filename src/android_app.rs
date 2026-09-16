@@ -5245,7 +5245,12 @@ impl ApplicationHandler for App {
             // 收敛/盖住零帧——无动画零成本纪律同 §四。
             // 收敛补终帧(ui-base §四,2026-09-14 用户实机抓下拉余影):
             // 活性翻 false 那圈必须再脏一帧擦终态,否则屏幕定格在收敛
-            // 前最后一帧(进度≈0.02 的一行黑余影)——闸 = prev||curr
+            // 前最后一帧(进度≈0.02 的一行黑余影)——闸 = prev||curr。
+            // BAR-098(2026-09-16 真机残影定案):补终帧不许被 33ms 节流
+            // 吃掉——活性期刚画过一帧(<33ms)就被跳过 = 末帧永是 t<1
+            // 的平移中帧(带内新代 PanMove@new_dx + 光标层冻在残余偏
+            // 移,真机「选中行残字/池框探出」病根),判定收纯函数
+            // fx_spring::cfg_fx_frame_due(钉在 fx_spring_spec)
             let cfg_fx = Self::cfg_anim_modal_open() || Self::cfg_fx_active();
             static CFG_FX_PREV: std::sync::atomic::AtomicBool =
                 std::sync::atomic::AtomicBool::new(false);
@@ -5255,7 +5260,11 @@ impl ApplicationHandler for App {
             {
                 static LAST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
                 let now = crate::report::boot_ms() as u64;
-                if now.saturating_sub(LAST.load(std::sync::atomic::Ordering::Relaxed)) >= 33 {
+                if crate::ui::fx_spring::cfg_fx_frame_due(
+                    cfg_fx_prev,
+                    cfg_fx,
+                    now.saturating_sub(LAST.load(std::sync::atomic::Ordering::Relaxed)),
+                ) {
                     LAST.store(now, std::sync::atomic::Ordering::Relaxed);
                     self.dirty = true;
                 }

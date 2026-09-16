@@ -586,3 +586,21 @@ fn spec_pt缝_replay中继_入账() {
     );
     seam::release_parser_panel_offset_x();
 }
+
+#[test]
+fn spec_bar098_池区泵_落停补帧不吃节流钉() {
+    // BAR-098（2026-09-16 真机残影定案）：活性翻 false 那圈的收敛补终帧
+    // 必须无视 33ms 节流恒产帧——被吃掉 = 末帧永是 t<1 的平移中帧
+    // （PanMove@new_dx + 光标层冻在残余偏移 = 选中行残字/池框探出）
+    use kfm_na::ui::fx_spring::cfg_fx_frame_due;
+    // 翻 false 且距上帧仅 8ms（活性期刚画过一帧）——仍必须产帧擦终态
+    assert!(
+        cfg_fx_frame_due(true, false, 8),
+        "活性翻 false 那圈被节流吃掉 = 末帧定格中帧（BAR-098 病根）"
+    );
+    // 活性期正常节流：<33ms 不产，≥33ms 产
+    assert!(!cfg_fx_frame_due(true, true, 8), "活性期 8ms 不许产帧");
+    assert!(cfg_fx_frame_due(true, true, 33), "活性期 33ms 到点必产");
+    // 翻 false 且距上帧已久——照样产（原节流路也放行的情形，防过修）
+    assert!(cfg_fx_frame_due(true, false, 50), "翻 false 久未画必产");
+}
