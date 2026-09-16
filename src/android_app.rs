@@ -437,6 +437,10 @@ struct CursorSig {
     px: i32,
     py: i32,
     denom: i64,
+    /// BAR-096 修：层内画选中行文字（复刻 BAR-089「先框后字」）——
+    /// 行表代际/聚焦行变即重烘（小画布便宜；漏维 = 文字不跟选中行走）
+    focus: u32,
+    epoch: u64,
 }
 
 /// 上层槽 sig（derive PartialEq 深比较——BarSnap/PresenceSnap 均已
@@ -4380,14 +4384,26 @@ impl App {
                     px: px0 as i32,
                     py: py0 as i32,
                     denom: page_denom,
+                    focus: cs.focus as u32,
+                    epoch: cs.epoch,
                 };
                 if sigs.cursor.feed(sig) {
                     g.set_slot_dims(crate::gles_present::ChromeSlot::LowerCursor, cw, chh);
                     let cxp = g.slot_canvas(crate::gles_present::ChromeSlot::LowerCursor);
                     cxp.fill(0);
-                    t.lock()
-                        .unwrap()
-                        .paint_lower_cursor_layer(cxp, cw, chh, px0, py0, page_denom, acc_cfg);
+                    // 层内画选中行文字（框在文字下）——框芯不透明（非纯黑即
+                    // 不透明），层在配置槽之上 → 文字必须随框同层（BAR-089
+                    // 修法复刻；否则 accent 亮时选中行文字被框芯盖没）
+                    t.lock().unwrap().paint_lower_cursor_layer(
+                        cxp,
+                        cw,
+                        chh,
+                        px0,
+                        py0,
+                        page_denom,
+                        acc_cfg,
+                        cs.rows.get(cs.focus),
+                    );
                     g.slot_bake(crate::gles_present::ChromeSlot::LowerCursor);
                 }
             }

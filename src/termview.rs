@@ -2762,6 +2762,7 @@ impl TermView {
         page_y: i64,
         page_denom: i64,
         accent: crate::ui::accent::AccentPair,
+        row: Option<&crate::ui::cfg_page::RowView>,
     ) {
         if cw < 4 || ch < 4 {
             return;
@@ -2778,6 +2779,38 @@ impl TermView {
             (0, i64::from(ch)),
             (page_x, page_y, page_denom),
         );
+        // BAR-096 拆层修（回归 BAR-089 的历史修法）：**选中行文字必须画在
+        // 框芯之上**——框芯是不透明渐变暗底（mark_chrome_alpha：非纯黑即
+        // 不透明），层画在配置槽之上 → 不在此补文字，accent 亮时选中行文字
+        // 被框芯盖没（用户真机实录「框把文字盖住」；redroid 那次看着正常
+        // 只因 accent 暗、框芯恰为纯黑被判透明）。尺与 paint_pool_lower 同源
+        // （title_band 90 / title 36 / meta 30 / 内缩 27 / faux-bold 双画）
+        if let Some(row) = row {
+            let title_fg = 0x00D9_D9D9;
+            let meta_fg = 0x0080_8080;
+            let title_band = 90u32;
+            let text_inset = 27.0;
+            self.draw_text_left_ex(
+                &mut frame, &row.title, 0, cw, 0, title_band, 36.0, title_fg, text_inset, None,
+            );
+            self.draw_text_left_ex(
+                &mut frame, &row.title, 1, cw, 0, title_band, 36.0, title_fg, text_inset, None,
+            );
+            if !row.meta.is_empty() && ch > title_band {
+                self.draw_text_left_ex(
+                    &mut frame,
+                    &row.meta,
+                    0,
+                    cw,
+                    title_band,
+                    ch - title_band,
+                    30.0,
+                    meta_fg,
+                    text_inset,
+                    None,
+                );
+            }
+        }
     }
 
     /// 双池涂装（宪法 §五）：上池/下池两枚二级卡片框，paint_rect_ring
@@ -5154,6 +5187,7 @@ pub trait TermEmu: Send {
         page_y: i64,
         page_denom: i64,
         accent: crate::ui::accent::AccentPair,
+        row: Option<&crate::ui::cfg_page::RowView>,
     );
     /// 下池子目录行表 + 上池联动下拉触发器/字段行/下拉 panel。
     /// cfg_off_x 语义同 paint_cfg_dual_pool；画在双池框之上。
@@ -5373,8 +5407,11 @@ impl TermEmu for TermView {
         page_y: i64,
         page_denom: i64,
         accent: crate::ui::accent::AccentPair,
+        row: Option<&crate::ui::cfg_page::RowView>,
     ) {
-        TermView::paint_lower_cursor_layer(self, buf, cw, ch, page_x, page_y, page_denom, accent)
+        TermView::paint_lower_cursor_layer(
+            self, buf, cw, ch, page_x, page_y, page_denom, accent, row,
+        )
     }
     #[allow(clippy::too_many_arguments)]
     fn paint_cfg_pool_content(
