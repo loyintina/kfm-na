@@ -68,6 +68,22 @@ ok "Android 已开机($SERIAL)"
 [[ $("$ADB" -s "$SERIAL" shell id -u | tr -d '\r') == "0" ]] || die "adbd root 失败"
 ok "adbd root 就位——闸门目录可直读直写"
 
+# ④.6 llkd 宿主恐慌引信拆除（2026-09-16 nz 线 12:45 内核恐慌根因通报
+# kimi-nz-kernel-panic-rootcause.md：redroid 内 llkd 检测 crash_dump64
+# 僵尸 600s，经 /proc/sysrq-trigger 故意 Panic **宿主**内核——特权
+# 容器爆炸半径实锤。容器内 stop/kill 均无效：服务 disabled 但 death
+# 即重生。拆除引信 = sysrq-trigger 绑定空文件，llkd 的 panic 写入落
+# 进 /data/local/tmp/sysrq-null；toybox mount 对 /dev/null 会误走
+# losetup，必须用普通文件。容器级挂载，重建容器后由本步幂等补挂）
+if ! "$ADB" -s "$SERIAL" shell 'su 0 grep -q " /proc/sysrq-trigger " /proc/mounts'; then
+    "$ADB" -s "$SERIAL" shell \
+        'su 0 sh -c "touch /data/local/tmp/sysrq-null && mount -o bind /data/local/tmp/sysrq-null /proc/sysrq-trigger"' \
+        || die "sysrq-trigger 绑空失败"
+    ok "llkd 宿主恐慌引信已拆除（sysrq-trigger → 空文件）"
+else
+    ok "sysrq-trigger 已在绑空状态"
+fi
+
 # ④.5 报表通道接力（2026-09-12）：adb reverse 数据面已死（adb 37.0.1 ↔
 # redroid12 adbd，注册成功但数据永不转发），改走 nc 接力：
 #   容器 127.0.0.1:8021 →(loop-relay)→ 172.18.0.1:8021 →(report-relay)→

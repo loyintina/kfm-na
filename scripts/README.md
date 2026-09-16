@@ -28,7 +28,10 @@
   `WITH_X86=1` 出 arm64+x86_64 胖包(redroid 云安卓用;不带开关=日常
   手机包,体积不变)。
 - `redroid-up.sh` — 云安卓(redroid)一键起场(幂等:binder 内核件 →
-  容器 → adb connect → 等 boot → adbd root → ④.5 报表接力保活)。
+  容器 → adb connect → 等 boot → adbd root → ④.6 llkd 宿主恐慌引信
+  拆除 → ④.5 报表接力保活)。④.6 由来:2026-09-16 nz 线 12:45 内核
+  恐慌根因通报——容器内 llkd 经 sysrq Panic 宿主内核,stop/kill 无效
+  (disabled 服务死亡即重生),引信拆除 = sysrq-trigger 绑空文件。
   起完后闸门走 adb 直读沙箱(无 sshd/无隧道,协议不变);判卷平台差异
   见 state.md redroid 条。
 - `redroid-report-relay.py` + `redroid-loop-relay.sh` — redroid 报表

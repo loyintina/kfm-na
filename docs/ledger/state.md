@@ -46,7 +46,14 @@
   driver '/dev/binder' could not be opened」→ 必须 `docker rm -f`
   重建容器（redroid-up.sh --recreate）；`wm size` 改分辨率后 app
   必须 force-stop 重开，否则布局停在旧尺寸缓存（设置页放大 2 倍
-  错位）。**顺带实证**：redroid 上 Page 平移 = 1 帧 t=0.000 后
+  错位）。**llkd 宿主恐慌引信已拆（2026-09-16 傍晚，nz 线 12:45
+  内核恐慌根因通报 kimi-nz-kernel-panic-rootcause.md）**：redroid
+  内 llkd 检测 crash_dump64 僵尸 600s 经 /proc/sysrq-trigger 故意
+  Panic 宿主内核；容器内 stop/kill 无效（disabled 服务死亡即重生），
+  拆除 = sysrq-trigger bind 绑空文件（toybox mount 对 /dev/null 误走
+  losetup，必须普通文件），已固化 redroid-up.sh ④.6 幂等步——
+  重建容器自动补挂；引爆腿已断，引信源（Z 态 600s）留管家线监控。
+  **顺带实证**：redroid 上 Page 平移 = 1 帧 t=0.000 后
   沉默 → 贴死帧直接落——「几帧同位置然后跳变」的极端版复现，
   与真机「结束闪烁」同根（pan_snap 贴死出 None，t=1.0 终点态
   无法表达为平移帧；机制根修 = BAR-099，见上条，当日修）。
