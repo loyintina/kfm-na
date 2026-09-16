@@ -4892,11 +4892,16 @@ impl App {
             if let (Some(chat), Some((total, fit))) = (&self.ai_chat, ai_layout) {
                 chat.scroll_sync_layout(total, fit);
             }
+            // 活性口径（2026-09-16 补 cfg_fx：池区平移/光标/下拉/池高
+            // 原不在记账面——anim-cap 点播触发只在 anim_run_start 消费，
+            // 池区动画不挂表 = 点播永不消费 = 池区动画无呈现帧仪器。
+            // 挂上后池区动画同享节奏账（panel-anim 行）与渲染源采样）
             crate::gles_present::note_anim_frame(
                 crate::ui::seam::ai_panel_offset_y_active()
                     || crate::ui::seam::config_panel_offset_x_active()
                     || crate::ui::seam::filetree_panel_offset_x_active()
-                    || crate::ui::seam::parser_panel_offset_x_active(),
+                    || crate::ui::seam::parser_panel_offset_x_active()
+                    || Self::cfg_fx_active(),
                 t0.elapsed(),
             );
             crate::gate::note_draw(t0.elapsed()); // 含 present 的全帧耗时
