@@ -3828,6 +3828,7 @@ impl App {
             // 隙底语义分域（十八修钉）：Page 间隙带=页背景（填）；
             // Upper 静物=稳态涂装的池内芯（不填，带外静物原样透出）
             clear_bg: p.scope == crate::ui::cfg_page::PanScope::Page,
+            scope_page: p.scope == crate::ui::cfg_page::PanScope::Page,
         })
     }
 
@@ -4217,50 +4218,57 @@ impl App {
             0
         };
         // 十九修 D8 平移升合成期两件（顺序敏感）：
-        // ①PanOld 捕获——平移起步帧把当前配置画布整幅拷过来 = 旧代
-        // 冻结封存（此刻画布还是旧代像素，必须抢在下面重烘焙之前）。
-        // 账键 = (epoch, scope, dir)：新账才捕（同账不重复 12MB 拷贝
-        // 上传），账清（贴死/离页）即释放
+        // ①PanOld 捕获——平移起步帧封存旧代（此刻配置槽纹理还是旧代像素，
+        // 必须抢在下面重烘焙之前）。BAR-100 零拷贝化：纹理互换代替
+        // 26MB 拷贝+13MB 重传（旧代像素本就在屏上纹理里，互换柄即封存）。
+        // 捕获源裁决 = pan_capture_src（纯函数有钉）：上一笔 Upper =
+        // 旧代行在上一笔 PanMove（配置槽是 hold 烘焙无上池行）；首笔或
+        // 上一笔 Page = 配置槽纹理即旧代（Page 域新代与配置槽同图）。
+        // 账键 = (epoch, scope, dir)：新账才捕，账清（贴死/离页）即释放
         let pan_now =
             cfg_snap.and_then(|cs| cs.pan.as_ref().map(|p| (cs.epoch, p.scope as u8, p.dir)));
         if let Some(k) = pan_now {
             if sigs.pan_cap != Some(k) {
-                // 旧代捕获接力：首笔从配置画布拷（旧代像素在此）；连环
-                // 平移（上一笔未清账）配置画布已是 hold 烘焙（Upper 无
-                // 上池行）——旧代的行在上一笔 PanMove 里，从它接
-                let src_slot = if sigs.pan_cap.is_some() {
-                    crate::gles_present::ChromeSlot::PanMove
-                } else {
-                    crate::gles_present::ChromeSlot::Config
+                let src_slot = match crate::ui::cfg_page::pan_capture_src(
+                    sigs.pan_cap
+                        .is_some_and(|pk| pk.1 == crate::ui::cfg_page::PanScope::Upper as u8),
+                ) {
+                    crate::ui::cfg_page::PanCaptureSrc::PanMove => {
+                        crate::gles_present::ChromeSlot::PanMove
+                    }
+                    crate::ui::cfg_page::PanCaptureSrc::Config => {
+                        crate::gles_present::ChromeSlot::Config
+                    }
                 };
-                let src = g.slot_canvas(src_slot).to_vec();
-                g.slot_canvas(crate::gles_present::ChromeSlot::PanOld)
-                    .copy_from_slice(&src);
-                g.slot_bake(crate::gles_present::ChromeSlot::PanOld);
-                // 新代滑动层（BAR-092 三咬：Upper hold 期配置槽无行，
-                // 新行必须独立成层——贴死闪现病灶的根治）
-                let pmx = g.slot_canvas(crate::gles_present::ChromeSlot::PanMove);
-                pmx.fill(0);
-                if let (Some(ps), Some(t), Some(cs)) = (pool_snap, th, cfg_snap) {
-                    let mut settled = cs.clone();
-                    settled.pan = None;
-                    t.lock()
-                        .unwrap()
-                        .paint_cfg_dual_pool(pmx, w, h, ps, 0, acc_cfg);
-                    t.lock().unwrap().paint_cfg_pool_content(
-                        pmx,
-                        w,
-                        h,
-                        ps,
-                        &settled,
-                        0,
-                        acc_cfg,
-                        crate::report::boot_ms() as u64,
-                        false,
-                        true, // BAR-096：选中框由下池光标层合成期提供
-                    );
+                g.slot_swap_tex(src_slot, crate::gles_present::ChromeSlot::PanOld);
+                // ②新代滑动层——仅 Upper 域重画（配置槽 hold 烘焙无上池
+                // 行，新行必须独立成层——BAR-092 三咬「新内容不跟随，贴死
+                // 闪现」的根治）；Page 域新代与配置槽同图，合成期复用配置
+                // 槽纹理（BAR-100，整页重画+13MB 上传全省）
+                if k.1 == crate::ui::cfg_page::PanScope::Upper as u8 {
+                    let pmx = g.slot_canvas(crate::gles_present::ChromeSlot::PanMove);
+                    pmx.fill(0);
+                    if let (Some(ps), Some(t), Some(cs)) = (pool_snap, th, cfg_snap) {
+                        let mut settled = cs.clone();
+                        settled.pan = None;
+                        t.lock()
+                            .unwrap()
+                            .paint_cfg_dual_pool(pmx, w, h, ps, 0, acc_cfg);
+                        t.lock().unwrap().paint_cfg_pool_content(
+                            pmx,
+                            w,
+                            h,
+                            ps,
+                            &settled,
+                            0,
+                            acc_cfg,
+                            crate::report::boot_ms() as u64,
+                            false,
+                            true, // BAR-096：选中框由下池光标层合成期提供
+                        );
+                    }
+                    g.slot_bake(crate::gles_present::ChromeSlot::PanMove);
                 }
-                g.slot_bake(crate::gles_present::ChromeSlot::PanMove);
                 sigs.pan_cap = Some(k);
             }
         } else {

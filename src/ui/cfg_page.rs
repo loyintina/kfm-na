@@ -142,6 +142,26 @@ pub enum PanScope {
     Upper,
 }
 
+/// PanOld 捕获源（BAR-100 零拷贝捕获的裁决产物，壳层映射到具体图层
+/// 槽）：上一笔是 Upper 域平移 = 配置槽是 hold 烘焙（无上池行），旧
+/// 代的行在上一笔新代滑动层里，接力捕它；首笔或上一笔是 Page 域 =
+/// 配置槽纹理即旧代（Page 域新代与配置槽同图，新代滑动层整页不画）。
+/// 判错 = 连环平移时旧代封存到残影/空图（上屏旧代直接错图）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PanCaptureSrc {
+    Config,
+    PanMove,
+}
+
+/// 捕获源裁决（纯函数有钉：tests/pan_capture_spec.rs）
+pub fn pan_capture_src(prev_upper: bool) -> PanCaptureSrc {
+    if prev_upper {
+        PanCaptureSrc::PanMove
+    } else {
+        PanCaptureSrc::Config
+    }
+}
+
 /// 旧代冻结快照（十七修 §六 双代同画：旧代 = 切换瞬间的状态封存）
 #[derive(Debug, Clone)]
 pub struct EpochSnap {

@@ -106,6 +106,10 @@ pub struct PanComp {
     /// 隙底是否填页底色（Page=true：间隙带=页背景，十八修钉；
     /// Upper=false：静物=稳态涂装的池内芯，与 vc425 涂装域逐像素同语义）
     pub clear_bg: bool,
+    /// 平移域 = Page（BAR-100：Page 域新代与配置槽同图——合成期直接
+    /// 复用配置槽纹理 @new_dx，PanMove 槽不再整页重画；Upper 域配置槽
+    /// 是 hold 烘焙无上池行，新代仍须 PanMove 独立成层）
+    pub scope_page: bool,
 }
 
 /// BAR-096 拆层合成参数：标签栏层与下池光标层的屏幕位置（top-down 像素）。
@@ -936,6 +940,26 @@ impl GlesPresent {
         (l.visible, l.baked)
     }
 
+    /// 两槽纹理互换（BAR-100 零拷贝捕获）：PanOld 捕获旧代不再 26MB
+    /// 拷贝+13MB 重传——旧代像素本就在源槽纹理里（屏幕上正显示着），
+    /// 互换纹理柄即完成封存，dst 立即可画（置 baked）。契约：调用方
+    /// 保证 src 槽在本次 present 前重烘（其新纹理 = dst 换出的旧纹理，
+    /// 内容是上一笔平移的残影，必须全量重画覆盖——两个调用现场都是
+    /// fill(0)+全量重涂，见 android_app 平移捕获块）
+    pub fn slot_swap_tex(&mut self, src: ChromeSlot, dst: ChromeSlot) {
+        let (a, b) = (src as usize, dst as usize);
+        if a == b {
+            self.layers[a].baked = true;
+            return;
+        }
+        let (lo, hi) = if a < b { (a, b) } else { (b, a) };
+        let (head, tail) = self.layers.split_at_mut(hi);
+        let (x, y) = (&mut head[lo], &mut tail[0]);
+        std::mem::swap(&mut x.tex, &mut y.tex);
+        std::mem::swap(&mut x.size, &mut y.size);
+        self.layers[dst as usize].baked = true;
+    }
+
     /// 烘焙一槽：mark_chrome_alpha（「纯黑=空白」约定）+ 全画布上传。
     /// 只在置脏帧调用——这是图层引擎的成本闸门（动画帧不进这里）。
     /// BAR-096：上传尺寸吃槽自己的 dims（小画布槽只传自己那块）
@@ -1317,13 +1341,23 @@ impl GlesPresent {
                                         );
                                     }
                                     let pm = &self.layers[ChromeSlot::PanMove as usize];
-                                    if pm.visible && pm.baked {
+                                    // BAR-100：Page 域新代 = 配置槽同图
+                                    // （同代际同 accent 同涂装调用）——直接
+                                    // 复用配置槽纹理，PanMove 不再整页重画；
+                                    // Upper 域配置槽是 hold 烘焙（无上池
+                                    // 行），新代仍走 PanMove 独立层
+                                    let (new_tex, new_ok) = if pc.scope_page {
+                                        (cf.tex, true)
+                                    } else {
+                                        (pm.tex, pm.visible && pm.baked)
+                                    };
+                                    if new_ok {
                                         draw_slot_layer_src(
                                             gl,
                                             self.layer_prog,
                                             self.layer_vao,
                                             self.layer_vbo,
-                                            pm.tex,
+                                            new_tex,
                                             cfg_off as f32 + pc.new_dx,
                                             by0 as f32 + cfg_dy_extra,
                                             (bx1 - bx0) as f32,

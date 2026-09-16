@@ -46,12 +46,12 @@
 | `src/trace.rs` | 12 | 8 | 4 | TRACE_CAP format_tail dump_all dump_tail |
 | `src/ui/accent.rs` | 6 | 6 | 0 | — |
 | `src/ui/ai_page.rs` | 7 | 7 | 0 | — |
-| `src/ui/cfg_page.rs` | 61 | 56 | 5 | DROPDOWN_ENTER_MS DROPDOWN_EXIT_MS DROPDOWN_PICK_MOVE_MS register_cfg_page cfg_page_handle |
+| `src/ui/cfg_page.rs` | 64 | 59 | 5 | DROPDOWN_ENTER_MS DROPDOWN_EXIT_MS DROPDOWN_PICK_MOVE_MS register_cfg_page cfg_page_handle |
 | `src/ui/comp_registry.rs` | 6 | 5 | 1 | preview_is_animated |
 | `src/ui/cursor.rs` | 9 | 9 | 0 | — |
 | `src/ui/dual_pool.rs` | 17 | 17 | 0 | — |
 | `src/ui/fx_ease.rs` | 11 | 11 | 0 | — |
-| `src/ui/fx_spring.rs` | 7 | 7 | 0 | — |
+| `src/ui/fx_spring.rs` | 8 | 8 | 0 | — |
 | `src/ui/gear.rs` | 7 | 7 | 0 | — |
 | `src/ui/keybar.rs` | 1 | 1 | 0 | — |
 | `src/ui/modal.rs` | 18 | 16 | 2 | MODAL_LABEL_H MODAL_MAX_MARGIN_Y |
