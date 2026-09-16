@@ -21,18 +21,37 @@ sleep 5
 echo "== 设备状态（foreground=true 才有效）"
 bash "$NA_ROOT/scripts/na-stats.sh" 2>/dev/null | head -3
 
+# 环污染修法（2026-09-16 仪器病实锤）：trace 是 256 帽内存环，
+# `rm trace.txt` 不清环——下次 trace-req 落盘仍是整环滚动副本，旧帧混进
+# 判卷（曾把多次平移的累积行数当单次帧数，还造出时间戳矛盾假象）。
+# 口径：判卷前先取水位线（环内最大 boot_ms），只数水位线之后的新行。
+ring_watermark() {
+    gate "touch $NA_TMP/trace-req"
+    sleep 1.2
+    gate "cat $NA_TMP/trace.txt" 2>/dev/null \
+        | sed -n 's/^\[+\([0-9]*\)ms .*/\1/p' | sort -n | tail -1
+}
+# 只输出水位线之后的行（awk 数值比较，8 位零填充时间戳天然防八进制坑）
+after_watermark() { # $1 = 水位线 ms
+    awk -v wm="$1" 'match($0, /^\[\+[0-9]+ms/) {
+        if (substr($0, 3, RLENGTH - 4) + 0 > wm) print
+    }'
+}
+
 run_case() { # $1 = 用例名，其余 = na-touch 指令逐条
     local name="$1"
     shift
-    gate "rm -f $NA_TMP/trace.txt"
+    local wm
+    wm=$(ring_watermark)
+    wm=${wm:-0}
     bash "$NA_ROOT/scripts/na-touch.sh" "$@" >/dev/null
     gate "touch $NA_TMP/trace-req"
     sleep 1.5
     local n
-    n=$(gate "grep -c panc $NA_TMP/trace.txt")
-    echo "== $name：panc 帧数 = $n"
-    gate "grep panc $NA_TMP/trace.txt" | head -14
-    gate "grep panel-anim $NA_TMP/trace.txt" | tail -2
+    n=$(gate "grep panc $NA_TMP/trace.txt" | after_watermark "$wm" | wc -l)
+    echo "== $name：panc 帧数 = $n（水位线 +${wm}ms 之后的新行）"
+    gate "grep panc $NA_TMP/trace.txt" | after_watermark "$wm" | head -14
+    gate "grep panel-anim $NA_TMP/trace.txt" | after_watermark "$wm" | tail -2
 }
 
 # 设置齿轮 (1166,70) → 设置页；组件池标签 (334,87) → Page 平移；

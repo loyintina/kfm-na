@@ -7,6 +7,26 @@
 
 ## 当前位置（2026-09-16)
 
+- **云安卓动画帧级监控建成（2026-09-16 下午，用户拍板「先建完全观测
+  再碰机制」）**：`scripts/redroid-anim-watch.sh`（screenrecord 整段录
+  + imageio 拆全帧到 /tmp/redroid-anim/<case>/）+ `na-anim-bench.sh`
+  水位线判卷口径，双路实证跑通。**当日三个坑全钉进脚本/README**：
+  ①screenrecord 后台起录必须重定向脱离 tty（否则 adb shell 阻塞到
+  180s 自然结束，表现为「脚本卡死」）——已加 --time-limit 兜底；
+  ②redroid 虚报 15Hz 刷新率（fx 行「刷新率读数离谱(15.000001)」），
+  有效帧率个位数、动画中间帧稀少是平台本色，不是 app bug；
+  ③trace 环是 256 帽内存环，`rm trace.txt` 不清环——bench 判卷改
+  水位线（环内最大 boot_ms）之后的新行，旧「31帧/20帧」判卷曾受
+  污染。**redroid 复起两条纪律**：宿主 binderfs 重挂后容器内
+  /dev/binderfs 变空（bind 挂载不传播）→ 全线 SIGABRT「Binder
+  driver '/dev/binder' could not be opened」→ 必须 `docker rm -f`
+  重建容器（redroid-up.sh --recreate）；`wm size` 改分辨率后 app
+  必须 force-stop 重开，否则布局停在旧尺寸缓存（设置页放大 2 倍
+  错位）。**顺带实证**：redroid 上 Page 平移 = 1 帧 t=0.000 后
+  沉默 → 贴死帧直接落——「几帧同位置然后跳变」的极端版复现，
+  与真机「结束闪烁」同根（pan_snap 贴死出 None，t=1.0 终点态
+  无法表达为平移帧；机制根修待动工，方案见下条）。
+
 - **BAR-098：平移落停帧被 33ms 节流吃掉（2026-09-16 下午，用户真机
   截屏两连报，当日修）**：用户点标签播动画后截屏——选中行左侧冒
   残字、池框右缘探出屏外（实定量 = 光标层整体右移 ~25-40px，配置

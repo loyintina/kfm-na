@@ -97,8 +97,22 @@
 - `na-anim-cap.sh` — 点播下一轮动画的渲染源采样(BAR-076 起点播制):
   投 anim-cap-req,动画开表消费,采样帧走 [anim-strip] 报表,
   服务器 anim-strip-png.py 拼 PNG。不点播 = 动画零 readPixels 开销。
+- `na-rec.sh` — 真机软件内录(MediaProjection,rec.mp4):帧级真相的正路,
+  每次 app 重启后需用户在授权弹窗点「立即开始」一次。
+- `redroid-anim-watch.sh page|upper|custom 'cmds'` — 云安卓动画帧级监控
+  (2026-09-16):screenrecord 整段录虚拟屏 + imageio 拆全帧到
+  /tmp/redroid-anim/<case>/。两个坑已钉进脚本:screenrecord 必须重定向
+  脱离 tty(--time-limit 兜底,否则 adb shell 阻塞到自然结束);redroid
+  虚报 15Hz 刷新率,有效帧率个位数,中间帧稀少是平台本色不是 bug。
 
 ## 判卷(实证脚本)
+
+- `na-anim-bench.sh` — 池区动画帧数一键判卷(两轮:Page 切标签/Upper 点
+  下池,各给 panc 帧数+明细+panel-anim 仪表;`NA_TRANSPORT=adb` 上云安卓)。
+  **判卷口径是水位线之后的新行**(2026-09-16 仪器病实锤:trace 是 256 帽
+  内存环,`rm trace.txt` 不清环,不过滤会把多次平移的累积旧行当帧数)。
+  前提:设置页停在「系统管理」默认标签——同标签/同行再点不挂平移账,
+  panc=0 是正确行为不是仪器坏。
 
 - `na-regress.sh [名字...]` — **真机回归套件**(调试闸门.md §十四):
   cases/*-accept.sh 全跑或点名跑,一案/一钉一卷,exit 0 过 / 非 0 挂 /
