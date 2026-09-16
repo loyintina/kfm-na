@@ -5033,3 +5033,70 @@ fn spec_bar102_字形缓存_命中且逐字节一致() {
     let (hit_b, same_b) = tv.spec_glyph_cache_probe('g', 30.0);
     assert!(hit_b && same_b, "每 (字,字号,字体) 独立成键且命中");
 }
+
+/// BAR-103：渐变 LUT 化逐像素等价钉——环带/池内芯/行框内芯的 LUT 采样
+/// 值必须等于 ring_gradient_rgb/frame_bg_rgb 逐点直算（LUT 建表错/索引
+/// 偏 1/钳位语义漂移即红）。背景：计时考题定罪全页重烘 63ms =
+/// 池框 29+页环 18+内容 15（每像素 1 次整数除法+内芯每像素 2 次压暗
+/// lerp+逐像素边界检查），LUT 后 26ms。
+/// 变异抽检：LUT 索引 s+1 → 三言齐红；行切片起点偏 1 → 红
+#[test]
+fn spec_bar103_渐变lut_采样钉() {
+    use kfm_na::termview::{POOL_FRAME_R, TermEmu, frame_bg_rgb, ring_gradient_rgb};
+    use kfm_na::ui::accent::AccentPair;
+    use kfm_na::ui::cfg_page::{CfgPage, RowView, lower_row_rect};
+    use kfm_na::ui::dual_pool::DualPool;
+    let (w, h) = (1260u32, 2400u32);
+    let acc = AccentPair {
+        c1: 0x00FF_6000,
+        c2: 0x0000_80FF,
+    };
+    let tv = TermView::new(host_font(), None, 8, 2, CELL_W, CELL_H);
+    let mut pool = DualPool::new(w, h);
+    pool.set_viewport(w, h, 0);
+    pool.set_upper_content_h(600);
+    let ps = pool.layout(1000);
+    let mut page = CfgPage::new();
+    page.set_rows(vec![
+        RowView {
+            title: "SYS".into(),
+            meta: "1 item".into(),
+        },
+        RowView {
+            title: "NET".into(),
+            meta: String::new(),
+        },
+    ]);
+    let cs = page.snap(1000);
+
+    let mut buf = vec![0u32; (w * h) as usize];
+    tv.paint_cfg_dual_pool(&mut buf, w, h, &ps, 0, acc);
+    // 言一：上池内芯中带整行段逐点扫（±1 索引错在 t 跨档点必留色差——
+    // 单点钉曾漏 ±1 变异：整除量化+t 步进亚字节，两点采样咬不住）
+    let up = &ps.upper;
+    let denom = (i64::from(up.w) - 1) + (i64::from(up.h) - 1);
+    let fy = 100i64;
+    for sx in 60..(i64::from(up.w) - 30) {
+        let got = buf[(up.y + fy) as usize * w as usize + (up.x + sx) as usize];
+        let want = frame_bg_rgb(acc.c2, acc.c1, sx, fy, denom);
+        assert_eq!(got, want, "池内芯 LUT 行段逐点等价（sx={sx}）");
+    }
+    // 言二：上池左粗条中带整列段逐点扫（直边区 cov=255 直写）
+    let fx = 2i64;
+    let (rc_w, fh_i) = (POOL_FRAME_R as i64 + 12, i64::from(up.h));
+    for ly in (rc_w + 5)..(fh_i - rc_w - 5) {
+        let got = buf[(up.y + ly) as usize * w as usize + (up.x + fx) as usize];
+        let want = ring_gradient_rgb(acc.c2, acc.c1, fx, ly, denom);
+        assert_eq!(got, want, "环带 LUT 列段逐点等价（ly={ly}）");
+    }
+    // 言三：下池行框内芯行段逐点扫（行框渐变参照 = 页坐标页尺）
+    tv.paint_cfg_pool_content(&mut buf, w, h, &ps, &cs, 0, acc, 1000, false, true);
+    let r1 = lower_row_rect(1, &ps.lower); // 行 1 meta 空，段内无文字墨
+    let page_denom = (i64::from(w) - 1) + (i64::from(h) - 1);
+    let cy = r1.y + i64::from(r1.h) / 2;
+    for cx in (r1.x + 400)..(r1.x + 700) {
+        let got = buf[cy as usize * w as usize + cx as usize];
+        let want = frame_bg_rgb(acc.c1, acc.c2, cx, cy, page_denom);
+        assert_eq!(got, want, "行框内芯 LUT 行段逐点等价（cx={cx}）");
+    }
+}

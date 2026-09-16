@@ -563,6 +563,22 @@ fn paint_rect_ring(
     let (gc, ga) = (c2, 64u32);
     let denom = ((fw - 1) + (fh - 1)).max(1);
 
+    // BAR-103 渐变 LUT（2026-09-16 计时考题定罪：全页重烘 63ms =
+    // 池框 29+页环 18+内容 15，文字非瓶颈——内芯/环带逐像素三重 lerp
+    // + 每像素边界检查才是。环带色与内芯色都只是 s=lx+ly 的一元函数
+    // （同一把 135° 尺同分母），一次建表 denom+1 项、内芯中带行切片
+    // 直写 ≈ memset 速。逐像素等价钉：spec_bar103_渐变LUT_采样钉
+    let ring_lut: Vec<u32> = (0..=denom as i64)
+        .map(|s| ring_gradient_rgb(c1, c2, s, 0, denom as i64))
+        .collect();
+    let bg_lut: Vec<u32> = if grad_fill {
+        (0..=denom as i64)
+            .map(|s| frame_bg_rgb(c1, c2, s, 0, denom as i64))
+            .collect()
+    } else {
+        Vec::new()
+    };
+
     // 带切（2026-09-06 ras 40ms→8ms）：三种墨的可能墨域都只是矩形周边
     // 的薄带——整包围盒逐像素 SDF 的 95% 是零墨或被 punch 覆盖的废访。
     // 各层给「每行列跨度」安全超集，墨函数一字不动（配方钉判逐像素）。
@@ -621,7 +637,7 @@ fn paint_rect_ring(
                 if ly >= 0 && ly < i64::from(fh) {
                     let cov = rr_cover(lx, ly as u32, fw, fh, rc as u32);
                     if cov > 0 {
-                        let color = ring_gradient_rgb(c1, c2, i64::from(lx), ly, denom as i64);
+                        let color = ring_lut[(i64::from(lx) + ly) as usize];
                         if cov == 255 {
                             frame.buf[ay as usize * frame.w as usize + ax as usize] = color;
                         } else {
@@ -651,10 +667,14 @@ fn paint_rect_ring(
             let rx1 = (ix + i64::from(iw)).min(i64::from(frame.w)).min(clip_x1);
             if rx1 > rx0 {
                 if grad_fill {
+                    // 行切片直写（BAR-103）：s = (ax-fx0)+(ay-fy0) 沿行
+                    // 单调 +1，iter_mut 免逐像素边界检查
                     for ay in my0..my1 {
-                        for ax in rx0..rx1 {
-                            frame.buf[ay as usize * frame.w as usize + ax as usize] =
-                                frame_bg_rgb(c1, c2, ax - fx0, ay - fy0, denom as i64);
+                        let s_base = (rx0 - fx0 + (ay - fy0)) as usize;
+                        let start = ay as usize * frame.w as usize + rx0 as usize;
+                        let row = &mut frame.buf[start..start + (rx1 - rx0) as usize];
+                        for (i, px) in row.iter_mut().enumerate() {
+                            *px = bg_lut[s_base + i];
                         }
                     }
                 } else {
@@ -684,7 +704,7 @@ fn paint_rect_ring(
             let cov = rr_cover(lx, lyy, iw, ih, punch_r as u32);
             if cov > 0 {
                 let color = if grad_fill {
-                    frame_bg_rgb(c1, c2, ax - fx0, ay - fy0, denom as i64)
+                    bg_lut[(ax - fx0 + (ay - fy0)) as usize]
                 } else {
                     bg
                 };
@@ -748,39 +768,47 @@ fn paint_row_frame_gradref(
         return;
     }
     let (fw, fh) = (i64::from(frame.w), i64::from(frame.h));
+    // BAR-103 渐变 LUT（同 paint_rect_ring）：行框内芯/环带色只是
+    // s=(xx+rx)+(yy+ry) 的一元函数（原实现每像素 1 次整数除法 + 内芯
+    // 每像素另付 2 次压暗 lerp——下池 6 行+上池 6 字段 ≈ 1.6M px 实
+    // 测 15ms 的构成）。建表 denom+1 项，行切片直写免边界检查；
+    // s 越界钳 [0, denom] 与原函数 max(0)/t.min(255) 语义全等
+    let d = grad_ref.2.max(1);
+    let ring_lut: Vec<u32> = (0..=d)
+        .map(|s| ring_gradient_rgb(accent.c1, accent.c2, s, 0, d))
+        .collect();
+    let bg_lut: Vec<u32> = (0..=d)
+        .map(|s| frame_bg_rgb(accent.c1, accent.c2, s, 0, d))
+        .collect();
     for dy in 0..rh as i64 {
         let yy = y + dy;
         if yy < 0 || yy >= fh || yy < clip.0 || yy >= clip.1 {
             continue;
         }
-        for dx in 0..rw as i64 {
-            let xx = x + dx;
-            if xx < 0 || xx >= fw {
-                continue;
-            }
+        let x_start = x.max(0);
+        let x_end = (x + i64::from(rw)).min(fw);
+        if x_end <= x_start {
+            continue;
+        }
+        let row_base = yy as usize * fw as usize;
+        let row = &mut frame.buf[row_base + x_start as usize..row_base + x_end as usize];
+        let s_row = yy + grad_ref.1 + grad_ref.0; // s = s_row + xx
+        for xx in x_start..x_end {
+            let dx = xx - x;
             if rr_sdf(dx as f32 + 0.5, dy as f32 + 0.5, rw, rh, r as u32) >= 0.0 {
                 continue; // 外剪影外
             }
+            let s = (s_row + xx).clamp(0, d) as usize;
             if sel && rr_sdf((xx - ix) as f32 + 0.5, (yy - iy) as f32 + 0.5, iw, ih, ir) >= 0.0 {
-                // 选中框环带：颜色全程 = 渐变采样 α255（只渐形状不渐色）
-                let grad = ring_gradient_rgb(
-                    accent.c1,
-                    accent.c2,
-                    xx + grad_ref.0,
-                    yy + grad_ref.1,
-                    grad_ref.2,
-                );
-                frame.blend_px(xx as u32, yy as u32, grad, 255);
+                // 选中框环带：颜色全程 = 渐变采样 α255（只渐形状不渐色）；
+                // blend_px(·,·,·,255) 内联（blend α255 ≡ fg，仅保目标 α——
+                // 行切片借用期不能再借 frame，语义逐比特一致）
+                let dst = &mut row[(xx - x_start) as usize];
+                *dst = (*dst & 0xFF00_0000) | ring_lut[s];
                 continue;
             }
             // 内芯（或未选中整剪影）= 渐变暗底不透明直出（十二修 §三）
-            frame.buf[yy as usize * fw as usize + xx as usize] = frame_bg_rgb(
-                accent.c1,
-                accent.c2,
-                xx + grad_ref.0,
-                yy + grad_ref.1,
-                grad_ref.2,
-            );
+            row[(xx - x_start) as usize] = bg_lut[s];
         }
     }
 }
@@ -3310,21 +3338,28 @@ impl TermView {
                 let lw2 = lb.w;
                 let lr = (POOL_FRAME_R as i64).min((lw2 / 2).min(vb.h / 2) as i64) as u32;
                 let fw = i64::from(frame.w);
+                // BAR-103：背衬色只是 s=xx+yy 的一元函数，LUT + 行切片
+                let bg_lut: Vec<u32> = (0..=denom)
+                    .map(|s| frame_bg_rgb(accent.c1, accent.c2, s, 0, denom))
+                    .collect();
                 for dy in 0..vb.h as i64 {
                     let yy = vb.y + dy;
                     if yy < 0 || yy >= i64::from(frame.h) || yy < uclip.0 || yy >= uclip.1 {
                         continue;
                     }
-                    for dx in 0..lw2 as i64 {
-                        let xx = rx + dx;
-                        if xx < 0 || xx >= fw {
-                            continue;
-                        }
+                    let x_start = rx.max(0);
+                    let x_end = (rx + i64::from(lw2)).min(fw);
+                    if x_end <= x_start {
+                        continue;
+                    }
+                    let row_base = yy as usize * fw as usize;
+                    for xx in x_start..x_end {
+                        let dx = xx - rx;
                         if rr_sdf(dx as f32 + 0.5, dy as f32 + 0.5, lw2, vb.h, lr) >= 0.0 {
                             continue;
                         }
-                        frame.buf[yy as usize * fw as usize + xx as usize] =
-                            frame_bg_rgb(accent.c1, accent.c2, xx, yy, denom);
+                        let s = (xx + yy).clamp(0, denom) as usize;
+                        frame.buf[row_base + xx as usize] = bg_lut[s];
                         frame.blend_px(xx as u32, yy as u32, 0x00FF_FFFF, 20);
                     }
                 }
@@ -4776,10 +4811,16 @@ pub(crate) struct VeilSpec {
 impl Frame<'_> {
     /// 画纯色矩形（裁剪到帧缓冲内）
     pub(crate) fn fill_rect(&mut self, x: u32, y: u32, w: u32, h: u32, color: u32) {
-        for row in y..(y + h).min(self.h) {
-            for col in x..(x + w).min(self.w) {
-                self.buf[(row * self.w + col) as usize] = color;
-            }
+        let x1 = (x + w).min(self.w);
+        let y1 = (y + h).min(self.h);
+        if x1 <= x || y1 <= y {
+            return;
+        }
+        // 行切片 fill（BAR-103）：逐像素索引的边界检查在全屏底色填充
+        // （3M px）上是实税，slice::fill 编译期单检查 ≈ memset
+        for row in y..y1 {
+            let start = (row * self.w + x) as usize;
+            self.buf[start..start + (x1 - x) as usize].fill(color);
         }
     }
 
