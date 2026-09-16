@@ -500,6 +500,24 @@ fn anim_run_flush(tag: &str) {
         " 帧列={}",
         crate::vsync_book::render_trace(&crate::vsync_book::take_trace())
     ));
+    // 分段账随轮结账（BAR-100 终验后真机仍见「过冲/卡一下」，panel-anim
+    // 实测 124-233ms/帧但不知钱花在哪个阶段）：ras=CPU 光栅 gen=字形实例
+    // upload=纹理上传 draw=GL 绘制，均值 ms/帧。读走即清零——300 帧周期账
+    // （stage_report）与之共用计数器，偶发被本轮吃掉属预期（轮账更细）。
+    let sn = STAGE_N.swap(0, Ordering::Relaxed);
+    if sn > 0 {
+        let avg =
+            |c: &std::sync::atomic::AtomicU64| c.swap(0, Ordering::Relaxed) / sn.max(1) / 1000;
+        line.push_str(&format!(
+            " 段=[ras={} gen={} alpha={} upload={} draw={}ms/{}帧]",
+            avg(&STAGE_RAS_US),
+            avg(&STAGE_GEN_US),
+            avg(&STAGE_ALPHA_US),
+            avg(&STAGE_UPLOAD_US),
+            avg(&STAGE_DRAW_US),
+            sn
+        ));
+    }
     vsync_disarm();
     CAPTURE_ON.store(false, Ordering::Relaxed);
     crate::report::report("panel-anim", &line);
