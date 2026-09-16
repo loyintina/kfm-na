@@ -5016,3 +5016,20 @@ fn spec_bar096_光标层_选中行文字落墨钉() {
         "选中行文字必须画在框芯之上（层内落墨 {in_core} 像素；< 100 = 文字没进层，BAR-089 回归）"
     );
 }
+
+/// BAR-102：字形位图缓存——槽涂装/CPU 画字热路径不许每次从轮廓重光栅
+/// （全页重烘 50-130ms 压在动画关键帧上 = 120Hz 屏肉眼黑洞）。
+/// 钉两言：二次取同字同号必命中同一份 Arc（零重光栅）；缓存位图与
+/// 直调 rasterize 逐字节一致（缓存不许改变任何像素）。
+/// 变异抽检：rasterize_cached 改成每次新光栅 → Arc::ptr_eq 言红；
+/// key 摘字号/字体维 → 串号/串字体时一致言或像素钉红
+#[test]
+fn spec_bar102_字形缓存_命中且逐字节一致() {
+    let tv = host_termview(80, 24);
+    let (hit_a, same_a) = tv.spec_glyph_cache_probe('K', 36.0);
+    assert!(hit_a, "二次取同字同号必须命中缓存（Arc 同一份）");
+    assert!(same_a, "缓存位图必须与直调 rasterize 逐字节一致");
+    // 第二字符独立成键，且同样命中
+    let (hit_b, same_b) = tv.spec_glyph_cache_probe('g', 30.0);
+    assert!(hit_b && same_b, "每 (字,字号,字体) 独立成键且命中");
+}

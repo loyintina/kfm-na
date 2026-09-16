@@ -1385,6 +1385,13 @@ pub struct TermView {
     /// 定期取走上报——「那个方框到底是什么字」不问用户，问机器。
     /// RefCell：render_into 的 display_iter 借用着 term，draw_glyph 只能 &self
     tofu_seen: std::cell::RefCell<Vec<char>>,
+    /// 字形位图缓存（BAR-102，2026-09-16 na-rec 实录定罪：槽涂装/CPU 画字
+    /// 每字每次 font.rasterize 从轮廓重光栅——全页重烘一次 50-130ms，
+    /// 压在动画起步/终点/Upper 逐帧关键帧上 = 120Hz 屏肉眼黑洞）。
+    /// key = (字, 字号 bits, 字体 id)；字体进程期不换、px 档位是固定小集合，
+    /// 无需失效；4096 封顶清表防膨胀。命中 = 零光栅零分配（Arc 克隆——
+    /// TermEmu:Send 不要 Rc）
+    glyph_cache: GlyphCache,
     cell_w: u32,
     cell_h: u32,
     /// 实际光栅字号：行盒（ascent-descent）比格高时按比例缩小，保证装进格
@@ -1398,6 +1405,12 @@ pub struct TermView {
     /// pub = 主题包插件/考题可直接换肤；生产默认 kfmv4 配方
     pub theme: crate::theme::Theme,
 }
+
+/// 字形缓存容器类型（BAR-102；clippy type_complexity 要求抽别名——
+/// 手机 1.97 咬字段原位写法，同 AiRow 先例）
+type GlyphCache = std::cell::RefCell<
+    std::collections::HashMap<(char, u32, u8), std::sync::Arc<(fontdue::Metrics, Vec<u8>)>>,
+>;
 
 /// AI 页一行展示行：(文字色, 该行的已量宽字符)——build_ai_rows 返回值的
 /// 类型别名（clippy type_complexity 要求；inherent 关联类型不稳定，只能放模块级）
@@ -1455,6 +1468,7 @@ impl TermView {
             font,
             cjk,
             tofu_seen: std::cell::RefCell::new(Vec::new()),
+            glyph_cache: GlyphCache::default(),
             cell_w,
             cell_h,
             font_px,
@@ -2459,7 +2473,8 @@ impl TermView {
         // 垂直居中：行内盒（ascent-descent）放进键格正中
         let baseline = cy as f32 + (rh as f32 - (hm.ascent - hm.descent)) / 2.0 + hm.ascent;
         for (f, c, adv) in glyphs {
-            let (m, bmp) = f.rasterize(c, px);
+            let g = self.rasterize_cached(f, c, px); // BAR-102：缓存光栅
+            let (m, bmp) = (&g.0, &g.1);
             let top = baseline - m.ymin as f32 - m.height as f32;
             for gy in 0..m.height as u32 {
                 let y = top as i64 + i64::from(gy);
@@ -2495,6 +2510,50 @@ impl TermView {
         } else {
             None
         }
+    }
+
+    /// 光栅化带缓存（BAR-102）：热路径统一入口——draw_glyph / draw_label /
+    /// draw_text_centered / draw_items_left_inset 四处每字每次
+    /// f.rasterize 从轮廓重光栅，是全页重烘 50-130ms 的主账。命中即
+    /// Arc 克隆返回，零光栅零分配。字体 id 按地址判别（0=主 1=备）：
+    /// draw_glyph 走 prefer_cjk、槽路径走 pick_font，两族判据对同字
+    /// 可能分歧（主字体有该字但 prefer_cjk 判全角归备），字体必须进
+    /// key，否则 (c,px) 巧合同值时串字体 = 拿错位图
+    pub(crate) fn rasterize_cached(
+        &self,
+        f: &fontdue::Font,
+        c: char,
+        px: f32,
+    ) -> std::sync::Arc<(fontdue::Metrics, Vec<u8>)> {
+        let fid = if std::ptr::eq(f, &self.font) {
+            0u8
+        } else {
+            1u8
+        };
+        let key = (c, px.to_bits(), fid);
+        if let Some(g) = self.glyph_cache.borrow().get(&key) {
+            return std::sync::Arc::clone(g);
+        }
+        let g = std::sync::Arc::new(f.rasterize(c, px));
+        let mut cache = self.glyph_cache.borrow_mut();
+        if cache.len() >= 4096 {
+            cache.clear(); // 封顶清表：px 档位×常用字符远小于此，清了重建
+        }
+        cache.insert(key, std::sync::Arc::clone(&g));
+        g
+    }
+
+    /// 考题专用通道（BAR-102 钉）：两次取同一字形——返回 (第二次是否
+    /// 命中同一份 Arc, 缓存位图与直调 rasterize 是否逐字节一致)
+    #[doc(hidden)]
+    pub fn spec_glyph_cache_probe(&self, c: char, px: f32) -> (bool, bool) {
+        let direct = self.font.rasterize(c, px);
+        let g1 = self.rasterize_cached(&self.font, c, px);
+        let g2 = self.rasterize_cached(&self.font, c, px);
+        (
+            std::sync::Arc::ptr_eq(&g1, &g2),
+            g1.1 == direct.1 && g1.0.width == direct.0.width && g1.0.height == direct.0.height,
+        )
     }
 
     /// 文本 → (字体, 字, 步进宽) 序列（px 字号下量宽；缺字记 tofu 跳过）。
@@ -2624,7 +2683,8 @@ impl TermView {
             if pen_x + adv >= clip_right as f32 {
                 break; // 格内装不下就停（与 draw_items_left 同判据）
             }
-            let (m, bmp) = f.rasterize(c, px);
+            let g = self.rasterize_cached(f, c, px); // BAR-102：缓存光栅
+            let (m, bmp) = (&g.0, &g.1);
             let top = baseline - m.ymin as f32 - m.height as f32;
             for gy in 0..m.height as u32 {
                 let y = top as i64 + i64::from(gy);
@@ -4444,7 +4504,8 @@ impl TermView {
             if pen_x + adv > clip_right as f32 {
                 break; // 右缘装不下就停（v1 无横滚，截断即判卷）
             }
-            let (m, bmp) = f.rasterize(*c, px);
+            let g = self.rasterize_cached(f, *c, px); // BAR-102：缓存光栅
+            let (m, bmp) = (&g.0, &g.1);
             let top = baseline - m.ymin as f32 - m.height as f32;
             for gy in 0..m.height as u32 {
                 let y = top as i64 + i64::from(gy);
@@ -4560,7 +4621,8 @@ impl TermView {
             }
             _ => (&self.font, self.font_px, self.baseline_off),
         };
-        let (metrics, bitmap) = font.rasterize(c, font_px);
+        let g = self.rasterize_cached(font, c, font_px); // BAR-102：缓存光栅
+        let (metrics, bitmap) = (&g.0, &g.1);
         if metrics.width == 0 || metrics.height == 0 {
             return; // 缺字形/空白字形：fontdue 给空位图，不 panic
         }
