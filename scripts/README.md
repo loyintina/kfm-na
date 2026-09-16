@@ -100,6 +100,9 @@
 - `na-anim-cap.sh` — 点播下一轮动画的渲染源采样(BAR-076 起点播制):
   投 anim-cap-req,动画开表消费,采样帧走 [anim-strip] 报表,
   服务器 anim-strip-png.py 拼 PNG。不点播 = 动画零 readPixels 开销。
+  **BAR-101 警告(2026-09-16 实锤)：点播武装的轮次整轮被 glReadPixels
+  停顿压成 2-3 帧——anim-strip 只判像素内容对错,它的帧数/帧耗时
+  一律不作性能证据;判动画性能用无点播的 panel-anim/panc。**
 - `na-rec.sh` — 真机软件内录(MediaProjection,rec.mp4):帧级真相的正路,
   每次 app 重启后需用户在授权弹窗点「立即开始」一次。
 - `redroid-anim-watch.sh page|upper|custom 'cmds'` — 云安卓动画帧级监控
