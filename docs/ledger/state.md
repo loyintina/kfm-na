@@ -16,8 +16,11 @@
   下池行层起步一烘合成期 y 位移（渐变锚 glide 终点位，贴死零跳色）
   + ConfigSig.pool_upper_h 平移期冻结 0。两钉逐像素等价 + 变异两咬。
   预研 stub（pool_layer_geometry 最大高烘+uv 裁剪案）弃用理由入
-  bugs.md（denom 随 h 变 → 裁剪案贴死跳色）。判卷口径：vc443 无点播
-  panel-anim——Upper 7→15+ 帧、ras 28→~12ms 达标。
+  bugs.md（denom 随 h 变 → 裁剪案贴死跳色）。vc443 判卷：ras 28→18ms、
+  帧均值 57→19ms，但只产 6 帧——帧列实锤中帧 3-6ms 而帧间隔
+  27-36ms = 33ms 帧泵节流成新天花板（帧贵时代遗产）。补咬：
+  cfg_fx_frame_due 节流 33→16ms（≤60fps），钉+变异齐。判卷口径：
+  vc444 无点播 panel-anim——Upper 6→13+ 帧达标。
 
 - **BAR-103：渐变 LUT 化（2026-09-16 夜，当日修，待真机 vc442 实测）**：
   BAR-102 真机判卷结果——Page 平移（切标签）双方向 51-58 帧密帧、

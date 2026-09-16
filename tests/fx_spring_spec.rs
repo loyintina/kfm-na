@@ -598,9 +598,11 @@ fn spec_bar098_池区泵_落停补帧不吃节流钉() {
         cfg_fx_frame_due(true, false, 8),
         "活性翻 false 那圈被节流吃掉 = 末帧定格中帧（BAR-098 病根）"
     );
-    // 活性期正常节流：<33ms 不产，≥33ms 产
+    // 活性期正常节流（BAR-097 补咬：33→16ms——拆层+LUT 后中帧 3-6ms，
+    // 33ms 节流反成帧率天花板）：<16ms 不产，≥16ms 产
     assert!(!cfg_fx_frame_due(true, true, 8), "活性期 8ms 不许产帧");
-    assert!(cfg_fx_frame_due(true, true, 33), "活性期 33ms 到点必产");
+    assert!(cfg_fx_frame_due(true, true, 17), "活性期 17ms 到点必产");
+    assert!(!cfg_fx_frame_due(true, true, 15), "活性期 15ms 不许产帧");
     // 翻 false 且距上帧已久——照样产（原节流路也放行的情形，防过修）
     assert!(cfg_fx_frame_due(true, false, 50), "翻 false 久未画必产");
 }

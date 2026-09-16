@@ -197,7 +197,12 @@ pub fn panel_frame_due(now_ms: u64) -> bool {
 /// 残余偏移（120Hz ≈13px / 60Hz ≈44px / 掉帧更狠）= 真机「选中行残字
 /// +池框右缘探出」的病根；redroid 帧饥饿末帧天然落在贴死之后 = 判卷
 /// 盲区（云安卓 A/B 两版「逐像素一致」全是贴死帧，咬不到这病）。
-/// 契约：翻 false（prev&&!curr）恒产帧；否则 33ms 节流。
+/// 契约：翻 false（prev&&!curr）恒产帧；否则 16ms 节流。
+/// BAR-097 补咬（2026-09-16 深夜 vc443 分段账）：33ms 节流是帧贵时代
+/// （逐帧全页重烘 47ms）的自我保护——BAR-097 拆层+BAR-103 LUT 后中帧
+/// 仅 3-6ms，33ms 节流反成帧率天花板（250ms 动画理论上限 7 帧，真机
+/// 实测 6 帧帧间隔 27-36ms 而中帧成本 3-6ms = 泵饿着画面）。降到
+/// 16ms（≤60fps）——与 fx_frame_due 采样缝泵同档。
 pub fn cfg_fx_frame_due(fx_prev: bool, fx_curr: bool, since_last_ms: u64) -> bool {
-    (fx_prev && !fx_curr) || since_last_ms >= 33
+    (fx_prev && !fx_curr) || since_last_ms >= 16
 }
