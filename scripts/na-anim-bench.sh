@@ -45,6 +45,11 @@ run_case() { # $1 = 用例名，其余 = na-touch 指令逐条
     wm=$(ring_watermark)
     wm=${wm:-0}
     bash "$NA_ROOT/scripts/na-touch.sh" "$@" >/dev/null
+    # 2026-09-16 二修实锤：touch 脚本由 app 内执行器消费（sleep 指令占
+    # 脚本时长），na-touch 返回 ≠ 执行完——立即落盘只会拍到执行中途的
+    # 环（旧版无水位线时靠环污染的旧行充数，从没暴露）。3.5s 覆盖
+    # 最长用例（2.2s 脚本 + 消费延迟 + redroid 慢场余量）
+    sleep 3.5
     gate "touch $NA_TMP/trace-req"
     sleep 1.5
     local n
@@ -55,7 +60,9 @@ run_case() { # $1 = 用例名，其余 = na-touch 指令逐条
 }
 
 # 设置齿轮 (1166,70) → 设置页；组件池标签 (334,87) → Page 平移；
-# 下池第二行 (630,1211) → Upper 平移（坐标为 1260 宽真机实测值）
+# 下池第三行 (630,1568) → Upper 平移（2026-09-16 修正：旧坐标 (630,1211)
+# 布局修订后已落在已选中的行 0——同行再点不挂账， panc=0 假阴性。
+# 行命中以输出里的 gest「下池点按: 聚焦行 N」回执为准，N≠0 才有效）
 run_case "Page 平移（切标签）" 'tap 1166 70' 'sleep 900' 'tap 334 87' 'sleep 1300'
-run_case "Upper 平移（点下池）" 'tap 630 1211' 'sleep 1300'
+run_case "Upper 平移（点下池）" 'tap 630 1568' 'sleep 1300'
 echo "== 判卷口径：帧数↑ 且 panc t 单调到 1.000；面板静止后（贴死）无残余动画"
