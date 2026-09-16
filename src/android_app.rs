@@ -4740,7 +4740,8 @@ impl App {
     }
 
     /// 配置页池区/下拉动画活性探针（十五修 §五/§六 帧泵闸）：
-    /// 下池光标缓动 / 下拉开合 / 视口平移 / 池高缓动（BAR-095）任一
+    /// 下池光标缓动 / 下拉开合 / 视口平移（BAR-099 状态驱动：账在 =
+    /// 活性在，终点帧渲染消费才灭）/ 池高缓动（BAR-095）任一
     /// 未收敛 = true。锁序 term→pool→cfg_page 不倒持嵌套（本探针不
     /// 碰 term，两把短锁先后取，互不嵌套）
     fn cfg_fx_active() -> bool {
@@ -4821,10 +4822,18 @@ impl App {
         }
         // 配置页内容快照（三层目录）：涂装/命中同一份（D9；十五修：
         // 吃 now——光标弹簧/下拉进度是时间函数）
+        let cfg_now = crate::report::boot_ms() as u64;
         let cfg_snap = self
             .cfg_page
             .as_ref()
-            .map(|p| p.lock().unwrap().snap(crate::report::boot_ms() as u64));
+            .map(|p| p.lock().unwrap().snap(cfg_now));
+        // BAR-099 终点帧消费（状态驱动帧泵）：本帧若已贴死，渲染的是
+        // 钳制后的精确终点态——账随帧消，帧泵下一圈停；活性翻 false
+        // 那圈 BAR-098 补帧机制再产一帧回稳态单代（逐像素一致无感）。
+        // 与本帧 snap 吃同一 cfg_now：消的账 = 刚画的那帧的账
+        if let Some(page) = &self.cfg_page {
+            page.lock().unwrap().consume_settled_pan(cfg_now);
+        }
         // GLES（2026-09-07 图层槽位版）：网格实例 → 键行槽 → 面板槽
         // （placement 动画）→ AI 文字实例 → 上层槽。槽位置脏烘焙。
         // 关联函数按字段传参，避开 buf 借用 gfx 时动不了 self 的问题

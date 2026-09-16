@@ -13,8 +13,9 @@ use kfm_na::ui::accent::AccentPair;
 use kfm_na::ui::cfg_page::{
     CfgPage, FIELD_BOTTOM_PAD, FIELD_BOX_GAP, FIELD_BOX_H, FIELD_ROW_GAP, FIELD_ROW_H,
     FIELD_TEXT_INSET, FIELD_TRIANGLE_PAD, FIELD_VALUE_MIN_W, LOWER_ROW_H, PAN_GAP_PAGE, PAN_MS,
-    POOL_CONTENT_INSET, PanScope, ROW_GAP, RowView, UpperRow, dropdown_panel_rect,
-    field_label_rect, field_value_rect, lower_row_rect, upper_row_rect, wrap_field_lines,
+    PAN_SETTLE_SLACK_MS, POOL_CONTENT_INSET, PanScope, ROW_GAP, RowView, UpperRow,
+    dropdown_panel_rect, field_label_rect, field_value_rect, lower_row_rect, pan_offsets,
+    upper_row_rect, wrap_field_lines,
 };
 use kfm_na::ui::dual_pool::{DualPoolSnap, PoolRect};
 
@@ -632,8 +633,9 @@ fn bar094_cursor_no_overshoot_and_in_sync_with_pan() {
 }
 
 /// BAR-095 分域探针钉：Upper 平移在场 → pan_upper_active 真（壳层喂
-/// glide 缓动）；Page 平移/无平移/贴死 → 假（壳层喂 set 直通——新页
-/// 池高起步帧就位）
+/// glide 缓动）；Page 平移/无平移/消费后 → 假（壳层喂 set 直通——新页
+/// 池高起步帧就位）。BAR-099：glide 域延到终点帧消费前（贴死帧仍
+/// glide——其值已收敛=直通同值，不在死线边界换喂入方式）
 #[test]
 fn bar095_pan_upper_scope_probe() {
     let mut p = CfgPage::new();
@@ -641,7 +643,12 @@ fn bar095_pan_upper_scope_probe() {
     p.select(2, 1000, pool_stub(), acc()); // Upper 域挂账
     assert!(p.pan_upper_active(1000), "Upper 平移期内 = 真（glide 域）");
     assert!(p.pan_upper_active(1249), "贴死前一刻仍真");
-    assert!(!p.pan_upper_active(1250), "贴死 = 假（回直通域）");
+    assert!(
+        p.pan_upper_active(1250),
+        "贴死帧待消费仍 glide 域（BAR-099）"
+    );
+    assert!(p.consume_settled_pan(1250), "终点帧渲染消费");
+    assert!(!p.pan_upper_active(1250), "消费后 = 假（回直通域）");
     p.set_tab(1, 2000, pool_stub(), acc()); // Page 域挂账
     assert!(!p.pan_upper_active(2000), "Page 平移期内也是假（直通域）");
     assert!(p.pan_active(2000), "但平移账本身在场（活性探针不混淆）");
@@ -868,7 +875,8 @@ fn set_tab_hangs_page_pan_with_dir_and_frozen_epoch() {
     assert_eq!(pan.old.accent, acc());
     assert_eq!(pan.old.pool.upper, UPPER);
     // 时序（十八修：ease-in-out cubic——起步收步皆柔，取代 ease-out 的
-    // 起步满速「太块」读感）：1/4 程 = 0.0625、半程 = 0.5，贴死后出 None
+    // 起步满速「太块」读感）：1/4 程 = 0.0625、半程 = 0.5；贴死 = t 钳
+    // 1.0 的终点帧（BAR-099），账待渲染消费后才出 None
     let q = p.snap(1000 + PAN_MS / 4).pan.expect("前段账在");
     assert!(
         (q.t - 0.0625).abs() < 0.01,
@@ -881,9 +889,15 @@ fn set_tab_hangs_page_pan_with_dir_and_frozen_epoch() {
         "ease-in-out cubic 半程 = 0.5（t={}）",
         mid.t
     );
+    let end = p
+        .snap(1000 + PAN_MS)
+        .pan
+        .expect("贴死帧账在（BAR-099 钳制）");
+    assert_eq!(end.t, 1.0, "贴死 = t 钳 1.0 精确终点态");
+    assert!(p.consume_settled_pan(1000 + PAN_MS), "终点帧渲染消费");
     assert!(
         p.snap(1000 + PAN_MS).pan.is_none(),
-        "250ms 贴死 = 稳态单代（pan None）"
+        "消费后 = 稳态单代（pan None）"
     );
 }
 
@@ -899,8 +913,10 @@ fn set_tab_backward_dir_negative_and_same_tab_no_pan() {
         acc2(),
         "旧代封的是回切前的页色（调用方喂入的当前页色）"
     );
-    // 同页重点：不挂账不空涨
+    // 同页重点：不挂账不空涨（贴死账先由渲染消费——BAR-099 后生产
+    // 路径唯一清账口，本钉模拟渲染回路）
     let settled = 2000 + PAN_MS + 100;
+    assert!(p.consume_settled_pan(settled), "贴死账须可消费");
     let e = p.epoch();
     p.set_tab(0, settled + 1000, pool_stub(), acc());
     assert_eq!(p.epoch(), e);
@@ -932,8 +948,9 @@ fn select_hangs_upper_pan_and_same_focus_no_pan() {
     // 上溯 = 后退
     p.select(0, 2000, pool_stub(), acc());
     assert_eq!(p.snap(2000).pan.as_ref().unwrap().dir, -1);
-    // 同标重点：不挂账（账贴死后）
+    // 同标重点：不挂账（贴死账先由渲染消费，同 BAR-099 模拟回路）
     let settled = 2000 + PAN_MS + 100;
+    assert!(p.consume_settled_pan(settled), "贴死账须可消费");
     let e = p.epoch();
     p.select(0, settled, pool_stub(), acc());
     assert_eq!(p.epoch(), e);
@@ -946,7 +963,42 @@ fn pan_active_probe_drives_frame_pump() {
     p.set_tab(1, 1000, pool_stub(), acc());
     assert!(p.pan_active(1000), "账起 = 活性（帧泵必须续帧）");
     assert!(p.pan_active(1000 + PAN_MS - 1));
-    assert!(!p.pan_active(1000 + PAN_MS), "贴死 = 活性灭（零空烧）");
+    // BAR-099 状态驱动：贴死不停泵——终点帧未消费前活性恒在（时间
+    // 驱动的旧闸在死线停泵 = t<1 偏移态冻屏病根）
+    assert!(p.pan_active(1000 + PAN_MS), "贴死帧待消费 = 活性仍在");
+    assert!(p.consume_settled_pan(1000 + PAN_MS));
+    assert!(!p.pan_active(1000 + PAN_MS), "消费 = 活性灭（零空烧）");
+}
+
+/// BAR-099 状态驱动帧泵钉：贴死帧 = t 钳 1.0 的精确终点态（old 全出
+/// 带/new 归零，pan_offsets 数学与稳态逐像素一致）；渲染消费账即消
+/// 泵即停；消费链路断裂时宽限兜底停泵但账留——下一事件帧仍走钳制
+/// 路径精确归位，不依赖任何补帧路径。
+/// 变异抽检：pan_snap 贴死改回出 None → 「贴死帧账必须在」咬红；
+/// 消费判定改永不消账 → 「消费后稳态单代」咬红
+#[test]
+fn bar099_settle_frame_clamped_t1_and_consumed_on_render() {
+    let mut p = CfgPage::new();
+    p.set_tab(1, 1000, pool_stub(), acc());
+    let end = p.snap(1000 + PAN_MS).pan.expect("贴死帧账必须在");
+    assert_eq!(end.t, 1.0, "贴死 = t 钳 1.0");
+    // 几何钉：t=1.0 时 old 全出带、new 归零 = 与稳态逐像素一致
+    let (d_old, d_new) = pan_offsets(1, 1.0, 1000);
+    assert_eq!((d_old, d_new), (-1000, 0), "终点帧几何 = 稳态");
+    // 消费前泵续命，消费后账消泵停
+    assert!(p.pan_active(1000 + PAN_MS));
+    assert!(p.consume_settled_pan(1000 + PAN_MS));
+    assert!(p.snap(1000 + PAN_MS).pan.is_none(), "消费后稳态单代");
+    assert!(!p.pan_active(1000 + PAN_MS));
+    // 消费缺失（渲染链断裂）：宽限后泵停、账留，迟到帧仍精确终点态
+    p.set_tab(0, 5000, pool_stub(), acc());
+    let late_at = 5000 + PAN_MS + PAN_SETTLE_SLACK_MS;
+    assert!(!p.pan_active(late_at), "宽限兜底停泵（防空烧）");
+    let late = p.snap(late_at).pan.expect("账留待归位");
+    assert_eq!(late.t, 1.0, "迟到事件帧仍钳制精确归位");
+    // 迟到帧消费后账消
+    assert!(p.consume_settled_pan(late_at));
+    assert!(p.snap(late_at).pan.is_none());
 }
 
 // ---- 十七修 BAR-090：下拉面板宽 = max(触发器, 最长选项文+边距)，钳右缘 ----

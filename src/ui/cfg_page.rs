@@ -173,6 +173,10 @@ pub struct PanSnap {
 /// ease-in-out cubic——ease-out 起步即满速读感「太块」，用户实机
 /// 录屏拍板）
 pub const PAN_MS: u64 = 250;
+/// 平移贴死宽限 ms（BAR-099 状态驱动帧泵）：账贴死后帧泵续命到终点帧
+/// 被渲染消费；宽限是消费链路断裂的兜底停泵——泵停 ≠ 画面错，钳制
+/// 的 pan_snap 让下一个事件帧仍精确归位
+pub const PAN_SETTLE_SLACK_MS: u64 = 500;
 /// 视口平移双代留隙 G（十八修 §七 留隙律）：页面级 = 2 格（静态时
 /// 池卡外缘距页内容带缘 1 格的两倍）；平移距 = 视口宽 + G——内容
 /// 轴上恒为「旧代 | 隙 G | 新代」隐藏布局
@@ -700,37 +704,54 @@ impl CfgPage {
     }
 
     /// 平移瞬时值求值（十七修 §六：250ms；十八修 §七：ease-in-out
-    /// cubic；贴死出 None，账留待下一次切换覆盖——fresh 账直接换掉
-    /// 旧账不续弹）
+    /// cubic。BAR-099 贴死钳制：raw≥1.0 恒出 t=1.0 精确终点帧——
+    /// pan_offsets 数学保证 old 全出带/new 归零，与稳态逐像素一致；
+    /// 账留待渲染消费（consume_settled_pan）或下一次平移覆盖。
+    /// 旧设计「贴死出 None」让 t=1.0 终点态永远无法表达为平移帧——
+    /// 末帧冻在 t<1 偏移态，靠另一代码路径补落停帧 = 真机「停在偏移
+    /// 位置 + 闪一下归位」整类病灶的根）
     fn pan_snap(&self, now_ms: u64) -> Option<PanSnap> {
-        self.pan.as_ref().and_then(|(scope, dir, start, old)| {
+        self.pan.as_ref().map(|(scope, dir, start, old)| {
             let raw = (now_ms.saturating_sub(*start)).min(PAN_MS) as f32 / PAN_MS as f32;
-            if raw >= 1.0 {
-                None
-            } else {
-                Some(PanSnap {
-                    scope: *scope,
-                    dir: *dir,
-                    t: crate::ui::fx_ease::ease_in_out_cubic(raw),
-                    old: Box::new(old.clone()),
-                })
+            PanSnap {
+                scope: *scope,
+                dir: *dir,
+                t: crate::ui::fx_ease::ease_in_out_cubic(raw),
+                old: Box::new(old.clone()),
             }
         })
     }
 
-    /// 平移活性探针（帧泵闸）：账未贴死 = true
+    /// 终点帧消费（BAR-099 状态驱动帧泵）：渲染路径每帧 snap 后调用——
+    /// 本帧已是贴死帧（raw≥PAN_MS，渲染的是钳制后的精确终点态）则账
+    /// 随帧消，帧泵下一圈停。返回是否消账（钉用）
+    pub fn consume_settled_pan(&mut self, now_ms: u64) -> bool {
+        match self.pan.as_ref() {
+            Some((_, _, start, _)) if now_ms >= *start + PAN_MS => {
+                self.pan = None;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// 平移活性探针（帧泵闸。BAR-099 状态驱动：账在 = 活性在，保证
+    /// 终点帧必被渲染消费——时间驱动的旧闸会在死线停泵，把 t<1 的
+    /// 偏移态冻在屏上；宽限兜底停泵防消费链断裂空烧）
     pub fn pan_active(&self, now_ms: u64) -> bool {
         self.pan
             .as_ref()
-            .is_some_and(|(_, _, start, _)| now_ms < *start + PAN_MS)
+            .is_some_and(|(_, _, start, _)| now_ms < *start + PAN_MS + PAN_SETTLE_SLACK_MS)
     }
 
     /// Upper 域平移进行中（BAR-095 分域律）：壳层据此选池高喂入
     /// 方式——Upper 域 = glide 缓动（池高与光标/平移同步），Page 域
-    /// 与无平移 = set 直通（新页池高起步帧就位）
+    /// 与无平移 = set 直通（新页池高起步帧就位）。
+    /// BAR-099：glide 域同步延到终点帧消费前——贴死帧仍走 glide
+    /// （其值已收敛=直通同值），不在死线边界换喂入方式
     pub fn pan_upper_active(&self, now_ms: u64) -> bool {
         self.pan.as_ref().is_some_and(|(scope, _, start, _)| {
-            *scope == PanScope::Upper && now_ms < *start + PAN_MS
+            *scope == PanScope::Upper && now_ms < *start + PAN_MS + PAN_SETTLE_SLACK_MS
         })
     }
 }
