@@ -374,6 +374,12 @@ struct ConfigSig {
     anim_bucket: u64,
 }
 
+/// 池框几何层 sig（BAR-097）：(画布w, 画布h, 底inset, 上池高瞬时值, c1, c2)
+type PoolFxSig = (u32, u32, u32, u32, u32, u32);
+/// 下池行层 sig（BAR-097）：(画布w, 画布h, 底inset, 终点上池高, c1, c2,
+/// 内容代际, 行表哈希)
+type LowerRowsSig = (u32, u32, u32, u32, u32, u32, u64, u64);
+
 #[derive(Default)]
 struct LayerSigs {
     keybar: crate::ui::stage::DirtyGuard<(u8, u32, u32, u32, u32)>,
@@ -387,6 +393,12 @@ struct LayerSigs {
     tabbar: crate::ui::stage::DirtyGuard<TabBarSig>,
     /// 下池光标层（BAR-096 拆槽）
     cursor: crate::ui::stage::DirtyGuard<CursorSig>,
+    /// 池框几何层（BAR-097：Upper 平移期逐帧烘——upper.h 是 glide 瞬时
+    /// 值逐帧变 = 逐帧烘；其余维不变不重烘）
+    poolfx: crate::ui::stage::DirtyGuard<PoolFxSig>,
+    /// 下池行层（BAR-097：起步一烘——内容哈希+epoch+终点几何锚定后
+    /// 平移期恒定零重烘）
+    lower_rows: crate::ui::stage::DirtyGuard<LowerRowsSig>,
     /// 平移旧代捕获账（十九修 D8）：Some((epoch, scope, dir)) = 当前
     /// PanOld 纹理属于哪笔平移账——新账才重新拷贝画布
     pan_cap: Option<(u64, u8, i8)>,
@@ -405,6 +417,8 @@ impl LayerSigs {
         self.termcard.invalidate();
         self.tabbar.invalidate();
         self.cursor.invalidate();
+        self.poolfx.invalidate();
+        self.lower_rows.invalidate();
     }
 }
 
@@ -4120,6 +4134,12 @@ impl App {
         // 八槽可见性单源（BAR-070：图层化首版漏设上层槽 → 输入栏/光球/
         // 放大镜集体隐身——可见性判定收进纯逻辑，每帧八槽都从这出）
         let pan_active = cfg_snap.as_ref().is_some_and(|cs| cs.pan.is_some());
+        // BAR-097：Upper 域平移活性（池区拆层上岗旗——池框/下池行由
+        // PoolFx/LowerRowsPan 层承担，配置槽 hold 烘焙不画池；Page 域
+        // 不动：池留在配置槽随页平移）
+        let pan_upper = cfg_snap
+            .and_then(|cs| cs.pan.as_ref())
+            .is_some_and(|p| p.scope == crate::ui::cfg_page::PanScope::Upper);
         let slot_vis = crate::ui::stage::slot_visibility(
             grid_keybar,
             panel_visible,
@@ -4143,6 +4163,16 @@ impl App {
         g.set_slot_visible(
             crate::gles_present::ChromeSlot::LowerCursor,
             slot_vis[2] && cfg_snap.as_ref().is_some_and(|cs| !cs.rows.is_empty()),
+        );
+        // BAR-097 池区两层：仅 Upper 平移期上岗（贴死即隐，稳态池区回
+        // 配置槽）
+        g.set_slot_visible(
+            crate::gles_present::ChromeSlot::PoolFx,
+            slot_vis[2] && pan_upper,
+        );
+        g.set_slot_visible(
+            crate::gles_present::ChromeSlot::LowerRowsPan,
+            slot_vis[2] && pan_upper,
         );
         // 终端卡片壳槽烘焙（2026-09-11）：恒靠泊零 placement——sig 含
         // ime/bar_h 是因为壳下缘停在快捷键行上沿（键盘开合期逐帧重烘焙
@@ -4282,7 +4312,11 @@ impl App {
                 bar_h,
                 c1: acc_cfg.c1,
                 c2: acc_cfg.c2,
-                pool_upper_h,
+                // BAR-097：Upper 平移期冻结为 0——hold 烘焙不画池（池区
+                // 归 PoolFx/LowerRowsPan 层），真值逐帧变只会白触发全页
+                // 重烘（ras 28ms 残余的结构性病根）；Page 域/稳态照旧
+                // 真值（池在配置槽里，几何变必须重烘）
+                pool_upper_h: if pan_upper { 0 } else { pool_upper_h },
                 cfg_epoch,
                 dd_progress_q,
                 pan_hold,
@@ -4299,13 +4333,14 @@ impl App {
             // 稳态（pan 剥离）——Page 域带内像素被 band fill 覆盖、
             // Upper 域带内上池行不画（pan_upper_hold，静物=池内芯）；
             // 双代呈现全在合成期
-            let pan_upper = cfg_snap
-                .and_then(|cs| cs.pan.as_ref())
-                .is_some_and(|p| p.scope == crate::ui::cfg_page::PanScope::Upper);
+            // BAR-097：Upper 平移期池框也不进配置槽（归 PoolFx 层逐帧
+            // 烘——本槽 pool_upper_h 冻结后恒定，零重烘）
             if let (Some(ps), Some(t)) = (pool_snap, th) {
-                t.lock()
-                    .unwrap()
-                    .paint_cfg_dual_pool(px, w, h, ps, 0, acc_cfg);
+                if !pan_upper {
+                    t.lock()
+                        .unwrap()
+                        .paint_cfg_dual_pool(px, w, h, ps, 0, acc_cfg);
+                }
                 // 池内容（§五 目录语义）：双池框之上同槽
                 if let Some(cs) = cfg_snap {
                     let mut settled = cs.clone();
@@ -4413,6 +4448,86 @@ impl App {
                         cs.rows.get(cs.focus),
                     );
                     g.slot_bake(crate::gles_present::ChromeSlot::LowerCursor);
+                }
+            }
+            // BAR-097 池区拆层烘焙（仅 Upper 平移期上岗，贴死即隐）：
+            // ①池框几何层 PoolFx——池高 glide 逐帧只重烘这块池区小画布
+            // （LUT 后 ~10ms/帧，替代配置槽 14MB 全页逐帧重烘=ras 28ms
+            // 病根）；②下池行层 LowerRowsPan——起步一烘（行内容静止），
+            // 合成期 y 位移跟 lower.y glide（渐变锚终点位，贴死帧与
+            // 稳态配置槽逐像素一致交接）
+            if pan_upper && let (Some(ps), Some(cs), Some(t)) = (pool_snap, cfg_snap, th) {
+                let area = crate::ui::dual_pool::pool_area(w, h, bottom_inset);
+                let fx_sig = (
+                    area.w,
+                    area.h,
+                    bottom_inset,
+                    ps.upper.h,
+                    acc_cfg.c1,
+                    acc_cfg.c2,
+                );
+                if sigs.poolfx.feed(fx_sig) {
+                    g.set_slot_dims(crate::gles_present::ChromeSlot::PoolFx, area.w, area.h);
+                    let px = g.slot_canvas(crate::gles_present::ChromeSlot::PoolFx);
+                    px.fill(0);
+                    t.lock()
+                        .unwrap()
+                        .paint_pool_frames_layer(px, area.w, area.h, area.x, area.y, ps, acc_cfg);
+                    g.slot_bake(crate::gles_present::ChromeSlot::PoolFx);
+                }
+                // 行层终点几何：布局数学同源（下池 = 区 − 上池 − 间距）；
+                // 终点高从共享池句柄拿（锁序：本块不持 term/cfg 锁 ✓）
+                let target_h = crate::ui::dual_pool::dual_pool_handle()
+                    .map(|p| p.lock().unwrap().target_upper_h())
+                    .unwrap_or(ps.upper.h);
+                let lower_final = crate::ui::dual_pool::PoolRect {
+                    x: area.x,
+                    y: area.y + i64::from(target_h + crate::ui::dual_pool::POOL_GAP),
+                    w: area.w,
+                    h: area
+                        .h
+                        .saturating_sub(target_h)
+                        .saturating_sub(crate::ui::dual_pool::POOL_GAP),
+                };
+                use std::hash::{Hash, Hasher};
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                for r in &cs.rows {
+                    r.title.hash(&mut hasher);
+                    r.meta.hash(&mut hasher);
+                }
+                let rows_hash = hasher.finish();
+                let lr_sig = (
+                    area.w,
+                    area.h,
+                    bottom_inset,
+                    target_h,
+                    acc_cfg.c1,
+                    acc_cfg.c2,
+                    cs.epoch,
+                    rows_hash,
+                );
+                if sigs.lower_rows.feed(lr_sig) && !cs.rows.is_empty() {
+                    g.set_slot_dims(
+                        crate::gles_present::ChromeSlot::LowerRowsPan,
+                        area.w,
+                        area.h,
+                    );
+                    let px = g.slot_canvas(crate::gles_present::ChromeSlot::LowerRowsPan);
+                    px.fill(0);
+                    let page_denom =
+                        (i64::from(w.saturating_sub(1)) + i64::from(h.saturating_sub(1))).max(1);
+                    t.lock().unwrap().paint_lower_rows_layer(
+                        px,
+                        area.w,
+                        area.h,
+                        area.x,
+                        lower_final.y,
+                        &lower_final,
+                        &cs.rows,
+                        acc_cfg,
+                        page_denom,
+                    );
+                    g.slot_bake(crate::gles_present::ChromeSlot::LowerRowsPan);
                 }
             }
         }
@@ -4594,6 +4709,22 @@ impl App {
                 lp.tabbar = Some((0.0, crate::ui::tab_bar::content_origin().1 as f32));
                 if let (Some(ps), Some(cs)) = (pool_snap, cfg_snap) {
                     use crate::ui::cfg_page as cp;
+                    // BAR-097：Upper 平移期池区两层合成位——池框层原点 =
+                    // 池区左上（无位移，逐帧烘的就是当前几何）；下池行层
+                    // y = 实时 lower.y（烘焙锚在终点，位移量 = 当前−终点
+                    // 已含在 draw_y 里），底缘 scissor = 下池内缘底
+                    if cs
+                        .pan
+                        .as_ref()
+                        .is_some_and(|p| p.scope == cp::PanScope::Upper)
+                    {
+                        lp.poolfx = Some((ps.upper.x as f32, ps.upper.y as f32));
+                        lp.lower_rows = Some((
+                            ps.lower.x as f32,
+                            ps.lower.y as f32,
+                            (ps.lower.y + i64::from(ps.lower.h) - cp::POOL_CONTENT_INSET) as f32,
+                        ));
+                    }
                     if !cs.rows.is_empty() && ps.lower.w > (cp::POOL_CONTENT_INSET * 2) as u32 {
                         let stride = (cp::LOWER_ROW_H as i64 + cp::ROW_GAP) as f32;
                         let cx = (ps.lower.x + cp::POOL_CONTENT_INSET) as f32;
@@ -4823,7 +4954,7 @@ impl App {
             }
             g3.layout(crate::report::boot_ms() as u64)
         });
-        // BAR-096 拆层：标签栏层画布不知屏高/键盘 inset——底线 span
+        // BAR-096 拆层：标签栏层画布不知屏高/键盘 inset——底线 span——底线 span
         // （池区左右内缘）由壳层补进快照（层画布只画自己那块）
         if let (Some(ts), Some(ps)) = (tab_snap.as_mut(), pool_snap.as_ref()) {
             ts.line_span = Some((ps.upper.x, ps.upper.x + i64::from(ps.upper.w)));

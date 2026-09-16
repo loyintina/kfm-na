@@ -2946,6 +2946,141 @@ impl TermView {
         }
     }
 
+    /// 池框几何层涂装（BAR-097 池高一路拆层）：paint_cfg_dual_pool_impl
+    /// 的层版——画布原点 = 池区左上角（x_shift/y_shift 平移语义），
+    /// 渐变参照是池框自身局部坐标（paint_rect_ring 以矩形原点为渐变
+    /// 原点同尺），平移后逐像素不变（钉：spec_bar097_池框层_逐像素
+    /// 等价）。裁剪带 = 层画布边界。无行无字——行内容归 LowerRowsPan
+    /// 层（本层才是 glide 逐帧重烘的承担者，越薄越好）
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn paint_pool_frames_layer(
+        &self,
+        buf: &mut [u32],
+        cw: u32,
+        ch: u32,
+        x_shift: i64,
+        y_shift: i64,
+        snap: &crate::ui::dual_pool::DualPoolSnap,
+        accent: crate::ui::accent::AccentPair,
+    ) {
+        if cw == 0 || ch == 0 {
+            return;
+        }
+        let mut frame = Frame { buf, w: cw, h: ch };
+        for r in [&snap.upper, &snap.lower] {
+            if r.w < 2 || r.h < 2 {
+                continue;
+            }
+            let x0 = r.x - x_shift;
+            let y0 = r.y - y_shift;
+            paint_rect_ring(
+                &mut frame,
+                x0,
+                y0,
+                x0 + i64::from(r.w),
+                y0 + i64::from(r.h),
+                0,
+                i64::from(cw),
+                crate::ui::accent::CARD_PAGE_BG,
+                accent.c2,
+                accent.c1,
+                POOL_FRAME_R,
+                true,
+            );
+        }
+    }
+
+    /// 下池行内容层涂装（BAR-097）：paint_pool_lower 的行表部分层版
+    /// （无选中框——光标层承担；行框/文字配方逐项同源：title_band 90/
+    /// title 36/meta 30/内缩 27/faux-bold 双画）。y_origin = 烘焙锚
+    /// （glide **终点** lower.y）：行画在 (页坐标 − (x_shift, y_origin))，
+    /// 渐变参照经 grad_ref 锚回页坐标页尺——贴死帧与稳态配置槽烘焙
+    /// 逐像素一致交接（钉：spec_bar097_下池行层_逐像素等价）。
+    /// 行裁剪纪律同在页版：出**终点**池底的行整行不画（lower_final =
+    /// 终点几何——glide 中途池更小时多出的行由合成期 scissor 裁）
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn paint_lower_rows_layer(
+        &self,
+        buf: &mut [u32],
+        cw: u32,
+        ch: u32,
+        x_shift: i64,
+        y_origin: i64,
+        lower_final: &crate::ui::dual_pool::PoolRect,
+        rows: &[crate::ui::cfg_page::RowView],
+        accent: crate::ui::accent::AccentPair,
+        page_denom: i64,
+    ) {
+        use crate::ui::cfg_page as cp;
+        if cw == 0 || ch == 0 {
+            return;
+        }
+        let mut frame = Frame { buf, w: cw, h: ch };
+        let title_fg = 0x00D9_D9D9; // 0.85 白（§2.3 标题档）
+        let meta_fg = 0x0080_8080; // 0.5 白（次级档）
+        let px_title = 36.0;
+        let px_meta = 30.0;
+        let text_inset = 27.0;
+        let title_band = 90u32;
+        let no_clip = (0, i64::from(ch));
+        let grad_ref = (x_shift, y_origin, page_denom);
+        for i in 0..rows.len() {
+            let r = cp::lower_row_rect(i, lower_final);
+            if r.y + i64::from(r.h) > lower_final.y + i64::from(lower_final.h) {
+                break; // 出终点池底的行不画（同在页版纪律）
+            }
+            paint_row_frame_gradref(
+                &mut frame,
+                r.x - x_shift,
+                r.y - y_origin,
+                r.w,
+                r.h,
+                false,
+                accent,
+                no_clip,
+                grad_ref,
+            );
+        }
+        // 文字最后一遍（盖过行框内芯）：与 paint_pool_lower 同配方
+        for (i, row) in rows.iter().enumerate() {
+            let r = cp::lower_row_rect(i, lower_final);
+            if r.y + i64::from(r.h) > lower_final.y + i64::from(lower_final.h) {
+                break;
+            }
+            let (rx, ry) = ((r.x - x_shift) as u32, (r.y - y_origin) as u32);
+            self.draw_text_left_ex(
+                &mut frame, &row.title, rx, r.w, ry, title_band, px_title, title_fg, text_inset,
+                None,
+            );
+            self.draw_text_left_ex(
+                &mut frame,
+                &row.title,
+                rx + 1,
+                r.w,
+                ry,
+                title_band,
+                px_title,
+                title_fg,
+                text_inset,
+                None,
+            );
+            if !row.meta.is_empty() {
+                self.draw_text_left_ex(
+                    &mut frame,
+                    &row.meta,
+                    rx,
+                    r.w,
+                    ry + title_band,
+                    r.h - title_band,
+                    px_meta,
+                    meta_fg,
+                    text_inset,
+                    None,
+                );
+            }
+        }
+    }
+
     /// 双池内容涂装（宪法 §五 目录语义四版，2026-09-13 修宪落地）：
     /// 下池 = 子目录行表（4.5 格左粗三边细框行，选中 = 三边 accent 渐变
     /// 描边 3px）；上池 = 字段框行表（4 格，标签列 + 值框；首行 = 下拉
@@ -3105,19 +3240,22 @@ impl TermView {
                 });
             }
             None => {
-                self.paint_pool_lower(
-                    &mut frame,
-                    &ps.lower,
-                    &page.rows,
-                    page.cursor_row,
-                    accent,
-                    off,
-                    skip_cursor,
-                );
                 // 十九修 D8：Upper 平移 hold 期上池行不进主画布——带内
                 // 静物=池内芯渐变（vc425 涂装域同语义：行只活在双代里，
                 // 隙底透出的是内芯不是定格行）
+                // BAR-097：hold 期下池行也不进主画布（连池框一起归
+                // PoolFx/LowerRowsPan 层——池高 glide 逐帧变，进主画布
+                // = pool_upper_h 逐帧脏 sig = 全页逐帧重烘，帧饥饿病根）
                 if !pan_upper_hold {
+                    self.paint_pool_lower(
+                        &mut frame,
+                        &ps.lower,
+                        &page.rows,
+                        page.cursor_row,
+                        accent,
+                        off,
+                        skip_cursor,
+                    );
                     self.paint_pool_upper(
                         &mut frame,
                         &ps.upper,
@@ -5292,6 +5430,36 @@ pub trait TermEmu: Send {
         accent: crate::ui::accent::AccentPair,
         row: Option<&crate::ui::cfg_page::RowView>,
     );
+    /// 池框几何层涂装（BAR-097，考题/壳层门面）：层缓冲 = 池区 w×h，
+    /// 原点 = 池区左上角（x_shift/y_shift）；仅双池框+内芯无行字
+    #[allow(clippy::too_many_arguments)]
+    fn paint_pool_frames_layer(
+        &self,
+        buf: &mut [u32],
+        cw: u32,
+        ch: u32,
+        x_shift: i64,
+        y_shift: i64,
+        snap: &crate::ui::dual_pool::DualPoolSnap,
+        accent: crate::ui::accent::AccentPair,
+    );
+    /// 下池行内容层涂装（BAR-097，考题/壳层门面）：层缓冲原点语义
+    /// (x_shift, y_origin)，y_origin = glide 终点 lower.y（渐变锚终点
+    /// 位，贴死帧与稳态逐像素一致）；lower_final = 终点几何（行裁剪
+    /// 纪律同在页版）；page_denom = 页渐变分母（保真参照）
+    #[allow(clippy::too_many_arguments)]
+    fn paint_lower_rows_layer(
+        &self,
+        buf: &mut [u32],
+        cw: u32,
+        ch: u32,
+        x_shift: i64,
+        y_origin: i64,
+        lower_final: &crate::ui::dual_pool::PoolRect,
+        rows: &[crate::ui::cfg_page::RowView],
+        accent: crate::ui::accent::AccentPair,
+        page_denom: i64,
+    );
     /// 下池子目录行表 + 上池联动下拉触发器/字段行/下拉 panel。
     /// cfg_off_x 语义同 paint_cfg_dual_pool；画在双池框之上。
     /// now_ms = 动画时钟（十四修 §六：跳框动效预览的相位源；无动画
@@ -5514,6 +5682,45 @@ impl TermEmu for TermView {
     ) {
         TermView::paint_lower_cursor_layer(
             self, buf, cw, ch, page_x, page_y, page_denom, accent, row,
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn paint_pool_frames_layer(
+        &self,
+        buf: &mut [u32],
+        cw: u32,
+        ch: u32,
+        x_shift: i64,
+        y_shift: i64,
+        snap: &crate::ui::dual_pool::DualPoolSnap,
+        accent: crate::ui::accent::AccentPair,
+    ) {
+        TermView::paint_pool_frames_layer(self, buf, cw, ch, x_shift, y_shift, snap, accent)
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn paint_lower_rows_layer(
+        &self,
+        buf: &mut [u32],
+        cw: u32,
+        ch: u32,
+        x_shift: i64,
+        y_origin: i64,
+        lower_final: &crate::ui::dual_pool::PoolRect,
+        rows: &[crate::ui::cfg_page::RowView],
+        accent: crate::ui::accent::AccentPair,
+        page_denom: i64,
+    ) {
+        TermView::paint_lower_rows_layer(
+            self,
+            buf,
+            cw,
+            ch,
+            x_shift,
+            y_origin,
+            lower_final,
+            rows,
+            accent,
+            page_denom,
         )
     }
     #[allow(clippy::too_many_arguments)]

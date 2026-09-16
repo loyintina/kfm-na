@@ -87,6 +87,16 @@ pub enum ChromeSlot {
     /// 14MB 重烘）；位移进合成期 rect.y（画布内容仅选框形状，与行
     /// 内容无关——选中行的文字留在配置槽）
     LowerCursor = 10,
+    /// 池框几何层（BAR-097 池高一路拆层，仅 Upper 平移期上岗）：双池
+    /// 框+内芯（无行无字），画布 = 池区 w×h（≈8.7MB）——池高 glide
+    /// 逐帧只重烘这一层（LUT 后 ~10ms），配置槽 14MB 全页不再逐帧
+    /// 重烘（ras 28ms 的结构性残余）。贴死即隐（稳态池框回配置槽）
+    PoolFx = 11,
+    /// 下池行内容层（BAR-097）：下池行表（行框+文字，无选中框——
+    /// 光标层承担），画布同池区；起步一烘（内容静止），合成期
+    /// y 位移跟 lower.y glide + 底缘 scissor（行底不许压下池底环）。
+    /// 渐变参照锚 glide 终点位（贴死帧与稳态配置槽逐像素一致交接）
+    LowerRowsPan = 12,
 }
 
 /// 视口平移合成参数（十九修 D8）：调用方逐帧从 cfg_snap.pan 求值——
@@ -124,6 +134,14 @@ pub struct LayeredPlace {
     pub cursor: Option<(f32, f32)>,
     /// Page 平移期旧代光标位置（带内双代画；None = 单次画）
     pub cursor_old: Option<(f32, f32)>,
+    /// 池框几何层 (x, y)（BAR-097：仅 Upper 平移期 Some——glide 逐帧
+    /// 烘的承担者；画布原点 = 池区左上角，页坐标）
+    pub poolfx: Option<(f32, f32)>,
+    /// 下池行层 (x, y, clip_bottom)（BAR-097：仅 Upper 平移期 Some——
+    /// 起步一烘，y 跟 lower.y 实时 glide；clip_bottom = 下池内缘底
+    /// （页坐标，行底不许压下池底环——glide 中途池高小于终点时行表
+    /// 按终点几何烘，多出的行必须裁掉）
+    pub lower_rows: Option<(f32, f32, f32)>,
 }
 
 /// 单槽烘焙物。baked=false 的槽不许上屏——采样未上传过的纹理得到
@@ -559,8 +577,10 @@ pub struct GlesPresent {
     // ---- 期 1 第 2 层：终端网格 GPU 化 ----
     /// 图层槽位（ui-base §八 渲染成本模型）：键行/AI面板/上层/配置/文件树
     /// /终端卡/平移双代 + BAR-096 拆槽两件（标签栏层/下池光标层——小画布
-    /// 逐帧重烘便宜），置脏烘焙 + placement 合成——动画帧零光栅零上传
-    layers: [ChromeLayer; 11],
+    /// 逐帧重烘便宜）+ BAR-097 池区两件（池框几何层/下池行层——Upper
+    /// 平移期池高 glide 的逐帧重烘限定在池区小画布），置脏烘焙 +
+    /// placement 合成——动画帧零光栅零上传
+    layers: [ChromeLayer; 13],
     /// 图层实例程序（rect+uv+tint 四边形；placement 逐槽进实例数据）
     layer_prog: glow::NativeProgram,
     layer_vao: glow::NativeVertexArray,
@@ -697,6 +717,8 @@ impl GlesPresent {
         };
         // 先建槽数组再 move gl 进结构体（E0382：字段初始化按书写序移动）
         let layers = [
+            mk_layer(&gl),
+            mk_layer(&gl),
             mk_layer(&gl),
             mk_layer(&gl),
             mk_layer(&gl),
@@ -1384,6 +1406,51 @@ impl GlesPresent {
                                             uv,
                                         );
                                     }
+                                    gl.disable(glow::SCISSOR_TEST);
+                                }
+                            }
+                            // BAR-097 池区拆层合成（在配置槽之上、光标
+                            // 层之下）：Upper 平移期池框几何层（逐帧烘，
+                            // 无位移）+ 下池行层（起步一烘，y 跟 glide，
+                            // 底缘 scissor 防行底压下池底环）
+                            if let Some((fx, fy)) = layered.poolfx {
+                                let pl = &self.layers[ChromeSlot::PoolFx as usize];
+                                if pl.visible && pl.baked {
+                                    let (pw, ph) = pl.dims;
+                                    draw_slot_layer(
+                                        gl,
+                                        self.layer_prog,
+                                        self.layer_vao,
+                                        self.layer_vbo,
+                                        pl.tex,
+                                        fx + cfg_off as f32,
+                                        fy + cfg_dy_extra,
+                                        pw as f32,
+                                        ph as f32,
+                                        cfg_alpha,
+                                    );
+                                }
+                            }
+                            if let Some((rx, ry, rclip)) = layered.lower_rows {
+                                let rl = &self.layers[ChromeSlot::LowerRowsPan as usize];
+                                if rl.visible && rl.baked {
+                                    let (rw, rh) = rl.dims;
+                                    let (fw, fh) = (self.w as i32, self.h as i32);
+                                    gl.enable(glow::SCISSOR_TEST);
+                                    let sh = (rclip as i32).clamp(0, fh);
+                                    gl.scissor(0, fh - sh, fw, sh.max(0));
+                                    draw_slot_layer(
+                                        gl,
+                                        self.layer_prog,
+                                        self.layer_vao,
+                                        self.layer_vbo,
+                                        rl.tex,
+                                        rx + cfg_off as f32,
+                                        ry + cfg_dy_extra,
+                                        rw as f32,
+                                        rh as f32,
+                                        cfg_alpha,
+                                    );
                                     gl.disable(glow::SCISSOR_TEST);
                                 }
                             }

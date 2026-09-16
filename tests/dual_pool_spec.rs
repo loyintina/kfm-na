@@ -322,3 +322,25 @@ fn bar097_dual_pool_layer_geometry() {
         );
     }
 }
+
+/// BAR-097 钉：target_upper_h = glide 终点高（行层渐变锚的唯一读数口）
+/// ——glide 中途也必须回终点（瞬时值由 layout 给，两者分工），
+/// 直通态 = 目标值。锚错成瞬时值 = 贴死帧跳色（bugs.md BAR-097 契约）
+#[test]
+fn bar097_target_upper_h_恒为终点高() {
+    let mut pool = DualPool::new(1260, 2400);
+    pool.set_viewport(1260, 2400, 0);
+    pool.set_upper_content_h(600);
+    let target = pool.target_upper_h();
+    assert_eq!(target, 600, "直通态 target = 内容高");
+    // glide 中途：瞬时值 ≠ 终点，target_upper_h 必须恒回终点
+    pool.glide_upper_content_h(200, 2000);
+    let mid = pool.layout(2100); // 滑行中途（250ms 窗口内）
+    assert_eq!(pool.target_upper_h(), 200, "glide 中途 target = 新终点高");
+    assert_ne!(mid.upper.h, 200, "瞬时高还在滑行（≠终点）");
+    // 空占位与半高钳同 target_h 数学
+    pool.set_upper_content_h(0);
+    assert_eq!(pool.target_upper_h(), POOL_EMPTY_H, "空内容 = 空占位高");
+    pool.set_upper_content_h(100_000);
+    assert_eq!(pool.target_upper_h(), pool.area().h / 2, "超高内容钳半高");
+}

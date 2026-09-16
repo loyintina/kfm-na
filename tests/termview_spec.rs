@@ -5100,3 +5100,134 @@ fn spec_bar103_渐变lut_采样钉() {
         assert_eq!(got, want, "行框内芯 LUT 行段逐点等价（cx={cx}）");
     }
 }
+
+/// BAR-097 钉①：池框几何层与在页版**逐像素等价**——层涂装是平移语义
+/// （渐变参照 = 池框局部坐标，平移不变），层像素 (lx,ly) 必须等于页
+/// 像素 (area.x+lx, area.y+ly)。渐变参照错（拿页坐标采/拿错分母）或
+/// 平移漏轴即红。变异：y_shift 传 0 → 红
+#[test]
+fn spec_bar097_池框层_逐像素等价() {
+    use kfm_na::termview::TermEmu;
+    use kfm_na::ui::accent::AccentPair;
+    use kfm_na::ui::dual_pool::{DualPool, pool_area};
+    let (w, h) = (1260u32, 2400u32);
+    let acc = AccentPair {
+        c1: 0x00FF_6000,
+        c2: 0x0000_80FF,
+    };
+    let tv = TermView::new(host_font(), None, 8, 2, CELL_W, CELL_H);
+    let mut pool = DualPool::new(w, h);
+    pool.set_viewport(w, h, 0);
+    pool.set_upper_content_h(600);
+    let ps = pool.layout(1000);
+    let area = pool_area(w, h, 0);
+    assert_eq!(
+        (area.x, area.y),
+        (ps.upper.x, ps.upper.y),
+        "池区原点 ≡ 上池原点（布局数学同源）"
+    );
+
+    let mut page = vec![0u32; (w * h) as usize];
+    tv.paint_cfg_dual_pool(&mut page, w, h, &ps, 0, acc);
+    let (aw, ah) = (area.w, area.h);
+    let mut layer = vec![0u32; (aw * ah) as usize];
+    tv.paint_pool_frames_layer(&mut layer, aw, ah, area.x, area.y, &ps, acc);
+
+    // 两池包围盒外扩 16px（含发光带）全像素对拍
+    let mut diffs = 0usize;
+    for r in [&ps.upper, &ps.lower] {
+        let (x0, y0) = (r.x - 16, r.y - 16);
+        let (x1, y1) = (r.x + i64::from(r.w) + 16, r.y + i64::from(r.h) + 16);
+        for py in y0..y1 {
+            for px in x0..x1 {
+                if px < 0 || py < 0 || px >= i64::from(w) || py >= i64::from(h) {
+                    continue;
+                }
+                let (lx, ly) = (px - area.x, py - area.y);
+                if lx < 0 || ly < 0 || lx >= i64::from(aw) || ly >= i64::from(ah) {
+                    continue;
+                }
+                let a = layer[ly as usize * aw as usize + lx as usize];
+                let b = page[py as usize * w as usize + px as usize];
+                if a != b {
+                    diffs += 1;
+                }
+            }
+        }
+    }
+    assert_eq!(diffs, 0, "池框层与在页版必须逐像素等价（差 {diffs}）");
+    let nz = layer.iter().filter(|p| **p & 0x00FF_FFFF != 0).count();
+    assert!(nz > 100_000, "池框层必须真落墨（非零像素 {nz}）");
+}
+
+/// BAR-097 钉②：下池行层与在页版**逐像素等价**（行框区域内）——渐变
+/// 参照锚终点页坐标页尺（grad_ref=(x_shift, y_origin, page_denom)），
+/// 贴死帧与稳态配置槽烘焙逐像素一致交接。变异：grad_ref.1 传 0 → 红
+#[test]
+fn spec_bar097_下池行层_逐像素等价() {
+    use kfm_na::termview::TermEmu;
+    use kfm_na::ui::accent::AccentPair;
+    use kfm_na::ui::cfg_page::{CfgPage, RowView, lower_row_rect};
+    use kfm_na::ui::dual_pool::{DualPool, pool_area};
+    let (w, h) = (1260u32, 2400u32);
+    let acc = AccentPair {
+        c1: 0x00FF_6000,
+        c2: 0x0000_80FF,
+    };
+    let tv = TermView::new(host_font(), None, 8, 2, CELL_W, CELL_H);
+    let mut pool = DualPool::new(w, h);
+    pool.set_viewport(w, h, 0);
+    pool.set_upper_content_h(600);
+    let ps = pool.layout(1000);
+    let area = pool_area(w, h, 0);
+    let rows = vec![
+        RowView {
+            title: "SYS".into(),
+            meta: "1 item".into(),
+        },
+        RowView {
+            title: "NET".into(),
+            meta: String::new(),
+        },
+    ];
+    let mut page_core = CfgPage::new();
+    page_core.set_rows(rows.clone());
+    let cs = page_core.snap(1000);
+
+    // 在页版：池框铺底 + 行内容（行文字混色底 = 行框内芯，两层同源）
+    let mut page = vec![0u32; (w * h) as usize];
+    tv.paint_cfg_dual_pool(&mut page, w, h, &ps, 0, acc);
+    tv.paint_cfg_pool_content(&mut page, w, h, &ps, &cs, 0, acc, 1000, false, true);
+    // 层版：行层（行框内芯不透明 → 文字混色底同在页版）
+    let (aw, ah) = (area.w, area.h);
+    let mut layer = vec![0u32; (aw * ah) as usize];
+    let page_denom = (i64::from(w) - 1) + (i64::from(h) - 1);
+    tv.paint_lower_rows_layer(
+        &mut layer, aw, ah, area.x, ps.lower.y, &ps.lower, &rows, acc, page_denom,
+    );
+
+    let mut diffs = 0usize;
+    let mut inked = 0usize;
+    for i in 0..rows.len() {
+        let r = lower_row_rect(i, &ps.lower);
+        if r.y + i64::from(r.h) > ps.lower.y + i64::from(ps.lower.h) {
+            break;
+        }
+        for py in r.y..(r.y + i64::from(r.h)) {
+            for px in r.x..(r.x + i64::from(r.w)) {
+                let (lx, ly) = (px - area.x, py - ps.lower.y);
+                let a = layer[ly as usize * aw as usize + lx as usize];
+                if a == 0 {
+                    continue; // 行框圆角剪影外 = 层透明（PoolFx 池芯在底下补，合成期等价）
+                }
+                inked += 1;
+                let b = page[py as usize * w as usize + px as usize];
+                if a != b {
+                    diffs += 1;
+                }
+            }
+        }
+    }
+    assert!(inked > 50_000, "行层必须真落墨（{inked} 像素）");
+    assert_eq!(diffs, 0, "下池行层与在页版必须逐像素等价（差 {diffs}）");
+}

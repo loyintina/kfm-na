@@ -183,6 +183,13 @@ impl DualPool {
         self.upper_content_h
     }
 
+    /// glide 目标上池高（BAR-097：下池行层烘焙的渐变参照锚——锚终点
+    /// 位 = 贴死帧与稳态配置槽烘焙逐像素一致交接；锚起步位会在贴死
+    /// 那帧跳色）
+    pub fn target_upper_h(&self) -> u32 {
+        self.target_h()
+    }
+
     pub fn area(&self) -> &PoolRect {
         &self.area
     }
