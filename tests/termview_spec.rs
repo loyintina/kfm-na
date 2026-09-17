@@ -5127,7 +5127,9 @@ fn spec_bar097_池框层_逐像素等价() {
         "池区原点 ≡ 上池原点（布局数学同源）"
     );
 
-    let mut page = vec![0u32; (w * h) as usize];
+    // BAR-104：页画布预填页底色——真实页非透明黑；透明底建模丢了半透明
+    // 涂装（框环 AA 边/发光带）的底色贡献，正是 BAR-104 钉盲区根源
+    let mut page = vec![kfm_na::ui::accent::CARD_PAGE_BG; (w * h) as usize];
     tv.paint_cfg_dual_pool(&mut page, w, h, &ps, 0, acc);
     let (aw, ah) = (area.w, area.h);
     let mut layer = vec![0u32; (aw * ah) as usize];
@@ -5167,7 +5169,7 @@ fn spec_bar097_池框层_逐像素等价() {
 fn spec_bar097_下池行层_逐像素等价() {
     use kfm_na::termview::TermEmu;
     use kfm_na::ui::accent::AccentPair;
-    use kfm_na::ui::cfg_page::{CfgPage, RowView, lower_row_rect};
+    use kfm_na::ui::cfg_page::{CfgPage, RowView};
     use kfm_na::ui::dual_pool::{DualPool, pool_area};
     let (w, h) = (1260u32, 2400u32);
     let acc = AccentPair {
@@ -5194,11 +5196,14 @@ fn spec_bar097_下池行层_逐像素等价() {
     page_core.set_rows(rows.clone());
     let cs = page_core.snap(1000);
 
-    // 在页版：池框铺底 + 行内容（行文字混色底 = 行框内芯，两层同源）
-    let mut page = vec![0u32; (w * h) as usize];
+    // 在页版：池框铺底 + 行内容（行文字混色底 = 行框内芯，两层同源）。
+    // BAR-104：页画布预填页底色——真实页非透明黑；透明底建模丢了半透明
+    // 涂装的底色贡献，正是 BAR-104 钉盲区根源
+    let mut page = vec![kfm_na::ui::accent::CARD_PAGE_BG; (w * h) as usize];
     tv.paint_cfg_dual_pool(&mut page, w, h, &ps, 0, acc);
     tv.paint_cfg_pool_content(&mut page, w, h, &ps, &cs, 0, acc, 1000, false, true);
-    // 层版：行层（行框内芯不透明 → 文字混色底同在页版）
+    // 层版：BAR-104 起层自填页底色+自画下池框（与 PoolFx 同源）——
+    // 行框内芯不透明 → 文字混色底同在页版，层内无透明像素
     let (aw, ah) = (area.w, area.h);
     let mut layer = vec![0u32; (aw * ah) as usize];
     let page_denom = (i64::from(w) - 1) + (i64::from(h) - 1);
@@ -5206,25 +5211,24 @@ fn spec_bar097_下池行层_逐像素等价() {
         &mut layer, aw, ah, area.x, ps.lower.y, &ps.lower, &rows, acc, page_denom,
     );
 
+    // BAR-104：对拍范围扩到下池整框（含框环 AA 边/渐变内芯/行间隙）——
+    // 行内墨全是不透明落墨时行内对拍咬不住透明底变异（实测），框环半
+    // 透明边才是 BAR-104 病灶的目击证人
     let mut diffs = 0usize;
     let mut inked = 0usize;
-    for i in 0..rows.len() {
-        let r = lower_row_rect(i, &ps.lower);
-        if r.y + i64::from(r.h) > ps.lower.y + i64::from(ps.lower.h) {
-            break;
-        }
-        for py in r.y..(r.y + i64::from(r.h)) {
-            for px in r.x..(r.x + i64::from(r.w)) {
-                let (lx, ly) = (px - area.x, py - ps.lower.y);
-                let a = layer[ly as usize * aw as usize + lx as usize];
-                if a == 0 {
-                    continue; // 行框圆角剪影外 = 层透明（PoolFx 池芯在底下补，合成期等价）
-                }
-                inked += 1;
-                let b = page[py as usize * w as usize + px as usize];
-                if a != b {
-                    diffs += 1;
-                }
+    let (bx0, by0) = (ps.lower.x, ps.lower.y);
+    let (bx1, by1) = (
+        ps.lower.x + i64::from(ps.lower.w),
+        ps.lower.y + i64::from(ps.lower.h),
+    );
+    for py in by0..by1 {
+        for px in bx0..bx1 {
+            let (lx, ly) = (px - area.x, py - ps.lower.y);
+            let a = layer[ly as usize * aw as usize + lx as usize];
+            inked += 1; // BAR-104：层全不透明（自填底色），逐像素全比
+            let b = page[py as usize * w as usize + px as usize];
+            if a != b {
+                diffs += 1;
             }
         }
     }

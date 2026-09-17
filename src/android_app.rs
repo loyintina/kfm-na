@@ -4280,7 +4280,9 @@ impl App {
                 // 槽纹理（BAR-100，整页重画+13MB 上传全省）
                 if k.1 == crate::ui::cfg_page::PanScope::Upper as u8 {
                     let pmx = g.slot_canvas(crate::gles_present::ChromeSlot::PanMove);
-                    pmx.fill(0);
+                    // BAR-104：预填页底色——半透明文字/框边在透明画布上落墨
+                    // 丢底色贡献，贴死交接比稳态页内版暗一截（全卡闪变）
+                    pmx.fill(crate::ui::accent::CARD_PAGE_BG);
                     if let (Some(ps), Some(t), Some(cs)) = (pool_snap, th, cfg_snap) {
                         let mut settled = cs.clone();
                         settled.pan = None;
@@ -4472,7 +4474,7 @@ impl App {
                 if sigs.poolfx.feed(fx_sig) {
                     g.set_slot_dims(crate::gles_present::ChromeSlot::PoolFx, area.w, area.h);
                     let px = g.slot_canvas(crate::gles_present::ChromeSlot::PoolFx);
-                    px.fill(0);
+                    // BAR-104：paint_pool_frames_layer 自填页底色，此处不再清 0
                     t.lock()
                         .unwrap()
                         .paint_pool_frames_layer(px, area.w, area.h, area.x, area.y, ps, acc_cfg);
@@ -4516,7 +4518,7 @@ impl App {
                         area.h,
                     );
                     let px = g.slot_canvas(crate::gles_present::ChromeSlot::LowerRowsPan);
-                    px.fill(0);
+                    // BAR-104：paint_lower_rows_layer 自填页底色+自画下池框，此处不再清 0
                     let page_denom =
                         (i64::from(w.saturating_sub(1)) + i64::from(h.saturating_sub(1))).max(1);
                     t.lock().unwrap().paint_lower_rows_layer(

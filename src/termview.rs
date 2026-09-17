@@ -2967,6 +2967,11 @@ impl TermView {
             return;
         }
         let mut frame = Frame { buf, w: cw, h: ch };
+        // BAR-104：画布预填页底色（不是透明黑）——半透明涂装（框环 AA 边/
+        // 发光带）在透明画布上落墨会丢底色贡献（RGB=C·a/255 被
+        // mark_chrome_alpha 强转 α=255），贴死交接时比稳态页内版暗一截
+        // = 全卡闪变。预填后层内混色底与在页版同为 CARD_PAGE_BG，逐像素一致
+        frame.fill_rect(0, 0, cw, ch, crate::ui::accent::CARD_PAGE_BG);
         for r in [&snap.upper, &snap.lower] {
             if r.w < 2 || r.h < 2 {
                 continue;
@@ -3016,6 +3021,30 @@ impl TermView {
             return;
         }
         let mut frame = Frame { buf, w: cw, h: ch };
+        // BAR-104：画布预填页底色（不是透明黑）——半透明涂装（三级框细边/
+        // 文字 AA）在透明画布上落墨会丢底色贡献，贴死交接时比稳态页内版
+        // 暗一截 = 全卡闪变（同 paint_pool_frames_layer 的池框层修法）。
+        // 底色之上再补画下池框环+渐变内芯（与 PoolFx 调用参数完全同源），
+        // 行框/文字落墨的底与在页版逐像素一致
+        frame.fill_rect(0, 0, cw, ch, crate::ui::accent::CARD_PAGE_BG);
+        if lower_final.w >= 2 && lower_final.h >= 2 {
+            let fx0 = lower_final.x - x_shift;
+            let fy0 = lower_final.y - y_origin;
+            paint_rect_ring(
+                &mut frame,
+                fx0,
+                fy0,
+                fx0 + i64::from(lower_final.w),
+                fy0 + i64::from(lower_final.h),
+                0,
+                i64::from(cw),
+                crate::ui::accent::CARD_PAGE_BG,
+                accent.c2,
+                accent.c1,
+                POOL_FRAME_R,
+                true,
+            );
+        }
         let title_fg = 0x00D9_D9D9; // 0.85 白（§2.3 标题档）
         let meta_fg = 0x0080_8080; // 0.5 白（次级档）
         let px_title = 36.0;
