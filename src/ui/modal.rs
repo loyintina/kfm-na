@@ -52,6 +52,21 @@ pub enum ModalHit {
     Outside,
 }
 
+/// 屏尺寸取舍（纯函数，钉死）：窗口活着吃窗口实时尺寸；退后台窗口
+/// 已弃（BAR-004 suspended 弃窗）→ 回退末次 Resized 缓存；缓存也没有
+/// （(0,0) 未量过）= None——宁可无动作不瞎猜几何。
+/// BAR-108 实录：挂起态跳框「关不掉」——起手路由正常（不查窗口），
+/// 抬手命中臂因 window=None 静默跳过，注入/远程判卷全瘫在这条缝上。
+pub fn pick_screen_px(win: Option<(u32, u32)>, cached: (u32, u32)) -> Option<(u32, u32)> {
+    if let Some(wh) = win {
+        return Some(wh);
+    }
+    if cached.0 > 0 && cached.1 > 0 {
+        return Some(cached);
+    }
+    None
+}
+
 /// 贪心折行（格宽尺：CJK 2 格/其余 1 格，与 tab_bar::text_cells 同尺）。
 /// 满即断、刚好放下不断；空串 = 一行空（占位不塌）
 pub fn wrap_text(s: &str, width_cells: u32) -> Vec<String> {

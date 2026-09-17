@@ -10,7 +10,7 @@ use kfm_na::ui::comp_registry::COMPONENTS;
 use kfm_na::ui::modal::{
     MODAL_CLOSE_H, MODAL_FIELD_GAP, MODAL_LINE_H, MODAL_PAD_X, MODAL_PAD_Y, MODAL_PREVIEW_H,
     MODAL_SIDE_MARGIN, MODAL_TITLE_H, ModalHit, card_rect, close_btn_rect, content_cells,
-    fields_of, fields_top, hit, preview_rect, wrap_text,
+    fields_of, fields_top, hit, pick_screen_px, preview_rect, wrap_text,
 };
 
 const SCR_W: u32 = 1221;
@@ -208,4 +208,29 @@ fn card_height_includes_preview_band() {
         + MODAL_CLOSE_H
         + MODAL_PAD_Y;
     assert_eq!(c.h, expect, "卡高公式含画板带（空字段 = 全固定带）");
+}
+
+#[test]
+fn spec_bar108_屏尺寸取舍_窗口优先() {
+    // 窗口活着：实时尺寸优先，缓存再大也不看
+    assert_eq!(
+        pick_screen_px(Some((1080, 2400)), (1260, 2800)),
+        Some((1080, 2400))
+    );
+}
+
+#[test]
+fn spec_bar108_屏尺寸取舍_挂起回退缓存() {
+    // 挂起弃窗（BAR-004）：回退末次 Resized 缓存——后台注入手势几何不瞎
+    // （BAR-108：跳框关闭臂曾因 window=None 静默跳过）
+    assert_eq!(pick_screen_px(None, (1260, 2800)), Some((1260, 2800)));
+}
+
+#[test]
+fn spec_bar108_屏尺寸取舍_双无则_none() {
+    // 窗口死了且从没量过（缓存 (0,0)）= None——宁可无动作不瞎猜；
+    // 半缓存（单边 0）同样不算数
+    assert_eq!(pick_screen_px(None, (0, 0)), None);
+    assert_eq!(pick_screen_px(None, (1260, 0)), None);
+    assert_eq!(pick_screen_px(None, (0, 2800)), None);
 }

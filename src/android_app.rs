@@ -296,6 +296,10 @@ struct App {
     /// 跳框模态手势槽（宪法 §六 跳框条款，九修）：
     /// (起手x, 起手y, 已拖过slop)——模态开着时配置页手势全归它
     modal_touch: Option<(f64, f64, bool)>,
+    /// 挂起态屏尺寸缓存（BAR-108）：退后台窗口即弃（BAR-004 suspended
+    /// 置 None），触摸命中几何不能跟着瞎——apply_window_size 每次记账，
+    /// window=None 时由 screen_px() 兜底回退
+    last_win_px: (u32, u32),
     /// 按在标签行带上的手势（宪法 §四 仲裁条款：行上横向滑动不触发
     /// 面板拖拽/页面滑向）——配置页靠泊且起点在行带才建
     tab_touch: Option<TabTouch>,
@@ -563,6 +567,20 @@ impl App {
         self.chrome_inset_px
     }
 
+    /// 屏尺寸几何源（BAR-108 挂起态兜底）：窗口活着吃实时尺寸；退后台
+    /// 窗口已弃（BAR-004）吃 last_win_px 缓存——触摸命中臂（跳框关闭/齿轮/
+    /// 键栏/输入栏/面板拖拽）在后台注入时不许静默瞎掉。取舍律钉在
+    /// ui/modal.rs pick_screen_px
+    fn screen_px(&self) -> Option<(u32, u32)> {
+        crate::ui::modal::pick_screen_px(
+            self.window.as_ref().map(|w| {
+                let s = w.inner_size();
+                (s.width, s.height)
+            }),
+            self.last_win_px,
+        )
+    }
+
     /// 闸门触摸注入抽干（通道八）：每圈 about_to_wait 调。Sleep 指令
     /// 挂起节拍（到点再取下一条），其余指令即刻喂 handle_touch——
     /// 与真手指同一入口，判卷尺同一把
@@ -654,11 +672,17 @@ impl App {
             Some(Panel::Parser) => DragTop::Parser,
             _ => DragTop::Other,
         };
-        let w = self
-            .window
-            .as_ref()
-            .map(|w| w.inner_size().width)
-            .unwrap_or(0) as f32;
+        // 字段级直取（self.screen_px() 借全 self 会撞 &mut panel_drag，
+        // 借检只认字段级 disjoint——E0502 手机端实踩）
+        let w = crate::ui::modal::pick_screen_px(
+            self.window.as_ref().map(|w| {
+                let s = w.inner_size();
+                (s.width, s.height)
+            }),
+            self.last_win_px,
+        )
+        .map(|(sw, _)| sw)
+        .unwrap_or(0) as f32;
         if w <= 0.0 {
             return false;
         }
@@ -708,11 +732,7 @@ impl App {
             crate::report::report("gest", "拖拽旁观者被第二指收走（捏合抢占）");
             return;
         }
-        let w = self
-            .window
-            .as_ref()
-            .map(|w| w.inner_size().width)
-            .unwrap_or(0) as f32;
+        let w = self.screen_px().map(|(sw, _)| sw).unwrap_or(0) as f32;
         let cur = d.current_offset().unwrap_or(w);
         let decision = if cancelled {
             ReleaseDecision::Cancel
@@ -821,8 +841,8 @@ impl App {
                 // （不滚屏不唤键盘——聚焦/发送在 Ended 分路）。
                 // 带高随行数走（textarea 长高，眼手同尺）
                 let bar_h = self.cur_bar_h();
-                let in_input_bar = self.window.as_ref().is_some_and(|w| {
-                    crate::input_bar::in_bar(y, w.inner_size().height, self.chrome_inset(), bar_h)
+                let in_input_bar = self.screen_px().is_some_and(|(_, sh)| {
+                    crate::input_bar::in_bar(y, sh, self.chrome_inset(), bar_h)
                 });
                 if in_input_bar {
                     // 选择态下先检查是否按在锚点热区上（锚点命中优先级最高）
@@ -1015,8 +1035,8 @@ impl App {
                 // 只在裸终端页走到这（面板在顶上面已 return）——「文件树/
                 // 浏览器在顶时设置不出现」从路由自然推出，栈零新规则。
                 // 登记即归钮，点按抬手才召唤（拖过 slop 不触发）
-                if let Some(w) = &self.window
-                    && crate::ui::gear::hit(x, y, w.inner_size().width)
+                if let Some((sw, _)) = self.screen_px()
+                    && crate::ui::gear::hit(x, y, sw)
                 {
                     self.gear_touch = Some((id, x, y, false));
                     return;
@@ -1025,8 +1045,8 @@ impl App {
                 // BAR-018：判定尺与渲染/hit 一致——减去键盘 inset，
                 // 否则键盘弹起时行带浮在 inset 上方，这里却认屏底。
                 // 期 0 组件三：行上移一层（输入栏压底），有效 inset + 当前栏高
-                let in_bar = self.window.as_ref().is_some_and(|w| {
-                    crate::keybar::in_bar(y, w.inner_size().height, self.chrome_inset() + bar_h)
+                let in_bar = self.screen_px().is_some_and(|(_, sh)| {
+                    crate::keybar::in_bar(y, sh, self.chrome_inset() + bar_h)
                 });
                 if in_bar {
                     self.bar_touch = Some((x, y));
@@ -1520,9 +1540,8 @@ impl App {
                         return;
                     }
                     let bar_h = self.cur_bar_h();
-                    let action = self.window.as_ref().and_then(|w| {
-                        let s = w.inner_size();
-                        crate::input_bar::hit(x, y, s.width, s.height, self.chrome_inset(), bar_h)
+                    let action = self.screen_px().and_then(|(sw, sh)| {
+                        crate::input_bar::hit(x, y, sw, sh, self.chrome_inset(), bar_h)
                     });
                     let selecting = self.input_bar.as_ref().is_some_and(|b| b.snap().selecting);
                     match action {
@@ -1562,20 +1581,21 @@ impl App {
                 // 跳框模态收尾（宪法 §六，九修）：未拖抬手 = 命中判定
                 // （几何吃 ui/modal.rs 同一份——眼手同尺）：关闭钮/框外 =
                 // 收起；框内其他 = 无操作吃手势。Cancelled/拖过 slop 零动作
+                // BAR-108：几何源走 screen_px（挂起态吃缓存）——曾因直查
+                // self.window 在退后台后静默跳过，跳框关不死
                 if let Some(mt) = self.modal_touch.take() {
                     if phase == TouchPhase::Ended
                         && !mt.2
-                        && let (Some(page), Some(win)) =
-                            (crate::ui::cfg_page::cfg_page_handle(), self.window.as_ref())
+                        && let (Some(page), Some((sw, sh))) =
+                            (crate::ui::cfg_page::cfg_page_handle(), self.screen_px())
                     {
-                        let size = win.inner_size();
                         let mut pg = page.lock().unwrap();
                         if let Some(mi) = pg.modal() {
                             use crate::ui::modal as md;
                             let comps = crate::ui::comp_registry::COMPONENTS;
                             let entry = &comps[mi.min(comps.len() - 1)];
-                            let fields = md::fields_of(entry, md::content_cells(size.width));
-                            let card = md::card_rect(size.width, size.height, &fields);
+                            let fields = md::fields_of(entry, md::content_cells(sw));
+                            let card = md::card_rect(sw, sh, &fields);
                             match md::hit(mt.0 as i64, mt.1 as i64, &card) {
                                 md::ModalHit::Close | md::ModalHit::Outside => {
                                     pg.close_modal();
@@ -2751,6 +2771,8 @@ impl App {
     ///
     /// 顶带恒定（margin_top：壳环靠泊接管防切，不跟格高走，2026-09-11）
     fn apply_window_size(&mut self, w: u32, h: u32) {
+        // BAR-108：末次真实屏尺寸记账——退后台弃窗后触摸命中几何靠它兜底
+        self.last_win_px = (w, h);
         // 光球边界钳制原料（首次调用落默认出生位；键盘 inset 变化也走这里）
         if let Some(ai) = &self.ai_presence {
             ai.set_bounds(w, h, self.ime_bottom_px);
