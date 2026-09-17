@@ -748,6 +748,10 @@ fn paint_row_frame_gradref(
     // 框必须采出「它在页上原位」的颜色（偏移=层在页上的原点、分母=
     // 页尺）；整页内绘制传 (0, 0, denom) 即恒等
     grad_ref: (i64, i64, i64),
+    // 内芯 alpha：0 = 旧语义（裸 RGB，mark_chrome_alpha 判不透明）；
+    // >0 = 写真 alpha 字节直通（BAR-107 光标层半透明芯——文字只归行层，
+    // 芯半透明让下层行文字透出；其余调用点恒传 0）
+    core_alpha: u8,
 ) {
     const THIN: i64 = 3; // 细边宽（左粗：细 ≈ 3:1）
     const BAR_L: i64 = 10; // 左粗竖线宽（六修标定 10px）
@@ -807,8 +811,14 @@ fn paint_row_frame_gradref(
                 *dst = (*dst & 0xFF00_0000) | ring_lut[s];
                 continue;
             }
-            // 内芯（或未选中整剪影）= 渐变暗底不透明直出（十二修 §三）
-            row[(xx - x_start) as usize] = bg_lut[s];
+            // 内芯（或未选中整剪影）= 渐变暗底直出（十二修 §三）；
+            // core_alpha=0 → 裸 RGB（mark 判不透明，旧语义），>0 → 自带
+            // 真 alpha 字节（mark 直通；BAR-107 光标层半透明芯）
+            row[(xx - x_start) as usize] = if core_alpha == 0 {
+                bg_lut[s]
+            } else {
+                (u32::from(core_alpha) << 24) | bg_lut[s]
+            };
         }
     }
 }
@@ -827,7 +837,7 @@ fn paint_row_frame(
     denom: i64,
     clip: (i64, i64),
 ) {
-    paint_row_frame_gradref(frame, x, y, rw, rh, sel, accent, clip, (0, 0, denom));
+    paint_row_frame_gradref(frame, x, y, rw, rh, sel, accent, clip, (0, 0, denom), 0);
 }
 
 /// 均匀细框涂装（宪法 §五 十一修新立：**非池行场合的通用细框**，不属
@@ -2833,13 +2843,21 @@ impl TermView {
         }
     }
 
+    /// BAR-107 下池光标层芯 alpha（用户拍板「框动行不动」：文字只归行层，
+    /// 光标只画框，芯改半透明让下层行文字透出；0x55≈33%，观感可微调）
+    pub(crate) const LOWER_CURSOR_CORE_ALPHA: u8 = 0x55;
+
     /// 下池光标**层**涂装（BAR-096 拆槽，帧饥饿根治件二）：层画布 =
     /// 池内容宽 × 下池行高，内容 = 选中全包框满态铺满整层——
     /// **框形状与行内容无关**，故层内容只随 accent/宽变（一次烘焙），
     /// 位置（行号小数 → 像素 y）全部进合成期 placement：滑行逐帧零重烘
     /// （原配置槽每帧 14MB 重光栅+上传）。
     /// 渐变保真：grad_ref 吃「框在页上原位」的页坐标与页分母 → 与整页内
-    /// 绘制逐像素同色（BAR-096 保真条；颜色不随层画布尺漂移）
+    /// 绘制逐像素同色（BAR-096 保真条；颜色不随层画布尺漂移）。
+    /// **BAR-107：层内不画任何文字**——旧版（BAR-089 绕道）因框芯不透明
+    /// 被迫把选中行文字烤进光标层，平移期光标层与行层各走一条曲线 →
+    /// 同一行文字同帧两处错位（重影/框动字动）；芯改半透明
+    /// （LOWER_CURSOR_CORE_ALPHA）后文字由下层行层自然透出，光标层只剩框
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn paint_lower_cursor_layer(
         &self,
@@ -2850,7 +2868,6 @@ impl TermView {
         page_y: i64,
         page_denom: i64,
         accent: crate::ui::accent::AccentPair,
-        row: Option<&crate::ui::cfg_page::RowView>,
     ) {
         if cw < 4 || ch < 4 {
             return;
@@ -2866,39 +2883,8 @@ impl TermView {
             accent,
             (0, i64::from(ch)),
             (page_x, page_y, page_denom),
+            Self::LOWER_CURSOR_CORE_ALPHA,
         );
-        // BAR-096 拆层修（回归 BAR-089 的历史修法）：**选中行文字必须画在
-        // 框芯之上**——框芯是不透明渐变暗底（mark_chrome_alpha：非纯黑即
-        // 不透明），层画在配置槽之上 → 不在此补文字，accent 亮时选中行文字
-        // 被框芯盖没（用户真机实录「框把文字盖住」；redroid 那次看着正常
-        // 只因 accent 暗、框芯恰为纯黑被判透明）。尺与 paint_pool_lower 同源
-        // （title_band 90 / title 36 / meta 30 / 内缩 27 / faux-bold 双画）
-        if let Some(row) = row {
-            let title_fg = 0x00D9_D9D9;
-            let meta_fg = 0x0080_8080;
-            let title_band = 90u32;
-            let text_inset = 27.0;
-            self.draw_text_left_ex(
-                &mut frame, &row.title, 0, cw, 0, title_band, 36.0, title_fg, text_inset, None,
-            );
-            self.draw_text_left_ex(
-                &mut frame, &row.title, 1, cw, 0, title_band, 36.0, title_fg, text_inset, None,
-            );
-            if !row.meta.is_empty() && ch > title_band {
-                self.draw_text_left_ex(
-                    &mut frame,
-                    &row.meta,
-                    0,
-                    cw,
-                    title_band,
-                    ch - title_band,
-                    30.0,
-                    meta_fg,
-                    text_inset,
-                    None,
-                );
-            }
-        }
     }
 
     /// 双池涂装（宪法 §五）：上池/下池两枚二级卡片框，paint_rect_ring
@@ -3068,6 +3054,7 @@ impl TermView {
                 accent,
                 no_clip,
                 grad_ref,
+                0,
             );
         }
         // 文字最后一遍（盖过行框内芯）：与 paint_pool_lower 同配方
@@ -5446,7 +5433,8 @@ pub trait TermEmu: Send {
     );
     /// 下池光标**层**涂装（BAR-096 拆槽，考题/壳层门面）：层缓冲 =
     /// 池内容宽 × 下池行高；page_x/page_y/page_denom = 框在页上原位坐标
-    /// 与页渐变分母（保真参照）
+    /// 与页渐变分母（保真参照）。BAR-107：层内只有框（芯半透明），
+    /// 文字只归行层
     #[allow(clippy::too_many_arguments)]
     fn paint_lower_cursor_layer(
         &self,
@@ -5457,7 +5445,6 @@ pub trait TermEmu: Send {
         page_y: i64,
         page_denom: i64,
         accent: crate::ui::accent::AccentPair,
-        row: Option<&crate::ui::cfg_page::RowView>,
     );
     /// 池框几何层涂装（BAR-097，考题/壳层门面）：层缓冲 = 池区 w×h，
     /// 原点 = 池区左上角（x_shift/y_shift）；仅双池框+内芯无行字
@@ -5707,11 +5694,8 @@ impl TermEmu for TermView {
         page_y: i64,
         page_denom: i64,
         accent: crate::ui::accent::AccentPair,
-        row: Option<&crate::ui::cfg_page::RowView>,
     ) {
-        TermView::paint_lower_cursor_layer(
-            self, buf, cw, ch, page_x, page_y, page_denom, accent, row,
-        )
+        TermView::paint_lower_cursor_layer(self, buf, cw, ch, page_x, page_y, page_denom, accent)
     }
     #[allow(clippy::too_many_arguments)]
     fn paint_pool_frames_layer(

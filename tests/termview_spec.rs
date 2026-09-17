@@ -4951,7 +4951,7 @@ fn spec_bar096_光标层_渐变保真钉() {
     let (px0, py0) = (102i64, 777i64);
     let denom = (i64::from(w) - 1) + (i64::from(h) - 1);
     let mut layer = vec![0u32; (cw * ch) as usize];
-    tv.paint_lower_cursor_layer(&mut layer, cw, ch, px0, py0, denom, acc, None);
+    tv.paint_lower_cursor_layer(&mut layer, cw, ch, px0, py0, denom, acc);
     // 左粗竖条内（x=5）——环带 = 渐变实色 α255
     let y_mid = (ch / 2) as i64;
     let got = layer[(ch / 2) as usize * cw as usize + 5];
@@ -4971,17 +4971,23 @@ fn spec_bar096_光标层_渐变保真钉() {
     );
 }
 
-/// BAR-096 补钉（回归 BAR-089 的历史修法）：光标层内**选中行文字落墨**
-/// ——框芯是不透明渐变暗底（mark_chrome_alpha：非纯黑即不透明），而层
-/// 画在配置槽之上：文字若不与框同层，accent 亮时选中行文字被框芯盖没
-/// （用户真机实录「下池三级选择框把文字盖住」；redroid 判卷那次看着正常
-/// 只因 accent 暗、框芯恰为纯黑被判透明 = 判卷盲区，故此钉按「文字墨
-/// 必须出现在框内芯区」判）。变异：层内不画文字（row=None 语义回潮）→ 红。
+/// BAR-107 钉（2026-09-17 用户拍板「框动行不动」，取代 BAR-096 落墨钉）：
+/// 光标层**只画框、不画字**——旧版把选中行文字烤进光标层（BAR-089 绕道：
+/// 框芯不透明会盖字），平移期光标层与行层各走一条曲线 → 同一行文字同帧
+/// 两处错位（用户真机录屏「整个框都移动了+重影」，vc449 差分 a00 帧
+/// 「组件」双现定罪）。修 = 芯改半透明（LOWER_CURSOR_CORE_ALPHA），文字
+/// 只归行层透出。钉三言：
+/// ①内芯像素 alpha 字节 = 0x55 且 RGB 非零（mark_chrome_alpha 对高字节
+///   非 0 像素直通 → GLES 真混合，下层行文字透出）；
+/// ②环带像素 alpha 字节 = 0 且 RGB 非零（mark 判不透明 = 实框不变）；
+/// ③剪影外像素全 0（圆角外透明，不污下层）。
+/// （0x55 与 termview LOWER_CURSOR_CORE_ALPHA 咬合——pub(crate) 测试不可
+/// 达，此处硬编码契约值，调常量须同步本钉。）
+/// 变异：core_alpha 传 0（芯回不透明）→ 言①红；环带误写 alpha → 言②红。
 #[test]
-fn spec_bar096_光标层_选中行文字落墨钉() {
+fn spec_bar107_光标层_框动行不动() {
     use kfm_na::termview::TermEmu;
     use kfm_na::ui::accent::AccentPair;
-    use kfm_na::ui::cfg_page::RowView;
     let acc = AccentPair {
         c1: 0x00FF_6000,
         c2: 0x0000_80FF,
@@ -4990,30 +4996,25 @@ fn spec_bar096_光标层_选中行文字落墨钉() {
     let (cw, ch) = (1000u32, 162u32);
     let (px0, py0) = (102i64, 777i64);
     let denom = 4058i64;
-    // 纯框（row=None）作对照
-    let mut bare = vec![0u32; (cw * ch) as usize];
-    tv.paint_lower_cursor_layer(&mut bare, cw, ch, px0, py0, denom, acc, None);
-    // 带选中行文字（ASCII 夹具——host 字体无 CJK 字形，state.md 夹具教训）
-    let row = RowView {
-        title: "SYS".into(),
-        meta: "1 item".into(),
-    };
-    let mut withtext = vec![0u32; (cw * ch) as usize];
-    tv.paint_lower_cursor_layer(&mut withtext, cw, ch, px0, py0, denom, acc, Some(&row));
-    // 文字墨必须落进"框内芯区"（左粗条 10px 之后、title 带内）
-    let mut in_core = 0usize;
-    for y in 0..110usize {
-        for x in 12..(cw as usize - 12) {
-            let a = bare[y * cw as usize + x];
-            let b = withtext[y * cw as usize + x];
-            if a != b {
-                in_core += 1;
-            }
-        }
-    }
-    assert!(
-        in_core > 100,
-        "选中行文字必须画在框芯之上（层内落墨 {in_core} 像素；< 100 = 文字没进层，BAR-089 回归）"
+    let mut layer = vec![0u32; (cw * ch) as usize];
+    tv.paint_lower_cursor_layer(&mut layer, cw, ch, px0, py0, denom, acc);
+    // ①内芯（中心点）——半透明渐变暗底
+    let core = layer[(ch / 2) as usize * cw as usize + (cw / 2) as usize];
+    assert_eq!(
+        core >> 24,
+        0x55,
+        "内芯必须自带半透明 alpha（0x55）让行层文字透出（BAR-107）"
+    );
+    assert!(core & 0x00FF_FFFF != 0, "内芯必须是渐变暗底非纯黑");
+    // ②环带（左粗条 x=5）——裸 RGB（mark 后不透明实框）
+    let ring = layer[(ch / 2) as usize * cw as usize + 5];
+    assert_eq!(ring >> 24, 0, "环带必须保持裸 RGB（mark 判不透明实框）");
+    assert!(ring & 0x00FF_FFFF != 0, "环带必须真落墨");
+    // ③剪影外（圆角外角点）——全 0 透明
+    assert_eq!(
+        layer[cw as usize + 1],
+        0,
+        "圆角剪影外必须全透明（不污下层行层）"
     );
 }
 

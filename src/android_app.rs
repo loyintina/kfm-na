@@ -4460,19 +4460,11 @@ impl App {
                     g.set_slot_dims(crate::gles_present::ChromeSlot::LowerCursor, cw, chh);
                     let cxp = g.slot_canvas(crate::gles_present::ChromeSlot::LowerCursor);
                     cxp.fill(0);
-                    // 层内画选中行文字（框在文字下）——框芯不透明（非纯黑即
-                    // 不透明），层在配置槽之上 → 文字必须随框同层（BAR-089
-                    // 修法复刻；否则 accent 亮时选中行文字被框芯盖没）
-                    t.lock().unwrap().paint_lower_cursor_layer(
-                        cxp,
-                        cw,
-                        chh,
-                        px0,
-                        py0,
-                        page_denom,
-                        acc_cfg,
-                        cs.rows.get(cs.focus),
-                    );
+                    // BAR-107：层内只画框（芯半透明 0x55），选中行文字归
+                    // 行层透出——「框动行不动」，平移期不再双画错位
+                    t.lock()
+                        .unwrap()
+                        .paint_lower_cursor_layer(cxp, cw, chh, px0, py0, page_denom, acc_cfg);
                     g.slot_bake(crate::gles_present::ChromeSlot::LowerCursor);
                 }
             }
