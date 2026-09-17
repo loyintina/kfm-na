@@ -4142,7 +4142,9 @@ impl App {
             .is_some_and(|p| p.scope == crate::ui::cfg_page::PanScope::Upper);
         // BAR-104：喂交接差分机本帧是否 Upper 平移合成帧（present_frame
         // 内消费；未武装时仅一次原子写，零开销）
-        crate::gles_present::set_panend_mark(pan_upper);
+        // BAR-104：喂交接差分机本帧是否 Upper 平移合成帧 + 本帧 cfg
+        // epoch（present_frame 内消费；未武装时仅一次原子写，零开销）
+        crate::gles_present::set_panend_mark(pan_upper, cfg_snap.map_or(0, |cs| cs.epoch));
         let slot_vis = crate::ui::stage::slot_visibility(
             grid_keybar,
             panel_visible,
@@ -4303,6 +4305,7 @@ impl App {
                         );
                     }
                     g.slot_bake(crate::gles_present::ChromeSlot::PanMove);
+                    crate::report::report("panend", &format!("panmove_bake epoch={}", k.0));
                 }
                 sigs.pan_cap = Some(k);
             }

@@ -198,16 +198,23 @@ static CAPTURE_TICK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64
 /// (w, h, rgb) 缩略帧仓——run 收尾统一外发
 static CAPTURE_FRAMES: std::sync::Mutex<Vec<(u32, u32, Vec<u8>)>> =
     std::sync::Mutex::new(Vec::new());
-/// BAR-104 交接差分机：状态机 + 平移末帧像素 hold + 本帧是否
-/// Upper 平移合成帧（android_app 每帧喂，present_frame 消费）
+/// BAR-104 交接差分机：状态机 + 平移末帧像素 hold + 本帧标记
+/// （android_app 每帧喂，present_frame 消费）。标记打包 u64：
+/// bit63 = 是否 Upper 平移合成帧，低 62 位 = 本帧 cfg epoch——
+/// 抓帧带代际对账（a/b 帧 epoch 落 trace，分辨「真·旧内容闪变」
+/// 与「仪器抓错帧」：a 帧 epoch 落后于贴死 epoch = 旧代实锤）
 static PANEND_CAP: std::sync::Mutex<crate::gate::PanendCap> =
     std::sync::Mutex::new(crate::gate::PanendCap::new());
 static PANEND_HOLD: std::sync::Mutex<Option<Vec<u32>>> = std::sync::Mutex::new(None);
-static PANEND_MARK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static PANEND_MARK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-/// 喂交接差分机：本帧是否 Upper 平移合成帧（android_app 渲染循环每帧调）
-pub fn set_panend_mark(is_pan: bool) {
-    PANEND_MARK.store(is_pan, std::sync::atomic::Ordering::Relaxed);
+/// 喂交接差分机：本帧是否 Upper 平移合成帧 + 本帧 cfg epoch
+/// （android_app 渲染循环每帧调）
+pub fn set_panend_mark(is_pan: bool, epoch: u64) {
+    PANEND_MARK.store(
+        (u64::from(is_pan) << 63) | (epoch & 0x7FFF_FFFF_FFFF_FFFF),
+        std::sync::atomic::Ordering::Relaxed,
+    );
 }
 
 // vsync 对表（dlsym libandroid.so 的 NDK API29+ 符号——targetSdk 28 不便
@@ -1802,19 +1809,23 @@ impl GlesPresent {
         // 单次点播单次交接，不投 = 零开销）：平移帧抓末帧合成 hold，
         // 平移后首帧稳态抓来配对倒盘——交接两侧逐像素差分归服务器
         {
+            let mark = PANEND_MARK.load(std::sync::atomic::Ordering::Relaxed);
             let cmd = {
                 let mut st = PANEND_CAP.lock().unwrap();
                 if !st.armed() && crate::gate::take_panend_cap_req(crate::gate::DUMP_DIR) {
                     st.arm();
                 }
-                st.on_frame(PANEND_MARK.load(std::sync::atomic::Ordering::Relaxed))
+                st.on_frame((mark >> 63) != 0)
             };
+            let mark_epoch = mark & 0x7FFF_FFFF_FFFF_FFFF;
             match cmd {
                 crate::gate::PanendCmd::Skip => {}
                 crate::gate::PanendCmd::GrabPan => {
+                    crate::report::report("panend", &format!("grab_a epoch={mark_epoch}"));
                     *PANEND_HOLD.lock().unwrap() = Some(self.capture_full());
                 }
                 crate::gate::PanendCmd::GrabStaticFinish => {
+                    crate::report::report("panend", &format!("grab_b epoch={mark_epoch}"));
                     let b = self.capture_full();
                     if let Some(a) = PANEND_HOLD.lock().unwrap().take() {
                         crate::gate::write_panend_pair(
