@@ -1417,7 +1417,11 @@ impl GlesPresent {
                                             self.layer_vao,
                                             self.layer_vbo,
                                             po.tex,
-                                            cfg_off as f32 + pc.old_dx,
+                                            // BAR-106：带内绘制必含带原点
+                                            // bx0（漏了 = 起步左闪+贴死左冲）
+                                            crate::ui::cfg_page::pan_band_draw_x(
+                                                pc.band.0, cfg_off, pc.old_dx,
+                                            ),
                                             by0 as f32 + cfg_dy_extra,
                                             (bx1 - bx0) as f32,
                                             (by1 - by0) as f32,
@@ -1443,7 +1447,12 @@ impl GlesPresent {
                                             self.layer_vao,
                                             self.layer_vbo,
                                             new_tex,
-                                            cfg_off as f32 + pc.new_dx,
+                                            // BAR-106：同 PanOld——带原点
+                                            // 入放置（贴死帧 new=bx0 精确
+                                            // 归位，不再左冲 bx0 补闪）
+                                            crate::ui::cfg_page::pan_band_draw_x(
+                                                pc.band.0, cfg_off, pc.new_dx,
+                                            ),
                                             by0 as f32 + cfg_dy_extra,
                                             (bx1 - bx0) as f32,
                                             (by1 - by0) as f32,

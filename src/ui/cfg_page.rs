@@ -215,6 +215,15 @@ pub fn pan_offsets(dir: i8, t: f32, travel: i64) -> (i64, i64) {
     )
 }
 
+/// 带内双代绘制 x（BAR-106：合成期源钳制绘制的放置唯一来源）：
+/// 带内 uv 采样的内容必须落回**带原点** bx0 再加平移偏移——漏 bx0
+/// 则 t=0 旧代左跳 bx0（起步左闪）、t=1 新代停在 −bx0（贴死左冲，
+/// 稳态重烘补闪归位），y 轴对称位是 by0+dy（gles_present 原代码 y
+/// 对 x 错 = 笔误实锤）
+pub fn pan_band_draw_x(bx0: i32, cfg_off: i32, dx: f32) -> f32 {
+    bx0 as f32 + cfg_off as f32 + dx
+}
+
 /// 下拉展开时长 ms（十五修 §六：生长 0→全高 ease-out）
 pub const DROPDOWN_ENTER_MS: u64 = 250;
 /// 下拉收起时长 ms（十五修 §六：选中细框即时落新行，面板 ease-in 收）

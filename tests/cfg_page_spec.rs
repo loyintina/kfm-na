@@ -12,9 +12,9 @@
 use kfm_na::ui::accent::AccentPair;
 use kfm_na::ui::cfg_page::{
     CfgPage, FIELD_BOTTOM_PAD, FIELD_BOX_GAP, FIELD_BOX_H, FIELD_ROW_GAP, FIELD_ROW_H,
-    FIELD_TEXT_INSET, FIELD_TRIANGLE_PAD, FIELD_VALUE_MIN_W, LOWER_ROW_H, PAN_GAP_PAGE, PAN_MS,
-    PAN_SETTLE_SLACK_MS, POOL_CONTENT_INSET, PanScope, ROW_GAP, RowView, UpperRow,
-    dropdown_panel_rect, field_label_rect, field_value_rect, lower_row_rect, pan_offsets,
+    FIELD_TEXT_INSET, FIELD_TRIANGLE_PAD, FIELD_VALUE_MIN_W, LOWER_ROW_H, PAN_GAP_PAGE,
+    PAN_GAP_UPPER, PAN_MS, PAN_SETTLE_SLACK_MS, POOL_CONTENT_INSET, PanScope, ROW_GAP, RowView,
+    UpperRow, dropdown_panel_rect, field_label_rect, field_value_rect, lower_row_rect, pan_offsets,
     upper_row_rect, wrap_field_lines,
 };
 use kfm_na::ui::dual_pool::{DualPoolSnap, PoolRect};
@@ -1071,4 +1071,41 @@ fn pan_offsets_forward_backward_and_gap_law() {
         let (d_old, d_new) = pan_offsets(-1, t, travel);
         assert_eq!((d_new - d_old).abs() - pw, PAN_GAP_PAGE, "t={t} 后退同律");
     }
+}
+
+// BAR-106 钉：带内源钳制绘制的放置 x = 带原点 bx0 + cfg_off + 偏移——
+// 合成期漏 bx0 则 t=0 旧代左跳 bx0（起步左闪）、t=1 新代停在 −bx0
+//（贴死左冲，稳态重烘补闪归位，vc449 全序列+panc 对定罪：panc 报
+// new=+0 精确归位而像素左切两字 = 放置与数学脱节）。
+// 变异抽检：绘制 x 退化成 cfg_off+dx（漏 bx0）→ 全四言必红。
+#[test]
+fn spec_bar106_带内绘制_放置含带原点() {
+    use kfm_na::ui::cfg_page::{pan_band_draw_x, pan_offsets};
+    let bx0 = 97; // vc449 真机 panc 实采带原点
+    let cfg_off = 0;
+    let travel = 1072 + PAN_GAP_UPPER;
+    // t=0：旧代精确在位（起步零跳闪）
+    let (d_old, d_new) = pan_offsets(1, 0.0, travel);
+    assert_eq!(
+        pan_band_draw_x(bx0, cfg_off, d_old as f32),
+        97.0,
+        "起步旧代在位"
+    );
+    assert_eq!(
+        pan_band_draw_x(bx0, cfg_off, d_new as f32),
+        97.0 + travel as f32,
+        "起步新代屏外右待"
+    );
+    // t=1：新代精确归位（贴死零左冲，与稳态重烘逐像素一致交接）
+    let (d_old, d_new) = pan_offsets(1, 1.0, travel);
+    assert_eq!(
+        pan_band_draw_x(bx0, cfg_off, d_old as f32),
+        97.0 - travel as f32,
+        "贴死旧代出尽"
+    );
+    assert_eq!(
+        pan_band_draw_x(bx0, cfg_off, d_new as f32),
+        97.0,
+        "贴死新代归位"
+    );
 }
