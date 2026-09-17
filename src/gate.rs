@@ -813,6 +813,32 @@ pub fn write_panend_pair(dir: &str, a: &[u32], b: &[u32], w: u32, h: u32) -> boo
     std::fs::write(Path::new(dir).join("panend.dim"), format!("{w} {h}")).is_ok()
 }
 
+/// 交接全序列倒盘（BAR-105 复判升级 2026-09-17：只留末帧掩盖了「仪器
+/// 到底看见什么」——逐帧全留，panend-a00..aNN.rgb 平移各帧 + panend-b.rgb
+/// 首帧稳态 + panend.dim；写前清掉上一轮残留 a 帧防串账）
+pub fn write_panend_seq(dir: &str, frames: &[Vec<u32>], b: &[u32], w: u32, h: u32) -> bool {
+    if let Ok(rd) = std::fs::read_dir(dir) {
+        for e in rd.flatten() {
+            let n = e.file_name();
+            let n = n.to_string_lossy();
+            if n.starts_with("panend-a") && n.ends_with(".rgb") {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+    }
+    let mut ok = true;
+    for (i, f) in frames.iter().enumerate() {
+        ok &= std::fs::write(
+            Path::new(dir).join(format!("panend-a{i:02}.rgb")),
+            encode_rgb(f),
+        )
+        .is_ok();
+    }
+    ok &= std::fs::write(Path::new(dir).join("panend-b.rgb"), encode_rgb(b)).is_ok();
+    ok &= std::fs::write(Path::new(dir).join("panend.dim"), format!("{w} {h}")).is_ok();
+    ok
+}
+
 /// GLES 合成帧倒盘（协议与 maybe_dump 同构：shot-gl.rgb + shot-gl.dim，
 /// 单次触发单次倒，倒完摘触发；文件 IO 失败不致命）
 pub fn write_shot_gl(dir: &str, buf: &[u32], w: u32, h: u32) -> bool {

@@ -205,7 +205,9 @@ static CAPTURE_FRAMES: std::sync::Mutex<Vec<(u32, u32, Vec<u8>)>> =
 /// 与「仪器抓错帧」：a 帧 epoch 落后于贴死 epoch = 旧代实锤）
 static PANEND_CAP: std::sync::Mutex<crate::gate::PanendCap> =
     std::sync::Mutex::new(crate::gate::PanendCap::new());
-static PANEND_HOLD: std::sync::Mutex<Option<Vec<u32>>> = std::sync::Mutex::new(None);
+/// BAR-105 复判：平移帧全序列留仓（末帧覆盖式 hold 说不清「仪器逐帧
+/// 到底看见什么」——真机差分与理论数学对不上时，序列是唯一裁判）
+static PANEND_HOLD: std::sync::Mutex<Vec<Vec<u32>>> = std::sync::Mutex::new(Vec::new());
 static PANEND_MARK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// 喂交接差分机：本帧是否 Upper 平移合成帧 + 本帧 cfg epoch
@@ -1829,15 +1831,16 @@ impl GlesPresent {
                 crate::gate::PanendCmd::Skip => {}
                 crate::gate::PanendCmd::GrabPan => {
                     crate::report::report("panend", &format!("grab_a epoch={mark_epoch}"));
-                    *PANEND_HOLD.lock().unwrap() = Some(self.capture_full());
+                    PANEND_HOLD.lock().unwrap().push(self.capture_full());
                 }
                 crate::gate::PanendCmd::GrabStaticFinish => {
                     crate::report::report("panend", &format!("grab_b epoch={mark_epoch}"));
                     let b = self.capture_full();
-                    if let Some(a) = PANEND_HOLD.lock().unwrap().take() {
-                        crate::gate::write_panend_pair(
+                    let frames = std::mem::take(&mut *PANEND_HOLD.lock().unwrap());
+                    if !frames.is_empty() {
+                        crate::gate::write_panend_seq(
                             crate::gate::DUMP_DIR,
-                            &a,
+                            &frames,
                             &b,
                             self.w,
                             self.h,

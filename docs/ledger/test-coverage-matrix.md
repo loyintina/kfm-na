@@ -17,7 +17,7 @@
 | `src/crash.rs` | 8 | 7 | 1 | install_signal_hook |
 | `src/direct_brain.rs` | 2 | 2 | 0 | — |
 | `src/exec_probe.rs` | 1 | 1 | 0 | — |
-| `src/gate.rs` | 88 | 64 | 24 | DUMP_DIR register_gate_router text_dump inject_keys spawn_gate_watcher REC_FILE_CAP REC_FILE rec_output rec_resize PANIC_FILE PANIC_TRACE_FILE LOOP_STALL_FILE note_loop_beat loop_beat_age_ms note_foreground install_panic_hook note_draw note_session_death touch_take register_input_bar ALERT_RSS_COOLDOWN_MS ALERT_DEATHS_WINDOW_MS ALERT_DEATHS_COOLDOWN_MS HISTORY_EVERY_TICKS |
+| `src/gate.rs` | 95 | 71 | 24 | DUMP_DIR register_gate_router text_dump inject_keys spawn_gate_watcher REC_FILE_CAP REC_FILE rec_output rec_resize PANIC_FILE PANIC_TRACE_FILE LOOP_STALL_FILE note_loop_beat loop_beat_age_ms note_foreground install_panic_hook note_draw note_session_death touch_take register_input_bar ALERT_RSS_COOLDOWN_MS ALERT_DEATHS_WINDOW_MS ALERT_DEATHS_COOLDOWN_MS HISTORY_EVERY_TICKS |
 | `src/glyph_atlas.rs` | 12 | 12 | 0 | — |
 | `src/http1.rs` | 10 | 7 | 3 | is_tick_err read_head_hook read_body_hook |
 | `src/ime_bridge.rs` | 1 | 0 | 1 | jni_counters |
@@ -49,7 +49,7 @@
 | `src/ui/cfg_page.rs` | 64 | 59 | 5 | DROPDOWN_ENTER_MS DROPDOWN_EXIT_MS DROPDOWN_PICK_MOVE_MS register_cfg_page cfg_page_handle |
 | `src/ui/comp_registry.rs` | 6 | 5 | 1 | preview_is_animated |
 | `src/ui/cursor.rs` | 9 | 9 | 0 | — |
-| `src/ui/dual_pool.rs` | 18 | 18 | 0 | — |
+| `src/ui/dual_pool.rs` | 19 | 19 | 0 | — |
 | `src/ui/fx_ease.rs` | 11 | 11 | 0 | — |
 | `src/ui/fx_spring.rs` | 8 | 8 | 0 | — |
 | `src/ui/gear.rs` | 7 | 7 | 0 | — |
@@ -62,4 +62,4 @@
 | `src/ui/stage.rs` | 7 | 7 | 0 | — |
 | `src/ui/tab_bar.rs` | 27 | 27 | 0 | — |
 | `src/ui/viewport_push.rs` | 2 | 2 | 0 | — |
-| `src/vsync_book.rs` | 20 | 15 | 5 | armed last_due_ms chain_dead mark_chain_dead last_ns |
+| `src/vsync_book.rs` | 20 | 16 | 4 | last_due_ms chain_dead mark_chain_dead last_ns |

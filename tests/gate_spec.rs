@@ -725,6 +725,39 @@ fn spec_bar104_交接双帧_倒盘协议() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+// BAR-105 钉：交接全序列倒盘——panend-a00..aNN.rgb 逐帧 + panend-b.rgb
+// + panend.dim；写前清上一轮残留 a 帧（防串账：本轮 3 帧而盘上留有
+// 上轮 8 帧时，a03..a07 必须消失）。
+// 变异抽检：漏清残留 → a03 存在断言必红；帧序写反 → 内容断言必红。
+#[test]
+fn spec_bar105_交接全序列_倒盘清残留() {
+    let dir = std::env::temp_dir().join(format!("panendseq-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let d = dir.to_str().unwrap();
+    // 上轮残留 4 帧
+    for i in 0..4 {
+        std::fs::write(dir.join(format!("panend-a{i:02}.rgb")), vec![0xAAu8; 24]).unwrap();
+    }
+    let frames = vec![vec![0x00112233u32; 6], vec![0x00445566u32; 6]];
+    let b = vec![0x00ABCDEFu32; 6];
+    assert!(kfm_na::gate::write_panend_seq(d, &frames, &b, 3, 2));
+    let r0 = std::fs::read(dir.join("panend-a00.rgb")).unwrap();
+    let r1 = std::fs::read(dir.join("panend-a01.rgb")).unwrap();
+    assert_eq!(&r0[0..4], &[0x33, 0x22, 0x11, 0x00], "a00 BGRX");
+    assert_eq!(&r1[0..4], &[0x66, 0x55, 0x44, 0x00], "a01 BGRX");
+    assert!(!dir.join("panend-a02.rgb").exists(), "上轮残留 a02 已清");
+    assert!(!dir.join("panend-a03.rgb").exists(), "上轮残留 a03 已清");
+    assert_eq!(
+        &std::fs::read(dir.join("panend-b.rgb")).unwrap()[0..4],
+        &[0xEF, 0xCD, 0xAB, 0x00]
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("panend.dim")).unwrap(),
+        "3 2"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 // BAR-104 钉：panend-cap-req 点播触发两态（同 BAR-076 点播制）——
 // 无触发=false；有触发=true 且即摘。变异抽检：只读不摘 → 复取仍 true 必红。
 #[test]

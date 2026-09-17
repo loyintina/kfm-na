@@ -50,4 +50,4 @@ src/ui/seam.rs 0
 src/ui/stage.rs 0
 src/ui/tab_bar.rs 0
 src/ui/viewport_push.rs 0
-src/vsync_book.rs 5
+src/vsync_book.rs 4
