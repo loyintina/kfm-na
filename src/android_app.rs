@@ -4140,11 +4140,17 @@ impl App {
         let pan_upper = cfg_snap
             .and_then(|cs| cs.pan.as_ref())
             .is_some_and(|p| p.scope == crate::ui::cfg_page::PanScope::Upper);
-        // BAR-104：喂交接差分机本帧是否 Upper 平移合成帧（present_frame
-        // 内消费；未武装时仅一次原子写，零开销）
-        // BAR-104：喂交接差分机本帧是否 Upper 平移合成帧 + 本帧 cfg
-        // epoch（present_frame 内消费；未武装时仅一次原子写，零开销）
-        crate::gles_present::set_panend_mark(pan_upper, cfg_snap.map_or(0, |cs| cs.epoch));
+        // BAR-104：喂交接差分机本帧平移域（0=无/1=Upper/2=Page）+ 本帧
+        // cfg epoch（present_frame 内消费；未武装时仅一次原子写，零开销）。
+        // 2026-09-17 Page 域接入：差分机不再只喂 Upper——切标签（Page）
+        // 与下池点行（Upper）共用一台仪器（观测矩阵 Page 像素级盲区补盲）
+        let pan_scope = cfg_snap
+            .and_then(|cs| cs.pan.as_ref())
+            .map_or(0u8, |p| match p.scope {
+                crate::ui::cfg_page::PanScope::Upper => 1,
+                crate::ui::cfg_page::PanScope::Page => 2,
+            });
+        crate::gles_present::set_panend_mark(pan_scope, cfg_snap.map_or(0, |cs| cs.epoch));
         let slot_vis = crate::ui::stage::slot_visibility(
             grid_keybar,
             panel_visible,

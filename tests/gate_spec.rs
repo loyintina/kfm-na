@@ -740,7 +740,9 @@ fn spec_bar105_交接全序列_倒盘清残留() {
     }
     let frames = vec![vec![0x00112233u32; 6], vec![0x00445566u32; 6]];
     let b = vec![0x00ABCDEFu32; 6];
-    assert!(kfm_na::gate::write_panend_seq(d, &frames, &b, 3, 2));
+    assert!(kfm_na::gate::write_panend_seq(
+        d, &frames, &b, 3, 2, "upper"
+    ));
     let r0 = std::fs::read(dir.join("panend-a00.rgb")).unwrap();
     let r1 = std::fs::read(dir.join("panend-a01.rgb")).unwrap();
     assert_eq!(&r0[0..4], &[0x33, 0x22, 0x11, 0x00], "a00 BGRX");
@@ -753,9 +755,26 @@ fn spec_bar105_交接全序列_倒盘清残留() {
     );
     assert_eq!(
         std::fs::read_to_string(dir.join("panend.dim")).unwrap(),
-        "3 2"
+        "3 2 upper"
     );
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// 2026-09-17 Page 域接入钉：平移域标记打包往返——bit63..62=域、低位=epoch；
+// 域 0/1/2 与 epoch 互不串位（观测矩阵 Page 像素级盲区补盲的位数学单一源）。
+// 变异抽检：域位移错一位（<<63）→ unpack 域值必红；epoch 掩码漏 → 大
+// epoch 串进域位必红。
+#[test]
+fn spec_panend_mark_域标记打包往返() {
+    use kfm_na::gate::{panend_mark_pack, panend_mark_unpack};
+    for (scope, epoch) in [(0u8, 0u64), (1, 8), (2, 42), (2, 0x3FFF_FFFF_FFFF_FFFF)] {
+        let (s, e) = panend_mark_unpack(panend_mark_pack(scope, epoch));
+        assert_eq!((s, e), (scope, epoch), "scope={scope} epoch={epoch} 往返");
+    }
+    // 域码用词：dim 第三字段/报表同源
+    assert_eq!(kfm_na::gate::panend_scope_name(0), "none");
+    assert_eq!(kfm_na::gate::panend_scope_name(1), "upper");
+    assert_eq!(kfm_na::gate::panend_scope_name(2), "page");
 }
 
 // BAR-104 钉：panend-cap-req 点播触发两态（同 BAR-076 点播制）——

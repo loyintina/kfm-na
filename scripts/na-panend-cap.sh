@@ -1,9 +1,10 @@
 #!/bin/bash
 # na-panend-cap.sh — BAR-104 贴死交接差分机一键入口（2026-09-17）
 #
-#   bash scripts/na-panend-cap.sh    # 点播后 20s 内触发一次 Upper 平移
-#                                    #（设置页点下池其他行），自动抓
-#                                    # 平移全序列帧+首帧稳态落盘
+#   bash scripts/na-panend-cap.sh    # 点播后 20s 内触发一次平移
+#                                    #（下池点行=Upper 域 / 切标签=Page 域，
+#                                    # 两域共用本仪，域名随 dim 落盘并播报），
+#                                    # 自动抓平移全序列帧+首帧稳态落盘
 #
 # 链路：8024 闸门 touch panend-cap-req → present_frame 逐帧消费（点播制，
 # 不投零开销）→ 平移各帧 panend-aNN.rgb + 首帧稳态 panend-b.rgb
@@ -17,7 +18,7 @@ source "$(dirname "$0")/lib/gate-lib.sh"
 PY=/root/.venvs/video/bin/python  # PIL+numpy（font venv 无 numpy）
 
 gate "rm -f $NA_TMP/panend-a*.rgb $NA_TMP/panend-b.rgb $NA_TMP/panend.dim; touch $NA_TMP/panend-cap-req"
-echo "已点播。请触发一次 Upper 平移（设置页→点下池其他行）…"
+echo "已点播。请触发一次平移（下池点行=Upper / 切标签=Page）…"
 
 ok=""
 for _ in $(seq 1 40); do
@@ -27,11 +28,12 @@ for _ in $(seq 1 40); do
     fi
 done
 if [ -z "$ok" ]; then
-    echo "❌ 20 秒内没等到交接双帧——没触发 Upper 平移？na 在前台吗？"
+    echo "❌ 20 秒内没等到交接双帧——没触发平移？na 在前台吗？"
     exit 1
 fi
 
 dim=$(gate "cat $NA_TMP/panend.dim")
+echo "捕获域: $(echo "$dim" | awk '{print $3}')"
 rm -f /tmp/panend-a*.rgb
 a_list=$(gate "ls $NA_TMP/panend-a*.rgb 2>/dev/null")
 for f in $a_list; do

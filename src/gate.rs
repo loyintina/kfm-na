@@ -757,6 +757,27 @@ pub enum PanendCmd {
     GrabStaticFinish,
 }
 
+/// 平移域标记打包（2026-09-17 Page 域接入：标记从「是否 Upper 平移」
+/// 升级为「平移域 0=无/1=Upper/2=Page」——观测矩阵 Page 像素级盲区补盲）。
+/// 布局：bit63..62 = 域，bit61..0 = cfg epoch（epoch 实际值个位数，远不顶位）。
+pub fn panend_mark_pack(scope: u8, epoch: u64) -> u64 {
+    ((u64::from(scope) & 0x3) << 62) | (epoch & 0x3FFF_FFFF_FFFF_FFFF)
+}
+
+/// 解包 panend_mark_pack：(域, epoch)
+pub fn panend_mark_unpack(mark: u64) -> (u8, u64) {
+    (((mark >> 62) & 0x3) as u8, mark & 0x3FFF_FFFF_FFFF_FFFF)
+}
+
+/// 域码 → 倒盘/报表用词（panend.dim 第三字段）
+pub fn panend_scope_name(scope: u8) -> &'static str {
+    match scope {
+        1 => "upper",
+        2 => "page",
+        _ => "none",
+    }
+}
+
 /// 交接差分状态机（纯逻辑，host 钉；像素归 GLES 侧 hold，本机只记账）。
 /// 语义：武装后逐帧喂「本帧是否 Upper 平移合成帧」——平移帧 GrabPan
 /// （末帧覆盖=留最后一帧）；平移后首帧稳态 GrabStaticFinish 并缴械；
@@ -815,8 +836,17 @@ pub fn write_panend_pair(dir: &str, a: &[u32], b: &[u32], w: u32, h: u32) -> boo
 
 /// 交接全序列倒盘（BAR-105 复判升级 2026-09-17：只留末帧掩盖了「仪器
 /// 到底看见什么」——逐帧全留，panend-a00..aNN.rgb 平移各帧 + panend-b.rgb
-/// 首帧稳态 + panend.dim；写前清掉上一轮残留 a 帧防串账）
-pub fn write_panend_seq(dir: &str, frames: &[Vec<u32>], b: &[u32], w: u32, h: u32) -> bool {
+/// 首帧稳态 + panend.dim；写前清掉上一轮残留 a 帧防串账。
+/// 2026-09-17 Page 域接入：dim 第三字段带域名 upper/page——切标签（Page）
+/// 与下池点行（Upper）共用一本账，拉取侧按域名报判卷口径）
+pub fn write_panend_seq(
+    dir: &str,
+    frames: &[Vec<u32>],
+    b: &[u32],
+    w: u32,
+    h: u32,
+    scope: &str,
+) -> bool {
     if let Ok(rd) = std::fs::read_dir(dir) {
         for e in rd.flatten() {
             let n = e.file_name();
@@ -835,7 +865,11 @@ pub fn write_panend_seq(dir: &str, frames: &[Vec<u32>], b: &[u32], w: u32, h: u3
         .is_ok();
     }
     ok &= std::fs::write(Path::new(dir).join("panend-b.rgb"), encode_rgb(b)).is_ok();
-    ok &= std::fs::write(Path::new(dir).join("panend.dim"), format!("{w} {h}")).is_ok();
+    ok &= std::fs::write(
+        Path::new(dir).join("panend.dim"),
+        format!("{w} {h} {scope}"),
+    )
+    .is_ok();
     ok
 }
 

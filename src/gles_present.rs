@@ -210,14 +210,19 @@ static PANEND_CAP: std::sync::Mutex<crate::gate::PanendCap> =
 static PANEND_HOLD: std::sync::Mutex<Vec<Vec<u32>>> = std::sync::Mutex::new(Vec::new());
 static PANEND_MARK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-/// 喂交接差分机：本帧是否 Upper 平移合成帧 + 本帧 cfg epoch
-/// （android_app 渲染循环每帧调）
-pub fn set_panend_mark(is_pan: bool, epoch: u64) {
+/// 喂交接差分机：本帧平移域（0=非平移/1=Upper/2=Page）+ 本帧 cfg epoch
+/// （android_app 渲染循环每帧调；2026-09-17 Page 域接入——观测矩阵
+/// Page 像素级盲区补盲，打包归 gate::panend_mark_pack 单一源）
+pub fn set_panend_mark(scope: u8, epoch: u64) {
     PANEND_MARK.store(
-        (u64::from(is_pan) << 63) | (epoch & 0x7FFF_FFFF_FFFF_FFFF),
+        crate::gate::panend_mark_pack(scope, epoch),
         std::sync::atomic::Ordering::Relaxed,
     );
 }
+
+/// 本笔平移的域（GrabPan 帧记，GrabStaticFinish 配对倒盘时读——
+/// 稳态帧 mark 域已是 0，域名必须记在平移帧上）
+static PANEND_SCOPE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 // vsync 对表（dlsym libandroid.so 的 NDK API29+ 符号——targetSdk 28 不便
 // 静态链接，运行期 dlsym，libEGL dlopen 先例；句柄存静态保符号有效）。
@@ -1825,25 +1830,40 @@ impl GlesPresent {
         }
         // BAR-104 贴死交接差分机（点播武装：panend-cap-req 触发才开，
         // 单次点播单次交接，不投 = 零开销）：平移帧抓末帧合成 hold，
-        // 平移后首帧稳态抓来配对倒盘——交接两侧逐像素差分归服务器
+        // 平移后首帧稳态抓来配对倒盘——交接两侧逐像素差分归服务器。
+        // 2026-09-17 Page 域接入：Upper/Page 两域平移都喂，域名随 dim 落盘
         {
             let mark = PANEND_MARK.load(std::sync::atomic::Ordering::Relaxed);
+            let (mark_scope, mark_epoch) = crate::gate::panend_mark_unpack(mark);
             let cmd = {
                 let mut st = PANEND_CAP.lock().unwrap();
                 if !st.armed() && crate::gate::take_panend_cap_req(crate::gate::DUMP_DIR) {
                     st.arm();
                 }
-                st.on_frame((mark >> 63) != 0)
+                st.on_frame(mark_scope != 0)
             };
-            let mark_epoch = mark & 0x7FFF_FFFF_FFFF_FFFF;
             match cmd {
                 crate::gate::PanendCmd::Skip => {}
                 crate::gate::PanendCmd::GrabPan => {
-                    crate::report::report("panend", &format!("grab_a epoch={mark_epoch}"));
+                    PANEND_SCOPE.store(u64::from(mark_scope), std::sync::atomic::Ordering::Relaxed);
+                    crate::report::report(
+                        "panend",
+                        &format!(
+                            "grab_a epoch={mark_epoch} scope={}",
+                            crate::gate::panend_scope_name(mark_scope)
+                        ),
+                    );
                     PANEND_HOLD.lock().unwrap().push(self.capture_full());
                 }
                 crate::gate::PanendCmd::GrabStaticFinish => {
-                    crate::report::report("panend", &format!("grab_b epoch={mark_epoch}"));
+                    let scope = PANEND_SCOPE.swap(0, std::sync::atomic::Ordering::Relaxed) as u8;
+                    crate::report::report(
+                        "panend",
+                        &format!(
+                            "grab_b epoch={mark_epoch} scope={}",
+                            crate::gate::panend_scope_name(scope)
+                        ),
+                    );
                     let b = self.capture_full();
                     let frames = std::mem::take(&mut *PANEND_HOLD.lock().unwrap());
                     if !frames.is_empty() {
@@ -1853,6 +1873,7 @@ impl GlesPresent {
                             &b,
                             self.w,
                             self.h,
+                            crate::gate::panend_scope_name(scope),
                         );
                     }
                 }
