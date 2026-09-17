@@ -49,6 +49,11 @@ echo "=== [chain 3/11] stats 字段咬合闸(2026-08-27,评审裁决建议) ==="
 # 半成品态 E0063)。字段 ↔ 输出键咬合,别名必须在检查脚本里登记
 bash scripts/check/check-stats-format.sh || { echo "❌ stats 字段咬合不过"; exit 1; }
 
+# 2026-09-17 自守卫（nz 形态效力阶梯：守卫本身也要被守卫）——仪器证据门
+# 被摘出 commit-msg / 脚本丢失或不可执行 = chain 红，代码守卫不许静默退化
+grep -q 'check-fix-instrument' .githooks/commit-msg || { echo "❌ commit-msg 钩子缺仪器证据门（check-fix-instrument）"; exit 1; }
+[ -x scripts/check/check-fix-instrument.sh ] || { echo "❌ check-fix-instrument.sh 缺失或不可执行"; exit 1; }
+
 echo "=== [chain 4/11] cargo fmt --check ==="
 # 2026-08-17 workspace 化（crates/cordis-na)：带根包的 workspace 里裸 cargo
 # fmt/clippy/test 只覆盖根包——不加 --all/--workspace 会让 crate 考题静默脱链
@@ -99,6 +104,9 @@ bash scripts/test-overlay.sh || { echo "❌ overlay 考题不过"; exit 1; }
 # 2026-08-24 同步挂入：kfm-pkg 原子性考题（BAR-031——中断标记/重装自愈/
 # 装后校验，zsh 卡死案病根）
 bash scripts/test-kfm-pkg.sh || { echo "❌ kfm-pkg 考题不过"; exit 1; }
+# 2026-09-17 同步挂入：仪器证据门八言考题（BAR-104/105/106 三部曲——
+# 假设驱动修复拦截门的自钉，门被改坏即红）
+bash scripts/test-check-fix-instrument.sh || { echo "❌ 仪器证据门考题不过"; exit 1; }
 
 echo "=== [chain 10/11] 考卷覆盖矩阵棘轮闸（2026-08-27,自我测试缺口④） ==="
 # 治「新功能补题靠自觉」:各模块 pub 项被 tests/ 引用数,棘轮只许降

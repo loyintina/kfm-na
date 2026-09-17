@@ -1,6 +1,13 @@
 # AGENTS.md — KFM-NA（Kaf Fee Meo Native）
 
 > agent 入职指南。读完这份再动手。
+>
+> **PARADIGM v1（2026-09-17 立，nz 唯一产出迭代范式 na 落地）**：本文件
+> 与 `docs/active/排障手册.md` 合为 na 的方法论唯一产出——每次任务它们
+> 是输入（本文件机械注入，手册由本文件指认），每次踩坑把教训编码回来并
+> 版本 +1（两文件头版本号同步）。形态效力阶梯：代码守卫 > 清单硬编码项
+> > 文档段落——新教训能升形态就不许停在段落（漏 cd 三天三犯/BAR-098~106
+> 三天三部曲：挂账≠入节奏）。
 
 ## 这是什么
 
@@ -69,7 +76,7 @@ bash scripts/deploy-phone.sh --build   # 先打包再送
   .png 但内容是 JPEG，仓内按内容存 .jpg，aapt2 与 BitmapFactory 都认内容）package-apk.sh
   第 4 步 `aapt2 compile --dir` + link `-R` 进包，不编 R.java。
 
-## 纪律（三门，全部 hard fail，commit-msg/pre-commit 钩子机械化执法）
+## 纪律（四门，全部 hard fail，commit-msg/pre-commit 钩子机械化执法）
 
 1. **chain 全绿**：pre-commit 跑 `scripts/chain.sh`，红了提交不了。
 2. **fix 必须带钉**：提交信息首行 `fix:`/`fix(范围):` 必须触及测试
@@ -79,6 +86,25 @@ bash scripts/deploy-phone.sh --build   # 先打包再送
 3. **文档耦合**：提交触及 src/ 或 scripts/ 必须同时触及 docs/；
    确认无文档影响则提交信息**独立一行**写 `docs:na` 豁免。
    （独立行语法：防正文讨论豁免标记时 prose 字面串误认——kfmv4 2026-07-30 教训）
+4. **仪器证据门（2026-09-17，BAR-098~106 三部曲裁决）**：`fix(渲染/动画/
+   设置页/手势/平移):` 提交必须引 BAR-NNN 且该行含观测证据通道词
+   （panend/panc/差分/遥测/实录/录屏/截屏/na-rec/epoch/帧账/redroid）——
+   没有仪器定罪的修复 = 假设驱动修复（BAR-098/099「修了真 bug 但不是用户
+   报的那个」）。纯逻辑病灶豁免：提交信息**独立一行**写 `instrument:na`。
+   commit-msg 钩子机械执法（check-fix-instrument.sh，八言考题
+   test-check-fix-instrument.sh 挂 chain 第 9 步）；门被摘/考题被删
+   chain 第 3 步自守卫拦红。
+
+## 观测先行三条款（2026-09-17，三部曲复盘用户裁决，C 档问题铁律）
+
+1. **立案先指认仪器**：C 档（感官）问题立案第一步 = 指认
+   `docs/active/排障手册.md` 观测矩阵的行；**没有行覆盖 = 先造仪器再修**，
+   不许凭假设动手（BAR-098/099 弯路）。
+2. **问「你能观测到吗」= 当场实跑**：用户问观测能力时，唯一合法应答是
+   当场跑一遍仪器并贴原始输出——禁止口头回答「能/不能」。
+3. **修复声明不许跳级**：状态词只许 `立案 → 定罪(仪器证据) → 已修待判
+   → 用户终验结案`；钉绿≠修复，仪器判卷≠修复，**「结案」一词只许在用户
+   肉眼终验后出现**（账本判卷列照此填写）。
 
 提交信息语言：中文，格式同 kfmv4（`类型(范围): 主题`，类型 feat/fix/chore/docs/test）。
 
