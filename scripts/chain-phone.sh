@@ -38,7 +38,13 @@ for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
 set -uo pipefail
 cd ~/kfm-na || exit 1
 git reset --hard >/dev/null 2>&1
-git apply --index /data/data/com.termux/files/home/kfm-na-day.patch || exit 1
+# 空补丁直跑基线（2026-09-18 夜班修挂账：docs-only 或无代码变更时
+# 0 行补丁 git apply 必红——补丁无 diff 头视为空，跳 apply 跑基线）
+if grep -q '^diff ' /data/data/com.termux/files/home/kfm-na-day.patch 2>/dev/null; then
+    git apply --index /data/data/com.termux/files/home/kfm-na-day.patch || exit 1
+else
+    echo "[chain-phone] 空补丁——跳 apply 直跑基线 chain"
+fi
 ionice -c3 nice -n 10 bash scripts/chain.sh > chain-last.log 2>&1
 RC=$?
 tail -60 chain-last.log
