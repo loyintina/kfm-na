@@ -4288,14 +4288,26 @@ impl App {
                     if let (Some(ps), Some(t), Some(cs)) = (pool_snap, th, cfg_snap) {
                         let mut settled = cs.clone();
                         settled.pan = None;
+                        // BAR-105：新代层锚**终点几何**（同 LowerRowsPan
+                        // 纪律）——起步几何烘的芯渐变分母（denom 含池高）
+                        // 与池框底缘随 glide 逐帧过期，贴死帧与稳态重烘
+                        // 必错位；锚终点后带内 t=1 与稳态逐像素一致
+                        let target_h = crate::ui::dual_pool::dual_pool_handle()
+                            .map(|p| p.lock().unwrap().target_upper_h())
+                            .unwrap_or(ps.upper.h);
+                        let ps_final = crate::ui::dual_pool::final_pool_snap(
+                            ps,
+                            &crate::ui::dual_pool::pool_area(w, h, bottom_inset),
+                            target_h,
+                        );
                         t.lock()
                             .unwrap()
-                            .paint_cfg_dual_pool(pmx, w, h, ps, 0, acc_cfg);
+                            .paint_cfg_dual_pool(pmx, w, h, &ps_final, 0, acc_cfg);
                         t.lock().unwrap().paint_cfg_pool_content(
                             pmx,
                             w,
                             h,
-                            ps,
+                            &ps_final,
                             &settled,
                             0,
                             acc_cfg,
@@ -4484,19 +4496,12 @@ impl App {
                     g.slot_bake(crate::gles_present::ChromeSlot::PoolFx);
                 }
                 // 行层终点几何：布局数学同源（下池 = 区 − 上池 − 间距）；
-                // 终点高从共享池句柄拿（锁序：本块不持 term/cfg 锁 ✓）
+                // 终点高从共享池句柄拿（锁序：本块不持 term/cfg 锁 ✓）。
+                // BAR-105：与 PanMove 终点锚共用 final_pool_snap 单一源
                 let target_h = crate::ui::dual_pool::dual_pool_handle()
                     .map(|p| p.lock().unwrap().target_upper_h())
                     .unwrap_or(ps.upper.h);
-                let lower_final = crate::ui::dual_pool::PoolRect {
-                    x: area.x,
-                    y: area.y + i64::from(target_h + crate::ui::dual_pool::POOL_GAP),
-                    w: area.w,
-                    h: area
-                        .h
-                        .saturating_sub(target_h)
-                        .saturating_sub(crate::ui::dual_pool::POOL_GAP),
-                };
+                let lower_final = crate::ui::dual_pool::final_pool_snap(ps, &area, target_h).lower;
                 use std::hash::{Hash, Hasher};
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
                 for r in &cs.rows {

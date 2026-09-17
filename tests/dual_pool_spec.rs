@@ -344,3 +344,40 @@ fn bar097_target_upper_h_恒为终点高() {
     pool.set_upper_content_h(100_000);
     assert_eq!(pool.target_upper_h(), pool.area().h / 2, "超高内容钳半高");
 }
+
+/// BAR-105 钉：final_pool_snap 终点几何数学——upper.h = target_h；
+/// lower = 区 − 上池 − 间距（y = area.y + target_h + POOL_GAP，
+/// h = area.h − target_h − POOL_GAP，x/w 取区）；upper 的 x/y/w 与
+/// upper_scroll 原样继承。数学错 = PanMove/LowerRowsPan 终点锚错位，
+/// 贴死帧与稳态重烘芯渐变分母/池框底缘双双漂移（vc447 实机差分
+/// 14.4 万超差像素的病根之一）
+#[test]
+fn spec_bar105_终点池快照_数学同源() {
+    use kfm_na::ui::dual_pool::final_pool_snap;
+    let mut pool = DualPool::new(1260, 2400);
+    pool.set_viewport(1260, 2400, 0);
+    pool.set_upper_content_h(600);
+    let ps = pool.layout(1000);
+    let area = pool_area(1260, 2400, 0);
+    let target = 400u32;
+    let f = final_pool_snap(&ps, &area, target);
+    assert_eq!(f.upper.h, target, "上池高 = 终点");
+    assert_eq!(
+        (f.upper.x, f.upper.y, f.upper.w),
+        (ps.upper.x, ps.upper.y, ps.upper.w),
+        "上池原点/宽继承"
+    );
+    assert_eq!(f.upper_scroll, ps.upper_scroll, "滚动旗继承");
+    assert_eq!((f.lower.x, f.lower.w), (area.x, area.w), "下池 x/w 取区");
+    assert_eq!(
+        f.lower.y,
+        area.y + i64::from(target + POOL_GAP),
+        "下池顶 = 区顶+终点高+间距"
+    );
+    assert_eq!(
+        f.lower.h,
+        area.h - target - POOL_GAP,
+        "下池高 = 区高−终点高−间距"
+    );
+    assert_eq!(f.upper.h + POOL_GAP + f.lower.h, area.h, "全程互补");
+}

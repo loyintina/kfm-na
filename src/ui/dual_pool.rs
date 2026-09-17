@@ -138,6 +138,27 @@ pub struct DualPoolSnap {
     pub upper_scroll: bool,
 }
 
+/// 终点几何池快照（BAR-105）：glide 终点 = target_h 的池几何——新代
+/// 滑动层（PanMove）锚终点烘焙用（同 LowerRowsPan 渐变锚终点纪律：
+/// 起步几何烘的芯渐变分母/池框底缘随 glide 逐帧过期，贴死帧与稳态
+/// 重烘必错位）。lower 数学与 LowerRowsPan 烘焙锚同源（钉：
+/// spec_bar105_终点池快照_数学同源）
+pub fn final_pool_snap(ps: &DualPoolSnap, area: &PoolRect, target_h: u32) -> DualPoolSnap {
+    DualPoolSnap {
+        upper: PoolRect {
+            h: target_h,
+            ..ps.upper.clone()
+        },
+        lower: PoolRect {
+            x: area.x,
+            y: area.y + i64::from(target_h + POOL_GAP),
+            w: area.w,
+            h: area.h.saturating_sub(target_h).saturating_sub(POOL_GAP),
+        },
+        upper_scroll: ps.upper_scroll,
+    }
+}
+
 impl DualPool {
     pub fn new(screen_w: u32, screen_h: u32) -> Self {
         DualPool {

@@ -1357,6 +1357,31 @@ impl GlesPresent {
                                         self.h as f32,
                                         cfg_alpha,
                                     );
+                                    // BAR-105：PoolFx 必须在带内双代**之下**
+                                    // ——池框层的不透明池芯（mark_chrome_alpha
+                                    // 强转 α=255）压在 PanMove 之上 = 新代行
+                                    // 全程被埋（「新内容不跟随，走完突然出现」
+                                    // + 贴死空上池闪帧真凶）。正确 z 序：
+                                    // 配置槽 → PoolFx（glide 帧+芯）→ 带内
+                                    // PanOld/PanMove（滑动双代盖其上方）
+                                    if let Some((fx, fy)) = layered.poolfx {
+                                        let pl = &self.layers[ChromeSlot::PoolFx as usize];
+                                        if pl.visible && pl.baked {
+                                            let (pw, ph) = pl.dims;
+                                            draw_slot_layer(
+                                                gl,
+                                                self.layer_prog,
+                                                self.layer_vao,
+                                                self.layer_vbo,
+                                                pl.tex,
+                                                fx + cfg_off as f32,
+                                                fy + cfg_dy_extra,
+                                                pw as f32,
+                                                ph as f32,
+                                                cfg_alpha,
+                                            );
+                                        }
+                                    }
                                     let (bx0, by0, bx1, by1) = pc.band;
                                     let sx = bx0.clamp(0, fw);
                                     let sy = (fh - by1).clamp(0, fh);
@@ -1427,28 +1452,10 @@ impl GlesPresent {
                                     gl.disable(glow::SCISSOR_TEST);
                                 }
                             }
-                            // BAR-097 池区拆层合成（在配置槽之上、光标
-                            // 层之下）：Upper 平移期池框几何层（逐帧烘，
-                            // 无位移）+ 下池行层（起步一烘，y 跟 glide，
-                            // 底缘 scissor 防行底压下池底环）
-                            if let Some((fx, fy)) = layered.poolfx {
-                                let pl = &self.layers[ChromeSlot::PoolFx as usize];
-                                if pl.visible && pl.baked {
-                                    let (pw, ph) = pl.dims;
-                                    draw_slot_layer(
-                                        gl,
-                                        self.layer_prog,
-                                        self.layer_vao,
-                                        self.layer_vbo,
-                                        pl.tex,
-                                        fx + cfg_off as f32,
-                                        fy + cfg_dy_extra,
-                                        pw as f32,
-                                        ph as f32,
-                                        cfg_alpha,
-                                    );
-                                }
-                            }
+                            // BAR-097 池区拆层合成：下池行层（起步一烘，
+                            // y 跟 glide，底缘 scissor 防行底压下池底环）。
+                            // BAR-105：PoolFx 已前移到带内双代之下（z 序
+                            // 修复）；本层仍在配置槽/带内双代之上、光标层之下
                             if let Some((rx, ry, rclip)) = layered.lower_rows {
                                 let rl = &self.layers[ChromeSlot::LowerRowsPan as usize];
                                 if rl.visible && rl.baked {
