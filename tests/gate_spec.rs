@@ -667,3 +667,75 @@ fn spec_bar076_采样点播_触发消费两态() {
     assert!(!kfm_na::gate::take_anim_cap_req(d));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// BAR-104 钉：贴死交接差分机状态机——
+// ①未武装全 Skip；②武装后平移未至的稳态帧 Skip 且保持武装；
+// ③平移帧 GrabPan（每帧都抓=末帧覆盖语义）；④平移后首帧稳态
+// GrabStaticFinish 且即缴械（之后全 Skip，单次点播单次交接）。
+// 变异抽检：on_frame 平移帧不置 hold → ④永不触发必红；
+// GrabStaticFinish 不缴械 → 后续帧仍非 Skip 必红。
+#[test]
+fn spec_bar104_交接差分_状态机四态() {
+    use kfm_na::gate::{PanendCap, PanendCmd};
+    let mut cap = PanendCap::new();
+    // ① 未武装：平移/稳态都 Skip
+    assert_eq!(cap.on_frame(true), PanendCmd::Skip);
+    assert_eq!(cap.on_frame(false), PanendCmd::Skip);
+    // ② 武装后平移未至：稳态帧 Skip 且保持武装
+    cap.arm();
+    assert!(cap.armed());
+    assert_eq!(cap.on_frame(false), PanendCmd::Skip);
+    assert!(cap.armed(), "平移未至不该缴械");
+    // ③ 平移帧：逐帧 GrabPan
+    assert_eq!(cap.on_frame(true), PanendCmd::GrabPan);
+    assert_eq!(cap.on_frame(true), PanendCmd::GrabPan);
+    assert_eq!(cap.on_frame(true), PanendCmd::GrabPan);
+    assert!(cap.armed());
+    // ④ 平移后首帧稳态：GrabStaticFinish + 即缴械
+    assert_eq!(cap.on_frame(false), PanendCmd::GrabStaticFinish);
+    assert!(!cap.armed(), "收尾后即缴械");
+    assert_eq!(cap.on_frame(false), PanendCmd::Skip);
+    assert_eq!(cap.on_frame(true), PanendCmd::Skip, "缴械后新平移不抓");
+    // ⑤ 二次武装 = 新一轮（hold 清零：上轮残留不得污染）
+    cap.arm();
+    assert_eq!(cap.on_frame(false), PanendCmd::Skip, "新武装无旧 hold");
+}
+
+// BAR-104 钉：交接双帧倒盘协议——panend-a/b.rgb + panend.dim，
+// 字节数 = w*h*4（BGRX，与 shot 同构），dim = "w h"。
+// 变异抽检：a/b 写反 → 内容断言必红；dim 漏写 → exists 断言必红。
+#[test]
+fn spec_bar104_交接双帧_倒盘协议() {
+    let dir = std::env::temp_dir().join(format!("panend-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let d = dir.to_str().unwrap();
+    let a = vec![0x00112233u32; 6];
+    let b = vec![0x00ABCDEFu32; 6];
+    assert!(kfm_na::gate::write_panend_pair(d, &a, &b, 3, 2));
+    let ra = std::fs::read(dir.join("panend-a.rgb")).unwrap();
+    let rb = std::fs::read(dir.join("panend-b.rgb")).unwrap();
+    assert_eq!(ra.len(), 24);
+    assert_eq!(rb.len(), 24);
+    assert_eq!(&ra[0..4], &[0x33, 0x22, 0x11, 0x00], "a 帧 BGRX");
+    assert_eq!(&rb[0..4], &[0xEF, 0xCD, 0xAB, 0x00], "b 帧 BGRX");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("panend.dim")).unwrap(),
+        "3 2"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// BAR-104 钉：panend-cap-req 点播触发两态（同 BAR-076 点播制）——
+// 无触发=false；有触发=true 且即摘。变异抽检：只读不摘 → 复取仍 true 必红。
+#[test]
+fn spec_bar104_交接差分_点播触发两态() {
+    let dir = std::env::temp_dir().join(format!("panendreq-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let d = dir.to_str().unwrap();
+    assert!(!kfm_na::gate::take_panend_cap_req(d));
+    std::fs::write(dir.join("panend-cap-req"), b"").unwrap();
+    assert!(kfm_na::gate::take_panend_cap_req(d));
+    assert!(!dir.join("panend-cap-req").exists(), "点播即摘");
+    assert!(!kfm_na::gate::take_panend_cap_req(d));
+    let _ = std::fs::remove_dir_all(&dir);
+}

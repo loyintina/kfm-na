@@ -4140,6 +4140,9 @@ impl App {
         let pan_upper = cfg_snap
             .and_then(|cs| cs.pan.as_ref())
             .is_some_and(|p| p.scope == crate::ui::cfg_page::PanScope::Upper);
+        // BAR-104：喂交接差分机本帧是否 Upper 平移合成帧（present_frame
+        // 内消费；未武装时仅一次原子写，零开销）
+        crate::gles_present::set_panend_mark(pan_upper);
         let slot_vis = crate::ui::stage::slot_visibility(
             grid_keybar,
             panel_visible,

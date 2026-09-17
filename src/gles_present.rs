@@ -198,6 +198,17 @@ static CAPTURE_TICK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64
 /// (w, h, rgb) 缩略帧仓——run 收尾统一外发
 static CAPTURE_FRAMES: std::sync::Mutex<Vec<(u32, u32, Vec<u8>)>> =
     std::sync::Mutex::new(Vec::new());
+/// BAR-104 交接差分机：状态机 + 平移末帧像素 hold + 本帧是否
+/// Upper 平移合成帧（android_app 每帧喂，present_frame 消费）
+static PANEND_CAP: std::sync::Mutex<crate::gate::PanendCap> =
+    std::sync::Mutex::new(crate::gate::PanendCap::new());
+static PANEND_HOLD: std::sync::Mutex<Option<Vec<u32>>> = std::sync::Mutex::new(None);
+static PANEND_MARK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// 喂交接差分机：本帧是否 Upper 平移合成帧（android_app 渲染循环每帧调）
+pub fn set_panend_mark(is_pan: bool) {
+    PANEND_MARK.store(is_pan, std::sync::atomic::Ordering::Relaxed);
+}
 
 // vsync 对表（dlsym libandroid.so 的 NDK API29+ 符号——targetSdk 28 不便
 // 静态链接，运行期 dlsym，libEGL dlopen 先例；句柄存静态保符号有效）。
@@ -1786,6 +1797,36 @@ impl GlesPresent {
             && let Some(t) = self.capture_thumb()
         {
             CAPTURE_FRAMES.lock().unwrap().push(t);
+        }
+        // BAR-104 贴死交接差分机（点播武装：panend-cap-req 触发才开，
+        // 单次点播单次交接，不投 = 零开销）：平移帧抓末帧合成 hold，
+        // 平移后首帧稳态抓来配对倒盘——交接两侧逐像素差分归服务器
+        {
+            let cmd = {
+                let mut st = PANEND_CAP.lock().unwrap();
+                if !st.armed() && crate::gate::take_panend_cap_req(crate::gate::DUMP_DIR) {
+                    st.arm();
+                }
+                st.on_frame(PANEND_MARK.load(std::sync::atomic::Ordering::Relaxed))
+            };
+            match cmd {
+                crate::gate::PanendCmd::Skip => {}
+                crate::gate::PanendCmd::GrabPan => {
+                    *PANEND_HOLD.lock().unwrap() = Some(self.capture_full());
+                }
+                crate::gate::PanendCmd::GrabStaticFinish => {
+                    let b = self.capture_full();
+                    if let Some(a) = PANEND_HOLD.lock().unwrap().take() {
+                        crate::gate::write_panend_pair(
+                            crate::gate::DUMP_DIR,
+                            &a,
+                            &b,
+                            self.w,
+                            self.h,
+                        );
+                    }
+                }
+            }
         }
         // P1 送帧节奏记账（swap 间隔 + vsync 相位）
         crate::gles_present::note_swap(now_ns());

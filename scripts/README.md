@@ -103,8 +103,13 @@
   **BAR-101 警告(2026-09-16 实锤)：点播武装的轮次整轮被 glReadPixels
   停顿压成 2-3 帧——anim-strip 只判像素内容对错,它的帧数/帧耗时
   一律不作性能证据;判动画性能用无点播的 panel-anim/panc。**
+- `na-panend-cap.sh` — BAR-104 贴死交接差分机一键入口:点播后触发一次
+  Upper 平移(点下池行),自动抓「平移末帧合成+首帧稳态」双帧,拉回
+  逐像素差分(均值/热区/diff PNG)。判读:a≈b=交接无缝;差大且平移
+  解释不了=贴死闪变病灶。帧数/耗时同样不作性能证据(BAR-101 纪律)。
 - `na-rec.sh` — 真机软件内录(MediaProjection,rec.mp4):帧级真相的正路,
-  每次 app 重启后需用户在授权弹窗点「立即开始」一次。
+  每次 app 重启后需用户在授权弹窗点「立即开始」一次。**注意:内录有效
+  帧率仅 ~14fps(2026-09-17 实测隔帧重复),逐帧判连续性请用系统录屏。**
 - `redroid-anim-watch.sh page|upper|custom 'cmds'` — 云安卓动画帧级监控
   (2026-09-16):screenrecord 整段录虚拟屏 + imageio 拆全帧到
   /tmp/redroid-anim/<case>/。两个坑已钉进脚本:screenrecord 必须重定向

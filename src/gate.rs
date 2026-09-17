@@ -730,6 +730,89 @@ pub fn take_anim_cap_req(dir: &str) -> bool {
     true
 }
 
+// ---- BAR-104：贴死交接差分机（2026-09-17）----
+// 用户录屏逐帧实证：Upper 平移末帧合成与稳态帧逐像素差 4.19（全卡文字/
+// 渐变/边框同闪，最佳平移残差不变=非位置），交接瞬间全卡闪一下。本仪
+// 抓「平移末帧合成」与「首帧稳态」双帧落盘，服务器逐像素差分定罪。
+
+/// panend-cap-req 点播触发：在则摘下返真（单次点播单次交接采样；
+/// 不投 = 零 readPixels 开销，同 BAR-076 点播制）
+pub fn take_panend_cap_req(dir: &str) -> bool {
+    let trigger = Path::new(dir).join("panend-cap-req");
+    if !trigger.exists() {
+        return false;
+    }
+    let _ = std::fs::remove_file(&trigger);
+    true
+}
+
+/// 交接差分指令（状态机出，GLES 侧照做）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PanendCmd {
+    /// 本帧不抓
+    Skip,
+    /// 本帧是平移合成帧——抓，覆盖留末帧
+    GrabPan,
+    /// 平移后首帧稳态——抓，与末帧合成配对落盘，自动缴械
+    GrabStaticFinish,
+}
+
+/// 交接差分状态机（纯逻辑，host 钉；像素归 GLES 侧 hold，本机只记账）。
+/// 语义：武装后逐帧喂「本帧是否 Upper 平移合成帧」——平移帧 GrabPan
+/// （末帧覆盖=留最后一帧）；平移后首帧稳态 GrabStaticFinish 并缴械；
+/// 武装后平移还没来时的稳态帧 Skip（保持武装等下一轮）。
+#[derive(Default)]
+pub struct PanendCap {
+    armed: bool,
+    hold: bool,
+}
+
+impl PanendCap {
+    pub const fn new() -> Self {
+        Self {
+            armed: false,
+            hold: false,
+        }
+    }
+
+    pub fn armed(&self) -> bool {
+        self.armed
+    }
+
+    pub fn arm(&mut self) {
+        self.armed = true;
+        self.hold = false;
+    }
+
+    pub fn on_frame(&mut self, is_pan: bool) -> PanendCmd {
+        if !self.armed {
+            return PanendCmd::Skip;
+        }
+        if is_pan {
+            self.hold = true;
+            return PanendCmd::GrabPan;
+        }
+        if self.hold {
+            self.armed = false;
+            self.hold = false;
+            return PanendCmd::GrabStaticFinish;
+        }
+        PanendCmd::Skip
+    }
+}
+
+/// 交接双帧倒盘：panend-a.rgb(平移末帧合成) + panend-b.rgb(首帧稳态)
+/// + panend.dim（协议与 shot 同构，BGRX 4 字节/px；文件 IO 失败不致命）
+pub fn write_panend_pair(dir: &str, a: &[u32], b: &[u32], w: u32, h: u32) -> bool {
+    if std::fs::write(Path::new(dir).join("panend-a.rgb"), encode_rgb(a)).is_err() {
+        return false;
+    }
+    if std::fs::write(Path::new(dir).join("panend-b.rgb"), encode_rgb(b)).is_err() {
+        return false;
+    }
+    std::fs::write(Path::new(dir).join("panend.dim"), format!("{w} {h}")).is_ok()
+}
+
 /// GLES 合成帧倒盘（协议与 maybe_dump 同构：shot-gl.rgb + shot-gl.dim，
 /// 单次触发单次倒，倒完摘触发；文件 IO 失败不致命）
 pub fn write_shot_gl(dir: &str, buf: &[u32], w: u32, h: u32) -> bool {
