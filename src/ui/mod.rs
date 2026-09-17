@@ -18,6 +18,7 @@ pub mod comp_registry;
 pub mod cursor;
 pub mod dual_pool;
 pub mod fx_ease;
+pub mod fx_preview;
 pub mod fx_spring;
 pub mod gear;
 pub mod keybar;

@@ -3965,15 +3965,16 @@ impl TermView {
         let icx = ix + i64::from(iw) / 2; // 内区心 x
         let title_fg = 0x00D9_D9D9;
         let meta_fg = 0x0080_8080;
-        // 白球 = 手指（十四修 §六 动效预览动画条款）：r10 覆盖率圆，
-        // alpha 入参（0 = 不画）；相位表见各动画臂与考题钉
+        // 白球 = 手指（十五修 §六 动效预览动画条款）：r13 覆盖率圆，
+        // alpha 入参（0 = 不画）；相位表单一源 = ui/fx_preview.rs（乒乓
+        // 1400ms，拖球/点球两语义），考题钉 tests/fx_preview_spec.rs
         fn finger_ball(frame: &mut Frame<'_>, cx: i64, cy: i64, alpha: u32) {
             if alpha == 0 {
                 return;
             }
-            for dy in -10..=10i64 {
-                for dx in -10..=10i64 {
-                    if dx * dx + dy * dy <= 100 {
+            for dy in -13..=13i64 {
+                for dx in -13..=13i64 {
+                    if dx * dx + dy * dy <= 169 {
                         let (xx, yy) = (cx + dx, cy + dy);
                         if xx >= 0 && xx < i64::from(frame.w) && yy >= 0 && yy < i64::from(frame.h)
                         {
@@ -3983,7 +3984,7 @@ impl TermView {
                 }
             }
         }
-        let at = now_ms % 2400; // 动画相位（循环 2400ms，十四修拍板）
+        let at = now_ms % crate::ui::fx_preview::PREVIEW_CYCLE_MS; // 乒乓循环 1400ms（十五修）
         match pv {
             Preview::Ring => {
                 // 小页环：池框同配方（c1→c2 外壳向），宽 ≈ 内区 2/3
@@ -4404,36 +4405,40 @@ impl TermView {
                     }
                     prev = Some((px_x, px_y));
                 }
-                // 动画层（十四修 §六）：白球在曲线原点淡入→按住→淡出；
-                // 响应点 300 起沿 spring_pos 实曲线骑行，900 停终点
+                // 动画层（十五修 §六 乒乓）：响应点 r8 沿 spring_pos 实曲线
+                // 往返骑行（去程 0→100 过冲可见；回程 100→0 释放曲线）；
+                // 白球点球在曲线原点腿首点触
                 let origin_y = iy + i64::from(ih);
-                let ball_a = if at < 200 {
-                    at as u32 * 220 / 200
-                } else if at < 300 {
-                    220
-                } else if at < 500 {
-                    220 - (at - 300) as u32 * 220 / 200
-                } else {
-                    0
+                use crate::ui::fx_preview::PreviewLeg;
+                let (pos, dx) = match crate::ui::fx_preview::preview_leg(at) {
+                    PreviewLeg::Go(rt) => (
+                        crate::ui::fx_spring::spring_pos(0.0, 100.0, (rt * 600.0) as u64),
+                        ix + (i64::from(iw) as f32 * rt) as i64,
+                    ),
+                    PreviewLeg::EndDwell => (100.0, ix + i64::from(iw)),
+                    PreviewLeg::Return(rt) => (
+                        crate::ui::fx_spring::spring_pos(100.0, 0.0, (rt * 600.0) as u64),
+                        ix + (i64::from(iw) as f32 * (1.0 - rt)) as i64,
+                    ),
+                    PreviewLeg::StartDwell => (0.0, ix),
                 };
-                finger_ball(frame, ix, origin_y, ball_a);
-                if at >= 300 {
-                    let prog = (at - 300).min(600);
-                    let pos = crate::ui::fx_spring::spring_pos(0.0, 100.0, prog);
-                    let dx = ix + i64::from(iw) * prog as i64 / 600;
-                    let dyy = origin_y - (pos / 130.0 * ih as f32) as i64;
-                    for ddy in -6..=6i64 {
-                        for ddx in -6..=6i64 {
-                            if ddx * ddx + ddy * ddy <= 36 {
-                                let (xx, yy) = (dx + ddx, dyy + ddy);
-                                if xx >= 0 && xx < i64::from(frame.w) && yy >= clip.0 && yy < clip.1
-                                {
-                                    frame.blend_px(xx as u32, yy as u32, 0x00FF_FFFF, 255);
-                                }
+                let dyy = origin_y - (pos / 130.0 * ih as f32) as i64;
+                for ddy in -8..=8i64 {
+                    for ddx in -8..=8i64 {
+                        if ddx * ddx + ddy * ddy <= 64 {
+                            let (xx, yy) = (dx + ddx, dyy + ddy);
+                            if xx >= 0 && xx < i64::from(frame.w) && yy >= clip.0 && yy < clip.1 {
+                                frame.blend_px(xx as u32, yy as u32, 0x00FF_FFFF, 255);
                             }
                         }
                     }
                 }
+                finger_ball(
+                    frame,
+                    ix,
+                    origin_y,
+                    crate::ui::fx_preview::preview_tap_ball_alpha(at),
+                );
             }
             Preview::CurveEase => {
                 // 两族同图：ease-out（c1）与 ease-in（c2）= 静态底图
@@ -4450,36 +4455,29 @@ impl TermView {
                         }
                     }
                 }
-                // 动画层（十四修 §六）：白球点触小面板顶心→面板
-                // ease_out 350ms 下落（= AI 面板实节奏）→停底→
-                // ease_in 250ms 收起；球按住到 650 后淡出
+                // 动画层（十五修 §六 乒乓）：白球点球在小面板顶心腿首
+                // 点触；面板 power2_out 下落（= AI 面板实节奏）→终点停靠
+                // →rise_release 收起（方向分档吃 fx_preview raw_t，
+                // BAR-095：预览不得自编曲线）
                 let pw2 = i64::from(iw) * 2 / 3;
                 let ph2 = 54i64;
                 let px0 = ix + i64::from(iw) / 6;
                 let span = i64::from(ih) - ph2;
-                let p = if at < 300 {
-                    0.0
-                } else if at < 650 {
-                    crate::ui::fx_ease::ease_out_cubic((at - 300) as f32 / 350.0)
-                } else if at < 1500 {
-                    1.0
-                } else if at < 1750 {
-                    1.0 - crate::ui::fx_ease::ease_in_cubic((at - 1500) as f32 / 250.0)
-                } else {
-                    0.0
+                use crate::ui::fx_preview::PreviewLeg;
+                let p = match crate::ui::fx_preview::preview_leg(at) {
+                    PreviewLeg::Go(rt) => crate::ui::fx_ease::power2_out(rt),
+                    PreviewLeg::EndDwell => 1.0,
+                    PreviewLeg::Return(rt) => 1.0 - crate::ui::fx_ease::rise_release(rt),
+                    PreviewLeg::StartDwell => 0.0,
                 };
                 let py = iy + (p * span as f32) as i64;
                 paint_thin_frame(frame, px0, py, pw2 as u32, ph2 as u32, accent, denom, clip);
-                let ball_a = if at < 200 {
-                    at as u32 * 220 / 200
-                } else if at < 650 {
-                    220
-                } else if at < 850 {
-                    220 - (at - 650) as u32 * 220 / 200
-                } else {
-                    0
-                };
-                finger_ball(frame, px0 + pw2 / 2, py + 27, ball_a);
+                finger_ball(
+                    frame,
+                    px0 + pw2 / 2,
+                    py + 27,
+                    crate::ui::fx_preview::preview_tap_ball_alpha(at),
+                );
             }
             Preview::Swipe => {
                 // 轨迹线 + 起点圆 + 终点箭头（横向锁定制示意）
@@ -4522,27 +4520,27 @@ impl TermView {
                         }
                     }
                 }
-                // 动画层（十四修 §六）：白球起点淡入→1:1 拖到轨道 70%
-                // （小卡片跟手）→松手卡片 ease_out 500ms 滑到终点、球淡出
+                // 动画层（十五修 §六 乒乓）：白球拖球全程跟手——去程
+                // rt<0.66 = 1:1 拖到轨道 70%（线性=跟手），rt≥0.66 =
+                // 松手 power2_out 补到终点；回程纯 1:1 拖回起点
                 let cw2 = i64::from(iw) / 4;
                 let ch2 = i64::from(ih) / 3;
                 let release_x = x0 + (x1 - x0) * 7 / 10;
-                let slide = |t0: u64| {
-                    release_x
-                        + (crate::ui::fx_ease::ease_out_cubic((t0 - 1200) as f32 / 500.0)
-                            * (x1 - release_x) as f32) as i64
-                };
-                let (ball_x, card_cx, ball_a) = if at < 200 {
-                    (x0, x0, at as u32 * 220 / 200)
-                } else if at < 1200 {
-                    let bx = x0 + (at - 200) as i64 * (release_x - x0) / 1000;
-                    (bx, bx, 220)
-                } else if at < 1400 {
-                    (release_x, slide(at), 220 - (at - 1200) as u32 * 220 / 200)
-                } else if at < 1700 {
-                    (release_x, slide(at), 0)
-                } else {
-                    (release_x, x1, 0)
+                use crate::ui::fx_preview::PreviewLeg;
+                let card_cx = match crate::ui::fx_preview::preview_leg(at) {
+                    PreviewLeg::Go(rt) => {
+                        if rt < 0.66 {
+                            x0 + ((release_x - x0) as f32 * (rt / 0.66)) as i64
+                        } else {
+                            release_x
+                                + (crate::ui::fx_ease::power2_out((rt - 0.66) / 0.34)
+                                    * (x1 - release_x) as f32)
+                                    as i64
+                        }
+                    }
+                    PreviewLeg::EndDwell => x1,
+                    PreviewLeg::Return(rt) => x1 + ((x0 - x1) as f32 * rt) as i64,
+                    PreviewLeg::StartDwell => x0,
                 };
                 let cx0 = (card_cx - cw2 / 2).clamp(ix, ix + i64::from(iw) - cw2);
                 paint_thin_frame(
@@ -4555,35 +4553,31 @@ impl TermView {
                     denom,
                     clip,
                 );
-                finger_ball(frame, ball_x, my, ball_a);
+                finger_ball(
+                    frame,
+                    card_cx,
+                    my,
+                    crate::ui::fx_preview::preview_drag_ball_alpha(at),
+                );
             }
             Preview::ViewportPush => {
-                // 旧页挤出（左，灰框）+ 新页推入（右，accent 框）——
-                // 十四修动画层：白球右缘淡入→左拖，新页 1:1 跟手推入、
-                // 旧页同比挤出；1100 松手 rise_release 180ms 补到靠泊
-                //（BAR-095：与实机面板召唤同款，预览不得自编曲线）
+                // 十五修语义化·满宽推入：新页宽 = 展台内宽，从 ix+iw 推到
+                // ix；旧页从 ix 推到 ix−iw 完全挤出（真换页）。两页都裁到
+                // 展台内（clip_x 带）。白球拖球贴新页左缘（=手指 1:1）
                 let ph = ih * 3 / 4;
                 let py0 = iy + (i64::from(ih) - i64::from(ph)) / 2;
-                let pw = i64::from(iw) / 2;
-                let p = if at < 300 {
-                    0.0f32
-                } else if at < 1100 {
-                    (at - 300) as f32 / 800.0 * 0.8
-                } else if at < 1280 {
-                    0.8 + crate::ui::fx_ease::rise_release((at - 1100) as f32 / 180.0) * 0.2
-                } else {
-                    1.0
-                };
-                let new_left = icx + ((1.0 - p) * pw as f32) as i64;
-                let old_left = ix - pw / 3 - (p * (pw / 2) as f32) as i64;
+                let p = crate::ui::fx_preview::preview_pos(at);
+                let w_i = i64::from(iw);
+                let new_left = ix + w_i - (p * w_i as f32) as i64;
+                let old_left = ix - (p * w_i as f32) as i64;
                 paint_rect_ring(
                     frame,
                     old_left,
                     py0,
-                    old_left + pw * 5 / 6,
+                    old_left + w_i,
                     py0 + i64::from(ph),
                     ix,
-                    i64::MAX,
+                    ix + w_i,
                     crate::ui::accent::CARD_PAGE_BG,
                     0x0040_4040,
                     0x0060_6060,
@@ -4594,31 +4588,351 @@ impl TermView {
                     frame,
                     new_left,
                     py0,
-                    new_left + pw,
+                    new_left + w_i,
                     py0 + i64::from(ph),
-                    0,
-                    ix + i64::from(iw),
+                    ix,
+                    ix + w_i,
                     crate::ui::accent::CARD_PAGE_BG,
                     accent.c2,
                     accent.c1,
                     18,
                     true,
                 );
-                let ball_a = if at < 200 {
-                    at as u32 * 220 / 200
-                } else if at < 1100 {
-                    220
-                } else if at < 1300 {
-                    220 - (at - 1100) as u32 * 220 / 200
-                } else {
-                    0
+                finger_ball(
+                    frame,
+                    new_left,
+                    py0 + i64::from(ph) / 2,
+                    crate::ui::fx_preview::preview_drag_ball_alpha(at),
+                );
+            }
+            Preview::PoolGlide => {
+                // 池高伸缩语义化（十五修）：双小池——上池高 25%↔55% 乒乓
+                // （ease-in-out 唯一尺），下池顶与内行跟随；白球点球在下池
+                // 首行（触发 = 点下池行）
+                let p = crate::ui::fx_preview::preview_pos(at);
+                let w_i = i64::from(iw);
+                let gap = 18i64;
+                let uh = (i64::from(ih) as f32 * (0.25 + 0.30 * p)) as i64;
+                paint_rect_ring(
+                    frame,
+                    ix,
+                    iy,
+                    ix + w_i,
+                    iy + uh,
+                    0,
+                    i64::MAX,
+                    crate::ui::accent::CARD_PAGE_BG,
+                    accent.c2,
+                    accent.c1,
+                    18,
+                    true,
+                );
+                let ly0 = iy + uh + gap;
+                let ly1 = iy + i64::from(ih);
+                paint_rect_ring(
+                    frame,
+                    ix,
+                    ly0,
+                    ix + w_i,
+                    ly1,
+                    0,
+                    i64::MAX,
+                    crate::ui::accent::CARD_PAGE_BG,
+                    accent.c2,
+                    accent.c1,
+                    18,
+                    true,
+                );
+                // 下池内两行（钉在下池顶下，跟随池顶）
+                for k in 0..2i64 {
+                    let ry = ly0 + 22 + k * 28;
+                    if ry + 1 < ly1 - 10 {
+                        for xx in ix + 20..ix + w_i - 20 {
+                            if xx >= 0 && xx < i64::from(frame.w) {
+                                frame.blend_px(xx as u32, ry as u32, accent.c2, 150);
+                                frame.blend_px(xx as u32, (ry + 1) as u32, accent.c2, 150);
+                            }
+                        }
+                    }
+                }
+                finger_ball(
+                    frame,
+                    ix + w_i / 2,
+                    ly0 + 22,
+                    crate::ui::fx_preview::preview_tap_ball_alpha(at),
+                );
+            }
+            Preview::TabSlide => {
+                // 标签栏层语义化（十五修）：两未选 chip（薄态）+ 选中块
+                // （满态均匀渐变）在两者间乒乓滑行 + 底线配合模式纯色；
+                // 白球点球在目标 chip 心
+                let p = crate::ui::fx_preview::preview_pos(at);
+                let chip_w = i64::from(iw) * 2 / 5;
+                let chip_h = (i64::from(ih) / 2).clamp(40, 118);
+                let y0 = iy + (i64::from(ih) - chip_h) / 2 - 6;
+                let ax = ix + i64::from(iw) / 12;
+                let bx = ix + i64::from(iw) - i64::from(iw) / 12 - chip_w;
+                paint_tab_chip(
+                    frame,
+                    ax,
+                    y0,
+                    chip_w as u32,
+                    chip_h as u32,
+                    false,
+                    accent,
+                    0,
+                    i64::MAX,
+                );
+                paint_tab_chip(
+                    frame,
+                    bx,
+                    y0,
+                    chip_w as u32,
+                    chip_h as u32,
+                    false,
+                    accent,
+                    0,
+                    i64::MAX,
+                );
+                let sx = ax + ((bx - ax) as f32 * p) as i64;
+                paint_tab_chip(
+                    frame,
+                    sx,
+                    y0,
+                    chip_w as u32,
+                    chip_h as u32,
+                    true,
+                    accent,
+                    0,
+                    i64::MAX,
+                );
+                // 底线（配合标签模式 = 纯色 c2，2px）
+                let uy = y0 + chip_h + 6;
+                for xx in ix..ix + i64::from(iw) {
+                    if xx >= 0 && xx < i64::from(frame.w) && uy >= clip.0 && uy + 1 < clip.1 {
+                        frame.blend_px(xx as u32, uy as u32, accent.c2, 255);
+                        frame.blend_px(xx as u32, (uy + 1) as u32, accent.c2, 255);
+                    }
+                }
+                // 点球目标：去程 = 右 chip，回程 = 左 chip
+                use crate::ui::fx_preview::PreviewLeg;
+                let tx = match crate::ui::fx_preview::preview_leg(at) {
+                    PreviewLeg::Go(_) | PreviewLeg::EndDwell => bx,
+                    PreviewLeg::Return(_) | PreviewLeg::StartDwell => ax,
                 };
-                let ball_x = if at < 300 {
-                    ix + i64::from(iw) - 20
-                } else {
-                    new_left.max(ix + 10)
+                finger_ball(
+                    frame,
+                    tx + chip_w / 2,
+                    y0 + chip_h / 2,
+                    crate::ui::fx_preview::preview_tap_ball_alpha(at),
+                );
+            }
+            Preview::CursorSlide => {
+                // 光标滑行/光标层语义化（十五修）：三行小行（真文字）+
+                // 光标框行间乒乓滑行。**框动字不动**（BAR-107 语义）——
+                // 行与文字位置全程钉死，只光标框动；文字最后画（压住框芯
+                // = 单缓冲里等价「半透明芯透字」的终态观感）
+                let p = crate::ui::fx_preview::preview_pos(at);
+                let rh = CELL_H * 2;
+                let rgap = CELL_H / 2;
+                let total = rh * 3 + rgap * 2;
+                let y0 = iy + (i64::from(ih) - i64::from(total)) / 2;
+                for k in 0..3i64 {
+                    paint_row_frame(
+                        frame,
+                        ix,
+                        y0 + k * i64::from(rh + rgap),
+                        iw,
+                        rh,
+                        false,
+                        accent,
+                        denom,
+                        clip,
+                    );
+                }
+                let cy = y0 + ((i64::from(rh + rgap) * 2) as f32 * p) as i64;
+                paint_row_frame(frame, ix, cy, iw, rh, true, accent, denom, clip);
+                // 行文字用 ASCII（row1/2/3）：host 夹具字体（DejaVu）无
+                // CJK 字形，中文在考题里不落墨 = 「框动字不动」钉无牙
+                // （变异抽检实锤）；真机 CJK 字体下观感等价
+                for (k, t) in ["row1", "row2", "row3"].iter().enumerate() {
+                    self.draw_text_left_ex(
+                        frame,
+                        t,
+                        ix as u32,
+                        iw,
+                        (y0 + k as i64 * i64::from(rh + rgap)) as u32,
+                        rh,
+                        20.0,
+                        0x00D9_D9D9,
+                        18.0,
+                        Some((clip.0 as i32, clip.1 as i32)),
+                    );
+                }
+                use crate::ui::fx_preview::PreviewLeg;
+                let ty = match crate::ui::fx_preview::preview_leg(at) {
+                    PreviewLeg::Go(_) | PreviewLeg::EndDwell => {
+                        y0 + i64::from(rh + rgap) * 2 + i64::from(rh) / 2
+                    }
+                    PreviewLeg::Return(_) | PreviewLeg::StartDwell => y0 + i64::from(rh) / 2,
                 };
-                finger_ball(frame, ball_x, py0 + i64::from(ph) / 2, ball_a);
+                finger_ball(
+                    frame,
+                    ix + i64::from(iw) / 2,
+                    ty,
+                    crate::ui::fx_preview::preview_tap_ball_alpha(at),
+                );
+            }
+            Preview::DropdownAnim => {
+                // 下拉开合语义化（十五修）：触发器细框 + ▼三角矢量旋转
+                // p×180° + 抽屉面板生长（高 = p·满高），三选项行钉死面板
+                // 顶、Y 向 clip 到面板底 = 抽屉随面；选中行均匀细框。
+                // 白球点球在触发器心
+                let p = crate::ui::fx_preview::preview_pos(at);
+                let tw = i64::from(iw) * 2 / 3;
+                let th = 54i64;
+                let tx = ix + (i64::from(iw) - tw) / 2;
+                paint_thin_frame(frame, tx, iy, tw as u32, th as u32, accent, denom, clip);
+                // ▼三角：基形尖朝下（顶边 y=−6 半宽 9，尖 (0,9)），绕心
+                // 旋转 θ = p·180°（逐像素逆旋转采样）
+                let (tcx, tcy) = (tx + tw - 30, iy + th / 2);
+                let theta = p * std::f32::consts::PI;
+                let (sn, cs) = theta.sin_cos();
+                for dy in -12..=12i64 {
+                    for dx in -12..=12i64 {
+                        let sx = cs * dx as f32 + sn * dy as f32;
+                        let sy = -sn * dx as f32 + cs * dy as f32;
+                        // 基形内测试：sy ∈ [−6,9]，|sx| ≤ 9·(9−sy)/15
+                        if (-6.0..=9.0).contains(&sy) && sx.abs() <= 9.0 * (9.0 - sy) / 15.0 {
+                            let (xx, yy) = (tcx + dx, tcy + dy);
+                            if xx >= 0 && xx < i64::from(frame.w) && yy >= clip.0 && yy < clip.1 {
+                                frame.blend_px(xx as u32, yy as u32, 0x00D9_D9D9, 255);
+                            }
+                        }
+                    }
+                }
+                // 抽屉面板（深底圆角无边框：c1=c2=深灰近无环）
+                let full_ph = i64::from(ih) - th - 12;
+                let ph = (full_ph as f32 * p) as i64;
+                let py = iy + th + 12;
+                if ph > 8 {
+                    paint_rect_ring(
+                        frame,
+                        tx,
+                        py,
+                        tx + tw,
+                        py + ph,
+                        0,
+                        i64::MAX,
+                        0x000A_0A0A,
+                        0x0022_2222,
+                        0x0022_2222,
+                        18,
+                        true,
+                    );
+                }
+                // 选项行钉死面板顶（全高坐标系，行数铺满全高），Y clip
+                // 到面板底缘 = 抽屉随面（下方先入场、上方先没入）；
+                // 选中行 = 第 2 行（均匀细框）
+                let dclip = (py, py + ph);
+                let rows_n = ((full_ph - 20) / 34).max(3);
+                for k in 0..rows_n {
+                    let ry = py + 14 + k * 34;
+                    if k == 1 {
+                        paint_thin_frame(
+                            frame,
+                            tx + 14,
+                            ry - 6,
+                            (tw - 28) as u32,
+                            26,
+                            accent,
+                            denom,
+                            dclip,
+                        );
+                    }
+                    for xx in tx + 26..tx + tw - 26 {
+                        if xx >= 0 && xx < i64::from(frame.w) && ry >= dclip.0 && ry + 1 < dclip.1 {
+                            frame.blend_px(xx as u32, ry as u32, 0x00A0_A0A0, 200);
+                            frame.blend_px(xx as u32, (ry + 1) as u32, 0x00A0_A0A0, 200);
+                        }
+                    }
+                }
+                finger_ball(
+                    frame,
+                    tx + tw / 2 - 20,
+                    iy + th / 2,
+                    crate::ui::fx_preview::preview_tap_ball_alpha(at),
+                );
+            }
+            Preview::PagePan => {
+                // 视口平移切页语义化（十五修）：两个迷你页各含双小池，
+                // 面与内容一体整体横移换页（页宽 7/10 iw，页距 3/10 iw =
+                // B 页起点恰好 ix+iw）。ease-in-out 唯一尺；两页裁到展台
+                // 内。白球点球在展台顶（= 点标签触发切页）
+                let p = crate::ui::fx_preview::preview_pos(at);
+                let page_w = i64::from(iw) * 7 / 10;
+                let stride = i64::from(iw); // 页宽 + 页距 = iw（B 起点 = ix+iw）
+                let page_h = i64::from(ih) * 4 / 5;
+                let py0 = iy + (i64::from(ih) - page_h) / 2;
+                let ax = ix - (p * stride as f32) as i64;
+                for (px, main) in [(ax, true), (ax + stride, false)] {
+                    let (pc1, pc2) = if main {
+                        (accent.c1, accent.c2)
+                    } else {
+                        (accent.c2, accent.c1)
+                    };
+                    paint_rect_ring(
+                        frame,
+                        px,
+                        py0,
+                        px + page_w,
+                        py0 + page_h,
+                        ix,
+                        ix + i64::from(iw),
+                        crate::ui::accent::CARD_PAGE_BG,
+                        pc1,
+                        pc2,
+                        18,
+                        true,
+                    );
+                    // 页内双小池（跟随页体 = 面与内容一体）
+                    let pw2 = page_w - 36;
+                    let uh2 = page_h / 4;
+                    paint_rect_ring(
+                        frame,
+                        px + 18,
+                        py0 + 14,
+                        px + 18 + pw2,
+                        py0 + 14 + uh2,
+                        ix,
+                        ix + i64::from(iw),
+                        crate::ui::accent::CARD_PAGE_BG,
+                        pc2,
+                        pc1,
+                        12,
+                        true,
+                    );
+                    paint_rect_ring(
+                        frame,
+                        px + 18,
+                        py0 + 14 + uh2 + 10,
+                        px + 18 + pw2,
+                        py0 + page_h - 14,
+                        ix,
+                        ix + i64::from(iw),
+                        crate::ui::accent::CARD_PAGE_BG,
+                        pc2,
+                        pc1,
+                        12,
+                        true,
+                    );
+                }
+                finger_ball(
+                    frame,
+                    ix + i64::from(iw) * 3 / 4,
+                    iy + 8,
+                    crate::ui::fx_preview::preview_tap_ball_alpha(at),
+                );
             }
         }
     }

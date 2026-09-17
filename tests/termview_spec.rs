@@ -3751,7 +3751,7 @@ fn spec_cfg双池_涂装钉() {
     );
 }
 
-// ---- 十四修：动效引擎预览 = 动画演示（宪法 §六 预览画板条款十四修段）----
+// ---- 十五修：动效引擎预览 = 乒乓语义化动画（相位表单一源 src/ui/fx_preview.rs）----
 
 /// 动画预览钉共用夹具：开指定 preview 的跳框，喂 now_ms 画一帧
 #[allow(clippy::too_many_arguments)]
@@ -3827,117 +3827,145 @@ fn near_white_count(buf: &[u32], w: u32, x0: i64, y0: i64, x1: i64, y1: i64) -> 
     n
 }
 
-#[test]
-fn spec_动效预览_弹簧_动画钉() {
-    // 宪法 §六 十四修：弹簧预览 = 白球点触 + 响应点沿 spring_pos 实曲线
-    // 移动（循环 2400ms）。相位表（实现唯一依据）：
-    //   0..200    球在曲线原点 (ix, iy+ih) 淡入
-    //   200..300  球原点按住（α220 满）
-    //   300..900  响应点沿线：x = ix + iw·(t−300)/600，
-    //             y 由 spring_pos(0,100,t−300) 出；球淡出
-    //   900..2400 响应点停终点
-    use kfm_na::ui::comp_registry::Preview;
-    let (b_a, w, _h, prev) = paint_modal_frame(Preview::CurveSpring, 250);
-    let (b_b, _, _, _) = paint_modal_frame(Preview::CurveSpring, 500);
-    let (b_c, _, _, _) = paint_modal_frame(Preview::CurveSpring, 850);
-    let (b_d, _, _, _) = paint_modal_frame(Preview::CurveSpring, 2000);
-
-    let (ix, iy) = (prev.x + CELL_W as i64, prev.y + (CELL_H / 2) as i64);
-    let (iw, ih) = (prev.w - CELL_W * 2, prev.h - CELL_H);
-    let origin = (ix, iy + i64::from(ih));
-
-    // ①球在：t=250 原点窗内近白像素 ≥80（r10 球 ≈ 314px 盘面）
-    let n_ball = near_white_count(
-        &b_a,
-        w,
-        origin.0 - 12,
-        origin.1 - 12,
-        origin.0 + 12,
-        origin.1 + 12,
-    );
-    assert!(n_ball >= 80, "t=250 白球必须在曲线原点（实采 {n_ball}）");
-    // ②球走：t=2000（停点相位）原点窗内近白像素必须归零——球不淡出/
-    // 常住原点即红（变异：动画层删掉淡出没红 = 钉弱）
-    let n_gone = near_white_count(
-        &b_d,
-        w,
-        origin.0 - 12,
-        origin.1 - 12,
-        origin.0 + 12,
-        origin.1 + 12,
-    );
-    assert_eq!(n_gone, 0, "t=2000 原点不许再有白球（实采 {n_gone}）");
-    // ③点在动：t=500 与 t=850 两帧响应点位不同（变异：忽略 now_ms
-    // 静态化 → 两帧全等即红）
-    let dot_x = |t: u64| ix + i64::from(iw) * (t as i64 - 300) / 600;
-    let (x_a, x_b) = (dot_x(500), dot_x(850));
-    assert!(x_b > x_a, "夹具前提：相位表单调");
-    let mut diff = 0usize;
-    let scan_y0 = prev.y;
-    let scan_y1 = prev.y + i64::from(prev.h);
-    for y in scan_y0..scan_y1 {
-        for x in prev.x..prev.x + i64::from(prev.w) {
-            if b_b[y as usize * w as usize + x as usize]
-                != b_c[y as usize * w as usize + x as usize]
-            {
-                diff += 1;
+/// 统计矩形内「亮墨」像素数（max 通道 > 100：环带/满填/文字亮墨；
+/// 渐变暗底 FRAME_BG_DIM≈22%（max ≤56）不过线——环在/不在判别尺）
+fn bright_ink_count(buf: &[u32], w: u32, x0: i64, y0: i64, x1: i64, y1: i64) -> usize {
+    let h = (buf.len() as i64) / i64::from(w);
+    let mut n = 0;
+    for y in y0.max(0)..y1.min(h) {
+        for x in x0.max(0)..x1.min(i64::from(w)) {
+            let p = buf[y as usize * w as usize + x as usize] & 0x00FF_FFFF;
+            let (r, g, b) = ((p >> 16) & 0xFF, (p >> 8) & 0xFF, p & 0xFF);
+            if r.max(g).max(b) > 100 {
+                n += 1;
             }
         }
     }
-    assert!(diff > 0, "两相位帧必须异（响应点移动；静态化变异即红）");
+    n
+}
+
+/// 展台内两帧异像素数（静态化变异判别尺：动画臂忽略 now_ms 即 0）
+fn booth_diff(a: &[u32], b: &[u32], w: u32, prev: &kfm_na::ui::dual_pool::PoolRect) -> usize {
+    let mut n = 0;
+    for y in prev.y..prev.y + i64::from(prev.h) {
+        for x in prev.x..prev.x + i64::from(prev.w) {
+            if a[y as usize * w as usize + x as usize] != b[y as usize * w as usize + x as usize] {
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
+#[test]
+fn spec_动效预览_弹簧_动画钉() {
+    // 十五修相位表（fx_preview 乒乓 1400ms）：点球在曲线原点腿首点触
+    // （0..80 淡入/80..160 满/160..300 淡出）；响应点 r8 沿 spring_pos
+    // 实曲线往返骑行（Go: 0→100；Return: 100→0）；停靠段钉死
+    use kfm_na::ui::comp_registry::Preview;
+    let (b_ball, w, _h, prev) = paint_modal_frame(Preview::CurveSpring, 100);
+    let (b_mid, _, _, _) = paint_modal_frame(Preview::CurveSpring, 175);
+    let (b_end, _, _, _) = paint_modal_frame(Preview::CurveSpring, 400);
+    let (b_wrap, _, _, _) = paint_modal_frame(Preview::CurveSpring, 175 + 1400);
+
+    let (ix, iy) = (prev.x + CELL_W as i64, prev.y + (CELL_H / 2) as i64);
+    let ih = prev.h - CELL_H;
+    let origin = (ix, iy + i64::from(ih));
+
+    // ①点球在：t=100（按住窗）原点 ±15 内近白 ≥80（r13 球 ≈530px 盘面）
+    let n_ball = near_white_count(
+        &b_ball,
+        w,
+        origin.0 - 15,
+        origin.1 - 15,
+        origin.0 + 15,
+        origin.1 + 15,
+    );
+    assert!(n_ball >= 80, "t=100 白球必须在曲线原点（实采 {n_ball}）");
+    // ②球走：t=400（终点停靠，骑行点在曲线终点）原点窗必须归零
+    let n_gone = near_white_count(
+        &b_end,
+        w,
+        origin.0 - 15,
+        origin.1 - 15,
+        origin.0 + 15,
+        origin.1 + 15,
+    );
+    assert_eq!(n_gone, 0, "t=400 原点不许再有白球（实采 {n_gone}）");
+    // ③骑行实跑：去程中 vs 终点停靠两帧必异（静态化变异即红）
+    assert!(
+        booth_diff(&b_mid, &b_end, w, &prev) > 0,
+        "去程中帧与终点停靠帧必须异（响应点骑行）"
+    );
+    // ④回卷无缝：t 与 t+1400 逐像素全等（相位表不取模即红）
+    assert_eq!(
+        booth_diff(&b_mid, &b_wrap, w, &prev),
+        0,
+        "回卷必须无缝（t 与 t+1400 全等）"
+    );
 }
 
 #[test]
 fn spec_动效预览_缓动_动画钉() {
-    // 相位表：0..200 球在小面板顶心淡入；300..650 面板 ease_out_cubic
-    // 下落（跨度 = ih−54）；650..1500 停底；1500..1750 ease_in_cubic
-    // 收起；球 650 起淡出
+    // 相位表：点球在小面板顶心腿首点触；Go = power2_out 下落（跨度
+    // = ih−54）；终点停靠钉死；Return = rise_release 收起
     use kfm_na::ui::comp_registry::Preview;
-    let (b_a, w, _h, prev) = paint_modal_frame(Preview::CurveEase, 250);
-    let (b_b, _, _, _) = paint_modal_frame(Preview::CurveEase, 500);
-    let (b_c, _, _, _) = paint_modal_frame(Preview::CurveEase, 1000);
+    let (b_ball, w, _h, prev) = paint_modal_frame(Preview::CurveEase, 100);
+    let (b_mid, _, _, _) = paint_modal_frame(Preview::CurveEase, 175);
+    let (b_end, _, _, _) = paint_modal_frame(Preview::CurveEase, 400);
+    let (b_start, _, _, _) = paint_modal_frame(Preview::CurveEase, 1000);
 
     let (ix, iy) = (prev.x + CELL_W as i64, prev.y + (CELL_H / 2) as i64);
     let (iw, ih) = (prev.w - CELL_W * 2, prev.h - CELL_H);
-    // 面板几何（相位表定值）：宽 iw·2/3、高 54、左缘 ix+iw/6
     let panel_cx = ix + i64::from(iw) / 6 + i64::from(iw) / 3;
-    // t=250：球在面板顶（未落，y ≈ iy+27）
-    let n_ball = near_white_count(&b_a, w, panel_cx - 14, iy + 10, panel_cx + 14, iy + 45);
-    assert!(n_ball >= 80, "t=250 白球必须在小面板顶（实采 {n_ball}）");
-    // t=500 vs t=1000：下落中 vs 停底——面板区位必须异
-    let mut diff = 0usize;
-    for y in prev.y..prev.y + i64::from(prev.h) {
-        for x in prev.x..prev.x + i64::from(prev.w) {
-            if b_b[y as usize * w as usize + x as usize]
-                != b_c[y as usize * w as usize + x as usize]
-            {
-                diff += 1;
-            }
-        }
-    }
-    assert!(diff > 0, "下落中帧与停底帧必须异（缓动实跑；静态化即红）");
-    // 停底钉：t=1000 面板应已到底（y0 = iy + ih − 54）——细框上缘有墨
-    let top_y = iy + i64::from(ih) - 54;
-    let mut ink = 0usize;
-    for x in ix + i64::from(iw) / 6 + 4..ix + i64::from(iw) / 6 + i64::from(iw) * 2 / 3 - 4 {
-        let p = b_c[(top_y + 1) as usize * w as usize + x as usize] & 0x00FF_FFFF;
-        if p != 0 {
-            ink += 1;
-        }
-    }
-    assert!(ink > 10, "t=1000 面板必须落到底（顶缘墨 {ink}）");
+    // ①t=100：点球按住窗，球骑在面板顶心（面板已随 Go 腿落了一段——
+    // 点触即走语义；球位 = iy + power2_out(100/350)·(ih−54) + 27，
+    // fx_ease 独立复算；画错位置/没跟面板即红）
+    let py100 =
+        iy + (kfm_na::ui::fx_ease::power2_out(100.0 / 350.0) * (i64::from(ih) - 54) as f32) as i64;
+    let n_ball = near_white_count(
+        &b_ball,
+        w,
+        panel_cx - 15,
+        py100 + 12,
+        panel_cx + 15,
+        py100 + 42,
+    );
+    assert!(n_ball >= 80, "t=100 白球必须骑在小面板顶（实采 {n_ball}）");
+    // ②缓动实跑：下落中 vs 终点停靠必异
+    assert!(
+        booth_diff(&b_mid, &b_end, w, &prev) > 0,
+        "下落中帧与停底帧必须异（缓动实跑；静态化即红）"
+    );
+    // ③停底钉：t=400 面板落到底（顶缘 = iy+ih−54）——底带亮环墨必须
+    // 多过 t=1000（面板在顶时底带只剩静态曲线墨）
+    let band = |buf: &[u32]| {
+        bright_ink_count(
+            buf,
+            w,
+            ix + i64::from(iw) / 6 + 20,
+            iy + i64::from(ih) - 53,
+            ix + i64::from(iw) / 6 + i64::from(iw) * 2 / 3 - 20,
+            iy + i64::from(ih) - 50,
+        )
+    };
+    assert!(
+        band(&b_end) > band(&b_start) + 20,
+        "t=400 面板必须落到底（亮环墨 {} vs {}）",
+        band(&b_end),
+        band(&b_start)
+    );
 }
 
 #[test]
 fn spec_动效预览_手势仲裁_动画钉() {
-    // 相位表：0..200 球在起点淡入；200..1200 球 1:1 拖到轨道 70%，
-    // 小卡片跟手；1200..1700 松手，卡片 ease_out 滑到终点；球 1200 起
-    // 淡出；1700..2400 停
+    // 相位表：拖球全程跟手（0..80 淡入/80..350 满/350..500 淡出）；
+    // Go rt<0.66 = 1:1 拖到轨道 70%，rt≥0.66 = 松手 power2_out 补到
+    // 终点；Return 纯 1:1 拖回起点
     use kfm_na::ui::comp_registry::Preview;
     let (b_a, w, _h, prev) = paint_modal_frame(Preview::Swipe, 250);
     let (b_b, _, _, _) = paint_modal_frame(Preview::Swipe, 700);
     let (b_c, _, _, _) = paint_modal_frame(Preview::Swipe, 1100);
-    let (b_d, _, _, _) = paint_modal_frame(Preview::Swipe, 2200);
 
     let (ix, iy) = (prev.x + CELL_W as i64, prev.y + (CELL_H / 2) as i64);
     let (iw, ih) = (prev.w - CELL_W * 2, prev.h - CELL_H);
@@ -3945,60 +3973,344 @@ fn spec_动效预览_手势仲裁_动画钉() {
     let x0 = ix + 30;
     let x1 = ix + i64::from(iw) - 60;
     let release_x = x0 + (x1 - x0) * 7 / 10;
-    // t=250：拖动相位 50ms/1000ms——球位必须 = 相位表精确值（位置钉：
-    // 淡入/按住相位画错位置也红）
-    let bx250 = x0 + 50 * (release_x - x0) / 1000;
-    let n_ball = near_white_count(&b_a, w, bx250 - 8, my - 12, bx250 + 8, my + 12);
+    // ①t=250：Go rt=250/350≈0.714 ≥ 0.66 → 松手补间段——球位必须 =
+    // 相位表精确值（fx_ease::power2_out 独立复算；位置钉：画错位置即红）
+    let rt = 250.0f32 / 350.0;
+    let bx250 = release_x
+        + (kfm_na::ui::fx_ease::power2_out((rt - 0.66) / 0.34) * (x1 - release_x) as f32) as i64;
+    let n_ball = near_white_count(&b_a, w, bx250 - 15, my - 15, bx250 + 15, my + 15);
     assert!(
         n_ball >= 60,
         "t=250 白球必须在相位表位 (bx={bx250})（实采 {n_ball}）"
     );
-    // t=700 vs t=1100：拖动中球位必须不同（1:1 跟手）
-    let mut diff = 0usize;
-    for y in prev.y..prev.y + i64::from(prev.h) {
-        for x in prev.x..prev.x + i64::from(prev.w) {
-            if b_b[y as usize * w as usize + x as usize]
-                != b_c[y as usize * w as usize + x as usize]
-            {
-                diff += 1;
-            }
-        }
-    }
-    assert!(diff > 0, "拖动两相位帧必须异（跟手实跑；静态化即红）");
-    // t=2200：球已退场——起点窗内不许有白
-    let n_gone = near_white_count(&b_d, w, x0 - 12, my - 12, x0 + 12, my + 12);
-    assert_eq!(n_gone, 0, "t=2200 起点不许再有白球（实采 {n_gone}）");
+    // ②回程拖动中（t=700）vs 起点停靠（t=1100）：两帧必异（拖回实跑）
+    assert!(
+        booth_diff(&b_b, &b_c, w, &prev) > 0,
+        "回程拖动帧与起点停靠帧必须异"
+    );
+    // ③t=1100：球已退场——起点窗内不许有白（卡片细框/起点圆是 accent
+    // 色不过 180 线）
+    let n_gone = near_white_count(&b_c, w, x0 - 15, my - 15, x0 + 15, my + 15);
+    assert_eq!(n_gone, 0, "t=1100 起点不许再有白球（实采 {n_gone}）");
 }
 
 #[test]
 fn spec_动效预览_视口平移_动画钉() {
-    // 相位表：0..200 球在右缘起淡入；300..1100 球左拖，新页跟手推入
-    // （新页左缘 = icx + (1−p)·pw，p = 拖动进度）；1100..1600 松手
-    // ease_out 补到 p=1；1600..2400 靠泊停
+    // 十五修·满宽推入：新页宽 = 展台内宽 iw，从 ix+iw 推到 ix；旧页从
+    // ix 推到 ix−iw 完全挤出（真换页）；拖球贴新页左缘
     use kfm_na::ui::comp_registry::Preview;
-    let (b_a, w, _h, prev) = paint_modal_frame(Preview::ViewportPush, 700);
-    let (b_b, _, _, _) = paint_modal_frame(Preview::ViewportPush, 1800);
-    // 拖动中 vs 靠泊：新页位必须不同
-    let mut diff = 0usize;
-    for y in prev.y..prev.y + i64::from(prev.h) {
-        for x in prev.x..prev.x + i64::from(prev.w) {
-            if b_a[y as usize * w as usize + x as usize]
-                != b_b[y as usize * w as usize + x as usize]
+    let (b_mid, w, _h, prev) = paint_modal_frame(Preview::ViewportPush, 175);
+    let (b_end, _, _, _) = paint_modal_frame(Preview::ViewportPush, 400);
+    let (b_start, _, _, _) = paint_modal_frame(Preview::ViewportPush, 1000);
+    let (b_wrap, _, _, _) = paint_modal_frame(Preview::ViewportPush, 1000 + 1400);
+
+    let (ix, iy) = (prev.x + CELL_W as i64, prev.y + (CELL_H / 2) as i64);
+    let (iw, ih) = (prev.w - CELL_W * 2, prev.h - CELL_H);
+    let ph = i64::from(ih) * 3 / 4;
+    let py0 = iy + (i64::from(ih) - ph) / 2;
+    // ①推入实跑：拖动中 vs 起点停靠必异
+    assert!(
+        booth_diff(&b_mid, &b_start, w, &prev) > 0,
+        "拖动中帧与起点停靠帧必须异（推入实跑；静态化即红）"
+    );
+    // ②回卷无缝
+    assert_eq!(
+        booth_diff(&b_start, &b_wrap, w, &prev),
+        0,
+        "回卷必须无缝（t 与 t+1400 全等）"
+    );
+    // ③满宽语义钉：展台 3/4 宽近底缘采样点 q（渐变 t≈0.8，橙蓝分离
+    // 度最大处）——t=1000（起点）= 旧灰页底环（R≈B）；t=400（终点）=
+    // 新 accent 页底环（橙侧 R>B+40）。旧页没完全挤出/新页没满宽靠泊
+    // 即红
+    let qx = ix + i64::from(iw) * 3 / 4;
+    let qy = py0 + ph - 2;
+    let split = |buf: &[u32]| {
+        let p = buf[qy as usize * w as usize + qx as usize] & 0x00FF_FFFF;
+        ((p >> 16) & 0xFF, (p >> 8) & 0xFF, p & 0xFF)
+    };
+    let (r0, _, b0) = split(&b_start);
+    let (r1, _, b1) = split(&b_end);
+    assert!(
+        r0.abs_diff(b0) <= 20,
+        "t=1000 q 必须是旧灰页底环（实采 R={r0} B={b0}）"
+    );
+    assert!(
+        r1 > b1 + 40,
+        "t=400 q 必须是新 accent 页底环（实采 R={r1} B={b1}）"
+    );
+}
+
+#[test]
+fn spec_动效预览_池高伸缩_动画钉() {
+    // 语义化（十五修）：上池高 uh = ih·(0.25+0.30·p) 乒乓（ease-in-out
+    // 唯一尺）；下池顶 = iy+uh+18 跟随；点球在下池首行腿首点触
+    use kfm_na::ui::comp_registry::Preview;
+    let (b_mid, w, _h, prev) = paint_modal_frame(Preview::PoolGlide, 175);
+    let (b_end, _, _, _) = paint_modal_frame(Preview::PoolGlide, 400);
+    let (b_start, _, _, _) = paint_modal_frame(Preview::PoolGlide, 1000);
+    let (b_ball, _, _, _) = paint_modal_frame(Preview::PoolGlide, 100);
+
+    let (ix, iy) = (prev.x + CELL_W as i64, prev.y + (CELL_H / 2) as i64);
+    let (iw, ih) = (prev.w - CELL_W * 2, prev.h - CELL_H);
+    // ①伸缩实跑
+    assert!(
+        booth_diff(&b_mid, &b_start, w, &prev) > 0,
+        "上池高必须实跑（静态化即红）"
+    );
+    // ②语义钉：t=1000（p=0，uh=0.25·ih）上池底环带 = y≈iy+0.25ih；
+    // t=400（p=1，uh=0.55ih）同带已在上池内芯（暗底不过 100 线）——
+    // 亮环墨必须前者多过后者（uh 区间锚错即红）
+    let band_y = iy + i64::from(ih) / 4;
+    let band = |buf: &[u32]| {
+        bright_ink_count(
+            buf,
+            w,
+            ix + i64::from(iw) / 2 - 40,
+            band_y - 2,
+            ix + i64::from(iw) / 2 + 40,
+            band_y + 2,
+        )
+    };
+    assert!(
+        band(&b_start) > band(&b_end) + 10,
+        "上池底环必须在 0.25ih 带（{} vs {}）",
+        band(&b_start),
+        band(&b_end)
+    );
+    // ③点球：t=100 球在下池首行（ly0+22，ly0 = iy+0.25ih+18）
+    let ly0 = iy + i64::from(ih) / 4 + 18;
+    let n_ball = near_white_count(
+        &b_ball,
+        w,
+        ix + i64::from(iw) / 2 - 15,
+        ly0 + 7,
+        ix + i64::from(iw) / 2 + 15,
+        ly0 + 37,
+    );
+    assert!(n_ball >= 60, "t=100 白球必须点在下池首行（实采 {n_ball}）");
+}
+
+#[test]
+fn spec_动效预览_标签栏层_动画钉() {
+    // 语义化（十五修）：两未选 chip（薄态 α48）+ 选中块（满态 α255
+    // 均匀渐变）在两者间乒乓滑行；底线纯色；点球在目标 chip 心
+    use kfm_na::ui::comp_registry::Preview;
+    let (b_end, w, _h, prev) = paint_modal_frame(Preview::TabSlide, 400);
+    let (b_start, _, _, _) = paint_modal_frame(Preview::TabSlide, 1000);
+    let (b_mid, _, _, _) = paint_modal_frame(Preview::TabSlide, 175);
+    let (b_ball, _, _, _) = paint_modal_frame(Preview::TabSlide, 100);
+
+    let (ix, iy) = (prev.x + CELL_W as i64, prev.y + (CELL_H / 2) as i64);
+    let (iw, ih) = (prev.w - CELL_W * 2, prev.h - CELL_H);
+    let chip_w = i64::from(iw) * 2 / 5;
+    let chip_h = (i64::from(ih) / 2).clamp(40, 118);
+    let y0 = iy + (i64::from(ih) - chip_h) / 2 - 6;
+    let ax = ix + i64::from(iw) / 12;
+    let bx = ix + i64::from(iw) - i64::from(iw) / 12 - chip_w;
+    let chip_bright = |buf: &[u32], cx: i64| {
+        bright_ink_count(buf, w, cx + 8, y0 + 8, cx + chip_w - 8, y0 + chip_h - 4)
+    };
+    // ①终点（t=400）选中块在右 chip：右亮墨 ≫ 左；起点（t=1000）反之
+    // （薄态 α48 不过 100 线，满态 α255 必过——选中块位置锚错即红）
+    assert!(
+        chip_bright(&b_end, bx) > chip_bright(&b_end, ax) + 100,
+        "终点选中块必须在右 chip（{} vs {}）",
+        chip_bright(&b_end, bx),
+        chip_bright(&b_end, ax)
+    );
+    assert!(
+        chip_bright(&b_start, ax) > chip_bright(&b_start, bx) + 100,
+        "起点选中块必须在左 chip（{} vs {}）",
+        chip_bright(&b_start, ax),
+        chip_bright(&b_start, bx)
+    );
+    // ②滑行实跑
+    assert!(
+        booth_diff(&b_mid, &b_start, w, &prev) > 0,
+        "选中块滑行必须实跑"
+    );
+    // ③点球：t=100 球在右 chip 心（Go 目标）
+    let n_ball = near_white_count(
+        &b_ball,
+        w,
+        bx + chip_w / 2 - 15,
+        y0 + chip_h / 2 - 15,
+        bx + chip_w / 2 + 15,
+        y0 + chip_h / 2 + 15,
+    );
+    assert!(n_ball >= 60, "t=100 白球必须点在右 chip（实采 {n_ball}）");
+}
+
+#[test]
+fn spec_动效预览_光标滑行_框动字不动钉() {
+    // 语义化（十五修）：三行真文字钉死 + 光标框行间乒乓滑行——
+    // **框动字不动**（BAR-107 语义钉：文字像素不随光标框动；变异：
+    // 文字烤进光标层/随框偏移重画即红）
+    use kfm_na::ui::comp_registry::Preview;
+    let (b_mid, w, _h, prev) = paint_modal_frame(Preview::CursorSlide, 175);
+    let (b_start, _, _, _) = paint_modal_frame(Preview::CursorSlide, 1000);
+    let (b_ball, _, _, _) = paint_modal_frame(Preview::CursorSlide, 100);
+
+    let (ix, iy) = (prev.x + CELL_W as i64, prev.y + (CELL_H / 2) as i64);
+    let (iw, ih) = (prev.w - CELL_W * 2, prev.h - CELL_H);
+    let rh = CELL_H * 2;
+    let rgap = CELL_H / 2;
+    let y0 = iy + (i64::from(ih) - i64::from(rh * 3 + rgap * 2)) / 2;
+    // ①框动字不动：t=175（p=0.5，光标框恰好盖住中行）vs t=1000（框在
+    // 首行）——中行文字带必须逐像素全等（带避开框环：x 让 30、y 让 10）
+    let row1_y = y0 + i64::from(rh + rgap);
+    let mut text_diff = 0usize;
+    for y in row1_y + 10..row1_y + i64::from(rh) - 10 {
+        for x in ix + 30..ix + 200 {
+            if b_mid[y as usize * w as usize + x as usize]
+                != b_start[y as usize * w as usize + x as usize]
             {
-                diff += 1;
+                text_diff += 1;
             }
         }
     }
-    assert!(diff > 0, "拖动中帧与靠泊帧必须异（推入实跑；静态化即红）");
-    // 靠泊钉：t=1800 新页左缘应停在 icx（accent 细框左边有墨）
+    assert_eq!(text_diff, 0, "中行文字带必须逐像素钉死（框动字不动）");
+    // ②框动：两帧展台必异（光标框滑行实跑）
+    assert!(
+        booth_diff(&b_mid, &b_start, w, &prev) > 0,
+        "光标框滑行必须实跑"
+    );
+    // ③点球：t=100 球在行三心（Go 目标 = 行三）
+    let row3_cy = y0 + i64::from(rh + rgap) * 2 + i64::from(rh) / 2;
+    let n_ball = near_white_count(
+        &b_ball,
+        w,
+        ix + i64::from(iw) / 2 - 15,
+        row3_cy - 15,
+        ix + i64::from(iw) / 2 + 15,
+        row3_cy + 15,
+    );
+    assert!(n_ball >= 60, "t=100 白球必须点在行三（实采 {n_ball}）");
+}
+
+#[test]
+fn spec_动效预览_下拉开合_抽屉随面钉() {
+    // 语义化（十五修）：抽屉面板高 = p·满高；选项行钉死面板顶、Y clip
+    // 到面板底（抽屉随面——下方先入场、上方先没入）；▼三角旋转
+    // p×180°；点球在触发器
+    use kfm_na::ui::comp_registry::Preview;
+    let (b_mid, w, _h, prev) = paint_modal_frame(Preview::DropdownAnim, 175);
+    let (b_open, _, _, _) = paint_modal_frame(Preview::DropdownAnim, 400);
+    let (b_shut, _, _, _) = paint_modal_frame(Preview::DropdownAnim, 1000);
+    let (b_ball, _, _, _) = paint_modal_frame(Preview::DropdownAnim, 100);
+
     let (ix, iy) = (prev.x + CELL_W as i64, prev.y + (CELL_H / 2) as i64);
     let (iw, ih) = (prev.w - CELL_W * 2, prev.h - CELL_H);
-    let icx = ix + i64::from(iw) / 2;
-    let py0 = iy + (i64::from(ih) - i64::from(ih) * 3 / 4) / 2;
-    let py1 = py0 + i64::from(ih) * 3 / 4;
-    let my = (py0 + py1) / 2;
-    let edge = b_b[my as usize * w as usize + (icx + 1) as usize] & 0x00FF_FFFF;
-    assert_ne!(edge, 0, "t=1800 新页左缘必须靠泊到 icx（有墨）");
+    let tw = i64::from(iw) * 2 / 3;
+    let th = 54i64;
+    let tx = ix + (i64::from(iw) - tw) / 2;
+    let full_ph = i64::from(ih) - th - 12;
+    let py = iy + th + 12;
+    // ①开合实跑：全开 vs 全收 面板区亮墨差
+    let region =
+        |buf: &[u32]| bright_ink_count(buf, w, tx + 10, py + 20, tx + tw - 10, py + full_ph - 10);
+    assert!(
+        region(&b_open) > region(&b_shut) + 200,
+        "全开面板区必须有墨（{} vs {}）",
+        region(&b_open),
+        region(&b_shut)
+    );
+    // ②抽屉随面：t=175（p=0.5）面板底缘+外发光晕带（spread 14）以下
+    // 必须与全收帧逐像素全等（选项行不许漏出抽屉底；clip 摘掉/行不钉
+    // 面板顶即红）
+    let clip_bottom = py + full_ph / 2;
+    let mut leak = 0usize;
+    for y in clip_bottom + 16..py + full_ph - 2 {
+        for x in tx..tx + tw {
+            if b_mid[y as usize * w as usize + x as usize]
+                != b_shut[y as usize * w as usize + x as usize]
+            {
+                leak += 1;
+            }
+        }
+    }
+    assert_eq!(leak, 0, "抽屉底以下不许漏墨（实采 {leak}）");
+    // ③三角旋转：全开 vs 全收 三角区必异（180° 翻转；不转即红）
+    let (tcx, tcy) = (tx + tw - 30, iy + th / 2);
+    let mut tri = 0usize;
+    for y in tcy - 12..tcy + 12 {
+        for x in tcx - 12..tcx + 12 {
+            if b_open[y as usize * w as usize + x as usize]
+                != b_shut[y as usize * w as usize + x as usize]
+            {
+                tri += 1;
+            }
+        }
+    }
+    assert!(tri > 10, "▼三角必须旋转（实采 {tri}）");
+    // ④点球：t=100 球在触发器心偏左（三角位右侧不受球污染）
+    let n_ball = near_white_count(
+        &b_ball,
+        w,
+        tx + tw / 2 - 35,
+        iy + th / 2 - 15,
+        tx + tw / 2 - 5,
+        iy + th / 2 + 15,
+    );
+    assert!(n_ball >= 60, "t=100 白球必须点在触发器（实采 {n_ball}）");
+}
+
+#[test]
+fn spec_动效预览_视口平移切页_动画钉() {
+    // 语义化（十五修）：两迷你页（各含双小池）面与内容一体横移换页；
+    // 页宽 7/10 iw、stride = iw（B 起点 = ix+iw 展台右缘外）；
+    // 点球在展台顶（= 点标签触发切页）
+    use kfm_na::ui::comp_registry::Preview;
+    let (b_mid, w, _h, prev) = paint_modal_frame(Preview::PagePan, 175);
+    let (b_end, _, _, _) = paint_modal_frame(Preview::PagePan, 400);
+    let (b_start, _, _, _) = paint_modal_frame(Preview::PagePan, 1000);
+    let (b_wrap, _, _, _) = paint_modal_frame(Preview::PagePan, 2400);
+    let (b_ball, _, _, _) = paint_modal_frame(Preview::PagePan, 100);
+
+    let (ix, iy) = (prev.x + CELL_W as i64, prev.y + (CELL_H / 2) as i64);
+    let (iw, ih) = (prev.w - CELL_W * 2, prev.h - CELL_H);
+    let page_h = i64::from(ih) * 4 / 5;
+    let py0 = iy + (i64::from(ih) - page_h) / 2;
+    // ①换页实跑
+    assert!(
+        booth_diff(&b_mid, &b_start, w, &prev) > 0,
+        "换页中帧与起点停靠帧必须异"
+    );
+    // ②回卷无缝
+    assert_eq!(
+        booth_diff(&b_start, &b_wrap, w, &prev),
+        0,
+        "回卷必须无缝（t 与 t+1400 全等）"
+    );
+    // ③靠泊身份钉：页环顶直段采样（ix+30, py0+1）渐变 t≈0 处 ≈ 纯
+    // c1——A 页 c1=accent.c1（FF6000 橙，R>B+100）；B 页 c1=accent.c2
+    // （0080FF 蓝，B>R+100）。t=1000 靠泊 A、t=400 靠泊 B（页序/双色
+    // 锚错即红）
+    let split = |buf: &[u32]| {
+        let p = buf[(py0 + 1) as usize * w as usize + (ix + 30) as usize] & 0x00FF_FFFF;
+        ((p >> 16) & 0xFF, (p >> 8) & 0xFF)
+    };
+    let (ra, ba) = split(&b_start);
+    let (rb, bb) = split(&b_end);
+    assert!(
+        ra > ba + 100,
+        "t=1000 必须靠泊 A 页（橙顶；实采 R={ra} B={ba}）"
+    );
+    assert!(
+        bb > rb + 100,
+        "t=400 必须靠泊 B 页（蓝顶；实采 R={rb} B={bb}）"
+    );
+    // ④点球：t=100 球在展台顶（ix+3iw/4, iy+8）
+    let n_ball = near_white_count(
+        &b_ball,
+        w,
+        ix + i64::from(iw) * 3 / 4 - 15,
+        iy - 7,
+        ix + i64::from(iw) * 3 / 4 + 15,
+        iy + 23,
+    );
+    assert!(n_ball >= 60, "t=100 白球必须点在展台顶（实采 {n_ball}）");
 }
 
 #[test]

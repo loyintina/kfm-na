@@ -81,6 +81,21 @@ pub enum Preview {
     Swipe,
     /// 视口平移示意：新页推入旧页挤出
     ViewportPush,
+    /// 池高伸缩演示（十五修语义化）：双小池，上池高 25%→55% 乒乓伸缩、
+    /// 下池顶与行跟随
+    PoolGlide,
+    /// 标签栏层演示（十五修语义化）：两未选 chip + 选中块在两者间滑行
+    /// + 底线（配合模式纯色）
+    TabSlide,
+    /// 光标滑行/光标层演示（十五修语义化）：三行小行（真文字）+ 光标框
+    /// 行间乒乓滑行，框动字不动（BAR-107：文字在框上层直出）
+    CursorSlide,
+    /// 下拉开合演示（十五修语义化）：触发器 + ▼三角旋转 p×180° +
+    /// 抽屉面板生长，选项行钉面板顶随面 clip
+    DropdownAnim,
+    /// 视口平移切页演示（十五修语义化）：两个迷你页（各含双小池）整体
+    /// 横移换页，面与内容一体
+    PagePan,
 }
 
 /// 组件条目（跳框字段区+预览画板的数据源：名/状态/位置/规范/考题/
@@ -287,7 +302,7 @@ pub const COMPONENTS: &[CompEntry] = &[
         file: "src/ui/fx_spring.rs",
         spec: "ui-base.md §八",
         tests: "tests/fx_spring_spec.rs",
-        desc: "欠阻尼弹簧：标签滑块、键盘 inset 同核。select 瞬间从当前位置重定基续弹，600ms 兜底贴死。预览 = 动画演示（十四修）：白球点触，响应点沿实曲线骑行。",
+        desc: "欠阻尼弹簧：标签滑块、键盘 inset 同核。select 瞬间从当前位置重定基续弹，600ms 兜底贴死。预览 = 语义化演示（十五修）：白球点触，响应点沿 spring_pos 实曲线往返骑行（去程 0→100、回程 100→0），1400ms 乒乓无缝。",
         preview: Preview::CurveSpring,
     },
     CompEntry {
@@ -298,7 +313,7 @@ pub const COMPONENTS: &[CompEntry] = &[
         file: "src/ui/fx_ease.rs",
         spec: "ui-base.md §八 + 宪法 §五 曲线单一源",
         tests: "tests/fx_ease_spec.rs",
-        desc: "全局曲线库三族：ease-in-out cubic 250ms = 位移类唯一尺（池平移/光标/池高/标签游标，BAR-095 定律）；ease-out/in = 面板下落收起与下拉开合；rise_release/power2_out = 面板松手补间。预览 = 动画演示（十四修）：白球点触，小面板实节奏下落/收起。",
+        desc: "全局曲线库三族：ease-in-out cubic 250ms = 位移类唯一尺（池平移/光标/池高/标签游标，BAR-095 定律）；ease-out/in = 面板下落收起与下拉开合；rise_release/power2_out = 面板松手补间。预览 = 语义化演示（十五修）：白球点触，小面板 power2_out 下落、停靠、rise_release 收起，1400ms 乒乓。",
         preview: Preview::CurveEase,
     },
     CompEntry {
@@ -309,7 +324,7 @@ pub const COMPONENTS: &[CompEntry] = &[
         file: "src/ui/panel_drag.rs",
         spec: "ui-base.md §五B",
         tests: "tests/panel_drag_spec.rs",
-        desc: "面板跟手拖拽：横向锁定制，松手按完成度+速度裁决去留。一滑一义——纵向滚动时横向锁未起。预览 = 动画演示（十四修）：白球 1:1 拖小卡片，松手滑到终点。",
+        desc: "面板跟手拖拽：横向锁定制，松手按完成度+速度裁决去留。一滑一义——纵向滚动时横向锁未起。预览 = 语义化演示（十五修）：白球 1:1 拖小卡片到 70%、松手 power2_out 补到终点，回程纯 1:1 拖回，1400ms 乒乓。",
         preview: Preview::Swipe,
     },
     CompEntry {
@@ -320,7 +335,7 @@ pub const COMPONENTS: &[CompEntry] = &[
         file: "src/ui/viewport_push.rs",
         spec: "ui-base.md §五B",
         tests: "tests/viewport_push_spec.rs",
-        desc: "四公民页面视口平移合成：新页推入、旧页挤出。被覆盖面板保持覆盖态，收起覆盖者即露出。预览 = 动画演示（十四修）：白球左拖，新页跟手推入，松手补到靠泊。",
+        desc: "四公民页面视口平移合成：新页推入、旧页挤出。被覆盖面板保持覆盖态，收起覆盖者即露出。预览 = 语义化演示（十五修）：白球左拖，满宽新页推入旧页完全挤出（真换页），ease-in-out 往返，1400ms 乒乓。",
         preview: Preview::ViewportPush,
     },
     CompEntry {
@@ -331,8 +346,8 @@ pub const COMPONENTS: &[CompEntry] = &[
         file: "src/ui/dual_pool.rs",
         spec: "宪法 §五 池区分域律（BAR-095）",
         tests: "tests/dual_pool_spec.rs",
-        desc: "上池高度分域动画：点下池 = 250ms ease-in-out 与光标/平移同钟同步（「光标到位池高也到位」，零过冲——BAR-094 弹簧废除）；切标签 = 直通（新页池高起步帧就位，贴死零二次动画）。预览借用缓动件曲线。",
-        preview: Preview::CurveEase,
+        desc: "上池高度分域动画：点下池 = 250ms ease-in-out 与光标/平移同钟同步（「光标到位池高也到位」，零过冲——BAR-094 弹簧废除）；切标签 = 直通（新页池高起步帧就位，贴死零二次动画）。预览 = 语义化演示（十五修）：双小池，上池高 25%↔55% 乒乓伸缩，下池顶与行跟随。",
+        preview: Preview::PoolGlide,
     },
     CompEntry {
         name: "标签栏层",
@@ -342,8 +357,8 @@ pub const COMPONENTS: &[CompEntry] = &[
         file: "src/ui/tab_bar.rs",
         spec: "ui-base §八 渲染成本模型（BAR-096 拆槽）",
         tests: "tests/termview_spec.rs",
-        desc: "标签行独立小画布槽（屏宽×118 ≈0.65MB）：游标滑行逐帧重烘只脏这一层——原配置槽每次 14MB 全页重光栅+上传是 21fps 帧饥饿的三路真凶之一（draw_avg 47ms）。签名已钉「与整页版逐像素等价」（减 y_shift 一个常量）。",
-        preview: Preview::TabChip,
+        desc: "标签行独立小画布槽（屏宽×118 ≈0.65MB）：游标滑行逐帧重烘只脏这一层——原配置槽每次 14MB 全页重光栅+上传是 21fps 帧饥饿的三路真凶之一（draw_avg 47ms）。签名已钉「与整页版逐像素等价」（减 y_shift 一个常量）。预览 = 语义化演示（十五修）：两未选 chip + 选中块在两者间滑行 + 底线。",
+        preview: Preview::TabSlide,
     },
     CompEntry {
         name: "光标层",
@@ -353,8 +368,8 @@ pub const COMPONENTS: &[CompEntry] = &[
         file: "src/termview.rs",
         spec: "ui-base §八 渲染成本模型（BAR-096 拆槽）",
         tests: "tests/termview_spec.rs",
-        desc: "下池光标独立小画布槽（池内容宽×行高 ≈0.69MB）：位置全进合成期 placement，滑行逐帧零重烘；渐变参照吃「框在页上原位」的页坐标页尺（保真条，防层画布尺漂色）。",
-        preview: Preview::RowFrame,
+        desc: "下池光标独立小画布槽（池内容宽×行高 ≈0.69MB）：位置全进合成期 placement，滑行逐帧零重烘；渐变参照吃「框在页上原位」的页坐标页尺（保真条，防层画布尺漂色）。预览 = 语义化演示（十五修）：与光标滑行件同款三行+滑框（框动字不动，BAR-107）。",
+        preview: Preview::CursorSlide,
     },
     CompEntry {
         name: "光标滑行",
@@ -364,8 +379,8 @@ pub const COMPONENTS: &[CompEntry] = &[
         file: "src/ui/cfg_page.rs",
         spec: "宪法 §五 池区动画（BAR-094 改判缓动核）",
         tests: "tests/cfg_page_spec.rs",
-        desc: "下池选中光标跨行滑行：250ms ease-in-out 与视口平移同钟同曲线（BAR-094 改判——弹簧过冲判「瞬移+过冲」废除），全程单调无过冲，涂装选中全包框吃瞬时值。预览借用缓动件曲线。",
-        preview: Preview::CurveEase,
+        desc: "下池选中光标跨行滑行：250ms ease-in-out 与视口平移同钟同曲线（BAR-094 改判——弹簧过冲判「瞬移+过冲」废除），全程单调无过冲，涂装选中全包框吃瞬时值。预览 = 语义化演示（十五修）：三行真文字 + 光标框行间乒乓滑行，框动字不动（BAR-107）。",
+        preview: Preview::CursorSlide,
     },
     CompEntry {
         name: "下拉开合",
@@ -375,8 +390,8 @@ pub const COMPONENTS: &[CompEntry] = &[
         file: "src/ui/cfg_page.rs",
         spec: "宪法 §六 开合动画两件",
         tests: "tests/cfg_page_spec.rs",
-        desc: "下拉面板开合（十五修+两段时序+十七修两件）：展开 250ms ease-out 生长；点选他行 = 选中细框 160ms ease-out 滑行（面板冻结等它）→ 180ms ease-in 收起；点当前行/外点直接收。十七修：①抽屉随面——选项行/选中细框钉在全高刚体上随面板滑出滑回（下方先入场、上方先没入）；②▼三角矢量旋转 progress×180°。预览借用缓动件面板。",
-        preview: Preview::CurveEase,
+        desc: "下拉面板开合（十五修+两段时序+十七修两件）：展开 250ms ease-out 生长；点选他行 = 选中细框 160ms ease-out 滑行（面板冻结等它）→ 180ms ease-in 收起；点当前行/外点直接收。十七修：①抽屉随面——选项行/选中细框钉在全高刚体上随面板滑出滑回（下方先入场、上方先没入）；②▼三角矢量旋转 progress×180°。预览 = 语义化演示（十五修）：触发器 + ▼旋转 + 抽屉生长开合乒乓。",
+        preview: Preview::DropdownAnim,
     },
     CompEntry {
         name: "视口平移切页",
@@ -386,17 +401,25 @@ pub const COMPONENTS: &[CompEntry] = &[
         file: "src/ui/cfg_page.rs",
         spec: "宪法 §六 面与内容一体",
         tests: "tests/cfg_page_spec.rs",
-        desc: "面与内容一体平移（十七修通则）：①标签切换 = 页面级（双池框+内容整体平移，视口 = 页环）；②下池选行 = 上池级（上池内容平移，视口 = 上池框）；③下拉 = 垂直实例（抽屉随面）。方向律：选择前进 = 内容左移。双代同画（旧代冻结快照带偏移出、新代活态带偏移进，禁两拍），250ms ease-out cubic。预览借用视口平移件面板。",
-        preview: Preview::ViewportPush,
+        desc: "面与内容一体平移（十七修通则）：①标签切换 = 页面级（双池框+内容整体平移，视口 = 页环）；②下池选行 = 上池级（上池内容平移，视口 = 上池框）；③下拉 = 垂直实例（抽屉随面）。方向律：选择前进 = 内容左移。双代同画（旧代冻结快照带偏移出、新代活态带偏移进，禁两拍），250ms ease-out cubic。预览 = 语义化演示（十五修）：两个迷你页（各含双小池）整体横移换页，面与内容一体。",
+        preview: Preview::PagePan,
     },
 ];
 
-/// 预览是否动效演示（十四修 §六：弹簧/缓动/手势仲裁/视口平移四件
-/// 预览 = 动画，帧泵与烘焙 sig 时间桶维的开关单源）
+/// 预览是否动效演示（十四修 §六 立、十五修扩到 10 件：动效引擎分类
+/// 全部语义化动画；帧泵与烘焙 sig 时间桶维的开关单源）
 pub fn preview_is_animated(p: Preview) -> bool {
     matches!(
         p,
-        Preview::CurveSpring | Preview::CurveEase | Preview::Swipe | Preview::ViewportPush
+        Preview::CurveSpring
+            | Preview::CurveEase
+            | Preview::Swipe
+            | Preview::ViewportPush
+            | Preview::PoolGlide
+            | Preview::TabSlide
+            | Preview::CursorSlide
+            | Preview::DropdownAnim
+            | Preview::PagePan
     )
 }
 
