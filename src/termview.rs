@@ -521,6 +521,20 @@ pub fn upper_pan_band(upper: &crate::ui::dual_pool::PoolRect, off: i64) -> (i64,
     )
 }
 
+/// 上池体级平移裁剪带（二十修 §六② 下拉换选）：= upper_pan_band 挖掉
+/// 行 0——带顶 = 触发器行底缘（行 0 钉住不进带，体行 1.. 双代平移）。
+/// scroll 吃快照真值（行 0 随滚动上移时带顶跟着走）
+pub fn upper_body_pan_band(
+    upper: &crate::ui::dual_pool::PoolRect,
+    off: i64,
+    scroll: i64,
+) -> (i64, i64, i64, i64) {
+    use crate::ui::cfg_page as cp;
+    let (x0, _y0, x1, y1) = upper_pan_band(upper, off);
+    let row0_bottom = cp::upper_row_rect(0, upper, scroll).y + cp::FIELD_ROW_H as i64;
+    (x0, row0_bottom.max(upper.y + 12), x1, y1)
+}
+
 /// 圆角矩形边框环（2026-09-12 从页环抽核，配置卡标签栏光标框复用——
 /// 宪法 §六 样式唯一来源，禁止逐卡手抄）：先外发光，再 135° 渐变外环，
 /// 最后内芯填充（左缘让 9 = 3 倍粗，其余让 3）。**内芯两路（十二修
@@ -3109,9 +3123,13 @@ impl TermView {
     /// 十七修 §六「面与内容一体」：page.pan = Some 时双代同画——
     /// Page 域 = 双池框+内容整体平移（本函数自带框，调用方须跳过
     /// paint_cfg_dual_pool）；Upper 域 = 仅上池内容平移（框/下池
-    /// 照常）。十八修 §七：平移距 = 视口宽 + 留隙 G（内容轴隐藏
-    /// 布局「旧代 | 隙 | 新代」），Upper 域裁剪带 = 上池内容矩形
-    /// （池框一像素不进带），曲线 ease-in-out cubic
+    /// 照常）；UpperBody 域（二十修 §六② 下拉换选）= 行 0 触发器
+    /// 钉住，体行 1.. 双代平移（框/下池/行 0 照常）。十八修 §七：
+    /// 平移距 = 视口宽 + 留隙 G（内容轴隐藏布局「旧代 | 隙 | 新代」），
+    /// Upper/UpperBody 域裁剪带 = 上池内容矩形（UpperBody 挖掉行 0），
+    /// 曲线 ease-in-out cubic。二十修冻结窗口：page.pending_old =
+    /// Some 时上池体行 1.. 画旧代冻结内容（行 0 吃当前态——值即换，
+    /// 下拉面板在其上正常收合）
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn paint_cfg_pool_content_impl(
         &self,
@@ -3123,7 +3141,10 @@ impl TermView {
         cfg_off_x: i32,
         accent: crate::ui::accent::AccentPair,
         now_ms: u64,
-        pan_upper_hold: bool,
+        // hold 烘焙域（GLES 路径；softbuffer 双代同画恒 None）：Some(
+        // Upper) = 上池行全不进主画布；Some(UpperBody) = 仅体行 1..
+        // 不进（行 0 触发器钉住照画）；None = 正常全画
+        pan_hold_scope: Option<crate::ui::cfg_page::PanScope>,
         // BAR-096 拆层：true = 选中全包框不由本画布画（改由下池光标层
         // 合成期 placement——GLES 路径）；softbuffer 兜底传 false
         skip_cursor: bool,
@@ -3134,6 +3155,22 @@ impl TermView {
         }
         let mut frame = Frame { buf, w, h };
         let off = i64::from(cfg_off_x);
+        // 二十修冻结窗口合并表：行 0 = 当前态（触发器值即换），行 1.. =
+        // 旧代冻结（pending_old 非空时 page.pan 恒 None，只影响 None 臂
+        // 与下拉面板触发器量宽——合并表行 0 与 page.upper 行 0 同一行）
+        let merged_upper: Vec<cp::UpperRow>;
+        let upper_rows: &[cp::UpperRow] = if let Some(old) = page.pending_old.as_ref() {
+            merged_upper = page
+                .upper
+                .iter()
+                .take(1)
+                .cloned()
+                .chain(old.upper.iter().skip(1).cloned())
+                .collect();
+            &merged_upper
+        } else {
+            &page.upper
+        };
 
         match page.pan.as_ref().map(|p| p.scope) {
             Some(cp::PanScope::Page) => {
@@ -3255,6 +3292,66 @@ impl TermView {
                     blit_shift(&mut frame, b, d_new, band);
                 });
             }
+            Some(cp::PanScope::UpperBody) => {
+                let pan = page.pan.as_ref().unwrap();
+                // 上池体级（二十修 §六② 下拉换选）：双池框/下池/行 0
+                // 触发器照常（当前态），仅体行 1.. 双代平移。裁剪带 =
+                // 上池内容矩形挖掉行 0（upper_body_pan_band）——行 0
+                // 一像素不进带（钉住语义）
+                self.paint_pool_lower(
+                    &mut frame,
+                    &ps.lower,
+                    &page.rows,
+                    page.cursor_row,
+                    accent,
+                    off,
+                    skip_cursor,
+                );
+                if !page.upper.is_empty() {
+                    self.paint_pool_upper(
+                        &mut frame,
+                        &ps.upper,
+                        &page.upper[..1],
+                        page.upper_scroll,
+                        accent,
+                        off,
+                        0.0, // 平移起步时并发账已收尽：三角恒关态
+                    );
+                }
+                let band = upper_body_pan_band(&ps.upper, off, page.upper_scroll);
+                let travel = (band.2 - band.0) + cp::PAN_GAP_UPPER;
+                let (d_old, d_new) = cp::pan_offsets(pan.dir, pan.t, travel);
+                pan_temps(w, h, |a, b| {
+                    copy_frame(frame.buf, a);
+                    copy_frame(frame.buf, b);
+                    {
+                        let mut fa = Frame { buf: a, w, h };
+                        self.paint_pool_upper(
+                            &mut fa,
+                            &pan.old.pool.upper,
+                            &pan.old.upper,
+                            pan.old.upper_scroll,
+                            pan.old.accent,
+                            off,
+                            0.0,
+                        );
+                    }
+                    {
+                        let mut fb = Frame { buf: b, w, h };
+                        self.paint_pool_upper(
+                            &mut fb,
+                            &ps.upper,
+                            &page.upper,
+                            page.upper_scroll,
+                            accent,
+                            off,
+                            0.0,
+                        );
+                    }
+                    blit_shift(&mut frame, a, d_old, band);
+                    blit_shift(&mut frame, b, d_new, band);
+                });
+            }
             None => {
                 // 十九修 D8：Upper 平移 hold 期上池行不进主画布——带内
                 // 静物=池内芯渐变（vc425 涂装域同语义：行只活在双代里，
@@ -3262,25 +3359,43 @@ impl TermView {
                 // BAR-097：hold 期下池行也不进主画布（连池框一起归
                 // PoolFx/LowerRowsPan 层——池高 glide 逐帧变，进主画布
                 // = pool_upper_h 逐帧脏 sig = 全页逐帧重烘，帧饥饿病根）
-                if !pan_upper_hold {
-                    self.paint_pool_lower(
-                        &mut frame,
-                        &ps.lower,
-                        &page.rows,
-                        page.cursor_row,
-                        accent,
-                        off,
-                        skip_cursor,
-                    );
-                    self.paint_pool_upper(
-                        &mut frame,
-                        &ps.upper,
-                        &page.upper,
-                        page.upper_scroll,
-                        accent,
-                        off,
-                        page.dropdown_progress,
-                    );
+                // 二十修 UpperBody hold：体行 1.. 归双代层，行 0 触发器
+                // 钉住照画（它在带外，双代滑不到它）
+                match pan_hold_scope {
+                    Some(cp::PanScope::Upper) => {}
+                    Some(cp::PanScope::UpperBody) => {
+                        if !upper_rows.is_empty() {
+                            self.paint_pool_upper(
+                                &mut frame,
+                                &ps.upper,
+                                &upper_rows[..1],
+                                page.upper_scroll,
+                                accent,
+                                off,
+                                page.dropdown_progress,
+                            );
+                        }
+                    }
+                    _ => {
+                        self.paint_pool_lower(
+                            &mut frame,
+                            &ps.lower,
+                            &page.rows,
+                            page.cursor_row,
+                            accent,
+                            off,
+                            skip_cursor,
+                        );
+                        self.paint_pool_upper(
+                            &mut frame,
+                            &ps.upper,
+                            upper_rows,
+                            page.upper_scroll,
+                            accent,
+                            off,
+                            page.dropdown_progress,
+                        );
+                    }
                 }
             }
         }
@@ -3678,13 +3793,16 @@ impl TermView {
                 frame.blend_px(xx as u32, yy as u32, 0, 252);
             }
         }
-        // 选中行均匀细框（两段时序 2026-09-14：吃 option_sel_f
-        // 滑行瞬时值——Ⅰ段可见滑动，滑到才收面板）；随面板
-        // 当前高裁剪（Ⅱ段收起中行出底即断墨）。**先框后字**——
+        // 选中行均匀细框（二十修 §六② 并发：吃 option_sel_f 滑行瞬时
+        // 值——滑行与面板收起同拍可见）；随面板当前高裁剪。**门 =
+        // 相交即画**（二十修定罪：旧「全有或全无门」要求整行在面板
+        // 当前高内——收起中行露一半时整框不画 = 选中细框闪出/瞬消；
+        // paint_thin_frame 本就吃 panel_clip 逐扫描线裁剪，相交门
+        // 让细框随面板缘滑出/滑回）。**先框后字**——
         // 细框内芯不透明渐变暗底，后画会盖没选项文字（下池
         // 选中行同款实踩）
         let sel_y = pr.y + (page.option_sel_f * cp::FIELD_ROW_H as f32).round() as i64 + drawer_dy;
-        if sel_y >= pr.y && sel_y + cp::FIELD_ROW_H as i64 <= pr.y + pr.h as i64 {
+        if sel_y < pr.y + pr.h as i64 && sel_y + cp::FIELD_ROW_H as i64 > pr.y {
             paint_thin_frame(
                 frame,
                 px0,
@@ -5793,9 +5911,11 @@ pub trait TermEmu: Send {
     /// 下池子目录行表 + 上池联动下拉触发器/字段行/下拉 panel。
     /// cfg_off_x 语义同 paint_cfg_dual_pool；画在双池框之上。
     /// now_ms = 动画时钟（十四修 §六：跳框动效预览的相位源；无动画
-    /// 预览时本参不读）。pan_upper_hold（十九修 D8）：Upper 平移 hold
-    /// 期上池行不进主画布——带内静物=池内芯（GLES 烘焙路径用；
-    /// softbuffer 双代同画路径恒 false 不受影响）
+    /// 预览时本参不读）。pan_hold_scope（十九修 D8 立、二十修泛化）：
+    /// 平移 hold 期主画布画出域——Some(Upper) = 上池行全不进（带内
+    /// 静物=池内芯）；Some(UpperBody) = 体行 1.. 不进、行 0 触发器
+    /// 钉住照画；None = 正常全画（GLES 烘焙路径用；softbuffer 双代
+    /// 同画路径恒 None 不受影响）
     #[allow(clippy::too_many_arguments)]
     fn paint_cfg_pool_content(
         &self,
@@ -5807,7 +5927,7 @@ pub trait TermEmu: Send {
         cfg_off_x: i32,
         accent: crate::ui::accent::AccentPair,
         now_ms: u64,
-        pan_upper_hold: bool,
+        pan_hold_scope: Option<crate::ui::cfg_page::PanScope>,
         // BAR-096 拆层：true = 选中全包框由下池光标层提供（GLES）；
         // softbuffer 兜底传 false（整页自带光标）
         skip_cursor: bool,
@@ -6061,7 +6181,7 @@ impl TermEmu for TermView {
         cfg_off_x: i32,
         accent: crate::ui::accent::AccentPair,
         now_ms: u64,
-        pan_upper_hold: bool,
+        pan_hold_scope: Option<crate::ui::cfg_page::PanScope>,
         skip_cursor: bool,
     ) {
         TermView::paint_cfg_pool_content_impl(
@@ -6074,7 +6194,7 @@ impl TermEmu for TermView {
             cfg_off_x,
             accent,
             now_ms,
-            pan_upper_hold,
+            pan_hold_scope,
             skip_cursor,
         )
     }

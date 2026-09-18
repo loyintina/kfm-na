@@ -120,6 +120,12 @@ pub struct PanComp {
     /// 复用配置槽纹理 @new_dx，PanMove 槽不再整页重画；Upper 域配置槽
     /// 是 hold 烘焙无上池行，新代仍须 PanMove 独立成层）
     pub scope_page: bool,
+    /// 钉住条带（二十修 §六② UpperBody 域）：Some((y0,y1)) = 带外有
+    /// 一行静止内容须从新代层直取——行 0 触发器钉住不进带，而配置槽
+    /// hold 烘焙的它被 PoolFx 不透明池芯盖住，须在带绘制后从新代层
+    /// （PanMove，页坐标涂装）以 dx=0 补画这一横条；x 范围 = 带 x
+    /// 范围。None = 无钉住条带（Page/Upper 域）
+    pub pinned_strip: Option<(i32, i32)>,
 }
 
 /// BAR-096 拆层合成参数：标签栏层与下池光标层的屏幕位置（top-down 像素）。
@@ -1466,6 +1472,49 @@ impl GlesPresent {
                                         );
                                     }
                                     gl.disable(glow::SCISSOR_TEST);
+                                    // 二十修 §六② 钉住条带（UpperBody
+                                    // 域）：行 0 触发器不进平移带，但配置
+                                    // 槽 hold 烘焙的它被 PoolFx 不透明池
+                                    // 芯盖住——带绘制后从新代层 dx=0 补画
+                                    // 这一横条（x 范围 = 带 x 范围，y =
+                                    // 行 0 矩形；与带不重叠无重绘）
+                                    if let Some((py0, py1)) = pc.pinned_strip
+                                        && !pc.scope_page
+                                    {
+                                        let pm2 = &self.layers[ChromeSlot::PanMove as usize];
+                                        if pm2.visible && pm2.baked {
+                                            let psx = bx0.clamp(0, fw);
+                                            let psy = (fh - py1).clamp(0, fh);
+                                            let psw = (bx1 - bx0).clamp(0, fw - psx);
+                                            let psh = (py1 - py0).clamp(0, fh - psy);
+                                            let puv = (
+                                                bx0 as f32 / uw,
+                                                py0 as f32 / uh,
+                                                (bx1 - bx0) as f32 / uw,
+                                                (py1 - py0) as f32 / uh,
+                                            );
+                                            gl.enable(glow::SCISSOR_TEST);
+                                            gl.scissor(psx, psy, psw.max(0), psh.max(0));
+                                            draw_slot_layer_src(
+                                                gl,
+                                                self.layer_prog,
+                                                self.layer_vao,
+                                                self.layer_vbo,
+                                                pm2.tex,
+                                                // dx=0 钉住：放置 = 带原点
+                                                // 自身（BAR-106 同尺）
+                                                crate::ui::cfg_page::pan_band_draw_x(
+                                                    pc.band.0, cfg_off, 0.0,
+                                                ),
+                                                py0 as f32 + cfg_dy_extra,
+                                                (bx1 - bx0) as f32,
+                                                (py1 - py0) as f32,
+                                                cfg_alpha,
+                                                puv,
+                                            );
+                                            gl.disable(glow::SCISSOR_TEST);
+                                        }
+                                    }
                                 }
                             }
                             // BAR-097 池区拆层合成：下池行层（起步一烘，

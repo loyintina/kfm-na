@@ -926,12 +926,11 @@ impl App {
                         )
                     {
                         let now = crate::report::boot_ms() as u64;
-                        let (ps, lower, upper) = {
+                        let (ps_snap, lower, upper) = {
                             let mut p = pool.lock().unwrap();
                             let ps = p.layout(now);
-                            (ps.upper.y, ps.lower.clone(), ps.upper.clone())
+                            (ps.clone(), ps.lower.clone(), ps.upper.clone())
                         };
-                        let _ = ps;
                         let (yi, xi) = (y as i64, x as i64);
                         // 十四修：下拉命中/触发器几何吃首行实量宽
                         // （先量后锁——锁序 term→cfg_page 不倒持）
@@ -949,7 +948,15 @@ impl App {
                             }
                             let max_h = 10_000; // 命中只问行号，钳高由涂装侧管
                             if let Some(i) = pg.dropdown_item_at_y(yi, &upper, max_h, lw, vw, cw) {
-                                pg.dropdown_pick(i, now);
+                                // 二十修 §六②：换选挂并发账 + UpperBody
+                                // 平移账——旧代冻结吃当前池几何与页色
+                                // （select 同规）
+                                let acc = self
+                                    .ai_presence
+                                    .as_ref()
+                                    .and_then(|ai| ai.accent_of(crate::ai_presence::Panel::Config))
+                                    .unwrap_or(crate::ui::accent::FALLBACK);
+                                pg.dropdown_pick(i, now, ps_snap, acc);
                                 drop(pg);
                                 // 下拉换选 = 默认服务器变更（二版：写盘+重建归壳）
                                 self.apply_default_server_pick();
@@ -3598,7 +3605,8 @@ impl App {
                                 );
                             }
                             // 池内容（宪法 §五 目录语义：下池子目录行表/
-                            // 上池联动下拉+字段行）——双池框之上同层
+                            // 上池联动下拉+字段行）——双池框之上同层；
+                            // 兜底路径双代同画自理，hold 域恒 None
                             if let Some(cs) = cfg_snap {
                                 term.paint_cfg_pool_content(
                                     buf,
@@ -3609,7 +3617,7 @@ impl App {
                                     cfg_off,
                                     acc_of(crate::ai_presence::Panel::Config),
                                     crate::report::boot_ms() as u64,
-                                    false,
+                                    None,
                                     false, // 兜底整页自带光标
                                 );
                             }
@@ -3854,17 +3862,38 @@ impl App {
                 let travel = (band.2 - band.0) + crate::ui::cfg_page::PAN_GAP_UPPER;
                 (band, travel)
             }
+            // 二十修 §六② 下拉换选：体行带 = 上池内容矩形挖掉行 0
+            // （行 0 触发器钉住），留隙律/曲线与 Upper 域同尺
+            crate::ui::cfg_page::PanScope::UpperBody => {
+                let band = crate::termview::upper_body_pan_band(&ps.upper, 0, cs.upper_scroll);
+                let travel = (band.2 - band.0) + crate::ui::cfg_page::PAN_GAP_UPPER;
+                (band, travel)
+            }
         };
         let (d_old, d_new) = crate::ui::cfg_page::pan_offsets(p.dir, p.t, travel);
+        // 二十修 §六②：UpperBody 域行 0 触发器钉住条带（带外、从新代
+        // 层 dx=0 补画）；行矩形 y 与池高无关（顶锚定），当前几何即
+        // 终点几何
+        let pinned_strip = if p.scope == crate::ui::cfg_page::PanScope::UpperBody {
+            let r0 = crate::ui::cfg_page::upper_row_rect(0, &ps.upper, cs.upper_scroll);
+            Some((
+                r0.y as i32,
+                (r0.y + crate::ui::cfg_page::FIELD_ROW_H as i64) as i32,
+            ))
+        } else {
+            None
+        };
         Some(crate::gles_present::PanComp {
             band: (band.0 as i32, band.1 as i32, band.2 as i32, band.3 as i32),
             t: p.t,
             old_dx: d_old as f32,
             new_dx: d_new as f32,
             // 隙底语义分域（十八修钉）：Page 间隙带=页背景（填）；
-            // Upper 静物=稳态涂装的池内芯（不填，带外静物原样透出）
+            // Upper/UpperBody 静物=稳态涂装的池内芯（不填，带外静物
+            // 原样透出）
             clear_bg: p.scope == crate::ui::cfg_page::PanScope::Page,
             scope_page: p.scope == crate::ui::cfg_page::PanScope::Page,
+            pinned_strip,
         })
     }
 
@@ -4158,19 +4187,25 @@ impl App {
         let pan_active = cfg_snap.as_ref().is_some_and(|cs| cs.pan.is_some());
         // BAR-097：Upper 域平移活性（池区拆层上岗旗——池框/下池行由
         // PoolFx/LowerRowsPan 层承担，配置槽 hold 烘焙不画池；Page 域
-        // 不动：池留在配置槽随页平移）
-        let pan_upper = cfg_snap
-            .and_then(|cs| cs.pan.as_ref())
-            .is_some_and(|p| p.scope == crate::ui::cfg_page::PanScope::Upper);
-        // BAR-104：喂交接差分机本帧平移域（0=无/1=Upper/2=Page）+ 本帧
-        // cfg epoch（present_frame 内消费；未武装时仅一次原子写，零开销）。
-        // 2026-09-17 Page 域接入：差分机不再只喂 Upper——切标签（Page）
-        // 与下池点行（Upper）共用一台仪器（观测矩阵 Page 像素级盲区补盲）
+        // 不动：池留在配置槽随页平移）。二十修：UpperBody 域同律
+        // （体行归双代层，行 0 触发器钉住留在 hold 烘焙里）
+        let pan_upper = cfg_snap.and_then(|cs| cs.pan.as_ref()).is_some_and(|p| {
+            matches!(
+                p.scope,
+                crate::ui::cfg_page::PanScope::Upper | crate::ui::cfg_page::PanScope::UpperBody
+            )
+        });
+        // BAR-104：喂交接差分机本帧平移域（0=无/1=Upper/2=Page/
+        // 3=UpperBody）+ 本帧 cfg epoch（present_frame 内消费；未武装
+        // 时仅一次原子写，零开销）。2026-09-17 Page 域接入：差分机不再
+        // 只喂 Upper——切标签（Page）与下池点行（Upper）共用一台仪器
+        // （观测矩阵 Page 像素级盲区补盲）；二十修 UpperBody 同机
         let pan_scope = cfg_snap
             .and_then(|cs| cs.pan.as_ref())
             .map_or(0u8, |p| match p.scope {
                 crate::ui::cfg_page::PanScope::Upper => 1,
                 crate::ui::cfg_page::PanScope::Page => 2,
+                crate::ui::cfg_page::PanScope::UpperBody => 3,
             });
         crate::gles_present::set_panend_mark(pan_scope, cfg_snap.map_or(0, |cs| cs.epoch));
         let slot_vis = crate::ui::stage::slot_visibility(
@@ -4292,23 +4327,26 @@ impl App {
             cfg_snap.and_then(|cs| cs.pan.as_ref().map(|p| (cs.epoch, p.scope as u8, p.dir)));
         if let Some(k) = pan_now {
             if sigs.pan_cap != Some(k) {
-                let src_slot = match crate::ui::cfg_page::pan_capture_src(
-                    sigs.pan_cap
-                        .is_some_and(|pk| pk.1 == crate::ui::cfg_page::PanScope::Upper as u8),
-                ) {
-                    crate::ui::cfg_page::PanCaptureSrc::PanMove => {
-                        crate::gles_present::ChromeSlot::PanMove
-                    }
-                    crate::ui::cfg_page::PanCaptureSrc::Config => {
-                        crate::gles_present::ChromeSlot::Config
-                    }
-                };
+                let src_slot =
+                    match crate::ui::cfg_page::pan_capture_src(sigs.pan_cap.is_some_and(|pk| {
+                        pk.1 == crate::ui::cfg_page::PanScope::Upper as u8
+                            || pk.1 == crate::ui::cfg_page::PanScope::UpperBody as u8
+                    })) {
+                        crate::ui::cfg_page::PanCaptureSrc::PanMove => {
+                            crate::gles_present::ChromeSlot::PanMove
+                        }
+                        crate::ui::cfg_page::PanCaptureSrc::Config => {
+                            crate::gles_present::ChromeSlot::Config
+                        }
+                    };
                 g.slot_swap_tex(src_slot, crate::gles_present::ChromeSlot::PanOld);
-                // ②新代滑动层——仅 Upper 域重画（配置槽 hold 烘焙无上池
-                // 行，新行必须独立成层——BAR-092 三咬「新内容不跟随，贴死
-                // 闪现」的根治）；Page 域新代与配置槽同图，合成期复用配置
-                // 槽纹理（BAR-100，整页重画+13MB 上传全省）
-                if k.1 == crate::ui::cfg_page::PanScope::Upper as u8 {
+                // ②新代滑动层——仅 Upper/UpperBody 域重画（配置槽 hold
+                // 烘焙无上池行，新行必须独立成层——BAR-092 三咬「新内容
+                // 不跟随，贴死闪现」的根治）；Page 域新代与配置槽同图，
+                // 合成期复用配置槽纹理（BAR-100，整页重画+13MB 上传全省）
+                if k.1 == crate::ui::cfg_page::PanScope::Upper as u8
+                    || k.1 == crate::ui::cfg_page::PanScope::UpperBody as u8
+                {
                     let pmx = g.slot_canvas(crate::gles_present::ChromeSlot::PanMove);
                     // BAR-104：预填页底色——半透明文字/框边在透明画布上落墨
                     // 丢底色贡献，贴死交接比稳态页内版暗一截（全卡闪变）
@@ -4340,7 +4378,7 @@ impl App {
                             0,
                             acc_cfg,
                             crate::report::boot_ms() as u64,
-                            false,
+                            None, // 新代层全量画（双代层不是 hold 烘焙）
                             true, // BAR-096：选中框由下池光标层合成期提供
                         );
                     }
@@ -4379,7 +4417,7 @@ impl App {
             // 双池（宪法 §五）：与标签栏同槽同 accent——内卡反转在涂装
             // 内部兑现（c2→c1），调用方无感。十九修 D8：烘焙恒画新代
             // 稳态（pan 剥离）——Page 域带内像素被 band fill 覆盖、
-            // Upper 域带内上池行不画（pan_upper_hold，静物=池内芯）；
+            // Upper 域带内上池行不画（pan_hold_scope，静物=池内芯）；
             // 双代呈现全在合成期
             // BAR-097：Upper 平移期池框也不进配置槽（归 PoolFx 层逐帧
             // 烘——本槽 pool_upper_h 冻结后恒定，零重烘）
@@ -4389,9 +4427,13 @@ impl App {
                         .unwrap()
                         .paint_cfg_dual_pool(px, w, h, ps, 0, acc_cfg);
                 }
-                // 池内容（§五 目录语义）：双池框之上同槽
+                // 池内容（§五 目录语义）：双池框之上同槽。
+                // 二十修：hold 域传 scope（Upper=上池行全 hold；
+                // UpperBody=体行 1.. hold、行 0 触发器钉住照画）；
+                // 冻结窗口 pending_old 合并表在涂装侧自理
                 if let Some(cs) = cfg_snap {
                     let mut settled = cs.clone();
+                    let hold_scope = settled.pan.as_ref().map(|p| p.scope);
                     settled.pan = None;
                     t.lock().unwrap().paint_cfg_pool_content(
                         px,
@@ -4402,7 +4444,7 @@ impl App {
                         0,
                         acc_cfg,
                         crate::report::boot_ms() as u64,
-                        pan_upper,
+                        hold_scope.filter(|_| pan_upper),
                         true, // BAR-096：选中框由下池光标层合成期提供
                     );
                 }
@@ -4746,11 +4788,9 @@ impl App {
                     // 池区左上（无位移，逐帧烘的就是当前几何）；下池行层
                     // y = 实时 lower.y（烘焙锚在终点，位移量 = 当前−终点
                     // 已含在 draw_y 里），底缘 scissor = 下池内缘底
-                    if cs
-                        .pan
-                        .as_ref()
-                        .is_some_and(|p| p.scope == cp::PanScope::Upper)
-                    {
+                    if cs.pan.as_ref().is_some_and(|p| {
+                        matches!(p.scope, cp::PanScope::Upper | cp::PanScope::UpperBody)
+                    }) {
                         lp.poolfx = Some((ps.upper.x as f32, ps.upper.y as f32));
                         lp.lower_rows = Some((
                             ps.lower.x as f32,
@@ -4973,13 +5013,22 @@ impl App {
             // 烘跟随，贴死连续）
             if let Some(page) = &self.cfg_page {
                 let now = crate::report::boot_ms() as u64;
-                // 单次锁内拿两样（锁序 term→pool→cfg_page 不倒持；分
+                // 单次锁内拿三样（锁序 term→pool→cfg_page 不倒持；分
                 // 两次锁有挂账竞态窗口）
-                let (h, gliding) = {
+                let (h, gliding, pending_start) = {
                     let pg = page.lock().unwrap();
-                    (pg.upper_content_h(), pg.pan_upper_active(now))
+                    (
+                        pg.upper_content_h(),
+                        pg.pan_upper_active(now),
+                        pg.pan_pending_start(now),
+                    )
                 };
-                if gliding {
+                if let Some(start) = pending_start {
+                    // 二十修冻结窗口：池高 glide 起步钉在平移起步帧——
+                    // 窗口内 elapsed=0 池高不动，起步帧起与体行平移
+                    // 同钟同曲线滑到目标
+                    g3.glide_upper_content_h(h, start);
+                } else if gliding {
                     g3.glide_upper_content_h(h, now);
                 } else {
                     g3.set_upper_content_h(h);
