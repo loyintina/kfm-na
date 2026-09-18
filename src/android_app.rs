@@ -368,6 +368,10 @@ struct ConfigSig {
     // 光标层（原三路逐帧 14MB 全页重烘 = draw_avg 47ms/21fps 真凶）
     /// 下拉进度 ×1000 量化（十五修 §六：开合动画逐帧新值逐帧重烘焙）
     dd_progress_q: u32,
+    /// 触发器值框宽伸缩账瞬时值 px（二十四修 §六②：换选后值框宽
+    /// 伸缩动画逐帧新值逐帧重烘行 0——与 dd_progress_q 同窗同拍，
+    /// 收敛/无账恒 0 零空烧）
+    trig_w_q: u32,
     /// 平移 hold 模式（十九修 D8/BAR-092 补丁）：pan 进行中=true——
     /// 模式开关只翻转两次（起步/贴死各一烘），不是动画进度，不违
     /// 合成期优先律；漏维 = 贴死后 hold 烘焙滞留（上池行消失到下次
@@ -403,6 +407,9 @@ struct LayerSigs {
     /// 下池行层（BAR-097：起步一烘——内容哈希+epoch+终点几何锚定后
     /// 平移期恒定零重烘）
     lower_rows: crate::ui::stage::DirtyGuard<LowerRowsSig>,
+    /// 下拉面板层（二十四修拆槽）：抽屉开合/细框滑行/宽度伸缩逐帧
+    /// 只脏这块小画布；贴死（progress=0）即隐零重烘
+    dropdown: crate::ui::stage::DirtyGuard<DropdownSig>,
     /// 平移旧代捕获账（十九修 D8）：Some((epoch, scope, dir)) = 当前
     /// PanOld 纹理属于哪笔平移账——新账才重新拷贝画布
     pan_cap: Option<(u64, u8, i8)>,
@@ -423,6 +430,7 @@ impl LayerSigs {
         self.cursor.invalidate();
         self.poolfx.invalidate();
         self.lower_rows.invalidate();
+        self.dropdown.invalidate();
     }
 }
 
@@ -458,6 +466,31 @@ struct CursorSig {
     /// BAR-096 修：层内画选中行文字（复刻 BAR-089「先框后字」）——
     /// 行表代际/聚焦行变即重烘（小画布便宜；漏维 = 文字不跟选中行走）
     focus: u32,
+    epoch: u64,
+}
+
+/// 下拉面板层 sig（二十四修拆槽）：层画布 = 面板最大宽 × 全高。
+/// 位置（x/y）进 sig 而非合成期：抽屉刚体钉面板矩形（宽度账在播时
+/// 左缘逐帧动 = 内容重烘保右缘锚定）；渐变 denom 画布尺（面板只活
+/// 在层里，无稳态配置槽版本要对齐——无 BAR-096 保真条需求）
+#[derive(PartialEq)]
+struct DropdownSig {
+    /// 画布宽（上池内容最大宽，右缘锚定容器）
+    w: u32,
+    /// 面板全高（progress=1 刚体尺）
+    full_h: u32,
+    /// 面板矩形页坐标（宽度账/池几何变即重烘）
+    x: i32,
+    y: i32,
+    /// 抽屉开合进度 ×1000（开合/并发收起逐帧新值）
+    progress_q: u32,
+    /// 选中细框行号浮点 ×64（换选滑行逐帧新值）
+    sel_q: i32,
+    c1: u32,
+    c2: u32,
+    /// 选项表哈希（内容变必重烘，漏 = 旧选项鬼影）
+    opts_hash: u64,
+    /// 代际（保险维：换选/重建必翻）
     epoch: u64,
 }
 
@@ -960,6 +993,17 @@ impl App {
                                 drop(pg);
                                 // 下拉换选 = 默认服务器变更（二版：写盘+重建归壳）
                                 self.apply_default_server_pick();
+                                // 二十四修 §六②：值框宽度伸缩账——旧宽 =
+                                // 点选前实量（上方 vw），新宽 = 重建后实量；
+                                // 等长换选账不起（feed 内部 <1px 闸）
+                                let (_, vw_new) = self.cfg_row0_text_widths();
+                                if let Some(page) = crate::ui::cfg_page::cfg_page_handle() {
+                                    page.lock().unwrap().feed_trigger_width(
+                                        vw as f32,
+                                        vw_new as f32,
+                                        now,
+                                    );
+                                }
                                 crate::report::report("gest", &format!("下拉点选→项 {i}"));
                             } else {
                                 pg.dismiss_dropdown(now);
@@ -4242,6 +4286,15 @@ impl App {
             crate::gles_present::ChromeSlot::LowerRowsPan,
             slot_vis[2] && pan_upper,
         );
+        // 二十四修：下拉面板层——配置页可见且抽屉有余影（progress>0）
+        // 才上岗；贴死即隐（稳态零烘焙零绘制）
+        g.set_slot_visible(
+            crate::gles_present::ChromeSlot::DropdownPanel,
+            slot_vis[2]
+                && cfg_snap
+                    .as_ref()
+                    .is_some_and(|cs| cs.dropdown_progress > 0.001),
+        );
         // 终端卡片壳槽烘焙（2026-09-11）：恒靠泊零 placement——sig 含
         // ime/bar_h 是因为壳下缘停在快捷键行上沿（键盘开合期逐帧重烘焙
         // 加入 ui-base §八 期 2 债同族清单，不单独立项）
@@ -4304,6 +4357,10 @@ impl App {
         // 是真机掉帧病灶——平移呈现全在合成期，烘焙恒画新代稳态）
         // BAR-096：光标行号随下池光标层走（本槽不再吃）
         let dd_progress_q = cfg_snap.map_or(0, |cs| (cs.dropdown_progress * 1000.0).round() as u32);
+        // 二十四修：宽度账瞬时值进 sig（收敛/无账恒 0）
+        let trig_w_q = cfg_snap
+            .and_then(|cs| cs.trigger_w)
+            .map_or(0, |v| v.round().max(0.0) as u32);
         // 平移 hold 模式维（BAR-092 补丁）：起步 true / 贴死 false 各翻
         // 转一次 = 各一烘。漏维 = 贴死后 hold 烘焙滞留（上池行消失到
         // 下次交互，rd427 f0008 实咬）
@@ -4354,6 +4411,10 @@ impl App {
                     if let (Some(ps), Some(t), Some(cs)) = (pool_snap, th, cfg_snap) {
                         let mut settled = cs.clone();
                         settled.pan = None;
+                        // 二十四修：新代层锚收敛态——宽度账瞬时值不带进
+                        // 一次性烘焙（行 0 活体由钉住条带从配置槽直取，
+                        // 本层行 0 本就在带外被裁；归零防残留中间宽）
+                        settled.trigger_w = None;
                         // BAR-105：新代层锚**终点几何**（同 LowerRowsPan
                         // 纪律）——起步几何烘的芯渐变分母（denom 含池高）
                         // 与池框底缘随 glide 逐帧过期，贴死帧与稳态重烘
@@ -4405,6 +4466,7 @@ impl App {
                 pool_upper_h: if pan_upper { 0 } else { pool_upper_h },
                 cfg_epoch,
                 dd_progress_q,
+                trig_w_q,
                 pan_hold,
                 anim_bucket,
             })
@@ -4430,7 +4492,8 @@ impl App {
                 // 池内容（§五 目录语义）：双池框之上同槽。
                 // 二十修：hold 域传 scope（Upper=上池行全 hold；
                 // UpperBody=体行 1.. hold、行 0 触发器钉住照画）；
-                // 冻结窗口 pending_old 合并表在涂装侧自理
+                // 二十四修：下拉面板已拆层（DropdownPanel 槽），
+                // 本槽从此不含面板像素——PanOld 零拷贝捕获恒净
                 if let Some(cs) = cfg_snap {
                     let mut settled = cs.clone();
                     let hold_scope = settled.pan.as_ref().map(|p| p.scope);
@@ -4530,6 +4593,57 @@ impl App {
                         .unwrap()
                         .paint_lower_cursor_layer(cxp, cw, chh, px0, py0, page_denom, acc_cfg);
                     g.slot_bake(crate::gles_present::ChromeSlot::LowerCursor);
+                }
+            }
+            // 二十四修：下拉面板层烘焙（抽屉开合/细框滑行/宽度伸缩
+            // 逐帧只脏这块小画布）。z 序在带内双代之上——并发同拍期
+            // 抽屉收起盖在滑动的体行之上
+            if cfg_snap
+                .as_ref()
+                .is_some_and(|cs| cs.dropdown_progress > 0.001)
+                && let (Some(ps), Some(cs), Some(t)) = (pool_snap, cfg_snap, th)
+                && let Some((pr, ox)) = Self::cfg_dropdown_panel_geom(th, cs, ps, h)
+            {
+                use crate::ui::cfg_page as cp;
+                let canvas_w = ps
+                    .upper
+                    .w
+                    .saturating_sub((cp::POOL_CONTENT_INSET * 2) as u32);
+                use std::hash::{Hash, Hasher};
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                for o in &cs.options {
+                    o.hash(&mut hasher);
+                }
+                let sig = DropdownSig {
+                    w: canvas_w,
+                    full_h: pr.h,
+                    x: pr.x as i32,
+                    y: pr.y as i32,
+                    progress_q: (cs.dropdown_progress * 1000.0).round() as u32,
+                    sel_q: (cs.option_sel_f * 64.0).round() as i32,
+                    c1: acc_cfg.c1,
+                    c2: acc_cfg.c2,
+                    opts_hash: hasher.finish(),
+                    epoch: cs.epoch,
+                };
+                if sigs.dropdown.feed(sig) {
+                    g.set_slot_dims(
+                        crate::gles_present::ChromeSlot::DropdownPanel,
+                        canvas_w,
+                        pr.h,
+                    );
+                    let bx = g.slot_canvas(crate::gles_present::ChromeSlot::DropdownPanel);
+                    bx.fill(0);
+                    t.lock().unwrap().paint_dropdown_panel_layer(
+                        bx,
+                        canvas_w,
+                        pr.h,
+                        cs,
+                        &pr,
+                        (ox, pr.y),
+                        acc_cfg,
+                    );
+                    g.slot_bake(crate::gles_present::ChromeSlot::DropdownPanel);
                 }
             }
             // BAR-097 池区拆层烘焙（仅 Upper 平移期上岗，贴死即隐）：
@@ -4784,6 +4898,13 @@ impl App {
                 lp.tabbar = Some((0.0, crate::ui::tab_bar::content_origin().1 as f32));
                 if let (Some(ps), Some(cs)) = (pool_snap, cfg_snap) {
                     use crate::ui::cfg_page as cp;
+                    // 二十四修：下拉面板层合成位（抽屉有余影即上岗；
+                    // 平移期同位——面板不进带，钉在自己的页坐标上）
+                    if cs.dropdown_progress > 0.001
+                        && let Some((pr, ox)) = Self::cfg_dropdown_panel_geom(th, cs, ps, h)
+                    {
+                        lp.dropdown = Some((ox as f32, pr.y as f32));
+                    }
                     // BAR-097：Upper 平移期池区两层合成位——池框层原点 =
                     // 池区左上（无位移，逐帧烘的就是当前几何）；下池行层
                     // y = 实时 lower.y（烘焙锚在终点，位移量 = 当前−终点
@@ -4935,6 +5056,53 @@ impl App {
         }
     }
 
+    /// 下拉面板层几何（二十四修拆层）：Some((面板全高矩形 pr, 画布
+    /// 原点 x = 上池内容左内缘))；None = 行 0 非下拉行/无 term 句柄。
+    /// 烘焙与合成 placement 共用本尺（单源）；量宽锁序：cs 是快照
+    /// （无页锁），term 锁独立短持。宽度账在播 = 触发器宽吃瞬时值
+    /// （面板宽 = max(触发器宽, 内容最小宽) 跟随伸缩）
+    fn cfg_dropdown_panel_geom(
+        th: &Option<crate::gate::SharedTerm>,
+        cs: &crate::ui::cfg_page::CfgPageSnap,
+        ps: &crate::ui::dual_pool::DualPoolSnap,
+        screen_h: u32,
+    ) -> Option<(crate::ui::dual_pool::PoolRect, i64)> {
+        use crate::ui::cfg_page as cp;
+        let ur = cs.upper.first()?;
+        if !ur.is_dropdown {
+            return None;
+        }
+        let t = th.as_ref()?;
+        let (lw, vw0, cw) = {
+            let tg = t.lock().unwrap();
+            let lw = tg.text_width(&ur.label, 36.0);
+            let vw0 = tg.text_width(&ur.value, 30.0);
+            let cw = cs
+                .options
+                .iter()
+                .map(|o| tg.text_width(o, 36.0))
+                .max()
+                .unwrap_or(0)
+                + cp::FIELD_TEXT_INSET * 2;
+            (lw, vw0, cw)
+        };
+        // 二十四修 §六②：宽度账瞬时值优先（伸缩动画期面板宽跟随）
+        let vw = cs.trigger_w.map(|v| v.ceil() as u32).unwrap_or(vw0);
+        let tr = cp::trigger_rect(&ps.upper, cs.upper_scroll, true, lw, vw);
+        let max_h = screen_h.saturating_sub(tr.y.max(0) as u32 + tr.h + 40);
+        let pr = cp::dropdown_panel_rect(
+            cs.options.len(),
+            &ps.upper,
+            max_h,
+            cs.upper_scroll,
+            true,
+            lw,
+            vw,
+            cw,
+        );
+        Some((pr, ps.upper.x + cp::POOL_CONTENT_INSET))
+    }
+
     /// 组件池跳框动效预览开着（十四修 §六）：当前 modal 条目是动效
     /// 引擎四件之一 = 帧泵/烘焙 sig 的动画维开关。无 self——
     /// draw_frame_gles（关联函数无 self 接收者）也调
@@ -4965,7 +5133,10 @@ impl App {
         }
         crate::ui::cfg_page::cfg_page_handle().is_some_and(|pg| {
             let g = pg.lock().unwrap();
-            g.cursor_fx_active(now) || g.dropdown_fx_active(now) || g.pan_active(now)
+            g.cursor_fx_active(now)
+                || g.dropdown_fx_active(now)
+                || g.pan_active(now)
+                || g.trig_w_fx_active(now)
         })
     }
 
@@ -5013,22 +5184,14 @@ impl App {
             // 烘跟随，贴死连续）
             if let Some(page) = &self.cfg_page {
                 let now = crate::report::boot_ms() as u64;
-                // 单次锁内拿三样（锁序 term→pool→cfg_page 不倒持；分
-                // 两次锁有挂账竞态窗口）
-                let (h, gliding, pending_start) = {
+                // 单次锁内拿两样（锁序 term→pool→cfg_page 不倒持；分
+                // 两次锁有挂账竞态窗口）。二十四修：冻结窗口废除——
+                // 并发三账同拍起步，glide 恒吃当下起步
+                let (h, gliding) = {
                     let pg = page.lock().unwrap();
-                    (
-                        pg.upper_content_h(),
-                        pg.pan_upper_active(now),
-                        pg.pan_pending_start(now),
-                    )
+                    (pg.upper_content_h(), pg.pan_upper_active(now))
                 };
-                if let Some(start) = pending_start {
-                    // 二十修冻结窗口：池高 glide 起步钉在平移起步帧——
-                    // 窗口内 elapsed=0 池高不动，起步帧起与体行平移
-                    // 同钟同曲线滑到目标
-                    g3.glide_upper_content_h(h, start);
-                } else if gliding {
+                if gliding {
                     g3.glide_upper_content_h(h, now);
                 } else {
                     g3.set_upper_content_h(h);

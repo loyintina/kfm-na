@@ -3127,9 +3127,9 @@ impl TermView {
     /// 钉住，体行 1.. 双代平移（框/下池/行 0 照常）。十八修 §七：
     /// 平移距 = 视口宽 + 留隙 G（内容轴隐藏布局「旧代 | 隙 | 新代」），
     /// Upper/UpperBody 域裁剪带 = 上池内容矩形（UpperBody 挖掉行 0），
-    /// 曲线 ease-in-out cubic。二十修冻结窗口：page.pending_old =
-    /// Some 时上池体行 1.. 画旧代冻结内容（行 0 吃当前态——值即换，
-    /// 下拉面板在其上正常收合）
+    /// 曲线 ease-in-out cubic。二十四修：下拉面板拆层独立成槽
+    /// （DropdownPanel 层）——本函数不再画面板（GLES 路径）；冻结
+    /// 窗口废除（并发三账同拍起步）
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn paint_cfg_pool_content_impl(
         &self,
@@ -3155,22 +3155,6 @@ impl TermView {
         }
         let mut frame = Frame { buf, w, h };
         let off = i64::from(cfg_off_x);
-        // 二十修冻结窗口合并表：行 0 = 当前态（触发器值即换），行 1.. =
-        // 旧代冻结（pending_old 非空时 page.pan 恒 None，只影响 None 臂
-        // 与下拉面板触发器量宽——合并表行 0 与 page.upper 行 0 同一行）
-        let merged_upper: Vec<cp::UpperRow>;
-        let upper_rows: &[cp::UpperRow] = if let Some(old) = page.pending_old.as_ref() {
-            merged_upper = page
-                .upper
-                .iter()
-                .take(1)
-                .cloned()
-                .chain(old.upper.iter().skip(1).cloned())
-                .collect();
-            &merged_upper
-        } else {
-            &page.upper
-        };
 
         match page.pan.as_ref().map(|p| p.scope) {
             Some(cp::PanScope::Page) => {
@@ -3214,6 +3198,7 @@ impl TermView {
                             pan.old.accent,
                             off,
                             0.0,
+                            None, // 旧代冻结：宽度账不追溯
                         );
                     }
                     {
@@ -3236,6 +3221,7 @@ impl TermView {
                             accent,
                             off,
                             page.dropdown_progress,
+                            page.trigger_w,
                         );
                     }
                     blit_shift(&mut frame, a, d_old, band);
@@ -3274,6 +3260,7 @@ impl TermView {
                             pan.old.accent,
                             off,
                             0.0,
+                            None, // 旧代冻结：宽度账不追溯
                         );
                     }
                     {
@@ -3286,6 +3273,7 @@ impl TermView {
                             accent,
                             off,
                             page.dropdown_progress,
+                            page.trigger_w,
                         );
                     }
                     blit_shift(&mut frame, a, d_old, band);
@@ -3315,7 +3303,10 @@ impl TermView {
                         page.upper_scroll,
                         accent,
                         off,
-                        0.0, // 平移起步时并发账已收尽：三角恒关态
+                        // 二十四修：并发三账同拍起步——三角旋转吃实时
+                        // 进度（兜底路径同律，不再恒关态）
+                        page.dropdown_progress,
+                        page.trigger_w,
                     );
                 }
                 let band = upper_body_pan_band(&ps.upper, off, page.upper_scroll);
@@ -3334,6 +3325,7 @@ impl TermView {
                             pan.old.accent,
                             off,
                             0.0,
+                            None, // 旧代冻结：宽度账不追溯
                         );
                     }
                     {
@@ -3346,6 +3338,7 @@ impl TermView {
                             accent,
                             off,
                             0.0,
+                            page.trigger_w,
                         );
                     }
                     blit_shift(&mut frame, a, d_old, band);
@@ -3364,15 +3357,16 @@ impl TermView {
                 match pan_hold_scope {
                     Some(cp::PanScope::Upper) => {}
                     Some(cp::PanScope::UpperBody) => {
-                        if !upper_rows.is_empty() {
+                        if !page.upper.is_empty() {
                             self.paint_pool_upper(
                                 &mut frame,
                                 &ps.upper,
-                                &upper_rows[..1],
+                                &page.upper[..1],
                                 page.upper_scroll,
                                 accent,
                                 off,
                                 page.dropdown_progress,
+                                page.trigger_w,
                             );
                         }
                     }
@@ -3389,18 +3383,20 @@ impl TermView {
                         self.paint_pool_upper(
                             &mut frame,
                             &ps.upper,
-                            upper_rows,
+                            &page.upper,
                             page.upper_scroll,
                             accent,
                             off,
                             page.dropdown_progress,
+                            page.trigger_w,
                         );
                     }
                 }
             }
         }
 
-        self.paint_dropdown_panel(&mut frame, ps, page, accent, off);
+        // 二十四修：下拉面板已拆层（DropdownPanel 槽，GLES 合成期画在
+        // 平移双代之上）——本画布不再含面板像素，PanOld 零拷贝捕获恒净
 
         // ---- 跳框（宪法 §六 跳框条款，九修）：模态盖在配置页最上层——
         // 压暗层 + 居中卡 + 关闭钮。本体在 paint_modal_impl（§六 样式
@@ -3567,6 +3563,9 @@ impl TermView {
         accent: crate::ui::accent::AccentPair,
         off: i64,
         dd_progress: f32,
+        // 二十四修 §六②：触发器值框宽度伸缩瞬时值（仅行 0 下拉行吃；
+        // None = 实量宽直出——旧代/稳态恒 None）
+        trigger_w: Option<f32>,
     ) {
         use crate::ui::cfg_page as cp;
         let title_fg = 0x00D9_D9D9;
@@ -3597,7 +3596,15 @@ impl TermView {
             let l_items = self.measure_items(&ur.label, px_title);
             let v_items = self.measure_items(&ur.value, px_meta);
             let lw = l_items.iter().map(|it| it.2).sum::<f32>().ceil() as u32;
-            let vw = v_items.iter().map(|it| it.2).sum::<f32>().ceil() as u32;
+            let mut vw = v_items.iter().map(|it| it.2).sum::<f32>().ceil() as u32;
+            // 二十四修 §六②：行 0 下拉行的值框宽走伸缩账瞬时值（锚右
+            // 缘左长/左收——field_value_rect 锚右恒等式不变）
+            if i == 0
+                && ur.is_dropdown
+                && let Some(tw) = trigger_w
+            {
+                vw = tw.ceil() as u32;
+            }
             let lb = cp::field_label_rect(&r, lw);
             let vb = cp::field_value_rect(&r, lb.w, vw, ur.is_dropdown);
             // 标签列背衬（十三修 §五）：圆角 36 无边框块（与值框同高
@@ -3717,80 +3724,65 @@ impl TermView {
         }
     }
 
-    /// 下拉 panel 块（十七修抽出；§六）：整面圆角无边框深底（近黑
-    /// α252）+ 选中行均匀细框。**抽屉随面**（十七修 §六③）：选项行与
-    /// 选中细框是钉在面板全高刚体上的——y 偏移 = 当前高−全高，展开
-    /// = 刚体从触发器后滑出（下方选项先入场），收起 = 整体滑回（上方
-    /// 先没入）；帘幕式（内容钉顶只裁底）退役。BAR-090：面板宽 =
-    /// max(触发器宽, 选项最长文+双侧边距)，右缘钳上池内容内缘
-    fn paint_dropdown_panel(
+    /// 下拉面板**层**涂装（二十四修拆层，BAR-096 模式；原页内版退役）：
+    /// 面板不再进配置槽画布——二十四修并发三账同拍起步后，PanOld
+    /// 零拷贝捕获（纹理互换）要求配置槽纹理无面板像素，否则开着的
+    /// 面板会被冻进旧代随带左滑（叠在真面板收起动画上 = 双重残影）。
+    /// 画布 = 面板层小画布（最大宽 × 全高，调用方先 fill(0)），本函数
+    /// 全部吃**画布局部坐标**（origin = 画布原点的页坐标）。视觉与
+    /// 页内版逐语义一致：整面圆角无边框深底（近黑 α252）+ 选中行
+    /// 均匀细框。**抽屉随面**（十七修 §六③）：选项行与选中细框钉在
+    /// 面板全高刚体上——y 偏移 = 当前高−全高，展开 = 刚体从触发器
+    /// 后滑出（下方选项先入场），收起 = 整体滑回（上方先没入）。
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn paint_dropdown_panel_layer(
         &self,
-        frame: &mut Frame<'_>,
-        ps: &crate::ui::dual_pool::DualPoolSnap,
+        buf: &mut [u32],
+        cw: u32,
+        ch: u32,
         page: &crate::ui::cfg_page::CfgPageSnap,
+        pr_full: &crate::ui::dual_pool::PoolRect,
+        origin: (i64, i64),
         accent: crate::ui::accent::AccentPair,
-        off: i64,
     ) {
         use crate::ui::cfg_page as cp;
-        if page.dropdown_progress <= 0.001 {
+        if cw == 0 || ch == 0 || page.dropdown_progress <= 0.001 {
             return;
         }
+        let mut frame = Frame { buf, w: cw, h: ch };
+        let frame = &mut frame;
         let title_fg = 0x00D9_D9D9;
         let px_title = 36.0;
-        let px_meta = 30.0;
         let text_inset = 27.0;
         let denom = ((frame.w - 1) + (frame.h - 1)).max(1) as i64;
-        let scroll = page.upper_scroll;
-        // 十四修：触发器几何吃首行实量宽（与字段行涂装同尺）
-        let (lw, vw) = match page.upper.first() {
-            Some(ur) => (
-                self.text_width(&ur.label, px_title),
-                self.text_width(&ur.value, px_meta),
-            ),
-            None => (0, 0),
-        };
-        let dd = page.upper.first().is_none_or(|ur| ur.is_dropdown);
-        let t = cp::trigger_rect(&ps.upper, scroll, dd, lw, vw);
-        let max_h = frame.h.saturating_sub(t.y.max(0) as u32 + t.h + 40);
-        // BAR-090：选项最长文实量宽 + 双侧文内边距 = 内容最小宽
-        let cw = page
-            .options
-            .iter()
-            .map(|o| self.text_width(o, px_title))
-            .max()
-            .unwrap_or(0)
-            + cp::FIELD_TEXT_INSET * 2;
-        let pr =
-            cp::dropdown_panel_rect(page.options.len(), &ps.upper, max_h, scroll, dd, lw, vw, cw);
-        let full_h = pr.h; // 全高（progress=1 的高）——抽屉刚体尺
-        let pr = crate::ui::dual_pool::PoolRect {
-            h: ((pr.h as f32) * page.dropdown_progress).round() as u32,
-            ..pr
-        };
+        let full_h = pr_full.h; // 全高（progress=1 的高）——抽屉刚体尺
+        let cur_h = ((full_h as f32) * page.dropdown_progress).round() as u32;
         // 抽屉随面：刚体（全高坐标系）随面板当前高上移——展开时下方
         // 选项先露，收起时上方先没入面板顶缘
-        let drawer_dy = pr.h as i64 - full_h as i64;
-        let panel_clip = (pr.y, pr.y + pr.h as i64);
-        let px0 = pr.x + off;
-        if px0 < 0 {
+        let drawer_dy = cur_h as i64 - full_h as i64;
+        let rx = pr_full.x - origin.0; // 面板左缘的画布局部 x
+        if rx < 0 || rx >= i64::from(frame.w) || cur_h == 0 {
             return;
         }
-        let prr = (POOL_FRAME_R as i64).min((pr.w / 2).min(pr.h / 2) as i64) as u32;
+        let panel_clip = (0, cur_h as i64); // 画布局部裁剪带
+        let prr = (POOL_FRAME_R as i64).min((pr_full.w / 2).min(cur_h / 2) as i64) as u32;
         let (fw, fh) = (i64::from(frame.w), i64::from(frame.h));
-        for dy in 0..pr.h as i64 {
-            let yy = pr.y + dy;
-            if yy < 0 || yy >= fh {
-                continue;
+        for dy in 0..cur_h as i64 {
+            if dy >= fh {
+                break;
             }
-            for dx in 0..pr.w as i64 {
-                let xx = px0 + dx;
+            for dx in 0..pr_full.w as i64 {
+                let xx = rx + dx;
                 if xx < 0 || xx >= fw {
                     continue;
                 }
-                if rr_sdf(dx as f32 + 0.5, dy as f32 + 0.5, pr.w, pr.h, prr) >= 0.0 {
+                if rr_sdf(dx as f32 + 0.5, dy as f32 + 0.5, pr_full.w, cur_h, prr) >= 0.0 {
                     continue;
                 }
-                frame.blend_px(xx as u32, yy as u32, 0, 252);
+                // 层画布没有「下层」可 blend——改写 α252 黑像素，GPU 合成
+                // （SRC_ALPHA）时恰好等价 blend(黑, 下层, 252)。rgb=0 且
+                // α≠0，mark_chrome_alpha 不动它（纯黑=透明约定只清 α0）
+                frame.buf[(dy as u32 * frame.w + xx as u32) as usize] = 252 << 24;
             }
         }
         // 选中行均匀细框（二十修 §六② 并发：吃 option_sel_f 滑行瞬时
@@ -3801,13 +3793,13 @@ impl TermView {
         // 让细框随面板缘滑出/滑回）。**先框后字**——
         // 细框内芯不透明渐变暗底，后画会盖没选项文字（下池
         // 选中行同款实踩）
-        let sel_y = pr.y + (page.option_sel_f * cp::FIELD_ROW_H as f32).round() as i64 + drawer_dy;
-        if sel_y < pr.y + pr.h as i64 && sel_y + cp::FIELD_ROW_H as i64 > pr.y {
+        let sel_y = (page.option_sel_f * cp::FIELD_ROW_H as f32).round() as i64 + drawer_dy;
+        if sel_y < cur_h as i64 && sel_y + cp::FIELD_ROW_H as i64 > 0 {
             paint_thin_frame(
                 frame,
-                px0,
+                rx,
                 sel_y,
-                pr.w,
+                pr_full.w,
                 cp::FIELD_ROW_H,
                 accent,
                 denom,
@@ -3816,21 +3808,18 @@ impl TermView {
         }
         let clip32 = Some((panel_clip.0 as i32, panel_clip.1 as i32));
         for (i, opt) in page.options.iter().enumerate() {
-            let iy = pr.y + (i as i64) * cp::FIELD_ROW_H as i64 + drawer_dy;
-            if iy + cp::FIELD_ROW_H as i64 <= pr.y {
+            let iy = (i as i64) * cp::FIELD_ROW_H as i64 + drawer_dy;
+            if iy + cp::FIELD_ROW_H as i64 <= 0 {
                 continue; // 整体没入面板顶缘之上（收起中上方先没）
             }
-            if iy >= pr.y + pr.h as i64 {
+            if iy >= cur_h as i64 {
                 break; // 出面板底（行有序，后续更靠下）
-            }
-            if iy < 0 {
-                continue;
             }
             self.draw_text_left_ex(
                 frame,
                 opt,
-                px0 as u32,
-                pr.w.saturating_sub(27),
+                rx as u32,
+                pr_full.w.saturating_sub(27),
                 iy as u32,
                 cp::FIELD_ROW_H,
                 px_title,
@@ -5908,7 +5897,23 @@ pub trait TermEmu: Send {
         accent: crate::ui::accent::AccentPair,
         page_denom: i64,
     );
-    /// 下池子目录行表 + 上池联动下拉触发器/字段行/下拉 panel。
+    /// 下拉面板**层**涂装（二十四修拆槽，考题/壳层门面）：层缓冲 =
+    /// 面板最大宽 × 全高（调用方先 fill(0)）；pr_full = 面板全高矩形
+    /// （页坐标，几何由壳层 cfg_dropdown_panel_geom 裁决——与命中
+    /// 同尺）；origin = 画布原点页坐标（= 上池内容左内缘, pr.y）
+    #[allow(clippy::too_many_arguments)]
+    fn paint_dropdown_panel_layer(
+        &self,
+        buf: &mut [u32],
+        cw: u32,
+        ch: u32,
+        page: &crate::ui::cfg_page::CfgPageSnap,
+        pr_full: &crate::ui::dual_pool::PoolRect,
+        origin: (i64, i64),
+        accent: crate::ui::accent::AccentPair,
+    );
+    /// 下池子目录行表 + 上池联动下拉触发器/字段行（下拉 panel 已拆
+    /// 层——paint_dropdown_panel_layer，本函数不再画面板）。
     /// cfg_off_x 语义同 paint_cfg_dual_pool；画在双池框之上。
     /// now_ms = 动画时钟（十四修 §六：跳框动效预览的相位源；无动画
     /// 预览时本参不读）。pan_hold_scope（十九修 D8 立、二十修泛化）：
@@ -6169,6 +6174,19 @@ impl TermEmu for TermView {
             accent,
             page_denom,
         )
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn paint_dropdown_panel_layer(
+        &self,
+        buf: &mut [u32],
+        cw: u32,
+        ch: u32,
+        page: &crate::ui::cfg_page::CfgPageSnap,
+        pr_full: &crate::ui::dual_pool::PoolRect,
+        origin: (i64, i64),
+        accent: crate::ui::accent::AccentPair,
+    ) {
+        TermView::paint_dropdown_panel_layer(self, buf, cw, ch, page, pr_full, origin, accent)
     }
     #[allow(clippy::too_many_arguments)]
     fn paint_cfg_pool_content(

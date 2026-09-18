@@ -131,10 +131,9 @@ pub struct CfgPageSnap {
     /// 进行中——涂装双代同画（旧代冻结快照带偏移出、新代活态带偏
     /// 移进）；None = 稳态单代
     pub pan: Option<PanSnap>,
-    /// 平移冻结窗口（二十修 §六② 下拉换选）：账已立但 start 在未来
-    /// （点选后先等选中细框滑行+面板收起同拍走完）——本字段 = 旧代
-    /// 冻结快照，涂装上池体行 1.. 吃它（行 0 触发器吃当前态，值即换）
-    pub pending_old: Option<Box<EpochSnap>>,
+    /// 触发器值框宽度伸缩瞬时值（二十四修 §六②）：Some = 伸缩账
+    /// 进行中，涂装行 0 值框几何吃这维；None = 稳态吃实量宽
+    pub trigger_w: Option<f32>,
 }
 
 /// 视口平移域（十七修 §六）：Page = 页面级（标签切换：双池框+内容
@@ -270,6 +269,12 @@ pub struct CfgPage {
     /// 冻结快照)) = 平移账；惰式求值同 pick_move（snap/fx 从 now 推，
     /// 贴死后 snap 出 None，账留待下一次切换覆盖）
     pan: Option<(PanScope, i8, u64, EpochSnap)>,
+    /// 触发器值框宽度伸缩账（二十四修 §六②，2026-09-18 用户拍板）：
+    /// Some((from_w, to_w, start_ms)) = 换选后值框宽从 from 滑向 to
+    /// （250ms ease-in-out，与并发账同钟同曲线）；None = 稳态直出实量
+    /// 宽。壳在换选重建后量新值文宽喂入（cfg_page 不碰字体度量——
+    /// 宽度是涂装域读数，本册只记账插值）
+    trig_w: Option<(f32, f32, u64)>,
 }
 
 impl CfgPage {
@@ -291,6 +296,7 @@ impl CfgPage {
             dd_start_ms: 0,
             pick_move: None,
             pan: None,
+            trig_w: None,
         }
     }
 
@@ -325,6 +331,7 @@ impl CfgPage {
             self.options = options;
             self.option_sel = sel;
             self.pick_move = None; // 选项表换版，挂账的并发账作废
+            self.trig_w = None; // 同规：宽度账作废（壳重建后喂新基线）
             self.epoch += 1;
         }
     }
@@ -372,6 +379,7 @@ impl CfgPage {
         self.dropdown_open = false;
         self.dd_from = 0.0;
         self.pick_move = None;
+        self.trig_w = None; // 切页不继承旧页宽度账（同并发账清零律）
         self.modal = None;
         self.pan = Some((PanScope::Page, dir, now_ms, old));
         self.epoch += 1;
@@ -555,16 +563,18 @@ impl CfgPage {
     }
 
     /// 下拉框点选（二十修 §六② 并发，2026-09-18 用户拍板取代 09-14
-    /// 两段时序）：点**其他**行 = 换选 + dropdown_open 即翻 false
-    /// （壳的触发器重开路由不被账面欺骗）+ 挂并发账——选中细框滑行
-    /// 与面板收起同拍 250ms ease-in-out；同刻立 **UpperBody 视口平移
-    /// 账**（start = 点选 + 250ms 冻结窗口后起步——面板收尽、旧代体
-    /// 行封存完毕，平移才动；行 0 触发器钉住，体行 1.. 旧左出新右进，
-    /// 池高 glide 同钟）；点**当前**行 = 无并发账直接收（挂账已收敛
-    /// 的重点 = 不空涨代际）。方向律同切标签（下标变大 = 前进 = 内容
-    /// 左移）。业务动作（写配置/重建上池）归壳——壳在本调用后读
-    /// `option_sel()` 执行；pool/accent = 旧代冻结用的池几何与页色
-    /// （set_tab/select 同规）
+    /// 两段时序；二十四修再修：并发扩到三账同拍）：点**其他**行 =
+    /// 换选 + dropdown_open 即翻 false（壳的触发器重开路由不被账面
+    /// 欺骗）+ 挂并发账——选中细框滑行与面板收起同拍 250ms
+    /// ease-in-out；**同刻**立 **UpperBody 视口平移账**（二十四修
+    /// 起 start = 点选当下——收起动画与页面切换动画同步播放，二十修
+    /// 的 250ms 冻结窗口（收尽才起步）被用户终验判「异步」废除；
+    /// 行 0 触发器钉住，体行 1.. 旧左出新右进，池高 glide 同钟）；
+    /// 点**当前**行 = 无并发账直接收（挂账已收敛的重点 = 不空涨
+    /// 代际）。方向律同切标签（下标变大 = 前进 = 内容左移）。业务
+    /// 动作（写配置/重建上池）归壳——壳在本调用后读 `option_sel()`
+    /// 执行；pool/accent = 旧代冻结用的池几何与页色（set_tab/
+    /// select 同规）
     pub fn dropdown_pick(
         &mut self,
         i: usize,
@@ -584,12 +594,7 @@ impl CfgPage {
             self.option_sel = i;
             self.dropdown_open = false; // 有效态即关，动画账全挂 pick_move
             self.pick_move = Some((sel_from, panel_from, now_ms));
-            self.pan = Some((
-                PanScope::UpperBody,
-                dir,
-                now_ms + DROPDOWN_PICK_SYNC_MS,
-                old,
-            ));
+            self.pan = Some((PanScope::UpperBody, dir, now_ms, old));
             self.epoch += 1;
         } else if self.dropdown_open || self.pick_move_live(now_ms) {
             self.dd_from = self.dropdown_progress(now_ms);
@@ -598,6 +603,39 @@ impl CfgPage {
             self.pick_move = None;
             self.epoch += 1;
         }
+    }
+
+    /// 喂触发器值框宽度伸缩账（二十四修 §六②）：换选后值文实量宽
+    /// 变化时壳喂入（from = 旧值文宽/to = 新值文宽，px）。挂账中
+    /// 重喂 = 重定基（from 取当时缓动瞬时值——cursor_row 同规）；
+    /// 变化不足 1px 不起账（等长换选零动画零脏烘）
+    pub fn feed_trigger_width(&mut self, from: f32, to: f32, now_ms: u64) {
+        if (to - from).abs() < 1.0 {
+            return;
+        }
+        let from = self.trigger_w_f(now_ms).unwrap_or(from);
+        self.trig_w = Some((from, to, now_ms));
+    }
+
+    /// 触发器值框宽度瞬时值（二十四修 §六②：250ms ease-in-out 与
+    /// 并发账同钟同曲线；收敛/无账 = None → 涂装吃实量宽）。涂装
+    /// 行 0 值框/触发器几何吃这维（命中测试恒吃实量宽——动画期的
+    /// 命中以收敛态为准，250ms 窗口内不追动框）
+    pub fn trigger_w_f(&self, now_ms: u64) -> Option<f32> {
+        self.trig_w.and_then(|(from, to, start)| {
+            let e = now_ms.saturating_sub(start);
+            if e >= DROPDOWN_PICK_SYNC_MS {
+                return None; // 收敛即归零——涂装回实量宽（与 to 恒等）
+            }
+            let t = e as f32 / DROPDOWN_PICK_SYNC_MS as f32;
+            Some(from + (to - from) * crate::ui::fx_ease::ease_in_out_cubic(t))
+        })
+    }
+
+    /// 宽度伸缩活性探针（帧泵闸）：账未到时长 = true
+    pub fn trig_w_fx_active(&self, now_ms: u64) -> bool {
+        self.trig_w
+            .is_some_and(|(_, _, s)| now_ms < s + DROPDOWN_PICK_SYNC_MS)
     }
 
     /// 下拉框开着时点别处 = 收（宪法 §六 下拉栏常规语义；十五修：
@@ -739,12 +777,6 @@ impl CfgPage {
 
     /// 快照（十五修：吃 now_ms——光标弹簧/下拉进度是时间函数）
     pub fn snap(&self, now_ms: u64) -> CfgPageSnap {
-        // 二十修冻结窗口：账已立但平移未起步——旧代随快照出，涂装
-        // 上池体行 1.. 吃它（行 0 触发器吃当前态）
-        let pending_old = match &self.pan {
-            Some((_, _, start, old)) if now_ms < *start => Some(Box::new(old.clone())),
-            _ => None,
-        };
         CfgPageSnap {
             rows: self.rows.clone(),
             focus: self.focus,
@@ -760,7 +792,7 @@ impl CfgPage {
             cursor_row: self.cursor_row(now_ms),
             dropdown_progress: self.dropdown_progress(now_ms),
             pan: self.pan_snap(now_ms),
-            pending_old,
+            trigger_w: self.trigger_w_f(now_ms),
         }
     }
 
@@ -770,22 +802,17 @@ impl CfgPage {
     /// 账留待渲染消费（consume_settled_pan）或下一次平移覆盖。
     /// 旧设计「贴死出 None」让 t=1.0 终点态永远无法表达为平移帧——
     /// 末帧冻在 t<1 偏移态，靠另一代码路径补落停帧 = 真机「停在偏移
-    /// 位置 + 闪一下归位」整类病灶的根）。
-    /// 二十修冻结窗口：start 在未来（下拉换选并发账收尽才起步）时出
-    /// None——壳层捕获/拆层/合成全部自动推迟到平移起步帧；窗口内旧代
-    /// 由 pending_old 承担
+    /// 位置 + 闪一下归位」整类病灶的根）。二十四修：冻结窗口废除
+    /// （用户终验判异步）——账立即起步，三账（收起/平移/池高）同拍
     fn pan_snap(&self, now_ms: u64) -> Option<PanSnap> {
-        self.pan.as_ref().and_then(|(scope, dir, start, old)| {
-            if now_ms < *start {
-                return None; // 冻结窗口：账已立，平移未起步
-            }
+        self.pan.as_ref().map(|(scope, dir, start, old)| {
             let raw = (now_ms.saturating_sub(*start)).min(PAN_MS) as f32 / PAN_MS as f32;
-            Some(PanSnap {
+            PanSnap {
                 scope: *scope,
                 dir: *dir,
                 t: crate::ui::fx_ease::ease_in_out_cubic(raw),
                 old: Box::new(old.clone()),
-            })
+            }
         })
     }
 
@@ -804,30 +831,18 @@ impl CfgPage {
 
     /// 平移活性探针（帧泵闸。BAR-099 状态驱动：账在 = 活性在，保证
     /// 终点帧必被渲染消费——时间驱动的旧闸会在死线停泵，把 t<1 的
-    /// 偏移态冻在屏上；宽限兜底停泵防消费链断裂空烧）。二十修冻结
-    /// 窗口：now < start（下拉换选并发账未收尽）= 未起步，出 false
+    /// 偏移态冻在屏上；宽限兜底停泵防消费链断裂空烧）
     pub fn pan_active(&self, now_ms: u64) -> bool {
         self.pan.as_ref().is_some_and(|(_, _, start, _)| {
             now_ms >= *start && now_ms < *start + PAN_MS + PAN_SETTLE_SLACK_MS
         })
     }
 
-    /// 平移冻结窗口起步时刻（二十修 §六②）：账已立但 now < start =
-    /// Some(start)——壳层据此把池高 glide 的起步钉在平移起步帧（冻结
-    /// 窗口内池高不许先动，体行平移与池高变化同钟同曲线）
-    pub fn pan_pending_start(&self, now_ms: u64) -> Option<u64> {
-        self.pan
-            .as_ref()
-            .and_then(|(_, _, start, _)| (now_ms < *start).then_some(*start))
-    }
-
     /// Upper 域平移进行中（BAR-095 分域律）：壳层据此选池高喂入
     /// 方式——Upper/UpperBody 域 = glide 缓动（池高与光标/平移同步），
     /// Page 域与无平移 = set 直通（新页池高起步帧就位）。
     /// BAR-099：glide 域同步延到终点帧消费前——贴死帧仍走 glide
-    /// （其值已收敛=直通同值），不在死线边界换喂入方式。
-    /// 二十修冻结窗口：now < start 出 false（窗口内池高喂入走
-    /// pan_pending_start 的未来起步 glide，不是本探针的活域）
+    /// （其值已收敛=直通同值），不在死线边界换喂入方式
     pub fn pan_upper_active(&self, now_ms: u64) -> bool {
         self.pan.as_ref().is_some_and(|(scope, _, start, _)| {
             matches!(scope, PanScope::Upper | PanScope::UpperBody)

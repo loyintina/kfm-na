@@ -3507,14 +3507,18 @@ fn spec_字段行_右对齐与动态宽涂装钉() {
 
 #[test]
 fn spec_下拉面板_涂装钉() {
-    // 宪法 §六 下拉栏（2026-09-14 十三修重订，用户拍板）：
+    // 宪法 §六 下拉栏（2026-09-14 十三修重订，用户拍板；2026-09-18
+    // 二十四修面板拆层——BAR-096 模式第五层，页涂装不再画面板，层画布
+    // 局部坐标 + 画布渐变尺，合成期 SRC_ALPHA 上屏）：
     // ①触发器 = 三级框全包框（左粗缘/三细边 = 渐变 α255 直出 + 渐变暗
-    //   底芯——变异：画回无边框值框即红）；
-    // ②展开面板 = 整面圆角无边框深底：近黑 α252（after = blend(黑,
-    //   before, 252) 精确值——旧 α245 深度回潮即红）；角外 = 下层原样
-    //   （圆角不吃直角即红）；
+    //   底芯——变异：画回无边框值框即红）——在页涂装，不进层；
+    // ②展开面板 = 整面圆角无边框深底：层画布 α252 黑像素直写（GPU
+    //   混合 ≡ blend(黑, 下层, 252)——blend_px 回潮 = 透明画布 rgb 恒
+    //   0 被 mark_chrome_alpha 判透明，深底整面消失即红）；角外 =
+    //   透明像素 0（圆角不吃直角即红）；
     // ③选项行 = 方形无个体背景（未选中行内 = 与面板同一块深底）；
-    //   选中行 = 均匀细框（四边 3px 渐变 α255 直出 + 渐变暗底芯不透明
+    //   选中行 = 均匀细框（四边 3px 渐变 rgb 直出、α 随深底 252——
+    //   blend_px 保 alpha 纪律 BAR-067 的层画布投影；芯渐变暗底不透明
     //   直写——变异：画回逐行圆角行框/无框即红）
     use kfm_na::termview::{frame_bg_rgb, ring_gradient_rgb};
     use kfm_na::ui::cfg_page::{self, CfgPage, RowView, UpperRow};
@@ -3526,13 +3530,6 @@ fn spec_下拉面板_涂装钉() {
         c2: 0x0000_80FF,
     };
     let denom = (i64::from(w) - 1) + (i64::from(h) - 1);
-    let blend = |fg: u32, dst: u32, a: u32| {
-        let inv = 255 - a;
-        let ch = |f: u32, d: u32| (f * a + d * inv) / 255;
-        (ch((fg >> 16) & 0xFF, (dst >> 16) & 0xFF) << 16)
-            | (ch((fg >> 8) & 0xFF, (dst >> 8) & 0xFF) << 8)
-            | ch(fg & 0xFF, dst & 0xFF)
-    };
     let tv = TermView::new(host_font(), None, 8, 2, CELL_W, CELL_H);
     let mut pool = DualPool::new(w, h);
     pool.set_viewport(w, h, inset);
@@ -3579,10 +3576,14 @@ fn spec_下拉面板_涂装钉() {
         "触发器内芯 = 渐变暗底不透明直出"
     );
 
-    // after：展开画一遍
+    // after：展开——二十四修 §六② 面板拆层（BAR-096 模式第五层）：页涂装
+    // 不再画面板，面板走独立槽画布（合成期 SRC_ALPHA 混合上屏）。层画布
+    // 局部坐标：原点 = (上池内容左内缘, 面板顶 pr.y)，渐变尺 = 画布尺——
+    // 与 android_app 烘焙块同尺复算（眼手同尺）
     page.toggle_dropdown(1000);
     let pg1 = page.snap(1300);
     assert!(pg1.dropdown_open, "夹具前提：展开态");
+    // 拆层钉：页缓冲面板区必须 = 合着时原样（页涂装画面板回潮即红）
     let mut b1 = vec![0u32; (w * h) as usize];
     termview::paint_cfg_page_chrome(&mut b1, w, h, inset, 0, acc);
     tv.paint_cfg_dual_pool(&mut b1, w, h, &ps, 0, acc);
@@ -3591,51 +3592,57 @@ fn spec_下拉面板_涂装钉() {
     let t = cfg_page::trigger_rect(&ps.upper, 0, true, lw, vw);
     let max_h = h.saturating_sub(t.y.max(0) as u32 + t.h + 40);
     // 十七修 BAR-090：几何复算吃与实现同尺的内容最小宽（眼手同尺）
-    let cw = tv.text_width("本地终端", 36.0) + cfg_page::FIELD_TEXT_INSET * 2;
-    let pr = cfg_page::dropdown_panel_rect(2, &ps.upper, max_h, 0, true, lw, vw, cw);
+    let cw0 = tv.text_width("本地终端", 36.0) + cfg_page::FIELD_TEXT_INSET * 2;
+    let pr = cfg_page::dropdown_panel_rect(2, &ps.upper, max_h, 0, true, lw, vw, cw0);
     let row_h = cfg_page::FIELD_ROW_H as i64;
+    let canvas_w = ps.upper.w - (cfg_page::POOL_CONTENT_INSET * 2) as u32;
+    let ox = ps.upper.x + cfg_page::POOL_CONTENT_INSET;
+    let rx = pr.x - ox; // 面板左缘的画布局部 x
+    let dnom = (i64::from(canvas_w) - 1) + (i64::from(pr.h) - 1);
+    let mut cv = vec![0u32; (canvas_w * pr.h) as usize];
+    tv.paint_dropdown_panel_layer(&mut cv, canvas_w, pr.h, &pg1, &pr, (ox, pr.y), acc);
+    let at = |lx: i64, ly: i64| cv[(ly * i64::from(canvas_w) + lx) as usize];
 
-    // ②面板深底：未选中行（行 0）内避字取样 = blend(黑, before, 252)
-    let (bx, by) = (pr.x + pr.w as i64 - 30, pr.y + row_h / 2);
-    let before = b0[by as usize * w as usize + bx as usize];
+    // 拆层钉：展开后页缓冲面板芯区 = 合着时原样（面板不进页涂装）
+    let (px_in, py_in) = (rx + pr.w as i64 - 30, row_h / 2);
     assert_eq!(
-        b1[by as usize * w as usize + bx as usize],
-        blend(0, before, 252),
-        "面板深底 = 近黑 α252 精确值（α245 旧深度回潮即红）"
+        b1[(pr.y + py_in) as usize * w as usize + (ox + px_in) as usize],
+        b0[(pr.y + py_in) as usize * w as usize + (ox + px_in) as usize],
+        "面板拆层：页涂装画面板回潮即红（并发同拍期会被零拷贝捕获冻进旧代）"
     );
-    assert_ne!(
-        b1[by as usize * w as usize + bx as usize],
-        blend(0, before, 245),
-        "深度必须是 252 不是旧 245"
-    );
-    // ②角外 = 下层原样（整面圆角：角盒外不吃深底）
-    let (cx0, cy0) = (pr.x + 1, pr.y + 1);
+    // ②面板深底：层画布 = α252 黑像素直写（GPU SRC_ALPHA 混合 ≡
+    // blend(黑, 下层, 252)——blend_px 回潮即红：透明画布上 rgb 恒 0，
+    // mark_chrome_alpha 判纯黑透明 = 深底整面消失）
     assert_eq!(
-        b1[cy0 as usize * w as usize + cx0 as usize],
-        b0[cy0 as usize * w as usize + cx0 as usize],
-        "面板左上圆角外必须 = 下层原样（直角化/方角深底即红）"
+        at(rx + pr.w as i64 - 30, row_h / 2),
+        252 << 24,
+        "面板深底 = α252 黑像素直写（blend_px 回潮 = 0 全透明即红）"
     );
-    // ③选中行（option_sel = 1）= 均匀细框：边 = 渐变 α255 直出；
-    // 芯 = 渐变暗底不透明直写（≠ 面板深底）
-    let iy1 = pr.y + row_h;
-    let (fx, fy) = (pr.x + 1, iy1 + row_h / 2);
+    // ②角外 = 透明（合成后下层原样；圆角不吃直角即红）
     assert_eq!(
-        b1[fy as usize * w as usize + fx as usize],
-        ring_gradient_rgb(acc.c1, acc.c2, fx, fy, denom),
-        "选中行细框边 = 渐变 α255 直出（无框/行框回潮即红）"
+        at(rx + 1, 1),
+        0,
+        "面板左上圆角外必须 = 透明（直角化/方角深底即红）"
     );
-    let (ix2, iy2) = (pr.x + pr.w as i64 - 30, iy1 + row_h / 2);
+    // ③选中行（option_sel = 1）= 均匀细框：边 = 渐变 rgb 直出（α 随深底
+    // 252——blend_px 保 alpha 纪律 BAR-067 在层画布的投影）；芯 = 渐变
+    // 暗底不透明直写（≠ 面板深底）
+    let (fx, fy) = (rx + 1, row_h + row_h / 2);
     assert_eq!(
-        b1[iy2 as usize * w as usize + ix2 as usize],
-        frame_bg_rgb(acc.c1, acc.c2, ix2, iy2, denom),
+        at(fx, fy),
+        (252 << 24) | ring_gradient_rgb(acc.c1, acc.c2, fx, fy, dnom),
+        "选中行细框边 = 渐变 rgb 直出（无框/行框回潮即红）"
+    );
+    let (ix2, iy2) = (rx + pr.w as i64 - 30, row_h + row_h / 2);
+    assert_eq!(
+        at(ix2, iy2),
+        frame_bg_rgb(acc.c1, acc.c2, ix2, iy2, dnom),
         "选中行芯 = 渐变暗底不透明直写（≠ 深底；逐行圆角行框回潮即红）"
     );
-    // ③未选中行无个体背景：行 0 芯色 = 面板深底（与 ②同点互证，
-    // 这里再取行中另一点钉「行内处处深底」）
-    let (ux2, uy2) = (pr.x + 60, pr.y + row_h - 8);
+    // ③未选中行无个体背景：行 0 芯 = 纯深底（行内另取一点钉「处处深底」）
     assert_eq!(
-        b1[uy2 as usize * w as usize + ux2 as usize],
-        blend(0, b0[uy2 as usize * w as usize + ux2 as usize], 252),
+        at(rx + 60, row_h - 8),
+        252 << 24,
         "未选中行 = 纯深底无个体背景（逐行圆角回潮即红）"
     );
 }
@@ -4450,7 +4457,6 @@ fn spec_cfg下拉_抽屉随面钉() {
         c1: 0x00FF_6000,
         c2: 0x0000_80FF,
     };
-    let denom = (i64::from(w) - 1) + (i64::from(h) - 1);
     let tv = TermView::new(host_font(), None, 8, 2, CELL_W, CELL_H);
     let mut pool = DualPool::new(w, h);
     pool.set_viewport(w, h, inset);
@@ -4468,62 +4474,64 @@ fn spec_cfg下拉_抽屉随面钉() {
     }]);
     page.set_options(vec!["LOCAL".into(), "SRV0".into()], 1);
 
-    // before：合着画一遍（下层原样取证）
-    let pg0 = page.snap(1000);
-    let mut b0 = vec![0u32; (w * h) as usize];
-    termview::paint_cfg_page_chrome(&mut b0, w, h, inset, 0, acc);
-    tv.paint_cfg_dual_pool(&mut b0, w, h, &ps, 0, acc);
-    tv.paint_cfg_pool_content(&mut b0, w, h, &ps, &pg0, 0, acc, 0, None, false);
-
-    // 手搓半高相位（缓动时值钉在 cfg_page_spec；涂装只吃 progress 维）
+    // 手搓半高相位（缓动时值钉在 cfg_page_spec；涂装只吃 progress 维）。
+    // 二十四修拆层：面板走独立槽画布（原点 = (上池内容左内缘, pr.y)，
+    // 画布尺渐变），页涂装不再画面板
     page.toggle_dropdown(1000);
     let mut pg1 = page.snap(1125);
     pg1.dropdown_progress = 0.5;
-    let mut b1 = vec![0u32; (w * h) as usize];
-    termview::paint_cfg_page_chrome(&mut b1, w, h, inset, 0, acc);
-    tv.paint_cfg_dual_pool(&mut b1, w, h, &ps, 0, acc);
-    tv.paint_cfg_pool_content(&mut b1, w, h, &ps, &pg1, 0, acc, 0, None, false);
 
     let lw = tv.text_width("server", 36.0);
     let vw = tv.text_width("LOCAL", 30.0);
-    let cw = tv
+    let cw0 = tv
         .text_width("LOCAL", 36.0)
         .max(tv.text_width("SRV0", 36.0))
         + cfg_page::FIELD_TEXT_INSET * 2;
     let t = cfg_page::trigger_rect(&ps.upper, 0, true, lw, vw);
     let max_h = h.saturating_sub(t.y.max(0) as u32 + t.h + 40);
-    let pr = cfg_page::dropdown_panel_rect(2, &ps.upper, max_h, 0, true, lw, vw, cw);
+    let pr = cfg_page::dropdown_panel_rect(2, &ps.upper, max_h, 0, true, lw, vw, cw0);
     let row_h = cfg_page::FIELD_ROW_H as i64;
-
-    // ①抽屉：半高面板内露**末行**（sel=1）——选中细框左缘中带 =
-    // 渐变 α255 直出（帘幕钉顶回潮 = 此处是行 0 无细框深底，即红）
-    let (fx, fy) = (pr.x + 1, pr.y + row_h / 2);
+    let canvas_w = ps.upper.w - (cfg_page::POOL_CONTENT_INSET * 2) as u32;
+    let ox = ps.upper.x + cfg_page::POOL_CONTENT_INSET;
+    let rx = pr.x - ox;
+    let dnom = (i64::from(canvas_w) - 1) + (i64::from(pr.h) - 1);
+    let mut cv = vec![0u32; (canvas_w * pr.h) as usize];
+    tv.paint_dropdown_panel_layer(&mut cv, canvas_w, pr.h, &pg1, &pr, (ox, pr.y), acc);
+    let at = |lx: i64, ly: i64| cv[(ly * i64::from(canvas_w) + lx) as usize];
     assert_eq!(
-        b1[fy as usize * w as usize + fx as usize],
-        ring_gradient_rgb(acc.c1, acc.c2, fx, fy, denom),
+        (pr.h as f32 * 0.5).round() as i64,
+        row_h,
+        "夹具前提：2 项面板半高 = 单行高"
+    );
+
+    // ①抽屉：半高面板内露**末行**（sel=1，drawer_dy = −row_h → 细框
+    // 落在画布局部 y∈[0,row_h)）——细框左缘中带 = 渐变 rgb 直出（α 随
+    // 深底 252，BAR-067 层投影）（帘幕钉顶回潮 = 此处是行 0 无细框深
+    // 底，即红）
+    let (fx, fy) = (rx + 1, row_h / 2);
+    assert_eq!(
+        at(fx, fy),
+        (252 << 24) | ring_gradient_rgb(acc.c1, acc.c2, fx, fy, dnom),
         "抽屉随面：末行细框必须落在半高面板内（drawer_dy 被删即红）"
     );
     // ②末行芯 = 渐变暗底不透明直写（≠ 面板深底）
-    let (ix, iy) = (pr.x + pr.w as i64 - 30, pr.y + row_h / 2);
+    let (ix, iy) = (rx + pr.w as i64 - 30, row_h / 2);
     assert_eq!(
-        b1[iy as usize * w as usize + ix as usize],
-        frame_bg_rgb(acc.c1, acc.c2, ix, iy, denom),
+        at(ix, iy),
+        frame_bg_rgb(acc.c1, acc.c2, ix, iy, dnom),
         "末行芯 = 渐变暗底不透明直写"
     );
-    // ③面板半高外 = 下层原样（面板按进度长出；展开瞬开回潮即红）
-    let (bx, by) = (pr.x + pr.w as i64 - 30, pr.y + row_h + row_h / 2);
+    // ③面板半高外 = 透明像素 0（合成后下层原样；展开瞬开回潮即红）
     assert_eq!(
-        b1[by as usize * w as usize + bx as usize],
-        b0[by as usize * w as usize + bx as usize],
-        "半高面板外必须 = 下层原样（瞬开回潮即红）"
+        at(rx + pr.w as i64 - 30, row_h + row_h / 2),
+        0,
+        "半高面板外必须 = 透明（瞬开回潮即红）"
     );
     // ④先框后字（BAR-089 同规）：细框芯条带上必须有末行文字落墨
     let mut ink = 0usize;
-    for py in pr.y + 10..pr.y + row_h - 10 {
-        for px in pr.x + 20..pr.x + 120 {
-            if b1[py as usize * w as usize + px as usize]
-                != frame_bg_rgb(acc.c1, acc.c2, px, py, denom)
-            {
+    for py in 10..row_h - 10 {
+        for px in rx + 20..rx + 120 {
+            if at(px, py) != frame_bg_rgb(acc.c1, acc.c2, px, py, dnom) {
                 ink += 1;
             }
         }
@@ -4618,7 +4626,6 @@ fn spec_cfg下拉_选中细框滑行涂装钉() {
         c1: 0x00FF_6000,
         c2: 0x0000_80FF,
     };
-    let denom = (i64::from(w) - 1) + (i64::from(h) - 1);
     let tv = TermView::new(host_font(), None, 8, 2, CELL_W, CELL_H);
     let mut pool = DualPool::new(w, h);
     pool.set_viewport(w, h, inset);
@@ -4640,32 +4647,37 @@ fn spec_cfg下拉_选中细框滑行涂装钉() {
     pg.dropdown_progress = 1.0;
     pg.option_sel_f = 0.5; // 手搓Ⅰ段滑行正中相位（时值钉在 cfg_page_spec）
 
-    let mut buf = vec![0u32; (w * h) as usize];
-    termview::paint_cfg_page_chrome(&mut buf, w, h, inset, 0, acc);
-    tv.paint_cfg_dual_pool(&mut buf, w, h, &ps, 0, acc);
-    tv.paint_cfg_pool_content(&mut buf, w, h, &ps, &pg, 0, acc, 0, None, false);
-
+    // 二十四修拆层：面板走独立槽画布（原点 = (上池内容左内缘, pr.y)，
+    // 画布尺渐变），页涂装不再画面板
     let lw = tv.text_width("server", 36.0);
     let vw = tv.text_width("LOCAL", 30.0);
-    let cw = tv.text_width("SRV1", 36.0) + cfg_page::FIELD_TEXT_INSET * 2;
+    let cw0 = tv.text_width("SRV1", 36.0) + cfg_page::FIELD_TEXT_INSET * 2;
     let t = cfg_page::trigger_rect(&ps.upper, 0, true, lw, vw);
     let max_h = h.saturating_sub(t.y.max(0) as u32 + t.h + 40);
-    let pr = cfg_page::dropdown_panel_rect(3, &ps.upper, max_h, 0, true, lw, vw, cw);
+    let pr = cfg_page::dropdown_panel_rect(3, &ps.upper, max_h, 0, true, lw, vw, cw0);
     let row_h = cfg_page::FIELD_ROW_H as i64;
+    let canvas_w = ps.upper.w - (cfg_page::POOL_CONTENT_INSET * 2) as u32;
+    let ox = ps.upper.x + cfg_page::POOL_CONTENT_INSET;
+    let rx = pr.x - ox;
+    let dnom = (i64::from(canvas_w) - 1) + (i64::from(pr.h) - 1);
+    let mut cv = vec![0u32; (canvas_w * pr.h) as usize];
+    tv.paint_dropdown_panel_layer(&mut cv, canvas_w, pr.h, &pg, &pr, (ox, pr.y), acc);
+    let at = |lx: i64, ly: i64| cv[(ly * i64::from(canvas_w) + lx) as usize];
 
-    // ①细框左缘中带（0.5 相位 = 两行之间）= 渐变 α255 直出
-    let sel_y = pr.y + (0.5f32 * row_h as f32).round() as i64;
-    let (fx, fy) = (pr.x + 1, sel_y + row_h / 2);
+    // ①细框左缘中带（0.5 相位 = 两行之间）= 渐变 rgb 直出（α 随深底
+    // 252，BAR-067 层投影）
+    let sel_y = (0.5f32 * row_h as f32).round() as i64;
+    let (fx, fy) = (rx + 1, sel_y + row_h / 2);
     assert_eq!(
-        buf[fy as usize * w as usize + fx as usize],
-        ring_gradient_rgb(acc.c1, acc.c2, fx, fy, denom),
+        at(fx, fy),
+        (252 << 24) | ring_gradient_rgb(acc.c1, acc.c2, fx, fy, dnom),
         "选中细框必须落在滑行瞬时值位（画回 option_sel 整行 = 瞬移回潮即红）"
     );
     // ②行 0 整相位处（sel_f=0 的旧位）不许有细框左缘——对照
-    let (ox, oy) = (pr.x + 1, pr.y + row_h / 2);
+    let (ox2, oy) = (rx + 1, row_h / 2);
     assert_ne!(
-        buf[oy as usize * w as usize + ox as usize],
-        ring_gradient_rgb(acc.c1, acc.c2, ox, oy, denom),
+        at(ox2, oy),
+        ring_gradient_rgb(acc.c1, acc.c2, ox2, oy, dnom),
         "细框旧位不许残留（瞬移回潮对照）"
     );
     // ③选项文字盖过细框内芯：扫描细框芯条带（上下芯内各让 10px，
@@ -4673,9 +4685,8 @@ fn spec_cfg下拉_选中细框滑行涂装钉() {
     use kfm_na::termview::frame_bg_rgb;
     let mut ink = 0usize;
     for py in sel_y + 10..sel_y + row_h - 10 {
-        for px in pr.x + 20..pr.x + 120 {
-            let pxv = buf[py as usize * w as usize + px as usize];
-            if pxv != frame_bg_rgb(acc.c1, acc.c2, px, py, denom) {
+        for px in rx + 20..rx + 120 {
+            if at(px, py) != frame_bg_rgb(acc.c1, acc.c2, px, py, dnom) {
                 ink += 1;
             }
         }

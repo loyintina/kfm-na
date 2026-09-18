@@ -762,44 +762,37 @@ fn dropdown_pick_concurrent_sel_slide_and_panel_close() {
 }
 
 #[test]
-fn dropdown_pick_upperbody_pan_pending_window() {
-    // 二十修 §六②：换选同刻立 UpperBody 视口平移账，start = 点选+250ms
-    // 冻结窗口（并发账收尽才起步）——窗口内快照 pan=None（壳层捕获/
-    // 拆层/合成全推迟）+ pending_old=旧代冻结；起步后 t 从 0 走
+fn dropdown_pick_upperbody_pan_immediate_start() {
+    // 二十四修 §六②（用户终验判二十修冻结窗口「异步」废除）：换选
+    // 同刻立 UpperBody 视口平移账且**立即起步**——收起动画与页面
+    // 切换动画同步播放，没有「并发账收尽才起步」的窗口
     let mut p = CfgPage::new();
     p.set_upper(upper(1)); // 行 0 触发器 + 行 1.. 体行
     p.set_options(opts(2), 0);
     p.toggle_dropdown(1000);
     p.dropdown_pick(2, 1300, pool_stub(), acc());
-    // 冻结窗口内：平移账已立但不可见
-    assert_eq!(p.pan_pending_start(1300), Some(1550), "窗口内报起步时刻");
-    assert_eq!(p.pan_pending_start(1499), Some(1550));
-    let s = p.snap(1400);
-    assert!(s.pan.is_none(), "冻结窗口内平移快照必须 None（延迟捕获）");
-    let old = s.pending_old.expect("冻结窗口内旧代必须随快照出");
-    assert_eq!(old.upper, upper(1), "旧代冻结 = 点选瞬间的上池行表");
-    assert_eq!(old.option_sel, 0, "旧代冻结 = 点选前的选中项");
-    assert!(!p.pan_upper_active(1400), "窗口内不算 Upper 活域");
-    assert!(!p.pan_active(1400), "窗口内平移活性假");
-    // 起步帧：t=0 精确起点；方向律：下标变大 = 前进
-    let s = p.snap(1550);
-    let pan = s.pan.expect("起步帧平移必须可见");
+    // 点选当帧：平移账立且可见（t=0 精确起点）
+    let s = p.snap(1300);
+    let pan = s.pan.expect("点选当帧平移必须已可见（同步播放）");
     assert_eq!(pan.scope, PanScope::UpperBody);
     assert_eq!(pan.dir, 1, "前进 = 内容左移（dir +1）");
     assert_eq!(pan.t, 0.0, "起步帧 t=0");
-    assert!(s.pending_old.is_none(), "起步后冻结窗口字段清空");
+    assert_eq!(pan.old.upper, upper(1), "旧代冻结 = 点选瞬间的上池行表");
+    assert_eq!(pan.old.option_sel, 0, "旧代冻结 = 点选前的选中项");
     assert!(
-        p.pan_upper_active(1550),
-        "起步后入 Upper 活域（池高 glide）"
+        p.pan_upper_active(1300),
+        "起步即入 Upper 活域（池高 glide 同拍）"
     );
-    let half = p.snap(1675).pan.expect("半程帧").t;
+    assert!(p.pan_active(1300));
+    // 半程 t = ease_in_out(0.5) = 0.5
+    let half = p.snap(1425).pan.expect("半程帧").t;
     assert!(
         (half - 0.5).abs() < 1e-4,
         "半程 t = ease_in_out(0.5) = 0.5，实得 {half}"
     );
     // 终点帧消费（BAR-099 同律）
-    assert!(p.consume_settled_pan(1800), "250ms 贴死后终点帧消账");
-    assert!(p.snap(1800).pan.is_none());
+    assert!(p.consume_settled_pan(1550), "250ms 贴死后终点帧消账");
+    assert!(p.snap(1550).pan.is_none());
 }
 
 #[test]
@@ -812,7 +805,6 @@ fn dropdown_pick_same_row_no_pan_account() {
     p.dropdown_pick(0, 2000, pool_stub(), acc());
     assert!(p.epoch() > e0, "收 panel bump 一次");
     assert!(p.snap(2100).pan.is_none(), "同项点选不许立平移账");
-    assert!(p.pan_pending_start(2100).is_none());
 }
 
 #[test]
@@ -833,11 +825,7 @@ fn dropdown_dismiss_mid_pick_move_cancels_and_closes() {
     );
     assert_eq!(p.dropdown_progress(1580), 0.0, "180ms 收尽");
     assert!(!p.dropdown_fx_active(1580));
-    assert_eq!(
-        p.pan_pending_start(1400),
-        Some(1550),
-        "dismiss 只杀并发账——平移账照活"
-    );
+    assert!(p.snap(1400).pan.is_some(), "dismiss 只杀并发账——平移账照活");
     let e = p.epoch();
     p.dismiss_dropdown(2000); // 收敛后再 dismiss = 不空涨代际
     assert_eq!(p.epoch(), e, "挂账收敛后 dismiss 必须零代际变化");
@@ -863,9 +851,50 @@ fn dropdown_pick_retarget_mid_move_rebases() {
         prog > 0.0 && prog < 1.0,
         "重定基起点 = 当时收起进度（0..1 之间），实得 {prog}"
     );
-    assert_eq!(p.pan_pending_start(1380), Some(1630), "平移账随改选重排");
+    let pan = p.snap(1380).pan.expect("改选当帧平移已重立");
+    assert_eq!(pan.t, 0.0, "平移账随改选重排：当帧 t=0 重新起步");
+    assert_eq!(pan.old.option_sel, 2, "旧代 = 上一笔点选的冻结态");
     assert_eq!(p.option_sel_f(1630), 3.0, "重定基 250ms 细框贴死新行");
     assert_eq!(p.dropdown_progress(1630), 0.0, "重定基 250ms 面板收尽");
+}
+
+#[test]
+fn trigger_width_anim_glides_and_converges() {
+    // 二十四修 §六②：换选后值框宽从旧值滑向新值（250ms ease-in-out，
+    // 与并发账同钟同曲线）；收敛后出 None（涂装回实量宽，零残留脏烘）
+    let mut p = CfgPage::new();
+    p.feed_trigger_width(100.0, 200.0, 1000);
+    assert_eq!(p.trigger_w_f(1000), Some(100.0), "起步帧 = 旧宽");
+    let mid = p.trigger_w_f(1125).expect("半程帧有账");
+    assert!(
+        (mid - 150.0).abs() < 1e-3,
+        "半程宽 = 100+100×ease_in_out(0.5) = 150，实得 {mid}"
+    );
+    assert!(p.trig_w_fx_active(1124), "时长内活性真");
+    assert!(!p.trig_w_fx_active(1250), "收敛后活性假");
+    assert_eq!(p.trigger_w_f(1250), None, "收敛出 None（涂装回实量宽）");
+    // 快照同一份读数
+    p.feed_trigger_width(100.0, 200.0, 2000);
+    assert_eq!(p.snap(2000).trigger_w, Some(100.0), "快照带伸缩瞬时值");
+    assert_eq!(p.snap(2250).trigger_w, None, "快照收敛归零");
+}
+
+#[test]
+fn trigger_width_anim_retarget_and_subpixel_gate() {
+    let mut p = CfgPage::new();
+    // 等宽/亚像素换选不起账（零动画零脏烘）
+    p.feed_trigger_width(100.0, 100.5, 1000);
+    assert_eq!(p.trigger_w_f(1010), None, "亚像素差不起账");
+    // 滑行中重喂 = 从当时瞬时值重定基（cursor_row 同规）
+    p.feed_trigger_width(100.0, 200.0, 1000);
+    let live = p.trigger_w_f(1125).expect("账活");
+    p.feed_trigger_width(100.0, 50.0, 1125); // from 参数过时也无妨
+    let rebase = p.trigger_w_f(1125).expect("重定基后账活");
+    assert!(
+        (rebase - live).abs() < 1e-3,
+        "重定基起点 = 当时瞬时值 {live}，实得 {rebase}"
+    );
+    assert_eq!(p.trigger_w_f(1375), None, "重定基 250ms 后收敛");
 }
 
 #[test]

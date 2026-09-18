@@ -97,6 +97,12 @@ pub enum ChromeSlot {
     /// y 位移跟 lower.y glide + 底缘 scissor（行底不许压下池底环）。
     /// 渐变参照锚 glide 终点位（贴死帧与稳态配置槽逐像素一致交接）
     LowerRowsPan = 12,
+    /// 下拉面板层（二十四修拆槽，2026-09-18）：面板圆角深底+选项行+
+    /// 选中细框，画布 = 面板最大宽 × 全高（≈2MB）。拆层根因：并发三账
+    /// 同拍起步（二十四修）后 PanOld 零拷贝捕获要求配置槽纹理无面板
+    /// 像素；顺带根治「开合期 dd_progress_q 逐帧全页重烘」里 panel
+    /// 部分的浪费。z 序：平移带内双代之上（抽屉浮在滑动内容上）
+    DropdownPanel = 13,
 }
 
 /// 视口平移合成参数（十九修 D8）：调用方逐帧从 cfg_snap.pan 求值——
@@ -148,6 +154,10 @@ pub struct LayeredPlace {
     /// （页坐标，行底不许压下池底环——glide 中途池高小于终点时行表
     /// 按终点几何烘，多出的行必须裁掉）
     pub lower_rows: Option<(f32, f32, f32)>,
+    /// 下拉面板层 (x, y)（二十四修：progress>0 即 Some——画布原点的
+    /// 页坐标 = (上池内容左内缘, 面板顶)；内容右缘锚定，宽度账在播时
+    /// 左缘逐帧动 = 烘焙维非 placement 维）
+    pub dropdown: Option<(f32, f32)>,
 }
 
 /// 单槽烘焙物。baked=false 的槽不许上屏——采样未上传过的纹理得到
@@ -609,9 +619,10 @@ pub struct GlesPresent {
     /// 图层槽位（ui-base §八 渲染成本模型）：键行/AI面板/上层/配置/文件树
     /// /终端卡/平移双代 + BAR-096 拆槽两件（标签栏层/下池光标层——小画布
     /// 逐帧重烘便宜）+ BAR-097 池区两件（池框几何层/下池行层——Upper
-    /// 平移期池高 glide 的逐帧重烘限定在池区小画布），置脏烘焙 +
+    /// 平移期池高 glide 的逐帧重烘限定在池区小画布）+ 二十四修一件
+    /// （下拉面板层——并发同拍起步的捕获净度），置脏烘焙 +
     /// placement 合成——动画帧零光栅零上传
-    layers: [ChromeLayer; 13],
+    layers: [ChromeLayer; 14],
     /// 图层实例程序（rect+uv+tint 四边形；placement 逐槽进实例数据）
     layer_prog: glow::NativeProgram,
     layer_vao: glow::NativeVertexArray,
@@ -748,6 +759,7 @@ impl GlesPresent {
         };
         // 先建槽数组再 move gl 进结构体（E0382：字段初始化按书写序移动）
         let layers = [
+            mk_layer(&gl),
             mk_layer(&gl),
             mk_layer(&gl),
             mk_layer(&gl),
@@ -1475,45 +1487,48 @@ impl GlesPresent {
                                     // 二十修 §六② 钉住条带（UpperBody
                                     // 域）：行 0 触发器不进平移带，但配置
                                     // 槽 hold 烘焙的它被 PoolFx 不透明池
-                                    // 芯盖住——带绘制后从新代层 dx=0 补画
-                                    // 这一横条（x 范围 = 带 x 范围，y =
-                                    // 行 0 矩形；与带不重叠无重绘）
+                                    // 芯盖住——带绘制后补画这一横条（x
+                                    // 范围 = 带 x 范围，y = 行 0 矩形；与
+                                    // 带不重叠无重绘）。二十四修：源从新
+                                    // 代层（PanMove，起步一烘的死图）改
+                                    // **配置槽活体**——并发同拍期行 0 是
+                                    // 活的（▼ 旋转/值框宽度伸缩逐帧变），
+                                    // 死图会把这两个动画冻结 250ms
                                     if let Some((py0, py1)) = pc.pinned_strip
                                         && !pc.scope_page
+                                        && cf.visible
+                                        && cf.baked
                                     {
-                                        let pm2 = &self.layers[ChromeSlot::PanMove as usize];
-                                        if pm2.visible && pm2.baked {
-                                            let psx = bx0.clamp(0, fw);
-                                            let psy = (fh - py1).clamp(0, fh);
-                                            let psw = (bx1 - bx0).clamp(0, fw - psx);
-                                            let psh = (py1 - py0).clamp(0, fh - psy);
-                                            let puv = (
-                                                bx0 as f32 / uw,
-                                                py0 as f32 / uh,
-                                                (bx1 - bx0) as f32 / uw,
-                                                (py1 - py0) as f32 / uh,
-                                            );
-                                            gl.enable(glow::SCISSOR_TEST);
-                                            gl.scissor(psx, psy, psw.max(0), psh.max(0));
-                                            draw_slot_layer_src(
-                                                gl,
-                                                self.layer_prog,
-                                                self.layer_vao,
-                                                self.layer_vbo,
-                                                pm2.tex,
-                                                // dx=0 钉住：放置 = 带原点
-                                                // 自身（BAR-106 同尺）
-                                                crate::ui::cfg_page::pan_band_draw_x(
-                                                    pc.band.0, cfg_off, 0.0,
-                                                ),
-                                                py0 as f32 + cfg_dy_extra,
-                                                (bx1 - bx0) as f32,
-                                                (py1 - py0) as f32,
-                                                cfg_alpha,
-                                                puv,
-                                            );
-                                            gl.disable(glow::SCISSOR_TEST);
-                                        }
+                                        let psx = bx0.clamp(0, fw);
+                                        let psy = (fh - py1).clamp(0, fh);
+                                        let psw = (bx1 - bx0).clamp(0, fw - psx);
+                                        let psh = (py1 - py0).clamp(0, fh - psy);
+                                        let puv = (
+                                            bx0 as f32 / uw,
+                                            py0 as f32 / uh,
+                                            (bx1 - bx0) as f32 / uw,
+                                            (py1 - py0) as f32 / uh,
+                                        );
+                                        gl.enable(glow::SCISSOR_TEST);
+                                        gl.scissor(psx, psy, psw.max(0), psh.max(0));
+                                        draw_slot_layer_src(
+                                            gl,
+                                            self.layer_prog,
+                                            self.layer_vao,
+                                            self.layer_vbo,
+                                            cf.tex,
+                                            // dx=0 钉住：放置 = 带原点
+                                            // 自身（BAR-106 同尺）
+                                            crate::ui::cfg_page::pan_band_draw_x(
+                                                pc.band.0, cfg_off, 0.0,
+                                            ),
+                                            py0 as f32 + cfg_dy_extra,
+                                            (bx1 - bx0) as f32,
+                                            (py1 - py0) as f32,
+                                            cfg_alpha,
+                                            puv,
+                                        );
+                                        gl.disable(glow::SCISSOR_TEST);
                                     }
                                 }
                             }
@@ -1622,6 +1637,28 @@ impl GlesPresent {
                                         typ + cfg_dy_extra,
                                         tw as f32,
                                         thh as f32,
+                                        cfg_alpha,
+                                    );
+                                }
+                            }
+                            // 二十四修：下拉面板层——z 序在平移带内双代
+                            // 之上（抽屉浮在滑动内容上，并发同拍期旧/
+                            // 新代体行从收起的面板底下滑过）；画布内容
+                            // 右缘锚定，placement = 画布原点页坐标
+                            if let Some((dxp, dyp)) = layered.dropdown {
+                                let dl = &self.layers[ChromeSlot::DropdownPanel as usize];
+                                if dl.visible && dl.baked {
+                                    let (dw, dh) = dl.dims;
+                                    draw_slot_layer(
+                                        gl,
+                                        self.layer_prog,
+                                        self.layer_vao,
+                                        self.layer_vbo,
+                                        dl.tex,
+                                        dxp + cfg_off as f32,
+                                        dyp + cfg_dy_extra,
+                                        dw as f32,
+                                        dh as f32,
                                         cfg_alpha,
                                     );
                                 }
