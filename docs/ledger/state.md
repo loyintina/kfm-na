@@ -384,6 +384,13 @@
   （手机上直接看/操作桌面端同一个 kimi CLI 现场）——command
   改 `tmux new-session -A -s kfm-na`，重启后实证 kfm-na attached
   且 48x47 手机尺寸 client 在列，测试遗留 `na` 会话已 kill。
+  **窗口尺寸匹配裁决（同日用户追问「能不能保证匹配」）**：tmux
+  同一 window 字符网格是共享态，两端同时看同一 window 不可能
+  各自一个尺寸；实证 `window-size latest`（sizetest 双 pty 假
+  客户端 80x24/40x12 交替活跃，窗口尺寸来回跟随）——活跃端
+  永远满配，非活跃端退化为裁剪/补点。已落地：kfm-na 会话级
+  `window-size latest` + 服务器 ~/.tmux.conf 全局 largest→latest
+  （持久化，原 kfm-na 的 manual 让手机端永远只能看裁剪视图）。
   后续优化项（用户说细节后续）：设置页服务器卡加
   command 字段 UI、右滑解析页插件架（tmux 窗口卡/服务器状态卡，
   设计讨论已记档待拍板）。
