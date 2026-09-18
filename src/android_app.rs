@@ -2836,24 +2836,36 @@ impl App {
         let usable_h = h.saturating_sub(
             termview::margin_top(ch)
                 + termview::MARGIN_Y
-                + self.ime_bottom_px
                 + crate::keybar::HEIGHT_PX
                 + crate::input_bar::HEIGHT_PX, // 期 0 组件三：输入栏常驻让位
                                                // （textarea 覆盖式悬浮：网格只让单行带高，栏长高向上浮盖终端
                                                // 底部行——不触发 resize→SIGWINCH→重绘洪峰链，nz case-002 教训）
+                                               // 2026-09-18「键盘弹起改视口平移」：键盘 inset 同此理移出
+                                               // grid 账——行数纹丝不动，遮挡靠视口平移（下方 sync_kb_shift）
         );
         let (cols, rows) = termview::grid_dims(usable_w, usable_h, cw, ch);
-        term.lock().unwrap().resize_cells(cols, rows);
-        self.last_grid = (cols, rows);
-        // 飞行记录仪:尺寸事件落带(回放网格几何的锚点;名字记当时活跃方)
-        if let Some(r) = self.router_handle() {
-            let name = r.lock().unwrap().active_name();
-            crate::gate::rec_resize(name, cols, rows, cw, ch);
+        // resize 会抖动服务器 pty，尺寸没变不重发（键盘弹收走到这里时
+        // cols/rows 恒定——tmux 侧零 SIGWINCH 零重排的铁证契约）；
+        // 会话切换/重连的补发走 last_grid 专径（3050/3141 行族），不受影响
+        if (cols, rows) != self.last_grid {
+            term.lock().unwrap().resize_cells(cols, rows);
+            self.last_grid = (cols, rows);
+            // 飞行记录仪:尺寸事件落带(回放网格几何的锚点;名字记当时活跃方)
+            if let Some(r) = self.router_handle() {
+                let name = r.lock().unwrap().active_name();
+                crate::gate::rec_resize(name, cols, rows, cw, ch);
+            }
+            if !self.session_over
+                && let Some(r) = self.router_handle()
+            {
+                r.lock().unwrap().send(TermCmd::Resize { cols, rows });
+            }
         }
-        if !self.session_over
-            && let Some(r) = self.router_handle()
-        {
-            r.lock().unwrap().send(TermCmd::Resize { cols, rows });
+        // 键盘遮挡带 → 视口上移（追光标钳制；看历史/光标可见时恒 0）
+        let occlude = self.ime_bottom_px + crate::keybar::HEIGHT_PX + crate::input_bar::HEIGHT_PX;
+        if term.lock().unwrap().sync_kb_shift(h, occlude) {
+            let shift = term.lock().unwrap().kb_shift();
+            crate::report::report("ime", &format!("视口平移 {shift} 行"));
         }
         self.dirty = true;
     }

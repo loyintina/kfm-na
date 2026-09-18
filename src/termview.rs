@@ -1295,6 +1295,21 @@ pub fn is_word_char(c: char) -> bool {
     c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | '/' | ':' | '~')
 }
 
+/// 键盘遮挡 → 视口上移行数（A 档考题钉死，2026-09-18 用户拍板「键盘弹起
+/// 改视口平移」）。追光标钳制 = min(需要的量, 遮挡量)：
+/// - 光标屏行 cursor_row（已含 display_offset）在可见区 [0, visible_rows)
+///   内 → 0（vim 编辑文件顶部场景：一行不动）；
+/// - 被遮 → cursor_row+1-visible_rows，刚好贴可见区底沿露出（kimi CLI
+///   光标贴底场景退化为与旧重排观感对齐）；
+/// - 看历史（in_scrollback）恒 0——用户在翻旧输出，不打扰阅读；
+/// - visible_rows==0（键盘遮满）/负行游标 → 0（移了也看不见的防御）。
+pub fn kb_shift_rows(visible_rows: u32, cursor_row: i32, in_scrollback: bool) -> u32 {
+    if in_scrollback || visible_rows == 0 || cursor_row < 0 {
+        return 0;
+    }
+    (cursor_row as u32 + 1).saturating_sub(visible_rows)
+}
+
 /// 选择区（网格坐标 (Line, Column)：行号含历史负行——滚进历史后选择
 /// 跟着内容走，与 render_into 的 display_iter 行号同坐标系）。
 /// anchor = 长按落点词首，cursor = 拖动当前点；归一化在判定/提取时做
@@ -1453,6 +1468,15 @@ pub struct TermView {
     /// 长按选择区（网格坐标，含历史负行）：Some = 选择模式激活，
     /// 渲染高亮 + 单击复制；None = 无选区
     selection: Option<Selection>,
+    /// 键盘遮挡视口上移行数（2026-09-18 用户拍板「键盘弹起改视口平移」）：
+    /// 网格行数不随键盘变（不再吃 ime inset → 不上报 resize → tmux 零重排），
+    /// 渲染/收集整体下移 -kb_shift 行、触摸逆映射 +kb_shift 行补回。
+    /// 0 = 键盘未弹/光标本可见/看历史中（追光标钳制，kb_shift_rows 纯函数）
+    kb_shift_rows: u32,
+    /// 视口可见底沿（屏 px 坐标，= 窗高 - 遮挡带）：GPU 收集路径的下裁剪线
+    /// （gpu_cells 签名无 inset，遮挡带由 sync_kb_shift 单一源记账）。
+    /// u32::MAX = 从未 sync（考题/回放路径）→ 不裁
+    kb_view_bottom: u32,
     /// 设计 token（theme.rs 第 2 层）：控件渲染只读这里，不认字面颜色。
     /// pub = 主题包插件/考题可直接换肤；生产默认 kfmv4 配方
     pub theme: crate::theme::Theme,
@@ -1526,6 +1550,8 @@ impl TermView {
             font_px,
             baseline_off,
             selection: None,
+            kb_shift_rows: 0,
+            kb_view_bottom: u32::MAX,
             theme: crate::theme::Theme::default(),
         }
     }
@@ -1563,6 +1589,29 @@ impl TermView {
             cols: (cols.max(1)) as usize,
             rows: (rows.max(1)) as usize,
         });
+    }
+
+    /// 键盘遮挡变化 → 重算视口上移（android_app apply_window_size 调用方，
+    /// 2026-09-18 用户拍板「键盘弹起改视口平移」）：occlude_px = 遮挡带总高
+    /// （键盘 + 快捷键行 + 输入栏带）。几何与 apply_window_size 的 grid 账
+    /// 同一把尺（顶带 + MARGIN_Y + 遮挡带），可见行数走 grid_dims 同源。
+    /// 只动视口字段，**绝不碰 grid**——行数纹丝不动是本特性的铁证契约。
+    /// 返回是否变化（判等防抖：insets 轮询 100ms 一遍，同值不假报）
+    pub fn sync_kb_shift(&mut self, win_h: u32, occlude_px: u32) -> bool {
+        let visible_h = win_h.saturating_sub(margin_top(self.cell_h) + MARGIN_Y + occlude_px);
+        let (_, visible_rows) = grid_dims(0, visible_h, self.cell_w, self.cell_h);
+        let content = self.term.renderable_content();
+        let cursor_row = content.cursor.point.line.0 + content.display_offset as i32;
+        let next = kb_shift_rows(visible_rows, cursor_row, content.display_offset > 0);
+        let changed = next != self.kb_shift_rows;
+        self.kb_shift_rows = next;
+        self.kb_view_bottom = win_h.saturating_sub(occlude_px);
+        changed
+    }
+
+    /// 当前视口上移行数（android_app 上报/考题读数）
+    pub fn kb_shift(&self) -> u32 {
+        self.kb_shift_rows
     }
 
     /// 字体探针（诊断用）：光栅化单字符，返回 (宽, 高, 非零覆盖像素数)。
@@ -1663,9 +1712,12 @@ impl TermView {
 
     /// 像素 → 网格点 (Line 含历史负行, Column)：屏格走 px_to_cell
     /// （边距/顶带同 render_into 一把尺），网格行 = 屏行 - display_offset
-    /// （render_into 屏行 = 网格行 + display_offset 的逆运算）
+    /// （render_into 屏行 = 网格行 + display_offset 的逆运算）。
+    /// 键盘视口平移补偿（2026-09-18「键盘弹起改视口平移」）：画面已上移
+    /// kb_shift_rows 行，触摸 y 先补回等量再逆映射——眼手同尺
     fn grid_point_at(&self, x: f64, y: f64) -> (i32, u32) {
         let grid = self.term.grid();
+        let y = y + f64::from(self.kb_shift_rows) * f64::from(self.cell_h);
         let (col, row) = px_to_cell(
             x,
             y,
@@ -2018,6 +2070,16 @@ impl TermView {
         // 是负的（Line(-offset)），跳过或直接用绝对行号都会让内容不随偏移
         // 移动、每滚一行底部黑一行（实拍「从下到上一行行消失」）
         let offset = content.display_offset as i32;
+        // 键盘视口平移（2026-09-18「键盘弹起改视口平移」）：屏行 = 网格行 +
+        // 显示偏移 - 视口上移；被推出顶沿（屏行<0）的行由下界钳裁剪，
+        // 被键盘/栏带遮住的行（格底越过可见底沿）不进料——网格行数不变，
+        // 画面纯平移零重排
+        let kb_shift = self.kb_shift_rows as i32;
+        // 下裁剪线只认 sync_kb_shift 记的键盘可见底沿（未 sync = u32::MAX
+        // 不裁）——不许借 card_bottom_inset：那是壳下缘让位（键栏+输入栏
+        // 常驻在减），dump/紧缓冲路径会算出 view_bottom=0 全灭（
+        // spec_后台值守_dump_now 钉实）
+        let view_bottom = self.kb_view_bottom;
         // 两遍绘制（2026-08-21 实拍「选中态中文只剩左半」病灶）：先全部背景
         // （含选择高亮），后全部字形。一遍绘制时宽字符（CJK）在格 0 画双宽
         // 字形、墨探进格 1，随后 spacer 格的背景填充（选中=SELECT_BG）把
@@ -2032,9 +2094,9 @@ impl TermView {
         }
         let mut cells: Vec<Cell2D> = Vec::new();
         for indexed in content.display_iter {
-            let line = indexed.point.line.0 + offset;
+            let line = indexed.point.line.0 + offset - kb_shift;
             if !(0..self.term.grid().screen_lines() as i32).contains(&line) {
-                continue; // 钳到屏内（防御：迭代区间理论上已对齐）
+                continue; // 钳到屏内（含键盘平移推出顶沿的行）
             }
             let (mut fg, mut bg) = (
                 color_to_xrgb(indexed.cell.fg),
@@ -2074,6 +2136,12 @@ impl TermView {
             let (px, py) = (px + MARGIN_X, py + margin_top(self.cell_h));
             if px >= buf_w || py >= buf_h {
                 continue; // 窗口比网格小（resize 途中）：裁掉放不下的格
+            }
+            if py >= view_bottom {
+                continue; // 整行没入键盘/栏带遮挡带才不进料；半遮的边界行
+                // 照画（被后画的键栏/系统键盘盖掉是真实观感——
+                // 且保持 resize 途中半行照旧的旧契约，dump 紧缓冲
+                // 路径 spec_后台值守_dump_now 钉死）
             }
             cells.push(Cell2D {
                 px,
@@ -2124,8 +2192,13 @@ impl TermView {
         let selection = self.selection;
         let offset = content.display_offset as i32;
         let margin_top = margin_top(self.cell_h);
+        // 键盘视口平移（与 render_into 同源同尺）：屏行 = 网格行 + 显示偏移
+        // - 视口上移；顶沿外/遮挡带内（格底越过 sync_kb_shift 记的可见底沿）
+        // 的行不收集
+        let kb_shift = self.kb_shift_rows as i32;
+        let view_bottom = self.kb_view_bottom;
         for indexed in content.display_iter {
-            let line = indexed.point.line.0 + offset;
+            let line = indexed.point.line.0 + offset - kb_shift;
             if !(0..self.term.grid().screen_lines() as i32).contains(&line) {
                 continue;
             }
@@ -2161,6 +2234,10 @@ impl TermView {
             let (px, py) = (px + MARGIN_X, py + margin_top);
             if px >= w || py >= h {
                 continue;
+            }
+            if py >= view_bottom {
+                continue; // 整行没入遮挡带才不收集（半遮边界行照出，同
+                // render_into 一把尺）
             }
             out.push(GpuCell {
                 px,
@@ -5769,6 +5846,11 @@ pub fn build_vendored() -> Option<(TermView, String, Option<String>)> {
 pub trait TermEmu: Send {
     fn feed(&mut self, bytes: &[u8]);
     fn resize_cells(&mut self, cols: u32, rows: u32);
+    /// 键盘遮挡 → 视口上移重算（2026-09-18「键盘弹起改视口平移」，
+    /// android_app apply_window_size 调用方先例）：只动视口不碰 grid
+    fn sync_kb_shift(&mut self, win_h: u32, occlude_px: u32) -> bool;
+    /// 当前视口上移行数（同调用方上报读数）
+    fn kb_shift(&self) -> u32;
     fn cell_size(&self) -> (u32, u32);
     /// 运行期改格尺寸（捏合缩放，android_app 双指手势调用方）
     fn set_cell_size(&mut self, cell_w: u32, cell_h: u32);
@@ -6029,6 +6111,12 @@ impl TermEmu for TermView {
     }
     fn resize_cells(&mut self, cols: u32, rows: u32) {
         TermView::resize_cells(self, cols, rows)
+    }
+    fn sync_kb_shift(&mut self, win_h: u32, occlude_px: u32) -> bool {
+        TermView::sync_kb_shift(self, win_h, occlude_px)
+    }
+    fn kb_shift(&self) -> u32 {
+        TermView::kb_shift(self)
     }
     fn cell_size(&self) -> (u32, u32) {
         TermView::cell_size(self)
