@@ -45,8 +45,9 @@ pub const CARD_PAD_H: u32 = CELL_W * 2;
 /// 框尾 × 命中宽
 pub const KILL_W: u32 = CELL_W * 4;
 /// 分隔线带高（会话框表与按钮带之间，线体在带内垂直居中）
-/// ——2026-09-19 用户拍板：分隔线 = 底线家变异（正渐变 c1→c2 横向）
-pub const DIVIDER_ZONE: u32 = CELL_H;
+/// ——2026-09-19 用户拍板：分隔线 = 底线家变异（正渐变 c1→c2 横向）；
+/// 同日二拍：线体上下各留 ≥1 格净空（带 = 2 格，线居中 → 上下各 ~1 格）
+pub const DIVIDER_ZONE: u32 = CELL_H * 2;
 /// 分隔线线体厚
 pub const DIVIDER_H: u32 = 2;
 /// 会话框表可见行上限（一行两框 × 3 行 = 6 框；超出内部滚动，

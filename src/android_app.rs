@@ -3577,15 +3577,97 @@ impl App {
     /// attach 切换（nz P7 嵌套禁止的 na 落地：不重开客户端内 attach，
     /// 而是关掉当前远程会话、按新命令重孵——复用断线重连同一条工序）：
     /// P1 同规——已附着同名 = 零动作；非远程活跃 = 报错引导
+    /// 远程重孵公共段（parser_attach / 脱离臂同款工序）：关旧 → 工厂按
+    /// cfg 起新 → router 换心 + 泵换入向通道 → 补 Resize。失败返回原因，
+    /// 页面上挂错误与 report 归调用方（两臂措辞不同）
+    fn respawn_remote_with(&mut self, new_cfg: &ConnConfig) -> Result<(), String> {
+        if let Some(r) = self.router_handle() {
+            r.lock().unwrap().send(TermCmd::Close);
+        }
+        let handle = self
+            .base
+            .as_ref()
+            .and_then(|b| b.ctx().get::<dyn TermFactory>().ok())
+            .map(|f| f.spawn(new_cfg));
+        let Some(h) = handle else {
+            return Err("连接工厂不可用".into());
+        };
+        {
+            let health = self.health_mut("remote");
+            health.dead = false;
+            health.connecting = true;
+        }
+        if let Some(r) = self.router_handle() {
+            r.lock().unwrap().replace_active(h.outbound);
+        }
+        crate::gate::pump_register("remote", h.events);
+        self.session_over = false;
+        let (cols, rows) = self.last_grid;
+        if let Some(r) = self.router_handle() {
+            r.lock().unwrap().send(TermCmd::Resize { cols, rows });
+        }
+        Ok(())
+    }
+
     fn parser_attach(&mut self, name: String) {
         if self.remote_attached.as_deref() == Some(name.as_str()) {
-            // 点已附着会话 = 回服务器命令行（2026-09-19 用户拍板，nz
-            // 同款：点聚焦标签 = 收起管理页回主内容）——连接本就在，
-            // 零重孵只收页
+            // 点已附着会话 = 脱离回服务器命令行（2026-09-19 用户二拍，nz
+            // 同款语义：点聚焦标签 = 回主内容）。初版只收页不脱离——附着
+            // 没动，终端里还是 tmux 会话，用户实报「没回到服务器的终端」
+            // +「聚焦框该灭」。正身 = 裸 shell 重孵远程 + 附着牌清空
+            // （聚焦框灭）+ 收页；tmux 会话在服务器侧毫发无损，再点任意
+            // 框重新进入（BAR-116）
             crate::report::report(
                 "ui",
-                &format!("tmux 插件: {name} 已附着 = 收回解析页回终端"),
+                &format!("tmux 插件: {name} 已附着 = 脱离回服务器 shell"),
             );
+            if self
+                .router_handle()
+                .map(|r| r.lock().unwrap().active_name())
+                != Some("remote")
+            {
+                if let Some(p) = &self.parser_page {
+                    p.lock()
+                        .unwrap()
+                        .set_error("先切到远程终端再脱离会话".into());
+                }
+                crate::report::report("ui", "tmux 插件: 脱离被拒——活跃非远程");
+                self.dirty = true;
+                return;
+            }
+            let Some(cfg) = self.remote_conn_cfg.clone() else {
+                crate::report::report("ui", "tmux 插件: 脱离无远程服务器配置");
+                return;
+            };
+            // command None = 交互 shell（kfmv4 terminal-pty：command 空则
+            // 起默认 shell）——脱离 tmux 回服务器命令行的协议面
+            let shell_cfg = ConnConfig {
+                url: cfg.url.clone(),
+                command: None,
+            };
+            if let Err(e) = self.respawn_remote_with(&shell_cfg) {
+                crate::report::report_sync("term", &format!("tmux 插件脱离失败: {e}"));
+                if let Some(p) = &self.parser_page {
+                    p.lock().unwrap().set_error(format!("脱离失败: {e}"));
+                }
+                self.dirty = true;
+                return;
+            }
+            self.remote_attached = None;
+            if let Some(p) = &self.parser_page {
+                p.lock().unwrap().set_attached(None);
+            }
+            if let Some(t) = self.term_handle() {
+                // 裸 shell 不会像 tmux attach 那样全屏重画——旧网格残留
+                // 必须先清，否则旧 tmux 残帧混进新 shell（redroid 实拍：
+                // 输出「DETACH_OK_42」拼上旧残字「e lines…」，BAR-116）
+                let banner = format!(
+                    "\x1b[2J\x1b[H\x1b[36m[kfm-na: 已脱离 tmux 会话 {name}，回到服务器 shell]\x1b[0m\r\n"
+                );
+                t.lock().unwrap().feed(banner.as_bytes());
+                t.lock().unwrap().scroll_to_bottom();
+            }
+            self.dirty = true;
             self.parser_dismiss();
             return;
         }
@@ -3614,40 +3696,16 @@ impl App {
             self.dirty = true;
             return;
         };
-        // 关旧 → 新命令重孵（respawn_session 活跃臂同款工序）
-        if let Some(r) = self.router_handle() {
-            r.lock().unwrap().send(TermCmd::Close);
-        }
+        // 关旧 → 新命令重孵（公共段；脱离臂同路）
         let new_cfg = ConnConfig {
             url: cfg.url.clone(),
             command: Some(crate::tmux_ctl::cmd_attach(&name)),
         };
-        let handle = self
-            .base
-            .as_ref()
-            .and_then(|b| b.ctx().get::<dyn TermFactory>().ok())
-            .map(|f| f.spawn(&new_cfg));
-        let Some(h) = handle else {
-            crate::report::report_sync("term", "tmux 插件 attach 失败: 工厂取回不到");
-            p.lock()
-                .unwrap()
-                .set_error("attach 失败: 连接工厂不可用".into());
+        if let Err(e) = self.respawn_remote_with(&new_cfg) {
+            crate::report::report_sync("term", &format!("tmux 插件 attach 失败: {e}"));
+            p.lock().unwrap().set_error(format!("attach 失败: {e}"));
             self.dirty = true;
             return;
-        };
-        {
-            let health = self.health_mut("remote");
-            health.dead = false;
-            health.connecting = true;
-        }
-        if let Some(r) = self.router_handle() {
-            r.lock().unwrap().replace_active(h.outbound);
-        }
-        crate::gate::pump_register("remote", h.events);
-        self.session_over = false;
-        let (cols, rows) = self.last_grid;
-        if let Some(r) = self.router_handle() {
-            r.lock().unwrap().send(TermCmd::Resize { cols, rows });
         }
         self.remote_attached = Some(name.clone());
         p.lock().unwrap().set_attached(Some(name.clone()));
