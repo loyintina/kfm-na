@@ -335,6 +335,11 @@ struct App {
     /// Idle 一次性闸只补首查，Ready 后重开页不刷 = 服务器侧 tmux 会话
     /// 增删永远看不见——「开页自动刷」设计口径的实际破洞）
     parser_docked_prev: bool,
+    /// 隧道快照上一圈代际戳+可用相（BAR-117：不可用→可用的上升沿踢
+    /// 活跃死会话重孵——重孵链是死亡事件驱动的，末次重孵撞 TCP
+    /// refused 被 5s 闸压住后链断，隧道 Up 必须回头踢壳层）
+    last_tunnel_epoch: u64,
+    last_tunnel_usable: bool,
     /// 跳框模态手势槽（宪法 §六 跳框条款，九修）：
     /// (起手x, 起手y, 已拖过slop)——模态开着时配置页手势全归它
     modal_touch: Option<(f64, f64, bool)>,
@@ -3891,6 +3896,35 @@ impl App {
         self.dirty = true;
     }
 
+    /// 隧道「不可用→可用」上升沿踢活跃死会话重孵（BAR-117，about_to_wait
+    /// 每圈调）：裁决是 tunnel::usable_edge_kick 纯函数，这里只做代际
+    /// 比对+触发。代际没变零成本；首圈（last_tunnel_epoch=0 撞上快照
+    /// epoch≥1）即判一条边——app 起跑时隧道已 Up 且会话死 = 立即补踢。
+    fn poll_tunnel_kick(&mut self) {
+        let Some(snap) = crate::tunnel::snap() else {
+            return;
+        };
+        let (epoch, state) = {
+            let g = snap.lock().unwrap();
+            (g.epoch, g.state.clone())
+        };
+        if epoch == self.last_tunnel_epoch {
+            return;
+        }
+        self.last_tunnel_epoch = epoch;
+        let prev_usable = self.last_tunnel_usable;
+        self.last_tunnel_usable = crate::tunnel::usable(&state);
+        if crate::tunnel::usable_edge_kick(prev_usable, &state, self.session_over) {
+            let name = self
+                .router_handle()
+                .map(|r| r.lock().unwrap().active_name());
+            if let Some(name) = name {
+                crate::report::report("tunnel", &format!("隧道可用沿 → 踢活跃死会话重孵: {name}"));
+                self.respawn_session(name);
+            }
+        }
+    }
+
     /// 抽干会话事件（about_to_wait 每圈调）：pump 一轮——活跃方 Output
     /// 直接喂共享终端（值守线程 300ms 也在 pump，挂起态网格照新，
     /// 2026-08-24 数据面分家）；待机 Output 泵自存 replay；控制事件
@@ -6515,6 +6549,11 @@ impl ApplicationHandler for App {
             {
                 self.parser_refresh();
             }
+            // BAR-117：隧道「不可用→可用」上升沿踢活跃死会话重孵——重孵
+            // 链是死亡事件驱动的，末次重孵撞 TCP refused（隧道未起）被 5s
+            // 闸压住后再无死亡事件 = 链断 remote_dead 卡死；传输恢复必须
+            // 回头踢壳层（裁决纯函数 tunnel::usable_edge_kick，A 档钉）
+            self.poll_tunnel_kick();
             self.poll_input_bar(); // 输入栏快照比对(注入/分流也要画帧)
             // 采样缝动画帧时钟(ui-base §四 按需启停):缝上有活跃动画
             // 且距上帧 ≥16ms 才置脏——无动画零额外帧,有动画 ≤60fps

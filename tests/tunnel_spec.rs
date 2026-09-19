@@ -5,7 +5,9 @@
 //! ②BatchMode 漏了必须咬（无 askpass 时密码悬问 = 隧道假死）。
 
 use kfm_na::settings::{ServerEntry, SshFields, TunnelPorts};
-use kfm_na::tunnel::{TARGET_PORT, TunnelState, backoff_secs, forward_args, state_word};
+use kfm_na::tunnel::{
+    TARGET_PORT, TunnelState, backoff_secs, forward_args, state_word, usable, usable_edge_kick,
+};
 
 fn srv(host: &str, user: &str, key: &str) -> ServerEntry {
     ServerEntry {
@@ -125,4 +127,33 @@ fn spec_状态词_四态五相() {
         "退避 ×3",
         "退避中必须带次数——用户要知道它还在敲第几次门"
     );
+}
+
+/// BAR-117：隧道可用沿踢壳层重孵的裁决（2026-09-20 接管终判现场定罪：
+/// 传输 Up 了壳层 remote_dead 卡死——重孵链死亡事件驱动，末次重孵撞
+/// TCP refused 被 5s 闸压住后再无死亡事件 = 链断）。
+#[test]
+fn spec_bar117_隧道up沿_踢活跃死会话重孵() {
+    let down = TunnelState::Down {
+        attempts: 1,
+        last_error: "ssh 退出".into(),
+    };
+    // 不可用 → Up 且活跃会话死了 = 踢（接管终判的原场景）
+    assert!(usable_edge_kick(false, &TunnelState::Up, true));
+    // 不可用 → ExternalUp 同样踢（外部借用期会话也走同一本地口）
+    assert!(usable_edge_kick(false, &TunnelState::ExternalUp, true));
+    // 稳定在线不踢（Up→Up 每圈踢 = 重孵风暴）
+    assert!(!usable_edge_kick(true, &TunnelState::Up, true));
+    assert!(!usable_edge_kick(true, &TunnelState::ExternalUp, true));
+    // 会话活着不踢（好端端的会话不许被隧道事件顶掉）
+    assert!(!usable_edge_kick(false, &TunnelState::Up, false));
+    // 可用 → Down 不踢（断线沿另有死亡事件驱动）
+    assert!(!usable_edge_kick(true, &down, true));
+    // Down→Down 不踢
+    assert!(!usable_edge_kick(false, &down, true));
+    // usable 相表：Up/ExternalUp 可用，Starting/Down 不可用
+    assert!(usable(&TunnelState::Up));
+    assert!(usable(&TunnelState::ExternalUp));
+    assert!(!usable(&TunnelState::Starting));
+    assert!(!usable(&down));
 }

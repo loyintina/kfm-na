@@ -46,7 +46,7 @@
 | `src/tmux_ctl.rs` | 9 | 9 | 0 | — |
 | `src/tmux_exec.rs` | 1 | 0 | 1 | exec |
 | `src/trace.rs` | 12 | 8 | 4 | TRACE_CAP format_tail dump_all dump_tail |
-| `src/tunnel.rs` | 7 | 6 | 1 | request_reconnect |
+| `src/tunnel.rs` | 9 | 8 | 1 | request_reconnect |
 | `src/ui/accent.rs` | 6 | 6 | 0 | — |
 | `src/ui/ai_page.rs` | 7 | 7 | 0 | — |
 | `src/ui/cfg_page.rs` | 68 | 63 | 5 | DROPDOWN_ENTER_MS DROPDOWN_EXIT_MS DROPDOWN_PICK_SYNC_MS register_cfg_page cfg_page_handle |

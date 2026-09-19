@@ -86,6 +86,22 @@ pub fn state_word(st: &TunnelState) -> String {
     }
 }
 
+/// 传输可用相（A 档纯函数）：Up/ExternalUp 都是「本地口能走」——壳层
+/// 会话只管 127.0.0.1:9021 通不通，不问是谁供的口。
+pub fn usable(st: &TunnelState) -> bool {
+    matches!(st, TunnelState::Up | TunnelState::ExternalUp)
+}
+
+/// 隧道可用沿踢壳层重孵的裁决（A 档纯函数，BAR-117）：上一拍不可用 →
+/// 本拍可用 且 活跃会话死了 → 踢一脚。稳定在线（可用→可用）不踢
+/// （每圈踢 = 重孵风暴）；会话活着不踢；可用→Down 不踢。
+/// 病灶：重孵链是死亡事件驱动的，末次重孵撞 TCP refused（隧道未起）
+/// 被 5s 时间闸压住后再无死亡事件 = 链断，隧道 Up 不回头踢壳层，
+/// remote_dead 卡死到用户敲键。本函数是「隧道→壳层」的唯一联动门。
+pub fn usable_edge_kick(prev_usable: bool, curr: &TunnelState, session_over: bool) -> bool {
+    !prev_usable && usable(curr) && session_over
+}
+
 // ---- 数据面（UI 只读/按钮只写这两道门，绝不许碰锁内活物）----
 
 /// 全局快照门：supervisor 启动时登记，插件卡经 snap() 读。
