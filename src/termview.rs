@@ -3485,6 +3485,201 @@ impl TermView {
 
     /// 双池框涂装（十七修从 paint_cfg_dual_pool_impl 抽出的 Frame 版——
     /// Page 域平移时双池框随内容进 temp 双代同画；内卡反转 c2→c1）
+    /// 解析页内容涂装（tmux 插件 v1，2026-09-19）：页标题 + tmux 插件卡
+    /// （二级框，paint_rect_ring 同配方内卡反转 c2→c1）——卡头/会话行表
+    /// （本端附着行 = 选中功能框 + ●；行尾 ×）/ 命名行 / 确认带 / 按钮带
+    /// （均匀细框 paint_thin_frame，非池行场合的通用细框条款）。几何吃
+    /// ui/parser_page::layout——命中同一份（眼手同尺）；pt_off_x 语义同
+    /// paint_cfg_dual_pool（GLES 烘焙恒 0，softbuffer/值守传真值）
+    /// （会话表/附着/命名/确认任何变更都必触发重烘焙，漏维 = 鬼影）
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn paint_parser_content_impl(
+        &self,
+        buf: &mut [u32],
+        w: u32,
+        h: u32,
+        bottom_inset: u32,
+        pt_off_x: i32,
+        snap: &crate::ui::parser_page::ParserPageSnap,
+        accent: crate::ui::accent::AccentPair,
+    ) {
+        use crate::ui::parser_page as pp;
+        if w == 0 || h == 0 {
+            return;
+        }
+        let mut frame = Frame { buf, w, h };
+        let off = i64::from(pt_off_x);
+        let title_fg = 0x00D9_D9D9; // 0.85 白（§2.3 标题档）
+        let body_fg = 0x00BF_BFBF; // 0.75 白（正文档）
+        let meta_fg = 0x0080_8080; // 0.5 白（次级档）
+        let err_fg = 0x00E0_6060;
+        let denom = ((w - 1) + (h - 1)).max(1) as i64;
+        let no_clip = (0, i64::from(h));
+
+        // 页标题（首行布局区，与配置页标签行同位）
+        let (ox, oy) = crate::ui::tab_bar::content_origin();
+        self.draw_text_left(
+            &mut frame,
+            "解析 · tmux",
+            (ox as i64 + off) as u32,
+            w,
+            oy,
+            crate::ui::tab_bar::TAB_ROW_H,
+            36.0,
+            meta_fg,
+        );
+
+        let mode = if snap.naming.is_some() {
+            pp::Mode::Naming
+        } else if snap.confirming.is_some() {
+            pp::Mode::Confirming
+        } else {
+            pp::Mode::Normal
+        };
+        let lay = pp::layout(w, h, bottom_inset, snap.sessions.len(), mode);
+
+        // 卡环（二级框：内卡渐变反转 c2→c1，与双池同配方）
+        let (cox, _coy) = crate::ui::tab_bar::content_origin();
+        let clip_l = i64::from(cox) + off;
+        let clip_r =
+            i64::from(w) - i64::from(AI_PAGE_FRAME_MARGIN + AI_PAGE_FRAME_W + CELL_W) + off;
+        paint_rect_ring(
+            &mut frame,
+            lay.card.x + off,
+            lay.card.y,
+            lay.card.x + off + i64::from(lay.card.w),
+            lay.card.y + i64::from(lay.card.h),
+            clip_l,
+            clip_r,
+            crate::ui::accent::CARD_PAGE_BG,
+            accent.c2,
+            accent.c1,
+            POOL_FRAME_R,
+            true,
+        );
+
+        // 卡头（状态行）
+        let header_text = match &snap.status {
+            pp::Status::Ready => format!("tmux · {} 会话", snap.sessions.len()),
+            pp::Status::Loading => "tmux · 查询中…".to_string(),
+            pp::Status::Idle => "tmux · 待查询".to_string(),
+            pp::Status::Error(e) => format!("tmux · 错误: {e}"),
+        };
+        let header_fg = if matches!(snap.status, pp::Status::Error(_)) {
+            err_fg
+        } else {
+            title_fg
+        };
+        self.draw_text_left(
+            &mut frame,
+            &header_text,
+            (lay.header.x + off) as u32,
+            lay.header.w,
+            lay.header.y as u32,
+            lay.header.h,
+            36.0,
+            header_fg,
+        );
+
+        // 会话行表（Ready 且非空才有行；空表 = 卡头已说「0 会话」）
+        for (i, s) in snap.sessions.iter().zip(lay.rows.iter()) {
+            let (r, s) = (s, i);
+            let mine = snap.attached.as_deref() == Some(s.name.as_str());
+            if mine {
+                paint_row_frame(
+                    &mut frame,
+                    r.x + off,
+                    r.y,
+                    r.w,
+                    r.h,
+                    true,
+                    accent,
+                    denom,
+                    no_clip,
+                );
+            }
+            let mut text = s.name.clone();
+            if mine {
+                text = format!("● {text}");
+            }
+            let mut meta = format!("·{}窗", s.windows);
+            if s.attached && !mine {
+                meta.push_str("·他端");
+            }
+            let fg = if mine { title_fg } else { body_fg };
+            self.draw_text_left(
+                &mut frame,
+                &format!("{text} {meta}"),
+                (r.x + off) as u32,
+                r.w.saturating_sub(pp::KILL_W),
+                r.y as u32,
+                r.h,
+                34.0,
+                fg,
+            );
+            // 行尾 ×
+            let kx = r.x + off + i64::from(r.w) - i64::from(pp::KILL_W);
+            self.draw_text_centered(
+                &mut frame,
+                "×",
+                kx,
+                r.y,
+                pp::KILL_W,
+                r.h,
+                34.0,
+                meta_fg,
+                r.x + off,
+            );
+        }
+
+        // 命名行 / 确认带
+        if let (Some(nr), Some(text)) = (&lay.naming, &snap.naming) {
+            self.draw_text_left(
+                &mut frame,
+                &format!("名: {text}▌"),
+                (nr.x + off) as u32,
+                nr.w,
+                nr.y as u32,
+                nr.h,
+                34.0,
+                title_fg,
+            );
+        }
+        if let (Some(cr), Some(ci)) = (&lay.confirm, snap.confirming) {
+            let name = snap
+                .sessions
+                .get(ci)
+                .map(|s| s.name.as_str())
+                .unwrap_or("?");
+            self.draw_text_left(
+                &mut frame,
+                &format!("关闭 '{name}'？"),
+                (cr.x + off) as u32,
+                cr.w,
+                cr.y as u32,
+                cr.h,
+                34.0,
+                err_fg,
+            );
+        }
+
+        // 按钮带（均匀细框 + 居中标签；labels 与命中同一份表）
+        for (b, label) in lay.buttons.iter().zip(pp::button_labels(mode).iter()) {
+            paint_thin_frame(&mut frame, b.x + off, b.y, b.w, b.h, accent, denom, no_clip);
+            self.draw_text_centered(
+                &mut frame,
+                label,
+                b.x + off,
+                b.y,
+                b.w,
+                b.h,
+                34.0,
+                title_fg,
+                b.x + off,
+            );
+        }
+    }
+
     fn paint_pool_frames(
         &self,
         frame: &mut Frame<'_>,
@@ -5908,6 +6103,19 @@ pub trait TermEmu: Send {
         bottom_inset: u32,
         accent: crate::ui::accent::AccentPair,
     );
+    /// 解析页内容涂装（tmux 插件卡 v1）：几何 ui/parser_page（命中同源），
+    /// pt_off_x 语义同 paint_cfg_dual_pool；画在解析页底装修之上
+    #[allow(clippy::too_many_arguments)]
+    fn paint_parser_content(
+        &self,
+        buf: &mut [u32],
+        w: u32,
+        h: u32,
+        bottom_inset: u32,
+        pt_off_x: i32,
+        snap: &crate::ui::parser_page::ParserPageSnap,
+        accent: crate::ui::accent::AccentPair,
+    );
     /// 配置卡双池涂装（主题宪法 §五，2026-09-12）：上池/下池两个二级
     /// 卡片框（paint_rect_ring 同配方；内卡渐变反转 c2→c1，§三 多级
     /// 嵌套逐层反转）。cfg_off_x 语义同 paint_cfg_tab_bar；画在配置页
@@ -6198,6 +6406,19 @@ impl TermEmu for TermView {
         accent: crate::ui::accent::AccentPair,
     ) {
         TermView::paint_cfg_dual_pool_impl(self, buf, w, h, snap, cfg_off_x, accent)
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn paint_parser_content(
+        &self,
+        buf: &mut [u32],
+        w: u32,
+        h: u32,
+        bottom_inset: u32,
+        pt_off_x: i32,
+        snap: &crate::ui::parser_page::ParserPageSnap,
+        accent: crate::ui::accent::AccentPair,
+    ) {
+        TermView::paint_parser_content_impl(self, buf, w, h, bottom_inset, pt_off_x, snap, accent)
     }
     #[allow(clippy::too_many_arguments)]
     fn paint_tab_bar_layer(

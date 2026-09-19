@@ -16,3 +16,4 @@
 | cfg_page 配置页 | `ui/cfg_page.rs`（目录核+tab/modal 维+字段框动态宽度几何） | `termview::paint_cfg_pool_content_impl` | touch-in（池区手势槽，先量后锁 term→cfg_page） | cfg_page_spec 27 + termview_spec 字段行/动效预览钉 | CELL_* 网格标定 | docs/active/theme.md §五 + 设置页.md |
 | modal 跳框 | `ui/cfg_page.rs` modal 维 + `ui/modal.rs` 几何 | `termview::paint_modal_impl` | touch-in（模态手势槽吃下层） | modal_spec 10 | CELL_* 网格标定 | docs/active/theme.md §六 跳框 |
 | comp_registry 组件池 | `ui/comp_registry.rs`（常量表=唯一信息源） | 读表渲染（复用双池行+跳框） | — | comp_registry_spec 7（symbol 实存棘轮） | 无 | docs/active/theme.md §五 目录语义 7 |
+| parser_page 解析页 tmux 插件 | `ui/parser_page.rs`（会话表/命名/确认+几何命中） | `termview::paint_parser_content_impl` | touch-in（卡区手势槽）+ tmux_exec（短命 ws） | parser_page_spec 14 + tmux_ctl_spec 21 | CELL_* 网格标定 | docs/active/theme.md §六之九 解析页插件卡 |

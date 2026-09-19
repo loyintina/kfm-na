@@ -136,6 +136,19 @@ enum BarMenuAction {
     Paste,
 }
 
+/// tmux 执行种类（解析页插件在途账：Ok 后的善后按种类分流）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ParserExec {
+    /// 列会话（结果填表）
+    List,
+    /// 新建会话（结果 = 新会话名 → attach 过去）
+    New,
+    /// 关闭会话（结果无视 → 刷新列表）
+    Kill,
+    /// 重排窗口尺寸（结果无视 → 刷新列表）
+    Reflow,
+}
+
 /// 会话健康牌（断线重连 2026-08-21，按名字记账——槽位随切换翻面,
 /// 死活跟名字走）：dead = Failed/Exited 钉死、Opened 复活;
 /// connecting = 重连在途
@@ -293,6 +306,23 @@ struct App {
     /// 拖过 slop)。只在配置页靠泊在顶且起点在池区时建——点按抬手 =
     /// 下池行聚焦/触发器开合；拖过 slop = 手势归面板页全家（不聚焦）
     cfg_pool_touch: Option<(f64, f64, bool)>,
+    /// 解析页 tmux 插件状态核（2026-09-19 用户立项）：会话表/附着名/
+    /// 命名态/确认态。共享句柄注册给 gate 值守倒帧（与 cfg_page 同规）
+    parser_page: Option<crate::ui::parser_page::SharedParserPage>,
+    /// 按在解析页卡片上的手势（起点 x, 起点 y, 拖过 slop）——只在解析页
+    /// 靠泊在顶且起点在卡区时建；拖过 slop 让回面板页全家（cfg_pool 同规）
+    parser_touch: Option<(f64, f64, bool)>,
+    /// tmux 执行在途（动作类 + 结果通道）：about_to_wait 排水——Ok 后
+    /// List=填表 / New=attach 新会话 / Kill/Reflow=刷新列表
+    parser_exec: Option<(
+        ParserExec,
+        std::sync::mpsc::Receiver<Result<String, String>>,
+    )>,
+    /// 远程连接配置缓存（启动时装配 conn_provider 那份的 clone）——
+    /// tmux 执行通道的 ws url 与 attach 重开连接的命令来源
+    remote_conn_cfg: Option<crate::conn::ConnConfig>,
+    /// 本端当前附着的 tmux 会话名（启动命令提取/attach 后更新）
+    remote_attached: Option<String>,
     /// 跳框模态手势槽（宪法 §六 跳框条款，九修）：
     /// (起手x, 起手y, 已拖过slop)——模态开着时配置页手势全归它
     modal_touch: Option<(f64, f64, bool)>,
@@ -395,7 +425,8 @@ struct LayerSigs {
     over: crate::ui::stage::DirtyGuard<OverSig>,
     config: crate::ui::stage::DirtyGuard<ConfigSig>,
     filetree: crate::ui::stage::DirtyGuard<(u32, u32, u32, u32, u32, u32)>,
-    parser: crate::ui::stage::DirtyGuard<(u32, u32, u32, u32, u32, u32)>,
+    /// 解析槽：末维 = tmux 插件 epoch（2026-09-19 插件卡内容随槽同烘焙）
+    parser: crate::ui::stage::DirtyGuard<(u32, u32, u32, u32, u32, u32, u64)>,
     termcard: crate::ui::stage::DirtyGuard<(u32, u32, u32, u32)>,
     /// 标签栏层（BAR-096 拆槽）
     tabbar: crate::ui::stage::DirtyGuard<TabBarSig>,
@@ -1057,6 +1088,51 @@ impl App {
                             return;
                         }
                     }
+                    // 解析页 tmux 插件卡仲裁（2026-09-19）：解析页靠泊
+                    // （缝采样判据与配置页同规——过渡帧中不仲裁，手势归
+                    // 面板全家）且起点在卡区 → 手势归插件：点按抬手 =
+                    // 行切换/按钮/×；拖过 slop = 让回面板页（Moved 段）
+                    if panel_top == Some(crate::ai_presence::Panel::Parser)
+                        && crate::ui::seam::sample_parser_panel_offset_x(
+                            0.0,
+                            crate::report::boot_ms() as u64,
+                        ) as i32
+                            == 0
+                        && let (Some(page), Some((sw, sh))) = (&self.parser_page, self.screen_px())
+                    {
+                        let in_card = {
+                            let pg = page.lock().unwrap();
+                            let snap = pg.snap();
+                            let mode = if snap.naming.is_some() {
+                                crate::ui::parser_page::Mode::Naming
+                            } else if snap.confirming.is_some() {
+                                crate::ui::parser_page::Mode::Confirming
+                            } else {
+                                crate::ui::parser_page::Mode::Normal
+                            };
+                            let lay = crate::ui::parser_page::layout(
+                                sw,
+                                sh,
+                                self.chrome_inset() + self.cur_bar_h(),
+                                snap.sessions.len(),
+                                mode,
+                            );
+                            let c = &lay.card;
+                            let (xi, yi) = (x as i64, y as i64);
+                            xi >= c.x
+                                && xi < c.x + i64::from(c.w)
+                                && yi >= c.y
+                                && yi < c.y + i64::from(c.h)
+                        };
+                        if in_card {
+                            crate::report::report(
+                                "gest",
+                                &format!("起手→解析页卡区 ({x:.0},{y:.0})"),
+                            );
+                            self.parser_touch = Some((x, y, false));
+                            return;
+                        }
+                    }
                     // 手势追踪：第二指落在面板页会盖掉第一指的手势状态
                     // （panel_touch/panel_drag 单槽）——留痕取证
                     if self.panel_touch.is_some() {
@@ -1324,6 +1400,38 @@ impl App {
                         return;
                     }
                     self.cfg_pool_touch = Some(ct); // 未过 slop：槽放回去继续扣留
+                    return;
+                }
+                // 解析页卡区手势：与池区同规——起手槽只是点按候选扣留席，
+                // 拖过 slop 即让回面板页全家（横向锁/抽屉裁决才轮得到它）
+                if let Some(pt) = self.parser_touch.take() {
+                    if !pt.2
+                        && ((x - pt.0).abs() > crate::scroll::TAP_SLOP_PX
+                            || (y - pt.1).abs() > crate::scroll::TAP_SLOP_PX)
+                    {
+                        crate::report::report(
+                            "gest",
+                            &format!("解析页卡区手势让回面板页 ({x:.0},{y:.0})"),
+                        );
+                        self.panel_touch = Some(PanelTouch {
+                            start_x: pt.0,
+                            start_y: pt.1,
+                            last_y: y,
+                            acc_px: 0.0,
+                            dragged: true,
+                        });
+                        self.panel_drag = Some(crate::ui::panel_drag::PanelDrag::new(
+                            pt.0,
+                            pt.1,
+                            crate::report::boot_ms() as u64,
+                        ));
+                        if self.feed_panel_drag(x, y) {
+                            return;
+                        }
+                        self.dirty = true;
+                        return;
+                    }
+                    self.parser_touch = Some(pt); // 未过 slop：槽放回去继续扣留
                     return;
                 }
                 // 面板页手势：AI 页拖动 = 对话页滚行（像素级累积跟手，
@@ -1800,6 +1908,42 @@ impl App {
                             }
                         }
                     }
+                    return;
+                }
+                // 解析页卡区手势收尾（2026-09-19 tmux 插件）：未拖抬手 =
+                // 命中判定（几何吃 ui/parser_page::layout 同一份——眼手
+                // 同尺）：行 = 切换 attach / × = 开确认 / 按钮 = 动作分发；
+                // 拖过 slop / Cancelled = 零动作（Moved 段已让回面板页）
+                if let Some(pt) = self.parser_touch.take() {
+                    if phase == TouchPhase::Ended
+                        && !pt.2
+                        && let (Some(page), Some((sw, sh))) = (&self.parser_page, self.screen_px())
+                    {
+                        let (snap, hit_result) = {
+                            let pg = page.lock().unwrap();
+                            let snap = pg.snap();
+                            let mode = if snap.naming.is_some() {
+                                crate::ui::parser_page::Mode::Naming
+                            } else if snap.confirming.is_some() {
+                                crate::ui::parser_page::Mode::Confirming
+                            } else {
+                                crate::ui::parser_page::Mode::Normal
+                            };
+                            let lay = crate::ui::parser_page::layout(
+                                sw,
+                                sh,
+                                self.chrome_inset() + self.cur_bar_h(),
+                                snap.sessions.len(),
+                                mode,
+                            );
+                            let h = crate::ui::parser_page::hit(&lay, pt.0 as i64, pt.1 as i64);
+                            (snap, h.map(|hh| (hh, mode)))
+                        };
+                        if let Some((hh, mode)) = hit_result {
+                            self.parser_dispatch(snap, hh, mode);
+                        }
+                    }
+                    self.dirty = true;
                     return;
                 }
                 // 过 slop）= 输入栏失焦 + 收键盘——面板不是输入区，绝不穿透
@@ -2513,6 +2657,14 @@ impl App {
         self.switch_hotkey_bytes = term_cfg.switch_hotkey.bytes();
         self.terminal_cfg = term_cfg;
         self.settings_servers = servers;
+        // 解析页 tmux 插件：远程连接配置缓存（ws url + 启动命令）+ 本端
+        // 附着会话名（启动命令提取；attach 切换后更新）。无服务器条目 =
+        // None——插件显示占位（执行通道无处连）
+        self.remote_conn_cfg = default_idx.map(|_| conn_cfg.clone());
+        self.remote_attached = conn_cfg
+            .command
+            .as_deref()
+            .and_then(crate::tmux_ctl::session_name_of);
 
         // 插件基座：终端模拟器 + 连接 provider（边界手术第一/二刀）——
         // 「用哪个终端芯、连哪、怎么连」都不归主循环；工厂是服务，实例归调用方。
@@ -2614,6 +2766,19 @@ impl App {
             crate::ui::cfg_page::register_cfg_page(page.clone());
             self.cfg_page = Some(page);
             self.rebuild_cfg_rows();
+        }
+
+        // 解析页 tmux 插件状态核（2026-09-19）：共享句柄注册（gate 值守
+        // 倒帧同源）；附着名从启动命令提取喂入（attach 后由壳更新）
+        {
+            let page = std::sync::Arc::new(std::sync::Mutex::new(
+                crate::ui::parser_page::ParserPage::new(),
+            ));
+            page.lock()
+                .unwrap()
+                .set_attached(self.remote_attached.clone());
+            crate::ui::parser_page::register_parser_page(page.clone());
+            self.parser_page = Some(page);
         }
 
         // 全局输入栏插件（期 0 组件三）：状态核共享实例直挂 + 发送口装配。
@@ -3109,6 +3274,290 @@ impl App {
         }
     }
 
+    // ---- 解析页 tmux 插件（2026-09-19 用户立项：窗口管理器 + 重排钮）----
+
+    /// 命中动作分发（Ended 臂唯一入口；snap 是点按当时的快照——几何与
+    /// 行表同一份，动作不许拿新锁里的「可能已经刷新过」的行表对号入座）
+    fn parser_dispatch(
+        &mut self,
+        snap: crate::ui::parser_page::ParserPageSnap,
+        hit: crate::ui::parser_page::Hit,
+        mode: crate::ui::parser_page::Mode,
+    ) {
+        use crate::ui::parser_page as pp;
+        match hit {
+            pp::Hit::Session(i) => {
+                if let Some(name) = snap.sessions.get(i).map(|s| s.name.clone()) {
+                    crate::report::report("ui", &format!("tmux 插件点行: attach {name}"));
+                    self.parser_attach(name);
+                }
+            }
+            pp::Hit::Kill(i) => {
+                if let Some(p) = &self.parser_page {
+                    p.lock().unwrap().begin_confirm(i);
+                    crate::report::report("ui", &format!("tmux 插件点×: 确认行 {i}"));
+                }
+            }
+            pp::Hit::Button(i) => match pp::button_action(mode, i) {
+                Some(pp::Action::Reflow) => self.parser_reflow(),
+                Some(pp::Action::New) => {
+                    if let Some(p) = &self.parser_page {
+                        p.lock().unwrap().begin_naming();
+                    }
+                    if let Some(w) = &self.window {
+                        w.set_ime_allowed(true);
+                    }
+                    if let Some(insets) = &self.ime_insets {
+                        insets.force_show();
+                    }
+                    crate::report::report("ui", "tmux 插件: 命名态开（弹键盘）");
+                }
+                Some(pp::Action::Refresh) => self.parser_refresh(),
+                Some(pp::Action::NamingOk) => {
+                    let raw = self
+                        .parser_page
+                        .as_ref()
+                        .and_then(|p| p.lock().unwrap().naming_take());
+                    self.parser_ime_off();
+                    self.parser_new_submit(raw);
+                }
+                Some(pp::Action::NamingCancel) => {
+                    if let Some(p) = &self.parser_page {
+                        p.lock().unwrap().cancel_naming();
+                    }
+                    self.parser_ime_off();
+                    crate::report::report("ui", "tmux 插件: 命名取消");
+                }
+                Some(pp::Action::ConfirmOk) => {
+                    let target = self
+                        .parser_page
+                        .as_ref()
+                        .and_then(|p| p.lock().unwrap().confirm_target());
+                    if let Some(p) = &self.parser_page {
+                        p.lock().unwrap().cancel_confirm();
+                    }
+                    if let (Some(cfg), Some(name)) = (&self.remote_conn_cfg, target) {
+                        crate::report::report("ui", &format!("tmux 插件: 确认关闭 {name}"));
+                        self.parser_exec = Some((
+                            ParserExec::Kill,
+                            crate::tmux_exec::exec(
+                                cfg.url.clone(),
+                                crate::tmux_ctl::cmd_kill(&name),
+                            ),
+                        ));
+                    }
+                }
+                Some(pp::Action::ConfirmCancel) => {
+                    if let Some(p) = &self.parser_page {
+                        p.lock().unwrap().cancel_confirm();
+                    }
+                    crate::report::report("ui", "tmux 插件: 关闭取消");
+                }
+                None => {}
+            },
+        }
+        self.dirty = true;
+    }
+
+    fn parser_ime_off(&mut self) {
+        if let Some(w) = &self.window {
+            w.set_ime_allowed(false);
+        }
+        if let Some(insets) = &self.ime_insets {
+            insets.force_hide();
+        }
+    }
+
+    /// 列会话（插件数据唯一来源 = 服务器真表，nz P5 同规）：在途不叠
+    fn parser_refresh(&mut self) {
+        let Some(cfg) = &self.remote_conn_cfg else {
+            if let Some(p) = &self.parser_page {
+                p.lock().unwrap().set_error("无远程服务器配置".into());
+            }
+            return;
+        };
+        if self.parser_exec.is_some() {
+            return;
+        }
+        if let Some(p) = &self.parser_page {
+            p.lock().unwrap().set_loading();
+        }
+        self.parser_exec = Some((
+            ParserExec::List,
+            crate::tmux_exec::exec(cfg.url.clone(), crate::tmux_ctl::cmd_list()),
+        ));
+        self.dirty = true;
+    }
+
+    /// 重排：窗口尺寸钉到 na 当前网格（manual 即生效；largest/latest
+    /// 下 tmux 自动翻 manual——2026-09-19 服务器实证）
+    fn parser_reflow(&mut self) {
+        let (Some(cfg), Some(sess)) = (&self.remote_conn_cfg, self.remote_attached.clone()) else {
+            if let Some(p) = &self.parser_page {
+                p.lock().unwrap().set_error("重排需要本端已附着会话".into());
+            }
+            self.dirty = true;
+            return;
+        };
+        if self.parser_exec.is_some() {
+            return;
+        }
+        let (cols, rows) = self.last_grid;
+        crate::report::report("ui", &format!("tmux 插件: 重排 {sess} → {cols}x{rows}"));
+        self.parser_exec = Some((
+            ParserExec::Reflow,
+            crate::tmux_exec::exec(
+                cfg.url.clone(),
+                crate::tmux_ctl::cmd_reflow(&sess, cols, rows),
+            ),
+        ));
+        self.dirty = true;
+    }
+
+    /// 新建提交：None/空 = tmux 自动编号；非法字符 = 报错不执行
+    fn parser_new_submit(&mut self, raw: Option<String>) {
+        let raw = raw.unwrap_or_default();
+        let name = if raw.trim().is_empty() {
+            None
+        } else {
+            match crate::tmux_ctl::sanitize_name(&raw) {
+                Some(n) => Some(n),
+                None => {
+                    if let Some(p) = &self.parser_page {
+                        p.lock()
+                            .unwrap()
+                            .set_error("名字含非法字符（' | : ; 控制符）".into());
+                    }
+                    self.dirty = true;
+                    return;
+                }
+            }
+        };
+        let Some(cfg) = &self.remote_conn_cfg else {
+            return;
+        };
+        if self.parser_exec.is_some() {
+            return;
+        }
+        crate::report::report("ui", &format!("tmux 插件: 新建会话 {name:?}"));
+        self.parser_exec = Some((
+            ParserExec::New,
+            crate::tmux_exec::exec(cfg.url.clone(), crate::tmux_ctl::cmd_new(name.as_deref())),
+        ));
+        self.dirty = true;
+    }
+
+    /// attach 切换（nz P7 嵌套禁止的 na 落地：不重开客户端内 attach，
+    /// 而是关掉当前远程会话、按新命令重孵——复用断线重连同一条工序）：
+    /// P1 同规——已附着同名 = 零动作；非远程活跃 = 报错引导
+    fn parser_attach(&mut self, name: String) {
+        if self.remote_attached.as_deref() == Some(name.as_str()) {
+            crate::report::report("ui", &format!("tmux 插件: {name} 已附着，零动作"));
+            return;
+        }
+        let Some(p) = self.parser_page.clone() else {
+            return;
+        };
+        if self
+            .router_handle()
+            .map(|r| r.lock().unwrap().active_name())
+            != Some("remote")
+        {
+            p.lock()
+                .unwrap()
+                .set_error("先切到远程终端再切换会话".into());
+            self.dirty = true;
+            return;
+        }
+        let Some(cfg) = self.remote_conn_cfg.clone() else {
+            return;
+        };
+        // 关旧 → 新命令重孵（respawn_session 活跃臂同款工序）
+        if let Some(r) = self.router_handle() {
+            r.lock().unwrap().send(TermCmd::Close);
+        }
+        let new_cfg = ConnConfig {
+            url: cfg.url.clone(),
+            command: Some(crate::tmux_ctl::cmd_attach(&name)),
+        };
+        let handle = self
+            .base
+            .as_ref()
+            .and_then(|b| b.ctx().get::<dyn TermFactory>().ok())
+            .map(|f| f.spawn(&new_cfg));
+        let Some(h) = handle else {
+            crate::report::report_sync("term", "tmux 插件 attach 失败: 工厂取回不到");
+            p.lock()
+                .unwrap()
+                .set_error("attach 失败: 连接工厂不可用".into());
+            self.dirty = true;
+            return;
+        };
+        {
+            let health = self.health_mut("remote");
+            health.dead = false;
+            health.connecting = true;
+        }
+        if let Some(r) = self.router_handle() {
+            r.lock().unwrap().replace_active(h.outbound);
+        }
+        crate::gate::pump_register("remote", h.events);
+        self.session_over = false;
+        let (cols, rows) = self.last_grid;
+        if let Some(r) = self.router_handle() {
+            r.lock().unwrap().send(TermCmd::Resize { cols, rows });
+        }
+        self.remote_attached = Some(name.clone());
+        p.lock().unwrap().set_attached(Some(name.clone()));
+        if let Some(t) = self.term_handle() {
+            let banner = format!("\r\n\x1b[36m[kfm-na: 切换到 tmux 会话 {name}]\x1b[0m\r\n");
+            t.lock().unwrap().feed(banner.as_bytes());
+            t.lock().unwrap().scroll_to_bottom();
+        }
+        crate::report::report("ui", &format!("tmux 插件: attach {name} 重孵已发"));
+        self.dirty = true;
+        // 新会话列表重排口径可能变（active 窗换了）——顺手刷新
+        self.parser_refresh();
+    }
+
+    /// 执行排水（about_to_wait 每圈）：Ok 后按种类善后
+    fn parser_exec_done(&mut self, kind: ParserExec, res: Result<String, String>) {
+        match (kind, res) {
+            (ParserExec::List, Ok(out)) => {
+                let ss = crate::tmux_ctl::parse_session_list(&out);
+                crate::report::report("ui", &format!("tmux 插件: 会话表 {} 条", ss.len()));
+                if let Some(p) = &self.parser_page {
+                    p.lock().unwrap().set_sessions(ss);
+                }
+            }
+            (ParserExec::New, Ok(out)) => {
+                // -P -F 回打印的新会话名（首行）；拿到就 attach 过去
+                let name = out
+                    .lines()
+                    .map(str::trim)
+                    .find(|l| !l.is_empty())
+                    .unwrap_or("")
+                    .to_string();
+                crate::report::report("ui", &format!("tmux 插件: 新建落成 {name}"));
+                if !name.is_empty() {
+                    self.parser_attach(name);
+                } else {
+                    self.parser_refresh();
+                }
+            }
+            (ParserExec::Kill, Ok(_)) | (ParserExec::Reflow, Ok(_)) => {
+                self.parser_refresh();
+            }
+            (_, Err(e)) => {
+                crate::report::report("ui", &format!("tmux 插件: 执行失败 {e}"));
+                if let Some(p) = &self.parser_page {
+                    p.lock().unwrap().set_error(e);
+                }
+            }
+        }
+        self.dirty = true;
+    }
+
     /// 断线重连（2026-08-21 实拍：WS 退后台被掐 → 会话线程死 → 僵尸通道
     /// 静默吞输入）：给死会话 spawn 新实例，router 换心脏（出向）+ 泵同名
     /// 登记换入向通道。服务器侧 PTY 随 WS 断即杀（kfmv4 ws-server killAll），
@@ -3277,6 +3726,46 @@ impl App {
             std::sync::atomic::AtomicBool::new(false);
         if !FIRST_INJECT.swap(true, std::sync::atomic::Ordering::Relaxed) {
             crate::report::report("ime", "首个 JNI IME 文字注入");
+        }
+        // 解析页命名态分流（tmux 插件，2026-09-19）：键盘按键全归命名
+        // 行——Enter=提交、退格删字、Esc=取消（收键盘）；先于输入栏判
+        //（命名态不会与栏聚焦并存，但单一判定点不许靠「不会并存」）
+        if self
+            .parser_page
+            .as_ref()
+            .is_some_and(|p| p.lock().unwrap().naming_active())
+        {
+            for item in items {
+                match item {
+                    crate::ime_queue::Inject::Text(s) => {
+                        if let Some(p) = &self.parser_page {
+                            p.lock().unwrap().naming_push(&s);
+                        }
+                    }
+                    crate::ime_queue::Inject::Key(66) => {
+                        let raw = self
+                            .parser_page
+                            .as_ref()
+                            .and_then(|p| p.lock().unwrap().naming_take());
+                        self.parser_ime_off();
+                        self.parser_new_submit(raw);
+                    }
+                    crate::ime_queue::Inject::Key(67) => {
+                        if let Some(p) = &self.parser_page {
+                            p.lock().unwrap().naming_pop();
+                        }
+                    }
+                    crate::ime_queue::Inject::Key(111) => {
+                        if let Some(p) = &self.parser_page {
+                            p.lock().unwrap().cancel_naming();
+                        }
+                        self.parser_ime_off();
+                    }
+                    _ => {}
+                }
+            }
+            self.dirty = true;
+            return;
         }
         // 输入栏聚焦分流（期 0 组件三，§五 焦点二态）：键盘按键全归栏，
         // 不下终端——Enter=栏内换行（2026-09-04 用户拍板：发送只走 ▶ 钮/
@@ -3583,6 +4072,7 @@ impl App {
         tab_snap: Option<&crate::ui::tab_bar::TabBarSnap>,
         pool_snap: Option<&crate::ui::dual_pool::DualPoolSnap>,
         cfg_snap: Option<&crate::ui::cfg_page::CfgPageSnap>,
+        parser_snap: Option<&crate::ui::parser_page::ParserPageSnap>,
     ) -> Option<(u32, u32)> {
         // 分支判定唯一裁决处（panel_split/cfg_split/ft_split/pt_split）——softbuffer
         // 与 GLES 两路径都从这里取，分支语义漂移 = 眼手两张皮（BAR-063 级
@@ -3702,6 +4192,19 @@ impl App {
                             pt_off,
                             acc_of(crate::ai_presence::Panel::Parser),
                         );
+                        // tmux 插件卡内容（2026-09-19 v1）：兜底路径与
+                        // GLES 烘焙同源同参——刚体平移传真值 pt_off
+                        if let Some(psnap) = parser_snap {
+                            term.paint_parser_content(
+                                buf,
+                                w,
+                                h,
+                                bottom_inset,
+                                pt_off,
+                                psnap,
+                                acc_of(crate::ai_presence::Panel::Parser),
+                            );
+                        }
                     }
                 }
                 crate::ai_presence::Panel::Ai => {
@@ -3838,6 +4341,7 @@ impl App {
         tab_snap: Option<&crate::ui::tab_bar::TabBarSnap>,
         pool_snap: Option<&crate::ui::dual_pool::DualPoolSnap>,
         cfg_snap: Option<&crate::ui::cfg_page::CfgPageSnap>,
+        parser_snap: Option<&crate::ui::parser_page::ParserPageSnap>,
     ) -> Option<(u32, u32)> {
         let Some(term) = term else {
             buf.fill(KFM_PURPLE); // 字体全灭的降级画面：紫屏 + 已有上报
@@ -3870,6 +4374,7 @@ impl App {
             tab_snap,
             pool_snap,
             cfg_snap,
+            parser_snap,
         );
         let sending = ai_snap.is_some_and(|s| s.ai_running);
         Self::paint_over(
@@ -3977,6 +4482,7 @@ impl App {
         tab_snap: Option<&crate::ui::tab_bar::TabBarSnap>,
         pool_snap: Option<&crate::ui::dual_pool::DualPoolSnap>,
         cfg_snap: Option<&crate::ui::cfg_page::CfgPageSnap>,
+        parser_snap: Option<&crate::ui::parser_page::ParserPageSnap>,
         drag: Option<(crate::ai_presence::Panel, f32)>,
     ) -> Option<(u32, u32)> {
         let (w, h) = g.size();
@@ -4739,11 +5245,29 @@ impl App {
             crate::termview::paint_ft_page_chrome(px, w, h, bottom_inset, 0, acc_ft);
             g.slot_bake(crate::gles_present::ChromeSlot::FileTree);
         }
-        // 解析槽（§五B 四公民·三缘语义）：同规——画布恒靠泊位（pt_off=0）
-        if pt_visible && sigs.parser.feed((w, h, ime, bar_h, acc_pt.c1, acc_pt.c2)) {
+        // 解析槽（§五B 四公民·三缘语义）：同规——画布恒靠泊位（pt_off=0）。
+        // tmux 插件卡内容随槽同烘焙（2026-09-19 v1）——sig 加插件 epoch
+        // （会话表/附着/命名/确认任何变更都必触发重烘焙，漏维 = 鬼影）
+        let pt_epoch = parser_snap.map_or(0, |ps| ps.epoch);
+        if pt_visible
+            && sigs
+                .parser
+                .feed((w, h, ime, bar_h, acc_pt.c1, acc_pt.c2, pt_epoch))
+        {
             let px = g.slot_canvas(crate::gles_present::ChromeSlot::Parser);
             px.fill(0);
             crate::termview::paint_parser_page_chrome(px, w, h, bottom_inset, 0, acc_pt);
+            if let Some(psnap) = parser_snap {
+                term_arc.lock().unwrap().paint_parser_content(
+                    px,
+                    w,
+                    h,
+                    bottom_inset,
+                    0,
+                    psnap,
+                    acc_pt,
+                );
+            }
             g.slot_bake(crate::gles_present::ChromeSlot::Parser);
         }
         // AI 文字（每帧实例——消息/滚动/panel_off 逐帧变，永不进烘焙；
@@ -5223,6 +5747,8 @@ impl App {
             .cfg_page
             .as_ref()
             .map(|p| p.lock().unwrap().snap(cfg_now));
+        // 解析页 tmux 插件快照（涂装/命中同一份）：锁短——snap 即放
+        let parser_snap = self.parser_page.as_ref().map(|p| p.lock().unwrap().snap());
         // BAR-099 终点帧消费（状态驱动帧泵）：本帧若已贴死，渲染的是
         // 钳制后的精确终点态——账随帧消，帧泵下一圈停；活性翻 false
         // 那圈 BAR-098 补帧机制再产一帧回稳态单代（逐像素一致无感）。
@@ -5258,6 +5784,7 @@ impl App {
                 tab_snap.as_ref(),
                 pool_snap.as_ref(),
                 cfg_snap.as_ref(),
+                parser_snap.as_ref(),
                 self.panel_drag.as_ref().and_then(|d| {
                     let off = d.current_offset()?;
                     let p = match d.role()? {
@@ -5438,6 +5965,7 @@ impl App {
                 tab_snap.as_ref(),
                 pool_snap.as_ref(),
                 cfg_snap.as_ref(),
+                parser_snap.as_ref(),
             );
             // 布局写回视口状态机（眼手同尺：手势钳制与渲染同一份布局）
             if let (Some(chat), Some((total, fit))) = (&self.ai_chat, ai_layout) {
@@ -5578,6 +6106,18 @@ impl ApplicationHandler for App {
                         // Preedit（拼音候选中）尖刺期不上屏
                         Ime::Preedit(_, _) => {}
                         Ime::Commit(text) => {
+                            // 解析页命名态分流（tmux 插件，与 JNI 链同尺）
+                            if self
+                                .parser_page
+                                .as_ref()
+                                .is_some_and(|p| p.lock().unwrap().naming_active())
+                            {
+                                if let Some(p) = &self.parser_page {
+                                    p.lock().unwrap().naming_push(&text);
+                                }
+                                self.dirty = true;
+                                return;
+                            }
                             // 输入栏聚焦分流（winit IME 链与 JNI 链同尺）
                             if self.input_bar.as_ref().is_some_and(|b| b.is_focused()) {
                                 if let Some(bar) = &self.input_bar {
@@ -5643,6 +6183,37 @@ impl ApplicationHandler for App {
             self.check_orb_long_press(); // 光球长按 → fake_run(debug 钩子)
             self.check_inputbar_long_press(); // 输入栏长按 → 选择模式(BAR-046)
             self.poll_ai_presence(); // AI 外显快照比对(注入/到期也要画帧)
+            // tmux 插件（2026-09-19）：执行排水 + 解析页在栈且从未查询
+            // 时的首查（Idle 一次性闸——Loading/Ready 都不会在这反复发）
+            let exec_done = self
+                .parser_exec
+                .as_ref()
+                .and_then(|(kind, rx)| match rx.try_recv() {
+                    Ok(res) => Some((*kind, res)),
+                    Err(std::sync::mpsc::TryRecvError::Empty) => None,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        Some((*kind, Err("执行线程断线".to_string())))
+                    }
+                });
+            if let Some((kind, res)) = exec_done {
+                self.parser_exec = None;
+                self.parser_exec_done(kind, res);
+            }
+            let parser_docked = self
+                .last_ai_snap
+                .is_some_and(|s| s.top == Some(crate::ai_presence::Panel::Parser));
+            if parser_docked
+                && self.remote_conn_cfg.is_some()
+                && self.parser_exec.is_none()
+                && self.parser_page.as_ref().is_some_and(|p| {
+                    matches!(
+                        p.lock().unwrap().status(),
+                        crate::ui::parser_page::Status::Idle
+                    )
+                })
+            {
+                self.parser_refresh();
+            }
             self.poll_input_bar(); // 输入栏快照比对(注入/分流也要画帧)
             // 采样缝动画帧时钟(ui-base §四 按需启停):缝上有活跃动画
             // 且距上帧 ≥16ms 才置脏——无动画零额外帧,有动画 ≤60fps
