@@ -89,8 +89,10 @@ else
     # ⑥ 冒烟回归(调试闸门.md §十四):热更刚重启过,SKIP_RESTART 直接判
     # 当前 boot。挂了不拦热更(核心已就位),但报表必须看——挂 = 这次
     # 热更可能带回了已销案的病
+    # 名单无 BAR-040(2026-09-19 起):它的前提是「首屏=local shell 横幅」,
+    # 默认启动已改 attach kfm-na tmux(用户拍板),首屏永远没横幅=必挂
     echo "=== ⑥ 冒烟回归(挂了不拦热更,但要看) ==="
     SKIP_RESTART=1 bash "$(dirname "$0")/na-regress.sh" \
-        PIN-boot PIN-signal BAR-040 \
+        PIN-boot PIN-signal \
         || echo "⚠️ 冒烟有挂卷——对照上面报表查案卷" >&2
 fi
