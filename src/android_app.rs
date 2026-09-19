@@ -2178,13 +2178,17 @@ impl App {
         let Some(px) = insets.ime_bottom_px() else {
             return;
         };
-        if px != self.ime_bottom_px {
-            crate::report::report("ime", &format!("键盘 inset 变化: {px}px"));
-            self.ime_bottom_px = px;
-            if let Some(w) = &self.window {
-                let s = w.inner_size();
-                self.apply_window_size(s.width, s.height);
-            }
+        // BAR-112：窗口死了不记账——挂起态记账不重算 = kb_shift 卡死半屏；
+        // 留旧值待回前台同差再判（变更臂必带 apply_window_size 重算）
+        let Some(px) = crate::insets::on_inset_poll(px, self.ime_bottom_px, self.window.is_some())
+        else {
+            return;
+        };
+        crate::report::report("ime", &format!("键盘 inset 变化: {px}px"));
+        self.ime_bottom_px = px;
+        if let Some(w) = &self.window {
+            let s = w.inner_size();
+            self.apply_window_size(s.width, s.height);
         }
     }
 
@@ -6107,6 +6111,11 @@ impl ApplicationHandler for App {
             }
             // 字体全灭走紫屏降级也要有首帧：dirty 兜底置位
             self.dirty = true;
+            // BAR-112：后台往返后强制重算一次几何（幂等——尺寸没变不抖 pty
+            // 3049 判等闸；sync_kb_shift 重算零成本）：挂起期漏算的
+            // inset/kb_shift 在此归位，系统不发 Resized 事件也不怕
+            let sz = window.inner_size();
+            self.apply_window_size(sz.width, sz.height);
         }
         log::info!("KFM-NA 壳启动完成");
         // 首帧快路(2026-08-21 落地):表面建成+终端就绪即主动画第一帧,

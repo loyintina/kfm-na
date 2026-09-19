@@ -22,6 +22,15 @@
 /// 家在 insets 而非 android_app：后者 cfg(android) 考题够不着
 pub const IME_POLL_MS: u64 = 100;
 
+/// 轮询变更裁决（BAR-112，2026-09-19 用户真机报「视口只有半屏，重排没用」）：
+/// 值变了才记账+重算（防抖），但**窗口死了不记账**——挂起态轮询把新值记了
+/// 却跳过重算（apply_window_size 要窗口），回前台后新旧值相等再也检测不到
+/// 变化 → kb_shift 卡死在键盘弹起态 = 视口半屏。不记账留旧值，回前台同差
+/// 再判（窗口活着时变更臂必带重算）。
+pub fn on_inset_poll(px: u32, current: u32, has_window: bool) -> Option<u32> {
+    (px != current && has_window).then_some(px)
+}
+
 /// 键盘来源服务（服务键 `dyn ImeInsets`，共享实例直挂）。
 /// 生产 = JniInsets（JNI 直调 WindowInsets）；考题 = 假实现。
 pub trait ImeInsets: Send + Sync {
