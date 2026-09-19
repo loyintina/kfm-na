@@ -35,6 +35,7 @@ pub mod theme;
 pub mod tmux_ctl;
 pub mod tmux_exec;
 pub mod trace;
+pub mod tunnel;
 pub mod ui;
 pub mod vsync_book;
 

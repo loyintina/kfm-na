@@ -328,6 +328,9 @@ struct App {
     remote_conn_cfg: Option<crate::conn::ConnConfig>,
     /// 本端当前附着的 tmux 会话名（启动命令提取/attach 后更新）
     remote_attached: Option<String>,
+    /// L3 内置 ssh 正连隧道快照（2026-09-19 用户拍板：通道收归 na 自持，
+    /// 取代 Termux 外挂隧道）——Some = 看门狗已起，UI/报表只读这份
+    tunnel_snap: Option<std::sync::Arc<std::sync::Mutex<crate::tunnel::TunnelSnap>>>,
     /// 解析页靠泊上一圈状态（BAR-115：靠泊上升沿 = 重开页 → 重列会话。
     /// Idle 一次性闸只补首查，Ready 后重开页不刷 = 服务器侧 tmux 会话
     /// 增删永远看不见——「开页自动刷」设计口径的实际破洞）
@@ -2779,6 +2782,21 @@ impl App {
             .command
             .as_deref()
             .and_then(crate::tmux_ctl::session_name_of);
+
+        // L3 内置 ssh 正连隧道（2026-09-19 用户拍板：运行时通道收归 na
+        // 自持，取代 Termux 外挂 ssh -L；让位/接管语义与看门狗在
+        // tunnel.rs）。有服务器条目 + L3 prefix 就绪才起；缺件不静默
+        let tunnel_srv = default_idx
+            .and_then(|i| self.settings_servers.get(i))
+            .cloned();
+        self.tunnel_snap = tunnel_srv.and_then(|srv| {
+            let prefix = crate::local_pty::android_prefix();
+            if !crate::bootstrap::prefix_ready(&prefix) {
+                crate::report::report("tunnel", "L3 prefix 未装，隧道不启动（装好 L3 后重开 app）");
+                return None;
+            }
+            Some(crate::tunnel::start(prefix, srv.clone()))
+        });
 
         // 插件基座：终端模拟器 + 连接 provider（边界手术第一/二刀）——
         // 「用哪个终端芯、连哪、怎么连」都不归主循环；工厂是服务，实例归调用方。
