@@ -12,7 +12,9 @@
 //!   吞并后的标题行起 = tmux 插件卡（二级框，动态高 = 内容定，上限池区）：
 //!     卡头行（「tmux · N 会话」/ 状态行）→ 会话框表（**一行两框**，
 //!     每框 = 三级框行主形态全包框双色渐变，内容只有 名字+×——
-//!     「·N窗/·他端」meta 2026-09-19 用户拍板撤）→
+//!     「·N窗/·他端」meta 2026-09-19 用户拍板撤；**可见窗上限 6 框**，
+//!     超出内部滚动：框全量发出 + scroll 平移 + list_clip 裁/判）→
+//!     **分隔线**（同日拍板：正渐变 c1→c2 底线家变异，非交互件）→
 //!     命名行（命名态）→ 按钮带（常态 [重排][新窗]——↻ 刷新钮同日撤：
 //!     列会话本就在开页/操作后自动刷，手动冗余；命名态 [确定][取消]）。
 //!   关闭确认 = **跳框模态**（同日拍板：防误触，取代卡内确认带）——
@@ -42,6 +44,14 @@ pub const CARD_PAD_V: u32 = CELL_H;
 pub const CARD_PAD_H: u32 = CELL_W * 2;
 /// 框尾 × 命中宽
 pub const KILL_W: u32 = CELL_W * 4;
+/// 分隔线带高（会话框表与按钮带之间，线体在带内垂直居中）
+/// ——2026-09-19 用户拍板：分隔线 = 底线家变异（正渐变 c1→c2 横向）
+pub const DIVIDER_ZONE: u32 = CELL_H;
+/// 分隔线线体厚
+pub const DIVIDER_H: u32 = 2;
+/// 会话框表可见行上限（一行两框 × 3 行 = 6 框；超出内部滚动，
+/// 同日用户拍板取代「超池区截断看不见」挂账）
+pub const MAX_VISIBLE_LINES: u32 = 3;
 
 /// 卡片模式（按钮带语义随模式换；Confirming = 跳框模态在，卡区按钮不画
 /// 不可点——模态屏蔽）
@@ -100,23 +110,33 @@ pub fn button_action(mode: Mode, i: usize) -> Option<Action> {
 pub struct Layout {
     pub card: PoolRect,
     pub header: PoolRect,
-    /// 会话框（一行两框，按行主序排：偶数左列、奇数右列）
+    /// 会话框（一行两框，按行主序排：偶数左列、奇数右列）——**全量**
+    /// 发出（y 已减 eff_scroll），可见性靠 list_clip 裁/判
     pub rows: Vec<PoolRect>,
+    /// 会话表与按钮带之间的分隔线（带内居中线体）
+    pub divider: PoolRect,
     pub naming: Option<PoolRect>,
     pub buttons: Vec<PoolRect>,
-    /// 可见框数（卡片高超池区时截断——v1 不滚动，超出会话看不着，
-    /// 挂账：会话 >max_visible 时加滚动）
+    /// 会话框表纵裁剪带（涂装断墨/命中闸门同一份）：滚动后画出
+    /// 带外的框不许显、不许点
+    pub list_clip: (i64, i64),
+    /// 滚动上限（总内容高超可见窗的部分；0 = 不可滚）
+    pub scroll_max: i64,
+    /// 可见窗容量（框数）= min(会话数, 可见行×2)——信息位，考题用
     pub visible_rows: usize,
 }
 
 /// 布局纯函数：卡片外区 = 双池同一池区（标题下 1 格起）；卡高 = 内容
-/// 定、上限池区高；可见框数按剩余高度截（一行两框）
+/// 定、上限池区高。会话框表可见行 ≤ MAX_VISIBLE_LINES（6 框），超出
+/// 内部滚动：scroll 为像素位移（壳手势喂入），本函数内部 clamp 后
+/// 几何吃 eff_scroll——眼手同尺，钳制语义唯一
 pub fn layout(
     screen_w: u32,
     screen_h: u32,
     bottom_inset: u32,
     n_sessions: usize,
     mode: Mode,
+    scroll: i64,
 ) -> Layout {
     let area = dual_pool::pool_area(screen_w, screen_h, bottom_inset);
     // 页标题已撤（2026-09-19 用户拍板）：卡区上吞标题行高 TAB_ROW_H，
@@ -131,16 +151,25 @@ pub fn layout(
         Mode::Normal | Mode::Confirming => 0,
         Mode::Naming => ROW_H + ROW_GAP,
     };
-    let fixed = CARD_PAD_V * 2 + ROW_H + ROW_GAP + extra + BTN_H;
     let stride = BOX_H + ROW_GAP;
+    // 卡高账：PAD_V·2 + 头 ROW_H + ROW_GAP + 可见行区 + 分隔线带 +
+    // extra + 钮 BTN_H；可见行区 = stride·L − ROW_GAP（末行下不留行距）
+    let fixed = CARD_PAD_V * 2 + ROW_H + DIVIDER_ZONE + extra + BTN_H;
     let max_lines = if area.h > fixed {
-        ((area.h - fixed + ROW_GAP) / stride).max(1) as usize
+        ((area.h - fixed) / stride).max(1)
     } else {
         1
     };
-    let visible_boxes = n_sessions.min(max_lines * 2);
-    let visible_lines = visible_boxes.div_ceil(2);
-    let content_h = fixed + stride * visible_lines as u32;
+    let cap_lines = max_lines.min(MAX_VISIBLE_LINES);
+    let total_lines = n_sessions.div_ceil(2) as u32;
+    // 可见窗高 = min(容量, 实际行数)——卡高随内容缩；滚动上限 =
+    // 总内容高超可见窗的部分
+    let used_lines = cap_lines.min(total_lines);
+    let visible_h = stride.saturating_mul(used_lines).saturating_sub(ROW_GAP);
+    let total_h = stride.saturating_mul(total_lines).saturating_sub(ROW_GAP);
+    let scroll_max = i64::from(total_h.saturating_sub(visible_h));
+    let eff_scroll = scroll.clamp(0, scroll_max);
+    let content_h = fixed + visible_h + ROW_GAP;
     let card_h = content_h.min(area.h);
     let card = PoolRect {
         x: area.x,
@@ -158,18 +187,27 @@ pub fn layout(
         h: ROW_H,
     };
     y += i64::from(ROW_H + ROW_GAP);
+    let list_top = y;
+    let list_clip = (list_top, list_top + i64::from(visible_h));
     let bw = cw.saturating_sub(COL_GAP) / 2;
-    let mut rows = Vec::with_capacity(visible_boxes);
-    for i in 0..visible_boxes {
+    let mut rows = Vec::with_capacity(n_sessions);
+    for i in 0..n_sessions {
         let (line, col) = (i / 2, i % 2);
         rows.push(PoolRect {
             x: cx + (bw + COL_GAP) as i64 * col as i64,
-            y: y + stride as i64 * line as i64,
+            y: list_top + stride as i64 * line as i64 - eff_scroll,
             w: bw,
             h: BOX_H,
         });
     }
-    y += i64::from(stride) * visible_lines as i64;
+    y += i64::from(visible_h);
+    let divider = PoolRect {
+        x: cx,
+        y: y + i64::from(DIVIDER_ZONE - DIVIDER_H) / 2,
+        w: cw,
+        h: DIVIDER_H,
+    };
+    y += i64::from(DIVIDER_ZONE);
     let naming = (mode == Mode::Naming).then(|| {
         let r = PoolRect {
             x: cx,
@@ -177,7 +215,7 @@ pub fn layout(
             w: cw,
             h: ROW_H,
         };
-        y += i64::from(stride);
+        y += i64::from(ROW_H + ROW_GAP);
         r
     });
     let labels = button_labels(mode);
@@ -197,9 +235,12 @@ pub fn layout(
         card,
         header,
         rows,
+        divider,
         naming,
         buttons,
-        visible_rows: visible_boxes,
+        list_clip,
+        scroll_max,
+        visible_rows: n_sessions.min(used_lines as usize * 2),
     }
 }
 
@@ -266,6 +307,11 @@ pub fn hit(l: &Layout, x: i64, y: i64, screen_w: u32, screen_h: u32, mode: Mode)
         return Some(Hit::ModalDismiss);
     }
     for (i, r) in l.rows.iter().enumerate() {
+        // 纵裁剪带外的框不许点（滚动后画出带上沿/下沿的半框只显不点
+        // 会误触——命中闸门与涂装断墨同一份 list_clip，眼手同尺）
+        if y < l.list_clip.0 || y >= l.list_clip.1 {
+            continue;
+        }
         if inside(r) {
             // 框尾 × 带 = Kill；其余 = Session
             if x >= r.x + i64::from(r.w) - i64::from(KILL_W) {
@@ -302,6 +348,9 @@ pub struct ParserPage {
     naming: Option<String>,
     /// 关闭确认目标（sessions 下标）
     confirming: Option<usize>,
+    /// 会话框表滚动位移（像素，≥0；上限 = layout().scroll_max——
+    /// 几何侧另有一道 clamp，状态侧脏值不伤眼手同尺）
+    scroll: i64,
     epoch: u64,
 }
 
@@ -313,6 +362,7 @@ pub struct ParserPageSnap {
     pub attached: Option<String>,
     pub naming: Option<String>,
     pub confirming: Option<usize>,
+    pub scroll: i64,
     pub epoch: u64,
 }
 
@@ -330,6 +380,7 @@ impl ParserPage {
             attached: None,
             naming: None,
             confirming: None,
+            scroll: 0,
             epoch: 0,
         }
     }
@@ -442,6 +493,30 @@ impl ParserPage {
         self.attached.as_deref()
     }
 
+    pub fn scroll(&self) -> i64 {
+        self.scroll
+    }
+
+    /// 列表滚动（壳手势喂增量；max 吃 layout().scroll_max——壳每次
+    /// 用当下几何算，状态核不揣屏寸）。变了才 bump（sig 鬼影纪律）
+    pub fn scroll_by(&mut self, dy: i64, max: i64) {
+        let ns = (self.scroll + dy).clamp(0, max.max(0));
+        if ns != self.scroll {
+            self.scroll = ns;
+            self.bump();
+        }
+    }
+
+    /// 行表刷新后钳回上限（会话变少 max 缩，壳拿新 layout 的
+    /// scroll_max 调；变了才 bump）
+    pub fn clamp_scroll(&mut self, max: i64) {
+        let ns = self.scroll.clamp(0, max.max(0));
+        if ns != self.scroll {
+            self.scroll = ns;
+            self.bump();
+        }
+    }
+
     pub fn epoch(&self) -> u64 {
         self.epoch
     }
@@ -453,6 +528,7 @@ impl ParserPage {
             attached: self.attached.clone(),
             naming: self.naming.clone(),
             confirming: self.confirming,
+            scroll: self.scroll,
             epoch: self.epoch,
         }
     }

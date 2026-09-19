@@ -59,6 +59,8 @@ pub enum Preview {
     /// 底线组件：模式①自身反转渐变细线（c2→c1；模式②配合标签纯色
     /// 在 TabChip 预览里展出）
     Underline,
+    /// 分隔线：正渐变 c1→c2 横向 2px 线体（底线家变异，卡内语义区断层）
+    Divider,
     /// 下拉面板：触发器（三级框）+ 圆角深底下弹 panel（选中项均匀细框）
     Dropdown,
     /// 字段标签列：标签（36 亮+提亮背衬）+ 值框（30 灰）mini 行
@@ -202,6 +204,17 @@ pub const COMPONENTS: &[CompEntry] = &[
         tests: "tests/tab_bar_spec.rs",
         desc: "标签行下缘紧挨的 1px 细线，池区同宽。两模式：自身反转渐变（c2→c1，留档）/配合标签 = 选中标签 c2 纯色（配置页采用，与选中块下 1/3 同色一体）。空态也画。BAR-096：随标签栏独立成小画布层，span 由壳层每帧喂（层画布不知屏高/键盘 inset）。",
         preview: Preview::Underline,
+    },
+    CompEntry {
+        name: "分隔线",
+        cat: "组件",
+        status: CompStatus::Active,
+        symbol: "paint_divider_line",
+        file: "src/termview.rs",
+        spec: "宪法 §四 底线家变异（2026-09-19 用户拍板）",
+        tests: "tests/parser_page_spec.rs",
+        desc: "卡内两个语义区之间的断层线：正渐变 c1→c2 横向 2px 线体（底线家变异——底线自身模式是反转渐变 c2→c1 1px；分隔线方向掉转、厚度加倍）。现役于解析页 tmux 卡：会话框表 | 按钮带之间。几何吃 parser_page::layout 的 divider 位（带高一格、线体带内垂直居中），涂装/命中同一份。",
+        preview: Preview::Divider,
     },
     CompEntry {
         name: "下拉面板",

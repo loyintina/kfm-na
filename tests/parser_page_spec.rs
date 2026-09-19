@@ -1,21 +1,27 @@
 //! parser_page_spec.rs — 解析页 tmux 插件核考题（A 档：几何/命中/状态机）
 //!
 //! 判卷维度：
-//! - layout：卡片在池区内、动态高 = 内容定、上限截断可见框；**一行两框**
-//!   （2026-09-19 用户拍板：框 = 三级框行主形态双色渐变，内容只有
-//!   名字+×，meta「·N窗/·他端」撤）；常态按钮带 = [重排][新窗]
-//!   （↻ 刷新撤——列会话开页/操作后自动刷，手动冗余）；命名态
-//!   [确定][取消]；确认态走跳框模态（卡区无按钮无确认带）
+//! - layout：卡片在池区内、动态高 = 内容定；**一行两框**（2026-09-19
+//!   用户拍板：框 = 三级框行主形态双色渐变，内容只有 名字+×，meta
+//!   「·N窗/·他端」撤）；常态按钮带 = [重排][新窗]（↻ 刷新撤——列会话
+//!   开页/操作后自动刷，手动冗余）；命名态 [确定][取消]；确认态走跳框
+//!   模态（卡区无按钮无确认带）；**分隔线**（同日拍板：正渐变 c1→c2
+//!   底线家变异）在会话表与按钮带之间、非交互件；**可见窗上限 6 框**
+//!   （同日拍板：超出内部滚动——框全量发出 + scroll 平移 + list_clip
+//!   裁/判，scroll 钳制语义唯一在 layout）
 //! - 跳框几何：confirm_card 居中、双钮在卡内不重叠、高 2 格框行纪律
 //! - hit：框命中（本体=Session / 框尾 × 带=Kill，两列都要）、按钮命中、
 //!   卡外=None；确认态只认跳框（钮/卡内吞/卡外 Dismiss，卡区全屏蔽）；
-//!   命中与涂装吃同一份 Layout（眼手同尺的本体）
+//!   **滚动后 list_clip 带外的框只显不点**；命中与涂装吃同一份 Layout
+//!   （眼手同尺的本体）
 //! - 状态机：set_sessions 收确认态防下标悬空；epoch 凡变更必 +1
-//!   （涂装 sig 靠它——漏 bump = 鬼影）；命名/确认模式流转
+//!   （涂装 sig 靠它——漏 bump = 鬼影）；命名/确认模式流转；
+//!   scroll_by/clamp_scroll 钳 [0, max]、没变不 bump
 //!
 //! 变异抽检方向：两列框宽忘减 COL_GAP（右列出卡）、hit 框尾 × 带判据
 //! 改 >（少 1px）、跳框卡外命中退化为 None（点外取消死）、
-//! set_sessions 忘收 confirming——本文件必须红。
+//! set_sessions 忘收 confirming、hit 漏 list_clip 闸（滚动后点中
+//! 隐框）、scroll 钳制漏 max（拖穿底）——本文件必须红。
 
 use kfm_na::tmux_ctl::TmuxSession;
 use kfm_na::ui::parser_page::{
@@ -41,7 +47,7 @@ fn ss(names: &[&str]) -> Vec<TmuxSession> {
 
 #[test]
 fn spec_layout_卡片在池区内() {
-    let l = parser_page::layout(W, H, INSET, 3, Mode::Normal);
+    let l = parser_page::layout(W, H, INSET, 3, Mode::Normal, 0);
     let area = kfm_na::ui::dual_pool::pool_area(W, H, INSET);
     // 页标题撤后卡区上吞 TAB_ROW_H（2026-09-19 用户拍板）：卡顶 = 池区顶
     // 减一行标签高，卡高上限同步放大
@@ -58,7 +64,7 @@ fn spec_layout_卡片在池区内() {
 fn spec_layout_两列框行() {
     // 4 会话 = 两行两列；框高 = 2 格（宪法三级框行最小高）；框宽 =
     // (内容宽 − 列距) / 2；右列左缘 = 左列右缘 + COL_GAP；框都在卡内
-    let l = parser_page::layout(W, H, INSET, 4, Mode::Normal);
+    let l = parser_page::layout(W, H, INSET, 4, Mode::Normal, 0);
     assert_eq!(l.rows.len(), 4);
     let stride = (parser_page::BOX_H + parser_page::ROW_GAP) as i64;
     let b0 = &l.rows[0];
@@ -87,15 +93,15 @@ fn spec_layout_两列框行() {
         assert!(r.y >= l.card.y && r.y + r.h as i64 <= l.card.y + l.card.h as i64);
     }
     // 奇数会话：末行只有左列一框
-    let l3 = parser_page::layout(W, H, INSET, 3, Mode::Normal);
+    let l3 = parser_page::layout(W, H, INSET, 3, Mode::Normal, 0);
     assert_eq!(l3.rows.len(), 3);
     assert_eq!(l3.rows[2].x, l3.rows[0].x);
 }
 
 #[test]
 fn spec_layout_动态高随内容长() {
-    let l2 = parser_page::layout(W, H, INSET, 2, Mode::Normal);
-    let l5 = parser_page::layout(W, H, INSET, 5, Mode::Normal);
+    let l2 = parser_page::layout(W, H, INSET, 2, Mode::Normal, 0);
+    let l5 = parser_page::layout(W, H, INSET, 5, Mode::Normal, 0);
     assert!(l5.card.h > l2.card.h, "5 框卡必须比 2 框卡高");
 }
 
@@ -104,12 +110,12 @@ fn spec_layout_模式按钮带() {
     assert_eq!(button_labels(Mode::Normal), ["重排", "新窗"]);
     assert_eq!(button_labels(Mode::Naming), ["确定", "取消"]);
     assert!(button_labels(Mode::Confirming).is_empty()); // 确认走跳框，卡区无钮
-    let ln = parser_page::layout(W, H, INSET, 1, Mode::Naming);
+    let ln = parser_page::layout(W, H, INSET, 1, Mode::Naming, 0);
     assert!(ln.naming.is_some());
     assert_eq!(ln.buttons.len(), 2);
     // 确认态 = 卡按 Normal 几何（跳框模态不占卡高）
-    let lc = parser_page::layout(W, H, INSET, 1, Mode::Confirming);
-    let lnor = parser_page::layout(W, H, INSET, 1, Mode::Normal);
+    let lc = parser_page::layout(W, H, INSET, 1, Mode::Confirming, 0);
+    let lnor = parser_page::layout(W, H, INSET, 1, Mode::Normal, 0);
     assert!(lc.naming.is_none());
     assert!(lc.buttons.is_empty());
     assert_eq!(lc.card.h, lnor.card.h, "确认态卡高 = 常态（跳框不占卡高）");
@@ -138,7 +144,7 @@ fn spec_layout_跳框几何() {
 #[test]
 fn spec_layout_按钮互不重叠且在卡内() {
     for mode in [Mode::Normal, Mode::Naming] {
-        let l = parser_page::layout(W, H, INSET, 2, mode);
+        let l = parser_page::layout(W, H, INSET, 2, mode, 0);
         for (i, b) in l.buttons.iter().enumerate() {
             assert!(b.x >= l.card.x, "{mode:?} 钮{i} 左出卡");
             assert!(
@@ -158,22 +164,117 @@ fn spec_layout_按钮互不重叠且在卡内() {
 }
 
 #[test]
-fn spec_layout_超池区截断可见框() {
+fn spec_layout_超高截窗内部滚动() {
     // 小屏高塞 100 会话：卡高不许越池区（吞标题行后的放大池区），
-    // 可见框数截断（一行两框 = 偶数）
-    let l = parser_page::layout(600, 900, INSET, 100, Mode::Normal);
+    // 框全量发出（滚动可见性靠 list_clip），scroll_max > 0 可滚
+    let l = parser_page::layout(600, 900, INSET, 100, Mode::Normal, 0);
     let area = kfm_na::ui::dual_pool::pool_area(600, 900, INSET);
     assert!(l.card.h <= area.h + kfm_na::ui::tab_bar::TAB_ROW_H);
-    assert_eq!(l.rows.len(), l.visible_rows);
+    assert_eq!(l.rows.len(), 100, "框全量发出，滚动裁窗不截表");
+    assert!(l.scroll_max > 0, "内容超高 = 可滚");
     assert!(l.visible_rows < 100);
     assert!(l.visible_rows >= 1);
+}
+
+#[test]
+fn spec_layout_上限六框与滚动几何() {
+    // 10 会话 = 5 行：可见窗硬上限 3 行（6 框），卡高按 3 行账；
+    // scroll_max = 超出的 2 行；scroll 平移框 y；超 max 钳到 max
+    let l = parser_page::layout(W, H, INSET, 10, Mode::Normal, 0);
+    let stride = (parser_page::BOX_H + parser_page::ROW_GAP) as i64;
+    assert_eq!(l.rows.len(), 10);
+    assert_eq!(l.visible_rows, 6, "可见窗容量 = 3 行 × 2 列");
+    assert_eq!(l.scroll_max, 2 * stride, "5 行内容 − 3 行窗 = 2 行可滚");
+    let visible_h = 3 * stride - parser_page::ROW_GAP as i64;
+    assert_eq!(l.list_clip.1 - l.list_clip.0, visible_h);
+    assert_eq!(l.rows[0].y, l.list_clip.0, "scroll=0 首框贴窗顶");
+    // scroll = 一行：首框移出窗上沿，第 3 框（原第二行左列）贴窗顶
+    let ls = parser_page::layout(W, H, INSET, 10, Mode::Normal, stride);
+    assert_eq!(ls.rows[0].y, ls.list_clip.0 - stride);
+    assert_eq!(ls.rows[2].y, ls.list_clip.0);
+    // 超 max 钳制：scroll=9999 几何 ≡ scroll=max（钳制语义唯一在 layout）
+    let lc = parser_page::layout(W, H, INSET, 10, Mode::Normal, 9999);
+    let lm = parser_page::layout(W, H, INSET, 10, Mode::Normal, l.scroll_max);
+    assert_eq!(lc.rows[0].y, lm.rows[0].y);
+    // 卡高按内容缩：2 会话卡 < 6 框满窗卡
+    let l2 = parser_page::layout(W, H, INSET, 2, Mode::Normal, 0);
+    assert!(l2.card.h < l.card.h, "卡高必须随实际行数缩，不按容量撑");
+    assert_eq!(l2.scroll_max, 0, "一屏装得下 = 不可滚");
+}
+
+#[test]
+fn spec_layout_分隔线在表与钮之间() {
+    let l = parser_page::layout(W, H, INSET, 2, Mode::Normal, 0);
+    assert_eq!(l.divider.h, parser_page::DIVIDER_H);
+    assert!(l.divider.y >= l.list_clip.1, "分隔线压在会话表窗内");
+    assert!(
+        l.divider.y + l.divider.h as i64 <= l.buttons[0].y,
+        "分隔线淹到按钮带"
+    );
+    let cw = l.card.w - parser_page::CARD_PAD_H * 2;
+    assert_eq!(l.divider.w, cw, "分隔线与卡内区同宽");
+    // 命中：分隔线不是交互件——点它 = None（不是 Session 也不是 Button）
+    let my = l.divider.y + l.divider.h as i64 / 2;
+    assert_eq!(
+        parser_page::hit(
+            &l,
+            l.divider.x + l.divider.w as i64 / 2,
+            my,
+            W,
+            H,
+            Mode::Normal
+        ),
+        None
+    );
+}
+
+#[test]
+fn spec_hit_滚动后裁剪带外不可点() {
+    let stride = (parser_page::BOX_H + parser_page::ROW_GAP) as i64;
+    let l = parser_page::layout(W, H, INSET, 10, Mode::Normal, stride);
+    let hit = |x: i64, y: i64| parser_page::hit(&l, x, y, W, H, Mode::Normal);
+    // rows[0] 整体滚出窗上沿：点它原位（现在在卡头区）≠ Session(0)
+    let b0 = &l.rows[0];
+    assert_ne!(
+        hit(b0.x + 10, b0.y + b0.h as i64 / 2),
+        Some(Hit::Session(0)),
+        "裁窗外的框不许点"
+    );
+    // rows[2] 贴窗顶 = 窗内首框，可点
+    let b2 = &l.rows[2];
+    assert_eq!(hit(b2.x + 10, b2.y + 2), Some(Hit::Session(2)));
+    // rows[8]（第 5 行）在窗下沿外：不可点
+    let b8 = &l.rows[8];
+    assert_eq!(hit(b8.x + 10, b8.y + 2), None, "窗下沿外的框不许点");
+}
+
+#[test]
+fn spec_滚动状态机() {
+    let mut p = ParserPage::new();
+    // scroll_by：clamp [0, max]，变了才 bump
+    let e0 = p.epoch();
+    p.scroll_by(-50, 200); // 下钳 0
+    assert_eq!(p.scroll(), 0);
+    assert_eq!(p.epoch(), e0, "钳住没变不许 bump");
+    p.scroll_by(120, 200);
+    assert_eq!(p.scroll(), 120);
+    assert!(p.epoch() > e0);
+    p.scroll_by(120, 200); // 上钳 max
+    assert_eq!(p.scroll(), 200);
+    // clamp_scroll：行表变少 max 缩
+    p.clamp_scroll(80);
+    assert_eq!(p.scroll(), 80);
+    p.clamp_scroll(80);
+    let e1 = p.epoch();
+    p.clamp_scroll(80);
+    assert_eq!(p.epoch(), e1, "同值钳不许 bump");
 }
 
 // ---- hit ----
 
 #[test]
 fn spec_hit_框本体与kill带_两列() {
-    let l = parser_page::layout(W, H, INSET, 4, Mode::Normal);
+    let l = parser_page::layout(W, H, INSET, 4, Mode::Normal, 0);
     let hit = |x: i64, y: i64| parser_page::hit(&l, x, y, W, H, Mode::Normal);
     let b0 = &l.rows[0];
     // 框本体中点 = Session(0)
@@ -202,7 +303,7 @@ fn spec_hit_框本体与kill带_两列() {
 
 #[test]
 fn spec_hit_按钮与卡外() {
-    let l = parser_page::layout(W, H, INSET, 2, Mode::Normal);
+    let l = parser_page::layout(W, H, INSET, 2, Mode::Normal, 0);
     let hit = |x: i64, y: i64| parser_page::hit(&l, x, y, W, H, Mode::Normal);
     let b0 = &l.buttons[0];
     assert_eq!(
@@ -218,7 +319,7 @@ fn spec_hit_按钮与卡外() {
 
 #[test]
 fn spec_hit_确认态只认跳框() {
-    let l = parser_page::layout(W, H, INSET, 2, Mode::Confirming);
+    let l = parser_page::layout(W, H, INSET, 2, Mode::Confirming, 0);
     let hit = |x: i64, y: i64| parser_page::hit(&l, x, y, W, H, Mode::Confirming);
     let card = parser_page::confirm_card(W, H);
     let btns = parser_page::confirm_buttons(&card);

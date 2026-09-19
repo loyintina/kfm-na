@@ -314,7 +314,9 @@ struct App {
     parser_page: Option<crate::ui::parser_page::SharedParserPage>,
     /// 按在解析页卡片上的手势（起点 x, 起点 y, 拖过 slop）——只在解析页
     /// 靠泊在顶且起点在卡区时建；拖过 slop 让回面板页全家（cfg_pool 同规）
-    parser_touch: Option<(f64, f64, bool)>,
+    /// 解析页卡区触摸槽：(起手 x, 起手 y, 列表滚动态, 上次 y)——
+    /// 拖过 slop 垂直主导且会话表可滚 → 转列表滚动（2026-09-19）
+    parser_touch: Option<(f64, f64, bool, f64)>,
     /// tmux 执行在途（动作类 + 结果通道）：about_to_wait 排水——Ok 后
     /// List=填表 / New=attach 新会话 / Kill/Reflow=刷新列表
     parser_exec: Option<(
@@ -1119,6 +1121,7 @@ impl App {
                                 self.chrome_inset() + self.cur_bar_h(),
                                 snap.sessions.len(),
                                 mode,
+                                snap.scroll,
                             );
                             let c = &lay.card;
                             let (xi, yi) = (x as i64, y as i64);
@@ -1135,7 +1138,7 @@ impl App {
                                 "gest",
                                 &format!("起手→解析页卡区 ({x:.0},{y:.0})"),
                             );
-                            self.parser_touch = Some((x, y, false));
+                            self.parser_touch = Some((x, y, false, y));
                             return;
                         }
                     }
@@ -1418,13 +1421,71 @@ impl App {
                     self.cfg_pool_touch = Some(ct); // 未过 slop：槽放回去继续扣留
                     return;
                 }
-                // 解析页卡区手势：与池区同规——起手槽只是点按候选扣留席，
-                // 拖过 slop 即让回面板页全家（横向锁/抽屉裁决才轮得到它）
+                // 解析页卡区手势：起手槽是点按候选扣留席。拖过 slop 分流——
+                // 常态 + 垂直主导 + 会话表可滚（>6 框）→ 列表内部滚动
+                // （2026-09-19 用户拍板）；否则让回面板页全家（横向锁/
+                // 抽屉裁决才轮得到它）
                 if let Some(pt) = self.parser_touch.take() {
-                    if !pt.2
-                        && ((x - pt.0).abs() > crate::scroll::TAP_SLOP_PX
-                            || (y - pt.1).abs() > crate::scroll::TAP_SLOP_PX)
+                    if pt.2 {
+                        // 列表滚动态：垂直增量跟手（手指上推 dy<0 = 看后部
+                        // = scroll 增）。max 每次吃当下几何（状态核不揣屏寸）
+                        let dy = y - pt.3;
+                        if dy != 0.0
+                            && let (Some(page), Some((sw, sh))) =
+                                (&self.parser_page, self.screen_px())
+                        {
+                            let max = {
+                                let pg = page.lock().unwrap();
+                                let snap = pg.snap();
+                                crate::ui::parser_page::layout(
+                                    sw,
+                                    sh,
+                                    self.chrome_inset() + self.cur_bar_h(),
+                                    snap.sessions.len(),
+                                    crate::ui::parser_page::Mode::Normal,
+                                    snap.scroll,
+                                )
+                                .scroll_max
+                            };
+                            page.lock().unwrap().scroll_by(-(dy as i64), max);
+                        }
+                        self.parser_touch = Some((pt.0, pt.1, true, y));
+                        self.dirty = true;
+                        return;
+                    }
+                    if (x - pt.0).abs() > crate::scroll::TAP_SLOP_PX
+                        || (y - pt.1).abs() > crate::scroll::TAP_SLOP_PX
                     {
+                        // 滚动仲裁：常态（命名/确认态不滚）+ 可滚 + 垂直主导
+                        let can_scroll = if let (Some(page), Some((sw, sh))) =
+                            (&self.parser_page, self.screen_px())
+                        {
+                            let pg = page.lock().unwrap();
+                            let snap = pg.snap();
+                            snap.naming.is_none()
+                                && snap.confirming.is_none()
+                                && crate::ui::parser_page::layout(
+                                    sw,
+                                    sh,
+                                    self.chrome_inset() + self.cur_bar_h(),
+                                    snap.sessions.len(),
+                                    crate::ui::parser_page::Mode::Normal,
+                                    snap.scroll,
+                                )
+                                .scroll_max
+                                    > 0
+                        } else {
+                            false
+                        };
+                        if can_scroll && (y - pt.1).abs() > (x - pt.0).abs() {
+                            crate::report::report(
+                                "gest",
+                                &format!("解析页卡区手势→会话列表滚动 ({x:.0},{y:.0})"),
+                            );
+                            self.parser_touch = Some((pt.0, pt.1, true, y));
+                            self.dirty = true;
+                            return;
+                        }
                         crate::report::report(
                             "gest",
                             &format!("解析页卡区手势让回面板页 ({x:.0},{y:.0})"),
@@ -1951,6 +2012,7 @@ impl App {
                                 self.chrome_inset() + self.cur_bar_h(),
                                 snap.sessions.len(),
                                 mode,
+                                snap.scroll,
                             );
                             let h = crate::ui::parser_page::hit(
                                 &lay,
@@ -3513,7 +3575,14 @@ impl App {
     /// P1 同规——已附着同名 = 零动作；非远程活跃 = 报错引导
     fn parser_attach(&mut self, name: String) {
         if self.remote_attached.as_deref() == Some(name.as_str()) {
-            crate::report::report("ui", &format!("tmux 插件: {name} 已附着，零动作"));
+            // 点已附着会话 = 回服务器命令行（2026-09-19 用户拍板，nz
+            // 同款：点聚焦标签 = 收起管理页回主内容）——连接本就在，
+            // 零重孵只收页
+            crate::report::report(
+                "ui",
+                &format!("tmux 插件: {name} 已附着 = 收回解析页回终端"),
+            );
+            self.parser_dismiss();
             return;
         }
         let Some(p) = self.parser_page.clone() else {
@@ -3592,6 +3661,24 @@ impl App {
                 crate::report::report("ui", &format!("tmux 插件: 会话表 {} 条", ss.len()));
                 if let Some(p) = &self.parser_page {
                     p.lock().unwrap().set_sessions(ss);
+                    // 行表变了滚动上限跟着变（会话变少 max 缩）——
+                    // 拿当下几何钳回，脏 scroll 不残留
+                    if let Some((sw, sh)) = self.screen_px() {
+                        let max = {
+                            let pg = p.lock().unwrap();
+                            let snap = pg.snap();
+                            crate::ui::parser_page::layout(
+                                sw,
+                                sh,
+                                self.chrome_inset() + self.cur_bar_h(),
+                                snap.sessions.len(),
+                                crate::ui::parser_page::Mode::Normal,
+                                snap.scroll,
+                            )
+                            .scroll_max
+                        };
+                        p.lock().unwrap().clamp_scroll(max);
+                    }
                 }
             }
             (ParserExec::New, Ok(out)) => {

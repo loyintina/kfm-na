@@ -737,6 +737,34 @@ fn paint_rect_ring(
 /// **文件级共享组件**（§六 样式唯一来源：三级框禁止逐卡手抄；下池行/
 /// 上池值框/下拉选项行三处共用这一份）。
 /// **选中 = 全包框**：左粗竖线 10px + 三细边 3px **整框 135° 双色渐变
+/// 分隔线（2026-09-19 用户拍板，组件池「分隔线」条目）：底线家变异——
+/// 底线自身模式是反转渐变 c2→c1 1px；分隔线走**正渐变 c1→c2 横向**
+/// 2px 线体，用于卡内两个语义区之间（解析页：会话框表 | 按钮带）。
+/// 采样 = 横向一元尺（s = ax−x0，分母 = 线宽），α255 直混
+fn paint_divider_line(
+    frame: &mut Frame<'_>,
+    x: i64,
+    y: i64,
+    w: u32,
+    h: u32,
+    accent: crate::ui::accent::AccentPair,
+) {
+    let (fw, fh) = (i64::from(frame.w), i64::from(frame.h));
+    let denom = i64::from(w.saturating_sub(1)).max(1);
+    for ax in x..(x + i64::from(w)) {
+        if ax < 0 || ax >= fw {
+            continue;
+        }
+        let c = ring_gradient_rgb(accent.c1, accent.c2, ax - x, 0, denom);
+        for yy in y..(y + i64::from(h)) {
+            if yy < 0 || yy >= fh {
+                continue;
+            }
+            frame.blend_px(ax as u32, yy as u32, c, 255);
+        }
+    }
+}
+
 /// α255**（与页环**同向** c1→c2——§三 逐层反转：页环正 → 池框反 →
 /// 三级框还原）。**角部渐细只渐形状不渐色**：非对称内芯配方（内芯左让
 /// BAR_L、其余让 THIN、半径 R−THIN，角心偏移 = 厚度渐细来源），颜色
@@ -2797,6 +2825,25 @@ impl TermView {
         fg: u32,
         clip_x0: i64,
     ) {
+        self.draw_text_centered_yclip(frame, text, cx, cy, cw, ch, px, fg, clip_x0, None);
+    }
+
+    /// draw_text_centered + 纵裁剪带（2026-09-19 解析页会话表滚动：
+    /// 半框内的文字出带即断墨——与框同一 list_clip，眼手同尺）
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn draw_text_centered_yclip(
+        &self,
+        frame: &mut Frame<'_>,
+        text: &str,
+        cx: i64,
+        cy: i64,
+        cw: u32,
+        ch: u32,
+        px: f32,
+        fg: u32,
+        clip_x0: i64,
+        clip_y: Option<(i64, i64)>,
+    ) {
         let items = self.measure_items(text, px);
         if items.is_empty() {
             return;
@@ -2818,6 +2865,11 @@ impl TermView {
             for gy in 0..m.height as u32 {
                 let y = top as i64 + i64::from(gy);
                 if y < 0 || y >= i64::from(frame.h) {
+                    continue;
+                }
+                if let Some((y0, y1)) = clip_y
+                    && (y < y0 || y >= y1)
+                {
                     continue;
                 }
                 for gx in 0..m.width as u32 {
@@ -3526,7 +3578,7 @@ impl TermView {
         } else {
             pp::Mode::Normal
         };
-        let lay = pp::layout(w, h, bottom_inset, snap.sessions.len(), mode);
+        let lay = pp::layout(w, h, bottom_inset, snap.sessions.len(), mode, snap.scroll);
 
         // 卡环（二级框：内卡渐变反转 c2→c1，与双池同配方）
         let (cox, _coy) = crate::ui::tab_bar::content_origin();
@@ -3582,6 +3634,11 @@ impl TermView {
         };
         for (i, s) in snap.sessions.iter().zip(lay.rows.iter()) {
             let (r, s) = (s, i);
+            // 滚动裁窗：整框出带不画（半框靠 list_clip 断墨——框/文字
+            // 同一裁剪带，眼手同尺）
+            if r.y + i64::from(r.h) <= lay.list_clip.0 || r.y >= lay.list_clip.1 {
+                continue;
+            }
             let mine = snap.attached.as_deref() == Some(s.name.as_str());
             let acc = if mine { accent } else { dim_accent };
             // 框内局部渐变尺：s = (xx-x0)+(yy-y0)，分母 = 框对角线
@@ -3594,12 +3651,12 @@ impl TermView {
                 r.h,
                 true,
                 acc,
-                no_clip,
+                lay.list_clip,
                 grad_ref,
                 0,
             );
             let fg = if mine { title_fg } else { body_fg };
-            self.draw_text_centered(
+            self.draw_text_centered_yclip(
                 &mut frame,
                 &s.name,
                 r.x + off,
@@ -3609,10 +3666,11 @@ impl TermView {
                 34.0,
                 fg,
                 r.x + off,
+                Some(lay.list_clip),
             );
             // 框尾 ×
             let kx = r.x + off + i64::from(r.w) - i64::from(pp::KILL_W);
-            self.draw_text_centered(
+            self.draw_text_centered_yclip(
                 &mut frame,
                 "×",
                 kx,
@@ -3622,8 +3680,20 @@ impl TermView {
                 34.0,
                 meta_fg,
                 r.x + off,
+                Some(lay.list_clip),
             );
         }
+
+        // 分隔线（2026-09-19 用户拍板：底线家变异——正渐变 c1→c2
+        // 横向 2px 线体；会话表与按钮带之间的语义断层）
+        paint_divider_line(
+            &mut frame,
+            lay.divider.x + off,
+            lay.divider.y,
+            lay.divider.w,
+            lay.divider.h,
+            accent,
+        );
 
         // 命名行
         if let (Some(nr), Some(text)) = (&lay.naming, &snap.naming) {
@@ -4577,6 +4647,12 @@ impl TermView {
                     let c = ring_gradient_rgb(accent.c2, accent.c1, ax, uy, denom);
                     frame.blend_px(ax as u32, uy as u32, c, 255);
                 }
+            }
+            Preview::Divider => {
+                // 分隔线：正渐变 c1→c2 横向 2px（底线家变异——与
+                // Underline 的反转渐变对照展出）
+                let uy = iy + i64::from(ih) / 2;
+                paint_divider_line(frame, ix, uy, iw, 2, accent);
             }
             Preview::Dropdown => {
                 // 十三修：触发器（三级框+▼）+ 圆角深底下弹 panel 两项
