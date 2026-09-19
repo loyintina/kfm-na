@@ -7,8 +7,9 @@
 //! 动作语义（attach 重开连接/重排钉网格）注释见各方法。
 //!
 //! 布局（网格制，宪法三行块/最小 3 格纪律）：
-//!   首行布局区 = 页标题「解析 · tmux」（涂装侧画，本册不算几何）；
-//!   标题下 1 格 = tmux 插件卡（二级框，动态高 = 内容定，上限池区）：
+//!   首行布局区 = 空（页标题 2026-09-19 用户拍板撤掉，卡区上吞
+//!   TAB_ROW_H——本册 layout 回收，涂装/命中同一份不破眼手同尺）；
+//!   吞并后的标题行起 = tmux 插件卡（二级框，动态高 = 内容定，上限池区）：
 //!     卡头行（「tmux · N 会话」/ 状态行）→ 会话行表（行尾 ×）→
 //!     命名行（命名态）/ 确认带（确认态）→ 按钮带（常态 [重排][+新窗][↻]；
 //!     命名/确认态 [确定][取消]）。
@@ -107,6 +108,13 @@ pub fn layout(
     mode: Mode,
 ) -> Layout {
     let area = dual_pool::pool_area(screen_w, screen_h, bottom_inset);
+    // 页标题已撤（2026-09-19 用户拍板）：卡区上吞标题行高 TAB_ROW_H，
+    // 卡顶对齐原首行布局区顶——池区其余三缘不动
+    let area = PoolRect {
+        y: area.y - i64::from(crate::ui::tab_bar::TAB_ROW_H),
+        h: area.h + crate::ui::tab_bar::TAB_ROW_H,
+        ..area
+    };
     let extra = match mode {
         Mode::Normal => 0,
         Mode::Naming | Mode::Confirming => ROW_H + ROW_GAP,

@@ -55,6 +55,13 @@ PATCH_RANGES = [
 BORROW_CPS = [0x26A1, 0x2713, 0x2717, 0x2718, 0x271A, 0x279C, 0x27A6]
 BORROW_DONOR = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
 
+# 月亮相位补丁（2026-09-19：kimi code 转动点 🌑-🌘 U+1F311-1F318 tofu
+# 目击——DejaVuSansMono 没有，DejaVuSans 有，同许可）。宽字符（EAW=W，
+# 网格占两格）→ 借全角位（cells=2）；缩放后墨迹 ≈877/1000 单位，
+# 与 CJK 字填充度同档，无需放大
+MOON_CPS = list(range(0x1F311, 0x1F319))
+MOON_DONOR = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+
 
 def gb2312_unicodes():
     """GB2312 可编码字符全集 + 终端符号补丁表"""
@@ -204,9 +211,10 @@ def synthesize_powerline_arrows(font):
     return done
 
 
-def borrow(font, donor_path, cps):
+def borrow(font, donor_path, cps, cells=1):
     """从捐体借字形补进产物：按 upm 比例缩放轮廓，墨迹居中进半角格
-    （超宽 XY 等比压缩，lsb 钉真实 xMin——与 monoify 同律），登记 cmap。
+    （cells=2 = 全角位，宽字符用——月亮相位 U+1F311-1F318 占两格）；
+    超宽 XY 等比压缩，lsb 钉真实 xMin（与 monoify 同律），登记 cmap。
     必须在 subset 之后跑，否则借来的字形会被子集器再裁掉。"""
     from fontTools.pens.recordingPen import DecomposingRecordingPen
 
@@ -219,8 +227,8 @@ def borrow(font, donor_path, cps):
     # 登记——否则保存时 vmtx compile 按 glyphOrder 查不到新字形直接
     # KeyError（BAR-027 调试实录：hmtx 补了、vmtx 漏了，挂的是 _h_m_t_x）
     vmtx = font["vmtx"] if "vmtx" in font else None
-    half = half_cell(font)
-    cap = half - 20  # 墨迹上限:留 20 单位边距防相邻格渗透
+    unit = half_cell(font) * cells
+    cap = unit - 20  # 墨迹上限:留 20 单位边距防相邻格渗透
     got, missing = [], []
     for cp in cps:
         dg = d_cmap.get(cp)
@@ -242,24 +250,52 @@ def borrow(font, donor_path, cps):
             xMin, yMin, xMax, yMax = b
             iw = xMax - xMin
             if iw <= cap:
-                t = Transform(1, 0, 0, 1, (half - iw) / 2 - xMin, 0)
+                t = Transform(1, 0, 0, 1, (unit - iw) / 2 - xMin, 0)
             else:
                 s = cap / iw
-                t = Transform(s, 0, 0, s, (half - iw * s) / 2 - xMin * s, yMin - yMin * s)
+                t = Transform(s, 0, 0, s, (unit - iw * s) / 2 - xMin * s, yMin - yMin * s)
             pen2 = TTGlyphPen(glyf)
             glyf[gname].draw(TransformPen(pen2, t), glyf)
             glyf[gname] = pen2.glyph()
-            hmtx[gname] = (half, ink_bounds(glyf, gname)[0])
+            hmtx[gname] = (unit, ink_bounds(glyf, gname)[0])
         else:
-            hmtx[gname] = (half, 0)
+            hmtx[gname] = (unit, 0)
         if vmtx is not None:
             vmtx[gname] = (font["head"].unitsPerEm, 0)
-        # 3. 登记所有 unicode 子表
+        # 3. 登记 unicode 子表：SMP 码点（>0xFFFF，月亮相位）format 4
+        # 装不下（段表 u16 溢出，编译期 OverflowError 实踩）——只能进
+        # format 12，没有就现场建一张
         for table in font["cmap"].tables:
-            if table.isUnicode():
-                table.cmap[cp] = gname
+            if not table.isUnicode():
+                continue
+            if cp > 0xFFFF and table.format == 4:
+                continue
+            table.cmap[cp] = gname
+        if cp > 0xFFFF:
+            ensure_cmap12(font).cmap[cp] = gname
         got.append(cp)
     return got, missing
+
+
+def ensure_cmap12(font):
+    """取/建 format 12 unicode 子表（SMP 码点的唯一容身所；GB2312 子集
+    原生只有 format 4 BMP 双表，月亮相位第一单逼出本函数）"""
+    from fontTools.ttLib.tables._c_m_a_p import CmapSubtable
+
+    for t in font["cmap"].tables:
+        if t.isUnicode() and t.format == 12:
+            return t
+    t = CmapSubtable.newSubtable(12)
+    t.platformID, t.platEncID, t.language = 3, 10, 0
+    t.cmap = {}
+    # 全量镜像 BMP 映射进新表——format 12 一旦存在就是各引擎的「最优
+    # 子表」（fontTools getBestCmap / fontdue 都优先选它），只装月亮 =
+    # 汉字全灭（保存判卷「缺 中」实踩）
+    for table in font["cmap"].tables:
+        if table.isUnicode() and table.format == 4:
+            t.cmap.update(table.cmap)
+    font["cmap"].tables.append(t)
+    return t
 
 
 def subset(font):
@@ -294,6 +330,9 @@ def main():
         got, missed = borrow(font, BORROW_DONOR, BORROW_CPS)
         print(f"borrow: 借入 {len(got)} 个字形"
               + (f"，捐体缺 {[hex(c) for c in missed]}" if missed else ""))
+        got, missed = borrow(font, MOON_DONOR, MOON_CPS, cells=2)
+        print(f"borrow: 月亮相位借入 {len(got)} 个（全角位）"
+              + (f"，捐体缺 {[hex(c) for c in missed]}" if missed else ""))
     if do_subset:
         n = squeeze_powerline(font)
         print(f"powerline: 横压半格 {n} 个字形")
@@ -308,9 +347,19 @@ def main():
     # 终端符号补丁覆盖报告（源字体没有的不强求，但要知道缺什么）
     patch = [("▽", 0x25BD), ("█", 0x2588), ("⠋", 0x280B), ("→", 0x2192),
              ("", 0xE0A0), ("", 0xE0B0), ("✘", 0x2718), ("⚡", 0x26A1),
-             ("✓", 0x2713), ("✗", 0x2717), ("➜", 0x279C), ("➦", 0x27A6)]
+             ("✓", 0x2713), ("✗", 0x2717), ("➜", 0x279C), ("➦", 0x27A6),
+             ("🌖", 0x1F316)]
     missing = [f"{ch}U+{cp:04X}" for ch, cp in patch if cp not in cmap]
     print("补丁表缺口:", ",".join(missing) if missing else "无")
+    if do_borrow:
+        # 月亮相位判卷：8 相全在 + 步进全角（宽字符占两格）
+        full = half_cell(check) * 2
+        bhmtx = check["hmtx"]
+        for cp in MOON_CPS:
+            gn = cmap.get(cp)
+            assert gn, f"U+{cp:04X} 月亮相位缺字形"
+            assert bhmtx[gn][0] == full, \
+                f"U+{cp:04X} 步进 {bhmtx[gn][0]} != 全角 {full}"
     if do_subset:
         cjk = sum(1 for cp in cmap if 0x4E00 <= cp <= 0x9FFF)
         # 满覆盖 = 6763；开源占位字体允许缺少量二级生僻字（缝合像素实测

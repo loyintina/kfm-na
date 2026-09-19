@@ -37,10 +37,13 @@ fn ss(names: &[&str]) -> Vec<TmuxSession> {
 fn spec_layout_卡片在池区内() {
     let l = parser_page::layout(W, H, INSET, 3, Mode::Normal);
     let area = kfm_na::ui::dual_pool::pool_area(W, H, INSET);
+    // 页标题撤后卡区上吞 TAB_ROW_H（2026-09-19 用户拍板）：卡顶 = 池区顶
+    // 减一行标签高，卡高上限同步放大
+    let tab_h = kfm_na::ui::tab_bar::TAB_ROW_H;
     assert_eq!(l.card.x, area.x);
-    assert_eq!(l.card.y, area.y);
+    assert_eq!(l.card.y, area.y - i64::from(tab_h));
     assert!(l.card.w <= area.w);
-    assert!(l.card.h <= area.h);
+    assert!(l.card.h <= area.h + tab_h);
     assert_eq!(l.rows.len(), 3);
     assert_eq!(l.buttons.len(), 3); // 常态 [重排][+新窗][↻]
 }
@@ -93,10 +96,10 @@ fn spec_layout_按钮互不重叠且在卡内() {
 
 #[test]
 fn spec_layout_超池区截断可见行() {
-    // 小屏高塞 100 行：卡高不许越池区，可见行数截断
+    // 小屏高塞 100 行：卡高不许越池区（吞标题行后的放大池区），可见行数截断
     let l = parser_page::layout(600, 900, INSET, 100, Mode::Normal);
     let area = kfm_na::ui::dual_pool::pool_area(600, 900, INSET);
-    assert!(l.card.h <= area.h);
+    assert!(l.card.h <= area.h + kfm_na::ui::tab_bar::TAB_ROW_H);
     assert_eq!(l.rows.len(), l.visible_rows);
     assert!(l.visible_rows < 100);
     assert!(l.visible_rows >= 1);

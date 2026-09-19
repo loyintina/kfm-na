@@ -197,3 +197,52 @@ pub fn hit(x: f64, y: f64, win_w: u32, win_h: u32, ime_bottom: u32) -> Option<&'
     }
     Some(&KEYS[row][col])
 }
+
+// ---- 方向键长按连发（2026-09-19 用户拍板：tmux 里方向键长按要能连续移动）----
+// 纯逻辑件（A 档，考题 keybar_spec）：壳主循环每圈 poll 一次，到点发一键。
+// 语义对齐硬键盘：按下 → 抬手前短点 = 抬手发一键（壳原路径不变）；
+// 按住过起延 → 周期连发，松手不补发（fired>0 顶掉抬手发键，防收尾多跳一格）。
+
+/// 连发起延（按下到第一发连键）——与系统硬键盘 repeat delay 同量级
+pub const REPEAT_DELAY: std::time::Duration = std::time::Duration::from_millis(400);
+/// 连发周期
+pub const REPEAT_PERIOD: std::time::Duration = std::time::Duration::from_millis(50);
+
+/// 连发白名单：只许方向十字（TAB/ENTER/PGUP 连发无意义且危险，修饰键更不许）
+pub fn is_arrow_key(code: i32) -> bool {
+    matches!(code, KC_UP | KC_DOWN | KC_LEFT | KC_RIGHT)
+}
+
+/// 连发状态（壳字段持有；时刻由壳注入——纯逻辑不碰时钟，考题可重演）
+#[derive(Debug, Clone)]
+pub struct KeyRepeat {
+    code: i32,
+    at: std::time::Instant,
+    last: std::time::Instant,
+    /// 已连发次数（壳抬手裁决用：>0 = 连发已交卷，抬手不再补发）
+    pub fired: u32,
+}
+
+impl KeyRepeat {
+    /// 按下武装：非方向键 = None（不武装）
+    pub fn arm(code: i32, now: std::time::Instant) -> Option<Self> {
+        is_arrow_key(code).then_some(KeyRepeat {
+            code,
+            at: now,
+            last: now,
+            fired: 0,
+        })
+    }
+
+    /// 每圈轮询：到点 = Some(键码) 发一键；未到点 = None
+    pub fn poll(&mut self, now: std::time::Instant) -> Option<i32> {
+        if now.duration_since(self.at) < REPEAT_DELAY
+            || now.duration_since(self.last) < REPEAT_PERIOD
+        {
+            return None;
+        }
+        self.last = now;
+        self.fired += 1;
+        Some(self.code)
+    }
+}

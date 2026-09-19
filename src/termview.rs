@@ -3516,18 +3516,8 @@ impl TermView {
         let denom = ((w - 1) + (h - 1)).max(1) as i64;
         let no_clip = (0, i64::from(h));
 
-        // 页标题（首行布局区，与配置页标签行同位）
-        let (ox, oy) = crate::ui::tab_bar::content_origin();
-        self.draw_text_left(
-            &mut frame,
-            "解析 · tmux",
-            (ox as i64 + off) as u32,
-            w,
-            oy,
-            crate::ui::tab_bar::TAB_ROW_H,
-            36.0,
-            meta_fg,
-        );
+        // 页标题已撤（2026-09-19 用户拍板：解析页无标题行，卡区上吞
+        // TAB_ROW_H——几何侧 parser_page::layout 同步回收，眼手同尺不破）
 
         let mode = if snap.naming.is_some() {
             pp::Mode::Naming

@@ -104,3 +104,61 @@ fn spec_修饰键_一次性粘滞() {
     mods.toggle(MOD_CTRL);
     assert_eq!(mods.peek(), 0, "再点一次必须灭");
 }
+
+// ---- 方向键长按连发（2026-09-19 用户拍板，答案 keybar::KeyRepeat）----
+// 变异抽检方向：白名单放进 TAB/ENTER、起延判据 < 改 <=、poll 忘推进
+// last（一圈连发）、fired 不计数——本组必须红。
+
+#[test]
+fn spec_连发_白名单只许方向十字() {
+    use kfm_na::keybar::{KeyRepeat, is_arrow_key};
+    let t0 = std::time::Instant::now();
+    // 方向十字全武装（↑19 ↓20 ←21 →22）——白名单判据本体与武装门同尺
+    for code in [19, 20, 21, 22] {
+        assert!(is_arrow_key(code), "方向键 {code} 必须在白名单");
+        assert!(
+            KeyRepeat::arm(code, t0).is_some(),
+            "方向键 {code} 必须可武装"
+        );
+    }
+    // TAB/ENTER/PGUP/ESC 等一律不武装
+    for code in [61, 66, 92, 93, 111, 122, 123] {
+        assert!(!is_arrow_key(code), "键码 {code} 不许在白名单");
+        assert!(
+            KeyRepeat::arm(code, t0).is_none(),
+            "键码 {code} 不许武装连发"
+        );
+    }
+}
+
+#[test]
+fn spec_连发_起延与周期() {
+    use kfm_na::keybar::{KeyRepeat, REPEAT_DELAY, REPEAT_PERIOD};
+    let t0 = std::time::Instant::now();
+    let mut r = KeyRepeat::arm(19, t0).unwrap();
+    // 起延前一圈不发
+    assert_eq!(
+        r.poll(t0 + REPEAT_DELAY - std::time::Duration::from_millis(1)),
+        None
+    );
+    assert_eq!(r.fired, 0);
+    // 到起延发第一发，键码原样
+    assert_eq!(r.poll(t0 + REPEAT_DELAY), Some(19));
+    assert_eq!(r.fired, 1);
+    // 周期内不连发
+    assert_eq!(
+        r.poll(t0 + REPEAT_DELAY + REPEAT_PERIOD - std::time::Duration::from_millis(1)),
+        None
+    );
+    assert_eq!(r.fired, 1);
+    // 到周期发第二发
+    assert_eq!(r.poll(t0 + REPEAT_DELAY + REPEAT_PERIOD), Some(19));
+    assert_eq!(r.fired, 2);
+    // 长圈（主循环卡顿 3 个周期）只补一发——不追发爆炸
+    assert_eq!(
+        r.poll(t0 + REPEAT_DELAY + REPEAT_PERIOD * 4),
+        Some(19),
+        "跳帧只补一发，不追发"
+    );
+    assert_eq!(r.fired, 3);
+}

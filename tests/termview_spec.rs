@@ -390,6 +390,34 @@ fn spec_字体_内嵌字节可直接用() {
     assert!(termview::font_monospaced(&font));
 }
 
+/// 内嵌 CJK fallback 的月亮相位补丁（2026-09-19：kimi code 转动点
+/// 🌑-🌘 U+1F311-1F318 tofu 目击——主字体（商业像素）天然缺，渲染全靠
+/// prefer_cjk 路由到这份备用；补丁 = font-bake.py MOON_CPS 借字形
+/// 全角位，捐体 DejaVuSans）。变异抽检方向：烘焙漏登记 format 12 /
+/// 借成半角位/漏某一相——本钉必须红
+#[test]
+fn spec_字体_内嵌cjk月亮相位补丁() {
+    let font = fontdue::Font::from_bytes(
+        termview::VENDORED_CJK_FONT,
+        fontdue::FontSettings::default(),
+    )
+    .expect("内嵌 CJK 字体字节必须可解析");
+    for cp in 0x1F311u32..=0x1F318 {
+        let c = char::from_u32(cp).unwrap();
+        assert!(
+            font.lookup_glyph_index(c) != 0,
+            "U+{cp:04X} 月亮相位在内嵌 fallback 缺字形"
+        );
+    }
+    // 汉字不能被 format 12 新表顶灭（getBestCmap 优先选 format 12，
+    // 只装月亮 = 汉字全灭——烘焙判卷实踩过的坑）
+    assert!(font.lookup_glyph_index('中') != 0, "汉字覆盖被月亮补丁破坏");
+    // 光栅必须有墨（空轮廓 = 不可见字形，比 tofu 更难察觉）
+    let (m, bmp) = font.rasterize('\u{1F316}', 32.0);
+    assert!(m.width > 0 && m.height > 0, "月亮光栅尺寸为零");
+    assert!(bmp.iter().any(|&v| v > 0), "月亮光栅全空（无墨）");
+}
+
 // CFF 轮廓字体（NimbusMonoPS，host_cff() 夹具）：fontdue 0.9 能载能画西文，
 // 但中文字形光栅全空（w=0 h=0 ink=0，2026-08-13 host 实测）——空光栅判定的活教材
 // 比例字体（host_proportional() 夹具）：BAR-003 病灶同款（真机 Roboto 即比例字体）

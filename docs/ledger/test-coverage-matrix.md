@@ -24,7 +24,7 @@
 | `src/ime_queue.rs` | 8 | 8 | 0 | — |
 | `src/input_bar.rs` | 59 | 50 | 9 | MENU_W MENU_TEXT_PX text_avail_w CARET_BLINK_MS SELECT_LONG_PRESS_MS ANCHOR_VISUAL_SIZE ANCHOR_HIT_SIZE set_sel_anchor insert_or_replace |
 | `src/insets.rs` | 5 | 2 | 3 | force_show_keyboard force_hide_keyboard query_ime_bottom |
-| `src/keybar.rs` | 15 | 11 | 4 | COLS MOD_ALT install_bridge_mods bridge_mods |
+| `src/keybar.rs` | 20 | 16 | 4 | COLS MOD_ALT install_bridge_mods bridge_mods |
 | `src/keymap.rs` | 2 | 2 | 0 | — |
 | `src/local_pty.rs` | 5 | 4 | 1 | android_prefix |
 | `src/plugins/ai_presence.rs` | 2 | 2 | 0 | — |
@@ -43,6 +43,8 @@
 | `src/settings.rs` | 6 | 5 | 1 | terminal_to_json |
 | `src/termview.rs` | 128 | 121 | 7 | AI_THINK_COLLAPSED FONT_CANDIDATES CJK_FONT_CANDIDATES load_cjk_font font_probe MAG_HALF_COLS MAG_HALF_ROWS |
 | `src/theme.rs` | 1 | 1 | 0 | — |
+| `src/tmux_ctl.rs` | 9 | 9 | 0 | — |
+| `src/tmux_exec.rs` | 1 | 0 | 1 | exec |
 | `src/trace.rs` | 12 | 8 | 4 | TRACE_CAP format_tail dump_all dump_tail |
 | `src/ui/accent.rs` | 6 | 6 | 0 | — |
 | `src/ui/ai_page.rs` | 7 | 7 | 0 | — |
@@ -58,6 +60,7 @@
 | `src/ui/modal.rs` | 19 | 17 | 2 | MODAL_LABEL_H MODAL_MAX_MARGIN_Y |
 | `src/ui/orb.rs` | 5 | 5 | 0 | — |
 | `src/ui/panel_drag.rs` | 12 | 7 | 5 | DRAG_DIR_LOCK RELEASE_PROGRESS VELOCITY_WINDOW_MS locked current_offset |
+| `src/ui/parser_page.rs` | 33 | 26 | 7 | ROW_H BTN_H CARD_PAD_V CARD_PAD_H cancel_confirm register_parser_page parser_page_handle |
 | `src/ui/prompt_bar.rs` | 5 | 4 | 1 | row_of |
 | `src/ui/seam.rs` | 24 | 24 | 0 | — |
 | `src/ui/stage.rs` | 7 | 7 | 0 | — |

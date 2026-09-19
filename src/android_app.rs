@@ -248,6 +248,9 @@ struct App {
     /// 按在快捷键行带上的手势（BAR-017）：Started 记下起点，Ended 命中测试
     /// 发键/翻修饰键。Some = 这手势归快捷键行，不滚屏不唤键盘
     bar_touch: Option<(f64, f64)>,
+    /// 方向键长按连发状态（2026-09-19 用户拍板）：Started 命中方向键即
+    /// 武装，主循环 check_bar_repeat 每圈 poll；抬手/Cancelled 收走
+    bar_repeat: Option<crate::keybar::KeyRepeat>,
     /// 闸门触摸注入队列（通道八 touch-in）：值守线程入，about_to_wait
     /// 逐条出，sleep 指令挂起到点再取下一条
     touch_pending: std::collections::VecDeque<crate::gate::TouchCmd>,
@@ -1177,6 +1180,16 @@ impl App {
                 });
                 if in_bar {
                     self.bar_touch = Some((x, y));
+                    // 方向键武装长按连发（主循环 check_bar_repeat 每圈 poll）；
+                    // 武装命中与抬手发键同一把尺（keybar::hit + 同款 inset）
+                    if let Some((sw, sh)) = self.screen_px()
+                        && let Some(kd) =
+                            crate::keybar::hit(x, y, sw, sh, self.chrome_inset() + bar_h)
+                        && let crate::keybar::Key::Direct(code) = kd.key
+                    {
+                        self.bar_repeat =
+                            crate::keybar::KeyRepeat::arm(code, std::time::Instant::now());
+                    }
                     return;
                 }
                 // 终端区指头登记（keybar 带上的不进来）
@@ -2017,6 +2030,8 @@ impl App {
                 }
                 // 快捷键行手势：抬手命中发键（Cancelled 不发）
                 if self.bar_touch.take().is_some() {
+                    // 连发状态随手势收走（Cancelled 同路——后台/抢手势不残留）
+                    let repeat = self.bar_repeat.take();
                     // BAR-018 诊断：进得了这个分支 = Started 的 in_bar
                     // 判定活着；hit 落空也会留痕（坐标+inset 三数）
                     crate::report::report(
@@ -2024,6 +2039,13 @@ impl App {
                         &format!("快捷键行抬手 ({},{}), inset={}", x, y, self.chrome_inset()),
                     );
                     if phase != TouchPhase::Ended {
+                        return;
+                    }
+                    // 长按连发已交卷（fired>0）= 抬手不再补发——硬键盘同语义
+                    // （按住 N 连发，松手不多跳一格）；短点（fired=0/非方向键
+                    // 未武装）走下方原命中发键路径
+                    if repeat.as_ref().is_some_and(|r| r.fired > 0) {
+                        self.dirty = true;
                         return;
                     }
                     let Some(w) = &self.window else { return };
@@ -2206,6 +2228,18 @@ impl App {
         }
         self.dirty = true;
         crate::report::report("ai", "长按光球 → fake_run(3000)（debug 钩子）");
+    }
+
+    /// 快捷键行方向键长按连发（2026-09-19 用户拍板：tmux 里方向键长按
+    /// 要能连续移动）：主循环每圈 poll，到点推键码进 ime_queue——与点按
+    /// 同一条路（修饰键粘滞/键码翻译下游不变）
+    fn check_bar_repeat(&mut self) {
+        let now = std::time::Instant::now();
+        let Some(code) = self.bar_repeat.as_mut().and_then(|r| r.poll(now)) else {
+            return;
+        };
+        crate::ime_queue::global().push_key_code(code);
+        self.dirty = true;
     }
 
     /// 输入栏长按计时（BAR-046）：按住栏内文本区 ≥SELECT_LONG_PRESS_MS
@@ -3389,6 +3423,21 @@ impl App {
         self.dirty = true;
     }
 
+    /// 程序化收起解析页（2026-09-19 用户拍板：点会话行 attach / 点重排
+    /// 后回终端主页）。只弹栈 + 脏帧——target 只问栈（stage::
+    /// panel_target_and_draw，BAR-084 单源），缝采样器见目标 0→+w 自动
+    /// 缓动播退场、活性期照画，无需 replay 踢（replay 只为「目标不变但
+    /// 历史变了」的覆盖再召唤场景重定基）
+    fn parser_dismiss(&mut self) {
+        use crate::ai_presence::Panel;
+        if let Some(ai) = &self.ai_presence
+            && ai.dismiss_top(Panel::Parser)
+        {
+            crate::report::report("ui", "tmux 插件: 程序化收起解析页");
+            self.dirty = true;
+        }
+    }
+
     /// 重排：窗口尺寸钉到 na 当前网格（manual 即生效；largest/latest
     /// 下 tmux 自动翻 manual——2026-09-19 服务器实证）
     fn parser_reflow(&mut self) {
@@ -3412,6 +3461,8 @@ impl App {
             ),
         ));
         self.dirty = true;
+        // 重排已派发 = 回终端主页看效果（用户拍板：点重排后收起解析页）
+        self.parser_dismiss();
     }
 
     /// 新建提交：None/空 = tmux 自动编号；非法字符 = 报错不执行
@@ -3518,6 +3569,9 @@ impl App {
         self.dirty = true;
         // 新会话列表重排口径可能变（active 窗换了）——顺手刷新
         self.parser_refresh();
+        // attach 重孵已发 = 回终端主页接新会话（用户拍板：点行后收起解析页；
+        // 早期报错臂——非远程活跃/工厂不可用——不收，错误得留在页面上可见）
+        self.parser_dismiss();
     }
 
     /// 执行排水（about_to_wait 每圈）：Ok 后按种类善后
@@ -6182,6 +6236,7 @@ impl ApplicationHandler for App {
             self.check_long_press();
             self.check_orb_long_press(); // 光球长按 → fake_run(debug 钩子)
             self.check_inputbar_long_press(); // 输入栏长按 → 选择模式(BAR-046)
+            self.check_bar_repeat(); // 方向键长按 → 连发（2026-09-19 拍板）
             self.poll_ai_presence(); // AI 外显快照比对(注入/到期也要画帧)
             // tmux 插件（2026-09-19）：执行排水 + 解析页在栈且从未查询
             // 时的首查（Idle 一次性闸——Loading/Ready 都不会在这反复发）

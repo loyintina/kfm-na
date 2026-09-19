@@ -19,7 +19,10 @@ git add -A
 # stamp 只绑代码内容——docs 变更不作废 stamp(docs 耦合由另一闸管)
 PATCH_HASH=$(git diff --cached HEAD -- . ':(exclude)docs' | md5sum | cut -d' ' -f1)
 if [ -z "$PATCH_HASH" ]; then echo "❌ 暂存区为空"; exit 1; fi
-git diff --cached HEAD > "$PATCH"
+# --binary：字体等二进制资产变更必须带 literal 增量——裸 diff 只有
+# 「Binary files differ」一行，手机端 git apply 必红（2026-09-19
+# 月亮字体补丁实踩：cannot apply binary patch without full index line）
+git diff --cached --binary HEAD > "$PATCH"
 echo "[chain-phone] 补丁 $(wc -l < "$PATCH") 行 哈希 $PATCH_HASH"
 
 ssh_rc=1
