@@ -328,6 +328,10 @@ struct App {
     remote_conn_cfg: Option<crate::conn::ConnConfig>,
     /// 本端当前附着的 tmux 会话名（启动命令提取/attach 后更新）
     remote_attached: Option<String>,
+    /// 解析页靠泊上一圈状态（BAR-115：靠泊上升沿 = 重开页 → 重列会话。
+    /// Idle 一次性闸只补首查，Ready 后重开页不刷 = 服务器侧 tmux 会话
+    /// 增删永远看不见——「开页自动刷」设计口径的实际破洞）
+    parser_docked_prev: bool,
     /// 跳框模态手势槽（宪法 §六 跳框条款，九修）：
     /// (起手x, 起手y, 已拖过slop)——模态开着时配置页手势全归它
     modal_touch: Option<(f64, f64, bool)>,
@@ -3596,10 +3600,18 @@ impl App {
             p.lock()
                 .unwrap()
                 .set_error("先切到远程终端再切换会话".into());
+            crate::report::report("ui", "tmux 插件: attach 被拒——活跃非远程");
             self.dirty = true;
             return;
         }
         let Some(cfg) = self.remote_conn_cfg.clone() else {
+            // 静默死点留痕（排障手册纪律：点行零响应必须有声）——
+            // 无服务器条目时 attach 不能凭空消失
+            crate::report::report("ui", "tmux 插件: attach 无远程服务器配置");
+            p.lock()
+                .unwrap()
+                .set_error("无远程服务器配置（设置页补服务器条目）".into());
+            self.dirty = true;
             return;
         };
         // 关旧 → 新命令重孵（respawn_session 活跃臂同款工序）
@@ -6370,15 +6382,21 @@ impl ApplicationHandler for App {
             let parser_docked = self
                 .last_ai_snap
                 .is_some_and(|s| s.top == Some(crate::ai_presence::Panel::Parser));
-            if parser_docked
+            // BAR-115：靠泊上升沿 = 开页/重开页 → 重列会话（Idle 一次性闸
+            // 只补首查——Ready 后重开页不刷，服务器侧 tmux 增删永远看不见，
+            // 「开页自动刷」设计口径的实际破洞；exec 在途闸在 refresh 内）
+            let parser_dock_edge = parser_docked && !self.parser_docked_prev;
+            self.parser_docked_prev = parser_docked;
+            if (parser_dock_edge
+                || (parser_docked
+                    && self.parser_page.as_ref().is_some_and(|p| {
+                        matches!(
+                            p.lock().unwrap().status(),
+                            crate::ui::parser_page::Status::Idle
+                        )
+                    })))
                 && self.remote_conn_cfg.is_some()
                 && self.parser_exec.is_none()
-                && self.parser_page.as_ref().is_some_and(|p| {
-                    matches!(
-                        p.lock().unwrap().status(),
-                        crate::ui::parser_page::Status::Idle
-                    )
-                })
             {
                 self.parser_refresh();
             }
