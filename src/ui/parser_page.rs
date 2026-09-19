@@ -10,31 +10,39 @@
 //!   首行布局区 = 空（页标题 2026-09-19 用户拍板撤掉，卡区上吞
 //!   TAB_ROW_H——本册 layout 回收，涂装/命中同一份不破眼手同尺）；
 //!   吞并后的标题行起 = tmux 插件卡（二级框，动态高 = 内容定，上限池区）：
-//!     卡头行（「tmux · N 会话」/ 状态行）→ 会话行表（行尾 ×）→
-//!     命名行（命名态）/ 确认带（确认态）→ 按钮带（常态 [重排][+新窗][↻]；
-//!     命名/确认态 [确定][取消]）。
+//!     卡头行（「tmux · N 会话」/ 状态行）→ 会话框表（**一行两框**，
+//!     每框 = 三级框行主形态全包框双色渐变，内容只有 名字+×——
+//!     「·N窗/·他端」meta 2026-09-19 用户拍板撤）→
+//!     命名行（命名态）→ 按钮带（常态 [重排][新窗]——↻ 刷新钮同日撤：
+//!     列会话本就在开页/操作后自动刷，手动冗余；命名态 [确定][取消]）。
+//!   关闭确认 = **跳框模态**（同日拍板：防误触，取代卡内确认带）——
+//!   压暗层 + 居中卡 + [确定关闭][取消]，点框外 = 取消（跳框惯例）。
 
 use crate::termview::{CELL_H, CELL_W};
 use crate::tmux_ctl::TmuxSession;
 use crate::ui::dual_pool::{self, PoolRect};
 use std::sync::{Arc, Mutex};
 
-/// 卡头/会话行/命名行/确认带行高 = 2 格
+/// 卡头/会话框/命名行高 = 2 格（宪法三级框行最小高：内容上下各留
+/// ≥半格空隙——34px 文本居中于 72px 框，上下各 ~19px ≈ 0.53 格）
 pub const ROW_H: u32 = CELL_H * 2;
 /// 按钮高 = 3 格（宪法「最小的框 ≥3 格」）
 pub const BTN_H: u32 = CELL_H * 3;
 /// 行间距
 pub const ROW_GAP: u32 = CELL_W;
+/// 一行两框的列间距（2 格，与池卡左右间隔同档）
+pub const COL_GAP: u32 = CELL_W * 2;
 /// 按钮间距
 pub const BTN_GAP: u32 = CELL_W * 3;
 /// 卡内上下留白
 pub const CARD_PAD_V: u32 = CELL_H;
 /// 卡内左右内缩
 pub const CARD_PAD_H: u32 = CELL_W * 2;
-/// 行尾 × 命中宽
+/// 框尾 × 命中宽
 pub const KILL_W: u32 = CELL_W * 4;
 
-/// 卡片模式（按钮带语义随模式换）
+/// 卡片模式（按钮带语义随模式换；Confirming = 跳框模态在，卡区按钮不画
+/// 不可点——模态屏蔽）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
     Normal,
@@ -45,18 +53,25 @@ pub enum Mode {
 /// 模式 → 按钮标签（涂装/命中唯一源——两处各写一份必漂移）
 pub fn button_labels(mode: Mode) -> &'static [&'static str] {
     match mode {
-        Mode::Normal => &["重排", "+新窗", "↻"],
+        Mode::Normal => &["重排", "新窗"],
         Mode::Naming => &["确定", "取消"],
-        Mode::Confirming => &["确定关闭", "取消"],
+        Mode::Confirming => &[],
     }
 }
 
-/// 命中结果（Button 的语义按当时 Mode 由 button_action 解）
+/// 命中结果（Button 的语义按当时 Mode 由 button_action 解；
+/// Modal* = 关闭确认跳框的命中——模态在时卡区命中全屏蔽）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Hit {
     Session(usize),
     Kill(usize),
     Button(usize),
+    /// 跳框 [确定关闭]
+    ModalOk,
+    /// 跳框 [取消]
+    ModalCancel,
+    /// 点跳框外 = 取消（跳框惯例）
+    ModalDismiss,
 }
 
 /// 按钮动作（壳动作分发表）
@@ -64,22 +79,16 @@ pub enum Hit {
 pub enum Action {
     Reflow,
     New,
-    Refresh,
     NamingOk,
     NamingCancel,
-    ConfirmOk,
-    ConfirmCancel,
 }
 
 pub fn button_action(mode: Mode, i: usize) -> Option<Action> {
     match (mode, i) {
         (Mode::Normal, 0) => Some(Action::Reflow),
         (Mode::Normal, 1) => Some(Action::New),
-        (Mode::Normal, 2) => Some(Action::Refresh),
         (Mode::Naming, 0) => Some(Action::NamingOk),
         (Mode::Naming, 1) => Some(Action::NamingCancel),
-        (Mode::Confirming, 0) => Some(Action::ConfirmOk),
-        (Mode::Confirming, 1) => Some(Action::ConfirmCancel),
         _ => None,
     }
 }
@@ -89,17 +98,17 @@ pub fn button_action(mode: Mode, i: usize) -> Option<Action> {
 pub struct Layout {
     pub card: PoolRect,
     pub header: PoolRect,
+    /// 会话框（一行两框，按行主序排：偶数左列、奇数右列）
     pub rows: Vec<PoolRect>,
     pub naming: Option<PoolRect>,
-    pub confirm: Option<PoolRect>,
     pub buttons: Vec<PoolRect>,
-    /// 可见行数（卡片高超池区时截断——v1 不滚动，超出会话看不着，
-    /// 挂账：会话 >max_visible 时加行滚动）
+    /// 可见框数（卡片高超池区时截断——v1 不滚动，超出会话看不着，
+    /// 挂账：会话 >max_visible 时加滚动）
     pub visible_rows: usize,
 }
 
 /// 布局纯函数：卡片外区 = 双池同一池区（标题下 1 格起）；卡高 = 内容
-/// 定、上限池区高；可见行数按剩余高度截
+/// 定、上限池区高；可见框数按剩余高度截（一行两框）
 pub fn layout(
     screen_w: u32,
     screen_h: u32,
@@ -115,19 +124,21 @@ pub fn layout(
         h: area.h + crate::ui::tab_bar::TAB_ROW_H,
         ..area
     };
+    // 确认跳框是模态，不占卡内高度（卡按 Normal 几何画在模态底下）
     let extra = match mode {
-        Mode::Normal => 0,
-        Mode::Naming | Mode::Confirming => ROW_H + ROW_GAP,
+        Mode::Normal | Mode::Confirming => 0,
+        Mode::Naming => ROW_H + ROW_GAP,
     };
     let fixed = CARD_PAD_V * 2 + ROW_H + ROW_GAP + extra + BTN_H;
     let stride = ROW_H + ROW_GAP;
-    let max_rows = if area.h > fixed {
+    let max_lines = if area.h > fixed {
         ((area.h - fixed + ROW_GAP) / stride).max(1) as usize
     } else {
         1
     };
-    let visible_rows = n_sessions.min(max_rows);
-    let content_h = fixed + stride * visible_rows as u32;
+    let visible_boxes = n_sessions.min(max_lines * 2);
+    let visible_lines = visible_boxes.div_ceil(2);
+    let content_h = fixed + stride * visible_lines as u32;
     let card_h = content_h.min(area.h);
     let card = PoolRect {
         x: area.x,
@@ -145,16 +156,18 @@ pub fn layout(
         h: ROW_H,
     };
     y += i64::from(ROW_H + ROW_GAP);
-    let mut rows = Vec::with_capacity(visible_rows);
-    for _ in 0..visible_rows {
+    let bw = cw.saturating_sub(COL_GAP) / 2;
+    let mut rows = Vec::with_capacity(visible_boxes);
+    for i in 0..visible_boxes {
+        let (line, col) = (i / 2, i % 2);
         rows.push(PoolRect {
-            x: cx,
-            y,
-            w: cw,
+            x: cx + (bw + COL_GAP) as i64 * col as i64,
+            y: y + stride as i64 * line as i64,
+            w: bw,
             h: ROW_H,
         });
-        y += i64::from(stride);
     }
+    y += i64::from(stride) * visible_lines as i64;
     let naming = (mode == Mode::Naming).then(|| {
         let r = PoolRect {
             x: cx,
@@ -165,46 +178,94 @@ pub fn layout(
         y += i64::from(stride);
         r
     });
-    let confirm = (mode == Mode::Confirming).then(|| {
-        let r = PoolRect {
-            x: cx,
-            y,
-            w: cw,
-            h: ROW_H,
-        };
-        y += i64::from(stride);
-        r
-    });
     let labels = button_labels(mode);
-    let n = labels.len() as u32;
-    let bw = cw.saturating_sub(BTN_GAP * (n - 1)) / n;
     let mut buttons = Vec::with_capacity(labels.len());
-    for i in 0..labels.len() {
-        buttons.push(PoolRect {
-            x: cx + (bw + BTN_GAP) as i64 * i as i64,
-            y,
-            w: bw,
-            h: BTN_H,
-        });
+    if let Some(n) = std::num::NonZeroU32::new(labels.len() as u32) {
+        let btw = cw.saturating_sub(BTN_GAP * (n.get() - 1)) / n;
+        for i in 0..labels.len() {
+            buttons.push(PoolRect {
+                x: cx + (btw + BTN_GAP) as i64 * i as i64,
+                y,
+                w: btw,
+                h: BTN_H,
+            });
+        }
     }
     Layout {
         card,
         header,
         rows,
         naming,
-        confirm,
         buttons,
-        visible_rows,
+        visible_rows: visible_boxes,
     }
 }
 
-/// 命中（x/y 屏坐标 i64，与涂装同一份 Layout）
-pub fn hit(l: &Layout, x: i64, y: i64) -> Option<Hit> {
+/// 确认跳框几何（涂装/命中同一份）：卡宽 40 格居中、卡高 = 标题 2 格 +
+/// 间距 + 双钮 3 格 + 上下留白（内容只有一句话「关闭 '名'？」放标题位）
+pub const MODAL_CARD_W: u32 = CELL_W * 40;
+pub const MODAL_TITLE_H: u32 = CELL_H * 2;
+pub const MODAL_PAD_V: u32 = CELL_H;
+pub const MODAL_GAP: u32 = CELL_H / 2;
+pub const MODAL_BTN_GAP: u32 = CELL_W * 2;
+
+pub fn confirm_card(screen_w: u32, screen_h: u32) -> PoolRect {
+    let w = MODAL_CARD_W.min(screen_w.saturating_sub(CELL_W * 4));
+    let h = MODAL_PAD_V * 2 + MODAL_TITLE_H + MODAL_GAP + BTN_H;
+    PoolRect {
+        x: (i64::from(screen_w) - i64::from(w)) / 2,
+        y: (i64::from(screen_h) - i64::from(h)) / 2,
+        w,
+        h,
+    }
+}
+
+/// 跳框双钮：[确定关闭][取消]（卡内底部一行，左右等宽）
+pub fn confirm_buttons(card: &PoolRect) -> [PoolRect; 2] {
+    let bw = (card.w.saturating_sub(CARD_PAD_H * 2 + MODAL_BTN_GAP)) / 2;
+    let y = card.y + i64::from(card.h - MODAL_PAD_V - BTN_H);
+    let x0 = card.x + i64::from(CARD_PAD_H);
+    [
+        PoolRect {
+            x: x0,
+            y,
+            w: bw,
+            h: BTN_H,
+        },
+        PoolRect {
+            x: x0 + i64::from(bw + MODAL_BTN_GAP),
+            y,
+            w: bw,
+            h: BTN_H,
+        },
+    ]
+}
+
+/// 跳框按钮标签（涂装/命中唯一源）
+pub const CONFIRM_LABELS: [&str; 2] = ["确定关闭", "取消"];
+
+/// 命中（x/y 屏坐标 i64，与涂装同一份 Layout）。模态（确认跳框）在时
+/// 只认跳框：钮/卡内（吞）/卡外（Dismiss）；卡区命中全屏蔽
+pub fn hit(l: &Layout, x: i64, y: i64, screen_w: u32, screen_h: u32, mode: Mode) -> Option<Hit> {
     let inside =
         |r: &PoolRect| x >= r.x && x < r.x + i64::from(r.w) && y >= r.y && y < r.y + i64::from(r.h);
+    if mode == Mode::Confirming {
+        let card = confirm_card(screen_w, screen_h);
+        let btns = confirm_buttons(&card);
+        if inside(&btns[0]) {
+            return Some(Hit::ModalOk);
+        }
+        if inside(&btns[1]) {
+            return Some(Hit::ModalCancel);
+        }
+        if inside(&card) {
+            return None; // 卡内非钮区 = 吞掉，不许穿透
+        }
+        return Some(Hit::ModalDismiss);
+    }
     for (i, r) in l.rows.iter().enumerate() {
         if inside(r) {
-            // 行尾 × 带 = Kill；其余 = Session
+            // 框尾 × 带 = Kill；其余 = Session
             if x >= r.x + i64::from(r.w) - i64::from(KILL_W) {
                 return Some(Hit::Kill(i));
             }

@@ -1122,10 +1122,13 @@ impl App {
                             );
                             let c = &lay.card;
                             let (xi, yi) = (x as i64, y as i64);
-                            xi >= c.x
-                                && xi < c.x + i64::from(c.w)
-                                && yi >= c.y
-                                && yi < c.y + i64::from(c.h)
+                            // 确认跳框（模态）在时全页吞触摸——跳框卡可能
+                            // 居中在 tmux 卡外，且框外点按 = 取消
+                            mode == crate::ui::parser_page::Mode::Confirming
+                                || (xi >= c.x
+                                    && xi < c.x + i64::from(c.w)
+                                    && yi >= c.y
+                                    && yi < c.y + i64::from(c.h))
                         };
                         if in_card {
                             crate::report::report(
@@ -1949,7 +1952,14 @@ impl App {
                                 snap.sessions.len(),
                                 mode,
                             );
-                            let h = crate::ui::parser_page::hit(&lay, pt.0 as i64, pt.1 as i64);
+                            let h = crate::ui::parser_page::hit(
+                                &lay,
+                                pt.0 as i64,
+                                pt.1 as i64,
+                                sw,
+                                sh,
+                                mode,
+                            );
                             (snap, h.map(|hh| (hh, mode)))
                         };
                         if let Some((hh, mode)) = hit_result {
@@ -3333,8 +3343,30 @@ impl App {
             pp::Hit::Kill(i) => {
                 if let Some(p) = &self.parser_page {
                     p.lock().unwrap().begin_confirm(i);
-                    crate::report::report("ui", &format!("tmux 插件点×: 确认行 {i}"));
+                    crate::report::report("ui", &format!("tmux 插件点×: 确认跳框 {i}"));
                 }
+            }
+            pp::Hit::ModalOk => {
+                let target = self
+                    .parser_page
+                    .as_ref()
+                    .and_then(|p| p.lock().unwrap().confirm_target());
+                if let Some(p) = &self.parser_page {
+                    p.lock().unwrap().cancel_confirm();
+                }
+                if let (Some(cfg), Some(name)) = (&self.remote_conn_cfg, target) {
+                    crate::report::report("ui", &format!("tmux 插件: 确认关闭 {name}"));
+                    self.parser_exec = Some((
+                        ParserExec::Kill,
+                        crate::tmux_exec::exec(cfg.url.clone(), crate::tmux_ctl::cmd_kill(&name)),
+                    ));
+                }
+            }
+            pp::Hit::ModalCancel | pp::Hit::ModalDismiss => {
+                if let Some(p) = &self.parser_page {
+                    p.lock().unwrap().cancel_confirm();
+                }
+                crate::report::report("ui", "tmux 插件: 关闭取消");
             }
             pp::Hit::Button(i) => match pp::button_action(mode, i) {
                 Some(pp::Action::Reflow) => self.parser_reflow(),
@@ -3350,7 +3382,6 @@ impl App {
                     }
                     crate::report::report("ui", "tmux 插件: 命名态开（弹键盘）");
                 }
-                Some(pp::Action::Refresh) => self.parser_refresh(),
                 Some(pp::Action::NamingOk) => {
                     let raw = self
                         .parser_page
@@ -3365,31 +3396,6 @@ impl App {
                     }
                     self.parser_ime_off();
                     crate::report::report("ui", "tmux 插件: 命名取消");
-                }
-                Some(pp::Action::ConfirmOk) => {
-                    let target = self
-                        .parser_page
-                        .as_ref()
-                        .and_then(|p| p.lock().unwrap().confirm_target());
-                    if let Some(p) = &self.parser_page {
-                        p.lock().unwrap().cancel_confirm();
-                    }
-                    if let (Some(cfg), Some(name)) = (&self.remote_conn_cfg, target) {
-                        crate::report::report("ui", &format!("tmux 插件: 确认关闭 {name}"));
-                        self.parser_exec = Some((
-                            ParserExec::Kill,
-                            crate::tmux_exec::exec(
-                                cfg.url.clone(),
-                                crate::tmux_ctl::cmd_kill(&name),
-                            ),
-                        ));
-                    }
-                }
-                Some(pp::Action::ConfirmCancel) => {
-                    if let Some(p) = &self.parser_page {
-                        p.lock().unwrap().cancel_confirm();
-                    }
-                    crate::report::report("ui", "tmux 插件: 关闭取消");
                 }
                 None => {}
             },
@@ -5518,7 +5524,13 @@ impl App {
                             (ps.lower.y + i64::from(ps.lower.h) - cp::POOL_CONTENT_INSET) as f32,
                         ));
                     }
-                    if !cs.rows.is_empty() && ps.lower.w > (cp::POOL_CONTENT_INSET * 2) as u32 {
+                    // 跳框模态在 = 光标层不画（BAR 挂账：光标层合成在配置
+                    // 槽之上，模态只画进槽画布——不摘会让下池三级框光标
+                    // 压盖跳框内容，用户实机目击「下池三级框行叠加在跳框上」）
+                    if cs.modal.is_none()
+                        && !cs.rows.is_empty()
+                        && ps.lower.w > (cp::POOL_CONTENT_INSET * 2) as u32
+                    {
                         let stride = (cp::LOWER_ROW_H as i64 + cp::ROW_GAP) as f32;
                         let cx = (ps.lower.x + cp::POOL_CONTENT_INSET) as f32;
                         let cy = ps.lower.y as f32

@@ -3571,35 +3571,32 @@ impl TermView {
             header_fg,
         );
 
-        // 会话行表（Ready 且非空才有行；空表 = 卡头已说「0 会话」）
+        // 会话框表（一行两框，每框 = 三级框行主形态：全包框左粗+三细
+        // 整环 135° 双色渐变 + 渐变暗底内芯——2026-09-19 用户拍板：
+        // 内容只有 名字+×，「·N窗/·他端」meta 撤；附着框名字带 ● 前缀）
         for (i, s) in snap.sessions.iter().zip(lay.rows.iter()) {
             let (r, s) = (s, i);
             let mine = snap.attached.as_deref() == Some(s.name.as_str());
-            if mine {
-                paint_row_frame(
-                    &mut frame,
-                    r.x + off,
-                    r.y,
-                    r.w,
-                    r.h,
-                    true,
-                    accent,
-                    denom,
-                    no_clip,
-                );
-            }
-            let mut text = s.name.clone();
-            if mine {
-                text = format!("● {text}");
-            }
-            let mut meta = format!("·{}窗", s.windows);
-            if s.attached && !mine {
-                meta.push_str("·他端");
-            }
+            paint_row_frame(
+                &mut frame,
+                r.x + off,
+                r.y,
+                r.w,
+                r.h,
+                true,
+                accent,
+                denom,
+                no_clip,
+            );
+            let text = if mine {
+                format!("● {}", s.name)
+            } else {
+                s.name.clone()
+            };
             let fg = if mine { title_fg } else { body_fg };
             self.draw_text_left(
                 &mut frame,
-                &format!("{text} {meta}"),
+                &text,
                 (r.x + off) as u32,
                 r.w.saturating_sub(pp::KILL_W),
                 r.y as u32,
@@ -3607,7 +3604,7 @@ impl TermView {
                 34.0,
                 fg,
             );
-            // 行尾 ×
+            // 框尾 ×
             let kx = r.x + off + i64::from(r.w) - i64::from(pp::KILL_W);
             self.draw_text_centered(
                 &mut frame,
@@ -3622,7 +3619,7 @@ impl TermView {
             );
         }
 
-        // 命名行 / 确认带
+        // 命名行
         if let (Some(nr), Some(text)) = (&lay.naming, &snap.naming) {
             self.draw_text_left(
                 &mut frame,
@@ -3633,23 +3630,6 @@ impl TermView {
                 nr.h,
                 34.0,
                 title_fg,
-            );
-        }
-        if let (Some(cr), Some(ci)) = (&lay.confirm, snap.confirming) {
-            let name = snap
-                .sessions
-                .get(ci)
-                .map(|s| s.name.as_str())
-                .unwrap_or("?");
-            self.draw_text_left(
-                &mut frame,
-                &format!("关闭 '{name}'？"),
-                (cr.x + off) as u32,
-                cr.w,
-                cr.y as u32,
-                cr.h,
-                34.0,
-                err_fg,
             );
         }
 
@@ -3667,6 +3647,72 @@ impl TermView {
                 title_fg,
                 b.x + off,
             );
+        }
+
+        // 关闭确认跳框（2026-09-19 用户拍板：× 必须过模态防误触，取代
+        // 卡内确认带）——压暗层 + 居中卡（内卡反转 c2→c1，池框同尺）+
+        // 标题问句 + 双钮 [确定关闭][取消]；几何吃 pp::confirm_card/
+        // confirm_buttons 同一份（眼手同尺）
+        if mode == pp::Mode::Confirming {
+            let name = snap
+                .confirming
+                .and_then(|ci| snap.sessions.get(ci))
+                .map(|s| s.name.as_str())
+                .unwrap_or("?");
+            // 压暗层：本页可见区整层混黑 α150（随面板平移，左右求交）
+            let dx0 = off.clamp(0, i64::from(w)) as u32;
+            let dx1 = (i64::from(w) + off).clamp(0, i64::from(w)) as u32;
+            for yy in 0..h {
+                for xx in dx0..dx1 {
+                    frame.blend_px(xx, yy, 0x0000_0000, 150);
+                }
+            }
+            let card = pp::confirm_card(w, h);
+            let cx0 = card.x + off;
+            if cx0 >= 0 {
+                paint_rect_ring(
+                    &mut frame,
+                    cx0,
+                    card.y,
+                    cx0 + i64::from(card.w),
+                    card.y + i64::from(card.h),
+                    0,
+                    i64::MAX,
+                    crate::ui::accent::CARD_PAGE_BG,
+                    accent.c2,
+                    accent.c1,
+                    POOL_FRAME_R,
+                    true,
+                );
+                self.draw_text_centered(
+                    &mut frame,
+                    &format!("关闭 '{name}'？"),
+                    cx0,
+                    card.y + i64::from(pp::MODAL_PAD_V),
+                    card.w,
+                    pp::MODAL_TITLE_H,
+                    36.0,
+                    title_fg,
+                    cx0,
+                );
+                for (b, label) in pp::confirm_buttons(&card)
+                    .iter()
+                    .zip(pp::CONFIRM_LABELS.iter())
+                {
+                    paint_thin_frame(&mut frame, b.x + off, b.y, b.w, b.h, accent, denom, no_clip);
+                    self.draw_text_centered(
+                        &mut frame,
+                        label,
+                        b.x + off,
+                        b.y,
+                        b.w,
+                        b.h,
+                        34.0,
+                        title_fg,
+                        b.x + off,
+                    );
+                }
+            }
         }
     }
 
