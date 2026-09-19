@@ -17,3 +17,4 @@
 | modal 跳框 | `ui/cfg_page.rs` modal 维 + `ui/modal.rs` 几何 | `termview::paint_modal_impl` | touch-in（模态手势槽吃下层） | modal_spec 10 | CELL_* 网格标定 | docs/active/theme.md §六 跳框 |
 | comp_registry 组件池 | `ui/comp_registry.rs`（常量表=唯一信息源） | 读表渲染（复用双池行+跳框） | — | comp_registry_spec 7（symbol 实存棘轮） | 无 | docs/active/theme.md §五 目录语义 7 |
 | parser_page 解析页 tmux 插件 | `ui/parser_page.rs`（会话表/命名/确认+几何命中） | `termview::paint_parser_content_impl` | touch-in（卡区手势槽）+ tmux_exec（短命 ws） | parser_page_spec 14 + tmux_ctl_spec 21 | CELL_* 网格标定 | docs/active/theme.md §六之九 解析页插件卡 |
+| conn_card 连接/服务卡 | `ui/conn_card.rs`（几何命中+文案映射；数据 = tunnel.rs 全局快照） | `termview::paint_parser_content_impl`（与 tmux 卡同槽同涂装段） | touch-in（解析页卡区手势槽同槽分流）+ tunnel 全局快照只读 + request_reconnect 单命令 | conn_card_spec 5 + tunnel_spec 6 | CELL_* 网格标定 | docs/active/theme.md §六之九 + 设置页.md §2.1 |

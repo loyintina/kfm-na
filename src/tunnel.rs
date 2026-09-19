@@ -15,7 +15,8 @@
 //! 停掉 Termux 隧道即无缝切换到 na 自持。
 
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::settings::ServerEntry;
 
@@ -72,6 +73,46 @@ pub fn backoff_secs(attempt: u32) -> u64 {
     }
 }
 
+/// 状态词（A 档纯函数）：连接/服务卡状态行的唯一文案源。
+/// Down{attempts:0} = 从没起来过（缺件/prefix 未装同相）→「未启动」；
+/// Down{n>0} = 退避中，必须带次数（用户要知道还在敲第几次门）。
+pub fn state_word(st: &TunnelState) -> String {
+    match st {
+        TunnelState::Up => "自持在线".into(),
+        TunnelState::ExternalUp => "外部借用".into(),
+        TunnelState::Starting => "连接中".into(),
+        TunnelState::Down { attempts, .. } if *attempts == 0 => "未启动".into(),
+        TunnelState::Down { attempts, .. } => format!("退避 ×{attempts}"),
+    }
+}
+
+// ---- 数据面（UI 只读/按钮只写这两道门，绝不许碰锁内活物）----
+
+/// 全局快照门：supervisor 启动时登记，插件卡经 snap() 读。
+/// 拍板（2026-09-20）：避免穿 App plumbing，UI 直读全局。
+static TUNNEL_SNAP: OnceLock<Arc<Mutex<TunnelSnap>>> = OnceLock::new();
+
+/// 读隧道快照（没起看门狗 = None——L3 未装/无服务器条目同相）
+pub fn snap() -> Option<Arc<Mutex<TunnelSnap>>> {
+    TUNNEL_SNAP.get().cloned()
+}
+
+/// 控制命令（v1 只有重连：杀娃重置退避，下一拍立即重拉）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TunnelCmd {
+    Reconnect,
+}
+
+static TUNNEL_CMD: OnceLock<Sender<TunnelCmd>> = OnceLock::new();
+
+/// 插件卡 [重连] 按钮的唯一入口；看门狗不在 = false（按钮侧可提示）
+pub fn request_reconnect() -> bool {
+    TUNNEL_CMD
+        .get()
+        .map(|tx| tx.send(TunnelCmd::Reconnect).is_ok())
+        .unwrap_or(false)
+}
+
 // ---- B 档：进程胶水（spawn/探活/看门狗），判卷 = 真机实拍 + report 行 ----
 
 /// 隧道状态（连接/服务插件卡与断线状态卡的唯一数据源）
@@ -94,6 +135,9 @@ pub struct TunnelSnap {
     pub local_port: u16,
     /// user@host:port（卡上显示用）
     pub target: String,
+    /// 代际戳：状态每变一次 +1——涂装 sig 的唯一代际源（漏维 = 鬼影，
+    /// 解析槽烘焙 sig 带本维才在状态翻转时重烘）
+    pub epoch: u64,
 }
 
 /// 本地口 TCP 探活（绑定在 = 转发通道在；端到端 ws 握手探活归插件卡阶段）
@@ -107,8 +151,13 @@ fn probe_port(port: u16) -> bool {
 
 /// 起看门狗（一线程 1s 滴答）：探口 → 外部占则让位挂 ExternalUp；
 /// 无娃则 spawn（Starting）；探活过且娃在 → Up；娃死 → Down 退避重拉。
-/// 返回共享快照——UI/报表只读这份。
+/// 返回共享快照——UI/报表只读这份。**幂等**：重复调用（设置重载）返回
+/// 已在跑的那份，不起第二条看门狗（两条抢一个口 = 互杀）。
 pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
+    if let Some(existing) = TUNNEL_SNAP.get() {
+        crate::report::report("tunnel", "看门狗已在跑，忽略重复启动");
+        return Arc::clone(existing);
+    }
     let snap = Arc::new(Mutex::new(TunnelSnap {
         state: TunnelState::Down {
             attempts: 0,
@@ -119,8 +168,19 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
             "{}@{}:{}",
             server.ssh.user, server.ssh.host, server.ssh.port
         ),
+        epoch: 0,
     }));
+    TUNNEL_SNAP.set(Arc::clone(&snap)).ok();
     let Ok(args) = forward_args(&server) else {
+        // 缺件：快照落字——连接/服务卡直接显示原因，不只靠报表
+        let mut g = snap.lock().unwrap();
+        g.state = TunnelState::Down {
+            attempts: 0,
+            last_error: "ssh 配置缺件".into(),
+        };
+        g.target = "—".into(); // 缺件时 user/host 是空串，"@:22" 上卡徒增噪音
+        g.epoch += 1;
+        drop(g);
         crate::report::report("tunnel", "ssh 配置缺件，隧道不启动（设置页补齐）");
         return snap;
     };
@@ -131,18 +191,45 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
             server.ssh.user, server.ssh.host, server.ssh.port, server.tunnel.local_port
         ),
     );
+    let (cmd_tx, cmd_rx) = channel::<TunnelCmd>();
+    TUNNEL_CMD.set(cmd_tx).ok();
     let ssh_bin = prefix.join("bin/ssh");
     let snap_t = Arc::clone(&snap);
     std::thread::spawn(move || {
         let mut child: Option<std::process::Child> = None;
         let mut attempts: u32 = 0;
-        let mut external_since: Option<std::time::Instant> = None;
         let set = |st: TunnelState, snap_t: &Arc<Mutex<TunnelSnap>>| {
             let mut g = snap_t.lock().unwrap();
             if g.state != st {
                 crate::report::report("tunnel", &format!("状态 {:?} → {:?}", g.state, st));
                 g.state = st;
+                g.epoch += 1;
             }
+        };
+        // 等一拍（可被取消）：命令到了 = true。重连语义 = 杀娃（有的话）+
+        // 退避清零，下一拍立刻重新探口/spawn——不等退避不等 30s 复查
+        let wait = |rx: &Receiver<TunnelCmd>, dur: std::time::Duration| -> bool {
+            match rx.recv_timeout(dur) {
+                Ok(TunnelCmd::Reconnect) => true,
+                Err(_) => false,
+            }
+        };
+        let reconnect = |child: &mut Option<std::process::Child>,
+                         attempts: &mut u32,
+                         snap_t: &Arc<Mutex<TunnelSnap>>| {
+            crate::report::report("tunnel", "手动重连：杀娃重拉");
+            if let Some(mut c) = child.take() {
+                let _ = c.kill();
+                let _ = c.wait(); // 收尸——不留僵尸，口随进程 teardown 立刻放
+            }
+            *attempts = 0;
+            set(
+                TunnelState::Down {
+                    attempts: 0,
+                    last_error: "手动重连".into(),
+                },
+                snap_t,
+            );
         };
         loop {
             let port = server.tunnel.local_port;
@@ -155,11 +242,11 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
             if port_open && !child_alive {
                 // 外部隧道占着口——让位不抢，30s 一拍复查（它一断下一拍接管）
                 set(TunnelState::ExternalUp, &snap_t);
-                external_since.get_or_insert_with(std::time::Instant::now);
-                std::thread::sleep(std::time::Duration::from_secs(30));
+                if wait(&cmd_rx, std::time::Duration::from_secs(30)) {
+                    reconnect(&mut child, &mut attempts, &snap_t);
+                }
                 continue;
             }
-            external_since = None;
 
             if child_alive {
                 set(
@@ -170,7 +257,9 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                     },
                     &snap_t,
                 );
-                std::thread::sleep(std::time::Duration::from_secs(1));
+                if wait(&cmd_rx, std::time::Duration::from_secs(1)) {
+                    reconnect(&mut child, &mut attempts, &snap_t);
+                }
                 continue;
             }
 
@@ -182,7 +271,7 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                     "tunnel",
                     &format!("ssh 进程退出（{code:?}），第 {attempts} 次退避重拉"),
                 );
-                let wait = backoff_secs(attempts);
+                let wait_s = backoff_secs(attempts);
                 set(
                     TunnelState::Down {
                         attempts,
@@ -190,8 +279,8 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                     },
                     &snap_t,
                 );
-                if wait > 0 {
-                    std::thread::sleep(std::time::Duration::from_secs(wait));
+                if wait_s > 0 && wait(&cmd_rx, std::time::Duration::from_secs(wait_s)) {
+                    reconnect(&mut child, &mut attempts, &snap_t);
                 }
             }
 
@@ -224,10 +313,17 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                         },
                         &snap_t,
                     );
-                    std::thread::sleep(std::time::Duration::from_secs(backoff_secs(attempts)));
+                    if wait(
+                        &cmd_rx,
+                        std::time::Duration::from_secs(backoff_secs(attempts)),
+                    ) {
+                        reconnect(&mut child, &mut attempts, &snap_t);
+                    }
                 }
             }
-            std::thread::sleep(std::time::Duration::from_secs(1));
+            if wait(&cmd_rx, std::time::Duration::from_secs(1)) {
+                reconnect(&mut child, &mut attempts, &snap_t);
+            }
         }
     });
     snap

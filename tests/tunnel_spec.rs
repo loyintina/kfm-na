@@ -5,7 +5,7 @@
 //! ②BatchMode 漏了必须咬（无 askpass 时密码悬问 = 隧道假死）。
 
 use kfm_na::settings::{ServerEntry, SshFields, TunnelPorts};
-use kfm_na::tunnel::{TARGET_PORT, backoff_secs, forward_args};
+use kfm_na::tunnel::{TARGET_PORT, TunnelState, backoff_secs, forward_args, state_word};
 
 fn srv(host: &str, user: &str, key: &str) -> ServerEntry {
     ServerEntry {
@@ -101,4 +101,28 @@ fn spec_自定义本地口() {
     let mut s = srv("h", "u", "/k");
     s.tunnel.local_port = 9121;
     assert!(args_of(&s).join(" ").contains("-L 9121:127.0.0.1:8021"));
+}
+
+#[test]
+fn spec_状态词_四态五相() {
+    // 连接/服务卡状态行的唯一文案源——词变了考题必须跟着改
+    assert_eq!(state_word(&TunnelState::Up), "自持在线");
+    assert_eq!(state_word(&TunnelState::ExternalUp), "外部借用");
+    assert_eq!(state_word(&TunnelState::Starting), "连接中");
+    assert_eq!(
+        state_word(&TunnelState::Down {
+            attempts: 0,
+            last_error: "未启动".into()
+        }),
+        "未启动",
+        "attempts=0 的 Down = 从没起来过（缺件/prefix 未装同相）"
+    );
+    assert_eq!(
+        state_word(&TunnelState::Down {
+            attempts: 3,
+            last_error: "ssh 退出".into()
+        }),
+        "退避 ×3",
+        "退避中必须带次数——用户要知道它还在敲第几次门"
+    );
 }

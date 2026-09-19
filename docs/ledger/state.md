@@ -7,6 +7,39 @@
 
 ## 当前位置（2026-09-19)
 
+> **连接/服务卡 v1（已修待判，待 redroid 实拍+用户真机终验）**：
+> 解析页第二张二级卡（纵排 tmux 卡下），L3 自持隧道的可视化面。
+> 数据面（tunnel.rs）：全局快照门 `tunnel::snap()` + 状态词
+> `state_word`（自持在线/外部借用/连接中/退避 ×N/未启动）+ 重连
+> 命令通道（`request_reconnect`：看门狗各睡眠点全改 recv_timeout
+> 可取消，命令到 = 杀娃收尸+退避清零+下一拍立即重拉）+ start
+> 幂等闸（重复调用不起第二条看门狗）+ TunnelSnap 加 epoch 维。
+> 卡（ui/conn_card.rs，A 档 5 钉+变异两咬）：卡头「连接 · 状态词」
+> + 四字段行（目标/本地口/重拉/错误，字段标签列配方）+ 分隔线 +
+> [重连] 钮（三级框同件）。几何：tmux 卡按 `INSET_EXTRA`（= 卡间
+> 距+卡实高，同源钉死）预留底部带，涂装/命中/滚动/起手势五处
+> pp::layout 调用点同加；涂装随隧道 epoch 进解析槽 sig 自动重烘。
+> 组件池控件家登记「连接/服务卡」+ registry.md 入册 + 设置页.md
+> §2.1 记。钉：conn_card_spec 5 + tunnel_spec 6（含状态词五相）。
+
+> **L3 自持隧道·真机接管实拍（半程，让位绿/接管未判）**：热更后
+> field-reports 实证看门狗让位语义正确——na-tunnel 占着 9021 时
+> `Down{未启动} → ExternalUp` 不抢（30s 复查）。杀孤儿 ssh 后接管
+> 窗口却没出现：服务器侧目击手机 IP 两条新 sshd（15:40:00 root@notty
+> + 15:41:54 交互会话）——**na-tunnel.sh 并未死透（此前 pgrep 括号法
+> 误判），它的自愈回路抢在原生看门狗之前把 9021 重新占回**，看门狗
+> 继续让位是正确行为（无 spawn 即无 report，符合设计）。~15:49 UTC
+> 手机全线掉线（kalo 主连接+na-tunnel 同刻消失，息屏 doze/网络切换
+> 特征），实拍中断。**接管判卷前提 = 真退役 na-tunnel.sh（杀脚本+
+> 它的看守回路，光杀 ssh 连接没用——它用 ControlMaster 式回路重绑）
+> → 手机回线后重做：ExternalUp → Down/Starting → Up 全序列 +
+> ss 侧 direct-tcpip 通道 + na-stats active=remote**。
+> 附带两笔：①redroid 热重启跌入 `创建事件循环失败: RecreationAttempt`
+> 刷屏恐慌环（热 .so 触发 restart-req，redroid 无 Termux 拉回、同进程
+> 重进 android_main 必炸——redroid 热更后必须 am force-stop 清进程），
+> 已 force-stop 清场；②报表路（手机 127.0.0.1:8021←kalo -L）与数据
+> 路（9021）是两条独立通道，判读时分开——ws 断≠报表断。
+
 > **解析页 tmux 卡重构 + BAR-114（已修待判，待 redroid 实拍+用户真机
 > 终验）**：①会话行 → 一行两框，每框 = 三级框行主形态（全包框 135°
 > 双色渐变+渐变暗芯，高 2 格、内容上下各 ~半格），内容只剩 名字+×

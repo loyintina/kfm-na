@@ -437,8 +437,9 @@ struct LayerSigs {
     over: crate::ui::stage::DirtyGuard<OverSig>,
     config: crate::ui::stage::DirtyGuard<ConfigSig>,
     filetree: crate::ui::stage::DirtyGuard<(u32, u32, u32, u32, u32, u32)>,
-    /// 解析槽：末维 = tmux 插件 epoch（2026-09-19 插件卡内容随槽同烘焙）
-    parser: crate::ui::stage::DirtyGuard<(u32, u32, u32, u32, u32, u32, u64)>,
+    /// 解析槽：末两维 = tmux 插件 epoch（2026-09-19 插件卡内容随槽同烘焙）
+    /// + 隧道 epoch（2026-09-20 连接/服务卡——状态翻转必重烘，漏维 = 鬼影）
+    parser: crate::ui::stage::DirtyGuard<(u32, u32, u32, u32, u32, u32, u64, u64)>,
     termcard: crate::ui::stage::DirtyGuard<(u32, u32, u32, u32)>,
     /// 标签栏层（BAR-096 拆槽）
     tabbar: crate::ui::stage::DirtyGuard<TabBarSig>,
@@ -1125,20 +1126,28 @@ impl App {
                             let lay = crate::ui::parser_page::layout(
                                 sw,
                                 sh,
-                                self.chrome_inset() + self.cur_bar_h(),
+                                self.chrome_inset()
+                                    + self.cur_bar_h()
+                                    + crate::ui::conn_card::INSET_EXTRA,
                                 snap.sessions.len(),
                                 mode,
                                 snap.scroll,
                             );
                             let c = &lay.card;
+                            let clay = crate::ui::conn_card::layout(c);
+                            let cc = &clay.card;
                             let (xi, yi) = (x as i64, y as i64);
+                            let in_rect = |r: &crate::ui::dual_pool::PoolRect| {
+                                xi >= r.x
+                                    && xi < r.x + i64::from(r.w)
+                                    && yi >= r.y
+                                    && yi < r.y + i64::from(r.h)
+                            };
                             // 确认跳框（模态）在时全页吞触摸——跳框卡可能
                             // 居中在 tmux 卡外，且框外点按 = 取消
                             mode == crate::ui::parser_page::Mode::Confirming
-                                || (xi >= c.x
-                                    && xi < c.x + i64::from(c.w)
-                                    && yi >= c.y
-                                    && yi < c.y + i64::from(c.h))
+                                || in_rect(c)
+                                || in_rect(cc) // 连接/服务卡同归插件手势（重连钮）
                         };
                         if in_card {
                             crate::report::report(
@@ -1447,7 +1456,9 @@ impl App {
                                 crate::ui::parser_page::layout(
                                     sw,
                                     sh,
-                                    self.chrome_inset() + self.cur_bar_h(),
+                                    self.chrome_inset()
+                                        + self.cur_bar_h()
+                                        + crate::ui::conn_card::INSET_EXTRA,
                                     snap.sessions.len(),
                                     crate::ui::parser_page::Mode::Normal,
                                     snap.scroll,
@@ -1474,7 +1485,9 @@ impl App {
                                 && crate::ui::parser_page::layout(
                                     sw,
                                     sh,
-                                    self.chrome_inset() + self.cur_bar_h(),
+                                    self.chrome_inset()
+                                        + self.cur_bar_h()
+                                        + crate::ui::conn_card::INSET_EXTRA,
                                     snap.sessions.len(),
                                     crate::ui::parser_page::Mode::Normal,
                                     snap.scroll,
@@ -2003,7 +2016,7 @@ impl App {
                         && !pt.2
                         && let (Some(page), Some((sw, sh))) = (&self.parser_page, self.screen_px())
                     {
-                        let (snap, hit_result) = {
+                        let (snap, hit_result, conn_hit) = {
                             let pg = page.lock().unwrap();
                             let snap = pg.snap();
                             let mode = if snap.naming.is_some() {
@@ -2016,7 +2029,9 @@ impl App {
                             let lay = crate::ui::parser_page::layout(
                                 sw,
                                 sh,
-                                self.chrome_inset() + self.cur_bar_h(),
+                                self.chrome_inset()
+                                    + self.cur_bar_h()
+                                    + crate::ui::conn_card::INSET_EXTRA,
                                 snap.sessions.len(),
                                 mode,
                                 snap.scroll,
@@ -2029,10 +2044,24 @@ impl App {
                                 sh,
                                 mode,
                             );
-                            (snap, h.map(|hh| (hh, mode)))
+                            // tmux 卡未命中且常态 → 连接/服务卡（几何同
+                            // 一份 lay.card 推出——眼手同尺）；模态/命名
+                            // 态屏蔽（模态跳框期间卡区命中全屏蔽惯例）
+                            let ch = if h.is_none() && mode == crate::ui::parser_page::Mode::Normal
+                            {
+                                let clay = crate::ui::conn_card::layout(&lay.card);
+                                crate::ui::conn_card::hit(&clay, pt.0 as i64, pt.1 as i64)
+                            } else {
+                                None
+                            };
+                            (snap, h.map(|hh| (hh, mode)), ch)
                         };
                         if let Some((hh, mode)) = hit_result {
                             self.parser_dispatch(snap, hh, mode);
+                        }
+                        if let Some(crate::ui::conn_card::ConnHit::Reconnect) = conn_hit {
+                            let ok = crate::tunnel::request_reconnect();
+                            crate::report::report("tunnel", &format!("连接卡点重连 → 下达{ok}"));
                         }
                     }
                     self.dirty = true;
@@ -3758,7 +3787,9 @@ impl App {
                             crate::ui::parser_page::layout(
                                 sw,
                                 sh,
-                                self.chrome_inset() + self.cur_bar_h(),
+                                self.chrome_inset()
+                                    + self.cur_bar_h()
+                                    + crate::ui::conn_card::INSET_EXTRA,
                                 snap.sessions.len(),
                                 crate::ui::parser_page::Mode::Normal,
                                 snap.scroll,
@@ -5493,10 +5524,18 @@ impl App {
         // tmux 插件卡内容随槽同烘焙（2026-09-19 v1）——sig 加插件 epoch
         // （会话表/附着/命名/确认任何变更都必触发重烘焙，漏维 = 鬼影）
         let pt_epoch = parser_snap.map_or(0, |ps| ps.epoch);
+        let tunnel_epoch = crate::tunnel::snap().map_or(0, |s| s.lock().unwrap().epoch);
         if pt_visible
-            && sigs
-                .parser
-                .feed((w, h, ime, bar_h, acc_pt.c1, acc_pt.c2, pt_epoch))
+            && sigs.parser.feed((
+                w,
+                h,
+                ime,
+                bar_h,
+                acc_pt.c1,
+                acc_pt.c2,
+                pt_epoch,
+                tunnel_epoch,
+            ))
         {
             let px = g.slot_canvas(crate::gles_present::ChromeSlot::Parser);
             px.fill(0);

@@ -306,6 +306,17 @@ pub const COMPONENTS: &[CompEntry] = &[
         desc: "配置卡首行标签行：横滑 + 点选 + 弹簧滑块。手势仲裁边界单源——行带上的横向滑动不触发面板拖拽。",
         preview: Preview::TabChip,
     },
+    CompEntry {
+        name: "连接/服务卡",
+        cat: "控件",
+        status: CompStatus::Active,
+        symbol: "from_tunnel",
+        file: "src/ui/conn_card.rs",
+        spec: "宪法 §六之九 解析页插件卡 + 设置页.md §2.1 隧道条",
+        tests: "tests/conn_card_spec.rs",
+        desc: "解析页第二张二级卡（2026-09-20 用户立项，纵排在 tmux 卡下）：L3 自持隧道的可视化面——卡头「连接 · 状态词」（自持在线/外部借用/连接中/退避 ×N/未启动）+ 四字段行（目标/本地口/重拉/错误）+ 分隔线 + [重连] 钮（杀娃重拉不等退避）。数据 = tunnel.rs 全局快照直读（supervisor 写、卡读，免穿 App plumbing）；涂装随隧道 epoch 进解析槽 sig 自动重烘。几何：tmux 卡按 INSET_EXTRA 预留底部带（= 间距+卡实高，同源钉死）。复用件：池框卡环/字段标签列配方/分隔线/三级框钮。",
+        preview: Preview::FieldLabel,
+    },
     // ---- 动效引擎 ----
     CompEntry {
         name: "弹簧",

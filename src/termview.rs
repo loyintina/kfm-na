@@ -3578,7 +3578,14 @@ impl TermView {
         } else {
             pp::Mode::Normal
         };
-        let lay = pp::layout(w, h, bottom_inset, snap.sessions.len(), mode, snap.scroll);
+        let lay = pp::layout(
+            w,
+            h,
+            bottom_inset + crate::ui::conn_card::INSET_EXTRA,
+            snap.sessions.len(),
+            mode,
+            snap.scroll,
+        );
 
         // 卡环（二级框：内卡渐变反转 c2→c1，与双池同配方）
         let (cox, _coy) = crate::ui::tab_bar::content_origin();
@@ -3728,6 +3735,116 @@ impl TermView {
             self.draw_text_centered(
                 &mut frame,
                 label,
+                b.x + off,
+                b.y,
+                b.w,
+                b.h,
+                34.0,
+                title_fg,
+                b.x + off,
+            );
+        }
+
+        // ---- 连接/服务卡（2026-09-20 v1：解析页第二张二级卡，纵排在
+        // tmux 卡下；数据 = tunnel 全局快照直读。卡环/字段行/分隔线/钮
+        // 与 tmux 卡同配方同件——组件池登记 conn_card）
+        let clay = crate::ui::conn_card::layout(&lay.card);
+        let csnap = crate::ui::conn_card::current();
+        paint_rect_ring(
+            &mut frame,
+            clay.card.x + off,
+            clay.card.y,
+            clay.card.x + off + i64::from(clay.card.w),
+            clay.card.y + i64::from(clay.card.h),
+            clip_l,
+            clip_r,
+            crate::ui::accent::CARD_PAGE_BG,
+            accent.c2,
+            accent.c1,
+            POOL_FRAME_R,
+            true,
+        );
+        // 卡头「连接 · 状态词」（退避/未启动相用次级档压一压——在线才是
+        // 值得亮的标题）
+        let header_fg = if csnap.word == "自持在线" || csnap.word == "外部借用" {
+            title_fg
+        } else {
+            meta_fg
+        };
+        self.draw_text_left(
+            &mut frame,
+            &format!("连接 · {}", csnap.word),
+            (clay.header.x + off) as u32,
+            clay.header.w,
+            clay.header.y as u32,
+            clay.header.h,
+            36.0,
+            header_fg,
+        );
+        // 四字段行（字段标签列配方：标签左对齐亮档、值逐行右对齐灰档
+        // ——draw_field_lines 自带 1.5 格文内边距与 ≤2 行折行；错误行
+        // 有字用错色）
+        let values = [&csnap.target, &csnap.local, &csnap.attempts, &csnap.error];
+        for (i, fr) in clay.fields.iter().enumerate() {
+            let l_items = self.measure_items(crate::ui::conn_card::FIELD_LABELS[i], 36.0);
+            self.draw_field_lines(
+                &mut frame,
+                &l_items,
+                (fr.x + off) as u32,
+                fr.w,
+                fr.y as u32,
+                fr.h,
+                36.0,
+                title_fg,
+                None,
+                true,
+            );
+            let (v_fg, v) = if i == 3 && csnap.error != "—" {
+                (err_fg, values[i].as_str())
+            } else {
+                (meta_fg, values[i].as_str())
+            };
+            let v_items = self.measure_items(v, 30.0);
+            self.draw_field_lines(
+                &mut frame,
+                &v_items,
+                (fr.x + off) as u32,
+                fr.w,
+                fr.y as u32,
+                fr.h,
+                30.0,
+                v_fg,
+                None,
+                false,
+            );
+        }
+        paint_divider_line(
+            &mut frame,
+            clay.divider.x + off,
+            clay.divider.y,
+            clay.divider.w,
+            clay.divider.h,
+            accent,
+        );
+        // [重连] 钮（三级框行主形态，与 tmux 钮同件同尺）
+        {
+            let b = &clay.button;
+            let grad_ref = (-(b.x + off), -b.y, i64::from(b.w + b.h));
+            paint_row_frame_gradref(
+                &mut frame,
+                b.x + off,
+                b.y,
+                b.w,
+                b.h,
+                true,
+                accent,
+                no_clip,
+                grad_ref,
+                0,
+            );
+            self.draw_text_centered(
+                &mut frame,
+                "重连",
                 b.x + off,
                 b.y,
                 b.w,

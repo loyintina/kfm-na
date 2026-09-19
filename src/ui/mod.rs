@@ -15,6 +15,7 @@ pub mod accent;
 pub mod ai_page;
 pub mod cfg_page;
 pub mod comp_registry;
+pub mod conn_card;
 pub mod cursor;
 pub mod dual_pool;
 pub mod fx_ease;
