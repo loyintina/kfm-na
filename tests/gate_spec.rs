@@ -791,3 +791,25 @@ fn spec_bar104_交接差分_点播触发两态() {
     assert!(!kfm_na::gate::take_panend_cap_req(d));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// BAR-110 钉：CPU 重画（na-shot）Parser 分支必须画 tmux 插件内容——
+// 漏画 = 仪器盲区（产品 GLES 槽烘焙正常、判卷截图看不见内容，2026-09-19
+// redroid 判卷现场实锤）。源码钉：分支内调用点被摘/挪出分支 = 钉红。
+// 变异抽检：删 paint_parser_content 调用行 → 钉红（已实咬）。
+#[test]
+fn spec_bar110_shot重画_parser分支带插件内容() {
+    let src = include_str!("../src/gate.rs");
+    let pos = src
+        .find("Panel::Parser => {")
+        .expect("gate.rs 缺 Parser 分支");
+    let end = (pos + 1400).min(src.len());
+    let branch = &src[pos..end];
+    assert!(
+        branch.contains("paint_parser_page_chrome"),
+        "Parser 分支缺页壳涂装（分支结构漂移，钉需重锚）"
+    );
+    assert!(
+        branch.contains("paint_parser_content"),
+        "BAR-110 回退：CPU 重画 Parser 分支没画插件内容——na-shot 仪器盲区复现"
+    );
+}

@@ -15,13 +15,22 @@ NA 报表硬编码 127.0.0.1:8021，容器内必须有本地监听者把流量�
 无外部依赖，stdlib only。daemon 化由调用方负责（nohup &）。
 """
 
+import os
 import socket
 import threading
 
-LISTEN_HOST = "172.18.0.1"
-LISTEN_PORT = 8021
-TARGET = ("127.0.0.1", 8021)
-UPSTREAM_TIMEOUT = 4  # 与 NA try_post 的 connect 2s + 读等待节奏对齐
+# 端口/地址可用环境变量覆盖（默认 = 生产拓扑；考题起独立实例测行为，
+# scripts/test-relay-timeout.py 用 RELAY_* 指到随机高端口防撞车）
+LISTEN_HOST = os.environ.get("RELAY_LISTEN_HOST", "172.18.0.1")
+LISTEN_PORT = int(os.environ.get("RELAY_LISTEN_PORT", "8021"))
+TARGET = (
+    os.environ.get("RELAY_TARGET_HOST", "127.0.0.1"),
+    int(os.environ.get("RELAY_TARGET_PORT", "8021")),
+)
+UPSTREAM_TIMEOUT = 4  # 仅 connect 上限——绝不许留在 socket 上：create_connection
+                      # 会把 timeout 带进 recv，4s 静默掐死长连接（BAR-109 命案：
+                      # 终端 ws 全路过本接力，静画面 tmux 会话 attach 4.1s
+                      # 准时被掐 → na 误判断线重连回默认会话）
 
 
 def pump(src: socket.socket, dst: socket.socket):
@@ -56,6 +65,7 @@ def main():
         conn, addr = srv.accept()
         try:
             up = socket.create_connection(TARGET, timeout=UPSTREAM_TIMEOUT)
+            up.settimeout(None)  # connect 上限用完即摘——recv 必须无限阻塞
         except OSError as e:
             print(f"[relay] 上游连接失败 {e}", flush=True)
             conn.close()

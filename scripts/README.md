@@ -148,6 +148,7 @@
 - `test-bg-survival.sh` — BAR-029:遥控前后台 + 8024 探针判后台存活。
 - `test-kfm-pkg.sh` — kfm-pkg 原子性三案(挂 chain 第 8 步)。
 - `test-overlay.sh` / `test-serve-overlays.sh` — L2 overlay 考题。
+- `test-relay-timeout.sh`(+`.py` 行为核) — BAR-109:relay 不得掐静默长连接(4s 死亡线命案;行为级判卷,dummy 上游静默 8s,越线一问一答。挂 chain 第 9 步)。
 
 ## 运维(crond 自动)
 

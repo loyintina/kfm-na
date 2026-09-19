@@ -312,6 +312,22 @@ pub fn dump_now(dir: &str) {
                             pt_off,
                             acc_of(Panel::Parser),
                         );
+                        // tmux 插件卡内容（BAR-110：CPU 重画路漏画 = 仪器盲区
+                        // ——产品 GLES 槽烘焙正常，na-shot 判卷看不见，与前台
+                        // 兜底路径同参同源补齐；锁序 term→parser_page 同 cfg）
+                        let psnap = crate::ui::parser_page::parser_page_handle()
+                            .map(|ph| ph.lock().unwrap().snap());
+                        if let Some(psnap) = psnap {
+                            t.paint_parser_content(
+                                &mut buf,
+                                w,
+                                h,
+                                bar_h,
+                                pt_off,
+                                &psnap,
+                                acc_of(Panel::Parser),
+                            );
+                        }
                     }
                 }
                 Panel::Ai => {

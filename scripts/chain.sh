@@ -107,6 +107,9 @@ bash scripts/test-kfm-pkg.sh || { echo "❌ kfm-pkg 考题不过"; exit 1; }
 # 2026-09-17 同步挂入：仪器证据门八言考题（BAR-104/105/106 三部曲——
 # 假设驱动修复拦截门的自钉，门被改坏即红）
 bash scripts/test-check-fix-instrument.sh || { echo "❌ 仪器证据门考题不过"; exit 1; }
+# 2026-09-19 同步挂入：BAR-109 relay 静默掐连行为钉（4s 死亡线命案——
+# 修复被回退 = redroid 一切静画面长连接复死，行为级判卷不 grep 源码）
+bash scripts/test-relay-timeout.sh || { echo "❌ BAR-109 relay 考题不过"; exit 1; }
 
 echo "=== [chain 10/11] 考卷覆盖矩阵棘轮闸（2026-08-27,自我测试缺口④） ==="
 # 治「新功能补题靠自觉」:各模块 pub 项被 tests/ 引用数,棘轮只许降
