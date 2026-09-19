@@ -35,6 +35,17 @@
   tofu 目击——从 DejaVuSans 借入 8 相，全角位（宽字符占两格），
   SMP 码点登记 format 12 新子表（全量镜像 BMP 映射，防「最优子表
   只装月亮汉字全灭」）；产物 1.46MB → 1.51MB
+- 符号全域补丁（BAR-113，2026-09-19）：kimi 输出 ·（U+00B7）—（U+2014）
+  ✅（U+2705）✨（U+2728）tofu 目击。borrow 增「源字体已有码点跳过」
+  守卫（像素气质优先，借形只补缺口）+ `cells="auto"`（按 EAW 逐字定
+  格宽）。两段借字：①窄符号 = Latin-1 整段（U+00A0-FF）+ 通用标点整段
+  （U+2000-206F）+ 货币符号整段（U+20A0-20BF）+ ⚠，DejaVuSansMono →
+  DejaVuSans 双级捐体补漏；②emoji 29 个高频（✅❌❗❓✨⭐⏰♻💡🔥🎉🚀🚨
+  🔔🔒🔓🔍📅📦🐛💀👍👎🎯📌📎💻📱🔧），捐体 Noto Emoji 黑白矢量
+  （构建期依赖不进库：`/root/kfm-na-toolchain/fonts/NotoEmoji-Regular.ttf`，
+  来源 google fonts notoemoji v65，许可 SIL OFL 1.1）。
+  缺口边界：零宽/格式控制符（ZWSP/双向控制/deprecated）与极冷门货币
+  （₶₷₻₼₾₿）不补——本就不该有墨。产物 1.51MB → 1.53MB
 - powerline 箭头（BAR-032）：上游 E0B0/E0B2 是「色块+镂空」装饰设计
   （渲染成 C 字，不可用），烘焙时替换为合成实心阶梯三角；其余私有区
   字形横压半格（BAR-028）

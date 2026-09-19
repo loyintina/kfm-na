@@ -418,6 +418,58 @@ fn spec_字体_内嵌cjk月亮相位补丁() {
     assert!(bmp.iter().any(|&v| v > 0), "月亮光栅全空（无墨）");
 }
 
+/// 内嵌 CJK fallback 的符号全域补丁（BAR-113，2026-09-19：kimi 输出里
+/// · U+00B7 / — U+2014 / ✅ U+2705 / ✨ U+2728 tofu 目击——主字体与旧
+/// fallback 都缺；补丁 = font-bake.py SYMBOL_NARROW_CPS（Latin-1 整段 +
+/// 通用标点整段 + 货币符号整段 + ⚠，DejaVuSansMono→DejaVuSans 双级捐体）
+/// + EMOJI_CPS 29 个高频 emoji（Noto Emoji 黑白矢量捐体，格宽按 EAW）。
+///
+/// 缺口边界：零宽/格式控制符（ZWSP/双向控制）与极冷门货币符号不补，
+/// 本就不该有墨。变异抽检方向：烘焙漏某段、漏登记 format 12（SMP 码点
+/// 全灭）、借入空轮廓——本钉必须红
+#[test]
+fn spec_字体_符号全域补丁() {
+    let font = fontdue::Font::from_bytes(
+        termview::VENDORED_CJK_FONT,
+        fontdue::FontSettings::default(),
+    )
+    .expect("内嵌 CJK 字体字节必须可解析");
+    // 窄符号：tofu 目击四字符 + 三块各抽代表
+    let narrow: &[char] = &[
+        '·', '—', '–', '⚠', // 目击实录
+        '©', '°', '±', '×', '÷', // Latin-1
+        '′', '″', '‰', '‹', '›', // 通用标点
+        '€', '₹', // 货币符号（₿ U+20BF 双级捐体都缺，豁免）
+    ];
+    for &c in narrow {
+        assert!(
+            font.lookup_glyph_index(c) != 0,
+            "U+{:04X} {c} 在符号全域补丁缺字形",
+            c as u32
+        );
+    }
+    // emoji：29 个全查字形在（SMP 码点只能靠 format 12 登记）
+    let emoji: &[char] = &[
+        '✅', '❌', '❗', '❓', '✨', '⭐', '⏰', '♻', '💡', '🔥', '🎉', '🚀', '🚨', '🔔', '🔒',
+        '🔓', '🔍', '📅', '📦', '🐛', '💀', '👍', '👎', '🎯', '📌', '📎', '💻', '📱', '🔧',
+    ];
+    for &c in emoji {
+        assert!(
+            font.lookup_glyph_index(c) != 0,
+            "U+{:04X} {c} 在 emoji 补丁缺字形",
+            c as u32
+        );
+    }
+    // 汉字不能被补丁顶灭（同月亮钉的 format 12 坑）
+    assert!(font.lookup_glyph_index('中') != 0, "汉字覆盖被符号补丁破坏");
+    // 光栅有墨抽两路：窄符号 + SMP emoji
+    for c in ['·', '✅'] {
+        let (m, bmp) = font.rasterize(c, 32.0);
+        assert!(m.width > 0 && m.height > 0, "{c} 光栅尺寸为零");
+        assert!(bmp.iter().any(|&v| v > 0), "{c} 光栅全空（无墨）");
+    }
+}
+
 // CFF 轮廓字体（NimbusMonoPS，host_cff() 夹具）：fontdue 0.9 能载能画西文，
 // 但中文字形光栅全空（w=0 h=0 ink=0，2026-08-13 host 实测）——空光栅判定的活教材
 // 比例字体（host_proportional() 夹具）：BAR-003 病灶同款（真机 Roboto 即比例字体）

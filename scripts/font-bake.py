@@ -62,6 +62,22 @@ BORROW_DONOR = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
 MOON_CPS = list(range(0x1F311, 0x1F319))
 MOON_DONOR = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 
+# 符号全域补丁（2026-09-19：trace tofu 目击 ·(U+00B7) —(U+2014) ✅(U+2705)
+# ✨(U+2728)——GB2312 子集连拉丁-1/通用标点都缺，装饰符号块也只 40/192）。
+# Latin-1 与通用标点整段借（源字体已有的自动跳过，像素气质优先），
+# ⚠ 点借（DejaVuSansMono 没有，DejaVuSans 有——donor 双级：Mono 先 Sans 补）
+SYMBOL_NARROW_CPS = list(range(0x00A0, 0x0100)) + list(range(0x2000, 0x2070)) + list(range(0x20A0, 0x20C0)) + [0x26A0]
+# 高颜 emoji 补丁（kimi 状态图标/TUI 高频；DejaVu 系全没有 → Noto Emoji
+# 黑白矢量捐体（OFL 许可；构建期 donor，不进库）。格宽 auto = EAW 逐字定
+# （emoji 多全角占两格，♻⏰ 等 BMP 同尺）
+EMOJI_CPS = [
+    0x2705, 0x274C, 0x2757, 0x2753, 0x2728, 0x2B50, 0x23F0, 0x267B,  # ✅❌❗❓✨⭐⏰♻
+    0x1F4A1, 0x1F525, 0x1F389, 0x1F680, 0x1F6A8, 0x1F514, 0x1F512,  # 💡🔥🎉🚀🚨🔔🔒
+    0x1F513, 0x1F50D, 0x1F4C5, 0x1F4E6, 0x1F41B, 0x1F480, 0x1F44D,  # 🔓🔍📅📦🐛💀👍
+    0x1F44E, 0x1F3AF, 0x1F4CC, 0x1F4CE, 0x1F4BB, 0x1F4F1, 0x1F527,  # 👎🎯📌📎💻📱🔧
+]
+EMOJI_DONOR = "/root/kfm-na-toolchain/fonts/NotoEmoji-Regular.ttf"
+
 
 def gb2312_unicodes():
     """GB2312 可编码字符全集 + 终端符号补丁表"""
@@ -213,28 +229,40 @@ def synthesize_powerline_arrows(font):
 
 def borrow(font, donor_path, cps, cells=1):
     """从捐体借字形补进产物：按 upm 比例缩放轮廓，墨迹居中进半角格
-    （cells=2 = 全角位，宽字符用——月亮相位 U+1F311-1F318 占两格）；
+    （cells=2 = 全角位，宽字符用——月亮相位 U+1F311-1F318 占两格；
+    cells="auto" = 按 EAW 逐字定，W/F 全角位其余半角——emoji 补丁用）；
     超宽 XY 等比压缩，lsb 钉真实 xMin（与 monoify 同律），登记 cmap。
-    必须在 subset 之后跑，否则借来的字形会被子集器再裁掉。"""
+    必须在 subset 之后跑，否则借来的字形会被子集器再裁掉。
+    源字体已有的码点跳过（像素气质优先，借形只补缺口）——整段借字
+    （Latin-1/通用标点）的安全前提。"""
     from fontTools.pens.recordingPen import DecomposingRecordingPen
 
     donor = TTFont(donor_path)
     d_cmap = donor.getBestCmap()
     d_gs = donor.getGlyphSet()
+    f_cmap = font.getBestCmap()
     scale = font["head"].unitsPerEm / donor["head"].unitsPerEm
     glyf, hmtx = font["glyf"], font["hmtx"]
     # 源字体若有竖排 metrics（vmtx，与 hmtx 同一个表类），借入字形也得
     # 登记——否则保存时 vmtx compile 按 glyphOrder 查不到新字形直接
     # KeyError（BAR-027 调试实录：hmtx 补了、vmtx 漏了，挂的是 _h_m_t_x）
     vmtx = font["vmtx"] if "vmtx" in font else None
-    unit = half_cell(font) * cells
-    cap = unit - 20  # 墨迹上限:留 20 单位边距防相邻格渗透
     got, missing = [], []
     for cp in cps:
+        if cp in f_cmap:
+            continue  # 源字体已有——借形只补缺口
         dg = d_cmap.get(cp)
         if not dg:
             missing.append(cp)
             continue
+        if cells == "auto":
+            import unicodedata
+
+            cp_cells = 2 if unicodedata.east_asian_width(chr(cp)) in ("W", "F") else 1
+        else:
+            cp_cells = cells
+        unit = half_cell(font) * cp_cells
+        cap = unit - 20  # 墨迹上限:留 20 单位边距防相邻格渗透
         gname = f"uni{cp:04X}"
         # 1. 复制轮廓（经 glyphSet 画，组合字形自动拆成简单轮廓，
         #    否则借来的 composite 会引用捐体里不存在的部件名）
@@ -333,6 +361,15 @@ def main():
         got, missed = borrow(font, MOON_DONOR, MOON_CPS, cells=2)
         print(f"borrow: 月亮相位借入 {len(got)} 个（全角位）"
               + (f"，捐体缺 {[hex(c) for c in missed]}" if missed else ""))
+        got, missed = borrow(font, BORROW_DONOR, SYMBOL_NARROW_CPS)
+        print(f"borrow: 符号全域借入 {len(got)} 个（Latin-1+通用标点+⚠）"
+              + (f"，捐体缺 {[hex(c) for c in missed]}" if missed else ""))
+        got2, missed2 = borrow(font, MOON_DONOR, missed)
+        print(f"borrow: 符号全域 Sans 补漏 {len(got2)} 个"
+              + (f"，双捐体仍缺 {[hex(c) for c in missed2]}" if missed2 else ""))
+        got, missed = borrow(font, EMOJI_DONOR, EMOJI_CPS, cells="auto")
+        print(f"borrow: emoji 借入 {len(got)} 个（格宽 EAW 自动）"
+              + (f"，捐体缺 {[hex(c) for c in missed]}" if missed else ""))
     if do_subset:
         n = squeeze_powerline(font)
         print(f"powerline: 横压半格 {n} 个字形")
@@ -348,7 +385,8 @@ def main():
     patch = [("▽", 0x25BD), ("█", 0x2588), ("⠋", 0x280B), ("→", 0x2192),
              ("", 0xE0A0), ("", 0xE0B0), ("✘", 0x2718), ("⚡", 0x26A1),
              ("✓", 0x2713), ("✗", 0x2717), ("➜", 0x279C), ("➦", 0x27A6),
-             ("🌖", 0x1F316)]
+             ("🌖", 0x1F316), ("·", 0x00B7), ("—", 0x2014),
+             ("✅", 0x2705), ("✨", 0x2728)]
     missing = [f"{ch}U+{cp:04X}" for ch, cp in patch if cp not in cmap]
     print("补丁表缺口:", ",".join(missing) if missing else "无")
     if do_borrow:
