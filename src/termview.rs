@@ -5727,6 +5727,62 @@ impl TermView {
         }
     }
 
+    /// 断线状态卡涂装（A 断线治理，2026-09-20）：终卡槽烘焙末尾、
+    /// session_over 时调用（与齿轮同槽——面板靠泊槽隐，「只在裸终端页
+    /// 出现」白拿）。几何全吃 ui::down_card 单源（眼手同尺）；
+    /// 色源 = 终端页族 TERM_FRAME_C1/C2（终端页不随机，宪法 §色）。
+    pub(crate) fn paint_down_card(&self, frame: &mut Frame<'_>, buf_w: u32, buf_h: u32) {
+        let Some((cx, cy, cw, ch)) = crate::ui::down_card::card_rect(buf_w) else {
+            return;
+        };
+        if cy + i64::from(ch) > i64::from(buf_h) {
+            return; // 矮屏画不下整卡 = 不画（半张卡比没有更误导）
+        }
+        let accent = crate::ui::accent::AccentPair {
+            c1: TERM_FRAME_C1,
+            c2: TERM_FRAME_C2,
+        };
+        let denom = i64::from(buf_w + buf_h);
+        let no_clip = (0, i64::from(buf_h));
+        // 卡带 = 三级框主形态全包框（sel=true：左粗+三细+渐变暗芯）
+        paint_row_frame(frame, cx, cy, cw, ch, true, accent, denom, no_clip);
+        let Some((retry, local)) = crate::ui::down_card::btn_rects(buf_w) else {
+            return;
+        };
+        // 状态行：左对齐，距左粗缘 1 格内垫；右缘让到重试钮前 1 格
+        let text_x = cx + 10 + i64::from(crate::termview::CELL_W);
+        let text_w = (retry.0 - i64::from(crate::termview::CELL_W) - text_x).max(0) as u32;
+        if text_w > 0 {
+            let (_, ry, _, rh) = crate::ui::down_card::row_rect(buf_w).unwrap();
+            self.draw_text_left(
+                frame,
+                "连接已断开",
+                text_x as u32,
+                text_w,
+                ry as u32,
+                rh,
+                30.0,
+                TERM_FRAME_C1,
+            );
+        }
+        // 双钮 = 三级框行同件（渐变参照吃页尺原位，BAR-096 保真条同规）
+        for (b, label) in [(retry, "重试"), (local, "切本地")] {
+            paint_row_frame_gradref(
+                frame,
+                b.0,
+                b.1,
+                b.2,
+                b.3,
+                true,
+                accent,
+                no_clip,
+                (0, 0, denom),
+                0,
+            );
+            self.draw_text_centered(frame, label, b.0, b.1, b.2, b.3, 30.0, TERM_FRAME_C1, b.0);
+        }
+    }
+
     /// 光栅化单字形并 alpha 混合进帧缓冲。基线对齐（BAR-001）：fontdue
     /// y 轴向上，metrics.ymin 是位图底边相对基线的偏移（下伸字母为负），
     /// 位图顶边（屏坐标）= 格顶 + 基线偏移 - (ymin + 位图高)。
@@ -6559,6 +6615,9 @@ pub trait TermEmu: Send {
     fn hit_boundary(&self, x: f64, y: f64) -> Option<SelEnd>;
     fn move_selection_end(&mut self, which: SelEnd, x: f64, y: f64);
     fn render_magnifier(&self, buf: &mut [u32], w: u32, h: u32, x: f64, y: f64);
+    /// 断线状态卡（A 断线治理）：终卡槽烘焙末尾、session_over 时调用，
+    /// 本体 = TermView::paint_down_card（几何/命中单源 ui::down_card）
+    fn render_down_card(&self, buf: &mut [u32], w: u32, h: u32);
 }
 
 impl TermEmu for TermView {
@@ -6877,6 +6936,10 @@ impl TermEmu for TermView {
     }
     fn render_magnifier(&self, buf: &mut [u32], w: u32, h: u32, x: f64, y: f64) {
         TermView::render_magnifier(self, buf, w, h, x, y)
+    }
+    fn render_down_card(&self, buf: &mut [u32], w: u32, h: u32) {
+        let mut frame = Frame { buf, w, h };
+        TermView::paint_down_card(self, &mut frame, w, h)
     }
 }
 

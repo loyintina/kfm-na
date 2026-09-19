@@ -17,6 +17,7 @@ pub mod cfg_page;
 pub mod comp_registry;
 pub mod conn_card;
 pub mod cursor;
+pub mod down_card;
 pub mod dual_pool;
 pub mod fx_ease;
 pub mod fx_preview;

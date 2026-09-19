@@ -294,6 +294,10 @@ struct App {
     /// 分流里面板在顶先于它 return，互斥从路由自然推出（栈零新规则）。
     /// 点按抬手 = summon_panel(Config)；拖过 slop = 不触发
     gear_touch: Option<(u64, f64, f64, bool)>,
+    /// 按在断线状态卡钮上的手势（A 断线治理，ui/down_card.rs）：
+    /// (指 id, 起点 x, 起点 y, 武装命中, 拖过 slop)。只在 session_over
+    /// 且裸终端页可达（卡在屏才命中）；抬手同钮 = 触发，拖过 = 不触发
+    down_touch: Option<(u64, f64, f64, crate::ui::down_card::DownHit, bool)>,
     /// 配置卡标签栏状态（主题宪法 §四）：池名表 + 选中 + 横滚 + 光标
     /// 弹簧。共享句柄注册给 gate 值守倒帧（D9 同源——后台截图/倒帧
     /// 与前台帧同一份标签栏读数）
@@ -446,6 +450,9 @@ struct LayerSigs {
     /// + 隧道 epoch（2026-09-20 连接/服务卡——状态翻转必重烘，漏维 = 鬼影）
     parser: crate::ui::stage::DirtyGuard<(u32, u32, u32, u32, u32, u32, u64, u64)>,
     termcard: crate::ui::stage::DirtyGuard<(u32, u32, u32, u32)>,
+    /// 断线状态卡层（A 断线治理）：(w, h, session_over)——死活翻转
+    /// 才重烘，稳态零成本
+    downcard: crate::ui::stage::DirtyGuard<(u32, u32, u8)>,
     /// 标签栏层（BAR-096 拆槽）
     tabbar: crate::ui::stage::DirtyGuard<TabBarSig>,
     /// 下池光标层（BAR-096 拆槽）
@@ -475,6 +482,7 @@ impl LayerSigs {
         self.filetree.invalidate();
         self.parser.invalidate();
         self.termcard.invalidate();
+        self.downcard.invalidate();
         self.tabbar.invalidate();
         self.cursor.invalidate();
         self.poolfx.invalidate();
@@ -1188,6 +1196,17 @@ impl App {
                     ));
                     return;
                 }
+                // 断线状态卡命中（A 断线治理，ui/down_card.rs）：活跃会话
+                // 死了卡才在屏——登记即归钮，抬手同钮才触发（拖过 slop 不
+                // 触发）。在齿轮/快捷键行之前拦：死会话上终端手势本就
+                // 只剩滚动，卡的两个钮是此时唯一的图形出路
+                if self.session_over
+                    && let Some((sw, _)) = self.screen_px()
+                    && let Some(h) = crate::ui::down_card::hit(x, y, sw)
+                {
+                    self.down_touch = Some((id, x, y, h, false));
+                    return;
+                }
                 // 设置钮命中（2026-09-12 配置池卡按钮入口，ui/gear.rs）：
                 // 只在裸终端页走到这（面板在顶上面已 return）——「文件树/
                 // 浏览器在顶时设置不出现」从路由自然推出，栈零新规则。
@@ -1286,6 +1305,17 @@ impl App {
                 }
             }
             TouchPhase::Moved => {
+                // 断线卡钮手势：只认本指——超 slop 记拖过（抬手不触发）
+                if let Some(dt) = &mut self.down_touch
+                    && dt.0 == id
+                {
+                    if (x - dt.1).abs() > crate::scroll::TAP_SLOP_PX
+                        || (y - dt.2).abs() > crate::scroll::TAP_SLOP_PX
+                    {
+                        dt.4 = true;
+                    }
+                    return;
+                }
                 // 设置钮手势（2026-09-12）：只认本指——超 slop 记拖过
                 // （抬手不触发召唤），它指事件放行走原分路
                 if let Some(gt) = &mut self.gear_touch
@@ -1728,6 +1758,31 @@ impl App {
                 // 残余指头不接管滚动/点按（touch_scroll/press 进捏合时已清）
                 if self.pinch.take().is_some() {
                     self.persist_zoom();
+                    return;
+                }
+                // 断线卡钮手势收尾（A 断线治理）：本指抬起、未拖过 slop、
+                // 落点仍同一钮 = 触发。重试 = kick_reconnect（敲键重连
+                // 同路）；切本地 = switch_session（Ctrl-] 同路）。栈动作
+                // 必须留痕（「点了没反应」静默死点治理同规）
+                if self.down_touch.as_ref().is_some_and(|d| d.0 == id) {
+                    let dt = self.down_touch.take().unwrap();
+                    if phase == TouchPhase::Ended
+                        && !dt.4
+                        && let Some((sw, _)) = self.screen_px()
+                        && crate::ui::down_card::hit(x, y, sw) == Some(dt.3)
+                    {
+                        match dt.3 {
+                            crate::ui::down_card::DownHit::Retry => {
+                                crate::report::report("term", "断线卡点重试 → kick_reconnect");
+                                self.kick_reconnect();
+                            }
+                            crate::ui::down_card::DownHit::Local => {
+                                crate::report::report("term", "断线卡点切本地 → switch_session");
+                                self.switch_session();
+                            }
+                        }
+                    }
+                    self.dirty = true;
                     return;
                 }
                 // 设置钮手势收尾（2026-09-12 配置池卡按钮入口）：本指
@@ -3896,32 +3951,46 @@ impl App {
         self.dirty = true;
     }
 
-    /// 隧道「不可用→可用」上升沿踢活跃死会话重孵（BAR-117，about_to_wait
-    /// 每圈调）：裁决是 tunnel::usable_edge_kick 纯函数，这里只做代际
-    /// 比对+触发。代际没变零成本；首圈（last_tunnel_epoch=0 撞上快照
-    /// epoch≥1）即判一条边——app 起跑时隧道已 Up 且会话死 = 立即补踢。
+    /// 死会话续链轮询（BAR-117，about_to_wait 每圈调），两条腿：
+    /// ①隧道「不可用→可用」上升沿踢活跃死会话重孵（裁决纯函数
+    ///    tunnel::usable_edge_kick）——传输恢复即续链，不等 5s；
+    /// ②活跃死会话且距上次重孵够钟（session::auto_respawn_due 同一把
+    ///    5s 闸）→ 再踢——死亡驱动链断在「最后一次失败撞闸压住后再无
+    ///    死亡事件」上（redroid 判卷实证：TCP refused 百 ms 返回永远
+    ///    撞闸，持续断网期链必断），时间到即续链 = 每 5s 敲门一次。
+    /// 两条腿都走 respawn_session（记账同刷时间闸，密度守恒）。
     fn poll_tunnel_kick(&mut self) {
-        let Some(snap) = crate::tunnel::snap() else {
-            return;
-        };
-        let (epoch, state) = {
-            let g = snap.lock().unwrap();
-            (g.epoch, g.state.clone())
-        };
-        if epoch == self.last_tunnel_epoch {
-            return;
-        }
-        self.last_tunnel_epoch = epoch;
-        let prev_usable = self.last_tunnel_usable;
-        self.last_tunnel_usable = crate::tunnel::usable(&state);
-        if crate::tunnel::usable_edge_kick(prev_usable, &state, self.session_over) {
-            let name = self
-                .router_handle()
-                .map(|r| r.lock().unwrap().active_name());
-            if let Some(name) = name {
-                crate::report::report("tunnel", &format!("隧道可用沿 → 踢活跃死会话重孵: {name}"));
-                self.respawn_session(name);
+        if let Some(snap) = crate::tunnel::snap() {
+            let (epoch, state) = {
+                let g = snap.lock().unwrap();
+                (g.epoch, g.state.clone())
+            };
+            if epoch != self.last_tunnel_epoch {
+                self.last_tunnel_epoch = epoch;
+                let prev_usable = self.last_tunnel_usable;
+                self.last_tunnel_usable = crate::tunnel::usable(&state);
+                if crate::tunnel::usable_edge_kick(prev_usable, &state, self.session_over) {
+                    let name = self
+                        .router_handle()
+                        .map(|r| r.lock().unwrap().active_name());
+                    if let Some(name) = name {
+                        crate::report::report(
+                            "tunnel",
+                            &format!("隧道可用沿 → 踢活跃死会话重孵: {name}"),
+                        );
+                        self.respawn_session(name);
+                    }
+                }
             }
+        }
+        if self.session_over
+            && crate::session::auto_respawn_due(self.last_auto_respawn_ms, boot_ms() as u64)
+            && let Some(name) = self
+                .router_handle()
+                .map(|r| r.lock().unwrap().active_name())
+        {
+            crate::report::report("term", &format!("死会话续链: {name} 够钟重孵"));
+            self.respawn_session(name);
         }
     }
 
@@ -3958,6 +4027,11 @@ impl App {
                 }
                 crate::gate::note_session_alive(name, false); // 复活同步进 stats
                 if is_active {
+                    if self.session_over {
+                        // 复活翻牌 → 断线卡该灭：置脏逼一帧（sig 死活维
+                        // 翻转 → 终卡槽重烘）。不置脏 = 卡赖在屏上鬼影
+                        self.dirty = true;
+                    }
                     self.session_over = false; // 重连复活：输出面解开
                 }
                 crate::report::report(
@@ -3998,6 +4072,9 @@ impl App {
         );
         if is_active {
             self.session_over = true;
+            // 死活翻牌 → 断线卡该出：置脏逼一帧（终卡槽 sig 死活维翻转
+            // 才重烘；不置脏 = 帧不来，卡永远不画——redroid 判卷现场定罪）
+            self.dirty = true;
         }
         {
             let h = self.health_mut(name);
@@ -4792,6 +4869,7 @@ impl App {
         pool_snap: Option<&crate::ui::dual_pool::DualPoolSnap>,
         cfg_snap: Option<&crate::ui::cfg_page::CfgPageSnap>,
         parser_snap: Option<&crate::ui::parser_page::ParserPageSnap>,
+        session_over: bool, // 活跃会话死活（A 断线状态卡：终卡槽 sig 末维+烘焙触发源）
         drag: Option<(crate::ai_presence::Panel, f32)>,
     ) -> Option<(u32, u32)> {
         let (w, h) = g.size();
@@ -5135,6 +5213,22 @@ impl App {
                 bottom_inset + crate::keybar::HEIGHT_PX,
             );
             g.slot_bake(crate::gles_present::ChromeSlot::TermCard);
+        }
+        // 断线状态卡层（A 断线治理）：独立槽——z 序必须在字形之上
+        // （TermCard 槽是最底层，画里面会被网格文字盖死，redroid 判卷
+        // 定罪）；可见性 = 裸终端页（slot_vis[6]）+ session_over 双闸，
+        // 会话复活/面板靠泊即隐。sig 带死活维：翻转才重烘，稳态零成本
+        g.set_slot_visible(
+            crate::gles_present::ChromeSlot::DownCard,
+            slot_vis[6] && session_over,
+        );
+        if slot_vis[6] && sigs.downcard.feed((w, h, session_over as u8)) {
+            let px = g.slot_canvas(crate::gles_present::ChromeSlot::DownCard);
+            px.fill(0);
+            if session_over {
+                term_arc.lock().unwrap().render_down_card(px, w, h);
+            }
+            g.slot_bake(crate::gles_present::ChromeSlot::DownCard);
         }
         // 键行槽烘焙：sig=render_keybar 读的每个输入（靠泊时槽隐藏，
         // 烘焙物常驻纹理，面板收起重现身零成本）
@@ -6108,6 +6202,7 @@ impl App {
                 pool_snap.as_ref(),
                 cfg_snap.as_ref(),
                 parser_snap.as_ref(),
+                self.session_over,
                 self.panel_drag.as_ref().and_then(|d| {
                     let off = d.current_offset()?;
                     let p = match d.role()? {

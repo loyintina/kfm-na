@@ -7,6 +7,19 @@
 
 ## 当前位置（2026-09-20)
 
+> **A 断线状态卡 v1（redroid 仪器判绿，待用户真机终验）**：活跃会话
+> 死（session_over）→ 终端页顶部浮三级框卡带「连接已断开」+
+> [重试][切本地] 双钮（kick_reconnect/switch_session 同路入口）。
+> 新控件 ui/down_card.rs（几何命中 A 档 4 钉+变异两咬）+ 涂装
+> termview::paint_down_card + **GLES 新槽 DownCard=14**（z 序字形
+> 之上——首版画进 TermCard 槽被网格文字盖死，redroid 截屏定罪：
+> 那是 clear 后最底层）。可见性 = 裸终端页（slot_vis[6]）+
+> session_over 双闸；死活翻转必置脏（on_slot_dead/Opened 两臂，
+> 不置脏帧不来卡不出/不灭）。**redroid 全环实录**：掐报表接力造真
+> 断线→卡出→点重试（logcat「断线卡点重试→kick_reconnect」+诚实
+> 失败留痕）→点切本地（「remote → local」）→接力恢复→续链够钟
+> 重孵→opened→卡自灭。组件池/registry.md 已入册。
+
 > **L3 自持隧道·接管终判绿（na-tunnel.sh 已真退役，传输层全线闭环）**：
 > 手机 03:29 回线（IP 换 39.144.207.42）后 9021 仍被占、看门狗让位
 > ——谜底：**持有者在 Termux 沙箱**（na-tunnel.sh pid 23407 + 娃 ssh
@@ -17,12 +30,12 @@
 > 完成接管全序列**（field-reports 实录：19:34:17.919Z spawn →
 > 19:34:18.293Z ExternalUp→Starting → 19:34:18.852Z Starting→Up），
 > 服务器侧见手机新 root@notty sshd 两条。na-tunnel.sh 定位降为
-> 手动兜底（不删）。**壳层重附缺口已修待判（BAR-117）**：传输 Up 了
-> 但壳层 remote_dead=true 不动——重孵链是死亡事件驱动的，末次重孵
-> 撞 TCP refused（隧道未起）被 5s 时间闸压住后再无死亡事件 = 链断。
-> 修 = 隧道「不可用→可用」上升沿踢活跃死会话重孵（usable_edge_kick
-> 纯函数 A 档钉+变异实咬；about_to_wait 每圈代际比对零成本轮询）。
-> 待判：redroid/真机断隧道→恢复→不敲键会话自回。
+> 手动兜底（不删）。**壳层重附缺口已修（BAR-117，redroid 判绿）**：
+> 传输 Up 了但壳层 remote_dead=true 不动——重孵链是死亡事件驱动的，
+> 末次重孵撞 TCP refused（隧道未起）被 5s 时间闸压住后再无死亡事件
+> = 链断。修 = 两腿续链：隧道可用沿踢 + 够钟（≥5s 同闸）再踢——
+> redroid 实证「掐接力→每 5s 续链敲门→接力恢复下一拍自动接回，
+> 全程零敲键」。
 
 > **连接/服务卡 v1（redroid 仪器判卷已绿，待用户真机终验）**：
 > 解析页第二张二级卡（纵排 tmux 卡下），L3 自持隧道的可视化面。

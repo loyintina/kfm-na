@@ -103,6 +103,12 @@ pub enum ChromeSlot {
     /// 像素；顺带根治「开合期 dd_progress_q 逐帧全页重烘」里 panel
     /// 部分的浪费。z 序：平移带内双代之上（抽屉浮在滑动内容上）
     DropdownPanel = 13,
+    /// 断线状态卡层（A 断线治理，2026-09-20）：三级框卡带+双钮，
+    /// 全屏画布（死活翻转才烘，稳态零成本）。z 序 = 字形之上、键行
+    /// 同族（term_place 同参——终端页家具）——**不许进 TermCard 槽**
+    /// （那是 clear 后最底层，网格实例压在它上面，卡片会被终端文字
+    /// 盖死——redroid 判卷现场定罪）
+    DownCard = 14,
 }
 
 /// 视口平移合成参数（十九修 D8）：调用方逐帧从 cfg_snap.pan 求值——
@@ -622,7 +628,7 @@ pub struct GlesPresent {
     /// 平移期池高 glide 的逐帧重烘限定在池区小画布）+ 二十四修一件
     /// （下拉面板层——并发同拍起步的捕获净度），置脏烘焙 +
     /// placement 合成——动画帧零光栅零上传
-    layers: [ChromeLayer; 14],
+    layers: [ChromeLayer; 15],
     /// 图层实例程序（rect+uv+tint 四边形；placement 逐槽进实例数据）
     layer_prog: glow::NativeProgram,
     layer_vao: glow::NativeVertexArray,
@@ -759,6 +765,7 @@ impl GlesPresent {
         };
         // 先建槽数组再 move gl 进结构体（E0382：字段初始化按书写序移动）
         let layers = [
+            mk_layer(&gl),
             mk_layer(&gl),
             mk_layer(&gl),
             mk_layer(&gl),
@@ -1331,6 +1338,27 @@ impl GlesPresent {
                     self.layer_vao,
                     self.layer_vbo,
                     kb.tex,
+                    tdx + (fw - fw * ts) / 2.0,
+                    tdy + (fh - fh * ts) / 2.0,
+                    fw * ts,
+                    fh * ts,
+                    1.0,
+                );
+            }
+
+            // 断线状态卡层（A 断线治理）：z 序 = 字形之上（TermCard 槽是
+            // 最底层，卡在里面会被网格文字盖死）；可见性 = 裸终端页 +
+            // session_over 双闸（壳层喂）；placement 同 term_place
+            let dc = &self.layers[ChromeSlot::DownCard as usize];
+            if dc.visible && dc.baked {
+                let (tdx, tdy, ts) = term_place;
+                let (fw, fh) = (self.w as f32, self.h as f32);
+                draw_slot_layer(
+                    gl,
+                    self.layer_prog,
+                    self.layer_vao,
+                    self.layer_vbo,
+                    dc.tex,
                     tdx + (fw - fw * ts) / 2.0,
                     tdy + (fh - fh * ts) / 2.0,
                     fw * ts,

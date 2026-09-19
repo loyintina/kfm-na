@@ -317,6 +317,17 @@ pub const COMPONENTS: &[CompEntry] = &[
         desc: "解析页第二张二级卡（2026-09-20 用户立项，纵排在 tmux 卡下）：L3 自持隧道的可视化面——卡头「连接 · 状态词」（自持在线/外部借用/连接中/退避 ×N/未启动）+ 四字段行（目标/本地口/重拉/错误）+ 分隔线 + [重连] 钮（杀娃重拉不等退避）。数据 = tunnel.rs 全局快照直读（supervisor 写、卡读，免穿 App plumbing）；涂装随隧道 epoch 进解析槽 sig 自动重烘。几何：tmux 卡按 INSET_EXTRA 预留底部带（= 间距+卡实高，同源钉死）。复用件：池框卡环/字段标签列配方/分隔线/三级框钮。",
         preview: Preview::FieldLabel,
     },
+    CompEntry {
+        name: "断线状态卡",
+        cat: "控件",
+        status: CompStatus::Active,
+        symbol: "pub fn hit",
+        file: "src/ui/down_card.rs",
+        spec: "A 断线治理提案一（2026-09-20）",
+        tests: "tests/down_card_spec.rs",
+        desc: "活跃会话死（session_over）时终端页顶部浮三级框卡带：状态行 + [重试][切本地] 双钮（重试=kick_reconnect 敲键同路，切本地=switch_session Ctrl-] 同路）。画进终卡槽（与齿轮同槽，面板靠泊整层自隐=只在裸终端页出现），sig 带 session_over 维死活翻转自动重烘。几何宪法合规：卡带 4 格（内行 3 格+上下半格净空）、钮 3 格高 6 格宽右簇；色源 = 终端页族 TERM_FRAME_C1/C2（不随机）。卡顶让开齿轮带（+90px）。",
+        preview: Preview::FieldLabel,
+    },
     // ---- 动效引擎 ----
     CompEntry {
         name: "弹簧",

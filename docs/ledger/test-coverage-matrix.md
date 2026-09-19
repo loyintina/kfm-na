@@ -53,6 +53,7 @@
 | `src/ui/comp_registry.rs` | 6 | 5 | 1 | preview_is_animated |
 | `src/ui/conn_card.rs` | 11 | 10 | 1 | current |
 | `src/ui/cursor.rs` | 9 | 9 | 0 | — |
+| `src/ui/down_card.rs` | 9 | 9 | 0 | — |
 | `src/ui/dual_pool.rs` | 19 | 19 | 0 | — |
 | `src/ui/fx_ease.rs` | 11 | 11 | 0 | — |
 | `src/ui/fx_preview.rs` | 8 | 5 | 3 | LEG_GO_MS LEG_RETURN_START LEG_RETURN_MS |
@@ -62,7 +63,7 @@
 | `src/ui/modal.rs` | 19 | 17 | 2 | MODAL_LABEL_H MODAL_MAX_MARGIN_Y |
 | `src/ui/orb.rs` | 5 | 5 | 0 | — |
 | `src/ui/panel_drag.rs` | 12 | 7 | 5 | DRAG_DIR_LOCK RELEASE_PROGRESS VELOCITY_WINDOW_MS locked current_offset |
-| `src/ui/parser_page.rs` | 49 | 39 | 10 | BTN_GAP MAX_VISIBLE_LINES MODAL_CARD_W MODAL_PAD_V MODAL_GAP MODAL_BTN_GAP CONFIRM_LABELS cancel_confirm register_parser_page parser_page_handle |
+| `src/ui/parser_page.rs` | 49 | 40 | 9 | MAX_VISIBLE_LINES MODAL_CARD_W MODAL_PAD_V MODAL_GAP MODAL_BTN_GAP CONFIRM_LABELS cancel_confirm register_parser_page parser_page_handle |
 | `src/ui/prompt_bar.rs` | 5 | 4 | 1 | row_of |
 | `src/ui/seam.rs` | 24 | 24 | 0 | — |
 | `src/ui/stage.rs` | 7 | 7 | 0 | — |
