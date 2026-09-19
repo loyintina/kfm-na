@@ -23,9 +23,11 @@ use crate::tmux_ctl::TmuxSession;
 use crate::ui::dual_pool::{self, PoolRect};
 use std::sync::{Arc, Mutex};
 
-/// 卡头/会话框/命名行高 = 2 格（宪法三级框行最小高：内容上下各留
-/// ≥半格空隙——34px 文本居中于 72px 框，上下各 ~19px ≈ 0.53 格）
+/// 卡头/命名行高 = 2 格
 pub const ROW_H: u32 = CELL_H * 2;
+/// 会话框高 = 3 格（2026-09-19 用户修宪：所有三级框至少两行高——
+/// 2 格观感仍是「一行高」，3 格 = 真·两行 + 上下各近一格空隙）
+pub const BOX_H: u32 = CELL_H * 3;
 /// 按钮高 = 3 格（宪法「最小的框 ≥3 格」）
 pub const BTN_H: u32 = CELL_H * 3;
 /// 行间距
@@ -130,7 +132,7 @@ pub fn layout(
         Mode::Naming => ROW_H + ROW_GAP,
     };
     let fixed = CARD_PAD_V * 2 + ROW_H + ROW_GAP + extra + BTN_H;
-    let stride = ROW_H + ROW_GAP;
+    let stride = BOX_H + ROW_GAP;
     let max_lines = if area.h > fixed {
         ((area.h - fixed + ROW_GAP) / stride).max(1) as usize
     } else {
@@ -164,7 +166,7 @@ pub fn layout(
             x: cx + (bw + COL_GAP) as i64 * col as i64,
             y: y + stride as i64 * line as i64,
             w: bw,
-            h: ROW_H,
+            h: BOX_H,
         });
     }
     y += i64::from(stride) * visible_lines as i64;

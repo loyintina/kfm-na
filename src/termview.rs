@@ -3572,37 +3572,43 @@ impl TermView {
         );
 
         // 会话框表（一行两框，每框 = 三级框行主形态：全包框左粗+三细
-        // 整环 135° 双色渐变 + 渐变暗底内芯——2026-09-19 用户拍板：
-        // 内容只有 名字+×，「·N窗/·他端」meta 撤；附着框名字带 ● 前缀）
+        // 135° 双色渐变 + 渐变暗底内芯。2026-09-19 用户修宪二轮：
+        // ①渐变采样 = 框内局部尺（框原点+框对角线分母——页尺下整框只
+        // 落到渐变带一小段，肉眼单色）；②未附着框边框压暗（聚焦语言
+        // 取代 ● 前缀——亮 = 我挂的）；③名字居中，meta/圆点全撤）
+        let dim_accent = crate::ui::accent::AccentPair {
+            c1: lerp_rgb(accent.c1, 0, 150),
+            c2: lerp_rgb(accent.c2, 0, 150),
+        };
         for (i, s) in snap.sessions.iter().zip(lay.rows.iter()) {
             let (r, s) = (s, i);
             let mine = snap.attached.as_deref() == Some(s.name.as_str());
-            paint_row_frame(
+            let acc = if mine { accent } else { dim_accent };
+            // 框内局部渐变尺：s = (xx-x0)+(yy-y0)，分母 = 框对角线
+            let grad_ref = (-(r.x + off), -r.y, i64::from(r.w + r.h));
+            paint_row_frame_gradref(
                 &mut frame,
                 r.x + off,
                 r.y,
                 r.w,
                 r.h,
                 true,
-                accent,
-                denom,
+                acc,
                 no_clip,
+                grad_ref,
+                0,
             );
-            let text = if mine {
-                format!("● {}", s.name)
-            } else {
-                s.name.clone()
-            };
             let fg = if mine { title_fg } else { body_fg };
-            self.draw_text_left(
+            self.draw_text_centered(
                 &mut frame,
-                &text,
-                (r.x + off) as u32,
+                &s.name,
+                r.x + off,
+                r.y,
                 r.w.saturating_sub(pp::KILL_W),
-                r.y as u32,
                 r.h,
                 34.0,
                 fg,
+                r.x + off,
             );
             // 框尾 ×
             let kx = r.x + off + i64::from(r.w) - i64::from(pp::KILL_W);
@@ -3633,9 +3639,22 @@ impl TermView {
             );
         }
 
-        // 按钮带（均匀细框 + 居中标签；labels 与命中同一份表）
+        // 按钮带（三级框行主形态——2026-09-19 用户修宪二轮：重排/新窗
+        // 与会话框统一三级框，均匀细框退役；钮内局部渐变尺）
         for (b, label) in lay.buttons.iter().zip(pp::button_labels(mode).iter()) {
-            paint_thin_frame(&mut frame, b.x + off, b.y, b.w, b.h, accent, denom, no_clip);
+            let grad_ref = (-(b.x + off), -b.y, i64::from(b.w + b.h));
+            paint_row_frame_gradref(
+                &mut frame,
+                b.x + off,
+                b.y,
+                b.w,
+                b.h,
+                true,
+                accent,
+                no_clip,
+                grad_ref,
+                0,
+            );
             self.draw_text_centered(
                 &mut frame,
                 label,

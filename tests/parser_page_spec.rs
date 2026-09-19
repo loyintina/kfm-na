@@ -60,11 +60,15 @@ fn spec_layout_两列框行() {
     // (内容宽 − 列距) / 2；右列左缘 = 左列右缘 + COL_GAP；框都在卡内
     let l = parser_page::layout(W, H, INSET, 4, Mode::Normal);
     assert_eq!(l.rows.len(), 4);
-    let stride = (parser_page::ROW_H + parser_page::ROW_GAP) as i64;
+    let stride = (parser_page::BOX_H + parser_page::ROW_GAP) as i64;
     let b0 = &l.rows[0];
     let b1 = &l.rows[1];
     let b2 = &l.rows[2];
-    assert_eq!(b0.h, parser_page::ROW_H, "框高必须 2 格");
+    assert_eq!(
+        b0.h,
+        parser_page::BOX_H,
+        "会话框高必须 3 格（修宪：三级框至少两行高）"
+    );
     // 绝对框宽钉（相对位钉不住「忘减列距」变异——COL_GAP==CARD_PAD_H
     // 时右缘恰好贴卡缘蒙混过关，变异抽检实录）
     let cw = l.card.w - parser_page::CARD_PAD_H * 2;
