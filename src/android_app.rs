@@ -3767,7 +3767,7 @@ impl App {
     /// 链路见 ime_queue.rs 文件头）。键码在排干侧按当下光标模式翻序列
     /// （模式位只有这里的 Term 知道，keymap.rs 吃 app_cursor 参数）
     fn drain_ime_inject(&mut self) {
-        let items = crate::ime_queue::global().drain();
+        let mut items = crate::ime_queue::global().drain();
         if items.is_empty() {
             return;
         }
@@ -3823,11 +3823,13 @@ impl App {
         }
         // 输入栏聚焦分流（期 0 组件三，§五 焦点二态）：键盘按键全归栏，
         // 不下终端——Enter=栏内换行（2026-09-04 用户拍板：发送只走 ▶ 钮/
-        // gate submit 注入）、退格删字、Esc 失焦、文本追加，其余特殊键
-        // v1 不管（方向键/Tab 等）
+        // gate submit 注入）、退格删字、Esc 失焦、文本追加。
+        // BAR-111：方向十字例外直通终端（栏内 v1 无方向语义，吞了 = 死键，
+        // 键盘在场时快捷键行方向键点按/长按连发全灭的真凶）
         if self.input_bar.as_ref().is_some_and(|b| b.is_focused()) {
+            let (bar_items, term_items) = crate::ime_queue::split_bar_focus(items);
             if let Some(bar) = &self.input_bar {
-                for item in items {
+                for item in bar_items {
                     match item {
                         crate::ime_queue::Inject::Text(s) => {
                             crate::report::report("ime-input", &format!("commit: {s:?}"));
@@ -3920,7 +3922,10 @@ impl App {
                 }
             }
             self.dirty = true;
-            return;
+            if term_items.is_empty() {
+                return;
+            }
+            items = term_items; // BAR-111：方向键续走下方终端路径
         }
         let app_cursor = self
             .term_handle()

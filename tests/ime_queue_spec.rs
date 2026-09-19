@@ -137,3 +137,45 @@ fn spec_队列_上下文菜单动作入队() {
         "上下文菜单动作必须原样入队、顺序保持"
     );
 }
+
+// ---------- BAR-111：栏聚焦分流——方向十字直通终端，其余全归栏 ----------
+
+#[test]
+fn spec_bar111_栏聚焦分流_方向键直通终端() {
+    use kfm_na::ime_queue::split_bar_focus;
+    let items = vec![
+        Inject::Text("你".into()),
+        Inject::Key(20), // KC_DOWN → 直通
+        Inject::Key(66), // KC_ENTER → 归栏
+        Inject::Key(19), // KC_UP → 直通
+        Inject::Key(67), // KC_DEL → 归栏
+        Inject::Composing("ni".into()),
+        Inject::Key(21),  // KC_LEFT → 直通
+        Inject::Key(22),  // KC_RIGHT → 直通
+        Inject::Key(111), // KC_ESC → 归栏（失焦）
+        Inject::CommitEmpty,
+    ];
+    let (bar, term) = split_bar_focus(items);
+    assert_eq!(
+        term,
+        vec![
+            Inject::Key(20),
+            Inject::Key(19),
+            Inject::Key(21),
+            Inject::Key(22)
+        ],
+        "方向十字必须全部直通终端且保序——栏内吞下 = 死键（连发全灭真凶）"
+    );
+    assert_eq!(
+        bar,
+        vec![
+            Inject::Text("你".into()),
+            Inject::Key(66),
+            Inject::Key(67),
+            Inject::Composing("ni".into()),
+            Inject::Key(111),
+            Inject::CommitEmpty,
+        ],
+        "文本/Enter/退格/Esc/组合态/空 commit 必须全归栏且保序"
+    );
+}

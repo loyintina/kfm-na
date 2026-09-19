@@ -126,3 +126,13 @@ static GLOBAL: ImeQueue = ImeQueue::new();
 pub fn global() -> &'static ImeQueue {
     &GLOBAL
 }
+
+/// 输入栏聚焦分流（2026-09-19 BAR-111）：栏聚焦时按键全归栏是期 0 契约，
+/// 但方向十字栏内 v1 无语义（`_ => {}` 吞掉 = 死键）——键盘在场时快捷键
+/// 行方向键点按/长按连发全灭的真凶。方向键直通终端，其余全归栏。
+/// 返回 (栏内项, 直通终端项)，各自保持原有先后顺序。
+pub fn split_bar_focus(items: Vec<Inject>) -> (Vec<Inject>, Vec<Inject>) {
+    items
+        .into_iter()
+        .partition(|i| !matches!(i, Inject::Key(c) if crate::keybar::is_arrow_key(*c)))
+}
