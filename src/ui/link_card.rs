@@ -9,20 +9,17 @@
 //! svc_card::current() 同两份快照，本册只重写几何/命中；涂装在
 //! termview（眼手同尺：两边吃本册同一份 layout）。
 //!
-//! 布局（网格制，与 tmux 卡同池区）：卡 = tmux 卡同宽、接其正下方
-//! （间距 LINK_GAP）。两竖列：列宽 = (内容宽 − COL_GAP)/2。卡高 =
-//! PAD_V·2 + max(左列高, 右列高(n 会话))——左列恒定（钮钉列底），
-//! 右列随会话数伸缩。tmux 卡侧按 inset_extra_live() 预留底部带
+//! 布局（网格制，与 tmux 卡同池区）：卡外框由卡链排布器配给
+//! （parser_chain::slot_rect——两轴契约 §四：本卡不再知道「我接在谁
+//! 下面」，间距/落位归排布器）。两竖列：列宽 = (内容宽 − COL_GAP)/2。
+//! 卡高 = PAD_V·2 + max(左列高, 右列高(n 会话))——左列恒定（钮钉列底），
+//! 右列随会话数伸缩。tmux 卡侧预留带 = 排布器 reserved_below_tmux
 //! （与实高同源钉死：两处各写一份必漂移 = 两卡相叠/底部空洞鬼影）。
 
-use crate::termview::CELL_H;
 use crate::ui::conn_card as cc;
 use crate::ui::dual_pool::PoolRect;
 use crate::ui::parser_page as pp;
-use crate::ui::svc_card as sc;
 
-/// 与 tmux 卡的间距（与合并前两卡同档）
-pub const LINK_GAP: u32 = CELL_H;
 /// 字段行高 = mini 卡头行高（2 格，合并前两卡同件）
 pub const FIELD_H: u32 = cc::FIELD_H;
 /// 字段行距
@@ -56,17 +53,6 @@ pub fn card_h(n_sessions: usize) -> u32 {
     pp::CARD_PAD_V * 2 + LEFT_H.max(right_h(n_sessions))
 }
 
-/// tmux 卡为本卡预留的底部带（n 会话时）：与实高同源钉死
-pub fn inset_extra(n_sessions: usize) -> u32 {
-    LINK_GAP + card_h(n_sessions)
-}
-
-/// tmux 卡为本卡预留的底部带：与实高同源钉死（活件——会话数换代
-/// → 壳脏帧 → 几何同步换代，眼手同尺不断代）
-pub fn inset_extra_live() -> u32 {
-    inset_extra(sc::current().lines.len())
-}
-
 /// 一卡布局（涂装/命中同一份——眼手同尺）
 #[derive(Debug, Clone)]
 pub struct LinkLayout {
@@ -85,15 +71,10 @@ pub struct LinkLayout {
     pub sessions: Vec<PoolRect>,
 }
 
-/// 布局纯函数：与 tmux 卡同宽、接其正下方（几何只从 tmux 卡推——
-/// 屏寸/池区都已在 tmux 卡里约过，本卡不二次揣度）
-pub fn layout(tmux_card: &PoolRect, n_sessions: usize) -> LinkLayout {
-    let card = PoolRect {
-        x: tmux_card.x,
-        y: tmux_card.y + i64::from(tmux_card.h) + i64::from(LINK_GAP),
-        w: tmux_card.w,
-        h: card_h(n_sessions),
-    };
+/// 布局纯函数：卡外框由卡链排布器配给（parser_chain::slot_rect——
+/// 屏寸/池区/落位都已在排布器里约过，本卡不二次揣度）。card.h 即
+/// 自报高 card_h(n)，调用方（排布器）保证同源
+pub fn layout_in(card: PoolRect, n_sessions: usize) -> LinkLayout {
     let cx = card.x + i64::from(pp::CARD_PAD_H);
     let cw = card.w.saturating_sub(pp::CARD_PAD_H * 2);
     let col_w = cw.saturating_sub(pp::COL_GAP) / 2;

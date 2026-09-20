@@ -3,7 +3,7 @@
 //! 两竖列）——纯逻辑先行钉死，涂装在 termview（眼手同尺：两边吃
 //! sys_card 同一份 layout）。
 //!
-//! 变异抽检：①INSET_EXTRA 漏加 SYS_GAP（预留量与实高漂移 = 两卡
+//! 变异抽检：①预留带漏加前距/本卡高（预留量与实高漂移 = 两卡
 //! 相叠/底部空洞）必须咬；②compose 内存用量拿 avail 当 used（卡面
 //! 显示「剩余」冒充「已用」）必须咬；③parse_sys 缺 load 键不报错
 //! （对面不是新版 na-server 静默当零）必须咬；④compose 把 None 当
@@ -15,16 +15,39 @@
 use kfm_na::na_server_sup::{SupSnap, SupState};
 use kfm_na::settings::Backend;
 use kfm_na::svc_health;
+use kfm_na::termview::CELL_H;
 use kfm_na::ui::dual_pool::PoolRect;
+use kfm_na::ui::parser_chain::{self, ChainCardId};
 use kfm_na::ui::sys_card::{self, FIELD_LABELS, N_FIELDS};
 
-fn svc_card() -> PoolRect {
-    PoolRect {
+/// 链几何夹具：tmux 卡 + 字面高度表（link=600 是虚构卡高——本考题
+/// 只钉「接在谁下面、多大间距、字段怎么排」，不钉卡高账本身）
+fn chain_fixture() -> (PoolRect, parser_chain::ChainHeights) {
+    let tmux = PoolRect {
         x: 40,
-        y: 1500,
+        y: 1500 - 800 - i64::from(CELL_H),
         w: 1000,
-        h: 600,
-    }
+        h: 800,
+    };
+    let h = parser_chain::ChainHeights {
+        tmux: 800,
+        link: 600,
+        sys: sys_card::CARD_H,
+    };
+    (tmux, h)
+}
+
+/// 链上的合并卡席位（Link 槽外框）：由 tmux 卡 + 排布器配给——
+/// 与生产侧同路径（slot_rect → layout_in）
+fn svc_card() -> PoolRect {
+    let (tmux, h) = chain_fixture();
+    parser_chain::slot_rect(ChainCardId::Link, &tmux, &h)
+}
+
+/// 环境卡 layout（排布器配给制）
+fn sys_lay() -> sys_card::SysLayout {
+    let (tmux, h) = chain_fixture();
+    sys_card::layout_in(parser_chain::slot_rect(ChainCardId::Sys, &tmux, &h))
 }
 
 fn sup() -> SupSnap {
@@ -187,13 +210,13 @@ fn spec_合成_局部显形() {
 #[test]
 fn spec_几何_接在服务卡下() {
     let sc = svc_card();
-    let l = sys_card::layout(&sc);
+    let l = sys_lay();
     assert_eq!(l.card.x, sc.x, "与服务卡同左右缘（二级卡同池区宽）");
     assert_eq!(l.card.w, sc.w);
     assert_eq!(
         l.card.y,
-        sc.y + i64::from(sc.h) + i64::from(sys_card::SYS_GAP),
-        "接在服务卡正下方，间距 SYS_GAP"
+        sc.y + i64::from(sc.h) + i64::from(CELL_H),
+        "接在服务卡正下方，间距一格（排布器注册槽 gap_before）"
     );
     assert_eq!(
         l.card.h,
@@ -233,11 +256,15 @@ fn spec_几何_接在服务卡下() {
 
 #[test]
 fn spec_预留量_与实高同源() {
-    assert_eq!(
-        sys_card::INSET_EXTRA,
-        sys_card::SYS_GAP + sys_card::CARD_H,
-        "预留量 = 间距 + 卡实高，漂移即两卡相叠或底部空洞"
-    );
+    // Link 槽之后的全部占位 = 本卡前距 + 本卡实高（排布器账——
+    // 变异①：漏 CELL_H 或漏 CARD_H 必须咬）
+    for n in [0usize, 1, 3, 6] {
+        assert_eq!(
+            parser_chain::reserved_below(ChainCardId::Link, &parser_chain::heights(0, n)),
+            CELL_H + sys_card::CARD_H,
+            "n={n} Link 后预留量漂移 = 两卡相叠或底部空洞"
+        );
+    }
 }
 
 #[test]

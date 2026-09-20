@@ -28,6 +28,7 @@ pub mod link_card;
 pub mod modal;
 pub mod orb;
 pub mod panel_drag;
+pub mod parser_chain;
 pub mod parser_page;
 pub mod prompt_bar;
 pub mod seam;

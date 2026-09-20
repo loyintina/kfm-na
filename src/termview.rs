@@ -3654,7 +3654,7 @@ impl TermView {
         let lay = pp::layout_vp(
             w,
             h,
-            bar_inset + crate::ui::link_card::inset_extra_live() + crate::ui::sys_card::INSET_EXTRA,
+            bar_inset + crate::ui::parser_chain::reserved_below_tmux(ssnap.lines.len()),
             snap.sessions.len(),
             ssnap.lines.len(),
             mode,
@@ -3843,7 +3843,15 @@ impl TermView {
         // 线）。文案面零改动：conn_card::current()/svc_card::current()
         // 同两份快照（函数顶已取）；几何 = link_card 同一份 layout——
         // 组件池登记 link_card）
-        let llay = crate::ui::link_card::layout(&lay.card, ssnap.lines.len());
+        let chain_h = crate::ui::parser_chain::heights(lay.card.h, ssnap.lines.len());
+        let llay = crate::ui::link_card::layout_in(
+            crate::ui::parser_chain::slot_rect(
+                crate::ui::parser_chain::ChainCardId::Link,
+                &lay.card,
+                &chain_h,
+            ),
+            ssnap.lines.len(),
+        );
         paint_rect_ring_yclip(
             &mut frame,
             llay.card.x + off,
@@ -4019,7 +4027,11 @@ impl TermView {
         // 服务合并卡下；「中央终端所在环境的自身体征」可视化，纯展示无按钮。数据
         // = sys_card::current() 三源合成（svc_health SysSnap + nasup
         // 对象词 + 后端相），体征解析与 na-server 同一份 na-sys crate）
-        let xlay = crate::ui::sys_card::layout(&llay.card);
+        let xlay = crate::ui::sys_card::layout_in(crate::ui::parser_chain::slot_rect(
+            crate::ui::parser_chain::ChainCardId::Sys,
+            &lay.card,
+            &chain_h,
+        ));
         paint_rect_ring_yclip(
             &mut frame,
             xlay.card.x + off,

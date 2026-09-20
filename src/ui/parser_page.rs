@@ -305,15 +305,14 @@ pub fn layout_vp(
             });
         }
     }
-    // ---- 页面级滚动窗（视口化）：链底 = tmux 卡底 + GAP + 合并卡高
-    // + GAP + 环境卡高（与涂装/命中的链式 layout 同账：link_card::layout
-    // 接 tmux 卡正下、sys_card::layout 接合并卡正下——高度账只能由各卡
-    // 自己的 card_h/CARD_H 常量和出，不许别处手抄）。窗 = 链底逾可视底
-    // 的部分；整链几何统一减 eff_page_scroll
-    let chain_bottom = card.y
-        + i64::from(card.h)
-        + i64::from(crate::ui::link_card::LINK_GAP + crate::ui::link_card::card_h(n_svc_lines))
-        + i64::from(crate::ui::sys_card::SYS_GAP + crate::ui::sys_card::CARD_H);
+    // ---- 页面级滚动窗（视口化）：链底账归卡链排布器（两轴契约 §四
+    // 收编——三卡顺序/间距/高度加法不再由本函数手抄；高度由各卡自报，
+    // 经 parser_chain::heights 唯一收集点进窗）。窗 = 链底逾可视底的
+    // 部分；整链几何统一减 eff_page_scroll
+    let chain_bottom = crate::ui::parser_chain::chain_bottom(
+        card.y,
+        &crate::ui::parser_chain::heights(card.h, n_svc_lines),
+    );
     let page_scroll_max = (chain_bottom - visible_bottom).max(0);
     let eff_page = page_scroll.clamp(0, page_scroll_max);
     if eff_page != 0 {

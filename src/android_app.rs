@@ -1151,14 +1151,14 @@ impl App {
                             };
                             // 视口化：命中臂与涂装同一份 layout_vp（页面
                             // 滚动后卡链已平移——眼手同尺）
+                            let n_svc = crate::ui::svc_card::current().lines.len();
                             let lay = crate::ui::parser_page::layout_vp(
                                 sw,
                                 sh,
                                 self.cur_bar_h()
-                                    + crate::ui::link_card::inset_extra_live()
-                                    + crate::ui::sys_card::INSET_EXTRA,
+                                    + crate::ui::parser_chain::reserved_below_tmux(n_svc),
                                 snap.sessions.len(),
-                                crate::ui::svc_card::current().lines.len(),
+                                n_svc,
                                 mode,
                                 snap.scroll,
                                 snap.page_scroll,
@@ -1168,15 +1168,25 @@ impl App {
                                 ),
                             );
                             let c = &lay.card;
+                            let chain_h = crate::ui::parser_chain::heights(c.h, n_svc);
                             // 连接服务合并卡（第二张，两竖列——点按归
                             // 插件手势，不许漏到面板页当滑页起手）
-                            let llay = crate::ui::link_card::layout(
-                                c,
-                                crate::ui::svc_card::current().lines.len(),
+                            let llay = crate::ui::link_card::layout_in(
+                                crate::ui::parser_chain::slot_rect(
+                                    crate::ui::parser_chain::ChainCardId::Link,
+                                    c,
+                                    &chain_h,
+                                ),
+                                n_svc,
                             );
                             let lc = &llay.card;
                             // 环境卡（第三张，纯展示——同归插件手势）
-                            let xlay = crate::ui::sys_card::layout(lc);
+                            let xlay =
+                                crate::ui::sys_card::layout_in(crate::ui::parser_chain::slot_rect(
+                                    crate::ui::parser_chain::ChainCardId::Sys,
+                                    c,
+                                    &chain_h,
+                                ));
                             let xc = &xlay.card;
                             let (xi, yi) = (x as i64, y as i64);
                             let in_rect = |r: &crate::ui::dual_pool::PoolRect| {
@@ -1524,8 +1534,9 @@ impl App {
                                     sw,
                                     sh,
                                     self.cur_bar_h()
-                                        + crate::ui::link_card::inset_extra_live()
-                                        + crate::ui::sys_card::INSET_EXTRA,
+                                        + crate::ui::parser_chain::reserved_below_tmux(
+                                            crate::ui::svc_card::current().lines.len(),
+                                        ),
                                     snap.sessions.len(),
                                     crate::ui::svc_card::current().lines.len(),
                                     crate::ui::parser_page::Mode::Normal,
@@ -1567,8 +1578,9 @@ impl App {
                                     sw,
                                     sh,
                                     self.cur_bar_h()
-                                        + crate::ui::link_card::inset_extra_live()
-                                        + crate::ui::sys_card::INSET_EXTRA,
+                                        + crate::ui::parser_chain::reserved_below_tmux(
+                                            crate::ui::svc_card::current().lines.len(),
+                                        ),
                                     snap.sessions.len(),
                                     crate::ui::svc_card::current().lines.len(),
                                     crate::ui::parser_page::Mode::Normal,
@@ -2152,8 +2164,9 @@ impl App {
                                 sw,
                                 sh,
                                 self.cur_bar_h()
-                                    + crate::ui::link_card::inset_extra_live()
-                                    + crate::ui::sys_card::INSET_EXTRA,
+                                    + crate::ui::parser_chain::reserved_below_tmux(
+                                        crate::ui::svc_card::current().lines.len(),
+                                    ),
                                 snap.sessions.len(),
                                 crate::ui::svc_card::current().lines.len(),
                                 mode,
@@ -2178,9 +2191,14 @@ impl App {
                             // 屏蔽惯例）
                             let ch = if h.is_none() && mode == crate::ui::parser_page::Mode::Normal
                             {
-                                let llay = crate::ui::link_card::layout(
-                                    &lay.card,
-                                    crate::ui::svc_card::current().lines.len(),
+                                let n_svc = crate::ui::svc_card::current().lines.len();
+                                let llay = crate::ui::link_card::layout_in(
+                                    crate::ui::parser_chain::slot_rect(
+                                        crate::ui::parser_chain::ChainCardId::Link,
+                                        &lay.card,
+                                        &crate::ui::parser_chain::heights(lay.card.h, n_svc),
+                                    ),
+                                    n_svc,
                                 );
                                 crate::ui::link_card::hit(&llay, pt.0 as i64, pt.1 as i64)
                             } else {
@@ -3984,8 +4002,9 @@ impl App {
                                 sw,
                                 sh,
                                 self.cur_bar_h()
-                                    + crate::ui::link_card::inset_extra_live()
-                                    + crate::ui::sys_card::INSET_EXTRA,
+                                    + crate::ui::parser_chain::reserved_below_tmux(
+                                        crate::ui::svc_card::current().lines.len(),
+                                    ),
                                 snap.sessions.len(),
                                 crate::ui::svc_card::current().lines.len(),
                                 crate::ui::parser_page::Mode::Normal,

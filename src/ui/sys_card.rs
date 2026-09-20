@@ -11,23 +11,21 @@
 //! （双端同构第二面）。本地相（第二刀）= collect("/data") 直读，
 //! 卡面零改动。
 //!
-//! 布局（网格制，与合并卡同池区）：卡 = 合并卡同宽、接其正下方
-//! （间距 SYS_GAP），卡高 = 恒定（三行固定，无列表无按钮）。六字段
-//! 两竖列：列宽 = (内容宽 − COL_GAP)/2，奇偶分列。tmux 卡侧按
-//! INSET_EXTRA 预留底部带（常量同源钉死——恒定高卡不需要 svc_card
-//! 那种活预留）。
+//! 布局（网格制，与合并卡同池区）：卡外框由卡链排布器配给
+//! （parser_chain::slot_rect——两轴契约 §四：间距/落位归排布器，
+//! 本卡不再知道「我接在谁下面」），卡高 = 恒定（三行固定，无列表
+//! 无按钮）。六字段两竖列：列宽 = (内容宽 − COL_GAP)/2，奇偶分列。
+//! tmux 卡侧预留带 = 排布器 reserved_below_tmux（同源钉死）。
 
 use crate::na_server_sup::{self, SupSnap};
 use crate::settings::Backend;
 use crate::svc_health::{self, Phase};
-use crate::termview::CELL_H;
 use crate::ui::conn_card as cc;
 use crate::ui::dual_pool::PoolRect;
 use crate::ui::parser_page as pp;
 
-/// 两卡间距（与服务卡同档）
-pub const SYS_GAP: u32 = CELL_H;
-/// 字段行高 = 卡头行高（2 格，服务卡同件）
+/// 两卡间距归排布器（parser_chain CHAIN 注册槽——排布元数据不再是
+/// 卡的私有财产）。字段行高 = 卡头行高（2 格，服务卡同件）
 pub const FIELD_H: u32 = cc::FIELD_H;
 /// 字段行距
 pub const FIELD_GAP: u32 = cc::FIELD_GAP;
@@ -40,8 +38,6 @@ pub const CARD_H: u32 = pp::CARD_PAD_V * 2
     + pp::ROW_GAP
     + (N_FIELDS as u32 / 2) * FIELD_H
     + (N_FIELDS as u32 / 2 - 1) * FIELD_GAP;
-/// tmux 卡为本卡预留的底部带：与实高同源钉死（常量——恒定高卡）
-pub const INSET_EXTRA: u32 = SYS_GAP + CARD_H;
 
 /// 字段标签（涂装唯一源——两处各写一份必漂移；行主序两竖列）
 pub const FIELD_LABELS: [&str; N_FIELDS] = ["负载", "进程", "内存", "交换", "磁盘", "在线"];
@@ -158,15 +154,9 @@ pub struct SysLayout {
     pub fields: [PoolRect; N_FIELDS],
 }
 
-/// 布局纯函数：与合并卡同宽、接其正下方（几何只从合并卡推——屏寸/
-/// 池区都已在 tmux 卡里约过，本卡不二次揣度）
-pub fn layout(link_card: &PoolRect) -> SysLayout {
-    let card = PoolRect {
-        x: link_card.x,
-        y: link_card.y + i64::from(link_card.h) + i64::from(SYS_GAP),
-        w: link_card.w,
-        h: CARD_H,
-    };
+/// 布局纯函数：卡外框由卡链排布器配给（parser_chain::slot_rect——
+/// 几何只从排布器拿，本卡不二次揣度）
+pub fn layout_in(card: PoolRect) -> SysLayout {
     let cx = card.x + i64::from(pp::CARD_PAD_H);
     let cw = card.w.saturating_sub(pp::CARD_PAD_H * 2);
     let col_w = cw.saturating_sub(pp::COL_GAP) / 2;

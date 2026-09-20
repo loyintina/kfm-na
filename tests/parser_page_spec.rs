@@ -482,13 +482,13 @@ fn spec_status_流转() {
 
 // ---- 视口化页面滚动（2026-09-20 用户拍板「卡弹小+内容跟随截断+上下能滑动」）----
 
-/// 链底账（与 layout_vp 内部同一份公式——考题独立复算，变异「可视底
-/// 拿错/链底漏卡」必须咬）
+/// 链底账（经排布器独立复算——考题与 layout_vp 内部必须同值，
+/// 变异「可视底拿错/链底漏卡」必须咬）
 fn chain_bottom_of(l: &parser_page::Layout, n_svc: usize) -> i64 {
-    l.card.y
-        + i64::from(l.card.h)
-        + i64::from(kfm_na::ui::link_card::LINK_GAP + kfm_na::ui::link_card::card_h(n_svc))
-        + i64::from(kfm_na::ui::sys_card::SYS_GAP + kfm_na::ui::sys_card::CARD_H)
+    kfm_na::ui::parser_chain::chain_bottom(
+        l.card.y,
+        &kfm_na::ui::parser_chain::heights(l.card.h, n_svc),
+    )
 }
 
 #[test]

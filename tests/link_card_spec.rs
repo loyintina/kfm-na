@@ -3,13 +3,17 @@
 //! 两边吃 link_card 同一份 layout）。文案面考卷留在 conn_card_spec /
 //! svc_card_spec（合并不动文案，只动几何）。
 //!
-//! 变异抽检：①inset_extra_live 漏加 LINK_GAP（预留量与实高漂移 =
-//! 两卡相叠/底部空洞）必须咬；②两列宽不等（列宽账错 = 左右列一大
-//! 一小）必须咬；③[重连] 钮不钉列底（右列长时钮吊在字段后悬空）
-//! 必须咬；④card_h 取 min 不取 max（高列内容出卡底）必须咬。
+//! 变异抽检：①预留带漏加前距/本卡高（预留量与实高漂移 = 两卡相叠/
+//! 底部空洞）必须咬；②两列宽不等（列宽账错 = 左右列一大一小）必须
+//! 咬；③[重连] 钮不钉列底（右列长时钮吊在字段后悬空）必须咬；
+//! ④card_h 取 min 不取 max（高列内容出卡底）必须咬。
+//! （2026-09-20 两轴契约 §四收编：卡外框改由排布器 parser_chain
+//! 配给——落位/间距/预留的钉在 parser_chain_spec，本册钉卡内几何）
 
+use kfm_na::termview::CELL_H;
 use kfm_na::ui::dual_pool::PoolRect;
-use kfm_na::ui::link_card::{self, LinkHit};
+use kfm_na::ui::link_card::{self, LinkHit, LinkLayout};
+use kfm_na::ui::parser_chain::{self, ChainCardId};
 use kfm_na::ui::parser_page as pp;
 
 fn tmux_card() -> PoolRect {
@@ -21,23 +25,32 @@ fn tmux_card() -> PoolRect {
     }
 }
 
+/// 排布器配给制 layout（涂装/命中同路径——生产侧也是 slot_rect → layout_in）
+fn lay(n: usize) -> LinkLayout {
+    let tc = tmux_card();
+    link_card::layout_in(
+        parser_chain::slot_rect(ChainCardId::Link, &tc, &parser_chain::heights(tc.h, n)),
+        n,
+    )
+}
+
 #[test]
 fn spec_几何_接在tmux卡下() {
     let tc = tmux_card();
-    let l = link_card::layout(&tc, 2);
+    let l = lay(2);
     assert_eq!(l.card.x, tc.x, "与 tmux 卡同左右缘（二级卡同池区宽）");
     assert_eq!(l.card.w, tc.w);
     assert_eq!(
         l.card.y,
-        tc.y + i64::from(tc.h) + i64::from(link_card::LINK_GAP),
-        "接在 tmux 卡正下方，间距 LINK_GAP"
+        tc.y + i64::from(tc.h) + i64::from(CELL_H),
+        "接在 tmux 卡正下方，间距一格（排布器注册槽 gap_before）"
     );
     assert_eq!(l.card.h, link_card::card_h(2), "卡高 = 卡高账同源");
 }
 
 #[test]
 fn spec_几何_两竖列等宽半分() {
-    let l = link_card::layout(&tmux_card(), 2);
+    let l = lay(2);
     let cx = l.card.x + i64::from(pp::CARD_PAD_H);
     let cw = l.card.w - pp::CARD_PAD_H * 2;
     let col_w = (cw - pp::COL_GAP) / 2;
@@ -70,7 +83,7 @@ fn spec_几何_两竖列等宽半分() {
 #[test]
 fn spec_几何_钮钉左列底() {
     // n=0：左列比右列长（钮占高）→ 钮在字段块一行距之后
-    let l0 = link_card::layout(&tmux_card(), 0);
+    let l0 = lay(0);
     let fields_end = l0.lfields[3].y + i64::from(l0.lfields[3].h);
     assert_eq!(
         l0.button.y,
@@ -83,7 +96,7 @@ fn spec_几何_钮钉左列底() {
         "钮底 = 卡底 − PAD_V（变异③：不钉底必须咬）"
     );
     // n=6：右列反超 → 钮仍钉列底，不许吊在字段后悬空
-    let l6 = link_card::layout(&tmux_card(), 6);
+    let l6 = lay(6);
     assert!(
         l6.rheader.y < l6.button.y,
         "右列长时左列字段与钮之间留空是钉底的设计形态"
@@ -121,18 +134,19 @@ fn spec_几何_卡高账取高列() {
 
 #[test]
 fn spec_预留量_与实高同源() {
+    // tmux 卡底部预留带必须完整盖住本卡（前距 + 本卡实高）——
+    // 排布器账（变异①：漏 gap 或漏卡高必须咬）
     for n in [0, 1, 3, 6] {
-        assert_eq!(
-            link_card::inset_extra(n),
-            link_card::LINK_GAP + link_card::card_h(n),
-            "预留量 = 间距 + 卡实高（变异①：漏 LINK_GAP 必须咬）"
+        assert!(
+            parser_chain::reserved_below_tmux(n) >= CELL_H + link_card::card_h(n),
+            "n={n} 预留带盖不住本卡 = 两卡相叠/底部空洞"
         );
     }
 }
 
 #[test]
 fn spec_命中_只有重连可点() {
-    let l = link_card::layout(&tmux_card(), 2);
+    let l = lay(2);
     let b = &l.button;
     assert_eq!(
         link_card::hit(&l, b.x + 1, b.y + 1),
