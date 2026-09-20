@@ -91,6 +91,17 @@ pub fn of_default_session(d: &DefaultSession) -> EndpointKind {
     }
 }
 
+/// 会话名 → 对象映射（壳 Ctrl-] 切换同步用）：路由槽位就两名，
+/// "local" → 本地，其余（"remote"）→ 服务器——名字归路由层所有，
+/// 本映射是对象轴对路由词的唯一认领点（不许各消费点自译）
+pub fn of_session_name(name: &str) -> EndpointKind {
+    if name == "local" {
+        EndpointKind::Local
+    } else {
+        EndpointKind::Server
+    }
+}
+
 /// 当前对象状态核（纯数据面——A 档判卷不碰全局；全局句柄是壳/涂装
 /// 的薄共享，同 parser_page 全局句柄模式）
 pub struct EndpointState {
@@ -134,7 +145,8 @@ impl EndpointState {
 pub enum ExecPlan<'a> {
     /// 服务器相 + 已配置服务器 → ws exec（url 由壳的 remote_conn_cfg 喂）
     Ws(&'a str),
-    /// 本地相 → local PTY exec（第 6 步接线；与有无服务器配置无关）
+    /// 本地相 → local PTY exec（local_pty::local_exec，与有无服务器
+    /// 配置无关）
     LocalPty,
     /// 服务器相但没配置服务器条目（各调用点自有报错语义——静默或挂
     /// 错误文案，裁决层不替它们措辞）

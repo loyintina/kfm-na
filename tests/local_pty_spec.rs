@@ -154,3 +154,65 @@ fn spec_l3_shell_plan_无bash回落系统sh() {
     assert_eq!(plan.shell, kfm_na::local_pty::default_shell());
     assert!(plan.env_extra.is_empty());
 }
+
+/// 收 local_exec 的一次性结果(超时不来即红——执行线程死了要显形)
+fn recv_exec(
+    rx: &std::sync::mpsc::Receiver<Result<String, String>>,
+    what: &str,
+) -> Result<String, String> {
+    rx.recv_timeout(TIMEOUT)
+        .unwrap_or_else(|e| panic!("等不到 exec 结果 {what}: {e}"))
+}
+
+/// 考题 6(两轴契约第 6 步):local_exec echo 往返——`sh -c` 跑命令,
+/// 全部输出进 Ok(host 判卷:shell = /bin/sh)
+#[test]
+fn spec_l6_exec_echo往返() {
+    let rx = kfm_na::local_pty::local_exec("echo kfm-exec-hi".into());
+    let out = recv_exec(&rx, "echo").expect("echo 不该失败");
+    assert!(out.contains("kfm-exec-hi"), "输出缺回显: {out:?}");
+}
+
+/// 考题 7:stderr 同 PTY 合并收回 + 非零退出仍 Ok(ws 路契约同形——
+/// tmux list 在无服务端时 rc=1 带报错文本,解析层把噪声滤成空表,
+/// 传输层不替它判成败)
+#[test]
+fn spec_l6_exec_非零退出仍ok并收stderr() {
+    let rx = kfm_na::local_pty::local_exec("echo kfm-exec-err >&2; exit 3".into());
+    let out = recv_exec(&rx, "stderr").expect("非零退出不该算传输失败");
+    assert!(out.contains("kfm-exec-err"), "stderr 未收回: {out:?}");
+}
+
+/// 考题 8:超时兜底——子进程挂死必杀必报 Err(裸阻塞 read 会把超时
+/// 咬死,本钉防读环退化);超时可注版 1s 判卷(10s 正身等不起)
+#[test]
+fn spec_l6_exec_超时兜底() {
+    let rx = kfm_na::local_pty::local_exec_with("sleep 30".to_string(), 1);
+    let err = recv_exec(&rx, "超时").expect_err("挂死命令不该出 Ok");
+    assert!(err.contains("执行超时"), "报错缺超时词: {err:?}");
+}
+
+/// 考题 9(两轴第 6 步②):ConnConfig.command = 命令行语义——平台
+/// shell `-c` 跑命令行,跑完自己退出(本地相 attach 重孵的工序根:
+/// `tmux new-session -A -s '名'` 走这条路进 PTY)。与 ws 侧「服务端
+/// sh -c」同一契约
+#[test]
+fn spec_l6_command命令行语义() {
+    let factory = LocalPtyFactory::new(
+        ConnConfig {
+            url: String::new(),
+            command: Some("echo kfm-cmdline-hi".into()),
+        },
+        local_pty_spawner(),
+    );
+    let h = factory.spawn(&factory.default_config());
+    recv_until(
+        &h.events,
+        "命令行输出",
+        |ev| matches!(ev, SessionEvent::Output { data } if data.contains("kfm-cmdline-hi")),
+    );
+    // sh -c 跑完即退——Exited 必须到(argv 漏 -c 会变交互 shell 挂死)
+    recv_until(&h.events, "Exited", |ev| {
+        matches!(ev, SessionEvent::Exited { .. })
+    });
+}

@@ -86,3 +86,20 @@ fn spec_endpoint_exec通道裁决() {
         ExecPlan::LocalPty
     ));
 }
+
+#[test]
+fn spec_endpoint_会话名映射() {
+    // 路由槽位词 → 对象轴的唯一认领点："local" → 本地，其余 → 服务器
+    assert_eq!(
+        endpoint::of_session_name("local"),
+        EndpointKind::Local,
+        "local 槽必须映射本地相"
+    );
+    assert_eq!(
+        endpoint::of_session_name("remote"),
+        EndpointKind::Server,
+        "remote 槽必须映射服务器相"
+    );
+    // 未知词不崩——归服务器（现状锚；路由层加新槽时来这里补映射）
+    assert_eq!(endpoint::of_session_name("未知槽"), EndpointKind::Server);
+}

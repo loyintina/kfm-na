@@ -7,6 +7,44 @@
 
 ## 当前位置（2026-09-20)
 
+> **两轴第 6 步②：attach 对称（2026-09-20，与①同批待提交+真机
+> 判卷）**：本地相点行 = 本地 PTY 重孵带 `tmux new-session -A -s '名'`
+> 命令，点已附着 = 裸 shell 重孵脱离（BAR-116 同规，聚焦框灭+收页）。
+> 工序根：ConnConfig.command 本地侧从「shell 路径覆盖」（无调用方、
+> 与 conn.rs 字段文档相悖）对齐 ws 侧「sh -c 命令行」——ShellPlan
+> 添 args 字段，drive_local argv = [arg0, args…]；壳 parser_attach
+> 按 endpoint::current() 分流 server/local 两臂（同语义同工序，
+> 通道不同），respawn_remote_with 泛化 respawn_named_with 按名分
+> 工厂；附着账分两本 remote/local_attached，cur_attached() 唯一
+> 认领点（初始化/翻相随行/重排/attach 判定全吃它）；本地死亡或
+> 手动重孵 = 裸 shell → 附着账勾销+页牌随行（远程不清：default
+> 带 attach 命令——不对称来自配置差不是工序差）。考题 +1
+> （命令行语义 spawn→输出→Exited），变异 argv 漏 args 咬住。
+> **判卷标准**：真机 Ctrl-] 切本地 → 解析页 tmux 卡列手机本地
+> tmux 会话 → 点行切过去（终端进 tmux）→ 再点脱离回本地 shell；
+> 新建/关闭/重排四腿同卡同吃。
+
+> **两轴第 6 步①：local exec 腿接线（2026-09-20，与②同批待提交+
+> 真机判卷）**：解析页本地相的执行腿落地——`local_pty::local_exec` 与
+> `tmux_exec::exec` 同一契约面（短命本地 PTY `sh -c` 收全输出进
+> mpsc，10s 超时杀子收尸，poll 截拍读环防挂死咬钟；环境 =
+> 交互本地会同一份 shell_plan，L3 bash + PREFIX/PATH/
+> LD_LIBRARY_PATH）。壳 `endpoint_exec` LocalPty 臂从 panic 换真
+> 通道、`endpoint_exec_ok` 扩席 Ws|LocalPty；tmux 卡 kill/refresh/
+> reflow/new 四调用点零改动同吃两相。**真机探针先行（全绿）**：
+> build-overlay 打 tmux 包（TUNA 镜像救场——packages-cf 被手机
+> 网络拦，sources.list 已换 TUNA 并留 .bak-kfm）→ 闸门通道九
+> switch-req 切本地会话 → kfm-pkg install tmux（3.7c）→
+> new-session/ls/kill-server 生命周期逐拍截屏绿 → 切回 remote。
+> 探针副产：switch-req 通道九实证可用（na-type.sh 头注「不支持
+> Ctrl-]」的留白已被 08-28 通道九补上，头注待修）。考题
+> local_pty_spec +3（echo 往返/stderr 合并且非零仍 Ok/超时兜底），
+> 变异 3 枚全咬。**判卷标准**：真机 Ctrl-] 切本地相 → 解析页 tmux
+> 卡列出手机本地 tmux 会话（attach 臂未通前点行会走远程语义——
+> 第 6 步②接线前只判列/新建/关闭/重排四腿）。
+> **下一刀已定**：第 6 步③ 环境卡本地相 collect("/data") 直读 +
+> ④ 服务/连接卡本地相（字段草稿先给用户过目）。
+
 > **解析页视口化页面滚动（2026-09-20，提交 57076e1 三推，redroid
 > 判卷 6/6 绿，待用户终验）**：用户拍板「卡弹小，然后里面的内容跟随
 > 截断，上下能滑动」——取代

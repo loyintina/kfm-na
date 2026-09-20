@@ -5,7 +5,9 @@
 #   bash scripts/na-type.sh '你好'         中文也行(IME 落字到底也是字节流)
 #
 # 字节语义:\r = 回车;\x03 = Ctrl+C;Ctrl 组合直接写控制字节。
-# 注意:Ctrl-](\x1d)会话切换是 UI 层逻辑,闸门不支持(有意留白)。
+# 注意:Ctrl-](\x1d)会话切换是 UI 层拦截不落 PTY,本通道注不进——
+# 切换走通道九 switch-req(touch $NA_TMP/switch-req,gate.rs 通道九,
+# 2026-09-20 真机探针实证可用)。
 # 协议:先写 keys-in.new 再 mv(原子防半读);na 值守线程 300ms 内消费。
 # 应用退后台也能注入(BAR-029 保活 + 值守线程不归事件循环管)。
 set -euo pipefail

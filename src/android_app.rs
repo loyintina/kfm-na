@@ -343,6 +343,10 @@ struct App {
     remote_conn_cfg: Option<crate::conn::ConnConfig>,
     /// 本端当前附着的 tmux 会话名（启动命令提取/attach 后更新）
     remote_attached: Option<String>,
+    /// 本地相附着名（两轴第 6 步②对称：本地 PTY 重孵 tmux attach 后
+    /// 更新；本地会话死亡/手动重孵 = 裸 shell——default_config 无命令，
+    /// 重孵点把本账勾销）
+    local_attached: Option<String>,
     /// L3 内置 ssh 正连隧道快照（2026-09-19 用户拍板：通道收归 na 自持，
     /// 取代 Termux 外挂隧道）——Some = 看门狗已起，UI/报表只读这份
     tunnel_snap: Option<std::sync::Arc<std::sync::Mutex<crate::tunnel::TunnelSnap>>>,
@@ -2949,6 +2953,11 @@ impl App {
             None => ConnConfig::default(),
         };
         self.switch_hotkey_bytes = term_cfg.switch_hotkey.bytes();
+        // 解析页对象轴启动同步（两轴宪法 §一）：默认会话是谁，启动相
+        // 就是谁——之后 Ctrl-] 切换在 switch_session 里随行同步
+        crate::endpoint::sync(crate::endpoint::of_default_session(
+            &term_cfg.default_session,
+        ));
         self.terminal_cfg = term_cfg;
         self.settings_servers = servers;
         // 解析页 tmux 插件：远程连接配置缓存（ws url + 启动命令）+ 本端
@@ -3101,14 +3110,13 @@ impl App {
         }
 
         // 解析页 tmux 插件状态核（2026-09-19）：共享句柄注册（gate 值守
-        // 倒帧同源）；附着名从启动命令提取喂入（attach 后由壳更新）
+        // 倒帧同源）；附着名 = 当前对象那份账（启动命令提取喂入，attach
+        // 后由壳更新；两轴第 6 步②起本地相有自己的附着账）
         {
             let page = std::sync::Arc::new(std::sync::Mutex::new(
                 crate::ui::parser_page::ParserPage::new(),
             ));
-            page.lock()
-                .unwrap()
-                .set_attached(self.remote_attached.clone());
+            page.lock().unwrap().set_attached(self.cur_attached());
             crate::ui::parser_page::register_parser_page(page.clone());
             self.parser_page = Some(page);
         }
@@ -3568,6 +3576,14 @@ impl App {
         }
         self.session_over = self.health(name_s).dead;
         crate::report::report("term", &format!("会话切换: {name_a} → {name_s}"));
+        // 解析页对象轴跟随中央终端（两轴宪法 §一：中央连着谁就解析谁）——
+        // 翻相 epoch+1 进涂装 sig 自动重烘；同名不抖
+        crate::endpoint::sync(crate::endpoint::of_session_name(name_s));
+        // 附着牌随行：对象换了附着名就是另一份账（状态核同源，涂装见
+        // epoch 重烘时自然画新牌）
+        if let Some(p) = &self.parser_page {
+            p.lock().unwrap().set_attached(self.cur_attached());
+        }
         if self.session_over {
             self.kick_reconnect(); // 切入死会话 = 立即重连
         }
@@ -3580,6 +3596,15 @@ impl App {
             self.health_local
         } else {
             self.health_remote
+        }
+    }
+
+    /// 当前对象那份附着账（两轴第 6 步②：服务器/本地各一本，对象轴
+    /// 随行切换后页牌/重排/attach 判定都吃这份——不许各消费点自译）
+    fn cur_attached(&self) -> Option<String> {
+        match crate::endpoint::current() {
+            crate::endpoint::EndpointKind::Server => self.remote_attached.clone(),
+            crate::endpoint::EndpointKind::Local => self.local_attached.clone(),
         }
     }
 
@@ -3699,9 +3724,9 @@ impl App {
     }
 
     /// tmux 卡 exec 通道可用性（两轴契约第 4 步：server 相原样迁入——
-    /// 通道选择唯一源，裁决纯函数 endpoint::plan_exec 钉着）。false =
-    /// 服务器相没配置 / 本地相未接线（第 6 步）；各调用点照旧自有
-    /// 报错语义（静默或挂错误文案），本层不替它们措辞
+    /// 通道选择唯一源，裁决纯函数 endpoint::plan_exec 钉着；第 6 步本地
+    /// 相 exec 腿接线 = LocalPty 也算可用）。false = 服务器相没配置；
+    /// 各调用点照旧自有报错语义（静默或挂错误文案），本层不替它们措辞
     fn endpoint_exec_ok(&self) -> bool {
         use crate::endpoint::{ExecPlan, plan_exec};
         matches!(
@@ -3709,7 +3734,7 @@ impl App {
                 crate::endpoint::current(),
                 self.remote_conn_cfg.as_ref().map(|c| c.url.as_str()),
             ),
-            ExecPlan::Ws(_)
+            ExecPlan::Ws(_) | ExecPlan::LocalPty
         )
     }
 
@@ -3723,11 +3748,7 @@ impl App {
             self.remote_conn_cfg.as_ref().map(|c| c.url.as_str()),
         ) {
             ExecPlan::Ws(url) => crate::tmux_exec::exec(url.to_string(), cmd),
-            ExecPlan::LocalPty => {
-                // 第 6 步接线位（local PTY exec）；exec_ok 已排除此路，
-                // 走到 = 调用点漏裁决 = 装配错误
-                panic!("本地相 exec 未接线（第 6 步）——调用点漏过 endpoint_exec_ok 裁决")
-            }
+            ExecPlan::LocalPty => crate::local_pty::local_exec(cmd),
             ExecPlan::NoServer => {
                 panic!("exec 通道不可用——调用点漏过 endpoint_exec_ok 裁决")
             }
@@ -3771,9 +3792,10 @@ impl App {
     }
 
     /// 重排：窗口尺寸钉到 na 当前网格（manual 即生效；largest/latest
-    /// 下 tmux 自动翻 manual——2026-09-19 服务器实证）
+    /// 下 tmux 自动翻 manual——2026-09-19 服务器实证）。附着账吃当前
+    /// 对象那份（第 6 步②：本地相重排的是手机本地 tmux）
     fn parser_reflow(&mut self) {
-        let Some(sess) = self.remote_attached.clone() else {
+        let Some(sess) = self.cur_attached() else {
             if let Some(p) = &self.parser_page {
                 p.lock().unwrap().set_error("重排需要本端已附着会话".into());
             }
@@ -3835,32 +3857,43 @@ impl App {
     }
 
     /// attach 切换（nz P7 嵌套禁止的 na 落地：不重开客户端内 attach，
-    /// 而是关掉当前远程会话、按新命令重孵——复用断线重连同一条工序）：
-    /// P1 同规——已附着同名 = 零动作；非远程活跃 = 报错引导
-    /// 远程重孵公共段（parser_attach / 脱离臂同款工序）：关旧 → 工厂按
-    /// cfg 起新 → router 换心 + 泵换入向通道 → 补 Resize。失败返回原因，
-    /// 页面上挂错误与 report 归调用方（两臂措辞不同）
-    fn respawn_remote_with(&mut self, new_cfg: &ConnConfig) -> Result<(), String> {
+    /// 而是关掉当前会话、按新命令重孵——复用断线重连同一条工序）：
+    /// P1 同规——已附着同名 = 零动作；非本相活跃 = 报错引导
+    /// 重孵公共段（attach/脱离两臂同款工序，第 6 步②起按名分工厂）：
+    /// 关旧 → 工厂按 cfg 起新 → router 换心 + 泵换入向通道 → 补
+    /// Resize。失败返回原因，页面上挂错误与 report 归调用方
+    fn respawn_named_with(
+        &mut self,
+        name: &'static str,
+        new_cfg: &ConnConfig,
+    ) -> Result<(), String> {
         if let Some(r) = self.router_handle() {
             r.lock().unwrap().send(TermCmd::Close);
         }
-        let handle = self
-            .base
-            .as_ref()
-            .and_then(|b| b.ctx().get::<dyn TermFactory>().ok())
-            .map(|f| f.spawn(new_cfg));
+        let handle = match name {
+            "local" => self
+                .base
+                .as_ref()
+                .and_then(|b| b.ctx().get::<crate::local_pty::LocalPtyFactory>().ok())
+                .map(|f| f.spawn(new_cfg)),
+            _ => self
+                .base
+                .as_ref()
+                .and_then(|b| b.ctx().get::<dyn TermFactory>().ok())
+                .map(|f| f.spawn(new_cfg)),
+        };
         let Some(h) = handle else {
             return Err("连接工厂不可用".into());
         };
         {
-            let health = self.health_mut("remote");
+            let health = self.health_mut(name);
             health.dead = false;
             health.connecting = true;
         }
         if let Some(r) = self.router_handle() {
             r.lock().unwrap().replace_active(h.outbound);
         }
-        crate::gate::pump_register("remote", h.events);
+        crate::gate::pump_register(name, h.events);
         self.session_over = false;
         let (cols, rows) = self.last_grid;
         if let Some(r) = self.router_handle() {
@@ -3869,7 +3902,108 @@ impl App {
         Ok(())
     }
 
+    /// attach 入口的对象轴分流（两轴第 6 步②：服务器相走 ws 重孵，
+    /// 本地相走本地 PTY 重孵——两臂同语义同工序，通道不同）
     fn parser_attach(&mut self, name: String) {
+        match crate::endpoint::current() {
+            crate::endpoint::EndpointKind::Server => self.parser_attach_server(name),
+            crate::endpoint::EndpointKind::Local => self.parser_attach_local(name),
+        }
+    }
+
+    /// 本地相 attach/脱离（与服务器臂逐点对称：点行 = 本地 PTY 重孵
+    /// 带 tmux attach 命令；点已附着 = 裸 shell 重孵脱离，BAR-116
+    /// 同规）。差异只在：工厂 = LocalPtyFactory、活跃槽守卫 = local、
+    /// 无「服务器配置缺失」臂（本地 exec 不需要配置）
+    fn parser_attach_local(&mut self, name: String) {
+        if self.local_attached.as_deref() == Some(name.as_str()) {
+            crate::report::report(
+                "ui",
+                &format!("tmux 插件: {name} 已附着 = 脱离回本地 shell"),
+            );
+            if self
+                .router_handle()
+                .map(|r| r.lock().unwrap().active_name())
+                != Some("local")
+            {
+                if let Some(p) = &self.parser_page {
+                    p.lock()
+                        .unwrap()
+                        .set_error("先切到本地终端再脱离会话".into());
+                }
+                crate::report::report("ui", "tmux 插件: 脱离被拒——活跃非本地");
+                self.dirty = true;
+                return;
+            }
+            let shell_cfg = ConnConfig {
+                url: String::new(),
+                command: None, // 裸 shell = 交互本地方案（L3 bash）
+            };
+            if let Err(e) = self.respawn_named_with("local", &shell_cfg) {
+                crate::report::report_sync("term", &format!("tmux 插件脱离失败: {e}"));
+                if let Some(p) = &self.parser_page {
+                    p.lock().unwrap().set_error(format!("脱离失败: {e}"));
+                }
+                self.dirty = true;
+                return;
+            }
+            self.local_attached = None;
+            if let Some(p) = &self.parser_page {
+                p.lock().unwrap().set_attached(None);
+            }
+            if let Some(t) = self.term_handle() {
+                // 裸 shell 不重画——旧 tmux 残帧必须先清（BAR-116 同规）
+                let banner = format!(
+                    "\x1b[2J\x1b[H\x1b[36m[kfm-na: 已脱离 tmux 会话 {name}，回到本地 shell]\x1b[0m\r\n"
+                );
+                t.lock().unwrap().feed(banner.as_bytes());
+                t.lock().unwrap().scroll_to_bottom();
+            }
+            self.dirty = true;
+            self.parser_dismiss();
+            return;
+        }
+        let Some(p) = self.parser_page.clone() else {
+            return;
+        };
+        if self
+            .router_handle()
+            .map(|r| r.lock().unwrap().active_name())
+            != Some("local")
+        {
+            p.lock()
+                .unwrap()
+                .set_error("先切到本地终端再切换会话".into());
+            crate::report::report("ui", "tmux 插件: attach 被拒——活跃非本地");
+            self.dirty = true;
+            return;
+        }
+        // 关旧 → 新命令重孵（公共段；脱离臂同路）。url 本地路径忽略
+        let new_cfg = ConnConfig {
+            url: String::new(),
+            command: Some(crate::tmux_ctl::cmd_attach(&name)),
+        };
+        if let Err(e) = self.respawn_named_with("local", &new_cfg) {
+            crate::report::report_sync("term", &format!("tmux 插件 attach 失败: {e}"));
+            p.lock().unwrap().set_error(format!("attach 失败: {e}"));
+            self.dirty = true;
+            return;
+        }
+        self.local_attached = Some(name.clone());
+        p.lock().unwrap().set_attached(Some(name.clone()));
+        if let Some(t) = self.term_handle() {
+            let banner = format!("\r\n\x1b[36m[kfm-na: 切换到 tmux 会话 {name}]\x1b[0m\r\n");
+            t.lock().unwrap().feed(banner.as_bytes());
+            t.lock().unwrap().scroll_to_bottom();
+        }
+        crate::report::report("ui", &format!("tmux 插件: attach {name} 本地重孵已发"));
+        self.dirty = true;
+        self.parser_refresh();
+        // attach 重孵已发 = 回终端主页接新会话（服务器臂同规）
+        self.parser_dismiss();
+    }
+
+    fn parser_attach_server(&mut self, name: String) {
         if self.remote_attached.as_deref() == Some(name.as_str()) {
             // 点已附着会话 = 脱离回服务器命令行（2026-09-19 用户二拍，nz
             // 同款语义：点聚焦标签 = 回主内容）。初版只收页不脱离——附着
@@ -3905,7 +4039,7 @@ impl App {
                 url: cfg.url.clone(),
                 command: None,
             };
-            if let Err(e) = self.respawn_remote_with(&shell_cfg) {
+            if let Err(e) = self.respawn_named_with("remote", &shell_cfg) {
                 crate::report::report_sync("term", &format!("tmux 插件脱离失败: {e}"));
                 if let Some(p) = &self.parser_page {
                     p.lock().unwrap().set_error(format!("脱离失败: {e}"));
@@ -3961,7 +4095,7 @@ impl App {
             url: cfg.url.clone(),
             command: Some(crate::tmux_ctl::cmd_attach(&name)),
         };
-        if let Err(e) = self.respawn_remote_with(&new_cfg) {
+        if let Err(e) = self.respawn_named_with("remote", &new_cfg) {
             crate::report::report_sync("term", &format!("tmux 插件 attach 失败: {e}"));
             p.lock().unwrap().set_error(format!("attach 失败: {e}"));
             self.dirty = true;
@@ -4073,6 +4207,17 @@ impl App {
             crate::report::report_sync("term", &format!("重连失败: {name} 工厂取回不到"));
             return;
         };
+        // 本地会话重孵 = 裸 shell（default_config 无命令）——本地附着账
+        // 同步勾销，页牌随行（远程臂不清：default_config 带设置里的
+        // attach 命令，重孵即重附，附着账依然成立——不对称来自配置差，
+        // 不是工序差）
+        if name == "local" && self.local_attached.is_some() {
+            crate::report::report("term", "本地重孵 = 裸 shell，附着账勾销");
+            self.local_attached = None;
+            if let Some(p) = &self.parser_page {
+                p.lock().unwrap().set_attached(None);
+            }
+        }
         {
             let health = self.health_mut(name);
             health.connecting = true;
