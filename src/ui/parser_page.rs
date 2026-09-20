@@ -146,10 +146,16 @@ pub struct Layout {
 }
 
 /// 视口可视底（键盘感知）：屏高 − 底 inset（键盘+输入栏带）− 页环边距
-/// = 页环底缘。布局账不吃它（BAR-119 红线不动：卡全价、只盖不重排），
-/// 只有页面滚动窗吃——壳/手势/命中三处同此一份尺
+/// − 页环底缘厚度 = 页环底内缘。布局账不吃它（BAR-119 红线不动：卡全价、
+/// 只盖不重排），只有页面滚动窗吃——壳/手势/命中三处同此一份尺。
+/// BAR-121 层级律：页环下沿必须压过内容——可视底让出底缘线厚
+/// （AI_PAGE_FRAME_W），否则内容可画到环底线所在行，把环底边盖掉
+/// （redroid 截屏定罪：中段框线被环境卡内芯盖掉，角弧区却干净）
 pub fn visible_bottom(screen_h: u32, bottom_inset: u32) -> i64 {
-    i64::from(screen_h) - i64::from(bottom_inset) - i64::from(crate::termview::AI_PAGE_FRAME_MARGIN)
+    i64::from(screen_h)
+        - i64::from(bottom_inset)
+        - i64::from(crate::termview::AI_PAGE_FRAME_MARGIN)
+        - i64::from(crate::termview::AI_PAGE_FRAME_W)
 }
 
 /// 布局纯函数：卡片外区 = 双池同一池区（标题下 1 格起）；卡高 = 内容

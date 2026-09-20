@@ -493,10 +493,13 @@ fn chain_bottom_of(l: &parser_page::Layout, n_svc: usize) -> i64 {
 
 #[test]
 fn spec_视口化_可视底公式() {
-    // 可视底 = 屏高 − 底 inset（键盘+输入栏带）− 页环边距 = 页环底缘
+    // 可视底 = 屏高 − 底 inset（键盘+输入栏带）− 页环边距 − 环底缘厚
+    // = 页环底内缘（BAR-121 层级律：框压内容，内容止于环底内缘）
     assert_eq!(
         parser_page::visible_bottom(2280, 200),
-        2280 - 200 - i64::from(kfm_na::termview::AI_PAGE_FRAME_MARGIN)
+        2280 - 200
+            - i64::from(kfm_na::termview::AI_PAGE_FRAME_MARGIN)
+            - i64::from(kfm_na::termview::AI_PAGE_FRAME_W)
     );
 }
 
