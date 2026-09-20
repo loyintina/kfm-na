@@ -12,6 +12,7 @@ pub mod brain_ep;
 pub mod conn;
 pub mod crash;
 pub mod direct_brain;
+pub mod endpoint;
 pub mod exec_probe;
 pub mod gate;
 pub mod glyph_atlas;
