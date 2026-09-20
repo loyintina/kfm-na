@@ -318,6 +318,17 @@ pub const COMPONENTS: &[CompEntry] = &[
         preview: Preview::FieldLabel,
     },
     CompEntry {
+        name: "服务卡",
+        cat: "控件",
+        status: CompStatus::Active,
+        symbol: "compose",
+        file: "src/ui/svc_card.rs",
+        spec: "na-server.md §四 可视化落位",
+        tests: "tests/svc_card_spec.rs",
+        desc: "解析页第三张二级卡（2026-09-20 用户立项，纵排在连接卡下）：na-server 会话层的可视化面——卡头「服务 · 状态词」（自持在线/外部借用/kfmv4 托管/退避 ×N/未启动）+ 四字段行（后端/在线/会话/错误）+ 分隔线 + 每会话一行（id · 尺寸 · 空闲，死会话标死），v1 纯展示无按钮。数据 = 三源合成（svc_health health 轮询器：解析页可见 2s 一拍不可见不轮，走 http1 手写客户端打隧道本地口；nasup 状态词；settings 后端相）——Error 相保留旧数据，闪断不清卡面。几何：动态高卡（会话数定），tmux 卡按 inset_extra_live() 预留底部带（与涂装吃同一份快照同源钉死）。复用件：池框卡环/字段标签列配方/分隔线。",
+        preview: Preview::FieldLabel,
+    },
+    CompEntry {
         name: "断线状态卡",
         cat: "控件",
         status: CompStatus::Active,

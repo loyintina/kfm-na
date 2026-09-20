@@ -3581,7 +3581,9 @@ impl TermView {
         let lay = pp::layout(
             w,
             h,
-            bottom_inset + crate::ui::conn_card::INSET_EXTRA,
+            bottom_inset
+                + crate::ui::conn_card::INSET_EXTRA
+                + crate::ui::svc_card::inset_extra_live(),
             snap.sessions.len(),
             mode,
             snap.scroll,
@@ -3852,6 +3854,100 @@ impl TermView {
                 34.0,
                 title_fg,
                 b.x + off,
+            );
+        }
+
+        // ---- 服务卡（2026-09-20 v1：解析页第三张二级卡，纵排在连接卡
+        // 下；na-server 会话层可视化面，纯展示无按钮。数据 = svc_card::
+        // current() 三源合成（svc_health + nasup + 后端相）。卡环/字段
+        // 行/分隔线与连接卡同配方同件——组件池登记 svc_card）
+        let ssnap = crate::ui::svc_card::current();
+        let slay = crate::ui::svc_card::layout(&clay.card, ssnap.lines.len());
+        paint_rect_ring(
+            &mut frame,
+            slay.card.x + off,
+            slay.card.y,
+            slay.card.x + off + i64::from(slay.card.w),
+            slay.card.y + i64::from(slay.card.h),
+            clip_l,
+            clip_r,
+            crate::ui::accent::CARD_PAGE_BG,
+            accent.c2,
+            accent.c1,
+            POOL_FRAME_R,
+            true,
+        );
+        // 卡头「服务 · 状态词」（在线相才亮标题档，其余次级档——与
+        // 连接卡同语言）
+        let header_fg = if ssnap.word == "自持在线" || ssnap.word == "外部借用" {
+            title_fg
+        } else {
+            meta_fg
+        };
+        self.draw_text_left(
+            &mut frame,
+            &format!("服务 · {}", ssnap.word),
+            (slay.header.x + off) as u32,
+            slay.header.w,
+            slay.header.y as u32,
+            slay.header.h,
+            36.0,
+            header_fg,
+        );
+        // 四字段行（字段标签列配方同连接卡；错误行有字用错色）
+        let svalues = [&ssnap.backend, &ssnap.uptime, &ssnap.sess_n, &ssnap.error];
+        for (i, fr) in slay.fields.iter().enumerate() {
+            let l_items = self.measure_items(crate::ui::svc_card::FIELD_LABELS[i], 36.0);
+            self.draw_field_lines(
+                &mut frame,
+                &l_items,
+                (fr.x + off) as u32,
+                fr.w,
+                fr.y as u32,
+                fr.h,
+                36.0,
+                title_fg,
+                None,
+                true,
+            );
+            let (v_fg, v) = if i == 3 && ssnap.error != "—" {
+                (err_fg, svalues[i].as_str())
+            } else {
+                (meta_fg, svalues[i].as_str())
+            };
+            let v_items = self.measure_items(v, 30.0);
+            self.draw_field_lines(
+                &mut frame,
+                &v_items,
+                (fr.x + off) as u32,
+                fr.w,
+                fr.y as u32,
+                fr.h,
+                30.0,
+                v_fg,
+                None,
+                false,
+            );
+        }
+        paint_divider_line(
+            &mut frame,
+            slay.divider.x + off,
+            slay.divider.y,
+            slay.divider.w,
+            slay.divider.h,
+            accent,
+        );
+        // 会话行（纯文本行，次级档；行几何吃 slay.sessions 同一份）
+        for (line, sr) in ssnap.lines.iter().zip(slay.sessions.iter()) {
+            self.draw_text_left(
+                &mut frame,
+                line,
+                (sr.x + off) as u32,
+                sr.w,
+                sr.y as u32,
+                sr.h,
+                30.0,
+                body_fg,
             );
         }
 

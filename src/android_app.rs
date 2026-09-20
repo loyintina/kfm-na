@@ -1143,7 +1143,8 @@ impl App {
                                 sh,
                                 self.chrome_inset()
                                     + self.cur_bar_h()
-                                    + crate::ui::conn_card::INSET_EXTRA,
+                                    + crate::ui::conn_card::INSET_EXTRA
+                                    + crate::ui::svc_card::inset_extra_live(),
                                 snap.sessions.len(),
                                 mode,
                                 snap.scroll,
@@ -1151,6 +1152,13 @@ impl App {
                             let c = &lay.card;
                             let clay = crate::ui::conn_card::layout(c);
                             let cc = &clay.card;
+                            // 服务卡（第三张，纯展示——点按也归插件手势，
+                            // 不许漏到面板页当滑页起手）
+                            let slay = crate::ui::svc_card::layout(
+                                cc,
+                                crate::ui::svc_card::current().lines.len(),
+                            );
+                            let sc = &slay.card;
                             let (xi, yi) = (x as i64, y as i64);
                             let in_rect = |r: &crate::ui::dual_pool::PoolRect| {
                                 xi >= r.x
@@ -1163,6 +1171,7 @@ impl App {
                             mode == crate::ui::parser_page::Mode::Confirming
                                 || in_rect(c)
                                 || in_rect(cc) // 连接/服务卡同归插件手势（重连钮）
+                                || in_rect(sc) // 服务卡同归（纯展示也吞）
                         };
                         if in_card {
                             crate::report::report(
@@ -1495,7 +1504,8 @@ impl App {
                                     sh,
                                     self.chrome_inset()
                                         + self.cur_bar_h()
-                                        + crate::ui::conn_card::INSET_EXTRA,
+                                        + crate::ui::conn_card::INSET_EXTRA
+                                        + crate::ui::svc_card::inset_extra_live(),
                                     snap.sessions.len(),
                                     crate::ui::parser_page::Mode::Normal,
                                     snap.scroll,
@@ -1524,7 +1534,8 @@ impl App {
                                     sh,
                                     self.chrome_inset()
                                         + self.cur_bar_h()
-                                        + crate::ui::conn_card::INSET_EXTRA,
+                                        + crate::ui::conn_card::INSET_EXTRA
+                                        + crate::ui::svc_card::inset_extra_live(),
                                     snap.sessions.len(),
                                     crate::ui::parser_page::Mode::Normal,
                                     snap.scroll,
@@ -2093,7 +2104,8 @@ impl App {
                                 sh,
                                 self.chrome_inset()
                                     + self.cur_bar_h()
-                                    + crate::ui::conn_card::INSET_EXTRA,
+                                    + crate::ui::conn_card::INSET_EXTRA
+                                    + crate::ui::svc_card::inset_extra_live(),
                                 snap.sessions.len(),
                                 mode,
                                 snap.scroll,
@@ -2900,6 +2912,17 @@ impl App {
                 crate::na_server_sup::start(prefix, srv.clone());
             }
         }
+
+        // 服务卡数据面（2026-09-20，docs/active/na-server.md §四）：
+        // 后端 + 隧道本地口喂给 health 轮询器（幂等；后端翻相自清
+        // 数据）。无服务器条目 = Kfmv4 托管态
+        crate::svc_health::configure(
+            tunnel_srv.as_ref().map(|s| s.backend).unwrap_or_default(),
+            tunnel_srv
+                .as_ref()
+                .map(|s| s.tunnel.local_port)
+                .unwrap_or(crate::tunnel::NA_SERVER_PORT),
+        );
 
         // 插件基座：终端模拟器 + 连接 provider（边界手术第一/二刀）——
         // 「用哪个终端芯、连哪、怎么连」都不归主循环；工厂是服务，实例归调用方。
@@ -3863,7 +3886,8 @@ impl App {
                                 sh,
                                 self.chrome_inset()
                                     + self.cur_bar_h()
-                                    + crate::ui::conn_card::INSET_EXTRA,
+                                    + crate::ui::conn_card::INSET_EXTRA
+                                    + crate::ui::svc_card::inset_extra_live(),
                                 snap.sessions.len(),
                                 crate::ui::parser_page::Mode::Normal,
                                 snap.scroll,
@@ -6663,6 +6687,12 @@ impl ApplicationHandler for App {
             // 闸压住后再无死亡事件 = 链断 remote_dead 卡死；传输恢复必须
             // 回头踢壳层（裁决纯函数 tunnel::usable_edge_kick，A 档钉）
             self.poll_tunnel_kick();
+            // 服务卡数据面（2026-09-20）：可见性喂轮询器（不可见不轮
+            // 纪律），快照换代 → 脏帧重烘卡面
+            crate::svc_health::set_visible(parser_docked);
+            if crate::svc_health::take_dirty() {
+                self.dirty = true;
+            }
             self.poll_input_bar(); // 输入栏快照比对(注入/分流也要画帧)
             // 采样缝动画帧时钟(ui-base §四 按需启停):缝上有活跃动画
             // 且距上帧 ≥16ms 才置脏——无动画零额外帧,有动画 ≤60fps

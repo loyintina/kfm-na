@@ -31,5 +31,6 @@ pub mod parser_page;
 pub mod prompt_bar;
 pub mod seam;
 pub mod stage;
+pub mod svc_card;
 pub mod tab_bar;
 pub mod viewport_push;
