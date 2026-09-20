@@ -20,8 +20,26 @@
 > nix 直造（local_pty.rs 同款 posix_openpt/fork/waitpid + FORK_LOCK
 > 纪律），接口不变，宿主 27 钉 + aarch64-android check 双绿。三笔账
 > 销 a；剩 b（双看门狗）c（日志降噪）挂账。
-> **下一步**：chain-phone 提交 → 服务器重编 release 换核 → 真机切
-> backend + 用户终验。
+> **替换符字形补丁（2026-09-20，待提交）**：tofu 悬案结案后用户拍板
+> 「补上」——U+FFFD 主/备字体双缺（仪器实测 cmap），走 font-bake.py
+> 借字管线从 DejaVuSansMono 借入（半角位），现产物为源幂等重烘
+> （借入 1 个，其余守卫跳过），烘焙判卷加钉（字形在 + 步进半角）。
+> 月亮相位实测有墨（FusionPixel 本就有，redroid 截屏实证路由生效）。
+
+> **真机已切 na-server 后端（2026-09-20，待用户终验）**：提交 9427d66
+> 三推齐；服务器核已换（nix 版，redroid 两轮回灌重绘零 tofu）；真机
+> servers.json 加 "backend":"na-server"（留档 servers.json.bak-kfmv4，
+> 回退 = 换回落档 + 重推核或手动划开）+ 热更核（9427d66 手机编）——
+> health 实证 s2（真机）/ s1（redroid）双活。**tofu 悬案闭环（同日
+> 实判定案）**：切换后报表仍刷「tofu 目击 U+FFFD」——实判链：tmux
+> pane 6 采样零 FFFD → tmux 净室 tapping 发月亮全须全尾 → redroid
+> 截屏零方框 → **重启 redroid app 后 45s 零 tofu**。真身 = 调试自我
+> 指涉：我把含 � 的日志行打到共享 tmux 屏，� 烙进客户端本地网格
+> 滚动史，每帧重烘即重报。解码修复无恙（考题/变异/净室三证）。
+> **教训**：tofu 目击 ≠ 传输病，先查屏上是不是真有 �（警惕调试
+> 输出自我烘焙）。**待用户终验**：真机
+> 日常用（输入/重绘/tmux 切换/断线重连），无异样即结案；state.md
+> 本段随下一里程碑提交。
 
 > **na-server redroid 判卷四绿（2026-09-20，全程 logcat/health 实录）**：
 > ①全链拉起：servers.json 开 backend:"na-server" → 隧道 9021→9021 →

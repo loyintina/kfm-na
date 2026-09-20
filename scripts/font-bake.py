@@ -78,6 +78,11 @@ EMOJI_CPS = [
 ]
 EMOJI_DONOR = "/root/kfm-na-toolchain/fonts/NotoEmoji-Regular.ttf"
 
+# 替换符补丁（2026-09-20：tofu 目击 U+FFFD——传输/日志里的替换符
+# 自身无墨，连目击报表的含义都读不出（调试自我指涉悬案，state.md
+# 2026-09-20 条）。DejaVuSansMono 有，半角位）
+FFFD_CPS = [0xFFFD]
+
 
 def gb2312_unicodes():
     """GB2312 可编码字符全集 + 终端符号补丁表"""
@@ -370,6 +375,9 @@ def main():
         got, missed = borrow(font, EMOJI_DONOR, EMOJI_CPS, cells="auto")
         print(f"borrow: emoji 借入 {len(got)} 个（格宽 EAW 自动）"
               + (f"，捐体缺 {[hex(c) for c in missed]}" if missed else ""))
+        got, missed = borrow(font, BORROW_DONOR, FFFD_CPS)
+        print(f"borrow: 替换符借入 {len(got)} 个"
+              + (f"，捐体缺 {[hex(c) for c in missed]}" if missed else ""))
     if do_subset:
         n = squeeze_powerline(font)
         print(f"powerline: 横压半格 {n} 个字形")
@@ -398,6 +406,11 @@ def main():
             assert gn, f"U+{cp:04X} 月亮相位缺字形"
             assert bhmtx[gn][0] == full, \
                 f"U+{cp:04X} 步进 {bhmtx[gn][0]} != 全角 {full}"
+        # 替换符判卷：字形在 + 步进半角
+        gn = cmap.get(0xFFFD)
+        assert gn, "U+FFFD 替换符缺字形"
+        assert bhmtx[gn][0] == half_cell(check), \
+            f"U+FFFD 步进 {bhmtx[gn][0]} != 半角 {half_cell(check)}"
     if do_subset:
         cjk = sum(1 for cp in cmap if 0x4E00 <= cp <= 0x9FFF)
         # 满覆盖 = 6763；开源占位字体允许缺少量二级生僻字（缝合像素实测
