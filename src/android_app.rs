@@ -1144,7 +1144,8 @@ impl App {
                                 self.chrome_inset()
                                     + self.cur_bar_h()
                                     + crate::ui::conn_card::INSET_EXTRA
-                                    + crate::ui::svc_card::inset_extra_live(),
+                                    + crate::ui::svc_card::inset_extra_live()
+                                    + crate::ui::sys_card::INSET_EXTRA,
                                 snap.sessions.len(),
                                 mode,
                                 snap.scroll,
@@ -1159,6 +1160,9 @@ impl App {
                                 crate::ui::svc_card::current().lines.len(),
                             );
                             let sc = &slay.card;
+                            // 环境卡（第四张，纯展示——同归插件手势）
+                            let xlay = crate::ui::sys_card::layout(sc);
+                            let xc = &xlay.card;
                             let (xi, yi) = (x as i64, y as i64);
                             let in_rect = |r: &crate::ui::dual_pool::PoolRect| {
                                 xi >= r.x
@@ -1172,6 +1176,7 @@ impl App {
                                 || in_rect(c)
                                 || in_rect(cc) // 连接/服务卡同归插件手势（重连钮）
                                 || in_rect(sc) // 服务卡同归（纯展示也吞）
+                                || in_rect(xc) // 环境卡同归（纯展示也吞）
                         };
                         if in_card {
                             crate::report::report(
@@ -1505,7 +1510,8 @@ impl App {
                                     self.chrome_inset()
                                         + self.cur_bar_h()
                                         + crate::ui::conn_card::INSET_EXTRA
-                                        + crate::ui::svc_card::inset_extra_live(),
+                                        + crate::ui::svc_card::inset_extra_live()
+                                        + crate::ui::sys_card::INSET_EXTRA,
                                     snap.sessions.len(),
                                     crate::ui::parser_page::Mode::Normal,
                                     snap.scroll,
@@ -1535,7 +1541,8 @@ impl App {
                                     self.chrome_inset()
                                         + self.cur_bar_h()
                                         + crate::ui::conn_card::INSET_EXTRA
-                                        + crate::ui::svc_card::inset_extra_live(),
+                                        + crate::ui::svc_card::inset_extra_live()
+                                        + crate::ui::sys_card::INSET_EXTRA,
                                     snap.sessions.len(),
                                     crate::ui::parser_page::Mode::Normal,
                                     snap.scroll,
@@ -2105,7 +2112,8 @@ impl App {
                                 self.chrome_inset()
                                     + self.cur_bar_h()
                                     + crate::ui::conn_card::INSET_EXTRA
-                                    + crate::ui::svc_card::inset_extra_live(),
+                                    + crate::ui::svc_card::inset_extra_live()
+                                    + crate::ui::sys_card::INSET_EXTRA,
                                 snap.sessions.len(),
                                 mode,
                                 snap.scroll,
@@ -3887,7 +3895,8 @@ impl App {
                                 self.chrome_inset()
                                     + self.cur_bar_h()
                                     + crate::ui::conn_card::INSET_EXTRA
-                                    + crate::ui::svc_card::inset_extra_live(),
+                                    + crate::ui::svc_card::inset_extra_live()
+                                    + crate::ui::sys_card::INSET_EXTRA,
                                 snap.sessions.len(),
                                 crate::ui::parser_page::Mode::Normal,
                                 snap.scroll,

@@ -1,0 +1,8 @@
+[package]
+name = "na-sys"
+version = "0.1.0"
+edition = "2024"
+description = "环境体征探针（负载/内存/磁盘）：na-server 与 na 客户端双端同一份解析/采集——双端同构第二个面。设计 docs/active/na-server.md §四"
+
+[dependencies]
+libc = "0.2"

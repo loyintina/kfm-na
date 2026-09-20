@@ -83,6 +83,64 @@ fn spec_route_health_prefix_folded() {
 }
 
 #[test]
+fn spec_route_sys() {
+    assert!(matches!(
+        httpd::route("GET", "/api/na/sys"),
+        httpd::Route::Sys
+    ));
+    assert!(matches!(
+        httpd::route("GET", "/kfmv4/api/na/sys"),
+        httpd::Route::Sys
+    ));
+    // POST 打 sys 口 = 404（方法也是路由的一部分）
+    assert!(matches!(
+        httpd::route("POST", "/api/na/sys"),
+        httpd::Route::NotFound
+    ));
+}
+
+#[test]
+fn spec_sys_json_形状() {
+    let info = na_sys::SysInfo {
+        load: Some(na_sys::LoadAvg {
+            l1: 0.42,
+            l5: 0.38,
+            l15: 0.35,
+        }),
+        mem: Some(na_sys::MemInfo {
+            total_kb: 16384000,
+            avail_kb: 8192000,
+        }),
+        disk: Some((100_000_000_000, 45_000_000_000)),
+    };
+    let v: serde_json::Value =
+        serde_json::from_str(&httpd::sys_json(&info)).expect("sys 是合法 JSON");
+    assert_eq!(v["load"], serde_json::json!([0.42, 0.38, 0.35]));
+    assert_eq!(v["mem_total_kb"], 16384000);
+    assert_eq!(v["mem_avail_kb"], 8192000);
+    assert_eq!(v["disk_total_b"], 100_000_000_000u64);
+    assert_eq!(v["disk_avail_b"], 45_000_000_000u64);
+}
+
+#[test]
+fn spec_sys_json_坏件显形() {
+    // 采不到的路 = null 显形：键永远在（客户端凭键认版本），
+    // 值不许缺键不许编造零值（Android 拒 loadavg 是合法常态）
+    let info = na_sys::SysInfo {
+        load: None,
+        mem: None,
+        disk: None,
+    };
+    let v: serde_json::Value =
+        serde_json::from_str(&httpd::sys_json(&info)).expect("sys 是合法 JSON");
+    assert!(v["load"].is_null(), "采不到 = null，不许缺键");
+    assert!(v["mem_total_kb"].is_null());
+    assert!(v["mem_avail_kb"].is_null());
+    assert!(v["disk_total_b"].is_null());
+    assert!(v["disk_avail_b"].is_null());
+}
+
+#[test]
 fn spec_route_method_mismatch_404() {
     // GET 打 report 口 = 404（方法也是路由的一部分）
     assert!(matches!(

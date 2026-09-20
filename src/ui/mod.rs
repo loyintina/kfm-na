@@ -32,5 +32,6 @@ pub mod prompt_bar;
 pub mod seam;
 pub mod stage;
 pub mod svc_card;
+pub mod sys_card;
 pub mod tab_bar;
 pub mod viewport_push;

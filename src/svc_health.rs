@@ -100,6 +100,43 @@ pub fn session_line(s: &HealthSession) -> String {
     )
 }
 
+/// sys JSON → na_sys::SysInfo（A 档纯函数，环境卡数据面）：契约 = 主键
+/// 必须在（缺 load 键 = 对面不是新版 na-server，报错显形——与
+/// parse_health 同纪律）；值 null = 该路采不到的合法显形 → None
+/// （卡面显「—」）；非 JSON/类型错才报错。数值键缺键同归 None
+/// （旧版缺面 404 已在 HTTP 层挡住，到这里缺键 = 对端半成品，
+/// 占位不编造）
+pub fn parse_sys(json: &str) -> Result<na_sys::SysInfo, String> {
+    let v: serde_json::Value =
+        serde_json::from_str(json).map_err(|e| format!("sys 不是合法 JSON: {e}"))?;
+    let load = match v.get("load") {
+        None => return Err("sys 缺 load".into()),
+        Some(l) if l.is_null() => None,
+        Some(l) => {
+            let a = l.as_array().ok_or_else(|| "sys load 非数组".to_string())?;
+            if a.len() < 3 {
+                return Err("sys load 不足三段".into());
+            }
+            let f = |i: usize| a[i].as_f64().ok_or_else(|| format!("load[{i}] 非数字"));
+            Some(na_sys::LoadAvg {
+                l1: f(0)?,
+                l5: f(1)?,
+                l15: f(2)?,
+            })
+        }
+    };
+    let kb = |k: &str| v.get(k).and_then(|x| x.as_u64());
+    let mem = match (kb("mem_total_kb"), kb("mem_avail_kb")) {
+        (Some(total_kb), Some(avail_kb)) => Some(na_sys::MemInfo { total_kb, avail_kb }),
+        _ => None,
+    };
+    let disk = match (kb("disk_total_b"), kb("disk_avail_b")) {
+        (Some(t), Some(a)) => Some((t, a)),
+        _ => None,
+    };
+    Ok(na_sys::SysInfo { load, mem, disk })
+}
+
 // ---- 数据面（UI 只读这道门）----
 
 /// 轮询相位
@@ -125,11 +162,20 @@ pub struct HealthSnap {
     pub epoch: u64,
 }
 
+/// 环境体征快照（环境卡数据源）：与 health 同轮询器同节拍，
+/// 错误保留旧数据（闪断不清卡面纪律同 health）
+#[derive(Debug, Clone)]
+pub struct SysSnap {
+    pub sys: Option<na_sys::SysInfo>,
+    pub epoch: u64,
+}
+
 struct Inner {
     cfg_backend: Backend,
     cfg_port: u16,
     visible: bool,
     snap: HealthSnap,
+    sys: SysSnap,
 }
 
 static INNER: OnceLock<Arc<Mutex<Inner>>> = OnceLock::new();
@@ -146,6 +192,10 @@ fn inner() -> &'static Arc<Mutex<Inner>> {
                 info: None,
                 epoch: 0,
             },
+            sys: SysSnap {
+                sys: None,
+                epoch: 0,
+            },
         }))
     })
 }
@@ -155,6 +205,14 @@ fn bump(g: &mut Inner, phase: Phase, info: Option<HealthInfo>) {
         g.snap.phase = phase;
         g.snap.info = info;
         g.snap.epoch += 1;
+        DIRTY.store(true, Ordering::Relaxed);
+    }
+}
+
+fn bump_sys(g: &mut Inner, sys: Option<na_sys::SysInfo>) {
+    if g.sys.sys != sys {
+        g.sys.sys = sys;
+        g.sys.epoch += 1;
         DIRTY.store(true, Ordering::Relaxed);
     }
 }
@@ -175,6 +233,7 @@ pub fn configure(backend: Backend, local_port: u16) {
             Phase::Kfmv4
         };
         bump(&mut g, phase, None);
+        bump_sys(&mut g, None); // 后端翻相清体征（kfmv4 时代的不许带进 na-server 相）
     }
     ensure_poller();
 }
@@ -196,6 +255,11 @@ pub fn snap() -> HealthSnap {
     inner().lock().unwrap().snap.clone()
 }
 
+/// 读环境体征快照（环境卡涂装每烘焙拍一张；锁短）
+pub fn sys_snap() -> SysSnap {
+    inner().lock().unwrap().sys.clone()
+}
+
 /// 壳脏帧消耗口：有变化取走 true（每帧一查，零成本）
 pub fn take_dirty() -> bool {
     DIRTY.swap(false, Ordering::Relaxed)
@@ -210,7 +274,9 @@ const HTTP_TIMEOUT: Duration = Duration::from_secs(2);
 /// body 上限（health 面也就几 KB，防爆内存）
 const BODY_CAP: usize = 64 * 1024;
 
-fn http_get_health(port: u16) -> Result<HealthInfo, String> {
+/// GET 一个 JSON 面拿回 body（B 档胶水）：连接/写/读全带超时，
+/// 非 200 即错（旧版 na-server 缺 sys 面 = 404 在这里显形）
+fn http_get(port: u16, path: &str) -> Result<String, String> {
     use std::io::Write;
     use std::net::{SocketAddr, TcpStream};
     let addr: SocketAddr = ([127, 0, 0, 1], port).into();
@@ -220,7 +286,7 @@ fn http_get_health(port: u16) -> Result<HealthInfo, String> {
     st.set_write_timeout(Some(HTTP_TIMEOUT)).ok();
     let req = crate::http1::serialize_request(&crate::http1::Request {
         method: "GET".into(),
-        path: "/api/na/health".into(),
+        path: path.into(),
         headers: vec![("Host".into(), "127.0.0.1".into())],
         body: Vec::new(),
     });
@@ -246,7 +312,7 @@ fn http_get_health(port: u16) -> Result<HealthInfo, String> {
             Err(e) => return Err(format!("读 body 失败: {e}")),
         }
     }
-    parse_health(&String::from_utf8_lossy(&body))
+    Ok(String::from_utf8_lossy(&body).into_owned())
 }
 
 fn ensure_poller() {
@@ -278,7 +344,7 @@ fn ensure_poller() {
                     continue;
                 }
                 last_poll = Some(Instant::now());
-                match http_get_health(port) {
+                match http_get(port, "/api/na/health").and_then(|b| parse_health(&b)) {
                     Ok(info) => {
                         let mut g = inner().lock().unwrap();
                         bump(&mut g, Phase::Ready, Some(info));
@@ -288,6 +354,17 @@ fn ensure_poller() {
                         let mut g = inner().lock().unwrap();
                         let keep = g.snap.info.clone();
                         bump(&mut g, Phase::Error(e), keep);
+                    }
+                }
+                // 环境体征同拍轮（环境卡数据面）：错误只报不换位，
+                // 旧数据保留（闪断不清卡面纪律同 health）
+                match http_get(port, "/api/na/sys").and_then(|b| parse_sys(&b)) {
+                    Ok(info) => {
+                        let mut g = inner().lock().unwrap();
+                        bump_sys(&mut g, Some(info));
+                    }
+                    Err(e) => {
+                        crate::report::report("svchealth", &format!("sys 轮询失败: {e}"));
                     }
                 }
             }

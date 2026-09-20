@@ -3583,7 +3583,8 @@ impl TermView {
             h,
             bottom_inset
                 + crate::ui::conn_card::INSET_EXTRA
-                + crate::ui::svc_card::inset_extra_live(),
+                + crate::ui::svc_card::inset_extra_live()
+                + crate::ui::sys_card::INSET_EXTRA,
             snap.sessions.len(),
             mode,
             snap.scroll,
@@ -3948,6 +3949,73 @@ impl TermView {
                 sr.h,
                 30.0,
                 body_fg,
+            );
+        }
+
+        // ---- 环境卡（2026-09-20 v1：解析页第四张二级卡，纵排在服务卡
+        // 下；「中央终端所在环境的自身体征」可视化，纯展示无按钮。数据
+        // = sys_card::current() 三源合成（svc_health SysSnap + nasup
+        // 对象词 + 后端相），体征解析与 na-server 同一份 na-sys crate）
+        let xsnap = crate::ui::sys_card::current();
+        let xlay = crate::ui::sys_card::layout(&slay.card);
+        paint_rect_ring(
+            &mut frame,
+            xlay.card.x + off,
+            xlay.card.y,
+            xlay.card.x + off + i64::from(xlay.card.w),
+            xlay.card.y + i64::from(xlay.card.h),
+            clip_l,
+            clip_r,
+            crate::ui::accent::CARD_PAGE_BG,
+            accent.c2,
+            accent.c1,
+            POOL_FRAME_R,
+            true,
+        );
+        // 卡头「环境 · 对象词」（有数据才亮标题档——占位是次级信息）
+        let header_fg = if xsnap.load != "—" {
+            title_fg
+        } else {
+            meta_fg
+        };
+        self.draw_text_left(
+            &mut frame,
+            &format!("环境 · {}", xsnap.word),
+            (xlay.header.x + off) as u32,
+            xlay.header.w,
+            xlay.header.y as u32,
+            xlay.header.h,
+            36.0,
+            header_fg,
+        );
+        // 三字段行（字段标签列配方同服务卡；无错误行）
+        let xvalues = [&xsnap.load, &xsnap.mem, &xsnap.disk];
+        for (i, fr) in xlay.fields.iter().enumerate() {
+            let l_items = self.measure_items(crate::ui::sys_card::FIELD_LABELS[i], 36.0);
+            self.draw_field_lines(
+                &mut frame,
+                &l_items,
+                (fr.x + off) as u32,
+                fr.w,
+                fr.y as u32,
+                fr.h,
+                36.0,
+                title_fg,
+                None,
+                true,
+            );
+            let v_items = self.measure_items(xvalues[i].as_str(), 30.0);
+            self.draw_field_lines(
+                &mut frame,
+                &v_items,
+                (fr.x + off) as u32,
+                fr.w,
+                fr.y as u32,
+                fr.h,
+                30.0,
+                meta_fg,
+                None,
+                false,
             );
         }
 

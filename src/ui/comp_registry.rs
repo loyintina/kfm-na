@@ -329,6 +329,17 @@ pub const COMPONENTS: &[CompEntry] = &[
         preview: Preview::FieldLabel,
     },
     CompEntry {
+        name: "环境卡",
+        cat: "控件",
+        status: CompStatus::Active,
+        symbol: "compose",
+        file: "src/ui/sys_card.rs",
+        spec: "na-server.md §四 可视化落位",
+        tests: "tests/sys_card_spec.rs",
+        desc: "解析页第四张二级卡（2026-09-20 用户立项，纵排在服务卡下）：「中央终端所在环境的自身体征」可视化——与设备无关的通用面（服务器/手机/任何设备同一张卡同一组字段）。卡头「环境 · 对象词」+ 三字段行（负载 1/5/15 / 内存已用·总量·占比 / 磁盘同尺），v1 纯展示。数据 = svc_health SysSnap（与 health 同轮询器同 2s 拍，GET /api/na/sys）；体征解析/格式与 na-server 同一份 na-sys crate（双端同构第二面——本地相 = collect(\"/data\") 直读，卡面零改动）。几何：恒定高卡（三字段行固定），tmux 卡按 INSET_EXTRA 常量同源预留。复用件：池框卡环/字段标签列配方。",
+        preview: Preview::FieldLabel,
+    },
+    CompEntry {
         name: "断线状态卡",
         cat: "控件",
         status: CompStatus::Active,

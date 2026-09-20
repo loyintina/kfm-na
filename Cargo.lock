@@ -803,6 +803,7 @@ dependencies = [
  "log",
  "na-loader",
  "na-protocol",
+ "na-sys",
  "ndk",
  "nix",
  "raw-window-handle",
@@ -963,11 +964,19 @@ dependencies = [
  "futures-util",
  "libc",
  "na-protocol",
+ "na-sys",
  "nix",
  "serde_json",
  "tempfile",
  "tokio",
  "tokio-tungstenite",
+]
+
+[[package]]
+name = "na-sys"
+version = "0.1.0"
+dependencies = [
+ "libc",
 ]
 
 [[package]]

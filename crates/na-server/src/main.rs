@@ -150,6 +150,10 @@ async fn http_handle(
             ),
         },
         httpd::Route::Health => httpd::respond(200, "OK", &registry.health_json()),
+        httpd::Route::Sys => {
+            // collect 永不失败——单路采不到归该路 null 显形
+            httpd::respond(200, "OK", &httpd::sys_json(&na_sys::collect("/")))
+        }
         httpd::Route::NotFound => {
             httpd::respond(404, "Not Found", "{\"ok\":false,\"error\":\"not found\"}")
         }

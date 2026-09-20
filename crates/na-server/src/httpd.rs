@@ -1,9 +1,25 @@
 //! httpd.rs — na-server 的平面 HTTP 面（非 WS 升级请求）
 //!
-//! 就三个面：POST /api/na-report（含 /kfmv4 前缀别名）、GET /api/na/health、
-//! 其余 404。响应构造是纯函数（A 档），IO 只是它的搬运工。
+//! 就四个面：POST /api/na-report（含 /kfmv4 前缀别名）、GET /api/na/health、
+//! GET /api/na/sys（环境体征，na-sys 采集）、其余 404。响应构造是纯函数
+//! （A 档），IO 只是它的搬运工。
 
 use std::io::Write as _;
+
+/// 环境体征 JSON（A 档纯函数：形状的唯一事实源，服务卡消费）：
+/// {"load":[l1,l5,l15]|null,"mem_total_kb":N|null,"mem_avail_kb":N|null,
+///  "disk_total_b":N|null,"disk_avail_b":N|null}
+/// 键永远在（客户端凭键认版本），采不到的路 = null 显形不编造
+pub fn sys_json(info: &na_sys::SysInfo) -> String {
+    serde_json::json!({
+        "load": info.load.map(|l| [l.l1, l.l5, l.l15]),
+        "mem_total_kb": info.mem.map(|m| m.total_kb),
+        "mem_avail_kb": info.mem.map(|m| m.avail_kb),
+        "disk_total_b": info.disk.map(|d| d.0),
+        "disk_avail_b": info.disk.map(|d| d.1),
+    })
+    .to_string()
+}
 
 /// 日志落盘路径（env NA_REPORT_LOG 可改；缺省与 kfmv4 files.ts:378 同路径）
 pub fn report_log_path() -> String {
@@ -23,6 +39,7 @@ pub fn respond(status: u16, reason: &str, body: &str) -> Vec<u8> {
 pub enum Route {
     Report,
     Health,
+    Sys,
     NotFound,
 }
 
@@ -33,6 +50,7 @@ pub fn route(method: &str, path: &str) -> Route {
     match (method, p) {
         ("POST", "/api/na-report") => Route::Report,
         ("GET", "/api/na/health") => Route::Health,
+        ("GET", "/api/na/sys") => Route::Sys,
         _ => Route::NotFound,
     }
 }

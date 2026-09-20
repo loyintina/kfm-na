@@ -10,6 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 na-protocol = { path = "../na-protocol" }
+na-sys = { path = "../na-sys" }
 serde_json = "1"
 tokio = { version = "1", features = ["rt", "macros", "time", "sync", "net", "io-util"] }
 tokio-tungstenite = "0.26"

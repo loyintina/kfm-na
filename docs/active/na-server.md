@@ -71,6 +71,7 @@ tmux 管理靠 tmux_exec 短命 PTY 会话顺带完成，AI/文件树/obs 一概
 | `GET /ws`（Upgrade） | 消息协议 = 现 protocol.rs 一字不改 | terminal-open(cwd?, cmd?) → spawned PTY；input/resize/close；回 opened/output/exit。语义对齐 kfmv4 terminal-pty.ts |
 | `POST /api/na-report` | body 原样 append `/root/kfm-na/field-reports.log` | 与 kfmv4 files.ts:378 同行为；接报表路的迁移见 §五 |
 | `GET /api/na/health` | `{uptime_s, sessions:[{id, cmd, cols, rows, alive, idle_s}]}` | **新增**，服务卡唯一数据源（kfmv4 没有此面——后端是 kfmv4 时服务卡显示「kfmv4 托管」态）。idle_s = **真空闲**（距最后 input/output 活动，2026-09-20 修约：此前借 opened_epoch_s 充数 = 年龄冒充空闲，服务卡显形后修约，wsterm input/output 接线 registry.touch） |
+| `GET /api/na/sys` | `{load:[l1,l5,l15]\|null, mem_total_kb\|null, mem_avail_kb\|null, disk_total_b\|null, disk_avail_b\|null}` | **新增（2026-09-20）**，环境卡唯一数据源——「中央终端所在环境的自身体征」，与设备无关的通用面。采集/解析 = `crates/na-sys`（na-server 与 na 客户端同一份，双端同构第二面；手机本地相 = 客户端 `collect("/data")` 直读，卡面零改动）。**逐路显形契约（同日修约）**：键永远在（客户端凭键认版本），采不到的路 = null——Android SELinux 拒 /proc/loadavg 实锤（手机 Termux EACCES，meminfo 可读），collect 永不整组失败，一路塌不连坐 |
 
 ## 四、可视化落位（解析页服务卡）
 
@@ -91,6 +92,17 @@ tmux 管理靠 tmux_exec 短命 PTY 会话顺带完成，AI/文件树/obs 一概
 并入状态词，错误行接 nasup 旧账与轮询错，连接卡同尺）；②Error 相
 保留旧数据（闪断不清卡面）。kfmv4 后端 = 卡显「kfmv4 托管」态
 （§三表口径照旧）。
+
+**环境卡 v1 已落地（2026-09-20，解析页第四张二级卡，服务卡下）**：
+「中央终端所在环境的自身体征」可视化（用户立项：与设备无关的通用
+面）。`src/ui/sys_card.rs`（恒定高几何 + 三源合成，A 档 10 考题四
+变异）+ `crates/na-sys`（负载/内存/磁盘解析采集，na-server 与客户端
+同一份）+ na-server `/api/na/sys` 面。轮询与 health 同器同拍
+（svc_health 扩面，sys 错误只报不换位）。字段行定三（负载/内存/
+磁盘），IO/网络/温度后续再议。**逐路显形（同日修约，chain-phone
+红出来的真需求）**：SysInfo 三字段全 Option——单路采不到 = 该字段
+卡面「—」，不许编造零值不连坐（手机本地相的合法常态：SELinux 拒
+/proc/loadavg、meminfo 可读、statvfs 可用）。
 
 ## 五、切换与回退（双挂期）
 
