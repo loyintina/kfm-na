@@ -19,6 +19,14 @@
 //!     列会话本就在开页/操作后自动刷，手动冗余；命名态 [确定][取消]）。
 //!   关闭确认 = **跳框模态**（同日拍板：防误触，取代卡内确认带）——
 //!   压暗层 + 居中卡 + [确定关闭][取消]，点框外 = 取消（跳框惯例）。
+//!
+//! **页面级滚动（2026-09-20 视口化，用户拍板「卡弹小+内容跟随截断+
+//! 上下能滑动」）**：键盘在场时页环吃键盘 inset 弹小（环底 = 可视底），
+//! 卡链布局不吃键盘（BAR-119 红线不动——只盖不重排），整链（tmux 卡 →
+//! 连接服务合并卡 → 环境卡）随 page_scroll 统一平移，逾视底的部分归
+//! 键盘/栏带遮盖、逾视顶的部分涂装断墨（页缘裁剪带）。滚动窗 =
+//! max(0, 链底 − 可视底)，无键盘恒 0（零行为差）。手势仲裁：起手落
+//! 会话框表带 = 表内滚动（既有），其余卡区垂直拖 = 页面滚动。
 
 use crate::termview::{CELL_H, CELL_W};
 use crate::tmux_ctl::TmuxSession;
@@ -130,6 +138,18 @@ pub struct Layout {
     pub scroll_max: i64,
     /// 可见窗容量（框数）= min(会话数, 可见行×2)——信息位，考题用
     pub visible_rows: usize,
+    /// 页面级滚动上限（2026-09-20 视口化，用户拍板「卡弹小+内容跟随
+    /// 截断+上下能滑动」）：= max(0, 卡链底 − 键盘感知可视底)。无键盘
+    /// 链高 < 可视底 → 恒 0（零行为差）。链 = tmux 卡 + 连接服务合并卡
+    /// + 环境卡；整链几何已减 eff_page_scroll（钳制语义唯一在本函数）
+    pub page_scroll_max: i64,
+}
+
+/// 视口可视底（键盘感知）：屏高 − 底 inset（键盘+输入栏带）− 页环边距
+/// = 页环底缘。布局账不吃它（BAR-119 红线不动：卡全价、只盖不重排），
+/// 只有页面滚动窗吃——壳/手势/命中三处同此一份尺
+pub fn visible_bottom(screen_h: u32, bottom_inset: u32) -> i64 {
+    i64::from(screen_h) - i64::from(bottom_inset) - i64::from(crate::termview::AI_PAGE_FRAME_MARGIN)
 }
 
 /// 布局纯函数：卡片外区 = 双池同一池区（标题下 1 格起）；卡高 = 内容
@@ -138,7 +158,9 @@ pub struct Layout {
 /// bar_h 族，不许传 chrome_inset）。会话框表可见行保底
 /// MIN_VISIBLE_LINES（2 行 4 框）、上限 MAX_VISIBLE_LINES（6 框），
 /// 超出内部滚动：scroll 为像素位移（壳手势喂入），本函数内部 clamp 后
-/// 几何吃 eff_scroll——眼手同尺，钳制语义唯一
+/// 几何吃 eff_scroll——眼手同尺，钳制语义唯一。
+/// 本签名 = 无页面滚动便捷壳（页面滚动 0、可视底无穷大 →
+/// page_scroll_max 恒 0）；产品涂装/命中/手势必须走 layout_vp
 pub fn layout(
     screen_w: u32,
     screen_h: u32,
@@ -146,6 +168,39 @@ pub fn layout(
     n_sessions: usize,
     mode: Mode,
     scroll: i64,
+) -> Layout {
+    layout_vp(
+        screen_w,
+        screen_h,
+        bottom_inset,
+        n_sessions,
+        0,
+        mode,
+        scroll,
+        0,
+        i64::MAX,
+    )
+}
+
+/// 全参布局（2026-09-20 视口化）：在 layout 之上加页面级滚动窗——
+/// n_svc_lines = 连接服务合并卡右列行数（链底账）；page_scroll = 页面
+/// 滚动位移（像素，壳手势喂入）；visible_bottom = 键盘感知可视底
+/// （visible_bottom() 同一份尺——页环吃键盘 inset 弹小后，环底缘就是
+/// 视口底）。页面滚动窗 = max(0, 链底 − 可视底)，本函数内部 clamp 后
+/// 整链几何（卡/头/框表/分隔线/命名行/按钮带/list_clip）统一减
+/// eff_page_scroll——链随窗滑，钳制语义唯一。无键盘时链高 < 可视底，
+/// page_scroll_max 恒 0，几何与 layout 逐像素一致（零行为差）
+#[allow(clippy::too_many_arguments)]
+pub fn layout_vp(
+    screen_w: u32,
+    screen_h: u32,
+    bottom_inset: u32,
+    n_sessions: usize,
+    n_svc_lines: usize,
+    mode: Mode,
+    scroll: i64,
+    page_scroll: i64,
+    visible_bottom: i64,
 ) -> Layout {
     let area = dual_pool::pool_area(screen_w, screen_h, bottom_inset);
     // 页标题已撤（2026-09-19 用户拍板）：卡区上吞标题行高 TAB_ROW_H，
@@ -184,7 +239,7 @@ pub fn layout(
     // 卡高 = 内容账全价，不钳进池区（BAR-119：钳进池区 = 纵向压力全
     // 由本卡吞下 = 塌卡病灶本身；超池出屏归键盘遮盖/下方卡顺延）
     let card_h = content_h;
-    let card = PoolRect {
+    let mut card = PoolRect {
         x: area.x,
         y: area.y,
         w: area.w,
@@ -193,7 +248,7 @@ pub fn layout(
     let cx = card.x + i64::from(CARD_PAD_H);
     let cw = card.w.saturating_sub(CARD_PAD_H * 2);
     let mut y = card.y + i64::from(CARD_PAD_V);
-    let header = PoolRect {
+    let mut header = PoolRect {
         x: cx,
         y,
         w: cw,
@@ -201,7 +256,7 @@ pub fn layout(
     };
     y += i64::from(ROW_H + ROW_GAP);
     let list_top = y;
-    let list_clip = (list_top, list_top + i64::from(visible_h));
+    let mut list_clip = (list_top, list_top + i64::from(visible_h));
     let bw = cw.saturating_sub(COL_GAP) / 2;
     let mut rows = Vec::with_capacity(n_sessions);
     for i in 0..n_sessions {
@@ -214,14 +269,14 @@ pub fn layout(
         });
     }
     y += i64::from(visible_h);
-    let divider = PoolRect {
+    let mut divider = PoolRect {
         x: cx,
         y: y + i64::from(DIVIDER_ZONE - DIVIDER_H) / 2,
         w: cw,
         h: DIVIDER_H,
     };
     y += i64::from(DIVIDER_ZONE);
-    let naming = (mode == Mode::Naming).then(|| {
+    let mut naming = (mode == Mode::Naming).then(|| {
         let r = PoolRect {
             x: cx,
             y,
@@ -244,6 +299,33 @@ pub fn layout(
             });
         }
     }
+    // ---- 页面级滚动窗（视口化）：链底 = tmux 卡底 + GAP + 合并卡高
+    // + GAP + 环境卡高（与涂装/命中的链式 layout 同账：link_card::layout
+    // 接 tmux 卡正下、sys_card::layout 接合并卡正下——高度账只能由各卡
+    // 自己的 card_h/CARD_H 常量和出，不许别处手抄）。窗 = 链底逾可视底
+    // 的部分；整链几何统一减 eff_page_scroll
+    let chain_bottom = card.y
+        + i64::from(card.h)
+        + i64::from(crate::ui::link_card::LINK_GAP + crate::ui::link_card::card_h(n_svc_lines))
+        + i64::from(crate::ui::sys_card::SYS_GAP + crate::ui::sys_card::CARD_H);
+    let page_scroll_max = (chain_bottom - visible_bottom).max(0);
+    let eff_page = page_scroll.clamp(0, page_scroll_max);
+    if eff_page != 0 {
+        card.y -= eff_page;
+        header.y -= eff_page;
+        for r in &mut rows {
+            r.y -= eff_page;
+        }
+        divider.y -= eff_page;
+        if let Some(n) = &mut naming {
+            n.y -= eff_page;
+        }
+        for b in &mut buttons {
+            b.y -= eff_page;
+        }
+        list_clip.0 -= eff_page;
+        list_clip.1 -= eff_page;
+    }
     Layout {
         card,
         header,
@@ -254,6 +336,7 @@ pub fn layout(
         list_clip,
         scroll_max,
         visible_rows: n_sessions.min(used_lines as usize * 2),
+        page_scroll_max,
     }
 }
 
@@ -364,6 +447,10 @@ pub struct ParserPage {
     /// 会话框表滚动位移（像素，≥0；上限 = layout().scroll_max——
     /// 几何侧另有一道 clamp，状态侧脏值不伤眼手同尺）
     scroll: i64,
+    /// 页面级滚动位移（2026-09-20 视口化；上限 = layout_vp().page_scroll_max
+    /// ——几何侧同样有 clamp，键盘收起大值脏存不伤眼：layout 钳回 0，
+    /// 下次 scroll_by 吃新 max 自愈）
+    page_scroll: i64,
     epoch: u64,
 }
 
@@ -376,6 +463,7 @@ pub struct ParserPageSnap {
     pub naming: Option<String>,
     pub confirming: Option<usize>,
     pub scroll: i64,
+    pub page_scroll: i64,
     pub epoch: u64,
 }
 
@@ -394,6 +482,7 @@ impl ParserPage {
             naming: None,
             confirming: None,
             scroll: 0,
+            page_scroll: 0,
             epoch: 0,
         }
     }
@@ -530,6 +619,29 @@ impl ParserPage {
         }
     }
 
+    pub fn page_scroll(&self) -> i64 {
+        self.page_scroll
+    }
+
+    /// 页面级滚动（视口化；壳手势喂增量，max 吃 layout_vp().page_scroll_max
+    /// ——壳每次用当下几何算）。变了才 bump（sig 鬼影纪律同 scroll_by）
+    pub fn page_scroll_by(&mut self, dy: i64, max: i64) {
+        let ns = (self.page_scroll + dy).clamp(0, max.max(0));
+        if ns != self.page_scroll {
+            self.page_scroll = ns;
+            self.bump();
+        }
+    }
+
+    /// 链底账变了（行表刷新增减卡高）钳回上限——同 clamp_scroll 纪律
+    pub fn clamp_page_scroll(&mut self, max: i64) {
+        let ns = self.page_scroll.clamp(0, max.max(0));
+        if ns != self.page_scroll {
+            self.page_scroll = ns;
+            self.bump();
+        }
+    }
+
     pub fn epoch(&self) -> u64 {
         self.epoch
     }
@@ -542,6 +654,7 @@ impl ParserPage {
             naming: self.naming.clone(),
             confirming: self.confirming,
             scroll: self.scroll,
+            page_scroll: self.page_scroll,
             epoch: self.epoch,
         }
     }

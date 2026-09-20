@@ -17,6 +17,11 @@
 //! - 状态机：set_sessions 收确认态防下标悬空；epoch 凡变更必 +1
 //!   （涂装 sig 靠它——漏 bump = 鬼影）；命名/确认模式流转；
 //!   scroll_by/clamp_scroll 钳 [0, max]、没变不 bump
+//! - **视口化页面滚动**（2026-09-20 用户拍板「卡弹小+内容跟随截断+
+//!   上下能滑动」）：page_scroll_max = max(0, 链底 − 键盘感知可视底)；
+//!   整链几何统一平移（卡/头/框表/分隔线/钮/list_clip 一个不落）；
+//!   钳制语义唯一在 layout_vp；无键盘 page_scroll_max 恒 0 零行为差；
+//!   page_scroll_by/clamp_page_scroll 钳 [0, max]、没变不 bump
 //!
 //! 变异抽检方向：两列框宽忘减 COL_GAP（右列出卡）、hit 框尾 × 带判据
 //! 改 >（少 1px）、跳框卡外命中退化为 None（点外取消死）、
@@ -473,4 +478,116 @@ fn spec_status_流转() {
     assert_eq!(p.status(), &Status::Ready);
     p.set_error("超时".into());
     assert_eq!(p.status(), &Status::Error("超时".into()));
+}
+
+// ---- 视口化页面滚动（2026-09-20 用户拍板「卡弹小+内容跟随截断+上下能滑动」）----
+
+/// 链底账（与 layout_vp 内部同一份公式——考题独立复算，变异「可视底
+/// 拿错/链底漏卡」必须咬）
+fn chain_bottom_of(l: &parser_page::Layout, n_svc: usize) -> i64 {
+    l.card.y
+        + i64::from(l.card.h)
+        + i64::from(kfm_na::ui::link_card::LINK_GAP + kfm_na::ui::link_card::card_h(n_svc))
+        + i64::from(kfm_na::ui::sys_card::SYS_GAP + kfm_na::ui::sys_card::CARD_H)
+}
+
+#[test]
+fn spec_视口化_可视底公式() {
+    // 可视底 = 屏高 − 底 inset（键盘+输入栏带）− 页环边距 = 页环底缘
+    assert_eq!(
+        parser_page::visible_bottom(2280, 200),
+        2280 - 200 - i64::from(kfm_na::termview::AI_PAGE_FRAME_MARGIN)
+    );
+}
+
+#[test]
+fn spec_视口化_页面滚动几何与钳制() {
+    let n_svc = 3;
+    let base = parser_page::layout_vp(W, H, INSET, 4, n_svc, Mode::Normal, 0, 0, i64::MAX);
+    let chain_bottom = chain_bottom_of(&base, n_svc);
+    // 键盘把可视底压进链内 500px（模拟键盘在场相）
+    let vbottom = chain_bottom - 500;
+    let l = parser_page::layout_vp(W, H, INSET, 4, n_svc, Mode::Normal, 0, 0, vbottom);
+    assert_eq!(l.page_scroll_max, 500, "滚动窗 = 链底逾可视底的部分");
+    // scroll=0：几何与无页面滚动逐像素一致（零行为差）
+    assert_eq!(l.card.y, base.card.y);
+    assert_eq!(l.rows[0].y, base.rows[0].y);
+    assert_eq!(l.list_clip, base.list_clip);
+    assert_eq!(l.buttons[0].y, base.buttons[0].y);
+    // scroll=200：整链统一上移 200——卡/头/框/分隔线/钮/裁剪带一个不落
+    let ls = parser_page::layout_vp(W, H, INSET, 4, n_svc, Mode::Normal, 0, 200, vbottom);
+    assert_eq!(ls.card.y, base.card.y - 200, "卡环必须随链平移");
+    assert_eq!(ls.header.y, base.header.y - 200, "卡头必须随链平移");
+    assert_eq!(ls.rows[0].y, base.rows[0].y - 200, "会话框必须随链平移");
+    assert_eq!(ls.rows[3].y, base.rows[3].y - 200);
+    assert_eq!(ls.divider.y, base.divider.y - 200, "分隔线必须随链平移");
+    assert_eq!(
+        ls.buttons[0].y,
+        base.buttons[0].y - 200,
+        "按钮带必须随链平移"
+    );
+    assert_eq!(
+        ls.list_clip,
+        (base.list_clip.0 - 200, base.list_clip.1 - 200),
+        "表内裁剪带必须随链平移（眼手同尺）"
+    );
+    // 超 max 钳制：钳制语义唯一在 layout_vp
+    let lc = parser_page::layout_vp(W, H, INSET, 4, n_svc, Mode::Normal, 0, 9999, vbottom);
+    let lm = parser_page::layout_vp(W, H, INSET, 4, n_svc, Mode::Normal, 0, 500, vbottom);
+    assert_eq!(lc.card.y, lm.card.y, "超 max 必须钳到 max");
+    assert_eq!(lc.card.y, base.card.y - 500);
+    // 负值钳 0
+    let ln = parser_page::layout_vp(W, H, INSET, 4, n_svc, Mode::Normal, 0, -300, vbottom);
+    assert_eq!(ln.card.y, base.card.y, "负滚动必须钳 0");
+    // 命名态（卡高变）链底账跟随——滚动窗公式不吃死账
+    let lnam = parser_page::layout_vp(W, H, INSET, 4, n_svc, Mode::Naming, 0, 0, i64::MAX);
+    let cb_nam = chain_bottom_of(&lnam, n_svc);
+    let ln2 = parser_page::layout_vp(W, H, INSET, 4, n_svc, Mode::Naming, 0, 0, cb_nam - 100);
+    assert_eq!(ln2.page_scroll_max, 100);
+}
+
+#[test]
+fn spec_视口化_无键盘零行为差() {
+    // 可视底无穷（无键盘常态）：page_scroll_max 恒 0，任意脏滚动值都
+    // 被钳 0，几何 ≡ 旧 layout 逐像素一致
+    for n in [0usize, 2, 10] {
+        let old = parser_page::layout(W, H, INSET, n, Mode::Normal, 0);
+        let new = parser_page::layout_vp(W, H, INSET, n, 3, Mode::Normal, 0, 777, i64::MAX);
+        assert_eq!(new.page_scroll_max, 0, "无键盘必须不可滚");
+        assert_eq!(new.card.y, old.card.y);
+        assert_eq!(new.card.h, old.card.h);
+        assert_eq!(new.rows.len(), old.rows.len());
+        if n > 0 {
+            assert_eq!(new.rows[0].y, old.rows[0].y);
+        }
+        assert_eq!(new.list_clip, old.list_clip);
+        assert_eq!(new.buttons.len(), old.buttons.len());
+    }
+    // 可视底刚好 = 链底：窗 = 0 也不可滚（边界相）
+    let base = parser_page::layout_vp(W, H, INSET, 2, 1, Mode::Normal, 0, 0, i64::MAX);
+    let cb = chain_bottom_of(&base, 1);
+    let le = parser_page::layout_vp(W, H, INSET, 2, 1, Mode::Normal, 0, 50, cb);
+    assert_eq!(le.page_scroll_max, 0, "链底恰贴可视底 = 不可滚");
+    assert_eq!(le.card.y, base.card.y);
+}
+
+#[test]
+fn spec_视口化_页面滚动状态机() {
+    let mut p = ParserPage::new();
+    let e0 = p.epoch();
+    p.page_scroll_by(-50, 200); // 下钳 0
+    assert_eq!(p.page_scroll(), 0);
+    assert_eq!(p.epoch(), e0, "钳住没变不许 bump");
+    p.page_scroll_by(120, 200);
+    assert_eq!(p.page_scroll(), 120);
+    assert!(p.epoch() > e0);
+    p.page_scroll_by(120, 200); // 上钳 max
+    assert_eq!(p.page_scroll(), 200);
+    p.clamp_page_scroll(80);
+    assert_eq!(p.page_scroll(), 80);
+    let e1 = p.epoch();
+    p.clamp_page_scroll(80);
+    assert_eq!(p.epoch(), e1, "同值钳不许 bump");
+    // snap 必须带 page_scroll（涂装 sig 代际同源——漏维 = 鬼影）
+    assert_eq!(p.snap().page_scroll, 80);
 }

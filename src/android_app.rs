@@ -149,6 +149,17 @@ enum ParserExec {
     Reflow,
 }
 
+/// 解析页卡区拖动分流（2026-09-20 视口化，用户拍板「卡弹小+上下能
+/// 滑动」）：起手落会话框表带 = 表内滚动；其余卡区 = 页面滚动（整链
+/// 随视口平移）。仲裁在拖过 slop 且垂直主导时一次定终身
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ParserDrag {
+    /// 会话框表内滚动（>6 框的内部滚窗）
+    Session,
+    /// 页面级滚动（卡链整体随视口平移）
+    Page,
+}
+
 /// 会话健康牌（断线重连 2026-08-21，按名字记账——槽位随切换翻面,
 /// 死活跟名字走）：dead = Failed/Exited 钉死、Opened 复活;
 /// connecting = 重连在途
@@ -316,11 +327,11 @@ struct App {
     /// 解析页 tmux 插件状态核（2026-09-19 用户立项）：会话表/附着名/
     /// 命名态/确认态。共享句柄注册给 gate 值守倒帧（与 cfg_page 同规）
     parser_page: Option<crate::ui::parser_page::SharedParserPage>,
-    /// 按在解析页卡片上的手势（起点 x, 起点 y, 拖过 slop）——只在解析页
-    /// 靠泊在顶且起点在卡区时建；拖过 slop 让回面板页全家（cfg_pool 同规）
-    /// 解析页卡区触摸槽：(起手 x, 起手 y, 列表滚动态, 上次 y)——
-    /// 拖过 slop 垂直主导且会话表可滚 → 转列表滚动（2026-09-19）
-    parser_touch: Option<(f64, f64, bool, f64)>,
+    /// 解析页卡区触摸槽：(起手 x, 起手 y, 拖动分流, 上次 y)——
+    /// 拖过 slop 垂直主导才分流（2026-09-20 视口化）：起手落会话框表
+    /// 带且表可滚 → Session 表内滚动；其余卡区且页面可滚 → Page 页面
+    /// 滚动；都不可滚/横向主导 → 让回面板页全家
+    parser_touch: Option<(f64, f64, Option<ParserDrag>, f64)>,
     /// tmux 执行在途（动作类 + 结果通道）：about_to_wait 排水——Ok 后
     /// List=填表 / New=attach 新会话 / Kill/Reflow=刷新列表
     parser_exec: Option<(
@@ -1138,15 +1149,23 @@ impl App {
                             } else {
                                 crate::ui::parser_page::Mode::Normal
                             };
-                            let lay = crate::ui::parser_page::layout(
+                            // 视口化：命中臂与涂装同一份 layout_vp（页面
+                            // 滚动后卡链已平移——眼手同尺）
+                            let lay = crate::ui::parser_page::layout_vp(
                                 sw,
                                 sh,
                                 self.cur_bar_h()
                                     + crate::ui::link_card::inset_extra_live()
                                     + crate::ui::sys_card::INSET_EXTRA,
                                 snap.sessions.len(),
+                                crate::ui::svc_card::current().lines.len(),
                                 mode,
                                 snap.scroll,
+                                snap.page_scroll,
+                                crate::ui::parser_page::visible_bottom(
+                                    sh,
+                                    self.chrome_inset() + self.cur_bar_h(),
+                                ),
                             );
                             let c = &lay.card;
                             // 连接服务合并卡（第二张，两竖列——点按归
@@ -1178,7 +1197,7 @@ impl App {
                                 "gest",
                                 &format!("起手→解析页卡区 ({x:.0},{y:.0})"),
                             );
-                            self.parser_touch = Some((x, y, false, y));
+                            self.parser_touch = Some((x, y, None, y));
                             return;
                         }
                     }
@@ -1484,71 +1503,103 @@ impl App {
                     return;
                 }
                 // 解析页卡区手势：起手槽是点按候选扣留席。拖过 slop 分流——
-                // 常态 + 垂直主导 + 会话表可滚（>6 框）→ 列表内部滚动
-                // （2026-09-19 用户拍板）；否则让回面板页全家（横向锁/
-                // 抽屉裁决才轮得到它）
+                // 常态 + 垂直主导：起手落会话框表带且表可滚（>6 框）→
+                // Session 表内滚动（2026-09-19 用户拍板）；其余卡区且页面
+                // 可滚 → Page 页面滚动（2026-09-20 视口化用户拍板「卡弹小+
+                // 上下能滑动」）；否则让回面板页全家（横向锁/抽屉裁决才轮
+                // 得到它）
                 if let Some(pt) = self.parser_touch.take() {
-                    if pt.2 {
-                        // 列表滚动态：垂直增量跟手（手指上推 dy<0 = 看后部
+                    if let Some(kind) = pt.2 {
+                        // 滚动态：垂直增量跟手（手指上推 dy<0 = 看后部
                         // = scroll 增）。max 每次吃当下几何（状态核不揣屏寸）
                         let dy = y - pt.3;
                         if dy != 0.0
                             && let (Some(page), Some((sw, sh))) =
                                 (&self.parser_page, self.screen_px())
                         {
-                            let max = {
+                            let (smax, pmax) = {
                                 let pg = page.lock().unwrap();
                                 let snap = pg.snap();
-                                crate::ui::parser_page::layout(
+                                let lay = crate::ui::parser_page::layout_vp(
                                     sw,
                                     sh,
                                     self.cur_bar_h()
                                         + crate::ui::link_card::inset_extra_live()
                                         + crate::ui::sys_card::INSET_EXTRA,
                                     snap.sessions.len(),
+                                    crate::ui::svc_card::current().lines.len(),
                                     crate::ui::parser_page::Mode::Normal,
                                     snap.scroll,
-                                )
-                                .scroll_max
+                                    snap.page_scroll,
+                                    crate::ui::parser_page::visible_bottom(
+                                        sh,
+                                        self.chrome_inset() + self.cur_bar_h(),
+                                    ),
+                                );
+                                (lay.scroll_max, lay.page_scroll_max)
                             };
-                            page.lock().unwrap().scroll_by(-(dy as i64), max);
+                            let mut pg = page.lock().unwrap();
+                            match kind {
+                                ParserDrag::Session => pg.scroll_by(-(dy as i64), smax),
+                                ParserDrag::Page => pg.page_scroll_by(-(dy as i64), pmax),
+                            }
                         }
-                        self.parser_touch = Some((pt.0, pt.1, true, y));
+                        self.parser_touch = Some((pt.0, pt.1, Some(kind), y));
                         self.dirty = true;
                         return;
                     }
                     if (x - pt.0).abs() > crate::scroll::TAP_SLOP_PX
                         || (y - pt.1).abs() > crate::scroll::TAP_SLOP_PX
                     {
-                        // 滚动仲裁：常态（命名/确认态不滚）+ 可滚 + 垂直主导
-                        let can_scroll = if let (Some(page), Some((sw, sh))) =
-                            (&self.parser_page, self.screen_px())
+                        // 滚动仲裁：常态（命名/确认态不滚）+ 垂直主导；
+                        // 分流 = 起手落点定（框表带→表滚，其余卡区→页滚）
+                        let vertical = (y - pt.1).abs() > (x - pt.0).abs();
+                        let drag = if vertical
+                            && let (Some(page), Some((sw, sh))) =
+                                (&self.parser_page, self.screen_px())
                         {
                             let pg = page.lock().unwrap();
                             let snap = pg.snap();
-                            snap.naming.is_none()
-                                && snap.confirming.is_none()
-                                && crate::ui::parser_page::layout(
+                            if snap.naming.is_some() || snap.confirming.is_some() {
+                                None
+                            } else {
+                                let lay = crate::ui::parser_page::layout_vp(
                                     sw,
                                     sh,
                                     self.cur_bar_h()
                                         + crate::ui::link_card::inset_extra_live()
                                         + crate::ui::sys_card::INSET_EXTRA,
                                     snap.sessions.len(),
+                                    crate::ui::svc_card::current().lines.len(),
                                     crate::ui::parser_page::Mode::Normal,
                                     snap.scroll,
-                                )
-                                .scroll_max
-                                    > 0
+                                    snap.page_scroll,
+                                    crate::ui::parser_page::visible_bottom(
+                                        sh,
+                                        self.chrome_inset() + self.cur_bar_h(),
+                                    ),
+                                );
+                                let in_list = pt.0 as i64 >= lay.card.x
+                                    && (pt.0 as i64) < lay.card.x + i64::from(lay.card.w)
+                                    && pt.1 as i64 >= lay.list_clip.0
+                                    && (pt.1 as i64) < lay.list_clip.1;
+                                if in_list && lay.scroll_max > 0 {
+                                    Some(ParserDrag::Session)
+                                } else if lay.page_scroll_max > 0 {
+                                    Some(ParserDrag::Page)
+                                } else {
+                                    None
+                                }
+                            }
                         } else {
-                            false
+                            None
                         };
-                        if can_scroll && (y - pt.1).abs() > (x - pt.0).abs() {
+                        if let Some(kind) = drag {
                             crate::report::report(
                                 "gest",
-                                &format!("解析页卡区手势→会话列表滚动 ({x:.0},{y:.0})"),
+                                &format!("解析页卡区手势→{kind:?}滚动 ({x:.0},{y:.0})"),
                             );
-                            self.parser_touch = Some((pt.0, pt.1, true, y));
+                            self.parser_touch = Some((pt.0, pt.1, Some(kind), y));
                             self.dirty = true;
                             return;
                         }
@@ -2079,12 +2130,12 @@ impl App {
                     return;
                 }
                 // 解析页卡区手势收尾（2026-09-19 tmux 插件）：未拖抬手 =
-                // 命中判定（几何吃 ui/parser_page::layout 同一份——眼手
+                // 命中判定（几何吃 ui/parser_page::layout_vp 同一份——眼手
                 // 同尺）：行 = 切换 attach / × = 开确认 / 按钮 = 动作分发；
                 // 拖过 slop / Cancelled = 零动作（Moved 段已让回面板页）
                 if let Some(pt) = self.parser_touch.take() {
                     if phase == TouchPhase::Ended
-                        && !pt.2
+                        && pt.2.is_none()
                         && let (Some(page), Some((sw, sh))) = (&self.parser_page, self.screen_px())
                     {
                         let (snap, hit_result, conn_hit) = {
@@ -2097,15 +2148,21 @@ impl App {
                             } else {
                                 crate::ui::parser_page::Mode::Normal
                             };
-                            let lay = crate::ui::parser_page::layout(
+                            let lay = crate::ui::parser_page::layout_vp(
                                 sw,
                                 sh,
                                 self.cur_bar_h()
                                     + crate::ui::link_card::inset_extra_live()
                                     + crate::ui::sys_card::INSET_EXTRA,
                                 snap.sessions.len(),
+                                crate::ui::svc_card::current().lines.len(),
                                 mode,
                                 snap.scroll,
+                                snap.page_scroll,
+                                crate::ui::parser_page::visible_bottom(
+                                    sh,
+                                    self.chrome_inset() + self.cur_bar_h(),
+                                ),
                             );
                             let h = crate::ui::parser_page::hit(
                                 &lay,
@@ -3875,24 +3932,33 @@ impl App {
                 if let Some(p) = &self.parser_page {
                     p.lock().unwrap().set_sessions(ss);
                     // 行表变了滚动上限跟着变（会话变少 max 缩）——
-                    // 拿当下几何钳回，脏 scroll 不残留
+                    // 拿当下几何钳回，脏 scroll 不残留（页面滚动同规：
+                    // 链底账随卡高变）
                     if let Some((sw, sh)) = self.screen_px() {
-                        let max = {
+                        let (smax, pmax) = {
                             let pg = p.lock().unwrap();
                             let snap = pg.snap();
-                            crate::ui::parser_page::layout(
+                            let lay = crate::ui::parser_page::layout_vp(
                                 sw,
                                 sh,
                                 self.cur_bar_h()
                                     + crate::ui::link_card::inset_extra_live()
                                     + crate::ui::sys_card::INSET_EXTRA,
                                 snap.sessions.len(),
+                                crate::ui::svc_card::current().lines.len(),
                                 crate::ui::parser_page::Mode::Normal,
                                 snap.scroll,
-                            )
-                            .scroll_max
+                                snap.page_scroll,
+                                crate::ui::parser_page::visible_bottom(
+                                    sh,
+                                    self.chrome_inset() + self.cur_bar_h(),
+                                ),
+                            );
+                            (lay.scroll_max, lay.page_scroll_max)
                         };
-                        p.lock().unwrap().clamp_scroll(max);
+                        let mut pg = p.lock().unwrap();
+                        pg.clamp_scroll(smax);
+                        pg.clamp_page_scroll(pmax);
                     }
                 }
             }
@@ -4610,10 +4676,12 @@ impl App {
                             buf,
                             w,
                             h,
-                            // BAR-120：壳与内容同吃 bar_h（框底与内容
-                            // 同缘——键盘遮盖对两者同线一致，框底边不许
-                            // 悬在卡半腰）
-                            bar_h,
+                            // 视口化（2026-09-20 用户拍板「卡弹小」）：
+                            // 壳吃 bottom_inset——键盘在场页环弹小到
+                            // 输入栏带以上，环底 = 页面滚动视口底；
+                            // 内容布局仍只吃栏带高（BAR-119 只盖不重排），
+                            // 逾视底归键盘遮盖、逾视顶归页缘裁剪带
+                            bottom_inset,
                             pt_off,
                             acc_of(crate::ai_presence::Panel::Parser),
                         );
@@ -4624,8 +4692,11 @@ impl App {
                                 buf,
                                 w,
                                 h,
-                                // BAR-119：解析页永不吃键盘 inset（只盖不重排）
+                                // BAR-119：解析页布局永不吃键盘 inset
+                                // （只盖不重排）
                                 bar_h,
+                                // 键盘 inset 只喂滚动窗可视底+页缘裁剪带
+                                ime_bottom_px,
                                 pt_off,
                                 psnap,
                                 acc_of(crate::ai_presence::Panel::Parser),
@@ -5707,14 +5778,17 @@ impl App {
         {
             let px = g.slot_canvas(crate::gles_present::ChromeSlot::Parser);
             px.fill(0);
-            // BAR-120：壳与内容同吃 bar_h（框底与内容同缘——键盘遮盖
-            // 对两者同线一致，框底边不许悬在卡半腰）
-            crate::termview::paint_parser_page_chrome(px, w, h, bar_h, 0, acc_pt);
+            // 视口化（2026-09-20 用户拍板「卡弹小」）：壳吃 bottom_inset
+            // ——键盘在场页环弹小到输入栏带以上，环底 = 页面滚动视口底；
+            // 内容布局仍只吃栏带高（BAR-119 只盖不重排），逾视底归键盘
+            // 遮盖、逾视顶归页缘裁剪带
+            crate::termview::paint_parser_page_chrome(px, w, h, bottom_inset, 0, acc_pt);
             if let Some(psnap) = parser_snap {
                 term_arc.lock().unwrap().paint_parser_content(
                     px, w, h,
-                    // BAR-119：解析页永不吃键盘 inset（只盖不重排）
-                    bar_h, 0, psnap, acc_pt,
+                    // BAR-119：解析页布局永不吃键盘 inset（只盖不重排）
+                    bar_h, // 键盘 inset 只喂滚动窗可视底+页缘裁剪带
+                    ime, 0, psnap, acc_pt,
                 );
             }
             g.slot_bake(crate::gles_present::ChromeSlot::Parser);

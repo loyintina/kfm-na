@@ -323,6 +323,9 @@ pub fn dump_now(dir: &str) {
                                 w,
                                 h,
                                 bar_h,
+                                // 值守倒帧无键盘相——ime 恒 0（滚动窗
+                                // 可视底 = 栏带上沿，与前台无键盘同）
+                                0,
                                 pt_off,
                                 &psnap,
                                 acc_of(Panel::Parser),

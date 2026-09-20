@@ -560,6 +560,44 @@ fn paint_rect_ring(
     r_max: u32,
     grad_fill: bool,
 ) {
+    paint_rect_ring_yclip(
+        frame,
+        fx0,
+        fy0,
+        fx1,
+        fy1,
+        clip_x0,
+        clip_x1,
+        0,
+        i64::MAX,
+        bg,
+        c1,
+        c2,
+        r_max,
+        grad_fill,
+    );
+}
+
+/// paint_rect_ring + 纵裁剪带（2026-09-20 解析页视口化：卡链随页面滚动
+/// 平移，逾页环顶缘/底缘的环带·发光·内芯断墨——框与框内文字同带，
+/// 眼手同尺）。采样全是位置一元函数，裁剪只收行域不改色
+#[allow(clippy::too_many_arguments)]
+fn paint_rect_ring_yclip(
+    frame: &mut Frame<'_>,
+    fx0: i64,
+    fy0: i64,
+    fx1: i64,
+    fy1: i64,
+    clip_x0: i64,
+    clip_x1: i64,
+    clip_y0: i64,
+    clip_y1: i64,
+    bg: u32,
+    c1: u32,
+    c2: u32,
+    r_max: u32,
+    grad_fill: bool,
+) {
     let (fw, fh) = ((fx1 - fx0) as u32, (fy1 - fy0) as u32);
     if fw < 2 || fh < 2 {
         return;
@@ -622,8 +660,10 @@ fn paint_rect_ring(
         }
     };
 
-    let y0 = (fy0 - spread).max(0);
-    let y1 = (fy0 + i64::from(fh) + spread).min(i64::from(frame.h));
+    let y0 = (fy0 - spread).max(0).max(clip_y0);
+    let y1 = (fy0 + i64::from(fh) + spread)
+        .min(i64::from(frame.h))
+        .min(clip_y1);
     let mut cur_row = i64::MIN;
     for ay in y0..y1 {
         let ly = ay - fy0;
@@ -674,8 +714,10 @@ fn paint_rect_ring(
         return;
     }
     if i64::from(ih) > 2 * punch_r {
-        let my0 = (iy + punch_r).max(0);
-        let my1 = (iy + i64::from(ih) - punch_r).min(i64::from(frame.h));
+        let my0 = (iy + punch_r).max(0).max(clip_y0);
+        let my1 = (iy + i64::from(ih) - punch_r)
+            .min(i64::from(frame.h))
+            .min(clip_y1);
         if my1 > my0 {
             let rx0 = ix.max(0).max(clip_x0);
             let rx1 = (ix + i64::from(iw)).min(i64::from(frame.w)).min(clip_x1);
@@ -703,8 +745,8 @@ fn paint_rect_ring(
             }
         }
     }
-    let py0 = (iy).max(0);
-    let py1 = (iy + i64::from(ih)).min(i64::from(frame.h));
+    let py0 = (iy).max(0).max(clip_y0);
+    let py1 = (iy + i64::from(ih)).min(i64::from(frame.h)).min(clip_y1);
     for ay in py0..py1 {
         let lyy = (ay - iy) as u32;
         let in_corner = lyy < punch_r as u32 || lyy >= ih - punch_r as u32;
@@ -749,6 +791,22 @@ fn paint_divider_line(
     h: u32,
     accent: crate::ui::accent::AccentPair,
 ) {
+    paint_divider_line_clip(frame, x, y, w, h, accent, 0, i64::MAX);
+}
+
+/// paint_divider_line + 纵裁剪带（2026-09-20 解析页视口化：线体随卡链
+/// 平移，逾页环缘断墨——与卡框/文字同带，眼手同尺）
+#[allow(clippy::too_many_arguments)]
+fn paint_divider_line_clip(
+    frame: &mut Frame<'_>,
+    x: i64,
+    y: i64,
+    w: u32,
+    h: u32,
+    accent: crate::ui::accent::AccentPair,
+    clip_y0: i64,
+    clip_y1: i64,
+) {
     let (fw, fh) = (i64::from(frame.w), i64::from(frame.h));
     let denom = i64::from(w.saturating_sub(1)).max(1);
     for ax in x..(x + i64::from(w)) {
@@ -757,7 +815,7 @@ fn paint_divider_line(
         }
         let c = ring_gradient_rgb(accent.c1, accent.c2, ax - x, 0, denom);
         for yy in y..(y + i64::from(h)) {
-            if yy < 0 || yy >= fh {
+            if yy < 0 || yy >= fh || yy < clip_y0 || yy >= clip_y1 {
                 continue;
             }
             frame.blend_px(ax as u32, yy as u32, c, 255);
@@ -3541,9 +3599,12 @@ impl TermView {
     /// （二级框，paint_rect_ring 同配方内卡反转 c2→c1）——卡头/会话行表
     /// （本端附着行 = 选中功能框 + ●；行尾 ×）/ 命名行 / 确认带 / 按钮带
     /// （均匀细框 paint_thin_frame，非池行场合的通用细框条款）。几何吃
-    /// ui/parser_page::layout——命中同一份（眼手同尺）；pt_off_x 语义同
+    /// ui/parser_page::layout_vp——命中同一份（眼手同尺）；pt_off_x 语义同
     /// paint_cfg_dual_pool（GLES 烘焙恒 0，softbuffer/值守传真值）
-    /// （会话表/附着/命名/确认任何变更都必触发重烘焙，漏维 = 鬼影）
+    /// （会话表/附着/命名/确认任何变更都必触发重烘焙，漏维 = 鬼影）。
+    /// 2026-09-20 视口化：布局不吃键盘（BAR-119 红线不动），ime 只喂
+    /// 页面滚动窗与页缘纵裁剪带 pclip = (环内顶, 环底缘)——卡链随
+    /// page_scroll 平移，逾环缘的框/线/文字同带断墨
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn paint_parser_content_impl(
         &self,
@@ -3553,6 +3614,9 @@ impl TermView {
         // 输入栏带高（永不含键盘 inset——BAR-119：解析页与终端网格同
         // 红线，键盘只盖不重排；各调用方传 bar_h 不传 bottom_inset）
         bar_inset: u32,
+        // 键盘 inset（0 = 无键盘；只喂页面滚动窗可视底与 pclip，
+        // 不进布局账——视口化契约：布局不随键盘重排，滚动窗键盘感知）
+        ime: u32,
         pt_off_x: i32,
         snap: &crate::ui::parser_page::ParserPageSnap,
         accent: crate::ui::accent::AccentPair,
@@ -3571,7 +3635,7 @@ impl TermView {
         let no_clip = (0, i64::from(h));
 
         // 页标题已撤（2026-09-19 用户拍板：解析页无标题行，卡区上吞
-        // TAB_ROW_H——几何侧 parser_page::layout 同步回收，眼手同尺不破）
+        // TAB_ROW_H——几何侧 parser_page::layout_vp 同步回收，眼手同尺不破）
 
         let mode = if snap.naming.is_some() {
             pp::Mode::Naming
@@ -3580,21 +3644,35 @@ impl TermView {
         } else {
             pp::Mode::Normal
         };
-        let lay = pp::layout(
+        // 三卡快照前置（链底账要 svc 行数；涂装段后文同两份不再取）
+        let csnap = crate::ui::conn_card::current();
+        let ssnap = crate::ui::svc_card::current();
+        let xsnap = crate::ui::sys_card::current();
+        // 可视底 = 页环底缘（键盘感知——壳吃 bottom_inset 弹小后环底即
+        // 视口底；布局账不吃它，只滚动窗吃）
+        let vbottom = pp::visible_bottom(h, ime + bar_inset);
+        let lay = pp::layout_vp(
             w,
             h,
             bar_inset + crate::ui::link_card::inset_extra_live() + crate::ui::sys_card::INSET_EXTRA,
             snap.sessions.len(),
+            ssnap.lines.len(),
             mode,
             snap.scroll,
+            snap.page_scroll,
+            vbottom,
         );
 
         // 卡环（二级框：内卡渐变反转 c2→c1，与双池同配方）
-        let (cox, _coy) = crate::ui::tab_bar::content_origin();
+        let (cox, coy) = crate::ui::tab_bar::content_origin();
         let clip_l = i64::from(cox) + off;
         let clip_r =
             i64::from(w) - i64::from(AI_PAGE_FRAME_MARGIN + AI_PAGE_FRAME_W + CELL_W) + off;
-        paint_rect_ring(
+        // 页缘纵裁剪带（视口化）：环内顶 → 环底缘。卡链一切涂装件（环/
+        // 分隔线/字段行/文字）同带断墨；无键盘无滚动时带覆盖整链，零行为差
+        let pclip = (i64::from(coy), vbottom);
+        let pclip32 = Some((pclip.0 as i32, pclip.1 as i32));
+        paint_rect_ring_yclip(
             &mut frame,
             lay.card.x + off,
             lay.card.y,
@@ -3602,6 +3680,8 @@ impl TermView {
             lay.card.y + i64::from(lay.card.h),
             clip_l,
             clip_r,
+            pclip.0,
+            pclip.1,
             crate::ui::accent::CARD_PAGE_BG,
             accent.c2,
             accent.c1,
@@ -3621,7 +3701,7 @@ impl TermView {
         } else {
             title_fg
         };
-        self.draw_text_left(
+        self.draw_text_left_ex(
             &mut frame,
             &header_text,
             (lay.header.x + off) as u32,
@@ -3630,6 +3710,8 @@ impl TermView {
             lay.header.h,
             36.0,
             header_fg,
+            18.0,
+            pclip32,
         );
 
         // 会话框表（一行两框，每框 = 三级框行主形态：全包框左粗+三细
@@ -3641,11 +3723,14 @@ impl TermView {
             c1: lerp_rgb(accent.c1, 0, 150),
             c2: lerp_rgb(accent.c2, 0, 150),
         };
+        // 框表有效裁剪带 = 表内滚窗 ∩ 页缘带（视口化：两道裁剪语义不同
+        // 源同带——表滚出窗断墨 + 页滚出环缘断墨，眼手同尺）
+        let rclip = (lay.list_clip.0.max(pclip.0), lay.list_clip.1.min(pclip.1));
         for (i, s) in snap.sessions.iter().zip(lay.rows.iter()) {
             let (r, s) = (s, i);
-            // 滚动裁窗：整框出带不画（半框靠 list_clip 断墨——框/文字
+            // 滚动裁窗：整框出带不画（半框靠 rclip 断墨——框/文字
             // 同一裁剪带，眼手同尺）
-            if r.y + i64::from(r.h) <= lay.list_clip.0 || r.y >= lay.list_clip.1 {
+            if r.y + i64::from(r.h) <= rclip.0 || r.y >= rclip.1 {
                 continue;
             }
             let mine = snap.attached.as_deref() == Some(s.name.as_str());
@@ -3660,7 +3745,7 @@ impl TermView {
                 r.h,
                 true,
                 acc,
-                lay.list_clip,
+                rclip,
                 grad_ref,
                 0,
             );
@@ -3675,7 +3760,7 @@ impl TermView {
                 34.0,
                 fg,
                 r.x + off,
-                Some(lay.list_clip),
+                Some(rclip),
             );
             // 框尾 ×
             let kx = r.x + off + i64::from(r.w) - i64::from(pp::KILL_W);
@@ -3689,24 +3774,26 @@ impl TermView {
                 34.0,
                 meta_fg,
                 r.x + off,
-                Some(lay.list_clip),
+                Some(rclip),
             );
         }
 
         // 分隔线（2026-09-19 用户拍板：底线家变异——正渐变 c1→c2
         // 横向 2px 线体；会话表与按钮带之间的语义断层）
-        paint_divider_line(
+        paint_divider_line_clip(
             &mut frame,
             lay.divider.x + off,
             lay.divider.y,
             lay.divider.w,
             lay.divider.h,
             accent,
+            pclip.0,
+            pclip.1,
         );
 
         // 命名行
         if let (Some(nr), Some(text)) = (&lay.naming, &snap.naming) {
-            self.draw_text_left(
+            self.draw_text_left_ex(
                 &mut frame,
                 &format!("名: {text}▌"),
                 (nr.x + off) as u32,
@@ -3715,6 +3802,8 @@ impl TermView {
                 nr.h,
                 34.0,
                 title_fg,
+                18.0,
+                pclip32,
             );
         }
 
@@ -3730,11 +3819,11 @@ impl TermView {
                 b.h,
                 true,
                 accent,
-                no_clip,
+                pclip,
                 grad_ref,
                 0,
             );
-            self.draw_text_centered(
+            self.draw_text_centered_yclip(
                 &mut frame,
                 label,
                 b.x + off,
@@ -3744,6 +3833,7 @@ impl TermView {
                 34.0,
                 title_fg,
                 b.x + off,
+                Some(pclip),
             );
         }
 
@@ -3751,12 +3841,10 @@ impl TermView {
         // 合并成一张二级卡两竖列——左列连接（mini 卡头/四字段行/[重连]
         // 钮钉列底），右列服务（mini 卡头/四字段行/会话行表，无分隔
         // 线）。文案面零改动：conn_card::current()/svc_card::current()
-        // 同两份快照；几何 = link_card 同一份 layout——组件池登记
-        // link_card）
-        let csnap = crate::ui::conn_card::current();
-        let ssnap = crate::ui::svc_card::current();
+        // 同两份快照（函数顶已取）；几何 = link_card 同一份 layout——
+        // 组件池登记 link_card）
         let llay = crate::ui::link_card::layout(&lay.card, ssnap.lines.len());
-        paint_rect_ring(
+        paint_rect_ring_yclip(
             &mut frame,
             llay.card.x + off,
             llay.card.y,
@@ -3764,6 +3852,8 @@ impl TermView {
             llay.card.y + i64::from(llay.card.h),
             clip_l,
             clip_r,
+            pclip.0,
+            pclip.1,
             crate::ui::accent::CARD_PAGE_BG,
             accent.c2,
             accent.c1,
@@ -3777,7 +3867,7 @@ impl TermView {
         } else {
             meta_fg
         };
-        self.draw_text_left(
+        self.draw_text_left_ex(
             &mut frame,
             &format!("连接 · {}", csnap.word),
             (llay.lheader.x + off) as u32,
@@ -3786,6 +3876,8 @@ impl TermView {
             llay.lheader.h,
             36.0,
             header_fg,
+            18.0,
+            pclip32,
         );
         // 左列四字段行（字段标签列配方：标签左对齐亮档、值逐行右对齐
         // 灰档——draw_field_lines 自带 1.5 格文内边距与 ≤2 行折行；
@@ -3802,7 +3894,7 @@ impl TermView {
                 fr.h,
                 36.0,
                 title_fg,
-                None,
+                pclip32,
                 true,
             );
             let (v_fg, v) = if i == 3 && csnap.error != "—" {
@@ -3820,7 +3912,7 @@ impl TermView {
                 fr.h,
                 30.0,
                 v_fg,
-                None,
+                pclip32,
                 false,
             );
         }
@@ -3836,11 +3928,11 @@ impl TermView {
                 b.h,
                 true,
                 accent,
-                no_clip,
+                pclip,
                 grad_ref,
                 0,
             );
-            self.draw_text_centered(
+            self.draw_text_centered_yclip(
                 &mut frame,
                 "重连",
                 b.x + off,
@@ -3850,6 +3942,7 @@ impl TermView {
                 34.0,
                 title_fg,
                 b.x + off,
+                Some(pclip),
             );
         }
         // 右列 mini 卡头「服务 · 状态词」（在线相才亮标题档，其余次级
@@ -3859,7 +3952,7 @@ impl TermView {
         } else {
             meta_fg
         };
-        self.draw_text_left(
+        self.draw_text_left_ex(
             &mut frame,
             &format!("服务 · {}", ssnap.word),
             (llay.rheader.x + off) as u32,
@@ -3868,6 +3961,8 @@ impl TermView {
             llay.rheader.h,
             36.0,
             header_fg,
+            18.0,
+            pclip32,
         );
         // 右列四字段行（字段标签列配方同左列；错误行有字用错色）
         let svalues = [&ssnap.backend, &ssnap.uptime, &ssnap.sess_n, &ssnap.error];
@@ -3900,13 +3995,13 @@ impl TermView {
                 fr.h,
                 30.0,
                 v_fg,
-                None,
+                pclip32,
                 false,
             );
         }
         // 会话行（纯文本行，次级档；行几何吃 llay.sessions 同一份）
         for (line, sr) in ssnap.lines.iter().zip(llay.sessions.iter()) {
-            self.draw_text_left(
+            self.draw_text_left_ex(
                 &mut frame,
                 line,
                 (sr.x + off) as u32,
@@ -3915,6 +4010,8 @@ impl TermView {
                 sr.h,
                 30.0,
                 body_fg,
+                18.0,
+                pclip32,
             );
         }
 
@@ -3922,9 +4019,8 @@ impl TermView {
         // 服务合并卡下；「中央终端所在环境的自身体征」可视化，纯展示无按钮。数据
         // = sys_card::current() 三源合成（svc_health SysSnap + nasup
         // 对象词 + 后端相），体征解析与 na-server 同一份 na-sys crate）
-        let xsnap = crate::ui::sys_card::current();
         let xlay = crate::ui::sys_card::layout(&llay.card);
-        paint_rect_ring(
+        paint_rect_ring_yclip(
             &mut frame,
             xlay.card.x + off,
             xlay.card.y,
@@ -3932,6 +4028,8 @@ impl TermView {
             xlay.card.y + i64::from(xlay.card.h),
             clip_l,
             clip_r,
+            pclip.0,
+            pclip.1,
             crate::ui::accent::CARD_PAGE_BG,
             accent.c2,
             accent.c1,
@@ -3944,7 +4042,7 @@ impl TermView {
         } else {
             meta_fg
         };
-        self.draw_text_left(
+        self.draw_text_left_ex(
             &mut frame,
             &format!("环境 · {}", xsnap.word),
             (xlay.header.x + off) as u32,
@@ -3953,6 +4051,8 @@ impl TermView {
             xlay.header.h,
             36.0,
             header_fg,
+            18.0,
+            pclip32,
         );
         // 六字段两竖列（字段标签列配方同服务卡；无错误行）
         let xvalues = [
@@ -3974,7 +4074,7 @@ impl TermView {
                 fr.h,
                 36.0,
                 title_fg,
-                None,
+                pclip32,
                 true,
             );
             let v_items = self.measure_items(xvalues[i].as_str(), 30.0);
@@ -3987,7 +4087,7 @@ impl TermView {
                 fr.h,
                 30.0,
                 meta_fg,
-                None,
+                pclip32,
                 false,
             );
         }
@@ -6546,7 +6646,9 @@ pub trait TermEmu: Send {
     );
     /// 解析页内容涂装（tmux 插件卡 v1）：几何 ui/parser_page（命中同源），
     /// pt_off_x 语义同 paint_cfg_dual_pool；画在解析页底装修之上。
-    /// bar_inset = 输入栏带高，永不含键盘 inset（BAR-119 红线同终端网格）
+    /// bar_inset = 输入栏带高，永不含键盘 inset（BAR-119 红线同终端网格）；
+    /// ime = 键盘 inset（0 = 无键盘）——只喂页面滚动窗可视底与页缘
+    /// 裁剪带（2026-09-20 视口化），不进布局账
     #[allow(clippy::too_many_arguments)]
     fn paint_parser_content(
         &self,
@@ -6554,6 +6656,7 @@ pub trait TermEmu: Send {
         w: u32,
         h: u32,
         bar_inset: u32,
+        ime: u32,
         pt_off_x: i32,
         snap: &crate::ui::parser_page::ParserPageSnap,
         accent: crate::ui::accent::AccentPair,
@@ -6859,11 +6962,12 @@ impl TermEmu for TermView {
         w: u32,
         h: u32,
         bar_inset: u32,
+        ime: u32,
         pt_off_x: i32,
         snap: &crate::ui::parser_page::ParserPageSnap,
         accent: crate::ui::accent::AccentPair,
     ) {
-        TermView::paint_parser_content_impl(self, buf, w, h, bar_inset, pt_off_x, snap, accent)
+        TermView::paint_parser_content_impl(self, buf, w, h, bar_inset, ime, pt_off_x, snap, accent)
     }
     #[allow(clippy::too_many_arguments)]
     fn paint_tab_bar_layer(
