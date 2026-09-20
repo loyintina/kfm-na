@@ -1,0 +1,27 @@
+[package]
+name = "na-server"
+version = "0.1.0"
+edition = "2024"
+description = "na 自持会话层后端：terminal PTY over WS + /na-report + /health。设计 docs/active/na-server.md；只绑 127.0.0.1，鉴权 = SSH 本身"
+
+[[bin]]
+name = "na-server"
+path = "src/main.rs"
+
+[dependencies]
+na-protocol = { path = "../na-protocol" }
+serde_json = "1"
+tokio = { version = "1", features = ["rt", "macros", "time", "sync", "net", "io-util"] }
+tokio-tungstenite = "0.26"
+futures-util = "0.3"
+# PTY 管理：nix 直造（posix_openpt/fork/waitpid，local_pty.rs 同款路径，
+# Android/host 同一份——portable-pty 的 serial→termios 0.2 链无 android cfg，
+# 手机端 chain 编不过，Termux 实证 E0432/E0433）
+nix = { version = "0.30", features = ["term", "process", "signal"] }
+libc = "0.2"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros", "time", "net"] }
+tokio-tungstenite = "0.26"
+futures-util = "0.3"
+tempfile = "3.27.0"

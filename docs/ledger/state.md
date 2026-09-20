@@ -7,6 +7,73 @@
 
 ## 当前位置（2026-09-20)
 
+> **U+FFFD 增量解码已修 + 变异双验（2026-09-20，待提交）**：新 A 档
+> crate 内模块 `utf8x.rs`（半截合法序列攒 carry ≤3 字节续拼，非法字节
+> FFFD 顶一个，EOF 尾巴强制出场）；wsterm 读线程接线（Out::Data 改
+> String，空帧不发）。变异验证两枚：①utf8x 改「尾巴不攒直接 FFFD」→
+> 考题 5 红（含逐字节劈字钉）；②wsterm 改回按块 lossy → live 考题红。
+> ②一度抓不到（内核 PTY 分包恰好字符对齐）→ 加仪器旋钮 NA_READ_BUF
+> （读块默认 8192，考题拧 7 = 块块劈字）+ 考题判读改累积流（小帧把
+> LIVE-DONE 劈两帧，逐帧 contains 永远等不到——探针实证，还曾误判为
+> PTY 尾巴丢失竞态）。**PTY 层裁决**：portable-pty 的 serial→termios 0.2
+> 链无 android cfg，手机 chain 整编必红（Termux 实证）——pty_sess 换
+> nix 直造（local_pty.rs 同款 posix_openpt/fork/waitpid + FORK_LOCK
+> 纪律），接口不变，宿主 27 钉 + aarch64-android check 双绿。三笔账
+> 销 a；剩 b（双看门狗）c（日志降噪）挂账。
+> **下一步**：chain-phone 提交 → 服务器重编 release 换核 → 真机切
+> backend + 用户终验。
+
+> **na-server redroid 判卷四绿（2026-09-20，全程 logcat/health 实录）**：
+> ①全链拉起：servers.json 开 backend:"na-server" → 隧道 9021→9021 →
+> nasup ensure → SPAWNED → Up，会话 s1 落 na-server（health 实证）；
+> ②**存在性判决绿**：systemctl restart kfmv4，na-server 与 s1 毫发无损
+> （同时段真机 kfmv4 会话死亡→BAR-117 自愈——反向对照组意外成立）；
+> ③死复活闭环：pkill na-server → 断线重孵 → nasup 3s 重拉 → 续链够钟
+> 重孵 → 新会话自动 opened，全程 ~5s 零敲键；
+> ④ExternalUp 接管：app 重启 → nasup 首拍 ALIVE → ExternalUp，不重启
+> 别人的进程；旧会话随 ws 断被杀（killAll 对齐），新实例开 s2。
+> 考场基建两坑（非 na-server 病）：宿主 python 接力裸 nohup 随 shell 死
+> （老坑，setsid 重起）；redroid 内 toybox nc 接力在 kfmv4 重启后卡死
+> （重启修复）。**发现三笔账**：a) redroid 终端 tofu 目击 U+FFFD =
+> na-server v1 有损 UTF-8 按块解码实证（chunk 边界劈字符）→ 待增量解码；
+> b) redroid 双 android_main/双看门狗（loader 双载疑云，隧道/ nasup 各
+> 起两条）→ 待查；c) na-server.log 被隧道 probe_port 裸 TCP 探活刷
+> 「对端在头区前断开」→ 降噪。判卷环境：redroid L3 进补 x86_64 openssh
+> 闭包（termux 源 7 deb）+ 部署考试密钥。
+
+> **na-server 主体拉起链落地（未提交，ensure 本地彩排全绿）**：
+> settings.rs Backend 枚举（Kfmv4 默认现状锚 / NaServer，servers.json
+> "backend":"na-server" 开启）→ tunnel.rs 目标口 f(后端)（8021/9021
+> 双锚钉死，check_ssh_fields 抽公共尺）→ src/na_server_sup.rs 看门狗
+> （隧道可用才动手 → SSH exec `bash -s` 喂 ensure 脚本：先探活→缺则建→
+> setsid detached 拉起→复检；ALIVE=接管（ExternalUp）/SPAWNED=自持（Up），
+> 13 钉+变异两咬）→ android_app 接线（backend==NaServer 才起）。
+> **彩排实录**：SPAWNED→ALIVE（同 pid 幂等不重启）→杀后 SPAWNED 复活，
+> PPID=1 自挂 SID 彻底 detached，health 正常。隧道考题/settings 考题
+> 随契约更新（16+7+13 钉全绿，全工作区 61 组零失败）。
+> 下一步：redroid 全链判卷（servers.json 开 backend + kfmv4 重启零感知判决）。
+
+> **na-server 一期本体落地（未提交，待用户过目）**：
+> crates/na-protocol（协议单源：正向 12 钉原样绿=迁移零漂移；反向
+> encode_server/decode_client 20 钉+变异两咬）+ crates/na-server
+> （ws+PTY / /na-report / /health / idle 自退 / 只绑回环硬闸；httpd 12 钉
+> +health 3 钉+变异两咬+live 3 环真二进制真 PTY 绿；全工作区 60 组测试
+> 零失败，fmt 绿）。语义对齐 kfmv4 terminal-pty.ts（$SHELL -c、80x24、
+> killAll、kill 也发 Exit）。AGENTS.md「服务端一行不动」段已修订。
+> 下一步：主体拉起链（na 经 SSH exec 拉起/接管）→ redroid 判卷。
+
+> **na-server 立项（设计定稿待实现，docs/active/na-server.md）**：na
+> 自持会话层后端——把终端 PTY over WS + /na-report + health 面从 kfmv4
+> 手里拿回（实证：na 只用 8021 全面的 ~5%，真正理由是生命周期耦合，
+> kfmv4 一重启 na 会话全断）。形态：crates/na-server（workspace 第三
+> 成员），协议上提共享 crate 单源，只听 127.0.0.1:9021（隧道改
+> 9021:9021 双端同口）。**主体拉起制（用户拍板）**：na 连接时经 SSH
+> exec 拉起、看门狗同级看管、ExternalUp 语义照抄隧道、留守带 idle
+> 自退；kfmv4 双挂回退不删。可视化 =
+> 解析页第三张卡「服务卡」（连接卡正下方，health 面数据源）。二期
+> 同 crate 上手机 = 双端同构。存在性判卷：na 会话挂着重启 kfmv4，
+> na 零感知。实现时同步修 AGENTS.md「服务端一行不动」段表述。
+
 > **真机核已就位（05:26，cc7f2ce 三核同推：连接卡+BAR-117+断线卡）**：
 > loader-pick=hot 实证；boot 后远程会话 3.6s 自动 opened（经孤儿 ssh
 > 持的 9021——看门狗让位「外部借用」正确），remote_dead 已转 false。

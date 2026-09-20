@@ -1,0 +1,8 @@
+[package]
+name = "na-protocol"
+version = "0.1.0"
+edition = "2024"
+description = "na 双端共享的 terminal-pty ws 协议单源（ClientMsg/ServerMsg 封套编解码）。na 壳与 na-server 同吃一份，协议漂移在类型层面不可能。真相源：kfmv4/src/server/ws-server.ts handleMessage"
+
+[dependencies]
+serde_json = "1"

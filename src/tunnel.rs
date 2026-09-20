@@ -18,15 +18,25 @@ use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use crate::settings::ServerEntry;
+use crate::settings::{Backend, ServerEntry};
 
-/// 转发目标口 = kfmv4 ws 口（与 conn::ConnConfig::default 的回环 8021 同锚；
-/// 漂移 = 隧道通了但 ws 全断，考题 spec_转发参数_目标口单一源 钉死）
-pub const TARGET_PORT: u16 = 8021;
+/// 转发目标口双锚（2026-09-20 na-server 立项）：kfmv4 ws 口 8021 /
+/// na-server 口 9021。漂移 = 隧道通了但 ws 全断，考题钉死
+pub const KFMV4_PORT: u16 = 8021;
+pub const NA_SERVER_PORT: u16 = 9021;
 
-/// ssh 转发参数（A 档纯函数）。v1 只走密钥：密码登录在 BatchMode 下
-/// 必悬问假死（无 askpass），显式拒；缺件（host/user/key 空）同拒。
-pub fn forward_args(s: &ServerEntry) -> Result<Vec<String>, String> {
+/// 转发目标口 = f(后端)（A 档纯函数）：Kfmv4 → 8021（现状锚）；
+/// NaServer → 9021（na-server 只绑回环，双端同口，na-server.md §二）
+pub fn target_port(b: &Backend) -> u16 {
+    match b {
+        Backend::Kfmv4 => KFMV4_PORT,
+        Backend::NaServer => NA_SERVER_PORT,
+    }
+}
+
+/// ssh 缺件检查（A 档纯函数）：forward_args 与 na_server_sup::exec_args
+/// 同一把尺——缺件判定写两处必漂移
+pub fn check_ssh_fields(s: &ServerEntry) -> Result<(), String> {
     if s.ssh.host.is_empty() {
         return Err("ssh.host 空".into());
     }
@@ -39,10 +49,21 @@ pub fn forward_args(s: &ServerEntry) -> Result<Vec<String>, String> {
     if !s.ssh.password.is_empty() {
         return Err("v1 只走密钥登录（密码在 BatchMode 下必悬问假死）".into());
     }
+    Ok(())
+}
+
+/// ssh 转发参数（A 档纯函数）。v1 只走密钥：密码登录在 BatchMode 下
+/// 必悬问假死（无 askpass），显式拒；缺件（host/user/key 空）同拒。
+pub fn forward_args(s: &ServerEntry) -> Result<Vec<String>, String> {
+    check_ssh_fields(s)?;
     Ok(vec![
         "-N".into(),
         "-L".into(),
-        format!("{}:127.0.0.1:{}", s.tunnel.local_port, TARGET_PORT),
+        format!(
+            "{}:127.0.0.1:{}",
+            s.tunnel.local_port,
+            target_port(&s.backend)
+        ),
         "-i".into(),
         s.ssh.key_path.clone(),
         "-o".into(),

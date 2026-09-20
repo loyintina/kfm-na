@@ -22,6 +22,7 @@ pub mod insets;
 pub mod keybar;
 pub mod keymap;
 pub mod local_pty;
+pub mod na_server_sup;
 pub mod plugins;
 pub mod protocol;
 pub mod providers;

@@ -19,7 +19,9 @@ kfmv4（/root/kfmv4，TypeScript Web 应用）的 **native 手机客户端**，R
 接管现在的 kfm 和数据。设计全貌见 `docs/active/立项.md`。
 
 **服务端一行不动**——kfmv4 的 terminal-pty / /ai/chat / tree 接口是协议层资产，
-本仓库只是新客户端，地位与浏览器客户端平等。
+本仓库只是新客户端，地位与浏览器客户端平等。（2026-09-20 修订：此条指
+「不改动 kfmv4 服务端」。na-server（crates/na-server）是 na 仓自有的会话层
+后端，与 kfmv4 双挂并存，设计见 docs/active/na-server.md。）
 
 ## 常用命令
 

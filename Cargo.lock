@@ -802,6 +802,7 @@ dependencies = [
  "libloading",
  "log",
  "na-loader",
+ "na-protocol",
  "ndk",
  "nix",
  "raw-window-handle",
@@ -946,6 +947,27 @@ dependencies = [
  "jni-sys 0.3.1",
  "libc",
  "ndk-sys",
+]
+
+[[package]]
+name = "na-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
+name = "na-server"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "libc",
+ "na-protocol",
+ "nix",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-tungstenite",
 ]
 
 [[package]]

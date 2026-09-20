@@ -179,3 +179,26 @@ fn terminal_reject_bad_shape() {
     assert!(parse_terminal("不是 json").is_err());
     assert!(parse_terminal(r#"[1,2]"#).is_err(), "顶层必须对象");
 }
+
+// ---- backend 字段（2026-09-20 na-server 立项，na-server.md §五）----
+
+#[test]
+fn servers_backend_default_kfmv4() {
+    // 缺省 = Kfmv4 现状锚（行为零变化承诺：旧 servers.json 不加字段不跳槽）
+    let v = parse_servers(SERVERS_SAMPLE).unwrap();
+    assert_eq!(v[0].backend, kfm_na::settings::Backend::Kfmv4);
+    assert_eq!(v[1].backend, kfm_na::settings::Backend::Kfmv4);
+}
+
+#[test]
+fn servers_backend_na_server_parsed() {
+    let v = parse_servers(r#"[{"id":"x","backend":"na-server"}]"#).unwrap();
+    assert_eq!(v[0].backend, kfm_na::settings::Backend::NaServer);
+}
+
+#[test]
+fn servers_backend_unknown_value_falls_back_kfmv4() {
+    // 未知值落回现状锚——不许静默进新世界
+    let v = parse_servers(r#"[{"id":"x","backend":"naserver"}]"#).unwrap();
+    assert_eq!(v[0].backend, kfm_na::settings::Backend::Kfmv4);
+}

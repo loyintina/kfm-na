@@ -4,9 +4,10 @@
 //! 变异抽检：①目标端口写错（9021→8021 拼反）必须咬；
 //! ②BatchMode 漏了必须咬（无 askpass 时密码悬问 = 隧道假死）。
 
-use kfm_na::settings::{ServerEntry, SshFields, TunnelPorts};
+use kfm_na::settings::{Backend, ServerEntry, SshFields, TunnelPorts};
 use kfm_na::tunnel::{
-    TARGET_PORT, TunnelState, backoff_secs, forward_args, state_word, usable, usable_edge_kick,
+    KFMV4_PORT, NA_SERVER_PORT, TunnelState, backoff_secs, forward_args, state_word, target_port,
+    usable, usable_edge_kick,
 };
 
 fn srv(host: &str, user: &str, key: &str) -> ServerEntry {
@@ -27,6 +28,7 @@ fn srv(host: &str, user: &str, key: &str) -> ServerEntry {
         ws_url: String::new(),
         command: None,
         hotkey: None,
+        backend: Backend::Kfmv4,
     }
 }
 
@@ -69,10 +71,23 @@ fn spec_转发参数_本地段() {
 
 #[test]
 fn spec_转发参数_目标口单一源() {
-    // 变异锚：TARGET_PORT 必须与 kfmv4 ws 端口同锚（ConnConfig::default 的 8021）
-    assert_eq!(TARGET_PORT, 8021, "转发目标口 = kfmv4 ws 口，漂移即全线断");
+    // 变异锚：双口钉死（kfmv4 ws = 8021；na-server = 9021 双端同口）
+    assert_eq!(KFMV4_PORT, 8021, "kfmv4 ws 口，漂移即全线断");
+    assert_eq!(NA_SERVER_PORT, 9021, "na-server 口（na-server.md §二）");
+    assert_eq!(target_port(&Backend::Kfmv4), KFMV4_PORT);
+    assert_eq!(target_port(&Backend::NaServer), NA_SERVER_PORT);
+    // Kfmv4 后端 = 现状锚（8021）
     let a = args_of(&srv("h", "u", "/k"));
-    assert!(a.join(" ").contains(&format!(":{TARGET_PORT}")));
+    assert!(a.join(" ").contains("-L 9021:127.0.0.1:8021"));
+    // NaServer 后端 = 隧道指 na-server（9021→9021）
+    let mut s = srv("h", "u", "/k");
+    s.backend = Backend::NaServer;
+    let a = args_of(&s);
+    assert!(
+        a.join(" ").contains("-L 9021:127.0.0.1:9021"),
+        "NaServer 后端隧道必须指 9021，实际 {}",
+        a.join(" ")
+    );
 }
 
 #[test]

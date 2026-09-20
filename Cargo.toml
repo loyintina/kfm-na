@@ -1,6 +1,6 @@
 [workspace]
 # 根包 kfm-na 是隐式成员；cordis-na = 通用运行时（基座搬家，2026-08-17 阶段 1）
-members = ["crates/cordis-na", "crates/na-loader"]
+members = ["crates/cordis-na", "crates/na-loader", "crates/na-protocol", "crates/na-server"]
 
 [package]
 name = "kfm-na"
@@ -16,6 +16,8 @@ crate-type = ["rlib", "cdylib"]
 # 插件基座 = cordis-na 通用运行时（src/base/ 已搬入；harness 经 `pub use
 # cordis_na as base`  re-export，消费侧路径不变）
 cordis-na = { path = "crates/cordis-na" }
+# 协议单源（2026-09-20 na-server 立项上提）：src/protocol.rs 为 re-export 壳
+na-protocol = { path = "crates/na-protocol" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 log = "0.4"

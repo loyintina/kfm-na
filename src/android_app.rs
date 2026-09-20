@@ -438,6 +438,8 @@ type PoolFxSig = (u32, u32, u32, u32, u32, u32);
 /// 下池行层 sig（BAR-097）：(画布w, 画布h, 底inset, 终点上池高, c1, c2,
 /// 内容代际, 行表哈希)
 type LowerRowsSig = (u32, u32, u32, u32, u32, u32, u64, u64);
+/// 解析槽签名（与 LowerRowsSig 同形状不同语义——别名分开，谁改维度不殃及对方）
+type ParserSig = (u32, u32, u32, u32, u32, u32, u64, u64);
 
 #[derive(Default)]
 struct LayerSigs {
@@ -448,7 +450,7 @@ struct LayerSigs {
     filetree: crate::ui::stage::DirtyGuard<(u32, u32, u32, u32, u32, u32)>,
     /// 解析槽：末两维 = tmux 插件 epoch（2026-09-19 插件卡内容随槽同烘焙）
     /// + 隧道 epoch（2026-09-20 连接/服务卡——状态翻转必重烘，漏维 = 鬼影）
-    parser: crate::ui::stage::DirtyGuard<(u32, u32, u32, u32, u32, u32, u64, u64)>,
+    parser: crate::ui::stage::DirtyGuard<ParserSig>,
     termcard: crate::ui::stage::DirtyGuard<(u32, u32, u32, u32)>,
     /// 断线状态卡层（A 断线治理）：(w, h, session_over)——死活翻转
     /// 才重烘，稳态零成本
@@ -2878,7 +2880,7 @@ impl App {
         let tunnel_srv = default_idx
             .and_then(|i| self.settings_servers.get(i))
             .cloned();
-        self.tunnel_snap = tunnel_srv.and_then(|srv| {
+        self.tunnel_snap = tunnel_srv.clone().and_then(|srv| {
             let prefix = crate::local_pty::android_prefix();
             if !crate::bootstrap::prefix_ready(&prefix) {
                 crate::report::report("tunnel", "L3 prefix 未装，隧道不启动（装好 L3 后重开 app）");
@@ -2886,6 +2888,18 @@ impl App {
             }
             Some(crate::tunnel::start(prefix, srv.clone()))
         });
+
+        // na-server 主体拉起链（2026-09-20，docs/active/na-server.md §二）：
+        // 后端 = na-server 才起——看门狗等隧道可用后经 SSH exec 幂等 ensure
+        // （服务器上活则接管/死则建起拉起）。幂等，设置重载重复调安全
+        if let Some(srv) = &tunnel_srv
+            && srv.backend == crate::settings::Backend::NaServer
+        {
+            let prefix = crate::local_pty::android_prefix();
+            if crate::bootstrap::prefix_ready(&prefix) {
+                crate::na_server_sup::start(prefix, srv.clone());
+            }
+        }
 
         // 插件基座：终端模拟器 + 连接 provider（边界手术第一/二刀）——
         // 「用哪个终端芯、连哪、怎么连」都不归主循环；工厂是服务，实例归调用方。

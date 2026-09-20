@@ -73,6 +73,28 @@ impl Default for TunnelPorts {
     }
 }
 
+/// 会话层后端（2026-09-20 na-server 立项，docs/active/na-server.md §五）：
+/// Kfmv4 = 隧道指 kfmv4 8021（现状锚）；NaServer = 隧道指 na-server 9021，
+/// 且由 na 主体拉起链负责它在服务器上的生死。
+/// **默认 Kfmv4 = 行为零变化锚**——redroid 判绿后按用户拍板翻默认。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Backend {
+    #[default]
+    Kfmv4,
+    NaServer,
+}
+
+impl Backend {
+    /// servers.json 的 "backend" 字段：只认 "na-server"，其余（含缺省/
+    /// 未知值）一律 Kfmv4——未知值落回现状锚，不许静默进新世界
+    pub fn parse(v: Option<&serde_json::Value>) -> Self {
+        match v.and_then(|v| v.as_str()) {
+            Some("na-server") => Backend::NaServer,
+            _ => Backend::Kfmv4,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServerEntry {
     pub id: String,
@@ -83,6 +105,8 @@ pub struct ServerEntry {
     pub command: Option<String>,
     /// 每服务器直达切换键（§2.4：不入轮换环，各自绑定）；未绑 = None
     pub hotkey: Option<Hotkey>,
+    /// 会话层后端（缺省 Kfmv4 现状锚）
+    pub backend: Backend,
 }
 
 impl ServerEntry {
@@ -149,6 +173,7 @@ pub fn parse_servers(json: &str) -> Result<Vec<ServerEntry>, String> {
             ws_url: s("wsUrl"),
             command,
             hotkey: item.get("hotkey").and_then(parse_hotkey_value),
+            backend: Backend::parse(item.get("backend")),
         });
     }
     Ok(out)
