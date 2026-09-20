@@ -4610,7 +4610,10 @@ impl App {
                             buf,
                             w,
                             h,
-                            bottom_inset,
+                            // BAR-120：壳与内容同吃 bar_h（框底与内容
+                            // 同缘——键盘遮盖对两者同线一致，框底边不许
+                            // 悬在卡半腰）
+                            bar_h,
                             pt_off,
                             acc_of(crate::ai_presence::Panel::Parser),
                         );
@@ -5704,7 +5707,9 @@ impl App {
         {
             let px = g.slot_canvas(crate::gles_present::ChromeSlot::Parser);
             px.fill(0);
-            crate::termview::paint_parser_page_chrome(px, w, h, bottom_inset, 0, acc_pt);
+            // BAR-120：壳与内容同吃 bar_h（框底与内容同缘——键盘遮盖
+            // 对两者同线一致，框底边不许悬在卡半腰）
+            crate::termview::paint_parser_page_chrome(px, w, h, bar_h, 0, acc_pt);
             if let Some(psnap) = parser_snap {
                 term_arc.lock().unwrap().paint_parser_content(
                     px, w, h,
