@@ -5,6 +5,28 @@
 > (速查表:症状 → 工具 → 字段 → 判卷)。本页只写「现在进行时」,
 > 历史功过在 bugs.md。
 
+## 当前位置（2026-09-21)
+
+> **BAR-123 快捷键行抬手尺 + 设置页联动（2026-09-21 凌晨，已提交
+> 三推 2bd8ee4/bf59b2b，双端热更，真机待用户终验）**：
+> ①BAR-123：BAR-119(7018c1a) 摘解析页 inset 链误伤快捷键行抬手
+> hit（chrome_inset 被摘只剩栏高 220），键盘弹起态全键落空——
+> 用户真机 inset=890 连点 CTRL 8+ 次（渲染中心 1630=瞄准点），
+> 遥测「抬手+落空」成对定罪。修 = 抬手 hit 恢复 chrome_inset+栏高
+> 与 Started/渲染同源；钉 = check-keybar-ruler.sh 源码守卫（hit/
+> in_bar 实参必含 chrome_inset）+ 变异两咬 + cases/BAR-123-accept.sh
+> 遥测自校正判卷案（redroid 判红→修复核判绿）。**契约：按下/抬手/
+> 渲染三处同尺。** ②设置页联动（用户拍板）：默认服务器换选立即
+> 翻活跃会话（纯核 DefaultSession::session_name + 不同名才 toggle，
+> switch_session 原路径双槽保活+replay 补屏）；钉 spec_default_
+> session_映射会话槽名（变异两臂互换咬）。③快照保鲜 = 原路径
+> 天然保（redroid 实测 remote→local→remote 往返标记不丢）。
+> **判卷状态**：redroid 全绿（accept 案 + 联动往返 + 快照标记）；
+> 真机 vc 核已热更（01:18），但熄屏前台闸挡驾（am start 唤不起
+> 前台）+ 8024 闸门夜间沉背抖（am start 可救）——**等用户醒来
+> 终验：键盘弹起点 Ctrl-] 应能切会话**。已知欠账：na-server
+> live_spec 夜间提交闸偶发一红（单跑全绿，重试即过，未立案）。
+
 ## 当前位置（2026-09-20)
 
 > **两轴第 6 步③：环境卡本地相（2026-09-20，待提交+真机判卷）**：
