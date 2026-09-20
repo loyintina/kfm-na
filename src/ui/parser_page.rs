@@ -53,6 +53,11 @@ pub const DIVIDER_H: u32 = 2;
 /// 会话框表可见行上限（一行两框 × 3 行 = 6 框；超出内部滚动，
 /// 同日用户拍板取代「超池区截断看不见」挂账）
 pub const MAX_VISIBLE_LINES: u32 = 3;
+/// 可见行保底（2026-09-20 BAR-119 用户拍板）：键盘/chrome/下方卡
+/// 长高任何纵向压力都不许把 tmux 卡吞到两行四框以下——它不再是
+/// 全页唯一的纵向泄压阀；卡高随内容超池出屏（键盘遮盖/下方卡
+/// 顺延），不许塌行自残
+pub const MIN_VISIBLE_LINES: u32 = 2;
 
 /// 卡片模式（按钮带语义随模式换；Confirming = 跳框模态在，卡区按钮不画
 /// 不可点——模态屏蔽）
@@ -128,8 +133,11 @@ pub struct Layout {
 }
 
 /// 布局纯函数：卡片外区 = 双池同一池区（标题下 1 格起）；卡高 = 内容
-/// 定、上限池区高。会话框表可见行 ≤ MAX_VISIBLE_LINES（6 框），超出
-/// 内部滚动：scroll 为像素位移（壳手势喂入），本函数内部 clamp 后
+/// 账全价（BAR-119：不再钳进池区——纵向压力不许本卡独吞）。bottom_inset
+/// 永不含键盘 inset（与终端网格同红线：键盘只盖不重排——调用方传
+/// bar_h 族，不许传 chrome_inset）。会话框表可见行保底
+/// MIN_VISIBLE_LINES（2 行 4 框）、上限 MAX_VISIBLE_LINES（6 框），
+/// 超出内部滚动：scroll 为像素位移（壳手势喂入），本函数内部 clamp 后
 /// 几何吃 eff_scroll——眼手同尺，钳制语义唯一
 pub fn layout(
     screen_w: u32,
@@ -163,15 +171,19 @@ pub fn layout(
     };
     let cap_lines = max_lines.min(MAX_VISIBLE_LINES);
     let total_lines = n_sessions.div_ceil(2) as u32;
-    // 可见窗高 = min(容量, 实际行数)——卡高随内容缩；滚动上限 =
-    // 总内容高超可见窗的部分
-    let used_lines = cap_lines.min(total_lines);
+    // 可见窗 = min(容量, 实际行数) 再抬到保底（BAR-119：挤压不许吞到
+    // 两行四框以下；保底也不超实际行数——一行内容不强撑两行）
+    let used_lines = cap_lines
+        .max(MIN_VISIBLE_LINES.min(total_lines))
+        .min(total_lines);
     let visible_h = stride.saturating_mul(used_lines).saturating_sub(ROW_GAP);
     let total_h = stride.saturating_mul(total_lines).saturating_sub(ROW_GAP);
     let scroll_max = i64::from(total_h.saturating_sub(visible_h));
     let eff_scroll = scroll.clamp(0, scroll_max);
     let content_h = fixed + visible_h + ROW_GAP;
-    let card_h = content_h.min(area.h);
+    // 卡高 = 内容账全价，不钳进池区（BAR-119：钳进池区 = 纵向压力全
+    // 由本卡吞下 = 塌卡病灶本身；超池出屏归键盘遮盖/下方卡顺延）
+    let card_h = content_h;
     let card = PoolRect {
         x: area.x,
         y: area.y,

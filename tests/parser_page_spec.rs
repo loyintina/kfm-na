@@ -21,7 +21,8 @@
 //! 变异抽检方向：两列框宽忘减 COL_GAP（右列出卡）、hit 框尾 × 带判据
 //! 改 >（少 1px）、跳框卡外命中退化为 None（点外取消死）、
 //! set_sessions 忘收 confirming、hit 漏 list_clip 闸（滚动后点中
-//! 隐框）、scroll 钳制漏 max（拖穿底）——本文件必须红。
+//! 隐框）、scroll 钳制漏 max（拖穿底）、保底两行退化为钳进池区
+//! （BAR-119 塌卡回魂）——本文件必须红。
 
 use kfm_na::tmux_ctl::TmuxSession;
 use kfm_na::ui::parser_page::{
@@ -103,6 +104,43 @@ fn spec_layout_动态高随内容长() {
     let l2 = parser_page::layout(W, H, INSET, 2, Mode::Normal, 0);
     let l5 = parser_page::layout(W, H, INSET, 5, Mode::Normal, 0);
     assert!(l5.card.h > l2.card.h, "5 框卡必须比 2 框卡高");
+}
+
+#[test]
+fn spec_bar119_纵向挤压保底两行() {
+    // BAR-119（2026-09-20 redroid 截屏定罪）：键盘/chrome/下方卡长高
+    // 任何纵向压力都拿 tmux 卡当唯一泄压阀——redroid 实录：键盘一弹
+    // tmux 卡塌成薄片、卡头文字裁断错位；真机常态也被下方三卡挤到
+    // 不足两行。修约（用户拍板）：保底两行四框——挤压再大连两行都
+    // 不许吞；卡高随内容，超池出屏归键盘遮盖/下方卡顺延，不许塌行
+    // 自残。钉：bottom_inset 顶到整屏高（键盘极端相）也不许塌。
+    let squeeze = H; // 键盘把 bottom_inset 顶到整屏高的极端相
+    let l = parser_page::layout(W, H, squeeze, 4, Mode::Normal, 0);
+    assert_eq!(l.visible_rows, 4, "4 会话保底可见两行四框——挤压不许吞行");
+    // 卡高必须真容下两行框（不是画出去再裁的「假可见」）：
+    // 账 = PAD_V·2 + 头 + 行距 + 两行框区 + 分隔线带 + 钮带
+    let stride = parser_page::BOX_H + parser_page::ROW_GAP;
+    let two_lines = stride * 2 - parser_page::ROW_GAP;
+    let want_h = parser_page::CARD_PAD_V * 2
+        + parser_page::ROW_H
+        + parser_page::ROW_GAP
+        + two_lines
+        + parser_page::DIVIDER_ZONE
+        + parser_page::BTN_H;
+    assert_eq!(
+        l.card.h, want_h,
+        "保底两行的卡高 = 内容账全价——卡高钳进池区就是塌卡病灶本身"
+    );
+    // 一行内容不强撑两行（保底 ≠ 拔高）
+    let l1 = parser_page::layout(W, H, squeeze, 1, Mode::Normal, 0);
+    assert_eq!(l1.visible_rows, 1);
+    // 三行内容挤压下保两行、第三行归内部滚动（不许超保也不许丢）
+    let l6 = parser_page::layout(W, H, squeeze, 6, Mode::Normal, 0);
+    assert_eq!(l6.visible_rows, 4, "6 会话挤压下保两行");
+    assert!(
+        l6.scroll_max >= i64::from(stride),
+        "第三行必须可滚达——保底不许吃掉滚动能力"
+    );
 }
 
 #[test]

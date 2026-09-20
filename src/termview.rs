@@ -3550,7 +3550,9 @@ impl TermView {
         buf: &mut [u32],
         w: u32,
         h: u32,
-        bottom_inset: u32,
+        // 输入栏带高（永不含键盘 inset——BAR-119：解析页与终端网格同
+        // 红线，键盘只盖不重排；各调用方传 bar_h 不传 bottom_inset）
+        bar_inset: u32,
         pt_off_x: i32,
         snap: &crate::ui::parser_page::ParserPageSnap,
         accent: crate::ui::accent::AccentPair,
@@ -3581,7 +3583,7 @@ impl TermView {
         let lay = pp::layout(
             w,
             h,
-            bottom_inset
+            bar_inset
                 + crate::ui::conn_card::INSET_EXTRA
                 + crate::ui::svc_card::inset_extra_live()
                 + crate::ui::sys_card::INSET_EXTRA,
@@ -6572,14 +6574,15 @@ pub trait TermEmu: Send {
         accent: crate::ui::accent::AccentPair,
     );
     /// 解析页内容涂装（tmux 插件卡 v1）：几何 ui/parser_page（命中同源），
-    /// pt_off_x 语义同 paint_cfg_dual_pool；画在解析页底装修之上
+    /// pt_off_x 语义同 paint_cfg_dual_pool；画在解析页底装修之上。
+    /// bar_inset = 输入栏带高，永不含键盘 inset（BAR-119 红线同终端网格）
     #[allow(clippy::too_many_arguments)]
     fn paint_parser_content(
         &self,
         buf: &mut [u32],
         w: u32,
         h: u32,
-        bottom_inset: u32,
+        bar_inset: u32,
         pt_off_x: i32,
         snap: &crate::ui::parser_page::ParserPageSnap,
         accent: crate::ui::accent::AccentPair,
@@ -6884,12 +6887,12 @@ impl TermEmu for TermView {
         buf: &mut [u32],
         w: u32,
         h: u32,
-        bottom_inset: u32,
+        bar_inset: u32,
         pt_off_x: i32,
         snap: &crate::ui::parser_page::ParserPageSnap,
         accent: crate::ui::accent::AccentPair,
     ) {
-        TermView::paint_parser_content_impl(self, buf, w, h, bottom_inset, pt_off_x, snap, accent)
+        TermView::paint_parser_content_impl(self, buf, w, h, bar_inset, pt_off_x, snap, accent)
     }
     #[allow(clippy::too_many_arguments)]
     fn paint_tab_bar_layer(

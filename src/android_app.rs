@@ -1141,8 +1141,7 @@ impl App {
                             let lay = crate::ui::parser_page::layout(
                                 sw,
                                 sh,
-                                self.chrome_inset()
-                                    + self.cur_bar_h()
+                                self.cur_bar_h()
                                     + crate::ui::conn_card::INSET_EXTRA
                                     + crate::ui::svc_card::inset_extra_live()
                                     + crate::ui::sys_card::INSET_EXTRA,
@@ -1507,8 +1506,7 @@ impl App {
                                 crate::ui::parser_page::layout(
                                     sw,
                                     sh,
-                                    self.chrome_inset()
-                                        + self.cur_bar_h()
+                                    self.cur_bar_h()
                                         + crate::ui::conn_card::INSET_EXTRA
                                         + crate::ui::svc_card::inset_extra_live()
                                         + crate::ui::sys_card::INSET_EXTRA,
@@ -1538,8 +1536,7 @@ impl App {
                                 && crate::ui::parser_page::layout(
                                     sw,
                                     sh,
-                                    self.chrome_inset()
-                                        + self.cur_bar_h()
+                                    self.cur_bar_h()
                                         + crate::ui::conn_card::INSET_EXTRA
                                         + crate::ui::svc_card::inset_extra_live()
                                         + crate::ui::sys_card::INSET_EXTRA,
@@ -2109,8 +2106,7 @@ impl App {
                             let lay = crate::ui::parser_page::layout(
                                 sw,
                                 sh,
-                                self.chrome_inset()
-                                    + self.cur_bar_h()
+                                self.cur_bar_h()
                                     + crate::ui::conn_card::INSET_EXTRA
                                     + crate::ui::svc_card::inset_extra_live()
                                     + crate::ui::sys_card::INSET_EXTRA,
@@ -2240,13 +2236,8 @@ impl App {
                     }
                     let Some(w) = &self.window else { return };
                     let s = w.inner_size();
-                    let Some(kd) = crate::keybar::hit(
-                        x,
-                        y,
-                        s.width,
-                        s.height,
-                        self.chrome_inset() + self.cur_bar_h(),
-                    ) else {
+                    let Some(kd) = crate::keybar::hit(x, y, s.width, s.height, self.cur_bar_h())
+                    else {
                         crate::report::report(
                             "ime",
                             &format!(
@@ -3892,8 +3883,7 @@ impl App {
                             crate::ui::parser_page::layout(
                                 sw,
                                 sh,
-                                self.chrome_inset()
-                                    + self.cur_bar_h()
+                                self.cur_bar_h()
                                     + crate::ui::conn_card::INSET_EXTRA
                                     + crate::ui::svc_card::inset_extra_live()
                                     + crate::ui::sys_card::INSET_EXTRA,
@@ -4632,7 +4622,8 @@ impl App {
                                 buf,
                                 w,
                                 h,
-                                bottom_inset,
+                                // BAR-119：解析页永不吃键盘 inset（只盖不重排）
+                                bar_h,
                                 pt_off,
                                 psnap,
                                 acc_of(crate::ai_presence::Panel::Parser),
@@ -5717,13 +5708,9 @@ impl App {
             crate::termview::paint_parser_page_chrome(px, w, h, bottom_inset, 0, acc_pt);
             if let Some(psnap) = parser_snap {
                 term_arc.lock().unwrap().paint_parser_content(
-                    px,
-                    w,
-                    h,
-                    bottom_inset,
-                    0,
-                    psnap,
-                    acc_pt,
+                    px, w, h,
+                    // BAR-119：解析页永不吃键盘 inset（只盖不重排）
+                    bar_h, 0, psnap, acc_pt,
                 );
             }
             g.slot_bake(crate::gles_present::ChromeSlot::Parser);
