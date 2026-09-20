@@ -144,3 +144,14 @@ fn spec_l1_路由_send_checked回执() {
         "对端死了必须报 false"
     );
 }
+
+/// 考题 BAR-124:抖动尺寸 = 行数减一且保底 1 行(0 行 pty 畸形不许造;
+/// 列数纹丝不动——只抖行,列抖了 tmux 横排也重画,白送一次洪峰)
+#[test]
+fn spec_bar124_抖动尺寸_减一行保底() {
+    use kfm_na::session_router::jog_resize;
+    assert_eq!(jog_resize(80, 24), (80, 23));
+    assert_eq!(jog_resize(80, 2), (80, 1));
+    assert_eq!(jog_resize(80, 1), (80, 1), "1 行不许抖成 0 行");
+    assert_eq!(jog_resize(80, 0), (80, 1), "0 行输入也要兜回 1 行");
+}

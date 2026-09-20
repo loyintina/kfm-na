@@ -209,6 +209,11 @@ struct App {
     /// 取控制事件（记健康账）和待机 replay（切换补屏）。
     /// 最近一次下发的网格尺寸（切换会话时给新活跃方补发 Resize）
     last_grid: (u32, u32),
+    /// BAR-124 切换强制重画的抖动账：(原 cols, 原 rows, 归位时刻)。
+    /// 切换时先发抖动尺寸（rows-1）武装本账，主循环 check_resize_jog
+    /// 到点归位——两次净变化对端 tmux 才收 SIGWINCH 全屏重画
+    /// （同尺寸 Resize 净变化为零，静默待机切回全是残影）
+    resize_jog: Option<(u32, u32, std::time::Instant)>,
     /// 有新输出/尺寸变化待渲染
     dirty: bool,
     /// 会话终了（exited/failed）后定格最后一屏，出向不再发
@@ -2515,6 +2520,24 @@ impl App {
         self.dirty = true;
     }
 
+    /// BAR-124 抖动归位（切换强制重画的第二发）：到点把尺寸归位。
+    /// 第一发（抖动 rows-1）在 switch_session 发出时就地完成；本发是
+    /// 第二次净变化——对端 tmux 吃到这发 SIGWINCH 才全屏重画成正确
+    /// 尺寸的画面，静默待机的残影被整屏覆盖
+    fn check_resize_jog(&mut self) {
+        let Some((cols, rows, at)) = self.resize_jog else {
+            return;
+        };
+        if std::time::Instant::now() < at {
+            return;
+        }
+        self.resize_jog = None;
+        if let Some(router) = self.router_handle() {
+            router.lock().unwrap().send(TermCmd::Resize { cols, rows });
+        }
+        crate::report::report("term", &format!("抖动 resize 归位 {cols}x{rows}"));
+    }
+
     /// 输入栏长按计时（BAR-046）：按住栏内文本区 ≥SELECT_LONG_PRESS_MS
     /// 未拖动 → 进入选择模式。锚点命中时不走这里。
     /// BAR-053：改长按选词（落点词整段高亮）+ 登记词枢轴（续滑扩选用）；
@@ -3364,6 +3387,10 @@ impl App {
         if (cols, rows) != self.last_grid {
             term.lock().unwrap().resize_cells(cols, rows);
             self.last_grid = (cols, rows);
+            // 真 resize 已到：BAR-124 抖动归位账作废（归位值是按旧网格
+            // 武装的，发出去会把尺寸掰回去；且这次净变化本身就有
+            // SIGWINCH，重画目的已达成）
+            self.resize_jog = None;
             // 飞行记录仪:尺寸事件落带(回放网格几何的锚点;名字记当时活跃方)
             if let Some(r) = self.router_handle() {
                 let name = r.lock().unwrap().active_name();
@@ -3585,7 +3612,26 @@ impl App {
         }
         let (cols, rows) = self.last_grid;
         if let Some(router) = self.router_handle() {
-            router.lock().unwrap().send(TermCmd::Resize { cols, rows });
+            // BAR-124 切换即刷新：同尺寸 Resize 净变化为零，对端收不到
+            // SIGWINCH，静默待机 replay 又可能为空 → 切回全是上一个会话
+            // 的残影。改发抖动尺寸（rows-1）并武装归位账，主循环 120ms
+            // 后归位（间隔必须——conn.rs Resize 只留最新值，背靠背发会
+            // 被合并成原值）；tmux 收两次 SIGWINCH 全屏重画。归位那发
+            // 同时兼原「补发当前网格尺寸」之职（待机期尺寸变过也纠回来）
+            let (jc, jr) = crate::session_router::jog_resize(cols, rows);
+            router
+                .lock()
+                .unwrap()
+                .send(TermCmd::Resize { cols: jc, rows: jr });
+            self.resize_jog = Some((
+                cols,
+                rows,
+                std::time::Instant::now() + std::time::Duration::from_millis(120),
+            ));
+            crate::report::report(
+                "term",
+                &format!("切换强制重画: 抖动 resize {cols}x{rows} → {jc}x{jr}"),
+            );
         }
         if let Some(t) = self.term_handle() {
             let hk = self.terminal_cfg.switch_hotkey.display();
@@ -6943,6 +6989,7 @@ impl ApplicationHandler for App {
             self.check_orb_long_press(); // 光球长按 → fake_run(debug 钩子)
             self.check_inputbar_long_press(); // 输入栏长按 → 选择模式(BAR-046)
             self.check_bar_repeat(); // 方向键长按 → 连发（2026-09-19 拍板）
+            self.check_resize_jog(); // BAR-124 抖动归位 → 对端全屏重画
             self.poll_ai_presence(); // AI 外显快照比对(注入/到期也要画帧)
             // tmux 插件（2026-09-19）：执行排水 + 解析页在栈且从未查询
             // 时的首查（Idle 一次性闸——Loading/Ready 都不会在这反复发）

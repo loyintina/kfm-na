@@ -87,3 +87,11 @@ impl SessionRouter {
         Ok(())
     }
 }
+
+/// BAR-124 切换强制重画的抖动尺寸：行数减一（保底 1 行——0 行 pty 是
+/// 畸形）。切换时先发抖动尺寸、120ms 后归位原尺寸，两次净变化对端
+/// tmux 才收得到 SIGWINCH 全屏重画（同尺寸 Resize 净变化为零,内核
+/// 不发信号,静默待机会话切回全是残影）。
+pub fn jog_resize(cols: u32, rows: u32) -> (u32, u32) {
+    (cols, rows.saturating_sub(1).max(1))
+}
