@@ -62,3 +62,27 @@ fn spec_endpoint_翻相epoch() {
     assert_eq!(s.set_current(EndpointKind::Server), e0 + 2);
     assert_eq!(s.current(), EndpointKind::Server);
 }
+
+#[test]
+fn spec_endpoint_exec通道裁决() {
+    use kfm_na::endpoint::{ExecPlan, plan_exec};
+    // 服务器相 + 已配置 = ws 通道（url 原样透传——壳的 remote_conn_cfg）
+    match plan_exec(EndpointKind::Server, Some("ws://127.0.0.1:9021/ws")) {
+        ExecPlan::Ws(u) => assert_eq!(u, "ws://127.0.0.1:9021/ws"),
+        _ => panic!("服务器相+已配置必须走 ws"),
+    }
+    // 服务器相 + 无配置 = NoServer（各调用点自有报错语义，裁决层不措辞）
+    assert!(matches!(
+        plan_exec(EndpointKind::Server, None),
+        ExecPlan::NoServer
+    ));
+    // 本地相 = LocalPty（第 6 步接线；与有无服务器配置无关）
+    assert!(matches!(
+        plan_exec(EndpointKind::Local, None),
+        ExecPlan::LocalPty
+    ));
+    assert!(matches!(
+        plan_exec(EndpointKind::Local, Some("ws://x")),
+        ExecPlan::LocalPty
+    ));
+}

@@ -3620,11 +3620,13 @@ impl App {
                 if let Some(p) = &self.parser_page {
                     p.lock().unwrap().cancel_confirm();
                 }
-                if let (Some(cfg), Some(name)) = (&self.remote_conn_cfg, target) {
+                if let Some(name) = target
+                    && self.endpoint_exec_ok()
+                {
                     crate::report::report("ui", &format!("tmux 插件: 确认关闭 {name}"));
                     self.parser_exec = Some((
                         ParserExec::Kill,
-                        crate::tmux_exec::exec(cfg.url.clone(), crate::tmux_ctl::cmd_kill(&name)),
+                        self.endpoint_exec(crate::tmux_ctl::cmd_kill(&name)),
                     ));
                 }
             }
@@ -3678,14 +3680,50 @@ impl App {
         }
     }
 
+    /// tmux 卡 exec 通道可用性（两轴契约第 4 步：server 相原样迁入——
+    /// 通道选择唯一源，裁决纯函数 endpoint::plan_exec 钉着）。false =
+    /// 服务器相没配置 / 本地相未接线（第 6 步）；各调用点照旧自有
+    /// 报错语义（静默或挂错误文案），本层不替它们措辞
+    fn endpoint_exec_ok(&self) -> bool {
+        use crate::endpoint::{ExecPlan, plan_exec};
+        matches!(
+            plan_exec(
+                crate::endpoint::current(),
+                self.remote_conn_cfg.as_ref().map(|c| c.url.as_str()),
+            ),
+            ExecPlan::Ws(_)
+        )
+    }
+
+    /// tmux 卡 exec 通道唯一入口：调用前必须先 endpoint_exec_ok() 裁决
+    /// （在途闸/报错语义各调用点自理），ok 后本入口必出通道——
+    /// expect 的 panic = 装配错误显形，不许静默吞
+    fn endpoint_exec(&self, cmd: String) -> std::sync::mpsc::Receiver<Result<String, String>> {
+        use crate::endpoint::{ExecPlan, plan_exec};
+        match plan_exec(
+            crate::endpoint::current(),
+            self.remote_conn_cfg.as_ref().map(|c| c.url.as_str()),
+        ) {
+            ExecPlan::Ws(url) => crate::tmux_exec::exec(url.to_string(), cmd),
+            ExecPlan::LocalPty => {
+                // 第 6 步接线位（local PTY exec）；exec_ok 已排除此路，
+                // 走到 = 调用点漏裁决 = 装配错误
+                panic!("本地相 exec 未接线（第 6 步）——调用点漏过 endpoint_exec_ok 裁决")
+            }
+            ExecPlan::NoServer => {
+                panic!("exec 通道不可用——调用点漏过 endpoint_exec_ok 裁决")
+            }
+        }
+    }
+
     /// 列会话（插件数据唯一来源 = 服务器真表，nz P5 同规）：在途不叠
     fn parser_refresh(&mut self) {
-        let Some(cfg) = &self.remote_conn_cfg else {
+        if !self.endpoint_exec_ok() {
             if let Some(p) = &self.parser_page {
                 p.lock().unwrap().set_error("无远程服务器配置".into());
             }
             return;
-        };
+        }
         if self.parser_exec.is_some() {
             return;
         }
@@ -3694,7 +3732,7 @@ impl App {
         }
         self.parser_exec = Some((
             ParserExec::List,
-            crate::tmux_exec::exec(cfg.url.clone(), crate::tmux_ctl::cmd_list()),
+            self.endpoint_exec(crate::tmux_ctl::cmd_list()),
         ));
         self.dirty = true;
     }
@@ -3717,13 +3755,20 @@ impl App {
     /// 重排：窗口尺寸钉到 na 当前网格（manual 即生效；largest/latest
     /// 下 tmux 自动翻 manual——2026-09-19 服务器实证）
     fn parser_reflow(&mut self) {
-        let (Some(cfg), Some(sess)) = (&self.remote_conn_cfg, self.remote_attached.clone()) else {
+        let Some(sess) = self.remote_attached.clone() else {
             if let Some(p) = &self.parser_page {
                 p.lock().unwrap().set_error("重排需要本端已附着会话".into());
             }
             self.dirty = true;
             return;
         };
+        if !self.endpoint_exec_ok() {
+            if let Some(p) = &self.parser_page {
+                p.lock().unwrap().set_error("重排需要本端已附着会话".into());
+            }
+            self.dirty = true;
+            return;
+        }
         if self.parser_exec.is_some() {
             return;
         }
@@ -3731,10 +3776,7 @@ impl App {
         crate::report::report("ui", &format!("tmux 插件: 重排 {sess} → {cols}x{rows}"));
         self.parser_exec = Some((
             ParserExec::Reflow,
-            crate::tmux_exec::exec(
-                cfg.url.clone(),
-                crate::tmux_ctl::cmd_reflow(&sess, cols, rows),
-            ),
+            self.endpoint_exec(crate::tmux_ctl::cmd_reflow(&sess, cols, rows)),
         ));
         self.dirty = true;
         // 重排已派发 = 回终端主页看效果（用户拍板：点重排后收起解析页）
@@ -3760,16 +3802,16 @@ impl App {
                 }
             }
         };
-        let Some(cfg) = &self.remote_conn_cfg else {
+        if !self.endpoint_exec_ok() {
             return;
-        };
+        }
         if self.parser_exec.is_some() {
             return;
         }
         crate::report::report("ui", &format!("tmux 插件: 新建会话 {name:?}"));
         self.parser_exec = Some((
             ParserExec::New,
-            crate::tmux_exec::exec(cfg.url.clone(), crate::tmux_ctl::cmd_new(name.as_deref())),
+            self.endpoint_exec(crate::tmux_ctl::cmd_new(name.as_deref())),
         ));
         self.dirty = true;
     }
@@ -6751,7 +6793,7 @@ impl ApplicationHandler for App {
                             crate::ui::parser_page::Status::Idle
                         )
                     })))
-                && self.remote_conn_cfg.is_some()
+                && self.endpoint_exec_ok()
                 && self.parser_exec.is_none()
             {
                 self.parser_refresh();

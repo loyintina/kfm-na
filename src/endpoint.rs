@@ -129,3 +129,45 @@ impl EndpointState {
         self.epoch
     }
 }
+
+/// exec 通道计划（tmux 卡四能力面之 exec 腿的裁决结果）
+pub enum ExecPlan<'a> {
+    /// 服务器相 + 已配置服务器 → ws exec（url 由壳的 remote_conn_cfg 喂）
+    Ws(&'a str),
+    /// 本地相 → local PTY exec（第 6 步接线；与有无服务器配置无关）
+    LocalPty,
+    /// 服务器相但没配置服务器条目（各调用点自有报错语义——静默或挂
+    /// 错误文案，裁决层不替它们措辞）
+    NoServer,
+}
+
+/// exec 通道裁决（纯函数，A 档）：对象 × 服务器 URL → 通道计划。
+/// 调用点（kill/refresh/reflow/new/attach×2）一律经此，不许再直查
+/// remote_conn_cfg——通道选择唯一源
+pub fn plan_exec(kind: EndpointKind, server_url: Option<&str>) -> ExecPlan<'_> {
+    match kind {
+        EndpointKind::Server => match server_url {
+            Some(u) => ExecPlan::Ws(u),
+            None => ExecPlan::NoServer,
+        },
+        EndpointKind::Local => ExecPlan::LocalPty,
+    }
+}
+
+/// 全局句柄（壳/涂装薄共享，parser_page 全局句柄同模式；纯逻辑判卷
+/// 只碰 EndpointState，不碰这里）
+static HANDLE: std::sync::OnceLock<std::sync::Mutex<EndpointState>> = std::sync::OnceLock::new();
+
+fn handle() -> &'static std::sync::Mutex<EndpointState> {
+    HANDLE.get_or_init(|| std::sync::Mutex::new(EndpointState::default()))
+}
+
+/// 当前对象（涂装/壳读取）
+pub fn current() -> EndpointKind {
+    handle().lock().unwrap().current()
+}
+
+/// 同步当前对象（壳在启动按设置、切换按 Ctrl-] 时调），返回 epoch
+pub fn sync(kind: EndpointKind) -> u64 {
+    handle().lock().unwrap().set_current(kind)
+}
