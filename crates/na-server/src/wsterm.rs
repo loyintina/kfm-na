@@ -144,6 +144,7 @@ pub async fn handle(stream: TcpStream, registry: Arc<Registry>) {
                                     cols: 80,
                                     rows: 24,
                                     opened_epoch_s: now_epoch_s(),
+                                    last_active_epoch_s: now_epoch_s(),
                                 });
                                 sessions.insert(sid.clone(), sess);
                                 send(&mut sink, &ServerMsg::Opened { session_id: sid, tag }).await;
@@ -154,6 +155,7 @@ pub async fn handle(stream: TcpStream, registry: Arc<Registry>) {
                         }
                     }
                     Ok(ClientMsg::Input { session_id, input }) => {
+                        registry.touch(&session_id); // 真空闲：敲键即活动
                         if let Some(s) = sessions.get_mut(&session_id) {
                             use std::io::Write as _;
                             let _ = s.writer.write_all(input.as_bytes());
@@ -176,6 +178,7 @@ pub async fn handle(stream: TcpStream, registry: Arc<Registry>) {
             Some(out) = rx.recv() => {
                 match out {
                     Out::Data(sid, data) => {
+                        registry.touch(&sid); // 真空闲：产出即活动
                         if !send(&mut sink, &ServerMsg::Output { session_id: sid, data }).await { break; }
                     }
                     Out::Exit(sid, code) => {

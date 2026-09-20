@@ -18,6 +18,9 @@ pub struct SessionRec {
     pub rows: u32,
     /// 距 epoch 的秒（跨进程可序列化；Instant 不能进 health）
     pub opened_epoch_s: u64,
+    /// 最后活动（2026-09-20 修约「真空闲」：input/output 时 touch 刷新；
+    /// idle_s 的唯一事实源——此前借 opened_epoch_s 充数 = 年龄冒充空闲）
+    pub last_active_epoch_s: u64,
 }
 
 /// 全局注册表
@@ -78,6 +81,18 @@ impl Registry {
             .remove(id);
     }
 
+    /// 刷新最后活动（wsterm 在 input/output 时调；不在册 = 零动作）
+    pub fn touch(&self, id: &str) {
+        if let Some(rec) = self
+            .sessions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get_mut(id)
+        {
+            rec.last_active_epoch_s = now_epoch_s();
+        }
+    }
+
     pub fn session_count(&self) -> usize {
         self.sessions
             .lock()
@@ -128,7 +143,8 @@ pub fn build_health(
                 "cols": s.cols,
                 "rows": s.rows,
                 "alive": true, // 在册即活（死会话先 unregister 再发 Exit）
-                "idle_s": now.saturating_sub(s.opened_epoch_s),
+                // 真空闲（2026-09-20 修约）：距最后活动，不是会话年龄
+                "idle_s": now.saturating_sub(s.last_active_epoch_s),
             })
         })
         .collect();

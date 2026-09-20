@@ -70,7 +70,7 @@ tmux 管理靠 tmux_exec 短命 PTY 会话顺带完成，AI/文件树/obs 一概
 |---|---|---|
 | `GET /ws`（Upgrade） | 消息协议 = 现 protocol.rs 一字不改 | terminal-open(cwd?, cmd?) → spawned PTY；input/resize/close；回 opened/output/exit。语义对齐 kfmv4 terminal-pty.ts |
 | `POST /api/na-report` | body 原样 append `/root/kfm-na/field-reports.log` | 与 kfmv4 files.ts:378 同行为；接报表路的迁移见 §五 |
-| `GET /api/na/health` | `{uptime_s, sessions:[{id, cmd, cols, rows, alive, idle_s}]}` | **新增**，服务卡唯一数据源（kfmv4 没有此面——后端是 kfmv4 时服务卡显示「kfmv4 托管」态） |
+| `GET /api/na/health` | `{uptime_s, sessions:[{id, cmd, cols, rows, alive, idle_s}]}` | **新增**，服务卡唯一数据源（kfmv4 没有此面——后端是 kfmv4 时服务卡显示「kfmv4 托管」态）。idle_s = **真空闲**（距最后 input/output 活动，2026-09-20 修约：此前借 opened_epoch_s 充数 = 年龄冒充空闲，服务卡显形后修约，wsterm input/output 接线 registry.touch） |
 
 ## 四、可视化落位（解析页服务卡）
 
