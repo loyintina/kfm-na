@@ -105,10 +105,24 @@ pub fn session_line(s: &HealthSession) -> String {
 /// parse_health 同纪律）；值 null = 该路采不到的合法显形 → None
 /// （卡面显「—」）；非 JSON/类型错才报错。数值键缺键同归 None
 /// （旧版缺面 404 已在 HTTP 层挡住，到这里缺键 = 对端半成品，
-/// 占位不编造）
+/// 占位不编造）。2026-09-20 三路扩键（procs/swap_*/uptime_s）缺键
+/// 同归 None——旧版 na-server 不认新键，契约向旧兼容不破
 pub fn parse_sys(json: &str) -> Result<na_sys::SysInfo, String> {
     let v: serde_json::Value =
         serde_json::from_str(json).map_err(|e| format!("sys 不是合法 JSON: {e}"))?;
+    let procs = match v.get("procs") {
+        Some(p) if p.is_array() => {
+            let a = p.as_array().unwrap();
+            match (
+                a.first().and_then(|x| x.as_u64()),
+                a.get(1).and_then(|x| x.as_u64()),
+            ) {
+                (Some(r), Some(t)) => Some((r, t)),
+                _ => None,
+            }
+        }
+        _ => None,
+    };
     let load = match v.get("load") {
         None => return Err("sys 缺 load".into()),
         Some(l) if l.is_null() => None,
@@ -122,19 +136,34 @@ pub fn parse_sys(json: &str) -> Result<na_sys::SysInfo, String> {
                 l1: f(0)?,
                 l5: f(1)?,
                 l15: f(2)?,
+                procs,
             })
         }
     };
     let kb = |k: &str| v.get(k).and_then(|x| x.as_u64());
+    let swap = match (kb("swap_total_kb"), kb("swap_free_kb")) {
+        (Some(t), Some(f)) => Some((t, f)),
+        _ => None,
+    };
     let mem = match (kb("mem_total_kb"), kb("mem_avail_kb")) {
-        (Some(total_kb), Some(avail_kb)) => Some(na_sys::MemInfo { total_kb, avail_kb }),
+        (Some(total_kb), Some(avail_kb)) => Some(na_sys::MemInfo {
+            total_kb,
+            avail_kb,
+            swap,
+        }),
         _ => None,
     };
     let disk = match (kb("disk_total_b"), kb("disk_avail_b")) {
         (Some(t), Some(a)) => Some((t, a)),
         _ => None,
     };
-    Ok(na_sys::SysInfo { load, mem, disk })
+    let uptime_s = kb("uptime_s");
+    Ok(na_sys::SysInfo {
+        load,
+        mem,
+        disk,
+        uptime_s,
+    })
 }
 
 // ---- 数据面（UI 只读这道门）----

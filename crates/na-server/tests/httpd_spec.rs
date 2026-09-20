@@ -106,12 +106,15 @@ fn spec_sys_json_形状() {
             l1: 0.42,
             l5: 0.38,
             l15: 0.35,
+            procs: Some((2, 123)),
         }),
         mem: Some(na_sys::MemInfo {
             total_kb: 16384000,
             avail_kb: 8192000,
+            swap: Some((4096000, 1024000)),
         }),
         disk: Some((100_000_000_000, 45_000_000_000)),
+        uptime_s: Some(7849375),
     };
     let v: serde_json::Value =
         serde_json::from_str(&httpd::sys_json(&info)).expect("sys 是合法 JSON");
@@ -120,16 +123,35 @@ fn spec_sys_json_形状() {
     assert_eq!(v["mem_avail_kb"], 8192000);
     assert_eq!(v["disk_total_b"], 100_000_000_000u64);
     assert_eq!(v["disk_avail_b"], 45_000_000_000u64);
+    assert_eq!(v["procs"], serde_json::json!([2, 123]));
+    assert_eq!(v["swap_total_kb"], 4096000);
+    assert_eq!(v["swap_free_kb"], 1024000);
+    assert_eq!(v["uptime_s"], 7849375);
+    // load 在但 procs 缺（第 4 段坏件）：procs 独立显形 null 不连坐 load
+    let info2 = na_sys::SysInfo {
+        load: Some(na_sys::LoadAvg {
+            l1: 0.1,
+            l5: 0.2,
+            l15: 0.3,
+            procs: None,
+        }),
+        ..info
+    };
+    let v2: serde_json::Value =
+        serde_json::from_str(&httpd::sys_json(&info2)).expect("sys 是合法 JSON");
+    assert!(v2["procs"].is_null(), "procs 坏件 = null 显形");
+    assert!(v2["load"].is_array(), "procs 坏了不许连坐 load");
 }
 
 #[test]
 fn spec_sys_json_坏件显形() {
     // 采不到的路 = null 显形：键永远在（客户端凭键认版本），
-    // 值不许缺键不许编造零值（Android 拒 loadavg 是合法常态）
+    // 值不许缺键不许编造零值（Android 拒 loadavg/uptime 是合法常态）
     let info = na_sys::SysInfo {
         load: None,
         mem: None,
         disk: None,
+        uptime_s: None,
     };
     let v: serde_json::Value =
         serde_json::from_str(&httpd::sys_json(&info)).expect("sys 是合法 JSON");
@@ -138,6 +160,10 @@ fn spec_sys_json_坏件显形() {
     assert!(v["mem_avail_kb"].is_null());
     assert!(v["disk_total_b"].is_null());
     assert!(v["disk_avail_b"].is_null());
+    assert!(v["procs"].is_null());
+    assert!(v["swap_total_kb"].is_null());
+    assert!(v["swap_free_kb"].is_null());
+    assert!(v["uptime_s"].is_null());
 }
 
 #[test]

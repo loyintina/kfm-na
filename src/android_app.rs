@@ -1142,25 +1142,22 @@ impl App {
                                 sw,
                                 sh,
                                 self.cur_bar_h()
-                                    + crate::ui::conn_card::INSET_EXTRA
-                                    + crate::ui::svc_card::inset_extra_live()
+                                    + crate::ui::link_card::inset_extra_live()
                                     + crate::ui::sys_card::INSET_EXTRA,
                                 snap.sessions.len(),
                                 mode,
                                 snap.scroll,
                             );
                             let c = &lay.card;
-                            let clay = crate::ui::conn_card::layout(c);
-                            let cc = &clay.card;
-                            // 服务卡（第三张，纯展示——点按也归插件手势，
-                            // 不许漏到面板页当滑页起手）
-                            let slay = crate::ui::svc_card::layout(
-                                cc,
+                            // 连接服务合并卡（第二张，两竖列——点按归
+                            // 插件手势，不许漏到面板页当滑页起手）
+                            let llay = crate::ui::link_card::layout(
+                                c,
                                 crate::ui::svc_card::current().lines.len(),
                             );
-                            let sc = &slay.card;
-                            // 环境卡（第四张，纯展示——同归插件手势）
-                            let xlay = crate::ui::sys_card::layout(sc);
+                            let lc = &llay.card;
+                            // 环境卡（第三张，纯展示——同归插件手势）
+                            let xlay = crate::ui::sys_card::layout(lc);
                             let xc = &xlay.card;
                             let (xi, yi) = (x as i64, y as i64);
                             let in_rect = |r: &crate::ui::dual_pool::PoolRect| {
@@ -1173,8 +1170,7 @@ impl App {
                             // 居中在 tmux 卡外，且框外点按 = 取消
                             mode == crate::ui::parser_page::Mode::Confirming
                                 || in_rect(c)
-                                || in_rect(cc) // 连接/服务卡同归插件手势（重连钮）
-                                || in_rect(sc) // 服务卡同归（纯展示也吞）
+                                || in_rect(lc) // 连接服务合并卡同归插件手势（重连钮）
                                 || in_rect(xc) // 环境卡同归（纯展示也吞）
                         };
                         if in_card {
@@ -1507,8 +1503,7 @@ impl App {
                                     sw,
                                     sh,
                                     self.cur_bar_h()
-                                        + crate::ui::conn_card::INSET_EXTRA
-                                        + crate::ui::svc_card::inset_extra_live()
+                                        + crate::ui::link_card::inset_extra_live()
                                         + crate::ui::sys_card::INSET_EXTRA,
                                     snap.sessions.len(),
                                     crate::ui::parser_page::Mode::Normal,
@@ -1537,8 +1532,7 @@ impl App {
                                     sw,
                                     sh,
                                     self.cur_bar_h()
-                                        + crate::ui::conn_card::INSET_EXTRA
-                                        + crate::ui::svc_card::inset_extra_live()
+                                        + crate::ui::link_card::inset_extra_live()
                                         + crate::ui::sys_card::INSET_EXTRA,
                                     snap.sessions.len(),
                                     crate::ui::parser_page::Mode::Normal,
@@ -2107,8 +2101,7 @@ impl App {
                                 sw,
                                 sh,
                                 self.cur_bar_h()
-                                    + crate::ui::conn_card::INSET_EXTRA
-                                    + crate::ui::svc_card::inset_extra_live()
+                                    + crate::ui::link_card::inset_extra_live()
                                     + crate::ui::sys_card::INSET_EXTRA,
                                 snap.sessions.len(),
                                 mode,
@@ -2122,13 +2115,17 @@ impl App {
                                 sh,
                                 mode,
                             );
-                            // tmux 卡未命中且常态 → 连接/服务卡（几何同
-                            // 一份 lay.card 推出——眼手同尺）；模态/命名
-                            // 态屏蔽（模态跳框期间卡区命中全屏蔽惯例）
+                            // tmux 卡未命中且常态 → 连接服务合并卡
+                            // （几何同一份 lay.card 推出——眼手同尺）；
+                            // 模态/命名态屏蔽（模态跳框期间卡区命中全
+                            // 屏蔽惯例）
                             let ch = if h.is_none() && mode == crate::ui::parser_page::Mode::Normal
                             {
-                                let clay = crate::ui::conn_card::layout(&lay.card);
-                                crate::ui::conn_card::hit(&clay, pt.0 as i64, pt.1 as i64)
+                                let llay = crate::ui::link_card::layout(
+                                    &lay.card,
+                                    crate::ui::svc_card::current().lines.len(),
+                                );
+                                crate::ui::link_card::hit(&llay, pt.0 as i64, pt.1 as i64)
                             } else {
                                 None
                             };
@@ -2137,9 +2134,12 @@ impl App {
                         if let Some((hh, mode)) = hit_result {
                             self.parser_dispatch(snap, hh, mode);
                         }
-                        if let Some(crate::ui::conn_card::ConnHit::Reconnect) = conn_hit {
+                        if let Some(crate::ui::link_card::LinkHit::Reconnect) = conn_hit {
                             let ok = crate::tunnel::request_reconnect();
-                            crate::report::report("tunnel", &format!("连接卡点重连 → 下达{ok}"));
+                            crate::report::report(
+                                "tunnel",
+                                &format!("连接服务卡点重连 → 下达{ok}"),
+                            );
                         }
                     }
                     self.dirty = true;
@@ -3884,8 +3884,7 @@ impl App {
                                 sw,
                                 sh,
                                 self.cur_bar_h()
-                                    + crate::ui::conn_card::INSET_EXTRA
-                                    + crate::ui::svc_card::inset_extra_live()
+                                    + crate::ui::link_card::inset_extra_live()
                                     + crate::ui::sys_card::INSET_EXTRA,
                                 snap.sessions.len(),
                                 crate::ui::parser_page::Mode::Normal,

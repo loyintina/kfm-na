@@ -3583,10 +3583,7 @@ impl TermView {
         let lay = pp::layout(
             w,
             h,
-            bar_inset
-                + crate::ui::conn_card::INSET_EXTRA
-                + crate::ui::svc_card::inset_extra_live()
-                + crate::ui::sys_card::INSET_EXTRA,
+            bar_inset + crate::ui::link_card::inset_extra_live() + crate::ui::sys_card::INSET_EXTRA,
             snap.sessions.len(),
             mode,
             snap.scroll,
@@ -3750,17 +3747,21 @@ impl TermView {
             );
         }
 
-        // ---- 连接/服务卡（2026-09-20 v1：解析页第二张二级卡，纵排在
-        // tmux 卡下；数据 = tunnel 全局快照直读。卡环/字段行/分隔线/钮
-        // 与 tmux 卡同配方同件——组件池登记 conn_card）
-        let clay = crate::ui::conn_card::layout(&lay.card);
+        // ---- 连接服务合并卡（2026-09-20 v2 合并裁决：连接卡 + 服务卡
+        // 合并成一张二级卡两竖列——左列连接（mini 卡头/四字段行/[重连]
+        // 钮钉列底），右列服务（mini 卡头/四字段行/会话行表，无分隔
+        // 线）。文案面零改动：conn_card::current()/svc_card::current()
+        // 同两份快照；几何 = link_card 同一份 layout——组件池登记
+        // link_card）
         let csnap = crate::ui::conn_card::current();
+        let ssnap = crate::ui::svc_card::current();
+        let llay = crate::ui::link_card::layout(&lay.card, ssnap.lines.len());
         paint_rect_ring(
             &mut frame,
-            clay.card.x + off,
-            clay.card.y,
-            clay.card.x + off + i64::from(clay.card.w),
-            clay.card.y + i64::from(clay.card.h),
+            llay.card.x + off,
+            llay.card.y,
+            llay.card.x + off + i64::from(llay.card.w),
+            llay.card.y + i64::from(llay.card.h),
             clip_l,
             clip_r,
             crate::ui::accent::CARD_PAGE_BG,
@@ -3769,8 +3770,8 @@ impl TermView {
             POOL_FRAME_R,
             true,
         );
-        // 卡头「连接 · 状态词」（退避/未启动相用次级档压一压——在线才是
-        // 值得亮的标题）
+        // 左列 mini 卡头「连接 · 状态词」（退避/未启动相用次级档压一压
+        // ——在线才是值得亮的标题）
         let header_fg = if csnap.word == "自持在线" || csnap.word == "外部借用" {
             title_fg
         } else {
@@ -3779,18 +3780,18 @@ impl TermView {
         self.draw_text_left(
             &mut frame,
             &format!("连接 · {}", csnap.word),
-            (clay.header.x + off) as u32,
-            clay.header.w,
-            clay.header.y as u32,
-            clay.header.h,
+            (llay.lheader.x + off) as u32,
+            llay.lheader.w,
+            llay.lheader.y as u32,
+            llay.lheader.h,
             36.0,
             header_fg,
         );
-        // 四字段行（字段标签列配方：标签左对齐亮档、值逐行右对齐灰档
-        // ——draw_field_lines 自带 1.5 格文内边距与 ≤2 行折行；错误行
-        // 有字用错色）
+        // 左列四字段行（字段标签列配方：标签左对齐亮档、值逐行右对齐
+        // 灰档——draw_field_lines 自带 1.5 格文内边距与 ≤2 行折行；
+        // 错误行有字用错色）
         let values = [&csnap.target, &csnap.local, &csnap.attempts, &csnap.error];
-        for (i, fr) in clay.fields.iter().enumerate() {
+        for (i, fr) in llay.lfields.iter().enumerate() {
             let l_items = self.measure_items(crate::ui::conn_card::FIELD_LABELS[i], 36.0);
             self.draw_field_lines(
                 &mut frame,
@@ -3823,17 +3824,9 @@ impl TermView {
                 false,
             );
         }
-        paint_divider_line(
-            &mut frame,
-            clay.divider.x + off,
-            clay.divider.y,
-            clay.divider.w,
-            clay.divider.h,
-            accent,
-        );
-        // [重连] 钮（三级框行主形态，与 tmux 钮同件同尺）
+        // [重连] 钮（三级框行主形态，钉左列底，与 tmux 钮同件同尺）
         {
-            let b = &clay.button;
+            let b = &llay.button;
             let grad_ref = (-(b.x + off), -b.y, i64::from(b.w + b.h));
             paint_row_frame_gradref(
                 &mut frame,
@@ -3859,29 +3852,8 @@ impl TermView {
                 b.x + off,
             );
         }
-
-        // ---- 服务卡（2026-09-20 v1：解析页第三张二级卡，纵排在连接卡
-        // 下；na-server 会话层可视化面，纯展示无按钮。数据 = svc_card::
-        // current() 三源合成（svc_health + nasup + 后端相）。卡环/字段
-        // 行/分隔线与连接卡同配方同件——组件池登记 svc_card）
-        let ssnap = crate::ui::svc_card::current();
-        let slay = crate::ui::svc_card::layout(&clay.card, ssnap.lines.len());
-        paint_rect_ring(
-            &mut frame,
-            slay.card.x + off,
-            slay.card.y,
-            slay.card.x + off + i64::from(slay.card.w),
-            slay.card.y + i64::from(slay.card.h),
-            clip_l,
-            clip_r,
-            crate::ui::accent::CARD_PAGE_BG,
-            accent.c2,
-            accent.c1,
-            POOL_FRAME_R,
-            true,
-        );
-        // 卡头「服务 · 状态词」（在线相才亮标题档，其余次级档——与
-        // 连接卡同语言）
+        // 右列 mini 卡头「服务 · 状态词」（在线相才亮标题档，其余次级
+        // 档——与左列同语言）
         let header_fg = if ssnap.word == "自持在线" || ssnap.word == "外部借用" {
             title_fg
         } else {
@@ -3890,16 +3862,16 @@ impl TermView {
         self.draw_text_left(
             &mut frame,
             &format!("服务 · {}", ssnap.word),
-            (slay.header.x + off) as u32,
-            slay.header.w,
-            slay.header.y as u32,
-            slay.header.h,
+            (llay.rheader.x + off) as u32,
+            llay.rheader.w,
+            llay.rheader.y as u32,
+            llay.rheader.h,
             36.0,
             header_fg,
         );
-        // 四字段行（字段标签列配方同连接卡；错误行有字用错色）
+        // 右列四字段行（字段标签列配方同左列；错误行有字用错色）
         let svalues = [&ssnap.backend, &ssnap.uptime, &ssnap.sess_n, &ssnap.error];
-        for (i, fr) in slay.fields.iter().enumerate() {
+        for (i, fr) in llay.rfields.iter().enumerate() {
             let l_items = self.measure_items(crate::ui::svc_card::FIELD_LABELS[i], 36.0);
             self.draw_field_lines(
                 &mut frame,
@@ -3932,16 +3904,8 @@ impl TermView {
                 false,
             );
         }
-        paint_divider_line(
-            &mut frame,
-            slay.divider.x + off,
-            slay.divider.y,
-            slay.divider.w,
-            slay.divider.h,
-            accent,
-        );
-        // 会话行（纯文本行，次级档；行几何吃 slay.sessions 同一份）
-        for (line, sr) in ssnap.lines.iter().zip(slay.sessions.iter()) {
+        // 会话行（纯文本行，次级档；行几何吃 llay.sessions 同一份）
+        for (line, sr) in ssnap.lines.iter().zip(llay.sessions.iter()) {
             self.draw_text_left(
                 &mut frame,
                 line,
@@ -3954,12 +3918,12 @@ impl TermView {
             );
         }
 
-        // ---- 环境卡（2026-09-20 v1：解析页第四张二级卡，纵排在服务卡
-        // 下；「中央终端所在环境的自身体征」可视化，纯展示无按钮。数据
+        // ---- 环境卡（2026-09-20 v1：解析页第三张二级卡，纵排在连接
+        // 服务合并卡下；「中央终端所在环境的自身体征」可视化，纯展示无按钮。数据
         // = sys_card::current() 三源合成（svc_health SysSnap + nasup
         // 对象词 + 后端相），体征解析与 na-server 同一份 na-sys crate）
         let xsnap = crate::ui::sys_card::current();
-        let xlay = crate::ui::sys_card::layout(&slay.card);
+        let xlay = crate::ui::sys_card::layout(&llay.card);
         paint_rect_ring(
             &mut frame,
             xlay.card.x + off,
@@ -3990,8 +3954,15 @@ impl TermView {
             36.0,
             header_fg,
         );
-        // 三字段行（字段标签列配方同服务卡；无错误行）
-        let xvalues = [&xsnap.load, &xsnap.mem, &xsnap.disk];
+        // 六字段两竖列（字段标签列配方同服务卡；无错误行）
+        let xvalues = [
+            &xsnap.load,
+            &xsnap.procs,
+            &xsnap.mem,
+            &xsnap.swap,
+            &xsnap.disk,
+            &xsnap.uptime,
+        ];
         for (i, fr) in xlay.fields.iter().enumerate() {
             let l_items = self.measure_items(crate::ui::sys_card::FIELD_LABELS[i], 36.0);
             self.draw_field_lines(

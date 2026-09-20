@@ -5,9 +5,13 @@
 //! 变异抽检：①parse_loadavg 把 l5/l15 顺序颠倒必须咬；②fmt_usage
 //! 漏算百分比必须咬；③parse_meminfo 把 MemAvailable 当 MemTotal 用
 //! 必须咬；④collect 把磁盘路的失败连坐到内存路必须咬（2026-09-20
-//! Android SELinux 拒 /proc/loadavg 实锤：每路独立显形是硬需求）。
+//! Android SELinux 拒 /proc/loadavg 实锤：每路独立显形是硬需求）；
+//! ⑤parse_loadavg 把 procs 的 running/total 颠倒必须咬；⑥fmt_uptime
+//! 漏「天」档必须咬；⑦SwapFree 被当 Swap 已用量必须咬。
 
-use na_sys::{LoadAvg, fmt_bytes, fmt_load, fmt_usage, parse_loadavg, parse_meminfo};
+use na_sys::{
+    LoadAvg, fmt_bytes, fmt_load, fmt_uptime, fmt_usage, parse_loadavg, parse_meminfo, parse_uptime,
+};
 
 const LOADAVG: &str = "0.42 0.38 0.35 2/123 4567\n";
 
@@ -28,10 +32,26 @@ fn spec_loadavg_三段() {
         LoadAvg {
             l1: 0.42,
             l5: 0.38,
-            l15: 0.35
+            l15: 0.35,
+            procs: Some((2, 123))
         }
     );
     assert_eq!(fmt_load(&l), "0.42 0.38 0.35");
+}
+
+#[test]
+fn spec_loadavg_procs_逐路显形() {
+    // 第 4 段 "2/123"：正常解析 → Some((running, total))
+    assert_eq!(parse_loadavg(LOADAVG).unwrap().procs, Some((2, 123)));
+    // 第 4 段缺失/坏件：procs 显形 None，前三段不许连坐
+    let l = parse_loadavg("0.1 0.2 0.3\n").unwrap();
+    assert_eq!(l.procs, None);
+    let l = parse_loadavg("0.1 0.2 0.3 garbage 4567\n").unwrap();
+    assert_eq!(l.procs, None);
+    assert!(
+        (l.l1 - 0.1).abs() < f64::EPSILON,
+        "procs 坏了不许连坐负载三段"
+    );
 }
 
 #[test]
@@ -48,6 +68,29 @@ fn spec_meminfo_双行() {
     assert_eq!(m.avail_kb, 8192000, "可用 = MemAvailable 不是 MemFree");
     // 已用 = total - avail
     assert_eq!(m.total_kb - m.avail_kb, 8192000);
+}
+
+#[test]
+fn spec_meminfo_swap_逐路显形() {
+    // SwapTotal/SwapFree 双行都在 → Some((total, free))
+    let m = parse_meminfo(MEMINFO).unwrap();
+    assert_eq!(m.swap, Some((4096000, 4096000)));
+    // 双行缺一：swap 显形 None，内存主路不许连坐（缺 SwapTotal
+    // 不是错——MemTotal/MemAvailable 缺行才是 err，契约不动）
+    let m = parse_meminfo("MemTotal: 16384000 kB\nMemAvailable: 8192000 kB\n").unwrap();
+    assert_eq!(m.swap, None);
+    let m =
+        parse_meminfo("MemTotal: 16384000 kB\nMemAvailable: 8192000 kB\nSwapTotal: 4096000 kB\n")
+            .unwrap();
+    assert_eq!(m.swap, None, "SwapFree 缺席 = swap 整路 None，不许编造");
+    assert_eq!(m.total_kb, 16384000, "swap 缺行不许连坐主路");
+    // 交换已用 = total - free（变异⑦：拿 free 当 used 必须咬）
+    let m = parse_meminfo(
+        "MemTotal: 16384000 kB\nMemAvailable: 8192000 kB\nSwapTotal: 4096000 kB\nSwapFree: 1024000 kB\n",
+    )
+    .unwrap();
+    let (t, f) = m.swap.unwrap();
+    assert_eq!(t - f, 3072000);
 }
 
 #[test]
@@ -98,6 +141,25 @@ fn spec_collect_本机活件() {
     }
     // 内存路在两个 chain 环境（服务器/手机 Termux）都真可读，钉住
     assert!(s.mem.is_some(), "meminfo 在 chain 环境必须可读");
+    // uptime 不钉必须 Some：手机 Termux 拒 /proc/uptime（EACCES 实锤
+    // 2026-09-20），服务器可读——显形差异本身就是契约
+    if let Some(u) = s.uptime_s {
+        assert!(u > 0, "开机秒数必须为正");
+    }
+}
+
+#[test]
+fn spec_parse_uptime_与_fmt_uptime() {
+    // /proc/uptime: "7849375.29 31234482.71"（首 token = 开机秒）
+    assert_eq!(parse_uptime("7849375.29 31234482.71\n").unwrap(), 7849375);
+    assert!(parse_uptime("").is_err(), "空必须报错");
+    assert!(parse_uptime("abc 1.0\n").is_err(), "非数字必须报错");
+    // 文案档位：>1天 "{d}天{h}时"，>1时 "{h}时{m}分"，否则 "{m}分"（不补零）
+    assert_eq!(fmt_uptime(45), "0分");
+    assert_eq!(fmt_uptime(90 * 60), "1时30分");
+    assert_eq!(fmt_uptime(3 * 3600 + 5 * 60 + 12), "3时5分");
+    assert_eq!(fmt_uptime(2 * 86400 + 7 * 3600), "2天7时");
+    assert_eq!(fmt_uptime(90 * 86400 + 23 * 3600 + 59 * 60), "90天23时");
 }
 
 #[test]

@@ -7,16 +7,24 @@
 use std::io::Write as _;
 
 /// 环境体征 JSON（A 档纯函数：形状的唯一事实源，服务卡消费）：
-/// {"load":[l1,l5,l15]|null,"mem_total_kb":N|null,"mem_avail_kb":N|null,
-///  "disk_total_b":N|null,"disk_avail_b":N|null}
-/// 键永远在（客户端凭键认版本），采不到的路 = null 显形不编造
+/// {"load":[l1,l5,l15]|null,"procs":[running,total]|null,
+///  "mem_total_kb":N|null,"mem_avail_kb":N|null,
+///  "swap_total_kb":N|null,"swap_free_kb":N|null,
+///  "disk_total_b":N|null,"disk_avail_b":N|null,"uptime_s":N|null}
+/// 键永远在（客户端凭键认版本），采不到的路 = null 显形不编造；
+/// 旧版 na-server 缺新键 → 客户端解析成 None → 卡面「—」，
+/// 契约向旧兼容不破（2026-09-20 三路扩：进程/交换/在线）
 pub fn sys_json(info: &na_sys::SysInfo) -> String {
     serde_json::json!({
         "load": info.load.map(|l| [l.l1, l.l5, l.l15]),
+        "procs": info.load.and_then(|l| l.procs.map(|p| [p.0, p.1])),
         "mem_total_kb": info.mem.map(|m| m.total_kb),
         "mem_avail_kb": info.mem.map(|m| m.avail_kb),
+        "swap_total_kb": info.mem.and_then(|m| m.swap.map(|s| s.0)),
+        "swap_free_kb": info.mem.and_then(|m| m.swap.map(|s| s.1)),
         "disk_total_b": info.disk.map(|d| d.0),
         "disk_avail_b": info.disk.map(|d| d.1),
+        "uptime_s": info.uptime_s,
     })
     .to_string()
 }

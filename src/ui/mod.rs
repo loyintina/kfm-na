@@ -24,6 +24,7 @@ pub mod fx_preview;
 pub mod fx_spring;
 pub mod gear;
 pub mod keybar;
+pub mod link_card;
 pub mod modal;
 pub mod orb;
 pub mod panel_drag;
