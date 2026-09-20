@@ -350,16 +350,22 @@ fn ensure_poller() {
         std::thread::spawn(|| {
             let mut last_poll: Option<Instant> = None;
             let mut was_visible = false;
+            let mut last_kind: Option<crate::endpoint::EndpointKind> = None;
             loop {
                 std::thread::sleep(Duration::from_millis(200));
                 let (backend, port, visible) = {
                     let g = inner().lock().unwrap();
                     (g.cfg_backend, g.cfg_port, g.visible)
                 };
-                if backend != Backend::NaServer {
+                // 对象轴翻相清账（两轴第 6 步③：服务器体征不许带进
+                // 本地相，互不清带——与 configure 后端翻相清账同纪律）；
+                // 翻相即拍（last_poll 勾销）
+                let kind = crate::endpoint::current();
+                if last_kind != Some(kind) {
+                    last_kind = Some(kind);
                     last_poll = None;
-                    was_visible = false;
-                    continue;
+                    let mut g = inner().lock().unwrap();
+                    bump_sys(&mut g, None);
                 }
                 if !visible {
                     was_visible = false;
@@ -373,6 +379,25 @@ fn ensure_poller() {
                     continue;
                 }
                 last_poll = Some(Instant::now());
+                // 对象轴分流：本地相体征 = na_sys 直读（/proc + statvfs
+                // 本机 /data，零网络零服务器——本机体征不需要任何
+                // 后端）；服务器相 = 既有 HTTP 轮询（后端非 na-server
+                // 不轮，kfmv4 托管态不变）。health 面本地相内容归
+                // 第 6 步④，本地相分支不轮 health（服务器账留到
+                // 翻回或④接线，闪断不清卡面纪律同构）
+                if kind == crate::endpoint::EndpointKind::Local {
+                    let info = na_sys::collect("/data");
+                    let mut g = inner().lock().unwrap();
+                    bump_sys(&mut g, Some(info));
+                    continue;
+                }
+                if backend != Backend::NaServer {
+                    // 托管相复位节拍账（旧行为保鲜：翻回 na-server
+                    // 后端即拍，不白等一拍）
+                    last_poll = None;
+                    was_visible = false;
+                    continue;
+                }
                 match http_get(port, "/api/na/health").and_then(|b| parse_health(&b)) {
                     Ok(info) => {
                         let mut g = inner().lock().unwrap();

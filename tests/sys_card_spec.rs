@@ -144,7 +144,12 @@ fn spec_sys解析_旧版缺新键() {
 
 #[test]
 fn spec_合成_kfmv4托管态() {
-    let c = sys_card::compose(Backend::Kfmv4, None, None);
+    let c = sys_card::compose(
+        kfm_na::endpoint::EndpointKind::Server,
+        Backend::Kfmv4,
+        None,
+        None,
+    );
     assert_eq!(c.word, "kfmv4 托管");
     assert_eq!(c.load, "—");
     assert_eq!(c.procs, "—");
@@ -157,7 +162,12 @@ fn spec_合成_kfmv4托管态() {
 #[test]
 fn spec_合成_在线有数据() {
     let s = sup();
-    let c = sys_card::compose(Backend::NaServer, Some(&s), Some(&sysinfo()));
+    let c = sys_card::compose(
+        kfm_na::endpoint::EndpointKind::Server,
+        Backend::NaServer,
+        Some(&s),
+        Some(&sysinfo()),
+    );
     assert_eq!(c.word, "root@8.145.46.182:22");
     assert_eq!(c.load, "2.83 2.69 2.22");
     assert_eq!(c.procs, "2/123");
@@ -173,7 +183,12 @@ fn spec_合成_在线有数据() {
 
 #[test]
 fn spec_合成_待数据占位() {
-    let c = sys_card::compose(Backend::NaServer, None, None);
+    let c = sys_card::compose(
+        kfm_na::endpoint::EndpointKind::Server,
+        Backend::NaServer,
+        None,
+        None,
+    );
     assert_eq!(c.word, "确认中", "nasup 没起 = 对象词给在途相");
     assert_eq!(c.load, "—", "无数据 = 占位，不编造");
     assert_eq!(c.procs, "—");
@@ -190,7 +205,12 @@ fn spec_合成_局部显形() {
     let s = sup();
     let mut i = sysinfo();
     i.load = None;
-    let c = sys_card::compose(Backend::NaServer, Some(&s), Some(&i));
+    let c = sys_card::compose(
+        kfm_na::endpoint::EndpointKind::Server,
+        Backend::NaServer,
+        Some(&s),
+        Some(&i),
+    );
     assert_eq!(c.load, "—", "负载路采不到 = 该字段占位");
     assert_eq!(c.procs, "—", "procs 挂在 load 路，同路显形");
     assert_eq!(c.mem, "5.0G/14.7G 34%", "内存路不许被连坐");
@@ -200,9 +220,32 @@ fn spec_合成_局部显形() {
     // load 在但 procs 缺（第 4 段坏件）：负载照常，进程占位
     let mut i2 = sysinfo();
     i2.load.as_mut().unwrap().procs = None;
-    let c2 = sys_card::compose(Backend::NaServer, Some(&s), Some(&i2));
+    let c2 = sys_card::compose(
+        kfm_na::endpoint::EndpointKind::Server,
+        Backend::NaServer,
+        Some(&s),
+        Some(&i2),
+    );
     assert_eq!(c2.load, "2.83 2.69 2.22", "procs 缺不许连坐负载");
     assert_eq!(c2.procs, "—");
+}
+
+#[test]
+fn spec_合成_本地相() {
+    use kfm_na::endpoint::EndpointKind;
+    // 本地相（两轴第 6 步③）：对象词 = 注册表静态词「本地」，字段
+    // 吃本地直读 sys——后端相不掺和（Kfmv4 后端也照样出本机体征，
+    // 本机不需要任何服务器）
+    let c = sys_card::compose(EndpointKind::Local, Backend::Kfmv4, None, Some(&sysinfo()));
+    assert_eq!(c.word, "本地", "本地相对象词 = 注册表静态词");
+    assert_eq!(c.load, "2.83 2.69 2.22", "本地直读字段照常出");
+    assert_eq!(c.mem, "5.0G/14.7G 34%");
+    assert_eq!(c.uptime, "90天20时");
+    // 本地相无数据 = 字段占位不编造（直读路塌 = 合法显形）
+    let c2 = sys_card::compose(EndpointKind::Local, Backend::NaServer, None, None);
+    assert_eq!(c2.word, "本地");
+    assert_eq!(c2.load, "—");
+    assert_eq!(c2.disk, "—");
 }
 
 // ---- 几何 ----

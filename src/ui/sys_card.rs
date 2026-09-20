@@ -61,14 +61,30 @@ pub struct SysCardSnap {
     pub uptime: String,
 }
 
-/// 三源合成（A 档纯函数）：后端 × nasup 快照（对象词）× sys 快照 →
-/// 卡文案。kfmv4 = 托管态全占位；na-server 无数据 = 字段占位不编造；
-/// 单路 None = 该字段占位（Android 拒 loadavg 合法常态，显形不连坐）
+/// 三源合成（A 档纯函数）：对象相 × 后端 × nasup 快照（对象词）×
+/// sys 快照 → 卡文案。本地相（第 6 步③）：对象词 = 注册表静态词
+/// 「本地」，字段吃本地直读的 sys 快照，后端相不掺和（本机体征
+/// 不需要任何服务器）；服务器相照旧：kfmv4 = 托管态全占位；
+/// na-server 无数据 = 字段占位不编造；单路 None = 该字段占位
+/// （Android 拒 loadavg 合法常态，显形不连坐）
 pub fn compose(
+    kind: crate::endpoint::EndpointKind,
     backend: Backend,
     sup: Option<&SupSnap>,
     sys: Option<&na_sys::SysInfo>,
 ) -> SysCardSnap {
+    if kind == crate::endpoint::EndpointKind::Local {
+        let (load, procs, mem, swap, disk, uptime) = fields_of(sys);
+        return SysCardSnap {
+            word: crate::endpoint::def(kind).display.into(),
+            load,
+            procs,
+            mem,
+            swap,
+            disk,
+            uptime,
+        };
+    }
     if backend != Backend::NaServer {
         return SysCardSnap {
             word: "kfmv4 托管".into(),
@@ -84,7 +100,22 @@ pub fn compose(
         Some(s) => s.target.clone(),
         None => "确认中".into(),
     };
-    let (load, procs, mem, swap, disk, uptime) = match sys {
+    let (load, procs, mem, swap, disk, uptime) = fields_of(sys);
+    SysCardSnap {
+        word,
+        load,
+        procs,
+        mem,
+        swap,
+        disk,
+        uptime,
+    }
+}
+
+/// sys 快照 → 六字段文案（本地/服务器相共用的字段映射唯一源——
+/// 相不同 = 数据源不同，字段形状与格式同一份）
+fn fields_of(sys: Option<&na_sys::SysInfo>) -> (String, String, String, String, String, String) {
+    match sys {
         Some(i) => (
             i.load
                 .map(|l| na_sys::fmt_load(&l))
@@ -120,20 +151,12 @@ pub fn compose(
             "—".into(),
             "—".into(),
         ),
-    };
-    SysCardSnap {
-        word,
-        load,
-        procs,
-        mem,
-        swap,
-        disk,
-        uptime,
     }
 }
 
 /// 读当前卡文案（涂装每烘焙拍一张；全局快照锁短）。后端相取
-/// svc_health 配置（与服务卡同源，不另开一路）
+/// svc_health 配置（与服务卡同源，不另开一路）；对象相取 endpoint
+/// 注册表（两轴契约 §二，对象轴唯一源）
 pub fn current() -> SysCardSnap {
     let hs = svc_health::snap();
     let backend = if hs.phase == Phase::Kfmv4 {
@@ -143,7 +166,12 @@ pub fn current() -> SysCardSnap {
     };
     let sup = na_server_sup::snap().map(|s| s.lock().unwrap().clone());
     let sys = svc_health::sys_snap();
-    compose(backend, sup.as_ref(), sys.sys.as_ref())
+    compose(
+        crate::endpoint::current(),
+        backend,
+        sup.as_ref(),
+        sys.sys.as_ref(),
+    )
 }
 
 /// 一卡布局（涂装/命中同一份——眼手同尺）
