@@ -57,10 +57,20 @@ win_dim() {  # 闸门截图协议拿「宽 高」（shot.dim 是壳层权威窗�
 }
 
 # ---- ①前台 + 裸终端页 ----
-gate_am_start
-sleep 2
-bash "$NA_ROOT/scripts/na-stats.sh" 2>/dev/null | grep -q '^foreground=true' \
-    || fail $BAR "am start 后 2s 仍非前台"
+# 熄屏/锁屏态 am start 唤不起前台（Vivo 夜间实测）——判不了就不判
+# （BAR-122 同哲学：环境账不记码上），重试窗口给到 ~20s 再跳过
+fg=""
+for _ in $(seq 1 5); do
+    gate_am_start
+    sleep 4
+    if bash "$NA_ROOT/scripts/na-stats.sh" 2>/dev/null | grep -q '^foreground=true'; then
+        fg=1; break
+    fi
+done
+[ -n "$fg" ] || {
+    echo "⏭ $BAR | am start 五轮仍非前台（熄屏/锁屏态唤不起，环境产物不判码），跳过" >&2
+    exit 77
+}
 
 # 面板靠泊时键行被盖（命中路径根本不走键行）——右滑收回到裸终端页
 for _ in 1 2 3; do
