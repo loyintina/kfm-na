@@ -3549,6 +3549,16 @@ impl App {
         }
         crate::report::report("ui", &format!("默认服务器换选→{ds_display}（已落盘）"));
         self.rebuild_cfg_rows();
+        // 换选立即联动（2026-09-21 用户拍板）：活跃会话同步翻到对应槽——
+        // 两会话拓扑下「不同名才 toggle」即点到；双槽保活 + replay 补屏
+        // （switch_session 原路径），切回去还是原来的样子（状态快照不失）
+        let want = self.terminal_cfg.default_session.session_name();
+        let cur = self
+            .router_handle()
+            .map(|r| r.lock().unwrap().active_name());
+        if cur.is_some_and(|c| c != want) {
+            self.switch_session();
+        }
     }
 
     /// 会话切换（L1）：Ctrl-] 触达——router 换出向活跃槽；入向不换槽

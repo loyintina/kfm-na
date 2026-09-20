@@ -221,6 +221,18 @@ pub enum DefaultSession {
     Server(String),
 }
 
+impl DefaultSession {
+    /// 默认会话 → 会话槽名（设置页换选立即联动的纯核，2026-09-21 用户
+    /// 拍板：换选 = 活跃会话同步翻到对应槽。两会话拓扑下「翻到对应槽」
+    /// = 不同名才 toggle——映射错 = 联动翻错边）
+    pub fn session_name(&self) -> &'static str {
+        match self {
+            DefaultSession::Local => "local",
+            DefaultSession::Server(_) => "remote",
+        }
+    }
+}
+
 /// terminal.json（全局项）：默认会话 + 全局切换键
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TerminalConfig {

@@ -202,3 +202,19 @@ fn servers_backend_unknown_value_falls_back_kfmv4() {
     let v = parse_servers(r#"[{"id":"x","backend":"naserver"}]"#).unwrap();
     assert_eq!(v[0].backend, kfm_na::settings::Backend::Kfmv4);
 }
+
+#[test]
+fn spec_default_session_映射会话槽名() {
+    // 设置页换选立即联动（2026-09-21 用户拍板）的纯核：Local→local 槽、
+    // Server(任意 id)→remote 槽。两会话拓扑下「翻到对应槽」= 不同名才
+    // toggle——映射错 = 联动翻错边。变异方向：两臂互换 → 本组必红。
+    assert_eq!(DefaultSession::Local.session_name(), "local");
+    assert_eq!(
+        DefaultSession::Server("main".into()).session_name(),
+        "remote"
+    );
+    assert_eq!(
+        DefaultSession::Server("dev".into()).session_name(),
+        "remote"
+    );
+}
