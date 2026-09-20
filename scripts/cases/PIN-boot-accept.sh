@@ -22,6 +22,11 @@
 # 段内出现 STALL beat_age≥1000ms = 冻结证物 → 跳过(77)不判,
 # 与「环被顶出→跳过」同哲学:判不了就不判,不把环境账记到码上。
 #
+# 挂起中断机检(BAR-122,2026-09-20):boot 段内出现「death] suspended」
+# = 启动中段被挂起(热更重启后用户切走/灭屏),段末行毫秒戳混进挂起
+# 期墙钟(实测 4033ms 误报:+3023 挂起 → +4008 回前台,表面重建实际
+# 只花 25ms)——同族环境产物,段内含挂起证物 → 跳过(77)不判。
+#
 # 局限(诚实版):trace 环帽 256,开机久了 boot 行会被顶出环——
 # 那时判不了,跳过(exit 77),不算挂。要新鲜判卷先跑 BAR-040(它重启)。
 set -uo pipefail
@@ -33,7 +38,8 @@ trace=$(bash "$NA_ROOT/scripts/na-trace.sh" 2>/dev/null) \
     || fail PIN-boot "trace 拉不到"
 # 末次 android_main 进入之后的 boot 段:冻结证物与最大毫秒戳一趟扫出
 verdict=$(echo "$trace" | awk '
-    /android_main 进入/ { boot=1; stall=0; m=0; next }
+    /android_main 进入/ { boot=1; stall=0; susp=0; m=0; next }
+    boot && /death\] suspended/ { susp=1 }
     boot && /STALL beat_age=[0-9]+ms/ {
         s=$0; sub(/.*STALL beat_age=/, "", s); sub(/ms.*/, "", s);
         if (s+0 >= 1000) stall=s
@@ -44,6 +50,7 @@ verdict=$(echo "$trace" | awk '
     }
     END {
         if (stall) { print "FROZEN " stall }
+        else if (susp) { print "SUSP" }
         else if (m > 0) { print m }
     }')
 if [ -z "$verdict" ]; then
@@ -52,6 +59,10 @@ if [ -z "$verdict" ]; then
 fi
 if [[ "$verdict" == FROZEN* ]]; then
     echo "⏭ PIN-boot | 末次 boot 段带熄屏冻结证物(STALL beat_age=${verdict#FROZEN }ms)——环境产物不判码,跳过" >&2
+    exit 77
+fi
+if [ "$verdict" = "SUSP" ]; then
+    echo "⏭ PIN-boot | 末次 boot 段含挂起中断(后台往返,毫秒戳混入挂起期墙钟)——环境产物不判码,跳过" >&2
     exit 77
 fi
 max_ms=$verdict

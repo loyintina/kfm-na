@@ -42,9 +42,10 @@ out=$(FAKE_MODE=unreachable PATH="$tmp:$PATH" bash "$here/na-regress.sh" PIN-boo
 case "$out" in *"跳过 1"*) : ;; *) fail "元契约①:报表应记跳过 1\n$out";; esac
 
 # ---- 元契约②:PIN-boot awk 判卷(样本直接喂给 awk 内核) ----
-boot_core() {  # 复刻 PIN-boot 的解析内核:$1=trace 文本 → "FROZEN n"/最大 ms/空
+boot_core() {  # 复刻 PIN-boot 的解析内核:$1=trace 文本 → "FROZEN n"/"SUSP"/最大 ms/空
     printf '%s' "$1" | awk '
-        /android_main 进入/ { boot=1; stall=0; m=0; next }
+        /android_main 进入/ { boot=1; stall=0; susp=0; m=0; next }
+        boot && /death\] suspended/ { susp=1 }
         boot && /STALL beat_age=[0-9]+ms/ {
             s=$0; sub(/.*STALL beat_age=/, "", s); sub(/ms.*/, "", s);
             if (s+0 >= 1000) stall=s
@@ -55,6 +56,7 @@ boot_core() {  # 复刻 PIN-boot 的解析内核:$1=trace 文本 → "FROZEN n"/
         }
         END {
             if (stall) { print "FROZEN " stall }
+            else if (susp) { print "SUSP" }
             else if (m > 0) { print m }
         }'
 }
@@ -82,6 +84,20 @@ TF3='[+00000000ms boot] android_main 进入 (构建 old)
 [+00004000ms boot] android_main 进入 (构建 new)
 [+00000090ms boot] L3: 环境已装——跳过'
 [ "$(boot_core "$TF3")" = 90 ] || fail "元契约②:旧 boot 冻结不应污染新 boot,实得 $(boot_core "$TF3")"
+# BAR-122 挂起中断:段内「death] suspended」= SUSP 跳过(4033ms 误报家族);
+# 旧 boot 的挂起不污染新 boot(窗口复位)
+TS='[+00000000ms boot] android_main 进入 (构建 dev · vcdev)
+[+00002415ms term] 会话 opened: local +2415ms
+[+00003023ms death] suspended——Activity 被挂起（退后台/被销毁前奏）
+[+00004008ms boot] GLES: dlopen libEGL.so + EGL1_4 符号加载
+[+00004033ms boot] GLES present 后端上线 +4033ms
+[+00004033ms boot] 后台往返：会话还在，只重建表面'
+[ "$(boot_core "$TS")" = "SUSP" ] || fail "元契约②:挂起样本应出 SUSP,实得 $(boot_core "$TS")"
+TS2='[+00000000ms boot] android_main 进入 (构建 old)
+[+00001000ms death] suspended——Activity 被挂起（退后台/被销毁前奏）
+[+00004000ms boot] android_main 进入 (构建 new)
+[+00000090ms boot] L3: 环境已装——跳过'
+[ "$(boot_core "$TS2")" = 90 ] || fail "元契约②:旧 boot 挂起不应污染新 boot,实得 $(boot_core "$TS2")"
 
 # ---- 元契约③:PIN-pump 差分速率(样本喂算法) ----
 pump_rate() {  # 复刻 PIN-pump:末两行 t/pump → 速率/s
