@@ -187,6 +187,9 @@ kfmv4-review-ops-convention-verdict.md。
 - `docs/active/设置页.md` — 设置页（配置卡）内容设计（living；服务器
   配置/切换键/会话切换行为决策。动设置页前必读）
 - `docs/active/工具卡.md` — 工具即卡设计（四个待拍板项定了才准实现）
+- `docs/active/解析页.md` — **解析页两轴插件契约**（对象轴 Endpoint ×
+  能力轴插件卡正交注册；卡链排布器；新终端/新功能适配律。动解析页
+  结构/加卡/加终端前必读）
 - `docs/ledger/bugs.md` — BAR 账本：每条修复登记编号/病灶/契约/钉位置
 - `/root/kfmv4/docs/ledger/agent-inbox/` — **跨线评审信箱**（评审会话维护，2026-08-15 迁入 kfmv4 文档目录）：
   kfm-na 与 kfmv4 两线设计评审往来信 + 状态列；设计相关评审意见在此收/发。
