@@ -2315,15 +2315,24 @@ impl App {
                     }
                     let Some(w) = &self.window else { return };
                     let s = w.inner_size();
-                    let Some(kd) = crate::keybar::hit(x, y, s.width, s.height, self.cur_bar_h())
-                    else {
+                    // BAR-123：抬手命中必须与 Started in_bar/渲染同一把尺
+                    // （chrome_inset + 栏高）——BAR-119 摘解析页 inset 链时
+                    // 误伤本行（只剩栏高），键盘弹起态全键落空
+                    let Some(kd) = crate::keybar::hit(
+                        x,
+                        y,
+                        s.width,
+                        s.height,
+                        self.chrome_inset() + self.cur_bar_h(),
+                    ) else {
                         crate::report::report(
                             "ime",
                             &format!(
-                                "快捷键行命中落空: 窗 {}x{} inset={}",
+                                "快捷键行命中落空: 窗 {}x{} inset={}+{}",
                                 s.width,
                                 s.height,
-                                self.chrome_inset()
+                                self.chrome_inset(),
+                                self.cur_bar_h()
                             ),
                         );
                         return;

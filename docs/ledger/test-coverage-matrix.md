@@ -16,7 +16,7 @@
 | `src/conn.rs` | 4 | 2 | 2 | spawn_smoke ws_spawner |
 | `src/crash.rs` | 8 | 7 | 1 | install_signal_hook |
 | `src/direct_brain.rs` | 2 | 2 | 0 | — |
-| `src/endpoint.rs` | 8 | 8 | 0 | — |
+| `src/endpoint.rs` | 9 | 9 | 0 | — |
 | `src/exec_probe.rs` | 1 | 1 | 0 | — |
 | `src/gate.rs` | 98 | 74 | 24 | DUMP_DIR register_gate_router text_dump inject_keys spawn_gate_watcher REC_FILE_CAP REC_FILE rec_output rec_resize PANIC_FILE PANIC_TRACE_FILE LOOP_STALL_FILE note_loop_beat loop_beat_age_ms note_foreground install_panic_hook note_draw note_session_death touch_take register_input_bar ALERT_RSS_COOLDOWN_MS ALERT_DEATHS_WINDOW_MS ALERT_DEATHS_COOLDOWN_MS HISTORY_EVERY_TICKS |
 | `src/glyph_atlas.rs` | 12 | 12 | 0 | — |
@@ -27,7 +27,7 @@
 | `src/insets.rs` | 6 | 3 | 3 | force_show_keyboard force_hide_keyboard query_ime_bottom |
 | `src/keybar.rs` | 20 | 16 | 4 | COLS MOD_ALT install_bridge_mods bridge_mods |
 | `src/keymap.rs` | 2 | 2 | 0 | — |
-| `src/local_pty.rs` | 5 | 4 | 1 | android_prefix |
+| `src/local_pty.rs` | 7 | 6 | 1 | android_prefix |
 | `src/na_server_sup.rs` | 14 | 9 | 5 | REPO_DIR HEALTH_URL EXEC_TIMEOUT_SECS RECHECK_SECS TUNNEL_WAIT_SECS |
 | `src/plugins/ai_presence.rs` | 2 | 2 | 0 | — |
 | `src/plugins/conn_provider_local.rs` | 3 | 3 | 0 | — |
@@ -41,7 +41,7 @@
 | `src/scroll.rs` | 5 | 5 | 0 | — |
 | `src/session.rs` | 10 | 10 | 0 | — |
 | `src/session_router.rs` | 10 | 10 | 0 | — |
-| `src/settings.rs` | 7 | 5 | 2 | parse terminal_to_json |
+| `src/settings.rs` | 8 | 6 | 2 | parse terminal_to_json |
 | `src/svc_health.rs` | 10 | 5 | 5 | configure set_visible sys_snap take_dirty POLL_SECS |
 | `src/termview.rs` | 128 | 121 | 7 | AI_THINK_COLLAPSED FONT_CANDIDATES CJK_FONT_CANDIDATES load_cjk_font font_probe MAG_HALF_COLS MAG_HALF_ROWS |
 | `src/theme.rs` | 1 | 1 | 0 | — |
@@ -62,16 +62,17 @@
 | `src/ui/fx_spring.rs` | 8 | 8 | 0 | — |
 | `src/ui/gear.rs` | 7 | 7 | 0 | — |
 | `src/ui/keybar.rs` | 1 | 1 | 0 | — |
-| `src/ui/link_card.rs` | 13 | 11 | 2 | SESS_H SESS_GAP |
+| `src/ui/link_card.rs` | 10 | 8 | 2 | SESS_H SESS_GAP |
 | `src/ui/modal.rs` | 19 | 17 | 2 | MODAL_LABEL_H MODAL_MAX_MARGIN_Y |
 | `src/ui/orb.rs` | 5 | 5 | 0 | — |
 | `src/ui/panel_drag.rs` | 12 | 7 | 5 | DRAG_DIR_LOCK RELEASE_PROGRESS VELOCITY_WINDOW_MS locked current_offset |
+| `src/ui/parser_chain.rs` | 7 | 7 | 0 | — |
 | `src/ui/parser_page.rs` | 55 | 45 | 10 | MAX_VISIBLE_LINES MIN_VISIBLE_LINES MODAL_CARD_W MODAL_PAD_V MODAL_GAP MODAL_BTN_GAP CONFIRM_LABELS cancel_confirm register_parser_page parser_page_handle |
 | `src/ui/prompt_bar.rs` | 5 | 4 | 1 | row_of |
 | `src/ui/seam.rs` | 24 | 24 | 0 | — |
 | `src/ui/stage.rs` | 7 | 7 | 0 | — |
 | `src/ui/svc_card.rs` | 6 | 6 | 0 | — |
-| `src/ui/sys_card.rs` | 10 | 10 | 0 | — |
+| `src/ui/sys_card.rs` | 8 | 8 | 0 | — |
 | `src/ui/tab_bar.rs` | 27 | 27 | 0 | — |
 | `src/ui/viewport_push.rs` | 2 | 2 | 0 | — |
 | `src/vsync_book.rs` | 20 | 16 | 4 | last_due_ms chain_dead mark_chain_dead last_ns |
