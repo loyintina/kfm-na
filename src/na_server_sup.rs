@@ -90,6 +90,20 @@ fi
 # ①常驻模式（systemd 在）：装/更新 unit + enable --now；内容变了才重写
 # + daemon-reload（幂等，na 每次连接都可安全跑）
 if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+  # 一次性迁移（2026-09-21 常驻化实踩）：unit 还没 active 而 9021 上有人
+  # = 自持时代的遗留 na-server（na 旧路 spawn 的，PPID 1 但 systemd 不认识
+  # 它）——不停它就绑不上口，unit 会在 Restart=always 里空转（实测
+  # status=101 循环）。**严判**：只认 cmdline 含本仓 target/release/na-server
+  # 的进程，别的（别人的服务）一律不动；其上的 ws 会话断一次，由远端
+  # tmux 续上（会话不丢）
+  if ! systemctl is-active --quiet {UNIT_NAME}; then
+    for p in $(ss -tlnpH "sport = :{NA_SERVER_PORT}" 2>/dev/null | grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -u); do
+      if tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null | grep -q 'target/release/na-server'; then
+        kill "$p" 2>/dev/null && echo "migrated=stopped-spawn:$p"
+      fi
+    done
+    sleep 1
+  fi
   cat > "$UNIT.new" <<'KFM_UNIT_EOF'
 {UNIT_CONTENT}KFM_UNIT_EOF
   chmod 644 "$UNIT.new"

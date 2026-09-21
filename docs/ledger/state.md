@@ -14,7 +14,10 @@
 > 重启）；探针 15s → 60s（常驻后 na 只是看状态），承载模式进
 > `SupSnap.mode`（常驻/自持/借用）。无 systemd 的机器走降级自持（先探活
 > 接管再 spawn）。**迁移注意**：切常驻时占着 9021 的旧 spawn 进程要先停
-> （否则 unit 绑不上口空转），其上 ws 会话断一次由 tmux 续上。
+> （否则 unit 绑不上口空转），其上 ws 会话断一次由 tmux 续上。**服务器侧
+> 已落地**：`kfm-na-server.service` active + enabled（9021 由 unit 持有，
+> 随机器自启）；迁移段的坑（旧自持进程占口 → unit 在 Restart=always 里
+> 空转 17 次）已写进 ensure 脚本并实测一次通过（`migrated=stopped-spawn`）。
 
 > **BAR-130 探针在途相跳出卡面（2026-09-21 夜，用户三陈述「在 na 客户端里
 > 也看到它反复地重连，手动重连也掉」）**：服务器 auth.log 实锤——手机每
