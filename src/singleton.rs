@@ -80,3 +80,68 @@ pub fn try_acquire() -> bool {
         None => false,
     }
 }
+
+// ---- 残留实例自清（BAR-131，2026-09-21 夜） ----
+//
+// 单实例闸只挡**新**实例；旧核留下的实例还活着继续抢反连口、刷状态
+// （用户侧表现为「打开 na 得反复重启才勉强能用」——每次重启又养出一个新
+// 实例，越重启越乱）。故拿到锁之后、任何子系统起跑之前，把**同 uid 的
+// 其它 na 进程**清掉。判据三条（严）：①uid 必须等于自己的 uid（用户级
+// 隔离，别人的进程一个不碰）②cmdline 必须含本包名（na 沙箱进程与其 ssh
+// 子进程都带；Termux 是别的 uid 且不带）③pid != 自己。
+
+/// 该进程该不该清（A 档纯函数——判据在这，扫描是胶水）
+pub fn is_reapable(pid: u32, my_pid: u32, uid: u32, my_uid: u32, cmdline: &str, pkg: &str) -> bool {
+    pid != my_pid && uid == my_uid && cmdline.contains(pkg)
+}
+
+/// 读某 pid 的 uid（/proc/<pid>/status 的 Uid: 首列）
+fn proc_uid(pid: u32) -> Option<u32> {
+    let s = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+    let line = s.lines().find(|l| l.starts_with("Uid:"))?;
+    line.split_whitespace().nth(1)?.parse().ok()
+}
+
+/// 读某 pid 的 cmdline（NUL 分隔 → 空格连接）
+fn proc_cmdline(pid: u32) -> Option<String> {
+    let b = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+    if b.is_empty() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&b).replace('\0', " "))
+}
+
+/// 扫 /proc 清残留（B 档胶水）：返回被清掉的 pid 列表。
+/// **安卓专属**（2026-09-21 自测实咬）：宿主上跑这条扫描会命中「跑测试的
+/// 外壳进程」（cmdline 里恰好带着包名字符串、uid 又是同一个 root）——当场
+/// 把自己的 shell 杀了（KILL 语义在非沙箱里没有管辖权）。故非安卓一律空转：
+/// 清场只在「同 uid = 同一 app 沙箱」的世界里才成立
+pub fn reap_foreign_instances(pkg: &str) -> Vec<u32> {
+    if !cfg!(target_os = "android") || pkg.is_empty() {
+        return Vec::new();
+    }
+    let my_pid = std::process::id();
+    let my_uid = unsafe { libc::getuid() };
+    let mut killed = Vec::new();
+    let Ok(rd) = std::fs::read_dir("/proc") else {
+        return killed;
+    };
+    for e in rd.flatten() {
+        let Some(name) = e.file_name().to_str().map(|s| s.to_string()) else {
+            continue;
+        };
+        let Ok(pid) = name.parse::<u32>() else {
+            continue;
+        };
+        let (Some(uid), Some(cmd)) = (proc_uid(pid), proc_cmdline(pid)) else {
+            continue;
+        };
+        if is_reapable(pid, my_pid, uid, my_uid, &cmd, pkg) {
+            // SIGKILL：旧实例可能已被 ROM 冻结，TERM 未必被处理
+            if unsafe { libc::kill(pid as i32, libc::SIGKILL) } == 0 {
+                killed.push(pid);
+            }
+        }
+    }
+    killed
+}

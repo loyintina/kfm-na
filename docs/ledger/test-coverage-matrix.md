@@ -43,7 +43,7 @@
 | `src/session.rs` | 10 | 10 | 0 | — |
 | `src/session_router.rs` | 11 | 11 | 0 | — |
 | `src/settings.rs` | 8 | 6 | 2 | parse terminal_to_json |
-| `src/singleton.rs` | 5 | 2 | 3 | LOCK_PATH lock_exclusive try_acquire |
+| `src/singleton.rs` | 7 | 4 | 3 | LOCK_PATH lock_exclusive try_acquire |
 | `src/svc_health.rs` | 12 | 7 | 5 | HIST_PATH configure set_visible sys_snap take_dirty |
 | `src/sys_hist.rs` | 39 | 34 | 5 | BAR_W PLACEHOLDER_PCT hist_idx restore HIST_FORMAT |
 | `src/termview.rs` | 135 | 128 | 7 | AI_THINK_COLLAPSED FONT_CANDIDATES CJK_FONT_CANDIDATES load_cjk_font font_probe MAG_HALF_COLS MAG_HALF_ROWS |

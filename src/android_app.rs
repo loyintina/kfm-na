@@ -7345,6 +7345,9 @@ impl ApplicationHandler for App {
     }
 }
 
+/// 本包名（残留实例自清的 cmdline 判据；与 AndroidManifest 的 package 同尺）
+const APP_PKG: &str = "dev.kfm.na";
+
 /// NativeActivity 入口（android-activity 约定符号名）
 #[unsafe(no_mangle)]
 fn android_main(app: winit::platform::android::activity::AndroidApp) {
@@ -7402,6 +7405,20 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
             ),
         );
         std::thread::spawn(|| std::process::exit(0)).join().ok();
+    }
+    // BAR-131 残留实例自清：拿到锁之后立刻清同 uid 的**其它** na 进程
+    // （旧核实例还在抢反连口/刷状态——用户侧就是「反复重启才勉强能用」）。
+    // 判据严三条（同 uid + cmdline 含包名 + 非自己），SIGKILL 收（旧实例
+    // 可能已冻结，TERM 未必被处理）。随后才起子系统（BAR-037 同规：
+    // 让位/清场不许晚到让子系统先起跑）
+    {
+        let reaped = crate::singleton::reap_foreign_instances(APP_PKG);
+        if !reaped.is_empty() {
+            crate::report::report(
+                "death",
+                &format!("清残留实例 {} 个: {:?}", reaped.len(), reaped),
+            );
+        }
     }
     if ANDROID_MAIN_RAN.swap(true, std::sync::atomic::Ordering::SeqCst) {
         crate::report::report_sync(

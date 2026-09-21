@@ -68,3 +68,59 @@ fn spec_singleton_child_helper() {
         // 不 sleep：进程一退，内核即释放
     }
 }
+
+#[test]
+fn spec_残留自清_判据三严() {
+    use kfm_na::singleton::is_reapable;
+    let pkg = "dev.kfm.na";
+    let me = 100u32;
+    let uid = 10376u32;
+    // 正例：同 uid、cmdline 带包名、不是自己 → 清
+    assert!(is_reapable(
+        200,
+        me,
+        uid,
+        uid,
+        "dev.kfm.na dev.kfm.na.MainActivity",
+        pkg
+    ));
+    assert!(is_reapable(
+        201,
+        me,
+        uid,
+        uid,
+        "/data/app/.../libkfm_na.so dev.kfm.na",
+        pkg
+    ));
+    // 反例一：自己（一个不碰自己，否则自杀）
+    assert!(!is_reapable(me, me, uid, uid, "dev.kfm.na", pkg));
+    // 反例二：别的 uid（Termux / 别人）——用户级隔离
+    assert!(!is_reapable(300, me, 10477, uid, "dev.kfm.na", pkg));
+    // 反例三：同 uid 但 cmdline 不带包名（na 自己的旁路进程如 ssh，
+    // 不带包名就不在名单里——**顺序敏感**：新实例的 ssh 是它自己起的，
+    // 那时早过了清场点）
+    assert!(!is_reapable(
+        400,
+        me,
+        uid,
+        uid,
+        "/system/bin/ssh -N -L 9021",
+        pkg
+    ));
+    assert!(!is_reapable(401, me, uid, uid, "", pkg));
+}
+
+#[test]
+fn spec_残留自清_宿主空转() {
+    // **安卓专属**（自测实咬）：宿主上跑扫描会命中「跑测试的外壳进程」
+    // （cmdline 恰好带包名字符串、uid 又是同一个 root）——当场把自己的
+    // shell 杀了。故非安卓一律空转；判据本身由上一题（纯函数）钉住
+    let v = kfm_na::singleton::reap_foreign_instances("dev.kfm.na");
+    assert!(v.is_empty(), "非安卓 = 零动作（管辖权只在 app 沙箱里）");
+    assert!(
+        !v.contains(&std::process::id()),
+        "永不许把自己算进名单（否则自杀）"
+    );
+    let e = kfm_na::singleton::reap_foreign_instances("");
+    assert!(e.is_empty(), "空包名 = 零动作（判据残缺不许开路）");
+}
