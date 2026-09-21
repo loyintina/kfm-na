@@ -1783,6 +1783,12 @@ impl TermView {
         self.term.mode().contains(TermMode::APP_CURSOR)
     }
 
+    /// 当前 mode 位图（BAR-125 每会话模式快照：切出时存、切入时恢复，
+    /// 鼠标上报/alt-screen 等壳状态不许跨会话泄漏）
+    pub fn mode_bits(&self) -> u32 {
+        self.term.mode().bits()
+    }
+
     /// 单元格像素尺寸（android_app 用窗口尺寸反推 cols/rows 时取值）
     pub fn cell_size(&self) -> (u32, u32) {
         (self.cell_w, self.cell_h)
@@ -6857,6 +6863,8 @@ pub trait TermEmu: Send {
     fn dump_text(&self) -> String;
     fn mouse_report_active(&self) -> bool;
     fn app_cursor_mode(&self) -> bool;
+    /// BAR-125 每会话模式快照：当前 mode 位图（切出存/切入恢复）
+    fn mode_bits(&self) -> u32;
     fn font_probe(&self, c: char) -> (usize, usize, usize);
     /// 长按选择面（android_app 触摸状态机调用方）
     fn selection_active(&self) -> bool;
@@ -7163,6 +7171,9 @@ impl TermEmu for TermView {
     }
     fn app_cursor_mode(&self) -> bool {
         TermView::app_cursor_mode(self)
+    }
+    fn mode_bits(&self) -> u32 {
+        TermView::mode_bits(self)
     }
     fn font_probe(&self, c: char) -> (usize, usize, usize) {
         TermView::font_probe(self, c)

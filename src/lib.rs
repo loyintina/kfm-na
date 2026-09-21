@@ -29,6 +29,7 @@ pub mod protocol;
 pub mod providers;
 pub mod report;
 pub mod scroll;
+pub mod sess_mode;
 pub mod session;
 pub mod session_router;
 pub mod settings;

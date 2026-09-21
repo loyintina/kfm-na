@@ -214,6 +214,10 @@ struct App {
     /// 到点归位——两次净变化对端 tmux 才收 SIGWINCH 全屏重画
     /// （同尺寸 Resize 净变化为零，静默待机切回全是残影）
     resize_jog: Option<(u32, u32, std::time::Instant)>,
+    /// BAR-125 每会话终端模式快照（会话名 → mode bits）：切出时存、
+    /// 切入时复位+恢复——鼠标上报/alt-screen 等壳状态不许跨会话泄漏
+    /// （泄漏 = 本地裸 shell 上滑手势被翻成 SGR 滚轮乱码）
+    sess_modes: std::collections::HashMap<&'static str, u32>,
     /// 有新输出/尺寸变化待渲染
     dirty: bool,
     /// 会话终了（exited/failed）后定格最后一屏，出向不再发
@@ -3601,6 +3605,30 @@ impl App {
         else {
             return; // 没待机方：装作没发生(或没路由装配)
         };
+        // BAR-125 模式快照换-mode（在 replay 之前——复位/清屏/恢复
+        // 铺好底，replay 画的是切入会话自己的状态）：切出方 mode 存账，
+        // 切入方先复位受管模式+清屏（用户拍板「切换后直接自动清屏」）
+        // 再恢复它自己的快照。不做 = 鼠标上报跨会话泄漏：本地裸 shell
+        // 上滑手势被翻成 SGR 滚轮序列发 pty 原样回显（用户真机报
+        // 「上下滑跳手势操作符乱码」）
+        if let Some(t) = self.term_handle() {
+            let mut g = t.lock().unwrap();
+            let cur_bits = g.mode_bits();
+            self.sess_modes.insert(name_a, cur_bits);
+            let saved = self.sess_modes.get(name_s).copied().unwrap_or(0);
+            let seq = format!(
+                "{}\x1b[2J\x1b[H{}",
+                crate::sess_mode::reset_seq(cur_bits),
+                crate::sess_mode::restore_seq(saved),
+            );
+            g.feed(seq.as_bytes());
+            crate::report::report(
+                "term",
+                &format!(
+                    "模式快照: {name_a}={cur_bits:#06x} 存账, {name_s}={saved:#06x} 恢复+清屏"
+                ),
+            );
+        }
         // 待机期缓存的输出补屏：死会话的遗屏也喂——用户看得到「死前最后
         // 画面」,比重连后的白屏亲切;活的会话更必须(输出连续)
         let replay = crate::gate::pump_take_replay(name_s);
