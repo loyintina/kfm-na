@@ -80,7 +80,20 @@
 > 终验：键盘弹起点 Ctrl-] 应能切会话**。已知欠账：na-server
 > live_spec 夜间提交闸偶发一红（单跑全绿，重试即过，未立案）。
 
-## 当前位置（2026-09-20)
+## 当前位置（2026-09-21)
+
+> **两轴第 7 步：解析页三区排布 v2（2026-09-21，待提交+redroid/
+> 真机判卷）**：tmux 卡竖排常驻右下（用户拍板「右滑→点窗口」恒定
+> 两步）——parser_chain 改版三区：Dock 常驻区（钉视口底，右列
+> RIGHT_COL_W = 16 格固定）+ RightTop 滚动区（连接·服务合并卡，
+> 两竖列改两段纵排全宽）+ Left 滚动区（环境卡吃宽区）；双滚动账
+> Scrolls{left,right}、slot_rect 钳制唯一、壳手势
+> ParserDrag{Session,Left,Right} 三账本 + parser_geom 一包同源
+> 五消费点。parser_page 竖排一行一框（上限 6 框内部滚，BAR-119
+> 保底两行）。考题全量重写：parser_chain 6 钉 4 变异全咬 /
+> parser_page 24 钉 2 变异全咬 / link_card 3 钉 / sys_card 12 钉。
+> **判卷标准**：redroid 截屏 = tmux 常驻右下钉底、右上连接卡
+> 可滚、左区环境卡吃宽区；真机右滑 → 拇指直点会话框切换。
 
 > **两轴第 6 步③：环境卡本地相（2026-09-20，待提交+真机判卷）**：
 > 本地相体征 = na_sys::collect("/data") 直读（/proc + statvfs 本机

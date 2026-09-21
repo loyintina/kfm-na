@@ -3608,9 +3608,10 @@ impl TermView {
     /// ui/parser_page::layout_vp——命中同一份（眼手同尺）；pt_off_x 语义同
     /// paint_cfg_dual_pool（GLES 烘焙恒 0，softbuffer/值守传真值）
     /// （会话表/附着/命名/确认任何变更都必触发重烘焙，漏维 = 鬼影）。
-    /// 2026-09-20 视口化：布局不吃键盘（BAR-119 红线不动），ime 只喂
-    /// 页面滚动窗与页缘纵裁剪带 pclip = (环内顶, 环底缘)——卡链随
-    /// page_scroll 平移，逾环缘的框/线/文字同带断墨
+    /// 2026-09-21 三区排布 v2：tmux 卡 = 右下常驻槽（钉键盘感知可视底，
+    /// 不滚）；连接·服务卡 = 右上滚动区（lclip = 区窗纵段）、环境卡 =
+    /// 左滚动区（xclip）——卡随各自区滚动账平移，逾区缘断墨；布局不吃
+    /// 键盘（BAR-119 红线不动），ime 只喂三区窗口与常驻槽钉底
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn paint_parser_content_impl(
         &self,
@@ -3650,24 +3651,25 @@ impl TermView {
         } else {
             pp::Mode::Normal
         };
-        // 三卡快照前置（链底账要 svc 行数；涂装段后文同两份不再取）
+        // 三卡快照前置（高度账要 svc 行数；涂装段后文同两份不再取）
         let csnap = crate::ui::conn_card::current();
         let ssnap = crate::ui::svc_card::current();
         let xsnap = crate::ui::sys_card::current();
         // 可视底 = 页环底缘（键盘感知——壳吃 bottom_inset 弹小后环底即
-        // 视口底；布局账不吃它，只滚动窗吃）
+        // 视口底；布局账不吃它，三区窗口/常驻槽钉底吃）
         let vbottom = pp::visible_bottom(h, ime + bar_inset);
-        let lay = pp::layout_vp(
-            w,
-            h,
-            bar_inset + crate::ui::parser_chain::reserved_below_tmux(ssnap.lines.len()),
-            snap.sessions.len(),
-            ssnap.lines.len(),
-            mode,
-            snap.scroll,
-            snap.page_scroll,
-            vbottom,
-        );
+        // 三区几何（2026-09-21 v2）：tmux 卡自报高（封顶 = 可视底 − 区顶）
+        // → 排布器三区 → 常驻槽卡内布局 + 两滚动区槽位（滚动账吃快照）
+        let area = crate::ui::parser_chain::page_area(w, h, bar_inset);
+        let cap = (vbottom - area.y).max(0) as u32;
+        let tmux_h = pp::tmux_card_h(snap.sessions.len(), mode, cap);
+        let regs = crate::ui::parser_chain::regions(w, h, bar_inset, vbottom, tmux_h);
+        let lay = pp::layout_in(regs.dock.clone(), snap.sessions.len(), mode, snap.scroll);
+        let chain_h = crate::ui::parser_chain::heights(tmux_h, ssnap.lines.len());
+        let scrolls = crate::ui::parser_chain::Scrolls {
+            left: snap.left_scroll,
+            right: snap.right_scroll,
+        };
 
         // 卡环（二级框：内卡渐变反转 c2→c1，与双池同配方）
         let (cox, coy) = crate::ui::tab_bar::content_origin();
@@ -3844,17 +3846,22 @@ impl TermView {
         }
 
         // ---- 连接服务合并卡（2026-09-20 v2 合并裁决：连接卡 + 服务卡
-        // 合并成一张二级卡两竖列——左列连接（mini 卡头/四字段行/[重连]
-        // 钮钉列底），右列服务（mini 卡头/四字段行/会话行表，无分隔
-        // 线）。文案面零改动：conn_card::current()/svc_card::current()
-        // 同两份快照（函数顶已取）；几何 = link_card 同一份 layout——
-        // 组件池登记 link_card）
-        let chain_h = crate::ui::parser_chain::heights(lay.card.h, ssnap.lines.len());
+        // 合并成一张二级卡；2026-09-21 三区排布 v2：归右上滚动区，窄列
+        // 两段纵排——连接段（mini 卡头/四字段行/[重连] 钮）→ 服务段
+        // （mini 卡头/四字段行/会话行表），无分隔线。文案面零改动：
+        // conn_card::current()/svc_card::current() 同两份快照（函数顶
+        // 已取）；几何 = link_card 同一份 layout——组件池登记 link_card）。
+        // 区裁剪带：右上区窗纵段——卡随区滚动平移，逾区缘的件同带断墨
+        // （涂装断墨/命中闸门同一份，眼手同尺）
+        let lclip =
+            crate::ui::parser_chain::clip_of(crate::ui::parser_chain::ChainCardId::Link, &regs);
+        let lclip32 = Some((lclip.0 as i32, lclip.1 as i32));
         let llay = crate::ui::link_card::layout_in(
             crate::ui::parser_chain::slot_rect(
                 crate::ui::parser_chain::ChainCardId::Link,
-                &lay.card,
+                &regs,
                 &chain_h,
+                &scrolls,
             ),
             ssnap.lines.len(),
         );
@@ -3866,15 +3873,15 @@ impl TermView {
             llay.card.y + i64::from(llay.card.h),
             clip_l,
             clip_r,
-            pclip.0,
-            pclip.1,
+            lclip.0,
+            lclip.1,
             crate::ui::accent::CARD_PAGE_BG,
             accent.c2,
             accent.c1,
             POOL_FRAME_R,
             true,
         );
-        // 左列 mini 卡头「连接 · 状态词」（退避/未启动相用次级档压一压
+        // 连接段 mini 卡头「连接 · 状态词」（退避/未启动相用次级档压一压
         // ——在线才是值得亮的标题）
         let header_fg = if csnap.word == "自持在线" || csnap.word == "外部借用" {
             title_fg
@@ -3891,9 +3898,9 @@ impl TermView {
             36.0,
             header_fg,
             18.0,
-            pclip32,
+            lclip32,
         );
-        // 左列四字段行（字段标签列配方：标签左对齐亮档、值逐行右对齐
+        // 连接段四字段行（字段标签列配方：标签左对齐亮档、值逐行右对齐
         // 灰档——draw_field_lines 自带 1.5 格文内边距与 ≤2 行折行；
         // 错误行有字用错色）
         let values = [&csnap.target, &csnap.local, &csnap.attempts, &csnap.error];
@@ -3908,7 +3915,7 @@ impl TermView {
                 fr.h,
                 36.0,
                 title_fg,
-                pclip32,
+                lclip32,
                 true,
             );
             let (v_fg, v) = if i == 3 && csnap.error != "—" {
@@ -3926,11 +3933,11 @@ impl TermView {
                 fr.h,
                 30.0,
                 v_fg,
-                pclip32,
+                lclip32,
                 false,
             );
         }
-        // [重连] 钮（三级框行主形态，钉左列底，与 tmux 钮同件同尺）
+        // [重连] 钮（三级框行主形态，连接段尾，与 tmux 钮同件同尺）
         {
             let b = &llay.button;
             let grad_ref = (-(b.x + off), -b.y, i64::from(b.w + b.h));
@@ -3942,7 +3949,7 @@ impl TermView {
                 b.h,
                 true,
                 accent,
-                pclip,
+                lclip,
                 grad_ref,
                 0,
             );
@@ -3956,11 +3963,11 @@ impl TermView {
                 34.0,
                 title_fg,
                 b.x + off,
-                Some(pclip),
+                Some(lclip),
             );
         }
-        // 右列 mini 卡头「服务 · 状态词」（在线相才亮标题档，其余次级
-        // 档——与左列同语言）
+        // 服务段 mini 卡头「服务 · 状态词」（在线相才亮标题档，其余次级
+        // 档——与连接段同语言）
         let header_fg = if ssnap.word == "自持在线" || ssnap.word == "外部借用" {
             title_fg
         } else {
@@ -3976,9 +3983,9 @@ impl TermView {
             36.0,
             header_fg,
             18.0,
-            pclip32,
+            lclip32,
         );
-        // 右列四字段行（字段标签列配方同左列；错误行有字用错色）
+        // 服务段四字段行（字段标签列配方同连接段；错误行有字用错色）
         let svalues = [&ssnap.backend, &ssnap.uptime, &ssnap.sess_n, &ssnap.error];
         for (i, fr) in llay.rfields.iter().enumerate() {
             let l_items = self.measure_items(crate::ui::svc_card::FIELD_LABELS[i], 36.0);
@@ -3991,7 +3998,7 @@ impl TermView {
                 fr.h,
                 36.0,
                 title_fg,
-                None,
+                lclip32,
                 true,
             );
             let (v_fg, v) = if i == 3 && ssnap.error != "—" {
@@ -4009,7 +4016,7 @@ impl TermView {
                 fr.h,
                 30.0,
                 v_fg,
-                pclip32,
+                lclip32,
                 false,
             );
         }
@@ -4025,18 +4032,23 @@ impl TermView {
                 30.0,
                 body_fg,
                 18.0,
-                pclip32,
+                lclip32,
             );
         }
 
-        // ---- 环境卡（2026-09-20 v1：解析页第三张二级卡，纵排在连接
-        // 服务合并卡下；「中央终端所在环境的自身体征」可视化，纯展示无按钮。数据
-        // = sys_card::current() 三源合成（svc_health SysSnap + nasup
-        // 对象词 + 后端相），体征解析与 na-server 同一份 na-sys crate）
+        // ---- 环境卡（2026-09-20 v1：解析页第三张二级卡；2026-09-21 三区
+        // 排布 v2：归左滚动区吃宽区——「中央终端所在环境的自身体征」可视化，
+        // 纯展示无按钮。数据 = sys_card::current() 三源合成（svc_health
+        // SysSnap + nasup 对象词 + 后端相），体征解析与 na-server 同一份
+        // na-sys crate）。区裁剪带 = 左区窗纵段（与右上区同纪律）
+        let xclip =
+            crate::ui::parser_chain::clip_of(crate::ui::parser_chain::ChainCardId::Sys, &regs);
+        let xclip32 = Some((xclip.0 as i32, xclip.1 as i32));
         let xlay = crate::ui::sys_card::layout_in(crate::ui::parser_chain::slot_rect(
             crate::ui::parser_chain::ChainCardId::Sys,
-            &lay.card,
+            &regs,
             &chain_h,
+            &scrolls,
         ));
         paint_rect_ring_yclip(
             &mut frame,
@@ -4046,8 +4058,8 @@ impl TermView {
             xlay.card.y + i64::from(xlay.card.h),
             clip_l,
             clip_r,
-            pclip.0,
-            pclip.1,
+            xclip.0,
+            xclip.1,
             crate::ui::accent::CARD_PAGE_BG,
             accent.c2,
             accent.c1,
@@ -4070,7 +4082,7 @@ impl TermView {
             36.0,
             header_fg,
             18.0,
-            pclip32,
+            xclip32,
         );
         // 六字段两竖列（字段标签列配方同服务卡；无错误行）
         let xvalues = [
@@ -4092,7 +4104,7 @@ impl TermView {
                 fr.h,
                 36.0,
                 title_fg,
-                pclip32,
+                xclip32,
                 true,
             );
             let v_items = self.measure_items(xvalues[i].as_str(), 30.0);
@@ -4105,7 +4117,7 @@ impl TermView {
                 fr.h,
                 30.0,
                 meta_fg,
-                pclip32,
+                xclip32,
                 false,
             );
         }

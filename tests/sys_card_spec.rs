@@ -3,8 +3,8 @@
 //! 两竖列）——纯逻辑先行钉死，涂装在 termview（眼手同尺：两边吃
 //! sys_card 同一份 layout）。
 //!
-//! 变异抽检：①预留带漏加前距/本卡高（预留量与实高漂移 = 两卡
-//! 相叠/底部空洞）必须咬；②compose 内存用量拿 avail 当 used（卡面
+//! 变异抽检：①左区槽位漏减滚动/脏滚动不钳（卡不随账走 = 三区 v2
+//! 排布器账漂移）必须咬；②compose 内存用量拿 avail 当 used（卡面
 //! 显示「剩余」冒充「已用」）必须咬；③parse_sys 缺 load 键不报错
 //! （对面不是新版 na-server 静默当零）必须咬；④compose 把 None 当
 //! 零值显示（"0.00 0.00 0.00" 冒充数据——Android 拒 loadavg 的
@@ -15,39 +15,33 @@
 use kfm_na::na_server_sup::{SupSnap, SupState};
 use kfm_na::settings::Backend;
 use kfm_na::svc_health;
-use kfm_na::termview::CELL_H;
-use kfm_na::ui::dual_pool::PoolRect;
 use kfm_na::ui::parser_chain::{self, ChainCardId};
 use kfm_na::ui::sys_card::{self, FIELD_LABELS, N_FIELDS};
 
-/// 链几何夹具：tmux 卡 + 字面高度表（link=600 是虚构卡高——本考题
-/// 只钉「接在谁下面、多大间距、字段怎么排」，不钉卡高账本身）
-fn chain_fixture() -> (PoolRect, parser_chain::ChainHeights) {
-    let tmux = PoolRect {
-        x: 40,
-        y: 1500 - 800 - i64::from(CELL_H),
-        w: 1000,
-        h: 800,
-    };
-    let h = parser_chain::ChainHeights {
-        tmux: 800,
-        link: 600,
-        sys: sys_card::CARD_H,
-    };
-    (tmux, h)
+/// 三区几何夹具（2026-09-21 三区排布 v2：环境卡归左滚动区）：屏
+/// 1080×2280、可视底 2000、tmux 卡高 300——本考题只钉「环境卡在左区
+/// 怎么排、字段怎么分列」，不钉三区几何本身（那在 parser_chain_spec）
+const W: u32 = 1080;
+const H: u32 = 2280;
+const VB: i64 = 2000;
+
+fn regs() -> parser_chain::Regions {
+    parser_chain::regions(W, H, 0, VB, 300)
 }
 
-/// 链上的合并卡席位（Link 槽外框）：由 tmux 卡 + 排布器配给——
-/// 与生产侧同路径（slot_rect → layout_in）
-fn svc_card() -> PoolRect {
-    let (tmux, h) = chain_fixture();
-    parser_chain::slot_rect(ChainCardId::Link, &tmux, &h)
+fn heights() -> parser_chain::ChainHeights {
+    parser_chain::heights(300, 2)
 }
 
-/// 环境卡 layout（排布器配给制）
+/// 环境卡 layout（排布器配给制——与生产侧同路径 slot_rect → layout_in）
 fn sys_lay() -> sys_card::SysLayout {
-    let (tmux, h) = chain_fixture();
-    sys_card::layout_in(parser_chain::slot_rect(ChainCardId::Sys, &tmux, &h))
+    let r = regs();
+    sys_card::layout_in(parser_chain::slot_rect(
+        ChainCardId::Sys,
+        &r,
+        &heights(),
+        &parser_chain::Scrolls { left: 0, right: 0 },
+    ))
 }
 
 fn sup() -> SupSnap {
@@ -251,16 +245,12 @@ fn spec_合成_本地相() {
 // ---- 几何 ----
 
 #[test]
-fn spec_几何_接在服务卡下() {
-    let sc = svc_card();
+fn spec_几何_左区贴窗顶() {
+    let r = regs();
     let l = sys_lay();
-    assert_eq!(l.card.x, sc.x, "与服务卡同左右缘（二级卡同池区宽）");
-    assert_eq!(l.card.w, sc.w);
-    assert_eq!(
-        l.card.y,
-        sc.y + i64::from(sc.h) + i64::from(CELL_H),
-        "接在服务卡正下方，间距一格（排布器注册槽 gap_before）"
-    );
+    assert_eq!(l.card.x, r.left.x, "环境卡在左滚动区（三区 v2）");
+    assert_eq!(l.card.w, r.left.w);
+    assert_eq!(l.card.y, r.left.y, "scroll=0 贴左区窗顶");
     assert_eq!(
         l.card.h,
         sys_card::CARD_H,
@@ -298,16 +288,26 @@ fn spec_几何_接在服务卡下() {
 }
 
 #[test]
-fn spec_预留量_与实高同源() {
-    // Link 槽之后的全部占位 = 本卡前距 + 本卡实高（排布器账——
-    // 变异①：漏 CELL_H 或漏 CARD_H 必须咬）
-    for n in [0usize, 1, 3, 6] {
-        assert_eq!(
-            parser_chain::reserved_below(ChainCardId::Link, &parser_chain::heights(0, n)),
-            CELL_H + sys_card::CARD_H,
-            "n={n} Link 后预留量漂移 = 两卡相叠或底部空洞"
-        );
-    }
+fn spec_槽位_随左区滚动账平移() {
+    // 左区槽位 = 区窗 − eff_scroll（三区 v2 排布器账——变异①：漏减
+    // 滚动或脏滚动不钳必须咬；更多区几何钉在 parser_chain_spec）
+    let r = regs();
+    let h = heights();
+    let s0 = parser_chain::Scrolls { left: 0, right: 0 };
+    let base = parser_chain::slot_rect(ChainCardId::Sys, &r, &h, &s0);
+    assert_eq!(base.y, r.left.y);
+    // 短内容 max=0：任何脏滚动都钳回区顶（环境卡恒高 < 左区窗）
+    assert_eq!(
+        parser_chain::scroll_max(ChainCardId::Sys, &r, &h),
+        0,
+        "本组参数左账必须不可滚"
+    );
+    let dirty = parser_chain::Scrolls {
+        left: 500,
+        right: 0,
+    };
+    let clamped = parser_chain::slot_rect(ChainCardId::Sys, &r, &h, &dirty);
+    assert_eq!(clamped.y, r.left.y, "max=0 的区脏滚动必须钳回区顶");
 }
 
 #[test]

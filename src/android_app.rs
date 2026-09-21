@@ -149,15 +149,65 @@ enum ParserExec {
     Reflow,
 }
 
-/// 解析页卡区拖动分流（2026-09-20 视口化，用户拍板「卡弹小+上下能
-/// 滑动」）：起手落会话框表带 = 表内滚动；其余卡区 = 页面滚动（整链
-/// 随视口平移）。仲裁在拖过 slop 且垂直主导时一次定终身
+/// 解析页卡区拖动分流（2026-09-21 三区排布 v2，用户拍板「tmux 常驻
+/// 右下」）：起手落会话框表带 = 表内滚动；落左区 = 左区滚动账；落
+/// 右上区 = 右上区滚动账（垂直拖拽按落点 x 命中分流，两本账独立）。
+/// 仲裁在拖过 slop 且垂直主导时一次定终身
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ParserDrag {
     /// 会话框表内滚动（>6 框的内部滚窗）
     Session,
-    /// 页面级滚动（卡链整体随视口平移）
-    Page,
+    /// 左区滚动（环境卡）
+    Left,
+    /// 右上区滚动（连接·服务卡）
+    Right,
+}
+
+/// 解析页三区几何一包（涂装/命中/手势/钳制五处同源——眼手同尺，
+/// 五处各算一份必漂移）。bar_h = 输入栏带高（布局吃）；vbottom_inset
+/// = 键盘+栏带（三区窗口/常驻槽钉底吃——BAR-119 红线：布局不吃键盘）
+struct ParserGeom {
+    regs: crate::ui::parser_chain::Regions,
+    chain_h: crate::ui::parser_chain::ChainHeights,
+    scrolls: crate::ui::parser_chain::Scrolls,
+    lay: crate::ui::parser_page::Layout,
+    mode: crate::ui::parser_page::Mode,
+}
+
+fn parser_geom(
+    sw: u32,
+    sh: u32,
+    bar_h: u32,
+    vbottom_inset: u32,
+    snap: &crate::ui::parser_page::ParserPageSnap,
+) -> ParserGeom {
+    use crate::ui::parser_page as pp;
+    let mode = if snap.naming.is_some() {
+        pp::Mode::Naming
+    } else if snap.confirming.is_some() {
+        pp::Mode::Confirming
+    } else {
+        pp::Mode::Normal
+    };
+    let n_svc = crate::ui::svc_card::current().lines.len();
+    let vbottom = pp::visible_bottom(sh, vbottom_inset);
+    let area = crate::ui::parser_chain::page_area(sw, sh, bar_h);
+    let cap = (vbottom - area.y).max(0) as u32;
+    let tmux_h = pp::tmux_card_h(snap.sessions.len(), mode, cap);
+    let regs = crate::ui::parser_chain::regions(sw, sh, bar_h, vbottom, tmux_h);
+    let lay = pp::layout_in(regs.dock.clone(), snap.sessions.len(), mode, snap.scroll);
+    let chain_h = crate::ui::parser_chain::heights(tmux_h, n_svc);
+    let scrolls = crate::ui::parser_chain::Scrolls {
+        left: snap.left_scroll,
+        right: snap.right_scroll,
+    };
+    ParserGeom {
+        regs,
+        chain_h,
+        scrolls,
+        lay,
+        mode,
+    }
 }
 
 /// 会话健康牌（断线重连 2026-08-21，按名字记账——槽位随切换翻面,
@@ -1155,52 +1205,29 @@ impl App {
                         let in_card = {
                             let pg = page.lock().unwrap();
                             let snap = pg.snap();
-                            let mode = if snap.naming.is_some() {
-                                crate::ui::parser_page::Mode::Naming
-                            } else if snap.confirming.is_some() {
-                                crate::ui::parser_page::Mode::Confirming
-                            } else {
-                                crate::ui::parser_page::Mode::Normal
-                            };
-                            // 视口化：命中臂与涂装同一份 layout_vp（页面
-                            // 滚动后卡链已平移——眼手同尺）
-                            let n_svc = crate::ui::svc_card::current().lines.len();
-                            let lay = crate::ui::parser_page::layout_vp(
+                            // 三区几何（2026-09-21 v2）：命中臂与涂装同
+                            // 一包 parser_geom（滚动后槽位已平移——眼手
+                            // 同尺）；滚动区命中带区窗闸门——裁出窗的
+                            // 部件只显不点（与涂装断墨同一份 clip）
+                            let g = parser_geom(
                                 sw,
                                 sh,
-                                self.cur_bar_h()
-                                    + crate::ui::parser_chain::reserved_below_tmux(n_svc),
-                                snap.sessions.len(),
-                                n_svc,
-                                mode,
-                                snap.scroll,
-                                snap.page_scroll,
-                                crate::ui::parser_page::visible_bottom(
-                                    sh,
-                                    self.chrome_inset() + self.cur_bar_h(),
-                                ),
+                                self.cur_bar_h(),
+                                self.chrome_inset() + self.cur_bar_h(),
+                                &snap,
                             );
-                            let c = &lay.card;
-                            let chain_h = crate::ui::parser_chain::heights(c.h, n_svc);
-                            // 连接服务合并卡（第二张，两竖列——点按归
-                            // 插件手势，不许漏到面板页当滑页起手）
-                            let llay = crate::ui::link_card::layout_in(
-                                crate::ui::parser_chain::slot_rect(
-                                    crate::ui::parser_chain::ChainCardId::Link,
-                                    c,
-                                    &chain_h,
-                                ),
-                                n_svc,
+                            let link_rect = crate::ui::parser_chain::slot_rect(
+                                crate::ui::parser_chain::ChainCardId::Link,
+                                &g.regs,
+                                &g.chain_h,
+                                &g.scrolls,
                             );
-                            let lc = &llay.card;
-                            // 环境卡（第三张，纯展示——同归插件手势）
-                            let xlay =
-                                crate::ui::sys_card::layout_in(crate::ui::parser_chain::slot_rect(
-                                    crate::ui::parser_chain::ChainCardId::Sys,
-                                    c,
-                                    &chain_h,
-                                ));
-                            let xc = &xlay.card;
+                            let sys_rect = crate::ui::parser_chain::slot_rect(
+                                crate::ui::parser_chain::ChainCardId::Sys,
+                                &g.regs,
+                                &g.chain_h,
+                                &g.scrolls,
+                            );
                             let (xi, yi) = (x as i64, y as i64);
                             let in_rect = |r: &crate::ui::dual_pool::PoolRect| {
                                 xi >= r.x
@@ -1208,12 +1235,16 @@ impl App {
                                     && yi >= r.y
                                     && yi < r.y + i64::from(r.h)
                             };
+                            let in_win = |r: &crate::ui::dual_pool::PoolRect,
+                                          w: &crate::ui::dual_pool::PoolRect| {
+                                in_rect(r) && yi >= w.y && yi < w.y + i64::from(w.h)
+                            };
                             // 确认跳框（模态）在时全页吞触摸——跳框卡可能
                             // 居中在 tmux 卡外，且框外点按 = 取消
-                            mode == crate::ui::parser_page::Mode::Confirming
-                                || in_rect(c)
-                                || in_rect(lc) // 连接服务合并卡同归插件手势（重连钮）
-                                || in_rect(xc) // 环境卡同归（纯展示也吞）
+                            g.mode == crate::ui::parser_page::Mode::Confirming
+                                || in_rect(&g.lay.card) // tmux 常驻槽
+                                || in_win(&link_rect, &g.regs.right_top) // 连接·服务卡
+                                || in_win(&sys_rect, &g.regs.left) // 环境卡
                         };
                         if in_card {
                             crate::report::report(
@@ -1540,32 +1571,35 @@ impl App {
                             && let (Some(page), Some((sw, sh))) =
                                 (&self.parser_page, self.screen_px())
                         {
-                            let (smax, pmax) = {
+                            let (smax, lmax, rmax) = {
                                 let pg = page.lock().unwrap();
                                 let snap = pg.snap();
-                                let lay = crate::ui::parser_page::layout_vp(
+                                let g = parser_geom(
                                     sw,
                                     sh,
-                                    self.cur_bar_h()
-                                        + crate::ui::parser_chain::reserved_below_tmux(
-                                            crate::ui::svc_card::current().lines.len(),
-                                        ),
-                                    snap.sessions.len(),
-                                    crate::ui::svc_card::current().lines.len(),
-                                    crate::ui::parser_page::Mode::Normal,
-                                    snap.scroll,
-                                    snap.page_scroll,
-                                    crate::ui::parser_page::visible_bottom(
-                                        sh,
-                                        self.chrome_inset() + self.cur_bar_h(),
-                                    ),
+                                    self.cur_bar_h(),
+                                    self.chrome_inset() + self.cur_bar_h(),
+                                    &snap,
                                 );
-                                (lay.scroll_max, lay.page_scroll_max)
+                                (
+                                    g.lay.scroll_max,
+                                    crate::ui::parser_chain::scroll_max(
+                                        crate::ui::parser_chain::ChainCardId::Sys,
+                                        &g.regs,
+                                        &g.chain_h,
+                                    ),
+                                    crate::ui::parser_chain::scroll_max(
+                                        crate::ui::parser_chain::ChainCardId::Link,
+                                        &g.regs,
+                                        &g.chain_h,
+                                    ),
+                                )
                             };
                             let mut pg = page.lock().unwrap();
                             match kind {
                                 ParserDrag::Session => pg.scroll_by(-(dy as i64), smax),
-                                ParserDrag::Page => pg.page_scroll_by(-(dy as i64), pmax),
+                                ParserDrag::Left => pg.left_scroll_by(-(dy as i64), lmax),
+                                ParserDrag::Right => pg.right_scroll_by(-(dy as i64), rmax),
                             }
                         }
                         self.parser_touch = Some((pt.0, pt.1, Some(kind), y));
@@ -1576,7 +1610,8 @@ impl App {
                         || (y - pt.1).abs() > crate::scroll::TAP_SLOP_PX
                     {
                         // 滚动仲裁：常态（命名/确认态不滚）+ 垂直主导；
-                        // 分流 = 起手落点定（框表带→表滚，其余卡区→页滚）
+                        // 分流 = 起手落点定（框表带→表滚，左区→左账，
+                        // 右上区→右账——2026-09-21 三区 v2）
                         let vertical = (y - pt.1).abs() > (x - pt.0).abs();
                         let drag = if vertical
                             && let (Some(page), Some((sw, sh))) =
@@ -1587,31 +1622,40 @@ impl App {
                             if snap.naming.is_some() || snap.confirming.is_some() {
                                 None
                             } else {
-                                let lay = crate::ui::parser_page::layout_vp(
+                                let g = parser_geom(
                                     sw,
                                     sh,
-                                    self.cur_bar_h()
-                                        + crate::ui::parser_chain::reserved_below_tmux(
-                                            crate::ui::svc_card::current().lines.len(),
-                                        ),
-                                    snap.sessions.len(),
-                                    crate::ui::svc_card::current().lines.len(),
-                                    crate::ui::parser_page::Mode::Normal,
-                                    snap.scroll,
-                                    snap.page_scroll,
-                                    crate::ui::parser_page::visible_bottom(
-                                        sh,
-                                        self.chrome_inset() + self.cur_bar_h(),
-                                    ),
+                                    self.cur_bar_h(),
+                                    self.chrome_inset() + self.cur_bar_h(),
+                                    &snap,
                                 );
-                                let in_list = pt.0 as i64 >= lay.card.x
-                                    && (pt.0 as i64) < lay.card.x + i64::from(lay.card.w)
-                                    && pt.1 as i64 >= lay.list_clip.0
-                                    && (pt.1 as i64) < lay.list_clip.1;
-                                if in_list && lay.scroll_max > 0 {
+                                let (px, py) = (pt.0 as i64, pt.1 as i64);
+                                let in_list = px >= g.lay.card.x
+                                    && px < g.lay.card.x + i64::from(g.lay.card.w)
+                                    && py >= g.lay.list_clip.0
+                                    && py < g.lay.list_clip.1;
+                                let in_win = |w: &crate::ui::dual_pool::PoolRect| {
+                                    px >= w.x
+                                        && px < w.x + i64::from(w.w)
+                                        && py >= w.y
+                                        && py < w.y + i64::from(w.h)
+                                };
+                                let lmax = crate::ui::parser_chain::scroll_max(
+                                    crate::ui::parser_chain::ChainCardId::Sys,
+                                    &g.regs,
+                                    &g.chain_h,
+                                );
+                                let rmax = crate::ui::parser_chain::scroll_max(
+                                    crate::ui::parser_chain::ChainCardId::Link,
+                                    &g.regs,
+                                    &g.chain_h,
+                                );
+                                if in_list && g.lay.scroll_max > 0 {
                                     Some(ParserDrag::Session)
-                                } else if lay.page_scroll_max > 0 {
-                                    Some(ParserDrag::Page)
+                                } else if in_win(&g.regs.right_top) && rmax > 0 {
+                                    Some(ParserDrag::Right)
+                                } else if in_win(&g.regs.left) && lmax > 0 {
+                                    Some(ParserDrag::Left)
                                 } else {
                                     None
                                 }
@@ -2166,58 +2210,52 @@ impl App {
                         let (snap, hit_result, conn_hit) = {
                             let pg = page.lock().unwrap();
                             let snap = pg.snap();
-                            let mode = if snap.naming.is_some() {
-                                crate::ui::parser_page::Mode::Naming
-                            } else if snap.confirming.is_some() {
-                                crate::ui::parser_page::Mode::Confirming
-                            } else {
-                                crate::ui::parser_page::Mode::Normal
-                            };
-                            let lay = crate::ui::parser_page::layout_vp(
+                            // 三区几何（2026-09-21 v2）：命中与涂装同一包
+                            // parser_geom——眼手同尺
+                            let g = parser_geom(
                                 sw,
                                 sh,
-                                self.cur_bar_h()
-                                    + crate::ui::parser_chain::reserved_below_tmux(
-                                        crate::ui::svc_card::current().lines.len(),
-                                    ),
-                                snap.sessions.len(),
-                                crate::ui::svc_card::current().lines.len(),
-                                mode,
-                                snap.scroll,
-                                snap.page_scroll,
-                                crate::ui::parser_page::visible_bottom(
-                                    sh,
-                                    self.chrome_inset() + self.cur_bar_h(),
-                                ),
+                                self.cur_bar_h(),
+                                self.chrome_inset() + self.cur_bar_h(),
+                                &snap,
                             );
                             let h = crate::ui::parser_page::hit(
-                                &lay,
+                                &g.lay,
                                 pt.0 as i64,
                                 pt.1 as i64,
                                 sw,
                                 sh,
-                                mode,
+                                g.mode,
                             );
-                            // tmux 卡未命中且常态 → 连接服务合并卡
-                            // （几何同一份 lay.card 推出——眼手同尺）；
-                            // 模态/命名态屏蔽（模态跳框期间卡区命中全
-                            // 屏蔽惯例）
-                            let ch = if h.is_none() && mode == crate::ui::parser_page::Mode::Normal
+                            // tmux 卡未命中且常态 → 连接·服务卡（右上区；
+                            // 区窗闸门：裁出窗的部件只显不点，与涂装断墨
+                            // 同一份 clip）；模态/命名态屏蔽（跳框期间
+                            // 卡区命中全屏蔽惯例）
+                            let ch = if h.is_none()
+                                && g.mode == crate::ui::parser_page::Mode::Normal
                             {
-                                let n_svc = crate::ui::svc_card::current().lines.len();
-                                let llay = crate::ui::link_card::layout_in(
-                                    crate::ui::parser_chain::slot_rect(
-                                        crate::ui::parser_chain::ChainCardId::Link,
-                                        &lay.card,
-                                        &crate::ui::parser_chain::heights(lay.card.h, n_svc),
-                                    ),
-                                    n_svc,
+                                let link_rect = crate::ui::parser_chain::slot_rect(
+                                    crate::ui::parser_chain::ChainCardId::Link,
+                                    &g.regs,
+                                    &g.chain_h,
+                                    &g.scrolls,
                                 );
-                                crate::ui::link_card::hit(&llay, pt.0 as i64, pt.1 as i64)
+                                let (px, py) = (pt.0 as i64, pt.1 as i64);
+                                let in_win = px >= g.regs.right_top.x
+                                    && px < g.regs.right_top.x + i64::from(g.regs.right_top.w)
+                                    && py >= g.regs.right_top.y
+                                    && py < g.regs.right_top.y + i64::from(g.regs.right_top.h);
+                                if in_win {
+                                    let n_svc = crate::ui::svc_card::current().lines.len();
+                                    let llay = crate::ui::link_card::layout_in(link_rect, n_svc);
+                                    crate::ui::link_card::hit(&llay, px, py)
+                                } else {
+                                    None
+                                }
                             } else {
                                 None
                             };
-                            (snap, h.map(|hh| (hh, mode)), ch)
+                            (snap, h.map(|hh| (hh, g.mode)), ch)
                         };
                         if let Some((hh, mode)) = hit_result {
                             self.parser_dispatch(snap, hh, mode);
@@ -4222,31 +4260,36 @@ impl App {
                     // 拿当下几何钳回，脏 scroll 不残留（页面滚动同规：
                     // 链底账随卡高变）
                     if let Some((sw, sh)) = self.screen_px() {
-                        let (smax, pmax) = {
+                        let (smax, lmax, rmax) = {
                             let pg = p.lock().unwrap();
                             let snap = pg.snap();
-                            let lay = crate::ui::parser_page::layout_vp(
+                            // 三区几何同包（2026-09-21 v2）：三本账的 max
+                            // 都从排布器/卡内同一份几何出
+                            let g = parser_geom(
                                 sw,
                                 sh,
-                                self.cur_bar_h()
-                                    + crate::ui::parser_chain::reserved_below_tmux(
-                                        crate::ui::svc_card::current().lines.len(),
-                                    ),
-                                snap.sessions.len(),
-                                crate::ui::svc_card::current().lines.len(),
-                                crate::ui::parser_page::Mode::Normal,
-                                snap.scroll,
-                                snap.page_scroll,
-                                crate::ui::parser_page::visible_bottom(
-                                    sh,
-                                    self.chrome_inset() + self.cur_bar_h(),
-                                ),
+                                self.cur_bar_h(),
+                                self.chrome_inset() + self.cur_bar_h(),
+                                &snap,
                             );
-                            (lay.scroll_max, lay.page_scroll_max)
+                            (
+                                g.lay.scroll_max,
+                                crate::ui::parser_chain::scroll_max(
+                                    crate::ui::parser_chain::ChainCardId::Sys,
+                                    &g.regs,
+                                    &g.chain_h,
+                                ),
+                                crate::ui::parser_chain::scroll_max(
+                                    crate::ui::parser_chain::ChainCardId::Link,
+                                    &g.regs,
+                                    &g.chain_h,
+                                ),
+                            )
                         };
                         let mut pg = p.lock().unwrap();
                         pg.clamp_scroll(smax);
-                        pg.clamp_page_scroll(pmax);
+                        pg.clamp_left_scroll(lmax);
+                        pg.clamp_right_scroll(rmax);
                     }
                 }
             }
