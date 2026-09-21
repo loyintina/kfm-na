@@ -34,11 +34,15 @@ pub struct MemInfo {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SysInfo {
     pub load: Option<LoadAvg>,
+    /// 核数（2026-09-21 用户拍板「负载判色」：负载占比 = l1/核数——
+    /// 采集侧 std::thread::available_parallelism，两台机器各报自己的核数，
+    /// 绝不写死设备常量）。采不到 = None → 负载轨回退窗内峰值归一 + 中性档
     pub mem: Option<MemInfo>,
     /// 磁盘 (总量, 可用) 字节（采集点 = collect 的 path）
     pub disk: Option<(u64, u64)>,
     /// 开机秒数（/proc/uptime 首 token）
     pub uptime_s: Option<u64>,
+    pub cores: Option<u32>,
 }
 
 /// /proc/loadavg 解析（A 档）："0.42 0.38 0.35 2/123 4567" → 前三段
@@ -166,11 +170,16 @@ pub fn collect(disk_path: &str) -> SysInfo {
     let uptime_s = std::fs::read_to_string("/proc/uptime")
         .ok()
         .and_then(|t| parse_uptime(&t).ok());
+    let cores = std::thread::available_parallelism()
+        .ok()
+        .map(|n| n.get() as u32)
+        .filter(|n| *n > 0);
     SysInfo {
         load,
         mem,
         disk,
         uptime_s,
+        cores,
     }
 }
 

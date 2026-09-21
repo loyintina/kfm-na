@@ -15,6 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+use crate::endpoint::EndpointKind;
 use crate::settings::Backend;
 use crate::sys_hist::{self, Hist};
 
@@ -159,11 +160,17 @@ pub fn parse_sys(json: &str) -> Result<na_sys::SysInfo, String> {
         _ => None,
     };
     let uptime_s = kb("uptime_s");
+    // 核数（2026-09-21 负载判色）：旧版 na-server 缺键 = None → 负载轨
+    // 回退窗内峰值归一 + 中性档（契约向旧兼容不破，同 procs/swap 规）
+    let cores = kb("cores")
+        .filter(|n| *n > 0)
+        .map(|n| n.min(u32::MAX as u64) as u32);
     Ok(na_sys::SysInfo {
         load,
         mem,
         disk,
         uptime_s,
+        cores,
     })
 }
 
@@ -200,16 +207,28 @@ pub struct SysSnap {
     pub epoch: u64,
 }
 
+/// 历史账落盘路径（Android 沙箱私有目录；宿主/测试环境该路径不可写 =
+/// 静默失败——落盘是缓存不是账本，读写失败一律吞掉不连坐进程）
+pub const HIST_PATH: &str = "/data/data/dev.kfm.na/files/sys-hist.txt";
+/// 落盘节流（拍）：每 15 拍（=30s）写一次——最坏丢 30s 历史，闪存写入
+/// 也不至于 2s 一刷
+const SAVE_EVERY: u32 = 15;
+
 struct Inner {
     cfg_backend: Backend,
     cfg_port: u16,
     visible: bool,
     snap: HealthSnap,
     sys: SysSnap,
-    /// 环境体征历史环形账（环境卡柱轨数据面，2026-09-21）：每采到
-    /// 一拍即追（值不变照追——kfmv4「时钟驱动滑动」同规：稳态负载值
-    /// 几分钟不变，值驱动会让柱轨彻底静止）；翻相清账
-    hist: Hist,
+    /// 环境体征历史环形账（环境卡柱轨数据面，2026-09-21）：**对象轴两相
+    /// 各一本**（hist_idx——服务器/本地互不清带，切环境各自续摊）；每采到
+    /// 一拍即追（值不变照追——kfmv4「时钟驱动滑动」同规）
+    hist: [Hist; 2],
+    /// Server 账的归属（nasup 目标串）：换服务器 = 清账（别人的体征
+    /// 曲线不许续在自己账上）；空串 = 归属未知不判
+    hist_target: String,
+    /// 落盘节流计数
+    hist_writes: u32,
 }
 
 static INNER: OnceLock<Arc<Mutex<Inner>>> = OnceLock::new();
@@ -217,6 +236,9 @@ static DIRTY: AtomicBool = AtomicBool::new(false);
 
 fn inner() -> &'static Arc<Mutex<Inner>> {
     INNER.get_or_init(|| {
+        // 落盘恢复（「别做从左长，最好是默认就是铺开的」）：进程重启不
+        // 清零柱轨历史；读不到/版本不认 = 从零攒（缓存不是账本）
+        let loaded = load_hist();
         Arc::new(Mutex::new(Inner {
             cfg_backend: Backend::Kfmv4,
             cfg_port: 9021,
@@ -230,7 +252,9 @@ fn inner() -> &'static Arc<Mutex<Inner>> {
                 sys: None,
                 epoch: 0,
             },
-            hist: Hist::default(),
+            hist: loaded.0,
+            hist_target: loaded.1,
+            hist_writes: 0,
         }))
     })
 }
@@ -252,18 +276,46 @@ fn bump_sys(g: &mut Inner, sys: Option<na_sys::SysInfo>) {
     }
 }
 
-/// 追一拍历史（环境卡柱轨）：值不变也追（拍序 = 时间轴），并置脏——
-/// 追拍本身就是屏上内容换代（柱轨右移一柱）
-fn push_hist(g: &mut Inner, s: sys_hist::Sample) {
-    g.hist.push(s);
-    DIRTY.store(true, Ordering::Relaxed);
+/// 目标机标识（Server 账归属唯一源：nasup 目标串；supervisor 未起 =
+/// 空串「归属未知」，此时不判归属不误清账）
+fn server_target() -> String {
+    crate::na_server_sup::snap()
+        .map(|s| s.lock().unwrap().target.clone())
+        .unwrap_or_default()
 }
 
-/// 清历史账（翻相用：上一相的体征曲线不许带进新相）
-fn clear_hist(g: &mut Inner) {
-    if !g.hist.is_empty() {
-        g.hist.clear();
-        DIRTY.store(true, Ordering::Relaxed);
+/// 落盘（失败吞掉）
+fn save_hist(rings: &[Hist; 2], target: &str) {
+    let text = sys_hist::encode_hist([&rings[0], &rings[1]], [target, ""]);
+    let _ = std::fs::write(HIST_PATH, text);
+}
+
+/// 读盘（读不到 = 空账；版本不认在 decode 里整份弃）
+fn load_hist() -> ([Hist; 2], String) {
+    match std::fs::read_to_string(HIST_PATH) {
+        Ok(t) => {
+            let (rings, targets) = sys_hist::decode_hist(&t);
+            (rings, targets[0].clone())
+        }
+        Err(_) => ([Hist::default(), Hist::default()], String::new()),
+    }
+}
+
+/// 追一拍历史（环境卡柱轨）：值不变也追（拍序 = 时间轴），并置脏——
+/// 追拍本身就是屏上内容换代（柱轨右移一柱）。落盘节流写。
+fn push_hist(g: &mut Inner, kind: EndpointKind, s: sys_hist::Sample) {
+    let tgt = server_target();
+    if kind == EndpointKind::Server && !tgt.is_empty() && tgt != g.hist_target {
+        g.hist[0].clear(); // 换服务器 = 清账（对象轴两相各一本之外的第三清账点）
+        g.hist_target = tgt;
+    }
+    g.hist[sys_hist::hist_idx(kind)].push(s);
+    g.hist_writes += 1;
+    DIRTY.store(true, Ordering::Relaxed);
+    if g.hist_writes >= SAVE_EVERY {
+        g.hist_writes = 0;
+        let (rings, target) = (g.hist.clone(), g.hist_target.clone());
+        std::thread::spawn(move || save_hist(&rings, &target));
     }
 }
 
@@ -284,7 +336,9 @@ pub fn configure(backend: Backend, local_port: u16) {
         };
         bump(&mut g, phase, None);
         bump_sys(&mut g, None); // 后端翻相清体征（kfmv4 时代的不许带进 na-server 相）
-        clear_hist(&mut g); // 柱轨同清（上一相的曲线不许带进新相）
+        // 柱轨不清账（2026-09-21 v2）：两相各一本历史账，翻相取另一本
+        // 即天然清账；同一相翻后端（na-server/kfmv4 托管）= 同一台机器，
+        // 历史留着（托管相 hist() 返空账不画陈旧柱，见下）
     }
     ensure_poller();
 }
@@ -311,9 +365,17 @@ pub fn sys_snap() -> SysSnap {
     inner().lock().unwrap().sys.clone()
 }
 
-/// 读环境体征历史账（柱轨涂装/合成期每帧一张；CAP 级样本克隆，便宜）
+/// 读环境体征历史账（柱轨涂装/合成期每帧一张；CAP 级样本克隆，便宜）。
+/// 取**当前对象相**那本（服务器/本地各一本）；服务器相 + 后端非
+/// na-server（kfmv4 托管，无体征面）= 空账——不画陈旧柱（账留着，
+/// 翻回 na-server 后端即续摊）
 pub fn hist() -> Hist {
-    inner().lock().unwrap().hist.clone()
+    let kind = crate::endpoint::current();
+    let g = inner().lock().unwrap();
+    if kind == EndpointKind::Server && g.cfg_backend != Backend::NaServer {
+        return Hist::default();
+    }
+    g.hist[sys_hist::hist_idx(kind)].clone()
 }
 
 /// 壳脏帧消耗口：有变化取走 true（每帧一查，零成本）
@@ -376,7 +438,7 @@ fn ensure_poller() {
     ONCE.get_or_init(|| {
         std::thread::spawn(|| {
             let mut last_poll: Option<Instant> = None;
-            let mut was_visible = false;
+            let mut was_on = false;
             let mut last_kind: Option<crate::endpoint::EndpointKind> = None;
             loop {
                 std::thread::sleep(Duration::from_millis(200));
@@ -385,24 +447,29 @@ fn ensure_poller() {
                     (g.cfg_backend, g.cfg_port, g.visible)
                 };
                 // 对象轴翻相清账（两轴第 6 步③：服务器体征不许带进
-                // 本地相，互不清带——与 configure 后端翻相清账同纪律）；
-                // 翻相即拍（last_poll 勾销）
+                // 本地相，互不清带）；翻相即拍（last_poll 勾销）。
+                // 柱轨历史账不在此清（两相各一本，取另一本 = 天然清账）
                 let kind = crate::endpoint::current();
                 if last_kind != Some(kind) {
                     last_kind = Some(kind);
                     last_poll = None;
                     let mut g = inner().lock().unwrap();
                     bump_sys(&mut g, None);
-                    clear_hist(&mut g); // 对象轴翻相同清柱轨账
                 }
-                if !visible {
-                    was_visible = false;
+                // 节拍闸（2026-09-21 v2「默认铺开」）：**解析页可见 或
+                // 应用在前台**都要拍——前台即在后台攒柱轨历史（用户
+                // 拍板「别做从左长，最好是默认就是铺开的」：历史铺开度
+                // = 手上拍数，退后台才停轮（零后台流量）；health 面
+                // 仍只认页可见（卡面才用它）
+                let fg = crate::gate::foreground();
+                if !visible && !fg {
+                    was_on = false;
                     continue;
                 }
-                // 可见上升沿立即一拍；之后 2s 一拍
-                let due = !was_visible
+                // 上升沿立即一拍；之后 2s 一拍
+                let due = !was_on
                     || last_poll.is_none_or(|t| t.elapsed() >= Duration::from_secs(POLL_SECS));
-                was_visible = true;
+                was_on = true;
                 if !due {
                     continue;
                 }
@@ -417,26 +484,29 @@ fn ensure_poller() {
                     let info = na_sys::collect("/data");
                     let mut g = inner().lock().unwrap();
                     bump_sys(&mut g, Some(info));
-                    push_hist(&mut g, sys_hist::sample_of(&info)); // 柱轨同拍追
+                    push_hist(&mut g, kind, sys_hist::sample_of(&info)); // 柱轨同拍追
                     continue;
                 }
                 if backend != Backend::NaServer {
                     // 托管相复位节拍账（旧行为保鲜：翻回 na-server
                     // 后端即拍，不白等一拍）
                     last_poll = None;
-                    was_visible = false;
+                    was_on = false;
                     continue;
                 }
-                match http_get(port, "/api/na/health").and_then(|b| parse_health(&b)) {
-                    Ok(info) => {
-                        let mut g = inner().lock().unwrap();
-                        bump(&mut g, Phase::Ready, Some(info));
-                    }
-                    Err(e) => {
-                        crate::report::report("svchealth", &format!("health 轮询失败: {e}"));
-                        let mut g = inner().lock().unwrap();
-                        let keep = g.snap.info.clone();
-                        bump(&mut g, Phase::Error(e), keep);
+                // health 面：只喂卡面，页不可见不白轮（前台攒历史不需要它）
+                if visible {
+                    match http_get(port, "/api/na/health").and_then(|b| parse_health(&b)) {
+                        Ok(info) => {
+                            let mut g = inner().lock().unwrap();
+                            bump(&mut g, Phase::Ready, Some(info));
+                        }
+                        Err(e) => {
+                            crate::report::report("svchealth", &format!("health 轮询失败: {e}"));
+                            let mut g = inner().lock().unwrap();
+                            let keep = g.snap.info.clone();
+                            bump(&mut g, Phase::Error(e), keep);
+                        }
                     }
                 }
                 // 环境体征同拍轮（环境卡数据面）：错误只报不换位，
@@ -445,7 +515,7 @@ fn ensure_poller() {
                     Ok(info) => {
                         let mut g = inner().lock().unwrap();
                         bump_sys(&mut g, Some(info));
-                        push_hist(&mut g, sys_hist::sample_of(&info)); // 柱轨同拍追
+                        push_hist(&mut g, kind, sys_hist::sample_of(&info)); // 柱轨同拍追
                     }
                     Err(e) => {
                         crate::report::report("svchealth", &format!("sys 轮询失败: {e}"));

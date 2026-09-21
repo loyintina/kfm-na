@@ -1048,10 +1048,10 @@ fn paint_sys_bars(
     if take.is_empty() {
         return;
     }
-    let peak = crate::sys_hist::window_peak(take);
+    let scale = crate::sys_hist::scale_of(kind, take);
     let max_h = crate::sys_hist::BAR_MAX_H.min(th);
     for (i, s) in take.iter().enumerate() {
-        let Some(v) = kind.value(s) else {
+        let Some(v) = kind.bar_value(s, scale) else {
             continue;
         };
         let x0 = tx + i as i64 * i64::from(crate::sys_hist::STEP) - i64::from(offset);
@@ -1059,7 +1059,7 @@ fn paint_sys_bars(
         if x1 <= tx || x0 >= tx + i64::from(tw) {
             continue; // 已滑出左缘 / 尚在进口条外
         }
-        let h = crate::sys_hist::bar_h(v, kind.denom(peak), max_h);
+        let h = crate::sys_hist::bar_h(v, scale.denom(), max_h);
         let y0 = ty + i64::from(th) - i64::from(h);
         let (cy0, cy1) = match clip_y {
             Some((c0, c1)) => (
@@ -1080,7 +1080,7 @@ fn paint_sys_bars(
             cy0 as u32,
             (cx1 - cx0) as u32,
             (cy1 - cy0) as u32,
-            sys_grade_color(kind.grade(s)),
+            sys_grade_color(kind.grade_in(s, scale)),
         );
     }
 }

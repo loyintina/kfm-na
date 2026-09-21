@@ -12,12 +12,28 @@
 
 use std::time::{Duration, Instant};
 
-use kfm_na::sys_hist::{self, Grade, Hist, MetricKind, Sample};
+use kfm_na::sys_hist::{self, Grade, Hist, MetricKind, Sample, Scale};
 
+/// 夹具：4 核口径（load_pct = load/4，与 na-sys 采集同一算法）——
+/// 负载轨走占比模式（用户拍板「服务器 4 核，负载也判色」）
 fn sample(load: u32, mem: u8, swap: u8, disk: u8) -> Sample {
     Sample {
         load_x100: load,
         has_load: true,
+        load_pct: Some((load as f64 / 4.0).round().min(255.0) as u8),
+        mem_pct: Some(mem),
+        swap_pct: Some(swap),
+        disk_pct: Some(disk),
+    }
+}
+
+/// 夹具：无核数口径（旧版 na-server 缺 cores 键）——负载轨回退
+/// 窗内峰值归一 + 中性档
+fn sample_no_cores(load: u32, mem: u8, swap: u8, disk: u8) -> Sample {
+    Sample {
+        load_x100: load,
+        has_load: true,
+        load_pct: None,
         mem_pct: Some(mem),
         swap_pct: Some(swap),
         disk_pct: Some(disk),
@@ -39,6 +55,7 @@ fn sysinfo() -> na_sys::SysInfo {
         }),
         disk: Some((105_286_258_688, 24_877_244_416)),
         uptime_s: Some(7849375),
+        cores: Some(4),
     }
 }
 
@@ -72,7 +89,10 @@ fn spec_环形_清账() {
     h.clear();
     assert!(h.is_empty());
     assert_eq!(h.seq(), 0, "清账连拍序一起归零（翻相语义）");
-    assert_eq!(h.elapsed_ms(Instant::now()), 0);
+    // 无在播相位（空账/落盘恢复）= **稳态位**，不是起步相：起步相会把
+    // 最新柱留在进口条外（右缘缺一根），恢复态必须贴右缘静止
+    assert_eq!(h.elapsed_ms(Instant::now()), sys_hist::ANIM_MS);
+    assert_eq!(h.slide_px_now(Instant::now()), sys_hist::STEP);
 }
 
 #[test]
@@ -157,37 +177,86 @@ fn spec_判色_阈值边界() {
 #[test]
 fn spec_判色_轨轴分流() {
     let s = sample(42, 90, 10, 0);
+    // 四核口径：负载 42/4 = 11% → 安全档（占比模式判色）
     assert_eq!(
-        MetricKind::Load.grade(&s),
-        Grade::Neutral,
-        "负载无核数口径 = 中性不判色（kfmv4 无百分比分支同规）"
+        MetricKind::Load.grade_in(&s, Scale::Pct),
+        Grade::Ok,
+        "有核数 = 负载按占比判色（用户拍板）"
     );
-    assert_eq!(MetricKind::Mem.grade(&s), Grade::Bad);
-    assert_eq!(MetricKind::Swap.grade(&s), Grade::Ok);
-    assert_eq!(MetricKind::Disk.grade(&s), Grade::Ok);
+    assert_eq!(MetricKind::Mem.grade_in(&s, Scale::Pct), Grade::Bad);
+    assert_eq!(MetricKind::Swap.grade_in(&s, Scale::Pct), Grade::Ok);
+    assert_eq!(MetricKind::Disk.grade_in(&s, Scale::Pct), Grade::Ok);
+    // 无核数口径：负载回中性（kfmv4 无百分比分支同规），其余轨不受影响
+    let nc = sample_no_cores(283, 90, 10, 0);
+    assert_eq!(
+        MetricKind::Load.grade_in(&nc, Scale::Peak(283)),
+        Grade::Neutral,
+        "缺核数 = 中性不判色"
+    );
+    assert_eq!(MetricKind::Mem.grade_in(&nc, Scale::Peak(283)), Grade::Bad);
     // 该路采不到 = 中性（不判色不连坐）
     let miss = Sample {
         load_x100: 0,
         has_load: false,
+        load_pct: None,
         mem_pct: None,
         swap_pct: None,
         disk_pct: None,
     };
-    assert_eq!(MetricKind::Mem.grade(&miss), Grade::Neutral);
-    assert!(MetricKind::Load.value(&miss).is_none());
-    assert!(MetricKind::Mem.value(&miss).is_none());
+    assert_eq!(MetricKind::Mem.grade_in(&miss, Scale::Pct), Grade::Neutral);
+    assert!(MetricKind::Load.bar_value(&miss, Scale::Peak(1)).is_none());
+    assert!(MetricKind::Mem.bar_value(&miss, Scale::Pct).is_none());
 }
 
 #[test]
-fn spec_轨轴_归一底() {
-    // 占比轨恒 100（绝对尺）；负载轨 = 窗内峰值（至少 1 防除零）
-    assert_eq!(MetricKind::Mem.denom(999), 100);
-    assert_eq!(MetricKind::Disk.denom(0), 100);
-    assert_eq!(MetricKind::Load.denom(0), 1);
-    assert_eq!(MetricKind::Load.denom(283), 283);
+fn spec_轨模式_占比与窗峰() {
+    // 有核数 = 占比轨（绝对尺，不随窗漂移）
+    let with = [sample(42, 0, 0, 0), sample(100, 0, 0, 0)];
+    assert_eq!(sys_hist::scale_of(MetricKind::Load, &with), Scale::Pct);
+    // 无核数 = 窗内峰值归一（至少 1）
+    let nc = [sample_no_cores(283, 0, 0, 0), sample_no_cores(100, 0, 0, 0)];
+    assert_eq!(sys_hist::scale_of(MetricKind::Load, &nc), Scale::Peak(283));
+    assert_eq!(
+        sys_hist::scale_of(MetricKind::Load, &[]),
+        Scale::Peak(1),
+        "空窗给 1 防除零"
+    );
+    // 其余三轨恒占比
+    for k in [MetricKind::Mem, MetricKind::Swap, MetricKind::Disk] {
+        assert_eq!(sys_hist::scale_of(k, &nc), Scale::Pct);
+        assert_eq!(sys_hist::scale_of(k, &[]), Scale::Pct);
+    }
+    // 归一底
+    assert_eq!(Scale::Pct.denom(), 100);
+    assert_eq!(Scale::Peak(0).denom(), 1);
+    assert_eq!(Scale::Peak(283).denom(), 283);
+    // 值取件两模式分流（无核数 = 原始 ×100；有核数 = 占比）
+    assert_eq!(
+        MetricKind::Load.bar_value(&nc[0], Scale::Peak(283)),
+        Some(283)
+    );
+    assert_eq!(MetricKind::Load.bar_value(&with[0], Scale::Pct), Some(11));
+}
+
+#[test]
+fn spec_轨轴_取值口径() {
+    // 占比取件（内存/交换/磁盘恒占比；负载看核数）
     let s = sample(42, 0, 0, 0);
-    assert_eq!(MetricKind::Load.value(&s), Some(42));
-    assert_eq!(MetricKind::Mem.value(&s), Some(0));
+    assert_eq!(
+        MetricKind::Load.pct(&s),
+        Some(11),
+        "0.42/4 核 = 10.5% → 11%"
+    );
+    assert_eq!(MetricKind::Mem.pct(&s), Some(0));
+    assert_eq!(MetricKind::Swap.pct(&s), Some(0));
+    assert_eq!(MetricKind::Disk.pct(&s), Some(0));
+    let nc = sample_no_cores(42, 0, 0, 0);
+    assert_eq!(MetricKind::Load.pct(&nc), None, "缺核数 = 无占比口径");
+    assert_eq!(
+        MetricKind::Load.bar_value(&nc, Scale::Peak(84)),
+        Some(42),
+        "缺核数走原始值（窗峰归一）"
+    );
 }
 
 // ---- 柱高 ----
@@ -227,8 +296,8 @@ fn spec_柱高_四舍五入与钳制() {
     assert_eq!(sys_hist::window_peak(&win), 283);
     assert_eq!(
         sys_hist::bar_h(
-            283,
-            MetricKind::Load.denom(sys_hist::window_peak(&win)),
+            sys_hist::window_peak(&win),
+            sys_hist::scale_of(MetricKind::Load, &win).denom(),
             max
         ),
         max,
@@ -277,6 +346,29 @@ fn spec_样本_占比与缺失() {
     assert_eq!(s.swap_pct, Some(75));
     // 磁盘已用 = 105286258688−24877244416 / 总 = 76.36% → 76
     assert_eq!(s.disk_pct, Some(76));
+    // 负载占比 = 2.83/4 核 = 70.75% → 71（恰落琥珀档——真机同景）
+    assert_eq!(s.load_pct, Some(71));
+}
+
+#[test]
+fn spec_样本_缺核数退化() {
+    // 旧版 na-server（缺 cores 键）：负载占比 None → 该轨回退窗峰归一 + 中性
+    let mut i = sysinfo();
+    i.cores = None;
+    let s = sys_hist::sample_of(&i);
+    assert_eq!(s.load_pct, None);
+    assert!(s.has_load, "原始负载照常采到（文字值不受影响）");
+    assert_eq!(s.load_x100, 283);
+    // 核数 0 也按缺口径处理（除零防线）
+    let mut i2 = sysinfo();
+    i2.cores = Some(0);
+    assert_eq!(sys_hist::sample_of(&i2).load_pct, None);
+    // 负载整路缺失 = 无占比（连坐只到本轨）
+    let mut i3 = sysinfo();
+    i3.load = None;
+    let s3 = sys_hist::sample_of(&i3);
+    assert_eq!(s3.load_pct, None);
+    assert_eq!(s3.mem_pct, Some(34), "内存路不连坐");
 }
 
 #[test]
@@ -288,7 +380,12 @@ fn spec_样本_单路缺失不连坐() {
         !s.has_load,
         "负载采不到 = has_load 假（0.00 与采不到要分辨）"
     );
-    assert_eq!(MetricKind::Load.value(&s), None, "负载该拍不画柱");
+    assert_eq!(
+        MetricKind::Load.bar_value(&s, Scale::Peak(1)),
+        None,
+        "负载采不到 → 该拍不画柱（两种口径都不画）"
+    );
+    assert_eq!(MetricKind::Load.pct(&s), None);
     assert_eq!(s.mem_pct, Some(34), "内存路不许被连坐");
     // 无 swap（total=0 或键缺）→ None 不编造 0%
     let mut i2 = sysinfo();
@@ -310,6 +407,16 @@ fn spec_记录_最新档查询() {
         Grade::Neutral,
         "空账 = 中性（无数据不报警）"
     );
+    // 4 核口径：负载也判色（用户拍板）——占比可满，满即红
+    h.push(sample(340, 10, 10, 10)); // 3.40/4 = 85% → 琥珀
+    assert_eq!(h.latest_grade(MetricKind::Load), Grade::Warn);
+    h.push(sample(400, 10, 10, 10)); // 4.00/4 = 100% → 红
+    assert_eq!(h.latest_grade(MetricKind::Load), Grade::Bad);
+    // 无核数口径 = 负载恒中性（不被窗峰归一伪造成警戒）
+    let mut h2 = Hist::default();
+    h2.push(sample_no_cores(400, 10, 10, 10));
+    assert_eq!(h2.latest_grade(MetricKind::Load), Grade::Neutral);
+    h.clear();
     h.push(sample(10, 90, 10, 10));
     assert_eq!(h.latest_grade(MetricKind::Mem), Grade::Bad);
     h.push(sample(10, 10, 10, 10));
@@ -457,4 +564,75 @@ fn spec_示警色档_映射与定值() {
     assert_eq!(sys_grade_fg(Grade::Neutral, 0x0080_8080), 0x0080_8080);
     assert_eq!(sys_grade_fg(Grade::Warn, 0x0080_8080), WARN_AMBER);
     assert_eq!(sys_grade_fg(Grade::Bad, 0x0080_8080), WARN_RED);
+}
+
+// ---- 落盘（默认铺开：进程重启不清零柱轨） ----
+
+#[test]
+fn spec_落盘_往返原样() {
+    let mut a = Hist::default();
+    let t0 = Instant::now();
+    a.push_at(sample(283, 34, 75, 76), t0);
+    a.push_at(sample_no_cores(100, 0, 0, 0), t0);
+    let mut b = Hist::default();
+    b.push_at(sample(400, 90, 10, 12), t0);
+    let text = sys_hist::encode_hist([&a, &b], ["root@10.0.0.1:22", ""]);
+    let (ra, ta) = sys_hist::decode_hist(&text);
+    assert_eq!(ta[0], "root@10.0.0.1:22", "归属串往返");
+    assert_eq!(ra[0].len(), a.len());
+    assert_eq!(ra[0].seq(), a.seq(), "拍序往返");
+    assert_eq!(ra[0].as_slice(), a.as_slice(), "样本逐值往返");
+    assert_eq!(ra[1].as_slice(), b.as_slice(), "两相各归各段");
+    // 恢复态相位 = 稳态（无在播动画）
+    assert_eq!(ra[0].slide_px_now(Instant::now()), sys_hist::STEP);
+}
+
+#[test]
+fn spec_落盘_归属串空格转义() {
+    let h = Hist::default();
+    let text = sys_hist::encode_hist([&h, &h], ["my server box", ""]);
+    let (_, t) = sys_hist::decode_hist(&text);
+    assert_eq!(t[0], "my server box", "空格 %20 往返（段头以空格分词）");
+    assert_eq!(t[1], "", "空归属 = 空串（未起 supervisor）");
+}
+
+#[test]
+fn spec_落盘_坏件宽容() {
+    let h = Hist::default();
+    let good = sys_hist::encode_hist([&h, &h], ["t", ""]);
+    // 版本不认 = 整份弃（宁可重攒不误读旧语义）
+    let (r, t) = sys_hist::decode_hist("kfm-na-sys-hist v0\n#server t 3\n1 1 - - - -\n");
+    assert!(r.iter().all(|x| x.is_empty()));
+    assert_eq!(t[0], "", "版本不认连归属也不认");
+    // 段头坏 = 该段弃；坏行 = 跳该行不连坐整份
+    let mut a = Hist::default();
+    let t0 = Instant::now();
+    a.push_at(sample(10, 1, 2, 3), t0);
+    let mut text = sys_hist::encode_hist([&a, &h], ["srv", ""]);
+    text = text.replace("#server srv 1", "#bogus srv 1");
+    let (r2, _) = sys_hist::decode_hist(&text);
+    assert!(r2[0].is_empty(), "段头坏 = 该段弃（不许误挂到别的段）");
+    // 半截行（断电写一半）跳过
+    let text2 = format!("{good}#bogus x 0\n12 1\nnot a line\n");
+    let (r3, _) = sys_hist::decode_hist(&text2);
+    assert_eq!(r3[1].len(), 0);
+    assert!(r3[0].is_empty());
+}
+
+#[test]
+fn spec_落盘_超容保末尾() {
+    // 落盘件可能是冒版本留下的更大环：恢复时截到 CAP，保**末尾**（最新）
+    let mut h = Hist::default();
+    let t0 = Instant::now();
+    for i in 0..(sys_hist::CAP + 5) {
+        h.push_at(sample(i as u32, 0, 0, 0), t0);
+    }
+    let text = sys_hist::encode_hist([&h, &Hist::default()], ["t", ""]);
+    let (r, _) = sys_hist::decode_hist(&text);
+    assert_eq!(r[0].len(), sys_hist::CAP);
+    assert_eq!(
+        r[0].as_slice()[r[0].len() - 1].load_x100,
+        (sys_hist::CAP + 4) as u32,
+        "保末尾 = 最新的那批"
+    );
 }

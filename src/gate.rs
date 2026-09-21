@@ -1287,6 +1287,12 @@ pub fn note_foreground(fg: bool) {
     APP_FOREGROUND.store(fg, Ordering::Relaxed);
 }
 
+/// 前台读数（2026-09-21：环境卡历史账「前台即抢」的唯一判据）——
+/// 与看门狗同源，不另开一路状态
+pub fn foreground() -> bool {
+    APP_FOREGROUND.load(Ordering::Relaxed)
+}
+
 /// 看门狗判决(纯函数,四态钉死)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WatchState {

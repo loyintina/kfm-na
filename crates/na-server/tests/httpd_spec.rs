@@ -115,6 +115,7 @@ fn spec_sys_json_形状() {
         }),
         disk: Some((100_000_000_000, 45_000_000_000)),
         uptime_s: Some(7849375),
+        cores: Some(4),
     };
     let v: serde_json::Value =
         serde_json::from_str(&httpd::sys_json(&info)).expect("sys 是合法 JSON");
@@ -127,6 +128,7 @@ fn spec_sys_json_形状() {
     assert_eq!(v["swap_total_kb"], 4096000);
     assert_eq!(v["swap_free_kb"], 1024000);
     assert_eq!(v["uptime_s"], 7849375);
+    assert_eq!(v["cores"], 4, "核数下发（客户端凭它算负载占比判色）");
     // load 在但 procs 缺（第 4 段坏件）：procs 独立显形 null 不连坐 load
     let info2 = na_sys::SysInfo {
         load: Some(na_sys::LoadAvg {
@@ -152,6 +154,7 @@ fn spec_sys_json_坏件显形() {
         mem: None,
         disk: None,
         uptime_s: None,
+        cores: None,
     };
     let v: serde_json::Value =
         serde_json::from_str(&httpd::sys_json(&info)).expect("sys 是合法 JSON");
@@ -164,6 +167,10 @@ fn spec_sys_json_坏件显形() {
     assert!(v["swap_total_kb"].is_null());
     assert!(v["swap_free_kb"].is_null());
     assert!(v["uptime_s"].is_null());
+    assert!(
+        v["cores"].is_null(),
+        "采不到核数 = null（客户端回退窗峰归一）"
+    );
 }
 
 #[test]

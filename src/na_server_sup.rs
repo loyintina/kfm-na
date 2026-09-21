@@ -28,14 +28,23 @@ pub const MARK_SPAWNED: &str = "NA_SERVER_SPAWNED";
 pub const MARK_FAIL: &str = "NA_SERVER_FAIL";
 
 /// ensure 脚本（A 档纯函数）：幂等保证的三段序——
-/// ①先探活（活 = 接管，绝不重启别人的进程）②缺二进制则建 ③detached
-/// 拉起后复检。顺序错了 = 重启别人的 na-server 或拉出死娃报假绿。
+/// ①先探活（活 = 接管，**绝不重启别人的进程**——别人的在跑 = 有活跃
+/// 会话挂在它上面，重启即断线）②缺二进制或**源码比二进制新**则建
+/// ③detached 拉起后复检。顺序错了 = 重启别人的 na-server 或拉出死娃报假绿。
+///
+/// ②的「源码更新」判据（2026-09-21 负载判色案落地）：na-server 是契约的
+/// 一端（/api/na/sys 加 cores 键就靠它下发），只判「二进制在不在」会让
+/// 契约变更**默默不生效**——本机实测：改了 na-server 源码，在跑的老进程
+/// 照旧下发旧契约，负载轨白等一个口径。故源（na-server/na-sys 两侧 src）
+/// 有比二进制新的 .rs 就重建；在跑的老进程不动（等它自己 idle 退出或
+/// 下次拉起换新），绝不为了新契约掐别人的会话。
 pub fn ensure_script() -> String {
     format!(
         r#"H={HEALTH_URL}
 if curl -s -m 2 "$H" >/dev/null 2>&1; then echo {MARK_ALIVE}; exit 0; fi
 cd {REPO_DIR} || {{ echo {MARK_FAIL}; exit 1; }}
-if [ ! -x target/release/na-server ]; then
+STALE=$(find crates/na-server/src crates/na-sys/src -name '*.rs' -newer target/release/na-server 2>/dev/null | head -1)
+if [ ! -x target/release/na-server ] || [ -n "$STALE" ]; then
   cargo build --release -p na-server >&2 || {{ echo {MARK_FAIL}; exit 1; }}
 fi
 setsid nohup env NA_BIND=127.0.0.1:{NA_SERVER_PORT} NA_IDLE_EXIT_SECS=1800 ./target/release/na-server >/tmp/na-server.log 2>&1 </dev/null &

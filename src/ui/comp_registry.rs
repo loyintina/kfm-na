@@ -249,7 +249,7 @@ pub const COMPONENTS: &[CompEntry] = &[
         file: "src/termview.rs",
         spec: "宪法 §2.4 示警色档 + §六之十 体征柱轨（2026-09-21 环境卡重做）",
         tests: "tests/sys_hist_spec.rs",
-        desc: "环境卡四轨（负载/内存/交换/磁盘）的文字行下滚动柱（脑在 src/sys_hist.rs：环形账/判色档/柱高滑入算术）：逐样本判色（>85 红 / ≥70 琥珀 / 其余绿；无占比指标走中性青 0x2E9FD0，固定色不跟 accent——防与琥珀撞色，窗内峰值归一），柱距半格 9px（柱宽 7 + 缝 2）、轨高 1 格、柱高上限 30px/下限 2px、可见柱数 = 轨宽÷柱距；新样本右侧匀速滚入（时长 = 采样拍长 2s，四轨同拍齐滑）。**滑动在合成期**：柱层（ChromeSlot::SysBars）内容只在采样换代时一烘（卡内芯渐变逐像素重建 + 柱稳态位），滑入位移 = 源 uv 窗口起点（sys_card::band_place 纯函数；dest 矩形 = 轨矩形——uv 源窗即 kfmv4 overflow:hidden 的等价物，零 scissor 零漏墨）。",
+        desc: "环境卡四轨（负载/内存/交换/磁盘）的文字行下滚动柱（脑在 src/sys_hist.rs：环形账/判色档/柱高滑入算术）：逐样本判色（>85 红 / ≥70 琥珀 / 其余绿——负载轨按 l1/核数占比同判，核数未知才回退中性青 0x2E9FD0 + 窗峰归一），柱距半格 9px（柱宽 7 + 缝 2）、轨高 1 格、柱高上限 30px/下限 2px、可见柱数 = 轨宽÷柱距；新样本右侧匀速滚入（时长 = 采样拍长 2s，四轨同拍齐滑）。**滑动在合成期**：柱层（ChromeSlot::SysBars）内容只在采样换代时一烘（卡内芯渐变逐像素重建 + 柱稳态位），滑入位移 = 源 uv 窗口起点（sys_card::band_place 纯函数；dest 矩形 = 轨矩形——uv 源窗即 kfmv4 overflow:hidden 的等价物，零 scissor 零漏墨）。**默认铺开**：历史账前台即抢 + 落盘续摊（进程重开不空窗）。",
         preview: Preview::SysBars,
     },
     // ---- 功能光标 ----

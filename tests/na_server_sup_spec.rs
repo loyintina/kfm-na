@@ -56,6 +56,32 @@ fn spec_脚本_建造在拉起前() {
 }
 
 #[test]
+fn spec_脚本_源码新即重建() {
+    // 契约变更不许默默不生效（2026-09-21 负载判色：na-server 加 cores 键，
+    // 老二进制在跑 = 新客户端永远收不到核数、负载轨白等一个口径）
+    let s = ensure_script();
+    assert!(
+        s.contains("find crates/na-server/src crates/na-sys/src"),
+        "判据必须覆盖 na-server 与 na-sys 两侧 src（体征契约在 na-sys 里）"
+    );
+    assert!(
+        s.contains("-newer target/release/na-server"),
+        "判据 = 源码比二进制新"
+    );
+    assert!(
+        s.contains("[ ! -x target/release/na-server ] || [ -n \"$STALE\" ]"),
+        "缺二进制与源码更新两条都要触发重建"
+    );
+    // 重建归重建，**绝不重启在跑的老进程**（别人会话挂它上面）
+    let probe = s.find("curl -s -m 2").unwrap();
+    let build = s.find("cargo build").unwrap();
+    assert!(probe < build, "探活仍在重建之前（接管优先，不掐别人会话）");
+    let spawn = s.find("setsid nohup").unwrap();
+    let build2 = s.rfind("cargo build").unwrap();
+    assert!(build2 < spawn, "重建后才能拉起（新娃用新二进制）");
+}
+
+#[test]
 fn spec_脚本_拉起必须彻底_detach() {
     let s = ensure_script();
     assert!(

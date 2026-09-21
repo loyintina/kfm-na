@@ -25,6 +25,7 @@ pub fn sys_json(info: &na_sys::SysInfo) -> String {
         "disk_total_b": info.disk.map(|d| d.0),
         "disk_avail_b": info.disk.map(|d| d.1),
         "uptime_s": info.uptime_s,
+        "cores": info.cores,
     })
     .to_string()
 }

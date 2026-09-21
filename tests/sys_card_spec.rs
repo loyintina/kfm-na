@@ -70,6 +70,7 @@ fn sysinfo() -> na_sys::SysInfo {
         }),
         disk: Some((105_286_258_688, 24_877_244_416)),
         uptime_s: Some(7849375),
+        cores: Some(4),
     }
 }
 

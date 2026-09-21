@@ -169,3 +169,18 @@ fn spec_collect_坏件显形() {
     assert!(s.disk.is_none(), "statvfs 失败必须显形 None");
     assert!(s.mem.is_some(), "磁盘路坏了不许连坐内存路");
 }
+
+#[test]
+fn spec_collect_核数显形() {
+    // 核数（2026-09-21 负载判色）：采集侧自报本机核数——两台机器各报
+    // 自己的，绝不写死设备常量。不可用的平台 = None（客户端回退窗峰归一）
+    let s = na_sys::collect("/");
+    let c = s
+        .cores
+        .expect("Linux/Android 上 available_parallelism 必有值");
+    assert!(c > 0, "核数下限 1");
+    assert!(
+        c <= 1024,
+        "核数上限护栏（防采集侧读到垃圾值把占比归一除歪）"
+    );
+}
