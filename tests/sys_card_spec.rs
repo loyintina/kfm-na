@@ -19,7 +19,7 @@ use kfm_na::settings::Backend;
 use kfm_na::svc_health;
 use kfm_na::sys_hist;
 use kfm_na::ui::parser_chain::{self, ChainCardId};
-use kfm_na::ui::sys_card::{self, METRIC_LABELS, N_METRICS, N_TAILS, TAIL_LABELS, TRACK_H};
+use kfm_na::ui::sys_card::{self, METRIC_LABELS, N_METRICS, N_TAILS, TAIL_LABEL, TRACK_H};
 
 /// 三区几何夹具（2026-09-21 三区排布 v2：环境卡归左滚动区）：屏
 /// 1080×2280、可视底 2000、tmux 卡高 300——本考题只钉「环境卡在左区
@@ -33,18 +33,29 @@ fn regs() -> parser_chain::Regions {
 }
 
 fn heights() -> parser_chain::ChainHeights {
-    parser_chain::heights(300, 2)
+    parser_chain::heights(300, 2, sys_card::CARD_H)
 }
 
 /// 环境卡 layout（排布器配给制——与生产侧同路径 slot_rect → layout_in）
+/// 全行集（四轨 + 在线）——参考夹具
+fn all_rows() -> sys_card::RowSet {
+    sys_card::RowSet {
+        metrics: sys_hist::METRICS.to_vec(),
+        uptime: true,
+    }
+}
+
 fn sys_lay() -> sys_card::SysLayout {
     let r = regs();
-    sys_card::layout_in(parser_chain::slot_rect(
-        ChainCardId::Sys,
-        &r,
-        &heights(),
-        &parser_chain::Scrolls { left: 0, right: 0 },
-    ))
+    sys_card::layout_in(
+        parser_chain::slot_rect(
+            ChainCardId::Sys,
+            &r,
+            &heights(),
+            &parser_chain::Scrolls { left: 0, right: 0 },
+        ),
+        &all_rows(),
+    )
 }
 
 fn sup() -> SupSnap {
@@ -258,7 +269,11 @@ fn spec_几何_左区贴窗顶单竖列() {
     assert_eq!(l.card.x, r.left.x, "环境卡在左滚动区（三区 v2）");
     assert_eq!(l.card.w, r.left.w);
     assert_eq!(l.card.y, r.left.y, "scroll=0 贴左区窗顶");
-    assert_eq!(l.card.h, sys_card::CARD_H, "卡高 = 恒定（四轨 + 两尾部行）");
+    assert_eq!(
+        l.card.h,
+        sys_card::CARD_H,
+        "全行集卡高 = card_h(四轨 + 在线) 参考值"
+    );
     use kfm_na::ui::parser_page as pk;
     let cx = l.card.x + i64::from(pk::CARD_PAD_H);
     let cw = l.card.w - pk::CARD_PAD_H * 2;
@@ -286,22 +301,85 @@ fn spec_几何_左区贴窗顶单竖列() {
             );
         }
     }
-    // 尾部两行接在末轨之下
+    // 尾部行（在线）接在末轨之下
+    let tail = l.uptime.expect("全行集有在线行");
     assert_eq!(
-        l.tails[0].y,
+        tail.y,
         l.metrics[N_METRICS - 1].track.y + i64::from(TRACK_H + pk::ROW_GAP),
         "尾部行紧跟末轨（行距同池）"
     );
     assert_eq!(
-        l.tails[1].y,
-        l.tails[0].y + i64::from(sys_card::FIELD_H + sys_card::FIELD_GAP)
-    );
-    let last = &l.tails[N_TAILS - 1];
-    assert_eq!(
-        last.y + i64::from(last.h),
+        tail.y + i64::from(tail.h),
         l.card.y + i64::from(l.card.h) - i64::from(pk::CARD_PAD_V),
         "末行底 = 卡底内缘（卡高账与布局逐值咬合）"
     );
+}
+
+#[test]
+fn spec_行集_没数据的行不做() {
+    // 用户拍板「如果切换到手机，没有的条就不做吧」+「进程数字删除吧」：
+    // 行集 = 值不是「—」的行；卡高随行集
+    let s = sup();
+    let full = sys_card::compose(
+        kfm_na::endpoint::EndpointKind::Server,
+        Backend::NaServer,
+        Some(&s),
+        Some(&sysinfo()),
+    );
+    let rows = sys_card::rows_of(&full);
+    assert_eq!(rows.metrics.len(), 4, "服务器相四轨全画");
+    assert!(rows.uptime, "服务器相有在线行");
+    assert_eq!(sys_card::card_h(&rows), sys_card::CARD_H, "全行集 = CARD_H");
+    // 手机相（Android 拒 loadavg/uptime）：只剩内存/交换/磁盘，卡高随之
+    let mut phone = sysinfo();
+    phone.load = None;
+    phone.uptime_s = None;
+    let lc = sys_card::compose(
+        kfm_na::endpoint::EndpointKind::Local,
+        Backend::NaServer,
+        None,
+        Some(&phone),
+    );
+    let lrows = sys_card::rows_of(&lc);
+    assert_eq!(
+        lrows.metrics,
+        vec![
+            sys_hist::MetricKind::Mem,
+            sys_hist::MetricKind::Swap,
+            sys_hist::MetricKind::Disk
+        ],
+        "负载行不做（没数据）"
+    );
+    assert!(!lrows.uptime, "在线行不做（没数据）");
+    assert!(
+        sys_card::card_h(&lrows) < sys_card::CARD_H,
+        "行少了卡高必矮（不留空洞）"
+    );
+    // 托管相全「—」→ 只剩卡头（三行高的最小卡）
+    let hosted = sys_card::compose(
+        kfm_na::endpoint::EndpointKind::Server,
+        Backend::Kfmv4,
+        None,
+        None,
+    );
+    let hrows = sys_card::rows_of(&hosted);
+    assert!(hrows.metrics.is_empty() && !hrows.uptime);
+    assert_eq!(
+        sys_card::card_h(&hrows),
+        kfm_na::ui::parser_page::CARD_PAD_V * 2 + kfm_na::ui::parser_page::ROW_H,
+        "零行 = 卡头 + 上下留白"
+    );
+    // 空行集布局：只有卡头，无轨无尾
+    let l = sys_card::layout_in(
+        parser_chain::slot_rect(
+            ChainCardId::Sys,
+            &regs(),
+            &heights(),
+            &parser_chain::Scrolls { left: 0, right: 0 },
+        ),
+        &hrows,
+    );
+    assert!(l.metrics.is_empty() && l.uptime.is_none());
 }
 
 #[test]
@@ -322,7 +400,7 @@ fn spec_柱层_画布尺与轨几何() {
         "可见柱数 = 轨宽/柱距（单源）"
     );
     assert!(t0.bars >= 1);
-    assert_eq!(t0.max_h, sys_hist::BAR_MAX_H.min(TRACK_H));
+    assert_eq!(t0.max_h, sys_hist::BAR_100_H.min(TRACK_H));
     assert_eq!(t0.step, sys_hist::STEP);
     // 四轨 x/宽同尺（柱层紧凑叠放的前提）
     for t in band.tracks.iter() {
@@ -360,11 +438,11 @@ fn spec_槽位_随左区滚动账平移() {
 #[test]
 fn spec_字段标签_涂装唯一源() {
     // 单竖列（2026-09-21 环境卡重做）：四轨标签与 sys_hist 轨序同长同序，
-    // 尾部两行各归各位——涂装/命中/取件三处同吃这两张表
+    // 尾部一行（在线）——涂装/命中/取件三处同吃这几张表
     assert_eq!(METRIC_LABELS.len(), N_METRICS);
     assert_eq!(METRIC_LABELS, ["负载", "内存", "交换", "磁盘"]);
-    assert_eq!(TAIL_LABELS.len(), N_TAILS);
-    assert_eq!(TAIL_LABELS, ["进程", "在线"]);
+    assert_eq!(TAIL_LABEL, "在线", "进程行已删（用户拍板）");
+    assert_eq!(N_TAILS, 1);
     assert_eq!(N_METRICS, sys_hist::METRICS.len(), "轨序同长");
 }
 
@@ -377,12 +455,11 @@ fn spec_值文案_取件同序() {
         Some(&s),
         Some(&sysinfo()),
     );
-    let mv = sys_card::metric_values(&c);
-    assert_eq!(mv[0], c.load, "轨 0 = 负载（与 METRIC_LABELS 同序）");
-    assert_eq!(mv[1], c.mem);
-    assert_eq!(mv[2], c.swap);
-    assert_eq!(mv[3], c.disk);
-    let tv = sys_card::tail_values(&c);
-    assert_eq!(tv[0], c.procs, "尾部 0 = 进程（与 TAIL_LABELS 同序）");
-    assert_eq!(tv[1], c.uptime);
+    use kfm_na::sys_hist::MetricKind;
+    assert_eq!(sys_card::metric_label(MetricKind::Load), METRIC_LABELS[0]);
+    assert_eq!(sys_card::metric_value(&c, MetricKind::Load), c.load);
+    assert_eq!(sys_card::metric_value(&c, MetricKind::Mem), c.mem);
+    assert_eq!(sys_card::metric_value(&c, MetricKind::Swap), c.swap);
+    assert_eq!(sys_card::metric_value(&c, MetricKind::Disk), c.disk);
+    assert_eq!(sys_card::metric_label(MetricKind::Disk), METRIC_LABELS[3]);
 }

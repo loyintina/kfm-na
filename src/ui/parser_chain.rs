@@ -18,7 +18,7 @@
 
 use crate::termview::{CELL_H, CELL_W};
 use crate::ui::dual_pool::{self, PoolRect};
-use crate::ui::{link_card, sys_card};
+use crate::ui::link_card;
 
 /// 链上卡 id（注册链席位）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,12 +103,15 @@ impl ChainHeights {
 }
 
 /// 高度收集唯一源（各卡自报高度只在本函数被问起——别处手抄
-/// card_h/CARD_H 的加法账 = 回潮）
-pub fn heights(tmux: u32, n_svc_lines: usize) -> ChainHeights {
+/// card_h 的加法账 = 回潮）。`sys_h` = 环境卡自报高**由调用方传**：
+/// 2026-09-21 起环境卡行集数据定（没数据的行不做，见
+/// sys_card::rows_of/card_h），卡高不再是一个常量——本函数不读全局
+/// 快照（考题要能钉固定夹具，不靠环境）
+pub fn heights(tmux: u32, n_svc_lines: usize, sys_h: u32) -> ChainHeights {
     ChainHeights {
         tmux,
         link: link_card::card_h(n_svc_lines),
-        sys: sys_card::CARD_H,
+        sys: sys_h,
     }
 }
 

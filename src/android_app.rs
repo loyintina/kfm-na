@@ -196,7 +196,8 @@ fn parser_geom(
     let tmux_h = pp::tmux_card_h(snap.sessions.len(), mode, cap);
     let regs = crate::ui::parser_chain::regions(sw, sh, bar_h, vbottom, tmux_h);
     let lay = pp::layout_in(regs.dock.clone(), snap.sessions.len(), mode, snap.scroll);
-    let chain_h = crate::ui::parser_chain::heights(tmux_h, n_svc);
+    let chain_h =
+        crate::ui::parser_chain::heights(tmux_h, n_svc, crate::ui::sys_card::card_h_now());
     let scrolls = crate::ui::parser_chain::Scrolls {
         left: snap.left_scroll,
         right: snap.right_scroll,
@@ -6202,8 +6203,11 @@ impl App {
                     &geo.chain_h,
                     &geo.scrolls,
                 );
-                let band =
-                    crate::ui::sys_card::band_of(&crate::ui::sys_card::layout_in(card.clone()));
+                let rows = crate::ui::sys_card::rows_of(&crate::ui::sys_card::current());
+                let band = crate::ui::sys_card::band_of(&crate::ui::sys_card::layout_in(
+                    card.clone(),
+                    &rows,
+                ));
                 let clip = crate::ui::parser_chain::clip_of(
                     crate::ui::parser_chain::ChainCardId::Sys,
                     &geo.regs,

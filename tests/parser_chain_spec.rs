@@ -29,7 +29,7 @@ fn regs(tmux_h: u32) -> parser_chain::Regions {
 }
 
 fn h(tmux: u32, n_svc: usize) -> parser_chain::ChainHeights {
-    parser_chain::heights(tmux, n_svc)
+    parser_chain::heights(tmux, n_svc, sys_card::CARD_H)
 }
 
 const S0: Scrolls = Scrolls { left: 0, right: 0 };
@@ -210,7 +210,7 @@ fn spec_区裁剪带() {
 fn spec_高度收集自报同源() {
     // heights() = 各卡自报高度的唯一收集点：link = card_h(n)、
     // sys = CARD_H，别处不许手抄高度账
-    let hh = parser_chain::heights(999, 3);
+    let hh = parser_chain::heights(999, 3, sys_card::CARD_H);
     assert_eq!(hh.tmux, 999);
     assert_eq!(hh.link, link_card::card_h(3));
     assert_eq!(hh.sys, sys_card::CARD_H);

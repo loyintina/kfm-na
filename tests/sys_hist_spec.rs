@@ -263,7 +263,7 @@ fn spec_轨轴_取值口径() {
 
 #[test]
 fn spec_柱高_四舍五入与钳制() {
-    let max = sys_hist::BAR_MAX_H;
+    let max = sys_hist::BAR_100_H;
     assert_eq!(sys_hist::bar_h(100, 100, max), max, "满值 = 满柱");
     assert_eq!(sys_hist::bar_h(50, 100, max), max / 2, "半值 = 半柱");
     assert_eq!(
@@ -281,16 +281,26 @@ fn spec_柱高_四舍五入与钳制() {
         max,
         "超归一值钳满（不越上限）"
     );
+    // 刻度 = 100% 线高（BAR_100_H），max_h = 轨高（钳制）——两把尺分开：
+    // 100% 值恰好到线，超 100% 越线不越轨
     assert_eq!(
-        sys_hist::bar_h(10, 100, 3),
-        sys_hist::BAR_MIN_H.min(3),
-        "上限比下限还小时取上限，否则保下限"
+        sys_hist::bar_h(100, 100, 36),
+        sys_hist::BAR_100_H,
+        "100% = 线高"
     );
     assert_eq!(
-        sys_hist::bar_h(50, 100, 1),
-        1,
-        "上限 < 下限时取上限（钳区不反）"
+        sys_hist::bar_h(143, 100, 36),
+        36,
+        "超 100%（负载超核）越线不越轨"
     );
+    assert_eq!(
+        sys_hist::placeholder_h(36),
+        sys_hist::BAR_100_H / 2,
+        "占位 = 50% 线高"
+    );
+    // 病态入参（max_h 比下限还小）不反钳：钳域退化成 [max_h, 下限]，
+    // 落点 = 下限（生产里 max_h = 轨高 36 ≫ 下限，此路只为防守）
+    assert_eq!(sys_hist::bar_h(50, 100, 1), sys_hist::BAR_MIN_H);
     // 归一底用窗内峰值（变异④：占比轨拿峰值当分母 = 柱高随窗漂移）
     let win = [sample(283, 0, 0, 0), sample(100, 0, 0, 0)];
     assert_eq!(sys_hist::window_peak(&win), 283);
@@ -434,7 +444,11 @@ fn spec_柱层_uv随位移滑() {
         w: 600,
         h: sys_card::CARD_H,
     };
-    let band = sys_card::band_of(&sys_card::layout_in(card));
+    let rows = sys_card::RowSet {
+        metrics: sys_hist::METRICS.to_vec(),
+        uptime: true,
+    };
+    let band = sys_card::band_of(&sys_card::layout_in(card, &rows));
     let clip = (0, 4000);
     let p0 = sys_card::band_place(&band, 0, clip);
     let p1 = sys_card::band_place(&band, sys_hist::STEP, clip);
@@ -492,7 +506,11 @@ fn spec_柱层_纵向裁剪() {
         w: 600,
         h: sys_card::CARD_H,
     };
-    let band = sys_card::band_of(&sys_card::layout_in(card));
+    let rows = sys_card::RowSet {
+        metrics: sys_hist::METRICS.to_vec(),
+        uptime: true,
+    };
+    let band = sys_card::band_of(&sys_card::layout_in(card, &rows));
     let t0 = &band.tracks[0];
     let t1 = &band.tracks[1];
     // 裁剪带罩轨 0 下半 + 轨 1 上半（区窗被滚到两轨之间）→ 两轨各砍一半
@@ -635,4 +653,29 @@ fn spec_落盘_超容保末尾() {
         (sys_hist::CAP + 4) as u32,
         "保末尾 = 最新的那批"
     );
+}
+
+// ---- 槽位映射（默认铺满 50% + 真实样本从右侧出现） ----
+
+#[test]
+fn spec_槽位_右对齐与占位段() {
+    // 用户拍板：「一开始就生成一个默认 50% 的铺满的版本，然后后续从
+    // 右侧慢慢出现」——手上样本右对齐进窗口，左侧缺口 = 占位段
+    let slots = 54usize; // 轨宽 478 / 柱距 9 ≈ 53 柱 + 1 进口位
+    // 只有 1 拍：占最新槽（= 最右槽），占位段铺满其余
+    assert_eq!(sys_hist::slot_of(0, 1, slots), slots - 1);
+    assert_eq!(sys_hist::placeholder_slots(1, slots), slots - 1);
+    // 3 拍：从右往左排，最旧的落在 slots−3
+    assert_eq!(sys_hist::slot_of(0, 3, slots), slots - 3);
+    assert_eq!(sys_hist::slot_of(2, 3, slots), slots - 1, "最新恒在最右槽");
+    // 铺满：零占位，最旧落 0 槽
+    assert_eq!(sys_hist::placeholder_slots(slots, slots), 0);
+    assert_eq!(sys_hist::slot_of(0, slots, slots), 0);
+    assert_eq!(sys_hist::slot_of(slots - 1, slots, slots), slots - 1);
+    // 病态（样本比槽多）：不越界（钳在末槽）
+    assert_eq!(sys_hist::slot_of(slots + 5, slots + 6, slots), slots);
+    // 100% 线落在轨内且留出越线余量（超 100% 可越线不越轨）——两常量
+    // 都是编译期定值，钉差值（clippy 不许对常量直接断言）
+    const HEADROOM: u32 = sys_hist::TRACK_H - sys_hist::BAR_100_H;
+    assert_eq!(HEADROOM, 6, "越线余量 = 6px（轨 1 格 36 − 线 30）");
 }

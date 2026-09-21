@@ -1027,61 +1027,111 @@ pub fn sys_grade_fg(g: crate::sys_hist::Grade, base: u32) -> u32 {
 
 /// 单轨柱列涂装（页内直涂；合成期柱层 paint_sys_band_layer 共用同一把
 /// 取件/柱高/判色尺——眼手同尺）：轨矩形（帧坐标）+ 轨轴 + 历史账 +
-/// 滑入位移。取件 = tail(柱数+1)（进口柱同窗——kfmv4 恒渲染 柱数+1 根
-/// 同规）；柱底贴轨底、高 = 值/归一底 × 柱高上限；柱越轨左右缘断墨
-/// （overflow:hidden 的网格版）；该拍该路采不到 = 该位留空（显形不编造）
+/// 滑入位移。三层墨：
+/// ① **100% 线**（2026-09-21 用户拍板「把每个柱状图的 100% 线画出来」）：
+///    轨底线以上 BAR_100_H 处的 1px 白 α96 参考线，横贯轨宽——柱高刻度
+///    的读尺；**超 100% 的读数（负载超核）越线不越轨**（轨迹高 36 > 线高
+///    30，留 6px 余量）
+/// ② **占位柱**（用户拍板「一开始就生成一个默认 50% 的铺满的版本，然后
+///    后续从右侧慢慢出现」）：槽位右对齐——**最新样本占最右槽**，样本从
+///    右往左排，左侧还没铺满的槽位 = 50% 高的中性青低 α 占位柱（不是
+///    数据：一眼与三个判色档可分）；真实样本每拍从右进来，把占位逐根顶出
+///    左缘。历史铺满（n = 槽数）时占位自然消失
+/// ③ **真实样本柱**：逐样本判色；该拍该路采不到 = 该位留空（显形不编造）；
+///    柱越轨左右缘断墨（overflow:hidden 的网格版）
 #[allow(clippy::too_many_arguments)]
 fn paint_sys_bars(
     frame: &mut Frame<'_>,
     track: (i64, i64, u32, u32),
+    // 槽位窗口宽（≠ 绘制域宽）：槽数 = 窗口宽/柱距——柱层画布是「窗口 +
+    // 一柱距」（进口条），槽位账必须锚窗口宽，锚画布宽会多算一槽
+    win_w: u32,
     kind: crate::sys_hist::MetricKind,
     samples: &[crate::sys_hist::Sample],
     offset: u32,
     clip_y: Option<(i32, i32)>,
 ) {
+    use crate::sys_hist as sh;
     let (tx, ty, tw, th) = track;
-    if tw == 0 || th == 0 {
+    if tw == 0 || th == 0 || win_w == 0 {
         return;
     }
-    let bars = crate::sys_hist::bars_for(tw, crate::sys_hist::STEP);
-    let take = crate::sys_hist::tail(samples, bars + 1);
-    if take.is_empty() {
-        return;
-    }
-    let scale = crate::sys_hist::scale_of(kind, take);
-    let max_h = crate::sys_hist::BAR_MAX_H.min(th);
-    for (i, s) in take.iter().enumerate() {
-        let Some(v) = kind.bar_value(s, scale) else {
-            continue;
-        };
-        let x0 = tx + i as i64 * i64::from(crate::sys_hist::STEP) - i64::from(offset);
-        let x1 = x0 + i64::from(crate::sys_hist::BAR_W);
-        if x1 <= tx || x0 >= tx + i64::from(tw) {
-            continue; // 已滑出左缘 / 尚在进口条外
-        }
-        let h = crate::sys_hist::bar_h(v, scale.denom(), max_h);
-        let y0 = ty + i64::from(th) - i64::from(h);
+    let bars = sh::bars_for(win_w, sh::STEP);
+    let slots = bars + 1; // 槽位 = 可见柱数 + 右缘进口位（kfmv4 恒渲染 柱数+1 根同规）
+    let take = sh::tail(samples, slots);
+    let n = take.len();
+    let max_h = th; // 超 100% 越线不越轨
+    let step = i64::from(sh::STEP);
+    let bw = i64::from(sh::BAR_W);
+    let base = ty + i64::from(th);
+    let fh = i64::from(frame.h);
+    let clip_row = move |y0: i64, h: i64| -> Option<(i64, i64)> {
         let (cy0, cy1) = match clip_y {
-            Some((c0, c1)) => (
-                y0.max(i64::from(c0)),
-                (y0 + i64::from(h)).min(i64::from(c1)),
-            ),
-            None => (y0, y0 + i64::from(h)),
+            Some((c0, c1)) => (y0.max(i64::from(c0)), (y0 + h).min(i64::from(c1))),
+            None => (y0, y0 + h),
         };
         let cy0 = cy0.max(0);
-        let cy1 = cy1.min(i64::from(frame.h));
-        if cy1 <= cy0 {
+        let cy1 = cy1.min(fh);
+        (cy1 > cy0).then_some((cy0, cy1))
+    };
+    // ② 占位（左段：槽 0..slots−n 还没铺满）
+    let ph_h = sh::placeholder_h(max_h) as i64;
+    for slot in 0..sh::placeholder_slots(n, slots) {
+        let x0 = tx + slot as i64 * step - i64::from(offset);
+        let x1 = x0 + bw;
+        if x1 <= tx || x0 >= tx + i64::from(tw) {
             continue;
         }
+        let Some((cy0, cy1)) = clip_row(base - ph_h, ph_h) else {
+            continue;
+        };
         let cx0 = x0.max(tx);
         let cx1 = x1.min(tx + i64::from(tw));
-        frame.fill_rect(
-            cx0 as u32,
-            cy0 as u32,
-            (cx1 - cx0) as u32,
-            (cy1 - cy0) as u32,
-            sys_grade_color(kind.grade_in(s, scale)),
-        );
+        // 低 α 中性青（不是数据：与三判色档+中性实柱一眼可分）
+        for yy in cy0..cy1 {
+            for xx in cx0..cx1 {
+                frame.blend_px(xx as u32, yy as u32, WARN_NEUTRAL, 64);
+            }
+        }
+    }
+    // ③ 真实样本（右对齐：最新占最右槽）
+    if n > 0 {
+        let scale = sh::scale_of(kind, take);
+        for (k, s) in take.iter().enumerate() {
+            let Some(v) = kind.bar_value(s, scale) else {
+                continue;
+            };
+            let slot = sh::slot_of(k, n, slots);
+            let x0 = tx + slot as i64 * step - i64::from(offset);
+            let x1 = x0 + bw;
+            if x1 <= tx || x0 >= tx + i64::from(tw) {
+                continue;
+            }
+            let h = i64::from(sh::bar_h(v, scale.denom(), max_h));
+            let Some((cy0, cy1)) = clip_row(base - h, h) else {
+                continue;
+            };
+            let cx0 = x0.max(tx);
+            let cx1 = x1.min(tx + i64::from(tw));
+            frame.fill_rect(
+                cx0 as u32,
+                cy0 as u32,
+                (cx1 - cx0) as u32,
+                (cy1 - cy0) as u32,
+                sys_grade_color(kind.grade_in(s, scale)),
+            );
+        }
+    }
+    // ① 100% 线（压在柱上——刻度读尺必须看得见；α96 白，柱色透出）
+    let ly = base - i64::from(sh::BAR_100_H);
+    if let Some((cy0, cy1)) = clip_row(ly, 1)
+        && cy1 > cy0
+    {
+        let x0 = tx.max(0);
+        let x1 = (tx + i64::from(tw)).min(i64::from(frame.w));
+        for xx in x0..x1 {
+            frame.blend_px(xx as u32, cy0 as u32, 0x00FF_FFFF, 96);
+        }
     }
 }
 
@@ -3758,7 +3808,11 @@ impl TermView {
         let tmux_h = pp::tmux_card_h(snap.sessions.len(), mode, cap);
         let regs = crate::ui::parser_chain::regions(w, h, bar_inset, vbottom, tmux_h);
         let lay = pp::layout_in(regs.dock.clone(), snap.sessions.len(), mode, snap.scroll);
-        let chain_h = crate::ui::parser_chain::heights(tmux_h, ssnap.lines.len());
+        let chain_h = crate::ui::parser_chain::heights(
+            tmux_h,
+            ssnap.lines.len(),
+            crate::ui::sys_card::card_h_now(),
+        );
         let scrolls = crate::ui::parser_chain::Scrolls {
             left: snap.left_scroll,
             right: snap.right_scroll,
@@ -4140,12 +4194,16 @@ impl TermView {
         let xclip =
             crate::ui::parser_chain::clip_of(crate::ui::parser_chain::ChainCardId::Sys, &regs);
         let xclip32 = Some((xclip.0 as i32, xclip.1 as i32));
-        let xlay = crate::ui::sys_card::layout_in(crate::ui::parser_chain::slot_rect(
-            crate::ui::parser_chain::ChainCardId::Sys,
-            &regs,
-            &chain_h,
-            &scrolls,
-        ));
+        let xrows = crate::ui::sys_card::rows_of(&xsnap);
+        let xlay = crate::ui::sys_card::layout_in(
+            crate::ui::parser_chain::slot_rect(
+                crate::ui::parser_chain::ChainCardId::Sys,
+                &regs,
+                &chain_h,
+                &scrolls,
+            ),
+            &xrows,
+        );
         paint_rect_ring_yclip(
             &mut frame,
             xlay.card.x + off,
@@ -4163,10 +4221,10 @@ impl TermView {
             true,
         );
         // 卡头「环境 · 对象词」（有数据才亮标题档——占位是次级信息）
-        let header_fg = if xsnap.load != "—" {
-            title_fg
-        } else {
+        let header_fg = if xrows.metrics.is_empty() && !xrows.uptime {
             meta_fg
+        } else {
+            title_fg
         };
         self.draw_text_left_ex(
             &mut frame,
@@ -4180,16 +4238,14 @@ impl TermView {
             18.0,
             xclip32,
         );
-        // 单竖列四轨（2026-09-21 用户拍板「环境卡重做」）：每轨 = 文字行
-        // （标签左锚 title 档 + 值右锚 meta 档，值随判色档上色——kfmv4
-        // 面板「指标行 = 标签 + 数值 + 实值对」的网格化落法）+ 行下滚动
-        // 柱轨。柱轨样本 = svc_health 历史账（与 health 同 2s 拍）
+        // 单竖列（行集数据定——没数据的行不做）：每轨 = 文字行（标签左锚
+        // title 档 + 值右锚 meta 档，值随判色档上色）+ 行下滚动柱轨
+        // （占位铺满 + 100% 线 + 逐样本判色，见 paint_sys_bars）
         let xhist = crate::svc_health::hist();
         let xslide = xhist.slide_px_now(std::time::Instant::now());
-        let xvals = crate::ui::sys_card::metric_values(&xsnap);
-        for (i, md) in xlay.metrics.iter().enumerate() {
-            let kind = crate::sys_hist::METRICS[i];
-            let l_items = self.measure_items(crate::ui::sys_card::METRIC_LABELS[i], 36.0);
+        for md in xlay.metrics.iter() {
+            let kind = md.kind;
+            let l_items = self.measure_items(crate::ui::sys_card::metric_label(kind), 36.0);
             self.draw_field_lines(
                 &mut frame,
                 &l_items,
@@ -4202,7 +4258,7 @@ impl TermView {
                 xclip32,
                 true,
             );
-            let v_items = self.measure_items(xvals[i], 30.0);
+            let v_items = self.measure_items(crate::ui::sys_card::metric_value(&xsnap, kind), 30.0);
             self.draw_field_lines(
                 &mut frame,
                 &v_items,
@@ -4222,16 +4278,16 @@ impl TermView {
             paint_sys_bars(
                 &mut frame,
                 (md.track.x + off, md.track.y, md.track.w, md.track.h),
+                md.track.w,
                 kind,
                 xhist.as_slice(),
                 xslide,
                 xclip32,
             );
         }
-        // 两尾部行（进程/在线）：计数与时长不是占比，无柱无判色（白档）
-        let xvals_tail = crate::ui::sys_card::tail_values(&xsnap);
-        for (j, tr) in xlay.tails.iter().enumerate() {
-            let l_items = self.measure_items(crate::ui::sys_card::TAIL_LABELS[j], 36.0);
+        // 尾部行（在线；进程行 2026-09-21 用户拍板删除）——无数据不做
+        if let Some(tr) = &xlay.uptime {
+            let l_items = self.measure_items(crate::ui::sys_card::TAIL_LABEL, 36.0);
             self.draw_field_lines(
                 &mut frame,
                 &l_items,
@@ -4244,7 +4300,7 @@ impl TermView {
                 xclip32,
                 true,
             );
-            let v_items = self.measure_items(xvals_tail[j], 30.0);
+            let v_items = self.measure_items(xsnap.uptime.as_str(), 30.0);
             self.draw_field_lines(
                 &mut frame,
                 &v_items,
@@ -4684,7 +4740,8 @@ impl TermView {
             paint_sys_bars(
                 frame,
                 (0, ly0, cw, band.track_h),
-                crate::sys_hist::METRICS[i],
+                bg.w,
+                band.tracks[i].kind,
                 hist.as_slice(),
                 0,
                 None,
@@ -5276,21 +5333,19 @@ impl TermView {
                 paint_thin_frame(frame, ix, oy1, iw, th, accent, denom, clip);
             }
             Preview::SysBars => {
-                // 体征柱轨（2026-09-21）：mini 指标行（标签左 + 判色值右）
-                // + 行下柱轨（逐样本绿/琥珀/红 + 一条中性主题色柱）——
-                // 柱高/柱距/判色全吃生产件（sys_hist 单源）
+                // 体征柱轨（2026-09-21 v3）：mini 指标行（标签左 + 判色值右）
+                // + 行下柱轨——左段 50% 占位、右段真实样本（三档 + 中性）、
+                // 100% 线横贯；柱高/柱距/判色/占位全吃生产件（sys_hist 单源）
+                use crate::sys_hist as sh;
                 let row_h = CELL_H * 2;
                 let y0 = iy + (i64::from(ih) - i64::from(row_h + CELL_H)) / 2;
                 self.draw_text_left_ex(
                     frame, "内存", ix as u32, 216, y0 as u32, row_h, 36.0, title_fg, 18.0, None,
                 );
                 let vals = ["42%", "88%", "71%"];
-                let gs = [
-                    crate::sys_hist::grade(Some(42)),
-                    crate::sys_hist::grade(Some(88)),
-                    crate::sys_hist::grade(Some(71)),
-                ];
-                for (k, (v, g)) in vals.iter().zip(gs.iter()).enumerate() {
+                for (k, v) in vals.iter().enumerate() {
+                    let pct: u8 = v.trim_end_matches('%').parse().unwrap_or(0);
+                    let g = sh::grade(Some(pct));
                     let vx = ix + 216 + k as i64 * 108;
                     if vx + 108 > ix + i64::from(iw) {
                         break;
@@ -5303,42 +5358,54 @@ impl TermView {
                         y0 as u32,
                         row_h,
                         30.0,
-                        sys_grade_fg(*g, meta_fg),
+                        sys_grade_fg(g, meta_fg),
                         18.0,
                         None,
                     );
                 }
-                // 柱轨：20 根演示柱（高度按正弦，档位循环——三色 + 中性）
+                // 柱轨：左 1/3 占位（50%）+ 右 2/3 真实样本（正弦演示，
+                // 档位循环出三色 + 一条中性）；100% 线压在柱上
                 let ty = y0 + i64::from(row_h);
-                let step = crate::sys_hist::STEP;
+                let step = sh::STEP;
                 let bars = (iw / step).clamp(4, 32) as usize;
+                let base = ty + i64::from(sh::TRACK_H);
+                let ph = i64::from(sh::placeholder_h(sh::TRACK_H));
+                let ph_end = (bars as u32 / 3) as usize;
                 for i in 0..bars {
                     let t = (i as f32 / bars as f32) * std::f32::consts::TAU;
-                    let hgt =
-                        (0.35 + 0.5 * (t * 0.7).sin().abs()) * crate::sys_hist::BAR_MAX_H as f32;
-                    let h = crate::sys_hist::bar_h(
-                        (hgt * 100.0) as u32,
-                        100,
-                        crate::sys_hist::BAR_MAX_H,
-                    );
-                    let pct = ((hgt * 100.0) as u32).min(120) as u8;
+                    let ratio = 0.35 + 0.5 * (t * 0.7).sin().abs();
+                    let pct = ((ratio * 100.0) as u32).min(120) as u8;
                     let g = if i % 7 == 3 {
-                        crate::sys_hist::Grade::Neutral
+                        sh::Grade::Neutral
                     } else {
-                        crate::sys_hist::grade(Some(pct))
+                        sh::grade(Some(pct))
                     };
                     let bx = ix + i as i64 * i64::from(step);
-                    let by = ty + i64::from(crate::sys_hist::TRACK_H - h);
-                    if by < clip.0 || by >= clip.1 {
+                    if i < ph_end {
+                        // 占位：50% 高中性青低 α
+                        let y = base - ph;
+                        if y >= clip.0 && y < clip.1 {
+                            for yy in y..base.min(clip.1) {
+                                for xx in bx..(bx + i64::from(sh::BAR_W)) {
+                                    frame.blend_px(xx as u32, yy as u32, WARN_NEUTRAL, 64);
+                                }
+                            }
+                        }
                         continue;
                     }
-                    frame.fill_rect(
-                        bx as u32,
-                        by as u32,
-                        crate::sys_hist::BAR_W,
-                        h,
-                        sys_grade_color(g),
-                    );
+                    let h = i64::from(sh::bar_h(u32::from(pct), 100, sh::TRACK_H));
+                    let y = base - h;
+                    if y < clip.0 || y >= clip.1 {
+                        continue;
+                    }
+                    frame.fill_rect(bx as u32, y as u32, sh::BAR_W, h as u32, sys_grade_color(g));
+                }
+                // 100% 线
+                let ly = base - i64::from(sh::BAR_100_H);
+                if ly >= clip.0 && ly < clip.1 {
+                    for xx in ix..(ix + i64::from(iw - 1)) {
+                        frame.blend_px(xx as u32, ly as u32, 0x00FF_FFFF, 96);
+                    }
                 }
             }
             Preview::FieldLabel => {

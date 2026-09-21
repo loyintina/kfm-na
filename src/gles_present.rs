@@ -149,7 +149,7 @@ pub struct PanComp {
 
 /// BAR-096 拆层合成参数：标签栏层与下池光标层的屏幕位置（top-down 像素）。
 /// 两层都是「小画布槽」——内容自己一副画布，位置全在合成期给
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct LayeredPlace {
     /// 标签栏层 (x, y)：随面板 cfg_off，**不进平移带**（十八修语义：
     /// 标签静止、内容动）；None = 配置页不可见
@@ -1744,7 +1744,7 @@ impl GlesPresent {
                         // uv 纵段 = 区窗裁剪后段）——**只画 dest 矩形内**
                         // 正是 kfmv4 overflow:hidden 的等价物：进出口柱
                         // 越轨缘即断墨，无需 scissor，也不会漏到卡外
-                        if let Some(bp) = layered.sys_band {
+                        if let Some(bp) = &layered.sys_band {
                             let sb = &self.layers[ChromeSlot::SysBars as usize];
                             if sb.visible && sb.baked {
                                 for t in bp.tracks.iter().filter(|t| t.visible) {

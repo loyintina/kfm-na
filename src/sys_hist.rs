@@ -31,10 +31,17 @@ pub const CAP: usize = 192;
 pub const STEP: u32 = CELL_W / 2;
 /// 柱宽（缝 2px 归柱距）
 pub const BAR_W: u32 = STEP - 2;
-/// 柱高上限（内容高 = 1 格 = 36px，满柱留 6px 顶隙不贴上邻文字行）
-pub const BAR_MAX_H: u32 = CELL_H - 6;
+/// **100% 线高**（2026-09-21 用户拍板「把每个柱状图的 100% 线画出来」）：
+/// 柱高刻度 = 值/归一底 × 本值，线体画在这条高度上；轨高 1 格 = 36px，
+/// 线上留 6px 余量——**超 100% 的读数（负载超核）可越线**，钳在轨顶
+pub const BAR_100_H: u32 = CELL_H - 6;
 /// 柱高下限（零值也留一线：读数 = 这一拍有采样）
 pub const BAR_MIN_H: u32 = 2;
+/// 占位柱高（用户拍板「一开始就生成一个默认 50% 的铺满的版本，然后后续
+/// 从右侧慢慢出现」）：历史还没铺满的那段（更早的槽位）= 50% 高的中性占位
+/// 柱——**不是数据**（低 α 中性青，与三个判色档一眼可分），真实样本从右侧
+/// 进来把它们逐根顶出左缘
+pub const PLACEHOLDER_PCT: u32 = 50;
 /// 柱轨内容高 = 1 格
 pub const TRACK_H: u32 = CELL_H;
 /// 滑入动画时长（ms）——恒等于轮询拍长（kfmv4 同规：速度 = 一柱步长/拍，
@@ -214,15 +221,21 @@ pub fn sample_of(info: &na_sys::SysInfo) -> Sample {
     }
 }
 
-/// 柱高（A 档）：value/denom 归一 × max_h 四舍五入，下限 BAR_MIN_H
-/// （钳进 [BAR_MIN_H, max_h]，max_h 比下限还小时取 max_h）
+/// 柱高（A 档）：value/denom 归一 × **100% 线高**（BAR_100_H）四舍五入，
+/// 下限 BAR_MIN_H、上限钳 max_h（= 轨高：超 100% 的读数越线不越轨）。
+/// `pct_h` 供占位柱复用（占位 = 固定 50% 线高，不是数据）
 pub fn bar_h(value: u32, denom: u32, max_h: u32) -> u32 {
     if denom == 0 {
         return BAR_MIN_H.min(max_h);
     }
-    let v = u64::from(value.min(denom));
-    let h = (v * u64::from(max_h) + u64::from(denom) / 2) / u64::from(denom);
-    (h as u32).clamp(BAR_MIN_H.min(max_h), max_h)
+    let v = u64::from(value);
+    let h = (v * u64::from(BAR_100_H) + u64::from(denom) / 2) / u64::from(denom);
+    (h as u32).clamp(BAR_MIN_H.min(max_h), max_h.max(BAR_MIN_H))
+}
+
+/// 占位柱高（A 档）：默认 50% 线高（铺满那一段的定高）
+pub fn placeholder_h(max_h: u32) -> u32 {
+    (BAR_100_H * PLACEHOLDER_PCT / 100).clamp(BAR_MIN_H.min(max_h), max_h.max(BAR_MIN_H))
 }
 
 /// 滑入位移（A 档）：末拍起 elapsed 毫秒 → 0..=STEP 的匀速平移量
@@ -242,6 +255,19 @@ pub fn bars_for(track_w: u32, step: u32) -> usize {
         return 0;
     }
     (track_w / step).max(1).min(CAP as u32 - 1) as usize
+}
+
+/// 槽位映射（A 档纯函数；2026-09-21 用户拍板「一开始就生成一个默认 50%
+/// 的铺满的版本，然后后续从右侧慢慢出现」）：手上 n 个样本（最新在末）
+/// **右对齐**落在 slots 个槽位里——第 k 个样本（0 = 最旧）的槽号。
+/// 左端 slots−n 个槽 = 还没铺满的占位段（占位柱 50%）
+pub fn slot_of(k: usize, n: usize, slots: usize) -> usize {
+    slots.saturating_sub(n) + k.min(slots)
+}
+
+/// 占位段槽数（A 档纯函数）：历史还没铺满的那一段
+pub fn placeholder_slots(n: usize, slots: usize) -> usize {
+    slots.saturating_sub(n)
 }
 
 /// 尾窗取件（A 档）：末 n 条（不足则全量）——柱涂装窗口唯一取件口

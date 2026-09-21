@@ -35,23 +35,26 @@ pub const FIELD_GAP: u32 = cc::FIELD_GAP;
 /// 柱轨（四轨：负载/内存/交换/磁盘）——轨序唯一源在 sys_hist::METRICS，
 /// 本册标签数组同序
 pub const N_METRICS: usize = sys_hist::METRICS.len();
-/// 尾部文字行（进程/在线——无占比可判，只出行）
-pub const N_TAILS: usize = 2;
+/// 尾部行数上限（只有「在线」——进程行 2026-09-21 用户拍板删除
+/// 「进程数字删除吧」；该字段仍在契约面（na-server 照发 procs），只是
+/// 卡面不做行）
+pub const N_TAILS: usize = 1;
 /// 柱轨高 = 1 格（sys_hist::TRACK_H 单源）
 pub const TRACK_H: u32 = sys_hist::TRACK_H;
-/// 卡高 = PAD_V·2 + 卡头 + 行距 + 四轨（文字行 + 柱轨 + 轨后隙）
-/// + 两尾部行 + 一行距（恒定，无列表无按钮）
+/// **全行集卡高**（参考值/考题夹具）：四轨 + 在线——实际卡高由行集定
+/// （card_h；没数据的行不做 ⇒ 手机相只剩三轨、托管相只剩卡头）。
+/// 考题钉 `card_h(全行集) == CARD_H`，防两处加法账漂
 pub const CARD_H: u32 = pp::CARD_PAD_V * 2
     + pp::ROW_H
     + pp::ROW_GAP
-    + N_METRICS as u32 * (FIELD_H + TRACK_H + pp::ROW_GAP)
+    + N_METRICS as u32 * (FIELD_H + TRACK_H)
     + N_TAILS as u32 * FIELD_H
-    + (N_TAILS as u32 - 1) * FIELD_GAP;
+    + (N_METRICS as u32 + N_TAILS as u32 - 1) * pp::ROW_GAP;
 
 /// 柱轨标签（涂装唯一源——两处各写一份必漂移；轨序 = sys_hist::METRICS）
 pub const METRIC_LABELS: [&str; N_METRICS] = ["负载", "内存", "交换", "磁盘"];
-/// 尾部行标签
-pub const TAIL_LABELS: [&str; N_TAILS] = ["进程", "在线"];
+/// 尾部行标签（只有「在线」）
+pub const TAIL_LABEL: &str = "在线";
 
 /// 卡文案（涂装快照）
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,14 +75,63 @@ pub struct SysCardSnap {
     pub uptime: String,
 }
 
-/// 四轨值文案（涂装/命中同一把尺——轨序与 METRIC_LABELS 咬合）
-pub fn metric_values(s: &SysCardSnap) -> [&str; N_METRICS] {
-    [&s.load, &s.mem, &s.swap, &s.disk]
+/// 轨标签（kind 寻址——轨序 = sys_hist::METRICS 声明序，考题钉咬合）
+pub fn metric_label(k: sys_hist::MetricKind) -> &'static str {
+    METRIC_LABELS[k as usize]
 }
 
-/// 尾部行值文案（同序咬合 TAIL_LABELS）
-pub fn tail_values(s: &SysCardSnap) -> [&str; N_TAILS] {
-    [&s.procs, &s.uptime]
+/// 轨值文案（涂装/命中同一把尺）
+pub fn metric_value(s: &SysCardSnap, k: sys_hist::MetricKind) -> &str {
+    match k {
+        sys_hist::MetricKind::Load => &s.load,
+        sys_hist::MetricKind::Mem => &s.mem,
+        sys_hist::MetricKind::Swap => &s.swap,
+        sys_hist::MetricKind::Disk => &s.disk,
+    }
+}
+
+/// 卡面行集（A 档纯函数）：**没数据的行不做**——用户拍板「如果切换到手机，
+/// 没有的条就不做吧」（Android 拒 /proc/loadavg 与 /proc/uptime → 手机相
+/// 自动只剩内存/交换/磁盘三轨；kfmv4 托管相全「—」→ 只剩卡头）。判据 =
+/// 该行值文案不是占位符「—」（compose 的逐路显形口径直接复用，不另设闸）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RowSet {
+    /// 要画的柱轨（sys_hist::METRICS 声明序的子集）
+    pub metrics: Vec<sys_hist::MetricKind>,
+    /// 在线行画不画
+    pub uptime: bool,
+}
+
+/// 行集裁决（A 档纯函数）
+pub fn rows_of(s: &SysCardSnap) -> RowSet {
+    let metrics = sys_hist::METRICS
+        .iter()
+        .copied()
+        .filter(|k| metric_value(s, *k) != "—")
+        .collect();
+    RowSet {
+        metrics,
+        uptime: s.uptime != "—",
+    }
+}
+
+/// 行集 → 卡高（A 档纯函数）：卡头 + 行间隙 + 各行（柱轨行 = 文字行 + 柱轨；
+/// 尾部行 = 文字行）。零行 = 只剩卡头（三行高的最小卡），不留空洞
+pub fn card_h(rows: &RowSet) -> u32 {
+    let n_rows = rows.metrics.len() as u32 + u32::from(rows.uptime);
+    let mut h = pp::CARD_PAD_V * 2 + pp::ROW_H;
+    if n_rows > 0 {
+        h += pp::ROW_GAP;
+    }
+    h += rows.metrics.len() as u32 * (FIELD_H + TRACK_H);
+    h += u32::from(rows.uptime) * FIELD_H;
+    h += n_rows.saturating_sub(1) * pp::ROW_GAP;
+    h
+}
+
+/// 当前卡高（壳排布用：读一次当前快照）
+pub fn card_h_now() -> u32 {
+    card_h(&rows_of(&current()))
 }
 
 /// 三源合成（A 档纯函数）：对象相 × 后端 × nasup 快照（对象词）×
@@ -198,26 +250,30 @@ pub fn current() -> SysCardSnap {
     )
 }
 
-/// 一轨布局（文字行 + 柱轨）
+/// 一轨布局（文字行 + 柱轨 + 轨轴）
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MetricLayout {
+    pub kind: sys_hist::MetricKind,
     pub row: PoolRect,
     pub track: PoolRect,
 }
 
-/// 一卡布局（涂装/命中同一份——眼手同尺）
+/// 一卡布局（涂装/命中同一份——眼手同尺；行集数据定，见 rows_of）
 #[derive(Debug, Clone)]
 pub struct SysLayout {
     pub card: PoolRect,
     pub header: PoolRect,
-    pub metrics: [MetricLayout; N_METRICS],
-    pub tails: [PoolRect; N_TAILS],
+    pub metrics: Vec<MetricLayout>,
+    /// 在线行（无数据 = 不做）
+    pub uptime: Option<PoolRect>,
 }
 
 /// 柱几何（一轨）：轨内柱列参数——轨宽/柱距/柱数/柱高上限（涂装与
 /// 合成期柱层同吃一份，眼手同尺）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BarGeom {
+    /// 轨轴（涂装取件/判色按它分流——柱层按轨自持，不另传参）
+    pub kind: sys_hist::MetricKind,
     /// 轨左缘 x（页坐标）
     pub x: i64,
     /// 柱轨顶 y（页坐标）
@@ -236,18 +292,18 @@ pub struct BarGeom {
 /// 画布宽 = 轨宽 + 一柱距（合成期 uv 窗口滑到稳态位时右缘要取到
 /// 轨宽 + 一柱距 处的底——kfmv4 恒渲染「柱数+1」根同规）；画布 = 四轨
 /// **紧凑排布**（轨间文字行不归本层——层只覆盖轨矩形，文字行留页烘焙）
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BandGeom {
-    pub tracks: [BarGeom; N_METRICS],
+    pub tracks: Vec<BarGeom>,
     pub canvas_w: u32,
     /// 单轨层内高（= 轨高）
     pub track_h: u32,
 }
 
 impl BandGeom {
-    /// 层画布高 = 四轨紧凑叠放
+    /// 层画布高 = 画出的各轨紧凑叠放（行集数据定）
     pub fn canvas_h(&self) -> u32 {
-        self.track_h * N_METRICS as u32
+        self.track_h * self.tracks.len() as u32
     }
 
     /// 轨 i 的层内顶（紧凑排布：i × 轨高）
@@ -266,24 +322,30 @@ impl BandGeom {
 }
 
 /// 一轨柱几何：轨矩 → 柱列参数
-pub fn bar_geom(track: &PoolRect) -> BarGeom {
+pub fn bar_geom(m: &MetricLayout) -> BarGeom {
+    let track = &m.track;
     BarGeom {
+        kind: m.kind,
         x: track.x,
         y: track.y,
         w: track.w,
         step: sys_hist::STEP,
         bars: sys_hist::bars_for(track.w, sys_hist::STEP),
-        max_h: sys_hist::BAR_MAX_H.min(track.h),
+        max_h: sys_hist::BAR_100_H.min(track.h),
     }
 }
 
 /// 柱层几何（涂装/合成期同一份——单一源）
 pub fn band_of(lay: &SysLayout) -> BandGeom {
-    let tracks: [BarGeom; N_METRICS] = std::array::from_fn(|i| bar_geom(&lay.metrics[i].track));
+    let tracks: Vec<BarGeom> = lay.metrics.iter().map(bar_geom).collect();
+    let (w, h) = match lay.metrics.first() {
+        Some(m) => (m.track.w, m.track.h),
+        None => (0, 0),
+    };
     BandGeom {
         tracks,
-        canvas_w: lay.metrics[0].track.w + sys_hist::STEP,
-        track_h: lay.metrics[0].track.h,
+        canvas_w: w + sys_hist::STEP,
+        track_h: h,
     }
 }
 
@@ -304,9 +366,9 @@ pub struct TrackPlace {
 }
 
 /// 柱层合成放置（四轨；页坐标，不含面板偏移/层位移）
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct BandPlace {
-    pub tracks: [TrackPlace; N_METRICS],
+    pub tracks: Vec<TrackPlace>,
 }
 
 /// 柱层合成放置（A 档纯函数）：**滑动全在合成期**——层内容烘一次
@@ -317,42 +379,45 @@ pub fn band_place(band: &BandGeom, offset: u32, clip: (i64, i64)) -> BandPlace {
     let cw = band.canvas_w.max(1) as f32;
     let ch = band.canvas_h().max(1) as f32;
     let u0 = (offset as f32 / cw).clamp(0.0, 1.0);
-    let tracks: [TrackPlace; N_METRICS] = std::array::from_fn(|i| {
-        let t = &band.tracks[i];
-        let y0 = t.y.max(clip.0);
-        let y1 = (t.y + i64::from(band.track_h)).min(clip.1);
-        if y1 <= y0 || t.w == 0 {
-            return TrackPlace {
-                rect: (0.0, 0.0, 0.0, 0.0),
-                uv: (0.0, 0.0, 0.0, 0.0),
-                visible: false,
-            };
-        }
-        let (lv0, _) = band.uv_v(i);
-        let row_h = band.track_h.max(1) as f32;
-        let skip = (y0 - t.y) as f32 / row_h; // 裁剪掉的顶部比例
-        let span = (y1 - y0) as f32 / row_h;
-        let lspan = band.track_h.max(1) as f32 / ch;
-        TrackPlace {
-            rect: (t.x as f32, y0 as f32, t.w as f32, (y1 - y0) as f32),
-            // 源窗尺寸恒 = (轨宽, 裁剪后轨高) 归一——**不随位移变**：
-            // 位移只挪原点（尺寸随位移变 = 把远角当尺寸的旧病复辟）
-            uv: (
-                u0,
-                lv0 + skip * lspan,
-                (t.w as f32 / cw).clamp(0.0, 1.0),
-                span * lspan,
-            ),
-            visible: true,
-        }
-    });
+    let tracks: Vec<TrackPlace> = (0..band.tracks.len())
+        .map(|i| {
+            let t = &band.tracks[i];
+            let y0 = t.y.max(clip.0);
+            let y1 = (t.y + i64::from(band.track_h)).min(clip.1);
+            if y1 <= y0 || t.w == 0 {
+                return TrackPlace {
+                    rect: (0.0, 0.0, 0.0, 0.0),
+                    uv: (0.0, 0.0, 0.0, 0.0),
+                    visible: false,
+                };
+            }
+            let (lv0, _) = band.uv_v(i);
+            let row_h = band.track_h.max(1) as f32;
+            let skip = (y0 - t.y) as f32 / row_h; // 裁剪掉的顶部比例
+            let span = (y1 - y0) as f32 / row_h;
+            let lspan = band.track_h.max(1) as f32 / ch;
+            TrackPlace {
+                rect: (t.x as f32, y0 as f32, t.w as f32, (y1 - y0) as f32),
+                // 源窗尺寸恒 = (轨宽, 裁剪后轨高) 归一——**不随位移变**：
+                // 位移只挪原点（尺寸随位移变 = 把远角当尺寸的旧病复辟）
+                uv: (
+                    u0,
+                    lv0 + skip * lspan,
+                    (t.w as f32 / cw).clamp(0.0, 1.0),
+                    span * lspan,
+                ),
+                visible: true,
+            }
+        })
+        .collect();
     BandPlace { tracks }
 }
 
 /// 布局纯函数：卡外框由卡链排布器配给（parser_chain::slot_rect——
-/// 几何只从排布器拿，本卡不二次揣度）。单竖列：卡头 → 四轨（文字行 +
-/// 柱轨）→ 两尾部行，各行距 = ROW_GAP
-pub fn layout_in(card: PoolRect) -> SysLayout {
+/// 几何只从排布器拿，本卡不二次揣度）。单竖列：卡头 → 各行（柱轨行 =
+/// 文字行 + 柱轨；尾部行 = 文字行），行距 = ROW_GAP；**行集由数据定**
+/// （rows_of——没数据的行不做，卡高随之，见 card_h）
+pub fn layout_in(card: PoolRect, rows: &RowSet) -> SysLayout {
     let cx = card.x + i64::from(pp::CARD_PAD_H);
     let cw = card.w.saturating_sub(pp::CARD_PAD_H * 2);
     let mut y = card.y + i64::from(pp::CARD_PAD_V);
@@ -362,26 +427,43 @@ pub fn layout_in(card: PoolRect) -> SysLayout {
         w: cw,
         h: pp::ROW_H,
     };
+    let n_rows = rows.metrics.len() as u32 + u32::from(rows.uptime);
+    if n_rows == 0 {
+        return SysLayout {
+            card,
+            header,
+            metrics: Vec::new(),
+            uptime: None,
+        };
+    }
     y += i64::from(pp::ROW_H + pp::ROW_GAP);
-    let metrics: [MetricLayout; N_METRICS] = std::array::from_fn(|i| {
-        let row = PoolRect {
-            x: cx,
-            y: y + i64::from((FIELD_H + TRACK_H + pp::ROW_GAP) * i as u32),
-            w: cw,
-            h: FIELD_H,
-        };
-        let track = PoolRect {
-            x: cx,
-            y: row.y + i64::from(FIELD_H),
-            w: cw,
-            h: TRACK_H,
-        };
-        MetricLayout { row, track }
-    });
-    y += i64::from((FIELD_H + TRACK_H + pp::ROW_GAP) * N_METRICS as u32);
-    let tails: [PoolRect; N_TAILS] = std::array::from_fn(|j| PoolRect {
+    let metrics: Vec<MetricLayout> = rows
+        .metrics
+        .iter()
+        .enumerate()
+        .map(|(i, k)| {
+            let row = PoolRect {
+                x: cx,
+                y: y + i64::from((FIELD_H + TRACK_H + pp::ROW_GAP) * i as u32),
+                w: cw,
+                h: FIELD_H,
+            };
+            MetricLayout {
+                kind: *k,
+                track: PoolRect {
+                    x: cx,
+                    y: row.y + i64::from(FIELD_H),
+                    w: cw,
+                    h: TRACK_H,
+                },
+                row,
+            }
+        })
+        .collect();
+    y += i64::from((FIELD_H + TRACK_H + pp::ROW_GAP) * rows.metrics.len() as u32);
+    let uptime = rows.uptime.then_some(PoolRect {
         x: cx,
-        y: y + i64::from((FIELD_H + FIELD_GAP) * j as u32),
+        y,
         w: cw,
         h: FIELD_H,
     });
@@ -389,6 +471,6 @@ pub fn layout_in(card: PoolRect) -> SysLayout {
         card,
         header,
         metrics,
-        tails,
+        uptime,
     }
 }
