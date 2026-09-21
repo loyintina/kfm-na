@@ -219,3 +219,41 @@ fn spec_状态词_五态() {
         "退避 ×2"
     );
 }
+
+#[test]
+fn spec_状态发布_在途相不跳出卡面() {
+    // 用户「我就算在 na 客户端里，也会看到它反复地重连」定案：ensure 探针
+    // 每 15s 一次的**在途相**不许进快照——否则服务卡状态词每 15s 翻一次
+    // 「自持在线 ↔ 确认中」，被读成反复重连（实测：同一秒里多次迁移）
+    use kfm_na::na_server_sup::{SupState, publish_state, state_word};
+    let up = SupState::ExternalUp;
+    assert_eq!(
+        publish_state(&up, SupState::Checking),
+        up,
+        "在途相不发布（保持上一个结果相）"
+    );
+    assert_eq!(
+        publish_state(&SupState::Checking, SupState::Up),
+        SupState::Up,
+        "结果相照发"
+    );
+    assert_eq!(
+        publish_state(&SupState::Checking, SupState::Checking),
+        SupState::Checking,
+        "首探前保持确认中（那是真话）"
+    );
+    let down = SupState::Down {
+        attempts: 2,
+        last_error: "x".into(),
+    };
+    assert_eq!(
+        publish_state(&down, SupState::Checking),
+        down,
+        "失败相不被在途相盖掉"
+    );
+    assert_eq!(
+        publish_state(&up, SupState::TunnelDown),
+        SupState::TunnelDown
+    );
+    assert_eq!(state_word(&SupState::Checking), "确认中");
+}

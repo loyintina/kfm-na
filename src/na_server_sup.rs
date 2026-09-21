@@ -126,6 +126,19 @@ pub enum SupState {
     Down { attempts: u32, last_error: String },
 }
 
+/// 状态发布裁决（A 档纯函数，2026-09-21 用户「我就算在 na 客户端里，也会
+/// 看到它反复地重连」定案）：ensure 探针的**在途相**（Checking）不是客户端
+/// 状态——每 15s 探一次就发布一次，服务卡状态词被翻成「自持在线 ↔ 确认中」
+/// 跳动（实测日志：同一秒里 nasup 状态迁移数次），用户读成「反复重连」。
+/// 故在途相**不发布**：只有结果相（Up/ExternalUp/Down/TunnelDown）进快照。
+/// 首次探针前仍是 Checking（那时「确认中」是真话：我们还不知道）
+pub fn publish_state(prev: &SupState, next: SupState) -> SupState {
+    match next {
+        SupState::Checking => prev.clone(),
+        other => other,
+    }
+}
+
 /// 状态词（A 档纯函数）：服务卡状态行的唯一文案源
 pub fn state_word(st: &SupState) -> String {
     match st {
@@ -227,10 +240,9 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<SupSnap>> {
         return Arc::clone(existing);
     }
     let snap = Arc::new(Mutex::new(SupSnap {
-        state: SupState::Down {
-            attempts: 0,
-            last_error: "未启动".into(),
-        },
+        // 初始相 = 确认中（首次探针前「我们还不知道」，这是真话）；
+        // 此后只发布结果相（publish_state）
+        state: SupState::Checking,
         target: format!(
             "{}@{}:{}",
             server.ssh.user, server.ssh.host, server.ssh.port
@@ -264,6 +276,7 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<SupSnap>> {
         let mut we_spawned = false;
         let set = |st: SupState, snap_t: &Arc<Mutex<SupSnap>>| {
             let mut g = snap_t.lock().unwrap();
+            let st = publish_state(&g.state, st); // 在途相不发布（见上）
             if g.state != st {
                 crate::report::report("nasup", &format!("状态 {:?} → {:?}", g.state, st));
                 g.state = st;
@@ -281,7 +294,7 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<SupSnap>> {
                 continue;
             }
 
-            set(SupState::Checking, &snap_t);
+            // 在途相由 publish_state 挡在快照外（探测本身不该让卡面跳字）
             match run_exec_once(&prefix, &server) {
                 Verdict::Alive => {
                     attempts = 0;
