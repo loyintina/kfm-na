@@ -474,24 +474,33 @@ fn ensure_poller() {
                     continue;
                 }
                 last_poll = Some(Instant::now());
-                // 对象轴分流：本地相体征 = na_sys 直读（/proc + statvfs
-                // 本机 /data，零网络零服务器——本机体征不需要任何
-                // 后端）；服务器相 = 既有 HTTP 轮询（后端非 na-server
-                // 不轮，kfmv4 托管态不变）。health 面本地相内容归
-                // 第 6 步④，本地相分支不轮 health（服务器账留到
-                // 翻回或④接线，闪断不清卡面纪律同构）
-                if kind == crate::endpoint::EndpointKind::Local {
-                    let info = na_sys::collect("/data");
-                    let mut g = inner().lock().unwrap();
-                    bump_sys(&mut g, Some(info));
-                    push_hist(&mut g, kind, sys_hist::sample_of(&info)); // 柱轨同拍追
-                    continue;
-                }
-                if backend != Backend::NaServer {
-                    // 托管相复位节拍账（旧行为保鲜：翻回 na-server
-                    // 后端即拍，不白等一拍）
+                // 托管相（服务器相 + 后端非 na-server）：无体征面可采，
+                // 节拍账复位即续（旧行为保鲜：翻回 na-server 后端即拍）。
+                // **必须排在本机体征之前**——这一支每 200ms 空转一次，
+                // 排在后面会把本地账灌成 200ms 采样（还每 3s 写一次盘）
+                if kind == crate::endpoint::EndpointKind::Server && backend != Backend::NaServer {
                     last_poll = None;
                     was_on = false;
+                    continue;
+                }
+                // 本机体征**每拍都采**（2026-09-21 v2 补刀）：na_sys 直读
+                // 是本机 /proc + statvfs，零网络零服务器——与当前相无关
+                // 地续摊本地账，用户切到手机环境时那本账已经是满窗（不是
+                // 刚起步的空账）。卡面字段只在本地相才喂（SysSnap 仍
+                // 单相单份，显形口径不变）
+                let local_info = na_sys::collect("/data");
+                {
+                    let mut g = inner().lock().unwrap();
+                    push_hist(
+                        &mut g,
+                        crate::endpoint::EndpointKind::Local,
+                        sys_hist::sample_of(&local_info),
+                    );
+                    if kind == crate::endpoint::EndpointKind::Local {
+                        bump_sys(&mut g, Some(local_info));
+                    }
+                }
+                if kind == crate::endpoint::EndpointKind::Local {
                     continue;
                 }
                 // health 面：只喂卡面，页不可见不白轮（前台攒历史不需要它）
