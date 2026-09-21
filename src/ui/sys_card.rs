@@ -141,9 +141,12 @@ fn fields_of(sys: Option<&na_sys::SysInfo>) -> (String, String, String, String, 
             i.load
                 .map(|l| na_sys::fmt_load(&l))
                 .unwrap_or_else(|| "—".into()),
+            // 进程行（2026-09-21 用户问「那个数字是什么意思」后自证化）：
+            // /proc/loadavg 第 4 段 = 「可运行调度实体 / 系统调度实体总数」
+            // （内核口径 = 进程+线程）。紧写 "2/123" 读不出是啥，故写明
             i.load
                 .and_then(|l| l.procs)
-                .map(|(r, t)| format!("{r}/{t}"))
+                .map(|(r, t)| format!("{r} 运行 / {t} 总"))
                 .unwrap_or_else(|| "—".into()),
             i.mem
                 .map(|m| {
