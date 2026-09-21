@@ -11,7 +11,7 @@
 //! （卡显示「kfmv4 托管」态）。快照全局注册（tunnel/nasup 同款），
 //! 涂装直读免穿 App plumbing；epoch 变 → DIRTY 置位 → 壳脏帧重烘。
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -301,6 +301,20 @@ fn load_hist() -> ([Hist; 2], String) {
     }
 }
 
+/// 失败上报限流（每面 60s 一次）：隧道断时每 2s 撞一次，不限流 = 报表
+/// 信道自己变成负载源（队列涨、落盘涨），真事件还会被淹掉
+static LAST_FAIL_H: AtomicU64 = AtomicU64::new(0);
+static LAST_FAIL_S: AtomicU64 = AtomicU64::new(0);
+
+fn fail_report(face: &str, slot: &AtomicU64, msg: &str) {
+    let now = crate::report::boot_ms() as u64;
+    let last = slot.load(Ordering::Relaxed);
+    if now.saturating_sub(last) >= 60_000 {
+        slot.store(now, Ordering::Relaxed);
+        crate::report::report(face, msg);
+    }
+}
+
 /// 追一拍历史（环境卡柱轨）：值不变也追（拍序 = 时间轴），并置脏——
 /// 追拍本身就是屏上内容换代（柱轨右移一柱）。落盘节流写。
 fn push_hist(g: &mut Inner, kind: EndpointKind, s: sys_hist::Sample) {
@@ -511,7 +525,11 @@ fn ensure_poller() {
                             bump(&mut g, Phase::Ready, Some(info));
                         }
                         Err(e) => {
-                            crate::report::report("svchealth", &format!("health 轮询失败: {e}"));
+                            fail_report(
+                                "svchealth",
+                                &LAST_FAIL_H,
+                                &format!("health 轮询失败: {e}"),
+                            );
                             let mut g = inner().lock().unwrap();
                             let keep = g.snap.info.clone();
                             bump(&mut g, Phase::Error(e), keep);
@@ -527,7 +545,7 @@ fn ensure_poller() {
                         push_hist(&mut g, kind, sys_hist::sample_of(&info)); // 柱轨同拍追
                     }
                     Err(e) => {
-                        crate::report::report("svchealth", &format!("sys 轮询失败: {e}"));
+                        fail_report("svchealth", &LAST_FAIL_S, &format!("sys 轮询失败: {e}"));
                     }
                 }
             }

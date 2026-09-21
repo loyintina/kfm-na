@@ -198,3 +198,25 @@ fn spec_bar117_隧道up沿_踢活跃死会话重孵() {
     assert!(!usable(&TunnelState::Starting));
     assert!(!usable(&down));
 }
+
+#[test]
+fn spec_抖动_短命退避不归零() {
+    // 2026-09-21「反复连接反复断开」立案：原先一 Up 就 attempts=0，抖动
+    // 网络下退化成每 2s 重拉 ssh 的热循环（手机无线电 + 服务器 sshd 同挨）
+    use kfm_na::tunnel::{STABLE_SECS, next_attempts};
+    // 真连接（活够稳定窗口）→ 回 1（首死立即重拉，用户在场等不得）
+    assert_eq!(next_attempts(7, STABLE_SECS), 1);
+    assert_eq!(next_attempts(1, 600), 1);
+    // 短命娃（一 spawn 即死/秒级死）→ 计数续涨（退避爬 5/10/30s）
+    assert_eq!(next_attempts(0, 0), 1);
+    assert_eq!(next_attempts(1, 1), 2);
+    assert_eq!(next_attempts(2, STABLE_SECS - 1), 3);
+    assert_eq!(next_attempts(9, 3), 10);
+    // 退避表随计数爬到封顶（不指数爆炸）
+    use kfm_na::tunnel::backoff_secs;
+    assert_eq!(backoff_secs(1), 2);
+    assert_eq!(backoff_secs(2), 5);
+    assert_eq!(backoff_secs(3), 10);
+    assert_eq!(backoff_secs(4), 30);
+    assert_eq!(backoff_secs(99), 30);
+}

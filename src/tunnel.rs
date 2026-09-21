@@ -14,6 +14,7 @@
 //! ExternalUp 挂着 30s 复查；外部隧道一断，下一拍自持接管——用户
 //! 停掉 Termux 隧道即无缝切换到 na 自持。
 
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -105,6 +106,23 @@ pub fn backoff_secs(attempt: u32) -> u64 {
         2 => 5,
         3 => 10,
         _ => 30,
+    }
+}
+
+/// 稳定窗口（秒）：娃活过这么久才算「一次真连接」——短于此 = 抖动
+pub const STABLE_SECS: u64 = 30;
+
+/// 死娃后的重试计数裁决（A 档纯函数，2026-09-21 「反复连接反复断开」立案）：
+/// 娃活得久（≥ STABLE_SECS）才算一次真连接 → 计数回 1（下次首死立即重拉，
+/// 用户在场等不得）；**短命娃（含一 spawn 即死：撞口/拒连/认证失败）计数
+/// 续涨** → 退避爬到 5/10/30s。原先「一 Up 就清零」在抖动网络下变成每 2s
+/// 重拉一次 ssh 的热循环：手机无线电 + 服务器 sshd 一起挨打，而热循环
+/// 本身又会诱发下一轮 255（现场实录：13:20-13:22 三分钟里 8 次 spawn/退出）
+pub fn next_attempts(prev: u32, lived_secs: u64) -> u32 {
+    if lived_secs >= STABLE_SECS {
+        1
+    } else {
+        prev.saturating_add(1).max(1)
     }
 }
 
@@ -282,6 +300,10 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                 snap_t,
             );
         };
+        // 抖动诊断两笔账（看门狗线程私有）：spawned_at = 本次 ssh 起于何时
+        // （活多久 = 真连接 vs 抖动）、ssh_err = 它的 stderr 尾环
+        let mut spawned_at: Option<std::time::Instant> = None;
+        let mut ssh_err: Option<Arc<Mutex<VecDeque<String>>>> = None;
         loop {
             let port = server.tunnel.local_port;
             let port_open = probe_port(port);
@@ -317,11 +339,32 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
             // 娃不在（从没起/死了）：退了重来
             if let Some(mut c) = child.take() {
                 let code = c.try_wait().ok().flatten();
-                attempts += 1;
+                let lived = spawned_at
+                    .map(|t| t.elapsed().as_secs())
+                    .unwrap_or(u64::MAX);
+                spawned_at = None;
+                attempts = next_attempts(attempts, lived);
+                // 真因随报表落一行（stderr 尾——诊断「为什么断」的唯一证据）
+                let tail = ssh_err
+                    .as_ref()
+                    .and_then(|r| {
+                        r.lock()
+                            .ok()
+                            .map(|g| g.iter().cloned().collect::<Vec<_>>().join(" | "))
+                    })
+                    .unwrap_or_default();
                 crate::report::report(
                     "tunnel",
-                    &format!("ssh 进程退出（{code:?}），第 {attempts} 次退避重拉"),
+                    &format!(
+                        "ssh 进程退出（{code:?}，活 {lived}s），第 {attempts} 次退避重拉{}",
+                        if tail.is_empty() {
+                            String::new()
+                        } else {
+                            format!("；stderr: {tail}")
+                        }
+                    ),
                 );
+                ssh_err = None;
                 let wait_s = backoff_secs(attempts);
                 set(
                     TunnelState::Down {
@@ -343,14 +386,39 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                 .env("TERMUX__PREFIX", &prefix)
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
+                // stderr 必抓（2026-09-21 立案仪器）：原先 null，ssh 退出 255
+                // 时只留一个 exit code——「为什么断」成了猜。抓进小环，
+                // 退出时随报表落一行真因（认证/撞口/拒连/keepalive 超时）
+                .stderr(std::process::Stdio::piped())
                 .spawn();
             match spawn {
-                Ok(c) => {
+                Ok(mut c) => {
                     crate::report::report(
                         "tunnel",
                         &format!("ssh 正连隧道已 spawn → 127.0.0.1:{port}"),
                     );
+                    spawned_at = Some(std::time::Instant::now());
+                    // stderr 读线程（随管道关闭自灭）：只留末 4 行非空
+                    if let Some(err) = c.stderr.take() {
+                        let ring = Arc::new(Mutex::new(VecDeque::<String>::new()));
+                        ssh_err = Some(Arc::clone(&ring));
+                        std::thread::spawn(move || {
+                            use std::io::BufRead;
+                            let r = std::io::BufReader::new(err);
+                            for line in r.lines().map_while(Result::ok) {
+                                let t = line.trim().to_string();
+                                if t.is_empty() {
+                                    continue;
+                                }
+                                if let Ok(mut g) = ring.lock() {
+                                    g.push_back(t);
+                                    while g.len() > 4 {
+                                        g.pop_front();
+                                    }
+                                }
+                            }
+                        });
+                    }
                     child = Some(c);
                     set(TunnelState::Starting, &snap_t);
                 }
