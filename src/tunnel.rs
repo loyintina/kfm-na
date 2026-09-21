@@ -15,7 +15,7 @@
 //! 停掉 Termux 隧道即无缝切换到 na 自持。
 
 use std::collections::VecDeque;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -126,6 +126,30 @@ pub fn next_attempts(prev: u32, lived_secs: u64) -> u32 {
     }
 }
 
+/// 反连口释放脚本（A 档纯函数，2026-09-21 BAR-129 自愈）：**口即设备身份**
+/// ——每设备 10 口段（手机 9022 / redroid 9122），所以「谁占着本设备口」
+/// 必然是我们自己上一轮遗留的会话（手机退后台/灭屏/杀进程时，服务端 sshd
+/// 要等 ClientAlive 90s 才收割，这段窗口里新 ssh 必撞口 → ExitOnForwardFailure
+/// → 秒级 255 → 用户看到的「恢复后反复掉」）。故释放 = 把占口的那个
+/// **sshd** 收掉：非 sshd 进程一律不动（防误伤真服务）
+pub fn release_forward_script(remote_port: u16) -> String {
+    format!(
+        "P=$(ss -tlnpH \"sport = :{remote_port}\" 2>/dev/null | grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -u)
+for p in $P; do
+  if ps -p \"$p\" -o comm= 2>/dev/null | grep -q '^sshd'; then kill \"$p\" 2>/dev/null && echo \"released=$p\"; fi
+done
+[ -z \"$P\" ] && echo none"
+    )
+}
+
+/// 反连口被占的判决（A 档纯函数）：ssh 死因里同时出现「远程转发绑定失败」
+/// 与**本设备口号**才触发释放——认证失败/拒连/keepalive 超时都不许触发，
+/// 否则可能把一条**活的**会话杀掉（口不匹配同理：别的设备的口不归我们管）
+pub fn should_release_forward(stderr_tail: &str, remote_port: u16) -> bool {
+    stderr_tail.contains("remote port forwarding failed")
+        && stderr_tail.contains(&remote_port.to_string())
+}
+
 /// 状态词（A 档纯函数）：连接/服务卡状态行的唯一文案源。
 /// Down{attempts:0} = 从没起来过（缺件/prefix 未装同相）→「未启动」；
 /// Down{n>0} = 退避中，必须带次数（用户要知道还在敲第几次门）。
@@ -216,6 +240,66 @@ fn probe_port(port: u16) -> bool {
         std::time::Duration::from_millis(300),
     )
     .is_ok()
+}
+
+/// 反连口释放（B 档胶水）：一次性 ssh 跑释放脚本，独立线程跑（看门狗
+/// 1s 滴答不许被 ssh 握手拖住）。释放是快活，10s 超时即弃（下一轮再试）
+fn kick_release_forward(prefix: &Path, server: &ServerEntry) {
+    let prefix = prefix.to_path_buf();
+    let server = server.clone();
+    std::thread::spawn(move || {
+        let Ok(args) = crate::na_server_sup::exec_args(&server) else {
+            crate::report::report("tunnel", "反连口释放：ssh 参数缺件，放弃");
+            return;
+        };
+        let mut cmd = std::process::Command::new(prefix.join("bin/ssh"));
+        let child = cmd
+            .args(&args)
+            .env("PATH", prefix.join("bin"))
+            .env("LD_LIBRARY_PATH", prefix.join("lib"))
+            .env("PREFIX", &prefix)
+            .env("TERMUX__PREFIX", &prefix)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn();
+        let Ok(mut child) = child else {
+            crate::report::report("tunnel", "反连口释放：ssh spawn 失败");
+            return;
+        };
+        if let Some(mut sin) = child.stdin.take() {
+            use std::io::Write as _;
+            let _ = sin.write_all(release_forward_script(server.tunnel.remote_port).as_bytes());
+            drop(sin); // 关 stdin = 脚本开跑
+        }
+        let (tx, rx) = channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(child.wait_with_output());
+        });
+        match rx.recv_timeout(std::time::Duration::from_secs(10)) {
+            Ok(Ok(out)) => {
+                let o = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                let e = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                crate::report::report(
+                    "tunnel",
+                    &format!(
+                        "反连口释放：{}{}",
+                        if o.is_empty() {
+                            "已回收/无占用".to_string()
+                        } else {
+                            o
+                        },
+                        if e.is_empty() {
+                            String::new()
+                        } else {
+                            format!("（err={e}）")
+                        }
+                    ),
+                );
+            }
+            _ => crate::report::report("tunnel", "反连口释放：超时，下一轮再试"),
+        }
+    });
 }
 
 /// 起看门狗（一线程 1s 滴答）：探口 → 外部占则让位挂 ExternalUp；
@@ -365,7 +449,24 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                     ),
                 );
                 ssh_err = None;
-                let wait_s = backoff_secs(attempts);
+                // 反连口自愈（BAR-129）：撞口是「上一轮遗留会话还在
+                // ClientAlive 收割窗里」的确定后果——不等 90s，直接请
+                // 服务器把占本设备口的 sshd 收掉，下一轮即可绑上
+                let releasing = if should_release_forward(&tail, server.tunnel.remote_port) {
+                    crate::report::report(
+                        "tunnel",
+                        &format!(
+                            "反连口 {} 被上一轮占着 → 请求服务器释放",
+                            server.tunnel.remote_port
+                        ),
+                    );
+                    kick_release_forward(&prefix, &server);
+                    true
+                } else {
+                    false
+                };
+                // 释放要几秒，首轮退避至少等到它落地
+                let wait_s = backoff_secs(attempts).max(if releasing { 4 } else { 0 });
                 set(
                     TunnelState::Down {
                         attempts,

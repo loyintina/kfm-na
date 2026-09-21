@@ -220,3 +220,39 @@ fn spec_抖动_短命退避不归零() {
     assert_eq!(backoff_secs(4), 30);
     assert_eq!(backoff_secs(99), 30);
 }
+
+#[test]
+fn spec_反连口_释放判决与脚本() {
+    // BAR-129：恢复后反复掉 = 上一轮会话还占着本设备反连口（ClientAlive
+    // 90s 收割窗），不等它，直接释放。判决必须严：只有「远程转发绑定失败
+    // + 本设备口号」才动手——别的死因（认证/拒连/keepalive）触发释放会
+    // 把一条活会话杀掉
+    use kfm_na::tunnel::{release_forward_script, should_release_forward};
+    let real = "Warning: remote port forwarding failed for listen port 9022";
+    assert!(should_release_forward(real, 9022), "撞本设备口 = 释放");
+    assert!(
+        !should_release_forward(real, 9122),
+        "别的设备的口（redroid 9122）不归我们管"
+    );
+    assert!(
+        !should_release_forward("Permission denied (publickey).", 9022),
+        "认证失败不许触发（会杀掉活会话）"
+    );
+    assert!(!should_release_forward("Connection refused", 9022));
+    assert!(!should_release_forward(
+        "Timeout, server not responding.",
+        9022
+    ));
+    assert!(!should_release_forward("", 9022));
+    // 脚本：按本设备口过滤，且只杀 sshd（非 sshd 一律不动）
+    let s = release_forward_script(9022);
+    assert!(s.contains("sport = :9022"), "按口过滤：{s}");
+    assert!(
+        s.contains("comm=") && s.contains("^sshd"),
+        "只杀 sshd 防误伤"
+    );
+    assert!(s.contains("kill"), "有杀动作");
+    assert!(s.contains("none"), "无占用要显形（判卷可读）");
+    let s2 = release_forward_script(9122);
+    assert!(s2.contains("sport = :9122"), "口参数化（每设备段）");
+}
