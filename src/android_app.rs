@@ -7383,6 +7383,26 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
     // android_main 若往下走 = 心跳/值守线程重复起 + EventLoop::new
     // panic(RecreationAttempt,panic.log 2026-08-26 已捕获)。遗言用
     // report_sync 同步直报——紧随的 exit(0) 不会给它异步入队的机会。
+    // BAR-127 单实例闸（2026-09-21 夜立案转修）：flock 独占——多实例是
+    // 今晚「反复重连」的最后一块根：每个实例各起隧道/看门狗**互抢反连口**
+    // （BAR-128 抓到的 remote port forwarding failed 真因之一）、各报一份
+    // 心跳与状态（封掉在途相发布后日志仍 1~3s 一跳 = 旧实例还活着）。
+    // 必须在任何子系统起跑之前（看门狗/心跳/EventLoop 全在后）；抢不到
+    // 写遗言就退。进程死内核自动释放锁 → 不存在陈旧锁卡住下一次启动
+    if !crate::singleton::try_acquire() {
+        let holder =
+            crate::singleton::holder_pid(std::path::Path::new(crate::singleton::LOCK_PATH))
+                .map(|p| p.to_string())
+                .unwrap_or_else(|| "?".into());
+        crate::report::report_sync(
+            "death",
+            &format!(
+                "单实例让位：已有活实例 pid={holder}（本进程 pid={}）",
+                std::process::id()
+            ),
+        );
+        std::thread::spawn(|| std::process::exit(0)).join().ok();
+    }
     if ANDROID_MAIN_RAN.swap(true, std::sync::atomic::Ordering::SeqCst) {
         crate::report::report_sync(
             "death",

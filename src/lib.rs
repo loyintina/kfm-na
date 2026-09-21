@@ -33,6 +33,7 @@ pub mod sess_mode;
 pub mod session;
 pub mod session_router;
 pub mod settings;
+pub mod singleton;
 pub mod svc_health;
 pub mod sys_hist;
 pub mod termview;

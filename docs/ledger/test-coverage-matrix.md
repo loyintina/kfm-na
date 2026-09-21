@@ -28,7 +28,7 @@
 | `src/keybar.rs` | 20 | 16 | 4 | COLS MOD_ALT install_bridge_mods bridge_mods |
 | `src/keymap.rs` | 2 | 2 | 0 | — |
 | `src/local_pty.rs` | 7 | 6 | 1 | android_prefix |
-| `src/na_server_sup.rs` | 14 | 9 | 5 | REPO_DIR HEALTH_URL EXEC_TIMEOUT_SECS RECHECK_SECS TUNNEL_WAIT_SECS |
+| `src/na_server_sup.rs` | 20 | 15 | 5 | REPO_DIR HEALTH_URL EXEC_TIMEOUT_SECS RECHECK_SECS TUNNEL_WAIT_SECS |
 | `src/plugins/ai_presence.rs` | 2 | 2 | 0 | — |
 | `src/plugins/conn_provider_local.rs` | 3 | 3 | 0 | — |
 | `src/plugins/conn_provider_ws.rs` | 3 | 3 | 0 | — |
@@ -43,19 +43,20 @@
 | `src/session.rs` | 10 | 10 | 0 | — |
 | `src/session_router.rs` | 11 | 11 | 0 | — |
 | `src/settings.rs` | 8 | 6 | 2 | parse terminal_to_json |
+| `src/singleton.rs` | 5 | 2 | 3 | LOCK_PATH lock_exclusive try_acquire |
 | `src/svc_health.rs` | 12 | 7 | 5 | HIST_PATH configure set_visible sys_snap take_dirty |
-| `src/sys_hist.rs` | 35 | 31 | 4 | BAR_W hist_idx restore HIST_FORMAT |
+| `src/sys_hist.rs` | 39 | 34 | 5 | BAR_W PLACEHOLDER_PCT hist_idx restore HIST_FORMAT |
 | `src/termview.rs` | 135 | 128 | 7 | AI_THINK_COLLAPSED FONT_CANDIDATES CJK_FONT_CANDIDATES load_cjk_font font_probe MAG_HALF_COLS MAG_HALF_ROWS |
 | `src/theme.rs` | 1 | 1 | 0 | — |
 | `src/tmux_ctl.rs` | 9 | 9 | 0 | — |
 | `src/tmux_exec.rs` | 1 | 1 | 0 | — |
 | `src/trace.rs` | 12 | 8 | 4 | TRACE_CAP format_tail dump_all dump_tail |
-| `src/tunnel.rs` | 13 | 10 | 3 | check_ssh_fields NA_SSHD_PORT request_reconnect |
+| `src/tunnel.rs` | 17 | 14 | 3 | check_ssh_fields NA_SSHD_PORT request_reconnect |
 | `src/ui/accent.rs` | 6 | 6 | 0 | — |
 | `src/ui/ai_page.rs` | 7 | 7 | 0 | — |
 | `src/ui/cfg_page.rs` | 68 | 63 | 5 | DROPDOWN_ENTER_MS DROPDOWN_EXIT_MS DROPDOWN_PICK_SYNC_MS register_cfg_page cfg_page_handle |
 | `src/ui/comp_registry.rs` | 6 | 5 | 1 | preview_is_animated |
-| `src/ui/conn_card.rs` | 6 | 6 | 0 | — |
+| `src/ui/conn_card.rs` | 6 | 5 | 1 | FIELD_GAP |
 | `src/ui/cursor.rs` | 9 | 9 | 0 | — |
 | `src/ui/down_card.rs` | 9 | 9 | 0 | — |
 | `src/ui/dual_pool.rs` | 19 | 19 | 0 | — |
@@ -64,7 +65,7 @@
 | `src/ui/fx_spring.rs` | 8 | 8 | 0 | — |
 | `src/ui/gear.rs` | 7 | 7 | 0 | — |
 | `src/ui/keybar.rs` | 1 | 1 | 0 | — |
-| `src/ui/link_card.rs` | 10 | 8 | 2 | SESS_H SESS_GAP |
+| `src/ui/link_card.rs` | 10 | 7 | 3 | FIELD_GAP SESS_H SESS_GAP |
 | `src/ui/modal.rs` | 19 | 17 | 2 | MODAL_LABEL_H MODAL_MAX_MARGIN_Y |
 | `src/ui/orb.rs` | 5 | 5 | 0 | — |
 | `src/ui/panel_drag.rs` | 12 | 7 | 5 | DRAG_DIR_LOCK RELEASE_PROGRESS VELOCITY_WINDOW_MS locked current_offset |
@@ -73,8 +74,8 @@
 | `src/ui/prompt_bar.rs` | 5 | 4 | 1 | row_of |
 | `src/ui/seam.rs` | 24 | 24 | 0 | — |
 | `src/ui/stage.rs` | 7 | 7 | 0 | — |
-| `src/ui/svc_card.rs` | 6 | 6 | 0 | — |
-| `src/ui/sys_card.rs` | 19 | 17 | 2 | local_y bar_geom |
+| `src/ui/svc_card.rs` | 6 | 5 | 1 | FIELD_GAP |
+| `src/ui/sys_card.rs` | 22 | 18 | 4 | FIELD_GAP card_h_now local_y bar_geom |
 | `src/ui/tab_bar.rs` | 27 | 27 | 0 | — |
 | `src/ui/viewport_push.rs` | 2 | 2 | 0 | — |
 | `src/vsync_book.rs` | 20 | 16 | 4 | last_due_ms chain_dead mark_chain_dead last_ns |
