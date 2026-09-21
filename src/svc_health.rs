@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use crate::settings::Backend;
+use crate::sys_hist::{self, Hist};
 
 // ---- A 档：数据形状与纯函数（考题先行钉死）----
 
@@ -205,6 +206,10 @@ struct Inner {
     visible: bool,
     snap: HealthSnap,
     sys: SysSnap,
+    /// 环境体征历史环形账（环境卡柱轨数据面，2026-09-21）：每采到
+    /// 一拍即追（值不变照追——kfmv4「时钟驱动滑动」同规：稳态负载值
+    /// 几分钟不变，值驱动会让柱轨彻底静止）；翻相清账
+    hist: Hist,
 }
 
 static INNER: OnceLock<Arc<Mutex<Inner>>> = OnceLock::new();
@@ -225,6 +230,7 @@ fn inner() -> &'static Arc<Mutex<Inner>> {
                 sys: None,
                 epoch: 0,
             },
+            hist: Hist::default(),
         }))
     })
 }
@@ -246,6 +252,21 @@ fn bump_sys(g: &mut Inner, sys: Option<na_sys::SysInfo>) {
     }
 }
 
+/// 追一拍历史（环境卡柱轨）：值不变也追（拍序 = 时间轴），并置脏——
+/// 追拍本身就是屏上内容换代（柱轨右移一柱）
+fn push_hist(g: &mut Inner, s: sys_hist::Sample) {
+    g.hist.push(s);
+    DIRTY.store(true, Ordering::Relaxed);
+}
+
+/// 清历史账（翻相用：上一相的体征曲线不许带进新相）
+fn clear_hist(g: &mut Inner) {
+    if !g.hist.is_empty() {
+        g.hist.clear();
+        DIRTY.store(true, Ordering::Relaxed);
+    }
+}
+
 /// 配置（壳设置加载/重载时喂）：后端 + 隧道本地口。幂等——重复喂同值
 /// 零动作；后端翻相时清数据（kfmv4 时代的会话行不许带进 na-server 相）
 pub fn configure(backend: Backend, local_port: u16) {
@@ -263,6 +284,7 @@ pub fn configure(backend: Backend, local_port: u16) {
         };
         bump(&mut g, phase, None);
         bump_sys(&mut g, None); // 后端翻相清体征（kfmv4 时代的不许带进 na-server 相）
+        clear_hist(&mut g); // 柱轨同清（上一相的曲线不许带进新相）
     }
     ensure_poller();
 }
@@ -287,6 +309,11 @@ pub fn snap() -> HealthSnap {
 /// 读环境体征快照（环境卡涂装每烘焙拍一张；锁短）
 pub fn sys_snap() -> SysSnap {
     inner().lock().unwrap().sys.clone()
+}
+
+/// 读环境体征历史账（柱轨涂装/合成期每帧一张；CAP 级样本克隆，便宜）
+pub fn hist() -> Hist {
+    inner().lock().unwrap().hist.clone()
 }
 
 /// 壳脏帧消耗口：有变化取走 true（每帧一查，零成本）
@@ -366,6 +393,7 @@ fn ensure_poller() {
                     last_poll = None;
                     let mut g = inner().lock().unwrap();
                     bump_sys(&mut g, None);
+                    clear_hist(&mut g); // 对象轴翻相同清柱轨账
                 }
                 if !visible {
                     was_visible = false;
@@ -389,6 +417,7 @@ fn ensure_poller() {
                     let info = na_sys::collect("/data");
                     let mut g = inner().lock().unwrap();
                     bump_sys(&mut g, Some(info));
+                    push_hist(&mut g, sys_hist::sample_of(&info)); // 柱轨同拍追
                     continue;
                 }
                 if backend != Backend::NaServer {
@@ -416,6 +445,7 @@ fn ensure_poller() {
                     Ok(info) => {
                         let mut g = inner().lock().unwrap();
                         bump_sys(&mut g, Some(info));
+                        push_hist(&mut g, sys_hist::sample_of(&info)); // 柱轨同拍追
                     }
                     Err(e) => {
                         crate::report::report("svchealth", &format!("sys 轮询失败: {e}"));

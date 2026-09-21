@@ -992,6 +992,99 @@ fn paint_thin_frame(
     }
 }
 
+/// 示警色档（宪法 §2.4，2026-09-21 环境卡重做新立）：柱色与体征数值
+/// 同吃一档——阈值照 kfmv4 obs.ts（>85 红 / ≥70 琥珀 / 其余绿），红复用
+/// err 档同值（失败色与危险档是一个语义家族）。仅环境卡体征面使用，
+/// 不进卡片/文字通用体系（白三档不动）
+pub const WARN_OK: u32 = 0x004F_BF8B;
+pub const WARN_AMBER: u32 = 0x00D8_A84A;
+pub const WARN_RED: u32 = 0x00E0_6060;
+/// 中性档（无占比可判的指标——负载）：kfmv4 obs-bar-cyan 的 na 档，
+/// 固定色（与示警三档在任意 accent 下都可分辨）
+pub const WARN_NEUTRAL: u32 = 0x002E_9FD0;
+
+/// 判色档 → 柱色（pub = 考题钉判色映射；无占比轨（负载）= 中性青（kfmv4 obs-bar-cyan 同规：
+/// 不判色不编造警戒）。**固定色不跟 accent**——accent 逐次召唤随机，
+/// 落橙黄区间时中性柱会与琥珀档撞色，示警三档必须任何 accent 下都可辨
+/// （redroid 实拍：黄调 accent 下负载柱与磁盘琥珀柱几乎同色）
+pub fn sys_grade_color(g: crate::sys_hist::Grade) -> u32 {
+    match g {
+        crate::sys_hist::Grade::Warn => WARN_AMBER,
+        crate::sys_hist::Grade::Bad => WARN_RED,
+        crate::sys_hist::Grade::Ok => WARN_OK,
+        crate::sys_hist::Grade::Neutral => WARN_NEUTRAL,
+    }
+}
+
+/// 判色档 → 文字色（Neutral/Ok = 白档不上色——示警才上色）
+pub fn sys_grade_fg(g: crate::sys_hist::Grade, base: u32) -> u32 {
+    match g {
+        crate::sys_hist::Grade::Warn => WARN_AMBER,
+        crate::sys_hist::Grade::Bad => WARN_RED,
+        _ => base,
+    }
+}
+
+/// 单轨柱列涂装（页内直涂；合成期柱层 paint_sys_band_layer 共用同一把
+/// 取件/柱高/判色尺——眼手同尺）：轨矩形（帧坐标）+ 轨轴 + 历史账 +
+/// 滑入位移。取件 = tail(柱数+1)（进口柱同窗——kfmv4 恒渲染 柱数+1 根
+/// 同规）；柱底贴轨底、高 = 值/归一底 × 柱高上限；柱越轨左右缘断墨
+/// （overflow:hidden 的网格版）；该拍该路采不到 = 该位留空（显形不编造）
+#[allow(clippy::too_many_arguments)]
+fn paint_sys_bars(
+    frame: &mut Frame<'_>,
+    track: (i64, i64, u32, u32),
+    kind: crate::sys_hist::MetricKind,
+    samples: &[crate::sys_hist::Sample],
+    offset: u32,
+    clip_y: Option<(i32, i32)>,
+) {
+    let (tx, ty, tw, th) = track;
+    if tw == 0 || th == 0 {
+        return;
+    }
+    let bars = crate::sys_hist::bars_for(tw, crate::sys_hist::STEP);
+    let take = crate::sys_hist::tail(samples, bars + 1);
+    if take.is_empty() {
+        return;
+    }
+    let peak = crate::sys_hist::window_peak(take);
+    let max_h = crate::sys_hist::BAR_MAX_H.min(th);
+    for (i, s) in take.iter().enumerate() {
+        let Some(v) = kind.value(s) else {
+            continue;
+        };
+        let x0 = tx + i as i64 * i64::from(crate::sys_hist::STEP) - i64::from(offset);
+        let x1 = x0 + i64::from(crate::sys_hist::BAR_W);
+        if x1 <= tx || x0 >= tx + i64::from(tw) {
+            continue; // 已滑出左缘 / 尚在进口条外
+        }
+        let h = crate::sys_hist::bar_h(v, kind.denom(peak), max_h);
+        let y0 = ty + i64::from(th) - i64::from(h);
+        let (cy0, cy1) = match clip_y {
+            Some((c0, c1)) => (
+                y0.max(i64::from(c0)),
+                (y0 + i64::from(h)).min(i64::from(c1)),
+            ),
+            None => (y0, y0 + i64::from(h)),
+        };
+        let cy0 = cy0.max(0);
+        let cy1 = cy1.min(i64::from(frame.h));
+        if cy1 <= cy0 {
+            continue;
+        }
+        let cx0 = x0.max(tx);
+        let cx1 = x1.min(tx + i64::from(tw));
+        frame.fill_rect(
+            cx0 as u32,
+            cy0 as u32,
+            (cx1 - cx0) as u32,
+            (cy1 - cy0) as u32,
+            sys_grade_color(kind.grade(s)),
+        );
+    }
+}
+
 /// 标签页块涂装（宪法 §四 八修新立、十一修入随机色体系、**十二修选中
 /// 块均匀渐变**，2026-09-14；文件级共享组件，§六 样式唯一来源）：
 /// **无边框色块标签**——上两角圆角 R=1 格、下缘直边（标签坐在行底，
@@ -4087,37 +4180,78 @@ impl TermView {
             18.0,
             xclip32,
         );
-        // 六字段两竖列（字段标签列配方同服务卡；无错误行）
-        let xvalues = [
-            &xsnap.load,
-            &xsnap.procs,
-            &xsnap.mem,
-            &xsnap.swap,
-            &xsnap.disk,
-            &xsnap.uptime,
-        ];
-        for (i, fr) in xlay.fields.iter().enumerate() {
-            let l_items = self.measure_items(crate::ui::sys_card::FIELD_LABELS[i], 36.0);
+        // 单竖列四轨（2026-09-21 用户拍板「环境卡重做」）：每轨 = 文字行
+        // （标签左锚 title 档 + 值右锚 meta 档，值随判色档上色——kfmv4
+        // 面板「指标行 = 标签 + 数值 + 实值对」的网格化落法）+ 行下滚动
+        // 柱轨。柱轨样本 = svc_health 历史账（与 health 同 2s 拍）
+        let xhist = crate::svc_health::hist();
+        let xslide = xhist.slide_px_now(std::time::Instant::now());
+        let xvals = crate::ui::sys_card::metric_values(&xsnap);
+        for (i, md) in xlay.metrics.iter().enumerate() {
+            let kind = crate::sys_hist::METRICS[i];
+            let l_items = self.measure_items(crate::ui::sys_card::METRIC_LABELS[i], 36.0);
             self.draw_field_lines(
                 &mut frame,
                 &l_items,
-                (fr.x + off) as u32,
-                fr.w,
-                fr.y as u32,
-                fr.h,
+                (md.row.x + off) as u32,
+                md.row.w,
+                md.row.y as u32,
+                md.row.h,
                 36.0,
                 title_fg,
                 xclip32,
                 true,
             );
-            let v_items = self.measure_items(xvalues[i].as_str(), 30.0);
+            let v_items = self.measure_items(xvals[i], 30.0);
             self.draw_field_lines(
                 &mut frame,
                 &v_items,
-                (fr.x + off) as u32,
-                fr.w,
-                fr.y as u32,
-                fr.h,
+                (md.row.x + off) as u32,
+                md.row.w,
+                md.row.y as u32,
+                md.row.h,
+                30.0,
+                sys_grade_fg(xhist.latest_grade(kind), meta_fg),
+                xclip32,
+                false,
+            );
+            // 柱轨（本层直涂 = 稳态位 + 当拍滑入位移）：GLES 主路径的柱
+            // 归合成期柱层（SysBars 槽同矩形满覆盖，见 paint_sys_band_layer
+            // ——层底重建卡内芯渐变，本层画的柱被逐像素盖住；softbuffer
+            // 兜底路径与闸门倒帧走这里直涂）
+            paint_sys_bars(
+                &mut frame,
+                (md.track.x + off, md.track.y, md.track.w, md.track.h),
+                kind,
+                xhist.as_slice(),
+                xslide,
+                xclip32,
+            );
+        }
+        // 两尾部行（进程/在线）：计数与时长不是占比，无柱无判色（白档）
+        let xvals_tail = crate::ui::sys_card::tail_values(&xsnap);
+        for (j, tr) in xlay.tails.iter().enumerate() {
+            let l_items = self.measure_items(crate::ui::sys_card::TAIL_LABELS[j], 36.0);
+            self.draw_field_lines(
+                &mut frame,
+                &l_items,
+                (tr.x + off) as u32,
+                tr.w,
+                tr.y as u32,
+                tr.h,
+                36.0,
+                title_fg,
+                xclip32,
+                true,
+            );
+            let v_items = self.measure_items(xvals_tail[j], 30.0);
+            self.draw_field_lines(
+                &mut frame,
+                &v_items,
+                (tr.x + off) as u32,
+                tr.w,
+                tr.y as u32,
+                tr.h,
                 30.0,
                 meta_fg,
                 xclip32,
@@ -4505,6 +4639,56 @@ impl TermView {
                     }
                 }
             }
+        }
+    }
+
+    /// 环境卡柱**层**涂装（2026-09-21 环境卡重做）：层画布 = 四轨紧凑带
+    /// （canvas_w × 4 轨高，轨间文字行不归本层），**不透明满填**——轨内
+    /// 先逐像素重建卡内芯渐变（与页烘焙同一把 135° 尺、同分母同原点：
+    /// bg_lut[s] = frame_bg_rgb(c2, c1, s, 0, (卡宽−1)+(卡高−1))，s = 卡内
+    /// 局部 x+y——页烘焙内芯段 paint_rect_ring_yclip 同式），再画柱
+    /// **稳态位**（偏移 0）。满覆盖是合成期滑动的契约：柱层在合成期以 uv
+    /// 源窗平移（gles_present 合成 + sys_card::band_place 单源），层下不许
+    /// 透出页烘焙的静态柱（双画重影）；层内容只在采样换代/几何变时重烘
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn paint_sys_band_layer(
+        &self,
+        buf: &mut [u32],
+        cw: u32,
+        ch: u32,
+        band: &crate::ui::sys_card::BandGeom,
+        hist: &crate::sys_hist::Hist,
+        card: &crate::ui::dual_pool::PoolRect,
+        accent: crate::ui::accent::AccentPair,
+    ) {
+        if cw == 0 || ch == 0 || band.canvas_w != cw || band.canvas_h() != ch {
+            return;
+        }
+        let mut frame = Frame { buf, w: cw, h: ch };
+        let frame = &mut frame;
+        // 卡内芯渐变分母（卡矩形自己的尺——与页烘焙内芯段同式）
+        let denom_card = ((card.w.saturating_sub(1)) + (card.h.saturating_sub(1))).max(1) as i64;
+        for (i, bg) in band.tracks.iter().enumerate() {
+            let ly0 = band.local_y(i);
+            // 底：卡内芯渐变重建（不透明满填——合成期滑动的覆盖契约）
+            for py in 0..band.track_h {
+                let card_y = (bg.y - card.y) + i64::from(py);
+                let start = (ly0 + i64::from(py)) as usize * cw as usize;
+                for px in 0..cw {
+                    let s = (bg.x - card.x) + i64::from(px) + card_y;
+                    frame.buf[start + px as usize] =
+                        frame_bg_rgb(accent.c2, accent.c1, s, 0, denom_card);
+                }
+            }
+            // 柱（稳态位：柱 j 在层内 x = j·柱距；滑入位移归合成期 uv）
+            paint_sys_bars(
+                frame,
+                (0, ly0, cw, band.track_h),
+                crate::sys_hist::METRICS[i],
+                hist.as_slice(),
+                0,
+                None,
+            );
         }
     }
 
@@ -5090,6 +5274,72 @@ impl TermView {
                 // 选中项（第二项）= 均匀细框；未选中项纯深底
                 let oy1 = py0 + i64::from(th);
                 paint_thin_frame(frame, ix, oy1, iw, th, accent, denom, clip);
+            }
+            Preview::SysBars => {
+                // 体征柱轨（2026-09-21）：mini 指标行（标签左 + 判色值右）
+                // + 行下柱轨（逐样本绿/琥珀/红 + 一条中性主题色柱）——
+                // 柱高/柱距/判色全吃生产件（sys_hist 单源）
+                let row_h = CELL_H * 2;
+                let y0 = iy + (i64::from(ih) - i64::from(row_h + CELL_H)) / 2;
+                self.draw_text_left_ex(
+                    frame, "内存", ix as u32, 216, y0 as u32, row_h, 36.0, title_fg, 18.0, None,
+                );
+                let vals = ["42%", "88%", "71%"];
+                let gs = [
+                    crate::sys_hist::grade(Some(42)),
+                    crate::sys_hist::grade(Some(88)),
+                    crate::sys_hist::grade(Some(71)),
+                ];
+                for (k, (v, g)) in vals.iter().zip(gs.iter()).enumerate() {
+                    let vx = ix + 216 + k as i64 * 108;
+                    if vx + 108 > ix + i64::from(iw) {
+                        break;
+                    }
+                    self.draw_text_left_ex(
+                        frame,
+                        v,
+                        vx as u32,
+                        108,
+                        y0 as u32,
+                        row_h,
+                        30.0,
+                        sys_grade_fg(*g, meta_fg),
+                        18.0,
+                        None,
+                    );
+                }
+                // 柱轨：20 根演示柱（高度按正弦，档位循环——三色 + 中性）
+                let ty = y0 + i64::from(row_h);
+                let step = crate::sys_hist::STEP;
+                let bars = (iw / step).clamp(4, 32) as usize;
+                for i in 0..bars {
+                    let t = (i as f32 / bars as f32) * std::f32::consts::TAU;
+                    let hgt =
+                        (0.35 + 0.5 * (t * 0.7).sin().abs()) * crate::sys_hist::BAR_MAX_H as f32;
+                    let h = crate::sys_hist::bar_h(
+                        (hgt * 100.0) as u32,
+                        100,
+                        crate::sys_hist::BAR_MAX_H,
+                    );
+                    let pct = ((hgt * 100.0) as u32).min(120) as u8;
+                    let g = if i % 7 == 3 {
+                        crate::sys_hist::Grade::Neutral
+                    } else {
+                        crate::sys_hist::grade(Some(pct))
+                    };
+                    let bx = ix + i as i64 * i64::from(step);
+                    let by = ty + i64::from(crate::sys_hist::TRACK_H - h);
+                    if by < clip.0 || by >= clip.1 {
+                        continue;
+                    }
+                    frame.fill_rect(
+                        bx as u32,
+                        by as u32,
+                        crate::sys_hist::BAR_W,
+                        h,
+                        sys_grade_color(g),
+                    );
+                }
             }
             Preview::FieldLabel => {
                 // 标签列（36 亮 + 十三修背衬：渐变暗底+8% 白提亮）+
@@ -6780,6 +7030,20 @@ pub trait TermEmu: Send {
         origin: (i64, i64),
         accent: crate::ui::accent::AccentPair,
     );
+    /// 环境卡柱层涂装（2026-09-21 环境卡重做）：层画布 = 四轨紧凑带，
+    /// 逐像素重建卡内芯渐变 + 柱（稳态位）——合成期按滑入位移取 uv 窗
+    /// 口（滑动零重烘）
+    #[allow(clippy::too_many_arguments)]
+    fn paint_sys_band_layer(
+        &self,
+        buf: &mut [u32],
+        cw: u32,
+        ch: u32,
+        band: &crate::ui::sys_card::BandGeom,
+        hist: &crate::sys_hist::Hist,
+        card: &crate::ui::dual_pool::PoolRect,
+        accent: crate::ui::accent::AccentPair,
+    );
     /// 下池子目录行表 + 上池联动下拉触发器/字段行（下拉 panel 已拆
     /// 层——paint_dropdown_panel_layer，本函数不再画面板）。
     /// cfg_off_x 语义同 paint_cfg_dual_pool；画在双池框之上。
@@ -7080,6 +7344,19 @@ impl TermEmu for TermView {
         accent: crate::ui::accent::AccentPair,
     ) {
         TermView::paint_dropdown_panel_layer(self, buf, cw, ch, page, pr_full, origin, accent)
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn paint_sys_band_layer(
+        &self,
+        buf: &mut [u32],
+        cw: u32,
+        ch: u32,
+        band: &crate::ui::sys_card::BandGeom,
+        hist: &crate::sys_hist::Hist,
+        card: &crate::ui::dual_pool::PoolRect,
+        accent: crate::ui::accent::AccentPair,
+    ) {
+        TermView::paint_sys_band_layer(self, buf, cw, ch, band, hist, card, accent)
     }
     #[allow(clippy::too_many_arguments)]
     fn paint_cfg_pool_content(

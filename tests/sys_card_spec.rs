@@ -1,7 +1,7 @@
 //! 环境卡考题（A 档）：三源合成文案映射（后端 × nasup × sys）+
-//! sys JSON 解析 + 几何（服务卡下纵排第四张二级卡，恒定高，六字段
-//! 两竖列）——纯逻辑先行钉死，涂装在 termview（眼手同尺：两边吃
-//! sys_card 同一份 layout）。
+//! sys JSON 解析 + 几何（左滚动区二级卡，恒定高，**单竖列**：卡头 →
+//! 四轨【文字行 + 柱轨】→ 两尾部行）——纯逻辑先行钉死，涂装在 termview
+//! （眼手同尺：两边吃 sys_card 同一份 layout）。
 //!
 //! 变异抽检：①左区槽位漏减滚动/脏滚动不钳（卡不随账走 = 三区 v2
 //! 排布器账漂移）必须咬；②compose 内存用量拿 avail 当 used（卡面
@@ -9,14 +9,17 @@
 //! （对面不是新版 na-server 静默当零）必须咬；④compose 把 None 当
 //! 零值显示（"0.00 0.00 0.00" 冒充数据——Android 拒 loadavg 的
 //! 合法常态下卡面造假）必须咬；⑤compose 交换路拿 SwapFree 当已用
-//! 必须咬（同②，交换路的镜像病）；⑥六字段几何列序错乱（行主序
-//! 负载/进程 | 内存/交换 | 磁盘/在线——左右列换位 = 语义串行）必须咬。
+//! 必须咬（同②，交换路的镜像病）；⑥单竖列轨序错乱（柱轨与标签错位
+//! = 数值和曲线讲两件事）必须咬；⑦柱轨与文字行不咬合（柱画在别人
+//! 行下）必须咬；⑧柱层画布宽漏加一柱距（稳态位右缘取到画布外 =
+//! 进口柱塌成一条）必须咬。
 
 use kfm_na::na_server_sup::{SupSnap, SupState};
 use kfm_na::settings::Backend;
 use kfm_na::svc_health;
+use kfm_na::sys_hist;
 use kfm_na::ui::parser_chain::{self, ChainCardId};
-use kfm_na::ui::sys_card::{self, FIELD_LABELS, N_FIELDS};
+use kfm_na::ui::sys_card::{self, METRIC_LABELS, N_METRICS, N_TAILS, TAIL_LABELS, TRACK_H};
 
 /// 三区几何夹具（2026-09-21 三区排布 v2：环境卡归左滚动区）：屏
 /// 1080×2280、可视底 2000、tmux 卡高 300——本考题只钉「环境卡在左区
@@ -245,46 +248,86 @@ fn spec_合成_本地相() {
 // ---- 几何 ----
 
 #[test]
-fn spec_几何_左区贴窗顶() {
+fn spec_几何_左区贴窗顶单竖列() {
     let r = regs();
     let l = sys_lay();
     assert_eq!(l.card.x, r.left.x, "环境卡在左滚动区（三区 v2）");
     assert_eq!(l.card.w, r.left.w);
     assert_eq!(l.card.y, r.left.y, "scroll=0 贴左区窗顶");
-    assert_eq!(
-        l.card.h,
-        sys_card::CARD_H,
-        "卡高 = 恒定（三行六字段两竖列）"
-    );
-    // 六字段行主序两竖列：0 负载/1 进程 | 2 内存/3 交换 | 4 磁盘/5 在线
-    let pp = kfm_na::ui::parser_page::COL_GAP;
-    let cx = l.card.x + i64::from(kfm_na::ui::parser_page::CARD_PAD_H);
-    let cw = l.card.w - kfm_na::ui::parser_page::CARD_PAD_H * 2;
-    let col_w = (cw - pp) / 2;
-    for (i, f) in l.fields.iter().enumerate() {
-        let (row, col) = (i / 2, i % 2);
-        let want_x = if col == 0 {
-            cx
-        } else {
-            cx + i64::from(col_w + pp)
-        };
-        assert_eq!(f.x, want_x, "字段 {i} 列位错（行主序两竖列）");
-        assert_eq!(f.w, col_w, "字段 {i} 列宽 = (内容宽−列距)/2");
-        if i >= 2 {
+    assert_eq!(l.card.h, sys_card::CARD_H, "卡高 = 恒定（四轨 + 两尾部行）");
+    use kfm_na::ui::parser_page as pk;
+    let cx = l.card.x + i64::from(pk::CARD_PAD_H);
+    let cw = l.card.w - pk::CARD_PAD_H * 2;
+    // 卡头贴卡顶内缘
+    assert_eq!(l.header.x, cx);
+    assert_eq!(l.header.w, cw);
+    assert_eq!(l.header.y, l.card.y + i64::from(pk::CARD_PAD_V));
+    // 四轨单竖列：全宽同 x，文字行 + 其下柱轨，轨序递进
+    for (i, md) in l.metrics.iter().enumerate() {
+        assert_eq!(md.row.x, cx, "轨 {i} 文字行左锚 = 卡内缘（单竖列）");
+        assert_eq!(md.row.w, cw, "轨 {i} 文字行全宽（无并排——变异⑥）");
+        assert_eq!(md.track.x, cx, "轨 {i} 柱轨与文字行同 x");
+        assert_eq!(md.track.w, cw, "柱轨全宽（柱列按轨宽取件）");
+        assert_eq!(md.track.h, TRACK_H);
+        assert_eq!(
+            md.track.y,
+            md.row.y + i64::from(sys_card::FIELD_H),
+            "柱轨必须紧咬本轨文字行下缘（变异⑦：错行 = 数值与曲线讲两件事）"
+        );
+        if i > 0 {
             assert_eq!(
-                f.y,
-                l.fields[i - 2].y + i64::from(sys_card::FIELD_H + sys_card::FIELD_GAP),
-                "行间纵序等距相接"
+                md.row.y,
+                l.metrics[i - 1].track.y + i64::from(TRACK_H + pk::ROW_GAP),
+                "轨间纵序等距相接"
             );
         }
-        let _ = row;
     }
-    assert_eq!(l.fields[0].y, l.fields[1].y, "同一行两列同高");
-    let last = &l.fields[N_FIELDS - 1];
-    assert!(
-        last.y + i64::from(last.h) <= l.card.y + i64::from(l.card.h),
-        "末字段行不许出卡底"
+    // 尾部两行接在末轨之下
+    assert_eq!(
+        l.tails[0].y,
+        l.metrics[N_METRICS - 1].track.y + i64::from(TRACK_H + pk::ROW_GAP),
+        "尾部行紧跟末轨（行距同池）"
     );
+    assert_eq!(
+        l.tails[1].y,
+        l.tails[0].y + i64::from(sys_card::FIELD_H + sys_card::FIELD_GAP)
+    );
+    let last = &l.tails[N_TAILS - 1];
+    assert_eq!(
+        last.y + i64::from(last.h),
+        l.card.y + i64::from(l.card.h) - i64::from(pk::CARD_PAD_V),
+        "末行底 = 卡底内缘（卡高账与布局逐值咬合）"
+    );
+}
+
+#[test]
+fn spec_柱层_画布尺与轨几何() {
+    let l = sys_lay();
+    let band = sys_card::band_of(&l);
+    let t0 = &band.tracks[0];
+    assert_eq!(
+        band.canvas_w,
+        t0.w + sys_hist::STEP,
+        "变异⑧：层画布宽 = 轨宽 + 一柱距（稳态位右缘要取到轨宽+柱距）"
+    );
+    assert_eq!(band.canvas_h(), TRACK_H * N_METRICS as u32);
+    assert_eq!(band.track_h, TRACK_H);
+    assert_eq!(
+        t0.bars,
+        sys_hist::bars_for(t0.w, sys_hist::STEP),
+        "可见柱数 = 轨宽/柱距（单源）"
+    );
+    assert!(t0.bars >= 1);
+    assert_eq!(t0.max_h, sys_hist::BAR_MAX_H.min(TRACK_H));
+    assert_eq!(t0.step, sys_hist::STEP);
+    // 四轨 x/宽同尺（柱层紧凑叠放的前提）
+    for t in band.tracks.iter() {
+        assert_eq!(t.x, t0.x);
+        assert_eq!(t.w, t0.w);
+    }
+    // 层内 v 段按轨序齐分
+    assert!((band.uv_v(1).0 - 0.25).abs() < 1e-6);
+    assert!((band.uv_v(3).1 - 1.0).abs() < 1e-6);
 }
 
 #[test]
@@ -312,9 +355,30 @@ fn spec_槽位_随左区滚动账平移() {
 
 #[test]
 fn spec_字段标签_涂装唯一源() {
-    assert_eq!(FIELD_LABELS.len(), N_FIELDS);
-    assert_eq!(
-        FIELD_LABELS,
-        ["负载", "进程", "内存", "交换", "磁盘", "在线"]
+    // 单竖列（2026-09-21 环境卡重做）：四轨标签与 sys_hist 轨序同长同序，
+    // 尾部两行各归各位——涂装/命中/取件三处同吃这两张表
+    assert_eq!(METRIC_LABELS.len(), N_METRICS);
+    assert_eq!(METRIC_LABELS, ["负载", "内存", "交换", "磁盘"]);
+    assert_eq!(TAIL_LABELS.len(), N_TAILS);
+    assert_eq!(TAIL_LABELS, ["进程", "在线"]);
+    assert_eq!(N_METRICS, sys_hist::METRICS.len(), "轨序同长");
+}
+
+#[test]
+fn spec_值文案_取件同序() {
+    let s = sup();
+    let c = sys_card::compose(
+        kfm_na::endpoint::EndpointKind::Server,
+        Backend::NaServer,
+        Some(&s),
+        Some(&sysinfo()),
     );
+    let mv = sys_card::metric_values(&c);
+    assert_eq!(mv[0], c.load, "轨 0 = 负载（与 METRIC_LABELS 同序）");
+    assert_eq!(mv[1], c.mem);
+    assert_eq!(mv[2], c.swap);
+    assert_eq!(mv[3], c.disk);
+    let tv = sys_card::tail_values(&c);
+    assert_eq!(tv[0], c.procs, "尾部 0 = 进程（与 TAIL_LABELS 同序）");
+    assert_eq!(tv[1], c.uptime);
 }

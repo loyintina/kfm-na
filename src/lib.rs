@@ -34,6 +34,7 @@ pub mod session;
 pub mod session_router;
 pub mod settings;
 pub mod svc_health;
+pub mod sys_hist;
 pub mod termview;
 pub mod theme;
 pub mod tmux_ctl;

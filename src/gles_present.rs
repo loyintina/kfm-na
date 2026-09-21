@@ -109,6 +109,13 @@ pub enum ChromeSlot {
     /// （那是 clear 后最底层，网格实例压在它上面，卡片会被终端文字
     /// 盖死——redroid 判卷现场定罪）
     DownCard = 14,
+    /// 环境卡柱层（2026-09-21 环境卡重做）：四轨紧凑带（轨宽+一柱距 ×
+    /// 4 轨高 ≈ 0.3MB），**滑动全在合成期**——层内容一烘（每采样拍），
+    /// 滑入位移 = 源 uv 窗口起点逐帧滑（kfmv4 CSS transform 的网格版；
+    /// 逐帧重烘解析层 13MB 上传是对「烘焙恒画稳态、动效在合成期」纪律
+    /// 的回潮）。z 序 = 解析槽之上（同面板臂内、页层之后画），随 pt_off
+    /// 平移、随 pt_alpha 显影
+    SysBars = 15,
 }
 
 /// 视口平移合成参数（十九修 D8）：调用方逐帧从 cfg_snap.pan 求值——
@@ -164,6 +171,11 @@ pub struct LayeredPlace {
     /// 页坐标 = (上池内容左内缘, 面板顶)；内容右缘锚定，宽度账在播时
     /// 左缘逐帧动 = 烘焙维非 placement 维）
     pub dropdown: Option<(f32, f32)>,
+    /// 环境卡柱层（2026-09-21 环境卡重做）：四轨 dest/uv 窗口（页坐标，
+    /// 面板偏移由合成期加同 pt_off/pt_extra）。层内容一烘（每采样拍），
+    /// **滑入位移只在源 uv 窗口上逐帧滑**——零重烘零上传，kfmv4 CSS
+    /// transform 的网格版。None = 解析页不可见
+    pub sys_band: Option<crate::ui::sys_card::BandPlace>,
 }
 
 /// 单槽烘焙物。baked=false 的槽不许上屏——采样未上传过的纹理得到
@@ -628,7 +640,7 @@ pub struct GlesPresent {
     /// 平移期池高 glide 的逐帧重烘限定在池区小画布）+ 二十四修一件
     /// （下拉面板层——并发同拍起步的捕获净度），置脏烘焙 +
     /// placement 合成——动画帧零光栅零上传
-    layers: [ChromeLayer; 15],
+    layers: [ChromeLayer; 16],
     /// 图层实例程序（rect+uv+tint 四边形；placement 逐槽进实例数据）
     layer_prog: glow::NativeProgram,
     layer_vao: glow::NativeVertexArray,
@@ -765,6 +777,7 @@ impl GlesPresent {
         };
         // 先建槽数组再 move gl 进结构体（E0382：字段初始化按书写序移动）
         let layers = [
+            mk_layer(&gl),
             mk_layer(&gl),
             mk_layer(&gl),
             mk_layer(&gl),
@@ -1725,6 +1738,33 @@ impl GlesPresent {
                                 self.h as f32,
                                 pt_alpha,
                             );
+                        }
+                        // 环境卡柱层（2026-09-21）：页层之上的同面板臂，
+                        // 四轨各按 dest/uv 源窗画（uv 起点 = 滑入位移、
+                        // uv 纵段 = 区窗裁剪后段）——**只画 dest 矩形内**
+                        // 正是 kfmv4 overflow:hidden 的等价物：进出口柱
+                        // 越轨缘即断墨，无需 scissor，也不会漏到卡外
+                        if let Some(bp) = layered.sys_band {
+                            let sb = &self.layers[ChromeSlot::SysBars as usize];
+                            if sb.visible && sb.baked {
+                                for t in bp.tracks.iter().filter(|t| t.visible) {
+                                    draw_slot_layer_src(
+                                        gl,
+                                        self.layer_prog,
+                                        self.layer_vao,
+                                        self.layer_vbo,
+                                        sb.tex,
+                                        t.rect.0 + pt_off as f32,
+                                        t.rect.1 + pt_dy_extra,
+                                        t.rect.2,
+                                        t.rect.3,
+                                        pt_alpha,
+                                        // BandPlace 的 uv 已是 (原点, 尺寸)
+                                        // ——与图层 shader a_uv 同尺，直传
+                                        (t.uv.0, t.uv.1, t.uv.2, t.uv.3),
+                                    );
+                                }
+                            }
                         }
                     }
                     crate::ai_presence::Panel::Ai => {

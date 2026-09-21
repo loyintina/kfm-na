@@ -65,6 +65,9 @@ pub enum Preview {
     Dropdown,
     /// 字段标签列：标签（36 亮+提亮背衬）+ 值框（30 灰）mini 行
     FieldLabel,
+    /// 体征柱轨：mini 指标行（标签 + 判色值）+ 行下滚动柱（绿/琥珀/红
+    /// 逐样本 + 中性主题色柱）
+    SysBars,
     /// 功能光标开口框（封存件复活展出）
     OpenCursor,
     /// 光球真渲染（orb sprite 加法合成微缩）
@@ -238,6 +241,17 @@ pub const COMPONENTS: &[CompEntry] = &[
         desc: "上池字段行的标签块：无边框组件，36px 亮（七修字档反转）+ 圆角背衬 = 渐变暗底 + 8% 白提亮（α20，十三修）。十四修动态宽度：块宽随标签文字实量宽，锚行左缘；值框锚右缘，间隔 ≥3 格，超长换行 ≤2 行。",
         preview: Preview::FieldLabel,
     },
+    CompEntry {
+        name: "体征柱轨",
+        cat: "组件",
+        status: CompStatus::Active,
+        symbol: "paint_sys_bars",
+        file: "src/termview.rs",
+        spec: "宪法 §2.4 示警色档 + §六之十 体征柱轨（2026-09-21 环境卡重做）",
+        tests: "tests/sys_hist_spec.rs",
+        desc: "环境卡四轨（负载/内存/交换/磁盘）的文字行下滚动柱（脑在 src/sys_hist.rs：环形账/判色档/柱高滑入算术）：逐样本判色（>85 红 / ≥70 琥珀 / 其余绿；无占比指标走中性青 0x2E9FD0，固定色不跟 accent——防与琥珀撞色，窗内峰值归一），柱距半格 9px（柱宽 7 + 缝 2）、轨高 1 格、柱高上限 30px/下限 2px、可见柱数 = 轨宽÷柱距；新样本右侧匀速滚入（时长 = 采样拍长 2s，四轨同拍齐滑）。**滑动在合成期**：柱层（ChromeSlot::SysBars）内容只在采样换代时一烘（卡内芯渐变逐像素重建 + 柱稳态位），滑入位移 = 源 uv 窗口起点（sys_card::band_place 纯函数；dest 矩形 = 轨矩形——uv 源窗即 kfmv4 overflow:hidden 的等价物，零 scissor 零漏墨）。",
+        preview: Preview::SysBars,
+    },
     // ---- 功能光标 ----
     CompEntry {
         name: "开口框",
@@ -347,7 +361,7 @@ pub const COMPONENTS: &[CompEntry] = &[
         file: "src/ui/sys_card.rs",
         spec: "na-server.md §四 可视化落位",
         tests: "tests/sys_card_spec.rs",
-        desc: "解析页第三张二级卡（2026-09-20 用户立项，纵排在连接服务合并卡下）：「中央终端所在环境的自身体征」可视化——与设备无关的通用面（服务器/手机/任何设备同一张卡同一组字段）。卡头「环境 · 对象词」+ 六字段两竖列（行主序：负载 1/5/15 | 进程 running/total | 内存已用·总量·占比 | 交换同尺 | 磁盘同尺 | 在线时长），v2 纯展示（同日晚用户拍板三路扩：进程/交换/在线）。数据 = svc_health SysSnap（与 health 同轮询器同 2s 拍，GET /api/na/sys）；体征解析/格式与 na-server 同一份 na-sys crate（双端同构第二面——本地相 = collect(\"/data\") 直读，卡面零改动）；逐路显形契约：采不到的路显「—」不编造不连坐（Android 拒 /proc/loadavg、/proc/uptime 是合法常态），旧版 na-server 缺新键同归「—」契约向旧兼容。几何：恒定高卡（三行六字段固定，两竖列等宽半分），tmux 卡侧预留带 = 卡链排布器 parser_chain（常量同源预留）。复用件：池框卡环/字段标签列配方。",
+        desc: "解析页二级卡（2026-09-20 用户立项；2026-09-21「环境卡重做」住左滚动区）：「中央终端所在环境的自身体征」可视化——与设备无关的通用面（服务器/手机/任何设备同一张卡同一组字段）。**单竖列**（用户拍板「不要并排」）：卡头「环境 · 对象词」→ 四轨（负载/内存/交换/磁盘：文字行 [标签左锚 + 值右锚，值随判色档上色] + 行下滚动柱轨）→ 两尾部行（进程/在线——计数与时长不是占比，无柱）。数据 = svc_health SysSnap（与 health 同轮询器同 2s 拍，GET /api/na/sys）+ sys_hist 历史账（柱轨数据面）；体征解析/格式与 na-server 同一份 na-sys crate（双端同构第二面——本地相 = collect(\"/data\") 直读，卡面零改动）；逐路显形契约：采不到的路显「—」不编造不连坐（Android 拒 /proc/loadavg、/proc/uptime 是合法常态）。几何：恒定高卡（四轨 + 两尾部行固定），卡外框 = 卡链排布器 parser_chain 配给。复用件：池框卡环/字段标签列配方/体征柱轨。",
         preview: Preview::FieldLabel,
     },
     CompEntry {

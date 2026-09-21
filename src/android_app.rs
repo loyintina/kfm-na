@@ -542,6 +542,10 @@ struct LayerSigs {
     /// 下拉面板层（二十四修拆槽）：抽屉开合/细框滑行/宽度伸缩逐帧
     /// 只脏这块小画布；贴死（progress=0）即隐零重烘
     dropdown: crate::ui::stage::DirtyGuard<DropdownSig>,
+    /// 环境卡柱层（2026-09-21 环境卡重做）：(层宽, 层高, 拍序, c1, c2,
+    /// 卡宽, 卡高)——采样换代/几何变/accent 变才重烘；**滑入位移不进
+    /// 本判定**（它在合成期 uv 上，逐帧变也不重烘 = 拆层的全部意义）
+    sys_band: crate::ui::stage::DirtyGuard<(u32, u32, u64, u32, u32, u32, u32)>,
     /// 平移旧代捕获账（十九修 D8）：Some((epoch, scope, dir)) = 当前
     /// PanOld 纹理属于哪笔平移账——新账才重新拷贝画布
     pan_cap: Option<(u64, u8, i8)>,
@@ -564,6 +568,7 @@ impl LayerSigs {
         self.poolfx.invalidate();
         self.lower_rows.invalidate();
         self.dropdown.invalidate();
+        self.sys_band.invalidate();
     }
 }
 
@@ -5694,6 +5699,9 @@ impl App {
                     .as_ref()
                     .is_some_and(|cs| cs.dropdown_progress > 0.001),
         );
+        // 环境卡柱层（2026-09-21 环境卡重做）：解析页可见即上岗（柱轨
+        // 常驻；无草稿柱 = 空账画家只会画底，不是错相）
+        g.set_slot_visible(crate::gles_present::ChromeSlot::SysBars, slot_vis[4]);
         // 终端卡片壳槽烘焙（2026-09-11）：恒靠泊零 placement——sig 含
         // ime/bar_h 是因为壳下缘停在快捷键行上沿（键盘开合期逐帧重烘焙
         // 加入 ui-base §八 期 2 债同族清单，不单独立项）
@@ -6176,6 +6184,67 @@ impl App {
             }
             g.slot_bake(crate::gles_present::ChromeSlot::Parser);
         }
+        // 环境卡柱层（2026-09-21 环境卡重做）：**滑动全在合成期**——
+        // 层内容 = 四轨紧凑带（卡内芯渐变 + 柱，稳态位），只在采样换代/
+        // 几何变/accent 变时重烘（每拍一次 ≈0.3MB 上传）；滑入位移 = 合成期
+        // 源 uv 窗口起点（逐帧只挪 uv，零重烘零上传）。几何吃同一条单源
+        // （parser_geom → slot_rect → layout_in → band_of，涂装/合成同尺）
+        let sys_band_geo = if pt_visible {
+            parser_snap.map(|ps| {
+                // vbottom_inset 与页烘焙同一把尺（ime + bar_h——page impl
+                // 的 visible_bottom(h, ime + bar_inset)）：只喂 ime 会让
+                // 区窗可视底高出一个栏带，卡链滚动时裁剪带与页烘焙错开
+                // （柱层越区窗下缘）
+                let geo = parser_geom(w, h, bar_h, ime + bar_h, ps);
+                let card = crate::ui::parser_chain::slot_rect(
+                    crate::ui::parser_chain::ChainCardId::Sys,
+                    &geo.regs,
+                    &geo.chain_h,
+                    &geo.scrolls,
+                );
+                let band =
+                    crate::ui::sys_card::band_of(&crate::ui::sys_card::layout_in(card.clone()));
+                let clip = crate::ui::parser_chain::clip_of(
+                    crate::ui::parser_chain::ChainCardId::Sys,
+                    &geo.regs,
+                );
+                (band, clip, card)
+            })
+        } else {
+            None
+        };
+        if let Some((band, _clip, card)) = &sys_band_geo {
+            let hsnap = crate::svc_health::hist();
+            let sig = (
+                band.canvas_w,
+                band.canvas_h(),
+                hsnap.seq(),
+                acc_pt.c1,
+                acc_pt.c2,
+                card.w,
+                card.h,
+            );
+            if sigs.sys_band.feed(sig) && band.canvas_w > 0 && band.canvas_h() > 0 {
+                g.set_slot_dims(
+                    crate::gles_present::ChromeSlot::SysBars,
+                    band.canvas_w,
+                    band.canvas_h(),
+                );
+                let px = g.slot_canvas(crate::gles_present::ChromeSlot::SysBars);
+                if let Some(t) = &th {
+                    t.lock().unwrap().paint_sys_band_layer(
+                        px,
+                        band.canvas_w,
+                        band.canvas_h(),
+                        band,
+                        &hsnap,
+                        card,
+                        acc_pt,
+                    );
+                }
+                g.slot_bake(crate::gles_present::ChromeSlot::SysBars);
+            }
+        }
         // AI 文字（每帧实例——消息/滚动/panel_off 逐帧变，永不进烘焙；
         // panel_off 进实例 y=刚体平移，2026-09-05 拍板不变）。别家面板靠泊
         // 在顶时 AI 被整页盖住：零生成零绘制（布局写回暂停，露出后下一帧
@@ -6397,6 +6466,13 @@ impl App {
                     }
                 }
             }
+            // 环境卡柱层（2026-09-21 环境卡重做）：四轨 dest/uv 窗口——
+            // 滑入位移 = 当前相位（柱层内容恒稳态位，位移只挪 uv 起点），
+            // 纵向裁剪带 = 左区窗（与页烘焙 xclip 同带）
+            if let Some((band, clip, _card)) = &sys_band_geo {
+                let boff = crate::svc_health::hist().slide_px_now(std::time::Instant::now());
+                lp.sys_band = Some(crate::ui::sys_card::band_place(band, boff, *clip));
+            }
             lp
         };
         if let Some(pc) = &pan_comp {
@@ -6574,6 +6650,21 @@ impl App {
         }
     }
 
+    /// 环境卡柱层滑入活性探针（2026-09-21 环境卡重做）：解析页靠泊且
+    /// 位移未到稳态 = 活性在（合成期 uv 在滑，与前台同尺——BAR-110）。
+    /// 空账必须挡：无样本 elapsed 恒 0 会让它假活性，把后台倒帧值守
+    /// 拖成常帧
+    fn sys_band_fx_active(&self) -> bool {
+        let docked = self
+            .last_ai_snap
+            .is_some_and(|s| s.top == Some(crate::ai_presence::Panel::Parser));
+        if !docked {
+            return false;
+        }
+        let h = crate::svc_health::hist();
+        !h.is_empty() && h.slide_px_now(std::time::Instant::now()) < crate::sys_hist::STEP
+    }
+
     /// 配置页池区/下拉动画活性探针（十五修 §五/§六 帧泵闸）：
     /// 下池光标缓动 / 下拉开合 / 视口平移（BAR-099 状态驱动：账在 =
     /// 活性在，终点帧渲染消费才灭）/ 池高缓动（BAR-095）任一
@@ -6736,7 +6827,8 @@ impl App {
                     || crate::ui::seam::config_panel_offset_x_active()
                     || crate::ui::seam::filetree_panel_offset_x_active()
                     || crate::ui::seam::parser_panel_offset_x_active()
-                    || Self::cfg_fx_active(),
+                    || Self::cfg_fx_active()
+                    || self.sys_band_fx_active(),
                 t0.elapsed(),
             );
             crate::gate::note_draw(t0.elapsed()); // 含 present 的全帧耗时
@@ -7157,6 +7249,17 @@ impl ApplicationHandler for App {
             crate::svc_health::set_visible(parser_docked);
             if crate::svc_health::take_dirty() {
                 self.dirty = true;
+            }
+            // 环境卡柱层滑入帧泵（2026-09-21 环境卡重做）：靠泊且 1px
+            // 量化位移变了才置脏（柱距 9px / 拍 2s ≈ 4.5 帧/s；位移只在
+            // 合成期 uv 起点上——零重烘零上传）；稳态/离页零帧
+            if parser_docked {
+                static SYS_BAR_Q: std::sync::atomic::AtomicU32 =
+                    std::sync::atomic::AtomicU32::new(u32::MAX);
+                let q = crate::svc_health::hist().slide_px_now(std::time::Instant::now());
+                if SYS_BAR_Q.swap(q, std::sync::atomic::Ordering::Relaxed) != q {
+                    self.dirty = true;
+                }
             }
             self.poll_input_bar(); // 输入栏快照比对(注入/分流也要画帧)
             // 采样缝动画帧时钟(ui-base §四 按需启停):缝上有活跃动画
