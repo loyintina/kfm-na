@@ -113,6 +113,9 @@ bash scripts/test-relay-timeout.sh || { echo "❌ BAR-109 relay 考题不过"; e
 # 2026-09-21 同步挂入：BAR-123 快捷键行三处同尺守卫（抬手 hit 被摘
 # chrome_inset 命案——再有人摘 inset 链误伤键行 = 当场红）
 bash scripts/test-bar123-keybar-ruler.sh || { echo "❌ BAR-123 同尺守卫考题不过"; exit 1; }
+# 2026-09-21 晨班会形态审计挂入：BAR-114 跳框模态压顶守卫（光标层合成
+# 位不问模态 = 下池三级框压盖跳框命案——拆层件合成位摘模态闸 = 当场红）
+bash scripts/test-bar114-modal-cursor.sh || { echo "❌ BAR-114 模态压顶守卫考题不过"; exit 1; }
 
 echo "=== [chain 10/11] 考卷覆盖矩阵棘轮闸（2026-08-27,自我测试缺口④） ==="
 # 治「新功能补题靠自觉」:各模块 pub 项被 tests/ 引用数,棘轮只许降
