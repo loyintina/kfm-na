@@ -14,15 +14,15 @@ use kfm_na::ui::parser_chain;
 use kfm_na::ui::parser_page as pp;
 
 /// 排布器配给制 layout（与生产同路径：slot_rect 配给卡外框 → layout_in
-/// 填卡内；本考题只钉卡内几何，槽位/滚动/裁剪的钉在 parser_chain_spec）
+/// 填卡内；本考题只钉卡内几何，槽位/区窗/裁剪的钉在 parser_chain_spec）
 fn lay(n: usize) -> LinkLayout {
     let card = PoolRect {
         x: 40,
         y: 300,
-        w: parser_chain::RIGHT_COL_W,
+        w: parser_chain::col_w(parser_chain::page_area(1080, 2280, 0).w),
         h: link_card::card_h(n),
     };
-    link_card::layout_in(card, n)
+    link_card::layout_in(card, n, 0)
 }
 
 #[test]
@@ -129,4 +129,76 @@ fn spec_命中_只有重连可点() {
     assert_eq!(link_card::hit(&l, l.rheader.x + 1, l.rheader.y + 1), None);
     let s = &l.sessions[0];
     assert_eq!(link_card::hit(&l, s.x + 1, s.y + 1), None);
+}
+
+#[test]
+fn spec_卡内滚_钉框动内容() {
+    // v3（2026-09-21 用户拍板）：「弹起后右上区域做卡片的压缩，里面
+    // 内容的滑动，不要做卡片的滑动」——卡框 = 区窗内静物（钳高归
+    // slot_rect），内容随右账卡内平移（本册 layout_in 的 scroll 参，
+    // 钳制语义唯一在此）
+    let full = link_card::card_h(6);
+    let frame_h = full / 2; // 区窗只容半张卡（键盘弹起相）
+    let card = PoolRect {
+        x: 40,
+        y: 300,
+        w: parser_chain::col_w(parser_chain::page_area(1080, 2280, 0).w),
+        h: frame_h,
+    };
+    let l0 = link_card::layout_in(card.clone(), 6, 0);
+    // 内芯带 = 卡内沿 − PAD_V 纵段（涂装断墨/命中闸门同一份）
+    assert_eq!(l0.content_clip.0, card.y + i64::from(pp::CARD_PAD_V));
+    assert_eq!(
+        l0.content_clip.1,
+        card.y + i64::from(frame_h) - i64::from(pp::CARD_PAD_V)
+    );
+    // scroll = 100：全部件 y 平移 −100，卡框不动（变异：框跟内容一起
+    // 动 = 区滑回潮，必须咬）
+    let ls = link_card::layout_in(card.clone(), 6, 100);
+    assert_eq!(ls.card.y, l0.card.y);
+    assert_eq!(ls.card.h, l0.card.h);
+    assert_eq!(ls.lheader.y, l0.lheader.y - 100);
+    assert_eq!(ls.button.y, l0.button.y - 100);
+    assert_eq!(ls.sessions[0].y, l0.sessions[0].y - 100);
+    // 超 max 钳到 max（max = 自报高 − 框高）
+    let max = i64::from(full - frame_h);
+    let lc = link_card::layout_in(card.clone(), 6, 999_999);
+    let lm = link_card::layout_in(card.clone(), 6, max);
+    assert_eq!(lc.lheader.y, lm.lheader.y, "钳制语义唯一在 layout_in");
+    // 负值钳 0
+    let ln = link_card::layout_in(card, 6, -50);
+    assert_eq!(ln.lheader.y, l0.lheader.y);
+}
+
+#[test]
+fn spec_卡内滚_裁出内芯带的钮不可点() {
+    let full = link_card::card_h(2);
+    let frame_h = full / 2;
+    let card = PoolRect {
+        x: 40,
+        y: 300,
+        w: parser_chain::col_w(parser_chain::page_area(1080, 2280, 0).w),
+        h: frame_h,
+    };
+    // 滚到 [重连] 钮完全画出内芯带上沿：点钮原位 = None（只显不点，
+    // 命中闸门与涂装断墨同一份 content_clip）
+    let l0 = link_card::layout_in(card.clone(), 2, 0);
+    let btn_mid = l0.button.y + i64::from(l0.button.h) / 2;
+    let need = btn_mid - l0.content_clip.0 + 10; // 让钮中点滚出带上沿
+    let ls = link_card::layout_in(card, 2, need);
+    assert!(ls.button.y + i64::from(ls.button.h) / 2 < ls.content_clip.0);
+    assert_eq!(
+        link_card::hit(
+            &ls,
+            ls.button.x + 5,
+            ls.button.y + i64::from(ls.button.h) / 2
+        ),
+        None,
+        "裁出内芯带的钮只显不点"
+    );
+    // 内芯带下沿外同样不可点
+    assert_eq!(
+        link_card::hit(&ls, ls.button.x + 5, ls.content_clip.1 + 5),
+        None
+    );
 }

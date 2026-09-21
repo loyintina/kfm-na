@@ -969,20 +969,45 @@ impl App {
                 }
                 // 光球命中优先级高于终端（ai-presence 期 0 组件一，D9）：
                 // 按下命中球区 → 这手势归球（pressed 置位 = 第四视觉态硬切；
-                // 拖动/点按/长按在 Moved/Ended/check_orb_long_press 分路）
-                if let Some(ai) = &self.ai_presence
-                    && ai.hit_orb(x, y)
-                {
-                    ai.press_down();
-                    self.orb_touch = Some(OrbTouch {
-                        at: std::time::Instant::now(),
-                        x,
-                        y,
-                        dragged: false,
-                        long_fired: false,
-                    });
-                    self.dirty = true;
-                    return;
+                // 拖动/点按/长按在 Moved/Ended/check_orb_long_press 分路）。
+                // 横向避让（宪法 §四 v3）：解析页滑入球让右列——命中与渲染
+                // 同吃 parser_chain::orb_avoid_x（触点折回状态尺再判，眼手
+                // 同尺）；缝采样的 target 只问栈（与渲染同规）
+                if let Some(ai) = &self.ai_presence {
+                    let now = crate::report::boot_ms() as u64;
+                    let psnap = ai.snap(now);
+                    let avoid_dx = match self.screen_px() {
+                        Some((sw, sh)) => {
+                            let pt_in = psnap.top == Some(crate::ai_presence::Panel::Parser)
+                                || psnap.covered == Some(crate::ai_presence::Panel::Parser);
+                            let pt_off = crate::ui::seam::sample_parser_panel_offset_x(
+                                if pt_in { 0.0 } else { sw as f32 },
+                                now,
+                            ) as i32;
+                            let eff = crate::ui::parser_chain::orb_avoid_x(
+                                psnap.x,
+                                psnap.pressed,
+                                pt_off,
+                                sw,
+                                sh,
+                                self.chrome_inset() + self.cur_bar_h(),
+                            );
+                            psnap.x - eff
+                        }
+                        None => 0.0,
+                    };
+                    if ai.hit_orb(x + avoid_dx, y) {
+                        ai.press_down();
+                        self.orb_touch = Some(OrbTouch {
+                            at: std::time::Instant::now(),
+                            x,
+                            y,
+                            dragged: false,
+                            long_fired: false,
+                        });
+                        self.dirty = true;
+                        return;
+                    }
                 }
                 // 选择菜单浮层命中（BAR-046 2026-09-03 ⑤号迭代配套）：菜单
                 // 气泡可浮出栏带盖在终端区上（贴选区），不再被栏带几何包住——
@@ -2231,30 +2256,33 @@ impl App {
                             // 区窗闸门：裁出窗的部件只显不点，与涂装断墨
                             // 同一份 clip）；模态/命名态屏蔽（跳框期间
                             // 卡区命中全屏蔽惯例）
-                            let ch = if h.is_none()
-                                && g.mode == crate::ui::parser_page::Mode::Normal
-                            {
-                                let link_rect = crate::ui::parser_chain::slot_rect(
-                                    crate::ui::parser_chain::ChainCardId::Link,
-                                    &g.regs,
-                                    &g.chain_h,
-                                    &g.scrolls,
-                                );
-                                let (px, py) = (pt.0 as i64, pt.1 as i64);
-                                let in_win = px >= g.regs.right_top.x
-                                    && px < g.regs.right_top.x + i64::from(g.regs.right_top.w)
-                                    && py >= g.regs.right_top.y
-                                    && py < g.regs.right_top.y + i64::from(g.regs.right_top.h);
-                                if in_win {
-                                    let n_svc = crate::ui::svc_card::current().lines.len();
-                                    let llay = crate::ui::link_card::layout_in(link_rect, n_svc);
-                                    crate::ui::link_card::hit(&llay, px, py)
+                            let ch =
+                                if h.is_none() && g.mode == crate::ui::parser_page::Mode::Normal {
+                                    let link_rect = crate::ui::parser_chain::slot_rect(
+                                        crate::ui::parser_chain::ChainCardId::Link,
+                                        &g.regs,
+                                        &g.chain_h,
+                                        &g.scrolls,
+                                    );
+                                    let (px, py) = (pt.0 as i64, pt.1 as i64);
+                                    let in_win = px >= g.regs.right_top.x
+                                        && px < g.regs.right_top.x + i64::from(g.regs.right_top.w)
+                                        && py >= g.regs.right_top.y
+                                        && py < g.regs.right_top.y + i64::from(g.regs.right_top.h);
+                                    if in_win {
+                                        let n_svc = crate::ui::svc_card::current().lines.len();
+                                        let llay = crate::ui::link_card::layout_in(
+                                            link_rect,
+                                            n_svc,
+                                            g.scrolls.right,
+                                        );
+                                        crate::ui::link_card::hit(&llay, px, py)
+                                    } else {
+                                        None
+                                    }
                                 } else {
                                     None
-                                }
-                            } else {
-                                None
-                            };
+                                };
                             (snap, h.map(|hh| (hh, g.mode)), ch)
                         };
                         if let Some((hh, mode)) = hit_result {
@@ -5216,6 +5244,19 @@ impl App {
             parser_snap,
         );
         let sending = ai_snap.is_some_and(|s| s.ai_running);
+        // 光球横向避让（宪法 §四 v3）：解析页滑入球让右列——渲染与起手
+        // 命中同吃 parser_chain::orb_avoid_x（眼手同尺唯一源）
+        let ai_snap = ai_snap.map(|mut s| {
+            s.x = crate::ui::parser_chain::orb_avoid_x(
+                s.x,
+                s.pressed,
+                pt_off,
+                w,
+                h,
+                ime_bottom_px + bar_h,
+            );
+            s
+        });
         Self::paint_over(
             &mut **term,
             buf,
@@ -6226,6 +6267,13 @@ impl App {
         // 全画布重画等价）
         let mut ras_us = ras0_us;
         let sending = ai_snap.is_some_and(|s| s.ai_running);
+        // 光球横向避让（宪法 §四 v3）：解析页滑入球让右列——调整件随
+        // ai_snap 维进 OverSig，滑入/滑出期逐帧重烘焙（与拖球同档成本），
+        // 靠泊/屏外稳态零额外；渲染与起手命中同吃 orb_avoid_x 唯一源
+        let ai_snap = ai_snap.map(|mut s| {
+            s.x = crate::ui::parser_chain::orb_avoid_x(s.x, s.pressed, pt_off, w, h, bottom_inset);
+            s
+        });
         let t_over = std::time::Instant::now();
         let over_dirty = magnifier_at.is_some()
             || sigs.over.feed(OverSig(

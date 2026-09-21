@@ -46,8 +46,6 @@ pub const BTN_H: u32 = CELL_H * 3;
 pub const ROW_GAP: u32 = CELL_W;
 /// 列间距（2 格，与池卡左右间隔同档；link/sys 卡两竖列共用）
 pub const COL_GAP: u32 = CELL_W * 2;
-/// 按钮间距
-pub const BTN_GAP: u32 = CELL_W * 3;
 /// 卡内上下留白
 pub const CARD_PAD_V: u32 = CELL_H;
 /// 卡内左右内缩
@@ -155,6 +153,27 @@ pub fn visible_bottom(screen_h: u32, bottom_inset: u32) -> i64 {
         - i64::from(crate::termview::AI_PAGE_FRAME_W)
 }
 
+/// 按钮带行数（几何唯一源——卡高账与卡内布局同吃）：2026-09-21 v3
+/// 用户拍板钮竖排（窄列并排两钮更窄——一钮一行全宽）；确认态 =
+/// 跳框模态在，卡区按钮不画不可点，但卡按**常态**几何画在模态底下
+/// （含两钮带占位——模态撤走零跳变）
+fn btn_rows(mode: Mode) -> usize {
+    match mode {
+        Mode::Confirming => button_labels(Mode::Normal).len(),
+        _ => button_labels(mode).len(),
+    }
+}
+
+/// 按钮带块高（n 钮竖排：n 行 + (n-1) 行距；0 钮 = 0）
+fn btn_block_h(mode: Mode) -> u32 {
+    let n = btn_rows(mode) as u32;
+    if n == 0 {
+        0
+    } else {
+        n * BTN_H + (n - 1) * ROW_GAP
+    }
+}
+
 /// 卡内几何账（A 档纯函数·唯一源）：(可见行数, 固定件高)。cap_h =
 /// 常驻槽可用高（排布器以「可视底 − 区顶」喂入）；可见行 =
 /// min(容量, 实际) 再抬到保底（BAR-119：挤压不许吞到两行以下；
@@ -165,7 +184,7 @@ fn used_lines(n_sessions: usize, mode: Mode, cap_h: u32) -> (u32, u32) {
         Mode::Normal | Mode::Confirming => 0,
         Mode::Naming => ROW_H + ROW_GAP,
     };
-    let fixed = CARD_PAD_V * 2 + ROW_H + DIVIDER_ZONE + extra + BTN_H;
+    let fixed = CARD_PAD_V * 2 + ROW_H + DIVIDER_ZONE + extra + btn_block_h(mode);
     let stride = BOX_H + ROW_GAP;
     let max_lines = if cap_h > fixed {
         ((cap_h - fixed) / stride).max(1)
@@ -262,18 +281,18 @@ pub fn layout_in(card: PoolRect, n_sessions: usize, mode: Mode, scroll: i64) -> 
         y += i64::from(ROW_H + ROW_GAP);
         r
     });
-    let labels = button_labels(mode);
-    let mut buttons = Vec::with_capacity(labels.len());
-    if let Some(n) = std::num::NonZeroU32::new(labels.len() as u32) {
-        let btw = cw.saturating_sub(BTN_GAP * (n.get() - 1)) / n;
-        for i in 0..labels.len() {
-            buttons.push(PoolRect {
-                x: cx + (btw + BTN_GAP) as i64 * i as i64,
-                y,
-                w: btw,
-                h: BTN_H,
-            });
-        }
+    // 按钮带（2026-09-21 v3 用户拍板竖排：窄列里并排两钮更窄——一钮
+    // 一行全宽，纵序等 stride；确认态按常态几何排位，涂装吃
+    // button_labels(mode) 空列 → 不画，命中模态臂屏蔽 → 不可点）
+    let mut buttons = Vec::with_capacity(btn_rows(mode));
+    for _ in 0..btn_rows(mode) {
+        buttons.push(PoolRect {
+            x: cx,
+            y,
+            w: cw,
+            h: BTN_H,
+        });
+        y += i64::from(BTN_H + ROW_GAP);
     }
     let _ = fixed; // fixed 账只参与 used_lines 的可见行裁决，卡内件不直接消费
     Layout {

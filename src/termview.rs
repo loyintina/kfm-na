@@ -3848,14 +3848,14 @@ impl TermView {
         // ---- 连接服务合并卡（2026-09-20 v2 合并裁决：连接卡 + 服务卡
         // 合并成一张二级卡；2026-09-21 三区排布 v2：归右上滚动区，窄列
         // 两段纵排——连接段（mini 卡头/四字段行/[重连] 钮）→ 服务段
-        // （mini 卡头/四字段行/会话行表），无分隔线。文案面零改动：
+        // （mini 卡头/四字段行/会话行表），无分隔线。同日 v3：右列放宽
+        // 半屏 + 钉顶钳高卡内滚——卡框 = 区窗内静物（框裁剪带 = 区窗
+        // 纵段 lclip），内容 = 随右账卡内平移（内容裁剪带 = 卡内芯
+        // content_clip，涂装断墨/命中闸门同一份）。文案面零改动：
         // conn_card::current()/svc_card::current() 同两份快照（函数顶
-        // 已取）；几何 = link_card 同一份 layout——组件池登记 link_card）。
-        // 区裁剪带：右上区窗纵段——卡随区滚动平移，逾区缘的件同带断墨
-        // （涂装断墨/命中闸门同一份，眼手同尺）
+        // 已取）；几何 = link_card 同一份 layout——组件池登记 link_card）
         let lclip =
             crate::ui::parser_chain::clip_of(crate::ui::parser_chain::ChainCardId::Link, &regs);
-        let lclip32 = Some((lclip.0 as i32, lclip.1 as i32));
         let llay = crate::ui::link_card::layout_in(
             crate::ui::parser_chain::slot_rect(
                 crate::ui::parser_chain::ChainCardId::Link,
@@ -3864,7 +3864,10 @@ impl TermView {
                 &scrolls,
             ),
             ssnap.lines.len(),
+            scrolls.right,
         );
+        let cclip = llay.content_clip;
+        let cclip32 = Some((cclip.0 as i32, cclip.1 as i32));
         paint_rect_ring_yclip(
             &mut frame,
             llay.card.x + off,
@@ -3898,7 +3901,7 @@ impl TermView {
             36.0,
             header_fg,
             18.0,
-            lclip32,
+            cclip32,
         );
         // 连接段四字段行（字段标签列配方：标签左对齐亮档、值逐行右对齐
         // 灰档——draw_field_lines 自带 1.5 格文内边距与 ≤2 行折行；
@@ -3915,7 +3918,7 @@ impl TermView {
                 fr.h,
                 36.0,
                 title_fg,
-                lclip32,
+                cclip32,
                 true,
             );
             let (v_fg, v) = if i == 3 && csnap.error != "—" {
@@ -3933,7 +3936,7 @@ impl TermView {
                 fr.h,
                 30.0,
                 v_fg,
-                lclip32,
+                cclip32,
                 false,
             );
         }
@@ -3949,7 +3952,7 @@ impl TermView {
                 b.h,
                 true,
                 accent,
-                lclip,
+                cclip,
                 grad_ref,
                 0,
             );
@@ -3963,7 +3966,7 @@ impl TermView {
                 34.0,
                 title_fg,
                 b.x + off,
-                Some(lclip),
+                Some(cclip),
             );
         }
         // 服务段 mini 卡头「服务 · 状态词」（在线相才亮标题档，其余次级
@@ -3983,7 +3986,7 @@ impl TermView {
             36.0,
             header_fg,
             18.0,
-            lclip32,
+            cclip32,
         );
         // 服务段四字段行（字段标签列配方同连接段；错误行有字用错色）
         let svalues = [&ssnap.backend, &ssnap.uptime, &ssnap.sess_n, &ssnap.error];
@@ -3998,7 +4001,7 @@ impl TermView {
                 fr.h,
                 36.0,
                 title_fg,
-                lclip32,
+                cclip32,
                 true,
             );
             let (v_fg, v) = if i == 3 && ssnap.error != "—" {
@@ -4016,7 +4019,7 @@ impl TermView {
                 fr.h,
                 30.0,
                 v_fg,
-                lclip32,
+                cclip32,
                 false,
             );
         }
@@ -4032,7 +4035,7 @@ impl TermView {
                 30.0,
                 body_fg,
                 18.0,
-                lclip32,
+                cclip32,
             );
         }
 

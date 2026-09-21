@@ -4,7 +4,8 @@
 //! - layout（2026-09-21 三区排布 v2，用户拍板「tmux 竖排放右下角常驻」）：
 //!   卡 = 右下常驻槽（排布器配给：右列固定网格宽 × 钉键盘感知可视底，
 //!   永不被滚出屏）；动态高 = 内容定；**竖排一行一框**（框 = 三级框行
-//!   主形态双色渐变，内容只有 名字+×）；常态按钮带 = [重排][新窗]；
+//!   主形态双色渐变，内容只有 名字+×）；常态按钮带 = [重排][新窗]
+//!   **竖排一钮一行全宽**（2026-09-21 v3 拍板：窄列并排两钮更窄）；
 //!   命名态 [确定][取消]；确认态走跳框模态；**分隔线**（正渐变 c1→c2
 //!   底线家变异）在会话表与按钮带之间、非交互件；**可见窗上限 6 框**
 //!   （超出内部滚动：框全量发出 + scroll 平移 + list_clip 裁/判，
@@ -54,8 +55,8 @@ fn ss(names: &[&str]) -> Vec<TmuxSession> {
 fn spec_layout_常驻槽钉底钉右列() {
     let l = parser_page::layout(W, H, INSET, 3, Mode::Normal, 0);
     let area = parser_chain::page_area(W, H, INSET);
-    // 右列固定网格宽 × 右缘贴全区右缘
-    assert_eq!(l.card.w, parser_chain::RIGHT_COL_W);
+    // 右列 = 页全区 1/2 比例制（宪法 v3）× 右缘贴全区右缘
+    assert_eq!(l.card.w, parser_chain::col_w(area.w));
     assert_eq!(l.card.x + i64::from(l.card.w), area.x + i64::from(area.w));
     // 钉键盘感知可视底（无键盘 = 页环底内缘）——永不被滚出屏
     assert_eq!(
@@ -133,6 +134,7 @@ fn spec_bar119_纵向挤压保底两行() {
     assert_eq!(l.visible_rows, 2, "4 会话保底可见两行——挤压不许吞行");
     // 卡高必须真容下两行框（不是画出去再裁的「假可见」）：
     // 账 = PAD_V·2 + 头 + 行距 + 两行框区 + 分隔线带 + 钮带
+    // （v3 竖排双钮 = 2 行钮高 + 1 行距）
     let stride = parser_page::BOX_H + parser_page::ROW_GAP;
     let two_lines = stride * 2 - parser_page::ROW_GAP;
     let want_h = parser_page::CARD_PAD_V * 2
@@ -140,7 +142,7 @@ fn spec_bar119_纵向挤压保底两行() {
         + parser_page::ROW_GAP
         + two_lines
         + parser_page::DIVIDER_ZONE
-        + parser_page::BTN_H;
+        + (parser_page::BTN_H * 2 + parser_page::ROW_GAP);
     assert_eq!(
         l.card.h, want_h,
         "保底两行的卡高 = 内容账全价——卡高钳进池区就是塌卡病灶本身"
@@ -165,11 +167,17 @@ fn spec_layout_模式按钮带() {
     let ln = parser_page::layout(W, H, INSET, 1, Mode::Naming, 0);
     assert!(ln.naming.is_some());
     assert_eq!(ln.buttons.len(), 2);
-    // 确认态 = 卡按 Normal 几何（跳框模态不占卡高）
+    // 确认态 = 卡按 Normal 几何（跳框模态不占卡高；v3 竖排后钮带
+    // 几何照常排位——涂装吃 button_labels(Confirming) 空列不画，
+    // 命中模态臂屏蔽不可点）
     let lc = parser_page::layout(W, H, INSET, 1, Mode::Confirming, 0);
     let lnor = parser_page::layout(W, H, INSET, 1, Mode::Normal, 0);
     assert!(lc.naming.is_none());
-    assert!(lc.buttons.is_empty());
+    assert_eq!(
+        lc.buttons.len(),
+        lnor.buttons.len(),
+        "确认态钮带几何 = 常态（模态底下零跳变）"
+    );
     assert_eq!(lc.card.h, lnor.card.h, "确认态卡高 = 常态（跳框不占卡高）");
 }
 
@@ -194,22 +202,26 @@ fn spec_layout_跳框几何() {
 }
 
 #[test]
-fn spec_layout_按钮互不重叠且在卡内() {
+fn spec_layout_按钮竖排全宽互不重叠() {
+    // v3（2026-09-21 用户拍板）：钮带竖排一钮一行全宽——窄列里并排
+    // 两钮更窄的观感病灶就此拔掉（变异：横排回潮/半宽回潮必须咬）
     for mode in [Mode::Normal, Mode::Naming] {
         let l = parser_page::layout(W, H, INSET, 2, mode, 0);
+        let cw = l.card.w - parser_page::CARD_PAD_H * 2;
         for (i, b) in l.buttons.iter().enumerate() {
-            assert!(b.x >= l.card.x, "{mode:?} 钮{i} 左出卡");
-            assert!(
-                b.x + b.w as i64 <= l.card.x + l.card.w as i64,
-                "{mode:?} 钮{i} 右出卡"
-            );
+            assert_eq!(b.x, l.card.x + i64::from(parser_page::CARD_PAD_H));
+            assert_eq!(b.w, cw, "{mode:?} 钮{i} 必须全宽（竖排）");
             assert!(
                 b.y + b.h as i64 <= l.card.y + l.card.h as i64,
                 "{mode:?} 钮{i} 底出卡"
             );
             if i > 0 {
                 let prev = &l.buttons[i - 1];
-                assert!(b.x >= prev.x + prev.w as i64, "{mode:?} 钮{i} 与前钮重叠");
+                assert_eq!(
+                    b.y,
+                    prev.y + (prev.h + parser_page::ROW_GAP) as i64,
+                    "{mode:?} 钮{i} 必须接前钮底 + 一行距（纵序等 stride）"
+                );
             }
         }
     }

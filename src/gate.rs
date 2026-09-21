@@ -382,7 +382,11 @@ pub fn dump_now(dir: &str) {
         }
         if let Some(s) = ai_snap {
             let (gain, halo_gain) = crate::ai_presence::orb_gain(s.ai_running, s.pressed, s.page);
-            t.render_orb(&mut buf, w, h, s.x, s.y, gain, halo_gain, false);
+            // 光球横向避让（宪法 §四 v3）：与前台两路径/起手命中同吃
+            // orb_avoid_x 唯一源——仪器视野必须与前台同尺（BAR-110  parity
+            // 纪律），否则 redroid 截屏判卷看不见避让
+            let ex = crate::ui::parser_chain::orb_avoid_x(s.x, s.pressed, pt_off, w, h, bar_h);
+            t.render_orb(&mut buf, w, h, ex, s.y, gain, halo_gain, false);
         }
     }
     if maybe_dump(dir, &buf, w, h) {

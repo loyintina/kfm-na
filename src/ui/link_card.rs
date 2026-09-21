@@ -1,8 +1,12 @@
 //! link_card.rs — 连接服务合并卡内容核（2026-09-20 用户拍板：连接卡 +
 //! 服务卡合并成一张二级卡，「第二张和第三张卡能合并一下吗？占空间太大
 //! 了」——省一段卡头+一段卡间距的纵高；同日两竖列。2026-09-21 三区
-//! 排布 v2：本卡归**右上滚动区**（右列窄区，RIGHT_COL_W 16 格）——
-//! 两竖列改**两段纵排**：连接段在上、服务段在下，合并契约不变）。
+//! 排布 v2：本卡归**右上滚动区**（右列窄区）——两竖列改**两段纵排**：
+//! 连接段在上、服务段在下，合并契约不变。同日 v3：右列放宽为页全区
+//! 1/2 比例制 + **钉顶钳高卡内滚**——「弹起后右上区域做卡片的压缩，
+//! 里面内容的滑动，不要做卡片的滑动」（卡框钉区顶、高钳进区窗归
+//! parser_chain::slot_rect；内容随 scroll 卡内平移归本册——框不动
+//! 内容动，与 tmux 卡内滚同语言））。
 //!
 //! 连接段 = mini 卡头「连接 · 状态词」+ 四字段行（目标/本地口/重拉/
 //! 错误）+ [重连] 钮（杀娃重拉，不等退避）；服务段 = mini 卡头
@@ -71,16 +75,24 @@ pub struct LinkLayout {
     pub rfields: [PoolRect; N_FIELDS],
     /// 服务段会话行（n 行）
     pub sessions: Vec<PoolRect>,
+    /// 卡内芯纵裁剪带（v3 卡内滚：涂装断墨/命中闸门同一份）——
+    /// 内容滚动后画出带外的件只显不点（卡框本身不吃这条带：
+    /// 框 = 区窗内静物，带 = 卡内沿 − PAD_V 的内容区纵段）
+    pub content_clip: (i64, i64),
 }
 
 /// 布局纯函数：卡外框由三区排布器配给（parser_chain::slot_rect——
-/// 屏寸/区窗/滚动都已在排布器里约过，本卡不二次揣度）。card.h 即
-/// 自报高 card_h(n)，调用方（排布器）保证同源。段内全宽纵排：
-/// 连接段（头/字段/钮）→ 段距 → 服务段（头/字段/会话行）
-pub fn layout_in(card: PoolRect, n_sessions: usize) -> LinkLayout {
+/// v3 钉顶钳高：card.h = min(自报高, 区窗高)，本卡不二次揣度屏寸/
+/// 区窗）。内容随 scroll 卡内平移（壳手势喂入的右账位移；钳制语义
+/// 唯一在本函数——上限 = 自报高 − 框高，与 parser_chain::scroll_max
+/// 同一份账的两种吃法：区滑时代它平移槽位，卡内滚时代它平移内容）
+pub fn layout_in(card: PoolRect, n_sessions: usize, scroll: i64) -> LinkLayout {
+    let full_h = card_h(n_sessions);
+    let scroll_max = i64::from(full_h.saturating_sub(card.h));
+    let eff_scroll = scroll.clamp(0, scroll_max.max(0));
     let cx = card.x + i64::from(pp::CARD_PAD_H);
     let cw = card.w.saturating_sub(pp::CARD_PAD_H * 2);
-    let y0 = card.y + i64::from(pp::CARD_PAD_V);
+    let y0 = card.y + i64::from(pp::CARD_PAD_V) - eff_scroll;
     let header = |y: i64| PoolRect {
         x: cx,
         y,
@@ -120,6 +132,11 @@ pub fn layout_in(card: PoolRect, n_sessions: usize) -> LinkLayout {
             h: SESS_H,
         })
         .collect();
+    let content_clip = (
+        card.y + i64::from(pp::CARD_PAD_V),
+        (card.y + i64::from(card.h) - i64::from(pp::CARD_PAD_V))
+            .max(card.y + i64::from(pp::CARD_PAD_V)),
+    );
     LinkLayout {
         card,
         lheader,
@@ -128,6 +145,7 @@ pub fn layout_in(card: PoolRect, n_sessions: usize) -> LinkLayout {
         rheader,
         rfields,
         sessions,
+        content_clip,
     }
 }
 
@@ -137,8 +155,12 @@ pub enum LinkHit {
     Reconnect,
 }
 
-/// 命中（x/y 屏坐标 i64，与涂装同一份 LinkLayout）
+/// 命中（x/y 屏坐标 i64，与涂装同一份 LinkLayout）。卡内滚后画出
+/// 内芯带的件只显不点——命中闸门与涂装断墨同一份 content_clip
 pub fn hit(l: &LinkLayout, x: i64, y: i64) -> Option<LinkHit> {
+    if y < l.content_clip.0 || y >= l.content_clip.1 {
+        return None;
+    }
     let b = &l.button;
     if x >= b.x && x < b.x + i64::from(b.w) && y >= b.y && y < b.y + i64::from(b.h) {
         return Some(LinkHit::Reconnect);

@@ -1,7 +1,9 @@
-//! parser_chain.rs — 三区排布器（解析页两轴插件契约 §四 v2，2026-09-21
+//! parser_chain.rs — 三区排布器（解析页两轴插件契约 §四 v3，2026-09-21
 //! 用户拍板：tmux 竖排常驻右下 + 右上滚动区（连接·服务卡）+ 左滚动区
 //! （环境卡）——排版服从操作频率，「右滑→点窗口」恒定两步，常驻卡永不
-//! 被滚出屏）
+//! 被滚出屏。v3 同日二拍：右列 16 格定宽 → **页全区 1/2 比例制**（窄列
+//! 折行实锤后放宽）；右上区 = **钉顶钳高 + 卡内内容滚**（框不动内容动）；
+//! 光球横向避让让出右列——orb_avoid_x 唯一源）
 //!
 //! v1（竖链 + 单页滚动）收编的是「卡知排布」病灶；v2 区域化后契约不变：
 //!
@@ -67,9 +69,16 @@ pub static CHAIN: &[ChainSlot] = &[
     },
 ];
 
-/// 右列固定网格宽（宪法 §四 v2：列数 = 实现参数，约束 = 刚好放下
-/// 会话框「名 + ✕」加左右留白，不随屏宽变）：内宽 12 格（名 8 + × 4）
-pub const RIGHT_COL_W: u32 = CELL_W * 16;
+/// 右列宽比（宪法 §四 v3，2026-09-21 用户拍板「还是占半屏合适」——
+/// v2 的 16 格定宽在窄列折行实锤后退役：长字段值/状态词折行不可读）。
+/// 列宽 = 页全区宽 × NUM/DEN，网格对齐；比例单常量，日后翻 1/3 只动这里
+pub const COL_W_NUM: u32 = 1;
+pub const COL_W_DEN: u32 = 2;
+
+/// 右列宽（网格对齐——列缘必须落格线，像素宪法）
+pub fn col_w(area_w: u32) -> u32 {
+    (area_w * COL_W_NUM / COL_W_DEN) / CELL_W * CELL_W
+}
 /// 左右区列间距（2 格，与池卡左右间隔同档）
 pub const REGION_GAP: u32 = CELL_W * 2;
 /// 常驻槽与右上滚动区的间距（1 格，链槽间距同档）
@@ -147,23 +156,24 @@ pub fn regions(
     tmux_h: u32,
 ) -> Regions {
     let area = page_area(screen_w, screen_h, bottom_inset);
-    let rx = area.x + i64::from(area.w) - i64::from(RIGHT_COL_W);
+    let cw = col_w(area.w);
+    let rx = area.x + i64::from(area.w) - i64::from(cw);
     let dock = PoolRect {
         x: rx,
         y: visible_bottom - i64::from(tmux_h),
-        w: RIGHT_COL_W,
+        w: cw,
         h: tmux_h,
     };
     let right_top = PoolRect {
         x: rx,
         y: area.y,
-        w: RIGHT_COL_W,
+        w: cw,
         h: (dock.y - i64::from(DOCK_GAP) - area.y).max(0) as u32,
     };
     let left = PoolRect {
         x: area.x,
         y: area.y,
-        w: area.w.saturating_sub(RIGHT_COL_W + REGION_GAP),
+        w: area.w.saturating_sub(cw + REGION_GAP),
         h: (visible_bottom - area.y).max(0) as u32,
     };
     Regions {
@@ -223,19 +233,31 @@ pub fn scroll_max(id: ChainCardId, r: &Regions, h: &ChainHeights) -> i64 {
     i64::from(region_chain_h(region, h).saturating_sub(win.h)).max(0)
 }
 
-/// 槽外框（涂装/命中落位唯一源）：Dock = 常驻槽原样；滚动区槽 =
+/// 槽外框（涂装/命中落位唯一源）：Dock = 常驻槽原样；Left 滚动区槽 =
 /// 区窗内位置 − eff_scroll（钳制语义唯一在本函数——上限吃
-/// scroll_max 同一份账）
+/// scroll_max 同一份账）；**RightTop = 钉顶钳高**（宪法 §四 v3，
+/// 2026-09-21 用户拍板「弹起后右上区域做卡片的压缩，里面内容的滑动，
+/// 不要做卡片的滑动」）：卡框钉区顶、高钳进区窗，右账滚动位移不进
+/// 槽位、进卡内内容（link_card::layout_in 的 scroll 参数——框不动
+/// 内容动，与 tmux 卡内滚同语言）。RightTop 单卡区专属语义——多卡区
+/// 的链式压缩待有第二卡再设计
 pub fn slot_rect(id: ChainCardId, r: &Regions, h: &ChainHeights, s: &Scrolls) -> PoolRect {
     let region = region_of(id);
     let win = window_of(region, r);
     if region == Region::Dock {
         return win.clone();
     }
+    if region == Region::RightTop {
+        return PoolRect {
+            x: win.x,
+            y: win.y,
+            w: win.w,
+            h: h.get(id).min(win.h),
+        };
+    }
     let raw = match region {
-        Region::RightTop => s.right,
         Region::Left => s.left,
-        Region::Dock => unreachable!(),
+        Region::RightTop | Region::Dock => unreachable!(),
     };
     let eff = raw.clamp(0, scroll_max(id, r, h));
     PoolRect {
@@ -251,4 +273,37 @@ pub fn slot_rect(id: ChainCardId, r: &Regions, h: &ChainHeights, s: &Scrolls) ->
 pub fn clip_of(id: ChainCardId, r: &Regions) -> (i64, i64) {
     let win = window_of(region_of(id), r);
     (win.y, win.y + i64::from(win.h))
+}
+
+/// 光球横向避让（宪法 §四 v3，2026-09-21 用户拍板「做 ai 对话光球的
+/// 横向避让，把 tmux 窗口让出来」）：解析页滑入时球让出右列——渲染
+/// （paint_over）与命中（handle_touch 起手）同吃本函数，眼手同尺唯一源。
+/// panel_off_x = 解析页当前缝采样偏移（0 = 靠泊，屏宽 = 屏外），避让量
+/// 随页滑入度同步：球心 x 上限 = 右列左缘 − 球可视半径，超出部分按
+/// progress 收敛（页进多少球让多少）。球被按住（拖拽中）= 不避让——
+/// 跟手优先，松手后落回避让位。状态核 x 永不改写：避让是纯展示/命中层
+/// 变换，拖球/边界钳制/默认出生位都不感知
+pub fn orb_avoid_x(
+    state_x: f64,
+    pressed: bool,
+    panel_off_x: i32,
+    screen_w: u32,
+    screen_h: u32,
+    bottom_inset: u32,
+) -> f64 {
+    if pressed || screen_w == 0 {
+        return state_x;
+    }
+    let progress = 1.0 - (f64::from(panel_off_x) / f64::from(screen_w)).clamp(0.0, 1.0);
+    if progress <= 0.0 {
+        return state_x;
+    }
+    let area = page_area(screen_w, screen_h, bottom_inset);
+    let limit = (area.x + i64::from(area.w) - i64::from(col_w(area.w))) as f64
+        - f64::from(crate::ai_presence::ORB_RADIUS_PX);
+    if state_x <= limit {
+        state_x
+    } else {
+        state_x - (state_x - limit) * progress
+    }
 }
