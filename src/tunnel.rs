@@ -52,8 +52,17 @@ pub fn check_ssh_fields(s: &ServerEntry) -> Result<(), String> {
     Ok(())
 }
 
+/// NA 内置 sshd 的手机本地监听口（与 files/usr/etc/ssh/kfm-sshd.conf
+/// 的 `Port 8024 ListenAddress 127.0.0.1` 单一源——改口两边一起改）。
+/// -R 反连的目的端：服务器 {remote_port} → 手机本口，直达 NA sshd
+pub const NA_SSHD_PORT: u16 = 8024;
+
 /// ssh 转发参数（A 档纯函数）。v1 只走密钥：密码登录在 BatchMode 下
 /// 必悬问假死（无 askpass），显式拒；缺件（host/user/key 空）同拒。
+/// -L 正连数据路 + -R 反连调试/推送路（2026-09-21 用户拍板「9022 我们
+/// 自己的推送路径」：v1 -R 归 Termux 维护，Termux 休眠冻结 = 推送全瘫
+/// 一整天实录；并进 na 自持隧道后看门狗双腿（BAR-117）维护——na 活着
+/// 反连就在）。-R 显式绑 127.0.0.1：不新增公网暴露面（2026-09-01 红线）
 pub fn forward_args(s: &ServerEntry) -> Result<Vec<String>, String> {
     check_ssh_fields(s)?;
     Ok(vec![
@@ -63,6 +72,11 @@ pub fn forward_args(s: &ServerEntry) -> Result<Vec<String>, String> {
             "{}:127.0.0.1:{}",
             s.tunnel.local_port,
             target_port(&s.backend)
+        ),
+        "-R".into(),
+        format!(
+            "127.0.0.1:{}:127.0.0.1:{}",
+            s.tunnel.remote_port, NA_SSHD_PORT
         ),
         "-i".into(),
         s.ssh.key_path.clone(),

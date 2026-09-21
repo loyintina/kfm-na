@@ -2,7 +2,8 @@
 //! 进程胶水（B 档）在 src/tunnel.rs 下半。
 //!
 //! 变异抽检：①目标端口写错（9021→8021 拼反）必须咬；
-//! ②BatchMode 漏了必须咬（无 askpass 时密码悬问 = 隧道假死）。
+//! ②BatchMode 漏了必须咬（无 askpass 时密码悬问 = 隧道假死）；
+//! ③-R 反连裸口打头（公网暴露面）/ 整段摘除必须咬。
 
 use kfm_na::settings::{Backend, ServerEntry, SshFields, TunnelPorts};
 use kfm_na::tunnel::{
@@ -111,6 +112,31 @@ fn spec_退避表() {
     assert_eq!(backoff_secs(3), 10);
     assert_eq!(backoff_secs(4), 30);
     assert_eq!(backoff_secs(99), 30, "封顶 30s，不指数爆炸");
+}
+
+#[test]
+fn spec_转发参数_反连段() {
+    // 2026-09-21 用户拍板「9022 我们自己的推送路径」：-R 反连并进
+    // na 自持隧道（v1 归 Termux 维护，Termux 休眠冻结 = 推送全瘫一整天）。
+    let a = args_of(&srv("h", "u", "/k"));
+    let joined = a.join(" ");
+    assert!(
+        joined.contains("-R 127.0.0.1:9022:127.0.0.1:8024"),
+        "反连三元组：服务器 9022 → 手机 NA sshd 8024，实际 {joined}"
+    );
+    assert!(
+        !joined.contains("-R 9022:"),
+        "-R 裸口打头 = 绑公网 0.0.0.0，暴露面回潮（2026-09-01 红线），实际 {joined}"
+    );
+    // 远端口跟配置走（换服务器/改口时设置页可配）
+    let mut s = srv("h", "u", "/k");
+    s.tunnel.remote_port = 9122;
+    assert!(
+        args_of(&s)
+            .join(" ")
+            .contains("-R 127.0.0.1:9122:127.0.0.1:8024"),
+        "remote_port 必须可配"
+    );
 }
 
 #[test]
