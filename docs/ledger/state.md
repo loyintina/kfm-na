@@ -82,8 +82,22 @@
 
 ## 当前位置（2026-09-21)
 
-> **两轴第 7 步：解析页三区排布 v2（2026-09-21，待提交+redroid/
-> 真机判卷）**：tmux 卡竖排常驻右下（用户拍板「右滑→点窗口」恒定
+> **BAR-126：na 反复断连重试事故（2026-09-21，已修待判）**：
+> 症状 = ws 对 127.0.0.1:9021 Connection refused 刷屏 + tunnel 看门狗
+> 22 次退避重拉全 exit 255。根因三段链：热更重启多例让位不收敛 →
+> 旧实例暴毙 RST 被运营商 NAT 吞 → 服务器 sshd 僵尸会话（无
+> ClientAlive 永不收割）霸占 -R 9022 → 新自持 ssh
+> ExitOnForwardFailure 死循环（-L 9021 陪葬）。修 = kill 僵尸
+> sshd 会话 + sshd_config 落 ClientAliveInterval 30/CountMax 3
+> （90s 收割，reload 不掉线，.bak-kfm-126 留档）。修后自持隧道
+> Up 稳定、9022 探针通、ws 无新增失败。挂账：①tunnel.rs spawn
+> stderr 被 Stdio::null 灭口（应落文件）；②redroid 三
+> android_main 入（让位不收敛同族，已强停重拉清掉，×3 锁步
+> 心跳行消失）；③field-reports.log 多设备混流，判读先分设备。
+> 排障手册已补「反复断连重试」定式行。
+
+> **两轴第 7 步：解析页三区排布 v2（2026-09-21，a9ff0c1 已提交
+> 三推+真机热更，待用户肉眼终验）**：tmux 卡竖排常驻右下（用户拍板「右滑→点窗口」恒定
 > 两步）——parser_chain 改版三区：Dock 常驻区（钉视口底，右列
 > RIGHT_COL_W = 16 格固定）+ RightTop 滚动区（连接·服务合并卡，
 > 两竖列改两段纵排全宽）+ Left 滚动区（环境卡吃宽区）；双滚动账
