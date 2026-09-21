@@ -4,8 +4,8 @@
 //! 纪律：本文件是考题，生成器不许改；答案只允许碰 src/na_server_sup.rs。
 
 use kfm_na::na_server_sup::{
-    MARK_ALIVE, MARK_FAIL, MARK_SPAWNED, SupState, Verdict, ensure_script, exec_args, state_word,
-    verdict_of,
+    MARK_ALIVE, MARK_FAIL, MARK_SPAWNED, MARK_SYSTEMD, SupMode, SupState, UNIT_NAME, Verdict,
+    ensure_script, exec_args, mode_of, mode_word, state_word, unit_content, verdict_of,
 };
 use kfm_na::settings::{Backend, ServerEntry, SshFields, TunnelPorts};
 
@@ -34,14 +34,27 @@ fn srv(host: &str, user: &str, key: &str) -> ServerEntry {
 // ---- ensure 脚本：三段序钉死 ----
 
 #[test]
-fn spec_脚本_先探活() {
+fn spec_脚本_常驻优先降级在后() {
+    // 2026-09-21 用户拍板：systemd 在 = 常驻模式（装/更新 unit + enable --now，
+    // 活着归 systemd）；无 systemd = 降级自持（先探活接管，再 spawn）
     let s = ensure_script();
-    let probe = s.find("curl -s -m 2").expect("有探活");
-    let alive = s.find(MARK_ALIVE).expect("有 ALIVE 标记");
-    let build = s.find("cargo build").expect("有建造段");
+    let sysd = s.find("command -v systemctl").expect("有 systemd 判据");
+    let unit = s.find("$UNIT.new").expect("有 unit 落盘");
+    let enable = s.find("systemctl enable --now").expect("有 enable --now");
+    let spawn = s.find("setsid nohup").expect("有降级 spawn");
     assert!(
-        probe < build && alive < build,
-        "探活+接管必须在建造之前——重启别人的进程 = 破坏 ExternalUp 语义"
+        sysd < unit && unit < enable,
+        "systemd 路三段序：判据→装 unit→启用"
+    );
+    assert!(enable < spawn, "常驻优先，降级在后");
+    assert!(s.contains(MARK_SYSTEMD), "常驻收场标记");
+    // 降级路仍守「先探活（活 = 接管，绝不重启别人的进程）」
+    let fallback = s.split("②降级").nth(1).expect("有降级段注释");
+    let probe = fallback.find("curl -s -m 2").expect("降级路有探活");
+    let sp2 = fallback.find("setsid nohup").expect("降级路有 spawn");
+    assert!(
+        probe < sp2,
+        "降级路必须先探活再拉——重启别人的进程 = 破坏接管语义"
     );
 }
 
@@ -72,13 +85,13 @@ fn spec_脚本_源码新即重建() {
         s.contains("[ ! -x target/release/na-server ] || [ -n \"$STALE\" ]"),
         "缺二进制与源码更新两条都要触发重建"
     );
-    // 重建归重建，**绝不重启在跑的老进程**（别人会话挂它上面）
-    let probe = s.find("curl -s -m 2").unwrap();
-    let build = s.find("cargo build").unwrap();
-    assert!(probe < build, "探活仍在重建之前（接管优先，不掐别人会话）");
+    // 重建归重建：常驻路的 unit 与降级路的 spawn 都排在重建之后
+    // （新二进制；且 **绝不重启在跑的老进程**——别人会话挂它上面）
     let spawn = s.find("setsid nohup").unwrap();
     let build2 = s.rfind("cargo build").unwrap();
     assert!(build2 < spawn, "重建后才能拉起（新娃用新二进制）");
+    let enable = s.find("systemctl enable --now").unwrap();
+    assert!(build2 < enable, "常驻路同样在重建之后启用");
 }
 
 #[test]
@@ -256,4 +269,46 @@ fn spec_状态发布_在途相不跳出卡面() {
         SupState::TunnelDown
     );
     assert_eq!(state_word(&SupState::Checking), "确认中");
+}
+
+#[test]
+fn spec_常驻_unit内容与模式词() {
+    // 「服务常驻在服务器，但它依然是 na 的触手」——unit 内容随 na 走，
+    // 三条纪律写死在 unit 里（只绑回环 / 永不自退 / Restart=always 收尸）
+    let u = unit_content();
+    assert!(
+        u.contains("Environment=NA_BIND=127.0.0.1:9021"),
+        "只绑回环（公网不可达 = 安全语义）"
+    );
+    assert!(
+        u.contains("Environment=NA_IDLE_EXIT_SECS=0"),
+        "永不自退——常驻的全部意义"
+    );
+    assert!(u.contains("Restart=always"), "崩了自己起，不靠 na 探针兜");
+    assert!(
+        u.contains("ExecStart=/root/kfm-na/target/release/na-server"),
+        "绝对路径（systemd 不吃相对路径）"
+    );
+    assert!(u.contains("WantedBy=multi-user.target"), "随机器自启");
+    assert!(u.contains("[Install]"), "可 enable");
+    assert!(
+        !u.contains("NA_IDLE_EXIT_SECS=1800"),
+        "常驻不许带自退（自持路才有）"
+    );
+    // 模式词与解析
+    assert_eq!(mode_word(SupMode::Systemd), "常驻");
+    assert_eq!(mode_word(SupMode::Spawn), "自持");
+    assert_eq!(mode_word(SupMode::External), "借用");
+    assert_eq!(mode_word(SupMode::Unknown), "—");
+    assert_eq!(mode_of("noise\nmode=systemd\n"), SupMode::Systemd);
+    assert_eq!(mode_of("\nmode=spawn"), SupMode::Spawn);
+    assert_eq!(mode_of("mode=external\n"), SupMode::External);
+    assert_eq!(mode_of("什么也没有"), SupMode::Unknown);
+    // 收场标记唯一源
+    assert_eq!(
+        verdict_of(&format!("x\n{MARK_SYSTEMD}\nmode=systemd\n")),
+        Verdict::Systemd
+    );
+    assert!(UNIT_NAME.ends_with(".service"));
+    assert!(ensure_script().contains(UNIT_NAME), "unit 名进脚本");
 }

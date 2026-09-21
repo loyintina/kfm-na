@@ -46,7 +46,21 @@ tmux 管理靠 tmux_exec 短命 PTY 会话顺带完成，AI/文件树/obs 一概
 - 监听：`127.0.0.1:9021`（服务器侧）。隧道目标从
   `-L 9021:127.0.0.1:8021` 改 `-L 9021:127.0.0.1:9021`——**双端同口
   9021**，手机侧无感。（实现第一步先实证服务器侧 9021 无占用。）
-- **生命周期（主体拉起制，取代 systemd）**：
+- **生命周期（2026-09-21 用户拍板改判：常驻模式为主路）**：
+  - **常驻（主路）**：「服务常驻在服务器，但它依然是 na 的触手」——unit
+    内容**随 na 走**（`na_server_sup::unit_content` 单一源，na 编译期内嵌），
+    na 每次连接经既有 SSH exec 通道**幂等**装/更新 unit（内容变了才重写 +
+    `daemon-reload`）+ `systemctl enable --now`（在跑的不重启）；活着归
+    systemd（`Restart=always` 收尸、`WantedBy=multi-user.target` 随机器
+    自启、`NA_IDLE_EXIT_SECS=0` 永不自退）。na 侧探针因此从 15s 放宽到
+    60s——它只是**看状态**，不再是伺候一个随时会死的自持娃。承载模式
+    进 `SupSnap.mode`（常驻/自持/借用）上卡面，na 由此「监控服务器上这个
+    服务的状态」。**迁移注意（一次性）**：从自持模式切常驻时，占着 9021
+    的老 spawn 进程要先停（否则 unit 绑不上口，`Restart=always` 会空转）；
+    其上的 ws 会话断一次、由 tmux 续上（会话不丢）。
+  - **降级（无 systemd 的机器：Termux 等）**：仍走自持 spawn + idle 自退
+    1800s，且**先探活接管**（活 = 不重启别人的进程）。
+  - 历史（v1 主体拉起制，2026-09-20 设计）：
   - **拉起**：na app 连上服务器后，经 SSH exec 通道在服务器侧
     `setsid`  detached 启动 na-server（通道与隧道同一条 SSH 或独立
     exec，实现时定）；app 侧归 tunnel.rs 看门狗同级看管（新 supervisor

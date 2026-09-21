@@ -13,6 +13,7 @@ use kfm_na::ui::svc_card::{self, FIELD_LABELS, N_FIELDS};
 
 fn sup_of(state: SupState) -> SupSnap {
     SupSnap {
+        mode: kfm_na::na_server_sup::SupMode::Systemd,
         state,
         target: "root@8.145.46.182:22".into(),
         epoch: 0,

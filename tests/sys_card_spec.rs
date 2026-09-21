@@ -60,6 +60,7 @@ fn sys_lay() -> sys_card::SysLayout {
 
 fn sup() -> SupSnap {
     SupSnap {
+        mode: kfm_na::na_server_sup::SupMode::Systemd,
         state: SupState::Up,
         target: "root@8.145.46.182:22".into(),
         epoch: 0,
