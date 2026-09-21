@@ -13,7 +13,9 @@
 #   na-tunnel scp  [-p na|termux] [-t 秒] -- 本地 远程   带重试拷贝(双向)
 #   na-tunnel shot [-t 秒]                   na-shot + 新鲜度校验(防拿旧图)
 #
-# 口名: na=8024(APK 内 sshd,na_probe_key)  termux=8022(Termux sshd)
+# 口名: na=9022(na 自持反连→APK 内 sshd,na_probe_key;2026-09-21 起,
+#      不再依赖 Termux 代维)  8024=Termux 代维旧路(备援,Termux 活时才在)
+#      termux=8022(Termux sshd)
 #
 # 作战条令(隧道会断,断不再伤工作):
 #   1. 跨隧道动作一律走本工具,禁止裸 ssh/scp——断了会静默失败或拿旧数据;
@@ -23,7 +25,8 @@
 #      命令自身失败原样返回,不拿重试掩盖真错。
 set -u
 
-NA_PORT=8024
+NA_PORT=9022
+NA_PORT_LEGACY=8024 # Termux 代维旧路:同达 APK sshd,备援不默认
 TERMUX_PORT=8022
 NA_KEY=/root/.ssh/na_probe_key
 SSH_HOST=localhost
@@ -35,7 +38,8 @@ die() { echo "[na-tunnel] $*" >&2; exit 2; }
 
 port_of() {
     case "$1" in
-        na | 8024) echo "$NA_PORT" ;;
+        na | 9022) echo "$NA_PORT" ;;
+        na旧路 | 8024) echo "$NA_PORT_LEGACY" ;;
         termux | 8022) echo "$TERMUX_PORT" ;;
         *) echo "$1" ;;
     esac
@@ -44,6 +48,7 @@ port_of() {
 name_of() {
     case "$1" in
         "$NA_PORT") echo na ;;
+        "$NA_PORT_LEGACY") echo na旧路 ;;
         "$TERMUX_PORT") echo termux ;;
         *) echo "port$1" ;;
     esac
@@ -69,8 +74,8 @@ tcp_connect() {
 }
 
 _ssh_base() {
-    if [[ "$1" == "$NA_PORT" ]]; then
-        echo "ssh -p $NA_PORT -i $NA_KEY -o BatchMode=yes -o ConnectTimeout=6 \
+    if [[ "$1" == "$NA_PORT" || "$1" == "$NA_PORT_LEGACY" ]]; then
+        echo "ssh -p $1 -i $NA_KEY -o BatchMode=yes -o ConnectTimeout=6 \
 -o ServerAliveInterval=10 -o StrictHostKeyChecking=no $SSH_HOST"
     else
         echo "ssh -p $TERMUX_PORT -o BatchMode=yes -o ConnectTimeout=8 \
@@ -79,8 +84,8 @@ _ssh_base() {
 }
 
 _scp_base() {
-    if [[ "$1" == "$NA_PORT" ]]; then
-        echo "scp -P $NA_PORT -i $NA_KEY -o BatchMode=yes -o ConnectTimeout=6 \
+    if [[ "$1" == "$NA_PORT" || "$1" == "$NA_PORT_LEGACY" ]]; then
+        echo "scp -P $1 -i $NA_KEY -o BatchMode=yes -o ConnectTimeout=6 \
 -o StrictHostKeyChecking=no"
     else
         echo "scp -P $TERMUX_PORT -o BatchMode=yes -o ConnectTimeout=8 \
