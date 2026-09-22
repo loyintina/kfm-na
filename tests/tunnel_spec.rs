@@ -268,3 +268,38 @@ fn spec_bar132_释放成功即免退避() {
         assert_eq!(retry_wait(a, false), backoff_secs(a), "别的死因照退避表");
     }
 }
+
+#[test]
+fn spec_bar133_死前绑过就预防式释放() {
+    // 2026-09-22 BAR-133：移动网换 IP 掐死隧道后，重拉必撞上一轮残留反连口
+    // （实测那一跳值 5~6 秒，11s 恢复里的大头）。裁决两种情形都释放，别的
+    // 死因（认证失败等）一律不动——不许误杀活会话
+    use kfm_na::tunnel::should_release_port;
+    // ①死前绑过（建立的会话此刻已无主）→ 释放，哪怕死因无关
+    assert!(should_release_port(
+        true,
+        "Connection to x closed by remote host.",
+        9022
+    ));
+    assert!(should_release_port(true, "", 9022));
+    // ②没绑过但死因自报撞口 → 释放（原来那条路保留）
+    assert!(should_release_port(
+        false,
+        "Error: remote port forwarding failed for listen port 9022",
+        9022
+    ));
+    // ③没绑过 + 别的死因（认证/拒连）→ 不动（防误杀）
+    assert!(!should_release_port(
+        false,
+        "Permission denied (publickey).",
+        9022
+    ));
+    assert!(!should_release_port(false, "Connection refused", 9022));
+    assert!(!should_release_port(false, "", 9022));
+    // ④他设备口号不归我们管（撞口判据里已含口匹配）
+    assert!(!should_release_port(
+        false,
+        "Error: remote port forwarding failed for listen port 9122",
+        9022
+    ));
+}

@@ -150,6 +150,15 @@ pub fn should_release_forward(stderr_tail: &str, remote_port: u16) -> bool {
         && stderr_tail.contains(&remote_port.to_string())
 }
 
+/// 端口释放裁决（A 档纯函数，2026-09-22 BAR-133）：两种情形都该释放本设备
+/// 反连口——①死因自报撞口（`should_release_forward`）②**死前转发已绑上**
+/// （established）：那一刻服务器那条会话已无主（客户就是刚死的这个），它占
+/// 着口只会让下一轮重拉白撞一次（实测这一跳值 5~6 秒：11s 恢复里的大头）。
+/// 不 established 且非撞口死因（如认证失败）一律不动——不许误杀活会话
+pub fn should_release_port(established: bool, stderr_tail: &str, remote_port: u16) -> bool {
+    established || should_release_forward(stderr_tail, remote_port)
+}
+
 /// 状态词（A 档纯函数）：连接/服务卡状态行的唯一文案源。
 /// Down{attempts:0} = 从没起来过（缺件/prefix 未装同相）→「未启动」；
 /// Down{n>0} = 退避中，必须带次数（用户要知道还在敲第几次门）。
@@ -396,6 +405,8 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
         // 抖动诊断两笔账（看门狗线程私有）：spawned_at = 本次 ssh 起于何时
         // （活多久 = 真连接 vs 抖动）、ssh_err = 它的 stderr 尾环
         let mut spawned_at: Option<std::time::Instant> = None;
+        // 死前转发是否绑上过（口开过 = 服务器那条 -R 会话存在过；它一死即无主）
+        let mut was_up = false;
         let mut ssh_err: Option<Arc<Mutex<VecDeque<String>>>> = None;
         loop {
             let port = server.tunnel.local_port;
@@ -415,6 +426,7 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
             }
 
             if child_alive {
+                was_up = port_open;
                 set(
                     if port_open {
                         TunnelState::Up
@@ -461,12 +473,21 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                 // 反连口自愈（BAR-129）：撞口是「上一轮遗留会话还在
                 // ClientAlive 收割窗里」的确定后果——不等 90s，直接请
                 // 服务器把占本设备口的 sshd 收掉，下一轮即可绑上
-                let releasing = if should_release_forward(&tail, server.tunnel.remote_port) {
+                let established = was_up;
+                was_up = false;
+                let port_hit = should_release_forward(&tail, server.tunnel.remote_port);
+                let releasing = should_release_port(established, &tail, server.tunnel.remote_port);
+                if releasing {
                     crate::report::report(
                         "tunnel",
                         &format!(
-                            "反连口 {} 被上一轮占着 → 请求服务器释放",
-                            server.tunnel.remote_port
+                            "反连口 {} 释放（{}）→ 请求服务器收紧",
+                            server.tunnel.remote_port,
+                            if port_hit {
+                                "撞口后"
+                            } else {
+                                "预防式：死前已绑过，残留会话无主"
+                            }
                         ),
                     );
                     kick_release_forward(&prefix, &server);
