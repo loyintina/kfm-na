@@ -7,7 +7,7 @@
 
 ## 当前位置（2026-09-21)
 
-> **BAR-132 「突然掉线 + 反复跳重连」（2026-09-22 上午，用户四报，附日志线索）**：仪器（BAR-128 的 stderr 面）当场给出三条：①服务器主动断（`Connection to … closed by remote host.`——App 后台/灭屏被冻结 → ssh 不回 keepalive → 服务端 90s 踢）；②重拉撞上一轮残留口（`remote port forwarding failed for listen port 9022`，自愈已收）；③**真的病因可见面**：隧道断着时远程会话仍每 5s 空转重孵（30 秒六次同一句 `Connection refused`）= 用户看到的「反复跳」。修 = 远程重孵须**隧道可用**（`auto_respawn_allowed`，恢复交隧道可用沿）+ 释放成功即免退避（`retry_wait`，4s 级恢复）。**提交待手机链闸**：Termux 8022 仍冻结（refused），白天提交闸不可用——需用户打开一次 Termux 解冻（或等夜里窗口）；**热更不受影响**（走 9022）。
+> **BAR-132 「突然掉线 + 反复跳重连」（2026-09-22 上午，用户四报，附日志线索）**：仪器（BAR-128 的 stderr 面）当场给出三条：①服务器主动断（`Connection to … closed by remote host.`——App 后台/灭屏被冻结 → ssh 不回 keepalive → 服务端 90s 踢）；②重拉撞上一轮残留口（`remote port forwarding failed for listen port 9022`，自愈已收）；③**真的病因可见面**：隧道断着时远程会话仍每 5s 空转重孵（30 秒六次同一句 `Connection refused`）= 用户看到的「反复跳」。修 = 远程重孵须**隧道可用**（`auto_respawn_allowed`，恢复交隧道可用沿）+ 释放成功即免退避（`retry_wait`，4s 级恢复）。**已提交三推 `4fa167c`**（手机端全量 chain 绿、stamp 落；手机已热更该核）。运维教训两条入账：①**8022 = Termux sshd，认默认私钥**；8024/9022 = na sshd，认 na_probe_key（按错钥匙会误判成「8022 不通」，本班白查一轮）；②手机仓落后时让**手机自己从服务器 git fetch + reset**（不经 Termux 隧道，实测可用），比依赖隧道推送稳。**结构性挂账**：白天提交闸与运维脚本舰队仍绑 Termux 的 8022/8024，而 Termux 空闲冻结会被服务端 keepalive 判死 → 闸时通时不通；根治 = 全线迁 na 自己的 9022（na 维护 + BAR-129 自愈），排为下一批任务。
 
 > **BAR-131 残留实例自清（2026-09-22 晨，用户「打开 na 得反复重启才勉强能用」）**：
 > 取证两条——手机侧 `单实例让位` 计数 **0**（= 还没上新核，BAR-127 未生效）
