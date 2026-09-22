@@ -4461,11 +4461,21 @@ impl App {
                 }
             }
         }
+        // BAR-132：远程会话必须隧道可用才许重孵（隧道断着的空转 = 用户
+        // 看到的「反复跳重连」；恢复归「隧道可用沿」那条腿）
+        let tunnel_ok = crate::tunnel::snap()
+            .map(|t| {
+                t.lock()
+                    .map(|g| crate::tunnel::usable(&g.state))
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false);
         if self.session_over
             && crate::session::auto_respawn_due(self.last_auto_respawn_ms, boot_ms() as u64)
             && let Some(name) = self
                 .router_handle()
                 .map(|r| r.lock().unwrap().active_name())
+            && crate::session::auto_respawn_allowed(tunnel_ok, name == "remote", true)
         {
             crate::report::report("term", &format!("死会话续链: {name} 够钟重孵"));
             self.respawn_session(name);
@@ -4560,8 +4570,18 @@ impl App {
             h.connecting = false;
         }
         crate::gate::note_session_alive(name, true); // 死活现况进 stats(考官前置探针)
+        // BAR-132：远程会话死而隧道不可用 = 重孵必 `Connection refused`
+        // （空转 + 刷屏）；交「隧道可用沿」那条腿接力
+        let tunnel_ok = crate::tunnel::snap()
+            .map(|t| {
+                t.lock()
+                    .map(|g| crate::tunnel::usable(&g.state))
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false);
         if is_active
             && crate::session::auto_respawn_due(self.last_auto_respawn_ms, boot_ms() as u64)
+            && crate::session::auto_respawn_allowed(tunnel_ok, name == "remote", true)
         {
             self.respawn_session(name);
         }

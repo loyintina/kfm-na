@@ -256,3 +256,15 @@ fn spec_反连口_释放判决与脚本() {
     let s2 = release_forward_script(9122);
     assert!(s2.contains("sport = :9122"), "口参数化（每设备段）");
 }
+
+#[test]
+fn spec_bar132_释放成功即免退避() {
+    // 2026-09-22 BAR-132：释放成功 ≈ 口已腾 → 只等 4s 再试，不背爬升的
+    // 退避账（实测那次从断到恢复 29s，其中 30s 退避白等）；别的死因照退避
+    use kfm_na::tunnel::{backoff_secs, retry_wait};
+    assert_eq!(retry_wait(4, true), 4, "释放路不背退避账");
+    assert_eq!(retry_wait(99, true), 4);
+    for a in 1..=6u32 {
+        assert_eq!(retry_wait(a, false), backoff_secs(a), "别的死因照退避表");
+    }
+}

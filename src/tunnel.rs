@@ -242,6 +242,15 @@ fn probe_port(port: u16) -> bool {
     .is_ok()
 }
 
+/// 重拉等待（A 档纯函数，2026-09-22 BAR-132）：**释放成功 ≈ 口已腾** →
+/// 只等 4s（让释放的 ssh 落地）再试，不背退避账——否则「上一轮残留占口」
+/// 这种一秒就能解的病因，会被爬到 30s 的退避白白拖慢（实测：05:47 那次
+/// 从断到恢复花了 29s，其中 30s 退避白等）。别的死因（网络/冻结）照退避
+/// 表爬，防抖语义不变
+pub fn retry_wait(attempts: u32, releasing: bool) -> u64 {
+    if releasing { 4 } else { backoff_secs(attempts) }
+}
+
 /// 反连口释放（B 档胶水）：一次性 ssh 跑释放脚本，独立线程跑（看门狗
 /// 1s 滴答不许被 ssh 握手拖住）。释放是快活，10s 超时即弃（下一轮再试）
 fn kick_release_forward(prefix: &Path, server: &ServerEntry) {
@@ -465,8 +474,10 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                 } else {
                     false
                 };
-                // 释放要几秒，首轮退避至少等到它落地
-                let wait_s = backoff_secs(attempts).max(if releasing { 4 } else { 0 });
+                let wait_s = retry_wait(attempts, releasing);
+                if releasing {
+                    attempts = 1; // 口腾了 = 从头来（下一轮 2s 级）
+                }
                 set(
                     TunnelState::Down {
                         attempts,

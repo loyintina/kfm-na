@@ -40,7 +40,7 @@
 | `src/report.rs` | 8 | 1 | 7 | set_boot_t0 start_flusher report report_sync report_sync_once http_status_is_200 escape_json |
 | `src/scroll.rs` | 5 | 5 | 0 | — |
 | `src/sess_mode.rs` | 3 | 3 | 0 | — |
-| `src/session.rs` | 10 | 10 | 0 | — |
+| `src/session.rs` | 11 | 11 | 0 | — |
 | `src/session_router.rs` | 11 | 11 | 0 | — |
 | `src/settings.rs` | 8 | 6 | 2 | parse terminal_to_json |
 | `src/singleton.rs` | 7 | 4 | 3 | LOCK_PATH lock_exclusive try_acquire |
@@ -51,7 +51,7 @@
 | `src/tmux_ctl.rs` | 9 | 9 | 0 | — |
 | `src/tmux_exec.rs` | 1 | 1 | 0 | — |
 | `src/trace.rs` | 12 | 8 | 4 | TRACE_CAP format_tail dump_all dump_tail |
-| `src/tunnel.rs` | 17 | 14 | 3 | check_ssh_fields NA_SSHD_PORT request_reconnect |
+| `src/tunnel.rs` | 18 | 15 | 3 | check_ssh_fields NA_SSHD_PORT request_reconnect |
 | `src/ui/accent.rs` | 6 | 6 | 0 | — |
 | `src/ui/ai_page.rs` | 7 | 7 | 0 | — |
 | `src/ui/cfg_page.rs` | 68 | 63 | 5 | DROPDOWN_ENTER_MS DROPDOWN_EXIT_MS DROPDOWN_PICK_SYNC_MS register_cfg_page cfg_page_handle |

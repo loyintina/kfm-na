@@ -155,3 +155,29 @@ fn spec_bar124_抖动尺寸_减一行保底() {
     assert_eq!(jog_resize(80, 1), (80, 1), "1 行不许抖成 0 行");
     assert_eq!(jog_resize(80, 0), (80, 1), "0 行输入也要兜回 1 行");
 }
+
+#[test]
+fn spec_bar132_远程会话重孵须隧道可用() {
+    // 2026-09-22 用户「正常使用时突然掉线，然后反复跳重连」定案：
+    // 隧道断着的 30 秒里会话重孵空转六次（每条都 `Connection refused`），
+    // 那就是用户看到的「反复跳」。闸 = 远程会话必须隧道可用；本地会话
+    // （本机 PTY）不吃这条；时间闸语义不变
+    use kfm_na::session::auto_respawn_allowed;
+    assert!(
+        auto_respawn_allowed(true, true, true),
+        "隧道可用 + 够钟 = 放行"
+    );
+    assert!(
+        !auto_respawn_allowed(false, true, true),
+        "远程会话 + 隧道不可用 = 不许重孵（空转即「反复跳」）"
+    );
+    assert!(
+        auto_respawn_allowed(false, false, true),
+        "本地会话与隧道无关，照放行"
+    );
+    assert!(
+        !auto_respawn_allowed(true, true, false),
+        "时间闸仍在（放行 ≠ 无视节流）"
+    );
+    assert!(!auto_respawn_allowed(true, false, false));
+}

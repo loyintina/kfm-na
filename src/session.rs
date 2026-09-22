@@ -150,6 +150,16 @@ pub const MIN_AUTO_RESPAWN_MS: u64 = 5000;
 /// 自动重孵闸门（纯函数，A 档考题 tests/session_spec.rs）：
 /// 从未自动重孵过 → 立即放行；否则距上次够钟才放行。
 /// 时钟回拨按 0 间隔处理 = 压住（saturating_sub，不透支不 panic）。
+/// 自动重孵放行（A 档纯函数，2026-09-22 BAR-132「反复跳重连」定案）：
+/// **远程会话必须隧道可用才许重孵**——隧道断着时它连 127.0.0.1:9021 必
+/// `Connection refused`（用户侧看到的就是「反复跳」：05:47 那 30 秒里空转
+/// 六次、每条都是同一句失败）；传输恢复自有「隧道可用沿」那条腿接力
+/// （tunnel::usable_edge_kick），不怕漏。本地会话不吃这条（本机 PTY 与
+/// 隧道无关）。放行后仍走原时间闸（auto_respawn_due）
+pub fn auto_respawn_allowed(tunnel_usable: bool, is_remote: bool, due: bool) -> bool {
+    due && (!is_remote || tunnel_usable)
+}
+
 pub fn auto_respawn_due(last_auto_respawn_ms: Option<u64>, now_ms: u64) -> bool {
     match last_auto_respawn_ms {
         None => true,
