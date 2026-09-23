@@ -401,6 +401,30 @@ fn spec_bar141_回前台即审_健康不碰僵尸即杀() {
 // ---- QUIC 腿（M3c，默认关）：齐件判定 / 指纹解析 / 腿裁决 / -R-only 参数 ----
 
 #[test]
+fn spec_bar146_腿starting超时_定罪重拉() {
+    // BAR-146：腿对象在但本地口始终没开（握手挂死，死信不会来）——
+    // 超宽限必须定罪；口开了/没到宽限不许冤杀。真值表：
+    use kfm_na::tunnel::{QUIC_START_GRACE, leg_starting_overdue};
+    let g = QUIC_START_GRACE;
+    assert!(
+        !leg_starting_overdue(true, g + g, g),
+        "口开了 = 腿活着，超多久都不许杀"
+    );
+    assert!(
+        !leg_starting_overdue(false, g - std::time::Duration::from_secs(1), g),
+        "没到宽限 = 还在握手，不打扰"
+    );
+    assert!(leg_starting_overdue(false, g, g), "正好到宽限 = 定罪");
+    assert!(leg_starting_overdue(false, g + g, g), "超宽限 = 定罪");
+    // 不变量：宽限必须大于握手超时——让腿自己的 8s 握手速败先说话，
+    // 看门狗这条是兜底，不许抢跑成双判
+    assert!(
+        QUIC_START_GRACE > na_quic::HANDSHAKE_TIMEOUT,
+        "宽限必须大于握手超时（兜底不抢跑）"
+    );
+}
+
+#[test]
 fn spec_quic_parse_pin_只收64位hex() {
     let good = "ab".repeat(32);
     assert_eq!(parse_pin(&good).unwrap()[0], 0xab);

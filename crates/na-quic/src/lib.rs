@@ -24,6 +24,11 @@ pub const IDLE_TIMEOUT: Duration = Duration::from_secs(4 * 3600);
 /// 客户端保活：10s 一 ping 保 NAT 映射（设计 §五）
 pub const KEEPALIVE: Duration = Duration::from_secs(10);
 
+/// 握手超时（BAR-146）：UDP 黑洞里 connect 会挂到 idle 上限（4h）——
+/// 腿线程不死、死信不发、本地口不开，看门狗在 Starting 里空转成天坑。
+/// 握手必须速败，把定罪权交回看门狗（跳闸账满即降级 ssh 兜底）
+pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(8);
+
 // ---- A 档纯逻辑：流头端口编解码 ----
 
 /// 流头（A 档）：每条流前 2 字节 = 目标端口（网络序大端）
@@ -324,11 +329,14 @@ pub async fn run_client(
     let mut ep = Endpoint::client(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)))
         .map_err(|e| std::io::Error::other(e.to_string()))?;
     ep.set_default_client_config(cfg);
-    let conn: Connection = ep
-        .connect(server, sni)
-        .map_err(|e| std::io::Error::other(e.to_string()))?
-        .await
-        .map_err(|e| std::io::Error::other(e.to_string()))?;
+    let conn: Connection = tokio::time::timeout(
+        HANDSHAKE_TIMEOUT,
+        ep.connect(server, sni)
+            .map_err(|e| std::io::Error::other(e.to_string()))?,
+    )
+    .await
+    .map_err(|_| std::io::Error::other("QUIC 握手超时（UDP 黑洞？）"))?
+    .map_err(|e| std::io::Error::other(e.to_string()))?;
     let listener = tokio::net::TcpListener::bind(local_bind).await?;
     loop {
         let (tcp, _) = listener.accept().await?;

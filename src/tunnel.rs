@@ -222,6 +222,23 @@ pub fn quic_configured(s: &ServerEntry) -> bool {
 /// 计数只随手动重连/回前台即审清零——用户在等 = 给 QUIC 再投一票
 pub const QUIC_FAIL_TRIP: u32 = 3;
 
+/// 腿 Starting 宽限（BAR-146）：腿 spawn 后本地口该在这段时间内开
+/// （握手 8s 超时 + 余量）。超宽限口还没开 = 握手挂死/起不来——
+/// 死信不会来（线程挂在 connect），看门狗必须主动定罪
+pub const QUIC_START_GRACE: std::time::Duration = std::time::Duration::from_secs(12);
+
+/// 腿 Starting 超时裁决（A 档纯函数，BAR-146）：腿对象在但本地口始终没开
+/// ——UDP 黑洞里 run_client 挂在 connect 阶段，死信不发、端口不开，
+/// 没有这条裁决看门狗会在 Starting 里转到天荒地老（2026-09-24 实录：
+/// 腿僵尸 1 小时无人收，用户「打开 na 连接不上」）
+pub fn leg_starting_overdue(
+    port_open: bool,
+    alive_for: std::time::Duration,
+    grace: std::time::Duration,
+) -> bool {
+    !port_open && alive_for >= grace
+}
+
 /// 数据路供应商（A 档纯函数）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Leg {
@@ -473,9 +490,12 @@ fn release_forward_sync(prefix: &Path, server: &ServerEntry, budget: std::time::
 /// QUIC 腿句柄（看门狗私有）：stop = 请它收（oneshot 进腿线程的 select），
 /// dead = 腿的死信（run_client 返回/线程消失 = 腿死）——死亡检测事件驱动，
 /// 这就是 QUIC 腿省掉探活三件套的原因（设计 docs/active/quic隧道.md §五）
+/// dead = 腿的死信（run_client 返回/线程消失 = 腿死）——死亡检测事件驱动，
 struct QuicLeg {
     stop: tokio::sync::oneshot::Sender<()>,
     dead: Receiver<String>,
+    /// spawn 时刻（BAR-146 Starting 超时裁决用：腿起不来也要能定罪）
+    spawned_at: std::time::Instant,
 }
 
 /// 起 QUIC 腿（核内线程，非外部进程）：自带 current_thread tokio runtime
@@ -533,7 +553,11 @@ fn spawn_quic_leg(server: &ServerEntry) -> Option<QuicLeg> {
             }
         });
     });
-    Some(QuicLeg { stop, dead })
+    Some(QuicLeg {
+        stop,
+        dead,
+        spawned_at: std::time::Instant::now(),
+    })
 }
 
 /// 起看门狗（一线程 1s 滴答）：探口 → 外部占则让位挂 ExternalUp；
@@ -722,6 +746,36 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
 
             if quic.is_some() {
                 was_up = port_open;
+                // Starting 超时审理（BAR-146）：腿对象在但本地口超宽限没开
+                // = 握手挂死（UDP 黑洞里死信不会来）——主动定罪收腿重拉，
+                // 跳闸账照记，满 QUIC_FAIL_TRIP 即降级 ssh 兜底
+                if let Some(q) = &quic
+                    && leg_starting_overdue(port_open, q.spawned_at.elapsed(), QUIC_START_GRACE)
+                {
+                    crate::report::report(
+                        "tunnel",
+                        &format!(
+                            "QUIC 腿 Starting 超时（{}s 口未开，握手挂死），定罪收腿重拉",
+                            q.spawned_at.elapsed().as_secs()
+                        ),
+                    );
+                    if let Some(q) = quic.take() {
+                        let _ = q.stop.send(());
+                    }
+                    quic_fails += 1;
+                    if let Some(mut c) = child.take() {
+                        let _ = c.kill();
+                        let _ = c.wait();
+                    }
+                    set(
+                        TunnelState::Down {
+                            attempts: quic_fails,
+                            last_error: "QUIC 腿 Starting 超时".into(),
+                        },
+                        &snap_t,
+                    );
+                    continue;
+                }
                 // 伴生 -R ssh 死亡审理：死了就地收，段尾重生（数据路不归它，
                 // 状态不动——QUIC 腿在，卡上就不许为推送路抖动翻状态）
                 if let Some(c) = child.as_mut()
