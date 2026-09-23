@@ -5,7 +5,7 @@
 //! - NA_REPORT_LOG      na-report 落盘路径（缺省 /root/kfm-na/field-reports.log）
 //! - NA_IDLE_EXIT_SECS  无连接无会话持续 N 秒自退（缺省 1800，0 = 永不）
 //! - NA_QUIC_BIND       QUIC 腿监听（可选，不设=不开；设计 docs/active/quic隧道.md）
-//! - NA_QUIC_CERT       QUIC 证书路径前缀（缺省 /root/kfm-na/certs/quic，
+//! - NA_QUIC_CERT       QUIC 证书路径前缀（缺省 /root/kfm-na-certs/quic，
 //!   首跑自签落盘 {前缀}.der / {前缀}.key.der，并生成客户端证
 //!   预共享密钥 {前缀}.psk——开 QUIC 腿即强制 HMAC 挑战，设计 §四）
 //!
@@ -57,7 +57,7 @@ fn spawn_quic_leg() {
             "NA_QUIC_BIND 只准回环或显式 0.0.0.0，收到: {bind}"
         );
     }
-    let prefix = std::env::var("NA_QUIC_CERT").unwrap_or_else(|_| "/root/kfm-na/certs/quic".into());
+    let prefix = std::env::var("NA_QUIC_CERT").unwrap_or_else(|_| "/root/kfm-na-certs/quic".into());
     let (certs, key) = load_or_gen_cert(&prefix);
     let psk = load_or_gen_psk(&format!("{prefix}.psk"));
     eprintln!(

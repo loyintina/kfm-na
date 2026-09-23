@@ -87,7 +87,7 @@ httpd/wsterm）。QUIC 直吃 = 协议消费点×2，漂移门×2。桥接把 QU
 
 QUIC 强制 TLS 1.3，方案按 ssh 信任模型抄（**2026-09-23 双向已全落地**）：
 
-- **服务器证**：服务器侧自签证书一张（生成于 /root/kfm-na/certs/，不进仓），
+- **服务器证**：服务器侧自签证书一张（生成于 /root/kfm-na-certs/（仓外——2026-09-23 教训：仓内路径被 git add -A 扫进公网远端，已轮转）），
   公钥指纹钉进 na 设置（像 ssh known_hosts）。na 首次连接报指纹不符即拒。
   ✅ 已实现（`PinnedVerifier`，考题：错指纹握手即拒）。
 - **客户端证**：na 侧预共享 32 字节密钥（与证书同目录 `{前缀}.psk` 首跑
@@ -170,7 +170,7 @@ nsA（客户端）─veth─ nsR（路由器/NAT）─veth─ 服务器（lo）
 
 - `NA_QUIC_BIND`：QUIC 腿监听地址。§七问题 1 裁决前与 TCP 同走回环
   闸（只准回环或显式 0.0.0.0）；裁决后绑公网 UDP 62633。
-- `NA_QUIC_CERT`：证书路径前缀，缺省 `/root/kfm-na/certs/quic`。
+- `NA_QUIC_CERT`：证书路径前缀，缺省 `/root/kfm-na-certs/quic`（仓外）。
   首跑落盘三件套：`{前缀}.der` / `{前缀}.key.der`（rcgen 自签，指纹
   打 stderr——手机 pin 的比对物，**必须持久**，重生成 = 全设备换 pin）
   + `{前缀}.psk`（32 字节随机客户端证，0600，hex 打一次 stderr 供抄

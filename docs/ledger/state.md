@@ -18,7 +18,7 @@
 > 单一源 `settings::QUIC_DEFAULT_PORT/QUIC_REVERSE_PORT`。④servers.json
 > quic 段加 `psk`，齐件判定升「两证齐全才准开腿」。**已部署（当晚）**：
 > 常驻 unit 挂 NA_QUIC_BIND=0.0.0.0:62633（22c54e9），生产重启生效，证书/
-> psk 已生成（/root/kfm-na/certs/quic.*，指纹与 psk 在 /var/log/
+> psk 已生成（/root/kfm-na-certs/quic.*，指纹与 psk 在 /var/log/
 > kfm-na-server.log）；**生产冒烟双判过**：对钥匙经桥 health JSON 全还 /
 > 错钥匙零字节（工具 crates/na-quic/examples/quic_bridge.rs）。**下一步**：
 > 用户在阿里云安全组放 UDP 62633 → 手机 servers.json 填 quic 段（pin/psk
