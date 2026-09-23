@@ -20,16 +20,18 @@ use std::sync::Mutex;
 use std::sync::mpsc::{Sender, channel};
 use std::time::Duration;
 
-/// 服务器地址（2026-08-14 拓扑变更）：kfmv4 直连 127.0.0.1:8021（无 nginx、
-/// 无公网）——手机侧 SSH 隧道把两端 8021 对接（Termux ssh -L），APK 打
-/// 本机回环即达。旧拓扑 nginx 80 公网反代已废弃(具体 IP 脱敏,不入库)。
-/// PATH 保留 /kfmv4 前缀：服务端 /api 与 /kfmv4/api 双挂载，都能到
-const SERVER_ADDR: SocketAddr = SocketAddr::new(
+/// 服务器地址（2026-09-23 拓扑变更，BAR-139）：na-server 直连 127.0.0.1:9021
+/// ——走 na 自持隧道（看门狗双腿维护，Termux 冻不冻都不看脸色）。
+/// 旧拓扑 8021 靠 Termux ssh -L 代维，Termux 一冻结报表即断供
+/// （2026-09-23 实拍：应用/隧道全活，心跳在 logcat 照打，服务器侧
+/// 断更 26 分钟——8021 成单点）。旧拓扑 nginx 80 公网反代已废弃。
+/// PATH 保留 /kfmv4 前缀：na-server 前缀别名也认（httpd.rs 双挂载）
+pub const SERVER_ADDR: SocketAddr = SocketAddr::new(
     std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1)),
-    8021,
+    9021,
 );
-const HOST_HEADER: &str = "127.0.0.1:8021";
-const PATH: &str = "/kfmv4/api/na-report";
+pub const HOST_HEADER: &str = "127.0.0.1:9021";
+pub const PATH: &str = "/kfmv4/api/na-report";
 
 static SENDER: Mutex<Option<Sender<String>>> = Mutex::new(None);
 

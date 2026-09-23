@@ -48,3 +48,17 @@ fn spec_bar134_标识_转义后仍存活() {
     );
     assert!(got.ends_with(']'), "标识必须在行尾: {got}");
 }
+
+#[test]
+fn spec_bar139_报表走自持隧道() {
+    // BAR-139：报表必须走 na 自持隧道（9021），不许回 8021（Termux 代维，
+    // 一冻结报表即断供——2026-09-23 断更 26 分钟实录）
+    use kfm_na::report::{HOST_HEADER, PATH, SERVER_ADDR};
+    assert_eq!(SERVER_ADDR.port(), 9021, "报表口必须是自持隧道 9021");
+    assert!(
+        SERVER_ADDR.ip().is_loopback(),
+        "必须打本机回环: {SERVER_ADDR}"
+    );
+    assert!(HOST_HEADER.contains("9021"), "Host 头随端口: {HOST_HEADER}");
+    assert!(PATH.ends_with("/api/na-report"), "路径不许漂: {PATH}");
+}
