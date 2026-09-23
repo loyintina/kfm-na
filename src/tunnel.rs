@@ -98,15 +98,25 @@ pub fn forward_args(s: &ServerEntry) -> Result<Vec<String>, String> {
 }
 
 /// 看门狗退避表（A 档）：首死立即重拉（用户在场等不得），2/5/10s 渐进，
-/// 30s 封顶——不指数爆炸，病态网络下每分钟至少敲一次门
+/// 30s 封顶——不指数爆炸，病态网络下每分钟至少敲一次门。
+/// 2026-09-23 加抖动（BAR-138）：IP 轮换风暴里多路重试同频撞口成簇
+/// （auth.log 513 次 bind 冲突实录），退避相位必须打散。熵 = 系统时钟
+/// 纳秒（boot_ms 在测试里 BOOT_T0 未种恒为 0——首版钉红实录），
+/// 免 rand 依赖；抖动量 = 基准的一半以内，首死（0s）不抖。
 pub fn backoff_secs(attempt: u32) -> u64 {
-    match attempt {
+    let base = match attempt {
         0 => 0,
         1 => 2,
         2 => 5,
         3 => 10,
         _ => 30,
-    }
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() ^ (d.subsec_nanos() as u64))
+        .unwrap_or(0);
+    let jitter = now % (base / 2 + 1);
+    base + jitter
 }
 
 /// 稳定窗口（秒）：娃活过这么久才算「一次真连接」——短于此 = 抖动

@@ -106,12 +106,17 @@ fn spec_转发参数_缺件全拒() {
 
 #[test]
 fn spec_退避表() {
-    assert_eq!(backoff_secs(0), 0, "首死立即重试（用户在场等不得）");
-    assert_eq!(backoff_secs(1), 2);
-    assert_eq!(backoff_secs(2), 5);
-    assert_eq!(backoff_secs(3), 10);
-    assert_eq!(backoff_secs(4), 30);
-    assert_eq!(backoff_secs(99), 30, "封顶 30s，不指数爆炸");
+    // BAR-138 起带抖动（相位打散防撞口簇）：断言从精确等值改为区间
+    // [base, base+base/2]，base 表本身不变
+    assert_eq!(backoff_secs(0), 0, "首死立即重试（用户在场等不得），不抖");
+    for (n, base) in [(1u32, 2u64), (2, 5), (3, 10), (4, 30), (99, 30)] {
+        let v = backoff_secs(n);
+        assert!(
+            (base..=base + base / 2).contains(&v),
+            "attempt {n}: {v} 不在 [{base}, {}] 抖动区间",
+            base + base / 2
+        );
+    }
 }
 
 #[test]
@@ -212,13 +217,12 @@ fn spec_抖动_短命退避不归零() {
     assert_eq!(next_attempts(1, 1), 2);
     assert_eq!(next_attempts(2, STABLE_SECS - 1), 3);
     assert_eq!(next_attempts(9, 3), 10);
-    // 退避表随计数爬到封顶（不指数爆炸）
+    // 退避表随计数爬到封顶（不指数爆炸；BAR-138 起带抖动，断言区间）
     use kfm_na::tunnel::backoff_secs;
-    assert_eq!(backoff_secs(1), 2);
-    assert_eq!(backoff_secs(2), 5);
-    assert_eq!(backoff_secs(3), 10);
-    assert_eq!(backoff_secs(4), 30);
-    assert_eq!(backoff_secs(99), 30);
+    for (n, base) in [(1u32, 2u64), (2, 5), (3, 10), (4, 30), (99, 30)] {
+        let v = backoff_secs(n);
+        assert!((base..=base + base / 2).contains(&v), "attempt {n}: {v}");
+    }
 }
 
 #[test]
@@ -261,11 +265,24 @@ fn spec_反连口_释放判决与脚本() {
 fn spec_bar132_释放成功即免退避() {
     // 2026-09-22 BAR-132：释放成功 ≈ 口已腾 → 只等 4s 再试，不背爬升的
     // 退避账（实测那次从断到恢复 29s，其中 30s 退避白等）；别的死因照退避
-    use kfm_na::tunnel::{backoff_secs, retry_wait};
+    use kfm_na::tunnel::retry_wait;
     assert_eq!(retry_wait(4, true), 4, "释放路不背退避账");
     assert_eq!(retry_wait(99, true), 4);
     for a in 1..=6u32 {
-        assert_eq!(retry_wait(a, false), backoff_secs(a), "别的死因照退避表");
+        // 2026-09-23 BAR-138：backoff_secs 带抖动（基准一半以内），
+        // 退避区间钉 [base, base+base/2]，不再钉等值
+        let base = match a {
+            1 => 2,
+            2 => 5,
+            3 => 10,
+            _ => 30,
+        };
+        let w = retry_wait(a, false);
+        assert!(
+            (base..=base + base / 2).contains(&w),
+            "a={a}: 退避 {w} 越出 [{base}, {}]",
+            base + base / 2
+        );
     }
 }
 
@@ -302,4 +319,22 @@ fn spec_bar133_死前绑过就预防式释放() {
         "Error: remote port forwarding failed for listen port 9122",
         9022
     ));
+}
+
+#[test]
+fn spec_bar138_退避抖动_相位打散() {
+    // BAR-138：抖动必须真实存在（退避退化成定值 = 撞口簇回魂）。
+    // base=2 抖 0/1：连采必见 {2,3} 两值（系统时钟纳秒进位翻转）
+    let mut seen = std::collections::HashSet::new();
+    for _ in 0..40 {
+        seen.insert(backoff_secs(1));
+        if seen.len() >= 2 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(
+        seen.contains(&2) && seen.contains(&3),
+        "抖动未生效：连采只见 {seen:?}"
+    );
 }
