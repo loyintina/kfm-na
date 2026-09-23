@@ -38,7 +38,7 @@
 | `src/plugins/term_alacritty.rs` | 3 | 3 | 0 | — |
 | `src/plugins/ui_fx.rs` | 2 | 2 | 0 | — |
 | `src/providers.rs` | 5 | 5 | 0 | — |
-| `src/report.rs` | 9 | 4 | 5 | set_boot_t0 start_flusher report_sync report_sync_once http_status_is_200 |
+| `src/report.rs` | 12 | 7 | 5 | set_boot_t0 start_flusher report_sync report_sync_once http_status_is_200 |
 | `src/scroll.rs` | 5 | 5 | 0 | — |
 | `src/sess_mode.rs` | 3 | 3 | 0 | — |
 | `src/session.rs` | 11 | 11 | 0 | — |
