@@ -1,0 +1,13 @@
+[package]
+name = "na-quic"
+version = "0.1.0"
+edition = "2024"
+description = "na QUIC 隧道：quinn endpoint + TCP↔stream 桥接（手机/服务器双端同构）。设计 docs/active/quic隧道.md"
+
+[dependencies]
+quinn = "0.11"
+tokio = { version = "1", features = ["rt", "macros", "time", "net", "io-util", "sync"] }
+
+[dev-dependencies]
+rcgen = "0.13"
+rustls = { version = "0.23", features = ["ring"] }
