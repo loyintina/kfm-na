@@ -37,12 +37,16 @@ echo "[pack-toolchain] 手机侧包闭包：$(echo "$PKGS" | tr '\n' ' ')" >&2
   for p in $PKGS; do dpkg -L "$p" 2>/dev/null; done
   echo "$PREFIX/bin/rustc"   # 保险：闭包漏网的手动兜底
   echo "$PREFIX/bin/cargo"
-} | grep "^$PREFIX" | sort -u | tar cf - -T - 2>/dev/null
+# 2026-09-23 首跑实踩：dpkg -L 打头路径与 $PREFIX 不符（前缀过滤把闭包
+# 文件全滤光，产物只剩两个手动兜底文件 3.3MB）——不过滤前缀，认绝对路径
+# 即可（dpkg -L 输出即包内文件全集，目录 tar 也收）。
+} | grep '^/' | sort -u | tar cf - -T - 2>/dev/null
 REMOTE
 rc=$?
 # zstd 管线的 rc 是 zstd 的；ssh 失败时 tar 流为空——用产物大小兜底判
-if [ "$rc" -ne 0 ] || [ ! -s "$OUT" ]; then
-    echo "❌ 打包失败（rc=$rc）——8022 通吗？Termux 醒着吗？"
+# （实测定档：完整工具链压缩后应 >100MB，首跑 3.3MB = 过滤 bug 残桩）
+if [ "$rc" -ne 0 ] || [ ! -s "$OUT" ] || [ "$(stat -c%s "$OUT")" -lt 104857600 ]; then
+    echo "❌ 打包失败或产物过小（rc=$rc，$(stat -c%s "$OUT" 2>/dev/null) 字节）——8022 通吗？Termux 醒着吗？"
     exit 1
 fi
 
