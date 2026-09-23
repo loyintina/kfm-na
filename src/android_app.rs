@@ -7167,6 +7167,9 @@ fn sync_fx_frame_budget(app: &winit::platform::android::activity::AndroidApp) {
 impl ApplicationHandler for App {
     fn resumed(&mut self, el: &ActiveEventLoop) {
         crate::gate::note_foreground(true); // 看门狗出假(BAR-036)
+        // 回前台即审（BAR-141）：省电冻结唤醒后第一拍就踢隧道——健康不碰，
+        // 僵尸一拍定罪零退避重拉，重连抢在用户察觉之前完成
+        crate::tunnel::request_resume_kick();
         // BAR-077：fx 帧预算跟真实刷新率走（每次 resumed 一问，系统设置
         // 切 60/120 档跟手）——写死 16ms 在 120Hz 屏上 = 落下拖影
         if let Some(app) = &self.android_app {

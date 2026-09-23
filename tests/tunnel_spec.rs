@@ -271,11 +271,19 @@ fn spec_反连口_释放判决与脚本() {
 
 #[test]
 fn spec_bar132_释放成功即免退避() {
-    // 2026-09-22 BAR-132：释放成功 ≈ 口已腾 → 只等 4s 再试，不背爬升的
-    // 退避账（实测那次从断到恢复 29s，其中 30s 退避白等）；别的死因照退避
-    use kfm_na::tunnel::retry_wait;
-    assert_eq!(retry_wait(4, true), 4, "释放路不背退避账");
-    assert_eq!(retry_wait(99, true), 4);
+    // 2026-09-22 BAR-132：释放成功 ≈ 口已腾 → 不背爬升的退避账。
+    // 2026-09-23 BAR-142 收紧：释放改同步确认——确认完成零等待直接
+    // spawn（原固定 4s 盲等作废）；失败（断网/超时）2s 重试，不许盲
+    // spawn 白撞一轮。别的死因照退避表爬，防抖语义不变
+    use kfm_na::tunnel::{STABLE_SECS, backoff_secs, next_attempts, release_wait};
+    assert_eq!(release_wait(true), 0, "释放确认完成：零等待直接 spawn");
+    assert_eq!(release_wait(false), 2, "释放失败：2s 后重试");
+    // BAR-142 同炉：稳定窗口 30→8——活 8s 以上的娃是真连接（IP 轮换风暴
+    // 里娃常活 10~30s，30s 门槛把它们误判抖动、退避爬账 = 恢复 10~20s
+    // 的大头）；spawn 即死的真抖动照旧爬账
+    assert_eq!(STABLE_SECS, 8, "稳定窗口收窄");
+    assert_eq!(next_attempts(1, 7), 2, "活 7s（<8）仍算抖动，爬账");
+    assert_eq!(next_attempts(7, 8), 1, "活 8s = 真连接，回首死");
     for a in 1..=6u32 {
         // 2026-09-23 BAR-138：backoff_secs 带抖动（基准一半以内），
         // 退避区间钉 [base, base+base/2]，不再钉等值
@@ -285,7 +293,7 @@ fn spec_bar132_释放成功即免退避() {
             3 => 10,
             _ => 30,
         };
-        let w = retry_wait(a, false);
+        let w = backoff_secs(a);
         assert!(
             (base..=base + base / 2).contains(&w),
             "a={a}: 退避 {w} 越出 [{base}, {}]",
@@ -358,4 +366,32 @@ fn spec_bar140_端到端探活连败_即杀即拉() {
     assert_eq!(e2e_strike(1, false), (2, true), "连败×2：定罪杀");
     // 杀完归零由调用方负责，裁决函数自身不许返回负计数
     assert_eq!(e2e_strike(5, true), (0, false), "再多前科也清零");
+}
+
+#[test]
+fn spec_bar141_回前台即审_健康不碰僵尸即杀() {
+    // BAR-141：回前台即审的判决真值表——健康连接不许碰（杀健康=没事
+    // 找事）；僵尸一拍定罪（不等连败×2）；没在连零退避立即重拉
+    use kfm_na::tunnel::{ResumeAction, resume_verdict};
+    // 娃活着 + 口开 + 探活过 = 健康，不碰
+    assert_eq!(
+        resume_verdict(true, true, true),
+        ResumeAction::Ignore,
+        "健康不许碰"
+    );
+    // 娃活着 + 口开 + 探活死 = 僵尸，一拍定罪
+    assert_eq!(
+        resume_verdict(true, true, false),
+        ResumeAction::KillRespawn,
+        "僵尸一拍定罪"
+    );
+    // 娃活着 + 口没开（还在 Starting）= 正在连，别添乱
+    assert_eq!(
+        resume_verdict(true, false, false),
+        ResumeAction::Ignore,
+        "Starting 不打扰"
+    );
+    // 娃不在 = 退避/未启动，零退避立即重拉
+    assert_eq!(resume_verdict(false, false, false), ResumeAction::Respawn);
+    assert_eq!(resume_verdict(false, true, true), ResumeAction::Respawn);
 }

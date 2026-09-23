@@ -125,8 +125,12 @@ pub fn backoff_secs(attempt: u32) -> u64 {
     base + jitter
 }
 
-/// 稳定窗口（秒）：娃活过这么久才算「一次真连接」——短于此 = 抖动
-pub const STABLE_SECS: u64 = 30;
+/// 稳定窗口（秒）：娃活过这么久才算「一次真连接」——短于此 = 抖动。
+/// 2026-09-23 BAR-142 从 30 收到 8：IP 轮换风暴里娃常活 10~30s，
+/// 30s 门槛把它们全判「抖动」→ 退避账一路爬到 5/10s（用户实测恢复
+/// 10~20s 的大头）。活 8s 以上 = 真扛过流量，下次死按首死待（2s 级）；
+/// spawn 即死的真抖动照旧爬账，防抖语义不破
+pub const STABLE_SECS: u64 = 8;
 
 /// 死娃后的重试计数裁决（A 档纯函数，2026-09-21 「反复连接反复断开」立案）：
 /// 娃活得久（≥ STABLE_SECS）才算一次真连接 → 计数回 1（下次首死立即重拉，
@@ -254,6 +258,9 @@ pub fn snap() -> Option<Arc<Mutex<TunnelSnap>>> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TunnelCmd {
     Reconnect,
+    /// 回前台/网络回即审（BAR-141）：用户在等了，检测判据从宽——
+    /// 健康连接不碰，僵尸一拍定罪（不等连败×2），退避清零立即重拉
+    ResumeKick,
 }
 
 static TUNNEL_CMD: OnceLock<Sender<TunnelCmd>> = OnceLock::new();
@@ -264,6 +271,36 @@ pub fn request_reconnect() -> bool {
         .get()
         .map(|tx| tx.send(TunnelCmd::Reconnect).is_ok())
         .unwrap_or(false)
+}
+
+/// 回前台即审（BAR-141）唯一入口：resumed()/网络回都踢这里
+pub fn request_resume_kick() -> bool {
+    TUNNEL_CMD
+        .get()
+        .map(|tx| tx.send(TunnelCmd::ResumeKick).is_ok())
+        .unwrap_or(false)
+}
+
+/// 回前台即审判决（A 档纯函数，BAR-141）：健康不碰（杀健康连接 =
+/// 没事找事），僵尸一拍定罪，退避中立即重拉
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResumeAction {
+    /// 健康/正在连——什么都不做
+    Ignore,
+    /// 僵尸定罪——杀娃、释放、零退避重拉
+    KillRespawn,
+    /// 没在连（退避/未启动）——零退避立即重拉
+    Respawn,
+}
+
+pub fn resume_verdict(child_alive: bool, port_open: bool, probe_ok: bool) -> ResumeAction {
+    if !child_alive {
+        return ResumeAction::Respawn;
+    }
+    if port_open && !probe_ok {
+        return ResumeAction::KillRespawn;
+    }
+    ResumeAction::Ignore
 }
 
 // ---- B 档：进程胶水（spawn/探活/看门狗），判卷 = 真机实拍 + report 行 ----
@@ -302,73 +339,73 @@ fn probe_port(port: u16) -> bool {
     .is_ok()
 }
 
-/// 重拉等待（A 档纯函数，2026-09-22 BAR-132）：**释放成功 ≈ 口已腾** →
-/// 只等 4s（让释放的 ssh 落地）再试，不背退避账——否则「上一轮残留占口」
-/// 这种一秒就能解的病因，会被爬到 30s 的退避白白拖慢（实测：05:47 那次
-/// 从断到恢复花了 29s，其中 30s 退避白等）。别的死因（网络/冻结）照退避
-/// 表爬，防抖语义不变
-pub fn retry_wait(attempts: u32, releasing: bool) -> u64 {
-    if releasing { 4 } else { backoff_secs(attempts) }
+/// 释放后等待（A 档纯函数，BAR-142）：释放**同步确认完成** = 口已腾 →
+/// 零等待直接 spawn（BAR-132 的固定 4s 盲等作废——同步后释放本身
+/// 就是等待，盲等 4s 纯属白等）；释放失败（断网/超时）= 2s 后重试，
+/// 不许盲 spawn 白撞一轮 255
+pub fn release_wait(release_ok: bool) -> u64 {
+    if release_ok { 0 } else { 2 }
 }
 
-/// 反连口释放（B 档胶水）：一次性 ssh 跑释放脚本，独立线程跑（看门狗
-/// 1s 滴答不许被 ssh 握手拖住）。释放是快活，10s 超时即弃（下一轮再试）
-fn kick_release_forward(prefix: &Path, server: &ServerEntry) {
-    let prefix = prefix.to_path_buf();
-    let server = server.clone();
+/// 反连口释放——同步核（BAR-142）：调用方线程内联跑（看门狗在死亡/
+/// 杀娃路径上，本就在等，阻塞它有界），budget 封顶。true = 释放确认
+/// 完成（口已腾）；false = 失败/超时（调用方 release_wait 退避重试）
+fn release_forward_sync(prefix: &Path, server: &ServerEntry, budget: std::time::Duration) -> bool {
+    let Ok(args) = crate::na_server_sup::exec_args(server) else {
+        crate::report::report("tunnel", "反连口释放：ssh 参数缺件，放弃");
+        return false;
+    };
+    let mut cmd = std::process::Command::new(prefix.join("bin/ssh"));
+    let child = cmd
+        .args(&args)
+        .env("PATH", prefix.join("bin"))
+        .env("LD_LIBRARY_PATH", prefix.join("lib"))
+        .env("PREFIX", prefix)
+        .env("TERMUX__PREFIX", prefix)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn();
+    let Ok(mut child) = child else {
+        crate::report::report("tunnel", "反连口释放：ssh spawn 失败");
+        return false;
+    };
+    if let Some(mut sin) = child.stdin.take() {
+        use std::io::Write as _;
+        let _ = sin.write_all(release_forward_script(server.tunnel.remote_port).as_bytes());
+        drop(sin); // 关 stdin = 脚本开跑
+    }
+    let (tx, rx) = channel();
     std::thread::spawn(move || {
-        let Ok(args) = crate::na_server_sup::exec_args(&server) else {
-            crate::report::report("tunnel", "反连口释放：ssh 参数缺件，放弃");
-            return;
-        };
-        let mut cmd = std::process::Command::new(prefix.join("bin/ssh"));
-        let child = cmd
-            .args(&args)
-            .env("PATH", prefix.join("bin"))
-            .env("LD_LIBRARY_PATH", prefix.join("lib"))
-            .env("PREFIX", &prefix)
-            .env("TERMUX__PREFIX", &prefix)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn();
-        let Ok(mut child) = child else {
-            crate::report::report("tunnel", "反连口释放：ssh spawn 失败");
-            return;
-        };
-        if let Some(mut sin) = child.stdin.take() {
-            use std::io::Write as _;
-            let _ = sin.write_all(release_forward_script(server.tunnel.remote_port).as_bytes());
-            drop(sin); // 关 stdin = 脚本开跑
-        }
-        let (tx, rx) = channel();
-        std::thread::spawn(move || {
-            let _ = tx.send(child.wait_with_output());
-        });
-        match rx.recv_timeout(std::time::Duration::from_secs(10)) {
-            Ok(Ok(out)) => {
-                let o = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                let e = String::from_utf8_lossy(&out.stderr).trim().to_string();
-                crate::report::report(
-                    "tunnel",
-                    &format!(
-                        "反连口释放：{}{}",
-                        if o.is_empty() {
-                            "已回收/无占用".to_string()
-                        } else {
-                            o
-                        },
-                        if e.is_empty() {
-                            String::new()
-                        } else {
-                            format!("（err={e}）")
-                        }
-                    ),
-                );
-            }
-            _ => crate::report::report("tunnel", "反连口释放：超时，下一轮再试"),
-        }
+        let _ = tx.send(child.wait_with_output());
     });
+    match rx.recv_timeout(budget) {
+        Ok(Ok(out)) => {
+            let o = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            let e = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            crate::report::report(
+                "tunnel",
+                &format!(
+                    "反连口释放：{}{}",
+                    if o.is_empty() {
+                        "已回收/无占用".to_string()
+                    } else {
+                        o
+                    },
+                    if e.is_empty() {
+                        String::new()
+                    } else {
+                        format!("（err={e}）")
+                    }
+                ),
+            );
+            true
+        }
+        _ => {
+            crate::report::report("tunnel", "反连口释放：超时/失败，下一轮再试");
+            false
+        }
+    }
 }
 
 /// 起看门狗（一线程 1s 滴答）：探口 → 外部占则让位挂 ExternalUp；
@@ -428,13 +465,10 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                 g.epoch += 1;
             }
         };
-        // 等一拍（可被取消）：命令到了 = true。重连语义 = 杀娃（有的话）+
+        // 等一拍（可被取消）：命令到了 = Some。重连语义 = 杀娃（有的话）+
         // 退避清零，下一拍立刻重新探口/spawn——不等退避不等 30s 复查
-        let wait = |rx: &Receiver<TunnelCmd>, dur: std::time::Duration| -> bool {
-            match rx.recv_timeout(dur) {
-                Ok(TunnelCmd::Reconnect) => true,
-                Err(_) => false,
-            }
+        let wait = |rx: &Receiver<TunnelCmd>, dur: std::time::Duration| -> Option<TunnelCmd> {
+            rx.recv_timeout(dur).ok()
         };
         let reconnect = |child: &mut Option<std::process::Child>,
                          attempts: &mut u32,
@@ -460,6 +494,36 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
         let mut was_up = false;
         // 端到端探活连败计数（BAR-140，看门狗线程私有）
         let mut e2e_miss: u32 = 0;
+        // 杀娃重拉（BAR-140/141 共用）：杀娃收尸、退避清零、死前绑过顺路
+        // 请服务器收尸（免下一 spawn 白撞 255）；状态落 Down，调用方 continue
+        let kill_zombie =
+            |child: &mut Option<std::process::Child>,
+             attempts: &mut u32,
+             e2e_miss: &mut u32,
+             was_up: bool,
+             why: &str,
+             prefix: &Path,
+             server: &ServerEntry,
+             snap_t: &Arc<Mutex<TunnelSnap>>,
+             set: &dyn Fn(TunnelState, &Arc<Mutex<TunnelSnap>>)| {
+                crate::report::report("tunnel", why);
+                if let Some(mut c) = child.take() {
+                    let _ = c.kill();
+                    let _ = c.wait();
+                }
+                *e2e_miss = 0;
+                *attempts = 0;
+                if was_up {
+                    release_forward_sync(prefix, server, std::time::Duration::from_secs(2));
+                }
+                set(
+                    TunnelState::Down {
+                        attempts: 0,
+                        last_error: why.to_string(),
+                    },
+                    snap_t,
+                );
+            };
         let mut ssh_err: Option<Arc<Mutex<VecDeque<String>>>> = None;
         loop {
             let port = server.tunnel.local_port;
@@ -472,7 +536,7 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
             if port_open && !child_alive {
                 // 外部隧道占着口——让位不抢，30s 一拍复查（它一断下一拍接管）
                 set(TunnelState::ExternalUp, &snap_t);
-                if wait(&cmd_rx, std::time::Duration::from_secs(30)) {
+                if wait(&cmd_rx, std::time::Duration::from_secs(30)).is_some() {
                     reconnect(&mut child, &mut attempts, &snap_t);
                 }
                 continue;
@@ -488,25 +552,16 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                     let (n, kill) = e2e_strike(e2e_miss, probe_e2e(port));
                     e2e_miss = n;
                     if kill {
-                        crate::report::report(
-                            "tunnel",
+                        kill_zombie(
+                            &mut child,
+                            &mut attempts,
+                            &mut e2e_miss,
+                            was_up,
                             "端到端探活连败×2：僵尸隧道定罪，杀娃立即重拉",
-                        );
-                        if let Some(mut c) = child.take() {
-                            let _ = c.kill();
-                            let _ = c.wait();
-                        }
-                        e2e_miss = 0;
-                        attempts = 0; // 定罪即赦：下一拍零退避直接 spawn
-                        if was_up {
-                            kick_release_forward(&prefix, &server);
-                        }
-                        set(
-                            TunnelState::Down {
-                                attempts: 0,
-                                last_error: "端到端探活连败".into(),
-                            },
+                            &prefix,
+                            &server,
                             &snap_t,
+                            &set,
                         );
                         continue;
                     }
@@ -519,8 +574,27 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                     },
                     &snap_t,
                 );
-                if wait(&cmd_rx, std::time::Duration::from_secs(1)) {
-                    reconnect(&mut child, &mut attempts, &snap_t);
+                match wait(&cmd_rx, std::time::Duration::from_secs(1)) {
+                    Some(TunnelCmd::Reconnect) => reconnect(&mut child, &mut attempts, &snap_t),
+                    // 回前台即审（BAR-141）：用户在等——健康不碰，僵尸一拍
+                    // 定罪（不等连败×2），零退避立即重拉
+                    Some(TunnelCmd::ResumeKick) => {
+                        let probe_ok = !port_open || probe_e2e(port);
+                        if resume_verdict(true, port_open, probe_ok) == ResumeAction::KillRespawn {
+                            kill_zombie(
+                                &mut child,
+                                &mut attempts,
+                                &mut e2e_miss,
+                                was_up,
+                                "回前台即审：僵尸隧道一拍定罪，杀娃立即重拉",
+                                &prefix,
+                                &server,
+                                &snap_t,
+                                &set,
+                            );
+                        }
+                    }
+                    None => {}
                 }
                 continue;
             }
@@ -561,11 +635,13 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                 was_up = false;
                 let port_hit = should_release_forward(&tail, server.tunnel.remote_port);
                 let releasing = should_release_port(established, &tail, server.tunnel.remote_port);
-                if releasing {
+                // BAR-142：释放改同步确认——确认完成（口已腾）零等待直接
+                // spawn；失败（断网/超时）2s 重试，不许盲 spawn 白撞一轮
+                let wait_s = if releasing {
                     crate::report::report(
                         "tunnel",
                         &format!(
-                            "反连口 {} 释放（{}）→ 请求服务器收紧",
+                            "反连口 {} 释放（{}）→ 同步收紧",
                             server.tunnel.remote_port,
                             if port_hit {
                                 "撞口后"
@@ -574,15 +650,15 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                             }
                         ),
                     );
-                    kick_release_forward(&prefix, &server);
-                    true
+                    let ok =
+                        release_forward_sync(&prefix, &server, std::time::Duration::from_secs(3));
+                    if ok {
+                        attempts = 1; // 口腾了 = 从头来（下一轮 2s 级）
+                    }
+                    release_wait(ok)
                 } else {
-                    false
+                    backoff_secs(attempts)
                 };
-                let wait_s = retry_wait(attempts, releasing);
-                if releasing {
-                    attempts = 1; // 口腾了 = 从头来（下一轮 2s 级）
-                }
                 set(
                     TunnelState::Down {
                         attempts,
@@ -590,8 +666,13 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                     },
                     &snap_t,
                 );
-                if wait_s > 0 && wait(&cmd_rx, std::time::Duration::from_secs(wait_s)) {
-                    reconnect(&mut child, &mut attempts, &snap_t);
+                if wait_s > 0 {
+                    match wait(&cmd_rx, std::time::Duration::from_secs(wait_s)) {
+                        Some(TunnelCmd::Reconnect) => reconnect(&mut child, &mut attempts, &snap_t),
+                        // 回前台即审（BAR-141）：退避中的用户在等——清零立即 spawn
+                        Some(TunnelCmd::ResumeKick) => attempts = 0,
+                        None => {}
+                    }
                 }
             }
 
@@ -649,16 +730,21 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                         },
                         &snap_t,
                     );
-                    if wait(
+                    match wait(
                         &cmd_rx,
                         std::time::Duration::from_secs(backoff_secs(attempts)),
                     ) {
-                        reconnect(&mut child, &mut attempts, &snap_t);
+                        Some(TunnelCmd::Reconnect) => reconnect(&mut child, &mut attempts, &snap_t),
+                        Some(TunnelCmd::ResumeKick) => attempts = 0,
+                        None => {}
                     }
                 }
             }
-            if wait(&cmd_rx, std::time::Duration::from_secs(1)) {
-                reconnect(&mut child, &mut attempts, &snap_t);
+            if let Some(cmd) = wait(&cmd_rx, std::time::Duration::from_secs(1)) {
+                match cmd {
+                    TunnelCmd::Reconnect => reconnect(&mut child, &mut attempts, &snap_t),
+                    TunnelCmd::ResumeKick => attempts = 0,
+                }
             }
         }
     });
