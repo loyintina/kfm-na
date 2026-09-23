@@ -7,6 +7,20 @@
 
 ## 当前位置（2026-09-23)
 
+> **敲门账本上链 + 公网双口放行（2026-09-23 深夜）**：用户在阿里云
+> 安全组放行 UDP 62633+62694（0.0.0.0/0）。①**敲门账本**：QUIC 腿
+> 对「连接/验签失败（带连败计数）/封禁中拒连」三类事件落 stderr
+> → /var/log/kfm-na-server.log，任何人来敲都留痕，被扫风险可量化观测
+> （`grep na-quic /var/log/kfm-na-server.log`）。②**unit QUIC 行被手机
+> 旧核 ensure 抹掉过一次**——热更 .so（含新 unit 模板）落地前若 QUIC
+> 腿失踪，先 `systemctl cat kfm-na-server.service | grep QUIC`，没了
+> 就手补 `Environment=NA_QUIC_BIND=0.0.0.0:62633` + daemon-reload +
+> restart。③生产重启后**冒烟三判全过**：对钥匙 health JSON 全还 /
+> 错钥匙零字节（账本记下「验签失败 第 1 次」）/ 公网 hairpin
+> （8.145.46.182:62633）真握手过。④被扫风险结论：UDP 扫描罕见且
+> QUIC 对垃圾包不应答（无放大面）；真锁是双向认证（证书 pinning +
+> psk HMAC，无密码可猜）；账本上链后敲门全留痕。
+
 > **QUIC 客户端证落地（2026-09-23 晚，用户裁决链）**：公网口前置条件齐
 > 了——①**HMAC 客户端证**：流头 = 2 字节端口 + 32 字节标签
 > （`HMAC(psk,"na-quic-auth-v1"‖端口)`；RFC 2104 手卷免 vendor 重生，

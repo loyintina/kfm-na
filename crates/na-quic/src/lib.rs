@@ -257,11 +257,15 @@ pub async fn run_server(
         tokio::spawn(async move {
             let Ok(conn) = inc.await else { return };
             let ip = conn.remote_address().ip();
+            // 敲门账本（用户「担心被扫」的观测面）：谁来了/谁验签栽了/
+            // 谁被封，全落 stderr（na-server → /var/log/kfm-na-server.log）
+            eprintln!("[na-quic] 连接 {ip}");
             {
                 let g = fails.lock().await;
                 if let Some(&(n, t0)) = g.get(&ip)
                     && ban_verdict(n, t0.elapsed().as_secs())
                 {
+                    eprintln!("[na-quic] 封禁中拒连 {ip}（第 {n} 次连败）");
                     conn.close(1u32.into(), b"auth banned");
                     return;
                 }
@@ -287,6 +291,7 @@ pub async fn run_server(
                                 *e = (0, std::time::Instant::now());
                             }
                             e.0 += 1;
+                            eprintln!("[na-quic] 验签失败 {ip}（第 {} 次连败）", e.0);
                             return;
                         }
                     }
