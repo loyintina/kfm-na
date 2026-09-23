@@ -4,21 +4,20 @@
 #
 #   bash scripts/na-rec.sh [毫秒,默认 8000]
 #
-# 链路:8024 闸门写 rec-req-ms → 值守线程 → JNI → MainActivity →
+# 链路:闸门(na-ssh.sh:9022 首选/8024 备援)写 rec-req-ms → 值守线程 → JNI → MainActivity →
 # 系统授权弹窗(用户点「立即开始」,一次性) → MediaProjection 编码 →
 # rec.mp4 落 files/usr/tmp → scp 拉回 /tmp/na-rec.mp4。
 # 状态机(rec-status):await→recording→done;denied/timeout=弹窗没点;
 # error=编码异常(看 message)。
 set -euo pipefail
 
-NA_KEY=/root/.ssh/na_probe_key
 NA_TMP=/data/data/dev.kfm.na/files/usr/tmp
 DUR=${1:-8000}
 
-gate() {
-    ssh -p 8024 -i "$NA_KEY" -o BatchMode=yes -o ConnectTimeout=6 \
-        -o StrictHostKeyChecking=no localhost "$1"
-}
+# shellcheck source=scripts/lib/na-ssh.sh
+source "$(dirname "$0")/lib/na-ssh.sh"
+
+gate() { na_ssh "$1"; }
 
 gate "echo $DUR > $NA_TMP/rec-req-ms; rm -f $NA_TMP/rec-status; rm -f $NA_TMP/rec.mp4"
 echo "已触发(${DUR}ms)。请在手机授权弹窗点「立即开始」…"
@@ -31,8 +30,7 @@ for _ in $(seq 1 120); do
             echo "…录制中"
             ;;
         done)
-            scp -P 8024 -i "$NA_KEY" -o BatchMode=yes -o StrictHostKeyChecking=no \
-                "localhost:$NA_TMP/rec.mp4" /tmp/na-rec.mp4 >/dev/null
+            na_scp_pull "$NA_TMP/rec.mp4" /tmp/na-rec.mp4 >/dev/null
             echo "✅ /tmp/na-rec.mp4"
             exit 0
             ;;

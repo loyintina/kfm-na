@@ -16,11 +16,12 @@
 # 用完自己删;重启/清 tmp 自然失效。
 set -u
 
-SSHOPTS="-p 8024 -i /root/.ssh/na_probe_key -o BatchMode=yes -o ConnectTimeout=6 -o StrictHostKeyChecking=no"
+# shellcheck source=scripts/lib/na-ssh.sh
+source "$(dirname "$0")/lib/na-ssh.sh"
 NA_TMP=/data/data/dev.kfm.na/files/usr/tmp
 DRY=${NA_QUIESCE_DRY:-0}
 
-if ssh $SSHOPTS localhost "test -f $NA_TMP/keep-alive" 2>/dev/null; then
+if na_ssh "test -f $NA_TMP/keep-alive" 2>/dev/null; then
     echo "$(date '+%F %T') [quiesce] keep-alive 旗在,豁免一晚"
     exit 0
 fi
@@ -32,7 +33,7 @@ case "$FG" in
             echo "$(date '+%F %T') [quiesce][dry] na 在后台,将触发 restart-req"
             exit 0
         fi
-        if ssh $SSHOPTS localhost "touch $NA_TMP/restart-req" 2>/dev/null; then
+        if na_ssh "touch $NA_TMP/restart-req" 2>/dev/null; then
             echo "$(date '+%F %T') [quiesce] na 在后台 → restart-req 已投,体面退出"
         else
             echo "$(date '+%F %T') [quiesce] restart-req 投递失败"

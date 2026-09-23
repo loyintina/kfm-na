@@ -13,14 +13,14 @@
   pre-commit 自动跑。
 - `check/` — chain 调用的单项检查（提交纪律闸门、stats 咬合闸等）。
 
-## 隧道韧性(跨隧道动作统一入口,2026-09-02 立)
+## 隧道韧性(跨隧道动作统一入口,2026-09-23 改版)
 
-- `na-tunnel` — 隧道抖动是常态(手机网络特性,已定案不修源头只修韧性),
-  一切跨隧道动作走它:probe/status(体检+断连史,史在
-  `~/.na-tunnel/history.log`)/wait(等恢复)/ssh・scp(带重试,只对
-  连接层失败重试,不拿重试掩盖命令真错)/shot(拍图+mtime 新鲜度校验,
-  防拿旧图)。安全红线:只碰 127.0.0.1 隧道端口,不新增任何公网
-  暴露面(2026-09-01 用户定案,第一层公网直开永不采用)。
+- `lib/na-ssh.sh` — 手机闸门传输唯一入口（na-tunnel 2026-09 退役，
+  BAR-117 看门狗接管隧道本体）：na_ssh/na_scp_pull/na_scp_push，
+  **9022 首选**（na 自持隧道反连，na 活着口就在）**/8024 备援**
+  （Termux 代维旧路）。8022 = Termux 专用（am start/手机仓/
+  工具链），一般闸门活不许碰。安全红线:只碰 127.0.0.1 隧道端口,
+  不新增任何公网暴露面(2026-09-01 用户定案,第一层公网直开永不采用)。
 
 ## 构建与部署(改 APK 层时)
 
@@ -42,7 +42,7 @@
   APK + 调安装器。
 - `deploy-phone.sh` — 送包到手机并调起安装器(`--build` 先打包再送)。
 - `deploy-ai-config.sh` — 三路 key 配置(Kimi 默认/智谱/DeepSeek 官网)
-  抽自服务器 kfmv4,经 8024 闸推 na 私有目录 ai/(key 不进 git)。
+  抽自服务器 kfmv4,经闸门(na-ssh.sh:9022 首选/8024 备援)推 na 私有目录 ai/(key 不进 git)。
 - `font-bake.py` — 字体烘焙管线(子集化/借形/monoify)。
 
 ## 热更回路(只改核心 .so 时,日常主力)
@@ -56,10 +56,12 @@
 - `na-restart.sh` — 体面重启:restart-req → 等断连 → am start 拉回
   → 等新 boot → 判卷。
 
-## 观测(看)——8024 闸门配套
+## 观测(看)——闸门配套
 
 **传输层开关（2026-09-11 redroid 接线）**：以下 na-*.sh 全部经
-`lib/gate-lib.sh` 单源传输——默认 ssh（真机 8024）；
+`lib/gate-lib.sh` 单源传输——默认走 `lib/na-ssh.sh` 统一入口
+（2026-09-23 起 **9022 首选/8024 备援**：9022 = na 自持隧道反连，
+na 看门狗自营，Termux 冻不冻都不看脸色；8024 = 旧反连路）。
 `NA_TRANSPORT=adb` 时走云安卓 adbd root 直读沙箱（串口
 `NA_ADB_SERIAL` 默认 localhost:5555），文件触发协议不变。
 整条回归套件上云安卓：`NA_TRANSPORT=adb bash scripts/na-regress.sh`。
@@ -67,6 +69,9 @@
 （stats 的 local_dead/remote_dead 字段是事实源），平台不适用
 自动跳过不挂卷。云安卓特判两处：na-shot 走 CPU 倒帧路（GL 回读
 翻转）、na-restart 死活探针看 pidof（adbd 常连无断连语义）。
+**8022 = Termux 专用路**（am start/手机仓 ~/kfm-na/工具链/
+termux-battery-status），只有 Termux 的 rootfs 干得了的活才用，
+一般闸门活不许碰它——Termux 空闲冻结时 8022 会消失（实测抖动）。
 
 - `na-front.sh` / `na-back.sh` — 前台拉起/退回后台并确认（2026-09-11
   用户拍板工作流：agent 自拉前台自测，退回后台 = 完成信号。熄屏时
@@ -145,7 +150,7 @@
 - `test-na-regress-meta.sh` — 回归套件的套件:跳过语义/boot 解析/泵速率/重启排尾四元契约(假 ssh 桩,零编译秒级)。
 - `check-spec-coverage.sh` — 考卷覆盖矩阵棘轮闸(调试闸门.md §十六):模块×考题对照表落 docs/ledger/test-coverage-matrix.md,未覆盖数只许降。
 - `probe-overnight-power.sh` — 过夜/昼间电耗画像采集:双源(电池 termux-battery-status + na stats)对账,GAP 行=冻结窗口即数据。
-- `test-bg-survival.sh` — BAR-029:遥控前后台 + 8024 探针判后台存活。
+- `test-bg-survival.sh` — BAR-029:遥控前后台 + 闸门探针判后台存活。
 - `test-kfm-pkg.sh` — kfm-pkg 原子性三案(挂 chain 第 8 步)。
 - `test-overlay.sh` / `test-serve-overlays.sh` — L2 overlay 考题。
 - `test-relay-timeout.sh`(+`.py` 行为核) — BAR-109:relay 不得掐静默长连接(4s 死亡线命案;行为级判卷,dummy 上游静默 8s,越线一问一答。挂 chain 第 9 步)。

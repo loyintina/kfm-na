@@ -369,6 +369,13 @@ struct App {
     /// (指 id, 起点 x, 起点 y, 武装命中, 拖过 slop)。只在 session_over
     /// 且裸终端页可达（卡在屏才命中）；抬手同钮 = 触发，拖过 = 不触发
     down_touch: Option<(u64, f64, f64, crate::ui::down_card::DownHit, bool)>,
+    /// 断线输入暂存队列（2026-09-23 BAR-135 用户拍板「断联影响最小化」）：
+    /// 远程死会话 + 隧道不可用期的击键收这里，Opened 时回冲——不盲孵
+    /// 必死连接、不丢输入、终端正文零污染（告示全在断线状态卡上）
+    offline_keys: crate::offline_keys::OfflineKeys,
+    /// 闸住告示沿（BAR-135）：kick_reconnect 被隧道闸挡住时每调用点都会
+    /// 走到——只在上沿报一次，复活/放行后自动复位（不成刷屏源）
+    kick_gated_noticed: bool,
     /// 配置卡标签栏状态（主题宪法 §四）：池名表 + 选中 + 横滚 + 光标
     /// 弹簧。共享句柄注册给 gate 值守倒帧（D9 同源——后台截图/倒帧
     /// 与前台帧同一份标签栏读数）
@@ -529,7 +536,7 @@ struct LayerSigs {
     termcard: crate::ui::stage::DirtyGuard<(u32, u32, u32, u32)>,
     /// 断线状态卡层（A 断线治理）：(w, h, session_over)——死活翻转
     /// 才重烘，稳态零成本
-    downcard: crate::ui::stage::DirtyGuard<(u32, u32, u8)>,
+    downcard: crate::ui::stage::DirtyGuard<(u32, u32, u8, u8, u16)>,
     /// 标签栏层（BAR-096 拆槽）
     tabbar: crate::ui::stage::DirtyGuard<TabBarSig>,
     /// 下池光标层（BAR-096 拆槽）
@@ -3740,6 +3747,11 @@ impl App {
             t.lock().unwrap().feed(banner.as_bytes());
         }
         self.session_over = self.health(name_s).dead;
+        // BAR-135：暂存回冲第二落点——断线期切去本地、远程在待机位复活
+        // 的边角（Opened 时不是活跃方不回冲），切回活的远程即补发
+        if !self.session_over {
+            self.flush_offline_keys();
+        }
         crate::report::report("term", &format!("会话切换: {name_a} → {name_s}"));
         // 解析页对象轴跟随中央终端（两轴宪法 §一：中央连着谁就解析谁）——
         // 翻相 epoch+1 进涂装 sig 自动重烘；同名不抖
@@ -3782,7 +3794,9 @@ impl App {
     }
 
     /// 死会话上敲键/切入 = 重连触发器（用户在场的明示）。在途不重孵
-    /// （重孵会丢在途会话的输入缓存通道）
+    /// （重孵会丢在途会话的输入缓存通道）。BAR-135：远程会话且隧道
+    /// 不可用时闸住不孵——孵了必 `Connection refused`（空转刷屏），
+    /// 恢复交「隧道可用沿」那条腿；闸住期的击键由 route_input 暂存
     fn kick_reconnect(&mut self) {
         let Some(name) = self
             .router_handle()
@@ -3792,8 +3806,76 @@ impl App {
         };
         let h = self.health(name);
         if h.dead && !h.connecting {
+            if name == "remote" && !self.tunnel_usable_now() {
+                if !self.kick_gated_noticed {
+                    self.kick_gated_noticed = true;
+                    crate::report::report("term", "重连闸住: 隧道不可用，等可用沿（击键暂存中）");
+                }
+                return;
+            }
+            self.kick_gated_noticed = false;
             self.respawn_session(name);
         }
+    }
+
+    /// 隧道可用现况（snapshot 读法同 poll_tunnel_kick——单一源抽出来
+    /// 是给 route_input/kick_reconnect 两处共用，判据分歧 = 闸口漏风）
+    fn tunnel_usable_now(&self) -> bool {
+        crate::tunnel::snap()
+            .map(|t| {
+                t.lock()
+                    .map(|g| crate::tunnel::usable(&g.state))
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false)
+    }
+
+    /// 击键出向唯一入口（BAR-135）：该暂存暂存、该重孵重孵、该发发。
+    /// 收编条件 = offline_keys::should_hold（远程 + 死会话 + 隧道不可用）
+    /// ——此刻重孵必死，击键进暂存队列等 Opened 回冲；不收编时维持
+    /// 原语义（死会话先 kick 再发，conn pending_input 代收）。
+    /// 返回 true = 已暂存（调用方据此刷状态行）
+    fn route_input(&mut self, bytes: String) -> bool {
+        let is_remote = self
+            .router_handle()
+            .map(|r| r.lock().unwrap().active_name() == "remote")
+            .unwrap_or(false);
+        if crate::offline_keys::should_hold(self.session_over, is_remote, self.tunnel_usable_now())
+        {
+            let was_empty = self.offline_keys.is_empty();
+            self.offline_keys.push(bytes);
+            if was_empty {
+                crate::report::report("term", "断线暂存开收: 隧道不可用，击键入队");
+            }
+            self.dirty = true; // 断线卡状态行字节数跟着变
+            return true;
+        }
+        if self.session_over {
+            self.kick_reconnect();
+        }
+        if let Some(r) = self.router_handle() {
+            r.lock().unwrap().send(TermCmd::Input(bytes));
+        }
+        false
+    }
+
+    /// 暂存回冲（Opened 时调）：保序灌回出向路由——conn 已 Live，
+    /// 直接 send 即达；回冲完报一条账（不静默）
+    fn flush_offline_keys(&mut self) {
+        if self.offline_keys.is_empty() {
+            return;
+        }
+        let items = self.offline_keys.drain();
+        let n = items.len();
+        let mut bytes = 0usize;
+        for b in items {
+            bytes += b.len();
+            if let Some(r) = self.router_handle() {
+                r.lock().unwrap().send(TermCmd::Input(b));
+            }
+        }
+        crate::report::report("term", &format!("断线暂存回冲: {n} 条 {bytes} 字节"));
+        self.dirty = true;
     }
 
     // ---- 解析页 tmux 插件（2026-09-19 用户立项：窗口管理器 + 重排钮）----
@@ -4411,12 +4493,9 @@ impl App {
             if let Some(r) = self.router_handle() {
                 r.lock().unwrap().send(TermCmd::Resize { cols, rows });
             }
-            if let Some(t) = self.term_handle() {
-                let banner = format!(
-                    "\r\n\x1b[36m[kfm-na: {name} 会话断线，已重连 = 新 shell（旧现场 tmux attach 接回）]\x1b[0m\r\n"
-                );
-                t.lock().unwrap().feed(banner.as_bytes());
-            }
+            // BAR-135：旧蓝色内联横幅退役——重连告示全部落在断线状态卡
+            // 状态行（ui::down_card::status_text：connecting 相显示
+            // 「重连中…接回 = 新 shell」），终端正文零污染
         } else {
             if let Some(r) = self.router_handle()
                 && let Err(e) = r.lock().unwrap().replace_standby(h.outbound)
@@ -4521,6 +4600,9 @@ impl App {
                         self.dirty = true;
                     }
                     self.session_over = false; // 重连复活：输出面解开
+                    // BAR-135：断线期暂存的击键此刻回冲（保序，conn 已
+                    // Live 直接即达）——「卡住的输入接好了直接传过去」
+                    self.flush_offline_keys();
                 }
                 crate::report::report(
                     "term",
@@ -4808,8 +4890,8 @@ impl App {
                 self.switch_session();
                 continue;
             }
-            if let Some(r) = self.router_handle() {
-                r.lock().unwrap().send(TermCmd::Input(bytes));
+            // BAR-135：出向唯一入口 route_input（断线暂存/重孵/发送三合一）
+            if !self.route_input(bytes) {
                 sent = true;
             }
         }
@@ -4855,10 +4937,11 @@ impl App {
             Key::Named(NamedKey::Escape) => Some("\x1b".into()),
             _ => event.text.as_ref().map(|t| t.to_string()),
         };
-        if let (Some(bytes), Some(r)) = (bytes, self.router_handle())
+        if let Some(bytes) = bytes
             && !bytes.is_empty()
         {
-            r.lock().unwrap().send(TermCmd::Input(bytes));
+            // BAR-135：出向唯一入口 route_input（断线暂存/重孵/发送三合一）
+            self.route_input(bytes);
             // 打字了就是要看现在——滚回底部贴最新输出
             if let Some(t) = self.term_handle() {
                 t.lock().unwrap().scroll_to_bottom();
@@ -5390,6 +5473,10 @@ impl App {
         cfg_snap: Option<&crate::ui::cfg_page::CfgPageSnap>,
         parser_snap: Option<&crate::ui::parser_page::ParserPageSnap>,
         session_over: bool, // 活跃会话死活（A 断线状态卡：终卡槽 sig 末维+烘焙触发源）
+        // BAR-135 断线卡状态行两输入（调用方算好传入——本函数无 self）：
+        // connecting = 活跃会话重连在途；dc_pending = 断线暂存字节数
+        dc_connecting: bool,
+        dc_pending: usize,
         drag: Option<(crate::ai_presence::Panel, f32)>,
     ) -> Option<(u32, u32)> {
         let (w, h) = g.size();
@@ -5740,16 +5827,24 @@ impl App {
         // 断线状态卡层（A 断线治理）：独立槽——z 序必须在字形之上
         // （TermCard 槽是最底层，画里面会被网格文字盖死，redroid 判卷
         // 定罪）；可见性 = 裸终端页（slot_vis[6]）+ session_over 双闸，
-        // 会话复活/面板靠泊即隐。sig 带死活维：翻转才重烘，稳态零成本
+        // 会话复活/面板靠泊即隐。sig 带死活维：翻转才重烘，稳态零成本。
+        // BAR-135：sig 加状态行两维（connecting/暂存字节量化值）——
+        // 断线期告示全在这张卡的状态行上，文本变了卡必须重烘
+        let dc_held = dc_pending.min(u16::MAX as usize) as u16;
         g.set_slot_visible(
             crate::gles_present::ChromeSlot::DownCard,
             slot_vis[6] && session_over,
         );
-        if slot_vis[6] && sigs.downcard.feed((w, h, session_over as u8)) {
+        if slot_vis[6]
+            && sigs
+                .downcard
+                .feed((w, h, session_over as u8, dc_connecting as u8, dc_held))
+        {
             let px = g.slot_canvas(crate::gles_present::ChromeSlot::DownCard);
             px.fill(0);
             if session_over {
-                term_arc.lock().unwrap().render_down_card(px, w, h);
+                let status = crate::ui::down_card::status_text(dc_connecting, dc_pending);
+                term_arc.lock().unwrap().render_down_card(px, w, h, &status);
             }
             g.slot_bake(crate::gles_present::ChromeSlot::DownCard);
         }
@@ -6716,6 +6811,18 @@ impl App {
         let t0 = std::time::Instant::now(); // 帧耗时画像(自观测第三块)
         // 先拿终端句柄(owned Arc,借用即还),再借 gfx——顺序反了 E0502
         let th = self.term_handle();
+        // BAR-135 断线卡状态行两输入（活跃会话 connecting + 暂存字节数
+        // ——卡文本的数据源，跟着 sig 一起变才重烘）。必须在借 gfx 之前
+        // 算：router_handle()/health() 是整 self 方法，与 &mut self.gfx
+        // 冲突（E0502，链上手机新 rustc 实咬，服务器 cfg 不含此路径查不出）
+        let dc_conn = self
+            .router_handle()
+            .map(|r| {
+                let n = r.lock().unwrap().active_name();
+                self.health(n).connecting
+            })
+            .unwrap_or(false);
+        let dc_pending = self.offline_keys.pending_bytes();
         let Some(g) = &mut self.gfx else { return };
         // 配置卡标签栏快照（宪法 §四）：视口宽按真实屏宽逐帧纠（捏合/
         // 旋转后内容带宽度变）；弹簧读数随快照——游标动画帧自带新值
@@ -6820,6 +6927,8 @@ impl App {
                 cfg_snap.as_ref(),
                 parser_snap.as_ref(),
                 self.session_over,
+                dc_conn,
+                dc_pending,
                 self.panel_drag.as_ref().and_then(|d| {
                     let off = d.current_offset()?;
                     let p = match d.role()? {

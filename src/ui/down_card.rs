@@ -5,6 +5,8 @@
 //! 重试 = kick_reconnect（与敲键触发同路）；切本地 = switch_session
 //! （与 Ctrl-] 同路）。会话复活（session_over=false）卡即灭——
 //! 终卡槽 sig 带 session_over 维，翻转自动重烘。
+//! 状态行文本 = status_text 纯函数（2026-09-23 BAR-135 动态化：
+//! 断线期告示全落本卡，终端正文零污染——旧蓝色内联横幅退役）。
 //!
 //! 分层：几何+命中 = 本册纯逻辑（A 档考题 tests/down_card_spec.rs）；
 //! 涂装挂终卡槽烘焙末尾（android_app 调 TermEmu::render_down_card →
@@ -93,4 +95,17 @@ pub fn hit(x: f64, y: f64, buf_w: u32) -> Option<DownHit> {
         return Some(DownHit::Local);
     }
     None
+}
+
+/// 状态行文本（纯函数，2026-09-23 BAR-135「提示全部在跳出的框上」）：
+/// 断线期的一切告示都落在这张卡上，终端正文零污染（旧蓝色横幅退役）。
+/// 三态优先级：重连在途 > 有暂存 > 裸断开
+pub fn status_text(connecting: bool, pending_bytes: usize) -> String {
+    if connecting {
+        "重连中…接回 = 新 shell（旧现场 tmux attach 接回）".to_string()
+    } else if pending_bytes > 0 {
+        format!("连接已断开 · 输入已暂存 {pending_bytes} 字节（接回自动补发）")
+    } else {
+        "连接已断开".to_string()
+    }
 }

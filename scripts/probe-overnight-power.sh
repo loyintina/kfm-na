@@ -5,9 +5,9 @@
 #
 # 默认 540 分钟 × 每 300s 一拍 ≈ 108 行。双源对账:
 #   电池侧(8022):percentage / current(µA,负=放电) / status / 温度
-#   na 侧(8024):cpu_jiffies / rss_kb / uptime / fg / pump_calls / deaths
+#   na 侧(闸门 na-stats):cpu_jiffies / rss_kb / uptime / fg / pump_calls / deaths
 # 判读:相邻拍 cpu_jiffies 差分=na 的 CPU 速率;current 均值=整机放电
-# 电流;GAP 行=8024 失联窗口(Doze 冻结?本身即数据)。结尾给 drain 摘要。
+# 电流;GAP 行=na 闸门失联窗口(Doze 冻结?本身即数据)。结尾给 drain 摘要。
 # 已知边界:充电状态整夜无效(status=CHARGING 电流读数无意义,照记)。
 set -uo pipefail
 
@@ -41,7 +41,7 @@ while [ "$(date +%s)" -lt "$END" ]; do
     if echo "$ns" | grep -q '^uptime='; then
         echo "$ts | $b | $ns" >> "$LOG"
     else
-        echo "$ts | $b | GAP(8024 失联——冻结/挂起窗口,本身即数据)" >> "$LOG"
+        echo "$ts | $b | GAP(na 闸门失联——冻结/挂起窗口,本身即数据)" >> "$LOG"
     fi
     sleep "$IV"
 done

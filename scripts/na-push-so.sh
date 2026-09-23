@@ -12,13 +12,12 @@
 # boot 报告的构建戳对得上 + na-ping alive。
 set -euo pipefail
 
-NA_KEY=/root/.ssh/na_probe_key
 NA_HOT=/data/data/dev.kfm.na/files/hot
 
-na() {
-    ssh -p 8024 -i "$NA_KEY" -o BatchMode=yes -o ConnectTimeout=6 \
-        -o StrictHostKeyChecking=no localhost "$1"
-}
+# shellcheck source=scripts/lib/na-ssh.sh
+source "$(dirname "$0")/lib/na-ssh.sh"
+
+na() { na_ssh "$1"; }
 
 NO_RESTART=0
 SRC=""
@@ -76,9 +75,7 @@ echo "=== 推送核心 ($SIZE 字节) → hot/ ==="
 na "mkdir -p $NA_HOT"
 # 原子防半写:.new → mv(若推送中断,旧核心不受损);
 # 推前留档 .so.last(2026-08-30 回退硬化):mv .last 回原名 + na-restart.sh = 秒级回退
-ssh -p 8024 -i "$NA_KEY" -o BatchMode=yes -o ConnectTimeout=10 \
-    -o StrictHostKeyChecking=no localhost \
-    "cat > $NA_HOT/libkfm_na.so.new && { [ -f $NA_HOT/libkfm_na.so ] && cp $NA_HOT/libkfm_na.so $NA_HOT/libkfm_na.so.last; mv $NA_HOT/libkfm_na.so.new $NA_HOT/libkfm_na.so; }" \
+na_ssh "cat > $NA_HOT/libkfm_na.so.new && { [ -f $NA_HOT/libkfm_na.so ] && cp $NA_HOT/libkfm_na.so $NA_HOT/libkfm_na.so.last; mv $NA_HOT/libkfm_na.so.new $NA_HOT/libkfm_na.so; }" \
     < "$LOCAL_TMP"
 na "ls -la $NA_HOT/"
 if [ "$NO_RESTART" = 1 ]; then

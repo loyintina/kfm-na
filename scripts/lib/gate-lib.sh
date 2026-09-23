@@ -16,11 +16,15 @@
 # 传输层(2026-09-11 redroid 云安卓接线):NA_TRANSPORT=adb 时闸门走
 # adbd root 直读沙箱——云安卓没有 app 内 sshd(overlay 是 aarch64 核),
 # 也不需要隧道,文件触发协议(.new→mv 原子写/轮询应答)一字不变。
-# 默认 ssh = 真机 8024。串口用 NA_ADB_SERIAL 覆盖(默认 localhost:5555)。
+# ssh 路 = na-ssh.sh 统一入口(2026-09-23 起 9022 首选/8024 备援,不再写死)。
+# 串口用 NA_ADB_SERIAL 覆盖(默认 localhost:5555)。
 
 NA_KEY=/root/.ssh/na_probe_key
 NA_TMP=/data/data/dev.kfm.na/files/usr/tmp
 NA_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+
+# shellcheck source=scripts/lib/na-ssh.sh
+source "$(dirname "${BASH_SOURCE[0]}")/na-ssh.sh"
 
 NA_TRANSPORT=${NA_TRANSPORT:-ssh}
 NA_ADB=${NA_ADB:-/root/kfm-na-toolchain/sdk/platform-tools/adb}
@@ -30,8 +34,7 @@ gate() {
     if [[ $NA_TRANSPORT == adb ]]; then
         "$NA_ADB" -s "$NA_ADB_SERIAL" shell "$1"
     else
-        ssh -p 8024 -i "$NA_KEY" -o BatchMode=yes -o ConnectTimeout=6 \
-            -o StrictHostKeyChecking=no localhost "$1"
+        na_ssh "$1"
     fi
 }
 
@@ -39,8 +42,7 @@ gate_pull() {
     if [[ $NA_TRANSPORT == adb ]]; then
         "$NA_ADB" -s "$NA_ADB_SERIAL" pull "$1" "$2" >/dev/null
     else
-        scp -P 8024 -i "$NA_KEY" -o BatchMode=yes -o StrictHostKeyChecking=no \
-            "localhost:$1" "$2" >/dev/null
+        na_scp_pull "$1" "$2" >/dev/null
     fi
 }
 

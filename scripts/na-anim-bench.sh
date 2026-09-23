@@ -1,7 +1,7 @@
 #!/bin/bash
 # na-anim-bench.sh — 池区动画帧数一键判卷（BAR-096/097 验收仪器，2026-09-16）
 #
-#   bash scripts/na-anim-bench.sh            # 真机（8024 闸门，默认）
+#   bash scripts/na-anim-bench.sh            # 真机（闸门 na-ssh.sh：9022 首选/8024 备援，默认）
 #   NA_TRANSPORT=adb bash scripts/na-anim-bench.sh   # redroid（合成率物理极限，只判正确性）
 #
 # 用途：池区动画（视口平移/光标滑行/池高）拆层前后的**帧数**对比判卷。

@@ -6,15 +6,15 @@
 #
 # 原理:na 侧 flight-rec.bin(输出流+尺寸事件+时间戳)→ scp 拉回 →
 # src/bin/na-replay.rs 喂进 host 侧同一台 TermView 复现。
-# 前提:kalo 隧道活着(8024),探针钥匙 /root/.ssh/na_probe_key。
+# 前提:na 隧道活着(na-ssh.sh:9022 首选/8024 备援),探针钥匙 /root/.ssh/na_probe_key。
 set -euo pipefail
 
-NA_KEY=/root/.ssh/na_probe_key
 NA_TMP=/data/data/dev.kfm.na/files/usr/tmp
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 
-scp -P 8024 -i "$NA_KEY" -o BatchMode=yes -o ConnectTimeout=6 \
-    -o StrictHostKeyChecking=no \
-    "localhost:$NA_TMP/flight-rec.bin" /tmp/flight-rec.bin
+# shellcheck source=scripts/lib/na-ssh.sh
+source "$(dirname "$0")/lib/na-ssh.sh"
+
+na_scp_pull "$NA_TMP/flight-rec.bin" /tmp/flight-rec.bin
 cargo run --quiet --manifest-path "$HERE/Cargo.toml" --bin na-replay -- \
     /tmp/flight-rec.bin "${1:-local}"

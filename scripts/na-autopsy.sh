@@ -12,16 +12,15 @@
 # 不用逐个文件 scp。拉回后原档不动(覆写制档案留沙箱里继续转)。
 set -euo pipefail
 
-NA_KEY=/root/.ssh/na_probe_key
 NA_TMP=/data/data/dev.kfm.na/files/usr/tmp
 TS="$(date +%Y%m%d-%H%M%S)"
 NOTE="${1:-}"
 DEST="/root/kfm-na/autopsy/$TS${NOTE:+-$NOTE}"
 
-gate() {
-    ssh -p 8024 -i "$NA_KEY" -o BatchMode=yes -o ConnectTimeout=6 \
-        -o StrictHostKeyChecking=no localhost "$1"
-}
+# shellcheck source=scripts/lib/na-ssh.sh
+source "$(dirname "$0")/lib/na-ssh.sh"
+
+gate() { na_ssh "$1"; }
 
 echo "[autopsy] ① 触发 trace/stats 落盘..."
 gate "rm -f $NA_TMP/trace.txt $NA_TMP/stats-res; touch $NA_TMP/trace-req $NA_TMP/stats-req" >/dev/null
@@ -41,9 +40,7 @@ mkdir -p "$DEST"
 # 有哪个拉哪个,缺档不致命
 for f in panic.log panic-trace.txt loop-stall.log trace.txt stats-res \
          loader-pick flight-rec.bin ping-res; do
-    scp -P 8024 -i "$NA_KEY" -o BatchMode=yes -o ConnectTimeout=6 \
-        -o StrictHostKeyChecking=no -q \
-        "localhost:$NA_TMP/$f" "$DEST/" 2>/dev/null || true
+    na_scp_pull "$NA_TMP/$f" "$DEST/" 2>/dev/null || true
 done
 
 echo "[autopsy] ③ 摘要"

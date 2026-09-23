@@ -70,16 +70,17 @@ echo "    备用取包点：$PHONE_PICKUP/$NAME"
 
 # 2026-08-31 排障实锤：na-loader 优先 dlopen {files}/hot/libkfm_na.so，
 # hot 里躺着旧热核 = 新 APK 白装（新功能全被盖住）。装包前清一次；
-# 8024 不可达（na 没在跑）就给手动路径（docs/active/热更新.md §坑）。
+# 闸门不可达（na 没在跑）就给手动路径（docs/active/热更新.md §坑）。
 echo "=== [deploy 收尾] 清 hot/ 旧热核（防盖住新包） ==="
-if [ -f /root/.ssh/na_probe_key ] && ssh -p 8024 -i /root/.ssh/na_probe_key \
-    -o BatchMode=yes -o ConnectTimeout=4 -o StrictHostKeyChecking=no \
-    localhost 'rm -f /data/data/dev.kfm.na/files/hot/libkfm_na.so' 2>/dev/null; then
+# shellcheck source=scripts/lib/na-ssh.sh
+source "$(dirname "$0")/lib/na-ssh.sh"
+if [ -f /root/.ssh/na_probe_key ] && na_ssh \
+    'rm -f /data/data/dev.kfm.na/files/hot/libkfm_na.so' 2>/dev/null; then
     echo "    ✅ hot 旧核已清，新包启动即新核"
 else
-    echo "    ⚠️ 8024 不可达（na 没在跑？）：启动新包后跑"
+    echo "    ⚠️ 闸门不可达（na 没在跑？）：启动新包后跑"
     echo "       bash scripts/na-push-so.sh 把同版新核推进 hot/ 盖住旧核，"
-    echo "       或经 8024 手动 rm hot/libkfm_na.so 再重启"
+    echo "       或经闸门(na-ssh.sh)手动 rm hot/libkfm_na.so 再重启"
 fi
 
 # 清旧包(2026-09-01):取包点只留最新 2 个——旧包误装=「已装更高版本」迷惑弹

@@ -33,6 +33,25 @@ const PATH: &str = "/kfmv4/api/na-report";
 
 static SENDER: Mutex<Option<Sender<String>>> = Mutex::new(None);
 
+/// 设备/实例标识（BAR-134）：field-reports.log 是多设备混流（手机 + redroid
+/// 同写一个文件——BAR-126 误判「多实例抢口」的根因），每行末尾挂 [arch/pid]：
+/// arch 分设备族，pid 分进程实例（同设备多实例混流时一眼可辨）。放 msg 末尾
+/// = 落盘行尾，不破坏既有按前缀 grep 的脚本（scripts/cases/* 已清点无行尾锚）。
+static INSTANCE_TAG: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+fn instance_tag() -> &'static str {
+    INSTANCE_TAG.get_or_init(|| format!("[{}/{}]", std::env::consts::ARCH, std::process::id()))
+}
+
+/// 给上报消息挂设备/实例标识（判读分道闸，见上）。空消息不领前导空格
+pub fn stamp_msg(msg: &str) -> String {
+    if msg.is_empty() {
+        instance_tag().to_string()
+    } else {
+        format!("{msg} {}", instance_tag())
+    }
+}
+
 /// 启动计时锚点（BAR-022：report 双通道的时间戳受冲洗节拍量化，段落归因
 /// 靠不住——把「距 android_main 的毫秒数」烘进里程碑消息文本，通道乱序/
 /// 量化都影响不了数值本身）。android_main 进门时 set 一次；非 Android
@@ -89,11 +108,7 @@ pub fn start_flusher() {
 pub fn report(stage: &str, msg: &str) {
     log::info!("[{stage}] {msg}");
     crate::trace::tap(stage, msg); // 行踪环旁路（过滤在环侧）
-    enqueue(format!(
-        "{{\"stage\":\"{}\",\"msg\":\"{}\"}}",
-        escape_json(stage),
-        escape_json(msg)
-    ));
+    enqueue(line_json(stage, msg));
 }
 
 /// 同步直报（仅启动第一格用）：早死进程等不到后台线程第一班车
@@ -103,11 +118,7 @@ pub fn report(stage: &str, msg: &str) {
 pub fn report_sync(stage: &str, msg: &str) {
     log::info!("[{stage}] {msg}");
     crate::trace::tap(stage, msg);
-    let line = format!(
-        "{{\"stage\":\"{}\",\"msg\":\"{}\"}}",
-        escape_json(stage),
-        escape_json(msg)
-    );
+    let line = line_json(stage, msg);
     // 连发重试无间隔：失败多是 connect 层秒挂，等不等都一样
     for _ in 0..3 {
         if try_post(&line).is_ok() {
@@ -123,14 +134,19 @@ pub fn report_sync(stage: &str, msg: &str) {
 pub fn report_sync_once(stage: &str, msg: &str) {
     log::info!("[{stage}] {msg}");
     crate::trace::tap(stage, msg);
-    let line = format!(
-        "{{\"stage\":\"{}\",\"msg\":\"{}\"}}",
-        escape_json(stage),
-        escape_json(msg)
-    );
+    let line = line_json(stage, msg);
     if try_post(&line).is_err() {
         enqueue(line);
     }
+}
+
+/// 上报行 JSON 装配（单一源：三条上报路径全走这里，设备/实例标识在此挂）
+fn line_json(stage: &str, msg: &str) -> String {
+    format!(
+        "{{\"stage\":\"{}\",\"msg\":\"{}\"}}",
+        escape_json(stage),
+        escape_json(&stamp_msg(msg))
+    )
 }
 
 fn enqueue(line: String) {

@@ -6318,7 +6318,13 @@ impl TermView {
     /// session_over 时调用（与齿轮同槽——面板靠泊槽隐，「只在裸终端页
     /// 出现」白拿）。几何全吃 ui::down_card 单源（眼手同尺）；
     /// 色源 = 终端页族 TERM_FRAME_C1/C2（终端页不随机，宪法 §色）。
-    pub(crate) fn paint_down_card(&self, frame: &mut Frame<'_>, buf_w: u32, buf_h: u32) {
+    pub(crate) fn paint_down_card(
+        &self,
+        frame: &mut Frame<'_>,
+        buf_w: u32,
+        buf_h: u32,
+        status: &str,
+    ) {
         let Some((cx, cy, cw, ch)) = crate::ui::down_card::card_rect(buf_w) else {
             return;
         };
@@ -6343,7 +6349,7 @@ impl TermView {
             let (_, ry, _, rh) = crate::ui::down_card::row_rect(buf_w).unwrap();
             self.draw_text_left(
                 frame,
-                "连接已断开",
+                status,
                 text_x as u32,
                 text_w,
                 ry as u32,
@@ -7223,8 +7229,9 @@ pub trait TermEmu: Send {
     fn move_selection_end(&mut self, which: SelEnd, x: f64, y: f64);
     fn render_magnifier(&self, buf: &mut [u32], w: u32, h: u32, x: f64, y: f64);
     /// 断线状态卡（A 断线治理）：终卡槽烘焙末尾、session_over 时调用，
-    /// 本体 = TermView::paint_down_card（几何/命中单源 ui::down_card）
-    fn render_down_card(&self, buf: &mut [u32], w: u32, h: u32);
+    /// 本体 = TermView::paint_down_card（几何/命中单源 ui::down_card）；
+    /// status = 状态行文本（ui::down_card::status_text 纯函数出品）
+    fn render_down_card(&self, buf: &mut [u32], w: u32, h: u32, status: &str);
 }
 
 impl TermEmu for TermView {
@@ -7561,9 +7568,9 @@ impl TermEmu for TermView {
     fn render_magnifier(&self, buf: &mut [u32], w: u32, h: u32, x: f64, y: f64) {
         TermView::render_magnifier(self, buf, w, h, x, y)
     }
-    fn render_down_card(&self, buf: &mut [u32], w: u32, h: u32) {
+    fn render_down_card(&self, buf: &mut [u32], w: u32, h: u32, status: &str) {
         let mut frame = Frame { buf, w, h };
-        TermView::paint_down_card(self, &mut frame, w, h)
+        TermView::paint_down_card(self, &mut frame, w, h, status)
     }
 }
 

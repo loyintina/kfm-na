@@ -4,7 +4,7 @@
 #   bash scripts/na-shot.sh           拍一张,落 /tmp/na-shot.png
 #   bash scripts/na-shot.sh --watch 3 每 3 秒拍一张(近同步直播,Ctrl-C 停)
 #
-# 链路:8024 闸门 touch 触发文件 → na 渲染循环下一帧倒 shot.rgb+shot.dim
+# 链路:闸门(na-ssh.sh:9022 首选/8024 备援) touch 触发文件 → na 渲染循环下一帧倒 shot.rgb+shot.dim
 # → scp 拉回 → PIL 转 PNG(XRGB 小端 = B,G,R,X 字节序)。
 # 前提:na 装着带 screendump 的包且在前台活着(BAR-029 保活后后台也行);
 # PIL 用 /root/.venvs/font/bin/python。

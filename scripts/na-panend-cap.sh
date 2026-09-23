@@ -6,7 +6,7 @@
 #                                    # 两域共用本仪，域名随 dim 落盘并播报），
 #                                    # 自动抓平移全序列帧+首帧稳态落盘
 #
-# 链路：8024 闸门 touch panend-cap-req → present_frame 逐帧消费（点播制，
+# 链路：闸门(na-ssh.sh:9022 首选/8024 备援) touch panend-cap-req → present_frame 逐帧消费（点播制，
 # 不投零开销）→ 平移各帧 panend-aNN.rgb + 首帧稳态 panend-b.rgb
 # +panend.dim 落 DUMP_DIR → scp 拉回 → PIL 转 PNG + 逐帧对 b 差分
 # 报告（BAR-105 复判：只留末帧说不清仪器逐帧看见什么，全序列是裁判）。

@@ -80,3 +80,23 @@ fn spec_断线卡_命中归属() {
     assert_eq!(hit(lc.0, 5.0, W), None);
     assert_eq!(hit(lc.0, local.1 as f64 + local.3 as f64 + 5.0, W), None);
 }
+
+#[test]
+fn spec_bar135_状态行_三态文本() {
+    // 优先级：重连在途 > 有暂存 > 裸断开
+    let t = kfm_na::ui::down_card::status_text;
+    assert!(
+        t(true, 0).contains("重连中"),
+        "connecting 相: {}",
+        t(true, 0)
+    );
+    assert!(
+        t(true, 42).contains("重连中"),
+        "connecting 优先于暂存: {}",
+        t(true, 42)
+    );
+    let held = t(false, 42);
+    assert!(held.contains("42"), "暂存字节数必须显形: {held}");
+    assert!(held.contains("暂存"), "暂存相: {held}");
+    assert_eq!(t(false, 0), "连接已断开");
+}

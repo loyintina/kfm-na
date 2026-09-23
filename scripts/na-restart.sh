@@ -4,7 +4,7 @@
 #   bash scripts/na-restart.sh
 #
 # 链路:闸门目录 touch restart-req → 值守线程 exit(0)(不经过事件循环,
-# 挂起态也杀得死)→ 8024 断连 = 确认死 → Termux 侧 am start 拉回 →
+# 挂起态也杀得死)→ 闸门断连 = 确认死 → Termux 侧 am start 拉回 →
 # 等 field-reports.log 出现新 boot 行 → na-ping 判 alive。
 #
 # 两个已知边界(诚实版):
@@ -17,7 +17,7 @@ set -euo pipefail
 source "$(dirname "$0")/lib/gate-lib.sh"
 REPORTS=/root/kfm-na/field-reports.log
 
-# 死活探针分传输：ssh 路 = 8024 断连即死透；adb 路 adbd 常连，
+# 死活探针分传输：ssh 路 = 闸门断连即死透(na-ssh.sh:9022 首选/8024 备援)；adb 路 adbd 常连，
 # 改看 pidof（2026-09-11 redroid 接线）
 alive_probe() {
     if [[ $NA_TRANSPORT == adb ]]; then
@@ -47,10 +47,10 @@ pull_foreground() {
 BEFORE=$(boot_count)
 echo "=== ① 触发 restart-req(重跑防御同步实证:此番若旧进程冻结,BAR-037 接) ==="
 if ! gate "touch $NA_TMP/restart-req"; then
-    echo "⚠️ 8024 不通——na 本就死着或隧道断,直接拉回" >&2
+    echo "⚠️ 闸门不通——na 本就死着或隧道断,直接拉回" >&2
 fi
 
-echo "=== ② 等 8024 断连(确认旧进程死透) ==="
+echo "=== ② 等闸门断连(确认旧进程死透) ==="
 FROZEN=0
 if wait_dead 10; then
     echo "    已断连"

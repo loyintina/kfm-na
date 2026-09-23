@@ -1,9 +1,9 @@
 #!/bin/bash
-# test-bg-survival.sh — BAR-029 实拍判卷:na 退后台后 8024 闸门必须存活
+# test-bg-survival.sh — BAR-029 实拍判卷:na 退后台后闸门必须存活(na-ssh.sh:9022 首选/8024 备援)
 #
 # 原理(2026-08-23 实证闭环):
 #   控制面:8022(Termux)`am start` 遥控前后台切换,不用人碰手机;
-#   探针面:8024 ssh 探针——na 被 cached-app 冻结器冻住时的症状是
+#   探针面:闸门 ssh 探针——na 被 cached-app 冻结器冻住时的症状是
 #   「Connection timed out during banner exchange」(TCP 握手由内核
 #   backlog 完成,但进程冬眠发不出 banner),一探一个准。
 #
@@ -11,14 +11,14 @@
 # 拉回前台。后台全程零断流 = 通过。
 #
 # 用法: bash scripts/test-bg-survival.sh [持续秒数,默认 120]
-# 前提: kalo 隧道活着(8022/8024),探针钥匙 /root/.ssh/na_probe_key
+# 前提: kalo 隧道活着(8022 Termux 控制面 + 闸门 na-ssh.sh),探针钥匙 /root/.ssh/na_probe_key
 set -uo pipefail
 
-NA_KEY=/root/.ssh/na_probe_key
+# shellcheck source=scripts/lib/na-ssh.sh
+source "$(dirname "$0")/lib/na-ssh.sh"
 
 probe() {
-    ssh -p 8024 -i "$NA_KEY" -o BatchMode=yes -o ConnectTimeout=6 \
-        -o StrictHostKeyChecking=no localhost true >/dev/null 2>&1
+    na_ssh true >/dev/null 2>&1
 }
 
 phone() {
