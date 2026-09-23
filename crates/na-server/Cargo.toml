@@ -12,7 +12,7 @@ path = "src/main.rs"
 na-protocol = { path = "../na-protocol" }
 na-sys = { path = "../na-sys" }
 na-quic = { path = "../na-quic" }
-rustls = { version = "0.23", features = ["ring"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "logging"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt", "macros", "time", "sync", "net", "io-util"] }
 tokio-tungstenite = "0.26"

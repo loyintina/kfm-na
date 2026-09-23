@@ -6,7 +6,9 @@ description = "na QUIC 隧道：quinn endpoint + TCP↔stream 桥接（手机/�
 
 [dependencies]
 quinn = "0.11"
-rustls = { version = "0.23", features = ["ring"] }
+# ring 唯一后端（与主仓同宗）：rustls 默认件带 aws-lc-rs——巨型 C 源
+# 树拖累 vendor/手机编，且与 ring 并存要装默认 provider，全是负资产
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "logging"] }
 rcgen = "0.13"
 sha2 = "0.10"
 tokio = { version = "1", features = ["rt", "macros", "time", "net", "io-util", "sync"] }
