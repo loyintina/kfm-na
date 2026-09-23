@@ -16,9 +16,13 @@
 > hex 打 stderr 供抄手机；绑定闸放宽为「回环或显式 0.0.0.0」。③**端口
 > 双口拍板（用户）**：62633 正连数据路 / 62694 反连推送路（M4 用），
 > 单一源 `settings::QUIC_DEFAULT_PORT/QUIC_REVERSE_PORT`。④servers.json
-> quic 段加 `psk`，齐件判定升「两证齐全才准开腿」。**下一步**：用户在
-> 阿里云安全组放 UDP 62633 → redroid 真链冒烟 → 真机验证。8021 无典故
-> （8080 衍生直觉段），已答。
+> quic 段加 `psk`，齐件判定升「两证齐全才准开腿」。**已部署（当晚）**：
+> 常驻 unit 挂 NA_QUIC_BIND=0.0.0.0:62633（22c54e9），生产重启生效，证书/
+> psk 已生成（/root/kfm-na/certs/quic.*，指纹与 psk 在 /var/log/
+> kfm-na-server.log）；**生产冒烟双判过**：对钥匙经桥 health JSON 全还 /
+> 错钥匙零字节（工具 crates/na-quic/examples/quic_bridge.rs）。**下一步**：
+> 用户在阿里云安全组放 UDP 62633 → 手机 servers.json 填 quic 段（pin/psk
+> 见日志）→ 真链验证。8021 无典故（8080 衍生直觉段），已答。
 
 > **QUIC 隧道线 M3 闭环（2026-09-23 下午）**：设计 docs/active/quic隧道.md
 > （§九 部署配置章新增）。①**na-quic 桥接库成型**：`run_server`（QUIC 入流
