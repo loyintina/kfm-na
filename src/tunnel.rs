@@ -179,6 +179,26 @@ pub fn should_release_port(established: bool, stderr_tail: &str, remote_port: u1
     established || should_release_forward(stderr_tail, remote_port)
 }
 
+/// 伴生「死前绑过」代理判据（A 档纯函数，BAR-147）：撞口死因是
+/// ExitOnForwardFailure 速死（~1s），活过 2s 的伴生必已绑上 9022——
+/// 它一死，服务器侧旧会话成无主尸体占口，重拉前必须同步释放
+pub fn companion_established(lived_secs: u64) -> bool {
+    lived_secs >= 2
+}
+
+/// 伴生重拉封锁时长（A 档纯函数，BAR-147）：撞口/死前绑过 → 按
+/// release_wait 睡（释放确认 0s/失败 2s）；其余死因至少 1s——任何
+/// 路径都不许零间隔重拉（exit 后立即 spawn 必撞服务器侧旧 sshd
+/// 尸体，ExitOnForwardFailure 255 再撞，每秒空转活锁：2026-09-24
+/// logcat「段尾重拉」1s 循环 + auth.log bind 9022 连发，双侧实录）
+pub fn companion_hold_secs(releasing: bool, release_ok: bool) -> u64 {
+    if releasing {
+        release_wait(release_ok)
+    } else {
+        1
+    }
+}
+
 /// 端到端探活连败裁决（A 档纯函数，BAR-140）：本地口通 ≠ 隧道活——
 /// NAT 吞 RST 时 ssh 僵尸仍举着本地监听，probe_port 全绿而数据已死，
 /// 干等 ssh 自己的 keepalive 要 10s。穿透隧道打 na-server 健康面，
@@ -657,6 +677,10 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
         let mut was_up = false;
         // 端到端探活连败计数（BAR-140，看门狗线程私有）
         let mut e2e_miss: u32 = 0;
+        // 伴生重拉封锁（BAR-147，看门狗线程私有）：伴生死后不到点不许
+        // spawn——零间隔重拉必撞服务器侧旧 sshd 尸体（9022 还在它手里），
+        // ExitOnForwardFailure 255 再撞，每秒空转活锁
+        let mut companion_hold_until: Option<std::time::Instant> = None;
         // 杀娃重拉（BAR-140/141 共用）：杀娃收尸、退避清零、死前绑过顺路
         // 请服务器收尸（免下一 spawn 白撞 255）；状态落 Down，调用方 continue
         let kill_zombie =
@@ -777,15 +801,69 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                     continue;
                 }
                 // 伴生 -R ssh 死亡审理：死了就地收，段尾重生（数据路不归它，
-                // 状态不动——QUIC 腿在，卡上就不许为推送路抖动翻状态）
+                // 状态不动——QUIC 腿在，卡上就不许为推送路抖动翻状态）。
+                // BAR-147 赛跑根修：重拉不许零间隔——exit 后立即 spawn 必撞
+                // 服务器侧旧 sshd 尸体（9022 还在它手里）→ ExitOnForwardFailure
+                // 255 再撞，每秒空转活锁。与数据腿同一治法：同步释放确认 +
+                // 封锁到点放行（闸在重生段前）
                 if let Some(c) = child.as_mut()
                     && let Some(code) = c.try_wait().ok().flatten()
                 {
+                    let lived = spawned_at
+                        .map(|t| t.elapsed().as_secs())
+                        .unwrap_or(u64::MAX);
+                    spawned_at = None;
+                    let tail = ssh_err
+                        .as_ref()
+                        .and_then(|r| {
+                            r.lock()
+                                .ok()
+                                .map(|g| g.iter().cloned().collect::<Vec<_>>().join(" | "))
+                        })
+                        .unwrap_or_default();
+                    ssh_err = None;
                     crate::report::report(
                         "tunnel",
-                        &format!("伴生 -R ssh 退出（{code:?}），段尾重拉"),
+                        &format!(
+                            "伴生 -R ssh 退出（{code:?}，活 {lived}s），段尾重拉{}",
+                            if tail.is_empty() {
+                                String::new()
+                            } else {
+                                format!("；stderr: {tail}")
+                            }
+                        ),
                     );
                     child = None;
+                    let releasing = should_release_port(
+                        companion_established(lived),
+                        &tail,
+                        server.tunnel.remote_port,
+                    );
+                    let hold_s = if releasing {
+                        let ok = release_forward_sync(
+                            &prefix,
+                            &server,
+                            std::time::Duration::from_secs(2),
+                        );
+                        crate::report::report(
+                            "tunnel",
+                            &format!(
+                                "伴生重拉：反连口 {} 释放（{}）同步确认={}",
+                                server.tunnel.remote_port,
+                                if companion_established(lived) {
+                                    "死前绑过，残留会话无主"
+                                } else {
+                                    "撞口后"
+                                },
+                                ok
+                            ),
+                        );
+                        companion_hold_secs(true, ok)
+                    } else {
+                        companion_hold_secs(false, false)
+                    };
+                    companion_hold_until =
+                        Some(std::time::Instant::now() + std::time::Duration::from_secs(hold_s));
                 }
                 // 端到端探活（BAR-140 同款判据打 QUIC 桥）：连败×2 收腿
                 if port_open {
@@ -1036,6 +1114,32 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                         );
                     }
                 }
+            }
+            // 伴生重拉封锁闸（BAR-147）：封锁期到点才放行——没有这道闸，
+            // 伴生死亡块后面就是 spawn，零间隔重拉必撞 9022 尸体活锁。
+            // 用户在等（Reconnect/ResumeKick）立即放行：命令优先于封锁
+            if quic.is_some()
+                && child.is_none()
+                && let Some(until) = companion_hold_until
+            {
+                if std::time::Instant::now() < until {
+                    match wait(&cmd_rx, std::time::Duration::from_secs(1)) {
+                        Some(TunnelCmd::Reconnect) => {
+                            companion_hold_until = None;
+                            reconnect(
+                                &mut child,
+                                &mut quic,
+                                &mut attempts,
+                                &mut quic_fails,
+                                &snap_t,
+                            );
+                        }
+                        Some(TunnelCmd::ResumeKick) => companion_hold_until = None,
+                        None => {}
+                    }
+                    continue;
+                }
+                companion_hold_until = None;
             }
             // ssh 参数：腿在 = -R-only 伴生；腿不在 = 全量正连（-L + -R）
             let ssh_args = if quic.is_some() {

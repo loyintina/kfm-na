@@ -401,6 +401,27 @@ fn spec_bar141_回前台即审_健康不碰僵尸即杀() {
 // ---- QUIC 腿（M3c，默认关）：齐件判定 / 指纹解析 / 腿裁决 / -R-only 参数 ----
 
 #[test]
+fn spec_bar147_伴生重拉_撞口先释放_零间隔禁令() {
+    // BAR-147：伴生 -R ssh（QUIC 模式的 9022 推送路）死亡重拉的真值表。
+    // 病灶：exit 后立即 spawn 撞服务器侧旧 sshd 尸体，255 每秒空转活锁
+    use kfm_na::tunnel::{companion_established, companion_hold_secs};
+    // 死前绑过代理：撞口速死 ~1s；活过 2s = 必已绑上 9022
+    assert!(!companion_established(0), "秒死 = 没绑上");
+    assert!(!companion_established(1), "撞口速死 = 没绑上");
+    assert!(companion_established(2), "活过 2s = 必已绑上");
+    assert!(companion_established(3600), "久活 = 绑过");
+    // 封锁时长：释放路径吃 release_wait（确认 0s 直放/失败 2s 重试）；
+    // 非撞口死因也至少睡 1s——任何路径都不许零间隔重拉
+    assert_eq!(companion_hold_secs(true, true), 0, "释放确认 = 零等待直放");
+    assert_eq!(companion_hold_secs(true, false), 2, "释放失败 = 2s 后重试");
+    assert_eq!(
+        companion_hold_secs(false, false),
+        1,
+        "非撞口也至少 1s——零间隔禁令"
+    );
+}
+
+#[test]
 fn spec_bar146_腿starting超时_定罪重拉() {
     // BAR-146：腿对象在但本地口始终没开（握手挂死，死信不会来）——
     // 超宽限必须定罪；口开了/没到宽限不许冤杀。真值表：
