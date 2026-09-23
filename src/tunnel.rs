@@ -85,10 +85,16 @@ pub fn forward_args(s: &ServerEntry) -> Result<Vec<String>, String> {
         "BatchMode=yes".into(),
         "-o".into(),
         "StrictHostKeyChecking=accept-new".into(),
+        // 断线检测三件套（2026-09-23 BAR-140，「孤岛也要秒回」加固）：
+        // ConnectTimeout=5——断网期 spawn 不许挂 75s TCP SYN 重试，
+        // 5s 速败让退避表接管；ServerAlive 5×2——NAT 吞 RST 的静默死
+        // 检测从 45s 压到 10s（端到端探活还会更快杀，见 e2e_strike）
         "-o".into(),
-        "ServerAliveInterval=15".into(),
+        "ConnectTimeout=5".into(),
         "-o".into(),
-        "ServerAliveCountMax=3".into(),
+        "ServerAliveInterval=5".into(),
+        "-o".into(),
+        "ServerAliveCountMax=2".into(),
         "-o".into(),
         "ExitOnForwardFailure=yes".into(),
         "-p".into(),
@@ -167,6 +173,41 @@ pub fn should_release_forward(stderr_tail: &str, remote_port: u16) -> bool {
 /// 不 established 且非撞口死因（如认证失败）一律不动——不许误杀活会话
 pub fn should_release_port(established: bool, stderr_tail: &str, remote_port: u16) -> bool {
     established || should_release_forward(stderr_tail, remote_port)
+}
+
+/// 端到端探活连败裁决（A 档纯函数，BAR-140）：本地口通 ≠ 隧道活——
+/// NAT 吞 RST 时 ssh 僵尸仍举着本地监听，probe_port 全绿而数据已死，
+/// 干等 ssh 自己的 keepalive 要 10s。穿透隧道打 na-server 健康面，
+/// 连败满 strike 即杀娃重拉。活着 → 清零；杀 → (0, true) 调用方立即重拉
+pub fn e2e_strike(prev: u32, alive: bool) -> (u32, bool) {
+    if alive {
+        (0, false)
+    } else {
+        let n = prev + 1;
+        (n, n >= 2)
+    }
+}
+
+/// 端到端探活（B 档）：穿透本地转发口打 na-server 健康面，认 HTTP 200。
+/// 超时 1.2s——两次连败 ≈ 2~3s 定罪僵尸，比 keepalive 快一个量级
+fn probe_e2e(port: u16) -> bool {
+    use std::io::{Read as _, Write as _};
+    let Ok(mut s) = std::net::TcpStream::connect_timeout(
+        &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+        std::time::Duration::from_millis(500),
+    ) else {
+        return false;
+    };
+    let _ = s.set_read_timeout(Some(std::time::Duration::from_millis(1200)));
+    let _ = s.set_write_timeout(Some(std::time::Duration::from_millis(500)));
+    let req = "GET /api/na/health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
+    if s.write_all(req.as_bytes()).is_err() {
+        return false;
+    }
+    let _ = s.shutdown(std::net::Shutdown::Write);
+    let mut resp = Vec::new();
+    let _ = s.read_to_end(&mut resp);
+    crate::report::http_status_is_200(&resp)
 }
 
 /// 状态词（A 档纯函数）：连接/服务卡状态行的唯一文案源。
@@ -417,6 +458,8 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
         let mut spawned_at: Option<std::time::Instant> = None;
         // 死前转发是否绑上过（口开过 = 服务器那条 -R 会话存在过；它一死即无主）
         let mut was_up = false;
+        // 端到端探活连败计数（BAR-140，看门狗线程私有）
+        let mut e2e_miss: u32 = 0;
         let mut ssh_err: Option<Arc<Mutex<VecDeque<String>>>> = None;
         loop {
             let port = server.tunnel.local_port;
@@ -437,6 +480,37 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
 
             if child_alive {
                 was_up = port_open;
+                // 端到端探活（BAR-140）：本地口通 ≠ 隧道活——NAT 吞 RST 时
+                // ssh 僵尸举着本地监听，数据面已死。连败×2 即杀娃立即重拉
+                // （不等 ssh keepalive 10s，不等退避）；死前绑过 → 顺路请
+                // 服务器收尸，免下一 spawn 白撞一次 255
+                if port_open {
+                    let (n, kill) = e2e_strike(e2e_miss, probe_e2e(port));
+                    e2e_miss = n;
+                    if kill {
+                        crate::report::report(
+                            "tunnel",
+                            "端到端探活连败×2：僵尸隧道定罪，杀娃立即重拉",
+                        );
+                        if let Some(mut c) = child.take() {
+                            let _ = c.kill();
+                            let _ = c.wait();
+                        }
+                        e2e_miss = 0;
+                        attempts = 0; // 定罪即赦：下一拍零退避直接 spawn
+                        if was_up {
+                            kick_release_forward(&prefix, &server);
+                        }
+                        set(
+                            TunnelState::Down {
+                                attempts: 0,
+                                last_error: "端到端探活连败".into(),
+                            },
+                            &snap_t,
+                        );
+                        continue;
+                    }
+                }
                 set(
                     if port_open {
                         TunnelState::Up

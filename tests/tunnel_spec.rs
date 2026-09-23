@@ -55,8 +55,16 @@ fn spec_转发参数_本地段() {
         "绑定失败必须死掉让看门狗知情，不许静默裸奔"
     );
     assert!(
-        a.iter().any(|x| x.starts_with("ServerAliveInterval=")),
-        "保活探测"
+        a.iter().any(|x| x == "ServerAliveInterval=5"),
+        "保活探测 5s 一拍（BAR-140：静默死检测 45s→10s）"
+    );
+    assert!(
+        a.iter().any(|x| x == "ServerAliveCountMax=2"),
+        "两拍不应即判死"
+    );
+    assert!(
+        a.iter().any(|x| x == "ConnectTimeout=5"),
+        "断网期 spawn 5s 速败（BAR-140：不许挂 75s SYN 重试）"
     );
     assert!(a.last().unwrap() == "root@8.145.46.182", "目的端收尾");
     assert!(
@@ -337,4 +345,17 @@ fn spec_bar138_退避抖动_相位打散() {
         seen.contains(&2) && seen.contains(&3),
         "抖动未生效：连采只见 {seen:?}"
     );
+}
+
+#[test]
+fn spec_bar140_端到端探活连败_即杀即拉() {
+    // BAR-140：本地口通 ≠ 隧道活（NAT 吞 RST，ssh 僵尸举监听）。
+    // 连败×2 才杀（单发抖动不冤杀）；活一拍清零；杀后计数归零（立即重拉）
+    use kfm_na::tunnel::e2e_strike;
+    assert_eq!(e2e_strike(0, true), (0, false), "活：清零不杀");
+    assert_eq!(e2e_strike(1, true), (0, false), "活：清掉前科");
+    assert_eq!(e2e_strike(0, false), (1, false), "首败：记账不杀");
+    assert_eq!(e2e_strike(1, false), (2, true), "连败×2：定罪杀");
+    // 杀完归零由调用方负责，裁决函数自身不许返回负计数
+    assert_eq!(e2e_strike(5, true), (0, false), "再多前科也清零");
 }
