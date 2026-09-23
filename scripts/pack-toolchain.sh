@@ -34,9 +34,11 @@ ssh -p "$PORT" -o StrictHostKeyChecking=no -o ConnectTimeout=15 "$PHONE" 'bash -
 set -uo pipefail
 PREFIX=/data/data/com.termux/files/usr
 OUT=$REMOTE_PACK
-# 依赖闭包：rust/clang 递归依赖，只留已装包名
+# 依赖闭包：rust/clang 递归依赖，只留已装包名。libicu 手动补种——
+# libxml2 链 libicuuc 却不申报（spike 3 实踩：重定位后 rustc 报
+# libicuuc.so.78 not found；补库后 LD_TRACE_LOADED_OBJECTS 扫描全绿定档）
 PKGS=\$(apt-cache depends --recurse --no-recommends --no-suggests \
-    --no-conflicts --no-breaks --no-replaces --no-enhances rust clang 2>/dev/null \
+    --no-conflicts --no-breaks --no-replaces --no-enhances rust clang libicu 2>/dev/null \
     | grep -E '^[a-zA-Z0-9]' | sort -u \
     | while read -r p; do dpkg -s "\$p" >/dev/null 2>&1 && echo "\$p"; done)
 echo "[pack-toolchain] 手机侧包闭包：\$(echo "\$PKGS" | tr '\n' ' ')" >&2

@@ -14,5 +14,7 @@ grep -q 'sha256sum' "$S" || fail "sha256 对账被摘"
 grep -q '\-f "\\$f"' "$S" || fail "files-only 清单被摘（目录递归事故回魂）"
 grep -q 'REMOTE_PACK=/data/data/com.termux/files/home' "$S" \
     || fail "远端产物路径必须是绝对路径（\$HOME 服务器侧展开命案回魂）"
+grep -q 'rust clang libicu' "$S" \
+    || fail "闭包补种被摘（libxml2 链 libicuuc 不申报，spike 3 实踩）"
 grep -q "REMOTE' | zstd" "$S" && fail "长流直压反模式回魂"
 echo "✅ pack-toolchain 契约钉过"
