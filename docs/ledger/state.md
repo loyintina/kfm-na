@@ -12,7 +12,14 @@
 > 归服务器全天**——pre-commit 全天本地跑 chain.sh（白天双甲，09-01 修订
 > 实测合规），chain-phone 降级可选、stamp 机制退役，AGENTS.md 公约 1 已
 > 修订；②**「编译舱」立项**——docs/active/编译舱.md（工具链包/9022 传输/
-> 私有目录落点/两版驱动/spike 三项），spike 未跑，旧手机开机全链为终验。
+> 私有目录落点/两版驱动/spike 三项）。**spike 三项已全绿（2026-09-23
+> 下午）**：①冷编 3m01s/单进程峰值 1.2GB/target 496MB；②vendor 376MB
+> 离线 check 47s；③251MB 快照经 9022 入 na 私有目录，rustc/cargo/clang
+> 跑通、hello 世界 na-hatch-ok。两命案入账：BAR-136（8022 冻结掐长流
+> →两阶段可续传+契约钉）、BAR-137（libxml2 链 libicuuc 不申报→闭包
+> 补种）。产物 /root/kfm-na-toolchain/（251MB+manifest）；手机 na 私有
+> 目录 toolchain/ 已留（1.1GB）。下一棒 = v1 首航：na 侧真编 kfm-na
+> .so（待拍板）。旧手机开机全链为终验。
 > 上一个提交 `3f12f53`（+`2e3c1f9`）三件断连治理已三推、.so 已热更手机
 > hot/（未重启，na 重启即生效）。
 
