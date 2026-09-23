@@ -6,7 +6,8 @@
 //! - NA_IDLE_EXIT_SECS  无连接无会话持续 N 秒自退（缺省 1800，0 = 永不）
 //! - NA_QUIC_BIND       QUIC 腿监听（可选，不设=不开；设计 docs/active/quic隧道.md）
 //! - NA_QUIC_CERT       QUIC 证书路径前缀（缺省 /root/kfm-na/certs/quic，
-//!   首跑自签落盘 {前缀}.der / {前缀}.key.der）
+//!   首跑自签落盘 {前缀}.der / {前缀}.key.der，并生成客户端证
+//!   预共享密钥 {前缀}.psk——开 QUIC 腿即强制 HMAC 挑战，设计 §四）
 //!
 //! 分流：peek 请求头不消费——见 Upgrade: websocket 交 wsterm（tokio-tungstenite
 //! 从头自读），否则按平面 HTTP 处理（httpd）。
@@ -42,25 +43,66 @@ fn assert_loopback(addr: &str) {
 }
 
 /// QUIC 腿（可选，设计 docs/active/quic隧道.md §二桥接模型）：QUIC 入流
-/// 读 2 字节端口头 → 回联本机 TCP（9021 自己）——协议层零改动，QUIC 只是
-/// 载体。§七问题 1（公网 UDP 口）裁决前与 TCP 同走回环硬闸。
+/// 读流头（2 字节端口 + 32 字节认证标签）→ 回联本机 TCP（9021 自己）——
+/// 协议层零改动，QUIC 只是载体。绑公网必须显式写 0.0.0.0（默认回环不变）；
+/// 开腿即强制客户端证（HMAC 挑战，设计 §四——公网口的前置条件）。
 fn spawn_quic_leg() {
     let Ok(bind) = std::env::var("NA_QUIC_BIND") else {
         return;
     };
-    assert_loopback(&bind);
+    {
+        let host = bind.rsplit_once(':').map(|(h, _)| h).unwrap_or(&bind);
+        assert!(
+            host == "127.0.0.1" || host == "localhost" || host == "::1" || host == "0.0.0.0",
+            "NA_QUIC_BIND 只准回环或显式 0.0.0.0，收到: {bind}"
+        );
+    }
     let prefix = std::env::var("NA_QUIC_CERT").unwrap_or_else(|_| "/root/kfm-na/certs/quic".into());
     let (certs, key) = load_or_gen_cert(&prefix);
+    let psk = load_or_gen_psk(&format!("{prefix}.psk"));
     eprintln!(
-        "[na-server] QUIC 听 {bind}（证书指纹 {}）",
+        "[na-server] QUIC 听 {bind}（证书指纹 {} / 客户端证已开）",
         hex(&na_quic::cert_fingerprint(&certs[0]))
     );
     let addr: std::net::SocketAddr = bind.parse().expect("NA_QUIC_BIND 解析");
     tokio::spawn(async move {
-        if let Err(e) = na_quic::run_server(addr, na_quic::server_config(certs, key)).await {
+        if let Err(e) =
+            na_quic::run_server(addr, na_quic::server_config(certs, key), Some(psk)).await
+        {
             eprintln!("[na-server] QUIC 腿退出: {e}");
         }
     });
+}
+
+/// 预共享密钥加载或首跑生成落盘（客户端证，设计 §四）：32 字节随机，
+/// 0600——与 ssh 私钥同保管等级；hex 打一次 stderr 供抄进手机设置
+fn load_or_gen_psk(path: &str) -> [u8; 32] {
+    if let Ok(b) = std::fs::read(path)
+        && b.len() == 32
+    {
+        return b.try_into().expect("32 字节");
+    }
+    let mut k = [0u8; 32];
+    use std::io::Read as _;
+    std::fs::File::open("/dev/urandom")
+        .expect("urandom")
+        .read_exact(&mut k)
+        .expect("读随机源");
+    if let Some(dir) = std::path::Path::new(path).parent() {
+        std::fs::create_dir_all(dir).expect("密钥目录");
+    }
+    std::fs::write(path, k).expect("密钥落盘");
+    // 0600：私钥级权限（unix 限定；host 侧考题跑在 Linux 上）
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    }
+    eprintln!(
+        "[na-server] 客户端证预共享密钥（hex，抄进手机 servers.json 的 quic.psk）: {}",
+        hex(&k)
+    );
+    k
 }
 
 /// 证书加载或首跑自签落盘（指纹 pinning 的比对物必须持久——设计 §四）

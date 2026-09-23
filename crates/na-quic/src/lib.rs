@@ -59,6 +59,65 @@ pub fn cert_fingerprint(der: &rustls::pki_types::CertificateDer<'_>) -> [u8; 32]
     h.finalize().into()
 }
 
+// ---- 客户端证（设计 §四：预共享密钥 HMAC 挑战——服务器认密钥不认 IP） ----
+
+/// HMAC-SHA256（RFC 2104 手卷——不引 hmac 依赖，vendor 免重生；
+/// 判卷 = RFC 4231 标准向量，tests/auth_spec.rs 钉死）
+pub fn hmac_sha256(key: &[u8], msg: &[u8]) -> [u8; 32] {
+    use sha2::Digest as _;
+    let mut k = [0u8; 64];
+    if key.len() > 64 {
+        k[..32].copy_from_slice(&sha2::Sha256::digest(key));
+    } else {
+        k[..key.len()].copy_from_slice(key);
+    }
+    let mut ipad = [0x36u8; 64];
+    let mut opad = [0x5cu8; 64];
+    for i in 0..64 {
+        ipad[i] ^= k[i];
+        opad[i] ^= k[i];
+    }
+    let mut inner = sha2::Sha256::new();
+    inner.update(ipad);
+    inner.update(msg);
+    let ih = inner.finalize();
+    let mut outer = sha2::Sha256::new();
+    outer.update(opad);
+    outer.update(ih);
+    outer.finalize().into()
+}
+
+/// 认证标签长度（流头 = 2 字节端口 + 32 字节标签）
+pub const AUTH_TAG_LEN: usize = 32;
+
+/// 认证标签：HMAC(psk, "na-quic-auth-v1" || 端口头)。标签在 TLS 内部
+/// 传输——攻击者看不见（加密）也伪造不了（无钥），静态标签已足够；
+/// 绑端口头 = 标签不可跨端口挪用
+pub fn auth_tag(psk: &[u8; 32], port: u16) -> [u8; 32] {
+    let mut m = [0u8; 17];
+    m[..15].copy_from_slice(b"na-quic-auth-v1");
+    m[15..].copy_from_slice(&port.to_be_bytes());
+    hmac_sha256(psk, &m)
+}
+
+/// 常量时间比对（认证面不许早退——时序侧信道零成本就堵上）
+pub fn ct_eq(a: &[u8; 32], b: &[u8; 32]) -> bool {
+    a.iter()
+        .zip(b.iter())
+        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
+        == 0
+}
+
+/// 认证连败封禁裁决（A 档纯函数）：同一来源连败满 trip 次，ban_secs 内
+/// 不再给它花一个字节的处理——在线枚举 32 字节密钥本是天文数字，
+/// 这道闸防的是资源消耗，不是枚举本身
+pub const AUTH_FAIL_TRIP: u32 = 5;
+pub const AUTH_BAN_SECS: u64 = 600;
+
+pub fn ban_verdict(fails: u32, elapsed_secs: u64) -> bool {
+    fails >= AUTH_FAIL_TRIP && elapsed_secs < AUTH_BAN_SECS
+}
+
 /// 服务器 QUIC 配置
 pub fn server_config(
     certs: Vec<rustls::pki_types::CertificateDer<'static>>,
@@ -177,22 +236,60 @@ async fn splice(
     tokio::join!(up, down);
 }
 
-/// 服务器腿：QUIC 监听，每条入站流读 2 字节端口头 → 回联 127.0.0.1:{port}
-/// → splice。连接级循环：连接死了 accept 出错返回（看门狗外侧重建）
-pub async fn run_server(bind: SocketAddr, cfg: ServerConfig) -> std::io::Result<()> {
+/// 服务器腿：QUIC 监听，每条入站流读流头 → 回联 127.0.0.1:{port} →
+/// splice。流头 = 2 字节端口；psk 为 Some 时再读 32 字节认证标签，
+/// 验不过直接弃流并按来源 IP 记连败（满 AUTH_FAIL_TRIP 封 10 分钟）。
+/// 连接级循环：连接死了 accept 出错返回（看门狗外侧重建）
+pub async fn run_server(
+    bind: SocketAddr,
+    cfg: ServerConfig,
+    psk: Option<[u8; 32]>,
+) -> std::io::Result<()> {
+    use std::collections::HashMap;
     let ep = Endpoint::server(cfg, bind).map_err(|e| std::io::Error::other(e.to_string()))?;
+    // 连败账（来源 IP → (次数, 首次失败时刻)）——认证面的资源闸
+    let fails = std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::<
+        std::net::IpAddr,
+        (u32, std::time::Instant),
+    >::new()));
     while let Some(inc) = ep.accept().await {
+        let fails = std::sync::Arc::clone(&fails);
         tokio::spawn(async move {
             let Ok(conn) = inc.await else { return };
+            let ip = conn.remote_address().ip();
+            {
+                let g = fails.lock().await;
+                if let Some(&(n, t0)) = g.get(&ip)
+                    && ban_verdict(n, t0.elapsed().as_secs())
+                {
+                    conn.close(1u32.into(), b"auth banned");
+                    return;
+                }
+            }
             loop {
                 let stream = conn.accept_bi().await;
                 let Ok((send, mut recv)) = stream else { break };
+                let fails = std::sync::Arc::clone(&fails);
                 tokio::spawn(async move {
                     let mut hdr = [0u8; 2];
                     if recv.read_exact(&mut hdr).await.is_err() {
                         return;
                     }
                     let port = parse_port_header(&hdr);
+                    if let Some(k) = psk {
+                        let mut tag = [0u8; AUTH_TAG_LEN];
+                        let ok = recv.read_exact(&mut tag).await.is_ok()
+                            && ct_eq(&tag, &auth_tag(&k, port));
+                        if !ok {
+                            let mut g = fails.lock().await;
+                            let e = g.entry(ip).or_insert((0, std::time::Instant::now()));
+                            if e.1.elapsed().as_secs() >= AUTH_BAN_SECS {
+                                *e = (0, std::time::Instant::now());
+                            }
+                            e.0 += 1;
+                            return;
+                        }
+                    }
                     let target = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
                     let Ok(tcp) = tokio::net::TcpStream::connect(target).await else {
                         return;
@@ -206,16 +303,18 @@ pub async fn run_server(bind: SocketAddr, cfg: ServerConfig) -> std::io::Result<
 }
 
 /// 客户端腿：连上服务器保持一条 QUIC 连接；本机 TCP 监听器每收一个
-/// 连接 → 开一条流（写端口头 = target_port）→ splice。连接死 = 本函数
-/// 返回（看门狗外侧重建——死亡检测是事件驱动的，这就是 QUIC 腿比 ssh
-/// 腿省掉探活三件套的原因）。target_port 与 local_bind 解耦：部署惯例
-/// 双端同口（9021→9021），但桥接模型本身不绑这个约定
+/// 连接 → 开一条流（写端口头 = target_port；psk 为 Some 时续写认证
+/// 标签——设计 §四客户端证）→ splice。连接死 = 本函数返回（看门狗
+/// 外侧重建——死亡检测是事件驱动的，这就是 QUIC 腿比 ssh 腿省掉探活
+/// 三件套的原因）。target_port 与 local_bind 解耦：部署惯例双端同口
+/// （9021→9021），但桥接模型本身不绑这个约定
 pub async fn run_client(
     server: SocketAddr,
     sni: &str,
     local_bind: SocketAddr,
     target_port: u16,
     cfg: ClientConfig,
+    psk: Option<[u8; 32]>,
 ) -> std::io::Result<()> {
     let mut ep = Endpoint::client(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)))
         .map_err(|e| std::io::Error::other(e.to_string()))?;
@@ -233,6 +332,11 @@ pub async fn run_client(
         };
         tokio::spawn(async move {
             if send.write_all(&port_header(target_port)).await.is_err() {
+                return;
+            }
+            if let Some(k) = psk
+                && send.write_all(&auth_tag(&k, target_port)).await.is_err()
+            {
                 return;
             }
             splice(tcp, send, recv).await;

@@ -85,12 +85,18 @@ httpd/wsterm）。QUIC 直吃 = 协议消费点×2，漂移门×2。桥接把 QU
 
 ## 四、认证（双向 pinning，复用 ssh 心智）
 
-QUIC 强制 TLS 1.3，方案按 ssh 信任模型抄：
+QUIC 强制 TLS 1.3，方案按 ssh 信任模型抄（**2026-09-23 双向已全落地**）：
 
 - **服务器证**：服务器侧自签证书一张（生成于 /root/kfm-na/certs/，不进仓），
   公钥指纹钉进 na 设置（像 ssh known_hosts）。na 首次连接报指纹不符即拒。
-- **客户端证**：na 侧预共享 32 字节密钥（现有 key_path 的同类物），首流
-  HMAC 挑战——服务器认密钥不认 IP。
+  ✅ 已实现（`PinnedVerifier`，考题：错指纹握手即拒）。
+- **客户端证**：na 侧预共享 32 字节密钥（与证书同目录 `{前缀}.psk` 首跑
+  生成，0600），每条流头 = 2 字节端口 + 32 字节 HMAC 标签
+  （`HMAC(psk, "na-quic-auth-v1"‖端口)`，RFC 2104 手卷、RFC 4231 向量
+  判卷；标签走 TLS 内部，静态即安全——看不见也伪造不了；绑端口防挪用）。
+  验签不过：常量时间比对（`ct_eq`）+ 弃流 + 按来源 IP 记连败，
+  满 5 封 10 分钟（`ban_verdict`——防资源消耗，不是防枚举）。
+  ✅ 已实现（考题：对钥匙 echo 全还 / 错钥匙零字节）。
 - rustls 配置 = `dangerous` 自定义验证器 + 指纹比对，不走 CA 体系
   （我们没有域名，CA 是负资产）。
 
@@ -128,7 +134,7 @@ nsA（客户端）─veth─ nsR（路由器/NAT）─veth─ 服务器（lo）
 1. **QUIC 监听口**：UDP 怎么绑？QUIC 走 UDP，「只绑 127.0.0.1」则公网
    不可达，手机打不进来——QUIC 必须绑**公网 UDP 新口**（安全语义从
    「回环」改为「双向 pinning 认证」），或再套一层穿透。倾向：**公网
-   UDP 独立口**（如 9023），认证见 §四。这突破了 8021/9021 的回环红线，
+   UDP 独立口**（2026-09-23 用户拍板：62633 正连数据路 / 62694 反连推送路），认证见 §四。这突破了 8021/9021 的回环红线，
    需要用户点头。
 2. **0-RTT 是否进 v1**：会话票据持久化在手机上（私有目录），风险面小；
    但 v1 先求全量握手把迁移跑通更稳。
@@ -153,7 +159,7 @@ nsA（客户端）─veth─ nsR（路由器/NAT）─veth─ 服务器（lo）
       （**看门狗双腿状态机已提前就位** 2026-09-23：tunnel.rs `Leg` 裁决
       QUIC 优先、`QUIC_FAIL_TRIP=3` 连挂跳闸降级 ssh、腿在时 ssh 降
       `-R`-only 伴生保推送路、手动重连/回前台即审清零再给 QUIC 一票；
-      `servers.json` 增 `"quic": {enable, port=9023, pin=指纹hex}` 段，
+      `servers.json` 增 `"quic": {enable, port=62633, pin, psk}` 段，
       缺省关。待办：反连路 QUIC 化 + 公网 UDP 裁决后的真链并行验证）
 - [ ] M5 真机验证（省电周间隙）+ 认证 pinning 落设置页
 - [ ] M6（v1.1）0-RTT 会话票据
@@ -163,20 +169,23 @@ nsA（客户端）─veth─ nsR（路由器/NAT）─veth─ 服务器（lo）
 **服务器侧（na-server）**：两个环境变量，缺省不开——
 
 - `NA_QUIC_BIND`：QUIC 腿监听地址。§七问题 1 裁决前与 TCP 同走回环
-  硬闸（只准 127.0.0.1）；裁决后绑公网 UDP（倾向 9023）。
+  闸（只准回环或显式 0.0.0.0）；裁决后绑公网 UDP 62633。
 - `NA_QUIC_CERT`：证书路径前缀，缺省 `/root/kfm-na/certs/quic`。
-  首跑 rcgen 自签落盘 `{前缀}.der` / `{前缀}.key.der`，指纹（DER 的
-  SHA-256 hex）打 stderr——手机 pinning 的比对物，**必须持久**（重生成
-  = 全设备换 pin）。
+  首跑落盘三件套：`{前缀}.der` / `{前缀}.key.der`（rcgen 自签，指纹
+  打 stderr——手机 pin 的比对物，**必须持久**，重生成 = 全设备换 pin）
+  + `{前缀}.psk`（32 字节随机客户端证，0600，hex 打一次 stderr 供抄
+  进手机 quic.psk）。**开 QUIC 腿即强制客户端证**（HMAC 挑战+连败封禁，
+  设计 §四——公网口的前置条件，2026-09-23 已落地）。
 
 **手机侧（servers.json 条目）**：
 
 ```json
-"quic": { "enable": false, "port": 9023, "pin": "<64 位指纹 hex>" }
+"quic": { "enable": false, "port": 62633, "pin": "<64 位指纹 hex>", "psk": "<64 位密钥 hex>" }
 ```
 
-缺省关。`tunnel::quic_configured` 齐件判定：开关开 + 口非 0 + 指纹
-恰 64 位 hex——缺任一件静默走 ssh（QUIC 是加速器，不是单点）。
+缺省关。`tunnel::quic_configured` 齐件判定：开关开 + 口非 0 + pin/psk
+双双恰 64 位 hex（两证齐全才准开腿）——缺任一件静默走 ssh（QUIC 是
+加速器，不是单点）。
 
 **看门狗双腿语义**（tunnel.rs，考题 `spec_quic_*` 钉死）：腿裁决
 `leg_verdict`——QUIC 优先，连挂 3 次（`QUIC_FAIL_TRIP`）跳闸降级 ssh

@@ -69,13 +69,14 @@ async fn spec_m3_桥接全链_echo_逐字节回还() {
     let front_addr = free_addr().await; // 桥前口（扮演 App 侧的 127.0.0.1:9021）
 
     tokio::spawn(tcp_echo(back_addr));
-    tokio::spawn(run_server(quic_addr, server_config(certs, key)));
+    tokio::spawn(run_server(quic_addr, server_config(certs, key), None));
     tokio::spawn(run_client(
         quic_addr,
         "kfm-na",
         front_addr,
         back_addr.port(),
         client_config(pinned),
+        None,
     ));
 
     // 全链：桥前写 → QUIC 流（端口头=后端口）→ 回联 echo → 原路回还
@@ -92,7 +93,7 @@ async fn spec_m3_pinning_错指纹_握手即拒() {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let (certs, key) = gen_self_signed("kfm-na");
     let quic_addr = free_addr().await;
-    tokio::spawn(run_server(quic_addr, server_config(certs, key)));
+    tokio::spawn(run_server(quic_addr, server_config(certs, key), None));
 
     // 全零指纹 ≠ 服务器真指纹：客户端连接受阻，握手必须失败
     let wrong = [0u8; 32];
@@ -135,13 +136,14 @@ async fn spec_m3_桥接_http式半关全链() {
         s.write_all(resp.as_bytes()).await.unwrap();
         // na-server 是 handle 返回即 drop 套接字——照做
     });
-    tokio::spawn(run_server(quic_addr, server_config(certs, key)));
+    tokio::spawn(run_server(quic_addr, server_config(certs, key), None));
     tokio::spawn(run_client(
         quic_addr,
         "kfm-na",
         front_addr,
         back_addr.port(),
         client_config(pinned),
+        None,
     ));
 
     let mut s = wait_connect(front_addr).await;

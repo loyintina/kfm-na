@@ -48,18 +48,21 @@ async fn spec_m3_na_server_quic_leg_health() {
         .expect("spawn na-server");
     let _guard = ServerGuard(child);
 
-    // 证书首跑落盘 → 读 DER 重算指纹（pinning 比对物 = 生产同款取径）
-    let cert_der = {
+    // 证书+客户端证首跑落盘 → 读回（指纹/psk = 生产同款取径）
+    let (cert_der, psk) = {
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
-            if let Ok(d) = std::fs::read(format!("{cert_prefix}.der")) {
-                break d;
+            let c = std::fs::read(format!("{cert_prefix}.der")).ok();
+            let p = std::fs::read(format!("{cert_prefix}.psk")).ok();
+            if let (Some(c), Some(p)) = (c, p) {
+                break (c, p);
             }
-            assert!(Instant::now() < deadline, "证书 10s 没落盘");
+            assert!(Instant::now() < deadline, "证书/密钥 10s 没落盘");
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     };
     let pinned = na_quic::cert_fingerprint(&rustls::pki_types::CertificateDer::from(cert_der));
+    let psk: [u8; 32] = psk.try_into().expect("psk 必 32 字节");
 
     // 桥：本机 front 口 ←QUIC→ na-server QUIC 腿 → 回联 TCP 口
     tokio::spawn(na_quic::run_client(
@@ -68,6 +71,7 @@ async fn spec_m3_na_server_quic_leg_health() {
         format!("127.0.0.1:{front_port}").parse().unwrap(),
         tcp_port,
         na_quic::client_config(pinned),
+        Some(psk),
     ));
 
     // 经桥打健康检查（等桥前口起来）

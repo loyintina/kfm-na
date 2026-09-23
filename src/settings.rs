@@ -112,16 +112,22 @@ pub struct ServerEntry {
     pub quic: QuicFields,
 }
 
-/// QUIC 腿缺省服务器 UDP 口（单一源——na-server NA_QUIC_BIND 部署对齐它）
-pub const QUIC_DEFAULT_PORT: u16 = 9023;
+/// QUIC 腿服务器 UDP 口（单一源——na-server NA_QUIC_BIND 部署对齐它）。
+/// 2026-09-23 用户拍板双口、避约定俗成段：
+/// - 62633 = 正连数据路（本常量；数据面 QUIC 桥）
+/// - 62694 = 反连推送路（M4 把 9022 QUIC 化时用，先立常量占位）
+pub const QUIC_DEFAULT_PORT: u16 = 62633;
+pub const QUIC_REVERSE_PORT: u16 = 62694;
 
 /// QUIC 腿配置（servers.json "quic" 段）：enable 缺省 false（未裁决不开）、
-/// port 缺省 9023、pin = 服务器证书 DER 的 SHA-256 hex（pinning，设计 §四）
+/// port 缺省 62633、pin = 服务器证书 DER 的 SHA-256 hex（服务器证 pinning）、
+/// psk = 预共享密钥 hex（客户端证 HMAC 挑战，设计 §四；两证齐全才准开腿）
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuicFields {
     pub enable: bool,
     pub port: u16,
     pub pin: String,
+    pub psk: String,
 }
 
 impl Default for QuicFields {
@@ -130,6 +136,7 @@ impl Default for QuicFields {
             enable: false,
             port: QUIC_DEFAULT_PORT,
             pin: String::new(),
+            psk: String::new(),
         }
     }
 }
@@ -197,6 +204,11 @@ pub fn parse_servers(json: &str) -> Result<Vec<ServerEntry>, String> {
                 .unwrap_or(quic_d.port as u64) as u16,
             pin: quic_v
                 .get("pin")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            psk: quic_v
+                .get("psk")
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string(),

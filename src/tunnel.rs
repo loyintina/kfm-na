@@ -208,10 +208,14 @@ pub fn parse_pin(h: &str) -> Option<[u8; 32]> {
     Some(out)
 }
 
-/// QUIC 腿齐件判定（A 档纯函数）：开关开 + 口非 0 + 指纹合法。
-/// 缺任一件 = 腿不存在，静默走 ssh——QUIC 是可选加速器，不是单点
+/// QUIC 腿齐件判定（A 档纯函数）：开关开 + 口非 0 + 服务器证（pin）
+/// 与客户端证（psk）双双合法——缺任一件 = 腿不存在，静默走 ssh；
+/// 两证齐全才准开腿（公网口前置条件，设计 §四）
 pub fn quic_configured(s: &ServerEntry) -> bool {
-    s.quic.enable && s.quic.port != 0 && parse_pin(&s.quic.pin).is_some()
+    s.quic.enable
+        && s.quic.port != 0
+        && parse_pin(&s.quic.pin).is_some()
+        && parse_pin(&s.quic.psk).is_some()
 }
 
 /// 连挂跳闸线（A 档）：QUIC 腿连续死满此次数降级 ssh 兜底。
@@ -481,6 +485,7 @@ struct QuicLeg {
 fn spawn_quic_leg(server: &ServerEntry) -> Option<QuicLeg> {
     use std::net::ToSocketAddrs as _;
     let pin = parse_pin(&server.quic.pin)?;
+    let psk = parse_pin(&server.quic.psk)?;
     let (stop, stop_rx) = tokio::sync::oneshot::channel::<()>();
     let (dead_tx, dead) = channel::<String>();
     let host = server.ssh.host.clone();
@@ -517,6 +522,7 @@ fn spawn_quic_leg(server: &ServerEntry) -> Option<QuicLeg> {
                     local,
                     target,
                     na_quic::client_config(pin),
+                    Some(psk),
                 ) => {
                     say(match r {
                         Ok(()) => "腿正常退出".into(),

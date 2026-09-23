@@ -422,7 +422,12 @@ fn spec_quic_齐件判定() {
     s.quic.enable = true;
     assert!(!quic_configured(&s), "开关开但指纹空 = 不齐件");
     s.quic.pin = "ab".repeat(32);
-    assert!(quic_configured(&s), "开关+合法指纹 = 齐件");
+    assert!(
+        !quic_configured(&s),
+        "有服务器证无客户端证 = 不齐件（两证齐全才准开腿）"
+    );
+    s.quic.psk = "cd".repeat(32);
+    assert!(quic_configured(&s), "开关+双证 = 齐件");
     s.quic.port = 0;
     assert!(!quic_configured(&s), "口 0 = 不齐件");
 }
