@@ -107,10 +107,10 @@ impl ChainHeights {
 /// 2026-09-21 起环境卡行集数据定（没数据的行不做，见
 /// sys_card::rows_of/card_h），卡高不再是一个常量——本函数不读全局
 /// 快照（考题要能钉固定夹具，不靠环境）
-pub fn heights(tmux: u32, n_svc_lines: usize, sys_h: u32) -> ChainHeights {
+pub fn heights(tmux: u32, sys_h: u32) -> ChainHeights {
     ChainHeights {
         tmux,
-        link: link_card::card_h(n_svc_lines),
+        link: link_card::card_h(),
         sys: sys_h,
     }
 }

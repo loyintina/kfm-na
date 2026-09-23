@@ -358,6 +358,11 @@ pub enum TunnelCmd {
     /// 回前台/网络回即审（BAR-141）：用户在等了，检测判据从宽——
     /// 健康连接不碰，僵尸一拍定罪（不等连败×2），退避清零立即重拉
     ResumeKick,
+    /// 手动跳闸 QUIC（通道卡调试钮）：跳闸账打满，降级 ssh 兜底
+    TripQuic,
+    /// 手动再投 QUIC 一票（跳闸后恢复）：语义 = 手动重连
+    /// （杀娃收腿、跳闸账清零立即重拉）
+    HealQuic,
 }
 
 static TUNNEL_CMD: OnceLock<Sender<TunnelCmd>> = OnceLock::new();
@@ -375,6 +380,22 @@ pub fn request_resume_kick() -> bool {
     TUNNEL_CMD
         .get()
         .map(|tx| tx.send(TunnelCmd::ResumeKick).is_ok())
+        .unwrap_or(false)
+}
+
+/// 通道卡 [跳闸 QUIC] 钮唯一入口
+pub fn request_trip_quic() -> bool {
+    TUNNEL_CMD
+        .get()
+        .map(|tx| tx.send(TunnelCmd::TripQuic).is_ok())
+        .unwrap_or(false)
+}
+
+/// 通道卡 [投 QUIC] 钮唯一入口（跳闸后手动恢复）
+pub fn request_heal_quic() -> bool {
+    TUNNEL_CMD
+        .get()
+        .map(|tx| tx.send(TunnelCmd::HealQuic).is_ok())
         .unwrap_or(false)
 }
 
@@ -427,6 +448,16 @@ pub struct TunnelSnap {
     /// 代际戳：状态每变一次 +1——涂装 sig 的唯一代际源（漏维 = 鬼影，
     /// 解析槽烘焙 sig 带本维才在状态翻转时重烘）
     pub epoch: u64,
+    /// 数据腿供应商（通道卡：Quic = QUIC 桥 / Ssh = ssh 正连；None = 断）
+    pub leg: Option<Leg>,
+    /// 本地数据口开着（9021 有监听——含外部借用）
+    pub port_open: bool,
+    /// 反连 9022 活着（伴生/全量 ssh 的 -R 绑定进程在）
+    pub reverse_up: bool,
+    /// QUIC 跳闸账（满 QUIC_FAIL_TRIP = 已降级 ssh 兜底）
+    pub quic_fails: u32,
+    /// QUIC 配置齐件（不齐件 = 卡上显示「未配置」）
+    pub quic_configured: bool,
 }
 
 /// 本地口 TCP 探活（绑定在 = 转发通道在；端到端 ws 握手探活归插件卡阶段）
@@ -600,6 +631,11 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
             server.ssh.user, server.ssh.host, server.ssh.port
         ),
         epoch: 0,
+        leg: None,
+        port_open: false,
+        reverse_up: false,
+        quic_fails: 0,
+        quic_configured: quic_configured(&server),
     }));
     TUNNEL_SNAP.set(Arc::clone(&snap)).ok();
     let Ok(args) = forward_args(&server) else {
@@ -670,6 +706,32 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                 snap_t,
             );
         };
+        // 手动跳闸 QUIC（通道卡调试钮）：跳闸账一把打满，收腿收娃，
+        // 下一拍 leg_verdict 必降级 ssh 兜底——UDP 黑洞/腿疑难时用户
+        // 不等三次自动跳闸，一键切 ssh 确认「是不是 QUIC 的锅」
+        let trip_quic = |child: &mut Option<std::process::Child>,
+                         quic: &mut Option<QuicLeg>,
+                         attempts: &mut u32,
+                         quic_fails: &mut u32,
+                         snap_t: &Arc<Mutex<TunnelSnap>>| {
+            crate::report::report("tunnel", "手动跳闸 QUIC：收腿收娃，降级 ssh 兜底");
+            if let Some(mut c) = child.take() {
+                let _ = c.kill();
+                let _ = c.wait();
+            }
+            if let Some(q) = quic.take() {
+                let _ = q.stop.send(());
+            }
+            *attempts = 0;
+            *quic_fails = QUIC_FAIL_TRIP;
+            set(
+                TunnelState::Down {
+                    attempts: 0,
+                    last_error: "手动跳闸 QUIC".into(),
+                },
+                snap_t,
+            );
+        };
         // 抖动诊断两笔账（看门狗线程私有）：spawned_at = 本次 ssh 起于何时
         // （活多久 = 真连接 vs 抖动）、ssh_err = 它的 stderr 尾环
         let mut spawned_at: Option<std::time::Instant> = None;
@@ -720,6 +782,22 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                 .map(|c| c.try_wait().ok().flatten().is_none())
                 .unwrap_or(false);
 
+            // 四口状态面（通道卡数据源）：每拍记账——腿供应商/本地口/
+            // 反连/跳闸账/齐件。UI 只读快照，绝不许碰锁内活物
+            if let Ok(mut g) = snap_t.lock() {
+                g.port_open = port_open;
+                g.reverse_up = child_alive;
+                g.leg = if quic.is_some() {
+                    Some(Leg::Quic)
+                } else if child_alive {
+                    Some(Leg::Ssh)
+                } else {
+                    None
+                };
+                g.quic_fails = quic_fails;
+                g.quic_configured = quic_configured(&server);
+            }
+
             // QUIC 腿死信审理（事件驱动死亡检测）：腿死 → 记一笔跳闸账，
             // ssh 伴生一并收（数据路换供应商，ssh 角色随之换），不睡——
             // 落到重生段按 leg_verdict 立即重拉（兜底 ssh 零等待接上）
@@ -756,14 +834,22 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
             if port_open && !child_alive && quic.is_none() {
                 // 外部隧道占着口——让位不抢，30s 一拍复查（它一断下一拍接管）
                 set(TunnelState::ExternalUp, &snap_t);
-                if wait(&cmd_rx, std::time::Duration::from_secs(30)).is_some() {
-                    reconnect(
+                match wait(&cmd_rx, std::time::Duration::from_secs(30)) {
+                    Some(TunnelCmd::TripQuic) => trip_quic(
                         &mut child,
                         &mut quic,
                         &mut attempts,
                         &mut quic_fails,
                         &snap_t,
-                    );
+                    ),
+                    Some(_) => reconnect(
+                        &mut child,
+                        &mut quic,
+                        &mut attempts,
+                        &mut quic_fails,
+                        &snap_t,
+                    ),
+                    None => {}
                 }
                 continue;
             }
@@ -902,7 +988,14 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                     &snap_t,
                 );
                 match wait(&cmd_rx, std::time::Duration::from_secs(1)) {
-                    Some(TunnelCmd::Reconnect) => reconnect(
+                    Some(TunnelCmd::Reconnect) | Some(TunnelCmd::HealQuic) => reconnect(
+                        &mut child,
+                        &mut quic,
+                        &mut attempts,
+                        &mut quic_fails,
+                        &snap_t,
+                    ),
+                    Some(TunnelCmd::TripQuic) => trip_quic(
                         &mut child,
                         &mut quic,
                         &mut attempts,
@@ -973,7 +1066,14 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                     &snap_t,
                 );
                 match wait(&cmd_rx, std::time::Duration::from_secs(1)) {
-                    Some(TunnelCmd::Reconnect) => reconnect(
+                    Some(TunnelCmd::Reconnect) | Some(TunnelCmd::HealQuic) => reconnect(
+                        &mut child,
+                        &mut quic,
+                        &mut attempts,
+                        &mut quic_fails,
+                        &snap_t,
+                    ),
+                    Some(TunnelCmd::TripQuic) => trip_quic(
                         &mut child,
                         &mut quic,
                         &mut attempts,
@@ -1072,7 +1172,14 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                 );
                 if wait_s > 0 {
                     match wait(&cmd_rx, std::time::Duration::from_secs(wait_s)) {
-                        Some(TunnelCmd::Reconnect) => reconnect(
+                        Some(TunnelCmd::Reconnect) | Some(TunnelCmd::HealQuic) => reconnect(
+                            &mut child,
+                            &mut quic,
+                            &mut attempts,
+                            &mut quic_fails,
+                            &snap_t,
+                        ),
+                        Some(TunnelCmd::TripQuic) => trip_quic(
                             &mut child,
                             &mut quic,
                             &mut attempts,
@@ -1124,9 +1231,19 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
             {
                 if std::time::Instant::now() < until {
                     match wait(&cmd_rx, std::time::Duration::from_secs(1)) {
-                        Some(TunnelCmd::Reconnect) => {
+                        Some(TunnelCmd::Reconnect) | Some(TunnelCmd::HealQuic) => {
                             companion_hold_until = None;
                             reconnect(
+                                &mut child,
+                                &mut quic,
+                                &mut attempts,
+                                &mut quic_fails,
+                                &snap_t,
+                            );
+                        }
+                        Some(TunnelCmd::TripQuic) => {
+                            companion_hold_until = None;
+                            trip_quic(
                                 &mut child,
                                 &mut quic,
                                 &mut attempts,
@@ -1226,7 +1343,14 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                         &cmd_rx,
                         std::time::Duration::from_secs(backoff_secs(attempts)),
                     ) {
-                        Some(TunnelCmd::Reconnect) => reconnect(
+                        Some(TunnelCmd::Reconnect) | Some(TunnelCmd::HealQuic) => reconnect(
+                            &mut child,
+                            &mut quic,
+                            &mut attempts,
+                            &mut quic_fails,
+                            &snap_t,
+                        ),
+                        Some(TunnelCmd::TripQuic) => trip_quic(
                             &mut child,
                             &mut quic,
                             &mut attempts,
@@ -1243,7 +1367,14 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
             }
             if let Some(cmd) = wait(&cmd_rx, std::time::Duration::from_secs(1)) {
                 match cmd {
-                    TunnelCmd::Reconnect => reconnect(
+                    TunnelCmd::Reconnect | TunnelCmd::HealQuic => reconnect(
+                        &mut child,
+                        &mut quic,
+                        &mut attempts,
+                        &mut quic_fails,
+                        &snap_t,
+                    ),
+                    TunnelCmd::TripQuic => trip_quic(
                         &mut child,
                         &mut quic,
                         &mut attempts,

@@ -3808,11 +3808,7 @@ impl TermView {
         let tmux_h = pp::tmux_card_h(snap.sessions.len(), mode, cap);
         let regs = crate::ui::parser_chain::regions(w, h, bar_inset, vbottom, tmux_h);
         let lay = pp::layout_in(regs.dock.clone(), snap.sessions.len(), mode, snap.scroll);
-        let chain_h = crate::ui::parser_chain::heights(
-            tmux_h,
-            ssnap.lines.len(),
-            crate::ui::sys_card::card_h_now(),
-        );
+        let chain_h = crate::ui::parser_chain::heights(tmux_h, crate::ui::sys_card::card_h_now());
         let scrolls = crate::ui::parser_chain::Scrolls {
             left: snap.left_scroll,
             right: snap.right_scroll,
@@ -4010,7 +4006,6 @@ impl TermView {
                 &chain_h,
                 &scrolls,
             ),
-            ssnap.lines.len(),
             scrolls.right,
         );
         let cclip = llay.content_clip;
@@ -4116,16 +4111,16 @@ impl TermView {
                 Some(cclip),
             );
         }
-        // 服务段 mini 卡头「服务 · 状态词」（在线相才亮标题档，其余次级
-        // 档——与连接段同语言）
-        let header_fg = if ssnap.word == "自持在线" || ssnap.word == "外部借用" {
+        // 通道段 mini 卡头「通道 · 状态词」（2026-09-24 通道段改造：
+        // 在线相才亮标题档，其余次级档——与连接段同语言）
+        let header_fg = if ssnap.word == "QUIC 在线" || ssnap.word == "ssh 在线" {
             title_fg
         } else {
             meta_fg
         };
         self.draw_text_left_ex(
             &mut frame,
-            &format!("服务 · {}", ssnap.word),
+            &format!("通道 · {}", ssnap.word),
             (llay.rheader.x + off) as u32,
             llay.rheader.w,
             llay.rheader.y as u32,
@@ -4135,8 +4130,8 @@ impl TermView {
             18.0,
             cclip32,
         );
-        // 服务段四字段行（字段标签列配方同连接段；错误行有字用错色）
-        let svalues = [&ssnap.backend, &ssnap.uptime, &ssnap.sess_n, &ssnap.error];
+        // 通道段四字段行（四口状态；字段标签列配方同连接段。「断」/
+        // 「跳闸降级」用错色提注意——故障相才是值得亮的行）
         for (i, fr) in llay.rfields.iter().enumerate() {
             let l_items = self.measure_items(crate::ui::svc_card::FIELD_LABELS[i], 36.0);
             self.draw_field_lines(
@@ -4151,10 +4146,11 @@ impl TermView {
                 cclip32,
                 true,
             );
-            let (v_fg, v) = if i == 3 && ssnap.error != "—" {
-                (err_fg, svalues[i].as_str())
+            let v = ssnap.vals[i].as_str();
+            let v_fg = if v == "断" || v.starts_with("跳闸降级") {
+                err_fg
             } else {
-                (meta_fg, svalues[i].as_str())
+                meta_fg
             };
             let v_items = self.measure_items(v, 30.0);
             self.draw_field_lines(
@@ -4170,24 +4166,42 @@ impl TermView {
                 false,
             );
         }
-        // 会话行（纯文本行，次级档；行几何吃 llay.sessions 同一份）
-        for (line, sr) in ssnap.lines.iter().zip(llay.sessions.iter()) {
-            self.draw_text_left_ex(
+        // 调试钮行（三级框行主形态，半宽并排）：[跳闸/投 QUIC]（钮面/
+        // 可点裁决唯一源 svc_card::toggle_label——未配置时压次级档且
+        // 派发侧不动作）+ [重启]（两段确认：武装中文案翻「再点确认」+
+        // 错色提注意——文案唯一源 self_restart::button_label）
+        {
+            let b = &llay.qbutton;
+            let tsnap = crate::tunnel::snap();
+            let tsnap = tsnap.as_ref().map(|s| s.lock().unwrap().clone());
+            let label = crate::ui::svc_card::toggle_label(tsnap.as_ref());
+            let clickable = crate::ui::svc_card::toggle_verdict(tsnap.as_ref()).is_some();
+            let grad_ref = (-(b.x + off), -b.y, i64::from(b.w + b.h));
+            paint_row_frame_gradref(
                 &mut frame,
-                line,
-                (sr.x + off) as u32,
-                sr.w,
-                sr.y as u32,
-                sr.h,
-                30.0,
-                body_fg,
-                18.0,
-                cclip32,
+                b.x + off,
+                b.y,
+                b.w,
+                b.h,
+                true,
+                accent,
+                cclip,
+                grad_ref,
+                0,
+            );
+            self.draw_text_centered_yclip(
+                &mut frame,
+                &label,
+                b.x + off,
+                b.y,
+                b.w,
+                b.h,
+                34.0,
+                if clickable { title_fg } else { meta_fg },
+                b.x + off,
+                Some(cclip),
             );
         }
-        // [重启] 钮（三级框行主形态，服务段尾，与 [重连] 同件同尺；
-        // 两段确认：武装中文案翻「再点确认」+ 错色提注意——文案唯一源
-        // self_restart::button_label，涂装/命中同吃）
         {
             let b = &llay.rbutton;
             let now_ms = crate::report::boot_ms() as u64;

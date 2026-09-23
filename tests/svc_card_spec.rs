@@ -1,15 +1,19 @@
-//! 服务卡文案考题（A 档）：三源合成文案映射（后端 × nasup × health）、
-//! health JSON 解析、时长格式——纯逻辑先行钉死。2026-09-20 晚
-//! 合并裁决：连接卡 + 服务卡合并成 link_card 一张二级卡两竖列，
-//! 几何考卷归 link_card_spec，本卷只留文案面。
+//! 通道卡文案考题（A 档，2026-09-24 通道段改造：原「服务」段退役，
+//! 原位换四口连接状况 + 调试钮）：隧道快照 → 四口状态词映射、调试钮
+//! 裁决——纯逻辑先行钉死。几何考卷归 link_card_spec，本卷只留文案面。
+//! （svc_health 解析/时长/会话行三钉保留——那些是 svc_health 的钉，
+//! 与本卡文案无关。）
 //!
-//! 变异抽检：①compose 把 Phase::Error 的旧数据清空（闪断清卡面）
-//! 必须咬；②会话行 alive=false 不标死（死会话冒充活的）必须咬。
+//! 变异抽检：①quic_row 把「跳闸降级」判成「待起」（降级相不显形 =
+//! 用户以为 QUIC 还在扛）必须咬；②reverse_row 把「断」判成「重拉中」
+//! （死透了还装活）必须咬；③toggle_verdict 未配置也给钮（点了没反应
+//! = 死钮）必须咬。
 
 use kfm_na::na_server_sup::{SupSnap, SupState};
 use kfm_na::settings::Backend;
 use kfm_na::svc_health::{self, HealthSnap, Phase};
-use kfm_na::ui::svc_card::{self, FIELD_LABELS, N_FIELDS};
+use kfm_na::tunnel::{Leg, QUIC_FAIL_TRIP, TunnelSnap, TunnelState};
+use kfm_na::ui::svc_card::{self, FIELD_LABELS, N_FIELDS, QuicToggle};
 
 fn sup_of(state: SupState) -> SupSnap {
     SupSnap {
@@ -25,6 +29,27 @@ fn hs(phase: Phase, info: Option<svc_health::HealthInfo>) -> HealthSnap {
         phase,
         info,
         epoch: 0,
+    }
+}
+
+/// 隧道快照夹具（只读字段全 pub，直构造）
+fn tsnap(
+    state: TunnelState,
+    leg: Option<Leg>,
+    reverse_up: bool,
+    quic_fails: u32,
+    quic_configured: bool,
+) -> TunnelSnap {
+    TunnelSnap {
+        state,
+        local_port: 9021,
+        target: "root@8.145.46.182:22".into(),
+        epoch: 0,
+        leg,
+        port_open: false,
+        reverse_up,
+        quic_fails,
+        quic_configured,
     }
 }
 
@@ -83,73 +108,163 @@ fn spec_会话行_死活两相() {
     );
 }
 
-// ---- 三源合成文案映射 ----
+// ---- 通道卡文案映射（隧道快照 → 四口状态词） ----
 
 #[test]
-fn spec_合成_kfmv4托管态() {
-    let c = svc_card::compose(Backend::Kfmv4, None, &hs(Phase::Kfmv4, None));
-    assert_eq!(c.word, "kfmv4 托管");
-    assert_eq!(c.backend, "kfmv4");
-    assert_eq!(c.uptime, "—");
-    assert_eq!(c.sess_n, "—");
-    assert_eq!(c.error, "—");
-    assert!(c.lines.is_empty(), "托管态不许有会话行");
+fn spec_合成_看门狗没起() {
+    let c = svc_card::compose(None);
+    assert_eq!(c.word, "未启动");
+    assert_eq!(c.vals[3], "预留 M4", "62694 恒预留");
+    assert_eq!(c.vals[0], "—");
 }
 
 #[test]
-fn spec_合成_在线有数据() {
-    let info = svc_health::parse_health(HEALTH_JSON).unwrap();
-    let sup = sup_of(SupState::Up);
-    let c = svc_card::compose(Backend::NaServer, Some(&sup), &hs(Phase::Ready, Some(info)));
-    assert_eq!(c.word, "自持在线");
-    assert_eq!(c.backend, "na-server");
-    assert_eq!(c.uptime, "1h");
-    assert_eq!(c.sess_n, "2");
-    assert_eq!(c.lines.len(), 2);
-    assert_eq!(c.lines[0], "s6 · 80×24 · 闲 5m");
-    assert_eq!(c.error, "—");
+fn spec_合成_quic在线全相() {
+    let s = tsnap(TunnelState::QuicUp, Some(Leg::Quic), true, 0, true);
+    let c = svc_card::compose(Some(&s));
+    assert_eq!(c.word, "QUIC 在线");
+    assert_eq!(c.vals, ["QUIC 桥在线", "在线", "在线", "预留 M4"]);
 }
 
 #[test]
-fn spec_合成_外部借用与待数据() {
-    let sup = sup_of(SupState::ExternalUp);
-    let c = svc_card::compose(Backend::NaServer, Some(&sup), &hs(Phase::Loading, None));
-    assert_eq!(c.word, "外部借用");
-    assert_eq!(c.uptime, "—", "health 未到位 = 字段占位，不编造");
-    assert!(c.lines.is_empty());
-    // 看门狗没起（后端刚切来）= 未启动
-    let c2 = svc_card::compose(Backend::NaServer, None, &hs(Phase::Pending, None));
-    assert_eq!(c2.word, "未启动");
-}
-
-#[test]
-fn spec_合成_轮询错留旧账() {
-    // 闪断：Error 相保留上一份数据（卡面不清空），错误上字段
-    let info = svc_health::parse_health(HEALTH_JSON).unwrap();
-    let sup = sup_of(SupState::Up);
-    let c = svc_card::compose(
-        Backend::NaServer,
-        Some(&sup),
-        &hs(Phase::Error("连接失败: refused".into()), Some(info)),
+fn spec_数据行_五相() {
+    assert_eq!(svc_card::data_row(&TunnelState::QuicUp), "QUIC 桥在线");
+    assert_eq!(svc_card::data_row(&TunnelState::Up), "ssh 正连在线");
+    assert_eq!(svc_card::data_row(&TunnelState::ExternalUp), "外部借用");
+    assert_eq!(svc_card::data_row(&TunnelState::Starting), "起手中");
+    assert_eq!(
+        svc_card::data_row(&TunnelState::Down {
+            attempts: 1,
+            last_error: String::new()
+        }),
+        "断"
     );
-    assert_eq!(c.sess_n, "2", "Error 相必须保留旧数据，闪断不清卡面");
-    assert_eq!(c.lines.len(), 2);
-    assert_eq!(c.error, "连接失败: refused");
 }
 
 #[test]
-fn spec_合成_退避相错误来自nasup() {
-    let sup = sup_of(SupState::Down {
-        attempts: 2,
-        last_error: "exec 超时".into(),
-    });
-    let c = svc_card::compose(Backend::NaServer, Some(&sup), &hs(Phase::Pending, None));
-    assert_eq!(c.word, "退避 ×2");
-    assert_eq!(c.error, "exec 超时", "health 无错时错误字段落 nasup 旧账");
+fn spec_反连行_断不许装重拉() {
+    // 变异②：数据路断了反连必断（同一条 ssh）——「断」不许写成「重拉中」
+    let down = TunnelState::Down {
+        attempts: 0,
+        last_error: String::new(),
+    };
+    assert_eq!(
+        svc_card::reverse_row(&tsnap(down, None, false, 0, true)),
+        "断"
+    );
+    assert_eq!(
+        svc_card::reverse_row(&tsnap(TunnelState::QuicUp, Some(Leg::Quic), true, 0, true)),
+        "在线"
+    );
+    assert_eq!(
+        svc_card::reverse_row(&tsnap(TunnelState::QuicUp, Some(Leg::Quic), false, 0, true)),
+        "重拉中",
+        "腿在伴生死 = 重拉窗口（封锁闸/死亡审理中）"
+    );
+}
+
+#[test]
+fn spec_quic行_六相真值表() {
+    // 变异①：跳闸降级必须显形——降级了还说「待起」= 用户以为 QUIC 在扛
+    let up = TunnelState::QuicUp;
+    assert_eq!(
+        svc_card::quic_row(&tsnap(up.clone(), Some(Leg::Quic), true, 0, false)),
+        "未配置"
+    );
+    assert_eq!(
+        svc_card::quic_row(&tsnap(
+            TunnelState::Up,
+            Some(Leg::Ssh),
+            true,
+            QUIC_FAIL_TRIP,
+            true
+        )),
+        "跳闸降级 ssh"
+    );
+    assert_eq!(
+        svc_card::quic_row(&tsnap(up.clone(), Some(Leg::Quic), true, 0, true)),
+        "在线"
+    );
+    assert_eq!(
+        svc_card::quic_row(&tsnap(
+            TunnelState::Starting,
+            Some(Leg::Quic),
+            true,
+            0,
+            true
+        )),
+        "握手中"
+    );
+    assert_eq!(
+        svc_card::quic_row(&tsnap(TunnelState::Starting, None, false, 2, true)),
+        "挂×2"
+    );
+    assert_eq!(
+        svc_card::quic_row(&tsnap(TunnelState::Starting, None, false, 0, true)),
+        "待起"
+    );
+}
+
+#[test]
+fn spec_调试钮裁决_三相() {
+    // 变异③：未配置 = None（死钮不许活）；未满 = 跳闸；已满 = 投票
+    assert_eq!(
+        svc_card::toggle_verdict(Some(&tsnap(
+            TunnelState::QuicUp,
+            Some(Leg::Quic),
+            true,
+            0,
+            false
+        ))),
+        None,
+        "未配置 = 钮不动作"
+    );
+    assert_eq!(
+        svc_card::toggle_verdict(None),
+        None,
+        "看门狗没起 = 钮不动作"
+    );
+    assert_eq!(
+        svc_card::toggle_verdict(Some(&tsnap(
+            TunnelState::QuicUp,
+            Some(Leg::Quic),
+            true,
+            0,
+            true
+        ))),
+        Some(QuicToggle::Trip),
+        "跳闸账未满 = 跳闸 QUIC"
+    );
+    assert_eq!(
+        svc_card::toggle_verdict(Some(&tsnap(
+            TunnelState::Up,
+            Some(Leg::Ssh),
+            true,
+            QUIC_FAIL_TRIP,
+            true
+        ))),
+        Some(QuicToggle::Heal),
+        "跳闸账满 = 投 QUIC"
+    );
+    // 钮面与裁决同一份账
+    assert_eq!(
+        svc_card::toggle_label(Some(&tsnap(
+            TunnelState::QuicUp,
+            Some(Leg::Quic),
+            true,
+            0,
+            true
+        ))),
+        "跳闸 QUIC"
+    );
+    assert_eq!(svc_card::toggle_label(None), "QUIC 未配置");
 }
 
 #[test]
 fn spec_字段标签_涂装唯一源() {
     assert_eq!(FIELD_LABELS.len(), N_FIELDS);
-    assert_eq!(FIELD_LABELS, ["后端", "在线", "会话", "错误"]);
+    assert_eq!(
+        FIELD_LABELS,
+        ["数据 9021", "反连 9022", "QUIC 62633", "QUIC 62694"]
+    );
 }

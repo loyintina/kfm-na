@@ -1,110 +1,153 @@
-//! svc_card.rs — 服务卡文案面（2026-09-20 用户立项；同日晚合并裁决：
-//! 连接卡 + 服务卡合并成 link_card 一张二级卡两竖列，本册**退役为
-//! 文案面**——几何归 link_card，涂装归 termview 合并段；本册只剩
-//! 三源合成（后端 × nasup × health）→ 卡文案 的映射与字段标签唯一源）。
-//!
-//! na-server 会话层的可视化面（docs/active/na-server.md §四）。文案
-//! v1（用户拍板，合并后原位沿用）：mini 卡头「服务 · 状态词」→ 四
-//! 字段行（后端/在线/会话/错误）→ 每会话一行；文案面无钮（2026-09-23
-//! [重启] 钮归 link_card 几何册 + self_restart 执行册，本册只出文案）。
-//! 数据 = svc_health 全局快照 + nasup 全局快照 + settings Backend
-//! 三源合成（compose 唯一映射）。
+//! svc_card.rs — 通道卡文案面（2026-09-24 用户裁决：原「服务」段
+//! ——后端/在线/会话/错误 + 会话行——「实际看了一下没什么用」，退役；
+//! 原位换更实际的：**四口连接状况**（数据 9021 / 反连 9022 /
+//! QUIC 62633 / QUIC 62694）+ **调试钮**（[跳闸 QUIC]/[投 QUIC]
+//! 切换 + [重启]）。本册 = 隧道快照 → 卡文案 的映射与字段标签唯一源；
+//! 几何归 link_card，涂装归 termview，跳闸/投票执行归 tunnel
+//! （TunnelCmd::TripQuic/HealQuic））。
 
-use crate::na_server_sup::{self, SupSnap, SupState};
-use crate::settings::Backend;
-use crate::svc_health::{self, HealthSnap, Phase};
+use crate::svc_health::{self, Phase};
+use crate::tunnel::{self, Leg, QUIC_FAIL_TRIP, TunnelSnap, TunnelState};
 use crate::ui::conn_card as cc;
 
 /// 字段行高 = mini 卡头行高（2 格，连接卡同件）
 pub const FIELD_H: u32 = cc::FIELD_H;
 /// 字段行距
 pub const FIELD_GAP: u32 = cc::FIELD_GAP;
-/// 字段行数（后端/在线/会话/错误——恒定四行，连接卡同尺）
+/// 字段行数（四口——恒定四行，连接卡同尺）
 pub const N_FIELDS: usize = 4;
 
-/// 字段标签（涂装唯一源——两处各写一份必漂移）
-pub const FIELD_LABELS: [&str; N_FIELDS] = ["后端", "在线", "会话", "错误"];
+/// 字段标签（涂装唯一源——两处各写一份必漂移）：数据 9021 = 本地
+/// 数据口；反连 9022 = 推送+调试路；QUIC 62633 = UDP 数据腿；
+/// QUIC 62694 = 反连腿（M4 预留，未启用）
+pub const FIELD_LABELS: [&str; N_FIELDS] = ["数据 9021", "反连 9022", "QUIC 62633", "QUIC 62694"];
 
-/// 卡文案（涂装快照）：三源合成后的唯一产物
+/// 卡文案（涂装快照）：隧道快照 → 卡行的唯一产物
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SvcSnap {
-    /// 状态词（卡头「服务 · {word}」）
+    /// 状态词（卡头「通道 · {word}」）
     pub word: String,
-    /// 后端词（na-server / kfmv4）
-    pub backend: String,
-    /// 在线时长（fmt_duration；无数据 —）
-    pub uptime: String,
-    /// 会话数（无数据 —）
-    pub sess_n: String,
-    /// 错误（无 —）
-    pub error: String,
-    /// 每会话一行（svc_health::session_line 同件）
-    pub lines: Vec<String>,
+    /// 四字段值（与 FIELD_LABELS 同序）
+    pub vals: [String; N_FIELDS],
 }
 
-/// 三源合成（A 档纯函数）：后端 × nasup 快照 × health 快照 → 卡文案。
-/// 相位机：kfmv4 托管态全占位；na-server 相 word 取 nasup 状态词
-/// （自持在线/外部借用/确认中/待隧道/退避×N/未启动），字段行只在
-/// health Ready 时有数据，Error 保留旧数据 + 错误上字段
-pub fn compose(backend: Backend, sup: Option<&SupSnap>, hs: &HealthSnap) -> SvcSnap {
-    if backend != Backend::NaServer {
+/// 卡头状态词（A 档纯函数）：数据腿的当前形态一句话
+pub fn head_word(st: &TunnelState) -> String {
+    match st {
+        TunnelState::QuicUp => "QUIC 在线".into(),
+        TunnelState::Up => "ssh 在线".into(),
+        TunnelState::ExternalUp => "外部借用".into(),
+        TunnelState::Starting => "连接中".into(),
+        TunnelState::Down { .. } => "断".into(),
+    }
+}
+
+/// 「数据 9021」行（A 档纯函数）：本地数据口谁在供
+pub fn data_row(st: &TunnelState) -> String {
+    match st {
+        TunnelState::QuicUp => "QUIC 桥在线".into(),
+        TunnelState::Up => "ssh 正连在线".into(),
+        TunnelState::ExternalUp => "外部借用".into(),
+        TunnelState::Starting => "起手中".into(),
+        TunnelState::Down { .. } => "断".into(),
+    }
+}
+
+/// 「反连 9022」行（A 档纯函数）：进程在 = 在线；数据路断了它必断
+/// （同一条 ssh/同一场重拉）；其余 = 重拉中（封锁闸/死亡审理窗口）
+pub fn reverse_row(s: &TunnelSnap) -> String {
+    if s.reverse_up {
+        "在线".into()
+    } else if matches!(s.state, TunnelState::Down { .. }) {
+        "断".into()
+    } else {
+        "重拉中".into()
+    }
+}
+
+/// 「QUIC 62633」行（A 档纯函数）：未配置 > 跳闸降级 > 在线 > 握手
+/// > 挂账 > 待起——跳闸账满 = 已降级 ssh 兜底（自动或手动同相）
+pub fn quic_row(s: &TunnelSnap) -> String {
+    if !s.quic_configured {
+        "未配置".into()
+    } else if s.quic_fails >= QUIC_FAIL_TRIP {
+        "跳闸降级 ssh".into()
+    } else if s.leg == Some(Leg::Quic) && matches!(s.state, TunnelState::QuicUp) {
+        "在线".into()
+    } else if s.leg == Some(Leg::Quic) {
+        "握手中".into()
+    } else if s.quic_fails > 0 {
+        format!("挂×{}", s.quic_fails)
+    } else {
+        "待起".into()
+    }
+}
+
+/// 隧道快照 → 卡文案（None = 看门狗没起：L3 未装/无服务器条目同相）
+pub fn compose(t: Option<&TunnelSnap>) -> SvcSnap {
+    match t {
+        None => SvcSnap {
+            word: "未启动".into(),
+            vals: ["—".into(), "—".into(), "—".into(), "预留 M4".into()],
+        },
+        Some(s) => SvcSnap {
+            word: head_word(&s.state),
+            vals: [
+                data_row(&s.state),
+                reverse_row(s),
+                quic_row(s),
+                "预留 M4".into(),
+            ],
+        },
+    }
+}
+
+/// QUIC 调试钮语义（A 档纯函数）：钮面/点按的唯一裁决。跳闸账未满
+/// =「跳闸 QUIC」（一键降级 ssh——UDP 黑洞/腿疑难时不等三次自动
+/// 跳闸，手动确认「是不是 QUIC 的锅」）；已满 =「投 QUIC」（再投
+/// 一票恢复）；未配置 = None（钮面显示「QUIC 未配置」，点按不动作）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuicToggle {
+    Trip,
+    Heal,
+}
+
+/// 调试钮裁决（None = 未配置，钮不可点）
+pub fn toggle_verdict(t: Option<&TunnelSnap>) -> Option<QuicToggle> {
+    let s = t?;
+    if !s.quic_configured {
+        return None;
+    }
+    if s.quic_fails >= QUIC_FAIL_TRIP {
+        Some(QuicToggle::Heal)
+    } else {
+        Some(QuicToggle::Trip)
+    }
+}
+
+/// 调试钮面文案（涂装唯一源）：与 toggle_verdict 同一份账
+pub fn toggle_label(t: Option<&TunnelSnap>) -> String {
+    match toggle_verdict(t) {
+        Some(QuicToggle::Trip) => "跳闸 QUIC".into(),
+        Some(QuicToggle::Heal) => "投 QUIC".into(),
+        None => "QUIC 未配置".into(),
+    }
+}
+
+/// 隧道快照借读（看门狗没起 = None）
+fn tunnel_snap() -> Option<TunnelSnap> {
+    tunnel::snap().map(|s| s.lock().unwrap().clone())
+}
+
+/// 读当前卡文案（涂装每烘焙拍一张；全局快照锁短）。Kfmv4 托管相 =
+/// 全占位（后端非 na-server 时四口无意义）；相判定吃 svc_health
+/// 配置源（壳设置加载时喂入——不许另开一路读 settings 两源漂移）
+pub fn current() -> SvcSnap {
+    if svc_health::snap().phase == Phase::Kfmv4 {
         return SvcSnap {
             word: "kfmv4 托管".into(),
-            backend: "kfmv4".into(),
-            uptime: "—".into(),
-            sess_n: "—".into(),
-            error: "—".into(),
-            lines: Vec::new(),
+            vals: ["—".into(), "—".into(), "—".into(), "预留 M4".into()],
         };
     }
-    let word = match sup {
-        Some(s) => na_server_sup::state_word(&s.state),
-        None => "未启动".into(),
-    };
-    let sup_err = match sup {
-        Some(SupSnap {
-            state: SupState::Down { last_error, .. },
-            ..
-        }) if !last_error.is_empty() => last_error.clone(),
-        _ => "—".into(),
-    };
-    let (uptime, sess_n, lines) = match &hs.info {
-        Some(info) => (
-            svc_health::fmt_duration(info.uptime_s),
-            info.sessions.len().to_string(),
-            info.sessions.iter().map(svc_health::session_line).collect(),
-        ),
-        None => ("—".into(), "—".into(), Vec::new()),
-    };
-    let error = match &hs.phase {
-        Phase::Error(e) => e.clone(),
-        _ => sup_err,
-    };
-    SvcSnap {
-        word,
-        backend: "na-server".into(),
-        uptime,
-        sess_n,
-        error,
-        lines,
-    }
-}
-
-/// 读当前卡文案（涂装每烘焙拍一张；全局快照锁短）。后端相取
-/// svc_health 配置（壳设置加载时喂入——与轮询器同源，不许另开一路
-/// 读 settings 两源漂移）：Kfmv4 相 = 托管态，其余 = na-server
-pub fn current() -> SvcSnap {
-    let hs = svc_health::snap();
-    let backend = if hs.phase == Phase::Kfmv4 {
-        Backend::Kfmv4
-    } else {
-        Backend::NaServer
-    };
-    let sup = svc_health_sup_snap();
-    compose(backend, sup.as_ref(), &hs)
-}
-
-/// nasup 快照借读（看门狗没起 = None——后端非 na-server 同相）
-fn svc_health_sup_snap() -> Option<SupSnap> {
-    na_server_sup::snap().map(|s| s.lock().unwrap().clone())
+    compose(tunnel_snap().as_ref())
 }

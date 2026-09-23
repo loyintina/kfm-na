@@ -189,15 +189,13 @@ fn parser_geom(
     } else {
         pp::Mode::Normal
     };
-    let n_svc = crate::ui::svc_card::current().lines.len();
     let vbottom = pp::visible_bottom(sh, vbottom_inset);
     let area = crate::ui::parser_chain::page_area(sw, sh, bar_h);
     let cap = (vbottom - area.y).max(0) as u32;
     let tmux_h = pp::tmux_card_h(snap.sessions.len(), mode, cap);
     let regs = crate::ui::parser_chain::regions(sw, sh, bar_h, vbottom, tmux_h);
     let lay = pp::layout_in(regs.dock.clone(), snap.sessions.len(), mode, snap.scroll);
-    let chain_h =
-        crate::ui::parser_chain::heights(tmux_h, n_svc, crate::ui::sys_card::card_h_now());
+    let chain_h = crate::ui::parser_chain::heights(tmux_h, crate::ui::sys_card::card_h_now());
     let scrolls = crate::ui::parser_chain::Scrolls {
         left: snap.left_scroll,
         right: snap.right_scroll,
@@ -2286,7 +2284,6 @@ impl App {
                                         && py >= g.regs.right_top.y
                                         && py < g.regs.right_top.y + i64::from(g.regs.right_top.h);
                                     if in_win {
-                                        let n_svc = crate::ui::svc_card::current().lines.len();
                                         let llay = crate::ui::link_card::layout_in(
                                             link_rect,
                                             n_svc,
@@ -2313,8 +2310,36 @@ impl App {
                                         &format!("连接服务卡点重连 → 下达{ok}"),
                                     );
                                 }
+                                crate::ui::link_card::LinkHit::QuicToggle => {
+                                    // 跳闸还是投票归 svc_card::toggle_verdict
+                                    // 唯一裁决（未配置 = None，不动作）
+                                    let tsnap = crate::tunnel::snap();
+                                    let tsnap = tsnap.as_ref().map(|s| s.lock().unwrap().clone());
+                                    match crate::ui::svc_card::toggle_verdict(tsnap.as_ref()) {
+                                        Some(crate::ui::svc_card::QuicToggle::Trip) => {
+                                            let ok = crate::tunnel::request_trip_quic();
+                                            crate::report::report(
+                                                "tunnel",
+                                                &format!("通道卡点跳闸 QUIC → 下达{ok}"),
+                                            );
+                                        }
+                                        Some(crate::ui::svc_card::QuicToggle::Heal) => {
+                                            let ok = crate::tunnel::request_heal_quic();
+                                            crate::report::report(
+                                                "tunnel",
+                                                &format!("通道卡点投 QUIC → 下达{ok}"),
+                                            );
+                                        }
+                                        None => {
+                                            crate::report::report(
+                                                "tunnel",
+                                                "通道卡 QUIC 钮：未配置，不动作",
+                                            );
+                                        }
+                                    }
+                                }
                                 crate::ui::link_card::LinkHit::Restart => {
-                                    self.self_restart_tap("服务段[重启]钮");
+                                    self.self_restart_tap("通道段[重启]钮");
                                 }
                             }
                         }
