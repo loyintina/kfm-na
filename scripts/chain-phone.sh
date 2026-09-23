@@ -1,12 +1,13 @@
 #!/bin/bash
-# chain-phone.sh — 白天 chain 闸在手机端跑（2026-09-01 用户拍板：
-# 大负载任务白天只准手机端；服务器 chain 全量只准 01:00-07:00）。
+# chain-phone.sh — 手机端跑全量 chain（2026-09-23 起降级为可选工具，
+# 不再是白天提交闸：闸已全天收回服务器本地，pre-commit 直接跑 chain.sh。
+# 保留场景：想在手机工具链上双保险复跑、或验证手机端工具链健康度）。
 #
 # 用法：bash scripts/chain-phone.sh
 # 流程：服务器暂存区全量 diff → 打补丁推到手机 apply → 手机跑全量
 #       chain（双环境自适应）→ 绿了落 stamp（补丁哈希+时间）→ 手机
-#       reset --hard 还原现场。pre-commit 白天校验 stamp（补丁哈希必须
-#       与当前暂存区一致，6 小时有效）——改了代码就必须重跑，无侥幸。
+#       reset --hard 还原现场。（stamp 已不被 pre-commit 消费，
+#       仅为双保险跑过的凭据。）
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 
