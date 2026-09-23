@@ -143,7 +143,45 @@ nsA（客户端）─veth─ nsR（路由器/NAT）─veth─ 服务器（lo）
       test-quic-migration.sh`——conntrack 清空+snat 换源（10→11）模拟
       运营商掐旧映射，QUIC 60/60 行全回还零重连，TCP 反例对照必死。
       环境坑一枚：本机内核 nft 在新 netns 建 nat 链 ENOENT，用 iptables）
-- [ ] M3 na-server QUIC 监听 + na 核本机桥：9021 全程 QUIC 跑通（redroid 冒烟）
-- [ ] M4 反连路（9022）迁移 + ssh 腿降级接线 + 看门狗双腿状态机
+- [x] M3 na-server QUIC 监听 + na 核本机桥（✅ 2026-09-23：na-server
+      `NA_QUIC_BIND`/`NA_QUIC_CERT` 可选 QUIC 腿（首跑 rcgen 自签落盘，
+      指纹打 stderr）；na-quic `run_server`/`run_client` 桥接全链考题
+      `spec_m3_桥接全链_echo_逐字节回还` + `spec_m3_na_server_quic_leg_health`
+      全绿；pinning 正反两钉（对指纹过/错指纹握手即拒）。redroid 真链
+      冒烟待 §七问题 1 裁决后随 M5 走）
+- [ ] M4 反连路（9022）迁移 + 真链双腿并行
+      （**看门狗双腿状态机已提前就位** 2026-09-23：tunnel.rs `Leg` 裁决
+      QUIC 优先、`QUIC_FAIL_TRIP=3` 连挂跳闸降级 ssh、腿在时 ssh 降
+      `-R`-only 伴生保推送路、手动重连/回前台即审清零再给 QUIC 一票；
+      `servers.json` 增 `"quic": {enable, port=9023, pin=指纹hex}` 段，
+      缺省关。待办：反连路 QUIC 化 + 公网 UDP 裁决后的真链并行验证）
 - [ ] M5 真机验证（省电周间隙）+ 认证 pinning 落设置页
 - [ ] M6（v1.1）0-RTT 会话票据
+
+## 九、部署配置（M3 落地形态）
+
+**服务器侧（na-server）**：两个环境变量，缺省不开——
+
+- `NA_QUIC_BIND`：QUIC 腿监听地址。§七问题 1 裁决前与 TCP 同走回环
+  硬闸（只准 127.0.0.1）；裁决后绑公网 UDP（倾向 9023）。
+- `NA_QUIC_CERT`：证书路径前缀，缺省 `/root/kfm-na/certs/quic`。
+  首跑 rcgen 自签落盘 `{前缀}.der` / `{前缀}.key.der`，指纹（DER 的
+  SHA-256 hex）打 stderr——手机 pinning 的比对物，**必须持久**（重生成
+  = 全设备换 pin）。
+
+**手机侧（servers.json 条目）**：
+
+```json
+"quic": { "enable": false, "port": 9023, "pin": "<64 位指纹 hex>" }
+```
+
+缺省关。`tunnel::quic_configured` 齐件判定：开关开 + 口非 0 + 指纹
+恰 64 位 hex——缺任一件静默走 ssh（QUIC 是加速器，不是单点）。
+
+**看门狗双腿语义**（tunnel.rs，考题 `spec_quic_*` 钉死）：腿裁决
+`leg_verdict`——QUIC 优先，连挂 3 次（`QUIC_FAIL_TRIP`）跳闸降级 ssh
+兜底；QUIC 腿在时 ssh 只挂 `-R`-only 伴生（`reverse_only_args`，9022
+推送路不断，本地口唯一属主是 QUIC 腿）；腿死信事件驱动（run_client
+返回即死，免探活三件套）；手动重连/回前台即审清零跳闸账再给 QUIC
+一票。状态相新增 `QuicUp`（卡面「自持 QUIC 在线」），与 `Up` 同属
+可用相。

@@ -7,7 +7,7 @@ use kfm_na::na_server_sup::{
     MARK_ALIVE, MARK_FAIL, MARK_SPAWNED, MARK_SYSTEMD, SupMode, SupState, UNIT_NAME, Verdict,
     ensure_script, exec_args, mode_of, mode_word, state_word, unit_content, verdict_of,
 };
-use kfm_na::settings::{Backend, ServerEntry, SshFields, TunnelPorts};
+use kfm_na::settings::{Backend, QuicFields, ServerEntry, SshFields, TunnelPorts};
 
 fn srv(host: &str, user: &str, key: &str) -> ServerEntry {
     ServerEntry {
@@ -28,6 +28,7 @@ fn srv(host: &str, user: &str, key: &str) -> ServerEntry {
         command: None,
         hotkey: None,
         backend: Backend::NaServer,
+        quic: QuicFields::default(),
     }
 }
 

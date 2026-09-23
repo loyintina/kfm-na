@@ -5,10 +5,11 @@
 //! ②BatchMode 漏了必须咬（无 askpass 时密码悬问 = 隧道假死）；
 //! ③-R 反连裸口打头（公网暴露面）/ 整段摘除必须咬。
 
-use kfm_na::settings::{Backend, ServerEntry, SshFields, TunnelPorts};
+use kfm_na::settings::{Backend, QuicFields, ServerEntry, SshFields, TunnelPorts};
 use kfm_na::tunnel::{
-    KFMV4_PORT, NA_SERVER_PORT, TunnelState, backoff_secs, forward_args, state_word, target_port,
-    usable, usable_edge_kick,
+    KFMV4_PORT, Leg, NA_SERVER_PORT, QUIC_FAIL_TRIP, TunnelState, backoff_secs, forward_args,
+    leg_verdict, parse_pin, quic_configured, reverse_only_args, state_word, target_port, usable,
+    usable_edge_kick,
 };
 
 fn srv(host: &str, user: &str, key: &str) -> ServerEntry {
@@ -30,6 +31,7 @@ fn srv(host: &str, user: &str, key: &str) -> ServerEntry {
         command: None,
         hotkey: None,
         backend: Backend::Kfmv4,
+        quic: QuicFields::default(),
     }
 }
 
@@ -394,4 +396,73 @@ fn spec_bar141_回前台即审_健康不碰僵尸即杀() {
     // 娃不在 = 退避/未启动，零退避立即重拉
     assert_eq!(resume_verdict(false, false, false), ResumeAction::Respawn);
     assert_eq!(resume_verdict(false, true, true), ResumeAction::Respawn);
+}
+
+// ---- QUIC 腿（M3c，默认关）：齐件判定 / 指纹解析 / 腿裁决 / -R-only 参数 ----
+
+#[test]
+fn spec_quic_parse_pin_只收64位hex() {
+    let good = "ab".repeat(32);
+    assert_eq!(parse_pin(&good).unwrap()[0], 0xab);
+    assert_eq!(parse_pin(&good).unwrap()[31], 0xab);
+    assert!(parse_pin(&good.to_uppercase()).is_some(), "大写 hex 也合法");
+    assert!(parse_pin(&"ab".repeat(31)).is_none(), "62 字符太短");
+    assert!(parse_pin(&"ab".repeat(33)).is_none(), "66 字符太长");
+    assert!(
+        parse_pin(&format!("{}zz", "ab".repeat(31))).is_none(),
+        "非 hex 字符"
+    );
+    assert!(parse_pin("").is_none(), "空串");
+}
+
+#[test]
+fn spec_quic_齐件判定() {
+    let mut s = srv("h", "root", "/k");
+    assert!(!quic_configured(&s), "缺省关 = 腿不存在");
+    s.quic.enable = true;
+    assert!(!quic_configured(&s), "开关开但指纹空 = 不齐件");
+    s.quic.pin = "ab".repeat(32);
+    assert!(quic_configured(&s), "开关+合法指纹 = 齐件");
+    s.quic.port = 0;
+    assert!(!quic_configured(&s), "口 0 = 不齐件");
+}
+
+#[test]
+fn spec_quic_腿裁决_优先与跳闸() {
+    assert_eq!(QUIC_FAIL_TRIP, 3, "跳闸线钉死：连挂 3 次降级 ssh 兜底");
+    assert_eq!(leg_verdict(false, 0), Leg::Ssh, "不齐件 = ssh");
+    assert_eq!(leg_verdict(true, 0), Leg::Quic, "QUIC 优先");
+    assert_eq!(leg_verdict(true, 2), Leg::Quic, "挂 2 次仍未跳闸");
+    assert_eq!(leg_verdict(true, 3), Leg::Ssh, "挂 3 次跳闸降级");
+    assert_eq!(leg_verdict(true, 99), Leg::Ssh, "跳闸后不再试");
+}
+
+#[test]
+fn spec_quic_反连伴生参数_正连摘除() {
+    let a =
+        reverse_only_args(&srv("8.145.46.182", "root", "/k/id_ed25519")).expect("合法条目必须出参");
+    let joined = a.join(" ");
+    assert!(
+        !a.iter().any(|x| x == "-L"),
+        "-L 必须摘除：本地口唯一属主是 QUIC 腿"
+    );
+    assert!(
+        joined.contains("-R 127.0.0.1:9022:127.0.0.1:8024"),
+        "反连推送路必须留（9022 不断），实际 {joined}"
+    );
+    assert!(a.iter().any(|x| x == "BatchMode=yes"), "其余安全件不动");
+}
+
+#[test]
+fn spec_quic_状态词与可用相() {
+    assert_eq!(state_word(&TunnelState::QuicUp), "自持 QUIC 在线");
+    assert!(usable(&TunnelState::QuicUp), "QUIC 腿在线 = 本地口能走");
+    // 可用沿踢壳层：QuicUp 与 Up 同相
+    let down = TunnelState::Down {
+        attempts: 1,
+        last_error: "x".into(),
+    };
+    assert!(usable_edge_kick(false, &TunnelState::QuicUp, true));
+    assert!(!usable_edge_kick(true, &TunnelState::QuicUp, true));
+    assert!(!usable_edge_kick(false, &down, true));
 }

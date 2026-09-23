@@ -7,6 +7,23 @@
 
 ## 当前位置（2026-09-23)
 
+> **QUIC 隧道线 M3 闭环（2026-09-23 下午）**：设计 docs/active/quic隧道.md
+> （§九 部署配置章新增）。①**na-quic 桥接库成型**：`run_server`（QUIC 入流
+> 读 2 字节端口头→回联回环）/`run_client`（显式 `target_port`——自抓过
+> 一个设计缺陷：把本机监听口误当端口头写流，本机口与远端目标口已解耦）/
+> 指纹 pinning（`PinnedVerifier`，不走 CA）。考题：`spec_m3_桥接全链_echo_
+> 逐字节回还`（TCP echo←QUIC 桥两跳）、`spec_m3_pinning_错指纹_握手即拒`、
+> 端口头编解码往返，全绿 + aarch64-android check 绿。②**na-server 可选
+> QUIC 腿**：env `NA_QUIC_BIND`/`NA_QUIC_CERT`（缺省关；首跑 rcgen 自签落
+> 盘，指纹打 stderr；§七问题 1 裁决前与 TCP 同走回环硬闸），整环考题
+> `spec_m3_na_server_quic_leg_health`（真二进制+真桥打 /api/na/health）绿。
+> ③**看门狗双腿状态机提前就位（M4 的一半）**：tunnel.rs `Leg` 裁决 QUIC
+> 优先、`QUIC_FAIL_TRIP=3` 跳闸降级 ssh、腿在时 ssh 降 `-R`-only 伴生保
+> 推送路、腿死信事件驱动免探活；`servers.json` 增 `"quic"` 段，**缺省关**。
+> **待用户裁决**：§七问题 1——QUIC 走 UDP 必须绑公网新口（倾向 9023），
+> 安全语义从回环改双向 pinning（设计 §四）。真链冒烟（redroid/真机）随
+> M5 走。离线 vendor 更新（quinn 链）随本次提交后补。
+
 > **Termux 自主化（2026-09-23 午后，用户拍板）**：动机 = 未来旧手机开机即
 > 陌生设备，无 Termux 资产，na 须自持编译+热更链。两步落地：①**日常闸收
 > 归服务器全天**——pre-commit 全天本地跑 chain.sh（白天双甲，09-01 修订

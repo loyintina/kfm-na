@@ -906,6 +906,7 @@ dependencies = [
  "log",
  "na-loader",
  "na-protocol",
+ "na-quic",
  "na-sys",
  "ndk",
  "nix",
@@ -1073,6 +1074,7 @@ dependencies = [
  "quinn",
  "rcgen",
  "rustls",
+ "sha2",
  "tokio",
 ]
 
@@ -1083,8 +1085,10 @@ dependencies = [
  "futures-util",
  "libc",
  "na-protocol",
+ "na-quic",
  "na-sys",
  "nix",
+ "rustls",
  "serde_json",
  "tempfile",
  "tokio",
@@ -2069,6 +2073,17 @@ name = "sha1"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a978451301f4db1d02937a4ab3ccce137717b81826e79b7d49ffe3244a13c3b8"
+dependencies = [
+ "cfg-if",
+ "cpufeatures 0.2.17",
+ "digest",
+]
+
+[[package]]
+name = "sha2"
+version = "0.10.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7507d819769d01a365ab707794a4084392c824f54a7a6a7862f8c3d0892b283"
 dependencies = [
  "cfg-if",
  "cpufeatures 0.2.17",

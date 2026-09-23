@@ -107,6 +107,31 @@ pub struct ServerEntry {
     pub hotkey: Option<Hotkey>,
     /// 会话层后端（缺省 Kfmv4 现状锚）
     pub backend: Backend,
+    /// QUIC 隧道腿（设计 docs/active/quic隧道.md；缺省关——§七问题 1
+    /// 公网 UDP 口裁决前只代码就位）
+    pub quic: QuicFields,
+}
+
+/// QUIC 腿缺省服务器 UDP 口（单一源——na-server NA_QUIC_BIND 部署对齐它）
+pub const QUIC_DEFAULT_PORT: u16 = 9023;
+
+/// QUIC 腿配置（servers.json "quic" 段）：enable 缺省 false（未裁决不开）、
+/// port 缺省 9023、pin = 服务器证书 DER 的 SHA-256 hex（pinning，设计 §四）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuicFields {
+    pub enable: bool,
+    pub port: u16,
+    pub pin: String,
+}
+
+impl Default for QuicFields {
+    fn default() -> Self {
+        Self {
+            enable: false,
+            port: QUIC_DEFAULT_PORT,
+            pin: String::new(),
+        }
+    }
 }
 
 impl ServerEntry {
@@ -159,6 +184,23 @@ pub fn parse_servers(json: &str) -> Result<Vec<ServerEntry>, String> {
             .get("command")
             .and_then(|v| v.as_str())
             .map(str::to_string);
+        let quic_v = item.get("quic").cloned().unwrap_or(serde_json::Value::Null);
+        let quic_d = QuicFields::default();
+        let quic = QuicFields {
+            enable: quic_v
+                .get("enable")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+            port: quic_v
+                .get("port")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(quic_d.port as u64) as u16,
+            pin: quic_v
+                .get("pin")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+        };
         out.push(ServerEntry {
             id: s("id"),
             name: s("name"),
@@ -174,6 +216,7 @@ pub fn parse_servers(json: &str) -> Result<Vec<ServerEntry>, String> {
             command,
             hotkey: item.get("hotkey").and_then(parse_hotkey_value),
             backend: Backend::parse(item.get("backend")),
+            quic,
         });
     }
     Ok(out)

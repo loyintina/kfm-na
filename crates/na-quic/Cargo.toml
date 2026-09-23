@@ -6,11 +6,12 @@ description = "na QUIC 隧道：quinn endpoint + TCP↔stream 桥接（手机/�
 
 [dependencies]
 quinn = "0.11"
+rustls = { version = "0.23", features = ["ring"] }
+rcgen = "0.13"
+sha2 = "0.10"
 tokio = { version = "1", features = ["rt", "macros", "time", "net", "io-util", "sync"] }
 
 [dev-dependencies]
-rcgen = "0.13"
-rustls = { version = "0.23", features = ["ring"] }
 
 # M2 迁移考题载体（scripts/test-quic-migration.sh 驱动）
 [[example]]

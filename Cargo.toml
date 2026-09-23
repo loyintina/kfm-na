@@ -21,6 +21,8 @@ na-protocol = { path = "crates/na-protocol" }
 # 环境体征探针（环境卡数据面）：与 na-server 同一份解析/采集——
 # 本地相直读 /proc、远程相吃 /api/na/sys 时用同一套 fmt
 na-sys = { path = "crates/na-sys" }
+# QUIC 隧道腿（tunnel.rs 双腿状态机，默认关）：设计 docs/active/quic隧道.md
+na-quic = { path = "crates/na-quic" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 log = "0.4"

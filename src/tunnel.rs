@@ -192,6 +192,58 @@ pub fn e2e_strike(prev: u32, alive: bool) -> (u32, bool) {
     }
 }
 
+// ---- QUIC 腿（设计 docs/active/quic隧道.md §二桥接模型，默认关） ----
+
+/// 指纹 hex → 32 字节（A 档纯函数）：恰 64 字符全 hex 才收
+pub fn parse_pin(h: &str) -> Option<[u8; 32]> {
+    if h.len() != 64 {
+        return None;
+    }
+    let mut out = [0u8; 32];
+    for (i, c) in h.as_bytes().chunks_exact(2).enumerate() {
+        let hi = (c[0] as char).to_digit(16)?;
+        let lo = (c[1] as char).to_digit(16)?;
+        out[i] = ((hi << 4) | lo) as u8;
+    }
+    Some(out)
+}
+
+/// QUIC 腿齐件判定（A 档纯函数）：开关开 + 口非 0 + 指纹合法。
+/// 缺任一件 = 腿不存在，静默走 ssh——QUIC 是可选加速器，不是单点
+pub fn quic_configured(s: &ServerEntry) -> bool {
+    s.quic.enable && s.quic.port != 0 && parse_pin(&s.quic.pin).is_some()
+}
+
+/// 连挂跳闸线（A 档）：QUIC 腿连续死满此次数降级 ssh 兜底。
+/// 计数只随手动重连/回前台即审清零——用户在等 = 给 QUIC 再投一票
+pub const QUIC_FAIL_TRIP: u32 = 3;
+
+/// 数据路供应商（A 档纯函数）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Leg {
+    Quic,
+    Ssh,
+}
+
+/// 腿裁决（A 档纯函数）：QUIC 优先，跳闸降级 ssh 兜底
+pub fn leg_verdict(configured: bool, quic_fails: u32) -> Leg {
+    if configured && quic_fails < QUIC_FAIL_TRIP {
+        Leg::Quic
+    } else {
+        Leg::Ssh
+    }
+}
+
+/// -R-only ssh 参数（A 档纯函数）：QUIC 腿供数据路时 ssh 只挂反连
+/// 推送路（9022 不断）——摘除 -L 两段，本地口唯一属主是 QUIC 腿
+pub fn reverse_only_args(s: &ServerEntry) -> Result<Vec<String>, String> {
+    let mut a = forward_args(s)?;
+    if let Some(i) = a.iter().position(|x| x == "-L") {
+        a.drain(i..i + 2);
+    }
+    Ok(a)
+}
+
 /// 端到端探活（B 档）：穿透本地转发口打 na-server 健康面，认 HTTP 200。
 /// 超时 1.2s——两次连败 ≈ 2~3s 定罪僵尸，比 keepalive 快一个量级
 fn probe_e2e(port: u16) -> bool {
@@ -220,6 +272,7 @@ fn probe_e2e(port: u16) -> bool {
 pub fn state_word(st: &TunnelState) -> String {
     match st {
         TunnelState::Up => "自持在线".into(),
+        TunnelState::QuicUp => "自持 QUIC 在线".into(),
         TunnelState::ExternalUp => "外部借用".into(),
         TunnelState::Starting => "连接中".into(),
         TunnelState::Down { attempts, .. } if *attempts == 0 => "未启动".into(),
@@ -227,10 +280,13 @@ pub fn state_word(st: &TunnelState) -> String {
     }
 }
 
-/// 传输可用相（A 档纯函数）：Up/ExternalUp 都是「本地口能走」——壳层
-/// 会话只管 127.0.0.1:9021 通不通，不问是谁供的口。
+/// 传输可用相（A 档纯函数）：Up/QuicUp/ExternalUp 都是「本地口能走」——
+/// 壳层会话只管 127.0.0.1:9021 通不通，不问是谁供的口。
 pub fn usable(st: &TunnelState) -> bool {
-    matches!(st, TunnelState::Up | TunnelState::ExternalUp)
+    matches!(
+        st,
+        TunnelState::Up | TunnelState::QuicUp | TunnelState::ExternalUp
+    )
 }
 
 /// 隧道可用沿踢壳层重孵的裁决（A 档纯函数，BAR-117）：上一拍不可用 →
@@ -312,6 +368,8 @@ pub enum TunnelState {
     Starting,
     /// 自持隧道在线（我们 spawn 的 ssh 供出本地口）
     Up,
+    /// QUIC 腿在线（na-quic 桥供出本地口，ssh 只挂 -R 推送路伴生）
+    QuicUp,
     /// 借用外部隧道（本地口被占且可连通——Termux ssh -L 让位前的过渡态）
     ExternalUp,
     /// 死了/起不来，attempts 次失败后退避重拉中
@@ -408,6 +466,70 @@ fn release_forward_sync(prefix: &Path, server: &ServerEntry, budget: std::time::
     }
 }
 
+/// QUIC 腿句柄（看门狗私有）：stop = 请它收（oneshot 进腿线程的 select），
+/// dead = 腿的死信（run_client 返回/线程消失 = 腿死）——死亡检测事件驱动，
+/// 这就是 QUIC 腿省掉探活三件套的原因（设计 docs/active/quic隧道.md §五）
+struct QuicLeg {
+    stop: tokio::sync::oneshot::Sender<()>,
+    dead: Receiver<String>,
+}
+
+/// 起 QUIC 腿（核内线程，非外部进程）：自带 current_thread tokio runtime
+/// 跑 na_quic::run_client——本机 127.0.0.1:{local_port} ←QUIC→ 服务器
+/// UDP {quic.port} → 回联 {target_port}。齐件判定在上游（leg_verdict），
+/// 本函数只吃已裁决的条目；None = 指纹不合法（上游已拦，此处兜底）
+fn spawn_quic_leg(server: &ServerEntry) -> Option<QuicLeg> {
+    use std::net::ToSocketAddrs as _;
+    let pin = parse_pin(&server.quic.pin)?;
+    let (stop, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let (dead_tx, dead) = channel::<String>();
+    let host = server.ssh.host.clone();
+    let qport = server.quic.port;
+    let local = std::net::SocketAddr::from(([127, 0, 0, 1], server.tunnel.local_port));
+    let target = target_port(&server.backend);
+    std::thread::spawn(move || {
+        let say = |m: String| {
+            let _ = dead_tx.send(m);
+        };
+        let Some(addr) = format!("{host}:{qport}")
+            .to_socket_addrs()
+            .ok()
+            .and_then(|mut i| i.next())
+        else {
+            say("DNS 解析失败".into());
+            return;
+        };
+        let rt = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(r) => r,
+            Err(e) => {
+                say(format!("runtime 起不来: {e}"));
+                return;
+            }
+        };
+        rt.block_on(async move {
+            tokio::select! {
+                r = na_quic::run_client(
+                    addr,
+                    "kfm-na",
+                    local,
+                    target,
+                    na_quic::client_config(pin),
+                ) => {
+                    say(match r {
+                        Ok(()) => "腿正常退出".into(),
+                        Err(e) => format!("腿死: {e}"),
+                    });
+                }
+                _ = stop_rx => say("看门狗请收".into()),
+            }
+        });
+    });
+    Some(QuicLeg { stop, dead })
+}
+
 /// 起看门狗（一线程 1s 滴答）：探口 → 外部占则让位挂 ExternalUp；
 /// 无娃则 spawn（Starting）；探活过且娃在 → Up；娃死 → Down 退避重拉。
 /// 返回共享快照——UI/报表只读这份。**幂等**：重复调用（设置重载）返回
@@ -457,6 +579,11 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
     std::thread::spawn(move || {
         let mut child: Option<std::process::Child> = None;
         let mut attempts: u32 = 0;
+        // QUIC 腿（默认关，设置页 servers.json "quic" 段开启）：腿在 = 它供
+        // 数据路，ssh 只挂 -R 推送路伴生；腿死连挂 QUIC_FAIL_TRIP 次跳闸，
+        // 降级 ssh 兜底，手动重连/回前台即审清零再给 QUIC 一票
+        let mut quic: Option<QuicLeg> = None;
+        let mut quic_fails: u32 = 0;
         let set = |st: TunnelState, snap_t: &Arc<Mutex<TunnelSnap>>| {
             let mut g = snap_t.lock().unwrap();
             if g.state != st {
@@ -471,14 +598,20 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
             rx.recv_timeout(dur).ok()
         };
         let reconnect = |child: &mut Option<std::process::Child>,
+                         quic: &mut Option<QuicLeg>,
                          attempts: &mut u32,
+                         quic_fails: &mut u32,
                          snap_t: &Arc<Mutex<TunnelSnap>>| {
-            crate::report::report("tunnel", "手动重连：杀娃重拉");
+            crate::report::report("tunnel", "手动重连：杀娃收腿重拉");
             if let Some(mut c) = child.take() {
                 let _ = c.kill();
                 let _ = c.wait(); // 收尸——不留僵尸，口随进程 teardown 立刻放
             }
+            if let Some(q) = quic.take() {
+                let _ = q.stop.send(());
+            }
             *attempts = 0;
+            *quic_fails = 0; // 用户在等 = 给 QUIC 再投一票
             set(
                 TunnelState::Down {
                     attempts: 0,
@@ -533,16 +666,143 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                 .map(|c| c.try_wait().ok().flatten().is_none())
                 .unwrap_or(false);
 
-            if port_open && !child_alive {
+            // QUIC 腿死信审理（事件驱动死亡检测）：腿死 → 记一笔跳闸账，
+            // ssh 伴生一并收（数据路换供应商，ssh 角色随之换），不睡——
+            // 落到重生段按 leg_verdict 立即重拉（兜底 ssh 零等待接上）
+            let mut quic_msg: Option<String> = None;
+            if let Some(q) = &quic {
+                match q.dead.try_recv() {
+                    Ok(m) => quic_msg = Some(m),
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        quic_msg = Some("腿线程消失".into())
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                }
+            }
+            if let Some(msg) = quic_msg {
+                quic = None;
+                quic_fails += 1;
+                crate::report::report(
+                    "tunnel",
+                    &format!("QUIC 腿死（{msg}），第 {quic_fails}/{QUIC_FAIL_TRIP} 次"),
+                );
+                if let Some(mut c) = child.take() {
+                    let _ = c.kill();
+                    let _ = c.wait();
+                }
+                set(
+                    TunnelState::Down {
+                        attempts: quic_fails,
+                        last_error: format!("QUIC 腿死: {msg}"),
+                    },
+                    &snap_t,
+                );
+            }
+
+            if port_open && !child_alive && quic.is_none() {
                 // 外部隧道占着口——让位不抢，30s 一拍复查（它一断下一拍接管）
                 set(TunnelState::ExternalUp, &snap_t);
                 if wait(&cmd_rx, std::time::Duration::from_secs(30)).is_some() {
-                    reconnect(&mut child, &mut attempts, &snap_t);
+                    reconnect(
+                        &mut child,
+                        &mut quic,
+                        &mut attempts,
+                        &mut quic_fails,
+                        &snap_t,
+                    );
                 }
                 continue;
             }
 
-            if child_alive {
+            if quic.is_some() {
+                was_up = port_open;
+                // 伴生 -R ssh 死亡审理：死了就地收，段尾重生（数据路不归它，
+                // 状态不动——QUIC 腿在，卡上就不许为推送路抖动翻状态）
+                if let Some(c) = child.as_mut()
+                    && let Some(code) = c.try_wait().ok().flatten()
+                {
+                    crate::report::report(
+                        "tunnel",
+                        &format!("伴生 -R ssh 退出（{code:?}），段尾重拉"),
+                    );
+                    child = None;
+                }
+                // 端到端探活（BAR-140 同款判据打 QUIC 桥）：连败×2 收腿
+                if port_open {
+                    let (n, kill) = e2e_strike(e2e_miss, probe_e2e(port));
+                    e2e_miss = n;
+                    if kill {
+                        crate::report::report(
+                            "tunnel",
+                            "端到端探活连败×2：QUIC 僵尸定罪，收腿立即重拉",
+                        );
+                        if let Some(q) = quic.take() {
+                            let _ = q.stop.send(());
+                        }
+                        quic_fails += 1;
+                        e2e_miss = 0;
+                        if let Some(mut c) = child.take() {
+                            let _ = c.kill();
+                            let _ = c.wait();
+                        }
+                        set(
+                            TunnelState::Down {
+                                attempts: quic_fails,
+                                last_error: "QUIC 僵尸".into(),
+                            },
+                            &snap_t,
+                        );
+                        continue;
+                    }
+                }
+                set(
+                    if port_open {
+                        TunnelState::QuicUp
+                    } else {
+                        TunnelState::Starting
+                    },
+                    &snap_t,
+                );
+                match wait(&cmd_rx, std::time::Duration::from_secs(1)) {
+                    Some(TunnelCmd::Reconnect) => reconnect(
+                        &mut child,
+                        &mut quic,
+                        &mut attempts,
+                        &mut quic_fails,
+                        &snap_t,
+                    ),
+                    // 回前台即审（BAR-141）：僵尸一拍定罪（不等连败×2）
+                    Some(TunnelCmd::ResumeKick) => {
+                        let probe_ok = !port_open || probe_e2e(port);
+                        if port_open && !probe_ok {
+                            crate::report::report(
+                                "tunnel",
+                                "回前台即审：QUIC 僵尸一拍定罪，收腿立即重拉",
+                            );
+                            if let Some(q) = quic.take() {
+                                let _ = q.stop.send(());
+                            }
+                            quic_fails += 1;
+                            if let Some(mut c) = child.take() {
+                                let _ = c.kill();
+                                let _ = c.wait();
+                            }
+                            set(
+                                TunnelState::Down {
+                                    attempts: quic_fails,
+                                    last_error: "QUIC 僵尸（回前台即审）".into(),
+                                },
+                                &snap_t,
+                            );
+                        }
+                    }
+                    None => {}
+                }
+                if child.is_some() || quic.is_none() {
+                    continue; // 伴生活着呢（或腿刚被收走落 Down）——下一拍再说
+                }
+                // 伴生死了：落到重生段补一条 -R-only ssh
+            } else if child_alive {
                 was_up = port_open;
                 // 端到端探活（BAR-140）：本地口通 ≠ 隧道活——NAT 吞 RST 时
                 // ssh 僵尸举着本地监听，数据面已死。连败×2 即杀娃立即重拉
@@ -575,7 +835,13 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                     &snap_t,
                 );
                 match wait(&cmd_rx, std::time::Duration::from_secs(1)) {
-                    Some(TunnelCmd::Reconnect) => reconnect(&mut child, &mut attempts, &snap_t),
+                    Some(TunnelCmd::Reconnect) => reconnect(
+                        &mut child,
+                        &mut quic,
+                        &mut attempts,
+                        &mut quic_fails,
+                        &snap_t,
+                    ),
                     // 回前台即审（BAR-141）：用户在等——健康不碰，僵尸一拍
                     // 定罪（不等连败×2），零退避立即重拉
                     Some(TunnelCmd::ResumeKick) => {
@@ -668,16 +934,65 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                 );
                 if wait_s > 0 {
                     match wait(&cmd_rx, std::time::Duration::from_secs(wait_s)) {
-                        Some(TunnelCmd::Reconnect) => reconnect(&mut child, &mut attempts, &snap_t),
-                        // 回前台即审（BAR-141）：退避中的用户在等——清零立即 spawn
-                        Some(TunnelCmd::ResumeKick) => attempts = 0,
+                        Some(TunnelCmd::Reconnect) => reconnect(
+                            &mut child,
+                            &mut quic,
+                            &mut attempts,
+                            &mut quic_fails,
+                            &snap_t,
+                        ),
+                        // 回前台即审（BAR-141）：退避中的用户在等——清零立即
+                        // spawn；QUIC 跳闸账同清（用户在等 = 再给 QUIC 一票）
+                        Some(TunnelCmd::ResumeKick) => {
+                            attempts = 0;
+                            quic_fails = 0;
+                        }
                         None => {}
                     }
                 }
             }
 
+            // 数据路裁决（QUIC 优先，跳闸降级 ssh 兜底）：腿不在且配置齐件
+            // 未跳闸 → 起 QUIC 腿；ssh 随之降级为 -R-only 伴生（推送路不断）
+            if quic.is_none() && leg_verdict(quic_configured(&server), quic_fails) == Leg::Quic {
+                match spawn_quic_leg(&server) {
+                    Some(q) => {
+                        crate::report::report(
+                            "tunnel",
+                            &format!(
+                                "QUIC 腿已 spawn → 127.0.0.1:{port}（UDP {}:{}）",
+                                server.ssh.host, server.quic.port
+                            ),
+                        );
+                        quic = Some(q);
+                        e2e_miss = 0;
+                        set(TunnelState::Starting, &snap_t);
+                    }
+                    None => {
+                        quic_fails += 1;
+                        crate::report::report(
+                            "tunnel",
+                            &format!("QUIC 腿 spawn 缺件（指纹不合法），第 {quic_fails} 次"),
+                        );
+                    }
+                }
+            }
+            // ssh 参数：腿在 = -R-only 伴生；腿不在 = 全量正连（-L + -R）
+            let ssh_args = if quic.is_some() {
+                match reverse_only_args(&server) {
+                    Ok(a) => a,
+                    Err(e) => {
+                        crate::report::report("tunnel", &format!("伴生 ssh 参数缺件: {e}"));
+                        let _ = wait(&cmd_rx, std::time::Duration::from_secs(1));
+                        continue;
+                    }
+                }
+            } else {
+                args.clone()
+            };
+
             let spawn = std::process::Command::new(&ssh_bin)
-                .args(&args)
+                .args(&ssh_args)
                 .env("PATH", prefix.join("bin"))
                 .env("LD_LIBRARY_PATH", prefix.join("lib"))
                 .env("PREFIX", &prefix)
@@ -693,7 +1008,14 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                 Ok(mut c) => {
                     crate::report::report(
                         "tunnel",
-                        &format!("ssh 正连隧道已 spawn → 127.0.0.1:{port}"),
+                        &if quic.is_some() {
+                            format!(
+                                "伴生 -R ssh 已 spawn（推送路 → {}）",
+                                server.tunnel.remote_port
+                            )
+                        } else {
+                            format!("ssh 正连隧道已 spawn → 127.0.0.1:{port}")
+                        },
                     );
                     spawned_at = Some(std::time::Instant::now());
                     // stderr 读线程（随管道关闭自灭）：只留末 4 行非空
@@ -718,32 +1040,56 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                         });
                     }
                     child = Some(c);
-                    set(TunnelState::Starting, &snap_t);
+                    // 伴生重生不碰状态——QUIC 腿分支自管 QuicUp/Starting
+                    if quic.is_none() {
+                        set(TunnelState::Starting, &snap_t);
+                    }
                 }
                 Err(e) => {
                     attempts += 1;
                     crate::report::report("tunnel", &format!("ssh spawn 失败: {e}"));
-                    set(
-                        TunnelState::Down {
-                            attempts,
-                            last_error: format!("spawn 失败: {e}"),
-                        },
-                        &snap_t,
-                    );
+                    // 伴生 spawn 失败不翻数据路状态（QUIC 腿在，口还通）
+                    if quic.is_none() {
+                        set(
+                            TunnelState::Down {
+                                attempts,
+                                last_error: format!("spawn 失败: {e}"),
+                            },
+                            &snap_t,
+                        );
+                    }
                     match wait(
                         &cmd_rx,
                         std::time::Duration::from_secs(backoff_secs(attempts)),
                     ) {
-                        Some(TunnelCmd::Reconnect) => reconnect(&mut child, &mut attempts, &snap_t),
-                        Some(TunnelCmd::ResumeKick) => attempts = 0,
+                        Some(TunnelCmd::Reconnect) => reconnect(
+                            &mut child,
+                            &mut quic,
+                            &mut attempts,
+                            &mut quic_fails,
+                            &snap_t,
+                        ),
+                        Some(TunnelCmd::ResumeKick) => {
+                            attempts = 0;
+                            quic_fails = 0;
+                        }
                         None => {}
                     }
                 }
             }
             if let Some(cmd) = wait(&cmd_rx, std::time::Duration::from_secs(1)) {
                 match cmd {
-                    TunnelCmd::Reconnect => reconnect(&mut child, &mut attempts, &snap_t),
-                    TunnelCmd::ResumeKick => attempts = 0,
+                    TunnelCmd::Reconnect => reconnect(
+                        &mut child,
+                        &mut quic,
+                        &mut attempts,
+                        &mut quic_fails,
+                        &snap_t,
+                    ),
+                    TunnelCmd::ResumeKick => {
+                        attempts = 0;
+                        quic_fails = 0;
+                    }
                 }
             }
         }
