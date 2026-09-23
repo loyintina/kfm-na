@@ -11,3 +11,7 @@ tokio = { version = "1", features = ["rt", "macros", "time", "net", "io-util", "
 [dev-dependencies]
 rcgen = "0.13"
 rustls = { version = "0.23", features = ["ring"] }
+
+# M2 迁移考题载体（scripts/test-quic-migration.sh 驱动）
+[[example]]
+name = "quic_echo"

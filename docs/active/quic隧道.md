@@ -139,7 +139,10 @@ nsA（客户端）─veth─ nsR（路由器/NAT）─veth─ 服务器（lo）
 
 - [x] M1 依赖 spike（✅ 2026-09-23：host + aarch64-android 双端 check 过；
       echo 双通 `spec_m1_quic_echo_双通`。离线 vendor 更新留到 M3 接线时）
-- [ ] M2 netns 迁移考题：NAT 重映射下 echo 不丢行（+TCP 反例对照）
+- [x] M2 netns 迁移考题（✅ 2026-09-23 首发即过+复跑稳：`scripts/
+      test-quic-migration.sh`——conntrack 清空+snat 换源（10→11）模拟
+      运营商掐旧映射，QUIC 60/60 行全回还零重连，TCP 反例对照必死。
+      环境坑一枚：本机内核 nft 在新 netns 建 nat 链 ENOENT，用 iptables）
 - [ ] M3 na-server QUIC 监听 + na 核本机桥：9021 全程 QUIC 跑通（redroid 冒烟）
 - [ ] M4 反连路（9022）迁移 + ssh 腿降级接线 + 看门狗双腿状态机
 - [ ] M5 真机验证（省电周间隙）+ 认证 pinning 落设置页

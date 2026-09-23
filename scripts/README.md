@@ -143,6 +143,11 @@ termux-battery-status），只有 Termux 的 rootfs 干得了的活才用，
 - `cases/PIN-touch-accept.sh` — scroll ±5 首行精确往返(通道八)。
 - `cases/PIN-signal-accept.sh` — kill -URG 探针 SIGNAL 行 +1 且活着。
 - `cases/PIN-standby-death-accept.sh` — ss -K 掐 ws:远程死亡记账+活跃不受扰+自愈重连。
+- `test-quic-migration.sh` — QUIC M2 迁移考题（服务器本地，root+netns+
+  iptables+conntrack）：nsA 客户端经 NAT 出网，中途清 conntrack+snat 换源
+  模拟运营商掐映射——判卷：QUIC echo 全回还零重连 + TCP 反例必死。
+  载体 crates/na-quic/examples/quic_echo.rs（`cargo build -p na-quic
+  --example quic_echo` 先编）。不进 chain 必修闸（CI 无 root/netns）。
 - `cases/PIN-switch-accept.sh` — switch-req 切换往返 X→Y→X(通道九)。
 - `cases/PIN-remote-active-death-accept.sh` — 活跃=远程死亡自动重孵(弹一次远程,宜空闲时跑)。
 - `cases/PIN-rehatch-accept.sh` — 故障注入:exit 杀会话→自动重孵→回显(§十五)。
