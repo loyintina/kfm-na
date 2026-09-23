@@ -4453,16 +4453,25 @@ impl App {
                 .base
                 .as_ref()
                 .and_then(|b| b.ctx().get::<dyn TermFactory>().ok())
-                .map(|f| f.spawn(&f.default_config())),
+                .map(|f| {
+                    let mut cfg = f.default_config();
+                    // BAR-144：附着账在 → 附回账上会话（default_config 带的是
+                    // 设置里的默认会话，一刀切 = 切 nz 的用户每次重孵都被
+                    // 拽回 kfm-na）；账空 → 原命令一字不动（裸 shell 语义保住）
+                    cfg.command = crate::tmux_ctl::respawn_attach_cmd(
+                        self.remote_attached.as_deref(),
+                        cfg.command.as_deref(),
+                    );
+                    f.spawn(&cfg)
+                }),
         };
         let Some(h) = handle else {
             crate::report::report_sync("term", &format!("重连失败: {name} 工厂取回不到"));
             return;
         };
         // 本地会话重孵 = 裸 shell（default_config 无命令）——本地附着账
-        // 同步勾销，页牌随行（远程臂不清：default_config 带设置里的
-        // attach 命令，重孵即重附，附着账依然成立——不对称来自配置差，
-        // 不是工序差）
+        // 同步勾销，页牌随行（远程臂不清账：BAR-144 起命令面已按附着账
+        // 裁决附回原会话，账与命令一致，勾销反而会丢附着）
         if name == "local" && self.local_attached.is_some() {
             crate::report::report("term", "本地重孵 = 裸 shell，附着账勾销");
             self.local_attached = None;

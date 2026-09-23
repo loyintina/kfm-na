@@ -152,6 +152,31 @@ fn spec_cmd_名字含空格照引() {
     assert_eq!(cmd_attach("my srv"), "tmux new-session -A -s 'my srv'");
 }
 
+// ---- respawn_attach_cmd（BAR-144：重孵按附着账裁决，不许一刀切默认）----
+
+#[test]
+fn spec_bar144_重孵_附着账在_附回账上会话() {
+    // 用户 attach nz 后隧道抖动重孵：命令必须附回 nz，不是设置里的
+    // 默认 kfm-na——一刀切 default_config 就是「切 nz 被拽回」的病灶
+    let default = Some("tmux new-session -A -s 'kfm-na'");
+    assert_eq!(
+        tmux_ctl::respawn_attach_cmd(Some("nz"), default),
+        Some("tmux new-session -A -s 'nz'".to_string())
+    );
+}
+
+#[test]
+fn spec_bar144_重孵_账空_原命令一字不动() {
+    // 账空两臂：默认 attach 命令原样还回（首次进默认会话的重连语义）；
+    // None 进 None 出（脱离 tmux 后的裸 shell 重孵语义）
+    let default = Some("tmux new-session -A -s 'kfm-na'");
+    assert_eq!(
+        tmux_ctl::respawn_attach_cmd(None, default),
+        Some("tmux new-session -A -s 'kfm-na'".to_string())
+    );
+    assert_eq!(tmux_ctl::respawn_attach_cmd(None, None), None);
+}
+
 // ---- session_name_of（现有启动命令 → 附着会话名）----
 
 #[test]

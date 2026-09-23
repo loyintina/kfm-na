@@ -121,6 +121,19 @@ pub fn cmd_attach(name: &str) -> String {
     format!("tmux new-session -A -s '{name}'")
 }
 
+/// 重孵附着裁决（BAR-144）：自动重孵拿哪条启动命令——
+/// 附着账在 → 附回账上那个会话（用户切去的 nz，不是设置里的默认）；
+/// 账空 → 配置原命令照旧。病灶实录：respawn_session 远程臂一刀切
+/// default_config，用户 attach nz 后隧道一抖，重孵即被拽回默认会话。
+/// 纯函数（A 档）：attached=None 必须原样还回 default_cmd（一字不动，
+/// 脱离 tmux 后的裸 shell 重孵语义靠这一臂保住）。
+pub fn respawn_attach_cmd(attached: Option<&str>, default_cmd: Option<&str>) -> Option<String> {
+    match attached {
+        Some(name) => Some(cmd_attach(name)),
+        None => default_cmd.map(str::to_string),
+    }
+}
+
 /// 引号感知分词（'...'/"..." 内空白不切）——`-s 'my srv'` 这类命令串
 /// 按 shell 语义取词；引号不配对时退化按空白切（提取场景宁缺毋滥）
 fn shell_tokens(command: &str) -> Vec<String> {
