@@ -29,6 +29,7 @@
 | `src/keymap.rs` | 2 | 2 | 0 | — |
 | `src/local_pty.rs` | 7 | 6 | 1 | android_prefix |
 | `src/na_server_sup.rs` | 20 | 15 | 5 | REPO_DIR HEALTH_URL EXEC_TIMEOUT_SECS RECHECK_SECS TUNNEL_WAIT_SECS |
+| `src/offline_keys.rs` | 8 | 8 | 0 | — |
 | `src/plugins/ai_presence.rs` | 2 | 2 | 0 | — |
 | `src/plugins/conn_provider_local.rs` | 3 | 3 | 0 | — |
 | `src/plugins/conn_provider_ws.rs` | 3 | 3 | 0 | — |
@@ -37,7 +38,7 @@
 | `src/plugins/term_alacritty.rs` | 3 | 3 | 0 | — |
 | `src/plugins/ui_fx.rs` | 2 | 2 | 0 | — |
 | `src/providers.rs` | 5 | 5 | 0 | — |
-| `src/report.rs` | 8 | 1 | 7 | set_boot_t0 start_flusher report report_sync report_sync_once http_status_is_200 escape_json |
+| `src/report.rs` | 9 | 4 | 5 | set_boot_t0 start_flusher report_sync report_sync_once http_status_is_200 |
 | `src/scroll.rs` | 5 | 5 | 0 | — |
 | `src/sess_mode.rs` | 3 | 3 | 0 | — |
 | `src/session.rs` | 11 | 11 | 0 | — |
@@ -58,7 +59,7 @@
 | `src/ui/comp_registry.rs` | 6 | 5 | 1 | preview_is_animated |
 | `src/ui/conn_card.rs` | 6 | 5 | 1 | FIELD_GAP |
 | `src/ui/cursor.rs` | 9 | 9 | 0 | — |
-| `src/ui/down_card.rs` | 9 | 9 | 0 | — |
+| `src/ui/down_card.rs` | 10 | 10 | 0 | — |
 | `src/ui/dual_pool.rs` | 19 | 19 | 0 | — |
 | `src/ui/fx_ease.rs` | 11 | 11 | 0 | — |
 | `src/ui/fx_preview.rs` | 8 | 5 | 3 | LEG_GO_MS LEG_RETURN_START LEG_RETURN_MS |
