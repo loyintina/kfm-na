@@ -36,10 +36,13 @@ pub const UNIT_NAME: &str = "kfm-na-server.service";
 /// systemd unit 内容（A 档纯函数，**单一源：内容随 na 走**）。2026-09-21
 /// 用户拍板形态：**服务常驻在服务器，但它依然是 na 的触手**——na 发起
 /// 安装/更新/状态/控制，systemd 只负责「活着」（na 被杀、手机重启、整机
-/// 断电重启都不影响它）。三条纪律写进 unit：①只绑回环 127.0.0.1（公网
+/// 断电重启都不影响它）。四条纪律写进 unit：①只绑回环 127.0.0.1（公网
 /// 不可达 = 安全语义，与 HEALTH_URL 同尺）；②`NA_IDLE_EXIT_SECS=0`
 /// 永不自退（常驻的全部意义，取代自持模式的 1800s 自退）；③
-/// `Restart=always` 收尸（崩了自己起，不靠 na 的探针兜）
+/// `Restart=always` 收尸（崩了自己起，不靠 na 的探针兜）；④QUIC 腿
+/// 常驻（2026-09-23 拍板，设计 quic隧道.md §九）：UDP 62633 显式
+/// 0.0.0.0——这是唯一特许公网的腿（双向认证齐备，设计 §四；安全组
+/// 未放口前公网本就到不了，腿在 = 证书/客户端证已生成待接）
 pub fn unit_content() -> String {
     format!(
         r#"[Unit]
@@ -51,6 +54,7 @@ Type=simple
 WorkingDirectory={REPO_DIR}
 Environment=NA_BIND=127.0.0.1:{NA_SERVER_PORT}
 Environment=NA_IDLE_EXIT_SECS=0
+Environment=NA_QUIC_BIND=0.0.0.0:{QUIC_PORT}
 ExecStart={REPO_DIR}/target/release/na-server
 Restart=always
 RestartSec=2
@@ -62,6 +66,7 @@ WantedBy=multi-user.target
 "#,
         REPO_DIR = REPO_DIR,
         NA_SERVER_PORT = NA_SERVER_PORT,
+        QUIC_PORT = crate::settings::QUIC_DEFAULT_PORT,
     )
 }
 

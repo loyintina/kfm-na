@@ -43,7 +43,7 @@
 | `src/sess_mode.rs` | 3 | 3 | 0 | — |
 | `src/session.rs` | 11 | 11 | 0 | — |
 | `src/session_router.rs` | 11 | 11 | 0 | — |
-| `src/settings.rs` | 9 | 6 | 3 | parse QUIC_DEFAULT_PORT terminal_to_json |
+| `src/settings.rs` | 10 | 6 | 4 | parse QUIC_DEFAULT_PORT QUIC_REVERSE_PORT terminal_to_json |
 | `src/singleton.rs` | 7 | 4 | 3 | LOCK_PATH lock_exclusive try_acquire |
 | `src/svc_health.rs` | 12 | 7 | 5 | HIST_PATH configure set_visible sys_snap take_dirty |
 | `src/sys_hist.rs` | 39 | 34 | 5 | BAR_W PLACEHOLDER_PCT hist_idx restore HIST_FORMAT |

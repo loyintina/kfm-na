@@ -287,6 +287,10 @@ fn spec_常驻_unit内容与模式词() {
     );
     assert!(u.contains("Restart=always"), "崩了自己起，不靠 na 探针兜");
     assert!(
+        u.contains("Environment=NA_QUIC_BIND=0.0.0.0:62633"),
+        "QUIC 腿常驻：UDP 62633 显式 0.0.0.0（唯一特许公网的腿，双向认证齐备）"
+    );
+    assert!(
         u.contains("ExecStart=/root/kfm-na/target/release/na-server"),
         "绝对路径（systemd 不吃相对路径）"
     );
