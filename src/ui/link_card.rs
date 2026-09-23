@@ -10,10 +10,12 @@
 //!
 //! 连接段 = mini 卡头「连接 · 状态词」+ 四字段行（目标/本地口/重拉/
 //! 错误）+ [重连] 钮（杀娃重拉，不等退避）；服务段 = mini 卡头
-//! 「服务 · 状态词」+ 四字段行（后端/在线/会话/错误）+ 会话行表，
-//! 无分隔线。**文案面零改动**：继续吃 conn_card::current() /
-//! svc_card::current() 同两份快照，本册只重写几何/命中；涂装在
-//! termview（眼手同尺：两边吃本册同一份 layout）。
+//! 「服务 · 状态词」+ 四字段行（后端/在线/会话/错误）+ 会话行表 +
+//! [重启] 钮（2026-09-23 用户立项：完全自重启，两段确认与执行归
+//! self_restart——本册只给几何/命中），无分隔线。**文案面零改动**：
+//! 继续吃 conn_card::current() / svc_card::current() 同两份快照，
+//! 本册只重写几何/命中；涂装在 termview（眼手同尺：两边吃本册同一份
+//! layout）。
 //!
 //! 布局（网格制）：卡外框由三区排布器配给（parser_chain::slot_rect——
 //! 两轴契约 §四 v2：本卡不再知道「我接在谁下面」「我在哪个区」，落位/
@@ -42,14 +44,16 @@ const FIELDS_BLOCK: u32 = N_FIELDS as u32 * FIELD_H + (N_FIELDS as u32 - 1) * FI
 pub const LEFT_H: u32 = pp::ROW_H + pp::ROW_GAP + FIELDS_BLOCK + pp::ROW_GAP + pp::BTN_H;
 
 /// 服务段内容高（n 会话）：mini 卡头 + 行距 + 字段块 + 会话行区
-/// （n>0 时 行距 + n 行 + (n-1) 行距）
+/// （n>0 时 行距 + n 行 + (n-1) 行距）+ 行距 + [重启] 钮
+/// （2026-09-23 用户立项：完全自重启入口，self_restart 同核）
 pub fn right_h(n_sessions: usize) -> u32 {
     let base = pp::ROW_H + pp::ROW_GAP + FIELDS_BLOCK;
-    if n_sessions == 0 {
+    let with_sess = if n_sessions == 0 {
         base
     } else {
         base + pp::ROW_GAP + n_sessions as u32 * SESS_H + (n_sessions as u32 - 1) * SESS_GAP
-    }
+    };
+    with_sess + pp::ROW_GAP + pp::BTN_H
 }
 
 /// 卡高账（A 档纯函数）：PAD_V·2 + 连接段 + 段距 + 服务段(n)
@@ -75,6 +79,9 @@ pub struct LinkLayout {
     pub rfields: [PoolRect; N_FIELDS],
     /// 服务段会话行（n 行）
     pub sessions: Vec<PoolRect>,
+    /// [重启] 钮（服务段尾，2026-09-23：完全自重启，两段确认归
+    /// self_restart::tap——本册只给几何/命中，确认态不进 layout）
+    pub rbutton: PoolRect,
     /// 卡内芯纵裁剪带（v3 卡内滚：涂装断墨/命中闸门同一份）——
     /// 内容滚动后画出带外的件只显不点（卡框本身不吃这条带：
     /// 框 = 区窗内静物，带 = 卡内沿 − PAD_V 的内容区纵段）
@@ -124,7 +131,7 @@ pub fn layout_in(card: PoolRect, n_sessions: usize, scroll: i64) -> LinkLayout {
     let rfy = ry + i64::from(pp::ROW_H + pp::ROW_GAP);
     let rfields = fields(rfy);
     let sy = rfy + i64::from(FIELDS_BLOCK + pp::ROW_GAP);
-    let sessions = (0..n_sessions)
+    let sessions: Vec<PoolRect> = (0..n_sessions)
         .map(|i| PoolRect {
             x: cx,
             y: sy + (SESS_H + SESS_GAP) as i64 * i as i64,
@@ -132,6 +139,15 @@ pub fn layout_in(card: PoolRect, n_sessions: usize, scroll: i64) -> LinkLayout {
             h: SESS_H,
         })
         .collect();
+    let sess_end = sessions
+        .last()
+        .map_or(sy - i64::from(pp::ROW_GAP), |s| s.y + i64::from(s.h));
+    let rbutton = PoolRect {
+        x: cx,
+        y: sess_end + i64::from(pp::ROW_GAP),
+        w: cw,
+        h: pp::BTN_H,
+    };
     let content_clip = (
         card.y + i64::from(pp::CARD_PAD_V),
         (card.y + i64::from(card.h) - i64::from(pp::CARD_PAD_V))
@@ -145,14 +161,17 @@ pub fn layout_in(card: PoolRect, n_sessions: usize, scroll: i64) -> LinkLayout {
         rheader,
         rfields,
         sessions,
+        rbutton,
         content_clip,
     }
 }
 
-/// 命中结果（只有 [重连] 可点；字段行/卡头/会话行 = 纯展示）
+/// 命中结果（[重连]/[重启] 可点；字段行/卡头/会话行 = 纯展示）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinkHit {
     Reconnect,
+    /// [重启] = 完全自重启（两段确认归 self_restart::tap）
+    Restart,
 }
 
 /// 命中（x/y 屏坐标 i64，与涂装同一份 LinkLayout）。卡内滚后画出
@@ -161,9 +180,13 @@ pub fn hit(l: &LinkLayout, x: i64, y: i64) -> Option<LinkHit> {
     if y < l.content_clip.0 || y >= l.content_clip.1 {
         return None;
     }
-    let b = &l.button;
-    if x >= b.x && x < b.x + i64::from(b.w) && y >= b.y && y < b.y + i64::from(b.h) {
+    let in_rect =
+        |b: &PoolRect| x >= b.x && x < b.x + i64::from(b.w) && y >= b.y && y < b.y + i64::from(b.h);
+    if in_rect(&l.button) {
         return Some(LinkHit::Reconnect);
+    }
+    if in_rect(&l.rbutton) {
+        return Some(LinkHit::Restart);
     }
     None
 }

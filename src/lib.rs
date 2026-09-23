@@ -30,6 +30,7 @@ pub mod protocol;
 pub mod providers;
 pub mod report;
 pub mod scroll;
+pub mod self_restart;
 pub mod sess_mode;
 pub mod session;
 pub mod session_router;

@@ -4185,6 +4185,39 @@ impl TermView {
                 cclip32,
             );
         }
+        // [重启] 钮（三级框行主形态，服务段尾，与 [重连] 同件同尺；
+        // 两段确认：武装中文案翻「再点确认」+ 错色提注意——文案唯一源
+        // self_restart::button_label，涂装/命中同吃）
+        {
+            let b = &llay.rbutton;
+            let now_ms = crate::report::boot_ms() as u64;
+            let armed = crate::self_restart::restart_armed(now_ms);
+            let grad_ref = (-(b.x + off), -b.y, i64::from(b.w + b.h));
+            paint_row_frame_gradref(
+                &mut frame,
+                b.x + off,
+                b.y,
+                b.w,
+                b.h,
+                true,
+                accent,
+                cclip,
+                grad_ref,
+                0,
+            );
+            self.draw_text_centered_yclip(
+                &mut frame,
+                crate::self_restart::button_label(now_ms),
+                b.x + off,
+                b.y,
+                b.w,
+                b.h,
+                34.0,
+                if armed { err_fg } else { title_fg },
+                b.x + off,
+                Some(cclip),
+            );
+        }
 
         // ---- 环境卡（2026-09-20 v1：解析页第三张二级卡；2026-09-21 三区
         // 排布 v2：归左滚动区吃宽区——「中央终端所在环境的自身体征」可视化，

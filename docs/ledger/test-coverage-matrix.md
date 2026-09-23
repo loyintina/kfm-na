@@ -40,6 +40,7 @@
 | `src/providers.rs` | 5 | 5 | 0 | — |
 | `src/report.rs` | 12 | 7 | 5 | set_boot_t0 start_flusher report_sync report_sync_once http_status_is_200 |
 | `src/scroll.rs` | 5 | 5 | 0 | — |
+| `src/self_restart.rs` | 11 | 4 | 7 | FLAG_REL set_files_dir restart_armed button_label poll_flag restart restart |
 | `src/sess_mode.rs` | 3 | 3 | 0 | — |
 | `src/session.rs` | 11 | 11 | 0 | — |
 | `src/session_router.rs` | 11 | 11 | 0 | — |
@@ -49,7 +50,7 @@
 | `src/sys_hist.rs` | 39 | 34 | 5 | BAR_W PLACEHOLDER_PCT hist_idx restore HIST_FORMAT |
 | `src/termview.rs` | 135 | 128 | 7 | AI_THINK_COLLAPSED FONT_CANDIDATES CJK_FONT_CANDIDATES load_cjk_font font_probe MAG_HALF_COLS MAG_HALF_ROWS |
 | `src/theme.rs` | 1 | 1 | 0 | — |
-| `src/tmux_ctl.rs` | 9 | 9 | 0 | — |
+| `src/tmux_ctl.rs` | 10 | 10 | 0 | — |
 | `src/tmux_exec.rs` | 1 | 1 | 0 | — |
 | `src/trace.rs` | 12 | 8 | 4 | TRACE_CAP format_tail dump_all dump_tail |
 | `src/tunnel.rs` | 27 | 23 | 4 | check_ssh_fields NA_SSHD_PORT request_reconnect request_resume_kick |

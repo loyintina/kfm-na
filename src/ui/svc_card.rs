@@ -5,9 +5,10 @@
 //!
 //! na-server 会话层的可视化面（docs/active/na-server.md §四）。文案
 //! v1（用户拍板，合并后原位沿用）：mini 卡头「服务 · 状态词」→ 四
-//! 字段行（后端/在线/会话/错误）→ 每会话一行；无按钮。数据 =
-//! svc_health 全局快照 + nasup 全局快照 + settings Backend 三源合成
-//! （compose 唯一映射）。
+//! 字段行（后端/在线/会话/错误）→ 每会话一行；文案面无钮（2026-09-23
+//! [重启] 钮归 link_card 几何册 + self_restart 执行册，本册只出文案）。
+//! 数据 = svc_health 全局快照 + nasup 全局快照 + settings Backend
+//! 三源合成（compose 唯一映射）。
 
 use crate::na_server_sup::{self, SupSnap, SupState};
 use crate::settings::Backend;

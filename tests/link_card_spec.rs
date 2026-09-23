@@ -50,7 +50,8 @@ fn spec_几何_两段纵排全宽() {
         assert_eq!(s.w, cw, "会话行必须全宽");
     }
     // 纵序：连接段头 → 连接段字段 → 钮 → 服务段头 → 服务段字段 → 会话行
-    // （变异②：两段顺序颠倒必须咬）
+    // → [重启] 钮（变异②：两段顺序颠倒必须咬；2026-09-23 服务段尾加
+    // [重启] 钮——全宽 + 接末件底一行距）
     let fields_end = l.lfields[3].y + i64::from(l.lfields[3].h);
     assert_eq!(
         l.lfields[0].y,
@@ -76,6 +77,27 @@ fn spec_几何_两段纵排全宽() {
         rfields_end + i64::from(pp::ROW_GAP),
         "会话行接服务段字段块"
     );
+    assert_eq!(l.rbutton.x, cx);
+    assert_eq!(l.rbutton.w, cw, "[重启] 钮必须全宽");
+    let sess_end = l.sessions[1].y + i64::from(l.sessions[1].h);
+    assert_eq!(
+        l.rbutton.y,
+        sess_end + i64::from(pp::ROW_GAP),
+        "[重启] 钮接末会话行底（一行距）"
+    );
+}
+
+#[test]
+fn spec_几何_无会话时_重启钮接字段块() {
+    // n=0：会话行区塌缩，[重启] 钮直接接服务段字段块（间隔一行距，
+    // 不许留双行距空洞）
+    let l = lay(0);
+    let rfields_end = l.rfields[3].y + i64::from(l.rfields[3].h);
+    assert_eq!(
+        l.rbutton.y,
+        rfields_end + i64::from(pp::ROW_GAP),
+        "n=0 时 [重启] 钮接字段块底（一行距）"
+    );
 }
 
 #[test]
@@ -93,25 +115,24 @@ fn spec_几何_卡高账两段相加() {
     );
     // 单调：会话多一行卡高长一段
     assert!(link_card::card_h(3) > link_card::card_h(2));
-    // 卡高账与布局同源：末件底 = 卡底 − PAD_V（n=0 末件 = 服务段末字段）
+    // 卡高账与布局同源：末件底 = 卡底 − PAD_V（2026-09-23 起末件恒为
+    // 服务段尾 [重启] 钮——n=0/n>0 同一件）
     let l0 = lay(0);
-    let last0 = &l0.rfields[3];
     assert_eq!(
-        last0.y + i64::from(last0.h),
+        l0.rbutton.y + i64::from(l0.rbutton.h),
         l0.card.y + i64::from(l0.card.h) - i64::from(pp::CARD_PAD_V),
-        "n=0 末件必须贴内容区底（卡高账漏项 = 空洞/出底）"
+        "n=0 末件（[重启] 钮）必须贴内容区底（卡高账漏项 = 空洞/出底）"
     );
     let l6 = lay(6);
-    let last6 = l6.sessions.last().unwrap();
     assert_eq!(
-        last6.y + i64::from(last6.h),
+        l6.rbutton.y + i64::from(l6.rbutton.h),
         l6.card.y + i64::from(l6.card.h) - i64::from(pp::CARD_PAD_V),
-        "n=6 末会话行必须贴内容区底"
+        "n=6 末件（[重启] 钮）必须贴内容区底"
     );
 }
 
 #[test]
-fn spec_命中_只有重连可点() {
+fn spec_命中_只有两钮可点() {
     let l = lay(2);
     let b = &l.button;
     assert_eq!(
@@ -122,6 +143,17 @@ fn spec_命中_只有重连可点() {
         link_card::hit(&l, b.x + i64::from(b.w), b.y),
         None,
         "右缘开区间"
+    );
+    // [重启] 钮（服务段尾）可点
+    let rb = &l.rbutton;
+    assert_eq!(
+        link_card::hit(&l, rb.x + 1, rb.y + 1),
+        Some(LinkHit::Restart)
+    );
+    assert_eq!(
+        link_card::hit(&l, rb.x + 1, rb.y + i64::from(rb.h)),
+        None,
+        "下缘开区间"
     );
     // 字段行/卡头/会话行 = 纯展示不可点
     let f = &l.lfields[0];

@@ -7,6 +7,20 @@
 
 ## 当前位置（2026-09-23)
 
+> **完全自重启（2026-09-23 深夜，用户立项）**：解析页服务段尾加
+> [重启] 钮 + agent 远程路，同核 `src/self_restart.rs`——两段确认
+> （一击武装 3s 钮面翻「再点确认」，二击执行；A 档 tap_verdict/
+> armed_at 双钉 + 变异咬）+ JNI 闹钟自重启（setAndAllowWhileIdle
+> 预约 1s 复活 → killProcess；纯 JNI 零 Java 皮 = 热更可投递）+
+> agent 旗标路（hatch/RESTART.request，about_to_wait 节流 1s 探）。
+> 动机：超级省电下用户无法手动清后台；「agent 也该能重启 na」。
+> link_card 几何/命中加 rbutton（卡高账末件恒为 [重启] 钮，既有
+> 贴底钉改写），考题 6+2 全绿，变异双咬。排障手册 §七之二。
+> **同轮运维事故**：给手机写 servers.json 时 `管道 | na_ssh 'cat>'`
+> 尾加 `</dev/null` 顶穿 stdin 把 servers.json 写成空文件——已从
+> .bak-quic 救回并写入 quic 段（md5 三向一致）。**纪律：na_ssh
+> 管道喂数据时禁止再挂 </dev/null**（探针类才挂）。
+
 > **敲门账本上链 + 公网双口放行（2026-09-23 深夜）**：用户在阿里云
 > 安全组放行 UDP 62633+62694（0.0.0.0/0）。①**敲门账本**：QUIC 腿
 > 对「连接/验签失败（带连败计数）/封禁中拒连」三类事件落 stderr

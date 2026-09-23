@@ -677,6 +677,9 @@ fn load_settings(
     let Some(dir) = app.and_then(|a| a.internal_data_path()) else {
         return (servers, term_cfg);
     };
+    // 自重启旗标路径的唯一来源（hatch/RESTART.request 探针归
+    // self_restart::poll_flag；拿不到目录 = 远程重启路断，钮路不受影响）
+    crate::self_restart::set_files_dir(dir.clone());
     let cfg = dir.join("settings");
     if let Ok(j) = std::fs::read_to_string(cfg.join("servers.json")) {
         match crate::settings::parse_servers(&j) {
@@ -2301,12 +2304,19 @@ impl App {
                         if let Some((hh, mode)) = hit_result {
                             self.parser_dispatch(snap, hh, mode);
                         }
-                        if let Some(crate::ui::link_card::LinkHit::Reconnect) = conn_hit {
-                            let ok = crate::tunnel::request_reconnect();
-                            crate::report::report(
-                                "tunnel",
-                                &format!("连接服务卡点重连 → 下达{ok}"),
-                            );
+                        if let Some(h) = conn_hit {
+                            match h {
+                                crate::ui::link_card::LinkHit::Reconnect => {
+                                    let ok = crate::tunnel::request_reconnect();
+                                    crate::report::report(
+                                        "tunnel",
+                                        &format!("连接服务卡点重连 → 下达{ok}"),
+                                    );
+                                }
+                                crate::ui::link_card::LinkHit::Restart => {
+                                    self.self_restart_tap("服务段[重启]钮");
+                                }
+                            }
                         }
                     }
                     self.dirty = true;
@@ -4442,6 +4452,35 @@ impl App {
     /// 登记换入向通道。服务器侧 PTY 随 WS 断即杀（kfmv4 ws-server killAll），
     /// 重连必然是新 shell——横幅明示，旧现场引导 tmux attach。本地 PTY
     /// 死亡（shell exit）同路重孵
+    /// [重启] 钮点击（两段确认）：一击武装 3s（钮面翻「再点确认」，
+    /// 错色提注意），窗内二击执行完全自重启
+    fn self_restart_tap(&mut self, from: &str) {
+        match crate::self_restart::tap(crate::report::boot_ms() as u64) {
+            crate::self_restart::TapVerdict::Arm => {
+                crate::report::report("ui", &format!("自重启武装（3s 窗）← {from}"));
+                self.dirty = true; // 钮面翻「再点确认」
+            }
+            crate::self_restart::TapVerdict::Execute => {
+                crate::report::report("term", &format!("自重启确认 ← {from}"));
+                self.self_restart_exec();
+            }
+        }
+    }
+
+    /// 完全自重启执行面：闹钟预约 1s 复活 → 杀进程（机制归
+    /// self_restart::restart）。预约失败 = 进程还活着，留账即可
+    fn self_restart_exec(&mut self) {
+        let r = self
+            .android_app
+            .as_ref()
+            .map(|app| crate::self_restart::restart(app));
+        match r {
+            Some(Ok(())) => {} // 正常走不到这（killProcess 先落地）
+            Some(Err(e)) => crate::report::report_sync("term", &format!("自重启预约失败: {e}")),
+            None => crate::report::report_sync("term", "自重启无 AndroidApp 句柄"),
+        }
+    }
+
     fn respawn_session(&mut self, name: &'static str) {
         let handle = match name {
             "local" => self
@@ -7389,6 +7428,12 @@ impl ApplicationHandler for App {
             // 闸压住后再无死亡事件 = 链断 remote_dead 卡死；传输恢复必须
             // 回头踢壳层（裁决纯函数 tunnel::usable_edge_kick，A 档钉）
             self.poll_tunnel_kick();
+            // agent 远程自重启（2026-09-23）：hatch/RESTART.request 旗标
+            // 节流 1s 一探，见旗即完全重启（与 [重启] 钮同核）
+            if crate::self_restart::poll_flag(crate::report::boot_ms() as u64) {
+                crate::report::report("term", "自重启旗标见到——完全重启");
+                self.self_restart_exec();
+            }
             // 服务卡数据面（2026-09-20）：可见性喂轮询器（不可见不轮
             // 纪律），快照换代 → 脏帧重烘卡面
             crate::svc_health::set_visible(parser_docked);
