@@ -4376,6 +4376,9 @@ impl App {
         }
         crate::gate::pump_register(name, h.events);
         self.session_over = false;
+        // BAR-151② 重孵模式清场（与 respawn_session 同规——本条是
+        // attach/脱离路：点聚焦标签回 shell 实证乱码的案发地）
+        self.reset_modes_on_respawn(name);
         let (cols, rows) = self.last_grid;
         if let Some(r) = self.router_handle() {
             r.lock().unwrap().send(TermCmd::Resize { cols, rows });
@@ -4705,6 +4708,24 @@ impl App {
         }
     }
 
+    /// BAR-151② 重孵模式清场（两条重孵路共用：respawn_session /
+    /// respawn_named_with）——受管模式（鼠标上报等）是远端应用的
+    /// 状态，换心脏 = 旧化身的位不许带过境（带过境 = 滚轮序列被
+    /// 新 shell 当键盘输入回显乱码）。复位不清屏（BAR-135 正文
+    /// 零污染，遗屏留到新输出冲掉）；新应用自会 DECSET 重开
+    fn reset_modes_on_respawn(&mut self, name: &str) {
+        if let Some(t) = self.term_handle() {
+            let mut g = t.lock().unwrap();
+            let cur = g.mode_bits();
+            let seq = crate::sess_mode::reset_seq(cur);
+            g.feed(seq.as_bytes());
+            crate::report::report(
+                "term",
+                &format!("重孵模式清场: {name} bits {cur:#06x} 复位"),
+            );
+        }
+    }
+
     fn respawn_session(&mut self, name: &'static str) {
         let handle = match name {
             "local" => self
@@ -4767,16 +4788,7 @@ impl App {
             // （用户复现路径：解析页点聚焦标签→重孵窗内滑动）。复位不
             // 清屏（BAR-135：正文零污染，遗屏留到新输出冲掉）；attach
             // 完成后 tmux 自己会 DECSET 重开它要的模式
-            if let Some(t) = self.term_handle() {
-                let mut g = t.lock().unwrap();
-                let cur = g.mode_bits();
-                let seq = crate::sess_mode::reset_seq(cur);
-                g.feed(seq.as_bytes());
-                crate::report::report(
-                    "term",
-                    &format!("重孵模式清场: {name} bits {cur:#06x} 复位"),
-                );
-            }
+            self.reset_modes_on_respawn(name);
             let (cols, rows) = self.last_grid;
             if let Some(r) = self.router_handle() {
                 r.lock().unwrap().send(TermCmd::Resize { cols, rows });

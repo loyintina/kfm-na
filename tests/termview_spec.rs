@@ -5973,3 +5973,27 @@ fn spec_像素滚动_关时渲染零差异() {
         .collect();
     assert_eq!(before, after, "零头 0 时开关不许改变收集集合");
 }
+
+// ---------- BAR-151② 清场序列走真网格（2026-09-24 乱码案实机复现后补钉） ----------
+// 实机复现链：杀活跃 tmux 客户端 → na 脱离回 shell（respawn_named_with
+// 路，不经过 respawn_session）→ 旧鼠标位带过境 → 滚轮序列被 bash 回显
+// 一屏乱码。修复 = 两条重孵路共用 reset_modes_on_respawn——本钉锁它的
+// 承重原语：reset_seq 喂进真网格必须真清鼠标面（只测字符串拼对不够，
+// 网格不吃 = 白搭）。
+
+#[test]
+fn spec_bar151_清场序列_真网格鼠标位真清() {
+    let mut tv = host_termview(8, 2);
+    // tmux 附体：DECSET 鼠标上报三件套 + SGR
+    tv.feed("\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h".as_bytes());
+    assert!(tv.mouse_report_active(), "前置：鼠标位必须真置上");
+    let cur = tv.mode_bits();
+    tv.feed(kfm_na::sess_mode::reset_seq(cur).as_bytes());
+    assert!(
+        !tv.mouse_report_active(),
+        "清场序列喂真网格后鼠标位必须全清（不清 = 乱码窗还在）"
+    );
+    // 事后 DECSET 可重开（attach 后 tmux 重开模式的路不许被堵死）
+    tv.feed("\x1b[?1002h".as_bytes());
+    assert!(tv.mouse_report_active(), "清场后 DECSET 必须能重开");
+}
