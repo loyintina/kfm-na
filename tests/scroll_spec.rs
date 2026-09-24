@@ -133,3 +133,50 @@ fn spec_像素滚动_双通道互不污染() {
     let d = u.moved_px(500.0 + TAP_SLOP_PX + CELL);
     assert_eq!(d, CELL, "像素通道同位移出原样 px");
 }
+
+// ---------- BAR-151 滚轮路余数挂账（2026-09-24 仪器定罪：tmux 滚动 ticks 恒 0） ----------
+// 病灶：像素通道滚轮换算逐事件 trunc——慢拖每笔位移 <cell_h 恒 0 tick，
+// 余数全吞（真机实录 d=16/20/20 ticks=0，tmux 滚动整只哑掉）。
+// 契约：滚轮 tick 换算必须带余数挂账——与行级 moved 同一把尺：
+// 半行半行慢拖必须累计成 tick；往返净位移为零 → 净 tick 为零。
+
+#[test]
+fn spec_bar151_滚轮挂账_慢拖累计成tick() {
+    let mut t = TouchScroll::new(500.0, CELL);
+    // 越阈：30px 累计位移（slop 24 不计入，第一笔有效位移 6px）
+    assert_eq!(t.wheel_ticks(530.0, CELL), 0, "6px 不足一行不许出 tick");
+    // 每笔 +10px：6→16→26→36→46——第 5 笔过一行才许出 1 tick
+    assert_eq!(t.wheel_ticks(540.0, CELL), 0);
+    assert_eq!(t.wheel_ticks(550.0, CELL), 0);
+    assert_eq!(t.wheel_ticks(560.0, CELL), 1, "累计 36px 过一行出 1 tick");
+    assert_eq!(t.wheel_ticks(570.0, CELL), 0);
+    assert_eq!(t.wheel_pending(), 16.0, "零头挂账不吞（6+10×4−30=16）");
+}
+
+#[test]
+fn spec_bar151_滚轮挂账_往返净tick为零() {
+    let mut t = TouchScroll::new(500.0, CELL);
+    let mut net = 0;
+    // 下去 100px（有效 76px = 2 tick + 16px 零头）
+    for y in [530.0, 550.0, 570.0, 590.0, 600.0] {
+        net += t.wheel_ticks(y, CELL);
+    }
+    // 回拖 106px（= 下去的有效 76px + 30px，净计 −30px = 恰好 −1 tick）：
+    // 挂账借还必须对称——吞零头/造 tick 都会让净账或零头对不上
+    for y in [570.0, 550.0, 530.0, 510.0, 494.0] {
+        net += t.wheel_ticks(y, CELL);
+    }
+    assert_eq!(net, -1, "净位移 −30px 必须恰好 −1 tick（挂账造假即破）");
+    assert_eq!(t.wheel_pending().abs(), 0.0, "净 −30px 后零头必须归零");
+}
+
+#[test]
+fn spec_bar151_滚轮挂账_slop段不计入() {
+    // 点按嫌疑期（slop 内）的位移一滴都不许进滚轮挂账——
+    // 否则轻点带微抖也攒零头，下一次真拖起步就白送 tick
+    let mut t = TouchScroll::new(500.0, CELL);
+    assert_eq!(t.wheel_ticks(510.0, CELL), 0);
+    assert_eq!(t.wheel_ticks(520.0, CELL), 0);
+    assert_eq!(t.wheel_pending(), 0.0, "slop 段位移不许进挂账");
+    assert!(t.was_tap(), "全程没过阈值仍是点按");
+}

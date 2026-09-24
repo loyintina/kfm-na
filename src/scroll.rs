@@ -26,6 +26,9 @@ pub struct TouchScroll {
     last_y: f64,
     /// 已换算成行后剩下的零头（px，带符号）——慢拖的命根
     pending_px: f64,
+    /// 滚轮 tick 挂账零头（鼠标上报通道专用，BAR-151）——与 pending_px
+    /// 分账：行级通道 moved 吃前者，滚轮通道 wheel_ticks 吃后者
+    wheel_pending_px: f64,
     /// 是否已越过点按阈值进入滚动模式
     dragging: bool,
     cell_h: f64,
@@ -37,6 +40,7 @@ impl TouchScroll {
             start_y,
             last_y: start_y,
             pending_px: 0.0,
+            wheel_pending_px: 0.0,
             dragging: false,
             cell_h: cell_h.max(1.0),
         }
@@ -89,5 +93,27 @@ impl TouchScroll {
     /// 手指抬起：true = 全程没过阈值，算点按（调用方唤键盘）
     pub fn was_tap(&self) -> bool {
         !self.dragging
+    }
+
+    /// 滚轮 tick 换算（鼠标上报通道，BAR-151 仪器定罪：旧实现逐事件
+    /// trunc，慢拖每笔 <cell_h 的位移余数全吞——真机实录 d=16/20/20
+    /// ticks 恒 0，tmux 滚动整只哑掉）：与 moved_px 同 slop 门同
+    /// last_y，但位移先挂账再取整——余数不吞，慢拖累计成 tick；
+    /// 往返借还对称（净位移多少就净出多少 tick，零头不造不吞）。
+    pub fn wheel_ticks(&mut self, y: f64, cell_h: f64) -> i32 {
+        let d = self.moved_px(y);
+        if d == 0.0 {
+            return 0;
+        }
+        let ch = cell_h.max(1.0);
+        self.wheel_pending_px += d;
+        let ticks = (self.wheel_pending_px / ch).trunc() as i32;
+        self.wheel_pending_px -= f64::from(ticks) * ch; // 余数挂账
+        ticks
+    }
+
+    /// 滚轮挂账零头读数（考题/[scroll] 遥测判卷用；带符号 px）
+    pub fn wheel_pending(&self) -> f64 {
+        self.wheel_pending_px
     }
 }

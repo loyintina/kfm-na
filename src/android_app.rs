@@ -1893,36 +1893,35 @@ impl App {
                 let pixel_lane = self
                     .term_handle()
                     .is_some_and(|t| t.lock().unwrap().pixel_scroll_enabled());
-                let Some(tracker) = &mut self.touch_scroll else {
-                    return;
-                };
                 if pixel_lane {
-                    let d = tracker.moved_px(y);
-                    if d == 0.0 {
-                        return;
-                    }
+                    // t 是 Arc 克隆（借用即还），tracker 的可变借用不冲突
                     let Some(t) = self.term_handle() else { return };
-                    let mut t = t.lock().unwrap();
-                    if t.mouse_report_active() {
-                        // 全屏 TUI（鼠标上报）协议无像素概念——照旧行级
-                        // 滚轮路（零头就地折算成行 tick，同旧路封顶）
-                        let lines = (d / f64::from(t.cell_size().1.max(1))).trunc() as i32;
+                    let mouse_on = t.lock().unwrap().mouse_report_active();
+                    let Some(tracker) = &mut self.touch_scroll else {
+                        return;
+                    };
+                    if mouse_on {
+                        // 全屏 TUI（鼠标上报）协议无像素概念——翻成滚轮
+                        // tick 发过去。BAR-151：换算走挂账（慢拖余数不吞）
+                        let ch = f64::from(t.lock().unwrap().cell_size().1.max(1));
+                        let lines = tracker.wheel_ticks(y, ch);
                         // 仪器（BAR-151 立案：tmux 滚不动/远程 shell 乱码）：
                         // 滚轮路无账 = 分支对错/模式位死活死无对证
                         crate::report::report(
                             "scroll",
                             &format!(
-                                "滚轮路 d={d:.1} ticks={lines} mode={:#x} cell_h={}",
-                                t.mode_bits(),
-                                t.cell_size().1
+                                "滚轮路 ticks={lines} 挂账={:.1} mode={:#x} cell_h={}",
+                                tracker.wheel_pending(),
+                                t.lock().unwrap().mode_bits(),
+                                ch as u32
                             ),
                         );
                         if lines == 0 {
                             return;
                         }
-                        let (cw, ch) = t.cell_size();
+                        let (cw, ch2) = t.lock().unwrap().cell_size();
                         let col = (x as u32 / cw + 1).max(1);
-                        let row = (y as u32 / ch + 1).max(1);
+                        let row = (y as u32 / ch2 + 1).max(1);
                         if let Some(r) = self.router_handle() {
                             let r = r.lock().unwrap();
                             for _ in 0..lines.unsigned_abs().min(10) {
@@ -1933,23 +1932,31 @@ impl App {
                                 )));
                             }
                         }
-                    } else {
-                        t.scroll_px(d);
-                        // 仪器（2026-09-24 像素滚动复验）：亚行拖动若无账，
-                        // 用户报「跳行/不跟手」时零头累计与整行提交死无对证
-                        crate::report::report(
-                            "scroll",
-                            &format!(
-                                "像素滚动 d={d:.1} 零头={:.1} offset={} cell_h={}",
-                                t.scroll_frac_px(),
-                                t.display_offset(),
-                                t.cell_size().1
-                            ),
-                        );
-                        self.dirty = true;
+                        return;
                     }
+                    let d = tracker.moved_px(y);
+                    if d == 0.0 {
+                        return;
+                    }
+                    let mut t = t.lock().unwrap();
+                    t.scroll_px(d);
+                    // 仪器（2026-09-24 像素滚动复验）：亚行拖动若无账，
+                    // 用户报「跳行/不跟手」时零头累计与整行提交死无对证
+                    crate::report::report(
+                        "scroll",
+                        &format!(
+                            "像素滚动 d={d:.1} 零头={:.1} offset={} cell_h={}",
+                            t.scroll_frac_px(),
+                            t.display_offset(),
+                            t.cell_size().1
+                        ),
+                    );
+                    self.dirty = true;
                     return;
                 }
+                let Some(tracker) = &mut self.touch_scroll else {
+                    return;
+                };
                 let lines = tracker.moved(y);
                 if lines == 0 {
                     return;
