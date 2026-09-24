@@ -78,7 +78,7 @@ pub enum Preview {
     Keybar,
     /// 设置钮：程序化齿轮（gear paint_at 共享件）
     Gear,
-    /// 弹簧响应曲线（过冲可见）
+    /// 弹簧响应曲线（BAR-152 临界阻尼，单调趋近零过冲）
     CurveSpring,
     /// 缓动曲线（ease-out/in 两族）
     CurveEase,
@@ -384,7 +384,7 @@ pub const COMPONENTS: &[CompEntry] = &[
         file: "src/ui/fx_spring.rs",
         spec: "ui-base.md §八",
         tests: "tests/fx_spring_spec.rs",
-        desc: "欠阻尼弹簧：标签滑块、键盘 inset 同核。select 瞬间从当前位置重定基续弹，600ms 兜底贴死。预览 = 语义化演示（十五修）：白球点触，响应点沿 spring_pos 实曲线往返骑行（去程 0→100、回程 100→0），1400ms 乒乓无缝。",
+        desc: "临界阻尼弹簧（BAR-152 零过冲，欠阻尼已废）：键盘 inset 缝独占。select 瞬间从当前位置重定基续趋，600ms 兜底贴死。预览 = 语义化演示（十五修）：白球点触，响应点沿 spring_pos 实曲线往返骑行（去程 0→100、回程 100→0），1400ms 乒乓无缝。",
         preview: Preview::CurveSpring,
     },
     CompEntry {

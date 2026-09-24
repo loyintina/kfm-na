@@ -5671,7 +5671,7 @@ impl TermView {
                 );
             }
             Preview::CurveSpring => {
-                // spring_pos 响应曲线（0→100 目标，过冲可见）+ 目标虚线
+                // spring_pos 响应曲线（0→100 目标，BAR-152 临界阻尼单调趋近）+ 目标虚线
                 let span_ms = 600u32;
                 let target_y = iy + i64::from(ih) - i64::from(ih) * 100 / 130;
                 for ax in ix..(ix + i64::from(iw)) {

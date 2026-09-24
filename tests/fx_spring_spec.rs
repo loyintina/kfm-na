@@ -43,29 +43,36 @@ fn spec_spring_端点精确() {
 }
 
 #[test]
-fn spec_spring_过冲存在且有界() {
-    // 1260×2800 屏全高落下：过冲 = 越过目标的最大距离。物理感来自
-    // 过冲——ζ 调高（过阻尼化）过冲消失，本题必须红（变异咬点）
-    let from = -2800.0_f32;
-    let mut max_over = 0.0_f32; // pos - target 的最大正值
-    let mut prev = from;
-    for t in (0..600).step_by(4) {
-        let pos = fx_spring::spring_pos(from, 0.0, t);
-        max_over = max_over.max(pos);
-        if pos != 0.0 {
-            // 未贴死前不许反向跳回起点方向（弹簧不是来回弹的皮球——
-            // 欠阻尼但单次过冲，振铃 ≥2 次 = 参数病态）
-            assert!(pos >= from, "位置不许越过起点反向: t={t} pos={pos}");
+fn spec_bar152_弹簧零过冲单调趋近() {
+    // BAR-152（2026-09-24 用户拍板「弹簧过冲效果取消」）：像素级视口平移
+    // 落地后终端内容随 inset 弹簧走，欠阻尼过冲（≈2.5% 屏高「墩一下」）
+    // 带整屏文字来回晃 = 视觉疲劳。改判临界阻尼：位置永不越过目标
+    // （零过冲）且单向趋近不来回（单调）——过冲再现本题必须红（变异咬点）
+    for (from, target) in [(-2800.0_f32, 0.0_f32), (890.0, 0.0), (0.0, 890.0)] {
+        let mut prev = from;
+        for t in (0..600).step_by(4) {
+            let pos = fx_spring::spring_pos(from, target, t);
+            let over = if target >= from {
+                pos - target // 上行：越过目标 = pos > target
+            } else {
+                target - pos // 下行：越过目标 = pos < target
+            };
+            assert!(
+                over <= f32::EPSILON,
+                "零过冲契约：不许越过目标 from={from} target={target} t={t} pos={pos}"
+            );
+            let rollback = if target >= from {
+                prev - pos
+            } else {
+                pos - prev
+            };
+            assert!(
+                rollback <= 0.01,
+                "单调契约：未贴死前不许反向回摆 from={from} target={target} t={t} prev={prev} pos={pos}"
+            );
             prev = pos;
         }
     }
-    let _ = prev;
-    let pct = max_over / 2800.0;
-    assert!(
-        (0.005..=0.035).contains(&pct),
-        "过冲必须存在且有界（0.5%~3.5% 屏高），实测 {pct:.4}——\
-         过小=物理感没了（ζ 变异），过大=拍桌子不是墩一下"
-    );
 }
 
 #[test]

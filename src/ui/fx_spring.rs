@@ -1,26 +1,30 @@
 //! fx_spring.rs — ui-fx 的弹簧核：键盘 inset（chrome 跟随）曲线。
 //! （2026-09-04 沿革：本件原是 AI 面板落下/升起曲线；用户拍板面板
 //! 改定时缓动「落 500ms ease-out / 收 400ms ease-in」→ fx_ease.rs，
-//! 弹簧退役到键盘 inset 缝独占——100ms 轮询轨迹是阶梯，纯镜像太硬。）
+//! 弹簧退役到键盘 inset 缝独占——100ms 轮询轨迹是阶梯，纯镜像太硬。
+//! 2026-09-24 BAR-152 用户拍板「弹簧过冲效果取消」：像素级视口平移
+//! 落地后终端内容随本弹簧走，欠阻尼 ≈2.5% 屏高的「墩一下」带整屏
+//! 文字来回晃 = 视觉疲劳——欠阻尼 → **临界阻尼，零过冲单调趋近**。）
 //!
-//! 曲线 = 欠阻尼弹簧（纯函数零墙钟，A 档钉）；占缝采样自给自足——
-//! 目标值变化即从当前值重定基续弹（来回狂点不跳变）；首采样直通
+//! 曲线 = 临界阻尼弹簧（纯函数零墙钟，A 档钉）；占缝采样自给自足——
+//! 目标值变化即从当前值重定基续趋（来回狂点不跳变）；首采样直通
 //! 不重放（冷启动/插件热装不补演一场）。
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-/// 阻尼比：过冲 ≈2.5% 屏高——「落下来墩一下」的手感（C 档实拍可调）
-const ZETA: f32 = 0.76;
-/// 阻尼角频率 rad/s：首过冲峰 ≈150ms，全程 ≈350ms 收敛
-const OMEGA_D: f32 = 20.9;
+/// 固有角频率 rad/s（临界阻尼）：95% 趋近 ≈195ms，2800px 全程贴死
+/// ≈440ms——比旧欠阻尼版（≈500ms）略快，键盘弹收更显利落（BAR-152）
+const OMEGA: f32 = 24.0;
 /// 收敛判定：位置偏差与速度双小即贴死目标（防无限渐近空烧帧）
 const SETTLE_PX: f32 = 0.5;
 const SETTLE_VEL: f32 = 40.0; // px/s
 /// 兜底：超时强制贴死（病态参数也不许永动）
 const SETTLE_TIMEOUT_MS: u64 = 600;
 
-/// 欠阻尼弹簧采样（纯函数）：from → target，elapsed_ms 时刻的位置。
+/// 临界阻尼弹簧采样（纯函数）：from → target，elapsed_ms 时刻的位置。
+/// pos(t) = target + d·(1+ωt)·e^(−ωt)——(1+ωt)e^(−ωt) 对 t>0 严格递减，
+/// 零过冲单调趋近（spec_bar152_弹簧零过冲单调趋近 钉死）。
 /// 收敛（位置/速度双小或超时）贴死 target——返回值 == target 即终态。
 pub fn spring_pos(from: f32, target: f32, elapsed_ms: u64) -> f32 {
     let d = from - target;
@@ -28,13 +32,11 @@ pub fn spring_pos(from: f32, target: f32, elapsed_ms: u64) -> f32 {
         return target;
     }
     let t = elapsed_ms as f32 / 1000.0;
-    let omega = OMEGA_D / (1.0 - ZETA * ZETA).sqrt(); // 固有角频率
-    let env = (-ZETA * omega * t).exp();
-    let phase = OMEGA_D * t;
-    let k = ZETA * omega / OMEGA_D;
-    let pos = target + d * env * (phase.cos() + k * phase.sin());
-    // v(t) = -d·e^(-ζωt)·(ω²/ω_d)·sin(ω_d·t)（解析导数，收敛判据用）
-    let vel = (-d * env * (omega * omega / OMEGA_D) * phase.sin()).abs();
+    let x = OMEGA * t;
+    let env = (-x).exp();
+    let pos = target + d * (1.0 + x) * env;
+    // v(t) = d·ω²·t·e^(−ωt)（解析导数，收敛判据用）
+    let vel = (d * OMEGA * OMEGA * t * env).abs();
     if ((pos - target).abs() < SETTLE_PX && vel < SETTLE_VEL) || elapsed_ms >= SETTLE_TIMEOUT_MS {
         target
     } else {
@@ -43,6 +45,7 @@ pub fn spring_pos(from: f32, target: f32, elapsed_ms: u64) -> f32 {
 }
 
 /// 弹簧采样器状态：目标值变化即从当前值重定基（from=此刻位置）
+/// ——临界阻尼零初速重定基，位置连续不跳变（BAR-152 后单调趋近不破）
 struct SpringState {
     from: f32,
     target: f32,
