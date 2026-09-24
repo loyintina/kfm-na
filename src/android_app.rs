@@ -2389,8 +2389,10 @@ impl App {
                         crate::report::report(
                             "touch",
                             &format!(
-                                "解析页点按 起手({:.0},{:.0}) 抬手({x:.0},{y:.0}) → {tap_desc}",
-                                pt.0, pt.1
+                                "解析页点按 起手({:.0},{:.0}) 抬手({x:.0},{y:.0}) → {tap_desc} 屏代{}",
+                                pt.0,
+                                pt.1,
+                                crate::ui::parser_page::baked_epoch(),
                             ),
                         );
                         if let Some((hh, mode)) = hit_result {
@@ -6547,10 +6549,19 @@ impl App {
                     .map(|(i, r)| format!("{i}:{}-{}", r.y, r.y + i64::from(r.h)))
                     .collect::<Vec<_>>()
                     .join(" ");
+                // 仪器三期补名单（2026-09-24 对表实录：行带一致但名单异代
+                // = 名次错位型「行漂移」——用户点看到的名字进的是别家，
+                // 只有行带没有名单时这种漂移在账上完全隐形）
+                let names = ps
+                    .sessions
+                    .iter()
+                    .map(|s| s.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(",");
                 crate::report::report(
                     "bake",
                     &format!(
-                        "解析页烘焙 epoch={} 会话{} 屏{w}x{h} inset={ime} bar={bar_h} 裁带{}-{} 行[{rows}]",
+                        "解析页烘焙 epoch={} 会话{} 屏{w}x{h} inset={ime} bar={bar_h} 裁带{}-{} 行[{rows}] 名[{names}]",
                         ps.epoch,
                         ps.sessions.len(),
                         geo.lay.list_clip.0,
@@ -6572,6 +6583,7 @@ impl App {
                 );
             }
             g.slot_bake(crate::gles_present::ChromeSlot::Parser);
+            crate::ui::parser_page::note_baked_epoch(pt_epoch);
         }
         // 环境卡柱层（2026-09-21 环境卡重做）：**滑动全在合成期**——
         // 层内容 = 四轨紧凑带（卡内芯渐变 + 柱，稳态位），只在采样换代/

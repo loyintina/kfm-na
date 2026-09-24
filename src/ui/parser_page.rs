@@ -665,3 +665,19 @@ pub fn register_parser_page(page: SharedParserPage) {
 pub fn parser_page_handle() -> Option<SharedParserPage> {
     HANDLE.lock().unwrap().clone()
 }
+
+// ---- 屏代账（BAR-145 仪器三期，2026-09-24）：GPU 层当前纹理是哪一代
+// 烘焙的——[touch] 行附「屏代N」，与活体 epoch 对表：漂移再现时
+// 屏代滞后 = 陈旧纹理定罪；屏代齐 = 排除纹理腿，缩小到意图/命名 ----
+
+static BAKED_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// 烘焙完成落账（android_app slot_bake(Parser) 处唯一调用方）
+pub fn note_baked_epoch(epoch: u64) {
+    BAKED_EPOCH.store(epoch, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// 当前屏上纹理的烘焙代（[touch] 遥测调用方）
+pub fn baked_epoch() -> u64 {
+    BAKED_EPOCH.load(std::sync::atomic::Ordering::Relaxed)
+}
