@@ -62,6 +62,30 @@ impl TouchScroll {
         lines
     }
 
+    /// 像素级滚动通道（2026-09-24 用户拍板「滚动的像素级」）：与 moved
+    /// 同一只 slop 门、同一份 last_y，但**不取整不挂账**——本次位移原样
+    /// 出 px（带符号，手指向下 = 正 = 看历史）。零头的累计/借还在
+    /// TermView::scroll_px 的分数视口里。行级通道 moved 一行不动
+    /// （旧保底，设置页可切回——一次触摸内不换道，切换发生在两次触摸间）
+    pub fn moved_px(&mut self, y: f64) -> f64 {
+        if !self.dragging {
+            let off = y - self.start_y;
+            if off.abs() <= TAP_SLOP_PX {
+                self.last_y = y;
+                return 0.0;
+            }
+            self.dragging = true;
+            // 越阈第一笔：slop 段不计入（从阈值边界起算，与 moved 的
+            // 挂账语义不同——像素通道一滴零头都是钱，slop 段是点按的）
+            let d = off - off.signum() * TAP_SLOP_PX;
+            self.last_y = y;
+            return d;
+        }
+        let d = y - self.last_y;
+        self.last_y = y;
+        d
+    }
+
     /// 手指抬起：true = 全程没过阈值，算点按（调用方唤键盘）
     pub fn was_tap(&self) -> bool {
         !self.dragging

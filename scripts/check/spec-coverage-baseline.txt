@@ -28,7 +28,7 @@ src/plugins/term_alacritty.rs 0
 src/plugins/ui_fx.rs 0
 src/protocol.rs 0
 src/providers.rs 0
-src/report.rs 7
+src/report.rs 5
 src/scroll.rs 0
 src/session.rs 0
 src/session_router.rs 0

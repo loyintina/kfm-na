@@ -250,10 +250,11 @@ pub fn terminal_to_json(t: &TerminalConfig) -> String {
     };
     let esc = |s: &str| serde_json::to_string(s).unwrap_or_else(|_| "\"\"".into());
     format!(
-        "{{\"defaultSession\":{},\"switchHotkey\":{{\"mod\":{},\"key\":{}}}}}",
+        "{{\"defaultSession\":{},\"switchHotkey\":{{\"mod\":{},\"key\":{}}},\"pixelScroll\":{}}}",
         esc(&ds),
         esc(modifier),
-        esc(&t.switch_hotkey.key)
+        esc(&t.switch_hotkey.key),
+        t.pixel_scroll
     )
 }
 
@@ -288,15 +289,18 @@ impl DefaultSession {
     }
 }
 
-/// terminal.json（全局项）：默认会话 + 全局切换键
+/// terminal.json（全局项）：默认会话 + 全局切换键 + 像素级滚动开关
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TerminalConfig {
     pub default_session: DefaultSession,
     pub switch_hotkey: Hotkey,
+    /// 像素级滚动（2026-09-24 用户拍板「滚动的像素级」）：false = 旧行级
+    /// 滚动保底（默认——防新机制意外卡死无退路，设置页终端设置可切回）
+    pub pixel_scroll: bool,
 }
 
 impl Default for TerminalConfig {
-    /// 现状行为锚（行为零变化承诺）：本地起步 + Ctrl-]
+    /// 现状行为锚（行为零变化承诺）：本地起步 + Ctrl-] + 行级滚动
     fn default() -> Self {
         TerminalConfig {
             default_session: DefaultSession::Local,
@@ -304,6 +308,7 @@ impl Default for TerminalConfig {
                 modifier: Some(Mod::Ctrl),
                 key: "]".into(),
             },
+            pixel_scroll: false,
         }
     }
 }
@@ -324,8 +329,13 @@ pub fn parse_terminal(json: &str) -> Result<TerminalConfig, String> {
         .get("switchHotkey")
         .and_then(parse_hotkey_value)
         .unwrap_or(d.switch_hotkey);
+    let pixel_scroll = v
+        .get("pixelScroll")
+        .and_then(|b| b.as_bool())
+        .unwrap_or(d.pixel_scroll);
     Ok(TerminalConfig {
         default_session,
         switch_hotkey,
+        pixel_scroll,
     })
 }

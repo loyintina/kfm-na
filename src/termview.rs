@@ -1709,6 +1709,16 @@ pub struct TermView {
     /// （gpu_cells 签名无 inset，遮挡带由 sync_kb_shift 单一源记账）。
     /// u32::MAX = 从未 sync（考题/回放路径）→ 不裁
     kb_view_bottom: u32,
+    /// 像素级滚动开关（2026-09-24 用户拍板「滚动的像素级」，设置页终端
+    /// 设置可切）：false = 旧行级滚动保底（默认）。关时 scroll_frac_px
+    /// 恒 0，渲染/收集与旧版逐格等价
+    pixel_scroll: bool,
+    /// 分数视口零头（px，带符号）：手指滚动位移减去已提交 alacritty
+    /// display_offset 整行后的余数。正 = 往历史方向（内容下移，顶缘
+    /// 多收 line=-1）；负 = 往最新方向（内容上移，底缘多收
+    /// line=screen_lines）。钳制：贴底（offset=0）不许负、贴历史顶
+    /// 不许正——scroll_px 唯一写入口
+    scroll_frac_px: f64,
     /// 设计 token（theme.rs 第 2 层）：控件渲染只读这里，不认字面颜色。
     /// pub = 主题包插件/考题可直接换肤；生产默认 kfmv4 配方
     pub theme: crate::theme::Theme,
@@ -1784,6 +1794,8 @@ impl TermView {
             selection: None,
             kb_shift_px: 0,
             kb_view_bottom: u32::MAX,
+            pixel_scroll: false,
+            scroll_frac_px: 0.0,
             theme: crate::theme::Theme::default(),
         }
     }
@@ -1848,6 +1860,57 @@ impl TermView {
     /// 当前视口上移像素数（android_app 上报/考题读数）
     pub fn kb_shift_px(&self) -> u32 {
         self.kb_shift_px
+    }
+
+    /// 像素级滚动开关（设置页终端设置切换，android_app 调用方先例）。
+    /// 拨关 = 清亚行零头（画面回整行，不残留半行态）；行级 scroll_lines
+    /// 通道不受开关影响（旧保底永远可用）
+    pub fn set_pixel_scroll(&mut self, on: bool) {
+        self.pixel_scroll = on;
+        if !on {
+            self.scroll_frac_px = 0.0;
+        }
+    }
+
+    /// 开关状态（触摸路径分流判据，android_app 调用方）
+    pub fn pixel_scroll_enabled(&self) -> bool {
+        self.pixel_scroll
+    }
+
+    /// 分数视口零头读数（合成期实例平移/考题读数；带符号 px）
+    pub fn scroll_frac_px(&self) -> f64 {
+        self.scroll_frac_px
+    }
+
+    /// 像素级滚动唯一写入口（2026-09-24「滚动的像素级」）：位移先进分数
+    /// 视口零头，累计满一行才提交 alacritty display_offset（整行部交给
+    /// 网格自己钳）；零头两端钳制——贴底（offset=0）不许负（没有更新
+    /// 的行可露）、贴历史顶不许正（没有更老的行可露）。开关关 = 零行为
+    /// （旧保底铁律，spec_像素滚动_零头累计整行提交与钳制 钉死）
+    pub fn scroll_px(&mut self, delta_px: f64) {
+        if !self.pixel_scroll {
+            return;
+        }
+        let ch = f64::from(self.cell_h.max(1));
+        let mut total = self.scroll_frac_px + delta_px;
+        let lines = (total / ch).trunc() as i32;
+        if lines != 0 {
+            let before = self.term.grid().display_offset() as i64;
+            self.term.scroll_display(Scroll::Delta(lines));
+            let after = self.term.grid().display_offset() as i64;
+            // 只扣真实提交的（alacritty 钳到边界时差额不许挂在零头上）
+            total -= (after - before) as f64 * ch;
+        }
+        let grid = self.term.grid();
+        let offset = grid.display_offset();
+        let hist = grid.history_size();
+        if offset == 0 && total < 0.0 {
+            total = 0.0; // 贴底：之下没有更新的行
+        }
+        if offset >= hist && total > 0.0 {
+            total = 0.0; // 贴历史顶：之上没有更老的行
+        }
+        self.scroll_frac_px = total;
     }
 
     /// 字体探针（诊断用）：光栅化单字符，返回 (宽, 高, 非零覆盖像素数)。
@@ -2328,90 +2391,160 @@ impl TermView {
         let view_bottom =
             self.kb_view_bottom
                 .saturating_add(if kb_frac > 0 { self.cell_h } else { 0 });
+        // 像素级滚动分数视口（2026-09-24「滚动的像素级」）：零头在落笔
+        // 坐标里加（正 = 内容随手指下移看历史，与 kb_frac 上移同尺反向）。
+        // 顶缘多收 = 历史行 line=-1（正零头）、底缘多收 = 更新行
+        // line=screen_lines（负零头）——不收 = 拖动中黑缝随零头涨
+        let scroll_frac = if self.pixel_scroll {
+            self.scroll_frac_px
+        } else {
+            0.0
+        };
+        let scroll_frac_i = scroll_frac.round() as i64;
         // 两遍绘制（2026-08-21 实拍「选中态中文只剩左半」病灶）：先全部背景
         // （含选择高亮），后全部字形。一遍绘制时宽字符（CJK）在格 0 画双宽
         // 字形、墨探进格 1，随后 spacer 格的背景填充（选中=SELECT_BG）把
         // 右半字形盖掉——两遍制让一切背景都在字形之下
         struct Cell2D {
             px: u32,
-            py: i64, // 含像素零头（格原点 - kb_frac），可越出 [0, buf_h)——落笔处逐像素裁
+            py: i64, // 含像素零头（格原点 - kb_frac + scroll_frac），可越出 [0, buf_h)——落笔处逐像素裁
             fg: u32,
             bg: u32,
             c: char,
             flags: Flags,
         }
         let mut cells: Vec<Cell2D> = Vec::new();
-        for indexed in content.display_iter {
-            let line = indexed.point.line.0 + offset - kb_rows;
-            if !(0..self.term.grid().screen_lines() as i32).contains(&line) {
-                continue; // 钳到屏内（含键盘平移推出顶沿的行）
-            }
-            let (mut fg, mut bg) = (
-                color_to_xrgb(indexed.cell.fg),
-                color_to_xrgb(indexed.cell.bg),
-            );
-            if indexed.cell.flags.contains(Flags::INVERSE) {
+        let screen_lines = self.term.grid().screen_lines() as i32;
+        let history_lines = self.term.grid().history_size() as i32;
+        let (cell_w, cell_h) = (self.cell_w, self.cell_h);
+        let mt = margin_top(self.cell_h);
+        // 每格决策单源（display_iter 行与手动多收行共用——颜色/选择/光标/
+        // 几何一把尺，两路漂移 = 对拍验收的命）：skip_view_bottom = 手动
+        // 多收行专用（它们的可见性由滚动几何定，遮挡带由 chrome 后画盖）
+        let push_cell = |line: i32,
+                         grid_line: i32,
+                         col: u32,
+                         cell: &alacritty_terminal::term::cell::Cell,
+                         skip_view_bottom: bool,
+                         cells: &mut Vec<Cell2D>| {
+            let (mut fg, mut bg) = (color_to_xrgb(cell.fg), color_to_xrgb(cell.bg));
+            if cell.flags.contains(Flags::INVERSE) {
                 std::mem::swap(&mut fg, &mut bg);
             }
             // 长按选择高亮：选中格盖选择底色（与网格行同坐标系，滚屏自动跟随）。
             // 宽字符整字扩边：spacer 的格 0 选中 → spacer 也亮；格 0 的 spacer
             // 选中（选词带 spacer 收尾）→ 格 0 也亮——任何钳法下都不劈字
             if let Some(sel) = selection {
-                let (line0, col0) = (indexed.point.line.0, indexed.point.column.0 as u32);
-                let selected = in_selection(sel.anchor, sel.cursor, line0, col0)
-                    || (col0 > 0
-                        && indexed.cell.flags.contains(Flags::WIDE_CHAR_SPACER)
-                        && in_selection(sel.anchor, sel.cursor, line0, col0 - 1))
-                    || (indexed.cell.flags.contains(Flags::WIDE_CHAR)
-                        && in_selection(sel.anchor, sel.cursor, line0, col0 + 1));
+                let selected = in_selection(sel.anchor, sel.cursor, grid_line, col)
+                    || (col > 0
+                        && cell.flags.contains(Flags::WIDE_CHAR_SPACER)
+                        && in_selection(sel.anchor, sel.cursor, grid_line, col - 1))
+                    || (cell.flags.contains(Flags::WIDE_CHAR)
+                        && in_selection(sel.anchor, sel.cursor, grid_line, col + 1));
                 if selected {
                     bg = SELECT_BG;
                 }
             }
-            let is_cursor = cursor.shape != CursorShape::Hidden && indexed.point == cursor.point;
+            let is_cursor = cursor.shape != CursorShape::Hidden
+                && cursor.point.line.0 == grid_line
+                && cursor.point.column.0 as u32 == col;
             if is_cursor {
                 std::mem::swap(&mut fg, &mut bg);
             }
-            let (px, py) = cell_origin(
-                indexed.point.column.0 as u32,
-                line as u32,
-                self.cell_w,
-                self.cell_h,
-            );
             // BAR-005：格原点加边距，网格不贴边（边距带留黑）；
             // BAR-010：顶部走动态顶带 margin_top（圆角屏下探一整行，
-            // 格高随捏合缩放变，顶带跟格高走）
-            let (px, py) = (px + MARGIN_X, py + margin_top(self.cell_h));
-            if px >= buf_w || py >= buf_h {
-                continue; // 窗口比网格小（resize 途中）：裁掉放不下的格
+            // 格高随捏合缩放变，顶带跟格高走）。py 有符号直算——手动
+            // 多收行 line=-1 的原点在顶带之上（负值），越顶部分归
+            // 背景 y0 钳与 draw_glyph clip_top 逐像素裁
+            let px = col * cell_w + MARGIN_X;
+            let py_i = i64::from(mt) + i64::from(line) * i64::from(cell_h);
+            if px >= buf_w || py_i >= i64::from(buf_h) {
+                return; // 窗口比网格小（resize 途中）：裁掉放不下的格
             }
-            if py >= view_bottom {
-                continue; // 整行没入键盘/栏带遮挡带才不进料；半遮的边界行
+            if !skip_view_bottom && py_i >= i64::from(view_bottom) {
+                return; // 整行没入键盘/栏带遮挡带才不进料；半遮的边界行
                 // 照画（被后画的键栏/系统键盘盖掉是真实观感——
                 // 且保持 resize 途中半行照旧的旧契约，dump 紧缓冲
                 // 路径 spec_后台值守_dump_now 钉死）。view_bottom 已在
                 // 上方按零头加宽一行（补底缝），与 collect_gpu_cells 一把尺
             }
-            // 像素零头在落笔坐标里减：py 转有符号，顶探出顶带内缘的行由
+            // 像素零头在落笔坐标里加减：py 转有符号，顶探出顶带内缘的行由
             // 背景裁剪（y0 钳 margin_top）与 draw_glyph clip_top 逐像素裁
-            let py = i64::from(py) - kb_frac;
+            let py = py_i - kb_frac + scroll_frac_i;
             cells.push(Cell2D {
                 px,
                 py,
                 fg,
                 bg,
-                c: indexed.cell.c,
-                flags: indexed.cell.flags,
+                c: cell.c,
+                flags: cell.flags,
             });
+        };
+        for indexed in content.display_iter {
+            let line = indexed.point.line.0 + offset - kb_rows;
+            if !(0..screen_lines).contains(&line) {
+                continue; // 钳到屏内（含键盘平移推出顶沿的行）
+            }
+            push_cell(
+                line,
+                indexed.point.line.0,
+                indexed.point.column.0 as u32,
+                indexed.cell,
+                false,
+                &mut cells,
+            );
+        }
+        // 手动多收行（像素级滚动零头的补缝行；grid_line 越界防御跳）
+        if scroll_frac_i > 0 {
+            // 正零头：顶缘补历史行 line=-1
+            let grid_line = -1 - offset + kb_rows;
+            if grid_line >= -history_lines && grid_line < screen_lines {
+                let row = &self.term.grid()[Line(grid_line)];
+                for col in 0..self.term.grid().columns() as u32 {
+                    push_cell(
+                        -1,
+                        grid_line,
+                        col,
+                        &row[Column(col as usize)],
+                        true,
+                        &mut cells,
+                    );
+                }
+            }
+        } else if scroll_frac_i < 0 {
+            // 负零头：底缘补更新行 line=screen_lines
+            let grid_line = screen_lines - offset + kb_rows;
+            if grid_line >= -history_lines && grid_line < screen_lines {
+                let row = &self.term.grid()[Line(grid_line)];
+                for col in 0..self.term.grid().columns() as u32 {
+                    push_cell(
+                        screen_lines,
+                        grid_line,
+                        col,
+                        &row[Column(col as usize)],
+                        true,
+                        &mut cells,
+                    );
+                }
+            }
         }
         // 第一遍：背景。不满格重画（全帧已填 DEFAULT_BG），非默认背景补色块。
         // py 含像素零头可为负/探进顶带：y0 钳顶带内缘（margin_top），高相应缩——
-        // 背景色块不许盖住顶带 chrome（与 GPU 路径 grid_clip_top scissor 一把尺）
+        // 背景色块不许盖住顶带 chrome（与 GPU 路径 grid_clip scissor 一把尺）。
+        // 滚动零头 ≠0 时 y1 再钳内容底沿（mt+行数×格高）——多收/平移行
+        // 不许把墨拖进底缘卡环（无滚动零头时网格恰好铺满，钳位恒等于不钳）
+        let content_bottom = i64::from(mt) + i64::from(screen_lines) * i64::from(cell_h);
+        let bg_bottom = if scroll_frac_i != 0 {
+            content_bottom
+        } else {
+            i64::from(buf_h)
+        };
         for cell in &cells {
             if cell.bg != DEFAULT_BG {
                 let y0 = cell.py.max(i64::from(margin_top(self.cell_h)));
-                let h = self.cell_h as i64 - (y0 - cell.py);
-                if h > 0 && y0 < i64::from(buf_h) {
+                let y1 = (cell.py + i64::from(self.cell_h)).min(bg_bottom);
+                let h = y1 - y0;
+                if h > 0 && y0 < y1 && y0 < i64::from(buf_h) {
                     frame.fill_rect(cell.px, y0 as u32, self.cell_w, h as u32, cell.bg);
                 }
             }
@@ -2420,8 +2553,14 @@ impl TermView {
         // 宽字符第二格（spacer）不画。裁剪宽：宽字符 2 格，其余 1 格——
         // 模糊宽度字符（如 ⇄，宽度判 1 格但 CJK 备用字体是全角字形）的
         // 墨不许溢进下一格（2026-08-21 实拍）。clip_top = 顶带内缘：
-        // 像素零头把字形顶上顶带的部分逐像素裁掉
+        // 像素零头把字形顶上顶带的部分逐像素裁掉；clip_bottom = 滚动
+        // 零头期的内容底沿（其余时候 = 帧底，恒等不钳）
         let clip_top = margin_top(self.cell_h);
+        let clip_bottom = if scroll_frac_i != 0 {
+            (content_bottom as u32).min(buf_h)
+        } else {
+            buf_h
+        };
         for cell in &cells {
             if !paintable(cell.c) || cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
                 continue;
@@ -2432,7 +2571,14 @@ impl TermView {
                 self.cell_w
             };
             self.draw_glyph(
-                &mut frame, cell.c, cell.px, cell.py, cell.fg, clip_w, clip_top,
+                &mut frame,
+                cell.c,
+                cell.px,
+                cell.py,
+                cell.fg,
+                clip_w,
+                clip_top,
+                clip_bottom,
             );
         }
     }
@@ -2456,54 +2602,63 @@ impl TermView {
         let margin_top = margin_top(self.cell_h);
         // 键盘视口平移（与 render_into 同源同尺；2026-09-24 像素级化）：
         // 屏行 = 网格行 + 显示偏移 - 整数行部；像素零头部不进 GpuCell
-        // （py 保持格原点整数），归合成期实例平移（vpush.dy - kb_frac）。
-        // 顶沿外/遮挡带内（格底越过 sync_kb_shift 记的可见底沿）的行不收集；
-        // 零头>0 时多收一整数行补底缝（spec_键盘平移_像素零头与边界多收 钉死）
+        // （py 保持格原点整数），归合成期实例平移（vpush.dy - kb_frac
+        // + scroll_frac）。顶沿外/遮挡带内（格底越过 sync_kb_shift 记的
+        // 可见底沿）的行不收集；零头>0 时多收一整数行补底缝
+        // （spec_键盘平移_像素零头与边界多收 钉死）
         let kb_rows = (self.kb_shift_px / self.cell_h.max(1)) as i32;
         let kb_frac = self.kb_shift_px % self.cell_h.max(1);
         let view_bottom =
             self.kb_view_bottom
                 .saturating_add(if kb_frac > 0 { self.cell_h } else { 0 });
-        for indexed in content.display_iter {
-            let line = indexed.point.line.0 + offset - kb_rows;
-            if !(0..self.term.grid().screen_lines() as i32).contains(&line) {
-                continue;
-            }
-            let (mut fg, mut bg) = (
-                color_to_xrgb(indexed.cell.fg),
-                color_to_xrgb(indexed.cell.bg),
-            );
-            if indexed.cell.flags.contains(Flags::INVERSE) {
+        // 像素级滚动分数视口（与 render_into 同源同尺）：py 保持格原点
+        // 整数（有符号——顶缘多收行 py 为负），滚动零头归合成期实例
+        // 平移；多收行规则同 softbuffer 路（正零头补 line=-1、负零头
+        // 补 line=screen_lines），spec_像素滚动_渲染顶缘多收底缘多收 钉死
+        let scroll_frac_i = if self.pixel_scroll {
+            self.scroll_frac_px.round() as i64
+        } else {
+            0
+        };
+        let screen_lines = self.term.grid().screen_lines() as i32;
+        let history_lines = self.term.grid().history_size() as i32;
+        let (cell_w, cell_h) = (self.cell_w, self.cell_h);
+        // 每格决策单源（display_iter 行与手动多收行共用，同 render_into
+        // 一把尺）；skip_view_bottom = 手动多收行专用
+        let push_cell = |line: i32,
+                         grid_line: i32,
+                         col: u32,
+                         cell: &alacritty_terminal::term::cell::Cell,
+                         skip_view_bottom: bool,
+                         out: &mut Vec<GpuCell>| {
+            let (mut fg, mut bg) = (color_to_xrgb(cell.fg), color_to_xrgb(cell.bg));
+            if cell.flags.contains(Flags::INVERSE) {
                 std::mem::swap(&mut fg, &mut bg);
             }
             if let Some(sel) = selection {
-                let (line0, col0) = (indexed.point.line.0, indexed.point.column.0 as u32);
-                let selected = in_selection(sel.anchor, sel.cursor, line0, col0)
-                    || (col0 > 0
-                        && indexed.cell.flags.contains(Flags::WIDE_CHAR_SPACER)
-                        && in_selection(sel.anchor, sel.cursor, line0, col0 - 1))
-                    || (indexed.cell.flags.contains(Flags::WIDE_CHAR)
-                        && in_selection(sel.anchor, sel.cursor, line0, col0 + 1));
+                let selected = in_selection(sel.anchor, sel.cursor, grid_line, col)
+                    || (col > 0
+                        && cell.flags.contains(Flags::WIDE_CHAR_SPACER)
+                        && in_selection(sel.anchor, sel.cursor, grid_line, col - 1))
+                    || (cell.flags.contains(Flags::WIDE_CHAR)
+                        && in_selection(sel.anchor, sel.cursor, grid_line, col + 1));
                 if selected {
                     bg = SELECT_BG;
                 }
             }
-            let is_cursor = cursor.shape != CursorShape::Hidden && indexed.point == cursor.point;
+            let is_cursor = cursor.shape != CursorShape::Hidden
+                && cursor.point.line.0 == grid_line
+                && cursor.point.column.0 as u32 == col;
             if is_cursor {
                 std::mem::swap(&mut fg, &mut bg);
             }
-            let (px, py) = cell_origin(
-                indexed.point.column.0 as u32,
-                line as u32,
-                self.cell_w,
-                self.cell_h,
-            );
-            let (px, py) = (px + MARGIN_X, py + margin_top);
-            if px >= w || py >= h {
-                continue;
+            let px = col * cell_w + MARGIN_X;
+            let py = i64::from(margin_top) + i64::from(line) * i64::from(cell_h);
+            if px >= w || py >= i64::from(h) {
+                return;
             }
-            if py >= view_bottom {
-                continue; // 整行没入遮挡带才不收集（半遮边界行照出，同
+            if !skip_view_bottom && py >= i64::from(view_bottom) {
+                return; // 整行没入遮挡带才不收集（半遮边界行照出，同
                 // render_into 一把尺）
             }
             out.push(GpuCell {
@@ -2511,10 +2666,56 @@ impl TermView {
                 py,
                 fg,
                 bg,
-                c: indexed.cell.c,
-                wide: indexed.cell.flags.contains(Flags::WIDE_CHAR),
-                spacer: indexed.cell.flags.contains(Flags::WIDE_CHAR_SPACER),
+                c: cell.c,
+                wide: cell.flags.contains(Flags::WIDE_CHAR),
+                spacer: cell.flags.contains(Flags::WIDE_CHAR_SPACER),
             });
+        };
+        for indexed in content.display_iter {
+            let line = indexed.point.line.0 + offset - kb_rows;
+            if !(0..screen_lines).contains(&line) {
+                continue;
+            }
+            push_cell(
+                line,
+                indexed.point.line.0,
+                indexed.point.column.0 as u32,
+                indexed.cell,
+                false,
+                &mut out,
+            );
+        }
+        // 手动多收行（像素级滚动零头补缝；grid_line 越界防御跳）
+        if scroll_frac_i > 0 {
+            let grid_line = -1 - offset + kb_rows;
+            if grid_line >= -history_lines && grid_line < screen_lines {
+                let row = &self.term.grid()[Line(grid_line)];
+                for col in 0..self.term.grid().columns() as u32 {
+                    push_cell(
+                        -1,
+                        grid_line,
+                        col,
+                        &row[Column(col as usize)],
+                        true,
+                        &mut out,
+                    );
+                }
+            }
+        } else if scroll_frac_i < 0 {
+            let grid_line = screen_lines - offset + kb_rows;
+            if grid_line >= -history_lines && grid_line < screen_lines {
+                let row = &self.term.grid()[Line(grid_line)];
+                for col in 0..self.term.grid().columns() as u32 {
+                    push_cell(
+                        screen_lines,
+                        grid_line,
+                        col,
+                        &row[Column(col as usize)],
+                        true,
+                        &mut out,
+                    );
+                }
+            }
         }
         out
     }
@@ -6462,10 +6663,11 @@ impl TermView {
     /// 双字体都缺 → 记 tofu 目击名单（主字体画 .notdef 方框）。
     /// clip_w = 右缘裁剪宽（格宽的 1 或 2 倍）：模糊宽度字符（宽度判 1 格
     /// 但落在全角比例的 CJK 字体上，如 ⇄）墨不许溢进下一格的内容区。
-    /// py 有符号 + clip_top（2026-09-24 像素级键盘平移）：零头平移把行顶上
-    /// 顶带时，py 可为负/小于顶带内缘——clip_top 以下的墨逐像素裁掉
-    /// （clip_top=0 退化为旧的「裁出屏」语义）
-    #[allow(clippy::too_many_arguments)] // 裁剪两维（右宽/顶缘）+落笔坐标，拆 struct 反而割断注释链
+    /// py 有符号 + clip_top/clip_bottom（2026-09-24 像素级键盘平移/滚动）：
+    /// 零头平移把行顶上顶带时，py 可为负/小于顶带内缘——clip_top 以下的
+    /// 墨逐像素裁掉（clip_top=0 退化为旧的「裁出屏」语义）；clip_bottom
+    /// = 滚动零头期的内容底沿（传 frame.h = 恒等不钳）
+    #[allow(clippy::too_many_arguments)] // 裁剪两维（右宽/顶缘/底缘）+落笔坐标，拆 struct 反而割断注释链
     fn draw_glyph(
         &self,
         frame: &mut Frame<'_>,
@@ -6475,6 +6677,7 @@ impl TermView {
         fg: u32,
         clip_w: u32,
         clip_top: u32,
+        clip_bottom: u32,
     ) {
         if self.font.lookup_glyph_index(c) == 0 {
             let covered = self
@@ -6504,7 +6707,7 @@ impl TermView {
             if y < i64::from(clip_top) {
                 continue; // 探进顶带/出屏（基线偏移 + 高字形 / 像素零头上顶）：裁
             }
-            if y >= i64::from(frame.h) {
+            if y >= i64::from(clip_bottom.min(frame.h)) {
                 break;
             }
             for gx in 0..metrics.width as u32 {
@@ -7036,6 +7239,19 @@ pub trait TermEmu: Send {
     /// 当前视口上移像素数（同调用方上报读数；2026-09-24 像素级化——
     /// 原行数读数被实机判步进观感怪，亚行零头随遮挡带连续跟随）
     fn kb_shift_px(&self) -> u32;
+    /// 像素级滚动开关（设置页终端设置，android_app 配置应用调用方先例）：
+    /// 关 = 旧行级滚动保底（默认），拨关清亚行零头
+    fn set_pixel_scroll(&mut self, on: bool);
+    /// 开关状态（触摸路径分流判据，android_app 调用方）
+    fn pixel_scroll_enabled(&self) -> bool;
+    /// 像素级滚动（触摸拖动调用方）：零头累计满行提交 display_offset，
+    /// 两端钳制；开关关 = 零行为
+    fn scroll_px(&mut self, delta_px: f64);
+    /// 分数视口零头读数（GLES 合成期实例平移调用方；带符号 px）
+    fn scroll_frac_px(&self) -> f64;
+    /// 网格行数（GLES 合成期内容底沿 = margin_top + 行数×格高 的
+    /// 计算调用方；像素滚动底缘裁剪带用）
+    fn grid_rows(&self) -> u32;
     fn cell_size(&self) -> (u32, u32);
     /// 运行期改格尺寸（捏合缩放，android_app 双指手势调用方）
     fn set_cell_size(&mut self, cell_w: u32, cell_h: u32);
@@ -7339,6 +7555,21 @@ impl TermEmu for TermView {
     }
     fn kb_shift_px(&self) -> u32 {
         TermView::kb_shift_px(self)
+    }
+    fn set_pixel_scroll(&mut self, on: bool) {
+        TermView::set_pixel_scroll(self, on)
+    }
+    fn pixel_scroll_enabled(&self) -> bool {
+        TermView::pixel_scroll_enabled(self)
+    }
+    fn scroll_px(&mut self, delta_px: f64) {
+        TermView::scroll_px(self, delta_px)
+    }
+    fn scroll_frac_px(&self) -> f64 {
+        TermView::scroll_frac_px(self)
+    }
+    fn grid_rows(&self) -> u32 {
+        self.term.grid().screen_lines() as u32
     }
     fn cell_size(&self) -> (u32, u32) {
         TermView::cell_size(self)

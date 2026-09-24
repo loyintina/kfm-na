@@ -39,16 +39,16 @@
 | `src/plugins/ui_fx.rs` | 2 | 2 | 0 | — |
 | `src/providers.rs` | 5 | 5 | 0 | — |
 | `src/report.rs` | 12 | 7 | 5 | set_boot_t0 start_flusher report_sync report_sync_once http_status_is_200 |
-| `src/scroll.rs` | 5 | 5 | 0 | — |
+| `src/scroll.rs` | 6 | 6 | 0 | — |
 | `src/self_restart.rs` | 11 | 5 | 6 | FLAG_REL set_files_dir button_label poll_flag restart restart |
 | `src/sess_mode.rs` | 3 | 3 | 0 | — |
 | `src/session.rs` | 11 | 11 | 0 | — |
 | `src/session_router.rs` | 11 | 11 | 0 | — |
-| `src/settings.rs` | 10 | 6 | 4 | parse QUIC_DEFAULT_PORT QUIC_REVERSE_PORT terminal_to_json |
+| `src/settings.rs` | 10 | 7 | 3 | parse QUIC_DEFAULT_PORT QUIC_REVERSE_PORT |
 | `src/singleton.rs` | 7 | 4 | 3 | LOCK_PATH lock_exclusive try_acquire |
 | `src/svc_health.rs` | 12 | 7 | 5 | HIST_PATH configure set_visible sys_snap take_dirty |
 | `src/sys_hist.rs` | 39 | 34 | 5 | BAR_W PLACEHOLDER_PCT hist_idx restore HIST_FORMAT |
-| `src/termview.rs` | 135 | 128 | 7 | AI_THINK_COLLAPSED FONT_CANDIDATES CJK_FONT_CANDIDATES load_cjk_font font_probe MAG_HALF_COLS MAG_HALF_ROWS |
+| `src/termview.rs` | 139 | 132 | 7 | AI_THINK_COLLAPSED FONT_CANDIDATES CJK_FONT_CANDIDATES load_cjk_font font_probe MAG_HALF_COLS MAG_HALF_ROWS |
 | `src/theme.rs` | 1 | 1 | 0 | — |
 | `src/tmux_ctl.rs` | 10 | 10 | 0 | — |
 | `src/tmux_exec.rs` | 1 | 1 | 0 | — |

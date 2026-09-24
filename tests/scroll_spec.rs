@@ -101,3 +101,35 @@ fn spec_滚轮序列_sgr编码() {
     assert_eq!(wheel_seq(false, 1, 1), "\x1b[<65;1;1M");
     assert_eq!(wheel_seq(true, 72, 40), "\x1b[<64;72;40M");
 }
+
+// ---------- 像素级滚动（2026-09-24 用户拍板「下面的方向就是滚动的像素级」） ----------
+// 契约：moved_px 与 moved 同一只 slop 门，但不取整不挂账——位移原样
+// 出 px（带符号）。旧行级通道 moved 一行不动（降级保底，设置里可切回）
+
+#[test]
+fn spec_像素滚动_moved_px零头原样不取整() {
+    let mut t = TouchScroll::new(500.0, CELL);
+    // slop 门同尺：阈值内零位移
+    assert_eq!(t.moved_px(505.0), 0.0);
+    assert_eq!(t.moved_px(500.0 + TAP_SLOP_PX), 0.0, "恰好到位仍是点按期");
+    assert!(t.was_tap());
+    // 越阈后：位移原样出——半行零头不取整不挂账（moved 在这里出 0 行）
+    let d = t.moved_px(500.0 + TAP_SLOP_PX + 15.5);
+    assert_eq!(d, 15.5, "越阈后第一笔位移原样出（slop 段不计入，同 moved）");
+    assert!(!t.was_tap());
+    // 连续小步：每次出当次位移，无累计无吞零
+    assert_eq!(t.moved_px(500.0 + TAP_SLOP_PX + 15.5 + 3.25), 3.25);
+    // 反向：负位移原样出
+    assert_eq!(t.moved_px(500.0), -(TAP_SLOP_PX + 18.75));
+}
+
+#[test]
+fn spec_像素滚动_双通道互不污染() {
+    // 同一只状态机的两条通道：slop/last_y 共享——行级保底与像素级
+    // 切换发生在两次触摸之间（设置页里点开关），一次触摸内不换道
+    let mut t = TouchScroll::new(500.0, CELL);
+    assert_eq!(t.moved(500.0 + TAP_SLOP_PX + CELL), 1, "行级通道照旧");
+    let mut u = TouchScroll::new(500.0, CELL);
+    let d = u.moved_px(500.0 + TAP_SLOP_PX + CELL);
+    assert_eq!(d, CELL, "像素通道同位移出原样 px");
+}

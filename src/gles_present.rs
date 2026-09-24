@@ -1251,11 +1251,12 @@ impl GlesPresent {
         pt_dy_extra: f32,
         pan_comp: Option<crate::gles_present::PanComp>,
         layered: LayeredPlace,
-        // 像素级键盘平移（2026-09-24）：网格实例在合成期整体上移 kb_frac
-        // 零头（调用方 push 时 dy 已减），顶带内缘以下才许落墨——scissor
-        // 保 screen y ≥ grid_clip_top（GL 原点左下：盒高 = h - clip_top）。
-        // 0 = 无零头不裁（与旧路径逐像素等价）
-        grid_clip_top: u32,
+        // 像素级视口平移（2026-09-24 键盘 kb_frac + 触摸滚动零头共用）：
+        // 网格实例在合成期整体平移（调用方 push 时 dy 已算入零头），
+        // 内容带外不许落墨——grid_clip = (顶带内缘, 内容底沿) screen y
+        // 闭开区间（GL 原点左下：盒 y = h-bottom，高 = bottom-top）。
+        // (0, h) = 无零头不裁（与旧路径逐像素等价）
+        grid_clip: (u32, u32),
     ) {
         let t0_draw = std::time::Instant::now();
         // CPU 画布直接测量（rgb 非零计数 + 样本原值）——「画没画」的铁证
@@ -1317,11 +1318,17 @@ impl GlesPresent {
                 gl.disable(glow::BLEND);
             }
 
-            // 网格内容顶带裁剪（像素级键盘平移）：零头把行顶上顶带时
-            // 不许墨探进顶带 chrome（与 softbuffer 路径 clip_top 一把尺）
-            if grid_clip_top > 0 {
+            // 网格内容带裁剪（像素级视口平移）：零头把行顶/底出内容带时
+            // 不许墨探进顶带 chrome 或底缘卡环（与 softbuffer 路径一把尺）
+            let clip_on = grid_clip.0 > 0 || grid_clip.1 < self.h;
+            if clip_on {
                 gl.enable(glow::SCISSOR_TEST);
-                gl.scissor(0, 0, self.w as i32, (self.h - grid_clip_top) as i32);
+                gl.scissor(
+                    0,
+                    (self.h - grid_clip.1) as i32,
+                    self.w as i32,
+                    (grid_clip.1 - grid_clip.0) as i32,
+                );
             }
 
             // 背景
@@ -1350,7 +1357,7 @@ impl GlesPresent {
                 glyphs_by_page,
                 1.0,
             );
-            if grid_clip_top > 0 {
+            if clip_on {
                 gl.disable(glow::SCISSOR_TEST);
             }
 

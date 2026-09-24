@@ -1164,10 +1164,16 @@ impl App {
                                     .as_ref()
                                     .and_then(|ai| ai.accent_of(crate::ai_presence::Panel::Config))
                                     .unwrap_or(crate::ui::accent::FALLBACK);
+                                let term_row = pg.tab() == 0 && pg.focus() == 1;
                                 pg.dropdown_pick(i, now, ps_snap, acc);
                                 drop(pg);
-                                // 下拉换选 = 默认服务器变更（二版：写盘+重建归壳）
-                                self.apply_default_server_pick();
+                                // 下拉换选：终端设置行 = 像素滚动开关；
+                                // 默认服务器行 = 默认会话变更（写盘+重建归壳）
+                                if term_row {
+                                    self.apply_pixel_scroll_pick();
+                                } else {
+                                    self.apply_default_server_pick();
+                                }
                                 // 二十四修 §六②：值框宽度伸缩账——旧宽 =
                                 // 点选前实量（上方 vw），新宽 = 重建后实量；
                                 // 等长换选账不起（feed 内部 <1px 闸）
@@ -1880,9 +1886,47 @@ impl App {
                     self.dirty = true;
                     return;
                 }
+                // 先读开关再分流（一次触摸内不换道——通道在建机时定）：
+                // 像素通道不取整，零头进分数视口；行级通道旧保底
+                let pixel_lane = self
+                    .term_handle()
+                    .is_some_and(|t| t.lock().unwrap().pixel_scroll_enabled());
                 let Some(tracker) = &mut self.touch_scroll else {
                     return;
                 };
+                if pixel_lane {
+                    let d = tracker.moved_px(y);
+                    if d == 0.0 {
+                        return;
+                    }
+                    let Some(t) = self.term_handle() else { return };
+                    let mut t = t.lock().unwrap();
+                    if t.mouse_report_active() {
+                        // 全屏 TUI（鼠标上报）协议无像素概念——照旧行级
+                        // 滚轮路（零头就地折算成行 tick，同旧路封顶）
+                        let lines = (d / f64::from(t.cell_size().1.max(1))).trunc() as i32;
+                        if lines == 0 {
+                            return;
+                        }
+                        let (cw, ch) = t.cell_size();
+                        let col = (x as u32 / cw + 1).max(1);
+                        let row = (y as u32 / ch + 1).max(1);
+                        if let Some(r) = self.router_handle() {
+                            let r = r.lock().unwrap();
+                            for _ in 0..lines.unsigned_abs().min(10) {
+                                r.send(TermCmd::Input(crate::scroll::wheel_seq(
+                                    lines > 0,
+                                    col,
+                                    row,
+                                )));
+                            }
+                        }
+                    } else {
+                        t.scroll_px(d);
+                        self.dirty = true;
+                    }
+                    return;
+                }
                 let lines = tracker.moved(y);
                 if lines == 0 {
                     return;
@@ -3496,6 +3540,14 @@ impl App {
             }
         }
 
+        // 像素级滚动开关读回（设置页「终端设置」，terminal.json）：启动
+        // 即定触摸滚动通道——开 = 分数视口亚行跟随，关 = 旧行级保底
+        if let Some(t) = self.term_handle() {
+            t.lock()
+                .unwrap()
+                .set_pixel_scroll(self.terminal_cfg.pixel_scroll);
+        }
+
         // 首发尺寸：Opened 前 outbound 会被 conn 层缓存，绑定后补发
         let size = window.inner_size();
         self.apply_window_size(size.width, size.height);
@@ -3624,10 +3676,33 @@ impl App {
             p.set_upper(upper);
             return;
         }
-        let rows = vec![crate::ui::cfg_page::RowView {
-            title: "系统管理".into(),
-            meta: "服务器配置".into(),
-        }];
+        let rows = vec![
+            crate::ui::cfg_page::RowView {
+                title: "系统管理".into(),
+                meta: "服务器配置".into(),
+            },
+            crate::ui::cfg_page::RowView {
+                title: "终端设置".into(),
+                meta: "滚动行为".into(),
+            },
+        ];
+        let focus = page.lock().unwrap().focus().min(1);
+        if focus == 1 {
+            // 终端设置（2026-09-24 像素级滚动）：单下拉机制复用——选项
+            // 关=旧行级保底（默认）/ 开=像素级实验；点选写盘+即时分流
+            let on = self.terminal_cfg.pixel_scroll;
+            let options = vec!["关（行级保底）".to_string(), "开（像素级实验）".to_string()];
+            let upper = vec![crate::ui::cfg_page::UpperRow {
+                label: "像素级滚动".into(),
+                value: options[usize::from(on)].clone(),
+                is_dropdown: true,
+            }];
+            let mut p = page.lock().unwrap();
+            p.set_rows(rows);
+            p.set_options(options, usize::from(on));
+            p.set_upper(upper);
+            return;
+        }
         // 下拉选项 = 本地终端 + 服务器池；选中位 = 当前默认会话
         let mut options = vec!["本地终端".to_string()];
         for s in &self.settings_servers {
@@ -3758,6 +3833,37 @@ impl App {
         if cur.is_some_and(|c| c != want) {
             self.switch_session();
         }
+    }
+
+    /// 像素级滚动开关换选（设置页「终端设置」行，2026-09-24）：
+    /// terminal.json pixelScroll 写盘 + term 即时分流（触摸滚动通道
+    /// 行级保底 ↔ 分数视口）+ 上池重建。写盘失败 = 上报不炸
+    fn apply_pixel_scroll_pick(&mut self) {
+        let Some(page) = &self.cfg_page else { return };
+        let on = page.lock().unwrap().option_sel() == 1;
+        self.terminal_cfg.pixel_scroll = on;
+        if let Some(dir) = self
+            .android_app
+            .as_ref()
+            .and_then(|a| a.internal_data_path())
+        {
+            let path = dir.join("settings").join("terminal.json");
+            let json = crate::settings::terminal_to_json(&self.terminal_cfg);
+            if let Err(e) = std::fs::write(&path, json) {
+                crate::report::report("term", &format!("terminal.json 写盘失败: {e}"));
+            }
+        }
+        if let Some(t) = self.term_handle() {
+            t.lock().unwrap().set_pixel_scroll(on);
+        }
+        crate::report::report(
+            "ui",
+            &format!(
+                "像素级滚动→{}（已落盘）",
+                if on { "开" } else { "关（行级保底）" }
+            ),
+        );
+        self.rebuild_cfg_rows();
     }
 
     /// 会话切换（L1）：Ctrl-] 触达——router 换出向活跃槽；入向不换槽
@@ -6671,27 +6777,40 @@ impl App {
         // 显影，烘焙物不动。视口推移：基座实例过仿射（恒等早退），
         // 面板 placement 加被压额外位移）
         let (cx, cy) = (w as f32 / 2.0, h as f32 / 2.0);
-        // 像素级键盘平移（2026-09-24）：GpuCell.py 保持格原点整数，像素零头
-        // 在这里合成期统一下移——只作用终端网格实例（ai_glyphs/TermCard/
-        // Keybar 槽不动），亚行平移随遮挡带连续跟随。grid_clip_top = 顶带
-        // scissor 下限（零头>0 才裁，防字探进顶带 chrome）
-        let (kb_frac, grid_clip_top) = {
+        // 像素级视口平移（2026-09-24 键盘 kb_frac + 触摸滚动零头共用）：
+        // GpuCell.py 保持格原点整数，像素零头在这里合成期统一平移——
+        // 只作用终端网格实例（ai_glyphs/TermCard/Keybar 槽不动），亚行
+        // 平移随遮挡带/手指拖动连续跟随。grid_clip = (顶带内缘, 内容
+        // 底沿) scissor 带（有零头才裁，防字探进顶带 chrome/底缘卡环）
+        let (view_frac, grid_clip) = {
             let t = term_arc.lock().unwrap();
             let ch = t.cell_size().1.max(1);
-            let frac = t.kb_shift_px() % ch;
+            let kb_frac = t.kb_shift_px() % ch;
+            let scroll_frac = if t.pixel_scroll_enabled() {
+                t.scroll_frac_px()
+            } else {
+                0.0
+            };
+            let has_frac = kb_frac > 0 || scroll_frac != 0.0;
+            let mt = crate::termview::margin_top(ch);
             (
-                frac as f32,
-                if frac > 0 {
-                    crate::termview::margin_top(ch)
+                kb_frac as f32 - scroll_frac as f32,
+                if has_frac {
+                    let bottom = if scroll_frac != 0.0 {
+                        mt + t.grid_rows() * ch
+                    } else {
+                        h
+                    };
+                    (mt, bottom)
                 } else {
-                    0
+                    (0, h)
                 },
             )
         };
         crate::glyph_atlas::push_bg_instances(
             &mut bg_inst,
             vpush.dx,
-            vpush.dy - kb_frac,
+            vpush.dy - view_frac,
             term_place.2,
             cx,
             cy,
@@ -6700,7 +6819,7 @@ impl App {
             crate::glyph_atlas::push_glyph_instances(
                 page,
                 vpush.dx,
-                vpush.dy - kb_frac,
+                vpush.dy - view_frac,
                 term_place.2,
                 cx,
                 cy,
@@ -6820,7 +6939,7 @@ impl App {
             pt_extra.dy,
             pan_comp,
             layered,
-            grid_clip_top,
+            grid_clip,
         );
         ai_layout
     }

@@ -5,6 +5,7 @@
 
 use kfm_na::settings::{
     DefaultSession, Hotkey, Mod, ServerEntry, TerminalConfig, parse_servers, parse_terminal,
+    terminal_to_json,
 };
 
 const SERVERS_SAMPLE: &str = r#"[
@@ -217,4 +218,18 @@ fn spec_default_session_映射会话槽名() {
         DefaultSession::Server("dev".into()).session_name(),
         "remote"
     );
+}
+
+#[test]
+fn spec_终端配置_pixel_scroll字段() {
+    // 像素级滚动开关（2026-09-24 用户拍板）：默认关 = 旧行级保底；
+    // 字段宽容缺省（老配置零迁移），往返不失
+    let t = parse_terminal(r#"{}"#).unwrap();
+    assert!(!t.pixel_scroll, "缺省必须关（旧保底铁律）");
+    let t = parse_terminal(r#"{ "pixelScroll": true }"#).unwrap();
+    assert!(t.pixel_scroll);
+    let back = parse_terminal(&terminal_to_json(&t)).unwrap();
+    assert!(back.pixel_scroll, "写盘再读必须保住开态");
+    let off = parse_terminal(&terminal_to_json(&TerminalConfig::default())).unwrap();
+    assert!(!off.pixel_scroll, "默认配置往返必须保住关态");
 }

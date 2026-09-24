@@ -200,7 +200,10 @@ impl GlyphAtlas {
 #[derive(Clone, Copy, Debug)]
 pub struct GpuCell {
     pub px: u32,
-    pub py: u32,
+    /// 有符号格原点（2026-09-24 像素级滚动）：顶缘多收的历史行
+    /// py = margin_top - cell_h 为负——零头归合成期实例平移，负原点
+    /// 经 dy 拉回顶带内，越顶带部分由 grid_clip scissor 裁
+    pub py: i64,
     pub fg: u32,
     pub bg: u32,
     pub c: char,
@@ -305,7 +308,7 @@ pub fn grid_to_instances(
         }
         out.glyph.push(GlyphInstance {
             x: left as f32,
-            y: (cell.py as i64 + i64::from(slot.off_y)) as f32,
+            y: (cell.py + i64::from(slot.off_y)) as f32,
             w: draw_w as f32,
             h: f32::from(slot.h),
             u0: f32::from(slot.u0) / page.w as f32,

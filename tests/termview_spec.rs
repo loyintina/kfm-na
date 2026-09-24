@@ -5740,14 +5740,18 @@ fn spec_键盘平移_遮挡驱动追光标全链() {
     // 像素零头归合成期）；A 所在屏行 -2 被推出顶沿 → 裁剪不收集
     let cells = tv.collect_gpu_cells(win_w, win_h);
     let z = cells.iter().find(|c| c.c == 'Z').expect("Z 必须可见");
-    assert_eq!(z.py, mt + 2 * ch, "Z 必须随视口平移 2 行（整数部）");
+    assert_eq!(
+        z.py,
+        i64::from(mt + 2 * ch),
+        "Z 必须随视口平移 2 行（整数部）"
+    );
     assert!(!cells.iter().any(|c| c.c == 'A'), "被推出顶沿的行必须裁剪");
     // 遮挡收回 → 归 0，Z 回到屏行 4
     assert!(tv.sync_kb_shift(win_h, 0));
     assert_eq!(tv.kb_shift_px(), 0);
     let cells = tv.collect_gpu_cells(win_w, win_h);
     let z = cells.iter().find(|c| c.c == 'Z').expect("Z 必须回原地");
-    assert_eq!(z.py, mt + 4 * ch);
+    assert_eq!(z.py, i64::from(mt + 4 * ch));
 }
 
 #[test]
@@ -5771,12 +5775,12 @@ fn spec_键盘平移_像素零头与边界多收() {
     // 整数行部分 R=0：Z 仍在屏行 4；像素零头 18px 归合成期平移
     let cells = tv.collect_gpu_cells(win_w, win_h);
     let z = cells.iter().find(|c| c.c == 'Z').expect("Z 必须可见");
-    assert_eq!(z.py, mt + 4 * ch);
+    assert_eq!(z.py, i64::from(mt + 4 * ch));
     // 边界多收：view_bottom = win_h - 3.5ch，第 6 行 py = mt+6ch 越线但
     // 零头>0 → 多收一行（合成期整体上移零头后，它恰好补上底缘的缝；
     // 不收 = 底缘黑一截，随零头增大越来越宽）
     assert!(
-        cells.iter().any(|c| c.py == mt + 6 * ch),
+        cells.iter().any(|c| c.py == i64::from(mt + 6 * ch)),
         "零头>0 时边界行必须多收一行补底缝"
     );
     // 对照：零头=0（遮挡恰 4 行 → shift 恰 1 行）不多收——同一条边界
@@ -5785,7 +5789,7 @@ fn spec_键盘平移_像素零头与边界多收() {
     assert_eq!(tv.kb_shift_px(), ch);
     let cells = tv.collect_gpu_cells(win_w, win_h);
     assert!(
-        !cells.iter().any(|c| c.py == mt + 5 * ch),
+        !cells.iter().any(|c| c.py == i64::from(mt + 5 * ch)),
         "零头=0 时不得多收（行版契约不回退）"
     );
 }
@@ -5848,4 +5852,124 @@ fn spec_键盘平移_触摸逆映射补平移() {
         Some("hello"),
         "触摸点必须映射回平移前的网格行（眼手同尺）"
     );
+}
+
+// ---------- A 档：像素级滚动（2026-09-24 用户拍板「滚动的像素级」——
+// 理想视口模型第二层：键盘 kb_frac 之后，手指滚动零头也进分数视口。
+// 铁律 = 旧行级滚动保留为降级保底：开关关零行为，设置页可切回） ----------
+
+#[test]
+fn spec_像素滚动_零头累计整行提交与钳制() {
+    let mut tv = host_termview(20, 8);
+    assert_eq!(
+        tv.grid_rows(),
+        8,
+        "网格行数读数 = 建机行数（合成期内容底沿的尺）"
+    );
+    for i in 0..20 {
+        tv.feed(format!("row{i:02}\r\n").as_bytes());
+    }
+    // 默认关：scroll_px 零行为（旧保底铁律——没开开关一滴不许动）
+    assert!(!tv.pixel_scroll_enabled(), "默认关 = 行级保底");
+    tv.scroll_px(50.0);
+    assert_eq!(tv.display_offset(), 0, "开关关 = 零行为（offset 不动）");
+    assert_eq!(tv.scroll_frac_px(), 0.0, "开关关 = 零行为（零头不动）");
+    // 开：50px → 1 行提交（36px）+ 零头 14px 挂分数视口
+    tv.set_pixel_scroll(true);
+    tv.scroll_px(50.0);
+    assert_eq!(tv.display_offset(), 1, "满一行必须提交 alacritty");
+    assert_eq!(tv.scroll_frac_px(), 14.0, "零头挂分数视口");
+    // 再 10px → 累计 24 不满一行不提交（慢拖亚行连续）
+    tv.scroll_px(10.0);
+    assert_eq!(tv.display_offset(), 1);
+    assert_eq!(tv.scroll_frac_px(), 24.0);
+    // 反向 -60 → 24-60=-36 → 借一行归还：offset 0、零头 0
+    tv.scroll_px(-60.0);
+    assert_eq!(tv.display_offset(), 0, "负累计满一行必须归还");
+    assert_eq!(tv.scroll_frac_px(), 0.0);
+    // 钳制①：offset=0 不许负零头（最底部之下没有更新的内容）
+    tv.scroll_px(-100.0);
+    assert_eq!(tv.display_offset(), 0);
+    assert_eq!(tv.scroll_frac_px(), 0.0, "贴底不许负零头");
+    // 钳制②：历史顶不许正零头（最老一行之上没有更老）
+    tv.scroll_px(100000.0);
+    assert!(tv.display_offset() > 0, "必须真滚进历史顶");
+    assert_eq!(tv.scroll_frac_px(), 0.0, "贴历史顶不许正零头");
+    // 开关拨回关：零头清零（画面回整行，不残留亚行态）
+    tv.scroll_px(-20.0); // 从历史顶往回，先造非零零头
+    assert!(tv.scroll_frac_px() != 0.0);
+    tv.set_pixel_scroll(false);
+    assert_eq!(tv.scroll_frac_px(), 0.0, "关开关必须清亚行态");
+}
+
+#[test]
+fn spec_像素滚动_渲染顶缘多收底缘多收() {
+    use kfm_na::termview::{MARGIN_X, MARGIN_Y, margin_top};
+    let (cw, ch) = (CELL_W, CELL_H);
+    let mt = i64::from(margin_top(ch));
+    let (chi, lines) = (i64::from(ch), 8_i64);
+    let mut tv = host_termview(20, 8);
+    for i in 0..20 {
+        tv.feed(format!("row{i:02}\r\n").as_bytes());
+    }
+    let win_w = 2 * MARGIN_X + 20 * cw;
+    let win_h = margin_top(ch) + 8 * ch + MARGIN_Y;
+    tv.set_pixel_scroll(true);
+    // 正零头 +20（offset 0，往历史拖）：顶缘多收 line=-1（py = mt-ch，
+    // 负整数原点——零头归合成期/落笔坐标，与 kb_frac 同套路）；
+    // 底缘不多收（贴底之下没有更新的行）
+    tv.scroll_px(20.0);
+    assert_eq!(tv.scroll_frac_px(), 20.0);
+    let cells = tv.collect_gpu_cells(win_w, win_h);
+    assert!(
+        cells.iter().any(|c| c.py == mt - chi),
+        "正零头必须多收顶缘历史行（py=mt-ch），没有 = 顶缘黑缝"
+    );
+    assert!(
+        !cells.iter().any(|c| c.py == mt + lines * chi),
+        "贴底时底缘不许多收（没有更新的行）"
+    );
+    // 归零后进历史 offset 2，负零头 -20（往最新拖）：底缘多收
+    // line=8（py = mt+8ch，屏行之下的更新行）；顶缘不多收
+    tv.scroll_px(-20.0);
+    assert_eq!(tv.scroll_frac_px(), 0.0);
+    tv.scroll_px(2.0 * f64::from(ch));
+    assert_eq!(tv.display_offset(), 2);
+    tv.scroll_px(-20.0);
+    assert_eq!(tv.scroll_frac_px(), -20.0);
+    let cells = tv.collect_gpu_cells(win_w, win_h);
+    assert!(
+        cells.iter().any(|c| c.py == mt + lines * chi),
+        "负零头必须多收底缘更新行（py=mt+lines*ch），没有 = 底缘黑缝"
+    );
+    assert!(
+        !cells.iter().any(|c| c.py == mt - chi),
+        "负零头时顶缘不许多收（顶行上滑裁剪归 clip_top）"
+    );
+}
+
+#[test]
+fn spec_像素滚动_关时渲染零差异() {
+    use kfm_na::termview::{MARGIN_X, MARGIN_Y, margin_top};
+    let (cw, ch) = (CELL_W, CELL_H);
+    let mut tv = host_termview(20, 8);
+    for i in 0..20 {
+        tv.feed(format!("row{i:02}\r\n").as_bytes());
+    }
+    let win_w = 2 * MARGIN_X + 20 * cw;
+    let win_h = margin_top(ch) + 8 * ch + MARGIN_Y;
+    // 旧保底铁律：开关关 = 收集集合与旧行级逐一对账（无多收无平移）；
+    // 开但零头 0 同样不许多收（稳态与旧版逐格等价）
+    let before: Vec<(i64, char)> = tv
+        .collect_gpu_cells(win_w, win_h)
+        .iter()
+        .map(|c| (c.py, c.c))
+        .collect();
+    tv.set_pixel_scroll(true);
+    let after: Vec<(i64, char)> = tv
+        .collect_gpu_cells(win_w, win_h)
+        .iter()
+        .map(|c| (c.py, c.c))
+        .collect();
+    assert_eq!(before, after, "零头 0 时开关不许改变收集集合");
 }

@@ -24,7 +24,7 @@ fn key(c: char) -> GlyphKey {
     }
 }
 
-fn cell(c: char, px: u32, py: u32) -> GpuCell {
+fn cell(c: char, px: u32, py: i64) -> GpuCell {
     GpuCell {
         px,
         py,
@@ -161,7 +161,7 @@ fn spec_inst_两遍制_背景块整体在前() {
     let a = atlas_with('A', 8, 16, 0, 0);
     let mut c1 = cell('A', 0, 0);
     c1.bg = 0x0022_3333;
-    let c2 = cell('A', CW, CH);
+    let c2 = cell('A', CW, i64::from(CH));
     let out = run(&[c1, c2], &a);
     // 背景实例全部产出后才有字形实例：bg[0] 是唯一背景，glyph[0] 是唯一字形
     assert_eq!(out.bg.len(), 1);
