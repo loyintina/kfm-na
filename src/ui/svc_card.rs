@@ -19,7 +19,7 @@ pub const N_FIELDS: usize = 4;
 
 /// 字段标签（涂装唯一源——两处各写一份必漂移）：数据 9021 = 本地
 /// 数据口；反连 9022 = 推送+调试路；QUIC 62633 = UDP 数据腿；
-/// QUIC 62694 = 反连腿（M4 预留，未启用）
+/// QUIC 62694 = UDP 反连腿（M4 已启用）
 pub const FIELD_LABELS: [&str; N_FIELDS] = ["数据 9021", "反连 9022", "QUIC 62633", "QUIC 62694"];
 
 /// 卡文案（涂装快照）：隧道快照 → 卡行的唯一产物
@@ -53,10 +53,13 @@ pub fn data_row(st: &TunnelState) -> String {
     }
 }
 
-/// 「反连 9022」行（A 档纯函数）：进程在 = 在线；数据路断了它必断
-/// （同一条 ssh/同一场重拉）；其余 = 重拉中（封锁闸/死亡审理窗口）
+/// 「反连 9022」行（A 档纯函数）：QUIC 反连腿在 = 9022 归 na-server
+/// QUIC 桥（M4）；否则进程在 = 在线；数据路断了它必断（同一条
+/// ssh/同一场重拉）；其余 = 重拉中（封锁闸/死亡审理窗口）
 pub fn reverse_row(s: &TunnelSnap) -> String {
-    if s.reverse_up {
+    if s.rev_quic_up {
+        "QUIC 反连在线".into()
+    } else if s.reverse_up {
         "在线".into()
     } else if matches!(s.state, TunnelState::Down { .. }) {
         "断".into()
@@ -83,12 +86,28 @@ pub fn quic_row(s: &TunnelSnap) -> String {
     }
 }
 
+/// 「QUIC 62694」行（A 档纯函数，M4）：未配置 > 在线 > 挂账 > 待起。
+/// 反连腿无跳闸（ssh 兜底永远欢迎，挂账只报数不降级）；「在线」含
+/// 握手窗——客户端只能死信驱动，握手 8s 内腿对象在但尚未注册，
+/// 无法与真在线区分（设计 docs/active/quic隧道.md §九 M4 段）
+pub fn rev_quic_row(s: &TunnelSnap) -> String {
+    if !s.quic_configured {
+        "未配置".into()
+    } else if s.rev_quic_up {
+        "在线".into()
+    } else if s.rev_quic_fails > 0 {
+        format!("挂×{}", s.rev_quic_fails)
+    } else {
+        "待起".into()
+    }
+}
+
 /// 隧道快照 → 卡文案（None = 看门狗没起：L3 未装/无服务器条目同相）
 pub fn compose(t: Option<&TunnelSnap>) -> SvcSnap {
     match t {
         None => SvcSnap {
             word: "未启动".into(),
-            vals: ["—".into(), "—".into(), "—".into(), "预留 M4".into()],
+            vals: ["—".into(), "—".into(), "—".into(), "—".into()],
         },
         Some(s) => SvcSnap {
             word: head_word(&s.state),
@@ -96,7 +115,7 @@ pub fn compose(t: Option<&TunnelSnap>) -> SvcSnap {
                 data_row(&s.state),
                 reverse_row(s),
                 quic_row(s),
-                "预留 M4".into(),
+                rev_quic_row(s),
             ],
         },
     }
@@ -146,7 +165,7 @@ pub fn current() -> SvcSnap {
     if svc_health::snap().phase == Phase::Kfmv4 {
         return SvcSnap {
             word: "kfmv4 托管".into(),
-            vals: ["—".into(), "—".into(), "—".into(), "预留 M4".into()],
+            vals: ["—".into(), "—".into(), "—".into(), "—".into()],
         };
     }
     compose(tunnel_snap().as_ref())

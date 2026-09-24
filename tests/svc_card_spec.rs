@@ -97,7 +97,7 @@ fn spec_会话行_死活两相() {
 fn spec_合成_看门狗没起() {
     let c = svc_card::compose(None);
     assert_eq!(c.word, "未启动");
-    assert_eq!(c.vals[3], "预留 M4", "62694 恒预留");
+    assert_eq!(c.vals[3], "—", "看门狗没起 = 全占位（62694 同相）");
     assert_eq!(c.vals[0], "—");
 }
 
@@ -106,7 +106,7 @@ fn spec_合成_quic在线全相() {
     let s = tsnap(TunnelState::QuicUp, Some(Leg::Quic), true, 0, true);
     let c = svc_card::compose(Some(&s));
     assert_eq!(c.word, "QUIC 在线");
-    assert_eq!(c.vals, ["QUIC 桥在线", "在线", "在线", "预留 M4"]);
+    assert_eq!(c.vals, ["QUIC 桥在线", "在线", "在线", "待起"]);
 }
 
 #[test]
@@ -143,6 +143,60 @@ fn spec_反连行_断不许装重拉() {
         svc_card::reverse_row(&tsnap(TunnelState::QuicUp, Some(Leg::Quic), false, 0, true)),
         "重拉中",
         "腿在伴生死 = 重拉窗口（封锁闸/死亡审理中）"
+    );
+}
+
+// ---- M4：反连 QUIC 化（62694）----
+
+/// M4 夹具：反连腿两字段显式喂（其余走 tsnap 缺省）
+fn tsnap_rev(
+    state: TunnelState,
+    quic_configured: bool,
+    rev_quic_up: bool,
+    rev_quic_fails: u32,
+) -> TunnelSnap {
+    let mut s = tsnap(state, None, false, 0, quic_configured);
+    s.rev_quic_up = rev_quic_up;
+    s.rev_quic_fails = rev_quic_fails;
+    s
+}
+
+#[test]
+fn spec_m4_反连行_quic相优先() {
+    // QUIC 反连腿在 = 9022 归 QUIC 桥——即使 ssh 伴生不在也不许写
+    // 「重拉中」（没人需要重拉，ssh 已被摘 -R）
+    let s = tsnap_rev(TunnelState::QuicUp, true, true, 0);
+    assert_eq!(svc_card::reverse_row(&s), "QUIC 反连在线");
+    // 腿死回落 ssh 兜底：照今三相
+    let down = TunnelState::Down {
+        attempts: 1,
+        last_error: String::new(),
+    };
+    assert_eq!(
+        svc_card::reverse_row(&tsnap_rev(down, true, false, 1)),
+        "断"
+    );
+}
+
+#[test]
+fn spec_m4_反连quic行_四相真值表() {
+    let up = TunnelState::QuicUp;
+    assert_eq!(
+        svc_card::rev_quic_row(&tsnap_rev(up.clone(), false, false, 0)),
+        "未配置"
+    );
+    assert_eq!(
+        svc_card::rev_quic_row(&tsnap_rev(up.clone(), true, true, 0)),
+        "在线"
+    );
+    assert_eq!(
+        svc_card::rev_quic_row(&tsnap_rev(up.clone(), true, false, 2)),
+        "挂×2",
+        "挂账只报数——反连腿无跳闸（ssh 兜底永远欢迎）"
+    );
+    assert_eq!(
+        svc_card::rev_quic_row(&tsnap_rev(up.clone(), true, false, 0)),
+        "待起"
     );
 }
 
