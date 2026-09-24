@@ -1925,6 +1925,17 @@ impl App {
                         }
                     } else {
                         t.scroll_px(d);
+                        // 仪器（2026-09-24 像素滚动复验）：亚行拖动若无账，
+                        // 用户报「跳行/不跟手」时零头累计与整行提交死无对证
+                        crate::report::report(
+                            "scroll",
+                            &format!(
+                                "像素滚动 d={d:.1} 零头={:.1} offset={} cell_h={}",
+                                t.scroll_frac_px(),
+                                t.display_offset(),
+                                t.cell_size().1
+                            ),
+                        );
                         self.dirty = true;
                     }
                     return;

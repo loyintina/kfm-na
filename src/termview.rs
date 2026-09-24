@@ -7249,6 +7249,9 @@ pub trait TermEmu: Send {
     fn scroll_px(&mut self, delta_px: f64);
     /// 分数视口零头读数（GLES 合成期实例平移调用方；带符号 px）
     fn scroll_frac_px(&self) -> f64;
+    /// scrollback 位移读数（[scroll] 仪器遥测调用方：零头累计满行提交
+    /// 的整行部读数，与零头同账才能判「跳行/不跟手」）
+    fn display_offset(&self) -> usize;
     /// 网格行数（GLES 合成期内容底沿 = margin_top + 行数×格高 的
     /// 计算调用方；像素滚动底缘裁剪带用）
     fn grid_rows(&self) -> u32;
@@ -7567,6 +7570,9 @@ impl TermEmu for TermView {
     }
     fn scroll_frac_px(&self) -> f64 {
         TermView::scroll_frac_px(self)
+    }
+    fn display_offset(&self) -> usize {
+        TermView::display_offset(self)
     }
     fn grid_rows(&self) -> u32 {
         self.term.grid().screen_lines() as u32
