@@ -2313,20 +2313,28 @@ impl App {
                                             .map(|s| s.name.as_str())
                                             .unwrap_or("?");
                                         format!(
-                                            "{hh:?} 行{i}「{name}」框y{}-{}",
+                                            "{hh:?} 行{i}「{name}」框y{}-{}（epoch={} 会话{}）",
                                             r.y,
-                                            r.y + i64::from(r.h)
+                                            r.y + i64::from(r.h),
+                                            snap.epoch,
+                                            snap.sessions.len()
                                         )
                                     }
-                                    other => format!("{other:?}"),
+                                    other => format!(
+                                        "{other:?}（epoch={} 会话{}）",
+                                        snap.epoch,
+                                        snap.sessions.len()
+                                    ),
                                 }
                             } else if let Some(chh) = &ch {
-                                format!("通道卡 {chh:?}")
+                                format!("通道卡 {chh:?}（epoch={}）", snap.epoch)
                             } else {
                                 format!(
-                                    "落空（屏{sw}x{sh} inset={} bar={} 表滚{} 裁带{}-{}）",
+                                    "落空（屏{sw}x{sh} inset={} bar={} epoch={} 会话{} 表滚{} 裁带{}-{}）",
                                     self.chrome_inset(),
                                     self.cur_bar_h(),
+                                    snap.epoch,
+                                    snap.sessions.len(),
                                     snap.scroll,
                                     g.lay.list_clip.0,
                                     g.lay.list_clip.1
@@ -6405,6 +6413,31 @@ impl App {
         {
             let px = g.slot_canvas(crate::gles_present::ChromeSlot::Parser);
             px.fill(0);
+            // BAR-145 仪器（2026-09-24 对表实录：触摸侧 [touch] 已落
+            // 命中几何，漂移时渲染侧几何无账 = 死无对证）：烘焙落渲染
+            // 侧几何一条——与 [touch] 同尺同格式，两边各算各的时直接
+            // 对 epoch/会话数/裁带/行带，不靠运气窗口
+            if let Some(ps) = parser_snap {
+                let geo = parser_geom(w, h, bar_h, ime + bar_h, ps);
+                let rows = geo
+                    .lay
+                    .rows
+                    .iter()
+                    .enumerate()
+                    .map(|(i, r)| format!("{i}:{}-{}", r.y, r.y + i64::from(r.h)))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                crate::report::report(
+                    "bake",
+                    &format!(
+                        "解析页烘焙 epoch={} 会话{} 屏{w}x{h} inset={ime} bar={bar_h} 裁带{}-{} 行[{rows}]",
+                        ps.epoch,
+                        ps.sessions.len(),
+                        geo.lay.list_clip.0,
+                        geo.lay.list_clip.1
+                    ),
+                );
+            }
             // 视口化（2026-09-20 用户拍板「卡弹小」）：壳吃 bottom_inset
             // ——键盘在场页环弹小到输入栏带以上，环底 = 页面滚动视口底；
             // 内容布局仍只吃栏带高（BAR-119 只盖不重排），逾视底归键盘
