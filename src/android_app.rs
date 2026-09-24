@@ -3571,8 +3571,11 @@ impl App {
                 r.lock().unwrap().send(TermCmd::Resize { cols, rows });
             }
         }
-        // 键盘遮挡带 → 视口上移（追光标钳制；看历史/光标可见时恒 0）
-        let occlude = self.ime_bottom_px + crate::keybar::HEIGHT_PX + crate::input_bar::HEIGHT_PX;
+        // 键盘遮挡带 → 视口上移（追光标钳制；看历史/光标可见时恒 0）。
+        // 吃 chrome 过缝值（IME 弹收跟随动画定罪改造 2026-09-24）：真值
+        // 单跳 = 内容瞬移（field-reports 单条 0↔18 行实录）；稳态下
+        // chrome == 真实 inset（无 ui-fx 占槽时缝直通），行为不变
+        let occlude = self.chrome_inset() + crate::keybar::HEIGHT_PX + crate::input_bar::HEIGHT_PX;
         if term.lock().unwrap().sync_kb_shift(h, occlude) {
             let shift = term.lock().unwrap().kb_shift();
             crate::report::report("ime", &format!("视口平移 {shift} 行"));
@@ -5617,6 +5620,17 @@ impl App {
             crate::report::boot_ms() as u64,
         )
         .max(0.0) as u32;
+        // 终端视口跟随 chrome 缝（IME 弹收跟随动画，2026-09-24；与
+        // softbuffer 路径同源同尺）：遮挡带吃过缝值，内容随卡片逐帧
+        // 平移——真值单跳=瞬移（field-reports 0↔18 行单条实录定罪）。
+        // 只动视口不碰 grid/pty（resize 抖动红线不破）
+        let kb_occlude = *chrome_inset_px + crate::keybar::HEIGHT_PX + crate::input_bar::HEIGHT_PX;
+        if let Some(t) = th {
+            let mut term = t.lock().unwrap();
+            if term.sync_kb_shift(h, kb_occlude) {
+                crate::report::report("ime", &format!("视口跟随 {} 行", term.kb_shift()));
+            }
+        }
         // AI 面板 Y 偏移过缝（ui-base §三）：目标值 = AI 在栈 0 靠泊 /
         // 不在栈 -屏高屏外；无 ui-fx 占槽 = 直通目标值（硬切）。
         // 被覆盖时自身 off 恒靠泊位（目标值只问栈），上方推移经
@@ -7238,6 +7252,18 @@ impl App {
                 crate::report::boot_ms() as u64,
             )
             .max(0.0) as u32;
+            // 终端视口跟随 chrome 缝（IME 弹收跟随动画，2026-09-24）：
+            // 遮挡带吃过缝值，内容随卡片逐帧平移——真值单跳=瞬移
+            // （field-reports 0↔18 行单条实录定罪）。视口平移不碰
+            // grid/pty（resize 抖动红线不破）；无 ui-fx 占槽 = 缝直通
+            // 真值，与硬切基座逐像素等价
+            let kb_occlude =
+                self.chrome_inset_px + crate::keybar::HEIGHT_PX + crate::input_bar::HEIGHT_PX;
+            if let Some(t) = tg.as_deref_mut()
+                && t.sync_kb_shift(h, kb_occlude)
+            {
+                crate::report::report("ime", &format!("视口跟随 {} 行", t.kb_shift()));
+            }
             let chat_scroll = self.ai_chat.as_ref().map_or(0, |c| c.scroll_offset());
             let chat_live = self.ai_chat.as_ref().is_some_and(|c| c.thinking_live());
             let ai_layout = Self::rasterize(
