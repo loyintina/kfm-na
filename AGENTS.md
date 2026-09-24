@@ -2,8 +2,11 @@
 
 > agent 入职指南。读完这份再动手。
 >
-> **PARADIGM v3（2026-09-23：BAR-134 报表行挂 [arch/pid] 设备/实例标识——
-> field-reports 混流分道闸从判读纪律升为数据自带；v2 2026-09-21 晨班会：
+> **PARADIGM v4（2026-09-24 晨班会：BAR-143 密钥防泄漏 纯段落→代码守卫
+> check-no-secrets.sh 挂 chain 第 1 步；BAR-148 提交纪律第 5 门硬编码——
+> 永不许 -c core.hooksPath 拆闸；v3 2026-09-23：BAR-134 报表行挂
+> [arch/pid] 设备/实例标识——field-reports 混流分道闸从判读纪律升为数据
+> 自带；v2 2026-09-21 晨班会：
 > BAR-114 段落级→代码守卫 check-modal-cursor.sh；v1 2026-09-17 立，nz 唯一
 > 产出迭代范式 na 落地）**：本文件
 > 与 `docs/active/排障手册.md` 合为 na 的方法论唯一产出——每次任务它们
@@ -101,6 +104,11 @@ bash scripts/deploy-phone.sh --build   # 先打包再送
    commit-msg 钩子机械执法（check-fix-instrument.sh，八言考题
    test-check-fix-instrument.sh 挂 chain 第 9 步）；门被摘/考题被删
    chain 第 3 步自守卫拦红。
+5. **提交永不许 `-c core.hooksPath` 覆盖（2026-09-24，BAR-148）**：
+   闸门在 `.githooks`（git config core.hooksPath），`-c core.hooksPath=...`
+   一覆盖 pre-commit chain 整体旁路——cfg 盲区代码（android 目标才可见）
+   的唯一兜底就是 chain 第 6 步 android check，拆闸 = 拆这唯一兜底。
+   提交命令只许裸 `git commit`（需要免交互加 `</dev/null`，不许动 hooksPath）。
 
 ## 观测先行三条款（2026-09-17，三部曲复盘用户裁决，C 档问题铁律）
 

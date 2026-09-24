@@ -14,6 +14,11 @@ fn snap_of(state: TunnelState) -> TunnelSnap {
         local_port: 9021,
         target: "root@8.145.46.182:22".into(),
         epoch: 0,
+        leg: None,
+        port_open: false,
+        reverse_up: false,
+        quic_fails: 0,
+        quic_configured: false,
     }
 }
 

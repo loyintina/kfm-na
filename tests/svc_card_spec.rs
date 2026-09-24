@@ -9,28 +9,9 @@
 //! （死透了还装活）必须咬；③toggle_verdict 未配置也给钮（点了没反应
 //! = 死钮）必须咬。
 
-use kfm_na::na_server_sup::{SupSnap, SupState};
-use kfm_na::settings::Backend;
-use kfm_na::svc_health::{self, HealthSnap, Phase};
+use kfm_na::svc_health;
 use kfm_na::tunnel::{Leg, QUIC_FAIL_TRIP, TunnelSnap, TunnelState};
 use kfm_na::ui::svc_card::{self, FIELD_LABELS, N_FIELDS, QuicToggle};
-
-fn sup_of(state: SupState) -> SupSnap {
-    SupSnap {
-        mode: kfm_na::na_server_sup::SupMode::Systemd,
-        state,
-        target: "root@8.145.46.182:22".into(),
-        epoch: 0,
-    }
-}
-
-fn hs(phase: Phase, info: Option<svc_health::HealthInfo>) -> HealthSnap {
-    HealthSnap {
-        phase,
-        info,
-        epoch: 0,
-    }
-}
 
 /// 隧道快照夹具（只读字段全 pub，直构造）
 fn tsnap(

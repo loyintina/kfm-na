@@ -2270,32 +2270,30 @@ impl App {
                             // 区窗闸门：裁出窗的部件只显不点，与涂装断墨
                             // 同一份 clip）；模态/命名态屏蔽（跳框期间
                             // 卡区命中全屏蔽惯例）
-                            let ch =
-                                if h.is_none() && g.mode == crate::ui::parser_page::Mode::Normal {
-                                    let link_rect = crate::ui::parser_chain::slot_rect(
-                                        crate::ui::parser_chain::ChainCardId::Link,
-                                        &g.regs,
-                                        &g.chain_h,
-                                        &g.scrolls,
-                                    );
-                                    let (px, py) = (pt.0 as i64, pt.1 as i64);
-                                    let in_win = px >= g.regs.right_top.x
-                                        && px < g.regs.right_top.x + i64::from(g.regs.right_top.w)
-                                        && py >= g.regs.right_top.y
-                                        && py < g.regs.right_top.y + i64::from(g.regs.right_top.h);
-                                    if in_win {
-                                        let llay = crate::ui::link_card::layout_in(
-                                            link_rect,
-                                            n_svc,
-                                            g.scrolls.right,
-                                        );
-                                        crate::ui::link_card::hit(&llay, px, py)
-                                    } else {
-                                        None
-                                    }
+                            let ch = if h.is_none()
+                                && g.mode == crate::ui::parser_page::Mode::Normal
+                            {
+                                let link_rect = crate::ui::parser_chain::slot_rect(
+                                    crate::ui::parser_chain::ChainCardId::Link,
+                                    &g.regs,
+                                    &g.chain_h,
+                                    &g.scrolls,
+                                );
+                                let (px, py) = (pt.0 as i64, pt.1 as i64);
+                                let in_win = px >= g.regs.right_top.x
+                                    && px < g.regs.right_top.x + i64::from(g.regs.right_top.w)
+                                    && py >= g.regs.right_top.y
+                                    && py < g.regs.right_top.y + i64::from(g.regs.right_top.h);
+                                if in_win {
+                                    let llay =
+                                        crate::ui::link_card::layout_in(link_rect, g.scrolls.right);
+                                    crate::ui::link_card::hit(&llay, px, py)
                                 } else {
                                     None
-                                };
+                                }
+                            } else {
+                                None
+                            };
                             (snap, h.map(|hh| (hh, g.mode)), ch)
                         };
                         if let Some((hh, mode)) = hit_result {

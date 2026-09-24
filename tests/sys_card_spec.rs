@@ -33,7 +33,7 @@ fn regs() -> parser_chain::Regions {
 }
 
 fn heights() -> parser_chain::ChainHeights {
-    parser_chain::heights(300, 2, sys_card::CARD_H)
+    parser_chain::heights(300, sys_card::CARD_H)
 }
 
 /// 环境卡 layout（排布器配给制——与生产侧同路径 slot_rect → layout_in）

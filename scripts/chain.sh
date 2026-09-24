@@ -37,6 +37,9 @@ big=$(git ls-files assets/fonts | while read -r f; do
     [ -f "$f" ] && [ "$(stat -c%s "$f")" -gt 4194304 ] && echo "$f"
 done)
 [ -z "$big" ] || { echo "❌ 字体资产超 4MB（未子集化？）: $big"; exit 1; }
+# 防泄漏闸之二（2026-09-24，BAR-143 形态升级 纯段落→代码守卫）：
+# 密钥/证书类文件永不进库——quic.key.der 被 git add -A 推进双远端事故
+bash scripts/check/check-no-secrets.sh || { echo "❌ 密钥防泄漏闸不过"; exit 1; }
 
 echo "=== [chain 2/11] 核心层零依赖闸（多端分层纪律 1，评审裁决 5） ==="
 # cordis-na = 多端核心层基座：零依赖是公开承诺（crates/cordis-na/Cargo.toml
