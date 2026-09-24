@@ -174,11 +174,13 @@ fn btn_block_h(mode: Mode) -> u32 {
     }
 }
 
-/// 卡内几何账（A 档纯函数·唯一源）：(可见行数, 固定件高)。cap_h =
-/// 常驻槽可用高（排布器以「可视底 − 区顶」喂入）；可见行 =
-/// min(容量, 实际) 再抬到保底（BAR-119：挤压不许吞到两行以下；
-/// 保底也不超实际行数——一行内容不强撑两行）
-fn used_lines(n_sessions: usize, mode: Mode, cap_h: u32) -> (u32, u32) {
+/// 卡内几何账（A 档纯函数·唯一源）：(可见行数, 固定件高, 容量行数)。cap_h =
+/// 常驻槽可用高（排布器以「可视底 − 区顶」喂入——**无键盘账**，
+/// BAR-119 红线：卡内账不吃键盘 inset）；可见行 = min(容量, 实际)
+/// 再抬到保底（BAR-119：挤压不许吞到两行以下；保底也不超实际行数
+/// ——一行内容不强撑两行）；容量行数只随屏幕空间，与会话数脱钩
+/// （BAR-145 顶锚修约的几何基石）
+fn used_lines(n_sessions: usize, mode: Mode, cap_h: u32) -> (u32, u32, u32) {
     // 确认跳框是模态，不占卡内高度（卡按 Normal 几何画在模态底下）
     let extra = match mode {
         Mode::Normal | Mode::Confirming => 0,
@@ -196,15 +198,19 @@ fn used_lines(n_sessions: usize, mode: Mode, cap_h: u32) -> (u32, u32) {
     let used = cap_lines
         .max(MIN_VISIBLE_LINES.min(total_lines))
         .min(total_lines);
-    (used, fixed)
+    (used, fixed, cap_lines)
 }
 
 /// tmux 卡自报高（排布器三区几何的唯一输入——卡高 = 内容账全价，
-/// BAR-119：不钳进池区，纵向压力不许本卡独吞塌行）
+/// BAR-119：不钳进池区，纵向压力不许本卡独吞塌行）。
+/// **BAR-145 顶锚修约（2026-09-24 用户拍板）**：卡高吃**容量**不吃
+/// 实际行数——会话数增减只影响列表区底部空位，已有行/分隔线/按钮
+/// 一行一像素不挪。旧动态高（卡高随实际行数长）在底锚槽上是
+/// 「名单翻动 → 全行位移 126px」的力学根源（点击行漂移病灶）
 pub fn tmux_card_h(n_sessions: usize, mode: Mode, cap_h: u32) -> u32 {
-    let (used, fixed) = used_lines(n_sessions, mode, cap_h);
+    let (_used, fixed, cap_lines) = used_lines(n_sessions, mode, cap_h);
     let stride = BOX_H + ROW_GAP;
-    let visible_h = stride.saturating_mul(used).saturating_sub(ROW_GAP);
+    let visible_h = stride.saturating_mul(cap_lines).saturating_sub(ROW_GAP);
     fixed + visible_h + ROW_GAP
 }
 
@@ -220,7 +226,9 @@ pub fn layout(
 ) -> Layout {
     let vb = visible_bottom(screen_h, bottom_inset);
     let area = crate::ui::parser_chain::page_area(screen_w, screen_h, bottom_inset);
-    let cap = (vb - area.y).max(0) as u32;
+    // BAR-145 顶锚修约：卡高容量必须吃**无键盘**可视底（BAR-119 红线
+    // 纯度——卡内账不吃键盘；钉底位移照吃，见 regions 的 vb）
+    let cap = (visible_bottom(screen_h, 0) - area.y).max(0) as u32;
     let th = tmux_card_h(n_sessions, mode, cap);
     let regs = crate::ui::parser_chain::regions(screen_w, screen_h, bottom_inset, vb, th);
     layout_in(regs.dock, n_sessions, mode, scroll)
@@ -235,10 +243,12 @@ pub fn layout(
 pub fn layout_in(card: PoolRect, n_sessions: usize, mode: Mode, scroll: i64) -> Layout {
     let stride = BOX_H + ROW_GAP;
     // 可见行与卡高同源：cap = 卡高自身（排布器配给的 h 出自
-    // tmux_card_h 同一份账，反推必一致）
-    let (used_lines_n, fixed) = used_lines(n_sessions, mode, card.h);
+    // tmux_card_h 同一份账，反推必一致）。**列表区高吃容量不吃实际**
+    // （BAR-145 顶锚修约）：行顶锚排位、分隔线与按钮带对卡底钉死——
+    // 会话数增减只改列表区底部空位，已有行一像素不挪
+    let (used_lines_n, fixed, cap_lines) = used_lines(n_sessions, mode, card.h);
     let total_lines = n_sessions as u32;
-    let visible_h = stride.saturating_mul(used_lines_n).saturating_sub(ROW_GAP);
+    let visible_h = stride.saturating_mul(cap_lines).saturating_sub(ROW_GAP);
     let total_h = stride.saturating_mul(total_lines).saturating_sub(ROW_GAP);
     let scroll_max = i64::from(total_h.saturating_sub(visible_h));
     let eff_scroll = scroll.clamp(0, scroll_max);
@@ -666,18 +676,27 @@ pub fn parser_page_handle() -> Option<SharedParserPage> {
     HANDLE.lock().unwrap().clone()
 }
 
-// ---- 屏代账（BAR-145 仪器三期，2026-09-24）：GPU 层当前纹理是哪一代
-// 烘焙的——[touch] 行附「屏代N」，与活体 epoch 对表：漂移再现时
-// 屏代滞后 = 陈旧纹理定罪；屏代齐 = 排除纹理腿，缩小到意图/命名 ----
+// ---- 屏代账（BAR-145 仪器三期+修复，2026-09-24）：GPU 层当前纹理是哪
+// 一代烘焙的——[touch] 行附「屏代N」，与活体 epoch 对表。**修复：
+// 命中吃屏代快照（眼手同尺的真义）**——名单翻动（网络风暴期短命会话
+// 起灭，9-23 夜实证 4↔5↔8 横跳）时，活体快照比屏上纹理新，用活体
+// 命中 = 你点中的是你没看到的名单；吃屏代 = 你点中的就是你看到的，
+// 屏在下一帧自追新名单
 
-static BAKED_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static BAKED_SNAP: Mutex<Option<ParserPageSnap>> = Mutex::new(None);
 
 /// 烘焙完成落账（android_app slot_bake(Parser) 处唯一调用方）
-pub fn note_baked_epoch(epoch: u64) {
-    BAKED_EPOCH.store(epoch, std::sync::atomic::Ordering::Relaxed);
+pub fn note_baked_snap(snap: &ParserPageSnap) {
+    *BAKED_SNAP.lock().unwrap() = Some(snap.clone());
+}
+
+/// 屏上正显示的那一代快照（解析页命中路径唯一合法源；无烘焙记录
+/// = 页未上过屏，调用方回落活体）
+pub fn baked_snap() -> Option<ParserPageSnap> {
+    BAKED_SNAP.lock().unwrap().clone()
 }
 
 /// 当前屏上纹理的烘焙代（[touch] 遥测调用方）
 pub fn baked_epoch() -> u64 {
-    BAKED_EPOCH.load(std::sync::atomic::Ordering::Relaxed)
+    BAKED_SNAP.lock().unwrap().as_ref().map_or(0, |s| s.epoch)
 }

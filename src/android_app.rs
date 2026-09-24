@@ -191,7 +191,9 @@ fn parser_geom(
     };
     let vbottom = pp::visible_bottom(sh, vbottom_inset);
     let area = crate::ui::parser_chain::page_area(sw, sh, bar_h);
-    let cap = (vbottom - area.y).max(0) as u32;
+    // BAR-145 顶锚修约：卡高容量吃**无键盘**可视底（bar_h 布局账，
+    // BAR-119 红线——卡内账不吃键盘；钉底位移照吃 vbottom）
+    let cap = (pp::visible_bottom(sh, bar_h) - area.y).max(0) as u32;
     let tmux_h = pp::tmux_card_h(snap.sessions.len(), mode, cap);
     let regs = crate::ui::parser_chain::regions(sw, sh, bar_h, vbottom, tmux_h);
     let lay = pp::layout_in(regs.dock.clone(), snap.sessions.len(), mode, snap.scroll);
@@ -2295,7 +2297,14 @@ impl App {
                     {
                         let (snap, hit_result, conn_hit, tap_desc) = {
                             let pg = page.lock().unwrap();
-                            let snap = pg.snap();
+                            // 眼手同尺的真义（BAR-145 修复，2026-09-24 用户
+                            // 拍板）：命中吃**屏上正显示的那一代**快照——
+                            // 名单翻动期（网络风暴短命会话起灭）活体比纹理
+                            // 新，用活体 = 点中没看到的名单；吃屏代 = 点中
+                            // 的就是看到的，屏在下一帧自追。无烘焙记录
+                            // （页未上过屏）回落活体
+                            let snap =
+                                crate::ui::parser_page::baked_snap().unwrap_or_else(|| pg.snap());
                             // 三区几何（2026-09-21 v2）：命中与涂装同一包
                             // parser_geom——眼手同尺
                             let g = parser_geom(
@@ -6583,7 +6592,9 @@ impl App {
                 );
             }
             g.slot_bake(crate::gles_present::ChromeSlot::Parser);
-            crate::ui::parser_page::note_baked_epoch(pt_epoch);
+            if let Some(ps) = parser_snap {
+                crate::ui::parser_page::note_baked_snap(ps);
+            }
         }
         // 环境卡柱层（2026-09-21 环境卡重做）：**滑动全在合成期**——
         // 层内容 = 四轨紧凑带（卡内芯渐变 + 柱，稳态位），只在采样换代/

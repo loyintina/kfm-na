@@ -108,55 +108,104 @@ fn spec_layout_竖排一行一框() {
 }
 
 #[test]
-fn spec_layout_动态高随内容长() {
-    let l2 = parser_page::layout(W, H, INSET, 2, Mode::Normal, 0);
-    let l5 = parser_page::layout(W, H, INSET, 5, Mode::Normal, 0);
-    assert!(l5.card.h > l2.card.h, "5 框卡必须比 2 框卡高");
+fn spec_bar145_卡高容量化_行位与会话数脱钩() {
+    // BAR-145 顶锚修约（2026-09-24 用户拍板，取代旧「卡高随内容长」）：
+    // 底锚槽 + 动态卡高 = 名单翻动时全行位移 126px（点击行漂移的力学
+    // 根源；9-23 夜实证名单 4↔5↔8 横跳）。修约：卡高吃容量不吃实际，
+    // 行/分隔线/按钮对卡底钉死——会话数增减只影响列表区底部空位
+    let l3 = parser_page::layout(W, H, INSET, 3, Mode::Normal, 0);
+    let l4 = parser_page::layout(W, H, INSET, 4, Mode::Normal, 0);
+    assert_eq!(l3.card.h, l4.card.h, "卡高必须与会话数脱钩（吃容量）");
+    assert_eq!(l3.rows[0].y, l4.rows[0].y, "首行一像素不挪");
+    assert_eq!(l3.rows[2].y, l4.rows[2].y, "已有行一像素不挪");
+    assert_eq!(l3.divider.y, l4.divider.y, "分隔线钉死");
+    assert_eq!(l3.buttons[0].y, l4.buttons[0].y, "按钮带钉死");
+    let stride = (parser_page::BOX_H + parser_page::ROW_GAP) as i64;
+    assert_eq!(
+        l4.rows[3].y,
+        l3.rows[2].y + stride,
+        "新会话进列表区底部空位——接前行底 + 行距"
+    );
     // 卡高账 = tmux_card_h 与 layout_in 同一份账（自报高 ≠ 卡内件 = 鬼影）
     let area = parser_chain::page_area(W, H, INSET);
-    let cap = (parser_page::visible_bottom(H, INSET) - area.y).max(0) as u32;
+    let cap = (parser_page::visible_bottom(H, 0) - area.y).max(0) as u32;
     assert_eq!(
-        l5.card.h,
-        parser_page::tmux_card_h(5, Mode::Normal, cap),
+        l4.card.h,
+        parser_page::tmux_card_h(4, Mode::Normal, cap),
         "自报高与卡内布局必须同源"
+    );
+    assert_eq!(
+        parser_page::tmux_card_h(3, Mode::Normal, cap),
+        parser_page::tmux_card_h(4, Mode::Normal, cap),
+        "自报高同样与会话数脱钩"
     );
 }
 
 #[test]
-fn spec_bar119_纵向挤压保底两行() {
-    // BAR-119（2026-09-20 redroid 截屏定罪）：键盘/chrome 任何纵向压力
-    // 都拿 tmux 卡当唯一泄压阀——塌成薄片、卡头文字裁断。修约（用户
-    // 拍板）：保底两行——挤压再大连两行都不许吞；卡高随内容，超池
-    // 出屏归键盘遮盖，不许塌行自残。钉：bottom_inset 顶到整屏高
-    // （键盘极端相）也不许塌。
-    let squeeze = H; // 键盘把 bottom_inset 顶到整屏高的极端相
-    let l = parser_page::layout(W, H, squeeze, 4, Mode::Normal, 0);
-    assert_eq!(l.visible_rows, 2, "4 会话保底可见两行——挤压不许吞行");
-    // 卡高必须真容下两行框（不是画出去再裁的「假可见」）：
-    // 账 = PAD_V·2 + 头 + 行距 + 两行框区 + 分隔线带 + 钮带
-    // （v3 竖排双钮 = 2 行钮高 + 1 行距）
-    let stride = parser_page::BOX_H + parser_page::ROW_GAP;
-    let two_lines = stride * 2 - parser_page::ROW_GAP;
-    let want_h = parser_page::CARD_PAD_V * 2
-        + parser_page::ROW_H
-        + parser_page::ROW_GAP
-        + two_lines
-        + parser_page::DIVIDER_ZONE
-        + (parser_page::BTN_H * 2 + parser_page::ROW_GAP);
-    assert_eq!(
-        l.card.h, want_h,
-        "保底两行的卡高 = 内容账全价——卡高钳进池区就是塌卡病灶本身"
+fn spec_bar145_命中吃屏代快照() {
+    // 源码守卫钉（BAR-145 修复·眼手同尺的真义）：解析页命中路径唯一
+    // 合法快照源 = 屏代烘焙快照（baked_snap）——用活体 pg.snap() 直接
+    // 命中 = 名单翻动期点中没看到的名单（病灶回潮即红）
+    let app = include_str!("../src/android_app.rs");
+    assert!(
+        app.contains("crate::ui::parser_page::baked_snap()"),
+        "解析页命中必须吃屏代快照（BAR-145：活体命中 = 点中没看到的名单）"
     );
-    // 一行内容不强撑两行（保底 ≠ 拔高）
+    let pp = include_str!("../src/ui/parser_page.rs");
+    assert!(
+        pp.contains("pub fn note_baked_snap"),
+        "烘焙完成必须落屏代账（note_baked_snap 被摘 = 命中快照断供）"
+    );
+}
+
+#[test]
+fn spec_bar145_仪器退役闸() {
+    // BAR-145 修复 2026-09-24 上机，仪器（[bake]名[]/[touch]屏代/屏代
+    // 快照账）留场观察一周（用户拍板「过一周没事自己取消或让我们
+    // 知道」）：2026-10-02 起本钉转红强制裁决——无再现 = 拆仪器+
+    // bugs.md 结案；有再现 = 凭屏代账定罪续修
+    let deadline = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_790_899_200);
+    assert!(
+        std::time::SystemTime::now() < deadline,
+        "BAR-145 仪器观察期满（2026-10-02）——无再现则拆屏代/名单仪器并结案，有再现凭账续修"
+    );
+}
+
+#[test]
+fn spec_bar119_挤压不吃卡内账_钉底独吞位移() {
+    // BAR-119 修约升级（2026-09-24 BAR-145 顶锚修约，用户拍板，取代
+    // 「保底两行」旧修约）：旧设计在极端挤压下把卡塌到两行使下半
+    // 可见——那是动态卡高时代对「卡高随内容」的补救；卡高容量化后
+    // 卡内账与压力全脱钩（BAR-119 红线纯度更高）：挤压再狠，卡高/
+    // 行位/按钮一像素不动，唯钉底随可视底位移，出屏部分归键盘遮盖
+    // 与页缘裁剪带（既有机制），不许塌行自残
+    let squeeze = H; // 键盘把 bottom_inset 顶到整屏高的极端相
+    let l0 = parser_page::layout(W, H, INSET, 4, Mode::Normal, 0);
+    let l = parser_page::layout(W, H, squeeze, 4, Mode::Normal, 0);
+    assert_eq!(l.card.h, l0.card.h, "挤压不许动卡高（卡内账不吃压力）");
+    assert_eq!(l.rows.len(), 4);
+    for (a, b) in l.rows.iter().zip(l0.rows.iter()) {
+        assert_eq!(
+            a.y - l.card.y,
+            b.y - l0.card.y,
+            "行相对卡顶一像素不动（位移唯钉底）"
+        );
+    }
+    assert_eq!(
+        l.divider.y - l.card.y,
+        l0.divider.y - l0.card.y,
+        "分隔线相对卡顶不动"
+    );
+    assert_eq!(
+        l.card.y + i64::from(l.card.h),
+        parser_page::visible_bottom(H, squeeze),
+        "极端相照钉新可视底（出屏归遮盖/裁剪，不塌行）"
+    );
+    // 可见窗容量账不变：1 会话可见 1 行、6 会话满窗 6 行
     let l1 = parser_page::layout(W, H, squeeze, 1, Mode::Normal, 0);
     assert_eq!(l1.visible_rows, 1);
-    // 六行内容挤压下保两行、第三行起归内部滚动（不许超保也不许丢）
     let l6 = parser_page::layout(W, H, squeeze, 6, Mode::Normal, 0);
-    assert_eq!(l6.visible_rows, 2, "6 会话挤压下保两行");
-    assert!(
-        l6.scroll_max >= i64::from(stride),
-        "第三行必须可滚达——保底不许吃掉滚动能力"
-    );
+    assert_eq!(l6.visible_rows, 6, "容量窗满六行——挤压不许吞");
 }
 
 #[test]
@@ -262,9 +311,10 @@ fn spec_layout_上限六框与滚动几何() {
     let lc = parser_page::layout(W, H, INSET, 10, Mode::Normal, 9999);
     let lm = parser_page::layout(W, H, INSET, 10, Mode::Normal, l.scroll_max);
     assert_eq!(lc.rows[0].y, lm.rows[0].y);
-    // 卡高按内容缩：2 会话卡 < 6 框满窗卡
+    // 卡高与会话数脱钩（BAR-145 顶锚修约）：2 会话卡 = 6 框满窗卡
+    // （同容量），空位在列表区底部；一屏装得下 = 不可滚
     let l2 = parser_page::layout(W, H, INSET, 2, Mode::Normal, 0);
-    assert!(l2.card.h < l.card.h, "卡高必须随实际行数缩，不按容量撑");
+    assert_eq!(l2.card.h, l.card.h, "卡高吃容量不吃实际（BAR-145）");
     assert_eq!(l2.scroll_max, 0, "一屏装得下 = 不可滚");
 }
 
@@ -398,10 +448,12 @@ fn spec_hit_确认态只认跳框() {
     // 卡内非钮区 = 吞（None，不许穿透）
     assert_eq!(hit(card.x + 5, card.y + 5), None);
     // 卡外 = Dismiss（点框外取消）；哪怕点在背后的会话框上也一样
+    // （BAR-145 卡加高后行 0 与居中跳框取消钮几何重叠——取跳框之下
+    // 的行 1，屏蔽语义不变：点在背景卡件上 = 框外取消，不许穿透）
     assert_eq!(hit(2, 2), Some(Hit::ModalDismiss));
-    let b0 = &l.rows[0];
+    let b1 = &l.rows[1];
     assert_eq!(
-        hit(b0.x + 10, b0.y + b0.h as i64 / 2),
+        hit(b1.x + 10, b1.y + b1.h as i64 / 2),
         Some(Hit::ModalDismiss),
         "模态在时卡区命中必须屏蔽（点在框上也只算框外取消）"
     );
