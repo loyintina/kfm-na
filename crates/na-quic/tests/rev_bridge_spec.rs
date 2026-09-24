@@ -17,8 +17,9 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
 use na_quic::{
-    REG_PORT, cert_fingerprint, client_config, gen_self_signed, run_rev_client, run_rev_server,
-    server_config,
+    IDLE_TIMEOUT, KEEPALIVE, REG_PORT, REV_IDLE_TIMEOUT, cert_fingerprint, client_config,
+    client_config_rev, gen_self_signed, run_rev_client, run_rev_server, server_config,
+    server_config_rev,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -140,4 +141,27 @@ async fn spec_m4_反连注册_错钥匙零服务() {
 #[test]
 fn spec_m4_注册口_零非业务() {
     assert_eq!(REG_PORT, 0, "注册口 = 0（合法业务口之外，与正连流不混）");
+}
+
+#[test]
+fn spec_m4_反连死寂判死_常量契约() {
+    // M4-5 兜底演练实踩：反连腿无本地可观测物，死寂判死全靠 idle
+    // 上限——沿用数据腿 4h = ssh 兜底永远接不上（9022 僵尸占口）
+    assert_eq!(
+        REV_IDLE_TIMEOUT,
+        Duration::from_secs(60),
+        "反连死寂判死钉死 60s（keepalive 6 倍）"
+    );
+    assert!(
+        REV_IDLE_TIMEOUT >= KEEPALIVE * 3,
+        "idle 必须 ≥ 3× keepalive——健康连接对端 ACK 续命不被误杀"
+    );
+    assert!(
+        REV_IDLE_TIMEOUT < IDLE_TIMEOUT,
+        "反连判死必须远快于数据腿 4h——不然 ssh 兜底永远接不上 9022"
+    );
+    // 双腿配置面真实吃到这个常量（装配钉：常量改了接线没改 = 白钉）
+    let _c = client_config_rev([7u8; 32]);
+    let (certs, key) = gen_self_signed("kfm-na");
+    let _s = server_config_rev(certs, key);
 }

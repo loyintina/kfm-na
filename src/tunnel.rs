@@ -691,7 +691,7 @@ fn spawn_rev_quic_leg(server: &ServerEntry) -> Option<QuicLeg> {
                 r = na_quic::run_rev_client(
                     addr,
                     "kfm-na",
-                    na_quic::client_config(pin),
+                    na_quic::client_config_rev(pin),
                     Some(psk),
                 ) => {
                     say(match r {

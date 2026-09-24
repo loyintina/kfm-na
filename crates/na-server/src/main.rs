@@ -122,7 +122,7 @@ fn spawn_rev_quic_leg() {
     tokio::spawn(async move {
         if let Err(e) = na_quic::run_rev_server(
             addr,
-            na_quic::server_config(certs, key),
+            na_quic::server_config_rev(certs, key),
             Some(psk),
             tcp_bind,
             target,

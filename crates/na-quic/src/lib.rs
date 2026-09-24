@@ -21,6 +21,15 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 /// idle 上限：4h——省电冻结期连接状态保活（代价 ≈ 一条 CID 表项，设计 §五）
 pub const IDLE_TIMEOUT: Duration = Duration::from_secs(4 * 3600);
 
+/// 反连腿死寂判死（M4-5 兜底演练实踩）：反连连接**协议层必须自带
+/// 死亡检测**——数据腿僵尸有 e2e 探活收尸（本地口还在可打），反连
+/// 腿无本地可观测物，服务器重启/网络静死后全靠 idle 上限。沿用 4h
+/// = ssh 兜底永远接不上（2026-09-24 实录：systemd 重启 na-server，
+/// 反连腿僵尸举「在线」相，9022 无人绑）。取 60s = keepalive 10s
+/// 的 6 倍：健康连接对端 ACK 续命稳活，死寂 1 分钟内定罪；doze 冻结
+/// 期计时器同冻，醒来一次性重拉（成本与数据腿 BAR-141 同级）
+pub const REV_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// 客户端保活：10s 一 ping 保 NAT 映射（设计 §五）
 pub const KEEPALIVE: Duration = Duration::from_secs(10);
 
@@ -128,11 +137,29 @@ pub fn server_config(
     certs: Vec<rustls::pki_types::CertificateDer<'static>>,
     key: rustls::pki_types::PrivateKeyDer<'static>,
 ) -> ServerConfig {
+    server_config_with_idle(certs, key, IDLE_TIMEOUT)
+}
+
+/// 服务器 QUIC 配置（反连腿版，M4-5）：死寂判死 60s——手机静死/掉线
+/// 时认领连接按期收尸，9022 及时让位 ssh 伴生兜底（4h = 兜底撞口
+/// 活锁：na-server 僵尸占着 9022，ssh -R 绑不上 255 空转）
+pub fn server_config_rev(
+    certs: Vec<rustls::pki_types::CertificateDer<'static>>,
+    key: rustls::pki_types::PrivateKeyDer<'static>,
+) -> ServerConfig {
+    server_config_with_idle(certs, key, REV_IDLE_TIMEOUT)
+}
+
+fn server_config_with_idle(
+    certs: Vec<rustls::pki_types::CertificateDer<'static>>,
+    key: rustls::pki_types::PrivateKeyDer<'static>,
+    idle: Duration,
+) -> ServerConfig {
     let mut sc = ServerConfig::with_single_cert(certs, key).expect("证书装载");
     Arc::get_mut(&mut sc.transport)
         .expect("transport 独占")
         .max_concurrent_bidi_streams(128u32.into())
-        .max_idle_timeout(Some(IDLE_TIMEOUT.try_into().expect("idle 上限")));
+        .max_idle_timeout(Some(idle.try_into().expect("idle 上限")));
     sc
 }
 
@@ -186,6 +213,18 @@ impl rustls::client::danger::ServerCertVerifier for PinnedVerifier {
 
 /// 客户端 QUIC 配置（指纹 pinning）
 pub fn client_config(pinned: [u8; 32]) -> ClientConfig {
+    client_config_with_idle(pinned, IDLE_TIMEOUT)
+}
+
+/// 客户端 QUIC 配置（反连腿版，M4-5）：死寂判死 60s——反连腿无本地
+/// 可观测物（数据腿僵尸有 e2e 探活收尸），服务器重启/网络静死全靠
+/// idle 上限定罪；4h = ssh 兜底永远接不上（2026-09-24 兜底演练实踩：
+/// systemd 重启 na-server，反连腿僵尸举「在线」相，9022 无人绑）
+pub fn client_config_rev(pinned: [u8; 32]) -> ClientConfig {
+    client_config_with_idle(pinned, REV_IDLE_TIMEOUT)
+}
+
+fn client_config_with_idle(pinned: [u8; 32], idle: Duration) -> ClientConfig {
     let crypto = rustls::ClientConfig::builder()
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(PinnedVerifier { pinned }))
@@ -196,7 +235,7 @@ pub fn client_config(pinned: [u8; 32]) -> ClientConfig {
     cc.transport_config(Arc::new({
         let mut t = quinn::TransportConfig::default();
         t.keep_alive_interval(Some(KEEPALIVE));
-        t.max_idle_timeout(Some(IDLE_TIMEOUT.try_into().expect("idle 上限")));
+        t.max_idle_timeout(Some(idle.try_into().expect("idle 上限")));
         t
     }));
     cc

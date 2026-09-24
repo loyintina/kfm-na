@@ -177,6 +177,20 @@ nsA（客户端）─veth─ nsR（路由器/NAT）─veth─ 服务器（lo）
       `rev_quic_up`/`rev_quic_fails`。钉 `spec_m4_ssh娃角色_真值表` /
       `spec_m4_正连参数_反连摘除`（变异双咬）。
       待办：M4-4 通道卡两行真状态；M4-5 服务器部署 62694 + 真链并行验证）
+      **M4-4 通道卡**（✅ 2026-09-24）：62694 行换 rev_quic_row 四相真
+      状态，9022 行加 QUIC 反连相，钉 spec_m4_反连* 双咬。
+      **M4-5 部署+真链判卷**（✅ 2026-09-24）：na_server_sup unit/降级
+      spawn 双路带 NA_QUIC_REV_BIND=0.0.0.0:62694（钉 spec_常驻_unit
+      内容与模式词）；服务器 kfm-na-server.service 常驻双绑 62633+
+      62694；手机热更后真链全绿——反连认领→na-server 持 9022、
+      na_ssh 走 QUIC 反连通、ssh 娃角色 Full→None 收编（双 QUIC 占
+      满）。**兜底演练揪出反连腿僵尸案**：systemd 重启 na-server 后
+      反连腿无本地可观测物，4h idle 上限内死信不来、9022 无人绑
+      （数据腿同款病灶 BAR-146，但数据腿有 e2e 探活收尸）。修 =
+      反连双腿专用死寂判死 REV_IDLE_TIMEOUT=60s（client_config_rev/
+      server_config_rev；健康连接 keepalive ACK 续命，死寂 1 分钟
+      定罪，ssh 兜底及时接）。钉 spec_m4_反连死寂判死_常量契约
+      （变异：改回 4h → 咬）。
 - [ ] M5 真机验证（省电周间隙）+ 认证 pinning 落设置页
 - [ ] M6（v1.1）0-RTT 会话票据
 

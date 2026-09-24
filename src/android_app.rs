@@ -2249,7 +2249,7 @@ impl App {
                         && pt.2.is_none()
                         && let (Some(page), Some((sw, sh))) = (&self.parser_page, self.screen_px())
                     {
-                        let (snap, hit_result, conn_hit) = {
+                        let (snap, hit_result, conn_hit, tap_desc) = {
                             let pg = page.lock().unwrap();
                             let snap = pg.snap();
                             // 三区几何（2026-09-21 v2）：命中与涂装同一包
@@ -2297,8 +2297,50 @@ impl App {
                             } else {
                                 None
                             };
-                            (snap, h.map(|hh| (hh, g.mode)), ch)
+                            // 点按遥测（BAR-145 挂起案仪器，2026-09-24 用户拍板
+                            // 「手指点击位置 vs UI 响应位置埋日志」）：指位→命中
+                            // 目标一条账。Session/Kill 附会话名与行 y 带——命中
+                            // 对不对得上肉眼框，与 na-shot 像素对表全在这行；
+                            // 落空连屏寸/inset/表滚动一起落（漂移对表三数）
+                            let desc = if let Some(hh) = &h {
+                                match hh {
+                                    crate::ui::parser_page::Hit::Session(i)
+                                    | crate::ui::parser_page::Hit::Kill(i) => {
+                                        let r = &g.lay.rows[*i];
+                                        let name = snap
+                                            .sessions
+                                            .get(*i)
+                                            .map(|s| s.name.as_str())
+                                            .unwrap_or("?");
+                                        format!(
+                                            "{hh:?} 行{i}「{name}」框y{}-{}",
+                                            r.y,
+                                            r.y + i64::from(r.h)
+                                        )
+                                    }
+                                    other => format!("{other:?}"),
+                                }
+                            } else if let Some(chh) = &ch {
+                                format!("通道卡 {chh:?}")
+                            } else {
+                                format!(
+                                    "落空（屏{sw}x{sh} inset={} bar={} 表滚{} 裁带{}-{}）",
+                                    self.chrome_inset(),
+                                    self.cur_bar_h(),
+                                    snap.scroll,
+                                    g.lay.list_clip.0,
+                                    g.lay.list_clip.1
+                                )
+                            };
+                            (snap, h.map(|hh| (hh, g.mode)), ch, desc)
                         };
+                        crate::report::report(
+                            "touch",
+                            &format!(
+                                "解析页点按 起手({:.0},{:.0}) 抬手({x:.0},{y:.0}) → {tap_desc}",
+                                pt.0, pt.1
+                            ),
+                        );
                         if let Some((hh, mode)) = hit_result {
                             self.parser_dispatch(snap, hh, mode);
                         }
