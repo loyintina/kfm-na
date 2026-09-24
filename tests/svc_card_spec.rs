@@ -31,6 +31,8 @@ fn tsnap(
         reverse_up,
         quic_fails,
         quic_configured,
+        rev_quic_up: false,
+        rev_quic_fails: 0,
     }
 }
 

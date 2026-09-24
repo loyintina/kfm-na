@@ -160,7 +160,23 @@ nsA（客户端）─veth─ nsR（路由器/NAT）─veth─ 服务器（lo）
       QUIC 优先、`QUIC_FAIL_TRIP=3` 连挂跳闸降级 ssh、腿在时 ssh 降
       `-R`-only 伴生保推送路、手动重连/回前台即审清零再给 QUIC 一票；
       `servers.json` 增 `"quic": {enable, port=62633, pin, psk}` 段，
-      缺省关。待办：反连路 QUIC 化 + 公网 UDP 裁决后的真链并行验证）
+      缺省关。
+      **M4-1 na-quic 反连双腿**（✅ 2026-09-24）：`run_rev_server`
+      （QUIC 监听→psk 注册认领→存活期绑本机 TCP 桥）/ `run_rev_client`
+      （拨出注册→accept_bi 回联本机口），`REG_PORT=0` 注册流端口头；
+      全链考题 `rev_bridge_spec.rs` 三钉（echo 逐字节回还/错钥匙零服务/
+      注册口零非业务）变异双咬。
+      **M4-2 na-server 接线**（✅ 2026-09-24）：`NA_QUIC_REV_BIND`
+      （不设=不开）/ `NA_QUIC_REV_TCP`（缺省 127.0.0.1:9022，只准回环）/
+      `NA_QUIC_REV_TARGET`（缺省 8024 = 手机 na sshd），与正连腿同证同钥。
+      **M4-3 看门狗反连腿**（✅ 2026-09-24 代码就位，真链判卷归 M4-5）：
+      tunnel.rs `spawn_rev_quic_leg`（UDP 62694，复用正连腿 pin/psk）、
+      `ssh_role` 真值表裁决 ssh 娃角色（None/Full/ForwardOnly/ReverseOnly
+      ——角色随双腿供应商变必须换娃，摘 -R 顺路同步释放腾 9022 给 QUIC
+      桥）、反连腿死只记账不动 TunnelState、手动重连双腿同收；快照新增
+      `rev_quic_up`/`rev_quic_fails`。钉 `spec_m4_ssh娃角色_真值表` /
+      `spec_m4_正连参数_反连摘除`（变异双咬）。
+      待办：M4-4 通道卡两行真状态；M4-5 服务器部署 62694 + 真链并行验证）
 - [ ] M5 真机验证（省电周间隙）+ 认证 pinning 落设置页
 - [ ] M6（v1.1）0-RTT 会话票据
 
@@ -194,3 +210,16 @@ nsA（客户端）─veth─ nsR（路由器/NAT）─veth─ 服务器（lo）
 返回即死，免探活三件套）；手动重连/回前台即审清零跳闸账再给 QUIC
 一票。状态相新增 `QuicUp`（卡面「自持 QUIC 在线」），与 `Up` 同属
 可用相。
+
+**反连路（M4，62694）**：na-server 侧三个环境变量——`NA_QUIC_REV_BIND`
+（QUIC 反连监听，不设 = 不开；回环闸同正连腿）/ `NA_QUIC_REV_TCP`
+（认领存活期绑的本机 TCP，缺省 127.0.0.1:9022，只准回环）/
+`NA_QUIC_REV_TARGET`（回联手机侧目标口，缺省 8024 = na sshd）。与
+正连腿同证同钥（`NA_QUIC_CERT` 前缀三件套复用）。手机侧零新增配置
+——`spawn_rev_quic_leg` 复用 quic 段 pin/psk + `QUIC_REVERSE_PORT`
+常量。看门狗语义：反连腿与数据腿独立（数据跳闸降级 ssh 时反连照跑）；
+`ssh_role` 真值表裁决 ssh 娃角色——双腿都在 = 无娃，各占一路 =
+挂剩下那路；角色变必须换娃（运行中的 ssh 改不了转发），摘 -R 时
+同步释放腾 9022 给 QUIC 桥（不然桥绑不上口空转）；反连腿死只记
+`rev_quic_fails` 账 + 报表，不动 TunnelState（数据路不归它），ssh
+兜底零等待接上；手动重连双腿同收（用户在等 = 双腿各再投一票）。

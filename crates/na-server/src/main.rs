@@ -8,6 +8,10 @@
 //! - NA_QUIC_CERT       QUIC 证书路径前缀（缺省 /root/kfm-na-certs/quic，
 //!   首跑自签落盘 {前缀}.der / {前缀}.key.der，并生成客户端证
 //!   预共享密钥 {前缀}.psk——开 QUIC 腿即强制 HMAC 挑战，设计 §四）
+//! - NA_QUIC_REV_BIND   M4 反连 QUIC 监听（可选，UDP 62694；9022 从 sshd
+//!   绑口变本机 TCP 监听器+反向开流，撞口/僵尸/释放三件套消失）
+//! - NA_QUIC_REV_TCP    反连本机桥前（缺省 127.0.0.1:9022，只准回环）
+//! - NA_QUIC_REV_TARGET 手机侧回联口（缺省 8024 = na sshd）
 //!
 //! 分流：peek 请求头不消费——见 Upgrade: websocket 交 wsterm（tokio-tungstenite
 //! 从头自读），否则按平面 HTTP 处理（httpd）。
@@ -70,6 +74,62 @@ fn spawn_quic_leg() {
             na_quic::run_server(addr, na_quic::server_config(certs, key), Some(psk)).await
         {
             eprintln!("[na-server] QUIC 腿退出: {e}");
+        }
+    });
+}
+
+/// M4 反连腿（设计 §二、§八 M4：9022 从「sshd 绑口」变「本机 TCP 监听器
+/// + 沿 QUIC 反向开流」）。三个环境变量，缺省不开——
+/// - NA_QUIC_REV_BIND：QUIC 反连监听（UDP 62694，公网口前置 = 客户端证，
+///   与正连腿同一份证书/psk——同一服务器身份、同一把钥匙）
+/// - NA_QUIC_REV_TCP：本机 TCP 桥前（缺省 127.0.0.1:9022——今天 sshd
+///   的位置；只在认领注册连接存活期内绑定，连接死即让位给 ssh 伴生兜底）
+/// - NA_QUIC_REV_TARGET：手机侧回联口（缺省 8024 = na sshd）
+fn spawn_rev_quic_leg() {
+    let Ok(bind) = std::env::var("NA_QUIC_REV_BIND") else {
+        return;
+    };
+    {
+        let host = bind.rsplit_once(':').map(|(h, _)| h).unwrap_or(&bind);
+        assert!(
+            host == "127.0.0.1" || host == "localhost" || host == "::1" || host == "0.0.0.0",
+            "NA_QUIC_REV_BIND 只准回环或显式 0.0.0.0，收到: {bind}"
+        );
+    }
+    let tcp_bind: std::net::SocketAddr = std::env::var("NA_QUIC_REV_TCP")
+        .unwrap_or_else(|_| "127.0.0.1:9022".into())
+        .parse()
+        .expect("NA_QUIC_REV_TCP 解析");
+    {
+        let host = tcp_bind.ip().to_string();
+        assert!(
+            host == "127.0.0.1" || host == "::1",
+            "NA_QUIC_REV_TCP 只准回环（9022 语义不变），收到: {tcp_bind}"
+        );
+    }
+    let target: u16 = std::env::var("NA_QUIC_REV_TARGET")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(8024);
+    let prefix = std::env::var("NA_QUIC_CERT").unwrap_or_else(|_| "/root/kfm-na-certs/quic".into());
+    let (certs, key) = load_or_gen_cert(&prefix);
+    let psk = load_or_gen_psk(&format!("{prefix}.psk"));
+    eprintln!(
+        "[na-server] QUIC 反连听 {bind}（TCP 桥前 {tcp_bind} → 手机 {target}，证书指纹 {}）",
+        hex(&na_quic::cert_fingerprint(&certs[0]))
+    );
+    let addr: std::net::SocketAddr = bind.parse().expect("NA_QUIC_REV_BIND 解析");
+    tokio::spawn(async move {
+        if let Err(e) = na_quic::run_rev_server(
+            addr,
+            na_quic::server_config(certs, key),
+            Some(psk),
+            tcp_bind,
+            target,
+        )
+        .await
+        {
+            eprintln!("[na-server] QUIC 反连腿退出: {e}");
         }
     });
 }
@@ -150,6 +210,7 @@ async fn main() {
     let registry = Arc::new(Registry::new());
 
     spawn_quic_leg();
+    spawn_rev_quic_leg();
 
     // idle 自退：无连接无会话持续超时 → 退出（下次 na 连接重新拉起）
     {

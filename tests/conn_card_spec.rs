@@ -19,6 +19,8 @@ fn snap_of(state: TunnelState) -> TunnelSnap {
         reverse_up: false,
         quic_fails: 0,
         quic_configured: false,
+        rev_quic_up: false,
+        rev_quic_fails: 0,
     }
 }
 

@@ -356,3 +356,173 @@ pub async fn run_client(
         });
     }
 }
+
+// ---- M4 反连路（设计 §二：9022 从「sshd 绑口」变「na-server 本机 TCP
+// 监听器 + 服务器沿 QUIC 反向开流」——撞口/僵尸/释放三件套整族消失）----
+//
+// 角色互换：手机是 QUIC 客户端（拨出），服务器是流的**发起方**。
+// 注册闸：反连客户端不主动开业务流，服务器无从验客户端证——故连接
+// 建立后手机必须先开一条「注册流」（端口头 = REG_PORT + psk 标签），
+// 验过才认领这条连接当反连载具；验不过记连败（与正连同一份资源闸）。
+
+/// 注册流端口头（A 档常量）：0 不是合法业务口，天然不会与正连流混
+pub const REG_PORT: u16 = 0;
+
+/// 反连服务器腿：QUIC 监听（UDP 62694）；认领注册连接后绑本机 TCP
+/// （127.0.0.1:9022），每个入站 TCP → 沿注册连接开流（写端口头 =
+/// target_port，即手机侧 na sshd 8024）→ splice。连接死 = 收 TCP
+/// 监听器回 QUIC 认领循环（9022 让位给 ssh 伴生兜底——口随供应商走，
+/// 与今天 sshd 持有它的语义同构）。同时只认领一条（多设备是未来事，
+/// 新注册挤掉旧的：旧手机掉线残留不会让新手机认领不上）
+pub async fn run_rev_server(
+    bind: SocketAddr,
+    cfg: ServerConfig,
+    psk: Option<[u8; 32]>,
+    tcp_bind: SocketAddr,
+    target_port: u16,
+) -> std::io::Result<()> {
+    let ep = Endpoint::server(cfg, bind).map_err(|e| std::io::Error::other(e.to_string()))?;
+    let fails = std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::<
+        std::net::IpAddr,
+        (u32, std::time::Instant),
+    >::new()));
+    loop {
+        // —— 认领循环：等一条验过客户端证的反连连接 ——
+        let conn = loop {
+            let Some(inc) = ep.accept().await else {
+                return Err(std::io::Error::other("QUIC endpoint 关闭"));
+            };
+            let Ok(conn) = inc.await else { continue };
+            let ip = conn.remote_address().ip();
+            eprintln!("[na-quic] 反连连接 {ip}");
+            {
+                let g = fails.lock().await;
+                if let Some(&(n, t0)) = g.get(&ip)
+                    && ban_verdict(n, t0.elapsed().as_secs())
+                {
+                    eprintln!("[na-quic] 封禁中拒连 {ip}（第 {n} 次连败）");
+                    conn.close(1u32.into(), b"auth banned");
+                    continue;
+                }
+            }
+            // 注册流：第一条流必须是 REG_PORT + 合法标签
+            let registered = async {
+                let (_send, mut recv) = conn.accept_bi().await.ok()?;
+                let mut hdr = [0u8; 2];
+                recv.read_exact(&mut hdr).await.ok()?;
+                let port = parse_port_header(&hdr);
+                if port != REG_PORT {
+                    return None;
+                }
+                if let Some(k) = psk {
+                    let mut tag = [0u8; AUTH_TAG_LEN];
+                    let ok =
+                        recv.read_exact(&mut tag).await.is_ok() && ct_eq(&tag, &auth_tag(&k, port));
+                    if !ok {
+                        return None;
+                    }
+                }
+                Some(())
+            }
+            .await;
+            if registered.is_none() {
+                let mut g = fails.lock().await;
+                let e = g.entry(ip).or_insert((0, std::time::Instant::now()));
+                if e.1.elapsed().as_secs() >= AUTH_BAN_SECS {
+                    *e = (0, std::time::Instant::now());
+                }
+                e.0 += 1;
+                eprintln!("[na-quic] 反连注册验签失败 {ip}（第 {} 次连败）", e.0);
+                conn.close(1u32.into(), b"bad registration");
+                continue;
+            }
+            eprintln!("[na-quic] 反连认领 {ip} → 本机 TCP {tcp_bind}");
+            break conn;
+        };
+        // —— 服务循环：TCP 桥到注册连接，连接死即收（让位兜底）——
+        serve_rev_tcp(&conn, tcp_bind, target_port).await;
+        eprintln!("[na-quic] 反连连接死，TCP {tcp_bind} 让位");
+    }
+}
+
+/// TCP 服务段（run_rev_server 私有）：注册连接存活期内绑 tcp_bind，
+/// 每个入站 → 开流写 target_port 端口头 → splice；连接死返回
+async fn serve_rev_tcp(conn: &Connection, tcp_bind: SocketAddr, target_port: u16) {
+    let Ok(listener) = tokio::net::TcpListener::bind(tcp_bind).await else {
+        return; // 口被占（ssh 伴生兜底在场？）——等下轮认领再说
+    };
+    loop {
+        tokio::select! {
+            a = listener.accept() => {
+                let Ok((tcp, _)) = a else { return };
+                let Ok((mut send, recv)) = conn.open_bi().await else { return };
+                tokio::spawn(async move {
+                    if send.write_all(&port_header(target_port)).await.is_err() {
+                        return;
+                    }
+                    splice(tcp, send, recv).await;
+                });
+            }
+            _ = conn.closed() => return,
+        }
+    }
+}
+
+/// 反连客户端腿（手机侧，核内线程）：拨出到服务器 UDP 62694，先发
+/// 注册流（REG_PORT + psk 标签），随后 accept_bi 循环——服务器每开
+/// 一条流 = 9022 那边来了一个连接，读端口头回联本机 127.0.0.1:{port}
+/// （na sshd 8024）→ splice。连接死 = 本函数返回（看门狗外侧重建，
+/// 与正连腿同款事件驱动）
+pub async fn run_rev_client(
+    server: SocketAddr,
+    sni: &str,
+    cfg: ClientConfig,
+    psk: Option<[u8; 32]>,
+) -> std::io::Result<()> {
+    let mut ep = Endpoint::client(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)))
+        .map_err(|e| std::io::Error::other(e.to_string()))?;
+    ep.set_default_client_config(cfg);
+    let conn: Connection = tokio::time::timeout(
+        HANDSHAKE_TIMEOUT,
+        ep.connect(server, sni)
+            .map_err(|e| std::io::Error::other(e.to_string()))?,
+    )
+    .await
+    .map_err(|_| std::io::Error::other("QUIC 反连握手超时（UDP 黑洞？）"))?
+    .map_err(|e| std::io::Error::other(e.to_string()))?;
+    // 注册流：验客户端证（服务器不验不认领，设计 §四）
+    let (mut send, _recv) = conn
+        .open_bi()
+        .await
+        .map_err(|e| std::io::Error::other(format!("注册流开不出: {e}")))?;
+    send.write_all(&port_header(REG_PORT))
+        .await
+        .map_err(|e| std::io::Error::other(e.to_string()))?;
+    if let Some(k) = psk {
+        send.write_all(&auth_tag(&k, REG_PORT))
+            .await
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
+    }
+    let _ = send.finish();
+    loop {
+        let (_send2, mut recv) = match conn.accept_bi().await {
+            Ok(s) => s,
+            Err(e) => return Err(std::io::Error::other(format!("QUIC 反连连接已死: {e}"))),
+        };
+        tokio::spawn(async move {
+            let mut hdr = [0u8; 2];
+            if recv.read_exact(&mut hdr).await.is_err() {
+                return;
+            }
+            let port = parse_port_header(&hdr);
+            if port == REG_PORT {
+                return; // 注册口不是业务口
+            }
+            let target = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+            let Ok(tcp) = tokio::net::TcpStream::connect(target).await else {
+                return;
+            };
+            splice(tcp, _send2, recv).await;
+        });
+    }
+}

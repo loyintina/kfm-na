@@ -7,9 +7,9 @@
 
 use kfm_na::settings::{Backend, QuicFields, ServerEntry, SshFields, TunnelPorts};
 use kfm_na::tunnel::{
-    KFMV4_PORT, Leg, NA_SERVER_PORT, QUIC_FAIL_TRIP, TunnelState, backoff_secs, forward_args,
-    leg_verdict, parse_pin, quic_configured, reverse_only_args, state_word, target_port, usable,
-    usable_edge_kick,
+    KFMV4_PORT, Leg, NA_SERVER_PORT, QUIC_FAIL_TRIP, SshRole, TunnelState, backoff_secs,
+    forward_args, forward_only_args, leg_verdict, parse_pin, quic_configured, reverse_only_args,
+    ssh_role, state_word, target_port, usable, usable_edge_kick,
 };
 
 fn srv(host: &str, user: &str, key: &str) -> ServerEntry {
@@ -515,4 +515,46 @@ fn spec_quic_状态词与可用相() {
     assert!(usable_edge_kick(false, &TunnelState::QuicUp, true));
     assert!(!usable_edge_kick(true, &TunnelState::QuicUp, true));
     assert!(!usable_edge_kick(false, &down, true));
+}
+
+// ---- M4：反连 QUIC 化（62694）----
+
+#[test]
+fn spec_m4_ssh娃角色_真值表() {
+    // 双腿供应商四种组合 → ssh 娃角色唯一映射（对账换娃的唯一判据）
+    assert_eq!(
+        ssh_role(true, true),
+        SshRole::None,
+        "双 QUIC 占满 = ssh 收编"
+    );
+    assert_eq!(
+        ssh_role(true, false),
+        SshRole::ReverseOnly,
+        "数据 QUIC + 反连 ssh = -R 伴生"
+    );
+    assert_eq!(
+        ssh_role(false, true),
+        SshRole::ForwardOnly,
+        "数据 ssh + 反连 QUIC = -L only（摘 -R 防撞口）"
+    );
+    assert_eq!(ssh_role(false, false), SshRole::Full, "双腿都不在 = 全量");
+}
+
+#[test]
+fn spec_m4_正连参数_反连摘除() {
+    let a =
+        forward_only_args(&srv("8.145.46.182", "root", "/k/id_ed25519")).expect("合法条目必须出参");
+    let joined = a.join(" ");
+    assert!(
+        !a.iter().any(|x| x == "-R"),
+        "-R 必须摘除：9022 唯一属主是 na-server QUIC 桥（撞口 = 255 活锁）"
+    );
+    assert!(
+        joined.contains("-L 9021:127.0.0.1:8021"),
+        "正连数据路必须留，实际 {joined}"
+    );
+    assert!(a.iter().any(|x| x == "BatchMode=yes"), "其余安全件不动");
+    // 与 reverse_only_args 对称：两者拼回 = 全量（-L/-R 各摘各的）
+    let r = reverse_only_args(&srv("8.145.46.182", "root", "/k/id_ed25519")).expect("出参");
+    assert!(r.iter().any(|x| x == "-R") && !r.iter().any(|x| x == "-L"));
 }

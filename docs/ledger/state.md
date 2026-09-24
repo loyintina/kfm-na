@@ -5,6 +5,30 @@
 > (速查表:症状 → 工具 → 字段 → 判卷)。本页只写「现在进行时」,
 > 历史功过在 bugs.md。
 
+## 当前位置（2026-09-24 M4 反连 QUIC 化，在途）
+
+> **M4 反连路（9022）QUIC 化**（quic隧道.md §八 M4，用户 2026-09-24
+> 拍板开工）：9022 从 ssh `-R` 伴生迁移为 QUIC 反连（UDP 62694，
+> 手机拨出、服务器 na-server 认领后反向开流），ssh 伴生降级为兜底。
+> - M4-1 ✅ na-quic `run_rev_server`/`run_rev_client` + 注册流
+>   `REG_PORT=0`；考题 crates/na-quic/tests/rev_bridge_spec.rs 三钉
+>   变异双咬。
+> - M4-2 ✅ na-server 环境变量 `NA_QUIC_REV_BIND`/`NA_QUIC_REV_TCP`
+>   （缺省 127.0.0.1:9022）/`NA_QUIC_REV_TARGET`（缺省 8024），
+>   与正连腿同证同钥。
+> - M4-3 ✅ tunnel.rs 看门狗反连腿：`spawn_rev_quic_leg`（复用 quic
+>   段 pin/psk + QUIC_REVERSE_PORT）、`ssh_role` 真值表（None/Full/
+>   ForwardOnly/ReverseOnly——角色变必须换娃，摘 -R 顺路同步释放
+>   腾 9022）、反连腿死只记账不动 TunnelState、手动重连双腿同收；
+>   TunnelSnap 加 `rev_quic_up`/`rev_quic_fails`。钉 spec_m4_* 双钉
+>   变异双咬。
+> - M4-4 待做：通道卡「QUIC 62694」行换真状态（今「预留 M4」占位）、
+>   「反连 9022」行反映 QUIC 反连相。
+> - M4-5 待做：服务器 na-server 部署 NA_QUIC_REV_BIND=0.0.0.0:62694
+>   （先查部署形态：systemd？现行 NA_QUIC_BIND 在哪配的）+ 双目标
+>   编核推手机 + 真链判卷（ss 见 na-server 持 9022、na_ssh 走 QUIC、
+>   杀反连腿验 ssh 兜底接上）。
+
 ## 当前位置（2026-09-24)
 
 > **BAR-146：QUIC 腿 Starting 僵尸修复（「打开 na 连接不上」定罪）**：

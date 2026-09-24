@@ -285,6 +285,43 @@ pub fn reverse_only_args(s: &ServerEntry) -> Result<Vec<String>, String> {
     Ok(a)
 }
 
+/// -L-only ssh 参数（A 档纯函数，M4）：QUIC 反连腿供 9022 时 ssh 只挂
+/// 正连数据路——摘除 -R 两段，防与 na-server QUIC 桥撞口（撞了
+/// ExitOnForwardFailure 255 活锁，BAR-147 同款病灶）
+pub fn forward_only_args(s: &ServerEntry) -> Result<Vec<String>, String> {
+    let mut a = forward_args(s)?;
+    if let Some(i) = a.iter().position(|x| x == "-R") {
+        a.drain(i..i + 2);
+    }
+    Ok(a)
+}
+
+/// ssh 娃角色（A 档纯函数，M4）：数据/反连两路各自谁供——都被 QUIC
+/// 占了 ssh 娃整体收编；只占一路 ssh 挂剩下那路；都没占 = 全量
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SshRole {
+    /// 不需要 ssh 娃（数据 QUIC + 反连 QUIC 双路全占）
+    None,
+    /// 全量（-L 数据 + -R 反连）
+    Full,
+    /// 只正连 -L（反连归 QUIC 桥）
+    ForwardOnly,
+    /// 只反连 -R 伴生（数据归 QUIC 桥）
+    ReverseOnly,
+}
+
+/// ssh 娃角色裁决（A 档纯函数，M4）：运行中的 ssh 改不了转发——角色
+/// 随双腿供应商变必须换娃（看门狗对账段执行），本函数是换不换的
+/// 唯一判据
+pub fn ssh_role(data_quic_up: bool, rev_quic_up: bool) -> SshRole {
+    match (data_quic_up, rev_quic_up) {
+        (true, true) => SshRole::None,
+        (true, false) => SshRole::ReverseOnly,
+        (false, true) => SshRole::ForwardOnly,
+        (false, false) => SshRole::Full,
+    }
+}
+
 /// 端到端探活（B 档）：穿透本地转发口打 na-server 健康面，认 HTTP 200。
 /// 超时 1.2s——两次连败 ≈ 2~3s 定罪僵尸，比 keepalive 快一个量级
 fn probe_e2e(port: u16) -> bool {
@@ -458,6 +495,10 @@ pub struct TunnelSnap {
     pub quic_fails: u32,
     /// QUIC 配置齐件（不齐件 = 卡上显示「未配置」）
     pub quic_configured: bool,
+    /// QUIC 反连腿在（M4：9022 归 na-server QUIC 桥；不在 = ssh -R 兜底）
+    pub rev_quic_up: bool,
+    /// QUIC 反连腿连死账（M4，报表用；无跳闸——ssh 兜底随时接）
+    pub rev_quic_fails: u32,
 }
 
 /// 本地口 TCP 探活（绑定在 = 转发通道在；端到端 ws 握手探活归插件卡阶段）
@@ -611,6 +652,64 @@ fn spawn_quic_leg(server: &ServerEntry) -> Option<QuicLeg> {
     })
 }
 
+/// 起 QUIC 反连腿（M4，核内线程）：拨出到服务器 UDP 62694 注册，
+/// 随后服务器 9022 的入站经这条连接开流回联本机 na sshd（8024）。
+/// 无本地 TCP 绑定——「活着」的唯一信号是没死信；握手 8s 速败在
+/// run_rev_client 内置超时里（UDP 黑洞也按时来信），无需数据腿
+/// 那套 Starting 宽限裁决
+fn spawn_rev_quic_leg(server: &ServerEntry) -> Option<QuicLeg> {
+    use std::net::ToSocketAddrs as _;
+    let pin = parse_pin(&server.quic.pin)?;
+    let psk = parse_pin(&server.quic.psk)?;
+    let (stop, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let (dead_tx, dead) = channel::<String>();
+    let host = server.ssh.host.clone();
+    std::thread::spawn(move || {
+        let say = |m: String| {
+            let _ = dead_tx.send(m);
+        };
+        let Some(addr) = format!("{host}:{}", crate::settings::QUIC_REVERSE_PORT)
+            .to_socket_addrs()
+            .ok()
+            .and_then(|mut i| i.next())
+        else {
+            say("DNS 解析失败".into());
+            return;
+        };
+        let rt = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(r) => r,
+            Err(e) => {
+                say(format!("runtime 起不来: {e}"));
+                return;
+            }
+        };
+        rt.block_on(async move {
+            tokio::select! {
+                r = na_quic::run_rev_client(
+                    addr,
+                    "kfm-na",
+                    na_quic::client_config(pin),
+                    Some(psk),
+                ) => {
+                    say(match r {
+                        Ok(()) => "反连腿正常退出".into(),
+                        Err(e) => format!("反连腿死: {e}"),
+                    });
+                }
+                _ = stop_rx => say("看门狗请收".into()),
+            }
+        });
+    });
+    Some(QuicLeg {
+        stop,
+        dead,
+        spawned_at: std::time::Instant::now(),
+    })
+}
+
 /// 起看门狗（一线程 1s 滴答）：探口 → 外部占则让位挂 ExternalUp；
 /// 无娃则 spawn（Starting）；探活过且娃在 → Up；娃死 → Down 退避重拉。
 /// 返回共享快照——UI/报表只读这份。**幂等**：重复调用（设置重载）返回
@@ -636,6 +735,8 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
         reverse_up: false,
         quic_fails: 0,
         quic_configured: quic_configured(&server),
+        rev_quic_up: false,
+        rev_quic_fails: 0,
     }));
     TUNNEL_SNAP.set(Arc::clone(&snap)).ok();
     let Ok(args) = forward_args(&server) else {
@@ -670,6 +771,14 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
         // 降级 ssh 兜底，手动重连/回前台即审清零再给 QUIC 一票
         let mut quic: Option<QuicLeg> = None;
         let mut quic_fails: u32 = 0;
+        // QUIC 反连腿（M4）：9022 推送路的 QUIC 化——腿在 = 9022 归
+        // na-server QUIC 桥，ssh 娃摘 -R（ssh_role 对账换娃）；腿死 =
+        // 记一笔账，ssh 兜底照今逻辑零等待接上（无跳闸——兜底永远欢迎）
+        let mut rev_quic: Option<QuicLeg> = None;
+        let mut rev_quic_fails: u32 = 0;
+        // 当前 ssh 娃的角色（M4 对账判据）：与 ssh_role() 裁决不符 = 换娃
+        // （运行中的 ssh 改不了转发）；重生段 spawn 时写入
+        let mut child_role: Option<SshRole> = None;
         let set = |st: TunnelState, snap_t: &Arc<Mutex<TunnelSnap>>| {
             let mut g = snap_t.lock().unwrap();
             if g.state != st {
@@ -685,8 +794,10 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
         };
         let reconnect = |child: &mut Option<std::process::Child>,
                          quic: &mut Option<QuicLeg>,
+                         rev_quic: &mut Option<QuicLeg>,
                          attempts: &mut u32,
                          quic_fails: &mut u32,
+                         rev_quic_fails: &mut u32,
                          snap_t: &Arc<Mutex<TunnelSnap>>| {
             crate::report::report("tunnel", "手动重连：杀娃收腿重拉");
             if let Some(mut c) = child.take() {
@@ -696,8 +807,13 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
             if let Some(q) = quic.take() {
                 let _ = q.stop.send(());
             }
+            // M4：手动重连 = 双腿同收——用户在等，反连腿也再给一票
+            if let Some(q) = rev_quic.take() {
+                let _ = q.stop.send(());
+            }
             *attempts = 0;
             *quic_fails = 0; // 用户在等 = 给 QUIC 再投一票
+            *rev_quic_fails = 0;
             set(
                 TunnelState::Down {
                     attempts: 0,
@@ -786,7 +902,11 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
             // 反连/跳闸账/齐件。UI 只读快照，绝不许碰锁内活物
             if let Ok(mut g) = snap_t.lock() {
                 g.port_open = port_open;
-                g.reverse_up = child_alive;
+                // 反连 9022 活着 = QUIC 反连腿在（na-server 桥持有）或
+                // ssh 娃在且它挂着 -R（角色对账后 ForwardOnly 不算）
+                g.reverse_up = rev_quic.is_some()
+                    || (child_alive
+                        && matches!(child_role, Some(SshRole::Full | SshRole::ReverseOnly)));
                 g.leg = if quic.is_some() {
                     Some(Leg::Quic)
                 } else if child_alive {
@@ -796,6 +916,8 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                 };
                 g.quic_fails = quic_fails;
                 g.quic_configured = quic_configured(&server);
+                g.rev_quic_up = rev_quic.is_some();
+                g.rev_quic_fails = rev_quic_fails;
             }
 
             // QUIC 腿死信审理（事件驱动死亡检测）：腿死 → 记一笔跳闸账，
@@ -831,6 +953,58 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                 );
             }
 
+            // QUIC 反连腿死信审理（M4，事件驱动）：腿死 = 9022 供应商
+            // 换回 ssh——只记账+报表，不动 TunnelState（数据路不归它）；
+            // 重生段按 ssh_role 拉起带 -R 的娃兜底，零等待
+            let mut rev_msg: Option<String> = None;
+            if let Some(q) = &rev_quic {
+                match q.dead.try_recv() {
+                    Ok(m) => rev_msg = Some(m),
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        rev_msg = Some("反连腿线程消失".into())
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                }
+            }
+            if let Some(msg) = rev_msg {
+                rev_quic = None;
+                rev_quic_fails += 1;
+                crate::report::report(
+                    "tunnel",
+                    &format!("QUIC 反连腿死（{msg}），第 {rev_quic_fails} 次——9022 回落 ssh 兜底"),
+                );
+            }
+
+            // ssh 娃角色对账（M4）：角色随双腿供应商变——运行中的 ssh
+            // 改不了转发，角色一变必须换娃。摘 -R 那一下顺路请服务器
+            // 收尸腾 9022：不然 na-server QUIC 桥绑不上口，反连腿空转
+            let want_role = ssh_role(quic.is_some(), rev_quic.is_some());
+            if child.is_some() && child_role != Some(want_role) {
+                let old = child_role.take();
+                let lived = spawned_at
+                    .map(|t| t.elapsed().as_secs())
+                    .unwrap_or(u64::MAX);
+                spawned_at = None;
+                ssh_err = None;
+                crate::report::report(
+                    "tunnel",
+                    &format!("ssh 娃角色换 {old:?} → {want_role:?}：收娃重拉"),
+                );
+                if let Some(mut c) = child.take() {
+                    let _ = c.kill();
+                    let _ = c.wait();
+                }
+                if matches!(old, Some(SshRole::Full | SshRole::ReverseOnly))
+                    && companion_established(lived)
+                {
+                    release_forward_sync(&prefix, &server, std::time::Duration::from_secs(2));
+                }
+                if want_role == SshRole::ReverseOnly {
+                    companion_hold_until =
+                        Some(std::time::Instant::now() + std::time::Duration::from_secs(2));
+                }
+            }
+
             if port_open && !child_alive && quic.is_none() {
                 // 外部隧道占着口——让位不抢，30s 一拍复查（它一断下一拍接管）
                 set(TunnelState::ExternalUp, &snap_t);
@@ -845,8 +1019,10 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                     Some(_) => reconnect(
                         &mut child,
                         &mut quic,
+                        &mut rev_quic,
                         &mut attempts,
                         &mut quic_fails,
+                        &mut rev_quic_fails,
                         &snap_t,
                     ),
                     None => {}
@@ -991,8 +1167,10 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                     Some(TunnelCmd::Reconnect) | Some(TunnelCmd::HealQuic) => reconnect(
                         &mut child,
                         &mut quic,
+                        &mut rev_quic,
                         &mut attempts,
                         &mut quic_fails,
+                        &mut rev_quic_fails,
                         &snap_t,
                     ),
                     Some(TunnelCmd::TripQuic) => trip_quic(
@@ -1069,8 +1247,10 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                     Some(TunnelCmd::Reconnect) | Some(TunnelCmd::HealQuic) => reconnect(
                         &mut child,
                         &mut quic,
+                        &mut rev_quic,
                         &mut attempts,
                         &mut quic_fails,
+                        &mut rev_quic_fails,
                         &snap_t,
                     ),
                     Some(TunnelCmd::TripQuic) => trip_quic(
@@ -1175,8 +1355,10 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                         Some(TunnelCmd::Reconnect) | Some(TunnelCmd::HealQuic) => reconnect(
                             &mut child,
                             &mut quic,
+                            &mut rev_quic,
                             &mut attempts,
                             &mut quic_fails,
+                            &mut rev_quic_fails,
                             &snap_t,
                         ),
                         Some(TunnelCmd::TripQuic) => trip_quic(
@@ -1222,10 +1404,37 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                     }
                 }
             }
+            // 反连路裁决（M4）：配置齐件即常拉 QUIC 反连腿（与数据腿
+            // 独立——数据腿跳闸降级 ssh 时反连腿照跑，9022 仍归 QUIC 桥）。
+            // 腿死无退避：每次失败本身已耗握手 8s 超时，重生段 1s 一拍
+            if rev_quic.is_none() && quic_configured(&server) {
+                match spawn_rev_quic_leg(&server) {
+                    Some(q) => {
+                        crate::report::report(
+                            "tunnel",
+                            &format!(
+                                "QUIC 反连腿已 spawn（UDP {}:{}，9022 归 QUIC 桥）",
+                                server.ssh.host,
+                                crate::settings::QUIC_REVERSE_PORT
+                            ),
+                        );
+                        rev_quic = Some(q);
+                    }
+                    None => {
+                        rev_quic_fails += 1;
+                        crate::report::report(
+                            "tunnel",
+                            &format!(
+                                "QUIC 反连腿 spawn 缺件（指纹不合法），第 {rev_quic_fails} 次"
+                            ),
+                        );
+                    }
+                }
+            }
             // 伴生重拉封锁闸（BAR-147）：封锁期到点才放行——没有这道闸，
             // 伴生死亡块后面就是 spawn，零间隔重拉必撞 9022 尸体活锁。
             // 用户在等（Reconnect/ResumeKick）立即放行：命令优先于封锁
-            if quic.is_some()
+            if want_role == SshRole::ReverseOnly
                 && child.is_none()
                 && let Some(until) = companion_hold_until
             {
@@ -1236,8 +1445,10 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                             reconnect(
                                 &mut child,
                                 &mut quic,
+                                &mut rev_quic,
                                 &mut attempts,
                                 &mut quic_fails,
+                                &mut rev_quic_fails,
                                 &snap_t,
                             );
                         }
@@ -1258,18 +1469,52 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                 }
                 companion_hold_until = None;
             }
-            // ssh 参数：腿在 = -R-only 伴生；腿不在 = 全量正连（-L + -R）
-            let ssh_args = if quic.is_some() {
-                match reverse_only_args(&server) {
+            // ssh 娃按角色起（M4）：双 QUIC 占满 = 根本不需要娃（1s 一拍
+            // 盯腿，命令照收）；只占一路 = 挂剩下那路；都没占 = 全量
+            let ssh_args = match want_role {
+                SshRole::None => {
+                    match wait(&cmd_rx, std::time::Duration::from_secs(1)) {
+                        Some(TunnelCmd::Reconnect) | Some(TunnelCmd::HealQuic) => reconnect(
+                            &mut child,
+                            &mut quic,
+                            &mut rev_quic,
+                            &mut attempts,
+                            &mut quic_fails,
+                            &mut rev_quic_fails,
+                            &snap_t,
+                        ),
+                        Some(TunnelCmd::TripQuic) => trip_quic(
+                            &mut child,
+                            &mut quic,
+                            &mut attempts,
+                            &mut quic_fails,
+                            &snap_t,
+                        ),
+                        Some(TunnelCmd::ResumeKick) => {
+                            attempts = 0;
+                            quic_fails = 0;
+                        }
+                        None => {}
+                    }
+                    continue;
+                }
+                SshRole::ReverseOnly => match reverse_only_args(&server) {
                     Ok(a) => a,
                     Err(e) => {
                         crate::report::report("tunnel", &format!("伴生 ssh 参数缺件: {e}"));
                         let _ = wait(&cmd_rx, std::time::Duration::from_secs(1));
                         continue;
                     }
-                }
-            } else {
-                args.clone()
+                },
+                SshRole::ForwardOnly => match forward_only_args(&server) {
+                    Ok(a) => a,
+                    Err(e) => {
+                        crate::report::report("tunnel", &format!("正连 ssh 参数缺件: {e}"));
+                        let _ = wait(&cmd_rx, std::time::Duration::from_secs(1));
+                        continue;
+                    }
+                },
+                SshRole::Full => args.clone(),
             };
 
             let spawn = std::process::Command::new(&ssh_bin)
@@ -1289,13 +1534,15 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                 Ok(mut c) => {
                     crate::report::report(
                         "tunnel",
-                        &if quic.is_some() {
-                            format!(
+                        &match want_role {
+                            SshRole::ReverseOnly => format!(
                                 "伴生 -R ssh 已 spawn（推送路 → {}）",
                                 server.tunnel.remote_port
-                            )
-                        } else {
-                            format!("ssh 正连隧道已 spawn → 127.0.0.1:{port}")
+                            ),
+                            SshRole::ForwardOnly => format!(
+                                "ssh 正连隧道已 spawn（-L only → 127.0.0.1:{port}，反连归 QUIC 桥）"
+                            ),
+                            _ => format!("ssh 正连隧道已 spawn → 127.0.0.1:{port}"),
                         },
                     );
                     spawned_at = Some(std::time::Instant::now());
@@ -1321,6 +1568,7 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                         });
                     }
                     child = Some(c);
+                    child_role = Some(want_role);
                     // 伴生重生不碰状态——QUIC 腿分支自管 QuicUp/Starting
                     if quic.is_none() {
                         set(TunnelState::Starting, &snap_t);
@@ -1346,8 +1594,10 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                         Some(TunnelCmd::Reconnect) | Some(TunnelCmd::HealQuic) => reconnect(
                             &mut child,
                             &mut quic,
+                            &mut rev_quic,
                             &mut attempts,
                             &mut quic_fails,
+                            &mut rev_quic_fails,
                             &snap_t,
                         ),
                         Some(TunnelCmd::TripQuic) => trip_quic(
@@ -1370,8 +1620,10 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                     TunnelCmd::Reconnect | TunnelCmd::HealQuic => reconnect(
                         &mut child,
                         &mut quic,
+                        &mut rev_quic,
                         &mut attempts,
                         &mut quic_fails,
+                        &mut rev_quic_fails,
                         &snap_t,
                     ),
                     TunnelCmd::TripQuic => trip_quic(
