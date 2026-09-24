@@ -1251,6 +1251,11 @@ impl GlesPresent {
         pt_dy_extra: f32,
         pan_comp: Option<crate::gles_present::PanComp>,
         layered: LayeredPlace,
+        // 像素级键盘平移（2026-09-24）：网格实例在合成期整体上移 kb_frac
+        // 零头（调用方 push 时 dy 已减），顶带内缘以下才许落墨——scissor
+        // 保 screen y ≥ grid_clip_top（GL 原点左下：盒高 = h - clip_top）。
+        // 0 = 无零头不裁（与旧路径逐像素等价）
+        grid_clip_top: u32,
     ) {
         let t0_draw = std::time::Instant::now();
         // CPU 画布直接测量（rgb 非零计数 + 样本原值）——「画没画」的铁证
@@ -1312,6 +1317,13 @@ impl GlesPresent {
                 gl.disable(glow::BLEND);
             }
 
+            // 网格内容顶带裁剪（像素级键盘平移）：零头把行顶上顶带时
+            // 不许墨探进顶带 chrome（与 softbuffer 路径 clip_top 一把尺）
+            if grid_clip_top > 0 {
+                gl.enable(glow::SCISSOR_TEST);
+                gl.scissor(0, 0, self.w as i32, (self.h - grid_clip_top) as i32);
+            }
+
             // 背景
             if !bg.is_empty() {
                 gl.use_program(Some(self.bg_prog));
@@ -1338,6 +1350,9 @@ impl GlesPresent {
                 glyphs_by_page,
                 1.0,
             );
+            if grid_clip_top > 0 {
+                gl.disable(glow::SCISSOR_TEST);
+            }
 
             // 键行槽（面板未靠泊时可见；烘焙物常驻纹理，重现身零成本；
             // 视口推移：与终端卡槽同 term_place——键行是终端页的家具）

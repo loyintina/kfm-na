@@ -3577,8 +3577,8 @@ impl App {
         // chrome == 真实 inset（无 ui-fx 占槽时缝直通），行为不变
         let occlude = self.chrome_inset() + crate::keybar::HEIGHT_PX + crate::input_bar::HEIGHT_PX;
         if term.lock().unwrap().sync_kb_shift(h, occlude) {
-            let shift = term.lock().unwrap().kb_shift();
-            crate::report::report("ime", &format!("视口平移 {shift} 行"));
+            let shift = term.lock().unwrap().kb_shift_px();
+            crate::report::report("ime", &format!("视口平移 {shift}px"));
         }
         self.dirty = true;
     }
@@ -5628,7 +5628,7 @@ impl App {
         if let Some(t) = th {
             let mut term = t.lock().unwrap();
             if term.sync_kb_shift(h, kb_occlude) {
-                crate::report::report("ime", &format!("视口跟随 {} 行", term.kb_shift()));
+                crate::report::report("ime", &format!("视口跟随 {}px", term.kb_shift_px()));
             }
         }
         // AI 面板 Y 偏移过缝（ui-base §三）：目标值 = AI 在栈 0 靠泊 /
@@ -6671,10 +6671,27 @@ impl App {
         // 显影，烘焙物不动。视口推移：基座实例过仿射（恒等早退），
         // 面板 placement 加被压额外位移）
         let (cx, cy) = (w as f32 / 2.0, h as f32 / 2.0);
+        // 像素级键盘平移（2026-09-24）：GpuCell.py 保持格原点整数，像素零头
+        // 在这里合成期统一下移——只作用终端网格实例（ai_glyphs/TermCard/
+        // Keybar 槽不动），亚行平移随遮挡带连续跟随。grid_clip_top = 顶带
+        // scissor 下限（零头>0 才裁，防字探进顶带 chrome）
+        let (kb_frac, grid_clip_top) = {
+            let t = term_arc.lock().unwrap();
+            let ch = t.cell_size().1.max(1);
+            let frac = t.kb_shift_px() % ch;
+            (
+                frac as f32,
+                if frac > 0 {
+                    crate::termview::margin_top(ch)
+                } else {
+                    0
+                },
+            )
+        };
         crate::glyph_atlas::push_bg_instances(
             &mut bg_inst,
             vpush.dx,
-            vpush.dy,
+            vpush.dy - kb_frac,
             term_place.2,
             cx,
             cy,
@@ -6683,7 +6700,7 @@ impl App {
             crate::glyph_atlas::push_glyph_instances(
                 page,
                 vpush.dx,
-                vpush.dy,
+                vpush.dy - kb_frac,
                 term_place.2,
                 cx,
                 cy,
@@ -6803,6 +6820,7 @@ impl App {
             pt_extra.dy,
             pan_comp,
             layered,
+            grid_clip_top,
         );
         ai_layout
     }
@@ -7262,7 +7280,7 @@ impl App {
             if let Some(t) = tg.as_deref_mut()
                 && t.sync_kb_shift(h, kb_occlude)
             {
-                crate::report::report("ime", &format!("视口跟随 {} 行", t.kb_shift()));
+                crate::report::report("ime", &format!("视口跟随 {}px", t.kb_shift_px()));
             }
             let chat_scroll = self.ai_chat.as_ref().map_or(0, |c| c.scroll_offset());
             let chat_live = self.ai_chat.as_ref().is_some_and(|c| c.thinking_live());

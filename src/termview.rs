@@ -1524,19 +1524,21 @@ pub fn is_word_char(c: char) -> bool {
     c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | '/' | ':' | '~')
 }
 
-/// 键盘遮挡 → 视口上移行数（A 档考题钉死，2026-09-18 用户拍板「键盘弹起
-/// 改视口平移」）。追光标钳制 = min(需要的量, 遮挡量)：
-/// - 光标屏行 cursor_row（已含 display_offset）在可见区 [0, visible_rows)
-///   内 → 0（vim 编辑文件顶部场景：一行不动）；
-/// - 被遮 → cursor_row+1-visible_rows，刚好贴可见区底沿露出（kimi CLI
-///   光标贴底场景退化为与旧重排观感对齐）；
+/// 键盘遮挡 → 视口上移像素数（A 档考题钉死，2026-09-18 用户拍板「键盘弹起
+/// 改视口平移」；2026-09-24 像素级化——行级步进实机判「观感怪」，分数行 =
+/// 理想视口模型「模型在本地/视口独立/tmux 不动」的第一层分数视口）。
+/// 追光标钳制 = max(0, 光标底沿px - 可见高px)：
+/// - 光标底沿 (cursor_row+1)*cell_h 已在可见高内 → 0（vim 编辑文件顶部
+///   场景：一像素不动）；
+/// - 被遮 → 移到光标底沿恰好贴可见区底沿（kimi CLI 光标贴底场景退化
+///   为与旧重排观感对齐；亚行遮挡只移亚行——连续跟随不瞬移）；
 /// - 看历史（in_scrollback）恒 0——用户在翻旧输出，不打扰阅读；
-/// - visible_rows==0（键盘遮满）/负行游标 → 0（移了也看不见的防御）。
-pub fn kb_shift_rows(visible_rows: u32, cursor_row: i32, in_scrollback: bool) -> u32 {
-    if in_scrollback || visible_rows == 0 || cursor_row < 0 {
+/// - visible_h==0（键盘遮满）/负行游标/格高 0 → 0（防御）。
+pub fn kb_shift_px(visible_h_px: u32, cursor_row: i32, in_scrollback: bool, cell_h: u32) -> u32 {
+    if in_scrollback || visible_h_px == 0 || cursor_row < 0 || cell_h == 0 {
         return 0;
     }
-    (cursor_row as u32 + 1).saturating_sub(visible_rows)
+    ((cursor_row as u32 + 1) * cell_h).saturating_sub(visible_h_px)
 }
 
 /// 选择区（网格坐标 (Line, Column)：行号含历史负行——滚进历史后选择
@@ -1697,11 +1699,12 @@ pub struct TermView {
     /// 长按选择区（网格坐标，含历史负行）：Some = 选择模式激活，
     /// 渲染高亮 + 单击复制；None = 无选区
     selection: Option<Selection>,
-    /// 键盘遮挡视口上移行数（2026-09-18 用户拍板「键盘弹起改视口平移」）：
-    /// 网格行数不随键盘变（不再吃 ime inset → 不上报 resize → tmux 零重排），
-    /// 渲染/收集整体下移 -kb_shift 行、触摸逆映射 +kb_shift 行补回。
-    /// 0 = 键盘未弹/光标本可见/看历史中（追光标钳制，kb_shift_rows 纯函数）
-    kb_shift_rows: u32,
+    /// 键盘遮挡视口上移像素数（2026-09-18 用户拍板「键盘弹起改视口平移」；
+    /// 2026-09-24 像素级化）：网格行数不随键盘变（不再吃 ime inset → 不上报
+    /// resize → tmux 零重排），渲染/收集整体下移 -kb_shift_px（整数行部在
+    /// 收集期、像素零头部在合成期/绘制期），触摸逆映射 +kb_shift_px 补回。
+    /// 0 = 键盘未弹/光标本可见/看历史中（追光标钳制，kb_shift_px 纯函数）
+    kb_shift_px: u32,
     /// 视口可见底沿（屏 px 坐标，= 窗高 - 遮挡带）：GPU 收集路径的下裁剪线
     /// （gpu_cells 签名无 inset，遮挡带由 sync_kb_shift 单一源记账）。
     /// u32::MAX = 从未 sync（考题/回放路径）→ 不裁
@@ -1779,7 +1782,7 @@ impl TermView {
             font_px,
             baseline_off,
             selection: None,
-            kb_shift_rows: 0,
+            kb_shift_px: 0,
             kb_view_bottom: u32::MAX,
             theme: crate::theme::Theme::default(),
         }
@@ -1828,19 +1831,23 @@ impl TermView {
     /// 返回是否变化（判等防抖：insets 轮询 100ms 一遍，同值不假报）
     pub fn sync_kb_shift(&mut self, win_h: u32, occlude_px: u32) -> bool {
         let visible_h = win_h.saturating_sub(margin_top(self.cell_h) + MARGIN_Y + occlude_px);
-        let (_, visible_rows) = grid_dims(0, visible_h, self.cell_w, self.cell_h);
         let content = self.term.renderable_content();
         let cursor_row = content.cursor.point.line.0 + content.display_offset as i32;
-        let next = kb_shift_rows(visible_rows, cursor_row, content.display_offset > 0);
-        let changed = next != self.kb_shift_rows;
-        self.kb_shift_rows = next;
+        let next = kb_shift_px(
+            visible_h,
+            cursor_row,
+            content.display_offset > 0,
+            self.cell_h,
+        );
+        let changed = next != self.kb_shift_px;
+        self.kb_shift_px = next;
         self.kb_view_bottom = win_h.saturating_sub(occlude_px);
         changed
     }
 
-    /// 当前视口上移行数（android_app 上报/考题读数）
-    pub fn kb_shift(&self) -> u32 {
-        self.kb_shift_rows
+    /// 当前视口上移像素数（android_app 上报/考题读数）
+    pub fn kb_shift_px(&self) -> u32 {
+        self.kb_shift_px
     }
 
     /// 字体探针（诊断用）：光栅化单字符，返回 (宽, 高, 非零覆盖像素数)。
@@ -1948,11 +1955,12 @@ impl TermView {
     /// 像素 → 网格点 (Line 含历史负行, Column)：屏格走 px_to_cell
     /// （边距/顶带同 render_into 一把尺），网格行 = 屏行 - display_offset
     /// （render_into 屏行 = 网格行 + display_offset 的逆运算）。
-    /// 键盘视口平移补偿（2026-09-18「键盘弹起改视口平移」）：画面已上移
-    /// kb_shift_rows 行，触摸 y 先补回等量再逆映射——眼手同尺
+    /// 键盘视口平移补偿（2026-09-18「键盘弹起改视口平移」；2026-09-24
+    /// 像素级化）：画面已上移 kb_shift_px 像素，触摸 y 先补回等量再逆
+    /// 映射——眼手同尺（像素级后亚行触摸也咬得上画面）
     fn grid_point_at(&self, x: f64, y: f64) -> (i32, u32) {
         let grid = self.term.grid();
-        let y = y + f64::from(self.kb_shift_rows) * f64::from(self.cell_h);
+        let y = y + f64::from(self.kb_shift_px);
         let (col, row) = px_to_cell(
             x,
             y,
@@ -2305,23 +2313,28 @@ impl TermView {
         // 是负的（Line(-offset)），跳过或直接用绝对行号都会让内容不随偏移
         // 移动、每滚一行底部黑一行（实拍「从下到上一行行消失」）
         let offset = content.display_offset as i32;
-        // 键盘视口平移（2026-09-18「键盘弹起改视口平移」）：屏行 = 网格行 +
-        // 显示偏移 - 视口上移；被推出顶沿（屏行<0）的行由下界钳裁剪，
-        // 被键盘/栏带遮住的行（格底越过可见底沿）不进料——网格行数不变，
-        // 画面纯平移零重排
-        let kb_shift = self.kb_shift_rows as i32;
+        // 键盘视口平移（2026-09-18「键盘弹起改视口平移」；2026-09-24 像素级化
+        // ——行级步进被实机判「观感怪」）：屏行 = 网格行 + 显示偏移 - 整数行部；
+        // 像素零头部在落笔坐标里减（py = 格原点 - kb_frac，逐像素亚行平移）。
+        // 被推出顶沿（屏行<0）的行由下界钳裁剪，被键盘/栏带遮住的行（格底
+        // 越过可见底沿）不进料——网格行数不变，画面纯平移零重排
+        let kb_rows = (self.kb_shift_px / self.cell_h.max(1)) as i32;
+        let kb_frac = i64::from(self.kb_shift_px % self.cell_h.max(1));
         // 下裁剪线只认 sync_kb_shift 记的键盘可见底沿（未 sync = u32::MAX
         // 不裁）——不许借 card_bottom_inset：那是壳下缘让位（键栏+输入栏
         // 常驻在减），dump/紧缓冲路径会算出 view_bottom=0 全灭（
-        // spec_后台值守_dump_now 钉实）
-        let view_bottom = self.kb_view_bottom;
+        // spec_后台值守_dump_now 钉实）。零头>0 时多收一整数行补底缝
+        // （整体上移零头后底缘露缝，spec_键盘平移_像素零头与边界多收 钉死）
+        let view_bottom =
+            self.kb_view_bottom
+                .saturating_add(if kb_frac > 0 { self.cell_h } else { 0 });
         // 两遍绘制（2026-08-21 实拍「选中态中文只剩左半」病灶）：先全部背景
         // （含选择高亮），后全部字形。一遍绘制时宽字符（CJK）在格 0 画双宽
         // 字形、墨探进格 1，随后 spacer 格的背景填充（选中=SELECT_BG）把
         // 右半字形盖掉——两遍制让一切背景都在字形之下
         struct Cell2D {
             px: u32,
-            py: u32,
+            py: i64, // 含像素零头（格原点 - kb_frac），可越出 [0, buf_h)——落笔处逐像素裁
             fg: u32,
             bg: u32,
             c: char,
@@ -2329,7 +2342,7 @@ impl TermView {
         }
         let mut cells: Vec<Cell2D> = Vec::new();
         for indexed in content.display_iter {
-            let line = indexed.point.line.0 + offset - kb_shift;
+            let line = indexed.point.line.0 + offset - kb_rows;
             if !(0..self.term.grid().screen_lines() as i32).contains(&line) {
                 continue; // 钳到屏内（含键盘平移推出顶沿的行）
             }
@@ -2376,8 +2389,12 @@ impl TermView {
                 continue; // 整行没入键盘/栏带遮挡带才不进料；半遮的边界行
                 // 照画（被后画的键栏/系统键盘盖掉是真实观感——
                 // 且保持 resize 途中半行照旧的旧契约，dump 紧缓冲
-                // 路径 spec_后台值守_dump_now 钉死）
+                // 路径 spec_后台值守_dump_now 钉死）。view_bottom 已在
+                // 上方按零头加宽一行（补底缝），与 collect_gpu_cells 一把尺
             }
+            // 像素零头在落笔坐标里减：py 转有符号，顶探出顶带内缘的行由
+            // 背景裁剪（y0 钳 margin_top）与 draw_glyph clip_top 逐像素裁
+            let py = i64::from(py) - kb_frac;
             cells.push(Cell2D {
                 px,
                 py,
@@ -2387,16 +2404,24 @@ impl TermView {
                 flags: indexed.cell.flags,
             });
         }
-        // 第一遍：背景。不满格重画（全帧已填 DEFAULT_BG），非默认背景补色块
+        // 第一遍：背景。不满格重画（全帧已填 DEFAULT_BG），非默认背景补色块。
+        // py 含像素零头可为负/探进顶带：y0 钳顶带内缘（margin_top），高相应缩——
+        // 背景色块不许盖住顶带 chrome（与 GPU 路径 grid_clip_top scissor 一把尺）
         for cell in &cells {
             if cell.bg != DEFAULT_BG {
-                frame.fill_rect(cell.px, cell.py, self.cell_w, self.cell_h, cell.bg);
+                let y0 = cell.py.max(i64::from(margin_top(self.cell_h)));
+                let h = self.cell_h as i64 - (y0 - cell.py);
+                if h > 0 && y0 < i64::from(buf_h) {
+                    frame.fill_rect(cell.px, y0 as u32, self.cell_w, h as u32, cell.bg);
+                }
             }
         }
         // 第二遍：字形。空格/控制符（BAR-015：tab 本体）无字形不画；
         // 宽字符第二格（spacer）不画。裁剪宽：宽字符 2 格，其余 1 格——
         // 模糊宽度字符（如 ⇄，宽度判 1 格但 CJK 备用字体是全角字形）的
-        // 墨不许溢进下一格（2026-08-21 实拍）
+        // 墨不许溢进下一格（2026-08-21 实拍）。clip_top = 顶带内缘：
+        // 像素零头把字形顶上顶带的部分逐像素裁掉
+        let clip_top = margin_top(self.cell_h);
         for cell in &cells {
             if !paintable(cell.c) || cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
                 continue;
@@ -2406,7 +2431,9 @@ impl TermView {
             } else {
                 self.cell_w
             };
-            self.draw_glyph(&mut frame, cell.c, cell.px, cell.py, cell.fg, clip_w);
+            self.draw_glyph(
+                &mut frame, cell.c, cell.px, cell.py, cell.fg, clip_w, clip_top,
+            );
         }
     }
 
@@ -2427,13 +2454,18 @@ impl TermView {
         let selection = self.selection;
         let offset = content.display_offset as i32;
         let margin_top = margin_top(self.cell_h);
-        // 键盘视口平移（与 render_into 同源同尺）：屏行 = 网格行 + 显示偏移
-        // - 视口上移；顶沿外/遮挡带内（格底越过 sync_kb_shift 记的可见底沿）
-        // 的行不收集
-        let kb_shift = self.kb_shift_rows as i32;
-        let view_bottom = self.kb_view_bottom;
+        // 键盘视口平移（与 render_into 同源同尺；2026-09-24 像素级化）：
+        // 屏行 = 网格行 + 显示偏移 - 整数行部；像素零头部不进 GpuCell
+        // （py 保持格原点整数），归合成期实例平移（vpush.dy - kb_frac）。
+        // 顶沿外/遮挡带内（格底越过 sync_kb_shift 记的可见底沿）的行不收集；
+        // 零头>0 时多收一整数行补底缝（spec_键盘平移_像素零头与边界多收 钉死）
+        let kb_rows = (self.kb_shift_px / self.cell_h.max(1)) as i32;
+        let kb_frac = self.kb_shift_px % self.cell_h.max(1);
+        let view_bottom =
+            self.kb_view_bottom
+                .saturating_add(if kb_frac > 0 { self.cell_h } else { 0 });
         for indexed in content.display_iter {
-            let line = indexed.point.line.0 + offset - kb_shift;
+            let line = indexed.point.line.0 + offset - kb_rows;
             if !(0..self.term.grid().screen_lines() as i32).contains(&line) {
                 continue;
             }
@@ -6429,8 +6461,21 @@ impl TermView {
     /// 字体选择：主字体缺该字且备用有 → CJK 三件套（prefer_cjk，两格宽适配）；
     /// 双字体都缺 → 记 tofu 目击名单（主字体画 .notdef 方框）。
     /// clip_w = 右缘裁剪宽（格宽的 1 或 2 倍）：模糊宽度字符（宽度判 1 格
-    /// 但落在全角比例的 CJK 字体上，如 ⇄）墨不许溢进下一格的内容区
-    fn draw_glyph(&self, frame: &mut Frame<'_>, c: char, px: u32, py: u32, fg: u32, clip_w: u32) {
+    /// 但落在全角比例的 CJK 字体上，如 ⇄）墨不许溢进下一格的内容区。
+    /// py 有符号 + clip_top（2026-09-24 像素级键盘平移）：零头平移把行顶上
+    /// 顶带时，py 可为负/小于顶带内缘——clip_top 以下的墨逐像素裁掉
+    /// （clip_top=0 退化为旧的「裁出屏」语义）
+    #[allow(clippy::too_many_arguments)] // 裁剪两维（右宽/顶缘）+落笔坐标，拆 struct 反而割断注释链
+    fn draw_glyph(
+        &self,
+        frame: &mut Frame<'_>,
+        c: char,
+        px: u32,
+        py: i64,
+        fg: u32,
+        clip_w: u32,
+        clip_top: u32,
+    ) {
         if self.font.lookup_glyph_index(c) == 0 {
             let covered = self
                 .cjk
@@ -6452,12 +6497,12 @@ impl TermView {
         if metrics.width == 0 || metrics.height == 0 {
             return; // 缺字形/空白字形：fontdue 给空位图，不 panic
         }
-        let top = py as i64 + baseline as i64 - i64::from(metrics.ymin) - metrics.height as i64;
+        let top = py + baseline as i64 - i64::from(metrics.ymin) - metrics.height as i64;
         let clip_right = px as i64 + i64::from(clip_w);
         for gy in 0..metrics.height as u32 {
             let y = top + i64::from(gy);
-            if y < 0 {
-                continue; // 上探出屏（基线偏移 + 高字形）：裁
+            if y < i64::from(clip_top) {
+                continue; // 探进顶带/出屏（基线偏移 + 高字形 / 像素零头上顶）：裁
             }
             if y >= i64::from(frame.h) {
                 break;
@@ -6988,8 +7033,9 @@ pub trait TermEmu: Send {
     /// 键盘遮挡 → 视口上移重算（2026-09-18「键盘弹起改视口平移」，
     /// android_app apply_window_size 调用方先例）：只动视口不碰 grid
     fn sync_kb_shift(&mut self, win_h: u32, occlude_px: u32) -> bool;
-    /// 当前视口上移行数（同调用方上报读数）
-    fn kb_shift(&self) -> u32;
+    /// 当前视口上移像素数（同调用方上报读数；2026-09-24 像素级化——
+    /// 原行数读数被实机判步进观感怪，亚行零头随遮挡带连续跟随）
+    fn kb_shift_px(&self) -> u32;
     fn cell_size(&self) -> (u32, u32);
     /// 运行期改格尺寸（捏合缩放，android_app 双指手势调用方）
     fn set_cell_size(&mut self, cell_w: u32, cell_h: u32);
@@ -7291,8 +7337,8 @@ impl TermEmu for TermView {
     fn sync_kb_shift(&mut self, win_h: u32, occlude_px: u32) -> bool {
         TermView::sync_kb_shift(self, win_h, occlude_px)
     }
-    fn kb_shift(&self) -> u32 {
-        TermView::kb_shift(self)
+    fn kb_shift_px(&self) -> u32 {
+        TermView::kb_shift_px(self)
     }
     fn cell_size(&self) -> (u32, u32) {
         TermView::cell_size(self)

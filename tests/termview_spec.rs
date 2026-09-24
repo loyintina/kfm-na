@@ -5681,30 +5681,36 @@ fn spec_bar097_下池行层_逐像素等价() {
     assert_eq!(diffs, 0, "下池行层与在页版必须逐像素等价（差 {diffs}）");
 }
 
-// ---------- A 档：键盘弹起视口平移（2026-09-18 用户拍板「键盘弹起改视口平移」） ----------
+// ---------- A 档：键盘弹起视口平移（2026-09-18 用户拍板「键盘弹起改视口平移」；
+// 2026-09-24 像素级化——行级步进被用户实机判「观感怪」，分数行 = 理想视口模型
+// （模型在本地/视口独立/tmux 不动）的第一层分数视口） ----------
 // 纪律：网格尺寸与可见视口解耦——键盘弹起 grid 行数纹丝不动（不上报 resize
-// → tmux 零重排），渲染视口整体上移 kb_shift_rows 行让光标露出，触摸逆映射
-// 补平移量。策略 = 追光标：min(需要的量, 遮挡量)——光标本就在可见区则一行
-// 不动（vim 编辑文件顶部零跳动）；光标贴底（kimi CLI）退化为露出即止。
+// → tmux 零重排），渲染视口上移 kb_shift_px 像素让光标底沿恰好贴可见区底，
+// 触摸逆映射补平移量。策略 = 追光标：光标本就在可见区则一像素不动
+// （vim 编辑文件顶部零跳动）；光标贴底（kimi CLI）退化为露出即止。
 
 #[test]
 fn spec_键盘平移_追光标钳制() {
-    use kfm_na::termview::kb_shift_rows;
-    // 光标在可见区内 → 0（vim 编辑文件顶部场景：一行不动）
-    assert_eq!(kb_shift_rows(25, 10, false), 0);
-    // 贴可见区底沿（最后一行可见）→ 0
-    assert_eq!(kb_shift_rows(25, 24, false), 0);
-    // 光标刚被遮一行 → 只移一行（min 钳制，不多移）
-    assert_eq!(kb_shift_rows(25, 25, false), 1);
+    use kfm_na::termview::kb_shift_px;
+    // 光标在可见区内 → 0（vim 编辑文件顶部场景：一像素不动）
+    assert_eq!(kb_shift_px(250, 10, false, 10), 0);
+    // 光标底沿恰好贴可见区底（250 = 25 行×10px）→ 0
+    assert_eq!(kb_shift_px(250, 24, false, 10), 0);
+    // 光标被遮一整行 → 移 10px（一行，min 钳制不多移）
+    assert_eq!(kb_shift_px(250, 25, false, 10), 10);
+    // 亚行精度（像素版核心新语义）：遮 5px 只移 5px——行版在这里
+    // 只能取整成 0 或 10，像素版随遮挡带连续跟随
+    assert_eq!(kb_shift_px(255, 25, false, 10), 5);
     // 光标贴 47 行屏底、键盘遮掉后半（kimi CLI 场景）→ 移到露出为止
-    assert_eq!(kb_shift_rows(25, 46, false), 22);
+    assert_eq!(kb_shift_px(250, 46, false, 10), 220);
     // 看历史（display_offset>0）→ 恒 0，不打扰阅读
-    assert_eq!(kb_shift_rows(25, 46, true), 0);
-    assert_eq!(kb_shift_rows(25, 10, true), 0);
-    // 防御：可见区 0 行（键盘遮满）→ 0（移了也看不见，不做无用功）
-    assert_eq!(kb_shift_rows(0, 46, false), 0);
-    // 防御：负行（历史区游标）→ 0
-    assert_eq!(kb_shift_rows(25, -3, false), 0);
+    assert_eq!(kb_shift_px(250, 46, true, 10), 0);
+    assert_eq!(kb_shift_px(250, 10, true, 10), 0);
+    // 防御：可见区 0px（键盘遮满）→ 0（移了也看不见，不做无用功）
+    assert_eq!(kb_shift_px(0, 46, false, 10), 0);
+    // 防御：负行（历史区游标）→ 0；格高 0（病态）→ 0
+    assert_eq!(kb_shift_px(250, -3, false, 10), 0);
+    assert_eq!(kb_shift_px(250, 46, false, 0), 0);
 }
 
 #[test]
@@ -5722,26 +5728,66 @@ fn spec_键盘平移_遮挡驱动追光标全链() {
     // 窗高 = 顶带 + 5 行格 + 底余量：无遮挡时 5 行全可见
     let win_w = 2 * MARGIN_X + 20 * cw;
     let win_h = mt + 5 * ch + MARGIN_Y;
-    // 无遮挡 → 光标行 4 < 可见 5，不追
+    // 无遮挡 → 光标行 4 底沿 5ch ≤ 可见 5ch，不追
     assert!(!tv.sync_kb_shift(win_h, 0));
-    assert_eq!(tv.kb_shift(), 0);
-    // 遮挡带 = 2 行高 → 可见 3 行，光标行 4 → shift = 4+1-3 = 2
+    assert_eq!(tv.kb_shift_px(), 0);
+    // 遮挡带 = 2 行高 → 可见 3ch，光标底沿 5ch → shift = 2ch px
     assert!(tv.sync_kb_shift(win_h, 2 * ch));
-    assert_eq!(tv.kb_shift(), 2);
+    assert_eq!(tv.kb_shift_px(), 2 * ch);
     // 同值再调 → 判等不抖（轮询路径每 100ms 来一遍，不能假报变化）
     assert!(!tv.sync_kb_shift(win_h, 2 * ch));
-    // GPU 收集：Z 从屏行 4 平移到屏行 2（py = 顶带 + 2 格高）；
-    // A 所在屏行 -2 被推出顶沿 → 裁剪不收集
+    // GPU 收集（整数行部分）：Z 从屏行 4 平移到屏行 2（py = 顶带 + 2 格高，
+    // 像素零头归合成期）；A 所在屏行 -2 被推出顶沿 → 裁剪不收集
     let cells = tv.collect_gpu_cells(win_w, win_h);
     let z = cells.iter().find(|c| c.c == 'Z').expect("Z 必须可见");
-    assert_eq!(z.py, mt + 2 * ch, "Z 必须随视口平移 2 行");
+    assert_eq!(z.py, mt + 2 * ch, "Z 必须随视口平移 2 行（整数部）");
     assert!(!cells.iter().any(|c| c.c == 'A'), "被推出顶沿的行必须裁剪");
     // 遮挡收回 → 归 0，Z 回到屏行 4
     assert!(tv.sync_kb_shift(win_h, 0));
-    assert_eq!(tv.kb_shift(), 0);
+    assert_eq!(tv.kb_shift_px(), 0);
     let cells = tv.collect_gpu_cells(win_w, win_h);
     let z = cells.iter().find(|c| c.c == 'Z').expect("Z 必须回原地");
     assert_eq!(z.py, mt + 4 * ch);
+}
+
+#[test]
+fn spec_键盘平移_像素零头与边界多收() {
+    use kfm_na::termview::{MARGIN_X, MARGIN_Y, margin_top};
+    let (cw, ch) = (CELL_W, CELL_H);
+    let mt = margin_top(ch);
+    // 8 行网格：Z 在第 4 行（下方留 3 行空白——遮挡带下沿要穿过的行）
+    let mut tv = host_termview(20, 8);
+    tv.feed(b"A");
+    for _ in 0..4 {
+        tv.feed(b"\r\n");
+    }
+    tv.feed(b"Z");
+    let win_w = 2 * MARGIN_X + 20 * cw;
+    let win_h = mt + 8 * ch + MARGIN_Y;
+    // 遮挡 3.5 行 → 可见 4.5ch，光标底沿 5ch → shift = 0.5ch = 18px
+    // （行版只能 0 或 36——像素版随遮挡带连续，这是「跟随不瞬移」的数）
+    assert!(tv.sync_kb_shift(win_h, 3 * ch + ch / 2));
+    assert_eq!(tv.kb_shift_px(), ch / 2);
+    // 整数行部分 R=0：Z 仍在屏行 4；像素零头 18px 归合成期平移
+    let cells = tv.collect_gpu_cells(win_w, win_h);
+    let z = cells.iter().find(|c| c.c == 'Z').expect("Z 必须可见");
+    assert_eq!(z.py, mt + 4 * ch);
+    // 边界多收：view_bottom = win_h - 3.5ch，第 6 行 py = mt+6ch 越线但
+    // 零头>0 → 多收一行（合成期整体上移零头后，它恰好补上底缘的缝；
+    // 不收 = 底缘黑一截，随零头增大越来越宽）
+    assert!(
+        cells.iter().any(|c| c.py == mt + 6 * ch),
+        "零头>0 时边界行必须多收一行补底缝"
+    );
+    // 对照：零头=0（遮挡恰 4 行 → shift 恰 1 行）不多收——同一条边界
+    // 行整行没入遮挡带，照行版旧契约裁剪
+    assert!(tv.sync_kb_shift(win_h, 4 * ch));
+    assert_eq!(tv.kb_shift_px(), ch);
+    let cells = tv.collect_gpu_cells(win_w, win_h);
+    assert!(
+        !cells.iter().any(|c| c.py == mt + 5 * ch),
+        "零头=0 时不得多收（行版契约不回退）"
+    );
 }
 
 #[test]
@@ -5752,9 +5798,9 @@ fn spec_键盘平移_光标本可见则不追() {
     let mut tv = host_termview(20, 5);
     tv.feed(b"Q"); // 光标停在第 0 行（vim 编辑文件顶部场景）
     let win_h = mt + 5 * ch + MARGIN_Y;
-    // 遮挡 2 行高：可见 3 行，光标行 0 远在可见区内 → 一行不动
+    // 遮挡 2 行高：可见 3 行，光标行 0 远在可见区内 → 一像素不动
     assert!(!tv.sync_kb_shift(win_h, 2 * ch));
-    assert_eq!(tv.kb_shift(), 0);
+    assert_eq!(tv.kb_shift_px(), 0);
     let _ = (MARGIN_X, cw);
 }
 
@@ -5773,11 +5819,11 @@ fn spec_键盘平移_看历史时零平移() {
     tv.scroll_lines(2);
     assert!(tv.display_offset() > 0);
     assert!(!tv.sync_kb_shift(win_h, 2 * ch));
-    assert_eq!(tv.kb_shift(), 0);
+    assert_eq!(tv.kb_shift_px(), 0);
     // 回到底部贴最新 → 恢复追光标
     tv.scroll_to_bottom();
     assert!(tv.sync_kb_shift(win_h, 2 * ch));
-    assert!(tv.kb_shift() > 0);
+    assert!(tv.kb_shift_px() > 0);
 }
 
 #[test]
@@ -5792,7 +5838,7 @@ fn spec_键盘平移_触摸逆映射补平移() {
     tv.feed(b"hello world"); // 落在网格行 4
     let win_h = mt + 5 * ch + MARGIN_Y;
     assert!(tv.sync_kb_shift(win_h, 2 * ch));
-    assert_eq!(tv.kb_shift(), 2);
+    assert_eq!(tv.kb_shift_px(), 2 * ch);
     // 网格行 4 平移后画在屏行 2：点屏行 2 的像素必须选中网格行 4 的词
     let x = f64::from(MARGIN_X + 2 * cw) + 1.0;
     let y = f64::from(mt + 2 * ch) + 5.0;
