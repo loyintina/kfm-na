@@ -34,8 +34,12 @@
 > 会话行表退役 → 卡高恒定；TunnelSnap 加 leg/port_open/reverse_up/
 > quic_fails/quic_configured 五字段；TunnelCmd 加 TripQuic/HealQuic。
 > A 档：svc_card/link_card 新钉 + 变异五咬全咬住。设计全文入
-> docs/active/解析页.md §六-15。待用户终验：热更上机后四口行与
-> 双钮观感/行为。
+> docs/active/解析页.md §六-15。**同日全批用户终验通过（「应该都
+> 过了」）结案**：BAR-144/146/147/149 + 通道段观感全过——现场
+> 实证：切回前台数秒通道自愈（9022 伴生重绑）、[投 QUIC]/[手动
+> 重连] 钮遥测到账、钮面舞步 redroid 判绿。端口形态备忘：数据
+> 面已是 QUIC(62633) 主/ssh 备（跳闸降级），反连面 9022 仍是
+> 唯一推送路、62694 是「预留 M4」占位——反连 QUIC 化未立项。
 
 ## 当前位置（2026-09-23)
 
