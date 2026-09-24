@@ -122,6 +122,10 @@ bash scripts/test-bar114-modal-cursor.sh || { echo "❌ BAR-114 模态压顶守�
 # 2026-09-23 同步挂入：BAR-136 pack-toolchain 冻结韧性契约钉（8022 长 tar
 # 流被 vivo 冻结掐死三跑命案——续传/对账/绝对路径/files-only 四契约）
 bash scripts/test-pack-toolchain.sh || { echo "❌ BAR-136 pack 契约考题不过"; exit 1; }
+# 2026-09-24 同步挂入：BAR-150 半截核不落位契约钉（cat&&mv 假原子——
+# ssh 断流 cat 退出 0，2MB 半截核直落位命案；对账先于 mv/失败 exit/
+# mv 不挂 cat 链三言）
+bash scripts/test-na-push-so-atomic.sh || { echo "❌ BAR-150 半截核契约考题不过"; exit 1; }
 
 echo "=== [chain 10/11] 考卷覆盖矩阵棘轮闸（2026-08-27,自我测试缺口④） ==="
 # 治「新功能补题靠自觉」:各模块 pub 项被 tests/ 引用数,棘轮只许降

@@ -73,10 +73,18 @@ if [ "${ALLOW_STALE:-0}" != 1 ]; then
 fi
 echo "=== 推送核心 ($SIZE 字节) → hot/ ==="
 na "mkdir -p $NA_HOT"
-# 原子防半写:.new → mv(若推送中断,旧核心不受损);
-# 推前留档 .so.last(2026-08-30 回退硬化):mv .last 回原名 + na-restart.sh = 秒级回退
-na_ssh "cat > $NA_HOT/libkfm_na.so.new && { [ -f $NA_HOT/libkfm_na.so ] && cp $NA_HOT/libkfm_na.so $NA_HOT/libkfm_na.so.last; mv $NA_HOT/libkfm_na.so.new $NA_HOT/libkfm_na.so; }" \
-    < "$LOCAL_TMP"
+# 原子防半写三道（BAR-150）：①.new 先落地；②**md5 对账过了才许 mv**——
+# 旧版 `cat > .new && mv` 的 && 链是假原子：ssh 中途断流（冻结/切网）
+# 远端 cat 收到 EOF 照样退出 0，半截核直接落位（2026-09-24 实踩：
+# 2MB 半截核落位，靠 .last 回滚）；③推前留档 .so.last = 秒级回退
+LMD5=$(md5sum "$LOCAL_TMP" | awk '{print $1}')
+na_ssh "cat > $NA_HOT/libkfm_na.so.new" < "$LOCAL_TMP"
+RMD5=$(na "md5sum $NA_HOT/libkfm_na.so.new 2>/dev/null | awk '{print \$1}'" || true)
+if [ "$RMD5" != "$LMD5" ]; then
+    echo "❌ 传输对账失败——半截核不许落位（local=$LMD5 remote=${RMD5:-读不到}）；.new 留远端待续传/诊断，现行核未动" >&2
+    exit 65
+fi
+na "{ [ -f $NA_HOT/libkfm_na.so ] && cp $NA_HOT/libkfm_na.so $NA_HOT/libkfm_na.so.last; mv $NA_HOT/libkfm_na.so.new $NA_HOT/libkfm_na.so; }"
 na "ls -la $NA_HOT/"
 if [ "$NO_RESTART" = 1 ]; then
     echo "✅ 热更核心已就位(--no-restart:不重启,手动划掉重开生效)"
