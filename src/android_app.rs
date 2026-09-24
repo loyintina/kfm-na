@@ -2323,7 +2323,7 @@ impl App {
                         && pt.2.is_none()
                         && let (Some(page), Some((sw, sh))) = (&self.parser_page, self.screen_px())
                     {
-                        let (snap, hit_result, conn_hit, tap_desc) = {
+                        let (snap, hit_result, conn_hit, tap_desc, geo_cmp) = {
                             let pg = page.lock().unwrap();
                             // 眼手同尺的真义（BAR-145 修复，2026-09-24 用户
                             // 拍板）：命中吃**屏上正显示的那一代**快照——
@@ -2342,6 +2342,52 @@ impl App {
                                 self.chrome_inset() + self.cur_bar_h(),
                                 &snap,
                             );
+                            // BAR-145 复发案仪器（2026-09-25）：活体 sig 七维
+                            // + 行带 vs 屏代账对表——异 = 该重烘没重烘（纹理
+                            // 滞留），差维直接指认漏的 sig 维；同而肉眼仍漂
+                            // = 病灶在纹理之下（合成/表面层）
+                            let live_sig = [
+                                u64::from(sw),
+                                u64::from(sh),
+                                u64::from(self.chrome_inset()),
+                                u64::from(self.cur_bar_h()),
+                                pg.snap().epoch,
+                                crate::tunnel::snap().map_or(0, |s| s.lock().unwrap().epoch),
+                                u64::from(crate::self_restart::restart_armed(
+                                    crate::report::boot_ms() as u64,
+                                )),
+                            ];
+                            let live_rows = g
+                                .lay
+                                .rows
+                                .iter()
+                                .enumerate()
+                                .map(|(i, r)| format!("{i}:{}-{}", r.y, r.y + i64::from(r.h)))
+                                .collect::<Vec<_>>()
+                                .join(" ");
+                            let geo_cmp = match crate::ui::parser_page::baked_geo() {
+                                Some(bg) => {
+                                    let sig_same = bg.sig == live_sig;
+                                    let rows_same = bg.rows == live_rows;
+                                    let age =
+                                        (crate::report::boot_ms() as u64).saturating_sub(bg.at_ms);
+                                    if sig_same && rows_same {
+                                        format!("几何对表同(账龄{age}ms)")
+                                    } else {
+                                        format!(
+                                            "几何对表异(sig{} rows{} 账龄{}ms 屏代sig{:?} 活体sig{:?} 屏代行[{}] 活体行[{}])",
+                                            if sig_same { "同" } else { "异" },
+                                            if rows_same { "同" } else { "异" },
+                                            age,
+                                            bg.sig,
+                                            live_sig,
+                                            bg.rows,
+                                            live_rows
+                                        )
+                                    }
+                                }
+                                None => "几何对表无账".to_string(),
+                            };
                             let h = crate::ui::parser_page::hit(
                                 &g.lay,
                                 pt.0 as i64,
@@ -2421,12 +2467,12 @@ impl App {
                                     g.lay.list_clip.1
                                 )
                             };
-                            (snap, h.map(|hh| (hh, g.mode)), ch, desc)
+                            (snap, h.map(|hh| (hh, g.mode)), ch, desc, geo_cmp)
                         };
                         crate::report::report(
                             "touch",
                             &format!(
-                                "解析页点按 起手({:.0},{:.0}) 抬手({x:.0},{y:.0}) → {tap_desc} 屏代{}",
+                                "解析页点按 起手({:.0},{:.0}) 抬手({x:.0},{y:.0}) → {tap_desc} 屏代{} {geo_cmp}",
                                 pt.0,
                                 pt.1,
                                 crate::ui::parser_page::baked_epoch(),
@@ -6589,25 +6635,27 @@ impl App {
         // BAR-149：自重启武装态必须进 sig——漏维 = 钮面「再点确认」
         // 不重烘（用户见字没变再点 = 意外重启）
         let restart_armed_now = crate::self_restart::restart_armed(crate::report::boot_ms() as u64);
-        if pt_visible
-            && sigs.parser.feed((
-                w,
-                h,
-                ime,
-                bar_h,
-                acc_pt.c1,
-                acc_pt.c2,
-                pt_epoch,
-                tunnel_epoch,
-                restart_armed_now,
-            ))
-        {
+        // BAR-145 复发案仪器：sig 落成变量——烘焙后同值落屏代几何账，
+        // [touch] 时与活体七维对表（漏维 = 该重烘没重烘的直接证据）
+        let pt_sig = (
+            w,
+            h,
+            ime,
+            bar_h,
+            acc_pt.c1,
+            acc_pt.c2,
+            pt_epoch,
+            tunnel_epoch,
+            restart_armed_now,
+        );
+        if pt_visible && sigs.parser.feed(pt_sig) {
             let px = g.slot_canvas(crate::gles_present::ChromeSlot::Parser);
             px.fill(0);
             // BAR-145 仪器（2026-09-24 对表实录：触摸侧 [touch] 已落
             // 命中几何，漂移时渲染侧几何无账 = 死无对证）：烘焙落渲染
             // 侧几何一条——与 [touch] 同尺同格式，两边各算各的时直接
             // 对 epoch/会话数/裁带/行带，不靠运气窗口
+            let mut bake_rows = String::new();
             if let Some(ps) = parser_snap {
                 let geo = parser_geom(w, h, bar_h, ime + bar_h, ps);
                 let rows = geo
@@ -6618,6 +6666,7 @@ impl App {
                     .map(|(i, r)| format!("{i}:{}-{}", r.y, r.y + i64::from(r.h)))
                     .collect::<Vec<_>>()
                     .join(" ");
+                bake_rows = rows.clone();
                 // 仪器三期补名单（2026-09-24 对表实录：行带一致但名单异代
                 // = 名次错位型「行漂移」——用户点看到的名字进的是别家，
                 // 只有行带没有名单时这种漂移在账上完全隐形）
@@ -6654,6 +6703,21 @@ impl App {
             g.slot_bake(crate::gles_present::ChromeSlot::Parser);
             if let Some(ps) = parser_snap {
                 crate::ui::parser_page::note_baked_snap(ps);
+                // BAR-145 复发案仪器：屏代几何账（sig 七维+行带）——
+                // [touch] 对表的右半本
+                crate::ui::parser_page::note_baked_geo(crate::ui::parser_page::BakedGeo {
+                    sig: [
+                        u64::from(w),
+                        u64::from(h),
+                        u64::from(ime),
+                        u64::from(bar_h),
+                        pt_epoch,
+                        tunnel_epoch,
+                        u64::from(restart_armed_now),
+                    ],
+                    rows: bake_rows,
+                    at_ms: crate::report::boot_ms() as u64,
+                });
             }
         }
         // 环境卡柱层（2026-09-21 环境卡重做）：**滑动全在合成期**——

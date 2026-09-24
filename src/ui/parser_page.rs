@@ -700,3 +700,30 @@ pub fn baked_snap() -> Option<ParserPageSnap> {
 pub fn baked_epoch() -> u64 {
     BAKED_SNAP.lock().unwrap().as_ref().map_or(0, |s| s.epoch)
 }
+
+// ── BAR-145 复发案仪器（2026-09-25）─────────────────────────────────
+// 屏代几何账：烘焙时刻的 sig 七维 + 行带。9-24 夜复发实录 [bake]/[touch]
+// 两账行带全程相等而用户肉眼错位仍在——证明两账之间断一环：纹理可能滞在
+// 更早一代（该重烘没重烘）。[touch] 时对表「活体七维 vs 屏代七维」：
+// 异 = 纹理滞留，差的那一维直接指认漏的 sig 维；同 = 病灶在纹理之下
+// （合成/表面层），仪器升级方向随之前移。accent 两色不入表（不挪几何）
+
+/// 屏代几何（烘焙时刻的 sig 七维：w/h/ime/bar_h/插件代/隧道代/重启武装）
+#[derive(Clone, Debug)]
+pub struct BakedGeo {
+    pub sig: [u64; 7],
+    pub rows: String,
+    pub at_ms: u64,
+}
+
+static BAKED_GEO: Mutex<Option<BakedGeo>> = Mutex::new(None);
+
+/// 烘焙完成落几何账（android_app slot_bake(Parser) 处唯一调用方）
+pub fn note_baked_geo(geo: BakedGeo) {
+    *BAKED_GEO.lock().unwrap() = Some(geo);
+}
+
+/// 屏代几何账（[touch] 对表调用方）
+pub fn baked_geo() -> Option<BakedGeo> {
+    BAKED_GEO.lock().unwrap().clone()
+}
