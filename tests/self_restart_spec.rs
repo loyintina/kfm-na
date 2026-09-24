@@ -31,3 +31,21 @@ fn spec_武装判定_边界() {
     assert!(!armed_at(5000, 5000), "边界时刻该落回（开区间）");
     assert!(!armed_at(5000, 5001));
 }
+
+/// BAR-149 源码守卫（2026-09-24 redroid 判卷定罪：武装态不进解析槽
+/// 烘焙 sig = 钮面「再点确认」永不重烘的死钮面——用户见字没变再点 =
+/// 意外重启）：①sig 必须含武装态维（漏维 = 武装不重烘）；②事件环
+/// 必须有翻相泵（armed 是时间函数无事件驱动，漏泵 = 落回后钮面卡死）。
+/// 两处都是「漏了就静默」的装配点，纯函数考题管不到，源码守卫钉死
+#[test]
+fn spec_bar149_武装态进烘焙sig_翻相泵在环() {
+    let src = include_str!("../src/android_app.rs");
+    assert!(
+        src.contains("let restart_armed_now = crate::self_restart::restart_armed("),
+        "解析槽烘焙 sig 的武装态维必须真从 restart_armed( 喂（BAR-149：恒值/漏维 = 死钮面）"
+    );
+    assert!(
+        src.contains("if restart_armed != self.restart_armed_last {"),
+        "事件环必须有武装态翻相泵（BAR-149：armed 是时间函数无事件驱动，漏泵 = 落回后钮面卡死）"
+    );
+}

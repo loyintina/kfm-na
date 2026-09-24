@@ -53,7 +53,7 @@
 | `src/tmux_ctl.rs` | 10 | 10 | 0 | — |
 | `src/tmux_exec.rs` | 1 | 1 | 0 | — |
 | `src/trace.rs` | 12 | 8 | 4 | TRACE_CAP format_tail dump_all dump_tail |
-| `src/tunnel.rs` | 31 | 27 | 4 | check_ssh_fields NA_SSHD_PORT request_reconnect request_resume_kick |
+| `src/tunnel.rs` | 33 | 27 | 6 | check_ssh_fields NA_SSHD_PORT request_reconnect request_resume_kick request_trip_quic request_heal_quic |
 | `src/ui/accent.rs` | 6 | 6 | 0 | — |
 | `src/ui/ai_page.rs` | 7 | 7 | 0 | — |
 | `src/ui/cfg_page.rs` | 68 | 63 | 5 | DROPDOWN_ENTER_MS DROPDOWN_EXIT_MS DROPDOWN_PICK_SYNC_MS register_cfg_page cfg_page_handle |
@@ -67,7 +67,7 @@
 | `src/ui/fx_spring.rs` | 8 | 8 | 0 | — |
 | `src/ui/gear.rs` | 7 | 7 | 0 | — |
 | `src/ui/keybar.rs` | 1 | 1 | 0 | — |
-| `src/ui/link_card.rs` | 10 | 7 | 3 | FIELD_GAP SESS_H SESS_GAP |
+| `src/ui/link_card.rs` | 9 | 8 | 1 | FIELD_GAP |
 | `src/ui/modal.rs` | 19 | 17 | 2 | MODAL_LABEL_H MODAL_MAX_MARGIN_Y |
 | `src/ui/orb.rs` | 5 | 5 | 0 | — |
 | `src/ui/panel_drag.rs` | 12 | 7 | 5 | DRAG_DIR_LOCK RELEASE_PROGRESS VELOCITY_WINDOW_MS locked current_offset |
@@ -76,7 +76,7 @@
 | `src/ui/prompt_bar.rs` | 5 | 4 | 1 | row_of |
 | `src/ui/seam.rs` | 24 | 24 | 0 | — |
 | `src/ui/stage.rs` | 7 | 7 | 0 | — |
-| `src/ui/svc_card.rs` | 6 | 5 | 1 | FIELD_GAP |
+| `src/ui/svc_card.rs` | 12 | 10 | 2 | FIELD_GAP head_word |
 | `src/ui/sys_card.rs` | 22 | 18 | 4 | FIELD_GAP card_h_now local_y bar_geom |
 | `src/ui/tab_bar.rs` | 27 | 27 | 0 | — |
 | `src/ui/viewport_push.rs` | 2 | 2 | 0 | — |

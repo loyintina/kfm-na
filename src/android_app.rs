@@ -269,6 +269,9 @@ struct App {
     sess_modes: std::collections::HashMap<&'static str, u32>,
     /// 有新输出/尺寸变化待渲染
     dirty: bool,
+    /// 自重启武装态翻相泵的上次值（BAR-149：武装/落回是时间函数，
+    /// 无事件驱动——about_to_wait 每圈照准，翻相即置脏重烘钮面）
+    restart_armed_last: bool,
     /// 会话终了（exited/failed）后定格最后一屏，出向不再发
     session_over: bool,
     /// 会话健康牌 ×2（断线重连）：字段语义见 SessHealth
@@ -519,7 +522,7 @@ type PoolFxSig = (u32, u32, u32, u32, u32, u32);
 /// 内容代际, 行表哈希)
 type LowerRowsSig = (u32, u32, u32, u32, u32, u32, u64, u64);
 /// 解析槽签名（与 LowerRowsSig 同形状不同语义——别名分开，谁改维度不殃及对方）
-type ParserSig = (u32, u32, u32, u32, u32, u32, u64, u64);
+type ParserSig = (u32, u32, u32, u32, u32, u32, u64, u64, bool);
 
 #[derive(Default)]
 struct LayerSigs {
@@ -6342,6 +6345,9 @@ impl App {
         // （会话表/附着/命名/确认任何变更都必触发重烘焙，漏维 = 鬼影）
         let pt_epoch = parser_snap.map_or(0, |ps| ps.epoch);
         let tunnel_epoch = crate::tunnel::snap().map_or(0, |s| s.lock().unwrap().epoch);
+        // BAR-149：自重启武装态必须进 sig——漏维 = 钮面「再点确认」
+        // 不重烘（用户见字没变再点 = 意外重启）
+        let restart_armed_now = crate::self_restart::restart_armed(crate::report::boot_ms() as u64);
         if pt_visible
             && sigs.parser.feed((
                 w,
@@ -6352,6 +6358,7 @@ impl App {
                 acc_pt.c2,
                 pt_epoch,
                 tunnel_epoch,
+                restart_armed_now,
             ))
         {
             let px = g.slot_canvas(crate::gles_present::ChromeSlot::Parser);
@@ -7456,6 +7463,14 @@ impl ApplicationHandler for App {
             if crate::self_restart::poll_flag(crate::report::boot_ms() as u64) {
                 crate::report::report("term", "自重启旗标见到——完全重启");
                 self.self_restart_exec();
+            }
+            // 自重启武装态翻相泵（BAR-149）：武装/落回都是时间函数，
+            // 无事件驱动——每圈照准，翻相即置脏（漏了 = 3s 落回后钮面
+            // 卡死「再点确认」，或武装后钮面不翻）
+            let restart_armed = crate::self_restart::restart_armed(crate::report::boot_ms() as u64);
+            if restart_armed != self.restart_armed_last {
+                self.restart_armed_last = restart_armed;
+                self.dirty = true;
             }
             // 服务卡数据面（2026-09-20）：可见性喂轮询器（不可见不轮
             // 纪律），快照换代 → 脏帧重烘卡面
