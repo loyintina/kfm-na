@@ -22,12 +22,24 @@
 >   腾 9022）、反连腿死只记账不动 TunnelState、手动重连双腿同收；
 >   TunnelSnap 加 `rev_quic_up`/`rev_quic_fails`。钉 spec_m4_* 双钉
 >   变异双咬。
-> - M4-4 待做：通道卡「QUIC 62694」行换真状态（今「预留 M4」占位）、
->   「反连 9022」行反映 QUIC 反连相。
-> - M4-5 待做：服务器 na-server 部署 NA_QUIC_REV_BIND=0.0.0.0:62694
->   （先查部署形态：systemd？现行 NA_QUIC_BIND 在哪配的）+ 双目标
->   编核推手机 + 真链判卷（ss 见 na-server 持 9022、na_ssh 走 QUIC、
->   杀反连腿验 ssh 兜底接上）。
+> - M4-4 ✅（400cbf0）：通道卡「QUIC 62694」行换 rev_quic_row 四相
+>   真状态，「反连 9022」行加 QUIC 反连相，钉 spec_m4_反连* 双咬。
+> - M4-5 在途：部署面 a3f70e8（unit/spawn 双路带 62694）+ 服务器
+>   kfm-na-server.service 常驻双绑。真链首判全绿（反连认领→
+>   na-server 持 9022、na_ssh 走 QUIC、ssh 娃 Full→None 收编）；
+>   **兜底演练揪出 BAR-151 反连腿僵尸**（重启 na-server，反连腿
+>   挂 accept_bi 无死信——4h idle 上限，9022 无人绑）→ 修 =
+>   REV_IDLE_TIMEOUT=60s（fb2437e，钉 spec_m4_反连死寂判死_常量
+>   契约变异咬）。**同 commit 扫入 BAR-145 [touch] 点按遥测**
+>   （fmt --all 后 git add -u 误并——解析页点按抬手落「指位 vs
+>   UI 响应」一条账，挂起案仪器先行；bugs.md 两行已同步）。
+>   待办：新核（fb2437e）上机后兜底演练复核——重启 na-server，
+>   60s 内反连腿定罪 → ssh 伴生接 9022 → 服务器回来反连腿复活 →
+>   角色换 None → na-server 重绑 9022。**复核全绿（2026-09-24 午）**：
+>   五拍时序逐行对上（timed out 定罪→伴生 spawn→反连腿重拉→
+>   角色收编→重认领），PROBE2-OK 走 QUIC 反连通。**M4 全里程碑
+>   代码+真链判卷毕，待用户通道卡肉眼终验**（62694 行应显「在线」、
+>   9022 行显「QUIC 反连在线」）。
 
 ## 当前位置（2026-09-24)
 
