@@ -39,10 +39,11 @@ pub const UNIT_NAME: &str = "kfm-na-server.service";
 /// 断电重启都不影响它）。四条纪律写进 unit：①只绑回环 127.0.0.1（公网
 /// 不可达 = 安全语义，与 HEALTH_URL 同尺）；②`NA_IDLE_EXIT_SECS=0`
 /// 永不自退（常驻的全部意义，取代自持模式的 1800s 自退）；③
-/// `Restart=always` 收尸（崩了自己起，不靠 na 的探针兜）；④QUIC 腿
-/// 常驻（2026-09-23 拍板，设计 quic隧道.md §九）：UDP 62633 显式
-/// 0.0.0.0——这是唯一特许公网的腿（双向认证齐备，设计 §四；安全组
-/// 未放口前公网本就到不了，腿在 = 证书/客户端证已生成待接）
+/// `Restart=always` 收尸（崩了自己起，不靠 na 的探针兜）；④QUIC 双腿
+/// 常驻（62633 正连 2026-09-23 拍板 / 62694 反连 M4 2026-09-24，
+/// 设计 quic隧道.md §九）：显式 0.0.0.0——特许公网的仅这两腿
+/// （双向认证齐备，设计 §四；安全组未放口前公网本就到不了，腿在 =
+/// 证书/客户端证已生成待接）
 pub fn unit_content() -> String {
     format!(
         r#"[Unit]
@@ -55,6 +56,7 @@ WorkingDirectory={REPO_DIR}
 Environment=NA_BIND=127.0.0.1:{NA_SERVER_PORT}
 Environment=NA_IDLE_EXIT_SECS=0
 Environment=NA_QUIC_BIND=0.0.0.0:{QUIC_PORT}
+Environment=NA_QUIC_REV_BIND=0.0.0.0:{QUIC_REV_PORT}
 ExecStart={REPO_DIR}/target/release/na-server
 Restart=always
 RestartSec=2
@@ -67,6 +69,7 @@ WantedBy=multi-user.target
         REPO_DIR = REPO_DIR,
         NA_SERVER_PORT = NA_SERVER_PORT,
         QUIC_PORT = crate::settings::QUIC_DEFAULT_PORT,
+        QUIC_REV_PORT = crate::settings::QUIC_REVERSE_PORT,
     )
 }
 
@@ -122,7 +125,7 @@ fi
 # ②降级（无 systemd：Termux 等）：先探活（活 = 接管，绝不重启别人的进程），
 # 再自持 spawn + 30 分钟 idle 自退
 if curl -s -m 2 "$H" >/dev/null 2>&1; then echo {MARK_ALIVE}; echo "mode=external"; exit 0; fi
-setsid nohup env NA_BIND=127.0.0.1:{NA_SERVER_PORT} NA_IDLE_EXIT_SECS=1800 ./target/release/na-server >/tmp/na-server.log 2>&1 </dev/null &
+setsid nohup env NA_BIND=127.0.0.1:{NA_SERVER_PORT} NA_IDLE_EXIT_SECS=1800 NA_QUIC_REV_BIND=0.0.0.0:{QUIC_REV_PORT} ./target/release/na-server >/tmp/na-server.log 2>&1 </dev/null &
 sleep 1
 if curl -s -m 2 "$H" >/dev/null 2>&1; then echo {MARK_SPAWNED}; echo "mode=spawn"; else echo {MARK_FAIL}; exit 1; fi
 "#,
@@ -132,6 +135,7 @@ if curl -s -m 2 "$H" >/dev/null 2>&1; then echo {MARK_SPAWNED}; echo "mode=spawn
         MARK_FAIL = MARK_FAIL,
         REPO_DIR = REPO_DIR,
         NA_SERVER_PORT = NA_SERVER_PORT,
+        QUIC_REV_PORT = crate::settings::QUIC_REVERSE_PORT,
         MARK_SYSTEMD = MARK_SYSTEMD,
         MARK_SPAWNED = MARK_SPAWNED,
     )

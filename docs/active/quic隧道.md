@@ -215,7 +215,10 @@ nsA（客户端）─veth─ nsR（路由器/NAT）─veth─ 服务器（lo）
 （QUIC 反连监听，不设 = 不开；回环闸同正连腿）/ `NA_QUIC_REV_TCP`
 （认领存活期绑的本机 TCP，缺省 127.0.0.1:9022，只准回环）/
 `NA_QUIC_REV_TARGET`（回联手机侧目标口，缺省 8024 = na sshd）。与
-正连腿同证同钥（`NA_QUIC_CERT` 前缀三件套复用）。手机侧零新增配置
+正连腿同证同钥（`NA_QUIC_CERT` 前缀三件套复用）。**部署形态**：
+systemd unit 与降级 spawn 两路都带（na_server_sup `unit_content` /
+`ensure_script` 单一源，钉 spec_常驻_unit内容与模式词）——特许
+公网仅 62633/62694 两腿（双向认证齐备）。手机侧零新增配置
 ——`spawn_rev_quic_leg` 复用 quic 段 pin/psk + `QUIC_REVERSE_PORT`
 常量。看门狗语义：反连腿与数据腿独立（数据跳闸降级 ssh 时反连照跑）；
 `ssh_role` 真值表裁决 ssh 娃角色——双腿都在 = 无娃，各占一路 =

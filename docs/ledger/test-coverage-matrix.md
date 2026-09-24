@@ -76,7 +76,7 @@
 | `src/ui/prompt_bar.rs` | 5 | 4 | 1 | row_of |
 | `src/ui/seam.rs` | 24 | 24 | 0 | — |
 | `src/ui/stage.rs` | 7 | 7 | 0 | — |
-| `src/ui/svc_card.rs` | 12 | 10 | 2 | FIELD_GAP head_word |
+| `src/ui/svc_card.rs` | 13 | 11 | 2 | FIELD_GAP head_word |
 | `src/ui/sys_card.rs` | 22 | 18 | 4 | FIELD_GAP card_h_now local_y bar_geom |
 | `src/ui/tab_bar.rs` | 27 | 27 | 0 | — |
 | `src/ui/viewport_push.rs` | 2 | 2 | 0 | — |

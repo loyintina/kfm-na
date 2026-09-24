@@ -291,6 +291,10 @@ fn spec_常驻_unit内容与模式词() {
         "QUIC 腿常驻：UDP 62633 显式 0.0.0.0（唯一特许公网的腿，双向认证齐备）"
     );
     assert!(
+        u.contains("Environment=NA_QUIC_REV_BIND=0.0.0.0:62694"),
+        "M4 反连腿常驻：UDP 62694 显式 0.0.0.0（特许公网仅这两腿）"
+    );
+    assert!(
         u.contains("ExecStart=/root/kfm-na/target/release/na-server"),
         "绝对路径（systemd 不吃相对路径）"
     );
