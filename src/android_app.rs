@@ -1907,6 +1907,16 @@ impl App {
                         // 全屏 TUI（鼠标上报）协议无像素概念——照旧行级
                         // 滚轮路（零头就地折算成行 tick，同旧路封顶）
                         let lines = (d / f64::from(t.cell_size().1.max(1))).trunc() as i32;
+                        // 仪器（BAR-151 立案：tmux 滚不动/远程 shell 乱码）：
+                        // 滚轮路无账 = 分支对错/模式位死活死无对证
+                        crate::report::report(
+                            "scroll",
+                            &format!(
+                                "滚轮路 d={d:.1} ticks={lines} mode={:#x} cell_h={}",
+                                t.mode_bits(),
+                                t.cell_size().1
+                            ),
+                        );
                         if lines == 0 {
                             return;
                         }
