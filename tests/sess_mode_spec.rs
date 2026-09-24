@@ -103,3 +103,25 @@ fn spec_bar125_快照源_mode_bits随喂入真实变化() {
     tv.feed("\x1b[?1000l".as_bytes());
     assert_eq!(tv.mode_bits() & MOUSE, 0, "?1000l 后快照必须摘掉鼠标位");
 }
+
+// ---------- BAR-151② 重孵模式清场契约（2026-09-24 乱码案） ----------
+// 病灶链：解析页点聚焦标签 → 会话重孵（泵换心脏，网格/模式原样保留）
+// → 新 PTY 在 tmux attach 就绪前是裸 bash → 旧 tmux 的鼠标上报位
+// 带过境 → 滚轮序列 \x1b[<64;列;行M 被 bash 当键盘输入回显成
+// 「三个数字一个 M」乱码（用户复现路径实证）。修复 = 重孵点喂
+// reset_seq 清场——本钉锁死该契约的承重假设：复位序列必须覆盖
+// 全部鼠标面（少一个位 = 乱码窗还在）。
+
+#[test]
+fn spec_bar151_重孵清场_鼠标面全覆盖() {
+    let mouse = TermMode::MOUSE_REPORT_CLICK.bits()
+        | TermMode::MOUSE_DRAG.bits()
+        | TermMode::MOUSE_MOTION.bits()
+        | TermMode::SGR_MOUSE.bits();
+    let s = reset_seq(mouse);
+    for num in [1000, 1002, 1003, 1006] {
+        assert!(s.contains(&format!("\x1b[?{num}l")), "复位序列缺 ?{num}l");
+    }
+    // 全鼠标面都在受管集内（漏管 = 快照/复位两边都管不住它）
+    assert_eq!(mouse & !managed_mask(), 0, "鼠标面必须全在受管 mask 内");
+}

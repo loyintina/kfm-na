@@ -4761,6 +4761,22 @@ impl App {
             crate::gate::pump_register(name, h.events);
             // 新会话 Input 缓存到 Opened（conn pending_input）——输出面先解开
             self.session_over = false;
+            // BAR-151② 乱码案：重孵 = 换远端心脏——旧化身（tmux）的受管
+            // 模式（鼠标上报等）不许带过境。新 PTY 在 attach 就绪前是裸
+            // bash，带过境 = 滚轮序列被当键盘输入回显「64;15;30M」乱码
+            // （用户复现路径：解析页点聚焦标签→重孵窗内滑动）。复位不
+            // 清屏（BAR-135：正文零污染，遗屏留到新输出冲掉）；attach
+            // 完成后 tmux 自己会 DECSET 重开它要的模式
+            if let Some(t) = self.term_handle() {
+                let mut g = t.lock().unwrap();
+                let cur = g.mode_bits();
+                let seq = crate::sess_mode::reset_seq(cur);
+                g.feed(seq.as_bytes());
+                crate::report::report(
+                    "term",
+                    &format!("重孵模式清场: {name} bits {cur:#06x} 复位"),
+                );
+            }
             let (cols, rows) = self.last_grid;
             if let Some(r) = self.router_handle() {
                 r.lock().unwrap().send(TermCmd::Resize { cols, rows });
@@ -4775,6 +4791,10 @@ impl App {
                 crate::report::report_sync("term", &format!("待机换心脏失败: {e}"));
             }
             crate::gate::pump_register(name, h.events);
+            // BAR-151② 待机臂同罪：它切入时吃的恢复快照（BAR-125
+            // sess_modes）还带着旧化身的鼠标位——重孵即远端死过，
+            // 快照清零（切入复位后无快照可恢 = 裸 shell 天然干净）
+            self.sess_modes.insert(name, 0);
         }
         crate::report::report("term", &format!("会话重连: {name} 重孵"));
         self.dirty = true;
