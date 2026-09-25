@@ -594,6 +594,36 @@ fn spec_软件内录_rec钩子消费链() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+// BAR-145 窗口几何对表触发通道（2026-09-25，B 档冒烟钉）：
+// window-state-req 读取/摘除 + 钩子消费链。
+#[test]
+fn spec_bar145_winstate触发与钩子链() {
+    use std::sync::{Arc, Mutex};
+    let dir = std::env::temp_dir().join(format!("winstate-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let d = dir.to_str().unwrap();
+    // ① 无文件 = false
+    assert!(!kfm_na::gate::take_winstate_req(d));
+    // ② 有文件 = true + 摘除（单次触发单次消费）
+    std::fs::write(dir.join("window-state-req"), "").unwrap();
+    assert!(kfm_na::gate::take_winstate_req(d));
+    assert!(!dir.join("window-state-req").exists(), "消费后必须摘除");
+    // ③ 钩子链：无请求不响，有请求甩一次且不重复消费
+    let hits = Arc::new(Mutex::new(0u32));
+    let sink = Arc::clone(&hits);
+    kfm_na::gate::register_winstate_hook(Box::new(move || {
+        *sink.lock().unwrap() += 1;
+    }));
+    kfm_na::gate::winstate_check(d);
+    assert_eq!(*hits.lock().unwrap(), 0);
+    std::fs::write(dir.join("window-state-req"), "").unwrap();
+    kfm_na::gate::winstate_check(d);
+    assert_eq!(*hits.lock().unwrap(), 1);
+    kfm_na::gate::winstate_check(d);
+    assert_eq!(*hits.lock().unwrap(), 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 // 浏览器卡尖刺触发通道（SPKE-web，B 档冒烟钉）：web-req 读取/摘除/空内容容忍。
 #[test]
 fn spec_浏览器尖刺_web触发读取() {

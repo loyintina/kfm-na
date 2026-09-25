@@ -8125,6 +8125,35 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
                 crate::report::report_sync("web", &format!("JNI startWebViewFromGate 失败: {e}"));
             }
         }));
+        // BAR-145（2026-09-25）：gate window-state-req → JNI 甩 MainActivity
+        // .dumpWindowStateFromGate()——从 Java 皮（输入边界外侧）远测系统
+        // 认定的窗口几何，发病/健康对表钉层。vm/gref 第三对（同上两槽）
+        let vm3 = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr() as *mut _) };
+        let gref3 = vm3
+            .attach_current_thread(|env| {
+                let act = unsafe {
+                    jni::objects::JObject::from_raw(env, app.activity_as_ptr() as *mut _)
+                };
+                env.new_global_ref(&act)
+            })
+            .expect("MainActivity GlobalRef#3 建立失败");
+        crate::gate::register_winstate_hook(Box::new(move || {
+            let r = vm3.attach_current_thread(|env| {
+                env.call_method(
+                    &gref3,
+                    jni::jni_str!("dumpWindowStateFromGate"),
+                    jni::jni_sig!(() -> void),
+                    &[],
+                )
+                .map(|_| ())
+            });
+            if let Err(e) = r {
+                crate::report::report_sync(
+                    "winstate",
+                    &format!("JNI dumpWindowStateFromGate 失败: {e}"),
+                );
+            }
+        }));
     }
     let mut app_handler = App {
         android_app: Some(app.clone()),

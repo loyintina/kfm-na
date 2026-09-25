@@ -492,6 +492,7 @@ pub fn spawn_gate_watcher() {
             bar_check(DUMP_DIR); // 通道十一:输入栏事件注入(直调状态核,落回执)
             rec_req_check(DUMP_DIR); // 通道十二:软件内实录(P2,2026-09-08)
             web_req_check(DUMP_DIR); // 通道十三:浏览器卡尖刺(SPKE-web,2026-09-12)
+            winstate_check(DUMP_DIR); // 通道十四:BAR-145 窗口几何对表(2026-09-25)
             alert_tick(tick);
             history_tick(DUMP_DIR, tick);
             thread_census(DUMP_DIR, tick);
@@ -971,6 +972,43 @@ pub fn web_req_check(dir: &str) {
         match WEB_HOOK.lock().unwrap().as_ref() {
             Some(f) => f(url),
             None => crate::report::report("web", "web-req 无钩子（host 或未注册），丢弃"),
+        }
+    }
+}
+
+// ---- 通道十四:window-state-req → BAR-145 窗口几何对表（2026-09-25）----
+// 三方对表已定罪偏移在 winit/系统窗口层，本通道从 Java 皮（输入边界外侧）
+// 远测「系统此刻认为窗口在哪」：触发文件一投，JNI 甩 MainActivity
+// .dumpWindowStateFromGate()——decorView 屏上位置 + 状态栏 inset 落
+// usr/tmp/window-state（快照覆盖写）+ motion-java.log（时序追加）。
+// 发病/健康各读一次直接对表：窗顶=126（状态栏）即 inset desync 钉死。
+
+/// 读 window-state-req：在则摘除返真（单次触发单次消费）
+pub fn take_winstate_req(dir: &str) -> bool {
+    let p = Path::new(dir).join("window-state-req");
+    if !p.exists() {
+        return false;
+    }
+    let _ = std::fs::remove_file(&p);
+    true
+}
+
+type WinstateHook = Box<dyn Fn() + Send>;
+static WINSTATE_HOOK: std::sync::Mutex<Option<WinstateHook>> = std::sync::Mutex::new(None);
+
+/// 注册窗口几何对表钩子（android_app 启动时注册一次；host 不注册=空转合法）
+pub fn register_winstate_hook(f: WinstateHook) {
+    *WINSTATE_HOOK.lock().unwrap() = Some(f);
+}
+
+/// 值守循环消费：有请求就甩钩子
+pub fn winstate_check(dir: &str) {
+    if take_winstate_req(dir) {
+        match WINSTATE_HOOK.lock().unwrap().as_ref() {
+            Some(f) => f(),
+            None => {
+                crate::report::report("winstate", "window-state-req 无钩子（host 或未注册），丢弃")
+            }
         }
     }
 }
