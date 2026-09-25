@@ -415,14 +415,19 @@ struct App {
     /// swap_browse_term 原地刷新（视口锚定内容守恒）；拖动中落地 =
     /// enter_browse_term + 挂账位移补滚；闲时落地 = 温热快照入账
     /// （下次起手零等待）
-    browse_capture: Option<std::sync::mpsc::Receiver<Result<termview::BrowseTerm, String>>>,
+    browse_capture: Option<
+        std::sync::mpsc::Receiver<
+            Result<(termview::BrowseTerm, std::sync::Arc<str>, usize), String>,
+        >,
+    >,
     /// 快照落地前的拖动位移挂账（px，带符号）——capture 往返期间
     /// 手指位移不丢，切入瞬间一并补滚（起手零丢失）
     browse_pending_px: f64,
     /// 温热快照（2026-09-25 用户拍板「不该有切入等待」）：闲时/抬手/
     /// 退浏览时后台抓好的快照 Term——拖动起手直接落位，零感知切入。
-    /// (预建 Term, 抓取时 live feed_seq, 抓取时 boot_ms)
-    browse_warm: Option<(termview::BrowseTerm, u64, u64)>,
+    /// (预建 Term, 抓取时 live feed_seq, 抓取时 boot_ms, 合并全文, hist)
+    /// ——全文/ hist 是 v3 增量合并的基账（温热 = 最近全量，直接当基账）
+    browse_warm: Option<(termview::BrowseTerm, u64, u64, std::sync::Arc<str>, usize)>,
     /// 本铺在途抓取发出时的 live feed_seq（排水时记账用：浏览期刷新
     /// 节流判「live 有没有新活动」靠它比对）
     browse_capture_feed: u64,
@@ -438,6 +443,11 @@ struct App {
     fling: Option<crate::scroll::Fling>,
     /// 甩尾帧泵末次推进时刻（boot_ms 尺——折帧 dt 的基准）
     fling_t_ms: f64,
+    /// v3 增量合并基账（immutable-history 模型）：末次成功抓取的
+    /// 合并全文 + 当时 history_size——浏览期刷新只小抓当前屏，
+    /// 拿本账合并出全量（k = hist_new - hist_old 行照抄旧文前缀）。
+    /// None = 下次抓取走全量（resize/切会话/合并判负后回落）
+    browse_last: Option<(std::sync::Arc<str>, usize)>,
     /// 远程连接配置缓存（启动时装配 conn_provider 那份的 clone）——
     /// tmux 执行通道的 ws url 与 attach 重开连接的命令来源
     remote_conn_cfg: Option<crate::conn::ConnConfig>,
@@ -1998,10 +2008,11 @@ impl App {
                         }
                         self.browse_pending_px += d;
                         if !capture_in_flight {
-                            if let Some((term, _, _)) = self.browse_warm.take() {
+                            if let Some((term, _, _, text, hist)) = self.browse_warm.take() {
                                 // 温热起手：零感知切入 + 挂账位移补滚
                                 // （BAR-154：快照 Term 已预建，落位即换壳，
-                                // 零解析成本）
+                                // 零解析成本）；v3：温热文本同步进合并基账
+                                self.browse_last = Some((text, hist));
                                 {
                                     let mut t = t.lock().unwrap();
                                     t.enter_browse_term(term);
@@ -3853,6 +3864,10 @@ impl App {
         if (cols, rows) != self.last_grid {
             term.lock().unwrap().resize_cells(cols, rows);
             self.last_grid = (cols, rows);
+            // v3：resize = 网格换尺——快照文本/温热账的行数账全作废
+            // （合并模型行数对不上必然回落全量，主动清账省一次空跑）
+            self.browse_warm = None;
+            self.browse_last = None;
             // 真 resize 已到：BAR-124 抖动归位账作废（归位值是按旧网格
             // 武装的，发出去会把尺寸掰回去；且这次净变化本身就有
             // SIGWINCH，重画目的已达成）
@@ -4135,6 +4150,7 @@ impl App {
         self.browse_capture = None;
         self.browse_pending_px = 0.0;
         self.browse_warm = None; // 快照/温热账都是旧会话的画面，一并作废
+        self.browse_last = None; // v3 合并基账同作废（旧会话文本不许当基）
         self.browse_suppress = false; // 换主体 = 新触摸语境，抑制清零
         self.fling = None; // 换主体 = 旧画面的甩尾不许过境
         // BAR-125 模式快照换-mode（在 replay 之前——复位/清屏/恢复
@@ -4475,7 +4491,12 @@ impl App {
     /// BAR-154：快照 Term 在抓取后台线程解析构建（266KB ANSI 解析占
     /// UI 线程 = 用户实报「拖动卡一下」病灶）——exec 通道收文本 →
     /// 同线程剥 BAR-153 验收尾标 → build_browse_term → 转发预建 Term，
-    /// UI 线程排水时只换壳零解析
+    /// UI 线程排水时只换壳零解析。
+    /// v3 immutable-history 合并模型（2026-09-25 晚，用户拍板「视口在
+    /// 中央也该跟贴底一样活」）：浏览期刷新走小抓（当前屏 rows 行）+
+    /// 合并（旧文前缀 hist_old+k 行 = 新历史照抄，新屏接续），全量
+    /// 大抓只在进入/合并判负回落时。历史不可变，合并产物 = 全量抓
+    /// 逐字节同真——刷新成本从 266KB 降到 rows 行，节奏才敢提速
     fn browse_fire_capture(&mut self) {
         if self.browse_capture.is_some() || !self.endpoint_exec_ok() {
             return;
@@ -4492,14 +4513,50 @@ impl App {
             .map(|t| t.lock().unwrap().feed_seq())
             .unwrap_or(0);
         self.browse_capture_ms = crate::report::boot_ms() as u64;
-        let rx = self.endpoint_exec(crate::tmux_ctl::cmd_capture(&name));
+        // 模式裁决：浏览期且有合并基账 = 增量小抓；其余 = 全量大抓
+        let incremental = if self
+            .term_handle()
+            .is_some_and(|t| t.lock().unwrap().browsing())
+        {
+            self.browse_last.clone()
+        } else {
+            None
+        };
+        let rx = match &incremental {
+            Some(_) => self.endpoint_exec(crate::tmux_ctl::cmd_capture_screen(&name)),
+            None => self.endpoint_exec(crate::tmux_ctl::cmd_capture(&name)),
+        };
+        let is_inc = incremental.is_some(); // spawn 闭包吃掉 incremental，report 行留旗
         let (tx, done) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let out = match rx.recv() {
-                Ok(Ok(text)) => match crate::tmux_ctl::capture_strip_marker(&text) {
-                    Some(cap) => Ok(crate::termview::TermView::build_browse_term(
-                        &cap, cols, rows,
-                    )),
+                Ok(Ok(text)) => match crate::tmux_ctl::capture_parse(&text) {
+                    Some((hist, limit, body)) => {
+                        // 增量臂：合并（判负 = Err 回落全量——hist 撞
+                        // history_limit 顶 = 史顶丢旧行，合并会把已丢
+                        // 行当存活，判负）；全量臂：正文即全文。
+                        // 两臂终点同形：(预建 Term, 全文, hist)
+                        let merged = match &incremental {
+                            Some((old_text, hist_old)) => {
+                                if hist >= limit {
+                                    None // 撞顶：史顶在丢行，增量不许合
+                                } else {
+                                    crate::tmux_ctl::merge_capture(
+                                        old_text, *hist_old, rows, hist, &body,
+                                    )
+                                }
+                            }
+                            None => Some(body),
+                        };
+                        match merged {
+                            Some(full) => {
+                                let term =
+                                    crate::termview::TermView::build_browse_term(&full, cols, rows);
+                                Ok((term, std::sync::Arc::from(full), hist))
+                            }
+                            None => Err("增量合并判负，回落全量".to_string()),
+                        }
+                    }
                     None => Err(format!(
                         "快照验收失败（无成功标记）: {:.80}",
                         text.replace(['\r', '\n'], " ")
@@ -4511,7 +4568,17 @@ impl App {
             tx.send(out).ok(); // 接收方（App）随进程死，发送失败静默
         });
         self.browse_capture = Some(done);
-        crate::report::report("scroll", &format!("外置视口抓取发出: {name}"));
+        crate::report::report(
+            "scroll",
+            &format!(
+                "外置视口抓取发出: {name}{}",
+                if is_inc {
+                    "（增量）"
+                } else {
+                    "（全量）"
+                }
+            ),
+        );
     }
 
     /// 列会话（插件数据唯一来源 = 服务器真表，nz P5 同规）：在途不叠
@@ -4678,6 +4745,7 @@ impl App {
         self.browse_capture = None;
         self.browse_pending_px = 0.0;
         self.browse_warm = None; // 快照/温热账都是旧会话的画面，一并作废
+        self.browse_last = None; // v3 合并基账同作废（旧会话文本不许当基）
         self.browse_suppress = false; // 换主体 = 新触摸语境，抑制清零
         self.fling = None; // 换主体 = 旧画面的甩尾不许过境
         match crate::endpoint::current() {
@@ -8083,7 +8151,9 @@ impl ApplicationHandler for App {
                 self.browse_capture = None;
                 let pending = std::mem::take(&mut self.browse_pending_px);
                 match res {
-                    Ok(term) => {
+                    Ok((term, text, hist)) => {
+                        // v3：抓取成功 = 合并基账更新（增量/全量同账——
+                        // 合并产物与全量逐字节同真）
                         let browsing = self
                             .term_handle()
                             .is_some_and(|t| t.lock().unwrap().browsing());
@@ -8097,6 +8167,7 @@ impl ApplicationHandler for App {
                                     &format!("外置视口刷新: offset={}", t.display_offset()),
                                 );
                             }
+                            self.browse_last = Some((text, hist));
                             self.dirty = true;
                         } else if dragging {
                             if let Some(t) = self.term_handle() {
@@ -8111,30 +8182,44 @@ impl ApplicationHandler for App {
                                     ),
                                 );
                             }
+                            self.browse_last = Some((text, hist));
                             self.dirty = true;
                         } else {
-                            self.browse_warm =
-                                Some((term, self.browse_capture_feed, self.browse_capture_ms));
+                            self.browse_warm = Some((
+                                term,
+                                self.browse_capture_feed,
+                                self.browse_capture_ms,
+                                text.clone(),
+                                hist,
+                            ));
+                            self.browse_last = Some((text, hist));
                             crate::report::report("scroll", "外置视口温热快照入账");
                         }
                     }
-                    Err(e) => crate::report::report(
-                        "scroll",
-                        &format!("外置视口快照失败: {e}（不进浏览态，下次拖动重试）"),
-                    ),
+                    Err(e) => {
+                        // v3：抓取失败（含增量合并判负）= 基账作废，下次
+                        // 抓取回全量（判负不自愈会每刷必败空烧 exec）
+                        self.browse_last = None;
+                        crate::report::report(
+                            "scroll",
+                            &format!("外置视口快照失败: {e}（不进浏览态，下次抓取回全量）"),
+                        );
+                    }
                 }
             }
             // 浏览期动态播放（2026-09-25 用户拍板「tmux 窗口就该是动态
-            // 播放的」）：节流 1.5s + live 有新活动才重抓（feed_seq 比对
-            // ——静默期零 exec 空转），落地 swap_browse_term 视口锚定
-            // 内容守恒（BAR-154：offset 补偿底部追加行数）
+            // 播放的」）：v3 增量合并后单次刷新成本降到 rows 行级小抓，
+            // 节奏提速——250ms 节流 + 在途不叠（exec 往返自限 ≈2-4Hz）
+            // + live 有新活动才抓（feed_seq 比对——静默期零 exec 空转），
+            // 落地 swap_browse_term 视口锚定内容守恒（BAR-154：offset
+            // 补偿底部追加行数）
             let browse_stale = self.term_handle().is_some_and(|t| {
                 let t = t.lock().unwrap();
                 t.browsing() && t.feed_seq() > self.browse_capture_feed
             });
             if browse_stale
                 && self.browse_capture.is_none()
-                && (crate::report::boot_ms() as u64).saturating_sub(self.browse_capture_ms) >= 1500
+                && (crate::report::boot_ms() as u64).saturating_sub(self.browse_capture_ms) >= 250
             {
                 self.browse_fire_capture();
             }

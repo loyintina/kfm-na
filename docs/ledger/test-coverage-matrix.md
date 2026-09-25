@@ -50,7 +50,7 @@
 | `src/sys_hist.rs` | 39 | 34 | 5 | BAR_W PLACEHOLDER_PCT hist_idx restore HIST_FORMAT |
 | `src/termview.rs` | 148 | 141 | 7 | AI_THINK_COLLAPSED FONT_CANDIDATES CJK_FONT_CANDIDATES load_cjk_font font_probe MAG_HALF_COLS MAG_HALF_ROWS |
 | `src/theme.rs` | 1 | 1 | 0 | — |
-| `src/tmux_ctl.rs` | 12 | 12 | 0 | — |
+| `src/tmux_ctl.rs` | 15 | 15 | 0 | — |
 | `src/tmux_exec.rs` | 1 | 1 | 0 | — |
 | `src/trace.rs` | 12 | 8 | 4 | TRACE_CAP format_tail dump_all dump_tail |
 | `src/tunnel.rs` | 35 | 29 | 6 | check_ssh_fields NA_SSHD_PORT request_reconnect request_resume_kick request_trip_quic request_heal_quic |

@@ -128,9 +128,24 @@ pub fn cmd_attach(name: &str) -> String {
 /// 目标上不成立，「can't find pane」报错文本直接当快照进了浏览态，
 /// 整页消失）。尾带 && echo 成功标记——tmux 的 exit 码经 sh -c 传不
 /// 回来，报错文本与快照同走 stdout，标记是唯一可靠验收（
-/// capture_strip_marker 判卷）
+/// capture_parse 判卷）
 pub fn cmd_capture(name: &str) -> String {
-    format!("tmux capture-pane -p -e -S - -t '={name}:' && echo KFM_CAP_OK; exit")
+    format!(
+        "tmux display-message -p -t '={name}:' '#{{history_size}} #{{history_limit}}' && tmux capture-pane -p -e -S - -t '={name}:' && echo KFM_CAP_OK; exit"
+    )
+}
+
+/// 增量刷新小抓（v3 immutable-history 合并模型，2026-09-25 用户拍板
+/// 「视口在中央也该跟贴底一样活」）：历史不可变——新输出只把屏顶行
+/// 挤进历史尾，所以刷新只需抓**当前屏**（不带 -S -，rows 行级小文本，
+/// 服务器实证尾空行保留、行数恒等于窗格高），合并时旧全文前
+/// hist_old+k 行（=新历史）照抄、新屏接续。头行 `history_size
+/// history_limit`——算 k = hist_new - hist_old + 判撞顶回落。
+/// 验收同 cmd_capture（&& 链 + 尾标）
+pub fn cmd_capture_screen(name: &str) -> String {
+    format!(
+        "tmux display-message -p -t '={name}:' '#{{history_size}} #{{history_limit}}' && tmux capture-pane -p -e -t '={name}:' && echo KFM_CAP_OK; exit"
+    )
 }
 
 /// 快照验收（BAR-152）：尾带 KFM_CAP_OK 标记 = 真快照，剥标记返回；
@@ -139,6 +154,62 @@ pub fn cmd_capture(name: &str) -> String {
 pub fn capture_strip_marker(out: &str) -> Option<String> {
     let body = out.trim_end().strip_suffix("KFM_CAP_OK")?;
     Some(body.trim_end_matches(['\r', '\n']).to_string())
+}
+
+/// 快照验收 + 史量解析（v3）：剥尾标（BAR-153）后头行 =
+/// `history_size history_limit`（两数缺一不可 = 垃圾，None），返回
+/// (hist, limit, 正文——首尾 \r\n 剥净，无尾换行）。limit 的用途：
+/// hist 撞顶 = 史顶在丢旧行，增量合并会把已丢行当存活——撞顶必须
+/// 回落全量（merge_capture 判负闸在调用方）
+pub fn capture_parse(out: &str) -> Option<(usize, usize, String)> {
+    let body = capture_strip_marker(out)?;
+    let (head, text) = body.split_once('\n')?;
+    let mut it = head.split_whitespace();
+    let hist = it.next()?.parse::<usize>().ok()?;
+    let limit = it.next()?.parse::<usize>().ok()?;
+    Some((hist, limit, text.to_string()))
+}
+
+/// 增量合并（v3 immutable-history 模型，A 档纯文本）：新全文 =
+/// 旧全文 first(hist_old + k) 行（=新历史：旧历史 + 旧屏顶 k 行——
+/// 被新输出挤进历史尾的那 k 行）+ 新屏 rows 行。k = hist_new -
+/// hist_old。判负回落（None = 调用方改全量抓）：k<0（对端清史）/
+/// 旧全文行数 ≠ hist_old+rows（resize 过境/对端重排）/新屏行数
+/// ≠ rows（同因）。history_limit 撞顶时 k 必然伴随丢史顶——合并
+/// 会把已丢行当存活，故调用方须保证 hist 未撞顶才走本路（撞顶
+/// 回全量）
+pub fn merge_capture(
+    old_full: &str,
+    hist_old: usize,
+    rows: usize,
+    hist_new: usize,
+    screen: &str,
+) -> Option<String> {
+    let k = hist_new.checked_sub(hist_old)?;
+    if k > rows {
+        return None; // 刷新间隔内 scrolled 超一屏：挤进历史的行没全被
+        // 旧屏抓到过（旧屏只有 rows 行可抄）——回落全量
+    }
+    let old_lines: Vec<&str> = old_full.split('\n').collect();
+    if old_lines.len() != hist_old + rows {
+        return None;
+    }
+    let screen_lines: Vec<&str> = screen.split('\n').collect();
+    if screen_lines.len() != rows {
+        return None;
+    }
+    let mut out = String::with_capacity(old_full.len() + screen.len());
+    for (i, line) in old_lines[..hist_old + k].iter().enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        out.push_str(line);
+    }
+    for line in &screen_lines {
+        out.push('\n');
+        out.push_str(line);
+    }
+    Some(out)
 }
 
 /// 重孵附着裁决（BAR-144）：自动重孵拿哪条启动命令——

@@ -158,14 +158,20 @@ fn spec_cmd_名字含空格照引() {
 fn spec_cmd_capture_精确匹配带色全史() {
     // '=name:' = 精确匹配会话 + 活动窗格（BAR-152 实机定罪：'=name' 裸用
     // 在 pane 目标上不成立，tmux 报 can't find pane）；-e 保色；-S - 全
-    // 滚动缓冲；尾带成功标记（exit 码经 sh -c 传不回，标记是唯一验收）
+    // 滚动缓冲；头行 history_size（v3 增量合并的锚）；尾带成功标记
+    // （exit 码经 sh -c 传不回，标记是唯一验收）
     assert_eq!(
         tmux_ctl::cmd_capture("amp"),
-        "tmux capture-pane -p -e -S - -t '=amp:' && echo KFM_CAP_OK; exit"
+        "tmux display-message -p -t '=amp:' '#{history_size} #{history_limit}' && tmux capture-pane -p -e -S - -t '=amp:' && echo KFM_CAP_OK; exit"
     );
     assert_eq!(
         tmux_ctl::cmd_capture("my srv"),
-        "tmux capture-pane -p -e -S - -t '=my srv:' && echo KFM_CAP_OK; exit"
+        "tmux display-message -p -t '=my srv:' '#{history_size} #{history_limit}' && tmux capture-pane -p -e -S - -t '=my srv:' && echo KFM_CAP_OK; exit"
+    );
+    // 增量小抓：同头行同尾标，但只抓当前屏（无 -S -）
+    assert_eq!(
+        tmux_ctl::cmd_capture_screen("amp"),
+        "tmux display-message -p -t '=amp:' '#{history_size} #{history_limit}' && tmux capture-pane -p -e -t '=amp:' && echo KFM_CAP_OK; exit"
     );
 }
 
@@ -278,4 +284,51 @@ fn spec_sanitize_超长截断() {
 #[test]
 fn spec_list_format_与cmd_list同源() {
     assert!(cmd_list().contains(tmux_ctl::LIST_FORMAT));
+}
+
+// ---- v3 增量合并（immutable-history 模型：历史不可变，新输出只把屏顶
+// 行挤进历史尾；2026-09-25 用户拍板「视口在中央也该跟贴底一样活」）----
+
+#[test]
+fn spec_capture_parse_史量与正文() {
+    // 正常：头行史量 + 正文还净
+    let (hist, limit, text) = tmux_ctl::capture_parse("2979 10000\r\nL1\r\nL2\r\nKFM_CAP_OK\r\n")
+        .expect("真快照必须过闸");
+    assert_eq!((hist, limit), (2979, 10000));
+    assert_eq!(
+        text, "L1\r\nL2",
+        "pty 的 \\r\\n 行尾原样保留（Term 解析同尺）"
+    );
+    // 无标记/头行非双数/无正文 = None（垃圾永许不进浏览态）
+    assert_eq!(tmux_ctl::capture_parse("L1\r\nL2\r\n"), None);
+    assert_eq!(tmux_ctl::capture_parse("abc def\nL1\nKFM_CAP_OK\n"), None);
+    assert_eq!(tmux_ctl::capture_parse("2979\nL1\nKFM_CAP_OK\n"), None);
+    assert_eq!(tmux_ctl::capture_parse("2979 10000KFM_CAP_OK"), None);
+}
+
+#[test]
+fn spec_增量合并_屏顶行挤进历史尾() {
+    // 旧全文 = 史 3 行 + 屏 4 行；新输出 2 行把旧屏顶 2 行（S0/S1）挤进
+    // 历史尾：hist 3→5，新全文 = 旧前 5 行 + 新屏 4 行
+    let old = "H0\nH1\nH2\nS0\nS1\nS2\nS3";
+    let screen = "S2\nS3\nN0\nN1";
+    let merged = tmux_ctl::merge_capture(old, 3, 4, 5, screen).expect("合法合并必须成");
+    assert_eq!(merged, "H0\nH1\nH2\nS0\nS1\nS2\nS3\nN0\nN1");
+    // k=0（alt 屏 TUI 原地重绘，史不动）：历史照抄 + 屏整换
+    let merged0 = tmux_ctl::merge_capture(old, 3, 4, 3, "A\nB\nC\nD").unwrap();
+    assert_eq!(merged0, "H0\nH1\nH2\nA\nB\nC\nD");
+}
+
+#[test]
+fn spec_增量合并_判负回落全量() {
+    let old = "H0\nH1\nH2\nS0\nS1\nS2\nS3";
+    let screen = "S2\nS3\nN0\nN1";
+    // 清史（hist 缩水）→ None
+    assert_eq!(tmux_ctl::merge_capture(old, 3, 4, 2, screen), None);
+    // k > rows（刷新间隔 scrolled 超一屏，旧屏不够抄）→ None
+    assert_eq!(tmux_ctl::merge_capture(old, 3, 4, 8, screen), None);
+    // 旧全文行数与账不符（resize 过境）→ None
+    assert_eq!(tmux_ctl::merge_capture("X\nY", 3, 4, 5, screen), None);
+    // 新屏行数与账不符（对端重排）→ None
+    assert_eq!(tmux_ctl::merge_capture(old, 3, 4, 5, "A\nB"), None);
 }
