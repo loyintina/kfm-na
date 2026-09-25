@@ -6101,6 +6101,54 @@ impl TermView {
                     crate::ui::fx_preview::preview_tap_ball_alpha(at),
                 );
             }
+            Preview::CurveFling => {
+                // 惯性甩尾双族曲线（scroll.rs Fling 实参数）：位移趋近线
+                // pos(f)=1-0.96^f（c1，快出缓停）+ 速度衰减线
+                // vel(f)=0.96^f（c2，指数衰减）——横轴 0..120 帧 ≈ 2s
+                let frames_max = 120.0f64;
+                for step in 0..iw {
+                    let f = f64::from(step) / f64::from(iw) * frames_max;
+                    let decay = crate::scroll::FLING_DECAY.powf(f);
+                    let px_x = ix + i64::from(step);
+                    for (v, c) in [(1.0 - decay, accent.c1), (decay, accent.c2)] {
+                        let px_y = iy + i64::from(ih) - (v as f32 * ih as f32) as i64;
+                        if px_x >= 0 && px_x < i64::from(frame.w) && px_y >= clip.0 && px_y < clip.1
+                        {
+                            frame.blend_px(px_x as u32, px_y as u32, c, 255);
+                        }
+                    }
+                }
+                // 动画层（乒乓同制）：白球点触后响应点 r8 沿位移趋近线
+                // 快出缓停（Go 骑 0→1），Return 沿原线骑回
+                use crate::ui::fx_preview::PreviewLeg;
+                let (prog, dx) = match crate::ui::fx_preview::preview_leg(at) {
+                    PreviewLeg::Go(rt) => (rt, ix + (i64::from(iw) as f32 * rt) as i64),
+                    PreviewLeg::EndDwell => (1.0, ix + i64::from(iw)),
+                    PreviewLeg::Return(rt) => {
+                        (1.0 - rt, ix + (i64::from(iw) as f32 * (1.0 - rt)) as i64)
+                    }
+                    PreviewLeg::StartDwell => (0.0, ix),
+                };
+                let f = f64::from(prog) * frames_max;
+                let pos = 1.0 - crate::scroll::FLING_DECAY.powf(f);
+                let dyy = iy + i64::from(ih) - (pos as f32 * ih as f32) as i64;
+                for ddy in -8..=8i64 {
+                    for ddx in -8..=8i64 {
+                        if ddx * ddx + ddy * ddy <= 64 {
+                            let (xx, yy) = (dx + ddx, dyy + ddy);
+                            if xx >= 0 && xx < i64::from(frame.w) && yy >= clip.0 && yy < clip.1 {
+                                frame.blend_px(xx as u32, yy as u32, 0x00FF_FFFF, 255);
+                            }
+                        }
+                    }
+                }
+                finger_ball(
+                    frame,
+                    ix,
+                    iy + i64::from(ih),
+                    crate::ui::fx_preview::preview_tap_ball_alpha(at),
+                );
+            }
             Preview::Swipe => {
                 // 轨迹线 + 起点圆 + 终点箭头（横向锁定制示意）
                 let my = iy + i64::from(ih) / 2;

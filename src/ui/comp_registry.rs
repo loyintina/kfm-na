@@ -80,6 +80,8 @@ pub enum Preview {
     Gear,
     /// 弹簧响应曲线（BAR-152 临界阻尼，单调趋近零过冲）
     CurveSpring,
+    /// 惯性甩尾曲线（位移趋近线 + 速度指数衰减线双族）
+    CurveFling,
     /// 缓动曲线（ease-out/in 两族）
     CurveEase,
     /// 手势仲裁示意：圆点 + 水平轨迹 + 方向箭头
@@ -476,6 +478,17 @@ pub const COMPONENTS: &[CompEntry] = &[
         preview: Preview::DropdownAnim,
     },
     CompEntry {
+        name: "惯性甩尾",
+        cat: "动效引擎",
+        status: CompStatus::Active,
+        symbol: "pub fn step",
+        file: "src/scroll.rs",
+        spec: "scroll.rs 惯性甩尾段（kfmv4 canvas-scroll 实测参数直译）",
+        tests: "tests/scroll_spec.rs",
+        desc: "触摸滚动的甩尾物理机：拖动期逐事件采样末速（d/dt×帧尺×1.7 增益），抬手交接 Fling——区间几何级数付位移（双帧一步≡单帧两步，4ms 降频泵等比折帧），速度每帧 ×0.96 指数衰减，启动阈 0.5/燃尽阈 0.3 px/帧。停滞杀速（按住停顿再松手不甩）、新触摸/捏合落地即取消、触底/触史顶即燃尽（浏览态触底 = 与拖动同一判据回 live）。车道：像素车道独占（滚轮车道不甩——滚轮语义归对端）。预览 = 语义化演示：位移趋近线（c1）+ 速度衰减线（c2）双族曲线，白球点触后响应点沿位移线快出缓停。",
+        preview: Preview::CurveFling,
+    },
+    CompEntry {
         name: "视口平移切页",
         cat: "动效引擎",
         status: CompStatus::Active,
@@ -494,6 +507,7 @@ pub fn preview_is_animated(p: Preview) -> bool {
     matches!(
         p,
         Preview::CurveSpring
+            | Preview::CurveFling
             | Preview::CurveEase
             | Preview::Swipe
             | Preview::ViewportPush

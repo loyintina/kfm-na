@@ -39,7 +39,7 @@
 | `src/plugins/ui_fx.rs` | 2 | 2 | 0 | — |
 | `src/providers.rs` | 5 | 5 | 0 | — |
 | `src/report.rs` | 12 | 7 | 5 | set_boot_t0 start_flusher report_sync report_sync_once http_status_is_200 |
-| `src/scroll.rs` | 8 | 8 | 0 | — |
+| `src/scroll.rs` | 18 | 18 | 0 | — |
 | `src/self_restart.rs` | 11 | 5 | 6 | FLAG_REL set_files_dir button_label poll_flag restart restart |
 | `src/sess_mode.rs` | 3 | 3 | 0 | — |
 | `src/session.rs` | 11 | 11 | 0 | — |

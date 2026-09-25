@@ -432,6 +432,12 @@ struct App {
     /// 后手指未抬，在途抓取落地又 enter_browse 把人扔回历史——用户
     /// 实报「页面被静止」病灶）。抬手（Ended）/切会话/attach 清零
     browse_suppress: bool,
+    /// 惯性甩尾在途（2026-09-25「工业级滑动」）：拖动抬手交接的
+    /// Fling（scroll.rs 物理机，kfmv4 canvas-scroll 实测参数直译），
+    /// about_to_wait 帧泵时间切片推进；新触摸落地即取消（kfmv4 同款）
+    fling: Option<crate::scroll::Fling>,
+    /// 甩尾帧泵末次推进时刻（boot_ms 尺——折帧 dt 的基准）
+    fling_t_ms: f64,
     /// 远程连接配置缓存（启动时装配 conn_provider 那份的 clone）——
     /// tmux 执行通道的 ws url 与 attach 重开连接的命令来源
     remote_conn_cfg: Option<crate::conn::ConnConfig>,
@@ -1412,6 +1418,7 @@ impl App {
                     self.press = None;
                     self.sel_drag = None;
                     self.magnifier_at = None;
+                    self.fling = None; // 双指捏合 = 手势变更，甩尾即取消
                     // 拖拽中第二指落下 = 系统级手势变更：强制取消跟手
                     // 拖拽（收尾续播回起点），捏合接管
                     self.finish_panel_drag(true);
@@ -1461,6 +1468,10 @@ impl App {
                         .unwrap_or(crate::termview::CELL_H);
                     self.touch_scroll = Some(crate::scroll::TouchScroll::new(y, f64::from(cell_h)));
                 }
+                // 新触摸落地：惯性甩尾即取消（kfmv4 canvas-scroll 同款），
+                // BAR-154 重返抑制同步解锁（新一次触摸 = 新语境）
+                self.fling = None;
+                self.browse_suppress = false;
             }
             TouchPhase::Moved => {
                 // 断线卡钮手势：只认本指——超 slop 记拖过（抬手不触发）
@@ -1940,7 +1951,8 @@ impl App {
                         //   不靠击键（手机交互：滚回最新 = 回到现在）。
                         // 浏览期永不发滚轮 tick（tick = tmux 默认绑定
                         // 一次跳 5 行的病灶本体）
-                        let d = tracker.moved_px(y);
+                        // 惯性采样：计时变体（甩尾初速的唯一来源）
+                        let d = tracker.moved_px_at(y, crate::report::boot_ms() as f64);
                         if browsing {
                             if d == 0.0 {
                                 return;
@@ -2044,7 +2056,8 @@ impl App {
                         }
                         return;
                     }
-                    let d = tracker.moved_px(y);
+                    // 惯性采样：计时变体（甩尾初速的唯一来源）
+                    let d = tracker.moved_px_at(y, crate::report::boot_ms() as f64);
                     if d == 0.0 {
                         return;
                     }
@@ -2821,10 +2834,33 @@ impl App {
                         );
                     }
                 }
-                let was_tap = self.touch_scroll.take().is_some_and(|t| t.was_tap());
+                let tr = self.touch_scroll.take();
+                let was_tap = tr.as_ref().is_some_and(|t| t.was_tap());
                 // BAR-154：抬手 = 同次触摸终了，触底/击键退场的重返抑制
                 // 在此解锁（下一次拖动重获起手权）
                 self.browse_suppress = false;
+                // 惯性甩尾交接（2026-09-25「工业级滑动」）：像素车道 +
+                // 非点按 → Fling 交 about_to_wait 帧泵。车道判定与拖动
+                // 分流同尺：滚轮车道（mouse_on 且无附着 = 全屏 TUI）不甩
+                // （滚轮语义归对端，本地甩快照会骗用户「对端滚了」）
+                if !was_tap && let Some(tr) = tr {
+                    let fling_ok = self.term_handle().is_some_and(|h| {
+                        let t = h.lock().unwrap();
+                        t.pixel_scroll_enabled()
+                            && !(t.mouse_report_active() && self.cur_attached().is_none())
+                    });
+                    if fling_ok {
+                        self.fling = tr.fling_on_release();
+                        self.fling_t_ms = crate::report::boot_ms() as f64;
+                        if let Some(f) = &self.fling {
+                            crate::report::report(
+                                "scroll",
+                                &format!("惯性甩尾起: v={:.1}px/帧", f.velocity()),
+                            );
+                            self.dirty = true;
+                        }
+                    }
+                }
                 // 外置视口 v2：tmux 附体拖动抬手 = 补一次温热快照（下次
                 // 起手零等待）；点按不抓（tap 无滚动意图，不烧 exec 通道）
                 if !was_tap
@@ -4100,6 +4136,7 @@ impl App {
         self.browse_pending_px = 0.0;
         self.browse_warm = None; // 快照/温热账都是旧会话的画面，一并作废
         self.browse_suppress = false; // 换主体 = 新触摸语境，抑制清零
+        self.fling = None; // 换主体 = 旧画面的甩尾不许过境
         // BAR-125 模式快照换-mode（在 replay 之前——复位/清屏/恢复
         // 铺好底，replay 画的是切入会话自己的状态）：切出方 mode 存账，
         // 切入方先复位受管模式+清屏（用户拍板「切换后直接自动清屏」）
@@ -4642,6 +4679,7 @@ impl App {
         self.browse_pending_px = 0.0;
         self.browse_warm = None; // 快照/温热账都是旧会话的画面，一并作废
         self.browse_suppress = false; // 换主体 = 新触摸语境，抑制清零
+        self.fling = None; // 换主体 = 旧画面的甩尾不许过境
         match crate::endpoint::current() {
             crate::endpoint::EndpointKind::Server => self.parser_attach_server(name),
             crate::endpoint::EndpointKind::Local => self.parser_attach_local(name),
@@ -8099,6 +8137,79 @@ impl ApplicationHandler for App {
                 && (crate::report::boot_ms() as u64).saturating_sub(self.browse_capture_ms) >= 1500
             {
                 self.browse_fire_capture();
+            }
+            // 惯性甩尾帧泵（2026-09-25「工业级滑动」）：时间切片等比
+            // 折帧（4ms 降频泵圈内 ≠ 16.667ms 帧），位移走与拖动同一把
+            // 尺（浏览态滚快照/live 滚终端史/首抓在途进挂账）。燃尽 =
+            // 速度阈（物理机）/触史顶/触底（浏览态触底 = 与拖动同一判据
+            // 回 live）/车道翻牌（设置切关/切全屏 TUI——甩到一半车道没了
+            // 不许甩错对象）
+            if self.fling.is_some() {
+                let now = crate::report::boot_ms() as f64;
+                let dt = now - self.fling_t_ms;
+                self.fling_t_ms = now;
+                let lane_ok = self.term_handle().is_some_and(|h| {
+                    let t = h.lock().unwrap();
+                    t.pixel_scroll_enabled()
+                        && !(t.mouse_report_active() && self.cur_attached().is_none())
+                });
+                let step = if lane_ok {
+                    self.fling.as_mut().and_then(|f| f.step(dt))
+                } else {
+                    None
+                };
+                // kill 语义：Some(原因) = 本圈后甩尾终止
+                let mut kill: Option<&str> = if lane_ok { None } else { Some("车道翻牌") };
+                match step {
+                    None => {
+                        if kill.is_none() {
+                            kill = Some("速度燃尽");
+                        }
+                    }
+                    Some(d) if d != 0.0 => {
+                        let tmux_attached = self.cur_attached().is_some();
+                        if let Some(h) = self.term_handle() {
+                            let mut t = h.lock().unwrap();
+                            if tmux_attached && t.mouse_report_active() {
+                                if t.browsing() {
+                                    t.scroll_px(d);
+                                    let off = t.display_offset();
+                                    let frac = t.scroll_frac_px();
+                                    if d < 0.0 && off == 0 && frac == 0.0 {
+                                        t.exit_browse();
+                                        self.browse_suppress = true; // 与拖动触底同制
+                                        kill = Some("触底回 live");
+                                        crate::report::report(
+                                            "scroll",
+                                            "外置视口触底自动回 live（甩尾，同次触摸抑制重返）",
+                                        );
+                                    } else if d > 0.0 && off >= t.history_size() {
+                                        kill = Some("触史顶");
+                                    }
+                                } else {
+                                    // 首抓在途快照未就位：甩尾位移进挂账，
+                                    // 切入补滚照吃（与拖动同账）
+                                    self.browse_pending_px += d;
+                                }
+                            } else {
+                                t.scroll_px(d);
+                                let off = t.display_offset();
+                                let frac = t.scroll_frac_px();
+                                if (d > 0.0 && off >= t.history_size())
+                                    || (d < 0.0 && off == 0 && frac == 0.0)
+                                {
+                                    kill = Some("触底/顶");
+                                }
+                            }
+                        }
+                        self.dirty = true;
+                    }
+                    Some(_) => {}
+                }
+                if let Some(why) = kill {
+                    self.fling = None;
+                    crate::report::report("scroll", &format!("惯性甩尾尽: {why}"));
+                }
             }
             // 浏览期对端鼠标上报消失（tmux 退出/脱离/重孵清场）= 快照
             // 语义死了——自动退浏览回 live（不退 = 僵尸画面盖活会话）

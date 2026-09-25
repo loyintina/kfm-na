@@ -180,3 +180,113 @@ fn spec_bar151_滚轮挂账_slop段不计入() {
     assert_eq!(t.wheel_pending(), 0.0, "slop 段位移不许进挂账");
     assert!(t.was_tap(), "全程没过阈值仍是点按");
 }
+
+// ---------- 惯性甩尾（2026-09-25「工业级滑动」，参数直译 kfmv4
+// canvas-scroll.ts 实测手感；答案 src/scroll.rs Fling + moved_px_at）----------
+
+use kfm_na::scroll::{
+    FLING_BOOST, FLING_DECAY, FLING_FRAME_MS, FLING_START_MIN, FLING_STOP_MIN, Fling,
+};
+
+#[test]
+fn spec_惯性甩尾_速度采样公式() {
+    // kfmv4 直译：vel = 事件位移/事件间隔 × 帧尺 × 增益（逐事件瞬时采样）
+    let mut t = TouchScroll::new(500.0, CELL);
+    // 越阈第一笔：off=30 超 slop 24，d=6，dt=16.667ms
+    let d0 = t.moved_px_at(530.0, FLING_FRAME_MS);
+    assert_eq!(d0, 6.0, "slop 段不计入位移");
+    // 第二笔：d=30，dt=16.667ms → vel = 30/16.667×16.667×BOOST = 30×BOOST
+    t.moved_px_at(560.0, FLING_FRAME_MS * 2.0);
+    let f = t.fling_on_release().expect("快甩必须出甩尾");
+    assert!(
+        (f.velocity() - 30.0 * FLING_BOOST).abs() < 1e-9,
+        "采样公式必须是 d/dt×帧尺×增益，实得 {}",
+        f.velocity()
+    );
+}
+
+#[test]
+fn spec_惯性甩尾_点按与低速不甩() {
+    // 点按（未越阈）：None
+    let mut t = TouchScroll::new(500.0, CELL);
+    t.moved_px_at(505.0, 10.0);
+    assert!(t.fling_on_release().is_none(), "点按不许甩");
+    // 低速爬行（1px/100ms ≈ 0.28px/帧 < 启动阈 0.5）：None
+    let mut u = TouchScroll::new(500.0, CELL);
+    u.moved_px_at(530.0, 0.0); // 越阈笔（dt=0 不采样）
+    u.moved_px_at(531.0, 100.0);
+    let v = 1.0 / 100.0 * FLING_FRAME_MS * FLING_BOOST;
+    assert!(v < FLING_START_MIN, "考题前提：本速必须低于启动阈");
+    assert!(u.fling_on_release().is_none(), "低速松手不许甩");
+}
+
+#[test]
+fn spec_惯性甩尾_停滞杀速() {
+    // 真实手感死穴：快速拖后按住停顿再松手 = 不许甩（末笔 d=0 把速度
+    // 采样清零）。旧式「速度窗平均」机在这里会误判出甩尾
+    let mut t = TouchScroll::new(500.0, CELL);
+    t.moved_px_at(530.0, 0.0);
+    t.moved_px_at(560.0, FLING_FRAME_MS); // 快甩一笔 30px/帧
+    t.moved_px_at(560.0, 300.0); // 按住不动 ~283ms
+    assert!(
+        t.fling_on_release().is_none(),
+        "按住停顿后松手必须不甩（停滞杀速）"
+    );
+}
+
+#[test]
+fn spec_惯性甩尾_衰减燃尽与位移账() {
+    // v=10px/帧出发：逐帧 ×FLING_DECAY，燃尽阈 0.3。总位移账 = 等比级数
+    // ≈ v/(1-DECAY)=250px（±一帧尾），且 |v| 全程单调降
+    let expect_total = 10.0 / (1.0 - FLING_DECAY);
+    let mut f = Fling::new(10.0);
+    let mut total = 0.0;
+    let mut last_v = f.velocity().abs();
+    let mut frames = 0;
+    loop {
+        frames += 1;
+        assert!(frames < 1000, "衰减机必须燃尽不许永动");
+        match f.step(FLING_FRAME_MS) {
+            Some(d) => {
+                total += d;
+                let v = f.velocity().abs();
+                assert!(v < last_v, "速度必须单调衰减");
+                last_v = v;
+            }
+            None => {
+                assert!(
+                    f.velocity().abs() < FLING_STOP_MIN,
+                    "燃尽时速度必须低于阈，实得 {}",
+                    f.velocity()
+                );
+                break;
+            }
+        }
+    }
+    assert!(
+        (total - expect_total).abs() < 15.0,
+        "等比位移账必须 ≈ v/(1-DECAY)={expect_total:.0}px，实得 {total}"
+    );
+    // dt≤0 = 零位移零衰减（同帧多圈防御）
+    let mut g = Fling::new(5.0);
+    assert_eq!(g.step(0.0), Some(0.0));
+    assert_eq!(g.velocity(), 5.0);
+}
+
+#[test]
+fn spec_惯性甩尾_时间切片等比折帧() {
+    // 4ms 降频泵一圈 ≠ 16.667ms 一帧：step(2 帧) 的位移+衰减必须
+    // ≈ 两次 step(1 帧) 的合成（等比折帧，不许按调用次数衰减）
+    let mut a = Fling::new(10.0);
+    let da = a.step(FLING_FRAME_MS * 2.0).unwrap();
+    let mut b = Fling::new(10.0);
+    let db = b.step(FLING_FRAME_MS).unwrap() + b.step(FLING_FRAME_MS).unwrap();
+    assert!(
+        (da - db).abs() < 1e-9,
+        "双帧一步({da}) 必须等于单帧两步({db})"
+    );
+    assert!(
+        (a.velocity() - b.velocity()).abs() < 1e-9,
+        "折帧后速度必须一致"
+    );
+}
