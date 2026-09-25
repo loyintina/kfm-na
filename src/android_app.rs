@@ -455,11 +455,10 @@ struct App {
     /// 后台画布（不在浏览态时在此续喂生长；浏览态时画布在 TermView
     /// 里，本槽 None——take/enter_browse_canvas 进出成对）
     browse_canvas: Option<termview::Canvas>,
-    /// 控制通道行装配余量（%output 可跨事件截半行）
-    ctrl_buf: Vec<u8>,
     /// 播种/续喂相位机（ctrl_feed.rs 纯逻辑 A 档——BAR-155：相位粒度
     /// 必须和 tmux 块序列一一对上，写在 cfg(android) 里不可测上过机
-    /// 即死。本壳只接线：动作枚举照单执行，不自译）
+    /// 即死。行装配+\r 剥除全收编在 feed_bytes 唯一入口，本壳只接线：
+    /// 动作枚举照单执行，不自译）
     ctrl_feed: crate::ctrl_feed::CtrlFeed,
     /// Building 期 %output 字节缓冲（安装后先喂这批，再接流）
     ctrl_pending: Vec<u8>,
@@ -4628,7 +4627,6 @@ impl App {
             h.outbound.send(TermCmd::Close).ok();
         }
         self.ctrl_feed.reset();
-        self.ctrl_buf.clear();
         self.ctrl_pending.clear();
         self.ctrl_build = None;
         self.browse_canvas = None;
@@ -4717,16 +4715,14 @@ impl App {
         }
     }
 
-    /// 单事件消费（ctrl_drain 拆解）：Output 走行装配进相位机，
+    /// 单事件消费（ctrl_drain 拆解）：Output 走 feed_bytes 唯一入口
+    /// （行装配+\r 剥除+相位判定全在 ctrl_feed），产物动作交 ctrl_exec；
     /// Exited/Failed/Disconnected 级 = 判负回落
     fn ctrl_on_event(&mut self, ev: SessionEvent) {
         match ev {
             SessionEvent::Output { data } => {
-                self.ctrl_buf.extend(data.as_bytes());
-                while let Some(pos) = self.ctrl_buf.iter().position(|b| *b == b'\n') {
-                    let line: Vec<u8> = self.ctrl_buf.drain(..=pos).collect();
-                    let line = String::from_utf8_lossy(&line[..line.len() - 1]).into_owned();
-                    self.ctrl_on_line(line);
+                for act in self.ctrl_feed.feed_bytes(data.as_bytes()) {
+                    self.ctrl_exec(act);
                 }
             }
             SessionEvent::Exited { code } => {
@@ -4739,13 +4735,12 @@ impl App {
         }
     }
 
-    /// 单行消费（薄壳）：相位判定全在 ctrl_feed（A 档纯逻辑，BAR-155
+    /// 动作执行（薄壳）：相位判定全在 ctrl_feed（A 档纯逻辑，BAR-155
     /// 钉死），本壳只把动作枚举翻译成平台操作（喂画布/起构建线程/
     /// 判负退避/逼对账/拆除）
-    fn ctrl_on_line(&mut self, line: String) {
+    fn ctrl_exec(&mut self, act: crate::ctrl_feed::CtrlAct) {
         use crate::ctrl_feed::CtrlAct;
-        let ev = crate::tmux_ctl::parse_ctrl_line(&line);
-        match self.ctrl_feed.on_event(ev, &line) {
+        match act {
             CtrlAct::Feed(bytes) => {
                 let fed = self
                     .term_handle()

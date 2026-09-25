@@ -32,7 +32,7 @@
 //! （安装后补喂）；Steady 的 %output 直喂画布（pane id 过滤——非活动
 //! 窗格的字节不许混进）。
 
-use crate::tmux_ctl::{CtrlEvent, parse_seed_header};
+use crate::tmux_ctl::{CtrlEvent, parse_ctrl_line, parse_seed_header};
 
 /// 相位机动作（on_event 产物——android_app 薄壳照单执行，不自译）
 #[derive(Debug, PartialEq, Eq)]
@@ -90,6 +90,9 @@ pub struct CtrlFeed {
     /// BlockBegin 清空，只留首行——一个块认不出头行时，第一行就是
     /// 最像样的嫌疑人）
     first_line: String,
+    /// 行装配余量（%output 事件可跨包截半行；BAR-155 三号病灶定罪后
+    /// 收编：装配/剥 \r/分类必须在 host 可测层，不许留在 cfg 壳里）
+    line_buf: Vec<u8>,
 }
 
 impl Default for CtrlFeed {
@@ -106,6 +109,7 @@ impl CtrlFeed {
             cap: Vec::new(),
             saw_body: false,
             first_line: String::new(),
+            line_buf: Vec::new(),
         }
     }
 
@@ -140,9 +144,27 @@ impl CtrlFeed {
         self.phase = Phase::Steady;
     }
 
-    /// 单行消费（调用方先 parse_ctrl_line 分类，Plain 行的原文经
-    /// line 传入——头行认领/正文累积要用）
-    pub fn on_event(&mut self, ev: CtrlEvent, line: &str) -> CtrlAct {
+    /// 字节流入唯一口（行装配 + 剥 \r + 分类 + 消费全在本层）：
+    /// 跨事件截半行留存余量；行尾 \r（pty 流恒带）在此剥——BAR-155
+    /// 定罪：剥 \r 若留在调用方壳层，KFMHDR 头行的 pane 段会带 \r
+    /// 尾导致数字解析失败，100% 判负（真机实录「首行=KFMHDR 2898
+    /// 10000 5 50 %3」完全合法却判负的案发机理）
+    pub fn feed_bytes(&mut self, data: &[u8]) -> Vec<CtrlAct> {
+        self.line_buf.extend(data);
+        let mut acts = Vec::new();
+        while let Some(pos) = self.line_buf.iter().position(|b| *b == b'\n') {
+            let raw: Vec<u8> = self.line_buf.drain(..=pos).collect();
+            let line = String::from_utf8_lossy(&raw[..raw.len() - 1])
+                .trim_end_matches('\r')
+                .to_string();
+            acts.push(self.on_event(parse_ctrl_line(&line), &line));
+        }
+        acts
+    }
+
+    /// 单行消费（feed_bytes 内部分发；Plain 行原文经 line 传入——
+    /// 头行认领/正文累积要用）
+    fn on_event(&mut self, ev: CtrlEvent, line: &str) -> CtrlAct {
         match ev {
             CtrlEvent::Output { pane, bytes } => match self.phase {
                 // 播种窗口内的输出已在 capture 快照内（带内对齐）——丢弃

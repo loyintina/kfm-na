@@ -1,33 +1,39 @@
 //! ctrl_feed_spec.rs — v4 推流画布播种/续喂相位机考题（A 档考题先行）
 //!
-//! BAR-155（2026-09-25 真机定罪，pty 实录 fixture）：v4 首版上机推流
-//! 从未生效——报表实录「播种发出→头块无 KFMHDR 头行」5s 循环，用户
-//! 看到的一直是 v3 轮询保底。两病灶：
+//! BAR-155（2026-09-25 真机定罪，pty/ws 双路实录 fixture）：v4 首版
+//! 上机推流从未生效——报表实录播种 5s 空转循环，用户看到的一直是
+//! v3 轮询保底（用户实报「还是掉帧，只是把糊弄机制逼近」）。三病灶：
 //! ①tmux -C attach-session 命令行命令自己的空回应块最先到达，被当
 //!   播种头块判负，真播种块到达时相位已回稳态全丢弃；
-//! ②（①修好才会暴露的连环病灶）头行认领后头块的 %end 被当 capture
-//!   块的 %end → 空 capture 提前 Build，真 capture 正文被丢。
-//! fixture 按 pty 实录块序逐行钉。变异抽检：摘空块跳过 → 钉①红；
-//! 并相 HdrEnd → 钉②红——均须实咬。
+//! ②头行认领后头块的 %end 被当 capture 块的 %end → 空 capture 提前
+//!   Build，真 capture 正文被丢（①修好才会暴露的连环雷）；
+//! ③剥 \r 留在 cfg(android) 壳层且只剥分类不剥原文——pty 流行尾恒
+//!   带 \r，KFMHDR 的 pane 段 "3\r" 数字解析失败，100% 判负（真机
+//!   实录「首行=KFMHDR 2898 10000 5 50 %3」完全合法却判负；服务器
+//!   侧复刻正常是因为只肉眼看了流、没让字节走真代码路径）。
+//! 根因共通：协议处理散在 host 不可测的壳里。**fixture 必须用真流
+//! 形态——\r\n 行尾 + 跨包截半**，字节走 feed_bytes 唯一入口。
+//! 变异抽检：摘空块跳过 → 钉一红；HdrEnd 产 Build → 钉二红；
+//! 摘 \r 剥离 → 全卷红——均须实咬。
 
 use kfm_na::ctrl_feed::{CtrlAct, CtrlFeed};
-use kfm_na::tmux_ctl::parse_ctrl_line;
 
-/// 一行进机（与 android_app 薄壳同路：先分类再消费）
+/// 一行真流形态（pty 流恒带 \r\n）进机，取唯一动作（多数行 None）
 fn line(f: &mut CtrlFeed, l: &str) -> CtrlAct {
-    f.on_event(parse_ctrl_line(l), l)
+    let acts = f.feed_bytes(format!("{l}\r\n").as_bytes());
+    assert!(acts.len() <= 1, "单行不该产多动作: {acts:?}");
+    acts.into_iter().next().unwrap_or(CtrlAct::None)
 }
 
-/// 多行进机收动作串
+/// 多行进机收动作串（逐行 \r\n）
 fn lines(f: &mut CtrlFeed, ls: &[&str]) -> Vec<CtrlAct> {
     ls.iter().map(|l| line(f, l)).collect()
 }
 
 #[test]
 fn spec_bar155_实证流全序_空块跳过到头播落地() {
-    // pty 实录（2026-09-25，tmux 3.4）：attach 空块 → Notify → 回声两行
-    // → 头块（KFMHDR）→ capture 块 → %output 续喂。全序走完动作串必须
-    // 逐拍对上——这条钉 = BAR-155 两病灶的合卷
+    // pty/ws 实录（2026-09-25，tmux 3.4）：attach 空块 → Notify →
+    // 回声两行 → 头块（KFMHDR）→ capture 块 → %output 续喂
     let mut f = CtrlFeed::new();
     f.seed_sent();
     assert!(f.pane().is_none(), "播种发出 ≠ 播种落地（pane 未认领）");
@@ -72,6 +78,33 @@ fn spec_bar155_实证流全序_空块跳过到头播落地() {
         CtrlAct::None,
         "非活动窗格字节不许混进画布"
     );
+}
+
+#[test]
+fn spec_bar155_cr尾必剥_病灶三回归() {
+    // 病灶③单行定罪钉：pty 流 KFMHDR 行尾恒带 \r——剥不干净则 pane
+    // 段 "3\r" 数字解析失败、100% 判负（真机实录「首行=KFMHDR 2898
+    // 10000 5 50 %3 完全合法却判负」的机理）。本钉的行全走 feed_bytes
+    // 真流形态（\r\n），认领成功 = 剥离在位
+    let mut f = CtrlFeed::new();
+    f.seed_sent();
+    line(&mut f, "%begin 2 2 1");
+    line(&mut f, "KFMHDR 2898 10000 5 50 %3"); // line() 自带 \r\n 收尾
+    assert_eq!(f.pane(), Some(3), "带 \\r 尾的头行必须认领（剥 \\r 在位）");
+}
+
+#[test]
+fn spec_bar155_行跨包截半装配() {
+    // %output 事件可在任意字节边界截半（ws 实录：「%begin …1」与
+    // 「<CR>」分属两个 Output 包）——行装配必须留住余量拼回
+    let mut f = CtrlFeed::new();
+    f.seed_sent();
+    // 头行拆三段喂（截半未拼齐 = 零动作空 vec，不许臆造 None）
+    assert_eq!(f.feed_bytes(b"%begin 2 2"), Vec::<CtrlAct>::new());
+    assert_eq!(f.feed_bytes(b" 1\r\nKFMHDR 2898 100"), vec![CtrlAct::None]);
+    let acts = f.feed_bytes(b"00 5 50 %3\r\n");
+    assert_eq!(acts, vec![CtrlAct::None], "拼回头行认领不产动作");
+    assert_eq!(f.pane(), Some(3), "跨包截半的头行拼回后必须认领");
 }
 
 #[test]

@@ -398,7 +398,9 @@ fn spec_parse_seed_header_缺件畸形全_none() {
     // 无前缀行 = None
     assert_eq!(parse_seed_header("HDR 0 2 0 %46"), None);
     assert_eq!(parse_seed_header(""), None);
-    // 行尾 \r（pty 流剥 \r 在 parse_ctrl_line 层，此处不兜底——钉住契约）
+    // 行尾 \r：本函数契约 = 输入必须已剥 \r（pty 流的 \r 剥除统一在
+    // ctrl_feed::feed_bytes 层，BAR-155 三号病灶——剥 \r 留在调用方
+    // 壳层曾致 pane 段带 \r 尾数字解析失败、100% 判负。此处严格不兜底）
     assert_eq!(parse_seed_header("KFMHDR 1 2 3 4 %5\r"), None);
 }
 
