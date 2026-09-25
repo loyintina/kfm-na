@@ -1728,6 +1728,8 @@ pub struct TermView {
     /// None = 不在浏览态。进出都清 scroll_frac_px（零头是视口态，
     /// 换内容源必须归零，不许带病过境）
     browse: Option<Term<VoidListener>>,
+    /// live 喂入代际（feed 单调递增）——外置视口刷新节流的活动判据
+    feed_seq: u64,
     /// 设计 token（theme.rs 第 2 层）：控件渲染只读这里，不认字面颜色。
     /// pub = 主题包插件/考题可直接换肤；生产默认 kfmv4 配方
     pub theme: crate::theme::Theme,
@@ -1806,6 +1808,7 @@ impl TermView {
             pixel_scroll: false,
             scroll_frac_px: 0.0,
             browse: None,
+            feed_seq: 0,
             theme: crate::theme::Theme::default(),
         }
     }
@@ -1832,9 +1835,17 @@ impl TermView {
         }
     }
 
-    /// 喂 PTY 原始字节流（含 ANSI/UTF-8），vte 解析器驱动 Term 状态迁移
+    /// 喂 PTY 原始字节流（含 ANSI/UTF-8），vte 解析器驱动 Term 状态迁移。
+    /// feed_seq 递增——外置视口的「live 有活动吗」判据（快照刷新节流
+    /// 吃它：静默期零抓取，不让 exec 通道空转）
     pub fn feed(&mut self, bytes: &[u8]) {
         self.processor.advance(&mut self.term, bytes);
+        self.feed_seq = self.feed_seq.wrapping_add(1);
+    }
+
+    /// live 喂入代际读数（android_app 快照刷新节流调用方）
+    pub fn feed_seq(&self) -> u64 {
+        self.feed_seq
     }
 
     /// 改网格尺寸（窗口 Resized 时调）。0 维钳 1，理由同 new。
@@ -1982,6 +1993,37 @@ impl TermView {
             return true;
         }
         false
+    }
+
+    /// 浏览期原地刷新快照（2026-09-25 用户拍板「后台模型动态播放」）：
+    /// 新快照重建 browse Term，**视口锚不变**——display_offset 从底部
+    /// 量（新输出只往底部追加，历史区稳定，offset 守恒 = 用户正在读的
+    /// 位置不跳；新史更短则钳到顶）。分数零头保留（亚行阅读位不动）。
+    /// 非浏览态调用 = 等价 enter_browse（容错，不 panic）
+    pub fn swap_browse(&mut self, capture: &str) {
+        let keep = self
+            .browse
+            .as_ref()
+            .map(|b| b.grid().display_offset() as i32);
+        let size = TermSize {
+            cols: self.term.grid().columns().max(1),
+            rows: self.term.grid().screen_lines().max(1),
+        };
+        let mut term = Term::new(
+            Config {
+                scrolling_history: Self::SCROLLBACK_LINES,
+                ..Config::default()
+            },
+            &size,
+            VoidListener,
+        );
+        let mut processor: Processor = Processor::new();
+        processor.advance(&mut term, capture.as_bytes());
+        processor.advance(&mut term, b"\x1b[?25l");
+        if let Some(off) = keep {
+            term.scroll_display(Scroll::Delta(off)); // alacritty 自钳历史顶
+        }
+        self.browse = Some(term);
     }
 
     /// 字体探针（诊断用）：光栅化单字符，返回 (宽, 高, 非零覆盖像素数)。
@@ -7329,6 +7371,11 @@ pub trait TermEmu: Send {
     /// 退浏览态：快照丢弃 + 分数零头归零；返回是否真在浏览态
     /// （live term 浏览期照常喂，回切即最新）
     fn exit_browse(&mut self) -> bool;
+    /// 浏览期原地刷新快照（视口锚从底部量守恒，零头保留）——动态
+    /// 播放条款的承重方法（android_app 节流刷新调用方）
+    fn swap_browse(&mut self, capture: &str);
+    /// live 喂入代际读数（快照刷新节流的活动判据，android_app 调用方）
+    fn feed_seq(&self) -> u64;
     /// scrollback 位移读数（[scroll] 仪器遥测调用方：零头累计满行提交
     /// 的整行部读数，与零头同账才能判「跳行/不跟手」）
     fn display_offset(&self) -> usize;
@@ -7662,6 +7709,12 @@ impl TermEmu for TermView {
     }
     fn exit_browse(&mut self) -> bool {
         TermView::exit_browse(self)
+    }
+    fn swap_browse(&mut self, capture: &str) {
+        TermView::swap_browse(self, capture)
+    }
+    fn feed_seq(&self) -> u64 {
+        TermView::feed_seq(self)
     }
     fn display_offset(&self) -> usize {
         TermView::display_offset(self)

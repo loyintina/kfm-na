@@ -6089,3 +6089,54 @@ fn spec_浏览态_光标藏起来() {
         "快照内容必须渲染出来"
     );
 }
+
+#[test]
+fn spec_浏览态_原地刷新锚守恒() {
+    let mut tv = host_termview(10, 4);
+    tv.set_pixel_scroll(true);
+    // v1 快照 8 行
+    let cap1 = (0..8)
+        .map(|i| format!("A{i:02}"))
+        .collect::<Vec<_>>()
+        .join("\r\n")
+        + "\r\n";
+    tv.enter_browse(&cap1);
+    tv.scroll_px(72.0); // 滚 2 行进历史
+    assert_eq!(tv.display_offset(), 2);
+    // 动态播放：新快照多了 2 行新输出（底部追加）——阅读位（从底部
+    // 量 offset=2）必须守恒
+    let cap2 = (0..10)
+        .map(|i| format!("A{i:02}"))
+        .collect::<Vec<_>>()
+        .join("\r\n")
+        + "\r\n";
+    tv.swap_browse(&cap2);
+    assert!(tv.browsing());
+    assert_eq!(tv.display_offset(), 2, "刷新后视口锚（从底部量）必须守恒");
+    let txt = tv.dump_text();
+    assert!(txt.contains("A07"), "刷新后可见新内容，实得 {txt:?}");
+    // 历史变短（对端清了滚动缓冲）→ 锚钳到新顶，不许越界 panic
+    tv.swap_browse("B0\r\nB1\r\n");
+    assert!(tv.browsing());
+    assert!(tv.display_offset() <= tv.history_size());
+    // 非浏览态 swap = 等价 enter（容错不 panic）
+    let mut tv2 = host_termview(10, 4);
+    tv2.swap_browse("X\r\n");
+    assert!(tv2.browsing());
+}
+
+#[test]
+fn spec_浏览态_feedseq活动判据() {
+    let mut tv = host_termview(8, 2);
+    let s0 = tv.feed_seq();
+    tv.feed(b"hello\r\n");
+    assert!(
+        tv.feed_seq() > s0,
+        "feed 必须递增代际（刷新节流的活动判据）"
+    );
+    // 浏览态下 feed 走 live——代际照涨（浏览期 live 有新活动 = 该重抓）
+    tv.enter_browse("S\r\n");
+    let s1 = tv.feed_seq();
+    tv.feed(b"more\r\n");
+    assert!(tv.feed_seq() > s1, "浏览期 live 喂入必须照涨代际");
+}
