@@ -6228,8 +6228,20 @@ fn spec_推流画布_交还往返零损耗() {
     }
     // 快照臂进/退清 proc：enter_browse_term 后再 take = None（快照无续喂权）
     let mut tv3 = host_termview(10, 4);
-    tv3.enter_browse_term(TermView::build_browse_term("S\r\n", cols, rows));
+    tv3.set_pixel_scroll(true);
+    // 5 行快照（>4 行屏 → 1 行史，正零头才有处可挂）
+    tv3.enter_browse_term(TermView::build_browse_term(
+        "S0\r\nS1\r\nS2\r\nS3\r\nS4\r\n",
+        cols,
+        rows,
+    ));
+    tv3.scroll_px(20.0); // 亚行零头挂上（混态过境归零判据）
+    assert!(tv3.scroll_frac_px() != 0.0);
     assert!(tv3.take_browse_canvas().is_none());
+    // (Some, None) 混态：快照已焚（等价 exit_browse），分数零头必须
+    // 同步归零——漏清 = 亚行零头带病过境污染 live
+    assert!(!tv3.browsing(), "混态 take 后浏览态必须已退");
+    assert_eq!(tv3.scroll_frac_px(), 0.0, "混态 take 零头必须归零");
 }
 
 #[test]

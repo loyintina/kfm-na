@@ -2061,11 +2061,15 @@ impl TermView {
     /// 下次拖动起手零等待零抓取）。会话切换/resize/attach 等画布作废
     /// 场景不许走这里——那些走 exit_browse 丢弃
     pub fn take_browse_canvas(&mut self) -> Option<Canvas> {
-        match (self.browse.take(), self.browse_proc.take()) {
-            (Some(term), Some(proc)) => {
-                self.scroll_frac_px = 0.0;
-                Some(Canvas { term, proc })
-            }
+        let taken = self.browse.take();
+        let proc = self.browse_proc.take();
+        if taken.is_some() {
+            self.scroll_frac_px = 0.0; // 视口态换源归零（v3 快照混态同规）
+        }
+        match (taken, proc) {
+            (Some(term), Some(proc)) => Some(Canvas { term, proc }),
+            // (Some, None) = v3 快照混态（resize 清画布后温热臂切入）：
+            // 快照已焚 = 等价 exit_browse，只是无画布可交还
             _ => None,
         }
     }
