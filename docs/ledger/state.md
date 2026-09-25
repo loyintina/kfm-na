@@ -15,10 +15,18 @@
 > 输入边界：唤醒后窗口 inset desync，输入侧窗口位置错记为状态栏
 > 之下**（IME 召收强制重排故必愈合）。之前所有几何侧修复都是在
 > 健康的层里找病（卡高容量化/屏代命中依然是对的工程，保留）。
-> **下一步（待用户拍板）**：Java 皮 MotionEvent rawY/y 对表仪器钉
-> 具体层 → resume 重贴 immersive 标志修复（需打 APK 用户点安装）。
+> **下一步（仪器 APK 已送机 `28630bd`，待用户点安装+复现钥匙一轮）**：
+> Java 皮三件套——①dispatchTouchEvent 记 raw/xy+窗顶+inset
+> （raw−y=系统认定窗顶；sDispatchCount=0 本身=input queue 旁路证据）
+> ②gate 通道十四 window-state-req → JNI dumpWindowStateFromGate
+> 落 usr/tmp/window-state+motion-java.log（发病/健康随时远测对表）
+> ③onResume/onWindowFocusChanged 几何行（desync 第一现场时序）。
+> 取证后按定罪层出修复（方向 = resume 重贴 immersive 标志）→ 用户终验。
 > 观测矩阵新增「命中漂移」行（PARADIGM v5）。BAR-145 观察期退役闸
-> 照旧走（10-02），但对表仪器四期建议保留至修复结案。
+> 照旧走（10-02），但对表仪器保留至修复结案。
+> 另挂账：涂装 paint_parser_content_impl 的 cap 用键盘感知可视底，
+> parser_geom 按修约用无键盘可视底——键盘在场时涂装/命中卡高分叉
+> （另一方向的病，修复时一并处理或单列）。
 >
 > **BAR-151 全案已修待用户终验**（tmux 滚轮挂账 fae85be + 重孵清场
 > 3688ca7/e552b09，端到端复验零乱码）；遗留③滚轮灵敏度（用户嫌
