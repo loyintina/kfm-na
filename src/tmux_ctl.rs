@@ -123,11 +123,22 @@ pub fn cmd_attach(name: &str) -> String {
 
 /// 抓会话全滚动缓冲（外置视口快照，2026-09-25 tmux 像素级滚动）：
 /// -p 打 stdout、-e 带 SGR 颜色/样式、-S - 从滚动缓冲顶起（屏上之外的
-/// 内容在服务器 tmux 手里，这是唯一取回通道）。'=' 精确匹配（同
-/// cmd_kill 闸——模糊匹配抓错会话）。输出不解析，原样喂 browse Term
-/// （alacritty 自己消化转义、自然攒 scrollback）
+/// 内容在服务器 tmux 手里，这是唯一取回通道）。目标 `'=name:'`——
+/// 精确匹配会话 + 活动窗格（BAR-152 实机定罪：`=name` 裸用在 pane
+/// 目标上不成立，「can't find pane」报错文本直接当快照进了浏览态，
+/// 整页消失）。尾带 && echo 成功标记——tmux 的 exit 码经 sh -c 传不
+/// 回来，报错文本与快照同走 stdout，标记是唯一可靠验收（
+/// capture_strip_marker 判卷）
 pub fn cmd_capture(name: &str) -> String {
-    format!("tmux capture-pane -p -e -S - -t '={name}'; exit")
+    format!("tmux capture-pane -p -e -S - -t '={name}:' && echo KFM_CAP_OK; exit")
+}
+
+/// 快照验收（BAR-152）：尾带 KFM_CAP_OK 标记 = 真快照，剥标记返回；
+/// 无标记 = 抓取失败（报错文本/空输出），None——调用方原地待命，
+/// 不许把垃圾喂进浏览态
+pub fn capture_strip_marker(out: &str) -> Option<String> {
+    let body = out.trim_end().strip_suffix("KFM_CAP_OK")?;
+    Some(body.trim_end_matches(['\r', '\n']).to_string())
 }
 
 /// 重孵附着裁决（BAR-144）：自动重孵拿哪条启动命令——

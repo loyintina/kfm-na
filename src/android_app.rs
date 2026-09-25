@@ -7930,20 +7930,34 @@ impl ApplicationHandler for App {
                 let pending = std::mem::take(&mut self.browse_pending_px);
                 match res {
                     Ok(text) => {
-                        if let Some(t) = self.term_handle() {
-                            let mut t = t.lock().unwrap();
-                            t.enter_browse(&text);
-                            t.scroll_px(pending);
-                            crate::report::report(
+                        // BAR-152：tmux 报错文本与快照同走 stdout——无
+                        // 成功标记 = 抓取失败，原地待命不许进浏览态
+                        // （垃圾快照盖整页的病灶闸）
+                        match crate::tmux_ctl::capture_strip_marker(&text) {
+                            Some(cap) => {
+                                if let Some(t) = self.term_handle() {
+                                    let mut t = t.lock().unwrap();
+                                    t.enter_browse(&cap);
+                                    t.scroll_px(pending);
+                                    crate::report::report(
+                                        "scroll",
+                                        &format!(
+                                            "外置视口切入: 快照 {}B 里程 {} 行 补滚 {pending:.1}px",
+                                            cap.len(),
+                                            t.history_size()
+                                        ),
+                                    );
+                                }
+                                self.dirty = true;
+                            }
+                            None => crate::report::report(
                                 "scroll",
                                 &format!(
-                                    "外置视口切入: 快照 {}B 里程 {} 行 补滚 {pending:.1}px",
-                                    text.len(),
-                                    t.history_size()
+                                    "外置视口快照验收失败（无成功标记）: {:.80}——不进浏览态",
+                                    text.replace(['\r', '\n'], " ")
                                 ),
-                            );
+                            ),
                         }
-                        self.dirty = true;
                     }
                     Err(e) => crate::report::report(
                         "scroll",

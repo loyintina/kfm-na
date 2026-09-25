@@ -156,16 +156,38 @@ fn spec_cmd_名字含空格照引() {
 
 #[test]
 fn spec_cmd_capture_精确匹配带色全史() {
-    // '=' 精确匹配（抓错会话=内容源污染）；-e 保色（无色=browse 灰洗）；
-    // -S - 全滚动缓冲（只抓屏=外置视口无米下锅）
+    // '=name:' = 精确匹配会话 + 活动窗格（BAR-152 实机定罪：'=name' 裸用
+    // 在 pane 目标上不成立，tmux 报 can't find pane）；-e 保色；-S - 全
+    // 滚动缓冲；尾带成功标记（exit 码经 sh -c 传不回，标记是唯一验收）
     assert_eq!(
         tmux_ctl::cmd_capture("amp"),
-        "tmux capture-pane -p -e -S - -t '=amp'; exit"
+        "tmux capture-pane -p -e -S - -t '=amp:' && echo KFM_CAP_OK; exit"
     );
     assert_eq!(
         tmux_ctl::cmd_capture("my srv"),
-        "tmux capture-pane -p -e -S - -t '=my srv'; exit"
+        "tmux capture-pane -p -e -S - -t '=my srv:' && echo KFM_CAP_OK; exit"
     );
+}
+
+// ---- capture_strip_marker（BAR-152：报错文本与快照同走 stdout，
+// 无标记 = 抓取失败不许进浏览态）----
+
+#[test]
+fn spec_bar152_快照验收_标记判卷() {
+    // 真快照：标记在尾 → 剥标记还净内容（pty \r\n 尾巴照剥）
+    assert_eq!(
+        tmux_ctl::capture_strip_marker("line1\r\nline2\r\nKFM_CAP_OK\r\n"),
+        Some("line1\r\nline2".to_string())
+    );
+    // 抓取失败：报错文本无标记 → None（「can't find pane 当快照」的
+    // 整页消失病灶在此闸死）
+    assert_eq!(
+        tmux_ctl::capture_strip_marker("can't find pane: =kfm-na\r\n"),
+        None
+    );
+    // 空输出/半截输出同样 None
+    assert_eq!(tmux_ctl::capture_strip_marker(""), None);
+    assert_eq!(tmux_ctl::capture_strip_marker("KFM_CAP_O"), None);
 }
 
 // ---- respawn_attach_cmd（BAR-144：重孵按附着账裁决，不许一刀切默认）----
