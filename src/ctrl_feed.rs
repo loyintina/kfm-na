@@ -43,8 +43,10 @@ pub enum CtrlAct {
     Pend(Vec<u8>),
     /// capture 块收齐：正文交后台线程建 Canvas（BAR-154：UI 零解析）
     Build(String),
-    /// 播种失败（调用方：相位归零 + 5s 退避 + 报表，v3 轮询兜底）
-    SeedFail(&'static str),
+    /// 播种失败（调用方：相位归零 + 5s 退避 + 报表，v3 轮询兜底）。
+    /// 携肇事块首行存证（BAR-155 续查：真机稳定失败而服务器复刻正常，
+    /// 首行原文是唯一铁证——不许再猜第二轮）
+    SeedFail(String),
     /// Notify 逼对账（%layout-change/%window-pane-changed 等：内容可能
     /// 走了 %output 覆盖不到的变化——调用方清零对账账，下拍重播种）
     Reconcile,
@@ -84,6 +86,10 @@ pub struct CtrlFeed {
     /// AwaitHeader 期本块见过正文（空块跳过判据——attach 回应块零
     /// 正文，跳过；有正文但认不出头行才判负）
     saw_body: bool,
+    /// AwaitHeader 期本块首个 Plain 行存证（判负报表的铁证载荷；
+    /// BlockBegin 清空，只留首行——一个块认不出头行时，第一行就是
+    /// 最像样的嫌疑人）
+    first_line: String,
 }
 
 impl Default for CtrlFeed {
@@ -99,6 +105,7 @@ impl CtrlFeed {
             pane: None,
             cap: Vec::new(),
             saw_body: false,
+            first_line: String::new(),
         }
     }
 
@@ -159,6 +166,9 @@ impl CtrlFeed {
             },
             CtrlEvent::Plain => match self.phase {
                 Phase::AwaitHeader => {
+                    if !self.saw_body {
+                        self.first_line = line.chars().take(80).collect();
+                    }
                     self.saw_body = true;
                     if let Some(h) = parse_seed_header(line) {
                         self.pane = Some(h.pane);
@@ -175,6 +185,7 @@ impl CtrlFeed {
             CtrlEvent::BlockBegin => match self.phase {
                 Phase::AwaitHeader => {
                     self.saw_body = false; // 新块起算（空块判据）
+                    self.first_line.clear();
                     CtrlAct::None
                 }
                 Phase::AwaitBody => {
@@ -187,9 +198,13 @@ impl CtrlFeed {
             CtrlEvent::BlockEnd => match self.phase {
                 Phase::AwaitHeader => {
                     if self.saw_body {
-                        // 有正文但认不出头行 = 真播种失败
+                        // 有正文但认不出头行 = 真播种失败（带首行存证）
+                        let clue = format!(
+                            "头块有正文但无 KFMHDR 头行: 首行={:.60}",
+                            self.first_line.replace(['\r', '\n'], " ")
+                        );
                         self.reset();
-                        CtrlAct::SeedFail("头块有正文但无 KFMHDR 头行")
+                        CtrlAct::SeedFail(clue)
                     } else {
                         // 零正文空块 = 前置块（attach-session 自己的
                         // 回应，BAR-155 病灶①）——跳过继续等播种块
@@ -202,7 +217,7 @@ impl CtrlFeed {
                 }
                 Phase::AwaitBody => {
                     self.reset();
-                    CtrlAct::SeedFail("capture 块缺失（头块后直接 %end）")
+                    CtrlAct::SeedFail("capture 块缺失（头块后直接 %end）".to_string())
                 }
                 Phase::InCapture => {
                     self.phase = Phase::Building;
@@ -213,7 +228,7 @@ impl CtrlFeed {
             CtrlEvent::BlockError => match self.phase {
                 Phase::AwaitHeader | Phase::HdrEnd | Phase::AwaitBody | Phase::InCapture => {
                     self.reset();
-                    CtrlAct::SeedFail("命令块 %error")
+                    CtrlAct::SeedFail("命令块 %error".to_string())
                 }
                 _ => CtrlAct::None,
             },

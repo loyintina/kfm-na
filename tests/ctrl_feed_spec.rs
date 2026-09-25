@@ -165,7 +165,7 @@ fn spec_判负三路_error与畸形与缺块() {
     );
     assert_eq!(
         line(&mut f, "%error 3 3 1"),
-        CtrlAct::SeedFail("命令块 %error")
+        CtrlAct::SeedFail("命令块 %error".to_string())
     );
     assert!(f.pane().is_none() && f.is_steady(), "判负必须归零");
     // 头块有正文但认不出头行 = 判负（与空块跳过对立——漏判=病灶①回潮）
@@ -173,9 +173,13 @@ fn spec_判负三路_error与畸形与缺块() {
     f2.seed_sent();
     line(&mut f2, "%begin 2 2 1");
     line(&mut f2, "garbage line");
-    assert_eq!(
-        line(&mut f2, "%end 2 2 1"),
-        CtrlAct::SeedFail("头块有正文但无 KFMHDR 头行")
+    // 判负携肇事首行存证（BAR-155 续查：真机铁证全靠它）
+    let CtrlAct::SeedFail(why) = line(&mut f2, "%end 2 2 1") else {
+        panic!("有正文无头行必须判负");
+    };
+    assert!(
+        why.starts_with("头块有正文但无 KFMHDR 头行") && why.contains("garbage line"),
+        "判负必须带首行存证: {why}"
     );
     // 头块后直接 %end（capture 块没来）= 判负
     let mut f3 = CtrlFeed::new();
@@ -186,7 +190,7 @@ fn spec_判负三路_error与畸形与缺块() {
     );
     assert_eq!(
         line(&mut f3, "%end 9 9 1"),
-        CtrlAct::SeedFail("capture 块缺失（头块后直接 %end）")
+        CtrlAct::SeedFail("capture 块缺失（头块后直接 %end）".to_string())
     );
 }
 

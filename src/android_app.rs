@@ -4770,7 +4770,7 @@ impl App {
                 });
                 self.ctrl_build = Some(rx);
             }
-            CtrlAct::SeedFail(why) => self.ctrl_seed_fail(why),
+            CtrlAct::SeedFail(why) => self.ctrl_seed_fail(&why),
             CtrlAct::Reconcile => self.ctrl_seeded_ms = 0, // 逼下拍对账重播
             CtrlAct::Dead(why) => self.ctrl_teardown(why),
             CtrlAct::None => {}
