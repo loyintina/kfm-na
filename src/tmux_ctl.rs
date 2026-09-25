@@ -121,6 +121,15 @@ pub fn cmd_attach(name: &str) -> String {
     format!("tmux new-session -A -s '{name}'")
 }
 
+/// 抓会话全滚动缓冲（外置视口快照，2026-09-25 tmux 像素级滚动）：
+/// -p 打 stdout、-e 带 SGR 颜色/样式、-S - 从滚动缓冲顶起（屏上之外的
+/// 内容在服务器 tmux 手里，这是唯一取回通道）。'=' 精确匹配（同
+/// cmd_kill 闸——模糊匹配抓错会话）。输出不解析，原样喂 browse Term
+/// （alacritty 自己消化转义、自然攒 scrollback）
+pub fn cmd_capture(name: &str) -> String {
+    format!("tmux capture-pane -p -e -S - -t '={name}'; exit")
+}
+
 /// 重孵附着裁决（BAR-144）：自动重孵拿哪条启动命令——
 /// 附着账在 → 附回账上那个会话（用户切去的 nz，不是设置里的默认）；
 /// 账空 → 配置原命令照旧。病灶实录：respawn_session 远程臂一刀切

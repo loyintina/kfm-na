@@ -408,6 +408,14 @@ struct App {
         ParserExec,
         std::sync::mpsc::Receiver<Result<String, String>>,
     )>,
+    /// 外置视口快照抓取在途（2026-09-25 tmux 像素级滚动，用户拍板）：
+    /// tmux 附体会话拖动起手发 capture-pane 全史抓取，about_to_wait
+    /// 排水——Ok = enter_browse + 挂账位移补滚；Err = 原地待命
+    /// （滚轮路不动，下次拖动重发）
+    browse_capture: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
+    /// 快照落地前的拖动位移挂账（px，带符号）——capture 往返几百 ms
+    /// 期间手指位移不丢，切入瞬间一并补滚（起手零丢失）
+    browse_pending_px: f64,
     /// 远程连接配置缓存（启动时装配 conn_provider 那份的 clone）——
     /// tmux 执行通道的 ws url 与 attach 重开连接的命令来源
     remote_conn_cfg: Option<crate::conn::ConnConfig>,
@@ -1897,9 +1905,64 @@ impl App {
                     // t 是 Arc 克隆（借用即还），tracker 的可变借用不冲突
                     let Some(t) = self.term_handle() else { return };
                     let mouse_on = t.lock().unwrap().mouse_report_active();
+                    // 外置视口判定在 tracker 可变借用前算好（NLL：self
+                    // 方法与字段错开借用）——附着 tmux = 快照浏览路
+                    let tmux_attached = self.cur_attached().is_some();
+                    let browsing = t.lock().unwrap().browsing();
+                    let capture_in_flight = self.browse_capture.is_some();
                     let Some(tracker) = &mut self.touch_scroll else {
                         return;
                     };
+                    if mouse_on && tmux_attached {
+                        // 外置视口（2026-09-25 tmux 像素级滚动，用户拍板
+                        // 「跟终端同款」）：tmux attach 下屏上以外的内容
+                        // 在服务器 tmux 手里，本网格只有可见行——真·像素
+                        // 级唯一路 = capture-pane 抓全史快照喂独立 Term
+                        // 直滚（渲染/滚动/命中同一把尺）；抓取往返期位移
+                        // 挂账不丢，切入瞬间一并补滚。浏览期永不发滚轮
+                        // tick（滚轮 tick = tmux 默认绑定一次跳 5 行的
+                        // 病灶本体）
+                        let d = tracker.moved_px(y);
+                        if browsing {
+                            if d == 0.0 {
+                                return;
+                            }
+                            let mut t = t.lock().unwrap();
+                            t.scroll_px(d);
+                            crate::report::report(
+                                "scroll",
+                                &format!(
+                                    "外置视口滚动 d={d:.1} 零头={:.1} offset={} 里程={}",
+                                    t.scroll_frac_px(),
+                                    t.display_offset(),
+                                    t.history_size()
+                                ),
+                            );
+                            self.dirty = true;
+                            return;
+                        }
+                        self.browse_pending_px += d;
+                        if !capture_in_flight {
+                            if self.endpoint_exec_ok() {
+                                let name = self.cur_attached().expect("tmux_attached 已判 Some");
+                                self.browse_capture =
+                                    Some(self.endpoint_exec(crate::tmux_ctl::cmd_capture(&name)));
+                                crate::report::report(
+                                    "scroll",
+                                    &format!(
+                                        "外置视口快照抓取发出: {name} 挂账={:.1}px",
+                                        self.browse_pending_px
+                                    ),
+                                );
+                            } else {
+                                crate::report::report(
+                                    "scroll",
+                                    "外置视口抓取无通道（exec 不可用）——位移挂账待下次重试",
+                                );
+                            }
+                        }
+                        return;
+                    }
                     if mouse_on {
                         // 全屏 TUI（鼠标上报）协议无像素概念——翻成滚轮
                         // tick 发过去。BAR-151：换算走挂账（慢拖余数不吞）
@@ -3964,6 +4027,16 @@ impl App {
         else {
             return; // 没待机方：装作没发生(或没路由装配)
         };
+        // 外置视口：切会话 = 换内容主体——旧会话的快照与在途抓取一并
+        // 作废（快照是旧会话的画面，留着 = 串台）
+        if let Some(t) = self.term_handle()
+            && t.lock().unwrap().exit_browse()
+        {
+            crate::report::report("scroll", "外置视口退出: 会话切换");
+            self.dirty = true;
+        }
+        self.browse_capture = None;
+        self.browse_pending_px = 0.0;
         // BAR-125 模式快照换-mode（在 replay 之前——复位/清屏/恢复
         // 铺好底，replay 画的是切入会话自己的状态）：切出方 mode 存账，
         // 切入方先复位受管模式+清屏（用户拍板「切换后直接自动清屏」）
@@ -4116,6 +4189,18 @@ impl App {
     /// 原语义（死会话先 kick 再发，conn pending_input 代收）。
     /// 返回 true = 已暂存（调用方据此刷状态行）
     fn route_input(&mut self, bytes: String) -> bool {
+        // 外置视口（2026-09-25）：浏览态下任何击键 = 退浏览回 live 再照
+        // 发（打字了就是要看现在——copy-mode 同款语义：输入即退场）
+        if self
+            .term_handle()
+            .is_some_and(|t| t.lock().unwrap().browsing())
+        {
+            if let Some(t) = self.term_handle() {
+                t.lock().unwrap().exit_browse();
+            }
+            crate::report::report("scroll", "外置视口退出: 击键回 live");
+            self.dirty = true;
+        }
         let is_remote = self
             .router_handle()
             .map(|r| r.lock().unwrap().active_name() == "remote")
@@ -4435,6 +4520,16 @@ impl App {
     /// attach 入口的对象轴分流（两轴第 6 步②：服务器相走 ws 重孵，
     /// 本地相走本地 PTY 重孵——两臂同语义同工序，通道不同）
     fn parser_attach(&mut self, name: String) {
+        // 外置视口：attach 切换 = 换附着主体（重孵链会清场重建）——
+        // 快照与在途抓取一并作废
+        if let Some(t) = self.term_handle()
+            && t.lock().unwrap().exit_browse()
+        {
+            crate::report::report("scroll", "外置视口退出: attach 切换");
+            self.dirty = true;
+        }
+        self.browse_capture = None;
+        self.browse_pending_px = 0.0;
         match crate::endpoint::current() {
             crate::endpoint::EndpointKind::Server => self.parser_attach_server(name),
             crate::endpoint::EndpointKind::Local => self.parser_attach_local(name),
@@ -7816,6 +7911,57 @@ impl ApplicationHandler for App {
             if let Some((kind, res)) = exec_done {
                 self.parser_exec = None;
                 self.parser_exec_done(kind, res);
+            }
+            // 外置视口快照排水（2026-09-25 tmux 像素级滚动）：capture
+            // 落地 = enter_browse + 挂账位移一并补滚（起手零丢失）；
+            // 失败原地待命（下次拖动重发），滚轮保底路不受影响
+            let cap_done = self
+                .browse_capture
+                .as_ref()
+                .and_then(|rx| match rx.try_recv() {
+                    Ok(res) => Some(res),
+                    Err(std::sync::mpsc::TryRecvError::Empty) => None,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        Some(Err("抓取线程断线".to_string()))
+                    }
+                });
+            if let Some(res) = cap_done {
+                self.browse_capture = None;
+                let pending = std::mem::take(&mut self.browse_pending_px);
+                match res {
+                    Ok(text) => {
+                        if let Some(t) = self.term_handle() {
+                            let mut t = t.lock().unwrap();
+                            t.enter_browse(&text);
+                            t.scroll_px(pending);
+                            crate::report::report(
+                                "scroll",
+                                &format!(
+                                    "外置视口切入: 快照 {}B 里程 {} 行 补滚 {pending:.1}px",
+                                    text.len(),
+                                    t.history_size()
+                                ),
+                            );
+                        }
+                        self.dirty = true;
+                    }
+                    Err(e) => crate::report::report(
+                        "scroll",
+                        &format!("外置视口快照失败: {e}（下次拖动重试）"),
+                    ),
+                }
+            }
+            // 浏览期对端鼠标上报消失（tmux 退出/脱离/重孵清场）= 快照
+            // 语义死了——自动退浏览回 live（不退 = 僵尸画面盖活会话）
+            if self.term_handle().is_some_and(|t| {
+                let t = t.lock().unwrap();
+                t.browsing() && !t.mouse_report_active()
+            }) {
+                if let Some(t) = self.term_handle() {
+                    t.lock().unwrap().exit_browse();
+                }
+                crate::report::report("scroll", "外置视口自动退出: 对端鼠标上报消失");
+                self.dirty = true;
             }
             let parser_docked = self
                 .last_ai_snap

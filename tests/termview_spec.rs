@@ -5997,3 +5997,95 @@ fn spec_bar151_清场序列_真网格鼠标位真清() {
     tv.feed("\x1b[?1002h".as_bytes());
     assert!(tv.mouse_report_active(), "清场后 DECSET 必须能重开");
 }
+
+// ---------- A 档：外置视口浏览态（2026-09-25 tmux 像素级滚动，用户拍板
+// 方向：tmux attach 下「屏上以外的内容在服务器 tmux 手里」——真·像素级
+// 的唯一路 = capture-pane 抓全滚动缓冲喂独立 Term，渲染/滚动/命中切源；
+// live term 照常喂，退出即回最新） ----------
+
+#[test]
+fn spec_浏览态_快照切换与像素滚动() {
+    let mut tv = host_termview(10, 4);
+    tv.set_pixel_scroll(true);
+    for i in 0..10 {
+        tv.feed(format!("L{i:02}\r\n").as_bytes());
+    }
+    let live_hist = tv.history_size();
+    assert!(!tv.browsing(), "默认不在浏览态");
+    // 快照：capture-pane 全文（8 行 > 4 行屏 → 超屏行沉 browse scrollback）
+    let cap = (0..8)
+        .map(|i| format!("C{i:02}"))
+        .collect::<Vec<_>>()
+        .join("\r\n")
+        + "\r\n";
+    tv.enter_browse(&cap);
+    assert!(tv.browsing());
+    assert_eq!(
+        tv.display_offset(),
+        0,
+        "切入即贴快照底（= 起手瞬间所见，零跳动）"
+    );
+    assert_eq!(tv.scroll_frac_px(), 0.0, "切入清零头（视口态换源归零）");
+    assert!(
+        tv.history_size() >= 4,
+        "超屏行必须沉快照 scrollback（可滚里程），实测 {}",
+        tv.history_size()
+    );
+    // 活动内容源 = 快照：所见是快照尾屏，live 内容不许漏进来
+    let txt = tv.dump_text();
+    assert!(txt.contains("C07"), "可见区 = 快照尾屏，实得 {txt:?}");
+    assert!(!txt.contains("L09"), "浏览态漏 live 内容 = 双源串台");
+    // 像素滚动作用于快照（满一行提交 + 零头挂账，与终端同款机制）
+    tv.scroll_px(40.0);
+    assert_eq!(tv.display_offset(), 1, "快照滚动整行提交");
+    assert_eq!(tv.scroll_frac_px(), 4.0, "快照滚动零头挂账");
+    let txt2 = tv.dump_text();
+    assert!(
+        txt2.contains("C04"),
+        "滚一行后顶缘 = 快照历史行，实得 {txt2:?}"
+    );
+    // 浏览期 live 照常被喂（会话泵不停）——退出即最新，零追赶
+    tv.feed("LIVE2\r\n".as_bytes());
+    assert!(tv.exit_browse());
+    assert!(!tv.browsing());
+    assert_eq!(tv.scroll_frac_px(), 0.0, "退出清零头（不带病过境）");
+    assert_eq!(tv.display_offset(), 0, "退出回 live 贴底");
+    assert_eq!(
+        tv.history_size(),
+        live_hist + 1,
+        "浏览期喂进 live 的行必须还在（浏览不丢输出）"
+    );
+    let txt3 = tv.dump_text();
+    assert!(txt3.contains("LIVE2"), "退出即见浏览期新输出");
+    assert!(!txt3.contains("C07"), "退出后快照内容必须清场");
+    assert!(!tv.exit_browse(), "非浏览态退出 = false（幂等）");
+}
+
+#[test]
+fn spec_浏览态_resize清快照() {
+    let mut tv = host_termview(10, 4);
+    tv.set_pixel_scroll(true);
+    tv.enter_browse("X\r\nY\r\n");
+    assert!(tv.browsing());
+    tv.resize_cells(12, 5);
+    assert!(
+        !tv.browsing(),
+        "resize 后快照几何失效必须清（重建比矫正便宜）"
+    );
+    assert_eq!(tv.scroll_frac_px(), 0.0, "清快照连带零头归零");
+}
+
+#[test]
+fn spec_浏览态_光标藏起来() {
+    // 快照光标停在文末是伪影（光标是 live 会话的发言权）——enter_browse
+    // 尾补 ?25l，渲染层 CursorShape::Hidden 不落笔
+    let mut tv = host_termview(10, 4);
+    tv.enter_browse("hello\r\n");
+    let cells = tv.collect_gpu_cells(10 * CELL_W + 2 * kfm_na::termview::MARGIN_X, 800);
+    // 尾行末格若被光标反色 = 伪影漏出（h/e/l/l/o 五字之后无反色格）
+    let hello: Vec<char> = cells.iter().map(|c| c.c).collect();
+    assert!(
+        hello.contains(&'h') && hello.contains(&'o'),
+        "快照内容必须渲染出来"
+    );
+}

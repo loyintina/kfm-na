@@ -1719,6 +1719,15 @@ pub struct TermView {
     /// line=screen_lines）。钳制：贴底（offset=0）不许负、贴历史顶
     /// 不许正——scroll_px 唯一写入口
     scroll_frac_px: f64,
+    /// 外置视口浏览快照（2026-09-25 tmux 像素级滚动，用户拍板方向）：
+    /// tmux attach 下屏上以外的内容在服务器 tmux 手里，本网格只有可见
+    /// 行——「平移视口」的前提是手里有全部内容。拖动起手经 tmux_exec
+    /// capture-pane -p -e -S - 抓全滚动缓冲喂进这颗独立 Term（一次性
+    /// 快照，copy-mode 同语义：浏览期内容冻结），渲染/滚动/命中/选择
+    /// 全切到它；live term 照常被会话泵喂（退出即回最新，零追赶）。
+    /// None = 不在浏览态。进出都清 scroll_frac_px（零头是视口态，
+    /// 换内容源必须归零，不许带病过境）
+    browse: Option<Term<VoidListener>>,
     /// 设计 token（theme.rs 第 2 层）：控件渲染只读这里，不认字面颜色。
     /// pub = 主题包插件/考题可直接换肤；生产默认 kfmv4 配方
     pub theme: crate::theme::Theme,
@@ -1796,6 +1805,7 @@ impl TermView {
             kb_view_bottom: u32::MAX,
             pixel_scroll: false,
             scroll_frac_px: 0.0,
+            browse: None,
             theme: crate::theme::Theme::default(),
         }
     }
@@ -1828,11 +1838,17 @@ impl TermView {
     }
 
     /// 改网格尺寸（窗口 Resized 时调）。0 维钳 1，理由同 new。
+    /// 浏览快照随几何失效（快照尺寸=进入时网格，resize 后行宽错位——
+    /// 重建比矫正便宜，壳层 resize 前也会先退浏览，这里是双保险）
     pub fn resize_cells(&mut self, cols: u32, rows: u32) {
         self.term.resize(TermSize {
             cols: (cols.max(1)) as usize,
             rows: (rows.max(1)) as usize,
         });
+        if self.browse.is_some() {
+            self.browse = None;
+            self.scroll_frac_px = 0.0;
+        }
     }
 
     /// 键盘遮挡变化 → 重算视口上移（android_app apply_window_size 调用方，
@@ -1895,13 +1911,13 @@ impl TermView {
         let mut total = self.scroll_frac_px + delta_px;
         let lines = (total / ch).trunc() as i32;
         if lines != 0 {
-            let before = self.term.grid().display_offset() as i64;
-            self.term.scroll_display(Scroll::Delta(lines));
-            let after = self.term.grid().display_offset() as i64;
+            let before = self.active_term().grid().display_offset() as i64;
+            self.active_term_mut().scroll_display(Scroll::Delta(lines));
+            let after = self.active_term().grid().display_offset() as i64;
             // 只扣真实提交的（alacritty 钳到边界时差额不许挂在零头上）
             total -= (after - before) as f64 * ch;
         }
-        let grid = self.term.grid();
+        let grid = self.active_term().grid();
         let offset = grid.display_offset();
         let hist = grid.history_size();
         if offset == 0 && total < 0.0 {
@@ -1911,6 +1927,61 @@ impl TermView {
             total = 0.0; // 贴历史顶：之上没有更老的行
         }
         self.scroll_frac_px = total;
+    }
+
+    // ---- 外置视口浏览态（2026-09-25 tmux 像素级滚动）----
+
+    /// 活动内容源：浏览态 = browse 快照，否则 = live 会话。渲染/滚动/
+    /// 命中/选择/导出唯一入口——「屏上正显示的那份」同尺（眼手同尺）。
+    /// feed/resize/模式位（mouse_report/mode_bits/app_cursor）永远读
+    /// live，不走这里（模式位是壳与对端的协议态，快照没有发言权）
+    fn active_term(&self) -> &Term<VoidListener> {
+        self.browse.as_ref().unwrap_or(&self.term)
+    }
+
+    /// 活动内容源可变臂：只服务滚动写入口（scroll_display 三件套）
+    fn active_term_mut(&mut self) -> &mut Term<VoidListener> {
+        self.browse.as_mut().unwrap_or(&mut self.term)
+    }
+
+    /// 浏览态查询（android_app 分流/退出判据）
+    pub fn browsing(&self) -> bool {
+        self.browse.is_some()
+    }
+
+    /// 进浏览态：capture-pane -p -e -S - 全文喂进独立 Term（与 live 同
+    /// 网格尺寸——行带逐行对位，切入瞬间内容零跳动；超屏行自然沉进
+    /// scrollback，存量 = 可滚里程）。尾补 ?25l 藏快照光标（快照光标
+    /// 停在文末是伪影，光标是 live 会话的发言权）。Processor 一次性
+    /// 即用即弃（快照流无续帧）。进入即清分数零头（视口态换源归零）
+    pub fn enter_browse(&mut self, capture: &str) {
+        let size = TermSize {
+            cols: self.term.grid().columns().max(1),
+            rows: self.term.grid().screen_lines().max(1),
+        };
+        let mut term = Term::new(
+            Config {
+                scrolling_history: Self::SCROLLBACK_LINES,
+                ..Config::default()
+            },
+            &size,
+            VoidListener,
+        );
+        let mut processor: Processor = Processor::new();
+        processor.advance(&mut term, capture.as_bytes());
+        processor.advance(&mut term, b"\x1b[?25l");
+        self.browse = Some(term);
+        self.scroll_frac_px = 0.0;
+    }
+
+    /// 退浏览态：快照丢弃（live term 浏览期照常被喂，回切即最新，
+    /// 零追赶）+ 分数零头归零。返回是否真在浏览态（调用方置脏判据）
+    pub fn exit_browse(&mut self) -> bool {
+        if self.browse.take().is_some() {
+            self.scroll_frac_px = 0.0;
+            return true;
+        }
+        false
     }
 
     /// 字体探针（诊断用）：光栅化单字符，返回 (宽, 高, 非零覆盖像素数)。
@@ -1929,23 +2000,23 @@ impl TermView {
     /// 滚动可视窗口（scrollback）：lines 正 = 看更老的历史（手指向下拖），
     /// 负 = 往最新回。alacritty 内部自钳到历史顶/底，调用方不用管边界
     pub fn scroll_lines(&mut self, lines: i32) {
-        self.term.scroll_display(Scroll::Delta(lines));
+        self.active_term_mut().scroll_display(Scroll::Delta(lines));
     }
 
     /// 回到底部贴最新输出（用户输入时调用——打字了就是要看现在，不是看历史）
     pub fn scroll_to_bottom(&mut self) {
-        self.term.scroll_display(Scroll::Bottom);
+        self.active_term_mut().scroll_display(Scroll::Bottom);
     }
 
     /// 当前显示偏移（行，0 = 贴底）——B 档考题钉 + 实拍上报用
     pub fn display_offset(&self) -> usize {
-        self.term.grid().display_offset()
+        self.active_term().grid().display_offset()
     }
 
     /// 当前 scrollback 已存行数（≤ SCROLLBACK_LINES）——容量考题与
     /// 观测用；内部 is_spacer/选区钳制早就在读它,只是没公开
     pub fn history_size(&self) -> usize {
-        self.term.grid().history_size()
+        self.active_term().grid().history_size()
     }
 
     /// 网格光标所在列(0 基)——term-contract C4「同串→光标推进列数」
@@ -1961,7 +2032,7 @@ impl TermView {
     /// 逐格收字符、跳过宽字符 spacer 半格，行尾 trim，行间 \n。
     /// v1 不导 scrollback——闸门只对齐「所见」（网格眼睛胚胎）
     pub fn dump_text(&self) -> String {
-        let grid = self.term.grid();
+        let grid = self.active_term().grid();
         let off = grid.display_offset() as i32;
         let lines = grid.screen_lines() as i32;
         let cols = grid.columns();
@@ -2022,7 +2093,7 @@ impl TermView {
     /// 像素级化）：画面已上移 kb_shift_px 像素，触摸 y 先补回等量再逆
     /// 映射——眼手同尺（像素级后亚行触摸也咬得上画面）
     fn grid_point_at(&self, x: f64, y: f64) -> (i32, u32) {
-        let grid = self.term.grid();
+        let grid = self.active_term().grid();
         let y = y + f64::from(self.kb_shift_px);
         let (col, row) = px_to_cell(
             x,
@@ -2039,7 +2110,7 @@ impl TermView {
     /// 该格是否 CJK 宽字符的 spacer 半格（宽字符占 col-1..col 两格，
     /// col 是 spacer）。行出界（含历史区）按 false 防御
     fn is_spacer(&self, line: i32, col: u32) -> bool {
-        let grid = self.term.grid();
+        let grid = self.active_term().grid();
         let lo = -(grid.history_size() as i32);
         let hi = grid.screen_lines() as i32 - 1;
         if !(lo..=hi).contains(&line) {
@@ -2062,7 +2133,7 @@ impl TermView {
             return point;
         }
         if moving_right {
-            let last = self.term.grid().columns() as u32 - 1;
+            let last = self.active_term().grid().columns() as u32 - 1;
             (line, (col + 1).min(last))
         } else {
             (line, col - 1) // spacer 的格 0 必在 col-1（col ≥ 1）
@@ -2081,8 +2152,8 @@ impl TermView {
         } else {
             col
         };
-        let cols = self.term.grid().columns() as u32;
-        let at = |c: u32| self.term.grid()[Line(line)][Column(c as usize)].c;
+        let cols = self.active_term().grid().columns() as u32;
+        let at = |c: u32| self.active_term().grid()[Line(line)][Column(c as usize)].c;
         let (mut start, mut end) = (col, col);
         if is_word_char(at(col)) {
             while start > 0 && is_word_char(at(start - 1)) {
@@ -2143,7 +2214,7 @@ impl TermView {
         } else {
             (sel.cursor, sel.anchor)
         };
-        let grid = self.term.grid();
+        let grid = self.active_term().grid();
         let last_col = grid.columns() as u32 - 1;
         // 防御钳制：选区存活期间滚屏/新输出可能让行号出界
         let lo = -(grid.history_size() as i32);
@@ -2192,7 +2263,7 @@ impl TermView {
         // 平局裁决：端点格心距触点的像素距离（行换算回屏行 = +display_offset）
         let dist = |end: (i32, u32)| {
             let cx = f64::from(MARGIN_X + end.1 * self.cell_w) + f64::from(self.cell_w) / 2.0;
-            let row = end.0 + self.term.grid().display_offset() as i32;
+            let row = end.0 + self.active_term().grid().display_offset() as i32;
             let cy =
                 f64::from(margin_top(self.cell_h)) + (row as f64 + 0.5) * f64::from(self.cell_h);
             (x - cx).powi(2) + (y - cy).powi(2)
@@ -2270,8 +2341,8 @@ impl TermView {
         let (col, row) = px_to_cell(
             x,
             y,
-            self.term.grid().columns() as u32,
-            self.term.grid().screen_lines() as u32,
+            self.active_term().grid().columns() as u32,
+            self.active_term().grid().screen_lines() as u32,
             self.cell_w,
             self.cell_h,
         );
@@ -2369,7 +2440,7 @@ impl TermView {
             w: buf_w,
             h: buf_h,
         };
-        let content = self.term.renderable_content();
+        let content = self.active_term().renderable_content();
         let cursor = content.cursor;
         let selection = self.selection; // Copy 出来，与 content 的 term 借用拆开
         // 屏行 = 网格行 + 显示偏移（BAR-016）：滚进历史后 alacritty 给的行号
@@ -2414,8 +2485,8 @@ impl TermView {
             flags: Flags,
         }
         let mut cells: Vec<Cell2D> = Vec::new();
-        let screen_lines = self.term.grid().screen_lines() as i32;
-        let history_lines = self.term.grid().history_size() as i32;
+        let screen_lines = self.active_term().grid().screen_lines() as i32;
+        let history_lines = self.active_term().grid().history_size() as i32;
         let (cell_w, cell_h) = (self.cell_w, self.cell_h);
         let mt = margin_top(self.cell_h);
         // 每格决策单源（display_iter 行与手动多收行共用——颜色/选择/光标/
@@ -2499,8 +2570,8 @@ impl TermView {
             // 正零头：顶缘补历史行 line=-1
             let grid_line = -1 - offset + kb_rows;
             if grid_line >= -history_lines && grid_line < screen_lines {
-                let row = &self.term.grid()[Line(grid_line)];
-                for col in 0..self.term.grid().columns() as u32 {
+                let row = &self.active_term().grid()[Line(grid_line)];
+                for col in 0..self.active_term().grid().columns() as u32 {
                     push_cell(
                         -1,
                         grid_line,
@@ -2515,8 +2586,8 @@ impl TermView {
             // 负零头：底缘补更新行 line=screen_lines
             let grid_line = screen_lines - offset + kb_rows;
             if grid_line >= -history_lines && grid_line < screen_lines {
-                let row = &self.term.grid()[Line(grid_line)];
-                for col in 0..self.term.grid().columns() as u32 {
+                let row = &self.active_term().grid()[Line(grid_line)];
+                for col in 0..self.active_term().grid().columns() as u32 {
                     push_cell(
                         screen_lines,
                         grid_line,
@@ -2595,7 +2666,7 @@ impl TermView {
         if w == 0 || h == 0 {
             return out;
         }
-        let content = self.term.renderable_content();
+        let content = self.active_term().renderable_content();
         let cursor = content.cursor;
         let selection = self.selection;
         let offset = content.display_offset as i32;
@@ -2620,8 +2691,8 @@ impl TermView {
         } else {
             0
         };
-        let screen_lines = self.term.grid().screen_lines() as i32;
-        let history_lines = self.term.grid().history_size() as i32;
+        let screen_lines = self.active_term().grid().screen_lines() as i32;
+        let history_lines = self.active_term().grid().history_size() as i32;
         let (cell_w, cell_h) = (self.cell_w, self.cell_h);
         // 每格决策单源（display_iter 行与手动多收行共用，同 render_into
         // 一把尺）；skip_view_bottom = 手动多收行专用
@@ -2689,8 +2760,8 @@ impl TermView {
         if scroll_frac_i > 0 {
             let grid_line = -1 - offset + kb_rows;
             if grid_line >= -history_lines && grid_line < screen_lines {
-                let row = &self.term.grid()[Line(grid_line)];
-                for col in 0..self.term.grid().columns() as u32 {
+                let row = &self.active_term().grid()[Line(grid_line)];
+                for col in 0..self.active_term().grid().columns() as u32 {
                     push_cell(
                         -1,
                         grid_line,
@@ -2704,8 +2775,8 @@ impl TermView {
         } else if scroll_frac_i < 0 {
             let grid_line = screen_lines - offset + kb_rows;
             if grid_line >= -history_lines && grid_line < screen_lines {
-                let row = &self.term.grid()[Line(grid_line)];
-                for col in 0..self.term.grid().columns() as u32 {
+                let row = &self.active_term().grid()[Line(grid_line)];
+                for col in 0..self.active_term().grid().columns() as u32 {
                     push_cell(
                         screen_lines,
                         grid_line,
@@ -7249,9 +7320,21 @@ pub trait TermEmu: Send {
     fn scroll_px(&mut self, delta_px: f64);
     /// 分数视口零头读数（GLES 合成期实例平移调用方；带符号 px）
     fn scroll_frac_px(&self) -> f64;
+    /// 外置视口浏览态查询（2026-09-25 tmux 像素级滚动，android_app
+    /// 分流/退出判据调用方）
+    fn browsing(&self) -> bool;
+    /// 进浏览态：capture-pane 全史快照喂独立 Term（与 live 同尺寸，
+    /// 切入零跳动；超屏行沉快照 scrollback = 可滚里程）
+    fn enter_browse(&mut self, capture: &str);
+    /// 退浏览态：快照丢弃 + 分数零头归零；返回是否真在浏览态
+    /// （live term 浏览期照常喂，回切即最新）
+    fn exit_browse(&mut self) -> bool;
     /// scrollback 位移读数（[scroll] 仪器遥测调用方：零头累计满行提交
     /// 的整行部读数，与零头同账才能判「跳行/不跟手」）
     fn display_offset(&self) -> usize;
+    /// scrollback 存量读数（外置视口里程遥测调用方：浏览态 = 快照
+    /// 历史行数 = 可滚里程）
+    fn history_size(&self) -> usize;
     /// 网格行数（GLES 合成期内容底沿 = margin_top + 行数×格高 的
     /// 计算调用方；像素滚动底缘裁剪带用）
     fn grid_rows(&self) -> u32;
@@ -7571,11 +7654,23 @@ impl TermEmu for TermView {
     fn scroll_frac_px(&self) -> f64 {
         TermView::scroll_frac_px(self)
     }
+    fn browsing(&self) -> bool {
+        TermView::browsing(self)
+    }
+    fn enter_browse(&mut self, capture: &str) {
+        TermView::enter_browse(self, capture)
+    }
+    fn exit_browse(&mut self) -> bool {
+        TermView::exit_browse(self)
+    }
     fn display_offset(&self) -> usize {
         TermView::display_offset(self)
     }
+    fn history_size(&self) -> usize {
+        TermView::history_size(self)
+    }
     fn grid_rows(&self) -> u32 {
-        self.term.grid().screen_lines() as u32
+        self.active_term().grid().screen_lines() as u32
     }
     fn cell_size(&self) -> (u32, u32) {
         TermView::cell_size(self)

@@ -152,6 +152,22 @@ fn spec_cmd_名字含空格照引() {
     assert_eq!(cmd_attach("my srv"), "tmux new-session -A -s 'my srv'");
 }
 
+// ---- cmd_capture（2026-09-25 外置视口快照：tmux 像素级滚动的内容源）----
+
+#[test]
+fn spec_cmd_capture_精确匹配带色全史() {
+    // '=' 精确匹配（抓错会话=内容源污染）；-e 保色（无色=browse 灰洗）；
+    // -S - 全滚动缓冲（只抓屏=外置视口无米下锅）
+    assert_eq!(
+        tmux_ctl::cmd_capture("amp"),
+        "tmux capture-pane -p -e -S - -t '=amp'; exit"
+    );
+    assert_eq!(
+        tmux_ctl::cmd_capture("my srv"),
+        "tmux capture-pane -p -e -S - -t '=my srv'; exit"
+    );
+}
+
 // ---- respawn_attach_cmd（BAR-144：重孵按附着账裁决，不许一刀切默认）----
 
 #[test]
