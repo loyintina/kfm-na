@@ -20,7 +20,8 @@
 //! 改 ==1（多客户端漏判）、sanitize 放行引号——本文件必须红。
 
 use kfm_na::tmux_ctl::{
-    self, TmuxSession, cmd_attach, cmd_kill, cmd_list, cmd_new, cmd_reflow, parse_session_list,
+    self, CtrlEvent, TmuxSession, cmd_attach, cmd_ctrl_attach, cmd_ctrl_seed, cmd_kill, cmd_list,
+    cmd_new, cmd_reflow, ctrl_unescape, parse_ctrl_line, parse_seed_header, parse_session_list,
     sanitize_name, session_name_of,
 };
 
@@ -331,4 +332,160 @@ fn spec_增量合并_判负回落全量() {
     assert_eq!(tmux_ctl::merge_capture("X\nY", 3, 4, 5, screen), None);
     // 新屏行数与账不符（对端重排）→ None
     assert_eq!(tmux_ctl::merge_capture(old, 3, 4, 5, "A\nB"), None);
+}
+
+// ---- 控制模式（tmux -C）协议解析（2026-09-25 服务器实证 tmux 3.4，
+// fixture 逐字钉）----
+
+#[test]
+fn spec_cmd_ctrl_attach_精确匹配常驻无exit() {
+    // '=名:' 精确匹配会话 + 活动窗格（BAR-152）；常驻命令不带 exit。
+    // -f ignore-size 必需：控制客户端 pty 默认 80x24，window-size=latest
+    // 下 attach 会抢用户窗口尺寸（2026-09-25 服务器实证带旗纹丝不动）
+    assert_eq!(
+        cmd_ctrl_attach("amp"),
+        "tmux -C attach-session -f ignore-size -t '=amp:'"
+    );
+    assert_eq!(
+        cmd_ctrl_attach("my srv"),
+        "tmux -C attach-session -f ignore-size -t '=my srv:'"
+    );
+    assert!(!cmd_ctrl_attach("amp").contains("exit"));
+}
+
+// ---- 带内播种（v4 推流画布）----
+
+#[test]
+fn spec_cmd_ctrl_seed_双块命令串钉() {
+    // 两块：头行（KFMHDR 前缀认领，五件：史量/上限/光标列/光标行/pane）
+    // + capture 全文（-p -e -S -，无壳无尾标——块内正文即纯净输出）
+    let seed = cmd_ctrl_seed();
+    let lines: Vec<&str> = seed.lines().collect();
+    assert_eq!(lines.len(), 2, "播种命令必须是两行（两个命令块）");
+    assert_eq!(
+        lines[0],
+        "display-message -p 'KFMHDR #{history_size} #{history_limit} #{cursor_x} #{cursor_y} #{pane_id}'"
+    );
+    assert_eq!(lines[1], "capture-pane -p -e -S -");
+    // capture 径无壳无尾标：不许带 capture_strip_marker 验收链的标记词
+    assert!(!seed.contains("KFMBEGIN"));
+    assert!(!seed.contains("KFMEND"));
+}
+
+#[test]
+fn spec_parse_seed_header_实证fixture钉() {
+    // 实证 fixture（2026-09-25 服务器 tmux 3.4 display-message 回应）
+    let h = parse_seed_header("KFMHDR 2979 10000 2 0 %46").unwrap();
+    assert_eq!(h.hist, 2979);
+    assert_eq!(h.limit, 10000);
+    assert_eq!(h.cursor_x, 2);
+    assert_eq!(h.cursor_y, 0);
+    assert_eq!(h.pane, 46);
+    // 空史量会话（HDR 0 2 0 %46 风）
+    let h0 = parse_seed_header("KFMHDR 0 2 0 0 %7").unwrap();
+    assert_eq!(h0.hist, 0);
+    assert_eq!(h0.pane, 7);
+}
+
+#[test]
+fn spec_parse_seed_header_缺件畸形全_none() {
+    // 五件缺一件 = None（播种作废）
+    assert_eq!(parse_seed_header("KFMHDR 2979 10000 2 0"), None);
+    // 件不成数 = None
+    assert_eq!(parse_seed_header("KFMHDR 2979 10000 x 0 %46"), None);
+    // pane 无 % 前缀 = None
+    assert_eq!(parse_seed_header("KFMHDR 2979 10000 2 0 46"), None);
+    // 无前缀行 = None
+    assert_eq!(parse_seed_header("HDR 0 2 0 %46"), None);
+    assert_eq!(parse_seed_header(""), None);
+    // 行尾 \r（pty 流剥 \r 在 parse_ctrl_line 层，此处不兜底——钉住契约）
+    assert_eq!(parse_seed_header("KFMHDR 1 2 3 4 %5\r"), None);
+}
+
+#[test]
+fn spec_ctrl_unescape_八进制实证钉() {
+    // 实证 fixture：%output %45 echo LINE_ONE\015\012 的载荷
+    assert_eq!(
+        ctrl_unescape(r"echo LINE_ONE\015\012"),
+        b"echo LINE_ONE\r\n".to_vec()
+    );
+    // \134 = 反斜杠自身（所以 \134t = 单反斜杠 + 字母 t，不是 tab）
+    assert_eq!(ctrl_unescape(r"\134t"), b"\\t".to_vec());
+    // \011 = tab；\033 = ESC
+    assert_eq!(ctrl_unescape(r"\011"), b"\t".to_vec());
+    assert_eq!(ctrl_unescape(r"\033["), b"\x1b[".to_vec());
+    // 可打印 ASCII 原样
+    assert_eq!(ctrl_unescape("plain text"), b"plain text".to_vec());
+}
+
+#[test]
+fn spec_ctrl_unescape_畸形转义原样保留() {
+    // 裸 \ / 位数不够 / 第三位非八进制：\ 原样保留，不丢字节不 panic
+    assert_eq!(ctrl_unescape("\\"), b"\\".to_vec());
+    assert_eq!(ctrl_unescape(r"\1"), b"\\1".to_vec());
+    assert_eq!(ctrl_unescape(r"\12x"), b"\\12x".to_vec());
+    assert_eq!(ctrl_unescape(r"\128"), b"\\128".to_vec()); // 8 非八进制数字
+}
+
+#[test]
+fn spec_ctrl_unescape_utf8跨行拼接还原中文() {
+    // UTF-8 多字节可被拆在两行 %output：「你」= E4 BD A0 = \344\275\240，
+    // 拆成 \344\275 | \240。各自 decode 成字节后拼接必须还原——
+    // ctrl_unescape 返回 Vec<u8> 而非 String 就是为这一刀
+    let mut bytes = Vec::new();
+    for line in [r"%output %45 \344\275", r"%output %45 \240"] {
+        let CtrlEvent::Output { bytes: b, .. } = parse_ctrl_line(line) else {
+            panic!("%output 行必须分类成 Output: {line:?}");
+        };
+        bytes.extend(b);
+    }
+    assert_eq!(String::from_utf8(bytes).unwrap(), "你");
+}
+
+#[test]
+fn spec_parse_ctrl_line_分类实证钉() {
+    // %output：pane id 解析（%45 → 45），载荷同步反转义
+    assert_eq!(
+        parse_ctrl_line(r"%output %45 echo LINE_ONE\015\012"),
+        CtrlEvent::Output {
+            pane: 45,
+            bytes: b"echo LINE_ONE\r\n".to_vec()
+        }
+    );
+    // 命令回应块边界（行号/旗标不进枚举）
+    assert_eq!(
+        parse_ctrl_line("%begin 1790331986 2066940 0"),
+        CtrlEvent::BlockBegin
+    );
+    assert_eq!(
+        parse_ctrl_line("%end 1790331986 2066940 0"),
+        CtrlEvent::BlockEnd
+    );
+    assert_eq!(
+        parse_ctrl_line("%error 1790331986 2066940 0"),
+        CtrlEvent::BlockError
+    );
+    // 通知行（只分类不逐字钉）
+    assert_eq!(
+        parse_ctrl_line("%session-changed $39 ctrlprobe"),
+        CtrlEvent::Notify
+    );
+    assert_eq!(parse_ctrl_line("%window-add @1"), CtrlEvent::Notify);
+    assert_eq!(parse_ctrl_line("%pane-exited %45"), CtrlEvent::Notify);
+    // 断开收线
+    assert_eq!(parse_ctrl_line("%exit"), CtrlEvent::Exit);
+    // 块内正文/非 % 行 = Plain；行尾 \r（pty 流）先剥
+    assert_eq!(parse_ctrl_line("session1: 1 windows"), CtrlEvent::Plain);
+    assert_eq!(parse_ctrl_line("%exit\r"), CtrlEvent::Exit);
+}
+
+#[test]
+fn spec_parse_ctrl_line_畸形行不panic落合理类() {
+    // %output 缺载荷/pane id 非数字 → Notify（畸形 % 行最无害落点）
+    assert_eq!(parse_ctrl_line("%output"), CtrlEvent::Notify);
+    assert_eq!(parse_ctrl_line("%output %45"), CtrlEvent::Notify);
+    assert_eq!(parse_ctrl_line("%output %xy foo"), CtrlEvent::Notify);
+    // % 后无内容 → Notify；空行 → Plain
+    assert_eq!(parse_ctrl_line("%"), CtrlEvent::Notify);
+    assert_eq!(parse_ctrl_line(""), CtrlEvent::Plain);
 }

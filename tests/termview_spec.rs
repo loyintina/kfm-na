@@ -6158,3 +6158,141 @@ fn spec_浏览态_feedseq活动判据() {
     tv.feed(b"more\r\n");
     assert!(tv.feed_seq() > s1, "浏览期 live 喂入必须照涨代际");
 }
+
+// ---- v4 推流画布（tmux -C 控制模式 %output 字节续喂，2026-09-25）----
+
+#[test]
+fn spec_推流画布_续喂生长锚守恒() {
+    // v4 锚守恒的根基假设：display_offset>0 时新行入史，alacritty 自动
+    // 抬 offset（阅读位钉死）——**这条红 = 假设破产，feed_browse 必须补
+    // 补偿账（Scroll::Delta(新增行数)）**，不许侥幸放行
+    let mut tv = host_termview(10, 4);
+    tv.set_pixel_scroll(true);
+    let cap = (0..8)
+        .map(|i| format!("A{i:02}"))
+        .collect::<Vec<_>>()
+        .join("\r\n")
+        + "\r\n";
+    let (cols, rows) = tv.live_grid_dims();
+    let canvas = termview::Canvas::build(&cap, cols, rows);
+    tv.enter_browse_canvas(canvas);
+    tv.scroll_px(72.0); // 滚 2 行进历史
+    assert_eq!(tv.display_offset(), 2);
+    let before = tv.dump_text();
+    assert!(before.contains("A03") && before.contains("A06"));
+    // 推流续喂：%output 解码字节直喂浏览中画布（底部追加 2 行）
+    assert!(tv.feed_browse(b"A08\r\nA09\r\n"), "浏览态续喂必须受理");
+    assert_eq!(
+        tv.display_offset(),
+        4,
+        "续喂追加 2 行 = alacritty 自动抬 offset +2（阅读位钉死）"
+    );
+    let txt = tv.dump_text();
+    assert!(
+        txt.contains("A03") && txt.contains("A06") && !txt.contains("A02") && !txt.contains("A07"),
+        "续喂后可见内容必须与喂前同一批（零跳动），实得 {txt:?}"
+    );
+    // 非浏览态 feed_browse = false（调用方转喂 App 侧后台画布）
+    let mut tv2 = host_termview(8, 2);
+    assert!(!tv2.feed_browse(b"x\r\n"));
+}
+
+#[test]
+fn spec_推流画布_交还往返零损耗() {
+    // 触底回 live：画布交还 App 后台续喂；再拖动起手原画布落位——
+    // 期间的字节一个不许丢（模型核心：画布离视图 ≠ 停生长）
+    let mut tv = host_termview(10, 4);
+    tv.set_pixel_scroll(true); // scroll_px 只在像素滚动模式受理
+    let (cols, rows) = tv.live_grid_dims();
+    let mut canvas = termview::Canvas::build("A0\r\nA1\r\n", cols, rows);
+    canvas.feed_bytes(b"A2\r\n"); // 落位前已在生长
+    tv.enter_browse_canvas(canvas);
+    assert!(tv.feed_browse(b"A3\r\n"));
+    // 触底退场：画布连常驻 proc 一起交还
+    let mut back = tv.take_browse_canvas().expect("浏览态必须能交还画布");
+    assert!(!tv.browsing(), "交还后视图已回 live");
+    assert!(!tv.feed_browse(b"zz\r\n"), "非浏览态续喂必须拒收");
+    back.feed_bytes(b"A4\r\n"); // App 侧后台续喂（视图不在场也生长）
+    // 再进浏览：原画布落位，全程字节完整（视口 4 行只装得下末尾——
+    // 底部见新字节，滚到顶见播种字节，合起来 = 零丢失）
+    tv.enter_browse_canvas(back);
+    let txt = tv.dump_text();
+    for want in ["A3", "A4"] {
+        assert!(txt.contains(want), "底部缺新字节 {want}，实得 {txt:?}");
+    }
+    assert!(!txt.contains("zz"), "非浏览态拒收的字节不许混入");
+    tv.scroll_px(720.0); // 滚到史顶
+    let top = tv.dump_text();
+    for want in ["A0", "A1", "A2"] {
+        assert!(top.contains(want), "史顶缺早字节 {want}，实得 {top:?}");
+    }
+    // 快照臂进/退清 proc：enter_browse_term 后再 take = None（快照无续喂权）
+    let mut tv3 = host_termview(10, 4);
+    tv3.enter_browse_term(TermView::build_browse_term("S\r\n", cols, rows));
+    assert!(tv3.take_browse_canvas().is_none());
+}
+
+#[test]
+fn spec_推流画布_转义跨块续喂() {
+    // %output 推送可在任意字节边界断行——转义序列截半（"\x1b[3" | "1mX"）
+    // 必须靠常驻 Processor 拼回：即用即弃的 Processor 会把 "1mX" 当垃圾
+    // 文本画出（红 X 变裸字 1mX）——这条钉 = 常驻 proc 的存在理由
+    let mut tv = host_termview(10, 4);
+    let (cols, rows) = tv.live_grid_dims();
+    tv.enter_browse_canvas(termview::Canvas::build("\r\n", cols, rows));
+    assert!(tv.feed_browse(b"\x1b[3")); // 半个 SGR 红色序列
+    assert!(tv.feed_browse(b"1mX\r\n")); // 续半 + 一个红 X
+    let cells = tv.collect_gpu_cells(10 * CELL_W + 2 * kfm_na::termview::MARGIN_X, 800);
+    let x = cells
+        .iter()
+        .find(|c| c.c == 'X')
+        .expect("跨块拼接后 X 必须落格");
+    // 红 = ANSI 1 号色映射（color_to_xrgb 同料）；若拼不回 = 无红 X
+    let red = color_to_xrgb(Color::Named(NamedColor::Red));
+    assert_eq!(x.fg, red, "转义跨块截半必须拼回完整 SGR（X 应为红色）");
+    let text: String = cells.iter().map(|c| c.c).collect();
+    assert!(
+        !text.contains('3') || !text.contains('m'),
+        "截半残片不许当文本画出: {text:?}"
+    );
+}
+
+#[test]
+fn spec_推流画布_对账重播锚守恒() {
+    // 5s 对账重播落位 = swap_browse_canvas：锚定内容守恒语义与
+    // swap_browse_term 同轨（阅读位钉死），常驻 proc 随新画布换班——
+    // 换班后续喂走的是新画布的 proc（旧 proc 与旧画布同焚）
+    let mut tv = host_termview(10, 4);
+    tv.set_pixel_scroll(true);
+    let (cols, rows) = tv.live_grid_dims();
+    let cap1 = (0..8)
+        .map(|i| format!("A{i:02}"))
+        .collect::<Vec<_>>()
+        .join("\r\n")
+        + "\r\n";
+    tv.enter_browse_canvas(termview::Canvas::build(&cap1, cols, rows));
+    tv.scroll_px(72.0); // 滚 2 行进历史
+    assert_eq!(tv.display_offset(), 2);
+    // 对账重播种：新画布多了 2 行新输出（底部追加）——offset 补偿 +2
+    let cap2 = (0..10)
+        .map(|i| format!("A{i:02}"))
+        .collect::<Vec<_>>()
+        .join("\r\n")
+        + "\r\n";
+    tv.swap_browse_canvas(termview::Canvas::build(&cap2, cols, rows));
+    assert!(tv.browsing());
+    assert_eq!(
+        tv.display_offset(),
+        4,
+        "对账重播底部追加 2 行 = offset 补偿 +2（阅读位钉死）"
+    );
+    let txt = tv.dump_text();
+    assert!(
+        txt.contains("A03") && txt.contains("A06"),
+        "重播后可见内容必须与重播前同一批，实得 {txt:?}"
+    );
+    // 换班后续喂受理（新画布的 proc 接流——旧 proc 已焚，这条喂不进
+    // = swap 没换 proc 的实咬）
+    assert!(tv.feed_browse(b"A10\r\n"), "对账重播后续喂必须受理");
+    assert_eq!(tv.display_offset(), 5, "换班后续喂照常锚守恒");
+}

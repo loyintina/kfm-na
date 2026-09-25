@@ -1728,6 +1728,13 @@ pub struct TermView {
     /// None = 不在浏览态。进出都清 scroll_frac_px（零头是视口态，
     /// 换内容源必须归零，不许带病过境）
     browse: Option<Term<VoidListener>>,
+    /// v4 推流画布的常驻 Processor（2026-09-25 tmux -C 控制模式推流）：
+    /// 快照路径（enter/swap_browse_term）Processor 即用即弃；推流路径
+    /// 转义序列可跨 %output 块截半，半边状态只能活在常驻 Processor
+    /// 里——浏览期画布在视图里时它跟班在此，退出随 take_browse_canvas
+    /// 交还 App。v3 快照落位（enter_browse_term/swap_browse_term）一律
+    /// 清 None：快照流没有续喂权
+    browse_proc: Option<Processor>,
     /// live 喂入代际（feed 单调递增）——外置视口刷新节流的活动判据
     feed_seq: u64,
     /// 设计 token（theme.rs 第 2 层）：控件渲染只读这里，不认字面颜色。
@@ -1744,6 +1751,46 @@ type GlyphCache = std::cell::RefCell<
 /// AI 页一行展示行：(文字色, 该行的已量宽字符)——build_ai_rows 返回值的
 /// 类型别名（clippy type_complexity 要求；inherent 关联类型不稳定，只能放模块级）
 type AiRow<'a> = (u32, Vec<(&'a fontdue::Font, char, f32)>);
+
+/// v4 推流画布（2026-09-25 tmux -C 控制模式推流，用户拍板「直接换真
+/// 方案」）：Term + 常驻 Processor 对。与快照 Term 的唯一差别 =
+/// Processor 留存——续喂流的转义序列可跨 %output 块截半，即用即弃的
+/// Processor 会把半边序列当下次开头的垃圾。播种 = 带内 capture 文本
+/// （build_browse_term 同料），之后 %output 字节经 feed 续喂
+pub struct Canvas {
+    pub term: Term<VoidListener>,
+    proc: Processor,
+}
+
+impl Canvas {
+    /// 播种：capture 文本建画布（网格同 live 尺，SCROLLBACK 同钉值，
+    /// 尾补 ?25l 藏播种光标），Processor 留存待续喂
+    pub fn build(capture: &str, cols: usize, rows: usize) -> Self {
+        let size = TermSize {
+            cols: cols.max(1),
+            rows: rows.max(1),
+        };
+        let mut term = Term::new(
+            Config {
+                scrolling_history: TermView::SCROLLBACK_LINES,
+                ..Config::default()
+            },
+            &size,
+            VoidListener,
+        );
+        let mut proc: Processor = Processor::new();
+        proc.advance(&mut term, capture.as_bytes());
+        proc.advance(&mut term, b"\x1b[?25l");
+        Canvas { term, proc }
+    }
+
+    /// 字节续喂（%output 解码后唯一入口）。命名 feed_bytes 不用 feed
+    /// ——feed 在覆盖矩阵的噪声黑名单里（过泛词引用不算覆盖证据），
+    /// 同名会让本方法的考题引用被误吞
+    pub fn feed_bytes(&mut self, bytes: &[u8]) {
+        self.proc.advance(&mut self.term, bytes);
+    }
+}
 
 impl TermView {
     /// scrollback 容量(行)。2026-08-27 两线横向审计漂移 #1 用户拍板:
@@ -1808,6 +1855,7 @@ impl TermView {
             pixel_scroll: false,
             scroll_frac_px: 0.0,
             browse: None,
+            browse_proc: None,
             feed_seq: 0,
             theme: crate::theme::Theme::default(),
         }
@@ -1964,25 +2012,10 @@ impl TermView {
     /// 用户实报「拖动卡一下」定罪，解析挪进抓取后台线程，UI 只换壳）。
     /// 与 live 同网格尺寸（行带逐行对位，切入瞬间内容零跳动；超屏行自然
     /// 沉进 scrollback，存量 = 可滚里程）。尾补 ?25l 藏快照光标（快照光标
-    /// 停在文末是伪影，光标是 live 会话的发言权）。Processor 一次性
-    /// 即用即弃（快照流无续帧）
+    /// 停在文末是伪影，光标是 live 会话的发言权）。实现 = Canvas::build
+    /// 弃 proc（快照流无续帧；v4 续喂画布同走此料，proc 留存）
     pub fn build_browse_term(capture: &str, cols: usize, rows: usize) -> Term<VoidListener> {
-        let size = TermSize {
-            cols: cols.max(1),
-            rows: rows.max(1),
-        };
-        let mut term = Term::new(
-            Config {
-                scrolling_history: Self::SCROLLBACK_LINES,
-                ..Config::default()
-            },
-            &size,
-            VoidListener,
-        );
-        let mut processor: Processor = Processor::new();
-        processor.advance(&mut term, capture.as_bytes());
-        processor.advance(&mut term, b"\x1b[?25l");
-        term
+        Canvas::build(capture, cols, rows).term
     }
 
     /// 进浏览态（字符串便利臂：UI 线程解析，只许考题/小快照用——
@@ -1992,15 +2025,55 @@ impl TermView {
         self.enter_browse_term(Self::build_browse_term(capture, cols, rows));
     }
 
-    /// 进浏览态（预建快照 Term 落位）。进入即清分数零头（视口态换源归零）
+    /// 进浏览态（预建快照 Term 落位）。进入即清分数零头（视口态换源归零）。
+    /// v3 快照臂：快照流无续喂权——常驻 proc 一并清空（v4 画布走
+    /// enter_browse_canvas）
     pub fn enter_browse_term(&mut self, term: Term<VoidListener>) {
         self.browse = Some(term);
+        self.browse_proc = None;
         self.scroll_frac_px = 0.0;
+    }
+
+    /// 进浏览态（v4 推流画布落位）：画布 = 带内 capture 播种 + %output
+    /// 字节续喂的活 Term，常驻 Processor 随画布进视图（续喂状态机不
+    /// 离画布）。进入即清分数零头（同 enter_browse_term）
+    pub fn enter_browse_canvas(&mut self, canvas: Canvas) {
+        self.browse = Some(canvas.term);
+        self.browse_proc = Some(canvas.proc);
+        self.scroll_frac_px = 0.0;
+    }
+
+    /// 浏览期字节续喂（v4 推流唯一写入口）：%output 解码字节直喂浏览中
+    /// 的画布。锚守恒靠 alacritty 内置——display_offset>0 时新行入史
+    /// 自动抬 offset（阅读位钉死，不需 swap 臂的补偿账）。返回 false
+    /// = 非浏览态（调用方转喂 App 侧后台画布）
+    pub fn feed_browse(&mut self, bytes: &[u8]) -> bool {
+        match (&mut self.browse, &mut self.browse_proc) {
+            (Some(t), Some(p)) => {
+                p.advance(t, bytes);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// 退浏览态且画布交还 App（v4：触底回 live 后画布在后台继续续喂，
+    /// 下次拖动起手零等待零抓取）。会话切换/resize/attach 等画布作废
+    /// 场景不许走这里——那些走 exit_browse 丢弃
+    pub fn take_browse_canvas(&mut self) -> Option<Canvas> {
+        match (self.browse.take(), self.browse_proc.take()) {
+            (Some(term), Some(proc)) => {
+                self.scroll_frac_px = 0.0;
+                Some(Canvas { term, proc })
+            }
+            _ => None,
+        }
     }
 
     /// 退浏览态：快照丢弃（live term 浏览期照常被喂，回切即最新，
     /// 零追赶）+ 分数零头归零。返回是否真在浏览态（调用方置脏判据）
     pub fn exit_browse(&mut self) -> bool {
+        self.browse_proc = None; // v3/v4 通用丢弃口：proc 随快照同焚
         if self.browse.take().is_some() {
             self.scroll_frac_px = 0.0;
             return true;
@@ -2020,7 +2093,8 @@ impl TermView {
     /// 内容下移（每刷一次阅读位跳 N 行，用户实报「一行一行瞬间消失」）。
     /// 补偿 = offset' = offset + (新总量 - 旧总量)（追加多少行就抬多少，
     /// 用户正在读的内容原地不动；tmux 史顶溢出丢旧行时钳到顶）。
-    /// 分数零头保留（亚行阅读位不动）。非浏览态调用 = 等价进入（容错）
+    /// 分数零头保留（亚行阅读位不动）。非浏览态调用 = 等价进入（容错）。
+    /// v3 快照臂：常驻 proc 清空（快照流无续喂权）
     pub fn swap_browse_term(&mut self, mut term: Term<VoidListener>) {
         if let Some(old) = &self.browse {
             let old_total = old.grid().history_size() + old.grid().screen_lines();
@@ -2030,6 +2104,15 @@ impl TermView {
             term.scroll_display(Scroll::Delta(off + delta)); // alacritty 自钳 [0, 史顶]
         }
         self.browse = Some(term);
+        self.browse_proc = None;
+    }
+
+    /// v4 对账重播种落位（浏览期中）：锚守恒语义同 swap_browse_term，
+    /// 常驻 Processor 随新画布换班（旧 proc 与旧画布同焚——状态机只认
+    /// 自己的字节流）
+    pub fn swap_browse_canvas(&mut self, canvas: Canvas) {
+        self.swap_browse_term(canvas.term);
+        self.browse_proc = Some(canvas.proc);
     }
 
     /// live 网格尺寸（快照 Term 构建的同尺依据；浏览期也读 live——
@@ -7441,6 +7524,18 @@ pub trait TermEmu: Send {
     /// 浏览期原地刷新快照（视口锚定内容守恒：offset 补偿底部追加行数，
     /// 零头保留）——动态播放条款的承重方法（android_app 节流刷新调用方）
     fn swap_browse_term(&mut self, term: BrowseTerm);
+    /// 进浏览态（v4 推流画布落位）：画布 = 带内 capture 播种 + %output
+    /// 字节续喂的活 Term，常驻 Processor 随画布进视图
+    fn enter_browse_canvas(&mut self, canvas: Canvas);
+    /// 浏览期字节续喂（v4 推流唯一写入口）：锚守恒靠 alacritty 内置
+    /// （display_offset>0 时新行入史自动抬 offset）；false = 非浏览态
+    fn feed_browse(&mut self, bytes: &[u8]) -> bool;
+    /// 退浏览态且画布交还 App（v4：后台续喂，下次起手零等待）；
+    /// v3 快照臂/非浏览态 = None
+    fn take_browse_canvas(&mut self) -> Option<Canvas>;
+    /// v4 对账重播种落位（浏览期中）：锚守恒语义同 swap_browse_term，
+    /// 常驻 Processor 随新画布换班
+    fn swap_browse_canvas(&mut self, canvas: Canvas);
     /// live 网格尺寸（抓取线程 build_browse_term 的同尺依据）
     fn live_grid_dims(&self) -> (usize, usize);
     /// live 喂入代际读数（快照刷新节流的活动判据，android_app 调用方）
@@ -7781,6 +7876,18 @@ impl TermEmu for TermView {
     }
     fn swap_browse_term(&mut self, term: BrowseTerm) {
         TermView::swap_browse_term(self, term)
+    }
+    fn enter_browse_canvas(&mut self, canvas: Canvas) {
+        TermView::enter_browse_canvas(self, canvas)
+    }
+    fn feed_browse(&mut self, bytes: &[u8]) -> bool {
+        TermView::feed_browse(self, bytes)
+    }
+    fn take_browse_canvas(&mut self) -> Option<Canvas> {
+        TermView::take_browse_canvas(self)
+    }
+    fn swap_browse_canvas(&mut self, canvas: Canvas) {
+        TermView::swap_browse_canvas(self, canvas)
     }
     fn live_grid_dims(&self) -> (usize, usize) {
         TermView::live_grid_dims(self)

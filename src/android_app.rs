@@ -238,6 +238,22 @@ enum Gfx {
 /// softbuffer，照常可用）；false = 纯 softbuffer（对照组/排障开关）
 const GLES_FIRST: bool = true;
 
+/// v4 推流画布控制通道相位（2026-09-25 tmux -C 控制模式，用户拍板
+/// 「直接换真方案」——v3 轮询快照是逼近，推流画布才是模型的正身）：
+/// Steady = 稳态（未播种 / 播种完成推流中，靠 ctrl_pane 区分）；
+/// AwaitHeader/AwaitCapture = 播种双块在途（此间 %output 字节丢弃——
+/// 块前字节已在 capture 快照内，带内对齐天然零丢失零重复）；
+/// Building = capture 块已收齐，Canvas 在后台线程构建（BAR-154：UI
+/// 线程零解析），此间 %output 字节进 ctrl_pending 待安装后补喂
+#[derive(Default, PartialEq, Eq)]
+enum CtrlPhase {
+    #[default]
+    Steady,
+    AwaitHeader,
+    AwaitCapture,
+    Building,
+}
+
 #[derive(Default)]
 struct App {
     window: Option<Arc<Window>>,
@@ -448,6 +464,36 @@ struct App {
     /// 拿本账合并出全量（k = hist_new - hist_old 行照抄旧文前缀）。
     /// None = 下次抓取走全量（resize/切会话/合并判负后回落）
     browse_last: Option<(std::sync::Arc<str>, usize)>,
+    // ---- v4 推流画布（tmux -C 控制模式，2026-09-25）----
+    /// 控制通道（tmux -C attach -f ignore-size 常驻）：%output 字节流
+    /// 即时续喂画布，v3 轮询降级为保底（本通道活着 = 轮询闸关死）
+    browse_ctrl: Option<crate::conn::TermHandle>,
+    /// 后台画布（不在浏览态时在此续喂生长；浏览态时画布在 TermView
+    /// 里，本槽 None——take/enter_browse_canvas 进出成对）
+    browse_canvas: Option<termview::Canvas>,
+    /// 控制通道行装配余量（%output 可跨事件截半行）
+    ctrl_buf: Vec<u8>,
+    /// 播种相位机（CtrlPhase 语义见枚举定义）
+    ctrl_phase: CtrlPhase,
+    /// capture 块正文累加器（AwaitCapture 期 Plain 行，\r\n 缝合——
+    /// 与 v3 capture_parse 产物的行尾同料，Canvas::build 一把尺）
+    ctrl_cap: String,
+    /// Building 期 %output 字节缓冲（安装后先喂这批，再接流）
+    ctrl_pending: Vec<u8>,
+    /// 播种认领的活动 pane id（%output 过滤：非活动窗格的字节不许
+    /// 混进画布；None = 未播种——v3 轮询闸开）
+    ctrl_pane: Option<u64>,
+    /// 播种发出时刻（boot_ms——播种落地耗时的尺子）
+    ctrl_seed_ms: u64,
+    /// 末次播种落地时刻（boot_ms——5s 对账重播的尺子；Notify 清零
+    /// 逼下拍重播）
+    ctrl_seeded_ms: u64,
+    /// 控制通道退避时刻（boot_ms——判负回落后 5s 内不许重孵/重播种，
+    /// 防死亡-重试空转刷屏）
+    ctrl_retry_ms: u64,
+    /// 播种 Canvas 后台构建在途（BAR-154 同款：266KB ANSI 解析不占
+    /// UI 线程；完工排水 = 安装 + ctrl_pending 补喂）
+    ctrl_build: Option<std::sync::mpsc::Receiver<termview::Canvas>>,
     /// 远程连接配置缓存（启动时装配 conn_provider 那份的 clone）——
     /// tmux 执行通道的 ws url 与 attach 重开连接的命令来源
     remote_conn_cfg: Option<crate::conn::ConnConfig>,
@@ -1971,9 +2017,7 @@ impl App {
                                 let mut t = t.lock().unwrap();
                                 t.scroll_px(d);
                                 let back = t.display_offset() == 0 && t.scroll_frac_px() == 0.0;
-                                if back {
-                                    t.exit_browse();
-                                } else {
+                                if !back {
                                     crate::report::report(
                                         "scroll",
                                         &format!(
@@ -1987,6 +2031,9 @@ impl App {
                                 back
                             };
                             if back_live {
+                                // v4：画布交还 App 后台续喂（下次起手零等待）；
+                                // v3：快照焚毁（锁外走公共分路口，不许锁内重入）
+                                self.browse_exit_or_park();
                                 // BAR-154：触底退场后同次触摸内抑制重返——
                                 // 手指未抬时在途抓取/温热落地不许再
                                 // enter_browse（用户实报「触底后又被扔回
@@ -1996,7 +2043,7 @@ impl App {
                                     "scroll",
                                     "外置视口触底自动回 live（同次触摸抑制重返）",
                                 );
-                                self.browse_fire_capture(); // 退场即补温热
+                                self.browse_fire_capture(); // 退场即补温热（v4 活性闸自封口）
                             }
                             self.dirty = true;
                             return;
@@ -2007,6 +2054,27 @@ impl App {
                             return;
                         }
                         self.browse_pending_px += d;
+                        // v4 推流画布起手（最优先臂）：画布在后台随字节流
+                        // 续喂生长，落位零等待零抓取——%output 自续，连
+                        // 温热/首抓的 exec 往返都不需要
+                        if let Some(canvas) = self.browse_canvas.take() {
+                            {
+                                let mut t = t.lock().unwrap();
+                                t.enter_browse_canvas(canvas);
+                                t.scroll_px(self.browse_pending_px);
+                                crate::report::report(
+                                    "scroll",
+                                    &format!(
+                                        "外置视口切入(推流画布): 里程 {} 行 补滚 {:.1}px",
+                                        t.history_size(),
+                                        self.browse_pending_px
+                                    ),
+                                );
+                            }
+                            self.browse_pending_px = 0.0;
+                            self.dirty = true;
+                            return;
+                        }
                         if !capture_in_flight {
                             if let Some((term, _, _, text, hist)) = self.browse_warm.take() {
                                 // 温热起手：零感知切入 + 挂账位移补滚
@@ -3868,6 +3936,12 @@ impl App {
             // （合并模型行数对不上必然回落全量，主动清账省一次空跑）
             self.browse_warm = None;
             self.browse_last = None;
+            // v4：画布与 live 同尺契约——换尺即作废；通道活着则清零
+            // 对账账逼下拍重播（新尺播种新画布，锚守恒落位）
+            self.browse_canvas = None;
+            if self.ctrl_active() {
+                self.ctrl_seeded_ms = 0;
+            }
             // 真 resize 已到：BAR-124 抖动归位账作废（归位值是按旧网格
             // 武装的，发出去会把尺寸掰回去；且这次净变化本身就有
             // SIGWINCH，重画目的已达成）
@@ -4151,6 +4225,7 @@ impl App {
         self.browse_pending_px = 0.0;
         self.browse_warm = None; // 快照/温热账都是旧会话的画面，一并作废
         self.browse_last = None; // v3 合并基账同作废（旧会话文本不许当基）
+        self.ctrl_teardown("会话/attach 切换"); // v4 画布/控制通道同是旧主体画面
         self.browse_suppress = false; // 换主体 = 新触摸语境，抑制清零
         self.fling = None; // 换主体 = 旧画面的甩尾不许过境
         // BAR-125 模式快照换-mode（在 replay 之前——复位/清屏/恢复
@@ -4311,12 +4386,11 @@ impl App {
             .term_handle()
             .is_some_and(|t| t.lock().unwrap().browsing())
         {
-            if let Some(t) = self.term_handle() {
-                t.lock().unwrap().exit_browse();
-            }
+            // v4：画布交还后台续喂；v3：快照焚毁（公共分路口）
+            self.browse_exit_or_park();
             crate::report::report("scroll", "外置视口退出: 击键回 live");
             self.browse_suppress = true; // BAR-154：同次触摸内不许重返（抬手解锁）
-            self.browse_fire_capture(); // 退场即补温热（下次起手零等待）
+            self.browse_fire_capture(); // 退场即补温热（v4 活性闸自封口）
             self.dirty = true;
         }
         let is_remote = self
@@ -4485,6 +4559,294 @@ impl App {
         }
     }
 
+    // ---- v4 推流画布：控制通道生命周期（tmux -C，2026-09-25）----
+
+    /// 推流活性闸（v3 轮询/抓取的封口令）：控制通道活着且播种成功过
+    /// = 字节流自续，轮询抓拍一律不开火（v3 降级为纯保底路径）
+    fn ctrl_active(&self) -> bool {
+        self.browse_ctrl.is_some() && self.ctrl_pane.is_some()
+    }
+
+    /// 每圈确保（about_to_wait 调用）：要就有（服务器相+已附着+过退避
+    /// → 起通道发播种）、不要就拆（本地相/未附着 = 通道无权存活）、
+    /// 播种失败过退避重试、推流稳态 5s 对账重播
+    fn ctrl_ensure(&mut self) {
+        let now = crate::report::boot_ms() as u64;
+        let want = crate::endpoint::current() == crate::endpoint::EndpointKind::Server
+            && self.remote_attached.is_some();
+        if !want {
+            if self.browse_ctrl.is_some() {
+                self.ctrl_teardown("对象离场（本地相/未附着）");
+            }
+            return;
+        }
+        if self.browse_ctrl.is_none() {
+            if now < self.ctrl_retry_ms {
+                return; // 判负退避中
+            }
+            let (Some(name), Some(cfg)) = (
+                self.remote_attached.clone(),
+                self.remote_conn_cfg.as_ref().map(|c| c.url.clone()),
+            ) else {
+                return;
+            };
+            let handle = crate::conn::ws_spawner()(crate::conn::ConnConfig {
+                url: cfg,
+                command: Some(crate::tmux_ctl::cmd_ctrl_attach(&name)),
+            });
+            // 播种命令直接发——conn 层 Opened 前 Input 有缓存补发
+            handle
+                .outbound
+                .send(TermCmd::Input(crate::tmux_ctl::cmd_ctrl_seed()))
+                .ok();
+            self.browse_ctrl = Some(handle);
+            self.ctrl_phase = CtrlPhase::AwaitHeader;
+            self.ctrl_seed_ms = now;
+            crate::report::report("term", &format!("推流画布 ctrl 开: {name}（播种发出）"));
+        } else if self.ctrl_pane.is_none()
+            && self.ctrl_phase == CtrlPhase::Steady
+            && now >= self.ctrl_retry_ms
+        {
+            self.ctrl_seed_send("播种失败重试");
+        } else if self.ctrl_pane.is_some()
+            && self.ctrl_phase == CtrlPhase::Steady
+            && now.saturating_sub(self.ctrl_seeded_ms) >= 5000
+        {
+            self.ctrl_seed_send("对账重播");
+        }
+    }
+
+    /// 播种发出（通道已活前提）：双块命令进 tmux stdin，相位转
+    /// AwaitHeader；cap 累加器清零。对账/重试/Notify 逼播同走此口
+    fn ctrl_seed_send(&mut self, why: &str) {
+        let Some(h) = &self.browse_ctrl else {
+            return;
+        };
+        h.outbound
+            .send(TermCmd::Input(crate::tmux_ctl::cmd_ctrl_seed()))
+            .ok();
+        self.ctrl_phase = CtrlPhase::AwaitHeader;
+        self.ctrl_seed_ms = crate::report::boot_ms() as u64;
+        self.ctrl_cap.clear();
+        crate::report::report("term", &format!("推流画布播种发出: {why}"));
+    }
+
+    /// 播种失败：相位回 Steady + pane 账勾销（v3 轮询闸开兜底）+
+    /// 5s 退避（ctrl_ensure 的重试臂到点再播）
+    fn ctrl_seed_fail(&mut self, why: &str) {
+        self.ctrl_phase = CtrlPhase::Steady;
+        self.ctrl_pane = None;
+        self.ctrl_retry_ms = crate::report::boot_ms() as u64 + 5000;
+        crate::report::report(
+            "term",
+            &format!("推流画布播种失败: {why}（5s 后重试，v3 轮询兜底）"),
+        );
+    }
+
+    /// 控制通道拆除（判负回落/换主体/对象离场）：Close 帧 + 通道丢弃
+    /// + 画布/相位/缓冲全清——v3 轮询自动接管（ctrl_active 闸开）
+    fn ctrl_teardown(&mut self, why: &str) {
+        if let Some(h) = self.browse_ctrl.take() {
+            h.outbound.send(TermCmd::Close).ok();
+        }
+        self.ctrl_phase = CtrlPhase::Steady;
+        self.ctrl_pane = None;
+        self.ctrl_buf.clear();
+        self.ctrl_cap.clear();
+        self.ctrl_pending.clear();
+        self.ctrl_build = None;
+        self.browse_canvas = None;
+        self.ctrl_retry_ms = crate::report::boot_ms() as u64 + 5000;
+        crate::report::report(
+            "term",
+            &format!("推流画布 ctrl 关: {why}（判负回落 v3 轮询）"),
+        );
+    }
+
+    /// 退浏览分路口（触底/击键/甩尾共用）：v4 = 画布交还 App 后台
+    /// 续喂（take_browse_canvas——下次起手零等待零抓取）；v3 = 快照
+    /// 焚毁（exit_browse——无续喂权）。返回是否真退了浏览态
+    fn browse_exit_or_park(&mut self) -> bool {
+        let Some(t) = self.term_handle() else {
+            return false;
+        };
+        let mut g = t.lock().unwrap();
+        if !g.browsing() {
+            return false;
+        }
+        if self.ctrl_active() {
+            if let Some(canvas) = g.take_browse_canvas() {
+                self.browse_canvas = Some(canvas);
+            }
+        } else {
+            g.exit_browse();
+        }
+        true
+    }
+
+    /// 控制通道排水（about_to_wait 每圈，先于 v3 轮询闸）：①播种
+    /// 构建完工安装（swap/入账 + pending 补喂）②事件泵——行装配
+    /// → parse_ctrl_line 分类 → 相位机消费
+    fn ctrl_drain(&mut self) {
+        // ① 后台 Canvas 构建完工
+        let built = self.ctrl_build.as_ref().and_then(|rx| match rx.try_recv() {
+            Ok(c) => Some(Ok(c)),
+            Err(std::sync::mpsc::TryRecvError::Empty) => None,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(Err(())),
+        });
+        if let Some(res) = built {
+            self.ctrl_build = None;
+            match res {
+                Ok(mut canvas) => {
+                    // Building 期字节先补喂（零丢失接缝），画布再接流
+                    if !self.ctrl_pending.is_empty() {
+                        let pending = std::mem::take(&mut self.ctrl_pending);
+                        canvas.feed_bytes(&pending);
+                    }
+                    let cost = (crate::report::boot_ms() as u64).saturating_sub(self.ctrl_seed_ms);
+                    self.ctrl_seeded_ms = crate::report::boot_ms() as u64;
+                    self.ctrl_phase = CtrlPhase::Steady;
+                    let browsing = self
+                        .term_handle()
+                        .is_some_and(|t| t.lock().unwrap().browsing());
+                    if browsing {
+                        if let Some(t) = self.term_handle() {
+                            t.lock().unwrap().swap_browse_canvas(canvas);
+                        }
+                        self.dirty = true;
+                    } else {
+                        self.browse_canvas = Some(canvas);
+                    }
+                    crate::report::report(
+                        "term",
+                        &format!("推流画布播种落地: 耗时 {cost}ms 浏览中={browsing}"),
+                    );
+                }
+                Err(()) => self.ctrl_seed_fail("构建线程断线"),
+            }
+        }
+        // ② 事件泵（先收成批再消费——消费臂要借 self 别处）
+        let mut events = Vec::new();
+        if let Some(h) = &self.browse_ctrl {
+            loop {
+                match h.events.try_recv() {
+                    Ok(ev) => events.push(ev),
+                    Err(std::sync::mpsc::TryRecvError::Empty)
+                    | Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+                }
+            }
+        }
+        for ev in events {
+            self.ctrl_on_event(ev);
+        }
+    }
+
+    /// 单事件消费（ctrl_drain 拆解）：Output 走行装配进相位机，
+    /// Exited/Failed/Disconnected 级 = 判负回落
+    fn ctrl_on_event(&mut self, ev: SessionEvent) {
+        match ev {
+            SessionEvent::Output { data } => {
+                self.ctrl_buf.extend(data.as_bytes());
+                while let Some(pos) = self.ctrl_buf.iter().position(|b| *b == b'\n') {
+                    let line: Vec<u8> = self.ctrl_buf.drain(..=pos).collect();
+                    let line = String::from_utf8_lossy(&line[..line.len() - 1]).into_owned();
+                    self.ctrl_on_line(line);
+                }
+            }
+            SessionEvent::Exited { code } => {
+                self.ctrl_teardown(&format!("通道退出 code={code}"));
+            }
+            SessionEvent::Failed { message } => {
+                self.ctrl_teardown(&format!("通道失败 {message}"));
+            }
+            SessionEvent::Opened { .. } => {} // 播种已在 spawn 时发出（缓存补发）
+        }
+    }
+
+    /// 单行消费（相位机本体）：%output 字节按相位三路（播种窗口内
+    /// 丢弃 = 已在 capture 内 / Building 进 pending / 稳态续喂画布），
+    /// 块边界推相位，Notify 逼对账
+    fn ctrl_on_line(&mut self, line: String) {
+        use crate::tmux_ctl::CtrlEvent;
+        match crate::tmux_ctl::parse_ctrl_line(&line) {
+            CtrlEvent::Output { pane, bytes } => match self.ctrl_phase {
+                // 播种窗口内的输出已在 capture 快照内（带内对齐）——丢弃
+                CtrlPhase::AwaitHeader | CtrlPhase::AwaitCapture => {}
+                CtrlPhase::Building => {
+                    if Some(pane) == self.ctrl_pane {
+                        self.ctrl_pending.extend(bytes);
+                    }
+                }
+                CtrlPhase::Steady => {
+                    if self.ctrl_pane == Some(pane) {
+                        let fed = self
+                            .term_handle()
+                            .is_some_and(|t| t.lock().unwrap().feed_browse(&bytes));
+                        if fed {
+                            self.dirty = true; // 浏览中：字节即达即画
+                        } else if let Some(canvas) = &mut self.browse_canvas {
+                            canvas.feed_bytes(&bytes); // 后台画布续喂生长
+                        }
+                    }
+                }
+            },
+            CtrlEvent::Plain => match self.ctrl_phase {
+                CtrlPhase::AwaitHeader => {
+                    if let Some(h) = crate::tmux_ctl::parse_seed_header(&line) {
+                        self.ctrl_pane = Some(h.pane);
+                        self.ctrl_phase = CtrlPhase::AwaitCapture;
+                    }
+                }
+                CtrlPhase::AwaitCapture => {
+                    // \r\n 缝合（与 v3 capture_parse 正文行尾同料）
+                    if !self.ctrl_cap.is_empty() {
+                        self.ctrl_cap.push_str("\r\n");
+                    }
+                    self.ctrl_cap.push_str(&line);
+                }
+                _ => {} // 稳态不该有杂散正文
+            },
+            CtrlEvent::BlockBegin => {
+                if self.ctrl_phase == CtrlPhase::AwaitCapture {
+                    self.ctrl_cap.clear(); // capture 块开口 = 正文起算
+                }
+            }
+            CtrlEvent::BlockEnd => match self.ctrl_phase {
+                CtrlPhase::AwaitHeader => self.ctrl_seed_fail("头块无 KFMHDR 头行"),
+                CtrlPhase::AwaitCapture => {
+                    // capture 收齐 → 后台线程建 Canvas（BAR-154：UI 零解析）
+                    self.ctrl_phase = CtrlPhase::Building;
+                    self.ctrl_pending.clear();
+                    let (cols, rows) = self
+                        .term_handle()
+                        .map(|t| t.lock().unwrap().live_grid_dims())
+                        .unwrap_or((80, 24));
+                    let cap = std::mem::take(&mut self.ctrl_cap);
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    std::thread::spawn(move || {
+                        let _ = tx.send(termview::Canvas::build(&cap, cols, rows));
+                    });
+                    self.ctrl_build = Some(rx);
+                }
+                _ => {} // 稳态：我方只发播种双块，不该有第三块
+            },
+            CtrlEvent::BlockError => {
+                if self.ctrl_phase != CtrlPhase::Steady {
+                    self.ctrl_seed_fail("命令块 %error");
+                }
+            }
+            // 通知（%layout-change/%window-pane-changed/...）：内容可能
+            // 走了 %output 覆盖不到的变化（切窗/布局/pane 换手）——清零
+            // 对账账逼下拍重播（重播 = 新 pane 认领 + 全量重播种自愈）
+            CtrlEvent::Notify => {
+                if self.ctrl_phase == CtrlPhase::Steady && self.ctrl_pane.is_some() {
+                    self.ctrl_seeded_ms = 0;
+                }
+            }
+            CtrlEvent::Exit => self.ctrl_teardown("tmux -C %exit（会话被 kill/断开）"),
+        }
+    }
+
     /// 外置视口抓取唯一发射口（2026-09-25 v2 后台模型）：在途不叠、
     /// 无附着/无通道不发；发出即记账 live feed_seq 与时刻（浏览期
     /// 刷新节流「live 有没有新活动」的比对基准）。
@@ -4498,7 +4860,8 @@ impl App {
     /// 大抓只在进入/合并判负回落时。历史不可变，合并产物 = 全量抓
     /// 逐字节同真——刷新成本从 266KB 降到 rows 行，节奏才敢提速
     fn browse_fire_capture(&mut self) {
-        if self.browse_capture.is_some() || !self.endpoint_exec_ok() {
+        // v4 推流活着 = 字节流自续，轮询抓拍永久封口（保底路径才开火）
+        if self.ctrl_active() || self.browse_capture.is_some() || !self.endpoint_exec_ok() {
             return;
         }
         let Some(name) = self.cur_attached() else {
@@ -4746,6 +5109,7 @@ impl App {
         self.browse_pending_px = 0.0;
         self.browse_warm = None; // 快照/温热账都是旧会话的画面，一并作废
         self.browse_last = None; // v3 合并基账同作废（旧会话文本不许当基）
+        self.ctrl_teardown("会话/attach 切换"); // v4 画布/控制通道同是旧主体画面
         self.browse_suppress = false; // 换主体 = 新触摸语境，抑制清零
         self.fling = None; // 换主体 = 旧画面的甩尾不许过境
         match crate::endpoint::current() {
@@ -8207,17 +8571,23 @@ impl ApplicationHandler for App {
                     }
                 }
             }
+            // v4 推流画布：每圈确保通道（起/拆/重试/5s 对账重播）+
+            // 排水（播种安装 + %output 字节续喂）——先于 v3 轮询闸
+            // （ctrl_active 封口后 v3 全链熄火，保底语义不靠时序）
+            self.ctrl_ensure();
+            self.ctrl_drain();
             // 浏览期动态播放（2026-09-25 用户拍板「tmux 窗口就该是动态
             // 播放的」）：v3 增量合并后单次刷新成本降到 rows 行级小抓，
             // 节奏提速——250ms 节流 + 在途不叠（exec 往返自限 ≈2-4Hz）
             // + live 有新活动才抓（feed_seq 比对——静默期零 exec 空转），
             // 落地 swap_browse_term 视口锚定内容守恒（BAR-154：offset
-            // 补偿底部追加行数）
+            // 补偿底部追加行数）。v4 起 = 保底路径（推流活着不开火）
             let browse_stale = self.term_handle().is_some_and(|t| {
                 let t = t.lock().unwrap();
                 t.browsing() && t.feed_seq() > self.browse_capture_feed
             });
             if browse_stale
+                && !self.ctrl_active()
                 && self.browse_capture.is_none()
                 && (crate::report::boot_ms() as u64).saturating_sub(self.browse_capture_ms) >= 250
             {
@@ -8253,6 +8623,9 @@ impl ApplicationHandler for App {
                     }
                     Some(d) if d != 0.0 => {
                         let tmux_attached = self.cur_attached().is_some();
+                        // 触底判定在锁内、退场在锁外（browse_exit_or_park
+                        // 要再拿同一把锁——锁内重入 = 死锁）
+                        let mut parked_bottom = false;
                         if let Some(h) = self.term_handle() {
                             let mut t = h.lock().unwrap();
                             if tmux_attached && t.mouse_report_active() {
@@ -8261,13 +8634,8 @@ impl ApplicationHandler for App {
                                     let off = t.display_offset();
                                     let frac = t.scroll_frac_px();
                                     if d < 0.0 && off == 0 && frac == 0.0 {
-                                        t.exit_browse();
-                                        self.browse_suppress = true; // 与拖动触底同制
+                                        parked_bottom = true; // 锁外退场
                                         kill = Some("触底回 live");
-                                        crate::report::report(
-                                            "scroll",
-                                            "外置视口触底自动回 live（甩尾，同次触摸抑制重返）",
-                                        );
                                     } else if d > 0.0 && off >= t.history_size() {
                                         kill = Some("触史顶");
                                     }
@@ -8286,6 +8654,15 @@ impl ApplicationHandler for App {
                                     kill = Some("触底/顶");
                                 }
                             }
+                        }
+                        if parked_bottom {
+                            // v4：画布交还后台续喂；v3：快照焚毁（锁外）
+                            self.browse_exit_or_park();
+                            self.browse_suppress = true; // 与拖动触底同制
+                            crate::report::report(
+                                "scroll",
+                                "外置视口触底自动回 live（甩尾，同次触摸抑制重返）",
+                            );
                         }
                         self.dirty = true;
                     }

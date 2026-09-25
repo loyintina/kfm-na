@@ -276,6 +276,146 @@ pub fn session_name_of(command: &str) -> Option<String> {
     None
 }
 
+// ---- 控制模式（tmux -C）协议解析层（2026-09-25 服务器实证 tmux 3.4）----
+//
+// tmux -C attach 后服务器把输出与事件全推成行协议：
+// - `%output %<pane数字id> <载荷>`：窗格新输出；载荷里不可见字节转义成
+//   **三位八进制**（\015=\r、\134=反斜杠自身、\011=tab、\033=ESC），可
+//   打印 ASCII 原样；
+// - `%begin <号> <号> <旗>` / `%end ...` / `%error ...`：命令回应块边界
+//   （出错时 %error 与 %begin 配对）；行号/旗标只是配对凭据，不进枚举；
+// - `%exit`：服务器收线（客户端断开），流随即将结束；
+// - 其余 % 开头行（%session-changed/%window-add/%layout-change/...）：
+//   通知类，只分类不逐字钉。
+
+/// 控制模式附着命令（常驻，**不带 exit**——同 cmd_attach 纪律，带了
+/// 附着即退）。`-t '=名:'`：精确匹配会话 + 活动窗格（BAR-152 实机定罪，
+/// 裸 '=名' 在 pane 目标上不成立）。`-f ignore-size`：不许抢窗口尺寸
+/// ——控制客户端的 pty 默认 80x24，window-size=latest 下 attach 会把
+/// 用户窗口掰成客户端尺（2026-09-25 服务器实证：带旗 attach/capture
+/// 全程 40x10 纹丝不动）
+pub fn cmd_ctrl_attach(name: &str) -> String {
+    format!("tmux -C attach-session -f ignore-size -t '={name}:'")
+}
+
+/// 带内播种命令对（v4 推流画布）：直接在控制通道发，回应块与 %output
+/// 严格不交错（2026-09-25 实证）——块前字节已在快照里、块后字节续喂，
+/// 零丢失零重复天然对齐。第一块 = 头行（史量/上限/光标位/pane id，
+/// KFMHDR 前缀认领），第二块 = capture 全文（无壳无尾标——块内正文
+/// 即纯净 capture 输出，capture_strip_marker 验收链不适用此径）
+pub fn cmd_ctrl_seed() -> String {
+    "display-message -p 'KFMHDR #{history_size} #{history_limit} #{cursor_x} #{cursor_y} #{pane_id}'\ncapture-pane -p -e -S -\n".to_string()
+}
+
+/// 播种头行（cmd_ctrl_seed 第一块正文）：KFMHDR <史量> <上限> <光标列>
+/// <光标行> %<pane>
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SeedHeader {
+    pub hist: usize,
+    pub limit: usize,
+    pub cursor_x: u32,
+    pub cursor_y: u32,
+    pub pane: u64,
+}
+
+/// 头行解析：五件缺一件/件件不成数 = None（播种作废，下拍重来）
+pub fn parse_seed_header(line: &str) -> Option<SeedHeader> {
+    let body = line.strip_prefix("KFMHDR ")?;
+    let mut it = body.split(' ');
+    let hist = it.next()?.parse().ok()?;
+    let limit = it.next()?.parse().ok()?;
+    let cursor_x = it.next()?.parse().ok()?;
+    let cursor_y = it.next()?.parse().ok()?;
+    let pane = it.next()?.strip_prefix('%')?.parse().ok()?;
+    Some(SeedHeader {
+        hist,
+        limit,
+        cursor_x,
+        cursor_y,
+        pane,
+    })
+}
+
+/// 控制模式行事件（parse_ctrl_line 产物）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CtrlEvent {
+    /// %output：窗格输出。载荷是字节不是 String——UTF-8 多字节可能被
+    /// 拆在两行 %output 里，拼接还原归调用方
+    Output { pane: u64, bytes: Vec<u8> },
+    /// %begin：命令回应块开始（行号/旗标只是配对凭据，不进枚举）
+    BlockBegin,
+    /// %end：命令回应块正常结束
+    BlockEnd,
+    /// %error：命令回应块出错结束（块内正文是错误文本）
+    BlockError,
+    /// %exit：服务器收线，流将结束
+    Exit,
+    /// 其余 % 开头行（通知类；畸形 % 行也落这里——通知本就不消费
+    /// 内容，落这里最无害，且不许 panic）
+    Notify,
+    /// 非 % 行：命令回应块内正文/杂散输出
+    Plain,
+}
+
+/// %output 载荷反转义：`\` 后跟恰好三位八进制数字 → 对应字节；其余
+/// `\` 原样保留（防御——畸形转义不许丢字节更不许 panic）。返回 Vec<u8>
+/// 而非 String：UTF-8 多字节可跨行拆，单行载荷不一定是合法 UTF-8
+pub fn ctrl_unescape(s: &str) -> Vec<u8> {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'\\' && i + 3 < b.len() {
+            let d = &b[i + 1..i + 4];
+            if d.iter().all(|c| c.is_ascii_digit() && *c < b'8') {
+                // 三位八进制最大 \777=511 超 u8——截断兜底（tmux 实证
+                // 只发 \000-\377，走不到这）
+                let v = u16::from(d[0] - b'0') * 64
+                    + u16::from(d[1] - b'0') * 8
+                    + u16::from(d[2] - b'0');
+                out.push((v & 0xff) as u8);
+                i += 4;
+                continue;
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    out
+}
+
+/// 一行 → 事件。行尾 \r 先剥（pty 流可能带 \r\n）。畸形 % 行（%output
+/// 缺载荷/pane id 非数字/% 后无内容）落 Notify，不许 panic
+pub fn parse_ctrl_line(line: &str) -> CtrlEvent {
+    let line = line.strip_suffix('\r').unwrap_or(line);
+    let Some(rest) = line.strip_prefix('%') else {
+        return CtrlEvent::Plain;
+    };
+    if rest == "exit" || rest.starts_with("exit ") {
+        return CtrlEvent::Exit;
+    }
+    if rest == "begin" || rest.starts_with("begin ") {
+        return CtrlEvent::BlockBegin;
+    }
+    if rest == "end" || rest.starts_with("end ") {
+        return CtrlEvent::BlockEnd;
+    }
+    if rest == "error" || rest.starts_with("error ") {
+        return CtrlEvent::BlockError;
+    }
+    if let Some(body) = rest.strip_prefix("output ")
+        && let Some((id, payload)) = body.split_once(' ')
+        && let Some(id) = id.strip_prefix('%')
+        && let Ok(pane) = id.parse::<u64>()
+    {
+        return CtrlEvent::Output {
+            pane,
+            bytes: ctrl_unescape(payload),
+        };
+    }
+    CtrlEvent::Notify
+}
+
 /// 新建名清洗：trim 后空 = None（走自动编号）；引号/竖线/冒号/分号/
 /// 控制字符 = None（注入面与解析面全堵）；>32 字符截断
 pub fn sanitize_name(raw: &str) -> Option<String> {
