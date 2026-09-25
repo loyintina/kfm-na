@@ -60,11 +60,13 @@ fn spec_bar155_实证流全序_空块跳过到头播落地() {
         acts[..12].iter().all(|a| *a == CtrlAct::None),
         "播种落地前不许有任何动作: {acts:?}"
     );
-    let CtrlAct::Build(cap) = &acts[12] else {
+    let CtrlAct::Build { cap, x, y } = &acts[12] else {
         panic!("capture 关块必须产 Build: {acts:?}");
     };
     // capture 正文 \r\n 缝合（与 v3 capture_parse 同料），无头行无壳
     assert_eq!(cap, "\r\n <ESC>[38;5;111m╭─╮<ESC>[39m\r\n第三行");
+    // BAR-156：Build 必须携头行游标（Canvas 归位凭据，动态行不复制）
+    assert_eq!((*x, *y), (5, 50), "Build 必须携头行 cursor_x/cursor_y");
     assert_eq!(f.pane(), Some(3), "头行 pane 必须认领入账");
     f.built();
     assert!(f.is_steady());
@@ -147,9 +149,16 @@ fn spec_bar155_头块关不产_build_病灶二回归() {
         acts.iter().all(|a| *a == CtrlAct::None),
         "头块关只许转相不许产动作: {acts:?}"
     );
-    // capture 空块（空窗格）→ Build 空串（合法：空画布播种）
+    // capture 空块（空窗格）→ Build 空串（合法：空画布播种；头行游标随行）
     let acts2 = lines(&mut f, &["%begin 3 3 1", "%end 3 3 1"]);
-    assert_eq!(acts2[1], CtrlAct::Build(String::new()));
+    assert_eq!(
+        acts2[1],
+        CtrlAct::Build {
+            cap: String::new(),
+            x: 0,
+            y: 0
+        }
+    );
 }
 
 #[test]

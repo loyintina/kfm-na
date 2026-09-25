@@ -4752,8 +4752,9 @@ impl App {
                 }
             }
             CtrlAct::Pend(bytes) => self.ctrl_pending.extend(bytes),
-            CtrlAct::Build(cap) => {
-                // capture 收齐 → 后台线程建 Canvas（BAR-154：UI 零解析）
+            CtrlAct::Build { cap, x, y } => {
+                // capture 收齐 → 后台线程建 Canvas（BAR-154：UI 零解析；
+                // BAR-156：头行游标随建归位，动态行原位更新不落屏底）
                 self.ctrl_pending.clear();
                 let (cols, rows) = self
                     .term_handle()
@@ -4761,7 +4762,7 @@ impl App {
                     .unwrap_or((80, 24));
                 let (tx, rx) = std::sync::mpsc::channel();
                 std::thread::spawn(move || {
-                    let _ = tx.send(termview::Canvas::build(&cap, cols, rows));
+                    let _ = tx.send(termview::Canvas::build(&cap, cols, rows, (x, y)));
                 });
                 self.ctrl_build = Some(rx);
             }

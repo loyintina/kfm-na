@@ -6174,7 +6174,7 @@ fn spec_推流画布_续喂生长锚守恒() {
         .join("\r\n")
         + "\r\n";
     let (cols, rows) = tv.live_grid_dims();
-    let canvas = termview::Canvas::build(&cap, cols, rows);
+    let canvas = termview::Canvas::build(&cap, cols, rows, (0, 3));
     tv.enter_browse_canvas(canvas);
     tv.scroll_px(72.0); // 滚 2 行进历史
     assert_eq!(tv.display_offset(), 2);
@@ -6204,7 +6204,7 @@ fn spec_推流画布_交还往返零损耗() {
     let mut tv = host_termview(10, 4);
     tv.set_pixel_scroll(true); // scroll_px 只在像素滚动模式受理
     let (cols, rows) = tv.live_grid_dims();
-    let mut canvas = termview::Canvas::build("A0\r\nA1\r\n", cols, rows);
+    let mut canvas = termview::Canvas::build("A0\r\nA1\r\n", cols, rows, (0, 2));
     canvas.feed_bytes(b"A2\r\n"); // 落位前已在生长
     tv.enter_browse_canvas(canvas);
     assert!(tv.feed_browse(b"A3\r\n"));
@@ -6251,7 +6251,7 @@ fn spec_推流画布_转义跨块续喂() {
     // 文本画出（红 X 变裸字 1mX）——这条钉 = 常驻 proc 的存在理由
     let mut tv = host_termview(10, 4);
     let (cols, rows) = tv.live_grid_dims();
-    tv.enter_browse_canvas(termview::Canvas::build("\r\n", cols, rows));
+    tv.enter_browse_canvas(termview::Canvas::build("\r\n", cols, rows, (0, 1)));
     assert!(tv.feed_browse(b"\x1b[3")); // 半个 SGR 红色序列
     assert!(tv.feed_browse(b"1mX\r\n")); // 续半 + 一个红 X
     let cells = tv.collect_gpu_cells(10 * CELL_W + 2 * kfm_na::termview::MARGIN_X, 800);
@@ -6282,7 +6282,7 @@ fn spec_推流画布_对账重播锚守恒() {
         .collect::<Vec<_>>()
         .join("\r\n")
         + "\r\n";
-    tv.enter_browse_canvas(termview::Canvas::build(&cap1, cols, rows));
+    tv.enter_browse_canvas(termview::Canvas::build(&cap1, cols, rows, (0, 3)));
     tv.scroll_px(72.0); // 滚 2 行进历史
     assert_eq!(tv.display_offset(), 2);
     // 对账重播种：新画布多了 2 行新输出（底部追加）——offset 补偿 +2
@@ -6291,7 +6291,7 @@ fn spec_推流画布_对账重播锚守恒() {
         .collect::<Vec<_>>()
         .join("\r\n")
         + "\r\n";
-    tv.swap_browse_canvas(termview::Canvas::build(&cap2, cols, rows));
+    tv.swap_browse_canvas(termview::Canvas::build(&cap2, cols, rows, (0, 3)));
     assert!(tv.browsing());
     assert_eq!(
         tv.display_offset(),
@@ -6307,4 +6307,30 @@ fn spec_推流画布_对账重播锚守恒() {
     // = swap 没换 proc 的实咬）
     assert!(tv.feed_browse(b"A10\r\n"), "对账重播后续喂必须受理");
     assert_eq!(tv.display_offset(), 5, "换班后续喂照常锚守恒");
+}
+
+#[test]
+fn spec_bar156_播种游标归位_动态行不复制() {
+    // BAR-156 定罪 fixture（2026-09-25 服务器 tmux 3.4 实录）：capture-pane
+    // -p -S - 恒发全屏含尾空行（24 行屏：10 行文本 + 动态行 + 13 尾空行），
+    // 头行 cursor=(12,10) 而播种文本尾落在屏底 23 行——播种不拿头行游标
+    // 归位，续喂的 \r\x1b[K 帧就落屏底，10 行留下旧帧静态复制（用户实报
+    // 「上滚后动态行在动，它上面还有一条它的静态内容复制」）
+    let mut lines: Vec<String> = (1..=10).map(|i| i.to_string()).collect();
+    lines.push("SPIN frame 7".into());
+    lines.extend((0..13).map(|_| String::new()));
+    assert_eq!(lines.len(), 24);
+    let cap = lines.join("\r\n");
+    let mut tv = host_termview(80, 24);
+    tv.set_pixel_scroll(true);
+    let (cols, rows) = tv.live_grid_dims();
+    tv.enter_browse_canvas(termview::Canvas::build(&cap, cols, rows, (12, 10)));
+    // 续喂下一帧（\r 回列 0 + EL 清行 + 新帧——动态行原位更新协议）
+    assert!(tv.feed_browse(b"\r\x1b[KSPIN frame 8"));
+    let txt = tv.dump_text();
+    assert!(txt.contains("SPIN frame 8"), "续喂帧必须落画布: {txt:?}");
+    assert!(
+        !txt.contains("SPIN frame 7"),
+        "旧帧静态复制不许残留（游标没归位 = 新帧落屏底、旧帧留原位）: {txt:?}"
+    );
 }

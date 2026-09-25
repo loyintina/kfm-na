@@ -41,8 +41,11 @@ pub enum CtrlAct {
     Feed(Vec<u8>),
     /// Building 期 %output：进 pending（Canvas 安装后补喂）
     Pend(Vec<u8>),
-    /// capture 块收齐：正文交后台线程建 Canvas（BAR-154：UI 零解析）
-    Build(String),
+    /// capture 块收齐：正文交后台线程建 Canvas（BAR-154：UI 零解析）。
+    /// 携播种头行的 pane 游标（x,y 屏相对 0 基）——BAR-156：capture 恒
+    /// 发全屏含尾空行，文本尾 ≠ 真实游标，建画布必须 CUP 归位，否则
+    /// 续喂原位更新帧落屏底、旧帧留静态复制
+    Build { cap: String, x: u32, y: u32 },
     /// 播种失败（调用方：相位归零 + 5s 退避 + 报表，v3 轮询兜底）。
     /// 携肇事块首行存证（BAR-155 续查：真机稳定失败而服务器复刻正常，
     /// 首行原文是唯一铁证——不许再猜第二轮）
@@ -79,6 +82,9 @@ pub struct CtrlFeed {
     phase: Phase,
     /// 播种认领的活动 pane id（%output 过滤凭据；None = 未播种）
     pane: Option<u64>,
+    /// 播种头行的 pane 游标（列,行 屏相对 0 基；BAR-156：Build 携它
+    /// 给 Canvas 归位——capture 尾空行会把文本尾拖离真实游标）
+    cursor: (u32, u32),
     /// capture 正文行账（Build 时 \r\n 缝合——与 v3 capture_parse 同料。
     /// Vec 不用 String+is_empty 判首行：首行恰为空行时 is_empty 分不
     /// 出「还没行」和「有一行空行」，缝会丢一个 \r\n）
@@ -106,6 +112,7 @@ impl CtrlFeed {
         CtrlFeed {
             phase: Phase::Steady,
             pane: None,
+            cursor: (0, 0),
             cap: Vec::new(),
             saw_body: false,
             first_line: String::new(),
@@ -194,6 +201,7 @@ impl CtrlFeed {
                     self.saw_body = true;
                     if let Some(h) = parse_seed_header(line) {
                         self.pane = Some(h.pane);
+                        self.cursor = (h.cursor_x, h.cursor_y);
                         self.phase = Phase::HdrEnd;
                     }
                     CtrlAct::None
@@ -243,7 +251,11 @@ impl CtrlFeed {
                 }
                 Phase::InCapture => {
                     self.phase = Phase::Building;
-                    CtrlAct::Build(std::mem::take(&mut self.cap).join("\r\n"))
+                    CtrlAct::Build {
+                        cap: std::mem::take(&mut self.cap).join("\r\n"),
+                        x: self.cursor.0,
+                        y: self.cursor.1,
+                    }
                 }
                 _ => CtrlAct::None, // Steady/Building：我方只发播种双块
             },

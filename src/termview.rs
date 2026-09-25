@@ -1764,8 +1764,11 @@ pub struct Canvas {
 
 impl Canvas {
     /// 播种：capture 文本建画布（网格同 live 尺，SCROLLBACK 同钉值，
-    /// 尾补 ?25l 藏播种光标），Processor 留存待续喂
-    pub fn build(capture: &str, cols: usize, rows: usize) -> Self {
+    /// 尾补 ?25l 藏播种光标），Processor 留存待续喂。cursor = 播种头行
+    /// 的 pane 游标（列,行，屏相对 0 基）——BAR-156：capture 恒发全屏
+    /// 含尾空行，文本尾 ≠ 真实游标；不归位则续喂的 \r\x1b[K 原位更新帧
+    /// 落屏底，真实游标行留下静态复制
+    pub fn build(capture: &str, cols: usize, rows: usize, cursor: (u32, u32)) -> Self {
         let size = TermSize {
             cols: cols.max(1),
             rows: rows.max(1),
@@ -1780,6 +1783,9 @@ impl Canvas {
         );
         let mut proc: Processor = Processor::new();
         proc.advance(&mut term, capture.as_bytes());
+        // 游标归位（CUP 1 基；超界 alacritty 自钳）
+        let cup = format!("\x1b[{};{}H", cursor.1 + 1, cursor.0 + 1);
+        proc.advance(&mut term, cup.as_bytes());
         proc.advance(&mut term, b"\x1b[?25l");
         Canvas { term, proc }
     }
@@ -2015,7 +2021,8 @@ impl TermView {
     /// 停在文末是伪影，光标是 live 会话的发言权）。实现 = Canvas::build
     /// 弃 proc（快照流无续帧；v4 续喂画布同走此料，proc 留存）
     pub fn build_browse_term(capture: &str, cols: usize, rows: usize) -> Term<VoidListener> {
-        Canvas::build(capture, cols, rows).term
+        // 快照无续喂、光标 ?25l 藏死——游标归位无意义，占位 (0,0)
+        Canvas::build(capture, cols, rows, (0, 0)).term
     }
 
     /// 进浏览态（字符串便利臂：UI 线程解析，只许考题/小快照用——
