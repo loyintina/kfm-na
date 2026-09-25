@@ -20,8 +20,15 @@
 > 本体）；锚守恒靠 alacritty 内置（display_offset>0 新行入史自动
 > 抬 offset——termview_spec 实证钉，不需补偿账）；5s 对账重播 +
 > Notify 逼播 + 判负 5s 退避回落 v3。
-> 钉 tmux_ctl_spec 37 + termview_spec 150 全绿（推流画布三钉：
+> 钉 tmux_ctl_spec 37 + termview_spec 151 全绿（推流画布三钉：
 > 锚守恒根基假设/交还往返零损耗/转义跨块续喂）。
+> **BAR-155（2026-09-25 晚，首版上机即死已修）**：用户实报「还是
+> 掉帧，只是逼近」——报表实录播种 5s 空转循环，推流从未生效。
+> pty 实录原始流定罪：attach-session 自己的空回应块被当播种头块
+> 判负 + 头块 %end 被当 capture 关（连环病灶）。修 = 相位机抽
+> ctrl_feed.rs 纯逻辑（六相位对块序列），ctrl_feed_spec 六钉 +
+> 变异双咬全绿。教训入账：**协议状态机不许落在 host 不可测的
+> cfg 壳里，先拿对端原始流 fixture 钉块序**。
 > 判卷点：kimicode 输出中滚到中部，内容**连续即时**流动且阅读位
 > 钉死；触底回 live 后再进零等待（画布后台续喂）；断网/杀会话
 > v3 轮询无感接管。

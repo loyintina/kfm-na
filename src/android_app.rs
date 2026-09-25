@@ -238,22 +238,6 @@ enum Gfx {
 /// softbuffer，照常可用）；false = 纯 softbuffer（对照组/排障开关）
 const GLES_FIRST: bool = true;
 
-/// v4 推流画布控制通道相位（2026-09-25 tmux -C 控制模式，用户拍板
-/// 「直接换真方案」——v3 轮询快照是逼近，推流画布才是模型的正身）：
-/// Steady = 稳态（未播种 / 播种完成推流中，靠 ctrl_pane 区分）；
-/// AwaitHeader/AwaitCapture = 播种双块在途（此间 %output 字节丢弃——
-/// 块前字节已在 capture 快照内，带内对齐天然零丢失零重复）；
-/// Building = capture 块已收齐，Canvas 在后台线程构建（BAR-154：UI
-/// 线程零解析），此间 %output 字节进 ctrl_pending 待安装后补喂
-#[derive(Default, PartialEq, Eq)]
-enum CtrlPhase {
-    #[default]
-    Steady,
-    AwaitHeader,
-    AwaitCapture,
-    Building,
-}
-
 #[derive(Default)]
 struct App {
     window: Option<Arc<Window>>,
@@ -473,16 +457,12 @@ struct App {
     browse_canvas: Option<termview::Canvas>,
     /// 控制通道行装配余量（%output 可跨事件截半行）
     ctrl_buf: Vec<u8>,
-    /// 播种相位机（CtrlPhase 语义见枚举定义）
-    ctrl_phase: CtrlPhase,
-    /// capture 块正文累加器（AwaitCapture 期 Plain 行，\r\n 缝合——
-    /// 与 v3 capture_parse 产物的行尾同料，Canvas::build 一把尺）
-    ctrl_cap: String,
+    /// 播种/续喂相位机（ctrl_feed.rs 纯逻辑 A 档——BAR-155：相位粒度
+    /// 必须和 tmux 块序列一一对上，写在 cfg(android) 里不可测上过机
+    /// 即死。本壳只接线：动作枚举照单执行，不自译）
+    ctrl_feed: crate::ctrl_feed::CtrlFeed,
     /// Building 期 %output 字节缓冲（安装后先喂这批，再接流）
     ctrl_pending: Vec<u8>,
-    /// 播种认领的活动 pane id（%output 过滤：非活动窗格的字节不许
-    /// 混进画布；None = 未播种——v3 轮询闸开）
-    ctrl_pane: Option<u64>,
     /// 播种发出时刻（boot_ms——播种落地耗时的尺子）
     ctrl_seed_ms: u64,
     /// 末次播种落地时刻（boot_ms——5s 对账重播的尺子；Notify 清零
@@ -4564,7 +4544,7 @@ impl App {
     /// 推流活性闸（v3 轮询/抓取的封口令）：控制通道活着且播种成功过
     /// = 字节流自续，轮询抓拍一律不开火（v3 降级为纯保底路径）
     fn ctrl_active(&self) -> bool {
-        self.browse_ctrl.is_some() && self.ctrl_pane.is_some()
+        self.browse_ctrl.is_some() && self.ctrl_feed.pane().is_some()
     }
 
     /// 每圈确保（about_to_wait 调用）：要就有（服务器相+已附着+过退避
@@ -4600,16 +4580,16 @@ impl App {
                 .send(TermCmd::Input(crate::tmux_ctl::cmd_ctrl_seed()))
                 .ok();
             self.browse_ctrl = Some(handle);
-            self.ctrl_phase = CtrlPhase::AwaitHeader;
+            self.ctrl_feed.seed_sent();
             self.ctrl_seed_ms = now;
             crate::report::report("term", &format!("推流画布 ctrl 开: {name}（播种发出）"));
-        } else if self.ctrl_pane.is_none()
-            && self.ctrl_phase == CtrlPhase::Steady
+        } else if self.ctrl_feed.pane().is_none()
+            && self.ctrl_feed.is_steady()
             && now >= self.ctrl_retry_ms
         {
             self.ctrl_seed_send("播种失败重试");
-        } else if self.ctrl_pane.is_some()
-            && self.ctrl_phase == CtrlPhase::Steady
+        } else if self.ctrl_feed.pane().is_some()
+            && self.ctrl_feed.is_steady()
             && now.saturating_sub(self.ctrl_seeded_ms) >= 5000
         {
             self.ctrl_seed_send("对账重播");
@@ -4625,17 +4605,15 @@ impl App {
         h.outbound
             .send(TermCmd::Input(crate::tmux_ctl::cmd_ctrl_seed()))
             .ok();
-        self.ctrl_phase = CtrlPhase::AwaitHeader;
+        self.ctrl_feed.seed_sent();
         self.ctrl_seed_ms = crate::report::boot_ms() as u64;
-        self.ctrl_cap.clear();
         crate::report::report("term", &format!("推流画布播种发出: {why}"));
     }
 
     /// 播种失败：相位回 Steady + pane 账勾销（v3 轮询闸开兜底）+
     /// 5s 退避（ctrl_ensure 的重试臂到点再播）
     fn ctrl_seed_fail(&mut self, why: &str) {
-        self.ctrl_phase = CtrlPhase::Steady;
-        self.ctrl_pane = None;
+        self.ctrl_feed.reset();
         self.ctrl_retry_ms = crate::report::boot_ms() as u64 + 5000;
         crate::report::report(
             "term",
@@ -4649,10 +4627,8 @@ impl App {
         if let Some(h) = self.browse_ctrl.take() {
             h.outbound.send(TermCmd::Close).ok();
         }
-        self.ctrl_phase = CtrlPhase::Steady;
-        self.ctrl_pane = None;
+        self.ctrl_feed.reset();
         self.ctrl_buf.clear();
-        self.ctrl_cap.clear();
         self.ctrl_pending.clear();
         self.ctrl_build = None;
         self.browse_canvas = None;
@@ -4705,7 +4681,7 @@ impl App {
                     }
                     let cost = (crate::report::boot_ms() as u64).saturating_sub(self.ctrl_seed_ms);
                     self.ctrl_seeded_ms = crate::report::boot_ms() as u64;
-                    self.ctrl_phase = CtrlPhase::Steady;
+                    self.ctrl_feed.built();
                     let browsing = self
                         .term_handle()
                         .is_some_and(|t| t.lock().unwrap().browsing());
@@ -4763,87 +4739,41 @@ impl App {
         }
     }
 
-    /// 单行消费（相位机本体）：%output 字节按相位三路（播种窗口内
-    /// 丢弃 = 已在 capture 内 / Building 进 pending / 稳态续喂画布），
-    /// 块边界推相位，Notify 逼对账
+    /// 单行消费（薄壳）：相位判定全在 ctrl_feed（A 档纯逻辑，BAR-155
+    /// 钉死），本壳只把动作枚举翻译成平台操作（喂画布/起构建线程/
+    /// 判负退避/逼对账/拆除）
     fn ctrl_on_line(&mut self, line: String) {
-        use crate::tmux_ctl::CtrlEvent;
-        match crate::tmux_ctl::parse_ctrl_line(&line) {
-            CtrlEvent::Output { pane, bytes } => match self.ctrl_phase {
-                // 播种窗口内的输出已在 capture 快照内（带内对齐）——丢弃
-                CtrlPhase::AwaitHeader | CtrlPhase::AwaitCapture => {}
-                CtrlPhase::Building => {
-                    if Some(pane) == self.ctrl_pane {
-                        self.ctrl_pending.extend(bytes);
-                    }
-                }
-                CtrlPhase::Steady => {
-                    if self.ctrl_pane == Some(pane) {
-                        let fed = self
-                            .term_handle()
-                            .is_some_and(|t| t.lock().unwrap().feed_browse(&bytes));
-                        if fed {
-                            self.dirty = true; // 浏览中：字节即达即画
-                        } else if let Some(canvas) = &mut self.browse_canvas {
-                            canvas.feed_bytes(&bytes); // 后台画布续喂生长
-                        }
-                    }
-                }
-            },
-            CtrlEvent::Plain => match self.ctrl_phase {
-                CtrlPhase::AwaitHeader => {
-                    if let Some(h) = crate::tmux_ctl::parse_seed_header(&line) {
-                        self.ctrl_pane = Some(h.pane);
-                        self.ctrl_phase = CtrlPhase::AwaitCapture;
-                    }
-                }
-                CtrlPhase::AwaitCapture => {
-                    // \r\n 缝合（与 v3 capture_parse 正文行尾同料）
-                    if !self.ctrl_cap.is_empty() {
-                        self.ctrl_cap.push_str("\r\n");
-                    }
-                    self.ctrl_cap.push_str(&line);
-                }
-                _ => {} // 稳态不该有杂散正文
-            },
-            CtrlEvent::BlockBegin => {
-                if self.ctrl_phase == CtrlPhase::AwaitCapture {
-                    self.ctrl_cap.clear(); // capture 块开口 = 正文起算
+        use crate::ctrl_feed::CtrlAct;
+        let ev = crate::tmux_ctl::parse_ctrl_line(&line);
+        match self.ctrl_feed.on_event(ev, &line) {
+            CtrlAct::Feed(bytes) => {
+                let fed = self
+                    .term_handle()
+                    .is_some_and(|t| t.lock().unwrap().feed_browse(&bytes));
+                if fed {
+                    self.dirty = true; // 浏览中：字节即达即画
+                } else if let Some(canvas) = &mut self.browse_canvas {
+                    canvas.feed_bytes(&bytes); // 后台画布续喂生长
                 }
             }
-            CtrlEvent::BlockEnd => match self.ctrl_phase {
-                CtrlPhase::AwaitHeader => self.ctrl_seed_fail("头块无 KFMHDR 头行"),
-                CtrlPhase::AwaitCapture => {
-                    // capture 收齐 → 后台线程建 Canvas（BAR-154：UI 零解析）
-                    self.ctrl_phase = CtrlPhase::Building;
-                    self.ctrl_pending.clear();
-                    let (cols, rows) = self
-                        .term_handle()
-                        .map(|t| t.lock().unwrap().live_grid_dims())
-                        .unwrap_or((80, 24));
-                    let cap = std::mem::take(&mut self.ctrl_cap);
-                    let (tx, rx) = std::sync::mpsc::channel();
-                    std::thread::spawn(move || {
-                        let _ = tx.send(termview::Canvas::build(&cap, cols, rows));
-                    });
-                    self.ctrl_build = Some(rx);
-                }
-                _ => {} // 稳态：我方只发播种双块，不该有第三块
-            },
-            CtrlEvent::BlockError => {
-                if self.ctrl_phase != CtrlPhase::Steady {
-                    self.ctrl_seed_fail("命令块 %error");
-                }
+            CtrlAct::Pend(bytes) => self.ctrl_pending.extend(bytes),
+            CtrlAct::Build(cap) => {
+                // capture 收齐 → 后台线程建 Canvas（BAR-154：UI 零解析）
+                self.ctrl_pending.clear();
+                let (cols, rows) = self
+                    .term_handle()
+                    .map(|t| t.lock().unwrap().live_grid_dims())
+                    .unwrap_or((80, 24));
+                let (tx, rx) = std::sync::mpsc::channel();
+                std::thread::spawn(move || {
+                    let _ = tx.send(termview::Canvas::build(&cap, cols, rows));
+                });
+                self.ctrl_build = Some(rx);
             }
-            // 通知（%layout-change/%window-pane-changed/...）：内容可能
-            // 走了 %output 覆盖不到的变化（切窗/布局/pane 换手）——清零
-            // 对账账逼下拍重播（重播 = 新 pane 认领 + 全量重播种自愈）
-            CtrlEvent::Notify => {
-                if self.ctrl_phase == CtrlPhase::Steady && self.ctrl_pane.is_some() {
-                    self.ctrl_seeded_ms = 0;
-                }
-            }
-            CtrlEvent::Exit => self.ctrl_teardown("tmux -C %exit（会话被 kill/断开）"),
+            CtrlAct::SeedFail(why) => self.ctrl_seed_fail(why),
+            CtrlAct::Reconcile => self.ctrl_seeded_ms = 0, // 逼下拍对账重播
+            CtrlAct::Dead(why) => self.ctrl_teardown(why),
+            CtrlAct::None => {}
         }
     }
 

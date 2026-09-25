@@ -15,6 +15,7 @@
 | `src/brain_ep.rs` | 4 | 4 | 0 | — |
 | `src/conn.rs` | 4 | 2 | 2 | spawn_smoke ws_spawner |
 | `src/crash.rs` | 8 | 7 | 1 | install_signal_hook |
+| `src/ctrl_feed.rs` | 7 | 6 | 1 | reset |
 | `src/direct_brain.rs` | 2 | 2 | 0 | — |
 | `src/endpoint.rs` | 9 | 9 | 0 | — |
 | `src/exec_probe.rs` | 1 | 1 | 0 | — |
