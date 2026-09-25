@@ -409,23 +409,29 @@ struct App {
         std::sync::mpsc::Receiver<Result<String, String>>,
     )>,
     /// 外置视口快照抓取在途（2026-09-25 tmux 像素级滚动，用户拍板）：
-    /// tmux 附体会话拖动起手发 capture-pane 全史抓取，about_to_wait
-    /// 排水——浏览态落地 = swap_browse 原地刷新（视口锚守恒）；
-    /// 拖动中落地 = enter_browse + 挂账位移补滚；闲时落地 = 温热快照
-    /// 入账（下次起手零等待）
-    browse_capture: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
+    /// tmux 附体会话拖动起手发 capture-pane 全史抓取，**BAR-154 起
+    /// 快照 Term 在抓取后台线程解析构建**（266KB ANSI 解析占 UI 线程
+    /// = 「拖动卡一下」病灶），about_to_wait 排水——浏览态落地 =
+    /// swap_browse_term 原地刷新（视口锚定内容守恒）；拖动中落地 =
+    /// enter_browse_term + 挂账位移补滚；闲时落地 = 温热快照入账
+    /// （下次起手零等待）
+    browse_capture: Option<std::sync::mpsc::Receiver<Result<termview::BrowseTerm, String>>>,
     /// 快照落地前的拖动位移挂账（px，带符号）——capture 往返期间
     /// 手指位移不丢，切入瞬间一并补滚（起手零丢失）
     browse_pending_px: f64,
     /// 温热快照（2026-09-25 用户拍板「不该有切入等待」）：闲时/抬手/
-    /// 退浏览时后台抓好的 capture 全文——拖动起手直接 enter_browse，
-    /// 零感知切入。(内容, 抓取时 live feed_seq, 抓取时 boot_ms)
-    browse_warm: Option<(String, u64, u64)>,
+    /// 退浏览时后台抓好的快照 Term——拖动起手直接落位，零感知切入。
+    /// (预建 Term, 抓取时 live feed_seq, 抓取时 boot_ms)
+    browse_warm: Option<(termview::BrowseTerm, u64, u64)>,
     /// 本铺在途抓取发出时的 live feed_seq（排水时记账用：浏览期刷新
     /// 节流判「live 有没有新活动」靠它比对）
     browse_capture_feed: u64,
     /// 末次抓取发出时刻（boot_ms）——浏览期刷新节流（1.5s）的尺子
     browse_capture_ms: u64,
+    /// 同次触摸内触底/击键退场后抑制重返浏览态（BAR-154：触底回 live
+    /// 后手指未抬，在途抓取落地又 enter_browse 把人扔回历史——用户
+    /// 实报「页面被静止」病灶）。抬手（Ended）/切会话/attach 清零
+    browse_suppress: bool,
     /// 远程连接配置缓存（启动时装配 conn_provider 那份的 clone）——
     /// tmux 执行通道的 ws url 与 attach 重开连接的命令来源
     remote_conn_cfg: Option<crate::conn::ConnConfig>,
@@ -1928,8 +1934,8 @@ impl App {
                         // ①零感知切入——温热快照起手即用，抓取只作后台
                         //   刷新，不再有「等一拍」；
                         // ②浏览期动态播放——about_to_wait 节流重抓，
-                        //   swap_browse 原地刷新（视口锚从底部量守恒，
-                        //   阅读位不跳）；
+                        //   swap_browse_term 原地刷新（视口锚定内容守恒：
+                        //   offset 补偿底部追加行数，阅读位钉死）；
                         // ③触底自动回 live——offset=0 且零头清零即退场，
                         //   不靠击键（手机交互：滚回最新 = 回到现在）。
                         // 浏览期永不发滚轮 tick（tick = tmux 默认绑定
@@ -1959,25 +1965,39 @@ impl App {
                                 back
                             };
                             if back_live {
-                                crate::report::report("scroll", "外置视口触底自动回 live");
+                                // BAR-154：触底退场后同次触摸内抑制重返——
+                                // 手指未抬时在途抓取/温热落地不许再
+                                // enter_browse（用户实报「触底后又被扔回
+                                // 历史，页面静止」病灶），抬手才解锁
+                                self.browse_suppress = true;
+                                crate::report::report(
+                                    "scroll",
+                                    "外置视口触底自动回 live（同次触摸抑制重返）",
+                                );
                                 self.browse_fire_capture(); // 退场即补温热
                             }
                             self.dirty = true;
                             return;
                         }
+                        // BAR-154 抑制闸：触底/击键退场后同次触摸的剩余
+                        // 拖动只是手指惯性，不许再挂账/切入/发抓
+                        if self.browse_suppress {
+                            return;
+                        }
                         self.browse_pending_px += d;
                         if !capture_in_flight {
-                            if let Some((cap, _, _)) = self.browse_warm.take() {
+                            if let Some((term, _, _)) = self.browse_warm.take() {
                                 // 温热起手：零感知切入 + 挂账位移补滚
+                                // （BAR-154：快照 Term 已预建，落位即换壳，
+                                // 零解析成本）
                                 {
                                     let mut t = t.lock().unwrap();
-                                    t.enter_browse(&cap);
+                                    t.enter_browse_term(term);
                                     t.scroll_px(self.browse_pending_px);
                                     crate::report::report(
                                         "scroll",
                                         &format!(
-                                            "外置视口切入(温热): {}B 里程 {} 行 补滚 {:.1}px",
-                                            cap.len(),
+                                            "外置视口切入(温热): 里程 {} 行 补滚 {:.1}px",
                                             t.history_size(),
                                             self.browse_pending_px
                                         ),
@@ -2802,6 +2822,9 @@ impl App {
                     }
                 }
                 let was_tap = self.touch_scroll.take().is_some_and(|t| t.was_tap());
+                // BAR-154：抬手 = 同次触摸终了，触底/击键退场的重返抑制
+                // 在此解锁（下一次拖动重获起手权）
+                self.browse_suppress = false;
                 // 外置视口 v2：tmux 附体拖动抬手 = 补一次温热快照（下次
                 // 起手零等待）；点按不抓（tap 无滚动意图，不烧 exec 通道）
                 if !was_tap
@@ -4076,6 +4099,7 @@ impl App {
         self.browse_capture = None;
         self.browse_pending_px = 0.0;
         self.browse_warm = None; // 快照/温热账都是旧会话的画面，一并作废
+        self.browse_suppress = false; // 换主体 = 新触摸语境，抑制清零
         // BAR-125 模式快照换-mode（在 replay 之前——复位/清屏/恢复
         // 铺好底，replay 画的是切入会话自己的状态）：切出方 mode 存账，
         // 切入方先复位受管模式+清屏（用户拍板「切换后直接自动清屏」）
@@ -4238,6 +4262,7 @@ impl App {
                 t.lock().unwrap().exit_browse();
             }
             crate::report::report("scroll", "外置视口退出: 击键回 live");
+            self.browse_suppress = true; // BAR-154：同次触摸内不许重返（抬手解锁）
             self.browse_fire_capture(); // 退场即补温热（下次起手零等待）
             self.dirty = true;
         }
@@ -4409,7 +4434,11 @@ impl App {
 
     /// 外置视口抓取唯一发射口（2026-09-25 v2 后台模型）：在途不叠、
     /// 无附着/无通道不发；发出即记账 live feed_seq 与时刻（浏览期
-    /// 刷新节流「live 有没有新活动」的比对基准）
+    /// 刷新节流「live 有没有新活动」的比对基准）。
+    /// BAR-154：快照 Term 在抓取后台线程解析构建（266KB ANSI 解析占
+    /// UI 线程 = 用户实报「拖动卡一下」病灶）——exec 通道收文本 →
+    /// 同线程剥 BAR-153 验收尾标 → build_browse_term → 转发预建 Term，
+    /// UI 线程排水时只换壳零解析
     fn browse_fire_capture(&mut self) {
         if self.browse_capture.is_some() || !self.endpoint_exec_ok() {
             return;
@@ -4417,12 +4446,34 @@ impl App {
         let Some(name) = self.cur_attached() else {
             return;
         };
+        let (cols, rows) = self
+            .term_handle()
+            .map(|t| t.lock().unwrap().live_grid_dims())
+            .unwrap_or((80, 24));
         self.browse_capture_feed = self
             .term_handle()
             .map(|t| t.lock().unwrap().feed_seq())
             .unwrap_or(0);
         self.browse_capture_ms = crate::report::boot_ms() as u64;
-        self.browse_capture = Some(self.endpoint_exec(crate::tmux_ctl::cmd_capture(&name)));
+        let rx = self.endpoint_exec(crate::tmux_ctl::cmd_capture(&name));
+        let (tx, done) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let out = match rx.recv() {
+                Ok(Ok(text)) => match crate::tmux_ctl::capture_strip_marker(&text) {
+                    Some(cap) => Ok(crate::termview::TermView::build_browse_term(
+                        &cap, cols, rows,
+                    )),
+                    None => Err(format!(
+                        "快照验收失败（无成功标记）: {:.80}",
+                        text.replace(['\r', '\n'], " ")
+                    )),
+                },
+                Ok(Err(e)) => Err(e),
+                Err(_) => Err("exec 通道断线".to_string()),
+            };
+            tx.send(out).ok(); // 接收方（App）随进程死，发送失败静默
+        });
+        self.browse_capture = Some(done);
         crate::report::report("scroll", &format!("外置视口抓取发出: {name}"));
     }
 
@@ -4590,6 +4641,7 @@ impl App {
         self.browse_capture = None;
         self.browse_pending_px = 0.0;
         self.browse_warm = None; // 快照/温热账都是旧会话的画面，一并作废
+        self.browse_suppress = false; // 换主体 = 新触摸语境，抑制清零
         match crate::endpoint::current() {
             crate::endpoint::EndpointKind::Server => self.parser_attach_server(name),
             crate::endpoint::EndpointKind::Local => self.parser_attach_local(name),
@@ -7972,11 +8024,13 @@ impl ApplicationHandler for App {
                 self.parser_exec = None;
                 self.parser_exec_done(kind, res);
             }
-            // 外置视口快照排水（2026-09-25 v2 后台模型）：落地三分流——
-            // 浏览态 = swap_browse 原地刷新（视口锚守恒，动态播放）；
-            // 拖动中 = enter_browse + 挂账位移补滚（首抓起手零丢失）；
-            // 闲时 = 温热快照入账（下次起手零等待）。验收闸（BAR-152）：
-            // 无成功标记的垃圾永许不进任何一条
+            // 外置视口快照排水（2026-09-25 v2 后台模型）：快照 Term 已在
+            // 抓取线程预建（BAR-154：UI 线程零解析），落地三分流——
+            // 浏览态 = swap_browse_term 原地刷新（视口锚定内容守恒，动态
+            // 播放）；拖动中且未抑制 = enter_browse_term + 挂账位移补滚
+            // （首抓起手零丢失）；闲时/抑制中 = 温热快照入账（下次起手
+            // 零等待）。验收闸（BAR-152/153）：无成功标记的垃圾已在抓取
+            // 线程拦成 Err，永许不进任何一条
             let cap_done = self
                 .browse_capture
                 .as_ref()
@@ -7991,72 +8045,51 @@ impl ApplicationHandler for App {
                 self.browse_capture = None;
                 let pending = std::mem::take(&mut self.browse_pending_px);
                 match res {
-                    Ok(text) => {
-                        // BAR-152：tmux 报错文本与快照同走 stdout——无
-                        // 成功标记 = 抓取失败，原地待命不许进浏览态
-                        // （垃圾快照盖整页的病灶闸）
-                        match crate::tmux_ctl::capture_strip_marker(&text) {
-                            Some(cap) => {
-                                let browsing = self
-                                    .term_handle()
-                                    .is_some_and(|t| t.lock().unwrap().browsing());
-                                let dragging = self.touch_scroll.is_some();
-                                if browsing {
-                                    if let Some(t) = self.term_handle() {
-                                        let mut t = t.lock().unwrap();
-                                        t.swap_browse(&cap);
-                                        crate::report::report(
-                                            "scroll",
-                                            &format!(
-                                                "外置视口刷新: {}B offset={}",
-                                                cap.len(),
-                                                t.display_offset()
-                                            ),
-                                        );
-                                    }
-                                    self.dirty = true;
-                                } else if dragging {
-                                    if let Some(t) = self.term_handle() {
-                                        let mut t = t.lock().unwrap();
-                                        t.enter_browse(&cap);
-                                        t.scroll_px(pending);
-                                        crate::report::report(
-                                            "scroll",
-                                            &format!(
-                                                "外置视口切入(首抓): {}B 里程 {} 行 补滚 {pending:.1}px",
-                                                cap.len(),
-                                                t.history_size()
-                                            ),
-                                        );
-                                    }
-                                    self.dirty = true;
-                                } else {
-                                    self.browse_warm = Some((
-                                        cap,
-                                        self.browse_capture_feed,
-                                        self.browse_capture_ms,
-                                    ));
-                                    crate::report::report("scroll", "外置视口温热快照入账");
-                                }
+                    Ok(term) => {
+                        let browsing = self
+                            .term_handle()
+                            .is_some_and(|t| t.lock().unwrap().browsing());
+                        let dragging = self.touch_scroll.is_some() && !self.browse_suppress;
+                        if browsing {
+                            if let Some(t) = self.term_handle() {
+                                let mut t = t.lock().unwrap();
+                                t.swap_browse_term(term);
+                                crate::report::report(
+                                    "scroll",
+                                    &format!("外置视口刷新: offset={}", t.display_offset()),
+                                );
                             }
-                            None => crate::report::report(
-                                "scroll",
-                                &format!(
-                                    "外置视口快照验收失败（无成功标记）: {:.80}——不进浏览态",
-                                    text.replace(['\r', '\n'], " ")
-                                ),
-                            ),
+                            self.dirty = true;
+                        } else if dragging {
+                            if let Some(t) = self.term_handle() {
+                                let mut t = t.lock().unwrap();
+                                t.enter_browse_term(term);
+                                t.scroll_px(pending);
+                                crate::report::report(
+                                    "scroll",
+                                    &format!(
+                                        "外置视口切入(首抓): 里程 {} 行 补滚 {pending:.1}px",
+                                        t.history_size()
+                                    ),
+                                );
+                            }
+                            self.dirty = true;
+                        } else {
+                            self.browse_warm =
+                                Some((term, self.browse_capture_feed, self.browse_capture_ms));
+                            crate::report::report("scroll", "外置视口温热快照入账");
                         }
                     }
                     Err(e) => crate::report::report(
                         "scroll",
-                        &format!("外置视口快照失败: {e}（下次拖动重试）"),
+                        &format!("外置视口快照失败: {e}（不进浏览态，下次拖动重试）"),
                     ),
                 }
             }
             // 浏览期动态播放（2026-09-25 用户拍板「tmux 窗口就该是动态
             // 播放的」）：节流 1.5s + live 有新活动才重抓（feed_seq 比对
-            // ——静默期零 exec 空转），落地 swap_browse 视口锚守恒
+            // ——静默期零 exec 空转），落地 swap_browse_term 视口锚定
+            // 内容守恒（BAR-154：offset 补偿底部追加行数）
             let browse_stale = self.term_handle().is_some_and(|t| {
                 let t = t.lock().unwrap();
                 t.browsing() && t.feed_seq() > self.browse_capture_feed

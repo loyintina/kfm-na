@@ -6100,21 +6100,39 @@ fn spec_浏览态_原地刷新锚守恒() {
         .collect::<Vec<_>>()
         .join("\r\n")
         + "\r\n";
-    tv.enter_browse(&cap1);
+    // 生产路径 = 抓取线程 build_browse_term 预建 → enter/swap_browse_term
+    // 落位（BAR-154：UI 线程零解析）——钉走真路，顺带验后台构建臂
+    let (cols, rows) = tv.live_grid_dims();
+    tv.enter_browse_term(TermView::build_browse_term(&cap1, cols, rows));
     tv.scroll_px(72.0); // 滚 2 行进历史
     assert_eq!(tv.display_offset(), 2);
-    // 动态播放：新快照多了 2 行新输出（底部追加）——阅读位（从底部
-    // 量 offset=2）必须守恒
+    let before = tv.dump_text();
+    assert!(before.contains("A03") && before.contains("A06"));
+    assert!(
+        !before.contains("A02") && !before.contains("A07"),
+        "刷新前视口实得 {before:?}"
+    );
+    // 动态播放：新快照多了 2 行新输出（底部追加）——BAR-154 定罪：
+    // display_offset 从底部量，offset 原样保留 = 视口追新内容下移
+    // （每刷一次阅读位跳 N 行）。锚定**内容**守恒 = offset 补偿追加
+    // 行数（2+2=4），用户正在读的行原地不动
     let cap2 = (0..10)
         .map(|i| format!("A{i:02}"))
         .collect::<Vec<_>>()
         .join("\r\n")
         + "\r\n";
-    tv.swap_browse(&cap2);
+    tv.swap_browse_term(TermView::build_browse_term(&cap2, cols, rows));
     assert!(tv.browsing());
-    assert_eq!(tv.display_offset(), 2, "刷新后视口锚（从底部量）必须守恒");
+    assert_eq!(
+        tv.display_offset(),
+        4,
+        "底部追加 2 行 = offset 补偿 +2（阅读位钉死）"
+    );
     let txt = tv.dump_text();
-    assert!(txt.contains("A07"), "刷新后可见新内容，实得 {txt:?}");
+    assert!(
+        txt.contains("A03") && txt.contains("A06") && !txt.contains("A07") && !txt.contains("A02"),
+        "刷新后可见内容必须与刷新前同一批（阅读位不跳），实得 {txt:?}"
+    );
     // 历史变短（对端清了滚动缓冲）→ 锚钳到新顶，不许越界 panic
     tv.swap_browse("B0\r\nB1\r\n");
     assert!(tv.browsing());

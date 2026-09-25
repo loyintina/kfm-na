@@ -1960,15 +1960,16 @@ impl TermView {
         self.browse.is_some()
     }
 
-    /// 进浏览态：capture-pane -p -e -S - 全文喂进独立 Term（与 live 同
-    /// 网格尺寸——行带逐行对位，切入瞬间内容零跳动；超屏行自然沉进
-    /// scrollback，存量 = 可滚里程）。尾补 ?25l 藏快照光标（快照光标
+    /// 快照 Term 构建唯一入口（BAR-154：266KB ANSI 解析不许占 UI 线程——
+    /// 用户实报「拖动卡一下」定罪，解析挪进抓取后台线程，UI 只换壳）。
+    /// 与 live 同网格尺寸（行带逐行对位，切入瞬间内容零跳动；超屏行自然
+    /// 沉进 scrollback，存量 = 可滚里程）。尾补 ?25l 藏快照光标（快照光标
     /// 停在文末是伪影，光标是 live 会话的发言权）。Processor 一次性
-    /// 即用即弃（快照流无续帧）。进入即清分数零头（视口态换源归零）
-    pub fn enter_browse(&mut self, capture: &str) {
+    /// 即用即弃（快照流无续帧）
+    pub fn build_browse_term(capture: &str, cols: usize, rows: usize) -> Term<VoidListener> {
         let size = TermSize {
-            cols: self.term.grid().columns().max(1),
-            rows: self.term.grid().screen_lines().max(1),
+            cols: cols.max(1),
+            rows: rows.max(1),
         };
         let mut term = Term::new(
             Config {
@@ -1981,6 +1982,18 @@ impl TermView {
         let mut processor: Processor = Processor::new();
         processor.advance(&mut term, capture.as_bytes());
         processor.advance(&mut term, b"\x1b[?25l");
+        term
+    }
+
+    /// 进浏览态（字符串便利臂：UI 线程解析，只许考题/小快照用——
+    /// 真机路径一律走 build_browse_term 后台解析 + enter_browse_term）
+    pub fn enter_browse(&mut self, capture: &str) {
+        let (cols, rows) = self.live_grid_dims();
+        self.enter_browse_term(Self::build_browse_term(capture, cols, rows));
+    }
+
+    /// 进浏览态（预建快照 Term 落位）。进入即清分数零头（视口态换源归零）
+    pub fn enter_browse_term(&mut self, term: Term<VoidListener>) {
         self.browse = Some(term);
         self.scroll_frac_px = 0.0;
     }
@@ -1995,35 +2008,37 @@ impl TermView {
         false
     }
 
-    /// 浏览期原地刷新快照（2026-09-25 用户拍板「后台模型动态播放」）：
-    /// 新快照重建 browse Term，**视口锚不变**——display_offset 从底部
-    /// 量（新输出只往底部追加，历史区稳定，offset 守恒 = 用户正在读的
-    /// 位置不跳；新史更短则钳到顶）。分数零头保留（亚行阅读位不动）。
-    /// 非浏览态调用 = 等价 enter_browse（容错，不 panic）
+    /// 浏览期原地刷新快照（字符串便利臂，同 enter_browse 的用途限定）
     pub fn swap_browse(&mut self, capture: &str) {
-        let keep = self
-            .browse
-            .as_ref()
-            .map(|b| b.grid().display_offset() as i32);
-        let size = TermSize {
-            cols: self.term.grid().columns().max(1),
-            rows: self.term.grid().screen_lines().max(1),
-        };
-        let mut term = Term::new(
-            Config {
-                scrolling_history: Self::SCROLLBACK_LINES,
-                ..Config::default()
-            },
-            &size,
-            VoidListener,
-        );
-        let mut processor: Processor = Processor::new();
-        processor.advance(&mut term, capture.as_bytes());
-        processor.advance(&mut term, b"\x1b[?25l");
-        if let Some(off) = keep {
-            term.scroll_display(Scroll::Delta(off)); // alacritty 自钳历史顶
+        let (cols, rows) = self.live_grid_dims();
+        self.swap_browse_term(Self::build_browse_term(capture, cols, rows));
+    }
+
+    /// 浏览期原地刷新快照（2026-09-25 用户拍板「后台模型动态播放」）：
+    /// 新快照 Term 落位，**视口锚定内容守恒**——BAR-154 定罪：display_offset
+    /// 是从底部量的行数，新输出追加在底部，offset 原样保留 = 视口追新
+    /// 内容下移（每刷一次阅读位跳 N 行，用户实报「一行一行瞬间消失」）。
+    /// 补偿 = offset' = offset + (新总量 - 旧总量)（追加多少行就抬多少，
+    /// 用户正在读的内容原地不动；tmux 史顶溢出丢旧行时钳到顶）。
+    /// 分数零头保留（亚行阅读位不动）。非浏览态调用 = 等价进入（容错）
+    pub fn swap_browse_term(&mut self, mut term: Term<VoidListener>) {
+        if let Some(old) = &self.browse {
+            let old_total = old.grid().history_size() + old.grid().screen_lines();
+            let new_total = term.grid().history_size() + term.grid().screen_lines();
+            let off = old.grid().display_offset() as i32;
+            let delta = new_total as i32 - old_total as i32;
+            term.scroll_display(Scroll::Delta(off + delta)); // alacritty 自钳 [0, 史顶]
         }
         self.browse = Some(term);
+    }
+
+    /// live 网格尺寸（快照 Term 构建的同尺依据；浏览期也读 live——
+    /// 尺寸是壳与对端的协议态，快照没有发言权）
+    pub fn live_grid_dims(&self) -> (usize, usize) {
+        (
+            self.term.grid().columns().max(1),
+            self.term.grid().screen_lines().max(1),
+        )
     }
 
     /// 字体探针（诊断用）：光栅化单字符，返回 (宽, 高, 非零覆盖像素数)。
@@ -7337,6 +7352,10 @@ pub fn build_vendored() -> Option<(TermView, String, Option<String>)> {
 
 // ---- trait 层（终端模拟器设计页 §2；插件化边界，方法体一行不动） ----
 
+/// 外置视口快照 Term 类型（capture-pane 全史解析产物——BAR-154 起在
+/// 抓取后台线程构建，跨线程送达 UI 线程落位；TermEmu trait 方法面用）
+pub type BrowseTerm = Term<VoidListener>;
+
 /// 终端模拟器对象面（服务键 `dyn TermEmuFactory` 产出的实例侧）。
 /// `Send` 不含 `Sync`：独占可变持有——类型约束编码状态存活分层（评审裁决 1）。
 ///
@@ -7365,15 +7384,17 @@ pub trait TermEmu: Send {
     /// 外置视口浏览态查询（2026-09-25 tmux 像素级滚动，android_app
     /// 分流/退出判据调用方）
     fn browsing(&self) -> bool;
-    /// 进浏览态：capture-pane 全史快照喂独立 Term（与 live 同尺寸，
-    /// 切入零跳动；超屏行沉快照 scrollback = 可滚里程）
-    fn enter_browse(&mut self, capture: &str);
+    /// 进浏览态：预建快照 Term 落位（BAR-154：快照解析在抓取后台线程
+    /// 完成——266KB ANSI 解析占 UI 线程 = 用户实报「拖动卡一下」病灶）
+    fn enter_browse_term(&mut self, term: BrowseTerm);
     /// 退浏览态：快照丢弃 + 分数零头归零；返回是否真在浏览态
     /// （live term 浏览期照常喂，回切即最新）
     fn exit_browse(&mut self) -> bool;
-    /// 浏览期原地刷新快照（视口锚从底部量守恒，零头保留）——动态
-    /// 播放条款的承重方法（android_app 节流刷新调用方）
-    fn swap_browse(&mut self, capture: &str);
+    /// 浏览期原地刷新快照（视口锚定内容守恒：offset 补偿底部追加行数，
+    /// 零头保留）——动态播放条款的承重方法（android_app 节流刷新调用方）
+    fn swap_browse_term(&mut self, term: BrowseTerm);
+    /// live 网格尺寸（抓取线程 build_browse_term 的同尺依据）
+    fn live_grid_dims(&self) -> (usize, usize);
     /// live 喂入代际读数（快照刷新节流的活动判据，android_app 调用方）
     fn feed_seq(&self) -> u64;
     /// scrollback 位移读数（[scroll] 仪器遥测调用方：零头累计满行提交
@@ -7704,14 +7725,17 @@ impl TermEmu for TermView {
     fn browsing(&self) -> bool {
         TermView::browsing(self)
     }
-    fn enter_browse(&mut self, capture: &str) {
-        TermView::enter_browse(self, capture)
+    fn enter_browse_term(&mut self, term: BrowseTerm) {
+        TermView::enter_browse_term(self, term)
     }
     fn exit_browse(&mut self) -> bool {
         TermView::exit_browse(self)
     }
-    fn swap_browse(&mut self, capture: &str) {
-        TermView::swap_browse(self, capture)
+    fn swap_browse_term(&mut self, term: BrowseTerm) {
+        TermView::swap_browse_term(self, term)
+    }
+    fn live_grid_dims(&self) -> (usize, usize) {
+        TermView::live_grid_dims(self)
     }
     fn feed_seq(&self) -> u64 {
         TermView::feed_seq(self)
