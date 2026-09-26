@@ -42,8 +42,17 @@
   APK + 调安装器。
 - `deploy-phone.sh` — 送包到手机并调起安装器(`--build` 先打包再送)。
 - `deploy-via-na.sh` — 自持安装通道（2026-09-26）：QUIC 反连桥推包进 na
-  私有目录 incoming/ → FileProvider content:// 一次性授权调起安装器，
-  零 Termux/存储权限依赖（首次使用前提：在跑的 na 已含 KfmFileProvider）。
+  私有目录 incoming/ → **投闸门**（通道十五 install-apk-req）→ na 值守线程
+  JNI 甩 MainActivity（UI 线程）→ FileProvider content:// 一次性授权调起
+  安装器，零 Termux/存储权限依赖（首次使用前提：在跑的 na 已含
+  KfmFileProvider）。**2026-09-26 改道**：原先第二步走桥 shell 的 am start
+  被 vivo 按进程态判 BAL 静默吞（连浏览器 VIEW 都不弹、exit=0 无输出），
+  安装意图只能由前台 Activity 发起——BAR-162。
+- `na-install-apk.sh [APK]` — **na 自更新原语**（BAR-162，2026-09-26）：
+  推包进 incoming/ + 投同一道闸门，读回 usr/tmp/install-status 判决。
+  通用口（deploy-via-na.sh 的同源同法）——agent 给自己/工具链推包走这条。
+  现行装机 APK 没有 Java 新方法时自动走引导腿（门线程直调
+  activity.startActivity），故**不装包也能用**。
 - `deploy-ai-config.sh` — 三路 key 配置(Kimi 默认/智谱/DeepSeek 官网)
   抽自服务器 kfmv4,经闸门(na-ssh.sh:9022 首选/8024 备援)推 na 私有目录 ai/(key 不进 git)。
 - `font-bake.py` — 字体烘焙管线(子集化/借形/monoify)。

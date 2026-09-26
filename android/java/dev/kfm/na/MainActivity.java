@@ -226,6 +226,58 @@ public class MainActivity extends NativeActivity {
         }
     }
 
+    // ---- 自更新原语（BAR-162，2026-09-26）：gate 通道十五 install-apk-req
+    // 的 Java 着陆点。缘起：桥 shell 路已证死（研究线实跑）——经 QUIC 反连桥
+    // 在 na 沙箱里 am start（termux-am 壳，na uid）被 vivo 按进程态判 BAL
+    // 静默吞，连浏览器 VIEW 都不弹、exit=0 无输出，而 pm list packages 照通
+    // （IPC 活）= 不是壳坏，是桥 spawn 的 app_process 不是可见 Activity 的
+    // 宿主进程；给「安装未知应用」全权限也无用（BAL 判进程态不判权限）。
+    // 故意图改由 MainActivity（前台进程）自己发起：门线程 → JNI → 本方法
+    // （UI 线程）→ 系统安装器。
+    // URI 由 Rust 侧先落定进 {files}/incoming/ 再拼（KfmFileProvider 的根
+    // 就锁在那儿，见 src/install.rs），本方法只管「从 Activity 上下文递出去」
+    // 这一段。现行装机 APK 没有本方法时，Rust 侧走引导腿（门线程直调
+    // activity.startActivity）——自更新原语的零引导义。
+    /** 判决落 usr/tmp/install-status + motion-java.log 时序（判卷一条账）。
+     *  参数 = content://dev.kfm.na.provider/apk/&lt;名&gt; */
+    public void installApkFromGate(final String uri) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                String verdict;
+                try {
+                    android.content.Intent it = new android.content.Intent(
+                            android.content.Intent.ACTION_VIEW);
+                    it.setDataAndType(android.net.Uri.parse(uri),
+                            "application/vnd.android.package-archive");
+                    it.addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+                            | android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+                    startActivity(it);
+                    verdict = "ok leg=java uri=" + uri;
+                } catch (android.content.ActivityNotFoundException e) {
+                    verdict = "NO_HANDLER leg=java uri=" + uri + "（无接收者）";
+                } catch (Throwable t) {
+                    verdict = "ERR leg=java uri=" + uri + " —— " + t;
+                }
+                appendMotion("install-apk " + verdict);
+                installStatus(verdict);
+            }
+        });
+    }
+
+    /** 自更新原语判决落账（快照覆盖写；与 web-status/rec-status 同族，
+     *  单独一个文件免得跟录音/浏览器的账混流） */
+    private void installStatus(String s) {
+        try {
+            java.io.File f = new java.io.File(getFilesDir(), "usr/tmp/install-status");
+            f.getParentFile().mkdirs();
+            java.io.FileWriter w = new java.io.FileWriter(f, false);
+            w.write(s + "\n");
+            w.close();
+        } catch (Exception ignored) {
+        }
+    }
+
     // ---- BAR-145 输入边界对表仪器（2026-09-25，定罪后钉层）----
     // 三方对表已定罪：显示/几何/渲染全链无罪，na 收到的触摸 y 系统性偏小
     // ~130px≈状态栏高——偏移在 winit/系统窗口层。本仪器从 Java 皮（系统

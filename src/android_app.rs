@@ -8983,6 +8983,60 @@ impl ApplicationHandler for App {
 /// 本包名（残留实例自清的 cmdline 判据；与 AndroidManifest 的 package 同尺）
 const APP_PKG: &str = "dev.kfm.na";
 
+/// 自更新原语**引导腿**（BAR-162）：门线程直调 activity.startActivity——
+/// 现行装机 APK 没有 installApkFromGate 时的零引导路（不装包也能推包）。
+/// 意图构造全走标准框架类（Intent/Uri），不依赖 Java 皮任何新代码；
+/// 从 Activity 身上发起 = 调用方是前台可见进程，vivo 的 BAL 判据放行
+/// （桥 shell 那条死的正因就是 shell 进程不在可见态）。
+fn install_intent_direct(
+    vm: &jni::JavaVM,
+    activity: &jni::objects::Global<jni::objects::JObject<'static>>,
+    uri: &str,
+) -> Result<(), String> {
+    vm.attach_current_thread(|env| -> jni::errors::Result<()> {
+        let action = env.new_string("android.intent.action.VIEW")?;
+        let intent = env.new_object(
+            jni::jni_str!("android/content/Intent"),
+            jni::jni_sig!("(Ljava/lang/String;)V"),
+            &[jni::objects::JValue::Object(&action)],
+        )?;
+        let juri = env.new_string(uri)?;
+        let parsed = env
+            .call_static_method(
+                jni::jni_str!("android/net/Uri"),
+                jni::jni_str!("parse"),
+                jni::jni_sig!("(Ljava/lang/String;)Landroid/net/Uri;"),
+                &[jni::objects::JValue::Object(&juri)],
+            )?
+            .l()?;
+        let mime = env.new_string(crate::install::APK_MIME)?;
+        env.call_method(
+            &intent,
+            jni::jni_str!("setDataAndType"),
+            jni::jni_sig!("(Landroid/net/Uri;Ljava/lang/String;)Landroid/content/Intent;"),
+            &[
+                jni::objects::JValue::Object(&parsed),
+                jni::objects::JValue::Object(&mime),
+            ],
+        )?;
+        // FLAG_GRANT_READ_URI_PERMISSION(0x1) | FLAG_ACTIVITY_NEW_TASK(0x1000_0000)
+        env.call_method(
+            &intent,
+            jni::jni_str!("addFlags"),
+            jni::jni_sig!("(I)Landroid/content/Intent;"),
+            &[jni::objects::JValue::Int(0x1000_0001)],
+        )?;
+        env.call_method(
+            activity,
+            jni::jni_str!("startActivity"),
+            jni::jni_sig!("(Landroid/content/Intent;)V"),
+            &[jni::objects::JValue::Object(&intent)],
+        )?;
+        Ok(())
+    })
+    .map_err(|e| format!("startActivity 失败: {e}"))
+}
+
 /// NativeActivity 入口（android-activity 约定符号名）
 #[unsafe(no_mangle)]
 fn android_main(app: winit::platform::android::activity::AndroidApp) {
@@ -9178,6 +9232,80 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
                     "winstate",
                     &format!("JNI dumpWindowStateFromGate 失败: {e}"),
                 );
+            }
+        }));
+        // BAR-162（2026-09-26）：gate install-apk-req → **na 自更新原语**。
+        // 缘起：桥 shell 路已证死（经 QUIC 桥在 na 沙箱 am start 被 vivo
+        // 按进程态判 BAL 静默吞，连浏览器 VIEW 都不弹）——安装意图必须由
+        // MainActivity 所在前台进程发起。分工：文件半边（落定进 incoming/
+        // + 拼 content://）在 Rust 纯函数（src/install.rs，有 A 档考题）；
+        // UI 半边优先甩 Java 皮 installApkFromGate（UI 线程正道），现行
+        // 装机 APK 没有该方法时走**引导腿**（门线程直调 activity.startActivity）
+        // ——自更新原语的零引导义：不装包也能用这条道。vm/gref 第四对。
+        let vm4 = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr() as *mut _) };
+        let gref4 = vm4
+            .attach_current_thread(|env| {
+                let act = unsafe {
+                    jni::objects::JObject::from_raw(env, app.activity_as_ptr() as *mut _)
+                };
+                env.new_global_ref(&act)
+            })
+            .expect("MainActivity GlobalRef#4 建立失败");
+        let files_dir = app.internal_data_path();
+        crate::gate::register_install_hook(Box::new(move |src: String| {
+            let Some(dir) = files_dir.as_ref() else {
+                crate::report::report_sync("install", "自更新递交：拿不到 files 目录，拒交");
+                return;
+            };
+            let staged = match crate::install::stage_apk(&dir.to_string_lossy(), &src) {
+                Ok(s) => s,
+                Err(e) => {
+                    crate::report::report_sync("install", &format!("自更新落定失败: {e}"));
+                    let _ = crate::install::write_status(
+                        crate::gate::DUMP_DIR,
+                        &format!("ERR stage {e}"),
+                    );
+                    return;
+                }
+            };
+            let java_leg = vm4.attach_current_thread(|env| -> jni::errors::Result<()> {
+                let juri = env.new_string(&staged.uri)?;
+                env.call_method(
+                    &gref4,
+                    jni::jni_str!("installApkFromGate"),
+                    jni::jni_sig!((java.lang.String) -> void),
+                    &[jni::objects::JValue::Object(&juri)],
+                )
+                .map(|_| ())
+            });
+            match java_leg {
+                Ok(()) => crate::report::report_sync(
+                    "install",
+                    &format!(
+                        "自更新递交 leg=java uri={} bytes={}（判决见 install-status）",
+                        staged.uri, staged.bytes
+                    ),
+                ),
+                Err(e) => {
+                    // 引导腿前必须清掉挂起的 Java 异常（jni 0.22 把
+                    // JavaException 抛回但不代清，残留会毒后续每次 JNI 调用）
+                    let _ = vm4.attach_current_thread(|env| -> jni::errors::Result<()> {
+                        env.exception_clear();
+                        Ok(())
+                    });
+                    let verdict = match install_intent_direct(&vm4, &gref4, &staged.uri) {
+                        Ok(_) => format!(
+                            "ok leg=rust-direct uri={} bytes={}",
+                            staged.uri, staged.bytes
+                        ),
+                        Err(err) => format!("ERR leg=rust-direct uri={} —— {err}", staged.uri),
+                    };
+                    let _ = crate::install::write_status(crate::gate::DUMP_DIR, &verdict);
+                    crate::report::report_sync(
+                        "install",
+                        &format!("自更新递交 leg=rust-direct（Java 腿不可用: {e}）{verdict}"),
+                    );
+                }
             }
         }));
     }

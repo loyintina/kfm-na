@@ -16,6 +16,7 @@ src/ime_bridge.rs 1
 src/ime_queue.rs 0
 src/input_bar.rs 9
 src/insets.rs 4
+src/install.rs 0
 src/keybar.rs 4
 src/keymap.rs 0
 src/local_pty.rs 1

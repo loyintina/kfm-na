@@ -21,6 +21,7 @@ pub mod http1;
 pub mod ime_queue;
 pub mod input_bar;
 pub mod insets;
+pub mod install;
 pub mod keybar;
 pub mod keymap;
 pub mod local_pty;

@@ -624,6 +624,45 @@ fn spec_bar145_winstate触发与钩子链() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+// na 自更新原语触发通道（BAR-162，2026-09-26）：install-apk-req 读取/摘除/
+// 空内容容忍 + 钩子链带路径参数（单次触发单次消费）。
+#[test]
+fn spec_bar162_install触发与钩子链() {
+    use std::sync::{Arc, Mutex};
+    let dir = std::env::temp_dir().join(format!("installreq-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let d = dir.to_str().unwrap();
+    // ① 无文件 = None
+    assert_eq!(kfm_na::gate::take_install_req(d), None);
+    // ② 空内容 = None + 摘除（无路径可用，不许空转弹一次安装器）
+    std::fs::write(dir.join("install-apk-req"), "   \n").unwrap();
+    assert_eq!(kfm_na::gate::take_install_req(d), None);
+    assert!(!dir.join("install-apk-req").exists(), "消费后必须摘除");
+    // ③ 正常路径 = Some（首尾空白去净）+ 摘除
+    let apk = "/data/data/dev.kfm.na/files/incoming/kfm-na-1.apk";
+    std::fs::write(dir.join("install-apk-req"), format!("{apk}\n")).unwrap();
+    assert_eq!(kfm_na::gate::take_install_req(d), Some(apk.to_string()));
+    assert!(!dir.join("install-apk-req").exists(), "消费后必须摘除");
+    // ④ 钩子链：无请求不响；有请求甩一次且带路径；不重复消费
+    let got: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&got);
+    kfm_na::gate::register_install_hook(Box::new(move |p: String| {
+        sink.lock().unwrap().push(p);
+    }));
+    kfm_na::gate::install_req_check(d);
+    assert_eq!(got.lock().unwrap().len(), 0);
+    std::fs::write(dir.join("install-apk-req"), format!("{apk}\n")).unwrap();
+    kfm_na::gate::install_req_check(d);
+    assert_eq!(
+        *got.lock().unwrap(),
+        vec![apk.to_string()],
+        "路径必须原样递给钩子"
+    );
+    kfm_na::gate::install_req_check(d);
+    assert_eq!(got.lock().unwrap().len(), 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 // 浏览器卡尖刺触发通道（SPKE-web，B 档冒烟钉）：web-req 读取/摘除/空内容容忍。
 #[test]
 fn spec_浏览器尖刺_web触发读取() {

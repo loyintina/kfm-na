@@ -493,6 +493,7 @@ pub fn spawn_gate_watcher() {
             rec_req_check(DUMP_DIR); // 通道十二:软件内实录(P2,2026-09-08)
             web_req_check(DUMP_DIR); // 通道十三:浏览器卡尖刺(SPKE-web,2026-09-12)
             winstate_check(DUMP_DIR); // 通道十四:BAR-145 窗口几何对表(2026-09-25)
+            install_req_check(DUMP_DIR); // 通道十五:自更新原语递交安装意图(BAR-162,2026-09-26)
             alert_tick(tick);
             history_tick(DUMP_DIR, tick);
             thread_census(DUMP_DIR, tick);
@@ -1009,6 +1010,54 @@ pub fn winstate_check(dir: &str) {
             None => {
                 crate::report::report("winstate", "window-state-req 无钩子（host 或未注册），丢弃")
             }
+        }
+    }
+}
+
+// ---- 通道十五:install-apk-req → na 自更新原语（BAR-162，2026-09-26）----
+// 缘起：经 QUIC 反连桥在 na 沙箱里 am start 被 vivo 按进程态判 BAL 静默吞
+// （连浏览器 VIEW 都不弹、exit=0 无输出，pm list packages 却通）——安装意图
+// 必须从 MainActivity 所在的前台进程发起。触发文件一投（**内容 = APK 路径**，
+// 首尾空白去净），门线程 JNI 甩 MainActivity.installApkFromGate(content://)
+// ——UI 线程 ACTION_VIEW + grant 标志；现行装机 APK 无该法时走引导腿
+// （门线程直调 activity.startActivity，零引导：不装包也能用）。判决落
+// usr/tmp/install-status 一行账。落定/URI 那半边纯函数在 src/install.rs。
+//
+// 定位（用户拍板入账）：**这是 na 自更新原语**——不是为某个包开的窄门，
+// 往后 agent 给自己/工具链推包都走这条道（部署脚本 deploy-via-na.sh 与
+// na-install-apk.sh 同源）。
+
+/// 读 install-apk-req：内容 = 目标 APK 路径（首尾空白去净）。空/缺 = None。
+/// 单次触发单次消费（消费即摘除，同通道十四口径）。
+pub fn take_install_req(dir: &str) -> Option<String> {
+    let p = Path::new(dir).join("install-apk-req");
+    let body = std::fs::read_to_string(&p).ok()?;
+    let _ = std::fs::remove_file(&p);
+    let path = body.trim();
+    if path.is_empty() {
+        crate::report::report("install", "install-apk-req 空内容（无 APK 路径），丢弃");
+        return None;
+    }
+    Some(path.to_string())
+}
+
+type InstallHook = Box<dyn Fn(String) + Send>;
+static INSTALL_HOOK: std::sync::Mutex<Option<InstallHook>> = std::sync::Mutex::new(None);
+
+/// 注册自更新递交钩子（android_app 启动时注册一次；host 不注册=空转合法）
+pub fn register_install_hook(f: InstallHook) {
+    *INSTALL_HOOK.lock().unwrap() = Some(f);
+}
+
+/// 值守循环消费：有请求就甩钩子（带路径参数）
+pub fn install_req_check(dir: &str) {
+    if let Some(path) = take_install_req(dir) {
+        match INSTALL_HOOK.lock().unwrap().as_ref() {
+            Some(f) => f(path),
+            None => crate::report::report(
+                "install",
+                &format!("install-apk-req({path}) 无钩子（host 或未注册），丢弃"),
+            ),
         }
     }
 }

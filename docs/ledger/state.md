@@ -25,6 +25,24 @@
 > 内容确讲 BAR-160 钩子 Stage 案）。systemd kfm-na-agentd.service
 > enabled+active（unit 单源 crates/na-agentd/kfm-na-agentd.service）。
 
+## 当前位置（2026-09-26 傍晚，BAR-162 na 自更新原语——安装意图改走 Activity 上下文）
+
+> **桥 shell 路已证死**（研究线实跑）：经 QUIC 反连桥在 na 沙箱里 `am start`
+> 被 vivo 按进程态判 BAL 静默吞（连浏览器 VIEW 都不弹、exit=0 无输出，`pm
+> list packages` 照通 = IPC 活、壳没坏）；桥 spawn 的 app_process 不是可见
+> Activity 的宿主进程，「安装未知应用」授权也救不了。**修 = 通道十五
+> `install-apk-req` + 两腿递交**：Rust 半边纯函数（`src/install.rs`：名净化
+> 与 provider 同口径 / 拼 content:// / 落定进 `{files}/incoming/` 且先 .new
+> 再 rename）→ 主臂 JNI 甩 `MainActivity.installApkFromGate`（UI 线程
+> ACTION_VIEW + grant 标志），**引导腿**在现行装机 APK 没有该方法时门线程
+> 直调 `activity.startActivity`（清挂起异常后走）——**不装包也能用**，这是
+> 自更新原语的零引导义。判决落 `usr/tmp/install-status` 一行。
+> **判卷**：热更后投闸门（`bash scripts/na-install-apk.sh`）弹安装器 = 过；
+> 通用口，往后 agent 给自己/工具链推包都走这条（deploy-via-na.sh 同源改道）。
+> 钉：`tests/install_spec.rs` + `tests/gate_spec.rs::spec_bar162_install触发与钩子链`，
+> 变异七咬全中。口径修正：KfmFileProvider 是手写 provider（非 androidx、
+> 无 res/xml），根锁死 incoming/——落定进 incoming 即覆盖，无需补 XML。
+
 ## 当前位置（2026-09-26 下午，BAR-145 七度再现闭链定罪 + 输入边界补偿修复臂上机）
 
 > **BAR-145 修复上机待判**（bugs.md 行全档）：捕获器
