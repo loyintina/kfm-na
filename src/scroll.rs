@@ -11,6 +11,11 @@
 /// 超过了就进入滚动模式，松手不弹键盘
 pub const TAP_SLOP_PX: f64 = 24.0;
 
+/// 拖滚增益（2026-09-26 用户拍板「2 倍滚动比：我移动 10px 页面滚 20px」）：
+/// 只乘手指位移，不动 slop 门（阈值是手指物理量）；像素/行级/滚轮三通道
+/// 共用，甩尾速度采样吃增益后的位移故初速同倍跟随
+pub const DRAG_GAIN: f64 = 2.0;
+
 /// SGR 1006 滚轮事件序列（BAR-016）：全屏 TUI（tmux/kimicode 开了鼠标上报）
 /// 时，滚屏不滚本地（alt screen 没历史），翻成滚轮事件发给 PTY 让对方滚。
 /// view_older=true（手指下拖看历史）= wheel up = button 64；false = 65。
@@ -66,7 +71,7 @@ impl TouchScroll {
             }
             self.dragging = true;
         }
-        self.pending_px += y - self.last_y;
+        self.pending_px += (y - self.last_y) * DRAG_GAIN;
         self.last_y = y;
         let lines = (self.pending_px / self.cell_h).trunc() as i32;
         self.pending_px -= f64::from(lines) * self.cell_h; // 余数挂账
@@ -88,11 +93,11 @@ impl TouchScroll {
             self.dragging = true;
             // 越阈第一笔：slop 段不计入（从阈值边界起算，与 moved 的
             // 挂账语义不同——像素通道一滴零头都是钱，slop 段是点按的）
-            let d = off - off.signum() * TAP_SLOP_PX;
+            let d = (off - off.signum() * TAP_SLOP_PX) * DRAG_GAIN;
             self.last_y = y;
             return d;
         }
-        let d = y - self.last_y;
+        let d = (y - self.last_y) * DRAG_GAIN;
         self.last_y = y;
         d
     }

@@ -5,8 +5,10 @@
 //! - 越过阈值进入滚动：手指向下拖 = 看更老的历史 = 行数为正
 //! - 像素→行换算带余数挂账：半行半行慢拖必须累计成行（取整吞余数则慢滚哑）
 //! - 拖下去再拖回来：行数可逆（净位移为零 → 净滚动为零）
+//! - 拖滚增益 DRAG_GAIN=2（2026-09-26 用户拍板「移 10px 滚 20px」）：
+//!   只乘手指位移，slop 门不动；三通道共用，甩尾初速同倍跟随
 
-use kfm_na::scroll::{TAP_SLOP_PX, TouchScroll};
+use kfm_na::scroll::{DRAG_GAIN, TAP_SLOP_PX, TouchScroll};
 
 const CELL: f64 = 30.0; // 格高 30px（与真机尖刺常量同量级）
 
@@ -37,10 +39,10 @@ fn spec_方向_向下拖看历史() {
     // （alacritty Scroll::Delta 正数 = display_offset 增大）
     let mut t = TouchScroll::new(500.0, CELL);
     let lines = t.moved(500.0 + CELL * 3.0);
-    assert_eq!(lines, 3, "向下拖三格高必须是 +3 行");
+    assert_eq!(lines, 6, "向下拖三格高×增益2 = +6 行");
     let mut u = TouchScroll::new(500.0, CELL);
     let lines = u.moved(500.0 - CELL * 2.0);
-    assert_eq!(lines, -2, "向上拖两格高必须是 -2 行");
+    assert_eq!(lines, -4, "向上拖两格高×增益2 = -4 行");
 }
 
 #[test]
@@ -49,23 +51,23 @@ fn spec_余数挂账_慢拖累计成行() {
     // 契约：三次 0.5 行（15px）的下拖 = 1 行 + 余数继续挂
     let mut t = TouchScroll::new(500.0, CELL);
     let half = CELL / 2.0; // 15px < TAP_SLOP？不——阈值内不滚！先一把越阈
-    // 先越阈进入滚动模式（越阈那一下的位移也计入）
-    let l0 = t.moved(500.0 + TAP_SLOP_PX + 1.0); // 25px → 0 行（余 25px）
-    assert_eq!(l0, 0, "25px 不足一格高，0 行（余数挂账 25px）");
+    // 先越阈进入滚动模式（越阈那一下的位移也计入；增益 2：指 25px = 页 50px）
+    let l0 = t.moved(500.0 + TAP_SLOP_PX + 1.0);
+    assert_eq!(l0, 1, "指 25px×2=50px → 1 行（余数挂账 20px）");
     assert_eq!(
         t.moved(500.0 + TAP_SLOP_PX + 1.0 + half),
         1,
-        "再拖 15px：25+15=40px ≥ 30px → 1 行"
+        "再拖指 15px（页 30px）：20+30=50 → 1 行（余 20）"
     );
     assert_eq!(
         t.moved(500.0 + TAP_SLOP_PX + 1.0 + half + half),
-        0,
-        "再 15px：余 10+15=25px 不足 → 0 行"
+        1,
+        "再 15px：20+30=50 → 1 行（余 20）"
     );
     assert_eq!(
         t.moved(500.0 + TAP_SLOP_PX + 1.0 + half + half + half),
         1,
-        "再 15px：25+15=40 → 1 行"
+        "再 15px：同上 → 1 行（余 20 不漂）"
     );
 }
 
@@ -75,8 +77,8 @@ fn spec_拖下去再拖回来净滚动为零() {
     let mut t = TouchScroll::new(500.0, CELL);
     let down = t.moved(500.0 + CELL * 3.0);
     let up = t.moved(500.0);
-    assert_eq!(down, 3);
-    assert_eq!(up, -3, "回原位必须是 -3 行，净滚动归零");
+    assert_eq!(down, 6);
+    assert_eq!(up, -6, "回原位必须是 -6 行，净滚动归零");
 }
 
 #[test]
@@ -86,8 +88,8 @@ fn spec_越阈当刻的位移也计入滚动() {
     let mut t = TouchScroll::new(500.0, CELL);
     assert_eq!(
         t.moved(500.0 + TAP_SLOP_PX + CELL),
-        1,
-        "越阈位移必须计入：25+30=55px → 1 行"
+        3,
+        "越阈位移必须计入：指 55px×2=110px → 3 行"
     );
 }
 
@@ -115,12 +117,19 @@ fn spec_像素滚动_moved_px零头原样不取整() {
     assert!(t.was_tap());
     // 越阈后：位移原样出——半行零头不取整不挂账（moved 在这里出 0 行）
     let d = t.moved_px(500.0 + TAP_SLOP_PX + 15.5);
-    assert_eq!(d, 15.5, "越阈后第一笔位移原样出（slop 段不计入，同 moved）");
+    assert_eq!(
+        d,
+        15.5 * DRAG_GAIN,
+        "越阈后第一笔位移×增益出（slop 段不计入，同 moved）"
+    );
     assert!(!t.was_tap());
-    // 连续小步：每次出当次位移，无累计无吞零
-    assert_eq!(t.moved_px(500.0 + TAP_SLOP_PX + 15.5 + 3.25), 3.25);
-    // 反向：负位移原样出
-    assert_eq!(t.moved_px(500.0), -(TAP_SLOP_PX + 18.75));
+    // 连续小步：每次出当次位移×增益，无累计无吞零
+    assert_eq!(
+        t.moved_px(500.0 + TAP_SLOP_PX + 15.5 + 3.25),
+        3.25 * DRAG_GAIN
+    );
+    // 反向：负位移×增益出
+    assert_eq!(t.moved_px(500.0), -(TAP_SLOP_PX + 18.75) * DRAG_GAIN);
 }
 
 #[test]
@@ -128,10 +137,14 @@ fn spec_像素滚动_双通道互不污染() {
     // 同一只状态机的两条通道：slop/last_y 共享——行级保底与像素级
     // 切换发生在两次触摸之间（设置页里点开关），一次触摸内不换道
     let mut t = TouchScroll::new(500.0, CELL);
-    assert_eq!(t.moved(500.0 + TAP_SLOP_PX + CELL), 1, "行级通道照旧");
+    assert_eq!(
+        t.moved(500.0 + TAP_SLOP_PX + CELL),
+        3,
+        "行级通道照旧（增益 2：54px→108→3 行）"
+    );
     let mut u = TouchScroll::new(500.0, CELL);
     let d = u.moved_px(500.0 + TAP_SLOP_PX + CELL);
-    assert_eq!(d, CELL, "像素通道同位移出原样 px");
+    assert_eq!(d, CELL * DRAG_GAIN, "像素通道同位移×增益出 px");
 }
 
 // ---------- BAR-151 滚轮路余数挂账（2026-09-24 仪器定罪：tmux 滚动 ticks 恒 0） ----------
@@ -143,31 +156,36 @@ fn spec_像素滚动_双通道互不污染() {
 #[test]
 fn spec_bar151_滚轮挂账_慢拖累计成tick() {
     let mut t = TouchScroll::new(500.0, CELL);
-    // 越阈：30px 累计位移（slop 24 不计入，第一笔有效位移 6px）
-    assert_eq!(t.wheel_ticks(530.0, CELL), 0, "6px 不足一行不许出 tick");
-    // 每笔 +10px：6→16→26→36→46——第 5 笔过一行才许出 1 tick
-    assert_eq!(t.wheel_ticks(540.0, CELL), 0);
+    // 越阈：指 30px（slop 24 不计入，第一笔有效 6px×增益2=12px 页位移）
+    assert_eq!(t.wheel_ticks(530.0, CELL), 0, "12px 不足一行不许出 tick");
+    // 每笔指 +10px（页 +20px）：12→32→22→42→32——过一行即出 tick
+    assert_eq!(
+        t.wheel_ticks(540.0, CELL),
+        1,
+        "累计 32px 过一行出 1 tick（余 2）"
+    );
     assert_eq!(t.wheel_ticks(550.0, CELL), 0);
-    assert_eq!(t.wheel_ticks(560.0, CELL), 1, "累计 36px 过一行出 1 tick");
-    assert_eq!(t.wheel_ticks(570.0, CELL), 0);
-    assert_eq!(t.wheel_pending(), 16.0, "零头挂账不吞（6+10×4−30=16）");
+    assert_eq!(t.wheel_ticks(560.0, CELL), 1);
+    assert_eq!(t.wheel_ticks(570.0, CELL), 1);
+    assert_eq!(t.wheel_pending(), 2.0, "零头挂账不吞（12+20×4−90=2）");
 }
 
 #[test]
 fn spec_bar151_滚轮挂账_往返净tick为零() {
     let mut t = TouchScroll::new(500.0, CELL);
     let mut net = 0;
-    // 下去 100px（有效 76px = 2 tick + 16px 零头）
-    for y in [530.0, 550.0, 570.0, 590.0, 600.0] {
+    // 下去指 99px（slop 24 不计 → 有效 75px × 增益 2 = 页 150px = 恰好
+    // 5 tick 零头归零）
+    for y in [530.0, 560.0, 599.0] {
         net += t.wheel_ticks(y, CELL);
     }
-    // 回拖 106px（= 下去的有效 76px + 30px，净计 −30px = 恰好 −1 tick）：
-    // 挂账借还必须对称——吞零头/造 tick 都会让净账或零头对不上
-    for y in [570.0, 550.0, 530.0, 510.0, 494.0] {
+    // 回拖指 75px（页 −150px，与下去的挂账借还对称）：净计零 = 恰好
+    // 净 0 tick 且零头归零——吞零头/造 tick 都会让净账或零头对不上
+    for y in [564.0, 534.0, 524.0] {
         net += t.wheel_ticks(y, CELL);
     }
-    assert_eq!(net, -1, "净位移 −30px 必须恰好 −1 tick（挂账造假即破）");
-    assert_eq!(t.wheel_pending().abs(), 0.0, "净 −30px 后零头必须归零");
+    assert_eq!(net, 0, "往返借还对称必须恰好净 0 tick（挂账造假即破）");
+    assert_eq!(t.wheel_pending().abs(), 0.0, "往返后零头必须归零");
 }
 
 #[test]
@@ -194,12 +212,13 @@ fn spec_惯性甩尾_速度采样公式() {
     let mut t = TouchScroll::new(500.0, CELL);
     // 越阈第一笔：off=30 超 slop 24，d=6，dt=16.667ms
     let d0 = t.moved_px_at(530.0, FLING_FRAME_MS);
-    assert_eq!(d0, 6.0, "slop 段不计入位移");
-    // 第二笔：d=30，dt=16.667ms → vel = 30/16.667×16.667×BOOST = 30×BOOST
+    assert_eq!(d0, 6.0 * DRAG_GAIN, "slop 段不计入位移（有效位移吃增益）");
+    // 第二笔：指 30px（页 60），dt=16.667ms → vel = 60×BOOST
+    //（甩尾初速跟随拖滚增益——同一根手指同一种快）
     t.moved_px_at(560.0, FLING_FRAME_MS * 2.0);
     let f = t.fling_on_release().expect("快甩必须出甩尾");
     assert!(
-        (f.velocity() - 30.0 * FLING_BOOST).abs() < 1e-9,
+        (f.velocity() - 60.0 * FLING_BOOST).abs() < 1e-9,
         "采样公式必须是 d/dt×帧尺×增益，实得 {}",
         f.velocity()
     );
@@ -211,11 +230,11 @@ fn spec_惯性甩尾_点按与低速不甩() {
     let mut t = TouchScroll::new(500.0, CELL);
     t.moved_px_at(505.0, 10.0);
     assert!(t.fling_on_release().is_none(), "点按不许甩");
-    // 低速爬行（1px/100ms ≈ 0.28px/帧 < 启动阈 0.5）：None
+    // 低速爬行（指 1px/200ms，页 2px/200ms ≈ 0.28px/帧 < 启动阈 0.5）：None
     let mut u = TouchScroll::new(500.0, CELL);
     u.moved_px_at(530.0, 0.0); // 越阈笔（dt=0 不采样）
-    u.moved_px_at(531.0, 100.0);
-    let v = 1.0 / 100.0 * FLING_FRAME_MS * FLING_BOOST;
+    u.moved_px_at(531.0, 200.0);
+    let v = 2.0 / 200.0 * FLING_FRAME_MS * FLING_BOOST;
     assert!(v < FLING_START_MIN, "考题前提：本速必须低于启动阈");
     assert!(u.fling_on_release().is_none(), "低速松手不许甩");
 }

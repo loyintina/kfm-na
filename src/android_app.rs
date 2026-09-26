@@ -238,6 +238,60 @@ enum Gfx {
 /// softbuffer，照常可用）；false = 纯 softbuffer（对照组/排障开关）
 const GLES_FIRST: bool = true;
 
+/// v4 预热池条目（每会话一份）：控制通道 + 相位机 + 画布 + 接缝账。
+/// 相位判定全在 ctrl_feed（A 档纯逻辑，BAR-155 钉死），本结构只是
+/// 每会话的接线包——通道/缓冲/时刻账
+struct WarmSess {
+    /// 控制通道（tmux -C attach -f ignore-size 常驻该会话）；
+    /// None = 通道死/判负退避中（壳留着——退避账在壳上）
+    ctrl: Option<crate::conn::TermHandle>,
+    /// 播种/续喂相位机（行装配+\r 剥除在 feed_bytes 唯一入口）
+    feed: crate::ctrl_feed::CtrlFeed,
+    /// 后台画布（该会话不在浏览态时在此续喂生长；浏览态时画布在
+    /// TermView 里，本槽 None——take/enter_browse_canvas 进出成对）
+    canvas: Option<termview::Canvas>,
+    /// Building 期 %output 字节缓冲（安装后先喂这批，再接流）
+    pending: Vec<u8>,
+    /// 播种 Canvas 后台构建在途（BAR-154 同款：解析不占 UI 线程）
+    build: Option<std::sync::mpsc::Receiver<termview::Canvas>>,
+    /// 播种发出时刻（boot_ms——播种落地耗时的尺子）
+    seed_ms: u64,
+    /// 末次播种落地时刻（boot_ms——对账重播的尺子；Notify 清零逼播）
+    seeded_ms: u64,
+    /// 退避时刻（boot_ms——判负回落后 5s 内不许重孵/重播种）
+    retry_ms: u64,
+}
+
+/// 预热池容量帽（会话多于帽只温前 N 个——防爆内存；当前会话永远
+/// 兜底在温，不受帽挤）
+const WARM_POOL_CAP: usize = 8;
+
+impl WarmSess {
+    fn new(now: u64) -> Self {
+        WarmSess {
+            ctrl: None,
+            feed: crate::ctrl_feed::CtrlFeed::new(),
+            canvas: None,
+            pending: Vec::new(),
+            build: None,
+            seed_ms: now,
+            seeded_ms: 0,
+            retry_ms: 0,
+        }
+    }
+
+    /// 网格换尺作废（resize 专用）：画布/在途构建/接缝账全清，相位
+    /// 归零立即可重播（画布与 live 同尺契约——旧尺画布留着就是错屏）
+    fn invalidate(&mut self, now: u64) {
+        self.feed.reset();
+        self.canvas = None;
+        self.pending.clear();
+        self.build = None;
+        self.retry_ms = now;
+        self.seeded_ms = 0;
+    }
+}
+
 #[derive(Default)]
 struct App {
     window: Option<Arc<Window>>,
@@ -448,31 +502,16 @@ struct App {
     /// 拿本账合并出全量（k = hist_new - hist_old 行照抄旧文前缀）。
     /// None = 下次抓取走全量（resize/切会话/合并判负后回落）
     browse_last: Option<(std::sync::Arc<str>, usize)>,
-    // ---- v4 推流画布（tmux -C 控制模式，2026-09-25）----
-    /// 控制通道（tmux -C attach -f ignore-size 常驻）：%output 字节流
-    /// 即时续喂画布，v3 轮询降级为保底（本通道活着 = 轮询闸关死）
-    browse_ctrl: Option<crate::conn::TermHandle>,
-    /// 后台画布（不在浏览态时在此续喂生长；浏览态时画布在 TermView
-    /// 里，本槽 None——take/enter_browse_canvas 进出成对）
-    browse_canvas: Option<termview::Canvas>,
-    /// 播种/续喂相位机（ctrl_feed.rs 纯逻辑 A 档——BAR-155：相位粒度
-    /// 必须和 tmux 块序列一一对上，写在 cfg(android) 里不可测上过机
-    /// 即死。行装配+\r 剥除全收编在 feed_bytes 唯一入口，本壳只接线：
-    /// 动作枚举照单执行，不自译）
-    ctrl_feed: crate::ctrl_feed::CtrlFeed,
-    /// Building 期 %output 字节缓冲（安装后先喂这批，再接流）
-    ctrl_pending: Vec<u8>,
-    /// 播种发出时刻（boot_ms——播种落地耗时的尺子）
-    ctrl_seed_ms: u64,
-    /// 末次播种落地时刻（boot_ms——5s 对账重播的尺子；Notify 清零
-    /// 逼下拍重播）
-    ctrl_seeded_ms: u64,
-    /// 控制通道退避时刻（boot_ms——判负回落后 5s 内不许重孵/重播种，
-    /// 防死亡-重试空转刷屏）
-    ctrl_retry_ms: u64,
-    /// 播种 Canvas 后台构建在途（BAR-154 同款：266KB ANSI 解析不占
-    /// UI 线程；完工排水 = 安装 + ctrl_pending 补喂）
-    ctrl_build: Option<std::sync::mpsc::Receiver<termview::Canvas>>,
+    // ---- v4 推流画布预热池（tmux -C 控制模式，2026-09-25 首播；
+    // 2026-09-26 用户模型「开 na 就把所有 tmux 窗口后台加载好，切窗/
+    // 首滚零等待」升预热池）----
+    /// 预热池：每会话一条控制通道 + 一块画布（%output 字节流即时续喂，
+    /// v3 轮询降级为保底——当前会话条目活着 = 轮询闸关死）。切窗不拆
+    /// 通道（BAR-155 前旧制切换即拆 = 切窗首滚必卡的病灶本体）
+    warm_pool: std::collections::HashMap<String, WarmSess>,
+    /// 预热名单（parser List 落地时同步——池只随服务器真表扩缩；
+    /// 空账时 cur_attached 单名兜底，名单落地即扩全）
+    warm_names: Vec<String>,
     /// 远程连接配置缓存（启动时装配 conn_provider 那份的 clone）——
     /// tmux 执行通道的 ws url 与 attach 重开连接的命令来源
     remote_conn_cfg: Option<crate::conn::ConnConfig>,
@@ -2036,7 +2075,12 @@ impl App {
                         // v4 推流画布起手（最优先臂）：画布在后台随字节流
                         // 续喂生长，落位零等待零抓取——%output 自续，连
                         // 温热/首抓的 exec 往返都不需要
-                        if let Some(canvas) = self.browse_canvas.take() {
+                        // v4 推流画布起手（最优先臂）：当前会话的池条目
+                        // 画布在后台随字节流续喂生长，落位零等待零抓取
+                        let warm_canvas = self
+                            .cur_attached()
+                            .and_then(|n| self.warm_pool.get_mut(&n).and_then(|e| e.canvas.take()));
+                        if let Some(canvas) = warm_canvas {
                             {
                                 let mut t = t.lock().unwrap();
                                 t.enter_browse_canvas(canvas);
@@ -3915,11 +3959,12 @@ impl App {
             // （合并模型行数对不上必然回落全量，主动清账省一次空跑）
             self.browse_warm = None;
             self.browse_last = None;
-            // v4：画布与 live 同尺契约——换尺即作废；通道活着则清零
-            // 对账账逼下拍重播（新尺播种新画布，锚守恒落位）
-            self.browse_canvas = None;
-            if self.ctrl_active() {
-                self.ctrl_seeded_ms = 0;
+            // v4：画布与 live 同尺契约——换尺即全池作废（旧尺画布留着
+            // 就是错屏），相位归零立即可重播（新尺播种新画布，锚守恒
+            // 落位）；通道不拆（控制模式 -f ignore-size 与尺寸无关）
+            let now_rs = crate::report::boot_ms() as u64;
+            for e in self.warm_pool.values_mut() {
+                e.invalidate(now_rs);
             }
             // 真 resize 已到：BAR-124 抖动归位账作废（归位值是按旧网格
             // 武装的，发出去会把尺寸掰回去；且这次净变化本身就有
@@ -4192,11 +4237,10 @@ impl App {
         else {
             return; // 没待机方：装作没发生(或没路由装配)
         };
-        // 外置视口：切会话 = 换内容主体——旧会话的快照与在途抓取一并
-        // 作废（快照是旧会话的画面，留着 = 串台）
-        if let Some(t) = self.term_handle()
-            && t.lock().unwrap().exit_browse()
-        {
+        // 外置视口：切会话 = 换内容主体——v3 快照焚毁（旧会话画面不许
+        // 串台）；v4 画布交还旧会话的池条目继续后台续喂（预热池：
+        // 切窗不拆通道，切回零等待）。在途抓取一并作废
+        if self.browse_exit_or_park() {
             crate::report::report("scroll", "外置视口退出: 会话切换");
             self.dirty = true;
         }
@@ -4204,7 +4248,8 @@ impl App {
         self.browse_pending_px = 0.0;
         self.browse_warm = None; // 快照/温热账都是旧会话的画面，一并作废
         self.browse_last = None; // v3 合并基账同作废（旧会话文本不许当基）
-        self.ctrl_teardown("会话/attach 切换"); // v4 画布/控制通道同是旧主体画面
+        // v4 预热池：切窗不拆控制通道（旧制切换即拆 = 切窗首滚必卡的
+        // 病灶本体）——旧会话条目留池低频养，切回画布即热
         self.browse_suppress = false; // 换主体 = 新触摸语境，抑制清零
         self.fling = None; // 换主体 = 旧画面的甩尾不许过境
         // BAR-125 模式快照换-mode（在 replay 之前——复位/清屏/恢复
@@ -4538,108 +4583,171 @@ impl App {
         }
     }
 
-    // ---- v4 推流画布：控制通道生命周期（tmux -C，2026-09-25）----
+    // ---- v4 推流画布预热池：控制通道生命周期（tmux -C，2026-09-25 首播；
+    // 2026-09-26 升全会话预热池——用户模型「开 na 就把所有 tmux 窗口后台
+    // 加载好，切窗/首滚零等待」。池扩缩唯一凭据 = 服务器真表（parser
+    // List），切窗不拆通道）----
 
-    /// 推流活性闸（v3 轮询/抓取的封口令）：控制通道活着且播种成功过
-    /// = 字节流自续，轮询抓拍一律不开火（v3 降级为纯保底路径）
+    /// 推流活性闸（v3 轮询/抓取的封口令）：**当前会话**的池条目活着且
+    /// 播种成功过 = 字节流自续，轮询抓拍一律不开火（v3 纯保底）
     fn ctrl_active(&self) -> bool {
-        self.browse_ctrl.is_some() && self.ctrl_feed.pane().is_some()
+        self.cur_attached()
+            .and_then(|n| self.warm_pool.get(&n).map(|e| e.feed.pane()))
+            .is_some_and(|p| p.is_some())
     }
 
-    /// 每圈确保（about_to_wait 调用）：要就有（服务器相+已附着+过退避
-    /// → 起通道发播种）、不要就拆（本地相/未附着 = 通道无权存活）、
-    /// 播种失败过退避重试、推流稳态 5s 对账重播
+    /// 每圈确保（about_to_wait 调用）：要就有（服务器相+已附着 → 池按
+    /// 真表扩缩、缺条目起通道发播种）、不要就拆（本地相/未附着 = 全池
+    /// 无权存活）、逐条目养（判负过退避重试；对账重播——当前 5s，
+    /// 停放 30s，后台会话低频养）
     fn ctrl_ensure(&mut self) {
         let now = crate::report::boot_ms() as u64;
         let want = crate::endpoint::current() == crate::endpoint::EndpointKind::Server
             && self.remote_attached.is_some();
         if !want {
-            if self.browse_ctrl.is_some() {
-                self.ctrl_teardown("对象离场（本地相/未附着）");
+            if !self.warm_pool.is_empty() {
+                self.ctrl_teardown_all("对象离场（本地相/未附着）");
             }
             return;
         }
-        if self.browse_ctrl.is_none() {
-            if now < self.ctrl_retry_ms {
-                return; // 判负退避中
+        // 名单未落地先拉（池扩缩只随服务器真表；refresh 在途不叠自重）
+        if self.warm_names.is_empty() {
+            self.parser_refresh();
+        }
+        // 目标名单 = 真表 ∩ 容量帽 + 当前附着兜底（名单未落地/附着不在
+        // 表都要温当前会话）
+        let mut want_names: Vec<String> = self
+            .warm_names
+            .iter()
+            .take(WARM_POOL_CAP)
+            .cloned()
+            .collect();
+        let cur = self.cur_attached();
+        if let Some(c) = &cur
+            && !want_names.contains(c)
+        {
+            want_names.push(c.clone());
+        }
+        // 缩：不在目标名单的条目拆壳（会话离表 = 服务器侧已灭）
+        let extra: Vec<String> = self
+            .warm_pool
+            .keys()
+            .filter(|k| !want_names.contains(k))
+            .cloned()
+            .collect();
+        for name in extra {
+            if let Some(e) = self.warm_pool.remove(&name)
+                && let Some(h) = &e.ctrl
+            {
+                h.outbound.send(TermCmd::Close).ok();
             }
-            let (Some(name), Some(cfg)) = (
-                self.remote_attached.clone(),
-                self.remote_conn_cfg.as_ref().map(|c| c.url.clone()),
-            ) else {
+        }
+        // 扩：缺条目/通道死且过退避 → 起通道发播种（播种命令直接发——
+        // conn 层 Opened 前 Input 有缓存补发）
+        for name in &want_names {
+            let dead = self
+                .warm_pool
+                .get(name)
+                .is_none_or(|e| e.ctrl.is_none() && now >= e.retry_ms);
+            if !dead {
+                continue;
+            }
+            let Some(url) = self.remote_conn_cfg.as_ref().map(|c| c.url.clone()) else {
                 return;
             };
             let handle = crate::conn::ws_spawner()(crate::conn::ConnConfig {
-                url: cfg,
-                command: Some(crate::tmux_ctl::cmd_ctrl_attach(&name)),
+                url,
+                command: Some(crate::tmux_ctl::cmd_ctrl_attach(name)),
             });
-            // 播种命令直接发——conn 层 Opened 前 Input 有缓存补发
             handle
                 .outbound
                 .send(TermCmd::Input(crate::tmux_ctl::cmd_ctrl_seed()))
                 .ok();
-            self.browse_ctrl = Some(handle);
-            self.ctrl_feed.seed_sent();
-            self.ctrl_seed_ms = now;
-            crate::report::report("term", &format!("推流画布 ctrl 开: {name}（播种发出）"));
-        } else if self.ctrl_feed.pane().is_none()
-            && self.ctrl_feed.is_steady()
-            && now >= self.ctrl_retry_ms
-        {
-            self.ctrl_seed_send("播种失败重试");
-        } else if self.ctrl_feed.pane().is_some()
-            && self.ctrl_feed.is_steady()
-            && now.saturating_sub(self.ctrl_seeded_ms) >= 5000
-        {
-            self.ctrl_seed_send("对账重播");
+            let e = self
+                .warm_pool
+                .entry(name.clone())
+                .or_insert_with(|| WarmSess::new(now));
+            e.ctrl = Some(handle);
+            e.feed.reset();
+            e.feed.seed_sent();
+            e.seed_ms = now;
+            crate::report::report(
+                "term",
+                &format!("推流画布 ctrl 开: {name}（播种发出·预热池）"),
+            );
+        }
+        // 养：逐条目重试/对账
+        for (name, e) in &mut self.warm_pool {
+            let Some(h) = &e.ctrl else { continue };
+            let cadence = if Some(name) == cur.as_ref() {
+                5000
+            } else {
+                30_000
+            };
+            let fire = (e.feed.pane().is_none() && e.feed.is_steady() && now >= e.retry_ms)
+                || (e.feed.pane().is_some()
+                    && e.feed.is_steady()
+                    && now.saturating_sub(e.seeded_ms) >= cadence);
+            if fire {
+                h.outbound
+                    .send(TermCmd::Input(crate::tmux_ctl::cmd_ctrl_seed()))
+                    .ok();
+                e.feed.seed_sent();
+                e.seed_ms = now;
+                crate::report::report(
+                    "term",
+                    &format!("推流画布播种发出: {name}（重试/对账·{cadence}ms 档）"),
+                );
+            }
         }
     }
 
-    /// 播种发出（通道已活前提）：双块命令进 tmux stdin，相位转
-    /// AwaitHeader；cap 累加器清零。对账/重试/Notify 逼播同走此口
-    fn ctrl_seed_send(&mut self, why: &str) {
-        let Some(h) = &self.browse_ctrl else {
-            return;
-        };
-        h.outbound
-            .send(TermCmd::Input(crate::tmux_ctl::cmd_ctrl_seed()))
-            .ok();
-        self.ctrl_feed.seed_sent();
-        self.ctrl_seed_ms = crate::report::boot_ms() as u64;
-        crate::report::report("term", &format!("推流画布播种发出: {why}"));
-    }
-
-    /// 播种失败：相位回 Steady + pane 账勾销（v3 轮询闸开兜底）+
-    /// 5s 退避（ctrl_ensure 的重试臂到点再播）
-    fn ctrl_seed_fail(&mut self, why: &str) {
-        self.ctrl_feed.reset();
-        self.ctrl_retry_ms = crate::report::boot_ms() as u64 + 5000;
-        crate::report::report(
-            "term",
-            &format!("推流画布播种失败: {why}（5s 后重试，v3 轮询兜底）"),
-        );
-    }
-
-    /// 控制通道拆除（判负回落/换主体/对象离场）：Close 帧 + 通道丢弃
-    /// + 画布/相位/缓冲全清——v3 轮询自动接管（ctrl_active 闸开）
-    fn ctrl_teardown(&mut self, why: &str) {
-        if let Some(h) = self.browse_ctrl.take() {
-            h.outbound.send(TermCmd::Close).ok();
+    /// 播种失败（条目级）：相位回 Steady + pane 账勾销（v3 轮询闸开
+    /// 兜底）+ 5s 退避（ensure 的养臂到点再播）
+    fn ctrl_seed_fail(&mut self, name: &str, why: &str) {
+        if let Some(e) = self.warm_pool.get_mut(name) {
+            e.feed.reset();
+            e.retry_ms = crate::report::boot_ms() as u64 + 5000;
         }
-        self.ctrl_feed.reset();
-        self.ctrl_pending.clear();
-        self.ctrl_build = None;
-        self.browse_canvas = None;
-        self.ctrl_retry_ms = crate::report::boot_ms() as u64 + 5000;
         crate::report::report(
             "term",
-            &format!("推流画布 ctrl 关: {why}（判负回落 v3 轮询）"),
+            &format!("推流画布播种失败: {name}: {why}（5s 后重试，v3 轮询兜底）"),
         );
     }
 
-    /// 退浏览分路口（触底/击键/甩尾共用）：v4 = 画布交还 App 后台
-    /// 续喂（take_browse_canvas——下次起手零等待零抓取）；v3 = 快照
-    /// 焚毁（exit_browse——无续喂权）。返回是否真退了浏览态
+    /// 条目通道拆除（判负回落/通道死）：Close 帧 + 通道/画布/相位/缓冲
+    /// 全清，条目壳留着（退避账在壳上，防死亡-重试空转刷屏）——v3
+    /// 轮询自动接管（ctrl_active 闸开）
+    fn ctrl_teardown(&mut self, name: &str, why: &str) {
+        if let Some(e) = self.warm_pool.get_mut(name) {
+            if let Some(h) = e.ctrl.take() {
+                h.outbound.send(TermCmd::Close).ok();
+            }
+            e.feed.reset();
+            e.pending.clear();
+            e.build = None;
+            e.canvas = None;
+            e.retry_ms = crate::report::boot_ms() as u64 + 5000;
+        }
+        crate::report::report(
+            "term",
+            &format!("推流画布 ctrl 关: {name}: {why}（判负回落 v3 轮询）"),
+        );
+    }
+
+    /// 全池拆除（对象离场：本地相/未附着——预热池无权存活）
+    fn ctrl_teardown_all(&mut self, why: &str) {
+        for (_, e) in self.warm_pool.drain() {
+            if let Some(h) = &e.ctrl {
+                h.outbound.send(TermCmd::Close).ok();
+            }
+        }
+        crate::report::report("term", &format!("推流画布全池关: {why}（回落 v3 轮询）"));
+    }
+
+    /// 退浏览分路口（触底/击键/甩尾/切会话共用）：v4 = 画布交还预热池
+    /// 后台续喂（take_browse_canvas——下次起手零等待零抓取）；v3 =
+    /// 快照焚毁（exit_browse——无续喂权）。返回是否真退了浏览态
     fn browse_exit_or_park(&mut self) -> bool {
         let Some(t) = self.term_handle() else {
             return false;
@@ -4650,7 +4758,12 @@ impl App {
         }
         if self.ctrl_active() {
             if let Some(canvas) = g.take_browse_canvas() {
-                self.browse_canvas = Some(canvas);
+                drop(g); // 还锁再借 self（画布入当前会话的池条目）
+                if let Some(cur) = self.cur_attached()
+                    && let Some(e) = self.warm_pool.get_mut(&cur)
+                {
+                    e.canvas = Some(canvas);
+                }
             }
         } else {
             g.exit_browse();
@@ -4658,78 +4771,99 @@ impl App {
         true
     }
 
-    /// 控制通道排水（about_to_wait 每圈，先于 v3 轮询闸）：①播种
-    /// 构建完工安装（swap/入账 + pending 补喂）②事件泵——行装配
-    /// → parse_ctrl_line 分类 → 相位机消费
+    /// 控制通道排水（about_to_wait 每圈，先于 v3 轮询闸）：逐条目——
+    /// ①播种构建完工安装（swap/入账 + pending 补喂）②事件泵——
+    /// feed_bytes 唯一入口（行装配+剥 \r+相位判定全在 ctrl_feed）
     fn ctrl_drain(&mut self) {
-        // ① 后台 Canvas 构建完工
-        let built = self.ctrl_build.as_ref().and_then(|rx| match rx.try_recv() {
-            Ok(c) => Some(Ok(c)),
-            Err(std::sync::mpsc::TryRecvError::Empty) => None,
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(Err(())),
-        });
-        if let Some(res) = built {
-            self.ctrl_build = None;
-            match res {
-                Ok(mut canvas) => {
-                    // Building 期字节先补喂（零丢失接缝），画布再接流
-                    if !self.ctrl_pending.is_empty() {
-                        let pending = std::mem::take(&mut self.ctrl_pending);
-                        canvas.feed_bytes(&pending);
-                    }
-                    let cost = (crate::report::boot_ms() as u64).saturating_sub(self.ctrl_seed_ms);
-                    self.ctrl_seeded_ms = crate::report::boot_ms() as u64;
-                    self.ctrl_feed.built();
-                    let browsing = self
-                        .term_handle()
-                        .is_some_and(|t| t.lock().unwrap().browsing());
-                    if browsing {
-                        if let Some(t) = self.term_handle() {
-                            t.lock().unwrap().swap_browse_canvas(canvas);
+        let names: Vec<String> = self.warm_pool.keys().cloned().collect();
+        for name in names {
+            // ① 后台 Canvas 构建完工（先取出 rx——完工/断线消费，
+            // 空 = 放回去下圈再看）
+            let rx = self.warm_pool.get_mut(&name).and_then(|e| e.build.take());
+            if let Some(rx) = rx {
+                match rx.try_recv() {
+                    Ok(mut canvas) => {
+                        let (pend, seed_ms) = match self.warm_pool.get_mut(&name) {
+                            Some(e) => (std::mem::take(&mut e.pending), e.seed_ms),
+                            None => (Vec::new(), 0),
+                        };
+                        // Building 期字节先补喂（零丢失接缝），画布再接流
+                        if !pend.is_empty() {
+                            canvas.feed_bytes(&pend);
                         }
-                        self.dirty = true;
-                    } else {
-                        self.browse_canvas = Some(canvas);
+                        let now = crate::report::boot_ms() as u64;
+                        let cost = now.saturating_sub(seed_ms);
+                        let cur = self.cur_attached();
+                        let is_cur = cur.as_ref() == Some(&name);
+                        let browsing = is_cur
+                            && self
+                                .term_handle()
+                                .is_some_and(|t| t.lock().unwrap().browsing());
+                        if let Some(e) = self.warm_pool.get_mut(&name) {
+                            e.seeded_ms = now;
+                            e.feed.built();
+                        }
+                        if browsing {
+                            // 当前会话浏览中：新画布直接 swap 进视图
+                            if let Some(t) = self.term_handle() {
+                                t.lock().unwrap().swap_browse_canvas(canvas);
+                            }
+                            self.dirty = true;
+                        } else if let Some(e) = self.warm_pool.get_mut(&name) {
+                            e.canvas = Some(canvas); // 后台画布入账续喂
+                        }
+                        crate::report::report(
+                            "term",
+                            &format!("推流画布播种落地: {name}: 耗时 {cost}ms 浏览中={browsing}"),
+                        );
                     }
-                    crate::report::report(
-                        "term",
-                        &format!("推流画布播种落地: 耗时 {cost}ms 浏览中={browsing}"),
-                    );
-                }
-                Err(()) => self.ctrl_seed_fail("构建线程断线"),
-            }
-        }
-        // ② 事件泵（先收成批再消费——消费臂要借 self 别处）
-        let mut events = Vec::new();
-        if let Some(h) = &self.browse_ctrl {
-            loop {
-                match h.events.try_recv() {
-                    Ok(ev) => events.push(ev),
-                    Err(std::sync::mpsc::TryRecvError::Empty)
-                    | Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        if let Some(e) = self.warm_pool.get_mut(&name) {
+                            e.build = Some(rx);
+                        }
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        self.ctrl_seed_fail(&name, "构建线程断线");
+                    }
                 }
             }
-        }
-        for ev in events {
-            self.ctrl_on_event(ev);
+            // ② 事件泵（先收成批再消费——消费臂要借 self 别处）
+            let mut events = Vec::new();
+            if let Some(e) = self.warm_pool.get(&name)
+                && let Some(h) = &e.ctrl
+            {
+                loop {
+                    match h.events.try_recv() {
+                        Ok(ev) => events.push(ev),
+                        Err(std::sync::mpsc::TryRecvError::Empty)
+                        | Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+                    }
+                }
+            }
+            for ev in events {
+                self.ctrl_on_event(&name, ev);
+            }
         }
     }
 
-    /// 单事件消费（ctrl_drain 拆解）：Output 走 feed_bytes 唯一入口
-    /// （行装配+\r 剥除+相位判定全在 ctrl_feed），产物动作交 ctrl_exec；
-    /// Exited/Failed/Disconnected 级 = 判负回落
-    fn ctrl_on_event(&mut self, ev: SessionEvent) {
+    /// 单事件消费（ctrl_drain 拆解）：Output 走该条目的 feed_bytes
+    /// 唯一入口，产物动作交 ctrl_exec；Exited/Failed 级 = 条目判负回落
+    fn ctrl_on_event(&mut self, name: &str, ev: SessionEvent) {
         match ev {
             SessionEvent::Output { data } => {
-                for act in self.ctrl_feed.feed_bytes(data.as_bytes()) {
-                    self.ctrl_exec(act);
+                let acts = match self.warm_pool.get_mut(name) {
+                    Some(e) => e.feed.feed_bytes(data.as_bytes()),
+                    None => return,
+                };
+                for act in acts {
+                    self.ctrl_exec(name, act);
                 }
             }
             SessionEvent::Exited { code } => {
-                self.ctrl_teardown(&format!("通道退出 code={code}"));
+                self.ctrl_teardown(name, &format!("通道退出 code={code}"));
             }
             SessionEvent::Failed { message } => {
-                self.ctrl_teardown(&format!("通道失败 {message}"));
+                self.ctrl_teardown(name, &format!("通道失败 {message}"));
             }
             SessionEvent::Opened { .. } => {} // 播种已在 spawn 时发出（缓存补发）
         }
@@ -4737,25 +4871,33 @@ impl App {
 
     /// 动作执行（薄壳）：相位判定全在 ctrl_feed（A 档纯逻辑，BAR-155
     /// 钉死），本壳只把动作枚举翻译成平台操作（喂画布/起构建线程/
-    /// 判负退避/逼对账/拆除）
-    fn ctrl_exec(&mut self, act: crate::ctrl_feed::CtrlAct) {
+    /// 判负退避/逼对账/拆除）。当前会话浏览中 → 字节即达即画；其余
+    /// 一律喂该会话自己的后台画布（预热池的生长律）
+    fn ctrl_exec(&mut self, name: &str, act: crate::ctrl_feed::CtrlAct) {
         use crate::ctrl_feed::CtrlAct;
         match act {
             CtrlAct::Feed(bytes) => {
-                let fed = self
-                    .term_handle()
-                    .is_some_and(|t| t.lock().unwrap().feed_browse(&bytes));
+                let is_cur = self.cur_attached().as_ref() == Some(&name.to_string());
+                let fed = is_cur
+                    && self
+                        .term_handle()
+                        .is_some_and(|t| t.lock().unwrap().feed_browse(&bytes));
                 if fed {
                     self.dirty = true; // 浏览中：字节即达即画
-                } else if let Some(canvas) = &mut self.browse_canvas {
+                } else if let Some(e) = self.warm_pool.get_mut(name)
+                    && let Some(canvas) = &mut e.canvas
+                {
                     canvas.feed_bytes(&bytes); // 后台画布续喂生长
                 }
             }
-            CtrlAct::Pend(bytes) => self.ctrl_pending.extend(bytes),
+            CtrlAct::Pend(bytes) => {
+                if let Some(e) = self.warm_pool.get_mut(name) {
+                    e.pending.extend(bytes);
+                }
+            }
             CtrlAct::Build { cap, x, y } => {
                 // capture 收齐 → 后台线程建 Canvas（BAR-154：UI 零解析；
                 // BAR-156：头行游标随建归位，动态行原位更新不落屏底）
-                self.ctrl_pending.clear();
                 let (cols, rows) = self
                     .term_handle()
                     .map(|t| t.lock().unwrap().live_grid_dims())
@@ -4764,11 +4906,18 @@ impl App {
                 std::thread::spawn(move || {
                     let _ = tx.send(termview::Canvas::build(&cap, cols, rows, (x, y)));
                 });
-                self.ctrl_build = Some(rx);
+                if let Some(e) = self.warm_pool.get_mut(name) {
+                    e.pending.clear();
+                    e.build = Some(rx);
+                }
             }
-            CtrlAct::SeedFail(why) => self.ctrl_seed_fail(&why),
-            CtrlAct::Reconcile => self.ctrl_seeded_ms = 0, // 逼下拍对账重播
-            CtrlAct::Dead(why) => self.ctrl_teardown(why),
+            CtrlAct::SeedFail(why) => self.ctrl_seed_fail(name, &why),
+            CtrlAct::Reconcile => {
+                if let Some(e) = self.warm_pool.get_mut(name) {
+                    e.seeded_ms = 0; // 逼下拍对账重播
+                }
+            }
+            CtrlAct::Dead(why) => self.ctrl_teardown(name, why),
             CtrlAct::None => {}
         }
     }
@@ -5024,10 +5173,9 @@ impl App {
     /// 本地相走本地 PTY 重孵——两臂同语义同工序，通道不同）
     fn parser_attach(&mut self, name: String) {
         // 外置视口：attach 切换 = 换附着主体（重孵链会清场重建）——
-        // 快照与在途抓取一并作废
-        if let Some(t) = self.term_handle()
-            && t.lock().unwrap().exit_browse()
-        {
+        // v3 快照焚毁；v4 画布交还旧会话的池条目继续后台续喂（预热池：
+        // 切窗不拆通道，切回零等待）。在途抓取一并作废
+        if self.browse_exit_or_park() {
             crate::report::report("scroll", "外置视口退出: attach 切换");
             self.dirty = true;
         }
@@ -5035,7 +5183,8 @@ impl App {
         self.browse_pending_px = 0.0;
         self.browse_warm = None; // 快照/温热账都是旧会话的画面，一并作废
         self.browse_last = None; // v3 合并基账同作废（旧会话文本不许当基）
-        self.ctrl_teardown("会话/attach 切换"); // v4 画布/控制通道同是旧主体画面
+        // v4 预热池：切窗不拆控制通道——旧会话条目留池低频养，
+        // 新会话条目多半已温热，首滚即画布落位
         self.browse_suppress = false; // 换主体 = 新触摸语境，抑制清零
         self.fling = None; // 换主体 = 旧画面的甩尾不许过境
         match crate::endpoint::current() {
@@ -5256,6 +5405,11 @@ impl App {
             (ParserExec::List, Ok(out)) => {
                 let ss = crate::tmux_ctl::parse_session_list(&out);
                 crate::report::report("ui", &format!("tmux 插件: 会话表 {} 条", ss.len()));
+                // v4 预热池名单同步（池扩缩唯一凭据 = 服务器真表）；
+                // 只同步服务器相名单——本地相预热池本就不存活
+                if crate::endpoint::current() == crate::endpoint::EndpointKind::Server {
+                    self.warm_names = ss.iter().map(|s| s.name.clone()).collect();
+                }
                 if let Some(p) = &self.parser_page {
                     p.lock().unwrap().set_sessions(ss);
                     // 行表变了滚动上限跟着变（会话变少 max 缩）——
