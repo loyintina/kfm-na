@@ -59,9 +59,9 @@
 | `src/tunnel.rs` | 35 | 29 | 6 | check_ssh_fields NA_SSHD_PORT request_reconnect request_resume_kick request_trip_quic request_heal_quic |
 | `src/ui/accent.rs` | 6 | 6 | 0 | — |
 | `src/ui/ai_page.rs` | 7 | 7 | 0 | — |
-| `src/ui/cfg_page.rs` | 71 | 63 | 8 | DROPDOWN_ENTER_MS DROPDOWN_EXIT_MS DROPDOWN_PICK_SYNC_MS viewer open_viewer close_viewer register_cfg_page cfg_page_handle |
+| `src/ui/cfg_page.rs` | 71 | 66 | 5 | DROPDOWN_ENTER_MS DROPDOWN_EXIT_MS DROPDOWN_PICK_SYNC_MS register_cfg_page cfg_page_handle |
 | `src/ui/comp_registry.rs` | 6 | 5 | 1 | preview_is_animated |
-| `src/ui/conn_card.rs` | 6 | 5 | 1 | FIELD_GAP |
+| `src/ui/conn_card.rs` | 6 | 6 | 0 | — |
 | `src/ui/cursor.rs` | 9 | 9 | 0 | — |
 | `src/ui/down_card.rs` | 10 | 10 | 0 | — |
 | `src/ui/dual_pool.rs` | 19 | 19 | 0 | — |
@@ -70,8 +70,8 @@
 | `src/ui/fx_spring.rs` | 8 | 8 | 0 | — |
 | `src/ui/gear.rs` | 7 | 7 | 0 | — |
 | `src/ui/keybar.rs` | 1 | 1 | 0 | — |
-| `src/ui/link_card.rs` | 9 | 8 | 1 | FIELD_GAP |
-| `src/ui/modal.rs` | 22 | 17 | 5 | MODAL_LABEL_H MODAL_MAX_MARGIN_Y viewer_fields viewer_fields_top viewer_card_rect |
+| `src/ui/link_card.rs` | 9 | 9 | 0 | — |
+| `src/ui/modal.rs` | 22 | 21 | 1 | MODAL_LABEL_H |
 | `src/ui/orb.rs` | 5 | 5 | 0 | — |
 | `src/ui/panel_drag.rs` | 12 | 7 | 5 | DRAG_DIR_LOCK RELEASE_PROGRESS VELOCITY_WINDOW_MS locked current_offset |
 | `src/ui/parser_chain.rs` | 15 | 12 | 3 | COL_W_NUM COL_W_DEN window_of |
@@ -79,8 +79,8 @@
 | `src/ui/prompt_bar.rs` | 5 | 4 | 1 | row_of |
 | `src/ui/seam.rs` | 24 | 24 | 0 | — |
 | `src/ui/stage.rs` | 7 | 7 | 0 | — |
-| `src/ui/svc_card.rs` | 13 | 11 | 2 | FIELD_GAP head_word |
-| `src/ui/sys_card.rs` | 22 | 18 | 4 | FIELD_GAP card_h_now local_y bar_geom |
+| `src/ui/svc_card.rs` | 13 | 12 | 1 | head_word |
+| `src/ui/sys_card.rs` | 22 | 19 | 3 | card_h_now local_y bar_geom |
 | `src/ui/tab_bar.rs` | 27 | 27 | 0 | — |
 | `src/ui/viewport_push.rs` | 2 | 2 | 0 | — |
 | `src/vsync_book.rs` | 20 | 16 | 4 | last_due_ms chain_dead mark_chain_dead last_ns |
