@@ -185,6 +185,18 @@ impl Fling {
     }
 }
 
+/// BAR-158 切入方向闸（2026-09-26 field-reports 实录定罪：追底态
+/// 「切入(推流画布) 补滚 -167.1px → 触底自动回 live」成对连发 =
+/// 用户实报「追底态继续下滚页面闪一下」的病灶本体）：浏览挂账
+/// 只许朝历史方向（d>0）净积压。追底态朝 live 方向（手指上推
+/// d<0）的位移钳到 0——旧制照单全收，切入补滚负值被 scroll_px
+/// 贴底钳回 offset=0，下一笔移动立刻「触底自动回 live」退场，
+/// 切入→闪退 = 一闪。返回挂账新值：调用方只在 >0 时才许切入浏览。
+/// A 档纯逻辑，考题 tests/scroll_spec.rs
+pub fn browse_pending_gate(pending: f64, d: f64) -> f64 {
+    (pending + d).max(0.0)
+}
+
 impl TouchScroll {
     /// moved_px 的计时变体（惯性采样唯一入口）：同 slop 门同位移语义，
     /// 顺手采样甩尾速度 vel = d/dt × FRAME × BOOST（kfmv4 直译：逐事件

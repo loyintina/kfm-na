@@ -309,3 +309,40 @@ fn spec_惯性甩尾_时间切片等比折帧() {
         "折帧后速度必须一致"
     );
 }
+
+// ---------- BAR-158 切入方向闸（2026-09-26 field-reports 实录定罪：
+// 追底态「切入(推流画布) 补滚 -167.1px → 触底自动回 live」成对连发 =
+// 追底朝 live 方向拖动误入浏览态，切入即闪退 = 页面闪一下）----------
+// 契约：浏览挂账只许朝历史方向（d>0）净积压；朝 live 方向的位移钳到 0，
+// 调用方只在挂账 >0 时才许切入浏览。答案 src/scroll.rs browse_pending_gate
+
+#[test]
+fn spec_bar158_追底朝live位移不挂账() {
+    use kfm_na::scroll::browse_pending_gate;
+    // 追底态（挂账 0）朝 live 方向的任意位移：挂账恒 0，永不转正
+    assert_eq!(browse_pending_gate(0.0, -1.0), 0.0);
+    assert_eq!(
+        browse_pending_gate(0.0, -11322.6),
+        0.0,
+        "实录同款大负位移也不许挂账"
+    );
+    // 零位移不动账
+    assert_eq!(browse_pending_gate(0.0, 0.0), 0.0);
+}
+
+#[test]
+fn spec_bar158_朝历史净积压转正才切入() {
+    use kfm_na::scroll::browse_pending_gate;
+    // 朝历史方向正常挂账（切入补滚语义不动）
+    assert_eq!(browse_pending_gate(0.0, 42.0), 42.0);
+    // 已积压后反向：净额照扣，扣穿 0 钳底不翻负
+    assert_eq!(browse_pending_gate(42.0, -10.0), 32.0);
+    assert_eq!(
+        browse_pending_gate(42.0, -100.0),
+        0.0,
+        "反向扣穿钳 0，不许留负账诱捕切入"
+    );
+    // 混合手势：先朝 live 后朝历史——负段被钳后正段从 0 起算
+    let p = browse_pending_gate(0.0, -30.0);
+    assert_eq!(browse_pending_gate(p, 15.0), 15.0);
+}

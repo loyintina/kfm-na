@@ -2071,7 +2071,15 @@ impl App {
                         if self.browse_suppress {
                             return;
                         }
-                        self.browse_pending_px += d;
+                        // BAR-158 方向闸：追底态朝 live 方向（手指上推
+                        // d<0）的位移不挂账不切入——切入补滚负值被贴底
+                        // 钳回 offset=0，下一笔移动立刻触底退场 = 一闪。
+                        // 挂账钳非负，只许朝历史方向净积压到正才进浏览
+                        self.browse_pending_px =
+                            crate::scroll::browse_pending_gate(self.browse_pending_px, d);
+                        if self.browse_pending_px <= 0.0 {
+                            return;
+                        }
                         // v4 推流画布起手（最优先臂）：画布在后台随字节流
                         // 续喂生长，落位零等待零抓取——%output 自续，连
                         // 温热/首抓的 exec 往返都不需要
@@ -8613,7 +8621,10 @@ impl ApplicationHandler for App {
                             }
                             self.browse_last = Some((text, hist));
                             self.dirty = true;
-                        } else if dragging {
+                        // BAR-158：挂账已过方向闸（非负），pending=0
+                        // = 拖动全程朝 live 方向——不许切入（切入即
+                        // 触底闪退），快照落温热账等下一手势
+                        } else if dragging && pending > 0.0 {
                             if let Some(t) = self.term_handle() {
                                 let mut t = t.lock().unwrap();
                                 t.enter_browse_term(term);
@@ -8722,7 +8733,18 @@ impl ApplicationHandler for App {
                                 } else {
                                     // 首抓在途快照未就位：甩尾位移进挂账，
                                     // 切入补滚照吃（与拖动同账）
-                                    self.browse_pending_px += d;
+                                    // BAR-158 同闸：朝 live 方向的甩尾在
+                                    // 追底态已贴底——不挂负账（负账落地
+                                    // 诱捕切入 = 闪一下病灶），当场燃尽
+                                    // （不空泵脏帧）
+                                    if d < 0.0 {
+                                        kill = Some("触底");
+                                    } else {
+                                        self.browse_pending_px = crate::scroll::browse_pending_gate(
+                                            self.browse_pending_px,
+                                            d,
+                                        );
+                                    }
                                 }
                             } else {
                                 t.scroll_px(d);
