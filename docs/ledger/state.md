@@ -167,10 +167,9 @@
 > parser_geom 按修约用无键盘可视底——键盘在场时涂装/命中卡高分叉
 > （另一方向的病，修复时一并处理或单列）。
 >
-> **BAR-151 全案已修待用户终验**（tmux 滚轮挂账 fae85be + 重孵清场
-> 3688ca7/e552b09，端到端复验零乱码）；遗留③滚轮灵敏度（用户嫌
-> 「一次滑动瞬移 5 行」跳）待裁决：现状 1:1 跟手（1 tick/格），
-> 可选降敏旋钮。
+> **BAR-151 全案用户终验通过（静默判过，2026-09-26）结案**（tmux 滚轮挂账
+> fae85be + 重孵清场 3688ca7/e552b09，端到端复验零乱码）；遗留③滚轮灵敏度
+> 后由外置视口链 BAR-153~156 根治销账。
 
 ## 当前位置（2026-09-24 晚②，BAR-145 点击行漂移 定罪修复上机，观察期一周）
 
@@ -227,7 +226,7 @@
 > - M4-5 在途：部署面 a3f70e8（unit/spawn 双路带 62694）+ 服务器
 >   kfm-na-server.service 常驻双绑。真链首判全绿（反连认领→
 >   na-server 持 9022、na_ssh 走 QUIC、ssh 娃 Full→None 收编）；
->   **兜底演练揪出 BAR-151 反连腿僵尸**（重启 na-server，反连腿
+>   **兜底演练揪出 BAR-151（现 BAR-159）反连腿僵尸**（重启 na-server，反连腿
 >   挂 accept_bi 无死信——4h idle 上限，9022 无人绑）→ 修 =
 >   REV_IDLE_TIMEOUT=60s（fb2437e，钉 spec_m4_反连死寂判死_常量
 >   契约变异咬）。**同 commit 扫入 BAR-145 [touch] 点按遥测**
@@ -238,7 +237,7 @@
 >   角色换 None → na-server 重绑 9022。**复核全绿（2026-09-24 午）**：
 >   五拍时序逐行对上（timed out 定罪→伴生 spawn→反连腿重拉→
 >   角色收编→重认领），PROBE2-OK 走 QUIC 反连通。**M4 全里程碑
->   代码+真链判卷毕，待用户通道卡肉眼终验**（62694 行应显「在线」、
+>   代码+真链判卷毕，通道卡肉眼终验用户静默判过（2026-09-26）结案**（62694 行应显「在线」、
 >   9022 行显「QUIC 反连在线」）。
 
 ## 当前位置（2026-09-24)
@@ -357,7 +356,7 @@
 > 上一个提交 `3f12f53`（+`2e3c1f9`）三件断连治理已三推、.so 已热更手机
 > hot/（未重启，na 重启即生效）。
 
-> **白班（2026-09-23，断连治理线收尾三件）**：①**BAR-134 报表行挂设备/实例标识**——report/report_sync/report_sync_once 经单一源 `line_json` 给 msg 末尾挂 `[arch/pid]`（field-reports 混流分道闸从判读纪律升为数据自带；钉 tests/report_spec.rs 两枚+变异实咬，PARADIGM v3）；②**脚本舰队 8024→9022 迁移落地**——新 `scripts/lib/na-ssh.sh` 统一入口（9022 首选/8024 备援，nc 探活解析，NA_GATE_PORT 可覆盖），gate-lib + na-autopsy/na-rec/na-replay/na-push-so/deploy-ai-config/na-nightly-quiesce/test-bg-survival/deploy-phone 全迁，8022 只剩 Termux 专属活（am start/手机仓/工具链/battery-status）。**活体验证**：迁移当日 Termux 冻结（8022/8024 双灭），9022 独活，闸门/热更全不受影响的实证到手。冒烟：na_ssh/scp 往返一致、bash -n 全过。chain-phone 留 8022（全量 chain 要 Termux 工具链，本质依赖，12 轮重试已有）；③**BAR-135 断联影响最小化**（用户拍板设计）——击键出向唯一入口 `route_input`：远程死会话+隧道不可用 → 击键进 OfflineKeys 暂存（64KB 封顶丢最旧），kick_reconnect 同款隧道闸（不再每击键盲孵必死 conn），Opened 活跃方保序回冲；蓝色内联横幅退役，告示全落断线状态卡状态行（status_text 三态：重连中 > 已暂存 N 字节 > 裸断开，卡 sig 加两维）。钉 5 枚+变异三咬全中。**已提交三推 `3f12f53`**（chain-phone 两轮：第一轮红——draw_frame 的 android-only GLES 路径在服务器 cfg 下查不出，整 self 方法调用（router_handle/health）与 &mut self.gfx 撞 E0502，手机新 rustc 咬住；修法 = 两输入提到借 gfx 之前算。教训入账：动 draw_frame 安卓专线后必须跑 aarch64 check 再上链）；`.so` 已交叉编热更手机 hot/（md5 e06a5362 双侧一致，.last 备份，**未重启**——na 重启即生效，BAR-133 核同在这包里）。**C 档待判**：断线卡状态行实机观感 + 真断线期暂存/回冲全链，归 redroid/真机判卷。
+> **白班（2026-09-23，断连治理线收尾三件）**：①**BAR-134 报表行挂设备/实例标识**——report/report_sync/report_sync_once 经单一源 `line_json` 给 msg 末尾挂 `[arch/pid]`（field-reports 混流分道闸从判读纪律升为数据自带；钉 tests/report_spec.rs 两枚+变异实咬，PARADIGM v3）；②**脚本舰队 8024→9022 迁移落地**——新 `scripts/lib/na-ssh.sh` 统一入口（9022 首选/8024 备援，nc 探活解析，NA_GATE_PORT 可覆盖），gate-lib + na-autopsy/na-rec/na-replay/na-push-so/deploy-ai-config/na-nightly-quiesce/test-bg-survival/deploy-phone 全迁，8022 只剩 Termux 专属活（am start/手机仓/工具链/battery-status）。**活体验证**：迁移当日 Termux 冻结（8022/8024 双灭），9022 独活，闸门/热更全不受影响的实证到手。冒烟：na_ssh/scp 往返一致、bash -n 全过。chain-phone 留 8022（全量 chain 要 Termux 工具链，本质依赖，12 轮重试已有）；③**BAR-135 断联影响最小化**（用户拍板设计）——击键出向唯一入口 `route_input`：远程死会话+隧道不可用 → 击键进 OfflineKeys 暂存（64KB 封顶丢最旧），kick_reconnect 同款隧道闸（不再每击键盲孵必死 conn），Opened 活跃方保序回冲；蓝色内联横幅退役，告示全落断线状态卡状态行（status_text 三态：重连中 > 已暂存 N 字节 > 裸断开，卡 sig 加两维）。钉 5 枚+变异三咬全中。**已提交三推 `3f12f53`**（chain-phone 两轮：第一轮红——draw_frame 的 android-only GLES 路径在服务器 cfg 下查不出，整 self 方法调用（router_handle/health）与 &mut self.gfx 撞 E0502，手机新 rustc 咬住；修法 = 两输入提到借 gfx 之前算。教训入账：动 draw_frame 安卓专线后必须跑 aarch64 check 再上链）；`.so` 已交叉编热更手机 hot/（md5 e06a5362 双侧一致，.last 备份，**未重启**——na 重启即生效，BAR-133 核同在这包里）。**C 档判卷**：断线卡状态行实机观感 + 真断线期暂存/回冲全链——用户静默判过（2026-09-26）结案。
 
 > **夜班（2026-09-23 01:43 窗口）**：①全量 chain 绿（服务器窗口，双甲）；②BAR-133 那批**已提交三推 `23c6213`**（白天闸昨天手机端已跑绿：stamp 21:03、第 5 轮 scp 才成，Termux 隧道抖动实录；本窗口本地 chain 复核后落库）；③候补重载任务：本窗口**未跑变异抽检**（今晚两枚修复只走考题+真机路径；BAR-132/133 的变异抽检挂下一窗口，按「cp 备份→改坏→验红→复原」规程，禁用 git checkout）；④**下一批第一件** = 运维脚本舰队 8022/8024 → na 自己 9022 迁移（今天被它咬三次：误判 8022 不通、提交闸两轮重试、热更重启依赖 Termux 拉回）；⑤晨会挂的仪器升级待做：报表行加**设备/实例标识**（arch+pid，防再被多设备混流骗）。
 
