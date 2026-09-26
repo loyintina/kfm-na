@@ -540,6 +540,12 @@ struct App {
     /// 置 None），触摸命中几何不能跟着瞎——apply_window_size 每次记账，
     /// window=None 时由 screen_px() 兜底回退
     last_win_px: (u32, u32),
+    /// 本手势的窗顶漂移补偿量（BAR-145 修复，px）：起手时活读一次系统认定的
+    /// 窗口顶（insets::query_win_top），本手势全程同尺——拖动两端同加一个常数，
+    /// 位移账相消，只有命中尺跟着显示空间走。0 = 健康基线（零影响）
+    touch_win_top: i32,
+    /// 上次落账的采样结果（None = 活读失败）——稳态不刷屏，变化才落账
+    touch_win_top_reported: Option<i32>,
     /// 按在标签行带上的手势（宪法 §四 仲裁条款：行上横向滑动不触发
     /// 面板拖拽/页面滑向）——配置页靠泊且起点在行带才建
     tab_touch: Option<TabTouch>,
@@ -1077,6 +1083,32 @@ impl App {
             &format!("拖拽收尾: {decision:?} 从偏移 {cur:.0} → 栈顶 {after:?}"),
         );
         self.dirty = true;
+    }
+
+    /// BAR-145 起手采样：活读系统此刻认定的窗顶（px），定本手势的补偿量。
+    /// 活读而非缓存——缓存会在愈合后仍拿 135 把用户的手往反方向推。
+    /// 查询失败/无 Android 手柄一律按 0（不补偿）：宁维持现状，不赌偏移。
+    /// 值变化才刷账（发病窗内每次点按都读到同一个 135，账不跟着刷屏）。
+    fn sample_touch_win_top(&mut self) {
+        let top = match &self.android_app {
+            Some(app) => crate::insets::query_win_top(app),
+            None => None,
+        };
+        self.touch_win_top = top.unwrap_or(0).max(0);
+        // 结果变化才落账（稳态不刷屏）。三态都要留痕，不许静默：
+        // Some(0) 也是证据——活读链路真在跑（否则「补偿没生效」与「JNI 链
+        // 死了」在账上分不开）；Some(n>0) = 修复臂生效；None = 活读失败。
+        if top != self.touch_win_top_reported {
+            let msg = match top {
+                Some(t) if t > 0 => format!(
+                    "触摸入口活读窗顶 winTop={t} → 本手势按显示空间补偿（BAR-145 修复臂生效）"
+                ),
+                Some(t) => format!("触摸入口活读窗顶 winTop={t}（健康基线，零补偿）"),
+                None => "触摸入口窗顶活读失败（本手势不补偿：宁维持现状，不赌偏移）".to_string(),
+            };
+            crate::report::report("winstate", &msg);
+            self.touch_win_top_reported = top;
+        }
     }
 
     fn handle_touch(&mut self, id: u64, x: f64, y: f64, phase: TouchPhase) {
@@ -2702,10 +2734,23 @@ impl App {
                             };
                             (snap, h.map(|hh| (hh, g.mode)), ch, desc, geo_cmp)
                         };
+                        // BAR-145 修复臂生效时把「补了多少、原值多少」一并落账：
+                        // 起手/抬手已是显示空间（与 na-shot/系统截屏同尺），原值
+                        // = 账面值 − 窗顶，再发病时读数不用猜（账要能自证）。
+                        let drift = if self.touch_win_top > 0 {
+                            format!(
+                                " 窗顶{}（已补回显示空间，原起手({:.0},{:.0})）",
+                                self.touch_win_top,
+                                pt.0,
+                                pt.1 - f64::from(self.touch_win_top)
+                            )
+                        } else {
+                            " 窗顶0".to_string()
+                        };
                         crate::report::report(
                             "touch",
                             &format!(
-                                "解析页点按 起手({:.0},{:.0}) 抬手({x:.0},{y:.0}) → {tap_desc} 屏代{} {geo_cmp}",
+                                "解析页点按 起手({:.0},{:.0}) 抬手({x:.0},{y:.0}) → {tap_desc} 屏代{} {geo_cmp}{drift}",
                                 pt.0,
                                 pt.1,
                                 crate::ui::parser_page::baked_epoch(),
@@ -8473,7 +8518,18 @@ impl ApplicationHandler for App {
             // SHOW_FORCED 强弹兜底
             WindowEvent::Touch(touch) => {
                 if TERMINAL_MODE {
-                    self.handle_touch(touch.id, touch.location.x, touch.location.y, touch.phase);
+                    // BAR-145 修复臂（2026-09-26 定罪）：winit 原值 = **窗口空间**
+                    // 坐标，输入侧窗顶错记期（实测 winTop=135）与显示空间差一个
+                    // 窗顶——判卷尺（几何/渲染）全在显示空间，故入口先把窗口空间
+                    // 换算回显示空间再分流。起手问一次、本手势全程同尺（拖动两端
+                    // 同加常数，位移账相消；每事件都问 = 白烧 JNI 还可能中途换尺）。
+                    // 补偿只在这里做：通道八注入的坐标本就写自显示空间（脚本按
+                    // 看到的画面点），进门再补就往反方向推。
+                    if touch.phase == TouchPhase::Started {
+                        self.sample_touch_win_top();
+                    }
+                    let y = crate::insets::drift_compensate(touch.location.y, self.touch_win_top);
+                    self.handle_touch(touch.id, touch.location.x, y, touch.phase);
                 }
             }
             // IME 事件链：Commit = 上屏文本（中文候选词落字也走这），直接注入终端

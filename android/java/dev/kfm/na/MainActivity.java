@@ -65,6 +65,31 @@ public class MainActivity extends NativeActivity {
         }
         // BAR-145：焦点变化 = IME 召收之外的窗口重排时点，对表时序关键帧
         appendMotion("lifecycle focus=" + hasFocus + " " + winGeom());
+        if (hasFocus) {
+            reapplyImmersive();
+        }
+    }
+
+    /** BAR-145 治本臂（2026-09-26）：唤醒/焦点变化的窗口重协商时点**重贴**
+     *  沉浸式标志——病灶是输入侧窗顶被错记到状态栏之下（捕获器实测 winTop=135，
+     *  显示侧全屏 0），重贴迫使系统重算窗口 frame，输入/显示两侧快照同源
+     *  （沉浸式 desync 的标准修法）。点火时点 = 复现钥匙直指的 resume。
+     *  安全性：本应用 surface 恒为物理整屏（1260x2800，见 [bake] 屏寸账），
+     *  重贴不改变可视尺寸；全过程 try 兜底留痕，皮肤不许把壳带着一起死。 */
+    private void reapplyImmersive() {
+        try {
+            getWindow().setDecorFitsSystemWindows(false);
+            getWindow().getDecorView().setSystemUiVisibility(
+                    android.view.View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                            | android.view.View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                            | android.view.View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                            | android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                            | android.view.View.SYSTEM_UI_FLAG_FULLSCREEN
+                            | android.view.View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
+            appendMotion("immersive 重贴 " + winGeom());
+        } catch (Throwable t) {
+            appendMotion("immersive 重贴 ERR " + t);
+        }
     }
 
     // ---- 软件内实录（P2，2026-09-08）：gate hook 的 Java 着陆点。
@@ -280,5 +305,6 @@ public class MainActivity extends NativeActivity {
         super.onResume();
         // 发病窗口 = 熄屏→解锁→回 na：resume 时的窗口几何是 desync 第一现场
         appendMotion("lifecycle onResume " + winGeom());
+        reapplyImmersive();
     }
 }

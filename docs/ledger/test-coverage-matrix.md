@@ -25,7 +25,7 @@
 | `src/ime_bridge.rs` | 1 | 0 | 1 | jni_counters |
 | `src/ime_queue.rs` | 9 | 9 | 0 | — |
 | `src/input_bar.rs` | 59 | 50 | 9 | MENU_W MENU_TEXT_PX text_avail_w CARET_BLINK_MS SELECT_LONG_PRESS_MS ANCHOR_VISUAL_SIZE ANCHOR_HIT_SIZE set_sel_anchor insert_or_replace |
-| `src/insets.rs` | 6 | 3 | 3 | force_show_keyboard force_hide_keyboard query_ime_bottom |
+| `src/insets.rs` | 8 | 4 | 4 | force_show_keyboard force_hide_keyboard query_ime_bottom query_win_top |
 | `src/keybar.rs` | 20 | 16 | 4 | COLS MOD_ALT install_bridge_mods bridge_mods |
 | `src/keymap.rs` | 2 | 2 | 0 | — |
 | `src/local_pty.rs` | 7 | 6 | 1 | android_prefix |

@@ -11,6 +11,11 @@
 //! 链路：Activity.getWindow().getDecorView().getRootWindowInsets()
 //!   → WindowInsets.Type.ime() → isVisible(type) / getInsets(type).bottom
 //!
+//! 同门第二用（BAR-145，2026-09-26）：`query_win_top` 走
+//! decorView.getLocationOnScreen() 读**系统此刻认定的窗口顶**——触摸入口
+//! 按它做漂移补偿（`drift_compensate`），治「输入侧窗顶错记 → 命中上移
+//! 一行」的瞬态（病灶与证据见 bugs.md BAR-145）。
+//!
 //! B 档平台胶水：对错是「系统让不让你活」，判卷 = 真机实拍 + [ime] 上报行。
 //!
 //! 插件化（input-ime 设计页，2026-08-16）：`ImeInsets` trait 跨平台常开
@@ -31,6 +36,27 @@ pub fn on_inset_poll(px: u32, current: u32, has_window: bool) -> Option<u32> {
     (px != current && has_window).then_some(px)
 }
 
+/// BAR-145 触摸漂移补偿（2026-09-26 同步证据链定罪后的修复臂，A 档纯函数）。
+///
+/// 病灶：唤醒/重排瞬态里 Android 把**输入侧**窗顶错记到状态栏之下（2026-09-26
+/// 16:45:44 捕获器实测 winTop=135，健康基线 0），显示侧照旧全屏——同一次点按，
+/// 用户按的是显示空间 y，na 收到的是窗口空间 y = 显示空间 − winTop（同日
+/// [touch] 账：nz 视觉中心 y≈1787 到手 1653），整屏命中系统性上移一行。
+///
+/// 补偿 = 把窗口空间换算回显示空间；win_top=0 零影响（健康基线不动一像素），
+/// 负值不反向（不该出现；宁可不动，不许把用户的手往反方向推）。
+///
+/// 已知边界：分屏/自由窗形态下 winTop>0 属**合法**偏移，本补偿会误伤——
+/// 本应用是独占全屏沉浸形态（surface 恒等于物理屏 1260x2800），分屏不在
+/// 使用面；将来若支持分屏，须加「surface == 物理屏高」闸再进本函数。
+pub fn drift_compensate(y: f64, win_top: i32) -> f64 {
+    if win_top > 0 {
+        y + f64::from(win_top)
+    } else {
+        y
+    }
+}
+
 /// 键盘来源服务（服务键 `dyn ImeInsets`，共享实例直挂）。
 /// 生产 = JniInsets（JNI 直调 WindowInsets）；考题 = 假实现。
 pub trait ImeInsets: Send + Sync {
@@ -44,7 +70,9 @@ pub trait ImeInsets: Send + Sync {
 }
 
 #[cfg(target_os = "android")]
-pub use imp::{JniInsets, force_hide_keyboard, force_show_keyboard, query_ime_bottom};
+pub use imp::{
+    JniInsets, force_hide_keyboard, force_show_keyboard, query_ime_bottom, query_win_top,
+};
 
 #[cfg(target_os = "android")]
 mod imp {
@@ -287,5 +315,53 @@ mod imp {
         })
         .ok()
         .flatten()
+    }
+
+    /// BAR-145：读系统此刻认定的窗口顶——decorView 在屏上的 y（px），即
+    /// WindowInsets 对表仪器同一个数（gate 通道十四 dumpWindowStateFromGate
+    /// 里的 winTop）。健康基线 0；发病（输入侧窗顶错记）实测 135。
+    ///
+    /// 调用点在触摸入口（起手时问一次），故必须是**活读**（缓存会拿旧值骗
+    /// 用户：愈合后仍按 135 反向推开）。查询失败 → None（调用方按 0 处理 =
+    /// 不补偿——宁维持现状，也不赌一个编出来的偏移）。
+    ///
+    /// 只碰标准框架类（getWindow/getDecorView/getLocationOnScreen），不依赖
+    /// Java 皮新方法——热更 .so 即生效，不必陪装 APK。
+    pub fn query_win_top(app: &AndroidApp) -> Option<i32> {
+        // SAFETY: 同 query_ime_bottom
+        let vm = unsafe { JavaVM::from_raw(app.vm_as_ptr().cast()) };
+        let raw_activity = app.activity_as_ptr() as jni::sys::jobject;
+        vm.attach_current_thread(|env| -> jni::errors::Result<i32> {
+            // SAFETY: 同 query_ime_bottom
+            let activity = unsafe { JObject::from_raw(env, raw_activity) };
+            let window = env
+                .call_method(
+                    &activity,
+                    jni_str!("getWindow"),
+                    jni_sig!("()Landroid/view/Window;"),
+                    &[],
+                )?
+                .l()?;
+            let decor = env
+                .call_method(
+                    &window,
+                    jni_str!("getDecorView"),
+                    jni_sig!("()Landroid/view/View;"),
+                    &[],
+                )?
+                .l()?;
+            // int[2] 出参：getLocationOnScreen 把 [x, y] 填进来
+            let loc = env.new_int_array(2)?;
+            env.call_method(
+                &decor,
+                jni_str!("getLocationOnScreen"),
+                jni_sig!("([I)V"),
+                &[jni::JValue::Object(loc.as_ref())],
+            )?;
+            let mut buf = [0i32; 2];
+            loc.get_region(env, 0, &mut buf)?;
+            Ok(buf[1])
+        })
+        .ok()
     }
 }

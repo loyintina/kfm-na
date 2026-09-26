@@ -26,7 +26,8 @@
 //! 判据改 >（少 1px）、跳框卡外命中退化为 None、set_sessions 忘收
 //! confirming、hit 漏 list_clip 闸、scroll 钳制漏 max（拖穿底）、
 //! 保底两行退化为钳进池区（BAR-119 塌卡回魂）、常驻槽钉顶不钉底
-//! （拍板语义反）——本文件必须红。
+//! （拍板语义反）、触摸漂移补偿条件反向/健康基线也补（BAR-145 修复臂
+//! 偷换 = 命中尺反向错位）——本文件必须红。
 
 use kfm_na::tmux_ctl::TmuxSession;
 use kfm_na::ui::parser_chain;
@@ -168,6 +169,99 @@ fn spec_bar145_仪器退役闸() {
     assert!(
         std::time::SystemTime::now() < deadline,
         "BAR-145 仪器观察期满（2026-10-02）——无再现则拆屏代/名单仪器并结案，有再现凭账续修"
+    );
+}
+
+#[test]
+fn spec_bar145_触摸漂移补偿_零不补_正补回_负不反向() {
+    // BAR-145 修复臂（2026-09-26 同步证据链定罪）：唤醒后 Android 把**输入侧**
+    // 窗顶错记到状态栏之下（捕获器实测 winTop=135，健康基线 0），显示侧全屏——
+    // 用户按显示空间 y=1787 点 nz，na 收到窗口空间 1653，整屏命中上移一行。
+    // 补偿 = 窗口空间 + 窗顶 = 显示空间；健康基线必须零影响（否则治好一行、
+    // 换来全屏错位）。变异方向：条件反向 / 无条件加 / 零值也加，本钉必红。
+    use kfm_na::insets::drift_compensate;
+    assert_eq!(
+        drift_compensate(1653.0, 0),
+        1653.0,
+        "健康基线 winTop=0 零影响（y 一像素不动）"
+    );
+    assert_eq!(
+        drift_compensate(1653.0, 135),
+        1788.0,
+        "发病 winTop=135 补回显示空间（nz 视觉中心 1787）"
+    );
+    assert_eq!(
+        drift_compensate(1000.0, -135),
+        1000.0,
+        "负窗顶不反向（宁不动，不许把用户的手往反方向推）"
+    );
+    assert_eq!(
+        drift_compensate(1481.0, 1),
+        1482.0,
+        "1px 也要补（无下限档）"
+    );
+    assert_eq!(drift_compensate(0.0, 135), 135.0, "屏顶触摸同样吃补偿");
+}
+
+#[test]
+fn spec_bar145_触摸入口吃补偿_注入通道不吃() {
+    // 眼手同尺的边界契约（BAR-145 修复臂）：判卷尺（几何/渲染）全在显示
+    // 空间，真手指进来的是**窗口空间**——补偿只许做在真触摸入口；通道八
+    // 注入的坐标本就写自显示空间（脚本按看到的画面点），进门再补就反推。
+    let app = include_str!("../src/android_app.rs");
+    let arm = app
+        .split("WindowEvent::Touch(touch) =>")
+        .nth(1)
+        .expect("window_event 里没有 Touch 臂（真触摸入口锚点被摘）");
+    let arm = &arm[..arm
+        .find("// IME 事件链")
+        .expect("Touch 臂尾锚点（IME 事件链）被摘")];
+    assert!(
+        arm.contains("crate::insets::drift_compensate"),
+        "真触摸入口必须过窗顶漂移补偿（BAR-145 修复臂被摘 = 命中继续上移一行）"
+    );
+    assert!(
+        arm.contains("sample_touch_win_top"),
+        "起手必须活读窗顶（缓存会拿愈合前的旧值把用户的手反向推）"
+    );
+    let inj = app
+        .split("fn drain_touch_in")
+        .nth(1)
+        .expect("通道八注入抽干被摘");
+    let inj = &inj[..inj.find("\n    fn ").unwrap_or(inj.len())];
+    assert!(
+        !inj.contains("drift_compensate"),
+        "注入通道不许连带补偿（脚本坐标写自显示空间，再补就是反推）"
+    );
+}
+
+#[test]
+fn spec_bar145_resume重贴沉浸式标志() {
+    // 治本臂（2026-09-26）：唤醒/焦点重协商时点重贴沉浸式标志——迫使系统
+    // 重算窗口 frame，输入/显示两侧快照同源。摘掉 = 只留补偿一条腿。
+    let java = include_str!("../android/java/dev/kfm/na/MainActivity.java");
+    assert!(
+        java.contains("private void reapplyImmersive()"),
+        "治本臂（重贴沉浸式标志）被摘"
+    );
+    let resume = java
+        .split("protected void onResume()")
+        .nth(1)
+        .expect("onResume 被摘");
+    assert!(
+        resume.contains("reapplyImmersive()"),
+        "onResume 必须重贴沉浸式标志（熄屏→解锁复现钥匙的时点）"
+    );
+    let focus = java
+        .split("public void onWindowFocusChanged(boolean hasFocus)")
+        .nth(1)
+        .expect("onWindowFocusChanged 被摘");
+    let focus = &focus[..focus
+        .find("private void reapplyImmersive()")
+        .expect("reapplyImmersive 定义锚点被摘")];
+    assert!(
+        focus.contains("reapplyImmersive()"),
+        "焦点重获必须重贴沉浸式标志（IME 召收/唤窗后的重协商时点）"
     );
 }
 
