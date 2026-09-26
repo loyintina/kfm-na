@@ -1008,6 +1008,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "na-agent"
+version = "0.1.0"
+dependencies = [
+ "rustls",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "webpki-roots",
+]
+
+[[package]]
+name = "na-agentd"
+version = "0.1.0"
+dependencies = [
+ "na-agent",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "na-loader"
 version = "0.1.0"
 dependencies = [

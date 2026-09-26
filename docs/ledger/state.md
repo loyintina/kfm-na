@@ -5,6 +5,26 @@
 > (速查表:症状 → 工具 → 字段 → 判卷)。本页只写「现在进行时」,
 > 历史功过在 bugs.md。
 
+## 当前位置（2026-09-26 晚，工单④ na agent 运行时 v1 落地，BAR-161）
+
+> **形态**：新 crates/na-agent（平台无关核心库：Host trait 收敛 fs/命令/
+> 时钟 + OpenAI 兼容方言 + 工具四件 + append-only 会话存储 + 多轮工具
+> 循环 max_rounds=32 兜底）+ crates/na-agentd（127.0.0.1:9041 daemon
+> systemd 常驻 + na-agent CLI：lines/send/tail）。aarch64-linux-android
+> check 双 crate 干净（落手机机械证明）。默认燃料 bigmodel-coding
+> glm-5.3-flash（line.toml 可覆盖 provider/model/workdir）；
+> **kimi-code oauth 挂账工单⑤**（providers.rs 机械拒绝指向，不静默回退）。
+> **钉**：五组 26 枚（host 抽象/围栏三言/loop 终止/方言解析/会话追加）
+> 全绿，变异四咬全中。
+> **demo 判卷（2026-09-26 晚实咬）**：demo 线塞「读 bugs.md 最后一条
+> BAR 主题写信入信箱」——glm-5.3-flash 5 轮自主走完 读→查→写→停。
+> 证据：会话 /root/.kfm/session/demo/0001-会话.jsonl（24 事件链
+> user_msg→usage(r1)→…→tool_call(read_file)→…→tool_call(write_file)
+> →…→done(stop)；usage 五轮全在）；信件 /root/.kfm/session/信箱/
+> kfm-na-git-stage-flow-report.md（ASCII 命名/机读头七字段/白话结论块，
+> 内容确讲 BAR-160 钩子 Stage 案）。systemd kfm-na-agentd.service
+> enabled+active（unit 单源 crates/na-agentd/kfm-na-agentd.service）。
+
 ## 当前位置（2026-09-26 下午，BAR-145 七度再现闭链定罪 + 输入边界补偿修复臂上机）
 
 > **BAR-145 修复上机待判**（bugs.md 行全档）：捕获器

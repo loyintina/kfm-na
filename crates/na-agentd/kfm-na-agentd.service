@@ -1,0 +1,18 @@
+[Unit]
+Description=KFM-NA agent runtime daemon (na-agentd · na agent 运行时 v1，工单④ BAR-161)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/kfm-na
+Environment=NA_AGENT_BIND=127.0.0.1:9041
+Environment=NA_AGENT_SESSION_ROOT=/root/.kfm/session
+Environment=NA_AGENT_PROVIDER_JSON=/root/.kfm/provider.json
+ExecStart=/root/kfm-na/target/release/na-agentd
+Restart=always
+RestartSec=2
+StandardOutput=append:/var/log/kfm-na-agentd.log
+StandardError=append:/var/log/kfm-na-agentd.log
+
+[Install]
+WantedBy=multi-user.target

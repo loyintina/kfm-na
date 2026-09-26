@@ -1,0 +1,16 @@
+[package]
+name = "na-agent"
+version = "0.1.0"
+edition = "2024"
+description = "na agent 运行时核心库（工单④ BAR-161）：agent 循环 / OpenAI 兼容方言 / 工具面 / 会话存储全平台无关，宿主依赖收敛到 host trait；aarch64-linux-android 可编是落手机的机械证明"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# HTTPS 直连（dialect 的传输层 httpc.rs）：与根 crate direct_brain.rs 同款
+# rustls ring 后端纯 Rust TLS，Android 交叉编译安全；不引 reqwest（离线 vendor 纪律）
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
+webpki-roots = "1"
+
+[dev-dependencies]
+tempfile = "3.27.0"

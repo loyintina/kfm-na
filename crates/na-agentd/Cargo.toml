@@ -1,0 +1,20 @@
+[package]
+name = "na-agentd"
+version = "0.1.0"
+edition = "2024"
+description = "na agent 服务器薄壳（工单④ BAR-161）：127.0.0.1:9041 本地 HTTP daemon（systemd 常驻）+ na-agent CLI；核心全在 na-agent 库，本 crate 只是装配工"
+
+[[bin]]
+name = "na-agentd"
+path = "src/main.rs"
+
+[[bin]]
+name = "na-agent"
+path = "src/bin/na-agent.rs"
+
+[dependencies]
+na-agent = { path = "../na-agent" }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3.27.0"

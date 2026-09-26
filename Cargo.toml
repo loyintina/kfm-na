@@ -1,6 +1,6 @@
 [workspace]
 # 根包 kfm-na 是隐式成员；cordis-na = 通用运行时（基座搬家，2026-08-17 阶段 1）
-members = ["crates/cordis-na", "crates/na-loader", "crates/na-protocol", "crates/na-server", "crates/na-sys", "crates/na-quic"]
+members = ["crates/cordis-na", "crates/na-loader", "crates/na-protocol", "crates/na-server", "crates/na-sys", "crates/na-quic", "crates/na-agent", "crates/na-agentd"]
 
 [package]
 name = "kfm-na"
