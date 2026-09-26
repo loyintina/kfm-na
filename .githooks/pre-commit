@@ -6,7 +6,7 @@
 #   运维公约 1；stamp 机制随之退役，改了代码当场跑当场验）。
 #   纯 docs 提交无代码可验，照旧豁免。
 cd "$(dirname "$0")/.." || exit 1
-NOW_HASH=$(git add -A >/dev/null 2>&1; git diff --cached HEAD -- . ':(exclude)docs' | md5sum | cut -d' ' -f1)
+NOW_HASH=$(git diff --cached HEAD -- . ':(exclude)docs' | md5sum | cut -d' ' -f1)
 if [ "$NOW_HASH" = "d41d8cd98f00b204e9800998ecf8427e" ]; then
     echo "✅ 纯 docs 提交，无代码可验（chain 闸不适用）"
     exit 0

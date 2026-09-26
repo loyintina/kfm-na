@@ -118,8 +118,8 @@ bash scripts/deploy-phone.sh --build   # 先打包再送
 涉及的文件，禁止 `git add -A` / `git add -u` 一扫了之——双线共享工作树，
 在途活会互污染（实例：2026-09-26 工单①提交时一次 `git add -A` 把研究线
 在途的 scripts/na-winstate-watch.sh 扫进主开发线提交，幸是成品）。机制面
-挂账：`.githooks/pre-commit` 第 9 行为算变更哈希自带 `git add -A`，目前
-仍会重 Stage 全树，待立项修。
+已修（2026-09-26，BAR-160）：pre-commit 第 9 行删 `git add -A`，哈希口径
+改实际暂存区（`git diff --cached HEAD`）。
 
 ## 观测先行条款（2026-09-17 立三条，2026-09-26 增第四条，C 档问题铁律）
 
