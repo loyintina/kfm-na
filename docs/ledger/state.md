@@ -18,8 +18,9 @@
 > 独立任务 + 握手验签每条 Incoming 一任务 + 认领 channel 积压留
 > 最新 + 服务期新认领 close 挤换。考题弃尸风暴（冻结线程保 socket
 > 演 CGNAT 无声陈尸，idle 加速 2s）先红（3.9s 超时）后绿。契约入
-> quic隧道.md M4-6。**待：重编 na-server + systemctl restart 上机
-> 实证（62694 认领 + 9022 归 QUIC 桥）。**
+> quic隧道.md M4-6。**上机实证通过（同日午）：重编 na-server +
+> systemctl restart 后反连即认领（39.144.207.40），na-server 自持
+> 9022，na_ssh 经 QUIC 反连桥全链 echo 实测通。**
 
 ## 当前位置（2026-09-26 晨，预热池+滚动增益，BAR-155/156 用户结案）
 
