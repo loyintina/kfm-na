@@ -16,6 +16,9 @@
          mediaProjection 类型前台服务，此权限与服务的 foregroundServiceType
          配对，缺一即 SecurityException -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <!-- 自持安装通道（2026-09-26）：调起系统安装器装自己的更新包
+         （Termux 同款权限，安装期授予，无需用户操作） -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <application
         android:label="KFM-NA"
@@ -58,5 +61,14 @@
             android:name=".KfmRecService"
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
+
+        <!-- 自持安装通道（KfmFileProvider 文件头）：私有目录 APK 经
+             content:// + 一次性读授权递给系统安装器——无存储权限、
+             不碰共享存储，Termux 路径的替身 -->
+        <provider
+            android:name=".KfmFileProvider"
+            android:authorities="dev.kfm.na.provider"
+            android:exported="false"
+            android:grantUriPermissions="true" />
     </application>
 </manifest>

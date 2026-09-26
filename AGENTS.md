@@ -49,7 +49,8 @@ bash scripts/package-apk.sh   # 产物：target/release/apk/kfm-na.apk
 # 送包到手机（ssh 隧道 localhost:8022 → Termux；scp 到共享存储 + am start
 # 调起系统安装器，用户在手机上点「安装」完成最后一步——普通 uid 无
 # INSTALL_PACKAGES 权限，静默安装 root 前无解）
-bash scripts/deploy-phone.sh           # 送当前已打好的包
+bash scripts/deploy-phone.sh           # 送当前已打好的包（走 Termux 8022）
+bash scripts/deploy-via-na.sh          # 自持通道：QUIC 桥 + FileProvider（na 含 Provider 后零 Termux）
 bash scripts/deploy-phone.sh --build   # 先打包再送
 ```
 

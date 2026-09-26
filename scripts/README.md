@@ -41,6 +41,9 @@
 - `build-on-phone.sh` — 手机编译回路:服务器推 master,手机本地编
   APK + 调安装器。
 - `deploy-phone.sh` — 送包到手机并调起安装器(`--build` 先打包再送)。
+- `deploy-via-na.sh` — 自持安装通道（2026-09-26）：QUIC 反连桥推包进 na
+  私有目录 incoming/ → FileProvider content:// 一次性授权调起安装器，
+  零 Termux/存储权限依赖（首次使用前提：在跑的 na 已含 KfmFileProvider）。
 - `deploy-ai-config.sh` — 三路 key 配置(Kimi 默认/智谱/DeepSeek 官网)
   抽自服务器 kfmv4,经闸门(na-ssh.sh:9022 首选/8024 备援)推 na 私有目录 ai/(key 不进 git)。
 - `font-bake.py` — 字体烘焙管线(子集化/借形/monoify)。
