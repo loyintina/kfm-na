@@ -16,3 +16,4 @@ mutants.out/
 mutants.out.old/
 overnight-power-*.log
 certs/
+logs/

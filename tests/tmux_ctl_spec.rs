@@ -176,11 +176,11 @@ fn spec_cmd_capture_精确匹配带色全史() {
     );
 }
 
-// ---- capture_strip_marker（BAR-152：报错文本与快照同走 stdout，
+// ---- capture_strip_marker（BAR-153：报错文本与快照同走 stdout，
 // 无标记 = 抓取失败不许进浏览态）----
 
 #[test]
-fn spec_bar152_快照验收_标记判卷() {
+fn spec_bar153_快照验收_标记判卷() {
     // 真快照：标记在尾 → 剥标记还净内容（pty \r\n 尾巴照剥）
     assert_eq!(
         tmux_ctl::capture_strip_marker("line1\r\nline2\r\nKFM_CAP_OK\r\n"),

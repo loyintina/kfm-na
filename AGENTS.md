@@ -90,7 +90,7 @@ bash scripts/deploy-phone.sh --build   # 先打包再送
   .png 但内容是 JPEG，仓内按内容存 .jpg，aapt2 与 BitmapFactory 都认内容）package-apk.sh
   第 4 步 `aapt2 compile --dir` + link `-R` 进包，不编 R.java。
 
-## 纪律（四门，全部 hard fail，commit-msg/pre-commit 钩子机械化执法）
+## 纪律（五门，全部 hard fail，commit-msg/pre-commit 钩子机械化执法）
 
 1. **chain 全绿**：pre-commit 跑 `scripts/chain.sh`，红了提交不了。
 2. **fix 必须带钉**：提交信息首行 `fix:`/`fix(范围):` 必须触及测试
@@ -227,8 +227,12 @@ kfmv4-review-ops-convention-verdict.md。
 
 ## 当前阶段
 
-**阶段 3：多端核心层抽层（L1 已落地）**。尖刺 1/阶段 2 已闭环（终端可用化：
-内嵌字体/快捷键行/触摸滚动/中文 IME/启动归因 BAR-020~024 全链，详见
-bugs.md 与 state.md）。当前主线：L1 本地 PTY 双会话（本地秒开 + ws 远程
-后台接 + Ctrl-] 切换）→ L3 本地 apt 生态（exec 探针两轮实拍：targetSdk 28
-域降级放行私有目录 exec）。设计宪法：multi-end-layering.md（评审已批）。
+**阶段 3 现实主线（2026-09-26 重写，旧「L1 双会话 → L3 apt 生态」表述
+过期——L1 早已落地，详见 bugs.md 与 state.md）**：①**QUIC 双通道自持**——
+数据面 UDP 62633 主 / ssh 备（跳闸降级），反连 9022 已 QUIC 化（UDP
+62694，M4 全里程碑判卷毕；BAR-157 认领循环陈尸憋死案修复上机实证通过）；
+②**外置视口 v4 推流画布**——tmux -C 控制模式 %output 即时推流 + 隐藏画布
+后台生长，v3 轮询降级保底（BAR-155/156 用户终验结案）；③**全会话预热池 +
+滚动 2 倍增益**——用户真机判卷过关销账；④**BAR-145 仪器观察中**（tmux 列
+点击漂移 = Android 输入边界坐标偏移，[touch]/[bake] 账常驻，观察期至
+2026-10-02）。设计宪法：multi-end-layering.md（评审已批）。
