@@ -5,6 +5,32 @@
 > (速查表:症状 → 工具 → 字段 → 判卷)。本页只写「现在进行时」,
 > 历史功过在 bugs.md。
 
+## 当前位置（2026-09-26 晚，工单⑤ BAR-164：kimi-code oauth 方言接入 na-agent）
+
+> **形态**：providers.json auth="oauth" 落地——na-agent 新 oauth.rs：
+> 凭证真身 `$KIMI_CODE_HOME/credentials/<provider>.json`（缺省
+> ~/.kimi-code），**每次调用现读不缓存**；expires_at 判早 60s skew
+> 三态裁决 Fresh/Refresh/Reauth；刷新 = POST {oauth_host}/api/oauth/token
+> （env KIMI_CODE_OAUTH_HOST > KIMI_OAUTH_HOST > 缺省 https://auth.kimi.com，
+> 探路结论来自本机官方 kimi-cli 1.37.0 auth/oauth.py 实录），form 表单
+> client_id（公开常量）+grant_type=refresh_token+refresh_token，带
+> X-Msh-* 设备头；200 → 原子回写（.tmp-PID+sync+chmod 0600+rename，
+> 新 refresh_token 同件回写，官方 CLI 登录态不刷死）→ 回读再用；
+> 401/403 → 机械报错「重跑 kimi /login」。**token 永不进日志/报错/
+> wire**（报错只给字段名，上游错误体 redact 兜底）。k3-256k
+> always-thinking：oauth 路 max_tokens 缺省 16384 可覆盖（api_key 路
+> 不出键），防 content 被 reasoning_tokens 吃光。agentd systemd unit
+> 补 Environment=KIMI_CODE_HOME=/root/.kimi-code（systemd 不带 HOME
+> 是首跑唯一卡点）。
+> **钉**：11 枚 spec_bar164_* 全绿（凭证解析/泄密红线/路径/裁决 skew/
+> 刷新请求·响应·报错抹除/原子回写/providers 落地/thinking 形状/
+> max_tokens 入体），变异四咬全中（摘 skew/401 不判 Reauth/redact
+> 直通/摘 chmod，均即红复原绿），aarch64 check 干净。**live 实咬
+> 已过**：demo 线临指 kimi-code/k3-256k 一发即通（会话
+> /root/.kfm/session/demo/0001-会话.jsonl 尾链 user_msg→usage
+> (prompt 69479/completion 31)→model_msg→done），line.toml 已恢复
+> 默认 glm-5.3-flash 并复跑实证照通。
+
 ## 当前位置（2026-09-26 晚，工单⑥ BAR-163：/agent 桥接 + 会话池一期只读）
 
 > **形态**：手机经既有 9021 隧道直达 agentd——na-server 加 `/agent`

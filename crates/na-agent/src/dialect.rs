@@ -1,5 +1,8 @@
-//! dialect.rs — OpenAI 兼容方言（v1 唯一方言；bigmodel-coding glm 与
-//! deepseek 同吃这份）。纯 JSON 进出（A 档），传输在 httpc.rs。
+//! dialect.rs — OpenAI 兼容方言（bigmodel-coding glm / deepseek /
+//! kimi-code k3 同吃这份——BAR-164 起 kimi always-thinking 响应形状
+//! （content 空 + reasoning_content + usage.completion_tokens_details）
+//! 与 reasoning+tool_calls 共存都在本册容忍面内）。纯 JSON 进出
+//! （A 档），传输在 httpc.rs。
 //!
 //! 请求：POST {base_url}/chat/completions，非流式（v1 判卷要的是
 //! content/tool_calls/usage 三段全量，不需要 SSE 增量），messages + tools。
@@ -109,14 +112,24 @@ pub struct ToolFn {
 }
 
 /// 构造请求体（A 档纯函数）。stream 恒 false——v1 非流式。
-pub fn build_request(model: &str, messages: &[Message], tools: &[ToolSpec]) -> String {
-    serde_json::json!({
+/// max_tokens：Some 入体 / None 键不出现（api_key 老路逐字节不变；
+/// kimi-code thinking 模型必须给足——BAR-164，providers 裁决喂入）
+pub fn build_request(
+    model: &str,
+    messages: &[Message],
+    tools: &[ToolSpec],
+    max_tokens: Option<u32>,
+) -> String {
+    let mut v = serde_json::json!({
         "model": model,
         "messages": messages,
         "tools": tools,
         "stream": false,
-    })
-    .to_string()
+    });
+    if let Some(mt) = max_tokens {
+        v["max_tokens"] = serde_json::json!(mt);
+    }
+    v.to_string()
 }
 
 /// 解析响应体（A 档纯函数）。只认 choices[0]；缺 choices/坏 JSON = Err。

@@ -12,7 +12,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::dialect::{ChatClient, ChatReply, Message, ToolSpec, build_request, parse_response};
-use crate::providers::Provider;
+use crate::oauth;
+use crate::providers::{Auth, Provider};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 /// 读心跳：阻塞读周期醒来看总Deadline（ glm/deepseek 首 token 慢，
@@ -33,46 +34,15 @@ impl OpenAiClient {
 
     /// 一轮非流式对话（阻塞）。返回 (status, body)。
     fn post(&self, body: &str) -> Result<(u16, String), String> {
-        let (host, port, base_path) = parse_https_url(&self.provider.base_url)?;
-        let addr = (host.as_str(), port)
-            .to_socket_addrs()
-            .map_err(|e| format!("DNS 解析失败 {host}: {e}"))?
-            .next()
-            .ok_or_else(|| format!("DNS 无结果: {host}"))?;
-        let tcp = TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT)
-            .map_err(|e| format!("连接失败 {host}:{port}: {e}"))?;
-        tcp.set_read_timeout(Some(READ_TICK))
-            .map_err(|e| e.to_string())?;
-        let mut roots = rustls::RootCertStore::empty();
-        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-        let config = rustls::ClientConfig::builder()
-            .with_root_certificates(roots)
-            .with_no_client_auth();
-        let server_name = rustls::pki_types::ServerName::try_from(host.clone())
-            .map_err(|e| format!("坏主机名 {host}: {e}"))?;
-        let conn = rustls::ClientConnection::new(Arc::new(config), server_name)
-            .map_err(|e| format!("TLS 初始化失败: {e}"))?;
-        let mut tls = rustls::StreamOwned::new(conn, tcp);
-
-        let path = format!("{}/chat/completions", base_path.trim_end_matches('/'));
-        let req = format!(
-            "POST {path} HTTP/1.1\r\nHost: {host}\r\nAuthorization: Bearer {}\r\n\
-             Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-            self.provider.api_key,
-            body.len()
+        let bearer = match &self.provider.auth {
+            Auth::ApiKey(k) => k.clone(),
+            Auth::OAuth { credential_path } => oauth_bearer(credential_path)?,
+        };
+        let url = format!(
+            "{}/chat/completions",
+            self.provider.base_url.trim_end_matches('/')
         );
-        tls.write_all(req.as_bytes())
-            .and_then(|_| tls.write_all(body.as_bytes()))
-            .map_err(|e| format!("写请求失败: {e}"))?;
-
-        let deadline = Instant::now() + ROUND_TIMEOUT;
-        let mut r = BufRead::new(tls);
-        let head = read_head(&mut r, deadline)?;
-        let body_bytes = read_body(&mut r, &head, deadline)?;
-        Ok((
-            head.status,
-            String::from_utf8_lossy(&body_bytes).into_owned(),
-        ))
+        https_post(&url, Some(&bearer), "application/json", &[], body)
     }
 }
 
@@ -83,7 +53,7 @@ impl ChatClient for OpenAiClient {
         messages: &[Message],
         tools: &[ToolSpec],
     ) -> Result<ChatReply, String> {
-        let body = build_request(model, messages, tools);
+        let body = build_request(model, messages, tools, self.provider.max_tokens);
         let (status, text) = self.post(&body)?;
         if status != 200 {
             // key 不落日志：错误体可能回显请求片段，截断到 512 字节
@@ -92,6 +62,136 @@ impl ChatClient for OpenAiClient {
         }
         parse_response(&text)
     }
+}
+
+// ---- kimi-code OAuth（BAR-164 工单⑤）：引用即取 + 过期刷新 + 原子回写 ----
+
+/// oauth Bearer（每次调用现走全流程）：现读凭证 → 裁决 →
+/// Fresh 直接用 / Refresh 刷完原子回写再用 / Reauth 机械报错。
+/// token 本体永不进报错文本（redact 兜底）。
+fn oauth_bearer(credential_path: &str) -> Result<String, String> {
+    let text = std::fs::read_to_string(credential_path)
+        .map_err(|_| format!("读凭证失败（{credential_path}）——{}", oauth::REAUTH_HINT))?;
+    let creds = oauth::parse_credentials(&text)?;
+    let now = unix_now();
+    match oauth::verdict(&creds, now) {
+        oauth::Verdict::Fresh(t) => Ok(t),
+        oauth::Verdict::Reauth(msg) => Err(msg),
+        oauth::Verdict::Refresh(rt) => {
+            let url = format!(
+                "{}/api/oauth/token",
+                oauth::oauth_host().trim_end_matches('/')
+            );
+            let (status, body) = https_post(
+                &url,
+                None,
+                "application/x-www-form-urlencoded",
+                &msh_headers(),
+                &oauth::build_refresh_body(&rt),
+            )
+            .map_err(|e| oauth::redact(&e, &[&creds.access_token, &creds.refresh_token]))?;
+            let file_json = oauth::parse_refresh_response(status, &body, now, &creds)?;
+            let path = std::path::Path::new(credential_path);
+            oauth::write_atomic(path, &file_json)
+                .map_err(|e| oauth::redact(&e, &[&creds.access_token, &creds.refresh_token]))?;
+            // 回读取用（写坏了立刻显形，不拿内存里的串将错就错）
+            let new = oauth::parse_credentials(
+                &std::fs::read_to_string(path).map_err(|e| format!("回读凭证失败: {e}"))?,
+            )?;
+            Ok(new.access_token)
+        }
+    }
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// 官方刷新请求的设备头（kimi_cli _common_headers 同族；device_id 读
+/// $KIMI_CODE_HOME/device_id 或 $HOME/.kimi-code/device_id，读不到不带）
+fn msh_headers() -> Vec<(String, String)> {
+    let mut hs = vec![
+        ("X-Msh-Platform".to_string(), "kimi_cli".to_string()),
+        ("X-Msh-Version".to_string(), "1.37.0".to_string()),
+    ];
+    let home = std::env::var("KIMI_CODE_HOME")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            std::env::var("HOME")
+                .ok()
+                .map(|h| format!("{h}/.kimi-code"))
+        });
+    if let Some(home) = home
+        && let Ok(id) = std::fs::read_to_string(format!("{home}/device_id"))
+    {
+        let id = id.trim();
+        if !id.is_empty() && id.is_ascii() {
+            hs.push(("X-Msh-Device-Id".to_string(), id.to_string()));
+        }
+    }
+    hs
+}
+
+/// HTTPS POST 一次（手写 HTTP/1.1 子集；rustls ring 纯 Rust TLS）：
+/// 读头 + 按 content-length/chunked/EOF 读全量 body。bearer=None 不带
+/// Authorization（刷新端点不吃 Bearer）
+fn https_post(
+    url: &str,
+    bearer: Option<&str>,
+    content_type: &str,
+    extra_headers: &[(String, String)],
+    body: &str,
+) -> Result<(u16, String), String> {
+    let (host, port, base_path) = parse_https_url(url)?;
+    let addr = (host.as_str(), port)
+        .to_socket_addrs()
+        .map_err(|e| format!("DNS 解析失败 {host}: {e}"))?
+        .next()
+        .ok_or_else(|| format!("DNS 无结果: {host}"))?;
+    let tcp = TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT)
+        .map_err(|e| format!("连接失败 {host}:{port}: {e}"))?;
+    tcp.set_read_timeout(Some(READ_TICK))
+        .map_err(|e| e.to_string())?;
+    let mut roots = rustls::RootCertStore::empty();
+    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    let config = rustls::ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    let server_name = rustls::pki_types::ServerName::try_from(host.clone())
+        .map_err(|e| format!("坏主机名 {host}: {e}"))?;
+    let conn = rustls::ClientConnection::new(Arc::new(config), server_name)
+        .map_err(|e| format!("TLS 初始化失败: {e}"))?;
+    let mut tls = rustls::StreamOwned::new(conn, tcp);
+
+    let auth = match bearer {
+        Some(b) => format!("Authorization: Bearer {b}\r\n"),
+        None => String::new(),
+    };
+    let extra: String = extra_headers
+        .iter()
+        .map(|(k, v)| format!("{k}: {v}\r\n"))
+        .collect();
+    let req = format!(
+        "POST {base_path} HTTP/1.1\r\nHost: {host}\r\n{auth}\
+         Content-Type: {content_type}\r\nContent-Length: {}\r\n{extra}Connection: close\r\n\r\n",
+        body.len()
+    );
+    tls.write_all(req.as_bytes())
+        .and_then(|_| tls.write_all(body.as_bytes()))
+        .map_err(|e| format!("写请求失败: {e}"))?;
+
+    let deadline = Instant::now() + ROUND_TIMEOUT;
+    let mut r = BufRead::new(tls);
+    let head = read_head(&mut r, deadline)?;
+    let body_bytes = read_body(&mut r, &head, deadline)?;
+    Ok((
+        head.status,
+        String::from_utf8_lossy(&body_bytes).into_owned(),
+    ))
 }
 
 /// https://host[:port]/base/path → (host, port, base_path)

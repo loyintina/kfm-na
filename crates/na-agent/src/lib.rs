@@ -14,6 +14,7 @@ pub mod config;
 pub mod dialect;
 pub mod host;
 pub mod httpc;
+pub mod oauth;
 pub mod providers;
 pub mod session;
 pub mod tools;

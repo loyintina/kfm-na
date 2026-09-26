@@ -73,7 +73,7 @@ fn spec_bar161_方言_坏件判负() {
 #[test]
 fn spec_bar161_方言_请求体形状() {
     let messages = vec![Message::user("问")];
-    let body = build_request("glm-5.3-flash", &messages, &tool_specs());
+    let body = build_request("glm-5.3-flash", &messages, &tool_specs(), None);
     let v: serde_json::Value = serde_json::from_str(&body).expect("合法 JSON");
     assert_eq!(v["model"], "glm-5.3-flash");
     assert_eq!(v["stream"], false, "v1 非流式");
