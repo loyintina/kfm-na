@@ -34,6 +34,7 @@ pub mod report;
 pub mod scroll;
 pub mod self_restart;
 pub mod sess_mode;
+pub mod sess_pool;
 pub mod session;
 pub mod session_router;
 pub mod settings;
@@ -48,6 +49,7 @@ pub mod trace;
 pub mod tunnel;
 pub mod ui;
 pub mod vsync_book;
+pub mod wire_render;
 
 #[cfg(target_os = "android")]
 pub mod android_app;

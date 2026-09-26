@@ -1226,7 +1226,11 @@ impl App {
                         ) as i32
                             == 0
                         && let Some(page) = crate::ui::cfg_page::cfg_page_handle()
-                        && page.lock().unwrap().modal().is_some()
+                        && {
+                            let pg = page.lock().unwrap();
+                            // BAR-163：查看器跳框与 comp modal 同层级同仲裁
+                            pg.modal().is_some() || pg.viewer().is_some()
+                        }
                     {
                         crate::report::report("gest", &format!("起手→跳框模态 ({x:.0},{y:.0})"));
                         self.modal_touch = Some((x, y, false));
@@ -1340,9 +1344,11 @@ impl App {
                         }
                         let tr = pg.trigger_rect(&upper, lw, vw);
                         let tab1 = pg.tab() == 1;
-                        // 触发器是系统管理页家具——组件池页首行不是下拉行，
-                        // 坐标重合也不许误判（九修：tab 维分流）
+                        let tab2 = pg.tab() == 2;
+                        // 触发器是系统管理页家具——组件池/会话池页首行不是
+                        // 下拉行，坐标重合也不许误判（九修：tab 维分流）
                         let in_trigger = !tab1
+                            && !tab2
                             && xi >= tr.x
                             && xi < tr.x + tr.w as i64
                             && yi >= tr.y
@@ -1351,9 +1357,10 @@ impl App {
                             && xi < lower.x + lower.w as i64
                             && yi >= lower.y
                             && yi < lower.y + lower.h as i64;
-                        // 组件池页：上池行可点开跳框（§五 目录语义 7）——
+                        // 组件池页：上池行可点开跳框（§五 目录语义 7）；
+                        // 会话池页（BAR-163）：上池行可点开查看器——
                         // 上池区也建池区手势槽
-                        let in_upper = tab1
+                        let in_upper = (tab1 || tab2)
                             && xi >= upper.x
                             && xi < upper.x + upper.w as i64
                             && yi >= upper.y
@@ -2433,6 +2440,21 @@ impl App {
                                     crate::report::report("ui", "跳框卡内点按（无操作，吃手势）");
                                 }
                             }
+                        } else if let Some(v) = pg.viewer().cloned() {
+                            // BAR-163 查看器跳框：同一套命中语义，几何吃
+                            // 查看器族同一份（眼手同尺）
+                            use crate::ui::modal as md;
+                            let fields = md::viewer_fields(&v.content, md::content_cells(sw));
+                            let card = md::viewer_card_rect(sw, sh, &fields);
+                            match md::hit(mt.0 as i64, mt.1 as i64, &card) {
+                                md::ModalHit::Close | md::ModalHit::Outside => {
+                                    pg.close_viewer();
+                                    crate::report::report("ui", "查看器收起（关闭钮/框外）");
+                                }
+                                md::ModalHit::Card => {
+                                    crate::report::report("ui", "查看器卡内点按（无操作，吃手势）");
+                                }
+                            }
                         }
                     }
                     self.dirty = true;
@@ -2530,7 +2552,9 @@ impl App {
                             let mut pg = page.lock().unwrap();
                             let tr = pg.trigger_rect(&upper, lw, vw);
                             let tab1 = pg.tab() == 1;
+                            let tab2 = pg.tab() == 2;
                             let in_trigger = !tab1
+                                && !tab2
                                 && xi >= tr.x
                                 && xi < tr.x + tr.w as i64
                                 && yi >= tr.y
@@ -2570,6 +2594,29 @@ impl App {
                                         crate::report::report(
                                             "ui",
                                             &format!("组件池点按: 开跳框 #{ci}"),
+                                        );
+                                        self.dirty = true;
+                                    }
+                                }
+                            } else if tab2 {
+                                // 会话池页（BAR-163 一期只读）：上池行点按 =
+                                // 开查看器（先落「加载中…」，取回件标题对上
+                                // 由脏帧喂真文）。占位行（空态/加载中）
+                                // 不开框
+                                let scroll = pg.upper_scroll();
+                                if let Some(i) = pg.upper_row_at_y(yi, &upper, scroll) {
+                                    let sp = crate::sess_pool::snap();
+                                    if let (Some(key), Some(row)) =
+                                        (sp.selected.clone(), sp.entries.get(i))
+                                        && !row.label.starts_with('（')
+                                    {
+                                        let title =
+                                            crate::sess_pool::content_title(&key, &row.label);
+                                        pg.open_viewer(title, "加载中…".to_string());
+                                        crate::sess_pool::request_content(key, &row.label);
+                                        crate::report::report(
+                                            "ui",
+                                            &format!("会话池点按: 开查看器 {}", row.label),
                                         );
                                         self.dirty = true;
                                     }
@@ -3651,6 +3698,14 @@ impl App {
                 .map(|s| s.tunnel.local_port)
                 .unwrap_or(crate::tunnel::NA_SERVER_PORT),
         );
+        // 会话池数据面（BAR-163）：同一隧道本地口喂会话池取数器
+        // （/agent 前缀反代进 agentd，幂等）
+        crate::sess_pool::configure(
+            tunnel_srv
+                .as_ref()
+                .map(|s| s.tunnel.local_port)
+                .unwrap_or(crate::tunnel::NA_SERVER_PORT),
+        );
 
         // 插件基座：终端模拟器 + 连接 provider（边界手术第一/二刀）——
         // 「用哪个终端芯、连哪、怎么连」都不归主循环；工厂是服务，实例归调用方。
@@ -3713,14 +3768,15 @@ impl App {
             crate::gate::register_ai_chat(chat);
         }
 
-        // 配置卡标签栏（主题宪法 §四，2026-09-12）：池名表 v1b 两池——
-        // 「系统管理」+「组件池」（九修 2026-09-13：组件库实机花名册，
-        // 宪法 §五 目录语义 7；表是 Vec 天然可扩——API 池随后追加）；
+        // 配置卡标签栏（主题宪法 §四，2026-09-12）：池名表——「系统管理」
+        // +「组件池」（九修 2026-09-13：组件库实机花名册，宪法 §五 目录
+        // 语义 7）+「会话池」（BAR-163 2026-09-26：agent 线会话/信箱只读
+        // 查看，表是 Vec 天然可扩——API 池随后追加）；
         // 共享句柄注册给 gate 值守倒帧（D9 同源）。初始视口 720 占位，
         // draw_frame 每帧按真实屏宽 set_viewport_w 纠
         {
             let bar = std::sync::Arc::new(std::sync::Mutex::new(crate::ui::tab_bar::TabBar::new(
-                &["系统管理", "组件池"],
+                &["系统管理", "组件池", "会话池"],
                 720,
             )));
             crate::ui::tab_bar::register_tab_bar(bar.clone());
@@ -4057,6 +4113,63 @@ impl App {
     /// 换选/切页后必调（set_* 内部判等，没变不空涨代际）
     fn rebuild_cfg_rows(&mut self) {
         let Some(page) = &self.cfg_page else { return };
+        if page.lock().unwrap().tab() == 2 {
+            // 会话池（BAR-163 一期只读）：下池 = 路由表（agent 线 + 信箱
+            // 特殊路由），上池 = 选中路由的条目表。数据走 sess_pool 全局
+            // 快照（隧道反代取数）；不在/在途给占位行并按需发起取数——
+            // 取回件 DIRTY 落脏帧再进本函数换真行
+            let sp = crate::sess_pool::snap();
+            if sp.routes.is_empty() && !sp.routes_loading {
+                crate::sess_pool::request_routes();
+            }
+            let rows: Vec<crate::ui::cfg_page::RowView> = if sp.routes.is_empty() {
+                vec![crate::ui::cfg_page::RowView {
+                    title: "（加载中…）".into(),
+                    meta: String::new(),
+                }]
+            } else {
+                sp.routes
+                    .iter()
+                    .map(|r| crate::ui::cfg_page::RowView {
+                        title: r.title.clone(),
+                        meta: r.meta.clone(),
+                    })
+                    .collect()
+            };
+            let focus = page
+                .lock()
+                .unwrap()
+                .focus()
+                .min(sp.routes.len().saturating_sub(1));
+            let want = sp.routes.get(focus).map(|r| r.key.clone());
+            if let Some(k) = &want
+                && sp.selected.as_ref() != Some(k)
+                && !sp.entries_loading
+            {
+                crate::sess_pool::request_entries(k.clone());
+            }
+            let upper: Vec<crate::ui::cfg_page::UpperRow> =
+                if sp.routes.is_empty() || sp.entries_loading || sp.selected != want {
+                    vec![crate::ui::cfg_page::UpperRow {
+                        label: "（加载中…）".into(),
+                        value: String::new(),
+                        is_dropdown: false,
+                    }]
+                } else {
+                    sp.entries
+                        .iter()
+                        .map(|e| crate::ui::cfg_page::UpperRow {
+                            label: e.label.clone(),
+                            value: e.value.clone(),
+                            is_dropdown: false,
+                        })
+                        .collect()
+                };
+            let mut p = page.lock().unwrap();
+            p.set_rows(rows);
+            p.set_upper(upper);
+            return;
+        }
         if page.lock().unwrap().tab() == 1 {
             use crate::ui::comp_registry as cr;
             let focus = page.lock().unwrap().focus();
@@ -8888,6 +9001,31 @@ impl ApplicationHandler for App {
             crate::svc_health::set_visible(parser_docked);
             if crate::svc_health::take_dirty() {
                 self.dirty = true;
+            }
+            // 会话池数据面（BAR-163）：取回即脏帧。会话池页在顶 → 重建
+            // 行表换真数据；查看器开着且取回件标题对上 → 喂真文（在途
+            // 旧件不盖新框——title 同尺比对）
+            if crate::sess_pool::take_dirty() {
+                self.dirty = true;
+                let on_pool_page = self
+                    .cfg_page
+                    .as_ref()
+                    .is_some_and(|p| p.lock().unwrap().tab() == 2);
+                if on_pool_page {
+                    let sp = crate::sess_pool::snap();
+                    if let Some(c) = &sp.content
+                        && let Some(page) = &self.cfg_page
+                    {
+                        let mut pg = page.lock().unwrap();
+                        if pg
+                            .viewer()
+                            .is_some_and(|v| v.title == c.title && v.content != c.text)
+                        {
+                            pg.open_viewer(c.title.clone(), c.text.clone());
+                        }
+                    }
+                    self.rebuild_cfg_rows();
+                }
             }
             // 环境卡柱层滑入帧泵（2026-09-21 环境卡重做）：靠泊且 1px
             // 量化位移变了才置脏（柱距 9px / 拍 2s ≈ 4.5 帧/s；位移只在

@@ -148,6 +148,35 @@ fn route_exec(method: &str, path: &str, body: &str, svc: &AgentService) -> Vec<u
             Ok(events) => ok(serde_json::json!({"ok": true, "events": events})),
             Err(e) => err(404, "Not Found", &e),
         },
+        httpd::Route::Sessions { line } => match svc.list_sessions(&line) {
+            Ok(ss) => ok(serde_json::json!({
+                "ok": true,
+                "sessions": ss.iter().map(|(name, bytes)| serde_json::json!({
+                    "name": name, "bytes": bytes,
+                })).collect::<Vec<_>>(),
+            })),
+            Err(e) if e.contains("非法") => err(400, "Bad Request", &e),
+            Err(e) => err(404, "Not Found", &e),
+        },
+        httpd::Route::SessionTail { line, name, n } => match svc.tail_session(&line, &name, n) {
+            Ok(events) => ok(serde_json::json!({"ok": true, "events": events})),
+            Err(e) if e.contains("非法") => err(400, "Bad Request", &e),
+            Err(e) => err(404, "Not Found", &e),
+        },
+        httpd::Route::Letters => match svc.list_letters() {
+            Ok(ls) => ok(serde_json::json!({
+                "ok": true,
+                "letters": ls.iter().map(|(name, bytes)| serde_json::json!({
+                    "name": name, "bytes": bytes,
+                })).collect::<Vec<_>>(),
+            })),
+            Err(e) => err(500, "Internal Server Error", &e),
+        },
+        httpd::Route::Letter { name } => match svc.letter(&name) {
+            Ok(content) => ok(serde_json::json!({"ok": true, "name": name, "content": content})),
+            Err(e) if e.contains("非法") => err(400, "Bad Request", &e),
+            Err(e) => err(404, "Not Found", &e),
+        },
         httpd::Route::NotFound => err(404, "Not Found", "not found"),
     }
 }

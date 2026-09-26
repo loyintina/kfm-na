@@ -52,6 +52,58 @@ pub enum ModalHit {
     Outside,
 }
 
+// ---- 查看器跳框（BAR-163 会话池：无预览画板版 modal，几何同族）----
+
+/// 查看器字段区：单字段「内容」——正文按卡内容宽折行（wrap_text 同尺；
+/// 多行正文逐行展开再折）
+pub fn viewer_fields(content: &str, width_cells: u32) -> Vec<ModalField> {
+    let mut lines = Vec::new();
+    for raw in content.lines() {
+        lines.extend(wrap_text(raw, width_cells));
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    vec![ModalField {
+        label: "内容".into(),
+        lines,
+    }]
+}
+
+/// 查看器字段区起始 y（无画板：分隔线下 0.5 格即字段区）
+pub fn viewer_fields_top(card: &PoolRect) -> i64 {
+    card.y
+        + i64::from(MODAL_PAD_Y)
+        + i64::from(MODAL_TITLE_H)
+        + i64::from(MODAL_FIELD_GAP)
+        + 1
+        + i64::from(MODAL_FIELD_GAP)
+}
+
+/// 查看器卡片矩形 = card_rect 公式去掉预览画板与其相邻留隙
+/// （MODAL_PREVIEW_H + 前后两个 MODAL_FIELD_GAP 换成分隔线后一个
+/// MODAL_FIELD_GAP）；高随内容，封顶屏高−8 格（超出截断同 v1 取舍）
+pub fn viewer_card_rect(screen_w: u32, screen_h: u32, fields: &[ModalField]) -> PoolRect {
+    let w = screen_w.saturating_sub(MODAL_SIDE_MARGIN * 2);
+    // 顶留白 + 标题 + 分隔线带（上 0.5 格 + 1px + 下 0.5 格）+ 字段区
+    // + 关闭钮前隙 0.5 格 + 关闭钮 + 底留白
+    let want = MODAL_PAD_Y
+        + MODAL_TITLE_H
+        + (MODAL_FIELD_GAP + 1 + MODAL_FIELD_GAP)
+        + fields_h(fields)
+        + MODAL_FIELD_GAP
+        + MODAL_CLOSE_H
+        + MODAL_PAD_Y;
+    let max_h = screen_h.saturating_sub(MODAL_MAX_MARGIN_Y * 2);
+    let h = want.min(max_h.max(MODAL_CLOSE_H + MODAL_PAD_Y * 2));
+    PoolRect {
+        x: i64::from(MODAL_SIDE_MARGIN),
+        y: i64::from(screen_h.saturating_sub(h) / 2),
+        w,
+        h,
+    }
+}
+
 /// 屏尺寸取舍（纯函数，钉死）：窗口活着吃窗口实时尺寸；退后台窗口
 /// 已弃（BAR-004 suspended 弃窗）→ 回退末次 Resized 缓存；缓存也没有
 /// （(0,0) 未量过）= None——宁可无动作不瞎猜几何。

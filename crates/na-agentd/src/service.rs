@@ -136,13 +136,112 @@ impl AgentService {
             return Err(format!("线 {line} 无会话"));
         };
         let text = host.read_file(&path)?;
-        let lines: Vec<String> = text
-            .lines()
-            .filter(|l| !l.trim().is_empty())
-            .map(str::to_string)
-            .collect();
-        Ok(lines.into_iter().rev().take(n).rev().collect())
+        Ok(tail_lines(&text, n))
     }
+
+    /// 线内会话列表（BAR-163 工单⑥ B）：[(文件名, 字节数)]，NNNN 升序；
+    /// 线不存在 = Err（404 语义归路由层）
+    pub fn list_sessions(&self, line: &str) -> Result<Vec<(String, u64)>, String> {
+        if !session::valid_line_name(line) {
+            return Err(format!("线名非法: {line:?}"));
+        }
+        let dir = session::line_dir(&self.session_root, line);
+        let host = StdHost::new(Path::new(&dir).to_path_buf());
+        let mut out = Vec::new();
+        for name in host.list_files(&dir)? {
+            if is_session_file(&name) {
+                let bytes = host
+                    .read_file(&format!("{dir}/{name}"))
+                    .map(|t| t.len() as u64)
+                    .unwrap_or(0);
+                out.push((name, bytes));
+            }
+        }
+        if out.is_empty() && !Path::new(&dir).is_dir() {
+            return Err(format!("线 {line} 不存在"));
+        }
+        out.sort();
+        Ok(out)
+    }
+
+    /// 点名会话文件的尾部 n 行（会话池看内容面）
+    pub fn tail_session(&self, line: &str, name: &str, n: usize) -> Result<Vec<String>, String> {
+        if !session::valid_line_name(line) {
+            return Err(format!("线名非法: {line:?}"));
+        }
+        if !is_session_file(name) {
+            return Err(format!("会话文件名非法: {name:?}（只认 NNNN-*.jsonl）"));
+        }
+        let dir = session::line_dir(&self.session_root, line);
+        let host = StdHost::new(Path::new(&dir).to_path_buf());
+        let text = host
+            .read_file(&format!("{dir}/{name}"))
+            .map_err(|_| format!("会话 {line}/{name} 不存在"))?;
+        Ok(tail_lines(&text, n))
+    }
+
+    /// 信箱信件列表（README.md 是规范不是信，除外）
+    pub fn list_letters(&self) -> Result<Vec<(String, u64)>, String> {
+        let dir = format!("{}/{}", self.session_root, session::MAILBOX_DIR);
+        let host = StdHost::new(Path::new(&dir).to_path_buf());
+        let mut out = Vec::new();
+        for name in host.list_files(&dir)? {
+            if valid_letter_name(&name) {
+                let bytes = host
+                    .read_file(&format!("{dir}/{name}"))
+                    .map(|t| t.len() as u64)
+                    .unwrap_or(0);
+                out.push((name, bytes));
+            }
+        }
+        out.sort();
+        Ok(out)
+    }
+
+    /// 信件正文
+    pub fn letter(&self, name: &str) -> Result<String, String> {
+        if !valid_letter_name(name) {
+            return Err(format!("信件名非法: {name:?}（只认 ASCII *.md）"));
+        }
+        let dir = format!("{}/{}", self.session_root, session::MAILBOX_DIR);
+        let host = StdHost::new(Path::new(&dir).to_path_buf());
+        host.read_file(&format!("{dir}/{name}"))
+            .map_err(|_| format!("信件 {name} 不存在"))
+    }
+}
+
+/// 尾部 n 非空行
+fn tail_lines(text: &str, n: usize) -> Vec<String> {
+    let lines: Vec<String> = text
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(str::to_string)
+        .collect();
+    lines.into_iter().rev().take(n).rev().collect()
+}
+
+/// 会话文件名闸（路径组件即权限：NNNN-*.jsonl，禁分隔符禁穿越）
+fn is_session_file(name: &str) -> bool {
+    let Some(stem) = name.strip_suffix(".jsonl") else {
+        return false;
+    };
+    let Some((num, rest)) = stem.split_once('-') else {
+        return false;
+    };
+    num.len() == 4
+        && num.bytes().all(|b| b.is_ascii_digit())
+        && !rest.is_empty()
+        && !rest.bytes().any(|b| b == b'/' || b == b'\\')
+}
+
+/// 信件文件名闸（ASCII *.md，禁分隔符；README.md 是规范不是信）
+fn valid_letter_name(name: &str) -> bool {
+    name != "README.md"
+        && name.len() <= 128
+        && name.ends_with(".md")
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
 }
 
 /// 系统提示：给模型的角色与工具纪律（写信任务靠它知道信箱规范去

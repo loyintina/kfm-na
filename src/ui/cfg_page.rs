@@ -102,6 +102,22 @@ pub struct UpperRow {
     pub is_dropdown: bool,
 }
 
+/// 查看器跳框（BAR-163 会话池一期：点条目看内容——会话渲染文本/
+/// 信件 markdown 直读）。与 comp modal 同层级（modal 盖配置页最上层
+/// 一档，不引入新层级）；标题 + 纯文本内容两维
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ViewerView {
+    pub title: String,
+    pub content: String,
+}
+
+/// 查看器涂装快照（CfgPageSnap 同款载体）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ViewerSnap {
+    pub title: String,
+    pub content: String,
+}
+
 /// 涂装/判卷快照（D9：gate 值守倒帧与前台帧同一份读数）
 #[derive(Debug, Clone)]
 pub struct CfgPageSnap {
@@ -120,6 +136,9 @@ pub struct CfgPageSnap {
     pub tab: usize,
     /// 开着的跳框 = COMPONENTS 下标（九修 §六 跳框条款；None = 无模态）
     pub modal: Option<usize>,
+    /// 开着的查看器跳框（BAR-163 会话池；与 modal 同层级互斥——
+    /// 壳保证不同时开；None = 无查看器）
+    pub viewer: Option<ViewerSnap>,
     pub epoch: u64,
     /// 下池光标行号（十五修 §五：弹簧滑行的瞬时值，涂装选中框吃这维；
     /// 收敛后 == focus as f32）
@@ -251,6 +270,8 @@ pub struct CfgPage {
     upper_scroll: i64,
     tab: usize,
     modal: Option<usize>,
+    /// 查看器跳框（BAR-163 会话池一期；modal 同层级，互斥由壳保证）
+    viewer: Option<ViewerView>,
     epoch: u64,
     /// 下池光标缓动起点（十五修立，BAR-094 改缓动核）：起点位（像素
     /// 域——重定基时 = 当时缓动瞬时值 × 行步进；见 cursor_row 注）
@@ -289,6 +310,7 @@ impl CfgPage {
             upper_scroll: 0,
             tab: 0,
             modal: None,
+            viewer: None,
             epoch: 0,
             cursor_from: 0.0,
             cursor_start_ms: 0,
@@ -381,6 +403,7 @@ impl CfgPage {
         self.pick_move = None;
         self.trig_w = None; // 切页不继承旧页宽度账（同并发账清零律）
         self.modal = None;
+        self.viewer = None; // 同 modal 律：新页不继承旧页的查看器跳框
         self.pan = Some((PanScope::Page, dir, now_ms, old));
         self.epoch += 1;
     }
@@ -423,6 +446,29 @@ impl CfgPage {
     pub fn close_modal(&mut self) {
         if self.modal.is_some() {
             self.modal = None;
+            self.epoch += 1;
+        }
+    }
+
+    /// 开着的查看器（BAR-163 会话池；None = 无查看器跳框）
+    pub fn viewer(&self) -> Option<&ViewerView> {
+        self.viewer.as_ref()
+    }
+
+    /// 开查看器/喂内容（会话池页点条目；取数完成壳再喂真内容——
+    /// 同标题内容变更也 bump 代际，「加载中…」换真文不残留旧像素）
+    pub fn open_viewer(&mut self, title: String, content: String) {
+        let v = ViewerView { title, content };
+        if self.viewer.as_ref() != Some(&v) {
+            self.viewer = Some(v);
+            self.epoch += 1;
+        }
+    }
+
+    /// 收查看器（点框外/关闭钮）；关着再关 = 不空涨代际
+    pub fn close_viewer(&mut self) {
+        if self.viewer.is_some() {
+            self.viewer = None;
             self.epoch += 1;
         }
     }
@@ -788,6 +834,10 @@ impl CfgPage {
             upper_scroll: self.upper_scroll,
             tab: self.tab,
             modal: self.modal,
+            viewer: self.viewer.as_ref().map(|v| ViewerSnap {
+                title: v.title.clone(),
+                content: v.content.clone(),
+            }),
             epoch: self.epoch,
             cursor_row: self.cursor_row(now_ms),
             dropdown_progress: self.dropdown_progress(now_ms),

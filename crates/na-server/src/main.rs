@@ -288,6 +288,44 @@ async fn peek_head(stream: &TcpStream) -> Result<String, String> {
     }
 }
 
+/// /agent 反代上游（na-agentd 本地口；9041 端口对账 2026-09-26 见
+/// na-agentd main.rs 注）。env 可改（考题/多实例）
+fn agent_upstream_addr() -> String {
+    std::env::var("NA_AGENT_UPSTREAM").unwrap_or_else(|_| "127.0.0.1:9041".into())
+}
+
+/// /agent 反代（BAR-163 工单⑥ A）：请求原样转发（剥 /agent 前缀的上游
+/// 路径 + 原 body），上游 Connection: close 响应**整段字节**回传中继——
+/// 状态行/头/体零重组，agentd 的契约就是线上的契约。连接失败/转发
+/// 失败 = 502 诚实报错（httpd::agent_error_body）。读超时 3700s——
+/// /send 是同步跑到 stop 的慢口，反代不许比 CLI 先放弃
+async fn agent_proxy(method: &str, upstream: &str, body: &[u8]) -> Result<Vec<u8>, String> {
+    let addr = agent_upstream_addr();
+    let mut up = tokio::time::timeout(Duration::from_secs(3), TcpStream::connect(addr.as_str()))
+        .await
+        .map_err(|_| format!("连 {addr} 超时"))
+        .and_then(|r| r.map_err(|e| format!("连 {addr} 失败: {e}")))?;
+    let req = format!(
+        "{method} {upstream} HTTP/1.1\r\nHost: {addr}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    up.write_all(req.as_bytes())
+        .await
+        .map_err(|e| format!("写上游失败: {e}"))?;
+    up.write_all(body)
+        .await
+        .map_err(|e| format!("写上游失败: {e}"))?;
+    let mut raw = Vec::new();
+    tokio::time::timeout(Duration::from_secs(3700), up.read_to_end(&mut raw))
+        .await
+        .map_err(|_| "读上游超时（3700s 封顶）".to_string())?
+        .map_err(|e| format!("读上游失败: {e}"))?;
+    if raw.is_empty() {
+        return Err("上游空响应".into());
+    }
+    Ok(raw)
+}
+
 /// 平面 HTTP：读体 → 路由 → 响应
 async fn http_handle(
     mut stream: TcpStream,
@@ -304,6 +342,12 @@ async fn http_handle(
     let body = String::from_utf8_lossy(&raw[head_len..]).into_owned();
 
     let resp = match httpd::route(&method, &path) {
+        httpd::Route::Agent { upstream } => {
+            match agent_proxy(&method, &upstream, body.as_bytes()).await {
+                Ok(raw) => raw,
+                Err(e) => httpd::respond(502, "Bad Gateway", &httpd::agent_error_body(&e)),
+            }
+        }
         httpd::Route::Report => match httpd::append_report(&body) {
             Ok(()) => httpd::respond(200, "OK", "{\"ok\":true}"),
             Err(e) => httpd::respond(

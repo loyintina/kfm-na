@@ -49,12 +49,34 @@ pub enum Route {
     Report,
     Health,
     Sys,
+    /// /agent 前缀反代（BAR-163，工单⑥ A：手机经既有 9021 隧道直达
+    /// na-agentd，不开新口）——携带剥前缀后的上游路径
+    Agent {
+        upstream: String,
+    },
     NotFound,
+}
+
+/// /agent 反代的上游路径（A 档纯函数）：`/agent/api/agent/...` →
+/// `/api/agent/...`。只放剥完仍以 /api/ 起头的（反代面只许吃 agentd
+/// 的公开 API 面，/agent/ 后面乱写的 = None 落 404）；query 原样携带
+pub fn agent_upstream(path: &str) -> Option<String> {
+    let rest = path.strip_prefix("/agent")?;
+    // "/agent" 裸路径 = 上游根"/" 也放行（agentd 404 自己答）；
+    // 非 /api/ 起头的上游路径不放行（反代不是任意口转发器）
+    if rest.is_empty() {
+        return Some("/".to_string());
+    }
+    rest.starts_with("/api/").then(|| rest.to_string())
 }
 
 /// 路径归一化：/kfmv4 前缀别名折叠（na 客户端现网 POST 的是
 /// /kfmv4/api/na-report——经 kfmv4 时靠前缀路由，直连 na-server 时两边都认）
 pub fn route(method: &str, path: &str) -> Route {
+    // /agent 前缀 = 反代面（方法照传——GET/POST 都可能是 agentd 的面）
+    if let Some(upstream) = agent_upstream(path) {
+        return Route::Agent { upstream };
+    }
     let p = path.strip_prefix("/kfmv4").unwrap_or(path);
     match (method, p) {
         ("POST", "/api/na-report") => Route::Report,
@@ -62,6 +84,16 @@ pub fn route(method: &str, path: &str) -> Route {
         ("GET", "/api/na/sys") => Route::Sys,
         _ => Route::NotFound,
     }
+}
+
+/// 反代失败诚实报错体（A 档纯函数）：502 = 上游 9041 不可达/转发失败，
+/// 不许静默 404 不许空体——手机端卡面要显形「agentd 挂了」不是「没有这条线」
+pub fn agent_error_body(detail: &str) -> String {
+    serde_json::json!({
+        "ok": false,
+        "error": format!("agent 反代失败: {detail}"),
+    })
+    .to_string()
 }
 
 /// na-report：body 原样 append 一行（与 kfmv4 同行为：落盘即收，不解析）

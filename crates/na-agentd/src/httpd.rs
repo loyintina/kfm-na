@@ -17,8 +17,29 @@ pub fn respond(status: u16, reason: &str, body: &str) -> Vec<u8> {
 pub enum Route {
     Health,
     Lines,
-    Send { line: String },
-    Tail { line: String, n: usize },
+    Send {
+        line: String,
+    },
+    Tail {
+        line: String,
+        n: usize,
+    },
+    /// 线内会话列表（BAR-163 工单⑥ B：会话池条目面）
+    Sessions {
+        line: String,
+    },
+    /// 指定会话文件的尾部 n 事件（Tail 只吃最新会话，本面吃点名文件）
+    SessionTail {
+        line: String,
+        name: String,
+        n: usize,
+    },
+    /// 信箱信件列表（信箱 = 特殊路由）
+    Letters,
+    /// 信件正文
+    Letter {
+        name: String,
+    },
     NotFound,
 }
 
@@ -37,6 +58,18 @@ pub fn route(method: &str, path: &str) -> Route {
         ("GET", ["api", "agent", "lines", line, "tail"]) => Route::Tail {
             line: line.to_string(),
             n: parse_n(query),
+        },
+        ("GET", ["api", "agent", "lines", line, "sessions"]) => Route::Sessions {
+            line: line.to_string(),
+        },
+        ("GET", ["api", "agent", "lines", line, "sessions", name, "tail"]) => Route::SessionTail {
+            line: line.to_string(),
+            name: name.to_string(),
+            n: parse_n(query),
+        },
+        ("GET", ["api", "agent", "mailbox", "letters"]) => Route::Letters,
+        ("GET", ["api", "agent", "mailbox", "letters", name]) => Route::Letter {
+            name: name.to_string(),
         },
         _ => Route::NotFound,
     }
