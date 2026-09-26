@@ -234,3 +234,48 @@ fn spec_bar108_屏尺寸取舍_双无则_none() {
     assert_eq!(pick_screen_px(None, (1260, 0)), None);
     assert_eq!(pick_screen_px(None, (0, 2800)), None);
 }
+
+// ---- BAR-163：查看器跳框几何（无预览画板版，会话池）----
+
+#[test]
+fn spec_bar163_viewer_fields_多行展开折行() {
+    use kfm_na::ui::modal::viewer_fields;
+    // 多行正文逐行展开再按卡宽折行；单字段「内容」
+    let f = viewer_fields("用户： hi\nagent： 这是一个很长的回答超过十格", 10);
+    assert_eq!(f.len(), 1);
+    assert_eq!(f[0].label, "内容");
+    assert_eq!(f[0].lines[0], "用户： hi");
+    assert!(f[0].lines.len() >= 3, "长行按 10 格折: {:?}", f[0].lines);
+    // 空正文 = 一行空占位不塌
+    let f = viewer_fields("", 10);
+    assert_eq!(f[0].lines, vec![String::new()]);
+}
+
+#[test]
+fn spec_bar163_viewer_card_rect_去画板公式() {
+    use kfm_na::ui::modal::{
+        MODAL_FIELD_GAP, MODAL_MAX_MARGIN_Y, MODAL_PAD_Y, MODAL_TITLE_H, card_rect, fields_of,
+        viewer_card_rect, viewer_fields, viewer_fields_top,
+    };
+    // 同字段同屏：查看器卡 = comp 卡去掉画板段（MODAL_PREVIEW_H + 相邻
+    // 两个 FIELD_GAP 换成 0）——正好矮 MODAL_PREVIEW_H + FIELD_GAP
+    let comp_fields = fields_of(&COMPONENTS[0], content_cells(SCR_W));
+    let comp_card = card_rect(SCR_W, SCR_H, &comp_fields);
+    let v_fields = viewer_fields("x", content_cells(SCR_W));
+    let v_card = viewer_card_rect(SCR_W, SCR_H, &v_fields);
+    // 宽/x 与 comp 卡同尺（左右 3 格边距同族）
+    assert_eq!(v_card.w, comp_card.w);
+    assert_eq!(v_card.x, comp_card.x);
+    // 字段区顶 = 分隔线下 0.5 格（无画板）
+    let expect_top = v_card.y
+        + i64::from(MODAL_PAD_Y)
+        + i64::from(MODAL_TITLE_H)
+        + i64::from(MODAL_FIELD_GAP)
+        + 1
+        + i64::from(MODAL_FIELD_GAP);
+    assert_eq!(viewer_fields_top(&v_card), expect_top);
+    // 高随内容封顶屏高−8 格（长正文截断不滚动同 v1 取舍）
+    let long = "行\n".repeat(500);
+    let tall = viewer_card_rect(SCR_W, SCR_H, &viewer_fields(&long, content_cells(SCR_W)));
+    assert_eq!(tall.h, SCR_H - MODAL_MAX_MARGIN_Y * 2);
+}

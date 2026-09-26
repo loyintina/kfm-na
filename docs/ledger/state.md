@@ -17,9 +17,10 @@
 > 或信正文。**一期只读**。数据面 = src/sess_pool.rs（svc_health 同款
 > 快照+脏帧）。**编号注**：工单原说 BAR-162，该号被自更新原语线占用，
 > 本线用 BAR-163。
-> **钉**：四组 22 枚全绿（agent_proxy 4 / sess_pool_api 5 /
-> wire_render 6 / sess_pool 7），变异四咬全中（摘 /api/ 闸 / 摘
-> is_session_file 闸 / 摘 usage 聚合 / 摘空态占位，均即红复原绿）。
+> **钉**：四组 26 枚全绿（agent_proxy 4 / sess_pool_api 5 /
+> wire_render 6 / sess_pool 7 / cfg_page viewer 2 / modal 查看器几何 2），
+> 变异五咬全中（摘 /api/ 闸 / 摘 is_session_file 闸 / 摘 usage 聚合 /
+> 摘空态占位 / 切页不清 viewer，均即红复原绿）。
 > aarch64 check 干净。**待上机判卷**：双 daemon 重编重启 + 9021→9041
 > live 一跳 curl 实证 + 热更核 redroid/遥测自验（池页开/路由出真数据/
 > 点条目出内容）。

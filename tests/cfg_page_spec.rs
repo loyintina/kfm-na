@@ -1206,3 +1206,49 @@ fn spec_bar106_带内绘制_放置含带原点() {
         "贴死新代归位"
     );
 }
+
+// ---- BAR-163：viewer 维（会话池查看器跳框，comp modal 同层级互斥）----
+
+#[test]
+fn spec_bar163_viewer_开合与代际() {
+    let mut p = CfgPage::new();
+    assert_eq!(p.viewer(), None);
+    let e0 = p.epoch();
+    p.open_viewer("demo/0001-会话.jsonl".into(), "加载中…".into());
+    assert_eq!(
+        p.viewer().map(|v| (v.title.as_str(), v.content.as_str())),
+        Some(("demo/0001-会话.jsonl", "加载中…"))
+    );
+    assert!(p.epoch() > e0, "开框必须 bump 代际（sig 防鬼影）");
+    // 同参重点不空涨
+    let e1 = p.epoch();
+    p.open_viewer("demo/0001-会话.jsonl".into(), "加载中…".into());
+    assert_eq!(p.epoch(), e1);
+    // 同标题换内容（取回件喂真文）必须 bump——漏 bump = 旧像素鬼影
+    p.open_viewer("demo/0001-会话.jsonl".into(), "用户： hi".into());
+    assert!(p.epoch() > e1);
+    assert_eq!(p.viewer().map(|v| v.content.as_str()), Some("用户： hi"));
+    // 收框；关着再关不空涨
+    let e2 = p.epoch();
+    p.close_viewer();
+    assert_eq!(p.viewer(), None);
+    assert!(p.epoch() > e2);
+    let e3 = p.epoch();
+    p.close_viewer();
+    assert_eq!(p.epoch(), e3);
+}
+
+#[test]
+fn spec_bar163_viewer_切页清零与快照携带() {
+    let mut p = CfgPage::new();
+    p.set_rows(rows());
+    p.open_viewer("信箱/a-b-report.md".into(), "# 信".into());
+    let snap = p.snap(1000);
+    let v = snap.viewer.expect("快照必须携带 viewer 维（涂装直读）");
+    assert_eq!(v.title, "信箱/a-b-report.md");
+    assert_eq!(v.content, "# 信");
+    // 切标签页查看器随 modal 律清零（新页不继承旧页浮层）
+    p.set_tab(2, 1000, pool_stub(), acc());
+    assert_eq!(p.viewer(), None);
+    assert!(p.snap(1000).viewer.is_none());
+}
