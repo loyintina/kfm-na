@@ -149,11 +149,19 @@ const VSYNC_WATCHDOG_MS: u64 = 32;
 /// - **未挂表 = 预算节流**（旧路保留）：距上帧 ≥帧预算产一帧，壳喂真实
 ///   刷新周期后跟屏走（BAR-077）
 pub fn fx_frame_due(now_ms: u64) -> bool {
+    // 第六路活性源（BAR-165，2026-09-26）：文件树页内动画（抽屉展开/收起、
+    // 三角回转、光标框移动）。面板缝只覆盖「页在滑动」，页停住而内容在动
+    // 时若不入表 = 动画零帧（tests/fx_spring_spec.rs 那道变异题的同款坑）
+    let ft_anim = crate::ui::filetree::filetree_handle().is_some_and(|h| {
+        let st = h.lock().unwrap();
+        crate::ui::filetree::anim_active(&st, now_ms)
+    });
     let active = crate::ui::seam::ai_panel_offset_y_active()
         || crate::ui::seam::chrome_ime_inset_active()
         || crate::ui::seam::config_panel_offset_x_active()
         || crate::ui::seam::filetree_panel_offset_x_active()
-        || crate::ui::seam::parser_panel_offset_x_active();
+        || crate::ui::seam::parser_panel_offset_x_active()
+        || ft_anim;
     if !active {
         LAST_FRAME_MS.store(0, Ordering::Relaxed);
         return false;

@@ -455,6 +455,17 @@ impl CfgPage {
         self.viewer.as_ref()
     }
 
+    /// 查看器快照（页面无关读取口）：文件树页开的只读预览也走这一个查看器
+    /// （状态住配置页，本册不复制第二份——互斥语义同「不同时开」的约定）
+    pub fn viewer_snap_global() -> Option<ViewerSnap> {
+        let p = cfg_page_handle()?;
+        let g = p.lock().unwrap();
+        g.viewer().map(|v| ViewerSnap {
+            title: v.title.clone(),
+            content: v.content.clone(),
+        })
+    }
+
     /// 开查看器/喂内容（会话池页点条目；取数完成壳再喂真内容——
     /// 同标题内容变更也 bump 代际，「加载中…」换真文不残留旧像素）
     pub fn open_viewer(&mut self, title: String, content: String) {

@@ -12,10 +12,14 @@
 //!   绑口变本机 TCP 监听器+反向开流，撞口/僵尸/释放三件套消失）
 //! - NA_QUIC_REV_TCP    反连本机桥前（缺省 127.0.0.1:9022，只准回环）
 //! - NA_QUIC_REV_TARGET 手机侧回联口（缺省 8024 = na sshd）
+//! - NA_FS_ROOTS        文件树数据面允许根（冒号分隔；缺省 = 库本体
+//!   /root/00-Loyintina 存在则用它，否则 $HOME；设成空串 = 零根全 404）。
+//!   语义在 na-protocol::fsapi::roots（每请求现读，运行时可改）
 //!
 //! 分流：peek 请求头不消费——见 Upgrade: websocket 交 wsterm（tokio-tungstenite
 //! 从头自读），否则按平面 HTTP 处理（httpd）。
 
+use na_protocol::fsapi;
 use na_server::httpd;
 use na_server::state::Registry;
 use na_server::wsterm;
@@ -326,6 +330,20 @@ async fn agent_proxy(method: &str, upstream: &str, body: &[u8]) -> Result<Vec<u8
     Ok(raw)
 }
 
+/// fs 面执行闸：na-server 是 `current_thread` 运行时——全部连接（含 WS 终端
+/// 流）共用那一条线程，handler 里直接同步 `std::fs` 会把所有连接一起冻住。
+/// 落 `spawn_blocking` 的阻塞池（运行时外挂线程，current_thread 同样有）、
+/// await 回收结果。fsapi 全是同步纯函数，搬进闭包零成本。
+async fn fs_blocking<T, F>(f: F) -> Result<T, String>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| format!("fs 任务未完成: {e}"))
+}
+
 /// 平面 HTTP：读体 → 路由 → 响应
 async fn http_handle(
     mut stream: TcpStream,
@@ -350,16 +368,24 @@ async fn http_handle(
         }
         httpd::Route::Report => match httpd::append_report(&body) {
             Ok(()) => httpd::respond(200, "OK", "{\"ok\":true}"),
-            Err(e) => httpd::respond(
-                500,
-                "Internal Server Error",
-                &format!("{{\"ok\":false,\"error\":\"{e}\"}}"),
-            ),
+            Err(e) => httpd::respond(500, "Internal Server Error", &httpd::error_body(&e)),
         },
         httpd::Route::Health => httpd::respond(200, "OK", &registry.health_json()),
         httpd::Route::Sys => {
             // collect 永不失败——单路采不到归该路 null 显形
             httpd::respond(200, "OK", &httpd::sys_json(&na_sys::collect("/")))
+        }
+        httpd::Route::FsList { dir } => match fs_blocking(move || fsapi::list_json(&dir)).await {
+            Ok(Ok(body)) => httpd::respond(200, "OK", &body),
+            Ok(Err(e)) => httpd::fs_error_response(&e),
+            Err(e) => httpd::respond(500, "Internal Server Error", &httpd::error_body(&e)),
+        },
+        httpd::Route::FsRead { path, max } => {
+            match fs_blocking(move || fsapi::read_json(&path, max)).await {
+                Ok(Ok(body)) => httpd::respond(200, "OK", &body),
+                Ok(Err(e)) => httpd::fs_error_response(&e),
+                Err(e) => httpd::respond(500, "Internal Server Error", &httpd::error_body(&e)),
+            }
         }
         httpd::Route::NotFound => {
             httpd::respond(404, "Not Found", "{\"ok\":false,\"error\":\"not found\"}")

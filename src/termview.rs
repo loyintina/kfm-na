@@ -360,6 +360,53 @@ pub fn pt_split(pt_off: i32, w: u32) -> (bool, bool) {
     cfg_split(pt_off, w)
 }
 
+/// Demo 页底装修（面板栈五公民，2026-09-26：md 渲染打样页）：整页
+/// CARD_PAGE_BG 深底 + 边框环（配方与解析页同源 paint_page_frame_ring，
+/// 环色 = 召唤即随机 accent 入参）——右缘家符号约定完全相同：
+/// demo_off_x = 面板刚体水平平移（+w=屏外右缘 → 0 靠泊）
+pub fn paint_demo_page_chrome(
+    buf: &mut [u32],
+    buf_w: u32,
+    buf_h: u32,
+    bottom_inset: u32,
+    demo_off_x: i32,
+    accent: crate::ui::accent::AccentPair,
+) {
+    if buf_w == 0 || buf_h == 0 {
+        return;
+    }
+    let mut frame = Frame {
+        buf,
+        w: buf_w,
+        h: buf_h,
+    };
+    // 整页底色 = 面板刚体矩形（全屏）与屏求交后画（X 向平移，左右裁剪）
+    let px0 = demo_off_x.clamp(0, buf_w as i32) as u32;
+    let px1 = (buf_w as i32 + demo_off_x).clamp(0, buf_w as i32) as u32;
+    if px1 > px0 {
+        frame.fill_rect(px0, 0, px1 - px0, buf_h, crate::ui::accent::CARD_PAGE_BG);
+    }
+    paint_page_frame_ring(
+        &mut frame,
+        buf_w,
+        buf_h,
+        bottom_inset,
+        demo_off_x,
+        0,
+        crate::ui::accent::CARD_PAGE_BG,
+        accent.c1,
+        accent.c2,
+        true,
+    );
+}
+
+/// Demo 页分层判定（右缘家，与 cfg_split 同构同尺）：
+/// - 网格+快捷键行（下层可见）：demo_off != 0；
+/// - Demo 页可见：demo_off < w（off ∈ [0, +w]，=w 即完全屏外右缘）
+pub fn demo_split(demo_off: i32, w: u32) -> (bool, bool) {
+    cfg_split(demo_off, w)
+}
+
 /// 终端卡片壳底装修（2026-09-11 用户拍板「终端也包全屏卡片壳」）：
 /// 与三面板同配方 paint_page_frame_ring，无色相碳灰环 + 近黑内芯底
 /// （卡片感 = 壳内略亮于壳外纯黑）。无平移无动画——基座页恒靠泊；
@@ -397,6 +444,13 @@ pub fn paint_term_card_chrome(buf: &mut [u32], buf_w: u32, buf_h: u32, bottom_in
     // 设置钮（2026-09-12 配置池卡按钮入口）：画进终卡槽——面板靠泊时
     // 本槽整层隐（slot_visibility），「只在裸终端页出现」白拿零新逻辑
     crate::ui::gear::paint(frame.buf, buf_w, buf_h);
+    // 打样 demo 钮（2026-09-26 五公民入口）：齿轮正下方 0.5 格，烧瓶
+    // 像素掩码 + Demo 页 accent 渐变笔触（未登记 presence = FALLBACK
+    // 兜底——host 考题/冷启动首帧不死）
+    let acc_demo = crate::gate::ai_presence_handle()
+        .and_then(|a| a.accent_of(crate::ai_presence::Panel::Demo))
+        .unwrap_or(crate::ui::accent::FALLBACK);
+    crate::ui::demo_icon::paint(frame.buf, buf_w, buf_h, acc_demo);
 }
 
 /// 页面边框环（2026-09-04 装修配方的唯一实体，09-05 平移参数化，
@@ -988,6 +1042,40 @@ fn paint_thin_frame(
             }
             let grad = ring_gradient_rgb(accent.c1, accent.c2, xx, yy, denom);
             frame.blend_px(xx as u32, yy as u32, grad, 255);
+        }
+    }
+}
+
+/// 行内码暗底小块（2026-09-26 md 渲染打样，宪法 §2.5 浅青档的承载
+/// 底）：渐变暗底不透明直出（页尺采样——与代码围栏内芯同一块 135°
+/// 渐变布的暗部），四角 4px 像素切角（沿格对角 45° 阶梯——描边层
+/// 自由细节，不进网格账）。无描边，纯底块
+fn paint_demo_chip(
+    frame: &mut Frame<'_>,
+    x: i64,
+    y: i64,
+    rw: u32,
+    rh: u32,
+    accent: crate::ui::accent::AccentPair,
+    denom: i64,
+) {
+    const CUT: i64 = 4; // 像素切角直角边长
+    let (fw, fh) = (i64::from(frame.w), i64::from(frame.h));
+    for dy in 0..i64::from(rh) {
+        let yy = y + dy;
+        if yy < 0 || yy >= fh {
+            continue;
+        }
+        // 45° 阶梯切角：顶/底 CUT 行内左右各让 (CUT-1-d)px
+        let top_d = dy.min(CUT - 1);
+        let bot_d = (i64::from(rh) - 1 - dy).min(CUT - 1);
+        let inset = (CUT - 1 - top_d.min(bot_d)).max(0);
+        for xx in x + inset..x + i64::from(rw) - inset {
+            if xx < 0 || xx >= fw {
+                continue;
+            }
+            frame.buf[yy as usize * fw as usize + xx as usize] =
+                frame_bg_rgb(accent.c1, accent.c2, xx, yy, denom);
         }
     }
 }
@@ -1751,6 +1839,367 @@ type GlyphCache = std::cell::RefCell<
 /// AI 页一行展示行：(文字色, 该行的已量宽字符)——build_ai_rows 返回值的
 /// 类型别名（clippy type_complexity 要求；inherent 关联类型不稳定，只能放模块级）
 type AiRow<'a> = (u32, Vec<(&'a fontdue::Font, char, f32)>);
+
+// ── 文件树页内容墨的尺与件（BAR-165，2026-09-26）────────────────────
+//
+// 涂装本体 = `TermView::paint_ft_content_impl`。本段只放「涂装/手势/命中
+// 三处都要吃」的尺：`ft_geom`（几何窗）与 `ft_wrap_split`（换行切分）是
+// pub——壳接线必须吃同一份（hit 的 y 基准就是这里的 list_y0，眼手同尺不许
+// 各算一遍）。参数来源：真机截屏 1260×2800 实测（行高 86/118、缩进
+// 0/55/104/147/184、左强调边 6px、底栏 ≈110）+ kfmv4/nz
+// `src/client/plugins/file-tree/index.tsx` 判据稿 §3.1 令牌表。
+
+/// 文件树底栏高（物理 px，截屏实测 ≈110）
+pub const FT_BAR_H: i64 = 110;
+/// 底栏三盒上下留白（栏高 110 − 2×22 = 盒高 66）
+const FT_BOX_PAD_V: i64 = 22;
+/// 底栏三盒圆角半径（规格 R≈20）
+const FT_BOX_R: u32 = 20;
+/// 底栏三盒描边厚（= 页环细缘同尺 3px）
+const FT_BOX_EDGE: i64 = 3;
+/// 底栏三盒宽（规格：眼 125 / 根名 560 / × 130）
+const FT_EYE_W: i64 = 125;
+const FT_ROOT_W: i64 = 560;
+const FT_CLOSE_W: i64 = 130;
+/// 栏底提亮档（「比页面底色略亮」的量：t=18/255 ≈ +7% 亮度）
+const FT_BAR_LIFT: u32 = 18;
+/// 名字与三角盒的间隙（规格给的 4–8 区间取中值 6）
+const FT_NAME_GAP: f32 = 6.0;
+/// 行名字号（= 解析页会话名同档 34，不新造字号）
+const FT_TEXT_PX: f32 = 34.0;
+/// 行名字色（0.85 白，目录/文件同色——原版实测同浅灰白，与解析页标题档同值）
+const FT_TEXT_FG: u32 = 0x00D9_D9D9;
+/// 左强调边宽（截屏实测 2 CSS px × 3.06 = 6 物理 px）
+const FT_ROW_BAR_W: i64 = 6;
+
+/// 文件树页内容几何（涂装/手势/命中唯一尺——三处同吃这一份）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FtGeom {
+    /// 内容左缘（页环细缘内 + 1 格）——缩进从这里起算
+    pub x0: i64,
+    /// 内容右缘（右侧镜像 = 屏宽 − 环右内缘）
+    pub x1: i64,
+    /// 行表窗顶（页环上内缘）
+    pub list_y0: i64,
+    /// 行表窗底 = 底栏顶
+    pub list_y1: i64,
+    /// 底栏顶 / 底（底 = 页环底内缘——BAR-121：内容不许压环底）
+    pub bar_y0: i64,
+    pub bar_y1: i64,
+}
+
+/// 文件树页内容窗（bottom_inset = 键盘 + 输入栏带高）。
+/// **行表窗 = [list_y0, list_y1)**：`list_y1 − list_y0` 就是喂
+/// `FileTreeState::hit` 的 view_h，而 hit 的 y 基准 = list_y0
+/// （壳传 `screen_y − list_y0`）——同一把尺，两处不许各算。
+/// 底栏顶 = 环底内缘 − FT_BAR_H（钉在环内，页环下沿仍压着内容）
+pub fn ft_geom(w: u32, h: u32, bottom_inset: u32) -> FtGeom {
+    let (ox, oy) = crate::ui::tab_bar::content_origin();
+    let x0 = i64::from(ox);
+    let x1 = i64::from(w) - i64::from(AI_PAGE_FRAME_MARGIN + AI_PAGE_FRAME_W + CELL_W);
+    let list_y0 = i64::from(oy);
+    let bar_y1 = crate::ui::parser_page::visible_bottom(h, bottom_inset).max(list_y0);
+    let bar_y0 = (bar_y1 - FT_BAR_H).max(list_y0);
+    FtGeom {
+        x0,
+        x1,
+        list_y0,
+        list_y1: bar_y0,
+        bar_y0,
+        bar_y1,
+    }
+}
+
+/// 底栏三盒（眼/根名/×）命中键
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FtBarHit {
+    Eye,
+    Root,
+    Close,
+}
+
+/// 底栏命中（BAR-165）：几何与涂装**同源一条**（眼手同尺——三盒的
+/// 125/560/130、8px 间隙、垂直留白都只在这里与涂装里各写一次，改一处
+/// 必改两处，故挤在同一个文件里）。页靠泊（偏移 0）时壳才用这份尺。
+pub fn ft_bar_hit(g: &FtGeom, x: i64, y: i64) -> Option<FtBarHit> {
+    let bar_h = g.bar_y1 - g.bar_y0;
+    if bar_h <= 0 || y < g.bar_y0 || y >= g.bar_y1 {
+        return None;
+    }
+    let box_h = (bar_h - 2 * FT_BOX_PAD_V).clamp(12, bar_h);
+    let by0 = g.bar_y0 + (bar_h - box_h) / 2;
+    if y < by0 || y >= by0 + box_h {
+        return None;
+    }
+    if x >= g.x0 && x < g.x0 + FT_EYE_W {
+        return Some(FtBarHit::Eye);
+    }
+    let close_x = (g.x1 - FT_CLOSE_W).max(g.x0);
+    if x >= close_x && x < close_x + FT_CLOSE_W {
+        return Some(FtBarHit::Close);
+    }
+    let mid_x0 = g.x0 + FT_EYE_W + 8;
+    let mid_x1 = (g.x1 - FT_CLOSE_W - 8).max(mid_x0 + 1);
+    let span = mid_x1 - mid_x0;
+    let root_w = FT_ROOT_W.min(span);
+    let root_x = mid_x0 + (span - root_w) / 2;
+    if x >= root_x && x < root_x + root_w {
+        return Some(FtBarHit::Root);
+    }
+    None
+}
+
+/// 行带取色（同深度同色）：深度偶取 c1、奇取 c2——原版「同深度行共享一条
+/// 色带」的分层感，NA 由 accent 双色承载（宪法 §2.2：页面色彩只从这对
+/// 色出，不引字面色）
+pub fn ft_band_rgb(depth: usize, accent: crate::ui::accent::AccentPair) -> u32 {
+    if depth.is_multiple_of(2) {
+        accent.c1
+    } else {
+        accent.c2
+    }
+}
+
+/// 换行贪心切分（纯函数 A 档）：给首行可用宽，返回**首行字符数**——装不
+/// 下即切；首字就超宽时独占首行（≥1，病态窄行不死循环，与
+/// `wrap_starts` 的「超宽单字不吞字」同律）。表项 == 字符 1:1
+pub fn ft_wrap_split(adv: &[f32], avail: f32) -> usize {
+    let mut acc = 0.0f32;
+    for (i, a) in adv.iter().enumerate() {
+        if i > 0 && acc + a > avail {
+            return i;
+        }
+        acc += a;
+    }
+    adv.len()
+}
+
+/// RRGGBBAA（`ui::filetree` 色常量口径）→ 本文件内部 AARRGGBB 的 RGB 三通道。
+/// **唯一取色口**：两套解包直搬必翻车（`0x00D4FFFF` 按 AARRGGBB 解 = 浅青
+/// 且 α=0，光标线整条不可见）
+fn ft_rgb(c: u32) -> u32 {
+    let (r, g, b, _a) = crate::ui::filetree::rrggbbaa(c);
+    (u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b)
+}
+
+/// f32 α（0..1）→ 0..255 档
+fn ft_a255(a: f32) -> u32 {
+    (a.clamp(0.0, 1.0) * 255.0).round() as u32
+}
+
+/// 点到线段距离（底栏 × 图标两笔交叉用）
+fn ft_seg_dist(px: f64, py: f64, x0: f64, y0: f64, x1: f64, y1: f64) -> f64 {
+    let (dx, dy) = (x1 - x0, y1 - y0);
+    let len2 = dx * dx + dy * dy;
+    let t = if len2 <= 0.0 {
+        0.0
+    } else {
+        (((px - x0) * dx + (py - y0) * dy) / len2).clamp(0.0, 1.0)
+    };
+    let (qx, qy) = (x0 + t * dx, y0 + t * dy);
+    ((px - qx).powi(2) + (py - qy).powi(2)).sqrt()
+}
+
+/// 同深度连续块跨度（内容坐标 → (块顶, 块高)）：左强调边「同深度连续行块
+/// 共一条」的渐变尺 + 圆头端点。row_top = 本行内容顶（调用方已在扫表，
+/// 免得再算一遍前缀和——大树上逐行前缀和是 O(n²)）
+fn ft_block_span(rows: &[crate::ui::filetree::Row], idx: usize, row_top: i64) -> (i64, i64) {
+    let d = rows[idx].depth;
+    let mut top = row_top;
+    let mut j = idx;
+    while j > 0 && rows[j - 1].depth == d {
+        j -= 1;
+        top -= crate::ui::filetree::row_h(rows[j].wrap);
+    }
+    let mut hgt = crate::ui::filetree::row_h(rows[idx].wrap);
+    let mut k = idx + 1;
+    while k < rows.len() && rows[k].depth == d {
+        hgt += crate::ui::filetree::row_h(rows[k].wrap);
+        k += 1;
+    }
+    (top, hgt)
+}
+
+/// 底栏圆角描边盒（三钮同件）：外剪影内、内剪影外的环带按覆盖率上色——
+/// solid = 纯色（根名盒 teal 系），None = accent 135° 渐变（眼/× 盒）
+#[allow(clippy::too_many_arguments)]
+fn paint_ft_round_box(
+    frame: &mut Frame<'_>,
+    x: i64,
+    y: i64,
+    w: u32,
+    h: u32,
+    r: u32,
+    edge: i64,
+    accent: crate::ui::accent::AccentPair,
+    solid: Option<u32>,
+) {
+    if w < 2 * edge as u32 + 2 || h < 2 * edge as u32 + 2 {
+        return;
+    }
+    let (iw, ih) = (w - 2 * edge as u32, h - 2 * edge as u32);
+    let ir = (r as i64 - edge).max(0) as u32;
+    let denom = (i64::from(w - 1) + i64::from(h - 1)).max(1);
+    for py in 0..h as i64 {
+        let ay = y + py;
+        if ay < 0 || ay >= i64::from(frame.h) {
+            continue;
+        }
+        for px in 0..w as i64 {
+            let ax = x + px;
+            if ax < 0 || ax >= i64::from(frame.w) {
+                continue;
+            }
+            let outer = rr_cover(px as u32, py as u32, w, h, r);
+            if outer == 0 {
+                continue;
+            }
+            let inner = if px >= edge && py >= edge {
+                rr_cover((px - edge) as u32, (py - edge) as u32, iw, ih, ir)
+            } else {
+                0
+            };
+            let cov = outer.saturating_sub(inner);
+            if cov == 0 {
+                continue;
+            }
+            let c = match solid {
+                Some(c) => c,
+                None => ring_gradient_rgb(accent.c1, accent.c2, px, py, denom),
+            };
+            frame.blend_px(ax as u32, ay as u32, c, cov);
+        }
+    }
+}
+
+/// 底栏眼图标（手绘：抛物线杏仁轮廓 + 实心瞳孔；accent 135° 渐变笔触）
+/// ——「看」的语义，文件树页底栏左钮
+fn paint_ft_eye(
+    frame: &mut Frame<'_>,
+    x: i64,
+    y: i64,
+    w: i64,
+    h: i64,
+    accent: crate::ui::accent::AccentPair,
+) {
+    let cx = x as f64 + w as f64 / 2.0;
+    let cy = y as f64 + h as f64 / 2.0;
+    let hw = (w as f64 / 2.0 - 24.0).max(14.0);
+    let hh = (hw * 0.5).min(h as f64 / 2.0 - 15.0).max(6.0);
+    let th = 2.6f64; // 笔触竖直厚度
+    let pr = (hh * 0.5).max(4.0); // 瞳孔半径
+    let denom = (w - 1 + h - 1).max(1);
+    for py in y.max(0)..(y + h).min(i64::from(frame.h)) {
+        for px in x.max(0)..(x + w).min(i64::from(frame.w)) {
+            let fx = px as f64 + 0.5 - cx;
+            let fy = py as f64 + 0.5 - cy;
+            let t = fx / hw;
+            let mut ink = false;
+            if t.abs() <= 1.0 {
+                let eh = hh * (1.0 - t * t);
+                ink = (fy + eh).abs() < th || (fy - eh).abs() < th;
+            }
+            if !ink && (fx * fx + fy * fy).sqrt() < pr {
+                ink = true;
+            }
+            if ink {
+                let c = ring_gradient_rgb(accent.c1, accent.c2, px - x, py - y, denom);
+                frame.blend_px(px as u32, py as u32, c, 255);
+            }
+        }
+    }
+}
+
+/// 底栏 × 图标（手绘：两笔对角交叉；accent 135° 渐变笔触）
+fn paint_ft_cross(
+    frame: &mut Frame<'_>,
+    x: i64,
+    y: i64,
+    w: i64,
+    h: i64,
+    accent: crate::ui::accent::AccentPair,
+) {
+    let cx = x as f64 + w as f64 / 2.0;
+    let cy = y as f64 + h as f64 / 2.0;
+    let arm = (h as f64 / 2.0 - 20.0).max(8.0);
+    let th = 1.9f64;
+    let denom = (w - 1 + h - 1).max(1);
+    for py in y.max(0)..(y + h).min(i64::from(frame.h)) {
+        for px in x.max(0)..(x + w).min(i64::from(frame.w)) {
+            let (fx, fy) = (px as f64 + 0.5, py as f64 + 0.5);
+            let d = ft_seg_dist(fx, fy, cx - arm, cy - arm, cx + arm, cy + arm).min(ft_seg_dist(
+                fx,
+                fy,
+                cx + arm,
+                cy - arm,
+                cx - arm,
+                cy + arm,
+            ));
+            if d < th {
+                let c = ring_gradient_rgb(accent.c1, accent.c2, px - x, py - y, denom);
+                frame.blend_px(px as u32, py as u32, c, 255);
+            }
+        }
+    }
+}
+
+/// 一行行带（纯色平涂 + 块首/尾圆角）：中段整行 `fill_rect`（页环内芯是
+/// 纯色 CARD_PAGE_BG，平涂色 = 裸带色按 α 与该底色 blend 出的成品色），
+/// 两端角带逐像素按 rr_cover 覆盖率压在裸带色上（与中段同源不出缝）。
+/// c0/c1 = 该行可见的列表相对纵段（行表窗 ∩ 抽屉顶缘窗）
+#[allow(clippy::too_many_arguments)]
+fn paint_ft_band_row(
+    frame: &mut Frame<'_>,
+    x0: i64,
+    bw: u32,
+    page_off: i64,
+    yrel: i64,
+    ch: i64,
+    r: i64,
+    first: bool,
+    last: bool,
+    band_rgb: u32,
+    band_a: u32,
+    flat: u32,
+    c0: i64,
+    c1: i64,
+) {
+    let mid0 = if first { yrel + r } else { yrel };
+    let mid1 = if last { yrel + ch - r } else { yrel + ch };
+    let (m0, m1) = (mid0.max(c0), mid1.min(c1));
+    if m1 > m0 {
+        frame.fill_rect(
+            x0 as u32,
+            (page_off + m0) as u32,
+            bw,
+            (m1 - m0) as u32,
+            flat,
+        );
+    }
+    if r <= 0 {
+        return;
+    }
+    let cap = |frame: &mut Frame<'_>, ya: i64, yb: i64, top_cap: bool| {
+        let (a, b) = (ya.max(c0), yb.min(c1));
+        for y in a..b {
+            let ly = y - yrel;
+            let py = if top_cap { ly } else { r + (ly - (ch - r)) };
+            let ay = (page_off + y) as u32;
+            for px in 0..bw {
+                let cov = rr_cover(px, py as u32, bw, (2 * r) as u32, r as u32);
+                if cov > 0 {
+                    frame.blend_px(x0 as u32 + px, ay, band_rgb, band_a * cov / 255);
+                }
+            }
+        }
+    };
+    if first {
+        cap(frame, yrel, mid0, true);
+    }
+    if last {
+        cap(frame, mid1, yrel + ch, false);
+    }
+}
 
 /// v4 推流画布（2026-09-25 tmux -C 控制模式推流，用户拍板「直接换真
 /// 方案」）：Term + 常驻 Processor 对。与快照 Term 的唯一差别 =
@@ -4202,6 +4651,333 @@ impl TermView {
         }
     }
 
+    /// Demo 页内容墨（2026-09-26 五公民：md 渲染打样）：几何吃
+    /// ui/demo_page::layout 单源（行高/缩进/块序/半格网咬合全在那边钉死，
+    /// 本侧只读不算——命中/涂装眼手同尺）；demo_off_x 语义同
+    /// paint_parser_content_impl（GLES 烘焙恒 0，softbuffer/值守传真值）。
+    /// 涂装条款 = 宪法 2026-09-26 两修：§三 md H1-H3 ┌ 左上直角框
+    /// （accent 135° 渐变，框内局部尺——原点框左上、分母框对角线，
+    /// 与解析页会话框 2026-09-19 修宪同规）+ §2.5 淡彩强调档（粗体 =
+    /// 淡粉双绘，行内码 = 浅青 + 渐变暗底小块——页尺暗部采样，与代码
+    /// 围栏内芯同一块布）
+    pub(crate) fn paint_demo_content_impl(
+        &self,
+        buf: &mut [u32],
+        w: u32,
+        h: u32,
+        demo_off_x: i32,
+        accent: crate::ui::accent::AccentPair,
+    ) {
+        use crate::ui::demo_page as dp;
+        if w == 0 || h == 0 {
+            return;
+        }
+        let mut frame = Frame { buf, w, h };
+        let off = i64::from(demo_off_x);
+        let title_fg = 0x00D9_D9D9; // 0.85 白（§2.3 标题档）
+        let body_fg = 0x00BF_BFBF; // 0.75 白（正文档）
+        let meta_fg = 0x0080_8080; // 0.5 白（次级档）
+        const PASTEL_PINK: u32 = 0x00F0_A6C0; // §2.5 淡粉（粗体/H4）
+        const PASTEL_CYAN: u32 = 0x009F_D8D8; // §2.5 浅青（行内码）
+        // 页渐变尺（代码围栏/行内码小块/分隔线的暗底与描边采样坐标系）：
+        // 原点 (0,0)、分母页对角线——与页环同一把 135° 尺
+        let page_denom = ((w - 1) + (h - 1)).max(1) as i64;
+        let no_clip = (0, i64::from(h));
+        let (fw, fh) = (i64::from(w), i64::from(h));
+        let lay = dp::layout(w);
+        let ox = i64::from(lay.ox) + off;
+        let content_r = ox + i64::from(lay.cw); // 内容右缘（文字右裁剪，未钳屏）
+        let mut h2_seen = 0u32;
+        for b in &lay.blocks {
+            let by = i64::from(b.y);
+            let bh = i64::from(b.h);
+            match b.kind {
+                dp::BlockKind::H1 | dp::BlockKind::H2 | dp::BlockKind::H3 => {
+                    // ┌ 左上直角框：左 3px 竖带全块高 + 顶 3px 横带全内容宽
+                    // （无右无底——「章节从此展开」，非容器）；框内局部渐变尺
+                    let denom = (i64::from(lay.cw) - 1).max(0) + (bh - 1).max(0);
+                    let t = i64::from(dp::HEAD_FRAME_T);
+                    for ay in by..by + bh {
+                        for ax in ox..ox + t {
+                            if ax < 0 || ax >= fw || ay < 0 || ay >= fh {
+                                continue;
+                            }
+                            let c =
+                                ring_gradient_rgb(accent.c1, accent.c2, ax - ox, ay - by, denom);
+                            frame.blend_px(ax as u32, ay as u32, c, 255);
+                        }
+                    }
+                    for ay in by..by + t {
+                        for ax in ox..content_r {
+                            if ax < 0 || ax >= fw || ay < 0 || ay >= fh {
+                                continue;
+                            }
+                            let c =
+                                ring_gradient_rgb(accent.c1, accent.c2, ax - ox, ay - by, denom);
+                            frame.blend_px(ax as u32, ay as u32, c, 255);
+                        }
+                    }
+                    let text = match b.kind {
+                        dp::BlockKind::H1 => dp::H1_TEXT,
+                        dp::BlockKind::H2 => {
+                            h2_seen += 1;
+                            if h2_seen == 1 {
+                                dp::H2_SECTION
+                            } else {
+                                dp::H2_TEXT
+                            }
+                        }
+                        _ => dp::H3_TEXT,
+                    };
+                    // 文字距框缘上 0.5 格（HU 上垫）、左 1 格（HEAD_TEXT_INSET）
+                    self.demo_text_line(
+                        &mut frame,
+                        text,
+                        ox + i64::from(dp::HEAD_TEXT_INSET),
+                        content_r,
+                        by + i64::from(dp::HU),
+                        b.line_h,
+                        b.px,
+                        title_fg,
+                        0.0,
+                    );
+                }
+                dp::BlockKind::H4 | dp::BlockKind::H5 | dp::BlockKind::H6 => {
+                    // 不挂框——正文字号，文字形态分档（宪法 §三 md 条款）
+                    let (fg, double) = match b.kind {
+                        dp::BlockKind::H4 => (PASTEL_PINK, true), // 淡粉强调 + 双绘加粗
+                        dp::BlockKind::H5 => (body_fg, false),
+                        _ => (meta_fg, false),
+                    };
+                    let text = match b.kind {
+                        dp::BlockKind::H4 => dp::H4_TEXT,
+                        dp::BlockKind::H5 => dp::H5_TEXT,
+                        _ => dp::H6_TEXT,
+                    };
+                    self.demo_text_line(
+                        &mut frame, text, ox, content_r, by, b.line_h, b.px, fg, 0.0,
+                    );
+                    if double {
+                        self.demo_text_line(
+                            &mut frame, text, ox, content_r, by, b.line_h, b.px, fg, 1.0,
+                        );
+                    }
+                }
+                dp::BlockKind::Body => {
+                    // 行内段排：量宽累进 pen_x；粗体淡粉双绘；行内码 =
+                    // 浅青文字 + 渐变暗底小块（40px 高 4px 像素切角——
+                    // 描边层自由细节，不进网格账）
+                    let mut pen = ox;
+                    for (style, text) in dp::BODY_SEGS {
+                        let tw = i64::from(self.text_width(text, b.px));
+                        match style {
+                            dp::SegStyle::Normal => {
+                                self.demo_text_line(
+                                    &mut frame, text, pen, content_r, by, b.line_h, b.px, body_fg,
+                                    0.0,
+                                );
+                                pen += tw;
+                            }
+                            dp::SegStyle::Bold => {
+                                self.demo_text_line(
+                                    &mut frame,
+                                    text,
+                                    pen,
+                                    content_r,
+                                    by,
+                                    b.line_h,
+                                    b.px,
+                                    PASTEL_PINK,
+                                    0.0,
+                                );
+                                self.demo_text_line(
+                                    &mut frame,
+                                    text,
+                                    pen,
+                                    content_r,
+                                    by,
+                                    b.line_h,
+                                    b.px,
+                                    PASTEL_PINK,
+                                    1.0,
+                                );
+                                pen += tw + 1;
+                            }
+                            dp::SegStyle::Code => {
+                                let chip_w = (tw + 12) as u32; // 文字左右各 6px 内垫
+                                let chip_h = 40.min(b.line_h);
+                                let chip_y = by + (i64::from(b.line_h) - i64::from(chip_h)) / 2;
+                                paint_demo_chip(
+                                    &mut frame, pen, chip_y, chip_w, chip_h, accent, page_denom,
+                                );
+                                self.demo_text_line(
+                                    &mut frame,
+                                    text,
+                                    pen + 6,
+                                    content_r,
+                                    by,
+                                    b.line_h,
+                                    b.px,
+                                    PASTEL_CYAN,
+                                    0.0,
+                                );
+                                pen += i64::from(chip_w);
+                            }
+                        }
+                    }
+                }
+                dp::BlockKind::Code => {
+                    // 代码围栏 = 展示型值框配方（宪法 §三：四边均匀细框 +
+                    // 渐变暗底内芯——paint_thin_frame 共享件，页尺采样）
+                    paint_thin_frame(&mut frame, ox, by, lay.cw, b.h, accent, page_denom, no_clip);
+                    for (i, line) in dp::CODE_LINES.iter().enumerate() {
+                        self.demo_text_line(
+                            &mut frame,
+                            line,
+                            ox + i64::from(CELL_W),
+                            content_r,
+                            by + i64::from(dp::HU) + i as i64 * i64::from(b.line_h),
+                            b.line_h,
+                            b.px,
+                            body_fg,
+                            0.0,
+                        );
+                    }
+                }
+                dp::BlockKind::Quote => {
+                    // 左竖线（2px，块内纵向渐变尺）+ 缩进 1 格白 0.5
+                    for ay in by..by + bh {
+                        if ay < 0 || ay >= fh {
+                            continue;
+                        }
+                        for ax in ox..ox + i64::from(dp::QUOTE_BAR_W) {
+                            if ax < 0 || ax >= fw {
+                                continue;
+                            }
+                            let c = ring_gradient_rgb(accent.c1, accent.c2, 0, ay - by, bh - 1);
+                            frame.blend_px(ax as u32, ay as u32, c, 255);
+                        }
+                    }
+                    for (i, line) in dp::QUOTE_LINES.iter().enumerate() {
+                        self.demo_text_line(
+                            &mut frame,
+                            line,
+                            ox + i64::from(dp::INDENT_W),
+                            content_r,
+                            by + i as i64 * i64::from(b.line_h),
+                            b.line_h,
+                            b.px,
+                            meta_fg,
+                            0.0,
+                        );
+                    }
+                }
+                dp::BlockKind::List => {
+                    // ▪ = 程序化 8px accent 方块（不赌字体字形——视觉即
+                    // 条款的 ▪；块内纵向渐变尺，与引用竖线同源）+ 文字
+                    // 内缩 2 格白 0.75
+                    let mark = i64::from(dp::LIST_MARK_PX);
+                    for (i, item) in dp::LIST_ITEMS.iter().enumerate() {
+                        let line_top = by + i as i64 * i64::from(b.line_h);
+                        let my = line_top + (i64::from(b.line_h) - mark) / 2;
+                        for ay in my..my + mark {
+                            if ay < 0 || ay >= fh {
+                                continue;
+                            }
+                            for ax in
+                                ox + i64::from(dp::INDENT_W)..ox + i64::from(dp::INDENT_W) + mark
+                            {
+                                if ax < 0 || ax >= fw {
+                                    continue;
+                                }
+                                let c = ring_gradient_rgb(accent.c1, accent.c2, 0, ay - by, bh - 1);
+                                frame.blend_px(ax as u32, ay as u32, c, 255);
+                            }
+                        }
+                        self.demo_text_line(
+                            &mut frame,
+                            item,
+                            ox + i64::from(dp::LIST_TEXT_INSET),
+                            content_r,
+                            line_top,
+                            b.line_h,
+                            b.px,
+                            body_fg,
+                            0.0,
+                        );
+                    }
+                }
+                dp::BlockKind::Hr => {
+                    // 1px 横向 accent 渐变线（α160 半透明），块竖向居中
+                    let ay = by + i64::from(dp::HU);
+                    if ay >= 0 && ay < fh {
+                        for ax in ox..content_r {
+                            if ax < 0 || ax >= fw {
+                                continue;
+                            }
+                            let c = ring_gradient_rgb(
+                                accent.c1,
+                                accent.c2,
+                                ax - ox,
+                                0,
+                                i64::from(lay.cw) - 1,
+                            );
+                            frame.blend_px(ax as u32, ay as u32, c, 160);
+                        }
+                    }
+                }
+                dp::BlockKind::Sign => {
+                    self.demo_text_line(
+                        &mut frame,
+                        dp::SIGN_TEXT,
+                        ox,
+                        content_r,
+                        by,
+                        b.line_h,
+                        b.px,
+                        meta_fg,
+                        0.0,
+                    );
+                }
+            }
+        }
+    }
+
+    /// Demo 页一行文字的带钳涂装：cx/clip_r 由 off 平移可逾屏右缘——
+    /// draw_items_left_inset 的 clip_right 不查帧界（blend_px 调用方
+    /// 保证界内），调用前先钳屏宽；inset 给双绘加粗的第二笔（+1px）
+    #[allow(clippy::too_many_arguments)]
+    fn demo_text_line(
+        &self,
+        frame: &mut Frame<'_>,
+        text: &str,
+        cx: i64,
+        clip_r: i64,
+        cy: i64,
+        rh: u32,
+        px: f32,
+        fg: u32,
+        inset: f32,
+    ) {
+        let cx = cx.max(0);
+        let cr = clip_r.min(i64::from(frame.w));
+        if cx >= cr || cy < 0 || cy >= i64::from(frame.h) {
+            return;
+        }
+        self.draw_text_left_ex(
+            frame,
+            text,
+            cx as u32,
+            (cr - cx) as u32,
+            cy as u32,
+            rh,
+            px,
+            fg,
+            inset,
+            None,
+        );
+    }
+
     /// 双池框涂装（十七修从 paint_cfg_dual_pool_impl 抽出的 Frame 版——
     /// Page 域平移时双池框随内容进 temp 双代同画；内卡反转 c2→c1）
     /// 解析页内容涂装（tmux 插件 v1，2026-09-19）：页标题 + tmux 插件卡
@@ -4889,6 +5665,395 @@ impl TermView {
         }
     }
 
+    /// 文件树页内容墨（BAR-165，2026-09-26）：行表（行带/左强调边/三角/
+    /// 名字）+ 抽屉顶缘裁剪 + 光标框 + 底栏。
+    ///
+    /// 坐标口径：画布恒在**靠泊位**烘焙（ft_off = 0），位移只发生在合成期
+    /// ——本件一律以 `ft_geom` 的内容窗为尺（x0/x1 = 页环内缘+1 格）。滑出
+    /// 时左缘由 chrome 的 `px0.clamp` 裁（本件不管滑动裁剪）。
+    ///
+    /// 裁剪三层，全是同一把尺的切面：①行表窗 [list_y0, list_y1)（滚出环
+    /// 内缘即断墨——与手势/命中同一份窗）；②抽屉顶缘窗（子行钉全高刚体、
+    /// 整体平移 dy，逾「父行底 + 当前高」之上的部分不画——cfg 下拉十七修
+    /// §六③ 同机制）；③帧缓冲（fill_rect/blend_px 自带，逐像素件自钳）。
+    ///
+    /// 取色一律走 `ft_rgb`（ui::filetree 色常量是 RRGGBBAA，见模块上注）。
+    /// 行带/栏底是**纯色平涂**（2026-09-11 用户裁决：逐行渐变太花）——
+    /// 先按 α 与页底 blend 出成品色再整行 fill_rect，只有圆角带/三角/
+    /// 光标框/图标才逐像素。
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn paint_ft_content_impl(
+        &self,
+        buf: &mut [u32],
+        w: u32,
+        h: u32,
+        bottom_inset: u32,
+        // 面板横向位移（GLES 槽画布恒在靠泊位烘焙 → 0；值守倒帧/软渲染
+        // 整页原地画 → 喂当前缝采样值，与 chrome 同一份）
+        x_shift: i32,
+        snap: &crate::ui::filetree::FileTreeSnap,
+        now_ms: u64,
+        accent: crate::ui::accent::AccentPair,
+    ) {
+        use crate::ui::filetree as ft;
+        if w == 0 || h == 0 {
+            return;
+        }
+        let g = ft_geom(w, h, bottom_inset);
+        let g = FtGeom {
+            x0: g.x0 + i64::from(x_shift),
+            x1: g.x1 + i64::from(x_shift),
+            ..g
+        };
+        if g.x1 <= g.x0 || g.list_y1 <= g.list_y0 {
+            return;
+        }
+        let mut frame = Frame { buf, w, h };
+        let bw = (g.x1 - g.x0) as u32;
+        let view_h = g.list_y1 - g.list_y0;
+        let scroll = snap.scroll;
+        let page_bg = crate::ui::accent::CARD_PAGE_BG;
+
+        // 抽屉账前置：子块 [b0, b1) / 父行底（列表相对）/ 当前高 cur / 位移 dy。
+        // 顶缘窗 = [父行底, 父行底 + cur)——刚体整块平移 dy 后，被顶缘切掉的
+        // 那截不画（展开时下方子行先入场，收起时上方先没入）
+        let drawer = snap.drawer.as_ref().and_then(|d| {
+            let pi = snap.rows.iter().position(|r| r.path == d.path)?;
+            let pd = snap.rows[pi].depth;
+            let mut b1 = pi + 1;
+            while b1 < snap.rows.len() && snap.rows[b1].depth > pd {
+                b1 += 1;
+            }
+            if b1 == pi + 1 {
+                return None; // 无子行 = 无可坠之物
+            }
+            let pbot = snap.rows[..=pi]
+                .iter()
+                .map(|r| ft::row_h(r.wrap))
+                .sum::<i64>()
+                - scroll;
+            Some((pi + 1, b1, pbot, (d.full_h + d.dy).max(0), d.dy))
+        });
+
+        // ── 行表 ────────────────────────────────────────────────────
+        let mut sel_box: Option<(usize, i64, i64, i64, i64)> = None;
+        let mut top = -scroll; // 列表相对行顶（内容坐标 − scroll）
+        for (idx, row) in snap.rows.iter().enumerate() {
+            let ch = ft::row_h(row.wrap);
+            let row_top_rel = top;
+            top += ch;
+            let (mut c0, mut c1, mut shift) = (0i64, view_h, 0i64);
+            if let Some((b0, b1, pbot, cur, dy)) = drawer
+                && idx >= b0
+                && idx < b1
+            {
+                shift = dy;
+                c0 = c0.max(pbot);
+                c1 = c1.min(pbot + cur);
+            }
+            let yrel = row_top_rel + shift;
+            if yrel + ch <= c0 || yrel >= c1 {
+                continue;
+            }
+            let (first, last) = ft::sibling_ends(&snap.rows, idx);
+            let rr = ft::ROW_RADIUS.min(bw as i64 / 2).min(ch / 2);
+            // ①行带（同深度同色，α 随深度加深；兄弟块首尾圆角）
+            let band_rgb = ft_band_rgb(row.depth, accent);
+            let band_a = ft_a255(ft::band_alpha(row.depth));
+            paint_ft_band_row(
+                &mut frame,
+                g.x0,
+                bw,
+                g.list_y0,
+                yrel,
+                ch,
+                rr,
+                first,
+                last,
+                band_rgb,
+                band_a,
+                blend(band_rgb, page_bg, band_a),
+                c0,
+                c1,
+            );
+            // ②左强调边（深度 0 不画；同深度连续块共一条 6px 渐变竖条，
+            // 色沿块高 c1→c2，端点圆头）
+            if ft::left_bar_on(row.depth) {
+                let bar_x = g.x0 + ft::indent_px(row.depth);
+                let bar_a = ft_a255(ft::border_op(row.depth));
+                let (blk_top, blk_h) = ft_block_span(&snap.rows, idx, row_top_rel + scroll);
+                let denom = blk_h.max(1);
+                let off = (row_top_rel + scroll) - blk_top;
+                let bar_r = rr.min(FT_ROW_BAR_W / 2);
+                for y in c0.max(yrel)..c1.min(yrel + ch) {
+                    let ly = y - yrel;
+                    let c = ring_gradient_rgb(accent.c1, accent.c2, 0, off + ly, denom);
+                    let py = if first && ly < bar_r {
+                        Some(ly)
+                    } else if last && ly >= ch - bar_r {
+                        Some(bar_r + (ly - (ch - bar_r)))
+                    } else {
+                        None
+                    };
+                    let ay = (g.list_y0 + y) as u32;
+                    for px in 0..FT_ROW_BAR_W as u32 {
+                        let ax = bar_x + i64::from(px);
+                        if ax >= g.x1 {
+                            continue;
+                        }
+                        let cov = match py {
+                            None => 255,
+                            Some(p) => rr_cover(
+                                px,
+                                p as u32,
+                                FT_ROW_BAR_W as u32,
+                                (2 * bar_r).max(1) as u32,
+                                bar_r as u32,
+                            ),
+                        };
+                        if cov > 0 {
+                            frame.blend_px(ax as u32, ay, c, bar_a * cov / 255);
+                        }
+                    }
+                }
+            }
+            // ③名字（目录/文件同色同档；换行档分两行画）
+            let nx = g.x0 + ft::name_x(row.depth);
+            let cw = (g.x1 - nx).max(0) as u32;
+            let cy_u = (g.list_y0 + yrel).max(0) as u32;
+            // 文字同吃行表窗 ∩ 抽屉顶缘窗（半行/半抽屉里的名字随带断墨，
+            // 与行带同一份裁剪——眼手同尺）
+            let clip = Some(((g.list_y0 + c0) as i32, (g.list_y0 + c1) as i32));
+            if row.wrap {
+                let items = self.measure_items(&row.name, FT_TEXT_PX);
+                let adv: Vec<f32> = items.iter().map(|i| i.2).collect();
+                let k = ft_wrap_split(&adv, cw as f32 - FT_NAME_GAP);
+                let l1: String = items.iter().take(k).map(|i| i.1).collect();
+                let l2: String = items.iter().skip(k).map(|i| i.1).collect();
+                let half = (ch / 2) as u32;
+                self.draw_text_left_ex(
+                    &mut frame,
+                    &l1,
+                    nx as u32,
+                    cw,
+                    cy_u,
+                    half,
+                    FT_TEXT_PX,
+                    FT_TEXT_FG,
+                    FT_NAME_GAP,
+                    clip,
+                );
+                self.draw_text_left_ex(
+                    &mut frame,
+                    &l2,
+                    nx as u32,
+                    cw,
+                    cy_u + half,
+                    half,
+                    FT_TEXT_PX,
+                    FT_TEXT_FG,
+                    FT_NAME_GAP,
+                    clip,
+                );
+            } else {
+                self.draw_text_left_ex(
+                    &mut frame,
+                    &row.name,
+                    nx as u32,
+                    cw,
+                    cy_u,
+                    ch as u32,
+                    FT_TEXT_PX,
+                    FT_TEXT_FG,
+                    FT_NAME_GAP,
+                    clip,
+                );
+            }
+            // ④实心三角（盒 20×22，行内垂直居中，左缘 = 缩进）：收起 ▶、
+            // 展开 ▼——逆旋转采样（模板 = cfg 下拉 ▼ 十七修 §六④）。
+            // at_ms 取快照里的三角戳（点击那一刻起算）：展开/收起都播
+            // 180ms 旋转——没戳的（从没被点过）取 0 = 直接收尽值
+            if row.kind.is_dir() {
+                let at = snap.tri.get(&row.path).copied().unwrap_or(0);
+                let ang = ft::tri_angle(row.expanded, at, now_ms);
+                let (sn, cs) = ang.sin_cos();
+                let tx = g.x0 + ft::tri_x(row.depth);
+                let ty = g.list_y0 + yrel + (ch - ft::TRI_H) / 2;
+                // 基形 = 右指实心三角（宽 10 高 16 居中盒内），展开转 90° = ▼
+                let (hwt, hht) = (5.0f32, 8.0f32);
+                let rgb = ft_rgb(ft::CHEVRON_RGB);
+                for py in 0..ft::TRI_H {
+                    let yy = ty + py;
+                    if yy < g.list_y0 + c0 || yy >= g.list_y0 + c1 {
+                        continue;
+                    }
+                    for px in 0..ft::TRI_W {
+                        let fx = px as f32 + 0.5 - ft::TRI_W as f32 / 2.0;
+                        let fy = py as f32 + 0.5 - ft::TRI_H as f32 / 2.0;
+                        let lx = fx * cs + fy * sn;
+                        let ly = -fx * sn + fy * cs;
+                        if lx.abs() > hwt || ly.abs() > hht * (hwt - lx) / (2.0 * hwt) {
+                            continue;
+                        }
+                        let ax = tx + px;
+                        if ax < 0 || ax >= i64::from(w) {
+                            continue;
+                        }
+                        frame.blend_px(ax as u32, yy as u32, rgb, 255);
+                    }
+                }
+            }
+            if snap.sel == Some(idx) {
+                sel_box = Some((idx, shift, ch, c0, c1));
+            }
+        }
+
+        // ── 光标框（选中行；画在行表之后——不许被后画的行盖住）──────
+        if let Some((idx, shift, ch, c0, c1)) = sel_box {
+            let row = &snap.rows[idx];
+            let name_w = i64::from(self.text_width(&row.name, FT_TEXT_PX));
+            // 盒左 = 选中行内容左缘 − 10（规格）；下钳到**页环内缘**（BAR-121：
+            // 光标框可借环内留白，不许压环本身）
+            let ring_in = i64::from(AI_PAGE_FRAME_MARGIN + AI_PAGE_FRAME_W * 3);
+            let bx0 = (g.x0 + ft::tri_x(row.depth) - ft::CURSOR_NAME_INSET).max(ring_in);
+            let bx1 = (g.x0 + ft::name_x(row.depth) + name_w + ft::CURSOR_NAME_INSET).min(g.x1);
+            let box_h = (ch - ft::CURSOR_INSET).max(2);
+            let box_w = bx1 - bx0;
+            // 框心 = 动画中的光标 y（内容坐标）→ 列表相对（随行滚 + 随抽屉平移）
+            let by0 = snap.cursor_y - scroll + shift - box_h / 2;
+            if box_w > 4 {
+                let brr = ft::ROW_RADIUS.min(box_w / 2).min(box_h / 2).max(0);
+                let line = ft_rgb(ft::CURSOR_LINE_RGB);
+                let line_a = ft_a255(ft::CURSOR_LINE_ALPHA);
+                let pad_a = ft_a255(ft::CURSOR_FILL_ALPHA);
+                // ①底垫 accent 15%（圆角同尺）
+                for y in by0.max(c0)..(by0 + box_h).min(c1) {
+                    let ly = y - by0;
+                    let ay = (g.list_y0 + y) as u32;
+                    for px in 0..box_w as u32 {
+                        let cov = rr_cover(px, ly as u32, box_w as u32, box_h as u32, brr as u32);
+                        if cov > 0 {
+                            frame.blend_px(
+                                (bx0 + i64::from(px)) as u32,
+                                ay,
+                                accent.c1,
+                                pad_a * cov / 255,
+                            );
+                        }
+                    }
+                }
+                // ②左竖线 3px（圆角区让开）
+                for y in (by0 + brr).max(c0)..(by0 + box_h - brr).min(c1) {
+                    let ay = (g.list_y0 + y) as u32;
+                    for px in 0..ft::CURSOR_BAR_W {
+                        let ax = bx0 + px;
+                        if ax >= bx1 {
+                            continue;
+                        }
+                        frame.blend_px(ax as u32, ay, line, line_a);
+                    }
+                }
+                // ③上线 = 名字实量宽 clamp(20, 盒宽−10) ④下线 = 补到盒右缘
+                let top_w = ft::cursor_line_w(name_w, box_w);
+                for (yy, len) in [(by0, top_w), (by0 + box_h - ft::CURSOR_HAIR_W, box_w - brr)] {
+                    let ys = yy + ft::CURSOR_HAIR_W;
+                    for y in yy.max(c0)..ys.min(c1) {
+                        let ay = (g.list_y0 + y) as u32;
+                        for ax in (bx0 + brr)..(bx0 + brr + len).min(bx1) {
+                            frame.blend_px(ax as u32, ay, line, line_a);
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── 底栏（钉在页环底内缘之上：栏底提亮档 + 顶缘双色渐变线 +
+        //      眼/根名/× 三盒）────────────────────────────────────
+        let bar_h = g.bar_y1 - g.bar_y0;
+        if bar_h >= 24 {
+            let bar_bg = lerp_rgb(page_bg, 0x00FF_FFFF, FT_BAR_LIFT);
+            frame.fill_rect(g.x0 as u32, g.bar_y0 as u32, bw, bar_h as u32, bar_bg);
+            paint_divider_line_clip(
+                &mut frame,
+                g.x0,
+                g.bar_y0,
+                bw,
+                FT_BOX_EDGE as u32,
+                accent,
+                0,
+                i64::MAX,
+            );
+            let box_h = (bar_h - 2 * FT_BOX_PAD_V).clamp(12, bar_h);
+            let by = g.bar_y0 + (bar_h - box_h) / 2;
+            let close_x = (g.x1 - FT_CLOSE_W).max(g.x0);
+            // 中盒在「眼盒右缘 + 8」到「×盒左缘 − 8」之间居中（真机 1174 宽
+            // 内容窗下 = 560 居中于页心；窄屏按余量收窄，不许压左右两盒）
+            let mid_x0 = g.x0 + FT_EYE_W + 8;
+            let mid_x1 = (g.x1 - FT_CLOSE_W - 8).max(mid_x0 + 1);
+            let span = mid_x1 - mid_x0;
+            let root_w = FT_ROOT_W.min(span);
+            let root_x = mid_x0 + (span - root_w) / 2;
+            let teal = ft_rgb(ft::CHEVRON_RGB);
+            // 中：根名盒（teal 描边 + 文字居中）
+            paint_ft_round_box(
+                &mut frame,
+                root_x,
+                by,
+                root_w as u32,
+                box_h as u32,
+                FT_BOX_R,
+                FT_BOX_EDGE,
+                accent,
+                Some(lerp_rgb(teal, page_bg, 90)),
+            );
+            self.draw_text_centered_yclip(
+                &mut frame,
+                &snap.root_label,
+                root_x,
+                by,
+                root_w as u32,
+                box_h as u32,
+                FT_TEXT_PX,
+                teal,
+                root_x,
+                Some((by, by + box_h)),
+            );
+            // 左：眼（看）右：×（关）——accent 渐变盒 + 手绘图标
+            paint_ft_round_box(
+                &mut frame,
+                g.x0,
+                by,
+                FT_EYE_W as u32,
+                box_h as u32,
+                FT_BOX_R,
+                FT_BOX_EDGE,
+                accent,
+                None,
+            );
+            paint_ft_eye(&mut frame, g.x0, by, FT_EYE_W, box_h, accent);
+            paint_ft_round_box(
+                &mut frame,
+                close_x,
+                by,
+                FT_CLOSE_W as u32,
+                box_h as u32,
+                FT_BOX_R,
+                FT_BOX_EDGE,
+                accent,
+                None,
+            );
+            paint_ft_cross(&mut frame, close_x, by, FT_CLOSE_W, box_h, accent);
+        }
+
+        // 查看器跳框（BAR-163 家族）最后画：文件树页点文件的只读预览。
+        // 查看器状态住在配置页（不复制第二份），而配置槽在文件树页在顶时
+        // 不烘焙（z 序非顶不画）——这一层必须由本槽补画一次，漏了 = 点文件
+        // 什么都不出现。偏移吃本槽 x_shift（与页同尺，不许各算）
+        if let Some(v) = crate::ui::cfg_page::CfgPage::viewer_snap_global() {
+            self.paint_viewer_impl(buf, w, h, &v, x_shift, accent);
+        }
+    }
+
     fn paint_pool_frames(
         &self,
         frame: &mut Frame<'_>,
@@ -5381,7 +6546,6 @@ impl TermView {
         accent: crate::ui::accent::AccentPair,
         now_ms: u64,
     ) {
-        use crate::ui::modal as md;
         if w == 0 || h == 0 {
             return;
         }
@@ -5392,11 +6556,10 @@ impl TermView {
         let entry = &comps[mi.min(comps.len() - 1)];
         let mut frame = Frame { buf, w, h };
         let off = i64::from(cfg_off_x);
-        let title_fg = 0x00D9_D9D9; // 0.85 亮
-        let meta_fg = 0x0080_8080; // 0.5 灰
-        let denom = ((w - 1) + (h - 1)).max(1) as i64; // 池内容同一把渐变尺
 
-        // 压暗层：本页可见区整层混黑 α150（随面板平移，左右求交）
+        // 压暗层：本页可见区整层混黑 α150（随面板平移，左右求交）——
+        // CPU 兜底路原位涂装（GLES 路跳框已搬 ModalVeil 全屏层，配置槽
+        // 烘焙快照清 modal/viewer 两维，本函数在 GLES 烘焙不到达）
         let dx0 = off.clamp(0, i64::from(w)) as u32;
         let dx1 = (i64::from(w) + off).clamp(0, i64::from(w)) as u32;
         for yy in 0..h {
@@ -5404,6 +6567,27 @@ impl TermView {
                 frame.blend_px(xx, yy, 0x0000_0000, 150);
             }
         }
+
+        self.paint_modal_card(&mut frame, entry, off, accent, now_ms);
+    }
+
+    /// 跳框卡体涂装（paint_modal_impl 去掉压暗段的全剩）：居中卡 +
+    /// 标题 + 分隔线 + 预览画板 + 字段区 + 关闭钮。两个调用口：
+    /// ①in-slot（paint_modal_impl，CPU 兜底路，压暗自理）②ModalVeil
+    /// 层（paint_modal_veil_layer，压暗 = 全幅直写后卡体盖其上）
+    fn paint_modal_card(
+        &self,
+        frame: &mut Frame,
+        entry: &crate::ui::comp_registry::CompEntry,
+        off: i64,
+        accent: crate::ui::accent::AccentPair,
+        now_ms: u64,
+    ) {
+        use crate::ui::modal as md;
+        let (w, h) = (frame.w, frame.h);
+        let title_fg = 0x00D9_D9D9; // 0.85 亮
+        let meta_fg = 0x0080_8080; // 0.5 灰
+        let denom = ((w - 1) + (h - 1)).max(1) as i64; // 池内容同一把渐变尺
 
         // 居中卡（几何 = modal.rs；折行吃 content_cells 同尺）
         let fields = md::fields_of(entry, md::content_cells(w));
@@ -5414,7 +6598,7 @@ impl TermView {
         }
         let cx1 = cx0 + i64::from(card.w);
         paint_rect_ring(
-            &mut frame,
+            frame,
             cx0,
             card.y,
             cx1,
@@ -5437,7 +6621,7 @@ impl TermView {
         // 标题（2 格带居中，faux-bold 双画偏 1px）
         let title_y = card.y + i64::from(md::MODAL_PAD_Y);
         self.draw_text_centered(
-            &mut frame,
+            frame,
             entry.name,
             cx0,
             title_y,
@@ -5448,7 +6632,7 @@ impl TermView {
             cx0,
         );
         self.draw_text_centered(
-            &mut frame,
+            frame,
             entry.name,
             cx0 + 1,
             title_y,
@@ -5477,7 +6661,7 @@ impl TermView {
         // §六 样式唯一来源）
         let prev = md::preview_rect(&card);
         paint_thin_frame(
-            &mut frame,
+            frame,
             prev.x + off,
             prev.y,
             prev.w,
@@ -5490,14 +6674,7 @@ impl TermView {
             x: prev.x + off,
             ..prev.clone()
         };
-        self.paint_preview_impl(
-            &mut frame,
-            entry.preview,
-            &prev_screen,
-            accent,
-            denom,
-            now_ms,
-        );
+        self.paint_preview_impl(frame, entry.preview, &prev_screen, accent, denom, now_ms);
 
         // 字段区：题注（30px 灰）在上 + 内容行（36px 亮）在下
         let mut pen = md::fields_top(&card);
@@ -5506,7 +6683,7 @@ impl TermView {
                 break;
             }
             self.draw_text_left_ex(
-                &mut frame,
+                frame,
                 &f.label,
                 text_x,
                 text_w,
@@ -5523,7 +6700,7 @@ impl TermView {
                     break;
                 }
                 self.draw_text_left_ex(
-                    &mut frame,
+                    frame,
                     line,
                     text_x,
                     text_w,
@@ -5542,7 +6719,7 @@ impl TermView {
         // 关闭钮：卡底全内宽 3 格，均匀细框（paint_thin_frame——非池行
         // 场合不属三级框，十一修）+ 居中 36px 亮字
         paint_thin_frame(
-            &mut frame,
+            frame,
             btn.x + off,
             btn.y,
             btn.w,
@@ -5552,7 +6729,7 @@ impl TermView {
             (0, i64::from(h)),
         );
         self.draw_text_centered(
-            &mut frame,
+            frame,
             "关闭",
             btn.x + off,
             btn.y,
@@ -5577,17 +6754,15 @@ impl TermView {
         cfg_off_x: i32,
         accent: crate::ui::accent::AccentPair,
     ) {
-        use crate::ui::modal as md;
         if w == 0 || h == 0 {
             return;
         }
         let mut frame = Frame { buf, w, h };
         let off = i64::from(cfg_off_x);
-        let title_fg = 0x00D9_D9D9; // 0.85 亮
-        let meta_fg = 0x0080_8080; // 0.5 灰
-        let denom = ((w - 1) + (h - 1)).max(1) as i64; // 池内容同一把渐变尺
 
-        // 压暗层：本页可见区整层混黑 α150（随面板平移，左右求交）
+        // 压暗层：本页可见区整层混黑 α150（随面板平移，左右求交）——
+        // CPU 兜底路原位涂装（GLES 路跳框已搬 ModalVeil 全屏层，配置槽
+        // 烘焙快照清 modal/viewer 两维，本函数在 GLES 烘焙不到达）
         let dx0 = off.clamp(0, i64::from(w)) as u32;
         let dx1 = (i64::from(w) + off).clamp(0, i64::from(w)) as u32;
         for yy in 0..h {
@@ -5595,6 +6770,26 @@ impl TermView {
                 frame.blend_px(xx, yy, 0x0000_0000, 150);
             }
         }
+
+        self.paint_viewer_card(&mut frame, v, off, accent);
+    }
+
+    /// 查看器卡体涂装（paint_viewer_impl 去掉压暗段的全剩）：居中卡 +
+    /// 标题 + 分隔线 + 字段区 + 关闭钮。两个调用口：①in-slot
+    /// （paint_viewer_impl，CPU 兜底路，压暗自理）②ModalVeil 层
+    /// （paint_modal_veil_layer，压暗 = 全幅直写后卡体盖其上）
+    fn paint_viewer_card(
+        &self,
+        frame: &mut Frame,
+        v: &crate::ui::cfg_page::ViewerSnap,
+        off: i64,
+        accent: crate::ui::accent::AccentPair,
+    ) {
+        use crate::ui::modal as md;
+        let (w, h) = (frame.w, frame.h);
+        let title_fg = 0x00D9_D9D9; // 0.85 亮
+        let meta_fg = 0x0080_8080; // 0.5 灰
+        let denom = ((w - 1) + (h - 1)).max(1) as i64; // 池内容同一把渐变尺
 
         // 居中卡（几何 = modal.rs 查看器族；折行吃 content_cells 同尺）
         let fields = md::viewer_fields(&v.content, md::content_cells(w));
@@ -5605,7 +6800,7 @@ impl TermView {
         }
         let cx1 = cx0 + i64::from(card.w);
         paint_rect_ring(
-            &mut frame,
+            frame,
             cx0,
             card.y,
             cx1,
@@ -5628,7 +6823,7 @@ impl TermView {
         // 标题（2 格带居中，faux-bold 双画偏 1px）
         let title_y = card.y + i64::from(md::MODAL_PAD_Y);
         self.draw_text_centered(
-            &mut frame,
+            frame,
             &v.title,
             cx0,
             title_y,
@@ -5639,7 +6834,7 @@ impl TermView {
             cx0,
         );
         self.draw_text_centered(
-            &mut frame,
+            frame,
             &v.title,
             cx0 + 1,
             title_y,
@@ -5669,7 +6864,7 @@ impl TermView {
                 break;
             }
             self.draw_text_left_ex(
-                &mut frame,
+                frame,
                 &f.label,
                 text_x,
                 text_w,
@@ -5686,7 +6881,7 @@ impl TermView {
                     break;
                 }
                 self.draw_text_left_ex(
-                    &mut frame,
+                    frame,
                     line,
                     text_x,
                     text_w,
@@ -5704,7 +6899,7 @@ impl TermView {
 
         // 关闭钮：卡底全内宽 3 格，均匀细框 + 居中 36px 亮字（modal 同款）
         paint_thin_frame(
-            &mut frame,
+            frame,
             btn.x + off,
             btn.y,
             btn.w,
@@ -5714,7 +6909,7 @@ impl TermView {
             (0, i64::from(h)),
         );
         self.draw_text_centered(
-            &mut frame,
+            frame,
             "关闭",
             btn.x + off,
             btn.y,
@@ -5724,6 +6919,72 @@ impl TermView {
             title_fg,
             btn.x + off,
         );
+    }
+
+    /// 压暗层涂装（BAR-163 翻案：跳框整体搬出配置槽的全屏 ChromeSlot::
+    /// ModalVeil 层）：全幅 α150 黑直写（层画布没有「下层」可 blend——
+    /// 改写 α150 黑像素，GPU SRC_ALPHA 合成 ≡ blend(黑,下层,150)，
+    /// DropdownPanel 深底同款直写纪律）+ 跳框卡体（comp modal / 查看器
+    /// 二有一）盖其上。卡区后处理提 α=0xFF——涂装原语的 α 语义是 XRGB
+    /// 路径的（直写高字节恒 0 / blend 保目标 α），veil 层 α 承载，卡
+    /// 必须是不透明墨压在压暗上（环带 AA 缘同提 = 环色渐向压暗黑）。
+    /// z 序 Over 之上 = 压暗盖标签栏层/下池光标层/输入栏槽，卡在压暗
+    /// 上（三症①③同收）。CPU 兜底路不走本层（in-slot 原位涂装保留）。
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn paint_modal_veil_layer(
+        &self,
+        buf: &mut [u32],
+        w: u32,
+        h: u32,
+        modal: Option<usize>,
+        viewer: Option<&crate::ui::cfg_page::ViewerSnap>,
+        accent: crate::ui::accent::AccentPair,
+        now_ms: u64,
+    ) {
+        use crate::ui::modal as md;
+        if w == 0 || h == 0 || (modal.is_none() && viewer.is_none()) {
+            return;
+        }
+        // 全幅压暗直写（α150 黑；rgb=0 且 α≠0，mark_chrome_alpha 不动它）
+        buf.fill(crate::ui::modal::VEIL_DIM_ARGB);
+        let mut frame = Frame { buf, w, h };
+        // 卡体（off=0——全屏层不随面板平移）
+        let card = if let Some(mi) = modal {
+            let comps = crate::ui::comp_registry::COMPONENTS;
+            if comps.is_empty() {
+                return;
+            }
+            let entry = &comps[mi.min(comps.len() - 1)];
+            let card = md::card_rect(w, h, &md::fields_of(entry, md::content_cells(w)));
+            self.paint_modal_card(&mut frame, entry, 0, accent, now_ms);
+            card
+        } else {
+            let v = viewer.expect("modal/viewer 二有一闸已过");
+            let card =
+                md::viewer_card_rect(w, h, &md::viewer_fields(&v.content, md::content_cells(w)));
+            self.paint_viewer_card(&mut frame, v, 0, accent);
+            card
+        };
+        // 卡区提不透明（圆角剪影内 α=0xFF 保 rgb；卡外留压暗直写）
+        let (fw, fh) = (card.w, card.h);
+        let r = POOL_FRAME_R.min((fw / 2).min(fh / 2));
+        for dy in 0..fh {
+            let yy = card.y + i64::from(dy);
+            if yy < 0 || yy >= i64::from(h) {
+                continue;
+            }
+            for dx in 0..fw {
+                let xx = card.x + i64::from(dx);
+                if xx < 0 || xx >= i64::from(w) {
+                    continue;
+                }
+                if rr_cover(dx, dy, fw, fh, r) == 0 {
+                    continue;
+                }
+                let p = &mut frame.buf[(yy as u32 * w + xx as u32) as usize];
+                *p = 0xFF00_0000 | (*p & 0x00FF_FFFF);
+            }
+        }
     }
 
     /// 跳框预览画板涂装（宪法 §六 跳框预览画板条款，2026-09-13 十修）：
@@ -5852,6 +7113,53 @@ impl TermView {
                 for dy in 0..ih as i64 {
                     for dx in 0..iw as i64 {
                         frame.blend_px((ix + dx) as u32, (iy + dy) as u32, 0x0000_0000, 120);
+                    }
+                }
+                let cw = i64::from(iw) * 2 / 3;
+                let ch = i64::from(ih) * 3 / 4;
+                let cx0 = icx - cw / 2;
+                let cy0 = iy + (i64::from(ih) - ch) / 2;
+                paint_rect_ring(
+                    frame,
+                    cx0,
+                    cy0,
+                    cx0 + cw,
+                    cy0 + ch,
+                    0,
+                    i64::MAX,
+                    crate::ui::accent::CARD_PAGE_BG,
+                    accent.c2,
+                    accent.c1,
+                    18,
+                    true,
+                );
+                let bw = cw - 2 * i64::from(CELL_W);
+                paint_thin_frame(
+                    frame,
+                    cx0 + i64::from(CELL_W),
+                    cy0 + ch - i64::from(CELL_H / 2) - 24,
+                    bw as u32,
+                    24,
+                    accent,
+                    denom,
+                    clip,
+                );
+            }
+            Preview::VeilFade => {
+                // 压暗层（BAR-163 翻案入册）：迷你页底（白 α8）+ 压暗
+                // 淡入淡出（相位三角波 α 0↔150，循环 1400ms 同帧泵）+
+                // ModalMini 同款小卡 + 小关闭钮恒在压暗之上（层级纪律
+                // 演示：卡 > 压暗 > 页底）
+                for dy in 0..ih as i64 {
+                    for dx in 0..iw as i64 {
+                        frame.blend_px((ix + dx) as u32, (iy + dy) as u32, 0x00FF_FFFF, 8);
+                    }
+                }
+                let tri = if at < 700 { at } else { 1400 - at };
+                let dim_a = (tri * 150 / 700) as u32;
+                for dy in 0..ih as i64 {
+                    for dx in 0..iw as i64 {
+                        frame.blend_px((ix + dx) as u32, (iy + dy) as u32, 0x0000_0000, dim_a);
                     }
                 }
                 let cw = i64::from(iw) * 2 / 3;
@@ -7789,6 +9097,21 @@ pub trait TermEmu: Send {
     /// bar_inset = 输入栏带高，永不含键盘 inset（BAR-119 红线同终端网格）；
     /// ime = 键盘 inset（0 = 无键盘）——只喂页面滚动窗可视底与页缘
     /// 裁剪带（2026-09-20 视口化），不进布局账
+    /// 文件树页内容墨（BAR-165）：值守倒帧（na-shot 判卷路）与软渲染兜底
+    /// 两条 CPU 路走它——GLES 烘焙臂直接调 impl，不经 trait
+    #[allow(clippy::too_many_arguments)]
+    fn paint_ft_content(
+        &self,
+        buf: &mut [u32],
+        w: u32,
+        h: u32,
+        bottom_inset: u32,
+        x_shift: i32,
+        snap: &crate::ui::filetree::FileTreeSnap,
+        now_ms: u64,
+        accent: crate::ui::accent::AccentPair,
+    );
+
     #[allow(clippy::too_many_arguments)]
     fn paint_parser_content(
         &self,
@@ -7799,6 +9122,18 @@ pub trait TermEmu: Send {
         ime: u32,
         pt_off_x: i32,
         snap: &crate::ui::parser_page::ParserPageSnap,
+        accent: crate::ui::accent::AccentPair,
+    );
+    /// Demo 页内容墨（2026-09-26 五公民：md 渲染打样）：几何 ui/demo_page
+    /// 单源；demo_off_x 语义同 paint_parser_content；画在 Demo 页底装修
+    /// 之上。值守倒帧（na-shot 判卷路）与软渲染兜底走它——GLES 烘焙臂
+    /// 直接调 impl，不经 trait
+    fn paint_demo_content(
+        &self,
+        buf: &mut [u32],
+        w: u32,
+        h: u32,
+        demo_off_x: i32,
         accent: crate::ui::accent::AccentPair,
     );
     /// 配置卡双池涂装（主题宪法 §五，2026-09-12）：上池/下池两个二级
@@ -7886,6 +9221,20 @@ pub trait TermEmu: Send {
         pr_full: &crate::ui::dual_pool::PoolRect,
         origin: (i64, i64),
         accent: crate::ui::accent::AccentPair,
+    );
+    /// 压暗层涂装（BAR-163 翻案，考题/壳层门面）：层缓冲 = 全屏 w×h，
+    /// 全幅 α150 黑直写 + 跳框卡体（modal/viewer 二有一，None+None =
+    /// 不开不画）。z 序 Over 之上，GLES 路专用（CPU 兜底走 in-slot）
+    #[allow(clippy::too_many_arguments)]
+    fn paint_modal_veil_layer(
+        &self,
+        buf: &mut [u32],
+        w: u32,
+        h: u32,
+        modal: Option<usize>,
+        viewer: Option<&crate::ui::cfg_page::ViewerSnap>,
+        accent: crate::ui::accent::AccentPair,
+        now_ms: u64,
     );
     /// 环境卡柱层涂装（2026-09-21 环境卡重做）：层画布 = 四轨紧凑带，
     /// 逐像素重建卡内芯渐变 + 柱（稳态位）——合成期按滑入位移取 uv 窗
@@ -8177,6 +9526,42 @@ impl TermEmu for TermView {
     ) {
         TermView::paint_parser_content_impl(self, buf, w, h, bar_inset, ime, pt_off_x, snap, accent)
     }
+
+    fn paint_demo_content(
+        &self,
+        buf: &mut [u32],
+        w: u32,
+        h: u32,
+        demo_off_x: i32,
+        accent: crate::ui::accent::AccentPair,
+    ) {
+        TermView::paint_demo_content_impl(self, buf, w, h, demo_off_x, accent)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn paint_ft_content(
+        &self,
+        buf: &mut [u32],
+        w: u32,
+        h: u32,
+        bottom_inset: u32,
+        x_shift: i32,
+        snap: &crate::ui::filetree::FileTreeSnap,
+        now_ms: u64,
+        accent: crate::ui::accent::AccentPair,
+    ) {
+        TermView::paint_ft_content_impl(
+            self,
+            buf,
+            w,
+            h,
+            bottom_inset,
+            x_shift,
+            snap,
+            now_ms,
+            accent,
+        )
+    }
     #[allow(clippy::too_many_arguments)]
     fn paint_tab_bar_layer(
         &self,
@@ -8253,6 +9638,19 @@ impl TermEmu for TermView {
         accent: crate::ui::accent::AccentPair,
     ) {
         TermView::paint_dropdown_panel_layer(self, buf, cw, ch, page, pr_full, origin, accent)
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn paint_modal_veil_layer(
+        &self,
+        buf: &mut [u32],
+        w: u32,
+        h: u32,
+        modal: Option<usize>,
+        viewer: Option<&crate::ui::cfg_page::ViewerSnap>,
+        accent: crate::ui::accent::AccentPair,
+        now_ms: u64,
+    ) {
+        TermView::paint_modal_veil_layer(self, buf, w, h, modal, viewer, accent, now_ms)
     }
     #[allow(clippy::too_many_arguments)]
     fn paint_sys_band_layer(
@@ -8458,5 +9856,216 @@ impl TermEmuFactory for AlacrittyEmuFactory {
             Some((tv, main, cjk)) => Ok((Box::new(tv), main, cjk)),
             None => Err("字体全灭——TermView 建不成".into()),
         }
+    }
+}
+
+// 文件树内容墨的冒烟考卷（BAR-165）：涂装本体是 `pub(crate)`——集成考卷
+// 够不着，故本模块随实现同址。判卷人仍是眼睛（C 档），这里只钉三类
+// 机器能咬的东西：①**不 panic**（逐像素件的坐标钳制/抽屉与滚动全组合，
+// 越界必炸 blowup）；②**成品像素落在该在的地方**（行带平涂色 == 纯色
+// α 混合公式、栏底提亮档、渐变顶线、三盒与图标墨、光标框左竖线）；
+// ③**裁剪生效**（行表窗顶之外无行墨）。
+#[cfg(test)]
+mod ft_paint_smoke {
+    use super::*;
+    use crate::ui::filetree as ft;
+
+    fn tv() -> TermView {
+        build_vendored().expect("内嵌字体必成").0
+    }
+
+    fn tree() -> ft::FileTreeState {
+        let mut st = ft::FileTreeState::new("kfm-na");
+        st.apply_root_list(
+            vec![
+                ft::Entry {
+                    name: "src".into(),
+                    kind: ft::RowKind::Dir,
+                    size: 0,
+                    mtime: 1,
+                },
+                ft::Entry {
+                    name: "docs".into(),
+                    kind: ft::RowKind::Dir,
+                    size: 0,
+                    mtime: 2,
+                },
+                ft::Entry {
+                    name: "README.md".into(),
+                    kind: ft::RowKind::File,
+                    size: 9,
+                    mtime: 3,
+                },
+                ft::Entry {
+                    name: "一个很长很长需要换行显示的名字.md".into(),
+                    kind: ft::RowKind::File,
+                    size: 9,
+                    mtime: 4,
+                },
+            ],
+            0,
+        );
+        st
+    }
+
+    fn paint(
+        tv: &TermView,
+        st: &ft::FileTreeState,
+        now: u64,
+        w: u32,
+        h: u32,
+        inset: u32,
+    ) -> Vec<u32> {
+        let snap = st.snap_at(now);
+        let mut buf = vec![0u32; (w as usize) * (h as usize)];
+        tv.paint_ft_content_impl(
+            &mut buf,
+            w,
+            h,
+            inset,
+            0,
+            &snap,
+            now,
+            crate::ui::accent::FALLBACK,
+        );
+        buf
+    }
+
+    #[test]
+    fn smoke_行带三角光标底栏落位() {
+        let tv = tv();
+        let mut st = tree();
+        st.set_wrap(3, true, 0); // 长名行换行档（行高 118）
+        st.select(1, 1_000); // docs（深度 0），光标 180ms 内落位
+        let (w, h) = (1260u32, 2800u32);
+        let g = ft_geom(w, h, 0);
+        let accent = crate::ui::accent::FALLBACK;
+        let buf = paint(&tv, &st, 1_200, w, h, 0);
+        let at = |x: i64, y: i64| buf[(y * i64::from(w) + x) as usize];
+        // ①行带 = 裸带色按 band_alpha 与页底混合的成品色（同深度同色）
+        let flat = |d: usize| {
+            blend(
+                ft_band_rgb(d, accent),
+                crate::ui::accent::CARD_PAGE_BG,
+                ft_a255(ft::band_alpha(d)),
+            )
+        };
+        assert_eq!(at(g.x1 - 20, g.list_y0 + 40), flat(0));
+        assert_ne!(
+            at(g.x1 - 20, g.list_y0 + 40),
+            crate::ui::accent::CARD_PAGE_BG
+        );
+        assert_ne!(flat(0), flat(1), "相邻深度不同色（奇偶分取双色）");
+        assert_ne!(flat(1), flat(2));
+        // ②三角：src 行（深度 0）左带内落 teal 墨
+        assert_ne!(at(g.x0 + 10, g.list_y0 + 43), flat(0), "三角该落墨");
+        // ③底栏：栏底提亮档平涂 + 顶缘 3px 渐变线
+        let bar_bg = lerp_rgb(crate::ui::accent::CARD_PAGE_BG, 0x00FF_FFFF, FT_BAR_LIFT);
+        assert_eq!(at(g.x0 + 200, g.bar_y0 + 10), bar_bg);
+        assert_eq!(at(g.x0 + 1_000, g.bar_y0 + 40), bar_bg);
+        assert_ne!(at(g.x0 + 4, g.bar_y0), bar_bg, "顶缘渐变线");
+        // ④三盒与图标：眼盒/×盒内该有墨，中盒 teal 描边
+        assert_ne!(
+            at(g.x0 + FT_EYE_W / 2, g.bar_y0 + 55),
+            bar_bg,
+            "眼盒内该有墨"
+        );
+        assert_ne!(
+            at(g.x1 - FT_CLOSE_W / 2, g.bar_y0 + 55),
+            bar_bg,
+            "×盒内该有墨"
+        );
+        // ⑤光标框：页坐标 = 内容坐标 + 行表窗顶（− scroll）；盒左 = 内容左缘 − 10
+        let cy_page = g.list_y0 + st.cursor_target(st.sel.unwrap());
+        assert_ne!(at(34, cy_page), 0, "光标框左竖线该落墨");
+        assert_ne!(at(34, cy_page), flat(0), "竖线墨 ≠ 纯行带色");
+        assert_eq!(at(34, cy_page + 86), 0, "无框处（内容窗留白）不许有竖线墨");
+        // ⑥滚动裁剪：滚 50 后窗顶之上不许有行墨
+        let mut snap = st.snap_at(1_200);
+        snap.scroll = 50;
+        let mut buf2 = vec![0u32; (w as usize) * (h as usize)];
+        tv.paint_ft_content_impl(&mut buf2, w, h, 0, 0, &snap, 1_200, accent);
+        let at2 = |x: i64, y: i64| buf2[(y * i64::from(w) + x) as usize];
+        assert_eq!(at2(g.x1 - 20, g.list_y0 - 1), 0, "窗顶之上不许有行墨");
+        assert_ne!(at2(g.x1 - 20, g.list_y0 + 40), 0, "窗内照画");
+    }
+
+    #[test]
+    fn smoke_抽屉滚动键盘与病态尺寸不炸() {
+        let tv = tv();
+        let mut st = tree();
+        assert_eq!(
+            st.toggle(0, 0),
+            ft::ToggleAction::NeedList { path: "src".into() }
+        );
+        st.apply_list(
+            "src",
+            vec![
+                ft::Entry {
+                    name: "ui".into(),
+                    kind: ft::RowKind::Dir,
+                    size: 0,
+                    mtime: 0,
+                },
+                ft::Entry {
+                    name: "main.rs".into(),
+                    kind: ft::RowKind::File,
+                    size: 0,
+                    mtime: 0,
+                },
+            ],
+            10,
+        );
+        assert_eq!(
+            st.toggle(1, 400),
+            ft::ToggleAction::NeedList {
+                path: "src/ui".into()
+            }
+        );
+        st.apply_list(
+            "src/ui",
+            vec![ft::Entry {
+                name: "filetree.rs".into(),
+                kind: ft::RowKind::File,
+                size: 0,
+                mtime: 0,
+            }],
+            420,
+        );
+        st.select(3, 500);
+        // 抽屉在飞的每一帧 × 各位滚动 × 键盘在场 / 病态小屏：只验不 panic
+        for now in [0u64, 130, 240, 419, 430, 700, 5_000] {
+            for scroll in [0i64, 137, 5_000] {
+                let mut snap = st.snap_at(now);
+                snap.scroll = scroll;
+                for (ww, hh, inset) in [
+                    (1260u32, 2800u32, 0u32),
+                    (1260, 2800, 600),
+                    (200, 120, 0),
+                    (40, 40, 0),
+                ] {
+                    let mut buf = vec![0u32; (ww as usize) * (hh as usize)];
+                    tv.paint_ft_content_impl(
+                        &mut buf,
+                        ww,
+                        hh,
+                        inset,
+                        0,
+                        &snap,
+                        now,
+                        crate::ui::accent::FALLBACK,
+                    );
+                }
+            }
+        }
+        // 收起态（子行已走、抽屉账指向空块）同样不炸且行表照画
+        st.collapse(0, 9_000);
+        let (w, h) = (1260u32, 2800u32);
+        let g = ft_geom(w, h, 0);
+        let buf = paint(&tv, &st, 9_100, w, h, 0);
+        assert_ne!(
+            buf[((g.list_y0 + 40) * i64::from(w) + (g.x1 - 20)) as usize],
+            crate::ui::accent::CARD_PAGE_BG
+        );
     }
 }

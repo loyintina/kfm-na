@@ -1,10 +1,14 @@
 //! httpd.rs — na-server 的平面 HTTP 面（非 WS 升级请求）
 //!
-//! 就四个面：POST /api/na-report（含 /kfmv4 前缀别名）、GET /api/na/health、
-//! GET /api/na/sys（环境体征，na-sys 采集）、其余 404。响应构造是纯函数
-//! （A 档），IO 只是它的搬运工。
+//! 就六个面：POST /api/na-report（含 /kfmv4 前缀别名）、GET /api/na/health、
+//! GET /api/na/sys（环境体征，na-sys 采集）、GET /api/fs/list、
+//! GET /api/fs/read（文件树数据面，逻辑在 na-protocol::fsapi）、其余 404。
+//! 响应构造是纯函数（A 档），IO 只是它的搬运工（fs 面的 IO 在 main.rs
+//! 的 spawn_blocking 里跑——current_thread 运行时上不许同步 fs）。
 
 use std::io::Write as _;
+
+use na_protocol::fsapi;
 
 /// 环境体征 JSON（A 档纯函数：形状的唯一事实源，服务卡消费）：
 /// {"load":[l1,l5,l15]|null,"procs":[running,total]|null,
@@ -49,6 +53,15 @@ pub enum Route {
     Report,
     Health,
     Sys,
+    /// GET /api/fs/list?dir=<相对路径>（dir 缺省 = 空串 = 允许根本身）
+    FsList {
+        dir: String,
+    },
+    /// GET /api/fs/read?path=<相对路径>&max=<字节>（max 缺省 64KB、上限 1MB）
+    FsRead {
+        path: String,
+        max: usize,
+    },
     /// /agent 前缀反代（BAR-163，工单⑥ A：手机经既有 9021 隧道直达
     /// na-agentd，不开新口）——携带剥前缀后的上游路径
     Agent {
@@ -72,18 +85,57 @@ pub fn agent_upstream(path: &str) -> Option<String> {
 
 /// 路径归一化：/kfmv4 前缀别名折叠（na 客户端现网 POST 的是
 /// /kfmv4/api/na-report——经 kfmv4 时靠前缀路由，直连 na-server 时两边都认）
+///
+/// **切 query 与折前缀的先后**：先切 query、再折前缀。query 不是路径的一部分，
+/// 折前缀只许作用于路径段——否则 query 里的 `/kfmv4` 字样会参与前缀判定；
+/// 两条 fs 面正是靠 query 传参（dir/path/max），切错 = 参数全丢落 404。
+/// 反代面例外：那一路的上游路径**连 query 原样带走**（agentd 自己切），
+/// 所以 agent_upstream 吃的是未切的整串。
 pub fn route(method: &str, path: &str) -> Route {
     // /agent 前缀 = 反代面（方法照传——GET/POST 都可能是 agentd 的面）
     if let Some(upstream) = agent_upstream(path) {
         return Route::Agent { upstream };
     }
-    let p = path.strip_prefix("/kfmv4").unwrap_or(path);
+    let (p, query) = match path.split_once('?') {
+        Some((p, q)) => (p, q),
+        None => (path, ""),
+    };
+    let p = p.strip_prefix("/kfmv4").unwrap_or(p);
     match (method, p) {
         ("POST", "/api/na-report") => Route::Report,
         ("GET", "/api/na/health") => Route::Health,
         ("GET", "/api/na/sys") => Route::Sys,
+        ("GET", "/api/fs/list") => Route::FsList {
+            dir: fsapi::query_get(query, "dir").unwrap_or_default(),
+        },
+        ("GET", "/api/fs/read") => Route::FsRead {
+            path: fsapi::query_get(query, "path").unwrap_or_default(),
+            max: fsapi::parse_max(query),
+        },
         _ => Route::NotFound,
     }
+}
+
+/// fs 面失败 → HTTP 响应（A 档纯函数）：NotFound 与 NotDir **同一条 404
+/// 同文案**（越界/类型不符/不存在不许互相区分——不透露存在性）；Io = 500
+/// 显形内部故障（500 本身已说明不是「没有」）。
+pub fn fs_error_response(e: &fsapi::FsError) -> Vec<u8> {
+    match e {
+        fsapi::FsError::NotFound | fsapi::FsError::NotDir => {
+            respond(404, "Not Found", "{\"ok\":false,\"error\":\"not found\"}")
+        }
+        fsapi::FsError::Io(detail) => respond(500, "Internal Server Error", &error_body(detail)),
+    }
+}
+
+/// 通用失败体（A 档纯函数）：`{"ok":false,"error":…}`——键序与 404 手写体
+/// 一致（json! 走 BTreeMap 会把 error 排到 ok 前面，形状不一观感乱）；
+/// detail 走 serde 转义，含引号/换行也不破 JSON
+pub fn error_body(detail: &str) -> String {
+    format!(
+        "{{\"ok\":false,\"error\":{}}}",
+        serde_json::Value::String(detail.to_string())
+    )
 }
 
 /// 反代失败诚实报错体（A 档纯函数）：502 = 上游 9041 不可达/转发失败，

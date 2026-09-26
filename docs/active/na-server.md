@@ -28,8 +28,12 @@ tmux 管理靠 tmux_exec 短命 PTY 会话顺带完成，AI/文件树/obs 一概
   娃**——服务器侧、手机侧同此理。na 走到哪里，服务跟到哪里。
 - **na-server = na 的会话层后端**：终端 PTY over WebSocket + na-report
   回传口 + 健康面（服务卡数据源）。三件事，没有第四件。
-- 不做：AI 对话、文件树、obs、provider——那些仍是 kfmv4 的资产，na 用到
-  时走 kfmv4（后端可双挂，见 §五）。
+- 不做：AI 对话、obs、provider——那些仍是 kfmv4 的资产，na 用到时走 kfmv4
+  （后端可双挂，见 §五）。**2026-09-26 修订：文件树的「数据面」入驻本仓**
+  （`GET /api/fs/list` + `GET /api/fs/read`，§三）——它属于会话层同构的一部分
+  （树卡片读的后端该是 na 自己拉起的那个），纯函数核 `crates/na-protocol/
+  src/fsapi.rs` 双端共享；文件树 **UI 与 @ 引用**仍归客户端，语义规格照抄
+  nz `docs/file-tree-v1-design.md`（本仓不重造手感）。
 - 安全语义照抄 8021：**只绑 127.0.0.1**，公网不可达，入口只有 SSH 隧道。
   无浏览器客户端 ⇒ 不需要 origin 校验；鉴权 = SSH 本身。
 
@@ -89,6 +93,31 @@ tmux 管理靠 tmux_exec 短命 PTY 会话顺带完成，AI/文件树/obs 一概
 | `POST /api/na-report` | body 原样 append `/root/kfm-na/field-reports.log` | 与 kfmv4 files.ts:378 同行为；接报表路的迁移见 §五 |
 | `GET /api/na/health` | `{uptime_s, sessions:[{id, cmd, cols, rows, alive, idle_s}]}` | **新增**，服务卡唯一数据源（kfmv4 没有此面——后端是 kfmv4 时服务卡显示「kfmv4 托管」态）。idle_s = **真空闲**（距最后 input/output 活动，2026-09-20 修约：此前借 opened_epoch_s 充数 = 年龄冒充空闲，服务卡显形后修约，wsterm input/output 接线 registry.touch） |
 | `GET /api/na/sys` | `{load:[l1,l5,l15]\|null, procs:[running,total]\|null, mem_total_kb\|null, mem_avail_kb\|null, swap_total_kb\|null, swap_free_kb\|null, disk_total_b\|null, disk_avail_b\|null, uptime_s\|null, cores\|null}`（2026-09-20 晚三路扩：进程/交换/在线；**2026-09-21 加 cores——负载判色口径**：负载占比 = l1/核数，客户端凭它把负载轨并入三档判色；旧版缺键 → 客户端 None → 负载轨回退窗内峰值归一 + 中性档，契约向旧兼容） | **新增（2026-09-20）**，环境卡唯一数据源——「中央终端所在环境的自身体征」，与设备无关的通用面。采集/解析 = `crates/na-sys`（na-server 与 na 客户端同一份，双端同构第二面；手机本地相 = 客户端 `collect("/data")` 直读，卡面零改动）。**逐路显形契约（同日修约）**：键永远在（客户端凭键认版本），采不到的路 = null——Android SELinux 拒 /proc/loadavg 实锤（手机 Termux EACCES，meminfo 可读），collect 永不整组失败，一路塌不连坐 |
+| `GET /api/fs/list?dir=<相对路径>` | `{"ok":true,"dir":…,"entries":[{"name","kind":"dir"\|"file","size":u64,"mtime":i64(ms)}]}` | **新增（2026-09-26）文件树数据面**：只列**直接子层**（懒加载，子目录里的东西不冒头），排除规则过滤后按名字排序。`dir` 缺省 = 空串 = 允许根本身 |
+| `GET /api/fs/read?path=<相对路径>&max=<字节>` | 文本 `{"ok":true,"path","binary":false,"truncated","size","text"}` / 二进制 `{…,"binary":true,…}`（不带 text） | **新增（2026-09-26）**：NUL 探测判二进制；`max` 缺省 64KB、上限 1MB；`truncated = 读到的 > max ‖ 读到的 < size`；text 按 UTF-8 字符边界收口（绝不劈出半个字）。`size` 永远是全文长度 |
+| 文件面失败 | 404 `{"ok":false,"error":"not found"}` | 越界 / 不存在 / 类型不符（列文件、读目录）**塌成同一条响应**——不透露存在性；IO 故障才 500 |
+
+**文件树数据面（2026-09-26 立项入驻）**：纯函数核 = `crates/na-protocol/src/fsapi.rs`
+（`list_json`/`read_json`/`resolve`/`safe_rel`/`excluded`/`query_get`/`pct_decode`），
+na-server 的 `httpd::route` 只切 query 出参、`main.rs` 只做 IO 搬运——
+放 na-protocol 是为了**双端一份**（客户端要同一套 query 编解码与出参形状，
+各写一份必漂移）。语义真相源 = nz `src/server/fs.ts` + `docs/file-tree-v1-design.md`
+（na 本地化换皮，手感/安全口径照抄）。
+
+- **安全模型**：路径一律相对允许根；`..`/绝对路径/根组件在 `safe_rel` 就拒；
+  `canonicalize` 后必须 `starts_with(根 canonical)`——**软链逃出根 = 与不存在
+  同一种 404**。canonical 路径一路带到 open/readdir（不拿拼接路径复用）。
+- **允许根 `NA_FS_ROOTS`**（环境变量，冒号分隔；每请求现读，运行时可改）：
+  缺省 = `/root/00-Loyintina`（库本体）存在则用它，否则 `$HOME`——全量 HOME
+  会把源码树/toolchain 全索进来（nz 8.3MB 索引实锤）。**设成空串 = 零根
+  fail-closed**（一切都 404），不退缺省，防「以为收窄了其实放开了」。
+- **执行纪律**：na-server 是 `current_thread` 运行时（全部连接含 WS 终端流
+  共用一条线程）——fs 面**必须**走 `tokio::task::spawn_blocking` 的阻塞池，
+  handler 里直接 `std::fs` 会把所有连接一起冻住（2026-09-26 实拍：40000 条
+  目录慢列在飞时，health 面 29ms 应答）。
+- **已知差异**：排序 = Rust `sort()` 字节序（Node 是 UTF-16 码元序，
+  仅 U+10000 以上与 U+E000..U+FFFF 混排时理论序不同）；出参键序 =
+  serde_json 的字母序（JSON 对象键序无语义，两端都走 serde 解析）。
 
 ## 四、可视化落位（解析页服务卡）
 

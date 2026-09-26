@@ -103,6 +103,9 @@ pub enum Preview {
     /// 视口平移切页演示（十五修语义化）：两个迷你页（各含双小池）整体
     /// 横移换页，面与内容一体
     PagePan,
+    /// 压暗层淡入淡出演示（BAR-163 翻案）：迷你页 + 压暗 α 0↔150 乒乓
+    /// + 小卡恒在压暗之上（层级语义同展出）
+    VeilFade,
 }
 
 /// 组件条目（跳框字段区+预览画板的数据源：名/状态/位置/规范/考题/
@@ -412,6 +415,28 @@ pub const COMPONENTS: &[CompEntry] = &[
         preview: Preview::Swipe,
     },
     CompEntry {
+        name: "文件树抽屉",
+        cat: "动效引擎",
+        status: CompStatus::Active,
+        symbol: "drawer_dy",
+        file: "src/ui/filetree.rs",
+        spec: "docs/active/文件树.md",
+        tests: "tests/filetree_spec.rs",
+        desc: "目录展开/收起的刚体位移：子行钉全高刚体、顶缘裁剪带随 cur_h=full_h+dy 收放（展开 240ms / 收起 180ms，复用配置页下拉的同一套机制）。漏进活性探针 = 动画零帧。",
+        preview: Preview::ViewportPush,
+    },
+    CompEntry {
+        name: "树光标框",
+        cat: "动效引擎",
+        status: CompStatus::Active,
+        symbol: "cursor_y",
+        file: "src/ui/filetree.rs",
+        spec: "docs/active/文件树.md",
+        tests: "tests/filetree_spec.rs",
+        desc: "文件树选中框（老 kfmv4 Canvas 版复刻，用户裁决：液体光点不要、渐变文字不要）：上线 = 名字实量宽、下线补全行尾、左 3px 竖线、底 accent 15%、移动 180ms ease-out cubic。",
+        preview: Preview::OpenCursor,
+    },
+    CompEntry {
         name: "视口平移",
         cat: "动效引擎",
         status: CompStatus::Active,
@@ -489,6 +514,17 @@ pub const COMPONENTS: &[CompEntry] = &[
         preview: Preview::CurveFling,
     },
     CompEntry {
+        name: "压暗层",
+        cat: "动效引擎",
+        status: CompStatus::Active,
+        symbol: "paint_modal_veil_layer",
+        file: "src/termview.rs",
+        spec: "宪法 §六 跳框 + BAR-163 翻案（2026-09-26 用户真机三症）",
+        tests: "tests/termview_spec.rs",
+        desc: "跳框模态的全屏压暗 + 卡承载层（ChromeSlot::ModalVeil，BAR-163 翻案升组件——压暗层是组件不是背景色）：全屏画布 α150 黑直写（GPU 混合 ≡ blend(黑,下层,150)，DropdownPanel 深底同款直写纪律）+ comp modal/查看器卡涂装在卡位之上。z 序 = Over 之上（恒最后画）——压暗盖标签栏层/下池光标层/输入栏槽，旧「压暗画进配置槽」让三 chrome 层全在压暗之上（用户「没有全屏压暗」+「光标框透出来」双症本体）。卡高安全带：顶 4 格 + 底（输入栏带 220+2 格），旧「屏高−8 格」让关闭钮底距栏顶 30px「差点按不到」。CPU 兜底路径无层机制，跳框原位涂装留配置槽（skip_cursor 同款分流）。预览 = 语义化演示：迷你页 + 压暗淡入淡出 + 小卡恒在压暗之上。",
+        preview: Preview::VeilFade,
+    },
+    CompEntry {
         name: "视口平移切页",
         cat: "动效引擎",
         status: CompStatus::Active,
@@ -516,6 +552,7 @@ pub fn preview_is_animated(p: Preview) -> bool {
             | Preview::CursorSlide
             | Preview::DropdownAnim
             | Preview::PagePan
+            | Preview::VeilFade
     )
 }
 

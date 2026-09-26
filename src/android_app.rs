@@ -422,6 +422,11 @@ struct App {
     /// 分流里面板在顶先于它 return，互斥从路由自然推出（栈零新规则）。
     /// 点按抬手 = summon_panel(Config)；拖过 slop = 不触发
     gear_touch: Option<(u64, f64, f64, bool)>,
+    /// 按在烧瓶钮上的手势（2026-09-26 md 渲染打样 demo 页入口，
+    /// ui/demo_icon.rs）：(指 id, 起点 x, 起点 y, 拖过 slop)。与齿轮
+    /// 同律——只在裸终端页可达；点按抬手 = summon_panel(Demo)，
+    /// 拖过 slop = 不触发（demo 页不占召唤滑槽，烧瓶钮是唯一召唤口）
+    demo_touch: Option<(u64, f64, f64, bool)>,
     /// 按在断线状态卡钮上的手势（A 断线治理，ui/down_card.rs）：
     /// (指 id, 起点 x, 起点 y, 武装命中, 拖过 slop)。只在 session_over
     /// 且裸终端页可达（卡在屏才命中）；抬手同钮 = 触发，拖过 = 不触发
@@ -456,6 +461,15 @@ struct App {
     /// 带且表可滚 → Session 表内滚动；其余卡区且页面可滚 → Page 页面
     /// 滚动；都不可滚/横向主导 → 让回面板页全家
     parser_touch: Option<(f64, f64, Option<ParserDrag>, f64)>,
+    /// 文件树页状态核（BAR-165；与全局句柄同一份——倒帧那两条涂装路手上
+    /// 没有 App，只有全局够得着，壳里留一份免得每处都查全局）
+    filetree: Option<std::sync::Arc<std::sync::Mutex<crate::ui::filetree::FileTreeState>>>,
+    /// 文件树页手势槽（行区起手）：(起手x, 起手y, 已拖过 slop, 上次y)。
+    /// 同 parser_touch 的「先量后锁」——拖过 slop = 滚行表（抬手不命中），
+    /// 横向占优 = 整槽让回面板页（滚动吃增量，故要记上次 y）
+    ft_touch: Option<(f64, f64, bool, f64)>,
+    /// 文件树页「在顶」上一圈值：召唤沿触发根层刷新（不进页不拉数据）
+    ft_top_last: bool,
     /// tmux 执行在途（动作类 + 结果通道）：about_to_wait 排水——Ok 后
     /// List=填表 / New=attach 新会话 / Kill/Reflow=刷新列表
     parser_exec: Option<(
@@ -642,11 +656,17 @@ struct LayerSigs {
     panel: crate::ui::stage::DirtyGuard<(u32, u32, u32, u32)>,
     over: crate::ui::stage::DirtyGuard<OverSig>,
     config: crate::ui::stage::DirtyGuard<ConfigSig>,
-    filetree: crate::ui::stage::DirtyGuard<(u32, u32, u32, u32, u32, u32)>,
+    /// 文件树槽：末四维 = 帧账（行表代 / 滚动 / 选中 / 动画簇，BAR-165）——
+    /// 动画簇在动画期喂 now_ms（每帧都变），静止期恒 0（稳态零重烘）
+    filetree: crate::ui::stage::DirtyGuard<(u32, u32, u32, u32, u32, u32, u32, u32, u32, u32)>,
     /// 解析槽：末两维 = tmux 插件 epoch（2026-09-19 插件卡内容随槽同烘焙）
     /// + 隧道 epoch（2026-09-20 连接/服务卡——状态翻转必重烘，漏维 = 鬼影）
     parser: crate::ui::stage::DirtyGuard<ParserSig>,
-    termcard: crate::ui::stage::DirtyGuard<(u32, u32, u32, u32)>,
+    termcard: crate::ui::stage::DirtyGuard<(u32, u32, u32, u32, u32, u32)>,
+    /// Demo 槽（2026-09-26 md 渲染打样）：(w, h, ime, bar_h, c1, c2)——
+    /// 页环停栏带上沿吃 ime/bar_h；accent 两维随召唤重随必重烘
+    /// （漏维 = 新色不进纹理）
+    demo: crate::ui::stage::DirtyGuard<(u32, u32, u32, u32, u32, u32)>,
     /// 断线状态卡层（A 断线治理）：(w, h, session_over)——死活翻转
     /// 才重烘，稳态零成本
     downcard: crate::ui::stage::DirtyGuard<(u32, u32, u8, u8, u16)>,
@@ -667,6 +687,9 @@ struct LayerSigs {
     /// 卡宽, 卡高)——采样换代/几何变/accent 变才重烘；**滑入位移不进
     /// 本判定**（它在合成期 uv 上，逐帧变也不重烘 = 拆层的全部意义）
     sys_band: crate::ui::stage::DirtyGuard<(u32, u32, u64, u32, u32, u32, u32)>,
+    /// 压暗层（BAR-163 翻案）：跳框全屏层——跳框开合/内容/accent/动效
+    /// 帧泵才重烘，跳框全关零成本
+    veil: crate::ui::stage::DirtyGuard<VeilSig>,
     /// 平移旧代捕获账（十九修 D8）：Some((epoch, scope, dir)) = 当前
     /// PanOld 纹理属于哪笔平移账——新账才重新拷贝画布
     pan_cap: Option<(u64, u8, i8)>,
@@ -683,6 +706,7 @@ impl LayerSigs {
         self.filetree.invalidate();
         self.parser.invalidate();
         self.termcard.invalidate();
+        self.demo.invalidate();
         self.downcard.invalidate();
         self.tabbar.invalidate();
         self.cursor.invalidate();
@@ -690,6 +714,7 @@ impl LayerSigs {
         self.lower_rows.invalidate();
         self.dropdown.invalidate();
         self.sys_band.invalidate();
+        self.veil.invalidate();
     }
 }
 
@@ -751,6 +776,24 @@ struct DropdownSig {
     opts_hash: u64,
     /// 代际（保险维：换选/重建必翻）
     epoch: u64,
+}
+
+/// 压暗层 sig（BAR-163 翻案）：层画布 = 全屏 w×h。跳框（comp modal/
+/// 查看器）内容变/accent 变/动效预览帧泵才重烘；跳框全关 = 层不上岗
+/// 零成本。content_key 漏维 = 换卡不重烘的旧卡面鬼影
+#[derive(PartialEq)]
+struct VeilSig {
+    w: u32,
+    h: u32,
+    c1: u32,
+    c2: u32,
+    /// 跳框内容键：modal = 下标+1；viewer = title+content 哈希（高位置
+    /// 1 与 modal 区间不撞）
+    content_key: u64,
+    /// 动效预览时间桶（comp modal 动画展品开着 = boot_ms/33 逐帧新值
+    /// 逐帧重烘——ConfigSig.anim_bucket 旧纪律随跳框一起搬进本层；
+    /// 查看器无动画恒 0）
+    anim_bucket: u64,
 }
 
 /// 上层槽 sig（derive PartialEq 深比较——BarSnap/PresenceSnap 均已
@@ -965,6 +1008,7 @@ impl App {
             Some(Panel::Config) => DragTop::Config,
             Some(Panel::FileTree) => DragTop::FileTree,
             Some(Panel::Parser) => DragTop::Parser,
+            Some(Panel::Demo) => DragTop::Demo,
             _ => DragTop::Other,
         };
         // 字段级直取（self.screen_px() 借全 self 会撞 &mut panel_drag，
@@ -1034,10 +1078,11 @@ impl App {
         } else {
             d.on_release(now, w)
         };
-        // 角色 → 目标面板（四公民：右缘家=配置/解析、左缘家=文件树，
-        // 栈操作同规）
+        // 角色 → 目标面板（五公民：右缘家=配置/解析/Demo、左缘家=文件树，
+        // 栈操作同规；Demo 只有 Dismiss 一义——钮召不占召唤滑槽）
         let role_panel = match d.role() {
             Some(DragRole::DismissConfig) => Some(Panel::Config),
+            Some(DragRole::DismissDemo) => Some(Panel::Demo),
             Some(DragRole::SummonFileTree) | Some(DragRole::DismissFileTree) => {
                 Some(Panel::FileTree)
             }
@@ -1057,24 +1102,27 @@ impl App {
             // 推回：完成 = 出栈；取消 = 保持（目标回 0）
             (Some(DragRole::DismissConfig), ReleaseDecision::Complete)
             | (Some(DragRole::DismissFileTree), ReleaseDecision::Complete)
-            | (Some(DragRole::DismissParser), ReleaseDecision::Complete) => {
+            | (Some(DragRole::DismissParser), ReleaseDecision::Complete)
+            | (Some(DragRole::DismissDemo), ReleaseDecision::Complete) => {
                 if let (Some(ai), Some(p)) = (&self.ai_presence, role_panel) {
                     ai.dismiss_top(p);
                 }
             }
             (Some(DragRole::DismissConfig), ReleaseDecision::Cancel)
             | (Some(DragRole::DismissFileTree), ReleaseDecision::Cancel)
-            | (Some(DragRole::DismissParser), ReleaseDecision::Cancel) => {}
+            | (Some(DragRole::DismissParser), ReleaseDecision::Cancel)
+            | (Some(DragRole::DismissDemo), ReleaseDecision::Cancel) => {}
             (None, _) => {}
         }
         // 收尾续播：从跟手偏移重定基到翻转后的目标值（方向分档曲线
         // 自动选臂——靠泊方向 250ms / 屏外方向 350ms，均减速到位）。
-        // 按家踢各自的缝（右缘家 +cur（配置/解析）/ 文件树左缘 -cur，
+        // 按家踢各自的缝（右缘家 +cur（配置/解析/Demo）/ 文件树左缘 -cur，
         // cur 是距靠泊的距离，折符号后进 replay）
         match role_panel {
             Some(Panel::Config) => crate::ui::seam::replay_config_panel_offset_x(cur, now),
             Some(Panel::FileTree) => crate::ui::seam::replay_filetree_panel_offset_x(-cur, now),
             Some(Panel::Parser) => crate::ui::seam::replay_parser_panel_offset_x(cur, now),
+            Some(Panel::Demo) => crate::ui::seam::replay_demo_panel_offset_x(cur, now),
             _ => {}
         }
         let after = self.ai_presence.as_ref().and_then(|ai| ai.snap(now).top);
@@ -1190,6 +1238,30 @@ impl App {
                 let in_input_bar = self.screen_px().is_some_and(|(_, sh)| {
                     crate::input_bar::in_bar(y, sh, self.chrome_inset(), bar_h)
                 });
+                // 跳框模态仲裁先于输入栏带分流（BAR-163 翻案症②的交互
+                // 半：压暗层升全屏后栏带也是「框外」——旧序 in_input_bar
+                // 先 return，跳框开着时点栏带既按不到框外收起也按不到
+                // 关闭钮，redroid 实录「差点按不到」的另一半病灶）。
+                // 压暗层吃下层全部触摸（标签栏/池区/栏带/面板拖拽全家
+                // 让路）；抬手命中判定在 Completed（几何吃 ui/modal.rs）
+                let panel_top = self.last_ai_snap.and_then(|s| s.top);
+                if panel_top == Some(crate::ai_presence::Panel::Config)
+                    && crate::ui::seam::sample_config_panel_offset_x(
+                        0.0,
+                        crate::report::boot_ms() as u64,
+                    ) as i32
+                        == 0
+                    && let Some(page) = crate::ui::cfg_page::cfg_page_handle()
+                    && {
+                        let pg = page.lock().unwrap();
+                        // BAR-163：查看器跳框与 comp modal 同层级同仲裁
+                        pg.modal().is_some() || pg.viewer().is_some()
+                    }
+                {
+                    crate::report::report("gest", &format!("起手→跳框模态 ({x:.0},{y:.0})"));
+                    self.modal_touch = Some((x, y, false));
+                    return;
+                }
                 if in_input_bar {
                     // 选择态下先检查是否按在锚点热区上（锚点命中优先级最高）
                     let anchor = self.hit_selection_anchor(x, y);
@@ -1212,30 +1284,9 @@ impl App {
                 // （AI 页拖动滚行/两页点按收键盘/水平快滑抽屉召唤推回），
                 // 终端手势全家让路（快捷键行热区也不许穿透：面板盖着它，
                 // 点得着看不见 = 幽灵键；被覆盖面板同样吃不到手势——
-                // 路由按逻辑栈顶，不按 placement 过渡帧）
-                let panel_top = self.last_ai_snap.and_then(|s| s.top);
+                // 路由按逻辑栈顶，不按 placement 过渡帧）。
+                // （跳框模态仲裁已提到栏带分流之前——BAR-163 翻案）
                 if panel_top.is_some() {
-                    // 跳框模态仲裁（宪法 §六 跳框条款，九修）：配置页靠泊
-                    // 且跳框开着 → 本手势全归跳框——压暗层吃下层全部触摸
-                    // （标签栏/池区/面板拖拽全家让路）；抬手命中判定在
-                    // Completed（几何吃 ui/modal.rs，眼手同尺）
-                    if panel_top == Some(crate::ai_presence::Panel::Config)
-                        && crate::ui::seam::sample_config_panel_offset_x(
-                            0.0,
-                            crate::report::boot_ms() as u64,
-                        ) as i32
-                            == 0
-                        && let Some(page) = crate::ui::cfg_page::cfg_page_handle()
-                        && {
-                            let pg = page.lock().unwrap();
-                            // BAR-163：查看器跳框与 comp modal 同层级同仲裁
-                            pg.modal().is_some() || pg.viewer().is_some()
-                        }
-                    {
-                        crate::report::report("gest", &format!("起手→跳框模态 ({x:.0},{y:.0})"));
-                        self.modal_touch = Some((x, y, false));
-                        return;
-                    }
                     // 标签栏仲裁（主题宪法 §四，2026-09-12）：配置页靠泊
                     // （cfg_off==0——过渡帧中不仲裁，手势归面板全家）且
                     // 起点在标签行带 → 手势归标签栏：横滑滚标签不触发
@@ -1256,6 +1307,75 @@ impl App {
                             dragged: false,
                         });
                         return;
+                    }
+                    // 文件树页仲裁（BAR-165）：页在顶且靠泊（缝采样 == 0，
+                    // 过渡帧中手势归面板全家）。
+                    // ① 查看器/跳框开着 → 本手势全归它——配置页那条模态仲裁
+                    //    是 Config 专用，文件树页开的查看器（点文件预览，
+                    //    BAR-163 同族）得在这里接住；抬手命中实现是页面无关的
+                    //    （modal_touch → cfg_page.viewer() 那条），故此处置
+                    //    modal_touch 就够
+                    // ② 行表窗内 → 建 ft_touch 槽（点按 = 命中；拖过 slop = 滚）
+                    // ③ 底栏 → X 关页、眼睛刷根层、根名盒 v1 只读（吃手势）
+                    if panel_top == Some(crate::ai_presence::Panel::FileTree)
+                        && crate::ui::seam::sample_filetree_panel_offset_x(
+                            0.0,
+                            crate::report::boot_ms() as u64,
+                        ) as i32
+                            == 0
+                    {
+                        if let Some(page) = crate::ui::cfg_page::cfg_page_handle()
+                            && {
+                                let pg = page.lock().unwrap();
+                                pg.modal().is_some() || pg.viewer().is_some()
+                            }
+                        {
+                            crate::report::report(
+                                "gest",
+                                &format!("起手→跳框模态（文件树页）({x:.0},{y:.0})"),
+                            );
+                            self.modal_touch = Some((x, y, false));
+                            return;
+                        }
+                        if let (Some((sw, sh)), Some(_ft)) = (self.screen_px(), &self.filetree) {
+                            let g = crate::termview::ft_geom(
+                                sw,
+                                sh,
+                                self.chrome_inset() + self.cur_bar_h(),
+                            );
+                            let (xi, yi) = (x as i64, y as i64);
+                            if xi >= g.x0 && xi < g.x1 && yi >= g.list_y0 && yi < g.list_y1 {
+                                crate::report::report(
+                                    "gest",
+                                    &format!("起手→文件树行表 ({x:.0},{y:.0})"),
+                                );
+                                self.ft_touch = Some((x, y, false, y));
+                                return;
+                            }
+                            match crate::termview::ft_bar_hit(&g, xi, yi) {
+                                Some(crate::termview::FtBarHit::Close) => {
+                                    crate::report::report("gest", "文件树底栏→关页");
+                                    if let Some(ai) = &self.ai_presence {
+                                        ai.dismiss_top(crate::ai_presence::Panel::FileTree);
+                                    }
+                                    self.dirty = true;
+                                    return;
+                                }
+                                Some(crate::termview::FtBarHit::Eye) => {
+                                    // 刷根层：`apply_root_list` 保已展开子树
+                                    // （用户摊开的树不被刷新拍平——BAR-165 注）
+                                    crate::report::report("gest", "文件树底栏→刷根层");
+                                    crate::fs_fetch::request_root();
+                                    self.dirty = true;
+                                    return;
+                                }
+                                Some(crate::termview::FtBarHit::Root) => {
+                                    // 根名盒 v1 只读（吃手势不留痕以外的动作）
+                                    return;
+                                }
+                                None => {}
+                            }
+                        }
                     }
                     // 池区仲裁（宪法 §五 目录语义，2026-09-13）：配置页
                     // 靠泊（同标签栏的缝采样判据）时——
@@ -1494,6 +1614,15 @@ impl App {
                     self.gear_touch = Some((id, x, y, false));
                     return;
                 }
+                // 烧瓶钮命中（2026-09-26 demo 页入口，ui/demo_icon.rs）：
+                // 齿轮正下 0.5 格同中轴，同律——只在裸终端页走到这；
+                // 登记即归钮，点按抬手才召唤（拖过 slop 不触发）
+                if let Some((sw, _)) = self.screen_px()
+                    && crate::ui::demo_icon::hit(x, y, sw)
+                {
+                    self.demo_touch = Some((id, x, y, false));
+                    return;
+                }
                 // 起点在快捷键行带上 → 这手势归行（不滚屏不唤键盘）
                 // BAR-018：判定尺与渲染/hit 一致——减去键盘 inset，
                 // 否则键盘弹起时行带浮在 inset 上方，这里却认屏底。
@@ -1607,6 +1736,18 @@ impl App {
                         || (y - gt.2).abs() > crate::scroll::TAP_SLOP_PX
                     {
                         gt.3 = true;
+                    }
+                    return;
+                }
+                // 烧瓶钮手势（2026-09-26 demo 页）：与齿轮同律——只认本指，
+                // 超 slop 记拖过（抬手不触发召唤），它指事件放行走原分路
+                if let Some(dt) = &mut self.demo_touch
+                    && dt.0 == id
+                {
+                    if (x - dt.1).abs() > crate::scroll::TAP_SLOP_PX
+                        || (y - dt.2).abs() > crate::scroll::TAP_SLOP_PX
+                    {
+                        dt.3 = true;
                     }
                     return;
                 }
@@ -1760,6 +1901,63 @@ impl App {
                 // 可滚 → Page 页面滚动（2026-09-20 视口化用户拍板「卡弹小+
                 // 上下能滑动」）；否则让回面板页全家（横向锁/抽屉裁决才轮
                 // 得到它）
+                // 文件树页行表拖动（BAR-165）：过 slop 才算滚（未过 = 仍是
+                // 点按，抬手进命中）；横向占优 = 槽让回面板页（本家在顶 +
+                // 右滑零动作，故只放行不抢）；滚动态吃当下可视窗（状态核
+                // 不揣屏寸，与解析页同律）
+                if let Some(ft) = self.ft_touch.take() {
+                    let (dx_all, dy_all) = (x - ft.0, y - ft.1);
+                    // 增量（滚动用）：跟手 = 手指上推（inc<0）看后部 = scroll 增
+                    let inc = y - ft.3;
+                    if !ft.2
+                        && (dx_all.abs() > crate::ui::panel_drag::DRAG_LOCK_PX
+                            || dy_all.abs() > crate::ui::panel_drag::DRAG_LOCK_PX)
+                    {
+                        if dx_all.abs() * crate::ui::panel_drag::DRAG_DIR_LOCK > dy_all.abs() {
+                            // 横向占优：本页只吃垂直滚动（本家在顶，右滑零
+                            // 动作、左滑关页都归面板页）——整槽让回去
+                            crate::report::report(
+                                "gest",
+                                &format!("文件树行表手势让回面板页 ({x:.0},{y:.0})"),
+                            );
+                            self.panel_touch = Some(PanelTouch {
+                                start_x: ft.0,
+                                start_y: ft.1,
+                                last_y: y,
+                                acc_px: 0.0,
+                                dragged: true,
+                            });
+                            self.panel_drag = Some(crate::ui::panel_drag::PanelDrag::new(
+                                ft.0,
+                                ft.1,
+                                crate::report::boot_ms() as u64,
+                            ));
+                            if self.feed_panel_drag(x, y) {
+                                return;
+                            }
+                            self.dirty = true;
+                            return;
+                        }
+                        // 落锁那一瞬不滚（起滚点重定基，防 slop 跳变）
+                        self.ft_touch = Some((ft.0, ft.1, true, y));
+                        self.dirty = true;
+                        return;
+                    }
+                    if ft.2
+                        && inc != 0.0
+                        && let (Some((sw, sh)), Some(state)) = (self.screen_px(), &self.filetree)
+                    {
+                        let g = crate::termview::ft_geom(
+                            sw,
+                            sh,
+                            self.chrome_inset() + self.cur_bar_h(),
+                        );
+                        let view_h = g.list_y1 - g.list_y0;
+                        state.lock().unwrap().scroll_by(-(inc as i64), view_h);
+                        self.dirty = true;
+                    }
+                    self.ft_touch = Some((ft.0, ft.1, ft.2, y));
+                }
                 if let Some(pt) = self.parser_touch.take() {
                     if let Some(kind) = pt.2 {
                         // 滚动态：垂直增量跟手（手指上推 dy<0 = 看后部
@@ -2324,6 +2522,26 @@ impl App {
                     self.dirty = true;
                     return;
                 }
+                // 烧瓶钮手势收尾（2026-09-26 demo 页入口）：与设置钮同律——
+                // 本指抬起且未拖过 slop = 点按 → 召唤 demo 页（栈操作留痕）
+                if self.demo_touch.as_ref().is_some_and(|d| d.0 == id) {
+                    let dt = self.demo_touch.take().unwrap();
+                    if phase == TouchPhase::Ended
+                        && !dt.3
+                        && let Some(ai) = &self.ai_presence
+                    {
+                        let before = self.last_ai_snap.and_then(|s| s.top);
+                        ai.summon_panel(crate::ai_presence::Panel::Demo);
+                        let after = ai.snap(crate::report::boot_ms() as u64).top;
+                        crate::report::report(
+                            "gest",
+                            &format!("烧瓶钮点按: 栈顶 {before:?}→{after:?}"),
+                        );
+                        crate::report::report("touch", "烧瓶钮命中 → summon Demo");
+                    }
+                    self.dirty = true;
+                    return;
+                }
                 // 光球手势收尾：pressed 复位；无位移短按抬起 → tap 切页
                 // （Cancelled / 拖过 / 长按已发 fake_run 的抬手不补 tap）
                 if let Some(ot) = self.orb_touch.take() {
@@ -2630,6 +2848,83 @@ impl App {
                 // 命中判定（几何吃 ui/parser_page::layout_vp 同一份——眼手
                 // 同尺）：行 = 切换 attach / × = 开确认 / 按钮 = 动作分发；
                 // 拖过 slop / Cancelled = 零动作（Moved 段已让回面板页）
+                // 文件树页抬手（BAR-165）：未拖 = 命中判定——几何吃**屏代
+                // 快照**（命中唯一合法源 = 屏上正显示的那一代，BAR-145 判例），
+                // 无烘焙记录回落活体（与解析页同规）。**三角带 = 开合 /
+                // 名字区 = 选中**（旧表述「目录行点哪都算开合（原版语义）」
+                // 已作废——2026-09-26 研究线判卷纠偏，以本处代码为准）；
+                // 文件行选中后另开只读预览跳框
+                if let Some(ft) = self.ft_touch.take() {
+                    if phase == TouchPhase::Ended
+                        && !ft.2
+                        && let (Some((sw, sh)), Some(state)) = (self.screen_px(), &self.filetree)
+                    {
+                        let now = crate::report::boot_ms() as u64;
+                        let g = crate::termview::ft_geom(
+                            sw,
+                            sh,
+                            self.chrome_inset() + self.cur_bar_h(),
+                        );
+                        let view_h = g.list_y1 - g.list_y0;
+                        let snap = crate::ui::filetree::baked_snap()
+                            .unwrap_or_else(|| state.lock().unwrap().snap());
+                        let y_local = ft.1 as i64 - g.list_y0;
+                        // x 必须折成**列表相对**（状态核的 x 尺 = 行左缘起算：
+                        // 三角带 x<TRI_W、三角盒 tri_x..tri_x+TRI_W 都相对它）——
+                        // 传屏幕 x 就差一个内容左缘（43px），实拍逮到过：
+                        // 三角点不中，全落成「选中」（2026-09-26 redroid 实拍）
+                        let x_local = ft.0 as i64 - g.x0;
+                        let hit = crate::ui::filetree::FileTreeState::hit_snap(
+                            &snap, x_local, y_local, view_h,
+                        );
+                        if let Some(h) = hit {
+                            // 三角带 = 开合；名字区 = 选中（文件行另开只读预览）。
+                            // 这条切分是原版截屏实拍的：屏上选中的那一行是**目录**
+                            // 且没展开——说明名字区点按只选中，不顺手摊开
+                            let (idx, want_toggle) = match h {
+                                crate::ui::filetree::Hit::Toggle(i) => (i, true),
+                                crate::ui::filetree::Hit::Row(i) => (i, false),
+                            };
+                            if let Some(row) = snap.rows.get(idx).cloned() {
+                                if want_toggle && row.kind.is_dir() {
+                                    let action = state.lock().unwrap().toggle(idx, now);
+                                    match action {
+                                        crate::ui::filetree::ToggleAction::NeedList { path } => {
+                                            crate::report::report(
+                                                "ftree",
+                                                &format!("展开目录 {path:?}→取子层"),
+                                            );
+                                            crate::fs_fetch::request_list(path);
+                                        }
+                                        crate::ui::filetree::ToggleAction::Locked => {}
+                                        other => crate::report::report(
+                                            "ftree",
+                                            &format!("目录点按 {other:?}"),
+                                        ),
+                                    }
+                                } else {
+                                    state.lock().unwrap().select(idx, now);
+                                    crate::report::report(
+                                        "ftree",
+                                        &format!("选中行 {idx} {}", row.path),
+                                    );
+                                    if !row.kind.is_dir() {
+                                        crate::report::report(
+                                            "ftree",
+                                            &format!("点文件→预览 {}", row.path),
+                                        );
+                                        crate::fs_fetch::request_read(
+                                            row.path.clone(),
+                                            row.name.clone(),
+                                        );
+                                    }
+                                }
+                                self.dirty = true;
+                            }
+                        }
+                    }
+                    self.dirty = true;
+                }
                 if let Some(pt) = self.parser_touch.take() {
                     if phase == TouchPhase::Ended
                         && pt.2.is_none()
@@ -3706,6 +4001,21 @@ impl App {
                 .map(|s| s.tunnel.local_port)
                 .unwrap_or(crate::tunnel::NA_SERVER_PORT),
         );
+        // 文件树数据面（BAR-165）：同一隧道本地口喂取数器；状态核注册全局
+        // （三处涂装 + 手势 + 取数同源一份，与 parser_page_handle 同形制）。
+        // 底栏根名 v1 恒 "root"（原版截屏同字；根全路径在服务端，客户端
+        // 只认相对路径——要显示真名得让 /api/fs/list 多回一个 root 字段）
+        crate::fs_fetch::configure(
+            tunnel_srv
+                .as_ref()
+                .map(|s| s.tunnel.local_port)
+                .unwrap_or(crate::tunnel::NA_SERVER_PORT),
+        );
+        let ft_state = std::sync::Arc::new(std::sync::Mutex::new(
+            crate::ui::filetree::FileTreeState::new("root"),
+        ));
+        crate::ui::filetree::register_filetree(ft_state.clone());
+        self.filetree = Some(ft_state);
 
         // 插件基座：终端模拟器 + 连接 provider（边界手术第一/二刀）——
         // 「用哪个终端芯、连哪、怎么连」都不归主循环；工厂是服务，实例归调用方。
@@ -6300,10 +6610,11 @@ impl App {
         cfg_off: i32,
         ft_off: i32,
         pt_off: i32,
-        z_order: [crate::ai_presence::Panel; 4],
-        // 三公民页面 accent（[cfg, ft, pt]，来自 PresenceSnap——静态装配
+        demo_off: i32,
+        z_order: [crate::ai_presence::Panel; 5],
+        // 五公民页面 accent（[cfg, ft, pt, demo]，来自 PresenceSnap——静态装配
         // 无 self，快照同行是唯一来源；调用方 None 时给 FALLBACK）
-        accents: [crate::ui::accent::AccentPair; 3],
+        accents: [crate::ui::accent::AccentPair; 4],
         chat_msgs: &[(bool, String, String)],
         chat_scroll: u32,
         chat_live: bool,
@@ -6321,7 +6632,8 @@ impl App {
         let (cfg_grid, cfg_visible) = crate::termview::cfg_split(cfg_off, w);
         let (ft_grid, ft_visible) = crate::termview::ft_split(ft_off, w);
         let (pt_grid, pt_visible) = crate::termview::pt_split(pt_off, w);
-        let grid_keybar = ai_grid && cfg_grid && ft_grid && pt_grid;
+        let (demo_grid, demo_visible) = crate::termview::demo_split(demo_off, w);
+        let grid_keybar = ai_grid && cfg_grid && ft_grid && pt_grid && demo_grid;
         let bottom_inset = ime_bottom_px + bar_h;
         let mut ai_layout = None;
         // 快捷键行（BAR-017 Rust 自绘覆盖层；inset 必须叠输入栏当前带高
@@ -6345,6 +6657,7 @@ impl App {
             crate::ai_presence::Panel::Config => accents[0],
             crate::ai_presence::Panel::FileTree => accents[1],
             crate::ai_presence::Panel::Parser => accents[2],
+            crate::ai_presence::Panel::Demo => accents[3],
             crate::ai_presence::Panel::Ai => crate::ui::accent::FALLBACK,
         };
         for slot in z_order {
@@ -6420,6 +6733,22 @@ impl App {
                             ft_off,
                             acc_of(crate::ai_presence::Panel::FileTree),
                         );
+                        // 内容墨（BAR-165）：软渲染兜底路整页原地画——内容
+                        // 吃同一份 ft_off（与 chrome 同尺，不许各算）
+                        if let Some((snap, _)) =
+                            crate::ui::filetree::frame(crate::report::boot_ms() as u64)
+                        {
+                            term.paint_ft_content(
+                                buf,
+                                w,
+                                h,
+                                bottom_inset,
+                                ft_off,
+                                &snap,
+                                crate::report::boot_ms() as u64,
+                                acc_of(crate::ai_presence::Panel::FileTree),
+                            );
+                        }
                     }
                 }
                 crate::ai_presence::Panel::Parser => {
@@ -6454,6 +6783,27 @@ impl App {
                                 acc_of(crate::ai_presence::Panel::Parser),
                             );
                         }
+                    }
+                }
+                crate::ai_presence::Panel::Demo => {
+                    if demo_visible {
+                        crate::termview::paint_demo_page_chrome(
+                            buf,
+                            w,
+                            h,
+                            bottom_inset,
+                            demo_off,
+                            acc_of(crate::ai_presence::Panel::Demo),
+                        );
+                        // 内容墨（md 打样）：兜底路径整页原地画——内容吃
+                        // 同一份 demo_off（与 chrome 同尺，不许各算）
+                        term.paint_demo_content(
+                            buf,
+                            w,
+                            h,
+                            demo_off,
+                            acc_of(crate::ai_presence::Panel::Demo),
+                        );
                     }
                 }
                 crate::ai_presence::Panel::Ai => {
@@ -6585,7 +6935,8 @@ impl App {
         cfg_off: i32,
         ft_off: i32,
         pt_off: i32,
-        z_order: [crate::ai_presence::Panel; 4],
+        demo_off: i32,
+        z_order: [crate::ai_presence::Panel; 5],
         panel_scratch: &mut Vec<u32>,
         tab_snap: Option<&crate::ui::tab_bar::TabBarSnap>,
         pool_snap: Option<&crate::ui::dual_pool::DualPoolSnap>,
@@ -6598,8 +6949,8 @@ impl App {
         };
         // 当前栏带高（眼手同尺单源，见 current_bar_h）
         let bar_h = Self::current_bar_h(&**term, bar_snap, w);
-        let accents = ai_snap.map_or([crate::ui::accent::FALLBACK; 3], |s| {
-            [s.accent_cfg, s.accent_ft, s.accent_pt]
+        let accents = ai_snap.map_or([crate::ui::accent::FALLBACK; 4], |s| {
+            [s.accent_cfg, s.accent_ft, s.accent_pt, s.accent_demo]
         });
         let ai_layout = Self::paint_under(
             &mut **term,
@@ -6613,6 +6964,7 @@ impl App {
             cfg_off,
             ft_off,
             pt_off,
+            demo_off,
             z_order,
             accents,
             chat_msgs,
@@ -6801,26 +7153,31 @@ impl App {
                 stack_vec.push(t);
             }
         }
-        // 配置/文件树/解析面板 X 偏移过缝（§五B 第三/四/五道缝）。target 只问栈
-        // （BAR-084 单源 panel_target_and_draw：活性泄漏进 target = 退场
-        // 回粘）；draw = 在栈或缝/拖拽活跃（退场动画画完）。右缘家屏外
-        // +w（配置/解析），文件树家屏外 -w（左缘来向）
+        // 配置/文件树/解析/Demo 面板 X 偏移过缝（§五B 第三/四/五/六道缝）。
+        // target 只问栈（BAR-084 单源 panel_target_and_draw：活性泄漏进
+        // target = 退场回粘）；draw = 在栈或缝/拖拽活跃（退场动画画完）。
+        // 右缘家屏外 +w（配置/解析/Demo），文件树家屏外 -w（左缘来向）
         let cfg_in = stack_vec.contains(&Panel::Config);
         let ft_in = stack_vec.contains(&Panel::FileTree);
         let pt_in = stack_vec.contains(&Panel::Parser);
+        let demo_in = stack_vec.contains(&Panel::Demo);
         let drag_cfg = drag.filter(|(p, _)| *p == Panel::Config).map(|(_, o)| o);
         let drag_ft = drag.filter(|(p, _)| *p == Panel::FileTree).map(|(_, o)| o);
         let drag_pt = drag.filter(|(p, _)| *p == Panel::Parser).map(|(_, o)| o);
+        let drag_demo = drag.filter(|(p, _)| *p == Panel::Demo).map(|(_, o)| o);
         let cfg_active = crate::ui::seam::config_panel_offset_x_active() || drag_cfg.is_some();
         let ft_active = crate::ui::seam::filetree_panel_offset_x_active() || drag_ft.is_some();
         let pt_active = crate::ui::seam::parser_panel_offset_x_active() || drag_pt.is_some();
+        let demo_active = crate::ui::seam::demo_panel_offset_x_active() || drag_demo.is_some();
         let (cfg_target, cfg_draw) =
             crate::ui::stage::panel_target_and_draw(cfg_in, cfg_active, w as f32);
         let (ft_target, ft_draw) =
             crate::ui::stage::panel_target_and_draw(ft_in, ft_active, -(w as f32));
         let (pt_target, pt_draw) =
             crate::ui::stage::panel_target_and_draw(pt_in, pt_active, w as f32);
-        // z 序单源（stage::panel_z_order，BAR-083「动者在上」四公民泛化）：
+        let (demo_target, demo_draw) =
+            crate::ui::stage::panel_target_and_draw(demo_in, demo_active, w as f32);
+        // z 序单源（stage::panel_z_order，BAR-083「动者在上」五公民泛化）：
         // 撤顶面板瞬栈顶翻成底下的不透明面板，动者仍压顶滑出可见；
         // 活性 = 缝动画中或拖拽锁定中（跟手期手指压着的面板在顶）
         let z_order = crate::ui::stage::panel_z_order(
@@ -6830,6 +7187,7 @@ impl App {
                 cfg_active,
                 ft_active,
                 pt_active,
+                demo_active,
             ],
         );
         // 跟手拖拽锁定期旁路缝采样（panel_drag：直接操纵不是动画——
@@ -6859,6 +7217,14 @@ impl App {
             ) as i32,
         };
         let pt_fade = 1.0_f32;
+        let demo_off = match drag_demo {
+            Some(off) => off as i32,
+            None => crate::ui::seam::sample_demo_panel_offset_x(
+                demo_target,
+                crate::report::boot_ms() as u64,
+            ) as i32,
+        };
+        let demo_fade = 1.0_f32;
         // 视口推移（2026-09-12 用户拍板，ui/viewport_push.rs）：基座页
         // （终端卡槽/网格实例/键行槽）随面板 off 平移；被压面板吃上方
         // 推移（交叉轴叠加 [配置,AI]：配置随 AI 下移）。off 已含缝采样
@@ -6866,8 +7232,9 @@ impl App {
         // 冻结」就此改写为「被压随动」：遮盖撤走从「零动画露出」变成
         // 「随推移滑回」。Q 弹形变同日二审取消（实拍不合预期）——scale
         // 恒 1.0，仿射管线保留
-        let (vpush, _p_max) =
-            crate::ui::viewport_push::viewport_push(panel_off, cfg_off, ft_off, pt_off, w, h);
+        let (vpush, _p_max) = crate::ui::viewport_push::viewport_push(
+            panel_off, cfg_off, ft_off, pt_off, demo_off, w, h,
+        );
         let term_place = (vpush.dx, vpush.dy, 1.0);
         let ai_extra = crate::ui::viewport_push::covered_extra(
             &stack_vec,
@@ -6876,6 +7243,7 @@ impl App {
             cfg_off,
             ft_off,
             pt_off,
+            demo_off,
             w,
             h,
         );
@@ -6886,6 +7254,7 @@ impl App {
             cfg_off,
             ft_off,
             pt_off,
+            demo_off,
             w,
             h,
         );
@@ -6896,6 +7265,7 @@ impl App {
             cfg_off,
             ft_off,
             pt_off,
+            demo_off,
             w,
             h,
         );
@@ -6906,6 +7276,18 @@ impl App {
             cfg_off,
             ft_off,
             pt_off,
+            demo_off,
+            w,
+            h,
+        );
+        let demo_extra = crate::ui::viewport_push::covered_extra(
+            &stack_vec,
+            Panel::Demo,
+            panel_off,
+            cfg_off,
+            ft_off,
+            pt_off,
+            demo_off,
             w,
             h,
         );
@@ -6913,11 +7295,13 @@ impl App {
         let (cfg_grid, cfg_visible) = crate::termview::cfg_split(cfg_off, w);
         let (ft_grid, ft_visible) = crate::termview::ft_split(ft_off, w);
         let (pt_grid, pt_visible) = crate::termview::pt_split(pt_off, w);
+        let (demo_grid, demo_visible) = crate::termview::demo_split(demo_off, w);
         let cfg_visible = cfg_visible && cfg_draw;
         let ft_visible = ft_visible && ft_draw;
         let pt_visible = pt_visible && pt_draw;
-        // 网格+键行让位 = 四面板都没靠泊（任一靠泊在顶即整页盖住终端）
-        let grid_keybar = ai_grid && cfg_grid && ft_grid && pt_grid;
+        let demo_visible = demo_visible && demo_draw;
+        // 网格+键行让位 = 五面板都没靠泊（任一靠泊在顶即整页盖住终端）
+        let grid_keybar = ai_grid && cfg_grid && ft_grid && pt_grid && demo_grid;
         let Some(term_arc) = th else {
             // 字体全灭的降级画面：紫屏（与 soft 路径同规）
             g.present_solid(KFM_PURPLE);
@@ -7035,6 +7419,13 @@ impl App {
                 crate::ui::cfg_page::PanScope::Upper | crate::ui::cfg_page::PanScope::UpperBody
             )
         });
+        // 压暗层上岗判据（BAR-163 翻案）：跳框（comp modal/查看器）任
+        // 一开 = ModalVeil 层上岗——跳框像素全在 veil 层，配置槽烘焙
+        // 快照清 modal/viewer 两维（本帧下文 settled 处）
+        let veil_on = cfg_visible
+            && cfg_snap.is_some_and(|cs| {
+                crate::ui::modal::veil_open(cs.modal.is_some(), cs.viewer.is_some())
+            });
         // BAR-104：喂交接差分机本帧平移域（0=无/1=Upper/2=Page/
         // 3=UpperBody）+ 本帧 cfg epoch（present_frame 内消费；未武装
         // 时仅一次原子写，零开销）。2026-09-17 Page 域接入：差分机不再
@@ -7055,6 +7446,7 @@ impl App {
             ft_visible,
             pt_visible,
             pan_active,
+            demo_visible,
         );
         g.set_slot_visible(crate::gles_present::ChromeSlot::Keybar, slot_vis[0]);
         g.set_slot_visible(crate::gles_present::ChromeSlot::Panel, slot_vis[1]);
@@ -7065,6 +7457,7 @@ impl App {
         g.set_slot_visible(crate::gles_present::ChromeSlot::TermCard, slot_vis[6]);
         g.set_slot_visible(crate::gles_present::ChromeSlot::PanOld, slot_vis[7]);
         g.set_slot_visible(crate::gles_present::ChromeSlot::PanMove, slot_vis[7]);
+        g.set_slot_visible(crate::gles_present::ChromeSlot::Demo, slot_vis[9]);
         // BAR-096 拆层：标签栏层与光标层都属配置页（cfg_visible 一票）；
         // 光标层另有"无行不画"（空池无光标）
         g.set_slot_visible(crate::gles_present::ChromeSlot::TabBar, slot_vis[2]);
@@ -7094,10 +7487,32 @@ impl App {
         // 环境卡柱层（2026-09-21 环境卡重做）：解析页可见即上岗（柱轨
         // 常驻；无草稿柱 = 空账画家只会画底，不是错相）
         g.set_slot_visible(crate::gles_present::ChromeSlot::SysBars, slot_vis[4]);
+        // 压暗层（BAR-163 翻案）：跳框任一开即上岗（z 序 Over 之上，
+        // present_frame 合成序落地）；跳框全关即隐零成本
+        g.set_slot_visible(crate::gles_present::ChromeSlot::ModalVeil, veil_on);
+        // 四公民页面 accent（配置/文件树/解析/Demo；静态装配无 self，
+        // 快照同行是唯一来源，None 时给 FALLBACK）——termcard sig 吃
+        // acc_demo（烧瓶图标画在终端卡槽上，色随 Demo 召唤重随），
+        // 提取必须先于下文一切 sig 喂点
+        let (acc_cfg, acc_ft, acc_pt, acc_demo) = ai_snap.map_or(
+            (
+                crate::ui::accent::FALLBACK,
+                crate::ui::accent::FALLBACK,
+                crate::ui::accent::FALLBACK,
+                crate::ui::accent::FALLBACK,
+            ),
+            |s| (s.accent_cfg, s.accent_ft, s.accent_pt, s.accent_demo),
+        );
         // 终端卡片壳槽烘焙（2026-09-11）：恒靠泊零 placement——sig 含
         // ime/bar_h 是因为壳下缘停在快捷键行上沿（键盘开合期逐帧重烘焙
         // 加入 ui-base §八 期 2 债同族清单，不单独立项）
-        if grid_keybar && sigs.termcard.feed((w, h, ime, bar_h)) {
+        // 2026-09-26 sig 加 acc_demo 两维：烧瓶图标（demo 页入口）画在
+        // 本槽，色随 Demo 召唤重随——漏维 = 换色不重烘旧色留壳
+        if grid_keybar
+            && sigs
+                .termcard
+                .feed((w, h, ime, bar_h, acc_demo.c1, acc_demo.c2))
+        {
             let px = g.slot_canvas(crate::gles_present::ChromeSlot::TermCard);
             px.fill(0);
             crate::termview::paint_term_card_chrome(
@@ -7154,15 +7569,8 @@ impl App {
         // 配置槽（§五B）：同规——画布恒靠泊位（cfg_off=0），X 位移在合成期。
         // sig 带 accent 两维（宪法 §2.2 召唤即随机：重随必触发重烘焙，
         // 漏维 = 新色不进纹理，满屏旧色——2026-09-12 accent 落地即钉）。
-        // accent 来源 = PresenceSnap 三字段（静态装配无 self，快照同行）
-        let (acc_cfg, acc_ft, acc_pt) = ai_snap.map_or(
-            (
-                crate::ui::accent::FALLBACK,
-                crate::ui::accent::FALLBACK,
-                crate::ui::accent::FALLBACK,
-            ),
-            |s| (s.accent_cfg, s.accent_ft, s.accent_pt),
-        );
+        // accent 来源 = PresenceSnap 字段（提取已前移到 termcard sig 之前，
+        // 见彼处——本段起直接用 acc_cfg/acc_ft/acc_pt/acc_demo）
         // 标签栏 sig 三维（宪法 §四）：选中/横滚/光标 x——游标弹簧动画
         // 逐帧新值逐帧重烘焙（键盘 inset 同族成本，已记 ui-base §八债单）。
         // 八修换案（开口框→填色标签块）后线长两维随组件退役
@@ -7189,7 +7597,9 @@ impl App {
         // 下次交互，rd427 f0008 实咬）
         let pan_hold = cfg_snap.is_some_and(|cs| cs.pan.is_some());
         // 动效预览 sig 一维（十四修 §六）：动画展品开着 = 33ms 时间桶
-        // 逐帧变 → 槽逐帧重烘焙；关着恒 0（无动画零烘焙同 §四纪律）
+        // 逐帧变 → 槽逐帧重烘焙；关着恒 0（无动画零烘焙同 §四纪律）。
+        // BAR-163 翻案：跳框已搬 ModalVeil 层——本值喂 VeilSig；配置槽
+        // 的 anim_bucket 恒 0（跳框像素不在槽里，白重烘 14MB/帧是空烧）
         let anim_bucket = if cfg_visible && Self::cfg_anim_modal_open() {
             crate::report::boot_ms() as u64 / 33
         } else {
@@ -7234,6 +7644,10 @@ impl App {
                     if let (Some(ps), Some(t), Some(cs)) = (pool_snap, th, cfg_snap) {
                         let mut settled = cs.clone();
                         settled.pan = None;
+                        // BAR-163 翻案：跳框像素不进任何配置家槽（新代
+                        // 层同清）——跳框全归 ModalVeil 全屏层
+                        settled.modal = None;
+                        settled.viewer = None;
                         // 二十四修：新代层锚收敛态——宽度账瞬时值不带进
                         // 一次性烘焙（行 0 活体由钉住条带从配置槽直取，
                         // 本层行 0 本就在带外被裁；归零防残留中间宽）
@@ -7291,7 +7705,9 @@ impl App {
                 dd_progress_q,
                 trig_w_q,
                 pan_hold,
-                anim_bucket,
+                // BAR-163 翻案：跳框已搬 ModalVeil 层，配置槽无跳框像素
+                // ——动效预览帧泵维恒 0（真值喂 VeilSig，见 veil_on）
+                anim_bucket: 0,
             })
         {
             let px = g.slot_canvas(crate::gles_present::ChromeSlot::Config);
@@ -7321,6 +7737,11 @@ impl App {
                     let mut settled = cs.clone();
                     let hold_scope = settled.pan.as_ref().map(|p| p.scope);
                     settled.pan = None;
+                    // BAR-163 翻案：配置槽从此无跳框像素——跳框（comp
+                    // modal/查看器）全归 ModalVeil 全屏层（z 序 Over 之
+                    // 上）；CPU 兜底路快照不清 = in-slot 原位涂装保留
+                    settled.modal = None;
+                    settled.viewer = None;
                     t.lock().unwrap().paint_cfg_pool_content(
                         px,
                         w,
@@ -7469,6 +7890,44 @@ impl App {
                     g.slot_bake(crate::gles_present::ChromeSlot::DropdownPanel);
                 }
             }
+            // 压暗层烘焙（BAR-163 翻案：跳框整体搬出配置槽的全屏层）——
+            // 全幅 α150 黑直写 + 卡体在上；跳框开合/内容变/accent 变/
+            // 动效帧泵才重烘（稳态零重烘零上传），z 序 Over 之上
+            if veil_on && let (Some(cs), Some(t)) = (cfg_snap, th) {
+                let content_key = if let Some(mi) = cs.modal {
+                    u64::from(mi as u32) + 1
+                } else if let Some(v) = &cs.viewer {
+                    use std::hash::{Hash, Hasher};
+                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                    v.title.hash(&mut hasher);
+                    v.content.hash(&mut hasher);
+                    hasher.finish() | (1 << 63)
+                } else {
+                    0
+                };
+                let sig = VeilSig {
+                    w,
+                    h,
+                    c1: acc_cfg.c1,
+                    c2: acc_cfg.c2,
+                    content_key,
+                    anim_bucket,
+                };
+                if sigs.veil.feed(sig) {
+                    let px = g.slot_canvas(crate::gles_present::ChromeSlot::ModalVeil);
+                    px.fill(0);
+                    t.lock().unwrap().paint_modal_veil_layer(
+                        px,
+                        w,
+                        h,
+                        cs.modal,
+                        cs.viewer.as_ref(),
+                        acc_cfg,
+                        crate::report::boot_ms() as u64,
+                    );
+                    g.slot_bake(crate::gles_present::ChromeSlot::ModalVeil);
+                }
+            }
             // BAR-097 池区拆层烘焙（仅 Upper 平移期上岗，贴死即隐）：
             // ①池框几何层 PoolFx——池高 glide 逐帧只重烘这块池区小画布
             // （LUT 后 ~10ms/帧，替代配置槽 14MB 全页逐帧重烘=ras 28ms
@@ -7543,11 +8002,42 @@ impl App {
                 }
             }
         }
-        // 文件树槽（§五B 三公民）：同规——画布恒靠泊位（ft_off=0）
-        if ft_visible && sigs.filetree.feed((w, h, ime, bar_h, acc_ft.c1, acc_ft.c2)) {
+        // 文件树槽（§五B 三公民）：同规——画布恒靠泊位（ft_off=0）。
+        // BAR-165 内容墨（行表/行带/三角/抽屉/光标/底栏）随槽同烘焙——
+        // sig 末四维是帧账（代/滚动/选中/动画簇），漏一维 = 确定的鬼影
+        let ft_frame = crate::ui::filetree::frame(crate::report::boot_ms() as u64);
+        let ft_sig = ft_frame.as_ref().map(|(_, s)| *s).unwrap_or((0, 0, -1, 0));
+        if ft_visible
+            && sigs.filetree.feed((
+                w,
+                h,
+                ime,
+                bar_h,
+                acc_ft.c1,
+                acc_ft.c2,
+                ft_sig.0 as u32,
+                ft_sig.1 as u32,
+                ft_sig.2 as u32,
+                ft_sig.3 as u32,
+            ))
+        {
             let px = g.slot_canvas(crate::gles_present::ChromeSlot::FileTree);
             px.fill(0);
             crate::termview::paint_ft_page_chrome(px, w, h, bottom_inset, 0, acc_ft);
+            if let Some((snap, _)) = &ft_frame {
+                term_arc.lock().unwrap().paint_ft_content(
+                    px,
+                    w,
+                    h,
+                    bottom_inset,
+                    0,
+                    snap,
+                    crate::report::boot_ms() as u64,
+                    acc_ft,
+                );
+                // 屏代快照落账（命中唯一合法源 = 屏上正显示的那一代）
+                crate::ui::filetree::note_baked_snap(snap.clone());
+            }
             g.slot_bake(crate::gles_present::ChromeSlot::FileTree);
         }
         // 解析槽（§五B 四公民·三缘语义）：同规——画布恒靠泊位（pt_off=0）。
@@ -7643,6 +8133,27 @@ impl App {
                 });
             }
         }
+        // Demo 槽烘焙（2026-09-26 md 渲染打样，五公民）：同规——画布恒
+        // 靠泊位（demo_off=0），X 位移在合成期；sig 带 accent 两维
+        // （召唤即随机，漏维 = 新色不进纹理）。硬编码样品静态页——
+        // 内容无 epoch 维（重烘只随屏参/ inset / accent）
+        if demo_visible && sigs.demo.feed((w, h, ime, bar_h, acc_demo.c1, acc_demo.c2)) {
+            let px = g.slot_canvas(crate::gles_present::ChromeSlot::Demo);
+            px.fill(0);
+            crate::termview::paint_demo_page_chrome(px, w, h, bottom_inset, 0, acc_demo);
+            term_arc
+                .lock()
+                .unwrap()
+                .paint_demo_content(px, w, h, 0, acc_demo);
+            crate::report::report(
+                "bake",
+                &format!(
+                    "demo页烘焙 屏{w}x{h} inset={ime} bar={bar_h} c1={:#x} c2={:#x}",
+                    acc_demo.c1, acc_demo.c2
+                ),
+            );
+            g.slot_bake(crate::gles_present::ChromeSlot::Demo);
+        }
         // 环境卡柱层（2026-09-21 环境卡重做）：**滑动全在合成期**——
         // 层内容 = 四轨紧凑带（卡内芯渐变 + 柱，稳态位），只在采样换代/
         // 几何变/accent 变时重烘（每拍一次 ≈0.3MB 上传）；滑入位移 = 合成期
@@ -7711,10 +8222,11 @@ impl App {
         // panel_off 进实例 y=刚体平移，2026-09-05 拍板不变）。别家面板靠泊
         // 在顶时 AI 被整页盖住：零生成零绘制（布局写回暂停，露出后下一帧
         // 自愈——被覆盖面板无手势够得着，眼手同尺不缺这份读数）
-        let ai_fully_covered = match z_order[3] {
+        let ai_fully_covered = match z_order[4] {
             Panel::Config => cfg_off == 0 && cfg_draw,
             Panel::FileTree => ft_off == 0 && ft_draw,
             Panel::Parser => pt_off == 0 && pt_draw,
+            Panel::Demo => demo_off == 0 && demo_draw,
             Panel::Ai => false,
         };
         let (ai_layout, ai_glyphs) = if panel_visible && !ai_fully_covered {
@@ -7906,6 +8418,11 @@ impl App {
             let mut lp = crate::gles_present::LayeredPlace::default();
             if cfg_visible {
                 lp.tabbar = Some((0.0, crate::ui::tab_bar::content_origin().1 as f32));
+                // 压暗层合成位（BAR-163 翻案）：恒靠泊 (0,0)——全屏层
+                // 不随面板平移；z 序 Over 之上（present_frame）
+                if veil_on {
+                    lp.veil = Some((0.0, 0.0));
+                }
                 if let (Some(ps), Some(cs)) = (pool_snap, cfg_snap) {
                     use crate::ui::cfg_page as cp;
                     // 二十四修：下拉面板层合成位（抽屉有余影即上岗；
@@ -8001,12 +8518,15 @@ impl App {
             ft_fade,
             pt_off,
             pt_fade,
+            demo_off,
+            demo_fade,
             z_order,
             term_place,
             ai_extra.dy,
             cfg_extra.dy,
             ft_extra.dy,
             pt_extra.dy,
+            demo_extra.dy,
             pan_comp,
             layered,
             grid_clip,
@@ -8317,6 +8837,9 @@ impl App {
                         | crate::ui::panel_drag::DragRole::DismissParser => {
                             crate::ai_presence::Panel::Parser
                         }
+                        crate::ui::panel_drag::DragRole::DismissDemo => {
+                            crate::ai_presence::Panel::Demo
+                        }
                     };
                     Some((p, off))
                 }),
@@ -8334,6 +8857,7 @@ impl App {
                     || crate::ui::seam::config_panel_offset_x_active()
                     || crate::ui::seam::filetree_panel_offset_x_active()
                     || crate::ui::seam::parser_panel_offset_x_active()
+                    || crate::ui::seam::demo_panel_offset_x_active()
                     || Self::cfg_fx_active()
                     || self.sys_band_fx_active(),
                 t0.elapsed(),
@@ -8392,15 +8916,18 @@ impl App {
                     | crate::ui::panel_drag::DragRole::DismissFileTree => Panel::FileTree,
                     crate::ui::panel_drag::DragRole::SummonParser
                     | crate::ui::panel_drag::DragRole::DismissParser => Panel::Parser,
+                    crate::ui::panel_drag::DragRole::DismissDemo => Panel::Demo,
                 };
                 Some((p, off))
             });
             let drag_cfg = drag.filter(|(p, _)| *p == Panel::Config).map(|(_, o)| o);
             let drag_ft = drag.filter(|(p, _)| *p == Panel::FileTree).map(|(_, o)| o);
             let drag_pt = drag.filter(|(p, _)| *p == Panel::Parser).map(|(_, o)| o);
+            let drag_demo = drag.filter(|(p, _)| *p == Panel::Demo).map(|(_, o)| o);
             let cfg_active = crate::ui::seam::config_panel_offset_x_active() || drag_cfg.is_some();
             let ft_active = crate::ui::seam::filetree_panel_offset_x_active() || drag_ft.is_some();
             let pt_active = crate::ui::seam::parser_panel_offset_x_active() || drag_pt.is_some();
+            let demo_active = crate::ui::seam::demo_panel_offset_x_active() || drag_demo.is_some();
             let (cfg_target, _cfg_draw) = crate::ui::stage::panel_target_and_draw(
                 stack_vec.contains(&Panel::Config),
                 cfg_active,
@@ -8416,7 +8943,12 @@ impl App {
                 pt_active,
                 w as f32,
             );
-            // z 序单源（stage::panel_z_order，BAR-083 动者在上四公民泛化，
+            let (demo_target, _demo_draw) = crate::ui::stage::panel_target_and_draw(
+                stack_vec.contains(&Panel::Demo),
+                demo_active,
+                w as f32,
+            );
+            // z 序单源（stage::panel_z_order，BAR-083 动者在上五公民泛化，
             // 同 GLES 路径）
             let z_order = crate::ui::stage::panel_z_order(
                 &stack_vec,
@@ -8425,6 +8957,7 @@ impl App {
                     cfg_active,
                     ft_active,
                     pt_active,
+                    demo_active,
                 ],
             );
             // 跟手拖拽锁定期旁路缝采样（同 GLES 路径；拖拽偏移=距靠泊
@@ -8447,6 +8980,13 @@ impl App {
                 Some(off) => off as i32,
                 None => crate::ui::seam::sample_parser_panel_offset_x(
                     pt_target,
+                    crate::report::boot_ms() as u64,
+                ) as i32,
+            };
+            let demo_off = match drag_demo {
+                Some(off) => off as i32,
+                None => crate::ui::seam::sample_demo_panel_offset_x(
+                    demo_target,
                     crate::report::boot_ms() as u64,
                 ) as i32,
             };
@@ -8491,6 +9031,7 @@ impl App {
                 cfg_off,
                 ft_off,
                 pt_off,
+                demo_off,
                 z_order,
                 &mut self.panel_scratch,
                 tab_snap.as_ref(),
@@ -9000,6 +9541,18 @@ impl ApplicationHandler for App {
             // 纪律），快照换代 → 脏帧重烘卡面
             crate::svc_health::set_visible(parser_docked);
             if crate::svc_health::take_dirty() {
+                self.dirty = true;
+            }
+            // 文件树页（BAR-165）：①召唤沿（不在顶 → 在顶）拉一次根层——
+            // 懒加载只做一级，根层不刷 = 用户看不到新文件；②取数回执置脏
+            // （数据面线程零阻塞，条件重绘接住）
+            let ft_top =
+                self.last_ai_snap.and_then(|s| s.top) == Some(crate::ai_presence::Panel::FileTree);
+            if ft_top && !self.ft_top_last {
+                crate::fs_fetch::request_root();
+            }
+            self.ft_top_last = ft_top;
+            if crate::fs_fetch::take_dirty() {
                 self.dirty = true;
             }
             // 会话池数据面（BAR-163）：取回即脏帧。会话池页在顶 → 重建

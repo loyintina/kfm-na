@@ -189,3 +189,100 @@ fn spec_route_unknown_404() {
         httpd::Route::NotFound
     ));
 }
+
+// ---------- 文件树数据面路由（A 档；语义在 na-protocol::fsapi，此处只钉路由形状） ----------
+
+#[test]
+fn spec_route_fs_list_取_dir() {
+    let httpd::Route::FsList { dir } = httpd::route("GET", "/api/fs/list?dir=x") else {
+        panic!("GET /api/fs/list 该是 FsList");
+    };
+    assert_eq!(dir, "x");
+    // 无 query → dir 空串（= 允许根本身）
+    let httpd::Route::FsList { dir } = httpd::route("GET", "/api/fs/list") else {
+        panic!("无 query 也要路由得上");
+    };
+    assert_eq!(dir, "");
+    // 百分号编码的路径值
+    let httpd::Route::FsList { dir } = httpd::route("GET", "/api/fs/list?dir=%2Froot%2F00&x=1")
+    else {
+        panic!();
+    };
+    assert_eq!(dir, "/root/00");
+    // 方法也参与路由
+    assert!(matches!(
+        httpd::route("POST", "/api/fs/list?dir=x"),
+        httpd::Route::NotFound
+    ));
+}
+
+/// /kfmv4 前缀别名与 query 共存：先切 query 再折前缀，参数不许被前缀折叠吃掉
+#[test]
+fn spec_route_fs_kfmv4_前缀别名() {
+    let httpd::Route::FsList { dir } = httpd::route("GET", "/kfmv4/api/fs/list?dir=x") else {
+        panic!("前缀别名该路由到 FsList");
+    };
+    assert_eq!(dir, "x");
+    let httpd::Route::FsRead { path, max } = httpd::route("GET", "/kfmv4/api/fs/read?path=a&max=9")
+    else {
+        panic!("前缀别名该路由到 FsRead");
+    };
+    assert_eq!(path, "a");
+    assert_eq!(max, 9);
+}
+
+#[test]
+fn spec_route_fs_read_取_path_max() {
+    let httpd::Route::FsRead { path, max } = httpd::route("GET", "/api/fs/read?path=sub%2Fa.txt")
+    else {
+        panic!("GET /api/fs/read 该是 FsRead");
+    };
+    assert_eq!(path, "sub/a.txt");
+    assert_eq!(max, na_protocol::fsapi::DEFAULT_MAX, "缺 max = 64KB");
+    let httpd::Route::FsRead { path, max } = httpd::route("GET", "/api/fs/read?path=b.txt&max=abc")
+    else {
+        panic!();
+    };
+    assert_eq!(path, "b.txt");
+    assert_eq!(max, na_protocol::fsapi::DEFAULT_MAX, "非数字回落缺省");
+    let httpd::Route::FsRead { max, .. } =
+        httpd::route("GET", "/api/fs/read?path=c.txt&max=999999999")
+    else {
+        panic!();
+    };
+    assert_eq!(max, na_protocol::fsapi::MAX_MAX, "上限 1MB");
+    let httpd::Route::FsRead { path, max } =
+        httpd::route("GET", "/api/fs/read?path=%26%3D&max=1024")
+    else {
+        panic!();
+    };
+    assert_eq!(path, "&=", "值里的 %26/%3D 解成普通字符");
+    assert_eq!(max, 1024);
+}
+
+/// 越界/不存在/类型不符在 HTTP 层必须塌成同一 404 字节串（不透露存在性）
+#[test]
+fn spec_fs_error_response_同文案() {
+    let nf = httpd::fs_error_response(&na_protocol::fsapi::FsError::NotFound);
+    let nd = httpd::fs_error_response(&na_protocol::fsapi::FsError::NotDir);
+    assert_eq!(nf, nd, "NotFound 与 NotDir 不许互相区分");
+    let s = String::from_utf8(nf).unwrap();
+    assert!(s.starts_with("HTTP/1.1 404 Not Found\r\n"), "{s:?}");
+    assert!(
+        s.ends_with("{\"ok\":false,\"error\":\"not found\"}"),
+        "{s:?}"
+    );
+    // Io = 500 显形（不是「没有」）
+    let io = String::from_utf8(httpd::fs_error_response(&na_protocol::fsapi::FsError::Io(
+        "permission denied".into(),
+    )))
+    .unwrap();
+    assert!(
+        io.starts_with("HTTP/1.1 500 Internal Server Error\r\n"),
+        "{io:?}"
+    );
+    assert!(
+        io.ends_with("{\"ok\":false,\"error\":\"permission denied\"}"),
+        "{io:?}"
+    );
+}

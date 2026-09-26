@@ -2,7 +2,11 @@
 name = "na-protocol"
 version = "0.1.0"
 edition = "2024"
-description = "na 双端共享的 terminal-pty ws 协议单源（ClientMsg/ServerMsg 封套编解码）。na 壳与 na-server 同吃一份，协议漂移在类型层面不可能。真相源：kfmv4/src/server/ws-server.ts handleMessage"
+description = "na 双端共享的纯函数单源：terminal-pty ws 协议封套（ClientMsg/ServerMsg 编解码）+ 文件树数据面核（fsapi：允许根/路径安全闸/列目录/读文件/query 编解码）。na 壳与 na-server 同吃一份，漂移在类型层面不可能。协议真相源：kfmv4/src/server/ws-server.ts handleMessage；文件面真相源：nz src/server/fs.ts"
 
 [dependencies]
 serde_json = "1"
+
+[dev-dependencies]
+# fsapi 考题造临时目录树（与 workspace 他处同一版本线）
+tempfile = "3.27.0"

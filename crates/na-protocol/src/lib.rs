@@ -4,6 +4,11 @@
 //! 封套：{type, payload, timestamp}。
 //!
 //! 纪律：本文件是「答案」，只允许为通过考题而写；考题（tests/protocol_spec.rs）不许动。
+//!
+//! 第二个面：`fsapi`（文件树数据面纯函数核，/api/fs/list + /api/fs/read）——
+//! 同一条纪律：双端共享一份，客户端与服务端不许各写一个版本。
+
+pub mod fsapi;
 
 use serde_json::{Value, json};
 

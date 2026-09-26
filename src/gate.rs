@@ -156,6 +156,7 @@ pub fn dump_now(dir: &str) {
         let cfg_active = crate::ui::seam::config_panel_offset_x_active();
         let ft_active = crate::ui::seam::filetree_panel_offset_x_active();
         let pt_active = crate::ui::seam::parser_panel_offset_x_active();
+        let demo_active = crate::ui::seam::demo_panel_offset_x_active();
         let (cfg_target, cfg_draw) = crate::ui::stage::panel_target_and_draw(
             stack_vec.contains(&Panel::Config),
             cfg_active,
@@ -171,6 +172,11 @@ pub fn dump_now(dir: &str) {
             pt_active,
             w as f32,
         );
+        let (demo_target, demo_draw) = crate::ui::stage::panel_target_and_draw(
+            stack_vec.contains(&Panel::Demo),
+            demo_active,
+            w as f32,
+        );
         let z_order = crate::ui::stage::panel_z_order(
             &stack_vec,
             [
@@ -178,6 +184,7 @@ pub fn dump_now(dir: &str) {
                 cfg_active,
                 ft_active,
                 pt_active,
+                demo_active,
             ],
         );
         let cfg_off = crate::ui::seam::sample_config_panel_offset_x(
@@ -192,14 +199,20 @@ pub fn dump_now(dir: &str) {
             pt_target,
             crate::report::boot_ms() as u64,
         ) as i32;
+        let demo_off = crate::ui::seam::sample_demo_panel_offset_x(
+            demo_target,
+            crate::report::boot_ms() as u64,
+        ) as i32;
         let (ai_grid, panel_visible) = crate::termview::panel_split(panel_off, h);
         let (cfg_grid, cfg_visible0) = crate::termview::cfg_split(cfg_off, w);
         let (ft_grid, ft_visible0) = crate::termview::ft_split(ft_off, w);
         let (pt_grid, pt_visible0) = crate::termview::pt_split(pt_off, w);
+        let (demo_grid, demo_visible0) = crate::termview::demo_split(demo_off, w);
         let cfg_visible = cfg_visible0 && cfg_draw;
         let ft_visible = ft_visible0 && ft_draw;
         let pt_visible = pt_visible0 && pt_draw;
-        let grid_keybar = ai_grid && cfg_grid && ft_grid && pt_grid;
+        let demo_visible = demo_visible0 && demo_draw;
+        let grid_keybar = ai_grid && cfg_grid && ft_grid && pt_grid && demo_grid;
         if grid_keybar {
             // 卡片壳下缘让位 = 快捷键行 + 输入栏带高（值守倒帧无键盘视野），
             // 与前台 paint_under 同尺（前景 ime_bottom_px 恒 0 于后台）
@@ -300,6 +313,22 @@ pub fn dump_now(dir: &str) {
                             ft_off,
                             acc_of(Panel::FileTree),
                         );
+                        // 内容墨（BAR-165）：值守倒帧是 na-shot 判卷那条路——
+                        // 只画 chrome 不画内容 = 判卷截图一片空页（BAR-110 教训）
+                        if let Some((snap, _)) =
+                            crate::ui::filetree::frame(crate::report::boot_ms() as u64)
+                        {
+                            t.paint_ft_content(
+                                &mut buf,
+                                w,
+                                h,
+                                bar_h,
+                                ft_off,
+                                &snap,
+                                crate::report::boot_ms() as u64,
+                                acc_of(Panel::FileTree),
+                            );
+                        }
                     }
                 }
                 Panel::Parser => {
@@ -331,6 +360,21 @@ pub fn dump_now(dir: &str) {
                                 acc_of(Panel::Parser),
                             );
                         }
+                    }
+                }
+                Panel::Demo => {
+                    if demo_visible {
+                        crate::termview::paint_demo_page_chrome(
+                            &mut buf,
+                            w,
+                            h,
+                            bar_h,
+                            demo_off,
+                            acc_of(Panel::Demo),
+                        );
+                        // 打样内容墨（BAR-110 同教训：值守倒帧是 na-shot
+                        // 判卷路——只画 chrome = 截图一片空页）
+                        t.paint_demo_content(&mut buf, w, h, demo_off, acc_of(Panel::Demo));
                     }
                 }
                 Panel::Ai => {
@@ -1672,6 +1716,7 @@ pub fn stats_snap() -> StatsSnap {
         Some(crate::ai_presence::Panel::Config) => "config".to_owned(),
         Some(crate::ai_presence::Panel::FileTree) => "filetree".to_owned(),
         Some(crate::ai_presence::Panel::Parser) => "parser".to_owned(),
+        Some(crate::ai_presence::Panel::Demo) => "demo".to_owned(),
     };
     let (
         ai_page,
@@ -2038,8 +2083,10 @@ fn ai_chat_handle() -> Option<Arc<crate::ai_chat::AiChatState>> {
     AI_CHAT.lock().unwrap().clone()
 }
 
-/// 取句柄(owned Arc,借用即还——同 GATE_ROUTER 套路);未登记 = None
-fn ai_presence_handle() -> Option<Arc<crate::ai_presence::AiPresenceState>> {
+/// 取句柄(owned Arc,借用即还——同 GATE_ROUTER 套路);未登记 = None。
+/// pub（2026-09-26）：termview 终卡涂装读 Demo 页 accent（打样钮渐变
+/// 笔触）——读数出口与闸门统计同一把柄，不开第二注册表
+pub fn ai_presence_handle() -> Option<Arc<crate::ai_presence::AiPresenceState>> {
     AI_PRESENCE.lock().unwrap().clone()
 }
 

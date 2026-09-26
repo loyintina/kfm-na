@@ -15,6 +15,7 @@ pub mod ctrl_feed;
 pub mod direct_brain;
 pub mod endpoint;
 pub mod exec_probe;
+pub mod fs_fetch;
 pub mod gate;
 pub mod glyph_atlas;
 pub mod http1;

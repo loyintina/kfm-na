@@ -8,7 +8,7 @@ src/conn.rs 2
 src/crash.rs 1
 src/direct_brain.rs 0
 src/exec_probe.rs 0
-src/gate.rs 24
+src/gate.rs 23
 src/gles_present.rs 0
 src/glyph_atlas.rs 0
 src/http1.rs 3
