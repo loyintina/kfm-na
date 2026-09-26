@@ -249,3 +249,51 @@ pub fn replay_parser_panel_offset_x(offscreen: f32, now_ms: u64) {
         r(offscreen, now_ms);
     }
 }
+
+// ---- 第六道缝：Demo 面板 X 偏移（面板栈五公民，2026-09-26）----
+// 目标值语义在基础层（Demo 页在栈=0 靠泊 / 不在栈=+屏宽 屏外右缘——烧瓶
+// 钮召唤、右滑/边缘拖拽推回，右缘家与配置缝符号约定完全相同）。动画只许
+// 在缝内插值。曲线族复用 fx_ease 同一对减速臂，零新曲线（同配置缝纪律）。
+
+static DEMO_PANEL_OFFSET_X: Mutex<Option<Occupier>> = Mutex::new(None);
+
+/// 占槽（后占者赢，ui-base §三 v1）
+pub fn occupy_demo_panel_offset_x(o: Occupier) {
+    *DEMO_PANEL_OFFSET_X.lock().unwrap() = Some(o);
+}
+
+/// 拔槽回硬切（插件卸载/禁用）
+pub fn release_demo_panel_offset_x() {
+    *DEMO_PANEL_OFFSET_X.lock().unwrap() = None;
+}
+
+/// 采样（渲染时过缝）：无占槽直通目标值——硬切基座语义
+pub fn sample_demo_panel_offset_x(target: f32, now_ms: u64) -> f32 {
+    let g = DEMO_PANEL_OFFSET_X.lock().unwrap();
+    match g.as_ref() {
+        Some(o) => (o.sampler)(target, now_ms),
+        None => target,
+    }
+}
+
+/// 该槽有活跃动画（帧时钟启停判据；无占槽恒 false = 零额外帧）
+pub fn demo_panel_offset_x_active() -> bool {
+    DEMO_PANEL_OFFSET_X
+        .lock()
+        .unwrap()
+        .as_ref()
+        .is_some_and(|o| (o.is_active)())
+}
+
+/// 入场重播踢（BAR-079，坍缩②）：壳层见 Demo 入场代 bump 即踢——采样器
+/// 重定基到屏外右缘（目标不变）→ 重播抽屉入场。无占槽/无 replay = 空操作
+pub fn replay_demo_panel_offset_x(offscreen: f32, now_ms: u64) {
+    if let Some(r) = DEMO_PANEL_OFFSET_X
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|o| o.replay.as_ref())
+    {
+        r(offscreen, now_ms);
+    }
+}

@@ -71,13 +71,16 @@ pub enum Page {
 /// 顶缘家=全局 AI）/ 配置（右缘家——设置页=独立第四页，齿轮钮唯一召唤口
 /// +右滑唯一关闭口，不占任何滑槽）/ 文件树（左缘家=路由，右滑召唤、左滑
 /// 推回）/ 解析（右缘家=解析器家族，左滑召唤、右滑推回，占位页先行——
-/// 手势语义闭环：每个滑向在任意栈态都有唯一归宿）
+/// 手势语义闭环：每个滑向在任意栈态都有唯一归宿）/ Demo（2026-09-26
+/// 五公民：md 渲染打样页，右缘家同配置约定——烧瓶钮唯一召唤口，右滑/
+/// 边缘拖拽推回，不占任何滑槽）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Panel {
     Ai,
     Config,
     FileTree,
     Parser,
+    Demo,
 }
 
 /// 水平滑向（抽屉手势识别结果，§五B 四公民）：左 = 解析家（顶是文件树则
@@ -133,11 +136,14 @@ pub struct PresenceSnap {
     pub ft_epoch: u64,
     /// 解析面板的入场代（语义同 ai_epoch）
     pub pt_epoch: u64,
+    /// Demo 面板的入场代（语义同 ai_epoch）
+    pub demo_epoch: u64,
     /// 三公民页面随机 accent（宪法 §2.2）：随快照同行——壳层静态装配函数
     /// （无 self 直读状态核）与烘焙 sig 的唯一来源；AI 页不纳入（主题色恒定）
     pub accent_cfg: crate::ui::accent::AccentPair,
     pub accent_ft: crate::ui::accent::AccentPair,
     pub accent_pt: crate::ui::accent::AccentPair,
+    pub accent_demo: crate::ui::accent::AccentPair,
 }
 
 /// 四态增益（纯函数，D8）：(整 sprite 增益, 光晕增益)。光晕增益只在 running
@@ -167,6 +173,7 @@ struct Inner {
     epoch_cfg: u64,
     epoch_ft: u64,
     epoch_pt: u64,
+    epoch_demo: u64,
     x: f64,
     y: f64,
     /// 首次 set_bounds 落默认出生位的标记（之后 set_bounds 只钳制不搬家）
@@ -186,6 +193,7 @@ struct Inner {
     accent_cfg: crate::ui::accent::AccentPair,
     accent_ft: crate::ui::accent::AccentPair,
     accent_pt: crate::ui::accent::AccentPair,
+    accent_demo: crate::ui::accent::AccentPair,
     /// 配置卡标签栏绑定（宪法 §四 十一修：每标签独立随机双色）——
     /// 召唤配置卡时逐标签重随色列喂进标签栏，accent_cfg 取选中项；
     /// 未绑定 = 旧路兜底（accent_cfg 单对重随，色列不动）
@@ -214,6 +222,7 @@ impl AiPresenceState {
                 epoch_cfg: 0,
                 epoch_ft: 0,
                 epoch_pt: 0,
+                epoch_demo: 0,
                 x: 0.0,
                 y: 0.0,
                 positioned: false,
@@ -225,6 +234,7 @@ impl AiPresenceState {
                 accent_cfg: accent_rng.generate(),
                 accent_ft: accent_rng.generate(),
                 accent_pt: accent_rng.generate(),
+                accent_demo: accent_rng.generate(),
                 accent_rng,
                 tab_bar: None,
             }),
@@ -253,6 +263,7 @@ impl AiPresenceState {
             Panel::Config => Some(g.accent_cfg),
             Panel::FileTree => Some(g.accent_ft),
             Panel::Parser => Some(g.accent_pt),
+            Panel::Demo => Some(g.accent_demo),
         }
     }
 
@@ -329,26 +340,27 @@ impl AiPresenceState {
     }
 
     /// 左滑（四公民 §五B 三缘语义，2026-09-12）：顶是文件树 = 推回它的来向
-    /// （左缘）；顶是配置/解析 = 空操作（右缘本家已在顶，一滑一义——设置页
-    /// 手势全退位只留关闭，解析页是本方向的新家）；其余 = 召唤解析页
+    /// （左缘）；顶是配置/解析/Demo = 空操作（右缘本家已在顶，一滑一义——
+    /// 设置页手势全退位只留关闭，解析页是本方向的新家，Demo 钮召不占滑槽）；
+    /// 其余 = 召唤解析页
     pub fn swipe_left(&self) {
         let mut g = self.inner.lock().unwrap();
         match g.stack.last() {
             Some(&Panel::FileTree) => {
                 g.stack.pop();
             }
-            Some(&Panel::Config) | Some(&Panel::Parser) => {}
+            Some(&Panel::Config) | Some(&Panel::Parser) | Some(&Panel::Demo) => {}
             _ => summon_locked(&mut g, Panel::Parser),
         }
     }
 
-    /// 右滑（四公民 §五B 三缘语义，2026-09-12）：顶是配置/解析 = 推回它们的
-    /// 来向（右缘——设置页唯一关闭路径）；顶是文件树 = 空操作（本家已在顶）；
-    /// 其余 = 召唤文件树
+    /// 右滑（四公民 §五B 三缘语义，2026-09-12）：顶是配置/解析/Demo = 推回
+    /// 它们的来向（右缘——设置页唯一关闭路径，Demo 同约定）；顶是文件树 =
+    /// 空操作（本家已在顶）；其余 = 召唤文件树
     pub fn swipe_right(&self) {
         let mut g = self.inner.lock().unwrap();
         match g.stack.last() {
-            Some(&Panel::Config) | Some(&Panel::Parser) => {
+            Some(&Panel::Config) | Some(&Panel::Parser) | Some(&Panel::Demo) => {
                 g.stack.pop();
             }
             Some(&Panel::FileTree) => {}
@@ -447,9 +459,11 @@ impl AiPresenceState {
             cfg_epoch: g.epoch_cfg,
             ft_epoch: g.epoch_ft,
             pt_epoch: g.epoch_pt,
+            demo_epoch: g.epoch_demo,
             accent_cfg: g.accent_cfg,
             accent_ft: g.accent_ft,
             accent_pt: g.accent_pt,
+            accent_demo: g.accent_demo,
         }
     }
 }
@@ -506,6 +520,7 @@ fn regen_accent(g: &mut Inner, p: Panel) {
         }
         Panel::FileTree => g.accent_ft = g.accent_rng.generate(),
         Panel::Parser => g.accent_pt = g.accent_rng.generate(),
+        Panel::Demo => g.accent_demo = g.accent_rng.generate(),
     }
 }
 
@@ -516,6 +531,7 @@ fn bump_epoch(g: &mut Inner, p: Panel) {
         Panel::Config => g.epoch_cfg += 1,
         Panel::FileTree => g.epoch_ft += 1,
         Panel::Parser => g.epoch_pt += 1,
+        Panel::Demo => g.epoch_demo += 1,
     }
 }
 

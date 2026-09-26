@@ -24,16 +24,18 @@ pub struct Push {
     pub dy: f32,
 }
 
-/// 四面板 off → 基座页推移 + 最大进度（纯函数）。
+/// 五面板 off → 基座页推移 + 最大进度（纯函数）。
 /// off 语义：AI ∈ [-h, 0]（屏外顶→靠泊）、配置 ∈ [0, +w]（靠泊→屏外右）、
 /// 文件树 ∈ [-w, 0]（屏外左→靠泊）、解析 ∈ [0, +w]（靠泊→屏外右，
-/// 右缘家与配置同约定）。推移方向：AI 落 → 基座下移；右缘家进 → 基座
-/// 左移；文件树进 → 基座右移。
+/// 右缘家与配置同约定）、Demo ∈ [0, +w]（右缘家同约定，2026-09-26
+/// 五公民）。推移方向：AI 落 → 基座下移；右缘家进 → 基座左移；
+/// 文件树进 → 基座右移。
 pub fn viewport_push(
     panel_off: i32,
     cfg_off: i32,
     ft_off: i32,
     pt_off: i32,
+    demo_off: i32,
     w: u32,
     h: u32,
 ) -> (Push, f32) {
@@ -42,12 +44,13 @@ pub fn viewport_push(
     let p_cfg = ((w - cfg_off as f32) / w).clamp(0.0, 1.0);
     let p_ft = ((w + ft_off as f32) / w).clamp(0.0, 1.0);
     let p_pt = ((w - pt_off as f32) / w).clamp(0.0, 1.0);
+    let p_demo = ((w - demo_off as f32) / w).clamp(0.0, 1.0);
     (
         Push {
-            dx: p_ft * w - p_cfg * w - p_pt * w,
+            dx: p_ft * w - p_cfg * w - p_pt * w - p_demo * w,
             dy: p_ai * h,
         },
-        p_ai.max(p_cfg).max(p_ft).max(p_pt),
+        p_ai.max(p_cfg).max(p_ft).max(p_pt).max(p_demo),
     )
 }
 
@@ -59,6 +62,7 @@ fn panel_progress(
     cfg_off: i32,
     ft_off: i32,
     pt_off: i32,
+    demo_off: i32,
     w: f32,
     h: f32,
 ) -> Push {
@@ -80,6 +84,11 @@ fn panel_progress(
             dx: -((w - pt_off as f32) / w).clamp(0.0, 1.0) * w,
             dy: 0.0,
         },
+        // Demo 右缘家同约定（2026-09-26 五公民）
+        Panel::Demo => Push {
+            dx: -((w - demo_off as f32) / w).clamp(0.0, 1.0) * w,
+            dy: 0.0,
+        },
     }
 }
 
@@ -93,6 +102,7 @@ pub fn covered_extra(
     cfg_off: i32,
     ft_off: i32,
     pt_off: i32,
+    demo_off: i32,
     w: u32,
     h: u32,
 ) -> Push {
@@ -102,7 +112,7 @@ pub fn covered_extra(
     };
     let mut acc = Push { dx: 0.0, dy: 0.0 };
     for above in &stack[pos + 1..] {
-        let p = panel_progress(*above, panel_off, cfg_off, ft_off, pt_off, w, h);
+        let p = panel_progress(*above, panel_off, cfg_off, ft_off, pt_off, demo_off, w, h);
         acc.dx += p.dx;
         acc.dy += p.dy;
     }

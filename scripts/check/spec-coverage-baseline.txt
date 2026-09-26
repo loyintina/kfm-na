@@ -39,6 +39,8 @@ src/trace.rs 4
 src/ui/accent.rs 0
 src/ui/ai_page.rs 0
 src/ui/cursor.rs 0
+src/ui/demo_icon.rs 0
+src/ui/demo_page.rs 14
 src/ui/dual_pool.rs 0
 src/ui/fx_ease.rs 0
 src/ui/fx_spring.rs 0

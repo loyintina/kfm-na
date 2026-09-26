@@ -256,6 +256,38 @@ fn spec_bar079_缝重播踢_中继三态() {
     seam::replay_config_panel_offset_x(1260.0, 100); // 无占槽空操作（入账）
 }
 
+// Demo 缝（第六道，2026-09-26 五公民）入账钉：occupy/sample/active/
+// replay/release 五件全链——无占槽 sample 直通目标值（硬切语义）；
+// 占槽后 sample/active 改吃占槽件读数；replay 踢必达且参数原样；
+// 拔槽回直通。变异抽检：sample 漏接占槽件（恒直通）→ 第 3 条红；
+// active 恒 false → 第 4 条红。
+#[test]
+fn spec_demo缝_占槽直通与重播踢() {
+    use kfm_na::ui::seam;
+    use std::sync::{Arc, Mutex};
+    seam::release_demo_panel_offset_x(); // 防前题残槽
+    // 无占槽：直通目标值（硬切），活性 false
+    assert_eq!(seam::sample_demo_panel_offset_x(7.0, 0), 7.0);
+    assert!(!seam::demo_panel_offset_x_active());
+    // 占槽：sample/active 吃占槽件读数；replay 踢必达
+    let got = Arc::new(Mutex::new(None));
+    let got2 = Arc::clone(&got);
+    seam::occupy_demo_panel_offset_x(seam::Occupier {
+        sampler: Arc::new(|t, _| t * 2.0),
+        is_active: Arc::new(|| true),
+        replay: Some(Arc::new(move |off: f32, now: u64| {
+            *got2.lock().unwrap() = Some((off, now));
+        })),
+    });
+    assert_eq!(seam::sample_demo_panel_offset_x(7.0, 0), 14.0);
+    assert!(seam::demo_panel_offset_x_active());
+    seam::replay_demo_panel_offset_x(1260.0, 100);
+    assert_eq!(*got.lock().unwrap(), Some((1260.0, 100)), "踢必达占槽件");
+    // 拔槽：回直通
+    seam::release_demo_panel_offset_x();
+    assert_eq!(seam::sample_demo_panel_offset_x(7.0, 0), 7.0);
+}
+
 // ---- 落下曲线族（2026-09-11 定稿：落下=power2.out 减速，nz 同款；
 // 前身重力 t² 被逐帧实锤判「冻结→跳变」，退役） ----
 
