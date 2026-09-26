@@ -116,6 +116,13 @@ pub enum ChromeSlot {
     /// 的回潮）。z 序 = 解析槽之上（同面板臂内、页层之后画），随 pt_off
     /// 平移、随 pt_alpha 显影
     SysBars = 15,
+    /// 压暗层（BAR-163 翻案，2026-09-26 用户真机三症终验报障）：跳框
+    /// （comp modal + 会话查看器）整体搬出配置槽的全屏层——全幅 α150
+    /// 黑直写 + 卡体盖其上（卡区 α=0xFF 不透明墨）。z 序 = Over 之上
+    /// （present_frame 里 Over draw 之后、BLEND 关闸之前）：压暗盖
+    /// 标签栏层/下池光标层/输入栏槽（三症①「没有全屏压暗」③「光标框
+    /// 透出压卡」同收），卡在压暗上。跳框开合才烘才画，稳态零成本
+    ModalVeil = 16,
 }
 
 /// 视口平移合成参数（十九修 D8）：调用方逐帧从 cfg_snap.pan 求值——
@@ -176,6 +183,9 @@ pub struct LayeredPlace {
     /// **滑入位移只在源 uv 窗口上逐帧滑**——零重烘零上传，kfmv4 CSS
     /// transform 的网格版。None = 解析页不可见
     pub sys_band: Option<crate::ui::sys_card::BandPlace>,
+    /// 压暗层 (x, y)（BAR-163 翻案：跳框全开 = Some((0,0)) 恒靠泊——
+    /// 全屏层不随面板平移；None = 无跳框不画）
+    pub veil: Option<(f32, f32)>,
 }
 
 /// 单槽烘焙物。baked=false 的槽不许上屏——采样未上传过的纹理得到
@@ -638,9 +648,11 @@ pub struct GlesPresent {
     /// /终端卡/平移双代 + BAR-096 拆槽两件（标签栏层/下池光标层——小画布
     /// 逐帧重烘便宜）+ BAR-097 池区两件（池框几何层/下池行层——Upper
     /// 平移期池高 glide 的逐帧重烘限定在池区小画布）+ 二十四修一件
-    /// （下拉面板层——并发同拍起步的捕获净度），置脏烘焙 +
+    /// （下拉面板层——并发同拍起步的捕获净度）+ BAR-163 翻案一件
+    /// （压暗层——跳框全屏层，z 序 Over 之上），置脏烘焙 +
+    /// 2026-09-26），置脏烘焙 +
     /// placement 合成——动画帧零光栅零上传
-    layers: [ChromeLayer; 16],
+    layers: [ChromeLayer; 17],
     /// 图层实例程序（rect+uv+tint 四边形；placement 逐槽进实例数据）
     layer_prog: glow::NativeProgram,
     layer_vao: glow::NativeVertexArray,
@@ -777,6 +789,7 @@ impl GlesPresent {
         };
         // 先建槽数组再 move gl 进结构体（E0382：字段初始化按书写序移动）
         let layers = [
+            mk_layer(&gl),
             mk_layer(&gl),
             mk_layer(&gl),
             mk_layer(&gl),
@@ -1838,6 +1851,26 @@ impl GlesPresent {
                     self.h as f32,
                     1.0,
                 );
+            }
+            // 压暗层（BAR-163 翻案：z 序 Over 之上 = 压暗盖输入栏槽/
+            // 标签栏层/下池光标层，跳框卡在压暗上——层级纪律「压暗层 >
+            // 下池光标 > 池内容；查看器卡在压暗层之上」的合成期落地）
+            if let Some((vx, vy)) = layered.veil {
+                let mv = &self.layers[ChromeSlot::ModalVeil as usize];
+                if mv.visible && mv.baked {
+                    draw_slot_layer(
+                        gl,
+                        self.layer_prog,
+                        self.layer_vao,
+                        self.layer_vbo,
+                        mv.tex,
+                        vx,
+                        vy,
+                        self.w as f32,
+                        self.h as f32,
+                        1.0,
+                    );
+                }
             }
             gl.disable(glow::BLEND);
             STAGE_DRAW_US.fetch_add(

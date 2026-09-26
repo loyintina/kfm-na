@@ -8,9 +8,10 @@
 use kfm_na::termview::{CELL_H, CELL_W};
 use kfm_na::ui::comp_registry::COMPONENTS;
 use kfm_na::ui::modal::{
-    MODAL_CLOSE_H, MODAL_FIELD_GAP, MODAL_LINE_H, MODAL_PAD_X, MODAL_PAD_Y, MODAL_PREVIEW_H,
-    MODAL_SIDE_MARGIN, MODAL_TITLE_H, ModalHit, card_rect, close_btn_rect, content_cells,
-    fields_of, fields_top, hit, pick_screen_px, preview_rect, wrap_text,
+    MODAL_CLOSE_H, MODAL_FIELD_GAP, MODAL_LINE_H, MODAL_MAX_MARGIN_BOTTOM, MODAL_MAX_MARGIN_TOP,
+    MODAL_PAD_X, MODAL_PAD_Y, MODAL_PREVIEW_H, MODAL_SIDE_MARGIN, MODAL_TITLE_H, ModalHit,
+    card_rect, close_btn_rect, content_cells, fields_of, fields_top, hit, pick_screen_px,
+    preview_rect, wrap_text,
 };
 
 const SCR_W: u32 = 1221;
@@ -69,10 +70,11 @@ fn card_centered_and_within_screen() {
         card.y > 0 && card.y + card.h as i64 <= SCR_H as i64,
         "卡不出屏"
     );
-    // 垂直居中（偶奇差 ≤1）
-    let top = card.y;
-    let bottom = SCR_H as i64 - (card.y + card.h as i64);
-    assert!((top - bottom).abs() <= 1, "上下余量相等（居中）");
+    // 安全带内居中（BAR-163 翻案：旧屏心居中在封顶时把卡底拽进输入
+    // 栏带；新约 = 顶 4 格 + 底 输入栏带+2 格的带内居中，偶奇差 ≤1）
+    let top = card.y - i64::from(MODAL_MAX_MARGIN_TOP);
+    let bottom = (SCR_H as i64 - i64::from(MODAL_MAX_MARGIN_BOTTOM)) - (card.y + card.h as i64);
+    assert!((top - bottom).abs() <= 1, "安全带内上下余量相等（居中）");
 }
 
 #[test]
@@ -80,7 +82,7 @@ fn card_height_grows_with_content_and_caps() {
     let entry = &COMPONENTS[0];
     let few = fields_of(entry, content_cells(SCR_W));
     let c1 = card_rect(SCR_W, SCR_H, &few);
-    // 塞 30 条长字段必然超封顶（屏高 − 8 格）
+    // 塞 30 条长字段必然超封顶（安全带 = 顶 4 格 + 底 输入栏带+2 格）
     let many: Vec<_> = (0..30)
         .map(|i| kfm_na::ui::modal::ModalField {
             label: format!("字段{i}"),
@@ -89,7 +91,11 @@ fn card_height_grows_with_content_and_caps() {
         .collect();
     let c2 = card_rect(SCR_W, SCR_H, &many);
     assert!(c2.h > c1.h, "高随内容生长");
-    assert_eq!(c2.h, SCR_H - CELL_H * 8, "封顶 = 屏高 − 8 格");
+    assert_eq!(
+        c2.h,
+        SCR_H - MODAL_MAX_MARGIN_TOP - MODAL_MAX_MARGIN_BOTTOM,
+        "封顶 = 安全带（BAR-163 翻案：让出输入栏带）"
+    );
 }
 
 #[test]
@@ -254,8 +260,8 @@ fn spec_bar163_viewer_fields_多行展开折行() {
 #[test]
 fn spec_bar163_viewer_card_rect_去画板公式() {
     use kfm_na::ui::modal::{
-        MODAL_FIELD_GAP, MODAL_MAX_MARGIN_Y, MODAL_PAD_Y, MODAL_TITLE_H, card_rect, fields_of,
-        viewer_card_rect, viewer_fields, viewer_fields_top,
+        MODAL_FIELD_GAP, MODAL_MAX_MARGIN_BOTTOM, MODAL_MAX_MARGIN_TOP, MODAL_PAD_Y, MODAL_TITLE_H,
+        card_rect, fields_of, viewer_card_rect, viewer_fields, viewer_fields_top,
     };
     // 同字段同屏：查看器卡 = comp 卡去掉画板段（MODAL_PREVIEW_H + 相邻
     // 两个 FIELD_GAP 换成 0）——正好矮 MODAL_PREVIEW_H + FIELD_GAP
@@ -274,8 +280,93 @@ fn spec_bar163_viewer_card_rect_去画板公式() {
         + 1
         + i64::from(MODAL_FIELD_GAP);
     assert_eq!(viewer_fields_top(&v_card), expect_top);
-    // 高随内容封顶屏高−8 格（长正文截断不滚动同 v1 取舍）
+    // 高随内容封顶安全带（BAR-163 翻案：旧契约「屏高−8 格」让卡底挨
+    // 输入栏 = 症②病灶本体；新约 = 顶 4 格 + 底（输入栏带+2 格））
     let long = "行\n".repeat(500);
     let tall = viewer_card_rect(SCR_W, SCR_H, &viewer_fields(&long, content_cells(SCR_W)));
-    assert_eq!(tall.h, SCR_H - MODAL_MAX_MARGIN_Y * 2);
+    assert_eq!(
+        tall.h,
+        SCR_H - MODAL_MAX_MARGIN_TOP - MODAL_MAX_MARGIN_BOTTOM
+    );
+}
+
+// ---- BAR-163 翻案钉（2026-09-26 用户真机三症终验报障：缺全屏压暗/
+// 卡太大关闭钮差点按不到/下池光标框透出压卡）——观测先行三条款第 4 条
+// 「静默判过」活例：BAR-163 真机自验判卷时三症全在但没被报障口径
+// 覆盖，用户肉眼终验翻案重开。修复臂 = 压暗层升组件（ChromeSlot::
+// ModalVeil 全屏层，z 序 Over 之上）+ 卡高公式让出输入栏带 + 同族
+// comp modal 同病同收 ----
+
+#[test]
+fn spec_bar163_翻案_卡高上限让出输入栏带() {
+    use kfm_na::ui::modal::{
+        MODAL_MAX_MARGIN_BOTTOM, MODAL_MAX_MARGIN_TOP, card_rect, close_btn_rect, content_cells,
+        fields_of, viewer_card_rect, viewer_fields,
+    };
+    let (w, h) = (1260u32, 2560u32); // 真机屏（redroid 同尺）
+    let long = "行\n".repeat(500);
+    let vf = viewer_fields(&long, content_cells(w));
+    let vc = viewer_card_rect(w, h, &vf);
+    // 上下安全边距：顶 ≥ MODAL_MAX_MARGIN_TOP，卡底 ≤ 屏高 − 底余量
+    assert!(
+        vc.y >= i64::from(MODAL_MAX_MARGIN_TOP),
+        "卡顶越安全边距: y={}",
+        vc.y
+    );
+    assert!(
+        vc.y + i64::from(vc.h) <= i64::from(h - MODAL_MAX_MARGIN_BOTTOM),
+        "卡底越安全边距: 底={}",
+        vc.y + i64::from(vc.h)
+    );
+    // 关闭钮底 → 输入栏顶（HEIGHT_PX=220）间距 ≥ 2 格——「差点按不到」翻案
+    let btn = close_btn_rect(&vc);
+    let bar_top = i64::from(h - kfm_na::input_bar::HEIGHT_PX);
+    assert!(
+        bar_top - (btn.y + i64::from(btn.h)) >= i64::from(CELL_H * 2),
+        "关闭钮与输入栏间距不足 2 格: {}",
+        bar_top - (btn.y + i64::from(btn.h))
+    );
+    // comp modal 同公式同收（同族同病）
+    let cf = fields_of(&COMPONENTS[0], content_cells(w));
+    let cc = card_rect(w, h, &cf);
+    assert!(
+        cc.y + i64::from(cc.h) <= i64::from(h - MODAL_MAX_MARGIN_BOTTOM),
+        "comp 卡底越安全边距"
+    );
+    // 短内容小卡也落在安全带内（带内居中，不许被旧屏心公式拽向底栏）
+    let sf = viewer_fields("短", content_cells(w));
+    let sc = viewer_card_rect(w, h, &sf);
+    assert!(sc.y >= i64::from(MODAL_MAX_MARGIN_TOP));
+    assert!(sc.y + i64::from(sc.h) <= i64::from(h - MODAL_MAX_MARGIN_BOTTOM));
+}
+
+#[test]
+fn spec_bar163_翻案_压暗层开合判据() {
+    use kfm_na::ui::modal::veil_open;
+    assert!(!veil_open(false, false), "双无 = 不开");
+    assert!(veil_open(true, false), "comp modal 开 = 压暗开");
+    assert!(
+        veil_open(false, true),
+        "查看器开 = 压暗开（BAR-163 欠账本体）"
+    );
+    assert!(veil_open(true, true));
+}
+
+#[test]
+fn spec_bar163_翻案_压暗层入册动效预览() {
+    use kfm_na::ui::comp_registry::{Preview, preview_is_animated};
+    let e = COMPONENTS
+        .iter()
+        .find(|e| e.name == "压暗层")
+        .expect("压暗层必须入 comp_registry（组件不是背景色）");
+    assert_eq!(e.cat, "动效引擎", "压暗层归动效引擎大类");
+    assert_eq!(
+        e.preview,
+        Preview::VeilFade,
+        "预览 = 压暗淡入淡出语义化演示"
+    );
+    assert!(
+        preview_is_animated(Preview::VeilFade),
+        "VeilFade 必须入动画帧泵名单"
+    );
 }

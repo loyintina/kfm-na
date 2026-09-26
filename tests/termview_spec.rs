@@ -6334,3 +6334,89 @@ fn spec_bar156_播种游标归位_动态行不复制() {
         "旧帧静态复制不许残留（游标没归位 = 新帧落屏底、旧帧留原位）: {txt:?}"
     );
 }
+
+// ---- BAR-163 翻案钉：压暗层（ChromeSlot::ModalVeil）像素契约 ----
+// 三症实录定罪（redroid shot-gl）：①压暗只画进配置槽画布 = 标签栏层/
+// 输入栏槽/光标层全在压暗之上（用户「没有全屏压暗」）；②卡高屏高−8
+// 格 = 关闭钮底距输入栏顶 30px「差点按不到」；③下池光标层合成位闸
+// 只认 cs.modal 不认 viewer → 光标框横线压查看器卡面。
+// 修复：跳框（comp modal + 查看器）整体搬出配置槽进全屏 veil 层——
+// 全幅 α150 黑直写（GPU 混合 ≡ blend(黑,下层,150)，DropdownPanel
+// 深底同款直写纪律）+ 卡涂装在上；z 序 Over 之上 = 全屏压暗盖标签栏
+// /光标/输入栏，卡在压暗上。
+
+/// veil 层压暗直写值（α150 黑，GPU 混合语义）
+const VEIL_DIM: u32 = 0x9600_0000;
+
+fn veil_fixture() -> (Vec<u32>, u32, u32, kfm_na::ui::cfg_page::ViewerSnap) {
+    let (w, h) = (1260u32, 2560u32);
+    let snap = kfm_na::ui::cfg_page::ViewerSnap {
+        title: "demo/0001-会话.jsonl".into(),
+        content: "正文行\n".repeat(300),
+    };
+    (vec![0u32; (w * h) as usize], w, h, snap)
+}
+
+#[test]
+fn spec_bar163_翻案_veil全幅压暗直写() {
+    use kfm_na::termview::TermEmu;
+    use kfm_na::ui::accent::AccentPair;
+    let acc = AccentPair {
+        c1: 0x00FF_6000,
+        c2: 0x0000_80FF,
+    };
+    let tv = TermView::new(host_font(), None, 8, 2, CELL_W, CELL_H);
+    let (mut veil, w, h, snap) = veil_fixture();
+    tv.paint_modal_veil_layer(&mut veil, w, h, None, Some(&snap), acc, 1000);
+    // 全幅压暗：四角 + 标签栏带（y=60，卡顶之上）+ 输入栏带（y=2450，
+    // 卡底之下）+ 左缘卡外带——「全屏压暗」翻案钉，缺一 = 回潮
+    for (x, y, tag) in [
+        (0, 0, "左上角"),
+        (w - 1, 0, "右上角"),
+        (0, h - 1, "左下角"),
+        (w - 1, h - 1, "右下角"),
+        (630, 60, "标签栏带"),
+        (630, 2450, "输入栏带"),
+        (30, 1200, "左缘卡外"),
+    ] {
+        assert_eq!(
+            veil[(y * w + x) as usize],
+            VEIL_DIM,
+            "{tag} ({x},{y}) 必须是 α150 黑直写"
+        );
+    }
+}
+
+#[test]
+fn spec_bar163_翻案_veil卡在压暗之上() {
+    use kfm_na::termview::TermEmu;
+    use kfm_na::ui::accent::AccentPair;
+    use kfm_na::ui::modal::{close_btn_rect, content_cells, viewer_card_rect, viewer_fields};
+    let acc = AccentPair {
+        c1: 0x00FF_6000,
+        c2: 0x0000_80FF,
+    };
+    let tv = TermView::new(host_font(), None, 8, 2, CELL_W, CELL_H);
+    let (mut veil, w, h, snap) = veil_fixture();
+    tv.paint_modal_veil_layer(&mut veil, w, h, None, Some(&snap), acc, 1000);
+    let fields = viewer_fields(&snap.content, content_cells(w));
+    let card = viewer_card_rect(w, h, &fields);
+    // 卡芯 = 不透明墨（α=0xFF 且非压暗值）——卡必须盖在压暗直写之上
+    let core = veil[((card.y + i64::from(card.h) / 2) as u32 * w + card.x as u32 + 20) as usize];
+    assert_eq!(core >> 24, 0xFF, "卡芯必须不透明: {core:#010x}");
+    assert_ne!(core, VEIL_DIM, "卡芯不许是压暗值（压暗盖卡 = 层级翻倒）");
+    assert_ne!(
+        core & 0x00FF_FFFF,
+        0,
+        "卡芯不许是纯黑（先卡后压暗 = 卡墨被压暗抹掉，层级翻倒的另一形）"
+    );
+    // 关闭钮带中心亦是不透明墨
+    let btn = close_btn_rect(&card);
+    let bp = veil[((btn.y + i64::from(btn.h) / 2) as u32 * w
+        + (btn.x + i64::from(btn.w) / 2) as u32) as usize];
+    assert_eq!(bp >> 24, 0xFF, "关闭钮带必须不透明: {bp:#010x}");
+    // 卡外左缘紧邻点仍是压暗（卡没溢出，压暗没缺口）
+    let outside =
+        veil[((card.y + i64::from(card.h) / 2) as u32 * w + (card.x - 30) as u32) as usize];
+    assert_eq!(outside, VEIL_DIM, "卡外必须仍是压暗: {outside:#010x}");
+}

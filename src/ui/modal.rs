@@ -11,7 +11,10 @@
 //! close_btn_rect/hit），壳层不许另算。字段折行（wrap_text）也是
 //! 本册的事——卡宽定行宽，涂装/命中/卡高计算吃同一份折行结果。
 //!
-//! v1 取舍：卡高封顶屏高−8 格，超出截断不做滚动；无入场动画。
+//! v1 取舍：卡高封顶安全带（顶 4 格 + 底 输入栏带+2 格，BAR-163 翻案
+//! 收紧——旧「屏高−8 格」让封顶卡压进输入栏带），超出截断不做滚动；
+//! 无入场动画。跳框涂装归宿：GLES = ChromeSlot::ModalVeil 全屏压暗层
+//! （BAR-163 翻案，组件不是背景色）；CPU 兜底 = 配置槽内原位涂装。
 
 use crate::termview::{CELL_H, CELL_W};
 use crate::ui::comp_registry::CompEntry;
@@ -34,8 +37,25 @@ pub const MODAL_FIELD_GAP: u32 = CELL_H / 2;
 pub const MODAL_CLOSE_H: u32 = CELL_H * 3;
 /// 预览画板高 6 格（十修 §六 跳框预览画板条款）
 pub const MODAL_PREVIEW_H: u32 = CELL_H * 6;
-/// 卡高封顶余量：屏高 − 8 格（上下各 4 格，压暗层仍可见可点）
-pub const MODAL_MAX_MARGIN_Y: u32 = CELL_H * 4;
+/// 卡高封顶余量·顶：屏顶 4 格（压暗层仍可见可点）
+pub const MODAL_MAX_MARGIN_TOP: u32 = CELL_H * 4;
+/// 卡高封顶余量·底（BAR-163 翻案，2026-09-26 用户真机症②「卡片下缘快
+/// 挨到输入栏，关闭按钮差点按不到」）：输入栏带高（单行 220px）+ 2 格
+/// 安全间距——旧契约「屏高−8 格」只留 4 格底余量（144px < 栏带 220），
+/// 封顶卡卡底直接压进输入栏带（redroid 实录关闭钮底距栏顶仅 30px，
+/// 且栏带触摸优先级在跳框仲裁之上 = 真按不到）
+pub const MODAL_MAX_MARGIN_BOTTOM: u32 = crate::input_bar::HEIGHT_PX + CELL_H * 2;
+
+/// 压暗层开合判据（BAR-163 翻案：压暗层 = ChromeSlot::ModalVeil 全屏层，
+/// 组件不是背景色）：comp modal 或查看器跳框任一开 = 压暗层上岗
+pub fn veil_open(modal_open: bool, viewer_open: bool) -> bool {
+    modal_open || viewer_open
+}
+
+/// 压暗层全幅直写值（α150 黑）：层画布没有「下层」可 blend——改写
+/// α150 黑像素，GPU SRC_ALPHA 合成 ≡ blend(黑,下层,150)（DropdownPanel
+/// 深底 α252 同款直写纪律）；rgb=0 且 α≠0，mark_chrome_alpha 不动它
+pub const VEIL_DIM_ARGB: u32 = 0x9600_0000;
 
 /// 跳框字段（题注 + 已折行的内容行）
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -82,7 +102,7 @@ pub fn viewer_fields_top(card: &PoolRect) -> i64 {
 
 /// 查看器卡片矩形 = card_rect 公式去掉预览画板与其相邻留隙
 /// （MODAL_PREVIEW_H + 前后两个 MODAL_FIELD_GAP 换成分隔线后一个
-/// MODAL_FIELD_GAP）；高随内容，封顶屏高−8 格（超出截断同 v1 取舍）
+/// MODAL_FIELD_GAP）；高随内容，封顶安全带（顶 4 格+底 输入栏带+2 格，超出截断同 v1 取舍）
 pub fn viewer_card_rect(screen_w: u32, screen_h: u32, fields: &[ModalField]) -> PoolRect {
     let w = screen_w.saturating_sub(MODAL_SIDE_MARGIN * 2);
     // 顶留白 + 标题 + 分隔线带（上 0.5 格 + 1px + 下 0.5 格）+ 字段区
@@ -94,11 +114,12 @@ pub fn viewer_card_rect(screen_w: u32, screen_h: u32, fields: &[ModalField]) -> 
         + MODAL_FIELD_GAP
         + MODAL_CLOSE_H
         + MODAL_PAD_Y;
-    let max_h = screen_h.saturating_sub(MODAL_MAX_MARGIN_Y * 2);
-    let h = want.min(max_h.max(MODAL_CLOSE_H + MODAL_PAD_Y * 2));
+    let avail = screen_h.saturating_sub(MODAL_MAX_MARGIN_TOP + MODAL_MAX_MARGIN_BOTTOM);
+    let h = want.min(avail.max(MODAL_CLOSE_H + MODAL_PAD_Y * 2));
     PoolRect {
         x: i64::from(MODAL_SIDE_MARGIN),
-        y: i64::from(screen_h.saturating_sub(h) / 2),
+        // 安全带内居中（旧屏心居中在封顶时把卡底拽进输入栏带——BAR-163 症②）
+        y: i64::from(MODAL_MAX_MARGIN_TOP) + i64::from(avail.saturating_sub(h)) / 2,
         w,
         h,
     }
@@ -192,7 +213,7 @@ pub fn fields_top(card: &PoolRect) -> i64 {
     preview_rect(card).y + i64::from(MODAL_PREVIEW_H) + i64::from(MODAL_FIELD_GAP)
 }
 
-/// 居中卡片矩形（高随内容，封顶屏高−8 格；v1 超出截断不滚动）
+/// 居中卡片矩形（高随内容，封顶安全带内居中——BAR-163 翻案；v1 超出截断不滚动）
 pub fn card_rect(screen_w: u32, screen_h: u32, fields: &[ModalField]) -> PoolRect {
     let w = screen_w.saturating_sub(MODAL_SIDE_MARGIN * 2);
     // 顶留白 + 标题 + 分隔线带（上 0.5 格 + 1px + 下 0.5 格）+ 预览画板
@@ -206,11 +227,12 @@ pub fn card_rect(screen_w: u32, screen_h: u32, fields: &[ModalField]) -> PoolRec
         + MODAL_FIELD_GAP
         + MODAL_CLOSE_H
         + MODAL_PAD_Y;
-    let max_h = screen_h.saturating_sub(MODAL_MAX_MARGIN_Y * 2);
-    let h = want.min(max_h.max(MODAL_CLOSE_H + MODAL_PAD_Y * 2));
+    let avail = screen_h.saturating_sub(MODAL_MAX_MARGIN_TOP + MODAL_MAX_MARGIN_BOTTOM);
+    let h = want.min(avail.max(MODAL_CLOSE_H + MODAL_PAD_Y * 2));
     PoolRect {
         x: i64::from(MODAL_SIDE_MARGIN),
-        y: i64::from(screen_h.saturating_sub(h) / 2),
+        // 安全带内居中（旧屏心居中在封顶时把卡底拽进输入栏带——BAR-163 症②）
+        y: i64::from(MODAL_MAX_MARGIN_TOP) + i64::from(avail.saturating_sub(h)) / 2,
         w,
         h,
     }
