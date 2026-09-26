@@ -425,62 +425,127 @@ pub async fn run_rev_server(
         std::net::IpAddr,
         (u32, std::time::Instant),
     >::new()));
-    loop {
-        // —— 认领循环：等一条验过客户端证的反连连接 ——
-        let conn = loop {
-            let Some(inc) = ep.accept().await else {
-                return Err(std::io::Error::other("QUIC endpoint 关闭"));
-            };
-            let Ok(conn) = inc.await else { continue };
-            let ip = conn.remote_address().ip();
-            eprintln!("[na-quic] 反连连接 {ip}");
-            {
-                let g = fails.lock().await;
-                if let Some(&(n, t0)) = g.get(&ip)
-                    && ban_verdict(n, t0.elapsed().as_secs())
-                {
-                    eprintln!("[na-quic] 封禁中拒连 {ip}（第 {n} 次连败）");
-                    conn.close(1u32.into(), b"auth banned");
-                    continue;
-                }
-            }
-            // 注册流：第一条流必须是 REG_PORT + 合法标签
-            let registered = async {
-                let (_send, mut recv) = conn.accept_bi().await.ok()?;
-                let mut hdr = [0u8; 2];
-                recv.read_exact(&mut hdr).await.ok()?;
-                let port = parse_port_header(&hdr);
-                if port != REG_PORT {
-                    return None;
-                }
-                if let Some(k) = psk {
-                    let mut tag = [0u8; AUTH_TAG_LEN];
-                    let ok =
-                        recv.read_exact(&mut tag).await.is_ok() && ct_eq(&tag, &auth_tag(&k, port));
-                    if !ok {
-                        return None;
+    // BAR-157：accept 驱动独立成任务，握手+验签每条 Incoming 一个任务。
+    // 旧制认领循环串行 await Incoming——quinn 的 Incoming 在应用 accept
+    // 之前不回第一个包，而客户端弃连（8s 握手超时）后服务器要等满
+    // REV_IDLE_TIMEOUT 才收尸 → 一具陈尸把 accept 停摆 60s，期间所有
+    // 新握手零回包，弃尸排队永远排不完（62694 pcap 实录：60s cadence
+    // 一具陈尸一组 PTO 序列，23 次新鲜尝试零回包）。考题
+    // spec_m4_bar157_弃尸风暴_诚实客户端不被憋死。
+    let (claim_tx, mut claim_rx) = tokio::sync::mpsc::channel::<Connection>(8);
+    {
+        let fails = std::sync::Arc::clone(&fails);
+        tokio::spawn(async move {
+            while let Some(inc) = ep.accept().await {
+                let fails = std::sync::Arc::clone(&fails);
+                let claim_tx = claim_tx.clone();
+                tokio::spawn(async move {
+                    // 握手等待给硬顶（客户端 8s 弃连点之上）——陈尸自己
+                    // 烂在自己的任务里，不拖累 accept 驱动
+                    let conn = match tokio::time::timeout(HANDSHAKE_TIMEOUT * 2, async {
+                        inc.await
+                    })
+                    .await
+                    {
+                        Ok(Ok(c)) => c,
+                        _ => return,
+                    };
+                    let ip = conn.remote_address().ip();
+                    eprintln!("[na-quic] 反连连接 {ip}");
+                    {
+                        let g = fails.lock().await;
+                        if let Some(&(n, t0)) = g.get(&ip)
+                            && ban_verdict(n, t0.elapsed().as_secs())
+                        {
+                            eprintln!("[na-quic] 封禁中拒连 {ip}（第 {n} 次连败）");
+                            conn.close(1u32.into(), b"auth banned");
+                            return;
+                        }
                     }
-                }
-                Some(())
+                    // 注册流：第一条流必须是 REG_PORT + 合法标签
+                    let registered = async {
+                        let (_send, mut recv) = conn.accept_bi().await.ok()?;
+                        let mut hdr = [0u8; 2];
+                        recv.read_exact(&mut hdr).await.ok()?;
+                        let port = parse_port_header(&hdr);
+                        if port != REG_PORT {
+                            return None;
+                        }
+                        if let Some(k) = psk {
+                            let mut tag = [0u8; AUTH_TAG_LEN];
+                            let ok = recv.read_exact(&mut tag).await.is_ok()
+                                && ct_eq(&tag, &auth_tag(&k, port));
+                            if !ok {
+                                return None;
+                            }
+                        }
+                        Some(())
+                    }
+                    .await;
+                    if registered.is_none() {
+                        let mut g = fails.lock().await;
+                        let e = g.entry(ip).or_insert((0, std::time::Instant::now()));
+                        if e.1.elapsed().as_secs() >= AUTH_BAN_SECS {
+                            *e = (0, std::time::Instant::now());
+                        }
+                        e.0 += 1;
+                        eprintln!("[na-quic] 反连注册验签失败 {ip}（第 {} 次连败）", e.0);
+                        conn.close(1u32.into(), b"bad registration");
+                        return;
+                    }
+                    let _ = claim_tx.send(conn).await;
+                });
             }
-            .await;
-            if registered.is_none() {
-                let mut g = fails.lock().await;
-                let e = g.entry(ip).or_insert((0, std::time::Instant::now()));
-                if e.1.elapsed().as_secs() >= AUTH_BAN_SECS {
-                    *e = (0, std::time::Instant::now());
+        });
+    }
+    // —— 认领/服务循环：取最新认领（channel 积压只留最新——「新注册
+    // 挤掉旧的」）；服务期来了新认领 = 旧连接当场 close（conn.closed()
+    // 让 serve 返回、TCP 口让出）换新连接续服。旧制服务期 accept 停摆
+    // = 换网络的手机要等旧连接 60s idle 收尸才能握手（BAR-157 同源
+    // 第二病灶）
+    let Some(mut conn) = claim_rx.recv().await else {
+        return Err(std::io::Error::other("QUIC accept 驱动死"));
+    };
+    loop {
+        while let Ok(newer) = claim_rx.try_recv() {
+            conn = newer; // 积压只留最新
+        }
+        eprintln!(
+            "[na-quic] 反连认领 {} → 本机 TCP {tcp_bind}",
+            conn.remote_address().ip()
+        );
+        let outcome = {
+            let serving = serve_rev_tcp(&conn, tcp_bind, target_port);
+            tokio::pin!(serving);
+            tokio::select! {
+                // 连接死 → TCP 口让位给 ssh 伴生兜底，等下一条认领
+                _ = &mut serving => {
+                    eprintln!("[na-quic] 反连连接死，TCP {tcp_bind} 让位");
+                    None
                 }
-                e.0 += 1;
-                eprintln!("[na-quic] 反连注册验签失败 {ip}（第 {} 次连败）", e.0);
-                conn.close(1u32.into(), b"bad registration");
-                continue;
+                // 新注册挤掉旧的：close 旧连接（serve 随之返回让口），换新续服
+                newer = claim_rx.recv() => match newer {
+                    Some(n) => {
+                        conn.close(0u32.into(), b"replaced");
+                        let _ = serving.await;
+                        Some(n)
+                    }
+                    None => {
+                        let _ = serving.await;
+                        return Err(std::io::Error::other("QUIC accept 驱动死"));
+                    }
+                },
             }
-            eprintln!("[na-quic] 反连认领 {ip} → 本机 TCP {tcp_bind}");
-            break conn;
+        }; // serving 随块退场，对 conn 的借用到此为止
+        conn = match outcome {
+            Some(n) => n,
+            None => {
+                let Some(c) = claim_rx.recv().await else {
+                    return Err(std::io::Error::other("QUIC accept 驱动死"));
+                };
+                c
+            }
         };
-        // —— 服务循环：TCP 桥到注册连接，连接死即收（让位兜底）——
-        serve_rev_tcp(&conn, tcp_bind, target_port).await;
-        eprintln!("[na-quic] 反连连接死，TCP {tcp_bind} 让位");
     }
 }
 

@@ -143,6 +143,83 @@ fn spec_m4_注册口_零非业务() {
     assert_eq!(REG_PORT, 0, "注册口 = 0（合法业务口之外，与正连流不混）");
 }
 
+/// BAR-157 考场基建：发得出 Initial 就整机冻结的弃尸客户端
+/// （手机侧「8s 握手超时 → 销毁重投」的缩影——socket 留着、驱动停摆，
+/// 服务器回包被内核收下但无人 ACK，半生连接只能等 idle 收尸。
+/// 必须冻结而非 drop：本机回环 drop 掉 socket 会回 ICMP 拒绝，
+/// 服务器秒收尸，生产上 CGNAT 吞掉 ICMP 的「无声陈尸」就演不出来）
+fn spawn_abandoning_client(quic_addr: SocketAddr, pinned: [u8; 32]) {
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async move {
+            let mut ep =
+                quinn::Endpoint::client(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0))).unwrap();
+            ep.set_default_client_config(client_config(pinned));
+            let _connecting = ep.connect(quic_addr, "kfm-na").unwrap();
+            // 让 Initial 发出去（并撑出一点重传窗口）
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            // 冻结：线程停在这里直到考场进程退场
+            std::future::pending::<()>().await;
+        });
+    });
+}
+
+#[tokio::test]
+async fn spec_m4_bar157_弃尸风暴_诚实客户端不被憋死() {
+    // BAR-157（2026-09-26 pcap 定罪）：run_rev_server 认领循环串行
+    // await 每个 Incoming——客户端弃连后服务器要等满 REV_IDLE_TIMEOUT
+    // 才收尸，期间 accept 停摆，而 quinn 的 Incoming 在应用 accept 前
+    // 不回第一个包 → 所有新握手零回包。62694 实录：60s cadence 一具
+    // 陈尸一组 PTO 序列飞向早已放弃的端口，23 次新鲜尝试全程零回包。
+    // 考场：8 具弃尸后，诚实客户端必须在预算内完成握手。
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let (certs, key) = gen_self_signed("kfm-na");
+    let pinned = cert_fingerprint(&certs[0]);
+    let psk = psk_of(7);
+
+    let quic_addr = free_addr().await;
+    let sshd_addr = free_addr().await;
+    let gate_addr = free_addr().await;
+
+    // 考场加速器：服务器 idle 压到 2s（真身 60s——「陈尸占队等 idle
+    // 收尸」的病灶结构不变，只是一具陈尸占队 2s 而非 60s）
+    let mut sc = server_config_rev(certs, key);
+    std::sync::Arc::get_mut(&mut sc.transport)
+        .unwrap()
+        .max_idle_timeout(Some(Duration::from_secs(2).try_into().unwrap()));
+
+    tokio::spawn(tcp_echo(sshd_addr));
+    tokio::spawn(run_rev_server(
+        quic_addr,
+        sc,
+        Some(psk),
+        gate_addr,
+        sshd_addr.port(),
+    ));
+
+    // 弃尸风暴：8 具，间隔 300ms——旧码串行认领下它们要排队等收尸，
+    // 排尽需 ≥ 2s（末具 idle）+ 8×0.3s（间隔）≈ 4.4s
+    for _ in 0..8 {
+        spawn_abandoning_client(quic_addr, pinned);
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+
+    // 诚实客户端：旧码下它的握手排在弃尸队尾（~4.4s 后才被 accept），
+    // 1.5s 预算必超；accept 驱动独立成任务后毫秒级完成
+    let mut ep = quinn::Endpoint::client(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0))).unwrap();
+    ep.set_default_client_config(client_config(pinned));
+    tokio::time::timeout(
+        Duration::from_millis(1500),
+        ep.connect(quic_addr, "kfm-na").unwrap(),
+    )
+    .await
+    .expect("诚实客户端 1.5s 握手预算——超时 = accept 被陈尸风暴憋死（BAR-157 复现）")
+    .expect("握手成功");
+}
+
 #[test]
 fn spec_m4_反连死寂判死_常量契约() {
     // M4-5 兜底演练实踩：反连腿无本地可观测物，死寂判死全靠 idle

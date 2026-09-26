@@ -191,6 +191,24 @@ nsA（客户端）─veth─ nsR（路由器/NAT）─veth─ 服务器（lo）
       server_config_rev；健康连接 keepalive ACK 续命，死寂 1 分钟
       定罪，ssh 兜底及时接）。钉 spec_m4_反连死寂判死_常量契约
       （变异：改回 4h → 咬）。
+      **M4-6 BAR-157 认领循环陈尸憋死案**（✅ 2026-09-26）：62694 上机
+      后间歇性全灭（ handshake 超时循环 150+ 次），pcap 逐包定罪——
+      手机 Initial 到网卡正常，服务器 20/23 次**零回包**，仅存回包是
+      每 60s 一具陈尸的 PTO 序列（60s = REV_IDLE_TIMEOUT）。病灶：
+      quinn 的 Incoming **在应用 accept 之前不回第一个包**（等应用
+      裁决 accept/refuse/retry），而旧认领循环**串行 await 每个
+      Incoming**——客户端 8s 弃连后服务器要等满 60s idle 才收尸，
+      一具陈尸把 accept 停摆 60s；服务期 accept 同样停摆（换网络的
+      手机要等旧连接 idle 收尸才能握手）。弃尸来得比收尸快 = 队列
+      永远排不完，腿永久死。修 = accept 驱动独立任务 + 握手/验签每条
+      Incoming 一个任务（超时硬顶 HANDSHAKE_TIMEOUT×2）+ 认领走
+      channel（积压只留最新，服务期新认领 close 旧连接当场挤换）。
+      契约：**quinn server 的 accept 轮询是握手应答的唯一泵——任何
+      「await 单条 Incoming 到终局再 accept 下一条」的串行认领都是
+      陈尸放大器；弃尸是公网口的常态不是异常**。考题
+      spec_m4_bar157_弃尸风暴_诚实客户端不被憋死（弃尸 = 冻结线程
+      保 socket——本机 drop 会回 ICMP 秒收尸演不出 CGNAT 无声陈尸；
+      idle 考场加速 2s）：旧码红（3.9s 超时）→ 修复绿（2.4s 全绿）。
 - [ ] M5 真机验证（省电周间隙）+ 认证 pinning 落设置页
 - [ ] M6（v1.1）0-RTT 会话票据
 
