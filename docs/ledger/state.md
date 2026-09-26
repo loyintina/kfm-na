@@ -42,6 +42,10 @@
 > 钉：`tests/install_spec.rs` + `tests/gate_spec.rs::spec_bar162_install触发与钩子链`，
 > 变异七咬全中。口径修正：KfmFileProvider 是手写 provider（非 androidx、
 > 无 res/xml），根锁死 incoming/——落定进 incoming 即覆盖，无需补 XML。
+> **自测（4fadfcc 上机后投闸门一次）**：引导腿接管并成功
+> （`[install] ok leg=rust-direct`，Java 腿不可用=装机 APK 尚无新方法），
+> na 随即 `suspended` = 安装器真上台；闸门消费即摘除、incoming 无残留。
+> 待用户肉眼终验（弹窗点安装即结案、装包后复投见 `ok leg=java`）。
 
 ## 当前位置（2026-09-26 下午，BAR-145 七度再现闭链定罪 + 输入边界补偿修复臂上机）
 
