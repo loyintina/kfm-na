@@ -19,10 +19,11 @@
 > 本线用 BAR-163。
 > **钉**：四组 26 枚全绿（agent_proxy 4 / sess_pool_api 5 /
 > wire_render 6 / sess_pool 7 / cfg_page viewer 2 / modal 查看器几何 2），
-> 变异五咬全中（摘 /api/ 闸 / 摘 is_session_file 闸 / 摘 usage 聚合 /
-> 摘空态占位 / 切页不清 viewer，均即红复原绿）。
-> aarch64 check 干净。**待上机判卷**：双 daemon 重编重启 + 9021→9041
-> live 一跳 curl 实证 + 热更核 redroid/遥测自验（池页开/路由出真数据/
+> 变异六咬全中（前述五咬 + SessionTail 摘 pct_decode，均即红复原绿）。
+> aarch64 check 干净。**live 实咬已过**：双 daemon 重编重启后 curl 经
+> 9021 反代五面全真数据；补一钉——curl 百分号编码非 ASCII 段旧路由
+> 全 404，逐段 pct_decode 后两吃（%2F 留段内，下游闸 400 照拒）。
+> **待上机判卷**：热更核 redroid/遥测自验（池页开/路由出真数据/
 > 点条目出内容）。
 
 ## 当前位置（2026-09-26 晚，工单④ na agent 运行时 v1 落地，BAR-161）

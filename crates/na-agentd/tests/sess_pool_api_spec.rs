@@ -47,10 +47,17 @@ fn spec_bar163_端点_路由四面() {
     ) {
         httpd::Route::SessionTail { line, name, n } => {
             assert_eq!(line, "demo");
-            assert_eq!(name, "0001-%E4%BC%9A%E8%AF%9D.jsonl");
+            // 百分号解码（live 实咬补：curl 把非 ASCII 段编成 %XX——
+            // 不解码 = 标准客户端全 404）
+            assert_eq!(name, "0001-会话.jsonl");
             assert_eq!(n, 3);
         }
         _ => panic!("session tail 路由"),
+    }
+    // %2F 解码成 '/' 也只留在段内（不裂成两段吃 404），下游闸照拒
+    match httpd::route("GET", "/api/agent/mailbox/letters/a%2Fb.md") {
+        httpd::Route::Letter { name } => assert_eq!(name, "a/b.md"),
+        _ => panic!("%2F 必须留在段内"),
     }
     assert!(matches!(
         httpd::route("GET", "/api/agent/mailbox/letters"),

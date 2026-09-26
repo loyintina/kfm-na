@@ -53,26 +53,57 @@ pub fn route(method: &str, path: &str) -> Route {
         ("GET", ["api", "agent", "health"]) => Route::Health,
         ("GET", ["api", "agent", "lines"]) => Route::Lines,
         ("POST", ["api", "agent", "lines", line, "send"]) => Route::Send {
-            line: line.to_string(),
+            line: pct_decode(line),
         },
         ("GET", ["api", "agent", "lines", line, "tail"]) => Route::Tail {
-            line: line.to_string(),
+            line: pct_decode(line),
             n: parse_n(query),
         },
         ("GET", ["api", "agent", "lines", line, "sessions"]) => Route::Sessions {
-            line: line.to_string(),
+            line: pct_decode(line),
         },
         ("GET", ["api", "agent", "lines", line, "sessions", name, "tail"]) => Route::SessionTail {
-            line: line.to_string(),
-            name: name.to_string(),
+            line: pct_decode(line),
+            name: pct_decode(name),
             n: parse_n(query),
         },
         ("GET", ["api", "agent", "mailbox", "letters"]) => Route::Letters,
         ("GET", ["api", "agent", "mailbox", "letters", name]) => Route::Letter {
-            name: name.to_string(),
+            name: pct_decode(name),
         },
         _ => Route::NotFound,
     }
+}
+
+/// 路径段百分号解码（BAR-163 live 实咬补：curl 等标准客户端把非 ASCII
+/// 段编成 %XX，app 侧 sess_pool 发原样 UTF-8——两吃）。分段后逐段调用：
+/// %2F 解码成 '/' 也只留在段内不变分隔符（下游闸 is_session_file/
+/// valid_letter_name 照拒）；非法 % 序列原样保留
+fn pct_decode(seg: &str) -> String {
+    fn hex(b: u8) -> Option<u8> {
+        match b {
+            b'0'..=b'9' => Some(b - b'0'),
+            b'a'..=b'f' => Some(b - b'a' + 10),
+            b'A'..=b'F' => Some(b - b'A' + 10),
+            _ => None,
+        }
+    }
+    let bs = seg.as_bytes();
+    let mut out = Vec::with_capacity(bs.len());
+    let mut i = 0;
+    while i < bs.len() {
+        if bs[i] == b'%'
+            && i + 3 <= bs.len()
+            && let (Some(h), Some(l)) = (hex(bs[i + 1]), hex(bs[i + 2]))
+        {
+            out.push(h * 16 + l);
+            i += 3;
+            continue;
+        }
+        out.push(bs[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// tail 的 ?n=N（缺省/坏值 = 50，上限 500）
