@@ -65,7 +65,7 @@
 | `src/ui/conn_card.rs` | 6 | 6 | 0 | — |
 | `src/ui/cursor.rs` | 9 | 9 | 0 | — |
 | `src/ui/demo_icon.rs` | 6 | 6 | 0 | — |
-| `src/ui/demo_page.rs` | 36 | 22 | 14 | CONTENT_RIGHT_INSET H1_TEXT H2_SECTION H2_TEXT H3_TEXT H4_TEXT H5_TEXT H6_TEXT SIGN_TEXT BODY_SEGS HEAD_FRAME_T QUOTE_BAR_W LIST_MARK_PX LIST_TEXT_INSET |
+| `src/ui/demo_page.rs` | 38 | 24 | 14 | CONTENT_RIGHT_INSET H1_TEXT H2_SECTION H2_TEXT H3_TEXT H4_TEXT H5_TEXT H6_TEXT SIGN_TEXT BODY_SEGS HEAD_FRAME_T QUOTE_BAR_W LIST_MARK_PX LIST_TEXT_INSET |
 | `src/ui/down_card.rs` | 10 | 10 | 0 | — |
 | `src/ui/dual_pool.rs` | 19 | 19 | 0 | — |
 | `src/ui/filetree.rs` | 71 | 63 | 8 | SHIFT_CLAMP_CSS CURSOR_NAME_INSET CURSOR_BAR_W CURSOR_HAIR_W row_top row_center register_filetree filetree_handle |
