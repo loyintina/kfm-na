@@ -153,6 +153,20 @@ pub fn viewer_fling_live() -> bool {
     VIEWER_FLING_LIVE.load(Ordering::Relaxed)
 }
 
+/// 阅读页正文甩尾在飞（BAR-170，2026-09-27）：活性表第九路的读数。
+/// 与查看器同款理由住这里——甩尾状态住壳 App，ui 层反向依赖宿主编不过
+static READER_FLING_LIVE: AtomicBool = AtomicBool::new(false);
+
+/// 同步阅读页甩尾活性（壳专用，每圈帧泵末尾同步 `self.reader_fling.is_some()`）
+pub fn note_reader_fling_live(on: bool) {
+    READER_FLING_LIVE.store(on, Ordering::Relaxed);
+}
+
+/// 阅读页甩尾在飞（活性表读数；考题/探视口）
+pub fn reader_fling_live() -> bool {
+    READER_FLING_LIVE.load(Ordering::Relaxed)
+}
+
 /// BAR-081 考题清钟（vsync_spec 锁相考题串行进场用）：LAST_FRAME_MS 归 0。
 /// 归 0 语义 = 「动画刚开始」——下一笔 fx_frame_due 直通首帧，与产线一致
 #[doc(hidden)]
@@ -191,6 +205,10 @@ pub fn fx_frame_due(now_ms: u64) -> bool {
     // 宿主测试直接编不过，故用壳可写、这里可读的活性旗（同 LAST_FRAME_MS
     // 的规：帧时钟的状态归帧时钟模块），壳每圈帧泵末尾同步
     let ft_fling = ft_fling_live();
+    // 第九路活性源（BAR-170）：阅读页正文甩尾在飞——同第七路的旗规
+    // （同第八路的插法规：源码守卫只钉链尾「|| viewer_fling || ft_fling;」
+    // 字面量，OR 链位置无语义差）
+    let reader_fling = reader_fling_live();
     // 第八路活性源（BAR-167 ①）：查看器正文甩尾在飞——同第七路的旗规
     // （放在 ft_fling 前：BAR-165 源码守卫钉死「|| ft_fling;」收尾字面量，
     // OR 链位置无语义差，新旧两钉同吃不破）
@@ -201,6 +219,7 @@ pub fn fx_frame_due(now_ms: u64) -> bool {
         || crate::ui::seam::filetree_panel_offset_x_active()
         || crate::ui::seam::parser_panel_offset_x_active()
         || ft_anim
+        || reader_fling
         || viewer_fling
         || ft_fling;
     if !active {

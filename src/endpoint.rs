@@ -19,6 +19,11 @@ use crate::settings::DefaultSession;
 pub enum EndpointKind {
     Server,
     Local,
+    /// 文件（BAR-170 阅读页，2026-09-27）：中央是文件时的解析对象。
+    /// 空注册席位——caps 全 false = 插件卡全进自声明降级相（两轴模型
+    /// 的合法空席，宪法 §三）；v1 壳不翻相到此（sync 只走 Server/Local），
+    /// 文件插件卡后议
+    File,
 }
 
 /// 能力面（插件卡数据契约的对端）：对象给不出 = false，插件卡据此进
@@ -70,6 +75,18 @@ pub static REGISTRY: &[EndpointDef] = &[
             sys_info: true,
             health: true,
             link: true,
+        },
+    },
+    EndpointDef {
+        kind: EndpointKind::File,
+        display: "文件",
+        // 空席（BAR-170）：四能力全给不出——插件卡据此全进自声明
+        // 降级相，不许假装能给（契约 §三原文语义）
+        caps: Caps {
+            exec: false,
+            sys_info: false,
+            health: false,
+            link: false,
         },
     },
 ];
@@ -163,6 +180,9 @@ pub fn plan_exec(kind: EndpointKind, server_url: Option<&str>) -> ExecPlan<'_> {
             None => ExecPlan::NoServer,
         },
         EndpointKind::Local => ExecPlan::LocalPty,
+        // 空席给不出 exec 通道——与「服务器相没配置条目」同一降级
+        // 语义（各调用点自有报错措辞，裁决层不代拟）
+        EndpointKind::File => ExecPlan::NoServer,
     }
 }
 

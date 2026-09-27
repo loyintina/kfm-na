@@ -12,6 +12,8 @@
 //!   （-w→0）减速、立场（0→-w）加速，同一件 fx_ease。
 //! - 「解析面板 X 偏移」缝（2026-09-12 四公民·三缘语义）：右缘家与配置
 //!   缝同符号约定（屏外 +w），同一件 fx_ease。
+//! - 「阅读页面板 X 偏移」缝（2026-09-27 六公民，BAR-170）：右缘家同约定，
+//!   同一件 fx_ease。
 //!
 //! 无 provides——占的是缝不是服务；disabled 一键关 =
 //! 不占槽 = 全局硬切（na-regress 禁用 ui-fx 全卷绿的兑现路径）。
@@ -60,6 +62,9 @@ impl Plugin for UiFx {
         // 第六道缝（2026-09-26 五公民）：Demo 面板 X 偏移——右缘家同约定，
         // 同一件 fx_ease
         crate::ui::seam::occupy_demo_panel_offset_x(crate::ui::fx_ease::ease_occupier());
+        // 第七道缝（2026-09-27 六公民，BAR-170）：阅读页面板 X 偏移——右缘家
+        // 同约定，同一件 fx_ease
+        crate::ui::seam::occupy_reader_panel_offset_x(crate::ui::fx_ease::ease_occupier());
         ctx.effect(Box::new(|| {
             crate::ui::seam::release_ai_panel_offset_y();
             crate::ui::seam::release_chrome_ime_inset();
@@ -67,6 +72,7 @@ impl Plugin for UiFx {
             crate::ui::seam::release_filetree_panel_offset_x();
             crate::ui::seam::release_parser_panel_offset_x();
             crate::ui::seam::release_demo_panel_offset_x();
+            crate::ui::seam::release_reader_panel_offset_x();
         }));
         Ok(())
     }

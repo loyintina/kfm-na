@@ -509,3 +509,141 @@ fn spec_roots_解析() {
     let r = fsapi::roots();
     assert!(!r.is_empty(), "本机缺省根非空: {r:?}");
 }
+
+// ---------- ⑧ BAR-170 分块读（read_range_json_in）----------
+
+/// 逐块取读到 EOF，返回（重组文本, 各块 (offset, next_offset, truncated)）
+fn read_all(td: &TempDir, rel: &str, max: usize) -> (String, Vec<(u64, u64, bool)>) {
+    let roots = roots_of(td);
+    let mut text = String::new();
+    let mut ledger = Vec::new();
+    let mut offset = 0u64;
+    for _ in 0..64 {
+        let v: Value = serde_json::from_str(
+            &fsapi::read_range_json_in(&roots, rel, offset, max).expect("分块读成功"),
+        )
+        .expect("合法 JSON");
+        assert_eq!(v["offset"].as_u64().unwrap(), offset, "回显 offset 错账");
+        let next = v["next_offset"].as_u64().expect("next_offset 是数");
+        let trunc = v["truncated"].as_bool().expect("truncated 是布尔");
+        assert!(
+            next > offset || !trunc,
+            "truncated 时 next_offset 必须前进（防死循环）"
+        );
+        text.push_str(v["text"].as_str().expect("text 是字符串"));
+        ledger.push((offset, next, trunc));
+        offset = next;
+        if !trunc {
+            break;
+        }
+    }
+    (text, ledger)
+}
+
+#[test]
+fn spec_bar170_分块重组等于原文件() {
+    let td = sample_tree();
+    let body = "白日依山尽，黄河入海流。abc123\n".repeat(500); // 15KB 级
+    std::fs::write(td.path().join("poem.txt"), &body).unwrap();
+    let (text, ledger) = read_all(&td, "poem.txt", 4096);
+    assert_eq!(text, body, "分块重组必须逐字节等于原文件");
+    assert!(ledger.len() >= 3, "15KB / 4KB 至少 4 块: {ledger:?}");
+    let last = ledger.last().unwrap();
+    assert!(!last.2, "末块 truncated=false");
+    assert_eq!(last.1, body.len() as u64, "末块 next_offset = size");
+}
+
+#[test]
+fn spec_bar170_字界不变式_max不整除字宽() {
+    let td = sample_tree();
+    let body = "中".repeat(100); // 300 字节
+    std::fs::write(td.path().join("cjk.txt"), &body).unwrap();
+    for max in [1usize, 2, 4, 5, 7, 10] {
+        let (text, ledger) = read_all(&td, "cjk.txt", max);
+        assert_eq!(text, body, "max={max} 重组不等于原文件");
+        assert!(!text.contains('\u{FFFD}'), "max={max} 劈出半个字");
+        for (_, next, _) in &ledger {
+            assert_eq!(*next % 3, 0, "max={max} next_offset={next} 不在字界上");
+        }
+    }
+}
+
+#[test]
+fn spec_bar170_坏字节显形且账照样前进() {
+    let td = sample_tree();
+    // 坏字节在第二块里：lossy 出 U+FFFD，但 next_offset 按原始侧推进（不重读）
+    let mut raw = b"good-prefix-".to_vec();
+    raw.extend_from_slice(&[0xff, 0xfe]);
+    raw.extend_from_slice(b"-and-a-long-tail-to-cross-chunk");
+    std::fs::write(td.path().join("bad.bin.txt"), &raw).unwrap();
+    let (text, ledger) = read_all(&td, "bad.bin.txt", 16);
+    assert!(text.starts_with("good-prefix-"), "{text:?}");
+    assert!(
+        text.ends_with("-and-a-long-tail-to-cross-chunk"),
+        "坏字节不许吞后半: {text:?}"
+    );
+    assert_eq!(
+        text.matches('\u{FFFD}').count(),
+        2,
+        "两个坏字节各显形一次（不重读）: {text:?}"
+    );
+    assert_eq!(
+        ledger.last().unwrap().1,
+        raw.len() as u64,
+        "末块 next_offset = size"
+    );
+}
+
+#[test]
+fn spec_bar170_越界与不存在同一条404() {
+    let td = sample_tree();
+    let roots = roots_of(&td);
+    std::fs::write(td.path().join("s.txt"), "0123456789").unwrap();
+    let e1 = fsapi::read_range_json_in(&roots, "s.txt", 10, 4).unwrap_err();
+    let e2 = fsapi::read_range_json_in(&roots, "s.txt", 999, 4).unwrap_err();
+    let e3 = fsapi::read_range_json_in(&roots, "ghost.txt", 0, 4).unwrap_err();
+    assert_eq!(e1, e2, "offset=size 与 offset>size 同错");
+    assert_eq!(
+        format!("{e1:?}"),
+        format!("{e3:?}"),
+        "越界与不存在同一条错（不透露存在性）"
+    );
+    // offset 恰在最后一个字界内 = 合法
+    let v: Value =
+        serde_json::from_str(&fsapi::read_range_json_in(&roots, "s.txt", 9, 4).unwrap()).unwrap();
+    assert_eq!(v["text"], "9");
+    assert_eq!(v["truncated"], false);
+    // 空文件 offset=0 合法出空块
+    std::fs::write(td.path().join("empty.txt"), "").unwrap();
+    let v2: Value =
+        serde_json::from_str(&fsapi::read_range_json_in(&roots, "empty.txt", 0, 4).unwrap())
+            .unwrap();
+    assert_eq!(v2["text"], "");
+    assert_eq!(v2["truncated"], false);
+    assert_eq!(v2["next_offset"], 0);
+}
+
+#[test]
+fn spec_bar170_nul块判二进制不带text() {
+    let td = sample_tree();
+    let roots = roots_of(&td);
+    std::fs::write(td.path().join("b.bin"), b"abc\x00def").unwrap();
+    let v: Value =
+        serde_json::from_str(&fsapi::read_range_json_in(&roots, "b.bin", 0, 1024).unwrap())
+            .unwrap();
+    assert_eq!(v["binary"], true);
+    assert!(v.get("text").is_none(), "二进制块不带 text");
+    assert_eq!(v["size"], 7);
+}
+
+#[test]
+fn spec_bar170_offset解析() {
+    assert_eq!(fsapi::parse_offset(""), 0);
+    assert_eq!(fsapi::parse_offset("offset=123"), 123);
+    assert_eq!(
+        fsapi::parse_offset("offset=abc"),
+        0,
+        "非数字回落 0（旧行为）"
+    );
+    assert_eq!(fsapi::parse_offset("max=9&offset=7"), 7);
+}

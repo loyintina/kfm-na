@@ -323,7 +323,10 @@ fn push_hist(g: &mut Inner, kind: EndpointKind, s: sys_hist::Sample) {
         g.hist[0].clear(); // 换服务器 = 清账（对象轴两相各一本之外的第三清账点）
         g.hist_target = tgt;
     }
-    g.hist[sys_hist::hist_idx(kind)].push(s);
+    // 无账相（File 空席）= 不追拍（BAR-170：永不采样，双防线之数据面道）
+    if let Some(i) = sys_hist::hist_idx(kind) {
+        g.hist[i].push(s);
+    }
     g.hist_writes += 1;
     DIRTY.store(true, Ordering::Relaxed);
     if g.hist_writes >= SAVE_EVERY {
@@ -389,7 +392,11 @@ pub fn hist() -> Hist {
     if kind == EndpointKind::Server && g.cfg_backend != Backend::NaServer {
         return Hist::default();
     }
-    g.hist[sys_hist::hist_idx(kind)].clone()
+    // 无账相（File 空席）= 空账（BAR-170：降级相不画柱轨，读空即空）
+    match sys_hist::hist_idx(kind) {
+        Some(i) => g.hist[i].clone(),
+        None => Hist::default(),
+    }
 }
 
 /// 壳脏帧消耗口：有变化取走 true（每帧一查，零成本）

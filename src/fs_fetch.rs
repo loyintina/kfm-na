@@ -218,6 +218,93 @@ fn open_viewer(title: String, content: String) {
     DIRTY.store(true, Ordering::Relaxed);
 }
 
+// ── 阅读页取数（BAR-170）────────────────────────────────────────────
+// 首块/续块同一条链：offset 由 reader 核的 next_request 账给出，回执喂
+// reader 核（**不再进 cfg_page 查看器**——改道点二）。竞态守卫两条：
+// ① 发请求前 mark_loading（防同块并发——壳每帧都可能问 need_prefetch）；
+// ② 回执落地前对 path（换文件后迟到的块不许喂进新文件——静默丢弃，
+//    新文件的请求自会补来）。
+
+/// 取一块（offset 语义 = 源字节消费量，服务端回执 next_offset 续账）
+pub fn request_read_chunk(offset: u64) {
+    if local_phase() {
+        feed_reader("", |st| {
+            st.apply_error("本地相：阅读不可用（根在服务器上——远程相才有）")
+        });
+        return;
+    }
+    let port = PORT.load(Ordering::Relaxed);
+    if port == 0 {
+        crate::report::report("reader", "阅读取数：隧道口未配置，跳过");
+        return;
+    }
+    let Some(h) = crate::ui::reader_page::reader_handle() else {
+        return;
+    };
+    let path = {
+        let mut st = h.lock().unwrap();
+        if st.next_request() != Some(offset) {
+            return; // 核账不认的 offset（重复/过期请求）不发
+        }
+        st.mark_loading();
+        st.path.clone()
+    };
+    DIRTY.store(true, Ordering::Relaxed);
+    std::thread::spawn(move || {
+        let p = format!(
+            "/api/fs/read?path={}&offset={offset}",
+            fsapi::pct_encode(&path)
+        );
+        let body = match http_get(port, &p) {
+            Ok(b) => b,
+            Err(e) => {
+                crate::report::report("reader", &format!("读块失败 {path:?}@{offset}: {e}"));
+                feed_reader(&path, |st| st.apply_error(&format!("读取失败：{e}")));
+                return;
+            }
+        };
+        let v: serde_json::Value = match serde_json::from_str(&body) {
+            Ok(v) => v,
+            Err(e) => {
+                feed_reader(&path, |st| st.apply_error(&format!("出参不是 JSON：{e}")));
+                return;
+            }
+        };
+        if v.get("binary").and_then(|b| b.as_bool()) == Some(true) {
+            feed_reader(&path, |st| st.apply_binary());
+            return;
+        }
+        let (Some(text), Some(next), Some(trunc)) = (
+            v.get("text").and_then(|t| t.as_str()),
+            v.get("next_offset").and_then(|n| n.as_u64()),
+            v.get("truncated").and_then(|b| b.as_bool()),
+        ) else {
+            // 缺键 = 出参不认（**不许拿 text.len() 顶 next_offset**——本体①）
+            feed_reader(&path, |st| {
+                st.apply_error("出参缺键（text/next_offset/truncated）")
+            });
+            return;
+        };
+        crate::report::report(
+            "reader",
+            &format!("块到位 {path:?}@{offset} → {next}（truncated={trunc}）"),
+        );
+        feed_reader(&path, |st| st.apply_chunk(offset, next, trunc, text));
+    });
+}
+
+/// 回执落地（守卫②：核里当前 path 必须与回执同源；空串守卫 = 无条件喂，
+/// 供本地相占位用）
+fn feed_reader(path: &str, f: impl FnOnce(&mut crate::ui::reader_page::ReaderPage)) {
+    if let Some(h) = crate::ui::reader_page::reader_handle() {
+        let mut st = h.lock().unwrap();
+        if path.is_empty() || st.path == path {
+            f(&mut st);
+        }
+    }
+    DIRTY.store(true, Ordering::Relaxed);
+}
+
 /// GET 一个 JSON 面拿回 body（sess_pool::http_get 同款：连接/写/读全带
 /// 超时，非 200 即错）——第三份复制是有意的：另两份的 BODY_CAP 与本册
 /// 不同档（64KB/256KB/512KB），合并不如各自显式

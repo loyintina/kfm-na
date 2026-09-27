@@ -19,7 +19,7 @@
 | `src/direct_brain.rs` | 2 | 2 | 0 | — |
 | `src/endpoint.rs` | 9 | 9 | 0 | — |
 | `src/exec_probe.rs` | 1 | 1 | 0 | — |
-| `src/fs_fetch.rs` | 6 | 3 | 3 | configure take_dirty request_read |
+| `src/fs_fetch.rs` | 7 | 5 | 2 | configure take_dirty |
 | `src/gate.rs` | 106 | 83 | 23 | register_gate_router text_dump inject_keys spawn_gate_watcher REC_FILE_CAP REC_FILE rec_output rec_resize PANIC_FILE PANIC_TRACE_FILE LOOP_STALL_FILE note_loop_beat loop_beat_age_ms note_foreground install_panic_hook note_draw note_session_death touch_take register_input_bar ALERT_RSS_COOLDOWN_MS ALERT_DEATHS_WINDOW_MS ALERT_DEATHS_COOLDOWN_MS HISTORY_EVERY_TICKS |
 | `src/glyph_atlas.rs` | 12 | 12 | 0 | — |
 | `src/http1.rs` | 10 | 7 | 3 | is_tick_err read_head_hook read_body_hook |
@@ -52,7 +52,7 @@
 | `src/singleton.rs` | 7 | 4 | 3 | LOCK_PATH lock_exclusive try_acquire |
 | `src/svc_health.rs` | 12 | 7 | 5 | HIST_PATH configure set_visible sys_snap take_dirty |
 | `src/sys_hist.rs` | 39 | 34 | 5 | BAR_W PLACEHOLDER_PCT hist_idx restore HIST_FORMAT |
-| `src/termview.rs` | 161 | 154 | 7 | AI_THINK_COLLAPSED FONT_CANDIDATES CJK_FONT_CANDIDATES load_cjk_font font_probe MAG_HALF_COLS MAG_HALF_ROWS |
+| `src/termview.rs` | 165 | 158 | 7 | AI_THINK_COLLAPSED FONT_CANDIDATES CJK_FONT_CANDIDATES load_cjk_font font_probe MAG_HALF_COLS MAG_HALF_ROWS |
 | `src/theme.rs` | 1 | 1 | 0 | — |
 | `src/tmux_ctl.rs` | 20 | 20 | 0 | — |
 | `src/tmux_exec.rs` | 1 | 1 | 0 | — |
@@ -71,7 +71,7 @@
 | `src/ui/filetree.rs` | 81 | 73 | 8 | SHIFT_CLAMP_CSS TRI_GAP_PX CURSOR_NAME_INSET CURSOR_BAR_W CURSOR_HAIR_W row_center register_filetree filetree_handle |
 | `src/ui/fx_ease.rs` | 11 | 11 | 0 | — |
 | `src/ui/fx_preview.rs` | 8 | 5 | 3 | LEG_GO_MS LEG_RETURN_START LEG_RETURN_MS |
-| `src/ui/fx_spring.rs` | 12 | 12 | 0 | — |
+| `src/ui/fx_spring.rs` | 14 | 14 | 0 | — |
 | `src/ui/gear.rs` | 7 | 7 | 0 | — |
 | `src/ui/keybar.rs` | 1 | 1 | 0 | — |
 | `src/ui/link_card.rs` | 9 | 9 | 0 | — |
@@ -83,7 +83,8 @@
 | `src/ui/parser_chain.rs` | 15 | 12 | 3 | COL_W_NUM COL_W_DEN window_of |
 | `src/ui/parser_page.rs` | 63 | 48 | 15 | COL_GAP DIVIDER_ZONE MAX_VISIBLE_LINES MIN_VISIBLE_LINES MODAL_CARD_W MODAL_PAD_V MODAL_GAP MODAL_BTN_GAP CONFIRM_LABELS cancel_confirm register_parser_page parser_page_handle baked_epoch note_baked_geo baked_geo |
 | `src/ui/prompt_bar.rs` | 5 | 4 | 1 | row_of |
-| `src/ui/seam.rs` | 29 | 29 | 0 | — |
+| `src/ui/reader_page.rs` | 23 | 19 | 4 | TOP_BAR_H RETURN_W PROGRESS_H register_reader |
+| `src/ui/seam.rs` | 34 | 34 | 0 | — |
 | `src/ui/stage.rs` | 7 | 7 | 0 | — |
 | `src/ui/svc_card.rs` | 13 | 12 | 1 | head_word |
 | `src/ui/sys_card.rs` | 22 | 19 | 3 | card_h_now local_y bar_geom |

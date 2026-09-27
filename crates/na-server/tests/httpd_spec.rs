@@ -223,23 +223,43 @@ fn spec_route_fs_kfmv4_前缀别名() {
         panic!("前缀别名该路由到 FsList");
     };
     assert_eq!(dir, "x");
-    let httpd::Route::FsRead { path, max } = httpd::route("GET", "/kfmv4/api/fs/read?path=a&max=9")
+    let httpd::Route::FsRead { path, max, offset } =
+        httpd::route("GET", "/kfmv4/api/fs/read?path=a&max=9")
     else {
         panic!("前缀别名该路由到 FsRead");
     };
     assert_eq!(path, "a");
     assert_eq!(max, 9);
+    assert_eq!(offset, 0, "缺 offset = 0（旧行为）");
+}
+
+/// BAR-170 分块读：offset 参数路由（缺省 0 / 非数字回落 0 / 真值透传）
+#[test]
+fn spec_route_fs_read_offset() {
+    let httpd::Route::FsRead { offset, .. } =
+        httpd::route("GET", "/api/fs/read?path=a&offset=65536")
+    else {
+        panic!();
+    };
+    assert_eq!(offset, 65536);
+    let httpd::Route::FsRead { offset, .. } = httpd::route("GET", "/api/fs/read?path=a&offset=abc")
+    else {
+        panic!();
+    };
+    assert_eq!(offset, 0, "非数字 offset 回落 0");
 }
 
 #[test]
 fn spec_route_fs_read_取_path_max() {
-    let httpd::Route::FsRead { path, max } = httpd::route("GET", "/api/fs/read?path=sub%2Fa.txt")
+    let httpd::Route::FsRead { path, max, .. } =
+        httpd::route("GET", "/api/fs/read?path=sub%2Fa.txt")
     else {
         panic!("GET /api/fs/read 该是 FsRead");
     };
     assert_eq!(path, "sub/a.txt");
     assert_eq!(max, na_protocol::fsapi::DEFAULT_MAX, "缺 max = 64KB");
-    let httpd::Route::FsRead { path, max } = httpd::route("GET", "/api/fs/read?path=b.txt&max=abc")
+    let httpd::Route::FsRead { path, max, .. } =
+        httpd::route("GET", "/api/fs/read?path=b.txt&max=abc")
     else {
         panic!();
     };
@@ -251,7 +271,7 @@ fn spec_route_fs_read_取_path_max() {
         panic!();
     };
     assert_eq!(max, na_protocol::fsapi::MAX_MAX, "上限 1MB");
-    let httpd::Route::FsRead { path, max } =
+    let httpd::Route::FsRead { path, max, .. } =
         httpd::route("GET", "/api/fs/read?path=%26%3D&max=1024")
     else {
         panic!();

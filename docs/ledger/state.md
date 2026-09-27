@@ -5,6 +5,32 @@
 > (速查表:症状 → 工具 → 字段 → 判卷)。本页只写「现在进行时」,
 > 历史功过在 bugs.md。
 
+## 当前位置（2026-09-27 午后，BAR-170 阅读页：文件树点文件 → 全屏阅读卡片页，Panel::Reader 第六公民）
+
+> **缘起**：用户拍板「文件树点击后跳预览页不是设计的主要内容——理想
+> 是关树 + 中央全屏卡片阅读页，md 走我们 md 解析的渲染」，并指定
+> **研究线亲做**（与文件树分开的独立插件，不派 x1/x2）。
+> **形制**：整页 CARD_PAGE_BG + 双色渐变环 + 顶栏（文件名居中 + 右上
+> 返回钮 + 底缘渐变线 + 进度线 3px 宽=scroll/max×内容宽）；一切文本过
+> BAR-169 md 管线（.md 六样渲染，plain 落段落块不开第二条路）；分块
+> 64KB×32 帽 2MB；预取阈滚近内容尾 1.5 视口；每路径滚动记忆 MEM_CAP=128；
+> 二进制/404 占位相。手势：缝采样归零才建 TouchScroll，返回钮命中与涂装
+> 同源 rd_return_hit，Ended 甩尾交接，帧泵 poll_reader（tick_restore +
+> need_prefetch）。数据面：fsapi read_range_json_in + httpd FsRead 加
+> offset + fs_fetch request_read_chunk（path 守卫防迟到块喂错文件）。
+> **公民全链**（BAR-166 Demo 同款 9 条）：ai_presence Panel::Reader /
+> stage 11 槽 / 第七道缝 / panel_drag DismissReader / viewport_push 第六
+> 臂 / ChromeSlot::Reader=18 layers 19 / fx_spring 第九路活性源 /
+> endpoint File 空注册（caps 全 false，plan_exec→NoServer；sys_hist
+> hist_idx 改 Option 防混账）。锁序红线 term→reader 单向。
+> **钉**：reader_page_spec A 档带变异 + fx_ease 第七道缝 + viewport_push/
+> stage 重写续钉 + endpoint 三席 + reader_wiring_spec 5 钉；基线加
+> endpoint 0/fs_fetch 2/reader_page 4，demo_page 14→13 下调。cargo test
+> 全绿 + aarch64-android check 干净。
+> 状态：已修待判（待 redroid 副口 C 档判卷：md 六样全屏/纯文本/二进制
+> 占位/滚动惯性/进度线/返回钮/右缘推回/关树进场同拍；真机热更走研究线
+> 惯例，用户静默终验）。
+
 ## 当前位置（2026-09-27 午后，BAR-169 md 渲染器一期：解析/排版/绘制三层落地，会话池查看器换芯）
 
 > **缘起**：研究线工单，用户痛点原话「会话池的会话、信箱的显示文字

@@ -380,8 +380,17 @@ async fn http_handle(
             Ok(Err(e)) => httpd::fs_error_response(&e),
             Err(e) => httpd::respond(500, "Internal Server Error", &httpd::error_body(&e)),
         },
-        httpd::Route::FsRead { path, max } => {
-            match fs_blocking(move || fsapi::read_json(&path, max)).await {
+        httpd::Route::FsRead { path, max, offset } => {
+            // offset=0 = 旧契约（read_json 原样）；>0 = BAR-170 分块读
+            match fs_blocking(move || {
+                if offset == 0 {
+                    fsapi::read_json(&path, max)
+                } else {
+                    fsapi::read_range_json(&path, offset, max)
+                }
+            })
+            .await
+            {
                 Ok(Ok(body)) => httpd::respond(200, "OK", &body),
                 Ok(Err(e)) => httpd::fs_error_response(&e),
                 Err(e) => httpd::respond(500, "Internal Server Error", &httpd::error_body(&e)),

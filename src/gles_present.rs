@@ -127,6 +127,10 @@ pub enum ChromeSlot {
     /// + accent 边框环 + 打样内容墨；placement.x 跟 demo_off，右缘家
     /// 屏外右缘进出（与配置/解析同约定）。**末尾追加——现有槽值不动**
     Demo = 17,
+    /// 阅读页槽（2026-09-27 六公民，BAR-170）：整页 CARD_PAGE_BG +
+    /// accent 边框环 + 顶栏（文件名/返回钮/进度线）+ md 正文墨；
+    /// placement.x 跟 rd_off，右缘家同约定。**末尾追加——现有槽值不动**
+    Reader = 18,
 }
 
 /// 视口平移合成参数（十九修 D8）：调用方逐帧从 cfg_snap.pan 求值——
@@ -654,9 +658,9 @@ pub struct GlesPresent {
     /// 平移期池高 glide 的逐帧重烘限定在池区小画布）+ 二十四修一件
     /// （下拉面板层——并发同拍起步的捕获净度）+ BAR-163 翻案一件
     /// （压暗层——跳框全屏层，z 序 Over 之上）+ 五公民一件（Demo 页槽，
-    /// 2026-09-26），置脏烘焙 +
-    /// placement 合成——动画帧零光栅零上传
-    layers: [ChromeLayer; 18],
+    /// 2026-09-26）+ 六公民一件（阅读页槽，2026-09-27 BAR-170），
+    /// 置脏烘焙 + placement 合成——动画帧零光栅零上传
+    layers: [ChromeLayer; 19],
     /// 图层实例程序（rect+uv+tint 四边形；placement 逐槽进实例数据）
     layer_prog: glow::NativeProgram,
     layer_vao: glow::NativeVertexArray,
@@ -793,6 +797,7 @@ impl GlesPresent {
         };
         // 先建槽数组再 move gl 进结构体（E0382：字段初始化按书写序移动）
         let layers = [
+            mk_layer(&gl),
             mk_layer(&gl),
             mk_layer(&gl),
             mk_layer(&gl),
@@ -1238,8 +1243,8 @@ impl GlesPresent {
     /// 09-11 三公民化）：清屏 → 网格背景实例 → 网格字形实例（按页）→ 键行槽
     /// → 三面板槽按 z_order 底→顶依序画（placement 跟缝采样——动画帧唯二
     /// 变的东西，零上传）→ 上层槽（输入栏/光球/放大镜）→ swap。
-    /// 四面板 z 序由 z_order 传入（stage::panel_z_order 单源，BAR-083
-    /// 「动者在上」四公民泛化：动画/拖拽中的面板压顶，双静止跟栈序）；
+    /// 六面板 z 序由 z_order 传入（stage::panel_z_order 单源，BAR-083
+    /// 「动者在上」泛化：动画/拖拽中的面板压顶，双静止跟栈序）；
     /// AI 文字是 AI 面板的墨，必须紧跟 AI 面板槽画（别家在顶时压在 AI
     /// 文字上）。槽画布由调用方置脏烘焙（slot_bake），未烘焙的槽不上屏
     /// （不完整纹理=黑屏案）。
@@ -1263,13 +1268,16 @@ impl GlesPresent {
         pt_alpha: f32,
         demo_off: i32,
         demo_alpha: f32,
-        z_order: [crate::ai_presence::Panel; 5],
+        rd_off: i32,
+        rd_alpha: f32,
+        z_order: [crate::ai_presence::Panel; 6],
         term_place: (f32, f32, f32),
         panel_dy_extra: f32,
         cfg_dy_extra: f32,
         ft_dy_extra: f32,
         pt_dy_extra: f32,
         demo_dy_extra: f32,
+        rd_dy_extra: f32,
         pan_comp: Option<crate::gles_present::PanComp>,
         layered: LayeredPlace,
         // 像素级视口平移（2026-09-24 键盘 kb_frac + 触摸滚动零头共用）：
@@ -1428,6 +1436,23 @@ impl GlesPresent {
             // 槽画，别家在顶时被连墨带底一起盖住
             for slot in z_order {
                 match slot {
+                    crate::ai_presence::Panel::Reader => {
+                        let rd = &self.layers[ChromeSlot::Reader as usize];
+                        if rd.visible && rd.baked {
+                            draw_slot_layer(
+                                gl,
+                                self.layer_prog,
+                                self.layer_vao,
+                                self.layer_vbo,
+                                rd.tex,
+                                rd_off as f32,
+                                rd_dy_extra,
+                                self.w as f32,
+                                self.h as f32,
+                                rd_alpha,
+                            );
+                        }
+                    }
                     crate::ai_presence::Panel::Demo => {
                         let dm = &self.layers[ChromeSlot::Demo as usize];
                         if dm.visible && dm.baked {

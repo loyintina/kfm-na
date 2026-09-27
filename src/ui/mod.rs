@@ -37,6 +37,7 @@ pub mod panel_drag;
 pub mod parser_chain;
 pub mod parser_page;
 pub mod prompt_bar;
+pub mod reader_page;
 pub mod seam;
 pub mod stage;
 pub mod svc_card;

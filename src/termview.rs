@@ -407,6 +407,118 @@ pub fn demo_split(demo_off: i32, w: u32) -> (bool, bool) {
     cfg_split(demo_off, w)
 }
 
+/// 阅读页几何（BAR-170，涂装/命中/滚动同读——学 ft_geom 模式）：
+/// 顶栏高/返回钮宽/进度线厚吃 ui::reader_page 常量单源；内容左右内缘
+/// 与文件树同尺（content_origin + 右缘 margin 公式），视口底 =
+/// parser_page::visible_bottom（与解析页同一条可见底线）
+pub struct RdGeom {
+    /// 内容左内缘
+    pub x0: i64,
+    /// 内容右内缘
+    pub x1: i64,
+    /// 顶栏顶（= 内容 oy）
+    pub bar_y0: i64,
+    /// 顶栏底
+    pub bar_y1: i64,
+    /// 顶栏底缘 1px 渐变线 y
+    pub div_y: i64,
+    /// 进度线顶（贴底缘线下）
+    pub prog_y0: i64,
+    /// 正文视口顶（进度线下）
+    pub view_y0: i64,
+    /// 正文视口底（可见底）
+    pub view_y1: i64,
+    /// 返回钮（顶栏内右上，上下留白与文件树底栏三盒同尺）
+    pub btn_x0: i64,
+    pub btn_y0: i64,
+    pub btn_w: i64,
+    pub btn_h: i64,
+}
+
+pub fn reader_geom(w: u32, h: u32, bottom_inset: u32) -> RdGeom {
+    let (ox, oy) = crate::ui::tab_bar::content_origin();
+    let x0 = i64::from(ox);
+    let x1 = i64::from(w) - i64::from(AI_PAGE_FRAME_MARGIN + AI_PAGE_FRAME_W + CELL_W);
+    let bar_y0 = i64::from(oy);
+    let bar_y1 = bar_y0 + crate::ui::reader_page::TOP_BAR_H;
+    let div_y = bar_y1;
+    let prog_y0 = bar_y1 + 1;
+    let view_y0 = prog_y0 + crate::ui::reader_page::PROGRESS_H;
+    let view_y1 = crate::ui::parser_page::visible_bottom(h, bottom_inset).max(view_y0);
+    let bar_h = bar_y1 - bar_y0;
+    let btn_h = (bar_h - 2 * FT_BOX_PAD_V).clamp(12, bar_h);
+    let btn_w = crate::ui::reader_page::RETURN_W;
+    let btn_x0 = (x1 - btn_w).max(x0);
+    let btn_y0 = bar_y0 + (bar_h - btn_h) / 2;
+    RdGeom {
+        x0,
+        x1,
+        bar_y0,
+        bar_y1,
+        div_y,
+        prog_y0,
+        view_y0,
+        view_y1,
+        btn_x0,
+        btn_y0,
+        btn_w,
+        btn_h,
+    }
+}
+
+/// 返回钮命中（BAR-170）：几何与涂装同源一条（眼手同尺——页靠泊偏移 0
+/// 时壳才用这份尺，与 ft_bar_hit 同规）
+pub fn rd_return_hit(g: &RdGeom, x: i64, y: i64) -> bool {
+    x >= g.btn_x0 && x < g.btn_x0 + g.btn_w && y >= g.btn_y0 && y < g.btn_y0 + g.btn_h
+}
+
+/// 阅读页底装修（面板栈六公民，2026-09-27 BAR-170）：整页 CARD_PAGE_BG
+/// 深底 + 边框环（配方与 Demo 页同源 paint_page_frame_ring，环色 = 召唤
+/// 即随机 accent 入参）——右缘家符号约定完全相同：rd_off_x = 面板刚体
+/// 水平平移（+w=屏外右缘 → 0 靠泊）
+pub fn paint_reader_page_chrome(
+    buf: &mut [u32],
+    buf_w: u32,
+    buf_h: u32,
+    bottom_inset: u32,
+    rd_off_x: i32,
+    accent: crate::ui::accent::AccentPair,
+) {
+    if buf_w == 0 || buf_h == 0 {
+        return;
+    }
+    let mut frame = Frame {
+        buf,
+        w: buf_w,
+        h: buf_h,
+    };
+    // 整页底色 = 面板刚体矩形（全屏）与屏求交后画（X 向平移，左右裁剪）
+    let px0 = rd_off_x.clamp(0, buf_w as i32) as u32;
+    let px1 = (buf_w as i32 + rd_off_x).clamp(0, buf_w as i32) as u32;
+    if px1 > px0 {
+        frame.fill_rect(px0, 0, px1 - px0, buf_h, crate::ui::accent::CARD_PAGE_BG);
+    }
+    paint_page_frame_ring(
+        &mut frame,
+        buf_w,
+        buf_h,
+        bottom_inset,
+        rd_off_x,
+        0,
+        crate::ui::accent::CARD_PAGE_BG,
+        accent.c1,
+        accent.c2,
+        true,
+    );
+}
+
+/// 阅读页分层判定（右缘家，与 cfg_split 同构同尺）：
+/// - 网格+快捷键行（下层可见）：rd_off != 0；
+/// - 阅读页可见：rd_off < w（off ∈ [0, +w]，=w 即完全屏外右缘）
+pub fn rd_split(rd_off: i32, w: u32) -> (bool, bool) {
+    cfg_split(rd_off, w)
+}
+
 /// 终端卡片壳底装修（2026-09-11 用户拍板「终端也包全屏卡片壳」）：
 /// 与三面板同配方 paint_page_frame_ring，无色相碳灰环 + 近黑内芯底
 /// （卡片感 = 壳内略亮于壳外纯黑）。无平移无动画——基座页恒靠泊；
@@ -4640,6 +4752,163 @@ impl TermView {
         // （无预览画板版，§六 样式唯一来源纪律同守）
         if let Some(v) = &page.viewer {
             self.paint_viewer_impl(frame.buf, w, h, v, cfg_off_x, accent);
+        }
+    }
+
+    /// 阅读页内容墨（2026-09-27 六公民，BAR-170）：几何 reader_geom 单源
+    /// （本侧只读不算）；正文 = md 文档（一切文本过 BAR-169 管线——plain
+    /// 天然落段落块，不开第二路），文档原点 = 视口顶 − scroll，纵裁剪
+    /// [view_y0, view_y1) 双裁（查看器同款纪律：上裁防污染顶栏，下裁守
+    /// 页环内缘）。占位相（Loading/Binary/Error）一行居中文案；capped
+    /// 页脚「文件过大只显示前 2MB」挂文档尾（随滚动自然进出视口）
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn paint_reader_content_impl(
+        &self,
+        buf: &mut [u32],
+        w: u32,
+        h: u32,
+        bottom_inset: u32,
+        rd_off_x: i32,
+        page: &crate::ui::reader_page::ReaderPage,
+        accent: crate::ui::accent::AccentPair,
+    ) {
+        use crate::ui::reader_page as rp;
+        if w == 0 || h == 0 {
+            return;
+        }
+        let mut frame = Frame { buf, w, h };
+        let off = i64::from(rd_off_x);
+        let g = reader_geom(w, h, bottom_inset);
+        let denom = ((w - 1) + (h - 1)).max(1) as i64; // 页环同一把 135° 渐变尺
+        let title_fg = 0x00D9_D9D9; // 0.85 亮（查看器标题档）
+        let meta_fg = 0x0080_8080; // 0.5 白（占位/页脚档）
+        let no_clip = (0, i64::from(h));
+
+        // ---- 顶栏：文件名居中（faux-bold 双绘；中置区裁到返回钮左缘前
+        // 8px——长名不许钻进钮区）----
+        let name_cw = (g.btn_x0 - 8 - g.x0).max(0) as u32;
+        let bar_h = (g.bar_y1 - g.bar_y0).max(0) as u32;
+        for dx in [0, 1] {
+            self.draw_text_centered(
+                &mut frame,
+                &page.name,
+                g.x0 + off + dx,
+                g.bar_y0,
+                name_cw,
+                bar_h,
+                36.0,
+                title_fg,
+                g.x0 + off + dx,
+            );
+        }
+        // ---- 返回钮：均匀细框 + 居中「返回」（modal 关闭钮配方）----
+        paint_thin_frame(
+            &mut frame,
+            g.btn_x0 + off,
+            g.btn_y0,
+            g.btn_w as u32,
+            g.btn_h as u32,
+            accent,
+            denom,
+            no_clip,
+        );
+        self.draw_text_centered(
+            &mut frame,
+            "返回",
+            g.btn_x0 + off,
+            g.btn_y0,
+            g.btn_w as u32,
+            g.btn_h as u32,
+            36.0,
+            title_fg,
+            g.btn_x0 + off,
+        );
+        // ---- 顶栏底缘 1px 渐变细线（c2→c1，内容宽）----
+        if g.div_y >= 0 && g.div_y < i64::from(h) {
+            for ax in (g.x0 + off)..(g.x1 + off) {
+                if ax < 0 || ax >= i64::from(w) {
+                    continue;
+                }
+                let c = ring_gradient_rgb(accent.c2, accent.c1, ax - off, g.div_y, denom);
+                frame.blend_px(ax as u32, g.div_y as u32, c, 255);
+            }
+        }
+
+        let cw = (g.x1 - g.x0).max(0);
+        let view_h = (g.view_y1 - g.view_y0).max(0);
+        // 占位相一行居中（视口区中置）
+        let placeholder = |frame: &mut Frame<'_>, text: &str| {
+            self.draw_text_centered(
+                frame,
+                text,
+                g.x0 + off,
+                g.view_y0,
+                cw as u32,
+                view_h as u32,
+                32.0,
+                meta_fg,
+                g.x0 + off,
+            );
+        };
+        match &page.phase {
+            rp::ReaderPhase::Loading => placeholder(&mut frame, "加载中…"),
+            rp::ReaderPhase::Binary => placeholder(&mut frame, "二进制文件不可读"),
+            rp::ReaderPhase::Error(msg) => placeholder(&mut frame, msg),
+            rp::ReaderPhase::Reading => {
+                let style = crate::ui::md_layout::md_style();
+                let lay = crate::ui::md_layout::layout_md(&page.text, cw as u32, &style, self);
+                let max = rp::scroll_max(i64::from(lay.total_h), view_h);
+                // ---- 进度线（贴顶栏底缘线下 3px，accent c1→c2 渐变，
+                // 宽 = scroll/max × 内容宽；max=0 不画）----
+                if let Some((sc, m)) = page.progress(max) {
+                    let pw = cw * sc / m;
+                    if pw > 0 {
+                        for ay in g.prog_y0..g.prog_y0 + rp::PROGRESS_H {
+                            if ay < 0 || ay >= i64::from(h) {
+                                continue;
+                            }
+                            for ax in (g.x0 + off)..(g.x0 + off + pw) {
+                                if ax < 0 || ax >= i64::from(w) {
+                                    continue;
+                                }
+                                let c =
+                                    ring_gradient_rgb(accent.c1, accent.c2, ax - off, ay, denom);
+                                frame.blend_px(ax as u32, ay as u32, c, 255);
+                            }
+                        }
+                    }
+                }
+                // ---- 正文（md 管线；文档原点 = 视口顶 − scroll，双裁）----
+                self.paint_md_body(
+                    &mut frame,
+                    &lay,
+                    g.x0 + off,
+                    g.view_y0 - page.scroll,
+                    cw as u32,
+                    (g.view_y0, g.view_y1),
+                    denom,
+                    accent,
+                );
+                // ---- capped 页脚（挂文档尾一行，随滚动进出视口）----
+                if page.capped {
+                    let fy = g.view_y0 - page.scroll + i64::from(lay.total_h) + i64::from(CELL_H);
+                    let fh = i64::from(CELL_H) * 2;
+                    if fy + fh > g.view_y0 && fy < g.view_y1 {
+                        self.draw_text_centered_yclip(
+                            &mut frame,
+                            "文件过大只显示前 2MB",
+                            g.x0 + off,
+                            fy,
+                            cw as u32,
+                            fh as u32,
+                            28.0,
+                            meta_fg,
+                            g.x0 + off,
+                            Some((g.view_y0, g.view_y1)),
+                        );
+                    }
+                }
+            }
         }
     }
 
@@ -9183,6 +9452,22 @@ pub trait TermEmu: Send {
         demo_off_x: i32,
         accent: crate::ui::accent::AccentPair,
     );
+    /// 阅读页内容墨（2026-09-27 六公民，BAR-170）：几何 reader_geom 单源
+    /// （顶栏/返回钮/进度线/正文视口）；正文吃 BAR-169 md 管线（plain 也
+    /// 喂 layout_md，不开第二路）。rd_off_x 语义同 paint_demo_content；
+    /// 画在阅读页底装修之上。值守倒帧与软渲染兜底走它——GLES 烘焙臂
+    /// 直接调 impl，不经 trait
+    #[allow(clippy::too_many_arguments)]
+    fn paint_reader_content(
+        &self,
+        buf: &mut [u32],
+        w: u32,
+        h: u32,
+        bottom_inset: u32,
+        rd_off_x: i32,
+        page: &crate::ui::reader_page::ReaderPage,
+        accent: crate::ui::accent::AccentPair,
+    );
     /// 配置卡双池涂装（主题宪法 §五，2026-09-12）：上池/下池两个二级
     /// 卡片框（paint_rect_ring 同配方；内卡渐变反转 c2→c1，§三 多级
     /// 嵌套逐层反转）。cfg_off_x 语义同 paint_cfg_tab_bar；画在配置页
@@ -9583,6 +9868,20 @@ impl TermEmu for TermView {
         accent: crate::ui::accent::AccentPair,
     ) {
         TermView::paint_demo_content_impl(self, buf, w, h, demo_off_x, accent)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn paint_reader_content(
+        &self,
+        buf: &mut [u32],
+        w: u32,
+        h: u32,
+        bottom_inset: u32,
+        rd_off_x: i32,
+        page: &crate::ui::reader_page::ReaderPage,
+        accent: crate::ui::accent::AccentPair,
+    ) {
+        TermView::paint_reader_content_impl(self, buf, w, h, bottom_inset, rd_off_x, page, accent)
     }
 
     #[allow(clippy::too_many_arguments)]

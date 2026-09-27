@@ -244,14 +244,94 @@ pub fn read_json_in(roots: &[PathBuf], rel: &str, max: usize) -> Result<String, 
 /// - 只被 max 切在多字节序列上（`error_len=None`）→ 收到上一个完整字符；
 /// - 内容本来就有坏字节 → lossy 出 U+FFFD 显形（不静默吞掉后半文件）。
 fn text_prefix(bytes: &[u8], limit: usize) -> String {
+    text_prefix_metered(bytes, limit).0
+}
+
+/// `text_prefix` 的计量版（BAR-170 分块读）：返回（文本, **消费的源字节数**）。
+/// 消费量必须走原始侧——lossy 显形时出参文本字节数 ≠ 源字节数（1 个坏字节
+/// 变 3 字节的 U+FFFD），拿 text.len() 当消费量会把下一块的 offset 记飞：
+/// - 整段合法 → 消费 = 段长；
+/// - 切在多字节序列上 → 消费 = valid_up_to（半字留给下一块，**字界不变式**：
+///   本函数保证 offset 恒指字界，下一块从完整字符起读）；
+/// - 坏字节 → 消费 = 段长（U+FFFD 已顶了坏字节的账，**不许重读**——重读会在
+///   每块边界把同一个坏字节反复显形）。
+fn text_prefix_metered(bytes: &[u8], limit: usize) -> (String, usize) {
     let end = bytes.len().min(limit);
     match std::str::from_utf8(&bytes[..end]) {
-        Ok(s) => s.to_string(),
-        Err(e) if e.error_len().is_none() => {
-            String::from_utf8_lossy(&bytes[..e.valid_up_to()]).into_owned()
-        }
-        Err(_) => String::from_utf8_lossy(&bytes[..end]).into_owned(),
+        Ok(s) => (s.to_string(), end),
+        Err(e) if e.error_len().is_none() => (
+            String::from_utf8_lossy(&bytes[..e.valid_up_to()]).into_owned(),
+            e.valid_up_to(),
+        ),
+        Err(_) => (String::from_utf8_lossy(&bytes[..end]).into_owned(), end),
     }
+}
+
+/// `GET /api/fs/read?path=&offset=&max=` 的分块变体（BAR-170 阅读页）：
+/// 从 `offset`（字节，协议不变式 = 恒为 UTF-8 字界，由出参 `next_offset`
+/// 维持）起读至多 `max` 字节。出参比 `read_json` 多 `offset`/`next_offset`
+/// 两键；`truncated = next_offset < size`（后面还有货）。
+/// **offset ≥ size（非空文件）= NotFound**——越界与不存在同一条 404 同文案
+/// （不透露存在性）；空文件 offset=0 合法，出空块 `truncated=false`。
+pub fn read_range_json(rel: &str, offset: u64, max: usize) -> Result<String, FsError> {
+    read_range_json_in(&roots(), rel, offset, max)
+}
+
+/// `read_range_json()` 的纯核。读窗 = `min(max+1, size−offset, 1MB)`
+/// （多读 1 字节分辨「刚好读完」与「被 max 截断」，与 read_json_in 同律）。
+pub fn read_range_json_in(
+    roots: &[PathBuf],
+    rel: &str,
+    offset: u64,
+    max: usize,
+) -> Result<String, FsError> {
+    use std::io::{Read as _, Seek as _};
+
+    let real = resolve_in(roots, rel)?;
+    let meta = std::fs::metadata(&real).map_err(|_| FsError::NotFound)?;
+    if !meta.is_file() {
+        return Err(FsError::NotDir);
+    }
+    let size = meta.len();
+    if offset >= size && size > 0 {
+        return Err(FsError::NotFound);
+    }
+    // cap 下限 8：max 小于一个 UTF-8 字宽时字界收口会零消费（下一块原地
+    // 不动 = 死循环，考题 spec_bar170_字界不变式 实捕）。分块协议的**前进性**
+    // 优先于块宽自律——两个最宽字符（4B×2）必能整块通过，消费 ≥ 4。
+    // （read_json_in 无此下限：它是一枪读，没有前进性契约）
+    let cap = max.min(MAX_MAX).clamp(8, MAX_MAX);
+    let want = (cap.saturating_add(1) as u64)
+        .min(size - offset)
+        .min(MAX_MAX as u64);
+    let mut buf = Vec::new();
+    std::fs::File::open(&real)
+        .and_then(|mut f| {
+            f.seek(std::io::SeekFrom::Start(offset))?;
+            f.take(want).read_to_end(&mut buf)
+        })
+        .map_err(|e| FsError::Io(e.to_string()))?;
+    let binary = buf.contains(&0);
+    if binary {
+        // 二进制不出 text；next_offset 按读窗给（消费方只看首块的 binary 旗，
+        // 见到即停，后续块不会来）
+        let next_offset = offset + buf.len().min(cap) as u64;
+        return Ok(serde_json::json!({
+            "ok": true, "path": rel, "binary": true,
+            "truncated": next_offset < size, "size": size,
+            "offset": offset, "next_offset": next_offset,
+        })
+        .to_string());
+    }
+    let (text, consumed) = text_prefix_metered(&buf, cap);
+    let next_offset = offset + consumed as u64;
+    Ok(serde_json::json!({
+        "ok": true, "path": rel, "binary": false,
+        "truncated": next_offset < size, "size": size,
+        "offset": offset, "next_offset": next_offset,
+        "text": text,
+    })
+    .to_string())
 }
 
 /// mtime = 毫秒 epoch（与 nz `Math.floor(mtimeMs)` 同一口径）；时钟异常 → 0
@@ -339,4 +419,12 @@ pub fn parse_max(query: &str) -> usize {
         .filter(|n| *n > 0)
         .map(|n| n.min(MAX_MAX))
         .unwrap_or(DEFAULT_MAX)
+}
+
+/// `?offset=` 解析（BAR-170 分块读）：缺省/非数字 = 0——**缺省即旧行为**，
+/// 分块面对旧客户端是纯粹加法
+pub fn parse_offset(query: &str) -> u64 {
+    query_get(query, "offset")
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(0)
 }

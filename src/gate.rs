@@ -157,6 +157,7 @@ pub fn dump_now(dir: &str) {
         let ft_active = crate::ui::seam::filetree_panel_offset_x_active();
         let pt_active = crate::ui::seam::parser_panel_offset_x_active();
         let demo_active = crate::ui::seam::demo_panel_offset_x_active();
+        let rd_active = crate::ui::seam::reader_panel_offset_x_active();
         let (cfg_target, cfg_draw) = crate::ui::stage::panel_target_and_draw(
             stack_vec.contains(&Panel::Config),
             cfg_active,
@@ -177,6 +178,11 @@ pub fn dump_now(dir: &str) {
             demo_active,
             w as f32,
         );
+        let (rd_target, rd_draw) = crate::ui::stage::panel_target_and_draw(
+            stack_vec.contains(&Panel::Reader),
+            rd_active,
+            w as f32,
+        );
         let z_order = crate::ui::stage::panel_z_order(
             &stack_vec,
             [
@@ -185,6 +191,7 @@ pub fn dump_now(dir: &str) {
                 ft_active,
                 pt_active,
                 demo_active,
+                rd_active,
             ],
         );
         let cfg_off = crate::ui::seam::sample_config_panel_offset_x(
@@ -203,16 +210,22 @@ pub fn dump_now(dir: &str) {
             demo_target,
             crate::report::boot_ms() as u64,
         ) as i32;
+        let rd_off = crate::ui::seam::sample_reader_panel_offset_x(
+            rd_target,
+            crate::report::boot_ms() as u64,
+        ) as i32;
         let (ai_grid, panel_visible) = crate::termview::panel_split(panel_off, h);
         let (cfg_grid, cfg_visible0) = crate::termview::cfg_split(cfg_off, w);
         let (ft_grid, ft_visible0) = crate::termview::ft_split(ft_off, w);
         let (pt_grid, pt_visible0) = crate::termview::pt_split(pt_off, w);
         let (demo_grid, demo_visible0) = crate::termview::demo_split(demo_off, w);
+        let (rd_grid, rd_visible0) = crate::termview::rd_split(rd_off, w);
         let cfg_visible = cfg_visible0 && cfg_draw;
         let ft_visible = ft_visible0 && ft_draw;
         let pt_visible = pt_visible0 && pt_draw;
         let demo_visible = demo_visible0 && demo_draw;
-        let grid_keybar = ai_grid && cfg_grid && ft_grid && pt_grid && demo_grid;
+        let rd_visible = rd_visible0 && rd_draw;
+        let grid_keybar = ai_grid && cfg_grid && ft_grid && pt_grid && demo_grid && rd_grid;
         if grid_keybar {
             // 卡片壳下缘让位 = 快捷键行 + 输入栏带高（值守倒帧无键盘视野），
             // 与前台 paint_under 同尺（前景 ime_bottom_px 恒 0 于后台）
@@ -358,6 +371,33 @@ pub fn dump_now(dir: &str) {
                                 pt_off,
                                 &psnap,
                                 acc_of(Panel::Parser),
+                            );
+                        }
+                    }
+                }
+                Panel::Reader => {
+                    if rd_visible {
+                        crate::termview::paint_reader_page_chrome(
+                            &mut buf,
+                            w,
+                            h,
+                            bar_h,
+                            rd_off,
+                            acc_of(Panel::Reader),
+                        );
+                        // 内容墨（BAR-110 同教训：值守倒帧是 na-shot 判卷
+                        // 路——只画 chrome = 截图一片空页）。未注册（host
+                        // 空转）= 只画 chrome 合法
+                        if let Some(r) = crate::ui::reader_page::reader_handle() {
+                            let pg = r.lock().unwrap();
+                            t.paint_reader_content(
+                                &mut buf,
+                                w,
+                                h,
+                                bar_h,
+                                rd_off,
+                                &pg,
+                                acc_of(Panel::Reader),
                             );
                         }
                     }
@@ -1717,6 +1757,7 @@ pub fn stats_snap() -> StatsSnap {
         Some(crate::ai_presence::Panel::FileTree) => "filetree".to_owned(),
         Some(crate::ai_presence::Panel::Parser) => "parser".to_owned(),
         Some(crate::ai_presence::Panel::Demo) => "demo".to_owned(),
+        Some(crate::ai_presence::Panel::Reader) => "reader".to_owned(),
     };
     let (
         ai_page,

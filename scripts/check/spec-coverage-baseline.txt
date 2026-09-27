@@ -7,7 +7,9 @@ src/clipboard.rs 0
 src/conn.rs 2
 src/crash.rs 1
 src/direct_brain.rs 0
+src/endpoint.rs 0
 src/exec_probe.rs 0
+src/fs_fetch.rs 2
 src/gate.rs 23
 src/gles_present.rs 0
 src/glyph_atlas.rs 0
@@ -40,7 +42,7 @@ src/ui/accent.rs 0
 src/ui/ai_page.rs 0
 src/ui/cursor.rs 0
 src/ui/demo_icon.rs 0
-src/ui/demo_page.rs 14
+src/ui/demo_page.rs 13
 src/ui/dual_pool.rs 0
 src/ui/fx_ease.rs 0
 src/ui/fx_spring.rs 0
@@ -49,6 +51,7 @@ src/ui/keybar.rs 0
 src/ui/orb.rs 0
 src/ui/panel_drag.rs 5
 src/ui/prompt_bar.rs 1
+src/ui/reader_page.rs 4
 src/ui/seam.rs 0
 src/ui/stage.rs 0
 src/ui/tab_bar.rs 0

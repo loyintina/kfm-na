@@ -6,12 +6,14 @@ use kfm_na::endpoint::{self, EndpointKind, EndpointState};
 use kfm_na::settings::DefaultSession;
 
 #[test]
-fn spec_endpoint_注册表两席有序() {
-    // 现状两席：服务器在前（现状锚——解析页恒服务器相）、本地在后；
+fn spec_endpoint_注册表三席有序() {
+    // 现状三席：服务器在前（现状锚——解析页恒服务器相）、本地在后、
+    // 文件席殿后（BAR-170 阅读页空注册——仅占对象轴席位，无 exec 通道）；
     // 有序 = 未来「下一个对象」轮换语义的根据
-    assert_eq!(endpoint::REGISTRY.len(), 2);
+    assert_eq!(endpoint::REGISTRY.len(), 3);
     assert_eq!(endpoint::REGISTRY[0].kind, EndpointKind::Server);
     assert_eq!(endpoint::REGISTRY[1].kind, EndpointKind::Local);
+    assert_eq!(endpoint::REGISTRY[2].kind, EndpointKind::File);
     // def() 反查与注册表同一份（不许另写一份漂移）
     for def in endpoint::REGISTRY {
         let looked = endpoint::def(def.kind);
@@ -20,15 +22,17 @@ fn spec_endpoint_注册表两席有序() {
 }
 
 #[test]
-fn spec_endpoint_能力面_两席全开() {
-    // 现状契约：两席四能力全开——本地相链路 = 恒在线回环（三卡结构
-    // 稳定，用户拍板「前者」：本地相连接卡显自查信息不收起）；未来
-    // 某席给不出某能力 = 该席 false，插件卡进降级相
+fn spec_endpoint_能力面_两席全开文件席全关() {
+    // 现状契约：服务器/本地两席四能力全开——本地相链路 = 恒在线回环
+    // （三卡结构稳定，用户拍板「前者」：本地相连接卡显自查信息不收起）；
+    // 文件席（BAR-170）= 阅读页空注册，四能力全 false（无 exec 通道，
+    // 数据面走 fs_fetch 分块拉取，不挂对象轴 exec）
     for def in endpoint::REGISTRY {
-        assert!(def.caps.exec, "{:?} exec", def.kind);
-        assert!(def.caps.sys_info, "{:?} sys_info", def.kind);
-        assert!(def.caps.health, "{:?} health", def.kind);
-        assert!(def.caps.link, "{:?} link", def.kind);
+        let expect_on = def.kind != EndpointKind::File;
+        assert_eq!(def.caps.exec, expect_on, "{:?} exec", def.kind);
+        assert_eq!(def.caps.sys_info, expect_on, "{:?} sys_info", def.kind);
+        assert_eq!(def.caps.health, expect_on, "{:?} health", def.kind);
+        assert_eq!(def.caps.link, expect_on, "{:?} link", def.kind);
     }
 }
 
@@ -84,6 +88,15 @@ fn spec_endpoint_exec通道裁决() {
     assert!(matches!(
         plan_exec(EndpointKind::Local, Some("ws://x")),
         ExecPlan::LocalPty
+    ));
+    // 文件席（BAR-170）= 无 exec 通道，恒 NoServer（数据面走 fs_fetch）
+    assert!(matches!(
+        plan_exec(EndpointKind::File, None),
+        ExecPlan::NoServer
+    ));
+    assert!(matches!(
+        plan_exec(EndpointKind::File, Some("ws://x")),
+        ExecPlan::NoServer
     ));
 }
 

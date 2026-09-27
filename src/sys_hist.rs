@@ -175,11 +175,14 @@ pub fn scale_of(kind: MetricKind, samples: &[Sample]) -> Scale {
 }
 
 /// 相索引（A 档纯函数）：对象轴两相各一本历史账（服务器/本地互不清带
-/// ——切换环境各自续摊，不是共用一本再清账）
-pub fn hist_idx(kind: EndpointKind) -> usize {
+/// ——切换环境各自续摊，不是共用一本再清账）。None = 无账相（File 空席
+/// caps.sys_info=false 永不采样，BAR-170——给 None 不给归并索引，
+/// 防未来翻相后文件相的样本混进本地账）
+pub fn hist_idx(kind: EndpointKind) -> Option<usize> {
     match kind {
-        EndpointKind::Server => 0,
-        EndpointKind::Local => 1,
+        EndpointKind::Server => Some(0),
+        EndpointKind::Local => Some(1),
+        EndpointKind::File => None,
     }
 }
 

@@ -48,11 +48,13 @@ impl<S: PartialEq> DirtyGuard<S> {
 /// 上层 chrome（输入栏/光球/放大镜）是常驻层，任何状态都可见；
 /// na-shot（值守 CPU 路径）看不见这类槽位病，判卷人=用户眼睛。
 /// 返回 [键行, AI面板, 配置页, 文件树页, 解析页, 上层, 终端卡片壳,
-/// 平移旧代, 平移新代, Demo页]
+/// 平移旧代, 平移新代, Demo页, 阅读页]
 /// （2026-09-10 面板栈 §五B 第四槽、09-11 三公民第五槽、09-12 四公民
 /// 解析页槽：被覆盖的面板仍 visible=true——placement 不动，遮盖撤走
 /// 随推移滑回；09-11 第六槽终端卡：与键行同规——五面板都没靠泊才可见，
-/// 基座壳永不动画；2026-09-26 五公民 Demo 页槽入列：右缘家同配置约定）
+/// 基座壳永不动画；2026-09-26 五公民 Demo 页槽入列：右缘家同配置约定；
+/// 2026-09-27 六公民阅读页槽入列（BAR-170）：右缘家同约定）
+#[allow(clippy::too_many_arguments)]
 pub fn slot_visibility(
     grid_keybar: bool,
     panel_visible: bool,
@@ -61,7 +63,8 @@ pub fn slot_visibility(
     pt_visible: bool,
     pan_active: bool,
     demo_visible: bool,
-) -> [bool; 10] {
+    rd_visible: bool,
+) -> [bool; 11] {
     [
         grid_keybar,
         panel_visible,
@@ -75,11 +78,13 @@ pub fn slot_visibility(
         cfg_visible && pan_active,
         cfg_visible && pan_active,
         demo_visible,
+        rd_visible,
     ]
 }
 
-/// 五面板 z 序裁决（BAR-083「动者在上」的四公民泛化，§五B 2026-09-12
-/// 三缘语义；2026-09-26 五公民 Demo 入列，规则不变）。旧二面板版（panel_z_cfg_on_top）的洞与它修掉的洞同构：
+/// 六面板 z 序裁决（BAR-083「动者在上」的四公民泛化，§五B 2026-09-12
+/// 三缘语义；2026-09-26 五公民 Demo 入列；2026-09-27 六公民阅读页入列
+/// BAR-170，规则不变）。旧二面板版（panel_z_cfg_on_top）的洞与它修掉的洞同构：
 /// 撤顶面板瞬栈顶翻成底下的不透明面板 → 退场动画在背后播完 = 用户见
 /// 瞬消。规则：**不动者按栈序（底→顶），动者（缝活跃/拖拽锁定）压到
 /// 一切不动者之上；多动者之间仍按栈序**。不在栈的面板垫最底（屏外
@@ -89,25 +94,26 @@ pub fn slot_visibility(
 /// 入参 active 与 PANELS 同序对齐；返回底→顶次序（合成器按序画）。
 /// 红线：本函数的活性读数只许进 z 序，**不许进 target/presence**——
 /// 那是 BAR-084 的回粘回路（见 panel_target_and_draw）
-pub const PANELS: [crate::ai_presence::Panel; 5] = [
+pub const PANELS: [crate::ai_presence::Panel; 6] = [
     crate::ai_presence::Panel::Ai,
     crate::ai_presence::Panel::Config,
     crate::ai_presence::Panel::FileTree,
     crate::ai_presence::Panel::Parser,
     crate::ai_presence::Panel::Demo,
+    crate::ai_presence::Panel::Reader,
 ];
 
 pub fn panel_z_order(
     stack: &[crate::ai_presence::Panel],
-    active: [bool; 5],
-) -> [crate::ai_presence::Panel; 5] {
-    // 栈位阶：在栈 = 位置下标（0 底）；不在栈 = -5+声明序（确定的垫底序）
+    active: [bool; 6],
+) -> [crate::ai_presence::Panel; 6] {
+    // 栈位阶：在栈 = 位置下标（0 底）；不在栈 = -6+声明序（确定的垫底序）
     let rank = |p: crate::ai_presence::Panel| -> i32 {
         stack
             .iter()
             .position(|&x| x == p)
             .map(|i| i as i32)
-            .unwrap_or_else(|| -5 + PANELS.iter().position(|&x| x == p).unwrap_or(0) as i32)
+            .unwrap_or_else(|| -6 + PANELS.iter().position(|&x| x == p).unwrap_or(0) as i32)
     };
     let mut order = PANELS;
     // 稳定排序键：（活性, 栈位阶）升序 = 底→顶；同组内栈序不动
