@@ -380,13 +380,19 @@ async fn http_handle(
             Ok(Err(e)) => httpd::fs_error_response(&e),
             Err(e) => httpd::respond(500, "Internal Server Error", &httpd::error_body(&e)),
         },
-        httpd::Route::FsRead { path, max, offset } => {
-            // offset=0 = 旧契约（read_json 原样）；>0 = BAR-170 分块读
+        httpd::Route::FsRead {
+            path,
+            max,
+            offset,
+            has_offset,
+        } => {
+            // 显式带 offset 键 = BAR-170 分块读（首块 offset=0 也是新契约）；
+            // 不带 = 旧契约（read_json 原样，kfmv4/查看器不受影响）
             match fs_blocking(move || {
-                if offset == 0 {
-                    fsapi::read_json(&path, max)
-                } else {
+                if has_offset {
                     fsapi::read_range_json(&path, offset, max)
+                } else {
+                    fsapi::read_json(&path, max)
                 }
             })
             .await

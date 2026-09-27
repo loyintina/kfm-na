@@ -646,4 +646,12 @@ fn spec_bar170_offset解析() {
         "非数字回落 0（旧行为）"
     );
     assert_eq!(fsapi::parse_offset("max=9&offset=7"), 7);
+    // has_offset：新旧契约分野 = 键在不在（redroid 判卷定罪——首块
+    // offset=0 被「值判」喂旧契约，客户端出参缺键；变异：恒 false →
+    // 新客户端全灭；恒 true → kfmv4 旧客户端出参多出两键虽兼容但契约漂移）
+    assert!(!fsapi::has_offset(""), "空 query 不带键");
+    assert!(!fsapi::has_offset("max=9"), "只带 max 不带 offset 键");
+    assert!(fsapi::has_offset("offset=123"), "带键 = 新契约");
+    assert!(fsapi::has_offset("offset=0"), "首块 offset=0 也是新契约");
+    assert!(fsapi::has_offset("offset=abc"), "值非法但键在");
 }

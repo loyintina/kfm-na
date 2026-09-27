@@ -223,30 +223,59 @@ fn spec_route_fs_kfmv4_前缀别名() {
         panic!("前缀别名该路由到 FsList");
     };
     assert_eq!(dir, "x");
-    let httpd::Route::FsRead { path, max, offset } =
-        httpd::route("GET", "/kfmv4/api/fs/read?path=a&max=9")
+    let httpd::Route::FsRead {
+        path,
+        max,
+        offset,
+        has_offset,
+    } = httpd::route("GET", "/kfmv4/api/fs/read?path=a&max=9")
     else {
         panic!("前缀别名该路由到 FsRead");
     };
     assert_eq!(path, "a");
     assert_eq!(max, 9);
     assert_eq!(offset, 0, "缺 offset = 0（旧行为）");
+    assert!(
+        !has_offset,
+        "不带 offset 键 = 旧契约（kfmv4 客户端不受影响）"
+    );
 }
 
-/// BAR-170 分块读：offset 参数路由（缺省 0 / 非数字回落 0 / 真值透传）
+/// BAR-170 分块读：offset 参数路由（缺省 0 / 非数字回落 0 / 真值透传）+
+/// has_offset 三态（2026-09-27 redroid 判卷定罪：新客户端首块也是
+/// offset=0，「值 0 = 旧契约」的判法把首块喂旧契约 = 出参缺 next_offset
+/// 键；新旧分野只能是「键在不在」）
 #[test]
-fn spec_route_fs_read_offset() {
-    let httpd::Route::FsRead { offset, .. } =
-        httpd::route("GET", "/api/fs/read?path=a&offset=65536")
+fn spec_bar170_route_fs_read_offset() {
+    let httpd::Route::FsRead {
+        offset, has_offset, ..
+    } = httpd::route("GET", "/api/fs/read?path=a&offset=65536")
     else {
         panic!();
     };
     assert_eq!(offset, 65536);
-    let httpd::Route::FsRead { offset, .. } = httpd::route("GET", "/api/fs/read?path=a&offset=abc")
+    assert!(has_offset, "带 offset 键 = 新契约分块读");
+    let httpd::Route::FsRead {
+        offset, has_offset, ..
+    } = httpd::route("GET", "/api/fs/read?path=a&offset=abc")
     else {
         panic!();
     };
     assert_eq!(offset, 0, "非数字 offset 回落 0");
+    assert!(has_offset, "值非法但键在 = 仍是新契约（客户端恒带键）");
+    let httpd::Route::FsRead {
+        offset, has_offset, ..
+    } = httpd::route("GET", "/api/fs/read?path=a&offset=0")
+    else {
+        panic!();
+    };
+    assert_eq!(offset, 0);
+    assert!(has_offset, "首块 offset=0 显式带键 = 新契约（本体定罪钉）");
+    let httpd::Route::FsRead { has_offset, .. } = httpd::route("GET", "/api/fs/read?path=a&max=9")
+    else {
+        panic!();
+    };
+    assert!(!has_offset, "不带键 = 旧契约");
 }
 
 #[test]

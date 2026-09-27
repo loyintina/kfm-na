@@ -58,11 +58,13 @@ pub enum Route {
         dir: String,
     },
     /// GET /api/fs/read?path=<相对路径>&max=<字节>&offset=<字节>
-    /// （max 缺省 64KB、上限 1MB；offset 缺省 0 = 旧行为，>0 走 BAR-170 分块读）
+    /// （max 缺省 64KB、上限 1MB；has_offset = query 显式带 offset 键
+    /// = BAR-170 分块读新契约，不带 = 旧契约 read_json 原样）
     FsRead {
         path: String,
         max: usize,
         offset: u64,
+        has_offset: bool,
     },
     /// /agent 前缀反代（BAR-163，工单⑥ A：手机经既有 9021 隧道直达
     /// na-agentd，不开新口）——携带剥前缀后的上游路径
@@ -114,6 +116,7 @@ pub fn route(method: &str, path: &str) -> Route {
             path: fsapi::query_get(query, "path").unwrap_or_default(),
             max: fsapi::parse_max(query),
             offset: fsapi::parse_offset(query),
+            has_offset: fsapi::has_offset(query),
         },
         _ => Route::NotFound,
     }

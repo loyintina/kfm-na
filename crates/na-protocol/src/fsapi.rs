@@ -428,3 +428,11 @@ pub fn parse_offset(query: &str) -> u64 {
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(0)
 }
+
+/// query 里**显式带了** offset 键（哪怕值是 0/非数字）= 新契约分块读
+/// （BAR-170 定罪：新客户端首块也是 offset=0，拿「值是不是 0」当新旧
+/// 分野会把首块喂旧契约——出参缺 next_offset 键，客户端报出参缺键。
+/// 分野只能是「键在不在」：旧客户端（kfmv4/查看器）根本不带这个键）
+pub fn has_offset(query: &str) -> bool {
+    query_get(query, "offset").is_some()
+}
