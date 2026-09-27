@@ -11,6 +11,7 @@
 //! 打回两症（2026-09-27）：症 5 交互口径（目录行整行 = 开合）与症 6 行表
 //! 滚动接惯性甩尾（现役复用件 `src/scroll.rs`：TouchScroll + Fling）——
 //! 后者的接线守卫 + 数值行为两钉在本册末（源码守卫与纯逻辑两条腿）。
+//! 本册末再挂 BAR-168 六调接线守卫（级联取层入口/返回值消费/涂装三条）。
 //!
 //! 变异方向：三盒命中不吃垂直留白 / × 盒不吃右缘镜像 / sig 退回六维 /
 //! 活性探针摘文件树那路 / 行表甩尾：摘交接、起手不取消、燃尽不清空、
@@ -281,5 +282,63 @@ fn spec_bar165_症6_甩尾数值行为() {
     assert!(
         u.fling_on_release().is_none(),
         "停住了才松手不许甩（kfmv4 同款）"
+    );
+}
+
+/// BAR-168 六调接线守卫（2026-09-27 用户工单）：三条跨件缝——①`fs_fetch` 的
+/// 级联取层入口与回执路（`request_list_quiet` → `apply_list_quiet`）；②级联
+/// 返回值被消费并递归（N 层逐层长回来，漏消费 = 只恢复一层）；③涂装三条
+/// （竖条吃 `bar_x`、根层跳过行带、兄弟行吃 `sib_shift`）。缺口类错误实拍前
+/// 就能钉死，别等上机。
+#[test]
+fn spec_bar168_六调接线守卫() {
+    let fetch = include_str!("../src/fs_fetch.rs");
+    assert!(
+        fetch.contains("pub fn request_list_quiet("),
+        "级联取层入口必须在（六调④）"
+    );
+    assert!(
+        fetch.contains("st.apply_list_quiet(dir, entries, now)"),
+        "级联回执必须落 quiet（曾展开账长回来的层不打抽屉动画）"
+    );
+    assert!(
+        fetch.contains("st.apply_list(dir, entries, now)"),
+        "用户亲手点的那级仍走动画路（quiet 只给级联）"
+    );
+    assert!(
+        fetch.contains("cascade = if dir.is_empty()"),
+        "apply_* 的返回值必须被接住（漏接 = 级联层丢在返回值里没人发）"
+    );
+    assert!(
+        fetch.contains("for p in cascade {") && fetch.contains("request_list_quiet(p)"),
+        "级联层必须逐个递归发 quiet（少一环 = 只恢复一层）"
+    );
+    let core = include_str!("../src/ui/filetree.rs");
+    assert!(
+        core.contains("pub fn apply_root_list(&mut self, entries: Vec<Entry>, now_ms: u64) -> Vec<String>")
+            && core.contains("pub fn apply_list_quiet(")
+            && core.contains("pub fn apply_list(&mut self, parent: &str, entries: Vec<Entry>, now_ms: u64) -> Vec<String>"),
+        "级联三接口签名照工单（返回值 = 待取层路径）"
+    );
+    assert!(
+        core.contains("fn cascade_expanded_mem(") && core.contains("expanded_mem"),
+        "曾展开账 + 级联恢复件必须在"
+    );
+    assert!(
+        core.contains("// 退场零帧 = 兄弟行卡在半路不落位"),
+        "退场账必须进 anim_active（漏这笔 = 兄弟行卡在半路不落位）"
+    );
+    let tv = include_str!("../src/termview.rs");
+    assert!(
+        tv.contains("let bar_l = g.x0 + ft::bar_x(row.depth);"),
+        "竖条 x 必须吃 bar_x（六调⑤；回 indent_px 累加值 = 竖条贴同层三角）"
+    );
+    assert!(
+        tv.contains("if band_a > 0 {"),
+        "根层必须跳过行带填充（六调②：露页底）"
+    );
+    assert!(
+        tv.contains("snap.sib_shift") && tv.contains("idx >= ss.from_idx"),
+        "涂装必须吃兄弟行平移（六调③；漏 = 兄弟行瞬移）"
     );
 }

@@ -10,29 +10,44 @@
 //! 为什么行高是 86：kfmv4 行高 26 CSS px，真机实测**物理 pitch** = 86
 //! （单行）/ 118（换行长名两行）。NA 全物理 px（`FT_CSS` = 本机 dpr），
 //! CSS 单位只活在缩进表与设计稿里，进代码即换算。缩进实测锚点（深度
-//! 0..4）= 0 / 55 / 104 / 147 / 184 物理 px。
+//! 0..4）= 0 / 55 / 104 / 147 / 184 物理 px（= 三角左缘 18 起的**层间距**，
+//! 六调后 `tri_x` 0..4 = 18 / 73 / 122 / 165 / 202 逐字保住）。
+//!
+//! **六调（2026-09-27 用户工单，一页六改）**：①名字与三角盒留
+//! `TRI_NAME_GAP_PX`；②根层不画行带（露页底）；③展开/收起两头都让**兄弟行
+//! 整体平移**（下半树刚体推下/连续上滑，不再瞬移，见 `SnapShift`/`RetractAnim`）；
+//! ④曾展开账 `expanded_mem`（**显式展开入账 / 显式收起摘自己那条 / 级联摘行不动它**），
+//! 及其级联恢复（关根再开 = 恢复用户离开时的样子）；
+//! ⑤竖条吊到**父行三角**正下方（`bar_x`）；⑥深层保缝——每层步进下限
+//! `STEP_MIN_PX` 由「⑤ 的对齐偏量 + 竖条宽 + 保缝」反解，表尾递减档一律兜住。
+//! 三角与竖条由此**分成两根轴**（`tri_x` 累进 / `bar_x` 对齐父缘），
+//! `indent_px` 只剩「行内容基准 = bar_x」一个义。
 //!
 //! 坐标口径（眼手同尺的唯一尺，三处同吃一份，谁都不许自己再算）：
-//! - 行矩形 = **内容坐标**（`row_rects` 的 y 已减 scroll）——涂装画它、
-//!   命中落它；
+//! - 行矩形 = **内容坐标**（`row_rects` 的 y 已减 scroll，动画期再加
+//!   `SnapShift::dy`）——涂装画它、命中落它；
 //! - `hit(x, y, view_h)` 吃**页面坐标**（未减 scroll 的屏幕坐标），内部
 //!   按 y 与行矩形（内容坐标）对表；
-//! - 光标 y 是**内容坐标的框心**（框属于行，随行滚）——涂装画在
-//!   y − scroll 处、框顶 = cursor_y − (行高 − CURSOR_INSET)/2，滚出视口
-//!   由列表裁剪带裁掉。
+//! - 光标 y 是**内容坐标的框心**（框属于行，随行滚 + 随兄弟行平移）——涂装
+//!   画在 y − scroll 处、框顶 = cursor_y − (行高 − CURSOR_INSET)/2，滚出
+//!   视口由列表裁剪带裁掉。
 //!
 //! 状态机语义（懒加载，nz 同源）：`rows` 即扁平树（DFS 行序，展开的目录
 //! 其后紧跟其子层）——子层没到就没有行。`expanded`（行上的 expanded 位）
 //! 记「视觉展开」，`loaded` 记「子层已取」：**已展开 ⟺ 子行在树**（收起
 //! 即行即走、账即清，再展开重取），所以 `toggle` 的 `NeedList` 判定可以
 //! 只认行在不在。锁窗（同一目录 240/180ms 内二次 toggle 忽略）是 nz
-//! §3.2「动画锁只防视觉抖动」的直译。
+//! §3.2「动画锁只防视觉抖动」的直译。**唯一例外（六调④）**：级联恢复出来的
+//! 目录是「展开（▼）但在途（loading）」——那个瞬间行还没到，正是同一条
+//! 不变量的在途态（等价于用户刚点下去那一刻）。
 //!
 //! 抽屉动画复用 cfg 下拉的「刚体 + 顶缘裁剪」机制（cfg_page 十七修 §六③）：
 //! 子行钉全高刚体，`drawer_dy = cur_h − full_h`（≤0），涂装按 cur_h 裁顶缘
 //! ——展开时刚体从父行下缘滑出（下方子行先入场）。**展开的刚体在子层到位
-//! 那一刻起步**（`apply_list` 记账 240ms）；收起 180ms 是锁窗 + 三角回转，
-//! 行已走、没有刚体可坠（要画收起下坠得留行到动画收尽，见 `collapse` 注）。
+//! 那一刻起步**（`apply_list` 记账 240ms）；收起 180ms = 锁窗 + 三角回转 +
+//! **退场账**（六调③：行即刻走，但被摘走行高总和换成下半树的连续上滑，
+//! 见 `RetractAnim`/`retract_dy`——路线 b 保守解，不变量「展开 ⟺ 子行在树」
+//! 一行不动）。
 //!
 //! 颜色常量按 **RRGGBBAA** 书写（规格原文口径：`0x00D4FFFF` = rgba(0,212,
 //! 255)、`0x0094B2FF` = teal(0,148,178)，末位 FF 是 alpha）——与 termview
@@ -53,7 +68,9 @@ pub const FT_CSS: f32 = 3.06;
 pub const SHIFT_TABLE: [i32; 20] = [
     18, 16, 14, 12, 10, 9, 8, 7, 6, 5, 4, 3, 3, 2, 2, 2, 2, 2, 2, 2,
 ];
-/// 累计缩进总量钳制（CSS px；深到表尾仍在加，没这道闸深层会走出屏）
+/// 累计缩进总量钳制的 **CSS 原值**（深到表尾仍在加，没这道闸深层会走出屏）。
+/// **六调⑤⑥ 后只作留档**：现役钳制吃物理身 `SHIFT_CLAMP_PX`（`tri_x` 里那
+/// 一道），本值记录「489 是怎么来的」——160 CSS × 3.06 = 489.6 → 489
 pub const SHIFT_CLAMP_CSS: i32 = 160;
 /// 钳制上限的物理身（实测锚点取整：160 × 3.06 = 489.6 → 489）
 pub const SHIFT_CLAMP_PX: i64 = 489;
@@ -73,9 +90,22 @@ pub const TRI_H: i64 = 34;
 /// 同吃这一个数（旧版 termview 里另有一份 FT_ROW_BAR_W，双源必漂）
 pub const ROW_BAR_W: i64 = 6;
 /// 三角左缘与竖条的间隙（物理 px）——**三修症⑤**：用户要「跟竖线有一定
-/// 距离」（旧版三角左缘 = 缩进量本身，贴着竖条）。缩进量 + ROW_BAR_W +
-/// 本值 = 三角左缘；**深度 0 一并右移**（对齐观感，无竖条时也缩）
+/// 距离」（旧版三角左缘 = 缩进量本身，贴着竖条）。基线（ROW_BAR_W + 本值）
+/// = 三角左缘；**深度 0 一并右移**（对齐观感，无竖条时也缩）
 pub const TRI_GAP_PX: i64 = 12;
+/// 三角盒与名字的间隔（物理 px，**六调①**）：名字左缘 = 三角盒右缘 + 本值
+/// ——旧版名字紧贴三角盒（`tri_x + TRI_W`），字与三角挤成一团
+pub const TRI_NAME_GAP_PX: i64 = 12;
+/// 竖条与**父行**三角盒左缘的对齐偏量（物理 px，**六调⑤**，原版实测：竖线
+/// 吊在父三角正下方略偏右）
+pub const BAR_ALIGN_DX: i64 = 5;
+/// 同层「本行三角盒左缘 − 竖条右缘」的保缝下限（物理 px，**六调⑥**）
+pub const GAP_MIN_PX: i64 = 6;
+/// 每层步进下限（物理 px，由 ⑥ 反解）：步进再小，竖条（对齐父三角 +BAR_ALIGN_DX）
+/// 就要压进本行三角盒里——表尾递减档（≤5 CSS）一律由本值兜住
+const STEP_MIN_PX: i64 = BAR_ALIGN_DX + ROW_BAR_W + GAP_MIN_PX;
+/// 曾展开账上限（**六调④**：超帽丢字典序最小者，确定性）
+pub const MEM_CAP: usize = 4096;
 /// 兄弟块首尾圆角半径（物理 px = 4 CSS × 3）
 pub const ROW_RADIUS: i64 = 12;
 /// 光标框内缩（盒高 = 行高 − 本值）
@@ -169,15 +199,51 @@ pub fn shift_css(depth: usize) -> i32 {
     SHIFT_TABLE[depth.min(SHIFT_TABLE.len() - 1)]
 }
 
-/// 累计缩进（物理 px）：递减增量逐层累加（「向左错开的卡片」纵深），总量
-/// 钳 160 CSS。钳在 CSS 侧做、换算后按实测锚点封顶 489
-pub fn indent_px(depth: usize) -> i64 {
-    let mut sum = 0i32;
-    for i in 0..depth {
-        sum += shift_css(i);
+/// 每层步进（物理 px；`depth` = **目标层**，0 层无步进）= max(表值换算,
+/// STEP_MIN_PX)。几何核重排（**六调⑤⑥**）：三角独立成轴逐层累进，本函数是
+/// 唯一来源；表尾递减档（2 CSS ≈ 6px）不够让开「竖条 + 缝」，由下限兜住
+pub fn step_px(depth: usize) -> i64 {
+    if depth == 0 {
+        return 0;
     }
-    let css = sum.min(SHIFT_CLAMP_CSS);
-    ((css as f32 * FT_CSS).round() as i64).min(SHIFT_CLAMP_PX)
+    ((shift_css(depth - 1) as f32 * FT_CSS).round() as i64).max(STEP_MIN_PX)
+}
+
+/// 三角盒左缘（页面 x）：基线 (ROW_BAR_W + TRI_GAP_PX) + Σ_{d=1..depth}
+/// step_px(d)，总量钳 SHIFT_CLAMP_PX（深到表尾仍步进，没这道闸深层走出屏）。
+/// 0 层 = 基线本身（无竖条也按同尺对齐）。**实测锚点保住**：深度 0..4 的
+/// 表值换算与旧累加表同值 → 18 / 73 / 122 / 165 / 202
+pub fn tri_x(depth: usize) -> i64 {
+    let mut x = ROW_BAR_W + TRI_GAP_PX;
+    for d in 1..=depth {
+        x += step_px(d);
+    }
+    x.min(SHIFT_CLAMP_PX)
+}
+
+/// 竖条左缘（页面 x）：0 层 = 0（根层没有「嵌套在谁里面」）；否则吊在**父行**
+/// 三角盒左缘正下方（+ BAR_ALIGN_DX，**六调⑤**），再钳到「本行三角盒左缘 −
+/// (ROW_BAR_W + GAP_MIN_PX)」——三角封顶 489 后父缘不再右移，钳制档由后半段
+/// 兜住 ⑥ 的缝（**自证**：∀d 本行三角左缘 − 竖条右缘 ≥ GAP_MIN_PX）
+pub fn bar_x(depth: usize) -> i64 {
+    if depth == 0 {
+        return 0;
+    }
+    (tri_x(depth - 1) + BAR_ALIGN_DX)
+        .min(tri_x(depth) - (ROW_BAR_W + GAP_MIN_PX))
+        .max(0)
+}
+
+/// 行内容基准（= `bar_x`；0 层 = 0）——**语义已改（六调⑤⑥）**：旧版是缩进表
+/// 的累加量（竖条与三角共用一个数），现三角走 `tri_x` 独立成轴，本函数只剩
+/// 「竖条左缘 / 行内容左缘」一个义（涂装/探针同吃）
+pub fn indent_px(depth: usize) -> i64 {
+    bar_x(depth)
+}
+
+/// 名字文本左缘（页面 x）：三角盒 + 间隔（六调①）
+pub fn name_x(depth: usize) -> i64 {
+    tri_x(depth) + TRI_W + TRI_NAME_GAP_PX
 }
 
 /// 逐层加深（深层更浓不是更淡）：浅≈0 → 深→0.89
@@ -185,8 +251,13 @@ pub fn density(depth: usize) -> f32 {
     1.0 - shift_css(depth) as f32 / 18.0
 }
 
-/// 行底纯色平涂 α（2026-09-11 用户裁决「逐行渐变太花」→ 纯色，纵深保留）
+/// 行底纯色平涂 α（2026-09-11 用户裁决「逐行渐变太花」→ 纯色，纵深保留）。
+/// **六调②（2026-09-27 用户拍板）**：根层恒 0 = 不画行带，露出页底
+/// CARD_PAGE_BG（根层没有「嵌在谁里面」的纵深可言）；深度 ≥1 公式不动
 pub fn band_alpha(depth: usize) -> f32 {
+    if depth == 0 {
+        return 0.0;
+    }
     0.05 + density(depth) * 0.26
 }
 
@@ -223,8 +294,18 @@ pub fn row_center(rows: &[Row], idx: usize) -> i64 {
 }
 
 /// 可见行表 → (行下标, 行顶 y, 行高)，y 为**内容坐标**（已减 scroll）；
-/// 只出与视口 [0, view_h) 相交的行（半行压边也出——裁剪是涂装的事）
-pub fn row_rects(rows: &[Row], scroll: i64, view_h: i64) -> Vec<(usize, i64, i64)> {
+/// 只出与视口 [0, view_h) 相交的行（半行压边也出——裁剪是涂装的事）。
+/// `sib` = 兄弟行整体平移账（③；None = 无动画）。
+///
+/// **眼手同尺**：命中吃的那一帧必须与屏上那一帧同位移——抽屉/退场动画期
+/// 下半树整体被推移，命中框若按静态内容位判就会点到隔壁行（BAR-145 判例：
+/// 命中唯一合法源 = 屏上正显示的那一代）
+pub fn row_rects(
+    rows: &[Row],
+    scroll: i64,
+    view_h: i64,
+    sib: Option<&SnapShift>,
+) -> Vec<(usize, i64, i64)> {
     let mut out = Vec::new();
     if view_h <= 0 {
         return out;
@@ -232,7 +313,11 @@ pub fn row_rects(rows: &[Row], scroll: i64, view_h: i64) -> Vec<(usize, i64, i64
     let mut top = 0i64;
     for (i, r) in rows.iter().enumerate() {
         let h = row_h(r.wrap);
-        let y = top - scroll;
+        let shift = match sib {
+            Some(s) if i >= s.from_idx => s.dy,
+            _ => 0,
+        };
+        let y = top - scroll + shift;
         top += h;
         if y >= view_h || y + h <= 0 {
             continue;
@@ -240,18 +325,6 @@ pub fn row_rects(rows: &[Row], scroll: i64, view_h: i64) -> Vec<(usize, i64, i64
         out.push((i, y, h));
     }
     out
-}
-
-/// 三角盒左缘（页面 x）：缩进量 + 竖条宽 + 间隙——**三修症⑤**（旧版 = 缩进
-/// 量本身，三角贴着竖条；nz 原文 `paddingLeft = 6 + indent(d)` 也是「先让开
-/// 竖条再排子元素」的同一礼数）。深度 0 也吃这份右移（无竖条时按同尺对齐）
-pub fn tri_x(depth: usize) -> i64 {
-    indent_px(depth) + ROW_BAR_W + TRI_GAP_PX
-}
-
-/// 名字文本左缘（页面 x）：三角盒之后
-pub fn name_x(depth: usize) -> i64 {
-    tri_x(depth) + TRI_W
 }
 
 /// 兄弟块首/尾判定（→ 涂装圆角：块首圆上、块尾圆下）。行表是 DFS 行序，
@@ -388,6 +461,40 @@ pub fn drawer_dy(anim: &DrawerAnim, now_ms: u64, full_h: i64) -> i64 {
     ((full_h as f32 * open).round() as i64) - full_h
 }
 
+/// 兄弟行整体平移账（**六调③**）：`from_idx` 起（含）的行**额外**吃 `dy`
+/// ——抽屉在飞时 = 子块之后的第一个兄弟行起（下半树被刚体整体推下）；
+/// 收起退场时 = 被摘走的子块原位起（下半树连续上滑落位）。
+/// 抽屉子块自己的位移（`DrawerFrame::dy`）不在这里，兄弟行照常可见
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SnapShift {
+    pub from_idx: usize,
+    pub dy: i64,
+}
+
+/// 抽屉退场账（**六调③ 收起路线 b，2026-09-27 用户裁决**）：收起**仍即时
+/// drain 子行**（不变量「展开 ⟺ 子行在树」一行不动），但把被摘走的行高总和
+/// 与位置记下来，帧内让下半树从「原位」连续上滑落位——不记这笔，兄弟行就是
+/// 瞬移（旧观感）。时长与抽屉收起同档（DRAWER_CLOSE_MS），曲线取 fx_ease 现成件
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RetractAnim {
+    /// 被摘走子块之后的第一行（= 父行 idx + 1，行表已 drain 完的当下位）
+    pub from_idx: usize,
+    /// 被摘走行的行高总和（起点位移量）
+    pub removed_h: i64,
+    pub start_ms: u64,
+}
+
+/// 收起退场位移（≥0；0 = 落位完毕）：removed_h 按 ease-out cubic 归 0——
+/// 起点整量（下半树还在原位）、收尽 0（接上缩小后的行表）
+pub fn retract_dy(rt: &RetractAnim, now_ms: u64) -> i64 {
+    let e = now_ms.saturating_sub(rt.start_ms);
+    if e >= DRAWER_CLOSE_MS {
+        return 0;
+    }
+    let t = e as f32 / DRAWER_CLOSE_MS as f32;
+    (rt.removed_h as f64 * (1.0 - ease_out_cubic(t) as f64)).round() as i64
+}
+
 /// 三角角度（0..π/2，180ms ease-out）：展开 0 → 90°，收起 90° → 0°。
 /// `at_ms` = 该目录末次翻转时刻（`FileTreeState::tri_at`），0 = 无账按收尽
 pub fn tri_angle(expanded: bool, at_ms: u64, now_ms: u64) -> f32 {
@@ -421,13 +528,19 @@ pub fn cursor_y(state: &FileTreeState, now_ms: u64) -> i64 {
 }
 
 /// 活性探针（帧泵闸，涂装接 `fx_spring::fx_frame_due` 的枚举表）：
-/// 抽屉在飞 / 光标在路上 / 三角在转 = true。锁窗不算活性（锁只是输入门，
-/// 不动像素）。**活性必须能被外部问出来**——产帧与否是壳的责任，核不自泵
+/// 抽屉在飞 / **退场在滑（六调③）** / 光标在路上 / 三角在转 = true。锁窗不算
+/// 活性（锁只是输入门，不动像素）。**活性必须能被外部问出来**——产帧与否是
+/// 壳的责任，核不自泵
 pub fn anim_active(state: &FileTreeState, now_ms: u64) -> bool {
     if let Some(a) = &state.anim
         && now_ms < a.start_ms.saturating_add(a.dur_ms())
     {
         return true;
+    }
+    if let Some(rt) = &state.retract
+        && now_ms < rt.start_ms.saturating_add(DRAWER_CLOSE_MS)
+    {
+        return true; // 退场零帧 = 兄弟行卡在半路不落位（漏这笔必鬼影）
     }
     for t in state.tri_at.values() {
         if now_ms < t.saturating_add(TRI_ROT_MS) {
@@ -480,6 +593,8 @@ pub struct FileTreeSnap {
     pub cursor_target: i64,
     /// 抽屉刚体账（None = 无抽屉动画）
     pub drawer: Option<DrawerFrame>,
+    /// 兄弟行整体平移账（③；None = 无）
+    pub sib_shift: Option<SnapShift>,
     pub root: String,
     pub root_label: String,
     pub expanded: BTreeSet<String>,
@@ -527,6 +642,15 @@ pub struct FileTreeState {
     pub epoch: u64,
     /// 单槽抽屉动画账
     pub anim: Option<DrawerAnim>,
+    /// 单槽收起退场账（③ 路线 b：行即走、下半树连续上滑落位）
+    pub retract: Option<RetractAnim>,
+    /// 曾展开账（**六调④**，2026-09-27 研究线裁定三档）：用户**显式展开**时
+    /// 入账（`remember_expanded`）；用户**显式收起**时在 `collapse` 里摘掉
+    /// **自己那一条**（子孙条目保留——重开自己时内部历史照样长回来）；祖先
+    /// 收起造成的级联摘行走 `drop_under`，**不动本账**。语义 = 关根再开恢复
+    /// 「用户离开时的样子」（显式收起过的保持收起，不被级联复活）
+    /// 超帽丢字典序最小者（确定性）
+    pub expanded_mem: BTreeSet<String>,
     /// 光标动画起点（内容坐标；None = 直落目标）
     pub cursor_from: Option<i64>,
     pub cursor_at_ms: u64,
@@ -549,6 +673,8 @@ impl FileTreeState {
             scroll: 0,
             epoch: 0,
             anim: None,
+            retract: None,
+            expanded_mem: BTreeSet::new(),
             cursor_from: None,
             cursor_at_ms: 0,
             tri_at: BTreeMap::new(),
@@ -581,14 +707,17 @@ impl FileTreeState {
 
     /// 根层装载（首次进页/整树刷新）：新根表 + **同路径目录的已展开子树原样
     /// 保留**（块级重挂——重取根层不该把用户展开的树拍平），消失的目录连子孙
-    /// 一起走。选中按路径重找（找不到 = 没了），光标随之贴行
-    pub fn apply_root_list(&mut self, entries: Vec<Entry>, now_ms: u64) {
+    /// 一起走。选中按路径重找（找不到 = 没了），光标随之贴行。
+    /// **返回值**（六调④）= 本层级联恢复出来的待取层路径（调用方逐层发
+    /// `request_list_quiet`；空 = 无需补取）
+    pub fn apply_root_list(&mut self, entries: Vec<Entry>, now_ms: u64) -> Vec<String> {
         let sel_path = self
             .sel
             .and_then(|i| self.rows.get(i))
             .map(|r| r.path.clone());
         let keep = subtree_map(&self.rows, 0);
         self.rows = graft(entries, 0, "", &keep);
+        // graft 后「行位即账」：展开 ⟺ 子树被原样挂回 = 已取
         self.expanded = self
             .rows
             .iter()
@@ -598,27 +727,53 @@ impl FileTreeState {
         self.loaded = self.expanded.clone();
         self.loading
             .retain(|p| self.rows.iter().any(|r| r.kind.is_dir() && &r.path == p));
+        // ④ 曾展开账级联恢复（本层 = 深度 0 的全部新行）
+        let cascade = self.cascade_expanded_mem(0, 0, self.rows.len());
         self.anim = None;
+        self.retract = None;
         self.sel = sel_path.and_then(|p| self.rows.iter().position(|r| r.path == p));
         self.reglue_cursor(now_ms);
         self.prune(now_ms);
         self.epoch += 1;
+        cascade
     }
 
-    /// 子层回执（`NeedList` 的应答）：插到父行之后（保持树序）、父行置展开、
-    /// 抽屉刚体从那一刻起步。**重复回执幂等**（先旧子块整体换新）；父行已不在
-    /// 树、或父行已被收起（迟到应答）= 丢弃——应答作废，账面自愈
-    pub fn apply_list(&mut self, parent: &str, entries: Vec<Entry>, now_ms: u64) {
+    /// 子层回执（`NeedList` 的应答，**用户亲手点的那级**）：插到父行之后（保持
+    /// 树序）、父行置展开、抽屉刚体从那一刻起步。**重复回执幂等**（先旧子块整体
+    /// 换新）；父行已不在树、或父行已被收起（迟到应答）= 丢弃——应答作废，
+    /// 账面自愈。返回值同 `apply_root_list`（六调④ 级联）
+    pub fn apply_list(&mut self, parent: &str, entries: Vec<Entry>, now_ms: u64) -> Vec<String> {
+        self.apply_list_impl(parent, entries, now_ms, true)
+    }
+
+    /// 级联到位回执（六调④）：与 `apply_list` 同一份实现，**只差不起抽屉动画**
+    /// （曾展开账里长回来的层不是用户此刻点的，不该再演一遍抽屉）——直接落位
+    pub fn apply_list_quiet(
+        &mut self,
+        parent: &str,
+        entries: Vec<Entry>,
+        now_ms: u64,
+    ) -> Vec<String> {
+        self.apply_list_impl(parent, entries, now_ms, false)
+    }
+
+    fn apply_list_impl(
+        &mut self,
+        parent: &str,
+        entries: Vec<Entry>,
+        now_ms: u64,
+        animate: bool,
+    ) -> Vec<String> {
         self.loading.remove(parent);
         let Some(pi) = self
             .rows
             .iter()
             .position(|r| r.path == parent && r.kind.is_dir())
         else {
-            return;
+            return Vec::new();
         };
         if !self.rows[pi].expanded {
-            return; // 请求在途时用户已收起：子行不许自己长回来
+            return Vec::new(); // 请求在途时用户已收起：子行不许自己长回来
         }
         let depth = self.rows[pi].depth + 1;
         let end = self.subtree_end(pi);
@@ -630,18 +785,24 @@ impl FileTreeState {
         self.rows[pi].expanded = true;
         self.expanded.insert(parent.to_string());
         self.loaded.insert(parent.to_string());
-        // 抽屉记账：刚体尺度以子块全高计，起点 = 子层到位这一刻（锁窗同步续）
-        self.anim = Some(DrawerAnim {
-            path: parent.to_string(),
-            opening: true,
-            start_ms: now_ms,
-        });
-        self.lock_until
-            .insert(parent.to_string(), now_ms.saturating_add(DRAWER_OPEN_MS));
+        // ④ 级联恢复（本层 = 刚落位的新块 [pi+1, pi+1+n)）
+        let cascade = self.cascade_expanded_mem(depth, pi + 1, pi + 1 + n);
+        if animate {
+            // 抽屉记账：刚体尺度以子块全高计，起点 = 子层到位这一刻（锁窗同步续）
+            self.anim = Some(DrawerAnim {
+                path: parent.to_string(),
+                opening: true,
+                start_ms: now_ms,
+            });
+            self.retract = None;
+            self.lock_until
+                .insert(parent.to_string(), now_ms.saturating_add(DRAWER_OPEN_MS));
+        }
         self.map_sel(pi, removed, n);
         self.reglue_cursor(now_ms);
         self.prune(now_ms);
         self.epoch += 1;
+        cascade
     }
 
     /// 取层失败回执（壳网络错时调）：摘 loading、父行三角回转、展开账回退
@@ -696,15 +857,20 @@ impl FileTreeState {
         self.loaded.remove(&path); // 与「展开 ⟺ 子行在树」对齐：无行 = 未取
         self.loading.insert(path.clone());
         self.anim = None; // 抽屉要等子行到位才有刚体可长
+        // ④ 曾展开账：用户亲手展开过就记住（**显式收起时 collapse 摘自己那条**，
+        // 2026-09-27 研究线裁定；旧「只进不出——collapse 不清」注释已废）
+        self.remember_expanded(&path);
         self.prune(now_ms);
         self.epoch += 1;
         ToggleAction::NeedList { path }
     }
 
     /// 收起子树（连子孙行一起移除 + 收起动画记账）。
-    /// **注**：行即走 ⇒ 抽屉刚体全高归 0（dy 恒 0，见 `drawer_full_h`），收起
-    /// 期肉眼所见 = 三角回转 180ms + 锁窗 180ms。要让收起也看见「刚体坠回」，
-    /// 得把行留到动画收尽（本册按规格「连子孙一起移除」，未留）
+    /// **注**：行即走 ⇒ 抽屉刚体全高归 0（dy 恒 0，见 `drawer_full_h`）。但
+    /// **六调③ 路线 b（2026-09-27 用户裁决：保守路线，不变量「展开 ⟺ 子行在
+    /// 树」不动）**——drain 的当下把被摘走行高总和与落点记成 `RetractAnim`，
+    /// 帧内让下半树从原位连续上滑落位（旧观感 = 兄弟行瞬移）。退场账与抽屉
+    /// 账并存：抽屉那槽此刻无子块可画（full_h = 0），兄弟行只吃退场一笔
     pub fn collapse(&mut self, idx: usize, now_ms: u64) {
         let Some(row) = self.rows.get(idx) else {
             return;
@@ -714,10 +880,16 @@ impl FileTreeState {
         }
         let path = row.path.clone();
         let end = self.subtree_end(idx);
+        let removed_h: i64 = self.rows[idx + 1..end].iter().map(|r| row_h(r.wrap)).sum();
         self.rows.drain(idx + 1..end);
         self.rows[idx].expanded = false;
         // 子孙账一并清（行没了账不许留——重展开要重取，账留则永不再要列表）
+        // **曾展开账语义（2026-09-27 研究线裁定）**：用户**显式收起**自己 →
+        // 摘自己的入口（免得关根再开把它级联复活 = 撤销用户的收起）；**子孙
+        // 账保留**（重开自己时内部历史照样长回来）；祖先收起导致的级联摘行
+        // 走 `drop_under`（不碰 mem）——三档一一对应「用户离开时的样子」
         self.drop_under(&path);
+        self.expanded_mem.remove(&path);
         self.expanded.remove(&path);
         self.loaded.remove(&path);
         self.loading.remove(&path);
@@ -727,6 +899,12 @@ impl FileTreeState {
         self.anim = Some(DrawerAnim {
             path,
             opening: false,
+            start_ms: now_ms,
+        });
+        // ③ 退场账：drain 之后的第一个兄弟行（= idx+1）起，连续上滑
+        self.retract = Some(RetractAnim {
+            from_idx: idx + 1,
+            removed_h,
             start_ms: now_ms,
         });
         // 选中落在被摘走的子行里 = 归到父行（父行还在，选中不许凭空消失）
@@ -798,7 +976,7 @@ impl FileTreeState {
         if x < 0 || !(0..view_h).contains(&y) {
             return None; // 页面之外（视口上下/左侧）不接
         }
-        for (idx, top, h) in row_rects(&self.rows, self.scroll, view_h) {
+        for (idx, top, h) in row_rects(&self.rows, self.scroll, view_h, None) {
             if !(top..top + h).contains(&y) {
                 continue;
             }
@@ -815,12 +993,13 @@ impl FileTreeState {
     /// 按**给定快照**命中（屏代快照的命中入口，BAR-145 判例：命中唯一
     /// 合法源 = 屏上正显示的那一代）。`x/y` = 页面坐标、`view_h` = 行表窗高
     /// ——语义与 `hit` 逐字对齐（目录行整行开合、文件行选中），差别只是
-    /// 吃哪份行表
+    /// 吃哪份行表。**动画位移一并吃**（六调③：兄弟行被推走时框也要跟着走，
+    /// 命中与涂装同吃快照里的 `sib_shift`——否则抽屉在飞的 240ms 里点谁中谁）
     pub fn hit_snap(snap: &FileTreeSnap, x: i64, y: i64, view_h: i64) -> Option<Hit> {
         if x < 0 || !(0..view_h).contains(&y) {
             return None;
         }
-        for (idx, top, h) in row_rects(&snap.rows, snap.scroll, view_h) {
+        for (idx, top, h) in row_rects(&snap.rows, snap.scroll, view_h, snap.sib_shift.as_ref()) {
             if !(top..top + h).contains(&y) {
                 continue;
             }
@@ -834,8 +1013,8 @@ impl FileTreeState {
         None
     }
 
-    /// 静态快照（无钟投影 = 动画收尽那一帧：光标贴目标、抽屉贴端点）。
-    /// 命中/判卷/无动画路径用；**产帧路径唯一入口是 `snap_at`**
+    /// 静态快照（无钟投影 = 动画收尽那一帧：光标贴目标、抽屉贴端点、兄弟行
+    /// 归位）。命中/判卷/无动画路径用；**产帧路径唯一入口是 `snap_at`**
     pub fn snap(&self) -> FileTreeSnap {
         let drawer_dy = self.anim.as_ref().map(|a| {
             if a.opening {
@@ -845,21 +1024,68 @@ impl FileTreeState {
             }
         });
         let cy = self.sel.map_or(0, |i| self.cursor_target(i));
-        self.snap_frame(cy, drawer_dy)
+        self.snap_frame(cy, drawer_dy, self.sib_shift_frame(0, true))
     }
 
-    /// 帧快照（涂装唯一入口）：光标/抽屉按 now_ms 解出当前帧值
+    /// 帧快照（涂装唯一入口）：光标/抽屉/兄弟行平移按 now_ms 解出当前帧值
     pub fn snap_at(&self, now_ms: u64) -> FileTreeSnap {
         let drawer_dy = self
             .anim
             .as_ref()
             .map(|a| drawer_dy(a, now_ms, self.drawer_full_h_of(&a.path)));
-        self.snap_frame(cursor_y(self, now_ms), drawer_dy)
+        self.snap_frame(
+            cursor_y(self, now_ms),
+            drawer_dy,
+            self.sib_shift_frame(now_ms, false),
+        )
     }
 
     // ── 内部 ────────────────────────────────────────────────────────
 
-    fn snap_frame(&self, cursor_y: i64, drawer_dy: Option<i64>) -> FileTreeSnap {
+    /// ③ 兄弟行整体平移账（None = 不动）：抽屉在飞 = 子块之后的第一个兄弟行
+    /// 起吃抽屉同款 dy（展开时下半树被刚体整体推下；几何自证——子块占
+    /// [父行底, 父行底+cur)，兄弟行从 父行底+full_h 滑到终位，起点恰在子块
+    /// 顶位、终点接子块底，无重叠）；退场期 = 被摘走的原位起，removed_h 按
+    /// ease-out 归 0（连续上滑，不瞬移）。`settled` = 无钟投影（收尽那一帧，
+    /// 无位移可言 → None）
+    fn sib_shift_frame(&self, now_ms: u64, settled: bool) -> Option<SnapShift> {
+        if settled {
+            return None;
+        }
+        if let Some(rt) = &self.retract {
+            if now_ms >= rt.start_ms.saturating_add(DRAWER_CLOSE_MS) {
+                return None; // 退场已收尽
+            }
+            return Some(SnapShift {
+                from_idx: rt.from_idx,
+                dy: retract_dy(rt, now_ms),
+            });
+        }
+        let a = self.anim.as_ref()?;
+        if !a.opening {
+            return None; // 收起期没有子块在树（行即走）——退场账管那一路
+        }
+        let pi = self.rows.iter().position(|r| r.path == a.path)?;
+        let pd = self.rows[pi].depth;
+        let mut b1 = pi + 1;
+        while b1 < self.rows.len() && self.rows[b1].depth > pd {
+            b1 += 1;
+        }
+        if b1 == pi + 1 {
+            return None; // 无子行 = 无刚体可长
+        }
+        Some(SnapShift {
+            from_idx: b1,
+            dy: drawer_dy(a, now_ms, self.drawer_full_h_of(&a.path)),
+        })
+    }
+
+    fn snap_frame(
+        &self,
+        cursor_y: i64,
+        drawer_dy: Option<i64>,
+        sib_shift: Option<SnapShift>,
+    ) -> FileTreeSnap {
         let drawer = self.anim.as_ref().map(|a| DrawerFrame {
             path: a.path.clone(),
             opening: a.opening,
@@ -874,6 +1100,7 @@ impl FileTreeState {
             cursor_y,
             cursor_target: self.sel.map_or(0, |i| self.cursor_target(i)),
             drawer,
+            sib_shift,
             root: self.root.clone(),
             root_label: self.root_label.clone(),
             expanded: self.expanded.clone(),
@@ -881,6 +1108,39 @@ impl FileTreeState {
             tri: self.tri_at.clone(),
             total_h: total_h(&self.rows),
             epoch: self.epoch,
+        }
+    }
+
+    /// ④ 曾展开账级联恢复：`[start,end)` 里深度 = `depth` 的目录行，若路径在
+    /// 曾展开账且**子层不在树**（graft 后没被挂回）= 标记展开（▼）+ 在途账，
+    /// 路径收集返回给取数侧逐层发 quiet 请求。**只扫本层**：扫全树会把别支
+    /// 深处「用户刚收起」的目录也拉起来
+    fn cascade_expanded_mem(&mut self, depth: usize, start: usize, end: usize) -> Vec<String> {
+        let mut out = Vec::new();
+        for i in start..end.min(self.rows.len()) {
+            if self.rows[i].depth != depth || !self.rows[i].kind.is_dir() || self.rows[i].expanded {
+                continue;
+            }
+            let p = self.rows[i].path.clone();
+            if !self.expanded_mem.contains(&p) {
+                continue;
+            }
+            self.rows[i].expanded = true;
+            self.expanded.insert(p.clone());
+            self.loading.insert(p.clone());
+            out.push(p);
+        }
+        out
+    }
+
+    /// ④ 曾展开账记账：**用户显式展开**才入账（toggle 的 NeedList 臂调本函数）；
+    /// 用户显式收起时在 `collapse` 里摘自己那一条（子孙条目保留）；祖先收起
+    /// 造成的级联摘行不动本账。效果 = 关根再开恢复「用户离开时的样子」。
+    /// 超帽丢字典序最小者（BTreeSet 有序 = 确定性，不引随机源）
+    fn remember_expanded(&mut self, path: &str) {
+        self.expanded_mem.insert(path.to_string());
+        while self.expanded_mem.len() > MEM_CAP {
+            self.expanded_mem.pop_first();
         }
     }
 
@@ -943,12 +1203,17 @@ impl FileTreeState {
         }
     }
 
-    /// 短窗口账老化（三角/锁窗都是百毫秒级账，压着不清会变化石表）
+    /// 短窗口账老化（三角/锁窗/退场都是百毫秒级账，压着不清会变化石表）
     fn prune(&mut self, now_ms: u64) {
         const KEEP_MS: u64 = 2_000;
         self.tri_at
             .retain(|_, t| now_ms < t.saturating_add(KEEP_MS));
         self.lock_until.retain(|_, t| now_ms < *t);
+        if let Some(rt) = &self.retract
+            && now_ms >= rt.start_ms.saturating_add(DRAWER_CLOSE_MS)
+        {
+            self.retract = None;
+        }
     }
 }
 

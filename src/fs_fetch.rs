@@ -47,12 +47,28 @@ pub fn request_root() {
 }
 
 /// 拉某目录的直接子层（后台线程）；`dir` 空串 = 根。
-/// 展开态/loading 账由 `FileTreeState::toggle` 记账（本册只负责取数与回填）
+/// 展开态/loading 账由 `FileTreeState::toggle` 记账（本册只负责取数与回填）。
+/// 回执里带出的**级联层**（六调④ 曾展开账恢复）递归走 `request_list_quiet`
 pub fn request_list(dir: String) {
     if local_phase() {
-        fill(&dir, local_placeholder_rows());
+        fill(&dir, local_placeholder_rows(), false);
         return;
     }
+    spawn_list(dir, false);
+}
+
+/// 级联取层（六调④）：与 `request_list` 同一条链，只差回执落
+/// `apply_list_quiet`（不起抽屉动画——曾展开账里长回来的层不是用户此刻点的）。
+/// 由回执里的级联路径递归驱动，逐层把树长回来
+pub fn request_list_quiet(dir: String) {
+    if local_phase() {
+        return; // 本地相没有真树，级联无处可落
+    }
+    spawn_list(dir, true);
+}
+
+/// 取层线程（两种回执共用；`quiet` 决定落哪个 apply）
+fn spawn_list(dir: String, quiet: bool) {
     let port = PORT.load(Ordering::Relaxed);
     if port == 0 {
         crate::report::report("ftree", "文件树取数：隧道口未配置，跳过");
@@ -74,7 +90,7 @@ pub fn request_list(dir: String) {
                     "ftree",
                     &format!("列目录到位 {dir:?} 条目 {}", entries.len()),
                 );
-                fill(&dir, entries);
+                fill(&dir, entries, quiet);
             }
             Err(e) => {
                 crate::report::report("ftree", &format!("列目录出参不认 {dir:?}: {e}"));
@@ -150,18 +166,27 @@ fn local_placeholder_rows() -> Vec<Entry> {
 }
 
 /// 回执落状态核：根层走 `apply_root_list`，子层走 `apply_list`（树序插入 +
-/// 抽屉起步），并置脏帧
-fn fill(dir: &str, entries: Vec<Entry>) {
+/// 抽屉起步）或 `apply_list_quiet`（级联到位，不动画），并置脏帧。
+/// **返回值即六调④ 的级联层**：逐个递归发 quiet 请求——曾展开账里的深层
+/// 由此一层层长回来（每层一个请求，到没有命中为止）
+fn fill(dir: &str, entries: Vec<Entry>, quiet: bool) {
     let now = crate::report::boot_ms() as u64;
+    let mut cascade: Vec<String> = Vec::new();
     if let Some(h) = filetree::filetree_handle() {
         let mut st = h.lock().unwrap();
-        if dir.is_empty() {
-            st.apply_root_list(entries, now);
+        cascade = if dir.is_empty() {
+            st.apply_root_list(entries, now)
+        } else if quiet {
+            st.apply_list_quiet(dir, entries, now)
         } else {
-            st.apply_list(dir, entries, now);
-        }
+            st.apply_list(dir, entries, now)
+        };
     }
     DIRTY.store(true, Ordering::Relaxed);
+    for p in cascade {
+        crate::report::report("ftree", &format!("曾展开账恢复：补取 {p:?}"));
+        request_list_quiet(p);
+    }
 }
 
 /// 取数失败：摘 loading 账（否则该目录永远卡在「转圈」），行表给一行说明
@@ -171,7 +196,8 @@ fn fail(dir: &str, msg: &str) {
         let mut st = h.lock().unwrap();
         st.list_failed(dir, now);
         if dir.is_empty() {
-            st.apply_root_list(
+            // 错误行是文件——没有可级联的目录，返回值只能是空
+            let _ = st.apply_root_list(
                 vec![Entry {
                     name: msg.to_string(),
                     kind: RowKind::File,

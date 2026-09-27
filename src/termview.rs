@@ -1001,7 +1001,7 @@ fn paint_row_frame(
 /// 载荷，§五 六修收窄条款）。圆角 = 池框同尺 36px 按短边一半钳
 /// （与 paint_rect_ring 同规）
 #[allow(clippy::too_many_arguments)]
-fn paint_thin_frame(
+pub(crate) fn paint_thin_frame(
     frame: &mut Frame<'_>,
     x: i64,
     y: i64,
@@ -1051,7 +1051,7 @@ fn paint_thin_frame(
 /// （页尺采样——与代码围栏内芯同一块 135° 渐变布的暗部），四角 4px
 /// 像素切角（沿格对角 45° 阶梯——描边层自由细节，不进网格账）。
 /// 无描边，纯底块
-fn paint_demo_chip(
+pub(crate) fn paint_demo_chip(
     frame: &mut Frame<'_>,
     x: i64,
     y: i64,
@@ -5785,35 +5785,48 @@ impl TermView {
                 c0 = c0.max(pbot);
                 c1 = c1.min(pbot + cur);
             }
+            // ③ 兄弟行整体平移（六调）：子块之后（抽屉期）或被摘走行的原位起
+            // （退场期）的行额外吃一笔 dy——下半树刚体推下 / 连续上滑，不再
+            // 瞬移。c0/c1 不动（兄弟行照常可见，只挪位）
+            if let Some(ss) = &snap.sib_shift
+                && idx >= ss.from_idx
+            {
+                shift += ss.dy;
+            }
             let yrel = row_top_rel + shift;
             if yrel + ch <= c0 || yrel >= c1 {
                 continue;
             }
             let (first, last) = ft::sibling_ends(&snap.rows, idx);
             let rr = ft::ROW_RADIUS.min(bw as i64 / 2).min(ch / 2);
-            // ①行带（同深度同色，α 随深度加深；兄弟块首尾圆角）
+            // ①行带（同深度同色，α 随深度加深；兄弟块首尾圆角）。
+            // **六调②**：根层 α 恒 0 = 整行不画（露页底 CARD_PAGE_BG）——
+            // 擦画一遍 α=0 的成品色等于白跑，直接跳过；深 ≥1 照旧
             let band_rgb = ft_band_rgb(row.depth, accent);
             let band_a = ft_a255(ft::band_alpha(row.depth));
-            paint_ft_band_row(
-                &mut frame,
-                g.x0,
-                bw,
-                g.list_y0,
-                yrel,
-                ch,
-                rr,
-                first,
-                last,
-                band_rgb,
-                band_a,
-                blend(band_rgb, page_bg, band_a),
-                c0,
-                c1,
-            );
+            if band_a > 0 {
+                paint_ft_band_row(
+                    &mut frame,
+                    g.x0,
+                    bw,
+                    g.list_y0,
+                    yrel,
+                    ch,
+                    rr,
+                    first,
+                    last,
+                    band_rgb,
+                    band_a,
+                    blend(band_rgb, page_bg, band_a),
+                    c0,
+                    c1,
+                );
+            }
             // ②左强调边（深度 0 不画；同深度连续块共一条 6px **纯色**竖条，
-            // 端点圆头）
+            // 端点圆头）——**六调⑤**：x 吃 `ft::bar_x`（吊在父行三角正下方），
+            // 旧版吃 `indent_px` 的累加值（竖条贴在同层三角左侧）
             if ft::left_bar_on(row.depth) {
-                let bar_x = g.x0 + ft::indent_px(row.depth);
+                let bar_l = g.x0 + ft::bar_x(row.depth);
                 let bar_a = ft_a255(ft::border_op(row.depth));
                 let bar_r = rr.min(ft::ROW_BAR_W / 2);
                 // **三修症③**：竖条改**纯色** accent.c1（用户拍板「做纯色，
@@ -5831,7 +5844,7 @@ impl TermView {
                     };
                     let ay = (g.list_y0 + y) as u32;
                     for px in 0..ft::ROW_BAR_W as u32 {
-                        let ax = bar_x + i64::from(px);
+                        let ax = bar_l + i64::from(px);
                         if ax >= g.x1 {
                             continue;
                         }
@@ -6828,28 +6841,32 @@ impl TermView {
     }
 
     /// 查看器卡体涂装（paint_viewer_impl 去掉压暗段的全剩）：居中卡 +
-    /// 标题 + 分隔线 + 字段区 + 关闭钮。两个调用口：①in-slot
+    /// 标题 + 分隔线 + md 正文区 + 关闭钮。两个调用口：①in-slot
     /// （paint_viewer_impl，CPU 兜底路，压暗自理）②ModalVeil 层
-    /// （paint_modal_veil_layer，压暗 = 全幅直写后卡体盖其上）
+    /// （paint_modal_veil_layer，压暗 = 全幅直写后卡体盖其上）。
+    /// 返 card = 卡区 α 提不透明的剪影与卡几何同读一份（眼手同尺）
     fn paint_viewer_card(
         &self,
         frame: &mut Frame,
         v: &crate::ui::cfg_page::ViewerSnap,
         off: i64,
         accent: crate::ui::accent::AccentPair,
-    ) {
+    ) -> crate::ui::dual_pool::PoolRect {
         use crate::ui::modal as md;
         let (w, h) = (frame.w, frame.h);
         let title_fg = 0x00D9_D9D9; // 0.85 亮
-        let meta_fg = 0x0080_8080; // 0.5 灰
         let denom = ((w - 1) + (h - 1)).max(1) as i64; // 池内容同一把渐变尺
 
-        // 居中卡（几何 = modal.rs 查看器族；折行吃 content_cells 同尺）
-        let fields = md::viewer_fields(&v.content, md::content_cells(w));
-        let card = md::viewer_card_rect(w, h, &fields);
+        // 居中卡（几何 = modal.rs 查看器族；BAR-169 md 渲染器：正文 =
+        // md 文档——排版折行吃 viewer_content_w 像素尺（量宽与涂装同一把
+        // 尺 = MdMeasure 对 TermView 落地），卡高吃 md 排版 total_h）
+        let style = crate::ui::md_layout::md_style();
+        let lay =
+            crate::ui::md_layout::layout_md(&v.content, md::viewer_content_w(w), &style, self);
+        let card = md::viewer_card_rect_h(w, h, lay.total_h);
         let cx0 = card.x + off;
         if cx0 < 0 {
-            return; // 过渡帧卡左缘出屏整卡不画（与池行同规取舍）
+            return card; // 过渡帧卡左缘出屏整卡不画（剪影仍返真值——眼手同尺）
         }
         let cx1 = cx0 + i64::from(card.w);
         paint_rect_ring(
@@ -6910,55 +6927,22 @@ impl TermView {
             }
         }
 
-        // 字段区：题注（30px 灰）在上 + 内容行（36px 亮）在下。
-        // BAR-167 ①可滚动：起笔 = 字段区顶 − scroll（正文全高可滚，滚动
-        // 上限 = modal::viewer_scroll_max 由壳钳住）；逐行 clip_y 裁进
-        // 视口 [字段区顶, ink_bottom)——上裁防滚出的行污染分隔线/标题带，
-        // 下裁守住关闭钮前隙（旧「截断不滚动」只保了下裁）
+        // 正文区（BAR-169：字段区 = md 文档区，题注「内容」带退役）。
+        // BAR-167 ①可滚动：文档原点 = 字段区顶 − scroll（滚动上限 =
+        // modal::viewer_scroll_max_h 由壳钳住）；纵裁剪 [vp_top,
+        // ink_bottom)——上裁防滚出的行污染分隔线/标题带，下裁守关闭钮
+        // 前隙。涂装规格 = theme.md §2.5 淡彩六色家族 + §三 md 条款
         let vp_top = md::viewer_fields_top(&card);
-        let clip = Some((vp_top as i32, ink_bottom as i32));
-        let mut pen = vp_top - v.scroll;
-        for f in &fields {
-            if pen + i64::from(md::MODAL_LABEL_H) > ink_bottom {
-                break;
-            }
-            if pen + i64::from(md::MODAL_LABEL_H) > vp_top {
-                self.draw_text_left_ex(
-                    frame,
-                    &f.label,
-                    text_x,
-                    text_w,
-                    pen as u32,
-                    md::MODAL_LABEL_H,
-                    30.0,
-                    meta_fg,
-                    0.0,
-                    clip,
-                );
-            }
-            pen += i64::from(md::MODAL_LABEL_H);
-            for line in &f.lines {
-                if pen + i64::from(md::MODAL_LINE_H) > ink_bottom {
-                    break;
-                }
-                if pen + i64::from(md::MODAL_LINE_H) > vp_top {
-                    self.draw_text_left_ex(
-                        frame,
-                        line,
-                        text_x,
-                        text_w,
-                        pen as u32,
-                        md::MODAL_LINE_H,
-                        36.0,
-                        title_fg,
-                        0.0,
-                        clip,
-                    );
-                }
-                pen += i64::from(md::MODAL_LINE_H);
-            }
-            pen += i64::from(md::MODAL_FIELD_GAP);
-        }
+        self.paint_md_body(
+            frame,
+            &lay,
+            text_x as i64,
+            vp_top - v.scroll,
+            text_w,
+            (vp_top, ink_bottom),
+            denom,
+            accent,
+        );
 
         // 关闭钮：卡底全内宽 3 格，均匀细框 + 居中 36px 亮字（modal 同款）
         paint_thin_frame(
@@ -6982,6 +6966,7 @@ impl TermView {
             title_fg,
             btn.x + off,
         );
+        card
     }
 
     /// 压暗层涂装（BAR-163 翻案：跳框整体搬出配置槽的全屏 ChromeSlot::
@@ -7023,10 +7008,9 @@ impl TermView {
             card
         } else {
             let v = viewer.expect("modal/viewer 二有一闸已过");
-            let card =
-                md::viewer_card_rect(w, h, &md::viewer_fields(&v.content, md::content_cells(w)));
-            self.paint_viewer_card(&mut frame, v, 0, accent);
-            card
+            // BAR-169：剪影卡几何 = paint_viewer_card 返值（md 排版
+            // total_h 同一份——眼手同尺，不另算第二遍）
+            self.paint_viewer_card(&mut frame, v, 0, accent)
         };
         // 卡区提不透明（圆角剪影内 α=0xFF 保 rgb；卡外留压暗直写）
         let (fw, fh) = (card.w, card.h);
@@ -9998,6 +9982,31 @@ mod ft_paint_smoke {
         buf
     }
 
+    /// 涂在**页底之上**的那一层（真机管线：chrome 先铺 CARD_PAGE_BG，内容层
+    /// 叠上去——②「根层露页底」只有叠在页底上才看得见）
+    fn paint_on_page(
+        tv: &TermView,
+        st: &ft::FileTreeState,
+        now: u64,
+        w: u32,
+        h: u32,
+        inset: u32,
+    ) -> Vec<u32> {
+        let snap = st.snap_at(now);
+        let mut buf = vec![crate::ui::accent::CARD_PAGE_BG; (w as usize) * (h as usize)];
+        tv.paint_ft_content_impl(
+            &mut buf,
+            w,
+            h,
+            inset,
+            0,
+            &snap,
+            now,
+            crate::ui::accent::FALLBACK,
+        );
+        buf
+    }
+
     /// 三修症②③逐像素钉：①行带**纵向无亮度阶跃**（帽带 == 块体；旧版角带拿
     /// 裸带色按 α 叠在底层像素上 = 二次上色，实拍 60,38,43 vs 35,29,37）
     /// ②左竖条**纯色**（同一块内上下两点同色——渐变版必不同）
@@ -10164,7 +10173,9 @@ mod ft_paint_smoke {
         let accent = crate::ui::accent::FALLBACK;
         let buf = paint(&tv, &st, 1_200, w, h, 0);
         let at = |x: i64, y: i64| buf[(y * i64::from(w) + x) as usize];
-        // ①行带 = 裸带色按 band_alpha 与页底混合的成品色（同深度同色）
+        // ①行带 = 裸带色按 band_alpha 与页底混合的成品色（同深度同色）；
+        // **六调②**：根层 α 恒 0 → 本层该处零墨（页底由 chrome 垫着，
+        // 见 `smoke_六调2_根层露页底` 的叠页底逐像素钉）
         let flat = |d: usize| {
             blend(
                 ft_band_rgb(d, accent),
@@ -10172,12 +10183,17 @@ mod ft_paint_smoke {
                 ft_a255(ft::band_alpha(d)),
             )
         };
-        assert_eq!(at(g.x1 - 20, g.list_y0 + 40), flat(0));
-        assert_ne!(
+        assert_eq!(
             at(g.x1 - 20, g.list_y0 + 40),
-            crate::ui::accent::CARD_PAGE_BG
+            0,
+            "根层行带不画（六调②露页底）"
         );
-        assert_ne!(flat(0), flat(1), "相邻深度不同色（奇偶分取双色）");
+        assert_eq!(
+            flat(0),
+            crate::ui::accent::CARD_PAGE_BG,
+            "根层成品色 = 页底"
+        );
+        assert_ne!(flat(0), flat(1), "深 1 行带照画（与页底不同色）");
         assert_ne!(flat(1), flat(2));
         // ②三角：src 行（深度 0）三角盒内落墨——**三修症⑤**后三角左缘 =
         // 缩进 + 竖条 + 间隙，探针吃 tri_x/name 同一把尺（旧硬编码 +10 已过期）
@@ -10214,8 +10230,8 @@ mod ft_paint_smoke {
         assert_ne!(at(bx + 1, cy_page), flat(0), "竖线墨 ≠ 纯行带色");
         assert_eq!(
             at(bx + 1, cy_page + 86),
-            flat(0),
-            "框外不许有竖线墨（该处应恰为纯行带色）"
+            0,
+            "框外不许有竖线墨（该行根层，本层零墨）"
         );
         // ⑥滚动裁剪：滚 50 后窗顶之上不许有行墨
         let mut snap = st.snap_at(1_200);
@@ -10225,6 +10241,209 @@ mod ft_paint_smoke {
         let at2 = |x: i64, y: i64| buf2[(y * i64::from(w) + x) as usize];
         assert_eq!(at2(g.x1 - 20, g.list_y0 - 1), 0, "窗顶之上不许有行墨");
         assert_ne!(at2(g.x1 - 20, g.list_y0 + 40), 0, "窗内照画");
+    }
+
+    /// **六调②逐像素钉**：根层行带不画——叠在页底之上（真机管线：chrome 先
+    /// 铺 CARD_PAGE_BG，内容层叠上去）的那一层里，根层整行**恰为页底色**；
+    /// 深 ≥1 的行带照画（成品色 ≠ 页底）。变异：`band_alpha(0)` 回 0.05 必红
+    #[test]
+    fn smoke_六调2_根层露页底() {
+        let tv = tv();
+        let mut st = ft::FileTreeState::new("root");
+        st.apply_root_list(
+            vec![
+                ft::Entry {
+                    name: "a".into(),
+                    kind: ft::RowKind::Dir,
+                    size: 0,
+                    mtime: 0,
+                },
+                ft::Entry {
+                    name: "b.txt".into(),
+                    kind: ft::RowKind::File,
+                    size: 0,
+                    mtime: 0,
+                },
+            ],
+            0,
+        );
+        assert!(matches!(st.toggle(0, 5), ft::ToggleAction::NeedList { .. }));
+        st.apply_list(
+            "a",
+            vec![ft::Entry {
+                name: "x.txt".into(),
+                kind: ft::RowKind::File,
+                size: 0,
+                mtime: 0,
+            }],
+            10,
+        );
+        let (w, h) = (1260u32, 2800u32);
+        let g = ft_geom(w, h, 0);
+        let page_bg = crate::ui::accent::CARD_PAGE_BG;
+        let accent = crate::ui::accent::FALLBACK;
+        let buf = paint_on_page(&tv, &st, 9_000, w, h, 0); // 抽屉收尽
+        let at = |x: i64, y: i64| buf[(y * i64::from(w) + x) as usize];
+        // 根层（行 0 = a）右端整列逐像素 == 页底：本层零墨
+        for dy in 0..ft::row_h(false) {
+            assert_eq!(
+                at(g.x1 - 20, g.list_y0 + dy),
+                page_bg,
+                "根层行带必须不画（六调②；α 回潮即红）dy={dy}"
+            );
+        }
+        // 深 1（行 1 = a/x.txt）行带照画，且成品色 ≠ 页底
+        let band1 = blend(ft_band_rgb(1, accent), page_bg, ft_a255(ft::band_alpha(1)));
+        assert_ne!(band1, page_bg);
+        assert_eq!(
+            at(g.x1 - 20, g.list_y0 + ft::row_h(false) + 40),
+            band1,
+            "深 1 行带照画（只根层让位页底）"
+        );
+    }
+
+    /// **六调③逐像素钉**：抽屉在飞时兄弟行带/三角随 dy 一起走——屏上那一帧
+    /// 的位置 = 内容位 + snap 里的 dy（涂装与帧账同表，漏平移 = 兄弟行瞬移）
+    #[test]
+    fn smoke_六调3_兄弟行随抽屉平移() {
+        let tv = tv();
+        let mut st = ft::FileTreeState::new("root");
+        st.apply_root_list(
+            vec![
+                ft::Entry {
+                    name: "d".into(),
+                    kind: ft::RowKind::Dir,
+                    size: 0,
+                    mtime: 0,
+                },
+                ft::Entry {
+                    name: "e".into(),
+                    kind: ft::RowKind::Dir,
+                    size: 0,
+                    mtime: 0,
+                },
+            ],
+            0,
+        );
+        assert!(matches!(st.toggle(0, 5), ft::ToggleAction::NeedList { .. }));
+        st.apply_list(
+            "d",
+            vec![
+                ft::Entry {
+                    name: "x.txt".into(),
+                    kind: ft::RowKind::File,
+                    size: 0,
+                    mtime: 0,
+                },
+                ft::Entry {
+                    name: "y.txt".into(),
+                    kind: ft::RowKind::File,
+                    size: 0,
+                    mtime: 0,
+                },
+            ],
+            10,
+        );
+        let (w, h) = (1260u32, 2800u32);
+        let g = ft_geom(w, h, 0);
+        // 兄弟行 e（行 3，深度 0，目录）：探针打它的三角盒心
+        let probe_x = g.x0 + ft::tri_x(0) + ft::TRI_W / 2 - 4;
+        let tri_cy = (ft::row_h(false) - ft::TRI_H) / 2 + ft::TRI_H / 2; // 行内三角心
+        let content_top = ft::row_top(&st.rows, 3);
+        let settled_y = g.list_y0 + content_top + tri_cy;
+        for ms in [10u64, 40, 70, 100, 130, 190] {
+            let snap = st.snap_at(ms);
+            let dy = snap.sib_shift.expect("抽屉在飞必有兄弟行平移").dy;
+            assert!(dy < 0, "@{ms} 抽屉该还在涨");
+            let mut buf = vec![0u32; (w as usize) * (h as usize)];
+            tv.paint_ft_content_impl(&mut buf, w, h, 0, 0, &snap, ms, crate::ui::accent::FALLBACK);
+            let at = |x: i64, y: i64| buf[(y * i64::from(w) + x) as usize];
+            let want_y = g.list_y0 + content_top + dy + tri_cy;
+            assert_ne!(at(probe_x, want_y), 0, "@{ms} 兄弟行该在 内容位+dy 处落墨");
+            if dy <= -60 {
+                assert_eq!(
+                    at(probe_x, settled_y),
+                    0,
+                    "@{ms} 兄弟行还压在原位 = 没吃 dy（瞬移回潮）"
+                );
+            }
+        }
+        // 收尽帧：兄弟行贴死内容位
+        let snap = st.snap_at(300);
+        assert_eq!(snap.sib_shift.unwrap().dy, 0);
+        let mut buf = vec![0u32; (w as usize) * (h as usize)];
+        tv.paint_ft_content_impl(
+            &mut buf,
+            w,
+            h,
+            0,
+            0,
+            &snap,
+            300,
+            crate::ui::accent::FALLBACK,
+        );
+        assert_ne!(
+            buf[(settled_y * i64::from(w) + probe_x) as usize],
+            0,
+            "收尽贴内容位"
+        );
+    }
+
+    /// **六调③收起腿逐像素钉**：退场期兄弟行带随 removed_h 连续上滑（行已走，
+    /// 但带在上滑途中——探针吃帧账 dy，不许瞬移落位）
+    #[test]
+    fn smoke_六调3_收起期兄弟行上滑() {
+        let tv = tv();
+        let mut st = ft::FileTreeState::new("root");
+        st.apply_root_list(
+            vec![
+                ft::Entry {
+                    name: "d".into(),
+                    kind: ft::RowKind::Dir,
+                    size: 0,
+                    mtime: 0,
+                },
+                ft::Entry {
+                    name: "e".into(),
+                    kind: ft::RowKind::Dir,
+                    size: 0,
+                    mtime: 0,
+                },
+            ],
+            0,
+        );
+        st.toggle(0, 5);
+        st.apply_list(
+            "d",
+            vec![ft::Entry {
+                name: "x.txt".into(),
+                kind: ft::RowKind::File,
+                size: 0,
+                mtime: 0,
+            }],
+            10,
+        );
+        st.collapse(0, 1_000);
+        let (w, h) = (1260u32, 2800u32);
+        let g = ft_geom(w, h, 0);
+        let probe_x = g.x0 + ft::tri_x(0) + ft::TRI_W / 2 - 4;
+        let tri_cy = (ft::row_h(false) - ft::TRI_H) / 2 + ft::TRI_H / 2;
+        // 收起后兄弟行 e 降到行 1（内容位 86）；退场期它还在原位（258）往下压
+        let content_top = ft::row_top(&st.rows, 1);
+        assert_eq!(content_top, ft::row_h(false));
+        let mut prev_dy = i64::MAX;
+        for ms in [1_000u64, 1_030, 1_060, 1_090, 1_120, 1_160] {
+            let snap = st.snap_at(ms);
+            let dy = snap.sib_shift.expect("退场期必有兄弟行平移").dy;
+            assert!(dy >= 0 && dy <= ft::row_h(false), "@{ms} 退场 dy 出域 {dy}");
+            assert!(dy <= prev_dy, "@{ms} 只许连续上滑");
+            prev_dy = dy;
+            let mut buf = vec![0u32; (w as usize) * (h as usize)];
+            tv.paint_ft_content_impl(&mut buf, w, h, 0, 0, &snap, ms, crate::ui::accent::FALLBACK);
+            let want_y = g.list_y0 + content_top + dy + tri_cy;
+            let got = buf[(want_y * i64::from(w) + probe_x) as usize];
+            assert_ne!(got, 0, "@{ms} 兄弟行该在 内容位+dy 处落墨（连续上滑）");
+        }
     }
 
     #[test]

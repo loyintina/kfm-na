@@ -53,30 +53,47 @@ fn tree_a_open() -> FileTreeState {
 
 #[test]
 fn spec_缩进_逐层锚点表() {
-    // 实测锚点：round(cumsum(d) × 3.06)
+    // 实测锚点（真机截屏）保持不变：深度 0..4 的**层间距** = 0 / 55 / 104 /
+    // 147 / 184（三角左缘 − 基线 18）。六调⑤⑥ 重排后三角独立成轴（`tri_x`
+    // 逐层累进），前段表值换算与旧累加表同值 → 锚点逐字保住
     assert_eq!(
-        (0..=6).map(indent_px).collect::<Vec<_>>(),
-        vec![0, 55, 104, 147, 184, 214, 242]
+        (0..=4).map(tri_x).collect::<Vec<_>>(),
+        vec![18, 73, 122, 165, 202]
     );
-    // 表值本身（CSS px）
+    assert_eq!(
+        (0..=4).map(|d| tri_x(d) - tri_x(0)).collect::<Vec<_>>(),
+        vec![0, 55, 104, 147, 184]
+    );
+    // 表值本身（CSS px）= 步进来源
     assert_eq!(shift_css(0), 18);
     assert_eq!(shift_css(1), 16);
     assert_eq!(shift_css(4), 10);
+    assert_eq!(step_px(0), 0, "0 层无步进");
+    assert_eq!(step_px(1), 55);
+    assert_eq!(step_px(2), 49);
+    assert_eq!(step_px(4), 37);
 }
 
 #[test]
 fn spec_缩进_深层钳489() {
-    // 累加到 160 CSS 即封顶（实测锚点取整 489 = 160 × 3.06 截断）
-    assert!(indent_px(35) < 489, "{}", indent_px(35));
-    assert_eq!(indent_px(36), 489);
-    assert_eq!(indent_px(80), 489);
-    // 全程非递减（钳制不许出现回缩）
-    let mut prev = 0;
+    // 三角左缘总量封顶 489（实测锚点取整 = 160 CSS × 3.06 截断）
+    assert!(tri_x(18) < SHIFT_CLAMP_PX, "{}", tri_x(18));
+    assert_eq!(tri_x(19), SHIFT_CLAMP_PX);
+    assert_eq!(tri_x(80), SHIFT_CLAMP_PX);
+    // 全程非递减（钳制不许出现回缩）——竖条同样
+    let (mut prev_t, mut prev_b) = (0i64, 0i64);
     for d in 0..=80 {
-        let v = indent_px(d);
-        assert!(v >= prev, "深度 {d} 缩进回缩: {prev} → {v}");
-        prev = v;
+        let (t, b) = (tri_x(d), bar_x(d));
+        assert!(
+            t >= prev_t && b >= prev_b,
+            "深度 {d} 回缩: {prev_t}/{prev_b} → {t}/{b}"
+        );
+        prev_t = t;
+        prev_b = b;
     }
+    // 钳制档：三角不再右移，竖条随之改由 ⑥ 的缝兜（不再吊父三角）
+    assert_eq!(bar_x(80), SHIFT_CLAMP_PX - (ROW_BAR_W + GAP_MIN_PX));
+    assert!(bar_x(80) < tri_x(80));
 }
 
 #[test]
@@ -85,20 +102,65 @@ fn spec_缩进_超表长末档兜() {
     assert_eq!(shift_css(19), 2);
     assert_eq!(shift_css(20), 2);
     assert_eq!(shift_css(64), 2);
+    // 末档 2 CSS 换算 ≈ 6px 不够让开「竖条 + 缝」，一律吃到步进下限
+    assert_eq!(step_px(20), BAR_ALIGN_DX + ROW_BAR_W + GAP_MIN_PX);
 }
 
 #[test]
-fn spec_几何_三角与名字左缘() {
-    // **三修症⑤**（2026-09-27 用户终验）：三角不再贴竖条——左缘 = 缩进量 +
-    // 竖条宽 + 间隙；**深度 0 同样右移**（无竖条时按同尺对齐观感）
-    let gap = ROW_BAR_W + TRI_GAP_PX;
-    assert_eq!(tri_x(0), gap, "深度 0 也吃右移（统一对齐）");
-    assert_eq!(tri_x(4), 184 + gap);
-    assert_eq!(name_x(4), 184 + gap + TRI_W);
-    assert_eq!(name_x(0), gap + TRI_W);
-    assert!(gap >= ROW_BAR_W + 8, "三角与竖条之间必须有可见距离");
-    // 三角盒与竖条不许重叠（盒左缘 ≥ 竖条右缘）
-    assert!(tri_x(3) >= indent_px(3) + ROW_BAR_W);
+fn spec_六调1_名字与三角留间隔() {
+    // ①：名字左缘 = 三角盒右缘 + TRI_NAME_GAP_PX（旧版紧贴 = 差 0）
+    assert_eq!(TRI_NAME_GAP_PX, 12);
+    for d in 0..=8 {
+        assert_eq!(
+            name_x(d) - (tri_x(d) + TRI_W),
+            TRI_NAME_GAP_PX,
+            "深度 {d} 名字与三角盒的间隔不对"
+        );
+    }
+    assert!(name_x(0) > tri_x(0) + TRI_W, "紧贴（无间隔）即打回重演");
+}
+
+#[test]
+fn spec_六调5_竖条吊在父三角正下方() {
+    // ⑤：竖条左缘 = 父行三角盒左缘 + BAR_ALIGN_DX。**非钳制档 = 1..=18**
+    // （三角左缘到 19 层才封顶 489，那里改由 ⑥ 的缝钳住，见下一条）
+    assert_eq!(BAR_ALIGN_DX, 5);
+    assert_eq!(bar_x(0), 0, "根层没有竖条，行内容基准 = 0");
+    for d in 1..=18 {
+        assert_eq!(
+            bar_x(d),
+            tri_x(d - 1) + BAR_ALIGN_DX,
+            "深度 {d} 竖条没吊父三角"
+        );
+    }
+    // 钳制档例外（报告已写明）：三角封顶后竖条改吃缝钳
+    assert!(bar_x(19) < tri_x(18) + BAR_ALIGN_DX);
+    assert_eq!(bar_x(19), tri_x(19) - (ROW_BAR_W + GAP_MIN_PX));
+    // indent_px 语义改为 bar_x（本册单源；涂装/探针同吃）
+    for d in 0..=8 {
+        assert_eq!(indent_px(d), bar_x(d));
+    }
+}
+
+#[test]
+fn spec_六调6_深层保缝与步进下限() {
+    // ⑥：∀深度 本行三角盒左缘 − 竖条右缘 ≥ GAP_MIN_PX（构造保证）
+    assert_eq!(GAP_MIN_PX, 6);
+    for d in 0..=40 {
+        let gap = tri_x(d) - (bar_x(d) + ROW_BAR_W);
+        assert!(gap >= GAP_MIN_PX, "深度 {d} 缝不足: {gap}");
+    }
+    // 深层步进下限 = 由 ⑥ 反解（STEP_MIN_PX = 5 + 6 + 6 = 17）：表尾递减档
+    // （≤5 CSS ≈ 15px）一律兜住，等价于「深层改常量步进」
+    let step_min = BAR_ALIGN_DX + ROW_BAR_W + GAP_MIN_PX;
+    assert_eq!(step_min, 17);
+    for d in 10..=40 {
+        assert_eq!(step_px(d), step_min, "深度 {d} 步进该吃下限");
+    }
+    // 非钳制档（三角还没封顶）：累进步进逐字 = 下限
+    for d in 10..=18 {
+        assert_eq!(tri_x(d) - tri_x(d - 1), step_min, "深度 {d} 三角步进");
+    }
 }
 
 // ── 几何：密度 / α ──────────────────────────────────────────────────
@@ -129,15 +191,18 @@ fn spec_密度_深层更浓单调() {
 
 #[test]
 fn spec_行底与边框alpha域与单调() {
-    assert_eq!(band_alpha(0), 0.05);
+    // 六调②：根层不画行带（露页底 CARD_PAGE_BG）——α 恒 0
+    assert_eq!(band_alpha(0), 0.0);
     assert_eq!(border_op(0), 0.3);
-    let mut prev = band_alpha(0);
-    for d in 0..=40 {
+    // 深度 ≥1：域 [0.05, 0.31) 与非递减照旧（公式一行未动）
+    let mut prev = band_alpha(1);
+    for d in 1..=40 {
         let a = band_alpha(d);
         assert!((0.05..0.31).contains(&a), "深度 {d} α 出域: {a}");
         assert!(a >= prev);
         prev = a;
     }
+    assert!(band_alpha(1) > band_alpha(0), "深一层必需比根层浓");
     assert!(band_alpha(19) > 0.28, "{}", band_alpha(19));
     assert!(border_op(19) > 0.7 && border_op(19) < 0.75);
     // 深度 0 不画左强调边（nz：row.depth > 0 才挂 span）
@@ -160,7 +225,7 @@ fn spec_total_h与row_rects一致() {
     let mut s = tree();
     s.set_wrap(1, true, 0); // b.txt 长名换行
     assert_eq!(total_h(&s.rows), 86 + 118);
-    let rects = row_rects(&s.rows, 0, 10_000);
+    let rects = row_rects(&s.rows, 0, 10_000, None);
     assert_eq!(rects, vec![(0, 0, 86), (1, 86, 118)]);
     // 相邻行首尾相接（不重叠不留缝），末行底 = 总高
     for w in rects.windows(2) {
@@ -175,19 +240,33 @@ fn spec_row_rects_相交才出() {
     let mut s = tree();
     s.set_wrap(1, true, 0);
     // 视口 90 高、滚 100：行 0 整体在上方（y+h = -14）→ 不出
-    let rects = row_rects(&s.rows, 100, 90);
+    let rects = row_rects(&s.rows, 100, 90, None);
     assert_eq!(rects, vec![(1, -14, 118)]);
     // 视口高 0 = 没有可画的行
-    assert!(row_rects(&s.rows, 0, 0).is_empty());
+    assert!(row_rects(&s.rows, 0, 0, None).is_empty());
 }
 
 #[test]
 fn spec_row_rects_滚动平移() {
     let s = tree();
-    let a = row_rects(&s.rows, 0, 10_000);
-    let b = row_rects(&s.rows, 30, 10_000);
+    let a = row_rects(&s.rows, 0, 10_000, None);
+    let b = row_rects(&s.rows, 30, 10_000, None);
     assert_eq!(a[1].1 - b[1].1, 30, "同一行随 scroll 平移同一位移");
     assert_eq!(a[1].2, b[1].2, "行高不随滚动变");
+}
+
+/// ③ 兄弟行整体平移进命中尺（眼手同尺）：`SnapShift` 一起吃，屏上画哪就是哪
+#[test]
+fn spec_row_rects_兄弟行平移() {
+    let s = tree();
+    let ss = SnapShift {
+        from_idx: 1,
+        dy: -40,
+    };
+    let a = row_rects(&s.rows, 0, 10_000, None);
+    let b = row_rects(&s.rows, 0, 10_000, Some(&ss));
+    assert_eq!(a[0], b[0], "from_idx 之前的行不动");
+    assert_eq!((b[1].0, b[1].1), (1, a[1].1 - 40), "行 1 起吃 dy");
 }
 
 #[test]
@@ -534,6 +613,218 @@ fn spec_list_failed_回退展开账() {
     );
 }
 
+/// 硬指标（六调④）：内部展开 N 层 → 关根 → 再开根 → N 层原样恢复
+#[test]
+fn spec_六调4_曾展开账级联恢复() {
+    let mut s = FileTreeState::new("根");
+    s.apply_root_list(vec![dir("a"), file("b.txt")], 0);
+    // 三级嵌套逐层展开（每一级都是用户亲手点的）
+    assert_eq!(s.toggle(0, 10), ToggleAction::NeedList { path: "a".into() });
+    assert_eq!(
+        s.apply_list("a", vec![dir("sub"), file("x.txt")], 20),
+        Vec::<String>::new(),
+        "子层里没有曾展开过的目录 → 无级联"
+    );
+    assert_eq!(
+        s.toggle(1, 30),
+        ToggleAction::NeedList {
+            path: "a/sub".into()
+        }
+    );
+    assert_eq!(
+        s.apply_list("a/sub", vec![dir("deep"), file("y.txt")], 40),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        s.toggle(2, 50),
+        ToggleAction::NeedList {
+            path: "a/sub/deep".into()
+        }
+    );
+    assert_eq!(
+        s.apply_list("a/sub/deep", vec![file("z.txt")], 60),
+        Vec::<String>::new()
+    );
+    let before = s.rows.clone();
+    assert_eq!(before.len(), 7);
+    let depths: Vec<usize> = before.iter().map(|r| r.depth).collect();
+    assert_eq!(depths, vec![0, 1, 2, 3, 2, 1, 0]);
+    let expanded_before: Vec<String> = s.expanded.iter().cloned().collect();
+    assert_eq!(expanded_before, vec!["a", "a/sub", "a/sub/deep"]);
+    // 关根（根级收起 = 整支走）：行/账照清；**曾展开账语义改约（2026-09-27
+    // 研究线裁定）** = 显式收起**摘自己那一条**、**子孙账保留**（所以这里
+    // 只剩 a/sub 与 a/sub/deep；根 a 的那条被这次显式收起摘掉）
+    s.collapse(0, 100);
+    assert_eq!(s.rows.len(), 2);
+    assert!(s.expanded.is_empty() && s.loaded.is_empty() && s.loading.is_empty());
+    assert_eq!(
+        s.expanded_mem.iter().cloned().collect::<Vec<_>>(),
+        vec!["a/sub", "a/sub/deep"],
+        "显式收起摘自己那条；级联摘行不动子孙账"
+    );
+    // 再开根：**a 自己是被显式收起过的 → mem 无它 → 不被级联拉起**（新语义，
+    // 2026-09-27 研究线裁定：显式收起过的保持收起）；用户再点 a 才长回来
+    let cascade = s.apply_root_list(vec![dir("a"), file("b.txt")], 1_000);
+    assert!(
+        cascade.is_empty(),
+        "显式收起过的目录不许被关根再开级联复活：{cascade:?}"
+    );
+    assert!(!s.rows[0].expanded, "a 保持收起态");
+    // 用户再点 a（显式展开）→ 它的**子孙账仍在** → 内部历史立刻级联回取
+    assert_eq!(
+        s.toggle(0, 1_100),
+        ToggleAction::NeedList { path: "a".into() }
+    );
+    assert!(s.rows[0].expanded, "▼ 立刻显（不等数据）");
+    assert!(s.is_loading("a"));
+    assert!(!s.loaded.contains("a"), "行没到 = 未取");
+    // 逐层 quiet 落位（dfs 三层：到没有命中为止）
+    assert_eq!(
+        s.apply_list_quiet("a", vec![dir("sub"), file("x.txt")], 1_010),
+        vec!["a/sub"]
+    );
+    assert!(s.anim.is_none(), "级联恢复不许打抽屉动画");
+    assert_eq!(
+        s.apply_list_quiet("a/sub", vec![dir("deep"), file("y.txt")], 1_020),
+        vec!["a/sub/deep"]
+    );
+    assert_eq!(
+        s.apply_list_quiet("a/sub/deep", vec![file("z.txt")], 1_030),
+        Vec::<String>::new()
+    );
+    // 原样恢复：行表逐字相同（路径/深度/展开位/顺序）
+    assert_eq!(s.rows, before, "N 层原样恢复");
+    assert_eq!(
+        s.expanded.iter().cloned().collect::<Vec<_>>(),
+        expanded_before
+    );
+    assert!(s.loading.is_empty());
+    assert!(s.anim.is_none() && s.retract.is_none());
+}
+
+/// ④ 上限策略：MEM_CAP 封顶，超帽丢**字典序最小者**（确定性，不引随机源）
+#[test]
+fn spec_六调4_曾展开账上限丢字典序最小() {
+    let mut s = FileTreeState::new("根");
+    let entries: Vec<Entry> = (0..=MEM_CAP).map(|i| dir(&format!("d{i:04}"))).collect();
+    s.apply_root_list(entries, 0);
+    assert_eq!(s.rows.len(), MEM_CAP + 1);
+    for i in 0..=MEM_CAP {
+        let idx = s
+            .rows
+            .iter()
+            .position(|r| r.path == format!("d{i:04}"))
+            .unwrap();
+        assert!(matches!(
+            s.toggle(idx, i as u64),
+            ToggleAction::NeedList { .. }
+        ));
+    }
+    assert_eq!(s.expanded_mem.len(), MEM_CAP, "超帽即丢到帽内");
+    assert!(!s.expanded_mem.contains("d0000"), "丢的是字典序最小者");
+    assert!(s.expanded_mem.contains(&format!("d{MEM_CAP:04}")));
+}
+
+/// ④ 曾展开账三档语义（2026-09-27 研究线裁定）：**显式展开入账 / 显式收起
+/// 摘自己那条 / 祖先收起造成的级联摘行不动 mem**。效果 = 关根再开恢复用户
+/// 离开时的样子（显式收起过的保持收起，不被级联复活）
+#[test]
+fn spec_六调4_显式收起摘自己_子孙账保留_级联不动mem() {
+    let mut s = FileTreeState::new("根");
+    s.apply_root_list(vec![dir("a")], 0);
+    // a → a/sub → a/sub/deep 三层逐级显式展开
+    assert_eq!(s.toggle(0, 10), ToggleAction::NeedList { path: "a".into() });
+    s.apply_list("a", vec![dir("sub")], 20);
+    assert_eq!(
+        s.toggle(1, 30),
+        ToggleAction::NeedList {
+            path: "a/sub".into()
+        }
+    );
+    s.apply_list("a/sub", vec![dir("deep")], 40);
+    assert_eq!(
+        s.toggle(2, 50),
+        ToggleAction::NeedList {
+            path: "a/sub/deep".into()
+        }
+    );
+    s.apply_list("a/sub/deep", vec![file("z.txt")], 60);
+    assert_eq!(s.expanded_mem.len(), 3, "三层都在账里");
+    // ① 祖先收起（a）= 级联摘行：子孙账**一律不动**（行没了账留着）
+    s.collapse(0, 70);
+    assert!(
+        !s.expanded_mem.contains("a"),
+        "祖先自己是被显式收起的 → 摘自己那条"
+    );
+    assert!(
+        s.expanded_mem.contains("a/sub") && s.expanded_mem.contains("a/sub/deep"),
+        "级联摘行不许动子孙账：{:#?}",
+        s.expanded_mem
+    );
+    // ② 关根再开：a 不复活（用户显式收起过），但重开 a 之后其内部历史长回来
+    let _ = s.apply_root_list(vec![dir("a")], 80);
+    assert!(
+        !s.rows.iter().any(|r| r.path == "a/sub"),
+        "a 不复活（未被级联拉起）"
+    );
+    assert_eq!(
+        s.toggle(0, 300),
+        ToggleAction::NeedList { path: "a".into() }
+    );
+    let cascade = s.apply_list("a", vec![dir("sub")], 100);
+    assert_eq!(
+        cascade,
+        vec!["a/sub".to_string()],
+        "重开 a → 内部曾展开的 sub 立刻级联回取（子孙账保留的兑现）"
+    );
+}
+
+/// ④ 级联只扫**本次 graft 的那一层**：别支（同深度、不在这块里）的曾展开账
+/// 不许被一次无关的取层拉起来——扫全树会把「用户刚收起的别支目录」也重新
+/// 长出来（本册实现口径：range 夹在 graft 出的新块上）
+#[test]
+fn spec_六调4_级联只扫本层() {
+    let mut s = FileTreeState::new("根");
+    s.apply_root_list(vec![dir("a"), dir("b")], 0);
+    // b 下展开 sub 再收起：曾展开账留着 b/sub，行没了
+    assert_eq!(s.toggle(1, 10), ToggleAction::NeedList { path: "b".into() });
+    assert_eq!(
+        s.apply_list("b", vec![dir("sub")], 20),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        s.toggle(2, 30),
+        ToggleAction::NeedList {
+            path: "b/sub".into()
+        }
+    );
+    assert_eq!(
+        s.apply_list("b/sub", vec![file("z.txt")], 40),
+        Vec::<String>::new()
+    );
+    s.collapse(2, 50);
+    // **语义改约（2026-09-27 研究线裁定）**：用户**显式收起** b/sub → 摘它
+    // **自己那一条**（免得关根再开把它级联复活 = 撤销用户的收起）
+    assert!(
+        !s.expanded_mem.contains("b/sub"),
+        "显式收起必摘自己那一条（旧「只进不出」语义已废）"
+    );
+    // 展 a 后重取 a 的层：b/sub 与 a 同深度但不在本块里，不许被拉起
+    assert_eq!(
+        s.toggle(0, 100),
+        ToggleAction::NeedList { path: "a".into() }
+    );
+    let cascade = s.apply_list("a", vec![file("x.txt")], 110);
+    assert_eq!(
+        cascade,
+        Vec::<String>::new(),
+        "别支的曾展开账不许被本层取法拉起"
+    );
+    let sub = s.rows.iter().find(|r| r.path == "b/sub").unwrap();
+    assert!(!sub.expanded, "别支收起态必须保持（级联只扫本层）");
+    assert!(!s.is_loading("b/sub"));
+}
+
 #[test]
 fn spec_apply_root_list_保留已展开子树() {
     let mut s = tree_a_open();
@@ -809,6 +1100,113 @@ fn spec_抽屉_无子行dy恒零() {
     };
     assert_eq!(drawer_dy(&a, 100, 0), 0);
     assert_eq!(drawer_dy(&a, 100, -5), 0);
+}
+
+/// ③ **帧账**（六调核心）：展开期兄弟行 y = 内容位 + dy，dy 单调
+/// （−full_h → 0）且相邻帧差不超单帧最大位移（无跳变、无瞬移）
+#[test]
+fn spec_六调3_展开期兄弟行整体平移帧账() {
+    let s = tree_a_open(); // 行表 = a / a-sub / a-x / b.txt，抽屉 10ms 起步 240ms
+    let full = drawer_full_h(&s.rows, 0);
+    assert_eq!(full, 172);
+    // 兄弟行 = 子块之后的第一个（b.txt，idx 3）；子块里的行不吃这笔
+    let mut prev_dy: Option<i64> = None;
+    let mut prev_y: Option<i64> = None;
+    let mut seen_zero = false;
+    for ms in (10..=250).step_by(10) {
+        let snap = s.snap_at(ms);
+        let ss = snap.sib_shift.expect("展开期必须记兄弟行平移");
+        assert_eq!(ss.from_idx, 3, "起点 = 子块之后的第一个兄弟行");
+        let dy = ss.dy;
+        assert!(dy <= 0 && dy >= -full, "dy 出域: {dy}");
+        if let Some(p) = prev_dy {
+            if dy == 0 {
+                seen_zero = true;
+            }
+            assert!(dy >= p, "dy 只许往上浮（单调）: {p} → {dy} @{ms}");
+            // 单帧最大位移：240ms 走 3×full（ease-out 起步斜率 3）→ 10ms ≈ 21.5，
+            // 取 full/4 = 43 为界（跳变/瞬移必超）
+            assert!(dy - p <= full / 4, "相邻帧跳变: {p} → {dy} @{ms}");
+        }
+        // 兄弟行屏上位置 = 内容位 + dy（与涂装同一把尺）
+        let content_top = row_top(&snap.rows, 3);
+        let rect = row_rects(&snap.rows, snap.scroll, 10_000, Some(&ss))
+            .into_iter()
+            .find(|r| r.0 == 3)
+            .expect("兄弟行必在可见表");
+        assert_eq!(rect.1, content_top + dy);
+        if let Some(py) = prev_y {
+            assert!(
+                (rect.1 - py).abs() <= full / 4,
+                "兄弟行跳变: {py} → {}",
+                rect.1
+            );
+        }
+        prev_y = Some(rect.1);
+        prev_dy = Some(dy);
+    }
+    assert!(seen_zero, "240ms 内必须走到 0（落位）");
+    // 收尽帧：兄弟行回到内容位（dy = 0；无钟投影 = 无位移 → None）
+    assert_eq!(s.snap_at(250).sib_shift.unwrap().dy, 0);
+    assert_eq!(s.snap_at(10_000).sib_shift.unwrap().dy, 0);
+    assert!(s.snap().sib_shift.is_none(), "静态投影 = 收尽无位移");
+}
+
+/// ③ **帧账**（收起，路线 b）：行即刻走，但兄弟行从「被摘走行的原位」连续上滑
+#[test]
+fn spec_六调3_收起期兄弟行连续上滑() {
+    let mut s = tree_a_open();
+    let removed_h = drawer_full_h(&s.rows, 0);
+    assert_eq!(removed_h, 172);
+    s.collapse(0, 300);
+    assert_eq!(s.rows.len(), 2, "行即刻走（不变量不动）");
+    let mut prev = i64::MAX;
+    let mut steps = 0;
+    for ms in (300..300 + DRAWER_CLOSE_MS).step_by(10) {
+        let snap = s.snap_at(ms);
+        let ss = snap.sib_shift.expect("退场期必须记兄弟行平移");
+        assert_eq!(ss.from_idx, 1, "起点 = 父行之后（被摘走行的原位）");
+        assert!(ss.dy >= 0 && ss.dy <= removed_h, "dy 出域: {}", ss.dy);
+        assert!(
+            ss.dy <= prev,
+            "只许连续上滑（单调递减）: {prev} → {} @{ms}",
+            ss.dy
+        );
+        if prev != i64::MAX {
+            assert!(prev - ss.dy <= removed_h / 4, "相邻帧跳变（瞬移）@{ms}");
+        }
+        prev = ss.dy;
+        steps += 1;
+    }
+    assert!(
+        s.snap_at(300).sib_shift.unwrap().dy == removed_h,
+        "起点 = 整量（下半树还在被摘走行的原位）"
+    );
+    assert!(steps > 10, "180ms 该有十几帧");
+    assert!(prev < removed_h / 4, "收尾已接近落位: {prev}");
+    // 收尽即无账（兄弟行贴死在缩小后的行表上）
+    assert!(s.snap_at(300 + DRAWER_CLOSE_MS).sib_shift.is_none());
+    assert!(s.snap().sib_shift.is_none());
+    assert_eq!(retract_dy(&s.retract.clone().unwrap(), 9_999), 0);
+}
+
+/// ③ 退场账的活性（漏这笔 = 兄弟行卡在半路不落位）
+/// ③ 退场账的活性（收起后 180ms 内必须继续产帧，兄弟行才滑得到位）。
+/// **诚实注**：工单要求 `anim_active` 把 retract 算进去，现役里收起那一拍同时
+/// 记了 closing 抽屉账（同档 180ms），两笔账窗口重合——所以这条钉咬的是
+/// 「退场期产帧」这个行为，分不出是哪笔账供的帧；retract 那一路是防御性的
+/// （任一路径若只留 retract 不留 anim，它就得顶上）
+#[test]
+fn spec_六调3_退场账算活性() {
+    let mut s = tree_a_open();
+    s.collapse(0, 1_000);
+    assert!(anim_active(&s, 1_000));
+    assert!(anim_active(&s, 1_179));
+    assert!(!anim_active(&s, 1_180), "180ms 落位即哑（退场账同档）");
+    // 抽屉账在飞时照旧算活性（两笔账互不遮蔽）
+    let s2 = tree_a_open();
+    assert!(anim_active(&s2, 10 + DRAWER_OPEN_MS - 1));
+    assert!(!anim_active(&s2, 10 + DRAWER_OPEN_MS));
 }
 
 #[test]

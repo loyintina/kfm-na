@@ -19,7 +19,7 @@
 | `src/direct_brain.rs` | 2 | 2 | 0 | — |
 | `src/endpoint.rs` | 9 | 9 | 0 | — |
 | `src/exec_probe.rs` | 1 | 1 | 0 | — |
-| `src/fs_fetch.rs` | 5 | 2 | 3 | configure take_dirty request_read |
+| `src/fs_fetch.rs` | 6 | 3 | 3 | configure take_dirty request_read |
 | `src/gate.rs` | 106 | 83 | 23 | register_gate_router text_dump inject_keys spawn_gate_watcher REC_FILE_CAP REC_FILE rec_output rec_resize PANIC_FILE PANIC_TRACE_FILE LOOP_STALL_FILE note_loop_beat loop_beat_age_ms note_foreground install_panic_hook note_draw note_session_death touch_take register_input_bar ALERT_RSS_COOLDOWN_MS ALERT_DEATHS_WINDOW_MS ALERT_DEATHS_COOLDOWN_MS HISTORY_EVERY_TICKS |
 | `src/glyph_atlas.rs` | 12 | 12 | 0 | — |
 | `src/http1.rs` | 10 | 7 | 3 | is_tick_err read_head_hook read_body_hook |
@@ -48,7 +48,7 @@
 | `src/sess_pool.rs` | 23 | 16 | 7 | TAIL_EVENTS fmt_bytes configure take_dirty request_routes request_entries request_content |
 | `src/session.rs` | 11 | 11 | 0 | — |
 | `src/session_router.rs` | 11 | 11 | 0 | — |
-| `src/settings.rs` | 10 | 7 | 3 | parse QUIC_DEFAULT_PORT QUIC_REVERSE_PORT |
+| `src/settings.rs` | 14 | 9 | 5 | parse QUIC_DEFAULT_PORT QUIC_REVERSE_PORT MD_FONT_STOPS MD_RATIO_STOPS |
 | `src/singleton.rs` | 7 | 4 | 3 | LOCK_PATH lock_exclusive try_acquire |
 | `src/svc_health.rs` | 12 | 7 | 5 | HIST_PATH configure set_visible sys_snap take_dirty |
 | `src/sys_hist.rs` | 39 | 34 | 5 | BAR_W PLACEHOLDER_PCT hist_idx restore HIST_FORMAT |
@@ -65,17 +65,19 @@
 | `src/ui/conn_card.rs` | 6 | 6 | 0 | — |
 | `src/ui/cursor.rs` | 9 | 9 | 0 | — |
 | `src/ui/demo_icon.rs` | 6 | 6 | 0 | — |
-| `src/ui/demo_page.rs` | 38 | 24 | 14 | CONTENT_RIGHT_INSET H1_TEXT H2_SECTION H2_TEXT H3_TEXT H4_TEXT H5_TEXT H6_TEXT SIGN_TEXT BODY_SEGS HEAD_FRAME_T QUOTE_BAR_W LIST_MARK_PX LIST_TEXT_INSET |
+| `src/ui/demo_page.rs` | 38 | 25 | 13 | CONTENT_RIGHT_INSET H1_TEXT H2_SECTION H2_TEXT H3_TEXT H4_TEXT H5_TEXT H6_TEXT SIGN_TEXT BODY_SEGS HEAD_FRAME_T QUOTE_BAR_W LIST_MARK_PX |
 | `src/ui/down_card.rs` | 10 | 10 | 0 | — |
 | `src/ui/dual_pool.rs` | 19 | 19 | 0 | — |
-| `src/ui/filetree.rs` | 73 | 65 | 8 | SHIFT_CLAMP_CSS CURSOR_NAME_INSET CURSOR_BAR_W CURSOR_HAIR_W row_top row_center register_filetree filetree_handle |
+| `src/ui/filetree.rs` | 81 | 73 | 8 | SHIFT_CLAMP_CSS TRI_GAP_PX CURSOR_NAME_INSET CURSOR_BAR_W CURSOR_HAIR_W row_center register_filetree filetree_handle |
 | `src/ui/fx_ease.rs` | 11 | 11 | 0 | — |
 | `src/ui/fx_preview.rs` | 8 | 5 | 3 | LEG_GO_MS LEG_RETURN_START LEG_RETURN_MS |
 | `src/ui/fx_spring.rs` | 12 | 12 | 0 | — |
 | `src/ui/gear.rs` | 7 | 7 | 0 | — |
 | `src/ui/keybar.rs` | 1 | 1 | 0 | — |
 | `src/ui/link_card.rs` | 9 | 9 | 0 | — |
-| `src/ui/modal.rs` | 27 | 26 | 1 | VEIL_DIM_ARGB |
+| `src/ui/md_layout.rs` | 4 | 4 | 0 | — |
+| `src/ui/md_parse.rs` | 2 | 2 | 0 | — |
+| `src/ui/modal.rs` | 30 | 29 | 1 | VEIL_DIM_ARGB |
 | `src/ui/orb.rs` | 5 | 5 | 0 | — |
 | `src/ui/panel_drag.rs` | 12 | 7 | 5 | DRAG_DIR_LOCK RELEASE_PROGRESS VELOCITY_WINDOW_MS locked current_offset |
 | `src/ui/parser_chain.rs` | 15 | 12 | 3 | COL_W_NUM COL_W_DEN window_of |
