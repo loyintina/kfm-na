@@ -113,22 +113,34 @@ pub fn viewer_viewport_h(card: &PoolRect) -> u32 {
 /// 视口高；装得下 = 0（不可滚）。卡高已被安全带封顶时正文超出部分
 /// 全靠这扇窗口滚出来
 pub fn viewer_scroll_max(screen_w: u32, screen_h: u32, fields: &[ModalField]) -> i64 {
-    let card = viewer_card_rect(screen_w, screen_h, fields);
-    (i64::from(fields_h(fields)) - i64::from(viewer_viewport_h(&card))).max(0)
+    viewer_scroll_max_h(screen_w, screen_h, fields_h(fields))
 }
 
-/// 查看器卡片矩形 = card_rect 公式去掉预览画板与其相邻留隙
-/// （MODAL_PREVIEW_H + 前后两个 MODAL_FIELD_GAP 换成分隔线后一个
-/// MODAL_FIELD_GAP）；高随内容，封顶安全带（顶 4 格+底 输入栏带+2 格，
-/// 超出 = 正文视口内滚动，BAR-167 ①——卡几何不动，只滚字段区）
-pub fn viewer_card_rect(screen_w: u32, screen_h: u32, fields: &[ModalField]) -> PoolRect {
+/// 查看器内容区宽（px，BAR-169 md 渲染器）：卡宽 − 两侧内边距——md
+/// 排版折行与涂装右裁同读这一份（眼手同尺；宽与内容无关可先算，
+/// 排版出全高再定卡高，无循环依赖）
+pub fn viewer_content_w(screen_w: u32) -> u32 {
+    let card_w = screen_w.saturating_sub(MODAL_SIDE_MARGIN * 2);
+    (card_w as i64 - MODAL_PAD_X * 2).max(0) as u32
+}
+
+/// 内容高直喂版滚动上限（BAR-169：md 排版 total_h 取代字段账——
+/// 查看器正文已是 md 文档，题注「内容」带退役，字段区 = 文档区）
+pub fn viewer_scroll_max_h(screen_w: u32, screen_h: u32, content_h: u32) -> i64 {
+    let card = viewer_card_rect_h(screen_w, screen_h, content_h);
+    (i64::from(content_h) - i64::from(viewer_viewport_h(&card))).max(0)
+}
+
+/// 内容高直喂版卡片矩形（同上；旧字段版 = fields_h 换算后委托本函数，
+/// 等价性由构造保证）
+pub fn viewer_card_rect_h(screen_w: u32, screen_h: u32, content_h: u32) -> PoolRect {
     let w = screen_w.saturating_sub(MODAL_SIDE_MARGIN * 2);
-    // 顶留白 + 标题 + 分隔线带（上 0.5 格 + 1px + 下 0.5 格）+ 字段区
+    // 顶留白 + 标题 + 分隔线带（上 0.5 格 + 1px + 下 0.5 格）+ 内容区
     // + 关闭钮前隙 0.5 格 + 关闭钮 + 底留白
     let want = MODAL_PAD_Y
         + MODAL_TITLE_H
         + (MODAL_FIELD_GAP + 1 + MODAL_FIELD_GAP)
-        + fields_h(fields)
+        + content_h
         + MODAL_FIELD_GAP
         + MODAL_CLOSE_H
         + MODAL_PAD_Y;
@@ -141,6 +153,14 @@ pub fn viewer_card_rect(screen_w: u32, screen_h: u32, fields: &[ModalField]) -> 
         w,
         h,
     }
+}
+
+/// 查看器卡片矩形 = card_rect 公式去掉预览画板与其相邻留隙
+/// （MODAL_PREVIEW_H + 前后两个 MODAL_FIELD_GAP 换成分隔线后一个
+/// MODAL_FIELD_GAP）；高随内容，封顶安全带（顶 4 格+底 输入栏带+2 格，
+/// 超出 = 正文视口内滚动，BAR-167 ①——卡几何不动，只滚字段区）
+pub fn viewer_card_rect(screen_w: u32, screen_h: u32, fields: &[ModalField]) -> PoolRect {
+    viewer_card_rect_h(screen_w, screen_h, fields_h(fields))
 }
 
 /// 屏尺寸取舍（纯函数，钉死）：窗口活着吃窗口实时尺寸；退后台窗口

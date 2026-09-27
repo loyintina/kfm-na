@@ -233,3 +233,33 @@ fn spec_终端配置_pixel_scroll字段() {
     let off = parse_terminal(&terminal_to_json(&TerminalConfig::default())).unwrap();
     assert!(!off.pixel_scroll, "默认配置往返必须保住关态");
 }
+
+// ---- BAR-169 render.json（渲染设置卡） ----
+
+#[test]
+fn spec_bar169_render_缺省锚与往返() {
+    use kfm_na::settings::{RenderConfig, parse_render, render_to_json};
+    // 缺文件/空对象 = 宪法锚（36px / 1.40——行为零变化承诺）
+    assert_eq!(
+        parse_render("{}").unwrap(),
+        RenderConfig {
+            md_font_px: 36,
+            md_line_ratio_pct: 140
+        }
+    );
+    assert_eq!(RenderConfig::default().md_font_px, 36);
+    assert_eq!(RenderConfig::default().md_line_ratio_pct, 140);
+    // 往返：序列化 → 解析 ≡ 原值
+    let r = RenderConfig {
+        md_font_px: 44,
+        md_line_ratio_pct: 165,
+    };
+    assert_eq!(parse_render(&render_to_json(&r)).unwrap(), r);
+    // 坏文件机械报错（不许炸终端）
+    assert!(parse_render("not json").is_err());
+    assert!(parse_render("[]").is_err());
+    // 手写配置不罚：档位外表值照收
+    let r = parse_render(r#"{"mdFontPx":40}"#).unwrap();
+    assert_eq!(r.md_font_px, 40);
+    assert_eq!(r.md_line_ratio_pct, 140, "缺省字段回锚");
+}

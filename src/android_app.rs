@@ -620,6 +620,10 @@ struct App {
     /// 配置页 UI 共用这份
     settings_servers: Vec<crate::settings::ServerEntry>,
     terminal_cfg: crate::settings::TerminalConfig,
+    /// render.json 渲染设置（BAR-169：md 字号基准/行距两旋钮；缺/坏 →
+    /// 宪法缺省 + 上报，同 terminal.json 纪律；渲染面另读
+    /// md_layout::md_style 全局口——本字段服务设置页 UI 回显）
+    render_cfg: crate::settings::RenderConfig,
     /// 全局切换键的拦截字节（= terminal_cfg.switch_hotkey 经 keymap
     /// 同一把尺产出的缓存，逐键比对免换算；空 = 不拦截）
     switch_hotkey_bytes: Vec<u8>,
@@ -830,6 +834,13 @@ struct VeilSig {
     /// 逐帧重烘——ConfigSig.anim_bucket 旧纪律随跳框一起搬进本层；
     /// 查看器无动画恒 0）
     anim_bucket: u64,
+    /// 查看器正文滚动 px（BAR-169 补维：BAR-167 ①滚动上机时本 sig 漏
+    /// scroll 维——redroid 兜底路逐帧原位涂装掩盖，GLES 路径漏维 =
+    /// 滚动不重烘旧帧鬼影；modal 恒 0）
+    viewer_scroll: i64,
+    /// md 渲染样式两旋钮（BAR-169 设置页渲染配置卡：字号基准×100 +
+    /// 行距×100——样式变 = 版面变必须重烘；modal 也吃同值无害）
+    md_style: (u32, u32),
 }
 
 /// 上层槽 sig（derive PartialEq 深比较——BarSnap/PresenceSnap 均已
@@ -863,11 +874,13 @@ fn load_settings(
 ) -> (
     Vec<crate::settings::ServerEntry>,
     crate::settings::TerminalConfig,
+    crate::settings::RenderConfig,
 ) {
     let mut servers = Vec::new();
     let mut term_cfg = crate::settings::TerminalConfig::default();
+    let mut render_cfg = crate::settings::RenderConfig::default();
     let Some(dir) = app.and_then(|a| a.internal_data_path()) else {
-        return (servers, term_cfg);
+        return (servers, term_cfg, render_cfg);
     };
     // 自重启旗标路径的唯一来源（hatch/RESTART.request 探针归
     // self_restart::poll_flag；拿不到目录 = 远程重启路断，钮路不受影响）
@@ -885,7 +898,13 @@ fn load_settings(
             Err(e) => crate::report::report_sync("term", &format!("terminal.json 解析失败: {e}")),
         }
     }
-    (servers, term_cfg)
+    if let Ok(j) = std::fs::read_to_string(cfg.join("render.json")) {
+        match crate::settings::parse_render(&j) {
+            Ok(r) => render_cfg = r,
+            Err(e) => crate::report::report_sync("ui", &format!("render.json 解析失败: {e}")),
+        }
+    }
+    (servers, term_cfg, render_cfg)
 }
 
 /// 装配本地脑（期 0③ 换脑，D11）：私有目录 ai/providers.json + ai/.env
@@ -1496,15 +1515,21 @@ impl App {
                                     .as_ref()
                                     .and_then(|ai| ai.accent_of(crate::ai_presence::Panel::Config))
                                     .unwrap_or(crate::ui::accent::FALLBACK);
-                                let term_row = pg.tab() == 0 && pg.focus() == 1;
+                                let tab0_focus = if pg.tab() == 0 {
+                                    pg.focus()
+                                } else {
+                                    usize::MAX
+                                };
                                 pg.dropdown_pick(i, now, ps_snap, acc);
                                 drop(pg);
                                 // 下拉换选：终端设置行 = 像素滚动开关；
+                                // 渲染字号/行距行 = 渲染设置（写盘+灌样式口）；
                                 // 默认服务器行 = 默认会话变更（写盘+重建归壳）
-                                if term_row {
-                                    self.apply_pixel_scroll_pick();
-                                } else {
-                                    self.apply_default_server_pick();
+                                match tab0_focus {
+                                    1 => self.apply_pixel_scroll_pick(),
+                                    2 => self.apply_render_font_pick(),
+                                    3 => self.apply_render_ratio_pick(),
+                                    _ => self.apply_default_server_pick(),
                                 }
                                 // 二十四修 §六②：值框宽度伸缩账——旧宽 =
                                 // 点选前实量（上方 vw），新宽 = 重建后实量；
@@ -1919,11 +1944,16 @@ impl App {
                         let d = ms.moved_px_at(y, crate::report::boot_ms() as f64);
                         if d != 0.0 {
                             use crate::ui::modal as md;
-                            let mut pg = page.lock().unwrap();
-                            if let Some(v) = pg.viewer() {
-                                let fields = md::viewer_fields(&v.content, md::content_cells(sw));
-                                let max = md::viewer_scroll_max(sw, sh, &fields);
-                                if pg.scroll_viewer_by(-(d as i64), max) {
+                            // BAR-169：滚动上限 = md 排版 total_h（眼手同尺
+                            // ——涂装同一份）。锁序 term→cfg_page 红线：
+                            // 先取正文快照放锁，排版完回锁喂滚动
+                            let content = page.lock().unwrap().viewer().map(|v| v.content.clone());
+                            if let Some(content) = content
+                                && let Some(lay) = self.viewer_md_layout(&content, sw)
+                            {
+                                let max = md::viewer_scroll_max_h(sw, sh, lay.total_h);
+                                let mut pg = page.lock().unwrap();
+                                if pg.viewer().is_some() && pg.scroll_viewer_by(-(d as i64), max) {
                                     self.dirty = true;
                                 }
                             }
@@ -2772,18 +2802,26 @@ impl App {
                                 }
                             }
                         } else if let Some(v) = pg.viewer().cloned() {
-                            // BAR-163 查看器跳框：同一套命中语义，几何吃
-                            // 查看器族同一份（眼手同尺）
+                            // BAR-163 查看器跳框：同一套命中语义。BAR-169：
+                            // 卡几何 = md 排版 total_h 同一份（眼手同尺）；
+                            // 锁序 term→cfg_page 红线：v 已克隆出锁，
+                            // 先放 pg 再量字排版，命中完回锁收口
                             use crate::ui::modal as md;
-                            let fields = md::viewer_fields(&v.content, md::content_cells(sw));
-                            let card = md::viewer_card_rect(sw, sh, &fields);
-                            match md::hit(mt.0 as i64, mt.1 as i64, &card) {
-                                md::ModalHit::Close | md::ModalHit::Outside => {
-                                    pg.close_viewer();
-                                    crate::report::report("ui", "查看器收起（关闭钮/框外）");
-                                }
-                                md::ModalHit::Card => {
-                                    crate::report::report("ui", "查看器卡内点按（无操作，吃手势）");
+                            drop(pg);
+                            if let Some(lay) = self.viewer_md_layout(&v.content, sw) {
+                                let card = md::viewer_card_rect_h(sw, sh, lay.total_h);
+                                let mut pg = page.lock().unwrap();
+                                match md::hit(mt.0 as i64, mt.1 as i64, &card) {
+                                    md::ModalHit::Close | md::ModalHit::Outside => {
+                                        pg.close_viewer();
+                                        crate::report::report("ui", "查看器收起（关闭钮/框外）");
+                                    }
+                                    md::ModalHit::Card => {
+                                        crate::report::report(
+                                            "ui",
+                                            "查看器卡内点按（无操作，吃手势）",
+                                        );
+                                    }
                                 }
                             }
                         }
@@ -4037,7 +4075,7 @@ impl App {
         // ws 连接插件的默认 ConnConfig。默认会话指向的服务器优先，
         // 否则第一条；wsUrl 空则按 tunnel.localPort 拼回环地址；
         // 无条目 = ConnConfig::default()（8021 现状锚，行为零变化）
-        let (servers, term_cfg) = load_settings(self.android_app.as_ref());
+        let (servers, term_cfg, render_cfg) = load_settings(self.android_app.as_ref());
         // 索引先行（借还瞬清，servers 之后整体 move 进 App 字段不打架）
         let default_idx = match &term_cfg.default_session {
             crate::settings::DefaultSession::Server(id) => servers
@@ -4078,6 +4116,10 @@ impl App {
             &term_cfg.default_session,
         ));
         self.terminal_cfg = term_cfg;
+        // 渲染设置灌全局样式口（BAR-169：涂装/滚动上限/命中同读
+        // md_layout::md_style 单源；缺省 = 宪法锚行为零变化）
+        crate::ui::md_layout::set_md_style(render_cfg.md_font_px, render_cfg.md_line_ratio_pct);
+        self.render_cfg = render_cfg;
         self.settings_servers = servers;
         // 解析页 tmux 插件：远程连接配置缓存（ws url + 启动命令）+ 本端
         // 附着会话名（启动命令提取；attach 切换后更新）。无服务器条目 =
@@ -4651,8 +4693,50 @@ impl App {
                 title: "终端设置".into(),
                 meta: "滚动行为".into(),
             },
+            crate::ui::cfg_page::RowView {
+                title: "渲染字号".into(),
+                meta: "md 正文基准".into(),
+            },
+            crate::ui::cfg_page::RowView {
+                title: "渲染行距".into(),
+                meta: "md 行高倍数".into(),
+            },
         ];
-        let focus = page.lock().unwrap().focus().min(1);
+        let focus = page.lock().unwrap().focus().min(3);
+        if focus == 2 || focus == 3 {
+            // 渲染设置（BAR-169 md 渲染器：字号基准/行距两旋钮，用户
+            // 拍板「渲染器值得加配置选项」）：单下拉机制复用（一行一
+            // 下拉——面板几何只认上池首行，双下拉位是二期活）；点选
+            // 写盘 render.json + 灌全局样式口即时生效（查看器重排版）
+            use crate::settings::{MD_FONT_STOPS, MD_RATIO_STOPS};
+            let (label, cur, stops, names): (&str, u32, &[u32], [&str; 3]) = if focus == 2 {
+                (
+                    "字号基准",
+                    self.render_cfg.md_font_px,
+                    &MD_FONT_STOPS,
+                    ["小 32px", "标准 36px", "大 44px"],
+                )
+            } else {
+                (
+                    "行距倍数",
+                    self.render_cfg.md_line_ratio_pct,
+                    &MD_RATIO_STOPS,
+                    ["紧凑 1.30", "标准 1.40", "宽松 1.65"],
+                )
+            };
+            let sel = stops.iter().position(|&v| v == cur).unwrap_or(1);
+            let options: Vec<String> = names.iter().map(|n| n.to_string()).collect();
+            let upper = vec![crate::ui::cfg_page::UpperRow {
+                label: label.into(),
+                value: names[sel].to_string(),
+                is_dropdown: true,
+            }];
+            let mut p = page.lock().unwrap();
+            p.set_rows(rows);
+            p.set_options(options, sel);
+            p.set_upper(upper);
+            return;
+        }
         if focus == 1 {
             // 终端设置（2026-09-24 像素级滚动）：单下拉机制复用——选项
             // 关=旧行级保底（默认）/ 开=像素级实验；点选写盘+即时分流
@@ -4801,6 +4885,23 @@ impl App {
         }
     }
 
+    /// 查看器正文 md 排版（BAR-169 md 渲染器：拖动/甩尾滚动上限、抬手
+    /// 命中卡几何、涂装四处同读一份；量宽走 term 真字尺 = 涂装同一把
+    /// MdMeasure）。term 不在 = None（宁可无动作不瞎猜几何，
+    /// modal::pick_screen_px 同律）。**调用方纪律：不许持 cfg_page 锁
+    /// 调本函数**（锁序 term→cfg_page，倒持 = 死锁）
+    fn viewer_md_layout(&self, content: &str, sw: u32) -> Option<crate::ui::md_layout::MdLayout> {
+        let term = self.term_handle()?;
+        let g = term.lock().unwrap();
+        let style = crate::ui::md_layout::md_style();
+        Some(crate::ui::md_layout::layout_md(
+            content,
+            crate::ui::modal::viewer_content_w(sw),
+            &style,
+            &*g,
+        ))
+    }
+
     /// 像素级滚动开关换选（设置页「终端设置」行，2026-09-24）：
     /// terminal.json pixelScroll 写盘 + term 即时分流（触摸滚动通道
     /// 行级保底 ↔ 分数视口）+ 上池重建。写盘失败 = 上报不炸
@@ -4828,6 +4929,48 @@ impl App {
                 "像素级滚动→{}（已落盘）",
                 if on { "开" } else { "关（行级保底）" }
             ),
+        );
+        self.rebuild_cfg_rows();
+    }
+
+    /// 渲染字号档位换选（BAR-169 设置页「渲染字号」行）：render.json
+    /// 写盘 + md_layout 全局样式口即时灌（涂装/滚动上限/命中同读）+
+    /// 上池重建。写盘失败 = 上报不炸（配置文件纪律）
+    fn apply_render_font_pick(&mut self) {
+        let Some(page) = &self.cfg_page else { return };
+        let sel = page.lock().unwrap().option_sel();
+        let v = crate::settings::MD_FONT_STOPS[sel.min(crate::settings::MD_FONT_STOPS.len() - 1)];
+        self.render_cfg.md_font_px = v;
+        self.render_cfg_commit();
+        crate::report::report("ui", &format!("渲染字号→{v}px（已落盘）"));
+    }
+
+    /// 渲染行距档位换选（同上「渲染行距」行）
+    fn apply_render_ratio_pick(&mut self) {
+        let Some(page) = &self.cfg_page else { return };
+        let sel = page.lock().unwrap().option_sel();
+        let v = crate::settings::MD_RATIO_STOPS[sel.min(crate::settings::MD_RATIO_STOPS.len() - 1)];
+        self.render_cfg.md_line_ratio_pct = v;
+        self.render_cfg_commit();
+        crate::report::report("ui", &format!("渲染行距→{}%（已落盘）", v));
+    }
+
+    /// render.json 落盘 + 全局样式口灌 + 上池重建（两旋钮共用收尾）
+    fn render_cfg_commit(&mut self) {
+        if let Some(dir) = self
+            .android_app
+            .as_ref()
+            .and_then(|a| a.internal_data_path())
+        {
+            let path = dir.join("settings").join("render.json");
+            let json = crate::settings::render_to_json(&self.render_cfg);
+            if let Err(e) = std::fs::write(&path, json) {
+                crate::report::report("ui", &format!("render.json 写盘失败: {e}"));
+            }
+        }
+        crate::ui::md_layout::set_md_style(
+            self.render_cfg.md_font_px,
+            self.render_cfg.md_line_ratio_pct,
         );
         self.rebuild_cfg_rows();
     }
@@ -8037,6 +8180,7 @@ impl App {
                 } else {
                     0
                 };
+                let st = crate::ui::md_layout::md_style();
                 let sig = VeilSig {
                     w,
                     h,
@@ -8044,6 +8188,11 @@ impl App {
                     c2: acc_cfg.c2,
                     content_key,
                     anim_bucket,
+                    viewer_scroll: cs.viewer.as_ref().map_or(0, |v| v.scroll),
+                    md_style: (
+                        (st.body_px * 100.0).round() as u32,
+                        (st.line_ratio * 100.0).round() as u32,
+                    ),
                 };
                 if sigs.veil.feed(sig) {
                     let px = g.slot_canvas(crate::gles_present::ChromeSlot::ModalVeil);
@@ -9700,11 +9849,16 @@ impl ApplicationHandler for App {
                                 (self.screen_px(), crate::ui::cfg_page::cfg_page_handle())
                         {
                             use crate::ui::modal as md;
-                            let mut pg = page.lock().unwrap();
-                            if let Some(v) = pg.viewer() {
-                                let fields = md::viewer_fields(&v.content, md::content_cells(sw));
-                                let max = md::viewer_scroll_max(sw, sh, &fields);
-                                if pg.scroll_viewer_by(req, max) {
+                            // BAR-169：甩尾帧的滚动上限同走 md 排版
+                            // total_h（与拖动臂/涂装同一份）；锁序
+                            // term→cfg_page 红线同拖动臂
+                            let content = page.lock().unwrap().viewer().map(|v| v.content.clone());
+                            if let Some(content) = content
+                                && let Some(lay) = self.viewer_md_layout(&content, sw)
+                            {
+                                let max = md::viewer_scroll_max_h(sw, sh, lay.total_h);
+                                let mut pg = page.lock().unwrap();
+                                if pg.viewer().is_some() && pg.scroll_viewer_by(req, max) {
                                     self.dirty = true;
                                 } else {
                                     kill = Some("触底/顶");

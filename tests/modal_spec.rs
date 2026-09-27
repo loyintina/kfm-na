@@ -415,3 +415,49 @@ fn spec_bar167_viewer_滚动上限与视口几何() {
         "卡高封顶不因而滚动改约"
     );
 }
+
+// ---- BAR-169 md 渲染器：内容高直喂版查看器几何 ----
+
+#[test]
+fn spec_bar169_viewer_h版与字段版构造等价() {
+    use kfm_na::ui::modal::{
+        content_cells, viewer_card_rect, viewer_card_rect_h, viewer_fields, viewer_scroll_max,
+        viewer_scroll_max_h,
+    };
+    let (w, h) = (1260u32, 2560u32);
+    // 等价性由委托构造保证——钉住不许分叉（两版并存期防漂）
+    for text in ["短", "行\n".repeat(500).as_str(), ""] {
+        let f = viewer_fields(text, content_cells(w));
+        assert_eq!(
+            viewer_card_rect(w, h, &f),
+            viewer_card_rect_h(w, h, fields_h_pub(&f)),
+            "卡几何两版等价"
+        );
+        assert_eq!(
+            viewer_scroll_max(w, h, &f),
+            viewer_scroll_max_h(w, h, fields_h_pub(&f)),
+            "滚动上限两版等价"
+        );
+    }
+}
+
+/// 字段版全高（与 modal.rs fields_h 同式——钉的独立复算，防委托账虚报）
+fn fields_h_pub(fields: &[kfm_na::ui::modal::ModalField]) -> u32 {
+    use kfm_na::ui::modal::{MODAL_FIELD_GAP, MODAL_LABEL_H, MODAL_LINE_H};
+    fields
+        .iter()
+        .map(|f| MODAL_LABEL_H + f.lines.len() as u32 * MODAL_LINE_H + MODAL_FIELD_GAP)
+        .sum()
+}
+
+#[test]
+fn spec_bar169_viewer_content_w钉() {
+    use kfm_na::ui::modal::{MODAL_PAD_X, MODAL_SIDE_MARGIN, viewer_content_w};
+    // 内容宽 = 屏宽 − 左右页边（3 格×2）− 卡内边距（2 格×2）；排版折行
+    // 与涂装右裁同读这份（眼手同尺）
+    assert_eq!(
+        viewer_content_w(1260),
+        1260 - MODAL_SIDE_MARGIN * 2 - (MODAL_PAD_X as u32) * 2
+    );
+    assert_eq!(viewer_content_w(10), 0, "病态窄屏不 Underflow");
+}

@@ -48,13 +48,14 @@ fn spec_bar167_viewer_滚动接线守卫() {
         APP.matches("self.viewer_fling = None;").count() >= 2,
         "清点两处：新触摸落地取消 + 帧泵燃尽离场"
     );
-    // ⑥ 滚动上限按实时屏尺寸现算现喂（modal::viewer_scroll_max 同一份
-    // 几何——涂装裁剪/滚动上限/钳制同尺）
+    // ⑥ 滚动上限按实时屏尺寸现算现喂（2026-09-27 BAR-169 换芯：md
+    // 排版 total_h 直喂版 viewer_scroll_max_h——旧字段版随 md 渲染器
+    // 退役，涂装裁剪/滚动上限/钳制同尺纪律不变）
     assert!(
-        APP.matches("md::viewer_scroll_max(sw, sh, &fields)")
+        APP.matches("md::viewer_scroll_max_h(sw, sh, lay.total_h)")
             .count()
             >= 2,
-        "拖动臂与甩尾泵都必须现算 viewer_scroll_max（同一份几何）"
+        "拖动臂与甩尾泵都必须现算 viewer_scroll_max_h（同一份几何）"
     );
     // ⑦ 活性探针第八路（页停住甩尾在飞 = 不入表即甩尾零帧）
     assert!(
@@ -77,4 +78,61 @@ fn spec_bar167_viewer_滚动接线守卫() {
     assert!(viewer_fling_live());
     note_viewer_fling_live(false);
     assert!(!viewer_fling_live());
+}
+
+// ---- BAR-169 md 渲染器接线守卫（源码钉，同律：壳断了宿主全绿也照烂）----
+
+const TV: &str = include_str!("../src/termview.rs");
+
+#[test]
+fn spec_bar169_md_渲染接线守卫() {
+    // ① 查看器涂装换芯：paint_viewer_card 走 md 排版（layout_md）+
+    // md_style 全局口 + 内容高直喂卡几何
+    assert!(
+        TV.contains(
+            "crate::ui::md_layout::layout_md(&v.content, md::viewer_content_w(w), &style, self)"
+        ),
+        "查看器涂装必须吃 md 排版（layout_md + viewer_content_w 同尺）"
+    );
+    assert!(
+        TV.contains("md::viewer_card_rect_h(w, h, lay.total_h)"),
+        "卡高必须吃 md 排版 total_h（内容高直喂版）"
+    );
+    // ② 壳三处接线全走内容高直喂版（拖动/甩尾滚 max + 抬手命中卡几何）
+    assert!(
+        APP.matches("viewer_scroll_max_h(sw, sh, lay.total_h)")
+            .count()
+            >= 2,
+        "拖动与甩尾两臂的滚动上限都必须走 md total_h"
+    );
+    assert!(
+        APP.contains("md::viewer_card_rect_h(sw, sh, lay.total_h)"),
+        "抬手命中卡几何必须走 md total_h"
+    );
+    // ③ 旧字段版不再被壳调用（残留 = 两份几何账分叉）
+    assert!(
+        !APP.contains("md::viewer_fields("),
+        "壳不许再调旧字段版 viewer_fields（分叉账）"
+    );
+    // ④ VeilSig 补维：滚动 + md 样式（漏维 = 滚动/换样式不重烘鬼影）
+    assert!(
+        APP.contains("viewer_scroll: cs.viewer.as_ref().map_or(0, |v| v.scroll)"),
+        "VeilSig 必须含 scroll 维（GLES 烘焙滚动重烘）"
+    );
+    assert!(APP.contains("md_style: ("), "VeilSig 必须含 md 样式维");
+    // ⑤ 量宽同尺：壳排版走 viewer_md_layout（term 真字尺 = 涂装同一把
+    // MdMeasure），三处接线同读这一个 helper
+    assert!(
+        APP.matches("self.viewer_md_layout(").count() >= 3,
+        "三处接线必须同读 viewer_md_layout（量宽单源）"
+    );
+    // ⑥ 渲染设置卡：render.json 写盘 + 全局样式口灌（两旋钮同路）
+    assert!(
+        APP.contains("crate::settings::render_to_json(&self.render_cfg)"),
+        "渲染设置必须写盘 render.json"
+    );
+    assert!(
+        APP.matches("crate::ui::md_layout::set_md_style(").count() >= 2,
+        "启动与换选两处都必须灌全局样式口"
+    );
 }
