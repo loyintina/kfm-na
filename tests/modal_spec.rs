@@ -370,3 +370,48 @@ fn spec_bar163_翻案_压暗层入册动效预览() {
         "VeilFade 必须入动画帧泵名单"
     );
 }
+
+// ---- BAR-167 ①（2026-09-27 用户点名）：查看器正文可滚动——旧 v1
+// 「卡高封顶+截断不滚动」废止。滚动上限 = 正文全高 − 视口高；视口 =
+// 字段区顶 → 关闭钮上 0.5 格；卡高安全带（三症修单）不动，只滚字段区。
+// 惯性甩尾吃 scroll.rs Fling 件（壳侧接线，本册只管几何）----
+
+#[test]
+fn spec_bar167_viewer_滚动上限与视口几何() {
+    use kfm_na::ui::modal::{
+        MODAL_LABEL_H, close_btn_rect, content_cells, viewer_card_rect, viewer_fields,
+        viewer_fields_top, viewer_scroll_max, viewer_viewport_h,
+    };
+    let (w, h) = (1260u32, 2560u32); // 真机屏（redroid 同尺）
+    // 短内容：装得下 = 上限 0（不可滚）
+    let short = viewer_fields("三行\n短文\n完", content_cells(w));
+    assert_eq!(
+        viewer_scroll_max(w, h, &short),
+        0,
+        "正文装得进视口 = 不可滚（上限 0）"
+    );
+    // 长内容：上限 = 正文全高（题注+各行+字段隙）− 视口高
+    let long = viewer_fields(&"行\n".repeat(500), content_cells(w));
+    let card = viewer_card_rect(w, h, &long);
+    let content_h = MODAL_LABEL_H + long[0].lines.len() as u32 * MODAL_LINE_H + MODAL_FIELD_GAP;
+    let vp = viewer_viewport_h(&card);
+    assert!(vp > 0, "视口必须有正高");
+    assert_eq!(
+        viewer_scroll_max(w, h, &long),
+        i64::from(content_h) - i64::from(vp),
+        "滚动上限 = 正文全高 − 视口高"
+    );
+    // 视口几何钉：顶 = 字段区起始，底 + 0.5 格 = 关闭钮顶——裁剪窗与
+    // 关闭钮永不相压（眼手同尺：涂装裁剪/滚动上限同读这份几何）
+    assert_eq!(
+        viewer_fields_top(&card) + i64::from(vp) + i64::from(MODAL_FIELD_GAP),
+        close_btn_rect(&card).y,
+        "视口底 + 0.5 格呼吸 = 关闭钮顶"
+    );
+    // 卡高安全带不动（三症修单沿用）：长内容卡高仍封顶，滚动接管超出
+    assert_eq!(
+        card.h,
+        h - MODAL_MAX_MARGIN_TOP - MODAL_MAX_MARGIN_BOTTOM,
+        "卡高封顶不因而滚动改约"
+    );
+}

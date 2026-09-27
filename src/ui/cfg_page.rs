@@ -109,6 +109,10 @@ pub struct UpperRow {
 pub struct ViewerView {
     pub title: String,
     pub content: String,
+    /// 正文滚动 px（BAR-167 ①：0 = 顶；眼手同尺——涂装裁剪/壳手势/
+    /// 命中同读这一维；上限由壳按实时屏尺寸 modal::viewer_scroll_max
+    /// 算好喂 scroll_viewer_by）
+    pub scroll: i64,
 }
 
 /// 查看器涂装快照（CfgPageSnap 同款载体）
@@ -116,6 +120,7 @@ pub struct ViewerView {
 pub struct ViewerSnap {
     pub title: String,
     pub content: String,
+    pub scroll: i64,
 }
 
 /// 涂装/判卷快照（D9：gate 值守倒帧与前台帧同一份读数）
@@ -463,16 +468,39 @@ impl CfgPage {
         g.viewer().map(|v| ViewerSnap {
             title: v.title.clone(),
             content: v.content.clone(),
+            scroll: v.scroll,
         })
     }
 
     /// 开查看器/喂内容（会话池页点条目；取数完成壳再喂真内容——
     /// 同标题内容变更也 bump 代际，「加载中…」换真文不残留旧像素）
     pub fn open_viewer(&mut self, title: String, content: String) {
-        let v = ViewerView { title, content };
+        let v = ViewerView {
+            title,
+            content,
+            scroll: 0,
+        };
         if self.viewer.as_ref() != Some(&v) {
             self.viewer = Some(v);
             self.epoch += 1;
+        }
+    }
+
+    /// 查看器正文滚动（BAR-167 ①用户点名：取代初版「截断不滚动」）。
+    /// 钳 [0, max]（max 由壳按实时屏尺寸 modal::viewer_scroll_max 算好
+    /// 喂入，同 scroll_upper_by 律）；到位不动不空涨代际；无查看器 =
+    /// 无操作
+    pub fn scroll_viewer_by(&mut self, dy: i64, max: i64) -> bool {
+        let Some(v) = self.viewer.as_mut() else {
+            return false;
+        };
+        let new = (v.scroll + dy).clamp(0, max.max(0));
+        if new != v.scroll {
+            v.scroll = new;
+            self.epoch += 1;
+            true
+        } else {
+            false
         }
     }
 
@@ -514,6 +542,11 @@ impl CfgPage {
             self.cursor_from = self.cursor_row(now_ms) * stride;
             self.cursor_start_ms = now_ms;
             self.focus = i;
+            // 切行上池滚动归零（同 set_tab 律；旧代快照上面已封存旧滚动，
+            // 双代同画各吃各的几何）——BAR-167 ②用户真机报障：旧滚动值
+            // 悬在新短内容上，行全画到视口上方 = 上池全空，下次滚动才
+            // 被 clamp 救回
+            self.upper_scroll = 0;
             self.pan = Some((PanScope::Upper, dir, now_ms, old));
             self.epoch += 1;
         }
@@ -848,6 +881,7 @@ impl CfgPage {
             viewer: self.viewer.as_ref().map(|v| ViewerSnap {
                 title: v.title.clone(),
                 content: v.content.clone(),
+                scroll: v.scroll,
             }),
             epoch: self.epoch,
             cursor_row: self.cursor_row(now_ms),

@@ -12,7 +12,9 @@
 //! 本册的事——卡宽定行宽，涂装/命中/卡高计算吃同一份折行结果。
 //!
 //! v1 取舍：卡高封顶安全带（顶 4 格 + 底 输入栏带+2 格，BAR-163 翻案
-//! 收紧——旧「屏高−8 格」让封顶卡压进输入栏带），超出截断不做滚动；
+//! 收紧——旧「屏高−8 格」让封顶卡压进输入栏带）；正文超出视口 =
+//! 内滚动（BAR-167 ①用户点名，取代初版「截断不滚动」——滚动上限 =
+//! 正文全高−视口高，惯性甩尾吃 scroll.rs Fling 件，壳侧接线）；
 //! 无入场动画。跳框涂装归宿：GLES = ChromeSlot::ModalVeil 全屏压暗层
 //! （BAR-163 翻案，组件不是背景色）；CPU 兜底 = 配置槽内原位涂装。
 
@@ -100,9 +102,25 @@ pub fn viewer_fields_top(card: &PoolRect) -> i64 {
         + i64::from(MODAL_FIELD_GAP)
 }
 
+/// 查看器正文视口高（BAR-167 ①可滚动区）：字段区顶 → 关闭钮上 0.5 格
+/// 呼吸——滚动的「窗口」，涂装裁剪与滚动上限同读这一份（眼手同尺）
+pub fn viewer_viewport_h(card: &PoolRect) -> u32 {
+    let bottom = close_btn_rect(card).y - i64::from(MODAL_FIELD_GAP);
+    (bottom - viewer_fields_top(card)).max(0) as u32
+}
+
+/// 查看器滚动上限（px，BAR-167 ①）：正文全高（题注+各行+字段隙）−
+/// 视口高；装得下 = 0（不可滚）。卡高已被安全带封顶时正文超出部分
+/// 全靠这扇窗口滚出来
+pub fn viewer_scroll_max(screen_w: u32, screen_h: u32, fields: &[ModalField]) -> i64 {
+    let card = viewer_card_rect(screen_w, screen_h, fields);
+    (i64::from(fields_h(fields)) - i64::from(viewer_viewport_h(&card))).max(0)
+}
+
 /// 查看器卡片矩形 = card_rect 公式去掉预览画板与其相邻留隙
 /// （MODAL_PREVIEW_H + 前后两个 MODAL_FIELD_GAP 换成分隔线后一个
-/// MODAL_FIELD_GAP）；高随内容，封顶安全带（顶 4 格+底 输入栏带+2 格，超出截断同 v1 取舍）
+/// MODAL_FIELD_GAP）；高随内容，封顶安全带（顶 4 格+底 输入栏带+2 格，
+/// 超出 = 正文视口内滚动，BAR-167 ①——卡几何不动，只滚字段区）
 pub fn viewer_card_rect(screen_w: u32, screen_h: u32, fields: &[ModalField]) -> PoolRect {
     let w = screen_w.saturating_sub(MODAL_SIDE_MARGIN * 2);
     // 顶留白 + 标题 + 分隔线带（上 0.5 格 + 1px + 下 0.5 格）+ 字段区

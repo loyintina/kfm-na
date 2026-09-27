@@ -508,6 +508,77 @@ fn set_tab_back_and_forth() {
     assert_eq!(p.focus(), 0, "切页聚焦归首行（壳重建前的安全态）");
 }
 
+// ---- BAR-167 ②（2026-09-27 用户真机报障）：上池滚过 → 下池切到内容
+// 少的行 → 上池全空（旧 upper_scroll 悬在新短内容上，行全画到视口
+// 上方），手动滚一下才被 clamp 救回。select 与 set_tab 同律归零 ----
+
+#[test]
+fn select_resets_upper_scroll_old_epoch_keeps_its_own() {
+    let mut p = CfgPage::new();
+    p.set_rows(vec![
+        RowView {
+            title: "a".into(),
+            meta: String::new(),
+        },
+        RowView {
+            title: "b".into(),
+            meta: String::new(),
+        },
+    ]);
+    p.set_upper(upper(8));
+    p.select(0, 1000, pool_stub(), acc());
+    p.scroll_upper_by(120, 400);
+    assert_eq!(p.upper_scroll(), 120, "夹具：先滚离顶");
+    p.select(1, 2000, pool_stub(), acc());
+    assert_eq!(
+        p.upper_scroll(),
+        0,
+        "切行上池滚动归零——新内容不继承旧滚动（BAR-167 ②）"
+    );
+    // 旧代快照封存旧滚动：平移期双代同画各吃各的几何，互不污染
+    let pan = p.snap(2000).pan.expect("切行必须挂上池级平移账");
+    assert_eq!(pan.old.upper_scroll, 120, "旧代快照自带旧滚动");
+    // 同标重点不重掷：没切行就不许清滚动（代际不空涨同律）
+    p.scroll_upper_by(120, 400);
+    let e = p.epoch();
+    p.select(1, 3000, pool_stub(), acc());
+    assert_eq!(p.epoch(), e);
+    assert_eq!(p.upper_scroll(), 120, "同标重点不清滚动");
+}
+
+#[test]
+fn select_into_short_content_first_row_at_viewport_top() {
+    // 短内容不空白的几何钉：滚过 → 切行（壳随即重建出短内容）→
+    // 首行必须落在视口顶（旧 bug = 首行 y 远在视口上方，命中/涂装全空）
+    let mut p = CfgPage::new();
+    p.set_rows(vec![
+        RowView {
+            title: "a".into(),
+            meta: String::new(),
+        },
+        RowView {
+            title: "b".into(),
+            meta: String::new(),
+        },
+    ]);
+    p.set_upper(upper(8));
+    p.select(0, 1000, pool_stub(), acc());
+    p.scroll_upper_by(999_999, 400); // 滚到长内容最底
+    assert!(p.upper_scroll() > 0);
+    p.select(1, 2000, pool_stub(), acc());
+    p.set_upper(upper(0)); // 壳重建：新行内容短（2 行装得下）
+    let r0 = upper_row_rect(0, &UPPER, p.upper_scroll());
+    assert!(
+        r0.y >= UPPER.y && r0.y < UPPER.y + i64::from(UPPER.h),
+        "切短内容后首行必须落在视口内——不许整片空白（BAR-167 ②）；实际 r0.y={} 视口 [{}, {})",
+        r0.y,
+        UPPER.y,
+        UPPER.y + i64::from(UPPER.h)
+    );
+    let top_hit = p.upper_row_at_y(r0.y + 1, &UPPER, p.upper_scroll());
+    assert_eq!(top_hit, Some(0), "首行原位可命中（眼手同尺）");
+}
+
 // ---- 九修：跳框开合（§六 跳框条款）----
 
 #[test]
@@ -1251,4 +1322,35 @@ fn spec_bar163_viewer_切页清零与快照携带() {
     p.set_tab(2, 1000, pool_stub(), acc());
     assert_eq!(p.viewer(), None);
     assert!(p.snap(1000).viewer.is_none());
+}
+
+// ---- BAR-167 ①（2026-09-27 用户点名）：查看器正文滚动态——scroll 住
+// ViewerView（眼手同尺单源），钳 [0, max]（max 由壳按实时屏尺寸
+// modal::viewer_scroll_max 算好喂入，同 scroll_upper_by 律）----
+
+#[test]
+fn spec_bar167_viewer_滚动钳制与代际() {
+    let mut p = CfgPage::new();
+    assert!(!p.scroll_viewer_by(50, 100), "无查看器 = 无操作");
+    p.open_viewer("t".into(), "c".into());
+    assert_eq!(p.viewer().unwrap().scroll, 0, "开框滚动归零");
+    let e0 = p.epoch();
+    assert!(p.scroll_viewer_by(50, 100));
+    assert_eq!(p.viewer().unwrap().scroll, 50);
+    assert!(p.epoch() > e0, "滚动必须 bump 代际（sig 防鬼影）");
+    assert!(p.scroll_viewer_by(999, 100), "越底 clamp 到 max");
+    assert_eq!(p.viewer().unwrap().scroll, 100);
+    let e1 = p.epoch();
+    assert!(!p.scroll_viewer_by(1, 100), "已在底 = 到位不动不空涨代际");
+    assert_eq!(p.epoch(), e1);
+    assert!(p.scroll_viewer_by(-999, 100), "越顶 clamp 0");
+    assert_eq!(p.viewer().unwrap().scroll, 0);
+    // 喂真文重开（「加载中…」换真文）滚动归零——新内容从头看
+    p.scroll_viewer_by(50, 100);
+    p.open_viewer("t".into(), "c2".into());
+    assert_eq!(p.viewer().unwrap().scroll, 0, "重开/喂真文滚动归零");
+    // 快照携带 scroll 维（涂装直读免穿 plumbing）
+    assert_eq!(p.snap(1000).viewer.unwrap().scroll, 0);
+    p.close_viewer();
+    assert!(!p.scroll_viewer_by(10, 100), "关后再滚 = 无操作");
 }

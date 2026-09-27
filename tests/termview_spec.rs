@@ -6353,6 +6353,7 @@ fn veil_fixture() -> (Vec<u32>, u32, u32, kfm_na::ui::cfg_page::ViewerSnap) {
     let snap = kfm_na::ui::cfg_page::ViewerSnap {
         title: "demo/0001-会话.jsonl".into(),
         content: "正文行\n".repeat(300),
+        scroll: 0,
     };
     (vec![0u32; (w * h) as usize], w, h, snap)
 }
@@ -6419,4 +6420,83 @@ fn spec_bar163_翻案_veil卡在压暗之上() {
     let outside =
         veil[((card.y + i64::from(card.h) / 2) as u32 * w + (card.x - 30) as u32) as usize];
     assert_eq!(outside, VEIL_DIM, "卡外必须仍是压暗: {outside:#010x}");
+}
+
+// ---- BAR-167 ①（2026-09-27 用户点名）：查看器正文滚动涂装——起笔 =
+// 字段区顶 − scroll，逐行 clip_y 裁进视口 [字段区顶, ink_bottom)：
+// 上裁防滚出行污染标题/分隔线带，下裁守关闭钮前隙（旧截断语义不变）----
+
+#[test]
+fn spec_bar167_viewer_滚动涂装_上裁下裁与平移() {
+    use kfm_na::termview::TermEmu;
+    use kfm_na::ui::accent::AccentPair;
+    use kfm_na::ui::modal::{
+        MODAL_FIELD_GAP, close_btn_rect, content_cells, viewer_card_rect, viewer_fields,
+        viewer_fields_top, viewer_scroll_max,
+    };
+    let acc = AccentPair {
+        c1: 0x00FF_6000,
+        c2: 0x0000_80FF,
+    };
+    let tv = TermView::new(host_font(), None, 8, 2, CELL_W, CELL_H);
+    let render = |scroll: i64| {
+        let (mut veil, w, h, mut snap) = veil_fixture();
+        // ASCII 正文——host 字体（DejaVu）没 CJK 字形，「正文行」不出墨
+        // 体会让体带恒等误判；判卷要的是真字形像素随滚动平移
+        snap.content = (0..400).fold(String::new(), |a, i| {
+            a + &format!("body line {i:04} abcdef\n")
+        });
+        snap.scroll = scroll;
+        tv.paint_modal_veil_layer(&mut veil, w, h, None, Some(&snap), acc, 1000);
+        (veil, w, h, snap)
+    };
+    let (base, w, h, snap) = render(0);
+    let fields = viewer_fields(&snap.content, content_cells(w));
+    let card = viewer_card_rect(w, h, &fields);
+    let max = viewer_scroll_max(w, h, &fields);
+    assert!(max > 0, "夹具 300 行正文必须超出视口（可滚）");
+    let (scrolled, _, _, _) = render(max);
+    // 半行错位滚（1000 % 36 = 28）：越界线 28px 墨探进分隔线带——
+    // 上裁钉的敏感错位（滚 max 恰 mod 36 = 1 近乎对齐，变异会漏咬）
+    let (mid, _, _, _) = render(1000);
+    let vp_top = viewer_fields_top(&card);
+    let ink_bottom = close_btn_rect(&card).y - i64::from(MODAL_FIELD_GAP);
+    let band_eq = |a: &[u32], b: &[u32], y0: i64, y1: i64, tag: &str| {
+        for y in y0.max(0)..y1.min(i64::from(h)) {
+            let row = y as u32 * w;
+            assert_eq!(
+                &a[row as usize..(row + w) as usize],
+                &b[row as usize..(row + w) as usize],
+                "{tag} 带第 {y} 行必须逐像素一致（裁剪失效 = 滚动污染）"
+            );
+        }
+    };
+    // ①上裁：标题+分隔线带（卡顶 → 字段区顶）滚前滚后逐像素一致——
+    // 滚出的行不许污染标题/分隔线（摘 clip_y 上界此钉即红）
+    band_eq(&base, &mid, card.y, vp_top, "标题/分隔线");
+    // ②下裁：关闭钮带（钮前隙 → 卡底）逐像素一致——旧截断语义不变
+    band_eq(
+        &base,
+        &mid,
+        ink_bottom,
+        card.y + i64::from(card.h),
+        "关闭钮",
+    );
+    // ③平移：视口体带（字段区顶 → ink_bottom）必须变——内容真滚了
+    // （摘 scroll 偏移此钉即红）；滚到底后末行进入视口尾部
+    let body0 = vp_top.max(0) as u32;
+    let body1 = ink_bottom.min(i64::from(h)) as u32;
+    let strip = |buf: &[u32]| {
+        let mut v = Vec::new();
+        for y in body0..body1 {
+            let row = y * w;
+            v.extend_from_slice(&buf[row as usize..(row + w) as usize]);
+        }
+        v
+    };
+    assert_ne!(
+        strip(&base),
+        strip(&scrolled),
+        "滚到 max 后视口体带必须变（内容平移生效）"
+    );
 }
