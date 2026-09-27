@@ -89,10 +89,16 @@ fn spec_缩进_超表长末档兜() {
 
 #[test]
 fn spec_几何_三角与名字左缘() {
-    assert_eq!(tri_x(0), 0);
-    assert_eq!(tri_x(4), 184);
-    assert_eq!(name_x(4), 184 + TRI_W);
-    assert_eq!(name_x(0), TRI_W);
+    // **三修症⑤**（2026-09-27 用户终验）：三角不再贴竖条——左缘 = 缩进量 +
+    // 竖条宽 + 间隙；**深度 0 同样右移**（无竖条时按同尺对齐观感）
+    let gap = ROW_BAR_W + TRI_GAP_PX;
+    assert_eq!(tri_x(0), gap, "深度 0 也吃右移（统一对齐）");
+    assert_eq!(tri_x(4), 184 + gap);
+    assert_eq!(name_x(4), 184 + gap + TRI_W);
+    assert_eq!(name_x(0), gap + TRI_W);
+    assert!(gap >= ROW_BAR_W + 8, "三角与竖条之间必须有可见距离");
+    // 三角盒与竖条不许重叠（盒左缘 ≥ 竖条右缘）
+    assert!(tri_x(3) >= indent_px(3) + ROW_BAR_W);
 }
 
 // ── 几何：密度 / α ──────────────────────────────────────────────────
@@ -230,21 +236,22 @@ fn spec_常量_颜色rrggbbaa口径() {
 
 #[test]
 fn spec_bar165打回_字号与三角等比放大() {
-    // 症①（2026-09-27 用户终验）：34px 字配 20×22 三角比例失调 → 文字 44、
-    // 三角 26×28（等比 ×1.3）。字高/三角高比 = 44:28 ≈ 1.57，对齐原版观感
-    // （原版 32~33:24 ≈ 1.36；本实现取放大档，用户已批「44px 左右」）。
-    // 尺子落在 termview 的常量上（同文件冒烟考题还逐像素验三角落墨范围）。
+    // 症①（2026-09-27 二修）：34px 字配 20×22 比例失调 → 字 44；
+    // **三修**（同日用户终验）：26×28 仍太小 → 盒 **32×34**、基形 26×32。
+    // 比例取证：nz 判据稿 §3.1 = 行高 26 / 字 11 / 三角 9 CSS（字:三角 ≈
+    // 1.22）；真机实测字高 32~33 配三角 24 → 字:三角墨高 ≈ 1.37；本实现
+    // 44 : 32 = 1.375 ✓ 对齐。尺子落在常量上（同文件冒烟还逐像素验落墨）。
     // 精确值钉已含「不许回退旧尺寸」（任何回退即红），不再叠阈值断言——
     // 常量阈值断言触发 clippy assertions_on_constants（2026-09-27 chain 红实录）
-    assert_eq!((TRI_W, TRI_H), (26, 28), "三角盒等比放大（症①）");
+    assert_eq!((TRI_W, TRI_H), (32, 34), "三角盒三修放大（症①）");
     let src = include_str!("../src/termview.rs");
     assert!(
         src.contains("const FT_TEXT_PX: f32 = 44.0;"),
         "行名字号必须为 44（症①；回退 34 = 打回重演）"
     );
     assert!(
-        src.contains("let (hwt, hht) = (6.5f32, 10.5f32);"),
-        "三角基形随盒等比（26×28 内 13×21）"
+        src.contains("let (hwt, hht) = (13.0f32, 16.0f32);"),
+        "三角基形随盒等比（32×34 内 26×32，墨高 32 配字 44 = 原版比 1.37）"
     );
     assert!(
         src.contains("let bx1 = g.x1;"),
@@ -253,6 +260,15 @@ fn spec_bar165打回_字号与三角等比放大() {
     assert!(
         src.contains("paint_open_cursor(") && src.contains("封存件复活（症④"),
         "光标必须吃封存件 paint_open_cursor（症④）——自绘无圆角版已废弃"
+    );
+    // 三修症③：左竖条纯色（从 accent 双色里选 c1），不再 ring_gradient 采样
+    assert!(
+        src.contains("竖条改**纯色** accent.c1"),
+        "左竖条必须是纯色 accent.c1（症③；回渐变即红）"
+    );
+    assert!(
+        !src.contains("let c = ring_gradient_rgb(accent.c1, accent.c2, 0, off + ly, denom);"),
+        "竖条不许回渐变采样（症③）"
     );
 }
 

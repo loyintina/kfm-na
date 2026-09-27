@@ -1873,8 +1873,6 @@ const FT_NAME_GAP: f32 = 8.0;
 const FT_TEXT_PX: f32 = 44.0;
 /// 行名字色（0.85 白，目录/文件同色——原版实测同浅灰白，与解析页标题档同值）
 const FT_TEXT_FG: u32 = 0x00D9_D9D9;
-/// 左强调边宽（截屏实测 2 CSS px × 3.06 = 6 物理 px）
-const FT_ROW_BAR_W: i64 = 6;
 
 /// 文件树页内容几何（涂装/手势/命中唯一尺——三处同吃这一份）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2006,28 +2004,8 @@ fn ft_seg_dist(px: f64, py: f64, x0: f64, y0: f64, x1: f64, y1: f64) -> f64 {
     ((px - qx).powi(2) + (py - qy).powi(2)).sqrt()
 }
 
-/// 同深度连续块跨度（内容坐标 → (块顶, 块高)）：左强调边「同深度连续行块
-/// 共一条」的渐变尺 + 圆头端点。row_top = 本行内容顶（调用方已在扫表，
-/// 免得再算一遍前缀和——大树上逐行前缀和是 O(n²)）
-fn ft_block_span(rows: &[crate::ui::filetree::Row], idx: usize, row_top: i64) -> (i64, i64) {
-    let d = rows[idx].depth;
-    let mut top = row_top;
-    let mut j = idx;
-    while j > 0 && rows[j - 1].depth == d {
-        j -= 1;
-        top -= crate::ui::filetree::row_h(rows[j].wrap);
-    }
-    let mut hgt = crate::ui::filetree::row_h(rows[idx].wrap);
-    let mut k = idx + 1;
-    while k < rows.len() && rows[k].depth == d {
-        hgt += crate::ui::filetree::row_h(rows[k].wrap);
-        k += 1;
-    }
-    (top, hgt)
-}
-
 /// 底栏圆角描边盒（三钮同件）：外剪影内、内剪影外的环带按覆盖率上色——
-/// solid = 纯色（根名盒 teal 系），None = accent 135° 渐变（眼/× 盒）
+/// solid = 纯色（根名盒 accent 采样），None = accent 135° 渐变（眼/× 盒）
 #[allow(clippy::too_many_arguments)]
 fn paint_ft_round_box(
     frame: &mut Frame<'_>,
@@ -2151,7 +2129,13 @@ fn paint_ft_cross(
 
 /// 一行行带（纯色平涂 + 块首/尾圆角）：中段整行 `fill_rect`（页环内芯是
 /// 纯色 CARD_PAGE_BG，平涂色 = 裸带色按 α 与该底色 blend 出的成品色），
-/// 两端角带逐像素按 rr_cover 覆盖率压在裸带色上（与中段同源不出缝）。
+/// 两端角带逐像素按 rr_cover 覆盖率压**成品色**（flat）——cov=255 处与中段
+/// 逐字节相同、cov<255 处朝**真实底层像素**抗锯齿收边。
+///
+/// **三修症②（2026-09-27 用户终验「亮帽带」）**：旧版角带用「裸带色 +
+/// α×cov」叠在底层像素上——底层若是**父块行带**（不是页底），就成了二次上色：
+/// 帽带比块体亮一档（实拍 60,38,43 vs 35,29,37，帽带恰 = ROW_RADIUS 12px 区）。
+/// 修 = 角带同吃成品色 + 覆盖率（圆角矩形**一次性画在**背景上，语义正确）。
 /// c0/c1 = 该行可见的列表相对纵段（行表窗 ∩ 抽屉顶缘窗）
 #[allow(clippy::too_many_arguments)]
 fn paint_ft_band_row(
@@ -2164,8 +2148,8 @@ fn paint_ft_band_row(
     r: i64,
     first: bool,
     last: bool,
-    band_rgb: u32,
-    band_a: u32,
+    _band_rgb: u32,
+    _band_a: u32,
     flat: u32,
     c0: i64,
     c1: i64,
@@ -2194,7 +2178,9 @@ fn paint_ft_band_row(
             for px in 0..bw {
                 let cov = rr_cover(px, py as u32, bw, (2 * r) as u32, r as u32);
                 if cov > 0 {
-                    frame.blend_px(x0 as u32 + px, ay, band_rgb, band_a * cov / 255);
+                    // 成品色 + 覆盖率（cov=255 = 不透明覆盖 → 与中段同色；
+                    // 旧版这里是 band_rgb/band_a 二次上色 = 亮帽带）
+                    frame.blend_px(x0 as u32 + px, ay, flat, cov);
                 }
             }
         }
@@ -4701,11 +4687,12 @@ impl TermView {
             let bh = i64::from(b.h);
             match b.kind {
                 dp::BlockKind::H1 => {
-                    // [ 形标题框（H1 专属；2026-09-27 用户拍板：直角换圆角 +
-                    // 左下加圆角——┌ 变 [）：左竖带 + 顶/底横带（横带宽 =
-                    // 1 格缩进 + 文字行宽 + 0.5 格收尾，随字长不吃满）+
-                    // 上下两个四分之一圆角（R=半格，弧带厚 t）；框内局部
-                    // 渐变尺（原点框左上、分母框对角线，2026-09-19 修宪同规）
+                    // 半包标题框（H1 专属；2026-09-27 用户拍板：顶横 + 左竖 +
+                    // 上下两个圆角，**底横去掉只留左下圆角**——[ 去底成「⌐
+                    // 倒挂 + 竖尾钩」）：顶横带宽 = 1 格缩进 + 文字行宽 +
+                    // 0.5 格收尾，随字长不吃满；圆角 R=半格、弧带厚 t；
+                    // 框内局部渐变尺（原点框左上、分母框对角线，
+                    // 2026-09-19 修宪同规）
                     let tw = i64::from(self.text_width(dp::H1_TEXT, b.px));
                     let top_w = i64::from(dp::HEAD_TEXT_INSET) + tw + i64::from(dp::HEAD_TOP_TAIL);
                     let denom = (top_w - 1).max(0) + (bh - 1).max(0);
@@ -4724,19 +4711,14 @@ impl TermView {
                             ink(ax, ay);
                         }
                     }
-                    // 顶/底横带（圆心以右；左端交给圆角）
+                    // 顶横带（圆心以右；左端交给圆角）
                     for ay in by..by + t {
                         for ax in ox + r..ox + top_w {
                             ink(ax, ay);
                         }
                     }
-                    for ay in by + bh - t..by + bh {
-                        for ax in ox + r..ox + top_w {
-                            ink(ax, ay);
-                        }
-                    }
                     // 上下圆角：四分之一环带（外半径 R、厚 t），圆心 (ox+r,
-                    // by+r) / (ox+r, by+bh−r)
+                    // by+r) / (ox+r, by+bh−r)——下圆角只转角不出底横
                     for (cy, top_c) in [(by + r, true), (by + bh - r, false)] {
                         let (ya, yb) = if top_c { (cy - r, cy) } else { (cy, cy + r) };
                         for ay in ya..yb {
@@ -5828,18 +5810,18 @@ impl TermView {
                 c0,
                 c1,
             );
-            // ②左强调边（深度 0 不画；同深度连续块共一条 6px 渐变竖条，
-            // 色沿块高 c1→c2，端点圆头）
+            // ②左强调边（深度 0 不画；同深度连续块共一条 6px **纯色**竖条，
+            // 端点圆头）
             if ft::left_bar_on(row.depth) {
                 let bar_x = g.x0 + ft::indent_px(row.depth);
                 let bar_a = ft_a255(ft::border_op(row.depth));
-                let (blk_top, blk_h) = ft_block_span(&snap.rows, idx, row_top_rel + scroll);
-                let denom = blk_h.max(1);
-                let off = (row_top_rel + scroll) - blk_top;
-                let bar_r = rr.min(FT_ROW_BAR_W / 2);
+                let bar_r = rr.min(ft::ROW_BAR_W / 2);
+                // **三修症③**：竖条改**纯色** accent.c1（用户拍板「做纯色，
+                // 从双色里选」）——旧版沿块高 ring_gradient 采 c1→c2 渐变；
+                // 透明度/宽度/圆头全保留。要回渐变改这一行即可（可调）
+                let c = accent.c1;
                 for y in c0.max(yrel)..c1.min(yrel + ch) {
                     let ly = y - yrel;
-                    let c = ring_gradient_rgb(accent.c1, accent.c2, 0, off + ly, denom);
                     let py = if first && ly < bar_r {
                         Some(ly)
                     } else if last && ly >= ch - bar_r {
@@ -5848,7 +5830,7 @@ impl TermView {
                         None
                     };
                     let ay = (g.list_y0 + y) as u32;
-                    for px in 0..FT_ROW_BAR_W as u32 {
+                    for px in 0..ft::ROW_BAR_W as u32 {
                         let ax = bar_x + i64::from(px);
                         if ax >= g.x1 {
                             continue;
@@ -5858,7 +5840,7 @@ impl TermView {
                             Some(p) => rr_cover(
                                 px,
                                 p as u32,
-                                FT_ROW_BAR_W as u32,
+                                ft::ROW_BAR_W as u32,
                                 (2 * bar_r).max(1) as u32,
                                 bar_r as u32,
                             ),
@@ -5931,9 +5913,10 @@ impl TermView {
                 let (sn, cs) = ang.sin_cos();
                 let tx = g.x0 + ft::tri_x(row.depth);
                 let ty = g.list_y0 + yrel + (ch - ft::TRI_H) / 2;
-                // 基形 = 右指实心三角（盒 26×28 内 13×21 居中），展开转 90° = ▼
-                // （症①：随字号等比放大；旧 10×16 配 44px 字太小）
-                let (hwt, hht) = (6.5f32, 10.5f32);
+                // 基形 = 右指实心三角（盒 32×34 内 26×32 居中），展开转 90° = ▼
+                // **三修症①**：墨高 32 配字 44（字:三角 ≈ 1.37 = 原版实测比；
+                // 盒缘各留 3px 余量）。旧 26×28/基形 13×21 仍偏小
+                let (hwt, hht) = (13.0f32, 16.0f32);
                 // 症③：三角色吃**页 accent 渐变同源采样**（原版那格 teal 是
                 // 那次召唤随机到的 accent，不是固定色；帧尺 = 页环同一把
                 // 135° 尺：原点 0,0 分母 (w−1)+(h−1)）
@@ -10015,6 +9998,91 @@ mod ft_paint_smoke {
         buf
     }
 
+    /// 三修症②③逐像素钉：①行带**纵向无亮度阶跃**（帽带 == 块体；旧版角带拿
+    /// 裸带色按 α 叠在底层像素上 = 二次上色，实拍 60,38,43 vs 35,29,37）
+    /// ②左竖条**纯色**（同一块内上下两点同色——渐变版必不同）
+    #[test]
+    fn smoke_三修_帽带无阶跃与竖条纯色() {
+        use ft::RowKind;
+        let tv = tv();
+        let mut st = ft::FileTreeState::new("root");
+        st.apply_root_list(
+            vec![
+                ft::Entry {
+                    name: "a".into(),
+                    kind: RowKind::Dir,
+                    size: 0,
+                    mtime: 0,
+                },
+                ft::Entry {
+                    name: "b".into(),
+                    kind: RowKind::Dir,
+                    size: 0,
+                    mtime: 0,
+                },
+            ],
+            0,
+        );
+        // 展开 a（**先 toggle**——apply_list 对未展开/已收起的父行按语义丢弃，
+        // 直接灌会静默无行）：块 = 3 个孩子（行 1..3），块首行 1 带帽带
+        assert!(matches!(st.toggle(0, 5), ft::ToggleAction::NeedList { .. }));
+        st.apply_list(
+            "a",
+            vec![
+                ft::Entry {
+                    name: "x1".into(),
+                    kind: RowKind::File,
+                    size: 0,
+                    mtime: 0,
+                },
+                ft::Entry {
+                    name: "x2".into(),
+                    kind: RowKind::File,
+                    size: 0,
+                    mtime: 0,
+                },
+                ft::Entry {
+                    name: "x3".into(),
+                    kind: RowKind::File,
+                    size: 0,
+                    mtime: 0,
+                },
+            ],
+            10,
+        );
+        let (w, h) = (1260u32, 2800u32);
+        let g = ft_geom(w, h, 0);
+        let buf = paint(&tv, &st, 9_000, w, h, 0); // 抽屉收尽（dy=0）
+        let at = |x: i64, y: i64| buf[(y * i64::from(w) + x) as usize];
+        // 症②：深度 1 块三行，逐行取右端列（避开竖条/文字/光标）——行内纵向恒色
+        let x = g.x1 - 20;
+        for i in 0..3 {
+            let top = g.list_y0 + ft::row_h(false) + i * ft::row_h(false);
+            let c = at(x, top + 4);
+            for dy in 0..ft::row_h(false) {
+                assert_eq!(
+                    at(x, top + dy),
+                    c,
+                    "症②：行带纵向不许有亮度阶跃（行 {i} 偏移 {dy}）"
+                );
+            }
+        }
+        // 症③：竖条纯色——**逐行扫整块**（上下各一点会漏掉按行交替/渐进这类
+        // 「非纯色」变体：本册变异 M2 实咬过这一口）
+        let bx = g.x0 + ft::indent_px(1) + 2;
+        // 跳过块首/尾的圆头（那里覆盖率 <255，本就该浅一点——量的是「纯色」）
+        let blk_top = g.list_y0 + ft::row_h(false) + 16;
+        let blk_bot = g.list_y0 + ft::row_h(false) * 4 - 16;
+        let c0 = at(bx, blk_top);
+        for y in blk_top..blk_bot {
+            assert_eq!(
+                at(bx, y),
+                c0,
+                "症③：左竖条必须严格纯色（块内 y={y} 与块顶不同色 = 渐变/交替回潮）"
+            );
+        }
+    }
+
     /// 打回改约的逐像素钉（症②③④）：全宽光标右缘、accent 三角随召唤变色、
     /// 封存开口框的圆角弧落墨。视觉判卷本体在 redroid，这几条是「改动碰没碰
     /// 到该碰的件」的机械兜底。
@@ -10111,8 +10179,16 @@ mod ft_paint_smoke {
         );
         assert_ne!(flat(0), flat(1), "相邻深度不同色（奇偶分取双色）");
         assert_ne!(flat(1), flat(2));
-        // ②三角：src 行（深度 0）左带内落 teal 墨
-        assert_ne!(at(g.x0 + 10, g.list_y0 + 43), flat(0), "三角该落墨");
+        // ②三角：src 行（深度 0）三角盒内落墨——**三修症⑤**后三角左缘 =
+        // 缩进 + 竖条 + 间隙，探针吃 tri_x/name 同一把尺（旧硬编码 +10 已过期）
+        assert_ne!(
+            at(
+                g.x0 + ft::tri_x(0) + ft::TRI_W / 2 - 4,
+                g.list_y0 + ft::row_h(false) / 2
+            ),
+            flat(0),
+            "三角该落墨"
+        );
         // ③底栏：栏底提亮档平涂 + 顶缘 3px 渐变线
         let bar_bg = lerp_rgb(crate::ui::accent::CARD_PAGE_BG, 0x00FF_FFFF, FT_BAR_LIFT);
         assert_eq!(at(g.x0 + 200, g.bar_y0 + 10), bar_bg);
@@ -10129,11 +10205,18 @@ mod ft_paint_smoke {
             bar_bg,
             "×盒内该有墨"
         );
-        // ⑤光标框：页坐标 = 内容坐标 + 行表窗顶（− scroll）；盒左 = 内容左缘 − 10
+        // ⑤光标框：页坐标 = 内容坐标 + 行表窗顶（− scroll）；盒左 = 三角盒左
+        // 缘 − CURSOR_NAME_INSET（**动态吃几何**——三修症⑤右移后硬编码 x 过期，
+        // 探针必须跟 tri_x 同尺，否则钉的是死坐标不是眼手同尺）
         let cy_page = g.list_y0 + st.cursor_target(st.sel.unwrap());
-        assert_ne!(at(34, cy_page), 0, "光标框左竖线该落墨");
-        assert_ne!(at(34, cy_page), flat(0), "竖线墨 ≠ 纯行带色");
-        assert_eq!(at(34, cy_page + 86), 0, "无框处（内容窗留白）不许有竖线墨");
+        let bx = g.x0 + ft::tri_x(0) - ft::CURSOR_NAME_INSET;
+        assert_ne!(at(bx + 1, cy_page), 0, "光标框左竖线该落墨");
+        assert_ne!(at(bx + 1, cy_page), flat(0), "竖线墨 ≠ 纯行带色");
+        assert_eq!(
+            at(bx + 1, cy_page + 86),
+            flat(0),
+            "框外不许有竖线墨（该处应恰为纯行带色）"
+        );
         // ⑥滚动裁剪：滚 50 后窗顶之上不许有行墨
         let mut snap = st.snap_at(1_200);
         snap.scroll = 50;

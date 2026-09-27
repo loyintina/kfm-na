@@ -158,24 +158,37 @@ pub fn list_json_in(roots: &[PathBuf], rel: &str) -> Result<String, FsError> {
         return Err(FsError::NotDir);
     }
     let rd = std::fs::read_dir(&real).map_err(|e| FsError::Io(e.to_string()))?;
-    let mut names: Vec<String> = Vec::new();
+    // 先各 stat 一次（排序要 kind；列完再 stat 会两边重复系统调用），
+    // 顺手拿到 name/dir 位
+    let mut raw: Vec<(String, bool)> = Vec::new();
     for ent in rd {
         let Ok(ent) = ent else { continue }; // 竞态消失的条目跳过
         let name = ent.file_name().to_string_lossy().into_owned();
         if excluded(&name) {
             continue;
         }
-        names.push(name);
-    }
-    names.sort();
-    let mut entries = Vec::new();
-    for name in names {
         let Ok(m) = std::fs::metadata(real.join(&name)) else {
             continue; // 列出后消失/无权限：跳过不留半条
         };
+        raw.push((name, m.is_dir()));
+    }
+    // **三修症④（2026-09-27 用户拍板）**：目录在前、文件在后；组内**大小写
+    // 不敏感**字母序（`to_lowercase()` 是 Unicode 感知的，CJK 原样 → 按
+    // Unicode 码位比），同键回落原名序（`A` vs `a` 确定性）。排序**只此一处**
+    // （数据面单源），客户端行构照单排，不二次排
+    raw.sort_by(|a, b| {
+        b.1.cmp(&a.1) // dir(true) 在前
+            .then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase()))
+            .then_with(|| a.0.cmp(&b.0))
+    });
+    let mut entries = Vec::new();
+    for (name, is_dir) in raw {
+        let Ok(m) = std::fs::metadata(real.join(&name)) else {
+            continue;
+        };
         entries.push(serde_json::json!({
             "name": name,
-            "kind": if m.is_dir() { "dir" } else { "file" },
+            "kind": if is_dir { "dir" } else { "file" },
             "size": m.len(),
             "mtime": mtime_ms(&m),
         }));

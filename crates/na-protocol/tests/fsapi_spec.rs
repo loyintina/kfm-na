@@ -55,6 +55,16 @@ fn names(v: &Value) -> Vec<String> {
         .collect()
 }
 
+/// 出参 kind 序列（症④ 结构断言用：目录全在文件之前）
+fn kinds(v: &Value) -> Vec<String> {
+    v["entries"]
+        .as_array()
+        .expect("entries 是数组")
+        .iter()
+        .map(|e| e["kind"].as_str().expect("kind 是字符串").to_string())
+        .collect()
+}
+
 // ---------- ① 只列直接子层 ----------
 
 #[test]
@@ -65,8 +75,8 @@ fn spec_list_只列直接子层() {
     assert_eq!(v["dir"], "");
     assert_eq!(
         names(&v),
-        vec!["A.txt".to_string(), "a.txt".to_string(), "sub".to_string()],
-        "子目录里的东西不许冒头"
+        vec!["sub".to_string(), "A.txt".to_string(), "a.txt".to_string()],
+        "子目录里的东西不许冒头；**症④改约**：目录在前、文件在后"
     );
     let sub = v["entries"]
         .as_array()
@@ -411,7 +421,9 @@ fn spec_排序稳定() {
     for n in ["b.txt", "a.txt", "A.txt", "z", "0.txt", "中.txt"] {
         std::fs::write(td.path().join(n), "x").unwrap();
     }
-    let roots = roots_of(&td);
+    let _roots = roots_of(&td);
+    // **三修症④改约（2026-09-27 用户拍板）**：全部是文件 → 组内**大小写不
+    // 敏感**字母序；`A.txt`/`a.txt` 同键，回落原名序（'A'(0x41) < 'a'(0x61)）
     assert_eq!(
         names(&list(&td, "")),
         vec![
@@ -422,11 +434,50 @@ fn spec_排序稳定() {
             "z".to_string(),
             "中.txt".to_string()
         ],
-        "字节序（'0'<'A'<'a'；CJK 首字节 0xE4 最大）"
+        "组内大小写不敏感字母序（CJK 按 Unicode 码位排尾）"
     );
-    let s1 = fsapi::list_json_in(&roots, "").unwrap();
-    let s2 = fsapi::list_json_in(&roots, "").unwrap();
-    assert_eq!(s1, s2, "同树两次列 = 逐字节相同（稳定）");
+    // 同树两次列 = 逐字节相同（稳定）
+    let s1 = list(&td, "");
+    let s2 = list(&td, "");
+    assert_eq!(s1, s2, "同树两次列逐字节相同");
+}
+
+#[test]
+fn spec_bar165三修_目录在前文件在后_组内大小写不敏感() {
+    // 症④（2026-09-27 用户拍板）：目录在前、文件在后；组内大小写不敏感
+    // 字母序（CJK 按 Unicode 码位）。**排序只在数据面这一处**——客户端
+    // 行构照单排（filetree.rs / fs_fetch.rs 里 grep 无 sort 为证）
+    let td = TempDir::new().unwrap();
+    for d in ["Zeta", "alpha", "beta", "中文目录"] {
+        std::fs::create_dir(td.path().join(d)).unwrap();
+    }
+    for f in ["Zeta.txt", "alpha.txt", "Beta.md", "中文件.txt"] {
+        std::fs::write(td.path().join(f), "x").unwrap();
+    }
+    let got = names(&list(&td, ""));
+    assert_eq!(
+        got,
+        vec![
+            // 目录组：alpha < beta < Zeta（忽略大小写）< 中文目录（码位大）
+            "alpha".to_string(),
+            "beta".to_string(),
+            "Zeta".to_string(),
+            "中文目录".to_string(),
+            // 文件组：alpha.txt < Beta.md < Zeta.txt < 中文件.txt
+            "alpha.txt".to_string(),
+            "Beta.md".to_string(),
+            "Zeta.txt".to_string(),
+            "中文件.txt".to_string(),
+        ],
+        "目录全在文件之前；组内大小写不敏感字母序"
+    );
+    // 结构断言（比名字表更硬）：前缀里不许出现任何 file
+    let kinds = kinds(&list(&td, ""));
+    let first_file = kinds.iter().position(|k| k == "file").unwrap();
+    assert!(
+        kinds[first_file..].iter().all(|k| k == "file"),
+        "文件之后不许再出现目录：{kinds:?}"
+    );
 }
 
 // ---------- roots 解析（纯核，不改进程 env） ----------
