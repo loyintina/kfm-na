@@ -182,7 +182,29 @@ impl AgentService {
 
     /// 信箱信件列表（README.md 是规范不是信，除外）
     pub fn list_letters(&self) -> Result<Vec<(String, u64)>, String> {
-        let dir = format!("{}/{}", self.session_root, session::MAILBOX_DIR);
+        self.list_inbox_letters("mailbox")
+    }
+
+    /// 信件正文
+    pub fn letter(&self, name: &str) -> Result<String, String> {
+        self.inbox_letter("mailbox", name)
+    }
+
+    /// 信箱 key → 根路径映射表（BAR-167，fail-closed：不在表里的 key
+    /// 一律 None → 路由层 404，不开任意路径口）
+    pub fn inbox_root(&self, key: &str) -> Option<String> {
+        match key {
+            "mailbox" => Some(format!("{}/{}", self.session_root, session::MAILBOX_DIR)),
+            "agent-inbox" => Some(AGENT_INBOX_ROOT.to_string()),
+            _ => None,
+        }
+    }
+
+    /// 点名信箱的信件列表（README.md 是规范不是信，除外）
+    pub fn list_inbox_letters(&self, key: &str) -> Result<Vec<(String, u64)>, String> {
+        let Some(dir) = self.inbox_root(key) else {
+            return Err(format!("信箱 key 未知: {key:?}"));
+        };
         let host = StdHost::new(Path::new(&dir).to_path_buf());
         let mut out = Vec::new();
         for name in host.list_files(&dir)? {
@@ -198,17 +220,22 @@ impl AgentService {
         Ok(out)
     }
 
-    /// 信件正文
-    pub fn letter(&self, name: &str) -> Result<String, String> {
+    /// 点名信箱的信件正文
+    pub fn inbox_letter(&self, key: &str, name: &str) -> Result<String, String> {
+        let Some(dir) = self.inbox_root(key) else {
+            return Err(format!("信箱 key 未知: {key:?}"));
+        };
         if !valid_letter_name(name) {
             return Err(format!("信件名非法: {name:?}（只认 ASCII *.md）"));
         }
-        let dir = format!("{}/{}", self.session_root, session::MAILBOX_DIR);
         let host = StdHost::new(Path::new(&dir).to_path_buf());
         host.read_file(&format!("{dir}/{name}"))
             .map_err(|_| format!("信件 {name} 不存在"))
     }
 }
+
+/// 全局评审信箱根（BAR-167：kfmv4 仓只读引用，na 侧只读不写）
+pub const AGENT_INBOX_ROOT: &str = "/root/kfmv4/docs/ledger/agent-inbox";
 
 /// 尾部 n 非空行
 fn tail_lines(text: &str, n: usize) -> Vec<String> {
@@ -235,7 +262,7 @@ fn is_session_file(name: &str) -> bool {
 }
 
 /// 信件文件名闸（ASCII *.md，禁分隔符；README.md 是规范不是信）
-fn valid_letter_name(name: &str) -> bool {
+pub fn valid_letter_name(name: &str) -> bool {
     name != "README.md"
         && name.len() <= 128
         && name.ends_with(".md")

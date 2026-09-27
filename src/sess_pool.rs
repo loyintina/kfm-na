@@ -18,33 +18,52 @@ use serde_json::Value;
 
 // ---- A 档：数据形状与纯函数（考题先行钉死）----
 
-/// 下池路由键：线 或 信箱（特殊路由）
+/// 下池路由键：线 / 本机信箱 / 全局评审信箱（特殊路由）
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RouteKey {
     Line(String),
     Mailbox,
+    /// BAR-167 工单③：全局评审信箱（agentd inbox_root 映射表同表）
+    AgentInbox,
 }
 
 /// 信箱路由标题（与 session/MAILBOX_DIR 同一面，UI 文案层）
 pub const MAILBOX_TITLE: &str = "信箱";
+/// 全局评审信箱路由标题（用户点名用原文件夹名）
+pub const AGENT_INBOX_TITLE: &str = "agent-inbox";
 /// 空态占位行文案
 pub const EMPTY_SESSIONS: &str = "（无会话）";
 pub const EMPTY_LETTERS: &str = "（无信件）";
 /// 查看器一次渲染的尾部事件数
 pub const TAIL_EVENTS: usize = 60;
 
-/// 下池路由表：各线一行（meta = "线"）+ 信箱特殊路由收尾（meta = "信件"）
+/// 下池路由表：各线一行（meta = "线"）+ 全局评审信箱固定行 + 信箱
+/// 特殊路由收尾（meta = "信件"；agent-inbox 在线表后、信箱前，位置钉死）
 pub fn routes_of(lines: &[String]) -> Vec<(RouteKey, String, String)> {
     let mut rows: Vec<(RouteKey, String, String)> = lines
         .iter()
         .map(|l| (RouteKey::Line(l.clone()), l.clone(), "线".to_string()))
         .collect();
     rows.push((
+        RouteKey::AgentInbox,
+        AGENT_INBOX_TITLE.to_string(),
+        "信件".to_string(),
+    ));
+    rows.push((
         RouteKey::Mailbox,
         MAILBOX_TITLE.to_string(),
         "信件".to_string(),
     ));
     rows
+}
+
+/// 路由键 → agentd 信箱 key（BAR-167，与 agentd inbox_root 映射表同表）
+pub fn inbox_api_key(key: &RouteKey) -> Option<&'static str> {
+    match key {
+        RouteKey::Mailbox => Some("mailbox"),
+        RouteKey::AgentInbox => Some("agent-inbox"),
+        RouteKey::Line(_) => None,
+    }
 }
 
 /// 上池条目表（会话）：label = 会话名，value = 字节数格式化
@@ -272,9 +291,12 @@ pub fn request_entries(key: RouteKey) {
                     .and_then(|b| parse_named_bytes(&b, "sessions"))
                     .map(|ss| entries_or_placeholder(session_entries(&ss), EMPTY_SESSIONS))
             }
-            RouteKey::Mailbox => http_get(port, "/agent/api/agent/mailbox/letters")
-                .and_then(|b| parse_named_bytes(&b, "letters"))
-                .map(|ls| entries_or_placeholder(letter_entries(&ls), EMPTY_LETTERS)),
+            RouteKey::Mailbox | RouteKey::AgentInbox => {
+                let inbox = inbox_api_key(&key).expect("信箱键");
+                http_get(port, &format!("/agent/api/agent/inboxes/{inbox}/letters"))
+                    .and_then(|b| parse_named_bytes(&b, "letters"))
+                    .map(|ls| entries_or_placeholder(letter_entries(&ls), EMPTY_LETTERS))
+            }
         };
         let mut g = inner().lock().unwrap();
         g.snap.entries_loading = false;
@@ -306,9 +328,13 @@ pub fn request_content(key: RouteKey, name: &str) {
             )
             .and_then(|b| parse_events(&b))
             .map(|evs| crate::wire_render::render_tail(&evs.join("\n"), TAIL_EVENTS)),
-            RouteKey::Mailbox => {
-                http_get(port, &format!("/agent/api/agent/mailbox/letters/{name}"))
-                    .and_then(|b| parse_letter_content(&b))
+            RouteKey::Mailbox | RouteKey::AgentInbox => {
+                let inbox = inbox_api_key(&key).expect("信箱键");
+                http_get(
+                    port,
+                    &format!("/agent/api/agent/inboxes/{inbox}/letters/{name}"),
+                )
+                .and_then(|b| parse_letter_content(&b))
             }
         };
         let text = got.unwrap_or_else(|e| format!("（取数失败：{e}）"));
@@ -325,6 +351,7 @@ pub fn content_title(key: &RouteKey, name: &str) -> String {
     match key {
         RouteKey::Line(line) => format!("{line}/{name}"),
         RouteKey::Mailbox => format!("{MAILBOX_TITLE}/{name}"),
+        RouteKey::AgentInbox => format!("{AGENT_INBOX_TITLE}/{name}"),
     }
 }
 

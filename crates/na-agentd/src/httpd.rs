@@ -40,6 +40,15 @@ pub enum Route {
     Letter {
         name: String,
     },
+    /// 点名信箱的信件列表（BAR-167：key 走 inbox_root 映射表，fail-closed）
+    InboxLetters {
+        key: String,
+    },
+    /// 点名信箱的信件正文
+    InboxLetter {
+        key: String,
+        name: String,
+    },
     NotFound,
 }
 
@@ -69,6 +78,13 @@ pub fn route(method: &str, path: &str) -> Route {
         },
         ("GET", ["api", "agent", "mailbox", "letters"]) => Route::Letters,
         ("GET", ["api", "agent", "mailbox", "letters", name]) => Route::Letter {
+            name: pct_decode(name),
+        },
+        ("GET", ["api", "agent", "inboxes", key, "letters"]) => Route::InboxLetters {
+            key: pct_decode(key),
+        },
+        ("GET", ["api", "agent", "inboxes", key, "letters", name]) => Route::InboxLetter {
+            key: pct_decode(key),
             name: pct_decode(name),
         },
         _ => Route::NotFound,

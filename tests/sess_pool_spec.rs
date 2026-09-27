@@ -5,13 +5,19 @@
 //! ②ok:false 的报错面被当成成功解析（错误详情变成条目名）必须咬；
 //! ③信箱特殊路由丢失（信件没入口）必须咬。
 
-use kfm_na::sess_pool::{self, EMPTY_LETTERS, EMPTY_SESSIONS, MAILBOX_TITLE, RouteKey};
+use kfm_na::sess_pool::{
+    self, AGENT_INBOX_TITLE, EMPTY_LETTERS, EMPTY_SESSIONS, MAILBOX_TITLE, RouteKey,
+};
 
 #[test]
 fn spec_bar163_池页_路由表_线加信箱特殊路由() {
     let lines = vec!["demo".to_string(), "x2".to_string()];
     let rows = sess_pool::routes_of(&lines);
-    assert_eq!(rows.len(), 3, "两线 + 信箱: {rows:?}");
+    assert_eq!(
+        rows.len(),
+        4,
+        "两线 + agent-inbox(BAR-167) + 信箱: {rows:?}"
+    );
     assert_eq!(
         rows[0],
         (RouteKey::Line("demo".into()), "demo".into(), "线".into())
@@ -21,7 +27,12 @@ fn spec_bar163_池页_路由表_线加信箱特殊路由() {
         (RouteKey::Line("x2".into()), "x2".into(), "线".into())
     );
     assert_eq!(
-        rows[2],
+        rows[2].0,
+        RouteKey::AgentInbox,
+        "BAR-167 固定行（详见 spec_bar167）"
+    );
+    assert_eq!(
+        rows[3],
         (
             RouteKey::Mailbox,
             MAILBOX_TITLE.to_string(),
@@ -30,8 +41,8 @@ fn spec_bar163_池页_路由表_线加信箱特殊路由() {
     );
     // 空线表也有信箱（信件永远有入口）
     let rows = sess_pool::routes_of(&[]);
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].0, RouteKey::Mailbox);
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[1].0, RouteKey::Mailbox);
 }
 
 #[test]
@@ -112,4 +123,85 @@ fn spec_bar163_解析_tail与letter面() {
     let body = r##"{"ok":true,"name":"a.md","content":"# 信\n正文"}"##;
     assert_eq!(sess_pool::parse_letter_content(body).unwrap(), "# 信\n正文");
     assert!(sess_pool::parse_letter_content(r#"{"ok":true,"name":"a.md"}"#).is_err());
+}
+
+// ---- BAR-167 工单③：全局信箱 agent-inbox 固定行进下池 ----
+
+#[test]
+fn spec_bar167_池页_路由表_agentinbox固定行() {
+    let lines = vec!["demo".to_string(), "x2".to_string()];
+    let rows = sess_pool::routes_of(&lines);
+    assert_eq!(rows.len(), 4, "两线 + agent-inbox + 信箱: {rows:?}");
+    assert_eq!(rows[0].0, RouteKey::Line("demo".into()));
+    assert_eq!(rows[1].0, RouteKey::Line("x2".into()));
+    // agent-inbox 在线表后、信箱前（位置钉死）
+    assert_eq!(
+        rows[2],
+        (
+            RouteKey::AgentInbox,
+            AGENT_INBOX_TITLE.to_string(),
+            "信件".to_string()
+        )
+    );
+    assert_eq!(rows[3].0, RouteKey::Mailbox);
+    // 空线表也有 agent-inbox（真信永远有入口）
+    let rows = sess_pool::routes_of(&[]);
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].0, RouteKey::AgentInbox);
+    assert_eq!(rows[1].0, RouteKey::Mailbox);
+}
+
+#[test]
+fn spec_bar167_池页_inbox_api_key映射() {
+    assert_eq!(
+        sess_pool::inbox_api_key(&RouteKey::Mailbox),
+        Some("mailbox")
+    );
+    assert_eq!(
+        sess_pool::inbox_api_key(&RouteKey::AgentInbox),
+        Some("agent-inbox")
+    );
+    assert_eq!(
+        sess_pool::inbox_api_key(&RouteKey::Line("demo".into())),
+        None
+    );
+}
+
+#[test]
+fn spec_bar167_池页_agentinbox条目与空态() {
+    // 条目表：信件形状与信箱同面（label = 信名，value = 字节数）
+    let ls = vec![
+        (
+            "0001-kfmv4-nz-report-readability-submission.md".to_string(),
+            4096u64,
+        ),
+        (
+            "0002-kfmv4-review-report-readability-response.md".to_string(),
+            512u64,
+        ),
+    ];
+    let rows = sess_pool::letter_entries(&ls);
+    assert_eq!(rows[0].0, "0001-kfmv4-nz-report-readability-submission.md");
+    assert_eq!(rows[0].1, "4.0KB");
+    assert_eq!(rows[1].1, "512B");
+    // 空态沿用信箱口径
+    let rows = sess_pool::entries_or_placeholder(vec![], EMPTY_LETTERS);
+    assert_eq!(rows, vec![(EMPTY_LETTERS.to_string(), String::new())]);
+}
+
+#[test]
+fn spec_bar167_池页_content_title新变体() {
+    assert_eq!(
+        sess_pool::content_title(&RouteKey::AgentInbox, "0001-x.md"),
+        format!("{AGENT_INBOX_TITLE}/0001-x.md")
+    );
+    // 旧两变体不动
+    assert_eq!(
+        sess_pool::content_title(&RouteKey::Mailbox, "a.md"),
+        format!("{MAILBOX_TITLE}/a.md")
+    );
+    assert_eq!(
+        sess_pool::content_title(&RouteKey::Line("demo".into()), "0001-会话.jsonl"),
+        "demo/0001-会话.jsonl"
+    );
 }

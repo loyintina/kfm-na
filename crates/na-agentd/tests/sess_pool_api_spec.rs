@@ -150,3 +150,102 @@ fn spec_bar163_端点_信件列表与正文() {
     assert!(svc.letter("中文名.md").unwrap_err().contains("非法"));
     assert!(svc.letter("README.md").unwrap_err().contains("非法"));
 }
+
+// ---- BAR-167 工单③：全局信箱 agent-inbox 进会话池（key→根映射，fail-closed）----
+
+#[test]
+fn spec_bar167_端点_inboxes路由面() {
+    match httpd::route("GET", "/api/agent/inboxes/agent-inbox/letters") {
+        httpd::Route::InboxLetters { key } => assert_eq!(key, "agent-inbox"),
+        _ => panic!("inbox letters 路由"),
+    }
+    match httpd::route("GET", "/api/agent/inboxes/mailbox/letters/a-b-report.md") {
+        httpd::Route::InboxLetter { key, name } => {
+            assert_eq!(key, "mailbox");
+            assert_eq!(name, "a-b-report.md");
+        }
+        _ => panic!("inbox letter 路由"),
+    }
+    // key 段百分号解码照走（%2F 只留段内，下游映射表照拒）
+    match httpd::route("GET", "/api/agent/inboxes/a%2Fb/letters") {
+        httpd::Route::InboxLetters { key } => assert_eq!(key, "a/b"),
+        _ => panic!("inbox key 百分号解码"),
+    }
+    // 形状错 = 404
+    assert!(matches!(
+        httpd::route("POST", "/api/agent/inboxes/agent-inbox/letters"),
+        httpd::Route::NotFound
+    ));
+    assert!(matches!(
+        httpd::route("GET", "/api/agent/inboxes"),
+        httpd::Route::NotFound
+    ));
+}
+
+#[test]
+fn spec_bar167_端点_inbox映射表failclosed() {
+    let (_t, svc) = fixture();
+    assert!(svc.inbox_root("mailbox").is_some(), "旧 key 保留");
+    assert_eq!(
+        svc.inbox_root("agent-inbox").as_deref(),
+        Some(na_agentd::service::AGENT_INBOX_ROOT),
+        "全局评审信箱根"
+    );
+    // 不在表里的 key 一律 None（fail-closed，不开任意路径口）
+    assert!(svc.inbox_root("etc").is_none());
+    assert!(svc.inbox_root("../../etc").is_none());
+    assert!(svc.inbox_root("").is_none());
+    // unknown key → 404 语义（错误串不含「非法」，路由层归 404）
+    let e = svc.list_inbox_letters("etc").unwrap_err();
+    assert!(e.contains("未知"), "unknown key = 404 语义: {e}");
+    let e = svc.inbox_letter("etc", "a.md").unwrap_err();
+    assert!(e.contains("未知"), "unknown key = 404 语义: {e}");
+}
+
+#[test]
+fn spec_bar167_端点_keyed信箱夹具形状() {
+    let (_t, svc) = fixture();
+    // mailbox key 走同一映射 = 旧面同形状
+    let ls = svc.list_inbox_letters("mailbox").expect("列出");
+    assert_eq!(ls.len(), 1, "README.md 与 *.txt 不算信");
+    assert_eq!(ls[0].0, "a-b-report.md");
+    let content = svc.inbox_letter("mailbox", "a-b-report.md").expect("正文");
+    assert!(content.contains("# 信"));
+    // README.md 点名正文照拒（400 语义）
+    let e = svc.inbox_letter("mailbox", "README.md").unwrap_err();
+    assert!(e.contains("非法"), "README 闸: {e}");
+    // 分隔符/穿越照拒（%2F 解码出的 '/' 也死在闸上）
+    let e = svc.inbox_letter("mailbox", "a/b.md").unwrap_err();
+    assert!(e.contains("非法"), "分隔符闸: {e}");
+    let e = svc.inbox_letter("mailbox", "../x.md").unwrap_err();
+    assert!(e.contains("非法"), "穿越闸: {e}");
+}
+
+#[test]
+fn spec_bar167_端点_agentinbox真根() {
+    let (_t, svc) = fixture();
+    // 真根直读（kfmv4 只读引用）：15 封量级真信，0001- 等真名
+    let ls = svc.list_inbox_letters("agent-inbox").expect("列真信");
+    assert!(ls.len() >= 10, "真信量级: {} 封", ls.len());
+    assert_eq!(ls[0].0, "0001-kfmv4-nz-report-readability-submission.md");
+    assert!(
+        ls.iter()
+            .all(|(name, bytes)| { na_agentd::service::valid_letter_name(name) && *bytes > 0 }),
+        "全表过信件闸且非空: {ls:?}"
+    );
+    assert!(
+        !ls.iter().any(|(name, _)| name == "README.md"),
+        "README.md 是规范不是信"
+    );
+    // 正文端点回真文
+    let content = svc
+        .inbox_letter(
+            "agent-inbox",
+            "0001-kfmv4-nz-report-readability-submission.md",
+        )
+        .expect("真信正文");
+    assert!(content.len() > 100, "真文非空: {} 字节", content.len());
+    // README.md 点名正文被拒
+    let e = svc.inbox_letter("agent-inbox", "README.md").unwrap_err();
+    assert!(e.contains("非法"), "README 闸: {e}");
+}

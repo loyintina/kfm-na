@@ -177,6 +177,21 @@ fn route_exec(method: &str, path: &str, body: &str, svc: &AgentService) -> Vec<u
             Err(e) if e.contains("非法") => err(400, "Bad Request", &e),
             Err(e) => err(404, "Not Found", &e),
         },
+        httpd::Route::InboxLetters { key } => match svc.list_inbox_letters(&key) {
+            Ok(ls) => ok(serde_json::json!({
+                "ok": true,
+                "letters": ls.iter().map(|(name, bytes)| serde_json::json!({
+                    "name": name, "bytes": bytes,
+                })).collect::<Vec<_>>(),
+            })),
+            Err(e) if e.contains("非法") => err(400, "Bad Request", &e),
+            Err(e) => err(404, "Not Found", &e),
+        },
+        httpd::Route::InboxLetter { key, name } => match svc.inbox_letter(&key, &name) {
+            Ok(content) => ok(serde_json::json!({"ok": true, "name": name, "content": content})),
+            Err(e) if e.contains("非法") => err(400, "Bad Request", &e),
+            Err(e) => err(404, "Not Found", &e),
+        },
         httpd::Route::NotFound => err(404, "Not Found", "not found"),
     }
 }
