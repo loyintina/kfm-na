@@ -58,14 +58,14 @@
 | `src/tmux_exec.rs` | 1 | 1 | 0 | — |
 | `src/trace.rs` | 12 | 8 | 4 | TRACE_CAP format_tail dump_all dump_tail |
 | `src/tunnel.rs` | 35 | 29 | 6 | check_ssh_fields NA_SSHD_PORT request_reconnect request_resume_kick request_trip_quic request_heal_quic |
-| `src/ui/accent.rs` | 6 | 6 | 0 | — |
+| `src/ui/accent.rs` | 13 | 13 | 0 | — |
 | `src/ui/ai_page.rs` | 7 | 7 | 0 | — |
 | `src/ui/cfg_page.rs` | 73 | 68 | 5 | DROPDOWN_ENTER_MS DROPDOWN_EXIT_MS DROPDOWN_PICK_SYNC_MS register_cfg_page cfg_page_handle |
 | `src/ui/comp_registry.rs` | 6 | 6 | 0 | — |
 | `src/ui/conn_card.rs` | 6 | 6 | 0 | — |
 | `src/ui/cursor.rs` | 9 | 9 | 0 | — |
 | `src/ui/demo_icon.rs` | 6 | 6 | 0 | — |
-| `src/ui/demo_page.rs` | 29 | 15 | 14 | CONTENT_RIGHT_INSET H1_TEXT H2_SECTION H2_TEXT H3_TEXT H4_TEXT H5_TEXT H6_TEXT SIGN_TEXT BODY_SEGS HEAD_FRAME_T QUOTE_BAR_W LIST_MARK_PX LIST_TEXT_INSET |
+| `src/ui/demo_page.rs` | 36 | 22 | 14 | CONTENT_RIGHT_INSET H1_TEXT H2_SECTION H2_TEXT H3_TEXT H4_TEXT H5_TEXT H6_TEXT SIGN_TEXT BODY_SEGS HEAD_FRAME_T QUOTE_BAR_W LIST_MARK_PX LIST_TEXT_INSET |
 | `src/ui/down_card.rs` | 10 | 10 | 0 | — |
 | `src/ui/dual_pool.rs` | 19 | 19 | 0 | — |
 | `src/ui/filetree.rs` | 71 | 63 | 8 | SHIFT_CLAMP_CSS CURSOR_NAME_INSET CURSOR_BAR_W CURSOR_HAIR_W row_top row_center register_filetree filetree_handle |
