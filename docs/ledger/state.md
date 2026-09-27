@@ -5,6 +5,41 @@
 > (速查表:症状 → 工具 → 字段 → 判卷)。本页只写「现在进行时」,
 > 历史功过在 bugs.md。
 
+## 当前位置（2026-09-27 午，BAR-167 会话池三件落地：查看器可滚动 + 上池切行空白修 + agent-inbox 路由）
+
+> **缘起**：用户真机报障/点名三件。①查看器「卡高封顶+截断不滚动」
+> 要改可滚动，点名用 scroll.rs 封存惯性件不许手写增量；②上池滚过→
+> 下池切短行→上池全空（研究线定罪：CfgPage::select 不钳 upper_scroll）；
+> ③全局信箱 agent-inbox 进会话池（只读引用 kfmv4/docs/ledger/agent-inbox，
+> 不改指向不搬不链，.kfm/session 零改动）。
+> **修复臂**：①滚动上限=正文全高−视口高，卡高安全带（BAR-163）不动
+> 只滚字段区；ViewerView.scroll 单源住 cfg_page，涂装点笔=字段区顶
+> −scroll 逐行 clip_y 双裁；惯性接 scroll.rs 物理机（起手建机/速度采样/
+> 抬手 fling 交接/帧泵折帧），活性入 fx_frame_due 第八路。②select 切
+> focus 时 upper_scroll 归零（同 set_tab 律）。③agentd key→根映射表
+> fail-closed（mailbox 原样/agent-inbox→kfmv4 只读，表外 key 404），
+> 新路由 /api/agent/inboxes/<key>/letters[/<name>]；UI 下池固定条目。
+> **提交**：6e58cff（①②+账本）/ 4aa73f3（③）。钉 9 枚 spec_bar167_*
+> +agentd/sess_pool 面全绿；变异九咬全中（含滚 max 恰对齐钉盲区补半行
+> 错位敏感钉实录）；壳接线 hunks 随 x2 f36262c 同构入库（共享树互染
+> 第三例，内容无损）。
+> **redroid 副口判卷通过（硬证据 /tmp/bar167/fix/）**：判卷形态 = adb
+> reverse redroid 9121 → 宿主一次性 na-server 副实例 19021 → /agent
+> 反代 → agentd 新码，生产 9021/QUIC/servers.json 一行未动。③下池三行
+> 位置钉一致、12 封真信列出、点信开真文（31/32/33）；①7.5KB 长信滚动
+> 三帧三屏全异 + 遥测实录「查看器甩尾起 v=-47.6px/帧 → 甩尾尽 速度燃尽」
+> （33→34→35）；②上池滚过切短行无一帧空白（40/41）。
+> **两条新教训已机械化入档（PARADIGM v6，排障手册观测矩阵新行）**：
+> redroid 撞口（-R 9021 撞生产口即退，池页恒加载中，换旧核同死 = 环境死；
+> 铁律 = 生产不动、副口判卷）+ redroid 核架构（redroid12 是 x86_64 容器，
+> 热推必编 x86_64-linux-android 核，aarch64 .so dlopen 必败 loader 静默
+> 回落 bundled 旧核，pick=hot/bundled 交替即此症）。
+> **在役**：生产 kfm-na-agentd 已换 BAR-167 新码；副实例 19021 与 adb
+> reverse 保留（redroid 数据面靠它活，杀法见 bugs.md BAR-167 行）；
+> /tmp/bar167-build 判卷 worktree 留档。
+> 状态：已修待判（redroid 实拍达标；用户真机终验待研究线二版热更后走
+> 静默判过）。
+
 ## 当前位置（2026-09-27 凌晨，BAR-163 翻案：会话池查看器三症修复，redroid 实拍定罪判卷）
 
 > **缘起**：BAR-163 一期 09-26 晚 B 档判过（静默判过候终验）→ 用户真机
