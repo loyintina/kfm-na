@@ -4682,10 +4682,10 @@ impl TermView {
         }
         let mut frame = Frame { buf, w, h };
         let off = i64::from(demo_off_x);
-        let title_fg = 0x00D9_D9D9; // 0.85 白（§2.3 标题档）
         let body_fg = 0x00BF_BFBF; // 0.75 白（正文档）
         let meta_fg = 0x0080_8080; // 0.5 白（次级档）
-        // 淡彩六色家族（§2.5：c1 色相 + 固定 60° 步进，随召唤换装）
+        // 淡彩六色家族（§2.5：c1 色相 + 固定 60° 步进，随召唤换装；H1
+        // 文字 2026-09-27 起也吃家族 slot0——0.85 白标题档在 demo 页退役）
         let pastel = crate::ui::accent::pastel_family(accent.c1);
         // 页渐变尺（代码围栏/行内码小块/分隔线的暗底与描边采样坐标系）：
         // 原点 (0,0)、分母页对角线——与页环同一把 135° 尺
@@ -4701,46 +4701,70 @@ impl TermView {
             let bh = i64::from(b.h);
             match b.kind {
                 dp::BlockKind::H1 => {
-                    // ┌ 左上直角框（H1 专属，2026-09-27 修宪）：左 3px 竖带
-                    // 全块高 + 顶 3px 横带 = 1 格缩进 + 文字行宽 + 0.5 格
-                    // 收尾——随字长不吃满内容宽；框内局部渐变尺（原点框
-                    // 左上、分母框对角线，与 2026-09-19 修宪同规）
+                    // [ 形标题框（H1 专属；2026-09-27 用户拍板：直角换圆角 +
+                    // 左下加圆角——┌ 变 [）：左竖带 + 顶/底横带（横带宽 =
+                    // 1 格缩进 + 文字行宽 + 0.5 格收尾，随字长不吃满）+
+                    // 上下两个四分之一圆角（R=半格，弧带厚 t）；框内局部
+                    // 渐变尺（原点框左上、分母框对角线，2026-09-19 修宪同规）
                     let tw = i64::from(self.text_width(dp::H1_TEXT, b.px));
                     let top_w = i64::from(dp::HEAD_TEXT_INSET) + tw + i64::from(dp::HEAD_TOP_TAIL);
                     let denom = (top_w - 1).max(0) + (bh - 1).max(0);
                     let t = i64::from(dp::HEAD_FRAME_T);
-                    for ay in by..by + bh {
+                    let r = i64::from(dp::HEAD_CORNER_R);
+                    let mut ink = |ax: i64, ay: i64| {
+                        if ax < 0 || ax >= fw || ay < 0 || ay >= fh {
+                            return;
+                        }
+                        let c = ring_gradient_rgb(accent.c1, accent.c2, ax - ox, ay - by, denom);
+                        frame.blend_px(ax as u32, ay as u32, c, 255);
+                    };
+                    // 左竖带（两圆心之间；端头交给圆角）
+                    for ay in by + r..by + bh - r {
                         for ax in ox..ox + t {
-                            if ax < 0 || ax >= fw || ay < 0 || ay >= fh {
-                                continue;
-                            }
-                            let c =
-                                ring_gradient_rgb(accent.c1, accent.c2, ax - ox, ay - by, denom);
-                            frame.blend_px(ax as u32, ay as u32, c, 255);
+                            ink(ax, ay);
                         }
                     }
+                    // 顶/底横带（圆心以右；左端交给圆角）
                     for ay in by..by + t {
-                        for ax in ox..ox + top_w {
-                            if ax < 0 || ax >= fw || ay < 0 || ay >= fh {
-                                continue;
-                            }
-                            let c =
-                                ring_gradient_rgb(accent.c1, accent.c2, ax - ox, ay - by, denom);
-                            frame.blend_px(ax as u32, ay as u32, c, 255);
+                        for ax in ox + r..ox + top_w {
+                            ink(ax, ay);
                         }
                     }
-                    // 文字距框缘上 0.5 格（HU 上垫）、左 1 格（HEAD_TEXT_INSET）
-                    self.demo_text_line(
-                        &mut frame,
-                        dp::H1_TEXT,
-                        ox + i64::from(dp::HEAD_TEXT_INSET),
-                        content_r,
-                        by + i64::from(dp::HU),
-                        b.line_h,
-                        b.px,
-                        title_fg,
-                        0.0,
-                    );
+                    for ay in by + bh - t..by + bh {
+                        for ax in ox + r..ox + top_w {
+                            ink(ax, ay);
+                        }
+                    }
+                    // 上下圆角：四分之一环带（外半径 R、厚 t），圆心 (ox+r,
+                    // by+r) / (ox+r, by+bh−r)
+                    for (cy, top_c) in [(by + r, true), (by + bh - r, false)] {
+                        let (ya, yb) = if top_c { (cy - r, cy) } else { (cy, cy + r) };
+                        for ay in ya..yb {
+                            for ax in ox..ox + r {
+                                let dx = (ax - (ox + r)) as f64 + 0.5;
+                                let dy = (ay - cy) as f64 + 0.5;
+                                let d = (dx * dx + dy * dy).sqrt();
+                                if d >= (r - t) as f64 && d <= r as f64 {
+                                    ink(ax, ay);
+                                }
+                            }
+                        }
+                    }
+                    // 文字距框缘上 0.5 格（HU 上垫）、左 1 格（HEAD_TEXT_INSET）；
+                    // 淡彩 slot0 双绘（2026-09-27 用户拍板「H1 文字更醒目」）
+                    for inset in [0.0, 1.0] {
+                        self.demo_text_line(
+                            &mut frame,
+                            dp::H1_TEXT,
+                            ox + i64::from(dp::HEAD_TEXT_INSET),
+                            content_r,
+                            by + i64::from(dp::HU),
+                            b.line_h,
+                            b.px,
+                            pastel[dp::pastel_role::BOLD],
+                            inset,
+                        );
+                    }
                 }
                 dp::BlockKind::H2 | dp::BlockKind::H3 => {
                     // 无框（2026-09-27 修宪「H1-H3 都挂框太丑」）：字号阶梯
@@ -4931,9 +4955,14 @@ impl TermView {
                     }
                 }
                 dp::BlockKind::Hr => {
-                    // 1px 横向 accent 渐变线（α160 半透明），块竖向居中
-                    let ay = by + i64::from(dp::HU);
-                    if ay >= 0 && ay < fh {
+                    // 3px 横向 accent 渐变线（2026-09-27 用户拍板加粗 1→3，
+                    // 厚吃 dp::HR_THICK 单源；α160 半透明），块竖向居中
+                    let hr_t = i64::from(dp::HR_THICK);
+                    let cy = by + i64::from(dp::HU);
+                    for ay in cy - (hr_t - 1) / 2..cy - (hr_t - 1) / 2 + hr_t {
+                        if ay < 0 || ay >= fh {
+                            continue;
+                        }
                         for ax in ox..content_r {
                             if ax < 0 || ax >= fw {
                                 continue;

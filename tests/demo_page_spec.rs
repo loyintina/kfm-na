@@ -14,8 +14,8 @@
 use kfm_na::termview::{CELL_H, CELL_W};
 use kfm_na::ui::demo_page::{
     BLOCK_GAP, BODY_PX, BlockKind, CODE_LINES, CODE_PX, H1_SCALE, H2_SCALE, H3_SCALE,
-    HEAD_TEXT_INSET, HEAD_TOP_TAIL, HU, INDENT_W, LINE_RATIO, LIST_ITEMS, QUOTE_LINES, layout,
-    line_h, pastel_role,
+    HEAD_CORNER_R, HEAD_TEXT_INSET, HEAD_TOP_TAIL, HR_THICK, HU, INDENT_W, LINE_RATIO, LIST_ITEMS,
+    QUOTE_LINES, layout, line_h, pastel_role,
 };
 
 const W: u32 = 1080;
@@ -64,12 +64,15 @@ fn spec_demo_标题块容量律与字号阶梯() {
     assert_eq!(h2.h, h2.line_h, "H2 摘框后块高 = 行带（变异：加垫即红）");
     assert_eq!(h3.h, h3.line_h, "H3 摘框后块高 = 行带（变异：加垫即红）");
     // 文字距框左缘 ≥1 格（宪法最小容量律同级条款；const 块 = 编译期钉，
-    // 缩进跌破 1 格直接编不过，比运行期断言更早红）；┌ 顶边收尾 = 0.5 格
-    // （顶边宽 = 1 格缩进 + 文字行宽 + 0.5 格收尾，随字长不吃满）；
-    // 淡彩槽位角色表（宪法 §2.5 角色映射单源，编译期咬死位序）
+    // 缩进跌破 1 格直接编不过，比运行期断言更早红）；[ 框横带收尾 = 0.5 格
+    // （横带宽 = 1 格缩进 + 文字行宽 + 0.5 格收尾，随字长不吃满）、圆角
+    // R = 半格、分隔线 3px（2026-09-27 三修，用户拍板）；淡彩槽位角色表
+    // （宪法 §2.5 角色映射单源，编译期咬死位序）
     const {
         assert!(HEAD_TEXT_INSET >= CELL_W, "标题文字左缩进 ≥1 格");
-        assert!(HEAD_TOP_TAIL == CELL_W / 2, "┌ 顶边收尾 = 0.5 格");
+        assert!(HEAD_TOP_TAIL == CELL_W / 2, "[ 框横带收尾 = 0.5 格");
+        assert!(HEAD_CORNER_R == CELL_H / 2, "[ 框圆角 R = 半格");
+        assert!(HR_THICK == 3, "分隔线 = 3px（与框厚同尺）");
         assert!(pastel_role::BOLD == 0);
         assert!(pastel_role::H4 == 1);
         assert!(pastel_role::RESERVED == 2);
