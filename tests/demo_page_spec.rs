@@ -2,18 +2,20 @@
 //! src/ui/demo_page.rs）。
 //!
 //! 契约：①行高 = 1.4 倍字号上取整咬半格网（一切行高/间距 = 0.5 格整数倍
-//! 的宪法条款在布局层的兑现）；②标题块 = 上垫 0.5 格 + 行带 + 下垫
-//! 0.5 格（文字距框缘上 ≥0.5 格），字号阶梯 1.7/1.45/1.2；③块序 =
+//! 的宪法条款在布局层的兑现）；②┌ 框 H1 专属（2026-09-27 修宪）——H1
+//! 块 = 上垫 0.5 格 + 行带 + 下垫 0.5 格，顶边收尾 0.5 格随字长；H2/H3
+//! 摘框块高 = 行带，字号阶梯 1.7/1.45/1.2 不变；③块序 =
 //! 设计拍板的样品元素清单（H1→正文→H2 节→H2~H6→代码围栏→引用→列表
 //! →分隔线→签名）；④代码围栏上下各 0.5 格、分隔线带 2 个半格；
 //! ⑤几何单源——块 y 严格累进（上一块底 + 0.5 格隙 = 下一块顶）。
-//! 变异抽检：BLOCK_GAP 改 0 → 题⑤红；标题上垫删了 → 题②红；字号阶梯
-//! 改平 → 题②红；行高不咬半格 → 题①红；块序换 → 题③红。
+//! 变异抽检：BLOCK_GAP 改 0 → 题⑤红；H1 上垫删了 / H2 加垫 → 题②红；
+//! 字号阶梯改平 → 题②红；行高不咬半格 → 题①红；块序换 → 题③红。
 
 use kfm_na::termview::{CELL_H, CELL_W};
 use kfm_na::ui::demo_page::{
     BLOCK_GAP, BODY_PX, BlockKind, CODE_LINES, CODE_PX, H1_SCALE, H2_SCALE, H3_SCALE,
-    HEAD_TEXT_INSET, HU, INDENT_W, LINE_RATIO, LIST_ITEMS, QUOTE_LINES, layout, line_h,
+    HEAD_TEXT_INSET, HEAD_TOP_TAIL, HU, INDENT_W, LINE_RATIO, LIST_ITEMS, QUOTE_LINES, layout,
+    line_h, pastel_role,
 };
 
 const W: u32 = 1080;
@@ -55,14 +57,25 @@ fn spec_demo_标题块容量律与字号阶梯() {
     assert_eq!(h2.px, BODY_PX * H2_SCALE);
     assert_eq!(h3.px, BODY_PX * H3_SCALE);
     assert!(h1.px > h2.px && h2.px > h3.px && h3.px > BODY_PX);
-    // ┌ 框容量律：块高 = 上垫 0.5 格 + 行带 + 下垫 0.5 格（变异：删垫即红）
+    // ┌ 框容量律（H1 专属，2026-09-27 修宪）：块高 = 上垫 0.5 格 +
+    // 行带 + 下垫 0.5 格（变异：删垫即红）
     assert_eq!(h1.h, HU + h1.line_h + HU, "H1 上下垫各 0.5 格");
-    assert_eq!(h2.h, HU + h2.line_h + HU);
-    assert_eq!(h3.h, HU + h3.line_h + HU);
+    // H2/H3 摘框（修宪「H1-H3 都挂框太丑」）：块高 = 行带，无上下垫
+    assert_eq!(h2.h, h2.line_h, "H2 摘框后块高 = 行带（变异：加垫即红）");
+    assert_eq!(h3.h, h3.line_h, "H3 摘框后块高 = 行带（变异：加垫即红）");
     // 文字距框左缘 ≥1 格（宪法最小容量律同级条款；const 块 = 编译期钉，
-    // 缩进跌破 1 格直接编不过，比运行期断言更早红）
+    // 缩进跌破 1 格直接编不过，比运行期断言更早红）；┌ 顶边收尾 = 0.5 格
+    // （顶边宽 = 1 格缩进 + 文字行宽 + 0.5 格收尾，随字长不吃满）；
+    // 淡彩槽位角色表（宪法 §2.5 角色映射单源，编译期咬死位序）
     const {
         assert!(HEAD_TEXT_INSET >= CELL_W, "标题文字左缩进 ≥1 格");
+        assert!(HEAD_TOP_TAIL == CELL_W / 2, "┌ 顶边收尾 = 0.5 格");
+        assert!(pastel_role::BOLD == 0);
+        assert!(pastel_role::H4 == 1);
+        assert!(pastel_role::RESERVED == 2);
+        assert!(pastel_role::INLINE_CODE == 3);
+        assert!(pastel_role::H2 == 4);
+        assert!(pastel_role::H3 == 5);
     }
     // H4-H6 不挂框：正文字号、块高 = 单行带
     for k in [BlockKind::H4, BlockKind::H5, BlockKind::H6] {

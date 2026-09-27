@@ -7,9 +7,11 @@
 //! （paint_demo_page_chrome 底装修 + paint_demo_content 内容墨），
 //! 块几何只读本册，不许各算。
 //!
-//! 视觉条款 = 宪法 2026-09-26 两修：§2.5 淡彩强调档（粗体淡粉/行内码
-//! 浅青）+ §三 md 标题 ┌ 左上直角框（H1-H3，accent 135° 渐变采样，
-//! 文字距框缘上 ≥0.5 格、左 ≥1 格）。白三档 0.85/0.75/0.5（§2.3）。
+//! 视觉条款 = 宪法 2026-09-27 修宪：§2.5 淡彩六色家族（accent c1 色相
+//! 固定 60° 步进派生，槽位角色见 pastel_role——粗体/H4/保留/行内码/
+//! H2/H3）+ §三 md 标题条款（┌ 左上直角框收窄 H1 专属，顶边宽 =
+//! 1 格缩进 + 文字行宽 + 0.5 格收尾，随字长不吃满；H2/H3 无框，
+//! 字号阶梯 + 淡彩色分档）。白三档 0.85/0.75/0.5（§2.3）。
 //! 所有行高/间距 = 0.5 格整数倍（§一 半格网，CELL_W=18/CELL_H=36）。
 
 use crate::termview::{CELL_H, CELL_W};
@@ -80,7 +82,8 @@ pub fn line_h(px: f32) -> u32 {
     ((px * LINE_RATIO) / HU as f32).ceil() as u32 * HU
 }
 
-/// 标题块高：上垫 0.5 格（文字距框缘上 ≥0.5 格）+ 行带 + 下垫 0.5 格
+/// H1 标题块高：上垫 0.5 格（文字距框缘上 ≥0.5 格）+ 行带 + 下垫 0.5 格
+/// （┌ 框 H1 专属——H2/H3 摘框后块高 = 行带，不走本函数）
 fn heading_h(px: f32) -> u32 {
     HU + line_h(px) + HU
 }
@@ -102,7 +105,8 @@ pub const QUOTE_LINES: [&str; 2] = ["引用第一行：打样不定稿。", "引
 pub const LIST_ITEMS: [&str; 3] = ["缩进一格圆点项", "accent 色方块符", "白 0.75 列表文"];
 pub const SIGN_TEXT: &str = "—— 研究线 敬上";
 
-/// 正文段的行内段（样式, 文本）：粗体 = 淡粉双绘，行内码 = 浅青暗底小块
+/// 正文段的行内段（样式, 文本）：粗体 = 淡彩 slot0 双绘，行内码 =
+/// 淡彩 slot3 + 暗底小块（宪法 §2.5 六色家族，角色表见 pastel_role）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SegStyle {
     Normal,
@@ -146,25 +150,27 @@ pub fn layout(w: u32) -> DemoLayout {
     );
     // 正文段（含粗体与行内码）
     push(BlockKind::Body, body_lh, body_lh, BODY_PX, &mut y);
-    // H2「六档标题」
+    // H2「六档标题」（2026-09-27 修宪：H2/H3 摘框——无框块高 = 行带，
+    // 不再留 ┌ 框的上下垫）
     push(
         BlockKind::H2,
-        heading_h(BODY_PX * H2_SCALE),
+        line_h(BODY_PX * H2_SCALE),
         line_h(BODY_PX * H2_SCALE),
         BODY_PX * H2_SCALE,
         &mut y,
     );
-    // 六档各一行（H1 已置顶展示）：H2/H3 挂 ┌ 框，H4-H6 正文字号文字档
+    // 六档各一行（H1 已置顶展示）：H2/H3 字号+淡彩色分档，H4-H6 正文
+    // 字号文字档
     push(
         BlockKind::H2,
-        heading_h(BODY_PX * H2_SCALE),
+        line_h(BODY_PX * H2_SCALE),
         line_h(BODY_PX * H2_SCALE),
         BODY_PX * H2_SCALE,
         &mut y,
     );
     push(
         BlockKind::H3,
-        heading_h(BODY_PX * H3_SCALE),
+        line_h(BODY_PX * H3_SCALE),
         line_h(BODY_PX * H3_SCALE),
         BODY_PX * H3_SCALE,
         &mut y,
@@ -206,8 +212,27 @@ pub fn layout(w: u32) -> DemoLayout {
 
 /// ┌ 框文字内缩（px）：文字距框左缘 ≥1 格（宪法最小容量律同级条款）
 pub const HEAD_TEXT_INSET: u32 = CELL_W;
+/// ┌ 框顶边收尾（px）：顶边宽 = 缩进 + 文字行宽 + 0.5 格收尾（随字长，
+/// 不吃满内容宽——宪法 2026-09-27 修宪）
+pub const HEAD_TOP_TAIL: u32 = CELL_W / 2;
 /// ┌ 框描边厚（px）：与页环细边同尺（AI_PAGE_FRAME_W=3）
 pub const HEAD_FRAME_T: u32 = 3;
+/// 淡彩家族槽位角色（宪法 §2.5 角色映射单源；家族本身 accent::
+/// pastel_family 派生——本表只管义不管色）
+pub mod pastel_role {
+    /// 粗体（accent 本相淡彩）
+    pub const BOLD: usize = 0;
+    /// H4 强调
+    pub const H4: usize = 1;
+    /// 保留（斜体·链接，md 解析器单启用）
+    pub const RESERVED: usize = 2;
+    /// 行内码（180° 对色）
+    pub const INLINE_CODE: usize = 3;
+    /// H2 标题
+    pub const H2: usize = 4;
+    /// H3 标题
+    pub const H3: usize = 5;
+}
 /// 引用左竖线宽（px）
 pub const QUOTE_BAR_W: u32 = 2;
 /// 引用/列表文字内缩（px）：缩进 1 格

@@ -89,6 +89,52 @@ pub fn hsl_to_rgb(h: f64, s: f64, l: f64) -> u32 {
     (to255(r) << 16) | (to255(g) << 8) | to255(b)
 }
 
+/// 0x00RRGGBB → (h, s, l)（hsl_to_rgb 的逆；考题侧另有独立反解器互证，
+/// 两侧错任何一侧 round-trip 必红）
+pub fn rgb_to_hsl(rgb: u32) -> (f64, f64, f64) {
+    let r = ((rgb >> 16) & 0xFF) as f64 / 255.0;
+    let g = ((rgb >> 8) & 0xFF) as f64 / 255.0;
+    let b = (rgb & 0xFF) as f64 / 255.0;
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let l = (max + min) / 2.0;
+    let d = max - min;
+    if d < 1e-9 {
+        return (0.0, 0.0, l * 100.0);
+    }
+    let s = d / (1.0 - (2.0 * l - 1.0).abs());
+    let h = if (max - r).abs() < 1e-9 {
+        60.0 * (((g - b) / d) % 6.0)
+    } else if (max - g).abs() < 1e-9 {
+        60.0 * ((b - r) / d + 2.0)
+    } else {
+        60.0 * ((r - g) / d + 4.0)
+    };
+    (h.rem_euclid(360.0), s * 100.0, l * 100.0)
+}
+
+// ---- 淡彩六色家族（宪法 §2.5，2026-09-27 修宪：固定三色 → accent 派生，
+// 用户拍板「根据随机色、固定角度」）----
+
+/// 色环固定角度步进（°）：六色 = c1 色相 + Δ
+pub const PASTEL_DELTAS: [f64; 6] = [0.0, 60.0, 120.0, 180.0, 240.0, 300.0];
+/// 淡彩化参数：饱和度 = accent 饱和度 × 0.55（钳 25–45%），亮度 75%
+/// ——低饱和高明度家族，与示警三档（§2.4 高饱和）形态分家
+pub const PASTEL_SAT_SCALE: f64 = 0.55;
+pub const PASTEL_SAT_MIN: f64 = 25.0;
+pub const PASTEL_SAT_MAX: f64 = 45.0;
+pub const PASTEL_LIT: f64 = 75.0;
+
+/// 淡彩六色家族：从本页随机 accent c1 的色相出发，固定角度步进取六色，
+/// 每色淡彩化。随每次召唤换装（accent §2.2 每召唤重随，家族同源跟随）。
+/// 槽位角色映射（粗体/H4/保留/行内码/H2/H3）在调用侧钉死（demo_page::
+/// pastel_role），本函数只管色不管义
+pub fn pastel_family(accent_c1: u32) -> [u32; 6] {
+    let (h, s, _l) = rgb_to_hsl(accent_c1);
+    let ps = (s * PASTEL_SAT_SCALE).clamp(PASTEL_SAT_MIN, PASTEL_SAT_MAX);
+    PASTEL_DELTAS.map(|d| hsl_to_rgb((h + d).rem_euclid(360.0), ps, PASTEL_LIT))
+}
+
 /// 三页共享的卡片深底（宪法 §2.2：背景固定深底不随 accent——
 /// kfmv4 rgba(20,16,32,0.92) 压平到不透明的事后色）
 pub const CARD_PAGE_BG: u32 = 0x0014_1020;

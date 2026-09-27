@@ -98,3 +98,89 @@ fn spec_accent_零种子兜底钉() {
     let b = rng.generate();
     assert_ne!(a, b, "零种子兜底后必须正常出随机序列");
 }
+
+/// 钉⑤：淡彩六色家族（宪法 §2.5，2026-09-27 修宪——「根据随机色、固定
+/// 角度」）：六色 = c1 色相 + {0,60,…,300}°（考题侧独立反解器互证），
+/// 饱和度 = accent sat × 0.55 钳 [25,45]，亮度 75%；slot0 与 c1 同色相
+/// （accent 本相淡彩）；六色互异（60° 步进不撞车）。
+/// **角度表/亮度必须考题侧写字面量**——import 实现侧常量 = 自指盲钉
+/// （2026-09-27 变异抽检实录：DELTAS 改 45° 步进、LIT 改 60 两咬全空，
+/// 改字面量后两咬全中）
+#[test]
+fn spec_pastel_六色家族角度钉() {
+    use kfm_na::ui::accent::pastel_family;
+    const DELTAS: [f64; 6] = [0.0, 60.0, 120.0, 180.0, 240.0, 300.0]; // 宪法字面量，不许 import
+    const LIT: f64 = 75.0; // 同上
+    let mut rng = AccentRng::new(2026);
+    for _ in 0..500 {
+        let c1 = rng.generate().c1;
+        let (h1, s1, _) = rgb_to_hsl(c1);
+        let fam = pastel_family(c1);
+        assert_eq!(fam.len(), 6, "家族必须六色");
+        for (i, c) in fam.iter().enumerate() {
+            let (h, s, l) = rgb_to_hsl(*c);
+            // 色相 = h1 + Δ[i]（环形距离容差 2.5°——淡彩档 sat 低，
+            // RGB 量化粒度 ≈1.9°，容差须盖过量化噪声仍咬得住 60° 变异）
+            let expect = (h1 + DELTAS[i]).rem_euclid(360.0);
+            let hd = (h - expect).abs().min(360.0 - (h - expect).abs());
+            assert!(hd < 2.5, "slot{i} 色相差 {hd}°（h={h} expect={expect}）");
+            // 淡彩化：sat = accent sat × 0.55 钳 [25,45]、lit = 75
+            let expect_s = (s1 * 0.55).clamp(25.0, 45.0);
+            assert!(
+                (s - expect_s).abs() < 2.0,
+                "slot{i} sat {s} 偏离淡彩化期望 {expect_s}"
+            );
+            assert!((l - LIT).abs() < 1.5, "slot{i} lit {l} 必须是淡彩档 {LIT}");
+        }
+        // 六色互异（60° 步进同 sat/lit 下不撞车）
+        for i in 0..6 {
+            for j in i + 1..6 {
+                assert_ne!(fam[i], fam[j], "slot{i} 与 slot{j} 撞色");
+            }
+        }
+    }
+}
+
+/// 钉⑥：淡彩家族确定性 + 随 accent 换装（同 c1 同家族；异 c1 异家族——
+/// 「每次召唤颜色都随机」的兑现钉）
+#[test]
+fn spec_pastel_确定性与换装钉() {
+    use kfm_na::ui::accent::pastel_family;
+    let a = pastel_family(0x00E0_6030);
+    assert_eq!(a, pastel_family(0x00E0_6030), "同 c1 必须同家族");
+    let b = pastel_family(0x0030_E0A0);
+    assert_ne!(a, b, "异 c1 必须异家族（随召唤换装）");
+}
+
+/// 钉⑦：淡彩常量表值钉 + rgb_to_hsl 互证（编译期钉值——运行期常量断言
+/// 会撞 clippy assertions_on_constants，const 块编译期咬更硬；棘轮
+/// 覆盖同源：符号名必须在 tests/ 出现）
+#[test]
+fn spec_pastel_常量表值钉与反解互证() {
+    use kfm_na::ui::accent::{
+        PASTEL_DELTAS, PASTEL_LIT, PASTEL_SAT_MAX, PASTEL_SAT_MIN, PASTEL_SAT_SCALE,
+        rgb_to_hsl as impl_rgb_to_hsl,
+    };
+    const {
+        assert!(PASTEL_DELTAS[0] == 0.0);
+        assert!(PASTEL_DELTAS[1] == 60.0);
+        assert!(PASTEL_DELTAS[2] == 120.0);
+        assert!(PASTEL_DELTAS[3] == 180.0);
+        assert!(PASTEL_DELTAS[4] == 240.0);
+        assert!(PASTEL_DELTAS[5] == 300.0);
+        assert!(PASTEL_SAT_SCALE == 0.55);
+        assert!(PASTEL_SAT_MIN == 25.0);
+        assert!(PASTEL_SAT_MAX == 45.0);
+        assert!(PASTEL_LIT == 75.0);
+    }
+    // 实施侧 rgb_to_hsl 与考题侧独立反解器逐点对表（同名不同源，
+    // 一侧写错必对不上）
+    let mut rng = AccentRng::new(77);
+    for _ in 0..300 {
+        let c = rng.generate().c1;
+        let (h1, s1, l1) = impl_rgb_to_hsl(c);
+        let (h2, s2, l2) = rgb_to_hsl(c);
+        let hd = (h1 - h2).abs().min(360.0 - (h1 - h2).abs());
+        assert!(hd < 1e-9 && (s1 - s2).abs() < 1e-9 && (l1 - l2).abs() < 1e-9);
+    }
+}

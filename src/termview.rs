@@ -1046,10 +1046,11 @@ fn paint_thin_frame(
     }
 }
 
-/// 行内码暗底小块（2026-09-26 md 渲染打样，宪法 §2.5 浅青档的承载
-/// 底）：渐变暗底不透明直出（页尺采样——与代码围栏内芯同一块 135°
-/// 渐变布的暗部），四角 4px 像素切角（沿格对角 45° 阶梯——描边层
-/// 自由细节，不进网格账）。无描边，纯底块
+/// 行内码暗底小块（2026-09-26 md 渲染打样；2026-09-27 修宪后文字改吃
+/// 淡彩 slot3，本块仍是 §2.5 行内码档的承载底）：渐变暗底不透明直出
+/// （页尺采样——与代码围栏内芯同一块 135° 渐变布的暗部），四角 4px
+/// 像素切角（沿格对角 45° 阶梯——描边层自由细节，不进网格账）。
+/// 无描边，纯底块
 fn paint_demo_chip(
     frame: &mut Frame<'_>,
     x: i64,
@@ -4660,11 +4661,13 @@ impl TermView {
     /// ui/demo_page::layout 单源（行高/缩进/块序/半格网咬合全在那边钉死，
     /// 本侧只读不算——命中/涂装眼手同尺）；demo_off_x 语义同
     /// paint_parser_content_impl（GLES 烘焙恒 0，softbuffer/值守传真值）。
-    /// 涂装条款 = 宪法 2026-09-26 两修：§三 md H1-H3 ┌ 左上直角框
-    /// （accent 135° 渐变，框内局部尺——原点框左上、分母框对角线，
-    /// 与解析页会话框 2026-09-19 修宪同规）+ §2.5 淡彩强调档（粗体 =
-    /// 淡粉双绘，行内码 = 浅青 + 渐变暗底小块——页尺暗部采样，与代码
-    /// 围栏内芯同一块布）
+    /// 涂装条款 = 宪法 2026-09-27 修宪：§三 md 标题——┌ 左上直角框
+    /// **H1 专属**（accent 135° 渐变，框内局部尺；**顶边宽 = 1 格缩进 +
+    /// 文字行宽 + 0.5 格收尾**，随字长不吃满内容宽），H2/H3 无框只走
+    /// 字号阶梯 + 淡彩色；§2.5 淡彩**六色家族**（accent::pastel_family
+    /// 从 c1 色相固定 60° 步进派生，槽位角色吃 demo_page::pastel_role
+    /// 单源——粗体 slot0 双绘、行内码 slot3 + 渐变暗底小块、H4 slot1、
+    /// H2/H3 slot4/5；行内码小块与代码围栏内芯仍是页尺暗部采样同一块布）
     pub(crate) fn paint_demo_content_impl(
         &self,
         buf: &mut [u32],
@@ -4682,8 +4685,8 @@ impl TermView {
         let title_fg = 0x00D9_D9D9; // 0.85 白（§2.3 标题档）
         let body_fg = 0x00BF_BFBF; // 0.75 白（正文档）
         let meta_fg = 0x0080_8080; // 0.5 白（次级档）
-        const PASTEL_PINK: u32 = 0x00F0_A6C0; // §2.5 淡粉（粗体/H4）
-        const PASTEL_CYAN: u32 = 0x009F_D8D8; // §2.5 浅青（行内码）
+        // 淡彩六色家族（§2.5：c1 色相 + 固定 60° 步进，随召唤换装）
+        let pastel = crate::ui::accent::pastel_family(accent.c1);
         // 页渐变尺（代码围栏/行内码小块/分隔线的暗底与描边采样坐标系）：
         // 原点 (0,0)、分母页对角线——与页环同一把 135° 尺
         let page_denom = ((w - 1) + (h - 1)).max(1) as i64;
@@ -4697,10 +4700,14 @@ impl TermView {
             let by = i64::from(b.y);
             let bh = i64::from(b.h);
             match b.kind {
-                dp::BlockKind::H1 | dp::BlockKind::H2 | dp::BlockKind::H3 => {
-                    // ┌ 左上直角框：左 3px 竖带全块高 + 顶 3px 横带全内容宽
-                    // （无右无底——「章节从此展开」，非容器）；框内局部渐变尺
-                    let denom = (i64::from(lay.cw) - 1).max(0) + (bh - 1).max(0);
+                dp::BlockKind::H1 => {
+                    // ┌ 左上直角框（H1 专属，2026-09-27 修宪）：左 3px 竖带
+                    // 全块高 + 顶 3px 横带 = 1 格缩进 + 文字行宽 + 0.5 格
+                    // 收尾——随字长不吃满内容宽；框内局部渐变尺（原点框
+                    // 左上、分母框对角线，与 2026-09-19 修宪同规）
+                    let tw = i64::from(self.text_width(dp::H1_TEXT, b.px));
+                    let top_w = i64::from(dp::HEAD_TEXT_INSET) + tw + i64::from(dp::HEAD_TOP_TAIL);
+                    let denom = (top_w - 1).max(0) + (bh - 1).max(0);
                     let t = i64::from(dp::HEAD_FRAME_T);
                     for ay in by..by + bh {
                         for ax in ox..ox + t {
@@ -4713,7 +4720,7 @@ impl TermView {
                         }
                     }
                     for ay in by..by + t {
-                        for ax in ox..content_r {
+                        for ax in ox..ox + top_w {
                             if ax < 0 || ax >= fw || ay < 0 || ay >= fh {
                                 continue;
                             }
@@ -4722,8 +4729,28 @@ impl TermView {
                             frame.blend_px(ax as u32, ay as u32, c, 255);
                         }
                     }
+                    // 文字距框缘上 0.5 格（HU 上垫）、左 1 格（HEAD_TEXT_INSET）
+                    self.demo_text_line(
+                        &mut frame,
+                        dp::H1_TEXT,
+                        ox + i64::from(dp::HEAD_TEXT_INSET),
+                        content_r,
+                        by + i64::from(dp::HU),
+                        b.line_h,
+                        b.px,
+                        title_fg,
+                        0.0,
+                    );
+                }
+                dp::BlockKind::H2 | dp::BlockKind::H3 => {
+                    // 无框（2026-09-27 修宪「H1-H3 都挂框太丑」）：字号阶梯
+                    // + 淡彩家族 slot4/slot5 分档，文字顶对齐行带
+                    let fg = pastel[if b.kind == dp::BlockKind::H2 {
+                        dp::pastel_role::H2
+                    } else {
+                        dp::pastel_role::H3
+                    }];
                     let text = match b.kind {
-                        dp::BlockKind::H1 => dp::H1_TEXT,
                         dp::BlockKind::H2 => {
                             h2_seen += 1;
                             if h2_seen == 1 {
@@ -4734,23 +4761,14 @@ impl TermView {
                         }
                         _ => dp::H3_TEXT,
                     };
-                    // 文字距框缘上 0.5 格（HU 上垫）、左 1 格（HEAD_TEXT_INSET）
                     self.demo_text_line(
-                        &mut frame,
-                        text,
-                        ox + i64::from(dp::HEAD_TEXT_INSET),
-                        content_r,
-                        by + i64::from(dp::HU),
-                        b.line_h,
-                        b.px,
-                        title_fg,
-                        0.0,
+                        &mut frame, text, ox, content_r, by, b.line_h, b.px, fg, 0.0,
                     );
                 }
                 dp::BlockKind::H4 | dp::BlockKind::H5 | dp::BlockKind::H6 => {
                     // 不挂框——正文字号，文字形态分档（宪法 §三 md 条款）
                     let (fg, double) = match b.kind {
-                        dp::BlockKind::H4 => (PASTEL_PINK, true), // 淡粉强调 + 双绘加粗
+                        dp::BlockKind::H4 => (pastel[dp::pastel_role::H4], true), // 淡彩 slot1 + 双绘加粗
                         dp::BlockKind::H5 => (body_fg, false),
                         _ => (meta_fg, false),
                     };
@@ -4769,9 +4787,9 @@ impl TermView {
                     }
                 }
                 dp::BlockKind::Body => {
-                    // 行内段排：量宽累进 pen_x；粗体淡粉双绘；行内码 =
-                    // 浅青文字 + 渐变暗底小块（40px 高 4px 像素切角——
-                    // 描边层自由细节，不进网格账）
+                    // 行内段排：量宽累进 pen_x；粗体 = 淡彩 slot0 双绘；
+                    // 行内码 = 淡彩 slot3 文字 + 渐变暗底小块（40px 高 4px
+                    // 像素切角——描边层自由细节，不进网格账）
                     let mut pen = ox;
                     for (style, text) in dp::BODY_SEGS {
                         let tw = i64::from(self.text_width(text, b.px));
@@ -4792,7 +4810,7 @@ impl TermView {
                                     by,
                                     b.line_h,
                                     b.px,
-                                    PASTEL_PINK,
+                                    pastel[dp::pastel_role::BOLD],
                                     0.0,
                                 );
                                 self.demo_text_line(
@@ -4803,7 +4821,7 @@ impl TermView {
                                     by,
                                     b.line_h,
                                     b.px,
-                                    PASTEL_PINK,
+                                    pastel[dp::pastel_role::BOLD],
                                     1.0,
                                 );
                                 pen += tw + 1;
@@ -4823,7 +4841,7 @@ impl TermView {
                                     by,
                                     b.line_h,
                                     b.px,
-                                    PASTEL_CYAN,
+                                    pastel[dp::pastel_role::INLINE_CODE],
                                     0.0,
                                 );
                                 pen += i64::from(chip_w);
