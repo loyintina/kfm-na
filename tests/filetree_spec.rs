@@ -214,18 +214,46 @@ fn spec_光标上线长钳制() {
 
 #[test]
 fn spec_常量_颜色rrggbbaa口径() {
-    // 规格原文口径：末位 FF 是 alpha（与 termview 的 AARRGGBB 相反）
+    // 规格原文口径：末位 FF 是 alpha（与 termview 的 AARRGGBB 相反）。
+    // **打回改约（症③）**：CHEVRON_RGB 降级为「原版那次召唤的实测色留档」
+    // ——现役三角取页 accent 渐变同源采样（涂装侧），常量本身仍按原值钉。
     assert_eq!(rrggbbaa(CURSOR_LINE_RGB), (0, 212, 255, 255));
     assert_eq!(rrggbbaa(CHEVRON_RGB), (0, 148, 178, 255));
     assert_eq!(CURSOR_LINE_ALPHA, 0.7);
     assert_eq!(CURSOR_FILL_ALPHA, 0.15);
     assert_eq!(CURSOR_INSET, 4);
     assert_eq!(ROW_RADIUS, 12);
-    assert_eq!(TRI_W, 20);
-    assert_eq!(TRI_H, 22);
     assert_eq!((DRAWER_OPEN_MS, DRAWER_CLOSE_MS), (240, 180));
     assert_eq!((TRI_ROT_MS, CURSOR_MOVE_MS), (180, 180));
     assert_eq!(FT_CSS, 3.06);
+}
+
+#[test]
+fn spec_bar165打回_字号与三角等比放大() {
+    // 症①（2026-09-27 用户终验）：34px 字配 20×22 三角比例失调 → 文字 44、
+    // 三角 26×28（等比 ×1.3）。字高/三角高比 = 44:28 ≈ 1.57，对齐原版观感
+    // （原版 32~33:24 ≈ 1.36；本实现取放大档，用户已批「44px 左右」）。
+    // 尺子落在 termview 的常量上（同文件冒烟考题还逐像素验三角落墨范围）。
+    // 精确值钉已含「不许回退旧尺寸」（任何回退即红），不再叠阈值断言——
+    // 常量阈值断言触发 clippy assertions_on_constants（2026-09-27 chain 红实录）
+    assert_eq!((TRI_W, TRI_H), (26, 28), "三角盒等比放大（症①）");
+    let src = include_str!("../src/termview.rs");
+    assert!(
+        src.contains("const FT_TEXT_PX: f32 = 44.0;"),
+        "行名字号必须为 44（症①；回退 34 = 打回重演）"
+    );
+    assert!(
+        src.contains("let (hwt, hht) = (6.5f32, 10.5f32);"),
+        "三角基形随盒等比（26×28 内 13×21）"
+    );
+    assert!(
+        src.contains("let bx1 = g.x1;"),
+        "光标右缘扩到行表窗全宽（症②；旧版到名字实量宽 + 内缩就收）"
+    );
+    assert!(
+        src.contains("paint_open_cursor(") && src.contains("封存件复活（症④"),
+        "光标必须吃封存件 paint_open_cursor（症④）——自绘无圆角版已废弃"
+    );
 }
 
 // ── 出参解析 ────────────────────────────────────────────────────────
@@ -629,44 +657,53 @@ fn spec_滚动_只动账面时才换代() {
 // ── 命中 ────────────────────────────────────────────────────────────
 
 #[test]
-fn spec_命中_三角带与行其余() {
+fn spec_命中_目录整行开合_死区消灭() {
+    // **打回改约（症⑤，2026-09-27 用户终裁）**：目录行**整行**点按 = 开合，
+    // 三角只是状态指示；旧实现把行左三角带判 Toggle、名字区判 Row → 真机
+    // 20+ 次点按零 toggle（用户点目录行没反应）。行内任意 x（含三角盒与
+    // 名字区之间的死区）同义 = Toggle
     let s = tree();
-    // 深度 0：行左带就是三角盒
-    assert_eq!(s.hit(0, 10, 172), Some(Hit::Toggle(0)));
-    assert_eq!(s.hit(TRI_W - 1, 10, 172), Some(Hit::Toggle(0)));
-    assert_eq!(s.hit(TRI_W, 10, 172), Some(Hit::Row(0)), "行其余 = 选中");
-    assert_eq!(s.hit(400, 10, 172), Some(Hit::Row(0)));
-    // 行底边界：y = 行高 落在下一行
-    assert_eq!(s.hit(400, ROW_H - 1, 172), Some(Hit::Row(0)));
+    for x in [0, 1, TRI_W - 1, TRI_W, TRI_W + 1, 120, 400, 1_200] {
+        assert_eq!(
+            s.hit(x, 10, 172),
+            Some(Hit::Toggle(0)),
+            "目录行 x={x} 都该开合（死区不许存在）"
+        );
+    }
+    // 行底边界：y = 行高 落在下一行（文件行 → 选中）
+    assert_eq!(s.hit(400, ROW_H - 1, 172), Some(Hit::Toggle(0)));
     assert_eq!(s.hit(400, ROW_H, 172), Some(Hit::Row(1)));
 }
 
 #[test]
-fn spec_命中_文件行左带也算行() {
+fn spec_命中_文件行整行选中() {
     let s = tree();
-    assert_eq!(
-        s.hit(0, ROW_H + 10, 172),
-        Some(Hit::Row(1)),
-        "文件没有三角可点"
-    );
+    for x in [0, TRI_W, 400, 1_200] {
+        assert_eq!(
+            s.hit(x, ROW_H + 10, 172),
+            Some(Hit::Row(1)),
+            "文件行没有三角，行内任意 x = 选中/预览"
+        );
+    }
 }
 
 #[test]
-fn spec_命中_深行三角盒能点() {
-    let s = tree_a_open(); // a/sub 在行 1，深度 1 → 三角盒 [55, 75)
+fn spec_命中_深行目录整行开合() {
+    let s = tree_a_open(); // a/sub 在行 1，深度 1
     let y = ROW_H + 10;
-    assert_eq!(
-        s.hit(60, y, 344),
-        Some(Hit::Toggle(1)),
-        "画出来的三角必须能点"
-    );
-    assert_eq!(s.hit(74, y, 344), Some(Hit::Toggle(1)));
-    assert_eq!(s.hit(75, y, 344), Some(Hit::Row(1)));
-    assert_eq!(s.hit(30, y, 344), Some(Hit::Row(1)), "缩进留白 = 选中");
-    // 文件行（a/x.txt，深度 1）左带与三角位都不给 Toggle
+    // 缩进留白 / 三角盒位 / 名字区——三种位置同义（旧口径在此分三档）
+    for x in [0, 30, 60, 74, 75, 200, 900] {
+        assert_eq!(
+            s.hit(x, y, 344),
+            Some(Hit::Toggle(1)),
+            "深缩进目录行 x={x} 都该开合"
+        );
+    }
+    // 文件行（a/x.txt，深度 1）全行选中
     let y2 = ROW_H * 2 + 10;
-    assert_eq!(s.hit(0, y2, 344), Some(Hit::Row(2)));
-    assert_eq!(s.hit(60, y2, 344), Some(Hit::Row(2)));
+    for x in [0, 60, 200] {
+        assert_eq!(s.hit(x, y2, 344), Some(Hit::Row(2)));
+    }
 }
 
 #[test]
@@ -677,7 +714,11 @@ fn spec_命中_滚动后平移() {
     assert_eq!(s.scroll, 72);
     // 同一行：屏上位置 = 内容位置 − scroll
     assert_eq!(s.hit(120, 14, 100), Some(Hit::Row(1)));
-    assert_eq!(s.hit(120, 13, 100), Some(Hit::Row(0)), "上边界随滚动平移");
+    assert_eq!(
+        s.hit(120, 13, 100),
+        Some(Hit::Toggle(0)),
+        "上边界随滚动平移"
+    );
     assert_eq!(s.hit(120, 100, 100), None, "视口外不点");
     assert_eq!(s.hit(120, -1, 100), None);
 }

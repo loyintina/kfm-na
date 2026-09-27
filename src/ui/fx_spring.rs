@@ -10,7 +10,7 @@
 //! 目标值变化即从当前值重定基续趋（来回狂点不跳变）；首采样直通
 //! 不重放（冷启动/插件热装不补演一场）。
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// 固有角频率 rad/s（临界阻尼）：95% 趋近 ≈195ms，2800px 全程贴死
@@ -124,6 +124,35 @@ pub fn frame_budget_ms() -> u64 {
     FRAME_BUDGET_MS.load(Ordering::Relaxed)
 }
 
+/// 文件树行表甩尾在飞（BAR-165 症 6，2026-09-27）：活性表第七路的读数。
+/// 壳（android_app）每圈帧泵末尾同步 `self.ft_fling.is_some()`
+static FT_FLING_LIVE: AtomicBool = AtomicBool::new(false);
+
+/// 同步文件树甩尾活性（壳专用；为什么用旗而不是读文件树状态核的理由
+/// 见 `fx_frame_due` 里第七路那段注释）
+pub fn note_ft_fling_live(on: bool) {
+    FT_FLING_LIVE.store(on, Ordering::Relaxed);
+}
+
+/// 文件树甩尾在飞（活性表读数；考题/探视口）
+pub fn ft_fling_live() -> bool {
+    FT_FLING_LIVE.load(Ordering::Relaxed)
+}
+
+/// 查看器正文甩尾在飞（BAR-167 ①，2026-09-27）：活性表第八路的读数。
+/// 与文件树同款理由住这里——甩尾状态住壳 App，ui 层反向依赖宿主编不过
+static VIEWER_FLING_LIVE: AtomicBool = AtomicBool::new(false);
+
+/// 同步查看器甩尾活性（壳专用，每圈帧泵末尾同步 `self.viewer_fling.is_some()`）
+pub fn note_viewer_fling_live(on: bool) {
+    VIEWER_FLING_LIVE.store(on, Ordering::Relaxed);
+}
+
+/// 查看器甩尾在飞（活性表读数；考题/探视口）
+pub fn viewer_fling_live() -> bool {
+    VIEWER_FLING_LIVE.load(Ordering::Relaxed)
+}
+
 /// BAR-081 考题清钟（vsync_spec 锁相考题串行进场用）：LAST_FRAME_MS 归 0。
 /// 归 0 语义 = 「动画刚开始」——下一笔 fx_frame_due 直通首帧，与产线一致
 #[doc(hidden)]
@@ -156,12 +185,24 @@ pub fn fx_frame_due(now_ms: u64) -> bool {
         let st = h.lock().unwrap();
         crate::ui::filetree::anim_active(&st, now_ms)
     });
+    // 第七路活性源（BAR-165 症 6，2026-09-27）：文件树行表甩尾在飞。甩尾
+    // 住壳 App（帧泵吃真实间隔、退界判据吃可视窗），状态核手上没有它——
+    // 且 android_app 是 `#[cfg(target_os = "android")]`，ui 层反向依赖它
+    // 宿主测试直接编不过，故用壳可写、这里可读的活性旗（同 LAST_FRAME_MS
+    // 的规：帧时钟的状态归帧时钟模块），壳每圈帧泵末尾同步
+    let ft_fling = ft_fling_live();
+    // 第八路活性源（BAR-167 ①）：查看器正文甩尾在飞——同第七路的旗规
+    // （放在 ft_fling 前：BAR-165 源码守卫钉死「|| ft_fling;」收尾字面量，
+    // OR 链位置无语义差，新旧两钉同吃不破）
+    let viewer_fling = viewer_fling_live();
     let active = crate::ui::seam::ai_panel_offset_y_active()
         || crate::ui::seam::chrome_ime_inset_active()
         || crate::ui::seam::config_panel_offset_x_active()
         || crate::ui::seam::filetree_panel_offset_x_active()
         || crate::ui::seam::parser_panel_offset_x_active()
-        || ft_anim;
+        || ft_anim
+        || viewer_fling
+        || ft_fling;
     if !active {
         LAST_FRAME_MS.store(0, Ordering::Relaxed);
         return false;

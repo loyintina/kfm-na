@@ -127,6 +127,21 @@ struct TabTouch {
     dragged: bool,
 }
 
+/// 文件树页行表手势槽（BAR-165）：起手落在行表窗内才建。
+///
+/// 拖动状态机吃 **scroll.rs 的现役接力件 `TouchScroll`**（slop 门/越阈
+/// 转向补偿/速度采样全在它身上，出处 = scroll.rs 触摸滚动手势状态机；
+/// 2026-09-27 用户拍板「滚动接惯性甩尾；废弃手写增量跟手」——旧制壳里
+/// 手写「上次 y」增量比阈值、自己算 inc 的路子已废）。抬手分流：
+/// `was_tap()` = 点按（进命中），拖动过 = `fling_on_release()` 交接甩尾
+struct FtTouch {
+    start_x: f64,
+    start_y: f64,
+    /// 行高喂行表行高 `filetree::ROW_H`（不是终端 cell_h——行级换算是行表
+    /// 自己的尺；像素通道走 `moved_px_at` 不吃它，按接力件契约仍喂）
+    scroll: crate::scroll::TouchScroll,
+}
+
 /// 输入栏选择操作菜单项（BAR-046）：自绘菜单四键，左→右依次
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BarMenuAction {
@@ -464,10 +479,27 @@ struct App {
     /// 文件树页状态核（BAR-165；与全局句柄同一份——倒帧那两条涂装路手上
     /// 没有 App，只有全局够得着，壳里留一份免得每处都查全局）
     filetree: Option<std::sync::Arc<std::sync::Mutex<crate::ui::filetree::FileTreeState>>>,
-    /// 文件树页手势槽（行区起手）：(起手x, 起手y, 已拖过 slop, 上次y)。
-    /// 同 parser_touch 的「先量后锁」——拖过 slop = 滚行表（抬手不命中），
-    /// 横向占优 = 整槽让回面板页（滚动吃增量，故要记上次 y）
-    ft_touch: Option<(f64, f64, bool, f64)>,
+    /// 文件树页手势槽（行区起手）：同 parser_touch 的「先量后锁」——拖过
+    /// slop = 滚行表（抬手不命中），横向占优 = 整槽让回面板页。位移/速度
+    /// 全在槽里的接力件 `TouchScroll` 身上（BAR-165 症 6）
+    ft_touch: Option<FtTouch>,
+    /// 文件树行表甩尾在途（BAR-165 症 6，2026-09-27 用户拍板「滚动接惯性
+    /// 甩尾」）：抬手从行表手势槽的接力件交接（`scroll.rs` Fling 物理机，
+    /// 参数是 kfmv4 canvas-scroll 实测直译——不自己发明阻尼），
+    /// about_to_wait 帧泵按真实间隔推进；速度燃尽/触底/触史顶/新触摸落地
+    /// 即清（取消语义见 comp_registry「惯性甩尾」条）
+    ft_fling: Option<crate::scroll::Fling>,
+    /// 行表甩尾帧泵末次推进时刻（boot_ms 单源——折帧 dt 的基准，同终端
+    /// 车道 fling_t_ms 的规；None = 首帧无账，取帧预算）
+    ft_fling_last_ms: Option<u64>,
+    /// 查看器正文甩尾在途（BAR-167 ①用户点名「查看器可滚动」，2026-09-27）：
+    /// 抬手从跳框手势槽的滚动接力件交接（`scroll.rs` Fling 同一物理机，
+    /// 不手写增量），about_to_wait 帧泵按真实间隔推进；速度燃尽/触底/顶/
+    /// 查看器收（车道翻牌）/新触摸落地即清（取消语义同行表车道）
+    viewer_fling: Option<crate::scroll::Fling>,
+    /// 查看器甩尾帧泵末次推进时刻（同 ft_fling_last_ms 的规；None =
+    /// 首帧无账，取帧预算）
+    viewer_fling_last_ms: Option<u64>,
     /// 文件树页「在顶」上一圈值：召唤沿触发根层刷新（不进页不拉数据）
     ft_top_last: bool,
     /// tmux 执行在途（动作类 + 结果通道）：about_to_wait 排水——Ok 后
@@ -550,6 +582,10 @@ struct App {
     /// 跳框模态手势槽（宪法 §六 跳框条款，九修）：
     /// (起手x, 起手y, 已拖过slop)——模态开着时配置页手势全归它
     modal_touch: Option<(f64, f64, bool)>,
+    /// 跳框手势的滚动接力件（BAR-167 ①）：查看器开着且拖过 slop 时
+    /// 逐事件喂 moved_px_at（惯性速度采样唯一入口），抬手交接甩尾；
+    /// comp modal 无可滚内容——件建了但不喂，恒点按态零行为差
+    modal_scroll: Option<crate::scroll::TouchScroll>,
     /// 挂起态屏尺寸缓存（BAR-108）：退后台窗口即弃（BAR-004 suspended
     /// 置 None），触摸命中几何不能跟着瞎——apply_window_size 每次记账，
     /// window=None 时由 screen_px() 兜底回退
@@ -1170,6 +1206,18 @@ impl App {
                 if !FIRST_TOUCH.swap(true, std::sync::atomic::Ordering::Relaxed) {
                     crate::report::report("ime", "首个触摸进 handler（派发活着）");
                 }
+                // 新触摸落地 = 手势语境变更：在飞的行表甩尾即取消（就地停住，
+                // 剩余位移不贴给新手势——comp_registry「惯性甩尾」条契约：
+                // 新触摸/捏合落地即取消，kfmv4 canvas-scroll 同款）。放在
+                // Started 最顶：任一路由（球/栏/底栏/行表/面板）都先过这道
+                self.ft_fling = None;
+                self.ft_fling_last_ms = None;
+                crate::ui::fx_spring::note_ft_fling_live(false);
+                // 查看器甩尾同律取消（BAR-167 ①）：任一路由的新触摸落地
+                // 都先过这道，剩余位移不贴给新手势
+                self.viewer_fling = None;
+                self.viewer_fling_last_ms = None;
+                crate::ui::fx_spring::note_viewer_fling_live(false);
                 // 光球命中优先级高于终端（ai-presence 期 0 组件一，D9）：
                 // 按下命中球区 → 这手势归球（pressed 置位 = 第四视觉态硬切；
                 // 拖动/点按/长按在 Moved/Ended/check_orb_long_press 分路）。
@@ -1260,6 +1308,11 @@ impl App {
                 {
                     crate::report::report("gest", &format!("起手→跳框模态 ({x:.0},{y:.0})"));
                     self.modal_touch = Some((x, y, false));
+                    // BAR-167 ①：滚动接力件同起手建机（速度采样时钟随件）
+                    self.modal_scroll = Some(crate::scroll::TouchScroll::new(
+                        y,
+                        f64::from(crate::termview::CELL_H),
+                    ));
                     return;
                 }
                 if in_input_bar {
@@ -1335,6 +1388,11 @@ impl App {
                                 &format!("起手→跳框模态（文件树页）({x:.0},{y:.0})"),
                             );
                             self.modal_touch = Some((x, y, false));
+                            // BAR-167 ①：滚动接力件同起手建机
+                            self.modal_scroll = Some(crate::scroll::TouchScroll::new(
+                                y,
+                                f64::from(crate::termview::CELL_H),
+                            ));
                             return;
                         }
                         if let (Some((sw, sh)), Some(_ft)) = (self.screen_px(), &self.filetree) {
@@ -1349,7 +1407,19 @@ impl App {
                                     "gest",
                                     &format!("起手→文件树行表 ({x:.0},{y:.0})"),
                                 );
-                                self.ft_touch = Some((x, y, false, y));
+                                // 接力件建机（现役复用件 scroll.rs TouchScroll）：
+                                // slop 门（TAP_SLOP_PX）/越阈转向补偿/速度采样
+                                // 全在件里，壳不再自己拿「上次 y」比阈值算增量。
+                                // 行高喂行表行高 ROW_H（行级通道的尺是行表自己的，
+                                // 与终端 cell_h 无关）
+                                self.ft_touch = Some(FtTouch {
+                                    start_x: x,
+                                    start_y: y,
+                                    scroll: crate::scroll::TouchScroll::new(
+                                        y,
+                                        crate::ui::filetree::ROW_H as f64,
+                                    ),
+                                });
                                 return;
                             }
                             match crate::termview::ft_bar_hit(&g, xi, yi) {
@@ -1837,6 +1907,28 @@ impl App {
                     {
                         mt.2 = true;
                     }
+                    // BAR-167 ①：查看器开着 + 拖过 slop = 正文滚动（眼手
+                    // 同尺：scroll 住 cfg_page viewer 态，涂装/命中同读；
+                    // max 按实时屏尺寸现算现喂）。手指上推（d<0）= 看
+                    // 下文 = scroll 增大，故取反
+                    if mt.2
+                        && let (Some(page), Some((sw, sh))) =
+                            (crate::ui::cfg_page::cfg_page_handle(), self.screen_px())
+                        && let Some(ms) = self.modal_scroll.as_mut()
+                    {
+                        let d = ms.moved_px_at(y, crate::report::boot_ms() as f64);
+                        if d != 0.0 {
+                            use crate::ui::modal as md;
+                            let mut pg = page.lock().unwrap();
+                            if let Some(v) = pg.viewer() {
+                                let fields = md::viewer_fields(&v.content, md::content_cells(sw));
+                                let max = md::viewer_scroll_max(sw, sh, &fields);
+                                if pg.scroll_viewer_by(-(d as i64), max) {
+                                    self.dirty = true;
+                                }
+                            }
+                        }
+                    }
                     return;
                 }
                 // 标签栏手势：拖过 slop = 横滚标签（pan 像素级跟手，
@@ -1901,50 +1993,50 @@ impl App {
                 // 可滚 → Page 页面滚动（2026-09-20 视口化用户拍板「卡弹小+
                 // 上下能滑动」）；否则让回面板页全家（横向锁/抽屉裁决才轮
                 // 得到它）
-                // 文件树页行表拖动（BAR-165）：过 slop 才算滚（未过 = 仍是
-                // 点按，抬手进命中）；横向占优 = 槽让回面板页（本家在顶 +
-                // 右滑零动作，故只放行不抢）；滚动态吃当下可视窗（状态核
+                // 文件树页行表拖动（BAR-165；症 6 2026-09-27 改装接力件）：
+                // 锁定判据在接力件里（`was_tap()` 翻假 = 过 slop），未过 =
+                // 仍是点按（抬手进命中）；横向占优 = 槽让回面板页（本家在顶
+                // + 右滑零动作，故只放行不抢）；滚动态吃当下可视窗（状态核
                 // 不揣屏寸，与解析页同律）
-                if let Some(ft) = self.ft_touch.take() {
-                    let (dx_all, dy_all) = (x - ft.0, y - ft.1);
-                    // 增量（滚动用）：跟手 = 手指上推（inc<0）看后部 = scroll 增
-                    let inc = y - ft.3;
-                    if !ft.2
+                if let Some(mut ft) = self.ft_touch.take() {
+                    let (dx_all, dy_all) = (x - ft.start_x, y - ft.start_y);
+                    if ft.scroll.was_tap()
                         && (dx_all.abs() > crate::ui::panel_drag::DRAG_LOCK_PX
                             || dy_all.abs() > crate::ui::panel_drag::DRAG_LOCK_PX)
+                        && dx_all.abs() * crate::ui::panel_drag::DRAG_DIR_LOCK > dy_all.abs()
                     {
-                        if dx_all.abs() * crate::ui::panel_drag::DRAG_DIR_LOCK > dy_all.abs() {
-                            // 横向占优：本页只吃垂直滚动（本家在顶，右滑零
-                            // 动作、左滑关页都归面板页）——整槽让回去
-                            crate::report::report(
-                                "gest",
-                                &format!("文件树行表手势让回面板页 ({x:.0},{y:.0})"),
-                            );
-                            self.panel_touch = Some(PanelTouch {
-                                start_x: ft.0,
-                                start_y: ft.1,
-                                last_y: y,
-                                acc_px: 0.0,
-                                dragged: true,
-                            });
-                            self.panel_drag = Some(crate::ui::panel_drag::PanelDrag::new(
-                                ft.0,
-                                ft.1,
-                                crate::report::boot_ms() as u64,
-                            ));
-                            if self.feed_panel_drag(x, y) {
-                                return;
-                            }
-                            self.dirty = true;
+                        // 横向占优：本页只吃垂直滚动（本家在顶，右滑零
+                        // 动作、左滑关页都归面板页）——整槽让回去
+                        crate::report::report(
+                            "gest",
+                            &format!("文件树行表手势让回面板页 ({x:.0},{y:.0})"),
+                        );
+                        self.panel_touch = Some(PanelTouch {
+                            start_x: ft.start_x,
+                            start_y: ft.start_y,
+                            last_y: y,
+                            acc_px: 0.0,
+                            dragged: true,
+                        });
+                        self.panel_drag = Some(crate::ui::panel_drag::PanelDrag::new(
+                            ft.start_x,
+                            ft.start_y,
+                            crate::report::boot_ms() as u64,
+                        ));
+                        if self.feed_panel_drag(x, y) {
                             return;
                         }
-                        // 落锁那一瞬不滚（起滚点重定基，防 slop 跳变）
-                        self.ft_touch = Some((ft.0, ft.1, true, y));
                         self.dirty = true;
                         return;
                     }
-                    if ft.2
-                        && inc != 0.0
+                    // 拖动期位移 = 接力件的**像素位移**（`moved_px_at`：自带
+                    // slop 门、越阈首笔从阈值边界起算（slop 段不计——零跳变
+                    // 即旧制「落锁那一瞬不滚」那条纪律，件里已有），并**顺手
+                    // 采样甩尾速度**——抬手交接的初速唯一来源。t 喂 boot_ms
+                    // 单源（与终端车道同规）。位移吃 DRAG_GAIN（件里的全局
+                    // 2 倍增益）后才落 scroll_by
+                    let d = ft.scroll.moved_px_at(y, crate::report::boot_ms() as f64);
+                    if d != 0.0
                         && let (Some((sw, sh)), Some(state)) = (self.screen_px(), &self.filetree)
                     {
                         let g = crate::termview::ft_geom(
@@ -1953,10 +2045,11 @@ impl App {
                             self.chrome_inset() + self.cur_bar_h(),
                         );
                         let view_h = g.list_y1 - g.list_y0;
-                        state.lock().unwrap().scroll_by(-(inc as i64), view_h);
+                        // 符号：手指下移 d>0 = 看更早 = 行表 scroll 减（同旧约定）
+                        state.lock().unwrap().scroll_by(-(d as i64), view_h);
                         self.dirty = true;
                     }
-                    self.ft_touch = Some((ft.0, ft.1, ft.2, y));
+                    self.ft_touch = Some(ft);
                 }
                 if let Some(pt) = self.parser_touch.take() {
                     if let Some(kind) = pt.2 {
@@ -2637,6 +2730,26 @@ impl App {
                 // BAR-108：几何源走 screen_px（挂起态吃缓存）——曾因直查
                 // self.window 在退后台后静默跳过，跳框关不死
                 if let Some(mt) = self.modal_touch.take() {
+                    // BAR-167 ①：拖过抬手 = 交接惯性甩尾（查看器开着且
+                    // 末速过启动阈；点按/停住才松手 = None 不甩——
+                    // scroll.rs Fling 同一物理机，不手写增量）
+                    if phase == TouchPhase::Ended
+                        && mt.2
+                        && let Some(f) = self
+                            .modal_scroll
+                            .as_ref()
+                            .and_then(|ms| ms.fling_on_release())
+                        && crate::ui::cfg_page::cfg_page_handle()
+                            .is_some_and(|p| p.lock().unwrap().viewer().is_some())
+                    {
+                        crate::report::report(
+                            "scroll",
+                            &format!("查看器甩尾起: v={:.1}px/帧", f.velocity()),
+                        );
+                        self.viewer_fling = Some(f);
+                        self.viewer_fling_last_ms = None;
+                    }
+                    self.modal_scroll = None;
                     if phase == TouchPhase::Ended
                         && !mt.2
                         && let (Some(page), Some((sw, sh))) =
@@ -2848,15 +2961,33 @@ impl App {
                 // 命中判定（几何吃 ui/parser_page::layout_vp 同一份——眼手
                 // 同尺）：行 = 切换 attach / × = 开确认 / 按钮 = 动作分发；
                 // 拖过 slop / Cancelled = 零动作（Moved 段已让回面板页）
-                // 文件树页抬手（BAR-165）：未拖 = 命中判定——几何吃**屏代
-                // 快照**（命中唯一合法源 = 屏上正显示的那一代，BAR-145 判例），
-                // 无烘焙记录回落活体（与解析页同规）。**三角带 = 开合 /
-                // 名字区 = 选中**（旧表述「目录行点哪都算开合（原版语义）」
-                // 已作废——2026-09-26 研究线判卷纠偏，以本处代码为准）；
-                // 文件行选中后另开只读预览跳框
+                // 文件树页抬手（BAR-165）两分流：没过 slop（`was_tap()`）=
+                // 点按 → 命中判定——几何吃**屏代快照**（命中唯一合法源 =
+                // 屏上正显示的那一代，BAR-145 判例），无烘焙记录回落活体
+                // （与解析页同规）。**口径 = 目录行整行（任意 x）开合 /
+                // 文件行选中**（2026-09-27 用户裁决回原版语义，`hit`/`hit_snap`
+                // 已改整行判据，三角只是状态指示）。旧口径「三角带 = 开合 /
+                // 名字区 = 选中」作废——真机 logcat 20+ 次点按零 toggle（用户
+                // 点目录行没反应）；根因是把原版截屏的「选中未展开正常态」
+                // 误读成「名字区只选中」。文件行选中后另开只读预览跳框；
+                // 拖动过（`was_tap()` 翻假）= 抬手交接甩尾（症 6）
                 if let Some(ft) = self.ft_touch.take() {
-                    if phase == TouchPhase::Ended
-                        && !ft.2
+                    if phase == TouchPhase::Ended && !ft.scroll.was_tap() {
+                        // 拖动过 = 交接甩尾：初速 = 拖动期逐事件采样末速（件里
+                        // 自带启动阈——「停住了才松手」不甩），帧泵在
+                        // about_to_wait 逐圈推进。落在 ended 才交接：Cancelled
+                        // 不甩（手势被系统收走 = 语境已变）
+                        self.ft_fling = ft.scroll.fling_on_release();
+                        self.ft_fling_last_ms = Some(crate::report::boot_ms() as u64);
+                        crate::report::report(
+                            "ftree",
+                            &format!(
+                                "行表抬手交接甩尾 v={:.1}px/帧（None = 低速不甩）",
+                                self.ft_fling.as_ref().map_or(0.0, |f| f.velocity())
+                            ),
+                        );
+                        self.dirty = true;
+                    } else if phase == TouchPhase::Ended
                         && let (Some((sw, sh)), Some(state)) = (self.screen_px(), &self.filetree)
                     {
                         let now = crate::report::boot_ms() as u64;
@@ -2868,19 +2999,20 @@ impl App {
                         let view_h = g.list_y1 - g.list_y0;
                         let snap = crate::ui::filetree::baked_snap()
                             .unwrap_or_else(|| state.lock().unwrap().snap());
-                        let y_local = ft.1 as i64 - g.list_y0;
-                        // x 必须折成**列表相对**（状态核的 x 尺 = 行左缘起算：
-                        // 三角带 x<TRI_W、三角盒 tri_x..tri_x+TRI_W 都相对它）——
-                        // 传屏幕 x 就差一个内容左缘（43px），实拍逮到过：
-                        // 三角点不中，全落成「选中」（2026-09-26 redroid 实拍）
-                        let x_local = ft.0 as i64 - g.x0;
+                        let y_local = ft.start_y as i64 - g.list_y0;
+                        // x 折成**列表相对**（状态核 x 尺 = 行左缘起算，`x < 0`
+                        // = 行表左外不接）。症 5 改回整行口径后 hit 不再看三角
+                        // 带，但折算这一笔照旧正确——传屏幕 x 会差一个内容左缘
+                        // （43px），x<0 的边界判就跟着漂
+                        let x_local = ft.start_x as i64 - g.x0;
                         let hit = crate::ui::filetree::FileTreeState::hit_snap(
                             &snap, x_local, y_local, view_h,
                         );
                         if let Some(h) = hit {
-                            // 三角带 = 开合；名字区 = 选中（文件行另开只读预览）。
-                            // 这条切分是原版截屏实拍的：屏上选中的那一行是**目录**
-                            // 且没展开——说明名字区点按只选中，不顺手摊开
+                            // 目录行整行 = 开合（三角只是状态指示）；文件行 =
+                            // 选中 + 只读预览。`Toggle` 只出在目录行、`Row` 只
+                            // 出在文件行（hit/hit_snap 的新契约），`is_dir` 兜底
+                            // 一并留着——口径漂了也不会把文件行当目录摊开
                             let (idx, want_toggle) = match h {
                                 crate::ui::filetree::Hit::Toggle(i) => (i, true),
                                 crate::ui::filetree::Hit::Row(i) => (i, false),
@@ -9485,6 +9617,111 @@ impl ApplicationHandler for App {
                     crate::report::report("scroll", &format!("惯性甩尾尽: {why}"));
                 }
             }
+            // 文件树行表甩尾帧泵（BAR-165 症 6，2026-09-27）：与终端车道同规
+            // ——Fling::step 吃**真实间隔**（时间切片等比折帧，4ms 降频泵圈内
+            // ≠ 16.667ms 帧），位移走与拖动同一把尺（filetree::scroll_by，自钳
+            // [0, max]）。燃尽两件：速度燃尽（step None）/ 本笔被钳（实际滚动
+            // 量 ≠ 请求量 = 触底或触史顶——空转位移不许继续泵脏帧）
+            if self.ft_fling.is_some() {
+                let now = crate::report::boot_ms() as u64;
+                let dt = match self.ft_fling_last_ms {
+                    Some(prev) => now.saturating_sub(prev),
+                    None => crate::ui::fx_spring::frame_budget_ms(), // 首帧无账：取帧预算
+                };
+                self.ft_fling_last_ms = Some(now);
+                let mut kill: Option<&str> = None;
+                match self.ft_fling.as_mut().and_then(|f| f.step(dt as f64)) {
+                    None => kill = Some("速度燃尽"),
+                    Some(d) if d != 0.0 => {
+                        let req = -(d as i64);
+                        // req = 0（位移不足 1px）= 本笔不出像素：不置脏不判界，
+                        // 余速继续衰减（下次抬到 1px 再落）
+                        if req != 0
+                            && let (Some((sw, sh)), Some(state)) =
+                                (self.screen_px(), &self.filetree)
+                        {
+                            let g = crate::termview::ft_geom(
+                                sw,
+                                sh,
+                                self.chrome_inset() + self.cur_bar_h(),
+                            );
+                            let view_h = g.list_y1 - g.list_y0;
+                            // 实滚量对表（行表状态核无 scroll 只读口，借快照读；
+                            // 一帧两次克隆只为判界，与涂装侧每帧取帧账同量级）
+                            let (before, after) = {
+                                let mut st = state.lock().unwrap();
+                                let before = st.snap().scroll;
+                                st.scroll_by(req, view_h);
+                                (before, st.snap().scroll)
+                            };
+                            if after - before != req {
+                                kill = Some("触底/触史顶");
+                            }
+                            self.dirty = true;
+                        }
+                    }
+                    Some(_) => {}
+                }
+                if let Some(why) = kill {
+                    self.ft_fling = None;
+                    crate::report::report("ftree", &format!("文件树甩尾尽: {why}"));
+                }
+            }
+            // 行表甩尾活性入表（fx_frame_due 第七路，BAR-165 症 6）：页停住而
+            // 甩尾在飞时若不入表 = 甩尾零帧（泵推进了但没帧许可，画面不动）
+            crate::ui::fx_spring::note_ft_fling_live(self.ft_fling.is_some());
+            // 查看器正文甩尾帧泵（BAR-167 ①）：与行表车道同规——Fling::step
+            // 吃真实间隔（时间切片等比折帧），位移走与拖动同一把尺
+            // （scroll_viewer_by 自钳 [0, max]，max 按实时屏尺寸现算）。
+            // 燃尽三件：速度燃尽 / 本笔到位不动（触底或顶——空转不许续泵
+            // 脏帧）/ 车道翻牌（查看器收了，甩到一半不许甩错对象）
+            if self.viewer_fling.is_some() {
+                let now = crate::report::boot_ms() as u64;
+                let dt = match self.viewer_fling_last_ms {
+                    Some(prev) => now.saturating_sub(prev),
+                    None => crate::ui::fx_spring::frame_budget_ms(),
+                };
+                self.viewer_fling_last_ms = Some(now);
+                let lane = self.screen_px().is_some()
+                    && crate::ui::cfg_page::cfg_page_handle()
+                        .is_some_and(|p| p.lock().unwrap().viewer().is_some());
+                let mut kill: Option<&str> = if lane { None } else { Some("车道翻牌") };
+                match self.viewer_fling.as_mut().and_then(|f| f.step(dt as f64)) {
+                    None => {
+                        if kill.is_none() {
+                            kill = Some("速度燃尽");
+                        }
+                    }
+                    Some(d) if d != 0.0 && lane => {
+                        // 手指上推看下文 = scroll 增大（与拖动同一取反）
+                        let req = -(d as i64);
+                        if req != 0
+                            && let (Some((sw, sh)), Some(page)) =
+                                (self.screen_px(), crate::ui::cfg_page::cfg_page_handle())
+                        {
+                            use crate::ui::modal as md;
+                            let mut pg = page.lock().unwrap();
+                            if let Some(v) = pg.viewer() {
+                                let fields = md::viewer_fields(&v.content, md::content_cells(sw));
+                                let max = md::viewer_scroll_max(sw, sh, &fields);
+                                if pg.scroll_viewer_by(req, max) {
+                                    self.dirty = true;
+                                } else {
+                                    kill = Some("触底/顶");
+                                }
+                            }
+                        }
+                    }
+                    Some(_) => {}
+                }
+                if let Some(why) = kill {
+                    self.viewer_fling = None;
+                    self.viewer_fling_last_ms = None;
+                    crate::report::report("scroll", &format!("查看器甩尾尽: {why}"));
+                }
+            }
+            // 查看器甩尾活性入表（fx_frame_due 第八路，同第七路的旗规）
+            crate::ui::fx_spring::note_viewer_fling_live(self.viewer_fling.is_some());
             // 浏览期对端鼠标上报消失（tmux 退出/脱离/重孵清场）= 快照
             // 语义死了——自动退浏览回 live（不退 = 僵尸画面盖活会话）
             if self.term_handle().is_some_and(|t| {

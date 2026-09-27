@@ -60,20 +60,22 @@ impl std::error::Error for FsError {}
 const EXCLUDE_DIRS: [&str; 5] = [".obsidian", ".smart-env", ".trash", "node_modules", ".git"];
 
 /// 允许根（每请求现读 env——考题/运营可在运行时改）：
-/// `NA_FS_ROOTS` 冒号分隔覆盖；缺省 = 库本体存在则用它，否则 `$HOME`。
+/// `NA_FS_ROOTS` 冒号分隔覆盖；**缺省 = `/root`**。
 /// env 设成空串 = 显式零根（fail-closed，一切 404），不退缺省。
 pub fn roots() -> Vec<PathBuf> {
-    let spec = std::env::var("NA_FS_ROOTS").ok();
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
-    roots_from(spec.as_deref(), Path::new(&home))
+    roots_from(std::env::var("NA_FS_ROOTS").ok().as_deref())
 }
 
-/// `roots()` 的纯核（考题可注入，不必改进程 env——env 在并行考题里不安全）：
-/// 缺省根照 nz 定案收窄到库本体 `$HOME/00-Loyintina`（服务器 HOME=/root
-/// ⇒ `/root/00-Loyintina`），库不在才退回 HOME（全量 HOME 会把源码树/
-/// toolchain 全索进索引，nz 8.3MB 索引实锤）。条目可为相对路径，按进程
-/// cwd 解析（canonicalize 在 resolve 侧做）。
-pub fn roots_from(spec: Option<&str>, home: &Path) -> Vec<PathBuf> {
+/// `roots()` 的纯核（考题可注入，不必改进程 env——env 在并行考题里不安全）。
+///
+/// **缺省根 = `/root`，不依赖 HOME**（2026-09-27 用户裁决，BAR-165 打回
+/// 定罪）：服务端跑在 systemd 里，unit 没写 `Environment=HOME`——旧实现
+/// 「HOME 缺省回退 `/`」于是把根落到**根文件系统**，真机打开的是 44 条
+/// 系统目录（logcat「列目录到位 "" 条目 44」铁证）。nz 那套「收窄到库本体
+/// `$HOME/00-Loyintina`」一并作废：用户要的是 `/root` 本身（00-Loyintina
+/// 是它的孩子，看得见、点得进）。条目可为相对路径，按进程 cwd 解析
+/// （canonicalize 在 resolve 侧做）。
+pub fn roots_from(spec: Option<&str>) -> Vec<PathBuf> {
     if let Some(spec) = spec {
         return spec
             .split(':')
@@ -81,12 +83,7 @@ pub fn roots_from(spec: Option<&str>, home: &Path) -> Vec<PathBuf> {
             .map(PathBuf::from)
             .collect();
     }
-    let lib = home.join("00-Loyintina");
-    if lib.exists() {
-        vec![lib]
-    } else {
-        vec![home.to_path_buf()]
-    }
+    vec![PathBuf::from("/root")]
 }
 
 /// 排除判定：隐藏项（`.` 开头）或段级命中清单（nz 同款：命中即整枝剪除）

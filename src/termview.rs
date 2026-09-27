@@ -1863,10 +1863,13 @@ const FT_ROOT_W: i64 = 560;
 const FT_CLOSE_W: i64 = 130;
 /// 栏底提亮档（「比页面底色略亮」的量：t=18/255 ≈ +7% 亮度）
 const FT_BAR_LIFT: u32 = 18;
-/// 名字与三角盒的间隙（规格给的 4–8 区间取中值 6）
-const FT_NAME_GAP: f32 = 6.0;
-/// 行名字号（= 解析页会话名同档 34，不新造字号）
-const FT_TEXT_PX: f32 = 34.0;
+/// 名字与三角盒的间隙（规格给的 4–8 区间；**打回改约症①**：字号 44 后
+/// 取区间上界 8，比例跟得上）
+const FT_NAME_GAP: f32 = 8.0;
+/// 行名字号（**打回改约症①，2026-09-27 用户终验**）：34 太小、与三角比例
+/// 失调；原版实测字高 32~33 物理 px，本实现按原版观感放到 44（≈ 原版
+/// 字号档 ×1.3，与三角 26×28 等比）。常量收拢在此，redroid 打样后可直接调。
+const FT_TEXT_PX: f32 = 44.0;
 /// 行名字色（0.85 白，目录/文件同色——原版实测同浅灰白，与解析页标题档同值）
 const FT_TEXT_FG: u32 = 0x00D9_D9D9;
 /// 左强调边宽（截屏实测 2 CSS px × 3.06 = 6 物理 px）
@@ -1975,8 +1978,10 @@ pub fn ft_wrap_split(adv: &[f32], avail: f32) -> usize {
 }
 
 /// RRGGBBAA（`ui::filetree` 色常量口径）→ 本文件内部 AARRGGBB 的 RGB 三通道。
-/// **唯一取色口**：两套解包直搬必翻车（`0x00D4FFFF` 按 AARRGGBB 解 = 浅青
-/// 且 α=0，光标线整条不可见）
+/// **留档用**（打回改约症③后现役涂装全走 accent 渐变同源采样，不再吃
+/// 字面色常量）：仍在冒烟考题里钉「解包不翻车」这条口径
+/// （`0x00D4FFFF` 按 AARRGGBB 解 = 浅青且 α=0，光标线整条不可见）。
+#[cfg(test)]
 fn ft_rgb(c: u32) -> u32 {
     let (r, g, b, _a) = crate::ui::filetree::rrggbbaa(c);
     (u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b)
@@ -5879,9 +5884,19 @@ impl TermView {
                 let (sn, cs) = ang.sin_cos();
                 let tx = g.x0 + ft::tri_x(row.depth);
                 let ty = g.list_y0 + yrel + (ch - ft::TRI_H) / 2;
-                // 基形 = 右指实心三角（宽 10 高 16 居中盒内），展开转 90° = ▼
-                let (hwt, hht) = (5.0f32, 8.0f32);
-                let rgb = ft_rgb(ft::CHEVRON_RGB);
+                // 基形 = 右指实心三角（盒 26×28 内 13×21 居中），展开转 90° = ▼
+                // （症①：随字号等比放大；旧 10×16 配 44px 字太小）
+                let (hwt, hht) = (6.5f32, 10.5f32);
+                // 症③：三角色吃**页 accent 渐变同源采样**（原版那格 teal 是
+                // 那次召唤随机到的 accent，不是固定色；帧尺 = 页环同一把
+                // 135° 尺：原点 0,0 分母 (w−1)+(h−1)）
+                let rgb = ring_gradient_rgb(
+                    accent.c1,
+                    accent.c2,
+                    tx + ft::TRI_W / 2,
+                    ty + ft::TRI_H / 2,
+                    i64::from(w.saturating_sub(1)) + i64::from(h.saturating_sub(1)),
+                );
                 for py in 0..ft::TRI_H {
                     let yy = ty + py;
                     if yy < g.list_y0 + c0 || yy >= g.list_y0 + c1 {
@@ -5909,6 +5924,13 @@ impl TermView {
         }
 
         // ── 光标框（选中行；画在行表之后——不许被后画的行盖住）──────
+        //
+        // **封存件复活（症④，2026-09-27 用户终验）**：改用
+        // `paint_open_cursor`（termview.rs:1303，comp_registry「功能光标
+        // 开口框·封存件复活展出」——封存时就注明「待文件树光标复用」）：
+        // 圆角开口框（左强调线 + 上下圆角弧 SDF + 顶底发丝 + accent 底垫
+        // α15%），线色**逐像素吃页 accent 渐变同源采样**（症③一并落地）。
+        // 旧的自绘无圆角版（底垫/左竖线/上下线三段手搓）据此**废弃**。
         if let Some((idx, shift, ch, c0, c1)) = sel_box {
             let row = &snap.rows[idx];
             let name_w = i64::from(self.text_width(&row.name, FT_TEXT_PX));
@@ -5916,54 +5938,47 @@ impl TermView {
             // 光标框可借环内留白，不许压环本身）
             let ring_in = i64::from(AI_PAGE_FRAME_MARGIN + AI_PAGE_FRAME_W * 3);
             let bx0 = (g.x0 + ft::tri_x(row.depth) - ft::CURSOR_NAME_INSET).max(ring_in);
-            let bx1 = (g.x0 + ft::name_x(row.depth) + name_w + ft::CURSOR_NAME_INSET).min(g.x1);
+            // 症②：光标**右缘扩到行表窗全宽**（旧版到「名字实量宽 + 内缩」就收，
+            // 右缘留空；开口框右边本就不封口，线一直拖到窗右缘才与原版一致）
+            let bx1 = g.x1;
             let box_h = (ch - ft::CURSOR_INSET).max(2);
             let box_w = bx1 - bx0;
-            // 框心 = 动画中的光标 y（内容坐标）→ 列表相对（随行滚 + 随抽屉平移）
-            let by0 = snap.cursor_y - scroll + shift - box_h / 2;
-            if box_w > 4 {
-                let brr = ft::ROW_RADIUS.min(box_w / 2).min(box_h / 2).max(0);
-                let line = ft_rgb(ft::CURSOR_LINE_RGB);
-                let line_a = ft_a255(ft::CURSOR_LINE_ALPHA);
-                let pad_a = ft_a255(ft::CURSOR_FILL_ALPHA);
-                // ①底垫 accent 15%（圆角同尺）
-                for y in by0.max(c0)..(by0 + box_h).min(c1) {
-                    let ly = y - by0;
-                    let ay = (g.list_y0 + y) as u32;
-                    for px in 0..box_w as u32 {
-                        let cov = rr_cover(px, ly as u32, box_w as u32, box_h as u32, brr as u32);
-                        if cov > 0 {
-                            frame.blend_px(
-                                (bx0 + i64::from(px)) as u32,
-                                ay,
-                                accent.c1,
-                                pad_a * cov / 255,
-                            );
-                        }
-                    }
-                }
-                // ②左竖线 3px（圆角区让开）
-                for y in (by0 + brr).max(c0)..(by0 + box_h - brr).min(c1) {
-                    let ay = (g.list_y0 + y) as u32;
-                    for px in 0..ft::CURSOR_BAR_W {
-                        let ax = bx0 + px;
-                        if ax >= bx1 {
-                            continue;
-                        }
-                        frame.blend_px(ax as u32, ay, line, line_a);
-                    }
-                }
-                // ③上线 = 名字实量宽 clamp(20, 盒宽−10) ④下线 = 补到盒右缘
+            // 框心 = 动画中的光标 y（**内容坐标**）→ 列表相对（随行滚 + 随抽屉
+            // 平移）。注意全段都用列表相对 y（c0/c1 也是列表相对——两者同尺
+            // 才可比；混用屏幕坐标就差一个窗顶 list_y0）
+            let box_top = snap.cursor_y - scroll + shift - box_h / 2;
+            // 可见带 = 行表窗 ∩ 抽屉顶缘窗（与行带同一份裁剪）
+            let ty0 = box_top.max(c0);
+            let ty1 = (box_top + box_h).min(c1);
+            if box_w > 4 && ty1 > ty0 {
+                let cy0 = g.list_y0 + ty0;
+                let cy1 = g.list_y0 + ty1;
+                // 上线 = 名字实量宽 clamp(20, 盒宽−10)；下线 = 补全到盒右缘
                 let top_w = ft::cursor_line_w(name_w, box_w);
-                for (yy, len) in [(by0, top_w), (by0 + box_h - ft::CURSOR_HAIR_W, box_w - brr)] {
-                    let ys = yy + ft::CURSOR_HAIR_W;
-                    for y in yy.max(c0)..ys.min(c1) {
-                        let ay = (g.list_y0 + y) as u32;
-                        for ax in (bx0 + brr)..(bx0 + brr + len).min(bx1) {
-                            frame.blend_px(ax as u32, ay, line, line_a);
-                        }
-                    }
-                }
+                // 渐变帧尺 = 页环同一把 135° 尺（原点 0,0 分母 (w−1)+(h−1)）
+                let grad = RingGradient {
+                    c1: accent.c1,
+                    c2: accent.c2,
+                    x0: 0,
+                    y0: 0,
+                    denom: i64::from(w.saturating_sub(1)) + i64::from(h.saturating_sub(1)),
+                };
+                // 开口框按「当前可见带」调用：把上缘折进 y0/盒高（封存件的
+                // clip 只管 X 向，Y 向由调用方给准盒）——行只露半截时
+                // 光标贴窗缘收口，不漏到栏带/页缘外
+                paint_open_cursor(
+                    &mut frame,
+                    bx0,
+                    cy0,
+                    box_w,
+                    cy1 - cy0,
+                    top_w,
+                    box_w - ft::ROW_RADIUS.min(box_w / 2),
+                    bx0,
+                    bx1,
+                    grad,
+                    accent.c1,
+                );
             }
         }
 
@@ -5993,8 +6008,16 @@ impl TermView {
             let span = mid_x1 - mid_x0;
             let root_w = FT_ROOT_W.min(span);
             let root_x = mid_x0 + (span - root_w) / 2;
-            let teal = ft_rgb(ft::CHEVRON_RGB);
-            // 中：根名盒（teal 描边 + 文字居中）
+            // 症③：底栏件同吃页 accent 渐变同源采样（旧版硬编码 teal 是原版
+            // 那次召唤的随机色；根名盒描边/文字 = 页心处的 accent 采样）
+            let mid_ink = ring_gradient_rgb(
+                accent.c1,
+                accent.c2,
+                (g.x0 + g.x1) / 2,
+                g.bar_y0 + bar_h / 2,
+                i64::from(w.saturating_sub(1)) + i64::from(h.saturating_sub(1)),
+            );
+            // 中：根名盒（accent 采样描边 + 文字居中，字号同吃 FT_TEXT_PX）
             paint_ft_round_box(
                 &mut frame,
                 root_x,
@@ -6004,7 +6027,7 @@ impl TermView {
                 FT_BOX_R,
                 FT_BOX_EDGE,
                 accent,
-                Some(lerp_rgb(teal, page_bg, 90)),
+                Some(lerp_rgb(mid_ink, page_bg, 90)),
             );
             self.draw_text_centered_yclip(
                 &mut frame,
@@ -6014,7 +6037,7 @@ impl TermView {
                 root_w as u32,
                 box_h as u32,
                 FT_TEXT_PX,
-                teal,
+                mid_ink,
                 root_x,
                 Some((by, by + box_h)),
             );
@@ -6857,41 +6880,51 @@ impl TermView {
             }
         }
 
-        // 字段区：题注（30px 灰）在上 + 内容行（36px 亮）在下
-        let mut pen = md::viewer_fields_top(&card);
+        // 字段区：题注（30px 灰）在上 + 内容行（36px 亮）在下。
+        // BAR-167 ①可滚动：起笔 = 字段区顶 − scroll（正文全高可滚，滚动
+        // 上限 = modal::viewer_scroll_max 由壳钳住）；逐行 clip_y 裁进
+        // 视口 [字段区顶, ink_bottom)——上裁防滚出的行污染分隔线/标题带，
+        // 下裁守住关闭钮前隙（旧「截断不滚动」只保了下裁）
+        let vp_top = md::viewer_fields_top(&card);
+        let clip = Some((vp_top as i32, ink_bottom as i32));
+        let mut pen = vp_top - v.scroll;
         for f in &fields {
             if pen + i64::from(md::MODAL_LABEL_H) > ink_bottom {
                 break;
             }
-            self.draw_text_left_ex(
-                frame,
-                &f.label,
-                text_x,
-                text_w,
-                pen as u32,
-                md::MODAL_LABEL_H,
-                30.0,
-                meta_fg,
-                0.0,
-                None,
-            );
+            if pen + i64::from(md::MODAL_LABEL_H) > vp_top {
+                self.draw_text_left_ex(
+                    frame,
+                    &f.label,
+                    text_x,
+                    text_w,
+                    pen as u32,
+                    md::MODAL_LABEL_H,
+                    30.0,
+                    meta_fg,
+                    0.0,
+                    clip,
+                );
+            }
             pen += i64::from(md::MODAL_LABEL_H);
             for line in &f.lines {
                 if pen + i64::from(md::MODAL_LINE_H) > ink_bottom {
                     break;
                 }
-                self.draw_text_left_ex(
-                    frame,
-                    line,
-                    text_x,
-                    text_w,
-                    pen as u32,
-                    md::MODAL_LINE_H,
-                    36.0,
-                    title_fg,
-                    0.0,
-                    None,
-                );
+                if pen + i64::from(md::MODAL_LINE_H) > vp_top {
+                    self.draw_text_left_ex(
+                        frame,
+                        line,
+                        text_x,
+                        text_w,
+                        pen as u32,
+                        md::MODAL_LINE_H,
+                        36.0,
+                        title_fg,
+                        0.0,
+                        clip,
+                    );
+                }
                 pen += i64::from(md::MODAL_LINE_H);
             }
             pen += i64::from(md::MODAL_FIELD_GAP);
@@ -9916,19 +9949,93 @@ mod ft_paint_smoke {
         h: u32,
         inset: u32,
     ) -> Vec<u32> {
+        paint_acc(tv, st, now, w, h, inset, crate::ui::accent::FALLBACK)
+    }
+
+    /// 指定 accent 的涂装（症③钉要「换召唤即换色」，故要能注入 accent）
+    fn paint_acc(
+        tv: &TermView,
+        st: &ft::FileTreeState,
+        now: u64,
+        w: u32,
+        h: u32,
+        inset: u32,
+        accent: crate::ui::accent::AccentPair,
+    ) -> Vec<u32> {
         let snap = st.snap_at(now);
         let mut buf = vec![0u32; (w as usize) * (h as usize)];
-        tv.paint_ft_content_impl(
-            &mut buf,
-            w,
-            h,
-            inset,
-            0,
-            &snap,
-            now,
-            crate::ui::accent::FALLBACK,
-        );
+        tv.paint_ft_content_impl(&mut buf, w, h, inset, 0, &snap, now, accent);
         buf
+    }
+
+    /// 打回改约的逐像素钉（症②③④）：全宽光标右缘、accent 三角随召唤变色、
+    /// 封存开口框的圆角弧落墨。视觉判卷本体在 redroid，这几条是「改动碰没碰
+    /// 到该碰的件」的机械兜底。
+    #[test]
+    fn smoke_打回_全宽光标与accent三角() {
+        use crate::ui::filetree::{CURSOR_NAME_INSET, ROW_RADIUS, band_alpha, tri_x};
+        let tv = tv();
+        let mut st = tree();
+        st.select(1, 1_000); // docs 行（深度 0），光标 180ms 内落位
+        let (w, h) = (1260u32, 2800u32);
+        let g = ft_geom(w, h, 0);
+        let acc = crate::ui::accent::FALLBACK;
+        let acc2 = crate::ui::accent::AccentPair {
+            c1: 0x00FF_3030,
+            c2: 0x00FF_C020,
+        };
+        let b1 = paint(&tv, &st, 1_200, w, h, 0);
+        let b2 = paint_acc(&tv, &st, 1_200, w, h, 0, acc2);
+        let at = |b: &[u32], x: i64, y: i64| b[(y * i64::from(w) + x) as usize];
+        let denom = i64::from(w - 1) + i64::from(h - 1);
+        let flat = |d: usize| {
+            blend(
+                ft_band_rgb(d, acc),
+                crate::ui::accent::CARD_PAGE_BG,
+                ft_a255(band_alpha(d)),
+            )
+        };
+        // 症②：光标（下线/底垫）必须拖到**行表窗右缘**——旧版在「名字实量宽
+        // + 内缩」就收，右缘留空。判据：右缘那一列里存在非行带色像素
+        let mut ink_at_right = false;
+        for y in g.list_y0..g.list_y1 {
+            for x in (g.x1 - 4)..g.x1 {
+                if at(&b1, x, y) != flat(0) && at(&b1, x, y) != flat(1) {
+                    ink_at_right = true;
+                }
+            }
+        }
+        assert!(ink_at_right, "症②：光标右缘必须到行表窗全宽");
+        // 症③：三角墨色 = 页 accent 渐变同源采样（逐像素取样点对表）
+        let tx = g.x0 + tri_x(0);
+        let ty = g.list_y0 + (ft::row_h(false) - ft::TRI_H) / 2;
+        let (px, py) = (tx + ft::TRI_W / 2 - 4, ty + ft::TRI_H / 2); // ▶ 最宽处必落墨
+        let want = ring_gradient_rgb(acc.c1, acc.c2, px, py, denom);
+        assert_eq!(at(&b1, px, py), want, "症③：三角吃 accent 同源采样");
+        assert_ne!(
+            at(&b2, px, py),
+            at(&b1, px, py),
+            "症③：换召唤 accent 三角必换色（硬编码 teal 回潮即红）"
+        );
+        // 症④：封存开口框的圆角弧在框左角各有墨（自绘无圆角版没有弧）——
+        // 判据 = 框左 CORNER_R 宽的那条竖带里出现非行带/非底垫色像素
+        let bx0 = (g.x0 + tri_x(0) - CURSOR_NAME_INSET)
+            .max(i64::from(AI_PAGE_FRAME_MARGIN + AI_PAGE_FRAME_W * 3));
+        let pad = blend(acc.c1, flat(0), ft_a255(ft::CURSOR_FILL_ALPHA));
+        let mut arc_ink = 0;
+        for y in g.list_y0..g.list_y1 {
+            for x in bx0..(bx0 + crate::ui::cursor::CORNER_R + 2) {
+                let p = at(&b1, x, y);
+                if p != flat(0) && p != flat(1) && p != pad {
+                    arc_ink += 1;
+                }
+            }
+        }
+        assert!(arc_ink > 0, "症④：封存开口框该在框左落弧墨");
+        let _ = ROW_RADIUS;
+        // 留档色口径（ft_rgb = RRGGBBAA → AARRGGBB 的取色口）：原版那次召唤的
+        // teal 仍解得出 RGB (0,148,178)（0x0094B2），别让两套解包直搬翻车
+        assert_eq!(ft_rgb(crate::ui::filetree::CHEVRON_RGB), 0x0000_94B2);
     }
 
     #[test]

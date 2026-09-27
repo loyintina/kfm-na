@@ -433,7 +433,7 @@ pub const COMPONENTS: &[CompEntry] = &[
         file: "src/ui/filetree.rs",
         spec: "docs/active/文件树.md",
         tests: "tests/filetree_spec.rs",
-        desc: "文件树选中框（老 kfmv4 Canvas 版复刻，用户裁决：液体光点不要、渐变文字不要）：上线 = 名字实量宽、下线补全行尾、左 3px 竖线、底 accent 15%、移动 180ms ease-out cubic。",
+        desc: "文件树选中框（老 kfmv4 Canvas 版复刻，用户裁决：液体光点不要、渐变文字不要）：上线 = 名字实量宽 clamp(20,盒宽−10)、下线补全到**行表窗全宽**（打回症②）、左 3px 竖线、底 accent 15%、移动 180ms ease-out cubic。**涂装本体 = 封存件 `paint_open_cursor`（症④复活）**：线色逐像素吃页 accent 渐变同源采样（症③），本条目只管帧值（cursor_y）。",
         preview: Preview::OpenCursor,
     },
     CompEntry {

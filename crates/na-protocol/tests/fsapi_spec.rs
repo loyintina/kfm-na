@@ -6,7 +6,7 @@
 //! 并行考题里 set_var 是竞态源）；`roots_from`/`parse_*`/`pct_decode` 等无 IO
 //! 的面直接打公开函数。
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use na_protocol::fsapi;
 use serde_json::Value;
@@ -433,30 +433,26 @@ fn spec_排序稳定() {
 
 #[test]
 fn spec_roots_解析() {
-    let home = Path::new("/tmp/kfm-na-spec-home");
     // 显式覆盖：冒号分隔，空段丢弃
     assert_eq!(
-        fsapi::roots_from(Some("/a:/b"), home),
+        fsapi::roots_from(Some("/a:/b")),
         vec![PathBuf::from("/a"), PathBuf::from("/b")]
     );
     assert_eq!(
-        fsapi::roots_from(Some("/a::/b:"), home),
+        fsapi::roots_from(Some("/a::/b:")),
         vec![PathBuf::from("/a"), PathBuf::from("/b")]
     );
     assert!(
-        fsapi::roots_from(Some(""), home).is_empty(),
+        fsapi::roots_from(Some("")).is_empty(),
         "显式空串 = 零根 fail-closed"
     );
-    // 缺省：库本体存在（服务器 /root/00-Loyintina）→ 用它
-    let td = TempDir::new().unwrap();
-    let lib = td.path().join("00-Loyintina");
-    std::fs::create_dir(&lib).unwrap();
-    assert_eq!(fsapi::roots_from(None, td.path()), vec![lib]);
-    // 库不在 → 退回 HOME 本身
-    let td2 = TempDir::new().unwrap();
+    // 缺省 = /root（2026-09-27 用户裁决）：**不看 HOME**——服务端 systemd
+    // 无 HOME 时旧实现把根落到 `/`（真机 44 条系统目录），故这里显式钉死
+    // 缺省值，并顺带钉「无 HOME 也无关」
     assert_eq!(
-        fsapi::roots_from(None, td2.path()),
-        vec![td2.path().to_path_buf()]
+        fsapi::roots_from(None),
+        vec![std::path::PathBuf::from("/root")],
+        "缺省根恒 /root（不依赖 HOME）"
     );
     // 真机现读 env 的形状：至少一个根
     let r = fsapi::roots();

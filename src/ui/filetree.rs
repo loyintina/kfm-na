@@ -61,10 +61,12 @@ pub const SHIFT_CLAMP_PX: i64 = 489;
 pub const ROW_H: i64 = 86;
 /// 换行长名行高（物理 px，实测：两行文本 118）
 pub const ROW_H_WRAP: i64 = 118;
-/// 三角盒宽（物理 px，命中带尺——见 `tri_x`/`hit`）
-pub const TRI_W: i64 = 20;
-/// 三角盒高（物理 px）
-pub const TRI_H: i64 = 22;
+/// 三角盒宽（物理 px）——**打回改约（2026-09-27 用户终验症①）**：原 20×22
+/// 与新字号 44 比例失调，改 26×28（等比 ×1.3，对齐原版观感：原版字高
+/// 32~33 / 三角 24）。三角不再是命中区（目录行整行可点），本盒只作涂装尺。
+pub const TRI_W: i64 = 26;
+/// 三角盒高（物理 px，同上：等比放大）
+pub const TRI_H: i64 = 28;
 /// 兄弟块首尾圆角半径（物理 px = 4 CSS × 3）
 pub const ROW_RADIUS: i64 = 12;
 /// 光标框内缩（盒高 = 行高 − 本值）
@@ -83,7 +85,9 @@ pub const CURSOR_LINE_RGB: u32 = 0x00D4_FFFF;
 pub const CURSOR_LINE_ALPHA: f32 = 0.7;
 /// 光标盒底 accent 垫 α（15%）
 pub const CURSOR_FILL_ALPHA: f32 = 0.15;
-/// 三角色（RRGGBBAA：teal(0,148,178) + alpha FF）
+/// 三角色**留档**（RRGGBBAA：teal(0,148,178)）——**打回改约（症③）**：
+/// 那是原版那次召唤随机到的 accent，不是固定色。现役涂装取**页 accent
+/// 渐变同源采样**（`RingGradient::sample`），本常量只在考题里钉原版实测值。
 pub const CHEVRON_RGB: u32 = 0x0094_B2FF;
 /// 光标上线最短（kfmv4 topLineW 下限 20 同款）
 pub const CURSOR_NAME_MIN: i64 = 20;
@@ -774,10 +778,12 @@ impl FileTreeState {
     /// 行矩形吃 `row_rects`（内容坐标，天然带滚动与裁剪）——同一份尺，
     /// 「点了没反应/点错行」这类漂移在几何上不可能。
     ///
-    /// 三角带 = **行左 TRI_W ∪ 实画三角盒**：左带是手指够得着的下限（20px
-    /// 的实画三角盒在深缩进行上离屏缘很远，只认它必点不中），三角盒保证
-    /// 「画了的能点」（点画出来的三角没反应 = 眼手不同尺）。文件行没有三角，
-    /// 行内一律 `Row`
+    /// **目录行整行 = 开合、文件行 = 选中/预览**（2026-09-27 打回改约，
+    /// 用户终验症⑤）：三角只是**状态指示**，不是命中区；旧实现把行左
+    /// 三角带判成 Toggle、名字区判成 Row，于是「点目录行没反应」（真机
+    /// logcat 20+ 次点按零 toggle）。三角盒与名字区之间的死区随之消灭
+    /// ——行内任意 x 同义。（旧口径的「证据」是误读：原版截屏里那行是
+    /// **选中态的目录**，正常态，不是「名字区只选中」的证明。）
     pub fn hit(&self, x: i64, y: i64, view_h: i64) -> Option<Hit> {
         if x < 0 || !(0..view_h).contains(&y) {
             return None; // 页面之外（视口上下/左侧）不接
@@ -787,20 +793,19 @@ impl FileTreeState {
                 continue;
             }
             let row = &self.rows[idx];
-            if row.kind.is_dir() {
-                let tx = tri_x(row.depth);
-                if x < TRI_W || (tx..tx + TRI_W).contains(&x) {
-                    return Some(Hit::Toggle(idx));
-                }
-            }
-            return Some(Hit::Row(idx));
+            return Some(if row.kind.is_dir() {
+                Hit::Toggle(idx)
+            } else {
+                Hit::Row(idx)
+            });
         }
         None
     }
 
     /// 按**给定快照**命中（屏代快照的命中入口，BAR-145 判例：命中唯一
     /// 合法源 = 屏上正显示的那一代）。`x/y` = 页面坐标、`view_h` = 行表窗高
-    /// ——语义与 `hit` 逐字对齐（三角带规则同一份），差别只是吃哪份行表
+    /// ——语义与 `hit` 逐字对齐（目录行整行开合、文件行选中），差别只是
+    /// 吃哪份行表
     pub fn hit_snap(snap: &FileTreeSnap, x: i64, y: i64, view_h: i64) -> Option<Hit> {
         if x < 0 || !(0..view_h).contains(&y) {
             return None;
@@ -810,13 +815,11 @@ impl FileTreeState {
                 continue;
             }
             let row = &snap.rows[idx];
-            if row.kind.is_dir() {
-                let tx = tri_x(row.depth);
-                if x < TRI_W || (tx..tx + TRI_W).contains(&x) {
-                    return Some(Hit::Toggle(idx));
-                }
-            }
-            return Some(Hit::Row(idx));
+            return Some(if row.kind.is_dir() {
+                Hit::Toggle(idx)
+            } else {
+                Hit::Row(idx)
+            });
         }
         None
     }

@@ -104,6 +104,20 @@
 > enabled+active（unit 单源 crates/na-agentd/kfm-na-agentd.service）。
 
 ## 当前位置（2026-09-26 夜，BAR-165 文件树页落地——原版逐像素复刻 + 数据面两端点）
+## 追加（2026-09-27 用户终验**打回重做**：六症 + 一定罪）
+
+> **打回缘由与修订见 bugs.md BAR-165 行 + 契约档 §七**（方法论红线：动手前
+> 先读 comp_registry 与 `src/scroll.rs`/`src/termview.rs` 的封存件——已有的
+> 东西不许重造轮子；每个复用件在提交信息里标注出处）。
+> 一句话：字 44/三角 26×28（症①）、光标右缘到行表窗全宽（②）、三角/光标/
+> 底栏吃页 accent 渐变同源采样（③）、光标换**封存件 `paint_open_cursor`**
+> （④，SDF 圆角开口框）、**目录行整行 = 开合**（⑤，真机 logcat 20+ 次点按
+> 零 toggle 为证；旧口径是误读原版截屏）、滚动接 **`scroll.rs` 封存惯性件**
+> （⑥，`TouchScroll::moved_px_at` + `fling_on_release` + `Fling::step`，
+> 新触摸取消/触底燃尽/进活性探针）、缺省根定死 **`/root`** 不依赖 HOME（⑦）。
+> 明确不动（用户已裁）：行带奇偶用色保留；左强调边宽与 α 公式本单不动。
+> **判卷**：redroid 实拍（根=/root 列表 / 目录行点按开合 logcat / 惯性甩尾
+> 帧账 / 全宽行带 / accent 三角 / 圆角开口框）。
 
 > **文件树页上机待判**（bugs.md 行全档、契约档 `docs/active/文件树.md`）：
 > na 左侧路由位文件树按 kfmv4 原版真机截屏复刻落地——①实测锚点入表（行高
