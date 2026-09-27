@@ -131,6 +131,12 @@ fn spec_bar170_壳手势与帧泵接线() {
         app.contains("self.reader_scroll = Some(crate::scroll::TouchScroll::new("),
         "阅读页起手必须建 TouchScroll 接力件"
     );
+    // 横向占优让回（redroid 判卷咬出：无让回 = 事件全被滚动槽吞，
+    // 右缘推回永远够不到面板拖拽）——文件树同款让回律
+    assert!(
+        app.contains("阅读页手势让回面板页"),
+        "横向占优必须整槽让回面板页（推回/关页才轮得到面板拖拽）"
+    );
     // 抬手两分流：点按返回钮 → 出栈；拖过 → 交接甩尾
     assert!(
         app.contains("crate::termview::rd_return_hit(&g, rt.0 as i64, rt.1 as i64)"),

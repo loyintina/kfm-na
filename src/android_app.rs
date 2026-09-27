@@ -2016,6 +2016,42 @@ impl App {
                 // 放锁，排版完回锁喂滚动）。手指上推（d<0）= 看下文 =
                 // scroll 增大，故取反
                 if let Some(rt) = self.reader_touch.as_mut() {
+                    // 横向占优：本页只吃垂直滚动（本家在顶，右滑推回/左滑
+                    // 零动作都归面板页全家）——整槽让回（文件树同款让回律；
+                    // BAR-170 redroid 判卷咬出：无让回 = 事件全被滚动槽吞，
+                    // 右缘推回永远够不到面板拖拽）
+                    let (dx_all, dy_all) = (x - rt.0, y - rt.1);
+                    if !rt.2
+                        && (dx_all.abs() > crate::ui::panel_drag::DRAG_LOCK_PX
+                            || dy_all.abs() > crate::ui::panel_drag::DRAG_LOCK_PX)
+                        && dx_all.abs() * crate::ui::panel_drag::DRAG_DIR_LOCK > dy_all.abs()
+                    {
+                        crate::report::report(
+                            "gest",
+                            &format!("阅读页手势让回面板页 ({x:.0},{y:.0})"),
+                        );
+                        let (sx, sy) = (rt.0, rt.1);
+                        self.reader_touch = None;
+                        self.reader_scroll = None;
+                        self.panel_touch = Some(PanelTouch {
+                            start_x: sx,
+                            start_y: sy,
+                            last_y: y,
+                            acc_px: 0.0,
+                            dragged: true,
+                        });
+                        self.panel_drag = Some(crate::ui::panel_drag::PanelDrag::new(
+                            sx,
+                            sy,
+                            crate::report::boot_ms() as u64,
+                        ));
+                        if self.feed_panel_drag(x, y) {
+                            return;
+                        }
+                        // 本事件不补滚动（防 slop 跳变），下事件起续
+                        self.dirty = true;
+                        return;
+                    }
                     if !rt.2
                         && ((x - rt.0).abs() > crate::scroll::TAP_SLOP_PX
                             || (y - rt.1).abs() > crate::scroll::TAP_SLOP_PX)
