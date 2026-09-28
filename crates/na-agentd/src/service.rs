@@ -226,7 +226,9 @@ impl AgentService {
             return Err(format!("信箱 key 未知: {key:?}"));
         };
         if !valid_letter_name(name) {
-            return Err(format!("信件名非法: {name:?}（只认 ASCII *.md）"));
+            return Err(format!(
+                "信件名非法: {name:?}（只认 ASCII *.md 或 v2.1 中文句法名）"
+            ));
         }
         let host = StdHost::new(Path::new(&dir).to_path_buf());
         host.read_file(&format!("{dir}/{name}"))
@@ -261,14 +263,23 @@ fn is_session_file(name: &str) -> bool {
         && !rest.bytes().any(|b| b == b'/' || b == b'\\')
 }
 
-/// 信件文件名闸（ASCII *.md，禁分隔符；README.md 是规范不是信）
+/// 信件文件名闸（README.md 是规范不是信；禁分隔符）。
+/// 两纪元并认（BAR-172，主册 2026-09-28 整体迁移 v2.1 中文名后旧闸把真信全滤光）：
+/// 旧 ASCII 名（字母数字/-/_/.）照旧放行；非 ASCII 名必须过 v2.1 文法判卷
+/// （`[分拣码]NNNN号<发信人>…的<类型词>.md`，文法唯一出处 = mailbox-core parse_v21_name——
+/// 分隔符/非法字天然过不了文法，fail-closed 语义不变）。
 pub fn valid_letter_name(name: &str) -> bool {
-    name != "README.md"
-        && name.len() <= 128
-        && name.ends_with(".md")
-        && name
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+    if name == "README.md" || name.chars().count() > 128 || !name.ends_with(".md") {
+        return false;
+    }
+    if name
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+    {
+        return true;
+    }
+    mailbox_core::name::is_v21_name(name)
+        && mailbox_core::name::parse_v21_name(name).errs.is_empty()
 }
 
 /// 系统提示：给模型的角色与工具纪律（写信任务靠它知道信箱规范去

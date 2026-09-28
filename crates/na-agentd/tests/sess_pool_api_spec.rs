@@ -224,28 +224,62 @@ fn spec_bar167_端点_keyed信箱夹具形状() {
 #[test]
 fn spec_bar167_端点_agentinbox真根() {
     let (_t, svc) = fixture();
-    // 真根直读（kfmv4 只读引用）：15 封量级真信，0001- 等真名
+    // 真根直读（kfmv4 只读引用）。断言对主册迁移鲁棒（BAR-172）：不钉具体文件名——
+    // 主册 2026-09-28 已整体迁移 v2.1 中文名，钉死文件名 = 下次主册变动又红
     let ls = svc.list_inbox_letters("agent-inbox").expect("列真信");
-    assert!(ls.len() >= 10, "真信量级: {} 封", ls.len());
-    assert_eq!(ls[0].0, "0001-kfmv4-nz-report-readability-submission.md");
+    assert!(!ls.is_empty(), "真信量级: {} 封", ls.len());
     assert!(
         ls.iter()
             .all(|(name, bytes)| { na_agentd::service::valid_letter_name(name) && *bytes > 0 }),
         "全表过信件闸且非空: {ls:?}"
     );
     assert!(
+        ls.iter().any(|(name, _)| name.contains('号')),
+        "主册现行含 v2.1 中文句法信（闸门须放行）: {ls:?}"
+    );
+    assert!(
         !ls.iter().any(|(name, _)| name == "README.md"),
         "README.md 是规范不是信"
     );
-    // 正文端点回真文
-    let content = svc
-        .inbox_letter(
-            "agent-inbox",
-            "0001-kfmv4-nz-report-readability-submission.md",
-        )
-        .expect("真信正文");
+    // 正文端点回真文（取列表首封，不挑名）
+    let content = svc.inbox_letter("agent-inbox", &ls[0].0).expect("真信正文");
     assert!(content.len() > 100, "真文非空: {} 字节", content.len());
     // README.md 点名正文被拒
     let e = svc.inbox_letter("agent-inbox", "README.md").unwrap_err();
     assert!(e.contains("非法"), "README 闸: {e}");
+}
+
+#[test]
+fn spec_bar172_信件名闸门_v21中文句法放行() {
+    use na_agentd::service::valid_letter_name as v;
+    // v2.1 中文句法名放行（主册现行真名形态；含分拣码/复/关于/9 词表类型词）
+    assert!(v("0001号小满致全体关于报告可读性契约的提案.md"));
+    assert!(v("0022号小满致评审部白露复0016关于名字征集的勘误.md"));
+    assert!(v("NA0024号白露致研究部清和及小满的通报.md"));
+    // 旧 ASCII 名照旧放行
+    assert!(v("0001-kfmv4-nz-report-readability-submission.md"));
+    assert!(v("a-b-report.md"));
+    // 非法名照拒（fail-closed 不变）
+    assert!(!v("README.md"));
+    assert!(!v("a/b.md"), "分隔符");
+    assert!(!v("../x.md"), "穿越");
+    assert!(!v("随便写的.md"), "无编号段");
+    assert!(!v("0001号白致评审部白露的提案.md"), "发信人单字过不了文法");
+    assert!(!v("0001号白露致全体的落地.md"), "类型词出 9 词表");
+    assert!(!v("0001号白露致全体的提案.txt"), "非 .md");
+    assert!(!v("0001号白露致全体关于名的提案.md"), "事由单字过不了文法");
+
+    // 端点面：中文名信进夹具信箱，列表出、点名正文取回
+    let (t, svc) = fixture();
+    let mb = t.path().join("session").join("信箱");
+    std::fs::write(mb.join("0001号测试致全体的通报.md"), "# 中文信\n正文\n").expect("写中文信");
+    let ls = svc.list_inbox_letters("mailbox").expect("列夹具信");
+    assert!(
+        ls.iter().any(|(n, _)| n == "0001号测试致全体的通报.md"),
+        "中文名信应被列出: {ls:?}"
+    );
+    let content = svc
+        .inbox_letter("mailbox", "0001号测试致全体的通报.md")
+        .expect("中文名点名取正文");
+    assert!(content.contains("中文信"));
 }
