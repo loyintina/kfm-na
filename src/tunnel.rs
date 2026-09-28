@@ -275,6 +275,17 @@ pub fn leg_verdict(configured: bool, quic_fails: u32) -> Leg {
     }
 }
 
+/// 跳闸回切探测退避（A 档纯函数，BAR-171 翻案③）：ssh 兜底期静默
+/// 探 QUIC 握手的节奏——15s → 30s → 60s 封顶。太勤 = UDP 黑洞里
+/// 每分钟烧一次 8s 握手（电+流量）；太懒 = 网络回来了还赖在 ssh
+pub fn probe_backoff_secs(probe_fails: u32) -> u64 {
+    match probe_fails {
+        0 => 15,
+        1 => 30,
+        _ => 60,
+    }
+}
+
 /// -R-only ssh 参数（A 档纯函数）：QUIC 腿供数据路时 ssh 只挂反连
 /// 推送路（9022 不断）——摘除 -L 两段，本地口唯一属主是 QUIC 腿
 pub fn reverse_only_args(s: &ServerEntry) -> Result<Vec<String>, String> {
@@ -652,6 +663,31 @@ fn spawn_quic_leg(server: &ServerEntry) -> Option<QuicLeg> {
     })
 }
 
+/// 跳闸回切探针（BAR-171 翻案③，看门狗 ssh 兜底期用）：专用线程 +
+/// current_thread runtime 跑 na_quic::probe——只握手不开口，不碰
+/// 本地口（口可能还在 ssh 娃手里）。true = UDP 路回来了
+fn probe_quic(server: &ServerEntry) -> bool {
+    use std::net::ToSocketAddrs as _;
+    // 只握手不验签——pin 即够（齐件判定在上游 quic_configured）
+    let Some(pin) = parse_pin(&server.quic.pin) else {
+        return false;
+    };
+    let Some(addr) = format!("{}:{}", server.ssh.host, server.quic.port)
+        .to_socket_addrs()
+        .ok()
+        .and_then(|mut i| i.next())
+    else {
+        return false;
+    };
+    let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    else {
+        return false;
+    };
+    rt.block_on(na_quic::probe(addr, "kfm-na", na_quic::client_config(pin)))
+}
+
 /// 起 QUIC 反连腿（M4，核内线程）：拨出到服务器 UDP 62694 注册，
 /// 随后服务器 9022 的入站经这条连接开流回联本机 na sshd（8024）。
 /// 无本地 TCP 绑定——「活着」的唯一信号是没死信；握手 8s 速败在
@@ -859,6 +895,12 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
         // spawn——零间隔重拉必撞服务器侧旧 sshd 尸体（9022 还在它手里），
         // ExitOnForwardFailure 255 再撞，每秒空转活锁
         let mut companion_hold_until: Option<std::time::Instant> = None;
+        // 跳闸回切探测账（BAR-171 翻案③，看门狗线程私有）：ssh 兜底期
+        // 按退避静默探 QUIC 握手；探测线程单飞，结果经信道回 loop 审理
+        let (probe_tx, probe_rx) = channel::<bool>();
+        let mut probe_running = false;
+        let mut probe_fails: u32 = 0;
+        let mut next_probe_at = std::time::Instant::now();
         // 杀娃重拉（BAR-140/141 共用）：杀娃收尸、退避清零、死前绑过顺路
         // 请服务器收尸（免下一 spawn 白撞 255）；状态落 Down，调用方 continue
         let kill_zombie =
@@ -890,7 +932,7 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                 );
             };
         let mut ssh_err: Option<Arc<Mutex<VecDeque<String>>>> = None;
-        loop {
+        'tick: loop {
             let port = server.tunnel.local_port;
             let port_open = probe_port(port);
             let child_alive = child
@@ -918,6 +960,62 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                 g.quic_configured = quic_configured(&server);
                 g.rev_quic_up = rev_quic.is_some();
                 g.rev_quic_fails = rev_quic_fails;
+            }
+
+            // 跳闸回切探测（BAR-171 翻案③）：跳闸进 ssh 后「只下不上」
+            // 是死账——ssh 兜底期按退避（15/30/60s 封顶）静默探 QUIC
+            // 握手（只握手不开口，不碰 ssh 占着的本地口）；通了 = UDP
+            // 路回来了，清零跳闸账重拉（重生段自然回 QUIC 腿，ssh 娃
+            // 按 ssh_role 对账换角色）。回前台/手动重连清零跳闸账时
+            // 探测账同清（下轮跳闸从 15s 重新退避）
+            let mut probe_healed = false;
+            while let Ok(ok) = probe_rx.try_recv() {
+                probe_running = false;
+                if ok {
+                    probe_healed = true;
+                } else {
+                    probe_fails += 1;
+                    let wait_s = probe_backoff_secs(probe_fails);
+                    next_probe_at =
+                        std::time::Instant::now() + std::time::Duration::from_secs(wait_s);
+                    crate::report::report(
+                        "tunnel",
+                        &format!("QUIC 回切探测未成（第 {probe_fails} 次），{wait_s}s 后再试"),
+                    );
+                }
+            }
+            if probe_healed {
+                crate::report::report("tunnel", "QUIC 回切探测成功——清零跳闸账重拉回 QUIC");
+                probe_fails = 0;
+                next_probe_at = std::time::Instant::now();
+                reconnect(
+                    &mut child,
+                    &mut quic,
+                    &mut rev_quic,
+                    &mut attempts,
+                    &mut quic_fails,
+                    &mut rev_quic_fails,
+                    &snap_t,
+                );
+                continue 'tick; // 本拍就此打住：重进一圈重新探口，立刻落重生段起 QUIC 腿
+            }
+            if quic_fails < QUIC_FAIL_TRIP && probe_fails > 0 {
+                probe_fails = 0;
+                next_probe_at = std::time::Instant::now();
+            }
+            if quic.is_none()
+                && quic_fails >= QUIC_FAIL_TRIP
+                && quic_configured(&server)
+                && !probe_running
+                && (!port_open || child_alive) // 外部隧道占口（口开且娃不在）不探：让位语义不许抢（ExternalUp 同款）
+                && std::time::Instant::now() >= next_probe_at
+            {
+                probe_running = true;
+                let sv = server.clone();
+                let txp = probe_tx.clone();
+                std::thread::spawn(move || {
+                    let _ = txp.send(probe_quic(&sv));
+                });
             }
 
             // QUIC 腿死信审理（事件驱动死亡检测）：腿死 → 记一笔跳闸账，

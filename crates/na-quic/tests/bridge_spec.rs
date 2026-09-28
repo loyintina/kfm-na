@@ -11,8 +11,8 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
 use na_quic::{
-    cert_fingerprint, client_config, gen_self_signed, parse_port_header, port_header, run_client,
-    run_server, server_config,
+    auth_tag, cert_fingerprint, client_config, gen_self_signed, parse_port_header, port_header,
+    probe, run_client, run_server, server_config,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -214,4 +214,98 @@ async fn spec_bar171_桥一侧终_排水窗内收尾() {
         .await
         .expect("10s 内后端没等到 EOF——桥任务陪葬（BAR-171 病灶：一侧终另侧永挂）")
         .unwrap();
+}
+
+/// BAR-171 翻案·修复①：正连腿顶替——新连接第一条验签通过的流落地，
+/// 旧连接必须当场 close（级联：splice 终 → loopback TCP 断 → wsterm
+/// killAll → 预热壳整组收）。带 psk 考：验签不过的假客户端顶不掉
+/// 真客户端（握手无客户端证，扫描器也能走完握手）。
+#[tokio::test]
+async fn spec_bar171_正连顶替_新客认领_旧客收尸() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let (certs, key) = gen_self_signed("kfm-na");
+    let pinned = cert_fingerprint(&certs[0]);
+    let psk = [7u8; 32];
+
+    let quic_addr = free_addr().await;
+    let back_addr = free_addr().await;
+    tokio::spawn(tcp_echo(back_addr));
+    tokio::spawn(run_server(quic_addr, server_config(certs, key), Some(psk)));
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // 客户端工厂（角色 = 手机重连后新一茬预热池的第一条控制通道）：
+    // 裸 quinn 握手 + 开流写端口头+验签标签；流的发送端随连接一并
+    // 返回保活（drop 了 splice 收尾是流水席的事，连接级存活才是
+    // 判卷面）
+    async fn authed_conn(
+        quic_addr: SocketAddr,
+        pinned: [u8; 32],
+        psk: [u8; 32],
+        port: u16,
+    ) -> (quinn::Connection, quinn::SendStream) {
+        let mut ep = quinn::Endpoint::client((Ipv4Addr::LOCALHOST, 0).into()).unwrap();
+        ep.set_default_client_config(client_config(pinned));
+        let conn = ep.connect(quic_addr, "kfm-na").unwrap().await.unwrap();
+        let (mut send, _recv) = conn.open_bi().await.unwrap();
+        send.write_all(&port_header(port)).await.unwrap();
+        send.write_all(&auth_tag(&psk, port)).await.unwrap();
+        (conn, send)
+    }
+
+    let (c1, _s1) = authed_conn(quic_addr, pinned, psk, back_addr.port()).await;
+    tokio::time::sleep(Duration::from_millis(300)).await; // 等认领落地
+    assert!(c1.close_reason().is_none(), "自己认领自己不许自杀");
+
+    // 假客户端（验签标签错）：流被弃、不认领——真客户端必须无恙
+    {
+        let mut ep = quinn::Endpoint::client((Ipv4Addr::LOCALHOST, 0).into()).unwrap();
+        ep.set_default_client_config(client_config(pinned));
+        let fake = ep.connect(quic_addr, "kfm-na").unwrap().await.unwrap();
+        let (mut send, _recv) = fake.open_bi().await.unwrap();
+        send.write_all(&port_header(back_addr.port()))
+            .await
+            .unwrap();
+        send.write_all(&[0u8; 32]).await.unwrap(); // 假标签
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(
+            c1.close_reason().is_none(),
+            "验签不过的连接顶不掉真客户端（扫描器免疫条款）"
+        );
+    }
+
+    // 真重连：c2 认领 → c1 必须被判死
+    let (c2, _s2) = authed_conn(quic_addr, pinned, psk, back_addr.port()).await;
+    tokio::time::timeout(Duration::from_secs(5), c1.closed())
+        .await
+        .expect("5s 内旧连接没被判死——顶替失效（BAR-171 白天重连堆积病灶）");
+    assert!(c2.close_reason().is_none(), "新连接必须活着接棒");
+}
+
+/// BAR-171 翻案③：probe 只握手——活口必须探得通；死口（回环无人听
+/// 的 UDP）必须速败，不许挂到 idle 上限（BAR-146 黑洞教训）
+#[tokio::test]
+async fn spec_bar171_probe_活口通_死口速败() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let (certs, key) = gen_self_signed("kfm-na");
+    let pinned = cert_fingerprint(&certs[0]);
+
+    let quic_addr = free_addr().await;
+    tokio::spawn(run_server(quic_addr, server_config(certs, key), None));
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        probe(quic_addr, "kfm-na", client_config(pinned)).await,
+        "活口必须探得通"
+    );
+
+    let dead = free_addr().await; // 占过即放——回环上此刻无人听
+    let t0 = std::time::Instant::now();
+    assert!(
+        !probe(dead, "kfm-na", client_config(pinned)).await,
+        "死口必须报死"
+    );
+    assert!(
+        t0.elapsed() < Duration::from_secs(10),
+        "死口探测必须速败（握手超时 8s + 余量），实际 {:?}",
+        t0.elapsed()
+    );
 }

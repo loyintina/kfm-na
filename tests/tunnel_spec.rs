@@ -8,8 +8,8 @@
 use kfm_na::settings::{Backend, QuicFields, ServerEntry, SshFields, TunnelPorts};
 use kfm_na::tunnel::{
     KFMV4_PORT, Leg, NA_SERVER_PORT, QUIC_FAIL_TRIP, SshRole, TunnelState, backoff_secs,
-    forward_args, forward_only_args, leg_verdict, parse_pin, quic_configured, reverse_only_args,
-    ssh_role, state_word, target_port, usable, usable_edge_kick,
+    forward_args, forward_only_args, leg_verdict, parse_pin, probe_backoff_secs, quic_configured,
+    reverse_only_args, ssh_role, state_word, target_port, usable, usable_edge_kick,
 };
 
 fn srv(host: &str, user: &str, key: &str) -> ServerEntry {
@@ -485,6 +485,36 @@ fn spec_quic_腿裁决_优先与跳闸() {
     assert_eq!(leg_verdict(true, 2), Leg::Quic, "挂 2 次仍未跳闸");
     assert_eq!(leg_verdict(true, 3), Leg::Ssh, "挂 3 次跳闸降级");
     assert_eq!(leg_verdict(true, 99), Leg::Ssh, "跳闸后不再试");
+}
+
+#[test]
+fn spec_bar171_回切探测退避_节奏表() {
+    // BAR-171 翻案③：跳闸只下不上是死账——ssh 兜底期按 15/30/60s
+    // 封顶退避静默探 QUIC 握手，通了清零重投（看门狗接线）
+    assert_eq!(probe_backoff_secs(0), 15, "头探 15s——跳闸后尽快试回");
+    assert_eq!(probe_backoff_secs(1), 30, "二探 30s");
+    assert_eq!(probe_backoff_secs(2), 60, "三探起封顶 60s");
+    assert_eq!(probe_backoff_secs(99), 60, "永远封顶 60s");
+}
+
+/// 接线守卫（源码级，BAR-171 翻案③）：看门狗必须接回切探测——
+/// 拆掉它，「跳闸只下不上」复活（用户实录：ssh 兜底里断联重试
+/// 到天荒地老，QUIC 路好了也不回家）
+#[test]
+fn spec_bar171_回切探测_接线守卫() {
+    let t = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/tunnel.rs")).unwrap();
+    assert!(
+        t.contains("probe_quic") && t.contains("probe_backoff_secs"),
+        "看门狗必须接回切探测（probe_quic + 退避节奏表）"
+    );
+    assert!(
+        t.contains("quic_fails >= QUIC_FAIL_TRIP"),
+        "探测只在跳闸后启动——健康期不许空烧握手"
+    );
+    assert!(
+        t.contains("QUIC 回切探测成功"),
+        "探测成功必须清零重投（reconnect 接线）"
+    );
 }
 
 #[test]

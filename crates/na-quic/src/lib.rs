@@ -328,8 +328,17 @@ pub async fn run_server(
         std::net::IpAddr,
         (u32, std::time::Instant),
     >::new()));
+    // 认领账（BAR-171 翻案·修复①）：正连腿同时只养一条活跃连接——
+    // 新连接第一条验签通过的流落地时，旧连接当场 close。级联收尸链：
+    // 旧连接死 → 其 splice 全终 → loopback TCP 全断 → wsterm killAll
+    // → 预热壳整组收。**验签通过才认领**——握手无客户端证，扫描器
+    // 光握手顶不掉真客户端（设计 §四）。QUIC 迁移不触雷：网络切换
+    // 是同一 Connection 不换 Incoming，stable_id 不变不自杀。
+    // （反连腿同款语义早已在 run_rev_server：「新注册挤掉旧的」）
+    let owner = std::sync::Arc::new(tokio::sync::Mutex::new(None::<Connection>));
     while let Some(inc) = ep.accept().await {
         let fails = std::sync::Arc::clone(&fails);
+        let owner = std::sync::Arc::clone(&owner);
         tokio::spawn(async move {
             let Ok(conn) = inc.await else { return };
             let ip = conn.remote_address().ip();
@@ -350,6 +359,8 @@ pub async fn run_server(
                 let stream = conn.accept_bi().await;
                 let Ok((send, mut recv)) = stream else { break };
                 let fails = std::sync::Arc::clone(&fails);
+                let owner = std::sync::Arc::clone(&owner);
+                let conn = conn.clone();
                 tokio::spawn(async move {
                     let mut hdr = [0u8; 2];
                     if recv.read_exact(&mut hdr).await.is_err() {
@@ -371,6 +382,21 @@ pub async fn run_server(
                             return;
                         }
                     }
+                    // 验签通过 = 真客户端——认领正连载具：顶掉旧连接
+                    // （幂等：本连接已是主则零动作；逐流对账免 claimed 旗）
+                    {
+                        let mut g = owner.lock().await;
+                        let mine = conn.stable_id();
+                        if g.as_ref().map(|c| c.stable_id()) != Some(mine)
+                            && let Some(old) = g.replace(conn.clone())
+                        {
+                            eprintln!(
+                                "[na-quic] 正连顶替：旧连接 {} 收尸（新连接 {mine} 认领，{ip}）",
+                                old.stable_id()
+                            );
+                            old.close(0u32.into(), b"superseded");
+                        }
+                    }
                     let target = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
                     let Ok(tcp) = tokio::net::TcpStream::connect(target).await else {
                         return;
@@ -381,6 +407,31 @@ pub async fn run_server(
         });
     }
     Ok(())
+}
+
+/// 跳闸回切探针（BAR-171 翻案③，tunnel 看门狗用）：只握手——不开
+/// 本地口（口可能还在 ssh 手里）、不验签（验签是正腿的事）。成功 =
+/// UDP 路通且服务器 QUIC 面活着。握手超时沿用 HANDSHAKE_TIMEOUT
+/// （BAR-146：UDP 黑洞里 connect 挂死到 idle 上限，必须速败）。
+pub async fn probe(server: SocketAddr, sni: &str, cfg: ClientConfig) -> bool {
+    let Ok(mut ep) = Endpoint::client(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0))) else {
+        return false;
+    };
+    ep.set_default_client_config(cfg);
+    let connecting = match ep.connect(server, sni) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    match tokio::time::timeout(HANDSHAKE_TIMEOUT, connecting).await {
+        Ok(Ok(conn)) => {
+            conn.close(0u32.into(), b"probe");
+            ep.wait_idle().await; // 成功路放干净（close 帧发出去）
+            true
+        }
+        // 失败路直接丢端点：wait_idle 会等失败连接的排水（实测 +3s，
+        // 死口探 11s 超线被钉咬）——探针没有体面收尾的义务
+        _ => false,
+    }
 }
 
 /// 客户端腿：连上服务器保持一条 QUIC 连接；本机 TCP 监听器每收一个

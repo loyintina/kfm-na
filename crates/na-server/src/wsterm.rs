@@ -56,12 +56,18 @@ pub async fn handle(stream: TcpStream, registry: Arc<Registry>) {
     let (mut sink, mut src) = ws.split();
     let (tx, mut rx) = mpsc::unbounded_channel::<Out>();
     let mut sessions: HashMap<String, PtySession> = HashMap::new();
-    let mut ping_clock = interval(Duration::from_secs(30));
+    let mut ping_clock = interval(Duration::from_secs(ping_secs()));
+    // 心跳租约账（BAR-171 翻案·修复②）：任何入站帧（含协议级 pong）
+    // 都盖戳；租约期无回执 = 对端死/冻结——**发送停摆判死的盲区补位**：
+    // 安静会话无出站可停摆（缓冲永远填不满），只有「要回执」才逮得住
+    let lease = Duration::from_secs(lease_secs());
+    let mut last_rx = std::time::Instant::now();
 
     loop {
         tokio::select! {
             frame = src.next() => {
                 let Some(Ok(msg)) = frame else { break }; // 连接断/帧错 → killAll
+                last_rx = std::time::Instant::now(); // 入站即回执（pong 也算）
                 let tokio_tungstenite::tungstenite::Message::Text(text) = msg else {
                     continue; // 二进制/pong 等不处理
                 };
@@ -187,11 +193,37 @@ pub async fn handle(stream: TcpStream, registry: Arc<Registry>) {
                         if !send(&mut sink, &ServerMsg::Exit { session_id: sid, code }).await { break; }
                     }
                     Out::Ping => {
+                        // 协议级 ws Ping 先发（BAR-171 翻案·修复②）：
+                        // tungstenite 客户端自动 pong（实锤见 na 侧
+                        // conn.rs 心跳注释）——回执盖 last_rx 的戳；
+                        // 应用层 ServerMsg::Ping 照旧（客户端 decode_server
+                        // 已收纳，租约不依赖它）
+                        if !send_raw(
+                            &mut sink,
+                            tokio_tungstenite::tungstenite::Message::Ping(
+                                tokio_tungstenite::tungstenite::Bytes::new(),
+                            ),
+                        )
+                        .await
+                        {
+                            break;
+                        }
                         if !send(&mut sink, &ServerMsg::Ping).await { break; }
                     }
                 }
             }
             _ = ping_clock.tick() => {
+                // 租约先于 ping 判：已死的连接不配再拿心跳
+                if lease_expired(last_rx.elapsed(), lease) {
+                    crate::logcap::throttled(
+                        "ws-lease",
+                        &format!(
+                            "[na-server] ws 心跳租约 {}s 无回执，判死收尸",
+                            lease.as_secs()
+                        ),
+                    );
+                    break;
+                }
                 if tx.send(Out::Ping).is_err() { break; }
             }
         }
@@ -221,14 +253,35 @@ fn send_stall_secs() -> u64 {
         .unwrap_or(45)
 }
 
-/// 发一帧；返回是否还活着（false = 对端已断/停摆判死，调用方应 break）
-///
-/// BAR-171：发送无超时的年代，对端停摆 = send 挂死 = 整个会话循环
-/// 陪葬（ping 发不出、close 收不到、killAll 永不触发），僵尸 ws 会话
-/// 撑满 QUIC idle 4h 上限——fd/pty/附着壳全套泄漏的传导起点。
-async fn send(sink: &mut WsSink, msg: &ServerMsg) -> bool {
+/// 心跳间隔秒数（BAR-171 翻案·修复②）：env NA_PING_SECS 可拧（考题用），
+/// 缺省 30——与 kfmv4 应用层 ping 同拍
+fn ping_secs() -> u64 {
+    std::env::var("NA_PING_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(30)
+}
+
+/// 心跳租约秒数（BAR-171 翻案·修复②）：env NA_LEASE_SECS 可拧（考题用），
+/// 缺省 90 = 3 个心跳拍——手机省电冻结超过这个时长，重孵比养着便宜
+fn lease_secs() -> u64 {
+    std::env::var("NA_LEASE_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(90)
+}
+
+/// 租约判满（A 档纯函数，钉走 tests/bar171_spec.rs）：距最后一次
+/// 入站回执达到租约期 = 对端死/冻结
+pub fn lease_expired(elapsed: Duration, limit: Duration) -> bool {
+    elapsed >= limit
+}
+
+/// 发一帧原始 ws 消息（协议级 Ping 也走停摆判死——同 send 的账；
+/// 保持 timeout(stall, fut) 形态：bar171 接线守卫钉认这个写法）
+async fn send_raw(sink: &mut WsSink, msg: tokio_tungstenite::tungstenite::Message) -> bool {
     let stall = Duration::from_secs(send_stall_secs());
-    let fut = sink.send(na_protocol::encode_server(msg).into());
+    let fut = sink.send(msg);
     match tokio::time::timeout(stall, fut).await {
         Ok(r) => r.is_ok(),
         Err(_) => {
@@ -239,6 +292,15 @@ async fn send(sink: &mut WsSink, msg: &ServerMsg) -> bool {
             false
         }
     }
+}
+
+/// 发一帧；返回是否还活着（false = 对端已断/停摆判死，调用方应 break）
+///
+/// BAR-171：发送无超时的年代，对端停摆 = send 挂死 = 整个会话循环
+/// 陪葬（ping 发不出、close 收不到、killAll 永不触发），僵尸 ws 会话
+/// 撑满 QUIC idle 4h 上限——fd/pty/附着壳全套泄漏的传导起点。
+async fn send(sink: &mut WsSink, msg: &ServerMsg) -> bool {
+    send_raw(sink, na_protocol::encode_server(msg).into()).await
 }
 
 /// 杀一条会话：先登记注销，再杀子进程（等死线程会补发 Exit——
