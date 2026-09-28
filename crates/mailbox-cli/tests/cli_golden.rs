@@ -392,3 +392,45 @@ fn extract_fp(text: &str) -> &str {
     );
     hex
 }
+
+// ---------------------------------------------------------------
+// BAR-173：gen_nonce 用 fs::read 读 /dev/urandom——无限设备文件读至 OOM
+// （真机实爆：reticket 真跑 anon-rss 冲 10G 被 oom-kill）。病灶根 = 全部既有
+// 考题都注了 --nonce，随机路从未被跑到。钉：不注 --nonce 的 new 必须返回
+// 且 nonce 为 16 位 hex（修复前本钉表现为挂死，修复后秒绿）。
+// ---------------------------------------------------------------
+
+#[test]
+fn spec_bar173_new_不注nonce_随机路定长秒回() {
+    let d = tmpdir("bar173");
+    let mb = d.to_str().unwrap().to_string();
+    let out = run(&[
+        "new",
+        "--mailbox",
+        &mb,
+        "--roster",
+        ROSTER,
+        "--from-func",
+        "研究部",
+        "--from-name",
+        "清和",
+        "--to-all",
+        "--type",
+        "通报",
+        "--title",
+        "nonce 钉",
+        "--now-local",
+        "2026-09-29 01:20 +08:00",
+        "--now-utc",
+        "2026-09-29T01:20:00.000Z",
+    ]);
+    assert_ok(&out, "BAR-173 new 不注 nonce（修复前此路挂死读 urandom）");
+    let letter = fs::read_to_string(d.join("0001号清和致全体的通报.md")).unwrap();
+    let i = letter.find("nonce=").expect("信内缺 nonce") + 6;
+    let nonce = &letter[i..i + 16];
+    assert!(
+        nonce.bytes().all(|b| b.is_ascii_hexdigit()),
+        "nonce 非 16 位 hex：{nonce}"
+    );
+    let _ = fs::remove_dir_all(&d);
+}

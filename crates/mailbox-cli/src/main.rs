@@ -117,12 +117,13 @@ fn now_utc_iso() -> String {
 }
 
 fn gen_nonce() -> String {
-    let b = fs::read("/dev/urandom")
+    // BAR-173：/dev/urandom 是无限设备文件，fs::read 会读到 OOM——必须定长读 8 字节
+    use std::io::Read;
+    let mut b = [0u8; 8];
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| f.read_exact(&mut b))
         .unwrap_or_else(|e| die("mailbox-cli", &format!("读 /dev/urandom 失败：{e}")));
-    if b.len() < 8 {
-        die("mailbox-cli", "/dev/urandom 可读字节不足");
-    }
-    b[..8].iter().map(|x| format!("{x:02x}")).collect()
+    b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
 // ---------------------------------------------------------------
