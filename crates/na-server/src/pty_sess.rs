@@ -81,9 +81,27 @@ impl ChildProc {
         }
     }
 
+    /// 组 id（= pid；子进程 fork 后 setsid 是组长）——暴露供 BAR-171
+    /// killpg 语义钉（整组灭/孤儿不留的 /proc 对账）
+    pub fn pgid(&self) -> i32 {
+        self.pid.as_raw()
+    }
+
     pub fn kill(&mut self) -> Result<(), String> {
-        nix::sys::signal::kill(self.pid, nix::sys::signal::Signal::SIGKILL)
-            .map_err(|e| format!("kill 失败: {e}"))
+        // BAR-171：杀整组不杀单 pid——子进程 fork 后 setsid 是组长，
+        // `sh -c "tmux new-session -A …"` 的孙进程（tmux 客户端）与壳同组。
+        // 只杀壳 = 孙进程成孤儿继续附着 tmux server（2026-09-27 实录：
+        // 30 个孤儿 attach + continuum 连坐 churn 拖垮 4 核机）。
+        // ESRCH 回落 = 组还没立（fork 后 setsid 前的竞态窗），直杀 pid。
+        let pg = nix::unistd::Pid::from_raw(-self.pid.as_raw());
+        match nix::sys::signal::kill(pg, nix::sys::signal::Signal::SIGKILL) {
+            Ok(()) => Ok(()),
+            Err(nix::errno::Errno::ESRCH) => {
+                nix::sys::signal::kill(self.pid, nix::sys::signal::Signal::SIGKILL)
+                    .map_err(|e| format!("kill 失败: {e}"))
+            }
+            Err(e) => Err(format!("killpg 失败: {e}")),
+        }
     }
 }
 

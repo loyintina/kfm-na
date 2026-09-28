@@ -162,3 +162,56 @@ async fn spec_m3_桥接_http式半关全链() {
         &text[..text.len().min(100)]
     );
 }
+
+/// BAR-171：桥一侧终结 → 另侧排水窗内强制收尾。旧 `join!` 制下后端
+/// 永不开口 = 桥任务陪葬（本钉在旧码上必超时判红）。排水窗拧到
+/// 300ms（本文件其他钉在回环上 300ms 绰绰有余，互不影响）。
+#[tokio::test]
+async fn spec_bar171_桥一侧终_排水窗内收尾() {
+    unsafe { std::env::set_var("NA_SPLICE_DRAIN_MS", "300") };
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let (certs, key) = gen_self_signed("kfm-na");
+    let pinned = cert_fingerprint(&certs[0]);
+
+    let quic_addr = free_addr().await;
+    let back_addr = free_addr().await;
+    let front_addr = free_addr().await;
+
+    // 后端：accept 后永不开口永不关（扮演死透但 TCP 没断的对端）；
+    // 读到 EOF = 桥把后端侧收掉了——这是唯一的判卷观察口
+    let (eof_tx, eof_rx) = tokio::sync::oneshot::channel::<()>();
+    tokio::spawn(async move {
+        let l = tokio::net::TcpListener::bind(back_addr).await.unwrap();
+        let (mut s, _) = l.accept().await.unwrap();
+        let mut buf = vec![0u8; 4096];
+        loop {
+            match s.read(&mut buf).await {
+                Ok(0) | Err(_) => {
+                    let _ = eof_tx.send(());
+                    return;
+                }
+                Ok(_) => {} // 请求字节照吞，不开口
+            }
+        }
+    });
+    tokio::spawn(run_server(quic_addr, server_config(certs, key), None));
+    tokio::spawn(run_client(
+        quic_addr,
+        "kfm-na",
+        front_addr,
+        back_addr.port(),
+        client_config(pinned),
+        None,
+    ));
+
+    // 客户端：写一字节后整个 socket 直接丢（全关）——桥两侧都必须
+    // 在排水窗内收尾，最终传导成后端的 EOF
+    let mut s = wait_connect(front_addr).await;
+    s.write_all(b"x").await.unwrap();
+    drop(s);
+
+    tokio::time::timeout(Duration::from_secs(10), eof_rx)
+        .await
+        .expect("10s 内后端没等到 EOF——桥任务陪葬（BAR-171 病灶：一侧终另侧永挂）")
+        .unwrap();
+}

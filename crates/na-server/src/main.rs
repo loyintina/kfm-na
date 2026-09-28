@@ -239,7 +239,11 @@ async fn main() {
         let (stream, peer) = match listener.accept().await {
             Ok(v) => v,
             Err(e) => {
-                eprintln!("[na-server] accept 失败: {e}");
+                // BAR-171：fd 枯竭期 accept 立即失败——无退避的 continue
+                // 是空转刷屏（99108 行/29GB 实录，2026-09-28 晨）。200ms
+                // 定间隔退避 + 同款限流；accept 恢复即正常服务。
+                na_server::logcap::throttled("accept", &format!("[na-server] accept 失败: {e}"));
+                tokio::time::sleep(Duration::from_millis(200)).await;
                 continue;
             }
         };
@@ -247,7 +251,8 @@ async fn main() {
         let reg = Arc::clone(&registry);
         tokio::spawn(async move {
             if let Err(e) = dispatch(stream, reg).await {
-                eprintln!("[na-server] 连接 {peer} 处理失败: {e}");
+                // key 用错误种（稳定串），同款风暴归并；peer 端口进 line
+                na_server::logcap::throttled(&e, &format!("[na-server] 连接 {peer} 处理失败: {e}"));
             }
         });
     }

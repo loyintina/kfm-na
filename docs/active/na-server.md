@@ -203,6 +203,27 @@ portable-pty，其 serial → termios 0.2 依赖链没有 android cfg——Termu
 CLOEXEC 纪律），Android 与 host 同一份代码——这是二期双端同构的前置，
 不是绕路。接口不变：spawn/resize(TIOCSWINSZ)/try_wait(WNOHANG)/kill。
 
+**死亡回收契约（2026-09-28，BAR-171 隔夜两次事故后的立法）**：
+na-server 每孵一个常驻子壳/自连通道，必须有对等的死亡回收路径——
+「连接死了」的唯一判据是端到端账，不是 TCP ESTAB。四条：
+
+1. **kill = 杀整组**（pty_sess）：子进程 setsid 后是组长，`sh -c` 的
+   孙进程（tmux 客户端）与壳同组；只杀壳 = 孙进程孤儿继续附着
+   （tmux 客户端吃 SIGHUP 不死只 detach——单 pid 杀永远杀不到它）。
+   ESRCH（setsid 前竞态窗）回落单 pid。
+2. **发送停摆判死**（wsterm）：任何 ws 发送 45s（NA_SEND_STALL_SECS）
+   未完成 = 对端不排水 = 死连接，break 走 killAll。无超时的 send
+   挂死 = 整个会话循环陪葬（ping 发不出/close 收不到），僵尸 ws
+   撑满 QUIC idle 4h——fd/pty/附着壳全套泄漏的传导起点。
+3. **桥先终 + 排水窗**（na-quic splice，见 quic隧道.md §二）：任一侧
+   终结，另一侧限时 15s（NA_SPLICE_DRAIN_MS）排放残余即收尾；
+   join 等双侧 = 一侧永 pend 桥任务陪葬 4h。
+4. **日志面限流 + accept 退避**（main/logcap）：accept 失败 200ms
+   退避；同款报错前 3 直发、60s 窗内压制、出闸带计数（fd 枯竭期
+   空转刷屏 99108 行/29GB 的实录不许重演）。日志也是资源，同吃
+   回收纪律。
+
+
 **增量 UTF-8 解码（2026-09-20，redroid tofu 病灶结案）**：PTY 读线程
 不许按块 `from_utf8_lossy`——块界劈开多字节字符时两侧各产一个 U+FFFD
 （redroid 终端实录目击）。正身 `utf8x.rs`：半截合法序列（≤3 字节）攒

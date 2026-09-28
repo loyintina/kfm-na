@@ -243,7 +243,26 @@ fn client_config_with_idle(pinned: [u8; 32], idle: Duration) -> ClientConfig {
 
 // ---- B 档桥接（TCP↔stream splice，IO 胶水） ----
 
-/// TCP ↔ QUIC 流双向拷贝：任一侧 EOF/错误即停（B 档胶水，无判卷面）
+/// 排水窗（BAR-171）：桥一侧终结后另一侧的排放上限。旧制 `join!` 等
+/// 双侧齐终——一侧永久 pend（死手机的 QUIC 流在 idle 4h 内不报错，
+/// 流控窗满后写端也 pend）桥任务就陪葬 4h：fd、对端 ws 会话、pty、
+/// tmux 附着壳全套僵尸沿桥传导（2026-09-27/28 实录：30 孤儿 attach +
+/// 252 fd + 29GB 日志）。改「先终 + 排水窗」：一侧终结另一侧限时
+/// 排放（HTTP 半关的响应照常走完，bridge_spec 半关钉守住这条），
+/// 窗尽强制收尾——函数返回即析构，tcp/流柄全 drop，两侧都不许再挂。
+/// env NA_SPLICE_DRAIN_MS 可拧（考题拧小），生产缺省 15s。
+pub const SPLICE_DRAIN_MS_DEFAULT: u64 = 15_000;
+
+fn drain_grace() -> Duration {
+    std::env::var("NA_SPLICE_DRAIN_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .map(Duration::from_millis)
+        .unwrap_or(Duration::from_millis(SPLICE_DRAIN_MS_DEFAULT))
+}
+
+/// TCP ↔ QUIC 流双向拷贝（B 档胶水）：**任一侧先终即进排水窗**，窗尽
+/// 或另侧自终即返。排水窗语义见 SPLICE_DRAIN_MS_DEFAULT 注。
 async fn splice(
     mut tcp: tokio::net::TcpStream,
     mut send: quinn::SendStream,
@@ -277,7 +296,20 @@ async fn splice(
             }
         }
     };
-    tokio::join!(up, down);
+    tokio::pin!(up);
+    tokio::pin!(down);
+    tokio::select! {
+        _ = &mut up => {
+            // 上行先终（对端 TCP EOF/错）：下行限时排放残余
+            let _ = tokio::time::timeout(drain_grace(), &mut down).await;
+        }
+        _ = &mut down => {
+            // 下行先终（QUIC 流 FIN/错）：上行限时排放残余
+            let _ = tokio::time::timeout(drain_grace(), &mut up).await;
+        }
+    }
+    // 收尾 = 析构：pin 住的 future 弃疗即释放借用，tcp/流柄随返回全
+    // drop——桥任务的生命周期钉死在「先终 + 排水窗」之内
 }
 
 /// 服务器腿：QUIC 监听，每条入站流读流头 → 回联 127.0.0.1:{port} →

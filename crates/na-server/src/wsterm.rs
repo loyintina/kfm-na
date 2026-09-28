@@ -48,7 +48,7 @@ pub async fn handle(stream: TcpStream, registry: Arc<Registry>) {
     let ws = match tokio_tungstenite::accept_async(stream).await {
         Ok(w) => w,
         Err(e) => {
-            eprintln!("[na-server] ws 握手失败: {e}");
+            crate::logcap::throttled("ws-handshake", &format!("[na-server] ws 握手失败: {e}"));
             registry.conn_close();
             return;
         }
@@ -210,11 +210,35 @@ type WsSink = futures_util::stream::SplitSink<
     tokio_tungstenite::tungstenite::Message,
 >;
 
-/// 发一帧；返回是否还活着（false = 对端已断，调用方应 break）
+/// 发送停摆判死秒数（BAR-171）：env NA_SEND_STALL_SECS 可拧（考题用），
+/// 缺省 45——30s ping 一拍半的余量。对端不排水的唯一合法长因是手机
+/// 死/冻结（QUIC 流控窗满、桥停抽、TCP 缓冲塞死）；手机醒来走
+/// BAR-140/141 重孵链几秒回活，比养 4h 僵尸便宜得多。
+fn send_stall_secs() -> u64 {
+    std::env::var("NA_SEND_STALL_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(45)
+}
+
+/// 发一帧；返回是否还活着（false = 对端已断/停摆判死，调用方应 break）
+///
+/// BAR-171：发送无超时的年代，对端停摆 = send 挂死 = 整个会话循环
+/// 陪葬（ping 发不出、close 收不到、killAll 永不触发），僵尸 ws 会话
+/// 撑满 QUIC idle 4h 上限——fd/pty/附着壳全套泄漏的传导起点。
 async fn send(sink: &mut WsSink, msg: &ServerMsg) -> bool {
-    sink.send(na_protocol::encode_server(msg).into())
-        .await
-        .is_ok()
+    let stall = Duration::from_secs(send_stall_secs());
+    let fut = sink.send(na_protocol::encode_server(msg).into());
+    match tokio::time::timeout(stall, fut).await {
+        Ok(r) => r.is_ok(),
+        Err(_) => {
+            crate::logcap::throttled(
+                "ws-send-stall",
+                &format!("[na-server] ws 发送停摆 {}s，判死收尸", stall.as_secs()),
+            );
+            false
+        }
+    }
 }
 
 /// 杀一条会话：先登记注销，再杀子进程（等死线程会补发 Exit——
