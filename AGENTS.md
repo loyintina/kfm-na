@@ -231,6 +231,9 @@ kfmv4-review-ops-convention-verdict.md。
   结构/加卡/加终端前必读）
 - `docs/active/编译舱.md` — **na 自持编译+热更链**（陌生设备自举：工具链
   包/9022 传输/私有目录落点/两版驱动/spike 三项。动设备侧编译前必读）
+- `docs/active/信箱工具链.md` — **mailbox-core/mailbox-cli 用法与判卷**
+  （kfmv4 信箱 JS 三件套 Rust 移植：new/verify/gen/scan/reticket 五子命令、
+  默认解析序、与 JS 的行为差异全列。写信/查欠账/换票前必读）
 - `docs/ledger/bugs.md` — BAR 账本：每条修复登记编号/病灶/契约/钉位置
 - `/root/kfmv4/docs/ledger/agent-inbox/` — **跨线评审信箱**（评审会话维护，2026-08-15 迁入 kfmv4 文档目录）：
   kfm-na 与 kfmv4 两线设计评审往来信 + 状态列；设计相关评审意见在此收/发。

@@ -1,0 +1,11 @@
+[package]
+name = "mailbox-core"
+version = "0.1.0"
+edition = "2024"
+description = "信箱工具链纯函数核（kfmv4 JS 三件套忠实移植；零 IO——不碰文件系统、不取时间）"
+
+[dependencies]
+# fp/hash = sha256，版本与 na-quic 依赖树同线（tree 里已锁 0.10.9）
+sha2 = "0.10"
+# 状态词前缀/代际戳/汉字判定正则，与 JS 同款构造（tree 里已锁 1.13.1）
+regex = "1"

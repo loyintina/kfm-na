@@ -1,0 +1,8 @@
+[package]
+name = "mailbox-cli"
+version = "0.1.0"
+edition = "2024"
+description = "kfm-na 信箱工具链 CLI：IO 壳，逻辑全在 mailbox-core"
+
+[dependencies]
+mailbox-core = { path = "../mailbox-core" }

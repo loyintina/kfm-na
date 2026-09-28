@@ -6,12 +6,15 @@
 
 ## 纪律链(提交前)
 
-- `chain.sh` — **唯一检查入口**(10 步)：防泄漏闸 → 零依赖闸 →
+- `chain.sh` — **唯一检查入口**(12 步)：防泄漏闸 → 零依赖闸 →
   **stats 字段咬合闸**(check/check-stats-format.sh,StatsSnap 加字段
-  忘进 format! 不许过链，2026-08-27 评审建议落地）→ fmt → clippy →
+  忘进 format! 不许过链，2026-08-27 评审建议落地）→ **na 信箱执法**
+  (check/mailbox.sh,2026-09-29:na 册全册 verify + gen --check-only,
+  信箱目录不存在的双环境自动跳过)→ fmt → clippy →
   android-check → javac → test → overlay/kfm-pkg 考题 → build。
   pre-commit 自动跑。
-- `check/` — chain 调用的单项检查（提交纪律闸门、stats 咬合闸等）。
+- `check/` — chain 调用的单项检查（提交纪律闸门、stats 咬合闸、
+  mailbox.sh 信箱执法等）。
 
 ## 隧道韧性(跨隧道动作统一入口,2026-09-23 改版)
 

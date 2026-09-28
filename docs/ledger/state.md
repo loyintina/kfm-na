@@ -5,6 +5,27 @@
 > (速查表:症状 → 工具 → 字段 → 判卷)。本页只写「现在进行时」,
 > 历史功过在 bugs.md。
 
+## 当前位置（2026-09-29，信箱工具链 Rust 移植：mailbox-core + mailbox-cli 落地，提案 0004）
+
+> **缘起**：na 信箱 0004 号提案（评审线）——kfmv4 信箱 JS 三件套
+> （new-letter/check-letter-token/gen-agent-inbox.mjs）忠实移植 Rust，
+> na 侧自持写信/执法/投影，不再依赖 kfmv4 node 环境。
+> **形制**：`crates/mailbox-core` 纯函数核零 IO（A 档判卷），
+> `crates/mailbox-cli` IO 壳五子命令 new/verify/gen/scan/reticket
+> （reticket = 契约 §八改名换票机械化，JS 侧原是手工流程）。
+> 默认信箱 `/root/.kfm/session/信箱`；主册写者分区——gen 对
+> kfmv4 主册路径拒绝写入（只许 --check-only）。
+> **判卷**：core 33 题 + cli 6 题全绿；new A/B 与 JS 实跑抄录件
+> 逐字节零差异（fp/骨架/台账 key 序同制）；主册 373 封实跑
+> `gen --check-only` 绿（投影与 JS 逐字节相同）；`scan --for=清和`
+> 实跑命中主册 0016 广播信；变异抽检三枚全被考题咬死（状态词
+> regex 初检漏咬，补 status_re_anchor_and_alternation_order 钉
+> 锚定 + alternation 长度降序后双形态咬红）。
+> **挂链**：`scripts/check/mailbox.sh` 进 chain 第 4 步（11→12 步，
+> 信箱目录不存在的双环境自动跳过；na README 缺 gen 标记段时
+> gen 道跳过，标记段就位自动生效）。用法与行为差异全列：
+> `docs/active/信箱工具链.md`。
+
 ## 当前位置（2026-09-27 午后，BAR-170 阅读页：文件树点文件 → 全屏阅读卡片页，Panel::Reader 第六公民）
 
 > **缘起**：用户拍板「文件树点击后跳预览页不是设计的主要内容——理想

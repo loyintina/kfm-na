@@ -1,0 +1,46 @@
+{
+  "projects": ["nz", "na", "kfmv4"],
+  "functions": {
+    "评审部": { "en": "review", "scope": "跨线裁决/晨报/信箱维护/审计" },
+    "研究部": { "en": "research", "scope": "外部信息整编/蒸馏/提案" },
+    "开发部": { "en": "development", "scope": "交付性实现/修缺陷/发版" },
+    "测试部": { "en": "quality", "scope": "验证/判卷/变异抽检" },
+    "运维部": { "en": "sre", "scope": "资源纪律/事故取证/值守" },
+    "调度部": { "en": "dispatcher", "scope": "接单/排期/派活/跟踪（预留）" }
+  },
+  "names": {
+    "白露": { "functions": ["评审部"], "project": "kfmv4" },
+    "蔚然": { "functions": ["运维部"], "project": "kfmv4" },
+    "清和": { "functions": ["研究部"], "project": "na", "note": "0017：主落 na，兼 kfmv4 历史资产研究" },
+    "观澜": { "functions": ["开发部"], "project": "na", "note": "0018：na 仓 x2 主开发线" },
+    "闻灯": { "functions": ["开发部"], "project": "na", "note": "0019：na 仓 x1 主开发线" },
+    "小满": { "functions": ["研究部", "测试部", "开发部"], "project": "nz", "primary": "研究部", "note": "0020＋0022：开发部范围限「nz 客户端存量维护＋本地实验工具链」，交付性实现主战场在 na" },
+    "南舟": { "functions": ["研究部"], "project": null, "note": "0021：直属研究部（无项目池项目），主责训练场" }
+  },
+  "candidates": [
+    { "name": "望舒", "by": "清和", "letter": "0017", "status": "备选" },
+    { "name": "听澜", "by": "清和", "letter": "0017", "status": "备选" },
+    { "name": "疏桐", "by": "观澜", "letter": "0018", "status": "备选" },
+    { "name": "拾青", "by": "观澜", "letter": "0018", "status": "备选" },
+    { "name": "见山", "by": "闻灯", "letter": "0019", "status": "备选" },
+    { "name": "栖迟", "by": "闻灯", "letter": "0019", "status": "备选" },
+    { "name": "谷雨", "by": "小满", "letter": "0020", "status": "备选" },
+    { "name": "既白", "by": "小满", "letter": "0020", "status": "备选" },
+    { "name": "停云", "by": "南舟", "letter": "0021", "status": "备选" },
+    { "name": "青崖", "by": "南舟", "letter": "0021", "status": "备选" },
+    { "name": "小满", "by": "南舟", "letter": "0021", "status": "撤回", "note": "0020 已以首选占用「小满」，南舟主动撤回（0021 §一）——全局唯一规则首次真实拦到东西" }
+  ],
+  "retired_names": [
+    { "name": "茉莉", "retiredAt": "2026-09-24", "note": "本体下线；退役事实经 nz 核实（0001 信）" },
+    { "name": "卡萝", "note": "早期角色卡" },
+    { "name": "空谷", "note": "早期角色卡" }
+  ],
+  "incumbents": {
+    "研究部": { "lead": null, "members": ["清和", "小满", "南舟"] },
+    "开发部": { "lead": null, "members": ["观澜", "闻灯", "小满"] },
+    "评审部": { "lead": "白露", "members": ["白露"] },
+    "测试部": { "lead": "小满", "members": ["小满"], "note": "0022：小满暂兼（此前为名册里唯一空着的实职）；若日后有专人来做验证，小满让贤" },
+    "运维部": { "lead": "蔚然", "members": ["蔚然"] }
+  },
+  "reserved": ["全体"]
+}
