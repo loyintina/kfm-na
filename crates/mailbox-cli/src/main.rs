@@ -26,6 +26,8 @@ use mailbox_core::token::{self, fingerprint, ledger_nos, parse_ledger};
 use mailbox_core::verify::{BookCheck, LetterText, verify_book, verify_single};
 use std::collections::HashSet;
 use std::fs;
+use std::fs::OpenOptions;
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::{Command, exit};
 
@@ -225,6 +227,57 @@ fn strict_pools(args: &Args) -> bool {
 
 fn mailbox_of(args: &Args) -> PathBuf {
     PathBuf::from(args.opt("mailbox").unwrap_or(DEFAULT_MAILBOX))
+}
+
+// ---------------------------------------------------------------
+// BAR-181：写者子命令 flock（白露 0022 条件①——信是交付面，
+// 编号 scan-then-write 的 TOCTOU 与 bar-new.sh 治的 BAR 号同族；
+// new/gen/reticket 写的是同一批文件，共一把锁）
+// ---------------------------------------------------------------
+
+/// 册级互斥锁卫兵。失败模式（白露 0022 条件③口径）：
+/// - 拿不到锁 = **阻塞等待，不设超时**（写信/回写全是秒级短操作，
+///   超时误报比等待更伤；与 bar-new.sh 的 flock 同款语义）；
+/// - **无 stale 锁**：进程死亡（含 SIGKILL）由内核自动放锁；
+/// - 锁文件只建不删（防 unlink 竞态）；卫兵随进程退出释放。
+struct BookLock(fs::File);
+
+impl BookLock {
+    fn acquire(mailbox: &Path) -> BookLock {
+        fs::create_dir_all(mailbox).ok();
+        let path = mailbox.join(".mailbox.lock");
+        let f = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false) // 锁文件只是令牌，从不写内容——clippy 要这句明写
+            .open(&path)
+            .unwrap_or_else(|e| {
+                die(
+                    "mailbox-lock",
+                    &format!("开锁文件 {} 失败：{e}", path.display()),
+                )
+            });
+        let rc = unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX) };
+        if rc != 0 {
+            die(
+                "mailbox-lock",
+                &format!(
+                    "flock {} 失败：{}",
+                    path.display(),
+                    std::io::Error::last_os_error()
+                ),
+            );
+        }
+        BookLock(f)
+    }
+}
+
+impl Drop for BookLock {
+    fn drop(&mut self) {
+        unsafe {
+            libc::flock(self.0.as_raw_fd(), libc::LOCK_UN);
+        }
+    }
 }
 
 // ---------------------------------------------------------------
@@ -859,7 +912,14 @@ fn main() {
         println!("{USAGE}");
         exit(1);
     }
-    match args.pos[0].as_str() {
+    let cmd = args.pos[0].as_str();
+    // BAR-181：写者子命令先持册锁再干活（verify/scan 纯读不占锁；
+    // gen --check-only 也持锁——只查不写同样不许读到半截写）
+    let _lock = match cmd {
+        "new" | "gen" | "reticket" => Some(BookLock::acquire(&mailbox_of(&args))),
+        _ => None,
+    };
+    match cmd {
         "new" => cmd_new(&args),
         "verify" => cmd_verify(&args),
         "gen" => cmd_gen(&args),
