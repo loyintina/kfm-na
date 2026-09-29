@@ -3,9 +3,12 @@
 //!
 //! 条款兑现：模态详情卡——压暗层（涂装侧 α150 黑）+ 居中卡片
 //! （paint_rect_ring 池框同尺 R=36px、内卡反转 c2→c1）+ 标题
-//! （2 格 36px 居中）+ 1px 渐变分隔线 + 字段区（题注 1 格 30px 灰
-//! 在上、内容 1 格/行 36px 亮在下——与上池字段行字档相反是**有意的**，
-//! 跳框里题注是内容的脚注）+ 底部全宽关闭钮（3 格）。
+//! （2 格带居中）+ 1px 渐变分隔线 + 字段区（题注 1 格灰在上、
+//! 内容 1 格/行亮在下——与上池字段行字档相反是**有意的**，跳框里
+//! 题注是内容的脚注）+ 底部全宽关闭钮（3 格）。字号自 BAR-194 起
+//! 收编进网格文字引擎（grid_fit 格子变量，pinch 联动；题注档 =
+//! 引擎 fit × MODAL_LABEL_SCALE 保 30/36 层级比，旧固定 30/36px
+//! 字面量退役）。
 //!
 //! 眼手同尺：涂装与触摸命中读本册同一份几何（card_rect/
 //! close_btn_rect/hit），壳层不许另算。字段折行（wrap_text）也是
@@ -178,9 +181,9 @@ pub fn pick_screen_px(win: Option<(u32, u32)>, cached: (u32, u32)) -> Option<(u3
     None
 }
 
-/// 贪心折行（格宽尺：CJK 2 格/其余 1 格——tab_bar 已收编进
-/// grid_text::grid_text_cells（BAR-191）；本函数的 0x2E80 土判据
-/// 待 #5 面收编，追踪信 0017）。
+/// 贪心折行（格宽尺 = grid_text::char_cells 引擎唯一源——BAR-194 收编，
+/// 0x2E80 土判据退役：谚文首字母 U+1100–115F 归 2 格、零宽/组合符
+/// U+200B/U+0300 段归 0 格，与终端网格同宗）。
 /// 满即断、刚好放下不断；空串 = 一行空（占位不塌）
 pub fn wrap_text(s: &str, width_cells: u32) -> Vec<String> {
     if width_cells == 0 {
@@ -190,7 +193,7 @@ pub fn wrap_text(s: &str, width_cells: u32) -> Vec<String> {
     let mut cur = String::new();
     let mut cur_w = 0u32;
     for c in s.chars() {
-        let cw = if (c as u32) >= 0x2E80 { 2 } else { 1 };
+        let cw = crate::ui::grid_text::char_cells(c);
         if cur_w + cw > width_cells && !cur.is_empty() {
             lines.push(std::mem::take(&mut cur));
             cur_w = 0;
@@ -203,10 +206,23 @@ pub fn wrap_text(s: &str, width_cells: u32) -> Vec<String> {
 }
 
 /// 卡内容宽（格）=（卡宽 − 两侧内边距）/ CELL_W——折行的尺子
+/// （设计格基准版 = content_cells_cw 的 CELL_W 特例）
 pub fn content_cells(screen_w: u32) -> u32 {
-    let card_w = screen_w.saturating_sub(MODAL_SIDE_MARGIN * 2);
-    (card_w as i64 - MODAL_PAD_X * 2).max(0) as u32 / CELL_W
+    content_cells_cw(screen_w, CELL_W)
 }
+
+/// 卡内容宽（格）实例格宽版（BAR-194 网格文字收编）：折行尺与涂装
+/// 格步进同一份——pinch 后实例格宽 ≠ CELL_W 时壳侧（涂装/命中）必须
+/// 传实例 cell_w，不许各用各的尺（眼手同尺）
+pub fn content_cells_cw(screen_w: u32, cell_w: u32) -> u32 {
+    let card_w = screen_w.saturating_sub(MODAL_SIDE_MARGIN * 2);
+    (card_w as i64 - MODAL_PAD_X * 2).max(0) as u32 / cell_w.max(1)
+}
+
+/// 题注档字号比（BAR-194：跳框字号收编进 grid_fit 格子变量后，题注
+/// 与内容行的层级差保留——题注 px = 引擎 fit px × 本系数，旧固定档
+/// 30px/36px 的比例留档）
+pub const MODAL_LABEL_SCALE: f32 = 30.0 / 36.0;
 
 /// 组件条目 → 跳框字段区（名 = 标题不在字段里；折行吃 content_cells
 /// 同一把尺——卡高计算与涂装断行一致）

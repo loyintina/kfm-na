@@ -6,8 +6,8 @@
 //!
 //! 1. **格宽分类** `char_cells` / `grid_text_cells`——终端全角两格口径的
 //!    UI 侧唯一源（unicode-width，与 alacritty 网格同宗）。
-//!    `tab_bar::text_cells` 已收编（BAR-191）；`modal::wrap_text` 的
-//!    0x2E80 土判据挂账 #5 面（追踪信 0017）。
+//!    `tab_bar::text_cells`（BAR-191）与 `modal::wrap_text`（BAR-194）
+//!    均已收编。
 //!    （土判据真盲区订正（BAR-191 实证）：U+3000 全角标点段在 0x2E80
 //!    **之上**，土判据照样判 2 格；真分野 = 谚文首字母 U+1100–115F、
 //!    零宽/组合符（U+200B、U+0300 段）——引擎 2/0 格，土判据全判 1）

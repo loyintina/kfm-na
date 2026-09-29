@@ -6977,8 +6977,9 @@ impl TermView {
         let meta_fg = 0x0080_8080; // 0.5 灰
         let denom = ((w - 1) + (h - 1)).max(1) as i64; // 池内容同一把渐变尺
 
-        // 居中卡（几何 = modal.rs；折行吃 content_cells 同尺）
-        let fields = md::fields_of(entry, md::content_cells(w));
+        // 居中卡（几何 = modal.rs；折行尺与格步进同一份实例格宽——
+        // content_cells_cw，pinch 联动眼手同尺，BAR-194）
+        let fields = md::fields_of(entry, md::content_cells_cw(w, self.cell_w));
         let card = md::card_rect(w, h, &fields);
         let cx0 = card.x + off;
         if cx0 < 0 {
@@ -7006,29 +7007,30 @@ impl TermView {
         let text_x = (cx0 + md::MODAL_PAD_X) as u32;
         let text_w = (card.w as i64 - md::MODAL_PAD_X * 2).max(0) as u32;
 
-        // 标题（2 格带居中，faux-bold 双画偏 1px）
+        // 标题（2 格带居中，faux-bold 双画偏 1px；网格文字引擎收编
+        // BAR-194——量宽/步进全走格，旧 36px 字面量退役）
         let title_y = card.y + i64::from(md::MODAL_PAD_Y);
-        self.draw_text_centered(
+        self.draw_grid_text_centered(
             frame,
             entry.name,
             cx0,
             title_y,
             card.w,
             md::MODAL_TITLE_H,
-            36.0,
             title_fg,
             cx0,
+            None,
         );
-        self.draw_text_centered(
+        self.draw_grid_text_centered(
             frame,
             entry.name,
             cx0 + 1,
             title_y,
             card.w,
             md::MODAL_TITLE_H,
-            36.0,
             title_fg,
             cx0,
+            None,
         );
 
         // 分隔线：标题下 0.5 格处 1px 渐变细线，卡内宽，c2→c1
@@ -7064,22 +7066,27 @@ impl TermView {
         };
         self.paint_preview_impl(frame, entry.preview, &prev_screen, accent, denom, now_ms);
 
-        // 字段区：题注（30px 灰）在上 + 内容行（36px 亮）在下
+        // 字段区：题注（引擎 fit × MODAL_LABEL_SCALE 灰）在上 + 内容行
+        // （引擎 fit 亮）在下——网格文字引擎收编（BAR-194），纵向 = 一格
+        // 线盒在 1 格行带内居中（行带 = CELL_H 与线盒同高，pinch 时线盒
+        // 随行放大居中）
+        let cell_h = i64::from(self.cell_h);
         let mut pen = md::fields_top(&card);
         for f in &fields {
             if pen + i64::from(md::MODAL_LABEL_H) > ink_bottom {
                 break;
             }
-            self.draw_text_left_ex(
+            let (litems, _) = self.measure_items_grid_scaled(&f.label, md::MODAL_LABEL_SCALE);
+            let ly = pen + (i64::from(md::MODAL_LABEL_H) - cell_h).max(0) / 2;
+            self.draw_grid_text_left(
                 frame,
-                &f.label,
-                text_x,
+                &litems,
+                i64::from(text_x),
+                ly,
+                self.cell_w,
                 text_w,
-                pen as u32,
-                md::MODAL_LABEL_H,
-                30.0,
                 meta_fg,
-                0.0,
+                0,
                 None,
             );
             pen += i64::from(md::MODAL_LABEL_H);
@@ -7087,16 +7094,17 @@ impl TermView {
                 if pen + i64::from(md::MODAL_LINE_H) > ink_bottom {
                     break;
                 }
-                self.draw_text_left_ex(
+                let (items, _) = self.measure_items_grid(line);
+                let ly = pen + (i64::from(md::MODAL_LINE_H) - cell_h).max(0) / 2;
+                self.draw_grid_text_left(
                     frame,
-                    line,
-                    text_x,
+                    &items,
+                    i64::from(text_x),
+                    ly,
+                    self.cell_w,
                     text_w,
-                    pen as u32,
-                    md::MODAL_LINE_H,
-                    36.0,
                     title_fg,
-                    0.0,
+                    0,
                     None,
                 );
                 pen += i64::from(md::MODAL_LINE_H);
@@ -7105,7 +7113,7 @@ impl TermView {
         }
 
         // 关闭钮：卡底全内宽 3 格，均匀细框（paint_thin_frame——非池行
-        // 场合不属三级框，十一修）+ 居中 36px 亮字
+        // 场合不属三级框，十一修）+ 居中亮字（网格文字引擎，BAR-194）
         paint_thin_frame(
             frame,
             btn.x + off,
@@ -7116,16 +7124,16 @@ impl TermView {
             denom,
             (0, i64::from(h)),
         );
-        self.draw_text_centered(
+        self.draw_grid_text_centered(
             frame,
             "关闭",
             btn.x + off,
             btn.y,
             btn.w,
             btn.h,
-            36.0,
             title_fg,
             btn.x + off,
+            None,
         );
     }
 
@@ -7212,29 +7220,29 @@ impl TermView {
         let text_x = (cx0 + md::MODAL_PAD_X) as u32;
         let text_w = (card.w as i64 - md::MODAL_PAD_X * 2).max(0) as u32;
 
-        // 标题（2 格带居中，faux-bold 双画偏 1px）
+        // 标题（2 格带居中，faux-bold 双画偏 1px；网格文字引擎 BAR-194）
         let title_y = card.y + i64::from(md::MODAL_PAD_Y);
-        self.draw_text_centered(
+        self.draw_grid_text_centered(
             frame,
             &v.title,
             cx0,
             title_y,
             card.w,
             md::MODAL_TITLE_H,
-            36.0,
             title_fg,
             cx0,
+            None,
         );
-        self.draw_text_centered(
+        self.draw_grid_text_centered(
             frame,
             &v.title,
             cx0 + 1,
             title_y,
             card.w,
             md::MODAL_TITLE_H,
-            36.0,
             title_fg,
             cx0,
+            None,
         );
 
         // 分隔线：标题下 0.5 格处 1px 渐变细线，卡内宽，c2→c1
@@ -7266,7 +7274,8 @@ impl TermView {
             accent,
         );
 
-        // 关闭钮：卡底全内宽 3 格，均匀细框 + 居中 36px 亮字（modal 同款）
+        // 关闭钮：卡底全内宽 3 格，均匀细框 + 居中亮字（网格文字引擎，
+        // BAR-194——modal 同款）
         paint_thin_frame(
             frame,
             btn.x + off,
@@ -7277,16 +7286,16 @@ impl TermView {
             denom,
             (0, i64::from(h)),
         );
-        self.draw_text_centered(
+        self.draw_grid_text_centered(
             frame,
             "关闭",
             btn.x + off,
             btn.y,
             btn.w,
             btn.h,
-            36.0,
             title_fg,
             btn.x + off,
+            None,
         );
         card
     }
@@ -7325,7 +7334,11 @@ impl TermView {
                 return;
             }
             let entry = &comps[mi.min(comps.len() - 1)];
-            let card = md::card_rect(w, h, &md::fields_of(entry, md::content_cells(w)));
+            let card = md::card_rect(
+                w,
+                h,
+                &md::fields_of(entry, md::content_cells_cw(w, self.cell_w)),
+            );
             self.paint_modal_card(&mut frame, entry, 0, accent, now_ms);
             card
         } else {
@@ -10306,6 +10319,17 @@ impl TermView {
     /// CJK 备用字吃 cjk px；**步进 = char_cells × cell_w**（全角 2 格、
     /// 半角 1 格、零宽 0 格——不再吃 fontdue 自然步进）
     pub(crate) fn measure_items_grid(&self, text: &str) -> (Vec<GridItem<'_>>, u32) {
+        self.measure_items_grid_scaled(text, 1.0)
+    }
+
+    /// 字号缩放版量宽（BAR-194 跳框题注档：px = grid_fit × scale 保
+    /// 题注/内容层级差——步进仍 = char_cells × cell_w 不吃 scale，
+    /// 缩的只是一行线盒内的字形大小，格尺账不动）
+    pub(crate) fn measure_items_grid_scaled(
+        &self,
+        text: &str,
+        scale: f32,
+    ) -> (Vec<GridItem<'_>>, u32) {
         let (px, _bo, cpx, _cbo) = self.grid_fit();
         let mut items = Vec::new();
         let mut cells = 0u32;
@@ -10319,7 +10343,7 @@ impl TermView {
             };
             let item_px = if std::ptr::eq(f, &self.font) { px } else { cpx };
             let n = crate::ui::grid_text::char_cells(c);
-            items.push((f, c, item_px, n as f32 * self.cell_w as f32));
+            items.push((f, c, item_px * scale, n as f32 * self.cell_w as f32));
             cells += n;
         }
         (items, cells)

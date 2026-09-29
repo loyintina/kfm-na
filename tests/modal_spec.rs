@@ -461,3 +461,48 @@ fn spec_bar169_viewer_content_w钉() {
     );
     assert_eq!(viewer_content_w(10), 0, "病态窄屏不 Underflow");
 }
+
+// ---- BAR-194：跳框文字收编网格文字引擎（折行尺 = char_cells 唯一源，
+// 格宽随实例 cell_w）----
+
+#[test]
+fn spec_bar194_折行尺吃引擎格宽钉() {
+    // 分野字①：谚文首字母 U+1100–115F = 2 格（旧 0x2E80 土判据误判 1 格
+    // ——0x1100 < 0x2E80；BAR-191 实证订正的真盲区）。两个谚文字 = 4 格，
+    // 行宽 3 → 必断成两行；土判据会误判 2 格放下不断
+    assert_eq!(
+        wrap_text("\u{1100}\u{1100}", 3),
+        vec!["\u{1100}".to_string(), "\u{1100}".to_string()],
+        "谚文首字母按引擎 2 格入账"
+    );
+    // 分野字②：零宽空格 U+200B = 0 格（土判据误判 1 格）。「ab\u{200B}cd」
+    // = 4 格，行宽 4 刚好放下不断；土判据会算 5 格误断
+    assert_eq!(
+        wrap_text("ab\u{200B}cd", 4),
+        vec!["ab\u{200B}cd".to_string()],
+        "零宽字符不占格不触发断行"
+    );
+    // 组合符 U+0300 段同律（0 格）
+    assert_eq!(
+        wrap_text("ab\u{0300}cd", 4),
+        vec!["ab\u{0300}cd".to_string()],
+        "组合符不占格"
+    );
+}
+
+#[test]
+fn spec_bar194_折行尺随实例格宽钉() {
+    use kfm_na::ui::modal::content_cells_cw;
+    // 基准特例：实例格宽 = CELL_W 时与设计格版同值（旧钉口径不动）
+    assert_eq!(content_cells_cw(SCR_W, CELL_W), content_cells(SCR_W));
+    // pinch 放大一倍（格宽 ×2）→ 同屏宽折行容量减半（涂装格步进同尺
+    // 放大，眼手同尺）；病态 0 格宽钳 1 = 不除（整像素宽），不死
+    assert_eq!(
+        content_cells_cw(SCR_W, CELL_W * 2),
+        content_cells(SCR_W) / 2
+    );
+    assert_eq!(
+        content_cells_cw(SCR_W, 0),
+        SCR_W - MODAL_SIDE_MARGIN * 2 - (MODAL_PAD_X as u32) * 2
+    );
+}

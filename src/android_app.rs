@@ -2975,12 +2975,20 @@ impl App {
                         && let (Some(page), Some((sw, sh))) =
                             (crate::ui::cfg_page::cfg_page_handle(), self.screen_px())
                     {
+                        // 折行尺 = 实例格宽（与涂装同一份，BAR-194 眼手
+                        // 同尺）；term 锁先取先放再锁 cfg_page（锁序
+                        // term→cfg_page 不倒持）；term 不在 = 回退设计
+                        // 格基准，命中照常可用
+                        let modal_cw = self
+                            .term_handle()
+                            .map(|t| t.lock().unwrap().cell_size().0)
+                            .unwrap_or(crate::termview::CELL_W);
                         let mut pg = page.lock().unwrap();
                         if let Some(mi) = pg.modal() {
                             use crate::ui::modal as md;
                             let comps = crate::ui::comp_registry::COMPONENTS;
                             let entry = &comps[mi.min(comps.len() - 1)];
-                            let fields = md::fields_of(entry, md::content_cells(sw));
+                            let fields = md::fields_of(entry, md::content_cells_cw(sw, modal_cw));
                             let card = md::card_rect(sw, sh, &fields);
                             match md::hit(mt.0 as i64, mt.1 as i64, &card) {
                                 md::ModalHit::Close | md::ModalHit::Outside => {
