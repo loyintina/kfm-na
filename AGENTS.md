@@ -164,6 +164,31 @@ TOCTOU 双号竞态）：flock 下一次原子完成 领号（bugs.md 与
    `docs/active/信箱工具链.md`）；追加只动正文与信头状态，文件名出生即冻结；
    类型词：开工信按事实选（通报/提案），同信追加不另发信。
 
+## 分支流与工作区基建（0018 试点）
+
+分支流本体（一线一 worktree + 工单分支 / 冲突归分支侧 / append-only 账
+union 驱动 / 合并串行器 / 主工作区 `/root/kfm-na` 只许 master）是 0018 提案、
+0022 裁决的试点机制，全案以两信为准；本节只收**新工作区基建的明文步**
+（0039 乙，白露裁「直接写进 AGENTS.md」，观澜 0040 §二 实证背书）：
+
+**新工作区 = master + 本机资产补齐。**`git worktree add` 签出 master 后，
+必须把本机资产清单逐项补齐，缺一项都不算建区完成：
+
+- `assets/fonts/local/main.ttf` —— 本机商业主字体（BAR-021 防泄漏闸
+  **不许进库**）。build.rs 编译期把它吃进二进制，且每 worktree 独立
+  target、独立编译，故**每区必拷**，不存在「拷一次全区共享」（0040 §二
+  实证：无则 `ai_presence` 钉红、拷上 65/65 全绿——BAR-183 后干净克隆
+  钉已按字体量测改判不再红，但不拷 = 打出的包主字体落 DejaVuSansMono
+  占位，与真机交付视觉不同尺）。
+
+```bash
+git worktree add /root/kfm-na.wt/<线名> -b <工单分支> master
+cp /root/kfm-na/assets/fonts/local/main.ttf \
+   /root/kfm-na.wt/<线名>/assets/fonts/local/main.ttf
+```
+
+清单有新增项（普查 BAR-184 的「基建清单」桶）追加到本节，别散落各信。
+
 ## 跨线运维公约（2026-08-28 评审裁决，全线生效）
 
 1. **重 IO 窗口制（2026-09-01 用户收紧，取代原 22:00-07:00 版）**：
