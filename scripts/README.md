@@ -15,6 +15,12 @@
   pre-commit 自动跑。
 - `check/` — chain 调用的单项检查（提交纪律闸门、stats 咬合闸、
   mailbox.sh 信箱执法等）。
+- `bar-new.sh` — **BAR 号唯一领取口**（2026-09-29 用户拍板，治三线
+  grep 空号的 TOCTOU 双号竞态）：flock 原子四步——领号（bugs.md +
+  `docs/ledger/bar-registry.jsonl` 两账 max+1）→ 登记（登记即占有）→
+  开 BAR 追踪信（mailbox-cli，白话结论当场填实不挡别线 chain）→ 回写
+  信号 + commit 信箱小仓。用法 `scripts/bar-new.sh --func 开发部
+  --name 观澜 "主题"`；新立 BAR 只许走它，禁手 grep 挑号。
 
 ## 隧道韧性(跨隧道动作统一入口,2026-09-23 改版)
 
