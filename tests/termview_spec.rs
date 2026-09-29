@@ -1066,6 +1066,46 @@ fn spec_bar022_内嵌cjk字体_终端符号补丁覆盖() {
     }
 }
 
+/// 超 GB2312 汉字钉（BAR-176：用户报障「涅槃的槃」终端纯黑不可见——旧
+/// CJK 备用只有 GB2312 子集，超集汉字主备双缺；用户拍板 CJK 备用换尽量
+/// 全的黑体大字库，像素气质让位于覆盖率）。契约：内嵌 CJK 备用必须覆盖
+/// 超 GB2312 汉字与病灶周界借形件（月亮/emoji/盲文/powerline/框线/方块/
+/// ⚡/FFFD）——lookup 非 0 且 rasterize 有墨；ASCII 必须归半格（Noto 原生
+/// 'M' advance 812/1000，不归格西文全乱）。
+/// 变异抽检方向：烘焙漏汉字段/借形漏登记 format 12/借入空轮廓/归格被摘——
+/// 本钉必须红
+#[test]
+fn spec_bar176_内嵌cjk字体_超gb2312汉字与借形有墨() {
+    let font = fontdue::Font::from_bytes(
+        termview::VENDORED_CJK_FONT,
+        fontdue::FontSettings::default(),
+    )
+    .expect("内嵌 CJK 字体必须可解析");
+    // 槃 = 报障原字（GB2312 外）；㐂 = 扩展 A 抽样；其余 = 病灶周界借形件
+    for c in [
+        '槃', '㐂', '中', '🌑', '✅', '⠋', '\u{E0B0}', '─', '░', '⚡', '\u{FFFD}',
+    ] {
+        assert!(
+            font.lookup_glyph_index(c) != 0,
+            "内嵌 CJK 备用缺 {c}（U+{:04X}）——超 GB2312 纯黑病灶未愈？",
+            c as u32
+        );
+        let (m, bmp) = font.rasterize(c, CELL_H as f32);
+        assert!(
+            m.width > 0 && m.height > 0 && bmp.iter().any(|&a| a > 0),
+            "{c}（U+{:04X}）有 cmap 无墨——借入空轮廓？",
+            c as u32
+        );
+    }
+    let half = font.metrics('M', 100.0).advance_width;
+    let full = font.metrics('中', 100.0).advance_width;
+    assert!(
+        (full / half - 2.0).abs() < 0.05,
+        "全角/半角步进比应=2（实得 {}）——ASCII 归格被摘？",
+        full / half
+    );
+}
+
 /// powerline 单格钉（BAR-028：FusionPixel 的 E0A0-E0D4 是全角设计，终端按
 /// unicode-width=1 渲染，右半被格宽裁剪切掉——agnoster 箭头变「方括号」，
 /// 2026-08-23 真机截图目击）。契约：powerline 字形步进 == 半角字符步进，

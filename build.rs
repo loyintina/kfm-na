@@ -1,10 +1,11 @@
 //! build.rs — 编译期字体选择（BAR-021，2026-08-18）
 //!
 //! 规则（占位资产 + 本地覆盖）：
-//! - `assets/fonts/local/main.ttf` 存在 → 主/CJK 字体都用它（本机商业字体，
+//! - `assets/fonts/local/main.ttf` 存在 → 主字体用它（本机商业字体，
 //!   gitignore 钉死永不进库；它是等宽化+GB2312 子集化后的全功能像素字体）
-//! - 否则落开源占位：主 = DejaVuSansMono.ttf，CJK = 缝合像素 12px 等宽
-//!   GB2312 子集——任何克隆仓库的人编出的包行为一致
+//! - 否则落开源占位：主 = DejaVuSansMono.ttf，CJK = Noto Sans CJK SC
+//!   烘焙大字库（BAR-176，汉字 27924 全量黑体）——任何克隆仓库的人编出的
+//!   包行为一致
 //!
 //! 选中的文件拷进 OUT_DIR/fonts/{main,cjk}.ttf，termview.rs 用
 //! `include_bytes!(concat!(env!("OUT_DIR"), ...))` 内嵌。源码树里不产生
@@ -34,13 +35,15 @@ fn main() {
         Path::new("assets/fonts/DejaVuSansMono.ttf"),
         &out_dir,
     );
-    // CJK/符号 fallback 链：local/cjk.ttf > 缝合像素子集（终端符号补丁包：
-    // 盲文/方块/▽/powerline 全有；主字体缺的字形按 prefer_cjk 逐字路由给它。
+    // CJK/符号 fallback 链：local/cjk.ttf > Noto 黑体大字库（BAR-176：
+    // 旧缝合像素备用只有 GB2312 子集，超集汉字（如「槃」）主备双缺纯黑
+    // 不可见——换尽量全的黑体，像素气质让位于覆盖率；烘焙管线
+    // scripts/font-bake-cjk.py。主字体缺的字形按 prefer_cjk 逐字路由给它。
     // 注意不再默认落 local/main.ttf——商业美术字体天然缺终端符号，
     // fallback 的职责就是补这个，BAR-022）
     pick(
         "cjk.ttf",
-        Path::new("assets/fonts/FusionPixelMono12-gb2312.ttf"),
+        Path::new("assets/fonts/NotoSansCJKsc-kfm.ttf"),
         &out_dir,
     );
 }

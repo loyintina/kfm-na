@@ -34,9 +34,18 @@ if git ls-files assets/fonts | grep -qi 'local/\|AaHMKJXST'; then
     echo "❌ 商业字体混入暂存区：git rm --cached 后再试"; exit 1
 fi
 big=$(git ls-files assets/fonts | while read -r f; do
-    [ -f "$f" ] && [ "$(stat -c%s "$f")" -gt 4194304 ] && echo "$f"
+    [ -f "$f" ] || continue
+    size=$(stat -c%s "$f")
+    # 唯一豁免 = NotoSansCJKsc-kfm.ttf（BAR-176：CJK 备用换黑体大字库，
+    # 汉字 27924 全量正是这单的意义，裁体积 = 裁覆盖率——单独帽 16MB，
+    # 烘焙脚本判卷自带 ≤15MB 断言）
+    if [ "$f" = "assets/fonts/NotoSansCJKsc-kfm.ttf" ]; then
+        [ "$size" -gt 16777216 ] && echo "$f"
+    else
+        [ "$size" -gt 4194304 ] && echo "$f"
+    fi
 done)
-[ -z "$big" ] || { echo "❌ 字体资产超 4MB（未子集化？）: $big"; exit 1; }
+[ -z "$big" ] || { echo "❌ 字体资产超体积帽（未子集化？）: $big"; exit 1; }
 # 防泄漏闸之二（2026-09-24，BAR-143 形态升级 纯段落→代码守卫）：
 # 密钥/证书类文件永不进库——quic.key.der 被 git add -A 推进双远端事故
 bash scripts/check/check-no-secrets.sh || { echo "❌ 密钥防泄漏闸不过"; exit 1; }
