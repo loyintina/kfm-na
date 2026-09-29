@@ -1002,6 +1002,13 @@ impl App {
             .unwrap_or(crate::input_bar::LINE_STEP_PX)
     }
 
+    /// AI 页运行期行距（BAR-198 格化 pinch 联动）：term 未装 = 设计格保底
+    fn ai_page_line_step(&self) -> u32 {
+        self.term_handle()
+            .map(|t| crate::termview::ai_line_step(t.lock().unwrap().cell_size().1))
+            .unwrap_or(crate::termview::AI_PAGE_LINE_H)
+    }
+
     /// chrome 跟随 inset（眼手同尺：触摸命中与渲染吃同一份采样值）。
     /// 采样在 draw_frame 每帧写回；无 ui-fx 占槽时 == 真实 inset（硬切）
     fn chrome_inset(&self) -> u32 {
@@ -2380,10 +2387,15 @@ impl App {
                     return;
                 }
                 // 面板页手势：AI 页拖动 = 对话页滚行（像素级累积跟手，
-                // 行高与渲染同尺 AI_PAGE_LINE_H；方向契约在 ui/ai_page.rs
+                // 行高与渲染同尺——BAR-198 格化起吃运行期
+                // ai_page_line_step()（pinch 联动），设计格 = 旧
+                // AI_PAGE_LINE_H 恒值；方向契约在 ui/ai_page.rs
                 // drag_accum_rows——下滑 = 看更早，BAR-064）；配置页拖动
                 // = 上池像素滚动（§五 四版，起手落上池才滚，下分支）；
-                // 水平位移只攒着，抽屉识别在抬手（decide_swipe）
+                // 水平位移只攒着，抽屉识别在抬手（decide_swipe）。
+                // step 先算（ai_page_line_step 借全 self，与 apt 的字段
+                // 可变借冲突——E0502）
+                let ai_step = self.ai_page_line_step();
                 if let Some(apt) = self.panel_touch.as_mut() {
                     let dy = y - apt.last_y;
                     apt.last_y = y;
@@ -2396,11 +2408,8 @@ impl App {
                         .last_ai_snap
                         .is_some_and(|s| s.top == Some(crate::ai_presence::Panel::Ai));
                     if top_is_ai {
-                        let (acc, rows) = crate::ui::ai_page::drag_accum_rows(
-                            apt.acc_px,
-                            dy,
-                            f64::from(crate::termview::AI_PAGE_LINE_H),
-                        );
+                        let (acc, rows) =
+                            crate::ui::ai_page::drag_accum_rows(apt.acc_px, dy, f64::from(ai_step));
                         apt.acc_px = acc;
                         if rows != 0 {
                             if let Some(chat) = &self.ai_chat {
@@ -7253,7 +7262,9 @@ impl App {
     }
 
     /// AI 字形槽位查找（主槽优先、另一字体槽兜底——路由认知翻转时
-    /// 不至于全盲；网格路径双键回退同款）。供 ai_glyphs_to_instances
+    /// 不至于全盲；网格路径双键回退同款）。BAR-198 起与终端同册
+    /// GLYPH_SIZE_TERM（grid_fit 实例格 pinch 联动，格变走
+    /// sync_term_glyph_size 整册重建）。供 ai_glyphs_to_instances
     /// 的内联闭包调用
     fn ai_slot_of(
         atlas: &crate::glyph_atlas::GlyphAtlas,
@@ -7266,7 +7277,7 @@ impl App {
         let k0 = crate::glyph_atlas::GlyphKey {
             font,
             c,
-            size: crate::glyph_atlas::GLYPH_SIZE_AI,
+            size: crate::glyph_atlas::GLYPH_SIZE_TERM,
         };
         if let Some(s) = atlas.slot(&k0) {
             return (k0, Some(s));
@@ -7274,7 +7285,7 @@ impl App {
         let k1 = crate::glyph_atlas::GlyphKey {
             font: 1 - font,
             c,
-            size: crate::glyph_atlas::GLYPH_SIZE_AI,
+            size: crate::glyph_atlas::GLYPH_SIZE_TERM,
         };
         if let Some(s) = atlas.slot(&k1) {
             return (k1, Some(s));
@@ -7578,12 +7589,13 @@ impl App {
                                 panel_off,
                             );
                             **out = glyphs;
-                            crate::termview::paint_ai_page_chrome(
+                            crate::termview::paint_ai_page_chrome_with_step(
                                 buf,
                                 w,
                                 h,
                                 bottom_inset,
                                 panel_off,
+                                crate::termview::ai_line_step(term.cell_size().1),
                             );
                             ai_layout = Some(layout);
                         } else if panel_off == 0 {
@@ -8367,11 +8379,13 @@ impl App {
             g.slot_bake(crate::gles_present::ChromeSlot::Keybar);
         }
         // 面板槽：烘焙画布恒为靠泊位（panel_off=0 画），位移交给合成
-        // placement——这就是「动画零光栅」的承载点
+        // placement——这就是「动画零光栅」的承载点。fit 读数吃运行期行距
+        // （BAR-198 格化 pinch 联动；chrome 像素配方本身不吃 step）
         if panel_visible && sigs.panel.feed((w, h, ime, bar_h)) {
             let px = g.slot_canvas(crate::gles_present::ChromeSlot::Panel);
             px.fill(0);
-            crate::termview::paint_ai_page_chrome(px, w, h, bottom_inset, 0);
+            let step = crate::termview::ai_line_step(term_arc.lock().unwrap().cell_size().1);
+            crate::termview::paint_ai_page_chrome_with_step(px, w, h, bottom_inset, 0, step);
             g.slot_bake(crate::gles_present::ChromeSlot::Panel);
         }
         // 配置槽（§五B）：同规——画布恒靠泊位（cfg_off=0），X 位移在合成期。
@@ -9103,9 +9117,11 @@ impl App {
         };
         let ras0_us = t_ras.elapsed().as_micros() as u64;
 
-        // 3) AI 文字实例（图集两遍制：misses 补装载 → 重生成；字号类 =
-        // GLYPH_SIZE_AI——AI_PAGE_PX/AI_PAGE_LINE_H 常量冻结的代号，
-        // off_y 按 AI 行基线折算，ai_text_baseline_off 是唯一尺子）
+        // 3) AI 文字实例（图集两遍制：misses 补装载 → 重生成。BAR-198
+        // 起 AI 页字形与终端网格同册同件：键类 = GLYPH_SIZE_TERM，装载 =
+        // rasterize_for_atlas（grid_fit 实例格 + 格基线 off_y 烤进槽位）
+        // ——pinch 变格由 sync_term_glyph_size 整册重建覆盖，AI 页零自备
+        // 失效路径；格跨居中余量/格顶已在收集期折进 AiGlyph）
         let t_gen2 = std::time::Instant::now();
         let mut ai_glyphs_by_page: Vec<Vec<crate::glyph_atlas::GlyphInstance>> = Vec::new();
         if panel_visible && !ai_glyphs.is_empty() {
@@ -9115,31 +9131,14 @@ impl App {
                 });
             if !inst.misses.is_empty() {
                 let t = term_arc.lock().unwrap();
-                let baseline = t.ai_text_baseline_off();
                 for k in &inst.misses {
-                    if let Some((fid, m, bmp)) = t.rasterize_for_atlas_px(
-                        k.c,
-                        crate::termview::AI_PAGE_PX,
-                        crate::termview::AI_PAGE_PX,
-                    ) {
-                        let off_y = crate::termview::ai_glyph_off_y(
-                            baseline,
-                            m.ymin as f32,
-                            m.height as f32,
-                        );
+                    if let Some((fid, m, bmp, ox, oy)) = t.rasterize_for_atlas(k.c) {
                         let key = crate::glyph_atlas::GlyphKey {
                             font: fid,
                             c: k.c,
-                            size: crate::glyph_atlas::GLYPH_SIZE_AI,
+                            size: crate::glyph_atlas::GLYPH_SIZE_TERM,
                         };
-                        g.atlas_insert(
-                            key,
-                            m.width as u32,
-                            m.height as u32,
-                            &bmp,
-                            m.xmin as i16,
-                            off_y,
-                        );
+                        g.atlas_insert(key, m.width as u32, m.height as u32, &bmp, ox, oy);
                     }
                 }
                 // 闭包内联成临时（调用结束即死）——提升成 let 会横跨

@@ -18,22 +18,24 @@
 use std::collections::HashMap;
 
 /// 图集键：字体槽 + 字符 + 字号类（font：0 = 主字体，1 = CJK 备用，
-/// 路由归调用方）。size 维（期 1 第 2 层 C 档）：图集只按字符缓存，
-/// AI 页文字（AI_PAGE_PX=40/LINE_H=64）与终端网格字号不同——同一
-/// 字符两套位图必须共存，键里没有字号维就会拿终端小字画 AI 页大字。
-/// 字号类是常量冻结的代号不是自由参数：改 AI_PAGE_PX/LINE_H 必须
-/// 同步换类号（off_y 按 LINE_H 折算烤进槽位，键对不上字号 = 错位）
+/// 路由归调用方）。size 维：网格引擎字号类——BAR-198（0017 #9 面）起
+/// AI 页字形与终端网格同册同尺（grid_fit 实例格，pinch 联动），
+/// 旧 AI 专属字号类退役；现存唯一类 = GLYPH_SIZE_TERM。格尺寸变 = 册内
+/// 字形全成陈墨，壳侧 sync_term_glyph_size 检出即整册清空逼重光栅
+/// （2026-09-11 捏合缩放字号不跟案）——size 维不再是烤死的常量代号
+/// 分类，而是留给将来新字号档的扩展位
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct GlyphKey {
     pub font: u8,
     pub c: char,
-    /// 字号类：GLYPH_SIZE_TERM = 终端网格，GLYPH_SIZE_AI = AI 页正文
+    /// 字号类：GLYPH_SIZE_TERM = 网格引擎实例格字号（终端网格 + AI 页
+    /// 正文同册）
     pub size: u8,
 }
 
-/// 字号类代号（见 GlyphKey.size——常量冻结，改字号必换号）
+/// 网格引擎字号类代号（现唯一类；pinch 变格由壳侧整册重建覆盖，
+/// 见 GlyphAtlas::clear）
 pub const GLYPH_SIZE_TERM: u8 = 0;
-pub const GLYPH_SIZE_AI: u8 = 1;
 
 /// 图集中一个字形的落位与相对格原点的偏移
 #[derive(Clone, Copy, Debug)]
@@ -182,7 +184,9 @@ impl GlyphAtlas {
     /// 整册清空（2026-09-11 捏合缩放字号不跟案）：字号类代号无 px 维，
     /// 格尺寸变 = font_px 变 = 册内字形全成陈墨——slots 清空、页回第 0
     /// 页行架归零、coverage 清零、revision  bump（壳侧纹理全页重传）。
-    /// 清空后装载照常（行架从头排）
+    /// BAR-198 起 AI 页字形与终端同册（GLYPH_SIZE_TERM），一次清空
+    /// 两面同效、下一帧各自 misses 路径按新格重光栅。清空后装载照常
+    /// （行架从头排）
     pub fn clear(&mut self) {
         self.slots.clear();
         self.pages.truncate(1);
@@ -362,18 +366,25 @@ pub fn push_glyph_instances(
 
 /// AI 页文字的 GPU 中立镜像（render_ai_page 画字段的纯数据版：布局/
 /// 视口/折行/右缘截断归收集方 ai_page_glyphs，这里只见结果——画在哪、
-/// 画什么字、哪个字体槽、什么颜色）。x 是笔位（xmin/off_y 归图集槽位
-/// ——与网格路径同规：GpuCell 带格原点，槽位带偏移）
+/// 画什么字、哪个字体槽、什么颜色）。x 是起笔位（格跨居中余量已含，
+/// xmin/off_y 归图集槽位——与网格路径同规：GpuCell 带格原点，槽位带
+/// 偏移）；字形 = grid_fit 实例格（BAR-198：与终端同册 GLYPH_SIZE_TERM，
+/// pinch 整册重建路径同源）
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AiGlyph {
-    /// 笔位 x（像素；实例 x = x + slot.off_x）
+    /// 起笔位 x（像素，格跨内水平居中余量已折进；实例 x = x + slot.off_x）
     pub x: f32,
-    /// 行顶 y（已含 panel_off 平移；实例 y = y + slot.off_y）
+    /// 格顶 y（行顶 + 线盒居中垫 + panel_off 平移；实例 y = y + slot.off_y）
     pub y: f32,
     pub c: char,
-    /// 字体槽（0 = 主，1 = CJK——ai_page_glyphs 已按 prefer_cjk 路由）
+    /// 字体槽（0 = 主，1 = CJK——ai_page_glyphs 已按条目字体身份路由）
     pub font: u8,
     pub fg: u32,
+    /// 右缘墨钳（格跨右缘相对起笔位的像素列数，整数像素域——
+    /// draw_grid_text_left 的 span_right 裁剪（trunc 后 i64 坐标判据）
+    /// 折进实例几何：字形位图探出格跨的边缘墨不进实例，与 CPU 画字段
+    /// 逐列咬合）
+    pub clip_w: f32,
 }
 
 /// AI 文字实例化产出（无背景层——AI 页紫底/边框环是 CPU chrome 画，
@@ -383,12 +394,15 @@ pub struct AiInstanced {
     pub misses: Vec<GlyphKey>,
 }
 
-/// AI 页文字 → GPU 实例（与 draw_items_left 的画字语义逐条对齐，
-/// 验收就在这两份代码的咬合上）：
+/// AI 页文字 → GPU 实例（与 draw_grid_text_left 的画字语义逐条对齐
+/// ——BAR-198 格化，验收就在这两份代码的咬合上）：
 /// - 放置：left = x + slot.off_x（= xmin，斜体左探可为负），top =
-///   y + slot.off_y（= 基线 - ymin - 高，装载方按 AI 行尺折算）；
-/// - 右缘截断已由收集方折进 AiGlyph（break 语义），此处不再裁——
-///   字形探出 clip_right 的边缘墨交给视口（AI 页边距 60px，无格界）；
+///   y + slot.off_y（= 格基线 - ymin - 高，装载方烤格基线——终端网格
+///   同一件 rasterize_for_atlas）；
+/// - 右缘墨钳：格跨右缘由收集方折进 AiGlyph.clip_w，此处钳实例宽与
+///   UV（grid_to_instances 的宽字符 clip_w 同形制）——字形位图探出
+///   格跨的边缘墨不进实例（CPU 画字段的 span_right 逐像素裁剪等价成
+///   几何裁剪）；行右缘 break 已由收集方折进 AiGlyph 序列；
 /// - 图集未命中：不落实例，记键，调用方补装载后重生成（两遍制同规）。
 pub fn ai_glyphs_to_instances(
     glyphs: &[AiGlyph],
@@ -406,14 +420,22 @@ pub fn ai_glyphs_to_instances(
             continue;
         };
         let page = &atlas.pages()[slot.page as usize];
+        // 格跨右缘墨钳：ink 右界 = 起笔位 + clip_w，实例宽钳到
+        // clip_w - off_x（UV 同步钳）；钳到零 = 整字不进墨
+        let draw_w = (f32::from(slot.w))
+            .min(g.clip_w - f32::from(slot.off_x))
+            .max(0.0);
+        if draw_w == 0.0 {
+            continue;
+        }
         out.glyph.push(GlyphInstance {
             x: g.x + f32::from(slot.off_x),
             y: g.y + f32::from(slot.off_y),
-            w: f32::from(slot.w),
+            w: draw_w,
             h: f32::from(slot.h),
             u0: f32::from(slot.u0) / page.w as f32,
             v0: f32::from(slot.v0) / page.h as f32,
-            du: f32::from(slot.w) / page.w as f32,
+            du: draw_w / page.w as f32,
             dv: f32::from(slot.h) / page.h as f32,
             fg: g.fg,
             page: u32::from(slot.page),

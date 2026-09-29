@@ -222,18 +222,27 @@ CPU 优化线顶上（§六分流）。
 - **架构落点（termview）**：`panel_split`（分支判定唯一裁决处，
   softbuffer 与 GLES 两路径共用）；`ai_page_layout`（布局单源，
   render_ai_page 与 ai_page_glyphs 共用——眼手同尺不断）；`ai_page_glyphs`
-  （画字语义与 draw_items_left 逐条对齐：起笔内缩 18/主字体行尺居中/
-  右缘 break/paintable 过滤）；`rasterize_for_atlas_px`（供墨核心字号
-  参数化，终端与 AI 页共用路由+tofu 记账）；`ai_glyph_off_y`（off_y
-  折算唯一公式，**floor 语义**——见判卷②）。android_app 侧 rasterize
+  （画字语义与 CPU 落笔件逐条对齐：起笔内缩/行尺居中/右缘 break/
+  paintable 过滤）；`rasterize_for_atlas_px`（供墨核心字号
+  参数化，终端与 AI 页共用路由+tofu 记账）；off_y 折算唯一公式
+  （**floor 语义**——见判卷②；BAR-198 后烤进 rasterize_for_atlas
+  槽位，独立折算件退役）。android_app 侧 rasterize
   拆成 paint_under/paint_over 两件（softbuffer 单层路径与 GLES 双层
   路径共享），GLES 装配 = `draw_frame_gles`；rasterize 的 gpu_term
   开关随之退役。面板靠泊（panel_off==0）时终端网格零生成（整页被
   不透明面板盖住）。
 - **GlyphKey 加 size 维**：AI 页 40px 与终端字号两套位图共存——键里
   没有字号维就会拿终端小字画 AI 页大字。size 是常量冻结的代号
-  （GLYPH_SIZE_TERM/GLYPH_SIZE_AI），改 AI_PAGE_PX/LINE_H 必须换号
-  （off_y 按 LINE_H 折算烤进槽位）。
+  （GLYPH_SIZE_TERM + AI 专属类），改 AI 页字号/行距常量必须换号
+  （off_y 按行高折算烤进槽位）。**BAR-198 修订（2026-09-30，0017
+  #9 面）**：AI 页字号类退役、AI 字形并入 GLYPH_SIZE_TERM 同册——
+  AI 页字号改吃 grid_fit 实例格（pinch 联动），格尺寸变走壳侧
+  `sync_term_glyph_size` 检出即整册清空逼重光栅（终端图集本就是
+  整册重建模型，AI 字形同册陪葬同重生，不再要独立失效路径）；
+  收集期把格跨居中余量折进 `AiGlyph.x`、y 改格顶（off_y 由
+  rasterize_for_atlas 烤进槽位，两侧通用同一件），右缘截断由新
+  字段 `AiGlyph.clip_w` 钳进实例几何（整数像素域，与 CPU trunc
+  判据同式）。size 维保留为将来新字号档的扩展位。
 - **判卷（考题 6 道，全绿）**：
   ①真值表 panel_split；②布局同尺（render_ai_page 返回与
   ai_page_glyphs 读数在 scroll×inset 全组合相等）；③底装修刚体平移
@@ -248,8 +257,9 @@ CPU 优化线顶上（§六分流）。
   管线（shader 采样）无此坑。
   ② **off_y 截断语义**：装载折算 `as i16` 向零截断，CPU 画字的
   `top as i64`（行顶整数）等效 floor——负分数偏移（高字形上探）错
-  1px。修 = `ai_glyph_off_y` 单源 floor 公式，android_app 装载与考题
-  合成共用。
+  1px。修 = off_y 单源 floor 公式（时为 `ai_glyph_off_y`，BAR-198
+  后该独立件退役、公式烤进 `rasterize_for_atlas`），android_app
+  装载与考题合成共用。
 - **微损伤备忘（对拍考题之外的已知差异）**：双层化后每帧 2 次
   10MB chrome 上传 + 2 次全画布 alpha 遍历（原 1 次）——chrome 脏
   hash/带状上传（§十一修复路径①）的收益翻倍，优先级上调。

@@ -13,6 +13,115 @@ const APP: &str = include_str!("../src/android_app.rs");
 const PROMPT: &str = include_str!("../src/ui/prompt_bar.rs");
 /// 输入栏状态核（BAR-197 行距格化取数口钉）
 const INPUTBAR: &str = include_str!("../src/input_bar.rs");
+/// 字形图集（BAR-198 字号类退役钉）
+const ATLAS: &str = include_str!("../src/glyph_atlas.rs");
+
+/// 函数体切片（BAR-198：AI 面旧件 draw_items_left 在全册仍合法存活
+/// ——配置页四版在用，裸全册查会误伤；接线守卫咬到函数体粒度）。
+/// 从 fn 定义行起到下一个 `    ///`  doc 注释头止（本册函数全带文档）
+fn fn_body<'a>(src: &'a str, sig: &str) -> &'a str {
+    let b = src.find(sig).unwrap_or_else(|| panic!("{sig} 定义必须在"));
+    src[b..]
+        .find("\n    ///")
+        .map_or(&src[b..], |e| &src[b..b + e])
+}
+
+#[test]
+fn spec_bar198_ai页_网格引擎接线守卫() {
+    // ① 字面量字号退役：AI_PAGE_PX 三面（CPU 渲染/GPU 收集/壳侧装载）
+    // 零残留——字形 = grid_fit 实例格（pinch 联动）
+    assert!(
+        !TERMVIEW.contains("AI_PAGE_PX"),
+        "AI 页字面量字号 AI_PAGE_PX 已退役（字号吃 grid_fit 实例格）"
+    );
+    assert!(
+        !APP.contains("AI_PAGE_PX"),
+        "壳侧不许回潮 AI_PAGE_PX（装载走 rasterize_for_atlas 终端同一件）"
+    );
+    // ② 旧字号类退役：GLYPH_SIZE_AI 零残留——AI 页字形并入终端同册
+    // GLYPH_SIZE_TERM，pinch 变格走 sync_term_glyph_size 整册重建
+    assert!(
+        !ATLAS.contains("GLYPH_SIZE_AI"),
+        "GLYPH_SIZE_AI 已退役（glyph_atlas 全册只剩网格引擎字号类）"
+    );
+    assert!(
+        !APP.contains("GLYPH_SIZE_AI"),
+        "壳侧 AI 字形键/装载必须走 GLYPH_SIZE_TERM 同册"
+    );
+    // ②b 壳侧槽位查找双键都必须咬 TERM 类（裸「不许 GLYPH_SIZE_AI」
+    // 咬不住字面量类号偷换——2026-09-30 变异实证：size 改字面量 1
+    // 宿主测试全绿，ai_slot_of 只跑在机上。咬函数体粒度双键计数）
+    let slot = fn_body(APP, "fn ai_slot_of(");
+    assert!(
+        slot.matches("GLYPH_SIZE_TERM").count() >= 2,
+        "ai_slot_of 双键（主槽+兜底槽）都必须走 GLYPH_SIZE_TERM 同册"
+    );
+    // ③ 行距格化取数口在（咬定义行）+ 设计格常量重定义为格化读数
+    assert!(
+        TERMVIEW.contains("pub const fn ai_line_step("),
+        "termview::ai_line_step 必须在（行距 = 16/9 格高唯一源）"
+    );
+    assert!(
+        TERMVIEW.contains("pub const AI_PAGE_LINE_H: u32 = ai_line_step(CELL_H);"),
+        "AI_PAGE_LINE_H 必须重定义为 ai_line_step(CELL_H)（设计格口径）"
+    );
+    // ④ AI 面函数体粒度：格引擎件在、旧件零残留（旧件全册合法存活，
+    // 只能咬函数体——fn_body 切片）
+    let render = fn_body(TERMVIEW, "pub fn render_ai_page(");
+    assert!(
+        render.contains("draw_grid_text_left("),
+        "render_ai_page 必须走 draw_grid_text_left（格落笔）"
+    );
+    assert!(
+        !render.contains("draw_items_left("),
+        "render_ai_page 不许回潮 draw_items_left（旧自然步进落笔件）"
+    );
+    let build = fn_body(TERMVIEW, "fn build_ai_rows<'a>(");
+    assert!(
+        build.contains("measure_items_grid("),
+        "build_ai_rows 必须吃 measure_items_grid（格量宽）"
+    );
+    assert!(
+        !build.contains("measure_items("),
+        "build_ai_rows 不许回潮 measure_items（旧自然步进量宽件）"
+    );
+    let wrap = fn_body(TERMVIEW, "fn wrap_ai_lines<'a>(");
+    assert!(
+        wrap.contains("measure_items_grid("),
+        "wrap_ai_lines 折行尺必须吃格量宽（折行点随格尺）"
+    );
+    let collect = fn_body(TERMVIEW, "pub fn ai_page_glyphs(");
+    assert!(
+        collect.contains("ai_line_step(self.cell_h)"),
+        "ai_page_glyphs 行距必须吃运行期 step（pinch 联动）"
+    );
+    // ⑤ 布局/渲染同一份运行期 step + 壳侧手势换算运行期化
+    assert!(
+        fn_body(TERMVIEW, "fn ai_page_layout<'a>(").contains("ai_page_fit_with_step("),
+        "ai_page_layout 必须走 ai_page_fit_with_step（运行期行距）"
+    );
+    assert!(
+        APP.contains("fn ai_page_line_step("),
+        "壳侧 AI 页运行期行距取数口必须在（ai_page_line_step）"
+    );
+    assert!(
+        !APP.contains("f64::from(crate::termview::AI_PAGE_LINE_H)"),
+        "壳侧手势 px→行换算不许回潮设计格恒值（须吃运行期 step）"
+    );
+    // ⑥ 退役件零残留：AI 行基线尺/off_y 折算件/泛化供墨的壳侧调用
+    assert!(
+        !TERMVIEW.contains("ai_text_baseline_off"),
+        "ai_text_baseline_off 已退役（格基线归 rasterize_for_atlas 同一件）"
+    );
+    assert!(
+        !TERMVIEW.contains("ai_glyph_off_y"),
+        "ai_glyph_off_y 已退役（off_y 由终端装载件烤进槽位）"
+    );
+    assert!(
+        !APP.contains("rasterize_for_atlas_px("),
+        "壳侧 AI 装载不许回潮泛化字号件（rasterize_for_atlas 同册同件）"
+    );
+}
 
 #[test]
 fn spec_bar195_键栏断线卡_网格引擎接线守卫() {

@@ -738,15 +738,14 @@ fn spec_bar183_ai页思考块_三行钳制暗色_按字体量测() {
 #[test]
 fn spec_常量_ai页排版尺家族钉死() {
     // 排版尺 = 手势 px→行换算、渲染、考题三方的公共尺——任何一方私改
-    // 就是眼手两张皮（BAR-062 同类病）。钉死防随手调
-    use kfm_na::termview::{
-        AI_PAGE_BOTTOM, AI_PAGE_LINE_H, AI_PAGE_MARGIN_X, AI_PAGE_PX, AI_PAGE_TOP,
-    };
+    // 就是眼手两张皮（BAR-062 同类病）。钉死防随手调。
+    // BAR-198：AI_PAGE_PX 字面量退役（字号吃 grid_fit 实例格 pinch 联动），
+    // AI_PAGE_LINE_H 重定义为 ai_line_step(CELL_H)（设计格口径，64 不变）
+    use kfm_na::termview::{AI_PAGE_BOTTOM, AI_PAGE_LINE_H, AI_PAGE_MARGIN_X, AI_PAGE_TOP};
     assert_eq!(AI_PAGE_LINE_H, 64);
     assert_eq!(AI_PAGE_TOP, 48);
     assert_eq!(AI_PAGE_BOTTOM, 48);
     assert_eq!(AI_PAGE_MARGIN_X, 60);
-    assert_eq!(AI_PAGE_PX, 40.0);
 }
 
 #[test]
@@ -849,8 +848,10 @@ fn spec_gpu_ai页布局读数_cpu与gpu同尺() {
 
 #[test]
 fn spec_gpu_ai页字形几何_行栅格与笔位() {
-    // y = 行顶 + panel_off 刚体平移，行距恒 LINE_H；x = 边距 + 18 起笔
-    // （draw_items_left 同式），推进 = 逐字步进宽累加
+    // BAR-198 格化后：y = 格顶（行顶 + 线盒居中垫 (step-cell_h)/2）+
+    // panel_off 刚体平移，行距 = ai_line_step(实例格高)（设计格 = 64）；
+    // x = 边距 + 1 格内缩 + 格跨居中余量（设计格：边距+18 起笔，
+    // draw_grid_text_left 同式），推进 = 逐字格步进（char_cells×cell_w）
     let (tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必须建得成");
     let (w, h) = (800u32, 600u32);
     let off = -123i32;
@@ -864,20 +865,23 @@ fn spec_gpu_ai页字形几何_行栅格与笔位() {
         off,
     );
     assert!(!glyphs.is_empty());
+    let step = kfm_na::termview::AI_PAGE_LINE_H as i32;
+    let cell_pad = (step - kfm_na::termview::CELL_H as i32) / 2;
     for g in &glyphs {
-        let rel = g.y as i32 - off - kfm_na::termview::AI_PAGE_TOP as i32;
+        let rel = g.y as i32 - off - kfm_na::termview::AI_PAGE_TOP as i32 - cell_pad;
         assert_eq!(
-            rel % kfm_na::termview::AI_PAGE_LINE_H as i32,
+            rel % step,
             0,
-            "字形必须落在行栅格上（y={}）",
+            "字形必须落在格顶栅格上（行顶+居中垫，y={}）",
             g.y
         );
     }
     let first = &glyphs[0];
-    assert_eq!(
-        first.x,
-        kfm_na::termview::AI_PAGE_MARGIN_X as f32 + 18.0,
-        "起笔 = 边距 + 18 内缩（draw_items_left 同式）"
+    assert!(
+        (first.x - (kfm_na::termview::AI_PAGE_MARGIN_X + kfm_na::termview::CELL_W) as f32).abs()
+            < 2.0,
+        "起笔 = 边距 + 1 格内缩 + 居中余量（余量容差 2px——grid_fit 字号下 vendored 像素字体 advance≠格宽，设计格实测余量 ≈1.56），实测 {}",
+        first.x
     );
     // panel_off 进 y：同输入不同平移，x 不动 y 平移
     let (_, glyphs0) = tv.ai_page_glyphs(
@@ -931,8 +935,10 @@ fn spec_gpu_ai页底装修_刚体平移与直画逐像素咬合() {
 fn spec_gpu_ai页文字实例_与cpu画字逐像素咬合() {
     // 终审判卷：GPU 实例路径（底装修 + 图集实例软件合成）与 CPU 全路径
     // 的整帧像素必须完全相等——折行/视口/路由/放置/裁剪任何一处语义
-    // 漂移都会在这里现形
-    use kfm_na::glyph_atlas::{GLYPH_SIZE_AI, GlyphAtlas, GlyphKey, ai_glyphs_to_instances};
+    // 漂移都会在这里现形。BAR-198 格化后：装载 = rasterize_for_atlas
+    // 终端同一件（grid_fit 实例格 + 格基线 off_y 烤进槽位），键类 =
+    // GLYPH_SIZE_TERM 同册
+    use kfm_na::glyph_atlas::{GLYPH_SIZE_TERM, GlyphAtlas, GlyphKey, ai_glyphs_to_instances};
     let (tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必须建得成");
     let (w, h) = (600u32, 500u32);
     let msgs = vec![
@@ -951,44 +957,37 @@ fn spec_gpu_ai页文字实例_与cpu画字逐像素咬合() {
     let (_, glyphs) = tv.ai_page_glyphs(w, h, &msgs, 0, 0, false, 0);
     assert!(!glyphs.is_empty());
     let mut atlas = GlyphAtlas::new(2048, 2048);
-    let baseline = tv.ai_text_baseline_off();
-    // 装载遍（同 android_app：misses 补墨），转换遍只查表——借用两清
+    // 装载遍（同 android_app：misses 补墨，终端同一件供墨），转换遍只查表
     for g in &glyphs {
         let k0 = GlyphKey {
             font: g.font,
             c: g.c,
-            size: GLYPH_SIZE_AI,
+            size: GLYPH_SIZE_TERM,
         };
         if atlas.slot(&k0).is_some() {
             continue;
         }
-        let (fid, m, bmp) = tv
-            .rasterize_for_atlas_px(
-                g.c,
-                kfm_na::termview::AI_PAGE_PX,
-                kfm_na::termview::AI_PAGE_PX,
-            )
+        let (fid, m, bmp, ox, oy) = tv
+            .rasterize_for_atlas(g.c)
             .unwrap_or_else(|| panic!("字符 {} 必须可路由", g.c));
-        let off_y = kfm_na::termview::ai_glyph_off_y(baseline, m.ymin as f32, m.height as f32);
-        let k = GlyphKey {
-            font: fid,
-            c: g.c,
-            size: GLYPH_SIZE_AI,
-        };
         atlas.insert(
-            k,
+            GlyphKey {
+                font: fid,
+                c: g.c,
+                size: GLYPH_SIZE_TERM,
+            },
             m.width as u32,
             m.height as u32,
             &bmp,
-            m.xmin as i16,
-            off_y,
+            ox,
+            oy,
         );
     }
     let out = ai_glyphs_to_instances(&glyphs, &atlas, |c, font| {
         let k0 = GlyphKey {
             font,
             c,
-            size: GLYPH_SIZE_AI,
+            size: GLYPH_SIZE_TERM,
         };
         match atlas.slot(&k0) {
             Some(s) => (k0, Some(s)),
@@ -996,7 +995,7 @@ fn spec_gpu_ai页文字实例_与cpu画字逐像素咬合() {
                 let k1 = GlyphKey {
                     font: 1 - font,
                     c,
-                    size: GLYPH_SIZE_AI,
+                    size: GLYPH_SIZE_TERM,
                 };
                 (k0, atlas.slot(&k1))
             }
@@ -1004,8 +1003,8 @@ fn spec_gpu_ai页文字实例_与cpu画字逐像素咬合() {
     });
     assert!(out.misses.is_empty(), "装载后不许再缺墨");
     // 软件合成（GPU 语义的逐像素直译：x/y 截断同 GPU 实例公式；混合 =
-    // blend_px 同款整数公式 blend(fg, dst, cov)——40px 下像素字体轮廓
-    // 缩放会出反锯齿中间 coverage，判卷按真公式不复述 {0,255} 假设）
+    // blend_px 同款整数公式 blend(fg, dst, cov)——轮廓缩放会出反锯齿
+    // 中间 coverage，判卷按真公式不复述 {0,255} 假设）
     let blend = |fg: u32, dst: u32, a: u32| {
         let inv = 255 - a;
         let ch = |f: u32, d: u32| (f * a + d * inv) / 255;
@@ -1053,37 +1052,130 @@ fn spec_gpu_ai页文字实例_与cpu画字逐像素咬合() {
 }
 
 #[test]
-fn spec_gpu_ai供墨_字号类真实生效() {
-    // rasterize_for_atlas_px 的字号参数必须真实生效（图集键的 size 维
-    // 就是为此而生——AI 页 40px 与终端字号两套位图共存）
-    let (tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必须建得成");
-    let (_, m_big, _) = tv
-        .rasterize_for_atlas_px(
-            'A',
-            kfm_na::termview::AI_PAGE_PX,
-            kfm_na::termview::AI_PAGE_PX,
-        )
-        .expect("A 必有字形");
-    let (_, m_small, _) = tv
-        .rasterize_for_atlas_px('A', 20.0, 20.0)
-        .expect("A 必有字形");
-    assert_ne!(
-        (m_big.width, m_big.height),
-        (m_small.width, m_small.height),
-        "不同 px 光栅化必须产出不同位图"
+fn spec_bar198_ai页供墨_并入终端同册pinch联动() {
+    // GLYPH_SIZE_AI 退役后（字号吃 grid_fit 实例格）：
+    // ① AI 页字形由终端同一件供墨（rasterize_for_atlas）、同册
+    //    GLYPH_SIZE_TERM 槽位——装载一遍后转换零 miss；
+    // ② pinch 变格 → 供墨位图真实联动（同步失效 = 壳侧
+    //    sync_term_glyph_size 整册重建，gles_present 单点既有钉不动）；
+    // ③ 同字同槽幂等（同字符 AI 页与终端共享槽位的前提）
+    use kfm_na::glyph_atlas::{GLYPH_SIZE_TERM, GlyphAtlas, GlyphKey, ai_glyphs_to_instances};
+    let (mut tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必须建得成");
+    let (w, h) = (800u32, 600u32);
+    let (_, glyphs) = tv.ai_page_glyphs(
+        w,
+        h,
+        &[(false, "同册对拍 AB 中".to_string(), String::new())],
+        0,
+        0,
+        false,
+        0,
     );
-    // 同 px 两次调用确定性一致（图集缓存的正确性前提）
-    let (_, m_again, _) = tv
-        .rasterize_for_atlas_px(
-            'A',
-            kfm_na::termview::AI_PAGE_PX,
-            kfm_na::termview::AI_PAGE_PX,
-        )
-        .unwrap();
-    assert_eq!((m_big.width, m_big.height), (m_again.width, m_again.height));
-    // AI 行基线：行内正偏移、小于两倍行高（放置合理性）
-    let bl = tv.ai_text_baseline_off();
-    assert!(bl > 0.0 && bl < kfm_na::termview::AI_PAGE_LINE_H as f32 * 2.0);
+    assert!(!glyphs.is_empty());
+    let mut atlas = GlyphAtlas::new(2048, 2048);
+    for g in &glyphs {
+        let k = GlyphKey {
+            font: g.font,
+            c: g.c,
+            size: GLYPH_SIZE_TERM,
+        };
+        if atlas.slot(&k).is_some() {
+            continue;
+        }
+        let (fid, m, bmp, ox, oy) = tv
+            .rasterize_for_atlas(g.c)
+            .unwrap_or_else(|| panic!("字符 {} 必须可路由", g.c));
+        atlas.insert(
+            GlyphKey {
+                font: fid,
+                c: g.c,
+                size: GLYPH_SIZE_TERM,
+            },
+            m.width as u32,
+            m.height as u32,
+            &bmp,
+            ox,
+            oy,
+        );
+    }
+    let out = ai_glyphs_to_instances(&glyphs, &atlas, |c, font| {
+        let k = GlyphKey {
+            font,
+            c,
+            size: GLYPH_SIZE_TERM,
+        };
+        let s = atlas.slot(&k).or_else(|| {
+            atlas.slot(&GlyphKey {
+                font: 1 - font,
+                c,
+                size: GLYPH_SIZE_TERM,
+            })
+        });
+        (k, s)
+    });
+    assert!(
+        out.misses.is_empty(),
+        "① AI 页字形必须由终端同一件供墨、同册命中（零 miss）"
+    );
+    // ② pinch 翻倍档：供墨位图真实变大（实例格 → 字号联动）
+    let (_, m1, _, _, _) = tv.rasterize_for_atlas('A').expect("A 必有字形");
+    tv.set_cell_size(kfm_na::termview::CELL_W * 2, kfm_na::termview::CELL_H * 2);
+    let (_, m2, _, _, _) = tv.rasterize_for_atlas('A').expect("A 必有字形");
+    assert!(
+        m2.width > m1.width && m2.height > m1.height,
+        "② pinch 翻倍档供墨位图必须真实变大（{:?} → {:?}）",
+        (m1.width, m1.height),
+        (m2.width, m2.height)
+    );
+    // ③ 同字同槽幂等：重复装载原位返回
+    let mut atlas2 = GlyphAtlas::new(2048, 2048);
+    let (_, m, bmp, ox, oy) = tv.rasterize_for_atlas('B').unwrap();
+    let k = GlyphKey {
+        font: 0,
+        c: 'B',
+        size: GLYPH_SIZE_TERM,
+    };
+    let s1 = atlas2.insert(k, m.width as u32, m.height as u32, &bmp, ox, oy);
+    let s2 = atlas2.insert(k, m.width as u32, m.height as u32, &bmp, ox, oy);
+    assert_eq!((s1.u0, s1.v0), (s2.u0, s2.v0), "③ 同键幂等原位返回");
+}
+
+#[test]
+fn spec_bar198_ai页行栅格_pinch联动() {
+    // 行距/内缩/格顶垫全吃实例格：pinch 翻倍档（36×72）下行距 =
+    // ai_line_step(72) = 128（设计格 64 翻倍），起笔内缩 = 1 格 = 36
+    // （设计格 18），格顶垫 = (128-72)/2 = 28（设计格 14）
+    let (mut tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必须建得成");
+    let (w, h) = (800u32, 900u32);
+    let msgs = || {
+        vec![
+            (false, "第一行甲".to_string(), String::new()),
+            (false, "第二行乙".to_string(), String::new()),
+        ]
+    };
+    let (_, g0) = tv.ai_page_glyphs(w, h, &msgs(), 0, 0, false, 0);
+    tv.set_cell_size(kfm_na::termview::CELL_W * 2, kfm_na::termview::CELL_H * 2);
+    let (_, g1) = tv.ai_page_glyphs(w, h, &msgs(), 0, 0, false, 0);
+    assert!(!g0.is_empty() && !g1.is_empty());
+    // 行距：相邻展示行（label→正文）首字 y 差 = step
+    let dy0 = g0[2].y - g0[0].y; // 行0 label「AI」1 字 + 行1 首字（g0[1] 是 label 第二字）
+    assert_eq!(dy0, 64.0, "设计格行距 = 64（实测 {dy0}）");
+    let dy1 = g1[2].y - g1[0].y;
+    assert_eq!(dy1, 128.0, "翻倍档行距 = 128（实测 {dy1}）");
+    // 起笔内缩与格顶垫（居中余量容差 2px——grid_fit 字号下 vendored 像素字体
+    // advance≠格宽，设计格实测余量 ≈1.56）
+    let x0 = (kfm_na::termview::AI_PAGE_MARGIN_X + kfm_na::termview::CELL_W) as f32;
+    assert!(
+        (g0[0].x - x0).abs() < 2.0,
+        "设计格起笔 ≈ 78（实测 {})",
+        g0[0].x
+    );
+    let x1 = (kfm_na::termview::AI_PAGE_MARGIN_X + kfm_na::termview::CELL_W * 2) as f32;
+    assert!(
+        (g1[0].x - x1).abs() < 4.0,
+        "翻倍档起笔 ≈ 60+36=96（居中余量翻倍档实测 ≈3.11，容差 4px），实测 {}",
+        g1[0].x
+    );
 }
 
 // ---- BAR-066：光球半透写出 + chrome 条件 alpha 直通（2026-09-05） ----

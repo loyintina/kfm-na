@@ -253,9 +253,10 @@ fn spec_inst_uv归一化() {
 
 // ---------- 期 1 第 2 层 C 档：AI 页文字实例转换（A 档纯逻辑） ----------
 
-use kfm_na::glyph_atlas::{AiGlyph, GLYPH_SIZE_AI, ai_glyphs_to_instances};
+use kfm_na::glyph_atlas::{AiGlyph, GLYPH_SIZE_TERM, ai_glyphs_to_instances};
 
-/// AI 槽路由闭包（同字符走 GLYPH_SIZE_AI 类，主字体单槽）
+/// AI 槽路由闭包（同字符走 GLYPH_SIZE_TERM 类——BAR-198 起 AI 页与
+/// 终端同册，GLYPH_SIZE_AI 已退役；主字体单槽）
 fn router_ai(
     atlas: &GlyphAtlas,
 ) -> impl Fn(char, u8) -> (GlyphKey, Option<kfm_na::glyph_atlas::GlyphSlot>) + '_ {
@@ -263,7 +264,7 @@ fn router_ai(
         let k = GlyphKey {
             font,
             c,
-            size: GLYPH_SIZE_AI,
+            size: GLYPH_SIZE_TERM,
         };
         (k, atlas.slot(&k))
     }
@@ -276,7 +277,7 @@ fn spec_ai_inst_放置偏移与未命中记键() {
         GlyphKey {
             font: 0,
             c: 'A',
-            size: GLYPH_SIZE_AI,
+            size: GLYPH_SIZE_TERM,
         },
         10,
         12,
@@ -291,6 +292,7 @@ fn spec_ai_inst_放置偏移与未命中记键() {
             c: 'A',
             font: 0,
             fg: 0x00FF_FF00,
+            clip_w: 100.0, // 不钳（格跨远大于字形）
         },
         AiGlyph {
             x: 120.0,
@@ -298,13 +300,14 @@ fn spec_ai_inst_放置偏移与未命中记键() {
             c: 'B',
             font: 0,
             fg: 0x00FF_FF00,
+            clip_w: 100.0,
         },
     ];
     let out = ai_glyphs_to_instances(&glyphs, &a, router_ai(&a));
-    // 放置：x = 笔位 + off_x，y = 行顶 + off_y（与网格路径同规）
+    // 放置：x = 起笔位 + off_x，y = 格顶 + off_y（与网格路径同规）
     let gi = &out.glyph[0];
-    assert_eq!(gi.x, 102.0, "x = 笔位 + xmin");
-    assert_eq!(gi.y, 47.0, "y = 行顶 + off_y（负 = 上探）");
+    assert_eq!(gi.x, 102.0, "x = 起笔位 + xmin");
+    assert_eq!(gi.y, 47.0, "y = 格顶 + off_y（负 = 上探）");
     assert_eq!(gi.fg, 0x00FF_FF00);
     assert_eq!(gi.page, 0);
     // UV 归一化（页 128；首个装载位：行架顶 v0=0，行内 u0=0）
@@ -315,13 +318,61 @@ fn spec_ai_inst_放置偏移与未命中记键() {
     // 未命中：不落实例、记键（调用方补装载后重生成——两遍制同规）
     assert_eq!(out.misses.len(), 1);
     assert_eq!(out.misses[0].c, 'B');
-    assert_eq!(out.misses[0].size, GLYPH_SIZE_AI);
+    assert_eq!(out.misses[0].size, GLYPH_SIZE_TERM);
 }
 
 #[test]
-fn spec_atlas_双字号类共存_同字符两套位图() {
-    // GlyphKey.size 维的存在意义：AI 页（40px 大字）与终端网格（小字）
-    // 同字符两套位图必须各自占槽——没有这维就会拿终端小字画 AI 大字
+fn spec_ai_inst_右缘墨钳_折进实例几何() {
+    // BAR-198：格跨右缘墨钳（AiGlyph.clip_w）钳实例宽与 UV——
+    // draw_grid_text_left 的 span_right 逐列裁剪的几何等价
+    // （变异：删掉钳制 → 本钉 w/du 断言红）
+    let mut a = GlyphAtlas::new(PAGE_W, PAGE_H);
+    a.insert(
+        GlyphKey {
+            font: 0,
+            c: 'A',
+            size: GLYPH_SIZE_TERM,
+        },
+        10,
+        12,
+        &solid(10, 12),
+        2,
+        0,
+    );
+    // clip_w=8、off_x=2 → 起笔位起右界 8 列，槽位墨从 xmin=2 起 → 钳到 6 列
+    let glyphs = vec![
+        AiGlyph {
+            x: 100.0,
+            y: 50.0,
+            c: 'A',
+            font: 0,
+            fg: 7,
+            clip_w: 8.0,
+        },
+        // 钳到零（格跨右缘在 xmin 之左——病态但合法）：整字不进墨
+        AiGlyph {
+            x: 200.0,
+            y: 50.0,
+            c: 'A',
+            font: 0,
+            fg: 7,
+            clip_w: 1.0,
+        },
+    ];
+    let out = ai_glyphs_to_instances(&glyphs, &a, router_ai(&a));
+    assert_eq!(out.glyph.len(), 1, "钳到零的字形不落实例");
+    let gi = &out.glyph[0];
+    assert_eq!(gi.w, 6.0, "实例宽 = min(字形宽, clip_w - off_x)");
+    assert!((gi.du - 6.0 / 128.0).abs() < 1e-6, "UV 宽同步钳");
+    assert_eq!(gi.x, 102.0, "钳右缘不动起笔");
+}
+
+#[test]
+fn spec_atlas_字号类维机制_同字符两类共存() {
+    // GlyphKey.size 维机制钉：同字符不同类号两套位图各自占槽。
+    // （BAR-198 前这维载 GLYPH_SIZE_TERM/GLYPH_SIZE_AI 双类共存；AI 类
+    // 退役后生产只剩 TERM 一类，size 维留作将来字号档扩展位——机制本身
+    // 用匿名类号 1 继续钉住，防 Hash/Eq 把 size 维吃掉）
     let mut a = GlyphAtlas::new(PAGE_W, PAGE_H);
     let s0 = a.insert(
         GlyphKey {
@@ -339,7 +390,7 @@ fn spec_atlas_双字号类共存_同字符两套位图() {
         GlyphKey {
             font: 0,
             c: '中',
-            size: GLYPH_SIZE_AI,
+            size: 1, // 匿名扩展类（生产无此类；纯机制钉）
         },
         20,
         22,
@@ -347,7 +398,7 @@ fn spec_atlas_双字号类共存_同字符两套位图() {
         1,
         -2,
     );
-    assert_ne!((s0.w, s0.h), (s1.w, s1.h), "同字符双字号各自占槽");
+    assert_ne!((s0.w, s0.h), (s1.w, s1.h), "同字符双类号各自占槽");
     assert_eq!(
         a.slot(&GlyphKey {
             font: 0,
@@ -362,18 +413,18 @@ fn spec_atlas_双字号类共存_同字符两套位图() {
         a.slot(&GlyphKey {
             font: 0,
             c: '中',
-            size: GLYPH_SIZE_AI
+            size: 1
         })
         .unwrap()
         .w,
         20
     );
-    // 同键幂等不受字号类干扰
+    // 同键幂等不受类号干扰
     let again = a.insert(
         GlyphKey {
             font: 0,
             c: '中',
-            size: GLYPH_SIZE_AI,
+            size: 1,
         },
         20,
         22,
@@ -432,5 +483,7 @@ fn spec_push_实例推移_恒等早退与绕心缩放() {
 // 变异抽检（纪律：改坏答案看考题抓不抓得住）：
 // 1. ai_glyphs_to_instances 把 x 写成 g.x（漏加 off_x）→ spec_ai_inst_放置偏移 红
 // 2. misses 落实例不记键 → spec_ai_inst_放置偏移与未命中记键 红
-// 3. GlyphKey 去掉 size 维 → spec_atlas_双字号类共存 编译期即红（语义）
+// 3. GlyphKey 去掉 size 维 → spec_atlas_字号类维机制_同字符两类共存 编译期即红（语义）
 // 4. ai_page_glyphs 行 y 漏加 panel_off → spec_gpu_ai页字形几何 红
+// 5. ai_glyphs_to_instances 摘掉右缘墨钳（clip_w 不钳 draw_w/du）
+//    → spec_ai_inst_右缘墨钳_折进实例几何 红（BAR-198，格跨右缘截断）

@@ -8,8 +8,8 @@
 //! 单位是「展示行」（折行后的行，不是消息条）——渲染方每帧把布局
 //! （总行数/一屏行数）写回，手势钳制与渲染用同一份布局（眼手同尺）。
 //! 本模块是纯逻辑（A 档），不碰字体不碰像素——行高换算在手势侧
-//! （android_app 用 termview::AI_PAGE_LINE_H），布局测量在渲染侧
-//! （termview build_ai_rows）。
+//! （android_app 用 termview::ai_line_step 吃实例格高，BAR-198 格化
+//! pinch 联动），布局测量在渲染侧（termview build_ai_rows）。
 
 /// 视口状态：距底行数 + 追底标志 + 布局缓存
 #[derive(Default)]
@@ -83,8 +83,9 @@ pub fn thinking_window(total_wrapped: usize) -> std::ops::Range<usize> {
 
 /// 手势像素累积 → 行增量换算（BAR-064：方向契约的唯一出处）。
 /// 手指下滑 dy>0 = 拉内容向下 = 看更早 = 正行增量；手指上滑 = 看更新 = 负
-/// ——主流对话 App 手感。行高与渲染同尺（调用方传
-/// termview::AI_PAGE_LINE_H）。返回（新累积, 本轮行增量）：满一行才吐
+/// ——主流对话 App 手感。行高与渲染同尺（调用方传运行期
+/// termview::ai_line_step(实例格高)，设计格 = AI_PAGE_LINE_H）。返回
+/// （新累积, 本轮行增量）：满一行才吐
 /// 行，余数留累积里下次接着算（像素级跟手不丢小数）
 pub fn drag_accum_rows(acc_px: f64, dy: f64, line_h: f64) -> (f64, i32) {
     let acc = acc_px + dy;

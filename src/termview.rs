@@ -69,12 +69,25 @@ pub const TERM_CARD_PAD_X: u32 = TERM_CARD_PAD + CELL_W;
 /// 网格原点 X（= 卡片壳左边距 16+3+30=49）：BAR-005 语义由壳环继承
 pub const MARGIN_X: u32 = AI_PAGE_FRAME_MARGIN + AI_PAGE_FRAME_W + TERM_CARD_PAD_X;
 
-/// AI 对话页排版尺（期 0④ 提升为模块级：手势 px→行换算与渲染同尺）
+/// AI 对话页排版尺（期 0④ 提升为模块级：手势 px→行换算与渲染同尺）。
+/// 边距三件是设计格恒值（不随 pinch——与 BAR-194 卡几何同律）；
+/// 行距/字号走格（BAR-198，0017 #9 面迁网格文字引擎）
 pub const AI_PAGE_MARGIN_X: u32 = 60;
 pub const AI_PAGE_TOP: u32 = 48;
 pub const AI_PAGE_BOTTOM: u32 = 48;
-pub const AI_PAGE_LINE_H: u32 = 64;
-pub const AI_PAGE_PX: f32 = 40.0;
+
+/// AI 页行距格化（BAR-198）：行距 = 16/9 格高。设计格（CELL_H=36）下 =
+/// 64 逐像素不变；pinch 改实例格高后行距/视口/手势换算全吃运行期
+/// step——渲染（render_ai_page/ai_page_glyphs/底装修）与壳侧手势
+/// （android_app 拖行换算）同传 ai_line_step(实例格高)，眼手同尺
+pub const fn ai_line_step(cell_h: u32) -> u32 {
+    cell_h * 16 / 9
+}
+
+/// 设计格行距（= ai_line_step(CELL_H) = 64，与 BAR-198 前恒值逐像素
+/// 等价）——运行期路径一律走 ai_line_step(实例格高)，本常量只剩设计格
+/// 口径（考题/无 term 兜底）
+pub const AI_PAGE_LINE_H: u32 = ai_line_step(CELL_H);
 /// 双池框圆角半径（宪法 §五，2026-09-12 二标）：= 页环卡片框 36——
 /// 池是通用卡片（与页环同尺）；功能光标是开口框（ui/cursor.rs），
 /// 两者分家不同源（用户拍板：光标不是卡片）
@@ -171,22 +184,43 @@ pub fn panel_split(panel_off: i32, h: u32) -> (bool, bool) {
 
 /// AI 页视口一屏行数（布局尺：render_ai_page / ai_page_glyphs / 底装修
 /// 共用——原是 render_ai_page 里的一行算式，chrome 路径空态也要给
-/// scroll_sync_layout 同尺读数，抽出来单源）
+/// scroll_sync_layout 同尺读数，抽出来单源）。设计格口径——运行期路径
+/// 走 ai_page_fit_with_step（BAR-197 line_step 同款形制）
 pub fn ai_page_fit(buf_h: u32, bottom_inset: u32) -> u32 {
-    buf_h.saturating_sub(AI_PAGE_TOP + AI_PAGE_BOTTOM + bottom_inset) / AI_PAGE_LINE_H
+    ai_page_fit_with_step(buf_h, bottom_inset, AI_PAGE_LINE_H)
+}
+
+/// 运行期行距版（BAR-198 格化 pinch 联动）：step = ai_line_step(实例
+/// 格高)，pinch 后一屏行数随格尺重算
+pub fn ai_page_fit_with_step(buf_h: u32, bottom_inset: u32, line_step: u32) -> u32 {
+    buf_h.saturating_sub(AI_PAGE_TOP + AI_PAGE_BOTTOM + bottom_inset) / line_step.max(1)
 }
 
 /// AI 页底装修（2026-09-05 GLES 双层合成）：整页紫底 + 边框环，文字
 /// 不在这层——GPU 路径的 z 序是 终端网格 → 下层（键行 + 本层）→
 /// AI 文字实例 → 上层（输入栏/光球）。panel_off = 面板刚体平移（过渡
 /// 帧整体移位，与 scratch+blit 时代像素等价；屏外部分裁剪零成本）。
-/// 返回 fit（空态也要给 scroll_sync_layout 同尺读数）
+/// 返回 fit（空态也要给 scroll_sync_layout 同尺读数）。设计格行距口径
+/// ——运行期路径走 paint_ai_page_chrome_with_step
 pub fn paint_ai_page_chrome(
     buf: &mut [u32],
     buf_w: u32,
     buf_h: u32,
     bottom_inset: u32,
     panel_off: i32,
+) -> u32 {
+    paint_ai_page_chrome_with_step(buf, buf_w, buf_h, bottom_inset, panel_off, AI_PAGE_LINE_H)
+}
+
+/// 运行期行距版（BAR-198 格化 pinch 联动）：chrome 像素配方不吃 step
+/// （环/底是设计格装修），step 只进 fit 读数
+pub fn paint_ai_page_chrome_with_step(
+    buf: &mut [u32],
+    buf_w: u32,
+    buf_h: u32,
+    bottom_inset: u32,
+    panel_off: i32,
+    line_step: u32,
 ) -> u32 {
     if buf_w == 0 || buf_h == 0 {
         return 0;
@@ -216,7 +250,7 @@ pub fn paint_ai_page_chrome(
         AI_PAGE_FRAME_C2,
         false,
     );
-    ai_page_fit(buf_h, bottom_inset)
+    ai_page_fit_with_step(buf_h, bottom_inset, line_step)
 }
 
 /// 配置页底装修（面板栈 §五B，2026-09-10）：整页 CARD_PAGE_BG 深底 +
@@ -1952,9 +1986,10 @@ type GlyphCache = std::cell::RefCell<
     std::collections::HashMap<(char, u32, u8), std::sync::Arc<(fontdue::Metrics, Vec<u8>)>>,
 >;
 
-/// AI 页一行展示行：(文字色, 该行的已量宽字符)——build_ai_rows 返回值的
-/// 类型别名（clippy type_complexity 要求；inherent 关联类型不稳定，只能放模块级）
-type AiRow<'a> = (u32, Vec<(&'a fontdue::Font, char, f32)>);
+/// AI 页一行展示行：(文字色, 该行的格落笔条目)——build_ai_rows 返回值的
+/// 类型别名（clippy type_complexity 要求；inherent 关联类型不稳定，只能放模块级）。
+/// BAR-198 起条目 = 网格引擎 GridItem（量宽/折行/画字/收集同一条序列）
+type AiRow<'a> = (u32, Vec<GridItem<'a>>);
 
 // ── 文件树页内容墨的尺与件（BAR-165，2026-09-26）────────────────────
 //
@@ -3565,11 +3600,11 @@ impl TermView {
     }
 
     /// 泛化供墨核心（2026-09-05 C 档字号参数化）：路由（prefer_cjk）+
-    /// tofu 记账与终端供墨同款，光栅字号由调用方给——终端（font_px /
-    /// cjk.px 各归各）与 AI 页（AI_PAGE_PX 一刀切，draw_items_left 画
-    /// AI 文字就是单一 px）共用这一份。off 不在这算：终端烤格基线、
-    /// AI 页烤行基线（ai_text_baseline_off），两种约定调用方各自折算
-    /// 后走 atlas_insert。None = 空字形（图集契约：空字形不进）
+    /// tofu 记账与终端供墨同款，光栅字号由调用方给。off 不在这算：
+    /// 格基线折算归调用方（rasterize_for_atlas 烤格基线后走
+    /// atlas_insert）。None = 空字形（图集契约：空字形不进）
+    /// （BAR-198 前 AI 页曾以自带字面量字号走本件；AI 页并入终端同册
+    /// 后唯一调用方回到 rasterize_for_atlas）
     pub fn rasterize_for_atlas_px(
         &self,
         c: char,
@@ -3597,19 +3632,12 @@ impl TermView {
         Some((font_id, metrics, bitmap))
     }
 
-    /// AI 页行基线（相对行顶）：draw_items_left 的 baseline 公式在
-    /// (AI_PAGE_PX, AI_PAGE_LINE_H) 下的读数——off_y 装载折算的唯一
-    /// 尺子（实例收集只管行顶，基线归槽位偏移，两处各算各的 = 错位）
-    pub fn ai_text_baseline_off(&self) -> f32 {
-        match self.font.horizontal_line_metrics(AI_PAGE_PX) {
-            Some(hm) => (AI_PAGE_LINE_H as f32 - (hm.ascent - hm.descent)) / 2.0 + hm.ascent,
-            None => 0.0,
-        }
-    }
-
     /// AI 全屏页真对话渲染（期 0③，取代占位空壳；合成网格美化是期 0⑤）。
     /// 简版纯文本消息行：角色标签行（你=青 / AI=浅紫）+ 正文折行（输入栏
-    /// 同款 wrap_starts 贪心断行）。
+    /// 同款 wrap_starts 贪心断行）。BAR-198 起画字走网格文字引擎
+    /// （draw_grid_text_left：步进 = char_cells×实例格宽，字号 = grid_fit
+    /// 实例格 pinch 联动，行距 = ai_line_step(实例格高)，格线盒在行带内
+    /// 居中——旧「行尺垂直居中」规则的格化身）
     /// scroll_rows = 距底行数（期 0④ 视口，ui/ai_page.rs 状态机的读数）：
     /// 0 = 尾随锁定贴底；>0 = 视口上移看历史。返回（总行数, 一屏行数）
     /// ——调用方写回 AiChatState.scroll_sync_layout（眼手同尺：手势钳制
@@ -3656,17 +3684,23 @@ impl TermView {
         );
         let (rows, fit, skip) =
             self.ai_page_layout(buf_w, buf_h, msgs, scroll_rows, bottom_inset, live_tail);
+        // BAR-198 格化：行距/起笔内缩/字号全吃实例格（pinch 联动）——
+        // 起笔内缩 1 格 = 旧 18px 文内缩的格化身（设计格逐像素等价）；
+        // 格线盒（cell_h）在行带（step）内居中 = 旧行尺垂直居中的格化身
+        let step = ai_line_step(self.cell_h);
+        let cell_pad = (step - self.cell_h) / 2;
         for (i, (fg, items)) in rows.iter().skip(skip).take(fit as usize).enumerate() {
-            let y = AI_PAGE_TOP + i as u32 * AI_PAGE_LINE_H;
-            self.draw_items_left(
+            let y = AI_PAGE_TOP + i as u32 * step;
+            let x0 = i64::from(AI_PAGE_MARGIN_X + self.cell_w);
+            self.draw_grid_text_left(
                 &mut frame,
                 items,
-                AI_PAGE_MARGIN_X,
-                buf_w.saturating_sub(AI_PAGE_MARGIN_X * 2),
-                y,
-                AI_PAGE_LINE_H,
-                AI_PAGE_PX,
+                x0,
+                i64::from(y + cell_pad),
+                self.cell_w,
+                buf_w.saturating_sub(AI_PAGE_MARGIN_X + self.cell_w + AI_PAGE_MARGIN_X),
                 *fg,
+                0,
                 None,
             );
         }
@@ -3686,7 +3720,8 @@ impl TermView {
         bottom_inset: u32,
         live_tail: bool,
     ) -> (Vec<AiRow<'a>>, u32, usize) {
-        let fit = ai_page_fit(buf_h, bottom_inset);
+        // BAR-198：运行期行距（pinch 联动）——布局与手势换算同一份 step
+        let fit = ai_page_fit_with_step(buf_h, bottom_inset, ai_line_step(self.cell_h));
         let rows = self.build_ai_rows(msgs, buf_w, live_tail);
         // 视口：贴底基线 - 距底行数（期 0④——期 0③ 是整行丢弃没有视口）
         let base_skip = rows.len().saturating_sub(fit as usize);
@@ -3696,12 +3731,17 @@ impl TermView {
 
     /// AI 页文字 → GPU 字形收集（期 1 第 2 层 C 档：AI 页接入图集管线，
     /// 病根是 CPU 逐字 fontdue 光栅化每帧 48ms）。布局与 render_ai_page
-    /// 同源（ai_page_layout）；画字语义与 draw_items_left 逐条对齐——
-    /// 起笔内缩 18、主字体行尺垂直居中、右缘装不下即 break、不可上屏
-    /// 字符（空格/控制符，BAR-015）不落墨只推笔。返回（布局读数, 字形
-    /// 列表）：读数喂 scroll_sync_layout（眼手同尺），列表归调用方经
-    /// 图集转实例（xmin/off_y 槽位偏移在 ai_glyphs_to_instances 补）。
-    /// panel_off 直接加进行 y（面板刚体平移——2026-09-05 拍板：过渡帧
+    /// 同源（ai_page_layout）；画字语义与 draw_grid_text_left 逐条对齐
+    /// （BAR-198 格化）——起笔内缩 1 格、格线盒在行带内居中、每字步进
+    /// char_cells×实例格宽、字形在自身格跨内水平居中（居中余量折进
+    /// AiGlyph.x 起笔位，槽位 off_x = xmin 与终端网格同一份）、格跨右缘
+    /// 墨钳折进 AiGlyph.clip_w、右缘装不下即 break（恰好满宽 = 装得下，
+    /// BAR-088 同律）、不可上屏字符（空格/控制符，BAR-015）不落墨只推笔。
+    /// 返回（布局读数, 字形列表）：读数喂 scroll_sync_layout（眼手同尺），
+    /// 列表归调用方经图集转实例（xmin/off_y 槽位偏移在
+    /// ai_glyphs_to_instances 补——BAR-198 起字形与终端同册
+    /// GLYPH_SIZE_TERM，pinch 整册重建路径同源）。
+    /// panel_off 直接加进格顶 y（面板刚体平移——2026-09-05 拍板：过渡帧
     /// 不再 scratch 全页渲染 + blit）
     #[allow(clippy::too_many_arguments)]
     pub fn ai_page_glyphs(
@@ -3717,44 +3757,63 @@ impl TermView {
         let (rows, fit, skip) =
             self.ai_page_layout(buf_w, buf_h, msgs, scroll_rows, bottom_inset, live_tail);
         let mut out = Vec::new();
-        // 行尺 None（字体无横向量尺）= draw_items_left 同款空转，零实例
-        if self.font.horizontal_line_metrics(AI_PAGE_PX).is_some() {
-            let clip_right = buf_w.saturating_sub(AI_PAGE_MARGIN_X) as f32;
-            for (i, (fg, items)) in rows.iter().skip(skip).take(fit as usize).enumerate() {
-                // y = 行顶 + 刚体平移（垂直居中基线归图集槽位 off_y，
-                // 装载方按 ai_text_baseline_off 折算——收集只管行顶）
-                let y = (AI_PAGE_TOP + i as u32 * AI_PAGE_LINE_H) as f32 + panel_off as f32;
-                let mut pen = AI_PAGE_MARGIN_X as f32 + 18.0;
-                for (_, c, adv) in items {
-                    if pen + adv >= clip_right {
-                        break; // 右缘装不下就停（draw_items_left 同判据）
-                    }
-                    if paintable(*c) {
-                        // 字体路由与 rasterize_for_atlas_px 同判据
-                        // （prefer_cjk）——收集键与装载键必须同一槽
-                        let font_id = match &self.cjk {
-                            Some(cjk) if prefer_cjk(&self.font, &cjk.font, *c) => 1u8,
-                            _ => 0u8,
-                        };
-                        out.push(crate::glyph_atlas::AiGlyph {
-                            x: pen,
-                            y,
-                            c: *c,
-                            font: font_id,
-                            fg: *fg,
-                        });
-                    }
-                    pen += adv;
+        let step = ai_line_step(self.cell_h);
+        let cell_pad = (step - self.cell_h) / 2;
+        let clip_right = buf_w.saturating_sub(AI_PAGE_MARGIN_X) as f32;
+        for (i, (fg, items)) in rows.iter().skip(skip).take(fit as usize).enumerate() {
+            // y = 格顶 + 刚体平移（格基线归图集槽位 off_y，装载方 =
+            // rasterize_for_atlas 终端同一件——收集只管格顶）
+            let y = (AI_PAGE_TOP + i as u32 * step + cell_pad) as f32 + panel_off as f32;
+            let mut pen = (AI_PAGE_MARGIN_X + self.cell_w) as f32;
+            for (f, c, px, _step_w) in items {
+                // 与 draw_grid_text_left 同一条公式重算格跨（不信任上游
+                // 可能放过期的 item.3，同律）
+                let span = crate::ui::grid_text::char_cells(*c) as f32 * self.cell_w as f32;
+                if span <= 0.0 {
+                    continue; // 零宽字符不占格不落笔（draw_grid_text_left 同规）
                 }
+                if pen + span > clip_right {
+                    break; // 右缘装不下就停（恰好满宽 = 装得下，BAR-088 同律）
+                }
+                if paintable(*c) {
+                    // 格跨内水平居中余量折进起笔位（draw_grid_text_left
+                    // 同式：origin_x = pen + (span - advance)/2）；字体路由
+                    // 按条目字体身份（pick_font，与 CPU 画字同一支）
+                    let adv = f.metrics(*c, *px).advance_width;
+                    let center = (span - adv).max(0.0) / 2.0;
+                    let origin_x = pen + center;
+                    // 右缘墨钳取整数像素域（draw_grid_text_left 的裁剪判据
+                    // 是 trunc 后的 i64 坐标——浮点域钳会在居中余量带分数
+                    // 时错一列）：clip_w = trunc(格跨右缘) - trunc(起笔位)
+                    let clip_w = ((pen + span) as i64 - origin_x as i64) as f32;
+                    let font_id = if std::ptr::eq(*f, &self.font) {
+                        0u8
+                    } else {
+                        1u8
+                    };
+                    out.push(crate::glyph_atlas::AiGlyph {
+                        x: origin_x,
+                        y,
+                        c: *c,
+                        font: font_id,
+                        fg: *fg,
+                        clip_w,
+                    });
+                }
+                pen += span;
             }
         }
         ((rows.len() as u32, fit), out)
     }
 
-    /// 全部展示行：(文字色, 该行的已量宽字符)——角色标签行 + 思考块
+    /// 全部展示行：(文字色, 该行的格落笔条目)——角色标签行 + 思考块
     /// （流式中的末条：≤3 行暗色尾随活窗；已收流：折叠成一行暗色
     /// 「已思考」——2026-09-04 用户拍板：思考往往不重要但必须存在）
-    /// + 正文折行（渲染与布局测量共用这一份：眼手同尺的单源）
+    /// + 正文折行（渲染与布局测量共用这一份：眼手同尺的单源）。
+    ///
+    /// BAR-198 起量宽吃网格引擎（measure_items_grid：步进 = char_cells×
+    /// 实例格宽，字号 = grid_fit 实例格 pinch 联动——折行点随格尺，
+    /// 预裁 C 档变化 0017 已注明）
     fn build_ai_rows<'a>(
         &'a self,
         msgs: &'a [(bool, String, String)],
@@ -3762,15 +3821,15 @@ impl TermView {
         live_tail: bool,
     ) -> Vec<AiRow<'a>> {
         let row_w = buf_w.saturating_sub(AI_PAGE_MARGIN_X * 2);
-        // draw_items_left 起笔内缩 18，折行可用宽要扣掉
-        let wrap_w = row_w.saturating_sub(18) as f32;
+        // 起笔内缩 1 格（旧 18px 的格化身），折行可用宽要扣掉
+        let wrap_w = row_w.saturating_sub(self.cell_w) as f32;
         // 折行辅助改方法（闭包推不出 'a 生命周期）
         let mut rows = Vec::new();
         let last = msgs.len().saturating_sub(1);
         for (i, (is_user, text, thinking)) in msgs.iter().enumerate() {
             let label_fg = if *is_user { MAG_BORDER } else { AI_PAGE_FG };
             let label = if *is_user { "你" } else { "AI" };
-            rows.push((label_fg, self.measure_items(label, AI_PAGE_PX)));
+            rows.push((label_fg, self.measure_items_grid(label).0));
             if !is_user && !thinking.is_empty() {
                 if live_tail && i == last {
                     // 活窗：尾随窗 ≤3 行（thinking_window 纯函数钉计数与
@@ -3782,10 +3841,7 @@ impl TermView {
                     }
                 } else {
                     // 收流折叠：一行暗色占位（思考全文随消息存档，不丢）
-                    rows.push((
-                        AI_THINK_FG,
-                        self.measure_items(AI_THINK_COLLAPSED, AI_PAGE_PX),
-                    ));
+                    rows.push((AI_THINK_FG, self.measure_items_grid(AI_THINK_COLLAPSED).0));
                 }
             }
             for items in self.wrap_ai_lines(text, wrap_w) {
@@ -3795,16 +3851,13 @@ impl TermView {
         rows
     }
 
-    /// 折行辅助：一段文本 → 若干展示行（与正文同尺贪心断行）
-    fn wrap_ai_lines<'a>(
-        &'a self,
-        text: &str,
-        wrap_w: f32,
-    ) -> Vec<Vec<(&'a fontdue::Font, char, f32)>> {
+    /// 折行辅助：一段文本 → 若干展示行（与正文同尺贪心断行——格步进
+    /// 喂 wrap_starts，折行点随格尺）
+    fn wrap_ai_lines<'a>(&'a self, text: &str, wrap_w: f32) -> Vec<Vec<GridItem<'a>>> {
         let mut out = Vec::new();
         for line in text.split('\n') {
-            let items = self.measure_items(line, AI_PAGE_PX);
-            let widths: Vec<f32> = items.iter().map(|i| i.2).collect();
+            let (items, _) = self.measure_items_grid(line);
+            let widths: Vec<f32> = items.iter().map(|i| i.3).collect();
             let starts = wrap_starts(&widths, wrap_w);
             for (li, &st) in starts.iter().enumerate() {
                 let en = starts.get(li + 1).copied().unwrap_or(items.len());
@@ -8466,24 +8519,6 @@ impl TermView {
         }
     }
 
-    /// 画一串已量宽的字符（折行后逐行画走这里）：左对齐内缩 18 +
-    /// 垂直居中 + 右缘裁剪，规则与 draw_text_left 一致
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn draw_items_left(
-        &self,
-        frame: &mut Frame<'_>,
-        items: &[(&fontdue::Font, char, f32)],
-        cx: u32,
-        cw: u32,
-        cy: u32,
-        rh: u32,
-        px: f32,
-        fg: u32,
-        clip_y: Option<(i32, i32)>,
-    ) {
-        self.draw_items_left_inset(frame, items, cx, cw, cy, rh, px, fg, clip_y, 18.0);
-    }
-
     /// 考题专用通道（BAR-088 钉：恰好满宽末字必须落墨）——集成测试
     /// 摸不到 pub(crate) Frame，经此薄壳直打 draw_items_left_inset
     /// 本体（单源不抄实现，同 pub text_width 先例）
@@ -8506,8 +8541,10 @@ impl TermView {
         self.draw_items_left_inset(&mut frame, items, cx, cw, cy, rh, px, fg, None, 0.0);
     }
 
-    /// draw_items_left 全参版：显式起笔内缩（18 是输入栏标定，四版
-    /// 配置页 ×1.5 = 27；老调用方走 draw_items_left 行为不变）
+    /// 自然步进画字·全参版（四版配置页用；BAR-197 起基件 draw_text_left
+    /// 退役，BAR-198 起 18 内缩壳 draw_items_left 零调用退役，本件
+    /// 独立存续）：显式内缩 + 纵裁剪带
+    /// （池内滚动内容出池内缘即断墨——框/文字同一裁剪带，眼手同尺）
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn draw_items_left_inset(
         &self,
@@ -9128,15 +9165,6 @@ fn blend(fg: u32, dst: u32, a: u32) -> u32 {
     (r << 16) | (g << 8) | b
 }
 
-/// AI 文字装载的 off_y 折算（唯一公式）：floor 语义与 CPU 画字的
-/// `top as i64` 逐像素对齐——行顶是整数，trunc(行 + x) = 行 +
-/// floor(x)；负分数偏移（高字形上探）按 `as i16` 向零截断会错
-/// 1px（2026-09-05 对拍考题 spec_gpu_ai页文字实例 逮住）。
-/// android_app 装载与考题软件合成共用这一份
-pub fn ai_glyph_off_y(baseline_off: f32, ymin: f32, height: f32) -> i16 {
-    (baseline_off - ymin - height).floor() as i16
-}
-
 /// 两色逐通道线性插值（t = 0..255，渐变图元用；A 档考题
 /// spec_lerp_rgb_* 在 tests/termview_spec.rs）
 pub fn lerp_rgb(c1: u32, c2: u32, t: u32) -> u32 {
@@ -9346,20 +9374,16 @@ pub trait TermEmu: Send {
     /// grid_to_instances 的进料；CPU 路径不调
     fn gpu_cells(&mut self, w: u32, h: u32) -> Vec<crate::glyph_atlas::GpuCell>;
     /// 图集供墨（同上调用方）：字体路由（prefer_cjk）+ 光栅化 + 放置
-    /// 偏移（xmin / baseline-ymin-h）；None = 空字形跳装载
+    /// 偏移（xmin / baseline-ymin-h）；None = 空字形跳装载。
+    /// BAR-198 起 AI 页字形也走本件（并入终端同册 GLYPH_SIZE_TERM，
+    /// grid_fit 实例格 pinch 联动，同步失效走 sync_term_glyph_size 整册
+    /// 重建）——泛化字号参数版 rasterize_for_atlas_px 退出 trait 面
+    /// （唯一调用方回到固有 rasterize_for_atlas）
     fn rasterize_for_atlas(&self, c: char) -> Option<(u8, fontdue::Metrics, Vec<u8>, i16, i16)>;
-    /// 泛化供墨核心（字号参数化，android_app GLES AI 文字装载调用方）：
-    /// 路由/tofu 记账同上，字号调用方定——终端与 AI 页（AI_PAGE_PX）
-    /// 共用；off 归调用方按各自基线约定折算
-    fn rasterize_for_atlas_px(
-        &self,
-        c: char,
-        px: f32,
-        px_cjk: f32,
-    ) -> Option<(u8, fontdue::Metrics, Vec<u8>)>;
     /// AI 页文字 → GPU 字形收集（android_app GLES paint_under 调用方）：
-    /// 布局与 render_ai_page 同源，画字语义对齐 draw_items_left；返回
-    /// （布局读数, 字形列表——panel_off 已进行 y）
+    /// 布局与 render_ai_page 同源，画字语义对齐 draw_grid_text_left
+    /// （BAR-198 格化：格跨居中余量折进起笔位 x、格顶+panel_off 进 y、
+    /// 格跨右缘墨钳折进 clip_w）；返回（布局读数, 字形列表）
     #[allow(clippy::too_many_arguments)]
     fn ai_page_glyphs(
         &self,
@@ -9371,8 +9395,6 @@ pub trait TermEmu: Send {
         live_tail: bool,
         panel_off: i32,
     ) -> ((u32, u32), Vec<crate::glyph_atlas::AiGlyph>);
-    /// AI 页行基线（相对行顶；AI 文字装载 off_y 折算的唯一尺子）
-    fn ai_text_baseline_off(&self) -> f32;
     /// 文本实量宽 px（十四修 §五 字段框动态宽度：触摸命中量宽与涂装
     /// 同一条 measure_items 尺——android_app 池区手势命中调用方）
     fn text_width(&self, text: &str, px: f32) -> u32;
@@ -9772,14 +9794,6 @@ impl TermEmu for TermView {
     fn rasterize_for_atlas(&self, c: char) -> Option<(u8, fontdue::Metrics, Vec<u8>, i16, i16)> {
         TermView::rasterize_for_atlas(self, c)
     }
-    fn rasterize_for_atlas_px(
-        &self,
-        c: char,
-        px: f32,
-        px_cjk: f32,
-    ) -> Option<(u8, fontdue::Metrics, Vec<u8>)> {
-        TermView::rasterize_for_atlas_px(self, c, px, px_cjk)
-    }
     #[allow(clippy::too_many_arguments)]
     fn ai_page_glyphs(
         &self,
@@ -9801,9 +9815,6 @@ impl TermEmu for TermView {
             live_tail,
             panel_off,
         )
-    }
-    fn ai_text_baseline_off(&self) -> f32 {
-        TermView::ai_text_baseline_off(self)
     }
     fn text_width(&self, text: &str, px: f32) -> u32 {
         TermView::text_width(self, text, px)

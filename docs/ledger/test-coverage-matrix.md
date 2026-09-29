@@ -22,7 +22,7 @@
 | `src/exec_probe.rs` | 1 | 1 | 0 | — |
 | `src/fs_fetch.rs` | 14 | 13 | 1 | take_dirty |
 | `src/gate.rs` | 106 | 83 | 23 | register_gate_router text_dump inject_keys spawn_gate_watcher REC_FILE_CAP REC_FILE rec_output rec_resize PANIC_FILE PANIC_TRACE_FILE LOOP_STALL_FILE note_loop_beat loop_beat_age_ms note_foreground install_panic_hook note_draw note_session_death touch_take register_input_bar ALERT_RSS_COOLDOWN_MS ALERT_DEATHS_WINDOW_MS ALERT_DEATHS_COOLDOWN_MS HISTORY_EVERY_TICKS |
-| `src/glyph_atlas.rs` | 12 | 12 | 0 | — |
+| `src/glyph_atlas.rs` | 11 | 11 | 0 | — |
 | `src/http1.rs` | 10 | 7 | 3 | is_tick_err read_head_hook read_body_hook |
 | `src/ime_bridge.rs` | 1 | 0 | 1 | jni_counters |
 | `src/ime_queue.rs` | 9 | 9 | 0 | — |

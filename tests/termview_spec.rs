@@ -2843,6 +2843,41 @@ fn spec_ai页fit公式_饱和与裁剪() {
     assert_eq!(f(50, 100), 0, "负余量 saturating 饱和为 0，不许下溢");
 }
 
+#[test]
+fn spec_bar198_ai_line_step_格化() {
+    // BAR-198：AI 页行距格化唯一源 ai_line_step = cell_h×16/9（设计格
+    // 36 → 64，与旧 AI_PAGE_LINE_H 恒值逐像素等价；pinch 翻倍档 72 → 128）。
+    // 系数漂移 = 行距与格高脱钩（GPU 收集/CPU 渲染/壳侧手势三方同尺靠它）
+    let s = kfm_na::termview::ai_line_step;
+    assert_eq!(s(36), 64, "设计格行距 = 36×16/9 = 64");
+    assert_eq!(s(72), 128, "翻倍档行距 = 72×16/9 = 128");
+    assert_eq!(s(18), 32, "半档行距 = 18×16/9 = 32");
+    assert_eq!(
+        s(kfm_na::termview::CELL_H),
+        kfm_na::termview::AI_PAGE_LINE_H,
+        "AI_PAGE_LINE_H 必须 = ai_line_step(CELL_H)（设计格口径重定义）"
+    );
+    // fit 的运行期 step 变体：设计格与旧恒值同读数，翻倍档行数减半
+    assert_eq!(
+        kfm_na::termview::ai_page_fit_with_step(600, 0, 64),
+        kfm_na::termview::ai_page_fit(600, 0),
+        "设计格 step 变体 ≡ 设计格恒值版"
+    );
+    assert_eq!(
+        kfm_na::termview::ai_page_fit_with_step(600, 0, 128),
+        3,
+        "翻倍档 (600-96)/128 = 3"
+    );
+    // chrome 运行期 step 变体：设计格 ≡ 旧版（fit 读数与像素双等价；
+    // 覆盖棘轮入册——with_step 变体不许成无考题孤儿）
+    let mut b1 = vec![0u32; (100 * 200) as usize];
+    let mut b2 = vec![0u32; (100 * 200) as usize];
+    let f1 = kfm_na::termview::paint_ai_page_chrome(&mut b1, 100, 200, 0, 0);
+    let f2 = kfm_na::termview::paint_ai_page_chrome_with_step(&mut b2, 100, 200, 0, 0, 64);
+    assert_eq!(f1, f2, "chrome_with_step 设计格 fit ≡ 旧版");
+    assert_eq!(b1, b2, "chrome_with_step 设计格像素 ≡ 旧版");
+}
+
 // ---- BAR-067：栏带半透契约（2026-09-05，chrome 层真 alpha 直通后还原
 // kfmv4 rgba(18,18,26,.85)——CPU 时代压平的不透明暗板在多行带高下成
 // 黑墙）----
