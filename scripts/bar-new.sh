@@ -65,7 +65,11 @@ if [ "${BAR_NEW_NO_LETTER:-}" != "1" ]; then
         --status 待落地通报)
     file=$(printf '%s' "$out" | sed -n 's/.*已生成 \([^ ]*\.md\).*/\1/p')
     [ -n "$file" ] || { echo "mailbox-cli new 输出解析失败: $out" >&2; exit 1; }
-    LETTER=$(printf '%s' "$file" | sed -n 's/^\([0-9]\{4\}\).*/NA\1/p')
+    # 2026-09-29 评审修订（白露）：不写本册自指码——契约 §二「分拣码…本册信一律不写，
+    # 只在跨册引用时写全码」。原行给编号无条件加 NA 前缀，致使 registry 的 letter 字段
+    # 与提交信息的「追踪信 NA00NN」指向并不存在的文件名（NA0015 即此误用的成品）。
+    # 新写法剥掉可选分拣码，取纯流水号（`0016号…` 与 `NA0016号…` 都归 `0016`）。
+    LETTER=$(printf '%s' "$file" | sed -n 's/^\([A-Z]\{0,4\}\)\([0-9]\{4\}\).*/\2/p')
     path="$MAILBOX/$file"
     plain="本信是 BAR-$NEXT（$TITLE）的追踪卷：立案/定罪/修复/判卷/终验全部在同一封信追加（规矩 = na 仓 AGENTS.md「BAR 追踪信」节）。当前状态 = 已立案开工，承办 $FUNC$NAME。隐藏读者看进展翻本信最新一节即可，无需做任何事。"
     body="### §一 立案（$NOW）\n\n- 主题：$TITLE\n- 承办：$FUNC$NAME\n- 定罪/修复/判卷/终验自下一节起按日期追加；信头状态随生命周期翻转\n  （待落地通报 → 已落地 → 已验证），打回翻回 待落地通报。\n\n——$FUNC$NAME · $TODAY"

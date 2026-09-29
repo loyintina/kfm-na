@@ -373,6 +373,31 @@ fn to_field_inheritance_and_deng() {
         }
     );
 
+    // 契约 §三：「、」分职能组、组内多名用「及」连接（同职能必须合并——`开发部闻灯及观澜`）
+    let mut errs = vec![];
+    let items = parse_to_field("研究部清和、开发部闻灯及观澜", &mut errs);
+    assert!(errs.is_empty(), "{errs:?}");
+    assert_eq!(
+        items,
+        vec![
+            ToItem {
+                func: Some("研究部".into()),
+                name: "清和".into(),
+                inherited: false
+            },
+            ToItem {
+                func: Some("开发部".into()),
+                name: "闻灯".into(),
+                inherited: false
+            },
+            ToItem {
+                func: Some("开发部".into()),
+                name: "观澜".into(),
+                inherited: true
+            },
+        ]
+    );
+
     let mut errs = vec![];
     parse_to_field("评审部白露等", &mut errs);
     assert!(

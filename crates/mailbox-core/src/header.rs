@@ -78,12 +78,14 @@ fn last_chars(s: &str, n: usize) -> &str {
     }
 }
 
-/// 「致」字段按顿号/逗号切项；纯两字继承前项职能；禁「等」结尾（记 errs）。
+/// 「致」字段按顿号/逗号/「及」切项；纯两字继承前项职能；禁「等」结尾（记 errs）。
+/// 契约 §三：「、」分职能组、组内多名用「及」连接（`开发部闻灯及观澜`）；同职能必须合并。
+/// 与文件名「致」段的切项口径同制（见 parse_v21_name）。
 pub fn parse_to_field(value: &str, errs: &mut Vec<String>) -> Vec<ToItem> {
     let mut items = vec![];
     let mut prev_func: Option<String> = None;
     for raw in value
-        .split(['、', '，', ','])
+        .split(['、', '，', ',', '及'])
         .map(str::trim)
         .filter(|s| !s.is_empty())
     {

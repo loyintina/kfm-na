@@ -319,7 +319,7 @@ pub fn verify_book(b: &BookCheck) -> Diags {
                 }
                 if let Some(v) = header_get(&h, "致") {
                     for it in v
-                        .split(['、', '，', ','])
+                        .split(['、', '，', ',', '及'])
                         .map(str::trim)
                         .filter(|s| !s.is_empty())
                     {
