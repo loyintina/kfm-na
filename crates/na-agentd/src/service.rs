@@ -28,6 +28,14 @@ pub struct SendOutcome {
     pub session_path: String,
 }
 
+/// 信件列表条目（BAR-174：mtime = 增量同步比对键，unix 秒，取不到给 0）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LetterMeta {
+    pub name: String,
+    pub bytes: u64,
+    pub mtime: u64,
+}
+
 impl AgentService {
     pub fn new(session_root: &str, provider_json: &str) -> Self {
         Self {
@@ -181,7 +189,7 @@ impl AgentService {
     }
 
     /// 信箱信件列表（README.md 是规范不是信，除外）
-    pub fn list_letters(&self) -> Result<Vec<(String, u64)>, String> {
+    pub fn list_letters(&self) -> Result<Vec<LetterMeta>, String> {
         self.list_inbox_letters("mailbox")
     }
 
@@ -200,8 +208,9 @@ impl AgentService {
         }
     }
 
-    /// 点名信箱的信件列表（README.md 是规范不是信，除外）
-    pub fn list_inbox_letters(&self, key: &str) -> Result<Vec<(String, u64)>, String> {
+    /// 点名信箱的信件列表（README.md 是规范不是信，除外）：
+    /// [(名, 字节, mtime unix 秒)]——BAR-174 起吃 file_meta 不再逐封整读
+    pub fn list_inbox_letters(&self, key: &str) -> Result<Vec<LetterMeta>, String> {
         let Some(dir) = self.inbox_root(key) else {
             return Err(format!("信箱 key 未知: {key:?}"));
         };
@@ -209,14 +218,14 @@ impl AgentService {
         let mut out = Vec::new();
         for name in host.list_files(&dir)? {
             if valid_letter_name(&name) {
-                let bytes = host
-                    .read_file(&format!("{dir}/{name}"))
-                    .map(|t| t.len() as u64)
-                    .unwrap_or(0);
-                out.push((name, bytes));
+                let (bytes, mtime) = host
+                    .file_meta(&format!("{dir}/{name}"))
+                    .map(|m| (m.bytes, m.mtime))
+                    .unwrap_or((0, 0));
+                out.push(LetterMeta { name, bytes, mtime });
             }
         }
-        out.sort();
+        out.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(out)
     }
 

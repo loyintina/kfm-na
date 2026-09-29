@@ -139,8 +139,8 @@ fn spec_bar163_端点_信件列表与正文() {
     let (_t, svc) = fixture();
     let ls = svc.list_letters().expect("列出");
     assert_eq!(ls.len(), 1, "README.md 与 *.txt 不算信");
-    assert_eq!(ls[0].0, "a-b-report.md");
-    assert!(ls[0].1 > 0);
+    assert_eq!(ls[0].name, "a-b-report.md");
+    assert!(ls[0].bytes > 0);
     let content = svc.letter("a-b-report.md").expect("正文");
     assert!(content.contains("# 信"));
     assert!(content.contains("正文"));
@@ -208,7 +208,7 @@ fn spec_bar167_端点_keyed信箱夹具形状() {
     // mailbox key 走同一映射 = 旧面同形状
     let ls = svc.list_inbox_letters("mailbox").expect("列出");
     assert_eq!(ls.len(), 1, "README.md 与 *.txt 不算信");
-    assert_eq!(ls[0].0, "a-b-report.md");
+    assert_eq!(ls[0].name, "a-b-report.md");
     let content = svc.inbox_letter("mailbox", "a-b-report.md").expect("正文");
     assert!(content.contains("# 信"));
     // README.md 点名正文照拒（400 语义）
@@ -230,19 +230,21 @@ fn spec_bar167_端点_agentinbox真根() {
     assert!(!ls.is_empty(), "真信量级: {} 封", ls.len());
     assert!(
         ls.iter()
-            .all(|(name, bytes)| { na_agentd::service::valid_letter_name(name) && *bytes > 0 }),
+            .all(|l| { na_agentd::service::valid_letter_name(&l.name) && l.bytes > 0 }),
         "全表过信件闸且非空: {ls:?}"
     );
     assert!(
-        ls.iter().any(|(name, _)| name.contains('号')),
+        ls.iter().any(|l| l.name.contains('号')),
         "主册现行含 v2.1 中文句法信（闸门须放行）: {ls:?}"
     );
     assert!(
-        !ls.iter().any(|(name, _)| name == "README.md"),
+        !ls.iter().any(|l| l.name == "README.md"),
         "README.md 是规范不是信"
     );
     // 正文端点回真文（取列表首封，不挑名）
-    let content = svc.inbox_letter("agent-inbox", &ls[0].0).expect("真信正文");
+    let content = svc
+        .inbox_letter("agent-inbox", &ls[0].name)
+        .expect("真信正文");
     assert!(content.len() > 100, "真文非空: {} 字节", content.len());
     // README.md 点名正文被拒
     let e = svc.inbox_letter("agent-inbox", "README.md").unwrap_err();
@@ -275,11 +277,38 @@ fn spec_bar172_信件名闸门_v21中文句法放行() {
     std::fs::write(mb.join("0001号测试致全体的通报.md"), "# 中文信\n正文\n").expect("写中文信");
     let ls = svc.list_inbox_letters("mailbox").expect("列夹具信");
     assert!(
-        ls.iter().any(|(n, _)| n == "0001号测试致全体的通报.md"),
+        ls.iter().any(|l| l.name == "0001号测试致全体的通报.md"),
         "中文名信应被列出: {ls:?}"
     );
     let content = svc
         .inbox_letter("mailbox", "0001号测试致全体的通报.md")
         .expect("中文名点名取正文");
     assert!(content.contains("中文信"));
+}
+
+// ---- BAR-174：信件列表带 mtime（app 本地缓存增量同步的比对键）----
+
+#[test]
+fn spec_bar174_端点_信件列表带mtime() {
+    let (_t, svc) = fixture();
+    let ls = svc.list_inbox_letters("mailbox").expect("列出");
+    assert_eq!(ls.len(), 1, "夹具一封信: {ls:?}");
+    let letter = &ls[0];
+    assert_eq!(letter.name, "a-b-report.md");
+    assert!(letter.mtime > 0, "mtime 必须带（增量比对键）: {letter:?}");
+    // bytes 与真实文件长度一致（BAR-163 语义不变）
+    let real = std::fs::metadata(format!("{}/信箱/a-b-report.md", svc.session_root))
+        .expect("真实文件元数据");
+    assert_eq!(letter.bytes, real.len(), "bytes 语义不变");
+    // mtime 与真实文件 mtime 一致（秒级）
+    let real_mtime = real
+        .modified()
+        .expect("mtime")
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("unix 秒")
+        .as_secs();
+    assert_eq!(letter.mtime, real_mtime);
+    // 旧别名 list_letters 同形同数据
+    let old = svc.list_letters().expect("旧别名");
+    assert_eq!(old, ls, "旧别名与 keyed 面同形");
 }

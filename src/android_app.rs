@@ -4422,6 +4422,15 @@ impl App {
                 .map(|s| s.tunnel.local_port)
                 .unwrap_or(crate::tunnel::NA_SERVER_PORT),
         );
+        // 信件本地缓存根（BAR-174）：<私有目录>/cache/letters——先灌缓存
+        // 首屏即时，远端到了增量换鲜；拿不到私有目录 = 缓存层关闭（纯远端）
+        if let Some(dir) = self
+            .android_app
+            .as_ref()
+            .and_then(|a| a.internal_data_path())
+        {
+            crate::sess_pool::set_cache_root(dir.join("cache/letters"));
+        }
         // 文件树数据面（BAR-165）：同一隧道本地口喂取数器；状态核注册全局
         // （三处涂装 + 手势 + 取数同源一份，与 parser_page_handle 同形制）。
         // 底栏根名 v1 恒 "root"（原版截屏同字；根全路径在服务端，客户端

@@ -5,6 +5,31 @@
 > (速查表:症状 → 工具 → 字段 → 判卷)。本页只写「现在进行时」,
 > 历史功过在 bugs.md。
 
+## 当前位置（2026-09-29，BAR-174 会话池信箱本地缓存+增量加载）
+
+> **缘起**：主开发线工单——信箱面信号差时列表/正文全白等（切路由必等
+> 3s 超时 GET），且 agentd 列表端点逐封整读拿字节数。设计已定稿：
+> 列表带 mtime 做增量比对键，app 本地缓存先灌后换鲜。
+> **形制**：①agentd——Host trait 加 `file_meta`（StdHost fs::metadata /
+> FakeHost 内存实现），`list_inbox_letters` 改吃它去整读，JSON 每项加
+> `"mtime"`（旧别名 list_letters 同形，bytes 语义不变）；②app——缓存
+> 布局 `<私有目录>/cache/letters/<inbox_key>/{manifest.json+逐信正文}`，
+> 纯核 `LetterMeta`/`parse_letter_list`/`reconcile`（(bytes,mtime) 双元
+> 比对键，fetch/delete/list 三出参）/`manifest_json`，胶水
+> `set_cache_root`（壳 configure 旁喂）+ request_entries 三段式（先
+> 同步灌缓存行 stale 标「 · 缓存」首屏即时 → 后台 GET 成功增量写透
+> 换新鲜行 → 失败保缓存行）+ request_content 写透/失败回退缓存副本
+> （引用块头 `> （本地缓存副本，联网后自动刷新）`）。零新依赖。
+> **判卷**：agentd 11 钉绿（新 spec_bar174_端点_信件列表带mtime +
+> 163/167/172 旧钉 bytes 语义不变保绿）；app sess_pool_spec 20 钉绿
+> （新 spec_bar174_* 8 钉：reconcile 五态/缺正文补抓/parse 容错/
+> manifest 回环/stale 值串）+ wiring 守卫 3 钉绿（新 spec_bar174_缓存
+> 接线守卫：set_cache_root 壳调用/先灌缓存后 spawn/失败回退三处源码
+> 字面咬死）；变异三咬全中（比对键摘 mtime/delete 漏做/stale 后缀摘，
+> 各被对应钉咬红，cp 备份复原）。chain 全绿。
+> **状态**：已修待判——redroid 实拍待补（信号差场景 stale 首屏/回退
+> 副本两幕），由主线后续判卷。
+
 ## 当前位置（2026-09-29，信箱工具链 Rust 移植：mailbox-core + mailbox-cli 落地，提案 0004）
 
 > **缘起**：na 信箱 0004 号提案（评审线）——kfmv4 信箱 JS 三件套

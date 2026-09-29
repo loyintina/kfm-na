@@ -10,6 +10,7 @@
 //! 路径段带非 ASCII（会话名 0001-会话.jsonl）原样放行——na-server
 //! 反代与 agentd 头解析两端都是自家码，全程 UTF-8 透传。
 
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
@@ -105,6 +106,108 @@ pub fn fmt_bytes(bytes: u64) -> String {
     } else {
         format!("{bytes}B")
     }
+}
+
+// ---- BAR-174：信件本地缓存 + 增量加载（纯核）----
+
+/// 信件元数据（列表面：name/bytes/mtime，mtime = 增量同步比对键，
+/// 旧响应无 mtime 字段兼容为 0 = 全量重抓）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LetterMeta {
+    pub name: String,
+    pub bytes: u64,
+    pub mtime: u64,
+}
+
+/// 缓存行 stale 标记（value 后缀：远端未到前给用户看的缓存行）
+pub const STALE_MARK: &str = " · 缓存";
+/// 缓存正文回退时的引用块头（正文前一行）
+pub const CACHE_NOTICE: &str = "> （本地缓存副本，联网后自动刷新）\n\n";
+
+/// reconcile 的产物：新清单 + 待抓正文名单 + 待删正文名单
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SyncPlan {
+    pub list: Vec<LetterMeta>,
+    pub fetch: Vec<String>,
+    pub delete: Vec<String>,
+}
+
+/// letters 面 → 信件元数据表（无 mtime 旧响应兼容为 0；坏 JSON / ok:false 即错）
+pub fn parse_letter_list(body: &str) -> Result<Vec<LetterMeta>, String> {
+    let v: Value = serde_json::from_str(body).map_err(|e| format!("JSON 坏: {e}"))?;
+    if v.get("ok").and_then(Value::as_bool) != Some(true) {
+        return Err(err_detail(&v));
+    }
+    Ok(v.get("letters")
+        .and_then(Value::as_array)
+        .ok_or("缺 letters 字段")?
+        .iter()
+        .filter_map(|x| {
+            let name = x.get("name").and_then(Value::as_str)?.to_string();
+            Some(LetterMeta {
+                name,
+                bytes: x.get("bytes").and_then(Value::as_u64).unwrap_or(0),
+                mtime: x.get("mtime").and_then(Value::as_u64).unwrap_or(0),
+            })
+        })
+        .collect())
+}
+
+/// 增量同步比对（纯函数零 IO）：
+/// fetch = 远端有而缓存无 / (bytes,mtime) 变了 / 有条目但缺正文文件；
+/// delete = 缓存有而远端无；list = 远端新清单（落 manifest 用）
+pub fn reconcile(cached: &[LetterMeta], remote: &[LetterMeta], have_body: &[String]) -> SyncPlan {
+    let mut fetch = Vec::new();
+    for r in remote {
+        let stale = match cached.iter().find(|c| c.name == r.name) {
+            None => true,
+            Some(c) => c.bytes != r.bytes || c.mtime != r.mtime,
+        };
+        if stale || !have_body.iter().any(|n| n == &r.name) {
+            fetch.push(r.name.clone());
+        }
+    }
+    let delete = cached
+        .iter()
+        .filter(|c| !remote.iter().any(|r| r.name == c.name))
+        .map(|c| c.name.clone())
+        .collect();
+    SyncPlan {
+        list: remote.to_vec(),
+        fetch,
+        delete,
+    }
+}
+
+/// manifest 落盘串（与端点同形 {"ok":true,"letters":[...]}——parse_letter_list
+/// 一口径读回；ok:true 防「ok:false 不许吞表」闸咬自家缓存）
+pub fn manifest_json(list: &[LetterMeta]) -> String {
+    serde_json::json!({
+        "ok": true,
+        "letters": list.iter().map(|l| serde_json::json!({
+            "name": l.name, "bytes": l.bytes, "mtime": l.mtime,
+        })).collect::<Vec<_>>(),
+    })
+    .to_string()
+}
+
+/// 缓存行（stale）：value 带「 · 缓存」后缀，远端到了换鲜行去标
+pub fn stale_letter_entries(list: &[LetterMeta]) -> Vec<(String, String)> {
+    list.iter()
+        .map(|l| {
+            (
+                l.name.clone(),
+                format!("{}{STALE_MARK}", fmt_bytes(l.bytes)),
+            )
+        })
+        .collect()
+}
+
+/// 新鲜行（远端刚到）：与旧面同形（label = 信名，value = 字节数）
+pub fn fresh_letter_entries(list: &[LetterMeta]) -> Vec<(String, String)> {
+    list.iter()
+        .map(|l| (l.name.clone(), fmt_bytes(l.bytes)))
+        .collect()
 }
 
 /// GET /api/agent/lines 响应 → 线名表
@@ -218,6 +321,8 @@ pub struct SessPoolSnap {
 struct Inner {
     snap: SessPoolSnap,
     cfg_port: u16,
+    /// 信件本地缓存根（BAR-174，壳 configure 旁喂）：<私有目录>/cache/letters
+    cache_root: Option<PathBuf>,
 }
 
 static INNER: OnceLock<Mutex<Inner>> = OnceLock::new();
@@ -237,6 +342,13 @@ fn bump() {
 pub fn configure(local_port: u16) {
     let mut g = inner().lock().unwrap();
     g.cfg_port = local_port;
+}
+
+/// 信件本地缓存根（BAR-174，壳 configure 旁喂，幂等）：
+/// <internal_data_path>/cache/letters——未喂 = 缓存层整体关闭（纯远端行为不变）
+pub fn set_cache_root(root: PathBuf) {
+    let mut g = inner().lock().unwrap();
+    g.cache_root = Some(root);
 }
 
 /// 读当前快照（rebuild_cfg_rows 每次拍一张；锁短）
@@ -274,16 +386,35 @@ pub fn request_routes() {
     });
 }
 
-/// 刷上池条目表（切路由时调）：线 → sessions 面；信箱 → letters 面
+/// 刷上池条目表（切路由时调）：线 → sessions 面；信箱 → letters 面。
+/// 信箱分支三段（BAR-174）：①先同步灌本地缓存行（stale 标，首屏即时）
+/// → ②后台 GET 成功换新鲜行 + 缓存写透 → ③GET 失败保缓存行/现有占位
 pub fn request_entries(key: RouteKey) {
-    let port = {
+    let (port, cache_root) = {
         let mut g = inner().lock().unwrap();
         g.snap.selected = Some(key.clone());
         g.snap.entries_loading = true;
         g.snap.entries.clear();
         DIRTY.store(true, Ordering::Relaxed);
-        g.cfg_port
+        (g.cfg_port, g.cache_root.clone())
     };
+    // ①发起前先灌缓存（fs 读在锁外；有缓存 = 信号差也立刻有列表看）
+    if let (RouteKey::Mailbox | RouteKey::AgentInbox, Some(root)) = (&key, &cache_root) {
+        let inbox = inbox_api_key(&key).expect("信箱键");
+        if let Some(cached) = read_manifest(&root.join(inbox))
+            && !cached.is_empty()
+        {
+            let rows = entries_or_placeholder(stale_letter_entries(&cached), EMPTY_LETTERS);
+            let mut g = inner().lock().unwrap();
+            if g.snap.selected.as_ref() == Some(&key) {
+                g.snap.entries = rows
+                    .into_iter()
+                    .map(|(label, value)| EntryRow { label, value })
+                    .collect();
+            }
+            bump();
+        }
+    }
     std::thread::spawn(move || {
         let got = match &key {
             RouteKey::Line(line) => {
@@ -294,12 +425,19 @@ pub fn request_entries(key: RouteKey) {
             RouteKey::Mailbox | RouteKey::AgentInbox => {
                 let inbox = inbox_api_key(&key).expect("信箱键");
                 http_get(port, &format!("/agent/api/agent/inboxes/{inbox}/letters"))
-                    .and_then(|b| parse_named_bytes(&b, "letters"))
-                    .map(|ls| entries_or_placeholder(letter_entries(&ls), EMPTY_LETTERS))
+                    .and_then(|b| parse_letter_list(&b))
+                    .map(|ls| {
+                        // ②缓存写透（增量 reconcile；fs/网络 IO 全在锁外）
+                        if let Some(root) = &cache_root {
+                            sync_inbox_cache(root, inbox, &ls, port);
+                        }
+                        entries_or_placeholder(fresh_letter_entries(&ls), EMPTY_LETTERS)
+                    })
             }
         };
         let mut g = inner().lock().unwrap();
         g.snap.entries_loading = false;
+        // ③失败不动 entries：有缓存保持 ①灌的 stale 行，无缓存走现有空态
         if g.snap.selected.as_ref() == Some(&key)
             && let Ok(rows) = got
         {
@@ -313,11 +451,13 @@ pub fn request_entries(key: RouteKey) {
 }
 
 /// 取条目内容（点条目时调）：会话 → tail 面 + wire_render 渲染；
-/// 信 → 正文直读。取回写入快照 content（壳脏帧喂查看器）。
+/// 信 → 正文直读（BAR-174：成功写透缓存；失败回退缓存副本，加引用块头
+/// 声明；缓存也没有才落「（取数失败：…）」）。取回写入快照 content
+/// （壳脏帧喂查看器）。
 pub fn request_content(key: RouteKey, name: &str) {
-    let (port, title) = {
+    let (port, title, cache_root) = {
         let g = inner().lock().unwrap();
-        (g.cfg_port, content_title(&key, name))
+        (g.cfg_port, content_title(&key, name), g.cache_root.clone())
     };
     let name = name.to_string();
     std::thread::spawn(move || {
@@ -330,11 +470,27 @@ pub fn request_content(key: RouteKey, name: &str) {
             .map(|evs| crate::wire_render::render_tail(&evs.join("\n"), TAIL_EVENTS)),
             RouteKey::Mailbox | RouteKey::AgentInbox => {
                 let inbox = inbox_api_key(&key).expect("信箱键");
-                http_get(
+                match http_get(
                     port,
                     &format!("/agent/api/agent/inboxes/{inbox}/letters/{name}"),
                 )
                 .and_then(|b| parse_letter_content(&b))
+                {
+                    Ok(content) => {
+                        // 写透正文缓存（单封失败不连坐，缓存是加强不是命脉）
+                        if let Some(root) = &cache_root {
+                            let _ = write_body(&root.join(inbox), &name, &content);
+                        }
+                        Ok(content)
+                    }
+                    Err(e) => match cache_root
+                        .as_ref()
+                        .and_then(|root| read_body(&root.join(inbox), &name))
+                    {
+                        Some(cached) => Ok(format!("{CACHE_NOTICE}{cached}")),
+                        None => Err(e),
+                    },
+                }
             }
         };
         let text = got.unwrap_or_else(|e| format!("（取数失败：{e}）"));
@@ -352,6 +508,76 @@ pub fn content_title(key: &RouteKey, name: &str) -> String {
         RouteKey::Line(line) => format!("{line}/{name}"),
         RouteKey::Mailbox => format!("{MAILBOX_TITLE}/{name}"),
         RouteKey::AgentInbox => format!("{AGENT_INBOX_TITLE}/{name}"),
+    }
+}
+
+// ---- BAR-174：信件本地缓存 fs 面（全锁外 IO；缓存是加强不是命脉，
+// 读写失败一律跳过/回退，不上报不炸）----
+
+/// 信箱缓存目录：<cache_root>/<inbox_key>
+fn cache_dir(root: &Path, inbox: &str) -> PathBuf {
+    root.join(inbox)
+}
+
+/// 读 manifest（文件缺/坏 JSON 一律 None = 无缓存，不炸）
+fn read_manifest(dir: &Path) -> Option<Vec<LetterMeta>> {
+    let text = std::fs::read_to_string(dir.join("manifest.json")).ok()?;
+    parse_letter_list(&text).ok()
+}
+
+/// 写 manifest（父目录自动建）
+fn write_manifest(dir: &Path, list: &[LetterMeta]) -> Result<(), String> {
+    std::fs::create_dir_all(dir).map_err(|e| format!("建缓存目录失败: {e}"))?;
+    std::fs::write(dir.join("manifest.json"), manifest_json(list))
+        .map_err(|e| format!("写 manifest 失败: {e}"))
+}
+
+/// 缓存目录里现存正文文件名（*.md；reconcile 的 have_body 入参）
+fn cached_body_names(dir: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(dir) {
+        for ent in rd.flatten() {
+            let name = ent.file_name().to_string_lossy().into_owned();
+            if name.ends_with(".md") {
+                out.push(name);
+            }
+        }
+    }
+    out
+}
+
+/// 读缓存正文（缺/坏 = None）
+fn read_body(dir: &Path, name: &str) -> Option<String> {
+    std::fs::read_to_string(dir.join(name)).ok()
+}
+
+/// 写透缓存正文（父目录自动建）
+fn write_body(dir: &Path, name: &str, content: &str) -> Result<(), String> {
+    std::fs::create_dir_all(dir).map_err(|e| format!("建缓存目录失败: {e}"))?;
+    std::fs::write(dir.join(name), content).map_err(|e| format!("写缓存正文失败: {e}"))
+}
+
+/// 列表 GET 成功后的缓存写透（reconcile 增量）：
+/// 新 manifest 落盘 → 删消失信正文 → 逐封 GET fetch 名单正文写透
+/// （单封失败跳过不连坐）
+fn sync_inbox_cache(root: &Path, inbox: &str, remote: &[LetterMeta], port: u16) {
+    let dir = cache_dir(root, inbox);
+    let cached = read_manifest(&dir).unwrap_or_default();
+    let have = cached_body_names(&dir);
+    let plan = reconcile(&cached, remote, &have);
+    let _ = write_manifest(&dir, &plan.list);
+    for name in &plan.delete {
+        let _ = std::fs::remove_file(dir.join(name));
+    }
+    for name in &plan.fetch {
+        if let Ok(content) = http_get(
+            port,
+            &format!("/agent/api/agent/inboxes/{inbox}/letters/{name}"),
+        )
+        .and_then(|b| parse_letter_content(&b))
+        {
+            let _ = write_body(&dir, name, &content);
+        }
     }
 }
 

@@ -166,8 +166,8 @@ fn route_exec(method: &str, path: &str, body: &str, svc: &AgentService) -> Vec<u
         httpd::Route::Letters => match svc.list_letters() {
             Ok(ls) => ok(serde_json::json!({
                 "ok": true,
-                "letters": ls.iter().map(|(name, bytes)| serde_json::json!({
-                    "name": name, "bytes": bytes,
+                "letters": ls.iter().map(|l| serde_json::json!({
+                    "name": l.name, "bytes": l.bytes, "mtime": l.mtime,
                 })).collect::<Vec<_>>(),
             })),
             Err(e) => err(500, "Internal Server Error", &e),
@@ -180,8 +180,8 @@ fn route_exec(method: &str, path: &str, body: &str, svc: &AgentService) -> Vec<u
         httpd::Route::InboxLetters { key } => match svc.list_inbox_letters(&key) {
             Ok(ls) => ok(serde_json::json!({
                 "ok": true,
-                "letters": ls.iter().map(|(name, bytes)| serde_json::json!({
-                    "name": name, "bytes": bytes,
+                "letters": ls.iter().map(|l| serde_json::json!({
+                    "name": l.name, "bytes": l.bytes, "mtime": l.mtime,
                 })).collect::<Vec<_>>(),
             })),
             Err(e) if e.contains("非法") => err(400, "Bad Request", &e),

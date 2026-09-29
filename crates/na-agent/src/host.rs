@@ -15,6 +15,14 @@ pub struct CmdOut {
     pub stderr: String,
 }
 
+/// 文件元数据（BAR-174：信件列表增量同步的比对键）。
+/// mtime = 修改时间 unix 秒；宿主取不到（平台不支持）给 0。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileMeta {
+    pub bytes: u64,
+    pub mtime: u64,
+}
+
 pub trait Host {
     fn read_file(&self, path: &str) -> Result<String, String>;
     /// 整写（父目录自动建）。
@@ -23,6 +31,8 @@ pub trait Host {
     fn append_line(&self, path: &str, line: &str) -> Result<(), String>;
     /// 列目录内文件名（不含子目录递归；不存在 = 空表）。会话 NNNN 序号扫描用。
     fn list_files(&self, dir: &str) -> Result<Vec<String>, String>;
+    /// 文件元数据（尺寸 + mtime unix 秒）。信件列表走它比 read_file 省整读。
+    fn file_meta(&self, path: &str) -> Result<FileMeta, String>;
     /// 执行命令。围栏（cwd 锁/sudo·su 拒）在 tools.rs 的纯函数闸，
     /// host 只管「在配置根里跑」这一件宿主事。
     fn run_command(&self, command: &str) -> Result<CmdOut, String>;
@@ -89,6 +99,20 @@ impl Host for StdHost {
         }
         out.sort();
         Ok(out)
+    }
+
+    fn file_meta(&self, path: &str) -> Result<FileMeta, String> {
+        let md = std::fs::metadata(path).map_err(|e| format!("读 {path} 元数据失败: {e}"))?;
+        let mtime = md
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        Ok(FileMeta {
+            bytes: md.len(),
+            mtime,
+        })
     }
 
     fn run_command(&self, command: &str) -> Result<CmdOut, String> {
@@ -199,6 +223,20 @@ impl Host for FakeHost {
         }
         out.sort();
         Ok(out)
+    }
+
+    fn file_meta(&self, path: &str) -> Result<FileMeta, String> {
+        // 内存 fs 无真 mtime——bytes 从内容长算，mtime 恒 0（语义同
+        // StdHost「取不到给 0」；要比对键行为的判卷走真 fs 的 service 层）
+        self.files
+            .lock()
+            .expect("锁")
+            .get(path)
+            .map(|c| FileMeta {
+                bytes: c.len() as u64,
+                mtime: 0,
+            })
+            .ok_or_else(|| format!("读 {path} 元数据失败: 不存在"))
     }
 
     fn run_command(&self, command: &str) -> Result<CmdOut, String> {

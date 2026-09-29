@@ -205,3 +205,129 @@ fn spec_bar167_池页_content_title新变体() {
         "demo/0001-会话.jsonl"
     );
 }
+
+// ---- BAR-174：信件本地缓存 + 增量加载（纯核钉）----
+//
+// 变异抽检：①reconcile 比对键摘 mtime（同 bytes 改 mtime 不重抓 = 内容
+// 变了看不到）必须咬；②delete 漏做（幽灵信不删，列表减了正文还在）必须咬；
+// ③stale 后缀摘掉（用户分不清缓存行/新鲜行）必须咬。
+
+use kfm_na::sess_pool::{LetterMeta, SyncPlan};
+
+fn lm(name: &str, bytes: u64, mtime: u64) -> LetterMeta {
+    LetterMeta {
+        name: name.to_string(),
+        bytes,
+        mtime,
+    }
+}
+
+fn names(v: &[String]) -> Vec<&str> {
+    v.iter().map(String::as_str).collect()
+}
+
+#[test]
+fn spec_bar174_parse_letter_list_容错() {
+    // 新面：mtime 带上
+    let body = r#"{"ok":true,"letters":[{"name":"a.md","bytes":900,"mtime":1727000000}]}"#;
+    let ls = sess_pool::parse_letter_list(body).unwrap();
+    assert_eq!(ls, vec![lm("a.md", 900, 1727000000)]);
+    // 旧响应无 mtime 字段兼容为 0（= 全量重抓语义）
+    let body = r#"{"ok":true,"letters":[{"name":"a.md","bytes":900}]}"#;
+    let ls = sess_pool::parse_letter_list(body).unwrap();
+    assert_eq!(ls, vec![lm("a.md", 900, 0)]);
+    // 坏 JSON / ok:false / 缺字段 都是错不是吞
+    assert!(sess_pool::parse_letter_list("不是 json").is_err());
+    assert!(sess_pool::parse_letter_list(r#"{"ok":false,"error":"x"}"#).is_err());
+    assert!(sess_pool::parse_letter_list(r#"{"ok":true}"#).is_err());
+}
+
+#[test]
+fn spec_bar174_manifest_落盘串同端点形可回读() {
+    let list = vec![lm("a.md", 900, 111), lm("b.md", 5, 222)];
+    let text = sess_pool::manifest_json(&list);
+    // 与端点同形（ok:true 防 ok:false 吞表闸咬自家缓存）且可一口径读回
+    assert!(text.contains("\"ok\":true"), "manifest 带 ok:true: {text}");
+    assert!(text.contains("\"mtime\":111"), "manifest 带 mtime: {text}");
+    let back = sess_pool::parse_letter_list(&text).unwrap();
+    assert_eq!(back, list, "写读回环");
+}
+
+#[test]
+fn spec_bar174_reconcile_全新全抓() {
+    let remote = vec![lm("a.md", 1, 10), lm("b.md", 2, 20)];
+    let plan = sess_pool::reconcile(&[], &remote, &[]);
+    assert_eq!(plan.list, remote, "list = 远端新清单");
+    assert_eq!(names(&plan.fetch), vec!["a.md", "b.md"], "全新全抓");
+    assert!(plan.delete.is_empty());
+}
+
+#[test]
+fn spec_bar174_reconcile_全同零动作() {
+    let cached = vec![lm("a.md", 1, 10), lm("b.md", 2, 20)];
+    let have = vec!["a.md".to_string(), "b.md".to_string()];
+    let plan = sess_pool::reconcile(&cached, &cached.clone(), &have);
+    assert_eq!(
+        plan,
+        SyncPlan {
+            list: cached,
+            ..SyncPlan::default()
+        },
+        "全同零动作"
+    );
+}
+
+#[test]
+fn spec_bar174_reconcile_新信抓() {
+    let cached = vec![lm("a.md", 1, 10)];
+    let remote = vec![lm("a.md", 1, 10), lm("b.md", 2, 20)];
+    let have = vec!["a.md".to_string()];
+    let plan = sess_pool::reconcile(&cached, &remote, &have);
+    assert_eq!(names(&plan.fetch), vec!["b.md"], "只抓新信");
+    assert!(plan.delete.is_empty());
+}
+
+#[test]
+fn spec_bar174_reconcile_消失删() {
+    let cached = vec![lm("a.md", 1, 10), lm("ghost.md", 3, 30)];
+    let remote = vec![lm("a.md", 1, 10)];
+    let have = vec!["a.md".to_string(), "ghost.md".to_string()];
+    let plan = sess_pool::reconcile(&cached, &remote, &have);
+    assert_eq!(names(&plan.delete), vec!["ghost.md"], "幽灵信正文要删");
+    assert!(plan.fetch.is_empty(), "留存的信不重抓");
+    assert_eq!(plan.list, remote, "list 跟远端（幽灵出列）");
+}
+
+#[test]
+fn spec_bar174_reconcile_mtime变重抓() {
+    // 同 bytes 不同 mtime = 内容变了（比对键是 (bytes, mtime) 双元）
+    let cached = vec![lm("a.md", 100, 10)];
+    let remote = vec![lm("a.md", 100, 99)];
+    let have = vec!["a.md".to_string()];
+    let plan = sess_pool::reconcile(&cached, &remote, &have);
+    assert_eq!(names(&plan.fetch), vec!["a.md"], "mtime 变必须重抓");
+    // bytes 变同理
+    let remote = vec![lm("a.md", 101, 10)];
+    let plan = sess_pool::reconcile(&cached, &remote, &have);
+    assert_eq!(names(&plan.fetch), vec!["a.md"], "bytes 变必须重抓");
+}
+
+#[test]
+fn spec_bar174_reconcile_有清单缺正文补抓() {
+    let cached = vec![lm("a.md", 1, 10), lm("b.md", 2, 20)];
+    let have = vec!["a.md".to_string()]; // b.md 正文文件丢了
+    let plan = sess_pool::reconcile(&cached, &cached.clone(), &have);
+    assert_eq!(names(&plan.fetch), vec!["b.md"], "清单在正文缺 = 补抓");
+}
+
+#[test]
+fn spec_bar174_stale值串形状() {
+    let list = vec![lm("a.md", 512, 10), lm("b.md", 2048, 20)];
+    let rows = sess_pool::stale_letter_entries(&list);
+    assert_eq!(rows[0], ("a.md".to_string(), "512B · 缓存".to_string()));
+    assert_eq!(rows[1].1, "2.0KB · 缓存", "fmt_bytes 后缀「 · 缓存」");
+    assert_eq!(sess_pool::STALE_MARK, " · 缓存");
+    // 新鲜行去标
+    let rows = sess_pool::fresh_letter_entries(&list);
+    assert_eq!(rows[0].1, "512B");
+}

@@ -136,3 +136,47 @@ fn spec_bar169_md_渲染接线守卫() {
         "启动与换选两处都必须灌全局样式口"
     );
 }
+
+// ---- BAR-174 信件本地缓存接线守卫（源码钉，同律：壳断了宿主全绿也照烂）----
+
+const SESS: &str = include_str!("../src/sess_pool.rs");
+
+#[test]
+fn spec_bar174_缓存接线守卫() {
+    // ① 壳必须喂缓存根（configure 旁同款静态配置）：没喂 = 缓存层静默
+    // 关闭，信号差首屏干等
+    assert!(
+        APP.contains("crate::sess_pool::set_cache_root("),
+        "壳必须调 sess_pool::set_cache_root（信件本地缓存根）"
+    );
+    assert!(
+        APP.contains(r#".join("cache/letters")"#),
+        "缓存根必须落 <私有目录>/cache/letters"
+    );
+    // ② request_entries 信箱分支必须先灌缓存（stale 行）再起后台线程——
+    // 顺序反了 = 首屏即时承诺失效
+    let req = SESS
+        .find("pub fn request_entries")
+        .expect("request_entries");
+    let stale = SESS
+        .find("stale_letter_entries(&cached)")
+        .expect("先灌缓存调用");
+    let spawn = SESS[req..]
+        .find("std::thread::spawn(move || {")
+        .map(|i| req + i)
+        .expect("request_entries 后台线程");
+    assert!(
+        req < stale && stale < spawn,
+        "request_entries 必须先灌缓存行再 spawn 后台 GET（首屏即时）"
+    );
+    // ③ request_content 失败必须回退缓存副本（引用块头声明），缓存也没有
+    // 才落「（取数失败：…）」
+    assert!(
+        SESS.contains("> （本地缓存副本，联网后自动刷新）\\n\\n"),
+        "request_content GET 失败必须回退缓存副本并带引用块头"
+    );
+    assert!(
+        SESS.contains("read_body(&root.join(inbox), &name)"),
+        "request_content 失败回退必须读缓存正文文件"
+    );
+}
