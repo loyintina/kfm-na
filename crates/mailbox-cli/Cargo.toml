@@ -6,3 +6,9 @@ description = "kfm-na 信箱工具链 CLI：IO 壳，逻辑全在 mailbox-core"
 
 [dependencies]
 mailbox-core = { path = "../mailbox-core" }
+# flock(2)：写者子命令互斥锁（BAR-181，白露 0022 条件①）。workspace 锁图已有 0.2.189，零新下载
+libc = "0.2"
+
+[dev-dependencies]
+# flock_spec 直取 libc 持锁造互斥场景（integration test 是独立 crate，不吃 [dependencies]）
+libc = "0.2"

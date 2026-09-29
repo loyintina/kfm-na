@@ -32,6 +32,8 @@ use mailbox_core::token::{self, fingerprint, ledger_nos, parse_ledger};
 use mailbox_core::verify::{BookCheck, LetterText, verify_book, verify_single};
 use std::collections::HashSet;
 use std::fs;
+use std::fs::OpenOptions;
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::{Command, exit};
 
@@ -330,60 +332,45 @@ fn reject_main_book_write(p: &str, mailbox: &Path) {
     }
 }
 
-/// 写者锁（BAR-177 建议⑥）：信箱根 O_EXCL lockfile，new/gen/reticket 三写
-/// 路径共用——无锁 + 台账整文件重写 = 两写者并发后写覆盖前写，留痕丢失。
-/// pid 入锁文件；die!/崩溃的残留锁由下次获取时 /proc 探活自愈（pid 还活着
-/// 才报并发，报错文案指明手动删锁的判据）
-struct BookLock(PathBuf);
+/// 写者锁（BAR-177 建议⑥ 立，BAR-181 换芯 flock——白露 0022 条件①字面 +
+/// 清和 0032 表态）：信箱根 lockfile，new/gen/reticket 三写路径共用——无锁 +
+/// 台账整文件重写 = 两写者并发后写覆盖前写，留痕丢失。
+/// 失败模式（白露 0022 条件③口径）：
+/// - 拿不到锁 = **阻塞等待，不设超时**（写信/回写全是秒级短操作，超时误报
+///   比等待更伤；bar-new.sh 一次进程 new→verify→gen 连跑，fail-fast 会死在
+///   半路 = 信开而台账未登记；与 bar-new.sh 的 flock 同款语义）；
+/// - **无 stale 锁**：进程死亡（含 SIGKILL）由内核自动放锁，无残留锁自愈负担；
+/// - 锁文件只建不删（防 unlink 竞态）；卫兵随 fd 关闭释放。
+struct BookLock(fs::File);
 
 fn acquire_book_lock(p: &str, mailbox: &Path) -> BookLock {
-    use std::io::Write;
     let path = mailbox.join(".mailbox-cli.lock");
-    for attempt in 0..2 {
-        match fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-        {
-            Ok(mut f) => {
-                let _ = writeln!(f, "pid={} at={}", std::process::id(), now_local_stamp());
-                return BookLock(path);
-            }
-            Err(e) if attempt == 0 => {
-                let alive = read_opt(&path)
-                    .and_then(|s| {
-                        s.split_whitespace()
-                            .find_map(|kv| kv.strip_prefix("pid=").map(str::to_string))
-                    })
-                    .map(|pid| Path::new(&format!("/proc/{pid}")).exists());
-                if alive == Some(false) {
-                    // 残留锁（持锁进程已死）——摘除重试
-                    let _ = fs::remove_file(&path);
-                    continue;
-                }
-                die(
-                    p,
-                    &format!(
-                        "另一写者持锁：{}（{e}）——并发写会丢留痕；确认无并发（上次崩溃残留）后手动删除该锁文件再试",
-                        path.display()
-                    ),
-                );
-            }
-            Err(e) => die(
-                p,
-                &format!(
-                    "锁文件异常：{}（{e}）——确认无并发后手动删除再试",
-                    path.display()
-                ),
+    let f = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false) // 锁文件只是令牌，从不写内容——clippy 要这句明写
+        .open(&path)
+        .unwrap_or_else(|e| die(p, &format!("开锁文件 {} 失败：{e}", path.display())));
+    let rc = unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX) };
+    if rc != 0 {
+        die(
+            p,
+            &format!(
+                "flock {} 失败：{}",
+                path.display(),
+                std::io::Error::last_os_error()
             ),
-        }
+        );
     }
-    unreachable!("锁重试逻辑最多两轮")
+    BookLock(f)
 }
 
 impl Drop for BookLock {
     fn drop(&mut self) {
-        let _ = fs::remove_file(&self.0);
+        // 显式放锁（fd 随 File 关闭也会释，写明为读码人留顺序）
+        unsafe {
+            libc::flock(self.0.as_raw_fd(), libc::LOCK_UN);
+        }
     }
 }
 
@@ -1323,7 +1310,8 @@ fn main() {
         println!("{USAGE}");
         exit(1);
     }
-    match args.pos[0].as_str() {
+    let cmd = args.pos[0].as_str();
+    match cmd {
         "new" => cmd_new(&args),
         "verify" => cmd_verify(&args),
         "gen" => cmd_gen(&args),
