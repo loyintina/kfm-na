@@ -680,40 +680,57 @@ fn spec_d8光球配方_逐像素钉() {
 }
 
 #[test]
-fn spec_冒烟_ai页思考块_三行钳制暗色() {
+fn spec_bar183_ai页思考块_三行钳制暗色_按字体量测() {
     // 期 0④½：思考折成 8 行（短行不折），流式中（live_tail=true）渲染
-    // 只许出 3 行暗色（尾随自滚：正文行必须紧跟在第 3 行思考后）
+    // 只许出尾随 3 行暗色（thinking_window 取尾窗），正文紧跟在第 3 行后。
+    //
+    // BAR-183（0039 甲）：判据随实际字体量走，不写死桶数——「放宽到 ≤4
+    // 桶」被裁为掩盖（溢出到 5 照样红，且真上界从此无人知道）。
+    // 「3 行钳制」是**主字体下的 UI 承诺**：主字体（assets/fonts/local/
+    // main.ttf，本机商业字体，BAR-021 不许进库）40px 文本栅格化后收在
+    // 64px 行桶内，3 行思考恰好 3 桶；**占位字体下的期望值**：干净克隆
+    // （无 local/main.ttf）落 DejaVuSansMono，行高更大，3 行思考像素跨
+    // 4 桶（2026-09-29 干净克隆实证）——钳制同样正确，只是字体更高。
+    // 故判据 = 8 行输入（应被钳到尾随 3 行）渲染出的暗色像素行桶集，逐桶
+    // 等于**同字体下同三条文本**（think-5..7 = 钳制后该显示的三行）渲染
+    // 出的行桶集。期望值由实际栅格化量出、不是新魔数：换任何字体两边
+    // 同步伸缩，等式恒真；钳制若漏（第 4 行思考落墨），左盘必多出右盘
+    // 没有的桶。
     let (tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必须建得成");
     let (w, h) = (800u32, 600u32);
-    let mut buf = vec![0u32; (w * h) as usize];
-    let thinking = (0..8)
+    // 渲一页，收（暗色行桶集, 帧缓冲）
+    let render = |thinking: String| {
+        let mut buf = vec![0u32; (w * h) as usize];
+        let msgs = vec![(false, "正文一句话".to_string(), thinking)];
+        tv.render_ai_page(&mut buf, w, h, &msgs, 0, 0, true);
+        let line_h = kfm_na::termview::AI_PAGE_LINE_H;
+        let mut buckets = std::collections::BTreeSet::new();
+        for (i, &p) in buf.iter().enumerate() {
+            if p == kfm_na::termview::AI_THINK_FG {
+                buckets.insert((i as u32 / w) / line_h);
+            }
+        }
+        (buckets, buf)
+    };
+    let (expected, _) = render("think-5\nthink-6\nthink-7".to_string());
+    let thinking8 = (0..8)
         .map(|i| format!("think-{i}"))
         .collect::<Vec<_>>()
         .join("\n");
-    let msgs = vec![(false, "正文一句话".to_string(), thinking)];
-    tv.render_ai_page(&mut buf, w, h, &msgs, 0, 0, true);
-    // 暗色像素聚在几个行桶里？>3 = 钳制漏了
-    let line_h = kfm_na::termview::AI_PAGE_LINE_H;
-    let mut buckets = std::collections::BTreeSet::new();
-    for (i, &p) in buf.iter().enumerate() {
-        if p == kfm_na::termview::AI_THINK_FG {
-            buckets.insert((i as u32 / w) / line_h);
-        }
-    }
-    assert!(
-        buckets.len() <= 3,
-        "思考块必须钳在 3 行内，实测占了 {:?} 个行桶",
-        buckets.len()
+    let (actual, buf) = render(thinking8);
+    assert!(!expected.is_empty(), "思考块必须真画出来（暗色）");
+    assert_eq!(
+        actual, expected,
+        "8 行思考的暗色行桶必须逐桶等于尾随 3 行（钳制目标）的行桶——多出的桶 = 钳制漏了"
     );
-    assert!(!buckets.is_empty(), "思考块必须真画出来（暗色）");
-    // 尾随语义：正文（DEFAULT_FG 白）必须出现在思考块下方不远处——
-    // 若画的是头部 3 行，正文位置不变，这题抓不住……补一刀：思考总行
-    // 8 行时若全画，正文会被推到第 10 行后；钳制后正文在第 5 行区
+    // 尾随语义（布局行判据，与字体无关）：正文（DEFAULT_FG 白）必须出现在
+    // 思考块下方不远处——思考 8 行若全画，正文会被推到第 10 行后；钳制后
+    // 正文在第 5 行区
     let body_y = (0..h)
         .find(|&y| (0..w).any(|x| buf[(y * w + x) as usize] == kfm_na::termview::DEFAULT_FG))
         .expect("正文必须画出来");
     assert!(
-        body_y < kfm_na::termview::AI_PAGE_TOP + 6 * line_h,
+        body_y < kfm_na::termview::AI_PAGE_TOP + 6 * kfm_na::termview::AI_PAGE_LINE_H,
         "思考 8 行若不钳制正文会被推到 6 行外（实测 y={body_y}）"
     );
 }
