@@ -188,6 +188,11 @@ cp /root/kfm-na/assets/fonts/local/main.ttf \
 ```
 
 清单有新增项（普查 BAR-184 的「基建清单」桶）追加到本节，别散落各信。
+BAR-184 普查全账见 `docs/ledger/本机资产依赖普查.md`——基建桶除上条
+main.ttf 外另两项：**NimbusMonoPS-Regular.otf**（apt 包 urw-base35，
+termview_spec host_cff 夹具，缺席 = 测试 panic 红）与 **fonts-dejavu
+系统包**（host_mono/host_proportional 夹具，缺席 = panic 红；治本桶
+#1「夹具改指仓内副本」落地后本项消亡），均每机一次、非每 worktree。
 
 ## 跨线运维公约（2026-08-28 评审裁决，全线生效）
 
