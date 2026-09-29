@@ -22,6 +22,86 @@ use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 static PORT: AtomicU16 = AtomicU16::new(0);
 static DIRTY: AtomicBool = AtomicBool::new(false);
 
+// ---- BAR-187：文件树本地缓存（宪法 = 0047 §三：本地一切状态都是服务器
+// 真源的显示缓存——可旧、可缺，绝不与真源争对错；形制复用 BAR-174/185）----
+
+static CACHE_ROOT: std::sync::OnceLock<std::sync::Mutex<Option<std::path::PathBuf>>> =
+    std::sync::OnceLock::new();
+
+/// 文件树本地缓存根（壳 configure 旁喂，幂等）：<私有目录>/cache/fs——
+/// 未喂 = 缓存层整体关闭（纯远端行为不变）
+pub fn set_cache_root(root: std::path::PathBuf) {
+    *CACHE_ROOT
+        .get_or_init(|| std::sync::Mutex::new(None))
+        .lock()
+        .unwrap() = Some(root);
+}
+
+fn cache_root() -> Option<std::path::PathBuf> {
+    CACHE_ROOT
+        .get_or_init(|| std::sync::Mutex::new(None))
+        .lock()
+        .unwrap()
+        .clone()
+}
+
+/// 缓存文件相对路径（list/read 两柜）。键过 `fsapi::pct_encode` 一口径——
+/// 保留字只放行 `A-Za-z0-9-._~`，中文/斜杠路径落平文件名天然安全；
+/// 空串（根目录键）落 `ROOT.json`（不许落 `.json` 隐形文件）
+pub fn cache_rel(kind: &str, key: &str) -> String {
+    let k = if key.is_empty() {
+        "ROOT".to_string()
+    } else {
+        fsapi::pct_encode(key)
+    };
+    format!("{kind}/{k}.json")
+}
+
+/// 读缓存（不存在/IO 失败/空文件 = None——缓存是加强不是命脉，读坏不当障）
+pub fn read_cache(root: &std::path::Path, rel: &str) -> Option<String> {
+    let s = std::fs::read_to_string(root.join(rel)).ok()?;
+    if s.is_empty() { None } else { Some(s) }
+}
+
+/// 写透缓存（IO 失败静默——单目失败不连坐，不上报不炸）
+pub fn write_cache(root: &std::path::Path, rel: &str, body: &str) {
+    let p = root.join(rel);
+    if let Some(parent) = p.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(p, body);
+}
+
+/// list 失败决策（纯函数）：有缓存 = 缓存树留场（**不走 fail()**——不许把
+/// 刚灌的缓存树拍成错误行/回退展开账）；无缓存 = 照旧错误路。
+/// 返回值 = 是否走旧 fail 路
+pub fn list_fail_goes_old(had_cache: bool) -> bool {
+    !had_cache
+}
+
+/// 正文缓存出参 → 正文（path 必须同源，binary/坏 JSON/缺 text = None）
+pub fn cached_read_text(body: &str, path: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(body).ok()?;
+    if v.get("ok").and_then(serde_json::Value::as_bool) == Some(false) {
+        return None;
+    }
+    if v.get("path").and_then(|p| p.as_str()) != Some(path) {
+        return None;
+    }
+    if v.get("binary").and_then(|b| b.as_bool()) == Some(true) {
+        return None;
+    }
+    v.get("text")
+        .and_then(|t| t.as_str())
+        .map(str::to_string)
+        .filter(|t| !t.is_empty())
+}
+
+/// 正文缓存落盘串（与端点出参同形——cached_read_text 一口径读回）
+pub fn read_cache_json(path: &str, text: &str) -> String {
+    serde_json::json!({"ok": true, "path": path, "binary": false, "text": text}).to_string()
+}
+
 const HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 /// body 上限比 sess_pool（256KB）高一档：大目录的 JSON 会更长
 const BODY_CAP: usize = 512 * 1024;
@@ -48,27 +128,50 @@ pub fn request_root() {
 
 /// 拉某目录的直接子层（后台线程）；`dir` 空串 = 根。
 /// 展开态/loading 账由 `FileTreeState::toggle` 记账（本册只负责取数与回填）。
-/// 回执里带出的**级联层**（六调④ 曾展开账恢复）递归走 `request_list_quiet`
+/// 回执里带出的**级联层**（六调④ 曾展开账恢复）递归走 `request_list_quiet`。
+/// BAR-187①三段式：spawn 前先同步灌缓存（弱网秒开树）→ GET 成功换鲜 +
+/// 写透 → GET 失败有缓存留场（不走 fail），无缓存照旧错误行
 pub fn request_list(dir: String) {
     if local_phase() {
         fill(&dir, local_placeholder_rows(), false);
         return;
     }
-    spawn_list(dir, false);
+    let had_cache = serve_list_cache(&dir, false);
+    spawn_list(dir, false, had_cache);
 }
 
 /// 级联取层（六调④）：与 `request_list` 同一条链，只差回执落
 /// `apply_list_quiet`（不起抽屉动画——曾展开账里长回来的层不是用户此刻点的）。
-/// 由回执里的级联路径递归驱动，逐层把树长回来
+/// 由回执里的级联路径递归驱动，逐层把树长回来。BAR-187①同律缓存先灌
 pub fn request_list_quiet(dir: String) {
     if local_phase() {
         return; // 本地相没有真树，级联无处可落
     }
-    spawn_list(dir, true);
+    let had_cache = serve_list_cache(&dir, true);
+    spawn_list(dir, true, had_cache);
 }
 
-/// 取层线程（两种回执共用；`quiet` 决定落哪个 apply）
-fn spawn_list(dir: String, quiet: bool) {
+/// ①缓存先灌：有缓存即同步落状态核（回执幂等，真源到了换鲜）；坏件当无缓存
+fn serve_list_cache(dir: &str, quiet: bool) -> bool {
+    let Some(body) = cache_root().and_then(|r| read_cache(&r, &cache_rel("list", dir))) else {
+        return false;
+    };
+    match filetree::entries_of(&body) {
+        Ok(entries) => {
+            crate::report::report(
+                "ftree",
+                &format!("目录缓存先画 {dir:?} 条目 {}", entries.len()),
+            );
+            fill(dir, entries, quiet);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+/// 取层线程（两种回执共用；`quiet` 决定落哪个 apply；`had_cache` = ①灌过，
+/// 失败时缓存留场不走 fail——BAR-187③）
+fn spawn_list(dir: String, quiet: bool, had_cache: bool) {
     let port = PORT.load(Ordering::Relaxed);
     if port == 0 {
         crate::report::report("ftree", "文件树取数：隧道口未配置，跳过");
@@ -80,12 +183,20 @@ fn spawn_list(dir: String, quiet: bool) {
             Ok(b) => b,
             Err(e) => {
                 crate::report::report("ftree", &format!("列目录失败 {dir:?}: {e}"));
-                fail(&dir, &format!("取数失败：{e}"));
+                if list_fail_goes_old(had_cache) {
+                    fail(&dir, &format!("取数失败：{e}"));
+                } else {
+                    DIRTY.store(true, Ordering::Relaxed);
+                }
                 return;
             }
         };
         match filetree::entries_of(&body) {
             Ok(entries) => {
+                // ②缓存写透（IO 在锁外；写坏静默——缓存是加强不是命脉）
+                if let Some(root) = cache_root() {
+                    write_cache(&root, &cache_rel("list", &dir), &body);
+                }
                 crate::report::report(
                     "ftree",
                     &format!("列目录到位 {dir:?} 条目 {}", entries.len()),
@@ -94,7 +205,11 @@ fn spawn_list(dir: String, quiet: bool) {
             }
             Err(e) => {
                 crate::report::report("ftree", &format!("列目录出参不认 {dir:?}: {e}"));
-                fail(&dir, &format!("出参不认：{e}"));
+                if list_fail_goes_old(had_cache) {
+                    fail(&dir, &format!("出参不认：{e}"));
+                } else {
+                    DIRTY.store(true, Ordering::Relaxed);
+                }
             }
         }
     });
@@ -250,6 +365,9 @@ pub fn request_read_chunk(offset: u64) {
         st.path.clone()
     };
     DIRTY.store(true, Ordering::Relaxed);
+    // BAR-187②：首块且有缓存 = 缓存先画（声明头 + 正文立即上屏），网络
+    // 回执改走 apply_refresh0 换芯；失败 refresh_failed 摘账缓存留场
+    let served_cache = offset == 0 && serve_read_cache(&path);
     std::thread::spawn(move || {
         let p = format!(
             "/api/fs/read?path={}&offset={offset}",
@@ -259,14 +377,22 @@ pub fn request_read_chunk(offset: u64) {
             Ok(b) => b,
             Err(e) => {
                 crate::report::report("reader", &format!("读块失败 {path:?}@{offset}: {e}"));
-                feed_reader(&path, |st| st.apply_error(&format!("读取失败：{e}")));
+                if served_cache {
+                    feed_reader(&path, |st| st.refresh_failed());
+                } else {
+                    feed_reader(&path, |st| st.apply_error(&format!("读取失败：{e}")));
+                }
                 return;
             }
         };
         let v: serde_json::Value = match serde_json::from_str(&body) {
             Ok(v) => v,
             Err(e) => {
-                feed_reader(&path, |st| st.apply_error(&format!("出参不是 JSON：{e}")));
+                if served_cache {
+                    feed_reader(&path, |st| st.refresh_failed());
+                } else {
+                    feed_reader(&path, |st| st.apply_error(&format!("出参不是 JSON：{e}")));
+                }
                 return;
             }
         };
@@ -280,17 +406,61 @@ pub fn request_read_chunk(offset: u64) {
             v.get("truncated").and_then(|b| b.as_bool()),
         ) else {
             // 缺键 = 出参不认（**不许拿 text.len() 顶 next_offset**——本体①）
-            feed_reader(&path, |st| {
-                st.apply_error("出参缺键（text/next_offset/truncated）")
-            });
+            if served_cache {
+                feed_reader(&path, |st| st.refresh_failed());
+            } else {
+                feed_reader(&path, |st| {
+                    st.apply_error("出参缺键（text/next_offset/truncated）")
+                });
+            }
             return;
         };
         crate::report::report(
             "reader",
             &format!("块到位 {path:?}@{offset} → {next}（truncated={trunc}）"),
         );
-        feed_reader(&path, |st| st.apply_chunk(offset, next, trunc, text));
+        if served_cache {
+            feed_reader(&path, |st| st.apply_refresh0(next, trunc, text));
+        } else {
+            feed_reader(&path, |st| st.apply_chunk(offset, next, trunc, text));
+        }
+        // ②写透：真源完整读完（eof 且未到帽）才落缓存——半截/到帽不存
+        if trunc {
+            return;
+        }
+        if let (Some(root), Some(h2)) = (cache_root(), crate::ui::reader_page::reader_handle()) {
+            let snap = {
+                let st = h2.lock().unwrap();
+                if st.path == path && st.eof && !st.capped && !st.text.is_empty() {
+                    Some(st.text.clone())
+                } else {
+                    None
+                }
+            };
+            if let Some(t) = snap {
+                write_cache(
+                    &root,
+                    &cache_rel("read", &path),
+                    &read_cache_json(&path, &t),
+                );
+            }
+        }
     });
+}
+
+/// ②缓存先画（BAR-187）：缓存副本带声明头立即上屏；坏件/不同源 = 不画
+fn serve_read_cache(path: &str) -> bool {
+    let Some(body) = cache_root().and_then(|r| read_cache(&r, &cache_rel("read", path))) else {
+        return false;
+    };
+    let Some(text) = cached_read_text(&body, path) else {
+        return false;
+    };
+    crate::report::report("reader", &format!("正文缓存先画 {path:?}"));
+    feed_reader(path, |st| {
+        st.apply_cached(&format!("{}{text}", crate::sess_pool::CACHE_NOTICE))
+    });
+    true
 }
 
 /// 回执落地（守卫②：核里当前 path 必须与回执同源；空串守卫 = 无条件喂，

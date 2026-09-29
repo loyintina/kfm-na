@@ -187,6 +187,43 @@ impl ReaderPage {
         self.epoch += 1;
     }
 
+    /// 缓存先画（BAR-187）：本地缓存副本立即上屏，eof 置真挡住续块请求
+    /// （缓存只知全文不知源字节账，consumed 归零等 refresh 重建）；后台
+    /// refresh 首块走 `apply_refresh0` 换芯。text 由调用方带声明头
+    pub fn apply_cached(&mut self, text: &str) {
+        self.text = text.to_string();
+        self.consumed = 0;
+        self.chunks = 0;
+        self.eof = true;
+        self.capped = false;
+        self.loading = false;
+        self.phase = ReaderPhase::Reading;
+        self.epoch += 1;
+    }
+
+    /// 后台换芯首块（BAR-187）：缓存视图在屏时 refresh 的 offset=0 回执——
+    /// 重置正文与块账（声明头随之摘除）后按正常块入账；**只在缓存先画后**
+    /// 合法（否则与 apply_chunk 重复入账），后续续块照常走 apply_chunk
+    pub fn apply_refresh0(&mut self, next_offset: u64, truncated: bool, text: &str) {
+        self.text = text.to_string();
+        self.consumed = next_offset;
+        self.chunks = 1;
+        self.loading = false;
+        self.phase = ReaderPhase::Reading;
+        self.eof = !truncated;
+        self.capped = false;
+        self.epoch += 1;
+    }
+
+    /// 后台换芯失败（BAR-187）：缓存视图留场不动，只摘在途账（不摘会让
+    /// next_request 永远 None 卡死后续操作）
+    pub fn refresh_failed(&mut self) {
+        if self.loading {
+            self.loading = false;
+            self.epoch += 1;
+        }
+    }
+
     /// 二进制回执（服务端 NUL 探测）：拒读占位
     pub fn apply_binary(&mut self) {
         self.phase = ReaderPhase::Binary;

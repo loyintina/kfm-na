@@ -180,3 +180,56 @@ fn spec_bar174_缓存接线守卫() {
         "request_content 失败回退必须读缓存正文文件"
     );
 }
+
+// ---- BAR-187 文件树本地缓存接线守卫（源码钉，模板 = spec_bar174_缓存接线守卫）----
+
+const FS_FETCH: &str = include_str!("../src/fs_fetch.rs");
+
+#[test]
+fn spec_bar187_缓存接线守卫() {
+    // ① 壳必须喂缓存根（BAR-174 同位同律）：没喂 = 缓存层静默关闭
+    assert!(
+        APP.contains("crate::fs_fetch::set_cache_root("),
+        "壳必须调 fs_fetch::set_cache_root（文件树本地缓存根）"
+    );
+    assert!(
+        APP.contains(r#".join("cache/fs")"#),
+        "缓存根必须落 <私有目录>/cache/fs"
+    );
+    // ② list 必须先灌缓存再 spawn 后台 GET（顺序反了 = 弱网秒开承诺失效）
+    let req = FS_FETCH.find("pub fn request_list(").expect("request_list");
+    let serve = FS_FETCH
+        .find("serve_list_cache(&dir, false)")
+        .expect("缓存先灌调用");
+    let spawn = FS_FETCH[req..]
+        .find("spawn_list(dir, false, had_cache)")
+        .map(|i| req + i)
+        .expect("request_list 起 spawn_list");
+    assert!(
+        req < serve && serve < spawn,
+        "request_list 必须先 serve_list_cache 再 spawn_list"
+    );
+    // ③ 失败决策必过 list_fail_goes_old 闸（有缓存不走 fail）
+    assert!(
+        FS_FETCH.contains("if list_fail_goes_old(had_cache)"),
+        "list 失败必须过 list_fail_goes_old 闸"
+    );
+    // ④ 阅读页缓存先画 + 换芯三件套（核方法全被取数面消费）
+    assert!(
+        FS_FETCH.contains("serve_read_cache(&path)"),
+        "首块必须先 serve_read_cache"
+    );
+    assert!(
+        FS_FETCH.contains("st.apply_refresh0(next, trunc, text)"),
+        "缓存先画后 refresh 首块必须走 apply_refresh0 换芯"
+    );
+    assert!(
+        FS_FETCH.contains("st.refresh_failed()"),
+        "缓存先画后 refresh 失败必须 refresh_failed 摘账"
+    );
+    // ⑤ 写透只在真源完整读完（trunc=false 才进写透段）
+    assert!(
+        FS_FETCH.contains("read_cache_json(&path, &t)"),
+        "真源 eof 才 read_cache_json 写透"
+    );
+}

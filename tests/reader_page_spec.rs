@@ -209,3 +209,52 @@ fn spec_reader_close回写_mem留本体清() {
     p.tick_restore(1000, 100);
     assert_eq!(p.scroll, 30, "close 后重开照样恢复");
 }
+
+// ---- BAR-187：正文缓存先画 + 后台换芯（阅读页核三方法）----
+
+#[test]
+fn spec_bar187_缓存先画_eof挡续块() {
+    let mut p = ReaderPage::new();
+    open_and_first_chunk(&mut p, "x/a.md");
+    // 缓存先画：正文上屏、eof 挡续块请求（缓存不知源字节账）
+    p.apply_cached("> （本地缓存副本）\n\n旧正文");
+    assert_eq!(p.phase, ReaderPhase::Reading);
+    assert!(p.text.contains("旧正文"));
+    assert!(!p.loading, "缓存上屏摘在途账");
+    assert!(p.eof, "缓存视图 eof 挡续块");
+    assert_eq!(p.next_request(), None, "缓存视图期间不发续块");
+}
+
+#[test]
+fn spec_bar187_换芯首块_重置正文与块账() {
+    let mut p = ReaderPage::new();
+    open_and_first_chunk(&mut p, "x/a.md");
+    p.apply_cached("> （本地缓存副本）\n\n旧正文");
+    // refresh 首块到位：声明头随旧正文一起换掉，块账从 1 重起
+    p.apply_refresh0(50, true, "新鲜上半");
+    assert_eq!(p.text, "新鲜上半", "缓存声明头与旧正文被换掉");
+    assert!(!p.eof, "truncated=true 继续等续块");
+    // 续块照常走 apply_chunk（consumed 已被 refresh0 重建为 50）
+    assert_eq!(p.next_request(), Some(50));
+    p.apply_chunk(50, 100, false, "下半");
+    assert_eq!(p.text, "新鲜上半下半");
+    assert!(p.eof);
+}
+
+#[test]
+fn spec_bar187_换芯失败_缓存留场摘在途() {
+    let mut p = ReaderPage::new();
+    open_and_first_chunk(&mut p, "x/a.md");
+    p.apply_cached("缓存正文");
+    p.mark_loading(); // refresh 在途
+    let e = p.epoch;
+    p.refresh_failed();
+    assert!(!p.loading, "失败摘在途账（不摘 = next_request 永 None）");
+    assert!(p.epoch > e);
+    assert_eq!(p.text, "缓存正文", "缓存视图留场不动");
+    assert_eq!(p.phase, ReaderPhase::Reading);
+    // 空账幂等：不在途时调用零效果（不涨代际——本体②）
+    let e2 = p.epoch;
+    p.refresh_failed();
+    assert_eq!(p.epoch, e2, "不在途 refresh_failed 空涨代际 = 白烘");
+}

@@ -4454,6 +4454,9 @@ impl App {
             // 同步落盘，启动 attach 时读回；拿不到目录 = 纯内存旧行为
             self.offline_keys
                 .attach_wal(&dir.join("cache/offline-input.wal"));
+            // 文件树本地缓存根（BAR-187）：<私有目录>/cache/fs——list/read
+            // 两柜缓存先画后台换鲜；拿不到目录 = 缓存层关闭（纯远端）
+            crate::fs_fetch::set_cache_root(dir.join("cache/fs"));
         }
         // 文件树数据面（BAR-165）：同一隧道本地口喂取数器；状态核注册全局
         // （三处涂装 + 手势 + 取数同源一份，与 parser_page_handle 同形制）。
