@@ -2709,6 +2709,15 @@ impl TermView {
         self.active_term_mut().scroll_display(Scroll::Bottom);
     }
 
+    /// 追平落地帧（BAR-186 臂②追赶模式）：跳底 + 像素零头归零——
+    /// scroll_to_bottom 不清 scroll_frac_px，追赶期压帧后亮出的这一帧
+    /// 必须一刀齐（零头归零先例：enter_browse_term/take_browse_canvas/
+    /// exit_browse 三处同做）
+    pub fn land_bottom(&mut self) {
+        self.active_term_mut().scroll_display(Scroll::Bottom);
+        self.scroll_frac_px = 0.0;
+    }
+
     /// 当前显示偏移（行，0 = 贴底）——B 档考题钉 + 实拍上报用
     pub fn display_offset(&self) -> usize {
         self.active_term().grid().display_offset()
@@ -9679,6 +9688,8 @@ pub trait TermEmu: Send {
     fn take_tofu_chars(&self) -> Vec<char>;
     fn scroll_lines(&mut self, lines: i32);
     fn scroll_to_bottom(&mut self);
+    /// 追平落地帧（BAR-186 臂②）：跳底 + 像素零头归零一刀齐
+    fn land_bottom(&mut self);
     /// 当前视野纯文本导出（调试闸门 text-req 通道；跟随滚动位置，对齐「所见」）
     fn dump_text(&self) -> String;
     fn mouse_report_active(&self) -> bool;
@@ -10110,6 +10121,9 @@ impl TermEmu for TermView {
     }
     fn scroll_to_bottom(&mut self) {
         TermView::scroll_to_bottom(self)
+    }
+    fn land_bottom(&mut self) {
+        TermView::land_bottom(self)
     }
     fn dump_text(&self) -> String {
         TermView::dump_text(self)

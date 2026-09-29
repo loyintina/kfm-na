@@ -340,6 +340,9 @@ struct App {
     sess_modes: std::collections::HashMap<&'static str, u32>,
     /// 有新输出/尺寸变化待渲染
     dirty: bool,
+    /// 追赶模式状态机（BAR-186 臂②）：弱网滴灌/重连窗口压帧——字节
+    /// 照喂 grid 但不置脏，追平（静默窗满/播种尾锚）后一帧跳底亮出
+    catchup: crate::catchup::Catchup,
     /// 自重启武装态翻相泵的上次值（BAR-149：武装/落回是时间函数，
     /// 无事件驱动——about_to_wait 每圈照准，翻相即置脏重烘钮面）
     restart_armed_last: bool,
@@ -5836,6 +5839,11 @@ impl App {
                             e.seeded_ms = now;
                             e.feed.built();
                         }
+                        // BAR-186 臂②：播种尾锚到达 = 追平判据二——追赶中
+                        // 立即落地一帧（稳态撞锚 = None，不抢稳态的画）
+                        if self.catchup.anchor() == crate::catchup::CatchAct::Land {
+                            self.catchup_land();
+                        }
                         if browsing {
                             // 当前会话浏览中：新画布直接 swap 进视图
                             if let Some(t) = self.term_handle() {
@@ -5902,6 +5910,18 @@ impl App {
         }
     }
 
+    /// 追平落地帧（BAR-186 臂②）：跳底+像素零头归零+置脏亮出。
+    /// 用户上翻读历史中（display_offset>0）不抢滚动条——只补画不跳底
+    fn catchup_land(&mut self) {
+        if let Some(t) = self.term_handle() {
+            let mut g = t.lock().unwrap();
+            if g.display_offset() == 0 {
+                g.land_bottom();
+            }
+        }
+        self.dirty = true;
+    }
+
     /// 动作执行（薄壳）：相位判定全在 ctrl_feed（A 档纯逻辑，BAR-155
     /// 钉死），本壳只把动作枚举翻译成平台操作（喂画布/起构建线程/
     /// 判负退避/逼对账/拆除）。当前会话浏览中 → 字节即达即画；其余
@@ -5916,7 +5936,13 @@ impl App {
                         .term_handle()
                         .is_some_and(|t| t.lock().unwrap().feed_browse(&bytes));
                 if fed {
-                    self.dirty = true; // 浏览中：字节即达即画
+                    // BAR-186 臂②：追赶期字节照喂 grid 但不置脏——弱网
+                    // 滴灌「每包一帧」= 用户看到的疯狂慢滚；追平落地帧
+                    // 统一亮出（tick 静默窗 / anchor 播种尾锚 → catchup_land）
+                    let now = crate::report::boot_ms();
+                    if !self.catchup.note_bytes(now, bytes.len()) {
+                        self.dirty = true; // 稳态浏览中：字节即达即画
+                    }
                 } else if let Some(e) = self.warm_pool.get_mut(name)
                     && let Some(canvas) = &mut e.canvas
                 {
@@ -6586,6 +6612,9 @@ impl App {
     }
 
     fn respawn_session(&mut self, name: &'static str) {
+        // BAR-186 臂②：重连 = 一波重播种/重画风暴的开端——进追赶模式，
+        // 窗口内字节喂格不置脏，追平（静默窗/播种尾锚）后一帧跳底亮出
+        self.catchup.enter(crate::report::boot_ms());
         let handle = match name {
             "local" => self
                 .base
@@ -6739,10 +6768,20 @@ impl App {
             .map_or("", |r| r.lock().unwrap().active_name());
         // 终端还没建好就不 pump:Output 堆 mpsc 不丢(同旧制),控制事件
         // 等得起(首轮 about_to_wait 前终端必就位——init_terminal 先跑)
-        if let Some(t) = self.term_handle()
-            && crate::gate::pump_once(active, &mut |b| t.lock().unwrap().feed(b))
-        {
-            self.dirty = true;
+        let mut pump_bytes = 0usize;
+        let pumped = self.term_handle().is_some_and(|t| {
+            crate::gate::pump_once(active, &mut |b| {
+                pump_bytes += b.len();
+                t.lock().unwrap().feed(b);
+            })
+        });
+        if pumped {
+            // BAR-186 臂②：追赶期（重连风暴/弱网滴灌洪峰）字节照喂 grid
+            // 不置脏——每包一帧 = 用户报障的疯狂慢滚；追平一帧跳底亮出
+            let now = crate::report::boot_ms();
+            if !self.catchup.note_bytes(now, pump_bytes) {
+                self.dirty = true;
+            }
         }
         for (name, ev) in crate::gate::pump_take_control() {
             self.on_session_event(name, ev, name == active);
@@ -10578,6 +10617,11 @@ impl ApplicationHandler for App {
                 "loop",
                 &format!("事件循环心跳 jni(commit={ce}/{cp} key={sk} log={il})"),
             );
+        }
+        // BAR-186 臂②：追赶静默窗满 → 追平落地帧（跳底+零头归零+置脏），
+        // 置于脏帧泵之前——本圈置的脏本圈即画
+        if self.catchup.tick(crate::report::boot_ms()) == crate::catchup::CatchAct::Land {
+            self.catchup_land();
         }
         // 降频泵(2026-08-26,挂单①治理):Poll 全速空转实测 ~57k 圈/s,
         // 白烧 CPU/电。双闸——①有脏才请求重绘(空圈不 redraw);②节拍改

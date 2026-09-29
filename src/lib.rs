@@ -9,6 +9,7 @@ pub mod ai_presence;
 pub mod bootstrap;
 pub mod brain;
 pub mod brain_ep;
+pub mod catchup;
 pub mod conn;
 pub mod crash;
 pub mod ctrl_feed;
