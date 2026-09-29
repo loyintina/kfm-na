@@ -46,7 +46,7 @@
 | `src/self_restart.rs` | 11 | 5 | 6 | FLAG_REL set_files_dir button_label poll_flag restart restart |
 | `src/sess_mode.rs` | 3 | 3 | 0 | — |
 | `src/sess_pool.rs` | 31 | 27 | 4 | TAIL_EVENTS CACHE_NOTICE take_dirty request_routes |
-| `src/session.rs` | 11 | 11 | 0 | — |
+| `src/session.rs` | 14 | 14 | 0 | — |
 | `src/session_router.rs` | 11 | 11 | 0 | — |
 | `src/settings.rs` | 14 | 9 | 5 | parse QUIC_DEFAULT_PORT QUIC_REVERSE_PORT MD_FONT_STOPS MD_RATIO_STOPS |
 | `src/singleton.rs` | 7 | 4 | 3 | LOCK_PATH lock_exclusive try_acquire |

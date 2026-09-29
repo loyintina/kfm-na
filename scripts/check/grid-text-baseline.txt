@@ -1,9 +1,9 @@
-src/android_app.rs:9259:text_width
-src/android_app.rs:9259:text_width
-src/android_app.rs:9280:text_width
-src/android_app.rs:9308:text_width
-src/android_app.rs:9309:text_width
-src/android_app.rs:9313:text_width
+src/android_app.rs:9293:text_width
+src/android_app.rs:9293:text_width
+src/android_app.rs:9314:text_width
+src/android_app.rs:9342:text_width
+src/android_app.rs:9343:text_width
+src/android_app.rs:9347:text_width
 src/termview.rs:3612:draw_items_left
 src/termview.rs:3724:measure_items
 src/termview.rs:3738:measure_items

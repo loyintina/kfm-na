@@ -166,3 +166,21 @@ pub fn auto_respawn_due(last_auto_respawn_ms: Option<u64>, now_ms: u64) -> bool 
         Some(t) => now_ms.saturating_sub(t) >= MIN_AUTO_RESPAWN_MS,
     }
 }
+
+/// 预热池名单拉取退避基数（BAR-182，2026-09-29 redroid 实烧定罪）：对端
+/// 死亡时「名单未落地先拉」臂（android_app::ctrl_ensure）每圈重发 List，
+/// 重试节奏 = ws 握手失败延迟（redroid 实测 2.5Hz 永动、实烧 ~3 核，
+/// logcat 「tmux 插件: 执行失败 连接失败」刷屏）——与 BAR-132 瞬死案同族，
+/// 那边有时间闸这边漏了。指数退避：连败 n 次间隔 = min(BASE·2^(n-1), CAP)。
+pub const LIST_RETRY_BASE_MS: u64 = 1_000;
+/// 退避封顶（与预热池停放养档 30s 同尺）
+pub const LIST_RETRY_CAP_MS: u64 = 30_000;
+
+/// 名单拉取退避表（A 档纯函数，钉 tests/session_spec.rs）：
+/// 连败 1/2/3/4/5/6+ 次 → 1s/2s/4s/8s/16s/30s 封顶。fails=0 防御按基数
+/// 返回（正常路径首败即 1 起记）。shift 钳 15 位防溢出（先 min CAP 也
+/// 拦住了，双保险）。成功或隧道可用沿由调用方把连败账归零。
+pub fn list_retry_backoff_ms(fails: u32) -> u64 {
+    let shift = fails.saturating_sub(1).min(15);
+    (LIST_RETRY_BASE_MS << shift).min(LIST_RETRY_CAP_MS)
+}

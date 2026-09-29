@@ -254,3 +254,37 @@ fn spec_时钟回拨压住不炸() {
     assert!(!auto_respawn_due(Some(5000), 1000));
     assert!(!auto_respawn_due(Some(u64::MAX), 0));
 }
+
+// ---- 预热池名单拉取退避（2026-09-29 BAR-182，A 档）----
+// 约束 src/session.rs list_retry_backoff_ms：对端死亡时预热池
+// 「名单未落地先拉」臂（ctrl_ensure 每圈）曾零退避重发 List——节奏 =
+// ws 握手失败延迟，redroid 实测 2.5Hz 永动、logcat 刷屏、实烧 ~3 核
+// （与 BAR-132 瞬死案同族）。指数退避：1s 起翻倍增、30s 封顶；
+// 成功/隧道可用沿归零（调用方账）。
+
+use kfm_na::session::{LIST_RETRY_BASE_MS, LIST_RETRY_CAP_MS, list_retry_backoff_ms};
+
+#[test]
+fn spec_bar182_连败指数翻倍() {
+    assert_eq!(list_retry_backoff_ms(1), 1_000);
+    assert_eq!(list_retry_backoff_ms(2), 2_000);
+    assert_eq!(list_retry_backoff_ms(3), 4_000);
+    assert_eq!(list_retry_backoff_ms(4), 8_000);
+    assert_eq!(list_retry_backoff_ms(5), 16_000);
+}
+
+#[test]
+fn spec_bar182_封顶30s() {
+    assert_eq!(list_retry_backoff_ms(6), LIST_RETRY_CAP_MS);
+    assert_eq!(list_retry_backoff_ms(100), LIST_RETRY_CAP_MS);
+    assert_eq!(list_retry_backoff_ms(u32::MAX), LIST_RETRY_CAP_MS);
+}
+
+#[test]
+fn spec_bar182_零连败防御按基数() {
+    // 正常路径首败即 1 起记；0 防御返回基数（不 panic 不返回 0 ——
+    // 返回 0 = 退避闸形同虚设）
+    assert_eq!(list_retry_backoff_ms(0), LIST_RETRY_BASE_MS);
+    assert_eq!(LIST_RETRY_BASE_MS, 1_000);
+    assert_eq!(LIST_RETRY_CAP_MS, 30_000);
+}

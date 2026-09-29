@@ -573,6 +573,13 @@ struct App {
     /// 预热名单（parser List 落地时同步——池只随服务器真表扩缩；
     /// 空账时 cur_attached 单名兜底，名单落地即扩全）
     warm_names: Vec<String>,
+    /// 名单拉取退避账（BAR-182）：连败次数 + 下次放行时刻（boot_ms 口径）。
+    /// 对端死亡时 List 必败 → 名单永空 → ctrl_ensure「名单未落地先拉」臂
+    /// 曾每圈重发（节奏 = 握手失败延迟，redroid 实测 2.5Hz 永动烧 ~3 核）。
+    /// 指数退避只闸自动臂（手动刷新不过闸）；成功/隧道可用沿归零。
+    warm_list_fails: u32,
+    /// 同上——下次放行时刻（0 = 立即放行）
+    warm_list_retry_ms: u64,
     /// 远程连接配置缓存（启动时装配 conn_provider 那份的 clone）——
     /// tmux 执行通道的 ws url 与 attach 重开连接的命令来源
     remote_conn_cfg: Option<crate::conn::ConnConfig>,
@@ -5635,7 +5642,9 @@ impl App {
             return;
         }
         // 名单未落地先拉（池扩缩只随服务器真表；refresh 在途不叠自重）
-        if self.warm_names.is_empty() {
+        // BAR-182：退避闸——连败未够钟不开火（对端死亡时每圈重发 =
+        // 2.5Hz 永动烧核，redroid 定罪实录；手动刷新不过此闸）
+        if self.warm_names.is_empty() && now >= self.warm_list_retry_ms {
             self.parser_refresh();
         }
         // 目标名单 = 真表 ∩ 容量帽 + 当前附着兜底（名单未落地/附着不在
@@ -6431,6 +6440,9 @@ impl App {
             (ParserExec::List, Ok(out)) => {
                 let ss = crate::tmux_ctl::parse_session_list(&out);
                 crate::report::report("ui", &format!("tmux 插件: 会话表 {} 条", ss.len()));
+                // BAR-182：名单落地 = 退避账归零（自动臂下一圈即放行）
+                self.warm_list_fails = 0;
+                self.warm_list_retry_ms = 0;
                 // v4 预热池名单同步（池扩缩唯一凭据 = 服务器真表）；
                 // 只同步服务器相名单——本地相预热池本就不存活
                 if crate::endpoint::current() == crate::endpoint::EndpointKind::Server {
@@ -6492,6 +6504,24 @@ impl App {
             }
             (ParserExec::Kill, Ok(_)) | (ParserExec::Reflow, Ok(_)) => {
                 self.parser_refresh();
+            }
+            (ParserExec::List, Err(e)) => {
+                // BAR-182：名单拉取连败记账 + 指数退避（退避表 =
+                // session::list_retry_backoff_ms，A 档钉着）——闸只拦
+                // ctrl_ensure 的自动臂，用户手动刷新照旧即时
+                self.warm_list_fails = self.warm_list_fails.saturating_add(1);
+                let wait = crate::session::list_retry_backoff_ms(self.warm_list_fails);
+                self.warm_list_retry_ms = crate::report::boot_ms() as u64 + wait;
+                crate::report::report(
+                    "ui",
+                    &format!(
+                        "tmux 插件: 执行失败 {e}（名单第 {} 连败，{wait}ms 后自动重试）",
+                        self.warm_list_fails
+                    ),
+                );
+                if let Some(p) = &self.parser_page {
+                    p.lock().unwrap().set_error(e);
+                }
             }
             (_, Err(e)) => {
                 crate::report::report("ui", &format!("tmux 插件: 执行失败 {e}"));
@@ -6660,6 +6690,10 @@ impl App {
                 let prev_usable = self.last_tunnel_usable;
                 self.last_tunnel_usable = crate::tunnel::usable(&state);
                 if crate::tunnel::usable_edge_kick(prev_usable, &state, self.session_over) {
+                    // BAR-182：传输恢复 = 名单拉取退避账归零（下一圈即放行，
+                    // 不等退避钟——传输死了才连败，传输活了就该立刻补拉）
+                    self.warm_list_fails = 0;
+                    self.warm_list_retry_ms = 0;
                     let name = self
                         .router_handle()
                         .map(|r| r.lock().unwrap().active_name());
