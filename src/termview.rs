@@ -3832,84 +3832,9 @@ impl TermView {
         }
     }
 
-    /// 快捷键行标签：水平居中 + 垂直居中光栅文本。主字体缺字形走 CJK 备用
-    /// （↑↓←→ 的命），双缺记 tofu 目击名单后跳过（不画方框吓唬人）。
-    /// fg = 文字色（快捷键行 KEYBAR_LABEL / AI 页 AI_PAGE_FG）
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn draw_label(
-        &self,
-        frame: &mut Frame<'_>,
-        text: &str,
-        cx: u32,
-        cw: u32,
-        cy: u32,
-        rh: u32,
-        fg: u32,
-    ) {
-        let px = rh as f32 * 0.26; // 字号：行高的 1/4 左右（实拍「太大」后收敛）
-        let Some(hm) = self.font.horizontal_line_metrics(px) else {
-            return;
-        };
-        // 逐字挑字体（与 draw_glyph 同规则），顺便算总宽
-        let pick = |c: char| -> Option<&fontdue::Font> {
-            if self.font.lookup_glyph_index(c) != 0 {
-                Some(&self.font)
-            } else if let Some(k) = &self.cjk {
-                if k.font.lookup_glyph_index(c) != 0 {
-                    Some(&k.font)
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        };
-        let mut glyphs = Vec::new();
-        let mut width = 0.0f32;
-        for c in text.chars() {
-            let Some(f) = pick(c) else {
-                let mut seen = self.tofu_seen.borrow_mut();
-                if !seen.contains(&c) && seen.len() < 16 {
-                    seen.push(c); // 标签缺字也上报（↑ 在不在设备字体里，问机器）
-                }
-                continue;
-            };
-            let m = f.metrics(c, px);
-            glyphs.push((f, c, m.advance_width));
-            width += m.advance_width;
-        }
-        if glyphs.is_empty() {
-            return;
-        }
-        let mut pen_x = cx as f32 + (cw as f32 - width).max(0.0) / 2.0;
-        // 垂直居中：行内盒（ascent-descent）放进键格正中
-        let baseline = cy as f32 + (rh as f32 - (hm.ascent - hm.descent)) / 2.0 + hm.ascent;
-        for (f, c, adv) in glyphs {
-            let g = self.rasterize_cached(f, c, px); // BAR-102：缓存光栅
-            let (m, bmp) = (&g.0, &g.1);
-            let top = baseline - m.ymin as f32 - m.height as f32;
-            for gy in 0..m.height as u32 {
-                let y = top as i64 + i64::from(gy);
-                if y < 0 || y >= i64::from(frame.h) {
-                    continue;
-                }
-                for gx in 0..m.width as u32 {
-                    let x = (pen_x + m.xmin as f32) as i64 + i64::from(gx);
-                    if x < 0 || x >= i64::from(frame.w) {
-                        continue;
-                    }
-                    let a = u32::from(bmp[(gy * m.width as u32 + gx) as usize]);
-                    if a > 0 {
-                        frame.blend_px(x as u32, y as u32, fg, a);
-                    }
-                }
-            }
-            pen_x += adv;
-        }
-    }
-
-    /// 逐字挑字体（输入栏文本规则，与 draw_label 同）：主字体缺走 CJK
-    /// 备用，双缺 = None（调用方记 tofu）
+    /// 逐字挑字体（输入栏/网格引擎文本规则，BAR-195 前键栏 draw_label
+    /// 同——该件已随网格引擎收编退役）：主字体缺走 CJK 备用，双缺 =
+    /// None（调用方记 tofu）
     fn pick_font(&self, c: char) -> Option<&fontdue::Font> {
         if self.font.lookup_glyph_index(c) != 0 {
             Some(&self.font)
@@ -8749,20 +8674,25 @@ impl TermView {
         let Some((retry, local)) = crate::ui::down_card::btn_rects(buf_w) else {
             return;
         };
-        // 状态行：左对齐，距左粗缘 1 格内垫；右缘让到重试钮前 1 格
-        let text_x = cx + 10 + i64::from(crate::termview::CELL_W);
+        // 状态行：左对齐，距左粗缘 1 格内垫 + 18px 文内缩（旧 draw_text_left
+        // 自带内缩等额保留）；右缘让到重试钮前 1 格。网格文字引擎收编
+        // （BAR-195：字号吃 grid_fit 实例格 pinch 联动，30px 字面量退役）
+        let text_x = cx + 10 + i64::from(crate::termview::CELL_W) + 18;
         let text_w = (retry.0 - i64::from(crate::termview::CELL_W) - text_x).max(0) as u32;
         if text_w > 0 {
             let (_, ry, _, rh) = crate::ui::down_card::row_rect(buf_w).unwrap();
-            self.draw_text_left(
+            let (items, _) = self.measure_items_grid(status);
+            let y_top = ry + (i64::from(rh) - i64::from(self.cell_h)).max(0) / 2;
+            self.draw_grid_text_left(
                 frame,
-                status,
-                text_x as u32,
+                &items,
+                text_x,
+                y_top,
+                self.cell_w,
                 text_w,
-                ry as u32,
-                rh,
-                30.0,
                 TERM_FRAME_C1,
+                0,
+                None,
             );
         }
         // 双钮 = 三级框行同件（渐变参照吃页尺原位，BAR-096 保真条同规）
@@ -8779,7 +8709,17 @@ impl TermView {
                 (0, 0, denom),
                 0,
             );
-            self.draw_text_centered(frame, label, b.0, b.1, b.2, b.3, 30.0, TERM_FRAME_C1, b.0);
+            self.draw_grid_text_centered(
+                frame,
+                label,
+                b.0,
+                b.1,
+                b.2,
+                b.3,
+                TERM_FRAME_C1,
+                b.0,
+                None,
+            );
         }
     }
 

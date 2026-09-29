@@ -54,14 +54,19 @@ impl crate::termview::TermView {
                 };
                 // 圆角药丸键格（内缩出缝，圆角半径 14px）
                 frame.fill_round_rect(x + 3, y + 3, cell_w - 6, keybar::ROW_H_PX - 6, 14, bg);
-                self.draw_label(
+                // 标签字形居中（网格文字引擎，BAR-195：量宽=总格×格宽、
+                // 线盒=实例格高、字号吃 grid_fit pinch 联动——draw_label
+                // 的 rh×0.26 字面量与自然步进退役）
+                self.draw_grid_text_centered(
                     &mut frame,
                     kd.label,
-                    x,
+                    i64::from(x),
+                    i64::from(y),
                     cell_w,
-                    y,
                     keybar::ROW_H_PX,
                     self.theme.keybar.label,
+                    i64::from(x),
+                    None,
                 );
             }
         }
