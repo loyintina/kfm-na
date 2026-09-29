@@ -6,11 +6,14 @@
 
 ## 纪律链(提交前)
 
-- `chain.sh` — **唯一检查入口**(12 步)：防泄漏闸 → 零依赖闸 →
+- `chain.sh` — **唯一检查入口**(13 步)：防泄漏闸 → 零依赖闸 →
   **stats 字段咬合闸**(check/check-stats-format.sh,StatsSnap 加字段
   忘进 format! 不许过链，2026-08-27 评审建议落地）→ **na 信箱执法**
   (check/mailbox.sh,2026-09-29:na 册全册 verify + gen --check-only,
-  信箱目录不存在的双环境自动跳过)→ fmt → clippy →
+  信箱目录不存在的双环境自动跳过）→ **网格文字棘轮闸**
+  (check/grid-text-ratchet.sh,BAR-178:基线外新增自然步进文字调用点
+  不许过链，比对键 file:symbol 多重集——BAR-188 起行号不入键；
+  考题 check/test-grid-text-ratchet.sh 五夹具同段）→ fmt → clippy →
   android-check → javac → test → overlay/kfm-pkg 考题 → build。
   pre-commit 自动跑。
 - `check/` — chain 调用的单项检查（提交纪律闸门、stats 咬合闸、

@@ -67,6 +67,7 @@ grep -q 'check-fix-instrument' .githooks/commit-msg || { echo "❌ commit-msg �
 [ -x scripts/check/check-fix-instrument.sh ] || { echo "❌ check-fix-instrument.sh 缺失或不可执行"; exit 1; }
 [ -x scripts/check/grid-text-ratchet.sh ] || { echo "❌ grid-text-ratchet.sh 缺失或不可执行（BAR-178 棘轮闸不许静默退化）"; exit 1; }
 [ -f scripts/check/grid-text-baseline.txt ] || { echo "❌ grid-text-baseline.txt 缺失（BAR-178 棘轮基线）"; exit 1; }
+[ -x scripts/check/test-grid-text-ratchet.sh ] || { echo "❌ test-grid-text-ratchet.sh 缺失或不可执行（BAR-188 棘轮考题不许静默退化）"; exit 1; }
 
 echo "=== [chain 4/13] na 信箱执法（mailbox.sh） ==="
 # 2026-09-29 第 4 步：na 信箱（/root/.kfm/session/信箱）全册 verify +
@@ -76,8 +77,10 @@ bash scripts/check/mailbox.sh || { echo "❌ na 信箱执法不过"; exit 1; }
 
 echo "=== [chain 5/13] 网格文字棘轮闸（BAR-178，布局唯一源） ==="
 # 2026-09-29 用户拍板：新功能文字/布局不走网格引擎（ui::grid_text）= 红；
-# 存量登记 scripts/check/grid-text-baseline.txt，迁移一面收一面（只缩不涨）
+# 存量登记 scripts/check/grid-text-baseline.txt，迁移一面收一面（只缩不涨）。
+# BAR-188 改约：比对键 = file:symbol 多重集（行号不入键——插行平移不再误红）
 bash scripts/check/grid-text-ratchet.sh || { echo "❌ 网格文字棘轮闸不过"; exit 1; }
+bash scripts/check/test-grid-text-ratchet.sh || { echo "❌ 棘轮闸考题不过（BAR-188）"; exit 1; }
 
 echo "=== [chain 6/13] cargo fmt --check ==="
 # 2026-08-17 workspace 化（crates/cordis-na)：带根包的 workspace 里裸 cargo
