@@ -226,6 +226,10 @@ termview_spec host_cff 夹具，缺席 = 测试 panic 红）与 **fonts-dejavu
    机械合规红→当场修当场推。
 3. **信箱计数投影**由 kfmv4 侧 gen-agent-inbox 自动回写，na 侧不再
    手改计数（改也活不过下一次 gen）。
+4. **跨仓改动通告必写落地状态（2026-09-30，白露 0034 §三，断口教训）**：
+   任何改了别仓/本仓影响他线的改动，通告信里必须写明
+   `已提交 <hash>` 或 `未提交（在工作树）`——只说「改了什么」不说
+   「是否落仓」，读者无从判断主干安全性（0033 主干断口就是这么来的）。
 
 判例与全文：kfmv4 仓信箱 kfm-na-ops-convention-submission.md +
 kfmv4-review-ops-convention-verdict.md。
