@@ -64,3 +64,33 @@ fn spec_bar186_追赶接线守卫() {
         "land_bottom 必须同旧三先例一样清像素零头（scroll_frac_px 归零）"
     );
 }
+
+const OFFLINE: &str = include_str!("../src/offline_keys.rs");
+
+/// BAR-186 臂③ 输入 WAL 壳接线守卫
+#[test]
+fn spec_bar186_wal接线守卫() {
+    // ① 壳必须挂 WAL（BAR-174 缓存根同位）：不挂 = 进程死输入全灭照烂
+    assert!(
+        APP.contains(r#"attach_wal(&dir.join("cache/offline-input.wal"))"#),
+        "壳必须在私有目录就绪处 attach_wal（断线输入落盘）"
+    );
+    // ② 模块三件：读回 / 追加 / 重写——缺一臂 WAL 语义不全
+    assert!(
+        OFFLINE.contains("pub fn attach_wal")
+            && OFFLINE.contains("fn wal_append")
+            && OFFLINE.contains("fn wal_rewrite")
+            && OFFLINE.contains("fn hex_dec"),
+        "offline_keys 必须有 attach_wal/wal_append/wal_rewrite/hex_dec 四件"
+    );
+    // ③ 回冲清账：drain 必须 remove_file（不回冲 = 重启重放已发输入 = 事故）
+    assert!(
+        OFFLINE.contains("std::fs::remove_file"),
+        "drain 必须清 WAL 账（remove_file）——漏清 = 重启重复回冲"
+    );
+    // ④ 降级律：落盘失败摘 WAL 降级纯内存，不反复撞 IO 不 panic
+    assert!(
+        OFFLINE.contains("self.wal = None;"),
+        "落盘失败必须摘 WAL 降级（缓存是加强不是命脉）"
+    );
+}

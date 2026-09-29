@@ -4440,6 +4440,10 @@ impl App {
             .and_then(|a| a.internal_data_path())
         {
             crate::sess_pool::set_cache_root(dir.join("cache/letters"));
+            // 断线输入 WAL（BAR-186 臂③）：进程死队列全灭的修——push/drain
+            // 同步落盘，启动 attach 时读回；拿不到目录 = 纯内存旧行为
+            self.offline_keys
+                .attach_wal(&dir.join("cache/offline-input.wal"));
         }
         // 文件树数据面（BAR-165）：同一隧道本地口喂取数器；状态核注册全局
         // （三处涂装 + 手势 + 取数同源一份，与 parser_page_handle 同形制）。
