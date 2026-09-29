@@ -3934,53 +3934,8 @@ impl TermView {
         crate::ui::grid_text::grid_text_cells(text) * self.cell_w
     }
 
-    /// 输入栏量宽（2026-09-04 Enter 换行多逻辑行排版）：与 measure_items
-    /// 唯一差异——'\n' 保留为零宽条目，不被 pick_font 跳过。下游全家
-    /// （starts/光标/选区/锚点柄/菜单）建立在「item 下标 == char 下标
-    /// 1:1」假设上，'\n' 进序列才能一处不破。零宽光栅零面积，
-    /// draw_items_left 对它天然安全（循环不执行，不进墨）。
-    pub(crate) fn measure_bar_items(
-        &self,
-        text: &str,
-        px: f32,
-    ) -> Vec<(&fontdue::Font, char, f32)> {
-        let mut items = Vec::new();
-        for c in text.chars() {
-            if c == '\n' {
-                items.push((&self.font, '\n', 0.0));
-                continue;
-            }
-            let Some(f) = self.pick_font(c) else {
-                let mut seen = self.tofu_seen.borrow_mut();
-                if !seen.contains(&c) && seen.len() < 16 {
-                    seen.push(c);
-                }
-                continue;
-            };
-            items.push((f, c, f.metrics(c, px).advance_width));
-        }
-        items
-    }
-
-    /// 输入栏文本：左对齐（内缩 18px）+ 垂直居中，右缘按 cw 裁剪。
-    /// px = 显式字号（textarea 多行后字号不随行高缩，调用方给 BAR_TEXT_PX）
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn draw_text_left(
-        &self,
-        frame: &mut Frame<'_>,
-        text: &str,
-        cx: u32,
-        cw: u32,
-        cy: u32,
-        rh: u32,
-        px: f32,
-        fg: u32,
-    ) {
-        let items = self.measure_items(text, px);
-        self.draw_items_left(frame, &items, cx, cw, cy, rh, px, fg, None);
-    }
-
-    /// draw_text_left 全参版（四版配置页用）：显式内缩 + 纵裁剪带
+    /// 左对齐画字·全参版（四版配置页用；BAR-197 起基件 draw_text_left
+    /// 退役，本件独立存续）：显式内缩 + 纵裁剪带
     /// （池内滚动内容出池内缘即断墨——框/文字同一裁剪带，眼手同尺）
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn draw_text_left_ex(
@@ -10289,6 +10244,47 @@ impl TermView {
     /// 半角 1 格、零宽 0 格——不再吃 fontdue 自然步进）
     pub(crate) fn measure_items_grid(&self, text: &str) -> (Vec<GridItem<'_>>, u32) {
         self.measure_items_grid_scaled(text, 1.0)
+    }
+
+    /// 输入栏量宽·网格引擎版（BAR-197，0017 #10 面）：与
+    /// measure_items_grid 唯一差异——'\n' 保留为零宽条目（旧件
+    /// measure_bar_items 的 1:1 不变量原样承接：下游 starts/光标/选区/
+    /// 锚点柄/菜单全家建在「item 下标 == char 下标」假设上，'\n' 进序列
+    /// 才能一处不破）。步进（item.3）= char_cells × 实例格宽，字号
+    /// （item.2）= grid_fit 实例格（pinch 联动）；tofu 口径与旧件一致
+    /// （跳过+记账——tofu 字上 1:1 破例的诚实边界照旧）。
+    /// 零宽条目 draw_grid_text_left 天然安全（span ≤ 0 不进墨）
+    pub(crate) fn measure_bar_items_grid(&self, text: &str) -> Vec<GridItem<'_>> {
+        let (px, _bo, cpx, _cbo) = self.grid_fit();
+        let mut items = Vec::new();
+        for c in text.chars() {
+            if c == '\n' {
+                items.push((&self.font, '\n', px, 0.0));
+                continue;
+            }
+            let Some(f) = self.pick_font(c) else {
+                let mut seen = self.tofu_seen.borrow_mut();
+                if !seen.contains(&c) && seen.len() < 16 {
+                    seen.push(c);
+                }
+                continue;
+            };
+            let item_px = if std::ptr::eq(f, &self.font) { px } else { cpx };
+            let n = crate::ui::grid_text::char_cells(c);
+            items.push((f, c, item_px, n as f32 * self.cell_w as f32));
+        }
+        items
+    }
+
+    /// 考题专用通道（BAR-197 钉：'\n' 零宽条目保 item==char 1:1）——集成
+    /// 考卷摸不到 pub(crate) 件，经此薄壳直打量宽本体（单源不抄实现，
+    /// 同 spec_draw_items_left 先例）。返回 (字, 格步进宽 px) 序列
+    #[doc(hidden)]
+    pub fn spec_measure_bar_items_grid(&self, text: &str) -> Vec<(char, f32)> {
+        self.measure_bar_items_grid(text)
+            .iter()
+            .map(|it| (it.1, it.3))
+            .collect()
     }
 
     /// 字号缩放版量宽（BAR-194 跳框题注档：px = grid_fit × scale 保

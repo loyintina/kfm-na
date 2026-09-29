@@ -1606,6 +1606,34 @@ fn spec_bar_text_lines_硬换行计入行数() {
     assert_eq!(tv.bar_text_lines("ab", 1080), 1, "无换行仍一行（不退化）");
 }
 
+// BAR-197（0017 #10 面）：输入栏量宽迁网格引擎——item 下标 == char 下标
+// 1:1 不变量（'\n' 零宽条目保留）是全屋光标/选区/锚点柄/命中换算的承重
+// 墙；步进 = char_cells × 实例格宽（pinch 联动）。经 spec 薄壳直打量宽
+// 本体（spec_measure_bar_items_grid，单源不抄实现）
+#[test]
+fn spec_bar197_格量宽_换行零宽保1比1() {
+    let (mut tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必成");
+    let items = tv.spec_measure_bar_items_grid("a\n测");
+    assert_eq!(
+        items.len(),
+        3,
+        "item 下标 == char 下标 1:1（'\\n' 条目保留）"
+    );
+    assert_eq!(items[0].0, 'a');
+    assert_eq!(items[1], ('\n', 0.0), "'\\n' = 零宽条目");
+    assert_eq!(items[2].0, '测');
+    let (cw, _) = tv.cell_size();
+    assert_eq!(items[0].1, cw as f32, "半角步进 = 1 格");
+    assert_eq!(items[2].1, (cw * 2) as f32, "全角步进 = 2 格");
+    // pinch 联动：格宽翻倍步进翻倍，'\n' 恒零宽
+    tv.set_cell_size(cw * 2, 72);
+    let z = tv.spec_measure_bar_items_grid("a\n测");
+    assert_eq!(z.len(), 3, "pinch 后 1:1 不动");
+    assert_eq!(z[0].1, (cw * 2) as f32, "半角步进随格宽翻倍");
+    assert_eq!(z[2].1, (cw * 4) as f32, "全角步进随格宽翻倍");
+    assert_eq!(z[1], ('\n', 0.0), "'\\n' 恒零宽");
+}
+
 // ========== BAR-039：渲染带高从文本实测（stale lines 两张皮回归钉） ==========
 
 #[test]
@@ -1684,14 +1712,19 @@ fn spec_bar_caret_闪烁相位与定位柄() {
     assert_ne!(on[handle_px], noh[handle_px], "定位柄必须悬在光标行底");
     // BAR-042:柄稳显不随光标闪烁(off 相位下柄仍在)
     assert_eq!(off[handle_px], on[handle_px], "柄不随光标闪烁");
-    // 失焦不画光标(与相位灭同画素)
-    let unfocused = kfm_na::input_bar::BarSnap {
+    // 失焦不画光标（同聚焦态双相位对拍：失焦时相位亮/灭两帧在光标位
+    // 必须逐像素相等）。BAR-197 注：旧案跨聚焦态对拍（unf vs off），靠的是
+    // 旧 40.56px 占位符墨恰好盖住光标列——格引擎占位符（实例格字号）不再
+    // 盖住光标列，聚焦态底色差漏进探针；改同聚焦态对拍，判意不变且更直
+    let unfocused_off = kfm_na::input_bar::BarSnap {
         focused: false,
         ..focused.clone()
     };
     let mut unf = vec![0u32; (w * h) as usize];
-    tv.render_inputbar(&mut unf, w, h, 0, &unfocused, false, true);
-    assert_eq!(unf[caret_px], off[caret_px], "失焦无光标");
+    tv.render_inputbar(&mut unf, w, h, 0, &unfocused_off, false, true);
+    let mut unf_off = vec![0u32; (w * h) as usize];
+    tv.render_inputbar(&mut unf_off, w, h, 0, &unfocused_off, false, false);
+    assert_eq!(unf[caret_px], unf_off[caret_px], "失焦无光标（相位无关）");
 }
 
 #[test]
@@ -1783,12 +1816,15 @@ fn spec_composing_下划线稳显() {
 }
 
 // BAR-046: 文本选择系统渲染判卷——选区高亮像素+锚点稳显+菜单像素
+// （BAR-197 注：文本 10 字改 6 字——格量宽尺 6×2格×18=216px 恰好单行
+// 装得下（可用宽 230），保单行带几何行锚（行中心 1089）；10 字在格尺下
+// 360px 折两行，行锚整体下移——折行点移动是尺换格的题中之意）
 #[test]
 fn spec_selection_高亮与锚点稳显() {
     let (tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必成");
     let (w, h) = (600u32, 1200u32);
     let snap = kfm_na::input_bar::BarSnap {
-        text: "一二三四五六七八九十".to_string(),
+        text: "一二三四五六".to_string(),
         focused: true,
         lines: 1,
         cursor: 0,

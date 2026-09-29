@@ -9,6 +9,10 @@ const KEYBAR: &str = include_str!("../src/ui/keybar.rs");
 const TERMVIEW: &str = include_str!("../src/termview.rs");
 /// 设置页字段/下拉几何命中面（BAR-196：壳侧量宽与涂装同尺）
 const APP: &str = include_str!("../src/android_app.rs");
+/// 输入栏涂装面（BAR-197，0017 #10 面）
+const PROMPT: &str = include_str!("../src/ui/prompt_bar.rs");
+/// 输入栏状态核（BAR-197 行距格化取数口钉）
+const INPUTBAR: &str = include_str!("../src/input_bar.rs");
 
 #[test]
 fn spec_bar195_键栏断线卡_网格引擎接线守卫() {
@@ -81,5 +85,69 @@ fn spec_bar196_设置页解析页字段_网格引擎接线守卫() {
     assert!(
         TERMVIEW.contains("pub const GRID_META_SCALE: f32 = 30.0 / 36.0;"),
         "GRID_META_SCALE 常量必须在（30/36 层级差唯一源）"
+    );
+}
+
+#[test]
+fn spec_bar197_输入栏_网格引擎接线守卫() {
+    // ① 格量宽件定义在（'\n' 零宽条目保 item==char 1:1 的输入栏专用变体）。
+    // 咬 `fn measure_bar_items_grid(` 定义行（pub(crate) 前缀若被摘，
+    // 调用点照样编译过——与 spec_bar196 咬 pub fn 前缀同族教训）
+    assert!(
+        TERMVIEW.contains("fn measure_bar_items_grid("),
+        "TermView::measure_bar_items_grid 定义必须在（BAR-197 新增胶水）"
+    );
+    // ② 输入栏面（prompt_bar）旧件零残留：旧量宽件（新名含旧名子串，
+    // 先抹新名再查——spec_bar196 同款写法）/字面量字号/三个自然步进
+    // 落笔件全部清零
+    let prompt = PROMPT.replace("measure_bar_items_grid(", "");
+    assert!(
+        !prompt.contains("measure_bar_items("),
+        "输入栏不许回潮 measure_bar_items（旧自然步进量宽件）"
+    );
+    assert!(
+        !PROMPT.contains("BAR_TEXT_PX"),
+        "输入栏字面量字号常量已退役（字号吃实例格 pinch 联动）"
+    );
+    for old in ["draw_items_left(", "draw_text_left(", "draw_text_centered("] {
+        assert!(
+            !PROMPT.contains(old),
+            "输入栏不许回潮 {old}（旧自然步进落笔件）"
+        );
+    }
+    // ③ 格引擎调用面：量宽 ×4（渲染/量行/点按/选择几何）+ 落笔左对齐
+    // ×2（占位符+正文行）+ 菜单居中 ×1
+    assert!(
+        PROMPT.matches("measure_bar_items_grid(").count() >= 4,
+        "输入栏量宽四调用点必须全走 measure_bar_items_grid"
+    );
+    assert!(
+        PROMPT.matches("draw_grid_text_left(").count() >= 2,
+        "占位符+正文行必须走 draw_grid_text_left"
+    );
+    assert!(
+        PROMPT.matches("draw_grid_text_centered(").count() >= 1,
+        "选择菜单四钮必须走 draw_grid_text_centered"
+    );
+    // ④ 行距格化取数口在（pinch 联动的关键二分之一）
+    assert!(
+        INPUTBAR.contains("fn line_step("),
+        "input_bar::line_step 必须在（行距 = 7/4 格高唯一源）"
+    );
+    // ⑤ 旧量宽件整件退役：定义+调用零残留（termview 全册，先抹新名）
+    assert!(
+        !TERMVIEW
+            .replace("measure_bar_items_grid(", "")
+            .contains("measure_bar_items("),
+        "measure_bar_items 整件已退役（定义+调用零残留）"
+    );
+    // ⑥ 运行期行距渗透双端：渲染面与壳/闸门命中面都传运行期 step
+    assert!(
+        PROMPT.contains("line_step("),
+        "渲染面必须吃 line_step(实例格高)"
+    );
+    assert!(
+        APP.contains("bar_line_step("),
+        "壳侧命中/带高必须吃运行期行距（bar_line_step）"
     );
 }

@@ -22,8 +22,18 @@ pub const HEIGHT_PX: u32 = 220;
 /// 就超了」）；na 字号大（~40px 物理 vs kfmv4 有效 ~22px），取 5 行 = 带高
 /// 472px 封顶，再多就要吃掉半屏终端了
 pub const MAX_LINES: u32 = 5;
-/// 每多一行带高增量（px）= 行高：字号 ~40px × 1.5（kfmv4 line-height 直译）
-pub const LINE_STEP_PX: u32 = 63;
+/// 行距格化（BAR-197，0017 #10 面输入栏迁网格文字引擎）：行距 = 7/4 格高。
+/// 设计格（CELL_H=36）下 = 63 逐像素不变；pinch 改实例格高后行距/带高/
+/// 视口/滚动钳制全吃运行期 step——渲染/命中双端同传
+/// line_step(term.cell_size().1)，眼手同尺
+pub const fn line_step(cell_h: u32) -> u32 {
+    cell_h * 7 / 4
+}
+
+/// 每多一行带高增量（px）= 行高：字号 ~40px × 1.5（kfmv4 line-height 直译）。
+/// 设计格行距（line_step(CELL_H) = 63）——BAR-197 起运行期路径一律走
+/// line_step(实例格高)，本常量只剩设计格口径（考题/无 term 兜底）
+pub const LINE_STEP_PX: u32 = line_step(crate::termview::CELL_H);
 
 /// 文本区垂直内衬（px，BAR-049）：文字/高亮不贴 field 上下沿——2026-09-03
 /// 用户对照其他输入框实拍指正：kfmv4 `.ai-input` padding 14px CSS ≈ 40 物理
@@ -41,14 +51,18 @@ pub fn text_view_h(field_h: u32) -> u32 {
 /// 渲染/触摸几何/考题共用（眼手同尺）。
 pub const MENU_W: u32 = 640;
 pub const MENU_H: u32 = 120;
-/// 菜单按钮标签字号（与输入栏正文同号 40px——原 30 实拍偏小）
-pub const MENU_TEXT_PX: f32 = 40.0;
 
-/// 行数 → 带高（px）。0 行按 1 行计（空栏也是一行高）；超 MAX_LINES 封顶。
-/// 覆盖式悬浮：带长高只把栏带向上浮盖终端底部行，终端网格几何不动。
+/// 行数 → 带高（px，设计格行距口径）。0 行按 1 行计（空栏也是一行高）；
+/// 超 MAX_LINES 封顶。运行期路径（渲染/命中）走 height_for_lines_with_step
 pub fn height_for_lines(lines: u32) -> u32 {
+    height_for_lines_with_step(lines, LINE_STEP_PX)
+}
+
+/// 行数 → 带高（运行期行距版，BAR-197）：step = line_step(实例格高)。
+/// 覆盖式悬浮：带长高只把栏带向上浮盖终端底部行，终端网格几何不动。
+pub fn height_for_lines_with_step(lines: u32, step: u32) -> u32 {
     let n = lines.clamp(1, MAX_LINES);
-    HEIGHT_PX + (n - 1) * LINE_STEP_PX
+    HEIGHT_PX + (n - 1) * step
 }
 
 /// 文本可用宽（px）：屏宽 → 文本区宽（减左右留白/发送钮/缝隙）→ 减左内缩
@@ -61,8 +75,8 @@ pub fn text_avail_w(buf_w: u32) -> Option<f32> {
 
 /// 多逻辑行折行（2026-09-04 Enter 换行拍板）：与 termview::wrap_starts
 /// 同贪心断行算法，但遇 '\n' 无条件断行——'\n' 是它终止行的最后一字
-/// （零宽条目，termview::measure_bar_items 保留在 items 里，保
-/// 「item 下标 == char 下标 1:1」全家假设）。chars/widths 必须等长 1:1。
+/// （零宽条目，termview 输入栏量宽件（BAR-197 起 = measure_bar_items_grid）
+/// 保留在 items 里，保「item 下标 == char 下标 1:1」全家假设）。chars/widths 必须等长 1:1。
 /// 无 '\n' 时与 wrap_starts 逐字节一致（旧软折行为不退化）；
 /// 连续/行尾 '\n' 产空行（starts 可等于 items.len()，切片 [len..len]
 /// 安全）。A 档纯逻辑，考题 spec_multiline_starts_* 在
@@ -138,16 +152,28 @@ pub const ANCHOR_VISUAL_SIZE: u32 = 28;
 pub const ANCHOR_HIT_SIZE: u32 = 48;
 
 /// 视口几何（BAR-042 像素滚动；渲染与点按换算共用的纯函数——眼手同尺）。
-/// 给定折行行数与 field 高，输出：条带高（N×行高）、有效像素偏移
-/// （follow=尾锚=条带底贴 field 底；否则 scroll_px 钳制到
-/// [0, 条带高-field_h]）、文本顶相对 field_top 的留白（条带不足一屏时居中）
+/// 设计格行距口径；运行期路径走 viewport_geometry_with_step
 pub fn viewport_geometry(
     n_lines: u32,
     field_h: u32,
     follow: bool,
     scroll_px: i32,
 ) -> (u32, i32, u32) {
-    let strip_h = n_lines * LINE_STEP_PX;
+    viewport_geometry_with_step(n_lines, field_h, follow, scroll_px, LINE_STEP_PX)
+}
+
+/// 视口几何·运行期行距版（BAR-197）：step = line_step(实例格高)。
+/// 给定折行行数与 field 高，输出：条带高（N×行距）、有效像素偏移
+/// （follow=尾锚=条带底贴 field 底；否则 scroll_px 钳制到
+/// [0, 条带高-field_h]）、文本顶相对 field_top 的留白（条带不足一屏时居中）
+pub fn viewport_geometry_with_step(
+    n_lines: u32,
+    field_h: u32,
+    follow: bool,
+    scroll_px: i32,
+    step: u32,
+) -> (u32, i32, u32) {
+    let strip_h = n_lines * step;
     let max_eff = strip_h.saturating_sub(field_h) as i32;
     let eff = if follow {
         max_eff
@@ -645,19 +671,32 @@ impl InputBarState {
         }
     }
 
-    /// 视图拖动滚动·行单位（gate scroll 指令用；1 行 = LINE_STEP_PX）。
+    /// 视图拖动滚动·行单位（gate scroll 指令用；设计格口径 1 行 =
+    /// LINE_STEP_PX，运行期路径走 scroll_by_with_step）。
     /// 拖动 = 脱离跟随（不自动回锚），任何编辑操作回跟随
     pub fn scroll_by(&self, lines: i32, field_h: u32) {
-        self.scroll_by_px(lines * crate::input_bar::LINE_STEP_PX as i32, field_h);
+        self.scroll_by_with_step(lines, field_h, LINE_STEP_PX);
     }
 
-    /// 视口拖动滚动·像素单位（真指 1:1 跟手：dy 直接进偏移）。
-    /// px 正 = 往尾部，负 = 往头部。**写入即钳制**到
-    /// [0, 条带高-field_h]（BAR-041 同族教训：raw 越界累积 = 死区，
-    /// 「第一下失效/比例失真」的根因）——钳制需要 field_h，调用方给
+    /// 行单位滚动·运行期行距版（BAR-197）：1 行 = step（line_step(实例格高)）
+    pub fn scroll_by_with_step(&self, lines: i32, field_h: u32, step: u32) {
+        self.scroll_by_px_with_step(lines * step as i32, field_h, step);
+    }
+
+    /// 视口拖动滚动·像素单位（真指 1:1 跟手：dy 直接进偏移）。设计格行距
+    /// 口径；运行期路径走 scroll_by_px_with_step
     pub fn scroll_by_px(&self, px: i32, field_h: u32) {
+        self.scroll_by_px_with_step(px, field_h, LINE_STEP_PX);
+    }
+
+    /// 像素滚动·运行期行距版（BAR-197）：px 正 = 往尾部，负 = 往头部。
+    /// **写入即钳制**到
+    /// [0, 条带高-field_h]（BAR-041 同族教训：raw 越界累积 = 死区，
+    /// 「第一下失效/比例失真」的根因）——条带高 = 行数 × step，
+    /// 与渲染行距同尺才不错量程；钳制需要 field_h，调用方给
+    pub fn scroll_by_px_with_step(&self, px: i32, field_h: u32, step: u32) {
         let mut g = self.inner.lock().unwrap();
-        let strip_h = g.lines * crate::input_bar::LINE_STEP_PX;
+        let strip_h = g.lines * step;
         let max_eff = strip_h.saturating_sub(field_h) as i32;
         if g.follow {
             // BAR-043:尾锚→手动交接必须播种。raw 语义=距头顶偏移,

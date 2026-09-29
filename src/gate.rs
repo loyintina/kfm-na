@@ -125,9 +125,11 @@ pub fn dump_now(dir: &str) {
         let mut t = term.lock().unwrap();
         let ai_page = ai_snap.is_some_and(|s| s.page == crate::ai_presence::Page::AiFullscreen);
         // 当前栏带高（与 render_inputbar 同源实测折行——后台无 poll 写回，
-        // 实测才不得两张皮）——keybar inset 与前台同尺
+        // 实测才不得两张皮）——keybar inset 与前台同尺；BAR-197：行距吃
+        // 实例格高（pinch 联动，与渲染同一份 step）
+        let step = crate::input_bar::line_step(t.cell_size().1);
         let bar_h = bar_snap.as_ref().map_or(crate::input_bar::HEIGHT_PX, |bs| {
-            crate::input_bar::height_for_lines(t.bar_text_lines(&bs.text, w))
+            crate::input_bar::height_for_lines_with_step(t.bar_text_lines(&bs.text, w), step)
         });
         // AI 面板 Y 偏移与前台同尺过缝（2026-09-04 弹簧落下）：dump 是
         // 快照，采到中间值就画过渡帧——实拍判卷与前台同一画面
@@ -2276,9 +2278,22 @@ pub(crate) fn input_bar_handle() -> Option<Arc<crate::input_bar::InputBarState>>
 /// 闸门侧滚动钳制高:由当前折行数推 bar_h(input_bar 渲染同款公式),
 /// field = bar_h - 64，再收 TEXT_PAD_Y 内衬 = 文本视口高（BAR-049 与渲染
 /// 同尺——钳制尺若比渲染视口大，滚动行程两端各差 40px 眼手不同尺）。
-/// 供 scroll/scrollpx 指令钳制用
-fn gh_field_h(lines: u32) -> u32 {
-    crate::input_bar::text_view_h(crate::input_bar::height_for_lines(lines).saturating_sub(64))
+/// 供 scroll/scrollpx 指令钳制用。step = 运行期行距（BAR-197）
+fn gh_field_h(lines: u32, step: u32) -> u32 {
+    crate::input_bar::text_view_h(
+        crate::input_bar::height_for_lines_with_step(lines, step).saturating_sub(64),
+    )
+}
+
+/// 闸门侧运行期行距（BAR-197：dump 登记的 term 实例格高 → line_step；
+/// term 未登记 = 设计格保底）
+fn gh_line_step() -> u32 {
+    DUMP_TERM
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|t| crate::input_bar::line_step(t.lock().unwrap().cell_size().1))
+        .unwrap_or(crate::input_bar::LINE_STEP_PX)
 }
 
 /// 判卷:bar-inject 内容该不该消费(BAR-044)。空/纯空白 = writer 半截态,不消费,
@@ -2433,8 +2448,14 @@ fn bar_check(dir: &str) {
             }
             BarCmd::Composing(cs) => bar.set_composing(cs),
             BarCmd::ComposingEnd => bar.finish_composing(),
-            BarCmd::Scroll(n) => bar.scroll_by(*n, gh_field_h(bar.lines())),
-            BarCmd::ScrollPx(n) => bar.scroll_by_px(*n, gh_field_h(bar.lines())),
+            BarCmd::Scroll(n) => {
+                let step = gh_line_step();
+                bar.scroll_by_with_step(*n, gh_field_h(bar.lines(), step), step);
+            }
+            BarCmd::ScrollPx(n) => {
+                let step = gh_line_step();
+                bar.scroll_by_px_with_step(*n, gh_field_h(bar.lines(), step), step);
+            }
             BarCmd::SelectAll => bar.select_all(),
             BarCmd::Select(start, end) => {
                 bar.enter_selection(*start);

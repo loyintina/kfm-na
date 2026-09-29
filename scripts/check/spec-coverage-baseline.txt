@@ -16,7 +16,7 @@ src/glyph_atlas.rs 0
 src/http1.rs 3
 src/ime_bridge.rs 1
 src/ime_queue.rs 0
-src/input_bar.rs 9
+src/input_bar.rs 8
 src/insets.rs 4
 src/install.rs 0
 src/keybar.rs 4

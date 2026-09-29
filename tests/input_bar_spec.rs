@@ -175,6 +175,57 @@ fn bar_inject_script_parse() {
 // ========== textarea 长高几何（2026-08-31 移动端全量复刻拍板） ==========
 // 判卷点:行数→带高单调、MAX_LINES 封顶;长高后命中带跟上(眼手同尺)
 
+// BAR-197 行距格化钉（0017 #10 面）：line_step = 7/4 格高——设计格
+// （CELL_H=36）逐像素等价旧常量 63，pinch 双倍格联动翻倍；_with_step
+// 变体在设计 step 下 ≡ 旧签名委托（旧钉零惊动的结构性保证）
+#[test]
+fn spec_bar197_line_step_格化() {
+    use kfm_na::input_bar::{
+        LINE_STEP_PX, height_for_lines, height_for_lines_with_step, line_step, viewport_geometry,
+        viewport_geometry_with_step,
+    };
+    assert_eq!(line_step(36), 63, "设计格行距 = 63 逐像素不变");
+    assert_eq!(line_step(72), 126, "pinch 双倍格行距联动");
+    assert_eq!(LINE_STEP_PX, 63, "设计格常量 ≡ line_step(CELL_H=36)");
+    for n in [0, 1, 3, 5, 99] {
+        assert_eq!(
+            height_for_lines_with_step(n, LINE_STEP_PX),
+            height_for_lines(n),
+            "带高变体设计 step ≡ 旧口径（n={n}）"
+        );
+        assert_eq!(
+            height_for_lines_with_step(n, line_step(72)),
+            height_for_lines(n) + (n.clamp(1, 5) - 1) * 63,
+            "双倍格带高 = 旧带高 + 每多一行 +63（n={n}）"
+        );
+    }
+    assert_eq!(
+        viewport_geometry_with_step(15, 300, true, 0, LINE_STEP_PX),
+        viewport_geometry(15, 300, true, 0),
+        "视口几何变体设计 step ≡ 旧口径"
+    );
+    // 滚动两变体：设计 step ≡ 旧签名逐位等价（眼手同尺双端同源的
+    // 运行期口，覆盖棘轮入册）
+    let a = kfm_na::input_bar::InputBarState::new();
+    let b = kfm_na::input_bar::InputBarState::new();
+    a.set_lines(5);
+    b.set_lines(5);
+    a.scroll_by(1, 200);
+    b.scroll_by_with_step(1, 200, LINE_STEP_PX);
+    assert_eq!(
+        a.snap().scroll_px,
+        b.snap().scroll_px,
+        "scroll_by_with_step 设计 step ≡ scroll_by"
+    );
+    a.scroll_by_px(-12, 200);
+    b.scroll_by_px_with_step(-12, 200, LINE_STEP_PX);
+    assert_eq!(
+        a.snap().scroll_px,
+        b.snap().scroll_px,
+        "scroll_by_px_with_step 设计 step ≡ scroll_by_px"
+    );
+}
+
 #[test]
 fn height_for_lines_monotonic_capped() {
     use kfm_na::input_bar::{MAX_LINES, height_for_lines};

@@ -2,7 +2,7 @@
 //! 物理搬移立形：状态核 = input_bar.rs，视图 = 本文件 impl TermView 块，
 //! 注入通道 = bar-inject，考题 = input_bar_spec + termview_spec caret/bar
 //! 系列，档案 = 插件档案-输入栏.md。搬移为零逻辑变化——逐字节原样）。
-use crate::termview::{Frame, GlowSpec, GradSpec, SELECT_BG, VeilSpec, lerp_rgb};
+use crate::termview::{Frame, GlowSpec, GradSpec, GridItem, SELECT_BG, VeilSpec, lerp_rgb};
 
 /// 行归属纯函数（BAR-041）：字符位 idx 落在 starts 的第几行——最后一个
 /// 起点 ≤ idx 的行（idx=文末 items.len() 自动归末行）。2026-09-01 闪退案
@@ -23,12 +23,11 @@ pub fn row_of(starts: &[usize], idx: usize) -> usize {
     k
 }
 
-/// 输入栏正文字号（px，物理像素）= 单行文本区高 156 × 0.26（单行时的
-/// 历史配比）。textarea 多行后字号不随行高缩——量宽/折行/画字同用这一把尺
-/// 输入栏正文字号（px，物理像素）= 单行文本区高 156 × 0.26（单行时的
-/// 历史配比）。textarea 多行后字号不随行高缩——量宽/折行/画字同用这一把尺
-/// （模块内私有：调用方只管传 snap.lines，字号是渲染内部事）
-const BAR_TEXT_PX: f32 = 156.0 * 0.26;
+/// 输入栏文字 = 网格文字引擎（BAR-197，0017 #10 面）：量宽/落笔走
+/// measure_bar_items_grid + draw_grid_text_left（步进 = char_cells ×
+/// 实例格宽，字号 = grid_fit 实例格，pinch 联动），行距 =
+/// input_bar::line_step(实例格高)——设计格下与旧件逐像素等价
+/// （旧 156×0.26 字面量字号 + fontdue 自然步进随本面退役）
 impl crate::termview::TermView {
     /// 全局输入栏（ai-presence 期 0 组件三，§二 常驻 chrome 一）：
     /// 压底紧贴键盘（keybar 在其上一层——调用方几何保证）。样式 = kfmv4
@@ -68,13 +67,18 @@ impl crate::termview::TermView {
         if buf_w < min_w {
             return; // 窗太窄画不下，保命要紧
         }
+        // BAR-197 网格引擎尺：实例格（pinch 联动）——格宽喂落笔步进，
+        // 行距 = line_step(格高) 喂一切纵向几何（渲染/命中同一份）
+        let (cell_w, cell_h) = self.cell_size();
+        let step = input_bar::line_step(cell_h);
         // 量宽折行（画文本也要用，先量一次两头吃）。显示文本 = text 在
         // 光标处拼入组合态（input_bar::display_text 单源，「所见」定义）。
-        // 2026-09-04 Enter 换行：items 走 measure_bar_items（'\n' 零宽条目
-        // 保 1:1），折行走 multiline_starts（硬换行 + 软折同尺）
+        // 2026-09-04 Enter 换行：items 走输入栏格量宽（'\n' 零宽条目
+        // 保 1:1，BAR-197 起 measure_bar_items_grid），折行走
+        // multiline_starts（硬换行 + 软折同尺）
         let display = crate::input_bar::InputBarState::display_text(snap);
-        let items = self.measure_bar_items(&display, BAR_TEXT_PX);
-        let widths: Vec<f32> = items.iter().map(|i| i.2).collect();
+        let items = self.measure_bar_items_grid(&display);
+        let widths: Vec<f32> = items.iter().map(|i| i.3).collect();
         let avail = input_bar::text_avail_w(buf_w).unwrap_or(1.0);
         let chars: Vec<char> = display.chars().collect();
         let starts = input_bar::multiline_starts(&chars, &widths, avail);
@@ -83,7 +87,7 @@ impl crate::termview::TermView {
         } else {
             starts.len() as u32
         };
-        let bar_h = input_bar::height_for_lines(n_lines);
+        let bar_h = input_bar::height_for_lines_with_step(n_lines, step);
         let Some(top) = buf_h
             .checked_sub(ime_bottom)
             .and_then(|b| b.checked_sub(bar_h))
@@ -205,30 +209,37 @@ impl crate::termview::TermView {
         // 内衬带里被裁掉。field_y0/y1 以下一律指「文本视口」边界。
         let n = starts.len();
         let view_h = input_bar::text_view_h(field_h);
-        let (_, eff, top_off) =
-            input_bar::viewport_geometry(n as u32, view_h, snap.follow, snap.scroll_px);
+        let (_, eff, top_off) = input_bar::viewport_geometry_with_step(
+            n as u32,
+            view_h,
+            snap.follow,
+            snap.scroll_px,
+            step,
+        );
         let field_y0 = field_top as i32 + input_bar::TEXT_PAD_Y as i32;
         let field_y1 = (field_top + field_h) as i32 - input_bar::TEXT_PAD_Y as i32;
         let text_top = field_y0 + top_off as i32 - eff;
-        let line_y = |k: usize| -> i32 { text_top + k as i32 * input_bar::LINE_STEP_PX as i32 };
+        let line_y = |k: usize| -> i32 { text_top + k as i32 * step as i32 };
         let text_cw = field_w - 40 - 12;
         if display.is_empty() {
-            self.draw_text_left(
+            // 占位符（BAR-197 格引擎左对齐）：起笔/纵向锚与正文行 0 同位
+            let (pitems, _) = self.measure_items_grid("输入消息…");
+            self.draw_grid_text_left(
                 &mut frame,
-                "输入消息…",
-                text_cx,
+                &pitems,
+                i64::from(text_cx + 18),
+                i64::from(line_y(0)),
+                cell_w,
                 text_cw,
-                field_top,
-                field_h,
-                BAR_TEXT_PX,
                 t.placeholder,
+                i64::from(text_cx),
+                Some((field_y0, field_y1)),
             );
         } else {
             // textarea 折行：只画与 field 有交集的行，行内逐像素垂直裁剪
-            let first = ((field_y0 - text_top).max(0) / input_bar::LINE_STEP_PX as i32) as usize;
-            let last = (((field_y1 - text_top) + input_bar::LINE_STEP_PX as i32 - 1)
-                / input_bar::LINE_STEP_PX as i32)
-                .min(n as i32) as usize;
+            let first = ((field_y0 - text_top).max(0) / step as i32) as usize;
+            let last =
+                (((field_y1 - text_top) + step as i32 - 1) / step as i32).min(n as i32) as usize;
             for k in first..last {
                 let st = starts[k];
                 let end = if k + 1 < n {
@@ -246,13 +257,13 @@ impl crate::termview::TermView {
                     let sel_s = snap.selection_start.max(st);
                     let sel_e = snap.selection_end.min(end).max(sel_s);
                     if sel_s < sel_e {
-                        let x0 = items[st..sel_s].iter().map(|i| i.2).sum::<f32>();
-                        let x1 = items[st..sel_e].iter().map(|i| i.2).sum::<f32>();
+                        let x0 = items[st..sel_s].iter().map(|i| i.3).sum::<f32>();
+                        let x1 = items[st..sel_e].iter().map(|i| i.3).sum::<f32>();
                         let clip_x1 = text_cx + text_cw;
                         let sx0 = (text_cx + 18 + x0 as u32).min(clip_x1);
                         let sx1 = (text_cx + 18 + x1 as u32).min(clip_x1);
                         let ry0 = line_y(k).max(field_y0);
-                        let ry1 = (line_y(k) + input_bar::LINE_STEP_PX as i32).min(field_y1);
+                        let ry1 = (line_y(k) + step as i32).min(field_y1);
                         if sx1 > sx0 && ry1 > ry0 {
                             frame.fill_rect(
                                 sx0,
@@ -264,15 +275,15 @@ impl crate::termview::TermView {
                         }
                     }
                 }
-                self.draw_items_left(
+                self.draw_grid_text_left(
                     &mut frame,
                     &items[st..end.max(st)],
-                    text_cx,
+                    i64::from(text_cx + 18),
+                    i64::from(line_y(k)),
+                    cell_w,
                     text_cw,
-                    line_y(k) as u32,
-                    input_bar::LINE_STEP_PX,
-                    BAR_TEXT_PX,
                     t.text,
+                    i64::from(text_cx),
                     Some((field_y0, field_y1)),
                 );
             }
@@ -285,8 +296,7 @@ impl crate::termview::TermView {
         let caret_idx = (snap.cursor + comp_len).min(items.len());
         let caret_row_all = row_of(&starts, caret_idx);
         let caret_y = line_y(caret_row_all);
-        let caret_fully_visible =
-            caret_y >= field_y0 && caret_y + input_bar::LINE_STEP_PX as i32 <= field_y1;
+        let caret_fully_visible = caret_y >= field_y0 && caret_y + step as i32 <= field_y1;
         if snap.focused && caret_fully_visible {
             let row_start = starts[caret_row_all];
             let row_end = if caret_row_all + 1 < n {
@@ -295,8 +305,8 @@ impl crate::termview::TermView {
                 items.len()
             };
             let caret_slice_end = caret_idx.min(row_end).max(row_start);
-            let x_off: f32 = items[row_start..caret_slice_end].iter().map(|i| i.2).sum();
-            let row_cy = caret_y + input_bar::LINE_STEP_PX as i32 / 2;
+            let x_off: f32 = items[row_start..caret_slice_end].iter().map(|i| i.3).sum();
+            let row_cy = caret_y + step as i32 / 2;
             let caret_x = text_cx + 18 + x_off as u32;
             if caret_on {
                 frame.fill_round_rect(caret_x, (row_cy - 26) as u32, 4, 52, 2, t.text);
@@ -309,7 +319,7 @@ impl crate::termview::TermView {
                 // 平顶拼接的 3px 接缝台阶消除。外沿/轴不变：尖轴=块轴=
                 // caret_x+2，跨 [tip_y-1, tip_y+58]
                 let hx = (caret_x + 2).saturating_sub(22);
-                let tip_y = (caret_y + input_bar::LINE_STEP_PX as i32 - 2) as u32;
+                let tip_y = (caret_y + step as i32 - 2) as u32;
                 frame.fill_pin_handle(hx + 22, tip_y - 1, 22, 18, 43, 10, 12, SELECT_BG);
             }
         }
@@ -321,7 +331,7 @@ impl crate::termview::TermView {
         if snap.focused
             && !snap.composing.is_empty()
             && comp_y >= field_y0
-            && comp_y + input_bar::LINE_STEP_PX as i32 <= field_y1
+            && comp_y + step as i32 <= field_y1
         {
             let comp_end = (snap.cursor + comp_len).min(items.len());
             let row_start = starts[comp_row_all];
@@ -330,14 +340,14 @@ impl crate::termview::TermView {
             let ux0 = (text_cx + 18) as f32
                 + items[row_start..comp_start_clamped]
                     .iter()
-                    .map(|i| i.2)
+                    .map(|i| i.3)
                     .sum::<f32>();
             let ux1 = (text_cx + 18) as f32
                 + items[row_start..comp_end_clamped]
                     .iter()
-                    .map(|i| i.2)
+                    .map(|i| i.3)
                     .sum::<f32>();
-            let urow_cy = comp_y + input_bar::LINE_STEP_PX as i32 / 2;
+            let urow_cy = comp_y + step as i32 / 2;
             frame.fill_rect(
                 ux0 as u32,
                 (urow_cy + 22) as u32,
@@ -460,9 +470,9 @@ impl crate::termview::TermView {
             return 1;
         };
         let widths: Vec<f32> = self
-            .measure_bar_items(text, BAR_TEXT_PX)
+            .measure_bar_items_grid(text)
             .iter()
-            .map(|i| i.2)
+            .map(|i| i.3)
             .collect();
         let chars: Vec<char> = text.chars().collect();
         crate::input_bar::multiline_starts(&chars, &widths, avail).len() as u32
@@ -483,30 +493,29 @@ impl crate::termview::TermView {
         // 眼手同尺：点按换算与渲染共用 display_text（含组合态），避免
         // 组合态下布局与光标不同源导致命中错位 / 切片倒挂
         let display = crate::input_bar::InputBarState::display_text(snap);
-        let items = self.measure_bar_items(&display, BAR_TEXT_PX);
+        let items = self.measure_bar_items_grid(&display);
         if items.is_empty() {
             return 0;
         }
-        let widths: Vec<f32> = items.iter().map(|i| i.2).collect();
+        let step = input_bar::line_step(self.cell_size().1);
+        let widths: Vec<f32> = items.iter().map(|i| i.3).collect();
         let avail = input_bar::text_avail_w(buf_w).unwrap_or(1.0);
         let chars: Vec<char> = display.chars().collect();
         let starts = input_bar::multiline_starts(&chars, &widths, avail);
         let n = starts.len();
-        let bar_h = input_bar::height_for_lines(n as u32);
+        let bar_h = input_bar::height_for_lines_with_step(n as u32, step);
         // BAR-049：视口高与渲染同尺（field 上下收 TEXT_PAD_Y 内衬）
-        let (_, eff, top_off) = input_bar::viewport_geometry(
+        let (_, eff, top_off) = input_bar::viewport_geometry_with_step(
             n as u32,
             input_bar::text_view_h(bar_h - 64),
             snap.follow,
             snap.scroll_px,
+            step,
         );
         // 行:strip 坐标 = field 内 y - 内衬 - 顶留白 + 滚动偏移;行 = strip/行高,
         // 钳 [0, 行数-1](与渲染视口窗同源:viewport_geometry)
         let strip_y = y_local - f64::from(input_bar::TEXT_PAD_Y) - top_off as f64 + eff as f64;
-        let k = ((strip_y / f64::from(input_bar::LINE_STEP_PX))
-            .floor()
-            .max(0.0) as usize)
-            .min(n.saturating_sub(1));
+        let k = ((strip_y / f64::from(step)).floor().max(0.0) as usize).min(n.saturating_sub(1));
         let row_start = starts[k];
         let row_end = if k + 1 < n {
             starts[k + 1]
@@ -520,13 +529,13 @@ impl crate::termview::TermView {
         } else {
             row_end
         };
-        // 列：累计步进宽，过半归右（浏览器 tap 落点就近原则）
+        // 列：累计格步进宽，过半归右（浏览器 tap 落点就近原则）
         let mut pen = 18.0f32;
         for (i, item) in items[row_start..row_end.max(row_start)].iter().enumerate() {
-            if x_local < f64::from(pen + item.2 * 0.5) {
+            if x_local < f64::from(pen + item.3 * 0.5) {
                 return row_start + i;
             }
-            pen += item.2;
+            pen += item.3;
         }
         content_end
     }
@@ -540,7 +549,7 @@ impl crate::termview::TermView {
         idx: usize,
         text_cx: u32,
         starts: &[usize],
-        items: &[(&fontdue::Font, char, f32)],
+        items: &[GridItem<'_>],
         line_y: &dyn Fn(usize) -> i32,
         field_y0: i32,
         field_y1: i32,
@@ -548,18 +557,19 @@ impl crate::termview::TermView {
         _left: bool,
     ) {
         use crate::input_bar;
+        let step = input_bar::line_step(self.cell_size().1) as i32;
         let row = row_of(starts, idx.min(items.len()));
         let row_start = starts[row];
         let row_y = line_y(row);
-        if row_y + input_bar::LINE_STEP_PX as i32 <= field_y0 || row_y >= field_y1 {
+        if row_y + step <= field_y0 || row_y >= field_y1 {
             return; // 行滚出视口不画
         }
         let x_off: f32 = items[row_start..idx.min(items.len()).max(row_start)]
             .iter()
-            .map(|i| i.2)
+            .map(|i| i.3)
             .sum();
         let ax = (text_cx + 18 + x_off as u32) as i32;
-        let tip_y = (row_y + input_bar::LINE_STEP_PX as i32 - 2) as u32;
+        let tip_y = (row_y + step - 2) as u32;
         // 上尖三角 + 正方承载（与定位柄同族，缩小版）。
         // 2026-09-03 ①号迭代：两图元水平中心统一锚到 ax（原三角 ax+half、
         // 矩形 ax-half+4，静态错位 10px，实拍可见尖与块不对齐）。
@@ -580,7 +590,8 @@ impl crate::termview::TermView {
     /// 菜单不画、几何不返（眼手同尺：看不见的点不得有触摸热区）。
     /// 钉死钳制（BAR-048 复测防抖）：锚 y 钳进视口边界——选区起点滚在视口
     /// 之上时菜单钉栏顶固定位，不追部分可见行的连续 y（追了就是锯齿：
-    /// 行内连续移 63px、跨行跳回 63px，实拍「上下抖动」）。
+    /// 行内连续移一个行距、跨行跳回一个行距，实拍「上下抖动」）。
+    /// step = 运行期行距（BAR-197：line_step(实例格高)，与渲染同一份）
     fn visible_sel_anchor_y(
         line_y0: i32,
         n_rows: usize,
@@ -588,8 +599,8 @@ impl crate::termview::TermView {
         field_y1: i32,
         row_s: usize,
         row_e: usize,
+        step: i32,
     ) -> Option<(i32, i32)> {
-        let step = crate::input_bar::LINE_STEP_PX as i32;
         if n_rows == 0 || line_y0 >= field_y1 {
             return None;
         }
@@ -617,6 +628,7 @@ impl crate::termview::TermView {
         buf_w: u32,
         bar_top: u32,
         bar_h: u32,
+        step: i32,
     ) -> (u32, u32, u32, u32) {
         let menu_h = crate::input_bar::MENU_H;
         // 窄窗（含 600 宽考题夹具）内缩守边 8px，防菜单越出屏幕
@@ -625,7 +637,7 @@ impl crate::termview::TermView {
         const GAP: i32 = 12;
         let mut menu_y = y_s - menu_h as i32 - GAP;
         if menu_y < 8 {
-            menu_y = y_e + crate::input_bar::LINE_STEP_PX as i32 + GAP;
+            menu_y = y_e + step + GAP;
             if menu_y + menu_h as i32 > (bar_top + bar_h) as i32 {
                 menu_y = (bar_top + bar_h) as i32 - menu_h as i32 - 8; // 兜底：贴栏底
             }
@@ -642,7 +654,7 @@ impl crate::termview::TermView {
         frame: &mut Frame,
         snap: &crate::input_bar::BarSnap,
         starts: &[usize],
-        items: &[(&fontdue::Font, char, f32)],
+        items: &[GridItem<'_>],
         _text_cx: u32,
         line_y: &dyn Fn(usize) -> i32,
         field_top: u32,
@@ -654,6 +666,7 @@ impl crate::termview::TermView {
         if snap.selection_start >= snap.selection_end {
             return;
         }
+        let step = crate::input_bar::line_step(self.cell_size().1) as i32;
         let row_s = row_of(starts, snap.selection_start.min(items.len()));
         let row_e = row_of(starts, snap.selection_end.min(items.len()));
         // BAR-048：只锚可见选区+钉死钳制——选区首行滚出栏顶时菜单钉栏顶
@@ -665,11 +678,12 @@ impl crate::termview::TermView {
             (field_top + field_h) as i32,
             row_s,
             row_e,
+            step,
         ) else {
             return;
         };
         let (menu_x, menu_y, menu_w, menu_h) =
-            Self::selection_menu_rect(y_s, y_e, buf_w, bar_top, bar_h);
+            Self::selection_menu_rect(y_s, y_e, buf_w, bar_top, bar_h, step);
         // 气泡底
         let t = &self.theme.bar;
         frame.fill_round_rect(menu_x, menu_y, menu_w, menu_h, 16, t.menu_bg);
@@ -684,19 +698,20 @@ impl crate::termview::TermView {
             frame.fill_rect(x, menu_y + 12, 2, menu_h - 24, t.menu_disabled);
         }
         // 按钮文字（2026-09-03 ④号迭代：居中自绘，终结 MVP 空色块——
-        // 实拍菜单条只有分隔线没有标签，用户不知道哪格是什么）
+        // 实拍菜单条只有分隔线没有标签，用户不知道哪格是什么；
+        // BAR-197 起走格引擎居中，字号吃实例格 pinch 联动）
         const LABELS: [&str; 4] = ["全选", "复制", "剪切", "粘贴"];
         for (i, label) in LABELS.iter().enumerate() {
-            self.draw_text_centered(
+            self.draw_grid_text_centered(
                 frame,
                 label,
-                (menu_x + btn_w * i as u32) as i64,
-                menu_y as i64,
+                i64::from(menu_x + btn_w * i as u32),
+                i64::from(menu_y),
                 btn_w,
                 menu_h,
-                crate::input_bar::MENU_TEXT_PX,
                 t.menu_text,
-                (menu_x + btn_w * i as u32) as i64, // clip_x0 = 左缘即格左（行为不变）
+                i64::from(menu_x + btn_w * i as u32), // clip_x0 = 左缘即格左（行为不变）
+                None,
             );
         }
     }
@@ -719,16 +734,17 @@ impl crate::termview::TermView {
             return None;
         }
         let display = crate::input_bar::InputBarState::display_text(snap);
-        let items = self.measure_bar_items(&display, BAR_TEXT_PX);
+        let items = self.measure_bar_items_grid(&display);
         if items.is_empty() {
             return None;
         }
-        let widths: Vec<f32> = items.iter().map(|i| i.2).collect();
+        let step = input_bar::line_step(self.cell_size().1);
+        let widths: Vec<f32> = items.iter().map(|i| i.3).collect();
         let avail = input_bar::text_avail_w(buf_w)?;
         let chars: Vec<char> = display.chars().collect();
         let starts = input_bar::multiline_starts(&chars, &widths, avail);
         let n_lines = starts.len();
-        let bar_h = input_bar::height_for_lines(n_lines as u32);
+        let bar_h = input_bar::height_for_lines_with_step(n_lines as u32, step);
         let top = buf_h.checked_sub(ime_bottom)?.checked_sub(bar_h)?;
         let field_h = bar_h - 64;
         let field_top = top + 32;
@@ -740,10 +756,15 @@ impl crate::termview::TermView {
             field_top as i32 + input_bar::TEXT_PAD_Y as i32,
             (field_top + field_h) as i32 - input_bar::TEXT_PAD_Y as i32,
         );
-        let (_, eff, top_off) =
-            input_bar::viewport_geometry(n_lines as u32, view_h, snap.follow, snap.scroll_px);
+        let (_, eff, top_off) = input_bar::viewport_geometry_with_step(
+            n_lines as u32,
+            view_h,
+            snap.follow,
+            snap.scroll_px,
+            step,
+        );
         let text_top = vy0 + top_off as i32 - eff;
-        let line_y = |k: usize| -> i32 { text_top + k as i32 * input_bar::LINE_STEP_PX as i32 };
+        let line_y = |k: usize| -> i32 { text_top + k as i32 * step as i32 };
         // 锚点柄视觉中心（2026-09-03 ②号迭代）：柄形 = 上尖三角（tip-1 起
         // 高 14）+ 正方承载（tip+11 起高 28），合 span y∈[tip-1, tip+38]，
         // 中心 tip+18；水平中心 ax（两图元 2026-09-03 ①号迭代后同锚 ax）。
@@ -754,10 +775,10 @@ impl crate::termview::TermView {
             let row_start = starts[row];
             let x_off: f32 = items[row_start..idx.min(items.len()).max(row_start)]
                 .iter()
-                .map(|i| i.2)
+                .map(|i| i.3)
                 .sum();
             let ax = f64::from(text_cx + 18) + f64::from(x_off);
-            let ay = f64::from(line_y(row) + input_bar::LINE_STEP_PX as i32 - 2 + 18);
+            let ay = f64::from(line_y(row) + step as i32 - 2 + 18);
             (ax, ay)
         };
         let left = anchor_at(snap.selection_start);
@@ -767,10 +788,17 @@ impl crate::termview::TermView {
         // 滚出视口时菜单不画，几何也同步 None（看不见的点不得有触摸热区）
         let row_s = row_of(&starts, snap.selection_start.min(items.len()));
         let row_e = row_of(&starts, snap.selection_end.min(items.len()));
-        let (y_s, y_e) =
-            Self::visible_sel_anchor_y(line_y(0), starts.len(), vy0, vy1, row_s, row_e)?;
+        let (y_s, y_e) = Self::visible_sel_anchor_y(
+            line_y(0),
+            starts.len(),
+            vy0,
+            vy1,
+            row_s,
+            row_e,
+            step as i32,
+        )?;
         let (menu_x, menu_y, menu_w, menu_h) =
-            Self::selection_menu_rect(y_s, y_e, buf_w, top, bar_h);
+            Self::selection_menu_rect(y_s, y_e, buf_w, top, bar_h, step as i32);
         Some(crate::input_bar::BarSelectionGeometry {
             left_anchor: left,
             right_anchor: right,

@@ -26,7 +26,7 @@
 | `src/http1.rs` | 10 | 7 | 3 | is_tick_err read_head_hook read_body_hook |
 | `src/ime_bridge.rs` | 1 | 0 | 1 | jni_counters |
 | `src/ime_queue.rs` | 9 | 9 | 0 | — |
-| `src/input_bar.rs` | 59 | 50 | 9 | MENU_W MENU_TEXT_PX text_avail_w CARET_BLINK_MS SELECT_LONG_PRESS_MS ANCHOR_VISUAL_SIZE ANCHOR_HIT_SIZE set_sel_anchor insert_or_replace |
+| `src/input_bar.rs` | 63 | 55 | 8 | MENU_W text_avail_w CARET_BLINK_MS SELECT_LONG_PRESS_MS ANCHOR_VISUAL_SIZE ANCHOR_HIT_SIZE set_sel_anchor insert_or_replace |
 | `src/insets.rs` | 8 | 4 | 4 | force_show_keyboard force_hide_keyboard query_ime_bottom query_win_top |
 | `src/install.rs` | 7 | 7 | 0 | — |
 | `src/keybar.rs` | 20 | 16 | 4 | COLS MOD_ALT install_bridge_mods bridge_mods |
@@ -54,7 +54,7 @@
 | `src/singleton.rs` | 7 | 4 | 3 | LOCK_PATH lock_exclusive try_acquire |
 | `src/svc_health.rs` | 12 | 8 | 4 | HIST_PATH set_visible sys_snap take_dirty |
 | `src/sys_hist.rs` | 39 | 34 | 5 | BAR_W PLACEHOLDER_PCT hist_idx restore HIST_FORMAT |
-| `src/termview.rs` | 168 | 161 | 7 | AI_THINK_COLLAPSED FONT_CANDIDATES CJK_FONT_CANDIDATES load_cjk_font font_probe MAG_HALF_COLS MAG_HALF_ROWS |
+| `src/termview.rs` | 171 | 164 | 7 | AI_THINK_COLLAPSED FONT_CANDIDATES CJK_FONT_CANDIDATES load_cjk_font font_probe MAG_HALF_COLS MAG_HALF_ROWS |
 | `src/theme.rs` | 1 | 1 | 0 | — |
 | `src/tmux_ctl.rs` | 20 | 20 | 0 | — |
 | `src/tmux_exec.rs` | 1 | 1 | 0 | — |
@@ -80,7 +80,7 @@
 | `src/ui/link_card.rs` | 9 | 9 | 0 | — |
 | `src/ui/md_layout.rs` | 4 | 4 | 0 | — |
 | `src/ui/md_parse.rs` | 2 | 2 | 0 | — |
-| `src/ui/modal.rs` | 32 | 30 | 2 | VEIL_DIM_ARGB MODAL_LABEL_SCALE |
+| `src/ui/modal.rs` | 32 | 31 | 1 | VEIL_DIM_ARGB |
 | `src/ui/orb.rs` | 5 | 5 | 0 | — |
 | `src/ui/panel_drag.rs` | 12 | 7 | 5 | DRAG_DIR_LOCK RELEASE_PROGRESS VELOCITY_WINDOW_MS locked current_offset |
 | `src/ui/parser_chain.rs` | 15 | 12 | 3 | COL_W_NUM COL_W_DEN window_of |

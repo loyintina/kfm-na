@@ -1,6 +1,5 @@
 src/termview.rs:draw_items_left
 src/termview.rs:draw_items_left
-src/termview.rs:draw_items_left
 src/termview.rs:draw_text_centered
 src/termview.rs:draw_text_centered
 src/termview.rs:draw_text_centered
@@ -10,7 +9,6 @@ src/termview.rs:draw_text_centered
 src/termview.rs:draw_text_centered_yclip
 src/termview.rs:draw_text_centered_yclip
 src/termview.rs:draw_text_centered_yclip
-src/termview.rs:draw_text_left
 src/termview.rs:draw_text_left_ex
 src/termview.rs:draw_text_left_ex
 src/termview.rs:draw_text_left_ex
@@ -20,8 +18,6 @@ src/termview.rs:draw_text_left_ex
 src/termview.rs:draw_text_left_ex
 src/termview.rs:draw_text_left_ex
 src/termview.rs:draw_text_left_ex
-src/termview.rs:measure_bar_items
-src/termview.rs:measure_items
 src/termview.rs:measure_items
 src/termview.rs:measure_items
 src/termview.rs:measure_items
@@ -42,10 +38,3 @@ src/ui/md_paint.rs:text_width
 src/ui/md_paint.rs:text_width
 src/ui/md_paint.rs:text_width
 src/ui/md_paint.rs:text_width
-src/ui/prompt_bar.rs:draw_items_left
-src/ui/prompt_bar.rs:draw_text_centered
-src/ui/prompt_bar.rs:draw_text_left
-src/ui/prompt_bar.rs:measure_bar_items
-src/ui/prompt_bar.rs:measure_bar_items
-src/ui/prompt_bar.rs:measure_bar_items
-src/ui/prompt_bar.rs:measure_bar_items

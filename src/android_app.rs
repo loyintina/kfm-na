@@ -985,13 +985,21 @@ fn assemble_brain(
 }
 
 impl App {
-    /// 当前输入栏带高（textarea 随行数长高；栏未装 = 单行默认）
+    /// 当前输入栏带高（textarea 随行数长高；栏未装 = 单行默认）。
+    /// BAR-197：行距吃运行期 line_step(实例格高)——与渲染同一份 step
     fn cur_bar_h(&self) -> u32 {
         self.input_bar
             .as_ref()
             .map_or(crate::input_bar::HEIGHT_PX, |b| {
-                crate::input_bar::height_for_lines(b.lines())
+                crate::input_bar::height_for_lines_with_step(b.lines(), self.bar_line_step())
             })
+    }
+
+    /// 输入栏运行期行距（BAR-197 格化 pinch 联动）：term 未装 = 设计格保底
+    fn bar_line_step(&self) -> u32 {
+        self.term_handle()
+            .map(|t| crate::input_bar::line_step(t.lock().unwrap().cell_size().1))
+            .unwrap_or(crate::input_bar::LINE_STEP_PX)
     }
 
     /// chrome 跟随 inset（眼手同尺：触摸命中与渲染吃同一份采样值）。
@@ -1986,7 +1994,11 @@ impl App {
                         if bt.dragged {
                             // 像素级 1:1 跟手:手指位移直进视口偏移(下拖=回头部)
                             if let Some(bar) = &self.input_bar {
-                                bar.scroll_by_px(-(dy as i32), view_h);
+                                bar.scroll_by_px_with_step(
+                                    -(dy as i32),
+                                    view_h,
+                                    self.bar_line_step(),
+                                );
                             }
                             self.dirty = true;
                         }
@@ -3913,14 +3925,15 @@ impl App {
                 + 32
         }) as f64;
         let edge = 12.0;
+        let step = self.bar_line_step(); // BAR-197：滚动钳制量程与渲染行距同尺
         if y - field_top < edge
             && let Some(bar) = &self.input_bar
         {
-            bar.scroll_by_px(-8, view_h);
+            bar.scroll_by_px_with_step(-8, view_h, step);
         } else if (field_top + f64::from(field_h)) - y < edge
             && let Some(bar) = &self.input_bar
         {
-            bar.scroll_by_px(8, view_h);
+            bar.scroll_by_px_with_step(8, view_h, step);
         }
     }
 
@@ -7270,14 +7283,18 @@ impl App {
     }
 
     /// 当前栏带高（render_inputbar 同源实测折行——眼手同尺单源，
-    /// rasterize 与 draw_frame_gles 共用，2026-08-31 排障实锤的延伸）
+    /// rasterize 与 draw_frame_gles 共用，2026-08-31 排障实锤的延伸）。
+    /// BAR-197：行距吃 term 实例格高（pinch 联动，与渲染同一份 step）
     fn current_bar_h(
         term: &dyn TermEmu,
         bar_snap: Option<&crate::input_bar::BarSnap>,
         w: u32,
     ) -> u32 {
         bar_snap.map_or(crate::input_bar::HEIGHT_PX, |bs| {
-            crate::input_bar::height_for_lines(term.bar_text_lines(&bs.text, w))
+            crate::input_bar::height_for_lines_with_step(
+                term.bar_text_lines(&bs.text, w),
+                crate::input_bar::line_step(term.cell_size().1),
+            )
         })
     }
 
