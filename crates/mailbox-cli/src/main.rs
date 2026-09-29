@@ -7,10 +7,13 @@
 //!   gen       回写 README gen:pending + gen:agent-inbox 两区段 + letters-index.jsonl
 //!             （--check-only 只查不写；--mailbox 指向主册时拒绝写入——写者分区）
 //!   scan      --for=<职能|名字|旧线名> | --by=<名字>  跨册欠账扫描（na 册 + 主册）
-//!   reticket  <信件路径> --new-name <新文件名>  改名换票（契约 §八改名窗口）
+//!   reticket  <信件路径> --new-name <新文件名>  改名换票（契约 §八改名窗口：
+//!             状态非待*/两册有复信即拒，--force 逃生留痕；na 册收尾直接回写投影）
 //!
 //! 公共选项：--mailbox / --roster / --name-prefix / --v1-manifest /
 //! --no-strict-pools（env KFM_MAILBOX_STRICT_POOLS=0 同效）。
+//! 写路径（new/gen/reticket）共用：写者分区闸（指向主册一律拒写）+ 信箱根
+//! O_EXCL 写者锁（BAR-177）。
 
 use mailbox_core::json::{JVal, parse_json, to_json_string};
 use mailbox_core::name::{CONNECT_CHARS, V21_TYPES, is_v21_name, parse_v21_name, v21_no_of};
@@ -227,6 +230,77 @@ fn mailbox_of(args: &Args) -> PathBuf {
     PathBuf::from(args.opt("mailbox").unwrap_or(DEFAULT_MAILBOX))
 }
 
+/// 写者分区闸（BAR-177 必修③）：主册回写归 kfmv4 侧 gen-agent-inbox.mjs
+/// 独占（契约 §六跨册口径第 3 条「不许代改别册既有文件」）——本器任何写
+/// 路径（new/gen/reticket）指向主册一律拒
+fn reject_main_book_write(p: &str, mailbox: &Path) {
+    let canon = fs::canonicalize(mailbox).unwrap_or_else(|_| mailbox.to_path_buf());
+    let main_canon = fs::canonicalize(MAIN_BOOK).unwrap_or_else(|_| PathBuf::from(MAIN_BOOK));
+    if canon == main_canon {
+        die(
+            p,
+            "写者分区：--mailbox 指向主册（kfmv4 docs/ledger/agent-inbox）时本器拒绝写入——主册回写归 kfmv4 侧 gen-agent-inbox.mjs（只许 --check-only）",
+        );
+    }
+}
+
+/// 写者锁（BAR-177 建议⑥）：信箱根 O_EXCL lockfile，new/gen/reticket 三写
+/// 路径共用——无锁 + 台账整文件重写 = 两写者并发后写覆盖前写，留痕丢失。
+/// pid 入锁文件；die!/崩溃的残留锁由下次获取时 /proc 探活自愈（pid 还活着
+/// 才报并发，报错文案指明手动删锁的判据）
+struct BookLock(PathBuf);
+
+fn acquire_book_lock(p: &str, mailbox: &Path) -> BookLock {
+    use std::io::Write;
+    let path = mailbox.join(".mailbox-cli.lock");
+    for attempt in 0..2 {
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut f) => {
+                let _ = writeln!(f, "pid={} at={}", std::process::id(), now_local_stamp());
+                return BookLock(path);
+            }
+            Err(e) if attempt == 0 => {
+                let alive = read_opt(&path)
+                    .and_then(|s| {
+                        s.split_whitespace()
+                            .find_map(|kv| kv.strip_prefix("pid=").map(str::to_string))
+                    })
+                    .map(|pid| Path::new(&format!("/proc/{pid}")).exists());
+                if alive == Some(false) {
+                    // 残留锁（持锁进程已死）——摘除重试
+                    let _ = fs::remove_file(&path);
+                    continue;
+                }
+                die(
+                    p,
+                    &format!(
+                        "另一写者持锁：{}（{e}）——并发写会丢留痕；确认无并发（上次崩溃残留）后手动删除该锁文件再试",
+                        path.display()
+                    ),
+                );
+            }
+            Err(e) => die(
+                p,
+                &format!(
+                    "锁文件异常：{}（{e}）——确认无并发后手动删除再试",
+                    path.display()
+                ),
+            ),
+        }
+    }
+    unreachable!("锁重试逻辑最多两轮")
+}
+
+impl Drop for BookLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
+}
+
 // ---------------------------------------------------------------
 // new：写信 + 发令牌
 // ---------------------------------------------------------------
@@ -234,6 +308,9 @@ fn mailbox_of(args: &Args) -> PathBuf {
 fn cmd_new(args: &Args) {
     let p = "mailbox-new";
     let mailbox = mailbox_of(args);
+    // 写者分区闸（BAR-177 必修③）+ 写者锁（建议⑥）：与 gen/reticket 同闸同锁
+    reject_main_book_write(p, &mailbox);
+    let _lock = acquire_book_lock(p, &mailbox);
     let from_func = args.opt("from-func").unwrap_or_else(|| {
         die(p, "v2.1 模式需要 --from-func <职能> --from-name <两字名>（如 --from-func 研究部 --from-name 清和）")
     });
@@ -550,19 +627,30 @@ fn cmd_gen(args: &Args) {
     let p = "mailbox-gen";
     let mailbox = mailbox_of(args);
     let check_only = args.has("check-only");
-    // 写者分区：主册由 kfmv4 侧 gen-agent-inbox.mjs 独占回写，本器只许 --check-only
+    // 写者分区（BAR-177 必修③：提成公共函数，new/reticket 入口同过）
+    let _lock = if check_only {
+        None
+    } else {
+        reject_main_book_write(p, &mailbox);
+        Some(acquire_book_lock(p, &mailbox))
+    };
+    let roster = resolve_roster(args, &mailbox);
     if !check_only {
-        let canon = fs::canonicalize(&mailbox).unwrap_or_else(|_| mailbox.clone());
-        let main_canon = fs::canonicalize(MAIN_BOOK).unwrap_or_else(|_| PathBuf::from(MAIN_BOOK));
-        if canon == main_canon {
-            die(
-                p,
-                "写者分区：--mailbox 指向主册（kfmv4 docs/ledger/agent-inbox）时本器拒绝写入——主册回写归 kfmv4 侧 gen-agent-inbox.mjs（只许 --check-only）",
-            );
+        let (errors, rows, active, archive) = gen_write_now(&mailbox, roster.as_ref());
+        if !errors.is_empty() {
+            for e in &errors {
+                eprintln!("[{p}] {e}");
+            }
+            eprintln!("[{p}] {} 处问题", errors.len());
+            exit(1);
         }
+        println!(
+            "[{p}] 已回写信件清单（{} 封：在册 {} + 归档 {}）+ letters-index.jsonl（{} 行）",
+            rows, active, archive, rows
+        );
+        return;
     }
     let letters = load_letters(&mailbox);
-    let roster = resolve_roster(args, &mailbox);
     let out = projection::render_gen(&letters, roster.as_ref());
     let mut errors = out.errors.clone();
 
@@ -582,52 +670,82 @@ fn cmd_gen(args: &Args) {
     }
     let index_path = mailbox.join("letters-index.jsonl");
     let prev_index = read_opt(&index_path);
-    if check_only {
-        if next != doc {
-            errors.push("README 台账投影漂移（gen:pending/gen:agent-inbox 区段与信件不一致）——跑 mailbox-cli gen 回写".to_string());
-        }
-        if prev_index.as_deref() != Some(out.index_text.as_str()) {
-            errors.push(
-                "派生索引漂移：letters-index.jsonl 与信件不一致——跑 mailbox-cli gen 回写"
-                    .to_string(),
-            );
-        }
-    } else {
-        if errors.is_empty() && next != doc {
-            fs::write(&readme_path, &next)
-                .unwrap_or_else(|e| die(p, &format!("回写 README 失败：{e}")));
-        }
-        if errors.is_empty() && prev_index.as_deref() != Some(out.index_text.as_str()) {
-            fs::write(&index_path, &out.index_text)
-                .unwrap_or_else(|e| die(p, &format!("回写 letters-index.jsonl 失败：{e}")));
-        }
+    if next != doc {
+        errors.push("README 台账投影漂移（gen:pending/gen:agent-inbox 区段与信件不一致）——跑 mailbox-cli gen 回写".to_string());
+    }
+    if prev_index.as_deref() != Some(out.index_text.as_str()) {
+        errors.push(
+            "派生索引漂移：letters-index.jsonl 与信件不一致——跑 mailbox-cli gen 回写".to_string(),
+        );
     }
     if !errors.is_empty() {
         for e in &errors {
             eprintln!("[{p}] {e}");
         }
-        eprintln!(
-            "[{p}] {} 处问题{}",
-            errors.len(),
-            if check_only {
-                "——跑 mailbox-cli gen 回写"
-            } else {
-                ""
-            }
-        );
+        eprintln!("[{p}] {} 处问题——跑 mailbox-cli gen 回写", errors.len());
         exit(1);
     }
-    if check_only {
-        println!(
-            "[{p}] OK — {} 封信台账投影与机读头一致（在册 {} + 归档 {}）",
-            out.rows, out.active, out.archive
-        );
-    } else {
-        println!(
-            "[{p}] 已回写信件清单（{} 封：在册 {} + 归档 {}）+ letters-index.jsonl（{} 行）",
-            out.rows, out.active, out.archive, out.rows
-        );
+    println!(
+        "[{p}] OK — {} 封信台账投影与机读头一致（在册 {} + 归档 {}）",
+        out.rows, out.active, out.archive
+    );
+}
+
+/// 投影全链回写（reticket 收尾用，BAR-177 必修②）：render → splice 两区段
+/// → 有变化才写盘。返回 (错误串, 总数, 在册, 归档)；调用方负责写者分区闸与锁
+fn gen_write_now(mailbox: &Path, roster: Option<&Roster>) -> (Vec<String>, usize, usize, usize) {
+    let letters = load_letters(mailbox);
+    let out = projection::render_gen(&letters, roster);
+    let mut errors = out.errors.clone();
+    let readme_path = mailbox.join("README.md");
+    let Some(doc) = read_opt(&readme_path) else {
+        errors.push(format!("{} 不存在", readme_path.display()));
+        return (errors, out.rows, out.active, out.archive);
+    };
+    let mut next = doc.clone();
+    match projection::splice_section(&next, PENDING_START, PENDING_END, &out.pending_section) {
+        Ok(s) => next = s,
+        Err(e) => errors.push(e),
     }
+    match projection::splice_section(&next, MARK_START, MARK_END, &out.ledger_section) {
+        Ok(s) => next = s,
+        Err(e) => errors.push(e),
+    }
+    if errors.is_empty() {
+        errors.extend(write_projection_files(
+            &readme_path,
+            &doc,
+            &next,
+            &mailbox.join("letters-index.jsonl"),
+            &out.index_text,
+        ));
+    }
+    (errors, out.rows, out.active, out.archive)
+}
+
+/// 投影回写盘（cmd_gen 与 reticket 收尾共用，BAR-177 必修②）：有变化才写，
+/// 返回错误串（空 = 全绿）。调用方负责写者分区闸与写者锁
+fn write_projection_files(
+    readme_path: &Path,
+    doc: &str,
+    next: &str,
+    index_path: &Path,
+    index_text: &str,
+) -> Vec<String> {
+    let mut errors = vec![];
+    if next != doc
+        && let Err(e) = fs::write(readme_path, next)
+    {
+        errors.push(format!("回写 README 失败：{e}"));
+    }
+    let prev_index = read_opt(index_path);
+    if errors.is_empty()
+        && prev_index.as_deref() != Some(index_text)
+        && let Err(e) = fs::write(index_path, index_text)
+    {
+        errors.push(format!("回写 letters-index.jsonl 失败：{e}"));
+    }
+    errors
 }
 
 // ---------------------------------------------------------------
@@ -680,12 +798,25 @@ fn cmd_reticket(args: &Args) {
     let path = args.pos.get(1).unwrap_or_else(|| {
         die(
             p,
-            "用法：mailbox-cli reticket <信件路径> --new-name <新文件名> [--reason <说明>]",
+            "用法：mailbox-cli reticket <信件路径> --new-name <新文件名> [--reason <说明>] [--force]",
         )
     });
     let lp = PathBuf::from(path);
     if !lp.is_file() {
         die(p, &format!("信件不存在：{path}"));
+    }
+    let mailbox = mailbox_of(args);
+    // ③ 写者分区闸（BAR-177）：指向主册一律拒写（与 new/gen 同闸）
+    reject_main_book_write(p, &mailbox);
+    // ⑩ 显式拒绝跨目录（BAR-177）：只许换信箱根目录下的在册信——归档区信
+    // 换票会静默「出档」落到在册根目录；lp 在 --mailbox 外同理拒
+    let canon_mb = fs::canonicalize(&mailbox).unwrap_or_else(|_| mailbox.clone());
+    let canon_lp = fs::canonicalize(&lp).unwrap_or_else(|_| lp.clone());
+    if canon_lp.parent() != Some(canon_mb.as_path()) {
+        die(
+            p,
+            &format!("reticket 只许换信箱根目录下的在册信（归档区/册外路径一律拒）：{path}"),
+        );
     }
     let old_file = lp
         .file_name()
@@ -695,9 +826,22 @@ fn cmd_reticket(args: &Args) {
     let new_name = args
         .opt("new-name")
         .unwrap_or_else(|| die(p, "reticket 需要 --new-name <新文件名>（改名不改号）"));
-    let mailbox = mailbox_of(args);
     if mailbox.join(new_name).is_file() || mailbox.join("archive-v1").join(new_name).is_file() {
         die(p, &format!("目标已存在：{new_name}"));
+    }
+    // ④ 禁止降级改名（BAR-177）：新名强制 v2.1 文法——旧 ASCII 名只许出现在
+    // 旧名位置。v2.1 信降级成 ASCII 名会脱离 §二/§三/§七 全量执法而 verify 不拦
+    if !is_v21_name(new_name) {
+        die(
+            p,
+            &format!(
+                "新文件名必须是 v2.1 形态（契约 §二「文件名出生即冻结」，唯一例外 = §八窗口内换票且新名仍须过文法）：{new_name}"
+            ),
+        );
+    }
+    let parsed = parse_v21_name(new_name);
+    if !parsed.errs.is_empty() {
+        die(p, &format!("新文件名文法不合：{}", parsed.errs.join("；")));
     }
     let text = read_opt(&lp).unwrap_or_default();
     let Some(tm) = token::find_token(&text) else {
@@ -706,26 +850,119 @@ fn cmd_reticket(args: &Args) {
             &format!("缺令牌行：{old_file} 没有 LETTER-TOKEN v2 行——非生成器签发的信不能换票"),
         );
     };
-    // 改名不改号：新名编号须与令牌编号一致
-    let new_no = v21_no_of(new_name)
-        .or_else(|| mailbox_core::name::legacy_no_of(new_name))
-        .unwrap_or_else(|| die(p, &format!("新文件名缺编号：{new_name}")));
+    // 改名不改号：新名编号须与令牌编号一致（is_v21_name 已保 Some）
+    let new_no = v21_no_of(new_name).unwrap_or_default();
     if new_no != tm.no {
         die(
             p,
             &format!("改名不改号：新名编号 {new_no} ≠ 令牌编号 {}", tm.no),
         );
     }
-    if is_v21_name(new_name) {
-        let parsed = parse_v21_name(new_name);
-        if !parsed.errs.is_empty() {
-            die(p, &format!("新文件名文法不合：{}", parsed.errs.join("；")));
+    // ⑪ 生成即合规（BAR-177，对 0010 存疑项的答复）：新名的发信人/收件人
+    // 入口即过名字池校验，与严格池口径对齐——v2.1 文件名不带职能段，只能
+    // 校名字池一级（职能/组合校验归 verify 的信封面）
+    let roster = resolve_roster(args, &mailbox);
+    match &roster {
+        None => println!("[{p}] 注意 — roster.json 缺失——新名名字池校验退化为仅文法校验"),
+        Some(r) => {
+            let mut names: Vec<(&str, &str)> = vec![];
+            if let Some(f) = &parsed.from_name {
+                names.push(("发信人", f.as_str()));
+            }
+            if let Some(items) = &parsed.to_items {
+                for it in items {
+                    if it.name != "全体" {
+                        names.push(("收件人", it.name.as_str()));
+                    }
+                }
+            }
+            let mut errs = vec![];
+            for (who, name) in &names {
+                if r.name_rec(name).is_none() {
+                    let msg = format!("{who}名字「{name}」不在名字池（池唯一出处 = roster.json）");
+                    if strict_pools(args) {
+                        errs.push(msg);
+                    } else {
+                        println!("[{p}] 注意 — {msg}");
+                    }
+                }
+            }
+            if !errs.is_empty() {
+                for e in &errs {
+                    eprintln!("[{p}] ✗ {e}");
+                }
+                exit(1);
+            }
         }
+    }
+    // ⑥ 写者锁：读取-改写-写回全程持锁（与 new/gen 同一把）
+    let _lock = acquire_book_lock(p, &mailbox);
+    // ① 改名窗口判据（BAR-177 必修，契约 §八第 7 条「窗口一过（有任何回应），
+    // 改名一律禁止」）：状态非 待* 即窗口关闭；再扫两册（na 册 + --main-book
+    // 主册，目录不存在自动跳过）有无 复: <no> 的信，有即拒。--force 逃生闸：
+    // force 事实与改动内容写进撤销票 revokeReason
+    let force = args.has("force");
+    let hdr = mailbox_core::header::parse_header(&text, &["状态"]);
+    let status = mailbox_core::header::header_get(&hdr, "状态")
+        .unwrap_or("")
+        .to_string();
+    let mut window_blocks: Vec<String> = vec![];
+    if status.is_empty() {
+        window_blocks.push("信封缺「状态」行".to_string());
+    } else if !mailbox_core::status::status_is_pending(&status) {
+        window_blocks.push(format!("状态已翻「{status}」（非待*）"));
+    }
+    let mut repliers: Vec<String> = vec![];
+    let main_book = PathBuf::from(args.opt("main-book").unwrap_or(MAIN_BOOK));
+    let digits_no = tm.no.trim_start_matches(|c: char| c.is_ascii_uppercase());
+    let mut books: Vec<(&str, Vec<LetterText>)> = vec![("NA", load_letters(&mailbox))];
+    if main_book.is_dir() {
+        books.push(("MAIN", load_letters(&main_book)));
+    }
+    for (label, letters) in &books {
+        for lt in letters {
+            if *label == "NA" && lt.dir == "active" && lt.file == old_file {
+                continue; // 被换票的自身不算回应
+            }
+            let h = mailbox_core::header::parse_header(&lt.text, &["复"]);
+            let Some(v) = mailbox_core::header::header_get(&h, "复") else {
+                continue;
+            };
+            let hit = v
+                .split(|c: char| !c.is_ascii_alphanumeric())
+                .any(|seg| seg == tm.no || (!digits_no.is_empty() && seg == digits_no));
+            if hit {
+                repliers.push(format!(
+                    "[{label}] {}{}",
+                    if lt.dir != "active" { "[归档] " } else { "" },
+                    lt.file
+                ));
+            }
+        }
+    }
+    if !repliers.is_empty() {
+        window_blocks.push(format!("已有复信：{}", repliers.join("、")));
+    }
+    if !window_blocks.is_empty() && !force {
+        die(
+            p,
+            &format!(
+                "改名窗口已关闭（契约 §八第 7 条：有任何回应即禁止改名，只能在 H1/正文更正）——{}。确需强制：--force（force 事实与改动内容将写进撤销票 revokeReason）",
+                window_blocks.join("；")
+            ),
+        );
     }
     let tokens_path = mailbox.join("letter-tokens.jsonl");
     let ledger_text = read_opt(&tokens_path)
         .unwrap_or_else(|| die(p, &format!("台账不存在：{}", tokens_path.display())));
     let ledger = parse_ledger(&ledger_text);
+    // ⑧ 脏台账即拒（BAR-177）：台账自身有错（坏行/编号重复）不许继续加票
+    if !ledger.errs.is_empty() {
+        die(
+            p,
+            &format!("台账自身有错（先修台账再换票）：{}", ledger.errs.join("；")),
+        );
+    }
     let Some(cur) = ledger.find_current(&tm.no) else {
         die(p, &format!("台账找不到 no={} 的现行票据", tm.no));
     };
@@ -738,14 +975,39 @@ fn cmd_reticket(args: &Args) {
             ),
         );
     }
+    // ⑦ 防篡改（BAR-177）：与台账现行票比 nonce/fp，不符即拒——旧实现拿信内
+    // 令牌反拼行再 contains 是恒真死码，台账被改也照过
+    if cur.nonce.as_deref() != Some(tm.nonce.as_str()) || cur.fp.as_deref() != Some(tm.fp.as_str())
+    {
+        die(
+            p,
+            &format!(
+                "台账现行票与信内令牌不符（台账 nonce={:?} fp={:?} vs 信内 nonce={} fp={}）——疑似台账被改或票据归属错乱，先跑 mailbox-cli verify 查清",
+                cur.nonce, cur.fp, tm.nonce, tm.fp
+            ),
+        );
+    }
     let now = args
         .opt("now-utc")
         .map(str::to_string)
         .unwrap_or_else(now_utc_iso);
-    let reason = args
-        .opt("reason")
-        .map(str::to_string)
-        .unwrap_or_else(|| "改名窗口内换票（契约 §八）".to_string());
+    // force 逃生闸必须把 force 事实与改动内容写进 revokeReason（0010 必修①）
+    let base_reason = args.opt("reason").map(str::to_string);
+    let reason = if force {
+        let detail = if window_blocks.is_empty() {
+            "窗口判据全过但指定了 --force".to_string()
+        } else {
+            window_blocks.join("；")
+        };
+        match base_reason {
+            Some(r) => {
+                format!("【force 强制换票】{detail}——仍执行 {old_file} → {new_name}；理由：{r}")
+            }
+            None => format!("【force 强制换票】{detail}——仍执行 {old_file} → {new_name}"),
+        }
+    } else {
+        base_reason.unwrap_or_else(|| "改名窗口内换票（契约 §八）".to_string())
+    };
     let nonce = args
         .opt("nonce")
         .map(str::to_string)
@@ -802,23 +1064,69 @@ fn cmd_reticket(args: &Args) {
     let mut out = lines.join("\n");
     out.push('\n');
 
-    // 信内令牌行换新 fp；文件改名
+    // 信内令牌行换新 fp（旧行 replacen 一次，与主册铁律一致）
     let old_line = token::token_line(&tm.no, &tm.nonce, &tm.fp);
     let new_line = token::token_line(&tm.no, &nonce, &new_fp);
     if !text.contains(&old_line) {
         die(p, "信内令牌行与台账票面不符——先跑 mailbox-cli verify 查清");
     }
     let new_text = text.replacen(&old_line, &new_line, 1);
-    fs::write(mailbox.join(new_name), &new_text)
-        .unwrap_or_else(|e| die(p, &format!("写新信件失败：{e}")));
-    fs::write(&tokens_path, out).unwrap_or_else(|e| die(p, &format!("回写台账失败：{e}")));
-    if lp != mailbox.join(new_name) {
-        fs::remove_file(&lp).unwrap_or_else(|e| die(p, &format!("移除旧信件失败：{e}")));
+    // ⑤ 三步写入改序 + 临时文件 rename + 失败回滚（BAR-177）：
+    // 新信件 → 台账 → 删旧信；每步失败都要么未落盘、要么错误串写清已落盘什么
+    let new_path = mailbox.join(new_name);
+    let tmp_letter = mailbox.join(format!(".{new_name}.tmp-{}", std::process::id()));
+    if let Err(e) =
+        fs::write(&tmp_letter, &new_text).and_then(|_| fs::rename(&tmp_letter, &new_path))
+    {
+        let _ = fs::remove_file(&tmp_letter);
+        die(p, &format!("写新信件失败（已落盘：无；台账未动）：{e}"));
+    }
+    let tmp_ledger = mailbox.join(format!(".letter-tokens.jsonl.tmp-{}", std::process::id()));
+    if let Err(e) = fs::write(&tmp_ledger, &out).and_then(|_| fs::rename(&tmp_ledger, &tokens_path))
+    {
+        let _ = fs::remove_file(&tmp_ledger);
+        let _ = fs::remove_file(&new_path);
+        die(
+            p,
+            &format!("回写台账失败（已回滚：新信件已删；台账未动）：{e}"),
+        );
+    }
+    if canon_lp != new_path
+        && let Err(e) = fs::remove_file(&lp)
+    {
+        die(
+            p,
+            &format!(
+                "移除旧信件失败（已落盘：新信件 {new_name} + 台账新票；残留旧信 {old_file} 请手动删除后跑 verify 复核）：{e}"
+            ),
+        );
     }
     println!(
         "[{p}] 已换票：{old_file} → {new_name}（编号 {} 不变；旧票已记 revokedAt，新票 renamedFrom={old_file}）",
         tm.no
     );
+    // ② 换票后收尾（BAR-177 必修，契约 §八补注「改完重跑生成器刷新台账与
+    // 派生索引」）：na 册直接调投影回写；无 README 的册（夹具/新册）照 new
+    // 样式打印下一步。主册在入口③闸已拒
+    if mailbox.join("README.md").is_file() {
+        let (errs, rows, active, archive) = gen_write_now(&mailbox, roster.as_ref());
+        if !errs.is_empty() {
+            for e in &errs {
+                eprintln!("[{p}] {e}");
+            }
+            eprintln!("[{p}] 投影回写失败——换票本体已落盘，请手动跑 mailbox-cli gen 诊断");
+            exit(1);
+        }
+        println!(
+            "[{p}] 台账投影已回写（{} 封：在册 {} + 归档 {}）→ 下一步：mailbox-cli verify",
+            rows, active, archive
+        );
+    } else {
+        println!(
+            "[{p}] 下一步：mailbox-cli verify {} → mailbox-cli gen",
+            new_path.display()
+        );
+    }
 }
 
 // ---------------------------------------------------------------
@@ -835,14 +1143,16 @@ const USAGE: &str = "mailbox-cli — kfm-na 信箱工具链（逻辑核 mailbox-
   mailbox-cli verify [信件路径]      不带参数=全册执法；带文件=单信自检
   mailbox-cli gen [--check-only]     回写 README 两区段 + letters-index.jsonl（主册拒绝写入）
   mailbox-cli scan --for=<目标> | --by=<名字>   跨册欠账扫描（na 册 [NA] + 主册 [MAIN]）
-  mailbox-cli reticket <信件路径> --new-name <新文件名> [--reason <说明>]   改名换票（契约 §八）
+  mailbox-cli reticket <信件路径> --new-name <新文件名> [--reason <说明>] [--force]
+                          改名换票（契约 §八：状态非待*/两册有复信即拒；--force 逃生，
+                          force 事实写进撤销票 revokeReason；na 册收尾直接回写投影）
 
 公共选项：
   --mailbox <dir>       信箱根（默认 /root/.kfm/session/信箱）
   --roster <path>       名册（默认 信箱/roster.json → 主册 roster.json）
   --name-prefix <re>    存量信命名前缀（默认 kfm-na|na）
   --v1-manifest <path>  v1 冻结名单（默认 信箱/archive-v1/manifest-v1.json → 信箱/manifest-v1.json）
-  --main-book <dir>     scan 的主册路径（默认 /root/kfmv4/docs/ledger/agent-inbox）
+  --main-book <dir>     scan/reticket 的主册路径（默认 /root/kfmv4/docs/ledger/agent-inbox）
   --no-strict-pools     名字池严格模式降级（env KFM_MAILBOX_STRICT_POOLS=0 同效）";
 
 fn main() {

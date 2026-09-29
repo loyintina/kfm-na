@@ -823,6 +823,90 @@ fn verify_book_reticket_pairing_warning() {
 }
 
 #[test]
+fn spec_bar179_verify_日期单调_分拣码混排按数字序() {
+    // BAR-179：编号数字段序 = 签发序（next_number 跨前缀统一 max+1）。
+    // 字符串序在混排前缀下会把 0018 排到 NA0015 前，把数字序单调的真册误判
+    // 成「日期非单调」红（na 册 NA 前缀与纯数字混排实录，0018 撞墙定罪；
+    // 主册前缀划一从未踩到，JS check-letter-token.mjs localeCompare 同款潜伏）。
+    let v1: HashSet<String> = HashSet::new();
+    let r = roster();
+    let mk = |no: &str, nonce: &str, time: &str| {
+        let f = format!("{no}号清和致评审部白露关于日期序的通报.md");
+        let text = v21_letter(&f, nonce, "评审部白露", "无（首信）", "待回信", "已填实。")
+            .replace("2026-09-28 10:00", time);
+        (f, text)
+    };
+
+    // 数字序 NA0015 < 0016 < 0018 且日期 10:00 < 11:00 < 12:00：单调，不该红。
+    // 旧字符串序 0016 < 0018 < NA0015 → NA0015(10:00) 早于 0018(12:00) 误判红。
+    let (f1, t1) = mk("NA0015", "aabbccddeeff0015", "2026-09-29 10:00");
+    let (f2, t2) = mk("0016", "aabbccddeeff0016", "2026-09-29 11:00");
+    let (f3, t3) = mk("0018", "aabbccddeeff0018", "2026-09-29 12:00");
+    let letters = vec![
+        LetterText {
+            file: f1.clone(),
+            dir: "active".into(),
+            text: t1.clone(),
+        },
+        LetterText {
+            file: f2.clone(),
+            dir: "active".into(),
+            text: t2.clone(),
+        },
+        LetterText {
+            file: f3.clone(),
+            dir: "active".into(),
+            text: t3.clone(),
+        },
+    ];
+    let tokens = ledger_line("NA0015", &f1, "aabbccddeeff0015")
+        + "\n"
+        + &ledger_line("0016", &f2, "aabbccddeeff0016")
+        + "\n"
+        + &ledger_line("0018", &f3, "aabbccddeeff0018")
+        + "\n";
+    let d = verify::verify_book(&book(&letters, &tokens, &v1, &r));
+    assert!(
+        !d.errs.iter().any(|e| e.contains("日期非单调")),
+        "{:?}",
+        d.errs
+    );
+
+    // 负样本：NA0015 真回退（13:00 晚于 0016/0018）——数字序下必红，
+    // 防判据被整体摘除（字符串序反而看不到这条红）。
+    let (f1, t1) = mk("NA0015", "aabbccddeeff0015", "2026-09-29 13:00");
+    let letters = vec![
+        LetterText {
+            file: f1.clone(),
+            dir: "active".into(),
+            text: t1,
+        },
+        LetterText {
+            file: f2.clone(),
+            dir: "active".into(),
+            text: t2,
+        },
+        LetterText {
+            file: f3.clone(),
+            dir: "active".into(),
+            text: t3,
+        },
+    ];
+    let tokens = ledger_line("NA0015", &f1, "aabbccddeeff0015")
+        + "\n"
+        + &ledger_line("0016", &f2, "aabbccddeeff0016")
+        + "\n"
+        + &ledger_line("0018", &f3, "aabbccddeeff0018")
+        + "\n";
+    let d = verify::verify_book(&book(&letters, &tokens, &v1, &r));
+    assert!(
+        d.errs.iter().any(|e| e.contains("日期非单调")),
+        "{:?}",
+        d.errs
+    );
+}
+
+#[test]
 fn verify_book_legacy_placeholder_and_clean() {
     let v1: HashSet<String> = HashSet::new();
     let r = roster();

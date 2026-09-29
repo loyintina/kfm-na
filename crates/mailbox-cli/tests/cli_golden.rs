@@ -327,6 +327,8 @@ fn verify_book_sweep() {
 fn reticket_renames_and_revokes() {
     let d = setup_verified_book("reticket");
     let mb = d.to_str().unwrap().to_string();
+    // BAR-177 起 reticket 扫两册复信——钉必须不依赖宿主主册，指到不存在路径
+    let no_main = d.join("no-main-book").to_str().unwrap().to_string();
     let old = d.join(LETTER_A).to_str().unwrap().to_string();
     let new_name = "0001号清和致评审部白露及开发部观澜复0004关于改名测试的通报.md";
     let out = run(&[
@@ -334,6 +336,10 @@ fn reticket_renames_and_revokes() {
         &old,
         "--mailbox",
         &mb,
+        "--roster",
+        ROSTER,
+        "--main-book",
+        &no_main,
         "--new-name",
         new_name,
         "--reason",
@@ -391,6 +397,277 @@ fn extract_fp(text: &str) -> &str {
         "fp 非 16 位 hex：{hex}"
     );
     hex
+}
+
+// ---------------------------------------------------------------
+// BAR-177：reticket 四项必修判据钉（白露 0010 审查 §二/§三）
+// ---------------------------------------------------------------
+
+/// 窗口拒绝钉（必修①考卷）：状态已翻（非待*）的信、已有复信的信，
+/// reticket 必须拒（契约 §八第 7 条）；--force 逃生必须把 force 事实与
+/// 改动内容写进撤销票 revokeReason。顺带 ④：新名降级旧 ASCII 形态必须拒
+/// （报错指向契约 §二）。变异方向：窗口判据/④文法跳检摘除 → 本题全红
+#[test]
+fn spec_bar177_reticket_窗口拒绝与force留痕() {
+    // 场景一：状态已翻「已回」→ 拒，且信件/台账分毫不动
+    let d = setup_verified_book("bar177-window");
+    let mb = d.to_str().unwrap().to_string();
+    let no_main = d.join("no-main-book").to_str().unwrap().to_string();
+    let old = d.join(LETTER_A).to_str().unwrap().to_string();
+    let new_name = "0001号清和致评审部白露及开发部观澜复0004关于窗口判据的通报.md";
+    let text = fs::read_to_string(d.join(LETTER_A)).unwrap();
+    fs::write(
+        d.join(LETTER_A),
+        text.replacen("> 状态: 待回信", "> 状态: 已回", 1),
+    )
+    .unwrap();
+    let ledger_before = fs::read_to_string(d.join("letter-tokens.jsonl")).unwrap();
+    let out = run(&[
+        "reticket",
+        &old,
+        "--mailbox",
+        &mb,
+        "--roster",
+        ROSTER,
+        "--main-book",
+        &no_main,
+        "--new-name",
+        new_name,
+        "--now-utc",
+        "2026-09-29T02:00:00.000Z",
+        "--nonce",
+        "aabbccddeeff0022",
+    ]);
+    assert_fail(&out, "BAR-177 窗口：状态已翻必须拒");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("改名窗口已关闭") && stderr.contains("已回"),
+        "报错应点名窗口与状态：{stderr}"
+    );
+    assert!(d.join(LETTER_A).exists() && !d.join(new_name).exists());
+    assert_eq!(
+        fs::read_to_string(d.join("letter-tokens.jsonl")).unwrap(),
+        ledger_before,
+        "被拒后台账不得变动"
+    );
+    // 场景二：同信 --force 逃生 → 成功，撤销票 revokeReason 带 force 事实与改动内容
+    let out = run(&[
+        "reticket",
+        &old,
+        "--mailbox",
+        &mb,
+        "--roster",
+        ROSTER,
+        "--main-book",
+        &no_main,
+        "--new-name",
+        new_name,
+        "--reason",
+        "钉 force 留痕",
+        "--force",
+        "--now-utc",
+        "2026-09-29T02:00:00.000Z",
+        "--nonce",
+        "aabbccddeeff0022",
+    ]);
+    assert_ok(&out, "BAR-177 force 逃生闸");
+    let ledger = fs::read_to_string(d.join("letter-tokens.jsonl")).unwrap();
+    assert!(
+        ledger.contains("【force 强制换票】")
+            && ledger.contains("已回")
+            && ledger.contains(&format!("{LETTER_A} → {new_name}")),
+        "revokeReason 须写清 force 事实与改动内容：{ledger}"
+    );
+    let _ = fs::remove_dir_all(&d);
+
+    // 场景三：已有复信的信（LETTER_A 复: 0004 → 0004 号信已有回应）→ 拒
+    let d = setup_verified_book("bar177-replied");
+    let mb = d.to_str().unwrap().to_string();
+    let no_main = d.join("no-main-book").to_str().unwrap().to_string();
+    let old4 = d
+        .join("0004号白露致研究部清和的通报.md")
+        .to_str()
+        .unwrap()
+        .to_string();
+    let new4 = "0004号白露致研究部清和关于回件后改名的通报.md";
+    let out = run(&[
+        "reticket",
+        &old4,
+        "--mailbox",
+        &mb,
+        "--roster",
+        ROSTER,
+        "--main-book",
+        &no_main,
+        "--new-name",
+        new4,
+        "--now-utc",
+        "2026-09-29T02:00:00.000Z",
+        "--nonce",
+        "aabbccddeeff0044",
+    ]);
+    assert_fail(&out, "BAR-177 窗口：已有复信必须拒");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("改名窗口已关闭")
+            && stderr.contains("已有复信")
+            && stderr.contains(LETTER_A),
+        "报错应点名复信：{stderr}"
+    );
+    // 场景四（必修④）：新名降级旧 ASCII 形态 → 拒，报错指向契约 §二
+    let old = d.join(LETTER_A).to_str().unwrap().to_string();
+    let out = run(&[
+        "reticket",
+        &old,
+        "--mailbox",
+        &mb,
+        "--roster",
+        ROSTER,
+        "--main-book",
+        &no_main,
+        "--new-name",
+        "0001-kfm-na-downgrade-report.md",
+        "--now-utc",
+        "2026-09-29T02:00:00.000Z",
+        "--nonce",
+        "aabbccddeeff0055",
+    ]);
+    assert_fail(&out, "BAR-177 ④：降级改名必须拒");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("v2.1") && stderr.contains("§二"),
+        "报错应指向契约 §二：{stderr}"
+    );
+    let _ = fs::remove_dir_all(&d);
+}
+
+/// 换票后投影复绿钉（必修②考卷）：窗口内换票后 na 册直接回写投影，
+/// gen 再跑幂等、verify + gen --check-only 全绿。变异方向：收尾投影摘除 →
+/// 「check-only 当场绿」红
+#[test]
+fn spec_bar177_reticket_投影复绿() {
+    let d = setup_verified_book("bar177-proj");
+    // 带 gen 标记与状态词表的 README 进册（收尾投影回写的落点）
+    fs::write(
+        d.join("README.md"),
+        "# BAR-177 钉夹具\n\n合法状态词表（测试钉）：待回信 / 已回 / 已落地 / 已验证。\n\n<!-- gen:pending:start -->\n<!-- gen:pending:end -->\n\n## 信件清单\n\n<!-- gen:agent-inbox:start -->\n<!-- gen:agent-inbox:end -->\n",
+    )
+    .unwrap();
+    let mb = d.to_str().unwrap().to_string();
+    let no_main = d.join("no-main-book").to_str().unwrap().to_string();
+    let old = d.join(LETTER_A).to_str().unwrap().to_string();
+    let new_name = "0001号清和致评审部白露及开发部观澜复0004关于投影回写的通报.md";
+    let out = run(&[
+        "reticket",
+        &old,
+        "--mailbox",
+        &mb,
+        "--roster",
+        ROSTER,
+        "--main-book",
+        &no_main,
+        "--new-name",
+        new_name,
+        "--now-utc",
+        "2026-09-29T02:10:00.000Z",
+        "--nonce",
+        "aabbccddeeff0033",
+    ]);
+    assert_ok(&out, "BAR-177 窗口内换票");
+    // 收尾已直接回写：check-only 当场绿（不先跑 gen）
+    let out = run(&["gen", "--mailbox", &mb, "--roster", ROSTER, "--check-only"]);
+    assert_ok(
+        &out,
+        "BAR-177 换票后 gen --check-only 当场绿（投影已随换票回写）",
+    );
+    // 考卷口径：gen 回写幂等 + verify 全册绿 + check-only 复绿
+    let out = run(&["gen", "--mailbox", &mb, "--roster", ROSTER]);
+    assert_ok(&out, "BAR-177 换票后 gen 回写幂等");
+    let out = run(&["verify", "--mailbox", &mb, "--roster", ROSTER]);
+    assert_ok(&out, "BAR-177 换票后 verify 全册绿");
+    let out = run(&["gen", "--mailbox", &mb, "--roster", ROSTER, "--check-only"]);
+    assert_ok(&out, "BAR-177 gen --check-only 复绿");
+    let _ = fs::remove_dir_all(&d);
+}
+
+/// ⑦防篡改钉：台账现行票 nonce 被改 → reticket 必须拒（修复前旧实现是
+/// 恒真死码——拿信内令牌反拼行再 contains，台账改坏照过 exit 0）
+#[test]
+fn spec_bar177_reticket_台账票面篡改即拒() {
+    let d = setup_verified_book("bar177-tamper");
+    let mb = d.to_str().unwrap().to_string();
+    let no_main = d.join("no-main-book").to_str().unwrap().to_string();
+    let ledger = fs::read_to_string(d.join("letter-tokens.jsonl")).unwrap();
+    let bad = ledger.replacen(
+        "\"nonce\":\"3643be10ce49827a\"",
+        "\"nonce\":\"3643be10ce49827b\"",
+        1,
+    );
+    assert_ne!(bad, ledger, "夹具前提：台账应含 0001 现行票 nonce");
+    fs::write(d.join("letter-tokens.jsonl"), bad).unwrap();
+    let old = d.join(LETTER_A).to_str().unwrap().to_string();
+    let out = run(&[
+        "reticket",
+        &old,
+        "--mailbox",
+        &mb,
+        "--roster",
+        ROSTER,
+        "--main-book",
+        &no_main,
+        "--new-name",
+        "0001号清和致评审部白露及开发部观澜复0004关于篡改钉的通报.md",
+        "--now-utc",
+        "2026-09-29T02:20:00.000Z",
+        "--nonce",
+        "aabbccddeeff0066",
+    ]);
+    assert_fail(&out, "BAR-177 ⑦：台账 nonce 被改必须拒");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("台账现行票与信内令牌不符"),
+        "报错应点名票面对咬：{stderr}"
+    );
+    assert!(d.join(LETTER_A).exists(), "被拒后旧信应在");
+    let _ = fs::remove_dir_all(&d);
+}
+
+/// ⑧脏台账钉：台账预置同号双现行票（parse_ledger 必记 errs）→ reticket
+/// 必须拒（修复前忽略 ledger.errs 照加票）
+#[test]
+fn spec_bar177_reticket_脏台账即拒() {
+    let d = setup_verified_book("bar177-dirty");
+    let mb = d.to_str().unwrap().to_string();
+    let no_main = d.join("no-main-book").to_str().unwrap().to_string();
+    let mut ledger = fs::read_to_string(d.join("letter-tokens.jsonl")).unwrap();
+    ledger.push_str(
+        "{\"no\":\"0001\",\"file\":\"幽灵.md\",\"nonce\":\"00\",\"fp\":\"00\",\"tpl\":\"v2\",\"createdAt\":\"2026-09-29T00:00:00.000Z\",\"from\":\"清和\"}\n",
+    );
+    fs::write(d.join("letter-tokens.jsonl"), ledger).unwrap();
+    let old = d.join(LETTER_A).to_str().unwrap().to_string();
+    let out = run(&[
+        "reticket",
+        &old,
+        "--mailbox",
+        &mb,
+        "--roster",
+        ROSTER,
+        "--main-book",
+        &no_main,
+        "--new-name",
+        "0001号清和致评审部白露及开发部观澜复0004关于脏账钉的通报.md",
+        "--now-utc",
+        "2026-09-29T02:30:00.000Z",
+        "--nonce",
+        "aabbccddeeff0077",
+    ]);
+    assert_fail(&out, "BAR-177 ⑧：脏台账必须拒");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("台账自身有错"),
+        "报错应点名脏台账：{stderr}"
+    );
+    let _ = fs::remove_dir_all(&d);
 }
 
 // ---------------------------------------------------------------

@@ -438,11 +438,18 @@ pub fn verify_book(b: &BookCheck) -> Diags {
         }
     }
 
-    // v2.1 信封日期单调（≥上一封；按编号序）
+    // v2.1 信封日期单调（≥上一封；按编号序——编号数字段序，BAR-179：编号
+    // 在 v2.1 是跨分拣码共享的数字流水（next_number 跨前缀统一 max+1），
+    // 数字序 = 签发序；字符串序在混排前缀（0018 与 NA0015）下会把后签发的
+    // 纯数字信排到 NA 信前造成误判——JS 同款潜伏病，主册前缀划一从未踩到）
     {
+        let no_key = |no: &str| {
+            let digits: String = no.chars().skip_while(|c| c.is_ascii_uppercase()).collect();
+            (digits.parse::<u64>().unwrap_or(u64::MAX), no.to_string())
+        };
         let mut seq: Vec<&(String, String, f64)> =
             v21_times.iter().filter(|t| !t.2.is_nan()).collect();
-        seq.sort_by(|a, b| a.0.cmp(&b.0));
+        seq.sort_by(|a, b| no_key(&a.0).cmp(&no_key(&b.0)));
         for w in seq.windows(2) {
             if w[1].2 < w[0].2 {
                 d.errs.push(format!(
