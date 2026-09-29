@@ -2346,6 +2346,36 @@ impl Canvas {
     pub fn feed_bytes(&mut self, bytes: &[u8]) {
         self.proc.advance(&mut self.term, bytes);
     }
+
+    /// 对账续播（BAR-186 臂①）：尾块由 reseed::plan_reseed 产出——
+    /// 相同前缀不重放，既有画布原位续长（不重建不 swap，视图零闪）
+    pub fn reseed(&mut self, tail: &[u8]) {
+        self.proc.advance(&mut self.term, tail);
+    }
+
+    /// 全量文本导出（历史+屏，逐行 trim_end）——考题对账件：
+    /// reseed 尾块 ≡ 全量重建 的等价钉据此逐格比对
+    pub fn dump_all(&self) -> String {
+        let grid = self.term.grid();
+        let hist = grid.history_size();
+        let lines = grid.screen_lines();
+        let cols = grid.columns();
+        let mut out = String::with_capacity((hist + lines) * (cols / 2));
+        for i in 0..(hist + lines) {
+            let grid_line = Line(i as i32 - hist as i32);
+            let mut s = String::with_capacity(cols);
+            for col in 0..cols {
+                let cell = &grid[grid_line][Column(col)];
+                if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                    continue; // CJK 宽字符的后半格（dump_text 同规）
+                }
+                s.push(cell.c);
+            }
+            out.push_str(s.trim_end());
+            out.push('\n');
+        }
+        out
+    }
 }
 
 impl TermView {
@@ -2614,6 +2644,13 @@ impl TermView {
         }
     }
 
+    /// 浏览期对账续播（BAR-186 臂①）：尾块直喂浏览中的画布——不重建
+    /// 不 swap，阅读位/滚动零头全不动。返回 false = 非浏览态（调用方
+    /// 转喂 App 侧后台画布或回落全量重建）
+    pub fn reseed_browse(&mut self, tail: &[u8]) -> bool {
+        self.feed_browse(tail) // 同为字节续喂口，语义分名钉接线
+    }
+
     /// 退浏览态且画布交还 App（v4：触底回 live 后画布在后台继续续喂，
     /// 下次拖动起手零等待零抓取）。会话切换/resize/attach 等画布作废
     /// 场景不许走这里——那些走 exit_browse 丢弃
@@ -2707,6 +2744,15 @@ impl TermView {
     /// 回到底部贴最新输出（用户输入时调用——打字了就是要看现在，不是看历史）
     pub fn scroll_to_bottom(&mut self) {
         self.active_term_mut().scroll_display(Scroll::Bottom);
+    }
+
+    /// 追平落地帧（BAR-186 臂②追赶模式）：跳底 + 像素零头归零——
+    /// scroll_to_bottom 不清 scroll_frac_px，追赶期压帧后亮出的这一帧
+    /// 必须一刀齐（零头归零先例：enter_browse_term/take_browse_canvas/
+    /// exit_browse 三处同做）
+    pub fn land_bottom(&mut self) {
+        self.active_term_mut().scroll_display(Scroll::Bottom);
+        self.scroll_frac_px = 0.0;
     }
 
     /// 当前显示偏移（行，0 = 贴底）——B 档考题钉 + 实拍上报用
@@ -9335,6 +9381,8 @@ pub trait TermEmu: Send {
     /// 浏览期字节续喂（v4 推流唯一写入口）：锚守恒靠 alacritty 内置
     /// （display_offset>0 时新行入史自动抬 offset）；false = 非浏览态
     fn feed_browse(&mut self, bytes: &[u8]) -> bool;
+    /// 浏览期对账续播（BAR-186 臂①）：尾块直喂浏览画布，不重建不 swap
+    fn reseed_browse(&mut self, tail: &[u8]) -> bool;
     /// 退浏览态且画布交还 App（v4：后台续喂，下次起手零等待）；
     /// v3 快照臂/非浏览态 = None
     fn take_browse_canvas(&mut self) -> Option<Canvas>;
@@ -9679,6 +9727,8 @@ pub trait TermEmu: Send {
     fn take_tofu_chars(&self) -> Vec<char>;
     fn scroll_lines(&mut self, lines: i32);
     fn scroll_to_bottom(&mut self);
+    /// 追平落地帧（BAR-186 臂②）：跳底 + 像素零头归零一刀齐
+    fn land_bottom(&mut self);
     /// 当前视野纯文本导出（调试闸门 text-req 通道；跟随滚动位置，对齐「所见」）
     fn dump_text(&self) -> String;
     fn mouse_report_active(&self) -> bool;
@@ -9744,6 +9794,9 @@ impl TermEmu for TermView {
     }
     fn feed_browse(&mut self, bytes: &[u8]) -> bool {
         TermView::feed_browse(self, bytes)
+    }
+    fn reseed_browse(&mut self, tail: &[u8]) -> bool {
+        TermView::reseed_browse(self, tail)
     }
     fn take_browse_canvas(&mut self) -> Option<Canvas> {
         TermView::take_browse_canvas(self)
@@ -10110,6 +10163,9 @@ impl TermEmu for TermView {
     }
     fn scroll_to_bottom(&mut self) {
         TermView::scroll_to_bottom(self)
+    }
+    fn land_bottom(&mut self) {
+        TermView::land_bottom(self)
     }
     fn dump_text(&self) -> String {
         TermView::dump_text(self)

@@ -275,6 +275,12 @@ struct WarmSess {
     seeded_ms: u64,
     /// 退避时刻（boot_ms——判负回落后 5s 内不许重孵/重播种）
     retry_ms: u64,
+    /// 末次落地播种的 capture 原文（BAR-186 臂①对账旧账：下次播种
+    /// 拿它与新 capture 做 immutable-history 前缀对账；只在安装/续播
+    /// 成功时归账——账必等于画布内容，不许记「在途构建」的虚账）
+    last_cap: Option<String>,
+    /// 在途构建的 capture 原文（安装时过账给 last_cap）
+    build_cap: Option<String>,
 }
 
 /// 预热池容量帽（会话多于帽只温前 N 个——防爆内存；当前会话永远
@@ -292,6 +298,8 @@ impl WarmSess {
             seed_ms: now,
             seeded_ms: 0,
             retry_ms: 0,
+            last_cap: None,
+            build_cap: None,
         }
     }
 
@@ -304,6 +312,8 @@ impl WarmSess {
         self.build = None;
         self.retry_ms = now;
         self.seeded_ms = 0;
+        self.last_cap = None; // 尺变行宽变，播种对账旧账同焚
+        self.build_cap = None;
     }
 }
 
@@ -340,6 +350,9 @@ struct App {
     sess_modes: std::collections::HashMap<&'static str, u32>,
     /// 有新输出/尺寸变化待渲染
     dirty: bool,
+    /// 追赶模式状态机（BAR-186 臂②）：弱网滴灌/重连窗口压帧——字节
+    /// 照喂 grid 但不置脏，追平（静默窗满/播种尾锚）后一帧跳底亮出
+    catchup: crate::catchup::Catchup,
     /// 自重启武装态翻相泵的上次值（BAR-149：武装/落回是时间函数，
     /// 无事件驱动——about_to_wait 每圈照准，翻相即置脏重烘钮面）
     restart_armed_last: bool,
@@ -4437,6 +4450,10 @@ impl App {
             .and_then(|a| a.internal_data_path())
         {
             crate::sess_pool::set_cache_root(dir.join("cache/letters"));
+            // 断线输入 WAL（BAR-186 臂③）：进程死队列全灭的修——push/drain
+            // 同步落盘，启动 attach 时读回；拿不到目录 = 纯内存旧行为
+            self.offline_keys
+                .attach_wal(&dir.join("cache/offline-input.wal"));
         }
         // 文件树数据面（BAR-165）：同一隧道本地口喂取数器；状态核注册全局
         // （三处涂装 + 手势 + 取数同源一份，与 parser_page_handle 同形制）。
@@ -5835,6 +5852,16 @@ impl App {
                         if let Some(e) = self.warm_pool.get_mut(&name) {
                             e.seeded_ms = now;
                             e.feed.built();
+                            // BAR-186 臂①：播种落地即归账——last_cap 恒等于
+                            // 画布内容（在途虚账不许进 last_cap）
+                            if let Some(cap) = e.build_cap.take() {
+                                e.last_cap = Some(cap);
+                            }
+                        }
+                        // BAR-186 臂②：播种尾锚到达 = 追平判据二——追赶中
+                        // 立即落地一帧（稳态撞锚 = None，不抢稳态的画）
+                        if self.catchup.anchor() == crate::catchup::CatchAct::Land {
+                            self.catchup_land();
                         }
                         if browsing {
                             // 当前会话浏览中：新画布直接 swap 进视图
@@ -5902,6 +5929,18 @@ impl App {
         }
     }
 
+    /// 追平落地帧（BAR-186 臂②）：跳底+像素零头归零+置脏亮出。
+    /// 用户上翻读历史中（display_offset>0）不抢滚动条——只补画不跳底
+    fn catchup_land(&mut self) {
+        if let Some(t) = self.term_handle() {
+            let mut g = t.lock().unwrap();
+            if g.display_offset() == 0 {
+                g.land_bottom();
+            }
+        }
+        self.dirty = true;
+    }
+
     /// 动作执行（薄壳）：相位判定全在 ctrl_feed（A 档纯逻辑，BAR-155
     /// 钉死），本壳只把动作枚举翻译成平台操作（喂画布/起构建线程/
     /// 判负退避/逼对账/拆除）。当前会话浏览中 → 字节即达即画；其余
@@ -5916,7 +5955,13 @@ impl App {
                         .term_handle()
                         .is_some_and(|t| t.lock().unwrap().feed_browse(&bytes));
                 if fed {
-                    self.dirty = true; // 浏览中：字节即达即画
+                    // BAR-186 臂②：追赶期字节照喂 grid 但不置脏——弱网
+                    // 滴灌「每包一帧」= 用户看到的疯狂慢滚；追平落地帧
+                    // 统一亮出（tick 静默窗 / anchor 播种尾锚 → catchup_land）
+                    let now = crate::report::boot_ms();
+                    if !self.catchup.note_bytes(now, bytes.len()) {
+                        self.dirty = true; // 稳态浏览中：字节即达即画
+                    }
                 } else if let Some(e) = self.warm_pool.get_mut(name)
                     && let Some(canvas) = &mut e.canvas
                 {
@@ -5935,13 +5980,67 @@ impl App {
                     .term_handle()
                     .map(|t| t.lock().unwrap().live_grid_dims())
                     .unwrap_or((80, 24));
-                let (tx, rx) = std::sync::mpsc::channel();
-                std::thread::spawn(move || {
-                    let _ = tx.send(termview::Canvas::build(&cap, cols, rows, (x, y)));
+                // BAR-186 臂①：有旧播种账且 immutable-history 对账过 →
+                // 尾块续播既有画布（相同前缀不重放：万行重建 → k+rows 行），
+                // 画布原位续长不 swap——浏览中阅读位/零头全不动
+                let tail = self.warm_pool.get(name).and_then(|e| {
+                    e.last_cap.as_deref().and_then(|old| {
+                        match crate::reseed::plan_reseed(old, &cap, rows, (x, y)) {
+                            crate::reseed::ReseedPlan::Tail(bytes) => Some(bytes),
+                            crate::reseed::ReseedPlan::Rebuild => None,
+                        }
+                    })
                 });
-                if let Some(e) = self.warm_pool.get_mut(name) {
-                    e.pending.clear();
-                    e.build = Some(rx);
+                let mut done = false;
+                if let Some(tail) = tail {
+                    let is_cur = self.cur_attached().as_ref() == Some(&name.to_string());
+                    let mut hit = is_cur
+                        && self
+                            .term_handle()
+                            .is_some_and(|t| t.lock().unwrap().reseed_browse(&tail));
+                    if !hit
+                        && let Some(e) = self.warm_pool.get_mut(name)
+                        && let Some(canvas) = &mut e.canvas
+                    {
+                        canvas.reseed(&tail);
+                        hit = true;
+                    }
+                    if hit {
+                        let lines = cap.lines().count();
+                        let now = crate::report::boot_ms() as u64;
+                        if let Some(e) = self.warm_pool.get_mut(name) {
+                            e.pending.clear(); // 播种窗输出已在快照内（InCapture 吞咽同规）
+                            e.seeded_ms = now;
+                            e.feed.built();
+                        }
+                        // 播种尾锚（臂②）：追赶中落地一帧
+                        if self.catchup.anchor() == crate::catchup::CatchAct::Land {
+                            self.catchup_land();
+                        }
+                        self.dirty = true;
+                        crate::report::report(
+                            "term",
+                            &format!("推流画布对账续播: {name}: 快照 {lines} 行前缀不重放"),
+                        );
+                        done = true;
+                    }
+                }
+                if done {
+                    // 账随落地归位（move 零拷贝——对账重播 5s 一档，clone 不起）
+                    if let Some(e) = self.warm_pool.get_mut(name) {
+                        e.last_cap = Some(cap);
+                    }
+                } else {
+                    let cap_build = cap.clone(); // 线程持副本，原账留 build_cap 待落地过账
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    std::thread::spawn(move || {
+                        let _ = tx.send(termview::Canvas::build(&cap_build, cols, rows, (x, y)));
+                    });
+                    if let Some(e) = self.warm_pool.get_mut(name) {
+                        e.pending.clear();
+                        e.build = Some(rx);
+                        e.build_cap = Some(cap);
+                    }
                 }
             }
             CtrlAct::SeedFail(why) => self.ctrl_seed_fail(name, &why),
@@ -6586,6 +6685,9 @@ impl App {
     }
 
     fn respawn_session(&mut self, name: &'static str) {
+        // BAR-186 臂②：重连 = 一波重播种/重画风暴的开端——进追赶模式，
+        // 窗口内字节喂格不置脏，追平（静默窗/播种尾锚）后一帧跳底亮出
+        self.catchup.enter(crate::report::boot_ms());
         let handle = match name {
             "local" => self
                 .base
@@ -6739,10 +6841,20 @@ impl App {
             .map_or("", |r| r.lock().unwrap().active_name());
         // 终端还没建好就不 pump:Output 堆 mpsc 不丢(同旧制),控制事件
         // 等得起(首轮 about_to_wait 前终端必就位——init_terminal 先跑)
-        if let Some(t) = self.term_handle()
-            && crate::gate::pump_once(active, &mut |b| t.lock().unwrap().feed(b))
-        {
-            self.dirty = true;
+        let mut pump_bytes = 0usize;
+        let pumped = self.term_handle().is_some_and(|t| {
+            crate::gate::pump_once(active, &mut |b| {
+                pump_bytes += b.len();
+                t.lock().unwrap().feed(b);
+            })
+        });
+        if pumped {
+            // BAR-186 臂②：追赶期（重连风暴/弱网滴灌洪峰）字节照喂 grid
+            // 不置脏——每包一帧 = 用户报障的疯狂慢滚；追平一帧跳底亮出
+            let now = crate::report::boot_ms();
+            if !self.catchup.note_bytes(now, pump_bytes) {
+                self.dirty = true;
+            }
         }
         for (name, ev) in crate::gate::pump_take_control() {
             self.on_session_event(name, ev, name == active);
@@ -10578,6 +10690,11 @@ impl ApplicationHandler for App {
                 "loop",
                 &format!("事件循环心跳 jni(commit={ce}/{cp} key={sk} log={il})"),
             );
+        }
+        // BAR-186 臂②：追赶静默窗满 → 追平落地帧（跳底+零头归零+置脏），
+        // 置于脏帧泵之前——本圈置的脏本圈即画
+        if self.catchup.tick(crate::report::boot_ms()) == crate::catchup::CatchAct::Land {
+            self.catchup_land();
         }
         // 降频泵(2026-08-26,挂单①治理):Poll 全速空转实测 ~57k 圈/s,
         // 白烧 CPU/电。双闸——①有脏才请求重绘(空圈不 redraw);②节拍改
