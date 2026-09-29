@@ -178,7 +178,9 @@ pub fn pick_screen_px(win: Option<(u32, u32)>, cached: (u32, u32)) -> Option<(u3
     None
 }
 
-/// 贪心折行（格宽尺：CJK 2 格/其余 1 格，与 tab_bar::text_cells 同尺）。
+/// 贪心折行（格宽尺：CJK 2 格/其余 1 格——tab_bar 已收编进
+/// grid_text::grid_text_cells（BAR-191）；本函数的 0x2E80 土判据
+/// 待 #5 面收编，追踪信 0017）。
 /// 满即断、刚好放下不断；空串 = 一行空（占位不塌）
 pub fn wrap_text(s: &str, width_cells: u32) -> Vec<String> {
     if width_cells == 0 {

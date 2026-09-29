@@ -35,7 +35,6 @@ src/termview.rs:draw_text_centered
 src/termview.rs:draw_text_centered
 src/termview.rs:draw_text_centered
 src/termview.rs:draw_text_centered
-src/termview.rs:draw_text_centered
 src/termview.rs:draw_text_centered_yclip
 src/termview.rs:draw_text_centered_yclip
 src/termview.rs:draw_text_centered_yclip

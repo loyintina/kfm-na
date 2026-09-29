@@ -5,9 +5,12 @@
 //! pinch 双指缩放改实例字段）。三件形制全部收在本模块：
 //!
 //! 1. **格宽分类** `char_cells` / `grid_text_cells`——终端全角两格口径的
-//!    UI 侧唯一源（unicode-width，与 alacritty 网格同宗）。收编对象：
-//!    `tab_bar::text_cells` / `modal::wrap_text` 的 0x2E80 土判据——
-//!    BAR-178 未动这两处，挂账后续（追踪信 NA0017）。
+//!    UI 侧唯一源（unicode-width，与 alacritty 网格同宗）。
+//!    `tab_bar::text_cells` 已收编（BAR-191）；`modal::wrap_text` 的
+//!    0x2E80 土判据挂账 #5 面（追踪信 0017）。
+//!    （土判据真盲区订正（BAR-191 实证）：U+3000 全角标点段在 0x2E80
+//!    **之上**，土判据照样判 2 格；真分野 = 谚文首字母 U+1100–115F、
+//!    零宽/组合符（U+200B、U+0300 段）——引擎 2/0 格，土判据全判 1）
 //! 2. **格折行** `grid_wrap`——贪心按格断行，断点优先最后一个 ASCII
 //!    空格之后，没有就硬断（ft_wrap_split 同款贪心语义）。
 //! 3. **格落笔**——在 TermView 侧（termview.rs 尾部
@@ -29,7 +32,9 @@ use unicode_width::UnicodeWidthChar;
 /// 半角 = 1 格，全角（CJK/全角标点/emoji）= 2 格。
 /// 判据来源 = unicode-width（alacritty 终端网格同一个 crate）——
 /// 终端画几格，UI 就量几格，两份判据不许再各写（0x2E80 土判据的
-/// 盲区：全角标点 U+3000–U+303F 在 0x2E80 之前会被误判 1 格）
+/// 真盲区（BAR-191 实证订正）：谚文首字母 U+1100–115F 与零宽/组合符
+/// ——U+200B、U+0300 段——土判据全误判 1 格；全角标点 U+3000 段在
+/// 0x2E80 之上，土判据碰巧不瞎）
 pub fn char_cells(c: char) -> u32 {
     UnicodeWidthChar::width(c).unwrap_or(0) as u32
 }
