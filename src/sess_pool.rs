@@ -461,10 +461,34 @@ pub fn request_entries(key: RouteKey) {
     });
 }
 
+/// BAR-185：点开正文的发布计划（纯逻辑，钉在 sess_pool_spec）。
+/// 缓存先画——有缓存立即发布缓存副本（带 CACHE_NOTICE），再后台 GET；
+/// GET 成功换新鲜件（同 title epoch 递增，开着的查看器自动换芯），
+/// 失败则缓存件留场。无缓存退化为旧路：GET 成败一次发布。
+pub enum OpenStep {
+    Cached(String),
+    Fresh(String),
+    Failed(String),
+}
+
+pub fn plan_open(cached: Option<String>, got: &Result<String, String>) -> Vec<OpenStep> {
+    let mut steps = Vec::new();
+    if let Some(c) = cached {
+        steps.push(OpenStep::Cached(format!("{CACHE_NOTICE}{c}")));
+    }
+    match got {
+        Ok(fresh) => steps.push(OpenStep::Fresh(fresh.clone())),
+        Err(e) if steps.is_empty() => steps.push(OpenStep::Failed(format!("（取数失败：{e}）"))),
+        Err(_) => {}
+    }
+    steps
+}
+
 /// 取条目内容（点条目时调）：会话 → tail 面 + wire_render 渲染；
-/// 信 → 正文直读（BAR-174：成功写透缓存；失败回退缓存副本，加引用块头
-/// 声明；缓存也没有才落「（取数失败：…）」）。取回写入快照 content
-/// （壳脏帧喂查看器）。
+/// 信 → 正文直读。**BAR-185 缓存先画**（旧路 GET-first：弱网连接活着但慢时
+/// 每点一封信硬等超时——「总是加载中」病灶）：有缓存副本先发布（带声明头），
+/// 后台 GET 成功写透缓存并换新鲜件，失败缓存留场；缓存也没有才落
+/// 「（取数失败：…）」。取回写入快照 content（壳脏帧喂查看器）。
 pub fn request_content(key: RouteKey, name: &str) {
     let (port, title, cache_root) = {
         let g = inner().lock().unwrap();
@@ -472,43 +496,53 @@ pub fn request_content(key: RouteKey, name: &str) {
     };
     let name = name.to_string();
     std::thread::spawn(move || {
-        let got: Result<String, String> = match &key {
-            RouteKey::Line(line) => http_get(
-                port,
-                &format!("/agent/api/agent/lines/{line}/sessions/{name}/tail?n={TAIL_EVENTS}"),
-            )
-            .and_then(|b| parse_events(&b))
-            .map(|evs| crate::wire_render::render_tail(&evs.join("\n"), TAIL_EVENTS)),
+        let publish = |text: String| {
+            let mut g = inner().lock().unwrap();
+            let epoch = EPOCH.fetch_add(1, Ordering::Relaxed) + 1;
+            g.snap.content = Some(Content {
+                title: title.clone(),
+                text,
+                epoch,
+            });
+            DIRTY.store(true, Ordering::Relaxed);
+        };
+        match &key {
+            RouteKey::Line(line) => {
+                let got = http_get(
+                    port,
+                    &format!("/agent/api/agent/lines/{line}/sessions/{name}/tail?n={TAIL_EVENTS}"),
+                )
+                .and_then(|b| parse_events(&b))
+                .map(|evs| crate::wire_render::render_tail(&evs.join("\n"), TAIL_EVENTS));
+                publish(got.unwrap_or_else(|e| format!("（取数失败：{e}）")));
+            }
             RouteKey::Mailbox | RouteKey::AgentInbox => {
                 let inbox = inbox_api_key(&key).expect("信箱键");
-                match http_get(
+                let dir = cache_root.as_ref().map(|r| r.join(inbox));
+                // ①缓存先画（fs 读在工作者线程，不卡 UI）②后台 GET 成败
+                // 都过 plan_open 裁决发布序列（纯逻辑钉在 sess_pool_spec）
+                let cached = cache_root
+                    .as_ref()
+                    .and_then(|root| read_body(&root.join(inbox), &name));
+                let got = http_get(
                     port,
                     &format!("/agent/api/agent/inboxes/{inbox}/letters/{name}"),
                 )
-                .and_then(|b| parse_letter_content(&b))
-                {
-                    Ok(content) => {
-                        // 写透正文缓存（单封失败不连坐，缓存是加强不是命脉）
-                        if let Some(root) = &cache_root {
-                            let _ = write_body(&root.join(inbox), &name, &content);
+                .and_then(|b| parse_letter_content(&b));
+                for step in plan_open(cached, &got) {
+                    match step {
+                        OpenStep::Fresh(t) => {
+                            // 写透正文缓存（单封失败不连坐，缓存是加强不是命脉）
+                            if let Some(d) = &dir {
+                                let _ = write_body(d, &name, &t);
+                            }
+                            publish(t);
                         }
-                        Ok(content)
+                        OpenStep::Cached(t) | OpenStep::Failed(t) => publish(t),
                     }
-                    Err(e) => match cache_root
-                        .as_ref()
-                        .and_then(|root| read_body(&root.join(inbox), &name))
-                    {
-                        Some(cached) => Ok(format!("{CACHE_NOTICE}{cached}")),
-                        None => Err(e),
-                    },
                 }
             }
-        };
-        let text = got.unwrap_or_else(|e| format!("（取数失败：{e}）"));
-        let mut g = inner().lock().unwrap();
-        let epoch = EPOCH.fetch_add(1, Ordering::Relaxed) + 1;
-        g.snap.content = Some(Content { title, text, epoch });
-        DIRTY.store(true, Ordering::Relaxed);
+        }
     });
 }
 
