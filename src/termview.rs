@@ -69,9 +69,6 @@ pub const AI_PAGE_TOP: u32 = 48;
 pub const AI_PAGE_BOTTOM: u32 = 48;
 pub const AI_PAGE_LINE_H: u32 = 64;
 pub const AI_PAGE_PX: f32 = 40.0;
-/// 标签栏文字字号（宪法 §四，标定值 2026-09-12）：2 格行高（72）内
-/// 容 24 = 内嵌像素体 12px 的整数倍，网格原生不虚化
-pub const TAB_TEXT_PX: f32 = 36.0;
 /// 双池框圆角半径（宪法 §五，2026-09-12 二标）：= 页环卡片框 36——
 /// 池是通用卡片（与页环同尺）；功能光标是开口框（ui/cursor.rs），
 /// 两者分家不同源（用户拍板：光标不是卡片）
@@ -4223,23 +4220,26 @@ impl TermView {
                 frame.blend_px(ax as u32, uy as u32, line_c, 255);
             }
         }
-        // 文字：选中块上深色（浅底反差），未选中 0.5 白；文字不随弹簧
+        // 文字：选中块上深色（浅底反差），未选中 0.5 白；文字不随弹簧。
+        // 网格文字引擎（BAR-191，布局唯一源）：字号吃格子变量
+        // （grid_fit 读实例格 = pinch 联动），量宽/步进全走格——
+        // 旧 TAB_TEXT_PX=36 常量与 fontdue 自然步进退役
         for (i, r) in rects.iter().enumerate() {
             let fg = if i == snap.selected {
                 crate::ui::accent::CARD_PAGE_BG
             } else {
                 0x0080_8080
             };
-            self.draw_text_centered(
+            self.draw_grid_text_centered(
                 &mut frame,
                 &snap.tabs[i],
                 r.x,
                 r.y - oy,
                 r.w,
                 r.h,
-                TAB_TEXT_PX,
                 fg,
                 clip_l,
+                None,
             );
         }
     }
@@ -6206,6 +6206,7 @@ impl TermView {
                     self.cell_w,
                     text_w,
                     FT_TEXT_FG,
+                    0, // 左裁只吃帧界（行带窗已纵裁，横无横滚）
                     clip,
                 );
                 self.draw_grid_text_left(
@@ -6216,6 +6217,7 @@ impl TermView {
                     self.cell_w,
                     text_w,
                     FT_TEXT_FG,
+                    0, // 左裁只吃帧界（行带窗已纵裁，横无横滚）
                     clip,
                 );
             } else {
@@ -6227,6 +6229,7 @@ impl TermView {
                     self.cell_w,
                     text_w,
                     FT_TEXT_FG,
+                    0, // 左裁只吃帧界（行带窗已纵裁，横无横滚）
                     clip,
                 );
             }
@@ -6400,6 +6403,7 @@ impl TermView {
                 self.cell_w,
                 (root_x + root_w - rtx).max(0) as u32,
                 mid_ink,
+                0,
                 Some((by as i32, (by + box_h) as i32)),
             );
             // 左：眼（看）右：×（关）——accent 渐变盒 + 手绘图标
@@ -10329,8 +10333,9 @@ impl TermView {
     /// 对应 baseline_off（主/cjk 按字体身份各吃各的，与 grid_fit
     /// 同源——实例字段就是那份计算的结果，不重算）。恰好满宽 = 装
     /// 得下（BAR-088 同律：> 才停笔）；光栅走 rasterize_cached。
-    /// clip_y = 纵裁剪带（行表窗 ∩ 抽屉顶缘窗那类——半行断墨，
-    /// 眼手同尺），None = 只裁帧界
+    /// clip_x0 = 左裁剪（内容带左缘——横滚出带的字左缘断墨，BAR-191
+    /// 标签栏收编需要；0 = 只裁帧界）。clip_y = 纵裁剪带（行表窗 ∩
+    /// 抽屉顶缘窗那类——半行断墨，眼手同尺），None = 只裁帧界
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn draw_grid_text_left(
         &self,
@@ -10341,6 +10346,7 @@ impl TermView {
         cell_w: u32,
         max_px_w: u32,
         fg: u32,
+        clip_x0: i64,
         clip_y: Option<(i32, i32)>,
     ) {
         let mut pen_x = x0 as f32;
@@ -10386,7 +10392,7 @@ impl TermView {
                 }
                 for gx in 0..m.width as u32 {
                     let x = (origin_x + m.xmin as f32) as i64 + i64::from(gx);
-                    if x < 0 || x >= i64::from(frame.w) || x >= span_right {
+                    if x < clip_x0 || x >= i64::from(frame.w) || x >= span_right {
                         continue;
                     }
                     let a = u32::from(bmp[(gy * m.width as u32 + gx) as usize]);
@@ -10397,6 +10403,46 @@ impl TermView {
             }
             pen_x += span;
         }
+    }
+
+    /// 格落笔居中版（BAR-191 起收编 draw_text_centered 系——量宽/步进
+    /// 全走格，draw_text_centered 的 fontdue 自然步进退役）：水平 =
+    /// 总格数×cell_w 量宽、盒内余量对半（超宽 = 贴左 cx 起笔，与旧版
+    /// max(0) 同律）；纵向 = 一格线盒（cell_h）在盒高 ch 内居中。
+    /// clip_x0 = 左裁剪（内容带左缘），clip_y = 纵裁剪带（可空）。
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn draw_grid_text_centered(
+        &self,
+        frame: &mut Frame<'_>,
+        text: &str,
+        cx: i64,
+        cy: i64,
+        cw: u32,
+        ch: u32,
+        fg: u32,
+        clip_x0: i64,
+        clip_y: Option<(i32, i32)>,
+    ) {
+        let (items, cells) = self.measure_items_grid(text);
+        if items.is_empty() {
+            return;
+        }
+        let text_w = i64::from(cells) * i64::from(self.cell_w);
+        let x0 = cx + (i64::from(cw) - text_w).max(0) / 2;
+        let cell_h = i64::from(self.cell_h);
+        let y_top = cy + (i64::from(ch) - cell_h).max(0) / 2;
+        let max_px_w = (cx + i64::from(cw) - x0).max(0) as u32;
+        self.draw_grid_text_left(
+            frame,
+            &items,
+            x0,
+            y_top,
+            self.cell_w,
+            max_px_w,
+            fg,
+            clip_x0,
+            clip_y,
+        );
     }
 }
 
