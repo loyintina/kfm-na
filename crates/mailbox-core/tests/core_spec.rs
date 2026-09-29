@@ -907,6 +907,52 @@ fn spec_bar179_verify_日期单调_分拣码混排按数字序() {
 }
 
 #[test]
+fn spec_bar180_verify_换票配对按renamed_from() {
+    // BAR-180：§八.8 格式性勘误换票编号同步去码（NA0015→0015 实录）——
+    // 配对键按 renamedFrom 文件名；旧「no 相等」判据对跨码换票每次 chain 误报
+    let v1: HashSet<String> = HashSet::new();
+    let r = roster();
+    let f = "0015号清和致评审部白露关于署名勘误的通报.md";
+    let letters = vec![LetterText {
+        file: f.into(),
+        dir: "active".into(),
+        text: v21_letter(
+            f,
+            "aabbccddeeff0015",
+            "评审部白露",
+            "无（首信）",
+            "待回信",
+            "已填实。",
+        ),
+    }];
+    let old_f = "NA0015号清和致评审部白露关于署名勘误的通报.md";
+    let mut cur = ledger_line("0015", f, "aabbccddeeff0015");
+    cur.pop();
+    cur.push_str(&format!(",\"renamedFrom\":\"{old_f}\"}}"));
+    let mut rev = ledger_line("NA0015", old_f, "aabbccddeeff0014");
+    rev.pop();
+    rev.push_str(
+        ",\"revokedAt\":\"2026-09-29T03:29:03.836Z\",\"revokeReason\":\"格式性勘误（契约 §八 第 8 条）：去本册自指码\"}",
+    );
+    // 跨码换票对（旧票 no=NA0015 ≠ 新票 no=0015）：文件名配上 → 不 warn
+    let tokens = format!("{cur}\n{rev}\n");
+    let d = verify::verify_book(&book(&letters, &tokens, &v1, &r));
+    assert!(
+        !d.warns.iter().any(|w| w.contains("换票留痕不完整")),
+        "{:?}",
+        d.warns
+    );
+    // 负样本：renamedFrom 找不到同名撤销票 → warn 仍在（防判据被摘）
+    let tokens = format!("{cur}\n");
+    let d = verify::verify_book(&book(&letters, &tokens, &v1, &r));
+    assert!(
+        d.warns.iter().any(|w| w.contains("换票留痕不完整")),
+        "{:?}",
+        d.warns
+    );
+}
+
+#[test]
 fn verify_book_legacy_placeholder_and_clean() {
     let v1: HashSet<String> = HashSet::new();
     let r = roster();

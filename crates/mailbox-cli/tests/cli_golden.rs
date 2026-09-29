@@ -711,3 +711,306 @@ fn spec_bar173_new_不注nonce_随机路定长秒回() {
     );
     let _ = fs::remove_dir_all(&d);
 }
+
+// ---------------------------------------------------------------
+// BAR-180：new 去自指码 + reticket §八.8 格式性勘误窄例外 + 例外之外改号仍拒
+// ---------------------------------------------------------------
+
+use mailbox_core::token::fingerprint;
+
+/// 带 NA 册身份的夹具册：NA0007 令牌信（状态 通报完毕 = 窗口关闭）+
+/// 0008 复信（复: NA0007，窗口实锤关闭——白露 NA0015→0015 先例同款场景）
+fn setup_na_book(tag: &str) -> PathBuf {
+    let d = tmpdir(tag);
+    fs::write(
+        d.join(".mailbox.json"),
+        "{\"sorting\":\"NA\",\"name\":\"fixture\"}\n",
+    )
+    .unwrap();
+    let old = "NA0007号清和致评审部白露的通报.md";
+    let nonce = "aabbccddeeff0007";
+    let fp = fingerprint("NA0007", nonce, old);
+    fs::write(
+        d.join(old),
+        format!(
+            "# 测试信\n\n> 日期: 2026-09-29 10:00 +08:00\n> 从: 研究部清和\n> 致: 评审部白露\n> 复: 无（首信）\n> 状态: 通报完毕（2026-09-29 10:30 +08:00 研究部清和 更新：钉）\n\n<!-- LETTER-TOKEN v2 no=NA0007 nonce={nonce} fp={fp} -->\n\n## 白话结论（写给隐藏读者：测试）\n\n已填实，不需要你做任何事。\n\n## 正文\n\n正文。\n"
+        ),
+    )
+    .unwrap();
+    let f8 = "0008号白露致研究部清和复NA0007的通报.md";
+    let n8 = "aabbccddeeff0008";
+    let fp8 = fingerprint("0008", n8, f8);
+    fs::write(
+        d.join(f8),
+        format!(
+            "# 回复\n\n> 日期: 2026-09-29 10:20 +08:00\n> 从: 评审部白露\n> 致: 研究部清和\n> 复: NA0007\n> 状态: 待回信\n\n<!-- LETTER-TOKEN v2 no=0008 nonce={n8} fp={fp8} -->\n\n## 白话结论（写给隐藏读者：测试）\n\n已填实，不需要你做任何事。\n\n## 正文\n\n正文。\n"
+        ),
+    )
+    .unwrap();
+    fs::write(
+        d.join("letter-tokens.jsonl"),
+        format!(
+            "{{\"no\":\"NA0007\",\"file\":\"{old}\",\"nonce\":\"{nonce}\",\"fp\":\"{fp}\",\"tpl\":\"v2\",\"createdAt\":\"2026-09-29T02:00:00.000Z\",\"from\":\"清和\"}}\n{{\"no\":\"0008\",\"file\":\"{f8}\",\"nonce\":\"{n8}\",\"fp\":\"{fp8}\",\"tpl\":\"v2\",\"createdAt\":\"2026-09-29T02:20:00.000Z\",\"from\":\"白露\"}}\n"
+        ),
+    )
+    .unwrap();
+    d
+}
+
+#[test]
+fn spec_bar180_new_编号不拼自指码() {
+    // 册身份 NA 的册里发新信：文件名/令牌/台账编号全纯流水号（§八.8 本册
+    // 自指码为误用）；显式 --sorting NA = 已废止，硬拒
+    let d = setup_na_book("bar180-new");
+    let mb = d.to_str().unwrap().to_string();
+    let out = run(&[
+        "new",
+        "--mailbox",
+        &mb,
+        "--roster",
+        ROSTER,
+        "--from-func",
+        "研究部",
+        "--from-name",
+        "清和",
+        "--to",
+        "评审部白露",
+        "--type",
+        "通报",
+        "--title",
+        "测试新信",
+        "--now-local",
+        "2026-09-29 12:00 +08:00",
+        "--now-utc",
+        "2026-09-29T04:00:00.000Z",
+        "--nonce",
+        "aabbccddeeff0009",
+    ]);
+    assert_ok(&out, "BAR-180 new 纯流水号");
+    let f9 = "0009号清和致评审部白露的通报.md";
+    assert!(d.join(f9).is_file(), "新信文件名应为纯流水号：{f9}");
+    assert!(
+        !d.join("NA0009号清和致评审部白露的通报.md").exists(),
+        "不许再拼自指码 NA"
+    );
+    let text = fs::read_to_string(d.join(f9)).unwrap();
+    let fp9 = fingerprint("0009", "aabbccddeeff0009", f9);
+    assert!(
+        text.contains(&format!("no=0009 nonce=aabbccddeeff0009 fp={fp9}")),
+        "令牌行应为纯流水号且 fp 按纯号算"
+    );
+    let ledger = fs::read_to_string(d.join("letter-tokens.jsonl")).unwrap();
+    assert!(
+        ledger.contains(&format!("\"no\":\"0009\",\"file\":\"{f9}\"")),
+        "台账新票应为纯流水号：{ledger}"
+    );
+    // --sorting NA 显式传 = 已废止硬拒，且分毫不落盘
+    let before = fs::read_to_string(d.join("letter-tokens.jsonl")).unwrap();
+    let out = run(&[
+        "new",
+        "--mailbox",
+        &mb,
+        "--roster",
+        ROSTER,
+        "--from-func",
+        "研究部",
+        "--from-name",
+        "清和",
+        "--to",
+        "评审部白露",
+        "--type",
+        "通报",
+        "--title",
+        "测试新信二",
+        "--sorting",
+        "NA",
+        "--now-local",
+        "2026-09-29 12:10 +08:00",
+        "--now-utc",
+        "2026-09-29T04:10:00.000Z",
+        "--nonce",
+        "aabbccddeeff0010",
+    ]);
+    assert_fail(&out, "BAR-180 --sorting 已废止");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--sorting 已废止") && stderr.contains("纯流水号"),
+        "报错应点名废止与纯流水号口径：{stderr}"
+    );
+    assert_eq!(
+        fs::read_to_string(d.join("letter-tokens.jsonl")).unwrap(),
+        before,
+        "被拒后台账不得变动"
+    );
+    let _ = fs::remove_dir_all(&d);
+}
+
+#[test]
+fn spec_bar180_reticket_格式性勘误窄例外() {
+    // §八.8 窄例外：新名 = 旧名仅去本册自指码（NA0007号… → 0007号…），
+    // 状态 通报完毕 + 已有复信（窗口实锤关闭）也放行；旧票 revokedAt +
+    // revokeReason 必带「格式性勘误（契约 §八 第 8 条）」，新票 renamedFrom；
+    // 收尾 verify 全册绿且配对键按 renamedFrom 不再误报
+    let d = setup_na_book("bar180-fix");
+    let mb = d.to_str().unwrap().to_string();
+    let no_main = d.join("no-main-book").to_str().unwrap().to_string();
+    let old = "NA0007号清和致评审部白露的通报.md";
+    let new_name = "0007号清和致评审部白露的通报.md";
+    let out = run(&[
+        "reticket",
+        d.join(old).to_str().unwrap(),
+        "--mailbox",
+        &mb,
+        "--roster",
+        ROSTER,
+        "--main-book",
+        &no_main,
+        "--new-name",
+        new_name,
+        "--reason",
+        "去本册自指码 NA——钉",
+        "--now-utc",
+        "2026-09-29T05:00:00.000Z",
+        "--nonce",
+        "aabbccddeeff0011",
+    ]);
+    assert_ok(&out, "BAR-180 §八.8 窄例外（窗口关闭也放行）");
+    assert!(!d.join(old).exists() && d.join(new_name).is_file());
+    let text = fs::read_to_string(d.join(new_name)).unwrap();
+    let fp_new = fingerprint("0007", "aabbccddeeff0011", new_name);
+    assert!(
+        text.contains(&format!("no=0007 nonce=aabbccddeeff0011 fp={fp_new}")),
+        "新信令牌应为去码后的新号且 fp 重算"
+    );
+    let ledger = fs::read_to_string(d.join("letter-tokens.jsonl")).unwrap();
+    assert!(
+        ledger.contains("\"revokedAt\":\"2026-09-29T05:00:00.000Z\"")
+            && ledger.contains("格式性勘误（契约 §八 第 8 条窄例外）：去本册自指码 NA——钉"),
+        "旧票 revokeReason 必带格式性勘误（契约 §八 第 8 条）：{ledger}"
+    );
+    assert!(
+        ledger.contains(&format!(
+            "\"no\":\"0007\",\"file\":\"{new_name}\",\"nonce\":\"aabbccddeeff0011\",\"fp\":\"{fp_new}\""
+        )) && ledger.contains(&format!("\"renamedFrom\":\"{old}\"")),
+        "新票应去码改名挂 renamedFrom：{ledger}"
+    );
+    let v = run(&["verify", "--mailbox", &mb, "--roster", ROSTER]);
+    assert_ok(&v, "窄例外换票后 verify 全册");
+    let out_all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&v.stdout),
+        String::from_utf8_lossy(&v.stderr)
+    );
+    assert!(
+        !out_all.contains("换票留痕不完整"),
+        "配对键按 renamedFrom：跨码换票不得误报：{out_all}"
+    );
+    let _ = fs::remove_dir_all(&d);
+}
+
+#[test]
+fn spec_bar180_reticket_例外之外改号仍拒() {
+    // ①改数字号：NA0007 → 0009 → 拒（改名不改号铁律不变）
+    let d = setup_na_book("bar180-deny1");
+    let mb = d.to_str().unwrap().to_string();
+    let no_main = d.join("no-main-book").to_str().unwrap().to_string();
+    let old = "NA0007号清和致评审部白露的通报.md";
+    let out = run(&[
+        "reticket",
+        d.join(old).to_str().unwrap(),
+        "--mailbox",
+        &mb,
+        "--roster",
+        ROSTER,
+        "--main-book",
+        &no_main,
+        "--new-name",
+        "0009号清和致评审部白露的通报.md",
+        "--now-utc",
+        "2026-09-29T05:00:00.000Z",
+        "--nonce",
+        "aabbccddeeff0011",
+    ]);
+    assert_fail(&out, "BAR-180 改数字号仍拒");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("改名不改号"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(d.join(old).exists());
+    let _ = fs::remove_dir_all(&d);
+
+    // ②去码但其余字符动了（收件人改名）→ 拒（逐字节不动是窄例外硬条件）
+    let d = setup_na_book("bar180-deny2");
+    let mb = d.to_str().unwrap().to_string();
+    let no_main = d.join("no-main-book").to_str().unwrap().to_string();
+    let out = run(&[
+        "reticket",
+        d.join(old).to_str().unwrap(),
+        "--mailbox",
+        &mb,
+        "--roster",
+        ROSTER,
+        "--main-book",
+        &no_main,
+        "--new-name",
+        "0007号清和致评审部玄甲的通报.md",
+        "--now-utc",
+        "2026-09-29T05:00:00.000Z",
+        "--nonce",
+        "aabbccddeeff0011",
+    ]);
+    assert_fail(&out, "BAR-180 去码但改他字仍拒");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("改名不改号"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(d.join(old).exists());
+    let _ = fs::remove_dir_all(&d);
+
+    // ③缺册身份文件：无法证明「自指」，窄例外 fail-closed → 拒
+    let d = tmpdir("bar180-deny3");
+    let mb = d.to_str().unwrap().to_string();
+    let no_main = d.join("no-main-book").to_str().unwrap().to_string();
+    let nonce = "aabbccddeeff0007";
+    let fp = fingerprint("NA0007", nonce, old);
+    fs::write(
+        d.join(old),
+        format!(
+            "# 测试信\n\n> 日期: 2026-09-29 10:00 +08:00\n> 从: 研究部清和\n> 致: 评审部白露\n> 复: 无（首信）\n> 状态: 待回信\n\n<!-- LETTER-TOKEN v2 no=NA0007 nonce={nonce} fp={fp} -->\n\n## 白话结论（写给隐藏读者：测试）\n\n已填实，不需要你做任何事。\n\n## 正文\n\n正文。\n"
+        ),
+    )
+    .unwrap();
+    fs::write(
+        d.join("letter-tokens.jsonl"),
+        format!(
+            "{{\"no\":\"NA0007\",\"file\":\"{old}\",\"nonce\":\"{nonce}\",\"fp\":\"{fp}\",\"tpl\":\"v2\",\"createdAt\":\"2026-09-29T02:00:00.000Z\",\"from\":\"清和\"}}\n"
+        ),
+    )
+    .unwrap();
+    let out = run(&[
+        "reticket",
+        d.join(old).to_str().unwrap(),
+        "--mailbox",
+        &mb,
+        "--roster",
+        ROSTER,
+        "--main-book",
+        &no_main,
+        "--new-name",
+        "0007号清和致评审部白露的通报.md",
+        "--now-utc",
+        "2026-09-29T05:00:00.000Z",
+        "--nonce",
+        "aabbccddeeff0011",
+    ]);
+    assert_fail(&out, "BAR-180 缺册身份窄例外 fail-closed");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("改名不改号"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(d.join(old).exists());
+    let _ = fs::remove_dir_all(&d);
+}

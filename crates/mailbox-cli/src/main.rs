@@ -337,14 +337,19 @@ fn cmd_new(args: &Args) {
             "v2.1 模式需要 --to \"<职能><名字>\"（可多次）或 --to-all",
         );
     }
-    let sorting_raw = args.opt("sorting").unwrap_or("");
-    let sorting = if sorting_raw.is_empty() || sorting_raw == "MAIN" {
-        String::new()
-    } else {
-        sorting_raw.to_uppercase()
-    };
-    if !sorting.is_empty() && !regex_lite_upper(&sorting) {
-        die(p, &format!("--sorting 非法：{sorting_raw}（如 MAIN／NA）"));
+    // BAR-180（0020 必修① CLI 源头收口，契约 §八.8「本册自指码为误用」）：
+    // 本器只写本册（写者分区闸拒主册），任何显式分拣码对本册都是自指码——
+    // --sorting 废止；编号 = 纯流水号（对照 0015/0016/0019 的 no= 形态）
+    if let Some(s) = args.opt("sorting")
+        && !s.is_empty()
+        && s != "MAIN"
+    {
+        die(
+            p,
+            &format!(
+                "--sorting 已废止：本册信编号 = 纯流水号，不拼自指码（契约 §八.8，BAR-180）——收到 {s}"
+            ),
+        );
     }
 
     // 收件人拆解 + 三池校验（JS new-letter 同款：错即 die）
@@ -448,7 +453,7 @@ fn cmd_new(args: &Args) {
         .iter()
         .map(|(func, name)| format!("{}{}", func.clone().unwrap_or_default(), name))
         .collect();
-    let file = build_v21_file_name(&no, &sorting, from_name, &display, reply, about, type_word);
+    let file = build_v21_file_name(&no, "", from_name, &display, reply, about, type_word);
     if mailbox.join(&file).is_file() || mailbox.join("archive-v1").join(&file).is_file() {
         die(p, &format!("目标已存在：{file}"));
     }
@@ -482,7 +487,8 @@ fn cmd_new(args: &Args) {
         expect,
         criteria,
     });
-    let full_no = format!("{sorting}{no}");
+    // 编号 = 纯流水号（BAR-180：本册自指码为误用，fingerprint/令牌/台账同吃纯号）
+    let full_no = no.clone();
     let fp = fingerprint(&full_no, &nonce, &file);
     let text = insert_token(&skeleton, &token::token_line(&full_no, &nonce, &fp));
     fs::write(mailbox.join(&file), &text).unwrap_or_else(|e| die(p, &format!("写信件失败：{e}")));
@@ -499,10 +505,6 @@ fn cmd_new(args: &Args) {
         "[{p}] 下一步：填白话结论块与正文 → mailbox-cli verify {} → mailbox-cli gen",
         mailbox.join(&file).display()
     );
-}
-
-fn regex_lite_upper(s: &str) -> bool {
-    !s.is_empty() && s.len() <= 4 && s.bytes().all(|b| b.is_ascii_uppercase())
 }
 
 fn regex_reply_no(s: &str) -> bool {
@@ -850,12 +852,33 @@ fn cmd_reticket(args: &Args) {
             &format!("缺令牌行：{old_file} 没有 LETTER-TOKEN v2 行——非生成器签发的信不能换票"),
         );
     };
-    // 改名不改号：新名编号须与令牌编号一致（is_v21_name 已保 Some）
+    // 改名不改号：新名编号须与令牌编号一致（is_v21_name 已保 Some）。
+    // 唯一例外 = §八.8 格式性勘误窄例外（BAR-180，白露 NA0015→0015 手工先例）：
+    // 新名 = 旧名仅去掉本册自指码前缀、其余字符逐字节不动 → 编号同步去码
+    // （no=NA0023→no=0023），且不受改名窗口判据限制；revokeReason 必带
+    // 「格式性勘误（契约 §八 第 8 条）」。自指码以册身份文件（契约 §六）为准——
+    // 缺身份文件无法证明「自指」，窄例外不成立（fail-closed）
     let new_no = v21_no_of(new_name).unwrap_or_default();
-    if new_no != tm.no {
+    let format_fix = if new_no == tm.no {
+        false
+    } else {
+        let code = match read_book_identity(&mailbox) {
+            Ok(v) => v.unwrap_or_default(),
+            Err(e) => die(p, &e),
+        };
+        !code.is_empty()
+            && tm.no.starts_with(code.as_str())
+            && new_no == tm.no[code.len()..]
+            && old_file.starts_with(code.as_str())
+            && new_name == &old_file[code.len()..]
+    };
+    if new_no != tm.no && !format_fix {
         die(
             p,
-            &format!("改名不改号：新名编号 {new_no} ≠ 令牌编号 {}", tm.no),
+            &format!(
+                "改名不改号：新名编号 {new_no} ≠ 令牌编号 {}（唯一例外 = §八.8 格式性勘误：新名 = 旧名仅去本册自指码、其余逐字节不动）",
+                tm.no
+            ),
         );
     }
     // ⑪ 生成即合规（BAR-177，对 0010 存疑项的答复）：新名的发信人/收件人
@@ -900,7 +923,9 @@ fn cmd_reticket(args: &Args) {
     // ① 改名窗口判据（BAR-177 必修，契约 §八第 7 条「窗口一过（有任何回应），
     // 改名一律禁止」）：状态非 待* 即窗口关闭；再扫两册（na 册 + --main-book
     // 主册，目录不存在自动跳过）有无 复: <no> 的信，有即拒。--force 逃生闸：
-    // force 事实与改动内容写进撤销票 revokeReason
+    // force 事实与改动内容写进撤销票 revokeReason。
+    // §八.8 格式性勘误窄例外（BAR-180）不受窗口限制——白露先例就是在 0015
+    // 已通报完毕且有回应后做的：冻结的是事实，不是错误
     let force = args.has("force");
     let hdr = mailbox_core::header::parse_header(&text, &["状态"]);
     let status = mailbox_core::header::header_get(&hdr, "状态")
@@ -943,7 +968,7 @@ fn cmd_reticket(args: &Args) {
     if !repliers.is_empty() {
         window_blocks.push(format!("已有复信：{}", repliers.join("、")));
     }
-    if !window_blocks.is_empty() && !force {
+    if !window_blocks.is_empty() && !force && !format_fix {
         die(
             p,
             &format!(
@@ -991,9 +1016,17 @@ fn cmd_reticket(args: &Args) {
         .opt("now-utc")
         .map(str::to_string)
         .unwrap_or_else(now_utc_iso);
-    // force 逃生闸必须把 force 事实与改动内容写进 revokeReason（0010 必修①）
+    // force 逃生闸必须把 force 事实与改动内容写进 revokeReason（0010 必修①）；
+    // §八.8 窄例外必须把「格式性勘误（契约 §八 第 8 条）」写进 revokeReason（BAR-180 硬判据）
     let base_reason = args.opt("reason").map(str::to_string);
-    let reason = if force {
+    let reason = if format_fix {
+        let r = base_reason.unwrap_or_else(|| "去本册自指码".to_string());
+        if r.contains("格式性勘误") {
+            r
+        } else {
+            format!("格式性勘误（契约 §八 第 8 条窄例外）：{r}")
+        }
+    } else if force {
         let detail = if window_blocks.is_empty() {
             "窗口判据全过但指定了 --force".to_string()
         } else {
@@ -1012,7 +1045,13 @@ fn cmd_reticket(args: &Args) {
         .opt("nonce")
         .map(str::to_string)
         .unwrap_or_else(gen_nonce);
-    let new_fp = fingerprint(&tm.no, &nonce, new_name);
+    // §八.8 窄例外新票用去码后的新号（fp/令牌/台账同吃），其余换票 = tm.no
+    let ticket_no = if format_fix {
+        new_no.as_str()
+    } else {
+        tm.no.as_str()
+    };
+    let new_fp = fingerprint(ticket_no, &nonce, new_name);
     // 旧行 from 原样继承（保序 JVal 取）
     let from = ledger_text
         .split('\n')
@@ -1053,7 +1092,7 @@ fn cmd_reticket(args: &Args) {
         );
     }
     lines.push(ledger_record_line(
-        &tm.no,
+        ticket_no,
         new_name,
         &nonce,
         &new_fp,
@@ -1066,7 +1105,7 @@ fn cmd_reticket(args: &Args) {
 
     // 信内令牌行换新 fp（旧行 replacen 一次，与主册铁律一致）
     let old_line = token::token_line(&tm.no, &tm.nonce, &tm.fp);
-    let new_line = token::token_line(&tm.no, &nonce, &new_fp);
+    let new_line = token::token_line(ticket_no, &nonce, &new_fp);
     if !text.contains(&old_line) {
         die(p, "信内令牌行与台账票面不符——先跑 mailbox-cli verify 查清");
     }
@@ -1101,10 +1140,17 @@ fn cmd_reticket(args: &Args) {
             ),
         );
     }
-    println!(
-        "[{p}] 已换票：{old_file} → {new_name}（编号 {} 不变；旧票已记 revokedAt，新票 renamedFrom={old_file}）",
-        tm.no
-    );
+    if format_fix {
+        println!(
+            "[{p}] 已换票：{old_file} → {new_name}（§八.8 格式性勘误：编号 {} → {new_no} 去本册自指码；旧票已记 revokedAt，新票 renamedFrom={old_file}）",
+            tm.no
+        );
+    } else {
+        println!(
+            "[{p}] 已换票：{old_file} → {new_name}（编号 {} 不变；旧票已记 revokedAt，新票 renamedFrom={old_file}）",
+            tm.no
+        );
+    }
     // ② 换票后收尾（BAR-177 必修，契约 §八补注「改完重跑生成器刷新台账与
     // 派生索引」）：na 册直接调投影回写；无 README 的册（夹具/新册）照 new
     // 样式打印下一步。主册在入口③闸已拒
@@ -1137,15 +1183,18 @@ const USAGE: &str = "mailbox-cli — kfm-na 信箱工具链（逻辑核 mailbox-
 
 用法：
   mailbox-cli new --from-func <职能> --from-name <两字名> --to \"<职能><名字>\" [--to …] [--to-all]
-                  [--reply NNNN] [--about 事由] [--sorting NA] --type <类型词> --title \"<标题>\"
+                  [--reply NNNN] [--about 事由] --type <类型词> --title \"<标题>\"
                   [--kind 链条] [--expect …] [--criteria …] [--status 待回信]
                   [--now-local \"YYYY-MM-DD HH:MM ±HH:MM\"] [--now-utc <ISO>] [--nonce <16hex>]
+                  （编号 = 纯流水号，不拼自指码——§八.8/BAR-180；--sorting 已废止）
   mailbox-cli verify [信件路径]      不带参数=全册执法；带文件=单信自检
   mailbox-cli gen [--check-only]     回写 README 两区段 + letters-index.jsonl（主册拒绝写入）
   mailbox-cli scan --for=<目标> | --by=<名字>   跨册欠账扫描（na 册 [NA] + 主册 [MAIN]）
   mailbox-cli reticket <信件路径> --new-name <新文件名> [--reason <说明>] [--force]
                           改名换票（契约 §八：状态非待*/两册有复信即拒；--force 逃生，
-                          force 事实写进撤销票 revokeReason；na 册收尾直接回写投影）
+                          force 事实写进撤销票 revokeReason；na 册收尾直接回写投影。
+                          唯一改号例外 = §八.8 格式性勘误：新名 = 旧名仅去本册自指码，
+                          不受窗口限制，revokeReason 必带「格式性勘误（契约 §八 第 8 条）」）
 
 公共选项：
   --mailbox <dir>       信箱根（默认 /root/.kfm/session/信箱）

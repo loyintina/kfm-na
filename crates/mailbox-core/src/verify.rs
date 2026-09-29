@@ -449,7 +449,7 @@ pub fn verify_book(b: &BookCheck) -> Diags {
         };
         let mut seq: Vec<&(String, String, f64)> =
             v21_times.iter().filter(|t| !t.2.is_nan()).collect();
-        seq.sort_by(|a, b| no_key(&a.0).cmp(&no_key(&b.0)));
+        seq.sort_by_key(|t| no_key(&t.0));
         for w in seq.windows(2) {
             if w[1].2 < w[0].2 {
                 d.errs.push(format!(
@@ -471,13 +471,15 @@ pub fn verify_book(b: &BookCheck) -> Diags {
             ));
         }
     }
-    // 换票留痕完整性（契约 §八）：renamedFrom 应有对应撤销票
+    // 换票留痕完整性（契约 §八）：renamedFrom 应有对应撤销票。
+    // 配对键 = renamedFrom 文件名（BAR-180：§八.8 格式性勘误换票会同步去码改号
+    // ——NA0015→0015，旧票 no=NA0015 ≠ 新票 no=0015，按 no 配对每次误报）
     for t in &ledger.current {
         let Some(rf) = &t.renamed_from else { continue };
         let paired = ledger
             .revoked
             .iter()
-            .any(|r| r.no == t.no && r.file.as_deref() == Some(rf.as_str()));
+            .any(|r| r.file.as_deref() == Some(rf.as_str()));
         if !paired {
             d.warns.push(format!(
                 "c. 换票留痕不完整：no={} 现行票记 renamedFrom={rf}，但台账找不到该旧票的 revokedAt 撤销记录（契约 §八）",
