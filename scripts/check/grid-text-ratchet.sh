@@ -32,9 +32,13 @@ APIS='measure_items|measure_bar_items|text_width|draw_text_left|draw_text_left_e
 
 scan() {
     # 键 = file:symbol（多重集：同文件同符号多次调用逐条登记，行号剥离）
-    grep -rnoE "($APIS)\(" "$SRC_DIR" --include='*.rs' \
+    # 标识符前缀并入匹配（[A-Za-z_]*）：引擎件 grid_text_width/measure_items_grid
+    # 以旧件 text_width/measure_items 为后缀，裸匹配会把引擎调用点误登记为旧件
+    # 存量（BAR-196 实证基线 +6 幽灵行）——并入前缀取符号全名后按名单全名过滤
+    grep -rnoE "[A-Za-z_]*($APIS)\(" "$SRC_DIR" --include='*.rs' \
         | grep -vE "fn ($APIS)\(" \
         | sed 's/^\(.*\):[0-9]*:\([A-Za-z_]*\)(/\1:\2/' \
+        | grep -E ":($APIS)$" \
         | sort
 }
 

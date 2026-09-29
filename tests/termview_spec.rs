@@ -3448,10 +3448,11 @@ fn spec_三级框_涂装钉() {
 
     // ③上池值框无边框：左竖线位/右缘/上缘全 = 渐变暗底
     // （变异：左竖线/四边细框回潮即红）
-    // 十四修动态宽度：几何吃实量宽（与涂装同一条 measure_items 尺）
+    // 十四修动态宽度（BAR-196 网格引擎尺）：几何吃格量宽（与涂装/命中
+    // 同一条 grid_text_width 尺——眼手同尺）
     let ur = cfg_page::upper_row_rect(0, &ps.upper, 0);
-    let lw = tv.text_width("默认服务器", 36.0);
-    let vw = tv.text_width("本地终端", 30.0);
+    let lw = tv.grid_text_width("默认服务器");
+    let vw = tv.grid_text_width("本地终端");
     let lb = cfg_page::field_label_rect(&ur, lw);
     let vb = cfg_page::field_value_rect(&ur, lb.w, vw, false);
     assert_eq!(
@@ -3570,8 +3571,8 @@ fn spec_字段行_右对齐与动态宽涂装钉() {
     tv.paint_cfg_pool_content(&mut b0, w, h, &ps, &pg, 0, acc, 0, None, false);
 
     let ur = cfg_page::upper_row_rect(0, &ps.upper, 0);
-    let lb = cfg_page::field_label_rect(&ur, tv.text_width("key", 36.0));
-    let vb = cfg_page::field_value_rect(&ur, lb.w, tv.text_width("v", 30.0), false);
+    let lb = cfg_page::field_label_rect(&ur, tv.grid_text_width("key"));
+    let vb = cfg_page::field_value_rect(&ur, lb.w, tv.grid_text_width("v"), false);
     assert_eq!(
         vb.w,
         cfg_page::FIELD_VALUE_MIN_W,
@@ -3674,9 +3675,9 @@ fn spec_下拉面板_涂装钉() {
     tv.paint_cfg_dual_pool(&mut b0, w, h, &ps, 0, acc);
     tv.paint_cfg_pool_content(&mut b0, w, h, &ps, &pg0, 0, acc, 0, None, false);
 
-    // ①触发器 = 三级框全包框（十四修动态宽度：实量宽喂几何）
-    let lw = tv.text_width("默认服务器", 36.0);
-    let vw = tv.text_width("本地终端", 30.0);
+    // ①触发器 = 三级框全包框（十四修动态宽度，BAR-196：格量宽喂几何）
+    let lw = tv.grid_text_width("默认服务器");
+    let vw = tv.grid_text_width("本地终端");
     let vb = cfg_page::trigger_rect(&ps.upper, 0, true, lw, vw);
     let trig = [
         (vb.x + 4, vb.y + vb.h as i64 / 2, "触发器左粗缘"),
@@ -3712,7 +3713,7 @@ fn spec_下拉面板_涂装钉() {
     let t = cfg_page::trigger_rect(&ps.upper, 0, true, lw, vw);
     let max_h = h.saturating_sub(t.y.max(0) as u32 + t.h + 40);
     // 十七修 BAR-090：几何复算吃与实现同尺的内容最小宽（眼手同尺）
-    let cw0 = tv.text_width("本地终端", 36.0) + cfg_page::FIELD_TEXT_INSET * 2;
+    let cw0 = tv.grid_text_width("本地终端") + cfg_page::FIELD_TEXT_INSET * 2;
     let pr = cfg_page::dropdown_panel_rect(2, &ps.upper, max_h, 0, true, lw, vw, cw0);
     let row_h = cfg_page::FIELD_ROW_H as i64;
     let canvas_w = ps.upper.w - (cfg_page::POOL_CONTENT_INSET * 2) as u32;
@@ -4601,11 +4602,9 @@ fn spec_cfg下拉_抽屉随面钉() {
     let mut pg1 = page.snap(1125);
     pg1.dropdown_progress = 0.5;
 
-    let lw = tv.text_width("server", 36.0);
-    let vw = tv.text_width("LOCAL", 30.0);
-    let cw0 = tv
-        .text_width("LOCAL", 36.0)
-        .max(tv.text_width("SRV0", 36.0))
+    let lw = tv.grid_text_width("server");
+    let vw = tv.grid_text_width("LOCAL");
+    let cw0 = tv.grid_text_width("LOCAL").max(tv.grid_text_width("SRV0"))
         + cfg_page::FIELD_TEXT_INSET * 2;
     let t = cfg_page::trigger_rect(&ps.upper, 0, true, lw, vw);
     let max_h = h.saturating_sub(t.y.max(0) as u32 + t.h + 40);
@@ -4769,9 +4768,9 @@ fn spec_cfg下拉_选中细框滑行涂装钉() {
 
     // 二十四修拆层：面板走独立槽画布（原点 = (上池内容左内缘, pr.y)，
     // 画布尺渐变），页涂装不再画面板
-    let lw = tv.text_width("server", 36.0);
-    let vw = tv.text_width("LOCAL", 30.0);
-    let cw0 = tv.text_width("SRV1", 36.0) + cfg_page::FIELD_TEXT_INSET * 2;
+    let lw = tv.grid_text_width("server");
+    let vw = tv.grid_text_width("LOCAL");
+    let cw0 = tv.grid_text_width("SRV1") + cfg_page::FIELD_TEXT_INSET * 2;
     let t = cfg_page::trigger_rect(&ps.upper, 0, true, lw, vw);
     let max_h = h.saturating_sub(t.y.max(0) as u32 + t.h + 40);
     let pr = cfg_page::dropdown_panel_rect(3, &ps.upper, max_h, 0, true, lw, vw, cw0);
@@ -4854,8 +4853,8 @@ fn spec_下拉三角旋转_涂装钉() {
     page.set_options(vec!["LOCAL".into()], 0);
 
     // 三角中心（与涂装同尺复算：值框右缘 −37，行中带）
-    let lw = tv.text_width("server", 36.0);
-    let vw = tv.text_width("LOCAL", 30.0);
+    let lw = tv.grid_text_width("server");
+    let vw = tv.grid_text_width("LOCAL");
     let vb = cfg_page::trigger_rect(&ps.upper, 0, true, lw, vw);
     let (cx, cy) = (vb.x + vb.w as i64 - 37, vb.y + vb.h as i64 / 2);
 
@@ -5167,8 +5166,8 @@ fn spec_上池平移_框静止留隙_涂装钉() {
     let travel = pw_c + cfg_page::PAN_GAP_UPPER;
     let d5 = (0.5 * travel as f32).round() as i64;
     // 旧代：值框（下拉行 = 三级框全包框）左粗缘左出半程，带旧 accent
-    let lw_o = tv.text_width("server", 36.0);
-    let vw_o = tv.text_width("LOCAL", 30.0);
+    let lw_o = tv.grid_text_width("server");
+    let vw_o = tv.grid_text_width("LOCAL");
     let vb_o = cfg_page::trigger_rect(&ps.upper, 0, true, lw_o, vw_o);
     let (ax, ay) = (vb_o.x + 1, vb_o.y + vb_o.h as i64 / 2);
     assert!(
@@ -5188,7 +5187,7 @@ fn spec_上池平移_框静止留隙_涂装钉() {
         (ch(255, (bg >> 16) & 0xFF) << 16) | (ch(255, (bg >> 8) & 0xFF) << 8) | ch(255, bg & 0xFF)
     };
     let row0 = cfg_page::upper_row_rect(0, &ps.upper, 0);
-    let lb_n = cfg_page::field_label_rect(&row0, tv.text_width("NEWL", 36.0));
+    let lb_n = cfg_page::field_label_rect(&row0, tv.grid_text_width("NEWL"));
     let (bx, by) = (lb_n.x + 2, lb_n.y + lb_n.h as i64 / 2);
     assert!(
         bx + d5 < x1c,
@@ -6539,4 +6538,19 @@ fn spec_bar167_viewer_滚动涂装_上裁下裁与平移() {
         strip(&scrolled),
         "滚到 max 后视口体带必须变（内容平移生效）"
     );
+}
+
+/// BAR-196：格量宽件行为钉——grid_text_width = 格数 × cell_w（眼手同尺）。
+/// 顺带咬死「固有方法被改名 → trait 兜底静默接管」变异：该变异下本钉
+/// 走 trait 委托无限递归，栈溢出直接红（2026-09-30 变异实证 wiring 守卫
+/// 裸 "fn grid_text_width(" 咬不住此类变异，故定义守卫改咬 pub fn 前缀 +
+/// 本行为钉双保险）。
+#[test]
+fn spec_bar196_格量宽_眼手同尺() {
+    let tv = host_termview(8, 2);
+    // 2 个 CJK 全角字 = 4 格；2 个 ASCII = 2 格
+    assert_eq!(tv.grid_text_width("测试"), 4 * CELL_W);
+    assert_eq!(tv.grid_text_width("ab"), 2 * CELL_W);
+    // 中英混排：1 全角 + 1 半角 = 3 格
+    assert_eq!(tv.grid_text_width("测a"), 3 * CELL_W);
 }

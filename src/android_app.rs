@@ -9396,9 +9396,9 @@ impl App {
         self.term.clone()
     }
 
-    /// 配置页首行字段实量宽（十四修动态宽度：触发器/panel 触摸命中
-    /// 与涂装同一条 measure_items 尺）。先 snap 取文再量，逐段借还
-    /// 不嵌套持锁（锁序 term→cfg_page，倒持 = 死锁）
+    /// 配置页首行字段格量宽（十四修动态宽度，BAR-196 换网格引擎尺：
+    /// 触发器/panel 触摸命中与涂装同一条 grid_text_width 尺）。先 snap
+    /// 取文再量，逐段借还 不嵌套持锁（锁序 term→cfg_page，倒持 = 死锁）
     fn cfg_row0_text_widths(&self) -> (u32, u32) {
         let Some(page) = crate::ui::cfg_page::cfg_page_handle() else {
             return (0, 0);
@@ -9413,14 +9413,15 @@ impl App {
         match self.term_handle() {
             Some(t) => {
                 let t = t.lock().unwrap();
-                (t.text_width(&lbl, 36.0), t.text_width(&val, 30.0))
+                (t.grid_text_width(&lbl), t.grid_text_width(&val))
             }
             None => (0, 0),
         }
     }
 
-    /// 下拉 panel 内容最小宽（十七修 BAR-090）：选项最长文实量宽 +
-    /// 双侧文内边距——命中与涂装同一条尺（眼手同尺不漏维）。
+    /// 下拉 panel 内容最小宽（十七修 BAR-090）：选项最长文格量宽 +
+    /// 双侧文内边距——命中与涂装同一条尺（眼手同尺不漏维；BAR-196
+    /// 网格引擎尺）。
     /// 锁序同 cfg_row0_text_widths（先 snap 取文再量，不嵌套持锁）
     fn cfg_dropdown_content_w_min(&self) -> u32 {
         let Some(page) = crate::ui::cfg_page::cfg_page_handle() else {
@@ -9433,10 +9434,7 @@ impl App {
         match self.term_handle() {
             Some(t) => {
                 let t = t.lock().unwrap();
-                opts.iter()
-                    .map(|o| t.text_width(o, 36.0))
-                    .max()
-                    .unwrap_or(0)
+                opts.iter().map(|o| t.grid_text_width(o)).max().unwrap_or(0)
                     + crate::ui::cfg_page::FIELD_TEXT_INSET * 2
             }
             None => 0,
@@ -9462,12 +9460,12 @@ impl App {
         let t = th.as_ref()?;
         let (lw, vw0, cw) = {
             let tg = t.lock().unwrap();
-            let lw = tg.text_width(&ur.label, 36.0);
-            let vw0 = tg.text_width(&ur.value, 30.0);
+            let lw = tg.grid_text_width(&ur.label);
+            let vw0 = tg.grid_text_width(&ur.value);
             let cw = cs
                 .options
                 .iter()
-                .map(|o| tg.text_width(o, 36.0))
+                .map(|o| tg.grid_text_width(o))
                 .max()
                 .unwrap_or(0)
                 + cp::FIELD_TEXT_INSET * 2;

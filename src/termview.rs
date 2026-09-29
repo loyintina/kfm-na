@@ -29,6 +29,12 @@ use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Processor};
 pub const CELL_W: u32 = 18;
 pub const CELL_H: u32 = 36;
 
+/// 次级档字号比（BAR-196 设置页/解析页字段网格文字收编）：meta/值档 =
+/// 引擎 fit × 本系数保 30/36 层级差（只缩字形不动格步进，
+/// measure_items_grid_scaled 同律）——与 modal::MODAL_LABEL_SCALE 同值
+/// 互指（跳框题注档同一把比例尺，各自常量因模块分层不互引）
+pub const GRID_META_SCALE: f32 = 30.0 / 36.0;
+
 /// 起手网格几何（BAR-035）：开机横幅在首个 resize 到达前落笔,折行点
 /// 由它定。真机(build_vendored)与 host 回放器(na-replay)必须同胚——
 /// 各写一份数字迟早漂走,2026-08-25 终验实拍回放恒差 1 行折行
@@ -3920,6 +3926,14 @@ impl TermView {
             .ceil() as u32
     }
 
+    /// 文本格量宽 px（BAR-196 网格引擎尺：总格数 × 实例格宽——涂装
+    /// 格步进与几何/命中同一条尺，pinch 联动）。设置页字段/下拉几何
+    /// （涂装 paint_pool_upper + 壳侧 android_app 命中/面板宽）一律
+    /// 吃本尺；md 排版面（#6 挂账）仍走 text_width 旧尺
+    pub fn grid_text_width(&self, text: &str) -> u32 {
+        crate::ui::grid_text::grid_text_cells(text) * self.cell_w
+    }
+
     /// 输入栏量宽（2026-09-04 Enter 换行多逻辑行排版）：与 measure_items
     /// 唯一差异——'\n' 保留为零宽条目，不被 pick_font 跳过。下游全家
     /// （starts/光标/选区/锚点柄/菜单）建立在「item 下标 == char 下标
@@ -4359,9 +4373,6 @@ impl TermView {
         }
         let title_fg = 0x00D9_D9D9; // 0.85 白（§2.3 标题档）
         let meta_fg = 0x0080_8080; // 0.5 白（次级档）
-        let px_title = 36.0;
-        let px_meta = 30.0;
-        let text_inset = 27.0;
         let title_band = 90u32;
         let no_clip = (0, i64::from(ch));
         let grad_ref = (x_shift, y_origin, page_denom);
@@ -4384,39 +4395,55 @@ impl TermView {
             );
         }
         // 文字最后一遍（盖过行框内芯）：与 paint_pool_lower 同配方
+        // （BAR-196 网格引擎尺：量宽/步进全走格，标题 faux-bold 双画
+        // 偏 1px 保留；meta 档 = GRID_META_SCALE 只缩字形不动格步进）
+        let cell_h = i64::from(self.cell_h);
+        let text_inset = i64::from(cp::FIELD_TEXT_INSET);
         for (i, row) in rows.iter().enumerate() {
             let r = cp::lower_row_rect(i, lower_final);
             if r.y + i64::from(r.h) > lower_final.y + i64::from(lower_final.h) {
                 break;
             }
-            let (rx, ry) = ((r.x - x_shift) as u32, (r.y - y_origin) as u32);
-            self.draw_text_left_ex(
-                &mut frame, &row.title, rx, r.w, ry, title_band, px_title, title_fg, text_inset,
+            let (rx, ry) = (r.x - x_shift, r.y - y_origin);
+            let tx0 = rx + text_inset;
+            let tw_max = r.w.saturating_sub(cp::FIELD_TEXT_INSET);
+            let ty = ry + (i64::from(title_band) - cell_h).max(0) / 2;
+            let (titems, _) = self.measure_items_grid(&row.title);
+            self.draw_grid_text_left(
+                &mut frame,
+                &titems,
+                tx0,
+                ty,
+                self.cell_w,
+                tw_max,
+                title_fg,
+                0,
                 None,
             );
-            self.draw_text_left_ex(
+            self.draw_grid_text_left(
                 &mut frame,
-                &row.title,
-                rx + 1,
-                r.w,
-                ry,
-                title_band,
-                px_title,
+                &titems,
+                tx0 + 1,
+                ty,
+                self.cell_w,
+                tw_max,
                 title_fg,
-                text_inset,
+                0,
                 None,
             );
             if !row.meta.is_empty() {
-                self.draw_text_left_ex(
+                let (mitems, _) = self.measure_items_grid_scaled(&row.meta, GRID_META_SCALE);
+                let my =
+                    ry + i64::from(title_band) + (i64::from(r.h - title_band) - cell_h).max(0) / 2;
+                self.draw_grid_text_left(
                     &mut frame,
-                    &row.meta,
-                    rx,
-                    r.w,
-                    ry + title_band,
-                    r.h - title_band,
-                    px_meta,
+                    &mitems,
+                    tx0,
+                    my,
+                    self.cell_w,
+                    tw_max,
                     meta_fg,
-                    text_inset,
+                    0,
                     None,
                 );
             }
@@ -5359,16 +5386,17 @@ impl TermView {
         } else {
             title_fg
         };
-        self.draw_text_left_ex(
+        // 卡头落笔（BAR-196 网格引擎尺：格量宽+格步进左对齐，18=1 格内缩）
+        let (hitems, _) = self.measure_items_grid(&header_text);
+        self.draw_grid_text_left(
             &mut frame,
-            &header_text,
-            (lay.header.x + off) as u32,
-            lay.header.w,
-            lay.header.y as u32,
-            lay.header.h,
-            36.0,
+            &hitems,
+            lay.header.x + off + i64::from(CELL_W),
+            lay.header.y + (i64::from(lay.header.h) - i64::from(self.cell_h)).max(0) / 2,
+            self.cell_w,
+            lay.header.w.saturating_sub(CELL_W),
             header_fg,
-            18.0,
+            0,
             pclip32,
         );
 
@@ -5384,6 +5412,7 @@ impl TermView {
         // 框表有效裁剪带 = 表内滚窗 ∩ 页缘带（视口化：两道裁剪语义不同
         // 源同带——表滚出窗断墨 + 页滚出环缘断墨，眼手同尺）
         let rclip = (lay.list_clip.0.max(pclip.0), lay.list_clip.1.min(pclip.1));
+        let rclip32 = Some((rclip.0 as i32, rclip.1 as i32));
         for (i, s) in snap.sessions.iter().zip(lay.rows.iter()) {
             let (r, s) = (s, i);
             // 滚动裁窗：整框出带不画（半框靠 rclip 断墨——框/文字
@@ -5408,31 +5437,29 @@ impl TermView {
                 0,
             );
             let fg = if mine { title_fg } else { body_fg };
-            self.draw_text_centered_yclip(
+            self.draw_grid_text_centered(
                 &mut frame,
                 &s.name,
                 r.x + off,
                 r.y,
                 r.w.saturating_sub(pp::KILL_W),
                 r.h,
-                34.0,
                 fg,
                 r.x + off,
-                Some(rclip),
+                rclip32,
             );
             // 框尾 ×
             let kx = r.x + off + i64::from(r.w) - i64::from(pp::KILL_W);
-            self.draw_text_centered_yclip(
+            self.draw_grid_text_centered(
                 &mut frame,
                 "×",
                 kx,
                 r.y,
                 pp::KILL_W,
                 r.h,
-                34.0,
                 meta_fg,
                 r.x + off,
-                Some(rclip),
+                rclip32,
             );
         }
 
@@ -5449,18 +5476,18 @@ impl TermView {
             pclip.1,
         );
 
-        // 命名行
+        // 命名行（BAR-196 网格引擎尺：格左对齐，18=1 格内缩）
         if let (Some(nr), Some(text)) = (&lay.naming, &snap.naming) {
-            self.draw_text_left_ex(
+            let (nitems, _) = self.measure_items_grid(&format!("名: {text}▌"));
+            self.draw_grid_text_left(
                 &mut frame,
-                &format!("名: {text}▌"),
-                (nr.x + off) as u32,
-                nr.w,
-                nr.y as u32,
-                nr.h,
-                34.0,
+                &nitems,
+                nr.x + off + i64::from(CELL_W),
+                nr.y + (i64::from(nr.h) - i64::from(self.cell_h)).max(0) / 2,
+                self.cell_w,
+                nr.w.saturating_sub(CELL_W),
                 title_fg,
-                18.0,
+                0,
                 pclip32,
             );
         }
@@ -5481,17 +5508,16 @@ impl TermView {
                 grad_ref,
                 0,
             );
-            self.draw_text_centered_yclip(
+            self.draw_grid_text_centered(
                 &mut frame,
                 label,
                 b.x + off,
                 b.y,
                 b.w,
                 b.h,
-                34.0,
                 title_fg,
                 b.x + off,
-                Some(pclip),
+                pclip32,
             );
         }
 
@@ -5540,32 +5566,31 @@ impl TermView {
         } else {
             meta_fg
         };
-        self.draw_text_left_ex(
+        let (hitems, _) = self.measure_items_grid(&format!("连接 · {}", csnap.word));
+        self.draw_grid_text_left(
             &mut frame,
-            &format!("连接 · {}", csnap.word),
-            (llay.lheader.x + off) as u32,
-            llay.lheader.w,
-            llay.lheader.y as u32,
-            llay.lheader.h,
-            36.0,
+            &hitems,
+            llay.lheader.x + off + i64::from(CELL_W),
+            llay.lheader.y + (i64::from(llay.lheader.h) - i64::from(self.cell_h)).max(0) / 2,
+            self.cell_w,
+            llay.lheader.w.saturating_sub(CELL_W),
             header_fg,
-            18.0,
+            0,
             cclip32,
         );
         // 连接段四字段行（字段标签列配方：标签左对齐亮档、值逐行右对齐
-        // 灰档——draw_field_lines 自带 1.5 格文内边距与 ≤2 行折行；
-        // 错误行有字用错色）
+        // 灰档——draw_field_lines_grid 自带 1.5 格文内边距与 ≤2 行折行
+        // （BAR-196 网格引擎尺）；错误行有字用错色）
         let values = [&csnap.target, &csnap.local, &csnap.attempts, &csnap.error];
         for (i, fr) in llay.lfields.iter().enumerate() {
-            let l_items = self.measure_items(crate::ui::conn_card::FIELD_LABELS[i], 36.0);
-            self.draw_field_lines(
+            self.draw_field_lines_grid(
                 &mut frame,
-                &l_items,
+                crate::ui::conn_card::FIELD_LABELS[i],
                 (fr.x + off) as u32,
                 fr.w,
                 fr.y as u32,
                 fr.h,
-                36.0,
+                1.0,
                 title_fg,
                 cclip32,
                 true,
@@ -5575,15 +5600,14 @@ impl TermView {
             } else {
                 (meta_fg, values[i].as_str())
             };
-            let v_items = self.measure_items(v, 30.0);
-            self.draw_field_lines(
+            self.draw_field_lines_grid(
                 &mut frame,
-                &v_items,
+                v,
                 (fr.x + off) as u32,
                 fr.w,
                 fr.y as u32,
                 fr.h,
-                30.0,
+                GRID_META_SCALE,
                 v_fg,
                 cclip32,
                 false,
@@ -5605,17 +5629,16 @@ impl TermView {
                 grad_ref,
                 0,
             );
-            self.draw_text_centered_yclip(
+            self.draw_grid_text_centered(
                 &mut frame,
                 "重连",
                 b.x + off,
                 b.y,
                 b.w,
                 b.h,
-                34.0,
                 title_fg,
                 b.x + off,
-                Some(cclip),
+                cclip32,
             );
         }
         // 通道段 mini 卡头「通道 · 状态词」（2026-09-24 通道段改造：
@@ -5625,30 +5648,29 @@ impl TermView {
         } else {
             meta_fg
         };
-        self.draw_text_left_ex(
+        let (hitems, _) = self.measure_items_grid(&format!("通道 · {}", ssnap.word));
+        self.draw_grid_text_left(
             &mut frame,
-            &format!("通道 · {}", ssnap.word),
-            (llay.rheader.x + off) as u32,
-            llay.rheader.w,
-            llay.rheader.y as u32,
-            llay.rheader.h,
-            36.0,
+            &hitems,
+            llay.rheader.x + off + i64::from(CELL_W),
+            llay.rheader.y + (i64::from(llay.rheader.h) - i64::from(self.cell_h)).max(0) / 2,
+            self.cell_w,
+            llay.rheader.w.saturating_sub(CELL_W),
             header_fg,
-            18.0,
+            0,
             cclip32,
         );
         // 通道段四字段行（四口状态；字段标签列配方同连接段。「断」/
         // 「跳闸降级」用错色提注意——故障相才是值得亮的行）
         for (i, fr) in llay.rfields.iter().enumerate() {
-            let l_items = self.measure_items(crate::ui::svc_card::FIELD_LABELS[i], 36.0);
-            self.draw_field_lines(
+            self.draw_field_lines_grid(
                 &mut frame,
-                &l_items,
+                crate::ui::svc_card::FIELD_LABELS[i],
                 (fr.x + off) as u32,
                 fr.w,
                 fr.y as u32,
                 fr.h,
-                36.0,
+                1.0,
                 title_fg,
                 cclip32,
                 true,
@@ -5659,15 +5681,14 @@ impl TermView {
             } else {
                 meta_fg
             };
-            let v_items = self.measure_items(v, 30.0);
-            self.draw_field_lines(
+            self.draw_field_lines_grid(
                 &mut frame,
-                &v_items,
+                v,
                 (fr.x + off) as u32,
                 fr.w,
                 fr.y as u32,
                 fr.h,
-                30.0,
+                GRID_META_SCALE,
                 v_fg,
                 cclip32,
                 false,
@@ -5696,17 +5717,16 @@ impl TermView {
                 grad_ref,
                 0,
             );
-            self.draw_text_centered_yclip(
+            self.draw_grid_text_centered(
                 &mut frame,
                 &label,
                 b.x + off,
                 b.y,
                 b.w,
                 b.h,
-                34.0,
                 if clickable { title_fg } else { meta_fg },
                 b.x + off,
-                Some(cclip),
+                cclip32,
             );
         }
         {
@@ -5726,17 +5746,16 @@ impl TermView {
                 grad_ref,
                 0,
             );
-            self.draw_text_centered_yclip(
+            self.draw_grid_text_centered(
                 &mut frame,
                 crate::self_restart::button_label(now_ms),
                 b.x + off,
                 b.y,
                 b.w,
                 b.h,
-                34.0,
                 if armed { err_fg } else { title_fg },
                 b.x + off,
-                Some(cclip),
+                cclip32,
             );
         }
 
@@ -5780,16 +5799,16 @@ impl TermView {
         } else {
             title_fg
         };
-        self.draw_text_left_ex(
+        let (hitems, _) = self.measure_items_grid(&format!("环境 · {}", xsnap.word));
+        self.draw_grid_text_left(
             &mut frame,
-            &format!("环境 · {}", xsnap.word),
-            (xlay.header.x + off) as u32,
-            xlay.header.w,
-            xlay.header.y as u32,
-            xlay.header.h,
-            36.0,
+            &hitems,
+            xlay.header.x + off + i64::from(CELL_W),
+            xlay.header.y + (i64::from(xlay.header.h) - i64::from(self.cell_h)).max(0) / 2,
+            self.cell_w,
+            xlay.header.w.saturating_sub(CELL_W),
             header_fg,
-            18.0,
+            0,
             xclip32,
         );
         // 单竖列（行集数据定——没数据的行不做）：每轨 = 文字行（标签左锚
@@ -5799,28 +5818,26 @@ impl TermView {
         let xslide = xhist.slide_px_now(std::time::Instant::now());
         for md in xlay.metrics.iter() {
             let kind = md.kind;
-            let l_items = self.measure_items(crate::ui::sys_card::metric_label(kind), 36.0);
-            self.draw_field_lines(
+            self.draw_field_lines_grid(
                 &mut frame,
-                &l_items,
+                crate::ui::sys_card::metric_label(kind),
                 (md.row.x + off) as u32,
                 md.row.w,
                 md.row.y as u32,
                 md.row.h,
-                36.0,
+                1.0,
                 title_fg,
                 xclip32,
                 true,
             );
-            let v_items = self.measure_items(crate::ui::sys_card::metric_value(&xsnap, kind), 30.0);
-            self.draw_field_lines(
+            self.draw_field_lines_grid(
                 &mut frame,
-                &v_items,
+                crate::ui::sys_card::metric_value(&xsnap, kind),
                 (md.row.x + off) as u32,
                 md.row.w,
                 md.row.y as u32,
                 md.row.h,
-                30.0,
+                GRID_META_SCALE,
                 sys_grade_fg(xhist.latest_grade(kind), meta_fg),
                 xclip32,
                 false,
@@ -5841,28 +5858,26 @@ impl TermView {
         }
         // 尾部行（在线；进程行 2026-09-21 用户拍板删除）——无数据不做
         if let Some(tr) = &xlay.uptime {
-            let l_items = self.measure_items(crate::ui::sys_card::TAIL_LABEL, 36.0);
-            self.draw_field_lines(
+            self.draw_field_lines_grid(
                 &mut frame,
-                &l_items,
+                crate::ui::sys_card::TAIL_LABEL,
                 (tr.x + off) as u32,
                 tr.w,
                 tr.y as u32,
                 tr.h,
-                36.0,
+                1.0,
                 title_fg,
                 xclip32,
                 true,
             );
-            let v_items = self.measure_items(xsnap.uptime.as_str(), 30.0);
-            self.draw_field_lines(
+            self.draw_field_lines_grid(
                 &mut frame,
-                &v_items,
+                xsnap.uptime.as_str(),
                 (tr.x + off) as u32,
                 tr.w,
                 tr.y as u32,
                 tr.h,
-                30.0,
+                GRID_META_SCALE,
                 meta_fg,
                 xclip32,
                 false,
@@ -5904,32 +5919,32 @@ impl TermView {
                     POOL_FRAME_R,
                     true,
                 );
-                self.draw_text_centered(
+                self.draw_grid_text_centered(
                     &mut frame,
                     &format!("关闭 '{name}'？"),
                     cx0,
                     card.y + i64::from(pp::MODAL_PAD_V),
                     card.w,
                     pp::MODAL_TITLE_H,
-                    36.0,
                     title_fg,
                     cx0,
+                    None,
                 );
                 for (b, label) in pp::confirm_buttons(&card)
                     .iter()
                     .zip(pp::CONFIRM_LABELS.iter())
                 {
                     paint_thin_frame(&mut frame, b.x + off, b.y, b.w, b.h, accent, denom, no_clip);
-                    self.draw_text_centered(
+                    self.draw_grid_text_centered(
                         &mut frame,
                         label,
                         b.x + off,
                         b.y,
                         b.w,
                         b.h,
-                        34.0,
                         title_fg,
                         b.x + off,
+                        None,
                     );
                 }
             }
@@ -6418,9 +6433,6 @@ impl TermView {
         use crate::ui::cfg_page as cp;
         let title_fg = 0x00D9_D9D9; // 0.85 白（§2.3 标题档）
         let meta_fg = 0x0080_8080; // 0.5 白（次级档）
-        let px_title = 36.0;
-        let px_meta = 30.0;
-        let text_inset = 27.0;
         let denom = ((frame.w - 1) + (frame.h - 1)).max(1) as i64;
         let no_clip = (0, i64::from(frame.h));
 
@@ -6465,7 +6477,10 @@ impl TermView {
         }
 
         // 文字最后一遍（盖过选中框内芯）：标题 faux-bold（像素体无粗体
-        // 档：双画偏 1px）+ meta，行内垂直分布
+        // 档：双画偏 1px）+ meta，行内垂直分布（BAR-196 网格引擎尺：
+        // 量宽/步进全走格；meta 档 = GRID_META_SCALE 只缩字形不动格步进）
+        let cell_h = i64::from(self.cell_h);
+        let text_inset = i64::from(cp::FIELD_TEXT_INSET);
         for (i, row) in rows.iter().enumerate() {
             let r = cp::lower_row_rect(i, lower);
             if r.y + r.h as i64 > lower.y + lower.h as i64 {
@@ -6475,34 +6490,46 @@ impl TermView {
             if rx < 0 {
                 continue;
             }
-            let (rx, ry) = (rx as u32, r.y as u32);
+            let ry = r.y;
             let title_band = 90; // 四版 ×1.5（60 → 90）
-            self.draw_text_left_ex(
-                frame, &row.title, rx, r.w, ry, title_band, px_title, title_fg, text_inset, None,
-            );
-            self.draw_text_left_ex(
+            let tx0 = rx + text_inset;
+            let tw_max = r.w.saturating_sub(cp::FIELD_TEXT_INSET);
+            let ty = ry + (title_band - cell_h).max(0) / 2;
+            let (titems, _) = self.measure_items_grid(&row.title);
+            self.draw_grid_text_left(
                 frame,
-                &row.title,
-                rx + 1,
-                r.w,
-                ry,
-                title_band,
-                px_title,
+                &titems,
+                tx0,
+                ty,
+                self.cell_w,
+                tw_max,
                 title_fg,
-                text_inset,
+                0,
+                None,
+            );
+            self.draw_grid_text_left(
+                frame,
+                &titems,
+                tx0 + 1,
+                ty,
+                self.cell_w,
+                tw_max,
+                title_fg,
+                0,
                 None,
             );
             if !row.meta.is_empty() {
-                self.draw_text_left_ex(
+                let (mitems, _) = self.measure_items_grid_scaled(&row.meta, GRID_META_SCALE);
+                let my = ry + title_band + (i64::from(r.h) - title_band - cell_h).max(0) / 2;
+                self.draw_grid_text_left(
                     frame,
-                    &row.meta,
-                    rx,
-                    r.w,
-                    ry + title_band,
-                    r.h - title_band,
-                    px_meta,
+                    &mitems,
+                    tx0,
+                    my,
+                    self.cell_w,
+                    tw_max,
                     meta_fg,
-                    text_inset,
+                    0,
                     None,
                 );
             }
@@ -6529,8 +6556,6 @@ impl TermView {
         use crate::ui::cfg_page as cp;
         let title_fg = 0x00D9_D9D9;
         let meta_fg = 0x0080_8080;
-        let px_title = 36.0;
-        let px_meta = 30.0;
         let denom = ((frame.w - 1) + (frame.h - 1)).max(1) as i64;
 
         // ---- 上池：字段框行表（标签列 + 值框；首行 = 下拉行）----
@@ -6550,12 +6575,11 @@ impl TermView {
                 continue;
             }
             let clip32 = Some((uclip.0 as i32, uclip.1 as i32));
-            // 十四修动态宽度：实量宽喂几何（与触摸命中同一条
-            // measure_items 尺——眼手同尺）；标签块锚左、值框锚右
-            let l_items = self.measure_items(&ur.label, px_title);
-            let v_items = self.measure_items(&ur.value, px_meta);
-            let lw = l_items.iter().map(|it| it.2).sum::<f32>().ceil() as u32;
-            let mut vw = v_items.iter().map(|it| it.2).sum::<f32>().ceil() as u32;
+            // 十四修动态宽度（BAR-196 换网格引擎尺）：格量宽喂几何（与
+            // 触摸命中同一条 grid_text_width 尺——眼手同尺）；标签块锚左、
+            // 值框锚右
+            let lw = self.grid_text_width(&ur.label);
+            let mut vw = self.grid_text_width(&ur.value);
             // 二十四修 §六②：行 0 下拉行的值框宽走伸缩账瞬时值（锚右
             // 缘左长/左收——field_value_rect 锚右恒等式不变）
             if i == 0
@@ -6599,16 +6623,16 @@ impl TermView {
                     }
                 }
             }
-            // 标签文字（title 档 36px 亮——六修字档反转（色）+ 七修补齐
-            // （号）；十四修：逐行左对齐，超长贪心换行 ≤2 行）
-            self.draw_field_lines(
+            // 标签文字（title 档亮——六修字档反转（色）；BAR-196 网格引擎
+            // 落笔：逐行左对齐，超长贪心折行 ≤2 行——格尺同一份）
+            self.draw_field_lines_grid(
                 frame,
-                &l_items,
+                &ur.label,
                 rx as u32,
                 lb.w,
                 vb.y as u32,
                 vb.h,
-                px_title,
+                1.0,
                 title_fg,
                 clip32,
                 true,
@@ -6627,22 +6651,22 @@ impl TermView {
                 denom,
                 uclip,
             );
-            // 值文本逐行右对齐（十四修）；右缘呼吸位 = 文内边距 1.5 格，
-            // 下拉行再让 ▼ 三角位 45px（kfmv4 实证：文字不贴框缘）；
-            // 字档反转：值 = meta 档 30px 灰
+            // 值文本逐行右对齐（十四修；BAR-196 网格引擎落笔）；右缘呼吸
+            // 位 = 文内边距 1.5 格，下拉行再让 ▼ 三角位 45px（kfmv4 实证：
+            // 文字不贴框缘）；字档反转：值 = meta 档灰（GRID_META_SCALE）
             let tri_pad = if ur.is_dropdown {
                 cp::FIELD_TRIANGLE_PAD
             } else {
                 0
             };
-            self.draw_field_lines(
+            self.draw_field_lines_grid(
                 frame,
-                &v_items,
+                &ur.value,
                 (vb.x + off) as u32,
                 vb.w.saturating_sub(tri_pad),
                 vb.y as u32,
                 vb.h,
-                px_meta,
+                GRID_META_SCALE,
                 meta_fg,
                 clip32,
                 false,
@@ -6762,8 +6786,6 @@ impl TermView {
         let mut frame = Frame { buf, w: cw, h: ch };
         let frame = &mut frame;
         let title_fg = 0x00D9_D9D9;
-        let px_title = 36.0;
-        let text_inset = 27.0;
         let denom = ((frame.w - 1) + (frame.h - 1)).max(1) as i64;
         let full_h = pr_full.h; // 全高（progress=1 的高）——抽屉刚体尺
         let cur_h = ((full_h as f32) * page.dropdown_progress).round() as u32;
@@ -6817,6 +6839,7 @@ impl TermView {
             );
         }
         let clip32 = Some((panel_clip.0 as i32, panel_clip.1 as i32));
+        let cell_h = i64::from(self.cell_h);
         for (i, opt) in page.options.iter().enumerate() {
             let iy = (i as i64) * cp::FIELD_ROW_H as i64 + drawer_dy;
             if iy + cp::FIELD_ROW_H as i64 <= 0 {
@@ -6825,16 +6848,21 @@ impl TermView {
             if iy >= cur_h as i64 {
                 break; // 出面板底（行有序，后续更靠下）
             }
-            self.draw_text_left_ex(
+            // 选项行文字（BAR-196 网格引擎尺：格左对齐 1.5 格内缩，纵 =
+            // 一格线盒在行高内居中）
+            let (oitems, _) = self.measure_items_grid(opt);
+            self.draw_grid_text_left(
                 frame,
-                opt,
-                rx as u32,
-                pr_full.w.saturating_sub(27),
-                iy as u32,
-                cp::FIELD_ROW_H,
-                px_title,
+                &oitems,
+                rx + i64::from(cp::FIELD_TEXT_INSET),
+                iy + (i64::from(cp::FIELD_ROW_H) - cell_h).max(0) / 2,
+                self.cell_w,
+                pr_full
+                    .w
+                    .saturating_sub(cp::FIELD_TEXT_INSET)
+                    .saturating_sub(27),
                 title_fg,
-                text_inset,
+                0,
                 clip32,
             );
         }
@@ -8581,68 +8609,63 @@ impl TermView {
         }
     }
 
-    /// 字段框文涂装（十四修 §五 动态宽度条款）：measure 序列按
-    /// cfg_page::wrap_field_lines 贪心折行（≤2 行，余量进末行靠右缘
-    /// 裁剪），逐行整体垂直居中于 (cy, rh)；align_left = 标签（逐行
-    /// 左对齐，起笔 cx+1.5 格），否则 = 值（逐行右对齐，末笔贴
-    /// cx+cw−1.5 格）
+    /// 字段框文涂装·网格引擎版（BAR-196：draw_field_lines 收编退役——
+    /// 量宽/折行/落笔全走格：字宽 = char_cells × 实例格宽，行高 = 实例
+    /// 格高 × scale × 4/3（旧 px×4/3 同比例），字号 = grid_fit × scale
+    /// （层级差只缩字形不动格步进——measure_items_grid_scaled 同律）。
+    /// 折行贪心语义 = cfg_page::wrap_field_lines 同一份（尺子换格）；
+    /// align_left = 标签（逐行左对齐，起笔 cx+1.5 格），否则 = 值
+    /// （逐行右对齐，末笔贴 cx+cw−1.5 格——行超内宽左贴内缘）
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn draw_field_lines(
+    pub(crate) fn draw_field_lines_grid(
         &self,
         frame: &mut Frame<'_>,
-        items: &[(&fontdue::Font, char, f32)],
+        text: &str,
         cx: u32,
         cw: u32,
         cy: u32,
         rh: u32,
-        px: f32,
+        scale: f32,
         fg: u32,
         clip_y: Option<(i32, i32)>,
         align_left: bool,
     ) {
         let inset = crate::ui::cfg_page::FIELD_TEXT_INSET;
         let inner = cw.saturating_sub(inset * 2);
-        if inner == 0 || items.is_empty() {
+        if inner == 0 || text.is_empty() {
             return;
         }
-        let widths: Vec<f32> = items.iter().map(|it| it.2).collect();
+        let (items, _) = self.measure_items_grid_scaled(text, scale);
+        if items.is_empty() {
+            return;
+        }
+        let widths: Vec<f32> = items.iter().map(|it| it.3).collect();
         let lines = crate::ui::cfg_page::wrap_field_lines(&widths, inner as f32);
-        let line_h = (px * 4.0 / 3.0).ceil() as u32;
+        let line_h = (self.cell_h as f32 * scale * 4.0 / 3.0).ceil() as u32;
         let total = line_h * lines.len() as u32;
         let top = cy + rh.saturating_sub(total) / 2;
+        let cell_h = i64::from(self.cell_h);
+        let right = i64::from(cx + cw - inset);
         for (k, (s, e, line_w)) in lines.iter().enumerate() {
-            let lcy = top + k as u32 * line_h;
-            if align_left {
-                self.draw_items_left_inset(
-                    frame,
-                    &items[*s..*e],
-                    cx + inset,
-                    inner,
-                    lcy,
-                    line_h,
-                    px,
-                    fg,
-                    clip_y,
-                    0.0,
-                );
+            let lcy = i64::from(top + k as u32 * line_h);
+            let y_top = lcy + (i64::from(line_h) - cell_h).max(0) / 2;
+            let x0 = if align_left {
+                i64::from(cx + inset)
             } else {
-                // 右对齐：起笔 = 右内缘 − 行宽；行超内宽时左贴内缘
-                // （右缘裁剪归 draw_items_left_inset 的 clip_right）
-                let right = cx + cw - inset;
-                let x0 = ((right as f32) - line_w).max(cx as f32 + inset as f32) as u32;
-                self.draw_items_left_inset(
-                    frame,
-                    &items[*s..*e],
-                    x0,
-                    right.saturating_sub(x0),
-                    lcy,
-                    line_h,
-                    px,
-                    fg,
-                    clip_y,
-                    0.0,
-                );
-            }
+                (right - line_w.ceil() as i64).max(i64::from(cx + inset))
+            };
+            let max_px_w = (right - x0).max(0) as u32;
+            self.draw_grid_text_left(
+                frame,
+                &items[*s..*e],
+                x0,
+                y_top,
+                self.cell_w,
+                max_px_w,
+                fg,
+                0,
+                clip_y,
+            );
         }
     }
 
@@ -9398,6 +9421,9 @@ pub trait TermEmu: Send {
     /// 文本实量宽 px（十四修 §五 字段框动态宽度：触摸命中量宽与涂装
     /// 同一条 measure_items 尺——android_app 池区手势命中调用方）
     fn text_width(&self, text: &str, px: f32) -> u32;
+    /// 文本格量宽 px（BAR-196 网格引擎尺：设置页字段/下拉几何的命中
+    /// 与涂装同尺——android_app cfg_row0_text_widths/cfg_dropdown_* 调用方）
+    fn grid_text_width(&self, text: &str) -> u32;
     fn render_keybar(&self, buf: &mut [u32], w: u32, h: u32, ime_bottom: u32, mods: u8);
     /// 配置卡标签栏涂装（主题宪法 §四，2026-09-13 五修）：标签文字
     /// （格内居中、内容带左缘裁剪）+ 选中功能光标开口框（ui/cursor.rs
@@ -9826,6 +9852,9 @@ impl TermEmu for TermView {
     }
     fn text_width(&self, text: &str, px: f32) -> u32 {
         TermView::text_width(self, text, px)
+    }
+    fn grid_text_width(&self, text: &str) -> u32 {
+        TermView::grid_text_width(self, text)
     }
     fn render_keybar(&self, buf: &mut [u32], w: u32, h: u32, ime_bottom: u32, mods: u8) {
         TermView::render_keybar(self, buf, w, h, ime_bottom, mods)
