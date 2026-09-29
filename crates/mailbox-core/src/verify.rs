@@ -18,7 +18,8 @@ const LEGACY_FIELDS: [&str; 7] = ["日期", "致", "流型", "预期表态方", 
 #[derive(Debug, Clone)]
 pub struct LetterText {
     pub file: String,
-    /// "active" | "archive-v1"
+    /// "active" | "archive-v1" | "withdrawn"（archive-withdrawn/ 撤回栏：
+    /// 不参与执法，但孤儿判据认这一栏——契约 §八 第 9 条《撤回票》）
     pub dir: String,
     pub text: String,
 }
@@ -31,6 +32,10 @@ pub struct Diags {
     pub legacy_count: usize,
     pub current_tickets: usize,
     pub revoked_tickets: usize,
+    /// 撤销票（换票的一半，被某张票以 renamedFrom 引用）
+    pub replaced_tickets: usize,
+    /// 撤回票（整封作废，无人引用；契约 §八 第 9 条）
+    pub withdrawn_tickets: usize,
 }
 
 impl Diags {
@@ -185,9 +190,12 @@ pub fn verify_book(b: &BookCheck) -> Diags {
     }
     let status_re = build_status_re(&words);
 
-    // 编号全集（复 存在性判据）
+    // 编号全集（复 存在性判据）——撤回栏信不算「在本信箱可见」（不参与执法同口径）
     let mut known: HashSet<String> = HashSet::new();
     for l in b.letters {
+        if l.dir == "withdrawn" {
+            continue;
+        }
         if let Some(full) = v21_no_of(&l.file).or_else(|| legacy_no_of(&l.file)) {
             known.insert(no4(&full));
             known.insert(full);
@@ -203,6 +211,11 @@ pub fn verify_book(b: &BookCheck) -> Diags {
     let full_no_re = regex::Regex::new(r"^[A-Z]{0,4}\d{4}$").unwrap();
 
     for l in b.letters {
+        // 撤回栏（archive-withdrawn/）不参与执法（撤回＝整封作废）——不进枚举，
+        // 只在本函数末尾的孤儿/半状态/防重判据里认这个位置（契约 §八 第 9 条）
+        if l.dir == "withdrawn" {
+            continue;
+        }
         if b.v1_files.contains(&l.file) {
             continue; // v1 名单：只读，不追改不补水印
         }
@@ -462,20 +475,75 @@ pub fn verify_book(b: &BookCheck) -> Diags {
         }
     }
 
-    // e. 孤儿票据（台账有、文件无；撤销票除外）
-    let files: HashSet<&str> = b.letters.iter().map(|l| l.file.as_str()).collect();
+    // e. 孤儿票据（台账有、文件无）——位置认三栏：在册 / archive-v1 /
+    // archive-withdrawn（契约 §八 第 9 条：撤回件的 file 指向撤回栏，判据不认
+    // 这个位置就会误报「file 不存在」）。反向也钉死：现行票的 file 落在撤回栏
+    // ＝「移了档没撤票」的半状态，照红（撤回缺第 4 步）
+    let active_files: HashSet<&str> = b
+        .letters
+        .iter()
+        .filter(|l| l.dir == "active")
+        .map(|l| l.file.as_str())
+        .collect();
+    let archive_files: HashSet<&str> = b
+        .letters
+        .iter()
+        .filter(|l| l.dir == "archive-v1")
+        .map(|l| l.file.as_str())
+        .collect();
+    let withdrawn_files: HashSet<&str> = b
+        .letters
+        .iter()
+        .filter(|l| l.dir == "withdrawn")
+        .map(|l| l.file.as_str())
+        .collect();
+    let book_has = |name: &str| {
+        !name.is_empty()
+            && (active_files.contains(name)
+                || archive_files.contains(name)
+                || withdrawn_files.contains(name))
+    };
+    // 撤回栏防重完整性（check-agent-inbox 同制）：同一封信不得同时在撤回栏与
+    // 在册/归档栏（撤回用 git mv，一件只落一处）
+    for f in &withdrawn_files {
+        if active_files.contains(f) || archive_files.contains(f) {
+            d.errs.push(format!(
+                "台账完整性：{f} 同时在撤回栏（archive-withdrawn/）与在册/归档栏出现——撤回用 git mv，不复制"
+            ));
+        }
+    }
     for t in &ledger.current {
         let tf = t.file.as_deref().unwrap_or("");
-        if !files.contains(tf) {
+        if active_files.contains(tf) || archive_files.contains(tf) {
+            continue;
+        }
+        if withdrawn_files.contains(tf) {
             d.errs.push(format!(
-                "e. 孤儿票据：no={} 登记的 file={tf} 不存在（改名未换票？）",
+                "e. 半状态：no={} 现行票未撤，但 file={tf} 已在 archive-withdrawn/——撤回缺第 4 步（给该票记 revokedAt＋revokeReason，契约 §八 第 9 条④）",
+                t.no
+            ));
+        } else {
+            d.errs.push(format!(
+                "e. 孤儿票据：no={} 登记的 file={tf} 在本册三栏（在册/archive-v1/archive-withdrawn）均不存在（改名未换票？）",
                 t.no
             ));
         }
     }
-    // 换票留痕完整性（契约 §八）：renamedFrom 应有对应撤销票。
-    // 配对键 = renamedFrom 文件名（BAR-180：§八.8 格式性勘误换票会同步去码改号
-    // ——NA0015→0015，旧票 no=NA0015 ≠ 新票 no=0015，按 no 配对每次误报）
+    // 两种「带 revokedAt 的票」靠配对关系判别（契约 §八 第 7 条 vs 第 9 条，
+    // 不靠新字段）：有 revokedAt 且被某张票以 renamedFrom 引用 → 撤销票（换票的
+    // 一半，要求配对）；无人引用 → 撤回票（整封作废，放行换票判据，但文件须在册
+    // ——「删文件」正是撤回要躲开的病）。配对键 = renamedFrom 文件名本身
+    // （BAR-180：§八.8 换票同步去码改号，比 no 必假失配）。引用方取**全部票**
+    // （含撤销票），非只取现行票——换票可多跳成链（主册 0003/0014 各是迁移→归位
+    // 两跳，链首票的「新票」自己后来也成了撤销票）；只认现行票会把链首票误判成
+    // 撤回票，再报成「file 不存在」——假红，主册实测
+    let paired_by: HashSet<&str> = ledger
+        .current
+        .iter()
+        .chain(ledger.revoked.iter())
+        .filter_map(|r| r.renamed_from.as_deref())
+        .filter(|s| !s.is_empty())
+        .collect();
     for t in &ledger.current {
         let Some(rf) = &t.renamed_from else { continue };
         let paired = ledger
@@ -489,9 +557,25 @@ pub fn verify_book(b: &BookCheck) -> Diags {
             ));
         }
     }
+    let mut withdrawn_tickets = 0usize;
+    for r in &ledger.revoked {
+        if paired_by.contains(r.file.as_deref().unwrap_or("")) {
+            continue; // 撤销票：换票的一半，文件已改名离场，另判
+        }
+        withdrawn_tickets += 1;
+        let tf = r.file.as_deref().unwrap_or("");
+        if !book_has(tf) {
+            d.errs.push(format!(
+                "e. 孤儿票据（撤回票）：no={} 登记的 file={tf} 在本册三栏均不存在——撤回只移档不删（契约 §八 第 9 条①）",
+                r.no
+            ));
+        }
+    }
 
     d.current_tickets = ledger.current.len();
     d.revoked_tickets = ledger.revoked.len();
+    d.withdrawn_tickets = withdrawn_tickets;
+    d.replaced_tickets = ledger.revoked.len() - withdrawn_tickets;
     d
 }
 

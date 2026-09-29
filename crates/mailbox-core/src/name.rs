@@ -32,7 +32,7 @@ fn han_re() -> regex::Regex {
     regex::Regex::new(r"^\p{Han}+$").unwrap()
 }
 
-pub(crate) fn is_han_str(s: &str) -> bool {
+pub fn is_han_str(s: &str) -> bool {
     !s.is_empty() && han_re().is_match(s)
 }
 

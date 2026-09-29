@@ -338,6 +338,19 @@ fn setup_verified_book(tag: &str) -> PathBuf {
         ));
     }
     fs::write(d.join("letter-tokens.jsonl"), ledger).unwrap();
+    // 垫号票 = 撤回票（revokedAt 且无人引用）——契约 §八 第 9 条：撤回只移档不删，
+    // 文件须在 archive-withdrawn/ 栏，否则 verify 的孤儿票据（撤回票）判据照红
+    let wd = d.join("archive-withdrawn");
+    fs::create_dir_all(&wd).unwrap();
+    for pad in ["0002", "0003"] {
+        fs::write(
+            wd.join(format!("{pad}号清和致评审部白露的通报.md")),
+            format!(
+                "# 垫号信（已撤回）\n\n> 日期: 2026-09-28 23:0{pad} +08:00\n> 从: 研究部清和\n> 致: 评审部白露\n> 复: 无（首信）\n> 状态: 待回信\n\n## 摘要\n\n垫号夹具（已撤回），不需要你做任何事。\n\n## 正文\n\n（明写）垫号。\n"
+            ),
+        )
+        .unwrap();
+    }
     // new 分到 0004：白露回清和的首信
     let mb = d.to_str().unwrap().to_string();
     let out = run(&[
@@ -1116,4 +1129,566 @@ fn spec_bar180_reticket_例外之外改号仍拒() {
     );
     assert!(d.join(old).exists());
     let _ = fs::remove_dir_all(&d);
+}
+
+// ---------------------------------------------------------------
+// BAR-193：withdraw 撤信（撤回票，契约 §八 第 9 条）——照主册共享向量
+// （kfmv4 docs/ledger/test-methods/withdraw-vectors.md）逐条同制。
+// golden = JS new-letter.mjs --withdraw 在 §0 夹具上的实跑产物抄录
+// （不手编），逐字节比对；注入戳 = 该次实跑产生的两枚时间戳。
+// ---------------------------------------------------------------
+
+const WD_FIX: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/withdraw");
+const WD_NOW_LOCAL: &str = "2026-09-29 23:27 +08:00"; // JS 实跑撤回行戳
+const WD_NOW_UTC: &str = "2026-09-29T15:27:23.713Z"; // JS 实跑台账 revokedAt
+const WD1: &str = "0001号白露致研究部清和的通报.md"; // 零回应（阳性）
+const WD2: &str = "0002号白露致研究部清和的通报.md"; // 已有回应（阴性①）
+const WD3: &str = "0003号清和致评审部白露复0002的回信.md"; // 0002 的回应件
+const WD4: &str = "0004号白露致研究部清和的通报.md"; // 状态已回（阴性③）
+const WD5: &str = "0005号白露致研究部清和的通报.md"; // 跨册回应（阴性①b）
+const WD_PEER_LETTER: &str = "0001号清和致评审部白露复MAIN0005的回信.md";
+
+fn git_in(dir: &Path, args: &[&str]) {
+    let out = Command::new("git")
+        // pre-commit 钩子下 GIT_DIR 系环境会漏进夹具 git（init/commit 打到主仓）——剥掉
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .unwrap_or_else(|e| panic!("git {args:?} 启动失败：{e}"));
+    assert!(
+        out.status.success(),
+        "git {args:?} 失败：{}{}",
+        String::from_utf8_lossy(&out.stderr),
+        String::from_utf8_lossy(&out.stdout)
+    );
+}
+
+/// 照向量 §0 的夹具册（JS 实跑首轮 gen 后的 pre-withdraw 态抄录）+ 对等册
+/// （复 MAIN0005）。落成 git 仓并提交（撤回走 git mv，未入库即拒是另一条钉）
+fn setup_withdraw_book(tag: &str) -> (PathBuf, PathBuf) {
+    let d = tmpdir(tag);
+    let peer = d.join("peer");
+    fs::create_dir_all(&peer).unwrap();
+    for f in fs::read_dir(WD_FIX).unwrap().flatten() {
+        let name = f.file_name().into_string().unwrap();
+        if name.ends_with(".md") || name == "letter-tokens.jsonl" {
+            fs::copy(f.path(), d.join(&name)).unwrap();
+        }
+    }
+    fs::copy(
+        Path::new(WD_FIX).join("letters-index.pre.jsonl"),
+        d.join("letters-index.jsonl"),
+    )
+    .unwrap();
+    fs::copy(
+        Path::new(WD_FIX).join("mailbox-main.json"),
+        d.join(".mailbox.json"),
+    )
+    .unwrap();
+    fs::copy(
+        Path::new(WD_FIX).join("peer").join(WD_PEER_LETTER),
+        peer.join(WD_PEER_LETTER),
+    )
+    .unwrap();
+    fs::copy(
+        Path::new(WD_FIX).join("peer").join("mailbox-na.json"),
+        peer.join(".mailbox.json"),
+    )
+    .unwrap();
+    git_in(&d, &["init", "-q"]);
+    git_in(&d, &["add", "-A"]);
+    git_in(
+        &d,
+        &[
+            "-c",
+            "user.name=fx",
+            "-c",
+            "user.email=fx@fx",
+            "commit",
+            "-qm",
+            "夹具",
+        ],
+    );
+    (d, peer)
+}
+
+/// 阳性（向量 §1）：零回应撤回成功——七断言逐条；产物与 JS 实跑抄录件逐字节比
+#[test]
+fn withdraw_byte_exact() {
+    let (d, peer) = setup_withdraw_book("wd-golden");
+    let mb = d.to_str().unwrap().to_string();
+    let peer_s = peer.to_str().unwrap().to_string();
+    let original = read(&d.join(WD1));
+    let out = run(&[
+        "withdraw",
+        d.join(WD1).to_str().unwrap(),
+        "--mailbox",
+        &mb,
+        "--roster",
+        ROSTER,
+        "--peer",
+        &peer_s,
+        "--reason",
+        "夹具阳性：零回应误投",
+        "--now-local",
+        WD_NOW_LOCAL,
+        "--now-utc",
+        WD_NOW_UTC,
+    ]);
+    assert_ok(&out, "BAR-193 阳性撤回");
+    // 断言 1：文件在 archive-withdrawn/，原位置已空
+    let moved = d.join("archive-withdrawn").join(WD1);
+    assert!(moved.is_file(), "撤回件应在 archive-withdrawn/");
+    assert!(!d.join(WD1).exists(), "原位置应已空");
+    // 断言 5：信末撤回行定式，且撤回行之前的字节与撤回前逐字节相同
+    let withdrawn = read(&moved);
+    assert!(
+        withdrawn.starts_with(&original),
+        "撤回行之前的字节须与撤回前逐字节相同"
+    );
+    let seal = String::from_utf8_lossy(&withdrawn[original.len()..]);
+    assert_eq!(
+        seal,
+        format!("——撤回：{WD_NOW_LOCAL} 评审部白露——原信作废，理由：夹具阳性：零回应误投\n"),
+        "撤回行定式（契约 §八 第 9 条补注⑦）"
+    );
+    // 断言 2/3/4：台账（原位 revoked、行数不变、不带 renamedFrom）＋ 索引
+    // dir:"withdrawn" ＋ 活信清单剔除——全在逐字节对表里
+    let golden = Path::new(GOLDEN);
+    assert_bytes_eq(
+        &withdrawn,
+        &read(&golden.join("withdraw_letter.md")),
+        "撤回件",
+    );
+    let ledger = read(&d.join("letter-tokens.jsonl"));
+    assert_bytes_eq(
+        &ledger,
+        &read(&golden.join("withdraw_tokens.jsonl")),
+        "台账",
+    );
+    let ledger_s = String::from_utf8_lossy(&ledger);
+    assert_eq!(ledger_s.lines().count(), 6, "台账行数不变（原位撤）");
+    let l1 = ledger_s.lines().next().unwrap();
+    assert!(
+        l1.contains(&format!("\"revokedAt\":\"{WD_NOW_UTC}\""))
+            && l1.contains("撤回票（整封作废）：夹具阳性：零回应误投")
+            && !l1.contains("renamedFrom"),
+        "现行票原位加 revokedAt＋revokeReason、不带 renamedFrom：{l1}"
+    );
+    assert_bytes_eq(
+        &read(&d.join("README.md")),
+        &read(&golden.join("withdraw_README.md")),
+        "README 投影（活信清单剔除＋台账行 archive-withdrawn/ 前缀＋（已撤回）尾注）",
+    );
+    assert_bytes_eq(
+        &read(&d.join("letters-index.jsonl")),
+        &read(&golden.join("withdraw_index.jsonl")),
+        "派生索引（dir:\"withdrawn\"）",
+    );
+    // 断言 6/7：na 侧两链全绿＋计数口径（在册＋归档，不含撤回件）
+    let v = run(&["verify", "--mailbox", &mb, "--roster", ROSTER]);
+    assert_ok(&v, "撤回后 verify 全册绿（撤回票放行、不计换票留痕）");
+    let vout = String::from_utf8_lossy(&v.stdout);
+    assert!(
+        vout.contains("换票撤销票 0 张 + 撤回票 1 张"),
+        "verify 摘要行应分计撤销票/撤回票：{vout}"
+    );
+    let g = run(&["gen", "--mailbox", &mb, "--roster", ROSTER, "--check-only"]);
+    assert_ok(&g, "撤回后 gen --check-only 绿");
+    let gout = String::from_utf8_lossy(&g.stdout);
+    assert!(
+        gout.contains("OK — 5 封信台账投影与机读头一致（在册 5 + 归档 0 + 撤回 1）"),
+        "9.0 计数口径 = 在册＋归档（不含撤回件）：{gout}"
+    );
+    // scan：撤回件不算欠账（活信清单同口径）
+    let s = run(&[
+        "scan",
+        "--mailbox",
+        &mb,
+        "--roster",
+        ROSTER,
+        "--by",
+        "白露",
+        "--main-book",
+        d.join("no-main-book").to_str().unwrap(),
+    ]);
+    assert_ok(&s, "撤回后 scan 绿");
+    let sout = String::from_utf8_lossy(&s.stdout);
+    assert!(
+        !sout.contains(WD1),
+        "撤回件不参与归属行扫描（整封作废不是欠账）：{sout}"
+    );
+    let _ = fs::remove_dir_all(&d);
+}
+
+/// 阴性三例＋跨册（向量 §2，诱饵实咬）：已有回应拒并列出回应件名／跨册回应拒
+/// 并指出哪一册／非作者无 --force 拒／非待* 状态拒并指出当前状态
+#[test]
+fn spec_bar193_withdraw_阴性三例与跨册() {
+    // ① 已有回应（0002，0003 复它）→ 拒，列出回应件名；台账/文件分毫不动
+    let (d, peer) = setup_withdraw_book("wd-neg1");
+    let mb = d.to_str().unwrap().to_string();
+    let peer_s = peer.to_str().unwrap().to_string();
+    let ledger_before = read(&d.join("letter-tokens.jsonl"));
+    let out = run(&[
+        "withdraw",
+        d.join(WD2).to_str().unwrap(),
+        "--mailbox",
+        &mb,
+        "--roster",
+        ROSTER,
+        "--peer",
+        &peer_s,
+        "--reason",
+        "阴性①",
+    ]);
+    assert_fail(&out, "BAR-193 阴性①已有回应必须拒");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("窗口已过：已有对该信（0002）的回应") && stderr.contains(WD3),
+        "报错须列出回应件名：{stderr}"
+    );
+    assert!(d.join(WD2).is_file() && !d.join("archive-withdrawn").join(WD2).exists());
+    assert_eq!(
+        read(&d.join("letter-tokens.jsonl")),
+        ledger_before,
+        "被拒后台账不得变动"
+    );
+
+    // ①b 跨册回应（0005 被对等册 复 MAIN0005）→ 拒，指出在哪一册
+    let out = run(&[
+        "withdraw",
+        d.join(WD5).to_str().unwrap(),
+        "--mailbox",
+        &mb,
+        "--roster",
+        ROSTER,
+        "--peer",
+        &peer_s,
+        "--reason",
+        "阴性①b",
+    ]);
+    assert_fail(&out, "BAR-193 阴性①b跨册回应必须拒");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("已有对该信（0005）的回应")
+            && stderr.contains(WD_PEER_LETTER)
+            && stderr.contains(&peer_s),
+        "报错须指出跨册回应件与所在册：{stderr}"
+    );
+
+    // ② 非作者无 --force（--by 承影）→ 拒，提示代撤须显式 --force 且理由落台账
+    let out = run(&[
+        "withdraw",
+        d.join(WD1).to_str().unwrap(),
+        "--mailbox",
+        &mb,
+        "--roster",
+        ROSTER,
+        "--peer",
+        &peer_s,
+        "--by",
+        "承影",
+        "--reason",
+        "阴性②",
+    ]);
+    assert_fail(&out, "BAR-193 阴性②非作者无 --force 必须拒");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("代撤须显式 --force") && stderr.contains("承影"),
+        "报错须点名代撤规矩：{stderr}"
+    );
+
+    // ③ 非待* 状态（0004 = 已回）→ 拒，指出当前状态
+    let out = run(&[
+        "withdraw",
+        d.join(WD4).to_str().unwrap(),
+        "--mailbox",
+        &mb,
+        "--roster",
+        ROSTER,
+        "--peer",
+        &peer_s,
+        "--reason",
+        "阴性③",
+    ]);
+    assert_fail(&out, "BAR-193 阴性③非待*状态必须拒");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("窗口已过：状态「已回") && stderr.contains("非「待*」"),
+        "报错须指出当前状态：{stderr}"
+    );
+    let _ = fs::remove_dir_all(&d);
+}
+
+/// 加成·代撤（向量 §3）：--by <评审名> --force → 台账记「代撤：<X> 代 <Y>」，
+/// 信末署名取名册 primary 职能（不是操作者自报的）
+#[test]
+fn spec_bar193_withdraw_代撤落账与名册署名() {
+    let (d, peer) = setup_withdraw_book("wd-proxy");
+    let mb = d.to_str().unwrap().to_string();
+    let peer_s = peer.to_str().unwrap().to_string();
+    // 清和的待*信（夹具里待*信全是白露的；现场签一封 0007）
+    let out = run(&[
+        "new",
+        "--mailbox",
+        &mb,
+        "--roster",
+        ROSTER,
+        "--from-func",
+        "研究部",
+        "--from-name",
+        "清和",
+        "--to",
+        "评审部白露",
+        "--type",
+        "通报",
+        "--title",
+        "代撤钉目标",
+        "--now-local",
+        "2026-09-29 23:40 +08:00",
+        "--now-utc",
+        "2026-09-29T15:40:00.000Z",
+        "--nonce",
+        "aabbccddeeff0007",
+    ]);
+    assert_ok(&out, "签代撤目标信");
+    let f7 = "0007号清和致评审部白露的通报.md";
+    git_in(&d, &["add", f7, "letter-tokens.jsonl"]);
+    let out = run(&[
+        "withdraw",
+        d.join(f7).to_str().unwrap(),
+        "--mailbox",
+        &mb,
+        "--roster",
+        ROSTER,
+        "--peer",
+        &peer_s,
+        "--by",
+        "白露",
+        "--force",
+        "--reason",
+        "误投代撤钉",
+        "--now-local",
+        "2026-09-29 23:41 +08:00",
+        "--now-utc",
+        "2026-09-29T15:41:00.000Z",
+    ]);
+    assert_ok(&out, "BAR-193 代撤（--by 白露 --force）");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("代撤：白露 代 清和"),
+        "代撤事实须明示：{stdout}"
+    );
+    let ledger = fs::read_to_string(d.join("letter-tokens.jsonl")).unwrap();
+    assert!(
+        ledger.contains("撤回票（整封作废，代撤：白露 代 清和）：误投代撤钉"),
+        "台账 revokeReason 须记代撤：{ledger}"
+    );
+    let moved = fs::read_to_string(d.join("archive-withdrawn").join(f7)).unwrap();
+    assert!(
+        moved.contains("——撤回：2026-09-29 23:41 +08:00 评审部白露——原信作废，理由：误投代撤钉"),
+        "信末署名取名册职能（白露→评审部），不是操作者自报：{}",
+        moved.lines().last().unwrap_or("")
+    );
+    let _ = fs::remove_dir_all(&d);
+}
+
+/// 加成·未 git add 的信（向量 §3）：git mv 预演失败即拒——台账不变、文件不动，
+/// 不静默降级为 mv
+#[test]
+fn spec_bar193_withdraw_未入库即拒不降级() {
+    let (d, peer) = setup_withdraw_book("wd-untracked");
+    let mb = d.to_str().unwrap().to_string();
+    let peer_s = peer.to_str().unwrap().to_string();
+    let out = run(&[
+        "new",
+        "--mailbox",
+        &mb,
+        "--roster",
+        ROSTER,
+        "--from-func",
+        "研究部",
+        "--from-name",
+        "清和",
+        "--to",
+        "评审部白露",
+        "--type",
+        "通报",
+        "--title",
+        "未入库钉目标",
+        "--now-local",
+        "2026-09-29 23:40 +08:00",
+        "--now-utc",
+        "2026-09-29T15:40:00.000Z",
+        "--nonce",
+        "aabbccddeeff0007",
+    ]);
+    assert_ok(&out, "签未入库目标信");
+    let f7 = "0007号清和致评审部白露的通报.md"; // 故意不 git add
+    let ledger_before = read(&d.join("letter-tokens.jsonl"));
+    let out = run(&[
+        "withdraw",
+        d.join(f7).to_str().unwrap(),
+        "--mailbox",
+        &mb,
+        "--roster",
+        ROSTER,
+        "--peer",
+        &peer_s,
+        "--reason",
+        "未入库即拒钉",
+    ]);
+    assert_fail(&out, "BAR-193 未 git add 的信撤回必须拒");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("git mv 预演失败") && stderr.contains("git add"),
+        "报错须点名 git mv 预演与入库前提：{stderr}"
+    );
+    assert!(
+        d.join(f7).is_file() && !d.join("archive-withdrawn").join(f7).exists(),
+        "被拒后文件不动（不降级 mv）"
+    );
+    assert_eq!(
+        read(&d.join("letter-tokens.jsonl")),
+        ledger_before,
+        "被拒后台账不变"
+    );
+    let _ = fs::remove_dir_all(&d);
+}
+
+/// 判据边界（向量 §3）＋ 配对范围（§4.1，变异位）：
+/// (a) 撤回件被删 → e. 孤儿票据（撤回票）红（撤回只移档不删）；
+/// (b) 现行票未撤而文件已在 archive-withdrawn/ → e. 半状态红；
+/// (c) 复原 → 绿；
+/// (d) 两跳换票链——配对范围取全部票（含撤销票）：链首票不得误判撤回票。
+///     变异方向：paired_by 只收现行票的 renamedFrom → (d) 红「孤儿票据（撤回票）」
+#[test]
+fn spec_bar193_verify_撤回判据边界与两跳链() {
+    // (a)(c)：阳性撤回后删撤回件 → 红；复原 → 绿
+    let (d, peer) = setup_withdraw_book("wd-edge");
+    let mb = d.to_str().unwrap().to_string();
+    let peer_s = peer.to_str().unwrap().to_string();
+    let out = run(&[
+        "withdraw",
+        d.join(WD1).to_str().unwrap(),
+        "--mailbox",
+        &mb,
+        "--roster",
+        ROSTER,
+        "--peer",
+        &peer_s,
+        "--reason",
+        "判据边界钉",
+        "--now-local",
+        WD_NOW_LOCAL,
+        "--now-utc",
+        WD_NOW_UTC,
+    ]);
+    assert_ok(&out, "边界钉前置撤回");
+    let kept = read(&d.join("archive-withdrawn").join(WD1));
+    fs::remove_file(d.join("archive-withdrawn").join(WD1)).unwrap();
+    let out = run(&["verify", "--mailbox", &mb, "--roster", ROSTER]);
+    assert_fail(&out, "(a) 撤回件被删必须红");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("孤儿票据（撤回票）") && stderr.contains("撤回只移档不删"),
+        "(a) 报错须点名撤回票孤儿：{stderr}"
+    );
+    fs::write(d.join("archive-withdrawn").join(WD1), kept).unwrap();
+    let out = run(&["verify", "--mailbox", &mb, "--roster", ROSTER]);
+    assert_ok(&out, "(c) 复原后全册复绿");
+
+    // (b)：现行票未撤而文件已在撤回栏（手工 git mv，不动台账）→ 半状态红
+    let (d2, _p2) = setup_withdraw_book("wd-half");
+    let mb2 = d2.to_str().unwrap().to_string();
+    fs::create_dir_all(d2.join("archive-withdrawn")).unwrap();
+    git_in(
+        &d2,
+        &[
+            "mv",
+            "0006号白露致研究部清和的通报.md",
+            "archive-withdrawn/0006号白露致研究部清和的通报.md",
+        ],
+    );
+    let out = run(&["verify", "--mailbox", &mb2, "--roster", ROSTER]);
+    assert_fail(&out, "(b) 移了档没撤票必须红");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("半状态") && stderr.contains("撤回缺第 4 步"),
+        "(b) 报错须点名半状态：{stderr}"
+    );
+    git_in(
+        &d2,
+        &[
+            "mv",
+            "archive-withdrawn/0006号白露致研究部清和的通报.md",
+            "0006号白露致研究部清和的通报.md",
+        ],
+    );
+    let out = run(&["verify", "--mailbox", &mb2, "--roster", ROSTER]);
+    assert_ok(&out, "(b) 复原后全册复绿");
+
+    // (d)：两跳换票链（0010 撤销 ←0011 renamedFrom；0011 撤销 ←0012 renamedFrom；
+    // 仅 0012 在册）——配对范围取全部票，两撤销票都判「撤销票」，零误判
+    let d3 = tmpdir("wd-twohop");
+    fs::write(
+        d3.join(".mailbox.json"),
+        "{\"sorting\":\"MAIN\",\"name\":\"fixture\"}\n",
+    )
+    .unwrap();
+    fs::write(
+        d3.join("README.md"),
+        "# 两跳链钉\n\n合法状态词表（夹具）：待回信 / 已回。\n",
+    )
+    .unwrap();
+    let f12 = "0012号白露致研究部清和的通报.md";
+    let n12 = "aabbccddeeff0012";
+    let fp12 = fingerprint("0012", n12, f12);
+    fs::write(
+        d3.join(f12),
+        format!(
+            "# 两跳链终态\n\n> 日期: 2026-09-29 23:50 +08:00\n> 从: 评审部白露\n> 致: 研究部清和\n> 复: 无（首信）\n> 状态: 待回信\n\n<!-- LETTER-TOKEN v2 no=0012 nonce={n12} fp={fp12} -->\n\n## 摘要\n\n两跳链夹具，不需要你做任何事。\n\n## 正文\n\n（明写）链终态。\n"
+        ),
+    )
+    .unwrap();
+    let t = |no: &str, file: &str, extra: &str| {
+        format!(
+            "{{\"no\":\"{no}\",\"file\":\"{file}\",\"nonce\":\"00\",\"fp\":\"00\",\"tpl\":\"v2\",\"createdAt\":\"2026-09-29T15:50:00.000Z\",\"from\":\"白露\"{extra}}}"
+        )
+    };
+    let f10 = "0010号白露致研究部清和的通报.md";
+    let f11 = "0011号白露致研究部清和的通报.md";
+    let mut ledger = String::new();
+    ledger.push_str(&t(
+        "0010",
+        f10,
+        ",\"revokedAt\":\"2026-09-29T15:51:00.000Z\",\"revokeReason\":\"换票第一跳\"",
+    ));
+    ledger.push('\n');
+    ledger.push_str(&t("0011", f11, &format!(",\"renamedFrom\":\"{f10}\",\"revokedAt\":\"2026-09-29T15:52:00.000Z\",\"revokeReason\":\"换票第二跳\"")));
+    ledger.push('\n');
+    ledger.push_str(&format!(
+        "{{\"no\":\"0012\",\"file\":\"{f12}\",\"nonce\":\"{n12}\",\"fp\":\"{fp12}\",\"tpl\":\"v2\",\"createdAt\":\"2026-09-29T15:53:00.000Z\",\"from\":\"白露\",\"renamedFrom\":\"{f11}\"}}\n"
+    ));
+    fs::write(d3.join("letter-tokens.jsonl"), ledger).unwrap();
+    let mb3 = d3.to_str().unwrap().to_string();
+    let out = run(&["verify", "--mailbox", &mb3, "--roster", ROSTER]);
+    assert_ok(&out, "(d) 两跳链：配对取全部票，链首票不得误判撤回票");
+    let vout = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        vout.contains("换票撤销票 2 张 + 撤回票 0 张") && !vout.contains("孤儿票据（撤回票）"),
+        "(d) 两撤销票都应配对（变异：只认现行票 → 此处假红）：{vout}"
+    );
+    let _ = fs::remove_dir_all(&d);
+    let _ = fs::remove_dir_all(&d2);
+    let _ = fs::remove_dir_all(&d3);
 }

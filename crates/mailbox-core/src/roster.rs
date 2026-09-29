@@ -8,6 +8,8 @@ pub struct NameRec {
     /// None = 名册未登记 functions 键（JS Array.isArray 判据 → 跳过组合校验）
     pub functions: Option<Vec<String>>,
     pub project: Option<String>,
+    /// 名册 primary 职能（撤回留痕署名取它，不取操作者自报——契约 §八 第 9 条③）
+    pub primary: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -44,13 +46,32 @@ impl Roster {
                         .collect()
                 });
                 let project = nv.get("project").and_then(JVal::as_str).map(str::to_string);
-                r.names.push((k.clone(), NameRec { functions, project }));
+                let primary = nv.get("primary").and_then(JVal::as_str).map(str::to_string);
+                r.names.push((
+                    k.clone(),
+                    NameRec {
+                        functions,
+                        project,
+                        primary,
+                    },
+                ));
             }
         }
         r
     }
     pub fn name_rec(&self, name: &str) -> Option<&NameRec> {
         self.names.iter().find(|(n, _)| n == name).map(|(_, r)| r)
+    }
+    /// 名字 → 署名职能（JS funcOfName 同款）：名册 primary > functions[0] > fallback
+    /// （代撤的撤回留痕署名取名册，不取操作者自报——契约 §八 第 9 条③）
+    pub fn func_of_name(&self, name: &str, fallback: &str) -> String {
+        let Some(rec) = self.name_rec(name) else {
+            return fallback.to_string();
+        };
+        rec.primary
+            .clone()
+            .or_else(|| rec.functions.as_ref().and_then(|f| f.first().cloned()))
+            .unwrap_or_else(|| fallback.to_string())
     }
 }
 
