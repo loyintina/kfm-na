@@ -363,3 +363,60 @@ fn spec_bar175_信件条目_新上旧下() {
     );
     assert_eq!(stale.len(), 4);
 }
+
+// ---- BAR-185：点开正文缓存先画（弱网 GET-first 硬等超时病灶）----
+// 变异锚：摘 Cached 臂（缓存不先画=回到病灶）/ Err 留场臂被摘（缓存被失败件
+// 顶掉=弱网看不了旧信）必咬。
+
+use kfm_na::sess_pool::{OpenStep, plan_open};
+
+fn step_tags(steps: &[OpenStep]) -> Vec<&'static str> {
+    steps
+        .iter()
+        .map(|s| match s {
+            OpenStep::Cached(_) => "cached",
+            OpenStep::Fresh(_) => "fresh",
+            OpenStep::Failed(_) => "failed",
+        })
+        .collect()
+}
+
+#[test]
+fn spec_bar185_点开正文_缓存先画发布序列() {
+    let cached = Some("旧信正文".to_string());
+
+    // ①有缓存+GET 成：先缓存后新鲜，两步都在
+    let got: Result<String, String> = Ok("新鲜正文".to_string());
+    let steps = plan_open(cached.clone(), &got);
+    assert_eq!(
+        step_tags(&steps),
+        vec!["cached", "fresh"],
+        "缓存先画+新鲜换芯"
+    );
+    match &steps[0] {
+        OpenStep::Cached(t) => {
+            assert!(t.starts_with(sess_pool::CACHE_NOTICE), "缓存件必带声明头");
+            assert!(t.contains("旧信正文"));
+        }
+        _ => panic!("首步必须是缓存件"),
+    }
+
+    // ②有缓存+GET 败：缓存留场，不许发布失败件顶掉它
+    let got: Result<String, String> = Err("超时".to_string());
+    let steps = plan_open(cached, &got);
+    assert_eq!(step_tags(&steps), vec!["cached"], "弱网失败时缓存留场");
+
+    // ③无缓存+GET 成：只发新鲜件（旧路退化）
+    let got: Result<String, String> = Ok("正文".to_string());
+    let steps = plan_open(None, &got);
+    assert_eq!(step_tags(&steps), vec!["fresh"]);
+
+    // ④无缓存+GET 败：才许落失败件
+    let got: Result<String, String> = Err("连接拒".to_string());
+    let steps = plan_open(None, &got);
+    assert_eq!(step_tags(&steps), vec!["failed"]);
+    match &steps[0] {
+        OpenStep::Failed(t) => assert!(t.contains("取数失败"), "失败件文案"),
+        _ => panic!("无缓存且失败必须落失败件"),
+    }
+}
