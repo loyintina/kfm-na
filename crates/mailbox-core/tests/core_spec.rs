@@ -1129,7 +1129,8 @@ fn fixture_letters() -> Vec<LetterText> {
 #[test]
 fn gen_projection_golden_matches_js() {
     let letters = fixture_letters();
-    let out = projection::render_gen(&letters, Some(&roster()));
+    // 无册身份文件的历史行为 = 主册口径（契约 §六《册身份》兜底 MAIN）
+    let out = projection::render_gen(&letters, Some(&roster()), "MAIN");
     assert!(out.errors.is_empty(), "{:?}", out.errors);
     assert_eq!(out.rows, 4);
     assert_eq!(out.active, 4);
@@ -1159,10 +1160,32 @@ fn gen_projection_golden_matches_js() {
     assert_eq!(out.index_text, expected_index, "letters-index 与 JS 不一致");
 }
 
+/// 册身份（契约 §六《册身份》）钉：本册身份码驱动索引 v2.1 行的 sorting 兜底——
+/// 同一批信换成 NA 册身份，索引除 sorting 列外一字不动，且逐字节等于 JS 实跑
+/// 抄录件（`letters-index.na.expected.jsonl`）。变异方向：把 book_sorting 换回
+/// 硬编码 "MAIN" → 本题红；把它错接到 legacy 行 → 本题红（legacy 无 sorting 列）。
+#[test]
+fn gen_book_identity_drives_sorting_fallback() {
+    let letters = fixture_letters();
+    let out = projection::render_gen(&letters, Some(&roster()), "NA");
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    assert_eq!(
+        out.index_text,
+        include_str!("fixtures/gen/letters-index.na.expected.jsonl"),
+        "NA 册身份的索引与 JS 实跑抄录件不一致"
+    );
+    // README 两区段不含册码（pending 编号列取文件名码，本册信不带码）→ 与 MAIN 册同
+    assert_eq!(
+        out.pending_section,
+        projection::render_gen(&letters, Some(&roster()), "MAIN").pending_section,
+        "册身份只影响索引 sorting 列，不该改动 README 投影"
+    );
+}
+
 #[test]
 fn gen_check_only_detects_drift() {
     let letters = fixture_letters();
-    let out = projection::render_gen(&letters, Some(&roster()));
+    let out = projection::render_gen(&letters, Some(&roster()), "MAIN");
     let pre = include_str!("fixtures/gen/README.pre.md");
     // 未回写的 pre（空标记段）≠ 应有区段 → 漂移判据成立
     let drifted = projection::splice_section(

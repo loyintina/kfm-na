@@ -11,9 +11,12 @@
 //!             状态非待*/两册有复信即拒，--force 逃生留痕；na 册收尾直接回写投影）
 //!
 //! 公共选项：--mailbox / --roster / --name-prefix / --v1-manifest /
-//! --no-strict-pools（env KFM_MAILBOX_STRICT_POOLS=0 同效）。
+//! --no-strict-pools（env KFM_MAILBOX_STRICT_POOLS=0 同效）/ --book-sorting。
 //! 写路径（new/gen/reticket）共用：写者分区闸（指向主册一律拒写）+ 信箱根
 //! O_EXCL 写者锁（BAR-177）。
+//! 册身份（book identity，契约 §六）：本册默认分拣码取自 `<信箱>/.mailbox.json`
+//! （至少 {"sorting":"NA","name":"na"}），索引 sorting = 文件名解析出的码 || 该码；
+//! 缺身份文件按 MAIN 兜底，但 --mailbox 非本仓主册时要求显式 --book-sorting。
 
 use mailbox_core::json::{JVal, parse_json, to_json_string};
 use mailbox_core::name::{CONNECT_CHARS, V21_TYPES, is_v21_name, parse_v21_name, v21_no_of};
@@ -155,6 +158,89 @@ fn resolve_readme(mailbox: &Path) -> String {
     read_opt(&mailbox.join("README.md"))
         .or_else(|| read_opt(&Path::new(MAIN_BOOK).join("README.md")))
         .unwrap_or_default()
+}
+
+/// 册身份码候选：`<册根>/.mailbox.json` 的 `sorting`（契约 §六《册身份》）。
+/// 无文件 = None；文件存在但坏/缺 sorting、name = Err（册身份是事实，不许半懂）。
+fn read_book_identity(mailbox: &Path) -> Result<Option<String>, String> {
+    let path = mailbox.join(".mailbox.json");
+    let Some(text) = read_opt(&path) else {
+        return Ok(None);
+    };
+    let v = parse_json(&text).map_err(|e| {
+        format!(
+            "{} 不是合法 JSON：{e}（契约 §六《册身份》）",
+            path.display()
+        )
+    })?;
+    let sorting = v
+        .get("sorting")
+        .and_then(JVal::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_uppercase);
+    let Some(sorting) = sorting else {
+        return Err(format!(
+            "{} 缺 sorting 字段——册身份文件至少含 {{\"sorting\":\"…\",\"name\":\"…\"}}（契约 §六《册身份》）",
+            path.display()
+        ));
+    };
+    if v.get("name")
+        .and_then(JVal::as_str)
+        .map(str::trim)
+        .is_none_or(str::is_empty)
+    {
+        return Err(format!(
+            "{} 缺 name 字段——册身份文件至少含 {{\"sorting\":\"…\",\"name\":\"…\"}}（契约 §六《册身份》）",
+            path.display()
+        ));
+    }
+    Ok(Some(sorting))
+}
+
+/// 本册默认分拣码解析（契约 §六《册身份》，2026-09-29 立；与 JS
+/// gen-agent-inbox.mjs 同款判据）：`索引 sorting = 文件名解析出的码 || 本册身份码`。
+///
+/// 取值顺序：册身份文件 sorting > --book-sorting <码> > `MAIN` 兜底。
+/// 兜底是向后兼容、不是许可——故 `--mailbox` 指向的不是本仓主册而该册无身份
+/// 文件时**不静默写 MAIN**，改为报错要求落身份文件或显式 --book-sorting。
+fn resolve_book_sorting(args: &Args, mailbox: &Path) -> Result<String, String> {
+    let explicit = args
+        .opt("book-sorting")
+        .map(str::trim)
+        .map(str::to_uppercase);
+    if let Some(e) = explicit.as_deref()
+        && (e.is_empty() || !e.chars().all(|c| c.is_ascii_uppercase()) || e.len() > 4)
+    {
+        return Err(format!(
+            "--book-sorting 非法：{}（如 MAIN／NA）",
+            args.opt("book-sorting").unwrap_or("")
+        ));
+    }
+    if let Some(identity) = read_book_identity(mailbox)? {
+        if let Some(e) = explicit
+            && e != identity
+        {
+            return Err(format!(
+                "--book-sorting {e} 与册身份（{identity}）冲突——册码是事实，删掉 --book-sorting 或改 {}（契约 §六《册身份》）",
+                mailbox.join(".mailbox.json").display()
+            ));
+        }
+        return Ok(identity);
+    }
+    if let Some(e) = explicit {
+        return Ok(e);
+    }
+    let canon = fs::canonicalize(mailbox).unwrap_or_else(|_| mailbox.to_path_buf());
+    let main_canon = fs::canonicalize(MAIN_BOOK).unwrap_or_else(|_| PathBuf::from(MAIN_BOOK));
+    if canon == main_canon {
+        return Ok("MAIN".to_string());
+    }
+    Err(format!(
+        "警告：--mailbox {} 不是本仓主册（{MAIN_BOOK}）且无册身份文件（缺 {}）——不静默按 MAIN 兜底；请落 {{\"sorting\":\"…\",\"name\":\"…\"}} 身份文件，或显式传 --book-sorting <码>（契约 §六《册身份》）",
+        mailbox.display(),
+        mailbox.join(".mailbox.json").display()
+    ))
 }
 
 /// v1 冻结名单：--v1-manifest > 信箱/archive-v1/manifest-v1.json > 信箱/manifest-v1.json。
@@ -637,8 +723,14 @@ fn cmd_gen(args: &Args) {
         Some(acquire_book_lock(p, &mailbox))
     };
     let roster = resolve_roster(args, &mailbox);
+    // 册身份（契约 §六）：本册默认分拣码——索引 sorting 的兜底不再是硬编码 MAIN
+    let book_sorting = match resolve_book_sorting(args, &mailbox) {
+        Ok(v) => v,
+        Err(e) => die(p, &e),
+    };
     if !check_only {
-        let (errors, rows, active, archive) = gen_write_now(&mailbox, roster.as_ref());
+        let (errors, rows, active, archive) =
+            gen_write_now(&mailbox, roster.as_ref(), &book_sorting);
         if !errors.is_empty() {
             for e in &errors {
                 eprintln!("[{p}] {e}");
@@ -653,7 +745,7 @@ fn cmd_gen(args: &Args) {
         return;
     }
     let letters = load_letters(&mailbox);
-    let out = projection::render_gen(&letters, roster.as_ref());
+    let out = projection::render_gen(&letters, roster.as_ref(), &book_sorting);
     let mut errors = out.errors.clone();
 
     let readme_path = mailbox.join("README.md");
@@ -694,10 +786,15 @@ fn cmd_gen(args: &Args) {
 }
 
 /// 投影全链回写（reticket 收尾用，BAR-177 必修②）：render → splice 两区段
-/// → 有变化才写盘。返回 (错误串, 总数, 在册, 归档)；调用方负责写者分区闸与锁
-fn gen_write_now(mailbox: &Path, roster: Option<&Roster>) -> (Vec<String>, usize, usize, usize) {
+/// → 有变化才写盘。`book_sorting` = 本册身份码（契约 §六，调用方经
+/// resolve_book_sorting 解析）。返回 (错误串, 总数, 在册, 归档)；调用方负责写者分区闸与锁
+fn gen_write_now(
+    mailbox: &Path,
+    roster: Option<&Roster>,
+    book_sorting: &str,
+) -> (Vec<String>, usize, usize, usize) {
     let letters = load_letters(mailbox);
-    let out = projection::render_gen(&letters, roster);
+    let out = projection::render_gen(&letters, roster, book_sorting);
     let mut errors = out.errors.clone();
     let readme_path = mailbox.join("README.md");
     let Some(doc) = read_opt(&readme_path) else {
@@ -1155,7 +1252,12 @@ fn cmd_reticket(args: &Args) {
     // 派生索引」）：na 册直接调投影回写；无 README 的册（夹具/新册）照 new
     // 样式打印下一步。主册在入口③闸已拒
     if mailbox.join("README.md").is_file() {
-        let (errs, rows, active, archive) = gen_write_now(&mailbox, roster.as_ref());
+        // 册身份（契约 §六）：换票收尾的索引 sorting 兜底取本册身份码
+        let book_sorting = match resolve_book_sorting(args, &mailbox) {
+            Ok(v) => v,
+            Err(e) => die(p, &e),
+        };
+        let (errs, rows, active, archive) = gen_write_now(&mailbox, roster.as_ref(), &book_sorting);
         if !errs.is_empty() {
             for e in &errs {
                 eprintln!("[{p}] {e}");
@@ -1202,6 +1304,9 @@ const USAGE: &str = "mailbox-cli — kfm-na 信箱工具链（逻辑核 mailbox-
   --name-prefix <re>    存量信命名前缀（默认 kfm-na|na）
   --v1-manifest <path>  v1 冻结名单（默认 信箱/archive-v1/manifest-v1.json → 信箱/manifest-v1.json）
   --main-book <dir>     scan/reticket 的主册路径（默认 /root/kfmv4/docs/ledger/agent-inbox）
+  --book-sorting <码>   gen/reticket 的本册默认分拣码兜底（契约 §六《册身份》）：
+                        册身份文件 <信箱>/.mailbox.json 的 sorting 优先；缺身份文件
+                        一律按 MAIN 兜底，但 --mailbox 非本仓主册时要求显式给本项
   --no-strict-pools     名字池严格模式降级（env KFM_MAILBOX_STRICT_POOLS=0 同效）";
 
 fn main() {

@@ -177,6 +177,13 @@ fn setup_gen_book(tag: &str) -> PathBuf {
         d.join("README.md"),
     )
     .unwrap();
+    // 册身份（契约 §六）：夹具册是新册，落身份文件 MAIN（缺文件时非主册路径会
+    // 被 gen 拒并要求 --book-sorting；各钉不必逐条传该选项）
+    fs::write(
+        d.join(".mailbox.json"),
+        "{\"sorting\":\"MAIN\",\"name\":\"fixture\"}\n",
+    )
+    .unwrap();
     d
 }
 
@@ -213,6 +220,95 @@ fn gen_roundtrip_and_drift() {
     fs::write(d.join("README.md"), tampered).unwrap();
     let out = run(&["gen", "--mailbox", &mb, "--roster", ROSTER, "--check-only"]);
     assert_fail(&out, "gen --check-only（篡改后）");
+    let _ = fs::remove_dir_all(&d);
+}
+
+/// 册身份（契约 §六《册身份》）钉：索引 sorting 的兜底 = 本册身份码，不再是
+/// 硬编码 MAIN。考卷四幕：①非主册 + 无身份文件 → 拒（要 --book-sorting）；
+/// ②落身份 NA → 索引 sorting 全 NA 且逐字节等于 JS 实跑抄录件；③无身份文件 +
+/// 显式 --book-sorting NA → 同产物；④身份 NA 与 --book-sorting MAIN 冲突 → 拒。
+/// 变异方向：兜底写回 "MAIN" → ②红；去掉①的要求（静默 MAIN）→ ①红。
+#[test]
+fn gen_book_identity_none_main_requires_flag() {
+    // ① 非主册 + 无身份文件 + 无 --book-sorting → 拒，且不写盘
+    let d = setup_gen_book("book-id");
+    fs::remove_file(d.join(".mailbox.json")).unwrap();
+    let mb = d.to_str().unwrap().to_string();
+    let readme_before = read(&d.join("README.md"));
+    let out = run(&["gen", "--mailbox", &mb, "--roster", ROSTER]);
+    assert_fail(&out, "①非主册缺身份文件必须拒（不静默写 MAIN）");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("警告") && stderr.contains("--book-sorting"),
+        "报错应点名「警告」与 --book-sorting：{stderr}"
+    );
+    assert!(
+        !d.join("letters-index.jsonl").exists(),
+        "被拒后不得落衍生索引"
+    );
+    assert_eq!(
+        read(&d.join("README.md")),
+        readme_before,
+        "被拒后 README 不得变动"
+    );
+    fs::remove_file(d.join("letters-index.jsonl")).ok();
+
+    // ② 落身份 NA → 索引 sorting 全 NA，逐字节等于 JS 实跑抄录件
+    fs::copy(
+        Path::new(GEN_FIX).join("mailbox-na.json"),
+        d.join(".mailbox.json"),
+    )
+    .unwrap();
+    let out = run(&["gen", "--mailbox", &mb, "--roster", ROSTER]);
+    assert_ok(&out, "②身份 NA 应绿");
+    assert_bytes_eq(
+        &read(&d.join("letters-index.jsonl")),
+        &read(
+            Path::new(GEN_FIX)
+                .join("letters-index.na.expected.jsonl")
+                .as_path(),
+        ),
+        "②NA 册身份派生索引",
+    );
+    // ③ 换回「无身份文件 + 显式 --book-sorting NA」→ 同产物
+    fs::remove_file(d.join(".mailbox.json")).unwrap();
+    let out = run(&[
+        "gen",
+        "--mailbox",
+        &mb,
+        "--roster",
+        ROSTER,
+        "--book-sorting",
+        "NA",
+    ]);
+    assert_ok(&out, "③显式 --book-sorting 兜底应绿");
+    assert_bytes_eq(
+        &read(&d.join("letters-index.jsonl")),
+        &read(
+            Path::new(GEN_FIX)
+                .join("letters-index.na.expected.jsonl")
+                .as_path(),
+        ),
+        "③--book-sorting NA 派生索引与身份文件同产物",
+    );
+    // ④ 身份 NA 与 --book-sorting MAIN 冲突 → 拒（册码是事实，不许参数压过）
+    fs::copy(
+        Path::new(GEN_FIX).join("mailbox-na.json"),
+        d.join(".mailbox.json"),
+    )
+    .unwrap();
+    let out = run(&[
+        "gen",
+        "--mailbox",
+        &mb,
+        "--roster",
+        ROSTER,
+        "--book-sorting",
+        "MAIN",
+    ]);
+    assert_fail(&out, "④身份与 --book-sorting 冲突必须拒");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("冲突"), "报错应点名冲突：{stderr}");
     let _ = fs::remove_dir_all(&d);
 }
 
@@ -279,6 +375,13 @@ fn setup_verified_book(tag: &str) -> PathBuf {
             "（明写）被复信正文。",
         );
     fs::write(&letter4, filled).unwrap();
+    // 册身份（契约 §六）：本册也是新册，落身份文件 MAIN——BAR-177 换票收尾会
+    // 调投影回写，缺身份文件会被 gen 拒（非主册路径）
+    fs::write(
+        d.join(".mailbox.json"),
+        "{\"sorting\":\"MAIN\",\"name\":\"fixture\"}\n",
+    )
+    .unwrap();
     d
 }
 
