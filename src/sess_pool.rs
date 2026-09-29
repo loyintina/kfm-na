@@ -191,9 +191,19 @@ pub fn manifest_json(list: &[LetterMeta]) -> String {
     .to_string()
 }
 
+/// 展示序（BAR-175，用户拍板「最新的信在最上面」）：按名降序——
+/// v2.1/存量信名均 NNNN 零填充开头，字典序降序 = 编号降序 = 新上旧下。
+/// 只动展示层：agentd 契约/manifest/reconcile 顺序无关不吃影响。
+fn newest_first(list: &[LetterMeta]) -> Vec<&LetterMeta> {
+    let mut v: Vec<&LetterMeta> = list.iter().collect();
+    v.sort_by(|a, b| b.name.cmp(&a.name));
+    v
+}
+
 /// 缓存行（stale）：value 带「 · 缓存」后缀，远端到了换鲜行去标
 pub fn stale_letter_entries(list: &[LetterMeta]) -> Vec<(String, String)> {
-    list.iter()
+    newest_first(list)
+        .into_iter()
         .map(|l| {
             (
                 l.name.clone(),
@@ -205,7 +215,8 @@ pub fn stale_letter_entries(list: &[LetterMeta]) -> Vec<(String, String)> {
 
 /// 新鲜行（远端刚到）：与旧面同形（label = 信名，value = 字节数）
 pub fn fresh_letter_entries(list: &[LetterMeta]) -> Vec<(String, String)> {
-    list.iter()
+    newest_first(list)
+        .into_iter()
         .map(|l| (l.name.clone(), fmt_bytes(l.bytes)))
         .collect()
 }

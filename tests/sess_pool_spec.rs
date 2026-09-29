@@ -324,10 +324,42 @@ fn spec_bar174_reconcile_有清单缺正文补抓() {
 fn spec_bar174_stale值串形状() {
     let list = vec![lm("a.md", 512, 10), lm("b.md", 2048, 20)];
     let rows = sess_pool::stale_letter_entries(&list);
-    assert_eq!(rows[0], ("a.md".to_string(), "512B · 缓存".to_string()));
-    assert_eq!(rows[1].1, "2.0KB · 缓存", "fmt_bytes 后缀「 · 缓存」");
+    // BAR-175 起展示序 = 按名降序（新上旧下），b.md 在 a.md 前
+    assert_eq!(rows[0], ("b.md".to_string(), "2.0KB · 缓存".to_string()));
+    assert_eq!(rows[1].1, "512B · 缓存", "fmt_bytes 后缀「 · 缓存」");
     assert_eq!(sess_pool::STALE_MARK, " · 缓存");
-    // 新鲜行去标
+    // 新鲜行去标（同倒序）
     let rows = sess_pool::fresh_letter_entries(&list);
-    assert_eq!(rows[0].1, "512B");
+    assert_eq!(rows[0].1, "2.0KB");
+}
+
+#[test]
+fn spec_bar175_信件条目_新上旧下() {
+    // 用户拍板「最新的信在最上面」：v2.1/存量信名 NNNN 零填充开头，
+    // 字典序降序 = 编号降序；输入乱序也必须出新上旧下
+    let list = vec![
+        lm("0007号甲致乙的通报.md", 100, 70),
+        lm("0001-kfm-na-legacy-report.md", 100, 10),
+        lm("0022号甲致乙的提案.md", 100, 220),
+        lm("0009号甲致乙复0001的回信.md", 100, 90),
+    ];
+    let order = |rows: Vec<(String, String)>| rows.into_iter().map(|(l, _)| l).collect::<Vec<_>>();
+    let fresh = order(sess_pool::fresh_letter_entries(&list));
+    assert_eq!(
+        fresh,
+        vec![
+            "0022号甲致乙的提案.md",
+            "0009号甲致乙复0001的回信.md",
+            "0007号甲致乙的通报.md",
+            "0001-kfm-na-legacy-report.md",
+        ],
+        "新鲜行新上旧下（v2.1 与存量混排同律）"
+    );
+    let stale = order(sess_pool::stale_letter_entries(&list));
+    assert_eq!(
+        stale.first().map(String::as_str),
+        Some("0022号甲致乙的提案.md"),
+        "stale 缓存行同倒序"
+    );
+    assert_eq!(stale.len(), 4);
 }
