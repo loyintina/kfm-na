@@ -9,6 +9,10 @@
 # 领号扫描 = 三账取 max+1：bugs.md + registry + 信箱全量信件 H1 的
 # BAR-NNN（含 archive-v1/ 等归档目录——补丁①：老号归档 max 不许回退；
 # 口径只认 H1 首行不认文件名——0054 闻灯：让号改号只改 H1）。
+# BAR-192：三账口径再收窄到账位——bugs.md 只认账行首格 `| BAR-NNN |`、
+# registry 只认 "bar":NNN 字段、信箱 H1 只认每行首个 BAR-NNN（prose/正文
+# 援引的号不许毒 max；BAR-189 账本行正文里的夹具陷阱号 BAR-999 曾毒出
+# 实领 1000 跳号）。
 # 补丁②：信箱不可读 = 拒领，不许静默退回树内旧账。补丁③：名册预检提到
 # 领号前（§六 名字登记前移后开信 fail-closed，预检杜绝「号领了信生不出」）。
 #
@@ -66,13 +70,18 @@ exec 9>"$LOCK"
 flock 9
 
 MAX=0
-for f in "$BUGS" "$REG"; do
-    [ -f "$f" ] || continue
-    # 两种账面都扫：bugs.md 的 BAR-NNN 与 registry 的 "bar":NNN；
-    # 零命中是合法态（首领/纯一方有号），grep 空果不许触发 pipefail
-    n=$(grep -oE '"bar":[0-9]+|BAR-[0-9]+' "$f" | grep -oE '[0-9]+' | sort -n | tail -1 || true)
+# 树内两账分账各扫，口径收窄到「账位」不认 prose（BAR-192：bugs.md 行内
+# 正文引号（夹具描述里的 BAR-999 陷阱号）曾把 max 毒到 999 → 实领 1000 跳号）：
+#   bugs.md 只认账行首格 `| BAR-NNN |`；registry 只认 jsonl 的 "bar":NNN 字段。
+# 零命中是合法态（首领/纯一方有号），grep 空果不许触发 pipefail
+if [ -f "$BUGS" ]; then
+    n=$(grep -oE '^\| BAR-[0-9]+' "$BUGS" | grep -oE '[0-9]+' | sort -n | tail -1 || true)
     if [ -n "$n" ] && [ "$n" -gt "$MAX" ]; then MAX=$n; fi
-done
+fi
+if [ -f "$REG" ]; then
+    n=$(grep -oE '"bar":[0-9]+' "$REG" | grep -oE '[0-9]+' | sort -n | tail -1 || true)
+    if [ -n "$n" ] && [ "$n" -gt "$MAX" ]; then MAX=$n; fi
+fi
 
 # 第三账 = 领号唯一源扶正（0055 甲案）：信箱全量信件 **H1** 的 BAR-NNN。
 # 树内两账（bugs.md/registry）在分支流下是树-local——登记到落 master 隔一个
@@ -84,10 +93,12 @@ done
 # 扫描无条件执行（NO_LETTER 只跳过开信，不跳过领号账——夹具请配 BAR_NEW_MAILBOX）。
 [ -d "$MAILBOX" ] || {
     echo "信箱不可读：$MAILBOX——拒领（0055 补丁②，不许退回树内旧账）" >&2; exit 1; }
+# 每行 H1 只认**首个** BAR-NNN（BAR-192：H1 标题正文援引他号如「修复
+# BAR-123 回归」不许毒 max——领号信标题形制 BAR-$NEXT 在前，首号即本信号）。
 while IFS= read -r n; do
     [ -n "$n" ] && [ "$n" -gt "$MAX" ] && MAX=$n
 done < <(find "$MAILBOX" -name '*.md' -not -path '*/.git/*' -exec head -q -n 1 {} + 2>/dev/null \
-    | grep -oE 'BAR-[0-9]+' | grep -oE '[0-9]+' || true)
+    | awk 'match($0, /BAR-[0-9]+/) { print substr($0, RSTART+4, RLENGTH-4) }' || true)
 NEXT=$((MAX + 1))
 
 LETTER=""

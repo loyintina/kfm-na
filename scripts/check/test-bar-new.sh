@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # test-bar-new.sh — bar-new.sh 领号唯一源考题（BAR-189，0055 甲案三补丁，挂 chain）
-# 五夹具全走 BAR_NEW_* 测试口 + NO_LETTER=1（不碰真账真信箱）：
+# 六夹具全走 BAR_NEW_* 测试口 + NO_LETTER=1（不碰真账真信箱）：
 #   ①跨树可见（185 场景复跑）②信箱不可读拒领 ③归档防回退 ④只认 H1 不认文件名
-#   ⑤名册预检（名不在册拒领 / 在册放行）
+#   ⑤名册预检（名不在册拒领 / 在册放行）⑥prose 毒免疫（BAR-192）
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 
@@ -16,13 +16,15 @@ chk() { # chk <名> <期望exit> <实际exit> [期望输出含]
     else echo "  ✗ $1（期望 exit=$2 实得 $3 输出:$(head -c 80 "$T/out" 2>/dev/null)）"; fail=$((fail+1)); fi
 }
 
-# 公共夹具：树内两账 max=184；名册含观澜
-printf '| BAR-180 | x |\n' > "$T/bugs.md"
-printf '{"bar":184}\n' > "$T/reg.jsonl"
+# 公共夹具：树内两账 max=184；名册含观澜。
+# BAR-192：两账 prose 各埋一个 >max 陷阱号（bugs 行正文 BAR-998 / registry
+# title 援引 BAR-997）——每轮领号都带毒跑，期望号全不受毒即免疫常证。
+printf '| BAR-180 | 修复（正文援引 BAR-998 陷阱号） |\n' > "$T/bugs.md"
+printf '{"bar":184,"title":"参照 BAR-997 的修复"}\n' > "$T/reg.jsonl"
 mkdir -p "$T/mb"
 printf '{"names":{"观澜":{"functions":["开发部"]}}}\n' > "$T/mb/roster.json"
 run() { # run <额外env...> -- 跑领号，输出落 $T/out；registry 每轮重置防累积
-    printf '{"bar":184}\n' > "$T/reg.jsonl"
+    printf '{"bar":184,"title":"参照 BAR-997 的修复"}\n' > "$T/reg.jsonl"
     env BAR_NEW_BUGS="$T/bugs.md" BAR_NEW_REGISTRY="$T/reg.jsonl" \
         BAR_NEW_MAILBOX="$T/mb" BAR_NEW_NO_LETTER=1 "$@" \
         bash "$BARNEW" --func 开发部 --name 观澜 "夹具主题" > "$T/out" 2>&1
@@ -53,6 +55,12 @@ printf '{"names":{"清和":{"functions":["研究部"]}}}\n' > "$T/mb/roster.json
 run; chk "名不在册拒领" 1 $? "不在名册"
 printf '{"names":{"观澜":{"functions":["开发部"]}}}\n' > "$T/mb/roster.json"
 run; chk "在册放行" 0 $?
+
+# ⑥prose 毒免疫（BAR-192）：H1 标题正文援引次号 BAR-996（>真 max）——
+# H1 只认首号（本信号 190），次号不许毒 max → 仍领 191。
+# （bugs.md/registry 的 prose 毒免疫由公共夹具埋弹、①~⑤期望号常证。）
+printf '# BAR-190 别线信（正文援引 BAR-996 旧案）\n' > "$T/mb/0046号某人的通报.md"
+run; chk "H1次号不毒max" 0 $? "BAR-191 已领"
 
 echo "[test-bar-new] $pass 过 / $fail 红"
 [ "$fail" = 0 ]
