@@ -64,7 +64,7 @@ fn v21_letter(file: &str, nonce: &str, to: &str, reply: &str, status: &str, plai
     let fp = fingerprint(&no, nonce, file);
     let from = parse_v21_name(file).from_name.unwrap_or_default();
     format!(
-        "# 测试信\n\n> 日期: 2026-09-28 10:00 +08:00\n> 从: 研究部{from}\n> 致: {to}\n> 复: {reply}\n> 状态: {status}\n\n<!-- LETTER-TOKEN v2 no={no} nonce={nonce} fp={fp} -->\n\n## 白话结论（写给隐藏读者：测试）\n\n{plain}\n\n## 正文\n\n正文。\n"
+        "# 测试信\n\n> 日期: 2026-09-28 10:00 +08:00\n> 从: 研究部{from}\n> 致: {to}\n> 复: {reply}\n> 状态: {status}\n\n<!-- LETTER-TOKEN v2 no={no} nonce={nonce} fp={fp} -->\n\n## 摘要\n\n{plain}\n\n## 正文\n\n正文。\n"
     )
 }
 
@@ -823,6 +823,136 @@ fn verify_book_reticket_pairing_warning() {
 }
 
 #[test]
+fn spec_bar179_verify_日期单调_分拣码混排按数字序() {
+    // BAR-179：编号数字段序 = 签发序（next_number 跨前缀统一 max+1）。
+    // 字符串序在混排前缀下会把 0018 排到 NA0015 前，把数字序单调的真册误判
+    // 成「日期非单调」红（na 册 NA 前缀与纯数字混排实录，0018 撞墙定罪；
+    // 主册前缀划一从未踩到，JS check-letter-token.mjs localeCompare 同款潜伏）。
+    let v1: HashSet<String> = HashSet::new();
+    let r = roster();
+    let mk = |no: &str, nonce: &str, time: &str| {
+        let f = format!("{no}号清和致评审部白露关于日期序的通报.md");
+        let text = v21_letter(&f, nonce, "评审部白露", "无（首信）", "待回信", "已填实。")
+            .replace("2026-09-28 10:00", time);
+        (f, text)
+    };
+
+    // 数字序 NA0015 < 0016 < 0018 且日期 10:00 < 11:00 < 12:00：单调，不该红。
+    // 旧字符串序 0016 < 0018 < NA0015 → NA0015(10:00) 早于 0018(12:00) 误判红。
+    let (f1, t1) = mk("NA0015", "aabbccddeeff0015", "2026-09-29 10:00");
+    let (f2, t2) = mk("0016", "aabbccddeeff0016", "2026-09-29 11:00");
+    let (f3, t3) = mk("0018", "aabbccddeeff0018", "2026-09-29 12:00");
+    let letters = vec![
+        LetterText {
+            file: f1.clone(),
+            dir: "active".into(),
+            text: t1.clone(),
+        },
+        LetterText {
+            file: f2.clone(),
+            dir: "active".into(),
+            text: t2.clone(),
+        },
+        LetterText {
+            file: f3.clone(),
+            dir: "active".into(),
+            text: t3.clone(),
+        },
+    ];
+    let tokens = ledger_line("NA0015", &f1, "aabbccddeeff0015")
+        + "\n"
+        + &ledger_line("0016", &f2, "aabbccddeeff0016")
+        + "\n"
+        + &ledger_line("0018", &f3, "aabbccddeeff0018")
+        + "\n";
+    let d = verify::verify_book(&book(&letters, &tokens, &v1, &r));
+    assert!(
+        !d.errs.iter().any(|e| e.contains("日期非单调")),
+        "{:?}",
+        d.errs
+    );
+
+    // 负样本：NA0015 真回退（13:00 晚于 0016/0018）——数字序下必红，
+    // 防判据被整体摘除（字符串序反而看不到这条红）。
+    let (f1, t1) = mk("NA0015", "aabbccddeeff0015", "2026-09-29 13:00");
+    let letters = vec![
+        LetterText {
+            file: f1.clone(),
+            dir: "active".into(),
+            text: t1,
+        },
+        LetterText {
+            file: f2.clone(),
+            dir: "active".into(),
+            text: t2,
+        },
+        LetterText {
+            file: f3.clone(),
+            dir: "active".into(),
+            text: t3,
+        },
+    ];
+    let tokens = ledger_line("NA0015", &f1, "aabbccddeeff0015")
+        + "\n"
+        + &ledger_line("0016", &f2, "aabbccddeeff0016")
+        + "\n"
+        + &ledger_line("0018", &f3, "aabbccddeeff0018")
+        + "\n";
+    let d = verify::verify_book(&book(&letters, &tokens, &v1, &r));
+    assert!(
+        d.errs.iter().any(|e| e.contains("日期非单调")),
+        "{:?}",
+        d.errs
+    );
+}
+
+#[test]
+fn spec_bar180_verify_换票配对按renamed_from() {
+    // BAR-180：§八.8 格式性勘误换票编号同步去码（NA0015→0015 实录）——
+    // 配对键按 renamedFrom 文件名；旧「no 相等」判据对跨码换票每次 chain 误报
+    let v1: HashSet<String> = HashSet::new();
+    let r = roster();
+    let f = "0015号清和致评审部白露关于署名勘误的通报.md";
+    let letters = vec![LetterText {
+        file: f.into(),
+        dir: "active".into(),
+        text: v21_letter(
+            f,
+            "aabbccddeeff0015",
+            "评审部白露",
+            "无（首信）",
+            "待回信",
+            "已填实。",
+        ),
+    }];
+    let old_f = "NA0015号清和致评审部白露关于署名勘误的通报.md";
+    let mut cur = ledger_line("0015", f, "aabbccddeeff0015");
+    cur.pop();
+    cur.push_str(&format!(",\"renamedFrom\":\"{old_f}\"}}"));
+    let mut rev = ledger_line("NA0015", old_f, "aabbccddeeff0014");
+    rev.pop();
+    rev.push_str(
+        ",\"revokedAt\":\"2026-09-29T03:29:03.836Z\",\"revokeReason\":\"格式性勘误（契约 §八 第 8 条）：去本册自指码\"}",
+    );
+    // 跨码换票对（旧票 no=NA0015 ≠ 新票 no=0015）：文件名配上 → 不 warn
+    let tokens = format!("{cur}\n{rev}\n");
+    let d = verify::verify_book(&book(&letters, &tokens, &v1, &r));
+    assert!(
+        !d.warns.iter().any(|w| w.contains("换票留痕不完整")),
+        "{:?}",
+        d.warns
+    );
+    // 负样本：renamedFrom 找不到同名撤销票 → warn 仍在（防判据被摘）
+    let tokens = format!("{cur}\n");
+    let d = verify::verify_book(&book(&letters, &tokens, &v1, &r));
+    assert!(
+        d.warns.iter().any(|w| w.contains("换票留痕不完整")),
+        "{:?}",
+        d.warns
+    );
+}
+
+#[test]
 fn verify_book_legacy_placeholder_and_clean() {
     let v1: HashSet<String> = HashSet::new();
     let r = roster();
@@ -832,7 +962,7 @@ fn verify_book_legacy_placeholder_and_clean() {
             file: file.into(),
             dir: "active".into(),
             text: format!(
-                "# 旧信\n\n> 日期: 2026-09-26\n> 致: 研究线\n> 流型: 线程\n> 预期表态方: 无\n> 收敛判据: 无需回信（知会）\n> 回: 无\n> 状态: {status}\n\n<!-- LETTER-TOKEN v2 no={no} nonce={nonce} fp={fp} -->\n\n## 白话结论（写给隐藏读者：用户）\n\n已填实。\n"
+                "# 旧信\n\n> 日期: 2026-09-26\n> 致: 研究线\n> 流型: 线程\n> 预期表态方: 无\n> 收敛判据: 无需回信（知会）\n> 回: 无\n> 状态: {status}\n\n<!-- LETTER-TOKEN v2 no={no} nonce={nonce} fp={fp} -->\n\n## 摘要\n\n已填实。\n"
             ),
         }
     };
@@ -999,7 +1129,8 @@ fn fixture_letters() -> Vec<LetterText> {
 #[test]
 fn gen_projection_golden_matches_js() {
     let letters = fixture_letters();
-    let out = projection::render_gen(&letters, Some(&roster()));
+    // 无册身份文件的历史行为 = 主册口径（契约 §六《册身份》兜底 MAIN）
+    let out = projection::render_gen(&letters, Some(&roster()), "MAIN");
     assert!(out.errors.is_empty(), "{:?}", out.errors);
     assert_eq!(out.rows, 4);
     assert_eq!(out.active, 4);
@@ -1029,10 +1160,32 @@ fn gen_projection_golden_matches_js() {
     assert_eq!(out.index_text, expected_index, "letters-index 与 JS 不一致");
 }
 
+/// 册身份（契约 §六《册身份》）钉：本册身份码驱动索引 v2.1 行的 sorting 兜底——
+/// 同一批信换成 NA 册身份，索引除 sorting 列外一字不动，且逐字节等于 JS 实跑
+/// 抄录件（`letters-index.na.expected.jsonl`）。变异方向：把 book_sorting 换回
+/// 硬编码 "MAIN" → 本题红；把它错接到 legacy 行 → 本题红（legacy 无 sorting 列）。
+#[test]
+fn gen_book_identity_drives_sorting_fallback() {
+    let letters = fixture_letters();
+    let out = projection::render_gen(&letters, Some(&roster()), "NA");
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    assert_eq!(
+        out.index_text,
+        include_str!("fixtures/gen/letters-index.na.expected.jsonl"),
+        "NA 册身份的索引与 JS 实跑抄录件不一致"
+    );
+    // README 两区段不含册码（pending 编号列取文件名码，本册信不带码）→ 与 MAIN 册同
+    assert_eq!(
+        out.pending_section,
+        projection::render_gen(&letters, Some(&roster()), "MAIN").pending_section,
+        "册身份只影响索引 sorting 列，不该改动 README 投影"
+    );
+}
+
 #[test]
 fn gen_check_only_detects_drift() {
     let letters = fixture_letters();
-    let out = projection::render_gen(&letters, Some(&roster()));
+    let out = projection::render_gen(&letters, Some(&roster()), "MAIN");
     let pre = include_str!("fixtures/gen/README.pre.md");
     // 未回写的 pre（空标记段）≠ 应有区段 → 漂移判据成立
     let drifted = projection::splice_section(
@@ -1192,7 +1345,7 @@ fn newletter_filename_and_skeleton_shape() {
     let token = token::token_line("0001", "3643be10ce49827a", "9897ac27606e4fde");
     let filled = newletter::insert_token(&skel, &token);
     assert!(!filled.contains("\n\n\n"));
-    assert!(filled.contains(&format!("> 状态: 待回信\n{token}\n\n## 白话结论")));
+    assert!(filled.contains(&format!("> 状态: 待回信\n{token}\n\n## 摘要")));
     assert!(skel.ends_with('\n'), "骨架末行换行（join 尾元素为空串）");
 }
 

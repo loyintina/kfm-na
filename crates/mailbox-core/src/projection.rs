@@ -268,8 +268,11 @@ fn to_items_jval(value: &str) -> (Vec<JVal>, bool) {
     (arr, to_all)
 }
 
-/// 派生索引单条记录（v2.1 / legacy 字段集与 JS 相同，key 序同 JS 对象字面量）
-fn index_record(r: &Row, roster: Option<&Roster>) -> JVal {
+/// 派生索引单条记录（v2.1 / legacy 字段集与 JS 相同，key 序同 JS 对象字面量）。
+/// `book_sorting` = 本册身份码（契约 §六《册身份》）：v2.1 行 `sorting` 取
+/// `文件名解析出的码 || 本册身份码`——册码是册的固有属性，不再硬编码兜底 MAIN。
+/// 取值由 IO 壳（mailbox-cli）从 `<册根>/.mailbox.json` 解析后传入（core 零 IO）。
+fn index_record(r: &Row, roster: Option<&Roster>, book_sorting: &str) -> JVal {
     let text = &r.letter.text;
     let hash = jstr(&sha256_hex16(text));
     let f = r.letter.file.as_str();
@@ -369,7 +372,7 @@ fn index_record(r: &Row, roster: Option<&Roster>) -> JVal {
         (
             "sorting",
             jstr(if p.sorting.as_deref().unwrap_or("").is_empty() {
-                "MAIN"
+                book_sorting
             } else {
                 p.sorting.as_deref().unwrap()
             }),
@@ -405,8 +408,14 @@ pub struct GenOutput {
     pub archive: usize,
 }
 
-/// 全量渲染（行构建 → 两区段 + 索引文本；字段缺失/文法错记 errors 并跳过该行）
-pub fn render_gen(letters: &[LetterText], roster: Option<&Roster>) -> GenOutput {
+/// 全量渲染（行构建 → 两区段 + 索引文本；字段缺失/文法错记 errors 并跳过该行）。
+/// `book_sorting` = 本册身份码（契约 §六《册身份》），v2.1 行无文件名码时取它；
+/// 主册/无身份文件的历史行为等价于传 `"MAIN"`。
+pub fn render_gen(
+    letters: &[LetterText],
+    roster: Option<&Roster>,
+    book_sorting: &str,
+) -> GenOutput {
     let mut out = GenOutput::default();
     let rows = build_rows(letters, &mut out.errors);
     out.rows = rows.len();
@@ -418,7 +427,7 @@ pub fn render_gen(letters: &[LetterText], roster: Option<&Roster>) -> GenOutput 
         String::new()
     } else {
         rows.iter()
-            .map(|r| to_json_string(&index_record(r, roster)))
+            .map(|r| to_json_string(&index_record(r, roster, book_sorting)))
             .collect::<Vec<_>>()
             .join("\n")
             + "\n"

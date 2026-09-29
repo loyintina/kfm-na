@@ -73,7 +73,7 @@ fn book_lock(mb: &Path) -> File {
         .create(true)
         .write(true)
         .truncate(false) // 锁文件只是令牌，从不写内容
-        .open(mb.join(".mailbox.lock"))
+        .open(mb.join(".mailbox-cli.lock"))
         .unwrap();
     let rc = unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX) };
     assert_eq!(rc, 0, "测试进程持锁失败");
@@ -116,15 +116,19 @@ fn spec_bar181_写者持锁_new与reticket阻塞_放锁放行() {
     let mut c1 = spawn_new(&d, "阻塞探针一");
     assert_blocked(&mut c1, "new");
 
-    // reticket 必阻塞（同一把锁，不只 new）
+    // reticket 必阻塞（同一把锁，不只 new）——新名用合法异名（同名会在锁前
+    // 「目标已存在」校验即拒，探不到锁位）
+    let new_name = letter.to_string_lossy().replace("通报", "回信");
     let mut c2 = Command::new(BIN)
         .args([
             "reticket",
             d.join(&letter).to_str().unwrap(),
             "--mailbox",
             d.to_str().unwrap(),
+            "--roster",
+            ROSTER,
             "--new-name",
-            &letter.to_string_lossy(),
+            &new_name,
         ])
         .spawn()
         .unwrap();
