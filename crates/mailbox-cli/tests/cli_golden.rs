@@ -733,7 +733,7 @@ fn setup_na_book(tag: &str) -> PathBuf {
     fs::write(
         d.join(old),
         format!(
-            "# 测试信\n\n> 日期: 2026-09-29 10:00 +08:00\n> 从: 研究部清和\n> 致: 评审部白露\n> 复: 无（首信）\n> 状态: 通报完毕（2026-09-29 10:30 +08:00 研究部清和 更新：钉）\n\n<!-- LETTER-TOKEN v2 no=NA0007 nonce={nonce} fp={fp} -->\n\n## 白话结论（写给隐藏读者：测试）\n\n已填实，不需要你做任何事。\n\n## 正文\n\n正文。\n"
+            "# 测试信\n\n> 日期: 2026-09-29 10:00 +08:00\n> 从: 研究部清和\n> 致: 评审部白露\n> 复: 无（首信）\n> 状态: 通报完毕（2026-09-29 10:30 +08:00 研究部清和 更新：钉）\n\n<!-- LETTER-TOKEN v2 no=NA0007 nonce={nonce} fp={fp} -->\n\n## 摘要\n\n已填实，不需要你做任何事。\n\n## 正文\n\n正文。\n"
         ),
     )
     .unwrap();
@@ -743,7 +743,7 @@ fn setup_na_book(tag: &str) -> PathBuf {
     fs::write(
         d.join(f8),
         format!(
-            "# 回复\n\n> 日期: 2026-09-29 10:20 +08:00\n> 从: 评审部白露\n> 致: 研究部清和\n> 复: NA0007\n> 状态: 待回信\n\n<!-- LETTER-TOKEN v2 no=0008 nonce={n8} fp={fp8} -->\n\n## 白话结论（写给隐藏读者：测试）\n\n已填实，不需要你做任何事。\n\n## 正文\n\n正文。\n"
+            "# 回复\n\n> 日期: 2026-09-29 10:20 +08:00\n> 从: 评审部白露\n> 致: 研究部清和\n> 复: NA0007\n> 状态: 待回信\n\n<!-- LETTER-TOKEN v2 no=0008 nonce={n8} fp={fp8} -->\n\n## 摘要\n\n已填实，不需要你做任何事。\n\n## 正文\n\n正文。\n"
         ),
     )
     .unwrap();
@@ -978,7 +978,7 @@ fn spec_bar180_reticket_例外之外改号仍拒() {
     fs::write(
         d.join(old),
         format!(
-            "# 测试信\n\n> 日期: 2026-09-29 10:00 +08:00\n> 从: 研究部清和\n> 致: 评审部白露\n> 复: 无（首信）\n> 状态: 待回信\n\n<!-- LETTER-TOKEN v2 no=NA0007 nonce={nonce} fp={fp} -->\n\n## 白话结论（写给隐藏读者：测试）\n\n已填实，不需要你做任何事。\n\n## 正文\n\n正文。\n"
+            "# 测试信\n\n> 日期: 2026-09-29 10:00 +08:00\n> 从: 研究部清和\n> 致: 评审部白露\n> 复: 无（首信）\n> 状态: 待回信\n\n<!-- LETTER-TOKEN v2 no=NA0007 nonce={nonce} fp={fp} -->\n\n## 摘要\n\n已填实，不需要你做任何事。\n\n## 正文\n\n正文。\n"
         ),
     )
     .unwrap();

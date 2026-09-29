@@ -64,7 +64,7 @@ fn v21_letter(file: &str, nonce: &str, to: &str, reply: &str, status: &str, plai
     let fp = fingerprint(&no, nonce, file);
     let from = parse_v21_name(file).from_name.unwrap_or_default();
     format!(
-        "# 测试信\n\n> 日期: 2026-09-28 10:00 +08:00\n> 从: 研究部{from}\n> 致: {to}\n> 复: {reply}\n> 状态: {status}\n\n<!-- LETTER-TOKEN v2 no={no} nonce={nonce} fp={fp} -->\n\n## 白话结论（写给隐藏读者：测试）\n\n{plain}\n\n## 正文\n\n正文。\n"
+        "# 测试信\n\n> 日期: 2026-09-28 10:00 +08:00\n> 从: 研究部{from}\n> 致: {to}\n> 复: {reply}\n> 状态: {status}\n\n<!-- LETTER-TOKEN v2 no={no} nonce={nonce} fp={fp} -->\n\n## 摘要\n\n{plain}\n\n## 正文\n\n正文。\n"
     )
 }
 
@@ -962,7 +962,7 @@ fn verify_book_legacy_placeholder_and_clean() {
             file: file.into(),
             dir: "active".into(),
             text: format!(
-                "# 旧信\n\n> 日期: 2026-09-26\n> 致: 研究线\n> 流型: 线程\n> 预期表态方: 无\n> 收敛判据: 无需回信（知会）\n> 回: 无\n> 状态: {status}\n\n<!-- LETTER-TOKEN v2 no={no} nonce={nonce} fp={fp} -->\n\n## 白话结论（写给隐藏读者：用户）\n\n已填实。\n"
+                "# 旧信\n\n> 日期: 2026-09-26\n> 致: 研究线\n> 流型: 线程\n> 预期表态方: 无\n> 收敛判据: 无需回信（知会）\n> 回: 无\n> 状态: {status}\n\n<!-- LETTER-TOKEN v2 no={no} nonce={nonce} fp={fp} -->\n\n## 摘要\n\n已填实。\n"
             ),
         }
     };
@@ -1322,7 +1322,7 @@ fn newletter_filename_and_skeleton_shape() {
     let token = token::token_line("0001", "3643be10ce49827a", "9897ac27606e4fde");
     let filled = newletter::insert_token(&skel, &token);
     assert!(!filled.contains("\n\n\n"));
-    assert!(filled.contains(&format!("> 状态: 待回信\n{token}\n\n## 白话结论")));
+    assert!(filled.contains(&format!("> 状态: 待回信\n{token}\n\n## 摘要")));
     assert!(skel.ends_with('\n'), "骨架末行换行（join 尾元素为空串）");
 }
 

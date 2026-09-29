@@ -9,7 +9,8 @@ use crate::status::{
 use crate::token::{self, Ledger, fingerprint, parse_ledger};
 use std::collections::{HashMap, HashSet};
 
-pub const PLAIN_HEAD: &str = "## 白话结论（写给隐藏读者：三句话内说清「是什么事、要不要你做事」）";
+pub const PLAIN_HEAD: &str =
+    "## 摘要\n\n> 注意（写给隐藏读者）：三句话内说清是什么事、要不要我做事；不写工作术语。";
 
 const V21_FIELDS: [&str; 6] = ["编号", "日期", "从", "致", "复", "状态"];
 const LEGACY_FIELDS: [&str; 7] = ["日期", "致", "流型", "预期表态方", "收敛判据", "回", "状态"];
@@ -51,19 +52,20 @@ pub struct BookCheck<'a> {
 }
 
 // ---------------------------------------------------------------
-// 白话结论块
+// 摘要块（制度名"白话面／白话结论"，信里呈现为 `## 摘要`）
 // ---------------------------------------------------------------
 
-/// 白话结论块存在（`^##\s*白话结论` 前缀匹配，措辞自由）
+/// 摘要块存在（`^##\s*摘要` 前缀匹配；旧形态 `## 白话结论…` 已于 2026-09-29
+/// 由用户拍板废止——两册全部信已统一，故只认 `## 摘要`，与 JS 三件套同步）
 pub fn has_plain_block(text: &str) -> bool {
     plain_re().is_match(text)
 }
 
 fn plain_re() -> regex::Regex {
-    regex::Regex::new(r"(?m)^##\s*白话结论").unwrap()
+    regex::Regex::new(r"(?m)^##\s*摘要").unwrap()
 }
 
-/// 白话结论块正文（标题行之后至下一个标题前；JS split 同款）
+/// 摘要块正文（标题行之后至下一个标题前；JS split 同款）
 pub fn plain_body(text: &str) -> String {
     let re = plain_re();
     let Some(m) = re.find(text) else {
@@ -374,12 +376,12 @@ pub fn verify_book(b: &BookCheck) -> Diags {
             }
             if has_placeholder(&plain_body(text)) {
                 d.errs.push(format!(
-                    "d0. 占位未填：{f} 白话结论块仍是占位文本——读者拿不到真话"
+                    "d0. 占位未填：{f} 摘要块仍是占位文本——读者拿不到真话"
                 ));
             }
             if !has_plain_block(text) {
                 d.errs.push(format!(
-                    "d. 缺白话结论块：{f} —— v2.1 新信必须有（面向隐藏读者）"
+                    "d. 缺摘要块：{f} —— v2.1 新信必须有（「## 摘要」；2026-09-29 起旧形态「## 白话结论」已废止）"
                 ));
             }
             continue;
@@ -428,12 +430,12 @@ pub fn verify_book(b: &BookCheck) -> Diags {
         }
         if has_placeholder(&plain_body(text)) {
             d.errs.push(format!(
-                "d0. 占位未填：{f} 白话结论块仍是占位文本——读者拿不到真话"
+                "d0. 占位未填：{f} 摘要块仍是占位文本——读者拿不到真话"
             ));
         }
         if !has_plain_block(text) {
             d.errs.push(format!(
-                "d. 缺白话结论块：{f} —— v2 新信必须有（面向隐藏读者；措辞模板见 README 写信规范）"
+                "d. 缺摘要块：{f} —— v2 新信必须有（「## 摘要」；2026-09-29 起旧形态「## 白话结论」已废止）"
             ));
         }
     }
@@ -660,10 +662,10 @@ pub fn verify_single(
 
     if !has_plain_block(text) {
         d.errs
-            .push("缺「白话结论」块（机读头/令牌之后、证据之前必须有）".to_string());
+            .push("缺摘要块（`## 摘要`）（机读头/令牌之后、证据之前必须有；2026-09-29 起旧形态 `## 白话结论` 已废止）".to_string());
     }
     if has_placeholder(&plain_body(text)) {
-        d.errs.push("白话结论块仍是占位文本".to_string());
+        d.errs.push("摘要块仍是占位文本".to_string());
     }
     d
 }

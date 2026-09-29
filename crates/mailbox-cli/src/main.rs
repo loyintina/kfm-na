@@ -502,7 +502,7 @@ fn cmd_new(args: &Args) {
     fs::write(&tokens_path, ledger).unwrap_or_else(|e| die(p, &format!("登记令牌失败：{e}")));
     println!("[{p}] 已生成 {file}（v2.1，编号 {full_no}，令牌已登记）");
     println!(
-        "[{p}] 下一步：填白话结论块与正文 → mailbox-cli verify {} → mailbox-cli gen",
+        "[{p}] 下一步：填摘要块与正文 → mailbox-cli verify {} → mailbox-cli gen",
         mailbox.join(&file).display()
     );
 }
