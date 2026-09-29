@@ -68,6 +68,7 @@ grep -q 'check-fix-instrument' .githooks/commit-msg || { echo "❌ commit-msg �
 [ -x scripts/check/grid-text-ratchet.sh ] || { echo "❌ grid-text-ratchet.sh 缺失或不可执行（BAR-178 棘轮闸不许静默退化）"; exit 1; }
 [ -f scripts/check/grid-text-baseline.txt ] || { echo "❌ grid-text-baseline.txt 缺失（BAR-178 棘轮基线）"; exit 1; }
 [ -x scripts/check/test-grid-text-ratchet.sh ] || { echo "❌ test-grid-text-ratchet.sh 缺失或不可执行（BAR-188 棘轮考题不许静默退化）"; exit 1; }
+[ -x scripts/check/test-bar-new.sh ] || { echo "❌ test-bar-new.sh 缺失或不可执行（BAR-189 领号考题不许静默退化）"; exit 1; }
 
 echo "=== [chain 4/13] na 信箱执法（mailbox.sh） ==="
 # 2026-09-29 第 4 步：na 信箱（/root/.kfm/session/信箱）全册 verify +
@@ -135,6 +136,9 @@ bash scripts/test-kfm-pkg.sh || { echo "❌ kfm-pkg 考题不过"; exit 1; }
 # 2026-09-17 同步挂入：仪器证据门八言考题（BAR-104/105/106 三部曲——
 # 假设驱动修复拦截门的自钉，门被改坏即红）
 bash scripts/test-check-fix-instrument.sh || { echo "❌ 仪器证据门考题不过"; exit 1; }
+# 2026-09-29 BAR-189：bar-new.sh 领号唯一源考题（0055 甲案三补丁——信箱 H1
+# 全量扫描含归档/不可读拒领/名册预检；领号闸被改坏 = 双号竞态回潮）
+bash scripts/check/test-bar-new.sh || { echo "❌ bar-new 领号考题不过"; exit 1; }
 # 2026-09-19 同步挂入：BAR-109 relay 静默掐连行为钉（4s 死亡线命案——
 # 修复被回退 = redroid 一切静画面长连接复死，行为级判卷不 grep 源码）
 bash scripts/test-relay-timeout.sh || { echo "❌ BAR-109 relay 考题不过"; exit 1; }

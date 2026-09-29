@@ -145,16 +145,20 @@ bash scripts/deploy-phone.sh --build   # 先打包再送
 
 **新立 BAR 开工 = 跑 `scripts/bar-new.sh --func <职能> --name <名字> "主题"`**
 ——这是**领号唯一入口**（2026-09-29 用户拍板，治「grep 空号再写账」的
-TOCTOU 双号竞态）：flock 下一次原子完成 领号（bugs.md 与
-`docs/ledger/bar-registry.jsonl` 两账取 max+1）→ 登记（登记即占有）→
+TOCTOU 双号竞态）：flock 下一次原子完成 领号（**三账取 max+1**：bugs.md、
+`docs/ledger/bar-registry.jsonl`、**信箱全量信件 H1**——0055 裁决甲案：
+树内两账分支流下树-local 延迟可见，信箱开信即 commit 小仓 = 唯一跨线
+即时可见账；含归档目录防老号回退；信箱不可读**拒领**不退旧账；
+名册预检提到领号前）→ 登记（登记即占有）→
 开追踪信（致全体/通报/`待落地通报`，白话结论当场填实）→ 回写信号入登记行
 并 commit 信箱小仓。**禁止手 grep 挑号手写 bugs.md 新行**。领号后定罪/
 修复/判卷/打回/终验全部在**同一封信追加新节**（节首带日期戳），不另开新信。
 
-1. **真源关系**：`docs/ledger/bar-registry.jsonl` 是**领号真源**（谁占了
-   几号）；`docs/ledger/bugs.md` 仍是 BAR 名册/判卷真源（五门第 2 门不动，
+1. **真源关系**：**领号唯一源 = 信箱全量信件 H1 的 BAR-NNN**（0055 甲案，
+   跨线即时可见）；`docs/ledger/bar-registry.jsonl` 是**登记账**（谁占了
+   几号的树内副本，领号时一并扫）；`docs/ledger/bugs.md` 仍是 BAR 名册/判卷真源（五门第 2 门不动，
    修复登记行照旧一行）；追踪信是该 BAR 的长卷（装 bugs.md 一行装不下的
-   全史——BAR-145 七度再现这类）。bugs.md 行尾注「追踪信 NA00NN」，信里
+   全史——BAR-145 七度再现这类）。bugs.md 行尾注「追踪信 NNNN」，信里
    H1 带 BAR 号，三处只互相指、不重复记账。
 2. **状态映射**（信头 `> 状态:` 随生命周期翻转，翻转必带代际戳）：
    立案开工 = `待落地通报` → 修复上机待判 = `已落地` → 用户终验（含静默
