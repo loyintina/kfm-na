@@ -94,3 +94,65 @@ fn spec_bar186_wal接线守卫() {
         "落盘失败必须摘 WAL 降级（缓存是加强不是命脉）"
     );
 }
+
+/// BAR-186 臂① 播种对账合并壳接线守卫
+#[test]
+fn spec_bar186_对账接线守卫() {
+    // ⓪ 模块归位
+    assert!(
+        LIB.contains("pub mod reseed;"),
+        "lib.rs 必须接 pub mod reseed（播种对账纯逻辑件）"
+    );
+    // ① Build 臂必须先对账再定路：无对账 = 每次播种万行重建照烂
+    assert!(
+        APP.contains("crate::reseed::plan_reseed(old, &cap, rows, (x, y))"),
+        "Build 臂必须挂 plan_reseed 对账（旧播种账 × 新 capture）"
+    );
+    // ② 尾块双落点：浏览画布 + 后台画布，缺一 = 该态照重建
+    assert!(
+        APP.contains("reseed_browse(&tail)"),
+        "浏览中画布必须走 reseed_browse 尾块续播"
+    );
+    assert!(
+        APP.contains("canvas.reseed(&tail)"),
+        "后台画布必须走 canvas.reseed 尾块续播"
+    );
+    // ③ 账纪律：last_cap 只在落地归账（在途虚账不许进）——
+    //    Build 臂记 build_cap，安装处过账，resize 作废同焚
+    assert!(
+        APP.contains("e.build_cap = Some(cap);"),
+        "Build 臂必须记 build_cap 在途账"
+    );
+    assert!(
+        APP.contains("if let Some(cap) = e.build_cap.take() {"),
+        "画布安装处必须过账 build_cap → last_cap"
+    );
+    assert!(
+        APP.contains("self.last_cap = None; // 尺变行宽变，播种对账旧账同焚"),
+        "invalidate 必须焚播种账（尺变对账无意义）"
+    );
+    // ④ 回落路还在：对账判负/无处可喂 = 全量重建旧路（Build 线程
+    //    + 在途账 build_cap 随 rx 挂账）
+    assert!(
+        APP.contains("let cap_build = cap.clone();") && APP.contains("e.build = Some(rx);"),
+        "对账判负必须回落全量重建（Build 线程旧路）"
+    );
+    // ⑤ TermView/Canvas 三件：reseed_browse（trait+实现）/ Canvas::reseed
+    //    / dump_all（等价钉对账件）
+    assert!(
+        TERMVIEW.contains("pub fn reseed_browse(&mut self, tail: &[u8]) -> bool"),
+        "TermView 必须有 reseed_browse"
+    );
+    assert!(
+        TERMVIEW
+            .matches("fn reseed_browse(&mut self, tail: &[u8]) -> bool")
+            .count()
+            >= 2,
+        "reseed_browse 必须进 TermEmu trait 且有委托实现"
+    );
+    assert!(
+        TERMVIEW.contains("pub fn reseed(&mut self, tail: &[u8])")
+            && TERMVIEW.contains("pub fn dump_all(&self) -> String"),
+        "Canvas 必须有 reseed + dump_all（等价钉对账件）"
+    );
+}

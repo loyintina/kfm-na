@@ -2346,6 +2346,36 @@ impl Canvas {
     pub fn feed_bytes(&mut self, bytes: &[u8]) {
         self.proc.advance(&mut self.term, bytes);
     }
+
+    /// 对账续播（BAR-186 臂①）：尾块由 reseed::plan_reseed 产出——
+    /// 相同前缀不重放，既有画布原位续长（不重建不 swap，视图零闪）
+    pub fn reseed(&mut self, tail: &[u8]) {
+        self.proc.advance(&mut self.term, tail);
+    }
+
+    /// 全量文本导出（历史+屏，逐行 trim_end）——考题对账件：
+    /// reseed 尾块 ≡ 全量重建 的等价钉据此逐格比对
+    pub fn dump_all(&self) -> String {
+        let grid = self.term.grid();
+        let hist = grid.history_size();
+        let lines = grid.screen_lines();
+        let cols = grid.columns();
+        let mut out = String::with_capacity((hist + lines) * (cols / 2));
+        for i in 0..(hist + lines) {
+            let grid_line = Line(i as i32 - hist as i32);
+            let mut s = String::with_capacity(cols);
+            for col in 0..cols {
+                let cell = &grid[grid_line][Column(col)];
+                if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                    continue; // CJK 宽字符的后半格（dump_text 同规）
+                }
+                s.push(cell.c);
+            }
+            out.push_str(s.trim_end());
+            out.push('\n');
+        }
+        out
+    }
 }
 
 impl TermView {
@@ -2612,6 +2642,13 @@ impl TermView {
             }
             _ => false,
         }
+    }
+
+    /// 浏览期对账续播（BAR-186 臂①）：尾块直喂浏览中的画布——不重建
+    /// 不 swap，阅读位/滚动零头全不动。返回 false = 非浏览态（调用方
+    /// 转喂 App 侧后台画布或回落全量重建）
+    pub fn reseed_browse(&mut self, tail: &[u8]) -> bool {
+        self.feed_browse(tail) // 同为字节续喂口，语义分名钉接线
     }
 
     /// 退浏览态且画布交还 App（v4：触底回 live 后画布在后台继续续喂，
@@ -9344,6 +9381,8 @@ pub trait TermEmu: Send {
     /// 浏览期字节续喂（v4 推流唯一写入口）：锚守恒靠 alacritty 内置
     /// （display_offset>0 时新行入史自动抬 offset）；false = 非浏览态
     fn feed_browse(&mut self, bytes: &[u8]) -> bool;
+    /// 浏览期对账续播（BAR-186 臂①）：尾块直喂浏览画布，不重建不 swap
+    fn reseed_browse(&mut self, tail: &[u8]) -> bool;
     /// 退浏览态且画布交还 App（v4：后台续喂，下次起手零等待）；
     /// v3 快照臂/非浏览态 = None
     fn take_browse_canvas(&mut self) -> Option<Canvas>;
@@ -9755,6 +9794,9 @@ impl TermEmu for TermView {
     }
     fn feed_browse(&mut self, bytes: &[u8]) -> bool {
         TermView::feed_browse(self, bytes)
+    }
+    fn reseed_browse(&mut self, tail: &[u8]) -> bool {
+        TermView::reseed_browse(self, tail)
     }
     fn take_browse_canvas(&mut self) -> Option<Canvas> {
         TermView::take_browse_canvas(self)

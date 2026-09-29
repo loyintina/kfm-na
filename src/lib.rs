@@ -33,6 +33,7 @@ pub mod plugins;
 pub mod protocol;
 pub mod providers;
 pub mod report;
+pub mod reseed;
 pub mod scroll;
 pub mod self_restart;
 pub mod sess_mode;

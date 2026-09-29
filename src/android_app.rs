@@ -275,6 +275,12 @@ struct WarmSess {
     seeded_ms: u64,
     /// 退避时刻（boot_ms——判负回落后 5s 内不许重孵/重播种）
     retry_ms: u64,
+    /// 末次落地播种的 capture 原文（BAR-186 臂①对账旧账：下次播种
+    /// 拿它与新 capture 做 immutable-history 前缀对账；只在安装/续播
+    /// 成功时归账——账必等于画布内容，不许记「在途构建」的虚账）
+    last_cap: Option<String>,
+    /// 在途构建的 capture 原文（安装时过账给 last_cap）
+    build_cap: Option<String>,
 }
 
 /// 预热池容量帽（会话多于帽只温前 N 个——防爆内存；当前会话永远
@@ -292,6 +298,8 @@ impl WarmSess {
             seed_ms: now,
             seeded_ms: 0,
             retry_ms: 0,
+            last_cap: None,
+            build_cap: None,
         }
     }
 
@@ -304,6 +312,8 @@ impl WarmSess {
         self.build = None;
         self.retry_ms = now;
         self.seeded_ms = 0;
+        self.last_cap = None; // 尺变行宽变，播种对账旧账同焚
+        self.build_cap = None;
     }
 }
 
@@ -5842,6 +5852,11 @@ impl App {
                         if let Some(e) = self.warm_pool.get_mut(&name) {
                             e.seeded_ms = now;
                             e.feed.built();
+                            // BAR-186 臂①：播种落地即归账——last_cap 恒等于
+                            // 画布内容（在途虚账不许进 last_cap）
+                            if let Some(cap) = e.build_cap.take() {
+                                e.last_cap = Some(cap);
+                            }
                         }
                         // BAR-186 臂②：播种尾锚到达 = 追平判据二——追赶中
                         // 立即落地一帧（稳态撞锚 = None，不抢稳态的画）
@@ -5965,13 +5980,67 @@ impl App {
                     .term_handle()
                     .map(|t| t.lock().unwrap().live_grid_dims())
                     .unwrap_or((80, 24));
-                let (tx, rx) = std::sync::mpsc::channel();
-                std::thread::spawn(move || {
-                    let _ = tx.send(termview::Canvas::build(&cap, cols, rows, (x, y)));
+                // BAR-186 臂①：有旧播种账且 immutable-history 对账过 →
+                // 尾块续播既有画布（相同前缀不重放：万行重建 → k+rows 行），
+                // 画布原位续长不 swap——浏览中阅读位/零头全不动
+                let tail = self.warm_pool.get(name).and_then(|e| {
+                    e.last_cap.as_deref().and_then(|old| {
+                        match crate::reseed::plan_reseed(old, &cap, rows, (x, y)) {
+                            crate::reseed::ReseedPlan::Tail(bytes) => Some(bytes),
+                            crate::reseed::ReseedPlan::Rebuild => None,
+                        }
+                    })
                 });
-                if let Some(e) = self.warm_pool.get_mut(name) {
-                    e.pending.clear();
-                    e.build = Some(rx);
+                let mut done = false;
+                if let Some(tail) = tail {
+                    let is_cur = self.cur_attached().as_ref() == Some(&name.to_string());
+                    let mut hit = is_cur
+                        && self
+                            .term_handle()
+                            .is_some_and(|t| t.lock().unwrap().reseed_browse(&tail));
+                    if !hit
+                        && let Some(e) = self.warm_pool.get_mut(name)
+                        && let Some(canvas) = &mut e.canvas
+                    {
+                        canvas.reseed(&tail);
+                        hit = true;
+                    }
+                    if hit {
+                        let lines = cap.lines().count();
+                        let now = crate::report::boot_ms() as u64;
+                        if let Some(e) = self.warm_pool.get_mut(name) {
+                            e.pending.clear(); // 播种窗输出已在快照内（InCapture 吞咽同规）
+                            e.seeded_ms = now;
+                            e.feed.built();
+                        }
+                        // 播种尾锚（臂②）：追赶中落地一帧
+                        if self.catchup.anchor() == crate::catchup::CatchAct::Land {
+                            self.catchup_land();
+                        }
+                        self.dirty = true;
+                        crate::report::report(
+                            "term",
+                            &format!("推流画布对账续播: {name}: 快照 {lines} 行前缀不重放"),
+                        );
+                        done = true;
+                    }
+                }
+                if done {
+                    // 账随落地归位（move 零拷贝——对账重播 5s 一档，clone 不起）
+                    if let Some(e) = self.warm_pool.get_mut(name) {
+                        e.last_cap = Some(cap);
+                    }
+                } else {
+                    let cap_build = cap.clone(); // 线程持副本，原账留 build_cap 待落地过账
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    std::thread::spawn(move || {
+                        let _ = tx.send(termview::Canvas::build(&cap_build, cols, rows, (x, y)));
+                    });
+                    if let Some(e) = self.warm_pool.get_mut(name) {
+                        e.pending.clear();
+                        e.build = Some(rx);
+                        e.build_cap = Some(cap);
+                    }
                 }
             }
             CtrlAct::SeedFail(why) => self.ctrl_seed_fail(name, &why),
