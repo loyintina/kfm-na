@@ -10405,6 +10405,37 @@ impl TermView {
         }
     }
 
+    /// 考题专用通道（BAR-199 钉：宽墨符号笔进格步与墨不截肢）——
+    /// 集成考卷摸不到 pub(crate) 件，经此薄壳直打 draw_grid_text_left
+    /// 本体（单源不抄实现，同 spec_draw_items_left/spec_measure_bar_items_grid
+    /// 先例）。返回墨迹盒（最左/最右墨列）供断言
+    #[doc(hidden)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn spec_draw_grid_text_left(
+        &self,
+        buf: &mut [u32],
+        w: u32,
+        h: u32,
+        text: &str,
+        x0: i64,
+        y_top: i64,
+        fg: u32,
+    ) -> (i64, i64) {
+        let mut frame = Frame { buf, w, h };
+        let (items, _) = self.measure_items_grid(text);
+        self.draw_grid_text_left(&mut frame, &items, x0, y_top, self.cell_w, w, fg, 0, None);
+        let (mut lo, mut hi) = (i64::MAX, i64::MIN);
+        for y in 0..h {
+            for x in 0..w {
+                if frame.buf[(y * w + x) as usize] == fg {
+                    lo = lo.min(i64::from(x));
+                    hi = hi.max(i64::from(x));
+                }
+            }
+        }
+        if lo == i64::MAX { (-1, -1) } else { (lo, hi) }
+    }
+
     /// 格落笔居中版（BAR-191 起收编 draw_text_centered 系——量宽/步进
     /// 全走格，draw_text_centered 的 fontdue 自然步进退役）：水平 =
     /// 总格数×cell_w 量宽、盒内余量对半（超宽 = 贴左 cx 起笔，与旧版

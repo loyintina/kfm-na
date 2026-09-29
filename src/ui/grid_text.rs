@@ -35,7 +35,15 @@ use unicode_width::UnicodeWidthChar;
 /// 真盲区（BAR-191 实证订正）：谚文首字母 U+1100–115F 与零宽/组合符
 /// ——U+200B、U+0300 段——土判据全误判 1 格；全角标点 U+3000 段在
 /// 0x2E80 之上，土判据碰巧不瞎）
+/// **唯一有意分叉（BAR-199，承影 0075 redroid 实测定罪）**：箭头块
+/// U+2190–U+21FF 的字体墨宽 ≈30px > 1 格（基准 18px），按 unicode-width
+/// 的 Ambiguous=1 落格会被「墨不溢本字格跨」钳成残字（→ 只剩横杆、
+/// ← 杆被截短）——CJK 优先产品的 Ambiguous 取宽口径：箭头块 = 2 格。
+/// 终端内容网格走 alacritty 自己的宽度表，不受本判据影响
 pub fn char_cells(c: char) -> u32 {
+    if ('\u{2190}'..='\u{21ff}').contains(&c) {
+        return 2;
+    }
     UnicodeWidthChar::width(c).unwrap_or(0) as u32
 }
 

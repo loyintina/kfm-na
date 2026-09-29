@@ -18,3 +18,4 @@
 {"bar":196,"title":"设置页/会话池/解析页字段文字迁网格引擎（0017 #7）","claimant_func":"开发部","claimant":"观澜","letter":"0071","ts":"2026-09-30 01:58 +0800"}
 {"bar":197,"title":"输入栏 prompt_bar 文字迁网格文字引擎（0017 #10 面）","claimant_func":"开发部","claimant":"观澜","letter":"0072","ts":"2026-09-30 02:37 +0800"}
 {"bar":198,"title":"AI 对话页文字迁网格文字引擎（0017 #9 面，glyph_atlas 图集键改造）","claimant_func":"开发部","claimant":"观澜","letter":"0073","ts":"2026-09-30 03:24 +0800"}
+{"bar":199,"title":"键栏方向键宽墨符号被格盒裁残（char_cells 箭头块改 2 格，承影 0075 redroid 实拍定罪）","claimant_func":"开发部","claimant":"观澜","letter":"0078","ts":"2026-09-30 06:17 +0800"}

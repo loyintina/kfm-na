@@ -6625,3 +6625,28 @@ fn spec_bar196_格量宽_眼手同尺() {
     // 中英混排：1 全角 + 1 半角 = 3 格
     assert_eq!(tv.grid_text_width("测a"), 3 * CELL_W);
 }
+
+/// BAR-199（承影 0075 redroid 实测定罪）：键栏方向键「→」在机上被
+/// 格盒裁成一根横杆（墨迹盒 18×1，旧版完整 30×10）——病灶 = char_cells
+/// 按 unicode-width Ambiguous=1 给箭头块 1 格，「墨不溢本字格跨」把宽墨
+/// 截肢。修 = 箭头块 U+2190–U+21FF 取 2 格（CJK 优先产品的 Ambiguous
+/// 宽口径）。钉的是「箭头笔进 = 2 格」这条契约：画「→→」两字，第二字
+/// 起笔必须在 +2 格处（箭头块回 1 格 / 笔进公式漂移，本钉即红）。
+/// （host 夹具 DejaVu 箭头墨宽恰 18px=1 格，测不出墨截肢本身——机上
+/// vendored 主字体墨宽 30px 才是承影实拍的病；墨宽判卷归 C 档 redroid
+/// 复拍，本钉锁 A 档可判的格步契约）
+#[test]
+fn spec_bar199_宽墨符号_笔进两格不截肢() {
+    let tv = host_termview(8, 2);
+    let (w, h) = (200u32, 60u32);
+    let fg = 0x00FF_FFFFu32;
+    let mut buf = vec![0u32; (w * h) as usize];
+    let (lo, hi) = tv.spec_draw_grid_text_left(&mut buf, w, h, "\u{2192}\u{2192}", 0, 0, fg);
+    assert!(lo >= 0, "两字必须都有墨");
+    let span = hi - lo + 1;
+    assert!(
+        span > 2 * i64::from(CELL_W),
+        "「→→」墨迹盒必须 > 2 格（{}px）——实得 lo={lo} hi={hi}（span={span}）：≤2 格 = 箭头块回 1 格笔进（BAR-199 复发病灶）",
+        2 * CELL_W
+    );
+}
