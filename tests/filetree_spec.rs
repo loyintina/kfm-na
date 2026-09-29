@@ -1,7 +1,8 @@
 //! filetree_spec.rs — 文件树页内容核考卷（A 档）。
 //! 判卷对象：src/ui/filetree.rs（纯逻辑：几何 / 出参解析 / 状态机 / 帧值）。
 //!
-//! 参数锚点来自真机截屏实测（用户量）：行高 86/118 物理 px、缩进表 CSS
+//! 参数锚点：行高 90/108 物理 px（BAR-178 半格网标定 2.5/3 格，原表 86/118
+//! 真机截屏实测留档 docs/active/文件树.md §三）、缩进表 CSS
 //! 18/16/14/… 递减增量、dpr 3.06、深度 0..4 缩进 0/55/104/147/184。
 //!
 //! 变异抽检预期（先改坏、看对应考题变红，cp 备份恢复——禁用 git checkout）：
@@ -34,7 +35,7 @@ fn file(name: &str) -> Entry {
     ent(name, RowKind::File)
 }
 
-/// 根 = [a(dir), b.txt(file)]（两行各 86 → 总高 172）
+/// 根 = [a(dir), b.txt(file)]（两行各 90 → 总高 180）
 fn tree() -> FileTreeState {
     let mut s = FileTreeState::new("根");
     s.apply_root_list(vec![dir("a"), file("b.txt")], 0);
@@ -213,20 +214,21 @@ fn spec_行底与边框alpha域与单调() {
 // ── 几何：行高 / 行矩形 ─────────────────────────────────────────────
 
 #[test]
-fn spec_行高_单行86换行118() {
-    assert_eq!(row_h(false), 86);
-    assert_eq!(row_h(true), 118);
-    assert_eq!(ROW_H, 86);
-    assert_eq!(ROW_H_WRAP, 118);
+fn spec_行高_单行90换行108() {
+    // BAR-178 半格网标定：90 = 2.5 格 / 108 = 3 格（基准格 CELL_H 36）
+    assert_eq!(row_h(false), 90);
+    assert_eq!(row_h(true), 108);
+    assert_eq!(ROW_H, 90);
+    assert_eq!(ROW_H_WRAP, 108);
 }
 
 #[test]
 fn spec_total_h与row_rects一致() {
     let mut s = tree();
     s.set_wrap(1, true, 0); // b.txt 长名换行
-    assert_eq!(total_h(&s.rows), 86 + 118);
+    assert_eq!(total_h(&s.rows), 90 + 108);
     let rects = row_rects(&s.rows, 0, 10_000, None);
-    assert_eq!(rects, vec![(0, 0, 86), (1, 86, 118)]);
+    assert_eq!(rects, vec![(0, 0, 90), (1, 90, 108)]);
     // 相邻行首尾相接（不重叠不留缝），末行底 = 总高
     for w in rects.windows(2) {
         assert_eq!(w[0].1 + w[0].2, w[1].1);
@@ -239,9 +241,9 @@ fn spec_total_h与row_rects一致() {
 fn spec_row_rects_相交才出() {
     let mut s = tree();
     s.set_wrap(1, true, 0);
-    // 视口 90 高、滚 100：行 0 整体在上方（y+h = -14）→ 不出
+    // 视口 90 高、滚 100：行 0 整体在上方（y+h = -10）→ 不出
     let rects = row_rects(&s.rows, 100, 90, None);
-    assert_eq!(rects, vec![(1, -14, 118)]);
+    assert_eq!(rects, vec![(1, -10, 108)]);
     // 视口高 0 = 没有可画的行
     assert!(row_rects(&s.rows, 0, 0, None).is_empty());
 }
@@ -283,7 +285,7 @@ fn spec_兄弟首尾判定() {
 #[test]
 fn spec_抽屉刚体全高() {
     let s = tree_a_open();
-    assert_eq!(drawer_full_h(&s.rows, 0), 172); // a 的子块 = 两行 × 86
+    assert_eq!(drawer_full_h(&s.rows, 0), 180); // a 的子块 = 两行 × 90
     assert_eq!(drawer_full_h(&s.rows, 1), 0); // sub 无子行
     assert_eq!(drawer_full_h(&s.rows, 3), 0); // 文件行
     assert_eq!(drawer_full_h(&s.rows, 99), 0); // 越界
@@ -324,13 +326,22 @@ fn spec_bar165打回_字号与三角等比放大() {
     // 常量阈值断言触发 clippy assertions_on_constants（2026-09-27 chain 红实录）
     assert_eq!((TRI_W, TRI_H), (32, 34), "三角盒三修放大（症①）");
     let src = include_str!("../src/termview.rs");
+    // **BAR-178 改约（2026-09-29）**：FT_TEXT_PX 常量删除——文件树文字
+    // 全走网格文字引擎（布局唯一源），字号自此吃格子变量（grid_fit 读
+    // TermView 实例格 = pinch 联动）。症①「字太小/比例失调」的量级诉求
+    // 由引擎的格字号承接（基准格下主字体 ≈ 30px 档 + 行高 2.5 格）；回退
+    // = 名字重新硬编码 px 或吃 fontdue 自然步进，本钉咬这两条路
     assert!(
-        src.contains("const FT_TEXT_PX: f32 = 44.0;"),
-        "行名字号必须为 44（症①；回退 34 = 打回重演）"
+        !src.contains("FT_TEXT_PX"),
+        "行名字号不许回硬编码 px 常量（BAR-178：字号吃格子变量，FT_TEXT_PX 已删）"
+    );
+    assert!(
+        src.contains("self.measure_items_grid(&row.name)") && src.contains("draw_grid_text_left("),
+        "行名落笔必须走网格文字引擎（BAR-178 布局唯一源）"
     );
     assert!(
         src.contains("let (hwt, hht) = (13.0f32, 16.0f32);"),
-        "三角基形随盒等比（32×34 内 26×32，墨高 32 配字 44 = 原版比 1.37）"
+        "三角基形随盒等比（32×34 内 26×32，墨高 32 = 症①放大档）"
     );
     assert!(
         src.contains("let bx1 = g.x1;"),
@@ -473,8 +484,8 @@ fn spec_apply_list_子行紧跟父行_深度加一() {
         (anim.path.as_str(), anim.opening, anim.start_ms),
         ("a", true, 10)
     );
-    assert_eq!(drawer_dy(&anim, 10, 172), -172);
-    assert_eq!(drawer_dy(&anim, 250, 172), 0);
+    assert_eq!(drawer_dy(&anim, 10, 180), -180);
+    assert_eq!(drawer_dy(&anim, 250, 180), 0);
 }
 
 #[test]
@@ -908,7 +919,7 @@ fn spec_set_wrap_光标贴行不滑() {
     let mut s = tree();
     s.select(1, 0);
     let target0 = s.cursor_target(1);
-    s.set_wrap(0, true, 50); // 量宽回填：a 换行 → 行高 86 → 118
+    s.set_wrap(0, true, 50); // 量宽回填：a 换行 → 行高 90 → 108
     assert!(s.rows[0].wrap);
     assert_eq!(s.cursor_target(1), target0 + (ROW_H_WRAP - ROW_H));
     assert_eq!(
@@ -927,14 +938,14 @@ fn spec_set_wrap_光标贴行不滑() {
 
 #[test]
 fn spec_滚动_钳制上下界() {
-    let mut s = tree(); // 总高 172
-    s.scroll_by(50, 100); // 上界 = 172 − 100 = 72，50 在界内
+    let mut s = tree(); // 总高 180
+    s.scroll_by(50, 100); // 上界 = 180 − 100 = 80，50 在界内
     assert_eq!(s.scroll, 50);
     s.scroll_by(100, 100);
-    assert_eq!(s.scroll, 72, "超界不越");
+    assert_eq!(s.scroll, 80, "超界不越");
     s.scroll_by(-1_000, 100);
     assert_eq!(s.scroll, 0, "上滑不许变负");
-    s.scroll_by(30, 172); // 一屏装得下 → 上界 0
+    s.scroll_by(30, 180); // 一屏装得下 → 上界 0
     assert_eq!(s.scroll, 0);
     s.scroll_by(0, 0); // 病态视口高（未布局）：上界 = 总高，仍钳
     assert_eq!(s.scroll, 0);
@@ -942,12 +953,12 @@ fn spec_滚动_钳制上下界() {
 
 #[test]
 fn spec_滚动_内容缩水钳回() {
-    let mut s = tree_a_open(); // 总高 344（四行）
+    let mut s = tree_a_open(); // 总高 360（四行）
     s.scroll_by(1_000, 100);
-    assert_eq!(s.scroll, 244);
-    s.collapse(0, 100); // 内容缩回 172
+    assert_eq!(s.scroll, 260);
+    s.collapse(0, 100); // 内容缩回 180
     s.clamp_scroll(100);
-    assert_eq!(s.scroll, 72, "内容缩水后视口不许悬在空白上");
+    assert_eq!(s.scroll, 80, "内容缩水后视口不许悬在空白上");
 }
 
 #[test]
@@ -972,14 +983,14 @@ fn spec_命中_目录整行开合_死区消灭() {
     let s = tree();
     for x in [0, 1, TRI_W - 1, TRI_W, TRI_W + 1, 120, 400, 1_200] {
         assert_eq!(
-            s.hit(x, 10, 172),
+            s.hit(x, 10, 180),
             Some(Hit::Toggle(0)),
             "目录行 x={x} 都该开合（死区不许存在）"
         );
     }
     // 行底边界：y = 行高 落在下一行（文件行 → 选中）
-    assert_eq!(s.hit(400, ROW_H - 1, 172), Some(Hit::Toggle(0)));
-    assert_eq!(s.hit(400, ROW_H, 172), Some(Hit::Row(1)));
+    assert_eq!(s.hit(400, ROW_H - 1, 180), Some(Hit::Toggle(0)));
+    assert_eq!(s.hit(400, ROW_H, 180), Some(Hit::Row(1)));
 }
 
 #[test]
@@ -987,7 +998,7 @@ fn spec_命中_文件行整行选中() {
     let s = tree();
     for x in [0, TRI_W, 400, 1_200] {
         assert_eq!(
-            s.hit(x, ROW_H + 10, 172),
+            s.hit(x, ROW_H + 10, 180),
             Some(Hit::Row(1)),
             "文件行没有三角，行内任意 x = 选中/预览"
         );
@@ -1001,7 +1012,7 @@ fn spec_命中_深行目录整行开合() {
     // 缩进留白 / 三角盒位 / 名字区——三种位置同义（旧口径在此分三档）
     for x in [0, 30, 60, 74, 75, 200, 900] {
         assert_eq!(
-            s.hit(x, y, 344),
+            s.hit(x, y, 360),
             Some(Hit::Toggle(1)),
             "深缩进目录行 x={x} 都该开合"
         );
@@ -1009,23 +1020,19 @@ fn spec_命中_深行目录整行开合() {
     // 文件行（a/x.txt，深度 1）全行选中
     let y2 = ROW_H * 2 + 10;
     for x in [0, 60, 200] {
-        assert_eq!(s.hit(x, y2, 344), Some(Hit::Row(2)));
+        assert_eq!(s.hit(x, y2, 360), Some(Hit::Row(2)));
     }
 }
 
 #[test]
 fn spec_命中_滚动后平移() {
     let mut s = tree();
-    assert_eq!(s.hit(120, 90, 172), Some(Hit::Row(1)));
+    assert_eq!(s.hit(120, 90, 180), Some(Hit::Row(1)));
     s.scroll_by(80, 100);
-    assert_eq!(s.scroll, 72);
+    assert_eq!(s.scroll, 80);
     // 同一行：屏上位置 = 内容位置 − scroll
-    assert_eq!(s.hit(120, 14, 100), Some(Hit::Row(1)));
-    assert_eq!(
-        s.hit(120, 13, 100),
-        Some(Hit::Toggle(0)),
-        "上边界随滚动平移"
-    );
+    assert_eq!(s.hit(120, 10, 100), Some(Hit::Row(1)));
+    assert_eq!(s.hit(120, 9, 100), Some(Hit::Toggle(0)), "上边界随滚动平移");
     assert_eq!(s.hit(120, 100, 100), None, "视口外不点");
     assert_eq!(s.hit(120, -1, 100), None);
 }
@@ -1033,11 +1040,11 @@ fn spec_命中_滚动后平移() {
 #[test]
 fn spec_命中_行外与负x() {
     let s = tree();
-    assert_eq!(s.hit(120, 500, 172), None, "行表之下");
-    assert_eq!(s.hit(-1, 10, 172), None, "页左之外");
+    assert_eq!(s.hit(120, 500, 180), None, "行表之下");
+    assert_eq!(s.hit(-1, 10, 180), None, "页左之外");
     assert_eq!(s.hit(120, 10, 0), None, "视口高 0 无可点");
     let empty = FileTreeState::new("空");
-    assert_eq!(empty.hit(10, 10, 172), None, "空树");
+    assert_eq!(empty.hit(10, 10, 180), None, "空树");
 }
 
 // ── 抽屉 / 三角 / 活性 ──────────────────────────────────────────────
@@ -1108,7 +1115,7 @@ fn spec_抽屉_无子行dy恒零() {
 fn spec_六调3_展开期兄弟行整体平移帧账() {
     let s = tree_a_open(); // 行表 = a / a-sub / a-x / b.txt，抽屉 10ms 起步 240ms
     let full = drawer_full_h(&s.rows, 0);
-    assert_eq!(full, 172);
+    assert_eq!(full, 180);
     // 兄弟行 = 子块之后的第一个（b.txt，idx 3）；子块里的行不吃这笔
     let mut prev_dy: Option<i64> = None;
     let mut prev_y: Option<i64> = None;
@@ -1157,7 +1164,7 @@ fn spec_六调3_展开期兄弟行整体平移帧账() {
 fn spec_六调3_收起期兄弟行连续上滑() {
     let mut s = tree_a_open();
     let removed_h = drawer_full_h(&s.rows, 0);
-    assert_eq!(removed_h, 172);
+    assert_eq!(removed_h, 180);
     s.collapse(0, 300);
     assert_eq!(s.rows.len(), 2, "行即刻走（不变量不动）");
     let mut prev = i64::MAX;
@@ -1259,19 +1266,19 @@ fn spec_活性_探针三类() {
 #[test]
 fn spec_快照_帧值与静态投影() {
     let mut s = tree_a_open(); // apply_list 记在 ms=10（抽屉刚体起步）
-    // 起步那一帧：刚体全高 = a 的子块（两行 × 86），整块压在父行下缘之上
+    // 起步那一帧：刚体全高 = a 的子块（两行 × 90），整块压在父行下缘之上
     let frame = s.snap_at(10);
     assert_eq!(frame.rows.len(), 4);
-    assert_eq!(frame.total_h, 344);
+    assert_eq!(frame.total_h, 360);
     assert_eq!(frame.epoch, s.epoch);
     let d = frame.drawer.clone().unwrap();
     assert_eq!(d.path, "a");
     assert!(d.opening);
-    assert_eq!((d.full_h, d.dy), (172, -172));
+    assert_eq!((d.full_h, d.dy), (180, -180));
     // 中途帧（半程已过大半——ease-out）与收尽帧
     let mid = s.snap_at(130).drawer.unwrap().dy;
-    assert!(mid > -86 && mid < 0, "半程已过大半: {mid}");
-    assert!(s.snap_at(60).drawer.unwrap().dy > -172);
+    assert!(mid > -90 && mid < 0, "半程已过大半: {mid}");
+    assert!(s.snap_at(60).drawer.unwrap().dy > -180);
     assert_eq!(s.snap_at(250).drawer.unwrap().dy, 0);
     assert_eq!(s.snap_at(10_000).drawer.unwrap().dy, 0);
     // 选中：帧值在 180ms 内单调逼近，收尽帧 = 目标
@@ -1295,7 +1302,7 @@ fn spec_快照_帧值与静态投影() {
     let s2 = tree();
     assert_eq!(s2.snap().cursor_y, 0);
     assert_eq!(s2.snap_at(0).cursor_target, 0);
-    assert_eq!(s2.snap().total_h, 172);
+    assert_eq!(s2.snap().total_h, 180);
     assert!(s2.snap().drawer.is_none());
     assert!(s2.snap().loading.is_empty());
 }
@@ -1330,9 +1337,9 @@ fn spec_端到端_一段真实会话() {
         st.rows.iter().map(|r| r.path.as_str()).collect::<Vec<_>>(),
         vec!["src", "src/ui", "src/main.rs", "docs", "README.md"]
     );
-    // 抽屉刚体：200ms 起步 172 高，440ms 到位
+    // 抽屉刚体：200ms 起步 180 高，440ms 到位
     let d = st.snap_at(200).drawer.unwrap();
-    assert_eq!((d.full_h, d.dy), (172, -172));
+    assert_eq!((d.full_h, d.dy), (180, -180));
     assert_eq!(st.snap_at(440).drawer.unwrap().dy, 0);
     assert!(anim_active(&st, 300));
     assert!(!anim_active(&st, 500));

@@ -874,6 +874,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-tungstenite",
+ "unicode-width",
  "webpki-roots",
  "winit",
  "zip",

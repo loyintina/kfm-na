@@ -34,6 +34,10 @@ futures-util = "0.3"
 alacritty_terminal = "0.25"
 # 字体光栅化（termview.rs）：纯 CPU，与软渲染路线同宗
 fontdue = "0.9"
+# 字符格宽分类（ui/grid_text.rs，BAR-178 网格文字引擎）：全角 2 格/半角
+# 1 格/控制符 0 格的唯一源。0.2.2 本就在 Cargo.lock（alacritty 传递
+# 依赖），直接引用零新下载
+unicode-width = "0.2"
 # 本地 PTY（local_pty.rs，L1）：bionic 无 openpty——nix 走 posix_openpt
 # 路径，Android/host Linux 同一份；fork/waitpid/kill 也在 nix
 nix = { version = "0.30", features = ["term", "process", "signal"] }

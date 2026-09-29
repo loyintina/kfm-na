@@ -7,8 +7,9 @@
 //! （`GET /api/fs/list` 的 body 原样喂 `entries_of`），本册记账，涂装只吃
 //! `snap_at(now)`。
 //!
-//! 为什么行高是 86：kfmv4 行高 26 CSS px，真机实测**物理 pitch** = 86
-//! （单行）/ 118（换行长名两行）。NA 全物理 px（`FT_CSS` = 本机 dpr），
+//! 为什么行高是 90：BAR-178 半格网标定（单行 2.5 格 × CELL_H 36 = 90，
+//! 换行长名 3 格 = 108，见 `ROW_H`/`ROW_H_WRAP`；原 86/118 = kfmv4 行高
+//! 26 CSS px 的真机实测 pitch 众数，留档）。NA 全物理 px（`FT_CSS` = 本机 dpr），
 //! CSS 单位只活在缩进表与设计稿里，进代码即换算。缩进实测锚点（深度
 //! 0..4）= 0 / 55 / 104 / 147 / 184 物理 px（= 三角左缘 18 起的**层间距**，
 //! 六调后 `tri_x` 0..4 = 18 / 73 / 122 / 165 / 202 逐字保住）。
@@ -74,10 +75,14 @@ pub const SHIFT_TABLE: [i32; 20] = [
 pub const SHIFT_CLAMP_CSS: i32 = 160;
 /// 钳制上限的物理身（实测锚点取整：160 × 3.06 = 489.6 → 489）
 pub const SHIFT_CLAMP_PX: i64 = 489;
-/// 单行行高（物理 px，实测 pitch）
-pub const ROW_H: i64 = 86;
-/// 换行长名行高（物理 px，实测：两行文本 118）
-pub const ROW_H_WRAP: i64 = 118;
+/// 单行行高（物理 px）——**BAR-178 半格网标定**：2.5 格 × CELL_H 36 = 90
+/// （原 86 = 真机截屏实测 pitch 众数 85.5，见 §三原表）。运行时刻度随
+/// pinch 变、本表是基准格（18×36）下的 px 身——基准常量 CELL_W/CELL_H
+/// 不变时两账一致；pinch 联动重标定挂账（docs/active/文件树.md 挂账段）
+pub const ROW_H: i64 = 90;
+/// 换行长名行高（物理 px）——**BAR-178 半格网标定**：3 格 × 36 = 108
+/// （两行 36 行距 + 上下各 18 余量；原 118 = 实测两行文本）
+pub const ROW_H_WRAP: i64 = 108;
 /// 三角盒宽（物理 px）——**三修（2026-09-27 用户终验症①）**：26×28 仍太小。
 /// 原版比例取证：nz 判据稿 §3.1 = 行高 26 / 字 11 / 三角 9 CSS（字:三角 ≈
 /// 1.22）；真机实测字高 32~33 物理 px 配三角 24 → **字:三角墨高 ≈ 1.37**。
@@ -187,7 +192,8 @@ pub struct Row {
     pub kind: RowKind,
     /// 视觉展开位（与 `FileTreeState::expanded` 同一事实，涂装读这维）
     pub expanded: bool,
-    /// 长名换行（行高 118 的那档；量宽侧回填，见 `set_wrap`）
+    /// 长名换行（行高 108 的那档；量宽侧回填，见 `set_wrap`——BAR-178
+    /// redroid 判卷查实生产侧尚无调用方，折行档未接线，挂账）
     pub wrap: bool,
     pub size: u64,
 }
@@ -932,7 +938,7 @@ impl FileTreeState {
         self.epoch += 1;
     }
 
-    /// 量宽回填换行位（涂装量完名字实宽后喂回——行高 118 的那档；几何唯一
+    /// 量宽回填换行位（涂装量完名字实宽后喂回——行高 108 的那档；几何唯一
     /// 源，涂装不许自己算行高）
     pub fn set_wrap(&mut self, idx: usize, wrap: bool, now_ms: u64) {
         let Some(r) = self.rows.get_mut(idx) else {

@@ -17,3 +17,4 @@ mutants.out.old/
 overnight-power-*.log
 certs/
 logs/
+/docs/ledger/bar-registry.jsonl.lock

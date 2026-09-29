@@ -73,6 +73,7 @@
 | `src/ui/fx_preview.rs` | 8 | 5 | 3 | LEG_GO_MS LEG_RETURN_START LEG_RETURN_MS |
 | `src/ui/fx_spring.rs` | 14 | 14 | 0 | — |
 | `src/ui/gear.rs` | 7 | 7 | 0 | — |
+| `src/ui/grid_text.rs` | 3 | 3 | 0 | — |
 | `src/ui/keybar.rs` | 1 | 1 | 0 | — |
 | `src/ui/link_card.rs` | 9 | 9 | 0 | — |
 | `src/ui/md_layout.rs` | 4 | 4 | 0 | — |

@@ -26,6 +26,7 @@ pub mod fx_ease;
 pub mod fx_preview;
 pub mod fx_spring;
 pub mod gear;
+pub mod grid_text;
 pub mod keybar;
 pub mod link_card;
 pub mod md_layout;

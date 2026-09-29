@@ -1958,7 +1958,8 @@ type AiRow<'a> = (u32, Vec<(&'a fontdue::Font, char, f32)>);
 // 涂装本体 = `TermView::paint_ft_content_impl`。本段只放「涂装/手势/命中
 // 三处都要吃」的尺：`ft_geom`（几何窗）与 `ft_wrap_split`（换行切分）是
 // pub——壳接线必须吃同一份（hit 的 y 基准就是这里的 list_y0，眼手同尺不许
-// 各算一遍）。参数来源：真机截屏 1260×2800 实测（行高 86/118、缩进
+// 各算一遍）。参数来源：真机截屏 1260×2800 实测（行高 86/118 原档——
+// BAR-178 半格网重标定为 90/108、缩进
 // 0/55/104/147/184、左强调边 6px、底栏 ≈110）+ kfmv4/nz
 // `src/client/plugins/file-tree/index.tsx` 判据稿 §3.1 令牌表。
 
@@ -1979,10 +1980,6 @@ const FT_BAR_LIFT: u32 = 18;
 /// 名字与三角盒的间隙（规格给的 4–8 区间；**打回改约症①**：字号 44 后
 /// 取区间上界 8，比例跟得上）
 const FT_NAME_GAP: f32 = 8.0;
-/// 行名字号（**打回改约症①，2026-09-27 用户终验**）：34 太小、与三角比例
-/// 失调；原版实测字高 32~33 物理 px，本实现按原版观感放到 44（≈ 原版
-/// 字号档 ×1.3，与三角 26×28 等比）。常量收拢在此，redroid 打样后可直接调。
-const FT_TEXT_PX: f32 = 44.0;
 /// 行名字色（0.85 白，目录/文件同色——原版实测同浅灰白，与解析页标题档同值）
 const FT_TEXT_FG: u32 = 0x00D9_D9D9;
 
@@ -6133,55 +6130,57 @@ impl TermView {
                     }
                 }
             }
-            // ③名字（目录/文件同色同档；换行档分两行画）
+            // ③名字（目录/文件同色同档；换行档分两行画）——网格文字引擎
+            // （BAR-178 布局唯一源）：字号吃格子变量（grid_fit 读实例格
+            // = pinch 联动），步进 = 格宽整数倍，不再吃 fontdue 自然步进
             let nx = g.x0 + ft::name_x(row.depth);
             let cw = (g.x1 - nx).max(0) as u32;
-            let cy_u = (g.list_y0 + yrel).max(0) as u32;
             // 文字同吃行表窗 ∩ 抽屉顶缘窗（半行/半抽屉里的名字随带断墨，
             // 与行带同一份裁剪——眼手同尺）
             let clip = Some(((g.list_y0 + c0) as i32, (g.list_y0 + c1) as i32));
+            let (items, _cells) = self.measure_items_grid(&row.name);
+            // 起笔 = 名字左缘 + 涂装内缩（FT_NAME_GAP 是内缩不是步进）；
+            // 纵向 = 一格线盒（cell_h）在行/半行内居中（行 2.5 格 =
+            // 1 行线盒居中；换行 3 格 = 两行 1.5 格线盒各居中）
+            let text_x = nx + FT_NAME_GAP as i64;
+            let text_w = (cw as f32 - FT_NAME_GAP).max(0.0) as u32;
+            let cell_h = i64::from(self.cell_h);
+            let line_y = |top: i64, lh: i64| g.list_y0 + top + (lh - cell_h).max(0) / 2;
             if row.wrap {
-                let items = self.measure_items(&row.name, FT_TEXT_PX);
-                let adv: Vec<f32> = items.iter().map(|i| i.2).collect();
-                let k = ft_wrap_split(&adv, cw as f32 - FT_NAME_GAP);
-                let l1: String = items.iter().take(k).map(|i| i.1).collect();
-                let l2: String = items.iter().skip(k).map(|i| i.1).collect();
-                let half = (ch / 2) as u32;
-                self.draw_text_left_ex(
+                // 折行吃同一份格步进数组（item.3 = char_cells × cell_w），
+                // ft_wrap_split 贪心语义不变——换的只是步进的来历
+                let adv: Vec<f32> = items.iter().map(|i| i.3).collect();
+                let k = ft_wrap_split(&adv, text_w as f32);
+                let half = ch / 2;
+                self.draw_grid_text_left(
                     &mut frame,
-                    &l1,
-                    nx as u32,
-                    cw,
-                    cy_u,
-                    half,
-                    FT_TEXT_PX,
+                    &items[..k],
+                    text_x,
+                    line_y(yrel, half),
+                    self.cell_w,
+                    text_w,
                     FT_TEXT_FG,
-                    FT_NAME_GAP,
                     clip,
                 );
-                self.draw_text_left_ex(
+                self.draw_grid_text_left(
                     &mut frame,
-                    &l2,
-                    nx as u32,
-                    cw,
-                    cy_u + half,
-                    half,
-                    FT_TEXT_PX,
+                    &items[k..],
+                    text_x,
+                    line_y(yrel + half, ch - half),
+                    self.cell_w,
+                    text_w,
                     FT_TEXT_FG,
-                    FT_NAME_GAP,
                     clip,
                 );
             } else {
-                self.draw_text_left_ex(
+                self.draw_grid_text_left(
                     &mut frame,
-                    &row.name,
-                    nx as u32,
-                    cw,
-                    cy_u,
-                    ch as u32,
-                    FT_TEXT_PX,
+                    &items,
+                    text_x,
+                    line_y(yrel, ch),
+                    self.cell_w,
+                    text_w,
                     FT_TEXT_FG,
-                    FT_NAME_GAP,
                     clip,
                 );
             }
@@ -6245,7 +6244,8 @@ impl TermView {
         // 旧的自绘无圆角版（底垫/左竖线/上下线三段手搓）据此**废弃**。
         if let Some((idx, shift, ch, c0, c1)) = sel_box {
             let row = &snap.rows[idx];
-            let name_w = i64::from(self.text_width(&row.name, FT_TEXT_PX));
+            // 名字宽 = 总格数 × 格宽（BAR-178：光标上线与落笔同一条尺）
+            let name_w = i64::from(self.measure_items_grid(&row.name).1) * i64::from(self.cell_w);
             // 盒左 = 选中行内容左缘 − 10（规格）；下钳到**页环内缘**（BAR-121：
             // 光标框可借环内留白，不许压环本身）
             let ring_in = i64::from(AI_PAGE_FRAME_MARGIN + AI_PAGE_FRAME_W * 3);
@@ -6329,7 +6329,8 @@ impl TermView {
                 g.bar_y0 + bar_h / 2,
                 i64::from(w.saturating_sub(1)) + i64::from(h.saturating_sub(1)),
             );
-            // 中：根名盒（accent 采样描边 + 文字居中，字号同吃 FT_TEXT_PX）
+            // 中：根名盒（accent 采样描边 + 文字居中，字号吃格子变量——
+            // BAR-178：居中 = 总格数 × 格宽 反推起笔，纵向一格线盒盒内居中）
             paint_ft_round_box(
                 &mut frame,
                 root_x,
@@ -6341,17 +6342,19 @@ impl TermView {
                 accent,
                 Some(lerp_rgb(mid_ink, page_bg, 90)),
             );
-            self.draw_text_centered_yclip(
+            let (ritems, rcells) = self.measure_items_grid(&snap.root_label);
+            let rtext_w = i64::from(rcells) * i64::from(self.cell_w);
+            let rtx = root_x + (root_w - rtext_w).max(0) / 2;
+            let rty = by + (box_h - i64::from(self.cell_h)).max(0) / 2;
+            self.draw_grid_text_left(
                 &mut frame,
-                &snap.root_label,
-                root_x,
-                by,
-                root_w as u32,
-                box_h as u32,
-                FT_TEXT_PX,
+                &ritems,
+                rtx,
+                rty,
+                self.cell_w,
+                (root_x + root_w - rtx).max(0) as u32,
                 mid_ink,
-                root_x,
-                Some((by, by + box_h)),
+                Some((by as i32, (by + box_h) as i32)),
             );
             // 左：眼（看）右：×（关）——accent 渐变盒 + 手绘图标
             paint_ft_round_box(
@@ -10205,6 +10208,142 @@ impl TermEmuFactory for AlacrittyEmuFactory {
     }
 }
 
+// ══ 网格文字引擎（BAR-178 布局唯一源）══════════════════════════════
+//
+// 纯函数核（格宽分类/格折行）在 `ui::grid_text`；本块是 TermView 侧
+// 胶水——cell_w/cell_h/font/cjk 私有字段只有本模块够得着。三件：
+// grid_fit（字号两来源条款：读实例格现值 = pinch 联动）、
+// measure_items_grid（逐字挑字体 + 格步进）、draw_grid_text_left
+// （格落笔：字形在自身格跨内水平居中）。消费面迁移纪律与挂账见
+// docs/active/网格文字.md。
+
+/// 格落笔条目：(字体, 字, 该字光栅字号, 格步进宽 px)——
+/// measure_items_grid 的返回行（clippy type_complexity 要求抽别名，
+/// 同 AiRow 先例）
+pub(crate) type GridItem<'a> = (&'a fontdue::Font, char, f32, f32);
+
+impl TermView {
+    /// 网格字号几何（引擎唯一取数口）：用 self.cell_w/cell_h **现值**
+    /// 调 fit_font_px/fit_cjk_px——pinch 改实例格后这里自动同源
+    /// （基准常量 CELL_W/CELL_H 不动）。返回 (主 px, 主 baseline,
+    /// cjk px, cjk baseline)；无 CJK 备用时后两项镜像前两项。
+    /// 与 new/set_cell_size 里写进 font_px/baseline_off 的是同一份
+    /// 计算——本函数重算不改语义，fit_* 既有钉（termview_spec）零惊动
+    pub(crate) fn grid_fit(&self) -> (f32, f32, f32, f32) {
+        let (px, bo) = fit_font_px(&self.font, self.cell_w, self.cell_h);
+        match &self.cjk {
+            Some(k) => {
+                let (cpx, cbo) = fit_cjk_px(&k.font, self.cell_w * 2, self.cell_h);
+                (px, bo, cpx, cbo)
+            }
+            None => (px, bo, px, bo),
+        }
+    }
+
+    /// 文本 → 格落笔序列 + 总格数（折行量宽与画字共用这一条序列——
+    /// 眼手同尺的物质基础，与 measure_items 同律）。逐字 pick_font
+    /// （缺字记 tofu 跳过，同 measure_items）；主字体字吃主 px、
+    /// CJK 备用字吃 cjk px；**步进 = char_cells × cell_w**（全角 2 格、
+    /// 半角 1 格、零宽 0 格——不再吃 fontdue 自然步进）
+    pub(crate) fn measure_items_grid(&self, text: &str) -> (Vec<GridItem<'_>>, u32) {
+        let (px, _bo, cpx, _cbo) = self.grid_fit();
+        let mut items = Vec::new();
+        let mut cells = 0u32;
+        for c in text.chars() {
+            let Some(f) = self.pick_font(c) else {
+                let mut seen = self.tofu_seen.borrow_mut();
+                if !seen.contains(&c) && seen.len() < 16 {
+                    seen.push(c);
+                }
+                continue;
+            };
+            let item_px = if std::ptr::eq(f, &self.font) { px } else { cpx };
+            let n = crate::ui::grid_text::char_cells(c);
+            items.push((f, c, item_px, n as f32 * self.cell_w as f32));
+            cells += n;
+        }
+        (items, cells)
+    }
+
+    /// 格落笔（左对齐单行书）：pen_x 从 x0 起，每字步进 = 格宽整数倍
+    /// （draw 内按 char_cells × cell_w 重算——与 measure_items_grid 同
+    /// 一条公式，不信任上游可能放过期的 item.3）；字形在自身格跨内
+    /// **水平居中**（全角字 2 格内居中，终端 draw_glyph 的 clip_w
+    /// 落位逻辑推广：墨不许溢过本字格跨右缘）；baseline = y_top +
+    /// 对应 baseline_off（主/cjk 按字体身份各吃各的，与 grid_fit
+    /// 同源——实例字段就是那份计算的结果，不重算）。恰好满宽 = 装
+    /// 得下（BAR-088 同律：> 才停笔）；光栅走 rasterize_cached。
+    /// clip_y = 纵裁剪带（行表窗 ∩ 抽屉顶缘窗那类——半行断墨，
+    /// 眼手同尺），None = 只裁帧界
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn draw_grid_text_left(
+        &self,
+        frame: &mut Frame<'_>,
+        items: &[GridItem<'_>],
+        x0: i64,
+        y_top: i64,
+        cell_w: u32,
+        max_px_w: u32,
+        fg: u32,
+        clip_y: Option<(i32, i32)>,
+    ) {
+        let mut pen_x = x0 as f32;
+        let clip_right = x0 + i64::from(max_px_w);
+        for (f, c, px, _adv) in items {
+            let span = crate::ui::grid_text::char_cells(*c) as f32 * cell_w as f32;
+            if span <= 0.0 {
+                continue; // 零宽字符不占格不落笔（墨没处放）
+            }
+            // BAR-088 同律：恰好满宽 = 装得下，超了才停（v1 截断即判卷）
+            if pen_x + span > clip_right as f32 {
+                break;
+            }
+            let baseline = y_top as f32
+                + if std::ptr::eq(*f, &self.font) {
+                    self.baseline_off
+                } else {
+                    self.cjk
+                        .as_ref()
+                        .map_or(self.baseline_off, |k| k.baseline_off)
+                };
+            let g = self.rasterize_cached(f, *c, *px); // BAR-102：缓存光栅
+            let (m, bmp) = (&g.0, &g.1);
+            if m.width == 0 || m.height == 0 {
+                pen_x += span;
+                continue; // 空白字形（空格）：占格无墨
+            }
+            // 格跨内水平居中：以 advance_width 为墨宽（排版意义的宽），
+            // 起笔 = 格跨左 + 余量一半；xmin 照旧叠加（斜体左探不裁，
+            // 终端同律）
+            let origin_x = pen_x + (span - m.advance_width).max(0.0) / 2.0;
+            let span_right = (pen_x + span) as i64; // 墨不许溢过本字格跨右缘
+            let top = baseline - m.ymin as f32 - m.height as f32;
+            for gy in 0..m.height as u32 {
+                let y = top as i64 + i64::from(gy);
+                if y < 0 || y >= i64::from(frame.h) {
+                    continue;
+                }
+                if let Some((cy0, cy1)) = clip_y
+                    && (y < i64::from(cy0) || y >= i64::from(cy1))
+                {
+                    continue;
+                }
+                for gx in 0..m.width as u32 {
+                    let x = (origin_x + m.xmin as f32) as i64 + i64::from(gx);
+                    if x < 0 || x >= i64::from(frame.w) || x >= span_right {
+                        continue;
+                    }
+                    let a = u32::from(bmp[(gy * m.width as u32 + gx) as usize]);
+                    if a > 0 {
+                        frame.blend_px(x as u32, y as u32, fg, a);
+                    }
+                }
+            }
+            pen_x += span;
+        }
+    }
+}
+
 // 文件树内容墨的冒烟考卷（BAR-165）：涂装本体是 `pub(crate)`——集成考卷
 // 够不着，故本模块随实现同址。判卷人仍是眼睛（C 档），这里只钉三类
 // 机器能咬的东西：①**不 panic**（逐像素件的坐标钳制/抽屉与滚动全组合，
@@ -10429,11 +10568,14 @@ mod ft_paint_smoke {
             }
         }
         assert!(ink_at_right, "症②：光标右缘必须到行表窗全宽");
-        // 症③：三角墨色 = 页 accent 渐变同源采样（逐像素取样点对表）
+        // 症③：三角墨色 = 页 accent 渐变同源采样（取样点 = 三角盒中心——
+        // 涂装就是中心单采样平涂；探针像素取 ▶ 最宽处必落墨点。旧版 want
+        // 采样探针点自身，靠 (lx+ly)*255/denom 整除巧合对齐——BAR-178 行高
+        // 改约后探针 y 移 2px 跨过整除界即误红，钉探针不钉巧合）
         let tx = g.x0 + tri_x(0);
         let ty = g.list_y0 + (ft::row_h(false) - ft::TRI_H) / 2;
         let (px, py) = (tx + ft::TRI_W / 2 - 4, ty + ft::TRI_H / 2); // ▶ 最宽处必落墨
-        let want = ring_gradient_rgb(acc.c1, acc.c2, px, py, denom);
+        let want = ring_gradient_rgb(acc.c1, acc.c2, tx + ft::TRI_W / 2, py, denom);
         assert_eq!(at(&b1, px, py), want, "症③：三角吃 accent 同源采样");
         assert_ne!(
             at(&b2, px, py),
@@ -10465,7 +10607,7 @@ mod ft_paint_smoke {
     fn smoke_行带三角光标底栏落位() {
         let tv = tv();
         let mut st = tree();
-        st.set_wrap(3, true, 0); // 长名行换行档（行高 118）
+        st.set_wrap(3, true, 0); // 长名行换行档（行高 108）
         st.select(1, 1_000); // docs（深度 0），光标 180ms 内落位
         let (w, h) = (1260u32, 2800u32);
         let g = ft_geom(w, h, 0);
@@ -10528,18 +10670,21 @@ mod ft_paint_smoke {
         assert_ne!(at(bx + 1, cy_page), 0, "光标框左竖线该落墨");
         assert_ne!(at(bx + 1, cy_page), flat(0), "竖线墨 ≠ 纯行带色");
         assert_eq!(
-            at(bx + 1, cy_page + 86),
+            at(bx + 1, cy_page + ft::row_h(false)),
             0,
-            "框外不许有竖线墨（该行根层，本层零墨）"
+            "框外不许有竖线墨（隔一行同根层，本层零墨）"
         );
-        // ⑥滚动裁剪：滚 50 后窗顶之上不许有行墨
+        // ⑥滚动裁剪：滚 50 后窗顶之上不许有行墨；窗内探针吃光标盒（症②
+        // 全宽光标 = 窗右缘的稳定墨源）——盒心屏上 y = 行心 135 − 50 = 85，
+        // 取 +60 稳在盒内（旧 +40 是 86 行高时代的死坐标，BAR-178 改约后
+        // 掉到盒上缘之外）
         let mut snap = st.snap_at(1_200);
         snap.scroll = 50;
         let mut buf2 = vec![0u32; (w as usize) * (h as usize)];
         tv.paint_ft_content_impl(&mut buf2, w, h, 0, 0, &snap, 1_200, accent);
         let at2 = |x: i64, y: i64| buf2[(y * i64::from(w) + x) as usize];
         assert_eq!(at2(g.x1 - 20, g.list_y0 - 1), 0, "窗顶之上不许有行墨");
-        assert_ne!(at2(g.x1 - 20, g.list_y0 + 40), 0, "窗内照画");
+        assert_ne!(at2(g.x1 - 20, g.list_y0 + 60), 0, "窗内照画");
     }
 
     /// **六调②逐像素钉**：根层行带不画——叠在页底之上（真机管线：chrome 先
