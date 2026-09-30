@@ -1,6 +1,6 @@
 //! mailbox-cli — kfm-na 信箱工具链 CLI（IO 壳；逻辑全在 mailbox-core）。
 //!
-//! 五子命令：
+//! 六子命令：
 //!   new       写信 + 发令牌（v2.1 模式，移植 new-letter.mjs 主流程）
 //!   verify    [信件路径]  不带参数 = 全册执法（check-letter-token.mjs 主循环）；
 //!             带文件 = 单信自检（new-letter.mjs --verify）
@@ -9,17 +9,24 @@
 //!   scan      --for=<职能|名字|旧线名> | --by=<名字>  跨册欠账扫描（na 册 + 主册）
 //!   reticket  <信件路径> --new-name <新文件名>  改名换票（契约 §八改名窗口：
 //!             状态非待*/两册有复信即拒，--force 逃生留痕；na 册收尾直接回写投影）
+//!   withdraw  <信路径> --reason "…" [--by 名字] [--force] [--peer 对等册]
+//!             撤信 = 撤回票（契约 §八 第 9 条，BAR-193 照共享向量 v2 同制）：
+//!             零回应窗口（看回应事实不看状态词，0034 裁）+ 作者/代撤权限 +
+//!             git mv 移档 archive-withdrawn/ +
+//!             台账原位 revokedAt（不带 renamedFrom）+ 信末撤回行 + gen 投影
 //!
 //! 公共选项：--mailbox / --roster / --name-prefix / --v1-manifest /
 //! --no-strict-pools（env KFM_MAILBOX_STRICT_POOLS=0 同效）/ --book-sorting。
-//! 写路径（new/gen/reticket）共用：写者分区闸（指向主册一律拒写）+ 信箱根
+//! 写路径（new/gen/reticket/withdraw）共用：写者分区闸（指向主册一律拒写）+ 信箱根
 //! O_EXCL 写者锁（BAR-177）。
 //! 册身份（book identity，契约 §六）：本册默认分拣码取自 `<信箱>/.mailbox.json`
 //! （至少 {"sorting":"NA","name":"na"}），索引 sorting = 文件名解析出的码 || 该码；
 //! 缺身份文件按 MAIN 兜底，但 --mailbox 非本仓主册时要求显式 --book-sorting。
 
 use mailbox_core::json::{JVal, parse_json, to_json_string};
-use mailbox_core::name::{CONNECT_CHARS, V21_TYPES, is_v21_name, parse_v21_name, v21_no_of};
+use mailbox_core::name::{
+    CONNECT_CHARS, V21_TYPES, is_han_str, is_v21_name, parse_v21_name, v21_no_of,
+};
 use mailbox_core::newletter::{
     SkeletonParams, build_v21_file_name, build_v21_skeleton, insert_token, ledger_record_line,
     next_number, revoke_fields,
@@ -287,10 +294,15 @@ fn list_md(dir: &Path) -> Vec<String> {
     v
 }
 
-/// 信箱信件全集：在册（active）+ 归档（archive-v1）
+/// 信箱信件全集三栏：在册（active）+ 归档（archive-v1）+ 撤回（archive-withdrawn/
+/// → dir "withdrawn"；撤回件不参与执法，但孤儿/半状态判据须认这一栏——契约 §八 第 9 条）
 fn load_letters(mailbox: &Path) -> Vec<LetterText> {
     let mut out = vec![];
-    for (sub, loc) in [("", "active"), ("archive-v1", "archive-v1")] {
+    for (sub, loc) in [
+        ("", "active"),
+        ("archive-v1", "archive-v1"),
+        ("archive-withdrawn", "withdrawn"),
+    ] {
         let dir = if sub.is_empty() {
             mailbox.to_path_buf()
         } else {
@@ -682,7 +694,10 @@ fn cmd_verify(args: &Args) {
         v1.len(),
         d.current_tickets,
         if d.revoked_tickets > 0 {
-            format!(" + {} 张撤销票", d.revoked_tickets)
+            format!(
+                " + 换票撤销票 {} 张 + 撤回票 {} 张（撤回票不要求配对、不计换票留痕）",
+                d.replaced_tickets, d.withdrawn_tickets
+            )
         } else {
             String::new()
         },
@@ -716,7 +731,7 @@ fn cmd_gen(args: &Args) {
         Err(e) => die(p, &e),
     };
     if !check_only {
-        let (errors, rows, active, archive) =
+        let (errors, rows, active, archive, withdrawn) =
             gen_write_now(&mailbox, roster.as_ref(), &book_sorting);
         if !errors.is_empty() {
             for e in &errors {
@@ -726,8 +741,16 @@ fn cmd_gen(args: &Args) {
             exit(1);
         }
         println!(
-            "[{p}] 已回写信件清单（{} 封：在册 {} + 归档 {}）+ letters-index.jsonl（{} 行）",
-            rows, active, archive, rows
+            "[{p}] 已回写信件清单（{} 行：在册 {} + 归档 {}{}）+ letters-index.jsonl（{} 行）",
+            rows,
+            active,
+            archive,
+            if withdrawn > 0 {
+                format!(" + 撤回 {withdrawn}")
+            } else {
+                String::new()
+            },
+            rows
         );
         return;
     }
@@ -767,26 +790,34 @@ fn cmd_gen(args: &Args) {
         exit(1);
     }
     println!(
-        "[{p}] OK — {} 封信台账投影与机读头一致（在册 {} + 归档 {}）",
-        out.rows, out.active, out.archive
+        "[{p}] OK — {} 封信台账投影与机读头一致（在册 {} + 归档 {}{}）",
+        out.active + out.archive,
+        out.active,
+        out.archive,
+        if out.withdrawn > 0 {
+            format!(" + 撤回 {}", out.withdrawn)
+        } else {
+            String::new()
+        }
     );
 }
 
-/// 投影全链回写（reticket 收尾用，BAR-177 必修②）：render → splice 两区段
-/// → 有变化才写盘。`book_sorting` = 本册身份码（契约 §六，调用方经
-/// resolve_book_sorting 解析）。返回 (错误串, 总数, 在册, 归档)；调用方负责写者分区闸与锁
+/// 投影全链回写（reticket/withdraw 收尾用，BAR-177 必修②）：render → splice
+/// 两区段 → 有变化才写盘。`book_sorting` = 本册身份码（契约 §六，调用方经
+/// resolve_book_sorting 解析）。返回 (错误串, 总行数, 在册, 归档, 撤回)；
+/// 调用方负责写者分区闸与锁
 fn gen_write_now(
     mailbox: &Path,
     roster: Option<&Roster>,
     book_sorting: &str,
-) -> (Vec<String>, usize, usize, usize) {
+) -> (Vec<String>, usize, usize, usize, usize) {
     let letters = load_letters(mailbox);
     let out = projection::render_gen(&letters, roster, book_sorting);
     let mut errors = out.errors.clone();
     let readme_path = mailbox.join("README.md");
     let Some(doc) = read_opt(&readme_path) else {
         errors.push(format!("{} 不存在", readme_path.display()));
-        return (errors, out.rows, out.active, out.archive);
+        return (errors, out.rows, out.active, out.archive, out.withdrawn);
     };
     let mut next = doc.clone();
     match projection::splice_section(&next, PENDING_START, PENDING_END, &out.pending_section) {
@@ -806,7 +837,7 @@ fn gen_write_now(
             &out.index_text,
         ));
     }
-    (errors, out.rows, out.active, out.archive)
+    (errors, out.rows, out.active, out.archive, out.withdrawn)
 }
 
 /// 投影回写盘（cmd_gen 与 reticket 收尾共用，BAR-177 必修②）：有变化才写，
@@ -1244,7 +1275,8 @@ fn cmd_reticket(args: &Args) {
             Ok(v) => v,
             Err(e) => die(p, &e),
         };
-        let (errs, rows, active, archive) = gen_write_now(&mailbox, roster.as_ref(), &book_sorting);
+        let (errs, rows, active, archive, _withdrawn) =
+            gen_write_now(&mailbox, roster.as_ref(), &book_sorting);
         if !errs.is_empty() {
             for e in &errs {
                 eprintln!("[{p}] {e}");
@@ -1261,6 +1293,406 @@ fn cmd_reticket(args: &Args) {
             "[{p}] 下一步：mailbox-cli verify {} → mailbox-cli gen",
             new_path.display()
         );
+    }
+}
+
+// ---------------------------------------------------------------
+// withdraw：撤信（撤回票，契约 §八 第 9 条；BAR-185 照共享向量逐条同制
+// new-letter.mjs --withdraw 七步，向量 = kfmv4 docs/ledger/test-methods/
+// withdraw-vectors.md）
+// ---------------------------------------------------------------
+// 与「撤销票」严格区分（混用会让「换票留痕」判据失焦）：
+//   撤销票 = 换票的一半（必有后继票以 renamedFrom 引用它）；
+//   撤回票 = 整封作废（无替补）——判别靠配对关系，不靠新字段。
+// 七步动作序列（每步都留痕，缺一步 = 半成品）：
+//   ①窗口校验 ②权限校验 ③移档 ④台账 ⑤件内留痕 ⑥投影 ⑦通告提示。
+
+/// `git -C <book> mv [-n] <file> <dest>`；Err = 失败输出（stderr+stdout 剥空白）
+fn git_mv(book: &Path, file: &str, dest_rel: &str, dry: bool) -> Result<(), String> {
+    let mut cmd = Command::new("git");
+    // 钩子/嵌套 git 调用的 GIT_DIR 系环境会把 mv 打到别的仓——目标仓由 -C 指定，环境一律剥掉
+    cmd.env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE");
+    cmd.arg("-C").arg(book).arg("mv");
+    if dry {
+        cmd.arg("-n");
+    }
+    cmd.arg(file).arg(dest_rel);
+    match cmd.output() {
+        Ok(out) if out.status.success() => Ok(()),
+        Ok(out) => Err(format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stderr),
+            String::from_utf8_lossy(&out.stdout)
+        )
+        .trim()
+        .to_string()),
+        Err(e) => Err(format!("git 不可用：{e}")),
+    }
+}
+
+fn cmd_withdraw(args: &Args) {
+    let p = "mailbox-withdraw";
+    let src = args.pos.get(1).unwrap_or_else(|| {
+        die(
+            p,
+            "用法：mailbox-cli withdraw <信路径> --reason \"<理由>\" [--by <名字>] [--force] [--peer <对等册路径>]",
+        )
+    });
+    let reason = args.opt("reason").unwrap_or_else(|| {
+        die(
+            p,
+            "withdraw 需要 --reason \"<理由>\"——理由进台账 revokeReason 与信末撤回行（不许悄悄撤信）",
+        )
+    });
+    let mailbox = mailbox_of(args);
+    // 写者分区闸（BAR-177：指向主册一律拒写）+ 写者锁（与 new/gen/reticket 同闸同锁）
+    reject_main_book_write(p, &mailbox);
+    let lp0 = PathBuf::from(src);
+    let lp = if lp0.is_file() {
+        lp0
+    } else {
+        mailbox.join(src)
+    };
+    if !lp.is_file() {
+        die(p, &format!("信不存在：{src}"));
+    }
+    let canon_mb = fs::canonicalize(&mailbox).unwrap_or_else(|_| mailbox.clone());
+    let canon_lp = fs::canonicalize(&lp).unwrap_or_else(|_| lp.clone());
+    if canon_lp.parent() != Some(canon_mb.as_path()) {
+        die(
+            p,
+            &format!(
+                "信不在本册：{}（所在册 {} ≠ --mailbox/默认 {}；跨册请显式 --mailbox <该册>）",
+                lp.display(),
+                lp.parent().unwrap_or_else(|| Path::new("")).display(),
+                mailbox.display()
+            ),
+        );
+    }
+    let file = lp
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_string();
+    if !is_v21_name(&file) {
+        die(
+            p,
+            &format!(
+                "撤回票只适用于 v2.1 新纪元信（文件名须 <编号>号<发信人>…的<类型词>.md）：{file}——存量冻结信不受理（契约 §九）"
+            ),
+        );
+    }
+    let parsed = parse_v21_name(&file);
+    if parsed.no.is_none() || !parsed.errs.is_empty() {
+        die(
+            p,
+            &format!(
+                "文件名不合 v2.1 文法，无法定位编号：{file}（{}）",
+                parsed.errs.join("；")
+            ),
+        );
+    }
+    let bare_no = parsed.no.clone().unwrap_or_default();
+    let full_no = format!("{}{}", parsed.sorting.as_deref().unwrap_or(""), bare_no);
+    // 册身份码（JS bookCode）：身份文件 sorting > 本仓主册兜底 MAIN > None
+    // （未知册——跨册回应匹配退化为不认码）
+    let code: Option<String> = match read_book_identity(&mailbox) {
+        Ok(v) => v,
+        Err(e) => die(p, &e),
+    }
+    .or_else(|| {
+        let main_canon = fs::canonicalize(MAIN_BOOK).unwrap_or_else(|_| PathBuf::from(MAIN_BOOK));
+        (canon_mb == main_canon).then(|| "MAIN".to_string())
+    });
+    let text0 = read_opt(&lp).unwrap_or_default();
+    let hdr = mailbox_core::header::parse_header(&text0, &["状态", "从"]);
+
+    let _lock = acquire_book_lock(p, &mailbox);
+
+    // ---- ① 窗口校验：判据 = 事实上的零回应（本册＋对等册＋归档里无「复: <本编号>」） ----
+    //   状态词不是判据（2026-09-30 白露 0034 裁决，起因 0052）：状态是「零回应」的代理
+    //   变量而非回应事实——0052 的状态是作者自己写的处分动作，不是「有人回应」。非 待*
+    //   时打一行注意照常执行（留痕在案，不悄悄放行）。口径见契约 §八 第 9 条②补注。
+    let status_raw = mailbox_core::header::header_get(&hdr, "状态").unwrap_or_else(|| {
+        die(
+            p,
+            &format!("该信信封无「状态」字段：{file}（状态是必填字段，契约 §三）"),
+        )
+    });
+    // 对等册（§六 跨册口径）：回应可能落在别册，故两册都要扫。缺省两册写死；--peer 覆盖
+    let peer_args = args.all("peer");
+    let mut book_list: Vec<PathBuf> = vec![mailbox.clone()];
+    if peer_args.is_empty() {
+        book_list.push(PathBuf::from(MAIN_BOOK));
+        book_list.push(PathBuf::from(DEFAULT_MAILBOX));
+    } else {
+        book_list.extend(peer_args.iter().map(PathBuf::from));
+    }
+    book_list.retain(|d| d.is_dir());
+    book_list.dedup();
+    let mut replies: Vec<String> = vec![];
+    for b in &book_list {
+        let self_book = fs::canonicalize(b).unwrap_or_else(|_| b.clone()) == canon_mb;
+        for sub in ["", "archive-v1", "archive-withdrawn"] {
+            let dir = if sub.is_empty() {
+                b.clone()
+            } else {
+                b.join(sub)
+            };
+            if !dir.is_dir() {
+                continue;
+            }
+            for rf in list_md(&dir) {
+                if rf == file {
+                    continue;
+                }
+                let Some(rtext) = read_opt(&dir.join(&rf)) else {
+                    continue;
+                };
+                let rh = mailbox_core::header::parse_header(&rtext, &["复"]);
+                let Some(rv) = mailbox_core::header::header_get(&rh, "复") else {
+                    continue;
+                };
+                let rv: String = rv.chars().filter(|c| !c.is_whitespace()).collect();
+                if rv.is_empty() || rv.starts_with('无') {
+                    continue;
+                }
+                // 本册内回应写裸编号（可带自指码误用）；跨册回应一律写全码（§六 跨册口径第 4 条）
+                let coded = code
+                    .as_deref()
+                    .is_some_and(|c| rv == format!("{c}{bare_no}"));
+                let hit = if self_book {
+                    rv == bare_no || coded
+                } else {
+                    coded
+                };
+                if hit {
+                    let prefix = if sub.is_empty() {
+                        String::new()
+                    } else {
+                        format!("{sub}/")
+                    };
+                    replies.push(format!("{prefix}{rf}（册：{}）", b.display()));
+                }
+            }
+        }
+    }
+    if !replies.is_empty() {
+        die(
+            p,
+            &format!(
+                "窗口已过：已有对该信（{full_no}）的回应——撤回会抹掉别人的回应（契约 §八 第 9 条②）：\n  {}",
+                replies.join("\n  ")
+            ),
+        );
+    }
+    if !mailbox_core::status::status_is_pending(status_raw) {
+        let shown: String = status_raw.chars().take(60).collect();
+        eprintln!(
+            "[{p}] 注意 — 该信状态「{shown}」非「待*」，但不作判据：窗口看**事实上的零回应**（无人以 复:{bare_no} 回应），撤回照准（契约 §八 第 9 条②，2026-09-30 裁决）"
+        );
+    }
+
+    // ---- ② 权限校验：作者本人自撤；他人代撤须 --force，且理由必须落台账（不许悄悄代撤） ----
+    let from_val = mailbox_core::header::header_get(&hdr, "从").unwrap_or("");
+    if from_val.chars().count() < 3 {
+        die(
+            p,
+            &format!("信封「从」非法：{from_val}（须 <职能><名字>）——判不了发信方，无法撤"),
+        );
+    }
+    let author_func: String = from_val
+        .chars()
+        .take(from_val.chars().count() - 2)
+        .collect();
+    let author_name: String = from_val
+        .chars()
+        .skip(from_val.chars().count() - 2)
+        .collect();
+    let by = args.opt("by").unwrap_or(&author_name).to_string();
+    if by.chars().count() != 2 || !is_han_str(&by) {
+        die(p, &format!("--by 非法：{by}（须恰好两个汉字，如 白露）"));
+    }
+    let forced = by != author_name;
+    if forced && !args.has("force") {
+        die(
+            p,
+            &format!(
+                "权限：--by「{by}」≠ 该信发信方「{author_name}」——代撤须显式 --force（评审代撤），且代撤理由必须落台账（契约 §八 第 9 条③）"
+            ),
+        );
+    }
+    if args.opt("by").is_none() {
+        println!("[{p}] --by 缺省 = 该信发信方「{author_name}」（视为作者自撤）");
+    }
+    if forced {
+        println!(
+            "[{p}] 代撤：{by} 代 {author_name} 撤「{file}」——理由落台账 revokeReason（不许悄悄代撤）"
+        );
+    }
+
+    // ---- ③ 移档：git mv 进 archive-withdrawn/（只移不删——删了就回到「孤儿票」困境） ----
+    let dest_rel = format!("archive-withdrawn/{file}");
+    let dest_dir = mailbox.join("archive-withdrawn");
+    if dest_dir.join(&file).is_file() {
+        die(
+            p,
+            &format!("移档目标已存在：archive-withdrawn/{file}（这封信可能已撤过）"),
+        );
+    }
+    fs::create_dir_all(&dest_dir).unwrap_or_else(|e| die(p, &format!("建撤回栏目录失败：{e}")));
+    if let Err(e) = git_mv(&mailbox, &file, &dest_rel, true) {
+        die(
+            p,
+            &format!(
+                "git mv 预演失败（撤回只移档不删，契约 §八 第 9 条①）：{e}——该册须是 git 仓且该信已入库（git add）"
+            ),
+        );
+    }
+
+    // ---- ④ 台账：现行票加 revokedAt ＋ revokeReason，**不带 renamedFrom** ----
+    let tokens_path = mailbox.join("letter-tokens.jsonl");
+    let tok_raw = read_opt(&tokens_path)
+        .unwrap_or_else(|| die(p, &format!("本册台账不存在：{}", tokens_path.display())));
+    let revoked_at = args
+        .opt("now-utc")
+        .map(str::to_string)
+        .unwrap_or_else(now_utc_iso);
+    let revoke_reason = if forced {
+        format!("撤回票（整封作废，代撤：{by} 代 {author_name}）：{reason}")
+    } else {
+        format!("撤回票（整封作废）：{reason}")
+    };
+    let mut tok_lines: Vec<String> = vec![];
+    let mut patched: Option<String> = None;
+    for line in tok_raw.split('\n') {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let mut v = match parse_json(line) {
+            Ok(v) => v,
+            Err(_) => {
+                tok_lines.push(line.to_string());
+                continue;
+            }
+        };
+        if patched.is_none()
+            && v.get("revokedAt").is_none()
+            && v.get("file").and_then(JVal::as_str) == Some(file.as_str())
+            && v.get("no")
+                .and_then(JVal::as_str)
+                .is_some_and(|no| no.len() >= 4 && no.ends_with(&bare_no))
+        {
+            if let JVal::Obj(pairs) = &mut v {
+                pairs.extend(revoke_fields(&revoked_at, &revoke_reason));
+            }
+            patched = v.get("no").and_then(JVal::as_str).map(str::to_string);
+            tok_lines.push(to_json_string(&v));
+            continue;
+        }
+        tok_lines.push(line.to_string());
+    }
+    let Some(tok_no) = patched else {
+        die(
+            p,
+            &format!(
+                "台账里找不到该信的现行票（no={full_no} file={file}）——撤回票只能撤「有票在册」的信（本信由本器签发？）"
+            ),
+        );
+    };
+    let mut tok_out = tok_lines.join("\n");
+    tok_out.push('\n');
+    fs::write(&tokens_path, &tok_out).unwrap_or_else(|e| die(p, &format!("回写台账失败：{e}")));
+
+    if let Err(e) = git_mv(&mailbox, &file, &dest_rel, false) {
+        // 回滚台账：不留「票已撤、信还在册」的半状态
+        let _ = fs::write(&tokens_path, &tok_raw);
+        die(p, &format!("git mv 失败（台账已回滚）：{e}"));
+    }
+
+    // ---- ⑤ 件内留痕：信末追加一行（正文断言不动）——否则归档目录里的读者会把它当有效信读 ----
+    let now_local = args
+        .opt("now-local")
+        .map(str::to_string)
+        .unwrap_or_else(now_local_stamp);
+    let roster = resolve_roster(args, &mailbox);
+    let seal_func = if forced {
+        roster
+            .as_ref()
+            .map(|r| r.func_of_name(&by, &author_func))
+            .unwrap_or_else(|| author_func.clone())
+    } else {
+        author_func.clone()
+    };
+    let seal = format!("——撤回：{now_local} {seal_func}{by}——原信作废，理由：{reason}");
+    let moved = dest_dir.join(&file);
+    let body0 = read_opt(&moved).unwrap_or_default();
+    // JS body0.replace(/\n?$/,'\n')：结尾至多一个换行，不足补足、不多删
+    let mut body = body0;
+    if !body.ends_with('\n') {
+        body.push('\n');
+    }
+    body.push_str(&seal);
+    body.push('\n');
+    fs::write(&moved, body).unwrap_or_else(|e| die(p, &format!("写撤回留痕失败：{e}")));
+
+    // ---- ⑥ 投影：重跑 gen（本册）→ README 台账 ＋ 活信清单剔除 ＋ 索引 dir:"withdrawn" ----
+    if mailbox.join("README.md").is_file() {
+        let book_sorting = match resolve_book_sorting(args, &mailbox) {
+            Ok(v) => v,
+            Err(e) => die(p, &e),
+        };
+        let (errs, _rows, _active, _archive, _withdrawn) =
+            gen_write_now(&mailbox, roster.as_ref(), &book_sorting);
+        if !errs.is_empty() {
+            for e in &errs {
+                eprintln!("[{p}] {e}");
+            }
+            eprintln!(
+                "[{p}] 撤回本身已完成（移档/台账/留痕），但投影步骤失败——请手工跑 mailbox-cli gen --mailbox {}",
+                mailbox.display()
+            );
+            exit(1);
+        }
+    }
+
+    // ---- ⑦ 通告提示 ----
+    println!("[{p}] ✓ 撤回完成：{file}（编号 {full_no}）");
+    println!(
+        "  ① 窗口：状态「{}」（零回应）＋ 两册（{}）无「复: {bare_no}」",
+        mailbox_core::status::status_bare(status_raw),
+        book_list
+            .iter()
+            .map(|b| b.display().to_string())
+            .collect::<Vec<_>>()
+            .join("、")
+    );
+    println!(
+        "  ② 权限：{}",
+        if forced {
+            format!("代撤（{by} 代 {author_name}，--force）")
+        } else {
+            format!("作者自撤（{by}）")
+        }
+    );
+    println!("  ③ 移档：archive-withdrawn/{file}（git mv，不删）");
+    println!(
+        "  ④ 台账：现行票 no={tok_no} 加 revokedAt ＋ revokeReason，无 renamedFrom（＝撤回票，不参与换票配对）"
+    );
+    println!("  ⑤ 留痕：信末「{seal}」（正文断言未动）");
+    println!("  ⑥ 投影：gen 已重跑（台账含撤回件 ＋ 活信清单剔除 ＋ 索引 dir:\"withdrawn\"）");
+    if forced {
+        println!(
+            "  ⑦ 通告（代撤必做）：请在册内发信通告本次代撤——收件方 = 原发信方/受影响方，写明代撤理由；"
+        );
+        println!(
+            "     mailbox-cli new --mailbox {} --from-func <职能> --from-name <名字> --to \"<收件方>\" --type 通报 --title \"<标题>\"",
+            mailbox.display()
+        );
+    } else {
+        println!("  ⑦ 通告：自撤不强制发信（台账 revokeReason 即留痕）");
     }
 }
 
@@ -1284,6 +1716,16 @@ const USAGE: &str = "mailbox-cli — kfm-na 信箱工具链（逻辑核 mailbox-
                           force 事实写进撤销票 revokeReason；na 册收尾直接回写投影。
                           唯一改号例外 = §八.8 格式性勘误：新名 = 旧名仅去本册自指码，
                           不受窗口限制，revokeReason 必带「格式性勘误（契约 §八 第 8 条）」）
+  mailbox-cli withdraw <信路径> --reason \"<理由>\" [--by <名字>] [--force] [--peer <对等册路径>]
+                          撤信 = 整封作废（撤回票，契约 §八 第 9 条；非「撤销票/换票」——
+                          无替补、不带 renamedFrom）：①窗口校验（两册无复信——回应事实，
+                          不看状态词；状态非待* 打注意行照准（0034 裁）；
+                          缺省对等册 = 主册与 na 册，--peer 覆盖）②权限（作者自撤；--by
+                          非作者须 --force，代撤理由落台账，信末署名取名册 primary 职能）
+                          ③移档 git mv 进 archive-withdrawn/（只移不删，未 git add 即拒，
+                          不降级 mv）④台账原位加 revokedAt+revokeReason ⑤信末追加
+                          「——撤回：<戳> <职能><名字>——原信作废，理由：…」（正文不动）
+                          ⑥重跑 gen 刷新投影 ⑦代撤须另行发信通告
 
 公共选项：
   --mailbox <dir>       信箱根（默认 /root/.kfm/session/信箱）
@@ -1317,6 +1759,7 @@ fn main() {
         "gen" => cmd_gen(&args),
         "scan" => cmd_scan(&args),
         "reticket" => cmd_reticket(&args),
+        "withdraw" => cmd_withdraw(&args),
         other => die("mailbox-cli", &format!("未知子命令：{other}\n\n{USAGE}")),
     }
 }

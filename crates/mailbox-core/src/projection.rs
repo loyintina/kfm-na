@@ -8,7 +8,6 @@ use crate::roster::{Roster, split_func};
 use crate::status::is_debt;
 use crate::token::sha256_hex16;
 use crate::verify::LetterText;
-use std::collections::HashSet;
 
 pub const MARK_START: &str = "<!-- gen:agent-inbox:start -->";
 pub const MARK_END: &str = "<!-- gen:agent-inbox:end -->";
@@ -139,22 +138,33 @@ fn build_rows<'a>(letters: &'a [LetterText], errors: &mut Vec<String>) -> Vec<Ro
     rows
 }
 
-/// 「回哪条/状态」列的归档链接补前缀（fixHui）
-fn fix_hui(cell: &str, archived: &HashSet<&str>) -> String {
+/// 栏位 → 链接前缀（非在册行的链接指向所在栏——台账仍是单一出处，
+/// 表的每一行都指向真文件；契约 §八 第 9 条：撤回栏 archive-withdrawn/）
+fn loc_prefix(dir: &str) -> &'static str {
+    match dir {
+        "archive-v1" => "archive-v1/",
+        "withdrawn" => "archive-withdrawn/",
+        _ => "",
+    }
+}
+
+/// 「回哪条/状态」列的非在册链接补前缀（fixHui）——archive-v1 与
+/// archive-withdrawn 两栏都补（JS LOC_PREFIX 同款）
+fn fix_hui(cell: &str, prefixed: &[(&str, &str)]) -> String {
     let mut out = cell.to_string();
-    for n in archived {
-        out = out.replace(&format!("]({n})"), &format!("](archive-v1/{n})"));
-        out = out.replace(&format!("`{n}`"), &format!("`archive-v1/{n}`"));
+    for (n, p) in prefixed {
+        out = out.replace(&format!("]({n})"), &format!("]({p}{n})"));
+        out = out.replace(&format!("`{n}`"), &format!("`{p}{n}`"));
     }
     out
 }
 
 /// 文末台账区段（gen:agent-inbox）
 fn render_ledger(rows: &[Row]) -> String {
-    let archived: HashSet<&str> = rows
+    let prefixed: Vec<(&str, &str)> = rows
         .iter()
         .filter(|r| r.letter.dir != "active")
-        .map(|r| r.letter.file.as_str())
+        .map(|r| (r.letter.file.as_str(), loc_prefix(&r.letter.dir)))
         .collect();
     let mut lines = vec![
         MARK_START.to_string(),
@@ -163,18 +173,25 @@ fn render_ledger(rows: &[Row]) -> String {
     ];
     for r in rows {
         let f = r.letter.file.as_str();
-        let link = if r.letter.dir == "active" {
-            f.to_string()
-        } else {
-            format!("archive-v1/{f}")
-        };
+        let link = format!("{}{f}", loc_prefix(&r.letter.dir));
+        // 撤回件的状态是原件状态（窗口＝零回应，故仍「待*」）——加尾注免得
+        // 读者把它当活信（契约 §八 第 9 条④活信清单剔除的表内对应）
+        let status_cell = format!(
+            "{}{}",
+            fix_hui(r.status(), &prefixed),
+            if r.letter.dir == "withdrawn" {
+                "（已撤回）"
+            } else {
+                ""
+            }
+        );
         lines.push(format!(
             "| {} | [`{}`]({}) | {} | {} |",
             r.date_col,
             f,
             link,
-            fix_hui(r.hui_cell(), &archived),
-            fix_hui(r.status(), &archived)
+            fix_hui(r.hui_cell(), &prefixed),
+            status_cell
         ));
     }
     lines.push(MARK_END.to_string());
@@ -405,7 +422,11 @@ pub struct GenOutput {
     pub index_text: String,
     pub rows: usize,
     pub active: usize,
+    /// 仅 archive-v1 栏（撤回栏单列，不计入 9.0「N 封信」口径）
     pub archive: usize,
+    /// 撤回栏（archive-withdrawn/）件数——物理在册可审计，但不计 9.0 计数
+    /// （口径 = 在册 + 归档；契约 §八 第 9 条补注⑥）
+    pub withdrawn: usize,
 }
 
 /// 全量渲染（行构建 → 两区段 + 索引文本；字段缺失/文法错记 errors 并跳过该行）。
@@ -420,7 +441,8 @@ pub fn render_gen(
     let rows = build_rows(letters, &mut out.errors);
     out.rows = rows.len();
     out.active = rows.iter().filter(|r| r.letter.dir == "active").count();
-    out.archive = rows.len() - out.active;
+    out.withdrawn = rows.iter().filter(|r| r.letter.dir == "withdrawn").count();
+    out.archive = rows.len() - out.active - out.withdrawn;
     out.pending_section = render_pending(&rows);
     out.ledger_section = render_ledger(&rows);
     out.index_text = if rows.is_empty() {
@@ -473,7 +495,8 @@ pub fn scan_debts(
     for (label, letters) in books {
         let rows = build_rows(letters, &mut errors);
         for r in &rows {
-            if !is_debt(r.status()) {
+            // 撤回件不参与（撤回＝整封作废，不是欠账；活信清单同此口径）
+            if r.letter.dir == "withdrawn" || !is_debt(r.status()) {
                 continue;
             }
             let hit = match target {

@@ -226,6 +226,10 @@ termview_spec host_cff 夹具，缺席 = 测试 panic 红）与 **fonts-dejavu
    机械合规红→当场修当场推。
 3. **信箱计数投影**由 kfmv4 侧 gen-agent-inbox 自动回写，na 侧不再
    手改计数（改也活不过下一次 gen）。
+4. **跨仓改动通告必写落地状态（2026-09-30，白露 0034 §三，断口教训）**：
+   任何改了别仓/本仓影响他线的改动，通告信里必须写明
+   `已提交 <hash>` 或 `未提交（在工作树）`——只说「改了什么」不说
+   「是否落仓」，读者无从判断主干安全性（0033 主干断口就是这么来的）。
 
 判例与全文：kfmv4 仓信箱 kfm-na-ops-convention-submission.md +
 kfmv4-review-ops-convention-verdict.md。
@@ -257,6 +261,12 @@ kfmv4-review-ops-convention-verdict.md。
 判卷成本倒挂的不出考题（getter/装配/常量表）。
 
 ## 文档地图
+
+> **方向档案已迁家（2026-09-30，用户拍板）**：`docs/active/` 与 `docs/assets/`
+> 是**符号链接** → `/root/20-工作区/02-清和/方向/`（研究部清和家，独立 git 小仓）——
+> 设计/方向文档的权威归研究线，读写经链接透明；`docs/ledger/`（bugs.md/state.md/
+> bar-registry 等机制账）仍在本仓，随提交走。改方向文档 = 改家仓；遇链接失效先查
+> `readlink docs/active`。
 
 - `docs/ledger/state.md` — **交接页：现在进行时**（当前位置/待判卷/欠账/日志
   判读手册，里程碑必更新；接手冷启动第一读）

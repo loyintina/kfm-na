@@ -76,10 +76,15 @@ pub fn has_v21_stamp(s: &str) -> bool {
         .is_match(s)
 }
 
+/// 信封「状态」剥前缀（非汉字非字母）后的原文（展示用，同 JS statusBare）
+pub fn status_bare(s: &str) -> String {
+    let re = regex::Regex::new(r"^[^\p{Han}A-Za-z]+").unwrap();
+    re.replace(s, "").into_owned()
+}
+
 /// 信封「状态」剥前缀（非汉字非字母）后是否待*（待* 豁免代际戳）
 pub fn status_is_pending(s: &str) -> bool {
-    let re = regex::Regex::new(r"^[^\p{Han}A-Za-z]+").unwrap();
-    re.replace(s, "").starts_with('待')
+    status_bare(s).starts_with('待')
 }
 
 fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
