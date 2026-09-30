@@ -18,7 +18,7 @@ fn sample() -> String {
         ev(r#"{"type":"user_msg","content":"读一下 bugs.md","seq":1}"#),
         ev(r#"{"type":"usage","round":1,"prompt_tokens":540,"completion_tokens":130}"#),
         ev(r#"{"type":"model_msg","content":"先读文件。","round":1}"#),
-        ev(r#"{"type":"tool_call","id":"c1","name":"read_file","arguments":"{\"path\":\"/root/bugs.md\"}","round":1}"#),
+        ev(r#"{"type":"tool_call","id":"c1","name":"read_file","arguments":"{\"path\":\"/srv/na/bugs.md\"}","round":1}"#),
         ev(r##"{"type":"tool_result","id":"c1","name":"read_file","output":"# bugs.md 标题\n第二行","round":1}"##),
         ev(r#"{"type":"usage","round":2,"prompt_tokens":800,"completion_tokens":70}"#),
         ev(r#"{"type":"done","reason":"end_turn","rounds":2}"#),
@@ -32,7 +32,7 @@ fn spec_bar163_渲染_五类事件各就其位() {
     let lines: Vec<&str> = text.lines().collect();
     assert_eq!(lines[0], "用户： 读一下 bugs.md");
     assert_eq!(lines[1], "agent： 先读文件。");
-    assert_eq!(lines[2], "调 read_file(/root/bugs.md) → # bugs.md 标题");
+    assert_eq!(lines[2], "调 read_file(/srv/na/bugs.md) → # bugs.md 标题");
     assert_eq!(lines[3], "── 结束（end_turn，2 轮）");
     assert!(lines[4].starts_with("账： "), "账行收尾: {text}");
 }
