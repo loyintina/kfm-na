@@ -5,7 +5,7 @@
 /// 默认燃料：bigmodel-coding 的 glm-5.3-flash（coding 套餐）。工单拍板。
 pub const DEFAULT_PROVIDER: &str = "bigmodel-coding";
 pub const DEFAULT_MODEL: &str = "glm-5.3-flash";
-pub const DEFAULT_WORKDIR: &str = "/root/kfm-na";
+pub const DEFAULT_WORKDIR: &str = "/root/10-项目/kfm-na";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LineConfig {

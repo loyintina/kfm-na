@@ -136,12 +136,12 @@ fn spec_选择_长按选词边界() {
 fn spec_选择_路径整段当选() {
     // 词字符集的立意：路径/带行号串整段拎出来
     let mut tv = host_termview(40, 4);
-    tv.feed(b"open /root/kfm-na/src/a.rs:12 ok");
+    tv.feed(b"open /root/na-app/src/a.rs:12 ok");
     let (x, y) = cell_center(8, 0); // 'o' in "/root/..."
     tv.select_word_at(x, y);
     assert_eq!(
         tv.selected_text().as_deref(),
-        Some("/root/kfm-na/src/a.rs:12")
+        Some("/root/na-app/src/a.rs:12")
     );
 }
 

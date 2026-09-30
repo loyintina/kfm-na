@@ -171,7 +171,7 @@ TOCTOU 双号竞态）：flock 下一次原子完成 领号（**三账取 max+1*
 ## 分支流与工作区基建（0018 试点）
 
 分支流本体（一线一 worktree + 工单分支 / 冲突归分支侧 / append-only 账
-union 驱动 / 合并串行器 / 主工作区 `/root/kfm-na` 只许 master）是 0018 提案、
+union 驱动 / 合并串行器 / 主工作区 `/root/10-项目/kfm-na` 只许 master）是 0018 提案、
 0022 裁决的试点机制，全案以两信为准；本节只收**新工作区基建的明文步**
 （0039 乙，白露裁「直接写进 AGENTS.md」，观澜 0040 §二 实证背书）：
 
@@ -186,9 +186,9 @@ union 驱动 / 合并串行器 / 主工作区 `/root/kfm-na` 只许 master）是
   占位，与真机交付视觉不同尺）。
 
 ```bash
-git worktree add /root/kfm-na.wt/<线名> -b <工单分支> master
-cp /root/kfm-na/assets/fonts/local/main.ttf \
-   /root/kfm-na.wt/<线名>/assets/fonts/local/main.ttf
+git worktree add /root/20-工作区/<编号-名字>/工作区 -b <工单分支> master
+cp /root/10-项目/kfm-na/assets/fonts/local/main.ttf \
+   /root/20-工作区/<编号-名字>/工作区/assets/fonts/local/main.ttf
 ```
 
 清单有新增项（普查 BAR-184 的「基建清单」桶）追加到本节，别散落各信。

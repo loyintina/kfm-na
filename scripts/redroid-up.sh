@@ -14,7 +14,7 @@
 #   bash scripts/redroid-up.sh --recreate # 销毁重建容器(数据清盘)
 set -euo pipefail
 
-ADB=/root/kfm-na-toolchain/sdk/platform-tools/adb
+ADB=/root/40-资产/kfm-na-toolchain/sdk/platform-tools/adb
 IMAGE=redroid/redroid:12.0.0_64only-latest
 NAME=redroid12
 SERIAL=localhost:5555

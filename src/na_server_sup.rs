@@ -17,7 +17,7 @@ use crate::settings::ServerEntry;
 use crate::tunnel::{NA_SERVER_PORT, backoff_secs, check_ssh_fields};
 
 /// 服务器侧仓库路径（二进制建造与落点；v1 常量，多设备化时进 settings）
-pub const REPO_DIR: &str = "/root/kfm-na";
+pub const REPO_DIR: &str = "/root/10-项目/kfm-na";
 
 /// 服务器本地 health 口（curl 探活只打回环——公网不可达是安全语义）
 pub const HEALTH_URL: &str = "http://127.0.0.1:9021/api/na/health";

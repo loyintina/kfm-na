@@ -19,7 +19,7 @@ if [ -d /data/data/com.termux ]; then
     TARGET_DIR=target/release            # 宿主即 aarch64-linux-android
     CARGO_TARGET_ARGS=""
 else
-    SDK=/root/kfm-na-toolchain/sdk
+    SDK=/root/40-资产/kfm-na-toolchain/sdk
     BT="$SDK/build-tools/34.0.0"
     AJAR="$SDK/platforms/android-35/android.jar"
     AAPT2="$BT/aapt2"
@@ -89,6 +89,6 @@ if [ "${1:-}" = "deploy" ]; then
              -t application/vnd.android.package-archive"
     fi
     echo "=== [spike] ✅ 安装器已调起：手机上点「安装」，然后开「GPU尖刺」==="
-    echo "    判卷：服务器 tail -f /root/kfm-na/field-reports.log | grep gpu-spike"
+    echo "    判卷：服务器 tail -f /root/10-项目/kfm-na/field-reports.log | grep gpu-spike"
 fi
 echo "=== [spike] ✅ $OUT（vc=$VERSION_CODE） ==="

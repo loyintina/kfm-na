@@ -15,7 +15,7 @@
 set -euo pipefail
 
 source "$(dirname "$0")/lib/gate-lib.sh"
-REPORTS=/root/kfm-na/field-reports.log
+REPORTS=/root/10-项目/kfm-na/field-reports.log
 
 # 死活探针分传输：ssh 路 = 闸门断连即死透(na-ssh.sh:9022 首选/8024 备援)；adb 路 adbd 常连，
 # 改看 pidof（2026-09-11 redroid 接线）

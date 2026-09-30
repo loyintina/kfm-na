@@ -96,7 +96,7 @@ echo "=== [chain 8/13] cargo check --target aarch64-linux-android ==="
 # ring（rustls 后端）是第一个要编 C 的依赖：build.rs 找 aarch64-linux-android-clang，
 # 服务器得指 NDK；手机 Termux 的 cc 原生就是目标三元组，无需指（2026-08-31）
 if [ ! -d /data/data/com.termux ]; then
-    NDK_BIN=/root/kfm-na-toolchain/sdk/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64/bin
+    NDK_BIN=/root/40-资产/kfm-na-toolchain/sdk/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64/bin
     export CC_aarch64_linux_android="$NDK_BIN/aarch64-linux-android24-clang"
     export AR_aarch64_linux_android="$NDK_BIN/llvm-ar"
     export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$NDK_BIN/aarch64-linux-android24-clang"
@@ -111,8 +111,8 @@ if [ -d /data/data/com.termux ]; then
     JAVAC=javac
     AJAR="$HOME/kfm-na-toolchain/android.jar"
 else
-    JAVAC=/root/kfm-na-toolchain/jdk/bin/javac
-    AJAR=/root/kfm-na-toolchain/sdk/platforms/android-35/android.jar
+    JAVAC=/root/40-资产/kfm-na-toolchain/jdk/bin/javac
+    AJAR=/root/40-资产/kfm-na-toolchain/sdk/platforms/android-35/android.jar
 fi
 rm -rf build/java-check && mkdir -p build/java-check
 "$JAVAC" -source 8 -target 8 \

@@ -76,7 +76,7 @@ EMOJI_CPS = [
     0x1F513, 0x1F50D, 0x1F4C5, 0x1F4E6, 0x1F41B, 0x1F480, 0x1F44D,  # 🔓🔍📅📦🐛💀👍
     0x1F44E, 0x1F3AF, 0x1F4CC, 0x1F4CE, 0x1F4BB, 0x1F4F1, 0x1F527,  # 👎🎯📌📎💻📱🔧
 ]
-EMOJI_DONOR = "/root/kfm-na-toolchain/fonts/NotoEmoji-Regular.ttf"
+EMOJI_DONOR = "/root/40-资产/kfm-na-toolchain/fonts/NotoEmoji-Regular.ttf"
 
 # 替换符补丁（2026-09-20：tofu 目击 U+FFFD——传输/日志里的替换符
 # 自身无墨，连目击报表的含义都读不出（调试自我指涉悬案，state.md

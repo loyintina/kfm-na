@@ -27,7 +27,7 @@ NA_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$(dirname "${BASH_SOURCE[0]}")/na-ssh.sh"
 
 NA_TRANSPORT=${NA_TRANSPORT:-ssh}
-NA_ADB=${NA_ADB:-/root/kfm-na-toolchain/sdk/platform-tools/adb}
+NA_ADB=${NA_ADB:-/root/40-资产/kfm-na-toolchain/sdk/platform-tools/adb}
 NA_ADB_SERIAL=${NA_ADB_SERIAL:-localhost:5555}
 
 gate() {

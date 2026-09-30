@@ -3663,7 +3663,7 @@
 
 **服务器出题判卷，手机编包安装。** 分工：
 
-- 服务器（/root/kfm-na):代码事实来源；pre-commit chain 8 步全绿才算数，
+- 服务器（/root/10-项目/kfm-na，2026-09-30 自 /root/kfm-na 正迁）：代码事实来源；pre-commit chain 8 步全绿才算数，
   commit-msg 双门照常。任何代码先进这里。
 - 手机（Termux,/data/data/com.termux/files/home/kfm-na)：只拉绿了的
   master → 本地编 APK → 本地调安装器。不当判官、不提交代码。

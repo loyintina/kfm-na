@@ -22,7 +22,7 @@ cd "$(dirname "$0")/.." || exit 1
 PHONE=${PHONE:-"u0_a376@localhost"}
 PORT=${PORT:-8022}
 STAMP=$(date +%Y%m%d)
-OUT=${OUTPUT:-/root/kfm-na-toolchain/na-toolchain-aarch64-$STAMP.tar.zst}
+OUT=${OUTPUT:-/root/40-资产/kfm-na-toolchain/na-toolchain-aarch64-$STAMP.tar.zst}
 # 远端产物路径必须绝对写死——$HOME 会在服务器侧展开成 /root（2026-09-23
 # 三跑 zstd: /root/...: No such file or directory 实踩）
 REMOTE_PACK=/data/data/com.termux/files/home/na-toolchain-aarch64-$STAMP.tar.zst

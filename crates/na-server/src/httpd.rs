@@ -36,7 +36,8 @@ pub fn sys_json(info: &na_sys::SysInfo) -> String {
 
 /// 日志落盘路径（env NA_REPORT_LOG 可改；缺省与 kfmv4 files.ts:378 同路径）
 pub fn report_log_path() -> String {
-    std::env::var("NA_REPORT_LOG").unwrap_or_else(|_| "/root/kfm-na/field-reports.log".into())
+    std::env::var("NA_REPORT_LOG")
+        .unwrap_or_else(|_| "/root/10-项目/kfm-na/field-reports.log".into())
 }
 
 /// 构造 HTTP/1.1 响应（A 档纯函数）

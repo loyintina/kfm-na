@@ -295,7 +295,7 @@ fn spec_常驻_unit内容与模式词() {
         "M4 反连腿常驻：UDP 62694 显式 0.0.0.0（特许公网仅这两腿）"
     );
     assert!(
-        u.contains("ExecStart=/root/kfm-na/target/release/na-server"),
+        u.contains("ExecStart=/root/10-项目/kfm-na/target/release/na-server"),
         "绝对路径（systemd 不吃相对路径）"
     );
     assert!(u.contains("WantedBy=multi-user.target"), "随机器自启");

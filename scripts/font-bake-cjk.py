@@ -85,7 +85,7 @@ FFFD_CPS = [0xFFFD]
 FP_DONOR = os.environ.get("FP_DONOR", "assets/fonts/FusionPixelMono12-gb2312.ttf")
 DEJAVU_MONO = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
 DEJAVU_SANS = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-EMOJI_DONOR = "/root/kfm-na-toolchain/fonts/NotoEmoji-Regular.ttf"
+EMOJI_DONOR = "/root/40-资产/kfm-na-toolchain/fonts/NotoEmoji-Regular.ttf"
 
 
 def keep_unicodes():

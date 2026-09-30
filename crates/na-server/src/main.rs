@@ -2,10 +2,10 @@
 //!
 //! 配置全走环境变量（主体拉起制：拉起命令由 na 给出，没有配置文件）：
 //! - NA_BIND            监听地址（缺省 127.0.0.1:9021，只准回环）
-//! - NA_REPORT_LOG      na-report 落盘路径（缺省 /root/kfm-na/field-reports.log）
+//! - NA_REPORT_LOG      na-report 落盘路径（缺省 /root/10-项目/kfm-na/field-reports.log）
 //! - NA_IDLE_EXIT_SECS  无连接无会话持续 N 秒自退（缺省 1800，0 = 永不）
 //! - NA_QUIC_BIND       QUIC 腿监听（可选，不设=不开；设计 docs/active/quic隧道.md）
-//! - NA_QUIC_CERT       QUIC 证书路径前缀（缺省 /root/kfm-na-certs/quic，
+//! - NA_QUIC_CERT       QUIC 证书路径前缀（缺省 /root/40-资产/kfm-na-certs/quic，
 //!   首跑自签落盘 {前缀}.der / {前缀}.key.der，并生成客户端证
 //!   预共享密钥 {前缀}.psk——开 QUIC 腿即强制 HMAC 挑战，设计 §四）
 //! - NA_QUIC_REV_BIND   M4 反连 QUIC 监听（可选，UDP 62694；9022 从 sshd
@@ -65,7 +65,8 @@ fn spawn_quic_leg() {
             "NA_QUIC_BIND 只准回环或显式 0.0.0.0，收到: {bind}"
         );
     }
-    let prefix = std::env::var("NA_QUIC_CERT").unwrap_or_else(|_| "/root/kfm-na-certs/quic".into());
+    let prefix =
+        std::env::var("NA_QUIC_CERT").unwrap_or_else(|_| "/root/40-资产/kfm-na-certs/quic".into());
     let (certs, key) = load_or_gen_cert(&prefix);
     let psk = load_or_gen_psk(&format!("{prefix}.psk"));
     eprintln!(
@@ -115,7 +116,8 @@ fn spawn_rev_quic_leg() {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(8024);
-    let prefix = std::env::var("NA_QUIC_CERT").unwrap_or_else(|_| "/root/kfm-na-certs/quic".into());
+    let prefix =
+        std::env::var("NA_QUIC_CERT").unwrap_or_else(|_| "/root/40-资产/kfm-na-certs/quic".into());
     let (certs, key) = load_or_gen_cert(&prefix);
     let psk = load_or_gen_psk(&format!("{prefix}.psk"));
     eprintln!(

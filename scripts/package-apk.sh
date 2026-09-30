@@ -25,13 +25,13 @@ if [ -d /data/data/com.termux ]; then
     # Termux 的 cc 原生就是 aarch64-linux-android clang，无需 NDK 交叉链
     LINKER=cc
 else
-    SDK=/root/kfm-na-toolchain/sdk
+    SDK=/root/40-资产/kfm-na-toolchain/sdk
     BT="$SDK/build-tools/34.0.0"
     AJAR="$SDK/platforms/android-35/android.jar"
-    JAVAC=/root/kfm-na-toolchain/jdk/bin/javac
+    JAVAC=/root/40-资产/kfm-na-toolchain/jdk/bin/javac
     # d8 包装脚本内部裸调 `java`（2026-09-08 实拍：javac 全路径过了，
     # d8 却 exec: java: not found）——jdk bin 进 PATH 治本
-    export PATH="/root/kfm-na-toolchain/jdk/bin:$PATH"
+    export PATH="/root/40-资产/kfm-na-toolchain/jdk/bin:$PATH"
     D8="$BT/d8"
     AAPT2="$BT/aapt2"
     ZIPALIGN="$BT/zipalign"
@@ -113,8 +113,8 @@ mkdir -p "$BUILD/classes" "$BUILD/dex" "$BUILD/stage/lib/arm64-v8a" target/relea
 BOOTSTRAP_ZIP="${KFM_BOOTSTRAP_ZIP:-}"
 if [ -z "$BOOTSTRAP_ZIP" ]; then
     for cand in \
-        /root/kfm-na-toolchain/termux-packages/output/bootstrap-aarch64.zip \
-        /root/kfm-na-toolchain/termux-packages/bootstrap-aarch64.zip \
+        /root/40-资产/kfm-na-toolchain/termux-packages/output/bootstrap-aarch64.zip \
+        /root/40-资产/kfm-na-toolchain/termux-packages/bootstrap-aarch64.zip \
         "$HOME/kfm-na-toolchain/bootstrap-aarch64.zip"; do
         [ -f "$cand" ] && BOOTSTRAP_ZIP="$cand" && break
     done

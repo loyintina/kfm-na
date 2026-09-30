@@ -2,7 +2,7 @@
 """anim-strip-png.py — 动画期回读抽帧串拼图（P3 渲染源真相，2026-09-07）。
 
 用法: python3 scripts/anim-strip-png.py [tail行数，默认 20000]
-读 /root/kfm-na/field-reports.log 里 [anim-strip] 行（gles_present.rs
+读 /root/10-项目/kfm-na/field-reports.log 里 [anim-strip] 行（gles_present.rs
 capture_report 分块外发），按 run 拼回原始 RGB，落 PNG 到 /tmp/anim-strip/。
 
 行格式: ts [anim-strip] frameIdx|w|h|chunkIdx|total|hexchunk
@@ -17,7 +17,7 @@ import sys
 import zlib
 from pathlib import Path
 
-LOG = Path("/root/kfm-na/field-reports.log")
+LOG = Path("/root/10-项目/kfm-na/field-reports.log")
 OUT = Path("/tmp/anim-strip")
 PAT = re.compile(r"^\S+ \[anim-strip\] (\d+)\|(\d+)\|(\d+)\|(\d+)\|(\d+)\|([0-9a-f]*)$")
 

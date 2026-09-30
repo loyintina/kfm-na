@@ -5,7 +5,7 @@
 #
 # 干三件事:
 #   ①触发 trace-req / stats-req,让沙箱把最新行踪环和统计快照落盘;
-#   ②把闸门目录的档案全量拉回 /root/kfm-na/autopsy/<时间戳>[-备注]/;
+#   ②把闸门目录的档案全量拉回 /root/10-项目/kfm-na/autopsy/<时间戳>[-备注]/;
 #   ③打印摘要:stats 全文 + panic.log 末行 + trace.txt 末五行。
 #
 # 适用:装机实测出了异常(卡死/闪退/输入失灵),一条命令收齐现场,
@@ -15,7 +15,7 @@ set -euo pipefail
 NA_TMP=/data/data/dev.kfm.na/files/usr/tmp
 TS="$(date +%Y%m%d-%H%M%S)"
 NOTE="${1:-}"
-DEST="/root/kfm-na/autopsy/$TS${NOTE:+-$NOTE}"
+DEST="/root/10-项目/kfm-na/autopsy/$TS${NOTE:+-$NOTE}"
 
 # shellcheck source=scripts/lib/na-ssh.sh
 source "$(dirname "$0")/lib/na-ssh.sh"
