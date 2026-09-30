@@ -5531,6 +5531,10 @@ impl App {
         else {
             return; // 没待机方：装作没发生(或没路由装配)
         };
+        // BAR-209①：切会话 = replay 补屏 + 对端重画洪峰的开端——与
+        // respawn_session 同规先进追赶（补屏/重播种字节喂格不置脏，
+        // 追平一帧跳底亮出；不挂 = 黑屏 2-3s+回显压制，0075 用户复现）
+        self.catchup.enter(crate::report::boot_ms());
         // 外置视口：切会话 = 换内容主体——v3 快照焚毁（旧会话画面不许
         // 串台）；v4 画布交还旧会话的池条目继续后台续喂（预热池：
         // 切窗不拆通道，切回零等待）。在途抓取一并作废
@@ -5913,19 +5917,12 @@ impl App {
             self.parser_refresh();
         }
         // 目标名单 = 真表 ∩ 容量帽 + 当前附着兜底（名单未落地/附着不在
-        // 表都要温当前会话）
-        let mut want_names: Vec<String> = self
-            .warm_names
-            .iter()
-            .take(WARM_POOL_CAP)
-            .cloned()
-            .collect();
+        // 表都要温当前会话）。
+        // BAR-209③：播种序 = 活动会话排头（自重启后全会话同时起播时，
+        // 用户正在看的先播种先点亮），其余保持真表原序；集合语义不变
         let cur = self.cur_attached();
-        if let Some(c) = &cur
-            && !want_names.contains(c)
-        {
-            want_names.push(c.clone());
-        }
+        let want_names =
+            crate::seed_sched::order_seed(&self.warm_names, WARM_POOL_CAP, cur.as_deref());
         // 缩：不在目标名单的条目拆壳（会话离表 = 服务器侧已灭）
         let extra: Vec<String> = self
             .warm_pool
@@ -5940,14 +5937,25 @@ impl App {
                 h.outbound.send(TermCmd::Close).ok();
             }
         }
+        // BAR-209③：在途播种并发帽——全会话同圈起播 = capture/构建
+        // 洪峰互踩滚雪球（0107 §二 实测第二批 96.5s）；活动会话不受
+        // 帽拦。扩臂养臂同吃一本账（单一口径 inflight_of）
+        let mut inflight: usize = self
+            .warm_pool
+            .values()
+            .map(|e| crate::seed_sched::inflight_of(e.ctrl.is_some(), e.feed.is_steady()))
+            .sum();
         // 扩：缺条目/通道死且过退避 → 起通道发播种（播种命令直接发——
-        // conn 层 Opened 前 Input 有缓存补发）
+        // conn 层 Opened 前 Input 有缓存补发）。到帽排队下圈再扩
         for name in &want_names {
             let dead = self
                 .warm_pool
                 .get(name)
                 .is_none_or(|e| e.ctrl.is_none() && now >= e.retry_ms);
             if !dead {
+                continue;
+            }
+            if !crate::seed_sched::admit_seed(inflight, cur.as_ref() == Some(name)) {
                 continue;
             }
             let Some(url) = self.remote_conn_cfg.as_ref().map(|c| c.url.clone()) else {
@@ -5969,12 +5977,14 @@ impl App {
             e.feed.reset();
             e.feed.seed_sent();
             e.seed_ms = now;
+            inflight += 1;
             crate::report::report(
                 "term",
                 &format!("推流画布 ctrl 开: {name}（播种发出·预热池）"),
             );
         }
-        // 养：逐条目重试/对账
+        // 养：逐条目重试/对账（同吃并发帽——冷启动后全体到档同圈齐发
+        // 也是滚雪球；活动会话恒放行）
         for (name, e) in &mut self.warm_pool {
             let Some(h) = &e.ctrl else { continue };
             let cadence = if Some(name) == cur.as_ref() {
@@ -5986,12 +5996,13 @@ impl App {
                 || (e.feed.pane().is_some()
                     && e.feed.is_steady()
                     && now.saturating_sub(e.seeded_ms) >= cadence);
-            if fire {
+            if fire && crate::seed_sched::admit_seed(inflight, cur.as_ref() == Some(name)) {
                 h.outbound
                     .send(TermCmd::Input(crate::tmux_ctl::cmd_ctrl_seed()))
                     .ok();
                 e.feed.seed_sent();
                 e.seed_ms = now;
+                inflight += 1;
                 crate::report::report(
                     "term",
                     &format!("推流画布播种发出: {name}（重试/对账·{cadence}ms 档）"),
@@ -6013,9 +6024,14 @@ impl App {
         );
     }
 
-    /// 条目通道拆除（判负回落/通道死）：Close 帧 + 通道/画布/相位/缓冲
-    /// 全清，条目壳留着（退避账在壳上，防死亡-重试空转刷屏）——v3
-    /// 轮询自动接管（ctrl_active 闸开）
+    /// 条目通道拆除（判负回落/通道死）：Close 帧 + 通道/相位/缓冲清，
+    /// 条目壳留着（退避账在壳上，防死亡-重试空转刷屏）——v3
+    /// 轮询自动接管（ctrl_active 闸开）。
+    /// BAR-209② 清场改对账续传：画布与对账账（last_cap）**不焚**——
+    /// 通道死 ≠ 画布死（断线重孵/attach 洪峰后旧画布仍是合法对账基，
+    /// 尺没变）：重播时 plan_reseed 前缀命中即尾块原位续长（免清场
+    /// 全量重建）；前缀不命中它自会判 Rebuild 回旧路保底。焚画布/
+    /// 焚账唯一口 = invalidate（换尺——旧尺画布留着就是错屏）
     fn ctrl_teardown(&mut self, name: &str, why: &str) {
         if let Some(e) = self.warm_pool.get_mut(name) {
             if let Some(h) = e.ctrl.take() {
@@ -6024,7 +6040,7 @@ impl App {
             e.feed.reset();
             e.pending.clear();
             e.build = None;
-            e.canvas = None;
+            e.build_cap = None; // 在途构建随拆作废（虚账不许赖着）
             e.retry_ms = crate::report::boot_ms() as u64 + 5000;
         }
         crate::report::report(
@@ -6511,6 +6527,10 @@ impl App {
         name: &'static str,
         new_cfg: &ConnConfig,
     ) -> Result<(), String> {
+        // BAR-209①：attach/脱离 = 换心脏重孵——与 respawn_session 同规
+        // 先进追赶（清场/重播种洪峰罩进静默窗，追平后一帧亮出；不挂 =
+        // 该路黑屏+回显压制，0075 定罪的漏网路）
+        self.catchup.enter(crate::report::boot_ms());
         if let Some(r) = self.router_handle() {
             r.lock().unwrap().send(TermCmd::Close);
         }

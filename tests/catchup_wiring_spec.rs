@@ -6,6 +6,20 @@ const APP: &str = include_str!("../src/android_app.rs");
 const LIB: &str = include_str!("../src/lib.rs");
 const TERMVIEW: &str = include_str!("../src/termview.rs");
 
+/// 源码取函数体（4 空格方法级）：从签名行到下一个同级 fn。接线钉
+/// 按函数粒度断言——全文件 contains 分不清同串挂在哪条路上
+fn fn_body<'a>(src: &'a str, sig: &str) -> &'a str {
+    let start = src
+        .find(sig)
+        .unwrap_or_else(|| panic!("源码里找不到 {sig}"));
+    let rest = &src[start..];
+    let end = rest[1..]
+        .find("\n    fn ")
+        .map(|i| i + 1)
+        .unwrap_or(rest.len());
+    &rest[..end]
+}
+
 #[test]
 fn spec_bar186_追赶接线守卫() {
     // ⓪ 模块归位：mod 不接线 = 纯逻辑件再绿也上不了车
@@ -29,11 +43,29 @@ fn spec_bar186_追赶接线守卫() {
         APP.contains("if !self.catchup.note_bytes(now, bytes.len()) {"),
         "v4 Feed 臂必须记字节量 + 追赶期抑制置脏"
     );
-    // ③ 显式入场钩：重连 = 重播种/重画风暴开端
-    assert!(
-        APP.contains("self.catchup.enter(crate::report::boot_ms());"),
-        "respawn_session 必须挂 catchup.enter（重连入场）"
-    );
+    // ③ 显式入场钩（BAR-209① 一扩三）：重连/attach/切会话三条重播种
+    //    风暴路都必须挂 catchup.enter——漏一条 = 该路清场黑屏+回显压制
+    //    复辟（0075 定罪：enter 只挂 respawn_session，另两路漏网）
+    for sig in [
+        "fn respawn_session(",
+        "fn respawn_named_with(",
+        "fn switch_session(",
+    ] {
+        let body = fn_body(APP, sig);
+        assert!(
+            body.contains("self.catchup.enter(crate::report::boot_ms());"),
+            "{sig} 必须挂 catchup.enter（重连/attach/切会话三路同入追赶）"
+        );
+    }
+    // enter 必须先于清场/补屏——追赶窗罩住整个风暴才有压帧意义
+    let body = fn_body(APP, "fn respawn_named_with(");
+    let enter_at = body.find("self.catchup.enter(").unwrap();
+    let clear_at = body.find("self.reset_modes_on_respawn(name)").unwrap();
+    assert!(enter_at < clear_at, "attach 路 enter 必须先于重孵清场");
+    let body = fn_body(APP, "fn switch_session(");
+    let enter_at = body.find("self.catchup.enter(").unwrap();
+    let feed_at = body.find("g.feed(chunk.as_bytes())").unwrap();
+    assert!(enter_at < feed_at, "切会话路 enter 必须先于 replay 补屏");
     // ④ 追平判据二：播种尾锚（画布安装）落地
     assert!(
         APP.contains("if self.catchup.anchor() == crate::catchup::CatchAct::Land {"),
@@ -154,5 +186,57 @@ fn spec_bar186_对账接线守卫() {
         TERMVIEW.contains("pub fn reseed(&mut self, tail: &[u8])")
             && TERMVIEW.contains("pub fn dump_all(&self) -> String"),
         "Canvas 必须有 reseed + dump_all（等价钉对账件）"
+    );
+}
+
+/// BAR-209② 重孵/判负不焚画布（清场改对账续传）接线守卫：通道死 ≠
+/// 画布死——尺没变，旧画布+对账账留着给下次播种做 plan_reseed 前缀
+/// 对账（命中 = 尾块原位续长免清场；不命中它自会判 Rebuild 回旧路
+/// 保底）。焚了 = 断线回播只能全量重建（57.8s 风暴旧路）。
+#[test]
+fn spec_bar209_对账续传接线守卫() {
+    // ① 判负拆除只拆通道：Close + 相位归零照旧，画布/对账账不许焚
+    let body = fn_body(APP, "fn ctrl_teardown(");
+    assert!(
+        body.contains("TermCmd::Close") && body.contains("e.feed.reset();"),
+        "ctrl_teardown 仍须关通道+相位归零（拆除本分不动）"
+    );
+    assert!(
+        !body.contains("e.canvas = None") && !body.contains("e.last_cap = None"),
+        "ctrl_teardown 不许焚画布/对账账（BAR-209②：留账对账续传）"
+    );
+    // ② 焚账唯一口 = invalidate（换尺）——旧律不动：尺变行宽变，
+    //    旧尺画布/旧账留着就是错屏
+    let inv = fn_body(APP, "fn invalidate(&mut self, now: u64)");
+    assert!(
+        inv.contains("self.canvas = None;") && inv.contains("self.last_cap = None;"),
+        "invalidate（换尺）必须仍是焚画布/焚对账账的唯一口"
+    );
+}
+
+/// BAR-209③ 播种风暴调度（活动排头 + 在途并发帽）接线守卫：自重启
+/// 后全会话同时起播 = capture/构建洪峰滚雪球（0107 §二 第二批 96.5s）
+#[test]
+fn spec_bar209_播种风暴接线守卫() {
+    // ⓪ 模块归位
+    assert!(
+        LIB.contains("pub mod seed_sched;"),
+        "lib.rs 必须接 pub mod seed_sched（播种调度纯逻辑件）"
+    );
+    let body = fn_body(APP, "fn ctrl_ensure(");
+    // ① 扩臂播种序必须走 order_seed（活动会话排头先点亮）
+    assert!(
+        body.contains("crate::seed_sched::order_seed("),
+        "ctrl_ensure 扩臂必须用 order_seed 排播种序（活动会话排头）"
+    );
+    // ② 扩臂与养臂都必须过 admit_seed 并发帽（缺一臂 = 该臂照滚雪球）
+    assert!(
+        body.matches("crate::seed_sched::admit_seed(").count() >= 2,
+        "ctrl_ensure 扩臂与养臂都必须过 admit_seed 并发帽"
+    );
+    // ③ 在途计数单一口径（各算各的 = 帽形同虚设）
+    assert!(
+        body.contains("crate::seed_sched::inflight_of("),
+        "ctrl_ensure 在途计数必须走 inflight_of 单一口径"
     );
 }

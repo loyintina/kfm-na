@@ -59,7 +59,8 @@ impl Catchup {
     }
 
     /// 显式入场：重连/发种/重播种窗口开始（壳在 seed_sent/respawn/
-    /// browse 重抓 处调）。重复入场 = 重新计窗，幂等无栈。
+    /// attach/切会话/browse 重抓 处调——BAR-209① 三路同规）。重复
+    /// 入场 = 重新计窗，幂等无栈。
     pub fn enter(&mut self, now_ms: u128) {
         self.phase = Phase::Catching;
         self.last_byte_ms = now_ms;
