@@ -34,10 +34,11 @@ pub fn sys_json(info: &na_sys::SysInfo) -> String {
     .to_string()
 }
 
-/// 日志落盘路径（env NA_REPORT_LOG 可改；缺省与 kfmv4 files.ts:378 同路径）
+/// 日志落盘路径（env NA_REPORT_LOG 可改；缺省 = 进程 cwd 下的
+/// `field-reports.log`——systemd unit 的 WorkingDirectory 即仓库根，等价于
+/// 仓库内落盘。2026-09-30 边界审计：原缺省写死作者机器绝对路径）
 pub fn report_log_path() -> String {
-    std::env::var("NA_REPORT_LOG")
-        .unwrap_or_else(|_| "/root/10-项目/kfm-na/field-reports.log".into())
+    std::env::var("NA_REPORT_LOG").unwrap_or_else(|_| "field-reports.log".into())
 }
 
 /// 构造 HTTP/1.1 响应（A 档纯函数）

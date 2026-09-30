@@ -11,7 +11,7 @@
 # 拉回前台。后台全程零断流 = 通过。
 #
 # 用法: bash scripts/test-bg-survival.sh [持续秒数,默认 120]
-# 前提: kalo 隧道活着(8022 Termux 控制面 + 闸门 na-ssh.sh),探针钥匙 /root/.ssh/na_probe_key
+# 前提: kalo 隧道活着(8022 Termux 控制面 + 闸门 na-ssh.sh),探针钥匙 $HOME/.ssh/na_probe_key
 set -uo pipefail
 
 # shellcheck source=scripts/lib/na-ssh.sh

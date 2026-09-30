@@ -2,7 +2,8 @@
 //!
 //! 背景（2026-08-13 实拍闪退）：手机走蜂窝/WiFi NAT，服务器 adb 反连不回去，
 //! logcat 拿不到。APK 的 panic 与启动里程碑改走 HTTP POST 直报 kfmv4 服务器
-//! （手机既然能下载 APK，就一定能回传），落盘 /root/10-项目/kfm-na/field-reports.log。
+//! （手机既然能下载 APK，就一定能回传），落盘（服务器侧 NA_REPORT_LOG，
+//! 缺省 = 进程 cwd 下的 field-reports.log）。
 //!
 //! 架构（第三版，血泪教训见下）：report() 只入队不触网，专用后台线程冲洗。
 //! - v1 fire-and-forget：单条丢失无法区分「没跑到」与「丢了」

@@ -1,5 +1,5 @@
 #!/bin/bash
-# mailbox.sh — na 信箱（/root/.kfm/session/信箱）执法闸（2026-09-29 立，
+# mailbox.sh — na 信箱（$HOME/.kfm/session/信箱）执法闸（2026-09-29 立，
 # kfmv4 JS 三件套 Rust 移植 mailbox-cli 落地，提案 0004）。
 #
 # 两道：
@@ -15,7 +15,7 @@
 set -u
 cd "$(dirname "$0")/../.." || exit 1
 
-MB="${KFM_NA_MAILBOX:-/root/.kfm/session/信箱}"
+MB="${KFM_NA_MAILBOX:-$HOME/.kfm/session/信箱}"
 if [ ! -d "$MB" ]; then
     echo "[mailbox.sh] 信箱目录不存在（$MB）——跳过（手机/新环境无此册）"
     exit 0

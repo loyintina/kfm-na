@@ -5,7 +5,20 @@
 /// 默认燃料：bigmodel-coding 的 glm-5.3-flash（coding 套餐）。工单拍板。
 pub const DEFAULT_PROVIDER: &str = "bigmodel-coding";
 pub const DEFAULT_MODEL: &str = "glm-5.3-flash";
-pub const DEFAULT_WORKDIR: &str = "/root/10-项目/kfm-na";
+/// 线工作目录缺省：env `NA_AGENT_WORKDIR` 优先，否则 `$HOME/kfm-na`
+/// （2026-09-30 边界审计：原缺省写死作者机器路径。只在**新建线**时取
+/// 缺省——已建线读各自 line.toml 的 workdir，不受影响）
+pub fn default_workdir() -> String {
+    std::env::var("NA_AGENT_WORKDIR").unwrap_or_else(|_| format!("{}/kfm-na", home()))
+}
+
+/// $HOME（缺省 `/root`——systemd 服务不设 HOME 时的 uid 0 习惯位；空串按未设算）
+fn home() -> String {
+    std::env::var("HOME")
+        .ok()
+        .filter(|h| !h.is_empty())
+        .unwrap_or_else(|| "/root".into())
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LineConfig {
@@ -21,7 +34,7 @@ impl LineConfig {
             created_at: created_at.to_string(),
             provider: DEFAULT_PROVIDER.into(),
             model: DEFAULT_MODEL.into(),
-            workdir: DEFAULT_WORKDIR.into(),
+            workdir: default_workdir(),
         }
     }
 

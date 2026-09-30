@@ -74,7 +74,7 @@ echo "    备用取包点：$PHONE_PICKUP/$NAME"
 echo "=== [deploy 收尾] 清 hot/ 旧热核（防盖住新包） ==="
 # shellcheck source=scripts/lib/na-ssh.sh
 source "$(dirname "$0")/lib/na-ssh.sh"
-if [ -f /root/.ssh/na_probe_key ] && na_ssh \
+if [ -f $HOME/.ssh/na_probe_key ] && na_ssh \
     'rm -f /data/data/dev.kfm.na/files/hot/libkfm_na.so' 2>/dev/null; then
     echo "    ✅ hot 旧核已清，新包启动即新核"
 else

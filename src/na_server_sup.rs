@@ -16,8 +16,14 @@ use std::sync::{Arc, Mutex, OnceLock};
 use crate::settings::ServerEntry;
 use crate::tunnel::{NA_SERVER_PORT, backoff_secs, check_ssh_fields};
 
-/// 服务器侧仓库路径（二进制建造与落点；v1 常量，多设备化时进 settings）
-pub const REPO_DIR: &str = "/root/10-项目/kfm-na";
+/// 服务器侧仓库根的环境变量口（二进制建造与落点；2026-09-30 边界审计：
+/// 原先写死作者机器路径，改 env 优先 + 中性缺省）。**由服务器侧 shell 展开**
+/// （ensure 脚本经 ssh 会话跑，机器侧设 /etc/environment 或 ssh 会话 env）
+pub const REPO_DIR_ENV: &str = "NA_SERVER_REPO_DIR";
+
+/// 缺省仓库根（中性形态：$HOME 下同名目录，不假定任何机器布局）——
+/// 服务器侧 shell 展开，故写的是 shell 文本而非已解析路径
+pub const REPO_DIR_FALLBACK: &str = "$HOME/kfm-na";
 
 /// 服务器本地 health 口（curl 探活只打回环——公网不可达是安全语义）
 pub const HEALTH_URL: &str = "http://127.0.0.1:9021/api/na/health";
@@ -44,7 +50,11 @@ pub const UNIT_NAME: &str = "kfm-na-server.service";
 /// 设计 quic隧道.md §九）：显式 0.0.0.0——特许公网的仅这两腿
 /// （双向认证齐备，设计 §四；安全组未放口前公网本就到不了，腿在 =
 /// 证书/客户端证已生成待接）
-pub fn unit_content() -> String {
+///
+/// `repo` = 服务器侧仓库根（WorkingDirectory/ExecStart 由它产出）。
+/// ensure 脚本在**服务器侧**解析后把 `"$REPO"` 传进来；考题传字面路径
+/// （绝对路径纪律不变）。
+pub fn unit_content(repo: &str) -> String {
     format!(
         r#"[Unit]
 Description=KFM-NA session backend (na-server · na 的常驻触手)
@@ -52,12 +62,12 @@ After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory={REPO_DIR}
+WorkingDirectory={repo}
 Environment=NA_BIND=127.0.0.1:{NA_SERVER_PORT}
 Environment=NA_IDLE_EXIT_SECS=0
 Environment=NA_QUIC_BIND=0.0.0.0:{QUIC_PORT}
 Environment=NA_QUIC_REV_BIND=0.0.0.0:{QUIC_REV_PORT}
-ExecStart={REPO_DIR}/target/release/na-server
+ExecStart={repo}/target/release/na-server
 Restart=always
 RestartSec=2
 StandardOutput=append:/var/log/kfm-na-server.log
@@ -66,7 +76,7 @@ StandardError=append:/var/log/kfm-na-server.log
 [Install]
 WantedBy=multi-user.target
 "#,
-        REPO_DIR = REPO_DIR,
+        repo = repo,
         NA_SERVER_PORT = NA_SERVER_PORT,
         QUIC_PORT = crate::settings::QUIC_DEFAULT_PORT,
         QUIC_REV_PORT = crate::settings::QUIC_REVERSE_PORT,
@@ -86,11 +96,17 @@ WantedBy=multi-user.target
 /// 照旧下发旧契约，负载轨白等一个口径。故源（na-server/na-sys 两侧 src）
 /// 有比二进制新的 .rs 就重建；在跑的老进程不动（等它自己 idle 退出或
 /// 下次拉起换新），绝不为了新契约掐别人的会话。
+///
+/// 仓库根的解析（2026-09-30 边界审计）：`NA_SERVER_REPO_DIR` env 优先，
+/// 缺省 `$HOME/kfm-na`——**在服务器侧展开**（`{REPO_LINE}` 生成的就是
+/// 那行 shell 赋值），故生成的 unit 落的是服务器真实路径，na 侧不带
+/// 任何作者机器布局。
 pub fn ensure_script() -> String {
     format!(
         r#"H={HEALTH_URL}
 UNIT=/etc/systemd/system/{UNIT_NAME}
-cd {REPO_DIR} || {{ echo {MARK_FAIL}; exit 1; }}
+{REPO_LINE}
+cd "$REPO" || {{ echo {MARK_FAIL}; exit 1; }}
 STALE=$(find crates/na-server/src crates/na-sys/src -name '*.rs' -newer target/release/na-server 2>/dev/null | head -1)
 if [ ! -x target/release/na-server ] || [ -n "$STALE" ]; then
   cargo build --release -p na-server >&2 || {{ echo {MARK_FAIL}; exit 1; }}
@@ -112,7 +128,9 @@ if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
     done
     sleep 1
   fi
-  cat > "$UNIT.new" <<'KFM_UNIT_EOF'
+  # 无引号 heredoc：$REPO 在**服务器侧**展开（unit 里落的是服务器真实路径）；
+  # 本模板不许再出现 $ 或反引号（会被服务器 shell 吃掉）
+  cat > "$UNIT.new" <<KFM_UNIT_EOF
 {UNIT_CONTENT}KFM_UNIT_EOF
   chmod 644 "$UNIT.new"
   if ! cmp -s "$UNIT.new" "$UNIT"; then mv "$UNIT.new" "$UNIT"; systemctl daemon-reload; fi
@@ -131,14 +149,21 @@ if curl -s -m 2 "$H" >/dev/null 2>&1; then echo {MARK_SPAWNED}; echo "mode=spawn
 "#,
         HEALTH_URL = HEALTH_URL,
         UNIT_NAME = UNIT_NAME,
-        UNIT_CONTENT = unit_content(),
+        REPO_LINE = repo_line(),
+        UNIT_CONTENT = unit_content("$REPO"),
         MARK_FAIL = MARK_FAIL,
-        REPO_DIR = REPO_DIR,
         NA_SERVER_PORT = NA_SERVER_PORT,
         QUIC_REV_PORT = crate::settings::QUIC_REVERSE_PORT,
         MARK_SYSTEMD = MARK_SYSTEMD,
         MARK_SPAWNED = MARK_SPAWNED,
     )
+}
+
+/// 服务器侧仓库根解析行（A 档纯函数）：env 优先 → 中性缺省。
+/// 展开发生在**服务器侧 shell**（不是 na 侧）——不同服务器的仓库位置
+/// 由各自机器侧 env 说了算，na 侧只管把口子摆出去
+fn repo_line() -> String {
+    format!("REPO=\"${{{REPO_DIR_ENV}:-{REPO_DIR_FALLBACK}}}\"")
 }
 
 /// ssh exec 参数（A 档纯函数）：脚本走 stdin（`bash -s`），参数面与

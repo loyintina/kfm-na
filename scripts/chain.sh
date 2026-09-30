@@ -17,8 +17,10 @@ if [ -z "$KFM_CHAIN_NICED" ]; then
     # 2026-08-21 增：整链同时进独立 cgroup「kfm-builds」（内存隔离，评审代接）——
     # 编译尖峰只在自己桶里互杀，不再与三线 agent 共享内存账（OOM 连坐可防）。
     # helper 在 kfmv4 侧（共享本机构建基础设施）；缺失/不可写则回退纯 nice。
-    if [ -x /root/10-项目/kfmv4/scripts/build-enter-cgroup.sh ] && [ -w /sys/fs/cgroup/agent.slice ]; then
-        KFM_CHAIN_NICED=1 exec bash /root/10-项目/kfmv4/scripts/build-enter-cgroup.sh nice -n 10 ionice -c2 -n7 bash "$0" "$@"
+    # 位置 env 可覆盖（KFM_V4_CGROUP_HELPER），缺省 $HOME 下同级项目。
+    V4_CGROUP_HELPER="${KFM_V4_CGROUP_HELPER:-$HOME/10-项目/kfmv4/scripts/build-enter-cgroup.sh}"
+    if [ -x "$V4_CGROUP_HELPER" ] && [ -w /sys/fs/cgroup/agent.slice ]; then
+        KFM_CHAIN_NICED=1 exec bash "$V4_CGROUP_HELPER" nice -n 10 ionice -c2 -n7 bash "$0" "$@"
     elif command -v ionice >/dev/null 2>&1; then
         KFM_CHAIN_NICED=1 exec nice -n 10 ionice -c2 -n7 bash "$0" "$@"
     else
@@ -71,7 +73,7 @@ grep -q 'check-fix-instrument' .githooks/commit-msg || { echo "❌ commit-msg �
 [ -x scripts/check/test-bar-new.sh ] || { echo "❌ test-bar-new.sh 缺失或不可执行（BAR-189 领号考题不许静默退化）"; exit 1; }
 
 echo "=== [chain 4/13] na 信箱执法（mailbox.sh） ==="
-# 2026-09-29 第 4 步：na 信箱（/root/.kfm/session/信箱）全册 verify +
+# 2026-09-29 第 4 步：na 信箱（$HOME/.kfm/session/信箱）全册 verify +
 # gen --check-only（信箱目录不存在的双环境自动跳过）。工具链 =
 # mailbox-core/mailbox-cli（kfmv4 JS 三件套 Rust 移植，提案 0004）
 bash scripts/check/mailbox.sh || { echo "❌ na 信箱执法不过"; exit 1; }
@@ -96,7 +98,7 @@ echo "=== [chain 8/13] cargo check --target aarch64-linux-android ==="
 # ring（rustls 后端）是第一个要编 C 的依赖：build.rs 找 aarch64-linux-android-clang，
 # 服务器得指 NDK；手机 Termux 的 cc 原生就是目标三元组，无需指（2026-08-31）
 if [ ! -d /data/data/com.termux ]; then
-    NDK_BIN=/root/40-资产/kfm-na-toolchain/sdk/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64/bin
+    NDK_BIN="${KFM_NA_TOOLCHAIN:-$HOME/40-资产/kfm-na-toolchain}/sdk/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64/bin"
     export CC_aarch64_linux_android="$NDK_BIN/aarch64-linux-android24-clang"
     export AR_aarch64_linux_android="$NDK_BIN/llvm-ar"
     export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$NDK_BIN/aarch64-linux-android24-clang"
@@ -111,8 +113,9 @@ if [ -d /data/data/com.termux ]; then
     JAVAC=javac
     AJAR="$HOME/kfm-na-toolchain/android.jar"
 else
-    JAVAC=/root/40-资产/kfm-na-toolchain/jdk/bin/javac
-    AJAR=/root/40-资产/kfm-na-toolchain/sdk/platforms/android-35/android.jar
+    TOOLCHAIN="${KFM_NA_TOOLCHAIN:-$HOME/40-资产/kfm-na-toolchain}"
+    JAVAC="$TOOLCHAIN/jdk/bin/javac"
+    AJAR="$TOOLCHAIN/sdk/platforms/android-35/android.jar"
 fi
 rm -rf build/java-check && mkdir -p build/java-check
 "$JAVAC" -source 8 -target 8 \

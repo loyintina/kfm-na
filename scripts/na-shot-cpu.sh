@@ -2,7 +2,7 @@
 # na-shot-cpu.sh — 强制 CPU 路截屏（GLES 回读本机 180° 翻转，判卷用正立帧）
 set -euo pipefail
 source "$(dirname "$0")/lib/gate-lib.sh"
-PY=/root/.venvs/font/bin/python
+PY=$HOME/.venvs/font/bin/python
 gate "rm -f $NA_TMP/shot.rgb $NA_TMP/shot.dim; touch $NA_TMP/shot-req" >/dev/null
 ok=""
 for _ in $(seq 1 20); do

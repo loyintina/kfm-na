@@ -10,7 +10,8 @@
 
 set -euo pipefail
 
-BIN=${BIN:-/root/10-项目/kfm-na/target/debug/examples/quic_echo}
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+BIN=${BIN:-$REPO/target/debug/examples/quic_echo}
 NS_A=naq-a
 NS_R=naq-r
 PORT=9943

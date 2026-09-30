@@ -256,42 +256,33 @@ fn spec_bar079_缝重播踢_中继三态() {
     seam::replay_config_panel_offset_x(1260.0, 100); // 无占槽空操作（入账）
 }
 
-// Demo 缝（第六道，2026-09-26 五公民）入账钉：occupy/sample/active/
-// replay/release 五件全链——无占槽 sample 直通目标值（硬切语义）；
-// 占槽后 sample/active 改吃占槽件读数；replay 踢必达且参数原样；
-// 拔槽回直通。变异抽检：sample 漏接占槽件（恒直通）→ 第 3 条红；
-// active 恒 false → 第 4 条红。
+// BAR-207 反向钉：Demo 缝（原第六道，2026-09-26 五公民随打样页
+// 退役）整族必须死透——seam 件/占槽调用点/活性口径三路源码面钉，
+// 复活任一路 = 已死面板的缝槽空转
 #[test]
-fn spec_demo缝_占槽直通与重播踢() {
-    use kfm_na::ui::seam;
-    use std::sync::{Arc, Mutex};
-    seam::release_demo_panel_offset_x(); // 防前题残槽
-    // 无占槽：直通目标值（硬切），活性 false
-    assert_eq!(seam::sample_demo_panel_offset_x(7.0, 0), 7.0);
-    assert!(!seam::demo_panel_offset_x_active());
-    // 占槽：sample/active 吃占槽件读数；replay 踢必达
-    let got = Arc::new(Mutex::new(None));
-    let got2 = Arc::clone(&got);
-    seam::occupy_demo_panel_offset_x(seam::Occupier {
-        sampler: Arc::new(|t, _| t * 2.0),
-        is_active: Arc::new(|| true),
-        replay: Some(Arc::new(move |off: f32, now: u64| {
-            *got2.lock().unwrap() = Some((off, now));
-        })),
-    });
-    assert_eq!(seam::sample_demo_panel_offset_x(7.0, 0), 14.0);
-    assert!(seam::demo_panel_offset_x_active());
-    seam::replay_demo_panel_offset_x(1260.0, 100);
-    assert_eq!(*got.lock().unwrap(), Some((1260.0, 100)), "踢必达占槽件");
-    // 拔槽：回直通
-    seam::release_demo_panel_offset_x();
-    assert_eq!(seam::sample_demo_panel_offset_x(7.0, 0), 7.0);
+fn spec_bar207_demo缝死透() {
+    let seam = include_str!("../src/ui/seam.rs");
+    assert!(
+        !seam.contains("demo_panel_offset_x"),
+        "seam Demo 缝整族必须随葬（BAR-207）"
+    );
+    let fx = include_str!("../src/plugins/ui_fx.rs");
+    assert!(
+        !fx.contains("demo_panel_offset_x"),
+        "ui_fx 不许再占 Demo 缝槽（BAR-207）"
+    );
+    let app = include_str!("../src/android_app.rs");
+    assert!(
+        !app.contains("demo_panel_offset_x") && !app.contains("Panel::Demo"),
+        "壳层 Demo 缝采样/面板引用必须死透（BAR-207）"
+    );
 }
 
-// Reader 缝（第七道，2026-09-27 BAR-170 六公民）入账钉：与 Demo 缝
-// 同款五件全链——阅读页右缘拖拽推回的采样缝；无占槽直通目标值，占槽
-// 后 sample/active 吃占槽件，replay 踢必达，拔槽回直通。变异抽检同
-// Demo 款：sample 漏接占槽件 → 第 3 条红；active 恒 false → 第 4 条红。
+// Reader 缝（第六道，2026-09-27 BAR-170 五公民；2026-09-30 BAR-207
+// Demo 缝退役顺位）入账钉：occupy/sample/active/replay/release 五件
+// 全链——无占槽直通目标值（硬切语义）；占槽后 sample/active 吃占槽件，
+// replay 踢必达，拔槽回直通。变异抽检：sample 漏接占槽件 → 第 3 条红；
+// active 恒 false → 第 4 条红。
 #[test]
 fn spec_reader缝_占槽直通与重播踢() {
     use kfm_na::ui::seam;

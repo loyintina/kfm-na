@@ -1,5 +1,5 @@
 //! CLI 端到端 golden 对表：真跑编译产物，产物与 JS 三件套实跑抄录件逐字节比。
-//! 全程不依赖 /root/kfmv4 与 /root/.kfm（手机 Termux 也跑 chain）——名册/状态词表走 fixture。
+//! 全程不依赖 kfmv4 与 $HOME/.kfm（手机 Termux 也跑 chain）——名册/状态词表走 fixture。
 
 use std::fs;
 use std::path::{Path, PathBuf};

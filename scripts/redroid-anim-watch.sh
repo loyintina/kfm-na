@@ -12,8 +12,8 @@
 # 配套逻辑真相：panc 遥测（na-trace.sh，按时间戳过滤——环是 256 帽
 # 滚动副本，rm trace.txt 不清环，旧帧会混进来，2026-09-16 仪器病实锤）
 set -euo pipefail
-ADB=/root/40-资产/kfm-na-toolchain/sdk/platform-tools/adb
-PY=/root/.venvs/video/bin/python
+ADB=$HOME/40-资产/kfm-na-toolchain/sdk/platform-tools/adb
+PY=$HOME/.venvs/video/bin/python
 DEV=${REDROID_SERIAL:-localhost:5555}
 CASE=${1:?用法: page|upper|custom 'cmds'}
 OUT=/tmp/redroid-anim/$CASE

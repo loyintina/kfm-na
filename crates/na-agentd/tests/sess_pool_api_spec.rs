@@ -187,8 +187,8 @@ fn spec_bar167_端点_inbox映射表failclosed() {
     let (_t, svc) = fixture();
     assert!(svc.inbox_root("mailbox").is_some(), "旧 key 保留");
     assert_eq!(
-        svc.inbox_root("agent-inbox").as_deref(),
-        Some(na_agentd::service::AGENT_INBOX_ROOT),
+        svc.inbox_root("agent-inbox"),
+        Some(na_agentd::service::agent_inbox_root()),
         "全局评审信箱根"
     );
     // 不在表里的 key 一律 None（fail-closed，不开任意路径口）
@@ -387,8 +387,8 @@ fn spec_bar212_端点_两册新key映射() {
     // 旧两 key 不动
     assert!(svc.inbox_root("mailbox").is_some());
     assert_eq!(
-        svc.inbox_root("agent-inbox").as_deref(),
-        Some(na_agentd::service::AGENT_INBOX_ROOT)
+        svc.inbox_root("agent-inbox"),
+        Some(na_agentd::service::agent_inbox_root())
     );
     // fail-closed 不变：不在表里的 key 一律 None → 404 语义
     assert!(svc.inbox_root("etc").is_none());
