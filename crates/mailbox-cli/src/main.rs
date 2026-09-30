@@ -10,8 +10,9 @@
 //!   reticket  <信件路径> --new-name <新文件名>  改名换票（契约 §八改名窗口：
 //!             状态非待*/两册有复信即拒，--force 逃生留痕；na 册收尾直接回写投影）
 //!   withdraw  <信路径> --reason "…" [--by 名字] [--force] [--peer 对等册]
-//!             撤信 = 撤回票（契约 §八 第 9 条，BAR-185 照共享向量同制）：
-//!             零回应窗口 + 作者/代撤权限 + git mv 移档 archive-withdrawn/ +
+//!             撤信 = 撤回票（契约 §八 第 9 条，BAR-193 照共享向量 v2 同制）：
+//!             零回应窗口（看回应事实不看状态词，0034 裁）+ 作者/代撤权限 +
+//!             git mv 移档 archive-withdrawn/ +
 //!             台账原位 revokedAt（不带 renamedFrom）+ 信末撤回行 + gen 投影
 //!
 //! 公共选项：--mailbox / --roster / --name-prefix / --v1-manifest /
@@ -1410,18 +1411,16 @@ fn cmd_withdraw(args: &Args) {
 
     let _lock = acquire_book_lock(p, &mailbox);
 
-    // ---- ① 窗口校验：状态必须「待*」（零回应）＋两册（本册＋对等册）无「复: <本编号>」 ----
-    let status_raw = mailbox_core::header::header_get(&hdr, "状态")
-        .unwrap_or_else(|| die(p, &format!("该信信封无「状态」字段，判不了窗口：{file}")));
-    if !mailbox_core::status::status_is_pending(status_raw) {
-        let head: String = status_raw.chars().take(24).collect();
+    // ---- ① 窗口校验：判据 = 事实上的零回应（本册＋对等册＋归档里无「复: <本编号>」） ----
+    //   状态词不是判据（2026-09-30 白露 0034 裁决，起因 0052）：状态是「零回应」的代理
+    //   变量而非回应事实——0052 的状态是作者自己写的处分动作，不是「有人回应」。非 待*
+    //   时打一行注意照常执行（留痕在案，不悄悄放行）。口径见契约 §八 第 9 条②补注。
+    let status_raw = mailbox_core::header::header_get(&hdr, "状态").unwrap_or_else(|| {
         die(
             p,
-            &format!(
-                "窗口已过：状态「{head}…」非「待*」（零回应）——有回应后不可撤回，撤回会抹掉别人的回应（契约 §八 第 9 条②）"
-            ),
-        );
-    }
+            &format!("该信信封无「状态」字段：{file}（状态是必填字段，契约 §三）"),
+        )
+    });
     // 对等册（§六 跨册口径）：回应可能落在别册，故两册都要扫。缺省两册写死；--peer 覆盖
     let peer_args = args.all("peer");
     let mut book_list: Vec<PathBuf> = vec![mailbox.clone()];
@@ -1487,6 +1486,12 @@ fn cmd_withdraw(args: &Args) {
                 "窗口已过：已有对该信（{full_no}）的回应——撤回会抹掉别人的回应（契约 §八 第 9 条②）：\n  {}",
                 replies.join("\n  ")
             ),
+        );
+    }
+    if !mailbox_core::status::status_is_pending(status_raw) {
+        let shown: String = status_raw.chars().take(60).collect();
+        eprintln!(
+            "[{p}] 注意 — 该信状态「{shown}」非「待*」，但不作判据：窗口看**事实上的零回应**（无人以 复:{bare_no} 回应），撤回照准（契约 §八 第 9 条②，2026-09-30 裁决）"
         );
     }
 
@@ -1656,7 +1661,8 @@ fn cmd_withdraw(args: &Args) {
     // ---- ⑦ 通告提示 ----
     println!("[{p}] ✓ 撤回完成：{file}（编号 {full_no}）");
     println!(
-        "  ① 窗口：状态「待*」（零回应）＋ 两册（{}）无「复: {bare_no}」",
+        "  ① 窗口：状态「{}」（零回应）＋ 两册（{}）无「复: {bare_no}」",
+        mailbox_core::status::status_bare(status_raw),
         book_list
             .iter()
             .map(|b| b.display().to_string())
@@ -1712,7 +1718,8 @@ const USAGE: &str = "mailbox-cli — kfm-na 信箱工具链（逻辑核 mailbox-
                           不受窗口限制，revokeReason 必带「格式性勘误（契约 §八 第 8 条）」）
   mailbox-cli withdraw <信路径> --reason \"<理由>\" [--by <名字>] [--force] [--peer <对等册路径>]
                           撤信 = 整封作废（撤回票，契约 §八 第 9 条；非「撤销票/换票」——
-                          无替补、不带 renamedFrom）：①窗口校验（状态须待* + 两册无复信；
+                          无替补、不带 renamedFrom）：①窗口校验（两册无复信——回应事实，
+                          不看状态词；状态非待* 打注意行照准（0034 裁）；
                           缺省对等册 = 主册与 na 册，--peer 覆盖）②权限（作者自撤；--by
                           非作者须 --force，代撤理由落台账，信末署名取名册 primary 职能）
                           ③移档 git mv 进 archive-withdrawn/（只移不删，未 git add 即拒，

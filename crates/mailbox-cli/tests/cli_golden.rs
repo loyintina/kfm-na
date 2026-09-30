@@ -1142,9 +1142,12 @@ const WD_FIX: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/withdr
 const WD_NOW_LOCAL: &str = "2026-09-29 23:27 +08:00"; // JS 实跑撤回行戳
 const WD_NOW_UTC: &str = "2026-09-29T15:27:23.713Z"; // JS 实跑台账 revokedAt
 const WD1: &str = "0001号白露致研究部清和的通报.md"; // 零回应（阳性）
-const WD2: &str = "0002号白露致研究部清和的通报.md"; // 已有回应（阴性①）
+const WD2: &str = "0002号白露致研究部清和的通报.md"; // 待回信＋已有回应（阴性①/③）
 const WD3: &str = "0003号清和致评审部白露复0002的回信.md"; // 0002 的回应件
-const WD4: &str = "0004号白露致研究部清和的通报.md"; // 状态已回（阴性③）
+const WD4: &str = "0004号白露致研究部清和的通报.md"; // 状态已回、零回应（阳性乙，v2）
+const WD4_NOW_LOCAL: &str = "2026-09-30 08:10 +08:00"; // JS 实跑撤回行戳（阳性乙）
+const WD4_NOW_UTC: &str = "2026-09-30T00:10:19.516Z"; // JS 实跑台账 revokedAt（阳性乙）
+const WD4_STATUS: &str = "已回（2026-09-29 23:31 +08:00 研究部清和 更新：夹具状态已翻）";
 const WD5: &str = "0005号白露致研究部清和的通报.md"; // 跨册回应（阴性①b）
 const WD_PEER_LETTER: &str = "0001号清和致评审部白露复MAIN0005的回信.md";
 
@@ -1325,8 +1328,9 @@ fn withdraw_byte_exact() {
     let _ = fs::remove_dir_all(&d);
 }
 
-/// 阴性三例＋跨册（向量 §2，诱饵实咬）：已有回应拒并列出回应件名／跨册回应拒
-/// 并指出哪一册／非作者无 --force 拒／非待* 状态拒并指出当前状态
+/// 阴性三例＋跨册（向量 §2 v2，诱饵实咬）：已有回应拒并列出回应件名／跨册回应拒
+/// 并指出哪一册／非作者无 --force 拒／待*但已有回应拒（回应扫描在岗证明——
+/// v1 旧③「非待*即拒」已于 v2 作废，状态词两边都不出场）
 #[test]
 fn spec_bar193_withdraw_阴性三例与跨册() {
     // ① 已有回应（0002，0003 复它）→ 拒，列出回应件名；台账/文件分毫不动
@@ -1403,7 +1407,37 @@ fn spec_bar193_withdraw_阴性三例与跨册() {
         "报错须点名代撤规矩：{stderr}"
     );
 
-    // ③ 非待* 状态（0004 = 已回）→ 拒，指出当前状态
+    // ③（v2 新义：向量 §2 ③位）状态为 待* 但已有回应（0002 = 待回信＋0003 复它）
+    // → 拒，列出回应件名——证明取消状态硬拦之后回应扫描仍在岗
+    let out = run(&[
+        "withdraw",
+        d.join(WD2).to_str().unwrap(),
+        "--mailbox",
+        &mb,
+        "--roster",
+        ROSTER,
+        "--peer",
+        &peer_s,
+        "--reason",
+        "阴性③",
+    ]);
+    assert_fail(&out, "BAR-193 阴性③待*但已有回应必须拒（回应扫描在岗）");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("窗口已过：已有对该信（0002）的回应") && stderr.contains(WD3),
+        "报错须列出回应件名（状态词两边都不出场）：{stderr}"
+    );
+    let _ = fs::remove_dir_all(&d);
+}
+
+/// 阳性乙（向量 v2 §1b，0052 形态）：状态非 待*（0004 = 已回）但两册零回应 → 准；
+/// 注意行（stderr）与 ① 行状态原文照 JS 实跑抄录；产物四件与 golden 逐字节比
+#[test]
+fn spec_bar193_withdraw_状态非待但零回应照准() {
+    let (d, peer) = setup_withdraw_book("wd-pos2");
+    let mb = d.to_str().unwrap().to_string();
+    let peer_s = peer.to_str().unwrap().to_string();
+    let original = read(&d.join(WD4));
     let out = run(&[
         "withdraw",
         d.join(WD4).to_str().unwrap(),
@@ -1414,13 +1448,77 @@ fn spec_bar193_withdraw_阴性三例与跨册() {
         "--peer",
         &peer_s,
         "--reason",
-        "阴性③",
+        "夹具阳性乙：状态非待*但零回应（0052 形态）",
+        "--now-local",
+        WD4_NOW_LOCAL,
+        "--now-utc",
+        WD4_NOW_UTC,
     ]);
-    assert_fail(&out, "BAR-193 阴性③非待*状态必须拒");
+    assert_ok(
+        &out,
+        "BAR-193 阳性乙：状态非待*但零回应必须照准（v1 口径此处必拒）",
+    );
+    // 留痕注意行（stderr，语义 = 不悄悄放行；文案照 JS 实跑抄录，仅前缀器名不同）
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("窗口已过：状态「已回") && stderr.contains("非「待*」"),
-        "报错须指出当前状态：{stderr}"
+        stderr.contains(&format!(
+            "注意 — 该信状态「{WD4_STATUS}」非「待*」，但不作判据：窗口看**事实上的零回应**（无人以 复:0004 回应），撤回照准（契约 §八 第 9 条②，2026-09-30 裁决）"
+        )),
+        "非待* 须打注意行（状态原文＋不作判据＋依据条号）：{stderr}"
+    );
+    // ① 行打实际状态原文（0034 §一 文案对齐：不打「待*」字面）
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains(&format!("① 窗口：状态「{WD4_STATUS}」（零回应）")),
+        "① 行须打实际状态原文：{stdout}"
+    );
+    // 断言 1/5：移档＋撤回行定式、行前字节不动
+    let moved = d.join("archive-withdrawn").join(WD4);
+    assert!(
+        moved.is_file() && !d.join(WD4).exists(),
+        "移档 archive-withdrawn/"
+    );
+    let withdrawn = read(&moved);
+    assert!(withdrawn.starts_with(&original), "撤回行之前字节不动");
+    let seal = String::from_utf8_lossy(&withdrawn[original.len()..]);
+    assert_eq!(
+        seal,
+        format!(
+            "——撤回：{WD4_NOW_LOCAL} 评审部白露——原信作废，理由：夹具阳性乙：状态非待*但零回应（0052 形态）\n"
+        ),
+        "撤回行定式"
+    );
+    // 断言 2/3/4：四产物与 JS 实跑抄录 golden 逐字节比
+    let golden = Path::new(GOLDEN);
+    assert_bytes_eq(
+        &withdrawn,
+        &read(&golden.join("withdraw4_letter.md")),
+        "撤回件",
+    );
+    assert_bytes_eq(
+        &read(&d.join("letter-tokens.jsonl")),
+        &read(&golden.join("withdraw4_tokens.jsonl")),
+        "台账（原位 revoked，无 renamedFrom）",
+    );
+    assert_bytes_eq(
+        &read(&d.join("README.md")),
+        &read(&golden.join("withdraw4_README.md")),
+        "README 投影",
+    );
+    assert_bytes_eq(
+        &read(&d.join("letters-index.jsonl")),
+        &read(&golden.join("withdraw4_index.jsonl")),
+        "派生索引（dir:\"withdrawn\"）",
+    );
+    // 断言 6/7：verify/gen 链绿＋计数口径
+    let v = run(&["verify", "--mailbox", &mb, "--roster", ROSTER]);
+    assert_ok(&v, "阳性乙后 verify 全册绿");
+    let g = run(&["gen", "--mailbox", &mb, "--roster", ROSTER, "--check-only"]);
+    assert_ok(&g, "阳性乙后 gen --check-only 绿");
+    let gout = String::from_utf8_lossy(&g.stdout);
+    assert!(
+        gout.contains("OK — 5 封信台账投影与机读头一致（在册 5 + 归档 0 + 撤回 1）"),
+        "9.0 计数口径不含撤回件：{gout}"
     );
     let _ = fs::remove_dir_all(&d);
 }
