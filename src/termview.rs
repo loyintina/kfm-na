@@ -5554,9 +5554,9 @@ impl TermView {
             cclip32,
         );
         // 连接段两字段行（目标/本地口——2026-09-30 BAR-212 用户拍板：
-        // 重拉/错误两行退役；字段标签列配方：标签左对齐亮档、值逐行
-        // 右对齐灰档——draw_field_lines_grid 自带 1.5 格文内边距与
-        // ≤2 行折行（BAR-196 网格引擎尺））
+        // 重拉/错误两行退役；字段标签列配方：标签左对齐亮档、值右锚
+        // 灰档。BAR-206：目标地址类长串恒定单行——中段省略（头尾双锚）
+        // 不折行（折行第二行纵溢出行盒），硬裁无省略号退役）
         let values = [&csnap.target, &csnap.local];
         for (i, fr) in llay.lfields.iter().enumerate() {
             self.draw_field_lines_grid(
@@ -5571,9 +5571,14 @@ impl TermView {
                 cclip32,
                 true,
             );
+            let v = self.field_value_elided(
+                values[i].as_str(),
+                fr.w,
+                crate::ui::conn_card::FIELD_LABELS[i],
+            );
             self.draw_field_lines_grid(
                 &mut frame,
-                values[i].as_str(),
+                &v,
                 (fr.x + off) as u32,
                 fr.w,
                 fr.y as u32,
@@ -5652,9 +5657,11 @@ impl TermView {
             } else {
                 meta_fg
             };
+            // BAR-206：同字段值单行契约（长状态句中段省略不折行）
+            let v = self.field_value_elided(v, fr.w, crate::ui::svc_card::FIELD_LABELS[i]);
             self.draw_field_lines_grid(
                 &mut frame,
-                v,
+                &v,
                 (fr.x + off) as u32,
                 fr.w,
                 fr.y as u32,
@@ -5764,13 +5771,19 @@ impl TermView {
             POOL_FRAME_R,
             true,
         );
-        // 卡头「环境 · 对象词」（有数据才亮标题档——占位是次级信息）
+        // 卡头「环境 · 对象词」（有数据才亮标题档——占位是次级信息）；
+        // BAR-206：对象词 = 目标主机地址类长串，装不下走中段省略（头尾
+        // 双锚认得出是哪台），硬裁无省略号退役
         let header_fg = if xrows.metrics.is_empty() && !xrows.uptime {
             meta_fg
         } else {
             title_fg
         };
-        let (hitems, _) = self.measure_items_grid(&format!("环境 · {}", xsnap.word));
+        let htext = crate::ui::grid_text::elide_middle(
+            &format!("环境 · {}", xsnap.word),
+            xlay.header.w.saturating_sub(CELL_W) / self.cell_w.max(1),
+        );
+        let (hitems, _) = self.measure_items_grid(&htext);
         self.draw_grid_text_left(
             &mut frame,
             &hitems,
@@ -5801,9 +5814,16 @@ impl TermView {
                 xclip32,
                 true,
             );
+            // BAR-206：值恒定单行——长值（磁盘数字类）中段省略不折行
+            // （折行第二行纵溢出行盒，被下面的柱轨层盖住 = 「被遮住」）
+            let v = self.field_value_elided(
+                crate::ui::sys_card::metric_value(&xsnap, kind),
+                md.row.w,
+                crate::ui::sys_card::metric_label(kind),
+            );
             self.draw_field_lines_grid(
                 &mut frame,
-                crate::ui::sys_card::metric_value(&xsnap, kind),
+                &v,
                 (md.row.x + off) as u32,
                 md.row.w,
                 md.row.y as u32,
@@ -5841,9 +5861,15 @@ impl TermView {
                 xclip32,
                 true,
             );
+            // BAR-206：同字段值单行契约（长在线时长中段省略不折行）
+            let v = self.field_value_elided(
+                xsnap.uptime.as_str(),
+                tr.w,
+                crate::ui::sys_card::TAIL_LABEL,
+            );
             self.draw_field_lines_grid(
                 &mut frame,
-                xsnap.uptime.as_str(),
+                &v,
                 (tr.x + off) as u32,
                 tr.w,
                 tr.y as u32,
@@ -8854,6 +8880,23 @@ impl TermView {
             }
             pen_x += adv;
         }
+    }
+
+    /// 字段行值整形（BAR-206 解析页长值截断/纵溢治理）：字段行盒高恒定
+    /// 2 格（FIELD_H = ROW_H），折行进第二行 = meta 线盒 2×cell_h×scale
+    /// ×4/3（真机 ≈102px）纵溢出行盒压到柱轨/下一行（用户报障「磁盘后面
+    /// 的数字被遮住」）——故字段值**恒定单行不折行**，装不下的长值
+    /// （对象地址/磁盘数字/隧道目标）走中段省略：头尾保真、中间 …。
+    /// 预算格数 = 行内宽（扣双侧 1.5 格文内边距）折格 − 标签格 − 1 格
+    /// 间隔（值右锚/标签左锚同盒共宽，不许贴墨）。格步进不吃 meta 缩字
+    /// （measure_items_grid_scaled 步进恒 = char_cells × cell_w），故格数
+    /// 预算 ≡ px 内宽 ÷ 实例格宽，省略后即单行（钉：
+    /// grid_text_spec spec_elide_middle_bar206_省略后恒定单行）
+    pub(crate) fn field_value_elided(&self, text: &str, cw: u32, label: &str) -> String {
+        let inner = cw.saturating_sub(crate::ui::cfg_page::FIELD_TEXT_INSET * 2);
+        let total = inner / self.cell_w.max(1);
+        let label_cells = crate::ui::grid_text::grid_text_cells(label);
+        crate::ui::grid_text::elide_middle(text, total.saturating_sub(label_cells + 1))
     }
 
     /// 字段框文涂装·网格引擎版（BAR-196：draw_field_lines 收编退役——

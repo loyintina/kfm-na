@@ -13,6 +13,8 @@
 //!    零宽/组合符（U+200B、U+0300 段）——引擎 2/0 格，土判据全判 1）
 //! 2. **格折行** `grid_wrap`——贪心按格断行，断点优先最后一个 ASCII
 //!    空格之后，没有就硬断（ft_wrap_split 同款贪心语义）。
+//!    同族：**中段省略** `elide_middle`（BAR-206——装不下的长值不折行，
+//!    头尾双锚中间 …；按格算不走像素，量宽复用本模块同一份 char_cells）。
 //! 3. **格落笔**——在 TermView 侧（termview.rs 尾部
 //!    `grid_fit` / `measure_items_grid` / `draw_grid_text_left`，
 //!    私有字段只有本模块够得着，胶水只能放那边）。
@@ -50,6 +52,51 @@ pub fn char_cells(c: char) -> u32 {
 /// 字符串总格数（逐字 char_cells 求和）
 pub fn grid_text_cells(s: &str) -> u32 {
     s.chars().map(char_cells).sum()
+}
+
+/// 中段省略（BAR-206 解析页长值截断/纵溢治理）：总格数 ≤ `max_cells`
+/// 原样返回；装不下 = **头尾双锚 + 中间一个「…」**（… = 1 格，预算对半
+/// 分：头 ⌈半⌉ 尾 ⌊半⌋），总格数 ≤ `max_cells` 恒成立。地址/错误长句
+/// 头裁尾裁都认不出是哪个对象（真机报障原话：地址/磁盘数字「被截断了
+/// 没显示全」）——头尾都保住才读得懂。字符原子切：全角字劈不下就整字
+/// 让给另一侧，不劈半。
+/// - `max_cells` = 0 → 空串（一格都放不下，放「…」也是占格撒谎）；
+/// - 装不下且只有 1 格 → 「…」（至少报「这里有字被截」）。
+pub fn elide_middle(text: &str, max_cells: u32) -> String {
+    if grid_text_cells(text) <= max_cells {
+        return text.to_string();
+    }
+    if max_cells == 0 {
+        return String::new();
+    }
+    if max_cells == 1 {
+        return "…".to_string();
+    }
+    let budget = max_cells - 1; // 「…」自占 1 格
+    let head_budget = budget.div_ceil(2);
+    let tail_budget = budget / 2;
+    let mut head = String::new();
+    let mut acc = 0;
+    for c in text.chars() {
+        let w = char_cells(c);
+        if acc + w > head_budget {
+            break;
+        }
+        acc += w;
+        head.push(c);
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let mut tail = String::new();
+    let mut acc = 0;
+    for &c in chars.iter().rev() {
+        let w = char_cells(c);
+        if acc + w > tail_budget {
+            break;
+        }
+        acc += w;
+        tail.insert(0, c);
+    }
+    format!("{head}…{tail}")
 }
 
 /// 按格折行（贪心，ft_wrap_split 同款语义）：返回每行的 **char 下标**
