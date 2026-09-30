@@ -262,6 +262,12 @@ kfmv4-review-ops-convention-verdict.md。
 
 ## 文档地图
 
+> **方向档案已迁家（2026-09-30，用户拍板）**：`docs/active/` 与 `docs/assets/`
+> 是**符号链接** → `/root/20-工作区/02-清和/方向/`（研究部清和家，独立 git 小仓）——
+> 设计/方向文档的权威归研究线，读写经链接透明；`docs/ledger/`（bugs.md/state.md/
+> bar-registry 等机制账）仍在本仓，随提交走。改方向文档 = 改家仓；遇链接失效先查
+> `readlink docs/active`。
+
 - `docs/ledger/state.md` — **交接页：现在进行时**（当前位置/待判卷/欠账/日志
   判读手册，里程碑必更新；接手冷启动第一读）
 - `docs/active/排障手册.md` — **用户报 bug 第一读**：症状 → 工具 →
