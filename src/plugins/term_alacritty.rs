@@ -1,6 +1,6 @@
 //! plugins/term_alacritty.rs — alacritty 芯终端模拟器 provider（规格书 §3 第一批）
 //!
-//! 设计页：`/root/kfmv4/experiments/dsh-na/na/terminal-emulator.md`（v0，
+//! 设计页：`/root/30-实验/dsh-na/na/terminal-emulator.md`（v0，
 //! 评审五条裁决落地）。契约考题：tests/term_emu_spec.rs（考题 4-8）。
 //!
 //! 职责边界：apply 只注册「终端模拟器工厂」服务（`dyn TermEmuFactory`），

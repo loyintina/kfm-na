@@ -2,7 +2,7 @@
 //!
 //! 约束对象：`src/plugins/input_ime.rs` + `src/keybar.rs::ModifierState` +
 //! `src/insets.rs::ImeInsets` trait 层。
-//! 依据：设计页 `/root/kfmv4/experiments/dsh-na/na/input-ime.md` §8 考题 4-8
+//! 依据：设计页 `/root/30-实验/dsh-na/na/input-ime.md` §8 考题 4-8
 //! + 评审回信（方案 A 批准；形态判别准则 v1.2：Sync 内部可变 → 共享实例直挂）。
 //!
 //! 判卷维度：注册成功 / ModifierState 语义 / 卸载回滚（句柄存活）/

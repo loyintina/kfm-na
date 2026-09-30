@@ -2,7 +2,7 @@
 //!
 //! 约束对象：`src/plugins/term_alacritty.rs` + `src/termview.rs` 的 trait 层
 //! （`TermEmu`/`TermEmuFactory`/`AlacrittyEmuFactory`）。
-//! 依据：设计页 `/root/kfmv4/experiments/dsh-na/na/terminal-emulator.md` §8
+//! 依据：设计页 `/root/30-实验/dsh-na/na/terminal-emulator.md` §8
 //! 考题 4-8 + 评审回信（考题先红、trait 演化纪律注释）。
 //!
 //! 判卷维度：注册成功 / trait 对象冒烟 / 卸载回滚（实例存活）/ reload 换工厂 /

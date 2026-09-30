@@ -1,6 +1,6 @@
 //! plugins/conn_provider_local.rs — 本地 PTY 连接 provider(L1)
 //!
-//! 设计页:`/root/kfmv4/experiments/dsh-na/na/multi-end-layering.md` §3。
+//! 设计页:`/root/30-实验/dsh-na/na/multi-end-layering.md` §3。
 //! 契约考题:tests/local_pty_spec.rs(考题 4-5)。
 //!
 //! 职责边界与 conn-provider-ws 同款:apply 只注册「本地会话工厂」服务

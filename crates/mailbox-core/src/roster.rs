@@ -104,7 +104,7 @@ pub fn check_pools(
 ) {
     let Some(roster) = roster else {
         warns.push(
-            "roster.json 缺失——三池校验退化为仅文法校验（建 docs/ledger/agent-inbox/roster.json 或用 --roster 指定）"
+            "roster.json 缺失——三池校验退化为仅文法校验（建 /root/90-信箱/00-主册/roster.json 或用 --roster 指定）"
                 .to_string(),
         );
         return;

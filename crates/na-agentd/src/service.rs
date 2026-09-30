@@ -246,7 +246,7 @@ impl AgentService {
 }
 
 /// 全局评审信箱根（BAR-167：kfmv4 仓只读引用，na 侧只读不写）
-pub const AGENT_INBOX_ROOT: &str = "/root/kfmv4/docs/ledger/agent-inbox";
+pub const AGENT_INBOX_ROOT: &str = "/root/90-信箱/00-主册";
 
 /// 尾部 n 非空行
 fn tail_lines(text: &str, n: usize) -> Vec<String> {

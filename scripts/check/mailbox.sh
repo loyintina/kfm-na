@@ -30,8 +30,19 @@ fi
 "$BIN" verify --mailbox "$MB" --name-prefix 'kfm-na|na' \
     --v1-manifest "$MB/manifest-v1.json" || { echo "❌ na 信箱全册执法不过"; exit 1; }
 
-if [ -f "$MB/README.md" ] && grep -q 'gen:agent-inbox:start' "$MB/README.md"; then
-    "$BIN" gen --mailbox "$MB" --check-only || { echo "❌ na 信箱台账投影漂移"; exit 1; }
+if [ -n "${KFM_CHAIN_FROM_HOOK:-}" ]; then
+    # 2026-09-30 评审裁定：**派生投影检查不挂提交钩**。
+    # 理由（实踩三次）：台账/索引是**全册属性**——谁新投一封信，投影就漂；
+    # 于是"别人还没 gen"会挡住**你**的提交，而那个漂移不是你这笔的错，你也没法
+    # 替全册负责（你 gen 完，下一个人投信又漂）。这是承重对象的错配。
+    # → 分派：**提交钩只执法信本身（verify 全册，上面那道，它与并发无关）；
+    #    派生投影检查归"手动跑全链/巡检"这一层**（跑 `bash scripts/chain.sh` 即含）。
+    echo "[mailbox.sh] 提交钩上下文：跳过 gen --check-only（派生投影检查归全链/巡检；"
+    echo "              理由见本文件此段注释——投影是全册属性，单个人负不了责）"
 else
-    echo "[mailbox.sh] README 缺 gen 标记区段——gen --check-only 跳过（标记段就位后自动生效）"
+    if [ -f "$MB/README.md" ] && grep -q 'gen:agent-inbox:start' "$MB/README.md"; then
+        "$BIN" gen --mailbox "$MB" --check-only || { echo "❌ na 信箱台账投影漂移"; exit 1; }
+    else
+        echo "[mailbox.sh] README 缺 gen 标记区段——gen --check-only 跳过（标记段就位后自动生效）"
+    fi
 fi

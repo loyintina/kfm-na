@@ -1,6 +1,6 @@
 //! plugins/conn_provider_ws.rs — kfmv4 ws 协议连接 provider（规格书 §3 第一批）
 //!
-//! 设计页：`/root/kfmv4/experiments/dsh-na/na/connection-provider.md`（v0.1，
+//! 设计页：`/root/30-实验/dsh-na/na/connection-provider.md`（v0.1，
 //! 评审五条裁决落地）。契约考题：tests/conn_provider_spec.rs（考题 5-9）。
 //!
 //! 职责边界：apply 只注册「连接工厂」服务（`dyn TermFactory`），瞬时返回、
