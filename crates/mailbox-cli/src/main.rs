@@ -45,7 +45,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, exit};
 
 const DEFAULT_MAILBOX: &str = "/root/.kfm/session/信箱";
-const MAIN_BOOK: &str = "/root/kfmv4/docs/ledger/agent-inbox";
+const MAIN_BOOK: &str = "/root/90-信箱/00-主册";
 /// na 册存量信命名前缀默认词表（--name-prefix 覆盖）
 const DEFAULT_NAME_PREFIX: &str = "kfm-na|na";
 
@@ -339,7 +339,7 @@ fn reject_main_book_write(p: &str, mailbox: &Path) {
     if canon == main_canon {
         die(
             p,
-            "写者分区：--mailbox 指向主册（kfmv4 docs/ledger/agent-inbox）时本器拒绝写入——主册回写归 kfmv4 侧 gen-agent-inbox.mjs（只许 --check-only）",
+            "写者分区：--mailbox 指向主册（/root/90-信箱/00-主册）时本器拒绝写入——主册回写归设施侧 gen-agent-inbox.mjs（只许 --check-only）",
         );
     }
 }
@@ -1732,7 +1732,7 @@ const USAGE: &str = "mailbox-cli — kfm-na 信箱工具链（逻辑核 mailbox-
   --roster <path>       名册（默认 信箱/roster.json → 主册 roster.json）
   --name-prefix <re>    存量信命名前缀（默认 kfm-na|na）
   --v1-manifest <path>  v1 冻结名单（默认 信箱/archive-v1/manifest-v1.json → 信箱/manifest-v1.json）
-  --main-book <dir>     scan/reticket 的主册路径（默认 /root/kfmv4/docs/ledger/agent-inbox）
+  --main-book <dir>     scan/reticket 的主册路径（默认 /root/90-信箱/00-主册）
   --book-sorting <码>   gen/reticket 的本册默认分拣码兜底（契约 §六《册身份》）：
                         册身份文件 <信箱>/.mailbox.json 的 sorting 优先；缺身份文件
                         一律按 MAIN 兜底，但 --mailbox 非本仓主册时要求显式给本项

@@ -1,20 +1,33 @@
-{"bar":177,"title":"reticket 换票工具四项必修（白露 0010 审查）","claimant_func":"研究部","claimant":"清和","letter":"NA0016","ts":"2026-09-29 10:49 +0800"}
-{"bar":178,"title":"网格文字引擎——布局唯一源与全局面改造","claimant_func":"开发部","claimant":"观澜","letter":"0017","ts":"2026-09-29 10:52 +0800"}
-{"bar":179,"title":"verify 日期单调判据对分拣码混排按数字序（0018 撞墙定罪）","claimant_func":"研究部","claimant":"清和","letter":"NA0019","ts":"2026-09-29 11:19 +0800"}
-{"bar":180,"title":"信箱 CLI 去自指码 + §八.8 窄例外 + 换票配对键（0020 必修① CLI 源头收口）","claimant_func":"研究部","claimant":"清和","letter":"0024","ts":"2026-09-29 13:49 +0800"}
-{"bar":181,"title":"信箱工具 flock——new/gen/reticket 共一把锁（白露 0022 条件①）","claimant_func":"开发部","claimant":"闻灯","letter":"0028","ts":"2026-09-29 16:27 +0800"}
-{"bar":182,"title":"重连指数退避——对端死亡后 65ms 零退避热循环烧 CPU","claimant_func":"开发部","claimant":"观澜","letter":"0029","ts":"2026-09-29 16:43 +0800"}
-{"bar":183,"title":"ai页思考块冒烟钉改按字体量测（0039 甲，干净克隆第二红）","claimant_func":"研究部","claimant":"清和","letter":"0041","ts":"2026-09-29 19:17 +0800"}
-{"bar":184,"title":"本机资产依赖普查——干净克隆全量测试为普查机（0039 丙）","claimant_func":"研究部","claimant":"清和","letter":"0042","ts":"2026-09-29 19:17 +0800"}
-{"bar":185,"title":"会话池正文缓存先画——弱网点开正文硬等 GET 超时才回退缓存（BAR-174 缓存盖列表没盖正文）","claimant_func":"开发部","claimant":"闻灯","letter":"0046","ts":"2026-09-29 20:40 +0800"}
-{"bar":186,"title":"tmux 弱网大滚动专项——重连快照打底+帧合并追底跳帧+输入队列落盘","claimant_func":"开发部","claimant":"闻灯","letter":"0047","ts":"2026-09-29 20:40 +0800"}
-{"bar":187,"title":"文件树数据本地化——服务器命名空间缓存+全量同步","claimant_func":"开发部","claimant":"闻灯","letter":"0048","ts":"2026-09-29 20:40 +0800"}
-{"bar":188,"title":"网格文字棘轮闸行号容忍——比对键改 file:symbol 多重集（行号平移误红根治）","claimant_func":"开发部","claimant":"观澜","letter":"0044","ts":"2026-09-29 20:31 +0800"}
-{"bar":189,"title":"bar-new.sh 领号唯一源扶正信箱——H1 扫描含归档+信箱不可读拒领+名册预检（0055 甲案三补丁）","claimant_func":"开发部","claimant":"观澜","letter":"0056","ts":"2026-09-29 23:06 +0800"}
-{"bar":191,"title":"tmux 标签栏文字迁网格引擎（0017 #4）","claimant_func":"开发部","claimant":"观澜","letter":"0061","ts":"2026-09-29 23:39 +0800"}{"bar":192,"title":"领号扫描防 prose 毒——bugs.md 只认账行首格/H1 只认首号","claimant_func":"开发部","claimant":"观澜","letter":"0062","ts":"2026-09-29 23:42 +0800"}{"bar":193,"title":"na 侧 mailbox-cli withdraw 实现（照主册共享向量逐条同制）","claimant_func":"研究部","claimant":"清和","letter":"0057","ts":"2026-09-29 23:59 +0800"}{"bar":194,"title":"modal 跳框文字迁网格引擎——标题/按钮/字段折行收编（0017 #5）","claimant_func":"开发部","claimant":"观澜","letter":"0069","ts":"2026-09-30 01:11 +0800"}{"bar":195,"title":"键栏/断线状态卡文字迁网格引擎（0017 #8）","claimant_func":"开发部","claimant":"观澜","letter":"0070","ts":"2026-09-30 01:36 +0800"}{"bar":196,"title":"设置页/会话池/解析页字段文字迁网格引擎（0017 #7）","claimant_func":"开发部","claimant":"观澜","letter":"0071","ts":"2026-09-30 01:58 +0800"}{"bar":197,"title":"输入栏 prompt_bar 文字迁网格文字引擎（0017 #10 面）","claimant_func":"开发部","claimant":"观澜","letter":"0072","ts":"2026-09-30 02:37 +0800"}{"bar":198,"title":"AI 对话页文字迁网格文字引擎（0017 #9 面，glyph_atlas 图集键改造）","claimant_func":"开发部","claimant":"观澜","letter":"0073","ts":"2026-09-30 03:24 +0800"}{"bar":199,"title":"键栏方向键宽墨符号被格盒裁残（char_cells 箭头块改 2 格，承影 0075 redroid 实拍定罪）","claimant_func":"开发部","claimant":"观澜","letter":"0078","ts":"2026-09-30 06:17 +0800"
-{"bar":200,"title":"na-server 缺证静默重生废全部 pinning 客户端——改 fail-loud 拒启","claimant_func":"开发部","claimant":"观澜","letter":"0092","ts":"2026-09-30 17:30 +0800"}
-{"bar":201,"title":"ssh 探活脱发夹+零退避重拉+沿踢重孵三环咬成自持续刷新风暴","claimant_func":"开发部","claimant":"观澜","letter":"0093","ts":"2026-09-30 17:30 +0800"}
-{"bar":202,"title":"冷启动绑死 kfm-na 会话——改动态引导（无会话跑 veran/附回上次视面/裸壳兜底）","claimant_func":"研究部","claimant":"清和","letter":"0094","ts":"2026-09-30 18:17 +0800"}
-{"bar":203,"title":"bar-new.sh 扫描不随符号链接下钻（find -P 起点链接）→ 202 双号实案——readlink 解引用+空扫描面拒领","claimant_func":"研究部","claimant":"清和","letter":"0095","ts":"2026-09-30 18:22 +0800"}
-{"bar":207,"title":"demo 页下线——烧瓶钮/打样页退役进组件池封存 + md 引擎单开下池栏（一效果一条+随机色设计）","claimant_func":"研究部","claimant":"清和","letter":"0104","ts":"2026-09-30 19:31 +0800"}
-{"bar":208,"title":"阅读页存在逻辑重构——盖中央页/滚动同终端/右滑文件树左滑空白解析页/终端钮回退/齿轮上浮/右侧滑入","claimant_func":"研究部","claimant":"清和","letter":"0105","ts":"2026-09-30 19:31 +0800"}
+{"bar": 177, "title": "reticket 换票工具四项必修（白露 0010 审查）", "claimant_func": "研究部", "claimant": "清和", "letter": "NA0016", "ts": "2026-09-29 10:49 +0800"}
+{"bar": 178, "title": "网格文字引擎——布局唯一源与全局面改造", "claimant_func": "开发部", "claimant": "观澜", "letter": "0017", "ts": "2026-09-29 10:52 +0800"}
+{"bar": 179, "title": "verify 日期单调判据对分拣码混排按数字序（0018 撞墙定罪）", "claimant_func": "研究部", "claimant": "清和", "letter": "NA0019", "ts": "2026-09-29 11:19 +0800"}
+{"bar": 180, "title": "信箱 CLI 去自指码 + §八.8 窄例外 + 换票配对键（0020 必修① CLI 源头收口）", "claimant_func": "研究部", "claimant": "清和", "letter": "0024", "ts": "2026-09-29 13:49 +0800"}
+{"bar": 181, "title": "信箱工具 flock——new/gen/reticket 共一把锁（白露 0022 条件①）", "claimant_func": "开发部", "claimant": "闻灯", "letter": "0028", "ts": "2026-09-29 16:27 +0800"}
+{"bar": 182, "title": "重连指数退避——对端死亡后 65ms 零退避热循环烧 CPU", "claimant_func": "开发部", "claimant": "观澜", "letter": "0029", "ts": "2026-09-29 16:43 +0800"}
+{"bar": 183, "title": "ai页思考块冒烟钉改按字体量测（0039 甲，干净克隆第二红）", "claimant_func": "研究部", "claimant": "清和", "letter": "0041", "ts": "2026-09-29 19:17 +0800"}
+{"bar": 184, "title": "本机资产依赖普查——干净克隆全量测试为普查机（0039 丙）", "claimant_func": "研究部", "claimant": "清和", "letter": "0042", "ts": "2026-09-29 19:17 +0800"}
+{"bar": 185, "title": "会话池正文缓存先画——弱网点开正文硬等 GET 超时才回退缓存（BAR-174 缓存盖列表没盖正文）", "claimant_func": "开发部", "claimant": "闻灯", "letter": "0046", "ts": "2026-09-29 20:40 +0800"}
+{"bar": 186, "title": "tmux 弱网大滚动专项——重连快照打底+帧合并追底跳帧+输入队列落盘", "claimant_func": "开发部", "claimant": "闻灯", "letter": "0047", "ts": "2026-09-29 20:40 +0800"}
+{"bar": 187, "title": "文件树数据本地化——服务器命名空间缓存+全量同步", "claimant_func": "开发部", "claimant": "闻灯", "letter": "0048", "ts": "2026-09-29 20:40 +0800"}
+{"bar": 188, "title": "网格文字棘轮闸行号容忍——比对键改 file:symbol 多重集（行号平移误红根治）", "claimant_func": "开发部", "claimant": "观澜", "letter": "0044", "ts": "2026-09-29 20:31 +0800"}
+{"bar": 189, "title": "bar-new.sh 领号唯一源扶正信箱——H1 扫描含归档+信箱不可读拒领+名册预检（0055 甲案三补丁）", "claimant_func": "开发部", "claimant": "观澜", "letter": "0056", "ts": "2026-09-29 23:06 +0800"}
+{"bar": 191, "title": "tmux 标签栏文字迁网格引擎（0017 #4）", "claimant_func": "开发部", "claimant": "观澜", "letter": "0061", "ts": "2026-09-29 23:39 +0800"}
+{"bar": 192, "title": "领号扫描防 prose 毒——bugs.md 只认账行首格/H1 只认首号", "claimant_func": "开发部", "claimant": "观澜", "letter": "0062", "ts": "2026-09-29 23:42 +0800"}
+{"bar": 193, "title": "na 侧 mailbox-cli withdraw 实现（照主册共享向量逐条同制）", "claimant_func": "研究部", "claimant": "清和", "letter": "0057", "ts": "2026-09-29 23:59 +0800"}
+{"bar": 194, "title": "modal 跳框文字迁网格引擎——标题/按钮/字段折行收编（0017 #5）", "claimant_func": "开发部", "claimant": "观澜", "letter": "0069", "ts": "2026-09-30 01:11 +0800"}
+{"bar": 195, "title": "键栏/断线状态卡文字迁网格引擎（0017 #8）", "claimant_func": "开发部", "claimant": "观澜", "letter": "0070", "ts": "2026-09-30 01:36 +0800"}
+{"bar": 196, "title": "设置页/会话池/解析页字段文字迁网格引擎（0017 #7）", "claimant_func": "开发部", "claimant": "观澜", "letter": "0071", "ts": "2026-09-30 01:58 +0800"}
+{"bar": 197, "title": "输入栏 prompt_bar 文字迁网格文字引擎（0017 #10 面）", "claimant_func": "开发部", "claimant": "观澜", "letter": "0072", "ts": "2026-09-30 02:37 +0800"}
+{"bar": 198, "title": "AI 对话页文字迁网格文字引擎（0017 #9 面，glyph_atlas 图集键改造）", "claimant_func": "开发部", "claimant": "观澜", "letter": "0073", "ts": "2026-09-30 03:24 +0800"}
+{"bar": 199, "title": "键栏方向键宽墨符号被格盒裁残（char_cells 箭头块改 2 格，承影 0075 redroid 实拍定罪）", "claimant_func": "开发部", "claimant": "观澜", "letter": "0078", "ts": "2026-09-30 06:17 +0800"}
+{"bar": 200, "title": "na-server 缺证静默重生废全部 pinning 客户端——改 fail-loud 拒启", "claimant_func": "开发部", "claimant": "观澜", "letter": "0092", "ts": "2026-09-30 17:30 +0800"}
+{"bar": 201, "title": "ssh 探活脱发夹+零退避重拉+沿踢重孵三环咬成自持续刷新风暴", "claimant_func": "开发部", "claimant": "观澜", "letter": "0093", "ts": "2026-09-30 17:30 +0800"}
+{"bar": 202, "title": "冷启动绑死 kfm-na 会话——改动态引导（无会话跑 veran/附回上次视面/裸壳兜底）", "claimant_func": "研究部", "claimant": "清和", "letter": "0094", "ts": "2026-09-30 18:17 +0800"}
+{"bar": 203, "title": "bar-new.sh 扫描不随符号链接下钻（find -P 起点链接）→ 202 双号实案——readlink 解引用+空扫描面拒领", "claimant_func": "研究部", "claimant": "清和", "letter": "0095", "ts": "2026-09-30 18:22 +0800"}
+{"bar": 204, "title": "阅读页/md 字号档废除迁网格引擎（0017 #6 用户拍板 a 案：pinch 一统）+棘轮清零硬限制", "claimant_func": "开发部", "claimant": "观澜", "letter": "0101", "ts": "2026-09-30 19:17 +0800"}
+{"bar": 205, "title": "tmux 标签块四字截断——栏随字动态加宽+字缘内边距", "claimant_func": "开发部", "claimant": "观澜", "letter": "0102", "ts": "2026-09-30 19:17 +0800"}
+{"bar": 206, "title": "解析页环境地址/磁盘数字/右上框字段过长截断", "claimant_func": "开发部", "claimant": "观澜", "letter": "0103", "ts": "2026-09-30 19:17 +0800"}
+{"bar": 207, "title": "demo 页下线——烧瓶钮/打样页退役进组件池封存 + md 引擎单开下池栏（一效果一条+随机色设计）", "claimant_func": "研究部", "claimant": "清和", "letter": "0104", "ts": "2026-09-30 19:31 +0800"}
+{"bar": 208, "title": "阅读页存在逻辑重构——盖中央页/滚动同终端/右滑文件树左滑空白解析页/终端钮回退/齿轮上浮/右侧滑入", "claimant_func": "研究部", "claimant": "清和", "letter": "0105", "ts": "2026-09-30 19:31 +0800"}
+{"bar": 209, "title": "attach/切会话不入追赶——清场黑屏+全量重播种57.8s（0075 承影定罪：catchup.enter 只挂 respawn_session）", "claimant_func": "开发部", "claimant": "观澜", "letter": "0107", "ts": "2026-09-30 19:46 +0800"}
+{"bar": 210, "title": "prompt_bar.rs:246 切片越界 SIGABRT 崩溃（0075 §三：start>end ×4，病灶输入栏）", "claimant_func": "开发部", "claimant": "观澜", "letter": "0110", "ts": "2026-09-30 20:14 +0800"}

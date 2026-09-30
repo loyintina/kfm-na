@@ -2,7 +2,7 @@
 //!
 //! 约束对象：`src/plugins/conn_provider_ws.rs` + `src/conn.rs` 工厂层
 //! （`ConnConfig`/`TermHandle`/`TermFactory`/`Spawner`）。
-//! 依据：设计页 `/root/kfmv4/experiments/dsh-na/na/connection-provider.md` §8
+//! 依据：设计页 `/root/30-实验/dsh-na/na/connection-provider.md` §8
 //! 考题 5-9 + 评审回信裁决（假 transport 注入、unload 不断连、reload 钉旧句柄）。
 //!
 //! 判卷维度：注册成功 / 事件桥收敛 / 卸载回滚（观察等价 + 句柄存活）/

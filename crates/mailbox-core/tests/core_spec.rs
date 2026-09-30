@@ -2,7 +2,7 @@
 //! verify 负样本向量 / gen 投影 golden / next_number / block_field。
 //!
 //! golden 数据来源（非手编）：
-//! - fp：主册 docs/ledger/agent-inbox/letter-tokens.jsonl 真实票据 6 行
+//! - fp：主册 `/root/90-信箱/00-主册/letter-tokens.jsonl` 真实票据 6 行
 //!   （含 0016 换票行 renamedFrom）+ na 册 4 行旧票据；
 //! - gen 投影：JS gen-agent-inbox.mjs 对本目录 fixtures/gen 夹具实跑的回写产物
 //!   （README.post.md / letters-index.expected.jsonl 逐字节抄录）。

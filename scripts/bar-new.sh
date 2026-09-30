@@ -63,7 +63,7 @@ MAILBOX="$(readlink -f "$MAILBOX")"
 # roster.json → 主册 roster.json；两处都没有 = 无法校验（双环境手机端），
 # 告警放行。查到名册而名不在册 = 拒领。
 ROSTER="$MAILBOX/roster.json"
-[ -f "$ROSTER" ] || ROSTER="/root/kfmv4/docs/ledger/agent-inbox/roster.json"
+[ -f "$ROSTER" ] || ROSTER="/root/90-信箱/00-主册/roster.json"
 if [ -f "$ROSTER" ]; then
     grep -q "\"$NAME\"" "$ROSTER" || {
         echo "名字 $NAME 不在名册（$ROSTER）——先入册再领号（信箱契约 §六）" >&2; exit 1; }

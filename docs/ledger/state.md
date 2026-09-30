@@ -3737,3 +3737,25 @@ IO 挤兑（some=0.93/full=0.76），编译进程被外部冻结，负载自然�
   混杂（符号化后目击 android_logger/regex Cache 化石），fp 链离线逐帧走
   才能滤出活链；线程普查 threads.txt（每 3s tid:comm 花名册）给死者
   发姓名。REG 格式钉同步换版。
+
+## 2026-09-30 · 撤链改址（服务器整理：根目录过渡链接撤除）
+
+背景：服务器大整理把两个代码项目搬进编号目录，根目录留了过渡符号链接，
+用户拍板「摘链接，摘彻底」。na 仓本笔改址（评审部白露执行，chain 13/13 绿）：
+
+- `crates/mailbox-cli/src/main.rs`：`MAIN_BOOK` 常量
+  `/root/kfmv4/docs/ledger/agent-inbox` → **`/root/90-信箱/00-主册`**
+  （同文件的 `--main-book` 帮助文本与写者分区提示同步改）。
+- `crates/na-agentd/src/service.rs`：`AGENT_INBOX_ROOT` 同上一串 → 同上。
+  **该常量编译进二进制**：已重编 release 装机 `/root/40-资产/na-发布/na-agentd`
+  （md5 `7f22fc2f0517c354818bf83357ce5234`），旧件留
+  `na-agentd.bak-20260930-撤链前`；台账见该目录 README。
+- `scripts/bar-new.sh` 的名册兜底、`scripts/chain.sh` 的 `build-enter-cgroup.sh`
+  调用、`AGENTS.md` 四处、`src/plugins/*.rs` 与 `tests/*_spec.rs` 的设计页注释
+  ——全部改新址。**未改**（只追加不删改）：`docs/ledger/bugs.md`／`state.md`
+  历史账、`crates/mailbox-cli/tests/cli_golden.rs` 里「不许依赖 /root/kfmv4」
+  那条铁律本身的字面。
+- 路径现状：信箱设施根 `/root/90-信箱`（主册 `00-主册`／na 册 `10-NA信箱`）；
+  实验档案与 nz 的**稳定桥**在 `/root/30-实验/`（`kfmv4-实验档案`／`nz`／
+  `dsh-na`）；本仓 `/root/10-项目/kfm-na`。
+- 信：主册 `0072`（评审→开发部观澜：na 仓 8 处清单）。

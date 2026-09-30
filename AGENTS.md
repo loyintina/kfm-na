@@ -25,7 +25,7 @@
 
 ## 这是什么
 
-kfmv4（/root/kfmv4，TypeScript Web 应用）的 **native 手机客户端**，Rust 实现。
+kfmv4（/root/10-项目/kfmv4，TypeScript Web 应用）的 **native 手机客户端**，Rust 实现。
 核心三件套：光球对话（内置 AI）/ tmux 里的 kimi code（远程操作服务器）/
 文件树（仿 Obsidian 手机端交互）。终局愿景：NA 成长到与 kfmv4 同等高度后，
 接管现在的 kfm 和数据。设计全貌见 `docs/active/立项.md`。
@@ -236,7 +236,7 @@ kfmv4-review-ops-convention-verdict.md。
 
 ## 分层纪律（2026-08-20 多端分层设计，评审五问全裁落地）
 
-设计页：`/root/kfmv4/experiments/dsh-na/na/multi-end-layering.md`。三条：
+设计页：`/root/30-实验/dsh-na/na/multi-end-layering.md`。三条：
 
 1. **核心层禁碰平台依赖**：cordis-na（及未来的核心 crate）不许依赖
    winit/softbuffer/jni/android 系——chain 机械检查执法，不靠自觉；
@@ -305,7 +305,7 @@ kfmv4-review-ops-convention-verdict.md。
   （kfmv4 信箱 JS 三件套 Rust 移植：new/verify/gen/scan/reticket 五子命令、
   默认解析序、与 JS 的行为差异全列。写信/查欠账/换票前必读）
 - `docs/ledger/bugs.md` — BAR 账本：每条修复登记编号/病灶/契约/钉位置
-- `/root/kfmv4/docs/ledger/agent-inbox/` — **跨线评审信箱**（评审会话维护，2026-08-15 迁入 kfmv4 文档目录）：
+- `/root/90-信箱/00-主册/` — **跨线评审信箱·主册真身**（评审会话维护；2026-08-15 曾迁入 kfmv4 文档目录，2026-09-30 迁出为独立设施 `90-信箱`，kfmv4 侧只留过渡链接）：
   kfm-na 与 kfmv4 两线设计评审往来信 + 状态列；设计相关评审意见在此收/发。
   kfm-na 侧的单文件信箱（docs/ledger/inbox.md）同日退役，勿重建
 
@@ -313,7 +313,7 @@ kfmv4-review-ops-convention-verdict.md。
 
 - `kfmv4/docs/active/眼睛与手.md` — 眼睛/手设计思想（NA 落地为网格眼睛 + 按键注入的手）
 - kfmv4 服务端协议：terminal-pty ws、/ai/chat、文件树接口（对接时读 kfmv4 源码为准）
-- **nz 可直抄规格索引（2026-09-11 nz 结项通报移交，维护态）**：`/root/kfmv4/nz/docs/`
+- **nz 可直抄规格索引（2026-09-11 nz 结项通报移交，维护态）**：`/root/30-实验/nz/docs/`
   file-tree-v1-design.md（文件树+@引用全套，含 §七 实施定案：右滑仲裁/纯色行底 α 公式/长按复制三级链）/
   ai-chat-a1-design.md / config-pool-a2a-design.md / keybar-v3-state-machine.md /
   tmux-tabs-v2-state-machine.md / plugin-contract.md / dev-flow-case-001~006——
