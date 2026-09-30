@@ -2,6 +2,7 @@
 //!
 //! 设计 docs/active/na-server.md。只绑 127.0.0.1，鉴权 = SSH 本身。
 
+pub mod cert;
 pub mod httpd;
 pub mod logcap;
 pub mod pty_sess;

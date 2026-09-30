@@ -5,9 +5,11 @@
 //! - NA_REPORT_LOG      na-report 落盘路径（缺省 /root/10-项目/kfm-na/field-reports.log）
 //! - NA_IDLE_EXIT_SECS  无连接无会话持续 N 秒自退（缺省 1800，0 = 永不）
 //! - NA_QUIC_BIND       QUIC 腿监听（可选，不设=不开；设计 docs/active/quic隧道.md）
-//! - NA_QUIC_CERT       QUIC 证书路径前缀（缺省 /root/40-资产/kfm-na-certs/quic，
-//!   首跑自签落盘 {前缀}.der / {前缀}.key.der，并生成客户端证
-//!   预共享密钥 {前缀}.psk——开 QUIC 腿即强制 HMAC 挑战，设计 §四）
+//! - NA_QUIC_CERT       QUIC 证书路径前缀（缺省 /root/40-资产/kfm-na-certs/quic；
+//!   三件 {前缀}.der/.key.der/.psk 作为一个身份：齐则载，缺则拒启——
+//!   首跑生成须显式授权 NA_QUIC_GEN_KEYS=1（BAR-200 fail-loud：静默重生
+//!   = 所有 pin 旧指纹的客户端永久失配）；开 QUIC 腿即强制 HMAC 挑战，设计 §四）
+//! - NA_QUIC_GEN_KEYS   置 1 = 授权首跑生成 QUIC 身份三件（缺省不许）
 //! - NA_QUIC_REV_BIND   M4 反连 QUIC 监听（可选，UDP 62694；9022 从 sshd
 //!   绑口变本机 TCP 监听器+反向开流，撞口/僵尸/释放三件套消失）
 //! - NA_QUIC_REV_TCP    反连本机桥前（缺省 127.0.0.1:9022，只准回环）
@@ -67,8 +69,7 @@ fn spawn_quic_leg() {
     }
     let prefix =
         std::env::var("NA_QUIC_CERT").unwrap_or_else(|_| "/root/40-资产/kfm-na-certs/quic".into());
-    let (certs, key) = load_or_gen_cert(&prefix);
-    let psk = load_or_gen_psk(&format!("{prefix}.psk"));
+    let (certs, key, psk) = quic_identity(&prefix);
     eprintln!(
         "[na-server] QUIC 听 {bind}（证书指纹 {} / 客户端证已开）",
         hex(&na_quic::cert_fingerprint(&certs[0]))
@@ -118,8 +119,7 @@ fn spawn_rev_quic_leg() {
         .unwrap_or(8024);
     let prefix =
         std::env::var("NA_QUIC_CERT").unwrap_or_else(|_| "/root/40-资产/kfm-na-certs/quic".into());
-    let (certs, key) = load_or_gen_cert(&prefix);
-    let psk = load_or_gen_psk(&format!("{prefix}.psk"));
+    let (certs, key, psk) = quic_identity(&prefix);
     eprintln!(
         "[na-server] QUIC 反连听 {bind}（TCP 桥前 {tcp_bind} → 手机 {target}，证书指纹 {}）",
         hex(&na_quic::cert_fingerprint(&certs[0]))
@@ -140,64 +140,79 @@ fn spawn_rev_quic_leg() {
     });
 }
 
-/// 预共享密钥加载或首跑生成落盘（客户端证，设计 §四）：32 字节随机，
-/// 0600——与 ssh 私钥同保管等级；hex 打一次 stderr 供抄进手机设置
-fn load_or_gen_psk(path: &str) -> [u8; 32] {
-    if let Ok(b) = std::fs::read(path)
-        && b.len() == 32
-    {
-        return b.try_into().expect("32 字节");
-    }
-    let mut k = [0u8; 32];
-    use std::io::Read as _;
-    std::fs::File::open("/dev/urandom")
-        .expect("urandom")
-        .read_exact(&mut k)
-        .expect("读随机源");
-    if let Some(dir) = std::path::Path::new(path).parent() {
-        std::fs::create_dir_all(dir).expect("密钥目录");
-    }
-    std::fs::write(path, k).expect("密钥落盘");
-    // 0600：私钥级权限（unix 限定；host 侧考题跑在 Linux 上）
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
-    }
-    eprintln!(
-        "[na-server] 客户端证预共享密钥（hex，抄进手机 servers.json 的 quic.psk）: {}",
-        hex(&k)
-    );
-    k
-}
-
-/// 证书加载或首跑自签落盘（指纹 pinning 的比对物必须持久——设计 §四）
-fn load_or_gen_cert(
+/// QUIC 身份加载（BAR-200 fail-loud）：证书/私钥/psk 三件作为一个身份裁决——
+/// 三件齐 → 载；全缺且显式授权（NA_QUIC_GEN_KEYS=1）→ 首跑生成落盘；
+/// 全缺未授权 / 半缺 → panic 拒启大声喊话（静默换新 = 所有 pin 旧指纹的
+/// 客户端永久失配，2026-09-30 事故）。裁决纯函数在 na_server::cert。
+fn quic_identity(
     prefix: &str,
 ) -> (
     Vec<rustls::pki_types::CertificateDer<'static>>,
     rustls::pki_types::PrivateKeyDer<'static>,
+    [u8; 32],
 ) {
+    use na_server::cert::{IdentityVerdict, identity_verdict};
     use rustls::pki_types::{CertificateDer, PrivateKeyDer};
     let cert_path = format!("{prefix}.der");
     let key_path = format!("{prefix}.key.der");
-    if let (Ok(c), Ok(k)) = (std::fs::read(&cert_path), std::fs::read(&key_path)) {
-        return (
-            vec![CertificateDer::from(c)],
-            PrivateKeyDer::Pkcs8(k.into()),
-        );
+    let psk_path = format!("{prefix}.psk");
+    let cert_b = std::fs::read(&cert_path).ok();
+    let key_b = std::fs::read(&key_path).ok();
+    // psk 长度非法按「不在」计（旧码遇坏长度也会重生——坏件 = 事故形态）
+    let psk_b = std::fs::read(&psk_path).ok().filter(|b| b.len() == 32);
+    let gen_allowed = std::env::var("NA_QUIC_GEN_KEYS").as_deref() == Ok("1");
+    match identity_verdict(cert_b.is_some(), key_b.is_some(), psk_b.is_some(), gen_allowed) {
+        IdentityVerdict::Load => (
+            vec![CertificateDer::from(cert_b.expect("判 Load 必在"))],
+            PrivateKeyDer::Pkcs8(key_b.expect("判 Load 必在").into()),
+            psk_b.expect("判 Load 必在").try_into().expect("32 字节"),
+        ),
+        IdentityVerdict::Gen => {
+            let (certs, key) = na_quic::gen_self_signed("kfm-na");
+            let mut psk = [0u8; 32];
+            use std::io::Read as _;
+            std::fs::File::open("/dev/urandom")
+                .expect("urandom")
+                .read_exact(&mut psk)
+                .expect("读随机源");
+            if let Some(dir) = std::path::Path::new(&cert_path).parent() {
+                std::fs::create_dir_all(dir).expect("证书目录");
+            }
+            std::fs::write(&cert_path, certs[0].as_ref()).expect("证书落盘");
+            let der = match &key {
+                PrivateKeyDer::Pkcs8(k) => k.secret_pkcs8_der().to_vec(),
+                _ => panic!("gen_self_signed 必出 PKCS8"),
+            };
+            std::fs::write(&key_path, der).expect("私钥落盘");
+            std::fs::write(&psk_path, psk).expect("密钥落盘");
+            // 0600：私钥级权限（unix 限定；host 侧考题跑在 Linux 上）
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                let _ = std::fs::set_permissions(&psk_path, std::fs::Permissions::from_mode(0o600));
+            }
+            eprintln!(
+                "[na-server] QUIC 身份首跑生成（NA_QUIC_GEN_KEYS=1 授权）：指纹 {} / 客户端证 psk（hex，抄进手机 servers.json 的 quic.psk）: {}",
+                hex(&na_quic::cert_fingerprint(&certs[0])),
+                hex(&psk)
+            );
+            (certs, key, psk)
+        }
+        IdentityVerdict::FailMissing => panic!(
+            "QUIC 身份三件全缺（{cert_path} 系），拒绝静默重生（BAR-200）——\
+             静默换新 = 所有 pin 旧指纹的客户端永久失配（2026-09-30 事故）。\
+             修复二选一：①从归档恢复原件（/root/98-归档/ 或备份）②首跑/重置显式授权：\
+             NA_QUIC_GEN_KEYS=1 重启本服务"
+        ),
+        IdentityVerdict::FailPartial => panic!(
+            "QUIC 身份半缺（{prefix} 系：证书{} 私钥{} psk{}），拒绝静默补齐（BAR-200）——\
+             半缺 = 事故形态（搬家漏链/误删单件），静默补齐会用新对覆盖幸存件，pin 照废。\
+             修复：从归档恢复齐三件；确要重头来 = 删净三件后 NA_QUIC_GEN_KEYS=1",
+            if cert_b.is_some() { "在" } else { "缺" },
+            if key_b.is_some() { "在" } else { "缺" },
+            if psk_b.is_some() { "在" } else { "缺" },
+        ),
     }
-    let (certs, key) = na_quic::gen_self_signed("kfm-na");
-    if let Some(dir) = std::path::Path::new(&cert_path).parent() {
-        std::fs::create_dir_all(dir).expect("证书目录");
-    }
-    std::fs::write(&cert_path, certs[0].as_ref()).expect("证书落盘");
-    let der = match &key {
-        PrivateKeyDer::Pkcs8(k) => k.secret_pkcs8_der().to_vec(),
-        _ => panic!("gen_self_signed 必出 PKCS8"),
-    };
-    std::fs::write(&key_path, der).expect("私钥落盘");
-    (certs, key)
 }
 
 fn hex(b: &[u8]) -> String {

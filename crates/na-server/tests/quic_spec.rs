@@ -40,6 +40,7 @@ async fn spec_m3_na_server_quic_leg_health() {
         .env("NA_REPORT_LOG", tmp.path().join("field-reports.log"))
         .env("NA_QUIC_BIND", format!("127.0.0.1:{quic_port}"))
         .env("NA_QUIC_CERT", &cert_prefix)
+        .env("NA_QUIC_GEN_KEYS", "1") // BAR-200：首跑生成须显式授权
         .stdout(Stdio::null())
         .stderr(Stdio::from(
             std::fs::File::create(tmp.path().join("server.err")).unwrap(),
@@ -112,4 +113,49 @@ async fn spec_m3_na_server_quic_leg_health() {
         text.contains("\"uptime_s\""),
         "health 必须是 health_json 体: {text}"
     );
+}
+
+/// BAR-200 冒烟钉：缺证不许静默重生——真二进制、空证书目录、不给授权旗标
+/// → 进程必须非零退出且 stderr 喊话指路（NA_QUIC_GEN_KEYS）；半缺（只放
+/// psk）同样拒启且不许落盘任何新件
+#[test]
+fn spec_bar200_缺证拒启不静默重生() {
+    let run = |setup_psk: bool| -> (std::process::ExitStatus, String, tempfile::TempDir) {
+        let tmp = tempfile::tempdir().expect("临时目录");
+        let cert_prefix = tmp.path().join("quic").to_str().unwrap().to_owned();
+        if setup_psk {
+            std::fs::write(format!("{cert_prefix}.psk"), [7u8; 32]).unwrap();
+        }
+        let out = Command::new(env!("CARGO_BIN_EXE_na-server"))
+            .env("NA_BIND", format!("127.0.0.1:{}", free_port()))
+            .env("NA_IDLE_EXIT_SECS", "0")
+            .env("NA_REPORT_LOG", tmp.path().join("field-reports.log"))
+            .env("NA_QUIC_BIND", format!("127.0.0.1:{}", free_port()))
+            .env("NA_QUIC_CERT", &cert_prefix)
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .output()
+            .expect("run na-server");
+        (
+            out.status,
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+            tmp,
+        )
+    };
+
+    // 全缺未授权 → 拒启喊话，且一件身份件都不许落盘
+    let (status, err, tmp) = run(false);
+    assert!(!status.success(), "全缺未授权必须拒启: {err}");
+    assert!(err.contains("NA_QUIC_GEN_KEYS"), "喊话必须指路: {err}");
+    for ext in ["der", "key.der", "psk"] {
+        assert!(
+            std::fs::read(tmp.path().join(format!("quic.{ext}"))).is_err(),
+            "拒启不许落盘 quic.{ext}"
+        );
+    }
+
+    // 半缺（只有 psk）→ 授权缺省也拒启，形态 = FailPartial
+    let (status, err, _tmp2) = run(true);
+    assert!(!status.success(), "半缺必须拒启: {err}");
+    assert!(err.contains("半缺"), "半缺喊话要点名形态: {err}");
 }
