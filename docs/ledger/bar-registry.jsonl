@@ -31,3 +31,4 @@
 {"bar": 208, "title": "阅读页存在逻辑重构——盖中央页/滚动同终端/右滑文件树左滑空白解析页/终端钮回退/齿轮上浮/右侧滑入", "claimant_func": "研究部", "claimant": "清和", "letter": "0105", "ts": "2026-09-30 19:31 +0800"}
 {"bar": 209, "title": "attach/切会话不入追赶——清场黑屏+全量重播种57.8s（0075 承影定罪：catchup.enter 只挂 respawn_session）", "claimant_func": "开发部", "claimant": "观澜", "letter": "0107", "ts": "2026-09-30 19:46 +0800"}
 {"bar": 210, "title": "prompt_bar.rs:246 切片越界 SIGABRT 崩溃（0075 §三：start>end ×4，病灶输入栏）", "claimant_func": "开发部", "claimant": "观澜", "letter": "0110", "ts": "2026-09-30 20:14 +0800"}
+{"bar":211,"title":"KFMHDR 播种头判负 4876 次致像素级滚动瘫痪（0081：r尾/错误块抢先两支仍在，判卷归承影）","claimant_func":"开发部","claimant":"观澜","letter":"0111","ts":"2026-09-30 22:34 +0800"}
