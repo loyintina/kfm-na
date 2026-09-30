@@ -7887,6 +7887,134 @@ impl TermView {
                     (iy + i64::from(ih) / 2) as u32,
                 );
             }
+            Preview::Flask => {
+                crate::ui::demo_icon::paint_at(
+                    frame.buf,
+                    frame.w,
+                    frame.h,
+                    icx as u32,
+                    (iy + i64::from(ih) / 2) as u32,
+                    accent,
+                );
+            }
+            // md 引擎栏（BAR-207）：一效果一臂，全走真实管线微缩
+            // （paint_md_preview：parse→layout→paint，mini 字号档）
+            Preview::MdH1 => {
+                self.paint_md_preview(frame, "# 一级标题", ix, iy, iw, clip, denom, accent);
+            }
+            Preview::MdH2 => {
+                self.paint_md_preview(frame, "## 二级标题", ix, iy, iw, clip, denom, accent);
+            }
+            Preview::MdH3 => {
+                self.paint_md_preview(frame, "### 三级标题", ix, iy, iw, clip, denom, accent);
+            }
+            Preview::MdH4 => {
+                self.paint_md_preview(frame, "#### 四级强调", ix, iy, iw, clip, denom, accent);
+            }
+            Preview::MdH5 => {
+                self.paint_md_preview(frame, "##### 五级正文色", ix, iy, iw, clip, denom, accent);
+            }
+            Preview::MdH6 => {
+                self.paint_md_preview(frame, "###### 六级次级色", ix, iy, iw, clip, denom, accent);
+            }
+            Preview::MdBold => {
+                self.paint_md_preview(
+                    frame,
+                    "正文**粗体**同排一行",
+                    ix,
+                    iy,
+                    iw,
+                    clip,
+                    denom,
+                    accent,
+                );
+            }
+            Preview::MdInlineCode => {
+                self.paint_md_preview(
+                    frame,
+                    "正文 `code` 同排一行",
+                    ix,
+                    iy,
+                    iw,
+                    clip,
+                    denom,
+                    accent,
+                );
+            }
+            Preview::MdCodeFence => {
+                self.paint_md_preview(
+                    frame,
+                    "```\nfn main() {\n    hi();\n}\n```",
+                    ix,
+                    iy,
+                    iw,
+                    clip,
+                    denom,
+                    accent,
+                );
+            }
+            Preview::MdQuote => {
+                self.paint_md_preview(
+                    frame,
+                    "> 引用第一行\n> 引用第二行",
+                    ix,
+                    iy,
+                    iw,
+                    clip,
+                    denom,
+                    accent,
+                );
+            }
+            Preview::MdList => {
+                self.paint_md_preview(
+                    frame,
+                    "- 列表项一\n- 列表项二",
+                    ix,
+                    iy,
+                    iw,
+                    clip,
+                    denom,
+                    accent,
+                );
+            }
+            Preview::MdHr => {
+                self.paint_md_preview(
+                    frame,
+                    "上文\n\n---\n\n下文",
+                    ix,
+                    iy,
+                    iw,
+                    clip,
+                    denom,
+                    accent,
+                );
+            }
+            Preview::MdRandomColor => {
+                // 淡彩六色家族横排（accent c1 固定 60° 步进派生）：
+                // 六块满填色片均分内区，纵居中——角色关系见条目 desc
+                let fam = crate::ui::accent::pastel_family(accent.c1);
+                let n = fam.len() as i64;
+                let gap = 6i64;
+                let iw = i64::from(iw);
+                let ih = i64::from(ih);
+                let chip_w = ((iw - gap * (n - 1)) / n).clamp(8, 64);
+                let chip_h = (ih / 2).clamp(8, 64);
+                let cy = iy + (ih - chip_h) / 2;
+                for (i, c) in fam.iter().enumerate() {
+                    let cx0 = ix + i as i64 * (chip_w + gap);
+                    for ay in cy..cy + chip_h {
+                        if ay < clip.0 || ay >= clip.1 || ay < 0 || ay >= i64::from(frame.h) {
+                            continue;
+                        }
+                        for ax in cx0..cx0 + chip_w {
+                            if ax < 0 || ax >= i64::from(frame.w) {
+                                continue;
+                            }
+                            frame.blend_px(ax as u32, ay as u32, *c, 255);
+                        }
+                    }
+                }
+            }
             Preview::CurveSpring => {
                 // spring_pos 响应曲线（0→100 目标，BAR-152 临界阻尼单调趋近）+ 目标虚线
                 let span_ms = 600u32;

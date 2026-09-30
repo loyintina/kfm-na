@@ -102,3 +102,28 @@ fn status_labels_nonempty() {
         assert!(!s.label().is_empty());
     }
 }
+
+/// BAR-207：md 引擎第六大类一效果一条（H1-H6/粗体/行内码/围栏/引用/
+/// 列表/分隔线/随机色 = 13 条）+ 烧瓶钮随 demo 页退役封存留档
+#[test]
+fn spec_bar207_md引擎栏与烧瓶钮封存() {
+    assert!(CATEGORIES.contains(&"md 引擎"), "md 引擎大类失踪");
+    assert_eq!(
+        count_of("md 引擎"),
+        13,
+        "md 引擎栏条数漂移——一效果一条的契约破了"
+    );
+    let e = COMPONENTS
+        .iter()
+        .find(|e| e.name == "烧瓶钮")
+        .expect("烧瓶钮封存条目失踪");
+    assert_eq!(e.cat, "控件");
+    assert!(
+        matches!(e.status, CompStatus::Mothballed),
+        "烧瓶钮必须是封存态（退役展品不许再挂 Active）"
+    );
+    assert!(matches!(
+        e.preview,
+        kfm_na::ui::comp_registry::Preview::Flask
+    ));
+}
