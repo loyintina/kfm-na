@@ -234,32 +234,30 @@ fn spec_终端配置_pixel_scroll字段() {
     assert!(!off.pixel_scroll, "默认配置往返必须保住关态");
 }
 
-// ---- BAR-169 render.json（渲染设置卡） ----
+// ---- BAR-204 render.json 字号档废除（a 案：pinch 实例格一统） ----
 
 #[test]
-fn spec_bar169_render_缺省锚与往返() {
-    use kfm_na::settings::{RenderConfig, parse_render, render_to_json};
-    // 缺文件/空对象 = 宪法锚（36px / 1.40——行为零变化承诺）
-    assert_eq!(
-        parse_render("{}").unwrap(),
-        RenderConfig {
-            md_font_px: 36,
-            md_line_ratio_pct: 140
-        }
-    );
-    assert_eq!(RenderConfig::default().md_font_px, 36);
-    assert_eq!(RenderConfig::default().md_line_ratio_pct, 140);
-    // 往返：序列化 → 解析 ≡ 原值
-    let r = RenderConfig {
-        md_font_px: 44,
-        md_line_ratio_pct: 165,
-    };
-    assert_eq!(parse_render(&render_to_json(&r)).unwrap(), r);
-    // 坏文件机械报错（不许炸终端）
-    assert!(parse_render("not json").is_err());
-    assert!(parse_render("[]").is_err());
-    // 手写配置不罚：档位外表值照收
-    let r = parse_render(r#"{"mdFontPx":40}"#).unwrap();
-    assert_eq!(r.md_font_px, 40);
-    assert_eq!(r.md_line_ratio_pct, 140, "缺省字段回锚");
+fn spec_bar204_render_字号档体系废除钉() {
+    // 渲染字号/行距两旋钮体系整族退役（设置页两卡 + render.json 持久化 +
+    // 全局样式口同单废除——字号唯一来源 = 实例格 pinch）。源码零残留钉：
+    // 盘上旧 render.json 文件无害残留，代码侧一个字符都不许再提
+    let src = include_str!("../src/settings.rs");
+    for gone in [
+        "RenderConfig",
+        "parse_render",
+        "render_to_json",
+        "MD_FONT_STOPS",
+        "MD_RATIO_STOPS",
+        "render.json",
+        "md_font_px",
+        "md_line_ratio_pct",
+    ] {
+        assert!(
+            !src.contains(gone),
+            "settings.rs 字号档件 {gone} 必须零残留"
+        );
+    }
+    // 既有配置面毫发无伤：terminal.json 解析/序列化仍在（连坐检查）
+    let t = parse_terminal(r#"{}"#).unwrap();
+    assert!(!t.pixel_scroll);
 }

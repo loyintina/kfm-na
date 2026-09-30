@@ -23,6 +23,17 @@ pub fn row_of(starts: &[usize], idx: usize) -> usize {
     k
 }
 
+/// 切片钳制唯一口（BAR-210 结穴钉）：prompt_bar 内一切 `items[始..终]`
+/// 切片只许经本函数——始>终 / 终>len 一律钳成合法区间（倒挂 = 空片），
+/// 裸写 `items[` 由 spec_bar210 接线钉判红。2026-09-01 闪退族（slice
+/// index starts at N but ends at M<N）的死因就是裸切片，BAR-197 重写时
+/// 七处各加了 ad-hoc .max()，本钉收口成单源。
+pub fn clamp_slice<T>(v: &[T], start: usize, end: usize) -> &[T] {
+    let s = start.min(v.len());
+    let e = end.min(v.len()).max(s);
+    &v[s..e]
+}
+
 /// 输入栏文字 = 网格文字引擎（BAR-197，0017 #10 面）：量宽/落笔走
 /// measure_bar_items_grid + draw_grid_text_left（步进 = char_cells ×
 /// 实例格宽，字号 = grid_fit 实例格，pinch 联动），行距 =
@@ -257,8 +268,14 @@ impl crate::termview::TermView {
                     let sel_s = snap.selection_start.max(st);
                     let sel_e = snap.selection_end.min(end).max(sel_s);
                     if sel_s < sel_e {
-                        let x0 = items[st..sel_s].iter().map(|i| i.3).sum::<f32>();
-                        let x1 = items[st..sel_e].iter().map(|i| i.3).sum::<f32>();
+                        let x0 = clamp_slice(&items, st, sel_s)
+                            .iter()
+                            .map(|i| i.3)
+                            .sum::<f32>();
+                        let x1 = clamp_slice(&items, st, sel_e)
+                            .iter()
+                            .map(|i| i.3)
+                            .sum::<f32>();
                         let clip_x1 = text_cx + text_cw;
                         let sx0 = (text_cx + 18 + x0 as u32).min(clip_x1);
                         let sx1 = (text_cx + 18 + x1 as u32).min(clip_x1);
@@ -277,7 +294,7 @@ impl crate::termview::TermView {
                 }
                 self.draw_grid_text_left(
                     &mut frame,
-                    &items[st..end.max(st)],
+                    clamp_slice(&items, st, end),
                     i64::from(text_cx + 18),
                     i64::from(line_y(k)),
                     cell_w,
@@ -305,7 +322,10 @@ impl crate::termview::TermView {
                 items.len()
             };
             let caret_slice_end = caret_idx.min(row_end).max(row_start);
-            let x_off: f32 = items[row_start..caret_slice_end].iter().map(|i| i.3).sum();
+            let x_off: f32 = clamp_slice(&items, row_start, caret_slice_end)
+                .iter()
+                .map(|i| i.3)
+                .sum();
             let row_cy = caret_y + step as i32 / 2;
             let caret_x = text_cx + 18 + x_off as u32;
             if caret_on {
@@ -338,12 +358,12 @@ impl crate::termview::TermView {
             let comp_start_clamped = comp_start.max(row_start);
             let comp_end_clamped = comp_end.max(row_start);
             let ux0 = (text_cx + 18) as f32
-                + items[row_start..comp_start_clamped]
+                + clamp_slice(&items, row_start, comp_start_clamped)
                     .iter()
                     .map(|i| i.3)
                     .sum::<f32>();
             let ux1 = (text_cx + 18) as f32
-                + items[row_start..comp_end_clamped]
+                + clamp_slice(&items, row_start, comp_end_clamped)
                     .iter()
                     .map(|i| i.3)
                     .sum::<f32>();
@@ -531,7 +551,7 @@ impl crate::termview::TermView {
         };
         // 列：累计格步进宽，过半归右（浏览器 tap 落点就近原则）
         let mut pen = 18.0f32;
-        for (i, item) in items[row_start..row_end.max(row_start)].iter().enumerate() {
+        for (i, item) in clamp_slice(&items, row_start, row_end).iter().enumerate() {
             if x_local < f64::from(pen + item.3 * 0.5) {
                 return row_start + i;
             }
@@ -564,10 +584,7 @@ impl crate::termview::TermView {
         if row_y + step <= field_y0 || row_y >= field_y1 {
             return; // 行滚出视口不画
         }
-        let x_off: f32 = items[row_start..idx.min(items.len()).max(row_start)]
-            .iter()
-            .map(|i| i.3)
-            .sum();
+        let x_off: f32 = clamp_slice(items, row_start, idx).iter().map(|i| i.3).sum();
         let ax = (text_cx + 18 + x_off as u32) as i32;
         let tip_y = (row_y + step - 2) as u32;
         // 上尖三角 + 正方承载（与定位柄同族，缩小版）。
@@ -773,7 +790,7 @@ impl crate::termview::TermView {
         let anchor_at = |idx: usize| -> (f64, f64) {
             let row = row_of(&starts, idx.min(items.len()));
             let row_start = starts[row];
-            let x_off: f32 = items[row_start..idx.min(items.len()).max(row_start)]
+            let x_off: f32 = clamp_slice(&items, row_start, idx)
                 .iter()
                 .map(|i| i.3)
                 .sum();

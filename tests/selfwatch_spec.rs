@@ -318,3 +318,19 @@ fn spec_dump头_tid_sp_len钉死() {
     assert_eq!(&buf[..n], b"DUMP tid=26018 sp=0x77a6bf7a70 len=16384\n");
     // 头后紧跟裸栈料——头是这堆二进制里唯一的锚,格式一个字不许动
 }
+
+// ---- BAR-210 仪器：在线 fp 链回溯 FRAME 行格式钉 ----
+
+#[test]
+fn spec_bar210_frame行格式钉死() {
+    let mut buf = [0u8; 96];
+    let n = kfm_na::crash::format_frame_line(3, 0x1000_0042, 0x1000_0000, 0x1001_0000, &mut buf);
+    assert_eq!(
+        &buf[..n],
+        b"FRAME i=3 pc=0x10000042 in=libkfm_na off=0x42\n"
+    );
+    let n = kfm_na::crash::format_frame_line(0, 0xdead, 0, 0, &mut buf);
+    assert_eq!(&buf[..n], b"FRAME i=0 pc=0xdead in=foreign\n");
+    let n = kfm_na::crash::format_frame_line(23, 0xffff_ffff_ffff, 0x1000, 0x2000, &mut buf);
+    assert_eq!(&buf[..n], b"FRAME i=23 pc=0xffffffffffff in=foreign\n");
+}

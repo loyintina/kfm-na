@@ -89,12 +89,18 @@ const TV: &str = include_str!("../src/termview.rs");
 #[test]
 fn spec_bar169_md_渲染接线守卫() {
     // ① 查看器涂装换芯：paint_viewer_card 走 md 排版（layout_md）+
-    // md_style 全局口 + 内容高直喂卡几何
+    // 实例格两维（BAR-204：md_style 全局口废除，pinch 实例格一统）+
+    // 内容高直喂卡几何
     assert!(
-        TV.contains(
-            "crate::ui::md_layout::layout_md(&v.content, md::viewer_content_w(w), &style, self)"
-        ),
+        TV.contains("layout_md(&v.content, md::viewer_content_w(w)"),
         "查看器涂装必须吃 md 排版（layout_md + viewer_content_w 同尺）"
+    );
+    let call_at = TV
+        .find("layout_md(&v.content, md::viewer_content_w(w)")
+        .expect("查看器 layout_md 调用点必须在");
+    assert!(
+        TV[call_at..call_at + 200].contains("self.cell_size()"),
+        "查看器排版必须吃实例格两维（pinch 联动；全局样式口已废）"
     );
     assert!(
         TV.contains("md::viewer_card_rect_h(w, h, lay.total_h)"),
@@ -116,26 +122,35 @@ fn spec_bar169_md_渲染接线守卫() {
         !APP.contains("md::viewer_fields("),
         "壳不许再调旧字段版 viewer_fields（分叉账）"
     );
-    // ④ VeilSig 补维：滚动 + md 样式（漏维 = 滚动/换样式不重烘鬼影）
+    // ④ VeilSig 补维：滚动 + 实例格两维（BAR-204 换约：md_style 全局态
+    // 废除——pinch 变格 = 版面变必须重烘；漏维 = 鬼影同律）
     assert!(
         APP.contains("viewer_scroll: cs.viewer.as_ref().map_or(0, |v| v.scroll)"),
         "VeilSig 必须含 scroll 维（GLES 烘焙滚动重烘）"
     );
-    assert!(APP.contains("md_style: ("), "VeilSig 必须含 md 样式维");
-    // ⑤ 量宽同尺：壳排版走 viewer_md_layout（term 真字尺 = 涂装同一把
-    // MdMeasure），三处接线同读这一个 helper
+    assert!(
+        APP.contains("cell: (u32, u32)"),
+        "VeilSig 必须含实例格两维（BAR-204 换约）"
+    );
+    assert!(
+        !APP.contains("md_style"),
+        "md_style 全局口已废（BAR-204）——VeilSig/壳全册零残留"
+    );
+    // ⑤ 量宽同尺：壳排版走 viewer_md_layout（格步进尺 = 涂装同一把
+    // char_cells×实例格宽），三处接线同读这一个 helper
     assert!(
         APP.matches("self.viewer_md_layout(").count() >= 3,
         "三处接线必须同读 viewer_md_layout（量宽单源）"
     );
-    // ⑥ 渲染设置卡：render.json 写盘 + 全局样式口灌（两旋钮同路）
+    // ⑥ 渲染设置卡整族废除（BAR-204 a 案：pinch 实例格一统——render.json
+    // 写盘/全局样式口灌/档位换选全退役，壳册零残留钉）
     assert!(
-        APP.contains("crate::settings::render_to_json(&self.render_cfg)"),
-        "渲染设置必须写盘 render.json"
+        !APP.contains("render_to_json") && !APP.contains("render_cfg"),
+        "渲染设置卡已废（render.json 写盘链零残留）"
     );
     assert!(
-        APP.matches("crate::ui::md_layout::set_md_style(").count() >= 2,
-        "启动与换选两处都必须灌全局样式口"
+        !APP.contains("set_md_style"),
+        "全局样式口已废（set_md_style 零残留）"
     );
 }
 

@@ -148,6 +148,25 @@ pub fn format_pc_line(pc: usize, base: usize, end: usize, buf: &mut [u8]) -> usi
     n
 }
 
+/// FRAME 行格式（纯函数，BAR-210 在线 fp 链回溯）：`FRAME i=N pc=0x…
+/// in=libkfm_na off=0x…\n` 或 `… in=foreign\n`。分类口径与
+/// format_pc_line 同源（base/end 全零按 foreign 报）。
+pub fn format_frame_line(i: usize, pc: usize, base: usize, end: usize, buf: &mut [u8]) -> usize {
+    let mut n = 0;
+    push_bytes(b"FRAME i=", buf, &mut n);
+    push_dec(i, buf, &mut n);
+    push_bytes(b" pc=0x", buf, &mut n);
+    push_hex(pc, buf, &mut n);
+    if base != 0 && pc >= base && pc < end {
+        push_bytes(b" in=libkfm_na off=0x", buf, &mut n);
+        push_hex(pc - base, buf, &mut n);
+    } else {
+        push_bytes(b" in=foreign", buf, &mut n);
+    }
+    push_bytes(b"\n", buf, &mut n);
+    n
+}
+
 /// 寄存器行格式(纯函数):`REG sp=0x… lr=0x… fp=0x… x0=0x… x1=0x… x2=0x…\n`
 /// LR(x30)=野跳转的调用者指纹——addr2line 直达肇事调用点;
 /// FP(x29)=帧链锚(2026-09-09 加):栈料里化石与活帧混杂,fp 链
@@ -224,6 +243,40 @@ unsafe extern "C" fn on_signal(sig: i32, info: *mut libc::siginfo_t, ctx: *mut l
         let n3 = format_reg_line(sp, lr, fp, x0, x1, x2, &mut buf[n1 + n2..]);
         unsafe {
             libc::write(fd, buf.as_ptr().cast(), n1 + n2 + n3);
+        }
+        // BAR-210 仪器：在线 fp 链回溯。2026-09-30 实证动机——SIGABRT
+        // 末族（abort 由 libc 深处发起）16KB 栈窗内零 libkfm_na 帧，
+        // 离线走链才能定罪；在线走完写盘 = 下次崩溃自带调用链
+        // （FRAME i=N pc=… in=libkfm_na off=…/in=foreign，零 na 帧本身
+        // 也是一行自证结论）。只读、有界：fp 必须落 [sp, sp+2MB) 且
+        // 单调递增，破约即断链（野 fp 不追，不许二次 fault）。
+        if fp != 0 && sp != 0 {
+            let mut cur = fp;
+            let top = sp.saturating_add(2 * 1024 * 1024);
+            let mut fbuf = [0u8; 96];
+            for i in 0..24usize {
+                if cur < sp || cur >= top || cur % 8 != 0 {
+                    break;
+                }
+                let (prev, ret) = unsafe { (*(cur as *const usize), *((cur + 8) as *const usize)) };
+                if ret == 0 {
+                    break;
+                }
+                let fn_len = format_frame_line(
+                    i,
+                    ret,
+                    SO_BASE.load(Ordering::Relaxed),
+                    SO_END.load(Ordering::Relaxed),
+                    &mut fbuf,
+                );
+                unsafe {
+                    libc::write(fd, fbuf.as_ptr().cast(), fn_len);
+                }
+                if prev <= cur {
+                    break;
+                }
+                cur = prev;
+            }
         }
     }
     // 栈料倾倒(探针也倒——SIGURG 冒烟顺带端到端验这条链)

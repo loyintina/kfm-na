@@ -1,12 +1,15 @@
-//! ui/md_paint.rs — md 绘制层（BAR-169 md 渲染器一期，壳层）：MdLayout
-//! → 像素。涂装规格 = theme.md §2.5 淡彩六色家族 + §三 md 条款——**demo
-//! 页涂装即打样规格**，本册是同配方的数据驱动版（demo 页硬编码样品
-//! 二期才换芯，本单不动）。
+//! ui/md_paint.rs — md 绘制层（BAR-169 md 渲染器一期，壳层；BAR-204
+//! 换芯网格文字引擎）：MdLayout → 像素。涂装规格 = theme.md §2.5 淡彩
+//! 六色家族 + §三 md 条款——**demo 页涂装即打样规格**，本册是同配方的
+//! 数据驱动版（demo 页硬编码样品二期才换芯，本单不动）。
 //!
-//! 消费关系：md_parse（事件流）→ md_layout（折行几何，行宽实量存档）
-//! → 本册（照几何涂装，量宽与排版同一把尺 = MdMeasure 对 TermView 的
-//! 落地）。查看器正文视口纵裁剪由调用方喂 clip（BAR-167 ①滚动双裁
-//! 纪律：上裁防污染标题/分隔线带，下裁守关闭钮前隙）。
+//! 消费关系：md_parse（事件流）→ md_layout（折行几何，行宽存档）
+//! → 本册（照几何涂装，落笔走网格引擎 `measure_items_grid_stepped` +
+//! `draw_grid_text_stepped`：步进 = char_cells × 实例格宽 × 档 scale，
+//! 字形 px = grid_fit 实例格 × scale——pen 累进与排版行宽同一把尺
+//! = `grid_stepped_w` 唯一源）。查看器正文视口纵裁剪由调用方喂 clip
+//! （BAR-167 ①滚动双裁纪律：上裁防污染标题/分隔线带，下裁守关闭钮
+//! 前隙）。
 
 use crate::termview::{
     CELL_W, Frame, TermView, paint_demo_chip, paint_thin_frame, ring_gradient_rgb,
@@ -14,22 +17,7 @@ use crate::termview::{
 use crate::ui::accent::{self, AccentPair};
 use crate::ui::demo_page as dp;
 use crate::ui::demo_page::{BlockKind, SegStyle};
-use crate::ui::md_layout::{MdLayout, MdMeasure};
-
-/// 量宽通路落地：排版与涂装同一把尺（TermView::text_width 真字尺）
-impl MdMeasure for TermView {
-    fn md_text_w(&self, text: &str, px: f32) -> u32 {
-        self.text_width(text, px)
-    }
-}
-
-/// dyn 转发（android 壳的 term 句柄是 Box<dyn TermEmu>——cfg 盲区件，
-/// android check 唯一兜底）；量宽仍走同一条 text_width 通路
-impl MdMeasure for Box<dyn crate::termview::TermEmu> {
-    fn md_text_w(&self, text: &str, px: f32) -> u32 {
-        self.text_width(text, px)
-    }
-}
+use crate::ui::md_layout::{MdLayout, grid_stepped_w};
 
 impl TermView {
     /// md 正文涂装（数据驱动版 paint_demo_content_impl）：x0/y0 = 文档
@@ -139,7 +127,7 @@ impl TermView {
                                 content_r,
                                 ly,
                                 b.line_h,
-                                b.px,
+                                b.scale,
                                 pastel[dp::pastel_role::BOLD],
                                 inset,
                                 yclip,
@@ -156,7 +144,7 @@ impl TermView {
                     for (i, line) in b.lines.iter().enumerate() {
                         let ly = by + i as i64 * i64::from(b.line_h);
                         self.md_text_line(
-                            frame, line, x0, content_r, ly, b.line_h, b.px, fg, 0.0, yclip,
+                            frame, line, x0, content_r, ly, b.line_h, b.scale, fg, 0.0, yclip,
                         );
                     }
                 }
@@ -169,11 +157,11 @@ impl TermView {
                     for (i, line) in b.lines.iter().enumerate() {
                         let ly = by + i as i64 * i64::from(b.line_h);
                         self.md_text_line(
-                            frame, line, x0, content_r, ly, b.line_h, b.px, fg, 0.0, yclip,
+                            frame, line, x0, content_r, ly, b.line_h, b.scale, fg, 0.0, yclip,
                         );
                         if double {
                             self.md_text_line(
-                                frame, line, x0, content_r, ly, b.line_h, b.px, fg, 1.0, yclip,
+                                frame, line, x0, content_r, ly, b.line_h, b.scale, fg, 1.0, yclip,
                             );
                         }
                     }
@@ -182,7 +170,7 @@ impl TermView {
                     for (i, line) in b.lines.iter().enumerate() {
                         let ly = by + i as i64 * i64::from(b.line_h);
                         self.md_spans_line(
-                            frame, line, x0, content_r, ly, b.line_h, b.px, body_fg, &pastel,
+                            frame, line, x0, content_r, ly, b.line_h, b.scale, body_fg, &pastel,
                             accent, denom, yclip, clip,
                         );
                     }
@@ -200,7 +188,7 @@ impl TermView {
                             content_r,
                             ly,
                             b.line_h,
-                            b.px,
+                            b.scale,
                             body_fg,
                             0.0,
                             yclip,
@@ -230,7 +218,7 @@ impl TermView {
                             content_r,
                             ly,
                             b.line_h,
-                            b.px,
+                            b.scale,
                             meta_fg,
                             0.0,
                             yclip,
@@ -266,7 +254,7 @@ impl TermView {
                             content_r,
                             ly,
                             b.line_h,
-                            b.px,
+                            b.scale,
                             body_fg,
                             0.0,
                             yclip,
@@ -295,7 +283,9 @@ impl TermView {
         }
     }
 
-    /// 单行文字涂装（无行内段）：右裁 content_r + 纵裁 yclip
+    /// 单行文字涂装（无行内段）·网格引擎版：步进 = char_cells × 实例
+    /// 格宽 × 档 scale（与排版尺同源唯一源 grid_stepped_w），字形 px =
+    /// grid_fit 实例格 × scale；右裁 content_r + 纵裁 yclip
     #[allow(clippy::too_many_arguments)]
     fn md_text_line(
         &self,
@@ -305,43 +295,47 @@ impl TermView {
         content_r: i64,
         y: i64,
         rh: u32,
-        px: f32,
+        scale: f32,
         fg: u32,
         inset: f32,
         yclip: Option<(i32, i32)>,
     ) {
-        // 段列拼串单行画（H1-H6/引用/列表/代码行内无样式段；正文段排走
-        // md_spans_line）—— spans 为一行的完整样式列，这里顺序段排
+        // 段列逐段画（H1-H6/引用/列表/代码行内无样式段；正文段排走
+        // md_spans_line）；字形线盒（cell_h × scale）在行带内纵向居中
+        let (cell_w, cell_h) = self.cell_size();
+        let step = cell_w as f32 * scale;
+        let glyph_h = cell_h as f32 * scale;
+        let y_top = y + ((i64::from(rh) as f32 - glyph_h).max(0.0) / 2.0) as i64;
         let mut pen = x;
         for (style, text) in &line.spans {
             let _ = style; // 标题/引用等单色行：样式段文字同色（行内强调档归正文路）
+            let tw = i64::from(grid_stepped_w(text, step));
             if pen >= content_r {
                 break;
             }
-            let cx = pen.max(0);
+            let cx = pen + inset as i64;
             let cr = content_r.min(i64::from(frame.w));
-            if cx >= cr || y + i64::from(rh) <= 0 || y >= i64::from(frame.h) {
-                pen += i64::from(self.text_width(text, px));
-                continue;
+            if cx < cr && y + i64::from(rh) > 0 && y < i64::from(frame.h) {
+                let (items, _) = self.measure_items_grid_stepped(text, step, scale);
+                self.draw_grid_text_stepped(
+                    frame,
+                    &items,
+                    cx,
+                    y_top,
+                    step,
+                    (cr - cx).max(0) as u32,
+                    fg,
+                    0,
+                    yclip,
+                );
             }
-            self.draw_text_left_ex(
-                frame,
-                text,
-                cx as u32,
-                (cr - cx) as u32,
-                y.max(0) as u32,
-                rh,
-                px,
-                fg,
-                inset,
-                yclip,
-            );
-            pen += i64::from(self.text_width(text, px));
+            pen += tw;
         }
     }
 
     /// 正文行段排（粗体 = 淡彩 slot0 双绘；行内码 = 淡彩 slot3 + 渐变
-    /// 暗底小块——demo 页打样配方数据驱动版，pen 累进与排版行宽同尺）
+    /// 暗底小块——demo 页打样配方数据驱动版，pen 累进与排版行宽同尺
+    /// = grid_stepped_w 同一尺）
     #[allow(clippy::too_many_arguments)]
     fn md_spans_line(
         &self,
@@ -351,7 +345,7 @@ impl TermView {
         content_r: i64,
         y: i64,
         rh: u32,
-        px: f32,
+        scale: f32,
         body_fg: u32,
         pastel: &[u32; 6],
         accent: AccentPair,
@@ -359,9 +353,10 @@ impl TermView {
         yclip: Option<(i32, i32)>,
         clip: (i64, i64),
     ) {
+        let step = self.cell_size().0 as f32 * scale;
         let mut pen = x0;
         for (style, text) in &line.spans {
-            let tw = i64::from(self.text_width(text, px));
+            let tw = i64::from(grid_stepped_w(text, step));
             match style {
                 SegStyle::Normal => {
                     self.md_text_line(
@@ -371,7 +366,7 @@ impl TermView {
                         content_r,
                         y,
                         rh,
-                        px,
+                        scale,
                         body_fg,
                         0.0,
                         yclip,
@@ -387,7 +382,7 @@ impl TermView {
                             content_r,
                             y,
                             rh,
-                            px,
+                            scale,
                             pastel[dp::pastel_role::BOLD],
                             inset,
                             yclip,
@@ -409,7 +404,7 @@ impl TermView {
                         content_r,
                         y,
                         rh,
-                        px,
+                        scale,
                         pastel[dp::pastel_role::INLINE_CODE],
                         0.0,
                         yclip,
@@ -435,7 +430,7 @@ mod md_paint_smoke {
     //! md_paint 烟雾钉（BAR-169，ASCII 夹具——宿主字体无 CJK 字形的
     //! 判卷陷阱 BAR-167 已录：要真字形像素用 ASCII 正文）
     use super::*;
-    use crate::ui::md_layout::{MdLayout, MdStyle, layout_md};
+    use crate::ui::md_layout::{MdLayout, layout_md};
 
     fn tv() -> TermView {
         crate::termview::build_vendored().expect("内嵌字体必成").0
@@ -443,7 +438,7 @@ mod md_paint_smoke {
 
     fn paint(md: &str, w: u32, h: u32, y0: i64, clip: (i64, i64)) -> (Vec<u32>, MdLayout) {
         let t = tv();
-        let lay = layout_md(md, w, &MdStyle::default(), &t);
+        let lay = layout_md(md, w, t.cell_size());
         let mut buf = vec![0u32; (w * h) as usize];
         {
             let mut frame = Frame {
@@ -557,5 +552,26 @@ mod md_paint_smoke {
         // 零宽/零高/负原点不炸
         let _ = paint("# x", 0, 0, 0, (0, 0));
         let _ = paint("# x", 800, 600, -5000, (0, 600));
+    }
+
+    #[test]
+    fn spec_bar204_涂装尺与排版尺同源() {
+        // 涂装 pen 步进 = 排版行宽同一把格尺：正文「aa」（2 格 × 18px =
+        // 36px）墨不许越过排版行宽右缘——涂装尺分叉（步进不吃实例格/
+        // 不吃档 scale）的变异在这里红（第二字墨落进 36..72）
+        let (buf, lay) = paint("aa", 200, 600, 0, (0, 600));
+        let b = &lay.blocks[0];
+        assert_eq!(b.lines[0].w, 36, "排版尺：2 格 × 18px 步进");
+        let band = b.y..b.y + b.line_h;
+        assert!(
+            band.clone().any(|y| (0..36).any(|x| ink(&buf, 200, x, y))),
+            "行宽内必须有墨"
+        );
+        for y in band {
+            assert!(
+                (36..200).all(|x| !ink(&buf, 200, x, y)),
+                "墨溢过排版行宽右缘 y={y}（涂装尺分叉）"
+            );
+        }
     }
 }

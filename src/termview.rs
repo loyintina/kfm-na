@@ -3964,7 +3964,7 @@ impl TermView {
     /// 文本格量宽 px（BAR-196 网格引擎尺：总格数 × 实例格宽——涂装
     /// 格步进与几何/命中同一条尺，pinch 联动）。设置页字段/下拉几何
     /// （涂装 paint_pool_upper + 壳侧 android_app 命中/面板宽）一律
-    /// 吃本尺；md 排版面（#6 挂账）仍走 text_width 旧尺
+    /// 吃本尺；md 排版面 BAR-204 已收编（#6 挂账销：格步进尺同源）
     pub fn grid_text_width(&self, text: &str) -> u32 {
         crate::ui::grid_text::grid_text_cells(text) * self.cell_w
     }
@@ -4798,18 +4798,19 @@ impl TermView {
 
         let cw = (g.x1 - g.x0).max(0);
         let view_h = (g.view_y1 - g.view_y0).max(0);
-        // 占位相一行居中（视口区中置）
+        // 占位相一行居中（视口区中置；网格引擎居中件，字号吃 grid_fit
+        // 实例格 pinch 联动——BAR-204 字号档废除后唯一取数口）
         let placeholder = |frame: &mut Frame<'_>, text: &str| {
-            self.draw_text_centered(
+            self.draw_grid_text_centered(
                 frame,
                 text,
                 g.x0 + off,
                 g.view_y0,
                 cw as u32,
                 view_h as u32,
-                32.0,
                 meta_fg,
                 g.x0 + off,
+                None,
             );
         };
         match &page.phase {
@@ -4817,15 +4818,13 @@ impl TermView {
             rp::ReaderPhase::Binary => placeholder(&mut frame, "二进制文件不可读"),
             rp::ReaderPhase::Error(msg) => placeholder(&mut frame, msg),
             rp::ReaderPhase::Reading => {
-                let style = crate::ui::md_layout::md_style();
                 // BAR-208：排版走缓存（text_epoch 键）——滚动重烘零重排，
-                // 同代与帧泵/拖拽/甩尾共读一份
+                // 同代与帧泵/拖拽/甩尾共读一份；BAR-204：键三四维 = 实例格
                 let lay = crate::ui::md_layout::layout_md_cached(
                     page.text_epoch,
                     &page.text,
                     cw as u32,
-                    &style,
-                    self,
+                    self.cell_size(),
                 );
                 let max = rp::scroll_max(i64::from(lay.total_h), view_h);
                 // ---- 进度线（贴顶栏底缘线下 3px，accent c1→c2 渐变，
@@ -4859,22 +4858,22 @@ impl TermView {
                     denom,
                     accent,
                 );
-                // ---- capped 页脚（挂文档尾一行，随滚动进出视口）----
+                // ---- capped 页脚（挂文档尾一行，随滚动进出视口；网格
+                // 引擎居中件 + 视口纵裁——BAR-204 迁）----
                 if page.capped {
                     let fy = g.view_y0 - page.scroll + i64::from(lay.total_h) + i64::from(CELL_H);
                     let fh = i64::from(CELL_H) * 2;
                     if fy + fh > g.view_y0 && fy < g.view_y1 {
-                        self.draw_text_centered_yclip(
+                        self.draw_grid_text_centered(
                             &mut frame,
                             "文件过大只显示前 2MB",
                             g.x0 + off,
                             fy,
                             cw as u32,
                             fh as u32,
-                            28.0,
                             meta_fg,
                             g.x0 + off,
-                            Some((g.view_y0, g.view_y1)),
+                            Some((g.view_y0 as i32, g.view_y1 as i32)),
                         );
                     }
                 }
@@ -7196,11 +7195,10 @@ impl TermView {
         let denom = ((w - 1) + (h - 1)).max(1) as i64; // 池内容同一把渐变尺
 
         // 居中卡（几何 = modal.rs 查看器族；BAR-169 md 渲染器：正文 =
-        // md 文档——排版折行吃 viewer_content_w 像素尺（量宽与涂装同一把
-        // 尺 = MdMeasure 对 TermView 落地），卡高吃 md 排版 total_h）
-        let style = crate::ui::md_layout::md_style();
+        // md 文档——排版折行吃 viewer_content_w 宽 + 实例格两维（BAR-204：
+        // 格步进尺与涂装同源，pinch 联动），卡高吃 md 排版 total_h）
         let lay =
-            crate::ui::md_layout::layout_md(&v.content, md::viewer_content_w(w), &style, self);
+            crate::ui::md_layout::layout_md(&v.content, md::viewer_content_w(w), self.cell_size());
         let card = md::viewer_card_rect_h(w, h, lay.total_h);
         let cx0 = card.x + off;
         if cx0 < 0 {
@@ -10582,6 +10580,35 @@ impl TermView {
         (items, cells)
     }
 
+    /// 自定步进+自定字形缩放版量宽（BAR-204 md 面：排版尺与涂装尺同源
+    /// = char_cells × step_unit，逐字挑字体同 measure_items_grid；字形
+    /// px = grid_fit 实例格对应字体 px × glyph_scale——标题阶梯/代码档
+    /// 的「步进与字形一起缩放」走本件）。返回行总格数（折行账用）
+    pub(crate) fn measure_items_grid_stepped(
+        &self,
+        text: &str,
+        step_unit: f32,
+        glyph_scale: f32,
+    ) -> (Vec<GridItem<'_>>, u32) {
+        let (px, _bo, cpx, _cbo) = self.grid_fit();
+        let mut items = Vec::new();
+        let mut cells = 0u32;
+        for c in text.chars() {
+            let Some(f) = self.pick_font(c) else {
+                let mut seen = self.tofu_seen.borrow_mut();
+                if !seen.contains(&c) && seen.len() < 16 {
+                    seen.push(c);
+                }
+                continue;
+            };
+            let item_px = if std::ptr::eq(f, &self.font) { px } else { cpx };
+            let n = crate::ui::grid_text::char_cells(c);
+            items.push((f, c, item_px * glyph_scale, n as f32 * step_unit));
+            cells += n;
+        }
+        (items, cells)
+    }
+
     /// 格落笔（左对齐单行书）：pen_x 从 x0 起，每字步进 = 格宽整数倍
     /// （draw 内按 char_cells × cell_w 重算——与 measure_items_grid 同
     /// 一条公式，不信任上游可能放过期的 item.3）；字形在自身格跨内
@@ -10606,10 +10633,43 @@ impl TermView {
         clip_x0: i64,
         clip_y: Option<(i32, i32)>,
     ) {
+        self.draw_grid_text_stepped(
+            frame,
+            items,
+            x0,
+            y_top,
+            cell_w as f32,
+            max_px_w,
+            fg,
+            clip_x0,
+            clip_y,
+        );
+    }
+
+    /// 格落笔·自定步进版（BAR-204 md 面）：语义与 draw_grid_text_left
+    /// 全同，唯步进尺 = char_cells × step_unit（f32——md 标题/代码档的
+    /// 步进随档 scale 缩放，不是实例格宽整数倍）；baseline 随步进比
+    /// （step_unit / 实例 cell_w）同缩——步进与字形一起缩放的另一半。
+    /// step_unit = 实例 cell_w 时与 draw_grid_text_left 逐值等价（本件
+    /// 是本体，左件是 cell_w 进 f32 的薄壳）
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn draw_grid_text_stepped(
+        &self,
+        frame: &mut Frame<'_>,
+        items: &[GridItem<'_>],
+        x0: i64,
+        y_top: i64,
+        step_unit: f32,
+        max_px_w: u32,
+        fg: u32,
+        clip_x0: i64,
+        clip_y: Option<(i32, i32)>,
+    ) {
+        let base_scale = step_unit / self.cell_w as f32;
         let mut pen_x = x0 as f32;
         let clip_right = x0 + i64::from(max_px_w);
         for (f, c, px, _adv) in items {
-            let span = crate::ui::grid_text::char_cells(*c) as f32 * cell_w as f32;
+            let span = crate::ui::grid_text::char_cells(*c) as f32 * step_unit;
             if span <= 0.0 {
                 continue; // 零宽字符不占格不落笔（墨没处放）
             }
@@ -10618,13 +10678,14 @@ impl TermView {
                 break;
             }
             let baseline = y_top as f32
-                + if std::ptr::eq(*f, &self.font) {
-                    self.baseline_off
-                } else {
-                    self.cjk
-                        .as_ref()
-                        .map_or(self.baseline_off, |k| k.baseline_off)
-                };
+                + base_scale
+                    * if std::ptr::eq(*f, &self.font) {
+                        self.baseline_off
+                    } else {
+                        self.cjk
+                            .as_ref()
+                            .map_or(self.baseline_off, |k| k.baseline_off)
+                    };
             let g = self.rasterize_cached(f, *c, *px); // BAR-102：缓存光栅
             let (m, bmp) = (&g.0, &g.1);
             if m.width == 0 || m.height == 0 {

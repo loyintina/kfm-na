@@ -15,7 +15,7 @@
 | `src/brain_ep.rs` | 4 | 4 | 0 | — |
 | `src/catchup.rs` | 9 | 9 | 0 | — |
 | `src/conn.rs` | 4 | 2 | 2 | spawn_smoke ws_spawner |
-| `src/crash.rs` | 8 | 7 | 1 | install_signal_hook |
+| `src/crash.rs` | 9 | 8 | 1 | install_signal_hook |
 | `src/ctrl_feed.rs` | 7 | 6 | 1 | reset |
 | `src/direct_brain.rs` | 2 | 2 | 0 | — |
 | `src/endpoint.rs` | 9 | 9 | 0 | — |
@@ -51,7 +51,7 @@
 | `src/sess_pool.rs` | 33 | 30 | 3 | TAIL_EVENTS take_dirty request_routes |
 | `src/session.rs` | 14 | 14 | 0 | — |
 | `src/session_router.rs` | 11 | 11 | 0 | — |
-| `src/settings.rs` | 14 | 9 | 5 | parse QUIC_DEFAULT_PORT QUIC_REVERSE_PORT MD_FONT_STOPS MD_RATIO_STOPS |
+| `src/settings.rs` | 10 | 7 | 3 | parse QUIC_DEFAULT_PORT QUIC_REVERSE_PORT |
 | `src/singleton.rs` | 7 | 4 | 3 | LOCK_PATH lock_exclusive try_acquire |
 | `src/svc_health.rs` | 12 | 8 | 4 | HIST_PATH set_visible sys_snap take_dirty |
 | `src/sys_hist.rs` | 39 | 34 | 5 | BAR_W PLACEHOLDER_PCT hist_idx restore HIST_FORMAT |
@@ -81,14 +81,14 @@
 | `src/ui/link_card.rs` | 10 | 10 | 0 | — |
 | `src/ui/mail_card.rs` | 5 | 4 | 1 | N_ENTRIES |
 | `src/ui/mail_list.rs` | 36 | 24 | 12 | ITEM_PAD_V ITEM_PAD_H ITEM_META_H ITEM_TITLE_H ITEM_SUMMARY_H ITEM_ROW_GAP SUMMARY_PENDING SUMMARY_EMPTY title_rect SUMMARY_LOOKBACK open_key take_dirty |
-| `src/ui/md_layout.rs` | 6 | 6 | 0 | — |
+| `src/ui/md_layout.rs` | 5 | 5 | 0 | — |
 | `src/ui/md_parse.rs` | 2 | 2 | 0 | — |
 | `src/ui/modal.rs` | 32 | 31 | 1 | VEIL_DIM_ARGB |
 | `src/ui/orb.rs` | 5 | 5 | 0 | — |
 | `src/ui/panel_drag.rs` | 12 | 7 | 5 | DRAG_DIR_LOCK RELEASE_PROGRESS VELOCITY_WINDOW_MS locked current_offset |
 | `src/ui/parser_chain.rs` | 15 | 12 | 3 | COL_W_NUM COL_W_DEN window_of |
 | `src/ui/parser_page.rs` | 63 | 48 | 15 | COL_GAP DIVIDER_ZONE MAX_VISIBLE_LINES MIN_VISIBLE_LINES MODAL_CARD_W MODAL_PAD_V MODAL_GAP MODAL_BTN_GAP CONFIRM_LABELS cancel_confirm register_parser_page parser_page_handle baked_epoch note_baked_geo baked_geo |
-| `src/ui/prompt_bar.rs` | 5 | 4 | 1 | row_of |
+| `src/ui/prompt_bar.rs` | 6 | 5 | 1 | row_of |
 | `src/ui/reader_page.rs` | 25 | 22 | 3 | TOP_BAR_H PROGRESS_H register_reader |
 | `src/ui/seam.rs` | 34 | 34 | 0 | — |
 | `src/ui/stage.rs` | 7 | 7 | 0 | — |

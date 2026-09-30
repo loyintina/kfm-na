@@ -260,3 +260,185 @@ fn spec_bar197_输入栏_网格引擎接线守卫() {
         "壳侧命中/带高必须吃运行期行距（bar_line_step）"
     );
 }
+
+// ---- BAR-204 阅读页/md 字号档废除 · 迁网格文字引擎（a 案 pinch 一统）----
+
+/// md 排版层（纯逻辑：尺子换芯 char_cells×实例格步进）
+const MD_LAYOUT: &str = include_str!("../src/ui/md_layout.rs");
+/// md 绘制层（壳：落笔换网格引擎）
+const MD_PAINT: &str = include_str!("../src/ui/md_paint.rs");
+/// 设置持久化（render.json 字号档体系废除面）
+const SETTINGS: &str = include_str!("../src/settings.rs");
+
+#[test]
+fn spec_bar204_md阅读页_网格引擎接线守卫() {
+    // ① 字号档体系整族退役：MdStyle 全局态/MdMeasure 通路/旧尺件在
+    // 排版+涂装两册字面零残留（doc 注释也不许提——注释回潮 = 下一棒
+    // 照注释复活的温床）
+    for (name, src) in [("md_layout", MD_LAYOUT), ("md_paint", MD_PAINT)] {
+        for gone in [
+            "MdStyle",
+            "MdMeasure",
+            "MD_STYLE",
+            "set_md_style",
+            "md_style",
+            "line_h_styled",
+            "text_width",
+            "draw_text_left_ex(",
+            "draw_text_left(",
+        ] {
+            assert!(!src.contains(gone), "{name} 旧字号档件 {gone} 必须零残留");
+        }
+    }
+    // ② 排版尺换芯：实例格两维入参 + char_cells 纯函数量宽 + 行高咬实例
+    // 半格网 + 排版/涂装同源尺件（涂装 pen 累进直调，不许另写尺子）
+    assert!(
+        MD_LAYOUT.contains("pub fn layout_md(") && MD_LAYOUT.contains("cell: (u32, u32)"),
+        "layout_md 必须吃实例格两维（pinch 唯一可调维）"
+    );
+    assert!(
+        MD_LAYOUT.contains("char_cells"),
+        "排版量宽必须走 char_cells（与涂装同源纯函数）"
+    );
+    assert!(
+        MD_LAYOUT.contains("pub fn line_h_grid("),
+        "行高件 line_h_grid 必须在（咬实例半格网）"
+    );
+    assert!(
+        MD_LAYOUT.contains("pub fn grid_stepped_w("),
+        "同源尺件 grid_stepped_w 必须在（排版行宽 = 涂装 pen 累进）"
+    );
+    // ③ 引擎新件在（定义行——咬 fn 前缀同 spec_bar196/197 教训）
+    assert!(
+        TERMVIEW.contains("fn measure_items_grid_stepped("),
+        "引擎块必须有 measure_items_grid_stepped（自定步进+字形缩放）"
+    );
+    assert!(
+        TERMVIEW.contains("fn draw_grid_text_stepped("),
+        "引擎块必须有 draw_grid_text_stepped（自定步进落笔）"
+    );
+    // ④ 涂装同源（函数体粒度）：md 单行/段排两件的 pen 累进吃同一
+    // grid_stepped_w、落笔走 stepped 引擎件；旧尺件函数体内零残留
+    let line = fn_body(MD_PAINT, "fn md_text_line(");
+    assert!(
+        line.contains("measure_items_grid_stepped(") && line.contains("draw_grid_text_stepped("),
+        "md_text_line 必须走 stepped 网格引擎（量宽+落笔）"
+    );
+    assert!(
+        line.contains("grid_stepped_w("),
+        "md_text_line pen 累进必须吃 grid_stepped_w（排版同源尺）"
+    );
+    assert!(
+        !line.contains("text_width(") && !line.contains("draw_text_left_ex("),
+        "md_text_line 旧尺件零残留"
+    );
+    let spans = fn_body(MD_PAINT, "fn md_spans_line(");
+    assert!(
+        spans.contains("grid_stepped_w("),
+        "md_spans_line pen 累进必须吃 grid_stepped_w（排版同源尺）"
+    );
+    assert!(!spans.contains("text_width("), "md_spans_line 旧尺件零残留");
+    // ⑤ 阅读页占位相/页脚迁网格居中件（切片粒度：占位相闭包与 capped
+    // 页脚段——顶栏文件名/返回钮是别面存量，本单不动；先抹新名再查，
+    // 同 spec_bar196 写法）
+    let rd = fn_body(TERMVIEW, "pub(crate) fn paint_reader_content_impl(");
+    let ph_at = rd.find("let placeholder").expect("占位相闭包必须在");
+    let ph_end = rd[ph_at..]
+        .find("match &page.phase")
+        .expect("phase 分发必须在")
+        + ph_at;
+    let ph = &rd[ph_at..ph_end];
+    assert!(
+        ph.contains("draw_grid_text_centered("),
+        "占位相必须走 draw_grid_text_centered（网格引擎居中件）"
+    );
+    assert!(
+        !ph.replace("draw_grid_text_centered(", "")
+            .contains("draw_text_centered("),
+        "占位相旧居中件零残留"
+    );
+    let ft_at = rd.find("if page.capped").expect("capped 页脚必须在");
+    let ft = &rd[ft_at..];
+    assert!(
+        ft.contains("draw_grid_text_centered("),
+        "capped 页脚必须走 draw_grid_text_centered"
+    );
+    let ft_old = ft.replace("draw_grid_text_centered(", "");
+    assert!(
+        !ft_old.contains("draw_text_centered(") && !ft_old.contains("draw_text_centered_yclip("),
+        "capped 页脚旧居中件零残留"
+    );
+    // ⑥ 壳侧字号档零残留 + sig/缓存键换实例格两维
+    for gone in [
+        "render_cfg",
+        "render.json",
+        "RenderConfig",
+        "MD_FONT_STOPS",
+        "MD_RATIO_STOPS",
+        "set_md_style",
+        "md_style",
+        "apply_render",
+    ] {
+        assert!(
+            !APP.contains(gone),
+            "android_app 字号档件 {gone} 必须零残留"
+        );
+    }
+    assert!(
+        !SETTINGS.contains("RenderConfig") && !SETTINGS.contains("render.json"),
+        "settings.rs 字号档持久化件必须零残留（settings_spec 有专钉，双保险）"
+    );
+    assert!(
+        fn_body(APP, "fn poll_reader(&mut self)").contains("cell_size()"),
+        "poll_reader 缓存键必须含实例格两维（pinch 变格 = 重排版）"
+    );
+    assert!(
+        APP.contains("cell: (u32, u32)"),
+        "VeilSig 必须含实例格维（pinch 变格 = 查看器版面变必须重烘）"
+    );
+}
+
+// ---- BAR-210：prompt_bar 切片钳制收单源（2026-09-30 承影 panic.log 挖到
+// 「slice index starts at N but ends at M」陈尸×4——时戳实证是 2026-09-01
+// 旧核（BAR-045 当夜已修+BAR-197 重写七处各加 ad-hoc 钳），本 BAR 把七处
+// 钳收口成 clamp_slice 单源并接线钉死，永不回潮）----
+
+#[test]
+fn spec_bar210_切片钳制纯函数() {
+    use kfm_na::ui::prompt_bar::clamp_slice;
+    let v = [10, 20, 30, 40];
+    assert_eq!(clamp_slice(&v, 1, 3), &[20, 30]); // 正常区间原样
+    assert_eq!(clamp_slice(&v, 3, 1), &[] as &[i32]); // 倒挂=空片（陈尸族死因）
+    assert_eq!(clamp_slice(&v, 2, 99), &[30, 40]); // 终越界钳 len
+    assert_eq!(clamp_slice(&v, 99, 100), &[] as &[i32]); // 始越界=空片
+    assert_eq!(clamp_slice(&v, 0, 4), &[10, 20, 30, 40]); // 全量
+    assert_eq!(clamp_slice(&v, 0, 0), &[] as &[i32]); // 空区间
+}
+
+#[test]
+fn spec_bar210_输入栏裸区间切片清零接线守卫() {
+    // prompt_bar.rs 内不许再有裸 `items[… .. …]` 区间切片（单点索引
+    // items[row_end-1] 上界由 row_end≤len 构造守，不在禁列）——
+    // 一切区间切片走 clamp_slice（定义 1 + 调用点 7）
+    let mut bare = 0;
+    for line in PROMPT.lines() {
+        // 注释行不算（防 prose 毒——BAR-192 同族教训：本钉自己的 doc 里
+        // 就写着 `items[始..终]` 字样）
+        if line.trim_start().starts_with("//") {
+            continue;
+        }
+        if let Some(pos) = line.find("items[")
+            && line[pos..].contains("..")
+        {
+            bare += 1;
+        }
+    }
+    assert_eq!(
+        bare, 0,
+        "prompt_bar 裸 items[..] 区间切片必须清零（走 clamp_slice）"
+    );
+    assert!(
+        PROMPT.matches("clamp_slice(").count() >= 8,
+        "clamp_slice 单源（定义+七调用点）必须在"
+    );
+}

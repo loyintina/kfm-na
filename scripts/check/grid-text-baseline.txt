@@ -2,10 +2,8 @@ src/termview.rs:draw_text_centered
 src/termview.rs:draw_text_centered
 src/termview.rs:draw_text_centered
 src/termview.rs:draw_text_centered
-src/termview.rs:draw_text_centered
 src/termview.rs:draw_text_centered_yclip
 src/termview.rs:draw_text_centered_yclip
-src/termview.rs:draw_text_centered_yclip
 src/termview.rs:draw_text_left_ex
 src/termview.rs:draw_text_left_ex
 src/termview.rs:draw_text_left_ex
@@ -25,10 +23,3 @@ src/termview.rs:text_width
 src/termview.rs:text_width
 src/termview.rs:text_width
 src/termview.rs:text_width
-src/ui/md_layout.rs:text_width
-src/ui/md_paint.rs:draw_text_left_ex
-src/ui/md_paint.rs:text_width
-src/ui/md_paint.rs:text_width
-src/ui/md_paint.rs:text_width
-src/ui/md_paint.rs:text_width
-src/ui/md_paint.rs:text_width

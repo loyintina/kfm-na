@@ -671,10 +671,6 @@ struct App {
     /// 配置页 UI 共用这份
     settings_servers: Vec<crate::settings::ServerEntry>,
     terminal_cfg: crate::settings::TerminalConfig,
-    /// render.json 渲染设置（BAR-169：md 字号基准/行距两旋钮；缺/坏 →
-    /// 宪法缺省 + 上报，同 terminal.json 纪律；渲染面另读
-    /// md_layout::md_style 全局口——本字段服务设置页 UI 回显）
-    render_cfg: crate::settings::RenderConfig,
     /// 全局切换键的拦截字节（= terminal_cfg.switch_hotkey 经 keymap
     /// 同一把尺产出的缓存，逐键比对免换算；空 = 不拦截）
     switch_hotkey_bytes: Vec<u8>,
@@ -894,9 +890,9 @@ struct VeilSig {
     /// scroll 维——redroid 兜底路逐帧原位涂装掩盖，GLES 路径漏维 =
     /// 滚动不重烘旧帧鬼影；modal 恒 0）
     viewer_scroll: i64,
-    /// md 渲染样式两旋钮（BAR-169 设置页渲染配置卡：字号基准×100 +
-    /// 行距×100——样式变 = 版面变必须重烘；modal 也吃同值无害）
-    md_style: (u32, u32),
+    /// md 排版实例格两维（BAR-204 换约：全局样式态随字号档废除——
+    /// pinch 变格 = 版面变必须重烘；modal 也吃同值无害）
+    cell: (u32, u32),
     /// 信箱列表卡三维账（BAR-212：册键 + 视图 epoch（滚动/追底）+
     /// 数据 epoch（列表/摘要换代）——漏维 = 滚动/摘要到达不重烘鬼影；
     /// 卡关着 = (0,0,0)）
@@ -927,6 +923,8 @@ const DEFAULT_MODEL: &str = "glm-5.3-flash";
 /// settings/servers.json + settings/terminal.json。缺文件 = 现状默认
 /// （空服务器表 → ConnConfig 走 8021 锚；terminal.json 缺 → 本地起步
 /// + Ctrl-]）；坏文件 = 上报 + 回退默认——配置文件不许炸终端。
+/// （BAR-204：渲染字号档体系废除——盘上旧配置文件无害残留，
+/// 代码侧不再读；md 字号唯一来源 = 实例格 pinch）
 ///
 /// 配置文件不进 git——由脚本经隧道推送（ai/providers.json 同款纪律）
 fn load_settings(
@@ -934,13 +932,11 @@ fn load_settings(
 ) -> (
     Vec<crate::settings::ServerEntry>,
     crate::settings::TerminalConfig,
-    crate::settings::RenderConfig,
 ) {
     let mut servers = Vec::new();
     let mut term_cfg = crate::settings::TerminalConfig::default();
-    let mut render_cfg = crate::settings::RenderConfig::default();
     let Some(dir) = app.and_then(|a| a.internal_data_path()) else {
-        return (servers, term_cfg, render_cfg);
+        return (servers, term_cfg);
     };
     // 自重启旗标路径的唯一来源（hatch/RESTART.request 探针归
     // self_restart::poll_flag；拿不到目录 = 远程重启路断，钮路不受影响）
@@ -958,13 +954,7 @@ fn load_settings(
             Err(e) => crate::report::report_sync("term", &format!("terminal.json 解析失败: {e}")),
         }
     }
-    if let Ok(j) = std::fs::read_to_string(cfg.join("render.json")) {
-        match crate::settings::parse_render(&j) {
-            Ok(r) => render_cfg = r,
-            Err(e) => crate::report::report_sync("ui", &format!("render.json 解析失败: {e}")),
-        }
-    }
-    (servers, term_cfg, render_cfg)
+    (servers, term_cfg)
 }
 
 /// 装配本地脑（期 0③ 换脑，D11）：私有目录 ai/providers.json + ai/.env
@@ -1639,12 +1629,11 @@ impl App {
                                 pg.dropdown_pick(i, now, ps_snap, acc);
                                 drop(pg);
                                 // 下拉换选：终端设置行 = 像素滚动开关；
-                                // 渲染字号/行距行 = 渲染设置（写盘+灌样式口）；
                                 // 默认服务器行 = 默认会话变更（写盘+重建归壳）
+                                // （BAR-204：渲染字号/行距两行随字号档体系
+                                // 废除，focus 只剩 0/1）
                                 match tab0_focus {
                                     1 => self.apply_pixel_scroll_pick(),
-                                    2 => self.apply_render_font_pick(),
-                                    3 => self.apply_render_ratio_pick(),
                                     _ => self.apply_default_server_pick(),
                                 }
                                 // 二十四修 §六②：值框宽度伸缩账——旧宽 =
@@ -4329,9 +4318,11 @@ impl App {
     /// 阅读页帧泵（BAR-170）：每圈一问——① tick_restore（内容长到包得
     /// 住恢复值才落）② need_prefetch（滚动进内容尾 1.5 视口且 !eof 且
     /// !loading → 取续块）③ epoch 置脏（续块回执/滚动变化不经触摸）。
-    /// 缓存键 = (epoch, 屏 w/h, inset, md 样式两位)：不变即整跳；
-    /// 排版走 BAR-208 缓存（滚动翻 epoch 不翻 text_epoch——滚动步
-    /// 零克隆零重排，全文排版只在续块/改宽/改样式时发生）
+    /// 缓存键 = (epoch, 屏 w/h, inset, 实例格两维)：不变即整跳（2MB
+    /// 文档每圈全量排版是空烧；epoch 已含文本与滚动代际；BAR-204 实例
+    /// 格维 = pinch 变格必重排版）；排版走 BAR-208 缓存（滚动翻 epoch
+    /// 不翻 text_epoch——滚动步零克隆零重排，全文排版只在续块/改宽/
+    /// 变格时发生）
     fn poll_reader(&mut self) {
         let Some(r) = crate::ui::reader_page::reader_handle() else {
             return;
@@ -4340,16 +4331,12 @@ impl App {
             return;
         };
         let inset = self.chrome_inset() + self.cur_bar_h();
-        let style = crate::ui::md_layout::md_style();
+        let cell = self
+            .term_handle()
+            .map(|t| t.lock().unwrap().cell_size())
+            .unwrap_or((0, 0));
         let epoch = r.lock().unwrap().epoch;
-        let key = (
-            epoch,
-            sw,
-            sh,
-            inset,
-            style.body_px.to_bits(),
-            style.line_ratio.to_bits(),
-        );
+        let key = (epoch, sw, sh, inset, cell.0, cell.1);
         if self.reader_pump_key == Some(key) {
             return;
         }
@@ -4622,7 +4609,7 @@ impl App {
         // ws 连接插件的默认 ConnConfig。默认会话指向的服务器优先，
         // 否则第一条；wsUrl 空则按 tunnel.localPort 拼回环地址；
         // 无条目 = ConnConfig::default()（8021 现状锚，行为零变化）
-        let (servers, term_cfg, render_cfg) = load_settings(self.android_app.as_ref());
+        let (servers, term_cfg) = load_settings(self.android_app.as_ref());
         // 索引先行（借还瞬清，servers 之后整体 move 进 App 字段不打架）
         let default_idx = match &term_cfg.default_session {
             crate::settings::DefaultSession::Server(id) => servers
@@ -4678,10 +4665,6 @@ impl App {
             &term_cfg.default_session,
         ));
         self.terminal_cfg = term_cfg;
-        // 渲染设置灌全局样式口（BAR-169：涂装/滚动上限/命中同读
-        // md_layout::md_style 单源；缺省 = 宪法锚行为零变化）
-        crate::ui::md_layout::set_md_style(render_cfg.md_font_px, render_cfg.md_line_ratio_pct);
-        self.render_cfg = render_cfg;
         self.settings_servers = servers;
         // 解析页 tmux 插件：远程连接配置缓存（ws url + 启动命令）+ 本端
         // 附着会话名（启动命令提取；attach 切换后更新）。无服务器条目 =
@@ -5295,50 +5278,10 @@ impl App {
                 title: "终端设置".into(),
                 meta: "滚动行为".into(),
             },
-            crate::ui::cfg_page::RowView {
-                title: "渲染字号".into(),
-                meta: "md 正文基准".into(),
-            },
-            crate::ui::cfg_page::RowView {
-                title: "渲染行距".into(),
-                meta: "md 行高倍数".into(),
-            },
         ];
-        let focus = page.lock().unwrap().focus().min(3);
-        if focus == 2 || focus == 3 {
-            // 渲染设置（BAR-169 md 渲染器：字号基准/行距两旋钮，用户
-            // 拍板「渲染器值得加配置选项」）：单下拉机制复用（一行一
-            // 下拉——面板几何只认上池首行，双下拉位是二期活）；点选
-            // 写盘 render.json + 灌全局样式口即时生效（查看器重排版）
-            use crate::settings::{MD_FONT_STOPS, MD_RATIO_STOPS};
-            let (label, cur, stops, names): (&str, u32, &[u32], [&str; 3]) = if focus == 2 {
-                (
-                    "字号基准",
-                    self.render_cfg.md_font_px,
-                    &MD_FONT_STOPS,
-                    ["小 32px", "标准 36px", "大 44px"],
-                )
-            } else {
-                (
-                    "行距倍数",
-                    self.render_cfg.md_line_ratio_pct,
-                    &MD_RATIO_STOPS,
-                    ["紧凑 1.30", "标准 1.40", "宽松 1.65"],
-                )
-            };
-            let sel = stops.iter().position(|&v| v == cur).unwrap_or(1);
-            let options: Vec<String> = names.iter().map(|n| n.to_string()).collect();
-            let upper = vec![crate::ui::cfg_page::UpperRow {
-                label: label.into(),
-                value: names[sel].to_string(),
-                is_dropdown: true,
-            }];
-            let mut p = page.lock().unwrap();
-            p.set_rows(rows);
-            p.set_options(options, sel);
-            p.set_upper(upper);
-            return;
-        }
+        // （BAR-204：「渲染字号」「渲染行距」两卡废除——md 字号唯一
+        // 来源 = pinch 实例格，focus 序号只剩 0/1）
+        let focus = page.lock().unwrap().focus().min(1);
         if focus == 1 {
             // 终端设置（2026-09-24 像素级滚动）：单下拉机制复用——选项
             // 关=旧行级保底（默认）/ 开=像素级实验；点选写盘+即时分流
@@ -5509,40 +5452,39 @@ impl App {
     }
 
     /// 查看器正文 md 排版（BAR-169 md 渲染器：拖动/甩尾滚动上限、抬手
-    /// 命中卡几何、涂装四处同读一份；量宽走 term 真字尺 = 涂装同一把
-    /// MdMeasure）。term 不在 = None（宁可无动作不瞎猜几何，
-    /// modal::pick_screen_px 同律）。**调用方纪律：不许持 cfg_page 锁
-    /// 调本函数**（锁序 term→cfg_page，倒持 = 死锁）
+    /// 命中卡几何、涂装四处同读一份；BAR-204 换芯：格步进尺 =
+    /// char_cells × 实例格宽，与涂装同一把尺，pinch 联动）。term 不在
+    /// = None（宁可无动作不瞎猜几何，modal::pick_screen_px 同律）。
+    /// **调用方纪律：不许持 cfg_page 锁调本函数**（锁序 term→cfg_page，
+    /// 倒持 = 死锁）
     fn viewer_md_layout(&self, content: &str, sw: u32) -> Option<crate::ui::md_layout::MdLayout> {
         let term = self.term_handle()?;
         let g = term.lock().unwrap();
-        let style = crate::ui::md_layout::md_style();
         Some(crate::ui::md_layout::layout_md(
             content,
             crate::ui::modal::viewer_content_w(sw),
-            &style,
-            &*g,
+            g.cell_size(),
         ))
     }
 
-    /// 阅读页排版（BAR-208 缓存版）：peek 命中 = 零克隆零重排（滚动步
-    /// 每事件一问的高频路径全走这里）；未中 = 短锁克隆文本 → term 锁
-    /// 排版入柜。锁序红线 term→reader：全程不持 reader 锁取 term 锁；
-    /// 量宽与涂装同一把尺（MdMeasure 对 TermEmu 的落地），content_w 吃
-    /// reader_geom 同一份
+    /// 阅读页排版（BAR-208 缓存版；BAR-204 键换实例格两维）：peek 命中 =
+    /// 零克隆零重排（滚动步每事件一问的高频路径全走这里）；未中 = 短锁
+    /// 克隆文本 → 排版入柜（网格尺纯函数，量宽不再需要 term 锁）。锁序
+    /// 红线 term→reader：先短锁 term 取实例格，再 reader 锁，全程不倒持；
+    /// content_w 吃 reader_geom 同一份
     fn reader_layout_arc(&self, cw: u32) -> Option<std::sync::Arc<crate::ui::md_layout::MdLayout>> {
+        let term = self.term_handle()?;
+        let cell = {
+            let g = term.lock().unwrap();
+            g.cell_size()
+        };
         let r = crate::ui::reader_page::reader_handle()?;
-        let style = crate::ui::md_layout::md_style();
         let te = r.lock().unwrap().text_epoch;
-        if let Some(lay) = crate::ui::md_layout::layout_md_peek(te, cw, &style) {
+        if let Some(lay) = crate::ui::md_layout::layout_md_peek(te, cw, cell) {
             return Some(lay);
         }
         let text = r.lock().unwrap().text.clone();
-        let term = self.term_handle()?;
-        let g = term.lock().unwrap();
-        Some(crate::ui::md_layout::layout_md_cached(
-            te, &text, cw, &style, &*g,
-        ))
+        Some(crate::ui::md_layout::layout_md_cached(te, &text, cw, cell))
     }
 
     /// 像素级滚动开关换选（设置页「终端设置」行，2026-09-24）：
@@ -5572,48 +5514,6 @@ impl App {
                 "像素级滚动→{}（已落盘）",
                 if on { "开" } else { "关（行级保底）" }
             ),
-        );
-        self.rebuild_cfg_rows();
-    }
-
-    /// 渲染字号档位换选（BAR-169 设置页「渲染字号」行）：render.json
-    /// 写盘 + md_layout 全局样式口即时灌（涂装/滚动上限/命中同读）+
-    /// 上池重建。写盘失败 = 上报不炸（配置文件纪律）
-    fn apply_render_font_pick(&mut self) {
-        let Some(page) = &self.cfg_page else { return };
-        let sel = page.lock().unwrap().option_sel();
-        let v = crate::settings::MD_FONT_STOPS[sel.min(crate::settings::MD_FONT_STOPS.len() - 1)];
-        self.render_cfg.md_font_px = v;
-        self.render_cfg_commit();
-        crate::report::report("ui", &format!("渲染字号→{v}px（已落盘）"));
-    }
-
-    /// 渲染行距档位换选（同上「渲染行距」行）
-    fn apply_render_ratio_pick(&mut self) {
-        let Some(page) = &self.cfg_page else { return };
-        let sel = page.lock().unwrap().option_sel();
-        let v = crate::settings::MD_RATIO_STOPS[sel.min(crate::settings::MD_RATIO_STOPS.len() - 1)];
-        self.render_cfg.md_line_ratio_pct = v;
-        self.render_cfg_commit();
-        crate::report::report("ui", &format!("渲染行距→{}%（已落盘）", v));
-    }
-
-    /// render.json 落盘 + 全局样式口灌 + 上池重建（两旋钮共用收尾）
-    fn render_cfg_commit(&mut self) {
-        if let Some(dir) = self
-            .android_app
-            .as_ref()
-            .and_then(|a| a.internal_data_path())
-        {
-            let path = dir.join("settings").join("render.json");
-            let json = crate::settings::render_to_json(&self.render_cfg);
-            if let Err(e) = std::fs::write(&path, json) {
-                crate::report::report("ui", &format!("render.json 写盘失败: {e}"));
-            }
-        }
-        crate::ui::md_layout::set_md_style(
-            self.render_cfg.md_font_px,
-            self.render_cfg.md_line_ratio_pct,
         );
         self.rebuild_cfg_rows();
     }
@@ -9081,7 +8981,7 @@ impl App {
                 } else {
                     0
                 };
-                let st = crate::ui::md_layout::md_style();
+                let cell = t.lock().unwrap().cell_size();
                 // BAR-212：列表卡住本层 = accent 随宿主页（解析页在顶吃
                 // acc_pt，否则 acc_cfg 旧律）；mail_dim = 册键 + 视图代 +
                 // 数据代三维（涂装直读 mail_feed/mail_list 全局快照，
@@ -9112,10 +9012,7 @@ impl App {
                     content_key,
                     anim_bucket,
                     viewer_scroll: cs.viewer.as_ref().map_or(0, |v| v.scroll),
-                    md_style: (
-                        (st.body_px * 100.0).round() as u32,
-                        (st.line_ratio * 100.0).round() as u32,
-                    ),
+                    cell,
                     mail_dim,
                 };
                 if sigs.veil.feed(sig) {
@@ -9370,27 +9267,19 @@ impl App {
         }
         // 阅读页槽烘焙（2026-09-27 六公民，BAR-170）：同规——画布恒靠泊
         // 位（rd_off=0），X 位移在合成期。sig 维 = w/h/ime/bar_h/accent×2
-        // /reader epoch/scroll/md 样式两维（漏维 = 鬼影：正文续块/滚动/
-        // 渲染设置变了必须重烘；epoch 已含文本与滚动代际，scroll 单列是
-        // 进度线——它吃 scroll 不吃 epoch 空涨保护）
+        // /reader epoch/scroll/实例格两维（漏维 = 鬼影：正文续块/滚动/
+        // pinch 变格变了必须重烘；epoch 已含文本与滚动代际，scroll 单列是
+        // 进度线——它吃 scroll 不吃 epoch 空涨保护；BAR-204 实例格维换
+        // 掉字号档样式维）
         let (rd_epoch, rd_scroll) = crate::ui::reader_page::reader_handle()
             .map(|r| {
                 let pg = r.lock().unwrap();
                 (pg.epoch, pg.scroll.clamp(0, u32::MAX as i64) as u32)
             })
             .unwrap_or((0, 0));
-        let rd_style = crate::ui::md_layout::md_style();
+        let rd_cell = term_arc.lock().unwrap().cell_size();
         let rd_sig = (
-            w,
-            h,
-            ime,
-            bar_h,
-            acc_rd.c1,
-            acc_rd.c2,
-            rd_epoch,
-            rd_scroll,
-            rd_style.body_px.to_bits(),
-            rd_style.line_ratio.to_bits(),
+            w, h, ime, bar_h, acc_rd.c1, acc_rd.c2, rd_epoch, rd_scroll, rd_cell.0, rd_cell.1,
         );
         if rd_visible && sigs.reader.feed(rd_sig) {
             let px = g.slot_canvas(crate::gles_present::ChromeSlot::Reader);

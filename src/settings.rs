@@ -289,61 +289,6 @@ impl DefaultSession {
     }
 }
 
-/// render.json（渲染设置卡，BAR-169 md 渲染器一期）：md 正文
-/// 字号基准 + 行距两旋钮。独立文件（terminal.json 是终端行为账，
-/// 渲染观感账分开——各卡各文件，写坏不连坐）
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RenderConfig {
-    /// md 正文字号基准（px；缺省 36 = 宪法 demo_page::BODY_PX 锚）
-    pub md_font_px: u32,
-    /// md 行距（百分数；缺省 140 = 1.4 宪法 demo_page::LINE_RATIO 锚）
-    pub md_line_ratio_pct: u32,
-}
-
-impl Default for RenderConfig {
-    /// 宪法缺省锚（行为零变化承诺：缺文件 = 打样规格版面）
-    fn default() -> Self {
-        RenderConfig {
-            md_font_px: 36,
-            md_line_ratio_pct: 140,
-        }
-    }
-}
-
-/// 渲染字号档位表（设置页下拉选项单源；下标 = 选项序）
-pub const MD_FONT_STOPS: [u32; 3] = [32, 36, 44];
-/// 渲染行距档位表（百分数）
-pub const MD_RATIO_STOPS: [u32; 3] = [130, 140, 165];
-
-/// 解析 render.json（顶层对象，字段宽容缺省 → 宪法锚；值不在档位表
-/// 也照收——手写配置文件不罚，设置页下拉只挂档位序）
-pub fn parse_render(json: &str) -> Result<RenderConfig, String> {
-    let v: serde_json::Value =
-        serde_json::from_str(json).map_err(|e| format!("render.json 不是合法 JSON: {e}"))?;
-    if !v.is_object() {
-        return Err("render.json 顶层必须是对象".to_string());
-    }
-    let d = RenderConfig::default();
-    Ok(RenderConfig {
-        md_font_px: v
-            .get("mdFontPx")
-            .and_then(|x| x.as_u64())
-            .map_or(d.md_font_px, |x| x as u32),
-        md_line_ratio_pct: v
-            .get("mdLineRatioPct")
-            .and_then(|x| x.as_u64())
-            .map_or(d.md_line_ratio_pct, |x| x as u32),
-    })
-}
-
-/// render.json 落盘序列化（与 parse_render 同一份字段口径）
-pub fn render_to_json(r: &RenderConfig) -> String {
-    format!(
-        "{{\"mdFontPx\":{},\"mdLineRatioPct\":{}}}",
-        r.md_font_px, r.md_line_ratio_pct
-    )
-}
-
 /// terminal.json（全局项）：默认会话 + 全局切换键 + 像素级滚动开关
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TerminalConfig {
