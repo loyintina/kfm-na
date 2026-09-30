@@ -36,8 +36,8 @@ pub const DRAG_GAIN: f64 = 2.0;
 /// 拖拽角色（锁定瞬间仲裁，四公民全表见考题钉②；2026-09-12 三缘语义——
 /// 左缘家=文件树（路由），右缘家=解析页（解析器家族）。设置页（配置面板）
 /// 是独立第四页：齿轮钮唯一召唤口、右滑唯一关闭口，永不走手势召唤——
-/// 故 SummonConfig 变体删除，原位是 SummonParser；2026-09-26 五公民
-/// Demo 页同型：烧瓶钮唯一召唤口，只有 DismissDemo 无 SummonDemo）
+/// 故 SummonConfig 变体删除，原位是 SummonParser；2026-09-30 BAR-207
+/// Demo 打样页退役，DismissDemo 一并回收）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DragRole {
     /// 右滑推配置页回右缘：偏移从 0 → 屏宽（设置页唯一关闭路径）
@@ -50,14 +50,12 @@ pub enum DragRole {
     SummonParser,
     /// 右滑推解析页回右缘：偏移从 0 → 屏宽
     DismissParser,
-    /// 右滑推 Demo 页回右缘：偏移从 0 → 屏宽（打样页唯一关闭路径）
-    DismissDemo,
 }
 
-/// 锁定瞬间的栈顶读数（角色仲裁的唯一栈依赖）：六家面板或都不是。
+/// 锁定瞬间的栈顶读数（角色仲裁的唯一栈依赖）：五家面板或都不是。
 /// 2026-09-12 四公民加 Parser（三缘语义：右缘=解析器家族）；
-/// 2026-09-26 五公民加 Demo（右缘家，与配置同约定）；
-/// 2026-09-27 六公民加 Reader（BAR-170，右缘家同约定）；
+/// 2026-09-27 五公民加 Reader（BAR-170，右缘家同约定）；
+/// 2026-09-30 BAR-207 Demo 退役，DragTop::Demo 一并回收；
 /// **2026-09-30 BAR-208：Reader 退出抽屉仲裁改归 Other**——阅读页 =
 /// 盖中央页的存在，拖拽语义与终端页同款（右拖召文件树/左拖召解析
 /// 占位页），退出归右上角终端钮，不再可拖拽推回。
@@ -67,7 +65,6 @@ pub enum DragTop {
     Config,
     FileTree,
     Parser,
-    Demo,
     Other,
 }
 
@@ -147,12 +144,12 @@ impl PanelDrag {
             if dx.abs() < DRAG_LOCK_PX || dx.abs() <= DRAG_DIR_LOCK * dy.abs() {
                 return None; // 未过阈值或斜率不够横——让路
             }
-            // 角色仲裁（一滑一义 §五B 四公民·三缘语义；Demo 右缘家同配置）
+            // 角色仲裁（一滑一义 §五B 四公民·三缘语义）
             let role = if dx < 0.0 {
                 match top {
                     DragTop::FileTree => DragRole::DismissFileTree,
                     // 右缘本家已在顶：左滑空操作
-                    DragTop::Config | DragTop::Parser | DragTop::Demo => {
+                    DragTop::Config | DragTop::Parser => {
                         return None;
                     }
                     DragTop::Other => DragRole::SummonParser,
@@ -161,7 +158,6 @@ impl PanelDrag {
                 match top {
                     DragTop::Config => DragRole::DismissConfig,
                     DragTop::Parser => DragRole::DismissParser,
-                    DragTop::Demo => DragRole::DismissDemo,
                     DragTop::FileTree => return None, // 本家已在顶：右滑空操作
                     DragTop::Other => DragRole::SummonFileTree,
                 }
@@ -190,9 +186,7 @@ impl PanelDrag {
         let d = ((x - self.lock_x) * DRAG_GAIN) as f32;
         match self.role {
             Some(DragRole::SummonParser) => (w + d).clamp(0.0, w),
-            Some(DragRole::DismissConfig)
-            | Some(DragRole::DismissParser)
-            | Some(DragRole::DismissDemo) => d.clamp(0.0, w),
+            Some(DragRole::DismissConfig) | Some(DragRole::DismissParser) => d.clamp(0.0, w),
             Some(DragRole::SummonFileTree) => (w - d).clamp(0.0, w),
             Some(DragRole::DismissFileTree) => (-d).clamp(0.0, w),
             None => 0.0,
@@ -210,8 +204,7 @@ impl PanelDrag {
             }
             Some(DragRole::DismissConfig)
             | Some(DragRole::DismissFileTree)
-            | Some(DragRole::DismissParser)
-            | Some(DragRole::DismissDemo) => (self.offset / w).clamp(0.0, 1.0),
+            | Some(DragRole::DismissParser) => (self.offset / w).clamp(0.0, 1.0),
             None => 0.0,
         }
     }
@@ -239,9 +232,7 @@ impl PanelDrag {
         let v = (x1 - x0) / (t1 - t0) as f64; // px/ms，右为正
         match self.role {
             Some(DragRole::SummonParser) => -v, // 左移 = 朝完成
-            Some(DragRole::DismissConfig)
-            | Some(DragRole::DismissParser)
-            | Some(DragRole::DismissDemo) => v,
+            Some(DragRole::DismissConfig) | Some(DragRole::DismissParser) => v,
             Some(DragRole::SummonFileTree) => v, // 右移 = 朝完成
             Some(DragRole::DismissFileTree) => -v,
             None => 0.0,

@@ -59,11 +59,8 @@ impl Plugin for UiFx {
         // 第五道缝（2026-09-12 四公民·三缘语义）：解析面板 X 偏移——右缘家
         // 与配置缝同符号约定，同一件 fx_ease
         crate::ui::seam::occupy_parser_panel_offset_x(crate::ui::fx_ease::ease_occupier());
-        // 第六道缝（2026-09-26 五公民）：Demo 面板 X 偏移——右缘家同约定，
-        // 同一件 fx_ease
-        crate::ui::seam::occupy_demo_panel_offset_x(crate::ui::fx_ease::ease_occupier());
-        // 第七道缝（2026-09-27 六公民，BAR-170）：阅读页面板 X 偏移——右缘家
-        // 同约定，同一件 fx_ease
+        // 第六道缝（2026-09-27 五公民，BAR-170；2026-09-30 BAR-207 Demo
+        // 退役顺位）：阅读页面板 X 偏移——右缘家同约定，同一件 fx_ease
         crate::ui::seam::occupy_reader_panel_offset_x(crate::ui::fx_ease::ease_occupier());
         ctx.effect(Box::new(|| {
             crate::ui::seam::release_ai_panel_offset_y();
@@ -71,7 +68,6 @@ impl Plugin for UiFx {
             crate::ui::seam::release_config_panel_offset_x();
             crate::ui::seam::release_filetree_panel_offset_x();
             crate::ui::seam::release_parser_panel_offset_x();
-            crate::ui::seam::release_demo_panel_offset_x();
             crate::ui::seam::release_reader_panel_offset_x();
         }));
         Ok(())

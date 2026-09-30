@@ -123,14 +123,11 @@ pub enum ChromeSlot {
     /// 标签栏层/下池光标层/输入栏槽（三症①「没有全屏压暗」③「光标框
     /// 透出压卡」同收），卡在压暗上。跳框开合才烘才画，稳态零成本
     ModalVeil = 16,
-    /// Demo 页槽（2026-09-26 五公民：md 渲染打样页）：整页 CARD_PAGE_BG
-    /// + accent 边框环 + 打样内容墨；placement.x 跟 demo_off，右缘家
-    /// 屏外右缘进出（与配置/解析同约定）。**末尾追加——现有槽值不动**
-    Demo = 17,
-    /// 阅读页槽（2026-09-27 六公民，BAR-170）：整页 CARD_PAGE_BG +
+    /// 阅读页槽（2026-09-27 五公民，BAR-170）：整页 CARD_PAGE_BG +
     /// accent 边框环 + 顶栏（文件名/返回钮/进度线）+ md 正文墨；
     /// placement.x 跟 rd_off，右缘家同约定。**末尾追加——现有槽值不动**
-    Reader = 18,
+    /// （2026-09-30 BAR-207：原 17 号 Demo 打样页槽退役回收，本槽 18→17 顺位）
+    Reader = 17,
 }
 
 /// 视口平移合成参数（十九修 D8）：调用方逐帧从 cfg_snap.pan 求值——
@@ -657,10 +654,10 @@ pub struct GlesPresent {
     /// 逐帧重烘便宜）+ BAR-097 池区两件（池框几何层/下池行层——Upper
     /// 平移期池高 glide 的逐帧重烘限定在池区小画布）+ 二十四修一件
     /// （下拉面板层——并发同拍起步的捕获净度）+ BAR-163 翻案一件
-    /// （压暗层——跳框全屏层，z 序 Over 之上）+ 五公民一件（Demo 页槽，
-    /// 2026-09-26）+ 六公民一件（阅读页槽，2026-09-27 BAR-170），
+    /// （压暗层——跳框全屏层，z 序 Over 之上）+ 五公民一件（阅读页槽，
+    /// 2026-09-27 BAR-170；2026-09-30 BAR-207 Demo 页槽退役回收），
     /// 置脏烘焙 + placement 合成——动画帧零光栅零上传
-    layers: [ChromeLayer; 19],
+    layers: [ChromeLayer; 18],
     /// 图层实例程序（rect+uv+tint 四边形；placement 逐槽进实例数据）
     layer_prog: glow::NativeProgram,
     layer_vao: glow::NativeVertexArray,
@@ -796,8 +793,8 @@ impl GlesPresent {
             }
         };
         // 先建槽数组再 move gl 进结构体（E0382：字段初始化按书写序移动）
+        // 18 槽（BAR-207：Demo 槽随葬 19→18，槽号序见 ChromeSlot）
         let layers = [
-            mk_layer(&gl),
             mk_layer(&gl),
             mk_layer(&gl),
             mk_layer(&gl),
@@ -1267,17 +1264,14 @@ impl GlesPresent {
         ft_alpha: f32,
         pt_off: i32,
         pt_alpha: f32,
-        demo_off: i32,
-        demo_alpha: f32,
         rd_off: i32,
         rd_alpha: f32,
-        z_order: [crate::ai_presence::Panel; 6],
+        z_order: [crate::ai_presence::Panel; 5],
         term_place: (f32, f32, f32),
         panel_dy_extra: f32,
         cfg_dy_extra: f32,
         ft_dy_extra: f32,
         pt_dy_extra: f32,
-        demo_dy_extra: f32,
         rd_dy_extra: f32,
         pan_comp: Option<crate::gles_present::PanComp>,
         layered: LayeredPlace,
@@ -1451,23 +1445,6 @@ impl GlesPresent {
                                 self.w as f32,
                                 self.h as f32,
                                 rd_alpha,
-                            );
-                        }
-                    }
-                    crate::ai_presence::Panel::Demo => {
-                        let dm = &self.layers[ChromeSlot::Demo as usize];
-                        if dm.visible && dm.baked {
-                            draw_slot_layer(
-                                gl,
-                                self.layer_prog,
-                                self.layer_vao,
-                                self.layer_vbo,
-                                dm.tex,
-                                demo_off as f32,
-                                demo_dy_extra,
-                                self.w as f32,
-                                self.h as f32,
-                                demo_alpha,
                             );
                         }
                     }

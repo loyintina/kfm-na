@@ -450,11 +450,6 @@ struct App {
     /// 分流里面板在顶先于它 return，互斥从路由自然推出（栈零新规则）。
     /// 点按抬手 = summon_panel(Config)；拖过 slop = 不触发
     gear_touch: Option<(u64, f64, f64, bool)>,
-    /// 按在烧瓶钮上的手势（2026-09-26 md 渲染打样 demo 页入口，
-    /// ui/demo_icon.rs）：(指 id, 起点 x, 起点 y, 拖过 slop)。与齿轮
-    /// 同律——只在裸终端页可达；点按抬手 = summon_panel(Demo)，
-    /// 拖过 slop = 不触发（demo 页不占召唤滑槽，烧瓶钮是唯一召唤口）
-    demo_touch: Option<(u64, f64, f64, bool)>,
     /// 按在终端钮上的手势（BAR-208 阅读页顶出口，ui/term_btn.rs）：
     /// (指 id, 起点 x, 起点 y, 拖过 slop)。只在阅读页靠泊在顶可达——
     /// 裸终端页终端钮不在屏（不设槽），阅读页仲裁先于正文槽分流。
@@ -742,11 +737,7 @@ struct LayerSigs {
     /// 解析槽：末两维 = tmux 插件 epoch（2026-09-19 插件卡内容随槽同烘焙）
     /// + 隧道 epoch（2026-09-20 连接/服务卡——状态翻转必重烘，漏维 = 鬼影）
     parser: crate::ui::stage::DirtyGuard<ParserSig>,
-    termcard: crate::ui::stage::DirtyGuard<(u32, u32, u32, u32, u32, u32)>,
-    /// Demo 槽（2026-09-26 md 渲染打样）：(w, h, ime, bar_h, c1, c2)——
-    /// 页环停栏带上沿吃 ime/bar_h；accent 两维随召唤重随必重烘
-    /// （漏维 = 新色不进纹理）
-    demo: crate::ui::stage::DirtyGuard<(u32, u32, u32, u32, u32, u32)>,
+    termcard: crate::ui::stage::DirtyGuard<(u32, u32, u32, u32)>,
     /// 阅读页槽（2026-09-27 六公民，BAR-170）：(w, h, ime, bar_h, c1, c2,
     /// reader epoch, scroll, md 样式 body 位, 行距位)——epoch 含文本/
     /// 占位相代际；scroll 单列（进度线吃它）；md 样式两维漏 = 渲染
@@ -791,7 +782,6 @@ impl LayerSigs {
         self.filetree.invalidate();
         self.parser.invalidate();
         self.termcard.invalidate();
-        self.demo.invalidate();
         self.downcard.invalidate();
         self.tabbar.invalidate();
         self.cursor.invalidate();
@@ -1123,7 +1113,6 @@ impl App {
             Some(Panel::Config) => DragTop::Config,
             Some(Panel::FileTree) => DragTop::FileTree,
             Some(Panel::Parser) => DragTop::Parser,
-            Some(Panel::Demo) => DragTop::Demo,
             // BAR-208：阅读页退出抽屉仲裁——拖拽语义与终端页同款
             // （右拖召文件树/左拖召解析占位页），退出归右上角终端钮
             _ => DragTop::Other,
@@ -1195,11 +1184,9 @@ impl App {
         } else {
             d.on_release(now, w)
         };
-        // 角色 → 目标面板（五公民：右缘家=配置/解析/Demo、左缘家=文件树，
-        // 栈操作同规；Demo 只有 Dismiss 一义——钮召不占召唤滑槽）
+        // 角色 → 目标面板（右缘家=配置/解析、左缘家=文件树，栈操作同规）
         let role_panel = match d.role() {
             Some(DragRole::DismissConfig) => Some(Panel::Config),
-            Some(DragRole::DismissDemo) => Some(Panel::Demo),
             Some(DragRole::SummonFileTree) | Some(DragRole::DismissFileTree) => {
                 Some(Panel::FileTree)
             }
@@ -1219,27 +1206,24 @@ impl App {
             // 推回：完成 = 出栈；取消 = 保持（目标回 0）
             (Some(DragRole::DismissConfig), ReleaseDecision::Complete)
             | (Some(DragRole::DismissFileTree), ReleaseDecision::Complete)
-            | (Some(DragRole::DismissParser), ReleaseDecision::Complete)
-            | (Some(DragRole::DismissDemo), ReleaseDecision::Complete) => {
+            | (Some(DragRole::DismissParser), ReleaseDecision::Complete) => {
                 if let (Some(ai), Some(p)) = (&self.ai_presence, role_panel) {
                     ai.dismiss_top(p);
                 }
             }
             (Some(DragRole::DismissConfig), ReleaseDecision::Cancel)
             | (Some(DragRole::DismissFileTree), ReleaseDecision::Cancel)
-            | (Some(DragRole::DismissParser), ReleaseDecision::Cancel)
-            | (Some(DragRole::DismissDemo), ReleaseDecision::Cancel) => {}
+            | (Some(DragRole::DismissParser), ReleaseDecision::Cancel) => {}
             (None, _) => {}
         }
         // 收尾续播：从跟手偏移重定基到翻转后的目标值（方向分档曲线
         // 自动选臂——靠泊方向 250ms / 屏外方向 350ms，均减速到位）。
-        // 按家踢各自的缝（右缘家 +cur（配置/解析/Demo）/ 文件树左缘 -cur，
+        // 按家踢各自的缝（右缘家 +cur（配置/解析）/ 文件树左缘 -cur，
         // cur 是距靠泊的距离，折符号后进 replay）
         match role_panel {
             Some(Panel::Config) => crate::ui::seam::replay_config_panel_offset_x(cur, now),
             Some(Panel::FileTree) => crate::ui::seam::replay_filetree_panel_offset_x(-cur, now),
             Some(Panel::Parser) => crate::ui::seam::replay_parser_panel_offset_x(cur, now),
-            Some(Panel::Demo) => crate::ui::seam::replay_demo_panel_offset_x(cur, now),
             Some(Panel::Reader) => crate::ui::seam::replay_reader_panel_offset_x(cur, now),
             _ => {}
         }
@@ -1810,15 +1794,6 @@ impl App {
                     self.gear_touch = Some((id, x, y, false));
                     return;
                 }
-                // 烧瓶钮命中（2026-09-26 demo 页入口，ui/demo_icon.rs）：
-                // 齿轮正下 0.5 格同中轴，同律——只在裸终端页走到这；
-                // 登记即归钮，点按抬手才召唤（拖过 slop 不触发）
-                if let Some((sw, _)) = self.screen_px()
-                    && crate::ui::demo_icon::hit(x, y, sw)
-                {
-                    self.demo_touch = Some((id, x, y, false));
-                    return;
-                }
                 // 起点在快捷键行带上 → 这手势归行（不滚屏不唤键盘）
                 // BAR-018：判定尺与渲染/hit 一致——减去键盘 inset，
                 // 否则键盘弹起时行带浮在 inset 上方，这里却认屏底。
@@ -1932,18 +1907,6 @@ impl App {
                         || (y - gt.2).abs() > crate::scroll::TAP_SLOP_PX
                     {
                         gt.3 = true;
-                    }
-                    return;
-                }
-                // 烧瓶钮手势（2026-09-26 demo 页）：与齿轮同律——只认本指，
-                // 超 slop 记拖过（抬手不触发召唤），它指事件放行走原分路
-                if let Some(dt) = &mut self.demo_touch
-                    && dt.0 == id
-                {
-                    if (x - dt.1).abs() > crate::scroll::TAP_SLOP_PX
-                        || (y - dt.2).abs() > crate::scroll::TAP_SLOP_PX
-                    {
-                        dt.3 = true;
                     }
                     return;
                 }
@@ -2840,26 +2803,6 @@ impl App {
                             "gest",
                             &format!("设置钮点按: 栈顶 {before:?}→{after:?}"),
                         );
-                    }
-                    self.dirty = true;
-                    return;
-                }
-                // 烧瓶钮手势收尾（2026-09-26 demo 页入口）：与设置钮同律——
-                // 本指抬起且未拖过 slop = 点按 → 召唤 demo 页（栈操作留痕）
-                if self.demo_touch.as_ref().is_some_and(|d| d.0 == id) {
-                    let dt = self.demo_touch.take().unwrap();
-                    if phase == TouchPhase::Ended
-                        && !dt.3
-                        && let Some(ai) = &self.ai_presence
-                    {
-                        let before = self.last_ai_snap.and_then(|s| s.top);
-                        ai.summon_panel(crate::ai_presence::Panel::Demo);
-                        let after = ai.snap(crate::report::boot_ms() as u64).top;
-                        crate::report::report(
-                            "gest",
-                            &format!("烧瓶钮点按: 栈顶 {before:?}→{after:?}"),
-                        );
-                        crate::report::report("touch", "烧瓶钮命中 → summon Demo");
                     }
                     self.dirty = true;
                     return;
@@ -4217,7 +4160,7 @@ impl App {
             }
             // BAR-170：阅读页出栈（返回钮/拖拽推回/右滑推回三通道同收
             // 一处）= 状态核 close——滚动回写 mem（滚动记忆只进不出本体③）。
-            // 入场代不走 replay 中继（同 Demo 的规：钮召/改道召是新鲜
+            // 入场代不走 replay 中继（同旧 Demo 的规：钮召/改道召是新鲜
             // 召唤，缝从屏外自然播入，不踢重定基）
             let rd_in = |s: &crate::ai_presence::PresenceSnap| {
                 s.top == Some(crate::ai_presence::Panel::Reader)
@@ -7443,12 +7386,11 @@ impl App {
         cfg_off: i32,
         ft_off: i32,
         pt_off: i32,
-        demo_off: i32,
         rd_off: i32,
-        z_order: [crate::ai_presence::Panel; 6],
-        // 六公民页面 accent（[cfg, ft, pt, demo, reader]，来自 PresenceSnap
+        z_order: [crate::ai_presence::Panel; 5],
+        // 五公民页面 accent（[cfg, ft, pt, reader]，来自 PresenceSnap
         // ——静态装配无 self，快照同行是唯一来源；调用方 None 时给 FALLBACK）
-        accents: [crate::ui::accent::AccentPair; 5],
+        accents: [crate::ui::accent::AccentPair; 4],
         chat_msgs: &[(bool, String, String)],
         chat_scroll: u32,
         chat_live: bool,
@@ -7470,9 +7412,8 @@ impl App {
         let (cfg_grid, cfg_visible) = crate::termview::cfg_split(cfg_off, w);
         let (ft_grid, ft_visible) = crate::termview::ft_split(ft_off, w);
         let (pt_grid, pt_visible) = crate::termview::pt_split(pt_off, w);
-        let (demo_grid, demo_visible) = crate::termview::demo_split(demo_off, w);
         let (rd_grid, rd_visible) = crate::termview::rd_split(rd_off, w);
-        let grid_keybar = ai_grid && cfg_grid && ft_grid && pt_grid && demo_grid && rd_grid;
+        let grid_keybar = ai_grid && cfg_grid && ft_grid && pt_grid && rd_grid;
         let bottom_inset = ime_bottom_px + bar_h;
         let mut ai_layout = None;
         // 快捷键行（BAR-017 Rust 自绘覆盖层；inset 必须叠输入栏当前带高
@@ -7496,8 +7437,7 @@ impl App {
             crate::ai_presence::Panel::Config => accents[0],
             crate::ai_presence::Panel::FileTree => accents[1],
             crate::ai_presence::Panel::Parser => accents[2],
-            crate::ai_presence::Panel::Demo => accents[3],
-            crate::ai_presence::Panel::Reader => accents[4],
+            crate::ai_presence::Panel::Reader => accents[3],
             crate::ai_presence::Panel::Ai => crate::ui::accent::FALLBACK,
         };
         for slot in z_order {
@@ -7670,27 +7610,6 @@ impl App {
                         );
                     }
                 }
-                crate::ai_presence::Panel::Demo => {
-                    if demo_visible {
-                        crate::termview::paint_demo_page_chrome(
-                            buf,
-                            w,
-                            h,
-                            bottom_inset,
-                            demo_off,
-                            acc_of(crate::ai_presence::Panel::Demo),
-                        );
-                        // 内容墨（md 打样）：兜底路径整页原地画——内容吃
-                        // 同一份 demo_off（与 chrome 同尺，不许各算）
-                        term.paint_demo_content(
-                            buf,
-                            w,
-                            h,
-                            demo_off,
-                            acc_of(crate::ai_presence::Panel::Demo),
-                        );
-                    }
-                }
                 crate::ai_presence::Panel::Ai => {
                     // AI 面板（三分支，panel_off 是缝采样值——无 ui-fx 占槽
                     // 时恒等于目标值 0 或 -h，退化为硬切；中间值 = 弹簧过渡帧）。
@@ -7821,9 +7740,8 @@ impl App {
         cfg_off: i32,
         ft_off: i32,
         pt_off: i32,
-        demo_off: i32,
         rd_off: i32,
-        z_order: [crate::ai_presence::Panel; 6],
+        z_order: [crate::ai_presence::Panel; 5],
         panel_scratch: &mut Vec<u32>,
         tab_snap: Option<&crate::ui::tab_bar::TabBarSnap>,
         pool_snap: Option<&crate::ui::dual_pool::DualPoolSnap>,
@@ -7837,14 +7755,8 @@ impl App {
         };
         // 当前栏带高（眼手同尺单源，见 current_bar_h）
         let bar_h = Self::current_bar_h(&**term, bar_snap, w);
-        let accents = ai_snap.map_or([crate::ui::accent::FALLBACK; 5], |s| {
-            [
-                s.accent_cfg,
-                s.accent_ft,
-                s.accent_pt,
-                s.accent_demo,
-                s.accent_reader,
-            ]
+        let accents = ai_snap.map_or([crate::ui::accent::FALLBACK; 4], |s| {
+            [s.accent_cfg, s.accent_ft, s.accent_pt, s.accent_reader]
         });
         let ai_layout = Self::paint_under(
             &mut **term,
@@ -7858,7 +7770,6 @@ impl App {
             cfg_off,
             ft_off,
             pt_off,
-            demo_off,
             rd_off,
             z_order,
             accents,
@@ -8050,24 +7961,21 @@ impl App {
                 stack_vec.push(t);
             }
         }
-        // 配置/文件树/解析/Demo 面板 X 偏移过缝（§五B 第三/四/五/六道缝）。
+        // 配置/文件树/解析/阅读面板 X 偏移过缝（§五B 第三/四/五/六道缝）。
         // target 只问栈（BAR-084 单源 panel_target_and_draw：活性泄漏进
         // target = 退场回粘）；draw = 在栈或缝/拖拽活跃（退场动画画完）。
-        // 右缘家屏外 +w（配置/解析/Demo），文件树家屏外 -w（左缘来向）
+        // 右缘家屏外 +w（配置/解析/阅读），文件树家屏外 -w（左缘来向）
         let cfg_in = stack_vec.contains(&Panel::Config);
         let ft_in = stack_vec.contains(&Panel::FileTree);
         let pt_in = stack_vec.contains(&Panel::Parser);
-        let demo_in = stack_vec.contains(&Panel::Demo);
         let rd_in = stack_vec.contains(&Panel::Reader);
         let drag_cfg = drag.filter(|(p, _)| *p == Panel::Config).map(|(_, o)| o);
         let drag_ft = drag.filter(|(p, _)| *p == Panel::FileTree).map(|(_, o)| o);
         let drag_pt = drag.filter(|(p, _)| *p == Panel::Parser).map(|(_, o)| o);
-        let drag_demo = drag.filter(|(p, _)| *p == Panel::Demo).map(|(_, o)| o);
         let drag_rd = drag.filter(|(p, _)| *p == Panel::Reader).map(|(_, o)| o);
         let cfg_active = crate::ui::seam::config_panel_offset_x_active() || drag_cfg.is_some();
         let ft_active = crate::ui::seam::filetree_panel_offset_x_active() || drag_ft.is_some();
         let pt_active = crate::ui::seam::parser_panel_offset_x_active() || drag_pt.is_some();
-        let demo_active = crate::ui::seam::demo_panel_offset_x_active() || drag_demo.is_some();
         let rd_active = crate::ui::seam::reader_panel_offset_x_active() || drag_rd.is_some();
         let (cfg_target, cfg_draw) =
             crate::ui::stage::panel_target_and_draw(cfg_in, cfg_active, w as f32);
@@ -8075,8 +7983,6 @@ impl App {
             crate::ui::stage::panel_target_and_draw(ft_in, ft_active, -(w as f32));
         let (pt_target, pt_draw) =
             crate::ui::stage::panel_target_and_draw(pt_in, pt_active, w as f32);
-        let (demo_target, demo_draw) =
-            crate::ui::stage::panel_target_and_draw(demo_in, demo_active, w as f32);
         let (rd_target, rd_draw) =
             crate::ui::stage::panel_target_and_draw(rd_in, rd_active, w as f32);
         // z 序单源（stage::panel_z_order，BAR-083「动者在上」五公民泛化）：
@@ -8089,7 +7995,6 @@ impl App {
                 cfg_active,
                 ft_active,
                 pt_active,
-                demo_active,
                 rd_active,
             ],
         );
@@ -8120,14 +8025,6 @@ impl App {
             ) as i32,
         };
         let pt_fade = 1.0_f32;
-        let demo_off = match drag_demo {
-            Some(off) => off as i32,
-            None => crate::ui::seam::sample_demo_panel_offset_x(
-                demo_target,
-                crate::report::boot_ms() as u64,
-            ) as i32,
-        };
-        let demo_fade = 1.0_f32;
         let rd_off = match drag_rd {
             Some(off) => off as i32,
             None => crate::ui::seam::sample_reader_panel_offset_x(
@@ -8144,7 +8041,7 @@ impl App {
         // 「随推移滑回」。Q 弹形变同日二审取消（实拍不合预期）——scale
         // 恒 1.0，仿射管线保留
         let (vpush, _p_max) = crate::ui::viewport_push::viewport_push(
-            panel_off, cfg_off, ft_off, pt_off, demo_off, rd_off, w, h,
+            panel_off, cfg_off, ft_off, pt_off, rd_off, w, h,
         );
         let term_place = (vpush.dx, vpush.dy, 1.0);
         let ai_extra = crate::ui::viewport_push::covered_extra(
@@ -8154,7 +8051,6 @@ impl App {
             cfg_off,
             ft_off,
             pt_off,
-            demo_off,
             rd_off,
             w,
             h,
@@ -8166,7 +8062,6 @@ impl App {
             cfg_off,
             ft_off,
             pt_off,
-            demo_off,
             rd_off,
             w,
             h,
@@ -8178,7 +8073,6 @@ impl App {
             cfg_off,
             ft_off,
             pt_off,
-            demo_off,
             rd_off,
             w,
             h,
@@ -8190,19 +8084,6 @@ impl App {
             cfg_off,
             ft_off,
             pt_off,
-            demo_off,
-            rd_off,
-            w,
-            h,
-        );
-        let demo_extra = crate::ui::viewport_push::covered_extra(
-            &stack_vec,
-            Panel::Demo,
-            panel_off,
-            cfg_off,
-            ft_off,
-            pt_off,
-            demo_off,
             rd_off,
             w,
             h,
@@ -8211,7 +8092,6 @@ impl App {
         let (cfg_grid, cfg_visible) = crate::termview::cfg_split(cfg_off, w);
         let (ft_grid, ft_visible) = crate::termview::ft_split(ft_off, w);
         let (pt_grid, pt_visible) = crate::termview::pt_split(pt_off, w);
-        let (demo_grid, demo_visible) = crate::termview::demo_split(demo_off, w);
         let (rd_grid, rd_visible) = crate::termview::rd_split(rd_off, w);
         let rd_extra = crate::ui::viewport_push::covered_extra(
             &stack_vec,
@@ -8220,7 +8100,6 @@ impl App {
             cfg_off,
             ft_off,
             pt_off,
-            demo_off,
             rd_off,
             w,
             h,
@@ -8228,10 +8107,9 @@ impl App {
         let cfg_visible = cfg_visible && cfg_draw;
         let ft_visible = ft_visible && ft_draw;
         let pt_visible = pt_visible && pt_draw;
-        let demo_visible = demo_visible && demo_draw;
         let rd_visible = rd_visible && rd_draw;
-        // 网格+键行让位 = 六面板都没靠泊（任一靠泊在顶即整页盖住终端）
-        let grid_keybar = ai_grid && cfg_grid && ft_grid && pt_grid && demo_grid && rd_grid;
+        // 网格+键行让位 = 五面板都没靠泊（任一靠泊在顶即整页盖住终端）
+        let grid_keybar = ai_grid && cfg_grid && ft_grid && pt_grid && rd_grid;
         let Some(term_arc) = th else {
             // 字体全灭的降级画面：紫屏（与 soft 路径同规）
             g.present_solid(KFM_PURPLE);
@@ -8376,7 +8254,6 @@ impl App {
             ft_visible,
             pt_visible,
             pan_active,
-            demo_visible,
             rd_visible,
         );
         g.set_slot_visible(crate::gles_present::ChromeSlot::Keybar, slot_vis[0]);
@@ -8388,8 +8265,7 @@ impl App {
         g.set_slot_visible(crate::gles_present::ChromeSlot::TermCard, slot_vis[6]);
         g.set_slot_visible(crate::gles_present::ChromeSlot::PanOld, slot_vis[7]);
         g.set_slot_visible(crate::gles_present::ChromeSlot::PanMove, slot_vis[7]);
-        g.set_slot_visible(crate::gles_present::ChromeSlot::Demo, slot_vis[9]);
-        g.set_slot_visible(crate::gles_present::ChromeSlot::Reader, slot_vis[10]);
+        g.set_slot_visible(crate::gles_present::ChromeSlot::Reader, slot_vis[9]);
         // BAR-096 拆层：标签栏层与光标层都属配置页（cfg_visible 一票）；
         // 光标层另有"无行不画"（空池无光标）
         g.set_slot_visible(crate::gles_present::ChromeSlot::TabBar, slot_vis[2]);
@@ -8422,38 +8298,23 @@ impl App {
         // 压暗层（BAR-163 翻案）：跳框任一开即上岗（z 序 Over 之上，
         // present_frame 合成序落地）；跳框全关即隐零成本
         g.set_slot_visible(crate::gles_present::ChromeSlot::ModalVeil, veil_on);
-        // 四公民页面 accent（配置/文件树/解析/Demo；静态装配无 self，
-        // 快照同行是唯一来源，None 时给 FALLBACK）——termcard sig 吃
-        // acc_demo（烧瓶图标画在终端卡槽上，色随 Demo 召唤重随），
-        // 提取必须先于下文一切 sig 喂点
-        let (acc_cfg, acc_ft, acc_pt, acc_demo, acc_rd) = ai_snap.map_or(
+        // 公民页面 accent（配置/文件树/解析/阅读；静态装配无 self，
+        // 快照同行是唯一来源，None 时给 FALLBACK）——提取必须先于下文
+        // 一切 sig 喂点
+        let (acc_cfg, acc_ft, acc_pt, acc_rd) = ai_snap.map_or(
             (
                 crate::ui::accent::FALLBACK,
                 crate::ui::accent::FALLBACK,
                 crate::ui::accent::FALLBACK,
                 crate::ui::accent::FALLBACK,
-                crate::ui::accent::FALLBACK,
             ),
-            |s| {
-                (
-                    s.accent_cfg,
-                    s.accent_ft,
-                    s.accent_pt,
-                    s.accent_demo,
-                    s.accent_reader,
-                )
-            },
+            |s| (s.accent_cfg, s.accent_ft, s.accent_pt, s.accent_reader),
         );
         // 终端卡片壳槽烘焙（2026-09-11）：恒靠泊零 placement——sig 含
         // ime/bar_h 是因为壳下缘停在快捷键行上沿（键盘开合期逐帧重烘焙
         // 加入 ui-base §八 期 2 债同族清单，不单独立项）
-        // 2026-09-26 sig 加 acc_demo 两维：烧瓶图标（demo 页入口）画在
-        // 本槽，色随 Demo 召唤重随——漏维 = 换色不重烘旧色留壳
-        if grid_keybar
-            && sigs
-                .termcard
-                .feed((w, h, ime, bar_h, acc_demo.c1, acc_demo.c2))
-        {
+        // （2026-09-30 BAR-207：烧瓶钮退役，acc_demo 两维随葬回 4 维）
+        if grid_keybar && sigs.termcard.feed((w, h, ime, bar_h)) {
             let px = g.slot_canvas(crate::gles_present::ChromeSlot::TermCard);
             px.fill(0);
             crate::termview::paint_term_card_chrome(
@@ -8513,7 +8374,7 @@ impl App {
         // sig 带 accent 两维（宪法 §2.2 召唤即随机：重随必触发重烘焙，
         // 漏维 = 新色不进纹理，满屏旧色——2026-09-12 accent 落地即钉）。
         // accent 来源 = PresenceSnap 字段（提取已前移到 termcard sig 之前，
-        // 见彼处——本段起直接用 acc_cfg/acc_ft/acc_pt/acc_demo）
+        // 见彼处——本段起直接用 acc_cfg/acc_ft/acc_pt/acc_rd）
         // 标签栏 sig 三维（宪法 §四）：选中/横滚/光标 x——游标弹簧动画
         // 逐帧新值逐帧重烘焙（键盘 inset 同族成本，已记 ui-base §八债单）。
         // 八修换案（开口框→填色标签块）后线长两维随组件退役
@@ -9087,28 +8948,7 @@ impl App {
                 });
             }
         }
-        // Demo 槽烘焙（2026-09-26 md 渲染打样，五公民）：同规——画布恒
-        // 靠泊位（demo_off=0），X 位移在合成期；sig 带 accent 两维
-        // （召唤即随机，漏维 = 新色不进纹理）。硬编码样品静态页——
-        // 内容无 epoch 维（重烘只随屏参/ inset / accent）
-        if demo_visible && sigs.demo.feed((w, h, ime, bar_h, acc_demo.c1, acc_demo.c2)) {
-            let px = g.slot_canvas(crate::gles_present::ChromeSlot::Demo);
-            px.fill(0);
-            crate::termview::paint_demo_page_chrome(px, w, h, bottom_inset, 0, acc_demo);
-            term_arc
-                .lock()
-                .unwrap()
-                .paint_demo_content(px, w, h, 0, acc_demo);
-            crate::report::report(
-                "bake",
-                &format!(
-                    "demo页烘焙 屏{w}x{h} inset={ime} bar={bar_h} c1={:#x} c2={:#x}",
-                    acc_demo.c1, acc_demo.c2
-                ),
-            );
-            g.slot_bake(crate::gles_present::ChromeSlot::Demo);
-        }
-        // 阅读页槽烘焙（2026-09-27 六公民，BAR-170）：同规——画布恒靠泊
+        // 阅读页槽烘焙（2026-09-27 五公民，BAR-170）：同规——画布恒靠泊
         // 位（rd_off=0），X 位移在合成期。sig 维 = w/h/ime/bar_h/accent×2
         // /reader epoch/scroll/md 样式两维（漏维 = 鬼影：正文续块/滚动/
         // 渲染设置变了必须重烘；epoch 已含文本与滚动代际，scroll 单列是
@@ -9223,11 +9063,10 @@ impl App {
         // panel_off 进实例 y=刚体平移，2026-09-05 拍板不变）。别家面板靠泊
         // 在顶时 AI 被整页盖住：零生成零绘制（布局写回暂停，露出后下一帧
         // 自愈——被覆盖面板无手势够得着，眼手同尺不缺这份读数）
-        let ai_fully_covered = match z_order[5] {
+        let ai_fully_covered = match z_order[4] {
             Panel::Config => cfg_off == 0 && cfg_draw,
             Panel::FileTree => ft_off == 0 && ft_draw,
             Panel::Parser => pt_off == 0 && pt_draw,
-            Panel::Demo => demo_off == 0 && demo_draw,
             Panel::Reader => rd_off == 0 && rd_draw,
             Panel::Ai => false,
         };
@@ -9505,8 +9344,6 @@ impl App {
             ft_fade,
             pt_off,
             pt_fade,
-            demo_off,
-            demo_fade,
             rd_off,
             rd_fade,
             z_order,
@@ -9515,7 +9352,6 @@ impl App {
             cfg_extra.dy,
             ft_extra.dy,
             pt_extra.dy,
-            demo_extra.dy,
             rd_extra.dy,
             pan_comp,
             layered,
@@ -9825,9 +9661,6 @@ impl App {
                         | crate::ui::panel_drag::DragRole::DismissParser => {
                             crate::ai_presence::Panel::Parser
                         }
-                        crate::ui::panel_drag::DragRole::DismissDemo => {
-                            crate::ai_presence::Panel::Demo
-                        }
                     };
                     Some((p, off))
                 }),
@@ -9845,7 +9678,6 @@ impl App {
                     || crate::ui::seam::config_panel_offset_x_active()
                     || crate::ui::seam::filetree_panel_offset_x_active()
                     || crate::ui::seam::parser_panel_offset_x_active()
-                    || crate::ui::seam::demo_panel_offset_x_active()
                     || crate::ui::seam::reader_panel_offset_x_active()
                     || Self::cfg_fx_active()
                     || self.sys_band_fx_active(),
@@ -9905,19 +9737,16 @@ impl App {
                     | crate::ui::panel_drag::DragRole::DismissFileTree => Panel::FileTree,
                     crate::ui::panel_drag::DragRole::SummonParser
                     | crate::ui::panel_drag::DragRole::DismissParser => Panel::Parser,
-                    crate::ui::panel_drag::DragRole::DismissDemo => Panel::Demo,
                 };
                 Some((p, off))
             });
             let drag_cfg = drag.filter(|(p, _)| *p == Panel::Config).map(|(_, o)| o);
             let drag_ft = drag.filter(|(p, _)| *p == Panel::FileTree).map(|(_, o)| o);
             let drag_pt = drag.filter(|(p, _)| *p == Panel::Parser).map(|(_, o)| o);
-            let drag_demo = drag.filter(|(p, _)| *p == Panel::Demo).map(|(_, o)| o);
             let drag_rd = drag.filter(|(p, _)| *p == Panel::Reader).map(|(_, o)| o);
             let cfg_active = crate::ui::seam::config_panel_offset_x_active() || drag_cfg.is_some();
             let ft_active = crate::ui::seam::filetree_panel_offset_x_active() || drag_ft.is_some();
             let pt_active = crate::ui::seam::parser_panel_offset_x_active() || drag_pt.is_some();
-            let demo_active = crate::ui::seam::demo_panel_offset_x_active() || drag_demo.is_some();
             let rd_active = crate::ui::seam::reader_panel_offset_x_active() || drag_rd.is_some();
             let (cfg_target, _cfg_draw) = crate::ui::stage::panel_target_and_draw(
                 stack_vec.contains(&Panel::Config),
@@ -9934,11 +9763,6 @@ impl App {
                 pt_active,
                 w as f32,
             );
-            let (demo_target, _demo_draw) = crate::ui::stage::panel_target_and_draw(
-                stack_vec.contains(&Panel::Demo),
-                demo_active,
-                w as f32,
-            );
             let (rd_target, _rd_draw) = crate::ui::stage::panel_target_and_draw(
                 stack_vec.contains(&Panel::Reader),
                 rd_active,
@@ -9953,7 +9777,6 @@ impl App {
                     cfg_active,
                     ft_active,
                     pt_active,
-                    demo_active,
                     rd_active,
                 ],
             );
@@ -9977,13 +9800,6 @@ impl App {
                 Some(off) => off as i32,
                 None => crate::ui::seam::sample_parser_panel_offset_x(
                     pt_target,
-                    crate::report::boot_ms() as u64,
-                ) as i32,
-            };
-            let demo_off = match drag_demo {
-                Some(off) => off as i32,
-                None => crate::ui::seam::sample_demo_panel_offset_x(
-                    demo_target,
                     crate::report::boot_ms() as u64,
                 ) as i32,
             };
@@ -10039,7 +9855,6 @@ impl App {
                 cfg_off,
                 ft_off,
                 pt_off,
-                demo_off,
                 rd_off,
                 z_order,
                 &mut self.panel_scratch,

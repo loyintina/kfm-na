@@ -14,13 +14,10 @@ src/termview.rs:draw_text_left_ex
 src/termview.rs:draw_text_left_ex
 src/termview.rs:draw_text_left_ex
 src/termview.rs:draw_text_left_ex
-src/termview.rs:draw_text_left_ex
 src/termview.rs:measure_items
 src/termview.rs:measure_items
 src/termview.rs:measure_items
 src/termview.rs:measure_items
-src/termview.rs:text_width
-src/termview.rs:text_width
 src/termview.rs:text_width
 src/termview.rs:text_width
 src/termview.rs:text_width
