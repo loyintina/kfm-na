@@ -88,3 +88,56 @@ fn spec_bar161d_respond_shape() {
     assert!(s.contains("Content-Length: 11\r\n"));
     assert!(s.ends_with("\r\n\r\n{\"ok\":true}"));
 }
+
+// ---- BAR-212：summaries 批量端点路由面 ----
+
+#[test]
+fn spec_bar212_route_summaries面() {
+    match httpd::route(
+        "GET",
+        "/api/agent/inboxes/na-book/summaries?names=a.md,b.md",
+    ) {
+        httpd::Route::InboxSummaries { key, names } => {
+            assert_eq!(key, "na-book");
+            assert_eq!(names, Some(vec!["a.md".to_string(), "b.md".to_string()]));
+        }
+        _ => panic!("summaries 路由"),
+    }
+    // 中文名百分号编码照解（与路径段同规矩）
+    match httpd::route(
+        "GET",
+        "/api/agent/inboxes/na-book/summaries?names=0090%E5%8F%B7%E9%97%BB%E7%81%AF.md",
+    ) {
+        httpd::Route::InboxSummaries { names, .. } => {
+            assert_eq!(names, Some(vec!["0090号闻灯.md".to_string()]));
+        }
+        _ => panic!("summaries 中文名解码"),
+    }
+    // key 段百分号解码照走
+    match httpd::route("GET", "/api/agent/inboxes/a%2Fb/summaries?names=x.md") {
+        httpd::Route::InboxSummaries { key, .. } => assert_eq!(key, "a/b"),
+        _ => panic!("summaries key 百分号解码"),
+    }
+}
+
+#[test]
+fn spec_bar212_route_summaries缺names与形状错() {
+    // 缺 names 参数 = None（main.rs 归 400）
+    match httpd::route("GET", "/api/agent/inboxes/na-book/summaries") {
+        httpd::Route::InboxSummaries { names, .. } => assert_eq!(names, None),
+        _ => panic!("缺 names 照进 summaries 路由"),
+    }
+    match httpd::route("GET", "/api/agent/inboxes/na-book/summaries?n=3") {
+        httpd::Route::InboxSummaries { names, .. } => assert_eq!(names, None, "别的参数不算 names"),
+        _ => panic!("缺 names 照进 summaries 路由"),
+    }
+    // 方法与形状错 = 404
+    assert!(matches!(
+        httpd::route("POST", "/api/agent/inboxes/na-book/summaries?names=a.md"),
+        httpd::Route::NotFound
+    ));
+    assert!(matches!(
+        httpd::route("GET", "/api/agent/inboxes/na-book/summaries/x"),
+        httpd::Route::NotFound
+    ));
+}

@@ -32,6 +32,7 @@
 | `src/keybar.rs` | 20 | 16 | 4 | COLS MOD_ALT install_bridge_mods bridge_mods |
 | `src/keymap.rs` | 2 | 2 | 0 | — |
 | `src/local_pty.rs` | 7 | 6 | 1 | android_prefix |
+| `src/mail_feed.rs` | 18 | 15 | 3 | book_snap take_dirty ensure_summaries |
 | `src/na_server_sup.rs` | 20 | 15 | 5 | REPO_DIR HEALTH_URL EXEC_TIMEOUT_SECS RECHECK_SECS TUNNEL_WAIT_SECS |
 | `src/offline_keys.rs` | 10 | 10 | 0 | — |
 | `src/plugins/ai_presence.rs` | 2 | 2 | 0 | — |
@@ -47,7 +48,7 @@
 | `src/scroll.rs` | 20 | 20 | 0 | — |
 | `src/self_restart.rs` | 11 | 5 | 6 | FLAG_REL set_files_dir button_label poll_flag restart restart |
 | `src/sess_mode.rs` | 3 | 3 | 0 | — |
-| `src/sess_pool.rs` | 32 | 29 | 3 | TAIL_EVENTS take_dirty request_routes |
+| `src/sess_pool.rs` | 33 | 30 | 3 | TAIL_EVENTS take_dirty request_routes |
 | `src/session.rs` | 14 | 14 | 0 | — |
 | `src/session_router.rs` | 11 | 11 | 0 | — |
 | `src/settings.rs` | 14 | 9 | 5 | parse QUIC_DEFAULT_PORT QUIC_REVERSE_PORT MD_FONT_STOPS MD_RATIO_STOPS |
@@ -77,7 +78,9 @@
 | `src/ui/gear.rs` | 7 | 7 | 0 | — |
 | `src/ui/grid_text.rs` | 3 | 3 | 0 | — |
 | `src/ui/keybar.rs` | 1 | 1 | 0 | — |
-| `src/ui/link_card.rs` | 9 | 9 | 0 | — |
+| `src/ui/link_card.rs` | 10 | 10 | 0 | — |
+| `src/ui/mail_card.rs` | 5 | 4 | 1 | N_ENTRIES |
+| `src/ui/mail_list.rs` | 36 | 24 | 12 | ITEM_PAD_V ITEM_PAD_H ITEM_META_H ITEM_TITLE_H ITEM_SUMMARY_H ITEM_ROW_GAP SUMMARY_PENDING SUMMARY_EMPTY title_rect SUMMARY_LOOKBACK open_key take_dirty |
 | `src/ui/md_layout.rs` | 6 | 6 | 0 | — |
 | `src/ui/md_parse.rs` | 2 | 2 | 0 | — |
 | `src/ui/modal.rs` | 32 | 31 | 1 | VEIL_DIM_ARGB |

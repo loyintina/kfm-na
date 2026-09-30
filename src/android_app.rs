@@ -518,6 +518,17 @@ struct App {
     /// 查看器甩尾帧泵末次推进时刻（同 ft_fling_last_ms 的规；None =
     /// 首帧无账，取帧预算）
     viewer_fling_last_ms: Option<u64>,
+    /// 信件列表卡手势槽（BAR-212 解析页信箱入口）：(起手 x, 起手 y,
+    /// 拖过 slop)——点按抬手 = 条目/关闭钮/卡外收；拖过 = 列表像素
+    /// 滚动（眼手同尺吃 mail_list 核 offset_bottom 账）
+    mail_touch: Option<(f64, f64, bool)>,
+    /// 信件列表卡滚动接力件（TouchScroll 同件，速度采样时钟随起手建机）
+    mail_scroll: Option<crate::scroll::TouchScroll>,
+    /// 信件列表卡甩尾在途（抬手从滚动接力件交接，scroll.rs Fling 同一
+    /// 物理机；速度燃尽/触底/顶/列表卡收/新触摸落地即清——viewer 同规）
+    mail_fling: Option<crate::scroll::Fling>,
+    /// 信件列表卡甩尾帧泵末次推进时刻（同 viewer_fling_last_ms 的规）
+    mail_fling_last_ms: Option<u64>,
     /// 阅读页正文甩尾在途（BAR-170，2026-09-27）：抬手从阅读页手势槽的
     /// 滚动接力件交接（scroll.rs Fling 同一物理机），帧泵按真实间隔推进；
     /// 速度燃尽/触底顶/车道翻牌（阅读页离顶）/新触摸落地即清
@@ -728,7 +739,7 @@ type PoolFxSig = (u32, u32, u32, u32, u32, u32);
 /// 内容代际, 行表哈希)
 type LowerRowsSig = (u32, u32, u32, u32, u32, u32, u64, u64);
 /// 解析槽签名（与 LowerRowsSig 同形状不同语义——别名分开，谁改维度不殃及对方）
-type ParserSig = (u32, u32, u32, u32, u32, u32, u64, u64, bool, bool);
+type ParserSig = (u32, u32, u32, u32, u32, u32, u64, u64, bool, bool, u64);
 
 #[derive(Default)]
 struct LayerSigs {
@@ -886,6 +897,10 @@ struct VeilSig {
     /// md 渲染样式两旋钮（BAR-169 设置页渲染配置卡：字号基准×100 +
     /// 行距×100——样式变 = 版面变必须重烘；modal 也吃同值无害）
     md_style: (u32, u32),
+    /// 信箱列表卡三维账（BAR-212：册键 + 视图 epoch（滚动/追底）+
+    /// 数据 epoch（列表/摘要换代）——漏维 = 滚动/摘要到达不重烘鬼影；
+    /// 卡关着 = (0,0,0)）
+    mail_dim: (u64, u64, u64),
 }
 
 /// 上层槽 sig（derive PartialEq 深比较——BarSnap/PresenceSnap 均已
@@ -1305,6 +1320,9 @@ impl App {
                 self.reader_fling = None;
                 self.reader_fling_last_ms = None;
                 crate::ui::fx_spring::note_reader_fling_live(false);
+                // 信件列表卡甩尾同律取消（BAR-212）
+                self.mail_fling = None;
+                self.mail_fling_last_ms = None;
                 // 光球命中优先级高于终端（ai-presence 期 0 组件一，D9）：
                 // 按下命中球区 → 这手势归球（pressed 置位 = 第四视觉态硬切；
                 // 拖动/点按/长按在 Moved/Ended/check_orb_long_press 分路）。
@@ -1696,6 +1714,47 @@ impl App {
                             return;
                         }
                     }
+                    // BAR-212：解析页信箱叠层仲裁（文件树页同款两条）——
+                    // ①跳框（列表卡点信弹的查看器）开着 → 手势归跳框模态
+                    //   （抬手命中实现页面无关，modal_touch 那条通用）
+                    // ②信件列表卡开着 → 手势归列表卡（拖滚/点条目/收）
+                    if panel_top == Some(crate::ai_presence::Panel::Parser)
+                        && crate::ui::seam::sample_parser_panel_offset_x(
+                            0.0,
+                            crate::report::boot_ms() as u64,
+                        ) as i32
+                            == 0
+                    {
+                        if let Some(page) = crate::ui::cfg_page::cfg_page_handle()
+                            && {
+                                let pg = page.lock().unwrap();
+                                pg.modal().is_some() || pg.viewer().is_some()
+                            }
+                        {
+                            crate::report::report(
+                                "gest",
+                                &format!("起手→跳框模态（解析页信箱）({x:.0},{y:.0})"),
+                            );
+                            self.modal_touch = Some((x, y, false));
+                            self.modal_scroll = Some(crate::scroll::TouchScroll::new(
+                                y,
+                                f64::from(crate::termview::CELL_H),
+                            ));
+                            return;
+                        }
+                        if crate::ui::mail_list::open_key().is_some() {
+                            crate::report::report(
+                                "gest",
+                                &format!("起手→信件列表卡 ({x:.0},{y:.0})"),
+                            );
+                            self.mail_touch = Some((x, y, false));
+                            self.mail_scroll = Some(crate::scroll::TouchScroll::new(
+                                y,
+                                f64::from(crate::termview::CELL_H),
+                            ));
+                            return;
+                        }
+                    }
                     // 解析页 tmux 插件卡仲裁（2026-09-19）：解析页靠泊
                     // （缝采样判据与配置页同规——过渡帧中不仲裁，手势归
                     // 面板全家）且起点在卡区 → 手势归插件：点按抬手 =
@@ -1737,6 +1796,14 @@ impl App {
                                 &g.chain_h,
                                 &g.scrolls,
                             );
+                            // BAR-212：信箱入口卡（左下常驻槽——钉底不滚，
+                            // 命中带 = 槽自身，与 tmux 常驻槽同律）
+                            let mail_rect = crate::ui::parser_chain::slot_rect(
+                                crate::ui::parser_chain::ChainCardId::Mail,
+                                &g.regs,
+                                &g.chain_h,
+                                &g.scrolls,
+                            );
                             let (xi, yi) = (x as i64, y as i64);
                             let in_rect = |r: &crate::ui::dual_pool::PoolRect| {
                                 xi >= r.x
@@ -1752,6 +1819,7 @@ impl App {
                             // 居中在 tmux 卡外，且框外点按 = 取消
                             g.mode == crate::ui::parser_page::Mode::Confirming
                                 || in_rect(&g.lay.card) // tmux 常驻槽
+                                || in_rect(&mail_rect) // 信箱入口卡（左下常驻槽）
                                 || in_win(&link_rect, &g.regs.right_top) // 连接·服务卡
                                 || in_win(&sys_rect, &g.regs.left) // 环境卡
                         };
@@ -2074,6 +2142,34 @@ impl App {
                                     self.dirty = true;
                                 }
                             }
+                        }
+                    }
+                    return;
+                }
+                // 信件列表卡手势（BAR-212）：拖过 slop 只记账（抬手不归点按
+                // 不收框）；拖滚 = 列表像素滚动——手指上推（d<0）= 看更新
+                // = 向底 = offset_bottom 减（与追底账同向，mail_list 核
+                // 自钳）。模态期间手势不出本槽（压暗层吃下层，同跳框律）
+                if let Some(mt) = self.mail_touch.as_mut() {
+                    if !mt.2
+                        && ((x - mt.0).abs() > crate::scroll::TAP_SLOP_PX
+                            || (y - mt.1).abs() > crate::scroll::TAP_SLOP_PX)
+                    {
+                        mt.2 = true;
+                    }
+                    if mt.2
+                        && let Some((sw, sh)) = self.screen_px()
+                        && let Some(ms) = self.mail_scroll.as_mut()
+                    {
+                        let d = ms.moved_px_at(y, crate::report::boot_ms() as f64);
+                        if d != 0.0 {
+                            // 眼手同尺：滚动前先按实时屏寸喂布局账（钳制上
+                            // 限同源），滚动后按新窗补摘要懒加载
+                            Self::mail_list_feed(sw, sh);
+                            if crate::ui::mail_list::scroll_by(d as i64) {
+                                self.dirty = true;
+                            }
+                            Self::mail_list_feed(sw, sh);
                         }
                     }
                     return;
@@ -3356,12 +3452,72 @@ impl App {
                     }
                     self.dirty = true;
                 }
+                if let Some(mt) = self.mail_touch.take() {
+                    // 抬手交接甩尾（viewer 同规：拖过才甩，列表卡还开着才接）
+                    if phase == TouchPhase::Ended
+                        && mt.2
+                        && let Some(ms) = self.mail_scroll.take()
+                    {
+                        if crate::ui::mail_list::open_key().is_some()
+                            && let Some(f) = ms.fling_on_release()
+                        {
+                            self.mail_fling = Some(f);
+                            self.mail_fling_last_ms = None;
+                        }
+                    } else {
+                        self.mail_scroll = None;
+                    }
+                    if phase == TouchPhase::Ended
+                        && !mt.2
+                        && let (Some(v), Some((sw, sh))) =
+                            (crate::ui::mail_list::snap(), self.screen_px())
+                    {
+                        // 眼手同尺：命中与 veil 层涂装同一份几何（卡矩形 +
+                        // 条目数 + offset_bottom 三维账）
+                        let card = crate::ui::mail_list::card_rect(sw, sh);
+                        let (n, _, off) = v.geo();
+                        match crate::ui::mail_list::hit(&card, n, off, x as i64, y as i64) {
+                            crate::ui::mail_list::MailListHit::Close
+                            | crate::ui::mail_list::MailListHit::Outside => {
+                                crate::report::report("gest", "信件列表卡收（关闭钮/卡外）");
+                                crate::ui::mail_list::close();
+                            }
+                            crate::ui::mail_list::MailListHit::Card => {}
+                            crate::ui::mail_list::MailListHit::Item(i) => {
+                                let book = crate::mail_feed::book_snap(v.key);
+                                if let Some(e) = book.entries.get(i) {
+                                    let rk = match v.key {
+                                        crate::mail_feed::MailKey::MainBook => {
+                                            crate::sess_pool::RouteKey::MainBook
+                                        }
+                                        crate::mail_feed::MailKey::NaBook => {
+                                            crate::sess_pool::RouteKey::NaBook
+                                        }
+                                    };
+                                    let title = crate::sess_pool::content_title(&rk, &e.name);
+                                    crate::report::report(
+                                        "gest",
+                                        &format!("信件列表点条目 {i}「{}」→ 查看器", e.name),
+                                    );
+                                    if let Some(page) = crate::ui::cfg_page::cfg_page_handle() {
+                                        page.lock()
+                                            .unwrap()
+                                            .open_viewer(title, "加载中…".to_string());
+                                    }
+                                    crate::sess_pool::request_content(rk, &e.name);
+                                }
+                            }
+                        }
+                    }
+                    self.dirty = true;
+                    return;
+                }
                 if let Some(pt) = self.parser_touch.take() {
                     if phase == TouchPhase::Ended
                         && pt.2.is_none()
                         && let (Some(page), Some((sw, sh))) = (&self.parser_page, self.screen_px())
                     {
-                        let (snap, hit_result, conn_hit, tap_desc, geo_cmp) = {
+                        let (snap, hit_result, conn_hit, mail_hit, tap_desc, geo_cmp) = {
                             let pg = page.lock().unwrap();
                             // 眼手同尺的真义（BAR-145 修复，2026-09-24 用户
                             // 拍板）：命中吃**屏上正显示的那一代**快照——
@@ -3462,6 +3618,27 @@ impl App {
                             } else {
                                 None
                             };
+                            // 连接·服务卡也未命中且常态 → 信箱入口卡
+                            // （BAR-212 左下常驻槽：钉底不滚，命中带 =
+                            // 槽自身；行 → 册键归 mail_card::hit）
+                            let mh = if h.is_none()
+                                && ch.is_none()
+                                && g.mode == crate::ui::parser_page::Mode::Normal
+                            {
+                                let mail_rect = crate::ui::parser_chain::slot_rect(
+                                    crate::ui::parser_chain::ChainCardId::Mail,
+                                    &g.regs,
+                                    &g.chain_h,
+                                    &g.scrolls,
+                                );
+                                crate::ui::mail_card::hit(
+                                    &crate::ui::mail_card::layout_in(mail_rect),
+                                    pt.0 as i64,
+                                    pt.1 as i64,
+                                )
+                            } else {
+                                None
+                            };
                             // 点按遥测（BAR-145 挂起案仪器，2026-09-24 用户拍板
                             // 「手指点击位置 vs UI 响应位置埋日志」）：指位→命中
                             // 目标一条账。Session/Kill 附会话名与行 y 带——命中
@@ -3493,6 +3670,8 @@ impl App {
                                 }
                             } else if let Some(chh) = &ch {
                                 format!("通道卡 {chh:?}（epoch={}）", snap.epoch)
+                            } else if let Some(mhh) = &mh {
+                                format!("信箱入口卡 {mhh:?}（epoch={}）", snap.epoch)
                             } else {
                                 format!(
                                     "落空（屏{sw}x{sh} inset={} bar={} epoch={} 会话{} 表滚{} 裁带{}-{}）",
@@ -3505,7 +3684,7 @@ impl App {
                                     g.lay.list_clip.1
                                 )
                             };
-                            (snap, h.map(|hh| (hh, g.mode)), ch, desc, geo_cmp)
+                            (snap, h.map(|hh| (hh, g.mode)), ch, mh, desc, geo_cmp)
                         };
                         // BAR-145 修复臂生效时把「补了多少、原值多少」一并落账：
                         // 起手/抬手已是显示空间（与 na-shot/系统截屏同尺），原值
@@ -3573,6 +3752,17 @@ impl App {
                                     self.self_restart_tap("通道段[重启]钮");
                                 }
                             }
+                        }
+                        // BAR-212：信箱入口卡点行 → 开该册信件列表卡 +
+                        // 拉列表（三段式：缓存先画，远端换鲜）
+                        if let Some(key) = mail_hit {
+                            crate::report::report(
+                                "gest",
+                                &format!("信箱入口卡 {} → 开信件列表卡", key.title()),
+                            );
+                            crate::ui::mail_list::open(key);
+                            crate::mail_feed::request_list(key);
+                            self.dirty = true;
                         }
                     }
                     self.dirty = true;
@@ -4555,6 +4745,14 @@ impl App {
                 .map(|s| s.tunnel.local_port)
                 .unwrap_or(crate::tunnel::NA_SERVER_PORT),
         );
+        // 信箱列表页数据面（BAR-212）：同一隧道本地口喂信箱取数器
+        // （/agent 前缀反代进 agentd 的 main-book/na-book 两面，幂等）
+        crate::mail_feed::configure(
+            tunnel_srv
+                .as_ref()
+                .map(|s| s.tunnel.local_port)
+                .unwrap_or(crate::tunnel::NA_SERVER_PORT),
+        );
         // 信件本地缓存根（BAR-174）：<私有目录>/cache/letters——先灌缓存
         // 首屏即时，远端到了增量换鲜；拿不到私有目录 = 缓存层关闭（纯远端）
         if let Some(dir) = self
@@ -4563,6 +4761,9 @@ impl App {
             .and_then(|a| a.internal_data_path())
         {
             crate::sess_pool::set_cache_root(dir.join("cache/letters"));
+            // 信箱列表页缓存根（BAR-212）：<私有目录>/cache/mail——manifest
+            // + 摘要写透，弱网/离线先灌缓存首屏即时
+            crate::mail_feed::set_cache_root(dir.join("cache/mail"));
             // 断线输入 WAL（BAR-186 臂③）：进程死队列全灭的修——push/drain
             // 同步落盘，启动 attach 时读回；拿不到目录 = 纯内存旧行为
             self.offline_keys
@@ -5284,6 +5485,27 @@ impl App {
         if cur.is_some_and(|c| c != want) {
             self.switch_session();
         }
+    }
+
+    /// 信箱列表卡几何喂账 + 摘要懒加载窗喂数（BAR-212；手势拖动/甩尾/
+    /// veil 烘焙三处同调同一份——眼手同尺）：实时屏寸 → 卡矩形/视口高
+    /// 喂 mail_list 核（追底/钳制同源），再按摘要窗（视口 + 上方两屏）
+    /// 挑缺摘要的名喂 mail_feed 懒取（在途/已败去重归数据面）。
+    /// 关联函数无 self——gesture 臂持锁路径上不许多抓一把锁
+    fn mail_list_feed(sw: u32, sh: u32) {
+        let Some(key) = crate::ui::mail_list::open_key() else {
+            return;
+        };
+        let card = crate::ui::mail_list::card_rect(sw, sh);
+        let (vt, vb) = crate::ui::mail_list::viewport_of(&card);
+        let book = crate::mail_feed::book_snap(key);
+        crate::ui::mail_list::sync_layout(book.entries.len(), vb - vt);
+        let off = crate::ui::mail_list::snap().map_or(0, |v| v.offset_bottom());
+        let win = crate::ui::mail_list::summary_window(book.entries.len(), vb - vt, off);
+        crate::mail_feed::ensure_summaries(
+            key,
+            crate::mail_feed::summaries_wanted(&book.entries, win),
+        );
     }
 
     /// 查看器正文 md 排版（BAR-169 md 渲染器：拖动/甩尾滚动上限、抬手
@@ -8352,10 +8574,16 @@ impl App {
         // 压暗层上岗判据（BAR-163 翻案）：跳框（comp modal/查看器）任
         // 一开 = ModalVeil 层上岗——跳框像素全在 veil 层，配置槽烘焙
         // 快照清 modal/viewer 两维（本帧下文 settled 处）
-        let veil_on = cfg_visible
+        // BAR-212：信箱列表卡（解析页左下入口弹出）同住 ModalVeil 层——
+        // 解析页在顶时列表卡开 / 查看器开（列表卡点信弹的）同样上岗
+        // （配置页不在栈里也得有压暗层——解析页从终端直滑即此情形）
+        let mail_list_open = crate::ui::mail_list::open_key().is_some();
+        let viewer_open_now = cfg_snap.is_some_and(|cs| cs.viewer.is_some());
+        let veil_on = (cfg_visible
             && cfg_snap.is_some_and(|cs| {
                 crate::ui::modal::veil_open(cs.modal.is_some(), cs.viewer.is_some())
-            });
+            }))
+            || (pt_visible && (mail_list_open || viewer_open_now));
         // BAR-104：喂交接差分机本帧平移域（0=无/1=Upper/2=Page/
         // 3=UpperBody）+ 本帧 cfg epoch（present_frame 内消费；未武装
         // 时仅一次原子写，零开销）。2026-09-17 Page 域接入：差分机不再
@@ -8837,6 +9065,11 @@ impl App {
             // 全幅 α150 黑直写 + 卡体在上；跳框开合/内容变/accent 变/
             // 动效帧泵才重烘（稳态零重烘零上传），z 序 Over 之上
             if veil_on && let (Some(cs), Some(t)) = (cfg_snap, th) {
+                // BAR-212：信箱列表卡开着 = 烘焙前先喂几何账 + 摘要懒
+                // 加载窗（滚动帧 sig 必变 → 本臂必达；开窗首帧同达）
+                if mail_list_open {
+                    Self::mail_list_feed(w, h);
+                }
                 let content_key = if let Some(mi) = cs.modal {
                     u64::from(mi as u32) + 1
                 } else if let Some(v) = &cs.viewer {
@@ -8849,11 +9082,33 @@ impl App {
                     0
                 };
                 let st = crate::ui::md_layout::md_style();
+                // BAR-212：列表卡住本层 = accent 随宿主页（解析页在顶吃
+                // acc_pt，否则 acc_cfg 旧律）；mail_dim = 册键 + 视图代 +
+                // 数据代三维（涂装直读 mail_feed/mail_list 全局快照，
+                // 换代必须重烘）
+                let veil_accent = if mail_list_open && pt_visible {
+                    acc_pt
+                } else {
+                    acc_cfg
+                };
+                let mail_dim = if mail_list_open {
+                    let mv = crate::ui::mail_list::snap();
+                    (
+                        mv.as_ref().map_or(0, |v| match v.key {
+                            crate::mail_feed::MailKey::MainBook => 1,
+                            crate::mail_feed::MailKey::NaBook => 2,
+                        }),
+                        mv.as_ref().map_or(0, |v| v.epoch()),
+                        crate::mail_feed::epoch(),
+                    )
+                } else {
+                    (0, 0, 0)
+                };
                 let sig = VeilSig {
                     w,
                     h,
-                    c1: acc_cfg.c1,
-                    c2: acc_cfg.c2,
+                    c1: veil_accent.c1,
+                    c2: veil_accent.c2,
                     content_key,
                     anim_bucket,
                     viewer_scroll: cs.viewer.as_ref().map_or(0, |v| v.scroll),
@@ -8861,6 +9116,7 @@ impl App {
                         (st.body_px * 100.0).round() as u32,
                         (st.line_ratio * 100.0).round() as u32,
                     ),
+                    mail_dim,
                 };
                 if sigs.veil.feed(sig) {
                     let px = g.slot_canvas(crate::gles_present::ChromeSlot::ModalVeil);
@@ -8871,7 +9127,7 @@ impl App {
                         h,
                         cs.modal,
                         cs.viewer.as_ref(),
-                        acc_cfg,
+                        veil_accent,
                         crate::report::boot_ms() as u64,
                     );
                     g.slot_bake(crate::gles_present::ChromeSlot::ModalVeil);
@@ -9013,6 +9269,10 @@ impl App {
             tunnel_epoch,
             restart_armed_now,
             pt_placeholder,
+            // BAR-212：信箱入口卡计数字随 mail_feed 换代（漏维 = 信到了
+            // 卡面计数不重烘旧数鬼影）。涂装维不挪几何——与 accent 同色
+            // 不入 BAR-145 屏代几何账七维
+            crate::mail_feed::epoch(),
         );
         if pt_visible && sigs.parser.feed(pt_sig) {
             let px = g.slot_canvas(crate::gles_present::ChromeSlot::Parser);
@@ -10604,8 +10864,50 @@ impl ApplicationHandler for App {
                     crate::report::report("scroll", &format!("查看器甩尾尽: {why}"));
                 }
             }
-            // 查看器甩尾活性入表（fx_frame_due 第八路，同第七路的旗规）
-            crate::ui::fx_spring::note_viewer_fling_live(self.viewer_fling.is_some());
+            // 信件列表卡甩尾帧泵（BAR-212）：与查看器车道同规——Fling::step
+            // 吃真实间隔，位移走与拖动同一把尺（mail_list 核 offset_bottom
+            // 自钳 [0, max]，甩尾方向与拖动同号：上推 = 负 = 向底贴）。
+            // 燃尽三件：速度燃尽 / 触底顶不动 / 车道翻牌（列表卡收了）
+            if self.mail_fling.is_some() {
+                let now = crate::report::boot_ms() as u64;
+                let dt = match self.mail_fling_last_ms {
+                    Some(prev) => now.saturating_sub(prev),
+                    None => crate::ui::fx_spring::frame_budget_ms(),
+                };
+                self.mail_fling_last_ms = Some(now);
+                let lane = crate::ui::mail_list::open_key().is_some();
+                let mut kill: Option<&str> = if lane { None } else { Some("车道翻牌") };
+                match self.mail_fling.as_mut().and_then(|f| f.step(dt as f64)) {
+                    None => {
+                        if kill.is_none() {
+                            kill = Some("速度燃尽");
+                        }
+                    }
+                    Some(d) if d != 0.0 && lane => {
+                        if let Some((sw, sh)) = self.screen_px() {
+                            Self::mail_list_feed(sw, sh);
+                            if crate::ui::mail_list::scroll_by(d as i64) {
+                                self.dirty = true;
+                            } else {
+                                kill = Some("触底/顶");
+                            }
+                            Self::mail_list_feed(sw, sh);
+                        }
+                    }
+                    Some(_) => {}
+                }
+                if let Some(why) = kill {
+                    self.mail_fling = None;
+                    self.mail_fling_last_ms = None;
+                    crate::report::report("scroll", &format!("信件列表卡甩尾尽: {why}"));
+                }
+            }
+            // 查看器甩尾活性入表（fx_frame_due 第八路，同第七路的旗规）；
+            // BAR-212：信箱列表卡甩尾共用本路活性旗（帧泵唤醒只问「有没
+            // 有在途甩尾」，不分车道）
+            crate::ui::fx_spring::note_viewer_fling_live(
+                self.viewer_fling.is_some() || self.mail_fling.is_some(),
+            );
             // 阅读页正文甩尾帧泵（BAR-170）：与查看器车道同规——Fling::step
             // 吃真实间隔，位移走与拖动同一把尺（reader 核 scroll_by 自钳
             // [0, max]，max = md 排版 total_h 同一份）。燃尽三件：速度
@@ -10752,7 +11054,10 @@ impl ApplicationHandler for App {
                     .cfg_page
                     .as_ref()
                     .is_some_and(|p| p.lock().unwrap().tab() == 2);
-                if on_pool_page {
+                // BAR-212：查看器换芯与池页解耦——信箱列表卡（解析页）点
+                // 信走同一取回通道，title 对上的开着框换芯不许绑「会话
+                // 池页在顶」（旧闸下解析页开的查看器永远停在「加载中…」）
+                {
                     let sp = crate::sess_pool::snap();
                     if let Some(c) = &sp.content
                         && let Some(page) = &self.cfg_page
@@ -10765,8 +11070,16 @@ impl ApplicationHandler for App {
                             pg.open_viewer(c.title.clone(), c.text.clone());
                         }
                     }
+                }
+                if on_pool_page {
                     self.rebuild_cfg_rows();
                 }
+            }
+            // 信箱列表页数据面（BAR-212）：列表/摘要取回即脏帧（veil 层
+            // sig 吃 mail_feed::epoch 维，重烘归 veil 烘焙块）；列表卡
+            // 开合/滚动换代同闸
+            if crate::mail_feed::take_dirty() || crate::ui::mail_list::take_dirty() {
+                self.dirty = true;
             }
             // 环境卡柱层滑入帧泵（2026-09-21 环境卡重做）：靠泊且 1px
             // 量化位移变了才置脏（柱距 9px / 拍 2s ≈ 4.5 帧/s；位移只在

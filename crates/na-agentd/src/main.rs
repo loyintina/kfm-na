@@ -6,6 +6,8 @@
 //!   9041 端口对账 2026-09-26：现役 8021-8032/9021/9022/9099/9229/
 //!   62633/62694（ss -tln 实证），9041 空闲）
 //! - NA_AGENT_SESSION_ROOT  会话根（缺省 /root/.kfm/session）
+//! - NA_AGENT_MAIL_ROOT     信箱根（缺省 /root/90-信箱，BAR-212 迁家后两册
+//!   挂这下面；照 NA_AGENT_SESSION_ROOT 先例）
 //! - NA_AGENT_PROVIDER_JSON provider 配置（缺省 /root/.kfm/provider.json，
 //!   key 永不进日志正文——错误信息只报路径不报内容）
 
@@ -34,10 +36,14 @@ fn assert_loopback(addr: &str) {
 fn main() {
     let addr = std::env::var("NA_AGENT_BIND").unwrap_or_else(|_| DEFAULT_BIND.into());
     assert_loopback(&addr);
-    let svc = Arc::new(AgentService::new(
+    let mut svc = AgentService::new(
         &std::env::var("NA_AGENT_SESSION_ROOT").unwrap_or_else(|_| DEFAULT_SESSION_ROOT.into()),
         &std::env::var("NA_AGENT_PROVIDER_JSON").unwrap_or_else(|_| DEFAULT_PROVIDER_JSON.into()),
-    ));
+    );
+    if let Ok(mr) = std::env::var("NA_AGENT_MAIL_ROOT") {
+        svc.mail_root = mr;
+    }
+    let svc = Arc::new(svc);
     let listener = TcpListener::bind(&addr).unwrap_or_else(|e| panic!("绑 {addr} 失败: {e}"));
     eprintln!(
         "[na-agentd] 听 {addr}（会话根 {} / provider {}）",
@@ -105,6 +111,15 @@ fn handle(mut stream: TcpStream, svc: &AgentService) -> Result<(), String> {
     Ok(())
 }
 
+/// 信件列表条目的 JSON 形状（BAR-212：name/bytes/mtime 之外增 time/from/to/title
+/// 信头四字段——增量字段，旧客户端只读老三样不断）
+fn letter_json(l: &na_agentd::service::LetterMeta) -> serde_json::Value {
+    serde_json::json!({
+        "name": l.name, "bytes": l.bytes, "mtime": l.mtime,
+        "time": l.time, "from": l.from, "to": l.to, "title": l.title,
+    })
+}
+
 fn route_exec(method: &str, path: &str, body: &str, svc: &AgentService) -> Vec<u8> {
     let ok = |v: serde_json::Value| httpd::respond(200, "OK", &v.to_string());
     let err = |status: u16, reason: &str, msg: &str| {
@@ -166,9 +181,7 @@ fn route_exec(method: &str, path: &str, body: &str, svc: &AgentService) -> Vec<u
         httpd::Route::Letters => match svc.list_letters() {
             Ok(ls) => ok(serde_json::json!({
                 "ok": true,
-                "letters": ls.iter().map(|l| serde_json::json!({
-                    "name": l.name, "bytes": l.bytes, "mtime": l.mtime,
-                })).collect::<Vec<_>>(),
+                "letters": ls.iter().map(letter_json).collect::<Vec<_>>(),
             })),
             Err(e) => err(500, "Internal Server Error", &e),
         },
@@ -180,9 +193,7 @@ fn route_exec(method: &str, path: &str, body: &str, svc: &AgentService) -> Vec<u
         httpd::Route::InboxLetters { key } => match svc.list_inbox_letters(&key) {
             Ok(ls) => ok(serde_json::json!({
                 "ok": true,
-                "letters": ls.iter().map(|l| serde_json::json!({
-                    "name": l.name, "bytes": l.bytes, "mtime": l.mtime,
-                })).collect::<Vec<_>>(),
+                "letters": ls.iter().map(letter_json).collect::<Vec<_>>(),
             })),
             Err(e) if e.contains("非法") => err(400, "Bad Request", &e),
             Err(e) => err(404, "Not Found", &e),
@@ -192,6 +203,20 @@ fn route_exec(method: &str, path: &str, body: &str, svc: &AgentService) -> Vec<u
             Err(e) if e.contains("非法") => err(400, "Bad Request", &e),
             Err(e) => err(404, "Not Found", &e),
         },
+        httpd::Route::InboxSummaries { key, names } => {
+            let Some(names) = names else {
+                return err(400, "Bad Request", "缺 names 参数");
+            };
+            match svc.inbox_summaries(&key, &names) {
+                Ok(ss) => ok(serde_json::json!({
+                    "ok": true,
+                    "summaries": ss.iter().map(|(name, summary, mtime)| serde_json::json!({
+                        "name": name, "summary": summary, "mtime": mtime,
+                    })).collect::<Vec<_>>(),
+                })),
+                Err(e) => err(404, "Not Found", &e),
+            }
+        }
         httpd::Route::NotFound => err(404, "Not Found", "not found"),
     }
 }

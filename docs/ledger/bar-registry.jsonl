@@ -32,3 +32,4 @@
 {"bar": 209, "title": "attach/切会话不入追赶——清场黑屏+全量重播种57.8s（0075 承影定罪：catchup.enter 只挂 respawn_session）", "claimant_func": "开发部", "claimant": "观澜", "letter": "0107", "ts": "2026-09-30 19:46 +0800"}
 {"bar": 210, "title": "prompt_bar.rs:246 切片越界 SIGABRT 崩溃（0075 §三：start>end ×4，病灶输入栏）", "claimant_func": "开发部", "claimant": "观澜", "letter": "0110", "ts": "2026-09-30 20:14 +0800"}
 {"bar":211,"title":"KFMHDR 播种头判负 4876 次致像素级滚动瘫痪（0081：r尾/错误块抢先两支仍在，判卷归承影）","claimant_func":"开发部","claimant":"观澜","letter":"0111","ts":"2026-09-30 22:34 +0800"}
+{"bar":212,"title":"信箱入口迁解析页左下常驻槽+页面级信件列表卡","claimant_func":"开发部","claimant":"闻灯","letter":"0098","ts":"2026-09-30 18:52 +0800"}

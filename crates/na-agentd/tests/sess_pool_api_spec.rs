@@ -312,3 +312,206 @@ fn spec_bar174_端点_信件列表带mtime() {
     let old = svc.list_letters().expect("旧别名");
     assert_eq!(old, ls, "旧别名与 keyed 面同形");
 }
+
+// ---- BAR-212：两册新 key + 信头四字段 + summaries 批量端点 ----
+
+/// v2.1 真格式信（照 0090 号实拍样例缩水）
+const LETTER_FULL: &str = "# 已读，随时可退：无在途写盘
+
+> 日期: 2026-09-30 14:59 +08:00
+> 从: 开发部闻灯
+> 致: 评审部白露
+> 复: 0050
+> 状态: 通报完毕
+<!-- LETTER-TOKEN v2 no=0090 nonce=c7ec8a064bf7f278 fp=52e759294e2ef921 -->
+
+## 摘要
+
+> 注意（写给隐藏读者）：三句话内说清是什么事、要不要我做事；不写工作术语。
+
+搬会话的信我读完了，我这边随时可以退。
+<!-- LETTER-TOKEN 摘要段内注释行也丢 -->
+要你做的事：没有。
+
+## 正文
+
+就绪申报。
+";
+
+/// 缺字头的信（只有 H1，无引用块字头，无摘要段）
+const LETTER_BARE: &str = "# 光秃秃的信
+
+正文一句话。
+";
+
+fn book_fixture() -> (tempfile::TempDir, AgentService) {
+    let tmp = tempfile::tempdir().expect("临时目录");
+    let mail = tmp.path().join("mail");
+    let main_book = mail.join("00-主册");
+    let na_book = mail.join("10-NA信箱");
+    std::fs::create_dir_all(&main_book).expect("建主册");
+    std::fs::create_dir_all(&na_book).expect("建NA信箱");
+    std::fs::write(na_book.join("README.md"), "# 规范\n").expect("写 README");
+    std::fs::write(
+        na_book.join("0090号闻灯致评审部白露复0050的回执.md"),
+        LETTER_FULL,
+    )
+    .expect("写真格式信");
+    std::fs::write(na_book.join("bare-letter.md"), LETTER_BARE).expect("写秃信");
+    std::fs::write(
+        main_book.join("0090号闻灯致评审部白露复0050的回执.md"),
+        LETTER_FULL,
+    )
+    .expect("写主册信");
+    let mut svc = AgentService::new(
+        &tmp.path().join("session").to_string_lossy(),
+        &tmp.path().join("无provider.json").to_string_lossy(),
+    );
+    svc.mail_root = mail.to_string_lossy().into_owned();
+    (tmp, svc)
+}
+
+#[test]
+fn spec_bar212_端点_两册新key映射() {
+    let (_t, svc) = book_fixture();
+    assert_eq!(
+        svc.inbox_root("main-book").as_deref(),
+        Some(format!("{}/00-主册", svc.mail_root)).as_deref(),
+        "main-book → 00-主册"
+    );
+    assert_eq!(
+        svc.inbox_root("na-book").as_deref(),
+        Some(format!("{}/10-NA信箱", svc.mail_root)).as_deref(),
+        "na-book → 10-NA信箱"
+    );
+    // 旧两 key 不动
+    assert!(svc.inbox_root("mailbox").is_some());
+    assert_eq!(
+        svc.inbox_root("agent-inbox").as_deref(),
+        Some(na_agentd::service::AGENT_INBOX_ROOT)
+    );
+    // fail-closed 不变：不在表里的 key 一律 None → 404 语义
+    assert!(svc.inbox_root("etc").is_none());
+    assert!(svc.inbox_root("../../etc").is_none());
+    let e = svc.list_inbox_letters("etc").unwrap_err();
+    assert!(e.contains("未知"), "unknown key = 404 语义: {e}");
+    let e = svc
+        .inbox_summaries("etc", &["a.md".to_string()])
+        .unwrap_err();
+    assert!(e.contains("未知"), "summaries unknown key = 404 语义: {e}");
+}
+
+#[test]
+fn spec_bar212_端点_列表信头四字段() {
+    let (_t, svc) = book_fixture();
+    let ls = svc.list_inbox_letters("na-book").expect("列NA信箱");
+    assert_eq!(ls.len(), 2, "README.md 不算信: {ls:?}");
+    // 按名升序：0090… 在 bare-letter.md 前
+    let full = &ls[0];
+    assert_eq!(full.name, "0090号闻灯致评审部白露复0050的回执.md");
+    assert_eq!(full.time, "2026-09-30 14:59 +08:00");
+    assert_eq!(full.from, "开发部闻灯");
+    assert_eq!(full.to, "评审部白露");
+    assert_eq!(full.title, "已读，随时可退：无在途写盘");
+    assert!(full.bytes > 0 && full.mtime > 0, "老三样不动: {full:?}");
+    // 缺字头容错：四字段全空串不炸
+    let bare = &ls[1];
+    assert_eq!(bare.name, "bare-letter.md");
+    assert_eq!(bare.title, "光秃秃的信");
+    assert_eq!(bare.time, "");
+    assert_eq!(bare.from, "");
+    assert_eq!(bare.to, "");
+    // 两册同形：main-book 也走这套解析
+    let ls = svc.list_inbox_letters("main-book").expect("列主册");
+    assert_eq!(ls.len(), 1);
+    assert_eq!(ls[0].from, "开发部闻灯");
+    // 旧 key 同走扩展：mailbox 夹具信 H1 出 title，无字头三字段空
+    let (t2, svc2) = {
+        let tmp = tempfile::tempdir().expect("临时目录");
+        let root = tmp.path().join("session");
+        let mb = root.join("信箱");
+        std::fs::create_dir_all(&mb).expect("建信箱");
+        std::fs::write(mb.join("a-b-report.md"), "# 信\n正文\n").expect("写信");
+        let svc = AgentService::new(
+            &root.to_string_lossy(),
+            &tmp.path().join("无provider.json").to_string_lossy(),
+        );
+        (tmp, svc)
+    };
+    let _keep = t2;
+    let ls = svc2.list_letters().expect("旧别名");
+    assert_eq!(ls[0].title, "信", "旧 key 同走信头解析");
+    assert_eq!(ls[0].time, "");
+    assert_eq!(ls[0].from, "");
+    assert_eq!(ls[0].to, "");
+}
+
+#[test]
+fn spec_bar212_端点_summaries提取与剔除() {
+    let (_t, svc) = book_fixture();
+    let names = vec!["0090号闻灯致评审部白露复0050的回执.md".to_string()];
+    let ss = svc.inbox_summaries("na-book", &names).expect("取摘要");
+    assert_eq!(ss.len(), 1);
+    assert_eq!(ss[0].0, names[0]);
+    // mtime 与列表端点同口径咬合（客户端摘要缓存按 (name, mtime) 对账）
+    let listed = svc.list_inbox_letters("na-book").expect("列表");
+    let listed_mtime = listed
+        .iter()
+        .find(|l| l.name == names[0])
+        .expect("列表含该信")
+        .mtime;
+    assert!(ss[0].2 > 0, "mtime 必须带: {:?}", ss[0]);
+    assert_eq!(ss[0].2, listed_mtime, "与列表端点 mtime 同口径");
+    let s = &ss[0].1;
+    assert!(s.contains("搬会话的信我读完了"), "真摘要进: {s}");
+    assert!(s.contains("要你做的事：没有。"), "多行空格拼接: {s}");
+    assert!(!s.contains("注意"), "占位提示行剔除: {s}");
+    assert!(!s.contains("LETTER-TOKEN"), "注释行剔除: {s}");
+    assert!(!s.contains("就绪申报"), "下一 ## 段不进摘要: {s}");
+    // 无摘要块 → ""
+    let ss = svc
+        .inbox_summaries("na-book", &["bare-letter.md".to_string()])
+        .expect("秃信摘要");
+    assert_eq!(ss[0].1, "", "无摘要块 = 空串");
+}
+
+#[test]
+fn spec_bar212_端点_summaries截断120字() {
+    let (t, svc) = book_fixture();
+    let long: String = "长".repeat(200);
+    let text = format!("# 长信\n\n> 日期: 2026-09-30\n\n## 摘要\n\n{long}\n\n## 正文\n\n尾。\n");
+    let na_book = t.path().join("mail").join("10-NA信箱");
+    std::fs::write(na_book.join("long-letter.md"), text).expect("写长信");
+    let ss = svc
+        .inbox_summaries("na-book", &["long-letter.md".to_string()])
+        .expect("取长摘要");
+    assert_eq!(
+        ss[0].1.chars().count(),
+        na_agentd::service::SUMMARY_MAX_CHARS,
+        "字符安全截断到 120（中文按字不按字节）"
+    );
+}
+
+#[test]
+fn spec_bar212_端点_summaries非法名跳过不连坐() {
+    let (_t, svc) = book_fixture();
+    let names = vec![
+        "../x.md".to_string(),
+        "0090号闻灯致评审部白露复0050的回执.md".to_string(),
+        "README.md".to_string(),
+        "ghost-letter.md".to_string(),
+        "随便写的.md".to_string(),
+    ];
+    let ss = svc.inbox_summaries("na-book", &names).expect("混合名单");
+    assert_eq!(
+        ss.len(),
+        1,
+        "非法名/规范文件/不存在全跳过，只剩真信: {ss:?}"
+    );
+    assert_eq!(ss[0].0, "0090号闻灯致评审部白露复0050的回执.md");
+    // 全非法 = 空表不是错
+    let ss = svc
+        .inbox_summaries("na-book", &["../x.md".to_string()])
+        .expect("全非法");
+    assert!(ss.is_empty());
+}

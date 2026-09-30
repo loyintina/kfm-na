@@ -29,6 +29,8 @@ pub mod gear;
 pub mod grid_text;
 pub mod keybar;
 pub mod link_card;
+pub mod mail_card;
+pub mod mail_list;
 pub mod md_layout;
 pub mod md_paint;
 pub mod md_parse;

@@ -8,10 +8,15 @@
 //! 会话行表退役 → 卡高恒定（不再吃会话数）；通道段尾 = 钮行半宽并排
 //! [跳闸/投 QUIC]（左半）+ [重启]（右半）。
 //!
+//! 2026-09-30 BAR-212（用户拍板：连接段「重拉」「错误」两行提示没用）：
+//! 连接段字段行 4 → 2（只剩 目标/本地口），左右段行数分家
+//! （L_FIELDS=2 / R_FIELDS=4），LEFT_H 与 card_h() 账随之收。
+//!
 //! 变异抽检：①card_h 漏段距/漏通道段（卡高账与布局漂移 = 末件出卡底）
 //! 必须咬；②两段顺序颠倒（通道段跑连接段上 = 拍板语义反）必须咬；
 //! ③段内不全宽（窄列里还按两竖列半分排 = 字段值挤爆）必须咬；
-//! ④调试钮行不并排/错半宽（两钮叠合或错位 = 误点）必须咬。
+//! ④调试钮行不并排/错半宽（两钮叠合或错位 = 误点）必须咬；
+//! ⑤连接段行数回潮成 4（重拉/错误两行复活 = BAR-212 白干）必须咬。
 
 use kfm_na::ui::dual_pool::PoolRect;
 use kfm_na::ui::link_card::{self, LinkHit, LinkLayout};
@@ -35,6 +40,12 @@ fn spec_几何_两段纵排全宽() {
     let l = lay();
     let cx = l.card.x + i64::from(pp::CARD_PAD_H);
     let cw = l.card.w - pp::CARD_PAD_H * 2;
+    // 变异⑤：连接段两行 / 通道段四行，行数分家（回潮成同一份 N_FIELDS
+    // = 重拉/错误复活或四口缺行，都必须咬）
+    assert_eq!(link_card::L_FIELDS, 2);
+    assert_eq!(link_card::R_FIELDS, 4);
+    assert_eq!(l.lfields.len(), 2, "连接段只剩 目标/本地口 两行");
+    assert_eq!(l.rfields.len(), 4, "通道段四口状态四行不动");
     // 变异③：段内必须全宽（窄列半分 = 字段值挤爆）
     assert_eq!(l.lheader.x, cx);
     assert_eq!(l.lheader.w, cw);
@@ -52,7 +63,7 @@ fn spec_几何_两段纵排全宽() {
     }
     // 纵序：连接段头 → 连接段字段 → 钮 → 通道段头 → 通道段字段 →
     // 调试钮行（变异②：两段顺序颠倒必须咬）
-    let fields_end = l.lfields[3].y + i64::from(l.lfields[3].h);
+    let fields_end = l.lfields[1].y + i64::from(l.lfields[1].h);
     assert_eq!(
         l.lfields[0].y,
         l.lheader.y + i64::from(l.lheader.h + pp::ROW_GAP)
@@ -108,6 +119,17 @@ fn spec_几何_卡高账两段相加_恒定() {
     assert_eq!(
         link_card::card_h(),
         pp::CARD_PAD_V * 2 + link_card::LEFT_H + pp::ROW_GAP + link_card::RIGHT_H
+    );
+    // BAR-212：连接段字段块 = 两行（2 行 + 1 行距）——LEFT_H 账同步收
+    // （行数回潮成 4 = 卡高虚高留空洞，必须咬）
+    assert_eq!(
+        link_card::LEFT_H,
+        pp::ROW_H
+            + pp::ROW_GAP
+            + (2 * link_card::FIELD_H + link_card::FIELD_GAP)
+            + pp::ROW_GAP
+            + pp::BTN_H,
+        "连接段高 = 卡头 + 两字段行 + [重连] 钮"
     );
     // 卡高账与布局同源：末件底 = 卡底 − PAD_V（末件恒为调试钮行）
     let l = lay();

@@ -38,9 +38,10 @@ const S0: Scrolls = Scrolls { left: 0, right: 0 };
 
 #[test]
 fn spec_注册链三席区归属() {
-    // 现状三席：tmux→常驻区、连接·服务卡→右上滚动区、环境卡→左滚动区；
+    // 现状四席（BAR-212 加信箱入口卡）：tmux→常驻区、连接·服务卡→
+    // 右上滚动区、环境卡→左滚动区、信箱入口卡→左下常驻区；
     // 区归属 = 注册表静态声明（卡自身零感知）
-    assert_eq!(parser_chain::CHAIN.len(), 3);
+    assert_eq!(parser_chain::CHAIN.len(), 4);
     assert_eq!(parser_chain::CHAIN[0].id, ChainCardId::Tmux);
     assert_eq!(parser_chain::CHAIN[0].region, Region::Dock);
     assert_eq!(parser_chain::CHAIN[1].id, ChainCardId::Link);
@@ -51,6 +52,10 @@ fn spec_注册链三席区归属() {
     assert_eq!(parser_chain::region_of(ChainCardId::Tmux), Region::Dock);
     assert_eq!(parser_chain::region_of(ChainCardId::Link), Region::RightTop);
     assert_eq!(parser_chain::region_of(ChainCardId::Sys), Region::Left);
+    // BAR-212：信箱入口卡 = 左下常驻槽第四席
+    assert_eq!(parser_chain::CHAIN[3].id, ChainCardId::Mail);
+    assert_eq!(parser_chain::CHAIN[3].region, Region::LeftDock);
+    assert_eq!(parser_chain::region_of(ChainCardId::Mail), Region::LeftDock);
 }
 
 #[test]
@@ -85,11 +90,25 @@ fn spec_三区几何_右列比例宽常驻钉底() {
         r.dock.y - i64::from(parser_chain::DOCK_GAP),
         "右上区底必须让出常驻槽 + 槽距"
     );
-    // 左区：区顶 → 可视底，宽 = 全区 − 右列 − 列距
+    // 左下常驻槽（BAR-212 信箱入口卡）：左列宽 × 钉可视底，与 dock 镜像
+    let lw = area.w - cw - parser_chain::REGION_GAP;
+    assert_eq!(r.left_dock.w, lw);
+    assert_eq!(r.left_dock.x, area.x);
+    assert_eq!(
+        r.left_dock.y + i64::from(r.left_dock.h),
+        VB,
+        "左下常驻槽必须钉键盘感知可视底——与 tmux 槽同律"
+    );
+    assert_eq!(r.left_dock.h, kfm_na::ui::mail_card::card_h());
+    // 左滚动区：区顶 → 左下槽顶 − DOCK_GAP，宽 = 全区 − 右列 − 列距
     assert_eq!(r.left.x, area.x);
     assert_eq!(r.left.y, area.y);
-    assert_eq!(r.left.w, area.w - cw - parser_chain::REGION_GAP);
-    assert_eq!(r.left.y + i64::from(r.left.h), VB);
+    assert_eq!(r.left.w, lw);
+    assert_eq!(
+        r.left.y + i64::from(r.left.h),
+        r.left_dock.y - i64::from(parser_chain::DOCK_GAP),
+        "左滚动区底必须让出左下常驻槽 + 槽距"
+    );
     // 比例制 = 随页全区宽走（v2 定宽回潮必须咬）：窄屏列宽同比缩
     let narrow = parser_chain::regions(600, 900, 0, 800, 300);
     let narea = parser_chain::page_area(600, 900, 0);
@@ -217,8 +236,39 @@ fn spec_高度收集自报同源() {
     assert_eq!(hh.tmux, 999);
     assert_eq!(hh.link, link_card::card_h());
     assert_eq!(hh.sys, sys_card::CARD_H);
+    assert_eq!(hh.mail, kfm_na::ui::mail_card::card_h());
     // DOCK_GAP 与链槽间距同档（一格——排布元数据收编后数值不许漂移）
     assert_eq!(parser_chain::DOCK_GAP, CELL_H);
+}
+
+#[test]
+fn spec_bar212_左下常驻槽配给与零滚动() {
+    let r = regs(300);
+    let hh = h(300, 2);
+    // 槽位原样配给 = left_dock（钉底不动，不吃任何滚动账）
+    let m = parser_chain::slot_rect(ChainCardId::Mail, &r, &hh, &S0);
+    assert_eq!(m.x, r.left_dock.x);
+    assert_eq!(m.y, r.left_dock.y);
+    assert_eq!(m.w, r.left_dock.w);
+    assert_eq!(m.h, r.left_dock.h);
+    // 带滚动账也纹丝不动（常驻 = 永不滚出屏）
+    let scrolled = Scrolls {
+        left: 500,
+        right: 500,
+    };
+    let m2 = parser_chain::slot_rect(ChainCardId::Mail, &r, &hh, &scrolled);
+    assert_eq!(m2.x, m.x);
+    assert_eq!(m2.y, m.y);
+    // 常驻区滚动上限恒 0
+    assert_eq!(
+        parser_chain::scroll_max(ChainCardId::Mail, &r, &hh),
+        0,
+        "左下常驻槽不许滚（变异：常驻区出非零 max 必须咬）"
+    );
+    // 裁剪带 = 槽自身纵段
+    let clip = parser_chain::clip_of(ChainCardId::Mail, &r);
+    assert_eq!(clip.0, r.left_dock.y);
+    assert_eq!(clip.1, r.left_dock.y + i64::from(r.left_dock.h));
 }
 
 #[test]

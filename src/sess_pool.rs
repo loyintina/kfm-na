@@ -19,13 +19,21 @@ use serde_json::Value;
 
 // ---- A 档：数据形状与纯函数（考题先行钉死）----
 
-/// 下池路由键：线 / 本机信箱 / 全局评审信箱（特殊路由）
+/// 下池路由键：线 / 本机信箱 / 全局评审信箱（特殊路由）/
+/// 主册 / NA信箱（BAR-212：新两册只走解析页信箱入口，不进会话池
+/// routes_of——旧入口用户验收前不下线，故 routes_of 不推新行；
+/// 变体挂在这是为了正文取数/缓存机（request_content/plan_open）
+/// 与信箱 key 表一处同源）
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RouteKey {
     Line(String),
     Mailbox,
     /// BAR-167 工单③：全局评审信箱（agentd inbox_root 映射表同表）
     AgentInbox,
+    /// BAR-212：00-主册（/root/90-信箱 新资产，agentd key=main-book）
+    MainBook,
+    /// BAR-212：10-NA信箱（agentd key=na-book）
+    NaBook,
 }
 
 /// 信箱路由标题（与 session/MAILBOX_DIR 同一面，UI 文案层）
@@ -63,6 +71,8 @@ pub fn inbox_api_key(key: &RouteKey) -> Option<&'static str> {
     match key {
         RouteKey::Mailbox => Some("mailbox"),
         RouteKey::AgentInbox => Some("agent-inbox"),
+        RouteKey::MainBook => Some(crate::mail_feed::MailKey::MainBook.api_key()),
+        RouteKey::NaBook => Some(crate::mail_feed::MailKey::NaBook.api_key()),
         RouteKey::Line(_) => None,
     }
 }
@@ -287,6 +297,21 @@ fn err_detail(v: &Value) -> String {
         .to_string()
 }
 
+/// URL query 值百分号编码（BAR-212 摘要批量端点的信名——中文句法名
+/// 必须编码进 query；unreserved 字符原样，其余按 UTF-8 字节 %XX）
+pub fn url_encode(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
 // ---- B 档：取数胶水（判卷 = redroid 实录：池页 vs curl 对表）----
 
 /// 单次 GET 总超时（连/读同档）
@@ -433,7 +458,7 @@ pub fn request_entries(key: RouteKey) {
                     .and_then(|b| parse_named_bytes(&b, "sessions"))
                     .map(|ss| entries_or_placeholder(session_entries(&ss), EMPTY_SESSIONS))
             }
-            RouteKey::Mailbox | RouteKey::AgentInbox => {
+            RouteKey::Mailbox | RouteKey::AgentInbox | RouteKey::MainBook | RouteKey::NaBook => {
                 let inbox = inbox_api_key(&key).expect("信箱键");
                 http_get(port, &format!("/agent/api/agent/inboxes/{inbox}/letters"))
                     .and_then(|b| parse_letter_list(&b))
@@ -516,7 +541,7 @@ pub fn request_content(key: RouteKey, name: &str) {
                 .map(|evs| crate::wire_render::render_tail(&evs.join("\n"), TAIL_EVENTS));
                 publish(got.unwrap_or_else(|e| format!("（取数失败：{e}）")));
             }
-            RouteKey::Mailbox | RouteKey::AgentInbox => {
+            RouteKey::Mailbox | RouteKey::AgentInbox | RouteKey::MainBook | RouteKey::NaBook => {
                 let inbox = inbox_api_key(&key).expect("信箱键");
                 let dir = cache_root.as_ref().map(|r| r.join(inbox));
                 // ①缓存先画（fs 读在工作者线程，不卡 UI）②后台 GET 成败
@@ -553,6 +578,8 @@ pub fn content_title(key: &RouteKey, name: &str) -> String {
         RouteKey::Line(line) => format!("{line}/{name}"),
         RouteKey::Mailbox => format!("{MAILBOX_TITLE}/{name}"),
         RouteKey::AgentInbox => format!("{AGENT_INBOX_TITLE}/{name}"),
+        RouteKey::MainBook => format!("{}/{name}", crate::mail_feed::MailKey::MainBook.title()),
+        RouteKey::NaBook => format!("{}/{name}", crate::mail_feed::MailKey::NaBook.title()),
     }
 }
 
@@ -628,7 +655,7 @@ fn sync_inbox_cache(root: &Path, inbox: &str, remote: &[LetterMeta], port: u16) 
 
 /// GET 一个 JSON 面拿回 body（B 档胶水，svc_health::http_get 同款）：
 /// 连接/写/读全带超时，非 200 即错
-fn http_get(port: u16, path: &str) -> Result<String, String> {
+pub(crate) fn http_get(port: u16, path: &str) -> Result<String, String> {
     use std::io::Write;
     use std::net::{SocketAddr, TcpStream};
     let addr: SocketAddr = ([127, 0, 0, 1], port).into();

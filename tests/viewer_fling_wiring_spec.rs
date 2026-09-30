@@ -68,8 +68,10 @@ fn spec_bar167_viewer_滚动接线守卫() {
         "查看器甩尾活性必须接进 fx_frame_due 的 active 表"
     );
     assert!(
-        APP.contains("crate::ui::fx_spring::note_viewer_fling_live(self.viewer_fling.is_some())"),
-        "壳每圈帧泵末尾必须同步活性旗"
+        APP.contains(
+            "crate::ui::fx_spring::note_viewer_fling_live(\n                self.viewer_fling.is_some() || self.mail_fling.is_some(),"
+        ),
+        "壳每圈帧泵末尾必须同步活性旗（BAR-212：查看器与信件列表卡甩尾共用一路，OR 同旗）"
     );
     // 活性旗的真行为（不是 grep）：默认假、置位读得回、清位读得回
     use kfm_na::ui::fx_spring::{note_viewer_fling_live, viewer_fling_live};
