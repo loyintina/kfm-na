@@ -26,6 +26,14 @@ fn spec_char_cells_真值表() {
     assert_eq!(char_cells('🙂'), 2, "emoji = 2 格");
     // 零宽连词符不占格（终端同口径）
     assert_eq!(char_cells('\u{200d}'), 0, "ZWJ 零宽 = 0 格");
+    // 箭头块 U+2190–U+21FF = 2 格（BAR-199 与 unicode-width 的唯一有意
+    // 分叉：Ambiguous 墨宽 ≈30px > 1 格会被格盒裁残——承影 0075 实测）
+    assert_eq!(char_cells('→'), 2, "U+2192 箭头 = 2 格（BAR-199 分叉）");
+    assert_eq!(char_cells('←'), 2, "U+2190 箭头 = 2 格（BAR-199 分叉）");
+    assert_eq!(char_cells('↑'), 2, "U+2191 箭头 = 2 格（BAR-199 分叉）");
+    assert_eq!(char_cells('↓'), 2, "U+2193 箭头 = 2 格（BAR-199 分叉）");
+    assert_eq!(char_cells('\u{21ff}'), 2, "箭头块末 = 2 格");
+    assert_eq!(char_cells('\u{2200}'), 1, "块外 ∀ 不受分叉影响");
 }
 
 #[test]

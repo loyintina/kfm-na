@@ -58,6 +58,16 @@ chk "行号平移绿" 0 $?
 sed -i '/draw_text_left("姓"/d' "$T/src/a.rs"
 GRID_TEXT_SRC="$T/src" GRID_TEXT_BASELINE="$T/baseline.txt" bash "$GATE" >/dev/null 2>&1
 chk "多重集计数红" 1 $?
+mv "$T/src/a.rs.bak" "$T/src/a.rs" 2>/dev/null || true
+mk_baseline
+
+# 夹具6 引擎名碰撞豁免（BAR-196）：引擎件 grid_text_width 以旧件 text_width
+# 为后缀——新增引擎调用点不许登记为旧件存量（幽灵涨 = 棘轮假性收窄空间被吃）
+cat >> "$T/src/a.rs" <<'RS'
+fn h() { let w = grid_text_width("名"); }
+RS
+GRID_TEXT_SRC="$T/src" GRID_TEXT_BASELINE="$T/baseline.txt" bash "$GATE" >/dev/null 2>&1
+chk "引擎名碰撞豁免绿" 0 $?
 
 echo "[test-grid-text-ratchet] $pass 过 / $fail 红"
 [ "$fail" = 0 ]

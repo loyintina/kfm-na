@@ -27,6 +27,11 @@
 
 use crate::termview::{AI_PAGE_FRAME_MARGIN, AI_PAGE_FRAME_W, CELL_H, CELL_W};
 use crate::ui::accent::{AccentPair, FALLBACK};
+// 标签几何的量宽尺 = 网格文字引擎（BAR-191 收编：0x2E80 土判据退役——
+// 真盲区 = 谚文首字母 U+1100 段与零宽/组合符（土判据全误判 1 格）；
+// 引擎与终端网格同一把 unicode-width 尺，眼手同尺从此不止标签栏
+// 内部自洽，与终端/文件树同尺）
+use crate::ui::grid_text::grid_text_cells;
 
 /// 标签行高 = 2 格（§七 相对比例条款；2026-09-12 真机实测拍板：
 /// 1 格太扁——24px 字贴边，2 格留白才像可点目标；咬格不破，不用 2.5）
@@ -39,15 +44,6 @@ pub const TAB_LAYER_H: u32 = TAB_ROW_H + 8;
 pub const TAB_PAD_X: u32 = CELL_W;
 /// 标签间距 1 格
 pub const TAB_GAP: u32 = CELL_W;
-
-/// 文字格宽（CJK 宽字 2 格，其余 1 格）：0x2E80 起是 CJK 部首/假名/汉字
-/// 全家——池名场景够用；终端网格的宽字判定是 alacritty 内账，这里只是
-/// 标签排版尺（眼手同尺范围 = 标签栏内部自洽）
-pub fn text_cells(s: &str) -> u32 {
-    s.chars()
-        .map(|c| if (c as u32) >= 0x2E80 { 2 } else { 1 })
-        .sum()
-}
 
 /// 内容区原点（咬格）：x = 环左内缘（MARGIN + 3 倍粗左缘）+ 1 格，
 /// y = 环上内缘（MARGIN + 细缘）+ 1 格。整卡内容布局的共同原点——
@@ -156,7 +152,7 @@ impl TabBar {
     fn base_x(&self, i: usize) -> i64 {
         let ox = tab_row_origin_x() as i64;
         self.tabs[..i].iter().fold(ox, |x, t| {
-            x + ((text_cells(t) + 2) * CELL_W) as i64 + TAB_GAP as i64
+            x + ((grid_text_cells(t) + 2) * CELL_W) as i64 + TAB_GAP as i64
         })
     }
 
@@ -168,7 +164,7 @@ impl TabBar {
         }
         self.tabs
             .iter()
-            .map(|t| (text_cells(t) + 2) * CELL_W)
+            .map(|t| (grid_text_cells(t) + 2) * CELL_W)
             .sum::<u32>()
             + (n - 1) * TAB_GAP
     }
@@ -211,7 +207,7 @@ impl TabBar {
         // 光标贴内容不追赶）；scroll 没变时 from 不动 = 纯切换续弹
         let old_scroll = self.scroll_px;
         let bx = self.base_x(i);
-        let w = ((text_cells(&self.tabs[i]) + 2) * CELL_W) as i64;
+        let w = ((grid_text_cells(&self.tabs[i]) + 2) * CELL_W) as i64;
         let vis_x = bx + self.scroll_px;
         if w >= self.viewport_w as i64 {
             self.scroll_px = -bx; // 标签比视口还宽：左缘对齐，右缘滚动看
@@ -280,7 +276,7 @@ pub fn rects_of(tabs: &[String], scroll_px: i64) -> Vec<TabRect> {
     let mut x = tab_row_origin_x() as i64 + scroll_px;
     tabs.iter()
         .map(|t| {
-            let w = (text_cells(t) + 2) * CELL_W;
+            let w = (grid_text_cells(t) + 2) * CELL_W;
             let r = TabRect {
                 x,
                 y: oy as i64,

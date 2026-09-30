@@ -1606,6 +1606,34 @@ fn spec_bar_text_lines_硬换行计入行数() {
     assert_eq!(tv.bar_text_lines("ab", 1080), 1, "无换行仍一行（不退化）");
 }
 
+// BAR-197（0017 #10 面）：输入栏量宽迁网格引擎——item 下标 == char 下标
+// 1:1 不变量（'\n' 零宽条目保留）是全屋光标/选区/锚点柄/命中换算的承重
+// 墙；步进 = char_cells × 实例格宽（pinch 联动）。经 spec 薄壳直打量宽
+// 本体（spec_measure_bar_items_grid，单源不抄实现）
+#[test]
+fn spec_bar197_格量宽_换行零宽保1比1() {
+    let (mut tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必成");
+    let items = tv.spec_measure_bar_items_grid("a\n测");
+    assert_eq!(
+        items.len(),
+        3,
+        "item 下标 == char 下标 1:1（'\\n' 条目保留）"
+    );
+    assert_eq!(items[0].0, 'a');
+    assert_eq!(items[1], ('\n', 0.0), "'\\n' = 零宽条目");
+    assert_eq!(items[2].0, '测');
+    let (cw, _) = tv.cell_size();
+    assert_eq!(items[0].1, cw as f32, "半角步进 = 1 格");
+    assert_eq!(items[2].1, (cw * 2) as f32, "全角步进 = 2 格");
+    // pinch 联动：格宽翻倍步进翻倍，'\n' 恒零宽
+    tv.set_cell_size(cw * 2, 72);
+    let z = tv.spec_measure_bar_items_grid("a\n测");
+    assert_eq!(z.len(), 3, "pinch 后 1:1 不动");
+    assert_eq!(z[0].1, (cw * 2) as f32, "半角步进随格宽翻倍");
+    assert_eq!(z[2].1, (cw * 4) as f32, "全角步进随格宽翻倍");
+    assert_eq!(z[1], ('\n', 0.0), "'\\n' 恒零宽");
+}
+
 // ========== BAR-039：渲染带高从文本实测（stale lines 两张皮回归钉） ==========
 
 #[test]
@@ -1684,14 +1712,19 @@ fn spec_bar_caret_闪烁相位与定位柄() {
     assert_ne!(on[handle_px], noh[handle_px], "定位柄必须悬在光标行底");
     // BAR-042:柄稳显不随光标闪烁(off 相位下柄仍在)
     assert_eq!(off[handle_px], on[handle_px], "柄不随光标闪烁");
-    // 失焦不画光标(与相位灭同画素)
-    let unfocused = kfm_na::input_bar::BarSnap {
+    // 失焦不画光标（同聚焦态双相位对拍：失焦时相位亮/灭两帧在光标位
+    // 必须逐像素相等）。BAR-197 注：旧案跨聚焦态对拍（unf vs off），靠的是
+    // 旧 40.56px 占位符墨恰好盖住光标列——格引擎占位符（实例格字号）不再
+    // 盖住光标列，聚焦态底色差漏进探针；改同聚焦态对拍，判意不变且更直
+    let unfocused_off = kfm_na::input_bar::BarSnap {
         focused: false,
         ..focused.clone()
     };
     let mut unf = vec![0u32; (w * h) as usize];
-    tv.render_inputbar(&mut unf, w, h, 0, &unfocused, false, true);
-    assert_eq!(unf[caret_px], off[caret_px], "失焦无光标");
+    tv.render_inputbar(&mut unf, w, h, 0, &unfocused_off, false, true);
+    let mut unf_off = vec![0u32; (w * h) as usize];
+    tv.render_inputbar(&mut unf_off, w, h, 0, &unfocused_off, false, false);
+    assert_eq!(unf[caret_px], unf_off[caret_px], "失焦无光标（相位无关）");
 }
 
 #[test]
@@ -1783,12 +1816,15 @@ fn spec_composing_下划线稳显() {
 }
 
 // BAR-046: 文本选择系统渲染判卷——选区高亮像素+锚点稳显+菜单像素
+// （BAR-197 注：文本 10 字改 6 字——格量宽尺 6×2格×18=216px 恰好单行
+// 装得下（可用宽 230），保单行带几何行锚（行中心 1089）；10 字在格尺下
+// 360px 折两行，行锚整体下移——折行点移动是尺换格的题中之意）
 #[test]
 fn spec_selection_高亮与锚点稳显() {
     let (tv, _, _) = kfm_na::termview::build_vendored().expect("内嵌字体必成");
     let (w, h) = (600u32, 1200u32);
     let snap = kfm_na::input_bar::BarSnap {
-        text: "一二三四五六七八九十".to_string(),
+        text: "一二三四五六".to_string(),
         focused: true,
         lines: 1,
         cursor: 0,
@@ -2807,6 +2843,41 @@ fn spec_ai页fit公式_饱和与裁剪() {
     assert_eq!(f(50, 100), 0, "负余量 saturating 饱和为 0，不许下溢");
 }
 
+#[test]
+fn spec_bar198_ai_line_step_格化() {
+    // BAR-198：AI 页行距格化唯一源 ai_line_step = cell_h×16/9（设计格
+    // 36 → 64，与旧 AI_PAGE_LINE_H 恒值逐像素等价；pinch 翻倍档 72 → 128）。
+    // 系数漂移 = 行距与格高脱钩（GPU 收集/CPU 渲染/壳侧手势三方同尺靠它）
+    let s = kfm_na::termview::ai_line_step;
+    assert_eq!(s(36), 64, "设计格行距 = 36×16/9 = 64");
+    assert_eq!(s(72), 128, "翻倍档行距 = 72×16/9 = 128");
+    assert_eq!(s(18), 32, "半档行距 = 18×16/9 = 32");
+    assert_eq!(
+        s(kfm_na::termview::CELL_H),
+        kfm_na::termview::AI_PAGE_LINE_H,
+        "AI_PAGE_LINE_H 必须 = ai_line_step(CELL_H)（设计格口径重定义）"
+    );
+    // fit 的运行期 step 变体：设计格与旧恒值同读数，翻倍档行数减半
+    assert_eq!(
+        kfm_na::termview::ai_page_fit_with_step(600, 0, 64),
+        kfm_na::termview::ai_page_fit(600, 0),
+        "设计格 step 变体 ≡ 设计格恒值版"
+    );
+    assert_eq!(
+        kfm_na::termview::ai_page_fit_with_step(600, 0, 128),
+        3,
+        "翻倍档 (600-96)/128 = 3"
+    );
+    // chrome 运行期 step 变体：设计格 ≡ 旧版（fit 读数与像素双等价；
+    // 覆盖棘轮入册——with_step 变体不许成无考题孤儿）
+    let mut b1 = vec![0u32; (100 * 200) as usize];
+    let mut b2 = vec![0u32; (100 * 200) as usize];
+    let f1 = kfm_na::termview::paint_ai_page_chrome(&mut b1, 100, 200, 0, 0);
+    let f2 = kfm_na::termview::paint_ai_page_chrome_with_step(&mut b2, 100, 200, 0, 0, 64);
+    assert_eq!(f1, f2, "chrome_with_step 设计格 fit ≡ 旧版");
+    assert_eq!(b1, b2, "chrome_with_step 设计格像素 ≡ 旧版");
+}
+
 // ---- BAR-067：栏带半透契约（2026-09-05，chrome 层真 alpha 直通后还原
 // kfmv4 rgba(18,18,26,.85)——CPU 时代压平的不透明暗板在多行带高下成
 // 黑墙）----
@@ -3448,10 +3519,11 @@ fn spec_三级框_涂装钉() {
 
     // ③上池值框无边框：左竖线位/右缘/上缘全 = 渐变暗底
     // （变异：左竖线/四边细框回潮即红）
-    // 十四修动态宽度：几何吃实量宽（与涂装同一条 measure_items 尺）
+    // 十四修动态宽度（BAR-196 网格引擎尺）：几何吃格量宽（与涂装/命中
+    // 同一条 grid_text_width 尺——眼手同尺）
     let ur = cfg_page::upper_row_rect(0, &ps.upper, 0);
-    let lw = tv.text_width("默认服务器", 36.0);
-    let vw = tv.text_width("本地终端", 30.0);
+    let lw = tv.grid_text_width("默认服务器");
+    let vw = tv.grid_text_width("本地终端");
     let lb = cfg_page::field_label_rect(&ur, lw);
     let vb = cfg_page::field_value_rect(&ur, lb.w, vw, false);
     assert_eq!(
@@ -3570,8 +3642,8 @@ fn spec_字段行_右对齐与动态宽涂装钉() {
     tv.paint_cfg_pool_content(&mut b0, w, h, &ps, &pg, 0, acc, 0, None, false);
 
     let ur = cfg_page::upper_row_rect(0, &ps.upper, 0);
-    let lb = cfg_page::field_label_rect(&ur, tv.text_width("key", 36.0));
-    let vb = cfg_page::field_value_rect(&ur, lb.w, tv.text_width("v", 30.0), false);
+    let lb = cfg_page::field_label_rect(&ur, tv.grid_text_width("key"));
+    let vb = cfg_page::field_value_rect(&ur, lb.w, tv.grid_text_width("v"), false);
     assert_eq!(
         vb.w,
         cfg_page::FIELD_VALUE_MIN_W,
@@ -3674,9 +3746,9 @@ fn spec_下拉面板_涂装钉() {
     tv.paint_cfg_dual_pool(&mut b0, w, h, &ps, 0, acc);
     tv.paint_cfg_pool_content(&mut b0, w, h, &ps, &pg0, 0, acc, 0, None, false);
 
-    // ①触发器 = 三级框全包框（十四修动态宽度：实量宽喂几何）
-    let lw = tv.text_width("默认服务器", 36.0);
-    let vw = tv.text_width("本地终端", 30.0);
+    // ①触发器 = 三级框全包框（十四修动态宽度，BAR-196：格量宽喂几何）
+    let lw = tv.grid_text_width("默认服务器");
+    let vw = tv.grid_text_width("本地终端");
     let vb = cfg_page::trigger_rect(&ps.upper, 0, true, lw, vw);
     let trig = [
         (vb.x + 4, vb.y + vb.h as i64 / 2, "触发器左粗缘"),
@@ -3712,7 +3784,7 @@ fn spec_下拉面板_涂装钉() {
     let t = cfg_page::trigger_rect(&ps.upper, 0, true, lw, vw);
     let max_h = h.saturating_sub(t.y.max(0) as u32 + t.h + 40);
     // 十七修 BAR-090：几何复算吃与实现同尺的内容最小宽（眼手同尺）
-    let cw0 = tv.text_width("本地终端", 36.0) + cfg_page::FIELD_TEXT_INSET * 2;
+    let cw0 = tv.grid_text_width("本地终端") + cfg_page::FIELD_TEXT_INSET * 2;
     let pr = cfg_page::dropdown_panel_rect(2, &ps.upper, max_h, 0, true, lw, vw, cw0);
     let row_h = cfg_page::FIELD_ROW_H as i64;
     let canvas_w = ps.upper.w - (cfg_page::POOL_CONTENT_INSET * 2) as u32;
@@ -4601,11 +4673,9 @@ fn spec_cfg下拉_抽屉随面钉() {
     let mut pg1 = page.snap(1125);
     pg1.dropdown_progress = 0.5;
 
-    let lw = tv.text_width("server", 36.0);
-    let vw = tv.text_width("LOCAL", 30.0);
-    let cw0 = tv
-        .text_width("LOCAL", 36.0)
-        .max(tv.text_width("SRV0", 36.0))
+    let lw = tv.grid_text_width("server");
+    let vw = tv.grid_text_width("LOCAL");
+    let cw0 = tv.grid_text_width("LOCAL").max(tv.grid_text_width("SRV0"))
         + cfg_page::FIELD_TEXT_INSET * 2;
     let t = cfg_page::trigger_rect(&ps.upper, 0, true, lw, vw);
     let max_h = h.saturating_sub(t.y.max(0) as u32 + t.h + 40);
@@ -4769,9 +4839,9 @@ fn spec_cfg下拉_选中细框滑行涂装钉() {
 
     // 二十四修拆层：面板走独立槽画布（原点 = (上池内容左内缘, pr.y)，
     // 画布尺渐变），页涂装不再画面板
-    let lw = tv.text_width("server", 36.0);
-    let vw = tv.text_width("LOCAL", 30.0);
-    let cw0 = tv.text_width("SRV1", 36.0) + cfg_page::FIELD_TEXT_INSET * 2;
+    let lw = tv.grid_text_width("server");
+    let vw = tv.grid_text_width("LOCAL");
+    let cw0 = tv.grid_text_width("SRV1") + cfg_page::FIELD_TEXT_INSET * 2;
     let t = cfg_page::trigger_rect(&ps.upper, 0, true, lw, vw);
     let max_h = h.saturating_sub(t.y.max(0) as u32 + t.h + 40);
     let pr = cfg_page::dropdown_panel_rect(3, &ps.upper, max_h, 0, true, lw, vw, cw0);
@@ -4854,8 +4924,8 @@ fn spec_下拉三角旋转_涂装钉() {
     page.set_options(vec!["LOCAL".into()], 0);
 
     // 三角中心（与涂装同尺复算：值框右缘 −37，行中带）
-    let lw = tv.text_width("server", 36.0);
-    let vw = tv.text_width("LOCAL", 30.0);
+    let lw = tv.grid_text_width("server");
+    let vw = tv.grid_text_width("LOCAL");
     let vb = cfg_page::trigger_rect(&ps.upper, 0, true, lw, vw);
     let (cx, cy) = (vb.x + vb.w as i64 - 37, vb.y + vb.h as i64 / 2);
 
@@ -5167,8 +5237,8 @@ fn spec_上池平移_框静止留隙_涂装钉() {
     let travel = pw_c + cfg_page::PAN_GAP_UPPER;
     let d5 = (0.5 * travel as f32).round() as i64;
     // 旧代：值框（下拉行 = 三级框全包框）左粗缘左出半程，带旧 accent
-    let lw_o = tv.text_width("server", 36.0);
-    let vw_o = tv.text_width("LOCAL", 30.0);
+    let lw_o = tv.grid_text_width("server");
+    let vw_o = tv.grid_text_width("LOCAL");
     let vb_o = cfg_page::trigger_rect(&ps.upper, 0, true, lw_o, vw_o);
     let (ax, ay) = (vb_o.x + 1, vb_o.y + vb_o.h as i64 / 2);
     assert!(
@@ -5188,7 +5258,7 @@ fn spec_上池平移_框静止留隙_涂装钉() {
         (ch(255, (bg >> 16) & 0xFF) << 16) | (ch(255, (bg >> 8) & 0xFF) << 8) | ch(255, bg & 0xFF)
     };
     let row0 = cfg_page::upper_row_rect(0, &ps.upper, 0);
-    let lb_n = cfg_page::field_label_rect(&row0, tv.text_width("NEWL", 36.0));
+    let lb_n = cfg_page::field_label_rect(&row0, tv.grid_text_width("NEWL"));
     let (bx, by) = (lb_n.x + 2, lb_n.y + lb_n.h as i64 / 2);
     assert!(
         bx + d5 < x1c,
@@ -6538,5 +6608,45 @@ fn spec_bar167_viewer_滚动涂装_上裁下裁与平移() {
         strip(&base),
         strip(&scrolled),
         "滚到 max 后视口体带必须变（内容平移生效）"
+    );
+}
+
+/// BAR-196：格量宽件行为钉——grid_text_width = 格数 × cell_w（眼手同尺）。
+/// 顺带咬死「固有方法被改名 → trait 兜底静默接管」变异：该变异下本钉
+/// 走 trait 委托无限递归，栈溢出直接红（2026-09-30 变异实证 wiring 守卫
+/// 裸 "fn grid_text_width(" 咬不住此类变异，故定义守卫改咬 pub fn 前缀 +
+/// 本行为钉双保险）。
+#[test]
+fn spec_bar196_格量宽_眼手同尺() {
+    let tv = host_termview(8, 2);
+    // 2 个 CJK 全角字 = 4 格；2 个 ASCII = 2 格
+    assert_eq!(tv.grid_text_width("测试"), 4 * CELL_W);
+    assert_eq!(tv.grid_text_width("ab"), 2 * CELL_W);
+    // 中英混排：1 全角 + 1 半角 = 3 格
+    assert_eq!(tv.grid_text_width("测a"), 3 * CELL_W);
+}
+
+/// BAR-199（承影 0075 redroid 实测定罪）：键栏方向键「→」在机上被
+/// 格盒裁成一根横杆（墨迹盒 18×1，旧版完整 30×10）——病灶 = char_cells
+/// 按 unicode-width Ambiguous=1 给箭头块 1 格，「墨不溢本字格跨」把宽墨
+/// 截肢。修 = 箭头块 U+2190–U+21FF 取 2 格（CJK 优先产品的 Ambiguous
+/// 宽口径）。钉的是「箭头笔进 = 2 格」这条契约：画「→→」两字，第二字
+/// 起笔必须在 +2 格处（箭头块回 1 格 / 笔进公式漂移，本钉即红）。
+/// （host 夹具 DejaVu 箭头墨宽恰 18px=1 格，测不出墨截肢本身——机上
+/// vendored 主字体墨宽 30px 才是承影实拍的病；墨宽判卷归 C 档 redroid
+/// 复拍，本钉锁 A 档可判的格步契约）
+#[test]
+fn spec_bar199_宽墨符号_笔进两格不截肢() {
+    let tv = host_termview(8, 2);
+    let (w, h) = (200u32, 60u32);
+    let fg = 0x00FF_FFFFu32;
+    let mut buf = vec![0u32; (w * h) as usize];
+    let (lo, hi) = tv.spec_draw_grid_text_left(&mut buf, w, h, "\u{2192}\u{2192}", 0, 0, fg);
+    assert!(lo >= 0, "两字必须都有墨");
+    let span = hi - lo + 1;
+    assert!(
+        span > 2 * i64::from(CELL_W),
+        "「→→」墨迹盒必须 > 2 格（{}px）——实得 lo={lo} hi={hi}（span={span}）：≤2 格 = 箭头块回 1 格笔进（BAR-199 复发病灶）",
+        2 * CELL_W
     );
 }

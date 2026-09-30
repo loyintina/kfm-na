@@ -13,26 +13,27 @@
 | `src/bootstrap.rs` | 5 | 3 | 2 | ensure_pkg_tool first_boot_install |
 | `src/brain.rs` | 14 | 14 | 0 | — |
 | `src/brain_ep.rs` | 4 | 4 | 0 | — |
+| `src/catchup.rs` | 9 | 9 | 0 | — |
 | `src/conn.rs` | 4 | 2 | 2 | spawn_smoke ws_spawner |
 | `src/crash.rs` | 8 | 7 | 1 | install_signal_hook |
 | `src/ctrl_feed.rs` | 7 | 6 | 1 | reset |
 | `src/direct_brain.rs` | 2 | 2 | 0 | — |
 | `src/endpoint.rs` | 9 | 9 | 0 | — |
 | `src/exec_probe.rs` | 1 | 1 | 0 | — |
-| `src/fs_fetch.rs` | 7 | 6 | 1 | take_dirty |
+| `src/fs_fetch.rs` | 14 | 13 | 1 | take_dirty |
 | `src/gate.rs` | 106 | 83 | 23 | register_gate_router text_dump inject_keys spawn_gate_watcher REC_FILE_CAP REC_FILE rec_output rec_resize PANIC_FILE PANIC_TRACE_FILE LOOP_STALL_FILE note_loop_beat loop_beat_age_ms note_foreground install_panic_hook note_draw note_session_death touch_take register_input_bar ALERT_RSS_COOLDOWN_MS ALERT_DEATHS_WINDOW_MS ALERT_DEATHS_COOLDOWN_MS HISTORY_EVERY_TICKS |
-| `src/glyph_atlas.rs` | 12 | 12 | 0 | — |
+| `src/glyph_atlas.rs` | 11 | 11 | 0 | — |
 | `src/http1.rs` | 10 | 7 | 3 | is_tick_err read_head_hook read_body_hook |
 | `src/ime_bridge.rs` | 1 | 0 | 1 | jni_counters |
 | `src/ime_queue.rs` | 9 | 9 | 0 | — |
-| `src/input_bar.rs` | 59 | 50 | 9 | MENU_W MENU_TEXT_PX text_avail_w CARET_BLINK_MS SELECT_LONG_PRESS_MS ANCHOR_VISUAL_SIZE ANCHOR_HIT_SIZE set_sel_anchor insert_or_replace |
+| `src/input_bar.rs` | 63 | 55 | 8 | MENU_W text_avail_w CARET_BLINK_MS SELECT_LONG_PRESS_MS ANCHOR_VISUAL_SIZE ANCHOR_HIT_SIZE set_sel_anchor insert_or_replace |
 | `src/insets.rs` | 8 | 4 | 4 | force_show_keyboard force_hide_keyboard query_ime_bottom query_win_top |
 | `src/install.rs` | 7 | 7 | 0 | — |
 | `src/keybar.rs` | 20 | 16 | 4 | COLS MOD_ALT install_bridge_mods bridge_mods |
 | `src/keymap.rs` | 2 | 2 | 0 | — |
 | `src/local_pty.rs` | 7 | 6 | 1 | android_prefix |
 | `src/na_server_sup.rs` | 20 | 15 | 5 | REPO_DIR HEALTH_URL EXEC_TIMEOUT_SECS RECHECK_SECS TUNNEL_WAIT_SECS |
-| `src/offline_keys.rs` | 8 | 8 | 0 | — |
+| `src/offline_keys.rs` | 10 | 10 | 0 | — |
 | `src/plugins/ai_presence.rs` | 2 | 2 | 0 | — |
 | `src/plugins/conn_provider_local.rs` | 3 | 3 | 0 | — |
 | `src/plugins/conn_provider_ws.rs` | 3 | 3 | 0 | — |
@@ -42,6 +43,7 @@
 | `src/plugins/ui_fx.rs` | 2 | 2 | 0 | — |
 | `src/providers.rs` | 5 | 5 | 0 | — |
 | `src/report.rs` | 12 | 7 | 5 | set_boot_t0 start_flusher report_sync report_sync_once http_status_is_200 |
+| `src/reseed.rs` | 1 | 1 | 0 | — |
 | `src/scroll.rs` | 20 | 20 | 0 | — |
 | `src/self_restart.rs` | 11 | 5 | 6 | FLAG_REL set_files_dir button_label poll_flag restart restart |
 | `src/sess_mode.rs` | 3 | 3 | 0 | — |
@@ -52,11 +54,11 @@
 | `src/singleton.rs` | 7 | 4 | 3 | LOCK_PATH lock_exclusive try_acquire |
 | `src/svc_health.rs` | 12 | 8 | 4 | HIST_PATH set_visible sys_snap take_dirty |
 | `src/sys_hist.rs` | 39 | 34 | 5 | BAR_W PLACEHOLDER_PCT hist_idx restore HIST_FORMAT |
-| `src/termview.rs` | 165 | 158 | 7 | AI_THINK_COLLAPSED FONT_CANDIDATES CJK_FONT_CANDIDATES load_cjk_font font_probe MAG_HALF_COLS MAG_HALF_ROWS |
+| `src/termview.rs` | 172 | 165 | 7 | AI_THINK_COLLAPSED FONT_CANDIDATES CJK_FONT_CANDIDATES load_cjk_font font_probe MAG_HALF_COLS MAG_HALF_ROWS |
 | `src/theme.rs` | 1 | 1 | 0 | — |
 | `src/tmux_ctl.rs` | 20 | 20 | 0 | — |
 | `src/tmux_exec.rs` | 1 | 1 | 0 | — |
-| `src/trace.rs` | 12 | 8 | 4 | TRACE_CAP format_tail dump_all dump_tail |
+| `src/trace.rs` | 12 | 9 | 3 | TRACE_CAP format_tail dump_tail |
 | `src/tunnel.rs` | 36 | 30 | 6 | check_ssh_fields NA_SSHD_PORT request_reconnect request_resume_kick request_trip_quic request_heal_quic |
 | `src/ui/accent.rs` | 13 | 13 | 0 | — |
 | `src/ui/ai_page.rs` | 7 | 7 | 0 | — |
@@ -78,18 +80,18 @@
 | `src/ui/link_card.rs` | 9 | 9 | 0 | — |
 | `src/ui/md_layout.rs` | 4 | 4 | 0 | — |
 | `src/ui/md_parse.rs` | 2 | 2 | 0 | — |
-| `src/ui/modal.rs` | 30 | 29 | 1 | VEIL_DIM_ARGB |
+| `src/ui/modal.rs` | 32 | 31 | 1 | VEIL_DIM_ARGB |
 | `src/ui/orb.rs` | 5 | 5 | 0 | — |
 | `src/ui/panel_drag.rs` | 12 | 7 | 5 | DRAG_DIR_LOCK RELEASE_PROGRESS VELOCITY_WINDOW_MS locked current_offset |
 | `src/ui/parser_chain.rs` | 15 | 12 | 3 | COL_W_NUM COL_W_DEN window_of |
 | `src/ui/parser_page.rs` | 63 | 48 | 15 | COL_GAP DIVIDER_ZONE MAX_VISIBLE_LINES MIN_VISIBLE_LINES MODAL_CARD_W MODAL_PAD_V MODAL_GAP MODAL_BTN_GAP CONFIRM_LABELS cancel_confirm register_parser_page parser_page_handle baked_epoch note_baked_geo baked_geo |
 | `src/ui/prompt_bar.rs` | 5 | 4 | 1 | row_of |
-| `src/ui/reader_page.rs` | 23 | 19 | 4 | TOP_BAR_H RETURN_W PROGRESS_H register_reader |
+| `src/ui/reader_page.rs` | 26 | 22 | 4 | TOP_BAR_H RETURN_W PROGRESS_H register_reader |
 | `src/ui/seam.rs` | 34 | 34 | 0 | — |
 | `src/ui/stage.rs` | 7 | 7 | 0 | — |
 | `src/ui/svc_card.rs` | 13 | 12 | 1 | head_word |
 | `src/ui/sys_card.rs` | 22 | 19 | 3 | card_h_now local_y bar_geom |
-| `src/ui/tab_bar.rs` | 27 | 27 | 0 | — |
+| `src/ui/tab_bar.rs` | 26 | 26 | 0 | — |
 | `src/ui/viewport_push.rs` | 2 | 2 | 0 | — |
 | `src/vsync_book.rs` | 20 | 16 | 4 | last_due_ms chain_dead mark_chain_dead last_ns |
 | `src/wire_render.rs` | 1 | 1 | 0 | — |

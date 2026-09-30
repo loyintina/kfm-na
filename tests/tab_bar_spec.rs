@@ -7,10 +7,11 @@
 //! ① TAB_GAP 改 0 → 钉①第二标签 x 坐标红；
 //! ② pan 删 clamp 上界 → 钉④ scroll>0 红；
 //! ③ select 删弹簧重定基（from 恒 0）→ 钉③「从当前位置续弹」红；
-//! ④ text_cells 宽字改 1 格 → 钉①/钉⑥标签宽红。
+//! ④ 量宽尺宽字改 1 格 → 钉①/钉⑥标签宽红。
 
 use kfm_na::termview::{CELL_H, CELL_W};
-use kfm_na::ui::tab_bar::{TabBar, content_origin, in_row, text_cells};
+use kfm_na::ui::grid_text::grid_text_cells;
+use kfm_na::ui::tab_bar::{TabBar, content_origin, in_row};
 
 /// 钉①：咬格几何钉——单标签/双标签的矩形全按格钉死（原点、宽、间距）；
 /// 标签行原点 61 = 双池左框左缘（§四 四修对齐条款，跨源钉死防各自漂移）
@@ -135,13 +136,41 @@ fn spec_tab_bar_select可见性钉() {
     );
 }
 
-/// 钉⑥：文字格宽钉——CJK 宽字 2 格，ASCII 1 格（量宽与画字同尺）
+/// 钉⑥：文字格宽钉——CJK 宽字 2 格，ASCII 1 格（量宽与画字同尺；
+/// BAR-191 起尺身 = 网格文字引擎 grid_text_cells，0x2E80 土判据退役）
 #[test]
 fn spec_tab_bar_文字格宽钉() {
-    assert_eq!(text_cells("系统管理"), 8);
-    assert_eq!(text_cells("API"), 3);
-    assert_eq!(text_cells("A系B"), 4);
-    assert_eq!(text_cells(""), 0);
+    assert_eq!(grid_text_cells("系统管理"), 8);
+    assert_eq!(grid_text_cells("API"), 3);
+    assert_eq!(grid_text_cells("A系B"), 4);
+    assert_eq!(grid_text_cells(""), 0);
+}
+
+/// spec_bar191：格宽尺收编钉——引擎尺 vs 旧 0x2E80 土判据的分野字：
+/// 谚文首字母 U+1100（引擎 2 格/土判据 1 格）、零宽空格 U+200B 与
+/// 组合符 U+0301（引擎 0 格/土判据 1 格）；全角标点两边都判 2 格
+/// （U+3000 段在 0x2E80 之上，不是分野）
+#[test]
+fn spec_bar191_格宽尺分野钉() {
+    assert_eq!(grid_text_cells("\u{1100}"), 2, "谚文首字母 = 全角 2 格");
+    assert_eq!(grid_text_cells("\u{200B}"), 0, "零宽空格 = 0 格");
+    assert_eq!(grid_text_cells("e\u{0301}"), 1, "组合符不占格（é = 1 格）");
+    assert_eq!(grid_text_cells("设置。"), 6, "全角标点两尺一致 = 6 格");
+}
+
+/// spec_bar191②：标签宽账吃引擎尺——几何观测面钉（分野钉只钉引擎
+/// 本身，本钉钉「调用方真用引擎」：tab_bar 量宽退回 0x2E80 土判据的
+/// 变异必须红——"\u{1100}ab" 引擎 4 格 → 宽 (4+2)×CELL_W，土判据
+/// 3 格 → (3+2)×CELL_W）
+#[test]
+fn spec_bar191_标签宽账吃引擎尺() {
+    let bar = TabBar::new(&["\u{1100}ab"], 720);
+    let r = bar.tab_rects()[0].clone();
+    assert_eq!(
+        r.w,
+        (4 + 2) * CELL_W,
+        "标签宽 = (4 格文字 + 2 padding 格) × CELL_W（引擎尺；土判据 = 5 格宽）"
+    );
 }
 
 /// 钉⑦：常量与视图钉——行高/padding/间距常量是几何的实体（改动即红）；
@@ -161,8 +190,10 @@ fn spec_tab_bar_常量与视口钉() {
         720 - 43 - 37,
         "视口宽 = 屏宽 − 原点 43 − 右内缘 37"
     );
-    // 字号必须装得进行高（termview 侧标定值，跨模块咬合）
-    assert!(kfm_na::termview::TAB_TEXT_PX <= TAB_ROW_H as f32);
+    // 文字线盒装载保证（BAR-191 起字号吃实例格 grid_fit，线盒恒 =
+    // 一格 cell_h；TAB_TEXT_PX 常量退役）——上面 TAB_ROW_H == CELL_H*2
+    // 的硬钉即装载证明（一格线盒 ≤ 两格行高恒真，常量断言会被
+    // clippy assertions_on_constants 毙，不重复断言）
 }
 
 /// 钉⑧：快照同源钉——snap 是涂装的唯一读数口，必须与状态逐字段咬合；

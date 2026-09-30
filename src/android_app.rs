@@ -275,6 +275,12 @@ struct WarmSess {
     seeded_ms: u64,
     /// 退避时刻（boot_ms——判负回落后 5s 内不许重孵/重播种）
     retry_ms: u64,
+    /// 末次落地播种的 capture 原文（BAR-186 臂①对账旧账：下次播种
+    /// 拿它与新 capture 做 immutable-history 前缀对账；只在安装/续播
+    /// 成功时归账——账必等于画布内容，不许记「在途构建」的虚账）
+    last_cap: Option<String>,
+    /// 在途构建的 capture 原文（安装时过账给 last_cap）
+    build_cap: Option<String>,
 }
 
 /// 预热池容量帽（会话多于帽只温前 N 个——防爆内存；当前会话永远
@@ -292,6 +298,8 @@ impl WarmSess {
             seed_ms: now,
             seeded_ms: 0,
             retry_ms: 0,
+            last_cap: None,
+            build_cap: None,
         }
     }
 
@@ -304,6 +312,8 @@ impl WarmSess {
         self.build = None;
         self.retry_ms = now;
         self.seeded_ms = 0;
+        self.last_cap = None; // 尺变行宽变，播种对账旧账同焚
+        self.build_cap = None;
     }
 }
 
@@ -340,6 +350,9 @@ struct App {
     sess_modes: std::collections::HashMap<&'static str, u32>,
     /// 有新输出/尺寸变化待渲染
     dirty: bool,
+    /// 追赶模式状态机（BAR-186 臂②）：弱网滴灌/重连窗口压帧——字节
+    /// 照喂 grid 但不置脏，追平（静默窗满/播种尾锚）后一帧跳底亮出
+    catchup: crate::catchup::Catchup,
     /// 自重启武装态翻相泵的上次值（BAR-149：武装/落回是时间函数，
     /// 无事件驱动——about_to_wait 每圈照准，翻相即置脏重烘钮面）
     restart_armed_last: bool,
@@ -972,13 +985,28 @@ fn assemble_brain(
 }
 
 impl App {
-    /// 当前输入栏带高（textarea 随行数长高；栏未装 = 单行默认）
+    /// 当前输入栏带高（textarea 随行数长高；栏未装 = 单行默认）。
+    /// BAR-197：行距吃运行期 line_step(实例格高)——与渲染同一份 step
     fn cur_bar_h(&self) -> u32 {
         self.input_bar
             .as_ref()
             .map_or(crate::input_bar::HEIGHT_PX, |b| {
-                crate::input_bar::height_for_lines(b.lines())
+                crate::input_bar::height_for_lines_with_step(b.lines(), self.bar_line_step())
             })
+    }
+
+    /// 输入栏运行期行距（BAR-197 格化 pinch 联动）：term 未装 = 设计格保底
+    fn bar_line_step(&self) -> u32 {
+        self.term_handle()
+            .map(|t| crate::input_bar::line_step(t.lock().unwrap().cell_size().1))
+            .unwrap_or(crate::input_bar::LINE_STEP_PX)
+    }
+
+    /// AI 页运行期行距（BAR-198 格化 pinch 联动）：term 未装 = 设计格保底
+    fn ai_page_line_step(&self) -> u32 {
+        self.term_handle()
+            .map(|t| crate::termview::ai_line_step(t.lock().unwrap().cell_size().1))
+            .unwrap_or(crate::termview::AI_PAGE_LINE_H)
     }
 
     /// chrome 跟随 inset（眼手同尺：触摸命中与渲染吃同一份采样值）。
@@ -1973,7 +2001,11 @@ impl App {
                         if bt.dragged {
                             // 像素级 1:1 跟手:手指位移直进视口偏移(下拖=回头部)
                             if let Some(bar) = &self.input_bar {
-                                bar.scroll_by_px(-(dy as i32), view_h);
+                                bar.scroll_by_px_with_step(
+                                    -(dy as i32),
+                                    view_h,
+                                    self.bar_line_step(),
+                                );
                             }
                             self.dirty = true;
                         }
@@ -2355,10 +2387,15 @@ impl App {
                     return;
                 }
                 // 面板页手势：AI 页拖动 = 对话页滚行（像素级累积跟手，
-                // 行高与渲染同尺 AI_PAGE_LINE_H；方向契约在 ui/ai_page.rs
+                // 行高与渲染同尺——BAR-198 格化起吃运行期
+                // ai_page_line_step()（pinch 联动），设计格 = 旧
+                // AI_PAGE_LINE_H 恒值；方向契约在 ui/ai_page.rs
                 // drag_accum_rows——下滑 = 看更早，BAR-064）；配置页拖动
                 // = 上池像素滚动（§五 四版，起手落上池才滚，下分支）；
-                // 水平位移只攒着，抽屉识别在抬手（decide_swipe）
+                // 水平位移只攒着，抽屉识别在抬手（decide_swipe）。
+                // step 先算（ai_page_line_step 借全 self，与 apt 的字段
+                // 可变借冲突——E0502）
+                let ai_step = self.ai_page_line_step();
                 if let Some(apt) = self.panel_touch.as_mut() {
                     let dy = y - apt.last_y;
                     apt.last_y = y;
@@ -2371,11 +2408,8 @@ impl App {
                         .last_ai_snap
                         .is_some_and(|s| s.top == Some(crate::ai_presence::Panel::Ai));
                     if top_is_ai {
-                        let (acc, rows) = crate::ui::ai_page::drag_accum_rows(
-                            apt.acc_px,
-                            dy,
-                            f64::from(crate::termview::AI_PAGE_LINE_H),
-                        );
+                        let (acc, rows) =
+                            crate::ui::ai_page::drag_accum_rows(apt.acc_px, dy, f64::from(ai_step));
                         apt.acc_px = acc;
                         if rows != 0 {
                             if let Some(chat) = &self.ai_chat {
@@ -2962,12 +2996,20 @@ impl App {
                         && let (Some(page), Some((sw, sh))) =
                             (crate::ui::cfg_page::cfg_page_handle(), self.screen_px())
                     {
+                        // 折行尺 = 实例格宽（与涂装同一份，BAR-194 眼手
+                        // 同尺）；term 锁先取先放再锁 cfg_page（锁序
+                        // term→cfg_page 不倒持）；term 不在 = 回退设计
+                        // 格基准，命中照常可用
+                        let modal_cw = self
+                            .term_handle()
+                            .map(|t| t.lock().unwrap().cell_size().0)
+                            .unwrap_or(crate::termview::CELL_W);
                         let mut pg = page.lock().unwrap();
                         if let Some(mi) = pg.modal() {
                             use crate::ui::modal as md;
                             let comps = crate::ui::comp_registry::COMPONENTS;
                             let entry = &comps[mi.min(comps.len() - 1)];
-                            let fields = md::fields_of(entry, md::content_cells(sw));
+                            let fields = md::fields_of(entry, md::content_cells_cw(sw, modal_cw));
                             let card = md::card_rect(sw, sh, &fields);
                             match md::hit(mt.0 as i64, mt.1 as i64, &card) {
                                 md::ModalHit::Close | md::ModalHit::Outside => {
@@ -3892,14 +3934,15 @@ impl App {
                 + 32
         }) as f64;
         let edge = 12.0;
+        let step = self.bar_line_step(); // BAR-197：滚动钳制量程与渲染行距同尺
         if y - field_top < edge
             && let Some(bar) = &self.input_bar
         {
-            bar.scroll_by_px(-8, view_h);
+            bar.scroll_by_px_with_step(-8, view_h, step);
         } else if (field_top + f64::from(field_h)) - y < edge
             && let Some(bar) = &self.input_bar
         {
-            bar.scroll_by_px(8, view_h);
+            bar.scroll_by_px_with_step(8, view_h, step);
         }
     }
 
@@ -4437,6 +4480,13 @@ impl App {
             .and_then(|a| a.internal_data_path())
         {
             crate::sess_pool::set_cache_root(dir.join("cache/letters"));
+            // 断线输入 WAL（BAR-186 臂③）：进程死队列全灭的修——push/drain
+            // 同步落盘，启动 attach 时读回；拿不到目录 = 纯内存旧行为
+            self.offline_keys
+                .attach_wal(&dir.join("cache/offline-input.wal"));
+            // 文件树本地缓存根（BAR-187）：<私有目录>/cache/fs——list/read
+            // 两柜缓存先画后台换鲜；拿不到目录 = 缓存层关闭（纯远端）
+            crate::fs_fetch::set_cache_root(dir.join("cache/fs"));
         }
         // 文件树数据面（BAR-165）：同一隧道本地口喂取数器；状态核注册全局
         // （三处涂装 + 手势 + 取数同源一份，与 parser_page_handle 同形制）。
@@ -5835,6 +5885,16 @@ impl App {
                         if let Some(e) = self.warm_pool.get_mut(&name) {
                             e.seeded_ms = now;
                             e.feed.built();
+                            // BAR-186 臂①：播种落地即归账——last_cap 恒等于
+                            // 画布内容（在途虚账不许进 last_cap）
+                            if let Some(cap) = e.build_cap.take() {
+                                e.last_cap = Some(cap);
+                            }
+                        }
+                        // BAR-186 臂②：播种尾锚到达 = 追平判据二——追赶中
+                        // 立即落地一帧（稳态撞锚 = None，不抢稳态的画）
+                        if self.catchup.anchor() == crate::catchup::CatchAct::Land {
+                            self.catchup_land();
                         }
                         if browsing {
                             // 当前会话浏览中：新画布直接 swap 进视图
@@ -5902,6 +5962,18 @@ impl App {
         }
     }
 
+    /// 追平落地帧（BAR-186 臂②）：跳底+像素零头归零+置脏亮出。
+    /// 用户上翻读历史中（display_offset>0）不抢滚动条——只补画不跳底
+    fn catchup_land(&mut self) {
+        if let Some(t) = self.term_handle() {
+            let mut g = t.lock().unwrap();
+            if g.display_offset() == 0 {
+                g.land_bottom();
+            }
+        }
+        self.dirty = true;
+    }
+
     /// 动作执行（薄壳）：相位判定全在 ctrl_feed（A 档纯逻辑，BAR-155
     /// 钉死），本壳只把动作枚举翻译成平台操作（喂画布/起构建线程/
     /// 判负退避/逼对账/拆除）。当前会话浏览中 → 字节即达即画；其余
@@ -5916,7 +5988,13 @@ impl App {
                         .term_handle()
                         .is_some_and(|t| t.lock().unwrap().feed_browse(&bytes));
                 if fed {
-                    self.dirty = true; // 浏览中：字节即达即画
+                    // BAR-186 臂②：追赶期字节照喂 grid 但不置脏——弱网
+                    // 滴灌「每包一帧」= 用户看到的疯狂慢滚；追平落地帧
+                    // 统一亮出（tick 静默窗 / anchor 播种尾锚 → catchup_land）
+                    let now = crate::report::boot_ms();
+                    if !self.catchup.note_bytes(now, bytes.len()) {
+                        self.dirty = true; // 稳态浏览中：字节即达即画
+                    }
                 } else if let Some(e) = self.warm_pool.get_mut(name)
                     && let Some(canvas) = &mut e.canvas
                 {
@@ -5935,13 +6013,67 @@ impl App {
                     .term_handle()
                     .map(|t| t.lock().unwrap().live_grid_dims())
                     .unwrap_or((80, 24));
-                let (tx, rx) = std::sync::mpsc::channel();
-                std::thread::spawn(move || {
-                    let _ = tx.send(termview::Canvas::build(&cap, cols, rows, (x, y)));
+                // BAR-186 臂①：有旧播种账且 immutable-history 对账过 →
+                // 尾块续播既有画布（相同前缀不重放：万行重建 → k+rows 行），
+                // 画布原位续长不 swap——浏览中阅读位/零头全不动
+                let tail = self.warm_pool.get(name).and_then(|e| {
+                    e.last_cap.as_deref().and_then(|old| {
+                        match crate::reseed::plan_reseed(old, &cap, rows, (x, y)) {
+                            crate::reseed::ReseedPlan::Tail(bytes) => Some(bytes),
+                            crate::reseed::ReseedPlan::Rebuild => None,
+                        }
+                    })
                 });
-                if let Some(e) = self.warm_pool.get_mut(name) {
-                    e.pending.clear();
-                    e.build = Some(rx);
+                let mut done = false;
+                if let Some(tail) = tail {
+                    let is_cur = self.cur_attached().as_ref() == Some(&name.to_string());
+                    let mut hit = is_cur
+                        && self
+                            .term_handle()
+                            .is_some_and(|t| t.lock().unwrap().reseed_browse(&tail));
+                    if !hit
+                        && let Some(e) = self.warm_pool.get_mut(name)
+                        && let Some(canvas) = &mut e.canvas
+                    {
+                        canvas.reseed(&tail);
+                        hit = true;
+                    }
+                    if hit {
+                        let lines = cap.lines().count();
+                        let now = crate::report::boot_ms() as u64;
+                        if let Some(e) = self.warm_pool.get_mut(name) {
+                            e.pending.clear(); // 播种窗输出已在快照内（InCapture 吞咽同规）
+                            e.seeded_ms = now;
+                            e.feed.built();
+                        }
+                        // 播种尾锚（臂②）：追赶中落地一帧
+                        if self.catchup.anchor() == crate::catchup::CatchAct::Land {
+                            self.catchup_land();
+                        }
+                        self.dirty = true;
+                        crate::report::report(
+                            "term",
+                            &format!("推流画布对账续播: {name}: 快照 {lines} 行前缀不重放"),
+                        );
+                        done = true;
+                    }
+                }
+                if done {
+                    // 账随落地归位（move 零拷贝——对账重播 5s 一档，clone 不起）
+                    if let Some(e) = self.warm_pool.get_mut(name) {
+                        e.last_cap = Some(cap);
+                    }
+                } else {
+                    let cap_build = cap.clone(); // 线程持副本，原账留 build_cap 待落地过账
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    std::thread::spawn(move || {
+                        let _ = tx.send(termview::Canvas::build(&cap_build, cols, rows, (x, y)));
+                    });
+                    if let Some(e) = self.warm_pool.get_mut(name) {
+                        e.pending.clear();
+                        e.build = Some(rx);
+                        e.build_cap = Some(cap);
+                    }
                 }
             }
             CtrlAct::SeedFail(why) => self.ctrl_seed_fail(name, &why),
@@ -6586,6 +6718,9 @@ impl App {
     }
 
     fn respawn_session(&mut self, name: &'static str) {
+        // BAR-186 臂②：重连 = 一波重播种/重画风暴的开端——进追赶模式，
+        // 窗口内字节喂格不置脏，追平（静默窗/播种尾锚）后一帧跳底亮出
+        self.catchup.enter(crate::report::boot_ms());
         let handle = match name {
             "local" => self
                 .base
@@ -6739,10 +6874,20 @@ impl App {
             .map_or("", |r| r.lock().unwrap().active_name());
         // 终端还没建好就不 pump:Output 堆 mpsc 不丢(同旧制),控制事件
         // 等得起(首轮 about_to_wait 前终端必就位——init_terminal 先跑)
-        if let Some(t) = self.term_handle()
-            && crate::gate::pump_once(active, &mut |b| t.lock().unwrap().feed(b))
-        {
-            self.dirty = true;
+        let mut pump_bytes = 0usize;
+        let pumped = self.term_handle().is_some_and(|t| {
+            crate::gate::pump_once(active, &mut |b| {
+                pump_bytes += b.len();
+                t.lock().unwrap().feed(b);
+            })
+        });
+        if pumped {
+            // BAR-186 臂②：追赶期（重连风暴/弱网滴灌洪峰）字节照喂 grid
+            // 不置脏——每包一帧 = 用户报障的疯狂慢滚；追平一帧跳底亮出
+            let now = crate::report::boot_ms();
+            if !self.catchup.note_bytes(now, pump_bytes) {
+                self.dirty = true;
+            }
         }
         for (name, ev) in crate::gate::pump_take_control() {
             self.on_session_event(name, ev, name == active);
@@ -7117,7 +7262,9 @@ impl App {
     }
 
     /// AI 字形槽位查找（主槽优先、另一字体槽兜底——路由认知翻转时
-    /// 不至于全盲；网格路径双键回退同款）。供 ai_glyphs_to_instances
+    /// 不至于全盲；网格路径双键回退同款）。BAR-198 起与终端同册
+    /// GLYPH_SIZE_TERM（grid_fit 实例格 pinch 联动，格变走
+    /// sync_term_glyph_size 整册重建）。供 ai_glyphs_to_instances
     /// 的内联闭包调用
     fn ai_slot_of(
         atlas: &crate::glyph_atlas::GlyphAtlas,
@@ -7130,7 +7277,7 @@ impl App {
         let k0 = crate::glyph_atlas::GlyphKey {
             font,
             c,
-            size: crate::glyph_atlas::GLYPH_SIZE_AI,
+            size: crate::glyph_atlas::GLYPH_SIZE_TERM,
         };
         if let Some(s) = atlas.slot(&k0) {
             return (k0, Some(s));
@@ -7138,7 +7285,7 @@ impl App {
         let k1 = crate::glyph_atlas::GlyphKey {
             font: 1 - font,
             c,
-            size: crate::glyph_atlas::GLYPH_SIZE_AI,
+            size: crate::glyph_atlas::GLYPH_SIZE_TERM,
         };
         if let Some(s) = atlas.slot(&k1) {
             return (k1, Some(s));
@@ -7147,14 +7294,18 @@ impl App {
     }
 
     /// 当前栏带高（render_inputbar 同源实测折行——眼手同尺单源，
-    /// rasterize 与 draw_frame_gles 共用，2026-08-31 排障实锤的延伸）
+    /// rasterize 与 draw_frame_gles 共用，2026-08-31 排障实锤的延伸）。
+    /// BAR-197：行距吃 term 实例格高（pinch 联动，与渲染同一份 step）
     fn current_bar_h(
         term: &dyn TermEmu,
         bar_snap: Option<&crate::input_bar::BarSnap>,
         w: u32,
     ) -> u32 {
         bar_snap.map_or(crate::input_bar::HEIGHT_PX, |bs| {
-            crate::input_bar::height_for_lines(term.bar_text_lines(&bs.text, w))
+            crate::input_bar::height_for_lines_with_step(
+                term.bar_text_lines(&bs.text, w),
+                crate::input_bar::line_step(term.cell_size().1),
+            )
         })
     }
 
@@ -7438,12 +7589,13 @@ impl App {
                                 panel_off,
                             );
                             **out = glyphs;
-                            crate::termview::paint_ai_page_chrome(
+                            crate::termview::paint_ai_page_chrome_with_step(
                                 buf,
                                 w,
                                 h,
                                 bottom_inset,
                                 panel_off,
+                                crate::termview::ai_line_step(term.cell_size().1),
                             );
                             ai_layout = Some(layout);
                         } else if panel_off == 0 {
@@ -8227,11 +8379,13 @@ impl App {
             g.slot_bake(crate::gles_present::ChromeSlot::Keybar);
         }
         // 面板槽：烘焙画布恒为靠泊位（panel_off=0 画），位移交给合成
-        // placement——这就是「动画零光栅」的承载点
+        // placement——这就是「动画零光栅」的承载点。fit 读数吃运行期行距
+        // （BAR-198 格化 pinch 联动；chrome 像素配方本身不吃 step）
         if panel_visible && sigs.panel.feed((w, h, ime, bar_h)) {
             let px = g.slot_canvas(crate::gles_present::ChromeSlot::Panel);
             px.fill(0);
-            crate::termview::paint_ai_page_chrome(px, w, h, bottom_inset, 0);
+            let step = crate::termview::ai_line_step(term_arc.lock().unwrap().cell_size().1);
+            crate::termview::paint_ai_page_chrome_with_step(px, w, h, bottom_inset, 0, step);
             g.slot_bake(crate::gles_present::ChromeSlot::Panel);
         }
         // 配置槽（§五B）：同规——画布恒靠泊位（cfg_off=0），X 位移在合成期。
@@ -8963,9 +9117,11 @@ impl App {
         };
         let ras0_us = t_ras.elapsed().as_micros() as u64;
 
-        // 3) AI 文字实例（图集两遍制：misses 补装载 → 重生成；字号类 =
-        // GLYPH_SIZE_AI——AI_PAGE_PX/AI_PAGE_LINE_H 常量冻结的代号，
-        // off_y 按 AI 行基线折算，ai_text_baseline_off 是唯一尺子）
+        // 3) AI 文字实例（图集两遍制：misses 补装载 → 重生成。BAR-198
+        // 起 AI 页字形与终端网格同册同件：键类 = GLYPH_SIZE_TERM，装载 =
+        // rasterize_for_atlas（grid_fit 实例格 + 格基线 off_y 烤进槽位）
+        // ——pinch 变格由 sync_term_glyph_size 整册重建覆盖，AI 页零自备
+        // 失效路径；格跨居中余量/格顶已在收集期折进 AiGlyph）
         let t_gen2 = std::time::Instant::now();
         let mut ai_glyphs_by_page: Vec<Vec<crate::glyph_atlas::GlyphInstance>> = Vec::new();
         if panel_visible && !ai_glyphs.is_empty() {
@@ -8975,31 +9131,14 @@ impl App {
                 });
             if !inst.misses.is_empty() {
                 let t = term_arc.lock().unwrap();
-                let baseline = t.ai_text_baseline_off();
                 for k in &inst.misses {
-                    if let Some((fid, m, bmp)) = t.rasterize_for_atlas_px(
-                        k.c,
-                        crate::termview::AI_PAGE_PX,
-                        crate::termview::AI_PAGE_PX,
-                    ) {
-                        let off_y = crate::termview::ai_glyph_off_y(
-                            baseline,
-                            m.ymin as f32,
-                            m.height as f32,
-                        );
+                    if let Some((fid, m, bmp, ox, oy)) = t.rasterize_for_atlas(k.c) {
                         let key = crate::glyph_atlas::GlyphKey {
                             font: fid,
                             c: k.c,
-                            size: crate::glyph_atlas::GLYPH_SIZE_AI,
+                            size: crate::glyph_atlas::GLYPH_SIZE_TERM,
                         };
-                        g.atlas_insert(
-                            key,
-                            m.width as u32,
-                            m.height as u32,
-                            &bmp,
-                            m.xmin as i16,
-                            off_y,
-                        );
+                        g.atlas_insert(key, m.width as u32, m.height as u32, &bmp, ox, oy);
                     }
                 }
                 // 闭包内联成临时（调用结束即死）——提升成 let 会横跨
@@ -9273,9 +9412,9 @@ impl App {
         self.term.clone()
     }
 
-    /// 配置页首行字段实量宽（十四修动态宽度：触发器/panel 触摸命中
-    /// 与涂装同一条 measure_items 尺）。先 snap 取文再量，逐段借还
-    /// 不嵌套持锁（锁序 term→cfg_page，倒持 = 死锁）
+    /// 配置页首行字段格量宽（十四修动态宽度，BAR-196 换网格引擎尺：
+    /// 触发器/panel 触摸命中与涂装同一条 grid_text_width 尺）。先 snap
+    /// 取文再量，逐段借还 不嵌套持锁（锁序 term→cfg_page，倒持 = 死锁）
     fn cfg_row0_text_widths(&self) -> (u32, u32) {
         let Some(page) = crate::ui::cfg_page::cfg_page_handle() else {
             return (0, 0);
@@ -9290,14 +9429,15 @@ impl App {
         match self.term_handle() {
             Some(t) => {
                 let t = t.lock().unwrap();
-                (t.text_width(&lbl, 36.0), t.text_width(&val, 30.0))
+                (t.grid_text_width(&lbl), t.grid_text_width(&val))
             }
             None => (0, 0),
         }
     }
 
-    /// 下拉 panel 内容最小宽（十七修 BAR-090）：选项最长文实量宽 +
-    /// 双侧文内边距——命中与涂装同一条尺（眼手同尺不漏维）。
+    /// 下拉 panel 内容最小宽（十七修 BAR-090）：选项最长文格量宽 +
+    /// 双侧文内边距——命中与涂装同一条尺（眼手同尺不漏维；BAR-196
+    /// 网格引擎尺）。
     /// 锁序同 cfg_row0_text_widths（先 snap 取文再量，不嵌套持锁）
     fn cfg_dropdown_content_w_min(&self) -> u32 {
         let Some(page) = crate::ui::cfg_page::cfg_page_handle() else {
@@ -9310,10 +9450,7 @@ impl App {
         match self.term_handle() {
             Some(t) => {
                 let t = t.lock().unwrap();
-                opts.iter()
-                    .map(|o| t.text_width(o, 36.0))
-                    .max()
-                    .unwrap_or(0)
+                opts.iter().map(|o| t.grid_text_width(o)).max().unwrap_or(0)
                     + crate::ui::cfg_page::FIELD_TEXT_INSET * 2
             }
             None => 0,
@@ -9339,12 +9476,12 @@ impl App {
         let t = th.as_ref()?;
         let (lw, vw0, cw) = {
             let tg = t.lock().unwrap();
-            let lw = tg.text_width(&ur.label, 36.0);
-            let vw0 = tg.text_width(&ur.value, 30.0);
+            let lw = tg.grid_text_width(&ur.label);
+            let vw0 = tg.grid_text_width(&ur.value);
             let cw = cs
                 .options
                 .iter()
-                .map(|o| tg.text_width(o, 36.0))
+                .map(|o| tg.grid_text_width(o))
                 .max()
                 .unwrap_or(0)
                 + cp::FIELD_TEXT_INSET * 2;
@@ -10578,6 +10715,11 @@ impl ApplicationHandler for App {
                 "loop",
                 &format!("事件循环心跳 jni(commit={ce}/{cp} key={sk} log={il})"),
             );
+        }
+        // BAR-186 臂②：追赶静默窗满 → 追平落地帧（跳底+零头归零+置脏），
+        // 置于脏帧泵之前——本圈置的脏本圈即画
+        if self.catchup.tick(crate::report::boot_ms()) == crate::catchup::CatchAct::Land {
+            self.catchup_land();
         }
         // 降频泵(2026-08-26,挂单①治理):Poll 全速空转实测 ~57k 圈/s,
         // 白烧 CPU/电。双闸——①有脏才请求重绘(空圈不 redraw);②节拍改
