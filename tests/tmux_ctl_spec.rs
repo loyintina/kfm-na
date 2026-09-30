@@ -491,3 +491,80 @@ fn spec_parse_ctrl_line_畸形行不panic落合理类() {
     assert_eq!(parse_ctrl_line("%"), CtrlEvent::Notify);
     assert_eq!(parse_ctrl_line(""), CtrlEvent::Plain);
 }
+
+// ---- cmd_bootstrap / is_legacy_default_command（BAR-202：冷启动不绑死
+// 任何会话——无会话跑 veran / 附回上次视面 / 裸壳兜底）----
+//
+// 变异抽检方向：veran 用裸名（PATH 不在）/哨兵拼错（裸 shell 粘性死）/
+// 兜底 exec 漏掉（会话起不来直接黑屏）/legacy 判据漏引号态（老配置不认）
+// ——本文件必须红。
+
+#[test]
+fn spec_bar202_引导_无记录_裁决链全件在位() {
+    let cmd = tmux_ctl::cmd_bootstrap(None);
+    // ①无会话先跑 veran（绝对路径，非交互 sh 没 PATH）
+    assert!(cmd.contains("if ! tmux list-sessions"));
+    assert!(cmd.contains(tmux_ctl::VERAN_BIN));
+    // ②有会话 → 上次视面裁决（has-session 精确匹配 + 哨兵排斥）
+    assert!(cmd.contains("tmux has-session -t \"=$KFM_LAST\""));
+    assert!(cmd.contains(tmux_ctl::BOOTSTRAP_SHELL_SENTINEL));
+    // ③无记录/名死 → 附 list 第一条
+    assert!(cmd.contains("head -n 1"));
+    // ④终极兜底 = 交互 shell（常驻语义：exec 不占尾 exit）
+    assert!(cmd.ends_with("exec ${SHELL:-/bin/sh} -l"));
+    assert!(!cmd.contains("; exit"));
+    // 无记录 = KFM_LAST 空串
+    assert!(cmd.contains("KFM_LAST=''"));
+}
+
+#[test]
+fn spec_bar202_引导_上次会话名与裸壳哨兵入串() {
+    let cmd = tmux_ctl::cmd_bootstrap(Some("nz"));
+    assert!(cmd.contains("KFM_LAST='nz'"));
+    let cmd = tmux_ctl::cmd_bootstrap(Some("清和"));
+    assert!(cmd.contains("KFM_LAST='清和'"));
+    let cmd = tmux_ctl::cmd_bootstrap(Some(tmux_ctl::BOOTSTRAP_SHELL_SENTINEL));
+    assert!(cmd.contains(&format!(
+        "KFM_LAST='{}'",
+        tmux_ctl::BOOTSTRAP_SHELL_SENTINEL
+    )));
+}
+
+#[test]
+fn spec_bar202_引导_单引号注入焊死() {
+    // 名字带单引号必须转义成 '\''——不转义 = sh 串断 + 注入口
+    let cmd = tmux_ctl::cmd_bootstrap(Some("it's"));
+    assert!(cmd.contains("KFM_LAST='it'\\''s'"));
+    assert!(!cmd.contains("KFM_LAST='it's'"));
+}
+
+#[test]
+fn spec_bar202_legacy判据_引号三态与空白同判() {
+    assert!(tmux_ctl::is_legacy_default_command(
+        "tmux new-session -A -s 'kfm-na'"
+    ));
+    assert!(tmux_ctl::is_legacy_default_command(
+        "tmux new-session -A -s \"kfm-na\""
+    ));
+    assert!(tmux_ctl::is_legacy_default_command(
+        "tmux new-session -A -s kfm-na"
+    ));
+    assert!(tmux_ctl::is_legacy_default_command(
+        "  tmux  new-session  -A  -s  'kfm-na'  "
+    ));
+}
+
+#[test]
+fn spec_bar202_legacy判据_自定义命令一律不命中() {
+    // 别的会话名/额外参数/别的命令 = 用户自定义，动态引导不许抢
+    assert!(!tmux_ctl::is_legacy_default_command(
+        "tmux new-session -A -s 'nz'"
+    ));
+    assert!(!tmux_ctl::is_legacy_default_command(
+        "tmux new-session -A -s 'kfm-na' && uptime"
+    ));
+    assert!(!tmux_ctl::is_legacy_default_command(
+        "tmux attach -t kfm-na"
+    ));
+    assert!(!tmux_ctl::is_legacy_default_command(""));
+}

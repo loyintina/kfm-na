@@ -52,6 +52,11 @@ REG="${BAR_NEW_REGISTRY:-$ROOT/docs/ledger/bar-registry.jsonl}"
 LOCK="$REG.lock"
 CLI="$ROOT/target/debug/mailbox-cli"
 MAILBOX="${BAR_NEW_MAILBOX:-/root/.kfm/session/信箱}"
+# 符号链接解引用（202 双号实案 2026-09-30：生产信箱 = /root/.kfm/session/信箱
+# → 90-信箱/10-NA信箱 的 symlink，find 默认 -P 对**起点链接**不下钻——
+# 扫描静默得 0 封、max 退回树内旧账 → 与观澜 0092 撞号。readlink -f 对
+# 非链接路径原样返回，幂等）
+MAILBOX="$(readlink -f "$MAILBOX")"
 
 # 名册预检（0055 补丁③，提到领号前）：§六《名字登记前移》后开信对未入册名
 # fail-closed——不预检会留下「号领了、信生不出」的坑。名册出处 = 信箱
@@ -95,6 +100,11 @@ fi
     echo "信箱不可读：$MAILBOX——拒领（0055 补丁②，不许退回树内旧账）" >&2; exit 1; }
 # 每行 H1 只认**首个** BAR-NNN（BAR-192：H1 标题正文援引他号如「修复
 # BAR-123 回归」不许毒 max——领号信标题形制 BAR-$NEXT 在前，首号即本信号）。
+# 空扫描面 = 病灶（链接/权限/路径错），不许当「零封信箱」静默领 1 号——
+# 与补丁②同族：扫描源异常一律拒领，fail-closed
+SCAN_N=$(find "$MAILBOX" -name '*.md' -not -path '*/.git/*' 2>/dev/null | wc -l)
+[ "$SCAN_N" -gt 0 ] || {
+    echo "信箱扫描面为空：$MAILBOX（0 封 .md）——扫描异常拒领（202 双号实案同族病灶）" >&2; exit 1; }
 while IFS= read -r n; do
     [ -n "$n" ] && [ "$n" -gt "$MAX" ] && MAX=$n
 done < <(find "$MAILBOX" -name '*.md' -not -path '*/.git/*' -exec head -q -n 1 {} + 2>/dev/null \

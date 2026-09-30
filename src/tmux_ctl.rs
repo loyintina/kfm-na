@@ -121,6 +121,58 @@ pub fn cmd_attach(name: &str) -> String {
     format!("tmux new-session -A -s '{name}'")
 }
 
+// ---- 冷启动动态引导（BAR-202，2026-09-30 用户拍板：启动不绑死任何会话）----
+
+/// 「上次视面 = 裸 shell」的哨兵值（持久化文件与引导脚本共用一词；
+/// 会话名合法字符集不会产出它——下划线开头 tmux 允许但 veran/人手都不用）
+pub const BOOTSTRAP_SHELL_SENTINEL: &str = "__kfm_shell__";
+
+/// veran 绝对路径（/root/50-工具 不在非交互 sh 的 PATH 里——ws 起步命令
+/// 经 sh -c 跑，PATH 是服务器最小公分母，全限定才稳）
+pub const VERAN_BIN: &str = "/root/50-工具/veran";
+
+/// sh 单引号转义：' → '\''（持久化的会话名进引导脚本前的唯一处理；
+/// 名字源是 session_name_of 从我们自己构造的命令里提取的，威胁面低，
+/// 但引号注入口必须焊死）
+fn sh_sq(s: &str) -> String {
+    s.replace('\'', "'\\''")
+}
+
+/// 冷启动引导命令（单行 POSIX sh，ws 起步命令面）。裁决链：
+/// ①服务器无 tmux 会话 → 跑 veran 重建（七窗登记表驱动）；
+/// ②veran 后仍无 → 裸 shell（exec ${SHELL:-/bin/sh} -l，与 command=None
+///   的交互 shell 同语义）；
+/// ③有会话 → 附回上次视面：last = 会话名且活着 → 附它；last = 哨兵
+///   （上次裸 shell）→ 落尾裸 shell；last 空（无记录）或会话名已死 →
+///   附 list 第一条。
+/// last 持久化在壳侧 files/kfm-last-view（attach/脱离时写），本函数只消费。
+pub fn cmd_bootstrap(last: Option<&str>) -> String {
+    let lv = sh_sq(last.unwrap_or(""));
+    format!(
+        "KFM_LAST='{lv}'; \
+         if ! tmux list-sessions >/dev/null 2>&1; then {VERAN_BIN} >/dev/null 2>&1; fi; \
+         if tmux list-sessions >/dev/null 2>&1; then \
+         if [ -n \"$KFM_LAST\" ] && [ \"$KFM_LAST\" != '{BOOTSTRAP_SHELL_SENTINEL}' ] \
+         && tmux has-session -t \"=$KFM_LAST\" 2>/dev/null; then \
+         exec tmux new-session -A -s \"$KFM_LAST\"; \
+         elif [ \"$KFM_LAST\" != '{BOOTSTRAP_SHELL_SENTINEL}' ]; then \
+         exec tmux new-session -A -s \"$(tmux list-sessions -F '#{{session_name}}' | head -n 1)\"; \
+         fi; \
+         fi; \
+         exec ${{SHELL:-/bin/sh}} -l"
+    )
+}
+
+/// 历史默认起步命令判据（servers.json 里写死的 kfm-na 附着命令）——
+/// 引号三态（'kfm-na'/"kfm-na"/kfm-na）与多余空白同判；命中即视同未配，
+/// 走 cmd_bootstrap 动态引导。用户自定义命令一律不命中（含 kfm-na 以外
+/// 的附着、或任何额外参数）
+pub fn is_legacy_default_command(cmd: &str) -> bool {
+    let norm: String = cmd.chars().filter(|c| *c != '\'' && *c != '"').collect();
+    let toks: Vec<&str> = norm.split_whitespace().collect();
+    toks == ["tmux", "new-session", "-A", "-s", "kfm-na"]
+}
+
 /// 抓会话全滚动缓冲（外置视口快照，2026-09-25 tmux 像素级滚动）：
 /// -p 打 stdout、-e 带 SGR 颜色/样式、-S - 从滚动缓冲顶起（屏上之外的
 /// 内容在服务器 tmux 手里，这是唯一取回通道）。目标 `'=name:'`——

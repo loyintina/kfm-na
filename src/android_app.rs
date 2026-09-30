@@ -4312,6 +4312,34 @@ impl App {
         }
     }
 
+    // ---- 上次视面持久化（BAR-202：冷启动附回上次页面，不绑死任何会话）----
+
+    /// files/kfm-last-view：内容 = 会话名 / BOOTSTRAP_SHELL_SENTINEL（裸
+    /// shell 粘性）；缺文件 = 无记录
+    fn last_view_path(&self) -> Option<std::path::PathBuf> {
+        self.android_app
+            .as_ref()
+            .and_then(|a| a.internal_data_path())
+            .map(|p| p.join("kfm-last-view"))
+    }
+
+    /// 冷启动读回：空串/缺文件/坏行 = None（无记录照引导裁决链走第一条）
+    fn load_last_view(&self) -> Option<String> {
+        let s = std::fs::read_to_string(self.last_view_path()?).ok()?;
+        let s = s.trim();
+        (!s.is_empty()).then(|| s.to_string())
+    }
+
+    /// attach/脱离时写盘；写失败只上报——视面记忆不该炸切换
+    fn persist_last_view(&self, token: &str) {
+        let Some(path) = self.last_view_path() else {
+            return;
+        };
+        if let Err(e) = std::fs::write(&path, token) {
+            crate::report::report("ui", &format!("上次视面写盘失败: {e}"));
+        }
+    }
+
     /// 初始化渲染后端：GLES present 优先（期 1 第 1 层），失败回退
     /// softbuffer（上下文 + 表面），按窗口尺寸配置
     fn init_gfx(window: &Arc<Window>) -> Gfx {
@@ -4392,16 +4420,31 @@ impl App {
                 term_cfg.default_session,
                 crate::settings::DefaultSession::Server(_)
             );
+        // BAR-202：起步命令动态化——servers.json 未配 command 或配的是
+        // 历史默认（tmux new-session -A -s 'kfm-na' 写死）→ 动态引导
+        // （无会话跑 veran / 附回上次视面 / 裸壳兜底），不绑死任何会话；
+        // 用户自定义命令一律原样尊重
+        let last_view = self.load_last_view();
+        let mut used_bootstrap = false;
         let conn_cfg = match default_idx {
             Some(i) => {
                 let s = &servers[i];
+                let dynamic = match &s.command {
+                    None => true,
+                    Some(c) => crate::tmux_ctl::is_legacy_default_command(c),
+                };
+                used_bootstrap = dynamic;
                 ConnConfig {
                     url: if s.ws_url.is_empty() {
                         format!("ws://127.0.0.1:{}/ws", s.tunnel.local_port)
                     } else {
                         s.ws_url.clone()
                     },
-                    command: s.command.clone(),
+                    command: if dynamic {
+                        Some(crate::tmux_ctl::cmd_bootstrap(last_view.as_deref()))
+                    } else {
+                        s.command.clone()
+                    },
                 }
             }
             None => ConnConfig::default(),
@@ -4422,10 +4465,18 @@ impl App {
         // 附着会话名（启动命令提取；attach 切换后更新）。无服务器条目 =
         // None——插件显示占位（执行通道无处连）
         self.remote_conn_cfg = default_idx.map(|_| conn_cfg.clone());
-        self.remote_attached = conn_cfg
-            .command
-            .as_deref()
-            .and_then(crate::tmux_ctl::session_name_of);
+        // BAR-202：动态引导起步时附着账置 None——服务器侧裁决（veran/
+        // 附回上次/第一条）壳不知道结果，硬猜会污染 BAR-144 重孵账
+        // （猜错 = 重孵把已死会话重新建出来）；None → 重孵原样重跑引导，
+        // 同服务器状态下裁决确定性一致
+        self.remote_attached = if used_bootstrap {
+            None
+        } else {
+            conn_cfg
+                .command
+                .as_deref()
+                .and_then(crate::tmux_ctl::session_name_of)
+        };
 
         // L3 内置 ssh 正连隧道（2026-09-19 用户拍板：运行时通道收归 na
         // 自持，取代 Termux 外挂 ssh -L；让位/接管语义与看门狗在
@@ -6497,6 +6548,9 @@ impl App {
                 return;
             }
             self.remote_attached = None;
+            // BAR-202：裸 shell 也是视面——持久化哨兵，下次冷启动不被
+            // 强行拽回 tmux（用户有意脱离 = 尊重，点任意框即回）
+            self.persist_last_view(crate::tmux_ctl::BOOTSTRAP_SHELL_SENTINEL);
             if let Some(p) = &self.parser_page {
                 p.lock().unwrap().set_attached(None);
             }
@@ -6551,6 +6605,8 @@ impl App {
             return;
         }
         self.remote_attached = Some(name.clone());
+        // BAR-202：附着即记视面——下次冷启动引导附回这个会话
+        self.persist_last_view(&name);
         p.lock().unwrap().set_attached(Some(name.clone()));
         if let Some(t) = self.term_handle() {
             let banner = format!("\r\n\x1b[36m[kfm-na: 切换到 tmux 会话 {name}]\x1b[0m\r\n");
