@@ -8,7 +8,7 @@ WorkingDirectory=/root/10-项目/kfm-na
 Environment=NA_AGENT_BIND=127.0.0.1:9041
 Environment=NA_AGENT_SESSION_ROOT=/root/.kfm/session
 Environment=NA_AGENT_PROVIDER_JSON=/root/.kfm/provider.json
-ExecStart=/root/10-项目/kfm-na/target/release/na-agentd
+ExecStart=/root/40-资产/na-发布/na-agentd
 Restart=always
 RestartSec=2
 StandardOutput=append:/var/log/kfm-na-agentd.log
