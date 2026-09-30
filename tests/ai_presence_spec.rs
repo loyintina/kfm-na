@@ -1895,3 +1895,15 @@ fn spec_bar208_占位不变量_阅读页出栈即翻全功能() {
         "阅读页被挤出 = 占位翻全功能（变异：不 normalize 咬此）"
     );
 }
+
+// presence 句柄读数出口兜底臂：host 考题环境无人登记 presence →
+// gate::ai_presence_handle() = None → 各消费侧走 FALLBACK（冷启动首帧
+// 不死）。原 demo_page_spec ⑥钉（烧瓶 icon accent 兜底），BAR-207 demo
+// 页退役后迁本卷——登记真身的日子 = 本钉换断言的日子
+#[test]
+fn spec_presence_handle兜底_未登记即none() {
+    assert!(
+        kfm_na::gate::ai_presence_handle().is_none(),
+        "host 考题环境不许登记 presence（登记了本钉失效，换断言）"
+    );
+}

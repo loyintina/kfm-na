@@ -414,7 +414,31 @@ impl TermView {
             }
         }
     }
+
+    /// md 引擎展品预览（BAR-207 组件池 md 引擎栏）：真实管线微缩——
+    /// parse→layout→paint 零平行实现，mini 实例格（24px 档 = 标准格
+    /// 2/3，宪法同行距；BAR-204 换芯后档位废、格缩即字缩）。
+    /// x0/y0 = 展台内区原点，cw = 内区宽，clip = 展台纵裁剪带
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn paint_md_preview(
+        &self,
+        frame: &mut Frame<'_>,
+        sample: &str,
+        x0: i64,
+        y0: i64,
+        cw: u32,
+        clip: (i64, i64),
+        denom: i64,
+        accent: AccentPair,
+    ) {
+        let lay = crate::ui::md_layout::layout_md(sample, cw, PREVIEW_MINI_CELL);
+        self.paint_md_body(frame, &lay, x0, y0, cw, clip, denom, accent);
+    }
 }
+
+/// 组件池 md 预览 mini 实例格（BAR-207）：标准格 (18,36) 的 2/3 =
+/// 原 mini 24px 字号档（BAR-204 格缩即字缩条款下的等价物）
+pub(crate) const PREVIEW_MINI_CELL: (u32, u32) = (12, 24);
 
 /// 单段拼 MdLine（段排内部复用单行涂装路）
 fn seg_line(style: &SegStyle, text: &str) -> crate::ui::md_layout::MdLine {
@@ -541,6 +565,50 @@ mod md_paint_smoke {
         };
         assert!(has_ink(&buf0, b0), "不滚时 line one 在视口顶出墨");
         assert!(has_ink(&buf1, b0), "滚一块隙后 line two 落在同一屏位");
+    }
+
+    #[test]
+    fn spec_bar207_预览走真管线且为mini档() {
+        // BAR-207 组件池 md 引擎栏：paint_md_preview = parse→layout→paint
+        // 零平行实现 + mini 实例格（24px 档等价，BAR-204 格缩即字缩）。
+        // 钉两件事：①出墨与 paint_md_body 同帧等价（同一样品同一缓冲区
+        // 两路画，逐像素相等）；②布局行高是 mini 格不是默认格
+        // （防有人改回正文格，展品变巨人）。
+        let t = tv();
+        let sample = "# T\n\nbody";
+        let w = 200u32;
+        let h = 400u32;
+        let clip = (0i64, i64::from(h));
+        let denom = ((w - 1) + (h - 1)) as i64;
+        let acc = crate::ui::accent::FALLBACK;
+        let mini = PREVIEW_MINI_CELL;
+        let lay = layout_md(sample, w, mini);
+        let mut buf_a = vec![0u32; (w * h) as usize];
+        {
+            let mut frame = Frame {
+                buf: &mut buf_a,
+                w,
+                h,
+            };
+            t.paint_md_preview(&mut frame, sample, 0, 0, w, clip, denom, acc);
+        }
+        let mut buf_b = vec![0u32; (w * h) as usize];
+        {
+            let mut frame = Frame {
+                buf: &mut buf_b,
+                w,
+                h,
+            };
+            t.paint_md_body(&mut frame, &lay, 0, 0, w, clip, denom, acc);
+        }
+        assert_eq!(buf_a, buf_b, "预览路与正文路同帧不等价——出现平行实现");
+        assert!(buf_a.iter().any(|&p| p & 0x00FF_FFFF != 0), "预览零墨");
+        // mini 档钉：同一样品默认格行高必须更高（不等式判卷，不钉死像素值）
+        let lay_default = layout_md(sample, w, t.cell_size());
+        assert!(
+            lay.blocks[0].line_h < lay_default.blocks[0].line_h,
+            "预览行高未落到 mini 档"
+        );
     }
 
     #[test]

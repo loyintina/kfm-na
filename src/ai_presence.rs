@@ -71,20 +71,19 @@ pub enum Page {
 /// 顶缘家=全局 AI）/ 配置（右缘家——设置页=独立第四页，齿轮钮唯一召唤口
 /// +右滑唯一关闭口，不占任何滑槽）/ 文件树（左缘家=路由，右滑召唤、左滑
 /// 推回）/ 解析（右缘家=解析器家族，左滑召唤、右滑推回，占位页先行——
-/// 手势语义闭环：每个滑向在任意栈态都有唯一归宿）/ Demo（2026-09-26
-/// 五公民：md 渲染打样页，右缘家同配置约定——烧瓶钮唯一召唤口，右滑/
-/// 边缘拖拽推回，不占任何滑槽）/ Reader（2026-09-27 六公民 BAR-170；
-/// 2026-09-30 BAR-208 存在逻辑重构：盖中央页的全屏阅读页——文件树
-/// 文件点击唯一召唤口；**右滑 = 召唤文件树，左滑 = 召唤它自己的空白
-/// 占位解析页**（同终端页手势语义），退出 = 右上角终端钮（齿轮左），
-/// 不再右滑推回；入场从右侧滑入，终端在底下不死）
+/// 手势语义闭环：每个滑向在任意栈态都有唯一归宿）/ Reader（2026-09-27
+/// 五公民 BAR-170；2026-09-30 BAR-208 存在逻辑重构：盖中央页的全屏阅读
+/// 页——文件树文件点击唯一召唤口；**右滑 = 召唤文件树，左滑 = 召唤它自己
+/// 的空白占位解析页**（同终端页手势语义），退出 = 右上角终端钮（齿轮左），
+/// 不再右滑推回；入场从右侧滑入，终端在底下不死）。
+/// （Demo 打样页 2026-09-30 BAR-207 退役：烧瓶钮样式封存入组件池，md
+/// 渲染效果迁组件池「md 引擎」栏）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Panel {
     Ai,
     Config,
     FileTree,
     Parser,
-    Demo,
     Reader,
 }
 
@@ -144,16 +143,13 @@ pub struct PresenceSnap {
     /// 解析页占位相（BAR-208）：true = 从阅读页顶召唤的空白占位页
     /// （随机 accent 页环 + 空内芯）；false = 全功能解析页
     pub pt_placeholder: bool,
-    /// Demo 面板的入场代（语义同 ai_epoch）
-    pub demo_epoch: u64,
     /// 阅读面板的入场代（语义同 ai_epoch）
     pub rd_epoch: u64,
-    /// 三公民页面随机 accent（宪法 §2.2）：随快照同行——壳层静态装配函数
+    /// 公民页面随机 accent（宪法 §2.2）：随快照同行——壳层静态装配函数
     /// （无 self 直读状态核）与烘焙 sig 的唯一来源；AI 页不纳入（主题色恒定）
     pub accent_cfg: crate::ui::accent::AccentPair,
     pub accent_ft: crate::ui::accent::AccentPair,
     pub accent_pt: crate::ui::accent::AccentPair,
-    pub accent_demo: crate::ui::accent::AccentPair,
     pub accent_reader: crate::ui::accent::AccentPair,
 }
 
@@ -187,7 +183,6 @@ struct Inner {
     /// 解析页占位相（BAR-208）：true = 从阅读页顶召唤的空白占位页；
     /// 召唤 Parser 时按被盖者打标（summon_locked 单源）
     pt_placeholder: bool,
-    epoch_demo: u64,
     epoch_rd: u64,
     x: f64,
     y: f64,
@@ -208,7 +203,6 @@ struct Inner {
     accent_cfg: crate::ui::accent::AccentPair,
     accent_ft: crate::ui::accent::AccentPair,
     accent_pt: crate::ui::accent::AccentPair,
-    accent_demo: crate::ui::accent::AccentPair,
     accent_reader: crate::ui::accent::AccentPair,
     /// 配置卡标签栏绑定（宪法 §四 十一修：每标签独立随机双色）——
     /// 召唤配置卡时逐标签重随色列喂进标签栏，accent_cfg 取选中项；
@@ -239,7 +233,6 @@ impl AiPresenceState {
                 epoch_ft: 0,
                 epoch_pt: 0,
                 pt_placeholder: false,
-                epoch_demo: 0,
                 epoch_rd: 0,
                 x: 0.0,
                 y: 0.0,
@@ -252,7 +245,6 @@ impl AiPresenceState {
                 accent_cfg: accent_rng.generate(),
                 accent_ft: accent_rng.generate(),
                 accent_pt: accent_rng.generate(),
-                accent_demo: accent_rng.generate(),
                 accent_reader: accent_rng.generate(),
                 accent_rng,
                 tab_bar: None,
@@ -282,7 +274,6 @@ impl AiPresenceState {
             Panel::Config => Some(g.accent_cfg),
             Panel::FileTree => Some(g.accent_ft),
             Panel::Parser => Some(g.accent_pt),
-            Panel::Demo => Some(g.accent_demo),
             Panel::Reader => Some(g.accent_reader),
         }
     }
@@ -361,8 +352,8 @@ impl AiPresenceState {
     }
 
     /// 左滑（四公民 §五B 三缘语义，2026-09-12）：顶是文件树 = 推回它的来向
-    /// （左缘）；顶是配置/解析/Demo = 空操作（右缘本家已在顶，一滑一义——
-    /// 设置页手势全退位只留关闭，解析页是本方向的新家，Demo 钮召不占滑槽）；
+    /// （左缘）；顶是配置/解析 = 空操作（右缘本家已在顶，一滑一义——
+    /// 设置页手势全退位只留关闭，解析页是本方向的新家）；
     /// 其余 = 召唤解析页。**BAR-208：顶是阅读页也走「其余」**——召唤它自己
     /// 的解析页（空白占位相，summon_locked 按被盖者打标）
     pub fn swipe_left(&self) {
@@ -371,19 +362,19 @@ impl AiPresenceState {
             Some(&Panel::FileTree) => {
                 g.stack.pop();
             }
-            Some(&Panel::Config) | Some(&Panel::Parser) | Some(&Panel::Demo) => {}
+            Some(&Panel::Config) | Some(&Panel::Parser) => {}
             _ => summon_locked(&mut g, Panel::Parser),
         }
     }
 
-    /// 右滑（四公民 §五B 三缘语义，2026-09-12）：顶是配置/解析/Demo = 推回
-    /// 它们的来向（右缘——设置页唯一关闭路径，Demo 同约定）；顶是文件树 =
+    /// 右滑（四公民 §五B 三缘语义，2026-09-12）：顶是配置/解析 = 推回
+    /// 它们的来向（右缘——设置页唯一关闭路径）；顶是文件树 =
     /// 空操作（本家已在顶）；其余 = 召唤文件树。**BAR-208：顶是阅读页也走
     /// 「其余」**——右滑召唤文件树（阅读页退出改归终端钮，不再右滑推回）
     pub fn swipe_right(&self) {
         let mut g = self.inner.lock().unwrap();
         match g.stack.last() {
-            Some(&Panel::Config) | Some(&Panel::Parser) | Some(&Panel::Demo) => {
+            Some(&Panel::Config) | Some(&Panel::Parser) => {
                 g.stack.pop();
             }
             Some(&Panel::FileTree) => {}
@@ -483,12 +474,10 @@ impl AiPresenceState {
             ft_epoch: g.epoch_ft,
             pt_epoch: g.epoch_pt,
             pt_placeholder: g.pt_placeholder,
-            demo_epoch: g.epoch_demo,
             rd_epoch: g.epoch_rd,
             accent_cfg: g.accent_cfg,
             accent_ft: g.accent_ft,
             accent_pt: g.accent_pt,
-            accent_demo: g.accent_demo,
             accent_reader: g.accent_reader,
         }
     }
@@ -562,7 +551,6 @@ fn regen_accent(g: &mut Inner, p: Panel) {
         }
         Panel::FileTree => g.accent_ft = g.accent_rng.generate(),
         Panel::Parser => g.accent_pt = g.accent_rng.generate(),
-        Panel::Demo => g.accent_demo = g.accent_rng.generate(),
         Panel::Reader => g.accent_reader = g.accent_rng.generate(),
     }
 }
@@ -574,7 +562,6 @@ fn bump_epoch(g: &mut Inner, p: Panel) {
         Panel::Config => g.epoch_cfg += 1,
         Panel::FileTree => g.epoch_ft += 1,
         Panel::Parser => g.epoch_pt += 1,
-        Panel::Demo => g.epoch_demo += 1,
         Panel::Reader => g.epoch_rd += 1,
     }
 }

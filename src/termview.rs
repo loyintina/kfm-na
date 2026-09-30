@@ -397,53 +397,6 @@ pub fn pt_split(pt_off: i32, w: u32) -> (bool, bool) {
     cfg_split(pt_off, w)
 }
 
-/// Demo 页底装修（面板栈五公民，2026-09-26：md 渲染打样页）：整页
-/// CARD_PAGE_BG 深底 + 边框环（配方与解析页同源 paint_page_frame_ring，
-/// 环色 = 召唤即随机 accent 入参）——右缘家符号约定完全相同：
-/// demo_off_x = 面板刚体水平平移（+w=屏外右缘 → 0 靠泊）
-pub fn paint_demo_page_chrome(
-    buf: &mut [u32],
-    buf_w: u32,
-    buf_h: u32,
-    bottom_inset: u32,
-    demo_off_x: i32,
-    accent: crate::ui::accent::AccentPair,
-) {
-    if buf_w == 0 || buf_h == 0 {
-        return;
-    }
-    let mut frame = Frame {
-        buf,
-        w: buf_w,
-        h: buf_h,
-    };
-    // 整页底色 = 面板刚体矩形（全屏）与屏求交后画（X 向平移，左右裁剪）
-    let px0 = demo_off_x.clamp(0, buf_w as i32) as u32;
-    let px1 = (buf_w as i32 + demo_off_x).clamp(0, buf_w as i32) as u32;
-    if px1 > px0 {
-        frame.fill_rect(px0, 0, px1 - px0, buf_h, crate::ui::accent::CARD_PAGE_BG);
-    }
-    paint_page_frame_ring(
-        &mut frame,
-        buf_w,
-        buf_h,
-        bottom_inset,
-        demo_off_x,
-        0,
-        crate::ui::accent::CARD_PAGE_BG,
-        accent.c1,
-        accent.c2,
-        true,
-    );
-}
-
-/// Demo 页分层判定（右缘家，与 cfg_split 同构同尺）：
-/// - 网格+快捷键行（下层可见）：demo_off != 0；
-/// - Demo 页可见：demo_off < w（off ∈ [0, +w]，=w 即完全屏外右缘）
-pub fn demo_split(demo_off: i32, w: u32) -> (bool, bool) {
-    cfg_split(demo_off, w)
-}
-
 /// 阅读页几何（BAR-170，涂装/命中/滚动同读——学 ft_geom 模式）：
 /// 顶栏高/进度线厚吃 ui::reader_page 常量单源；内容左右内缘
 /// 与文件树同尺（content_origin + 右缘 margin 公式），视口底 =
@@ -491,8 +444,8 @@ pub fn reader_geom(w: u32, h: u32, bottom_inset: u32) -> RdGeom {
     }
 }
 
-/// 阅读页底装修（面板栈六公民，2026-09-27 BAR-170）：整页 CARD_PAGE_BG
-/// 深底 + 边框环（配方与 Demo 页同源 paint_page_frame_ring，环色 = 召唤
+/// 阅读页底装修（面板栈五公民，2026-09-27 BAR-170）：整页 CARD_PAGE_BG
+/// 深底 + 边框环（配方与配置/解析页同源 paint_page_frame_ring，环色 = 召唤
 /// 即随机 accent 入参）——右缘家符号约定完全相同：rd_off_x = 面板刚体
 /// 水平平移（+w=屏外右缘 → 0 靠泊）
 pub fn paint_reader_page_chrome(
@@ -575,13 +528,8 @@ pub fn paint_term_card_chrome(buf: &mut [u32], buf_w: u32, buf_h: u32, bottom_in
     // 设置钮（2026-09-12 配置池卡按钮入口）：画进终卡槽——面板靠泊时
     // 本槽整层隐（slot_visibility），「只在裸终端页出现」白拿零新逻辑
     crate::ui::gear::paint(frame.buf, buf_w, buf_h);
-    // 打样 demo 钮（2026-09-26 五公民入口）：齿轮正下方 0.5 格，烧瓶
-    // 像素掩码 + Demo 页 accent 渐变笔触（未登记 presence = FALLBACK
-    // 兜底——host 考题/冷启动首帧不死）
-    let acc_demo = crate::gate::ai_presence_handle()
-        .and_then(|a| a.accent_of(crate::ai_presence::Panel::Demo))
-        .unwrap_or(crate::ui::accent::FALLBACK);
-    crate::ui::demo_icon::paint(frame.buf, buf_w, buf_h, acc_demo);
+    // （烧瓶打样钮 2026-09-30 BAR-207 退役——样式封存入组件池，见
+    // ui/demo_icon.rs 与 comp_registry「烧瓶钮」条目）
 }
 
 /// 页面边框环（2026-09-04 装修配方的唯一实体，09-05 平移参数化，
@@ -4881,375 +4829,6 @@ impl TermView {
         }
     }
 
-    /// Demo 页内容墨（2026-09-26 五公民：md 渲染打样）：几何吃
-    /// ui/demo_page::layout 单源（行高/缩进/块序/半格网咬合全在那边钉死，
-    /// 本侧只读不算——命中/涂装眼手同尺）；demo_off_x 语义同
-    /// paint_parser_content_impl（GLES 烘焙恒 0，softbuffer/值守传真值）。
-    /// 涂装条款 = 宪法 2026-09-27 修宪：§三 md 标题——┌ 左上直角框
-    /// **H1 专属**（accent 135° 渐变，框内局部尺；**顶边宽 = 1 格缩进 +
-    /// 文字行宽 + 0.5 格收尾**，随字长不吃满内容宽），H2/H3 无框只走
-    /// 字号阶梯 + 淡彩色；§2.5 淡彩**六色家族**（accent::pastel_family
-    /// 从 c1 色相固定 60° 步进派生，槽位角色吃 demo_page::pastel_role
-    /// 单源——粗体 slot0 双绘、行内码 slot3 + 渐变暗底小块、H4 slot1、
-    /// H2/H3 slot4/5；行内码小块与代码围栏内芯仍是页尺暗部采样同一块布）
-    pub(crate) fn paint_demo_content_impl(
-        &self,
-        buf: &mut [u32],
-        w: u32,
-        h: u32,
-        demo_off_x: i32,
-        accent: crate::ui::accent::AccentPair,
-    ) {
-        use crate::ui::demo_page as dp;
-        if w == 0 || h == 0 {
-            return;
-        }
-        let mut frame = Frame { buf, w, h };
-        let off = i64::from(demo_off_x);
-        let body_fg = 0x00BF_BFBF; // 0.75 白（正文档）
-        let meta_fg = 0x0080_8080; // 0.5 白（次级档）
-        // 淡彩六色家族（§2.5：c1 色相 + 固定 60° 步进，随召唤换装；H1
-        // 文字 2026-09-27 起也吃家族 slot0——0.85 白标题档在 demo 页退役）
-        let pastel = crate::ui::accent::pastel_family(accent.c1);
-        // 页渐变尺（代码围栏/行内码小块/分隔线的暗底与描边采样坐标系）：
-        // 原点 (0,0)、分母页对角线——与页环同一把 135° 尺
-        let page_denom = ((w - 1) + (h - 1)).max(1) as i64;
-        let no_clip = (0, i64::from(h));
-        let (fw, fh) = (i64::from(w), i64::from(h));
-        let lay = dp::layout(w);
-        let ox = i64::from(lay.ox) + off;
-        let content_r = ox + i64::from(lay.cw); // 内容右缘（文字右裁剪，未钳屏）
-        let mut h2_seen = 0u32;
-        for b in &lay.blocks {
-            let by = i64::from(b.y);
-            let bh = i64::from(b.h);
-            match b.kind {
-                dp::BlockKind::H1 => {
-                    // 半包标题框（H1 专属；2026-09-27 用户拍板：顶横 + 左竖 +
-                    // 上下两个圆角，**底横去掉只留左下圆角**——[ 去底成「⌐
-                    // 倒挂 + 竖尾钩」）：顶横带宽 = 1 格缩进 + 文字行宽 +
-                    // 0.5 格收尾，随字长不吃满；圆角 R=半格、弧带厚 t；
-                    // 框内局部渐变尺（原点框左上、分母框对角线，
-                    // 2026-09-19 修宪同规）
-                    let tw = i64::from(self.text_width(dp::H1_TEXT, b.px));
-                    let top_w = i64::from(dp::HEAD_TEXT_INSET) + tw + i64::from(dp::HEAD_TOP_TAIL);
-                    let denom = (top_w - 1).max(0) + (bh - 1).max(0);
-                    let t = i64::from(dp::HEAD_FRAME_T);
-                    let r = i64::from(dp::HEAD_CORNER_R);
-                    let mut ink = |ax: i64, ay: i64| {
-                        if ax < 0 || ax >= fw || ay < 0 || ay >= fh {
-                            return;
-                        }
-                        let c = ring_gradient_rgb(accent.c1, accent.c2, ax - ox, ay - by, denom);
-                        frame.blend_px(ax as u32, ay as u32, c, 255);
-                    };
-                    // 左竖带（两圆心之间；端头交给圆角）
-                    for ay in by + r..by + bh - r {
-                        for ax in ox..ox + t {
-                            ink(ax, ay);
-                        }
-                    }
-                    // 顶横带（圆心以右；左端交给圆角）
-                    for ay in by..by + t {
-                        for ax in ox + r..ox + top_w {
-                            ink(ax, ay);
-                        }
-                    }
-                    // 上下圆角：四分之一环带（外半径 R、厚 t），圆心 (ox+r,
-                    // by+r) / (ox+r, by+bh−r)——下圆角只转角不出底横
-                    for (cy, top_c) in [(by + r, true), (by + bh - r, false)] {
-                        let (ya, yb) = if top_c { (cy - r, cy) } else { (cy, cy + r) };
-                        for ay in ya..yb {
-                            for ax in ox..ox + r {
-                                let dx = (ax - (ox + r)) as f64 + 0.5;
-                                let dy = (ay - cy) as f64 + 0.5;
-                                let d = (dx * dx + dy * dy).sqrt();
-                                if d >= (r - t) as f64 && d <= r as f64 {
-                                    ink(ax, ay);
-                                }
-                            }
-                        }
-                    }
-                    // 文字距框缘上 0.5 格（HU 上垫）、左 1 格（HEAD_TEXT_INSET）；
-                    // 淡彩 slot0 双绘（2026-09-27 用户拍板「H1 文字更醒目」）
-                    for inset in [0.0, 1.0] {
-                        self.demo_text_line(
-                            &mut frame,
-                            dp::H1_TEXT,
-                            ox + i64::from(dp::HEAD_TEXT_INSET),
-                            content_r,
-                            by + i64::from(dp::HU),
-                            b.line_h,
-                            b.px,
-                            pastel[dp::pastel_role::BOLD],
-                            inset,
-                        );
-                    }
-                }
-                dp::BlockKind::H2 | dp::BlockKind::H3 => {
-                    // 无框（2026-09-27 修宪「H1-H3 都挂框太丑」）：字号阶梯
-                    // + 淡彩家族 slot4/slot5 分档，文字顶对齐行带
-                    let fg = pastel[if b.kind == dp::BlockKind::H2 {
-                        dp::pastel_role::H2
-                    } else {
-                        dp::pastel_role::H3
-                    }];
-                    let text = match b.kind {
-                        dp::BlockKind::H2 => {
-                            h2_seen += 1;
-                            if h2_seen == 1 {
-                                dp::H2_SECTION
-                            } else {
-                                dp::H2_TEXT
-                            }
-                        }
-                        _ => dp::H3_TEXT,
-                    };
-                    self.demo_text_line(
-                        &mut frame, text, ox, content_r, by, b.line_h, b.px, fg, 0.0,
-                    );
-                }
-                dp::BlockKind::H4 | dp::BlockKind::H5 | dp::BlockKind::H6 => {
-                    // 不挂框——正文字号，文字形态分档（宪法 §三 md 条款）
-                    let (fg, double) = match b.kind {
-                        dp::BlockKind::H4 => (pastel[dp::pastel_role::H4], true), // 淡彩 slot1 + 双绘加粗
-                        dp::BlockKind::H5 => (body_fg, false),
-                        _ => (meta_fg, false),
-                    };
-                    let text = match b.kind {
-                        dp::BlockKind::H4 => dp::H4_TEXT,
-                        dp::BlockKind::H5 => dp::H5_TEXT,
-                        _ => dp::H6_TEXT,
-                    };
-                    self.demo_text_line(
-                        &mut frame, text, ox, content_r, by, b.line_h, b.px, fg, 0.0,
-                    );
-                    if double {
-                        self.demo_text_line(
-                            &mut frame, text, ox, content_r, by, b.line_h, b.px, fg, 1.0,
-                        );
-                    }
-                }
-                dp::BlockKind::Body => {
-                    // 行内段排：量宽累进 pen_x；粗体 = 淡彩 slot0 双绘；
-                    // 行内码 = 淡彩 slot3 文字 + 渐变暗底小块（40px 高 4px
-                    // 像素切角——描边层自由细节，不进网格账）
-                    let mut pen = ox;
-                    for (style, text) in dp::BODY_SEGS {
-                        let tw = i64::from(self.text_width(text, b.px));
-                        match style {
-                            dp::SegStyle::Normal => {
-                                self.demo_text_line(
-                                    &mut frame, text, pen, content_r, by, b.line_h, b.px, body_fg,
-                                    0.0,
-                                );
-                                pen += tw;
-                            }
-                            dp::SegStyle::Bold => {
-                                self.demo_text_line(
-                                    &mut frame,
-                                    text,
-                                    pen,
-                                    content_r,
-                                    by,
-                                    b.line_h,
-                                    b.px,
-                                    pastel[dp::pastel_role::BOLD],
-                                    0.0,
-                                );
-                                self.demo_text_line(
-                                    &mut frame,
-                                    text,
-                                    pen,
-                                    content_r,
-                                    by,
-                                    b.line_h,
-                                    b.px,
-                                    pastel[dp::pastel_role::BOLD],
-                                    1.0,
-                                );
-                                pen += tw + 1;
-                            }
-                            dp::SegStyle::Code => {
-                                let chip_w = (tw + 12) as u32; // 文字左右各 6px 内垫
-                                let chip_h = 40.min(b.line_h);
-                                let chip_y = by + (i64::from(b.line_h) - i64::from(chip_h)) / 2;
-                                paint_demo_chip(
-                                    &mut frame, pen, chip_y, chip_w, chip_h, accent, page_denom,
-                                );
-                                self.demo_text_line(
-                                    &mut frame,
-                                    text,
-                                    pen + 6,
-                                    content_r,
-                                    by,
-                                    b.line_h,
-                                    b.px,
-                                    pastel[dp::pastel_role::INLINE_CODE],
-                                    0.0,
-                                );
-                                pen += i64::from(chip_w);
-                            }
-                        }
-                    }
-                }
-                dp::BlockKind::Code => {
-                    // 代码围栏 = 展示型值框配方（宪法 §三：四边均匀细框 +
-                    // 渐变暗底内芯——paint_thin_frame 共享件，页尺采样）
-                    paint_thin_frame(&mut frame, ox, by, lay.cw, b.h, accent, page_denom, no_clip);
-                    for (i, line) in dp::CODE_LINES.iter().enumerate() {
-                        self.demo_text_line(
-                            &mut frame,
-                            line,
-                            ox + i64::from(CELL_W),
-                            content_r,
-                            by + i64::from(dp::HU) + i as i64 * i64::from(b.line_h),
-                            b.line_h,
-                            b.px,
-                            body_fg,
-                            0.0,
-                        );
-                    }
-                }
-                dp::BlockKind::Quote => {
-                    // 左竖线（2px，块内纵向渐变尺）+ 缩进 1 格白 0.5
-                    for ay in by..by + bh {
-                        if ay < 0 || ay >= fh {
-                            continue;
-                        }
-                        for ax in ox..ox + i64::from(dp::QUOTE_BAR_W) {
-                            if ax < 0 || ax >= fw {
-                                continue;
-                            }
-                            let c = ring_gradient_rgb(accent.c1, accent.c2, 0, ay - by, bh - 1);
-                            frame.blend_px(ax as u32, ay as u32, c, 255);
-                        }
-                    }
-                    for (i, line) in dp::QUOTE_LINES.iter().enumerate() {
-                        self.demo_text_line(
-                            &mut frame,
-                            line,
-                            ox + i64::from(dp::INDENT_W),
-                            content_r,
-                            by + i as i64 * i64::from(b.line_h),
-                            b.line_h,
-                            b.px,
-                            meta_fg,
-                            0.0,
-                        );
-                    }
-                }
-                dp::BlockKind::List => {
-                    // ▪ = 程序化 8px accent 方块（不赌字体字形——视觉即
-                    // 条款的 ▪；块内纵向渐变尺，与引用竖线同源）+ 文字
-                    // 内缩 2 格白 0.75
-                    let mark = i64::from(dp::LIST_MARK_PX);
-                    for (i, item) in dp::LIST_ITEMS.iter().enumerate() {
-                        let line_top = by + i as i64 * i64::from(b.line_h);
-                        let my = line_top + (i64::from(b.line_h) - mark) / 2;
-                        for ay in my..my + mark {
-                            if ay < 0 || ay >= fh {
-                                continue;
-                            }
-                            for ax in
-                                ox + i64::from(dp::INDENT_W)..ox + i64::from(dp::INDENT_W) + mark
-                            {
-                                if ax < 0 || ax >= fw {
-                                    continue;
-                                }
-                                let c = ring_gradient_rgb(accent.c1, accent.c2, 0, ay - by, bh - 1);
-                                frame.blend_px(ax as u32, ay as u32, c, 255);
-                            }
-                        }
-                        self.demo_text_line(
-                            &mut frame,
-                            item,
-                            ox + i64::from(dp::LIST_TEXT_INSET),
-                            content_r,
-                            line_top,
-                            b.line_h,
-                            b.px,
-                            body_fg,
-                            0.0,
-                        );
-                    }
-                }
-                dp::BlockKind::Hr => {
-                    // 3px 横向 accent 渐变线（2026-09-27 用户拍板加粗 1→3，
-                    // 厚吃 dp::HR_THICK 单源；α160 半透明），块竖向居中
-                    let hr_t = i64::from(dp::HR_THICK);
-                    let cy = by + i64::from(dp::HU);
-                    for ay in cy - (hr_t - 1) / 2..cy - (hr_t - 1) / 2 + hr_t {
-                        if ay < 0 || ay >= fh {
-                            continue;
-                        }
-                        for ax in ox..content_r {
-                            if ax < 0 || ax >= fw {
-                                continue;
-                            }
-                            let c = ring_gradient_rgb(
-                                accent.c1,
-                                accent.c2,
-                                ax - ox,
-                                0,
-                                i64::from(lay.cw) - 1,
-                            );
-                            frame.blend_px(ax as u32, ay as u32, c, 160);
-                        }
-                    }
-                }
-                dp::BlockKind::Sign => {
-                    self.demo_text_line(
-                        &mut frame,
-                        dp::SIGN_TEXT,
-                        ox,
-                        content_r,
-                        by,
-                        b.line_h,
-                        b.px,
-                        meta_fg,
-                        0.0,
-                    );
-                }
-            }
-        }
-    }
-
-    /// Demo 页一行文字的带钳涂装：cx/clip_r 由 off 平移可逾屏右缘——
-    /// draw_items_left_inset 的 clip_right 不查帧界（blend_px 调用方
-    /// 保证界内），调用前先钳屏宽；inset 给双绘加粗的第二笔（+1px）
-    #[allow(clippy::too_many_arguments)]
-    fn demo_text_line(
-        &self,
-        frame: &mut Frame<'_>,
-        text: &str,
-        cx: i64,
-        clip_r: i64,
-        cy: i64,
-        rh: u32,
-        px: f32,
-        fg: u32,
-        inset: f32,
-    ) {
-        let cx = cx.max(0);
-        let cr = clip_r.min(i64::from(frame.w));
-        if cx >= cr || cy < 0 || cy >= i64::from(frame.h) {
-            return;
-        }
-        self.draw_text_left_ex(
-            frame,
-            text,
-            cx as u32,
-            (cr - cx) as u32,
-            cy as u32,
-            rh,
-            px,
-            fg,
-            inset,
-            None,
-        );
-    }
-
     /// 双池框涂装（十七修从 paint_cfg_dual_pool_impl 抽出的 Frame 版——
     /// Page 域平移时双池框随内容进 temp 双代同画；内卡反转 c2→c1）
     /// 解析页内容涂装（tmux 插件 v1，2026-09-19）：页标题 + tmux 插件卡
@@ -8166,6 +7745,134 @@ impl TermView {
                     (iy + i64::from(ih) / 2) as u32,
                 );
             }
+            Preview::Flask => {
+                crate::ui::demo_icon::paint_at(
+                    frame.buf,
+                    frame.w,
+                    frame.h,
+                    icx as u32,
+                    (iy + i64::from(ih) / 2) as u32,
+                    accent,
+                );
+            }
+            // md 引擎栏（BAR-207）：一效果一臂，全走真实管线微缩
+            // （paint_md_preview：parse→layout→paint，mini 字号档）
+            Preview::MdH1 => {
+                self.paint_md_preview(frame, "# 一级标题", ix, iy, iw, clip, denom, accent);
+            }
+            Preview::MdH2 => {
+                self.paint_md_preview(frame, "## 二级标题", ix, iy, iw, clip, denom, accent);
+            }
+            Preview::MdH3 => {
+                self.paint_md_preview(frame, "### 三级标题", ix, iy, iw, clip, denom, accent);
+            }
+            Preview::MdH4 => {
+                self.paint_md_preview(frame, "#### 四级强调", ix, iy, iw, clip, denom, accent);
+            }
+            Preview::MdH5 => {
+                self.paint_md_preview(frame, "##### 五级正文色", ix, iy, iw, clip, denom, accent);
+            }
+            Preview::MdH6 => {
+                self.paint_md_preview(frame, "###### 六级次级色", ix, iy, iw, clip, denom, accent);
+            }
+            Preview::MdBold => {
+                self.paint_md_preview(
+                    frame,
+                    "正文**粗体**同排一行",
+                    ix,
+                    iy,
+                    iw,
+                    clip,
+                    denom,
+                    accent,
+                );
+            }
+            Preview::MdInlineCode => {
+                self.paint_md_preview(
+                    frame,
+                    "正文 `code` 同排一行",
+                    ix,
+                    iy,
+                    iw,
+                    clip,
+                    denom,
+                    accent,
+                );
+            }
+            Preview::MdCodeFence => {
+                self.paint_md_preview(
+                    frame,
+                    "```\nfn main() {\n    hi();\n}\n```",
+                    ix,
+                    iy,
+                    iw,
+                    clip,
+                    denom,
+                    accent,
+                );
+            }
+            Preview::MdQuote => {
+                self.paint_md_preview(
+                    frame,
+                    "> 引用第一行\n> 引用第二行",
+                    ix,
+                    iy,
+                    iw,
+                    clip,
+                    denom,
+                    accent,
+                );
+            }
+            Preview::MdList => {
+                self.paint_md_preview(
+                    frame,
+                    "- 列表项一\n- 列表项二",
+                    ix,
+                    iy,
+                    iw,
+                    clip,
+                    denom,
+                    accent,
+                );
+            }
+            Preview::MdHr => {
+                self.paint_md_preview(
+                    frame,
+                    "上文\n\n---\n\n下文",
+                    ix,
+                    iy,
+                    iw,
+                    clip,
+                    denom,
+                    accent,
+                );
+            }
+            Preview::MdRandomColor => {
+                // 淡彩六色家族横排（accent c1 固定 60° 步进派生）：
+                // 六块满填色片均分内区，纵居中——角色关系见条目 desc
+                let fam = crate::ui::accent::pastel_family(accent.c1);
+                let n = fam.len() as i64;
+                let gap = 6i64;
+                let iw = i64::from(iw);
+                let ih = i64::from(ih);
+                let chip_w = ((iw - gap * (n - 1)) / n).clamp(8, 64);
+                let chip_h = (ih / 2).clamp(8, 64);
+                let cy = iy + (ih - chip_h) / 2;
+                for (i, c) in fam.iter().enumerate() {
+                    let cx0 = ix + i as i64 * (chip_w + gap);
+                    for ay in cy..cy + chip_h {
+                        if ay < clip.0 || ay >= clip.1 || ay < 0 || ay >= i64::from(frame.h) {
+                            continue;
+                        }
+                        for ax in cx0..cx0 + chip_w {
+                            if ax < 0 || ax >= i64::from(frame.w) {
+                                continue;
+                            }
+                            frame.blend_px(ax as u32, ay as u32, *c, 255);
+                        }
+                    }
+                }
+            }
             Preview::CurveSpring => {
                 // spring_pos 响应曲线（0→100 目标，BAR-152 临界阻尼单调趋近）+ 目标虚线
                 let span_ms = 600u32;
@@ -9706,21 +9413,9 @@ pub trait TermEmu: Send {
         snap: &crate::ui::parser_page::ParserPageSnap,
         accent: crate::ui::accent::AccentPair,
     );
-    /// Demo 页内容墨（2026-09-26 五公民：md 渲染打样）：几何 ui/demo_page
-    /// 单源；demo_off_x 语义同 paint_parser_content；画在 Demo 页底装修
-    /// 之上。值守倒帧（na-shot 判卷路）与软渲染兜底走它——GLES 烘焙臂
-    /// 直接调 impl，不经 trait
-    fn paint_demo_content(
-        &self,
-        buf: &mut [u32],
-        w: u32,
-        h: u32,
-        demo_off_x: i32,
-        accent: crate::ui::accent::AccentPair,
-    );
     /// 阅读页内容墨（2026-09-27 六公民，BAR-170）：几何 reader_geom 单源
     /// （顶栏/返回钮/进度线/正文视口）；正文吃 BAR-169 md 管线（plain 也
-    /// 喂 layout_md，不开第二路）。rd_off_x 语义同 paint_demo_content；
+    /// 喂 layout_md，不开第二路）。rd_off_x 语义同 paint_parser_content；
     /// 画在阅读页底装修之上。值守倒帧与软渲染兜底走它——GLES 烘焙臂
     /// 直接调 impl，不经 trait
     #[allow(clippy::too_many_arguments)]
@@ -10120,17 +9815,6 @@ impl TermEmu for TermView {
         accent: crate::ui::accent::AccentPair,
     ) {
         TermView::paint_parser_content_impl(self, buf, w, h, bar_inset, ime, pt_off_x, snap, accent)
-    }
-
-    fn paint_demo_content(
-        &self,
-        buf: &mut [u32],
-        w: u32,
-        h: u32,
-        demo_off_x: i32,
-        accent: crate::ui::accent::AccentPair,
-    ) {
-        TermView::paint_demo_content_impl(self, buf, w, h, demo_off_x, accent)
     }
 
     #[allow(clippy::too_many_arguments)]

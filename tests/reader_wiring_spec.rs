@@ -1,8 +1,9 @@
 //! reader_wiring_spec.rs — 阅读页**接线**考题（BAR-170，2026-09-27）
 //!
 //! 分工说明：纯逻辑核的考卷在 `tests/reader_page_spec.rs`（状态核 A 档
-//! 带变异）；缝的占槽/直通/重播踢在 `tests/fx_ease_spec.rs` 末（第七道
-//! 缝入账钉，与 Demo 缝同款五件）；终端钮几何钉在 `tests/term_btn_spec.rs`。
+//! 带变异）；缝的占槽/直通/重播踢在 `tests/fx_ease_spec.rs` 末（第六道
+//! 缝入账钉；2026-09-30 BAR-207 Demo 缝退役顺位）；终端钮几何钉在
+//! `tests/term_btn_spec.rs`。
 //! 本册管**涂装与壳核之间的机械接线**——漏一处 = 点文件没反应 /
 //! 阅读页零帧 / 终端钮点不中 / 甩尾不取消，实拍前就能钉死的缺口类错误
 //! （同 ftree_wiring_spec 的立法）。
@@ -89,16 +90,24 @@ fn spec_bar170_活性链第九路与缝() {
 fn spec_bar170_涂装三路与槽号() {
     let gles = include_str!("../src/gles_present.rs");
     assert!(
-        gles.contains("Reader = 18"),
-        "阅读页 GLES 槽号必须 18（前 18 槽各有其主）"
+        gles.contains("Reader = 17"),
+        "阅读页 GLES 槽号必须 17（BAR-207 Demo 槽退役顺位，前 17 槽各有其主）"
     );
     assert!(
-        gles.contains("layers: [ChromeLayer; 19]"),
-        "槽层数组必须 19 件（18 旧槽 + Reader）"
+        gles.contains("layers: [ChromeLayer; 18]"),
+        "槽层数组必须 18 件（17 旧槽 + Reader；BAR-207 Demo 槽回收）"
+    );
+    // 构造器槽数钉（BAR-207 cfg 盲区实录：类型改 18 后构造器字面量
+    // 漏删一件，宿主 check 全绿、android check 才咬——mk_layer 调用
+    // 计数 = 槽数的机械对表，变异：删/加一件即红）
+    assert_eq!(
+        gles.matches("mk_layer(&gl),").count(),
+        18,
+        "构造器 mk_layer 必须 18 件与槽层数组同数（BAR-207 cfg 盲区钉）"
     );
     assert!(
-        gles.contains("z_order: [crate::ai_presence::Panel; 6]"),
-        "z_order 必须六公民（阅读页入垫底序）"
+        gles.contains("z_order: [crate::ai_presence::Panel; 5]"),
+        "z_order 必须五公民（BAR-207 Demo 退役，阅读页入垫底序）"
     );
     let gate = include_str!("../src/gate.rs");
     assert!(
@@ -200,7 +209,7 @@ fn spec_bar170_壳手势与帧泵接线() {
     assert!(
         seam.contains("pub fn occupy_reader_panel_offset_x(")
             && seam.contains("pub fn replay_reader_panel_offset_x("),
-        "第七道缝整族必须在"
+        "第六道缝整族必须在（BAR-207 Demo 缝退役顺位）"
     );
 }
 
