@@ -197,3 +197,48 @@ fn spec_bar169_30_分隔线块几何() {
     assert_eq!(b.h, dp::HU * 2, "上下各 0.5 格线体居中");
     assert!(b.lines.is_empty());
 }
+
+// ---- BAR-208 排版缓存钉（滚动卡帧根修的考题面）----
+
+#[test]
+fn spec_bar208_缓存_peek未中_cached后中_同键同arc() {
+    use kfm_na::ui::md_layout::{layout_md_cached, layout_md_peek};
+    let st = def();
+    // 全新代：peek 未中（只查不排——帧内高频路径不许偷偷排版）
+    assert!(
+        layout_md_peek(9001, 400, &st).is_none(),
+        "新代 peek 必须未中（peek 排版 = 高频路径偷偷全量重排）"
+    );
+    // cached 全路：排版入柜
+    let a = layout_md_cached(9001, "# 标题\n\n正文", 400, &st, &Mock);
+    // 同键 peek 命中且同一份 Arc（零克隆零重排的兑现）
+    let b = layout_md_peek(9001, 400, &st).expect("cached 后 peek 必须命中");
+    assert!(
+        std::sync::Arc::ptr_eq(&a, &b),
+        "同键必须共读同一份 Arc（重排 = 病灶回潮）"
+    );
+    // 同键 cached 也不再排（直接回柜）
+    let c = layout_md_cached(9001, "# 标题\n\n正文", 400, &st, &Mock);
+    assert!(std::sync::Arc::ptr_eq(&a, &c), "同键 cached 必须回柜不重排");
+}
+
+#[test]
+fn spec_bar208_缓存_代宽样式三位各管失效() {
+    use kfm_na::ui::md_layout::{layout_md_cached, layout_md_peek};
+    let st = def();
+    let base = layout_md_cached(9101, "正文内容", 400, &st, &Mock);
+    // 换代（新块回执）→ 未中 → 重排入新柜
+    assert!(layout_md_peek(9102, 400, &st).is_none(), "换代必须失效");
+    let new_gen = layout_md_cached(9102, "正文内容更多", 400, &st, &Mock);
+    assert!(!std::sync::Arc::ptr_eq(&base, &new_gen), "换代必须重排");
+    // 改宽（横竖屏/字号联动）→ 未中
+    assert!(layout_md_peek(9102, 500, &st).is_none(), "改宽必须失效");
+    let new_w = layout_md_cached(9102, "正文内容更多", 500, &st, &Mock);
+    assert!(!std::sync::Arc::ptr_eq(&new_gen, &new_w), "改宽必须重排");
+    // 改样式（渲染设置卡旋钮）→ 未中
+    let st2 = MdStyle {
+        body_px: st.body_px * 1.2,
+        ..st
+    };
+    assert!(layout_md_peek(9102, 500, &st2).is_none(), "改样式必须失效");
+}

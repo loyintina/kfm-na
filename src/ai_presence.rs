@@ -73,9 +73,11 @@ pub enum Page {
 /// 推回）/ 解析（右缘家=解析器家族，左滑召唤、右滑推回，占位页先行——
 /// 手势语义闭环：每个滑向在任意栈态都有唯一归宿）/ Demo（2026-09-26
 /// 五公民：md 渲染打样页，右缘家同配置约定——烧瓶钮唯一召唤口，右滑/
-/// 边缘拖拽推回，不占任何滑槽）/ Reader（2026-09-27 六公民 BAR-170：
-/// 中央全屏阅读页，右缘家同 Demo 约定——文件树文件点击唯一召唤口，
-/// 顶栏返回钮/右滑/边缘拖拽推回，不占任何滑槽；终端在底下不死）
+/// 边缘拖拽推回，不占任何滑槽）/ Reader（2026-09-27 六公民 BAR-170；
+/// 2026-09-30 BAR-208 存在逻辑重构：盖中央页的全屏阅读页——文件树
+/// 文件点击唯一召唤口；**右滑 = 召唤文件树，左滑 = 召唤它自己的空白
+/// 占位解析页**（同终端页手势语义），退出 = 右上角终端钮（齿轮左），
+/// 不再右滑推回；入场从右侧滑入，终端在底下不死）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Panel {
     Ai,
@@ -139,6 +141,9 @@ pub struct PresenceSnap {
     pub ft_epoch: u64,
     /// 解析面板的入场代（语义同 ai_epoch）
     pub pt_epoch: u64,
+    /// 解析页占位相（BAR-208）：true = 从阅读页顶召唤的空白占位页
+    /// （随机 accent 页环 + 空内芯）；false = 全功能解析页
+    pub pt_placeholder: bool,
     /// Demo 面板的入场代（语义同 ai_epoch）
     pub demo_epoch: u64,
     /// 阅读面板的入场代（语义同 ai_epoch）
@@ -179,6 +184,9 @@ struct Inner {
     epoch_cfg: u64,
     epoch_ft: u64,
     epoch_pt: u64,
+    /// 解析页占位相（BAR-208）：true = 从阅读页顶召唤的空白占位页；
+    /// 召唤 Parser 时按被盖者打标（summon_locked 单源）
+    pt_placeholder: bool,
     epoch_demo: u64,
     epoch_rd: u64,
     x: f64,
@@ -230,6 +238,7 @@ impl AiPresenceState {
                 epoch_cfg: 0,
                 epoch_ft: 0,
                 epoch_pt: 0,
+                pt_placeholder: false,
                 epoch_demo: 0,
                 epoch_rd: 0,
                 x: 0.0,
@@ -344,6 +353,7 @@ impl AiPresenceState {
         let mut g = self.inner.lock().unwrap();
         if g.stack.last() == Some(&p) {
             g.stack.pop();
+            normalize_placeholder(&mut g);
             true
         } else {
             false
@@ -353,27 +363,27 @@ impl AiPresenceState {
     /// 左滑（四公民 §五B 三缘语义，2026-09-12）：顶是文件树 = 推回它的来向
     /// （左缘）；顶是配置/解析/Demo = 空操作（右缘本家已在顶，一滑一义——
     /// 设置页手势全退位只留关闭，解析页是本方向的新家，Demo 钮召不占滑槽）；
-    /// 其余 = 召唤解析页
+    /// 其余 = 召唤解析页。**BAR-208：顶是阅读页也走「其余」**——召唤它自己
+    /// 的解析页（空白占位相，summon_locked 按被盖者打标）
     pub fn swipe_left(&self) {
         let mut g = self.inner.lock().unwrap();
         match g.stack.last() {
             Some(&Panel::FileTree) => {
                 g.stack.pop();
             }
-            Some(&Panel::Config) | Some(&Panel::Parser) | Some(&Panel::Demo)
-            | Some(&Panel::Reader) => {}
+            Some(&Panel::Config) | Some(&Panel::Parser) | Some(&Panel::Demo) => {}
             _ => summon_locked(&mut g, Panel::Parser),
         }
     }
 
     /// 右滑（四公民 §五B 三缘语义，2026-09-12）：顶是配置/解析/Demo = 推回
     /// 它们的来向（右缘——设置页唯一关闭路径，Demo 同约定）；顶是文件树 =
-    /// 空操作（本家已在顶）；其余 = 召唤文件树
+    /// 空操作（本家已在顶）；其余 = 召唤文件树。**BAR-208：顶是阅读页也走
+    /// 「其余」**——右滑召唤文件树（阅读页退出改归终端钮，不再右滑推回）
     pub fn swipe_right(&self) {
         let mut g = self.inner.lock().unwrap();
         match g.stack.last() {
-            Some(&Panel::Config) | Some(&Panel::Parser) | Some(&Panel::Demo)
-            | Some(&Panel::Reader) => {
+            Some(&Panel::Config) | Some(&Panel::Parser) | Some(&Panel::Demo) => {
                 g.stack.pop();
             }
             Some(&Panel::FileTree) => {}
@@ -472,6 +482,7 @@ impl AiPresenceState {
             cfg_epoch: g.epoch_cfg,
             ft_epoch: g.epoch_ft,
             pt_epoch: g.epoch_pt,
+            pt_placeholder: g.pt_placeholder,
             demo_epoch: g.epoch_demo,
             rd_epoch: g.epoch_rd,
             accent_cfg: g.accent_cfg,
@@ -508,8 +519,24 @@ fn summon_locked(g: &mut Inner, p: Panel) {
     if was_covered {
         bump_epoch(g, p);
     }
+    // BAR-208：解析页从阅读页顶召唤 = 空白占位相（阅读页自己的解析
+    // 页——用户拍板「以前那种空白占位页，随机颜色」）；从终端页顶
+    // 召唤 = 全功能相。占位标记跟着召唤走，涂装读快照同源
+    if p == Panel::Parser {
+        g.pt_placeholder = g.stack.last() == Some(&Panel::Reader);
+    }
     regen_accent(g, p);
     g.stack.push(p);
+    normalize_placeholder(g);
+}
+
+/// BAR-208 占位相不变量：阅读页不在栈 = 占位失去依托（被挤出/收走），
+/// 解析页翻全功能相——空解析页悬在裸终端上没有存在意义。栈的任何
+/// 变动（召唤/收起/挤出）后都过这道归一
+fn normalize_placeholder(g: &mut Inner) {
+    if g.pt_placeholder && !g.stack.contains(&Panel::Reader) {
+        g.pt_placeholder = false;
+    }
 }
 
 /// 召唤即重随 accent（AI 页不纳入卡片体系，恒主题色）。

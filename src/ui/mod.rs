@@ -44,4 +44,5 @@ pub mod stage;
 pub mod svc_card;
 pub mod sys_card;
 pub mod tab_bar;
+pub mod term_btn;
 pub mod viewport_push;

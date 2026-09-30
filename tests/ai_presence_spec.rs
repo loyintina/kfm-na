@@ -1844,3 +1844,54 @@ fn spec_accent_标签色列钉() {
         "未绑定标签栏的核走旧路"
     );
 }
+
+#[test]
+fn spec_bar208_阅读页顶滑向与占位解析页() {
+    // BAR-208 阅读页手势语义：左滑 = 召唤它自己的空白占位解析页；
+    // 右滑 = 召唤文件树（阅读页退出归终端钮，右滑不再推回阅读页）
+    let ai = new_state();
+    ai.summon_panel(Panel::Reader);
+    ai.swipe_left();
+    let s = ai.snap(0);
+    assert_eq!(s.top, Some(Panel::Parser), "阅读页顶左滑 = 召唤解析页");
+    assert_eq!(s.covered, Some(Panel::Reader), "阅读页留栈底被盖");
+    assert!(s.pt_placeholder, "阅读页上召唤的解析页 = 空白占位相");
+    // 占位解析页右滑推回 → 回阅读页
+    ai.swipe_right();
+    assert_eq!(ai.snap(0).top, Some(Panel::Reader), "占位页推回露出阅读页");
+    // 阅读页顶右滑 = 召唤文件树
+    ai.swipe_right();
+    let s = ai.snap(0);
+    assert_eq!(s.top, Some(Panel::FileTree), "阅读页顶右滑 = 召唤文件树");
+    assert_eq!(s.covered, Some(Panel::Reader), "阅读页仍留栈底");
+}
+
+#[test]
+fn spec_bar208_终端顶解析页全功能相() {
+    let ai = new_state();
+    ai.swipe_left();
+    let s = ai.snap(0);
+    assert_eq!(s.top, Some(Panel::Parser));
+    assert!(
+        !s.pt_placeholder,
+        "终端页顶召唤的解析页 = 全功能相（占位只属阅读页上召唤）"
+    );
+}
+
+#[test]
+fn spec_bar208_占位不变量_阅读页出栈即翻全功能() {
+    // 占位相依托 = 阅读页在栈。第三面板入场挤出栈底阅读页后，空解析页
+    // 悬在裸终端上没有存在意义——必须翻全功能相（normalize_placeholder）
+    let ai = new_state();
+    ai.summon_panel(Panel::Reader);
+    ai.swipe_left(); // [Reader, Parser占位]
+    assert!(ai.snap(0).pt_placeholder);
+    ai.summon_panel(Panel::Config); // 挤出栈底 Reader
+    let s = ai.snap(0);
+    assert_eq!(s.top, Some(Panel::Config));
+    assert_eq!(s.covered, Some(Panel::Parser));
+    assert!(
+        !s.pt_placeholder,
+        "阅读页被挤出 = 占位翻全功能（变异：不 normalize 咬此）"
+    );
+}

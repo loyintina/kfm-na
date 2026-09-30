@@ -455,6 +455,11 @@ struct App {
     /// 同律——只在裸终端页可达；点按抬手 = summon_panel(Demo)，
     /// 拖过 slop = 不触发（demo 页不占召唤滑槽，烧瓶钮是唯一召唤口）
     demo_touch: Option<(u64, f64, f64, bool)>,
+    /// 按在终端钮上的手势（BAR-208 阅读页顶出口，ui/term_btn.rs）：
+    /// (指 id, 起点 x, 起点 y, 拖过 slop)。只在阅读页靠泊在顶可达——
+    /// 裸终端页终端钮不在屏（不设槽），阅读页仲裁先于正文槽分流。
+    /// 点按抬手 = dismiss_top(Reader) 回终端；拖过 slop = 不触发
+    term_btn_touch: Option<(u64, f64, f64, bool)>,
     /// 按在断线状态卡钮上的手势（A 断线治理，ui/down_card.rs）：
     /// (指 id, 起点 x, 起点 y, 武装命中, 拖过 slop)。只在 session_over
     /// 且裸终端页可达（卡在屏才命中）；抬手同钮 = 触发，拖过 = 不触发
@@ -723,7 +728,7 @@ type PoolFxSig = (u32, u32, u32, u32, u32, u32);
 /// 内容代际, 行表哈希)
 type LowerRowsSig = (u32, u32, u32, u32, u32, u32, u64, u64);
 /// 解析槽签名（与 LowerRowsSig 同形状不同语义——别名分开，谁改维度不殃及对方）
-type ParserSig = (u32, u32, u32, u32, u32, u32, u64, u64, bool);
+type ParserSig = (u32, u32, u32, u32, u32, u32, u64, u64, bool, bool);
 
 #[derive(Default)]
 struct LayerSigs {
@@ -1119,7 +1124,8 @@ impl App {
             Some(Panel::FileTree) => DragTop::FileTree,
             Some(Panel::Parser) => DragTop::Parser,
             Some(Panel::Demo) => DragTop::Demo,
-            Some(Panel::Reader) => DragTop::Reader,
+            // BAR-208：阅读页退出抽屉仲裁——拖拽语义与终端页同款
+            // （右拖召文件树/左拖召解析占位页），退出归右上角终端钮
             _ => DragTop::Other,
         };
         // 字段级直取（self.screen_px() 借全 self 会撞 &mut panel_drag，
@@ -1194,7 +1200,6 @@ impl App {
         let role_panel = match d.role() {
             Some(DragRole::DismissConfig) => Some(Panel::Config),
             Some(DragRole::DismissDemo) => Some(Panel::Demo),
-            Some(DragRole::DismissReader) => Some(Panel::Reader),
             Some(DragRole::SummonFileTree) | Some(DragRole::DismissFileTree) => {
                 Some(Panel::FileTree)
             }
@@ -1215,8 +1220,7 @@ impl App {
             (Some(DragRole::DismissConfig), ReleaseDecision::Complete)
             | (Some(DragRole::DismissFileTree), ReleaseDecision::Complete)
             | (Some(DragRole::DismissParser), ReleaseDecision::Complete)
-            | (Some(DragRole::DismissDemo), ReleaseDecision::Complete)
-            | (Some(DragRole::DismissReader), ReleaseDecision::Complete) => {
+            | (Some(DragRole::DismissDemo), ReleaseDecision::Complete) => {
                 if let (Some(ai), Some(p)) = (&self.ai_presence, role_panel) {
                     ai.dismiss_top(p);
                 }
@@ -1224,8 +1228,7 @@ impl App {
             (Some(DragRole::DismissConfig), ReleaseDecision::Cancel)
             | (Some(DragRole::DismissFileTree), ReleaseDecision::Cancel)
             | (Some(DragRole::DismissParser), ReleaseDecision::Cancel)
-            | (Some(DragRole::DismissDemo), ReleaseDecision::Cancel)
-            | (Some(DragRole::DismissReader), ReleaseDecision::Cancel) => {}
+            | (Some(DragRole::DismissDemo), ReleaseDecision::Cancel) => {}
             (None, _) => {}
         }
         // 收尾续播：从跟手偏移重定基到翻转后的目标值（方向分档曲线
@@ -1531,10 +1534,11 @@ impl App {
                             }
                         }
                     }
-                    // 阅读页仲裁（BAR-170）：页在顶且靠泊（缝采样 == 0，
-                    // 过渡帧中手势归面板全家）——整页建槽：点按抬手 =
-                    // 返回钮命中（几何 rd_return_hit 与涂装同源）；拖过
-                    // slop = 正文像素滚动（眼手同尺吃 reader 核 scroll）
+                    // 阅读页仲裁（BAR-170/BAR-208）：页在顶且靠泊（缝采样 == 0，
+                    // 过渡帧中手势归面板全家）——钮分流先于正文槽：终端钮
+                    // （回终端）> 设置钮（召唤配置页，栈叠 Reader 之上）>
+                    // 整页建槽（拖过 slop = 正文像素滚动，眼手同尺吃
+                    // reader 核 scroll）
                     if panel_top == Some(crate::ai_presence::Panel::Reader)
                         && crate::ui::seam::sample_reader_panel_offset_x(
                             0.0,
@@ -1542,6 +1546,16 @@ impl App {
                         ) as i32
                             == 0
                     {
+                        if let Some((sw, _)) = self.screen_px() {
+                            if crate::ui::term_btn::hit(x, y, sw) {
+                                self.term_btn_touch = Some((id, x, y, false));
+                                return;
+                            }
+                            if crate::ui::gear::hit(x, y, sw) {
+                                self.gear_touch = Some((id, x, y, false));
+                                return;
+                            }
+                        }
                         crate::report::report("gest", &format!("起手→阅读页 ({x:.0},{y:.0})"));
                         self.reader_touch = Some((x, y, false));
                         self.reader_scroll = Some(crate::scroll::TouchScroll::new(
@@ -1685,8 +1699,11 @@ impl App {
                     // 解析页 tmux 插件卡仲裁（2026-09-19）：解析页靠泊
                     // （缝采样判据与配置页同规——过渡帧中不仲裁，手势归
                     // 面板全家）且起点在卡区 → 手势归插件：点按抬手 =
-                    // 行切换/按钮/×；拖过 slop = 让回面板页（Moved 段）
+                    // 行切换/按钮/×；拖过 slop = 让回面板页（Moved 段）。
+                    // BAR-208 占位相（阅读页上召唤的空白解析页）：无内容
+                    // 可点——仲裁整体旁路，手势全落面板页全家（滑动推回）
                     if panel_top == Some(crate::ai_presence::Panel::Parser)
+                        && !self.last_ai_snap.is_some_and(|s| s.pt_placeholder)
                         && crate::ui::seam::sample_parser_panel_offset_x(
                             0.0,
                             crate::report::boot_ms() as u64,
@@ -1930,6 +1947,18 @@ impl App {
                     }
                     return;
                 }
+                // 终端钮手势（BAR-208 阅读页顶出口）：与齿轮同律——只认
+                // 本指，超 slop 记拖过（抬手不触发回终端）
+                if let Some(tt) = &mut self.term_btn_touch
+                    && tt.0 == id
+                {
+                    if (x - tt.1).abs() > crate::scroll::TAP_SLOP_PX
+                        || (y - tt.2).abs() > crate::scroll::TAP_SLOP_PX
+                    {
+                        tt.3 = true;
+                    }
+                    return;
+                }
                 // 面板跟手拖拽优先（§五B 升级）：已锁定/本事件锁定的
                 // 手势归拖拽——面板偏移直跟手指，原分路（滚屏/滚行/
                 // 点按候选）全部让路。未锁定 = 旁观者，零影响
@@ -2102,17 +2131,15 @@ impl App {
                     if dragged && let (Some(rs), Some((sw, sh))) = (self.reader_scroll.as_mut(), px)
                     {
                         let d = rs.moved_px_at(y, crate::report::boot_ms() as f64);
-                        if d != 0.0
-                            && let Some(text) = crate::ui::reader_page::reader_handle()
-                                .map(|r| r.lock().unwrap().text.clone())
-                        {
+                        if d != 0.0 {
                             let g = crate::termview::reader_geom(
                                 sw,
                                 sh,
                                 self.chrome_inset() + self.cur_bar_h(),
                             );
                             let cw = (g.x1 - g.x0).max(0) as u32;
-                            if let Some(lay) = self.reader_md_layout(&text, cw) {
+                            // BAR-208：排版走缓存——滚动步零克隆零重排
+                            if let Some(lay) = self.reader_layout_arc(cw) {
                                 let view_h = g.view_y1 - g.view_y0;
                                 let max = crate::ui::reader_page::scroll_max(
                                     i64::from(lay.total_h),
@@ -2837,6 +2864,26 @@ impl App {
                     self.dirty = true;
                     return;
                 }
+                // 终端钮手势收尾（BAR-208 阅读页顶出口）：本指抬起且未拖
+                // 过 slop = 点按 → 阅读页出栈回终端（栈操作留痕；出栈后
+                // poll_ai_presence 既有逻辑收 reader close()，此处只翻栈）
+                if self.term_btn_touch.as_ref().is_some_and(|t| t.0 == id) {
+                    let tt = self.term_btn_touch.take().unwrap();
+                    if phase == TouchPhase::Ended
+                        && !tt.3
+                        && let Some(ai) = &self.ai_presence
+                    {
+                        let before = self.last_ai_snap.and_then(|s| s.top);
+                        ai.dismiss_top(crate::ai_presence::Panel::Reader);
+                        let after = ai.snap(crate::report::boot_ms() as u64).top;
+                        crate::report::report(
+                            "gest",
+                            &format!("终端钮点按: 栈顶 {before:?}→{after:?}"),
+                        );
+                    }
+                    self.dirty = true;
+                    return;
+                }
                 // 光球手势收尾：pressed 复位；无位移短按抬起 → tap 切页
                 // （Cancelled / 拖过 / 长按已发 fake_run 的抬手不补 tap）
                 if let Some(ot) = self.orb_touch.take() {
@@ -2927,9 +2974,10 @@ impl App {
                     return;
                 }
                 // 阅读页收尾（BAR-170）：拖过抬手 = 交接惯性甩尾（末速
-                // 过启动阈才甩——scroll.rs Fling 同一物理机）；未拖抬手
-                // = 返回钮命中（rd_return_hit 与涂装同源一条几何）；
-                // Cancelled 零动作（槽直接收走）
+                // 过启动阈才甩——scroll.rs Fling 同一物理机）；
+                // Cancelled 零动作（槽直接收走）。BAR-208：顶栏返回钮
+                // 退役——退出归右上角终端钮（chrome 命中在 touch down
+                // 分流，不到本槽）；未拖抬手 = 无操作
                 if let Some(rt) = self.reader_touch.take() {
                     if phase == TouchPhase::Ended
                         && rt.2
@@ -2946,22 +2994,6 @@ impl App {
                         self.reader_fling_last_ms = None;
                     }
                     self.reader_scroll = None;
-                    if phase == TouchPhase::Ended
-                        && !rt.2
-                        && let Some((sw, sh)) = self.screen_px()
-                    {
-                        let g = crate::termview::reader_geom(
-                            sw,
-                            sh,
-                            self.chrome_inset() + self.cur_bar_h(),
-                        );
-                        if crate::termview::rd_return_hit(&g, rt.0 as i64, rt.1 as i64) {
-                            crate::report::report("ui", "阅读页返回钮 → 推回");
-                            if let Some(ai) = &self.ai_presence {
-                                ai.dismiss_top(crate::ai_presence::Panel::Reader);
-                            }
-                        }
-                    }
                     self.dirty = true;
                     return;
                 }
@@ -4107,8 +4139,9 @@ impl App {
     /// 阅读页帧泵（BAR-170）：每圈一问——① tick_restore（内容长到包得
     /// 住恢复值才落）② need_prefetch（滚动进内容尾 1.5 视口且 !eof 且
     /// !loading → 取续块）③ epoch 置脏（续块回执/滚动变化不经触摸）。
-    /// 缓存键 = (epoch, 屏 w/h, inset, md 样式两位)：不变即整跳（2MB
-    /// 文档每圈全量排版是空烧；epoch 已含文本与滚动代际）
+    /// 缓存键 = (epoch, 屏 w/h, inset, md 样式两位)：不变即整跳；
+    /// 排版走 BAR-208 缓存（滚动翻 epoch 不翻 text_epoch——滚动步
+    /// 零克隆零重排，全文排版只在续块/改宽/改样式时发生）
     fn poll_reader(&mut self) {
         let Some(r) = crate::ui::reader_page::reader_handle() else {
             return;
@@ -4131,13 +4164,12 @@ impl App {
             return;
         }
         self.reader_pump_key = Some(key);
-        let text = r.lock().unwrap().text.clone();
-        if text.is_empty() {
+        if r.lock().unwrap().text.is_empty() {
             return; // 占位相（加载/二进制/错误）无排版账——epoch 置脏已由 key 翻账带出
         }
         let g = crate::termview::reader_geom(sw, sh, inset);
         let cw = (g.x1 - g.x0).max(0) as u32;
-        let Some(lay) = self.reader_md_layout(&text, cw) else {
+        let Some(lay) = self.reader_layout_arc(cw) else {
             return;
         };
         let view_h = g.view_y1 - g.view_y0;
@@ -5271,14 +5303,24 @@ impl App {
         ))
     }
 
-    /// 阅读页 md 排版（BAR-170）：正文快照入参（调用方已从 reader 锁
-    /// 取出——锁序 term→reader 红线不倒持）；量宽与涂装同一把尺
-    /// （MdMeasure 对 TermEmu 的落地），content_w 吃 reader_geom 同一份
-    fn reader_md_layout(&self, text: &str, cw: u32) -> Option<crate::ui::md_layout::MdLayout> {
+    /// 阅读页排版（BAR-208 缓存版）：peek 命中 = 零克隆零重排（滚动步
+    /// 每事件一问的高频路径全走这里）；未中 = 短锁克隆文本 → term 锁
+    /// 排版入柜。锁序红线 term→reader：全程不持 reader 锁取 term 锁；
+    /// 量宽与涂装同一把尺（MdMeasure 对 TermEmu 的落地），content_w 吃
+    /// reader_geom 同一份
+    fn reader_layout_arc(&self, cw: u32) -> Option<std::sync::Arc<crate::ui::md_layout::MdLayout>> {
+        let r = crate::ui::reader_page::reader_handle()?;
+        let style = crate::ui::md_layout::md_style();
+        let te = r.lock().unwrap().text_epoch;
+        if let Some(lay) = crate::ui::md_layout::layout_md_peek(te, cw, &style) {
+            return Some(lay);
+        }
+        let text = r.lock().unwrap().text.clone();
         let term = self.term_handle()?;
         let g = term.lock().unwrap();
-        let style = crate::ui::md_layout::md_style();
-        Some(crate::ui::md_layout::layout_md(text, cw, &style, &*g))
+        Some(crate::ui::md_layout::layout_md_cached(
+            te, &text, cw, &style, &*g,
+        ))
     }
 
     /// 像素级滚动开关换选（设置页「终端设置」行，2026-09-24）：
@@ -7416,6 +7458,9 @@ impl App {
         pool_snap: Option<&crate::ui::dual_pool::DualPoolSnap>,
         cfg_snap: Option<&crate::ui::cfg_page::CfgPageSnap>,
         parser_snap: Option<&crate::ui::parser_page::ParserPageSnap>,
+        // BAR-208 占位相（阅读页上召唤的空白解析页）：true = 只画页环
+        // 不画内容墨（与 GLES 烘焙同一份 PresenceSnap.pt_placeholder）
+        pt_placeholder: bool,
         reader: Option<&crate::ui::reader_page::ReaderPage>,
     ) -> Option<(u32, u32)> {
         // 分支判定唯一裁决处（panel_split/cfg_split/ft_split/pt_split）——softbuffer
@@ -7562,8 +7607,9 @@ impl App {
                             acc_of(crate::ai_presence::Panel::Parser),
                         );
                         // tmux 插件卡内容（2026-09-19 v1）：兜底路径与
-                        // GLES 烘焙同源同参——刚体平移传真值 pt_off
-                        if let Some(psnap) = parser_snap {
+                        // GLES 烘焙同源同参——刚体平移传真值 pt_off；
+                        // BAR-208 占位相 = 内容墨整体跳过（页环照画）
+                        if !pt_placeholder && let Some(psnap) = parser_snap {
                             term.paint_parser_content(
                                 buf,
                                 w,
@@ -7604,6 +7650,24 @@ impl App {
                                 acc_of(crate::ai_presence::Panel::Reader),
                             );
                         }
+                        // BAR-208：终端钮（齿轮左）+ 齿轮（z 序在阅读页
+                        // 之上；跟页一体吃同一份 rd_off）
+                        let (ghx, ghy, ghw, _) = crate::ui::gear::hit_rect(w);
+                        let (thx, _, thw, _) = crate::ui::term_btn::hit_rect(w);
+                        crate::ui::gear::paint_at(
+                            buf,
+                            w,
+                            h,
+                            ghx + ghw / 2 + rd_off.max(0) as u32,
+                            ghy + ghw / 2,
+                        );
+                        crate::ui::term_btn::paint_at(
+                            buf,
+                            w,
+                            h,
+                            thx + thw / 2 + rd_off.max(0) as u32,
+                            ghy + ghw / 2,
+                        );
                     }
                 }
                 crate::ai_presence::Panel::Demo => {
@@ -7807,6 +7871,7 @@ impl App {
             pool_snap,
             cfg_snap,
             parser_snap,
+            ai_snap.is_some_and(|s| s.pt_placeholder),
             reader,
         );
         let sending = ai_snap.is_some_and(|s| s.ai_running);
@@ -8932,6 +8997,9 @@ impl App {
         // BAR-149：自重启武装态必须进 sig——漏维 = 钮面「再点确认」
         // 不重烘（用户见字没变再点 = 意外重启）
         let restart_armed_now = crate::self_restart::restart_armed(crate::report::boot_ms() as u64);
+        // BAR-208 占位相（阅读页上召唤的空白解析页）：只画页环不画内容——
+        // 进 sig 一维（漏维 = 占位/实体互换不重烘，旧内容鬼影）
+        let pt_placeholder = ai_snap.is_some_and(|s| s.pt_placeholder);
         // BAR-145 复发案仪器：sig 落成变量——烘焙后同值落屏代几何账，
         // [touch] 时与活体七维对表（漏维 = 该重烘没重烘的直接证据）
         let pt_sig = (
@@ -8944,6 +9012,7 @@ impl App {
             pt_epoch,
             tunnel_epoch,
             restart_armed_now,
+            pt_placeholder,
         );
         if pt_visible && sigs.parser.feed(pt_sig) {
             let px = g.slot_canvas(crate::gles_present::ChromeSlot::Parser);
@@ -8989,7 +9058,8 @@ impl App {
             // 内容布局仍只吃栏带高（BAR-119 只盖不重排），逾视底归键盘
             // 遮盖、逾视顶归页缘裁剪带
             crate::termview::paint_parser_page_chrome(px, w, h, bottom_inset, 0, acc_pt);
-            if let Some(psnap) = parser_snap {
+            // BAR-208 占位相：内容墨整体跳过（页环照画，空白内芯）
+            if !pt_placeholder && let Some(psnap) = parser_snap {
                 term_arc.lock().unwrap().paint_parser_content(
                     px, w, h,
                     // BAR-119：解析页布局永不吃键盘 inset（只盖不重排）
@@ -9072,6 +9142,11 @@ impl App {
                 let pg = r.lock().unwrap();
                 term_g.paint_reader_content(px, w, h, bottom_inset, 0, &pg, acc_rd);
             }
+            // BAR-208：终端钮（齿轮左）+ 齿轮画进阅读页槽——阅读页顶时
+            // 两钮可及（设置入口不下沉/退出有口）；画进页槽 = 跟页一体，
+            // placement 随页走零新逻辑
+            crate::ui::term_btn::paint(px, w, h);
+            crate::ui::gear::paint(px, w, h);
             crate::report::report(
                 "bake",
                 &format!(
@@ -9753,9 +9828,6 @@ impl App {
                         crate::ui::panel_drag::DragRole::DismissDemo => {
                             crate::ai_presence::Panel::Demo
                         }
-                        crate::ui::panel_drag::DragRole::DismissReader => {
-                            crate::ai_presence::Panel::Reader
-                        }
                     };
                     Some((p, off))
                 }),
@@ -9834,7 +9906,6 @@ impl App {
                     crate::ui::panel_drag::DragRole::SummonParser
                     | crate::ui::panel_drag::DragRole::DismissParser => Panel::Parser,
                     crate::ui::panel_drag::DragRole::DismissDemo => Panel::Demo,
-                    crate::ui::panel_drag::DragRole::DismissReader => Panel::Reader,
                 };
                 Some((p, off))
             });
@@ -10560,11 +10631,7 @@ impl ApplicationHandler for App {
                     Some(d) if d != 0.0 && lane => {
                         let req = -(d as i64);
                         if req != 0
-                            && let (Some((sw, sh)), Some(text)) = (
-                                self.screen_px(),
-                                crate::ui::reader_page::reader_handle()
-                                    .map(|r| r.lock().unwrap().text.clone()),
-                            )
+                            && let Some((sw, sh)) = self.screen_px()
                         {
                             let g = crate::termview::reader_geom(
                                 sw,
@@ -10572,7 +10639,8 @@ impl ApplicationHandler for App {
                                 self.chrome_inset() + self.cur_bar_h(),
                             );
                             let cw = (g.x1 - g.x0).max(0) as u32;
-                            if let Some(lay) = self.reader_md_layout(&text, cw) {
+                            // BAR-208：排版走缓存——甩尾每帧零克隆零重排
+                            if let Some(lay) = self.reader_layout_arc(cw) {
                                 let view_h = g.view_y1 - g.view_y0;
                                 let max = crate::ui::reader_page::scroll_max(
                                     i64::from(lay.total_h),
@@ -10584,9 +10652,13 @@ impl ApplicationHandler for App {
                                     pg.scroll_by(req, max);
                                     if pg.epoch != before {
                                         self.dirty = true;
-                                    } else {
+                                    } else if pg.eof || pg.scroll <= 0 {
                                         kill = Some("触底/顶");
                                     }
+                                    // 未到 eof 的触底 = 内容还会长（预取在途）
+                                    // ——甩尾驻车等长个，速度自然衰减，新块
+                                    // 到了续滑（BAR-208：旧路触底即燃尽 =
+                                    // 甩到装载缘急停「卡一下静止」的另一本体）
                                 }
                             }
                         }

@@ -258,3 +258,30 @@ fn spec_bar187_换芯失败_缓存留场摘在途() {
     p.refresh_failed();
     assert_eq!(p.epoch, e2, "不在途 refresh_failed 空涨代际 = 白烘");
 }
+
+#[test]
+fn spec_bar208_text_epoch_滚动不涨_文本事变才涨() {
+    // BAR-208 命根钉：排版缓存键 = (文本代, 宽, 样式)——滚动若涨文本代，
+    // 缓存每步失效 = 每帧全文重排病灶回潮（用户真机「滑到约三分之一卡
+    // 一下静止」本体）。滚动/恢复/在途标记只许动 epoch，不许动 text_epoch
+    let mut p = ReaderPage::new();
+    let g0 = p.text_epoch;
+    p.open("x/a.md".to_string(), "a".to_string());
+    assert!(p.text_epoch > g0, "open 换文本必须涨文本代");
+    let g1 = p.text_epoch;
+    p.mark_loading();
+    assert_eq!(p.text_epoch, g1, "mark_loading 不动文本，涨文本代 = 白排");
+    p.apply_chunk(0, 100, false, "hello");
+    assert!(p.text_epoch > g1, "apply_chunk 新文本必须涨文本代");
+    let g2 = p.text_epoch;
+    p.scroll_by(40, 1000);
+    p.scroll_by(-10, 1000);
+    assert_eq!(
+        p.text_epoch, g2,
+        "滚动涨文本代 = 排版缓存逐步失效（病灶回潮）"
+    );
+    p.tick_restore(1000, 300);
+    assert_eq!(p.text_epoch, g2, "恢复落地是滚动的一种，同样不许涨文本代");
+    p.close();
+    assert!(p.text_epoch > g2, "close 清文本必须涨文本代");
+}

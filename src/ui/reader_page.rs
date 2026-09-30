@@ -18,8 +18,6 @@ use std::collections::HashMap;
 
 /// 顶栏高（物理 px，与文件树底栏 FT_BAR_H 同尺配方）
 pub const TOP_BAR_H: i64 = 110;
-/// 返回钮宽（物理 px，文件树底栏 × 盒 FT_CLOSE_W 同尺）
-pub const RETURN_W: i64 = 130;
 /// 进度线厚（物理 px；贴顶栏底缘下，accent 渐变）
 pub const PROGRESS_H: i64 = 3;
 /// 每块请求字节数（对齐服务端 fsapi::DEFAULT_MAX）
@@ -88,6 +86,12 @@ pub struct ReaderPage {
     /// 每路径滚动记忆（本体③）
     mem: HashMap<String, i64>,
     pub epoch: u64,
+    /// 文本代（BAR-208 排版缓存键）：只在文本/相突变时翻账——open/
+    /// apply_chunk/apply_cached/apply_refresh0/apply_binary/apply_error/
+    /// close；**滚动/恢复/在途记账不涨**（排版只随文本失效，滚动步
+    /// 重排 = 阅读页卡帧本体）。与 epoch 分家：epoch 管脏帧（滚动也要
+    /// 画），text_epoch 管排版缓存（滚动不重排）
+    pub text_epoch: u64,
 }
 
 impl Default for ReaderPage {
@@ -113,6 +117,7 @@ impl ReaderPage {
             pending_restore: None,
             mem: HashMap::new(),
             epoch: 0,
+            text_epoch: 0,
         }
     }
 
@@ -134,6 +139,7 @@ impl ReaderPage {
         self.scroll = 0;
         self.pending_restore = self.mem.get(&self.path).copied();
         self.epoch += 1;
+        self.text_epoch += 1;
     }
 
     /// 关闭（面板推回）：滚动回写 mem，清空本体（mem 留住）
@@ -141,9 +147,11 @@ impl ReaderPage {
         self.writeback_mem();
         let mem = std::mem::take(&mut self.mem);
         let epoch = self.epoch;
+        let text_epoch = self.text_epoch;
         *self = Self::new();
         self.mem = mem;
         self.epoch = epoch + 1;
+        self.text_epoch = text_epoch + 1;
     }
 
     /// 回写当前路径滚动进 mem（空路径不写；帽满摘字典序最小——确定性，
@@ -185,6 +193,7 @@ impl ReaderPage {
             self.capped = true;
         }
         self.epoch += 1;
+        self.text_epoch += 1;
     }
 
     /// 缓存先画（BAR-187）：本地缓存副本立即上屏，eof 置真挡住续块请求
@@ -199,6 +208,7 @@ impl ReaderPage {
         self.loading = false;
         self.phase = ReaderPhase::Reading;
         self.epoch += 1;
+        self.text_epoch += 1;
     }
 
     /// 后台换芯首块（BAR-187）：缓存视图在屏时 refresh 的 offset=0 回执——
@@ -213,6 +223,7 @@ impl ReaderPage {
         self.eof = !truncated;
         self.capped = false;
         self.epoch += 1;
+        self.text_epoch += 1;
     }
 
     /// 后台换芯失败（BAR-187）：缓存视图留场不动，只摘在途账（不摘会让
@@ -230,6 +241,7 @@ impl ReaderPage {
         self.loading = false;
         self.eof = true;
         self.epoch += 1;
+        self.text_epoch += 1;
     }
 
     /// 读失败回执（网络/404/出参不认）
@@ -238,6 +250,7 @@ impl ReaderPage {
         self.loading = false;
         self.eof = true;
         self.epoch += 1;
+        self.text_epoch += 1;
     }
 
     /// 下一块请求的 offset（壳每帧/每次滚动后一问）：首块 = Some(0)；

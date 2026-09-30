@@ -344,3 +344,69 @@ pub fn layout_md(text: &str, content_w_px: u32, style: &MdStyle, m: &impl MdMeas
     let total_h = y.saturating_sub(dp::BLOCK_GAP); // 尾块后不欠隙
     MdLayout { blocks, total_h }
 }
+
+// ---- 排版缓存（BAR-208 阅读页滚动病灶根修，2026-09-30）----
+//
+// 排版只随 (文本代, 内容宽, 样式两位) 失效——**滚动不动文本代**。旧路
+// 帧内消费方（帧泵/拖拽/甩尾/涂装）各自 `text.clone()` + 全文重排：
+// 一次滚动步 = 数次 2MB 克隆 + 数次全量 layout_md（用户真机「滑到约
+// 三分之一卡一下静止」的结构性本体；demo 页同病）。缓存后同代共读
+// 一份 Arc，重排只在新块/改宽/改样式时发生——终端视口模型：内容
+// 一次排版，视口滑动零重排。
+//
+// 锁纪律：LAYOUT_CACHE 是叶子锁（持它绝不取他锁），term→reader 红线
+// 不受影响。调用方责任：未中排版需要量宽器（持 term 锁），**不许持
+// reader 锁调本族函数**——先 peek，未中再短锁克隆文本后排版。
+/// 缓存键（文本代, 内容宽, body_px 位模, line_ratio 位模）
+type CacheKey = (u64, u32, u32, u32);
+/// 柜件 = 键 + 排版结果（共读 Arc）
+type CacheEntry = (u64, u32, u32, u32, std::sync::Arc<MdLayout>);
+static LAYOUT_CACHE: std::sync::Mutex<Option<CacheEntry>> = std::sync::Mutex::new(None);
+
+/// 缓存键（文本代, 内容宽, body_px 位模, line_ratio 位模）
+fn cache_key(txt_gen: u64, content_w_px: u32, style: &MdStyle) -> CacheKey {
+    (
+        txt_gen,
+        content_w_px,
+        style.body_px.to_bits(),
+        style.line_ratio.to_bits(),
+    )
+}
+
+/// 只查不排（帧内高频路径：滚动拖拽/甩尾/帧泵每事件一问）：命中 =
+/// Arc 克隆 O(1)；未中 = None（调用方走 cached 全路）
+pub fn layout_md_peek(
+    txt_gen: u64,
+    content_w_px: u32,
+    style: &MdStyle,
+) -> Option<std::sync::Arc<MdLayout>> {
+    let g = LAYOUT_CACHE.lock().unwrap();
+    match &*g {
+        Some((g0, w0, b0, r0, lay))
+            if (*g0, *w0, *b0, *r0) == cache_key(txt_gen, content_w_px, style) =>
+        {
+            Some(lay.clone())
+        }
+        _ => None,
+    }
+}
+
+/// 查 + 未中全量排版入柜（低频路径：新块回执/改宽/改样式后的第一问）
+pub fn layout_md_cached(
+    txt_gen: u64,
+    text: &str,
+    content_w_px: u32,
+    style: &MdStyle,
+    m: &impl MdMeasure,
+) -> std::sync::Arc<MdLayout> {
+    let key = cache_key(txt_gen, content_w_px, style);
+    let mut g = LAYOUT_CACHE.lock().unwrap();
+    if let Some((g0, w0, b0, r0, lay)) = &*g
+        && (*g0, *w0, *b0, *r0) == key
+    {
+        return lay.clone();
+    }
+    let lay = std::sync::Arc::new(layout_md(text, content_w_px, style, m));
+    *g = Some((key.0, key.1, key.2, key.3, lay.clone()));
+    lay
+}

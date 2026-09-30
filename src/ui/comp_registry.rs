@@ -78,6 +78,8 @@ pub enum Preview {
     Keybar,
     /// 设置钮：程序化齿轮（gear paint_at 共享件）
     Gear,
+    /// 终端钮：程序化「>‿」提示符（term_btn paint_at 共享件，BAR-208）
+    TermBtn,
     /// 弹簧响应曲线（BAR-152 临界阻尼，单调趋近零过冲）
     CurveSpring,
     /// 惯性甩尾曲线（位移趋近线 + 速度指数衰减线双族）
@@ -311,8 +313,19 @@ pub const COMPONENTS: &[CompEntry] = &[
         file: "src/ui/gear.rs",
         spec: "宪法 §四 配置卡入口",
         tests: "tests/gear_spec.rs",
-        desc: "终端页右上角齿轮，两行高。配置卡的唯一入口——画进终卡槽，面板靠泊时整层自隐。",
+        desc: "终端页右上角齿轮，两行高。配置卡的唯一入口——画进终卡槽，面板靠泊时整层自隐。BAR-208 起阅读页顶也可及（叠在阅读页槽上）。",
         preview: Preview::Gear,
+    },
+    CompEntry {
+        name: "终端钮",
+        cat: "控件",
+        status: CompStatus::Active,
+        symbol: "hit_rect",
+        file: "src/ui/term_btn.rs",
+        spec: "阅读页.md（BAR-208 存在逻辑重构）",
+        tests: "tests/term_btn_spec.rs",
+        desc: "阅读页右上角齿轮正左的「>‿」钮，点按回中央终端页。阅读页唯一退出口——右滑/左滑让给文件树与占位解析页后，退出只认本钮。几何锚定齿轮 hit_rect（正左 12px 净距同中轴同尺），两钮永不相撞。",
+        preview: Preview::TermBtn,
     },
     CompEntry {
         name: "标签栏",

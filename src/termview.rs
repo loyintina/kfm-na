@@ -445,9 +445,11 @@ pub fn demo_split(demo_off: i32, w: u32) -> (bool, bool) {
 }
 
 /// 阅读页几何（BAR-170，涂装/命中/滚动同读——学 ft_geom 模式）：
-/// 顶栏高/返回钮宽/进度线厚吃 ui::reader_page 常量单源；内容左右内缘
+/// 顶栏高/进度线厚吃 ui::reader_page 常量单源；内容左右内缘
 /// 与文件树同尺（content_origin + 右缘 margin 公式），视口底 =
-/// parser_page::visible_bottom（与解析页同一条可见底线）
+/// parser_page::visible_bottom（与解析页同一条可见底线）。
+/// BAR-208：顶栏返回钮退役（退出归右上角终端钮）——顶栏只剩
+/// 文件名 + 底缘线 + 进度线
 pub struct RdGeom {
     /// 内容左内缘
     pub x0: i64,
@@ -465,11 +467,6 @@ pub struct RdGeom {
     pub view_y0: i64,
     /// 正文视口底（可见底）
     pub view_y1: i64,
-    /// 返回钮（顶栏内右上，上下留白与文件树底栏三盒同尺）
-    pub btn_x0: i64,
-    pub btn_y0: i64,
-    pub btn_w: i64,
-    pub btn_h: i64,
 }
 
 pub fn reader_geom(w: u32, h: u32, bottom_inset: u32) -> RdGeom {
@@ -482,11 +479,6 @@ pub fn reader_geom(w: u32, h: u32, bottom_inset: u32) -> RdGeom {
     let prog_y0 = bar_y1 + 1;
     let view_y0 = prog_y0 + crate::ui::reader_page::PROGRESS_H;
     let view_y1 = crate::ui::parser_page::visible_bottom(h, bottom_inset).max(view_y0);
-    let bar_h = bar_y1 - bar_y0;
-    let btn_h = (bar_h - 2 * FT_BOX_PAD_V).clamp(12, bar_h);
-    let btn_w = crate::ui::reader_page::RETURN_W;
-    let btn_x0 = (x1 - btn_w).max(x0);
-    let btn_y0 = bar_y0 + (bar_h - btn_h) / 2;
     RdGeom {
         x0,
         x1,
@@ -496,17 +488,7 @@ pub fn reader_geom(w: u32, h: u32, bottom_inset: u32) -> RdGeom {
         prog_y0,
         view_y0,
         view_y1,
-        btn_x0,
-        btn_y0,
-        btn_w,
-        btn_h,
     }
-}
-
-/// 返回钮命中（BAR-170）：几何与涂装同源一条（眼手同尺——页靠泊偏移 0
-/// 时壳才用这份尺，与 ft_bar_hit 同规）
-pub fn rd_return_hit(g: &RdGeom, x: i64, y: i64) -> bool {
-    x >= g.btn_x0 && x < g.btn_x0 + g.btn_w && y >= g.btn_y0 && y < g.btn_y0 + g.btn_h
 }
 
 /// 阅读页底装修（面板栈六公民，2026-09-27 BAR-170）：整页 CARD_PAGE_BG
@@ -4785,11 +4767,10 @@ impl TermView {
         let denom = ((w - 1) + (h - 1)).max(1) as i64; // 页环同一把 135° 渐变尺
         let title_fg = 0x00D9_D9D9; // 0.85 亮（查看器标题档）
         let meta_fg = 0x0080_8080; // 0.5 白（占位/页脚档）
-        let no_clip = (0, i64::from(h));
 
-        // ---- 顶栏：文件名居中（faux-bold 双绘；中置区裁到返回钮左缘前
-        // 8px——长名不许钻进钮区）----
-        let name_cw = (g.btn_x0 - 8 - g.x0).max(0) as u32;
+        // ---- 顶栏：文件名居中（faux-bold 双绘；BAR-208 返回钮退役后
+        // 中置区 = 内容全宽）----
+        let name_cw = (g.x1 - g.x0).max(0) as u32;
         let bar_h = (g.bar_y1 - g.bar_y0).max(0) as u32;
         for dx in [0, 1] {
             self.draw_text_centered(
@@ -4804,28 +4785,6 @@ impl TermView {
                 g.x0 + off + dx,
             );
         }
-        // ---- 返回钮：均匀细框 + 居中「返回」（modal 关闭钮配方）----
-        paint_thin_frame(
-            &mut frame,
-            g.btn_x0 + off,
-            g.btn_y0,
-            g.btn_w as u32,
-            g.btn_h as u32,
-            accent,
-            denom,
-            no_clip,
-        );
-        self.draw_text_centered(
-            &mut frame,
-            "返回",
-            g.btn_x0 + off,
-            g.btn_y0,
-            g.btn_w as u32,
-            g.btn_h as u32,
-            36.0,
-            title_fg,
-            g.btn_x0 + off,
-        );
         // ---- 顶栏底缘 1px 渐变细线（c2→c1，内容宽）----
         if g.div_y >= 0 && g.div_y < i64::from(h) {
             for ax in (g.x0 + off)..(g.x1 + off) {
@@ -4859,7 +4818,15 @@ impl TermView {
             rp::ReaderPhase::Error(msg) => placeholder(&mut frame, msg),
             rp::ReaderPhase::Reading => {
                 let style = crate::ui::md_layout::md_style();
-                let lay = crate::ui::md_layout::layout_md(&page.text, cw as u32, &style, self);
+                // BAR-208：排版走缓存（text_epoch 键）——滚动重烘零重排，
+                // 同代与帧泵/拖拽/甩尾共读一份
+                let lay = crate::ui::md_layout::layout_md_cached(
+                    page.text_epoch,
+                    &page.text,
+                    cw as u32,
+                    &style,
+                    self,
+                );
                 let max = rp::scroll_max(i64::from(lay.total_h), view_h);
                 // ---- 进度线（贴顶栏底缘线下 3px，accent c1→c2 渐变，
                 // 宽 = scroll/max × 内容宽；max=0 不画）----
@@ -7904,6 +7871,15 @@ impl TermView {
             }
             Preview::Gear => {
                 crate::ui::gear::paint_at(
+                    frame.buf,
+                    frame.w,
+                    frame.h,
+                    icx as u32,
+                    (iy + i64::from(ih) / 2) as u32,
+                );
+            }
+            Preview::TermBtn => {
+                crate::ui::term_btn::paint_at(
                     frame.buf,
                     frame.w,
                     frame.h,

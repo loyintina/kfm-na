@@ -2,14 +2,19 @@
 //!
 //! 分工说明：纯逻辑核的考卷在 `tests/reader_page_spec.rs`（状态核 A 档
 //! 带变异）；缝的占槽/直通/重播踢在 `tests/fx_ease_spec.rs` 末（第七道
-//! 缝入账钉，与 Demo 缝同款五件）；几何命中钉在同册 `rd_return_hit`
-//! 用例。本册管**涂装与壳核之间的机械接线**——漏一处 = 点文件没反应 /
-//! 阅读页零帧 / 返回钮点不中 / 甩尾不取消，实拍前就能钉死的缺口类错误
+//! 缝入账钉，与 Demo 缝同款五件）；终端钮几何钉在 `tests/term_btn_spec.rs`。
+//! 本册管**涂装与壳核之间的机械接线**——漏一处 = 点文件没反应 /
+//! 阅读页零帧 / 终端钮点不中 / 甩尾不取消，实拍前就能钉死的缺口类错误
 //! （同 ftree_wiring_spec 的立法）。
+//!
+//! 2026-10-01 BAR-208 改版：返回钮退役（退出归终端钮），排版走缓存
+//! （text_epoch 钉在 reader_page_spec，缓存钉在 md_layout_spec），
+//! 拖拽推回臂死透反向钉在壳手势册。
 //!
 //! 变异方向：改道点缺 summon（阅读页不进场）/ 缺 dismiss FileTree（树
 //! 不关压在页上）/ 活性链摘 reader 那路（甩尾零帧）/ gles 槽号错（画到
-//! 别人的槽）/ 链尾字面量被吞（viewer/ft 两路被挤掉）——本册必红。
+//! 别人的槽）/ 链尾字面量被吞（viewer/ft 两路被挤掉）/ 排版绕开缓存
+//! （每帧全文重排回潮）/ 拖拽推回臂复活（退出路径双源）——本册必红。
 
 #[test]
 fn spec_bar170_文件点击改道阅读页() {
@@ -109,9 +114,15 @@ fn spec_bar170_涂装三路与槽号() {
         tv.contains("fn paint_reader_content_impl("),
         "正文涂装实现必须在（md 管线喂 paint_md_body）"
     );
+    // BAR-208：正文排版走排版缓存（同代同宽零重排——滚动卡帧根修）；
+    // 返回钮已退役（退出归终端钮 ui/term_btn.rs），命中几何随葬
     assert!(
-        tv.contains("pub fn rd_return_hit("),
-        "返回钮命中几何必须与涂装同源一份"
+        tv.contains("layout_md_cached("),
+        "正文涂装必须走排版缓存（每帧全文重排 = BAR-208 病灶回潮）"
+    );
+    assert!(
+        !tv.contains("rd_return_hit"),
+        "返回钮命中几何必须随葬（BAR-208 退出归终端钮）"
     );
     assert!(
         tv.contains("pub fn reader_geom("),
@@ -137,14 +148,23 @@ fn spec_bar170_壳手势与帧泵接线() {
         app.contains("阅读页手势让回面板页"),
         "横向占优必须整槽让回面板页（推回/关页才轮得到面板拖拽）"
     );
-    // 抬手两分流：点按返回钮 → 出栈；拖过 → 交接甩尾
+    // 抬手两分流（BAR-208）：终端钮点按 → 出栈回终端；拖过 → 交接甩尾。
+    // 起手仲裁钮分流先于正文槽：终端钮 > 设置钮 > 滚动接力件
     assert!(
-        app.contains("crate::termview::rd_return_hit(&g, rt.0 as i64, rt.1 as i64)"),
-        "返回钮点按必须吃同源命中几何"
+        app.contains("crate::ui::term_btn::hit(x, y, sw)"),
+        "阅读页仲裁必须先分流终端钮命中（BAR-208 唯一退出路径）"
+    );
+    assert!(
+        app.contains("self.term_btn_touch = Some((id, x, y, false))"),
+        "终端钮命中必须建槽（点按抬手才触发，拖过 slop 不触发）"
+    );
+    assert!(
+        app.contains("终端钮点按: 栈顶"),
+        "终端钮点按必须留栈痕（栈操作日志可见条款）"
     );
     assert!(
         app.contains("dismiss_top(crate::ai_presence::Panel::Reader)"),
-        "返回钮/推回必须出栈阅读页"
+        "终端钮/推回必须出栈阅读页"
     );
     // 帧泵：poll_reader 每圈一问 tick_restore + need_prefetch
     assert!(
@@ -159,15 +179,22 @@ fn spec_bar170_壳手势与帧泵接线() {
         app.contains("pg.need_prefetch(total_h, view_h)"),
         "帧泵必须走预取判（滚近内容尾拉下一块）"
     );
+    // BAR-208：排版帮手换芯——缓存 peek 命中零克隆，未中才排版入柜
+    // （锁序红线 term→reader 不倒持）
     assert!(
-        app.contains("fn reader_md_layout(&self, text: &str, cw: u32)"),
-        "md 排版帮手必须在（锁序：克隆出锁后排版，不嵌锁）"
+        app.contains("fn reader_layout_arc("),
+        "md 排版帮手必须走缓存版（reader_layout_arc）"
     );
-    // 拖拽推回：GLES + 软路两臂映射 DismissReader
+    assert!(
+        app.contains("layout_md_peek("),
+        "帧泵/拖拽必须走 peek 零克隆快路（每帧重排 = 病灶回潮）"
+    );
+    // BAR-208：拖拽推回臂退役（阅读页退出归终端钮，不占拖拽滑槽）——
+    // 反向钉：两变体必须死透，复活 = 滑槽语义双源
     let pd = include_str!("../src/ui/panel_drag.rs");
     assert!(
-        pd.contains("DismissReader") && pd.contains("DragTop::Reader"),
-        "panel_drag 必须有阅读页推回两臂"
+        !pd.contains("DismissReader") && !pd.contains("DragTop::Reader"),
+        "panel_drag 阅读页推回两臂必须死透（BAR-208 退出归终端钮）"
     );
     let seam = include_str!("../src/ui/seam.rs");
     assert!(
