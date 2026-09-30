@@ -36,6 +36,7 @@ pub mod providers;
 pub mod report;
 pub mod reseed;
 pub mod scroll;
+pub mod seed_sched;
 pub mod self_restart;
 pub mod sess_mode;
 pub mod sess_pool;
