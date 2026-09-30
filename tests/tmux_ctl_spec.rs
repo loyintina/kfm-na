@@ -357,16 +357,20 @@ fn spec_cmd_ctrl_attach_精确匹配常驻无exit() {
 
 #[test]
 fn spec_cmd_ctrl_seed_双块命令串钉() {
-    // 两块：头行（KFMHDR 前缀认领，五件：史量/上限/光标列/光标行/pane）
+    // 两块：头行（KFMHDR 前缀认领，六件：token/史量/上限/光标列/光标行/
+    // pane——BAR-211：token 是播种轮次身份，相位机认 token 不认到达序）
     // + capture 全文（-p -e -S -，无壳无尾标——块内正文即纯净输出）
-    let seed = cmd_ctrl_seed();
+    let seed = cmd_ctrl_seed(42);
     let lines: Vec<&str> = seed.lines().collect();
     assert_eq!(lines.len(), 2, "播种命令必须是两行（两个命令块）");
     assert_eq!(
         lines[0],
-        "display-message -p 'KFMHDR #{history_size} #{history_limit} #{cursor_x} #{cursor_y} #{pane_id}'"
+        "display-message -p 'KFMHDR 42 #{history_size} #{history_limit} #{cursor_x} #{cursor_y} #{pane_id}'"
     );
     assert_eq!(lines[1], "capture-pane -p -e -S -");
+    // token 必须紧随 KFMHDR（头行第一字段——parse_seed_header 同契）
+    // 且 capture 块不带 token（认领当前头块后紧跟的块即本对）
+    assert!(!lines[1].contains("42"), "capture 块不许携 token");
     // capture 径无壳无尾标：不许带 capture_strip_marker 验收链的标记词
     assert!(!seed.contains("KFMBEGIN"));
     assert!(!seed.contains("KFMEND"));
@@ -374,34 +378,42 @@ fn spec_cmd_ctrl_seed_双块命令串钉() {
 
 #[test]
 fn spec_parse_seed_header_实证fixture钉() {
-    // 实证 fixture（2026-09-25 服务器 tmux 3.4 display-message 回应）
-    let h = parse_seed_header("KFMHDR 2979 10000 2 0 %46").unwrap();
+    // 实证 fixture（2026-09-25 服务器 tmux 3.4 display-message 回应，
+    // 2026-09-30 BAR-211 加 token 首字段）
+    let h = parse_seed_header("KFMHDR 7 2979 10000 2 0 %46").unwrap();
+    assert_eq!(h.token, 7);
     assert_eq!(h.hist, 2979);
     assert_eq!(h.limit, 10000);
     assert_eq!(h.cursor_x, 2);
     assert_eq!(h.cursor_y, 0);
     assert_eq!(h.pane, 46);
     // 空史量会话（HDR 0 2 0 %46 风）
-    let h0 = parse_seed_header("KFMHDR 0 2 0 0 %7").unwrap();
+    let h0 = parse_seed_header("KFMHDR 3 0 2 0 0 %7").unwrap();
+    assert_eq!(h0.token, 3);
     assert_eq!(h0.hist, 0);
     assert_eq!(h0.pane, 7);
 }
 
 #[test]
 fn spec_parse_seed_header_缺件畸形全_none() {
-    // 五件缺一件 = None（播种作废）
-    assert_eq!(parse_seed_header("KFMHDR 2979 10000 2 0"), None);
+    // 六件缺一件 = None（播种作废）
+    assert_eq!(parse_seed_header("KFMHDR 7 2979 10000 2 0"), None);
     // 件不成数 = None
-    assert_eq!(parse_seed_header("KFMHDR 2979 10000 x 0 %46"), None);
+    assert_eq!(parse_seed_header("KFMHDR 7 2979 10000 x 0 %46"), None);
+    // token 不成数 = None
+    assert_eq!(parse_seed_header("KFMHDR x 2979 10000 2 0 %46"), None);
     // pane 无 % 前缀 = None
-    assert_eq!(parse_seed_header("KFMHDR 2979 10000 2 0 46"), None);
+    assert_eq!(parse_seed_header("KFMHDR 7 2979 10000 2 0 46"), None);
+    // BAR-211 前旧格式头行（五件无 token）= None——旧核/旧对在途残骸
+    // 永不会被误认成当前轮（token 位移后 cy 段吃 %46 必然不成数）
+    assert_eq!(parse_seed_header("KFMHDR 2979 10000 2 0 %46"), None);
     // 无前缀行 = None
     assert_eq!(parse_seed_header("HDR 0 2 0 %46"), None);
     assert_eq!(parse_seed_header(""), None);
     // 行尾 \r：本函数契约 = 输入必须已剥 \r（pty 流的 \r 剥除统一在
     // ctrl_feed::feed_bytes 层，BAR-155 三号病灶——剥 \r 留在调用方
     // 壳层曾致 pane 段带 \r 尾数字解析失败、100% 判负。此处严格不兜底）
-    assert_eq!(parse_seed_header("KFMHDR 1 2 3 4 %5\r"), None);
+    assert_eq!(parse_seed_header("KFMHDR 9 1 2 3 4 %5\r"), None);
 }
 
 #[test]
