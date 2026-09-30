@@ -199,16 +199,35 @@ pub fn companion_hold_secs(releasing: bool, release_ok: bool) -> u64 {
     }
 }
 
-/// 端到端探活连败裁决（A 档纯函数，BAR-140）：本地口通 ≠ 隧道活——
-/// NAT 吞 RST 时 ssh 僵尸仍举着本地监听，probe_port 全绿而数据已死，
-/// 干等 ssh 自己的 keepalive 要 10s。穿透隧道打 na-server 健康面，
-/// 连败满 strike 即杀娃重拉。活着 → 清零；杀 → (0, true) 调用方立即重拉
+/// 端到端探活连败裁决（A 档纯函数，BAR-140；BAR-201 改约 ×2→×3）：本地口通
+/// ≠ 隧道活——NAT 吞 RST 时 ssh 僵尸仍举着本地监听，probe_port 全绿而数据
+/// 已死。穿透隧道打 na-server 健康面，连败满 strike 即杀娃冷却重拉。
+/// 改约实证（2026-09-30 风暴）：×2 在冷腿/移动网毛刺下脱发夹——QUIC 冷腿
+/// 首探 RTT 超 1.2s 即被冤杀（19823 开机即两连冤），ssh-only 期 2.4s 一圈
+/// 喂出 sshd 3 分钟 75 会话的自持续环。×3 + 读超时 2.5s = 定罪须 ~8s 持续
+/// 死，仍不慢于 keepalive（5s×2）
+/// 活着 → 清零；杀 → (0, true) 调用方走 zombie_cooldown 冷却重拉
 pub fn e2e_strike(prev: u32, alive: bool) -> (u32, bool) {
     if alive {
         (0, false)
     } else {
         let n = prev + 1;
-        (n, n >= 2)
+        (n, n >= 3)
+    }
+}
+
+/// 杀娃重拉冷却（A 档纯函数，BAR-201）：探活杀娃后零退避立即重拉 = 风暴
+/// 自持续环的传动轴（杀 → 1s 重拉 → 冷腿冤杀 → 再杀，sshd 被环喂出来的
+/// 会话潮压慢，探活更易超时 → 环更紧）。稳定在线满 60s 后的首杀 = 真事故
+/// 前科清零、短冷却 2s；短稳连续被杀 = 抖动期，冷却爬坡 2/4/8/16/32 封顶
+/// 60s 掐断反馈。手动命令（Reconnect/ResumeKick）不看本函数——用户在等
+/// 永远立即。返回（新前科, 冷却秒）
+pub fn zombie_cooldown(consec: u32, up_secs: u64) -> (u32, u64) {
+    if up_secs >= 60 {
+        (1, 2)
+    } else {
+        let n = (consec + 1).min(6);
+        (n, (1u64 << n).min(60))
     }
 }
 
@@ -334,25 +353,38 @@ pub fn ssh_role(data_quic_up: bool, rev_quic_up: bool) -> SshRole {
 }
 
 /// 端到端探活（B 档）：穿透本地转发口打 na-server 健康面，认 HTTP 200。
-/// 超时 1.2s——两次连败 ≈ 2~3s 定罪僵尸，比 keepalive 快一个量级
-fn probe_e2e(port: u16) -> bool {
+/// 失败带因（BAR-201 观测升级：脱发夹时代 bool 不说死因，风暴定罪靠猜）——
+/// connect/write/read-timeout/read-err/http-non200/http-empty 进定罪报表。
+/// 超时 connect 1s / 读 2.5s（BAR-201 自 0.5/1.2 抬：移动网 RTT 毛刺 +
+/// 冷腿信道首建立都吃得下；连败×3 ≈ 8s+ 持续死才定罪，仍不慢于 keepalive）
+fn probe_e2e(port: u16) -> Result<(), &'static str> {
     use std::io::{Read as _, Write as _};
-    let Ok(mut s) = std::net::TcpStream::connect_timeout(
+    let mut s = std::net::TcpStream::connect_timeout(
         &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
-        std::time::Duration::from_millis(500),
-    ) else {
-        return false;
-    };
-    let _ = s.set_read_timeout(Some(std::time::Duration::from_millis(1200)));
-    let _ = s.set_write_timeout(Some(std::time::Duration::from_millis(500)));
+        std::time::Duration::from_millis(1000),
+    )
+    .map_err(|_| "connect")?;
+    let _ = s.set_read_timeout(Some(std::time::Duration::from_millis(2500)));
+    let _ = s.set_write_timeout(Some(std::time::Duration::from_millis(1000)));
     let req = "GET /api/na/health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
-    if s.write_all(req.as_bytes()).is_err() {
-        return false;
-    }
+    s.write_all(req.as_bytes()).map_err(|_| "write")?;
     let _ = s.shutdown(std::net::Shutdown::Write);
     let mut resp = Vec::new();
-    let _ = s.read_to_end(&mut resp);
-    crate::report::http_status_is_200(&resp)
+    s.read_to_end(&mut resp).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::TimedOut {
+            "read-timeout"
+        } else {
+            "read-err"
+        }
+    })?;
+    if resp.is_empty() {
+        return Err("http-empty");
+    }
+    if crate::report::http_status_is_200(&resp) {
+        Ok(())
+    } else {
+        Err("http-non200")
+    }
 }
 
 /// 状态词（A 档纯函数）：连接/服务卡状态行的唯一文案源。
@@ -404,7 +436,7 @@ pub fn snap() -> Option<Arc<Mutex<TunnelSnap>>> {
 pub enum TunnelCmd {
     Reconnect,
     /// 回前台/网络回即审（BAR-141）：用户在等了，检测判据从宽——
-    /// 健康连接不碰，僵尸一拍定罪（不等连败×2），退避清零立即重拉
+    /// 健康连接不碰，僵尸一拍定罪（不等连败×3），退避清零立即重拉
     ResumeKick,
     /// 手动跳闸 QUIC（通道卡调试钮）：跳闸账打满，降级 ssh 兜底
     TripQuic,
@@ -891,6 +923,11 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
         let mut was_up = false;
         // 端到端探活连败计数（BAR-140，看门狗线程私有）
         let mut e2e_miss: u32 = 0;
+        // BAR-201 两本账（看门狗线程私有）：本地口连续开着的起点（稳定度
+        // 证据）/ 探活杀娃前科（冷却爬坡用）。连败末因不另立账——定罪
+        // 那一刻的末因就是本拍探活的错（块内局部量随取随用）
+        let mut leg_up_since: Option<std::time::Instant> = None;
+        let mut consec_zombie: u32 = 0;
         // 伴生重拉封锁（BAR-147，看门狗线程私有）：伴生死后不到点不许
         // spawn——零间隔重拉必撞服务器侧旧 sshd 尸体（9022 还在它手里），
         // ExitOnForwardFailure 255 再撞，每秒空转活锁
@@ -939,6 +976,16 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                 .as_mut()
                 .map(|c| c.try_wait().ok().flatten().is_none())
                 .unwrap_or(false);
+            // BAR-201：本地口连续开着才攒稳定度——口断即清零（探活杀娃
+            // 冷却爬坡的稳定度证据；NAT 僵尸口不开断，攒的是口龄不是健康，
+            // 但那种恰是真事故形态，首次杀短冷却合情）
+            if port_open {
+                if leg_up_since.is_none() {
+                    leg_up_since = Some(std::time::Instant::now());
+                }
+            } else {
+                leg_up_since = None;
+            }
 
             // 四口状态面（通道卡数据源）：每拍记账——腿供应商/本地口/
             // 反连/跳闸账/齐件。UI 只读快照，绝不许碰锁内活物
@@ -1225,14 +1272,24 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                     companion_hold_until =
                         Some(std::time::Instant::now() + std::time::Duration::from_secs(hold_s));
                 }
-                // 端到端探活（BAR-140 同款判据打 QUIC 桥）：连败×2 收腿
+                // 端到端探活（BAR-140 判据打 QUIC 桥；BAR-201 改约连败×3 +
+                // 冷却爬坡）：冷腿首探毛刺不再冤杀，抖动期冷却掐断反馈环
                 if port_open {
-                    let (n, kill) = e2e_strike(e2e_miss, probe_e2e(port));
+                    let pr = probe_e2e(port);
+                    let err_kind = pr.err();
+                    let (n, kill) = e2e_strike(e2e_miss, pr.is_ok());
                     e2e_miss = n;
                     if kill {
+                        let up_secs = leg_up_since.map(|t| t.elapsed().as_secs()).unwrap_or(0);
+                        leg_up_since = None;
+                        let (cz, hold) = zombie_cooldown(consec_zombie, up_secs);
+                        consec_zombie = cz;
                         crate::report::report(
                             "tunnel",
-                            "端到端探活连败×2：QUIC 僵尸定罪，收腿立即重拉",
+                            &format!(
+                                "端到端探活连败×3（末因 {}）：QUIC 僵尸定罪，收腿冷却 {hold}s 重拉",
+                                err_kind.unwrap_or("?")
+                            ),
                         );
                         if let Some(q) = quic.take() {
                             let _ = q.stop.send(());
@@ -1250,6 +1307,38 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                             },
                             &snap_t,
                         );
+                        // 冷却期听命令（BAR-201）：用户在等（重连/回前台）=
+                        // 前科清零立即重拉——冷却只挡无人等的抖动环
+                        match wait(&cmd_rx, std::time::Duration::from_secs(hold)) {
+                            Some(TunnelCmd::Reconnect) | Some(TunnelCmd::HealQuic) => {
+                                consec_zombie = 0;
+                                reconnect(
+                                    &mut child,
+                                    &mut quic,
+                                    &mut rev_quic,
+                                    &mut attempts,
+                                    &mut quic_fails,
+                                    &mut rev_quic_fails,
+                                    &snap_t,
+                                );
+                            }
+                            Some(TunnelCmd::TripQuic) => {
+                                consec_zombie = 0;
+                                trip_quic(
+                                    &mut child,
+                                    &mut quic,
+                                    &mut attempts,
+                                    &mut quic_fails,
+                                    &snap_t,
+                                );
+                            }
+                            Some(TunnelCmd::ResumeKick) => {
+                                consec_zombie = 0;
+                                attempts = 0;
+                                quic_fails = 0;
+                            }
+                            None => {}
+                        }
                         continue;
                     }
                 }
@@ -1278,9 +1367,9 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                         &mut quic_fails,
                         &snap_t,
                     ),
-                    // 回前台即审（BAR-141）：僵尸一拍定罪（不等连败×2）
+                    // 回前台即审（BAR-141）：僵尸一拍定罪（不等连败×3）
                     Some(TunnelCmd::ResumeKick) => {
-                        let probe_ok = !port_open || probe_e2e(port);
+                        let probe_ok = !port_open || probe_e2e(port).is_ok();
                         if port_open && !probe_ok {
                             crate::report::report(
                                 "tunnel",
@@ -1311,25 +1400,66 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                 // 伴生死了：落到重生段补一条 -R-only ssh
             } else if child_alive {
                 was_up = port_open;
-                // 端到端探活（BAR-140）：本地口通 ≠ 隧道活——NAT 吞 RST 时
-                // ssh 僵尸举着本地监听，数据面已死。连败×2 即杀娃立即重拉
-                // （不等 ssh keepalive 10s，不等退避）；死前绑过 → 顺路请
-                // 服务器收尸，免下一 spawn 白撞一次 255
+                // 端到端探活（BAR-140；BAR-201 改约连败×3+冷却爬坡）：本地口通
+                // ≠ 隧道活——NAT 吞 RST 时 ssh 僵尸举着本地监听，数据面已死。
+                // 连败×3 即杀娃冷却重拉（不等 ssh keepalive 10s）；死前绑过 →
+                // 顺路请服务器收尸，免下一 spawn 白撞一次 255
                 if port_open {
-                    let (n, kill) = e2e_strike(e2e_miss, probe_e2e(port));
+                    let pr = probe_e2e(port);
+                    let err_kind = pr.err();
+                    let (n, kill) = e2e_strike(e2e_miss, pr.is_ok());
                     e2e_miss = n;
                     if kill {
+                        let up_secs = leg_up_since.map(|t| t.elapsed().as_secs()).unwrap_or(0);
+                        leg_up_since = None;
+                        let (cz, hold) = zombie_cooldown(consec_zombie, up_secs);
+                        consec_zombie = cz;
                         kill_zombie(
                             &mut child,
                             &mut attempts,
                             &mut e2e_miss,
                             was_up,
-                            "端到端探活连败×2：僵尸隧道定罪，杀娃立即重拉",
+                            &format!(
+                                "端到端探活连败×3（末因 {}）：僵尸隧道定罪，杀娃冷却 {hold}s 重拉",
+                                err_kind.unwrap_or("?")
+                            ),
                             &prefix,
                             &server,
                             &snap_t,
                             &set,
                         );
+                        // 冷却期听命令（BAR-201）：用户在等 = 前科清零立即
+                        // 重拉——冷却只挡无人等的抖动环
+                        match wait(&cmd_rx, std::time::Duration::from_secs(hold)) {
+                            Some(TunnelCmd::Reconnect) | Some(TunnelCmd::HealQuic) => {
+                                consec_zombie = 0;
+                                reconnect(
+                                    &mut child,
+                                    &mut quic,
+                                    &mut rev_quic,
+                                    &mut attempts,
+                                    &mut quic_fails,
+                                    &mut rev_quic_fails,
+                                    &snap_t,
+                                );
+                            }
+                            Some(TunnelCmd::TripQuic) => {
+                                consec_zombie = 0;
+                                trip_quic(
+                                    &mut child,
+                                    &mut quic,
+                                    &mut attempts,
+                                    &mut quic_fails,
+                                    &snap_t,
+                                );
+                            }
+                            Some(TunnelCmd::ResumeKick) => {
+                                consec_zombie = 0;
+                                attempts = 0;
+                                quic_fails = 0;
+                            }
+                            None => {}
+                        }
                         continue;
                     }
                 }
@@ -1359,9 +1489,9 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                         &snap_t,
                     ),
                     // 回前台即审（BAR-141）：用户在等——健康不碰，僵尸一拍
-                    // 定罪（不等连败×2），零退避立即重拉
+                    // 定罪（不等连败×3），零退避立即重拉
                     Some(TunnelCmd::ResumeKick) => {
-                        let probe_ok = !port_open || probe_e2e(port);
+                        let probe_ok = !port_open || probe_e2e(port).is_ok();
                         if resume_verdict(true, port_open, probe_ok) == ResumeAction::KillRespawn {
                             kill_zombie(
                                 &mut child,

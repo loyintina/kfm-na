@@ -360,14 +360,38 @@ fn spec_bar138_退避抖动_相位打散() {
 #[test]
 fn spec_bar140_端到端探活连败_即杀即拉() {
     // BAR-140：本地口通 ≠ 隧道活（NAT 吞 RST，ssh 僵尸举监听）。
-    // 连败×2 才杀（单发抖动不冤杀）；活一拍清零；杀后计数归零（立即重拉）
+    // 活一拍清零；杀后计数归零（调用方负责）。
+    // BAR-201 改约 ×2→×3（2026-09-30 风暴实证：×2 在冷腿/移动网毛刺下
+    // 脱发夹——QUIC 冷腿首探超 1.2s 即冤杀，ssh-only 期 2.4s 一圈喂出
+    // sshd 3 分钟 75 会话自持续环）：单发/双发毛刺不冤杀，三连败才定罪
     use kfm_na::tunnel::e2e_strike;
     assert_eq!(e2e_strike(0, true), (0, false), "活：清零不杀");
     assert_eq!(e2e_strike(1, true), (0, false), "活：清掉前科");
     assert_eq!(e2e_strike(0, false), (1, false), "首败：记账不杀");
-    assert_eq!(e2e_strike(1, false), (2, true), "连败×2：定罪杀");
+    assert_eq!(e2e_strike(1, false), (2, false), "连败×2：记账不杀（改约）");
+    assert_eq!(e2e_strike(2, false), (3, true), "连败×3：定罪杀");
     // 杀完归零由调用方负责，裁决函数自身不许返回负计数
     assert_eq!(e2e_strike(5, true), (0, false), "再多前科也清零");
+}
+
+#[test]
+fn spec_bar201_杀娃冷却爬坡_稳定清零() {
+    // BAR-201：探活杀娃零退避立即重拉 = 风暴自持续环的传动轴。
+    // 契约：稳定在线满 60s 后的首杀 = 真事故，前科清零短冷却 2s；
+    // 短稳连续被杀 = 抖动期，冷却 2/4/8/16/32 封顶 60s 爬坡掐环
+    use kfm_na::tunnel::zombie_cooldown;
+    // 稳定后首杀：不论前科多深都清零短冷却（真事故快修优先）
+    assert_eq!(zombie_cooldown(0, 70), (1, 2), "稳定首杀：2s");
+    assert_eq!(zombie_cooldown(5, 60), (1, 2), "满 60s 即算稳定，前科清零");
+    // 抖动期爬坡：2/4/8/16/32/60 封顶
+    assert_eq!(zombie_cooldown(0, 5), (1, 2), "抖动首杀：2s");
+    assert_eq!(zombie_cooldown(1, 5), (2, 4), "二连杀：4s");
+    assert_eq!(zombie_cooldown(2, 30), (3, 8), "三连杀：8s");
+    assert_eq!(zombie_cooldown(3, 10), (4, 16));
+    assert_eq!(zombie_cooldown(4, 10), (5, 32));
+    assert_eq!(zombie_cooldown(5, 10), (6, 60), "封顶 60s");
+    assert_eq!(zombie_cooldown(6, 10), (6, 60), "前科钳 6 不再涨");
+    assert_eq!(zombie_cooldown(99, 10), (6, 60), "深前科也钳住");
 }
 
 #[test]
