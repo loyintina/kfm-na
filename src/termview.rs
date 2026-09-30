@@ -5531,8 +5531,9 @@ impl TermView {
 
         // ---- 连接服务合并卡（2026-09-20 v2 合并裁决：连接卡 + 服务卡
         // 合并成一张二级卡；2026-09-21 三区排布 v2：归右上滚动区，窄列
-        // 两段纵排——连接段（mini 卡头/四字段行/[重连] 钮）→ 服务段
-        // （mini 卡头/四字段行/会话行表），无分隔线。同日 v3：右列放宽
+        // 两段纵排——连接段（mini 卡头/两字段行（2026-09-30 BAR-212：
+        // 重拉/错误两行退役）/[重连] 钮）→ 通道段（mini 卡头/四字段行/
+        // 钮行），无分隔线。同日 v3：右列放宽
         // 半屏 + 钉顶钳高卡内滚——卡框 = 区窗内静物（框裁剪带 = 区窗
         // 纵段 lclip），内容 = 随右账卡内平移（内容裁剪带 = 卡内芯
         // content_clip，涂装断墨/命中闸门同一份）。文案面零改动：
@@ -5586,10 +5587,11 @@ impl TermView {
             0,
             cclip32,
         );
-        // 连接段四字段行（字段标签列配方：标签左对齐亮档、值逐行右对齐
-        // 灰档——draw_field_lines_grid 自带 1.5 格文内边距与 ≤2 行折行
-        // （BAR-196 网格引擎尺）；错误行有字用错色）
-        let values = [&csnap.target, &csnap.local, &csnap.attempts, &csnap.error];
+        // 连接段两字段行（目标/本地口——2026-09-30 BAR-212 用户拍板：
+        // 重拉/错误两行退役；字段标签列配方：标签左对齐亮档、值逐行
+        // 右对齐灰档——draw_field_lines_grid 自带 1.5 格文内边距与
+        // ≤2 行折行（BAR-196 网格引擎尺））
+        let values = [&csnap.target, &csnap.local];
         for (i, fr) in llay.lfields.iter().enumerate() {
             self.draw_field_lines_grid(
                 &mut frame,
@@ -5603,20 +5605,15 @@ impl TermView {
                 cclip32,
                 true,
             );
-            let (v_fg, v) = if i == 3 && csnap.error != "—" {
-                (err_fg, values[i].as_str())
-            } else {
-                (meta_fg, values[i].as_str())
-            };
             self.draw_field_lines_grid(
                 &mut frame,
-                v,
+                values[i].as_str(),
                 (fr.x + off) as u32,
                 fr.w,
                 fr.y as u32,
                 fr.h,
                 GRID_META_SCALE,
-                v_fg,
+                meta_fg,
                 cclip32,
                 false,
             );
@@ -5888,6 +5885,89 @@ impl TermView {
                 GRID_META_SCALE,
                 meta_fg,
                 xclip32,
+                false,
+            );
+        }
+
+        // 信箱入口卡（BAR-212 左下常驻槽：卡头「信箱」+ 两入口行 =
+        // 三级框行主形态，行 = 册标题左锚 + 计数字右锚；钉底不滚——
+        // 裁剪带 = 槽自身纵段，与 tmux 常驻槽同律）
+        let mclip =
+            crate::ui::parser_chain::clip_of(crate::ui::parser_chain::ChainCardId::Mail, &regs);
+        let mclip32 = Some((mclip.0 as i32, mclip.1 as i32));
+        let mlay = crate::ui::mail_card::layout_in(crate::ui::parser_chain::slot_rect(
+            crate::ui::parser_chain::ChainCardId::Mail,
+            &regs,
+            &chain_h,
+            &scrolls,
+        ));
+        paint_rect_ring_yclip(
+            &mut frame,
+            mlay.card.x + off,
+            mlay.card.y,
+            mlay.card.x + off + i64::from(mlay.card.w),
+            mlay.card.y + i64::from(mlay.card.h),
+            clip_l,
+            clip_r,
+            mclip.0,
+            mclip.1,
+            crate::ui::accent::CARD_PAGE_BG,
+            accent.c2,
+            accent.c1,
+            POOL_FRAME_R,
+            true,
+        );
+        let (mhitems, _) = self.measure_items_grid("信箱");
+        self.draw_grid_text_left(
+            &mut frame,
+            &mhitems,
+            mlay.header.x + off + i64::from(CELL_W),
+            mlay.header.y + (i64::from(mlay.header.h) - i64::from(self.cell_h)).max(0) / 2,
+            self.cell_w,
+            mlay.header.w.saturating_sub(CELL_W),
+            title_fg,
+            0,
+            mclip32,
+        );
+        for (i, row) in mlay.rows.iter().enumerate() {
+            let key = crate::mail_feed::MailKey::all()[i];
+            paint_row_frame(
+                &mut frame,
+                row.x + off,
+                row.y,
+                row.w,
+                row.h,
+                true,
+                accent,
+                denom,
+                mclip,
+            );
+            // 册标题左锚（title 档）
+            self.draw_field_lines_grid(
+                &mut frame,
+                key.title(),
+                (row.x + off + i64::from(CELL_W)) as u32,
+                row.w.saturating_sub(CELL_W * 2),
+                row.y as u32,
+                row.h,
+                1.0,
+                title_fg,
+                mclip32,
+                true,
+            );
+            // 计数字右锚（meta 档；未取到 = 「…」占位）
+            let book = crate::mail_feed::book_snap(key);
+            let count = crate::mail_feed::count_word(book.fetched.then_some(book.entries.len()));
+            self.draw_field_lines_grid(
+                &mut frame,
+                &count,
+                (row.x + off + i64::from(CELL_W)) as u32,
+                row.w.saturating_sub(CELL_W * 2),
+                row.y as u32,
+                row.h,
+                GRID_META_SCALE,
+                meta_fg,
+                mclip32,
                 false,
             );
         }
@@ -7261,6 +7341,195 @@ impl TermView {
         card
     }
 
+    /// 信件列表卡涂装（BAR-212）：ModalVeil 层内，压暗之上、查看器
+    /// 跳框之下。几何/滚动/窗口全吃 ui/mail_list 同一份（眼手同尺）；
+    /// 条目 = 三级框行主形态三行（元信息 时间 从→致 / 标题 / 摘要），
+    /// 条目断墨带 = viewport_of 同一份；数据直读 mail_feed 全局快照
+    /// （svc_health/sess_pool 同款注册模式）。返卡矩形（α 提不透明
+    /// 剪影同读一份）；列表卡关着 = None
+    fn paint_mail_list_card(
+        &self,
+        frame: &mut Frame,
+        accent: crate::ui::accent::AccentPair,
+    ) -> Option<crate::ui::dual_pool::PoolRect> {
+        use crate::ui::mail_list as ml;
+        let v = ml::snap()?;
+        let (w, h) = (frame.w, frame.h);
+        if w == 0 || h == 0 {
+            return None;
+        }
+        let title_fg = 0x00D9_D9D9; // 0.85 亮
+        let body_fg = 0x00BF_BFBF; // 0.75 正文档
+        let meta_fg = 0x0080_8080; // 0.5 次级档
+        let denom = ((w - 1) + (h - 1)).max(1) as i64;
+        let card = ml::card_rect(w, h);
+        paint_rect_ring(
+            frame,
+            card.x,
+            card.y,
+            card.x + i64::from(card.w),
+            card.y + i64::from(card.h),
+            0,
+            i64::MAX,
+            crate::ui::accent::CARD_PAGE_BG,
+            accent.c2,
+            accent.c1,
+            POOL_FRAME_R,
+            true,
+        );
+
+        // 标题带（册名 · 计数字）+ 分隔线（modal 同族件）
+        let book = crate::mail_feed::book_snap(v.key);
+        let n = book.entries.len();
+        let title = if book.fetched {
+            format!(
+                "{} · {}",
+                v.key.title(),
+                crate::mail_feed::count_word(Some(n))
+            )
+        } else {
+            format!("{} · 加载中…", v.key.title())
+        };
+        let trect = ml::title_rect(&card);
+        self.draw_grid_text_centered(
+            frame, &title, trect.x, trect.y, trect.w, trect.h, title_fg, trect.x, None,
+        );
+        let line_y = trect.y
+            + i64::from(crate::ui::modal::MODAL_TITLE_H)
+            + i64::from(crate::ui::modal::MODAL_FIELD_GAP);
+        if line_y >= 0 && line_y < i64::from(h) {
+            for ax in (card.x + crate::ui::modal::MODAL_PAD_X)
+                ..(card.x + i64::from(card.w) - crate::ui::modal::MODAL_PAD_X)
+            {
+                if ax < 0 || ax >= i64::from(w) {
+                    continue;
+                }
+                let c = ring_gradient_rgb(accent.c2, accent.c1, ax, line_y, denom);
+                frame.blend_px(ax as u32, line_y as u32, c, 255);
+            }
+        }
+
+        // 条目表（视口内才画；断墨带 = viewport_of 同一份）
+        let (vp_top, vp_bot) = ml::viewport_of(&card);
+        let vp_h = vp_bot - vp_top;
+        let clip32 = Some((vp_top as i32, vp_bot as i32));
+        let off = v.offset_bottom();
+        if n == 0 {
+            // 空态/加载态（会话池 EMPTY_LETTERS 同词面）
+            let word = if book.fetched {
+                "（无信件）"
+            } else {
+                "加载中…"
+            };
+            self.draw_grid_text_centered(
+                frame,
+                word,
+                card.x,
+                vp_top,
+                card.w,
+                2 * CELL_H,
+                meta_fg,
+                card.x,
+                clip32,
+            );
+        }
+        for i in ml::visible_range(n, vp_h, off) {
+            let r = ml::item_rect(&card, n, i, off);
+            paint_row_frame(
+                frame,
+                r.x,
+                r.y,
+                r.w,
+                r.h,
+                true,
+                accent,
+                denom,
+                (vp_top, vp_bot),
+            );
+            let e = &book.entries[i];
+            let tx = r.x + i64::from(ml::ITEM_PAD_H);
+            let tw = r.w.saturating_sub(ml::ITEM_PAD_H * 2);
+            let mut y = r.y + i64::from(ml::ITEM_PAD_V);
+            // 行①元信息：时间 + 从 → 致（meta 档 1 格）
+            let meta = if e.time.is_empty() {
+                format!("{} → {}", e.from, e.to)
+            } else {
+                format!("{}  {} → {}", e.time, e.from, e.to)
+            };
+            let (items, _) = self.measure_items_grid(&meta);
+            self.draw_grid_text_left(
+                frame,
+                &items,
+                tx,
+                y + (i64::from(ml::ITEM_META_H) - i64::from(self.cell_h)).max(0) / 2,
+                self.cell_w,
+                tw,
+                meta_fg,
+                0,
+                clip32,
+            );
+            y += i64::from(ml::ITEM_META_H + ml::ITEM_ROW_GAP);
+            // 行②标题（title 档 2 格；缺字头标题回落信名）
+            let t = if e.title.is_empty() {
+                &e.name
+            } else {
+                &e.title
+            };
+            let (items, _) = self.measure_items_grid(t);
+            self.draw_grid_text_left(
+                frame,
+                &items,
+                tx,
+                y + (i64::from(ml::ITEM_TITLE_H) - i64::from(self.cell_h)).max(0) / 2,
+                self.cell_w,
+                tw,
+                title_fg,
+                0,
+                clip32,
+            );
+            y += i64::from(ml::ITEM_TITLE_H + ml::ITEM_ROW_GAP);
+            // 行③摘要（body 档 1 格，宽内截断；懒加载三态词面）
+            let s = match &e.summary {
+                None => ml::SUMMARY_PENDING,
+                Some(s) if s.is_empty() => ml::SUMMARY_EMPTY,
+                Some(s) => s.as_str(),
+            };
+            let (items, _) = self.measure_items_grid(s);
+            self.draw_grid_text_left(
+                frame,
+                &items,
+                tx,
+                y + (i64::from(ml::ITEM_SUMMARY_H) - i64::from(self.cell_h)).max(0) / 2,
+                self.cell_w,
+                tw,
+                if e.summary.is_some() {
+                    body_fg
+                } else {
+                    meta_fg
+                },
+                0,
+                clip32,
+            );
+        }
+
+        // 关闭钮：卡底全内宽 3 格，均匀细框 + 居中亮字（modal 同件）
+        let btn = ml::close_btn_rect(&card);
+        paint_thin_frame(
+            frame,
+            btn.x,
+            btn.y,
+            btn.w,
+            btn.h,
+            accent,
+            denom,
+            (0, i64::from(h)),
+        );
+        self.draw_grid_text_centered(
+            frame, "关闭", btn.x, btn.y, btn.w, btn.h, title_fg, btn.x, None,
+        );
+        Some(card)
+    }
+
     /// 压暗层涂装（BAR-163 翻案：跳框整体搬出配置槽的全屏 ChromeSlot::
     /// ModalVeil 层）：全幅 α150 黑直写（层画布没有「下层」可 blend——
     /// 改写 α150 黑像素，GPU SRC_ALPHA 合成 ≡ blend(黑,下层,150)，
@@ -7282,12 +7551,16 @@ impl TermView {
         now_ms: u64,
     ) {
         use crate::ui::modal as md;
-        if w == 0 || h == 0 || (modal.is_none() && viewer.is_none()) {
+        // BAR-212：信件列表卡也住本层（dim → 列表卡 → 跳框，叠序钉死）
+        let mail_open = crate::ui::mail_list::open_key().is_some();
+        if w == 0 || h == 0 || (modal.is_none() && viewer.is_none() && !mail_open) {
             return;
         }
         // 全幅压暗直写（α150 黑；rgb=0 且 α≠0，mark_chrome_alpha 不动它）
         buf.fill(crate::ui::modal::VEIL_DIM_ARGB);
         let mut frame = Frame { buf, w, h };
+        // 信件列表卡在先（压在它之上的查看器/跳框后画）
+        let mail_card = self.paint_mail_list_card(&mut frame, accent);
         // 卡体（off=0——全屏层不随面板平移）
         let card = if let Some(mi) = modal {
             let comps = crate::ui::comp_registry::COMPONENTS;
@@ -7302,30 +7575,38 @@ impl TermView {
             );
             self.paint_modal_card(&mut frame, entry, 0, accent, now_ms);
             card
-        } else {
-            let v = viewer.expect("modal/viewer 二有一闸已过");
+        } else if let Some(v) = viewer {
             // BAR-169：剪影卡几何 = paint_viewer_card 返值（md 排版
             // total_h 同一份——眼手同尺，不另算第二遍）
             self.paint_viewer_card(&mut frame, v, 0, accent)
-        };
-        // 卡区提不透明（圆角剪影内 α=0xFF 保 rgb；卡外留压暗直写）
-        let (fw, fh) = (card.w, card.h);
-        let r = POOL_FRAME_R.min((fw / 2).min(fh / 2));
-        for dy in 0..fh {
-            let yy = card.y + i64::from(dy);
-            if yy < 0 || yy >= i64::from(h) {
-                continue;
+        } else {
+            // BAR-212：只有列表卡开着的情形——卡体上面已画，剪影直通
+            match mail_card {
+                Some(ref c) => c.clone(),
+                None => return,
             }
-            for dx in 0..fw {
-                let xx = card.x + i64::from(dx);
-                if xx < 0 || xx >= i64::from(w) {
+        };
+        // 卡区提不透明（圆角剪影内 α=0xFF 保 rgb；卡外留压暗直写）——
+        // BAR-212：列表卡与跳框两卡各提各的剪影
+        for card in [Some(card), mail_card].into_iter().flatten() {
+            let (fw, fh) = (card.w, card.h);
+            let r = POOL_FRAME_R.min((fw / 2).min(fh / 2));
+            for dy in 0..fh {
+                let yy = card.y + i64::from(dy);
+                if yy < 0 || yy >= i64::from(h) {
                     continue;
                 }
-                if rr_cover(dx, dy, fw, fh, r) == 0 {
-                    continue;
+                for dx in 0..fw {
+                    let xx = card.x + i64::from(dx);
+                    if xx < 0 || xx >= i64::from(w) {
+                        continue;
+                    }
+                    if rr_cover(dx, dy, fw, fh, r) == 0 {
+                        continue;
+                    }
+                    let p = &mut frame.buf[(yy as u32 * w + xx as u32) as usize];
+                    *p = 0xFF00_0000 | (*p & 0x00FF_FFFF);
                 }
-                let p = &mut frame.buf[(yy as u32 * w + xx as u32) as usize];
-                *p = 0xFF00_0000 | (*p & 0x00FF_FFFF);
             }
         }
     }

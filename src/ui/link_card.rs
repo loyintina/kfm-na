@@ -8,8 +8,9 @@
 //! parser_chain::slot_rect；内容随 scroll 卡内平移归本册——框不动
 //! 内容动，与 tmux 卡内滚同语言））。
 //!
-//! 连接段 = mini 卡头「连接 · 状态词」+ 四字段行（目标/本地口/重拉/
-//! 错误）+ [重连] 钮（杀娃重拉，不等退避）；**通道段**（2026-09-24
+//! 连接段 = mini 卡头「连接 · 状态词」+ 两字段行（目标/本地口——
+//! 2026-09-30 BAR-212 用户拍板：「重拉」「错误」两行提示没用，退役）
+//! 加 [重连] 钮（杀娃重拉，不等退避）；**通道段**（2026-09-24
 //! 用户裁决：原「服务」段——后端/在线/会话/错误+会话行——「没什么用」
 //! 退役，原位换四口连接状况 + 调试钮）= mini 卡头「通道 · 状态词」+
 //! 四字段行（数据9021/反连9022/QUIC62633/QUIC62694）+ 钮行半宽并排
@@ -34,22 +35,31 @@ use crate::ui::parser_page as pp;
 pub const FIELD_H: u32 = cc::FIELD_H;
 /// 字段行距
 pub const FIELD_GAP: u32 = cc::FIELD_GAP;
-/// 每列字段行数（左：目标/本地口/重拉/错误；右：数据9021/反连9022/
-/// QUIC62633/QUIC62694——2026-09-24 通道段改造，恒定四行不变）
-pub const N_FIELDS: usize = 4;
+/// 连接段字段行数（目标/本地口——2026-09-30 BAR-212：重拉/错误两行退役）
+pub const L_FIELDS: usize = 2;
+/// 通道段字段行数（数据9021/反连9022/QUIC62633/QUIC62694——2026-09-24
+/// 通道段改造，恒定四行不变）
+pub const R_FIELDS: usize = 4;
 /// 调试钮间横距（通道段尾两钮并排：半宽 + 一距）
 pub const BTN_GAP: u32 = pp::ROW_GAP;
 
 /// 字段行块高（N 行 + (N-1) 行距）
-const FIELDS_BLOCK: u32 = N_FIELDS as u32 * FIELD_H + (N_FIELDS as u32 - 1) * FIELD_GAP;
+const fn fields_block(n: u32) -> u32 {
+    n * FIELD_H + (n - 1) * FIELD_GAP
+}
+
+/// 连接段字段块高（两行）
+const LFIELDS_BLOCK: u32 = fields_block(L_FIELDS as u32);
+/// 通道段字段块高（四行）
+const RFIELDS_BLOCK: u32 = fields_block(R_FIELDS as u32);
 
 /// 连接段内容高（恒定）：mini 卡头 + 行距 + 字段块 + 行距 + [重连] 钮
-pub const LEFT_H: u32 = pp::ROW_H + pp::ROW_GAP + FIELDS_BLOCK + pp::ROW_GAP + pp::BTN_H;
+pub const LEFT_H: u32 = pp::ROW_H + pp::ROW_GAP + LFIELDS_BLOCK + pp::ROW_GAP + pp::BTN_H;
 
 /// 通道段内容高（恒定，2026-09-24 通道段改造：会话行表退役——四口
 /// 状态恒定四行 + 调试钮行）：mini 卡头 + 行距 + 字段块 + 行距 +
 /// 钮行（[跳闸/投 QUIC] + [重启] 半宽并排）
-pub const RIGHT_H: u32 = pp::ROW_H + pp::ROW_GAP + FIELDS_BLOCK + pp::ROW_GAP + pp::BTN_H;
+pub const RIGHT_H: u32 = pp::ROW_H + pp::ROW_GAP + RFIELDS_BLOCK + pp::ROW_GAP + pp::BTN_H;
 
 /// 卡高账（A 档纯函数，恒定）：PAD_V·2 + 连接段 + 段距 + 通道段
 pub fn card_h() -> u32 {
@@ -62,14 +72,14 @@ pub struct LinkLayout {
     pub card: PoolRect,
     /// 连接段 mini 卡头「连接 · 状态词」
     pub lheader: PoolRect,
-    /// 连接段四字段行
-    pub lfields: [PoolRect; N_FIELDS],
+    /// 连接段两字段行（目标/本地口）
+    pub lfields: [PoolRect; L_FIELDS],
     /// [重连] 钮（连接段尾）
     pub button: PoolRect,
     /// 通道段 mini 卡头「通道 · 状态词」
     pub rheader: PoolRect,
     /// 通道段四字段行（四口状态）
-    pub rfields: [PoolRect; N_FIELDS],
+    pub rfields: [PoolRect; R_FIELDS],
     /// [跳闸/投 QUIC] 调试钮（通道段尾左半；钮面/可点裁决归
     /// svc_card::toggle_verdict——本册只给几何/命中）
     pub qbutton: PoolRect,
@@ -101,19 +111,16 @@ pub fn layout_in(card: PoolRect, scroll: i64) -> LinkLayout {
         w: cw,
         h: pp::ROW_H,
     };
-    let fields = |y: i64| -> [PoolRect; N_FIELDS] {
-        std::array::from_fn(|i| PoolRect {
-            x: cx,
-            y: y + (FIELD_H + FIELD_GAP) as i64 * i as i64,
-            w: cw,
-            h: FIELD_H,
-        })
-    };
     // 连接段
     let lheader = header(y0);
     let fy = y0 + i64::from(pp::ROW_H + pp::ROW_GAP);
-    let lfields = fields(fy);
-    let by = fy + i64::from(FIELDS_BLOCK + pp::ROW_GAP);
+    let lfields: [PoolRect; L_FIELDS] = std::array::from_fn(|i| PoolRect {
+        x: cx,
+        y: fy + (FIELD_H + FIELD_GAP) as i64 * i as i64,
+        w: cw,
+        h: FIELD_H,
+    });
+    let by = fy + i64::from(LFIELDS_BLOCK + pp::ROW_GAP);
     let button = PoolRect {
         x: cx,
         y: by,
@@ -124,8 +131,13 @@ pub fn layout_in(card: PoolRect, scroll: i64) -> LinkLayout {
     let ry = by + i64::from(pp::BTN_H + pp::ROW_GAP);
     let rheader = header(ry);
     let rfy = ry + i64::from(pp::ROW_H + pp::ROW_GAP);
-    let rfields = fields(rfy);
-    let by2 = rfy + i64::from(FIELDS_BLOCK + pp::ROW_GAP);
+    let rfields: [PoolRect; R_FIELDS] = std::array::from_fn(|i| PoolRect {
+        x: cx,
+        y: rfy + (FIELD_H + FIELD_GAP) as i64 * i as i64,
+        w: cw,
+        h: FIELD_H,
+    });
+    let by2 = rfy + i64::from(RFIELDS_BLOCK + pp::ROW_GAP);
     let half_w = cw.saturating_sub(BTN_GAP) / 2;
     let qbutton = PoolRect {
         x: cx,

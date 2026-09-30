@@ -29,6 +29,9 @@ pub enum ChainCardId {
     Link,
     /// 环境卡（左滚动区）
     Sys,
+    /// 信箱入口卡（BAR-212：常驻左下——与 tmux 卡镜像的钉底件，
+    /// 卡高恒定 mail_card::card_h）
+    Mail,
 }
 
 /// 区（卡→区 = 注册表静态声明，卡自身零感知）
@@ -38,8 +41,11 @@ pub enum Region {
     Dock,
     /// 右上滚动区（常驻槽之上，右列剩余纵段）
     RightTop,
-    /// 左滚动区（页全区减去右列与列距）
+    /// 左滚动区（页全区减去右列与列距，再减去左下常驻槽纵段）
     Left,
+    /// 左下常驻区（BAR-212 信箱入口卡，钉视口底，不滚——与 Dock
+    /// 镜像：常驻槽几何语义同一份，左右分列）
+    LeftDock,
 }
 
 /// 注册槽：region = 归属区；gap_before = 与**区内**上一卡的间距
@@ -67,6 +73,11 @@ pub static CHAIN: &[ChainSlot] = &[
         region: Region::Left,
         gap_before: 0,
     },
+    ChainSlot {
+        id: ChainCardId::Mail,
+        region: Region::LeftDock,
+        gap_before: 0,
+    },
 ];
 
 /// 右列宽比（宪法 §四 v3，2026-09-21 用户拍板「还是占半屏合适」——
@@ -90,6 +101,7 @@ pub struct ChainHeights {
     pub tmux: u32,
     pub link: u32,
     pub sys: u32,
+    pub mail: u32,
 }
 
 impl ChainHeights {
@@ -98,6 +110,7 @@ impl ChainHeights {
             ChainCardId::Tmux => self.tmux,
             ChainCardId::Link => self.link,
             ChainCardId::Sys => self.sys,
+            ChainCardId::Mail => self.mail,
         }
     }
 }
@@ -112,6 +125,7 @@ pub fn heights(tmux: u32, sys_h: u32) -> ChainHeights {
         tmux,
         link: link_card::card_h(),
         sys: sys_h,
+        mail: crate::ui::mail_card::card_h(),
     }
 }
 
@@ -128,12 +142,14 @@ pub struct Scrolls {
 pub struct Regions {
     /// 页全区（池区上吞标题行后）
     pub area: PoolRect,
-    /// 左滚动区窗口
+    /// 左滚动区窗口（BAR-212 起 = 区顶 → 左下常驻槽顶 − DOCK_GAP）
     pub left: PoolRect,
     /// 右上滚动区窗口
     pub right_top: PoolRect,
     /// 常驻槽（tmux 卡外框，已钉视口底）
     pub dock: PoolRect,
+    /// 左下常驻槽（BAR-212 信箱入口卡外框，钉视口底——dock 镜像）
+    pub left_dock: PoolRect,
 }
 
 /// 页全区（v1 layout_vp 的页级几何收编本册）：池区 + 上吞标题行
@@ -150,7 +166,8 @@ pub fn page_area(screen_w: u32, screen_h: u32, bottom_inset: u32) -> PoolRect {
 /// 三区几何唯一源。visible_bottom = 键盘感知可视底（parser_page::
 /// visible_bottom 同一份尺）；tmux_h = tmux 卡自报高（tmux_card_h——
 /// 封顶视口由调用方以 cap 喂入）。常驻槽钉底：dock.y = 可视底 − 卡高；
-/// 右上区 = 区顶 → 槽顶 − DOCK_GAP；左区 = 区顶 → 可视底。
+/// 右上区 = 区顶 → 槽顶 − DOCK_GAP；左下常驻槽（BAR-212 信箱入口卡，
+/// 卡高恒定 mail_card::card_h）同律钉底；左区 = 区顶 → 左槽顶 − DOCK_GAP。
 pub fn regions(
     screen_w: u32,
     screen_h: u32,
@@ -173,17 +190,26 @@ pub fn regions(
         w: cw,
         h: (dock.y - i64::from(DOCK_GAP) - area.y).max(0) as u32,
     };
+    let lw = area.w.saturating_sub(cw + REGION_GAP);
+    let mail_h = crate::ui::mail_card::card_h();
+    let left_dock = PoolRect {
+        x: area.x,
+        y: visible_bottom - i64::from(mail_h),
+        w: lw,
+        h: mail_h,
+    };
     let left = PoolRect {
         x: area.x,
         y: area.y,
-        w: area.w.saturating_sub(cw + REGION_GAP),
-        h: (visible_bottom - area.y).max(0) as u32,
+        w: lw,
+        h: (left_dock.y - i64::from(DOCK_GAP) - area.y).max(0) as u32,
     };
     Regions {
         area,
         left,
         right_top,
         dock,
+        left_dock,
     }
 }
 
@@ -196,12 +222,13 @@ pub fn region_of(id: ChainCardId) -> Region {
         .region
 }
 
-/// 区窗口（Region → 对应几何；Dock = 常驻槽）
+/// 区窗口（Region → 对应几何；Dock/LeftDock = 常驻槽）
 pub fn window_of(region: Region, r: &Regions) -> &PoolRect {
     match region {
         Region::Dock => &r.dock,
         Region::RightTop => &r.right_top,
         Region::Left => &r.left,
+        Region::LeftDock => &r.left_dock,
     }
 }
 
@@ -226,10 +253,10 @@ fn slot_top_in(region: Region, id: ChainCardId, h: &ChainHeights) -> i64 {
     panic!("未注册链卡 {id:?}——CHAIN 漏席 = 装配错误")
 }
 
-/// 区滚动上限（两本账各自的 max 唯一源；Dock 恒 0——常驻不滚）
+/// 区滚动上限（两本账各自的 max 唯一源；Dock/LeftDock 恒 0——常驻不滚）
 pub fn scroll_max(id: ChainCardId, r: &Regions, h: &ChainHeights) -> i64 {
     let region = region_of(id);
-    if region == Region::Dock {
+    if region == Region::Dock || region == Region::LeftDock {
         return 0;
     }
     let win = window_of(region, r);
@@ -247,7 +274,7 @@ pub fn scroll_max(id: ChainCardId, r: &Regions, h: &ChainHeights) -> i64 {
 pub fn slot_rect(id: ChainCardId, r: &Regions, h: &ChainHeights, s: &Scrolls) -> PoolRect {
     let region = region_of(id);
     let win = window_of(region, r);
-    if region == Region::Dock {
+    if region == Region::Dock || region == Region::LeftDock {
         return win.clone();
     }
     if region == Region::RightTop {
@@ -260,7 +287,7 @@ pub fn slot_rect(id: ChainCardId, r: &Regions, h: &ChainHeights, s: &Scrolls) ->
     }
     let raw = match region {
         Region::Left => s.left,
-        Region::RightTop | Region::Dock => unreachable!(),
+        Region::RightTop | Region::Dock | Region::LeftDock => unreachable!(),
     };
     let eff = raw.clamp(0, scroll_max(id, r, h));
     PoolRect {

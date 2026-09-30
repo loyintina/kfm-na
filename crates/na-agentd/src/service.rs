@@ -16,6 +16,9 @@ use na_agent::session::{self, SessionWriter};
 
 pub struct AgentService {
     pub session_root: String,
+    /// 信箱根（BAR-212：迁家 /root/90-信箱 后的两册挂这下面；
+    /// main.rs 吃 NA_AGENT_MAIL_ROOT 覆盖，测试直改字段指 tempdir）
+    pub mail_root: String,
     pub provider_json: String,
     pub max_rounds: u32,
     /// v1 全局串行闸：append-only 会话文件不许多线程交错写
@@ -28,18 +31,25 @@ pub struct SendOutcome {
     pub session_path: String,
 }
 
-/// 信件列表条目（BAR-174：mtime = 增量同步比对键，unix 秒，取不到给 0）
+/// 信件列表条目（BAR-174：mtime = 增量同步比对键，unix 秒，取不到给 0；
+/// BAR-212 增 time/from/to/title 四个信头解析字段——增量字段，旧客户端
+/// 只读 name/bytes/mtime 不断；缺字头字段给 ""）
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LetterMeta {
     pub name: String,
     pub bytes: u64,
     pub mtime: u64,
+    pub time: String,
+    pub from: String,
+    pub to: String,
+    pub title: String,
 }
 
 impl AgentService {
     pub fn new(session_root: &str, provider_json: &str) -> Self {
         Self {
             session_root: session_root.to_string(),
+            mail_root: DEFAULT_MAIL_ROOT.to_string(),
             provider_json: provider_json.to_string(),
             max_rounds: agent::DEFAULT_MAX_ROUNDS,
             send_lock: Mutex::new(()),
@@ -199,17 +209,21 @@ impl AgentService {
     }
 
     /// 信箱 key → 根路径映射表（BAR-167，fail-closed：不在表里的 key
-    /// 一律 None → 路由层 404，不开任意路径口）
+    /// 一律 None → 路由层 404，不开任意路径口；
+    /// BAR-212 增 main-book/na-book 两册挂 mail_root 下，旧两 key 不动）
     pub fn inbox_root(&self, key: &str) -> Option<String> {
         match key {
             "mailbox" => Some(format!("{}/{}", self.session_root, session::MAILBOX_DIR)),
             "agent-inbox" => Some(AGENT_INBOX_ROOT.to_string()),
+            "main-book" => Some(format!("{}/00-主册", self.mail_root)),
+            "na-book" => Some(format!("{}/10-NA信箱", self.mail_root)),
             _ => None,
         }
     }
 
     /// 点名信箱的信件列表（README.md 是规范不是信，除外）：
-    /// [(名, 字节, mtime unix 秒)]——BAR-174 起吃 file_meta 不再逐封整读
+    /// [(名, 字节, mtime unix 秒)]——BAR-174 起吃 file_meta 不再逐封整读；
+    /// BAR-212 增信头四字段：只读文件头部几 KB 解析，仍不整读
     pub fn list_inbox_letters(&self, key: &str) -> Result<Vec<LetterMeta>, String> {
         let Some(dir) = self.inbox_root(key) else {
             return Err(format!("信箱 key 未知: {key:?}"));
@@ -218,11 +232,21 @@ impl AgentService {
         let mut out = Vec::new();
         for name in host.list_files(&dir)? {
             if valid_letter_name(&name) {
+                let path = format!("{dir}/{name}");
                 let (bytes, mtime) = host
-                    .file_meta(&format!("{dir}/{name}"))
+                    .file_meta(&path)
                     .map(|m| (m.bytes, m.mtime))
                     .unwrap_or((0, 0));
-                out.push(LetterMeta { name, bytes, mtime });
+                let (title, time, from, to) = parse_letter_head(&read_head(&path));
+                out.push(LetterMeta {
+                    name,
+                    bytes,
+                    mtime,
+                    time,
+                    from,
+                    to,
+                    title,
+                });
             }
         }
         out.sort_by(|a, b| a.name.cmp(&b.name));
@@ -243,10 +267,129 @@ impl AgentService {
         host.read_file(&format!("{dir}/{name}"))
             .map_err(|_| format!("信件 {name} 不存在"))
     }
+
+    /// 点名信箱的摘要批量面（BAR-212 懒加载）：[(名, 摘要, mtime unix 秒)]。
+    /// mtime 与列表端点同口径（file_meta，取不到给 0）——客户端摘要缓存
+    /// 按 (name, mtime) 对账，信变了摘要作废重取。
+    /// 非法名跳过不连坐；信不在盘上同样跳过（列表与点名之间的删除竞态不算错）
+    pub fn inbox_summaries(
+        &self,
+        key: &str,
+        names: &[String],
+    ) -> Result<Vec<(String, String, u64)>, String> {
+        let Some(dir) = self.inbox_root(key) else {
+            return Err(format!("信箱 key 未知: {key:?}"));
+        };
+        let host = StdHost::new(Path::new(&dir).to_path_buf());
+        let mut out = Vec::new();
+        for name in names {
+            if !valid_letter_name(name) {
+                continue;
+            }
+            let path = format!("{dir}/{name}");
+            let Ok(text) = host.read_file(&path) else {
+                continue;
+            };
+            let mtime = host.file_meta(&path).map(|m| m.mtime).unwrap_or(0);
+            out.push((name.clone(), extract_summary(&text), mtime));
+        }
+        Ok(out)
+    }
 }
 
-/// 全局评审信箱根（BAR-167：kfmv4 仓只读引用，na 侧只读不写）
-pub const AGENT_INBOX_ROOT: &str = "/root/kfmv4/docs/ledger/agent-inbox";
+/// 全局评审信箱根（BAR-167：主册只读引用，na 侧只读不写；
+/// 2026-09-30 随信箱正迁改指 /root/90-信箱/00-主册——旧 /root/kfmv4 路径
+/// 随仓迁 /root/10-项目/kfmv4 失效，chain spec_bar167_端点_agentinbox真根
+/// 红定罪）
+pub const AGENT_INBOX_ROOT: &str = "/root/90-信箱/00-主册";
+
+/// 信箱迁家后的默认根（BAR-212：main-book/na-book 两册挂这下面；
+/// 覆盖口 = NA_AGENT_MAIL_ROOT 环境变量，照 NA_AGENT_SESSION_ROOT 先例）
+pub const DEFAULT_MAIL_ROOT: &str = "/root/90-信箱";
+
+/// 信头解析只读文件头部这么多字节（v2.1 字头远在窗口内，不整读）
+const HEAD_CAP: usize = 8 * 1024;
+
+/// 摘要面字符上限（BAR-212：按字符安全截断）
+pub const SUMMARY_MAX_CHARS: usize = 120;
+
+/// 读文件头部（≤HEAD_CAP 字节；打不开给空串，下游解析全字段落空）
+fn read_head(path: &str) -> String {
+    use std::io::Read;
+    let mut buf = Vec::new();
+    if let Ok(f) = std::fs::File::open(path) {
+        let _ = f.take(HEAD_CAP as u64).read_to_end(&mut buf);
+    }
+    String::from_utf8_lossy(&buf).into_owned()
+}
+
+/// v2.1 信头解析（BAR-212）：(H1 标题, 日期, 从, 致)，缺字段一律 ""
+fn parse_letter_head(head: &str) -> (String, String, String, String) {
+    fn quote_value<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+        let body = line.strip_prefix('>')?.trim_start();
+        let v = body.strip_prefix(key)?.strip_prefix(':')?;
+        Some(v.trim())
+    }
+    let (mut title, mut time, mut from, mut to) =
+        (String::new(), String::new(), String::new(), String::new());
+    for line in head.lines() {
+        if title.is_empty()
+            && let Some(t) = line.strip_prefix("# ")
+        {
+            title = t.trim().to_string();
+        }
+        if time.is_empty()
+            && let Some(v) = quote_value(line, "日期")
+        {
+            time = v.to_string();
+        }
+        if from.is_empty()
+            && let Some(v) = quote_value(line, "从")
+        {
+            from = v.to_string();
+        }
+        if to.is_empty()
+            && let Some(v) = quote_value(line, "致")
+        {
+            to = v.to_string();
+        }
+    }
+    (title, time, from, to)
+}
+
+/// 摘要提取（BAR-212）：`^## 摘要` 段到下一个 `^##` 前；丢占位提示行
+/// （`> 注意` 开头）、空行、LETTER-TOKEN 注释行；剩余行空格连接，
+/// 字符安全截断到 SUMMARY_MAX_CHARS。无摘要块 → ""
+pub fn extract_summary(text: &str) -> String {
+    let mut in_summary = false;
+    let mut parts: Vec<&str> = Vec::new();
+    for line in text.lines() {
+        let line = line.trim_end();
+        if line.starts_with("##") {
+            if in_summary {
+                break;
+            }
+            if line
+                .trim_start_matches('#')
+                .trim_start()
+                .starts_with("摘要")
+            {
+                in_summary = true;
+            }
+            continue;
+        }
+        if !in_summary {
+            continue;
+        }
+        let t = line.trim();
+        if t.is_empty() || t.starts_with("> 注意") || t.contains("<!-- LETTER-TOKEN") {
+            continue;
+        }
+        parts.push(t);
+    }
+    let joined = parts.join(" ");
+    joined.chars().take(SUMMARY_MAX_CHARS).collect()
+}
 
 /// 尾部 n 非空行
 fn tail_lines(text: &str, n: usize) -> Vec<String> {

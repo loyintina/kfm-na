@@ -27,6 +27,7 @@ pub mod install;
 pub mod keybar;
 pub mod keymap;
 pub mod local_pty;
+pub mod mail_feed;
 pub mod na_server_sup;
 pub mod offline_keys;
 pub mod plugins;

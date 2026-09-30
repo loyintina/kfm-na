@@ -49,6 +49,12 @@ pub enum Route {
         key: String,
         name: String,
     },
+    /// 点名信箱的摘要批量面（BAR-212 懒加载：?names=逗号分隔信名；
+    /// names 缺省 = None → 路由层 400）
+    InboxSummaries {
+        key: String,
+        names: Option<Vec<String>>,
+    },
     NotFound,
 }
 
@@ -86,6 +92,10 @@ pub fn route(method: &str, path: &str) -> Route {
         ("GET", ["api", "agent", "inboxes", key, "letters", name]) => Route::InboxLetter {
             key: pct_decode(key),
             name: pct_decode(name),
+        },
+        ("GET", ["api", "agent", "inboxes", key, "summaries"]) => Route::InboxSummaries {
+            key: pct_decode(key),
+            names: parse_names(query),
         },
         _ => Route::NotFound,
     }
@@ -132,6 +142,25 @@ fn parse_n(query: &str) -> usize {
         }
     }
     50
+}
+
+/// summaries 的 ?names=<逗号分隔信名>（BAR-212）：整个值先百分号解码
+/// （中文名 %XX 两吃，与路径段同规矩）再按逗号切；参数缺席 = None（400 语义）
+fn parse_names(query: &str) -> Option<Vec<String>> {
+    for kv in query.split('&') {
+        if let Some(v) = kv.strip_prefix("names=") {
+            let decoded = pct_decode(v);
+            return Some(
+                decoded
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+                    .collect(),
+            );
+        }
+    }
+    None
 }
 
 /// 解析请求头（A 档纯函数）：(method, path, content_length)
