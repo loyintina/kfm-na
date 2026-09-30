@@ -19,7 +19,7 @@
 # ssh 路 = na-ssh.sh 统一入口(2026-09-23 起 9022 首选/8024 备援,不再写死)。
 # 串口用 NA_ADB_SERIAL 覆盖(默认 localhost:5555)。
 
-NA_KEY=/root/.ssh/na_probe_key
+NA_KEY=$HOME/.ssh/na_probe_key
 NA_TMP=/data/data/dev.kfm.na/files/usr/tmp
 NA_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
@@ -27,7 +27,7 @@ NA_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$(dirname "${BASH_SOURCE[0]}")/na-ssh.sh"
 
 NA_TRANSPORT=${NA_TRANSPORT:-ssh}
-NA_ADB=${NA_ADB:-/root/40-资产/kfm-na-toolchain/sdk/platform-tools/adb}
+NA_ADB=${NA_ADB:-$HOME/40-资产/kfm-na-toolchain/sdk/platform-tools/adb}
 NA_ADB_SERIAL=${NA_ADB_SERIAL:-localhost:5555}
 
 gate() {

@@ -15,7 +15,7 @@
 set -euo pipefail
 
 source "$(dirname "$0")/lib/gate-lib.sh"
-PY=/root/.venvs/video/bin/python  # PIL+numpy（font venv 无 numpy）
+PY=$HOME/.venvs/video/bin/python  # PIL+numpy（font venv 无 numpy）
 
 gate "rm -f $NA_TMP/panend-a*.rgb $NA_TMP/panend-b.rgb $NA_TMP/panend.dim; touch $NA_TMP/panend-cap-req"
 echo "已点播。请触发一次平移（下池点行=Upper / 切标签=Page）…"

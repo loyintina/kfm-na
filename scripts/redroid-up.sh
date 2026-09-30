@@ -14,7 +14,7 @@
 #   bash scripts/redroid-up.sh --recreate # 销毁重建容器(数据清盘)
 set -euo pipefail
 
-ADB=/root/40-资产/kfm-na-toolchain/sdk/platform-tools/adb
+ADB=$HOME/40-资产/kfm-na-toolchain/sdk/platform-tools/adb
 IMAGE=redroid/redroid:12.0.0_64only-latest
 NAME=redroid12
 SERIAL=localhost:5555
@@ -90,7 +90,7 @@ fi
 #   host 127.0.0.1:8021 kfmv4。两臂都是幂等保活：host 侧靠 pgrep 查活，
 # 容器侧重推脚本 + 查监听。
 if ! pgrep -f 'redroid-report-relay.py' >/dev/null; then
-    nohup /root/.venvs/font/bin/python \
+    nohup $HOME/.venvs/font/bin/python \
         "$(dirname "$0")/redroid-report-relay.py" \
         >/tmp/redroid-relay.log 2>&1 &
     ok "host 报表中继已拉起（/tmp/redroid-relay.log）"

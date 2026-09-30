@@ -63,8 +63,8 @@ fn spec_bar164_凭证_报错文本永不泄token() {
 #[test]
 fn spec_bar164_凭证_路径形状() {
     assert_eq!(
-        oauth::credential_path("/root/.kimi-code", "kimi-code"),
-        "/root/.kimi-code/credentials/kimi-code.json"
+        oauth::credential_path("/srv/kimi-code", "kimi-code"),
+        "/srv/kimi-code/credentials/kimi-code.json"
     );
 }
 

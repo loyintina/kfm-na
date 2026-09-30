@@ -1,6 +1,6 @@
 //! plugins/input_ime.rs — 输入/IME 域插件（规格书 §3 第一批最后一域）
 //!
-//! 设计页：`/root/30-实验/dsh-na/na/input-ime.md`（v0.1，方案 A
+//! 设计页（na 方向档案）：`input-ime.md`（v0.1，方案 A
 //! 批准）。契约考题：tests/input_ime_spec.rs（考题 4-8）。
 //!
 //! 形态（规格书 v1.2 §4.2 判别准则）：两个服务都是 Sync 内部可变 →

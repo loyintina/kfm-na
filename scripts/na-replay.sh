@@ -6,7 +6,7 @@
 #
 # 原理:na 侧 flight-rec.bin(输出流+尺寸事件+时间戳)→ scp 拉回 →
 # src/bin/na-replay.rs 喂进 host 侧同一台 TermView 复现。
-# 前提:na 隧道活着(na-ssh.sh:9022 首选/8024 备援),探针钥匙 /root/.ssh/na_probe_key。
+# 前提:na 隧道活着(na-ssh.sh:9022 首选/8024 备援),探针钥匙 $HOME/.ssh/na_probe_key。
 set -euo pipefail
 
 NA_TMP=/data/data/dev.kfm.na/files/usr/tmp

@@ -16,7 +16,7 @@
 #
 # 解析：nc 探 9022 → 通则用之；不通退 8024；双不通返回非零（调用方按不可达处理）。
 
-NA_KEY=${NA_KEY:-/root/.ssh/na_probe_key}
+NA_KEY=${NA_KEY:-$HOME/.ssh/na_probe_key}
 
 na_gate_port() {
     if [[ -z ${NA_GATE_PORT:-} ]]; then

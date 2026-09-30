@@ -30,7 +30,7 @@ pub enum RouteKey {
     Mailbox,
     /// BAR-167 工单③：全局评审信箱（agentd inbox_root 映射表同表）
     AgentInbox,
-    /// BAR-212：00-主册（/root/90-信箱 新资产，agentd key=main-book）
+    /// BAR-212：00-主册（$HOME/90-信箱 下的服务器级资产，agentd key=main-book）
     MainBook,
     /// BAR-212：10-NA信箱（agentd key=na-book）
     NaBook,

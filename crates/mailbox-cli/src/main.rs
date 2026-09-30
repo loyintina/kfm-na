@@ -44,8 +44,25 @@ use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::{Command, exit};
 
-const DEFAULT_MAILBOX: &str = "/root/.kfm/session/信箱";
-const MAIN_BOOK: &str = "/root/90-信箱/00-主册";
+/// $HOME（缺省 `/root`——systemd 服务不设 HOME 时的 uid 0 习惯位；空串按未设算）
+fn home() -> String {
+    std::env::var("HOME")
+        .ok()
+        .filter(|h| !h.is_empty())
+        .unwrap_or_else(|| "/root".into())
+}
+
+/// na 册信箱根缺省：env `KFM_NA_MAILBOX` 优先（scripts/check/mailbox.sh 同名口），
+/// 否则 `$HOME/.kfm/session/信箱`——2026-09-30 边界审计：原写死作者机器路径
+fn default_mailbox() -> String {
+    std::env::var("KFM_NA_MAILBOX").unwrap_or_else(|_| format!("{}/.kfm/session/信箱", home()))
+}
+
+/// 主册路径缺省：env `KFM_MAIN_BOOK` 优先，否则 `$HOME/90-信箱/00-主册`
+/// （同一审计；主册是跨线共享设施，机器侧由 env 指位）
+fn main_book() -> String {
+    std::env::var("KFM_MAIN_BOOK").unwrap_or_else(|_| format!("{}/90-信箱/00-主册", home()))
+}
 /// na 册存量信命名前缀默认词表（--name-prefix 覆盖）
 const DEFAULT_NAME_PREFIX: &str = "kfm-na|na";
 
@@ -151,10 +168,11 @@ fn read_opt(p: &Path) -> Option<String> {
 
 /// 名册解析：--roster > <dir>/roster.json > 主册 roster.json（JS resolveRoster 同款）
 fn resolve_roster(args: &Args, dir: &Path) -> Option<Roster> {
+    let main_book = main_book();
     let candidates = [
         args.opt("roster").map(PathBuf::from),
         Some(dir.join("roster.json")),
-        Some(Path::new(MAIN_BOOK).join("roster.json")),
+        Some(Path::new(&main_book).join("roster.json")),
     ];
     candidates
         .into_iter()
@@ -164,8 +182,9 @@ fn resolve_roster(args: &Args, dir: &Path) -> Option<Roster> {
 
 /// 状态词表出处文本：信箱 README > 主册 README > 空串
 fn resolve_readme(mailbox: &Path) -> String {
+    let main_book = main_book();
     read_opt(&mailbox.join("README.md"))
-        .or_else(|| read_opt(&Path::new(MAIN_BOOK).join("README.md")))
+        .or_else(|| read_opt(&Path::new(&main_book).join("README.md")))
         .unwrap_or_default()
 }
 
@@ -241,12 +260,13 @@ fn resolve_book_sorting(args: &Args, mailbox: &Path) -> Result<String, String> {
         return Ok(e);
     }
     let canon = fs::canonicalize(mailbox).unwrap_or_else(|_| mailbox.to_path_buf());
-    let main_canon = fs::canonicalize(MAIN_BOOK).unwrap_or_else(|_| PathBuf::from(MAIN_BOOK));
+    let main_book = main_book();
+    let main_canon = fs::canonicalize(&main_book).unwrap_or_else(|_| PathBuf::from(&main_book));
     if canon == main_canon {
         return Ok("MAIN".to_string());
     }
     Err(format!(
-        "警告：--mailbox {} 不是本仓主册（{MAIN_BOOK}）且无册身份文件（缺 {}）——不静默按 MAIN 兜底；请落 {{\"sorting\":\"…\",\"name\":\"…\"}} 身份文件，或显式传 --book-sorting <码>（契约 §六《册身份》）",
+        "警告：--mailbox {} 不是本仓主册（{main_book}）且无册身份文件（缺 {}）——不静默按 MAIN 兜底；请落 {{\"sorting\":\"…\",\"name\":\"…\"}} 身份文件，或显式传 --book-sorting <码>（契约 §六《册身份》）",
         mailbox.display(),
         mailbox.join(".mailbox.json").display()
     ))
@@ -327,7 +347,9 @@ fn strict_pools(args: &Args) -> bool {
 }
 
 fn mailbox_of(args: &Args) -> PathBuf {
-    PathBuf::from(args.opt("mailbox").unwrap_or(DEFAULT_MAILBOX))
+    args.opt("mailbox")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(default_mailbox()))
 }
 
 /// 写者分区闸（BAR-177 必修③）：主册回写归 kfmv4 侧 gen-agent-inbox.mjs
@@ -335,11 +357,12 @@ fn mailbox_of(args: &Args) -> PathBuf {
 /// 路径（new/gen/reticket）指向主册一律拒
 fn reject_main_book_write(p: &str, mailbox: &Path) {
     let canon = fs::canonicalize(mailbox).unwrap_or_else(|_| mailbox.to_path_buf());
-    let main_canon = fs::canonicalize(MAIN_BOOK).unwrap_or_else(|_| PathBuf::from(MAIN_BOOK));
+    let main_book = main_book();
+    let main_canon = fs::canonicalize(&main_book).unwrap_or_else(|_| PathBuf::from(&main_book));
     if canon == main_canon {
         die(
             p,
-            "写者分区：--mailbox 指向主册（/root/90-信箱/00-主册）时本器拒绝写入——主册回写归设施侧 gen-agent-inbox.mjs（只许 --check-only）",
+            "写者分区：--mailbox 指向主册时本器拒绝写入——主册回写归设施侧 gen-agent-inbox.mjs（只许 --check-only）",
         );
     }
 }
@@ -880,7 +903,10 @@ fn cmd_scan(args: &Args) {
         ),
     };
     let na_book = mailbox_of(args);
-    let main_book = PathBuf::from(args.opt("main-book").unwrap_or(MAIN_BOOK));
+    let main_book = args
+        .opt("main-book")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(main_book()));
     let na_letters = load_letters(&na_book);
     let main_letters = load_letters(&main_book);
     let mut books: Vec<(&str, &[LetterText])> = vec![("NA", &na_letters)];
@@ -1053,7 +1079,10 @@ fn cmd_reticket(args: &Args) {
         window_blocks.push(format!("状态已翻「{status}」（非待*）"));
     }
     let mut repliers: Vec<String> = vec![];
-    let main_book = PathBuf::from(args.opt("main-book").unwrap_or(MAIN_BOOK));
+    let main_book = args
+        .opt("main-book")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(main_book()));
     let digits_no = tm.no.trim_start_matches(|c: char| c.is_ascii_uppercase());
     let mut books: Vec<(&str, Vec<LetterText>)> = vec![("NA", load_letters(&mailbox))];
     if main_book.is_dir() {
@@ -1403,7 +1432,8 @@ fn cmd_withdraw(args: &Args) {
         Err(e) => die(p, &e),
     }
     .or_else(|| {
-        let main_canon = fs::canonicalize(MAIN_BOOK).unwrap_or_else(|_| PathBuf::from(MAIN_BOOK));
+        let main_book = main_book();
+        let main_canon = fs::canonicalize(&main_book).unwrap_or_else(|_| PathBuf::from(&main_book));
         (canon_mb == main_canon).then(|| "MAIN".to_string())
     });
     let text0 = read_opt(&lp).unwrap_or_default();
@@ -1425,8 +1455,8 @@ fn cmd_withdraw(args: &Args) {
     let peer_args = args.all("peer");
     let mut book_list: Vec<PathBuf> = vec![mailbox.clone()];
     if peer_args.is_empty() {
-        book_list.push(PathBuf::from(MAIN_BOOK));
-        book_list.push(PathBuf::from(DEFAULT_MAILBOX));
+        book_list.push(PathBuf::from(main_book()));
+        book_list.push(PathBuf::from(default_mailbox()));
     } else {
         book_list.extend(peer_args.iter().map(PathBuf::from));
     }
@@ -1728,11 +1758,11 @@ const USAGE: &str = "mailbox-cli — kfm-na 信箱工具链（逻辑核 mailbox-
                           ⑥重跑 gen 刷新投影 ⑦代撤须另行发信通告
 
 公共选项：
-  --mailbox <dir>       信箱根（默认 /root/.kfm/session/信箱）
+  --mailbox <dir>       信箱根（默认 env KFM_NA_MAILBOX，否则 $HOME/.kfm/session/信箱）
   --roster <path>       名册（默认 信箱/roster.json → 主册 roster.json）
   --name-prefix <re>    存量信命名前缀（默认 kfm-na|na）
   --v1-manifest <path>  v1 冻结名单（默认 信箱/archive-v1/manifest-v1.json → 信箱/manifest-v1.json）
-  --main-book <dir>     scan/reticket 的主册路径（默认 /root/90-信箱/00-主册）
+  --main-book <dir>     scan/reticket 的主册路径（默认 env KFM_MAIN_BOOK，否则 $HOME/90-信箱/00-主册）
   --book-sorting <码>   gen/reticket 的本册默认分拣码兜底（契约 §六《册身份》）：
                         册身份文件 <信箱>/.mailbox.json 的 sorting 优先；缺身份文件
                         一律按 MAIN 兜底，但 --mailbox 非本仓主册时要求显式给本项

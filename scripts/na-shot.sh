@@ -7,11 +7,11 @@
 # 链路:闸门(na-ssh.sh:9022 首选/8024 备援) touch 触发文件 → na 渲染循环下一帧倒 shot.rgb+shot.dim
 # → scp 拉回 → PIL 转 PNG(XRGB 小端 = B,G,R,X 字节序)。
 # 前提:na 装着带 screendump 的包且在前台活着(BAR-029 保活后后台也行);
-# PIL 用 /root/.venvs/font/bin/python。
+# PIL 用 $HOME/.venvs/font/bin/python。
 set -euo pipefail
 
 source "$(dirname "$0")/lib/gate-lib.sh"
-PY=/root/.venvs/font/bin/python
+PY=$HOME/.venvs/font/bin/python
 
 # redroid 云安卓平台差异（2026-09-11 实测，state.md redroid 条）：
 # shot-gl(GPU 回读)出来 180° 翻转，shot.rgb(CPU 重画)正常——

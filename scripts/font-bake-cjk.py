@@ -27,7 +27,7 @@
               X 向钉满半格左右缘（拼接件不许留边距），不用通用居中律。
 
 用法（开发期工具，不进 chain；产物 assets/fonts/*.ttf 直接进库）：
-  /root/.venvs/font/bin/python scripts/font-bake-cjk.py 源.otf 出.ttf
+  python3 scripts/font-bake-cjk.py 源.otf 出.ttf
 
 判卷（脚本尾自打印+断言）：槃/中/🌑/⠋/░/─/✅/E0B0/⚡/FFFD 的 cmap
 命中 + 墨迹非空；汉字总数（URO+ExtA+兼容）≥ 27900；体积 ≤ 15MB；
@@ -85,7 +85,7 @@ FFFD_CPS = [0xFFFD]
 FP_DONOR = os.environ.get("FP_DONOR", "assets/fonts/FusionPixelMono12-gb2312.ttf")
 DEJAVU_MONO = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
 DEJAVU_SANS = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-EMOJI_DONOR = "/root/40-资产/kfm-na-toolchain/fonts/NotoEmoji-Regular.ttf"
+EMOJI_DONOR = os.path.expanduser("~/40-资产/kfm-na-toolchain/fonts/NotoEmoji-Regular.ttf")
 
 
 def keep_unicodes():

@@ -2,7 +2,7 @@
 //! verify 负样本向量 / gen 投影 golden / next_number / block_field。
 //!
 //! golden 数据来源（非手编）：
-//! - fp：主册 `/root/90-信箱/00-主册/letter-tokens.jsonl` 真实票据 6 行
+//! - fp：主册 `$HOME/90-信箱/00-主册/letter-tokens.jsonl` 真实票据 6 行
 //!   （含 0016 换票行 renamedFrom）+ na 册 4 行旧票据；
 //! - gen 投影：JS gen-agent-inbox.mjs 对本目录 fixtures/gen 夹具实跑的回写产物
 //!   （README.post.md / letters-index.expected.jsonl 逐字节抄录）。
@@ -150,7 +150,7 @@ fn fp_golden_main_book_real_tickets() {
 
 #[test]
 fn fp_golden_na_book_legacy_tickets() {
-    // na 册 4 行旧票据（/root/.kfm/session/信箱/letter-tokens.jsonl 实录）
+    // na 册 4 行旧票据（$HOME/.kfm/session/信箱/letter-tokens.jsonl 实录）
     let cases = [
         (
             "0001",

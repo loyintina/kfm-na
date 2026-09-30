@@ -13,7 +13,8 @@ set -uo pipefail
 
 MINUTES=${1:-540}
 IV=${2:-300}
-LOG=/root/10-项目/kfm-na/overnight-power-$(date +%m%d).log
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+LOG="$REPO/overnight-power-$(date +%m%d).log"
 END=$(( $(date +%s) + MINUTES * 60 ))
 
 echo "# 过夜电耗采集 $(date '+%F %T') 起,${MINUTES}min×${IV}s | ts | 电量% 电流µA 状态 温度 | uptime fg cpu_jiffies rss_kb pump deaths |" >> "$LOG"
