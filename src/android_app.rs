@@ -9856,13 +9856,19 @@ impl App {
         let dc_pending = self.offline_keys.pending_bytes();
         let Some(g) = &mut self.gfx else { return };
         // 配置卡标签栏快照（宪法 §四）：视口宽按真实屏宽逐帧纠（捏合/
-        // 旋转后内容带宽度变）；弹簧读数随快照——游标动画帧自带新值
+        // 旋转后内容带宽度变）；BAR-205：实例格同站逐帧喂（锁序
+        // term→tab_bar——先取格放锁再锁栏），pinch 变格块宽即时随字；
+        // 弹簧读数随快照——游标动画帧自带新值
+        let tab_cell_w = th.as_ref().map(|t| t.lock().unwrap().cell_size().0);
         let mut tab_snap = self.tab_bar.as_ref().map(|b| {
             let mut g2 = b.lock().unwrap();
             if let Some(win) = &self.window {
                 g2.set_viewport_w(crate::ui::tab_bar::content_viewport_w(
                     win.inner_size().width,
                 ));
+            }
+            if let Some(w) = tab_cell_w {
+                g2.set_cell_w(w);
             }
             g2.snap(crate::report::boot_ms() as u64)
         });

@@ -40,10 +40,12 @@ pub const TAB_ROW_H: u32 = CELL_H * 2;
 /// 层只覆盖标签行区域（y 原点 = content_origin().1），游标滑行只脏
 /// 这一层（≈0.65MB vs 配置槽全页 14MB）
 pub const TAB_LAYER_H: u32 = TAB_ROW_H + 8;
-/// 标签文字两侧 padding 各 1 格
-pub const TAB_PAD_X: u32 = CELL_W;
-/// 标签间距 1 格
-pub const TAB_GAP: u32 = CELL_W;
+/// 标签文字两侧 padding 各 1 实例格 / 标签间距 1 实例格（BAR-205 栏随字：
+/// 设计基准 = CELL_W，运行时吃壳层逐帧喂的实例格——pinch 变格块宽随行，
+/// 旧账「块宽走设计常量 18、文字走实例格」在 zoom≠1 下必裁字）
+pub const TAB_PAD_CELLS: u32 = 1;
+/// 标签间距（格）
+pub const TAB_GAP_CELLS: u32 = 1;
 
 /// 内容区原点（咬格）：x = 环左内缘（MARGIN + 3 倍粗左缘）+ 1 格，
 /// y = 环上内缘（MARGIN + 细缘）+ 1 格。整卡内容布局的共同原点——
@@ -89,6 +91,9 @@ pub struct TabBar {
     scroll_px: i64,
     /// 可视视口宽（内容区宽；pan clamp / select 可见性的尺子）
     viewport_w: u32,
+    /// 实例格宽（BAR-205：壳层逐帧喂 TermEmu 现值——块宽/间距/padding
+    /// 的像素尺；缺省 CELL_W = 设计基准，zoom=1 时逐值等旧）
+    cell_w: u32,
     /// 光标弹簧：select 瞬间 from = 当时位置（重定基）
     cursor_from: f32,
     cursor_start_ms: u64,
@@ -107,10 +112,18 @@ impl TabBar {
             selected: 0,
             scroll_px: 0,
             viewport_w,
+            cell_w: CELL_W,
             cursor_from: tab_row_origin_x() as f32,
             cursor_start_ms: 0,
             colors: vec![FALLBACK; tabs.len()],
         }
+    }
+
+    /// 喂实例格宽（BAR-205：壳层 draw_frame 与 set_viewport_w 同站逐帧
+    /// 纠——pinch 变格即生效）。变格后内容宽变 → 横滚钳制重算
+    pub fn set_cell_w(&mut self, w: u32) {
+        self.cell_w = w.max(1);
+        self.scroll_px = self.scroll_px.clamp(self.min_scroll(), 0);
     }
 
     /// 喂标签色列（presence 召唤配置卡时逐标签 generate 的产物）；
@@ -144,7 +157,12 @@ impl TabBar {
 
     /// 全部标签的矩形（scroll 已平移；涂装与命中同这份——眼手同尺）
     pub fn tab_rects(&self) -> Vec<TabRect> {
-        rects_of(&self.tabs, self.scroll_px)
+        rects_of(&self.tabs, self.scroll_px, self.cell_w)
+    }
+
+    /// 单标签块宽（唯一尺）：(字格 + 两侧 padding 格) × 实例格
+    fn tab_w(&self, t: &str) -> u32 {
+        (grid_text_cells(t) + TAB_PAD_CELLS * 2) * self.cell_w
     }
 
     /// 未加 scroll 的基准 x（select 可见性/光标目标的计算尺）；
@@ -152,7 +170,7 @@ impl TabBar {
     fn base_x(&self, i: usize) -> i64 {
         let ox = tab_row_origin_x() as i64;
         self.tabs[..i].iter().fold(ox, |x, t| {
-            x + ((grid_text_cells(t) + 2) * CELL_W) as i64 + TAB_GAP as i64
+            x + self.tab_w(t) as i64 + (TAB_GAP_CELLS * self.cell_w) as i64
         })
     }
 
@@ -162,11 +180,7 @@ impl TabBar {
         if n == 0 {
             return 0;
         }
-        self.tabs
-            .iter()
-            .map(|t| (grid_text_cells(t) + 2) * CELL_W)
-            .sum::<u32>()
-            + (n - 1) * TAB_GAP
+        self.tabs.iter().map(|t| self.tab_w(t)).sum::<u32>() + (n - 1) * TAB_GAP_CELLS * self.cell_w
     }
 
     fn min_scroll(&self) -> i64 {
@@ -207,7 +221,7 @@ impl TabBar {
         // 光标贴内容不追赶）；scroll 没变时 from 不动 = 纯切换续弹
         let old_scroll = self.scroll_px;
         let bx = self.base_x(i);
-        let w = ((grid_text_cells(&self.tabs[i]) + 2) * CELL_W) as i64;
+        let w = self.tab_w(&self.tabs[i]) as i64;
         let vis_x = bx + self.scroll_px;
         if w >= self.viewport_w as i64 {
             self.scroll_px = -bx; // 标签比视口还宽：左缘对齐，右缘滚动看
@@ -250,6 +264,7 @@ impl TabBar {
             scroll_px: self.scroll_px,
             cursor_x: self.cursor_x(now_ms),
             colors: self.colors.clone(),
+            cell_w: self.cell_w,
             line_span: None,
         }
     }
@@ -263,6 +278,9 @@ pub struct TabBarSnap {
     pub scroll_px: i64,
     pub cursor_x: f32,
     pub colors: Vec<AccentPair>,
+    /// 实例格宽（BAR-205：涂装 rects_of 吃它——涂装与命中同一份几何的
+    /// 尺随 pinch；状态核 set_cell_w 喂入，快照随行）
+    pub cell_w: u32,
     /// 底线 x 起止（池区左右内缘，屏像素）——BAR-096 拆层后层画布
     /// 不知屏高/键盘 inset，此维由壳层每帧填（缺省 = 内容带）
     pub line_span: Option<(i64, i64)>,
@@ -270,20 +288,22 @@ pub struct TabBarSnap {
 
 /// 标签矩形序列（自由函数版：涂装侧从快照算，状态侧从 self 算——
 /// 同一实体，眼手同尺）。x 起点 = 标签行原点 61（四修 左缘对齐）；
-/// y 仍取内容原点行（55）
-pub fn rects_of(tabs: &[String], scroll_px: i64) -> Vec<TabRect> {
+/// y 仍取内容原点行（55）。cell_w = 实例格宽（BAR-205：块宽/间距尺，
+/// 涂装侧吃 snap.cell_w、状态侧吃 self.cell_w——同一份几何）
+pub fn rects_of(tabs: &[String], scroll_px: i64, cell_w: u32) -> Vec<TabRect> {
     let oy = content_origin().1;
     let mut x = tab_row_origin_x() as i64 + scroll_px;
+    let cw = cell_w.max(1);
     tabs.iter()
         .map(|t| {
-            let w = (grid_text_cells(t) + 2) * CELL_W;
+            let w = (grid_text_cells(t) + TAB_PAD_CELLS * 2) * cw;
             let r = TabRect {
                 x,
                 y: oy as i64,
                 w,
                 h: TAB_ROW_H,
             };
-            x += w as i64 + TAB_GAP as i64;
+            x += w as i64 + (TAB_GAP_CELLS * cw) as i64;
             r
         })
         .collect()

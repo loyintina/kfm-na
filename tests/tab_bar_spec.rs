@@ -177,14 +177,17 @@ fn spec_bar191_标签宽账吃引擎尺() {
 /// 内容视口宽公式 = 屏宽 − 原点 − 右内缘 37
 #[test]
 fn spec_tab_bar_常量与视口钉() {
-    use kfm_na::ui::tab_bar::{TAB_GAP, TAB_PAD_X, TAB_ROW_H, content_viewport_w};
+    use kfm_na::ui::tab_bar::{TAB_GAP_CELLS, TAB_PAD_CELLS, TAB_ROW_H, content_viewport_w};
     assert_eq!(
         TAB_ROW_H,
         CELL_H * 2,
         "标签行 = 2 格（§七，2026-09-12 实测拍板）"
     );
-    assert_eq!(TAB_PAD_X, CELL_W, "标签文字两侧各 1 格");
-    assert_eq!(TAB_GAP, CELL_W, "标签间距 1 格");
+    assert_eq!(
+        TAB_PAD_CELLS, 1,
+        "标签文字两侧各 1 格（BAR-205 起 = 实例格）"
+    );
+    assert_eq!(TAB_GAP_CELLS, 1, "标签间距 1 格（BAR-205 起 = 实例格）");
     assert_eq!(
         content_viewport_w(720),
         720 - 43 - 37,
@@ -219,7 +222,7 @@ fn spec_tab_bar_快照同源钉() {
         "弹簧终点 = 新标签视口 x"
     );
     assert_eq!(
-        rects_of(&snap.tabs, snap.scroll_px),
+        rects_of(&snap.tabs, snap.scroll_px, snap.cell_w),
         bar.tab_rects(),
         "自由函数与状态几何同源"
     );
@@ -302,4 +305,65 @@ fn spec_tab_bar_标签色列钉() {
     bar.set_colors(vec![pair_a]);
     assert_eq!(bar.selected_pair(), FALLBACK, "选中 1 缺色 → FALLBACK 兜底");
     assert_eq!(bar.snap(0).colors.len(), 2, "色列恒与标签等长");
+}
+
+// ---- BAR-205 栏随字动态加宽（用户真机报障：zoom 1.2778 下「系统管理」
+// 四字截断；定罪：块宽走设计常量 CELL_W=18，文字走实例格 23——
+// 8 格字 184px > 块 (8+2)×18=180px 必裁）----
+
+/// 钉 BAR-205①：块宽/间距/padding 全吃实例格（pinch 唯一缩放维联动）
+#[test]
+fn spec_bar205_块宽栏随字实例格() {
+    let mut bar = TabBar::new(&["系统管理", "组件池"], 720);
+    // 缺省 = CELL_W 旧尺逐值不变（零缩放零影响钉）
+    let d = bar.tab_rects()[0].clone();
+    assert_eq!(d.w, (grid_text_cells("系统管理") + 2) * CELL_W);
+    assert_eq!(
+        bar.content_w(),
+        (8 + 2) * CELL_W + CELL_W + (6 + 2) * CELL_W
+    );
+    // 实例格 23（用户 zoom 1.2778 现值）：块宽 = (8+2)×23 = 230；
+    // 字 8×23=184 + 两侧 padding 各 1 格 23 = 230——字不裁不贴边
+    bar.set_cell_w(23);
+    let r = bar.tab_rects()[0].clone();
+    assert_eq!(r.w, (8 + 2) * 23, "块宽 = (字格+2pad格)×实例格");
+    assert!(
+        8 * 23 + 2 * 23 <= r.w,
+        "字宽 + 两侧各 1 实例格 padding 必须 ≤ 块宽（贴边/截断回潮红）"
+    );
+    // 间距 = 1 实例格：第二标签 x = 首块右缘 + 23
+    let r2 = bar.tab_rects()[1].clone();
+    assert_eq!(r2.x, r.x + r.w as i64 + 23, "标签间距 = 1 实例格");
+    assert_eq!(r2.w, (6 + 2) * 23);
+    // 内容总宽/横滚账同尺
+    assert_eq!(bar.content_w(), 230 + 23 + 184, "content_w 同吃实例格");
+    // 变格后 min_scroll/横滚 clamp 不炸（content_w 变 → 钳制重算）
+    bar.pan(-10000.0);
+    let _ = bar.snap(0);
+}
+
+/// 钉 BAR-205②：涂装快照带实例格（眼手同尺——涂装 rect 与命中 rect
+/// 同一份几何的延伸：rects_of 涂装侧吃 snap.cell_w）
+#[test]
+fn spec_bar205_快照带实例格() {
+    let mut bar = TabBar::new(&["系统管理"], 720);
+    assert_eq!(bar.snap(0).cell_w, CELL_W, "缺省 = 设计基准格");
+    bar.set_cell_w(23);
+    assert_eq!(bar.snap(0).cell_w, 23, "快照必须携带实例格");
+}
+
+/// 钉 BAR-205③：接线守卫——壳层逐帧同站喂（set_viewport_w 一站），
+/// 涂装层吃 snap.cell_w；断线 = pinch 后块宽回潮设计常量
+#[test]
+fn spec_bar205_壳层涂装接线守卫() {
+    const APP: &str = include_str!("../src/android_app.rs");
+    const TV: &str = include_str!("../src/termview.rs");
+    assert!(
+        APP.contains("set_cell_w"),
+        "壳层未喂标签栏实例格（逐帧纠一站：set_viewport_w 同站）"
+    );
+    assert!(
+        TV.contains("rects_of(&snap.tabs, snap.scroll_px, snap.cell_w)"),
+        "涂装层 rects_of 必须吃 snap.cell_w（眼手同尺）"
+    );
 }

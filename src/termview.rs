@@ -4106,7 +4106,7 @@ impl TermView {
         // 内容带（x 向）——层恒靠泊，off=0；带外的东西用户看不见也点不着
         let clip_l = i64::from(ox);
         let clip_r = i64::from(cw) - i64::from(AI_PAGE_FRAME_MARGIN + AI_PAGE_FRAME_W + CELL_W);
-        let rects = crate::ui::tab_bar::rects_of(&snap.tabs, snap.scroll_px);
+        let rects = crate::ui::tab_bar::rects_of(&snap.tabs, snap.scroll_px, snap.cell_w);
         // 标签块先画（装修在文字之下）：选中块随弹簧 x，未选中各就各位；
         // 色源 = 快照色列该标签自己的双色（缺位兜底页 accent，§四 十一修）
         for (i, r) in rects.iter().enumerate() {
