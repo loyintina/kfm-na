@@ -161,7 +161,12 @@ fn quic_identity(
     // psk 长度非法按「不在」计（旧码遇坏长度也会重生——坏件 = 事故形态）
     let psk_b = std::fs::read(&psk_path).ok().filter(|b| b.len() == 32);
     let gen_allowed = std::env::var("NA_QUIC_GEN_KEYS").as_deref() == Ok("1");
-    match identity_verdict(cert_b.is_some(), key_b.is_some(), psk_b.is_some(), gen_allowed) {
+    match identity_verdict(
+        cert_b.is_some(),
+        key_b.is_some(),
+        psk_b.is_some(),
+        gen_allowed,
+    ) {
         IdentityVerdict::Load => (
             vec![CertificateDer::from(cert_b.expect("判 Load 必在"))],
             PrivateKeyDer::Pkcs8(key_b.expect("判 Load 必在").into()),
