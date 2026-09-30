@@ -1,6 +1,6 @@
 //! tests/local_pty_spec.rs — 本地 PTY transport 契约考题(L1,A 档 host 实跑)
 //!
-//! 设计页:`/root/30-实验/dsh-na/na/multi-end-layering.md` §3 四条:
+//! 设计页（na 方向档案）:`multi-end-layering.md` §3 四条:
 //! ①echo 往返 ②resize 传播(TIOCSWINSZ) ③子进程退出事件 ④与 ws 工厂
 //! 同 trait 可替换(基座双键并存注册)。
 //!

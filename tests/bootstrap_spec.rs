@@ -1,6 +1,6 @@
 //! bootstrap_spec.rs — L3 bootstrap 解压核心考题（考题先行：先红后绿）
 //!
-//! 对应设计页 /root/30-实验/dsh-na/na/l3-bootstrap.md §5。
+//! 对应设计页（na 方向档案）l3-bootstrap.md §5。
 //! 语义对照 termux-app TermuxInstaller：staging 解包 → SYMLINKS.txt 补链 →
 //! 原子 rename → 幂等跳过。核心层纯文件逻辑，host 可判卷。
 

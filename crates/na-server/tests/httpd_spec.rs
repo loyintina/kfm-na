@@ -204,11 +204,11 @@ fn spec_route_fs_list_取_dir() {
     };
     assert_eq!(dir, "");
     // 百分号编码的路径值
-    let httpd::Route::FsList { dir } = httpd::route("GET", "/api/fs/list?dir=%2Froot%2F00&x=1")
+    let httpd::Route::FsList { dir } = httpd::route("GET", "/api/fs/list?dir=%2Fsrv%2Fna&x=1")
     else {
         panic!();
     };
-    assert_eq!(dir, "/root/00");
+    assert_eq!(dir, "/srv/na");
     // 方法也参与路由
     assert!(matches!(
         httpd::route("POST", "/api/fs/list?dir=x"),

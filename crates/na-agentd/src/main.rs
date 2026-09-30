@@ -5,10 +5,10 @@
 //! - NA_AGENT_BIND          监听地址（缺省 127.0.0.1:9041，只准回环。
 //!   9041 端口对账 2026-09-26：现役 8021-8032/9021/9022/9099/9229/
 //!   62633/62694（ss -tln 实证），9041 空闲）
-//! - NA_AGENT_SESSION_ROOT  会话根（缺省 /root/.kfm/session）
-//! - NA_AGENT_MAIL_ROOT     信箱根（缺省 /root/90-信箱，BAR-212 迁家后两册
+//! - NA_AGENT_SESSION_ROOT  会话根（缺省 $HOME/.kfm/session）
+//! - NA_AGENT_MAIL_ROOT     信箱根（缺省 $HOME/90-信箱，BAR-212 迁家后两册
 //!   挂这下面；照 NA_AGENT_SESSION_ROOT 先例）
-//! - NA_AGENT_PROVIDER_JSON provider 配置（缺省 /root/.kfm/provider.json，
+//! - NA_AGENT_PROVIDER_JSON provider 配置（缺省 $HOME/.kfm/provider.json，
 //!   key 永不进日志正文——错误信息只报路径不报内容）
 
 use std::io::{Read, Write};
@@ -21,8 +21,27 @@ use na_agentd::service::AgentService;
 
 /// 缺省监听口（2026-09-26 端口对账见上注）
 pub const DEFAULT_BIND: &str = "127.0.0.1:9041";
-pub const DEFAULT_SESSION_ROOT: &str = "/root/.kfm/session";
-pub const DEFAULT_PROVIDER_JSON: &str = "/root/.kfm/provider.json";
+
+/// $HOME（缺省 `/root`——systemd 服务不设 HOME 时的 uid 0 习惯位；
+/// 空串按未设算）
+fn home() -> String {
+    std::env::var("HOME")
+        .ok()
+        .filter(|h| !h.is_empty())
+        .unwrap_or_else(|| "/root".into())
+}
+
+/// 会话根：env `NA_AGENT_SESSION_ROOT` 优先，否则 `$HOME/.kfm/session`
+/// （2026-09-30 边界审计：原缺省写死作者机器路径）
+pub fn default_session_root() -> String {
+    std::env::var("NA_AGENT_SESSION_ROOT").unwrap_or_else(|_| format!("{}/.kfm/session", home()))
+}
+
+/// provider 配置：env `NA_AGENT_PROVIDER_JSON` 优先，否则 `$HOME/.kfm/provider.json`
+pub fn default_provider_json() -> String {
+    std::env::var("NA_AGENT_PROVIDER_JSON")
+        .unwrap_or_else(|_| format!("{}/.kfm/provider.json", home()))
+}
 
 /// 只绑回环的硬闸（与 na-server 同款安全语义：入口只有 SSH/本机）
 fn assert_loopback(addr: &str) {
@@ -36,10 +55,7 @@ fn assert_loopback(addr: &str) {
 fn main() {
     let addr = std::env::var("NA_AGENT_BIND").unwrap_or_else(|_| DEFAULT_BIND.into());
     assert_loopback(&addr);
-    let mut svc = AgentService::new(
-        &std::env::var("NA_AGENT_SESSION_ROOT").unwrap_or_else(|_| DEFAULT_SESSION_ROOT.into()),
-        &std::env::var("NA_AGENT_PROVIDER_JSON").unwrap_or_else(|_| DEFAULT_PROVIDER_JSON.into()),
-    );
+    let mut svc = AgentService::new(&default_session_root(), &default_provider_json());
     if let Ok(mr) = std::env::var("NA_AGENT_MAIL_ROOT") {
         svc.mail_root = mr;
     }

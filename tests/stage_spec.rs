@@ -12,41 +12,39 @@ use kfm_na::ui::stage;
 // 与键行同规跟 grid_keybar 走（基座壳恒靠泊，面板靠泊即整页盖住）；
 // 2026-09-12 四公民解析页槽入列（右缘家，与配置同规）；2026-09-15
 // 十九修 D8 第七槽平移旧代入列（平移升合成期：配置可见 ∧ 平移进行中）；
-// 2026-09-26 五公民 Demo 槽入列（index 9，右缘家与配置同规）；
-// 2026-09-27 六公民阅读页槽入列（BAR-170，index 10，右缘家同规）。
+// 2026-09-27 五公民阅读页槽入列（BAR-170，index 9，右缘家同规）；
+// 2026-09-30 BAR-207 Demo 打样页槽退役回收（原 index 9，槽序顺移）。
 // 变异抽检：返回数组第 6/7 槽改 false → 断言红；槽位次序换序即红；
-// 阅读槽漏追加/错位 → v[10] 断言红。
+// 阅读槽漏追加/错位 → v[9] 断言红。
 #[test]
 fn spec_bar070_上层槽恒可见() {
-    // 槽序：[键行, AI, 配置, 文件树, 解析, 上层, 终端卡, 平移旧代, 平移新代, Demo, 阅读]
+    // 槽序：[键行, AI, 配置, 文件树, 解析, 上层, 终端卡, 平移旧代, 平移新代, 阅读]
     assert_eq!(
-        stage::slot_visibility(true, true, true, true, true, false, false, false),
+        stage::slot_visibility(true, true, true, true, true, false, false),
         [
-            true, true, true, true, true, true, true, false, false, false, false
+            true, true, true, true, true, true, true, false, false, false
         ]
     );
     assert_eq!(
-        stage::slot_visibility(false, false, false, false, false, true, false, false),
+        stage::slot_visibility(false, false, false, false, false, true, false),
         [
-            false, false, false, false, false, true, false, false, false, false, false
+            false, false, false, false, false, true, false, false, false, false
         ]
     );
-    // 显式锁十一条语义：键行/终端卡跟网格未靠泊走，六面板各跟各的 visible 走
-    let v = stage::slot_visibility(false, true, true, false, true, true, true, true);
-    assert!(
-        !v[0] && v[1] && v[2] && !v[3] && v[4] && v[5] && !v[6] && v[7] && v[8] && v[9] && v[10]
-    );
-    // 阅读页槽独立一票（BAR-170）：rd_visible 翻 false 只灭 index 10
-    let v = stage::slot_visibility(true, true, true, true, true, true, true, false);
-    assert!(v[9] && !v[10]);
+    // 显式锁十条语义：键行/终端卡跟网格未靠泊走，五面板各跟各的 visible 走
+    let v = stage::slot_visibility(false, true, true, false, true, true, true);
+    assert!(!v[0] && v[1] && v[2] && !v[3] && v[4] && v[5] && !v[6] && v[7] && v[8] && v[9]);
+    // 阅读页槽独立一票（BAR-170）：rd_visible 翻 false 只灭 index 9
+    let v = stage::slot_visibility(true, true, true, true, true, true, false);
+    assert!(v[8] && !v[9]);
     // 被覆盖的面板：在栈（visible=true）哪怕顶是别家——露出随推移滑回的承载
-    let v = stage::slot_visibility(true, true, true, true, true, true, true, true);
-    assert!(v[2] && v[3] && v[4] && v[9] && v[10]);
+    let v = stage::slot_visibility(true, true, true, true, true, true, true);
+    assert!(v[2] && v[3] && v[4] && v[9]);
     // 十九修 D8：平移双槽 = 配置可见 ∧ 平移进行中（贴死即隐/页隐即隐）
-    assert!(!stage::slot_visibility(true, false, true, false, false, false, false, false)[7]);
-    assert!(stage::slot_visibility(true, false, true, false, false, true, false, false)[7]);
-    assert!(!stage::slot_visibility(true, false, false, false, false, true, false, false)[7]);
-    assert!(stage::slot_visibility(true, false, true, false, false, true, false, false)[8]);
+    assert!(!stage::slot_visibility(true, false, true, false, false, false, false)[7]);
+    assert!(stage::slot_visibility(true, false, true, false, false, true, false)[7]);
+    assert!(!stage::slot_visibility(true, false, false, false, false, true, false)[7]);
+    assert!(stage::slot_visibility(true, false, true, false, false, true, false)[8]);
 }
 
 // DirtyGuard 复用契约跨卷再钉：同 sig 复喂=照用烘焙（动画帧零光栅
@@ -62,29 +60,28 @@ fn spec_置脏判定_同sig复用_变化重烘() {
     assert!(g.feed((7, true)));
 }
 
-// BAR-083/六公民泛化：z 序「动者在上，不动者按栈序」——旧规逐帧跟栈顶，
+// BAR-083/五公民泛化：z 序「动者在上，不动者按栈序」——旧规逐帧跟栈顶，
 // 撤 AI 瞬 AI 出栈、不透明配置页当场压顶，AI 退出动画在它背后播完 =
 // 用户见瞬消（2026-09-11 用户实机：先配置后 AI，撤 AI 无动画；反向撤
-// 配置有）。六公民版（2026-09-27 阅读页入列 BAR-170，PANELS 声明序
-// [Ai, Config, FileTree, Parser, Demo, Reader]）：多动者之间仍按栈序，
-// 不在栈者垫最底按声明序。
+// 配置有）。五公民版（2026-09-27 阅读页入列 BAR-170；2026-09-30 BAR-207
+// Demo 退役，PANELS 声明序 [Ai, Config, FileTree, Parser, Reader]）：
+// 多动者之间仍按栈序，不在栈者垫最底按声明序。
 // 变异抽检：活性权重删了（排序键只剩栈位阶）→ 第 1/3 条红；
 // 动者间 tie-break 改反 → 第 5 条红；PANELS 漏 Parser → 第 7 条红；
-// PANELS 漏 Demo → 第 8 条红；PANELS 漏 Reader → 第 9 条红。
+// PANELS 漏 Reader → 第 8 条红。
 #[test]
-fn spec_bar083_z序_动者在上_六公民() {
+fn spec_bar083_z序_动者在上_五公民() {
     use kfm_na::ui::stage::panel_z_order as z;
     // 1. 撤 AI（AI 缝活跃、配置静止在栈）：哪怕栈顶已翻成配置，AI 仍压顶
-    //    active 与 PANELS=[Ai,Config,FileTree,Parser,Demo,Reader] 对齐
+    //    active 与 PANELS=[Ai,Config,FileTree,Parser,Reader] 对齐
     assert_eq!(
         z(
             &[Panel::Config, Panel::Ai],
-            [true, false, false, false, false, false]
+            [true, false, false, false, false]
         ),
         [
             Panel::FileTree,
             Panel::Parser,
-            Panel::Demo,
             Panel::Reader,
             Panel::Config,
             Panel::Ai
@@ -94,12 +91,11 @@ fn spec_bar083_z序_动者在上_六公民() {
     assert_eq!(
         z(
             &[Panel::Config, Panel::Ai],
-            [false, true, false, false, false, false]
+            [false, true, false, false, false]
         ),
         [
             Panel::FileTree,
             Panel::Parser,
-            Panel::Demo,
             Panel::Reader,
             Panel::Ai,
             Panel::Config
@@ -109,12 +105,11 @@ fn spec_bar083_z序_动者在上_六公民() {
     assert_eq!(
         z(
             &[Panel::FileTree, Panel::Ai],
-            [false, false, true, false, false, false]
+            [false, false, true, false, false]
         ),
         [
             Panel::Config,
             Panel::Parser,
-            Panel::Demo,
             Panel::Reader,
             Panel::Ai,
             Panel::FileTree
@@ -124,12 +119,11 @@ fn spec_bar083_z序_动者在上_六公民() {
     assert_eq!(
         z(
             &[Panel::Config, Panel::Ai],
-            [false, false, false, false, false, false]
+            [false, false, false, false, false]
         ),
         [
             Panel::FileTree,
             Panel::Parser,
-            Panel::Demo,
             Panel::Reader,
             Panel::Config,
             Panel::Ai
@@ -139,25 +133,23 @@ fn spec_bar083_z序_动者在上_六公民() {
     assert_eq!(
         z(
             &[Panel::Config, Panel::Ai],
-            [true, true, false, false, false, false]
+            [true, true, false, false, false]
         ),
         [
             Panel::FileTree,
             Panel::Parser,
-            Panel::Demo,
             Panel::Reader,
             Panel::Config,
             Panel::Ai
         ]
     );
-    // 6. 不在栈者垫最底且次序确定（按 PANELS 声明序 Ai<Config<FileTree<Parser<Demo<Reader）
+    // 6. 不在栈者垫最底且次序确定（按 PANELS 声明序 Ai<Config<FileTree<Parser<Reader）
     assert_eq!(
-        z(&[Panel::Ai], [false, false, false, false, false, false]),
+        z(&[Panel::Ai], [false, false, false, false, false]),
         [
             Panel::Config,
             Panel::FileTree,
             Panel::Parser,
-            Panel::Demo,
             Panel::Reader,
             Panel::Ai
         ]
@@ -167,12 +159,11 @@ fn spec_bar083_z序_动者在上_六公民() {
     assert_eq!(
         z(
             &[Panel::FileTree, Panel::Parser],
-            [false, false, false, true, false, false]
+            [false, false, false, true, false]
         ),
         [
             Panel::Ai,
             Panel::Config,
-            Panel::Demo,
             Panel::Reader,
             Panel::FileTree,
             Panel::Parser
@@ -181,48 +172,50 @@ fn spec_bar083_z序_动者在上_六公民() {
     assert_eq!(
         z(
             &[Panel::Parser, Panel::FileTree],
-            [false, false, true, false, false, false]
+            [false, false, true, false, false]
         ),
         [
             Panel::Ai,
             Panel::Config,
-            Panel::Demo,
             Panel::Reader,
             Panel::Parser,
             Panel::FileTree
         ]
     );
-    // 8. Demo 入题（2026-09-26 五公民）：撤 Demo（缝活跃）压过栈顶配置
-    assert_eq!(
-        z(
-            &[Panel::Config, Panel::Demo],
-            [false, false, false, false, true, false]
-        ),
-        [
-            Panel::Ai,
-            Panel::FileTree,
-            Panel::Parser,
-            Panel::Reader,
-            Panel::Config,
-            Panel::Demo
-        ]
-    );
-    // 9. 阅读页入题（2026-09-27 六公民 BAR-170）：撤阅读页（缝活跃）压过
-    //    栈顶配置；阅读不在栈垫底序 = 声明序末位（Demo 之下）——变异：
+    // 8. 阅读页入题（2026-09-27 五公民 BAR-170）：撤阅读页（缝活跃）压过
+    //    栈顶配置；阅读不在栈垫底序 = 声明序末位——变异：
     //    PANELS 漏 Reader → 本条红
     assert_eq!(
         z(
             &[Panel::Config, Panel::Reader],
-            [false, false, false, false, false, true]
+            [false, false, false, false, true]
         ),
         [
             Panel::Ai,
             Panel::FileTree,
             Panel::Parser,
-            Panel::Demo,
             Panel::Config,
             Panel::Reader
         ]
+    );
+}
+
+// BAR-207 反向钉：Demo 打样页公民位必须死透——PANELS 五件、Panel 枚举
+// 无 Demo 变体（编译期钉：本卷能引用 Panel::Reader 五件即证；源码面
+// 再钉一道防复活）
+#[test]
+fn spec_bar207_demo公民位死透() {
+    assert_eq!(stage::PANELS.len(), 5, "PANELS 必须五公民（Demo 已退役）");
+    assert!(stage::PANELS.contains(&Panel::Reader));
+    let ap = include_str!("../src/ai_presence.rs");
+    assert!(
+        !ap.contains("Demo,") && !ap.contains("Panel::Demo"),
+        "ai_presence Demo 变体/臂必须死透（BAR-207）"
+    );
+    let st = include_str!("../src/ui/stage.rs");
+    assert!(
+        !st.contains("Panel::Demo"),
+        "stage PANELS 不许再出现 Demo（BAR-207）"
     );
 }
 

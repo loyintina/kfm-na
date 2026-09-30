@@ -1,6 +1,6 @@
 //! local_pty.rs — 本地 PTY transport(L1,多端分层设计页 §3:第一次抽层)
 //!
-//! 设计页:`/root/30-实验/dsh-na/na/multi-end-layering.md`(v0 送审,
+//! 设计页（na 方向档案）:`multi-end-layering.md`(v0 送审,
 //! 用户终审拍板先行,评审裁决到达后对账)。契约考题:tests/local_pty_spec.rs。
 //!
 //! 职责:与 ws transport 同缝(`Spawner`),把 ConnConfig 翻译成一条本地 PTY

@@ -22,8 +22,8 @@ fn usage(round_tokens: u64) -> Usage {
 #[test]
 fn spec_bar161_会话_逐行合法usage从第一轮记() {
     let host = FakeHost::new("2026-09-26T00:00:00Z");
-    let path = session_path("/root/.kfm/session/demo", 1);
-    assert_eq!(path, "/root/.kfm/session/demo/0001-会话.jsonl");
+    let path = session_path("/srv/na/session/demo", 1);
+    assert_eq!(path, "/srv/na/session/demo/0001-会话.jsonl");
     let mut w = SessionWriter::open(&host, &path);
     w.user_msg("任务").expect("写");
     w.usage(1, usage(10)).expect("写"); // 第一轮 API 返回即记

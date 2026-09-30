@@ -28,7 +28,7 @@ set -u
 NA_PORT=9022
 NA_PORT_LEGACY=8024 # Termux 代维旧路:同达 APK sshd,备援不默认
 TERMUX_PORT=8022
-NA_KEY=/root/.ssh/na_probe_key
+NA_KEY=$HOME/.ssh/na_probe_key
 SSH_HOST=localhost
 STATE_DIR="$HOME/.na-tunnel"
 HISTORY="$STATE_DIR/history.log"

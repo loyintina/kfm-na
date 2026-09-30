@@ -127,15 +127,22 @@ pub fn cmd_attach(name: &str) -> String {
 /// 会话名合法字符集不会产出它——下划线开头 tmux 允许但 veran/人手都不用）
 pub const BOOTSTRAP_SHELL_SENTINEL: &str = "__kfm_shell__";
 
-/// veran 绝对路径（/root/50-工具 不在非交互 sh 的 PATH 里——ws 起步命令
-/// 经 sh -c 跑，PATH 是服务器最小公分母，全限定才稳）
-pub const VERAN_BIN: &str = "/root/50-工具/veran";
+/// veran 可执行的环境变量口（2026-09-30 边界审计：原写死作者机器绝对路径）。
+/// 服务器侧解析：env 优先 → PATH 查 `veran`（部署侧把 veran 放进 PATH，
+/// 如软链到 /usr/local/bin）。非交互 sh 的 PATH 是服务器最小公分母——
+/// 两路都没有就跳过 veran、落到裸 shell 兜底（裁决链②），不容错卡启动
+pub const VERAN_BIN_ENV: &str = "NA_VERAN_BIN";
 
 /// sh 单引号转义：' → '\''（持久化的会话名进引导脚本前的唯一处理；
 /// 名字源是 session_name_of 从我们自己构造的命令里提取的，威胁面低，
 /// 但引号注入口必须焊死）
 fn sh_sq(s: &str) -> String {
     s.replace('\'', "'\\''")
+}
+
+/// veran 解析行（服务器侧 sh 展开）
+fn veran_resolve() -> String {
+    format!("VERAN=\"${{{VERAN_BIN_ENV}:-$(command -v veran)}}\"")
 }
 
 /// 冷启动引导命令（单行 POSIX sh，ws 起步命令面）。裁决链：
@@ -150,7 +157,8 @@ pub fn cmd_bootstrap(last: Option<&str>) -> String {
     let lv = sh_sq(last.unwrap_or(""));
     format!(
         "KFM_LAST='{lv}'; \
-         if ! tmux list-sessions >/dev/null 2>&1; then {VERAN_BIN} >/dev/null 2>&1; fi; \
+         if ! tmux list-sessions >/dev/null 2>&1; then {VERAN_RESOLVE}; \
+         [ -n \"$VERAN\" ] && \"$VERAN\" >/dev/null 2>&1; fi; \
          if tmux list-sessions >/dev/null 2>&1; then \
          if [ -n \"$KFM_LAST\" ] && [ \"$KFM_LAST\" != '{BOOTSTRAP_SHELL_SENTINEL}' ] \
          && tmux has-session -t \"=$KFM_LAST\" 2>/dev/null; then \
@@ -159,7 +167,8 @@ pub fn cmd_bootstrap(last: Option<&str>) -> String {
          exec tmux new-session -A -s \"$(tmux list-sessions -F '#{{session_name}}' | head -n 1)\"; \
          fi; \
          fi; \
-         exec ${{SHELL:-/bin/sh}} -l"
+         exec ${{SHELL:-/bin/sh}} -l",
+        VERAN_RESOLVE = veran_resolve()
     )
 }
 

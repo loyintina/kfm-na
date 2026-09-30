@@ -1,4 +1,5 @@
-//! providers.rs — /root/.kfm/provider.json（schema v2）读取与裁决。
+//! providers.rs — provider.json（schema v2，路径缺省见 na-agentd 的
+//! `NA_AGENT_PROVIDER_JSON`）读取与裁决。
 //!
 //! auth=api_key 的 OpenAI 兼容源（bigmodel-coding / deepseek）+ auth=oauth
 //! 的 kimi-code（BAR-164 工单⑤落地：凭证引用即取，路径按官方约定

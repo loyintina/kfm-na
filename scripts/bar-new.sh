@@ -51,8 +51,9 @@ BUGS="${BAR_NEW_BUGS:-$ROOT/docs/ledger/bugs.md}"
 REG="${BAR_NEW_REGISTRY:-$ROOT/docs/ledger/bar-registry.jsonl}"
 LOCK="$REG.lock"
 CLI="$ROOT/target/debug/mailbox-cli"
-MAILBOX="${BAR_NEW_MAILBOX:-/root/.kfm/session/信箱}"
-# 符号链接解引用（202 双号实案 2026-09-30：生产信箱 = /root/.kfm/session/信箱
+MAILBOX="${BAR_NEW_MAILBOX:-$HOME/.kfm/session/信箱}"
+DEFAULT_MAILBOX="$HOME/.kfm/session/信箱"
+# 符号链接解引用（202 双号实案 2026-09-30：生产信箱 = 上面那个路径
 # → 90-信箱/10-NA信箱 的 symlink，find 默认 -P 对**起点链接**不下钻——
 # 扫描静默得 0 封、max 退回树内旧账 → 与观澜 0092 撞号。readlink -f 对
 # 非链接路径原样返回，幂等）
@@ -63,7 +64,7 @@ MAILBOX="$(readlink -f "$MAILBOX")"
 # roster.json → 主册 roster.json；两处都没有 = 无法校验（双环境手机端），
 # 告警放行。查到名册而名不在册 = 拒领。
 ROSTER="$MAILBOX/roster.json"
-[ -f "$ROSTER" ] || ROSTER="/root/90-信箱/00-主册/roster.json"
+[ -f "$ROSTER" ] || ROSTER="$HOME/90-信箱/00-主册/roster.json"
 if [ -f "$ROSTER" ]; then
     grep -q "\"$NAME\"" "$ROSTER" || {
         echo "名字 $NAME 不在名册（$ROSTER）——先入册再领号（信箱契约 §六）" >&2; exit 1; }
@@ -136,7 +137,7 @@ if [ "${BAR_NEW_NO_LETTER:-}" != "1" ]; then
     grep -q '（待填' "$path" && { echo "占位未填尽: $path" >&2; exit 1; }
     "$CLI" verify --mailbox "$MAILBOX" "$path" >/dev/null
     "$CLI" gen --mailbox "$MAILBOX" >/dev/null
-    if [ "$MAILBOX" = "/root/.kfm/session/信箱" ] && [ -d "$MAILBOX/.git" ]; then
+    if [ "$MAILBOX" = "$DEFAULT_MAILBOX" ] && [ -d "$MAILBOX/.git" ]; then
         (cd "$MAILBOX" && git add "$file" README.md letters-index.jsonl letter-tokens.jsonl \
             && git -c user.name=kfm-na -c user.email=na@kfm.local commit -q \
                -m "feat(信箱): $LETTER BAR-$NEXT 追踪信开卷（$FUNC$NAME：$TITLE）" </dev/null)

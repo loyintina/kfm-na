@@ -380,8 +380,8 @@ fn spec_query_解析顺序() {
     assert_eq!(fsapi::query_get("&&a=1", "a"), Some("1".to_string()));
     assert_eq!(fsapi::query_get("a=1&a=2", "a"), Some("1".to_string()));
     assert_eq!(
-        fsapi::query_get("dir=%2Froot%2F00-Loyintina", "dir"),
-        Some("/root/00-Loyintina".to_string())
+        fsapi::query_get("dir=%2Fsrv%2Fna", "dir"),
+        Some("/srv/na".to_string())
     );
     // 非法 % 序列原样保留
     assert_eq!(fsapi::pct_decode("100%"), "100%");

@@ -2,10 +2,10 @@
 //!
 //! 配置全走环境变量（主体拉起制：拉起命令由 na 给出，没有配置文件）：
 //! - NA_BIND            监听地址（缺省 127.0.0.1:9021，只准回环）
-//! - NA_REPORT_LOG      na-report 落盘路径（缺省 /root/10-项目/kfm-na/field-reports.log）
+//! - NA_REPORT_LOG      na-report 落盘路径（缺省 = cwd 下 field-reports.log）
 //! - NA_IDLE_EXIT_SECS  无连接无会话持续 N 秒自退（缺省 1800，0 = 永不）
 //! - NA_QUIC_BIND       QUIC 腿监听（可选，不设=不开；设计 docs/active/quic隧道.md）
-//! - NA_QUIC_CERT       QUIC 证书路径前缀（缺省 /root/40-资产/kfm-na-certs/quic；
+//! - NA_QUIC_CERT       QUIC 证书路径前缀（缺省 $HOME/.kfm/certs/quic；
 //!   三件 {前缀}.der/.key.der/.psk 作为一个身份：齐则载，缺则拒启——
 //!   首跑生成须显式授权 NA_QUIC_GEN_KEYS=1（BAR-200 fail-loud：静默重生
 //!   = 所有 pin 旧指纹的客户端永久失配）；开 QUIC 腿即强制 HMAC 挑战，设计 §四）
@@ -14,8 +14,8 @@
 //!   绑口变本机 TCP 监听器+反向开流，撞口/僵尸/释放三件套消失）
 //! - NA_QUIC_REV_TCP    反连本机桥前（缺省 127.0.0.1:9022，只准回环）
 //! - NA_QUIC_REV_TARGET 手机侧回联口（缺省 8024 = na sshd）
-//! - NA_FS_ROOTS        文件树数据面允许根（冒号分隔；缺省 = 库本体
-//!   /root/00-Loyintina 存在则用它，否则 $HOME；设成空串 = 零根全 404）。
+//! - NA_FS_ROOTS        文件树数据面允许根（冒号分隔；缺省 = `/root`
+//!   （服务端全库根，2026-09-27 用户裁决——不依赖 HOME）；设成空串 = 零根全 404）。
 //!   语义在 na-protocol::fsapi::roots（每请求现读，运行时可改）
 //!
 //! 分流：peek 请求头不消费——见 Upgrade: websocket 交 wsterm（tokio-tungstenite
@@ -52,6 +52,22 @@ fn assert_loopback(addr: &str) {
     );
 }
 
+/// QUIC 身份三件的前缀（env NA_QUIC_CERT > `$HOME/.kfm/certs/quic`）。
+/// 2026-09-30 边界审计：原缺省写死作者机器路径——机器侧把证书放到该位置
+/// （本机 `~/.kfm/certs` 软链到资产目录）或显式设 env
+fn quic_cert_prefix() -> String {
+    std::env::var("NA_QUIC_CERT").unwrap_or_else(|_| format!("{}/.kfm/certs/quic", home()))
+}
+
+/// $HOME（缺省 `/root`——systemd 服务不设 HOME 时的 uid 0 习惯位；
+/// 空串按未设算：空 HOME 会拼出 `/.kfm/...` 这种坏路径）
+fn home() -> String {
+    std::env::var("HOME")
+        .ok()
+        .filter(|h| !h.is_empty())
+        .unwrap_or_else(|| "/root".into())
+}
+
 /// QUIC 腿（可选，设计 docs/active/quic隧道.md §二桥接模型）：QUIC 入流
 /// 读流头（2 字节端口 + 32 字节认证标签）→ 回联本机 TCP（9021 自己）——
 /// 协议层零改动，QUIC 只是载体。绑公网必须显式写 0.0.0.0（默认回环不变）；
@@ -67,8 +83,7 @@ fn spawn_quic_leg() {
             "NA_QUIC_BIND 只准回环或显式 0.0.0.0，收到: {bind}"
         );
     }
-    let prefix =
-        std::env::var("NA_QUIC_CERT").unwrap_or_else(|_| "/root/40-资产/kfm-na-certs/quic".into());
+    let prefix = quic_cert_prefix();
     let (certs, key, psk) = quic_identity(&prefix);
     eprintln!(
         "[na-server] QUIC 听 {bind}（证书指纹 {} / 客户端证已开）",
@@ -117,8 +132,7 @@ fn spawn_rev_quic_leg() {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(8024);
-    let prefix =
-        std::env::var("NA_QUIC_CERT").unwrap_or_else(|_| "/root/40-资产/kfm-na-certs/quic".into());
+    let prefix = quic_cert_prefix();
     let (certs, key, psk) = quic_identity(&prefix);
     eprintln!(
         "[na-server] QUIC 反连听 {bind}（TCP 桥前 {tcp_bind} → 手机 {target}，证书指纹 {}）",
@@ -206,7 +220,7 @@ fn quic_identity(
         IdentityVerdict::FailMissing => panic!(
             "QUIC 身份三件全缺（{cert_path} 系），拒绝静默重生（BAR-200）——\
              静默换新 = 所有 pin 旧指纹的客户端永久失配（2026-09-30 事故）。\
-             修复二选一：①从归档恢复原件（/root/98-归档/ 或备份）②首跑/重置显式授权：\
+             修复二选一：①从归档恢复原件（备份或归档目录）②首跑/重置显式授权：\
              NA_QUIC_GEN_KEYS=1 重启本服务"
         ),
         IdentityVerdict::FailPartial => panic!(

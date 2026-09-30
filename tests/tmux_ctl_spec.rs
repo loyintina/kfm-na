@@ -502,9 +502,14 @@ fn spec_parse_ctrl_line_畸形行不panic落合理类() {
 #[test]
 fn spec_bar202_引导_无记录_裁决链全件在位() {
     let cmd = tmux_ctl::cmd_bootstrap(None);
-    // ①无会话先跑 veran（绝对路径，非交互 sh 没 PATH）
+    // ①无会话先跑 veran（env NA_VERAN_BIN 优先，否则 PATH 查 veran——
+    //   2026-09-30 边界审计：不再写死作者机器绝对路径）
     assert!(cmd.contains("if ! tmux list-sessions"));
-    assert!(cmd.contains(tmux_ctl::VERAN_BIN));
+    assert!(cmd.contains(tmux_ctl::VERAN_BIN_ENV));
+    assert!(
+        cmd.contains("command -v veran"),
+        "PATH 兜底：查不到就不跑 veran，落裸 shell（不卡启动）"
+    );
     // ②有会话 → 上次视面裁决（has-session 精确匹配 + 哨兵排斥）
     assert!(cmd.contains("tmux has-session -t \"=$KFM_LAST\""));
     assert!(cmd.contains(tmux_ctl::BOOTSTRAP_SHELL_SENTINEL));

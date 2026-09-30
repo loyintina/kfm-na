@@ -4,8 +4,9 @@
 //! 纪律：本文件是考题，生成器不许改；答案只允许碰 src/na_server_sup.rs。
 
 use kfm_na::na_server_sup::{
-    MARK_ALIVE, MARK_FAIL, MARK_SPAWNED, MARK_SYSTEMD, SupMode, SupState, UNIT_NAME, Verdict,
-    ensure_script, exec_args, mode_of, mode_word, state_word, unit_content, verdict_of,
+    MARK_ALIVE, MARK_FAIL, MARK_SPAWNED, MARK_SYSTEMD, REPO_DIR_ENV, REPO_DIR_FALLBACK, SupMode,
+    SupState, UNIT_NAME, Verdict, ensure_script, exec_args, mode_of, mode_word, state_word,
+    unit_content, verdict_of,
 };
 use kfm_na::settings::{Backend, QuicFields, ServerEntry, SshFields, TunnelPorts};
 
@@ -276,7 +277,8 @@ fn spec_状态发布_在途相不跳出卡面() {
 fn spec_常驻_unit内容与模式词() {
     // 「服务常驻在服务器，但它依然是 na 的触手」——unit 内容随 na 走，
     // 三条纪律写死在 unit 里（只绑回环 / 永不自退 / Restart=always 收尸）
-    let u = unit_content();
+    // 仓库根是参数（2026-09-30 边界审计：不再写死作者机器路径）
+    let u = unit_content("/opt/kfm-na");
     assert!(
         u.contains("Environment=NA_BIND=127.0.0.1:9021"),
         "只绑回环（公网不可达 = 安全语义）"
@@ -295,8 +297,12 @@ fn spec_常驻_unit内容与模式词() {
         "M4 反连腿常驻：UDP 62694 显式 0.0.0.0（特许公网仅这两腿）"
     );
     assert!(
-        u.contains("ExecStart=/root/10-项目/kfm-na/target/release/na-server"),
-        "绝对路径（systemd 不吃相对路径）"
+        u.contains("ExecStart=/opt/kfm-na/target/release/na-server"),
+        "绝对路径（systemd 不吃相对路径）——且随传入的仓库根走"
+    );
+    assert!(
+        u.contains("WorkingDirectory=/opt/kfm-na"),
+        "工作目录与 ExecStart 同源（同一个仓库根）"
     );
     assert!(u.contains("WantedBy=multi-user.target"), "随机器自启");
     assert!(u.contains("[Install]"), "可 enable");
@@ -320,4 +326,31 @@ fn spec_常驻_unit内容与模式词() {
     );
     assert!(UNIT_NAME.ends_with(".service"));
     assert!(ensure_script().contains(UNIT_NAME), "unit 名进脚本");
+}
+
+#[test]
+fn spec_仓库根_env优先中性缺省() {
+    // 2026-09-30 边界审计（发布前）：na 侧不许再带作者机器布局。
+    // 仓库根在**服务器侧**解析——env 优先，缺省 $HOME/kfm-na（中性），
+    // 且 unit 里的路径由服务器侧展开（不是 na 侧烘死）。
+    let s = ensure_script();
+    assert!(
+        s.contains(&format!(
+            "REPO=\"${{{REPO_DIR_ENV}:-{REPO_DIR_FALLBACK}}}\""
+        )),
+        "env 优先 + 中性缺省（服务器侧展开）: {s}"
+    );
+    assert!(
+        s.contains("cd \"$REPO\""),
+        "cd 走解析出来的 $REPO（不是写死路径）"
+    );
+    assert!(!s.contains("/root/"), "na 侧脚本不许带作者机器绝对路径");
+    assert_eq!(REPO_DIR_ENV, "NA_SERVER_REPO_DIR");
+    assert!(REPO_DIR_FALLBACK.starts_with("$HOME/"), "缺省形态必须中性");
+    // 模板里的路径也是服务器侧变量占位（unit 落盘时由 $REPO 展开）
+    let u = unit_content("$REPO");
+    assert!(
+        u.contains("ExecStart=$REPO/target/release/na-server"),
+        "unit 模板的路径位 = 服务器侧变量"
+    );
 }

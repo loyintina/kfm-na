@@ -33,7 +33,7 @@
 | `src/keymap.rs` | 2 | 2 | 0 | — |
 | `src/local_pty.rs` | 7 | 6 | 1 | android_prefix |
 | `src/mail_feed.rs` | 18 | 15 | 3 | book_snap take_dirty ensure_summaries |
-| `src/na_server_sup.rs` | 20 | 15 | 5 | REPO_DIR HEALTH_URL EXEC_TIMEOUT_SECS RECHECK_SECS TUNNEL_WAIT_SECS |
+| `src/na_server_sup.rs` | 21 | 17 | 4 | HEALTH_URL EXEC_TIMEOUT_SECS RECHECK_SECS TUNNEL_WAIT_SECS |
 | `src/offline_keys.rs` | 10 | 10 | 0 | — |
 | `src/plugins/ai_presence.rs` | 2 | 2 | 0 | — |
 | `src/plugins/conn_provider_local.rs` | 3 | 3 | 0 | — |
@@ -55,7 +55,7 @@
 | `src/singleton.rs` | 7 | 4 | 3 | LOCK_PATH lock_exclusive try_acquire |
 | `src/svc_health.rs` | 12 | 8 | 4 | HIST_PATH set_visible sys_snap take_dirty |
 | `src/sys_hist.rs` | 39 | 34 | 5 | BAR_W PLACEHOLDER_PCT hist_idx restore HIST_FORMAT |
-| `src/termview.rs` | 171 | 164 | 7 | AI_THINK_COLLAPSED FONT_CANDIDATES CJK_FONT_CANDIDATES load_cjk_font font_probe MAG_HALF_COLS MAG_HALF_ROWS |
+| `src/termview.rs` | 169 | 162 | 7 | AI_THINK_COLLAPSED FONT_CANDIDATES CJK_FONT_CANDIDATES load_cjk_font font_probe MAG_HALF_COLS MAG_HALF_ROWS |
 | `src/theme.rs` | 1 | 1 | 0 | — |
 | `src/tmux_ctl.rs` | 24 | 24 | 0 | — |
 | `src/tmux_exec.rs` | 1 | 1 | 0 | — |
@@ -68,7 +68,7 @@
 | `src/ui/conn_card.rs` | 6 | 6 | 0 | — |
 | `src/ui/cursor.rs` | 9 | 9 | 0 | — |
 | `src/ui/demo_icon.rs` | 6 | 6 | 0 | — |
-| `src/ui/demo_page.rs` | 38 | 25 | 13 | CONTENT_RIGHT_INSET H1_TEXT H2_SECTION H2_TEXT H3_TEXT H4_TEXT H5_TEXT H6_TEXT SIGN_TEXT BODY_SEGS HEAD_FRAME_T QUOTE_BAR_W LIST_MARK_PX |
+| `src/ui/demo_page.rs` | 24 | 21 | 3 | HEAD_FRAME_T QUOTE_BAR_W LIST_MARK_PX |
 | `src/ui/down_card.rs` | 10 | 10 | 0 | — |
 | `src/ui/dual_pool.rs` | 19 | 19 | 0 | — |
 | `src/ui/filetree.rs` | 81 | 73 | 8 | SHIFT_CLAMP_CSS TRI_GAP_PX CURSOR_NAME_INSET CURSOR_BAR_W CURSOR_HAIR_W row_center register_filetree filetree_handle |
@@ -90,11 +90,11 @@
 | `src/ui/parser_page.rs` | 63 | 48 | 15 | COL_GAP DIVIDER_ZONE MAX_VISIBLE_LINES MIN_VISIBLE_LINES MODAL_CARD_W MODAL_PAD_V MODAL_GAP MODAL_BTN_GAP CONFIRM_LABELS cancel_confirm register_parser_page parser_page_handle baked_epoch note_baked_geo baked_geo |
 | `src/ui/prompt_bar.rs` | 6 | 5 | 1 | row_of |
 | `src/ui/reader_page.rs` | 25 | 22 | 3 | TOP_BAR_H PROGRESS_H register_reader |
-| `src/ui/seam.rs` | 34 | 34 | 0 | — |
+| `src/ui/seam.rs` | 29 | 29 | 0 | — |
 | `src/ui/stage.rs` | 7 | 7 | 0 | — |
 | `src/ui/svc_card.rs` | 13 | 12 | 1 | head_word |
 | `src/ui/sys_card.rs` | 22 | 19 | 3 | card_h_now local_y bar_geom |
-| `src/ui/tab_bar.rs` | 26 | 26 | 0 | — |
+| `src/ui/tab_bar.rs` | 27 | 27 | 0 | — |
 | `src/ui/term_btn.rs` | 8 | 8 | 0 | — |
 | `src/ui/viewport_push.rs` | 2 | 2 | 0 | — |
 | `src/vsync_book.rs` | 20 | 16 | 4 | last_due_ms chain_dead mark_chain_dead last_ns |

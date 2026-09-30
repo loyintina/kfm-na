@@ -1,7 +1,7 @@
 #!/bin/bash
 # na-nightly-quiesce.sh — NA-QUIESCE 夜间熄灯公约(2026-08-30 用户拍板电耗选项A)
 #
-#   crond: 55 0 * * * bash /root/10-项目/kfm-na/scripts/na-nightly-quiesce.sh >> /var/log/na-quiesce.log 2>&1
+#   crond: 55 0 * * * bash $HOME/10-项目/kfm-na/scripts/na-nightly-quiesce.sh >> /var/log/na-quiesce.log 2>&1
 #   干跑:  NA_QUIESCE_DRY=1 bash scripts/na-nightly-quiesce.sh
 #
 # 判据链:docs/active/电耗对照夜简报-2026-08-30.md——na 后台常驻唤醒

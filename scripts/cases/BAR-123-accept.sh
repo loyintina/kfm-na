@@ -24,7 +24,8 @@ set -uo pipefail
 source "$(dirname "$0")/../lib/gate-lib.sh"
 
 BAR=BAR-123
-LOG=/root/10-项目/kfm-na/field-reports.log
+REPO="$(cd "$(dirname "$0")/../.." && pwd)"
+LOG="$REPO/field-reports.log"
 BAR_H=220     # input_bar::HEIGHT_PX（单行；开考前输入栏必须空——空栏恒单行）
 KEYBAR_H=240  # keybar::HEIGHT_PX（2 行 × 120）
 WAIT=90       # 应答窗秒数（redroid 报表滞后实测 40~60s）

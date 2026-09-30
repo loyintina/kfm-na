@@ -16,7 +16,7 @@ use na_agent::session::{self, SessionWriter};
 
 pub struct AgentService {
     pub session_root: String,
-    /// 信箱根（BAR-212：迁家 /root/90-信箱 后的两册挂这下面；
+    /// 信箱根（BAR-212：迁家后两册挂这下面；
     /// main.rs 吃 NA_AGENT_MAIL_ROOT 覆盖，测试直改字段指 tempdir）
     pub mail_root: String,
     pub provider_json: String,
@@ -49,7 +49,7 @@ impl AgentService {
     pub fn new(session_root: &str, provider_json: &str) -> Self {
         Self {
             session_root: session_root.to_string(),
-            mail_root: DEFAULT_MAIL_ROOT.to_string(),
+            mail_root: default_mail_root(),
             provider_json: provider_json.to_string(),
             max_rounds: agent::DEFAULT_MAX_ROUNDS,
             send_lock: Mutex::new(()),
@@ -214,7 +214,7 @@ impl AgentService {
     pub fn inbox_root(&self, key: &str) -> Option<String> {
         match key {
             "mailbox" => Some(format!("{}/{}", self.session_root, session::MAILBOX_DIR)),
-            "agent-inbox" => Some(AGENT_INBOX_ROOT.to_string()),
+            "agent-inbox" => Some(agent_inbox_root()),
             "main-book" => Some(format!("{}/00-主册", self.mail_root)),
             "na-book" => Some(format!("{}/10-NA信箱", self.mail_root)),
             _ => None,
@@ -297,15 +297,28 @@ impl AgentService {
     }
 }
 
-/// 全局评审信箱根（BAR-167：主册只读引用，na 侧只读不写；
-/// 2026-09-30 随信箱正迁改指 /root/90-信箱/00-主册——旧 /root/kfmv4 路径
-/// 随仓迁 /root/10-项目/kfmv4 失效，chain spec_bar167_端点_agentinbox真根
-/// 红定罪；master 侧同值同修，合并取并集）
-pub const AGENT_INBOX_ROOT: &str = "/root/90-信箱/00-主册";
+/// 全局评审信箱根（BAR-167：主册只读引用，na 侧只读不写）。
+/// env `NA_AGENT_INBOX_ROOT` 优先，否则 `$HOME/90-信箱/00-主册`——
+/// 2026-09-30 边界审计：原缺省写死作者机器路径（chain
+/// spec_bar167_端点_agentinbox真根 判卷的是真根可达性，不钉具体路径）
+pub fn agent_inbox_root() -> String {
+    std::env::var("NA_AGENT_INBOX_ROOT").unwrap_or_else(|_| format!("{}/90-信箱/00-主册", home()))
+}
+
+/// $HOME（缺省 `/root`——systemd 服务不设 HOME 时的 uid 0 习惯位；空串按未设算）
+fn home() -> String {
+    std::env::var("HOME")
+        .ok()
+        .filter(|h| !h.is_empty())
+        .unwrap_or_else(|| "/root".into())
+}
 
 /// 信箱迁家后的默认根（BAR-212：main-book/na-book 两册挂这下面；
-/// 覆盖口 = NA_AGENT_MAIL_ROOT 环境变量，照 NA_AGENT_SESSION_ROOT 先例）
-pub const DEFAULT_MAIL_ROOT: &str = "/root/90-信箱";
+/// 覆盖口 = NA_AGENT_MAIL_ROOT 环境变量，照 NA_AGENT_SESSION_ROOT 先例；
+/// 缺省 `$HOME/90-信箱`——同一审计）
+pub fn default_mail_root() -> String {
+    std::env::var("NA_AGENT_MAIL_ROOT").unwrap_or_else(|_| format!("{}/90-信箱", home()))
+}
 
 /// 信头解析只读文件头部这么多字节（v2.1 字头远在窗口内，不整读）
 const HEAD_CAP: usize = 8 * 1024;

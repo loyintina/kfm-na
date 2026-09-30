@@ -3,7 +3,7 @@
 //! 默认 #[ignore]——真打 Kimi/智谱上游，烧真 token（用户 2026-08-31 明示预算充足）。
 //! 手动跑：cargo test --test direct_brain_live_spec -- --ignored
 //!
-//! 配置源：/root/.kfmv4/providers.json + .env（开发期借用 kfmv4 的卡；
+//! 配置源：`$HOME/.kfmv4/providers.json` + `.env`（开发期借用 kfmv4 的卡；
 //! 上机后换 na 私有目录同款文件）。
 //!
 //! 判卷（双线同尺）：start → 收流 → Done 到达 / 零 Error 事件 /
@@ -15,9 +15,16 @@ use kfm_na::direct_brain::DirectApiBrain;
 use std::time::{Duration, Instant};
 
 fn brain() -> DirectApiBrain {
-    let providers = std::fs::read_to_string("/root/.kfmv4/providers.json")
+    let base = std::env::var("NA_KFMV4_HOME").unwrap_or_else(|_| {
+        let home = std::env::var("HOME")
+            .ok()
+            .filter(|h| !h.is_empty())
+            .unwrap_or_else(|| "/root".into());
+        format!("{home}/.kfmv4")
+    });
+    let providers = std::fs::read_to_string(format!("{base}/providers.json"))
         .expect("读 kfmv4 providers.json 失败");
-    let dotenv = std::fs::read_to_string("/root/.kfmv4/.env").expect("读 kfmv4 .env 失败");
+    let dotenv = std::fs::read_to_string(format!("{base}/.env")).expect("读 kfmv4 .env 失败");
     DirectApiBrain::from_files(&providers, &dotenv).expect("装配失败")
 }
 

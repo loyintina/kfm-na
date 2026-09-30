@@ -1,14 +1,22 @@
+# na-agentd systemd 单元素材（2026-09-30 边界审计：路径一律 %h 起头——
+# systemd 会把 %h 展开成运行用户的家目录，故本机形态仍等价，而公开仓不带
+# 作者机器字面路径）。安装：复制到 /etc/systemd/system/ 后按本机落点改
+# ExecStart，再 systemctl daemon-reload && systemctl enable --now。
 [Unit]
 Description=KFM-NA agent runtime daemon (na-agentd · na agent 运行时 v1，工单④ BAR-161)
 After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=/root/10-项目/kfm-na
+WorkingDirectory=%h/10-项目/kfm-na
 Environment=NA_AGENT_BIND=127.0.0.1:9041
-Environment=NA_AGENT_SESSION_ROOT=/root/.kfm/session
-Environment=NA_AGENT_PROVIDER_JSON=/root/.kfm/provider.json
-ExecStart=/root/40-资产/na-发布/na-agentd
+Environment=NA_AGENT_SESSION_ROOT=%h/.kfm/session
+Environment=NA_AGENT_PROVIDER_JSON=%h/.kfm/provider.json
+Environment=NA_AGENT_MAIL_ROOT=%h/90-信箱
+Environment=NA_AGENT_INBOX_ROOT=%h/90-信箱/00-主册
+Environment=NA_AGENT_WORKDIR=%h/10-项目/kfm-na
+Environment=KIMI_CODE_HOME=%h/.kimi-code
+ExecStart=%h/40-资产/na-发布/na-agentd
 Restart=always
 RestartSec=2
 StandardOutput=append:/var/log/kfm-na-agentd.log

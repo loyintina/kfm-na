@@ -108,6 +108,26 @@ pub enum Preview {
     /// 压暗层淡入淡出演示（BAR-163 翻案）：迷你页 + 压暗 α 0↔150 乒乓
     /// + 小卡恒在压暗之上（层级语义同展出）
     VeilFade,
+    /// 烧瓶钮：md 打样 demo 页旧入口（BAR-207 封存展出，demo_icon
+    /// paint_at 共享件）
+    Flask,
+    /// md 引擎展品（BAR-207 md 引擎栏）：真实管线（parse→layout→paint）
+    /// 微缩样品，零平行实现——一效果一件
+    MdH1,
+    MdH2,
+    MdH3,
+    MdH4,
+    MdH5,
+    MdH6,
+    MdBold,
+    MdInlineCode,
+    MdCodeFence,
+    MdQuote,
+    MdList,
+    MdHr,
+    /// 随机色设计：淡彩六色家族横排（accent c1 固定 60° 步进派生，
+    /// 召唤即随机 = 每次开页全新配色）
+    MdRandomColor,
 }
 
 /// 组件条目（跳框字段区+预览画板的数据源：名/状态/位置/规范/考题/
@@ -132,7 +152,7 @@ pub struct CompEntry {
 }
 
 /// 大类表（顺序 = 组件池页下池行序）
-pub const CATEGORIES: [&str; 5] = ["装修框", "组件", "功能光标", "控件", "动效引擎"];
+pub const CATEGORIES: [&str; 6] = ["装修框", "组件", "功能光标", "控件", "动效引擎", "md 引擎"];
 
 /// 组件总表（唯一信息源；排序 = 大类内上池行序）
 pub const COMPONENTS: &[CompEntry] = &[
@@ -326,6 +346,17 @@ pub const COMPONENTS: &[CompEntry] = &[
         tests: "tests/term_btn_spec.rs",
         desc: "阅读页右上角齿轮正左的「>‿」钮，点按回中央终端页。阅读页唯一退出口——右滑/左滑让给文件树与占位解析页后，退出只认本钮。几何锚定齿轮 hit_rect（正左 12px 净距同中轴同尺），两钮永不相撞。",
         preview: Preview::TermBtn,
+    },
+    CompEntry {
+        name: "烧瓶钮",
+        cat: "控件",
+        status: CompStatus::Mothballed,
+        symbol: "hit_rect",
+        file: "src/ui/demo_icon.rs",
+        spec: "BAR-207 退役封存（2026-09-30）",
+        tests: "tests/demo_icon_spec.rs",
+        desc: "md 打样 demo 页的旧入口（齿轮正下 0.5 格同中轴）。BAR-207 随 demo 页一并退役——样式封存留档，未来新实验入口可照此复活。",
+        preview: Preview::Flask,
     },
     CompEntry {
         name: "标签栏",
@@ -547,6 +578,151 @@ pub const COMPONENTS: &[CompEntry] = &[
         tests: "tests/cfg_page_spec.rs",
         desc: "面与内容一体平移（十七修通则，四实例）：①标签切换 = 页面级（双池框+内容整体平移，视口 = 页环）；②下池选行 = 上池级（上池内容平移，视口 = 上池框）；③下拉 = 垂直实例（抽屉随面）；④下拉换选 = 上池体级（二十修：行 0 触发器钉住，体行 1.. 平移+池高 glide；二十四修：与细框滑行/面板收起并发同拍起步——冻结窗口退役，面板拆层承载）。方向律：选择前进 = 内容左移。双代同画（旧代冻结快照带偏移出、新代活态带偏移进，禁两拍），250ms ease-in-out cubic。预览 = 语义化演示（十五修）：两个迷你页（各含双小池）整体横移换页，面与内容一体。",
         preview: Preview::PagePan,
+    },
+    // ---- md 引擎（BAR-207：demo 打样页退役，渲染效果迁池——一效果一条，
+    // 预览 = 真实管线 parse→layout→paint 微缩样品，零平行实现）----
+    CompEntry {
+        name: "H1 半包框",
+        cat: "md 引擎",
+        status: CompStatus::Active,
+        symbol: "BlockKind::H1",
+        file: "src/ui/md_paint.rs",
+        spec: "theme.md §三 md 条款",
+        tests: "tests/md_layout_spec.rs",
+        desc: "[ 半包框：左竖带整块连续 + 顶横带逐行随字宽收尾（缩进 1 格 + 实量 + 0.5 格）+ 首行顶/末行底圆角；文字淡彩 slot0 双绘。折行条款：横带随每行字宽。",
+        preview: Preview::MdH1,
+    },
+    CompEntry {
+        name: "H2 标题",
+        cat: "md 引擎",
+        status: CompStatus::Active,
+        symbol: "BlockKind::H2",
+        file: "src/ui/md_paint.rs",
+        spec: "theme.md §三 md 条款",
+        tests: "tests/md_layout_spec.rs",
+        desc: "无框档：字号阶梯 ×1.45 + 淡彩 slot4 分档。2026-09-27 修宪摘框后块高 = 行带（不留上下垫）。",
+        preview: Preview::MdH2,
+    },
+    CompEntry {
+        name: "H3 标题",
+        cat: "md 引擎",
+        status: CompStatus::Active,
+        symbol: "BlockKind::H3",
+        file: "src/ui/md_paint.rs",
+        spec: "theme.md §三 md 条款",
+        tests: "tests/md_layout_spec.rs",
+        desc: "无框档：字号阶梯 ×1.2 + 淡彩 slot5 分档。",
+        preview: Preview::MdH3,
+    },
+    CompEntry {
+        name: "H4 强调",
+        cat: "md 引擎",
+        status: CompStatus::Active,
+        symbol: "BlockKind::H4",
+        file: "src/ui/md_paint.rs",
+        spec: "theme.md §三 md 条款 + §2.5 淡彩家族",
+        tests: "tests/md_layout_spec.rs",
+        desc: "正文字号 + 淡彩 slot1（强调档，双绘加墨）。",
+        preview: Preview::MdH4,
+    },
+    CompEntry {
+        name: "H5 正文色",
+        cat: "md 引擎",
+        status: CompStatus::Active,
+        symbol: "BlockKind::H5",
+        file: "src/ui/md_paint.rs",
+        spec: "theme.md §三 md 条款 + §2.3 白三档",
+        tests: "tests/md_layout_spec.rs",
+        desc: "正文字号 + 白 0.75 正文档（标题阶梯的正文色落点）。",
+        preview: Preview::MdH5,
+    },
+    CompEntry {
+        name: "H6 次级色",
+        cat: "md 引擎",
+        status: CompStatus::Active,
+        symbol: "BlockKind::H6",
+        file: "src/ui/md_paint.rs",
+        spec: "theme.md §三 md 条款 + §2.3 白三档",
+        tests: "tests/md_layout_spec.rs",
+        desc: "正文字号 + 白 0.5 次级档（标题阶梯的最弱档）。",
+        preview: Preview::MdH6,
+    },
+    CompEntry {
+        name: "粗体",
+        cat: "md 引擎",
+        status: CompStatus::Active,
+        symbol: "SegStyle::Bold",
+        file: "src/ui/md_paint.rs",
+        spec: "theme.md §2.5 淡彩家族 slot0",
+        tests: "tests/md_layout_spec.rs",
+        desc: "淡彩 slot0 双绘（accent 本相淡彩），与正文行内混排。",
+        preview: Preview::MdBold,
+    },
+    CompEntry {
+        name: "行内码",
+        cat: "md 引擎",
+        status: CompStatus::Active,
+        symbol: "SegStyle::Code",
+        file: "src/ui/md_paint.rs",
+        spec: "theme.md §2.5 淡彩家族 slot3",
+        tests: "tests/md_layout_spec.rs",
+        desc: "淡彩 slot3（180° 对色）+ 暗底小块，行内混排。",
+        preview: Preview::MdInlineCode,
+    },
+    CompEntry {
+        name: "代码围栏",
+        cat: "md 引擎",
+        status: CompStatus::Active,
+        symbol: "BlockKind::Code",
+        file: "src/ui/md_paint.rs",
+        spec: "theme.md §三 md 条款",
+        tests: "tests/md_layout_spec.rs",
+        desc: "四边均匀细框 + 渐变暗底内芯；等宽 30px 白 0.75，整行不折行（宪法条款）。",
+        preview: Preview::MdCodeFence,
+    },
+    CompEntry {
+        name: "引用",
+        cat: "md 引擎",
+        status: CompStatus::Active,
+        symbol: "BlockKind::Quote",
+        file: "src/ui/md_paint.rs",
+        spec: "theme.md §三 md 条款",
+        tests: "tests/md_layout_spec.rs",
+        desc: "左竖线 2px + 缩进 1 格 + 白 0.5 次级文。",
+        preview: Preview::MdQuote,
+    },
+    CompEntry {
+        name: "列表",
+        cat: "md 引擎",
+        status: CompStatus::Active,
+        symbol: "BlockKind::List",
+        file: "src/ui/md_paint.rs",
+        spec: "theme.md §三 md 条款",
+        tests: "tests/md_layout_spec.rs",
+        desc: "缩进 1 格 ▪ accent 方块符 + 白 0.75 列表文。",
+        preview: Preview::MdList,
+    },
+    CompEntry {
+        name: "md 分隔线",
+        cat: "md 引擎",
+        status: CompStatus::Active,
+        symbol: "BlockKind::Hr",
+        file: "src/ui/md_paint.rs",
+        spec: "theme.md §三 md 条款",
+        tests: "tests/md_layout_spec.rs",
+        desc: "3px 横向 accent 渐变（与框厚同尺，2026-09-27 用户拍板加粗），上下各 0.5 格。",
+        preview: Preview::MdHr,
+    },
+    CompEntry {
+        name: "随机色设计",
+        cat: "md 引擎",
+        status: CompStatus::Active,
+        symbol: "pastel_family",
+        file: "src/ui/accent.rs",
+        spec: "theme.md §2.5 淡彩六色家族",
+        tests: "tests/md_layout_spec.rs",
+        desc: "accent c1 固定 60° 步进派生六色家族：粗体/H4/保留/行内码/H2/H3 各就各位。召唤即随机——每次开页全新配色，家族内角色关系守恒。",
+        preview: Preview::MdRandomColor,
     },
 ];
 
