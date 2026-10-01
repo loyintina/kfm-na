@@ -3567,7 +3567,7 @@ impl App {
                         && pt.2.is_none()
                         && let (Some(page), Some((sw, sh))) = (&self.parser_page, self.screen_px())
                     {
-                        let (snap, hit_result, conn_hit, mail_hit, tap_desc, geo_cmp) = {
+                        let (snap, hit_result, conn_hit, mail_hit) = {
                             let pg = page.lock().unwrap();
                             // 眼手同尺的真义（BAR-145 修复，2026-09-24 用户
                             // 拍板）：命中吃**屏上正显示的那一代**快照——
@@ -3586,52 +3586,6 @@ impl App {
                                 self.chrome_inset() + self.cur_bar_h(),
                                 &snap,
                             );
-                            // BAR-145 复发案仪器（2026-09-25）：活体 sig 七维
-                            // + 行带 vs 屏代账对表——异 = 该重烘没重烘（纹理
-                            // 滞留），差维直接指认漏的 sig 维；同而肉眼仍漂
-                            // = 病灶在纹理之下（合成/表面层）
-                            let live_sig = [
-                                u64::from(sw),
-                                u64::from(sh),
-                                u64::from(self.chrome_inset()),
-                                u64::from(self.cur_bar_h()),
-                                pg.snap().epoch,
-                                crate::tunnel::snap().map_or(0, |s| s.lock().unwrap().epoch),
-                                u64::from(crate::self_restart::restart_armed(
-                                    crate::report::boot_ms() as u64,
-                                )),
-                            ];
-                            let live_rows = g
-                                .lay
-                                .rows
-                                .iter()
-                                .enumerate()
-                                .map(|(i, r)| format!("{i}:{}-{}", r.y, r.y + i64::from(r.h)))
-                                .collect::<Vec<_>>()
-                                .join(" ");
-                            let geo_cmp = match crate::ui::parser_page::baked_geo() {
-                                Some(bg) => {
-                                    let sig_same = bg.sig == live_sig;
-                                    let rows_same = bg.rows == live_rows;
-                                    let age =
-                                        (crate::report::boot_ms() as u64).saturating_sub(bg.at_ms);
-                                    if sig_same && rows_same {
-                                        format!("几何对表同(账龄{age}ms)")
-                                    } else {
-                                        format!(
-                                            "几何对表异(sig{} rows{} 账龄{}ms 屏代sig{:?} 活体sig{:?} 屏代行[{}] 活体行[{}])",
-                                            if sig_same { "同" } else { "异" },
-                                            if rows_same { "同" } else { "异" },
-                                            age,
-                                            bg.sig,
-                                            live_sig,
-                                            bg.rows,
-                                            live_rows
-                                        )
-                                    }
-                                }
-                                None => "几何对表无账".to_string(),
-                            };
                             let h = crate::ui::parser_page::hit(
                                 &g.lay,
                                 pt.0 as i64,
@@ -3693,75 +3647,8 @@ impl App {
                             } else {
                                 None
                             };
-                            // 点按遥测（BAR-145 挂起案仪器，2026-09-24 用户拍板
-                            // 「手指点击位置 vs UI 响应位置埋日志」）：指位→命中
-                            // 目标一条账。Session/Kill 附会话名与行 y 带——命中
-                            // 对不对得上肉眼框，与 na-shot 像素对表全在这行；
-                            // 落空连屏寸/inset/表滚动一起落（漂移对表三数）
-                            let desc = if let Some(hh) = &h {
-                                match hh {
-                                    crate::ui::parser_page::Hit::Session(i)
-                                    | crate::ui::parser_page::Hit::Kill(i) => {
-                                        let r = &g.lay.rows[*i];
-                                        let name = snap
-                                            .sessions
-                                            .get(*i)
-                                            .map(|s| s.name.as_str())
-                                            .unwrap_or("?");
-                                        format!(
-                                            "{hh:?} 行{i}「{name}」框y{}-{}（epoch={} 会话{}）",
-                                            r.y,
-                                            r.y + i64::from(r.h),
-                                            snap.epoch,
-                                            snap.sessions.len()
-                                        )
-                                    }
-                                    other => format!(
-                                        "{other:?}（epoch={} 会话{}）",
-                                        snap.epoch,
-                                        snap.sessions.len()
-                                    ),
-                                }
-                            } else if let Some(chh) = &ch {
-                                format!("通道卡 {chh:?}（epoch={}）", snap.epoch)
-                            } else if let Some(mhh) = &mh {
-                                format!("信箱入口卡 {mhh:?}（epoch={}）", snap.epoch)
-                            } else {
-                                format!(
-                                    "落空（屏{sw}x{sh} inset={} bar={} epoch={} 会话{} 表滚{} 裁带{}-{}）",
-                                    self.chrome_inset(),
-                                    self.cur_bar_h(),
-                                    snap.epoch,
-                                    snap.sessions.len(),
-                                    snap.scroll,
-                                    g.lay.list_clip.0,
-                                    g.lay.list_clip.1
-                                )
-                            };
-                            (snap, h.map(|hh| (hh, g.mode)), ch, mh, desc, geo_cmp)
+                            (snap, h.map(|hh| (hh, g.mode)), ch, mh)
                         };
-                        // BAR-145 修复臂生效时把「补了多少、原值多少」一并落账：
-                        // 起手/抬手已是显示空间（与 na-shot/系统截屏同尺），原值
-                        // = 账面值 − 窗顶，再发病时读数不用猜（账要能自证）。
-                        let drift = if self.touch_win_top > 0 {
-                            format!(
-                                " 窗顶{}（已补回显示空间，原起手({:.0},{:.0})）",
-                                self.touch_win_top,
-                                pt.0,
-                                pt.1 - f64::from(self.touch_win_top)
-                            )
-                        } else {
-                            " 窗顶0".to_string()
-                        };
-                        crate::report::report(
-                            "touch",
-                            &format!(
-                                "解析页点按 起手({:.0},{:.0}) 抬手({x:.0},{y:.0}) → {tap_desc} 屏代{} {geo_cmp}{drift}",
-                                pt.0,
-                                pt.1,
-                                crate::ui::parser_page::baked_epoch(),
-                            ),
-                        );
                         if let Some((hh, mode)) = hit_result {
                             self.parser_dispatch(snap, hh, mode);
                         }
@@ -9460,8 +9347,6 @@ impl App {
         // BAR-208 占位相（阅读页上召唤的空白解析页）：只画页环不画内容——
         // 进 sig 一维（漏维 = 占位/实体互换不重烘，旧内容鬼影）
         let pt_placeholder = ai_snap.is_some_and(|s| s.pt_placeholder);
-        // BAR-145 复发案仪器：sig 落成变量——烘焙后同值落屏代几何账，
-        // [touch] 时与活体七维对表（漏维 = 该重烘没重烘的直接证据）
         let pt_sig = (
             w,
             h,
@@ -9474,49 +9359,12 @@ impl App {
             restart_armed_now,
             pt_placeholder,
             // BAR-212：信箱入口卡计数字随 mail_feed 换代（漏维 = 信到了
-            // 卡面计数不重烘旧数鬼影）。涂装维不挪几何——与 accent 同色
-            // 不入 BAR-145 屏代几何账七维
+            // 卡面计数不重烘旧数鬼影）
             crate::mail_feed::epoch(),
         );
         if pt_visible && sigs.parser.feed(pt_sig) {
             let px = g.slot_canvas(crate::gles_present::ChromeSlot::Parser);
             px.fill(0);
-            // BAR-145 仪器（2026-09-24 对表实录：触摸侧 [touch] 已落
-            // 命中几何，漂移时渲染侧几何无账 = 死无对证）：烘焙落渲染
-            // 侧几何一条——与 [touch] 同尺同格式，两边各算各的时直接
-            // 对 epoch/会话数/裁带/行带，不靠运气窗口
-            let mut bake_rows = String::new();
-            if let Some(ps) = parser_snap {
-                let geo = parser_geom(w, h, bar_h, ime + bar_h, ps);
-                let rows = geo
-                    .lay
-                    .rows
-                    .iter()
-                    .enumerate()
-                    .map(|(i, r)| format!("{i}:{}-{}", r.y, r.y + i64::from(r.h)))
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                bake_rows = rows.clone();
-                // 仪器三期补名单（2026-09-24 对表实录：行带一致但名单异代
-                // = 名次错位型「行漂移」——用户点看到的名字进的是别家，
-                // 只有行带没有名单时这种漂移在账上完全隐形）
-                let names = ps
-                    .sessions
-                    .iter()
-                    .map(|s| s.name.as_str())
-                    .collect::<Vec<_>>()
-                    .join(",");
-                crate::report::report(
-                    "bake",
-                    &format!(
-                        "解析页烘焙 epoch={} 会话{} 屏{w}x{h} inset={ime} bar={bar_h} 裁带{}-{} 行[{rows}] 名[{names}]",
-                        ps.epoch,
-                        ps.sessions.len(),
-                        geo.lay.list_clip.0,
-                        geo.lay.list_clip.1
-                    ),
-                );
-            }
             // 视口化（2026-09-20 用户拍板「卡弹小」）：壳吃 bottom_inset
             // ——键盘在场页环弹小到输入栏带以上，环底 = 页面滚动视口底；
             // 内容布局仍只吃栏带高（BAR-119 只盖不重排），逾视底归键盘
@@ -9534,21 +9382,6 @@ impl App {
             g.slot_bake(crate::gles_present::ChromeSlot::Parser);
             if let Some(ps) = parser_snap {
                 crate::ui::parser_page::note_baked_snap(ps);
-                // BAR-145 复发案仪器：屏代几何账（sig 七维+行带）——
-                // [touch] 对表的右半本
-                crate::ui::parser_page::note_baked_geo(crate::ui::parser_page::BakedGeo {
-                    sig: [
-                        u64::from(w),
-                        u64::from(h),
-                        u64::from(ime),
-                        u64::from(bar_h),
-                        pt_epoch,
-                        tunnel_epoch,
-                        u64::from(restart_armed_now),
-                    ],
-                    rows: bake_rows,
-                    at_ms: crate::report::boot_ms() as u64,
-                });
             }
         }
         // 阅读页槽烘焙（2026-09-27 五公民，BAR-170）：同规——画布恒靠泊
@@ -11656,35 +11489,6 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
                 crate::report::report_sync("web", &format!("JNI startWebViewFromGate 失败: {e}"));
             }
         }));
-        // BAR-145（2026-09-25）：gate window-state-req → JNI 甩 MainActivity
-        // .dumpWindowStateFromGate()——从 Java 皮（输入边界外侧）远测系统
-        // 认定的窗口几何，发病/健康对表钉层。vm/gref 第三对（同上两槽）
-        let vm3 = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr() as *mut _) };
-        let gref3 = vm3
-            .attach_current_thread(|env| {
-                let act = unsafe {
-                    jni::objects::JObject::from_raw(env, app.activity_as_ptr() as *mut _)
-                };
-                env.new_global_ref(&act)
-            })
-            .expect("MainActivity GlobalRef#3 建立失败");
-        crate::gate::register_winstate_hook(Box::new(move || {
-            let r = vm3.attach_current_thread(|env| {
-                env.call_method(
-                    &gref3,
-                    jni::jni_str!("dumpWindowStateFromGate"),
-                    jni::jni_sig!(() -> void),
-                    &[],
-                )
-                .map(|_| ())
-            });
-            if let Err(e) = r {
-                crate::report::report_sync(
-                    "winstate",
-                    &format!("JNI dumpWindowStateFromGate 失败: {e}"),
-                );
-            }
-        }));
         // BAR-162（2026-09-26）：gate install-apk-req → **na 自更新原语**。
         // 缘起：桥 shell 路已证死（经 QUIC 桥在 na 沙箱 am start 被 vivo
         // 按进程态判 BAL 静默吞，连浏览器 VIEW 都不弹）——安装意图必须由
@@ -11692,7 +11496,7 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
         // + 拼 content://）在 Rust 纯函数（src/install.rs，有 A 档考题）；
         // UI 半边优先甩 Java 皮 installApkFromGate（UI 线程正道），现行
         // 装机 APK 没有该方法时走**引导腿**（门线程直调 activity.startActivity）
-        // ——自更新原语的零引导义：不装包也能用这条道。vm/gref 第四对。
+        // ——自更新原语的零引导义：不装包也能用这条道。vm/gref 第三对。
         let vm4 = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr() as *mut _) };
         let gref4 = vm4
             .attach_current_thread(|env| {
