@@ -24,8 +24,9 @@
 //! 布局（网格制）：卡外框由三区排布器配给（parser_chain::slot_rect——
 //! 两轴契约 §四 v2：本卡不再知道「我接在谁下面」「我在哪个区」，落位/
 //! 间距/滚动/裁剪归排布器）。段内全宽（窄列不分列）。卡高 =
-//! PAD_V·2 + 连接段 + 段距 + 通道段（2026-09-24 起恒定——会话行表
-//! 退役，卡高不再吃会话数）。
+//! PAD_V·2 + 连接段 + 段距 + 通道段（2026-09-24 起不吃会话数——
+//! 会话行表退役；2026-10-01 起吃折行账——BAR-206 打回重做：字段值
+//! 格折行往下长，行高随内容长，全单行 = 旧恒定几何）。
 
 use crate::ui::conn_card as cc;
 use crate::ui::dual_pool::PoolRect;
@@ -61,9 +62,63 @@ pub const LEFT_H: u32 = pp::ROW_H + pp::ROW_GAP + LFIELDS_BLOCK + pp::ROW_GAP + 
 /// 钮行（[跳闸/投 QUIC] + [重启] 半宽并排）
 pub const RIGHT_H: u32 = pp::ROW_H + pp::ROW_GAP + RFIELDS_BLOCK + pp::ROW_GAP + pp::BTN_H;
 
-/// 卡高账（A 档纯函数，恒定）：PAD_V·2 + 连接段 + 段距 + 通道段
-pub fn card_h() -> u32 {
-    pp::CARD_PAD_V * 2 + LEFT_H + pp::ROW_GAP + RIGHT_H
+/// 字段值折行数账（BAR-206 打回重做，2026-10-01 用户裁定：省略 = 信息
+/// 丢失——长值格折行往下长，行高随内容长，永不删字）：每字段 ≥1 行，
+/// 全 1 = 旧恒定几何（LEFT_H/RIGHT_H 参考值不变）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LinkLines {
+    /// 连接段两字段（目标/本地口）各自折行数
+    pub l: [u32; L_FIELDS],
+    /// 通道段四字段各自折行数
+    pub r: [u32; R_FIELDS],
+}
+
+impl LinkLines {
+    /// 全单行（旧恒定几何；缓存未写入时的缺省）
+    pub const SINGLE: Self = Self {
+        l: [1; L_FIELDS],
+        r: [1; R_FIELDS],
+    };
+}
+
+/// 字段行高（折行往下长）：n 行 = FIELD_H + (n−1) × 行推进（adv =
+/// 涂装侧 meta 档行高 ceil(cell_h × scale × 4/3)，与
+/// draw_field_lines_grid 同一份账——行高账不长 = 折行第二行纵溢
+/// 压盖下行（BAR-206 原症回潮））
+fn field_row_h(lines: u32, adv: u32) -> u32 {
+    FIELD_H + lines.saturating_sub(1) * adv
+}
+
+/// 折行账缓存（涂装烘焙拍写入一次，涂装/命中/合成同读一份——眼手
+/// 同尺；None = 还没烘过，缺省 SINGLE + adv 0 = 旧恒定几何）
+static LAY_LINES: std::sync::Mutex<Option<(LinkLines, u32)>> = std::sync::Mutex::new(None);
+
+/// 写入当前折行账（涂装侧在 parser_chain::heights 之前调用）
+pub fn set_lay_lines(lines: LinkLines, adv: u32) {
+    *LAY_LINES.lock().unwrap() = Some((lines, adv));
+}
+
+/// 读当前折行账（layout_in/card_h_now 调用方同取这一份）
+pub fn lay_lines_now() -> (LinkLines, u32) {
+    LAY_LINES.lock().unwrap().unwrap_or((LinkLines::SINGLE, 0))
+}
+
+/// 卡高账（A 档纯函数）：PAD_V·2 + 连接段 + 段距 + 通道段；字段行高
+/// 随折行数长（全 1 行 = LEFT_H/RIGHT_H 恒定参考值）
+pub fn card_h(lines: &LinkLines, adv: u32) -> u32 {
+    let lblock: u32 = lines.l.iter().map(|&n| field_row_h(n, adv)).sum::<u32>()
+        + FIELD_GAP * (L_FIELDS as u32 - 1);
+    let rblock: u32 = lines.r.iter().map(|&n| field_row_h(n, adv)).sum::<u32>()
+        + FIELD_GAP * (R_FIELDS as u32 - 1);
+    let left = pp::ROW_H + pp::ROW_GAP + lblock + pp::ROW_GAP + pp::BTN_H;
+    let right = pp::ROW_H + pp::ROW_GAP + rblock + pp::ROW_GAP + pp::BTN_H;
+    pp::CARD_PAD_V * 2 + left + pp::ROW_GAP + right
+}
+
+/// 当前卡高（排布器 heights 用：读折行账缓存，涂装/命中同一份）
+pub fn card_h_now() -> u32 {
+    let (lines, adv) = lay_lines_now();
+    card_h(&lines, adv)
 }
 
 /// 一卡布局（涂装/命中同一份——眼手同尺）
@@ -97,9 +152,11 @@ pub struct LinkLayout {
 /// 区窗）。内容随 scroll 卡内平移（壳手势喂入的右账位移；钳制语义
 /// 唯一在本函数——上限 = 自报高 − 框高，与 parser_chain::scroll_max
 /// 同一份账的两种吃法：区滑时代它平移槽位，卡内滚时代它平移内容）。
-/// 2026-09-24 通道段改造：自报高恒定（n_sessions 参数退役）
-pub fn layout_in(card: PoolRect, scroll: i64) -> LinkLayout {
-    let full_h = card_h();
+/// 2026-09-24 通道段改造：自报高恒定（n_sessions 参数退役）；
+/// 2026-10-01 BAR-206 打回重做：自报高改吃折行账（字段值格折行
+/// 往下长，全 1 行 = 旧恒定几何）
+pub fn layout_in(card: PoolRect, scroll: i64, lines: &LinkLines, adv: u32) -> LinkLayout {
+    let full_h = card_h(lines, adv);
     let scroll_max = i64::from(full_h.saturating_sub(card.h));
     let eff_scroll = scroll.clamp(0, scroll_max.max(0));
     let cx = card.x + i64::from(pp::CARD_PAD_H);
@@ -113,14 +170,19 @@ pub fn layout_in(card: PoolRect, scroll: i64) -> LinkLayout {
     };
     // 连接段
     let lheader = header(y0);
-    let fy = y0 + i64::from(pp::ROW_H + pp::ROW_GAP);
-    let lfields: [PoolRect; L_FIELDS] = std::array::from_fn(|i| PoolRect {
-        x: cx,
-        y: fy + (FIELD_H + FIELD_GAP) as i64 * i as i64,
-        w: cw,
-        h: FIELD_H,
+    let mut fy = y0 + i64::from(pp::ROW_H + pp::ROW_GAP);
+    let lfields: [PoolRect; L_FIELDS] = std::array::from_fn(|i| {
+        let h = field_row_h(lines.l[i], adv);
+        let r = PoolRect {
+            x: cx,
+            y: fy,
+            w: cw,
+            h,
+        };
+        fy += i64::from(h + FIELD_GAP);
+        r
     });
-    let by = fy + i64::from(LFIELDS_BLOCK + pp::ROW_GAP);
+    let by = fy - i64::from(FIELD_GAP) + i64::from(pp::ROW_GAP);
     let button = PoolRect {
         x: cx,
         y: by,
@@ -130,14 +192,19 @@ pub fn layout_in(card: PoolRect, scroll: i64) -> LinkLayout {
     // 通道段（段距一行）：四字段行 + 调试钮行（半宽并排）
     let ry = by + i64::from(pp::BTN_H + pp::ROW_GAP);
     let rheader = header(ry);
-    let rfy = ry + i64::from(pp::ROW_H + pp::ROW_GAP);
-    let rfields: [PoolRect; R_FIELDS] = std::array::from_fn(|i| PoolRect {
-        x: cx,
-        y: rfy + (FIELD_H + FIELD_GAP) as i64 * i as i64,
-        w: cw,
-        h: FIELD_H,
+    let mut rfy = ry + i64::from(pp::ROW_H + pp::ROW_GAP);
+    let rfields: [PoolRect; R_FIELDS] = std::array::from_fn(|i| {
+        let h = field_row_h(lines.r[i], adv);
+        let r = PoolRect {
+            x: cx,
+            y: rfy,
+            w: cw,
+            h,
+        };
+        rfy += i64::from(h + FIELD_GAP);
+        r
     });
-    let by2 = rfy + i64::from(RFIELDS_BLOCK + pp::ROW_GAP);
+    let by2 = rfy - i64::from(FIELD_GAP) + i64::from(pp::ROW_GAP);
     let half_w = cw.saturating_sub(BTN_GAP) / 2;
     let qbutton = PoolRect {
         x: cx,

@@ -4895,7 +4895,66 @@ impl TermView {
         let tmux_h = pp::tmux_card_h(snap.sessions.len(), mode, cap);
         let regs = crate::ui::parser_chain::regions(w, h, bar_inset, vbottom, tmux_h);
         let lay = pp::layout_in(regs.dock.clone(), snap.sessions.len(), mode, snap.scroll);
-        let chain_h = crate::ui::parser_chain::heights(tmux_h, crate::ui::sys_card::card_h_now());
+        // BAR-206 打回重做（2026-10-01 用户裁定：省略 = 信息丢失，「那些
+        // 信息都是必要的」）：字段值格折行账在排布器 heights 前算好并写
+        // 卡模块缓存（涂装/命中/GLES 合成同一份，眼手同尺）——长值往下
+        // 长不删字，行高/卡高随折行数长（全 1 行 = 旧恒定几何）
+        let adv_meta = (self.cell_h as f32 * GRID_META_SCALE * 4.0 / 3.0).ceil() as u32;
+        let adv_title = (self.cell_h as f32 * 4.0 / 3.0).ceil() as u32;
+        let link_row_w = regs.right_top.w.saturating_sub(pp::CARD_PAD_H * 2);
+        let link_lines = crate::ui::link_card::LinkLines {
+            l: [
+                self.field_wrap_lines(
+                    &csnap.target,
+                    link_row_w,
+                    crate::ui::conn_card::FIELD_LABELS[0],
+                ),
+                self.field_wrap_lines(
+                    &csnap.local,
+                    link_row_w,
+                    crate::ui::conn_card::FIELD_LABELS[1],
+                ),
+            ],
+            r: std::array::from_fn(|i| {
+                self.field_wrap_lines(
+                    &ssnap.vals[i],
+                    link_row_w,
+                    crate::ui::svc_card::FIELD_LABELS[i],
+                )
+            }),
+        };
+        crate::ui::link_card::set_lay_lines(link_lines, adv_meta);
+        let sys_row_w = regs.left.w.saturating_sub(pp::CARD_PAD_H * 2);
+        let xhtext = format!("环境 · {}", xsnap.word);
+        let xh_inner = sys_row_w
+            .saturating_sub(CELL_W)
+            .saturating_sub(crate::ui::cfg_page::FIELD_TEXT_INSET);
+        let xrows0 = crate::ui::sys_card::rows_of(&xsnap);
+        let sys_lines = crate::ui::sys_card::SysLines {
+            header: self.wrap_lines_px(&xhtext, xh_inner),
+            metrics: xrows0
+                .metrics
+                .iter()
+                .map(|&k| {
+                    self.field_wrap_lines(
+                        crate::ui::sys_card::metric_value(&xsnap, k),
+                        sys_row_w,
+                        crate::ui::sys_card::metric_label(k),
+                    )
+                })
+                .collect(),
+            uptime: if xrows0.uptime {
+                self.field_wrap_lines(&xsnap.uptime, sys_row_w, crate::ui::sys_card::TAIL_LABEL)
+            } else {
+                1
+            },
+        };
+        crate::ui::sys_card::set_lay_lines(sys_lines, adv_title, adv_meta);
+        let chain_h = crate::ui::parser_chain::heights(
+            tmux_h,
+            crate::ui::sys_card::card_h_now(),
+            crate::ui::link_card::card_h_now(),
+        );
         let scrolls = crate::ui::parser_chain::Scrolls {
             left: snap.left_scroll,
             right: snap.right_scroll,
@@ -5086,15 +5145,20 @@ impl TermView {
         // 已取）；几何 = link_card 同一份 layout——组件池登记 link_card）
         let lclip =
             crate::ui::parser_chain::clip_of(crate::ui::parser_chain::ChainCardId::Link, &regs);
-        let llay = crate::ui::link_card::layout_in(
-            crate::ui::parser_chain::slot_rect(
-                crate::ui::parser_chain::ChainCardId::Link,
-                &regs,
-                &chain_h,
-                &scrolls,
-            ),
-            scrolls.right,
-        );
+        let llay = {
+            let (llines, ladv) = crate::ui::link_card::lay_lines_now();
+            crate::ui::link_card::layout_in(
+                crate::ui::parser_chain::slot_rect(
+                    crate::ui::parser_chain::ChainCardId::Link,
+                    &regs,
+                    &chain_h,
+                    &scrolls,
+                ),
+                scrolls.right,
+                &llines,
+                ladv,
+            )
+        };
         let cclip = llay.content_clip;
         let cclip32 = Some((cclip.0 as i32, cclip.1 as i32));
         paint_rect_ring_yclip(
@@ -5134,8 +5198,9 @@ impl TermView {
         );
         // 连接段两字段行（目标/本地口——2026-09-30 BAR-212 用户拍板：
         // 重拉/错误两行退役；字段标签列配方：标签左对齐亮档、值右锚
-        // 灰档。BAR-206：目标地址类长串恒定单行——中段省略（头尾双锚）
-        // 不折行（折行第二行纵溢出行盒），硬裁无省略号退役）
+        // 灰档。BAR-206 打回重做（2026-10-01 用户裁定省略 = 信息丢失）：
+        // 目标地址类长串原文全量进涂装，格折行往下长（行高折行账同步
+        // 长好），永不删字）
         let values = [&csnap.target, &csnap.local];
         for (i, fr) in llay.lfields.iter().enumerate() {
             self.draw_field_lines_grid(
@@ -5150,22 +5215,17 @@ impl TermView {
                 cclip32,
                 true,
             );
-            let v = self.field_value_elided(
-                values[i].as_str(),
-                fr.w,
-                crate::ui::conn_card::FIELD_LABELS[i],
-            );
-            self.draw_field_lines_grid(
+            self.paint_field_value_grid(
                 &mut frame,
-                &v,
+                values[i].as_str(),
                 (fr.x + off) as u32,
                 fr.w,
                 fr.y as u32,
                 fr.h,
+                crate::ui::conn_card::FIELD_LABELS[i],
                 GRID_META_SCALE,
                 meta_fg,
                 cclip32,
-                false,
             );
         }
         // [重连] 钮（三级框行主形态，连接段尾，与 tmux 钮同件同尺）
@@ -5236,19 +5296,19 @@ impl TermView {
             } else {
                 meta_fg
             };
-            // BAR-206：同字段值单行契约（长状态句中段省略不折行）
-            let v = self.field_value_elided(v, fr.w, crate::ui::svc_card::FIELD_LABELS[i]);
-            self.draw_field_lines_grid(
+            // BAR-206 打回重做：同字段值折行契约（长状态句原文全量
+            // 折行往下长，永不省略删字）
+            self.paint_field_value_grid(
                 &mut frame,
-                &v,
+                v,
                 (fr.x + off) as u32,
                 fr.w,
                 fr.y as u32,
                 fr.h,
+                crate::ui::svc_card::FIELD_LABELS[i],
                 GRID_META_SCALE,
                 v_fg,
                 cclip32,
-                false,
             );
         }
         // 调试钮行（三级框行主形态，半宽并排）：[跳闸/投 QUIC]（钮面/
@@ -5325,15 +5385,21 @@ impl TermView {
             crate::ui::parser_chain::clip_of(crate::ui::parser_chain::ChainCardId::Sys, &regs);
         let xclip32 = Some((xclip.0 as i32, xclip.1 as i32));
         let xrows = crate::ui::sys_card::rows_of(&xsnap);
-        let xlay = crate::ui::sys_card::layout_in(
-            crate::ui::parser_chain::slot_rect(
-                crate::ui::parser_chain::ChainCardId::Sys,
-                &regs,
-                &chain_h,
-                &scrolls,
-            ),
-            &xrows,
-        );
+        let xlay = {
+            let (xlines, xadv_t, xadv_m) = crate::ui::sys_card::lay_lines_now(&xrows);
+            crate::ui::sys_card::layout_in(
+                crate::ui::parser_chain::slot_rect(
+                    crate::ui::parser_chain::ChainCardId::Sys,
+                    &regs,
+                    &chain_h,
+                    &scrolls,
+                ),
+                &xrows,
+                &xlines,
+                xadv_t,
+                xadv_m,
+            )
+        };
         paint_rect_ring_yclip(
             &mut frame,
             xlay.card.x + off,
@@ -5351,29 +5417,28 @@ impl TermView {
             true,
         );
         // 卡头「环境 · 对象词」（有数据才亮标题档——占位是次级信息）；
-        // BAR-206：对象词 = 目标主机地址类长串，装不下走中段省略（头尾
-        // 双锚认得出是哪台），硬裁无省略号退役
+        // BAR-206 打回重做：对象词 = 目标主机地址类长串，原文全量格折行
+        // 往下长（卡头行高折行账同步长好），省略/硬裁一并退役
         let header_fg = if xrows.metrics.is_empty() && !xrows.uptime {
             meta_fg
         } else {
             title_fg
         };
-        let htext = crate::ui::grid_text::elide_middle(
-            &format!("环境 · {}", xsnap.word),
-            xlay.header.w.saturating_sub(CELL_W) / self.cell_w.max(1),
-        );
-        let (hitems, _) = self.measure_items_grid(&htext);
-        self.draw_grid_text_left(
-            &mut frame,
-            &hitems,
-            xlay.header.x + off + i64::from(CELL_W),
-            xlay.header.y + (i64::from(xlay.header.h) - i64::from(self.cell_h)).max(0) / 2,
-            self.cell_w,
-            xlay.header.w.saturating_sub(CELL_W),
-            header_fg,
-            0,
-            xclip32,
-        );
+        {
+            let inset = crate::ui::cfg_page::FIELD_TEXT_INSET;
+            self.draw_field_lines_grid(
+                &mut frame,
+                &xhtext,
+                (xlay.header.x + off) as u32 + CELL_W - inset,
+                xlay.header.w - CELL_W + inset,
+                xlay.header.y as u32,
+                xlay.header.h,
+                1.0,
+                header_fg,
+                xclip32,
+                true,
+            );
+        }
         // 单竖列（行集数据定——没数据的行不做）：每轨 = 文字行（标签左锚
         // title 档 + 值右锚 meta 档，值随判色档上色）+ 行下滚动柱轨
         // （占位铺满 + 100% 线 + 逐样本判色，见 paint_sys_bars）
@@ -5393,24 +5458,19 @@ impl TermView {
                 xclip32,
                 true,
             );
-            // BAR-206：值恒定单行——长值（磁盘数字类）中段省略不折行
-            // （折行第二行纵溢出行盒，被下面的柱轨层盖住 = 「被遮住」）
-            let v = self.field_value_elided(
-                crate::ui::sys_card::metric_value(&xsnap, kind),
-                md.row.w,
-                crate::ui::sys_card::metric_label(kind),
-            );
-            self.draw_field_lines_grid(
+            // BAR-206 打回重做：值原文全量格折行往下长（行高折行账同步
+            // 长好，柱轨跟行底走）——省略删字退役，纵溢压轨随之根除
+            self.paint_field_value_grid(
                 &mut frame,
-                &v,
+                crate::ui::sys_card::metric_value(&xsnap, kind),
                 (md.row.x + off) as u32,
                 md.row.w,
                 md.row.y as u32,
                 md.row.h,
+                crate::ui::sys_card::metric_label(kind),
                 GRID_META_SCALE,
                 sys_grade_fg(xhist.latest_grade(kind), meta_fg),
                 xclip32,
-                false,
             );
             // 柱轨（本层直涂 = 稳态位 + 当拍滑入位移）：GLES 主路径的柱
             // 归合成期柱层（SysBars 槽同矩形满覆盖，见 paint_sys_band_layer
@@ -5440,23 +5500,19 @@ impl TermView {
                 xclip32,
                 true,
             );
-            // BAR-206：同字段值单行契约（长在线时长中段省略不折行）
-            let v = self.field_value_elided(
-                xsnap.uptime.as_str(),
-                tr.w,
-                crate::ui::sys_card::TAIL_LABEL,
-            );
-            self.draw_field_lines_grid(
+            // BAR-206 打回重做：同字段值折行契约（长在线时长原文全量
+            // 折行往下长，永不省略删字）
+            self.paint_field_value_grid(
                 &mut frame,
-                &v,
+                xsnap.uptime.as_str(),
                 (tr.x + off) as u32,
                 tr.w,
                 tr.y as u32,
                 tr.h,
+                crate::ui::sys_card::TAIL_LABEL,
                 GRID_META_SCALE,
                 meta_fg,
                 xclip32,
-                false,
             );
         }
 
@@ -8589,21 +8645,45 @@ impl TermView {
         }
     }
 
-    /// 字段行值整形（BAR-206 解析页长值截断/纵溢治理）：字段行盒高恒定
-    /// 2 格（FIELD_H = ROW_H），折行进第二行 = meta 线盒 2×cell_h×scale
-    /// ×4/3（真机 ≈102px）纵溢出行盒压到柱轨/下一行（用户报障「磁盘后面
-    /// 的数字被遮住」）——故字段值**恒定单行不折行**，装不下的长值
-    /// （对象地址/磁盘数字/隧道目标）走中段省略：头尾保真、中间 …。
-    /// 预算格数 = 行内宽（扣双侧 1.5 格文内边距）折格 − 标签格 − 1 格
-    /// 间隔（值右锚/标签左锚同盒共宽，不许贴墨）。格步进不吃 meta 缩字
-    /// （measure_items_grid_scaled 步进恒 = char_cells × cell_w），故格数
-    /// 预算 ≡ px 内宽 ÷ 实例格宽，省略后即单行（钉：
-    /// grid_text_spec spec_elide_middle_bar206_省略后恒定单行）
-    pub(crate) fn field_value_elided(&self, text: &str, cw: u32, label: &str) -> String {
-        let inner = cw.saturating_sub(crate::ui::cfg_page::FIELD_TEXT_INSET * 2);
-        let total = inner / self.cell_w.max(1);
-        let label_cells = crate::ui::grid_text::grid_text_cells(label);
-        crate::ui::grid_text::elide_middle(text, total.saturating_sub(label_cells + 1))
+    /// 字段值折行数（BAR-206 打回重做，2026-10-01 用户裁定：省略 = 信息
+    /// 丢失——长值格折行往下长，行高随内容长，永不删字）。账在排布器
+    /// heights 之前算好写进卡模块折行缓存（涂装/命中/GLES 同一份）。
+    /// 纯账归 grid_text::field_value_lines（值列 = 行内宽 − 标签宽 −
+    /// 1 格间隔；格步进不吃 meta 缩字，折行数与 scale 无关）
+    pub(crate) fn field_wrap_lines(&self, text: &str, row_w: u32, label: &str) -> u32 {
+        let inner = row_w.saturating_sub(crate::ui::cfg_page::FIELD_TEXT_INSET * 2);
+        crate::ui::grid_text::field_value_lines(text, inner, self.cell_w, label)
+    }
+
+    /// 任意文本按格折行数（无标签共宽的场合：卡头「环境 · 对象词」）
+    pub(crate) fn wrap_lines_px(&self, text: &str, inner_px: u32) -> u32 {
+        let cells = (inner_px / self.cell_w.max(1)).max(1);
+        crate::ui::grid_text::grid_wrap(text, cells).len().max(1) as u32
+    }
+
+    /// 字段值涂装（BAR-206 打回重做）：原文全量进涂装（不预删字），
+    /// 值列收窄到 行内宽 − 标签宽 − 1 格间隔（右缘不动——draw 内
+    /// 逐行右锚贴 cx+cw−inset；折行往下长，行高由折行账同步长好）
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn paint_field_value_grid(
+        &self,
+        frame: &mut Frame<'_>,
+        text: &str,
+        cx: u32,
+        cw: u32,
+        cy: u32,
+        rh: u32,
+        label: &str,
+        scale: f32,
+        fg: u32,
+        clip_y: Option<(i32, i32)>,
+    ) {
+        let inset = crate::ui::cfg_page::FIELD_TEXT_INSET;
+        let inner = cw.saturating_sub(inset * 2);
+        let col = crate::ui::grid_text::field_value_col_px(inner, self.cell_w, label);
+        let cw_v = (col + inset * 2).min(cw);
+        let cx_v = (cx + cw).saturating_sub(cw_v).max(cx);
+        self.draw_field_lines_grid(frame, text, cx_v, cw_v, cy, rh, scale, fg, clip_y, false);
     }
 
     /// 字段框文涂装·网格引擎版（BAR-196：draw_field_lines 收编退役——

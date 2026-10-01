@@ -77,9 +77,9 @@
 | `src/ui/fx_preview.rs` | 8 | 5 | 3 | LEG_GO_MS LEG_RETURN_START LEG_RETURN_MS |
 | `src/ui/fx_spring.rs` | 14 | 14 | 0 | — |
 | `src/ui/gear.rs` | 7 | 7 | 0 | — |
-| `src/ui/grid_text.rs` | 4 | 4 | 0 | — |
+| `src/ui/grid_text.rs` | 5 | 5 | 0 | — |
 | `src/ui/keybar.rs` | 1 | 1 | 0 | — |
-| `src/ui/link_card.rs` | 10 | 10 | 0 | — |
+| `src/ui/link_card.rs` | 14 | 11 | 3 | set_lay_lines lay_lines_now card_h_now |
 | `src/ui/mail_card.rs` | 5 | 4 | 1 | N_ENTRIES |
 | `src/ui/mail_list.rs` | 36 | 24 | 12 | ITEM_PAD_V ITEM_PAD_H ITEM_META_H ITEM_TITLE_H ITEM_SUMMARY_H ITEM_ROW_GAP SUMMARY_PENDING SUMMARY_EMPTY title_rect SUMMARY_LOOKBACK open_key take_dirty |
 | `src/ui/md_layout.rs` | 5 | 5 | 0 | — |
@@ -94,7 +94,7 @@
 | `src/ui/seam.rs` | 29 | 29 | 0 | — |
 | `src/ui/stage.rs` | 7 | 7 | 0 | — |
 | `src/ui/svc_card.rs` | 13 | 12 | 1 | head_word |
-| `src/ui/sys_card.rs` | 22 | 19 | 3 | card_h_now local_y bar_geom |
+| `src/ui/sys_card.rs` | 25 | 20 | 5 | set_lay_lines lay_lines_now card_h_now local_y bar_geom |
 | `src/ui/tab_bar.rs` | 27 | 27 | 0 | — |
 | `src/ui/term_btn.rs` | 8 | 8 | 0 | — |
 | `src/ui/viewport_push.rs` | 2 | 2 | 0 | — |

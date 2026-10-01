@@ -448,7 +448,13 @@ fn spec_柱层_uv随位移滑() {
         metrics: sys_hist::METRICS.to_vec(),
         uptime: true,
     };
-    let band = sys_card::band_of(&sys_card::layout_in(card, &rows));
+    let band = sys_card::band_of(&sys_card::layout_in(
+        card,
+        &rows,
+        &sys_card::SysLines::single(&rows),
+        0,
+        0,
+    ));
     let clip = (0, 4000);
     let p0 = sys_card::band_place(&band, 0, clip);
     let p1 = sys_card::band_place(&band, sys_hist::STEP, clip);
@@ -510,7 +516,13 @@ fn spec_柱层_纵向裁剪() {
         metrics: sys_hist::METRICS.to_vec(),
         uptime: true,
     };
-    let band = sys_card::band_of(&sys_card::layout_in(card, &rows));
+    let band = sys_card::band_of(&sys_card::layout_in(
+        card,
+        &rows,
+        &sys_card::SysLines::single(&rows),
+        0,
+        0,
+    ));
     let t0 = &band.tracks[0];
     let t1 = &band.tracks[1];
     // 裁剪带罩轨 0 下半 + 轨 1 上半（区窗被滚到两轨之间）→ 两轨各砍一半
