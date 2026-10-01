@@ -50,6 +50,9 @@ pub enum DragRole {
     SummonParser,
     /// 右滑推解析页回右缘：偏移从 0 → 屏宽
     DismissParser,
+    /// 右滑推信箱页回右缘：偏移从 0 → 屏宽（BAR-214：信箱页出场
+    /// 唯一路径 = 右滑推回；召唤不走手势——解析页入口卡点行唯一口）
+    DismissMail,
 }
 
 /// 锁定瞬间的栈顶读数（角色仲裁的唯一栈依赖）：五家面板或都不是。
@@ -65,6 +68,9 @@ pub enum DragTop {
     Config,
     FileTree,
     Parser,
+    /// 信箱页（BAR-214 六公民）：右缘家——右拖推回，左拖空操作
+    /// （与 Config/Parser 同族；不同于 Reader 归 Other 的 BAR-208 语义）
+    Mail,
     Other,
 }
 
@@ -149,7 +155,7 @@ impl PanelDrag {
                 match top {
                     DragTop::FileTree => DragRole::DismissFileTree,
                     // 右缘本家已在顶：左滑空操作
-                    DragTop::Config | DragTop::Parser => {
+                    DragTop::Config | DragTop::Parser | DragTop::Mail => {
                         return None;
                     }
                     DragTop::Other => DragRole::SummonParser,
@@ -158,6 +164,7 @@ impl PanelDrag {
                 match top {
                     DragTop::Config => DragRole::DismissConfig,
                     DragTop::Parser => DragRole::DismissParser,
+                    DragTop::Mail => DragRole::DismissMail,
                     DragTop::FileTree => return None, // 本家已在顶：右滑空操作
                     DragTop::Other => DragRole::SummonFileTree,
                 }
@@ -186,7 +193,9 @@ impl PanelDrag {
         let d = ((x - self.lock_x) * DRAG_GAIN) as f32;
         match self.role {
             Some(DragRole::SummonParser) => (w + d).clamp(0.0, w),
-            Some(DragRole::DismissConfig) | Some(DragRole::DismissParser) => d.clamp(0.0, w),
+            Some(DragRole::DismissConfig)
+            | Some(DragRole::DismissParser)
+            | Some(DragRole::DismissMail) => d.clamp(0.0, w),
             Some(DragRole::SummonFileTree) => (w - d).clamp(0.0, w),
             Some(DragRole::DismissFileTree) => (-d).clamp(0.0, w),
             None => 0.0,
@@ -204,7 +213,8 @@ impl PanelDrag {
             }
             Some(DragRole::DismissConfig)
             | Some(DragRole::DismissFileTree)
-            | Some(DragRole::DismissParser) => (self.offset / w).clamp(0.0, 1.0),
+            | Some(DragRole::DismissParser)
+            | Some(DragRole::DismissMail) => (self.offset / w).clamp(0.0, 1.0),
             None => 0.0,
         }
     }
@@ -232,7 +242,9 @@ impl PanelDrag {
         let v = (x1 - x0) / (t1 - t0) as f64; // px/ms，右为正
         match self.role {
             Some(DragRole::SummonParser) => -v, // 左移 = 朝完成
-            Some(DragRole::DismissConfig) | Some(DragRole::DismissParser) => v,
+            Some(DragRole::DismissConfig)
+            | Some(DragRole::DismissParser)
+            | Some(DragRole::DismissMail) => v,
             Some(DragRole::SummonFileTree) => v, // 右移 = 朝完成
             Some(DragRole::DismissFileTree) => -v,
             None => 0.0,

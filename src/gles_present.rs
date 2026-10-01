@@ -128,6 +128,10 @@ pub enum ChromeSlot {
     /// placement.x 跟 rd_off，右缘家同约定。**末尾追加——现有槽值不动**
     /// （2026-09-30 BAR-207：原 17 号 Demo 打样页槽退役回收，本槽 18→17 顺位）
     Reader = 17,
+    /// 信箱页槽（2026-10-01 六公民，BAR-214）：整页 CARD_PAGE_BG +
+    /// accent 边框环 + 顶栏（册名 · N 封）+ 三栏信卡墨；placement.x 跟
+    /// mail_off，右缘家同约定。**末尾追加——现有槽值不动**
+    Mail = 18,
 }
 
 /// 视口平移合成参数（十九修 D8）：调用方逐帧从 cfg_snap.pan 求值——
@@ -655,9 +659,10 @@ pub struct GlesPresent {
     /// 平移期池高 glide 的逐帧重烘限定在池区小画布）+ 二十四修一件
     /// （下拉面板层——并发同拍起步的捕获净度）+ BAR-163 翻案一件
     /// （压暗层——跳框全屏层，z 序 Over 之上）+ 五公民一件（阅读页槽，
-    /// 2026-09-27 BAR-170；2026-09-30 BAR-207 Demo 页槽退役回收），
+    /// 2026-09-27 BAR-170；2026-09-30 BAR-207 Demo 页槽退役回收）+
+    /// BAR-214 一件（信箱页槽，末尾入列 18→19），
     /// 置脏烘焙 + placement 合成——动画帧零光栅零上传
-    layers: [ChromeLayer; 18],
+    layers: [ChromeLayer; 19],
     /// 图层实例程序（rect+uv+tint 四边形；placement 逐槽进实例数据）
     layer_prog: glow::NativeProgram,
     layer_vao: glow::NativeVertexArray,
@@ -793,8 +798,9 @@ impl GlesPresent {
             }
         };
         // 先建槽数组再 move gl 进结构体（E0382：字段初始化按书写序移动）
-        // 18 槽（BAR-207：Demo 槽随葬 19→18，槽号序见 ChromeSlot）
+        // 19 槽（BAR-214：信箱页槽末尾入列 18→19，槽号序见 ChromeSlot）
         let layers = [
+            mk_layer(&gl),
             mk_layer(&gl),
             mk_layer(&gl),
             mk_layer(&gl),
@@ -1266,13 +1272,16 @@ impl GlesPresent {
         pt_alpha: f32,
         rd_off: i32,
         rd_alpha: f32,
-        z_order: [crate::ai_presence::Panel; 5],
+        mail_off: i32,
+        mail_alpha: f32,
+        z_order: [crate::ai_presence::Panel; 6],
         term_place: (f32, f32, f32),
         panel_dy_extra: f32,
         cfg_dy_extra: f32,
         ft_dy_extra: f32,
         pt_dy_extra: f32,
         rd_dy_extra: f32,
+        mail_dy_extra: f32,
         pan_comp: Option<crate::gles_present::PanComp>,
         layered: LayeredPlace,
         // 像素级视口平移（2026-09-24 键盘 kb_frac + 触摸滚动零头共用）：
@@ -1431,6 +1440,23 @@ impl GlesPresent {
             // 槽画，别家在顶时被连墨带底一起盖住
             for slot in z_order {
                 match slot {
+                    crate::ai_presence::Panel::Mail => {
+                        let ml = &self.layers[ChromeSlot::Mail as usize];
+                        if ml.visible && ml.baked {
+                            draw_slot_layer(
+                                gl,
+                                self.layer_prog,
+                                self.layer_vao,
+                                self.layer_vbo,
+                                ml.tex,
+                                mail_off as f32,
+                                mail_dy_extra,
+                                self.w as f32,
+                                self.h as f32,
+                                mail_alpha,
+                            );
+                        }
+                    }
                     crate::ai_presence::Panel::Reader => {
                         let rd = &self.layers[ChromeSlot::Reader as usize];
                         if rd.visible && rd.baked {

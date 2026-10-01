@@ -62,6 +62,9 @@ impl Plugin for UiFx {
         // 第六道缝（2026-09-27 五公民，BAR-170；2026-09-30 BAR-207 Demo
         // 退役顺位）：阅读页面板 X 偏移——右缘家同约定，同一件 fx_ease
         crate::ui::seam::occupy_reader_panel_offset_x(crate::ui::fx_ease::ease_occupier());
+        // 第七道缝（2026-10-01 六公民，BAR-214）：信箱页面板 X 偏移——
+        // 右缘家同约定，同一件 fx_ease
+        crate::ui::seam::occupy_mail_panel_offset_x(crate::ui::fx_ease::ease_occupier());
         ctx.effect(Box::new(|| {
             crate::ui::seam::release_ai_panel_offset_y();
             crate::ui::seam::release_chrome_ime_inset();
@@ -69,6 +72,7 @@ impl Plugin for UiFx {
             crate::ui::seam::release_filetree_panel_offset_x();
             crate::ui::seam::release_parser_panel_offset_x();
             crate::ui::seam::release_reader_panel_offset_x();
+            crate::ui::seam::release_mail_panel_offset_x();
         }));
         Ok(())
     }

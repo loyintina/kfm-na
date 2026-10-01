@@ -159,6 +159,7 @@ pub fn dump_now(dir: &str) {
         let ft_active = crate::ui::seam::filetree_panel_offset_x_active();
         let pt_active = crate::ui::seam::parser_panel_offset_x_active();
         let rd_active = crate::ui::seam::reader_panel_offset_x_active();
+        let mail_active = crate::ui::seam::mail_panel_offset_x_active();
         let (cfg_target, cfg_draw) = crate::ui::stage::panel_target_and_draw(
             stack_vec.contains(&Panel::Config),
             cfg_active,
@@ -179,6 +180,11 @@ pub fn dump_now(dir: &str) {
             rd_active,
             w as f32,
         );
+        let (mail_target, mail_draw) = crate::ui::stage::panel_target_and_draw(
+            stack_vec.contains(&Panel::Mail),
+            mail_active,
+            w as f32,
+        );
         let z_order = crate::ui::stage::panel_z_order(
             &stack_vec,
             [
@@ -187,6 +193,7 @@ pub fn dump_now(dir: &str) {
                 ft_active,
                 pt_active,
                 rd_active,
+                mail_active,
             ],
         );
         let cfg_off = crate::ui::seam::sample_config_panel_offset_x(
@@ -205,16 +212,22 @@ pub fn dump_now(dir: &str) {
             rd_target,
             crate::report::boot_ms() as u64,
         ) as i32;
+        let mail_off = crate::ui::seam::sample_mail_panel_offset_x(
+            mail_target,
+            crate::report::boot_ms() as u64,
+        ) as i32;
         let (ai_grid, panel_visible) = crate::termview::panel_split(panel_off, h);
         let (cfg_grid, cfg_visible0) = crate::termview::cfg_split(cfg_off, w);
         let (ft_grid, ft_visible0) = crate::termview::ft_split(ft_off, w);
         let (pt_grid, pt_visible0) = crate::termview::pt_split(pt_off, w);
         let (rd_grid, rd_visible0) = crate::termview::rd_split(rd_off, w);
+        let (mail_grid, mail_visible0) = crate::termview::mail_split(mail_off, w);
         let cfg_visible = cfg_visible0 && cfg_draw;
         let ft_visible = ft_visible0 && ft_draw;
         let pt_visible = pt_visible0 && pt_draw;
         let rd_visible = rd_visible0 && rd_draw;
-        let grid_keybar = ai_grid && cfg_grid && ft_grid && pt_grid && rd_grid;
+        let mail_visible = mail_visible0 && mail_draw;
+        let grid_keybar = ai_grid && cfg_grid && ft_grid && pt_grid && rd_grid && mail_grid;
         if grid_keybar {
             // 卡片壳下缘让位 = 快捷键行 + 输入栏带高（值守倒帧无键盘视野），
             // 与前台 paint_under 同尺（前景 ime_bottom_px 恒 0 于后台）
@@ -394,6 +407,21 @@ pub fn dump_now(dir: &str) {
                                 acc_of(Panel::Reader),
                             );
                         }
+                    }
+                }
+                Panel::Mail => {
+                    if mail_visible {
+                        crate::termview::paint_mail_page_chrome(
+                            &mut buf,
+                            w,
+                            h,
+                            bar_h,
+                            mail_off,
+                            acc_of(Panel::Mail),
+                        );
+                        // 内容墨（BAR-110 同教训：值守倒帧 = na-shot 判卷路，
+                        // 只画 chrome = 截图一片空页）
+                        t.paint_mail_content(&mut buf, w, h, bar_h, mail_off, acc_of(Panel::Mail));
                     }
                 }
                 Panel::Ai => {
@@ -1736,6 +1764,7 @@ pub fn stats_snap() -> StatsSnap {
         Some(crate::ai_presence::Panel::FileTree) => "filetree".to_owned(),
         Some(crate::ai_presence::Panel::Parser) => "parser".to_owned(),
         Some(crate::ai_presence::Panel::Reader) => "reader".to_owned(),
+        Some(crate::ai_presence::Panel::Mail) => "mail".to_owned(),
     };
     let (
         ai_page,

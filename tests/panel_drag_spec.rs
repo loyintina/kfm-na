@@ -52,16 +52,19 @@ fn spec_拖拽_方向锁() {
     );
 }
 
-// 钉②：角色仲裁八臂全表（2026-09-12 四公民·三缘语义重钉，4 顶×2 向）——
+// 钉②：角色仲裁十臂全表（2026-09-12 四公民·三缘语义重钉；2026-10-01
+// BAR-214 信箱页入列升 5 顶×2 向）——
 // 左滑：顶 FileTree = DismissFileTree / 顶 Config = 不锁 / 顶 Parser =
-// 不锁 / 顶 Other = SummonParser（设置页永不走手势召唤：SummonConfig 已删，
-// 原位是 SummonParser——右缘家，偏移/甩速/裁决符号语义与旧配置系完全
-// 一致）；右滑：顶 Config = DismissConfig（设置页唯一关闭路径）/ 顶
-// Parser = DismissParser / 顶 FileTree = 不锁 / 顶 Other = SummonFileTree。
+// 不锁 / 顶 Mail = 不锁 / 顶 Other = SummonParser（设置页永不走手势召唤：
+// SummonConfig 已删，原位是 SummonParser——右缘家，偏移/甩速/裁决符号
+// 语义与旧配置系完全一致）；右滑：顶 Config = DismissConfig（设置页唯一
+// 关闭路径）/ 顶 Parser = DismissParser / 顶 Mail = DismissMail（信箱页
+// 唯一关闭路径——右滑平移退出、终端平移回来）/ 顶 FileTree = 不锁 / 顶
+// Other = SummonFileTree。
 // 变异抽检：角色判反（左滑给 Dismiss）/DragTop 映射错一家/Other+左给错
 // 公民，对应臂必红。
 #[test]
-fn spec_拖拽_角色仲裁八臂全表() {
+fn spec_拖拽_角色仲裁十臂全表() {
     // 左滑，顶非抽屉面板（终端裸奔或 AI 在顶）→ 召唤解析页
     let mut d = PanelDrag::new(1000.0, 900.0, 0);
     match d.on_move(960.0, 900.0, 10, 1200.0, DragTop::Other) {
@@ -86,6 +89,9 @@ fn spec_拖拽_角色仲裁八臂全表() {
         d.on_move(960.0, 900.0, 10, 1200.0, DragTop::Parser)
             .is_none()
     );
+    // 左滑，顶已是信箱页 → 不锁（右缘本家在顶，BAR-214）
+    let mut d = PanelDrag::new(1000.0, 900.0, 0);
+    assert!(d.on_move(960.0, 900.0, 10, 1200.0, DragTop::Mail).is_none());
     // 右滑，顶是配置 → 推回配置（设置页唯一关闭路径）
     let mut d = PanelDrag::new(300.0, 900.0, 0);
     match d.on_move(340.0, 900.0, 10, 1200.0, DragTop::Config) {
@@ -97,6 +103,12 @@ fn spec_拖拽_角色仲裁八臂全表() {
     match d.on_move(340.0, 900.0, 10, 1200.0, DragTop::Parser) {
         Some((DragRole::DismissParser, _)) => {}
         other => panic!("右滑+顶是解析页应为推回锁定，得 {other:?}"),
+    }
+    // 右滑，顶是信箱页 → 推回信箱页（BAR-214：唯一关闭路径）
+    let mut d = PanelDrag::new(300.0, 900.0, 0);
+    match d.on_move(340.0, 900.0, 10, 1200.0, DragTop::Mail) {
+        Some((DragRole::DismissMail, _)) => {}
+        other => panic!("右滑+顶是信箱页应为推回锁定，得 {other:?}"),
     }
     // 右滑，顶非抽屉面板 → 召唤文件树（左缘家）
     let mut d = PanelDrag::new(300.0, 900.0, 0);

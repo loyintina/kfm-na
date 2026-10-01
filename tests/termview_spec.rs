@@ -2832,6 +2832,36 @@ fn spec_cfg_split_真值表() {
 }
 
 #[test]
+fn spec_bar214_mail_split与信箱页chrome涂装() {
+    // 信箱页分层判定（BAR-214 第六公民右缘家）：与 cfg_split 同构同尺
+    let w = 1260u32;
+    assert_eq!(kfm_na::termview::mail_split(0, w), (false, true));
+    assert_eq!(
+        kfm_na::termview::mail_split(1260, w),
+        (true, false),
+        "+w = 完全屏外右缘"
+    );
+    assert_eq!(kfm_na::termview::mail_split(1, w), (true, true));
+    // chrome 涂装冒烟：整页深底 + 边框环必须出像素；零缓冲安全返回
+    let (bw, bh) = (1260u32, 2560u32);
+    let mut buf = vec![0u32; (bw * bh) as usize];
+    kfm_na::termview::paint_mail_page_chrome(
+        &mut buf,
+        bw,
+        bh,
+        0,
+        0,
+        kfm_na::ui::accent::AccentPair {
+            c1: 0x0000_F0C8,
+            c2: 0x0020_90D0,
+        },
+    );
+    assert!(buf.iter().any(|&p| p != 0), "信箱页 chrome 必须出像素");
+    let mut empty: Vec<u32> = Vec::new();
+    kfm_na::termview::paint_mail_page_chrome(&mut empty, 0, 0, 0, 0, kfm_na::ui::accent::FALLBACK);
+}
+
+#[test]
 fn spec_ai页fit公式_饱和与裁剪() {
     // AI 页布局尺单源（ai_page_fit）：一屏行数 = (h - 顶 - 底 - inset)/64
     // 向下取整；余量不足饱和为 0。render_ai_page / ai_page_glyphs /
@@ -6464,6 +6494,7 @@ fn veil_fixture() -> (Vec<u32>, u32, u32, kfm_na::ui::cfg_page::ViewerSnap) {
         title: "demo/0001-会话.jsonl".into(),
         content: "正文行\n".repeat(300),
         scroll: 0,
+        accent: None,
     };
     (vec![0u32; (w * h) as usize], w, h, snap)
 }

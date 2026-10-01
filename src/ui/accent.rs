@@ -15,7 +15,7 @@
 //! 变异抽检）。
 
 /// 一对 accent（c1 = 渐变起点，c2 = 渐变终点；0x00RRGGBB 与全局色约定同）
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct AccentPair {
     pub c1: u32,
     pub c2: u32,
@@ -138,6 +138,58 @@ pub fn pastel_family(accent_c1: u32) -> [u32; 6] {
 /// 三页共享的卡片深底（宪法 §2.2：背景固定深底不随 accent——
 /// kfmv4 rgba(20,16,32,0.92) 压平到不透明的事后色）
 pub const CARD_PAGE_BG: u32 = 0x0014_1020;
+
+// ---- 按发信人稳定取色（BAR-214 信箱页三级框，2026-10-01 用户拍板：
+// 同一发信人永远随机到同一组双色做渐变，不同发信人不同色，且要跟
+// 页面颜色拉开）----
+
+/// 发信人色与页 accent c1 的最小色相距（°）：小于此距视为撞色要重 roll
+pub const SENDER_HUE_MIN_DIST: f64 = 40.0;
+/// 防撞重 roll 上限：序列推进确定性，8 次内找不到就整体色相 +180° 兜底
+/// （色环上对撞区永远只占 2×MIN_DIST，8 次实际必中，兜底是死保险）
+pub const SENDER_ROLL_MAX: u32 = 8;
+
+/// FNV-1a 64 哈希（轻量无依赖；同串同值跨次运行稳定——这是「同一发信人
+/// 同一色」的全部保证来源）。pub 理由：考题要拿它复算首发 roll 构造
+/// 脱撞真咬案例（tests/accent_spec.rs BAR-214 钉）
+pub fn fnv1a64(s: &str) -> u64 {
+    let mut h = 0xcbf2_9ce4_8422_2325u64;
+    for b in s.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
+}
+
+/// 色环距离（°，0–180]）
+fn hue_dist(a: f64, b: f64) -> f64 {
+    let d = (a - b).abs().rem_euclid(360.0);
+    d.min(360.0 - d)
+}
+
+/// 按发信人名取稳定双色：种子 = FNV-1a（名），走 AccentRng 同一约束区间
+/// （与页 accent 同族的 HSL 随机，观感同族）。与页 accent c1 色相距
+/// < SENDER_HUE_MIN_DIST 时推进序列重 roll；SENDER_ROLL_MAX 次未脱撞
+/// 则双色色相 +180° 强制脱撞（确定性，不引新随机源）。
+pub fn accent_for_sender(sender: &str, page: AccentPair) -> AccentPair {
+    let mut rng = AccentRng::new(fnv1a64(sender));
+    let (page_h, _, _) = rgb_to_hsl(page.c1);
+    for _ in 0..SENDER_ROLL_MAX {
+        let pair = rng.generate();
+        let (h, _, _) = rgb_to_hsl(pair.c1);
+        if hue_dist(h, page_h) >= SENDER_HUE_MIN_DIST {
+            return pair;
+        }
+    }
+    // 死保险：重 roll 全撞（实测不可能），整体转 180° 必脱撞
+    let pair = rng.generate();
+    let (h1, s, l) = rgb_to_hsl(pair.c1);
+    let (h2, _, _) = rgb_to_hsl(pair.c2);
+    AccentPair {
+        c1: hsl_to_rgb((h1 + 180.0).rem_euclid(360.0), s, l),
+        c2: hsl_to_rgb((h2 + 180.0).rem_euclid(360.0), s, l),
+    }
+}
 
 /// presence 不在场时的兜底 accent（旧配置青系——壳层早期帧/异常态
 /// 用，正常运行永远走 presence 里的随机对）

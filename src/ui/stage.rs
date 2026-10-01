@@ -48,7 +48,7 @@ impl<S: PartialEq> DirtyGuard<S> {
 /// 上层 chrome（输入栏/光球/放大镜）是常驻层，任何状态都可见；
 /// na-shot（值守 CPU 路径）看不见这类槽位病，判卷人=用户眼睛。
 /// 返回 [键行, AI面板, 配置页, 文件树页, 解析页, 上层, 终端卡片壳,
-/// 平移旧代, 平移新代, 阅读页]
+/// 平移旧代, 平移新代, 阅读页, 信箱页]
 /// （2026-09-10 面板栈 §五B 第四槽、09-11 三公民第五槽、09-12 四公民
 /// 解析页槽：被覆盖的面板仍 visible=true——placement 不动，遮盖撤走
 /// 随推移滑回；09-11 第六槽终端卡：与键行同规——五面板都没靠泊才可见，
@@ -63,7 +63,8 @@ pub fn slot_visibility(
     pt_visible: bool,
     pan_active: bool,
     rd_visible: bool,
-) -> [bool; 10] {
+    mail_visible: bool,
+) -> [bool; 11] {
     [
         grid_keybar,
         panel_visible,
@@ -77,6 +78,7 @@ pub fn slot_visibility(
         cfg_visible && pan_active,
         cfg_visible && pan_active,
         rd_visible,
+        mail_visible,
     ]
 }
 
@@ -92,25 +94,31 @@ pub fn slot_visibility(
 /// 入参 active 与 PANELS 同序对齐；返回底→顶次序（合成器按序画）。
 /// 红线：本函数的活性读数只许进 z 序，**不许进 target/presence**——
 /// 那是 BAR-084 的回粘回路（见 panel_target_and_draw）
-pub const PANELS: [crate::ai_presence::Panel; 5] = [
+pub const PANELS: [crate::ai_presence::Panel; 6] = [
     crate::ai_presence::Panel::Ai,
     crate::ai_presence::Panel::Config,
     crate::ai_presence::Panel::FileTree,
     crate::ai_presence::Panel::Parser,
     crate::ai_presence::Panel::Reader,
+    crate::ai_presence::Panel::Mail,
 ];
 
 pub fn panel_z_order(
     stack: &[crate::ai_presence::Panel],
-    active: [bool; 5],
-) -> [crate::ai_presence::Panel; 5] {
-    // 栈位阶：在栈 = 位置下标（0 底）；不在栈 = -5+声明序（确定的垫底序）
+    active: [bool; 6],
+) -> [crate::ai_presence::Panel; 6] {
+    // 栈位阶：在栈 = 位置下标（0 底）；不在栈 = -PANELS.len()+声明序
+    // （恒负——垫底序全压栈位阶 0 之下；BAR-214 六公民实录：硬编码 -5
+    // 在六公民下 Mail 得 0 与栈位 0 撞号，稳定排序把它漏进栈层——
+    // 常量改随 PANELS.len() 派生，公民再入列不再踩）
     let rank = |p: crate::ai_presence::Panel| -> i32 {
         stack
             .iter()
             .position(|&x| x == p)
             .map(|i| i as i32)
-            .unwrap_or_else(|| -5 + PANELS.iter().position(|&x| x == p).unwrap_or(0) as i32)
+            .unwrap_or_else(|| {
+                -(PANELS.len() as i32) + PANELS.iter().position(|&x| x == p).unwrap_or(0) as i32
+            })
     };
     let mut order = PANELS;
     // 稳定排序键：（活性, 栈位阶）升序 = 底→顶；同组内栈序不动

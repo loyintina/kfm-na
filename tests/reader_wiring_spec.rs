@@ -94,20 +94,24 @@ fn spec_bar170_涂装三路与槽号() {
         "阅读页 GLES 槽号必须 17（BAR-207 Demo 槽退役顺位，前 17 槽各有其主）"
     );
     assert!(
-        gles.contains("layers: [ChromeLayer; 18]"),
-        "槽层数组必须 18 件（17 旧槽 + Reader；BAR-207 Demo 槽回收）"
+        gles.contains("layers: [ChromeLayer; 19]"),
+        "槽层数组必须 19 件（17 旧槽 + Reader + Mail 信箱页槽 BAR-214 末尾入列）"
     );
-    // 构造器槽数钉（BAR-207 cfg 盲区实录：类型改 18 后构造器字面量
+    // 构造器槽数钉（BAR-207 cfg 盲区实录：类型改后构造器字面量
     // 漏删一件，宿主 check 全绿、android check 才咬——mk_layer 调用
     // 计数 = 槽数的机械对表，变异：删/加一件即红）
     assert_eq!(
         gles.matches("mk_layer(&gl),").count(),
-        18,
-        "构造器 mk_layer 必须 18 件与槽层数组同数（BAR-207 cfg 盲区钉）"
+        19,
+        "构造器 mk_layer 必须 19 件与槽层数组同数（BAR-207 cfg 盲区钉，BAR-214 升 19）"
     );
     assert!(
-        gles.contains("z_order: [crate::ai_presence::Panel; 5]"),
-        "z_order 必须五公民（BAR-207 Demo 退役，阅读页入垫底序）"
+        gles.contains("z_order: [crate::ai_presence::Panel; 6]"),
+        "z_order 必须六公民（BAR-207 Demo 退役，BAR-214 信箱页入列）"
+    );
+    assert!(
+        gles.contains("Mail = 18"),
+        "信箱页 GLES 槽号必须 18（BAR-214 末尾入列，前 18 槽各有其主）"
     );
     let gate = include_str!("../src/gate.rs");
     assert!(

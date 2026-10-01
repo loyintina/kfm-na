@@ -184,3 +184,70 @@ fn spec_pastel_常量表值钉与反解互证() {
         assert!(hd < 1e-9 && (s1 - s2).abs() < 1e-9 && (l1 - l2).abs() < 1e-9);
     }
 }
+
+/// 钉⑧（BAR-214）：按发信人稳定取色——同名同色/异名异色/与页色脱撞。
+/// 变异咬：种子改固定值（同名不同色必红）/ MIN_DIST 归 0（脱撞钉必红）/
+/// 重 roll 不推进序列（死循环或同色必红）。
+#[test]
+fn spec_bar214_按发信人稳定取色() {
+    use kfm_na::ui::accent::{AccentPair, SENDER_HUE_MIN_DIST, accent_for_sender, rgb_to_hsl};
+    let page = AccentPair {
+        c1: 0x0000_F0C8,
+        c2: 0x0020_90D0,
+    };
+    // 同名同色（跨「次运行」稳定 = 纯函数无时间源）
+    let a1 = accent_for_sender("观澜", page);
+    let a2 = accent_for_sender("观澜", page);
+    assert_eq!(a1, a2, "同一发信人必须永远同一组双色");
+    // 异名异色（六个真名册名两两不许全同）
+    let names = ["观澜", "清和", "承影", "闻灯", "白露", "蔚然"];
+    for (i, x) in names.iter().enumerate() {
+        for y in &names[i + 1..] {
+            assert_ne!(
+                accent_for_sender(x, page),
+                accent_for_sender(y, page),
+                "{x} 与 {y} 撞色"
+            );
+        }
+    }
+    // 脱撞守卫：任何发信人结果与页 c1 色相距 ≥ MIN_DIST
+    let (ph, _, _) = rgb_to_hsl(page.c1);
+    for n in names {
+        let (h, _, _) = rgb_to_hsl(accent_for_sender(n, page).c1);
+        let d = (h - ph).abs().min(360.0 - (h - ph).abs());
+        assert!(
+            d >= SENDER_HUE_MIN_DIST - 1.0, // hsl round-trip 量化容差 1°
+            "{n} 与页色相距 {d}° < {SENDER_HUE_MIN_DIST}°"
+        );
+    }
+    // 页色换装后同名仍稳定（页色只参与脱撞不参与播种，脱撞路径确定性）
+    let page2 = AccentPair {
+        c1: 0x00E0_6030,
+        c2: 0x0030_E0A0,
+    };
+    assert_eq!(
+        accent_for_sender("观澜", page2),
+        accent_for_sender("观澜", page2)
+    );
+    // 脱撞路径真咬：把页色钉成首发 roll（种子只问发信人，考题可复算）
+    // ——守卫必须推进序列脱撞。变异：守卫归 0 恒收首发 → d=0 本断言红
+    const {
+        assert!(
+            kfm_na::ui::accent::SENDER_ROLL_MAX >= 4,
+            "重 roll 上限不许归零（脱撞守卫的弹药）"
+        );
+    }
+    let first = kfm_na::ui::accent::AccentRng::new(kfm_na::ui::accent::fnv1a64("观澜")).generate();
+    let collide = AccentPair {
+        c1: first.c1,
+        c2: first.c2,
+    };
+    let escaped = accent_for_sender("观澜", collide);
+    let (eh, _, _) = rgb_to_hsl(escaped.c1);
+    let (ch, _, _) = rgb_to_hsl(collide.c1);
+    let d = (eh - ch).abs().min(360.0 - (eh - ch).abs());
+    assert!(
+        d >= SENDER_HUE_MIN_DIST - 1.0,
+        "页色撞首发 roll 时必须脱撞（相距 {d}° < {SENDER_HUE_MIN_DIST}°）"
+    );
+}

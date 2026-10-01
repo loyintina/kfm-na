@@ -113,6 +113,9 @@ pub struct ViewerView {
     /// 命中同读这一维；上限由壳按实时屏尺寸 modal::viewer_scroll_max
     /// 算好喂 scroll_viewer_by）
     pub scroll: i64,
+    /// 跳框继承色（BAR-214 信箱页：点三级信卡开的查看器继承该卡
+    /// 发信人双色；None = 跟页 accent 走旧路）
+    pub accent: Option<crate::ui::accent::AccentPair>,
 }
 
 /// 查看器涂装快照（CfgPageSnap 同款载体）
@@ -121,6 +124,8 @@ pub struct ViewerSnap {
     pub title: String,
     pub content: String,
     pub scroll: i64,
+    /// 跳框继承色（BAR-214；None = 跟页 accent）
+    pub accent: Option<crate::ui::accent::AccentPair>,
 }
 
 /// 涂装/判卷快照（D9：gate 值守倒帧与前台帧同一份读数）
@@ -469,16 +474,29 @@ impl CfgPage {
             title: v.title.clone(),
             content: v.content.clone(),
             scroll: v.scroll,
+            accent: v.accent,
         })
     }
 
     /// 开查看器/喂内容（会话池页点条目；取数完成壳再喂真内容——
     /// 同标题内容变更也 bump 代际，「加载中…」换真文不残留旧像素）
     pub fn open_viewer(&mut self, title: String, content: String) {
+        self.open_viewer_with_accent(title, content, None);
+    }
+
+    /// 开查看器带继承色（BAR-214 信箱页：跳框涂装继承三级信卡的
+    /// 发信人双色；accent=None 与 open_viewer 同义）
+    pub fn open_viewer_with_accent(
+        &mut self,
+        title: String,
+        content: String,
+        accent: Option<crate::ui::accent::AccentPair>,
+    ) {
         let v = ViewerView {
             title,
             content,
             scroll: 0,
+            accent,
         };
         if self.viewer.as_ref() != Some(&v) {
             self.viewer = Some(v);
@@ -882,6 +900,7 @@ impl CfgPage {
                 title: v.title.clone(),
                 content: v.content.clone(),
                 scroll: v.scroll,
+                accent: v.accent,
             }),
             epoch: self.epoch,
             cursor_row: self.cursor_row(now_ms),

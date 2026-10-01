@@ -37,6 +37,7 @@ pub fn viewport_push(
     ft_off: i32,
     pt_off: i32,
     rd_off: i32,
+    mail_off: i32,
     w: u32,
     h: u32,
 ) -> (Push, f32) {
@@ -47,12 +48,14 @@ pub fn viewport_push(
     let p_pt = ((w - pt_off as f32) / w).clamp(0.0, 1.0);
     // 阅读页右缘家同约定（2026-09-27 五公民，BAR-170）
     let p_rd = ((w - rd_off as f32) / w).clamp(0.0, 1.0);
+    // 信箱页右缘家同约定（2026-10-01 六公民，BAR-214）
+    let p_mail = ((w - mail_off as f32) / w).clamp(0.0, 1.0);
     (
         Push {
-            dx: p_ft * w - p_cfg * w - p_pt * w - p_rd * w,
+            dx: p_ft * w - p_cfg * w - p_pt * w - p_rd * w - p_mail * w,
             dy: p_ai * h,
         },
-        p_ai.max(p_cfg).max(p_ft).max(p_pt).max(p_rd),
+        p_ai.max(p_cfg).max(p_ft).max(p_pt).max(p_rd).max(p_mail),
     )
 }
 
@@ -65,6 +68,7 @@ fn panel_progress(
     ft_off: i32,
     pt_off: i32,
     rd_off: i32,
+    mail_off: i32,
     w: f32,
     h: f32,
 ) -> Push {
@@ -91,6 +95,11 @@ fn panel_progress(
             dx: -((w - rd_off as f32) / w).clamp(0.0, 1.0) * w,
             dy: 0.0,
         },
+        // 信箱页右缘家同约定（2026-10-01 六公民，BAR-214）
+        Panel::Mail => Push {
+            dx: -((w - mail_off as f32) / w).clamp(0.0, 1.0) * w,
+            dy: 0.0,
+        },
     }
 }
 
@@ -105,6 +114,7 @@ pub fn covered_extra(
     ft_off: i32,
     pt_off: i32,
     rd_off: i32,
+    mail_off: i32,
     w: u32,
     h: u32,
 ) -> Push {
@@ -114,7 +124,9 @@ pub fn covered_extra(
     };
     let mut acc = Push { dx: 0.0, dy: 0.0 };
     for above in &stack[pos + 1..] {
-        let p = panel_progress(*above, panel_off, cfg_off, ft_off, pt_off, rd_off, w, h);
+        let p = panel_progress(
+            *above, panel_off, cfg_off, ft_off, pt_off, rd_off, mail_off, w, h,
+        );
         acc.dx += p.dx;
         acc.dy += p.dy;
     }

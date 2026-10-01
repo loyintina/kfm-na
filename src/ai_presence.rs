@@ -85,6 +85,8 @@ pub enum Panel {
     FileTree,
     Parser,
     Reader,
+    /// 信箱页（BAR-214）：右缘家，解析页入口召唤；出场唯一 = 右滑推回
+    Mail,
 }
 
 /// 水平滑向（抽屉手势识别结果，§五B 四公民）：左 = 解析家（顶是文件树则
@@ -145,12 +147,15 @@ pub struct PresenceSnap {
     pub pt_placeholder: bool,
     /// 阅读面板的入场代（语义同 ai_epoch）
     pub rd_epoch: u64,
+    /// 信箱面板的入场代（语义同 ai_epoch）
+    pub mail_epoch: u64,
     /// 公民页面随机 accent（宪法 §2.2）：随快照同行——壳层静态装配函数
     /// （无 self 直读状态核）与烘焙 sig 的唯一来源；AI 页不纳入（主题色恒定）
     pub accent_cfg: crate::ui::accent::AccentPair,
     pub accent_ft: crate::ui::accent::AccentPair,
     pub accent_pt: crate::ui::accent::AccentPair,
     pub accent_reader: crate::ui::accent::AccentPair,
+    pub accent_mail: crate::ui::accent::AccentPair,
 }
 
 /// 四态增益（纯函数，D8）：(整 sprite 增益, 光晕增益)。光晕增益只在 running
@@ -184,6 +189,7 @@ struct Inner {
     /// 召唤 Parser 时按被盖者打标（summon_locked 单源）
     pt_placeholder: bool,
     epoch_rd: u64,
+    epoch_mail: u64,
     x: f64,
     y: f64,
     /// 首次 set_bounds 落默认出生位的标记（之后 set_bounds 只钳制不搬家）
@@ -204,6 +210,7 @@ struct Inner {
     accent_ft: crate::ui::accent::AccentPair,
     accent_pt: crate::ui::accent::AccentPair,
     accent_reader: crate::ui::accent::AccentPair,
+    accent_mail: crate::ui::accent::AccentPair,
     /// 配置卡标签栏绑定（宪法 §四 十一修：每标签独立随机双色）——
     /// 召唤配置卡时逐标签重随色列喂进标签栏，accent_cfg 取选中项；
     /// 未绑定 = 旧路兜底（accent_cfg 单对重随，色列不动）
@@ -234,6 +241,7 @@ impl AiPresenceState {
                 epoch_pt: 0,
                 pt_placeholder: false,
                 epoch_rd: 0,
+                epoch_mail: 0,
                 x: 0.0,
                 y: 0.0,
                 positioned: false,
@@ -246,6 +254,7 @@ impl AiPresenceState {
                 accent_ft: accent_rng.generate(),
                 accent_pt: accent_rng.generate(),
                 accent_reader: accent_rng.generate(),
+                accent_mail: accent_rng.generate(),
                 accent_rng,
                 tab_bar: None,
             }),
@@ -275,6 +284,7 @@ impl AiPresenceState {
             Panel::FileTree => Some(g.accent_ft),
             Panel::Parser => Some(g.accent_pt),
             Panel::Reader => Some(g.accent_reader),
+            Panel::Mail => Some(g.accent_mail),
         }
     }
 
@@ -362,7 +372,7 @@ impl AiPresenceState {
             Some(&Panel::FileTree) => {
                 g.stack.pop();
             }
-            Some(&Panel::Config) | Some(&Panel::Parser) => {}
+            Some(&Panel::Config) | Some(&Panel::Parser) | Some(&Panel::Mail) => {}
             _ => summon_locked(&mut g, Panel::Parser),
         }
     }
@@ -374,7 +384,7 @@ impl AiPresenceState {
     pub fn swipe_right(&self) {
         let mut g = self.inner.lock().unwrap();
         match g.stack.last() {
-            Some(&Panel::Config) | Some(&Panel::Parser) => {
+            Some(&Panel::Config) | Some(&Panel::Parser) | Some(&Panel::Mail) => {
                 g.stack.pop();
             }
             Some(&Panel::FileTree) => {}
@@ -475,10 +485,12 @@ impl AiPresenceState {
             pt_epoch: g.epoch_pt,
             pt_placeholder: g.pt_placeholder,
             rd_epoch: g.epoch_rd,
+            mail_epoch: g.epoch_mail,
             accent_cfg: g.accent_cfg,
             accent_ft: g.accent_ft,
             accent_pt: g.accent_pt,
             accent_reader: g.accent_reader,
+            accent_mail: g.accent_mail,
         }
     }
 }
@@ -552,6 +564,7 @@ fn regen_accent(g: &mut Inner, p: Panel) {
         Panel::FileTree => g.accent_ft = g.accent_rng.generate(),
         Panel::Parser => g.accent_pt = g.accent_rng.generate(),
         Panel::Reader => g.accent_reader = g.accent_rng.generate(),
+        Panel::Mail => g.accent_mail = g.accent_rng.generate(),
     }
 }
 
@@ -563,6 +576,7 @@ fn bump_epoch(g: &mut Inner, p: Panel) {
         Panel::FileTree => g.epoch_ft += 1,
         Panel::Parser => g.epoch_pt += 1,
         Panel::Reader => g.epoch_rd += 1,
+        Panel::Mail => g.epoch_mail += 1,
     }
 }
 

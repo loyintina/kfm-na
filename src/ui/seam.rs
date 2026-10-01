@@ -298,3 +298,51 @@ pub fn replay_reader_panel_offset_x(offscreen: f32, now_ms: u64) {
         r(offscreen, now_ms);
     }
 }
+
+// ---- 第七道缝：信箱页面板 X 偏移（面板栈六公民，2026-10-01 BAR-214）----
+// 目标值语义在基础层（信箱页在栈=0 靠泊 / 不在栈=+屏宽 屏外右缘——解析页
+// 入口召唤、右滑推回，右缘家与配置/阅读缝符号约定完全相同）。动画只许
+// 在缝内插值。曲线族复用 fx_ease 同一对减速臂，零新曲线。
+
+static MAIL_PANEL_OFFSET_X: Mutex<Option<Occupier>> = Mutex::new(None);
+
+/// 占槽（后占者赢，ui-base §三 v1）
+pub fn occupy_mail_panel_offset_x(o: Occupier) {
+    *MAIL_PANEL_OFFSET_X.lock().unwrap() = Some(o);
+}
+
+/// 拔槽回硬切（插件卸载/禁用）
+pub fn release_mail_panel_offset_x() {
+    *MAIL_PANEL_OFFSET_X.lock().unwrap() = None;
+}
+
+/// 采样（渲染时过缝）：无占槽直通目标值——硬切基座语义
+pub fn sample_mail_panel_offset_x(target: f32, now_ms: u64) -> f32 {
+    let g = MAIL_PANEL_OFFSET_X.lock().unwrap();
+    match g.as_ref() {
+        Some(o) => (o.sampler)(target, now_ms),
+        None => target,
+    }
+}
+
+/// 该槽有活跃动画（帧时钟启停判据；无占槽恒 false = 零额外帧）
+pub fn mail_panel_offset_x_active() -> bool {
+    MAIL_PANEL_OFFSET_X
+        .lock()
+        .unwrap()
+        .as_ref()
+        .is_some_and(|o| (o.is_active)())
+}
+
+/// 入场重播踢（BAR-079，坍缩②）：壳层见信箱页入场代 bump 即踢——采样器
+/// 重定基到屏外右缘（目标不变）→ 重播抽屉入场。无占槽/无 replay = 空操作
+pub fn replay_mail_panel_offset_x(offscreen: f32, now_ms: u64) {
+    if let Some(r) = MAIL_PANEL_OFFSET_X
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|o| o.replay.as_ref())
+    {
+        r(offscreen, now_ms);
+    }
+}
