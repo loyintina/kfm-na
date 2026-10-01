@@ -38,12 +38,20 @@ fn spec_bar186_追赶接线守卫() {
     //    通路弱网照滚
     assert!(
         APP.contains("pump_bytes += b.len();")
-            && APP.contains("if !self.catchup.note_bytes(now, pump_bytes) {"),
+            && APP.contains("let suppress = self.catchup.note_bytes(now, pump_bytes);"),
         "live 泵通路必须记字节量 + 追赶期抑制置脏"
     );
     assert!(
-        APP.contains("if !self.catchup.note_bytes(now, bytes.len()) {"),
+        APP.contains("let suppress = self.catchup.note_bytes(now, bytes.len());"),
         "v4 Feed 臂必须记字节量 + 追赶期抑制置脏"
+    );
+    // ②b BAR-216 观测账：两条通路都必须取进场沿报账（漏一条 = 该路
+    //    追赶风暴无账——回显无影案判卷靠此）
+    assert!(
+        APP.matches("if let Some(cause) = self.catchup.take_enter() {")
+            .count()
+            >= 2,
+        "泵/画布两通路都必须挂 take_enter 进场沿报账（BAR-216 仪器）"
     );
     // ③ 显式入场钩（BAR-209① 一扩三）：重连/attach/切会话三条重播种
     //    风暴路都必须挂 catchup.enter——漏一条 = 该路清场黑屏+回显压制
@@ -82,10 +90,37 @@ fn spec_bar186_追赶接线守卫() {
     );
     // ⑥ 落地帧三件套：跳底（仅贴底时）+ 置脏；用户上翻读历史不抢滚动条
     assert!(
-        APP.contains("fn catchup_land(&mut self)")
+        APP.contains("fn catchup_land(&mut self, cause: &str)")
             && APP.contains("if g.display_offset() == 0 {")
             && APP.contains("g.land_bottom();"),
         "catchup_land 必须贴底才跳底（display_offset>0 = 用户在读历史，只补画）"
+    );
+    // ⑥b BAR-216 观测账：落地沿必须报压制量/持续时长（三因齐：
+    //    播种尾锚/续播尾锚/静默窗满——漏一因 = 该落地路无账）
+    assert!(
+        APP.contains("self.catchup_land(\"播种尾锚\");")
+            && APP.contains("self.catchup_land(\"续播尾锚\");")
+            && APP.contains("self.catchup_land(\"静默窗满\");"),
+        "三条落地路都必须带因报账（BAR-216 仪器）"
+    );
+    assert!(
+        APP.contains("\"追赶落地: {cause} 压制="),
+        "落地报账行必须带压制量与持续时长（BAR-216 仪器）"
+    );
+    // ⑥c 追赶期落键账（回显无影案第一现场）
+    assert!(
+        APP.contains("\"追赶期落键——回显随压帧等落地\""),
+        "drain_ime_inject 必须报追赶期落键（BAR-216 仪器）"
+    );
+    // ⑥d BAR-216 修复：速率轮节拍帧必须挂 about_to_wait（tick 同位）
+    //    ——断接 = 洪峰压帧回到全冻，回显无影+频闪复辟
+    assert!(
+        APP.contains("if self.catchup.throttle_frame(crate::report::boot_ms()) {"),
+        "about_to_wait 必须挂 throttle_frame 节拍帧（BAR-216 修复）"
+    );
+    assert!(
+        APP.contains(" 节拍={} "),
+        "落地报账行必须带节拍帧数（BAR-216 仪器：限拍账随落地报）"
     );
     // ⑦ TermView 落地件：跳底 + 像素零头一刀齐（scroll_to_bottom 不清
     //    零头，缺这刀 = 落地帧留半格残影）

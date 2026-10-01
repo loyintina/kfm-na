@@ -6296,7 +6296,7 @@ impl App {
                         // BAR-186 臂②：播种尾锚到达 = 追平判据二——追赶中
                         // 立即落地一帧（稳态撞锚 = None，不抢稳态的画）
                         if self.catchup.anchor() == crate::catchup::CatchAct::Land {
-                            self.catchup_land();
+                            self.catchup_land("播种尾锚");
                         }
                         if browsing {
                             // 当前会话浏览中：新画布直接 swap 进视图
@@ -6368,7 +6368,23 @@ impl App {
 
     /// 追平落地帧（BAR-186 臂②）：跳底+像素零头归零+置脏亮出。
     /// 用户上翻读历史中（display_offset>0）不抢滚动条——只补画不跳底
-    fn catchup_land(&mut self) {
+    fn catchup_land(&mut self, cause: &str) {
+        // BAR-216 观测账：落地沿报本轮压制量与持续时长（held/catching_since
+        // 落地后保留至下一进场沿，此处取数安全）
+        let st = self.catchup.stats();
+        let held_ms = (crate::report::boot_ms() as u128).saturating_sub(st.catching_since_ms);
+        crate::report::report(
+            "term",
+            &format!(
+                "追赶落地: {cause} 压制={}B 持续={}ms 节拍={} 累计进场={}（速率{}）落地={}",
+                st.held_bytes,
+                held_ms,
+                st.throttle_count,
+                st.enter_count,
+                st.rate_enter_count,
+                st.land_count
+            ),
+        );
         if let Some(t) = self.term_handle() {
             let mut g = t.lock().unwrap();
             if g.display_offset() == 0 {
@@ -6397,7 +6413,17 @@ impl App {
                     // 滴灌「每包一帧」= 用户看到的疯狂慢滚；追平落地帧
                     // 统一亮出（tick 静默窗 / anchor 播种尾锚 → catchup_land）
                     let now = crate::report::boot_ms();
-                    if !self.catchup.note_bytes(now, bytes.len()) {
+                    let suppress = self.catchup.note_bytes(now, bytes.len());
+                    if let Some(cause) = self.catchup.take_enter() {
+                        crate::report::report(
+                            "term",
+                            &format!(
+                                "追赶进场: {}（画布通路）",
+                                crate::catchup::enter_cause_name(cause)
+                            ),
+                        );
+                    }
+                    if !suppress {
                         self.dirty = true; // 稳态浏览中：字节即达即画
                     }
                 } else if let Some(e) = self.warm_pool.get_mut(name)
@@ -6530,7 +6556,7 @@ impl App {
                         }
                         // 播种尾锚（臂②）：追赶中落地一帧
                         if self.catchup.anchor() == crate::catchup::CatchAct::Land {
-                            self.catchup_land();
+                            self.catchup_land("续播尾锚");
                         }
                         self.dirty = true;
                         crate::report::report(
@@ -7386,7 +7412,17 @@ impl App {
             // BAR-186 臂②：追赶期（重连风暴/弱网滴灌洪峰）字节照喂 grid
             // 不置脏——每包一帧 = 用户报障的疯狂慢滚；追平一帧跳底亮出
             let now = crate::report::boot_ms();
-            if !self.catchup.note_bytes(now, pump_bytes) {
+            let suppress = self.catchup.note_bytes(now, pump_bytes);
+            if let Some(cause) = self.catchup.take_enter() {
+                crate::report::report(
+                    "term",
+                    &format!(
+                        "追赶进场: {}（泵通路）",
+                        crate::catchup::enter_cause_name(cause)
+                    ),
+                );
+            }
+            if !suppress {
                 self.dirty = true;
             }
         }
@@ -7709,6 +7745,11 @@ impl App {
             }
         }
         if sent {
+            // BAR-216 观测账：追赶期落键——回显字节照喂 grid 但压帧，
+            // 用户看到的「无回显」若发生在追赶期，此账是第一现场
+            if self.catchup.catching() {
+                crate::report::report("ime", "追赶期落键——回显随压帧等落地");
+            }
             // IME 落字 = 用户输入：滚回底部贴最新输出
             if let Some(t) = self.term_handle() {
                 t.lock().unwrap().scroll_to_bottom();
@@ -11356,7 +11397,13 @@ impl ApplicationHandler for App {
         // BAR-186 臂②：追赶静默窗满 → 追平落地帧（跳底+零头归零+置脏），
         // 置于脏帧泵之前——本圈置的脏本圈即画
         if self.catchup.tick(crate::report::boot_ms()) == crate::catchup::CatchAct::Land {
-            self.catchup_land();
+            self.catchup_land("静默窗满");
+        }
+        // BAR-216：速率追赶轮到点放节拍帧——洪峰压帧 ≠ 全冻：击键回显/
+        // 流式进度有 ≤THROTTLE_MS 上屏路（0141④ 无回显+闪烁的修）。
+        // 只置脏不跳底（用户在读历史不抢滚动条）；显式重播种轮全压制
+        if self.catchup.throttle_frame(crate::report::boot_ms()) {
+            self.dirty = true;
         }
         // 降频泵(2026-08-26,挂单①治理):Poll 全速空转实测 ~57k 圈/s,
         // 白烧 CPU/电。双闸——①有脏才请求重绘(空圈不 redraw);②节拍改
