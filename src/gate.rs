@@ -1134,7 +1134,6 @@ pub fn take_install_req(dir: &str) -> Option<String> {
 
 type InstallHook = Box<dyn Fn(String) + Send>;
 static INSTALL_HOOK: std::sync::Mutex<Option<InstallHook>> = std::sync::Mutex::new(None);
-
 /// 注册自更新递交钩子（android_app 启动时注册一次；host 不注册=空转合法）
 pub fn register_install_hook(f: InstallHook) {
     *INSTALL_HOOK.lock().unwrap() = Some(f);
@@ -1150,6 +1149,19 @@ pub fn install_req_check(dir: &str) {
                 &format!("install-apk-req({path}) 无钩子（host 或未注册），丢弃"),
             ),
         }
+    }
+}
+
+/// BAR-215 观测闸（通道十一）：canvas-req 存在即消费——App 主循环每圈查，
+/// 查到就把暖池全画布 + 活动网格全量倒账落盘（dump_all 文本直接 grep
+/// 重复带定罪，上滚三形态案的观测仪器）
+pub fn take_canvas_req(dir: &str) -> bool {
+    let p = Path::new(dir).join("canvas-req");
+    if p.exists() {
+        let _ = std::fs::remove_file(&p);
+        true
+    } else {
+        false
     }
 }
 

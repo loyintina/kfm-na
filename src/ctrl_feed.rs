@@ -194,26 +194,29 @@ impl CtrlFeed {
     /// 头行认领/正文累积要用）
     fn on_event(&mut self, ev: CtrlEvent, line: &str) -> CtrlAct {
         match ev {
-            CtrlEvent::Output { pane, bytes } => match self.phase {
-                // 播种窗口内的输出已在 capture 快照内（带内对齐）——丢弃
-                Phase::AwaitHeader | Phase::HdrEnd | Phase::AwaitBody | Phase::InCapture => {
+            CtrlEvent::Output { pane, bytes } => {
+                if self.pane != Some(pane) {
+                    // 窗格未认领/非本格：无从归属，丢弃（首播种前的字节
+                    // 恒在那轮 capture 内——tmux 事件串行，先到的输出
+                    // 必先于 capture 命令执行，Rebuild 落地即对齐）
                     CtrlAct::None
-                }
-                Phase::Building => {
-                    if self.pane == Some(pane) {
-                        CtrlAct::Pend(bytes)
-                    } else {
-                        CtrlAct::None
+                } else {
+                    match self.phase {
+                        // capture 关块后（Building）的字节恒在快照外
+                        // （%end 后到达 = 快照后输出）→ Pend 待安装补喂
+                        Phase::Building => CtrlAct::Pend(bytes),
+                        // BAR-215③：播种窗（AwaitHeader..InCapture）的
+                        // %output 不是「已在快照内」——capture 命令执行
+                        // 与 %output 入队有先后竞速（命令先执行 = 后到的
+                        // 输出不在快照里）。画布是面板字节流的活镜像，
+                        // 窗期照喂：Rebuild 弃旧画布天然不双喂；Tail 靠
+                        // 这批字节补齐 k 行（丢弃 = 5s 档 × 1s 行锁相
+                        // 每档丢一行，画布缺号周期钉死档距——上滚断档
+                        // 病灶，redroid 画布倒账 38 缺号/步距 5 定罪）
+                        _ => CtrlAct::Feed(bytes),
                     }
                 }
-                Phase::Steady => {
-                    if self.pane == Some(pane) {
-                        CtrlAct::Feed(bytes)
-                    } else {
-                        CtrlAct::None
-                    }
-                }
-            },
+            }
             CtrlEvent::Plain => match self.phase {
                 Phase::AwaitHeader => {
                     if !self.saw_body {

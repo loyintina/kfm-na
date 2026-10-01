@@ -35,7 +35,7 @@ src/report.rs 5
 src/scroll.rs 0
 src/session.rs 0
 src/session_router.rs 0
-src/termview.rs 7
+src/termview.rs 8
 src/theme.rs 0
 src/trace.rs 4
 src/ui/accent.rs 0

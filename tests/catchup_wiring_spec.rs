@@ -5,6 +5,8 @@
 const APP: &str = include_str!("../src/android_app.rs");
 const LIB: &str = include_str!("../src/lib.rs");
 const TERMVIEW: &str = include_str!("../src/termview.rs");
+const RESEED: &str = include_str!("../src/reseed.rs");
+const GATE: &str = include_str!("../src/gate.rs");
 
 /// 源码取函数体（4 空格方法级）：从签名行到下一个同级 fn。接线钉
 /// 按函数粒度断言——全文件 contains 分不清同串挂在哪条路上
@@ -136,9 +138,10 @@ fn spec_bar186_对账接线守卫() {
         "lib.rs 必须接 pub mod reseed（播种对账纯逻辑件）"
     );
     // ① Build 臂必须先对账再定路：无对账 = 每次播种万行重建照烂
+    //    （BAR-215 扩第 5 参 cap_fed：%output 喂态 → 尾块免 LF）
     assert!(
-        APP.contains("crate::reseed::plan_reseed(old, &cap, rows, (x, y))"),
-        "Build 臂必须挂 plan_reseed 对账（旧播种账 × 新 capture）"
+        APP.contains("crate::reseed::plan_reseed(old, &cap, rows, (x, y), e.cap_fed)"),
+        "Build 臂必须挂 plan_reseed 对账（旧播种账 × 新 capture × 画布喂态）"
     );
     // ② 尾块双落点：浏览画布 + 后台画布，缺一 = 该态照重建
     assert!(
@@ -238,5 +241,85 @@ fn spec_bar209_播种风暴接线守卫() {
     assert!(
         body.contains("crate::seed_sched::inflight_of("),
         "ctrl_ensure 在途计数必须走 inflight_of 单一口径"
+    );
+}
+
+/// BAR-215 双通道同喂修复壳接线守卫：Steady 相 %output 喂布不更
+/// last_cap 账 → Tail 的 k-LF 把已入史的行再推一遍 = 每档续播复制
+/// k 行重复带（redroid 定罪三证：遥测 k=5+%output=210B 落同布、
+/// 画布史超额随档线性增长、94 行 T 行双份交替带）。修复五件套——
+/// 喂态账（cap_fed/cap_stale）× plan_reseed 第 5 参与 fed 产 Skip
+/// （活镜像一笔不画：LF 重发=重复带，全屏重画=抹快照后竞速行，
+/// redroid 复判画布史差值 50→57 线性漂移定罪）× 喂点挂账 ×
+/// 通道重开强制重建 × 落地 fed 凭据不归零，缺一件病灶回潮
+#[test]
+fn spec_bar215_双喂接线守卫() {
+    // ① WarmSess 带双账：cap_fed（画布已领先账）+ cap_stale（分歧强制重建）
+    assert!(
+        APP.contains("cap_fed: bool") && APP.contains("cap_stale: bool"),
+        "WarmSess 必须带 cap_fed/cap_stale 双账"
+    );
+    // ② plan_reseed 吃喂态（第 5 参）——纯逻辑件签名钉
+    assert!(
+        RESEED.contains("canvas_fed: bool"),
+        "plan_reseed 必须吃 canvas_fed（fed = 活镜像）"
+    );
+    assert!(
+        RESEED.contains("if canvas_fed {\n        return ReseedPlan::Skip;"),
+        "fed 对账过必须产 Skip（LF 重发=重复带；全屏重画=抹竞速行）"
+    );
+    // ②b Build 臂必须三路分派且 Skip 臂一笔不画（只取样遥测）
+    assert!(
+        APP.contains("crate::reseed::ReseedPlan::Skip => {"),
+        "Build 臂必须分派 Skip（活镜像免画）"
+    );
+    assert!(
+        APP.contains("stay_fed = true;"),
+        "Skip 落地必须留 fed 凭据（画布仍领先账，归零=下档重复带回潮）"
+    );
+    // ③ Feed 臂挂账：喂进 cap_fed=true / 无布可喂 cap_stale=true
+    assert!(
+        APP.contains("e.cap_fed = true;") && APP.contains("e.cap_stale = true;"),
+        "Feed 臂必须按送达与否挂 cap_fed/cap_stale"
+    );
+    // ④ Build 臂：cap_stale 短路判负 + Tail 落地双账归位
+    assert!(
+        APP.contains("if e.cap_stale {"),
+        "Build 臂必须对 cap_stale 短路判负（分歧画布只许全量重建）"
+    );
+    assert!(
+        APP.contains(
+            "e.cap_fed = stay_fed || pend_fed;\n                        e.cap_stale = false;"
+        ),
+        "落地必须按 Skip/补喂留 fed 凭据 + stale 归位（归零 = 下档 k-LF 重复带回潮）"
+    );
+    // ⑤ 通道重开：旧画布领先账不可知 → 强制一档全量重建对齐真源
+    assert!(
+        APP.contains("if e.canvas.is_some() {\n                e.cap_stale = true;\n            }"),
+        "ctrl 开必须对存活画布挂 cap_stale（通道断档 = 领先账不可知）"
+    );
+    // ⑥ 观测闸两件：fed_bytes 账 + canvas-req 倒账通道（定罪仪器不退场）
+    assert!(
+        APP.contains("e.fed_bytes += bytes.len();"),
+        "Feed 臂必须记 fed_bytes（双喂定罪账）"
+    );
+    assert!(
+        GATE.contains("pub fn take_canvas_req(dir: &str) -> bool")
+            && APP.contains("self.dump_warm_canvases();"),
+        "canvas-req 倒账闸必须接线（gate 取件 + App 落盘）"
+    );
+    // ⑦ BAR-215③ 断档修复：Tail 臂对快照后输出（Building 相 Pended）
+    //    必须 take + 补喂落点画布——%end 后的 %output 恒在快照外，
+    //    旧律 pending.clear() = 每档续播丢一批行（5s 档 × 1s 行锁相
+    //    实测画布史恒 −1/档）；回潮 clear 即断档复辟
+    assert!(
+        !APP.contains("e.pending.clear(); // 播种窗输出已在快照内（InCapture 吞咽同规）"),
+        "Tail 臂不许再 clear 快照后输出（断档病灶回潮）"
+    );
+    assert!(
+        APP.contains("pend = std::mem::take(&mut e.pending);")
+            && APP.contains("canvas.feed_bytes(&pend);")
+            && APP.contains("feed_browse(&pend)"),
+        "Tail 臂必须把快照后输出补喂落点画布（安装臂同规）"
     );
 }
