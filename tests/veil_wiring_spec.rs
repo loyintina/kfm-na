@@ -1,10 +1,12 @@
-//! tests/veil_wiring_spec.rs — BAR-212 翻案（NA0122）信箱列表卡 veil
+//! tests/veil_wiring_spec.rs — BAR-212 翻案（NA0122）信箱查看器 veil
 //! 烘焙门接线守卫（源码钉，仿 viewer_fling_wiring_spec 形制）：
 //! 解析页从终端直滑时配置页不在栈里（cfg_snap 恒 None），旧门
 //! `let (Some(cs), Some(t)) = (cfg_snap, th)` 把整条烘焙臂掐死——
-//! 列表卡状态开了但零像素，命中带铺满全屏 = 隐形输入陷阱。android_app
+//! 查看器状态开了但零像素，命中带铺满全屏 = 隐形输入陷阱。android_app
 //! 是 `#[cfg(target_os = "android")]` 宿主编不到，壳接线断了宿主测试
 //! 全绿也照烂——故用 include_str! 把门面字面钉死。
+//! （2026-10-01 BAR-214：旧 veil 列表卡退役，信箱升整页卡；查看器
+//! 继承色进 ViewerSnap.accent 自随快照，veil_on 臂换信箱页整页卡。）
 //!
 //! 变异抽检：①门改回要求 cfg_snap（`let (Some(cs), Some(t))`）必须咬
 //! ——即本钉 ② 的反钉；②摘掉 `CfgPage::viewer_snap_global` 兜底
@@ -32,10 +34,11 @@ fn spec_bar212_veil烘焙门不要cfg_snap接线守卫() {
         APP.contains(".or_else(crate::ui::cfg_page::CfgPage::viewer_snap_global)"),
         "viewer 快照必须有 viewer_snap_global 全局口兜底"
     );
-    // ④ veil_on 的解析页臂不丢（pt_visible && 列表卡开/查看器开）
+    // ④ veil_on 的解析页/信箱页臂不丢（查看器从两页开出都要上岗；
+    // BAR-214 旧列表卡臂退役换信箱页整页卡臂）
     assert!(
-        APP.contains("|| (pt_visible && (mail_list_open || viewer_open_now))"),
-        "veil_on 解析页臂（pt_visible && (mail_list_open || viewer_open_now)）必须在"
+        APP.contains("|| ((pt_visible || mail_visible) && viewer_open_now)"),
+        "veil_on 解析页/信箱页臂（(pt_visible || mail_visible) && viewer_open_now）必须在"
     );
     // ⑤ 合成位不被 cfg_visible 包（NA0126 承影红机判卷定罪：烘对了但
     // lp.veil 在 if cfg_visible 块内，直滑恒不置位 = 烘了不画）。钉法 =

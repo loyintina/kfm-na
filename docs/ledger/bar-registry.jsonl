@@ -34,4 +34,7 @@
 {"bar":211,"title":"KFMHDR 播种头判负 4876 次致像素级滚动瘫痪（0081：r尾/错误块抢先两支仍在，判卷归承影）","claimant_func":"开发部","claimant":"观澜","letter":"0111","ts":"2026-09-30 22:34 +0800"}
 {"bar":212,"title":"信箱入口迁解析页左下常驻槽+页面级信件列表卡","claimant_func":"开发部","claimant":"闻灯","letter":"0098","ts":"2026-09-30 18:52 +0800"}
 {"bar":213,"title":"md 全量镜像落私有目录（BAR-187 v2：walk 清单端点+reconcile 镜像+断网回退链）","claimant_func":"开发部","claimant":"闻灯","letter":"0137","ts":"2026-10-01 12:38 +0800"}
+{"bar":214,"title":"信箱入口弹框改整页卡：右挤入/右滑出，三级框信渲染器按发信人随机双色","claimant_func":"开发部","claimant":"观澜","letter":"0138","ts":"2026-10-01 12:56 +0800"}
+{"bar":215,"title":"tmux 上滚三形态（历史段重播/行宽散开/跳屏断档）——209/211 已上机仍现","claimant_func":"开发部","claimant":"观澜","letter":"0143","ts":"2026-10-01 14:19 +0800"}
+{"bar":216,"title":"kimi 输出时 IME 输入无回显+页面闪烁——209/211 已上机仍现","claimant_func":"开发部","claimant":"观澜","letter":"0144","ts":"2026-10-01 14:20 +0800"}
 {"bar":217,"title":"bar-new.sh 信箱自动 commit 闸失效——MAILBOX readlink 归一后与未归一 DEFAULT_MAILBOX 比字符串恒假，追踪信永不自动提交（0138/0143/0144 三封 untracked 漂流实证）","claimant_func":"开发部","claimant":"闻灯","letter":"0147","ts":"2026-10-01 15:43 +0800"}

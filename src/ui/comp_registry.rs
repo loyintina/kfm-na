@@ -279,6 +279,28 @@ pub const COMPONENTS: &[CompEntry] = &[
         desc: "环境卡各轨（负载/内存/交换/磁盘）的文字行下滚动柱（脑在 src/sys_hist.rs：环形账/判色档/柱高滑入算术/槽位映射）：逐样本判色（>85 红 / ≥70 琥珀 / 其余绿——负载轨按 l1/核数占比同判，核数未知才回退中性青 0x2E9FD0 + 窗峰归一）；柱距半格 9px（柱宽 7 + 缝 2）、轨高 1 格、**100% 线**画在轨底线以上 30px（超 100% 的读数越线不越轨，余量 6px）；**默认铺满**——样本右对齐进槽（最新占最右槽），左侧还没铺满的槽位 = 50% 高的中性青低 α **占位柱**（不是数据，与三判色档一眼可分），真实样本每拍从右进来把占位逐根顶出左缘；新样本匀速滚入（时长 = 采样拍长 2s，各轨同拍齐滑）。**滑动在合成期**：柱层（ChromeSlot::SysBars）内容只在采样换代时一烘（卡内芯渐变逐像素重建 + 柱稳态位），滑入位移 = 源 uv 窗口起点（sys_card::band_place 纯函数；dest 矩形 = 轨矩形——uv 源窗即 kfmv4 overflow:hidden 的等价物，零 scissor 零漏墨）。**默认铺开**：历史账前台即抢 + 落盘续摊（进程重开不空窗）。",
         preview: Preview::SysBars,
     },
+    CompEntry {
+        name: "信箱页卡",
+        cat: "组件",
+        status: CompStatus::Active,
+        symbol: "paint_mail_content_impl",
+        file: "src/termview.rs",
+        spec: "BAR-214 追踪信 0138（用户 2026-10-01 派单：与 AI 页/池卡/文件树/解析页同级整页卡）",
+        tests: "tests/mail_page_spec.rs",
+        desc: "信箱整页卡（第六公民，Panel::Mail）：右挤入/右滑退出唯一关闭路径，页内滚动列三级信卡——第一栏 发信人 H1 半包框（剥部门留二字名，迷你 md 真管线）居左 + 时间居右灰字不带时区 + 箭头收件人（双人上下并置栏高两行、行内上下居中）；第二栏 字头标题引用灰字折行；第三栏 摘要正文折行；渲染器不设最大高度（可变高排版 mail_page::lay_items，眼手同尺）。",
+        preview: Preview::RowFrame,
+    },
+    CompEntry {
+        name: "发信人稳定双色",
+        cat: "组件",
+        status: CompStatus::Active,
+        symbol: "accent_for_sender",
+        file: "src/ui/accent.rs",
+        spec: "BAR-214 用户拍板：同发信人永远同色、异人异色、与页色拉开",
+        tests: "tests/accent_spec.rs",
+        desc: "信箱页三级信卡取色件：FNV-1a(发信人二字名) 播种 AccentRng 稳定取色——同发信人永远同一组双色渐变（三级框未选中形态渐变暗底），异发信人异色；与页 accent 色相距 <40° 重 roll 至多 8 次后 +180° 死保险（SENDER_HUE_MIN_DIST/SENDER_ROLL_MAX）。点卡开的查看器跳框继承该卡双色（ViewerSnap.accent 随快照同行，换芯不丢）。",
+        preview: Preview::TabChip,
+    },
     // ---- 功能光标 ----
     CompEntry {
         name: "开口框",

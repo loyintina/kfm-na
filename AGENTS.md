@@ -2,7 +2,10 @@
 
 > agent 入职指南。读完这份再动手。
 >
-> **PARADIGM v6（2026-09-27：BAR-167 redroid 撞口定罪——「换旧核同死
+> **PARADIGM v7（2026-10-01：BAR-214 跳框实拍盲区定罪——na-shot
+> CPU 倒帧不画 ModalVeil 层，跳框类判卷只许 adb screencap 系统截屏
+> （帧 md5 不变=仪器盲区非产品病）；副口接力双臂 setsid 防收割；
+> v6 2026-09-27：BAR-167 redroid 撞口定罪——「换旧核同死
 > = 与代码无关的环境死」升观测矩阵硬行（redroid 判卷环境：生产 9021
 > 不动、宿主副口判卷；热推 redroid 必编 x86_64 核——redroid12 系
 > x86_64 容器，aarch64 .so 静默回落 bundled 旧核）；v5 2026-09-25 晨班会：BAR-145 五度再现定罪——「内部账
