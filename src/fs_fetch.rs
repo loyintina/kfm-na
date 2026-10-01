@@ -130,8 +130,15 @@ pub fn read_cache_json(path: &str, text: &str) -> String {
 }
 
 const HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
-/// body 上限比 sess_pool（256KB）高一档：大目录的 JSON 会更长
+/// body 上限比 sess_pool（256KB）高一档：大目录的 JSON 会更长。
+/// **只罩 list/read 两柜**——walk 全单不在这档（见 WALK_BODY_CAP）
 const BODY_CAP: usize = 512 * 1024;
+
+/// walk 递归清单专用 body 帽（BAR-213 翻案 NA0145，2026-10-01 承影红机
+/// 判卷③定罪：现役 8748 件全单实测 **1.32MB** > 旧 512KB 共帽，镜像同步
+/// 第一发即「body 超限」整趟放弃 = 镜像永远填不满）。8MB ≈ 5 万件量级
+/// 头room；真超了仍是机械报错不当障（下一趟 reconcile 自愈）
+pub const WALK_BODY_CAP: usize = 8 * 1024 * 1024;
 
 /// 配置（壳设置加载/重载时喂，svc_health/sess_pool 旁同款）：隧道本地口
 pub fn configure(local_port: u16) {
@@ -585,7 +592,7 @@ pub fn request_mirror_sync() {
 
 fn mirror_sync_run(root: &std::path::Path, port: u16) {
     use crate::fs_mirror::{Manifest, ManifestEntry, manifest_path, mirror_file_rel, reconcile};
-    let body = match http_get(port, "/api/fs/walk?ext=.md") {
+    let body = match http_get_cap(port, "/api/fs/walk?ext=.md", WALK_BODY_CAP) {
         Ok(b) => b,
         Err(e) => {
             crate::report::report("mirror", &format!("镜像同步：walk 失败 {e}"));
@@ -708,6 +715,12 @@ fn mirror_fetch_file(port: u16, path: &str) -> Result<Vec<u8>, String> {
 /// 超时，非 200 即错）——第三份复制是有意的：另两份的 BODY_CAP 与本册
 /// 不同档（64KB/256KB/512KB），合并不如各自显式
 fn http_get(port: u16, path: &str) -> Result<String, String> {
+    http_get_cap(port, path, BODY_CAP)
+}
+
+/// `http_get` 的带帽版：walk 全单走 WALK_BODY_CAP 高档（NA0145），
+/// list/read 照旧 512KB 共帽
+fn http_get_cap(port: u16, path: &str, body_cap: usize) -> Result<String, String> {
     use std::io::Write;
     use std::net::{SocketAddr, TcpStream};
     let addr: SocketAddr = ([127, 0, 0, 1], port).into();
@@ -735,7 +748,7 @@ fn http_get(port: u16, path: &str) -> Result<String, String> {
             Ok(0) => break,
             Ok(n) => {
                 body.extend_from_slice(&buf[..n]);
-                if body.len() > BODY_CAP {
+                if body.len() > body_cap {
                     return Err("body 超限".into());
                 }
             }
