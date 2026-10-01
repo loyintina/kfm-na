@@ -13,8 +13,11 @@
 //!    零宽/组合符（U+200B、U+0300 段）——引擎 2/0 格，土判据全判 1）
 //! 2. **格折行** `grid_wrap`——贪心按格断行，断点优先最后一个 ASCII
 //!    空格之后，没有就硬断（ft_wrap_split 同款贪心语义）。
-//!    同族：**中段省略** `elide_middle`（BAR-206——装不下的长值不折行，
-//!    头尾双锚中间 …；按格算不走像素，量宽复用本模块同一份 char_cells）。
+//!    同族：**字段值折行账** `field_value_col_px` / `field_value_lines`
+//!    （BAR-206 打回重做，2026-10-01 用户裁定：省略号 = 信息丢失，
+//!    「那些信息都是必要的」——长值一律格折行往下长，行高随内容长，
+//!    永不删字。旧 `elide_middle` 中段省略件随之**删除**——函数不在
+//!    了，回退省略在结构上不可能）。
 //! 3. **格落笔**——在 TermView 侧（termview.rs 尾部
 //!    `grid_fit` / `measure_items_grid` / `draw_grid_text_left`，
 //!    私有字段只有本模块够得着，胶水只能放那边）。
@@ -54,49 +57,23 @@ pub fn grid_text_cells(s: &str) -> u32 {
     s.chars().map(char_cells).sum()
 }
 
-/// 中段省略（BAR-206 解析页长值截断/纵溢治理）：总格数 ≤ `max_cells`
-/// 原样返回；装不下 = **头尾双锚 + 中间一个「…」**（… = 1 格，预算对半
-/// 分：头 ⌈半⌉ 尾 ⌊半⌋），总格数 ≤ `max_cells` 恒成立。地址/错误长句
-/// 头裁尾裁都认不出是哪个对象（真机报障原话：地址/磁盘数字「被截断了
-/// 没显示全」）——头尾都保住才读得懂。字符原子切：全角字劈不下就整字
-/// 让给另一侧，不劈半。
-/// - `max_cells` = 0 → 空串（一格都放不下，放「…」也是占格撒谎）；
-/// - 装不下且只有 1 格 → 「…」（至少报「这里有字被截」）。
-pub fn elide_middle(text: &str, max_cells: u32) -> String {
-    if grid_text_cells(text) <= max_cells {
-        return text.to_string();
-    }
-    if max_cells == 0 {
-        return String::new();
-    }
-    if max_cells == 1 {
-        return "…".to_string();
-    }
-    let budget = max_cells - 1; // 「…」自占 1 格
-    let head_budget = budget.div_ceil(2);
-    let tail_budget = budget / 2;
-    let mut head = String::new();
-    let mut acc = 0;
-    for c in text.chars() {
-        let w = char_cells(c);
-        if acc + w > head_budget {
-            break;
-        }
-        acc += w;
-        head.push(c);
-    }
-    let chars: Vec<char> = text.chars().collect();
-    let mut tail = String::new();
-    let mut acc = 0;
-    for &c in chars.iter().rev() {
-        let w = char_cells(c);
-        if acc + w > tail_budget {
-            break;
-        }
-        acc += w;
-        tail.insert(0, c);
-    }
-    format!("{head}…{tail}")
+/// 字段值列内宽（BAR-206 打回重做：标签左锚/值右锚同盒共宽，值列 =
+/// 行内宽 − 标签宽 − 1 格间隔；保底 1 格——病态窄行也留一列，值折行
+/// 往下长，不吞字不贴墨）。单位 px（格步进 = char_cells × cell_w，
+/// px 账 ≡ 格账，与 draw_field_lines_grid 同一份尺）
+pub fn field_value_col_px(inner_px: u32, cell_w: u32, label: &str) -> u32 {
+    let cw = cell_w.max(1);
+    let label_px = (grid_text_cells(label) + 1) * cw;
+    inner_px.saturating_sub(label_px).max(cw)
+}
+
+/// 字段值折行数（BAR-206 打回重做）：值列内按格贪心折行（grid_wrap
+/// 同一份语义），返回行数（≥1）。**全量可见契约**：折行不删字——
+/// 各行拼接逐字等于原文，不出现「…」
+pub fn field_value_lines(text: &str, inner_px: u32, cell_w: u32, label: &str) -> u32 {
+    let col = field_value_col_px(inner_px, cell_w, label);
+    let cells = (col / cell_w.max(1)).max(1);
+    grid_wrap(text, cells).len().max(1) as u32
 }
 
 /// 按格折行（贪心，ft_wrap_split 同款语义）：返回每行的 **char 下标**

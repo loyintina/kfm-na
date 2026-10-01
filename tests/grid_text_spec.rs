@@ -7,7 +7,9 @@
 //!   「恰好满格不断」红；
 //! - `grid_wrap` 不吃空格断点（断点分支删空格优先）→ 「多空格优选断点」红。
 
-use kfm_na::ui::grid_text::{char_cells, elide_middle, grid_text_cells, grid_wrap};
+use kfm_na::ui::grid_text::{
+    char_cells, field_value_col_px, field_value_lines, grid_text_cells, grid_wrap,
+};
 
 // ── 格宽分类 ────────────────────────────────────────────────────────
 
@@ -112,103 +114,94 @@ fn spec_grid_wrap_空串与边界() {
     assert_eq!(joined, t, "折行不许吞字/多字");
 }
 
-// ── 中段省略（BAR-206 解析页长值截断/纵溢治理）──────────────────────
+// ── 字段值折行（BAR-206 打回重做，2026-10-01 用户裁定：省略号 = 信息
+// 丢失，「那些信息都是必要的」——旧 elide_middle 中段省略件删除，长值
+// 一律格折行往下长，行高随内容长，永不删字）──────────────────────────
 //
-// 契约：装得下原样；装不下 = 头尾双锚 + 中间一个「…」（1 格），预算
-// 对半分（头 ⌈半⌉ 尾 ⌊半⌋），总格数 ≤ max_cells 恒成立；字符原子切，
-// 全角字不劈半。字段行盒高恒定 2 格装不下两行 meta（折行 = 第二行纵溢
-// 压柱轨），故值恒定单行——单行钉用引擎自己的格折行判（格步进不吃
-// meta 缩字，格预算 ≡ px 内宽 ÷ 格宽，与 draw_field_lines_grid 同尺）。
+// 契约：值列内宽 = 行内宽 − 标签宽 − 1 格间隔（保底 1 格）；折行全量
+// 可见——各行拼接逐字等于原文，不出现「…」；行数随内容长（退化长值
+// 也不许回退省略）。
 //
 // 变异抽检预期（cp 备份改坏看红、备份恢复）：
-// - 预算不减 1 格（不给「…」留位）→ 「总长不超预算」红；
-// - 尾预算砍 0（只保头）→ 「头尾双锚」红；
-// - 装得下判据 `<=` 改 `<` → 「恰好满格原样」红。
+// - 值列不扣标签宽（label_px 漏减）→ 「值列扣标签与间隔」红；
+// - 保底 1 格删掉（saturating 后不 max）→ 「病态窄列保底一格」红；
+// - 折行掺省略（任一行塞「…」/丢字）→ 「全量可见逐字复算」红。
 
-#[test]
-fn spec_elide_middle_bar206_装得下原样() {
-    assert_eq!(elide_middle("abc", 3), "abc", "恰好满格 = 原样（> 才省）");
-    assert_eq!(elide_middle("abc", 10), "abc");
-    assert_eq!(elide_middle("中文", 4), "中文", "全角恰好满格 = 原样");
-    assert_eq!(elide_middle("", 0), "", "空串恒原样");
-    assert_eq!(elide_middle("", 5), "");
+/// 同预算复算折行拼接（判卷口径：逐字等于原文、无省略号）
+fn rejoin_wrapped(text: &str, cells: u32) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    grid_wrap(text, cells)
+        .into_iter()
+        .flat_map(|(a, b)| chars[a..b].iter().copied())
+        .collect()
 }
 
 #[test]
-fn spec_elide_middle_bar206_头尾双锚() {
-    // 10 格进 7 格：预算 6（「…」占 1），头 ⌈3⌉ 尾 ⌊3⌋
-    assert_eq!(elide_middle("abcdefghij", 7), "abc…hij");
-    // 头 = 原文前缀、尾 = 原文后缀，中间只有一个省略号
-    let r = elide_middle("root@some-long-host.example.com:22", 15);
-    assert!(r.starts_with("root@"), "头锚保住：{r}");
-    assert!(r.ends_with("com:22"), "尾锚保住：{r}");
-    assert_eq!(r.matches('…').count(), 1, "恰好一个省略号：{r}");
+fn spec_field_value_bar206_值列扣标签与间隔() {
+    // 行内宽 180px、格宽 10px、标签「磁盘」= 4 格：值列 = 180 − (4+1)×10
+    assert_eq!(field_value_col_px(180, 10, "磁盘"), 130);
+    // 标签宽则列窄（同尺减法，不许各写一份）：「QUIC 62633」= 10 半角格
+    assert_eq!(field_value_col_px(180, 10, "QUIC 62633"), 70);
+    // 行内宽装得下标签+间隔+余量时按余量出
+    assert_eq!(field_value_col_px(120, 10, "目标"), 70);
 }
 
 #[test]
-fn spec_elide_middle_bar206_总长不超预算() {
-    for (s, n) in [
-        ("abcdefghij", 7),
-        ("root@some-long-host.example.com:22", 15),
-        ("105.5G/235.9G 45%", 13),
-        ("中文测试长字符串超宽", 9),
-        ("abc", 2),
-    ] {
-        let r = elide_middle(s, n);
-        assert!(
-            grid_text_cells(&r) <= n,
-            "elide_middle({s:?}, {n}) = {r:?} 超预算（{} 格）",
-            grid_text_cells(&r)
-        );
+fn spec_field_value_bar206_病态窄列保底一格() {
+    // 行内宽 < 标签宽 + 间隔：值列保底 1 格——病态窄也不吞字（往下长）
+    assert_eq!(field_value_col_px(30, 10, "磁盘"), 10);
+    assert_eq!(field_value_col_px(0, 10, "磁盘"), 10);
+    // cell_w 病态 0 也不除零、不吞字
+    let n = field_value_lines("abc", 0, 0, "磁盘");
+    assert!(n >= 1, "保底有行：{n}");
+}
+
+#[test]
+fn spec_field_value_bar206_装得下一行() {
+    // 短值 = 1 行（旧恒定几何不受影响）
+    assert_eq!(field_value_lines("45%", 180, 10, "磁盘"), 1);
+    assert_eq!(field_value_lines("", 180, 10, "磁盘"), 1);
+    // 恰好满值列 = 1 行（13 格值列装 13 格串）
+    assert_eq!(field_value_lines("105.5G/235.9G", 180, 10, "磁盘"), 1);
+}
+
+#[test]
+fn spec_field_value_bar206_全量可见逐字复算() {
+    // 判卷口径 §五.1：显示文本逐字等于数据源，不出现「…」
+    let cases = [
+        "root@some-long-host.example.com:22",
+        "105.5G/235.9G 45%",
+        "https://example.com/some/very/long/path?query=1&other=2",
+        "中文测试长字符串超宽很多很多",
+    ];
+    for (inner, cell_w, label) in [(180u32, 10u32, "磁盘"), (90, 10, "目标"), (60, 10, "在线")]
+    {
+        let col = field_value_col_px(inner, cell_w, label);
+        let cells = (col / cell_w).max(1);
+        for s in cases {
+            let n = field_value_lines(s, inner, cell_w, label);
+            let joined = rejoin_wrapped(s, cells);
+            assert_eq!(joined, s, "折行吞字/多字（{s:?} @ {inner}px）");
+            assert!(!joined.contains('…'), "不许出现省略号（{s:?}）");
+            assert_eq!(
+                grid_wrap(s, cells).len() as u32,
+                n,
+                "行数账与折行引擎同源（{s:?} @ {inner}px）"
+            );
+        }
     }
 }
 
 #[test]
-fn spec_elide_middle_bar206_全角不劈半() {
-    // 「中文测试abc」= 2+2+2+2+1+1+1 = 11 格进 7 格：预算 6，头 3 格
-    // 只能装「中」（「文」2 格劈不下整字让），尾 3 格 = 「abc」
-    assert_eq!(elide_middle("中文测试abc", 7), "中…abc");
-    // 尾侧同样：尾预算 2 格装一个全角
-    assert_eq!(elide_middle("abcde中文", 5), "ab…文");
-}
-
-#[test]
-fn spec_elide_middle_bar206_病态窄预算() {
-    assert_eq!(
-        elide_middle("abcdef", 0),
-        "",
-        "0 格 = 空串（放…也是占格撒谎）"
-    );
-    assert_eq!(
-        elide_middle("abcdef", 1),
-        "…",
-        "1 格 = 只放省略号报「有字被截」"
-    );
-    assert_eq!(elide_middle("abcdef", 2), "a…", "2 格 = 头 1 + …，尾预算 0");
-}
-
-#[test]
-fn spec_elide_middle_bar206_省略后恒定单行() {
-    // 纵溢病灶的契约钉：字段值经省略后按格折行恒一行（预算 ≥1 时）——
-    // draw_field_lines_grid 的 px 折行与格折行同尺（字宽 = 格数×格宽）
-    let disk = "105.5G/235.9G 45%";
-    for n in [1u32, 2, 7, 13, 15, 40] {
-        let r = elide_middle(disk, n);
-        assert_eq!(
-            grid_wrap(&r, n).len(),
-            usize::from(!r.is_empty()),
-            "elide_middle({disk:?}, {n}) = {r:?} 折行不是一行"
-        );
-    }
-}
-
-#[test]
-fn spec_elide_middle_bar206_真机磁盘场景() {
-    // 用户报障原话场景：磁盘值「数字过长被遮住」——预算 = 行内宽折格
-    // − 标签「磁盘」4 格 − 1 格间隔；值省略后单行落盒不压柱轨
-    let inner_cells = 18u32; // 真机 1260 宽 kfm-zoom 1.2778 左区字段行量级
-    let budget = inner_cells - grid_text_cells("磁盘") - 1;
-    let v = elide_middle("105.5G/235.9G 45%", budget);
-    assert!(grid_text_cells(&v) <= budget, "{v}");
-    assert_eq!(grid_wrap(&v, budget).len(), 1, "{v} 必须单行");
+fn spec_field_value_bar206_真机磁盘场景() {
+    // 用户报障原话场景：磁盘值「数字过长被遮住」——行内宽 18 格量级、
+    // 标签「磁盘」4 格：值列 = 18 − 4 − 1 = 13 格，17 格值折 2 行全显
+    let inner_px = 18 * 10; // 真机 1260 宽 kfm-zoom 1.2778 左区字段行量级
+    let n = field_value_lines("105.5G/235.9G 45%", inner_px, 10, "磁盘");
+    assert_eq!(n, 2, "长值折两行往下长（不省略、不压柱轨——行高随长）");
+    // 十位磁盘数退化档：也不许回退省略
+    let big = "1024.5G/8192.0G 100%";
+    let n2 = field_value_lines(big, inner_px, 10, "磁盘");
+    assert!(n2 >= 2, "退化长值继续折行：{n2}");
+    assert_eq!(rejoin_wrapped(big, 13), big, "退化档同样全量可见");
 }

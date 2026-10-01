@@ -33,7 +33,17 @@ fn regs() -> parser_chain::Regions {
 }
 
 fn heights() -> parser_chain::ChainHeights {
-    parser_chain::heights(300, sys_card::CARD_H)
+    parser_chain::heights(
+        300,
+        sys_card::CARD_H,
+        kfm_na::ui::link_card::card_h(&kfm_na::ui::link_card::LinkLines::SINGLE, 0),
+    )
+}
+
+/// 全单行折行账（旧恒定几何参考夹具——BAR-206 打回重做：折行往下长
+/// 的钉在 spec_几何_折行账_* 三钉）
+fn single(rows: &sys_card::RowSet) -> sys_card::SysLines {
+    sys_card::SysLines::single(rows)
 }
 
 /// 环境卡 layout（排布器配给制——与生产侧同路径 slot_rect → layout_in）
@@ -47,6 +57,7 @@ fn all_rows() -> sys_card::RowSet {
 
 fn sys_lay() -> sys_card::SysLayout {
     let r = regs();
+    let rows = all_rows();
     sys_card::layout_in(
         parser_chain::slot_rect(
             ChainCardId::Sys,
@@ -54,7 +65,10 @@ fn sys_lay() -> sys_card::SysLayout {
             &heights(),
             &parser_chain::Scrolls { left: 0, right: 0 },
         ),
-        &all_rows(),
+        &rows,
+        &single(&rows),
+        0,
+        0,
     )
 }
 
@@ -330,7 +344,11 @@ fn spec_行集_没数据的行不做() {
     let rows = sys_card::rows_of(&full);
     assert_eq!(rows.metrics.len(), 4, "服务器相四轨全画");
     assert!(rows.uptime, "服务器相有在线行");
-    assert_eq!(sys_card::card_h(&rows), sys_card::CARD_H, "全行集 = CARD_H");
+    assert_eq!(
+        sys_card::card_h(&rows, &single(&rows), 0, 0),
+        sys_card::CARD_H,
+        "全行集 = CARD_H"
+    );
     // 手机相（Android 拒 loadavg/uptime）：只剩内存/交换/磁盘，卡高随之
     let mut phone = sysinfo();
     phone.load = None;
@@ -353,7 +371,7 @@ fn spec_行集_没数据的行不做() {
     );
     assert!(!lrows.uptime, "在线行不做（没数据）");
     assert!(
-        sys_card::card_h(&lrows) < sys_card::CARD_H,
+        sys_card::card_h(&lrows, &single(&lrows), 0, 0) < sys_card::CARD_H,
         "行少了卡高必矮（不留空洞）"
     );
     // 托管相全「—」→ 只剩卡头（三行高的最小卡）
@@ -366,7 +384,7 @@ fn spec_行集_没数据的行不做() {
     let hrows = sys_card::rows_of(&hosted);
     assert!(hrows.metrics.is_empty() && !hrows.uptime);
     assert_eq!(
-        sys_card::card_h(&hrows),
+        sys_card::card_h(&hrows, &single(&hrows), 0, 0),
         kfm_na::ui::parser_page::CARD_PAD_V * 2 + kfm_na::ui::parser_page::ROW_H,
         "零行 = 卡头 + 上下留白"
     );
@@ -379,6 +397,9 @@ fn spec_行集_没数据的行不做() {
             &parser_chain::Scrolls { left: 0, right: 0 },
         ),
         &hrows,
+        &single(&hrows),
+        0,
+        0,
     );
     assert!(l.metrics.is_empty() && l.uptime.is_none());
 }
@@ -463,4 +484,130 @@ fn spec_值文案_取件同序() {
     assert_eq!(sys_card::metric_value(&c, MetricKind::Swap), c.swap);
     assert_eq!(sys_card::metric_value(&c, MetricKind::Disk), c.disk);
     assert_eq!(sys_card::metric_label(MetricKind::Disk), METRIC_LABELS[3]);
+}
+
+// ── 折行账（BAR-206 打回重做，2026-10-01 用户裁定：省略 = 信息丢失——
+// 卡头/字段值格折行往下长，行高/卡高随折行数长，柱轨跟行底走，永不
+// 删字）────────────────────────────────────────────────────────────
+//
+// 变异抽检预期（cp 备份改坏看红、备份恢复）：
+// ⑨卡头行高不吃折行账（header 仍恒 ROW_H）→ 「卡头折行行高」红；
+// ⑩轨行高长了但柱轨不跟（track.y 仍 +FIELD_H）→ 「柱轨跟行底走」红；
+// ⑪卡高不吃折行账（card_h 仍恒定）→ 「卡高随折行长」红。
+
+/// 折行相布局夹具：卡头 2 行、首轨值 2 行、在线 3 行
+fn wrap_lay(adv_title: u32, adv_meta: u32) -> (sys_card::SysLayout, sys_card::RowSet) {
+    let rows = all_rows();
+    let lines = sys_card::SysLines {
+        header: 2,
+        metrics: vec![2, 1, 1, 1],
+        uptime: 3,
+    };
+    let card = kfm_na::ui::dual_pool::PoolRect {
+        x: 40,
+        y: 300,
+        w: regs().left.w,
+        h: sys_card::card_h(&rows, &lines, adv_title, adv_meta),
+    };
+    (
+        sys_card::layout_in(card, &rows, &lines, adv_title, adv_meta),
+        rows,
+    )
+}
+
+#[test]
+fn spec_几何_折行账_卡头折行行高() {
+    use kfm_na::ui::parser_page as pk;
+    let (l, _rows) = wrap_lay(50, 40);
+    // 变异⑨：卡头 2 行 = ROW_H + 1×adv_title（漏乘 = 折行第二行纵溢）
+    assert_eq!(l.header.h, pk::ROW_H + 50, "卡头 2 行行高");
+    let (l1, _r) = wrap_lay(0, 0);
+    assert_eq!(l1.header.h, pk::ROW_H, "adv 0 时折行不长（(n−1)×0）");
+    // 卡头单行 = 旧恒定（全单行参考几何不变）
+    let rows = all_rows();
+    let sl = sys_card::layout_in(
+        kfm_na::ui::dual_pool::PoolRect {
+            x: 40,
+            y: 300,
+            w: regs().left.w,
+            h: sys_card::card_h(&rows, &single(&rows), 0, 0),
+        },
+        &rows,
+        &single(&rows),
+        0,
+        0,
+    );
+    assert_eq!(sl.header.h, pk::ROW_H, "单行卡头 = 旧恒定");
+    let _ = l1;
+}
+
+#[test]
+fn spec_几何_折行账_柱轨跟行底走() {
+    use kfm_na::ui::parser_page as pk;
+    let (l, _rows) = wrap_lay(50, 40);
+    // 首轨 2 行值：行高 = FIELD_H + 40；其余轨单行不变
+    assert_eq!(l.metrics[0].row.h, sys_card::FIELD_H + 40, "2 行值轨行高");
+    assert_eq!(l.metrics[1].row.h, sys_card::FIELD_H, "单行值轨行高不变");
+    // 变异⑩：柱轨必须紧咬本轨（折行后的）文字行下缘
+    for md in &l.metrics {
+        assert_eq!(
+            md.track.y,
+            md.row.y + i64::from(md.row.h),
+            "柱轨跟折行后的行底走（+FIELD_H 等步进回潮 = 压盖）"
+        );
+    }
+    // 轨间纵序：下一轨接上一轨柱轨底 + 行距
+    for i in 1..l.metrics.len() {
+        assert_eq!(
+            l.metrics[i].row.y,
+            l.metrics[i - 1].track.y + i64::from(sys_hist::TRACK_H + pk::ROW_GAP),
+            "轨 {i} 接前轨柱轨底（不吃等步进）"
+        );
+    }
+    // 在线 3 行：行高 = FIELD_H + 2×40，且接末轨柱轨底
+    let tail = l.uptime.expect("全行集有在线行");
+    assert_eq!(tail.h, sys_card::FIELD_H + 80, "在线 3 行行高");
+    assert_eq!(
+        tail.y,
+        l.metrics[3].track.y + i64::from(sys_hist::TRACK_H + pk::ROW_GAP)
+    );
+}
+
+#[test]
+fn spec_几何_折行账_卡高随折行长() {
+    use kfm_na::ui::parser_page as pk;
+    let rows = all_rows();
+    let base = sys_card::card_h(&rows, &single(&rows), 50, 40);
+    assert_eq!(
+        base,
+        sys_card::card_h(&rows, &single(&rows), 0, 0),
+        "全单行时 adv 不进账（= CARD_H 参考值）"
+    );
+    // 变异⑪：卡头 2 行 +50、首轨 2 行 +40、在线 3 行 +80，全进卡高账
+    let lines = sys_card::SysLines {
+        header: 2,
+        metrics: vec![2, 1, 1, 1],
+        uptime: 3,
+    };
+    assert_eq!(
+        sys_card::card_h(&rows, &lines, 50, 40),
+        base + 50 + 40 + 80,
+        "卡高 = 基线 + 各处折行增量"
+    );
+    // 卡高账与布局同源（折行相）：末行底 = 卡底内缘
+    let (l, _r) = wrap_lay(50, 40);
+    let tail = l.uptime.unwrap();
+    assert_eq!(
+        tail.y + i64::from(tail.h),
+        l.card.y + i64::from(l.card.h) - i64::from(pk::CARD_PAD_V),
+        "折行相末行仍贴卡底内缘（账漏项 = 空洞/出底）"
+    );
+    // 判卷口径 §五.2 不压盖：折行相相邻件零重叠
+    assert!(l.header.y + i64::from(l.header.h) <= l.metrics[0].row.y);
+    for w in l.metrics.windows(2) {
+        assert!(
+            w[0].track.y + i64::from(sys_hist::TRACK_H) <= w[1].row.y,
+            "折行相轨间零重叠"
+        );
+    }
 }

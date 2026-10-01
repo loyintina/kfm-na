@@ -30,8 +30,13 @@ fn regs(tmux_h: u32) -> parser_chain::Regions {
 
 fn h(tmux: u32, _n_svc: usize) -> parser_chain::ChainHeights {
     // 2026-09-24 通道段改造：link 卡高恒定（会话行表退役），n_svc 形参
-    // 退役——保留夹具签名免大面积改写调用点
-    parser_chain::heights(tmux, sys_card::CARD_H)
+    // 退役——保留夹具签名免大面积改写调用点；2026-10-01 折行账：
+    // 全单行 = 旧恒定参考值（link_card::LinkLines::SINGLE）
+    parser_chain::heights(
+        tmux,
+        sys_card::CARD_H,
+        kfm_na::ui::link_card::card_h(&kfm_na::ui::link_card::LinkLines::SINGLE, 0),
+    )
 }
 
 const S0: Scrolls = Scrolls { left: 0, right: 0 };
@@ -132,7 +137,10 @@ fn spec_槽位配给_scroll0贴区顶() {
     assert_eq!(l.x, r.right_top.x);
     assert_eq!(l.y, r.right_top.y);
     assert_eq!(l.w, r.right_top.w);
-    assert_eq!(l.h, link_card::card_h().min(r.right_top.h));
+    assert_eq!(
+        l.h,
+        link_card::card_h(&link_card::LinkLines::SINGLE, 0).min(r.right_top.h)
+    );
     let x = parser_chain::slot_rect(ChainCardId::Sys, &r, &hh, &S0);
     assert_eq!(x.x, r.left.x);
     assert_eq!(x.y, r.left.y);
@@ -147,7 +155,7 @@ fn spec_滚动账_max与钳制() {
     let r = regs(1500);
     let hh = h(1500, 0);
     let rt_h = i64::from(r.right_top.h);
-    let expect_rmax = i64::from(link_card::card_h()) - rt_h;
+    let expect_rmax = i64::from(link_card::card_h(&link_card::LinkLines::SINGLE, 0)) - rt_h;
     assert!(expect_rmax > 0, "本组参数右账必须真可滚");
     assert_eq!(
         parser_chain::scroll_max(ChainCardId::Link, &r, &hh),
@@ -230,11 +238,12 @@ fn spec_区裁剪带() {
 
 #[test]
 fn spec_高度收集自报同源() {
-    // heights() = 各卡自报高度的唯一收集点：link = card_h()（恒定）、
-    // sys = CARD_H，别处不许手抄高度账
-    let hh = parser_chain::heights(999, sys_card::CARD_H);
+    // heights() = 各卡自报高度的唯一收集点：link/sys 自报高由调用方传
+    // （2026-10-01 折行账：全单行 = 旧恒定参考值），别处不许手抄高度账
+    let link_h = link_card::card_h(&link_card::LinkLines::SINGLE, 0);
+    let hh = parser_chain::heights(999, sys_card::CARD_H, link_h);
     assert_eq!(hh.tmux, 999);
-    assert_eq!(hh.link, link_card::card_h());
+    assert_eq!(hh.link, link_h);
     assert_eq!(hh.sys, sys_card::CARD_H);
     assert_eq!(hh.mail, kfm_na::ui::mail_card::card_h());
     // DOCK_GAP 与链槽间距同档（一格——排布元数据收编后数值不许漂移）

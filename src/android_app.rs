@@ -212,7 +212,11 @@ fn parser_geom(
     let tmux_h = pp::tmux_card_h(snap.sessions.len(), mode, cap);
     let regs = crate::ui::parser_chain::regions(sw, sh, bar_h, vbottom, tmux_h);
     let lay = pp::layout_in(regs.dock.clone(), snap.sessions.len(), mode, snap.scroll);
-    let chain_h = crate::ui::parser_chain::heights(tmux_h, crate::ui::sys_card::card_h_now());
+    let chain_h = crate::ui::parser_chain::heights(
+        tmux_h,
+        crate::ui::sys_card::card_h_now(),
+        crate::ui::link_card::card_h_now(),
+    );
     let scrolls = crate::ui::parser_chain::Scrolls {
         left: snap.left_scroll,
         right: snap.right_scroll,
@@ -3550,30 +3554,34 @@ impl App {
                             // 区窗闸门：裁出窗的部件只显不点，与涂装断墨
                             // 同一份 clip）；模态/命名态屏蔽（跳框期间
                             // 卡区命中全屏蔽惯例）
-                            let ch = if h.is_none()
-                                && g.mode == crate::ui::parser_page::Mode::Normal
-                            {
-                                let link_rect = crate::ui::parser_chain::slot_rect(
-                                    crate::ui::parser_chain::ChainCardId::Link,
-                                    &g.regs,
-                                    &g.chain_h,
-                                    &g.scrolls,
-                                );
-                                let (px, py) = (pt.0 as i64, pt.1 as i64);
-                                let in_win = px >= g.regs.right_top.x
-                                    && px < g.regs.right_top.x + i64::from(g.regs.right_top.w)
-                                    && py >= g.regs.right_top.y
-                                    && py < g.regs.right_top.y + i64::from(g.regs.right_top.h);
-                                if in_win {
-                                    let llay =
-                                        crate::ui::link_card::layout_in(link_rect, g.scrolls.right);
-                                    crate::ui::link_card::hit(&llay, px, py)
+                            let ch =
+                                if h.is_none() && g.mode == crate::ui::parser_page::Mode::Normal {
+                                    let link_rect = crate::ui::parser_chain::slot_rect(
+                                        crate::ui::parser_chain::ChainCardId::Link,
+                                        &g.regs,
+                                        &g.chain_h,
+                                        &g.scrolls,
+                                    );
+                                    let (px, py) = (pt.0 as i64, pt.1 as i64);
+                                    let in_win = px >= g.regs.right_top.x
+                                        && px < g.regs.right_top.x + i64::from(g.regs.right_top.w)
+                                        && py >= g.regs.right_top.y
+                                        && py < g.regs.right_top.y + i64::from(g.regs.right_top.h);
+                                    if in_win {
+                                        let (llines, ladv) = crate::ui::link_card::lay_lines_now();
+                                        let llay = crate::ui::link_card::layout_in(
+                                            link_rect,
+                                            g.scrolls.right,
+                                            &llines,
+                                            ladv,
+                                        );
+                                        crate::ui::link_card::hit(&llay, px, py)
+                                    } else {
+                                        None
+                                    }
                                 } else {
                                     None
-                                }
-                            } else {
-                                None
-                            };
+                                };
                             // 连接·服务卡也未命中且常态 → 信箱入口卡
                             // （BAR-212 左下常驻槽：钉底不滚，命中带 =
                             // 槽自身；行 → 册键归 mail_card::hit）
@@ -9238,9 +9246,13 @@ impl App {
                     &geo.scrolls,
                 );
                 let rows = crate::ui::sys_card::rows_of(&crate::ui::sys_card::current());
+                let (xlines, xadv_t, xadv_m) = crate::ui::sys_card::lay_lines_now(&rows);
                 let band = crate::ui::sys_card::band_of(&crate::ui::sys_card::layout_in(
                     card.clone(),
                     &rows,
+                    &xlines,
+                    xadv_t,
+                    xadv_m,
                 ));
                 let clip = crate::ui::parser_chain::clip_of(
                     crate::ui::parser_chain::ChainCardId::Sys,

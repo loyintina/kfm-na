@@ -17,7 +17,8 @@
 //!
 //! 布局（网格制，与合并卡同池区）：卡外框由卡链排布器配给
 //! （parser_chain::slot_rect——两轴契约 §四：间距/落位归排布器，
-//! 本卡不再知道「我接在谁下面」），卡高 = 恒定（四轨 + 两尾部行固定）。
+//! 本卡不再知道「我接在谁下面」），卡高 = 行集 + 折行账定（没数据的行
+//! 不做；BAR-206 打回重做 2026-10-01：值折行往下长，行高随内容长）。
 
 use crate::na_server_sup::{self, SupSnap};
 use crate::settings::Backend;
@@ -115,23 +116,89 @@ pub fn rows_of(s: &SysCardSnap) -> RowSet {
     }
 }
 
+/// 字段值折行数账（BAR-206 打回重做，2026-10-01 用户裁定：省略 = 信息
+/// 丢失——长值格折行往下长，行高随内容长，永不删字）：卡头/各轨/在线
+/// 各自 ≥1 行，全 1 = 旧恒定几何（CARD_H 参考值不变）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SysLines {
+    /// 卡头「环境 · 对象词」折行数
+    pub header: u32,
+    /// 各轨值折行数（与 RowSet.metrics 同序）
+    pub metrics: Vec<u32>,
+    /// 在线行值折行数
+    pub uptime: u32,
+}
+
+impl SysLines {
+    /// 全单行（旧恒定几何；缓存未写入时的缺省）
+    pub fn single(rows: &RowSet) -> Self {
+        Self {
+            header: 1,
+            metrics: vec![1; rows.metrics.len()],
+            uptime: 1,
+        }
+    }
+}
+
+/// 卡头行高（折行往下长）：n 行 = ROW_H + (n−1) × 行推进
+fn header_row_h(lines: u32, adv_title: u32) -> u32 {
+    pp::ROW_H + lines.saturating_sub(1) * adv_title
+}
+
+/// 字段行高（折行往下长）：n 行 = FIELD_H + (n−1) × 行推进（adv_meta =
+/// 涂装侧 meta 档行高 ceil(cell_h × scale × 4/3)，与
+/// draw_field_lines_grid 同一份账——行高账不长 = 折行第二行纵溢
+/// 压盖柱轨（BAR-206 原症回潮））
+fn field_row_h(lines: u32, adv_meta: u32) -> u32 {
+    FIELD_H + lines.saturating_sub(1) * adv_meta
+}
+
+/// 折行账缓存（涂装烘焙拍写入一次，涂装/命中/GLES 合成同读一份——
+/// 眼手同尺；None = 还没烘过，缺省 single + adv 0 = 旧恒定几何）
+static LAY_LINES: std::sync::Mutex<Option<(SysLines, u32, u32)>> = std::sync::Mutex::new(None);
+
+/// 写入当前折行账（涂装侧在 parser_chain::heights 之前调用）
+pub fn set_lay_lines(lines: SysLines, adv_title: u32, adv_meta: u32) {
+    *LAY_LINES.lock().unwrap() = Some((lines, adv_title, adv_meta));
+}
+
+/// 读当前折行账（layout_in/card_h_now 调用方同取这一份）
+pub fn lay_lines_now(rows: &RowSet) -> (SysLines, u32, u32) {
+    LAY_LINES
+        .lock()
+        .unwrap()
+        .clone()
+        .unwrap_or((SysLines::single(rows), 0, 0))
+}
+
 /// 行集 → 卡高（A 档纯函数）：卡头 + 行间隙 + 各行（柱轨行 = 文字行 + 柱轨；
-/// 尾部行 = 文字行）。零行 = 只剩卡头（三行高的最小卡），不留空洞
-pub fn card_h(rows: &RowSet) -> u32 {
+/// 尾部行 = 文字行）。零行 = 只剩卡头（三行高的最小卡），不留空洞。
+/// 2026-10-01 BAR-206 打回重做：行高吃折行账（字段值格折行往下长，
+/// 全 1 行 = 旧恒定几何 CARD_H 参考值不变）
+pub fn card_h(rows: &RowSet, lines: &SysLines, adv_title: u32, adv_meta: u32) -> u32 {
     let n_rows = rows.metrics.len() as u32 + u32::from(rows.uptime);
-    let mut h = pp::CARD_PAD_V * 2 + pp::ROW_H;
+    let mut h = pp::CARD_PAD_V * 2 + header_row_h(lines.header, adv_title);
     if n_rows > 0 {
         h += pp::ROW_GAP;
     }
-    h += rows.metrics.len() as u32 * (FIELD_H + TRACK_H);
-    h += u32::from(rows.uptime) * FIELD_H;
+    h += rows
+        .metrics
+        .iter()
+        .enumerate()
+        .map(|(i, _)| field_row_h(lines.metrics.get(i).copied().unwrap_or(1), adv_meta) + TRACK_H)
+        .sum::<u32>();
+    if rows.uptime {
+        h += field_row_h(lines.uptime, adv_meta);
+    }
     h += n_rows.saturating_sub(1) * pp::ROW_GAP;
     h
 }
 
-/// 当前卡高（壳排布用：读一次当前快照）
+/// 当前卡高（壳排布用：读一次当前快照 + 折行账缓存，涂装/命中同一份）
 pub fn card_h_now() -> u32 {
-    card_h(&rows_of(&current()))
+    let rows = rows_of(&current());
+    let (lines, adv_title, adv_meta) = lay_lines_now(&rows);
+    card_h(&rows, &lines, adv_title, adv_meta)
 }
 
 /// 三源合成（A 档纯函数）：对象相 × 后端 × nasup 快照（对象词）×
@@ -416,8 +483,15 @@ pub fn band_place(band: &BandGeom, offset: u32, clip: (i64, i64)) -> BandPlace {
 /// 布局纯函数：卡外框由卡链排布器配给（parser_chain::slot_rect——
 /// 几何只从排布器拿，本卡不二次揣度）。单竖列：卡头 → 各行（柱轨行 =
 /// 文字行 + 柱轨；尾部行 = 文字行），行距 = ROW_GAP；**行集由数据定**
-/// （rows_of——没数据的行不做，卡高随之，见 card_h）
-pub fn layout_in(card: PoolRect, rows: &RowSet) -> SysLayout {
+/// （rows_of——没数据的行不做，卡高随之，见 card_h）；**行高吃折行账**
+/// （BAR-206 打回重做：值折行往下长，文字行随之，柱轨跟行底走）
+pub fn layout_in(
+    card: PoolRect,
+    rows: &RowSet,
+    lines: &SysLines,
+    adv_title: u32,
+    adv_meta: u32,
+) -> SysLayout {
     let cx = card.x + i64::from(pp::CARD_PAD_H);
     let cw = card.w.saturating_sub(pp::CARD_PAD_H * 2);
     let mut y = card.y + i64::from(pp::CARD_PAD_V);
@@ -425,7 +499,7 @@ pub fn layout_in(card: PoolRect, rows: &RowSet) -> SysLayout {
         x: cx,
         y,
         w: cw,
-        h: pp::ROW_H,
+        h: header_row_h(lines.header, adv_title),
     };
     let n_rows = rows.metrics.len() as u32 + u32::from(rows.uptime);
     if n_rows == 0 {
@@ -436,23 +510,26 @@ pub fn layout_in(card: PoolRect, rows: &RowSet) -> SysLayout {
             uptime: None,
         };
     }
-    y += i64::from(pp::ROW_H + pp::ROW_GAP);
+    y += i64::from(header.h + pp::ROW_GAP);
+    let mut my = y;
     let metrics: Vec<MetricLayout> = rows
         .metrics
         .iter()
         .enumerate()
         .map(|(i, k)| {
+            let row_h = field_row_h(lines.metrics.get(i).copied().unwrap_or(1), adv_meta);
             let row = PoolRect {
                 x: cx,
-                y: y + i64::from((FIELD_H + TRACK_H + pp::ROW_GAP) * i as u32),
+                y: my,
                 w: cw,
-                h: FIELD_H,
+                h: row_h,
             };
+            my += i64::from(row_h + TRACK_H + pp::ROW_GAP);
             MetricLayout {
                 kind: *k,
                 track: PoolRect {
                     x: cx,
-                    y: row.y + i64::from(FIELD_H),
+                    y: row.y + i64::from(row_h),
                     w: cw,
                     h: TRACK_H,
                 },
@@ -460,12 +537,11 @@ pub fn layout_in(card: PoolRect, rows: &RowSet) -> SysLayout {
             }
         })
         .collect();
-    y += i64::from((FIELD_H + TRACK_H + pp::ROW_GAP) * rows.metrics.len() as u32);
     let uptime = rows.uptime.then_some(PoolRect {
         x: cx,
-        y,
+        y: my,
         w: cw,
-        h: FIELD_H,
+        h: field_row_h(lines.uptime, adv_meta),
     });
     SysLayout {
         card,
