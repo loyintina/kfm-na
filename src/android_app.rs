@@ -4729,6 +4729,9 @@ impl App {
             // 文件树本地缓存根（BAR-187）：<私有目录>/cache/fs——list/read
             // 两柜缓存先画后台换鲜；拿不到目录 = 缓存层关闭（纯远端）
             crate::fs_fetch::set_cache_root(dir.join("cache/fs"));
+            // md 全量镜像根（BAR-213 v2）：<私有目录>/mirror——真 md 文件树
+            // + 台账；回退链第二阶，断网翻开任意 md 的判卷链
+            crate::fs_fetch::set_mirror_root(dir.join("mirror"));
         }
         // 文件树数据面（BAR-165）：同一隧道本地口喂取数器；状态核注册全局
         // （三处涂装 + 手势 + 取数同源一份，与 parser_page_handle 同形制）。
@@ -4740,6 +4743,9 @@ impl App {
                 .map(|s| s.tunnel.local_port)
                 .unwrap_or(crate::tunnel::NA_SERVER_PORT),
         );
+        // 镜像同步触发①（BAR-213 v2）：隧道口喂定即补一趟（在飞闸幂等，
+        // 未喂镜像根/本地相静默不跑）
+        crate::fs_fetch::request_mirror_sync();
         let ft_state = std::sync::Arc::new(std::sync::Mutex::new(
             crate::ui::filetree::FileTreeState::new("root"),
         ));
@@ -10171,6 +10177,9 @@ impl ApplicationHandler for App {
         // 回前台即审（BAR-141）：省电冻结唤醒后第一拍就踢隧道——健康不碰，
         // 僵尸一拍定罪零退避重拉，重连抢在用户察觉之前完成
         crate::tunnel::request_resume_kick();
+        // 镜像同步触发③（BAR-213 v2）：回前台补一趟增量（未配置期静默
+        // 不跑——镜像根/隧道口在 configure 链才喂定，本调用幂等空转）
+        crate::fs_fetch::request_mirror_sync();
         // BAR-077：fx 帧预算跟真实刷新率走（每次 resumed 一问，系统设置
         // 切 60/120 档跟手）——写死 16ms 在 120Hz 屏上 = 落下拖影
         if let Some(app) = &self.android_app {
@@ -10844,6 +10853,8 @@ impl ApplicationHandler for App {
                 self.last_ai_snap.and_then(|s| s.top) == Some(crate::ai_presence::Panel::FileTree);
             if ft_top && !self.ft_top_last {
                 crate::fs_fetch::request_root();
+                // 镜像同步触发②（BAR-213 v2）：开树即补一趟增量（在飞闸幂等）
+                crate::fs_fetch::request_mirror_sync();
             }
             self.ft_top_last = ft_top;
             if crate::fs_fetch::take_dirty() {

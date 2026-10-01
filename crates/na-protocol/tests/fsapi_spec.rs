@@ -655,3 +655,100 @@ fn spec_bar170_offset解析() {
     assert!(fsapi::has_offset("offset=0"), "首块 offset=0 也是新契约");
     assert!(fsapi::has_offset("offset=abc"), "值非法但键在");
 }
+
+/// BAR-213 walk 夹具树：
+/// ```text
+/// root/
+///   a.md "A" / b.MD "B"（大写后缀照收）/ c.txt（不收）
+///   sub/d.md / sub/deep/e.md（递归收）
+///   node_modules/x.md / .git/y.md / .hid/z.md（排除剪枝）
+///   linkdir -> sub（软链目录，整枝剪）/ link.md -> a.md（软链文件，剪）
+/// ```
+fn walk_tree() -> TempDir {
+    let td = TempDir::new().expect("临时目录");
+    let r = td.path();
+    std::fs::write(r.join("a.md"), "A").unwrap();
+    std::fs::write(r.join("b.MD"), "BB").unwrap();
+    std::fs::write(r.join("c.txt"), "c").unwrap();
+    std::fs::create_dir_all(r.join("sub/deep")).unwrap();
+    std::fs::write(r.join("sub/d.md"), "d").unwrap();
+    std::fs::write(r.join("sub/deep/e.md"), "e").unwrap();
+    std::fs::create_dir(r.join("node_modules")).unwrap();
+    std::fs::write(r.join("node_modules/x.md"), "x").unwrap();
+    std::fs::create_dir(r.join(".git")).unwrap();
+    std::fs::write(r.join(".git/y.md"), "y").unwrap();
+    std::fs::create_dir(r.join(".hid")).unwrap();
+    std::fs::write(r.join(".hid/z.md"), "z").unwrap();
+    std::os::unix::fs::symlink(r.join("sub"), r.join("linkdir")).unwrap();
+    std::os::unix::fs::symlink(r.join("a.md"), r.join("link.md")).unwrap();
+    td
+}
+
+fn walk(td: &TempDir, ext: &str) -> Value {
+    let s = fsapi::walk_json_in(&roots_of(td), ext).expect("walk 成功");
+    serde_json::from_str(&s).expect("walk 出参是合法 JSON")
+}
+
+fn walk_paths(v: &Value) -> Vec<String> {
+    v["entries"]
+        .as_array()
+        .expect("entries 是数组")
+        .iter()
+        .map(|e| e["path"].as_str().expect("path 是字符串").to_string())
+        .collect()
+}
+
+#[test]
+fn spec_bar213_walk_递归收md与排除剪枝() {
+    let td = walk_tree();
+    let v = walk(&td, ".md");
+    assert_eq!(v["ok"], true);
+    assert_eq!(v["ext"], ".md");
+    // 递归收 a/b.MD/sub/d/sub/deep/e；c.txt 不收；node_modules/.git/.hid
+    // 整枝剪；linkdir/link.md 软链不跟（linkdir 剪 = sub 内容不得经链
+    // 第二次进账）。序 = 路径序（确定性对账键）
+    assert_eq!(
+        walk_paths(&v),
+        vec!["a.md", "b.MD", "sub/d.md", "sub/deep/e.md"]
+    );
+    // size/mtime 两对账键在位（b.MD 写的是 "BB" = 2 字节）
+    let e = &v["entries"][1];
+    assert_eq!(e["size"], 2);
+    assert!(e["mtime"].as_i64().expect("mtime 是整数") > 0);
+}
+
+#[test]
+fn spec_bar213_walk_ext闸failclosed() {
+    let td = walk_tree();
+    // 形状非法全拒（不开任意子串匹配口）：空/无点/裸点/夹脏/超长
+    for bad in ["", "md", ".", ".m d", ".md;", ".toolongext", "..md"] {
+        assert!(
+            fsapi::walk_json_in(&roots_of(&td), bad).is_err(),
+            "ext「{bad}」必须拒"
+        );
+    }
+    // 合法形状大小写都行（后缀比对本身大小写不敏感）
+    assert!(fsapi::walk_json_in(&roots_of(&td), ".MD").is_ok());
+    assert!(fsapi::walk_json_in(&roots_of(&td), ".txt").is_ok());
+}
+
+#[test]
+fn spec_bar213_walk_缺席根跳过不连坐() {
+    let td = walk_tree();
+    let missing = PathBuf::from("/nonexistent-bar213-root");
+    let roots = vec![missing, td.path().to_path_buf()];
+    let s = fsapi::walk_json_in(&roots, ".md").expect("缺席根不连坐");
+    let v: Value = serde_json::from_str(&s).unwrap();
+    assert_eq!(walk_paths(&v).len(), 4);
+}
+
+#[test]
+fn spec_bar213_walk_多根并集() {
+    let td = walk_tree();
+    let td2 = TempDir::new().unwrap();
+    std::fs::write(td2.path().join("only.md"), "o").unwrap();
+    let roots = vec![td.path().to_path_buf(), td2.path().to_path_buf()];
+    let s = fsapi::walk_json_in(&roots, ".md").unwrap();
+    let v: Value = serde_json::from_str(&s).unwrap();
+    assert_eq!(walk_paths(&v).len(), 5);
+}

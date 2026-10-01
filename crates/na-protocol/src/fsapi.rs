@@ -196,6 +196,88 @@ pub fn list_json_in(roots: &[PathBuf], rel: &str) -> Result<String, FsError> {
     Ok(serde_json::json!({"ok": true, "dir": rel, "entries": entries}).to_string())
 }
 
+/// `GET /api/fs/walk?ext=.md`：递归清单（BAR-213 md 全量镜像数据面）——
+/// 全根递归遍历，排除规则同一 `excluded()` 段级剪枝，只收 ext 后缀
+/// （大小写不敏感）的普通文件，出参按路径序（确定性对账键）。
+/// 出参 `{"ok":true,"ext":ext,"entries":[{path,size,mtime}]}`。
+/// 软链不跟（目录软链整枝剪 = 不许借链出根；文件软链同剪——镜像语义
+/// 要真文件，链目标可能在根外）。
+pub fn walk_json(ext: &str) -> Result<String, FsError> {
+    walk_json_in(&roots(), ext)
+}
+
+/// `walk_json()` 的纯核（考题注入 roots，不必改进程 env）。
+/// ext 闸 fail-closed：必须 `.` 开头 + 其余 1..=8 位全 ASCII 字母数字
+/// ——形状非法与越界同一条 NotFound（不透露口存在性）。
+pub fn walk_json_in(roots: &[PathBuf], ext: &str) -> Result<String, FsError> {
+    if !valid_walk_ext(ext) {
+        return Err(FsError::NotFound);
+    }
+    let mut raw: Vec<(String, u64, i64)> = Vec::new();
+    for root in roots {
+        // 根本身读不出 = 该根缺席（多根逐试同 list 律），不连坐其余根
+        if std::fs::metadata(root).map(|m| m.is_dir()).unwrap_or(false) {
+            walk_dir(root, root, ext, &mut raw)?;
+        }
+    }
+    raw.sort_by(|a, b| a.0.cmp(&b.0));
+    let entries: Vec<_> = raw
+        .into_iter()
+        .map(|(path, size, mtime)| serde_json::json!({"path": path, "size": size, "mtime": mtime}))
+        .collect();
+    Ok(serde_json::json!({"ok": true, "ext": ext, "entries": entries}).to_string())
+}
+
+/// ext 闸纯核：`.md` 合法；空/无点/带点外字符/超 8 位全拒。
+fn valid_walk_ext(ext: &str) -> bool {
+    let Some(rest) = ext.strip_prefix('.') else {
+        return false;
+    };
+    !rest.is_empty() && rest.len() <= 8 && rest.bytes().all(|b| b.is_ascii_alphanumeric())
+}
+
+/// 递归体：逐层 read_dir，排除规则剪枝，ext 后缀（大小写不敏感）收文件。
+/// 嵌套层 read_dir 失败跳过（竞态消失/权限——reconcile 下一趟自愈）；
+/// symlink_metadata 判型，软链一律不跟。
+fn walk_dir(
+    root: &Path,
+    dir: &Path,
+    ext: &str,
+    out: &mut Vec<(String, u64, i64)>,
+) -> Result<(), FsError> {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return Ok(());
+    };
+    for ent in rd {
+        let Ok(ent) = ent else { continue };
+        let name = ent.file_name().to_string_lossy().into_owned();
+        if excluded(&name) {
+            continue;
+        }
+        let p = dir.join(&name);
+        let Ok(m) = std::fs::symlink_metadata(&p) else {
+            continue;
+        };
+        if m.file_type().is_symlink() {
+            continue;
+        }
+        if m.is_dir() {
+            walk_dir(root, &p, ext, out)?;
+        } else if m.is_file()
+            && name.len() > ext.len()
+            && name[name.len() - ext.len()..].eq_ignore_ascii_case(ext)
+        {
+            let rel = p
+                .strip_prefix(root)
+                .unwrap_or(&p)
+                .to_string_lossy()
+                .replace('\\', "/");
+            out.push((rel, m.len(), mtime_ms(&m)));
+        }
+    }
+    Ok(())
+}
+
 /// `GET /api/fs/read?path=&max=`：文本预览（NUL 探测二进制；max 截断）。
 /// 文本出参 `{"ok":true,"path","binary":false,"truncated","size","text"}`；
 /// 二进制不带 text。`max` 由调用方给（HTTP 层缺省 DEFAULT_MAX、上限 MAX_MAX）。

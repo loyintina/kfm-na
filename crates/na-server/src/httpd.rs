@@ -59,6 +59,10 @@ pub enum Route {
     FsList {
         dir: String,
     },
+    /// GET /api/fs/walk?ext=<.后缀>（BAR-213 递归清单，fail-closed ext 闸）
+    FsWalk {
+        ext: String,
+    },
     /// GET /api/fs/read?path=<相对路径>&max=<字节>&offset=<字节>
     /// （max 缺省 64KB、上限 1MB；has_offset = query 显式带 offset 键
     /// = BAR-170 分块读新契约，不带 = 旧契约 read_json 原样）
@@ -113,6 +117,9 @@ pub fn route(method: &str, path: &str) -> Route {
         ("GET", "/api/na/sys") => Route::Sys,
         ("GET", "/api/fs/list") => Route::FsList {
             dir: fsapi::query_get(query, "dir").unwrap_or_default(),
+        },
+        ("GET", "/api/fs/walk") => Route::FsWalk {
+            ext: fsapi::query_get(query, "ext").unwrap_or_default(),
         },
         ("GET", "/api/fs/read") => Route::FsRead {
             path: fsapi::query_get(query, "path").unwrap_or_default(),
