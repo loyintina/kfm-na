@@ -314,27 +314,57 @@ fn spec_route_fs_read_取_path_max() {
 /// ②把 ext 取值改成恒 "" → 第二咬 ext 断言红。两咬均抓回。
 #[test]
 fn spec_bar213_route_fs_walk() {
-    let httpd::Route::FsWalk { ext } = httpd::route("GET", "/api/fs/walk?ext=.md") else {
+    let httpd::Route::FsWalk { ext, after, limit } = httpd::route("GET", "/api/fs/walk?ext=.md")
+    else {
         panic!("GET /api/fs/walk 该是 FsWalk");
     };
     assert_eq!(ext, ".md");
+    assert_eq!(after, None, "不带 after = 从头");
+    assert_eq!(limit, 0, "不带 limit = 旧契约整单（乙案客户端兜底）");
     // 无 ext → 空串透传（合法性闸在 fsapi::valid_walk_ext，路由层不预裁）
-    let httpd::Route::FsWalk { ext } = httpd::route("GET", "/api/fs/walk") else {
+    let httpd::Route::FsWalk { ext, .. } = httpd::route("GET", "/api/fs/walk") else {
         panic!("无 query 也要路由得上");
     };
     assert_eq!(ext, "");
     // 百分号编码的 ext 值
-    let httpd::Route::FsWalk { ext } = httpd::route("GET", "/api/fs/walk?ext=%2Ers") else {
+    let httpd::Route::FsWalk { ext, .. } = httpd::route("GET", "/api/fs/walk?ext=%2Ers") else {
         panic!();
     };
     assert_eq!(ext, ".rs");
+    // NA0145 甲案分页参数：after 百分号解码透传、limit 取数；
+    // 非数字 limit 回落 0（旧契约）；超帽夹到 WALK_PAGE_LIMIT_MAX；
+    // 空 after 键 = 无游标
+    let httpd::Route::FsWalk { after, limit, .. } =
+        httpd::route("GET", "/api/fs/walk?ext=.md&after=sub%2Fd.md&limit=2000")
+    else {
+        panic!();
+    };
+    assert_eq!(after.as_deref(), Some("sub/d.md"));
+    assert_eq!(limit, 2000);
+    let httpd::Route::FsWalk { after, limit, .. } =
+        httpd::route("GET", "/api/fs/walk?ext=.md&after=&limit=abc")
+    else {
+        panic!();
+    };
+    assert_eq!(after, None, "空 after 键 = 无游标");
+    assert_eq!(limit, 0, "非数字 limit 回落旧契约");
+    let httpd::Route::FsWalk { limit, .. } =
+        httpd::route("GET", "/api/fs/walk?ext=.md&limit=999999")
+    else {
+        panic!();
+    };
+    assert_eq!(
+        limit,
+        na_protocol::fsapi::WALK_PAGE_LIMIT_MAX,
+        "limit 夹上限"
+    );
     // 方法也参与路由
     assert!(matches!(
         httpd::route("POST", "/api/fs/walk?ext=.md"),
         httpd::Route::NotFound
     ));
     // /kfmv4 前缀别名同样认
-    let httpd::Route::FsWalk { ext } = httpd::route("GET", "/kfmv4/api/fs/walk?ext=.md") else {
+    let httpd::Route::FsWalk { ext, .. } = httpd::route("GET", "/kfmv4/api/fs/walk?ext=.md") else {
         panic!("前缀别名该路由到 FsWalk");
     };
     assert_eq!(ext, ".md");

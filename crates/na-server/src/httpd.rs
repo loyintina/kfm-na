@@ -60,8 +60,12 @@ pub enum Route {
         dir: String,
     },
     /// GET /api/fs/walk?ext=<.后缀>（BAR-213 递归清单，fail-closed ext 闸）
+    /// NA0145 甲案分页：`after` = keyset 游标（开区间），`limit` = 页长
+    /// （缺省/非数字/0 = 旧契约整单；上限 WALK_PAGE_LIMIT_MAX 防万位页）
     FsWalk {
         ext: String,
+        after: Option<String>,
+        limit: usize,
     },
     /// GET /api/fs/read?path=<相对路径>&max=<字节>&offset=<字节>
     /// （max 缺省 64KB、上限 1MB；has_offset = query 显式带 offset 键
@@ -120,6 +124,11 @@ pub fn route(method: &str, path: &str) -> Route {
         },
         ("GET", "/api/fs/walk") => Route::FsWalk {
             ext: fsapi::query_get(query, "ext").unwrap_or_default(),
+            after: fsapi::query_get(query, "after").filter(|a| !a.is_empty()),
+            limit: fsapi::query_get(query, "limit")
+                .and_then(|s| s.parse::<usize>().ok())
+                .unwrap_or(0)
+                .min(fsapi::WALK_PAGE_LIMIT_MAX),
         },
         ("GET", "/api/fs/read") => Route::FsRead {
             path: fsapi::query_get(query, "path").unwrap_or_default(),

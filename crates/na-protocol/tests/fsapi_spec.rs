@@ -685,7 +685,7 @@ fn walk_tree() -> TempDir {
 }
 
 fn walk(td: &TempDir, ext: &str) -> Value {
-    let s = fsapi::walk_json_in(&roots_of(td), ext).expect("walk 成功");
+    let s = fsapi::walk_json_in(&roots_of(td), ext, None, 0).expect("walk 成功");
     serde_json::from_str(&s).expect("walk 出参是合法 JSON")
 }
 
@@ -723,13 +723,13 @@ fn spec_bar213_walk_ext闸failclosed() {
     // 形状非法全拒（不开任意子串匹配口）：空/无点/裸点/夹脏/超长
     for bad in ["", "md", ".", ".m d", ".md;", ".toolongext", "..md"] {
         assert!(
-            fsapi::walk_json_in(&roots_of(&td), bad).is_err(),
+            fsapi::walk_json_in(&roots_of(&td), bad, None, 0).is_err(),
             "ext「{bad}」必须拒"
         );
     }
     // 合法形状大小写都行（后缀比对本身大小写不敏感）
-    assert!(fsapi::walk_json_in(&roots_of(&td), ".MD").is_ok());
-    assert!(fsapi::walk_json_in(&roots_of(&td), ".txt").is_ok());
+    assert!(fsapi::walk_json_in(&roots_of(&td), ".MD", None, 0).is_ok());
+    assert!(fsapi::walk_json_in(&roots_of(&td), ".txt", None, 0).is_ok());
 }
 
 #[test]
@@ -737,7 +737,7 @@ fn spec_bar213_walk_缺席根跳过不连坐() {
     let td = walk_tree();
     let missing = PathBuf::from("/nonexistent-bar213-root");
     let roots = vec![missing, td.path().to_path_buf()];
-    let s = fsapi::walk_json_in(&roots, ".md").expect("缺席根不连坐");
+    let s = fsapi::walk_json_in(&roots, ".md", None, 0).expect("缺席根不连坐");
     let v: Value = serde_json::from_str(&s).unwrap();
     assert_eq!(walk_paths(&v).len(), 4);
 }
@@ -748,7 +748,49 @@ fn spec_bar213_walk_多根并集() {
     let td2 = TempDir::new().unwrap();
     std::fs::write(td2.path().join("only.md"), "o").unwrap();
     let roots = vec![td.path().to_path_buf(), td2.path().to_path_buf()];
-    let s = fsapi::walk_json_in(&roots, ".md").unwrap();
+    let s = fsapi::walk_json_in(&roots, ".md", None, 0).unwrap();
     let v: Value = serde_json::from_str(&s).unwrap();
     assert_eq!(walk_paths(&v).len(), 5);
+}
+
+/// BAR-213 翻案 NA0145 甲案：keyset 分页——after 开区间续页、limit 截页、
+/// 后面还有才带 next_after（= 本页末条 path）；limit=0 = 旧契约整单无
+/// next_after。变异留档：①摘 raw.retain(after 过滤) → 第一咬续页含旧条红；
+/// ② next_after 恒不给 → 第四咬「还有页必须带游标」红；③ truncate 摘了
+/// → 第二咬页长超 limit 红。三咬均抓回（cp 备份复原复跑绿）。
+#[test]
+fn spec_bar213_walk_keyset分页_na0145() {
+    let td = walk_tree();
+    let roots = roots_of(&td);
+    // 第一页 limit=2：a.md/b.MD + next_after=b.MD（后面还有）
+    let s = fsapi::walk_json_in(&roots, ".md", None, 2).unwrap();
+    let v: Value = serde_json::from_str(&s).unwrap();
+    assert_eq!(walk_paths(&v), vec!["a.md", "b.MD"], "首页截到 limit");
+    assert_eq!(
+        v["next_after"].as_str().expect("还有页必须带游标"),
+        "b.MD",
+        "游标 = 本页末条 path"
+    );
+    // 续页 after=b.MD（开区间：b.MD 本身不得再现）→ 收完，无 next_after
+    let s = fsapi::walk_json_in(&roots, ".md", Some("b.MD"), 2).unwrap();
+    let v: Value = serde_json::from_str(&s).unwrap();
+    assert_eq!(walk_paths(&v), vec!["sub/d.md", "sub/deep/e.md"]);
+    assert!(
+        v.get("next_after").is_none(),
+        "末页不许带游标（客户端以此收口）"
+    );
+    // after 越过末条 = 空页无游标（翻页期间树缩了也不炸）
+    let s = fsapi::walk_json_in(&roots, ".md", Some("zzz.md"), 2).unwrap();
+    let v: Value = serde_json::from_str(&s).unwrap();
+    assert!(walk_paths(&v).is_empty());
+    assert!(v.get("next_after").is_none());
+    // limit=0 = 旧契约整单（在野乙案客户端兜底），无 next_after
+    let s = fsapi::walk_json_in(&roots, ".md", None, 0).unwrap();
+    let v: Value = serde_json::from_str(&s).unwrap();
+    assert_eq!(walk_paths(&v).len(), 4);
+    assert!(v.get("next_after").is_none(), "整单模式无游标键");
+    // after 落中间（不是任何条目 path）也合法：keyset 比字典序不比存在性
+    let s = fsapi::walk_json_in(&roots, ".md", Some("sub/c"), 2).unwrap();
+    let v: Value = serde_json::from_str(&s).unwrap();
+    assert_eq!(walk_paths(&v), vec!["sub/d.md", "sub/deep/e.md"]);
 }
