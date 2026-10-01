@@ -45,6 +45,33 @@ fn cache_root() -> Option<std::path::PathBuf> {
         .clone()
 }
 
+// ---- BAR-213 v2：md 全量镜像（0139 口径全量放行）——<私有目录>/mirror/fs
+// 真 md 文件树 + fs.manifest.json 台账；回退链扩一阶「v1 缓存 → 镜像」，
+// 断网时没看过的 md 也能直读翻开（判卷点）。纯核在 `fs_mirror`，本册接线 ----
+
+static MIRROR_ROOT: std::sync::OnceLock<std::sync::Mutex<Option<std::path::PathBuf>>> =
+    std::sync::OnceLock::new();
+
+/// 镜像根（壳 configure 旁喂，幂等）：<私有目录>/mirror——未喂 = 镜像层
+/// 整体关闭（v1 缓存行为不变）
+pub fn set_mirror_root(root: std::path::PathBuf) {
+    *MIRROR_ROOT
+        .get_or_init(|| std::sync::Mutex::new(None))
+        .lock()
+        .unwrap() = Some(root);
+}
+
+fn mirror_root() -> Option<std::path::PathBuf> {
+    MIRROR_ROOT
+        .get_or_init(|| std::sync::Mutex::new(None))
+        .lock()
+        .unwrap()
+        .clone()
+}
+
+/// 镜像同步在飞闸（重入不叠线程——回前台/开树连触也只跑一趟）
+static MIRROR_SYNCING: AtomicBool = AtomicBool::new(false);
+
 /// 缓存文件相对路径（list/read 两柜）。键过 `fsapi::pct_encode` 一口径——
 /// 保留字只放行 `A-Za-z0-9-._~`，中文/斜杠路径落平文件名天然安全；
 /// 空串（根目录键）落 `ROOT.json`（不许落 `.json` 隐形文件）
@@ -136,7 +163,7 @@ pub fn request_list(dir: String) {
         fill(&dir, local_placeholder_rows(), false);
         return;
     }
-    let had_cache = serve_list_cache(&dir, false);
+    let had_cache = serve_list_cache(&dir, false) || serve_mirror_list(&dir, false);
     spawn_list(dir, false, had_cache);
 }
 
@@ -147,7 +174,7 @@ pub fn request_list_quiet(dir: String) {
     if local_phase() {
         return; // 本地相没有真树，级联无处可落
     }
-    let had_cache = serve_list_cache(&dir, true);
+    let had_cache = serve_list_cache(&dir, true) || serve_mirror_list(&dir, true);
     spawn_list(dir, true, had_cache);
 }
 
@@ -161,6 +188,31 @@ fn serve_list_cache(dir: &str, quiet: bool) -> bool {
             crate::report::report(
                 "ftree",
                 &format!("目录缓存先画 {dir:?} 条目 {}", entries.len()),
+            );
+            fill(dir, entries, quiet);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+/// ①b 镜像先画（BAR-213 v2）：v1 缓存没有该目录时的第二阶——从镜像台账
+/// 合成与端点同形的 list 出参喂同一条 fill 链。镜像查无此目录 = false
+fn serve_mirror_list(dir: &str, quiet: bool) -> bool {
+    let Some(root) = mirror_root() else {
+        return false;
+    };
+    let man = crate::fs_mirror::Manifest::parse(
+        &std::fs::read_to_string(crate::fs_mirror::manifest_path(&root)).unwrap_or_default(),
+    );
+    let Some(body) = crate::fs_mirror::synth_list_body(&man, dir) else {
+        return false;
+    };
+    match filetree::entries_of(&body) {
+        Ok(entries) => {
+            crate::report::report(
+                "ftree",
+                &format!("目录镜像先画 {dir:?} 条目 {}", entries.len()),
             );
             fill(dir, entries, quiet);
             true
@@ -366,8 +418,9 @@ pub fn request_read_chunk(offset: u64) {
     };
     DIRTY.store(true, Ordering::Relaxed);
     // BAR-187②：首块且有缓存 = 缓存先画（声明头 + 正文立即上屏），网络
-    // 回执改走 apply_refresh0 换芯；失败 refresh_failed 摘账缓存留场
-    let served_cache = offset == 0 && serve_read_cache(&path);
+    // 回执改走 apply_refresh0 换芯；失败 refresh_failed 摘账缓存留场。
+    // BAR-213 v2：缓存没有 → 镜像第二阶（断网翻开任意 md 的判卷链）
+    let served_cache = offset == 0 && (serve_read_cache(&path) || serve_mirror_read(&path));
     std::thread::spawn(move || {
         let p = format!(
             "/api/fs/read?path={}&offset={offset}",
@@ -463,6 +516,32 @@ fn serve_read_cache(path: &str) -> bool {
     true
 }
 
+/// ②b 镜像先画（BAR-213 v2）：v1 缓存没有该文件时的第二阶——直读镜像树里
+/// 的真 md 文件（带镜像声明头）；镜像无此件/坏 UTF-8/空件 = 不画。
+/// 判卷点「断网翻开任意 md」靠这一阶成立
+fn serve_mirror_read(path: &str) -> bool {
+    let Some(root) = mirror_root() else {
+        return false;
+    };
+    let Some(rel) = crate::fs_mirror::mirror_file_rel(path) else {
+        return false;
+    };
+    let Ok(bytes) = std::fs::read(root.join(rel)) else {
+        return false;
+    };
+    let Ok(text) = String::from_utf8(bytes) else {
+        return false; // 二进制/坏 UTF-8 不进阅读页
+    };
+    if text.is_empty() {
+        return false;
+    }
+    crate::report::report("reader", &format!("正文镜像先画 {path:?}"));
+    feed_reader(path, |st| {
+        st.apply_cached(&format!("{}{text}", crate::fs_mirror::MIRROR_NOTICE))
+    });
+    true
+}
+
 /// 回执落地（守卫②：核里当前 path 必须与回执同源；空串守卫 = 无条件喂，
 /// 供本地相占位用）
 fn feed_reader(path: &str, f: impl FnOnce(&mut crate::ui::reader_page::ReaderPage)) {
@@ -475,6 +554,156 @@ fn feed_reader(path: &str, f: impl FnOnce(&mut crate::ui::reader_page::ReaderPag
     DIRTY.store(true, Ordering::Relaxed);
 }
 
+// ── md 全量镜像同步（BAR-213 v2）────────────────────────────────────
+// walk 全清单 → reconcile 三判 → 逐文件分块拉差异 → tmp+rename 落镜像树 →
+// 删消失项 → 写台账。整趟任一硬步坏 = 报账放弃、台账不前进（下一趟 reconcile
+// 自愈）；单文件坏不连坐（该件台账不前进，下趟重拉）。
+
+/// 单文件拉取上限（防服务端坏账死循环；现役实测全量 96MB/8748 件，
+/// 单件 16MB 帽远够用）
+const MIRROR_FILE_CAP: usize = 16 * 1024 * 1024;
+
+/// 镜像同步触发（幂等 + 在飞不叠——回前台/开树连触也只跑一趟）：
+/// 未喂镜像根/未配隧道口/本地相 = 整体关闭，静默不跑
+pub fn request_mirror_sync() {
+    if local_phase() {
+        return;
+    }
+    let port = PORT.load(Ordering::Relaxed);
+    let Some(root) = mirror_root() else { return };
+    if port == 0 {
+        return;
+    }
+    if MIRROR_SYNCING.swap(true, Ordering::Relaxed) {
+        return; // 在飞
+    }
+    std::thread::spawn(move || {
+        mirror_sync_run(&root, port);
+        MIRROR_SYNCING.store(false, Ordering::Relaxed);
+    });
+}
+
+fn mirror_sync_run(root: &std::path::Path, port: u16) {
+    use crate::fs_mirror::{Manifest, ManifestEntry, manifest_path, mirror_file_rel, reconcile};
+    let body = match http_get(port, "/api/fs/walk?ext=.md") {
+        Ok(b) => b,
+        Err(e) => {
+            crate::report::report("mirror", &format!("镜像同步：walk 失败 {e}"));
+            return;
+        }
+    };
+    let Some(remote) = crate::fs_mirror::walk_entries_of(&body) else {
+        crate::report::report("mirror", "镜像同步：walk 出参不认");
+        return;
+    };
+    let man = Manifest::parse(&std::fs::read_to_string(manifest_path(root)).unwrap_or_default());
+    let plan = reconcile(&remote, &man, |p| {
+        mirror_file_rel(p).is_some_and(|r| root.join(r).is_file())
+    });
+    crate::report::report(
+        "mirror",
+        &format!(
+            "镜像同步：远端 {} 件，拉 {} 删 {}",
+            remote.len(),
+            plan.fetch.len(),
+            plan.delete.len()
+        ),
+    );
+    // 拉取表逐件分块拉；败件不连坐（台账不前进 = 下趟重拉）
+    let mut failed: Vec<String> = Vec::new();
+    for e in &plan.fetch {
+        let Some(rel) = mirror_file_rel(&e.path) else {
+            failed.push(e.path.clone());
+            continue;
+        };
+        match mirror_fetch_file(port, &e.path) {
+            Ok(bytes) => {
+                let dst = root.join(&rel);
+                if let Some(parent) = dst.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                let tmp = dst.with_extension("mirtmp");
+                if std::fs::write(&tmp, &bytes).is_err() || std::fs::rename(&tmp, &dst).is_err() {
+                    let _ = std::fs::remove_file(&tmp);
+                    failed.push(e.path.clone());
+                }
+            }
+            Err(err) => {
+                crate::report::report("mirror", &format!("镜像拉取败 {:?}: {err}", e.path));
+                failed.push(e.path.clone());
+            }
+        }
+    }
+    // 删除表：远端消失 → 本地镜像同删（只删台账登记过的，陌生件不动）
+    for p in &plan.delete {
+        if let Some(rel) = mirror_file_rel(p) {
+            let _ = std::fs::remove_file(root.join(rel));
+        }
+    }
+    // 台账前进：远端全单减去败件（败件保留旧台账条——有的话——下趟重判）
+    let mut new_entries: Vec<ManifestEntry> = remote
+        .into_iter()
+        .filter(|e| !failed.contains(&e.path))
+        .collect();
+    for p in &failed {
+        if let Some(old) = man.get(p) {
+            new_entries.push(old.clone());
+        }
+    }
+    new_entries.sort_by(|a, b| a.path.cmp(&b.path));
+    let new_man = Manifest {
+        entries: new_entries,
+    };
+    let mpath = manifest_path(root);
+    let mtmp = mpath.with_extension("tmp");
+    if std::fs::write(&mtmp, new_man.to_json()).is_ok() {
+        let _ = std::fs::rename(&mtmp, &mpath);
+    }
+    crate::report::report(
+        "mirror",
+        &format!(
+            "镜像同步毕：拉 {} 删 {} 败 {}（台账 {} 件）",
+            plan.fetch.len() - failed.len(),
+            plan.delete.len(),
+            failed.len(),
+            new_man.entries.len()
+        ),
+    );
+}
+
+/// 分块拉一个文件全文（BAR-170 分块读新契约：offset/next_offset/truncated
+/// 续账）；二进制不镜像（read 端点不带 text——镜不过来，败件记下趟重试）
+fn mirror_fetch_file(port: u16, path: &str) -> Result<Vec<u8>, String> {
+    let mut buf: Vec<u8> = Vec::new();
+    let mut offset: u64 = 0;
+    loop {
+        let p = format!(
+            "/api/fs/read?path={}&offset={offset}",
+            fsapi::pct_encode(path)
+        );
+        let body = http_get(port, &p)?;
+        let v: serde_json::Value =
+            serde_json::from_str(&body).map_err(|e| format!("出参不是 JSON: {e}"))?;
+        if v.get("binary").and_then(|b| b.as_bool()) == Some(true) {
+            return Err("二进制不镜像".into());
+        }
+        let (Some(text), Some(next), Some(trunc)) = (
+            v.get("text").and_then(|t| t.as_str()),
+            v.get("next_offset").and_then(|n| n.as_u64()),
+            v.get("truncated").and_then(|b| b.as_bool()),
+        ) else {
+            return Err("出参缺键（text/next_offset/truncated）".into());
+        };
+        buf.extend_from_slice(text.as_bytes());
+        if buf.len() > MIRROR_FILE_CAP {
+            return Err("超单件帽".into());
+        }
+        if !trunc {
+            return Ok(buf);
+        }
+        offset = next;
+    }
+}
 /// GET 一个 JSON 面拿回 body（sess_pool::http_get 同款：连接/写/读全带
 /// 超时，非 200 即错）——第三份复制是有意的：另两份的 BODY_CAP 与本册
 /// 不同档（64KB/256KB/512KB），合并不如各自显式

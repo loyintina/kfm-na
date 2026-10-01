@@ -309,6 +309,37 @@ fn spec_route_fs_read_取_path_max() {
     assert_eq!(max, 1024);
 }
 
+/// BAR-213 递归清单端点路由：GET /api/fs/walk?ext=<.后缀>
+/// 变异留档：①把路由臂路径改成 "/api/fs/walkk" → 第一咬 panic（路由不上）；
+/// ②把 ext 取值改成恒 "" → 第二咬 ext 断言红。两咬均抓回。
+#[test]
+fn spec_bar213_route_fs_walk() {
+    let httpd::Route::FsWalk { ext } = httpd::route("GET", "/api/fs/walk?ext=.md") else {
+        panic!("GET /api/fs/walk 该是 FsWalk");
+    };
+    assert_eq!(ext, ".md");
+    // 无 ext → 空串透传（合法性闸在 fsapi::valid_walk_ext，路由层不预裁）
+    let httpd::Route::FsWalk { ext } = httpd::route("GET", "/api/fs/walk") else {
+        panic!("无 query 也要路由得上");
+    };
+    assert_eq!(ext, "");
+    // 百分号编码的 ext 值
+    let httpd::Route::FsWalk { ext } = httpd::route("GET", "/api/fs/walk?ext=%2Ers") else {
+        panic!();
+    };
+    assert_eq!(ext, ".rs");
+    // 方法也参与路由
+    assert!(matches!(
+        httpd::route("POST", "/api/fs/walk?ext=.md"),
+        httpd::Route::NotFound
+    ));
+    // /kfmv4 前缀别名同样认
+    let httpd::Route::FsWalk { ext } = httpd::route("GET", "/kfmv4/api/fs/walk?ext=.md") else {
+        panic!("前缀别名该路由到 FsWalk");
+    };
+    assert_eq!(ext, ".md");
+}
+
 /// 越界/不存在/类型不符在 HTTP 层必须塌成同一 404 字节串（不透露存在性）
 #[test]
 fn spec_fs_error_response_同文案() {
