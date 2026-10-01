@@ -9466,13 +9466,17 @@ impl App {
         // 涂装同判据）
         let layered = {
             let mut lp = crate::gles_present::LayeredPlace::default();
+            // 压暗层合成位（BAR-163 翻案）：恒靠泊 (0,0)——全屏层
+            // 不随面板平移；z 序 Over 之上（present_frame）。
+            // NA0126（BAR-212 翻案）：只问 veil_on 不看 cfg_visible——
+            // 解析页直滑（配置页不在栈）时信箱列表卡/查看器的 veil
+            // 层也要上岗（veil_on 自带 pt_visible 臂；烘在 8899 门已
+            // 去 cfg_snap 苛求，合成位同律）
+            if veil_on {
+                lp.veil = Some((0.0, 0.0));
+            }
             if cfg_visible {
                 lp.tabbar = Some((0.0, crate::ui::tab_bar::content_origin().1 as f32));
-                // 压暗层合成位（BAR-163 翻案）：恒靠泊 (0,0)——全屏层
-                // 不随面板平移；z 序 Over 之上（present_frame）
-                if veil_on {
-                    lp.veil = Some((0.0, 0.0));
-                }
                 if let (Some(ps), Some(cs)) = (pool_snap, cfg_snap) {
                     use crate::ui::cfg_page as cp;
                     // 二十四修：下拉面板层合成位（抽屉有余影即上岗；

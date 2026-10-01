@@ -37,4 +37,14 @@ fn spec_bar212_veil烘焙门不要cfg_snap接线守卫() {
         APP.contains("|| (pt_visible && (mail_list_open || viewer_open_now))"),
         "veil_on 解析页臂（pt_visible && (mail_list_open || viewer_open_now)）必须在"
     );
+    // ⑤ 合成位不被 cfg_visible 包（NA0126 承影红机判卷定罪：烘对了但
+    // lp.veil 在 if cfg_visible 块内，直滑恒不置位 = 烘了不画）。钉法 =
+    // 缩进敏感字面：let layered 块顶层是 12 格，挪回 cfg_visible 块内
+    // 必然 16 格（fmt 机械保证缩进=嵌套），回潮即咬
+    assert!(
+        APP.contains(
+            "            if veil_on {\n                lp.veil = Some((0.0, 0.0));\n            }"
+        ),
+        "lp.veil 合成位必须在 let layered 顶层（cfg_visible 块外）——NA0126：包进块内 = 直滑烘了不画"
+    );
 }
