@@ -172,6 +172,11 @@ fn spec_bar213_接线源码守卫() {
         "同步器必须吃 walk 递归清单端点"
     );
     assert!(
+        fetch.contains("http_get_cap(port, \"/api/fs/walk?ext=.md\", WALK_BODY_CAP)"),
+        "walk 必须走 WALK_BODY_CAP 高档——NA0145 定罪：共用 512KB 帽 \
+         = 现役 1.32MB 全单第一发即超限，镜像永远填不满"
+    );
+    assert!(
         fetch.contains("MIRROR_SYNCING.swap(true"),
         "同步器必须在飞闸（重入不叠线程）"
     );
@@ -188,4 +193,24 @@ fn spec_bar213_接线源码守卫() {
     );
     let lib = include_str!("../src/lib.rs");
     assert!(lib.contains("pub mod fs_mirror;"), "镜像核必须接线进库");
+}
+
+/// walk 帽档钉（BAR-213 翻案 NA0145）：WALK_BODY_CAP 必须 ≥ 现役实测全单
+/// 1.32MB 的四倍头room（8748 件 → 约 3.5 万件量级）；list/read 共帽
+/// 维持 512KB 不涨（大目录 JSON 档，不为 walk 让路）
+#[test]
+fn spec_bar213_walk帽档_na0145() {
+    // 编译期咬（const 块：帽被砍 = 测试二进制编不过，比断言红更硬；
+    // clippy assertions_on_constants 教训—— BAR-214 同 lint 先例）
+    const {
+        assert!(
+            kfm_na::fs_fetch::WALK_BODY_CAP >= 4 * 1_320_000,
+            "WALK_BODY_CAP 必须 >= 4x 现役实测 1.32MB（NA0145）"
+        );
+    }
+    let fetch = include_str!("../src/fs_fetch.rs");
+    assert!(
+        fetch.contains("const BODY_CAP: usize = 512 * 1024;"),
+        "list/read 共帽维持 512KB 不动"
+    );
 }
