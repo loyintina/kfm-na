@@ -676,12 +676,10 @@ pub fn parser_page_handle() -> Option<SharedParserPage> {
     HANDLE.lock().unwrap().clone()
 }
 
-// ---- 屏代账（BAR-145 仪器三期+修复，2026-09-24）：GPU 层当前纹理是哪
-// 一代烘焙的——[touch] 行附「屏代N」，与活体 epoch 对表。**修复：
-// 命中吃屏代快照（眼手同尺的真义）**——名单翻动（网络风暴期短命会话
-// 起灭，9-23 夜实证 4↔5↔8 横跳）时，活体快照比屏上纹理新，用活体
-// 命中 = 你点中的是你没看到的名单；吃屏代 = 你点中的就是你看到的，
-// 屏在下一帧自追新名单
+// ---- 屏代快照（BAR-145 修复，2026-09-24）：**命中吃屏代快照（眼手同尺
+// 的真义）**——名单翻动（网络风暴期短命会话起灭，9-23 夜实证 4↔5↔8
+// 横跳）时，活体快照比屏上纹理新，用活体命中 = 你点中的是你没看到的
+// 名单；吃屏代 = 你点中的就是你看到的，屏在下一帧自追新名单
 
 static BAKED_SNAP: Mutex<Option<ParserPageSnap>> = Mutex::new(None);
 
@@ -694,36 +692,4 @@ pub fn note_baked_snap(snap: &ParserPageSnap) {
 /// = 页未上过屏，调用方回落活体）
 pub fn baked_snap() -> Option<ParserPageSnap> {
     BAKED_SNAP.lock().unwrap().clone()
-}
-
-/// 当前屏上纹理的烘焙代（[touch] 遥测调用方）
-pub fn baked_epoch() -> u64 {
-    BAKED_SNAP.lock().unwrap().as_ref().map_or(0, |s| s.epoch)
-}
-
-// ── BAR-145 复发案仪器（2026-09-25）─────────────────────────────────
-// 屏代几何账：烘焙时刻的 sig 七维 + 行带。9-24 夜复发实录 [bake]/[touch]
-// 两账行带全程相等而用户肉眼错位仍在——证明两账之间断一环：纹理可能滞在
-// 更早一代（该重烘没重烘）。[touch] 时对表「活体七维 vs 屏代七维」：
-// 异 = 纹理滞留，差的那一维直接指认漏的 sig 维；同 = 病灶在纹理之下
-// （合成/表面层），仪器升级方向随之前移。accent 两色不入表（不挪几何）
-
-/// 屏代几何（烘焙时刻的 sig 七维：w/h/ime/bar_h/插件代/隧道代/重启武装）
-#[derive(Clone, Debug)]
-pub struct BakedGeo {
-    pub sig: [u64; 7],
-    pub rows: String,
-    pub at_ms: u64,
-}
-
-static BAKED_GEO: Mutex<Option<BakedGeo>> = Mutex::new(None);
-
-/// 烘焙完成落几何账（android_app slot_bake(Parser) 处唯一调用方）
-pub fn note_baked_geo(geo: BakedGeo) {
-    *BAKED_GEO.lock().unwrap() = Some(geo);
-}
-
-/// 屏代几何账（[touch] 对表调用方）
-pub fn baked_geo() -> Option<BakedGeo> {
-    BAKED_GEO.lock().unwrap().clone()
 }

@@ -63,8 +63,8 @@ public class MainActivity extends NativeActivity {
         if (hasFocus && mIme != null) {
             mIme.requestFocus();
         }
-        // BAR-145：焦点变化 = IME 召收之外的窗口重排时点，对表时序关键帧
-        appendMotion("lifecycle focus=" + hasFocus + " " + winGeom());
+        // BAR-145 治本臂：焦点重获 = IME 召收之外的窗口重协商时点，重贴
+        // 沉浸式标志（见下）
         if (hasFocus) {
             reapplyImmersive();
         }
@@ -74,8 +74,8 @@ public class MainActivity extends NativeActivity {
      *  沉浸式标志——病灶是输入侧窗顶被错记到状态栏之下（捕获器实测 winTop=135，
      *  显示侧全屏 0），重贴迫使系统重算窗口 frame，输入/显示两侧快照同源
      *  （沉浸式 desync 的标准修法）。点火时点 = 复现钥匙直指的 resume。
-     *  安全性：本应用 surface 恒为物理整屏（1260x2800，见 [bake] 屏寸账），
-     *  重贴不改变可视尺寸；全过程 try 兜底留痕，皮肤不许把壳带着一起死。 */
+     *  安全性：本应用 surface 恒为物理整屏（1260x2800），重贴不改变可视
+     *  尺寸；全过程 try 兜底，皮肤不许把壳带着一起死。 */
     private void reapplyImmersive() {
         try {
             getWindow().setDecorFitsSystemWindows(false);
@@ -86,9 +86,7 @@ public class MainActivity extends NativeActivity {
                             | android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
                             | android.view.View.SYSTEM_UI_FLAG_FULLSCREEN
                             | android.view.View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
-            appendMotion("immersive 重贴 " + winGeom());
-        } catch (Throwable t) {
-            appendMotion("immersive 重贴 ERR " + t);
+        } catch (Throwable ignored) {
         }
     }
 
@@ -278,46 +276,6 @@ public class MainActivity extends NativeActivity {
         }
     }
 
-    // ---- BAR-145 输入边界对表仪器（2026-09-25，定罪后钉层）----
-    // 三方对表已定罪：显示/几何/渲染全链无罪，na 收到的触摸 y 系统性偏小
-    // ~130px≈状态栏高——偏移在 winit/系统窗口层。本仪器从 Java 皮（系统
-    // 输入边界外侧）取证：
-    //   ① dispatchTouchEvent 记 rawX/rawY vs x/y——raw−y=系统认定的窗顶，
-    //      发病期若窗顶=126（状态栏）即钉死 inset desync。风险点：NativeActivity
-    //      的 input queue 整窗接管，本回调可能被旁路——sDispatchCount 一直为 0
-    //      本身就是证据（Java 调度被旁路，偏移只能在更底层）。
-    //   ② dumpWindowStateFromGate（gate window-state-req 触发）：随时远测
-    //      decorView 屏上位置 + rootWindowInsets，发病/健康各读一次直接对表。
-    private static int sDispatchCount = 0;
-
-    @Override
-    public boolean dispatchTouchEvent(android.view.MotionEvent ev) {
-        int act = ev.getActionMasked();
-        if (act == android.view.MotionEvent.ACTION_DOWN
-                || act == android.view.MotionEvent.ACTION_UP) {
-            sDispatchCount++;
-            appendMotion("touch act=" + act
-                    + " raw=" + ev.getRawX() + "," + ev.getRawY()
-                    + " xy=" + ev.getX() + "," + ev.getY()
-                    + " " + winGeom());
-        }
-        return super.dispatchTouchEvent(ev);
-    }
-
-    /** 「系统此刻认为窗口在哪」：decorView 屏上坐标 + 状态栏 inset */
-    private String winGeom() {
-        try {
-            android.view.View dv = getWindow().getDecorView();
-            int[] loc = new int[2];
-            dv.getLocationOnScreen(loc);
-            android.view.WindowInsets in = dv.getRootWindowInsets();
-            int insetTop = in == null ? -1 : in.getSystemWindowInsetTop();
-            return "winTop=" + loc[1] + " insetTop=" + insetTop;
-        } catch (Throwable t) {
-            return "winGeom ERR " + t;
-        }
-    }
-
     private void appendMotion(String line) {
         try {
             java.io.File f = new java.io.File(getFilesDir(), "usr/tmp/motion-java.log");
@@ -329,34 +287,9 @@ public class MainActivity extends NativeActivity {
         }
     }
 
-    /** 原生 gate 线程经 JNI 调（与 rec/web 同槽注册）——甩 UI 线程读几何，
-     * 落 usr/tmp/window-state（快照，覆盖写）+ motion-java.log（时序，追加） */
-    public void dumpWindowStateFromGate() {
-        runOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                String snap = android.os.SystemClock.uptimeMillis() + " " + winGeom()
-                        + " dispatchCount=" + sDispatchCount
-                        + " dm=" + getResources().getDisplayMetrics().widthPixels + "x"
-                        + getResources().getDisplayMetrics().heightPixels;
-                appendMotion("dump " + snap);
-                try {
-                    java.io.File f = new java.io.File(getFilesDir(), "usr/tmp/window-state");
-                    f.getParentFile().mkdirs();
-                    java.io.FileWriter w = new java.io.FileWriter(f, false);
-                    w.write(snap + "\n");
-                    w.close();
-                } catch (Exception ignored) {
-                }
-            }
-        });
-    }
-
     @Override
     protected void onResume() {
         super.onResume();
-        // 发病窗口 = 熄屏→解锁→回 na：resume 时的窗口几何是 desync 第一现场
-        appendMotion("lifecycle onResume " + winGeom());
         reapplyImmersive();
     }
 }

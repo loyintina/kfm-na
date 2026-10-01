@@ -5,6 +5,19 @@
 > (速查表:症状 → 工具 → 字段 → 判卷)。本页只写「现在进行时」,
 > 历史功过在 bugs.md。
 
+## 当前位置（2026-10-02，BAR-145 观察期满裁决结案——BAR-219 拆仪器）
+
+> **裁决**：修复臂（9-26 触摸补偿+治本臂重贴）上机后六日零报障，用户
+> 9-27 实测「复现不出来」；捕获器 09-30~10-02 可达样本 915 条全
+> winTop=0 零 SICK → 静默判过成立，结案（bugs.md BAR-145 行全档）。
+> **拆仪器全账**：[touch] 点按遥测 / [bake] 烘焙行账 / 屏代几何账
+> （baked_epoch·BakedGeo）/ gate 通道十四 window-state-req 钩子链 /
+> Java 皮 dispatchTouchEvent·winGeom·dumpWindowStateFromGate·生命周期
+> 几何行 / scripts/na-winstate-watch.sh 捕获器（进程已停）+ 仪器钉两枚
+> （退役闸/winstate钩子链）。**修复全留**：drift_compensate 补偿、命中
+> 吃屏代快照、reapplyImmersive 治本臂 + spec_bar145 四钉在役。
+> 追踪信 0149。
+
 ## 当前位置（2026-10-02，BAR-213 md 全量镜像落私有目录——BAR-187 v2 数据本地化收口）
 
 > **缘起**：清和 0135 用户断网实测定罪——v1（BAR-187）只缓存「看过的」，
