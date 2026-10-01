@@ -60,6 +60,19 @@ impl MdSink for Rec {
     fn hr(&mut self) {
         self.events.push("HR".to_string());
     }
+    fn table(&mut self, header: Vec<Vec<Span>>, rows: Vec<Vec<Vec<Span>>>) {
+        let h = header
+            .iter()
+            .map(|c| spans_txt(c))
+            .collect::<Vec<_>>()
+            .join(",");
+        let body = rows
+            .iter()
+            .map(|r| r.iter().map(|c| spans_txt(c)).collect::<Vec<_>>().join(","))
+            .collect::<Vec<_>>()
+            .join("⏎");
+        self.events.push(format!("T:{h}‖{body}"));
+    }
 }
 
 fn rec(md: &str) -> Vec<String> {
@@ -211,4 +224,54 @@ fn spec_bar169_14_段落遇块起手即断() {
     // 段落中行出现块起手（标题/引用/列表/围栏/分隔线）= 段落断、新块起
     let ev = rec("正文行\n## 插题\n续文");
     assert_eq!(ev, vec!["P:[N]正文行", "H2:[N]插题", "P:[N]续文"]);
+}
+
+// ---- BAR-218 表格（GFM 子集）----
+
+#[test]
+fn spec_bar218_01_表格基本两列与文档序() {
+    let ev = rec("前文\n\n| 名 | 值 |\n|---|---|\n| a | b |\n| c | d |\n\n后文");
+    assert_eq!(
+        ev,
+        vec![
+            "P:[N]前文",
+            "T:[N]名,[N]值‖[N]a,[N]b⏎[N]c,[N]d",
+            "P:[N]后文"
+        ]
+    );
+}
+
+#[test]
+fn spec_bar218_02_转义竖线与行内码内竖线不分隔() {
+    let ev = rec("| a \\| b | `x|y` |\n|---|---|\n| 1 | 2 |");
+    assert_eq!(ev, vec!["T:[N]a | b,[C]x|y‖[N]1,[N]2"]);
+}
+
+#[test]
+fn spec_bar218_03_无分隔行不成表() {
+    // `|` 起行但次行不是分隔行 = 普通正文（防正文里的 | 误判成表）
+    let ev = rec("| a | b |\n没有分隔行");
+    assert_eq!(ev, vec!["P:[N]| a | b |⏎[N]没有分隔行"]);
+    // 连续 | 行无分隔行同样归段落
+    let ev = rec("| a |\n| b |");
+    assert_eq!(ev, vec!["P:[N]| a |⏎[N]| b |"]);
+}
+
+#[test]
+fn spec_bar218_04_列数不齐截补对齐表头() {
+    let ev = rec("| a | b |\n|---|---|\n| 1 | 2 | 3 |\n| 4 |");
+    assert_eq!(ev, vec!["T:[N]a,[N]b‖[N]1,[N]2⏎[N]4,[N]"]);
+}
+
+#[test]
+fn spec_bar218_05_段落遇表起手即断() {
+    let ev = rec("前文\n| a | b |\n|---|---|\n| 1 | 2 |\n后文");
+    assert_eq!(ev, vec!["P:[N]前文", "T:[N]a,[N]b‖[N]1,[N]2", "P:[N]后文"]);
+}
+
+#[test]
+fn spec_bar218_06_对齐标记形态认得但忽略() {
+    // `:--`/`--:`/`:--:` 都是合法分隔行（一期全左对齐，形态要认得）
+    let ev = rec("| a | b | c |\n|:---|---:|:---:|\n| 1 | 2 | 3 |");
+    assert_eq!(ev, vec!["T:[N]a,[N]b,[N]c‖[N]1,[N]2,[N]3"]);
 }

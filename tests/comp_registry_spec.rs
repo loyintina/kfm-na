@@ -104,14 +104,15 @@ fn status_labels_nonempty() {
 }
 
 /// BAR-207：md 引擎第六大类一效果一条（H1-H6/粗体/行内码/围栏/引用/
-/// 列表/分隔线/随机色 = 13 条）+ 烧瓶钮随 demo 页退役封存留档
+/// 列表/分隔线/随机色 = 13 条；**BAR-218 表格条目入栏 = 14 条**）
+/// + 烧瓶钮随 demo 页退役封存留档
 #[test]
 fn spec_bar207_md引擎栏与烧瓶钮封存() {
     assert!(CATEGORIES.contains(&"md 引擎"), "md 引擎大类失踪");
     assert_eq!(
         count_of("md 引擎"),
-        13,
-        "md 引擎栏条数漂移——一效果一条的契约破了"
+        14,
+        "md 引擎栏条数漂移——一效果一条的契约破了（BAR-218 后 = 14）"
     );
     let e = COMPONENTS
         .iter()
