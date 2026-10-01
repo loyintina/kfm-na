@@ -8892,15 +8892,23 @@ impl App {
             // 压暗层烘焙（BAR-163 翻案：跳框整体搬出配置槽的全屏层）——
             // 全幅 α150 黑直写 + 卡体在上；跳框开合/内容变/accent 变/
             // 动效帧泵才重烘（稳态零重烘零上传），z 序 Over 之上
-            if veil_on && let (Some(cs), Some(t)) = (cfg_snap, th) {
+            // NA0122（BAR-212 翻案）：门只要求 th，不再要求 cfg_snap——
+            // 解析页从终端直滑时配置页不在栈里（cfg_snap 恒 None），
+            // 信箱列表卡/查看器照样要烘焙；modal 必 None（配置页跳框
+            // 此时开不了），viewer 走全局口兜底
+            if veil_on && let Some(t) = th {
                 // BAR-212：信箱列表卡开着 = 烘焙前先喂几何账 + 摘要懒
                 // 加载窗（滚动帧 sig 必变 → 本臂必达；开窗首帧同达）
                 if mail_list_open {
                     Self::mail_list_feed(w, h);
                 }
-                let content_key = if let Some(mi) = cs.modal {
+                let modal = cfg_snap.and_then(|cs| cs.modal);
+                let viewer = cfg_snap
+                    .and_then(|cs| cs.viewer.clone())
+                    .or_else(crate::ui::cfg_page::CfgPage::viewer_snap_global);
+                let content_key = if let Some(mi) = modal {
                     u64::from(mi as u32) + 1
-                } else if let Some(v) = &cs.viewer {
+                } else if let Some(v) = &viewer {
                     use std::hash::{Hash, Hasher};
                     let mut hasher = std::collections::hash_map::DefaultHasher::new();
                     v.title.hash(&mut hasher);
@@ -8939,7 +8947,7 @@ impl App {
                     c2: veil_accent.c2,
                     content_key,
                     anim_bucket,
-                    viewer_scroll: cs.viewer.as_ref().map_or(0, |v| v.scroll),
+                    viewer_scroll: viewer.as_ref().map_or(0, |v| v.scroll),
                     cell,
                     mail_dim,
                 };
@@ -8950,8 +8958,8 @@ impl App {
                         px,
                         w,
                         h,
-                        cs.modal,
-                        cs.viewer.as_ref(),
+                        modal,
+                        viewer.as_ref(),
                         veil_accent,
                         crate::report::boot_ms() as u64,
                     );
