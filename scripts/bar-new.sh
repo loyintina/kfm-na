@@ -58,6 +58,11 @@ DEFAULT_MAILBOX="$HOME/.kfm/session/信箱"
 # 扫描静默得 0 封、max 退回树内旧账 → 与观澜 0092 撞号。readlink -f 对
 # 非链接路径原样返回，幂等）
 MAILBOX="$(readlink -f "$MAILBOX")"
+# BAR-217：DEFAULT_MAILBOX 同归一——上一行把 MAILBOX 解引用成真身
+# （/root/90-信箱/10-NA信箱），DEFAULT 不归一 = 下方「= 默认信箱才自动
+# commit」的字符串比恒假，追踪信永不自动提交（0138/0143/0144 untracked
+# 漂流三封实证）。两边都 readlink -f 再比（幂等，非链接原样返回）
+DEFAULT_MAILBOX="$(readlink -f "$DEFAULT_MAILBOX")"
 
 # 名册预检（0055 补丁③，提到领号前）：§六《名字登记前移》后开信对未入册名
 # fail-closed——不预检会留下「号领了、信生不出」的坑。名册出处 = 信箱
