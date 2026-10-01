@@ -16,6 +16,10 @@ pub const QUIET_MS: u128 = 150;
 pub const RATE_WINDOW_MS: u128 = 100;
 /// 速率触发阈（窗内字节数；打字回显量级远低于此，不误伤稳态）
 pub const RATE_BYTES: usize = 16 * 1024;
+/// 速率轮节拍帧周期（BAR-216）：洪峰压帧 ≠ 全冻——速率追赶轮每这么久
+/// 放一帧（击键回显/流式进度有上屏路，频闪 churn 变匀拍）。显式轮
+/// （重播种窗快照拼装）维持全压制，不受此闸
+pub const THROTTLE_MS: u128 = 400;
 
 /// 追赶动作（壳把枚举翻译成平台操作：跳底 + 像素零头归零 + 置脏亮出）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,6 +28,39 @@ pub enum CatchAct {
     None,
     /// 追平落地——只发一次（退出追赶即回稳态，后续 tick 不再发）
     Land,
+}
+
+/// 进场缘由（BAR-216 观测账：显式 = 重连/发种/重播种窗；速率 = 窗内洪峰）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnterCause {
+    Explicit,
+    Rate,
+}
+
+/// 壳侧报表用词（遥测行统一口径，接线守卫咬字面）
+pub fn enter_cause_name(c: EnterCause) -> &'static str {
+    match c {
+        EnterCause::Explicit => "显式",
+        EnterCause::Rate => "速率洪峰",
+    }
+}
+
+/// 追赶观测账快照（BAR-216：壳侧遥测取数——只在 进场/落地 沿报账，
+/// 不刷日志）。held_bytes = 本轮追赶期累计「喂而不画」的字节——回显
+/// 无影案的第一嫌疑人就是这笔账里有用户的击键回显。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CatchStats {
+    pub catching: bool,
+    /// 稳态→追赶 边沿计数（追赶期重复 enter 不计——幂等续窗非新沿）
+    pub enter_count: u32,
+    pub rate_enter_count: u32,
+    pub land_count: u32,
+    /// 本轮追赶期起算点（稳态期保留上轮的，供落地帧算持续时长）
+    pub catching_since_ms: u128,
+    /// 本轮追赶期累计压帧字节（落地沿壳取走报账；下一新沿清零）
+    pub held_bytes: u64,
+    /// 本轮速率追赶期已放节拍帧数（落地沿随账报；显式轮恒 0）
+    pub throttle_count: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,6 +77,22 @@ pub struct Catchup {
     last_byte_ms: u128,
     win_start_ms: u128,
     win_bytes: usize,
+    // BAR-216 观测账（回显无影案仪器：压制量/进场因/落地因全留账）
+    enter_count: u32,
+    rate_enter_count: u32,
+    land_count: u32,
+    catching_since_ms: u128,
+    held_bytes: u64,
+    /// 进场沿待取（单槽——take_enter 取走前的新沿覆盖旧的，壳每圈必取
+    /// 不会积压；只记 稳态→追赶 边沿，追赶期重复 enter 不产沿）
+    pending_enter: Option<EnterCause>,
+    /// 本轮追赶因（BAR-216：速率轮放节拍帧/显式轮全压制由此分流；
+    /// 速率轮中显式 enter 升级为显式——重播种快照拼装期画中间态 = 花屏）
+    round_cause: EnterCause,
+    /// 上一节拍帧时刻（速率轮限拍账）
+    last_throttle_ms: u128,
+    /// 本轮已放节拍帧数（落地沿随账报，新沿清零）
+    throttle_count: u32,
 }
 
 impl Default for Catchup {
@@ -55,13 +108,32 @@ impl Catchup {
             last_byte_ms: 0,
             win_start_ms: 0,
             win_bytes: 0,
+            enter_count: 0,
+            rate_enter_count: 0,
+            land_count: 0,
+            catching_since_ms: 0,
+            held_bytes: 0,
+            pending_enter: None,
+            round_cause: EnterCause::Explicit,
+            last_throttle_ms: 0,
+            throttle_count: 0,
         }
     }
 
     /// 显式入场：重连/发种/重播种窗口开始（壳在 seed_sent/respawn/
     /// attach/切会话/browse 重抓 处调——BAR-209① 三路同规）。重复
-    /// 入场 = 重新计窗，幂等无栈。
+    /// 入场 = 重新计窗，幂等无栈（不产新进场沿、账不清零续累计）；
+    /// 速率轮中显式入场 = 升级显式轮（重播种拼装期全压制，BAR-216 分流律）
     pub fn enter(&mut self, now_ms: u128) {
+        if self.phase == Phase::Steady {
+            self.enter_count += 1;
+            self.catching_since_ms = now_ms;
+            self.held_bytes = 0;
+            self.throttle_count = 0;
+            self.last_throttle_ms = now_ms;
+            self.pending_enter = Some(EnterCause::Explicit);
+        }
+        self.round_cause = EnterCause::Explicit;
         self.phase = Phase::Catching;
         self.last_byte_ms = now_ms;
         self.win_start_ms = now_ms;
@@ -71,6 +143,24 @@ impl Catchup {
     /// 是否处于追赶期（壳据此抑制置脏：字节照喂 grid，帧不画）
     pub fn catching(&self) -> bool {
         self.phase == Phase::Catching
+    }
+
+    /// 观测账快照（壳在落地沿取数报账：压制量/持续时长从这出）
+    pub fn stats(&self) -> CatchStats {
+        CatchStats {
+            catching: self.catching(),
+            enter_count: self.enter_count,
+            rate_enter_count: self.rate_enter_count,
+            land_count: self.land_count,
+            catching_since_ms: self.catching_since_ms,
+            held_bytes: self.held_bytes,
+            throttle_count: self.throttle_count,
+        }
+    }
+
+    /// 取进场沿（稳态→追赶 边沿一记一取；壳在喂字节后随取随报）
+    pub fn take_enter(&mut self) -> Option<EnterCause> {
+        self.pending_enter.take()
     }
 
     /// 字节到账登记（两条进料通路都调）。返回登记后的追赶态——
@@ -85,8 +175,37 @@ impl Catchup {
         self.last_byte_ms = now_ms;
         if self.phase == Phase::Steady && self.win_bytes >= RATE_BYTES {
             self.phase = Phase::Catching;
+            self.rate_enter_count += 1;
+            self.enter_count += 1;
+            self.catching_since_ms = now_ms;
+            self.held_bytes = 0;
+            self.throttle_count = 0;
+            self.last_throttle_ms = now_ms;
+            self.round_cause = EnterCause::Rate;
+            self.pending_enter = Some(EnterCause::Rate);
+        }
+        if self.phase == Phase::Catching {
+            self.held_bytes += nbytes as u64;
         }
         self.catching()
+    }
+
+    /// 速率轮节拍闸（BAR-216）：速率追赶期每 THROTTLE_MS 放一帧——洪峰
+    /// 压帧本是合并手段，全冻却把击键回显/流式进度一并关黑（0141④
+    /// 「输出时打字无回显+闪烁」定罪：落地→4ms→再进场的 churn 使回显
+    /// 秒级压帧、屏幕频闪）。显式轮（重播种快照拼装）恒 false 全压制。
+    /// 返回 true 即本圈该放帧（壳置脏即画，不跳底不抢滚动条）
+    pub fn throttle_frame(&mut self, now_ms: u128) -> bool {
+        if self.phase == Phase::Catching
+            && self.round_cause == EnterCause::Rate
+            && now_ms.saturating_sub(self.last_throttle_ms) >= THROTTLE_MS
+        {
+            self.last_throttle_ms = now_ms;
+            self.throttle_count += 1;
+            true
+        } else {
+            false
+        }
     }
 
     /// 追平判据二：播种尾锚到达（推流画布安装 / ctrl_feed built）。
@@ -94,6 +213,7 @@ impl Catchup {
     pub fn anchor(&mut self) -> CatchAct {
         if self.phase == Phase::Catching {
             self.phase = Phase::Steady;
+            self.land_count += 1;
             CatchAct::Land
         } else {
             CatchAct::None
@@ -104,6 +224,7 @@ impl Catchup {
     pub fn tick(&mut self, now_ms: u128) -> CatchAct {
         if self.phase == Phase::Catching && now_ms.saturating_sub(self.last_byte_ms) >= QUIET_MS {
             self.phase = Phase::Steady;
+            self.land_count += 1;
             CatchAct::Land
         } else {
             CatchAct::None
