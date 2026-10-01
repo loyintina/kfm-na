@@ -124,8 +124,10 @@ fn spec_bar169_md_渲染接线守卫() {
     );
     // ④ VeilSig 补维：滚动 + 实例格两维（BAR-204 换约：md_style 全局态
     // 废除——pinch 变格 = 版面变必须重烘；漏维 = 鬼影同律）
+    // （BAR-212 翻案改约：scroll 源由 cs.viewer 改吃兜底局部量 viewer
+    // ——NA0122 解析页直滑 cfg_snap=None，viewer 走全局口；语义不变）
     assert!(
-        APP.contains("viewer_scroll: cs.viewer.as_ref().map_or(0, |v| v.scroll)"),
+        APP.contains("viewer_scroll: viewer.as_ref().map_or(0, |v| v.scroll)"),
         "VeilSig 必须含 scroll 维（GLES 烘焙滚动重烘）"
     );
     assert!(
