@@ -281,11 +281,24 @@ struct WarmSess {
     last_cap: Option<String>,
     /// 在途构建的 capture 原文（安装时过账给 last_cap）
     build_cap: Option<String>,
+    /// 播种轮次 token 计数器（BAR-211：每通道递增，注入 KFMHDR 头行——
+    /// 相位机认 token 不认到达序，保通道重播时在途旧对整块跳过）
+    seed_token: u64,
+    /// 通道连败计数（BAR-211 F4：死会话空转回路 attach%error→%exit→
+    /// 拆除→重开 的退避升档凭据；播种落地清零）
+    retry_streak: u32,
 }
 
 /// 预热池容量帽（会话多于帽只温前 N 个——防爆内存；当前会话永远
 /// 兜底在温，不受帽挤）
 const WARM_POOL_CAP: usize = 8;
+
+/// 判负/拆除/换尺的基础退避（BAR-211 F2 收编单源：invalidate 曾与
+/// seed_fail 同尺度却写成零退避——now 即点火 = 在途旧对逼出死循环）
+const CTRL_RETRY_BACKOFF_MS: u64 = 5000;
+
+/// 通道连败退避封顶（BAR-211 F4：指数升档 5s→10s→20s→40s→60s 封顶）
+const CTRL_RETRY_BACKOFF_CAP_MS: u64 = 60_000;
 
 impl WarmSess {
     fn new(now: u64) -> Self {
@@ -300,17 +313,28 @@ impl WarmSess {
             retry_ms: 0,
             last_cap: None,
             build_cap: None,
+            seed_token: 0,
+            retry_streak: 0,
         }
     }
 
+    /// 取下一轮播种 token（递增——BAR-211：同一通道上轮播种对可能仍
+    /// 在 tmux 侧排队/在途，token 递增是相位机区分新旧对的唯一凭据）
+    fn next_seed_token(&mut self) -> u64 {
+        self.seed_token = self.seed_token.wrapping_add(1);
+        self.seed_token
+    }
+
     /// 网格换尺作废（resize 专用）：画布/在途构建/接缝账全清，相位
-    /// 归零立即可重播（画布与 live 同尺契约——旧尺画布留着就是错屏）
+    /// 归零。BAR-211 F2：退避照判负同尺度 5s——原 retry_ms=now 零退避
+    /// 立即重播，与在途旧播种对互踩出「判负→再播→再丢」死循环
+    /// （画布与 live 同尺契约——旧尺画布留着就是错屏）
     fn invalidate(&mut self, now: u64) {
         self.feed.reset();
         self.canvas = None;
         self.pending.clear();
         self.build = None;
-        self.retry_ms = now;
+        self.retry_ms = now + CTRL_RETRY_BACKOFF_MS;
         self.seeded_ms = 0;
         self.last_cap = None; // 尺变行宽变，播种对账旧账同焚
         self.build_cap = None;
@@ -5904,21 +5928,24 @@ impl App {
             let Some(url) = self.remote_conn_cfg.as_ref().map(|c| c.url.clone()) else {
                 return;
             };
+            // BAR-211：先记账目取本轮 token——播种命令与 seed_sent 必须
+            // 同 token（命令先发、账目后建的旧序没法把 token 注入命令）
+            let e = self
+                .warm_pool
+                .entry(name.clone())
+                .or_insert_with(|| WarmSess::new(now));
+            let tok = e.next_seed_token();
             let handle = crate::conn::ws_spawner()(crate::conn::ConnConfig {
                 url,
                 command: Some(crate::tmux_ctl::cmd_ctrl_attach(name)),
             });
             handle
                 .outbound
-                .send(TermCmd::Input(crate::tmux_ctl::cmd_ctrl_seed()))
+                .send(TermCmd::Input(crate::tmux_ctl::cmd_ctrl_seed(tok)))
                 .ok();
-            let e = self
-                .warm_pool
-                .entry(name.clone())
-                .or_insert_with(|| WarmSess::new(now));
             e.ctrl = Some(handle);
             e.feed.reset();
-            e.feed.seed_sent();
+            e.feed.seed_sent(tok);
             e.seed_ms = now;
             inflight += 1;
             crate::report::report(
@@ -5929,7 +5956,9 @@ impl App {
         // 养：逐条目重试/对账（同吃并发帽——冷启动后全体到档同圈齐发
         // 也是滚雪球；活动会话恒放行）
         for (name, e) in &mut self.warm_pool {
-            let Some(h) = &e.ctrl else { continue };
+            if e.ctrl.is_none() {
+                continue;
+            }
             let cadence = if Some(name) == cur.as_ref() {
                 5000
             } else {
@@ -5940,10 +5969,13 @@ impl App {
                     && e.feed.is_steady()
                     && now.saturating_sub(e.seeded_ms) >= cadence);
             if fire && crate::seed_sched::admit_seed(inflight, cur.as_ref() == Some(name)) {
-                h.outbound
-                    .send(TermCmd::Input(crate::tmux_ctl::cmd_ctrl_seed()))
-                    .ok();
-                e.feed.seed_sent();
+                let tok = e.next_seed_token();
+                if let Some(h) = &e.ctrl {
+                    h.outbound
+                        .send(TermCmd::Input(crate::tmux_ctl::cmd_ctrl_seed(tok)))
+                        .ok();
+                }
+                e.feed.seed_sent(tok);
                 e.seed_ms = now;
                 inflight += 1;
                 crate::report::report(
@@ -5959,7 +5991,7 @@ impl App {
     fn ctrl_seed_fail(&mut self, name: &str, why: &str) {
         if let Some(e) = self.warm_pool.get_mut(name) {
             e.feed.reset();
-            e.retry_ms = crate::report::boot_ms() as u64 + 5000;
+            e.retry_ms = crate::report::boot_ms() as u64 + CTRL_RETRY_BACKOFF_MS;
         }
         crate::report::report(
             "term",
@@ -5976,7 +6008,7 @@ impl App {
     /// 全量重建）；前缀不命中它自会判 Rebuild 回旧路保底。焚画布/
     /// 焚账唯一口 = invalidate（换尺——旧尺画布留着就是错屏）
     fn ctrl_teardown(&mut self, name: &str, why: &str) {
-        if let Some(e) = self.warm_pool.get_mut(name) {
+        let backoff = if let Some(e) = self.warm_pool.get_mut(name) {
             if let Some(h) = e.ctrl.take() {
                 h.outbound.send(TermCmd::Close).ok();
             }
@@ -5984,11 +6016,22 @@ impl App {
             e.pending.clear();
             e.build = None;
             e.build_cap = None; // 在途构建随拆作废（虚账不许赖着）
-            e.retry_ms = crate::report::boot_ms() as u64 + 5000;
-        }
+            // BAR-211 F4：连败指数退避升档 5s→10s→20s→40s→60s 封顶——
+            // 死会话空转回路（attach %error → %exit → 拆除 → 重开）原
+            // 恒定 5s 一圈永不收敛；落地成功才清零（见 ctrl_drain/续播）
+            let shift = e.retry_streak.min(4);
+            let backoff = CTRL_RETRY_BACKOFF_MS
+                .saturating_mul(1u64 << shift)
+                .min(CTRL_RETRY_BACKOFF_CAP_MS);
+            e.retry_ms = crate::report::boot_ms() as u64 + backoff;
+            e.retry_streak = e.retry_streak.saturating_add(1);
+            backoff
+        } else {
+            CTRL_RETRY_BACKOFF_MS
+        };
         crate::report::report(
             "term",
-            &format!("推流画布 ctrl 关: {name}: {why}（判负回落 v3 轮询）"),
+            &format!("推流画布 ctrl 关: {name}: {why}（判负回落 v3 轮询，{backoff}ms 后重开）"),
         );
     }
 
@@ -6059,6 +6102,7 @@ impl App {
                         if let Some(e) = self.warm_pool.get_mut(&name) {
                             e.seeded_ms = now;
                             e.feed.built();
+                            e.retry_streak = 0; // BAR-211 F4：落地 = 连败账清零
                             // BAR-186 臂①：播种落地即归账——last_cap 恒等于
                             // 画布内容（在途虚账不许进 last_cap）
                             if let Some(cap) = e.build_cap.take() {
@@ -6219,6 +6263,7 @@ impl App {
                             e.pending.clear(); // 播种窗输出已在快照内（InCapture 吞咽同规）
                             e.seeded_ms = now;
                             e.feed.built();
+                            e.retry_streak = 0; // BAR-211 F4：续播落地同清零
                         }
                         // 播种尾锚（臂②）：追赶中落地一帧
                         if self.catchup.anchor() == crate::catchup::CatchAct::Land {
@@ -6252,9 +6297,11 @@ impl App {
             }
             CtrlAct::SeedFail(why) => self.ctrl_seed_fail(name, &why),
             CtrlAct::Reconcile => {
-                if let Some(e) = self.warm_pool.get_mut(name) {
-                    e.seeded_ms = 0; // 逼下拍对账重播
-                }
+                // BAR-211 F3：不动 seeded_ms——原 seeded_ms=0 绕过 cadence
+                // 逼即时重播（每条 Notify 一发全量 capture，7 通道齐发 =
+                // 播种风暴放大器）；对账重播归 normal cadence 到点再播
+                // （养臂 fire 条件 pane.is_some() && steady && 到 cadence
+                // 自然会播，语义不丢——只是不再即时）
             }
             CtrlAct::Dead(why) => self.ctrl_teardown(name, why),
             CtrlAct::None => {}

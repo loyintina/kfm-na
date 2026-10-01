@@ -16,7 +16,7 @@
 | `src/catchup.rs` | 9 | 9 | 0 | — |
 | `src/conn.rs` | 4 | 2 | 2 | spawn_smoke ws_spawner |
 | `src/crash.rs` | 9 | 8 | 1 | install_signal_hook |
-| `src/ctrl_feed.rs` | 7 | 6 | 1 | reset |
+| `src/ctrl_feed.rs` | 8 | 8 | 0 | — |
 | `src/direct_brain.rs` | 2 | 2 | 0 | — |
 | `src/endpoint.rs` | 9 | 9 | 0 | — |
 | `src/exec_probe.rs` | 1 | 1 | 0 | — |
@@ -46,6 +46,7 @@
 | `src/report.rs` | 12 | 7 | 5 | set_boot_t0 start_flusher report_sync report_sync_once http_status_is_200 |
 | `src/reseed.rs` | 1 | 1 | 0 | — |
 | `src/scroll.rs` | 20 | 20 | 0 | — |
+| `src/seed_sched.rs` | 4 | 4 | 0 | — |
 | `src/self_restart.rs` | 11 | 5 | 6 | FLAG_REL set_files_dir button_label poll_flag restart restart |
 | `src/sess_mode.rs` | 3 | 3 | 0 | — |
 | `src/sess_pool.rs` | 33 | 30 | 3 | TAIL_EVENTS take_dirty request_routes |
@@ -76,7 +77,7 @@
 | `src/ui/fx_preview.rs` | 8 | 5 | 3 | LEG_GO_MS LEG_RETURN_START LEG_RETURN_MS |
 | `src/ui/fx_spring.rs` | 14 | 14 | 0 | — |
 | `src/ui/gear.rs` | 7 | 7 | 0 | — |
-| `src/ui/grid_text.rs` | 3 | 3 | 0 | — |
+| `src/ui/grid_text.rs` | 4 | 4 | 0 | — |
 | `src/ui/keybar.rs` | 1 | 1 | 0 | — |
 | `src/ui/link_card.rs` | 10 | 10 | 0 | — |
 | `src/ui/mail_card.rs` | 5 | 4 | 1 | N_ENTRIES |

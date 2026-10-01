@@ -18,7 +18,7 @@
 //! display-message ...    ← pty 回声（Plain，头行不认领，丢弃）
 //! capture-pane ...       ← pty 回声（同上）
 //! %begin                 ← 播种头块
-//! KFMHDR 2790 10000 5 50 %3
+//! KFMHDR 7 2790 10000 5 50 %3   ← BAR-211：KFMHDR 后首字段 = 播种 token
 //! %end                   ← 头块关（不是 capture 关！BAR-155 病灶②）
 //! %begin                 ← capture 块（%output 严格不插进块内）
 //! ...capture 正文...
@@ -51,7 +51,8 @@ pub enum CtrlAct {
     /// 首行原文是唯一铁证——不许再猜第二轮）
     SeedFail(String),
     /// Notify 逼对账（%layout-change/%window-pane-changed 等：内容可能
-    /// 走了 %output 覆盖不到的变化——调用方清零对账账，下拍重播种）
+    /// 走了 %output 覆盖不到的变化——BAR-211 F3：调用方不再绕过 cadence
+    /// 逼即时重播，对账重播归 normal cadence 到点再播）
     Reconcile,
     /// %exit：通道死（调用方拆除回落 v3）
     Dead(&'static str),
@@ -77,11 +78,23 @@ enum Phase {
     Building,
 }
 
+/// 陈旧块连跳上限（BAR-211）：AwaitHeader 期「有正文但非当前 token
+/// 头」的块 = 保通道重播时 tmux 侧存活的旧播种对残骸（或无名杂块），
+/// 整块静默跳过不判负；一轮内连跳到上限 = 真失败（残骸不可能这么
+/// 多——旧死循环里每轮最多留一对两块），归零 + SeedFail
+pub const STALE_SKIP_MAX: u32 = 4;
+
 /// 播种/续喂相位机（实例归 App 持有；复位/发种/完工语义见各方法）
 pub struct CtrlFeed {
     phase: Phase,
     /// 播种认领的活动 pane id（%output 过滤凭据；None = 未播种）
     pane: Option<u64>,
+    /// 当前播种轮次 token（BAR-211：seed_sent 记账，AwaitHeader 认领
+    /// 唯一凭据——认 token 不认到达序，陈旧头块/残骸块整块跳过）
+    cur_token: u64,
+    /// 本轮 AwaitHeader 连跳的陈旧/无名有正文块数（到 STALE_SKIP_MAX
+    /// 才判负——真失败与旧对残骸同形，单块无从分辨，连跳才是铁证）
+    stale_skips: u32,
     /// 播种头行的 pane 游标（列,行 屏相对 0 基；BAR-156：Build 携它
     /// 给 Canvas 归位——capture 尾空行会把文本尾拖离真实游标）
     cursor: (u32, u32),
@@ -90,9 +103,10 @@ pub struct CtrlFeed {
     /// 出「还没行」和「有一行空行」，缝会丢一个 \r\n）
     cap: Vec<String>,
     /// AwaitHeader 期本块见过正文（空块跳过判据——attach 回应块零
-    /// 正文，跳过；有正文但认不出头行才判负）
+    /// 正文，跳过；有正文但无当前 token 头 = 陈旧/无名块，静默跳过
+    /// 记 stale_skips，连跳到顶才判负——BAR-211）
     saw_body: bool,
-    /// AwaitHeader 期本块首个 Plain 行存证（判负报表的铁证载荷；
+    /// AwaitHeader 期本块首个 Plain 行存证（连跳判负报表的铁证载荷；
     /// BlockBegin 清空，只留首行——一个块认不出头行时，第一行就是
     /// 最像样的嫌疑人）
     first_line: String,
@@ -112,6 +126,8 @@ impl CtrlFeed {
         CtrlFeed {
             phase: Phase::Steady,
             pane: None,
+            cur_token: 0,
+            stale_skips: 0,
             cursor: (0, 0),
             cap: Vec::new(),
             saw_body: false,
@@ -131,9 +147,13 @@ impl CtrlFeed {
     }
 
     /// 播种命令已发出（ctrl_seed_send 调用方同步）：转 AwaitHeader，
-    /// 正文/见证清零。pane 保留旧账（重播种期间 v3 闸不许开）
-    pub fn seed_sent(&mut self) {
+    /// 正文/见证清零，记本轮 token（BAR-211：认领凭据——保通道重播时
+    /// 旧轮播种对仍在 tmux 侧排队/在途，token 不符的头块整块跳过）。
+    /// pane 保留旧账（重播种期间 v3 闸不许开）
+    pub fn seed_sent(&mut self, token: u64) {
         self.phase = Phase::AwaitHeader;
+        self.cur_token = token;
+        self.stale_skips = 0;
         self.cap.clear();
         self.saw_body = false;
     }
@@ -142,6 +162,7 @@ impl CtrlFeed {
     pub fn reset(&mut self) {
         self.phase = Phase::Steady;
         self.pane = None;
+        self.stale_skips = 0;
         self.cap.clear();
         self.saw_body = false;
     }
@@ -200,9 +221,15 @@ impl CtrlFeed {
                     }
                     self.saw_body = true;
                     if let Some(h) = parse_seed_header(line) {
-                        self.pane = Some(h.pane);
-                        self.cursor = (h.cursor_x, h.cursor_y);
-                        self.phase = Phase::HdrEnd;
+                        // BAR-211：认 token 不认到达序——token 不符 = 陈旧
+                        // 头块（保通道重播前发出的旧轮播种），不认领 pane、
+                        // 不进 HdrEnd；块账留 saw_body，%end 时按陈旧块
+                        // 静默跳过（连跳上限判负在 BlockEnd 臂）
+                        if h.token == self.cur_token {
+                            self.pane = Some(h.pane);
+                            self.cursor = (h.cursor_x, h.cursor_y);
+                            self.phase = Phase::HdrEnd;
+                        }
                     }
                     CtrlAct::None
                 }
@@ -228,13 +255,26 @@ impl CtrlFeed {
             CtrlEvent::BlockEnd => match self.phase {
                 Phase::AwaitHeader => {
                     if self.saw_body {
-                        // 有正文但认不出头行 = 真播种失败（带首行存证）
-                        let clue = format!(
-                            "头块有正文但无 KFMHDR 头行: 首行={:.60}",
-                            self.first_line.replace(['\r', '\n'], " ")
-                        );
-                        self.reset();
-                        CtrlAct::SeedFail(clue)
+                        // BAR-211：有正文但无当前 token 头 = 陈旧/无名块
+                        // （保通道重播时 tmux 侧存活的旧播种对残骸：旧头块
+                        // token 不符、旧 capture 块本就无头行）——静默跳过
+                        // 不判负，清本块账继续等下一块（保持 AwaitHeader）；
+                        // 一轮内连跳到上限 = 真失败（残骸不可能这么多），
+                        // 归零 + SeedFail（新文案，与旧「无 KFMHDR 头行」
+                        // 判负分列——判卷红线是旧计数不新增）
+                        self.stale_skips += 1;
+                        self.saw_body = false;
+                        if self.stale_skips >= STALE_SKIP_MAX {
+                            let clue = format!(
+                                "播种头块连跳 {STALE_SKIP_MAX} 块无当前 token（真失败）: 首行={:.60}",
+                                self.first_line.replace(['\r', '\n'], " ")
+                            );
+                            self.reset();
+                            CtrlAct::SeedFail(clue)
+                        } else {
+                            self.first_line.clear();
+                            CtrlAct::None
+                        }
                     } else {
                         // 零正文空块 = 前置块（attach-session 自己的
                         // 回应，BAR-155 病灶①）——跳过继续等播种块

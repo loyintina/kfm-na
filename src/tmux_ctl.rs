@@ -361,17 +361,25 @@ pub fn cmd_ctrl_attach(name: &str) -> String {
 
 /// 带内播种命令对（v4 推流画布）：直接在控制通道发，回应块与 %output
 /// 严格不交错（2026-09-25 实证）——块前字节已在快照里、块后字节续喂，
-/// 零丢失零重复天然对齐。第一块 = 头行（史量/上限/光标位/pane id，
+/// 零丢失零重复天然对齐。第一块 = 头行（token/史量/上限/光标位/pane id，
 /// KFMHDR 前缀认领），第二块 = capture 全文（无壳无尾标——块内正文
-/// 即纯净 capture 输出，capture_strip_marker 验收链不适用此径）
-pub fn cmd_ctrl_seed() -> String {
-    "display-message -p 'KFMHDR #{history_size} #{history_limit} #{cursor_x} #{cursor_y} #{pane_id}'\ncapture-pane -p -e -S -\n".to_string()
+/// 即纯净 capture 输出，capture_strip_marker 验收链不适用此径）。
+/// BAR-211：token 是播种轮次身份（每通道递增 u64）——保通道重播时
+/// tmux 侧排队/在途的旧播种对原样存活，相位机认 token 不认到达序，
+/// 陈旧对整块静默跳过（旧律按位置认领，旧 capture 块落进新一轮
+/// AwaitHeader 必判负 → 退避再播 → 再丢 = 死循环）
+pub fn cmd_ctrl_seed(token: u64) -> String {
+    format!(
+        "display-message -p 'KFMHDR {token} #{{history_size}} #{{history_limit}} #{{cursor_x}} #{{cursor_y}} #{{pane_id}}'\ncapture-pane -p -e -S -\n"
+    )
 }
 
-/// 播种头行（cmd_ctrl_seed 第一块正文）：KFMHDR <史量> <上限> <光标列>
-/// <光标行> %<pane>
+/// 播种头行（cmd_ctrl_seed 第一块正文）：KFMHDR <token> <史量> <上限>
+/// <光标列> <光标行> %<pane>
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SeedHeader {
+    /// 播种轮次身份（BAR-211：相位机认领唯一凭据，不认到达序）
+    pub token: u64,
     pub hist: usize,
     pub limit: usize,
     pub cursor_x: u32,
@@ -379,16 +387,18 @@ pub struct SeedHeader {
     pub pane: u64,
 }
 
-/// 头行解析：五件缺一件/件件不成数 = None（播种作废，下拍重来）
+/// 头行解析：六件缺一件/件件不成数 = None（播种作废，下拍重来）
 pub fn parse_seed_header(line: &str) -> Option<SeedHeader> {
     let body = line.strip_prefix("KFMHDR ")?;
     let mut it = body.split(' ');
+    let token = it.next()?.parse().ok()?;
     let hist = it.next()?.parse().ok()?;
     let limit = it.next()?.parse().ok()?;
     let cursor_x = it.next()?.parse().ok()?;
     let cursor_y = it.next()?.parse().ok()?;
     let pane = it.next()?.strip_prefix('%')?.parse().ok()?;
     Some(SeedHeader {
+        token,
         hist,
         limit,
         cursor_x,
