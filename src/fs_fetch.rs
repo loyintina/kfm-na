@@ -590,19 +590,48 @@ pub fn request_mirror_sync() {
     });
 }
 
+/// walk 分页页长（NA0145 甲案）：2000 件 ≈ 300KB/页——旧 512KB 共帽
+/// 量级也装得下（双保险：WALK_BODY_CAP 是安全阀不是容量设计，容量
+/// 设计 = 分页无天花板）；服务端上限 WALK_PAGE_LIMIT_MAX=10000 五倍余量
+pub const WALK_PAGE_LIMIT: usize = 2000;
+
+/// 分页收页上限（防服务端坏账同游标死循环：512 页 × 2000 = 百万件量级，
+/// 真到这数 = 服务端有病，机械停下一趟自愈）
+const WALK_PAGE_MAX_ROUNDS: usize = 512;
+
 fn mirror_sync_run(root: &std::path::Path, port: u16) {
     use crate::fs_mirror::{Manifest, ManifestEntry, manifest_path, mirror_file_rel, reconcile};
-    let body = match http_get_cap(port, "/api/fs/walk?ext=.md", WALK_BODY_CAP) {
-        Ok(b) => b,
-        Err(e) => {
-            crate::report::report("mirror", &format!("镜像同步：walk 失败 {e}"));
+    // keyset 循环收页（NA0145 甲案）：after 开区间续页到无 next_after
+    // 收口；旧服务端无分页 = 一轮整单天然兼容
+    let mut remote: Vec<ManifestEntry> = Vec::new();
+    let mut after: Option<String> = None;
+    for round in 0..WALK_PAGE_MAX_ROUNDS {
+        let mut q = format!("/api/fs/walk?ext=.md&limit={WALK_PAGE_LIMIT}");
+        if let Some(a) = &after {
+            q.push_str("&after=");
+            q.push_str(&fsapi::pct_encode(a));
+        }
+        let body = match http_get_cap(port, &q, WALK_BODY_CAP) {
+            Ok(b) => b,
+            Err(e) => {
+                crate::report::report("mirror", &format!("镜像同步：walk 第{round}页失败 {e}"));
+                return;
+            }
+        };
+        let Some((page, next)) = crate::fs_mirror::walk_page_of(&body) else {
+            crate::report::report("mirror", "镜像同步：walk 出参不认");
+            return;
+        };
+        remote.extend(page);
+        match next {
+            Some(n) => after = Some(n),
+            None => break,
+        }
+        if round + 1 == WALK_PAGE_MAX_ROUNDS {
+            crate::report::report("mirror", "镜像同步：walk 页数超帽机械停");
             return;
         }
-    };
-    let Some(remote) = crate::fs_mirror::walk_entries_of(&body) else {
-        crate::report::report("mirror", "镜像同步：walk 出参不认");
-        return;
-    };
+    }
     let man = Manifest::parse(&std::fs::read_to_string(manifest_path(root)).unwrap_or_default());
     let plan = reconcile(&remote, &man, |p| {
         mirror_file_rel(p).is_some_and(|r| root.join(r).is_file())

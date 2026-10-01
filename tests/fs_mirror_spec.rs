@@ -3,11 +3,16 @@
 //! 变异留档（cp 备份复原，禁 git checkout）：
 //! ① reconcile 摘 `|| !exists(&r.path)` → 三判钉「本地缺 = 拉」红；
 //! ② synth_list_body 摘 `to_lowercase()` 那级排序 → 同律钉大小写序红；
-//! ③ walk_entries_of 摘 ok:false 拒 → 解析钉「ok:false = None」红；
+//! ③ walk_page_of 摘 ok:false 拒 → 解析钉「ok:false = None」红；
 //! ④ manifest::parse 摘 dedup → 回环钉去重红。四咬均抓回。
+//! NA0145 乙案（帽档）两咬：walk 回落 512KB 共帽 → 接线守卫红；
+//! WALK_BODY_CAP 砍 1MB → 编译期 E0080（const 咬）。
+//! NA0145 甲案（keyset 分页）五咬：服务端摘 after 过滤/next_after 恒无/
+//! 摘 truncate → 分页钉红 ×3（fsapi_spec）；客户端摘续页驱动（单发即收）
+//! → 接线守卫红；walk_page_of 摘游标解析 → 解析钉「续页键」红。
 
 use kfm_na::fs_mirror::{
-    Manifest, ManifestEntry, mirror_file_rel, reconcile, synth_list_body, walk_entries_of,
+    Manifest, ManifestEntry, mirror_file_rel, reconcile, synth_list_body, walk_page_of,
 };
 
 fn ent(path: &str, size: u64, mtime: i64) -> ManifestEntry {
@@ -86,24 +91,34 @@ fn spec_bar213_mirror_file_rel_安全闸() {
     assert!(mirror_file_rel("").is_none(), "空串不是文件");
 }
 
-/// walk 端点出参解析：好件全收；ok:false/坏 JSON = None（整趟放弃）；
+/// walk 分页出参解析（NA0145 甲案）：好件全收 + 游标两态（有 = 续页键、
+/// 无 = 末页/旧契约整单）；ok:false/坏 JSON = None（整趟放弃）；
 /// 条目缺键 = 跳半条
 #[test]
-fn spec_bar213_walk_entries_of_解析() {
-    let good = r#"{"ok":true,"ext":".md","entries":[{"path":"a.md","size":3,"mtime":7},{"path":"d/b.md","size":4,"mtime":8}]}"#;
-    let got = walk_entries_of(good).expect("好件必须解析得出");
+fn spec_bar213_walk_page_of_解析() {
+    let paged = r#"{"ok":true,"ext":".md","entries":[{"path":"a.md","size":3,"mtime":7},{"path":"d/b.md","size":4,"mtime":8}],"next_after":"d/b.md"}"#;
+    let (got, next) = walk_page_of(paged).expect("好件必须解析得出");
     assert_eq!(got, vec![ent("a.md", 3, 7), ent("d/b.md", 4, 8)]);
+    assert_eq!(next.as_deref(), Some("d/b.md"), "有游标键必须收出续页键");
+    // 无 next_after = 末页（旧契约整单同形——新旧服务端双兼容）
+    let tail = r#"{"ok":true,"entries":[{"path":"a.md","size":3,"mtime":7}]}"#;
+    let (got, next) = walk_page_of(tail).unwrap();
+    assert_eq!(got.len(), 1);
+    assert_eq!(next, None, "无游标键 = 末页收口");
+    // 空串游标当无（不许空 after 续页死循环）
+    let empty_cur = r#"{"ok":true,"entries":[],"next_after":""}"#;
+    assert_eq!(walk_page_of(empty_cur).unwrap().1, None, "空游标 = 末页");
     // ok:false 但带 entries——只有 ok 拒那一道能拦（专咬摘 ok 判的变异）
     assert!(
-        walk_entries_of(r#"{"ok":false,"entries":[{"path":"a.md","size":3,"mtime":7}]}"#).is_none()
+        walk_page_of(r#"{"ok":false,"entries":[{"path":"a.md","size":3,"mtime":7}]}"#).is_none()
     );
-    assert!(walk_entries_of("坏掉了").is_none());
+    assert!(walk_page_of("坏掉了").is_none());
     assert!(
-        walk_entries_of(r#"{"ok":true}"#).is_none(),
+        walk_page_of(r#"{"ok":true}"#).is_none(),
         "缺 entries = None"
     );
     let half = r#"{"ok":true,"entries":[{"path":"a.md","size":3,"mtime":7},{"path":"bad.md"}]}"#;
-    assert_eq!(walk_entries_of(half).unwrap().len(), 1, "半条跳过");
+    assert_eq!(walk_page_of(half).unwrap().0.len(), 1, "半条跳过");
 }
 
 /// 合成 list：与 fsapi 同形同律（目录在前 + 大小写不敏感 + 原名 tie-break），
@@ -168,13 +183,26 @@ fn spec_bar213_接线源码守卫() {
         "镜像副本必须带镜像声明头（与 CACHE_NOTICE 措辞分家）"
     );
     assert!(
-        fetch.contains("\"/api/fs/walk?ext=.md\""),
-        "同步器必须吃 walk 递归清单端点"
+        fetch.contains("\"/api/fs/walk?ext=.md&limit={WALK_PAGE_LIMIT}\""),
+        "同步器必须吃 walk 递归清单端点（NA0145 甲案：带分页页长）"
+    );
+    // 甲案循环收页三咬：拼 after 续页 / walk_page_of 收游标 / 游标驱动循环
+    assert!(
+        fetch.contains("q.push_str(&fsapi::pct_encode(a))"),
+        "续页必须把上一页游标编进 after（keyset 开区间）"
     );
     assert!(
-        fetch.contains("http_get_cap(port, \"/api/fs/walk?ext=.md\", WALK_BODY_CAP)"),
-        "walk 必须走 WALK_BODY_CAP 高档——NA0145 定罪：共用 512KB 帽 \
-         = 现役 1.32MB 全单第一发即超限，镜像永远填不满"
+        fetch.contains("crate::fs_mirror::walk_page_of(&body)"),
+        "收页必须走 walk_page_of（entries + next_after 两态）"
+    );
+    assert!(
+        fetch.contains("Some(n) => after = Some(n),"),
+        "有游标必须续页——单发即收 = 树超一页就镜像不全（NA0145 同族病）"
+    );
+    assert!(
+        fetch.contains("http_get_cap(port, &q, WALK_BODY_CAP)"),
+        "walk 必须走 WALK_BODY_CAP 高档安全阀——NA0145 定罪：共用 512KB 帽 \
+         = 现役 1.32MB 全单第一发即超限，镜像永远填不满（分页后它是阀不是顶）"
     );
     assert!(
         fetch.contains("MIRROR_SYNCING.swap(true"),
@@ -213,4 +241,13 @@ fn spec_bar213_walk帽档_na0145() {
         fetch.contains("const BODY_CAP: usize = 512 * 1024;"),
         "list/read 共帽维持 512KB 不动"
     );
+    // 甲案页长档：2000/页 ≈300KB——下限防碎页（百页同步太碎），
+    // 上限防单页回潮撞旧 512KB 量级 + 不许超服务端页长帽
+    const {
+        assert!(
+            kfm_na::fs_fetch::WALK_PAGE_LIMIT >= 1000
+                && kfm_na::fs_fetch::WALK_PAGE_LIMIT <= na_protocol::fsapi::WALK_PAGE_LIMIT_MAX,
+            "WALK_PAGE_LIMIT 必须在 [1000, 服务端页长帽] 档内（NA0145 甲案）"
+        );
+    }
 }

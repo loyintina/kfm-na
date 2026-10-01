@@ -96,9 +96,11 @@ pub fn mirror_file_rel(path: &str) -> Option<String> {
     Some(format!("fs/{path}"))
 }
 
-/// walk 端点出参 → 远端清单：body 坏 = None（同步整趟放弃，下一趟自愈）；
-/// 条目缺键 = 跳过该条（半条不进对账）
-pub fn walk_entries_of(body: &str) -> Option<Vec<ManifestEntry>> {
+/// walk 分页出参 → (本页清单, 下一页游标)（NA0145 甲案）：body 坏 = None
+/// （同步整趟放弃，下一趟自愈）；条目缺键 = 跳过该条（半条不进对账）。
+/// 无 `next_after` 键 = 末页（旧契约整单响应同形——新客户端对旧服务端
+/// 一轮收全单，天然回退兼容）
+pub fn walk_page_of(body: &str) -> Option<(Vec<ManifestEntry>, Option<String>)> {
     let v: serde_json::Value = serde_json::from_str(body).ok()?;
     if v.get("ok").and_then(|o| o.as_bool()) == Some(false) {
         return None;
@@ -119,7 +121,12 @@ pub fn walk_entries_of(body: &str) -> Option<Vec<ManifestEntry>> {
             mtime: m,
         });
     }
-    Some(out)
+    let next = v
+        .get("next_after")
+        .and_then(|n| n.as_str())
+        .filter(|n| !n.is_empty())
+        .map(str::to_string);
+    Some((out, next))
 }
 
 /// reconcile 计划：fetch = 要拉的（新/变/本地缺），delete = 要删的

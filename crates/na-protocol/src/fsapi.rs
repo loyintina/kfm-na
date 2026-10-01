@@ -202,14 +202,26 @@ pub fn list_json_in(roots: &[PathBuf], rel: &str) -> Result<String, FsError> {
 /// 出参 `{"ok":true,"ext":ext,"entries":[{path,size,mtime}]}`。
 /// 软链不跟（目录软链整枝剪 = 不许借链出根；文件软链同剪——镜像语义
 /// 要真文件，链目标可能在根外）。
-pub fn walk_json(ext: &str) -> Result<String, FsError> {
-    walk_json_in(&roots(), ext)
+///
+/// **keyset 分页（BAR-213 翻案 NA0145 甲案，承影判卷 lane 倾向正治）**：
+/// `after=<path>`（开区间，吃上一页 next_after）+ `limit=<n>`（0 = 不分页
+/// = 旧契约整单，供在野乙案客户端兜底）；分页模式且后面还有 → 出参多
+/// `next_after` 键 = 本页末条 path（客户端循环收页到无此键为止）。
+/// keyset 不吃位移账——翻页期间树变了也只是本页边界新旧差，reconcile
+/// 下一趟自愈（镜像语义本来就不与真源争对错）。
+pub fn walk_json(ext: &str, after: Option<&str>, limit: usize) -> Result<String, FsError> {
+    walk_json_in(&roots(), ext, after, limit)
 }
 
 /// `walk_json()` 的纯核（考题注入 roots，不必改进程 env）。
 /// ext 闸 fail-closed：必须 `.` 开头 + 其余 1..=8 位全 ASCII 字母数字
 /// ——形状非法与越界同一条 NotFound（不透露口存在性）。
-pub fn walk_json_in(roots: &[PathBuf], ext: &str) -> Result<String, FsError> {
+pub fn walk_json_in(
+    roots: &[PathBuf],
+    ext: &str,
+    after: Option<&str>,
+    limit: usize,
+) -> Result<String, FsError> {
     if !valid_walk_ext(ext) {
         return Err(FsError::NotFound);
     }
@@ -221,11 +233,23 @@ pub fn walk_json_in(roots: &[PathBuf], ext: &str) -> Result<String, FsError> {
         }
     }
     raw.sort_by(|a, b| a.0.cmp(&b.0));
+    if let Some(a) = after {
+        raw.retain(|(p, _, _)| p.as_str() > a);
+    }
+    let more = limit > 0 && raw.len() > limit;
+    if more {
+        raw.truncate(limit);
+    }
+    let next_after = more.then(|| raw.last().unwrap().0.clone());
     let entries: Vec<_> = raw
         .into_iter()
         .map(|(path, size, mtime)| serde_json::json!({"path": path, "size": size, "mtime": mtime}))
         .collect();
-    Ok(serde_json::json!({"ok": true, "ext": ext, "entries": entries}).to_string())
+    let mut out = serde_json::json!({"ok": true, "ext": ext, "entries": entries});
+    if let Some(n) = next_after {
+        out["next_after"] = serde_json::Value::String(n);
+    }
+    Ok(out.to_string())
 }
 
 /// ext 闸纯核：`.md` 合法；空/无点/带点外字符/超 8 位全拒。
@@ -235,6 +259,10 @@ fn valid_walk_ext(ext: &str) -> bool {
     };
     !rest.is_empty() && rest.len() <= 8 && rest.bytes().all(|b| b.is_ascii_alphanumeric())
 }
+
+/// walk 分页页长上限（NA0145 甲案）：防万位页撑爆单页 body；客户端
+/// 页长 2000（fs_fetch::WALK_PAGE_LIMIT），上限留五倍余量
+pub const WALK_PAGE_LIMIT_MAX: usize = 10000;
 
 /// 递归体：逐层 read_dir，排除规则剪枝，ext 后缀（大小写不敏感）收文件。
 /// 嵌套层 read_dir 失败跳过（竞态消失/权限——reconcile 下一趟自愈）；

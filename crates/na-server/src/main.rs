@@ -421,11 +421,13 @@ async fn http_handle(
             Ok(Err(e)) => httpd::fs_error_response(&e),
             Err(e) => httpd::respond(500, "Internal Server Error", &httpd::error_body(&e)),
         },
-        httpd::Route::FsWalk { ext } => match fs_blocking(move || fsapi::walk_json(&ext)).await {
-            Ok(Ok(body)) => httpd::respond(200, "OK", &body),
-            Ok(Err(e)) => httpd::fs_error_response(&e),
-            Err(e) => httpd::respond(500, "Internal Server Error", &httpd::error_body(&e)),
-        },
+        httpd::Route::FsWalk { ext, after, limit } => {
+            match fs_blocking(move || fsapi::walk_json(&ext, after.as_deref(), limit)).await {
+                Ok(Ok(body)) => httpd::respond(200, "OK", &body),
+                Ok(Err(e)) => httpd::fs_error_response(&e),
+                Err(e) => httpd::respond(500, "Internal Server Error", &httpd::error_body(&e)),
+            }
+        }
         httpd::Route::FsRead {
             path,
             max,
