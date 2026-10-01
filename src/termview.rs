@@ -8076,6 +8076,18 @@ impl TermView {
                     accent,
                 );
             }
+            Preview::MdTable => {
+                self.paint_md_preview(
+                    frame,
+                    "| 字段 | 说明 |\n|---|---|\n| 名称 | na 客户端 |\n| 引擎 | md 真管线 |",
+                    ix,
+                    iy,
+                    iw,
+                    clip,
+                    denom,
+                    accent,
+                );
+            }
             Preview::MdRandomColor => {
                 // 淡彩六色家族横排（accent c1 固定 60° 步进派生）：
                 // 六块满填色片均分内区，纵居中——角色关系见条目 desc

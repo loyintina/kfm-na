@@ -53,6 +53,42 @@ pub struct MdLine {
     pub item_start: bool,
 }
 
+/// 表格形态档（BAR-218 三档降级，用户 2026-10-01 拍板）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TableTier {
+    /// 放得下：自然列宽经典表格
+    Fit,
+    /// 中等超宽：列宽压缩（下限 dp::TABLE_COL_MIN_CELLS）+格内折行
+    Shrink,
+    /// 极端超宽·两列：定义清单单块（题头溶解，逐行「名」+「值」竖排）
+    DefList,
+    /// 极端超宽·≥3 列：每内容行一卡（表头溶成字段名，**表头永不成卡**）
+    Cards,
+}
+
+/// 表格一行（表头或内容行）的几何+内容：y/h 相对块原点；
+/// cells[j] = 该格折行后的视觉行（Cards 档 j=0 = 卡标题行，j≥1 =
+/// 字段行——首段已前置 Bold「字段名：」；DefList 档 j=0 名、j=1 值）
+#[derive(Debug, Clone, PartialEq)]
+pub struct MdTableRowLay {
+    pub y: u32,
+    pub h: u32,
+    pub cells: Vec<Vec<MdLine>>,
+}
+
+/// 表格块排版结果（Fit/Shrink 用 col_x/col_w 列几何；降级两档列几何空）
+#[derive(Debug, Clone, PartialEq)]
+pub struct MdTableLay {
+    pub tier: TableTier,
+    pub col_x: Vec<u32>,
+    pub col_w: Vec<u32>,
+    pub header: MdTableRowLay,
+    pub rows: Vec<MdTableRowLay>,
+    /// Cards 档字段名（= 表头各列纯文本，表头溶成字段名不成卡）；
+    /// 其余档空
+    pub labels: Vec<String>,
+}
+
 /// 一块的几何+内容（y/h 相对文档画布原点，行带咬实例半格网）
 #[derive(Debug, Clone, PartialEq)]
 pub struct MdBlock {
@@ -63,8 +99,10 @@ pub struct MdBlock {
     /// 档位缩放（相对正文：H1=1.7/H2=1.45/H3=1.2/代码=30/36，余 1.0）——
     /// 步进 = 实例 cell_w × scale、字形 px = grid_fit × scale（涂装侧读）
     pub scale: f32,
-    /// 折行后的视觉行（Code 块 = 字面行不折行）
+    /// 折行后的视觉行（Code 块 = 字面行不折行；Table 块恒空——内容在 table）
     pub lines: Vec<MdLine>,
+    /// 表格块载荷（kind == Table 时 Some；余者 None）
+    pub table: Option<std::sync::Arc<MdTableLay>>,
 }
 
 /// 整文档排版结果
@@ -127,7 +165,214 @@ fn line_w(spans: &[Span], step_unit: f32) -> u32 {
         .sum()
 }
 
+/// 段列纯文本（表格字段名提取用）
+fn plain_text(spans: &[Span]) -> String {
+    spans.iter().map(|(_, t)| t.as_str()).collect()
+}
+
+/// 表格三档排版（BAR-218，用户 2026-10-01 拍板细则）：
+/// ①放得下（自然宽合计 + 列隙 ≤ 内容宽）= Fit 经典表格；
+/// ②中等超宽 = Shrink 注水法按比例压缩（下限 TABLE_COL_MIN_CELLS=10 格，
+/// 压过下限不如换形态——用户：折出七八行的瘦高表不好看）+格内折行；
+/// ③极端超宽（全按下限都摆不下）= 降级：两列 → DefList 定义清单单块
+/// （题头溶解，逐行 名+值 竖排）；≥3 列 → Cards 每内容行一卡
+/// （表头溶成字段名，**表头行永不单独成卡**）。
+/// 截断省略不做（BAR-206 判红：省略=信息丢失）。
+fn layout_table(
+    header: &[Vec<Span>],
+    rows: &[Vec<Vec<Span>>],
+    content_w_px: u32,
+    step: f32,
+    lh: u32,
+) -> MdTableLay {
+    let ncol = header.len().max(1);
+    let gap = dp::TABLE_COL_GAP_CELLS as f32 * step;
+    let min_w = dp::TABLE_COL_MIN_CELLS as f32 * step;
+    let avail = content_w_px as f32;
+    let gaps = gap * ncol.saturating_sub(1) as f32;
+    // 自然列宽 = 表头与各内容格的最大格步进宽（空列也占 1 格）
+    let natural: Vec<f32> = (0..ncol)
+        .map(|j| {
+            let mut w = line_w(&header[j], step) as f32;
+            for r in rows {
+                w = w.max(line_w(&r[j], step) as f32);
+            }
+            w.max(step)
+        })
+        .collect();
+    let need: f32 = natural.iter().sum::<f32>() + gaps;
+    let tier = if need <= avail {
+        TableTier::Fit
+    } else if min_w * ncol as f32 + gaps <= avail {
+        TableTier::Shrink
+    } else if ncol == 2 {
+        TableTier::DefList
+    } else {
+        TableTier::Cards
+    };
+    match tier {
+        TableTier::Fit | TableTier::Shrink => {
+            let budget = (avail - gaps).max(0.0);
+            let mut col_wf = natural.clone();
+            if tier == TableTier::Shrink {
+                // 注水法：触下限的列固定，余列按比例分剩余预算，
+                // 每轮至少固定一列，ncol 轮内必收敛
+                let mut fixed = vec![false; ncol];
+                loop {
+                    let used = fixed.iter().filter(|&&f| f).count() as f32 * min_w;
+                    let rem_budget = (budget - used).max(0.0);
+                    let rem_nat: f32 = (0..ncol).filter(|&j| !fixed[j]).map(|j| natural[j]).sum();
+                    let nrem = (0..ncol).filter(|&j| !fixed[j]).count() as f32;
+                    let mut newly = false;
+                    for j in 0..ncol {
+                        if fixed[j] {
+                            col_wf[j] = min_w;
+                            continue;
+                        }
+                        let v = if rem_nat > 0.0 {
+                            natural[j] / rem_nat * rem_budget
+                        } else {
+                            rem_budget / nrem.max(1.0)
+                        };
+                        if v < min_w {
+                            fixed[j] = true;
+                            newly = true;
+                        } else {
+                            col_wf[j] = v;
+                        }
+                    }
+                    if !newly {
+                        break;
+                    }
+                }
+            }
+            let col_w: Vec<u32> = col_wf.iter().map(|w| w.round().max(1.0) as u32).collect();
+            let mut col_x = Vec::with_capacity(ncol);
+            let mut x = 0u32;
+            for (j, w) in col_w.iter().enumerate() {
+                col_x.push(x);
+                x += w;
+                if j + 1 < ncol {
+                    x += gap.round() as u32;
+                }
+            }
+            let wrap_row = |row: &[Vec<Span>]| -> (Vec<Vec<MdLine>>, u32) {
+                let mut cells = Vec::with_capacity(ncol);
+                let mut hmax = 1u32;
+                for (j, cell) in row.iter().enumerate().take(ncol) {
+                    let ls = wrap_spans(cell, col_w[j], step);
+                    hmax = hmax.max(ls.len() as u32);
+                    cells.push(ls);
+                }
+                (cells, hmax * lh)
+            };
+            let (hcells, hh) = wrap_row(header);
+            let header_lay = MdTableRowLay {
+                y: 0,
+                h: hh,
+                cells: hcells,
+            };
+            let mut ry = hh + dp::TABLE_ROW_PAD;
+            let mut rows_lay = Vec::with_capacity(rows.len());
+            for r in rows {
+                let (cells, rh) = wrap_row(r);
+                rows_lay.push(MdTableRowLay {
+                    y: ry,
+                    h: rh,
+                    cells,
+                });
+                ry += rh + dp::TABLE_ROW_PAD;
+            }
+            MdTableLay {
+                tier,
+                col_x,
+                col_w,
+                header: header_lay,
+                rows: rows_lay,
+                labels: Vec::new(),
+            }
+        }
+        TableTier::Cards => {
+            // 卡内区宽 = 内容宽 − 左右内垫各 1 格；字段行 = Bold「字段名：」
+            // 前缀 + 值段（折行后续行不重复字段名，同一段流内自然断行）
+            let inner_w = content_w_px.saturating_sub(dp::INDENT_W * 2);
+            let labels: Vec<String> = header.iter().map(|h| plain_text(h)).collect();
+            let mut cards = Vec::with_capacity(rows.len());
+            let mut cy = 0u32;
+            for r in rows {
+                let title = wrap_spans(&r[0], inner_w, step);
+                let mut cells = vec![title];
+                let mut ch = dp::TABLE_ROW_PAD; // 卡上内垫
+                ch += cells[0].len() as u32 * lh;
+                for (j, label) in labels.iter().enumerate().skip(1) {
+                    let value = &r[j];
+                    if plain_text(value).trim().is_empty() {
+                        continue; // 空值字段不占行
+                    }
+                    let mut spans = vec![(SegStyle::Bold, format!("{label}："))];
+                    spans.extend(value.iter().cloned());
+                    let fl = wrap_spans(&spans, inner_w, step);
+                    ch += fl.len() as u32 * lh;
+                    cells.push(fl);
+                }
+                ch += dp::TABLE_ROW_PAD; // 卡下内垫
+                cards.push(MdTableRowLay {
+                    y: cy,
+                    h: ch,
+                    cells,
+                });
+                cy += ch + dp::TABLE_ROW_PAD; // 卡间留隙
+            }
+            MdTableLay {
+                tier,
+                col_x: Vec::new(),
+                col_w: Vec::new(),
+                header: MdTableRowLay {
+                    y: 0,
+                    h: 0,
+                    cells: Vec::new(),
+                },
+                rows: cards,
+                labels,
+            }
+        }
+        TableTier::DefList => {
+            // 定义清单单块（两列键值形）：每条目 = 名（标题色）+ 值
+            // （缩进 1 格折行）；表头（「属性/值」之类通用题头）整体溶解
+            let value_w = content_w_px.saturating_sub(dp::INDENT_W);
+            let mut entries = Vec::with_capacity(rows.len());
+            let mut ey = 0u32;
+            for r in rows {
+                let name = wrap_spans(&r[0], content_w_px, step);
+                let value = wrap_spans(&r[1], value_w, step);
+                let eh = (name.len() + value.len()) as u32 * lh;
+                entries.push(MdTableRowLay {
+                    y: ey,
+                    h: eh,
+                    cells: vec![name, value],
+                });
+                ey += eh + dp::TABLE_ROW_PAD;
+            }
+            MdTableLay {
+                tier,
+                col_x: Vec::new(),
+                col_w: Vec::new(),
+                header: MdTableRowLay {
+                    y: 0,
+                    h: 0,
+                    cells: Vec::new(),
+                },
+                rows: entries,
+                labels: Vec::new(),
+            }
+        }
+    }
+}
+
 /// 收块夹具（MdSink 消费端①：排版层；demo 页二期是②）
+/// 表格事件载荷：（表头格列, 内容行格列）
+type TableEvt = (Vec<Vec<Span>>, Vec<Vec<Vec<Span>>>);
+
 #[derive(Default)]
 struct Collector {
     heads: Vec<(u8, Vec<Span>)>,
@@ -135,6 +380,7 @@ struct Collector {
     codes: Vec<Vec<String>>,
     quotes: Vec<Vec<Vec<Span>>>,
     lists: Vec<Vec<Vec<Span>>>,
+    tables: Vec<TableEvt>,
     hrs: u32,
     order: Vec<Ev>,
 }
@@ -146,6 +392,7 @@ enum Ev {
     Code(usize),
     Quote(usize),
     List(usize),
+    Table(usize),
     Hr,
 }
 
@@ -174,6 +421,10 @@ impl MdSink for Collector {
         self.hrs += 1;
         self.order.push(Ev::Hr);
     }
+    fn table(&mut self, header: Vec<Vec<Span>>, rows: Vec<Vec<Vec<Span>>>) {
+        self.tables.push((header, rows));
+        self.order.push(Ev::Table(self.tables.len() - 1));
+    }
 }
 
 /// 整文档排版（纯函数）：content_w_px = 内容视口宽（px）；cell = 实例格
@@ -200,6 +451,7 @@ pub fn layout_md(text: &str, content_w_px: u32, cell: (u32, u32)) -> MdLayout {
                 line_h: $lh,
                 scale: $scale,
                 lines: $lines,
+                table: None,
             });
             y += $h + dp::BLOCK_GAP;
         }};
@@ -301,6 +553,34 @@ pub fn layout_md(text: &str, content_w_px: u32, cell: (u32, u32)) -> MdLayout {
             }
             Ev::Hr => {
                 push!(BlockKind::Hr, dp::HU * 2, dp::HU * 2, 1.0, Vec::new());
+            }
+            Ev::Table(i) => {
+                let (header, rows) = &col.tables[*i];
+                let t = layout_table(header, rows, content_w_px, body_step, body_lh);
+                // 块高 = 表头带 + 下划带（Fit/Shrink）+ 各行/各卡高 + 行隙
+                let mut h = t.header.h;
+                if matches!(t.tier, TableTier::Fit | TableTier::Shrink) {
+                    h += dp::TABLE_ROW_PAD; // 表头下划带
+                }
+                for (ri, r) in t.rows.iter().enumerate() {
+                    h += r.h;
+                    if ri + 1 < t.rows.len() {
+                        h += dp::TABLE_ROW_PAD;
+                    }
+                }
+                if t.rows.is_empty() && matches!(t.tier, TableTier::Cards | TableTier::DefList) {
+                    h = t.header.h.max(body_lh); // 零内容行不塌
+                }
+                blocks.push(MdBlock {
+                    kind: BlockKind::Table,
+                    y,
+                    h,
+                    line_h: body_lh,
+                    scale: 1.0,
+                    lines: Vec::new(),
+                    table: Some(std::sync::Arc::new(t)),
+                });
+                y += h + dp::BLOCK_GAP;
             }
         }
     }

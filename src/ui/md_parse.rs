@@ -41,6 +41,81 @@ pub trait MdSink {
     fn list(&mut self, items: Vec<Vec<Span>>);
     /// 分隔线
     fn hr(&mut self);
+    /// 表格（BAR-218 GFM 子集）：表头一行 + 内容行若干（单元格行内已
+    /// 解析；列数已对齐表头——多的截、缺的补空格）
+    fn table(&mut self, header: Vec<Vec<Span>>, rows: Vec<Vec<Vec<Span>>>) {
+        let _ = (header, rows); // 缺省丢弃：旧消费者零改动
+    }
+}
+
+/// 表格分隔行判据（GFM `|---|---|`）：trimmed 以 `|` 起、以 `|` 收尾，
+/// 每格 = 可选冒号 + ≥1 个 `-` + 可选冒号（对齐标记一期忽略——全左对齐，
+/// 但 `:--:`/`--:` 形态要认得，不当普通行）
+fn is_table_delim(line: &str) -> bool {
+    let t = line.trim();
+    let body = match t.strip_prefix('|').and_then(|s| s.strip_suffix('|')) {
+        Some(b) => b,
+        None => return false,
+    };
+    if body.trim().is_empty() {
+        return false;
+    }
+    body.split('|').all(|cell| {
+        let c = cell.trim();
+        let c = c.strip_prefix(':').unwrap_or(c);
+        let c = c.strip_suffix(':').unwrap_or(c);
+        !c.is_empty() && c.chars().all(|x| x == '-')
+    })
+}
+
+/// 单元格切分：`\|` 转义为字面 `|`；行内码（反引号对）内的 `|` 不分隔。
+/// trimmed 行剥首/尾 `|` 后逐字扫描。
+fn split_table_cells(line: &str) -> Vec<String> {
+    let t = line.trim();
+    let t = t.strip_prefix('|').unwrap_or(t);
+    let t = t.strip_suffix('|').unwrap_or(t);
+    let mut cells = Vec::new();
+    let mut cur = String::new();
+    let mut in_code = false;
+    let mut chars = t.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' if chars.peek() == Some(&'|') => {
+                cur.push('|');
+                chars.next();
+            }
+            '`' => {
+                in_code = !in_code;
+                cur.push(c);
+            }
+            '|' if !in_code => {
+                cells.push(cur.trim().to_string());
+                cur = String::new();
+            }
+            _ => cur.push(c),
+        }
+    }
+    cells.push(cur.trim().to_string());
+    cells
+}
+
+/// 表格起手判据：本行 `|` 起 + 下一行是分隔行（lookahead 一格）
+fn is_table_start(lines: &[&str], i: usize) -> bool {
+    lines[i].trim_start().starts_with('|') && i + 1 < lines.len() && is_table_delim(lines[i + 1])
+}
+
+/// 一行源文 → 一格（行内解析）；空串 = 空段占位
+fn parse_cell(s: &str) -> Vec<Span> {
+    parse_inline(s)
+}
+
+/// 行单元格列对齐表头列数：多的截、缺的补空格
+fn align_row(mut row: Vec<Vec<Span>>, ncol: usize) -> Vec<Vec<Span>> {
+    row.truncate(ncol);
+    while row.len() < ncol {
+        row.push(vec![(SegStyle::Normal, String::new())]);
+    }
+    row
 }
 
 /// 行内解析（`**粗体**` / `` `码` ``，余者 Normal）：左到右扫描，
@@ -187,6 +262,33 @@ pub fn parse_md(text: &str, sink: &mut impl MdSink) {
             sink.list(items);
             continue;
         }
+        // 表格块（BAR-218）：`|` 起行 + 次行分隔行才成表（防正文里
+        // 普通 `|` 误判）；内容行连续 `|` 起行尽收
+        if is_table_start(&lines, i) {
+            let header: Vec<Vec<Span>> = split_table_cells(lines[i])
+                .iter()
+                .map(|c| parse_cell(c))
+                .collect();
+            let ncol = header.len();
+            i += 2; // 吃表头行 + 分隔行
+            let mut rows: Vec<Vec<Vec<Span>>> = Vec::new();
+            while i < lines.len() {
+                let t = lines[i].trim_start();
+                if !t.starts_with('|') || t.trim().is_empty() {
+                    break;
+                }
+                rows.push(align_row(
+                    split_table_cells(lines[i])
+                        .iter()
+                        .map(|c| parse_cell(c))
+                        .collect(),
+                    ncol,
+                ));
+                i += 1;
+            }
+            sink.table(header, rows);
+            continue;
+        }
         // 正文段：连续「非空且不是任何块起手」行
         let mut plines: Vec<Vec<Span>> = Vec::new();
         while i < lines.len() {
@@ -198,6 +300,7 @@ pub fn parse_md(text: &str, sink: &mut impl MdSink) {
                 || atx_level(t).is_some()
                 || tt.starts_with('>')
                 || tt.starts_with("- ")
+                || is_table_start(&lines, i)
             {
                 break;
             }

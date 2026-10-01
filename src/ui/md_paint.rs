@@ -262,8 +262,8 @@ impl TermView {
                     }
                 }
                 BlockKind::Hr => {
-                    // 3px 横向 accent 渐变（块带 HU×2 内居中，宪法 2026-09-27
-                    // 拍板加粗与框厚同尺）
+                    // HR_THICK 横向 accent 渐变（块带 HU×2 内居中；
+                    // 宪法 2026-09-27 加粗 1→3，BAR-218 再加粗 3→5）
                     let ly = by + (bh - i64::from(dp::HR_THICK)) / 2;
                     for ay in ly.max(clip.0)..(ly + i64::from(dp::HR_THICK)).min(clip.1) {
                         if ay < 0 || ay >= fh {
@@ -279,6 +279,163 @@ impl TermView {
                     }
                 }
                 BlockKind::Sign => {} // demo 页专属，解析器永不产出
+                BlockKind::Table => {
+                    // BAR-218 三档：Fit/Shrink = 表头淡彩 slot4 + 3px 下划
+                    // accent 渐变 + 内容行白 0.75（列几何排版层存档，格内已
+                    // 折行）；Cards = 每行一卡（值框同配方）标题淡彩 slot0
+                    // 双绘 + 字段行（Bold 字段名前缀走段排）；DefList =
+                    // 名（slot0 双绘）+ 值（缩进 1 格白 0.75）无框
+                    if let Some(t) = &b.table {
+                        match t.tier {
+                            crate::ui::md_layout::TableTier::Fit
+                            | crate::ui::md_layout::TableTier::Shrink => {
+                                // 表头各格（淡彩 slot4，段排保行内样式）
+                                for (j, cell) in t.header.cells.iter().enumerate() {
+                                    let cx = x0 + i64::from(t.col_x[j]);
+                                    let cr = cx + i64::from(t.col_w[j]);
+                                    for (i, line) in cell.iter().enumerate() {
+                                        let ly = by + i as i64 * i64::from(b.line_h);
+                                        self.md_spans_line(
+                                            frame,
+                                            line,
+                                            cx,
+                                            cr,
+                                            ly,
+                                            b.line_h,
+                                            b.scale,
+                                            pastel[dp::pastel_role::H2],
+                                            &pastel,
+                                            accent,
+                                            denom,
+                                            yclip,
+                                            clip,
+                                        );
+                                    }
+                                }
+                                // 表头下划带：3px accent 渐变（带内居中）
+                                let uy = by
+                                    + i64::from(t.header.h)
+                                    + (i64::from(dp::TABLE_ROW_PAD)
+                                        - i64::from(dp::TABLE_HEAD_UNDER))
+                                        / 2;
+                                for ay in uy.max(clip.0)
+                                    ..(uy + i64::from(dp::TABLE_HEAD_UNDER)).min(clip.1)
+                                {
+                                    if ay < 0 || ay >= fh {
+                                        continue;
+                                    }
+                                    for ax in x0..content_r {
+                                        if ax < 0 || ax >= fw {
+                                            continue;
+                                        }
+                                        let c =
+                                            ring_gradient_rgb(accent.c2, accent.c1, ax, ay, denom);
+                                        frame.blend_px(ax as u32, ay as u32, c, 200);
+                                    }
+                                }
+                                // 内容行各格
+                                for row in &t.rows {
+                                    let ry = by + i64::from(row.y);
+                                    for (j, cell) in row.cells.iter().enumerate() {
+                                        let cx = x0 + i64::from(t.col_x[j]);
+                                        let cr = cx + i64::from(t.col_w[j]);
+                                        for (i, line) in cell.iter().enumerate() {
+                                            let ly = ry + i as i64 * i64::from(b.line_h);
+                                            self.md_spans_line(
+                                                frame, line, cx, cr, ly, b.line_h, b.scale,
+                                                body_fg, &pastel, accent, denom, yclip, clip,
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            crate::ui::md_layout::TableTier::Cards => {
+                                let inner_x = x0 + i64::from(dp::INDENT_W);
+                                let inner_r = content_r - i64::from(dp::INDENT_W);
+                                for row in &t.rows {
+                                    let ry = by + i64::from(row.y);
+                                    // 卡框 = 展示型值框同配方（四边细框+渐变暗底）
+                                    paint_thin_frame(frame, x0, ry, cw, row.h, accent, denom, clip);
+                                    let mut ly = ry + i64::from(dp::TABLE_ROW_PAD);
+                                    for (ci, cell) in row.cells.iter().enumerate() {
+                                        for line in cell {
+                                            if ci == 0 {
+                                                // 卡标题：淡彩 slot0 双绘
+                                                for inset in [0.0, 1.0] {
+                                                    self.md_text_line(
+                                                        frame,
+                                                        line,
+                                                        inner_x,
+                                                        inner_r,
+                                                        ly,
+                                                        b.line_h,
+                                                        b.scale,
+                                                        pastel[dp::pastel_role::BOLD],
+                                                        inset,
+                                                        yclip,
+                                                    );
+                                                }
+                                            } else {
+                                                // 字段行：Bold 字段名前缀走段排
+                                                self.md_spans_line(
+                                                    frame, line, inner_x, inner_r, ly, b.line_h,
+                                                    b.scale, body_fg, &pastel, accent, denom,
+                                                    yclip, clip,
+                                                );
+                                            }
+                                            ly += i64::from(b.line_h);
+                                        }
+                                    }
+                                }
+                            }
+                            crate::ui::md_layout::TableTier::DefList => {
+                                for row in &t.rows {
+                                    let ry = by + i64::from(row.y);
+                                    let mut ly = ry;
+                                    for (ci, cell) in row.cells.iter().enumerate() {
+                                        for line in cell {
+                                            if ci == 0 {
+                                                // 名：淡彩 slot0 双绘
+                                                for inset in [0.0, 1.0] {
+                                                    self.md_text_line(
+                                                        frame,
+                                                        line,
+                                                        x0,
+                                                        content_r,
+                                                        ly,
+                                                        b.line_h,
+                                                        b.scale,
+                                                        pastel[dp::pastel_role::BOLD],
+                                                        inset,
+                                                        yclip,
+                                                    );
+                                                }
+                                            } else {
+                                                // 值：缩进 1 格白 0.75
+                                                self.md_spans_line(
+                                                    frame,
+                                                    line,
+                                                    x0 + i64::from(dp::INDENT_W),
+                                                    content_r,
+                                                    ly,
+                                                    b.line_h,
+                                                    b.scale,
+                                                    body_fg,
+                                                    &pastel,
+                                                    accent,
+                                                    denom,
+                                                    yclip,
+                                                    clip,
+                                                );
+                                            }
+                                            ly += i64::from(b.line_h);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -533,7 +690,7 @@ mod md_paint_smoke {
         let b = &lay.blocks[5];
         let my = b.y + (b.line_h - dp::LIST_MARK_PX) / 2 + dp::LIST_MARK_PX / 2;
         assert!(ink(&buf, w, dp::LIST_MARK_PX / 2, my), "列表 ▪ 符");
-        // 分隔线：3px 横带中线出墨
+        // 分隔线：5px 横带中线出墨（BAR-218）
         let b = &lay.blocks[6];
         assert!(ink(&buf, w, w / 2, b.y + dp::HU), "分隔线");
     }
@@ -620,6 +777,63 @@ mod md_paint_smoke {
         // 零宽/零高/负原点不炸
         let _ = paint("# x", 0, 0, 0, (0, 0));
         let _ = paint("# x", 800, 600, -5000, (0, 600));
+    }
+
+    #[test]
+    fn spec_bar218_表格三档出墨() {
+        // Fit：表头下划带中线出墨（3px accent 渐变）
+        let md = "| A | B |\n|---|---|\n| x | y |";
+        let (buf, lay) = paint(md, 600, 1200, 0, (0, 1200));
+        let b = &lay.blocks[0];
+        let t = b.table.as_ref().unwrap();
+        let uy = b.y + t.header.h + (dp::TABLE_ROW_PAD - dp::TABLE_HEAD_UNDER) / 2 + 1;
+        assert!(ink(&buf, 600, 300, uy), "Fit 表头下划带出墨");
+        // 表头文字出墨（淡彩 slot4）
+        assert!(
+            (b.y..b.y + t.header.h).any(|y| (0..200).any(|x| ink(&buf, 600, x, y))),
+            "表头文字带"
+        );
+        // Cards：窄宽 3 列长文本 → 每行一卡，卡框左边框出墨（值框同配方 3px）
+        let md3 = "| h1 | h2 | h3 |\n|---|---|---|\n| tttttttttttttttttttt | vaaaaaaaaaaaaaaaaaaa | vbbbbbbbbbbbbbbbbbbbb |";
+        let (buf3, lay3) = paint(md3, 200, 1200, 0, (0, 1200));
+        let b3 = &lay3.blocks[0];
+        let t3 = b3.table.as_ref().unwrap();
+        assert_eq!(t3.tier, crate::ui::md_layout::TableTier::Cards);
+        let card = &t3.rows[0];
+        assert!(
+            ink(&buf3, 200, 1, b3.y + card.y + card.h / 2),
+            "Cards 卡框左边框出墨"
+        );
+        // DefList：窄宽 2 列 → 无框但名带出墨
+        let md2 = "| 属性 | 值 |\n|---|---|\n| 名称xxxxxxxxxx | na客户端yyyyyyyyyy |";
+        let (buf2, lay2) = paint(md2, 200, 1200, 0, (0, 1200));
+        let b2 = &lay2.blocks[0];
+        let t2 = b2.table.as_ref().unwrap();
+        assert_eq!(t2.tier, crate::ui::md_layout::TableTier::DefList);
+        assert!(
+            (b2.y..b2.y + b2.h).any(|y| (0..150).any(|x| ink(&buf2, 200, x, y))),
+            "DefList 条目出墨"
+        );
+    }
+
+    #[test]
+    fn spec_bar218_分隔线五px厚() {
+        // BAR-218 用户再判「太细」：HR_THICK 3→5——分隔线带中线列的
+        // 连续出墨行数 = 5（厚度钉，回不薄）
+        let (buf, lay) = paint("上文\n\n---\n\n下文", 600, 600, 0, (0, 600));
+        let b = lay
+            .blocks
+            .iter()
+            .find(|b| b.kind == BlockKind::Hr)
+            .expect("分隔线块");
+        let inked: Vec<u32> = (b.y..b.y + b.h)
+            .filter(|&y| ink(&buf, 600, 300, y))
+            .collect();
+        assert_eq!(
+            inked.len() as u32,
+            dp::HR_THICK,
+            "分隔线出墨行数 = HR_THICK（5px）"
+        );
     }
 
     #[test]

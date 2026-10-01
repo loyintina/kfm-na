@@ -325,3 +325,117 @@ fn spec_bar204_06_排版结果由实例格唯一决定() {
     assert_ne!(a, layout_md(md, 300, (36, 36)), "cell_w 变 = 版面变");
     assert_ne!(a, layout_md(md, 300, (18, 72)), "cell_h 变 = 版面变");
 }
+
+// ---- BAR-218 表格三档降级（用户 2026-10-01 拍板细则）----
+
+use kfm_na::ui::md_layout::TableTier;
+
+#[test]
+fn spec_bar218_07_fit档自然列宽与列隙() {
+    // 窄表放得下：Fit 档，列几何 = 自然宽 + 2 格列隙
+    let lay = layout_md("| 名 | 值 |\n|---|---|\n| a | b |", 500, X1);
+    let b = &lay.blocks[0];
+    assert_eq!(b.kind, BlockKind::Table);
+    let t = b.table.as_ref().expect("表格块必带载荷");
+    assert_eq!(t.tier, TableTier::Fit);
+    // 自然宽：col0 = max("名"=2格, "a"=1格)×18 = 36
+    assert_eq!(t.col_w[0], 36, "col0 自然宽 = 2 格 × 18px");
+    assert_eq!(t.col_x[0], 0);
+    assert_eq!(
+        t.col_x[1],
+        t.col_w[0] + dp::TABLE_COL_GAP_CELLS * 18,
+        "列隙 = 2 字符格"
+    );
+}
+
+#[test]
+fn spec_bar218_08_shrink档注水压缩含下限与格内折行() {
+    // 自然宽 [20格, 30格]×18 = [360, 540]，合计 + 隙 > 500 → Shrink；
+    // 下限 10 格×2 + 隙 = 396 ≤ 500 不入降级
+    let md = "| 名 | 值 |\n|---|---|\n| aaaaaaaaaaaaaaaaaaaa | bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb |";
+    let lay = layout_md(md, 500, X1);
+    let t = lay.blocks[0].table.as_ref().unwrap();
+    assert_eq!(t.tier, TableTier::Shrink);
+    let min_px = dp::TABLE_COL_MIN_CELLS * 18;
+    assert!(t.col_w[0] >= min_px && t.col_w[1] >= min_px, "列宽不破下限");
+    assert!(
+        t.col_w[0] + t.col_w[1] + dp::TABLE_COL_GAP_CELLS * 18 <= 500,
+        "压缩后合计 + 隙 ≤ 内容宽"
+    );
+    // 长值格内折行：值格折出多行且每行宽 ≤ 列宽
+    let cell = &t.rows[0].cells[1];
+    assert!(cell.len() >= 2, "30 格值在压缩列内必折行");
+    for line in cell {
+        assert!(line.w <= t.col_w[1], "折行行宽 ≤ 列宽");
+    }
+}
+
+#[test]
+fn spec_bar218_09_极端三列入cards且表头溶成字段名() {
+    // 3 列长文本：自然宽合计远超 200，且全按下限 3×180+2×36=612 > 200
+    // → Cards；表头 h=0（溶了）
+    let md = "| h1 | h2 | h3 |\n|---|---|---|\n| tttttttttttttttttttt | vaaaaaaaaaaaaaaaaaaa | vbbbbbbbbbbbbbbbbbbbb |";
+    let lay = layout_md(md, 200, X1);
+    let t = lay.blocks[0].table.as_ref().unwrap();
+    assert_eq!(t.tier, TableTier::Cards);
+    assert_eq!(t.header.h, 0, "表头溶解不单独成行（永不成卡）");
+    assert_eq!(t.labels, vec!["h1", "h2", "h3"]);
+    assert_eq!(t.rows.len(), 1, "一内容行一卡");
+    let card = &t.rows[0];
+    let title_txt: String = card.cells[0]
+        .iter()
+        .flat_map(|l| l.spans.iter().map(|(_, s)| s.as_str()))
+        .collect();
+    assert_eq!(title_txt, "tttttttttttttttttttt", "卡标题 = 首列值折行拼接");
+    // 字段行首段 = Bold「字段名：」
+    assert_eq!(
+        card.cells[1][0].spans[0],
+        (SegStyle::Bold, "h2：".to_string())
+    );
+}
+
+#[test]
+fn spec_bar218_10_两列极端入deflist() {
+    // 2 列全按下限 = 396 > 200 → DefList；cells[0]=名 cells[1]=值
+    let md = "| 属性 | 值 |\n|---|---|\n| 名称xxxxxxxxxx | na客户端yyyyyyyyyy |";
+    let lay = layout_md(md, 200, X1);
+    let t = lay.blocks[0].table.as_ref().unwrap();
+    assert_eq!(t.tier, TableTier::DefList);
+    assert_eq!(t.rows.len(), 1);
+    assert_eq!(t.rows[0].cells.len(), 2, "条目 = 名 + 值 两格");
+    assert_eq!(t.header.h, 0, "题头溶解");
+}
+
+#[test]
+fn spec_bar218_11_块高与行y自洽累进() {
+    // Fit 档块高 = 表头带 + 下划带 + 行高累加 + 行隙；后块 y = 表块 y+h+块隙
+    let md = "| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |\n\n后文";
+    let lay = layout_md(md, 500, X1);
+    let b = &lay.blocks[0];
+    let t = b.table.as_ref().unwrap();
+    let lh = b.line_h;
+    let expect = t.header.h + dp::TABLE_ROW_PAD + t.rows[0].h + dp::TABLE_ROW_PAD + t.rows[1].h;
+    assert_eq!(b.h, expect, "块高 = 表头+下划带+行带累加+行隙");
+    assert_eq!(
+        t.rows[1].y,
+        t.header.h + dp::TABLE_ROW_PAD + t.rows[0].h + dp::TABLE_ROW_PAD
+    );
+    assert_eq!(lay.blocks[1].y, b.y + b.h + dp::BLOCK_GAP, "后块咬块隙");
+    let _ = lh;
+}
+
+#[test]
+fn spec_bar218_08b_shrink注水法窄列触下限() {
+    // 鉴别夹具：自然宽 [2格, 30格, 30格]，纯比例分配 col0 ≈ 20px < 下限
+    // 180px → 注水法必须把它固定在下限（摘下限的变异在这里红）
+    let md = "| a | bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb | cccccccccccccccccccccccccccccc |\n|---|---|---|\n| 1 | 2 | 3 |";
+    let lay = layout_md(md, 700, X1);
+    let t = lay.blocks[0].table.as_ref().unwrap();
+    assert_eq!(t.tier, TableTier::Shrink);
+    let min_px = dp::TABLE_COL_MIN_CELLS * 18;
+    assert_eq!(t.col_w[0], min_px, "窄列必须触下限固定（注水法）");
+    assert!(
+        t.col_w[0] + t.col_w[1] + t.col_w[2] + dp::TABLE_COL_GAP_CELLS * 18 * 2 <= 700,
+        "合计 + 隙 ≤ 内容宽"
+    );
+}

@@ -125,6 +125,9 @@ pub enum Preview {
     MdQuote,
     MdList,
     MdHr,
+    /// 表格（BAR-218 三档降级：Fit 经典表 / Shrink 列压折行 / 极端 =
+    /// 两列定义清单、≥3 列每行一卡，表头溶成字段名永不成卡）
+    MdTable,
     /// 随机色设计：淡彩六色家族横排（accent c1 固定 60° 步进派生，
     /// 召唤即随机 = 每次开页全新配色）
     MdRandomColor,
@@ -732,8 +735,19 @@ pub const COMPONENTS: &[CompEntry] = &[
         file: "src/ui/md_paint.rs",
         spec: "theme.md §三 md 条款",
         tests: "tests/md_layout_spec.rs",
-        desc: "3px 横向 accent 渐变（与框厚同尺，2026-09-27 用户拍板加粗），上下各 0.5 格。",
+        desc: "5px 横向 accent 渐变（2026-09-27 加粗 1→3 与框厚同尺；2026-10-01 BAR-218 用户再判太细 3→5），上下各 0.5 格。",
         preview: Preview::MdHr,
+    },
+    CompEntry {
+        name: "表格",
+        cat: "md 引擎",
+        status: CompStatus::Active,
+        symbol: "BlockKind::Table",
+        file: "src/ui/md_paint.rs",
+        spec: "md渲染器.md §表格条款（BAR-218）",
+        tests: "tests/md_layout_spec.rs",
+        desc: "GFM 子集三档降级（2026-10-01 用户拍板）：放得下 = 经典表格（表头淡彩 slot4 + 3px accent 下划，列隙 2 格无竖线）；中等超宽 = 列宽注水压缩（下限 10 字符格）+格内折行；极端超宽 = 两列定义清单单块 / ≥3 列每内容行一卡（表头溶成字段名永不成卡）。截断省略不做（BAR-206 判红：省略=信息丢失）。",
+        preview: Preview::MdTable,
     },
     CompEntry {
         name: "随机色设计",
