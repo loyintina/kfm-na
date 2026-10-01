@@ -47,4 +47,16 @@ fn spec_bar212_veil烘焙门不要cfg_snap接线守卫() {
         ),
         "lp.veil 合成位必须在 let layered 顶层（cfg_visible 块外）——NA0126：包进块内 = 直滑烘了不画"
     );
+    // ⑥ 烘焙块不被 cfg_visible 罩（NA0129 承影三审定罪：前两修都对，
+    // 但整个烘焙块还在 if cfg_visible 罩层里，直滑恒假 = 门对了人不
+    // 让进）。三关同吃一判据 veil_on（承影建议）——缩进敏感字面：
+    // 帧函数顶层 8 格，罩回 cfg_visible 内必 12 格
+    assert!(
+        APP.contains("\n        if veil_on && let Some(t) = th {"),
+        "veil 烘焙块必须在 cfg_visible 罩层外（帧函数顶层 8 格）——NA0129：罩回块内 = 门对了人不让进"
+    );
+    assert!(
+        !APP.contains("\n            if veil_on && let Some(t) = th {"),
+        "veil 烘焙块 12 格形态 = 罩回 cfg_visible 内，不许回潮"
+    );
 }

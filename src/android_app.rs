@@ -8765,6 +8765,86 @@ impl App {
             }
             g.slot_bake(crate::gles_present::ChromeSlot::Config);
         }
+        // 压暗层烘焙（BAR-163 翻案：跳框整体搬出配置槽的全屏层）——
+        // 全幅 α150 黑直写 + 卡体在上；跳框开合/内容变/accent 变/
+        // 动效帧泵才重烘（稳态零重烘零上传），z 序 Over 之上
+        // NA0122（BAR-212 翻案）：门只要求 th，不再要求 cfg_snap——
+        // 解析页从终端直滑时配置页不在栈里（cfg_snap 恒 None），
+        // 信箱列表卡/查看器照样要烘焙；modal 必 None（配置页跳框
+        // 此时开不了），viewer 走全局口兜底
+        // NA0129（BAR-212 三审）：整块挪出 if cfg_visible 罩层——
+        // 上岗判据/烘焙门/合成位三关同吃一个 veil_on（承影建议）
+        if veil_on && let Some(t) = th {
+            // BAR-212：信箱列表卡开着 = 烘焙前先喂几何账 + 摘要懒
+            // 加载窗（滚动帧 sig 必变 → 本臂必达；开窗首帧同达）
+            if mail_list_open {
+                Self::mail_list_feed(w, h);
+            }
+            let modal = cfg_snap.and_then(|cs| cs.modal);
+            let viewer = cfg_snap
+                .and_then(|cs| cs.viewer.clone())
+                .or_else(crate::ui::cfg_page::CfgPage::viewer_snap_global);
+            let content_key = if let Some(mi) = modal {
+                u64::from(mi as u32) + 1
+            } else if let Some(v) = &viewer {
+                use std::hash::{Hash, Hasher};
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                v.title.hash(&mut hasher);
+                v.content.hash(&mut hasher);
+                hasher.finish() | (1 << 63)
+            } else {
+                0
+            };
+            let cell = t.lock().unwrap().cell_size();
+            // BAR-212：列表卡住本层 = accent 随宿主页（解析页在顶吃
+            // acc_pt，否则 acc_cfg 旧律）；mail_dim = 册键 + 视图代 +
+            // 数据代三维（涂装直读 mail_feed/mail_list 全局快照，
+            // 换代必须重烘）
+            let veil_accent = if mail_list_open && pt_visible {
+                acc_pt
+            } else {
+                acc_cfg
+            };
+            let mail_dim = if mail_list_open {
+                let mv = crate::ui::mail_list::snap();
+                (
+                    mv.as_ref().map_or(0, |v| match v.key {
+                        crate::mail_feed::MailKey::MainBook => 1,
+                        crate::mail_feed::MailKey::NaBook => 2,
+                    }),
+                    mv.as_ref().map_or(0, |v| v.epoch()),
+                    crate::mail_feed::epoch(),
+                )
+            } else {
+                (0, 0, 0)
+            };
+            let sig = VeilSig {
+                w,
+                h,
+                c1: veil_accent.c1,
+                c2: veil_accent.c2,
+                content_key,
+                anim_bucket,
+                viewer_scroll: viewer.as_ref().map_or(0, |v| v.scroll),
+                cell,
+                mail_dim,
+            };
+            if sigs.veil.feed(sig) {
+                let px = g.slot_canvas(crate::gles_present::ChromeSlot::ModalVeil);
+                px.fill(0);
+                t.lock().unwrap().paint_modal_veil_layer(
+                    px,
+                    w,
+                    h,
+                    modal,
+                    viewer.as_ref(),
+                    veil_accent,
+                    crate::report::boot_ms() as u64,
+                );
+                g.slot_bake(crate::gles_present::ChromeSlot::ModalVeil);
+            }
+        }
+
         // BAR-096 拆层烘焙（帧饥饿根治）：标签栏层 + 下池光标层——
         // 各持小画布（标签栏 屏宽×TAB_LAYER_H ≈0.65MB / 光标 池内容宽×
         // 行高 ≈0.69MB）；动画期只脏这两层，替代配置槽每次 14MB 全页
@@ -8895,83 +8975,6 @@ impl App {
                         acc_cfg,
                     );
                     g.slot_bake(crate::gles_present::ChromeSlot::DropdownPanel);
-                }
-            }
-            // 压暗层烘焙（BAR-163 翻案：跳框整体搬出配置槽的全屏层）——
-            // 全幅 α150 黑直写 + 卡体在上；跳框开合/内容变/accent 变/
-            // 动效帧泵才重烘（稳态零重烘零上传），z 序 Over 之上
-            // NA0122（BAR-212 翻案）：门只要求 th，不再要求 cfg_snap——
-            // 解析页从终端直滑时配置页不在栈里（cfg_snap 恒 None），
-            // 信箱列表卡/查看器照样要烘焙；modal 必 None（配置页跳框
-            // 此时开不了），viewer 走全局口兜底
-            if veil_on && let Some(t) = th {
-                // BAR-212：信箱列表卡开着 = 烘焙前先喂几何账 + 摘要懒
-                // 加载窗（滚动帧 sig 必变 → 本臂必达；开窗首帧同达）
-                if mail_list_open {
-                    Self::mail_list_feed(w, h);
-                }
-                let modal = cfg_snap.and_then(|cs| cs.modal);
-                let viewer = cfg_snap
-                    .and_then(|cs| cs.viewer.clone())
-                    .or_else(crate::ui::cfg_page::CfgPage::viewer_snap_global);
-                let content_key = if let Some(mi) = modal {
-                    u64::from(mi as u32) + 1
-                } else if let Some(v) = &viewer {
-                    use std::hash::{Hash, Hasher};
-                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                    v.title.hash(&mut hasher);
-                    v.content.hash(&mut hasher);
-                    hasher.finish() | (1 << 63)
-                } else {
-                    0
-                };
-                let cell = t.lock().unwrap().cell_size();
-                // BAR-212：列表卡住本层 = accent 随宿主页（解析页在顶吃
-                // acc_pt，否则 acc_cfg 旧律）；mail_dim = 册键 + 视图代 +
-                // 数据代三维（涂装直读 mail_feed/mail_list 全局快照，
-                // 换代必须重烘）
-                let veil_accent = if mail_list_open && pt_visible {
-                    acc_pt
-                } else {
-                    acc_cfg
-                };
-                let mail_dim = if mail_list_open {
-                    let mv = crate::ui::mail_list::snap();
-                    (
-                        mv.as_ref().map_or(0, |v| match v.key {
-                            crate::mail_feed::MailKey::MainBook => 1,
-                            crate::mail_feed::MailKey::NaBook => 2,
-                        }),
-                        mv.as_ref().map_or(0, |v| v.epoch()),
-                        crate::mail_feed::epoch(),
-                    )
-                } else {
-                    (0, 0, 0)
-                };
-                let sig = VeilSig {
-                    w,
-                    h,
-                    c1: veil_accent.c1,
-                    c2: veil_accent.c2,
-                    content_key,
-                    anim_bucket,
-                    viewer_scroll: viewer.as_ref().map_or(0, |v| v.scroll),
-                    cell,
-                    mail_dim,
-                };
-                if sigs.veil.feed(sig) {
-                    let px = g.slot_canvas(crate::gles_present::ChromeSlot::ModalVeil);
-                    px.fill(0);
-                    t.lock().unwrap().paint_modal_veil_layer(
-                        px,
-                        w,
-                        h,
-                        modal,
-                        viewer.as_ref(),
-                        veil_accent,
-                        crate::report::boot_ms() as u64,
-                    );
-                    g.slot_bake(crate::gles_present::ChromeSlot::ModalVeil);
                 }
             }
             // BAR-097 池区拆层烘焙（仅 Upper 平移期上岗，贴死即隐）：
