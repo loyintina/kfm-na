@@ -62,5 +62,13 @@ run; chk "在册放行" 0 $?
 printf '# BAR-190 别线信（正文援引 BAR-996 旧案）\n' > "$T/mb/0046号某人的通报.md"
 run; chk "H1次号不毒max" 0 $? "BAR-191 已领"
 
+# ⑦BAR-217 源码守卫：MAILBOX 与 DEFAULT_MAILBOX 必须同经 readlink -f
+# 归一——2026-10-01 病灶：只归一 MAILBOX 后与未归一 DEFAULT 比字符串
+# 恒假，「= 默认信箱才自动 commit」闸永不进，追踪信 untracked 漂流
+# （0138/0143/0144 三封实证）。变异：摘 DEFAULT 归一行 → 本咬红。
+grep -q 'DEFAULT_MAILBOX="$(readlink -f "$DEFAULT_MAILBOX")"' scripts/bar-new.sh \
+    && { echo "  ✓ BAR-217 DEFAULT同归一"; pass=$((pass+1)); } \
+    || { echo "  ✗ BAR-217 DEFAULT同归一（bar-new.sh 缺 DEFAULT_MAILBOX readlink 归一）"; fail=$((fail+1)); }
+
 echo "[test-bar-new] $pass 过 / $fail 红"
 [ "$fail" = 0 ]
