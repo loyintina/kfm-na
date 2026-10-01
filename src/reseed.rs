@@ -21,14 +21,34 @@ pub enum ReseedPlan {
     /// 相同前缀不重放：喂给既有画布的 ANSI 尾块
     /// （k 个裸 LF 顶行入史 + 全屏重画 + 游标归位）
     Tail(Vec<u8>),
+    /// BAR-215③：canvas_fed 且对账过 → 画布是 %output 活镜像（内容
+    /// 领先或齐平快照），调用方一笔不许画。快照后竞速行（capture 执行
+    /// 与 %output 入队竞速，窗期照喂进画布）不在快照里——尾块全屏重画
+    /// 会把它们整批抹掉（5s 档 × 1s 行锁相实测每档恒丢 1 行，画布史
+    /// 差值 50→57 线性漂移、缺号步距恒 5 定罪）。账照归位、pend 照
+    /// 补喂，唯有画布不动。
+    Skip,
 }
 
-/// 对账：旧播种文本 × 新 capture × 屏高 → 裁决。
+/// 对账：旧播种文本 × 新 capture × 屏高 × 画布喂态 → 裁决。
 ///
 /// 判负（Rebuild）全表：屏高为 0 / 任一文本不足一屏 / 历史缩短
 /// （对端清史）/ 新历史超旧屏一屏（k>rows，merge_capture 同款回落）/
 /// 旧历史段与旧屏顶 k 行在新文本中原样不在位（resize 重排/改写历史）。
-pub fn plan_reseed(old_cap: &str, new_cap: &str, rows: usize, cursor: (u32, u32)) -> ReseedPlan {
+///
+/// canvas_fed（BAR-215）：Steady/播种窗相 %output 已把新行续喂进画布
+/// （画布史 ≠ last_cap 账）时，画布是字节流活镜像——对账过 → Skip
+/// 一笔不画：再发 k 个裸 LF = 每档复制 k 行重复带（形态①，94 行 T 行
+/// 双份定罪）；全屏重画 = 抹掉快照后竞速行（形态③，每档恒丢 1 行、
+/// 缺号步距恒档距定罪）。fed=false（后台会话无 %output / 画布与账
+/// 同新）→ 原 k-LF 尾块语义不变。
+pub fn plan_reseed(
+    old_cap: &str,
+    new_cap: &str,
+    rows: usize,
+    cursor: (u32, u32),
+    canvas_fed: bool,
+) -> ReseedPlan {
     if rows == 0 {
         return ReseedPlan::Rebuild;
     }
@@ -58,10 +78,16 @@ pub fn plan_reseed(old_cap: &str, new_cap: &str, rows: usize, cursor: (u32, u32)
     {
         return ReseedPlan::Rebuild;
     }
+    // BAR-215：画布已被 %output 续喂 = 活镜像，对账过 → 一笔不画。
+    // LF 重发 = 重复带；全屏重画 = 抹掉快照后竞速行（capture 执行后
+    // 到达的 %output 已照喂进画布，不在快照文本里）。
+    if canvas_fed {
+        return ReseedPlan::Skip;
+    }
     // 尾块拼装：
     // ① 游标先到底行（播种归位后游标在中部，append 必须从底行起）
     // ② k 个裸 LF——底行 LF 滚屏 = 顶行入史，旧屏顶 k 行依次进历史，
-    //    内容与次序天然正确（对账已咬死它们 = 新历史的那 k 行），零重写
+    //    内容与次序天然正确（对账已咬死它们 = 新历史的那 k 行），零重写。
     // ③ CUP 回顶 + 逐行 内容+EL（清残）+CNL（下一行行首）全屏重画
     // ④ 游标归位 + 藏光标（Canvas::build 同规）
     let mut out = String::with_capacity(new_cap.len() / 2);

@@ -2364,6 +2364,17 @@ impl Canvas {
         self.proc.advance(&mut self.term, tail);
     }
 
+    /// scrollback 存量（BAR-215 观测账读数：android_app 侧拿不到
+    /// Dimensions trait，画布自家口径）
+    pub fn history_size(&self) -> usize {
+        self.term.grid().history_size()
+    }
+
+    /// 屏行数（同账）
+    pub fn screen_lines(&self) -> usize {
+        self.term.grid().screen_lines()
+    }
+
     /// 全量文本导出（历史+屏，逐行 trim_end）——考题对账件：
     /// reseed 尾块 ≡ 全量重建 的等价钉据此逐格比对
     pub fn dump_all(&self) -> String {
@@ -2802,6 +2813,31 @@ impl TermView {
                 let cell = &grid[grid_line][Column(col)];
                 if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
                     continue; // CJK 宽字符的后半格:字已在前半格收过
+                }
+                s.push(cell.c);
+            }
+            out.push_str(s.trim_end());
+            out.push('\n');
+        }
+        out
+    }
+
+    /// BAR-215 观测：活动网格全量文本导出（历史+屏，逐行 trim_end）——
+    /// 浏览中 = 浏览画布，否则 live 网格。Canvas::dump_all 同规；闸门
+    /// 通道十一（canvas-req）倒账件，重复带定罪靠它逐行对
+    pub fn dump_all_active(&self) -> String {
+        let grid = self.active_term().grid();
+        let hist = grid.history_size();
+        let lines = grid.screen_lines();
+        let cols = grid.columns();
+        let mut out = String::with_capacity((hist + lines) * (cols / 2));
+        for i in 0..(hist + lines) {
+            let grid_line = Line(i as i32 - hist as i32);
+            let mut s = String::with_capacity(cols);
+            for col in 0..cols {
+                let cell = &grid[grid_line][Column(col)];
+                if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                    continue; // CJK 宽字符的后半格（dump_all 同规）
                 }
                 s.push(cell.c);
             }
@@ -9887,6 +9923,8 @@ pub trait TermEmu: Send {
     fn land_bottom(&mut self);
     /// 当前视野纯文本导出（调试闸门 text-req 通道；跟随滚动位置，对齐「所见」）
     fn dump_text(&self) -> String;
+    /// BAR-215 观测：活动网格全量文本（历史+屏）——canvas-req 倒账件
+    fn dump_all_active(&self) -> String;
     fn mouse_report_active(&self) -> bool;
     fn app_cursor_mode(&self) -> bool;
     /// BAR-125 每会话模式快照：当前 mode 位图（切出存/切入恢复）
@@ -10318,6 +10356,9 @@ impl TermEmu for TermView {
     }
     fn dump_text(&self) -> String {
         TermView::dump_text(self)
+    }
+    fn dump_all_active(&self) -> String {
+        TermView::dump_all_active(self)
     }
     fn mouse_report_active(&self) -> bool {
         TermView::mouse_report_active(self)

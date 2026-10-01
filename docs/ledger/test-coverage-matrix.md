@@ -21,7 +21,7 @@
 | `src/endpoint.rs` | 9 | 9 | 0 | — |
 | `src/exec_probe.rs` | 1 | 1 | 0 | — |
 | `src/fs_fetch.rs` | 14 | 14 | 0 | — |
-| `src/gate.rs` | 106 | 83 | 23 | register_gate_router text_dump inject_keys spawn_gate_watcher REC_FILE_CAP REC_FILE rec_output rec_resize PANIC_FILE PANIC_TRACE_FILE LOOP_STALL_FILE note_loop_beat loop_beat_age_ms note_foreground install_panic_hook note_draw note_session_death touch_take register_input_bar ALERT_RSS_COOLDOWN_MS ALERT_DEATHS_WINDOW_MS ALERT_DEATHS_COOLDOWN_MS HISTORY_EVERY_TICKS |
+| `src/gate.rs` | 107 | 84 | 23 | register_gate_router text_dump inject_keys spawn_gate_watcher REC_FILE_CAP REC_FILE rec_output rec_resize PANIC_FILE PANIC_TRACE_FILE LOOP_STALL_FILE note_loop_beat loop_beat_age_ms note_foreground install_panic_hook note_draw note_session_death touch_take register_input_bar ALERT_RSS_COOLDOWN_MS ALERT_DEATHS_WINDOW_MS ALERT_DEATHS_COOLDOWN_MS HISTORY_EVERY_TICKS |
 | `src/glyph_atlas.rs` | 11 | 11 | 0 | — |
 | `src/http1.rs` | 10 | 7 | 3 | is_tick_err read_head_hook read_body_hook |
 | `src/ime_bridge.rs` | 1 | 0 | 1 | jni_counters |
@@ -56,7 +56,7 @@
 | `src/singleton.rs` | 7 | 4 | 3 | LOCK_PATH lock_exclusive try_acquire |
 | `src/svc_health.rs` | 12 | 9 | 3 | HIST_PATH set_visible sys_snap |
 | `src/sys_hist.rs` | 39 | 34 | 5 | BAR_W PLACEHOLDER_PCT hist_idx restore HIST_FORMAT |
-| `src/termview.rs` | 171 | 164 | 7 | AI_THINK_COLLAPSED FONT_CANDIDATES CJK_FONT_CANDIDATES load_cjk_font font_probe MAG_HALF_COLS MAG_HALF_ROWS |
+| `src/termview.rs` | 174 | 166 | 8 | AI_THINK_COLLAPSED FONT_CANDIDATES CJK_FONT_CANDIDATES load_cjk_font font_probe dump_all_active MAG_HALF_COLS MAG_HALF_ROWS |
 | `src/theme.rs` | 1 | 1 | 0 | — |
 | `src/tmux_ctl.rs` | 24 | 24 | 0 | — |
 | `src/tmux_exec.rs` | 1 | 1 | 0 | — |

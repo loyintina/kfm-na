@@ -171,25 +171,38 @@ fn spec_bar155_头块关不产_build_病灶二回归() {
 }
 
 #[test]
-fn spec_播种窗口_output丢弃_building进pend() {
-    // 带内对齐律：播种窗口（AwaitHeader..InCapture）的 %output 已在
-    // capture 内 = 丢弃；capture 关块后（Building）的 %output 不在
-    // capture 内 = Pend 待补喂；稳态 = Feed
+fn spec_bar215_播种窗_output照喂_building进pend() {
+    // BAR-215③ 新带内对齐律：tmux 事件串行 ⇒ 播种窗（AwaitHeader..InCapture）
+    // 内到达的 %output 字节「未必在快照内」（capture 命令执行与 %output 入队
+    // 竞速，命令先执行则后到输出恒在快照外）——pane 已认领时必须照 Feed，
+    // 双喂由 Rebuild 弃旧画布天然兜底；pane 未认领仍 None（无归属，且恒在
+    // capture 内）；capture 关块后（Building）进 Pend 待补喂；稳态 Feed。
     let mut f = CtrlFeed::new();
     f.seed_sent(1);
     assert_eq!(
         line(&mut f, r"%output %3 early\015\012"),
         CtrlAct::None,
-        "播种窗口字节必须丢弃（已在快照内）"
+        "pane 未认领（seed_sent 后首轮）：%output 无归属仍 None"
+    );
+    lines(
+        &mut f,
+        &["%begin 2 2 1", "KFMHDR 1 0 10000 0 0 %3", "%end 2 2 1"],
+    );
+    assert_eq!(f.pane(), Some(3), "头行认领后 pane 必须就位");
+    f.seed_sent(2);
+    assert_eq!(
+        line(&mut f, r"%output %3 early\015\012"),
+        CtrlAct::Feed(b"early\r\n".to_vec()),
+        "播种窗内 pane 已认领的 %output 必须照 Feed（快照外字节不许丢）"
     );
     lines(
         &mut f,
         &[
-            "%begin 2 2 1",
-            "KFMHDR 1 0 10000 0 0 %3",
-            "%end 2 2 1",
-            "%begin 3 3 1",
-            "%end 3 3 1",
+            "%begin 4 4 1",
+            "KFMHDR 2 0 10000 0 0 %3",
+            "%end 4 4 1",
+            "%begin 5 5 1",
+            "%end 5 5 1",
         ],
     );
     assert_eq!(

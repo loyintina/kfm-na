@@ -291,6 +291,17 @@ struct WarmSess {
     /// 通道连败计数（BAR-211 F4：死会话空转回路 attach%error→%exit→
     /// 拆除→重开 的退避升档凭据；播种落地清零）
     retry_streak: u32,
+    /// %output 喂布累计字节（BAR-215 观测账：last_cap 归账后 Steady 相
+    /// 续喂的字节总量——续播对账时随日志取走清零。>0 且 Tail 落同一只
+    /// 画布 = 双通道同喂，k 行重复带的定罪凭据）
+    fed_bytes: usize,
+    /// 画布已领先 last_cap（BAR-215：Steady 相 %output / Building 接缝
+    /// pending 把新行喂进了画布史）——下档续播尾块免 LF（那 k 行早已
+    /// 入史，再发 = 每档复制 k 行重复带）；Tail 落地/播种安装归 false
+    cap_fed: bool,
+    /// 画布与真源分歧（BAR-215：%output 无布可喂被丢弃 / 控制通道重开
+    /// 后画布领先账不可知）——下档播种强制全量重建，落地归 false
+    cap_stale: bool,
 }
 
 /// 预热池容量帽（会话多于帽只温前 N 个——防爆内存；当前会话永远
@@ -319,6 +330,9 @@ impl WarmSess {
             build_cap: None,
             seed_token: 0,
             retry_streak: 0,
+            fed_bytes: 0,
+            cap_fed: false,
+            cap_stale: false,
         }
     }
 
@@ -6064,6 +6078,11 @@ impl App {
             e.feed.reset();
             e.feed.seed_sent(tok);
             e.seed_ms = now;
+            // BAR-215：通道重开 = 旧通道 %output 断档，画布领先 last_cap
+            // 的账不可知——有旧画布则下档强制全量重建对齐真源（落地即摘）
+            if e.canvas.is_some() {
+                e.cap_stale = true;
+            }
             inflight += 1;
             crate::report::report(
                 "term",
@@ -6188,6 +6207,53 @@ impl App {
         true
     }
 
+    /// BAR-215 观测闸（通道十一 canvas-req）：暖池全画布 + 活动网格全量
+    /// 倒账落盘（DUMP_DIR/canvas-<会话>.txt + canvas-active.txt）——上滚
+    /// 重复案的定罪件：dump_all 全量文本直接 grep 重复带；头行带
+    /// hist/last_cap 行数/fed_bytes 三账（双通道同喂的当场凭据）
+    fn dump_warm_canvases(&self) {
+        let dir = crate::gate::DUMP_DIR;
+        let mut n = 0usize;
+        for (name, e) in &self.warm_pool {
+            let Some(canvas) = &e.canvas else {
+                continue;
+            };
+            let head = format!(
+                "# {name} hist={} screen={} last_cap={}行 fed_bytes={}\n",
+                canvas.history_size(),
+                canvas.screen_lines(),
+                e.last_cap
+                    .as_deref()
+                    .map(|c| c.matches('\n').count())
+                    .unwrap_or(0),
+                e.fed_bytes,
+            );
+            if std::fs::write(
+                format!("{dir}/canvas-{name}.txt"),
+                format!("{head}{}", canvas.dump_all()),
+            )
+            .is_ok()
+            {
+                n += 1;
+            }
+        }
+        if let Some(t) = self.term_handle() {
+            let g = t.lock().unwrap();
+            let body = g.dump_all_active();
+            let head = format!(
+                "# active browsing={} hist={} 总行={}\n",
+                g.browsing(),
+                g.history_size(),
+                body.matches('\n').count(),
+            );
+            let _ = std::fs::write(format!("{dir}/canvas-active.txt"), format!("{head}{body}"));
+        }
+        crate::report::report(
+            "term",
+            &format!("BAR-215 画布全量倒账落盘: 暖池 {n} 幅 + 活动网格"),
+        );
+    }
+
     /// 控制通道排水（about_to_wait 每圈，先于 v3 轮询闸）：逐条目——
     /// ①播种构建完工安装（swap/入账 + pending 补喂）②事件泵——
     /// feed_bytes 唯一入口（行装配+剥 \r+相位判定全在 ctrl_feed）
@@ -6208,6 +6274,7 @@ impl App {
                         if !pend.is_empty() {
                             canvas.feed_bytes(&pend);
                         }
+                        let pend_len = pend.len();
                         let now = crate::report::boot_ms() as u64;
                         let cost = now.saturating_sub(seed_ms);
                         let cur = self.cur_attached();
@@ -6216,10 +6283,16 @@ impl App {
                             && self
                                 .term_handle()
                                 .is_some_and(|t| t.lock().unwrap().browsing());
+                        let mut fed = 0usize;
                         if let Some(e) = self.warm_pool.get_mut(&name) {
                             e.seeded_ms = now;
                             e.feed.built();
                             e.retry_streak = 0; // BAR-211 F4：落地 = 连败账清零
+                            fed = std::mem::take(&mut e.fed_bytes); // BAR-215 账随日志取走
+                            // BAR-215：pending 补喂 = 画布已领先 build_cap
+                            // （续播免 LF 凭据）；安装落地 = 与真源分歧结清
+                            e.cap_fed = pend_len > 0;
+                            e.cap_stale = false;
                             // BAR-186 臂①：播种落地即归账——last_cap 恒等于
                             // 画布内容（在途虚账不许进 last_cap）
                             if let Some(cap) = e.build_cap.take() {
@@ -6242,7 +6315,9 @@ impl App {
                         }
                         crate::report::report(
                             "term",
-                            &format!("推流画布播种落地: {name}: 耗时 {cost}ms 浏览中={browsing}"),
+                            &format!(
+                                "推流画布播种落地: {name}: 耗时 {cost}ms 浏览中={browsing} 期间%output={fed}B"
+                            ),
                         );
                     }
                     Err(std::sync::mpsc::TryRecvError::Empty) => {
@@ -6322,6 +6397,7 @@ impl App {
                     && self
                         .term_handle()
                         .is_some_and(|t| t.lock().unwrap().feed_browse(&bytes));
+                let mut delivered = fed;
                 if fed {
                     // BAR-186 臂②：追赶期字节照喂 grid 但不置脏——弱网
                     // 滴灌「每包一帧」= 用户看到的疯狂慢滚；追平落地帧
@@ -6334,6 +6410,18 @@ impl App {
                     && let Some(canvas) = &mut e.canvas
                 {
                     canvas.feed_bytes(&bytes); // 后台画布续喂生长
+                    delivered = true;
+                }
+                // BAR-215 观测账/喂态：%output 喂布量（落点不论浏览/后台
+                // 都记）；喂进 = 画布已领先 last_cap（续播免 LF 凭据）；
+                // 无布可喂丢弃 = 画布与真源分歧（下档强制全量重建）
+                if let Some(e) = self.warm_pool.get_mut(name) {
+                    e.fed_bytes += bytes.len();
+                    if delivered {
+                        e.cap_fed = true;
+                    } else {
+                        e.cap_stale = true;
+                    }
                 }
             }
             CtrlAct::Pend(bytes) => {
@@ -6351,36 +6439,100 @@ impl App {
                 // BAR-186 臂①：有旧播种账且 immutable-history 对账过 →
                 // 尾块续播既有画布（相同前缀不重放：万行重建 → k+rows 行），
                 // 画布原位续长不 swap——浏览中阅读位/零头全不动
-                let tail = self.warm_pool.get(name).and_then(|e| {
-                    e.last_cap.as_deref().and_then(|old| {
-                        match crate::reseed::plan_reseed(old, &cap, rows, (x, y)) {
-                            crate::reseed::ReseedPlan::Tail(bytes) => Some(bytes),
-                            crate::reseed::ReseedPlan::Rebuild => None,
-                        }
+                // BAR-215 观测账：旧账行数先取（Tail 的 k = 新旧行数差）
+                let old_nls = self
+                    .warm_pool
+                    .get(name)
+                    .and_then(|e| e.last_cap.as_deref())
+                    .map(|c| c.matches('\n').count());
+                let plan = self.warm_pool.get(name).and_then(|e| {
+                    // BAR-215：画布与真源分歧（喂布落空/通道重开）→
+                    // 对账无基可凭，直接判负全量重建
+                    if e.cap_stale {
+                        return None;
+                    }
+                    e.last_cap.as_deref().map(|old| {
+                        // BAR-215：cap_fed = 画布已被 %output 续喂（活镜像），
+                        // 对账过 → Skip 一笔不画（LF 重发 = 重复带；全屏
+                        // 重画 = 抹掉快照后竞速行，每档恒丢 1 行）
+                        crate::reseed::plan_reseed(old, &cap, rows, (x, y), e.cap_fed)
                     })
                 });
                 let mut done = false;
-                if let Some(tail) = tail {
+                let mut stay_fed = false; // Skip 落地画布仍领先账，fed 凭据不归零
+                let mut pend_fed = false; // 补喂落地 = 画布领先 pend 批，同上
+                if let Some(plan) = plan {
                     let is_cur = self.cur_attached().as_ref() == Some(&name.to_string());
-                    let mut hit = is_cur
-                        && self
-                            .term_handle()
-                            .is_some_and(|t| t.lock().unwrap().reseed_browse(&tail));
-                    if !hit
-                        && let Some(e) = self.warm_pool.get_mut(name)
-                        && let Some(canvas) = &mut e.canvas
-                    {
-                        canvas.reseed(&tail);
-                        hit = true;
+                    let mut hit = false;
+                    let mut target = "";
+                    let mut canvas_hist = 0usize;
+                    match plan {
+                        crate::reseed::ReseedPlan::Skip => {
+                            // BAR-215③：画布是活镜像，一笔不画（快照后
+                            // 竞速行已在画布，重画必抹）——只取样遥测
+                            hit = true;
+                            stay_fed = true;
+                            target = "活镜像免画";
+                            if let Some(e) = self.warm_pool.get(name)
+                                && let Some(canvas) = &e.canvas
+                            {
+                                canvas_hist = canvas.history_size();
+                            } else if is_cur && let Some(t) = self.term_handle() {
+                                canvas_hist = t.lock().unwrap().history_size();
+                            }
+                        }
+                        crate::reseed::ReseedPlan::Tail(tail) => {
+                            if is_cur && let Some(t) = self.term_handle() {
+                                let mut g = t.lock().unwrap();
+                                if g.reseed_browse(&tail) {
+                                    hit = true;
+                                    target = "浏览画布";
+                                    canvas_hist = g.history_size();
+                                }
+                            }
+                            if !hit
+                                && let Some(e) = self.warm_pool.get_mut(name)
+                                && let Some(canvas) = &mut e.canvas
+                            {
+                                canvas.reseed(&tail);
+                                canvas_hist = canvas.history_size();
+                                target = "后台画布";
+                                hit = true;
+                            }
+                        }
+                        crate::reseed::ReseedPlan::Rebuild => {}
                     }
                     if hit {
                         let lines = cap.lines().count();
+                        let k = old_nls.map(|o| cap.matches('\n').count() as i64 - o as i64);
                         let now = crate::report::boot_ms() as u64;
+                        let mut fed = 0usize;
+                        // BAR-215③：快照窗后输出（Building 相 Pended）不是
+                        // 「已在快照内」——%end 后的 %output 恒在快照外。
+                        // 旧律 pending.clear() = 每档续播丢一批行（5s 档 ×
+                        // 1s 行锁相实测画布史恒 −1/档 = 上滚断档病灶）；
+                        // 尾块落哪只画布，这批字节就补喂哪只（安装臂同规）
+                        let mut pend = Vec::new();
                         if let Some(e) = self.warm_pool.get_mut(name) {
-                            e.pending.clear(); // 播种窗输出已在快照内（InCapture 吞咽同规）
+                            pend = std::mem::take(&mut e.pending);
                             e.seeded_ms = now;
                             e.feed.built();
                             e.retry_streak = 0; // BAR-211 F4：续播落地同清零
+                            fed = std::mem::take(&mut e.fed_bytes); // BAR-215 账随日志取走
+                        }
+                        if !pend.is_empty() {
+                            if is_cur
+                                && self
+                                    .term_handle()
+                                    .is_some_and(|t| t.lock().unwrap().feed_browse(&pend))
+                            {
+                                pend_fed = true;
+                            } else if let Some(e) = self.warm_pool.get_mut(name)
+                                && let Some(canvas) = &mut e.canvas
+                            {
+                                canvas.feed_bytes(&pend);
+                                pend_fed = true;
+                            }
                         }
                         // 播种尾锚（臂②）：追赶中落地一帧
                         if self.catchup.anchor() == crate::catchup::CatchAct::Land {
@@ -6389,7 +6541,11 @@ impl App {
                         self.dirty = true;
                         crate::report::report(
                             "term",
-                            &format!("推流画布对账续播: {name}: 快照 {lines} 行前缀不重放"),
+                            &format!(
+                                "推流画布对账续播: {name}: 快照 {lines} 行前缀不重放 k={} 期间%output={fed}B 补喂={}B 落点={target} 画布史={canvas_hist}",
+                                k.map_or("?".to_string(), |v| v.to_string()),
+                                if pend_fed { pend.len() } else { 0 },
+                            ),
                         );
                         done = true;
                     }
@@ -6398,6 +6554,10 @@ impl App {
                     // 账随落地归位（move 零拷贝——对账重播 5s 一档，clone 不起）
                     if let Some(e) = self.warm_pool.get_mut(name) {
                         e.last_cap = Some(cap);
+                        // BAR-215：Skip/补喂落地 = 画布仍领先账，fed 凭据
+                        // 不归零（归零 → 下档 Tail 重发 k-LF = 重复带回潮）
+                        e.cap_fed = stay_fed || pend_fed;
+                        e.cap_stale = false;
                     }
                 } else {
                     let cap_build = cap.clone(); // 线程持副本，原账留 build_cap 待落地过账
@@ -10569,6 +10729,9 @@ impl ApplicationHandler for App {
             self.drain_terminal_events();
             self.drain_ime_inject();
             self.drain_touch_in(); // 通道八:闸门触摸注入(与真手指同入口)
+            if crate::gate::take_canvas_req(crate::gate::DUMP_DIR) {
+                self.dump_warm_canvases(); // 通道十一:canvas-req 画布全量倒账(BAR-215)
+            }
             if crate::gate::switch_take() {
                 self.switch_session(); // 通道九:switch-req 遥控切换(与 Ctrl-] 同入口)
             }
