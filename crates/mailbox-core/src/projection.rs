@@ -143,13 +143,14 @@ fn build_rows<'a>(letters: &'a [LetterText], errors: &mut Vec<String>) -> Vec<Ro
 fn loc_prefix(dir: &str) -> &'static str {
     match dir {
         "archive-v1" => "archive-v1/",
+        "archive-v2.2" => "archive-v2.2/",
         "withdrawn" => "archive-withdrawn/",
         _ => "",
     }
 }
 
-/// 「回哪条/状态」列的非在册链接补前缀（fixHui）——archive-v1 与
-/// archive-withdrawn 两栏都补（JS LOC_PREFIX 同款）
+/// 「回哪条/状态」列的非在册链接补前缀（fixHui）——archive-v1、archive-v2.2 与
+/// archive-withdrawn 三栏都补（JS LOC_PREFIX 同款）
 fn fix_hui(cell: &str, prefixed: &[(&str, &str)]) -> String {
     let mut out = cell.to_string();
     for (n, p) in prefixed {
@@ -422,7 +423,7 @@ pub struct GenOutput {
     pub index_text: String,
     pub rows: usize,
     pub active: usize,
-    /// 仅 archive-v1 栏（撤回栏单列，不计入 9.0「N 封信」口径）
+    /// archive-v1 + archive-v2.2 两归档栏合计（撤回栏单列，不计入 9.0「N 封信」口径）
     pub archive: usize,
     /// 撤回栏（archive-withdrawn/）件数——物理在册可审计，但不计 9.0 计数
     /// （口径 = 在册 + 归档；契约 §八 第 9 条补注⑥）

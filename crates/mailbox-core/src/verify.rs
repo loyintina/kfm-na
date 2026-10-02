@@ -18,8 +18,10 @@ const LEGACY_FIELDS: [&str; 7] = ["日期", "致", "流型", "预期表态方", 
 #[derive(Debug, Clone)]
 pub struct LetterText {
     pub file: String,
-    /// "active" | "archive-v1" | "withdrawn"（archive-withdrawn/ 撤回栏：
-    /// 不参与执法，但孤儿判据认这一栏——契约 §八 第 9 条《撤回票》）
+    /// "active" | "archive-v1" | "archive-v2.2" | "withdrawn"
+    /// （archive-withdrawn/ 撤回栏：不参与执法，但孤儿判据认这一栏——契约 §八
+    /// 第 9 条《撤回票》；archive-v2.2 吸收栏：契约 §九《复信吸收例外》，
+    /// 票仍现行、照常参与执法，只换位置——JS ARCHIVE_V22 同款）
     pub dir: String,
     pub text: String,
 }
@@ -93,7 +95,14 @@ pub fn has_placeholder(s: &str) -> bool {
 // 令牌与台账咬合（两纪元共用）
 // ---------------------------------------------------------------
 
-fn check_token_book(d: &mut Diags, ledger: &Ledger, f: &str, text: &str, expect_no: Option<&str>) {
+fn check_token_book(
+    d: &mut Diags,
+    ledger: &Ledger,
+    f: &str,
+    dir: &str,
+    text: &str,
+    expect_no: Option<&str>,
+) {
     let Some(tm) = token::find_token(text) else {
         d.errs.push(format!(
             "b. 缺令牌：{f} 没有 LETTER-TOKEN v2 行——本信未由 new-letter.mjs 签发（水印即票据）"
@@ -115,7 +124,19 @@ fn check_token_book(d: &mut Diags, ledger: &Ledger, f: &str, text: &str, expect_
         ));
         return;
     };
-    if rec.file.as_deref() != Some(f) {
+    // 台账 file 两态都认：裸名 / 栏前缀名（JS okFiles = bar ? [f, bar/f] : [f]
+    // 同款——BAR-223：吸收件登记的就是 "archive-v2.2/<裸名>"）
+    let bar = match dir {
+        "active" => None,
+        "withdrawn" => Some("archive-withdrawn"),
+        d => Some(d),
+    };
+    let file_ok = match (rec.file.as_deref(), bar) {
+        (Some(rf), Some(bar)) => rf == f || rf == format!("{bar}/{f}"),
+        (Some(rf), None) => rf == f,
+        (None, _) => false,
+    };
+    if !file_ok {
         d.errs.push(format!(
             "c. 台账 file 与实际不符：台账={} 实际={f}（票据被套用或改名未换票）",
             rec.file.as_deref().unwrap_or("")
@@ -240,7 +261,7 @@ pub fn verify_book(b: &BookCheck) -> Diags {
                     seen_no.insert(n.clone(), f.to_string());
                 }
             }
-            check_token_book(&mut d, &ledger, f, text, full_no.as_deref());
+            check_token_book(&mut d, &ledger, f, &l.dir, text, full_no.as_deref());
 
             let h = parse_header(text, &V21_FIELDS);
             let miss: Vec<&str> = ["日期", "从", "致", "复", "状态"]
@@ -428,7 +449,7 @@ pub fn verify_book(b: &BookCheck) -> Diags {
                 }
             }
         }
-        check_token_book(&mut d, &ledger, f, text, no.as_deref());
+        check_token_book(&mut d, &ledger, f, &l.dir, text, no.as_deref());
 
         let head = parse_header(text, &LEGACY_FIELDS);
         for k in ["预期表态方", "收敛判据", "状态"] {
@@ -475,10 +496,15 @@ pub fn verify_book(b: &BookCheck) -> Diags {
         }
     }
 
-    // e. 孤儿票据（台账有、文件无）——位置认三栏：在册 / archive-v1 /
-    // archive-withdrawn（契约 §八 第 9 条：撤回件的 file 指向撤回栏，判据不认
-    // 这个位置就会误报「file 不存在」）。反向也钉死：现行票的 file 落在撤回栏
-    // ＝「移了档没撤票」的半状态，照红（撤回缺第 4 步）
+    // e. 孤儿票据（台账有、文件无）——位置认四栏：在册 / archive-v1 /
+    // archive-v2.2 / archive-withdrawn（契约 §八 第 9 条：撤回件的 file 指向
+    // 撤回栏，判据不认这个位置就会误报「file 不存在」；契约 §九：吸收件的
+    // file 指向 archive-v2.2 栏，票仍现行——不认就 25+ 张孤儿假红，na 册
+    // 2026-10-02 吸收 62 封实证）。反向也钉死：现行票的 file 落在撤回栏
+    // ＝「移了档没撤票」的半状态，照红（撤回缺第 4 步）。
+    // **台账 file 有两态：裸文件名 / 带栏前缀**（吸收登记 "archive-v2.2/x.md"）
+    // ——JS bookHas = existsSync(join(栏, file)) 路径拼接天然两态都认
+    // （join(INBOX,"archive-v2.2/x") 同命中），Rust 侧照此建路径形态集合
     let active_files: HashSet<&str> = b
         .letters
         .iter()
@@ -491,22 +517,48 @@ pub fn verify_book(b: &BookCheck) -> Diags {
         .filter(|l| l.dir == "archive-v1")
         .map(|l| l.file.as_str())
         .collect();
+    let archive_v22_files: HashSet<&str> = b
+        .letters
+        .iter()
+        .filter(|l| l.dir == "archive-v2.2")
+        .map(|l| l.file.as_str())
+        .collect();
     let withdrawn_files: HashSet<&str> = b
         .letters
         .iter()
         .filter(|l| l.dir == "withdrawn")
         .map(|l| l.file.as_str())
         .collect();
+    // live = 现行票的合法落点三栏（在册∪archive-v1∪archive-v2.2）的路径形态
+    let live_paths: HashSet<String> = b
+        .letters
+        .iter()
+        .filter(|l| l.dir != "withdrawn")
+        .map(|l| match l.dir.as_str() {
+            "active" => l.file.clone(),
+            d => format!("{d}/{}", l.file),
+        })
+        .collect();
+    let withdrawn_paths: HashSet<String> = withdrawn_files
+        .iter()
+        .map(|f| format!("archive-withdrawn/{f}"))
+        .collect();
+    // **台账 file 有两态：裸文件名 / 带栏前缀**（吸收登记 "archive-v2.2/x.md"）
+    // ——JS bookHas = [四栏].some(existsSync(join(栏, file)))：对每个栏目录都
+    // join 试一次——裸名靠栏前缀补全命中、带前缀名靠在册根 join 直通命中，
+    // 两态都认。Rust 侧同构 = 路径集合 P + 栏前缀候选求交
     let book_has = |name: &str| {
         !name.is_empty()
-            && (active_files.contains(name)
-                || archive_files.contains(name)
-                || withdrawn_files.contains(name))
+            && (live_paths.contains(name)
+                || withdrawn_paths.contains(name)
+                || live_paths.contains(&format!("archive-v1/{name}"))
+                || live_paths.contains(&format!("archive-v2.2/{name}"))
+                || withdrawn_paths.contains(&format!("archive-withdrawn/{name}")))
     };
     // 撤回栏防重完整性（check-agent-inbox 同制）：同一封信不得同时在撤回栏与
     // 在册/归档栏（撤回用 git mv，一件只落一处）
     for f in &withdrawn_files {
-        if active_files.contains(f) || archive_files.contains(f) {
+        if active_files.contains(f) || archive_files.contains(f) || archive_v22_files.contains(f) {
             d.errs.push(format!(
                 "台账完整性：{f} 同时在撤回栏（archive-withdrawn/）与在册/归档栏出现——撤回用 git mv，不复制"
             ));
@@ -514,17 +566,22 @@ pub fn verify_book(b: &BookCheck) -> Diags {
     }
     for t in &ledger.current {
         let tf = t.file.as_deref().unwrap_or("");
-        if active_files.contains(tf) || archive_files.contains(tf) {
+        // live = [在册, archive-v1, archive-v2.2].some(join(栏, tf) ∈ P)
+        // （JS live 判据同款——撤回栏不在其中，落撤回栏 ≠ live）
+        if live_paths.contains(tf)
+            || live_paths.contains(&format!("archive-v1/{tf}"))
+            || live_paths.contains(&format!("archive-v2.2/{tf}"))
+        {
             continue;
         }
-        if withdrawn_files.contains(tf) {
+        if withdrawn_paths.contains(&format!("archive-withdrawn/{tf}")) {
             d.errs.push(format!(
                 "e. 半状态：no={} 现行票未撤，但 file={tf} 已在 archive-withdrawn/——撤回缺第 4 步（给该票记 revokedAt＋revokeReason，契约 §八 第 9 条④）",
                 t.no
             ));
         } else {
             d.errs.push(format!(
-                "e. 孤儿票据：no={} 登记的 file={tf} 在本册三栏（在册/archive-v1/archive-withdrawn）均不存在（改名未换票？）",
+                "e. 孤儿票据：no={} 登记的 file={tf} 在本册四栏（在册/archive-v1/archive-v2.2/archive-withdrawn）均不存在（改名未换票？）",
                 t.no
             ));
         }
@@ -566,7 +623,7 @@ pub fn verify_book(b: &BookCheck) -> Diags {
         let tf = r.file.as_deref().unwrap_or("");
         if !book_has(tf) {
             d.errs.push(format!(
-                "e. 孤儿票据（撤回票）：no={} 登记的 file={tf} 在本册三栏均不存在——撤回只移档不删（契约 §八 第 9 条①）",
+                "e. 孤儿票据（撤回票）：no={} 登记的 file={tf} 在本册四栏均不存在——撤回只移档不删（契约 §八 第 9 条①）",
                 r.no
             ));
         }

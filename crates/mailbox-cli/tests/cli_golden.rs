@@ -436,6 +436,83 @@ fn verify_book_sweep() {
 }
 
 // ---------------------------------------------------------------
+// archive-v2.2 吸收栏（BAR-223，契约 §九《复信吸收例外》+ §十一第 9 行 +
+// MAIN0106 白露裁决②补栏）：票仍现行、文件移入 archive-v2.2/ →
+// verify 孤儿票据判据须认这栏（不认 = 25+ 张吸收票假红，na 册 2026-10-02
+// 吸收 62 封实证）；gen 索引行 dir 落 "archive-v2.2"、README 台账链接补
+// archive-v2.2/ 前缀；活信清单只收在册，吸收件不进。
+// 变异方向：load_letters 摘 v2.2 栏 → verify 孤儿红＋索引无 v2.2 行；
+// loc_prefix 摘 v2.2 arm → 台账链接缺前缀红；撤回栏式免执法误套吸收栏 →
+// 改坏 v2.2 信 fp 不红（本钉第 4 幕咬）
+// ---------------------------------------------------------------
+#[test]
+fn verify_gen_archive_v22() {
+    let d = setup_verified_book("v22");
+    let mb = d.to_str().unwrap().to_string();
+    // 第 1 幕：0004（票现行）移入 archive-v2.2/ —— 吸收是搬家不是结案
+    let v22 = d.join("archive-v2.2");
+    fs::create_dir_all(&v22).unwrap();
+    let letter4 = "0004号白露致研究部清和的通报.md";
+    fs::rename(d.join(letter4), v22.join(letter4)).unwrap();
+    // 第 2 幕：verify 全册绿——孤儿票据判据认吸收栏（摘栏变异在此红）
+    let out = run(&["verify", "--mailbox", &mb, "--roster", ROSTER]);
+    assert_ok(&out, "verify 全册（0004 在 archive-v2.2，票现行）");
+    // 第 2b 幕：台账 file 带栏前缀形态（JS bookHas = existsSync(join(栏,file))
+    // 两态都认；na 册 62 张吸收票实证登记的就是 "archive-v2.2/x.md"）——
+    // 把 0004 的台账 file 改为带前缀，verify 仍绿（裸名集合比对变异在此红）
+    let tokens_path = d.join("letter-tokens.jsonl");
+    let tokens = fs::read_to_string(&tokens_path).unwrap();
+    let tokens_v22 = tokens.replace(
+        &format!("\"file\":\"{letter4}\""),
+        &format!("\"file\":\"archive-v2.2/{letter4}\""),
+    );
+    assert!(tokens_v22 != tokens, "夹具前提：0004 台账行应可改写");
+    fs::write(&tokens_path, tokens_v22).unwrap();
+    let out = run(&["verify", "--mailbox", &mb, "--roster", ROSTER]);
+    assert_ok(&out, "verify 全册（台账 file 带 archive-v2.2/ 前缀）");
+    // 第 3 幕：gen——索引行 dir 落 archive-v2.2、台账链接补前缀、活信清单不收
+    // （gen 需 README 两区段标记，夹具补最小 README）
+    fs::write(
+        d.join("README.md"),
+        "# 夹具册\n\n<!-- gen:pending:start -->\n<!-- gen:pending:end -->\n\n<!-- gen:agent-inbox:start -->\n<!-- gen:agent-inbox:end -->\n",
+    )
+    .unwrap();
+    let out = run(&["gen", "--mailbox", &mb, "--roster", ROSTER]);
+    assert_ok(&out, "gen 回写（含 v2.2 行）");
+    let index = fs::read_to_string(d.join("letters-index.jsonl")).unwrap();
+    assert!(
+        index.contains("\"dir\":\"archive-v2.2\""),
+        "索引应有 archive-v2.2 行：{index}"
+    );
+    let readme = fs::read_to_string(d.join("README.md")).unwrap();
+    assert!(
+        readme.contains("](archive-v2.2/0004号白露致研究部清和的通报.md)"),
+        "台账链接应补 archive-v2.2/ 前缀：{readme}"
+    );
+    let pending = readme
+        .split("<!-- gen:pending:start -->")
+        .nth(1)
+        .and_then(|s| s.split("<!-- gen:pending:end -->").next())
+        .unwrap_or("");
+    assert!(
+        !pending.contains("0004号白露致研究部清和"),
+        "吸收件不进活信清单：{pending}"
+    );
+    // 第 4 幕：吸收栏照常执法（≠撤回栏免执法）——改坏 v2.2 信的 fp 照红
+    let text = fs::read_to_string(v22.join(letter4)).unwrap();
+    let tok_line = text
+        .lines()
+        .find(|l| l.contains("LETTER-TOKEN"))
+        .expect("0004 应带令牌行")
+        .to_string();
+    let bad = text.replacen(&tok_line, &tok_line.replacen("fp=", "fp=00", 1), 1);
+    fs::write(v22.join(letter4), bad).unwrap();
+    let out = run(&["verify", "--mailbox", &mb, "--roster", ROSTER]);
+    assert_fail(&out, "吸收栏信 fp 被改必须照红（吸收栏不免执法）");
+    let _ = fs::remove_dir_all(&d);
+}
+
+// ---------------------------------------------------------------
 // reticket：改名换票（契约 §八；票面对主册 0016 换票行形制）
 // ---------------------------------------------------------------
 
