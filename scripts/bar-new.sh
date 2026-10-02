@@ -142,7 +142,12 @@ if [ "${BAR_NEW_NO_LETTER:-}" != "1" ]; then
     grep -q '（待填' "$path" && { echo "占位未填尽: $path" >&2; exit 1; }
     "$CLI" verify --mailbox "$MAILBOX" "$path" >/dev/null
     "$CLI" gen --mailbox "$MAILBOX" >/dev/null
-    if [ "$MAILBOX" = "$DEFAULT_MAILBOX" ] && [ -d "$MAILBOX/.git" ]; then
+    # BAR-226：册探测改用 git rev-parse——na 册并入设施仓（90-信箱）后
+    # .git 在设施仓根、册子目录里无字面 .git 目录，旧闸 `[ -d "$MAILBOX/.git" ]`
+    # 恒假 → 追踪信开了不落盘、静默漂流（0154/0155 实证）。rev-parse 沿父目录
+    # 找仓，独立册仓与设施仓子目录两形态都认；git add 的 pathspec 相对 cwd
+    # （册目录）解析、commit 落所属仓，两形态行为一致。
+    if [ "$MAILBOX" = "$DEFAULT_MAILBOX" ] && git -C "$MAILBOX" rev-parse --git-dir >/dev/null 2>&1; then
         (cd "$MAILBOX" && git add "$file" README.md letters-index.jsonl letter-tokens.jsonl \
             && git -c user.name=kfm-na -c user.email=na@kfm.local commit -q \
                -m "feat(信箱): $LETTER BAR-$NEXT 追踪信开卷（$FUNC$NAME：$TITLE）" </dev/null)

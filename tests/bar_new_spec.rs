@@ -29,3 +29,33 @@ fn spec_bar217_default_mailbox_同归一() {
         .expect("自动 commit 闸比较行");
     assert!(norm < cmp, "DEFAULT 归一必须排在自动 commit 闸比较之前");
 }
+
+/// BAR-226：自动 commit 闸的「册在仓」探测必须走 git rev-parse——
+/// na 册并入设施仓（/root/90-信箱 单仓两册）后 .git 在设施仓根、册子目录
+/// 无字面 .git 目录，旧闸 `[ -d "$MAILBOX/.git" ]` 恒假 → 追踪信开了不落盘
+/// 静默漂流（0154 领号后 untracked 31 分钟、0155 至发现时仍漂流——若非
+/// BAR-223 抢修时手补提交即静默丢数据）。rev-parse 沿父目录找仓，独立册仓
+/// 与设施仓子目录两形态都认。
+/// 变异留档：闸改回字面 .git 探测 → 本钉双红（cp 备份复原复跑绿）。
+#[test]
+fn spec_bar226_自动commit闸_rev_parse探仓() {
+    let s = include_str!("../scripts/bar-new.sh");
+    assert!(
+        s.contains("git -C \"$MAILBOX\" rev-parse --git-dir >/dev/null 2>&1"),
+        "自动 commit 闸缺 git -C rev-parse 探仓（BAR-226 本体）"
+    );
+    // 探测必须与比较同闸（探了不用等于没修）：闸行同时含两条件；
+    // 负向咬收窄到闸行（注释引旧闸形态记录病灶是合法的，全文件 grep 误伤）
+    let gate = s
+        .lines()
+        .find(|l| l.contains("[ \"$MAILBOX\" = \"$DEFAULT_MAILBOX\" ]"))
+        .expect("自动 commit 闸行");
+    assert!(
+        gate.contains("rev-parse --git-dir"),
+        "rev-parse 探测必须与 MAILBOX==DEFAULT 比较同在一闸"
+    );
+    assert!(
+        !gate.contains("[ -d \"$MAILBOX/.git\" ]"),
+        "闸行字面 .git 目录探测回潮——册并入设施仓后恒假 = 追踪信静默漂流"
+    );
+}
