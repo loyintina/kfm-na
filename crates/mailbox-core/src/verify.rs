@@ -264,13 +264,15 @@ pub fn verify_book(b: &BookCheck) -> Diags {
             check_token_book(&mut d, &ledger, f, &l.dir, text, full_no.as_deref());
 
             let h = parse_header(text, &V21_FIELDS);
-            let miss: Vec<&str> = ["日期", "从", "致", "复", "状态"]
+            // BAR-227：必填追 v2.2——「复」自 v2.2 起不再必填（契约 §三，JS
+            // check-letter-token.mjs V21_REQUIRED 已删）；写了仍照校格式（见下「复」臂）。
+            let miss: Vec<&str> = ["日期", "从", "致", "状态"]
                 .into_iter()
                 .filter(|k| header_get(&h, k).is_none())
                 .collect();
             if !miss.is_empty() {
                 d.errs.push(format!(
-                    "a. 信封缺字段：{f} 缺 {}——v2.1 必填 日期/从/致/复/状态（编号可省、以文件名为准）（⛳ MECH-FLOW-15）",
+                    "a. 信封缺字段：{f} 缺 {}——v2.2 必填 5 项＝日期/从/致/状态（「复」v2.2 起不再必填；编号以文件名为准）（⛳ MECH-FLOW-15）",
                     miss.join("、")
                 ));
             }
@@ -698,13 +700,14 @@ pub fn verify_single(
                 .map(|no| format!("{}{}", p.sorting.as_deref().unwrap_or(""), no));
         check_token(&mut d, full_no.as_deref());
         let h = parse_header(text, &V21_FIELDS);
-        let miss: Vec<&str> = ["日期", "从", "致", "复", "状态"]
+        // BAR-227：必填追 v2.2——「复」自 v2.2 起不再必填（与全册臂同条款）。
+        let miss: Vec<&str> = ["日期", "从", "致", "状态"]
             .into_iter()
             .filter(|k| header_get(&h, k).is_none())
             .collect();
         if !miss.is_empty() {
             d.errs.push(format!(
-                "信封缺字段：{}（v2.1 必填 日期/从/致/复/状态；编号可省、以文件名为准）",
+                "信封缺字段：{}（v2.2 必填 5 项＝日期/从/致/状态；「复」v2.2 起不再必填；编号可省、以文件名为准）",
                 miss.join("、")
             ));
         }

@@ -14,7 +14,9 @@ pub const MARK_END: &str = "<!-- gen:agent-inbox:end -->";
 pub const PENDING_START: &str = "<!-- gen:pending:start -->";
 pub const PENDING_END: &str = "<!-- gen:pending:end -->";
 
-const V21_NEED: [&str; 5] = ["日期", "从", "致", "复", "状态"];
+// BAR-227：必填追 v2.2——「复」自 v2.2 起不再必填（JS gen-agent-inbox.mjs 已删）；
+// HEADER_NAMES 保留「复」＝写了仍解析校验，与 verify.rs 同条款。
+const V21_NEED: [&str; 4] = ["日期", "从", "致", "状态"];
 const LEGACY_NEED: [&str; 7] = ["日期", "致", "流型", "预期表态方", "收敛判据", "回", "状态"];
 const HEADER_NAMES: [&str; 10] = [
     "编号",
@@ -89,7 +91,7 @@ fn build_rows<'a>(letters: &'a [LetterText], errors: &mut Vec<String>) -> Vec<Ro
         if !miss.is_empty() {
             errors.push(if v21 {
                 format!(
-                    "{f} 信封缺字段：{}——v2.1 必填 日期/从/致/复/状态（编号可省）（见 mailbox-contract-v2.1.md §三）",
+                    "{f} 信封缺字段：{}——v2.2 必填 5 项＝日期/从/致/状态（「复」v2.2 起不再必填；编号可省）（见 mailbox-contract-v2.2.md §三）",
                     miss.join("、")
                 )
             } else {
