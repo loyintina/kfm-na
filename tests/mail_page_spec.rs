@@ -244,3 +244,21 @@ fn spec_bar214_页几何与全局句柄() {
     assert!(open_key().is_none());
     assert!(take_dirty(), "收页必立脏位");
 }
+
+/// 钉⑧（BAR-220）：页存活闸状态机——开=活 / 收=死 / 重开=活。
+/// 烘焙槽凭此闸退场滑出期的空页重烘（close 后 sig 归零必异，
+/// 无闸 = 空页重烘恰撞动画帧 = 半途卡）。变异咬：is_open 恒 true
+/// → 收页断言红；恒 false → 开页断言红
+#[test]
+fn spec_bar220_页存活闸状态机() {
+    use kfm_na::mail_feed::MailKey;
+    close(); // 防前题残态
+    assert!(!is_open(), "收态 = 死");
+    open(MailKey::NaBook);
+    assert!(is_open(), "开态 = 活");
+    close();
+    assert!(!is_open(), "收后 = 死（退场滑出期烘焙闸落）");
+    open(MailKey::NaBook);
+    assert!(is_open(), "重开 = 活（烘焙闸起）");
+    close();
+}
