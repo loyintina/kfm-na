@@ -27,6 +27,11 @@ use crate::ui::dual_pool::PoolRect;
 use crate::ui::grid_text::grid_wrap;
 
 // ---- 几何常量（网格制；涂装按实例格同尺换算）----
+//
+// BAR-221：本页几何吃实例格（pinch 联动）——各 const 是默认格
+// (CELL_W, CELL_H) 下的值，留作同源对表基准；运行期几何一律走
+// `metrics_of(cell)` 现算（页态存当前格，pinch/涂装两路喂，见
+// note_cell）。考题钉：默认格 metrics == 本表逐值；实例格变 → 几何变。
 
 /// 条目卡内上下留白 1 格
 pub const ITEM_PAD_V: u32 = CELL_H;
@@ -45,6 +50,45 @@ pub const H1_LH: u32 = 90;
 pub const H1_BLOCK_H: u32 = dp::HU + H1_LH + dp::HU;
 /// 标题栏引用缩进（格）：左竖线 + 1 格缩进（md 引用同尺）
 pub const TITLE_INDENT_CELLS: u32 = 2;
+
+/// 实例格几何账（BAR-221）：一切吃格几何量的运行期唯一源。
+/// 公式 = 上方 const 定义的参数化（1 格 = cell、半格 = cell/2、
+/// 行高 = line_h_grid(cell_h, scale)）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Metrics {
+    pub cell_w: u32,
+    pub cell_h: u32,
+    pub item_pad_v: u32,
+    pub item_pad_h: u32,
+    pub row_gap: u32,
+    pub item_gap: u32,
+    pub body_lh: u32,
+    pub h1_lh: u32,
+    pub h1_block_h: u32,
+}
+
+pub fn metrics_of(cell: (u32, u32)) -> Metrics {
+    let (cw, ch) = (cell.0.max(1), cell.1.max(2));
+    let hu = ch / 2;
+    let body_lh = crate::ui::md_layout::line_h_grid(ch, 1.0);
+    let h1_lh = crate::ui::md_layout::line_h_grid(ch, dp::H1_SCALE);
+    Metrics {
+        cell_w: cw,
+        cell_h: ch,
+        item_pad_v: ch,
+        item_pad_h: cw,
+        row_gap: hu,
+        item_gap: ch,
+        body_lh,
+        h1_lh,
+        h1_block_h: hu + h1_lh + hu,
+    }
+}
+
+/// 默认格几何账（考题/回退路径用）
+pub fn default_metrics() -> Metrics {
+    metrics_of((CELL_W, CELL_H))
+}
 
 /// 摘要占位（懒加载两态词面，沿用 mail_list 旧约）
 pub const SUMMARY_PENDING: &str = "（摘要待取）";
@@ -107,9 +151,9 @@ pub struct ItemLay {
     pub sum_y: u32,
 }
 
-/// 条目文宽（格）：卡宽 − 左右内缩，按 CELL_W 折算
-pub fn text_cells_of(item_w: u32) -> u32 {
-    item_w.saturating_sub(ITEM_PAD_H * 2) / CELL_W
+/// 条目文宽（格）：卡宽 − 左右内缩，按实例格宽折算（BAR-221）
+pub fn text_cells_of(item_w: u32, m: &Metrics) -> u32 {
+    item_w.saturating_sub(m.item_pad_h * 2) / m.cell_w
 }
 
 /// 显示标题（缺字头标题回落信名——涂装与排版同一把尺，单源）
@@ -122,11 +166,11 @@ pub fn display_title(e: &MailEntry) -> &str {
 }
 
 /// 排一信（纯函数）：text_cells = 卡内文宽（格）。折行宽保底 4 格防
-/// 零宽死循；行数下限各栏 1 行。
-pub fn lay_item(e: &MailEntry, top: i64, text_cells: u32) -> ItemLay {
+/// 零宽死循；行数下限各栏 1 行。几何吃 metrics（实例格，BAR-221）。
+pub fn lay_item(e: &MailEntry, top: i64, text_cells: u32, m: &Metrics) -> ItemLay {
     let recipients = split_recipients(&e.to);
     let n_rcp = recipients.len().max(1) as u32;
-    let meta_h = H1_BLOCK_H.max(n_rcp * BODY_LH);
+    let meta_h = m.h1_block_h.max(n_rcp * m.body_lh);
     let title_cells = text_cells.saturating_sub(TITLE_INDENT_CELLS).max(4);
     let body_cells = text_cells.max(4);
     let mut title_lines = grid_wrap(display_title(e), title_cells);
@@ -142,10 +186,10 @@ pub fn lay_item(e: &MailEntry, top: i64, text_cells: u32) -> ItemLay {
     if sum_lines.is_empty() {
         sum_lines.push((0, 0));
     }
-    let meta_y = ITEM_PAD_V;
-    let title_y = meta_y + meta_h + ROW_GAP;
-    let sum_y = title_y + title_lines.len() as u32 * BODY_LH + ROW_GAP;
-    let h = sum_y + sum_lines.len() as u32 * BODY_LH + ITEM_PAD_V;
+    let meta_y = m.item_pad_v;
+    let title_y = meta_y + meta_h + m.row_gap;
+    let sum_y = title_y + title_lines.len() as u32 * m.body_lh + m.row_gap;
+    let h = sum_y + sum_lines.len() as u32 * m.body_lh + m.item_pad_v;
     ItemLay {
         h,
         top,
@@ -160,13 +204,13 @@ pub fn lay_item(e: &MailEntry, top: i64, text_cells: u32) -> ItemLay {
 }
 
 /// 整册排版（前缀和流水）：oldest_first 序，最新在底
-pub fn lay_items(entries: &[MailEntry], text_cells: u32) -> Vec<ItemLay> {
+pub fn lay_items(entries: &[MailEntry], text_cells: u32, m: &Metrics) -> Vec<ItemLay> {
     let mut top = 0i64;
     entries
         .iter()
         .map(|e| {
-            let lay = lay_item(e, top, text_cells);
-            top += i64::from(lay.h) + i64::from(ITEM_GAP);
+            let lay = lay_item(e, top, text_cells, m);
+            top += i64::from(lay.h) + i64::from(m.item_gap);
             lay
         })
         .collect()
@@ -285,9 +329,11 @@ pub struct MailGeom {
 pub fn mail_geom(w: u32, h: u32, bottom_inset: u32) -> MailGeom {
     let (ox, oy) = crate::ui::tab_bar::content_origin();
     let x0 = i64::from(ox);
+    // BAR-221：右缘让位吃实例格宽（pinch 联动；页态存格，见 note_cell）
+    let cell_w = cur_cell().0;
     let x1 = i64::from(w)
         - i64::from(
-            crate::termview::AI_PAGE_FRAME_MARGIN + crate::termview::AI_PAGE_FRAME_W + CELL_W,
+            crate::termview::AI_PAGE_FRAME_MARGIN + crate::termview::AI_PAGE_FRAME_W + cell_w,
         );
     let bar_y0 = i64::from(oy);
     let bar_y1 = bar_y0 + TOP_BAR_H;
@@ -326,6 +372,9 @@ pub struct MailPageView {
     lays: Vec<ItemLay>,
     viewport_h: i64,
     epoch: u64,
+    /// 当前实例格（BAR-221：pinch 联动——pinch 应用臂与涂装两路喂，
+    /// 几何/排版全吃它；默认格零漂移）
+    cell: (u32, u32),
 }
 
 impl MailPageView {
@@ -337,6 +386,7 @@ impl MailPageView {
             lays: Vec::new(),
             viewport_h: 0,
             epoch: 0,
+            cell: (CELL_W, CELL_H),
         }
     }
 
@@ -354,8 +404,14 @@ impl MailPageView {
     }
 
     /// 排版+布局写回（壳烘焙轮喂）：追底态恒贴底；内容缩水钳回上限
-    pub fn sync_items(&mut self, entries: &[MailEntry], text_cells: u32, viewport_h: i64) {
-        self.lays = lay_items(entries, text_cells);
+    pub fn sync_items(
+        &mut self,
+        entries: &[MailEntry],
+        text_cells: u32,
+        viewport_h: i64,
+        m: &Metrics,
+    ) {
+        self.lays = lay_items(entries, text_cells, m);
         self.viewport_h = viewport_h;
         let max = scroll_max(&self.lays, viewport_h);
         if self.follow {
@@ -424,9 +480,36 @@ pub fn take_dirty() -> bool {
     DIRTY.swap(false, std::sync::atomic::Ordering::Relaxed)
 }
 
-pub fn sync_items(entries: &[MailEntry], text_cells: u32, viewport_h: i64) {
+/// 当前实例格（页关着 = 默认格回退；BAR-221）
+pub fn cur_cell() -> (u32, u32) {
+    VIEW.lock()
+        .unwrap()
+        .as_ref()
+        .map(|v| v.cell)
+        .unwrap_or((CELL_W, CELL_H))
+}
+
+/// 当前几何账（排版/命中/涂装共用同一份——眼手同尺）
+pub fn cur_metrics() -> Metrics {
+    metrics_of(cur_cell())
+}
+
+/// 实例格写回（pinch 应用臂 + 涂装两路喂）：变了才记脏（sig 鬼影纪律）。
+/// 页关着 = 无账可记，开页默认格起步、涂装首轮即喂正
+pub fn note_cell(cell: (u32, u32)) {
+    let mut g = VIEW.lock().unwrap();
+    if let Some(v) = g.as_mut()
+        && v.cell != cell
+    {
+        v.cell = cell;
+        drop(g);
+        bump_dirty();
+    }
+}
+
+pub fn sync_items(entries: &[MailEntry], text_cells: u32, viewport_h: i64, m: &Metrics) {
     if let Some(v) = VIEW.lock().unwrap().as_mut() {
-        v.sync_items(entries, text_cells, viewport_h);
+        v.sync_items(entries, text_cells, viewport_h, m);
     }
 }
 
