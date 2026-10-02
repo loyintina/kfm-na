@@ -280,11 +280,12 @@ impl TermView {
                 }
                 BlockKind::Sign => {} // demo 页专属，解析器永不产出
                 BlockKind::Table => {
-                    // BAR-218 三档：Fit/Shrink = 表头淡彩 slot4 + 3px 下划
-                    // accent 渐变 + 内容行白 0.75（列几何排版层存档，格内已
-                    // 折行）；Cards = 每行一卡（值框同配方）标题淡彩 slot0
-                    // 双绘 + 字段行（Bold 字段名前缀走段排）；DefList =
-                    // 名（slot0 双绘）+ 值（缩进 1 格白 0.75）无框
+                    // BAR-218 三档：Fit/Shrink = 完整横竖线网格表（2px accent
+                    // 渐变横竖线+按宽度屏幕左右居中，2026-10-02 用户打回复做）
+                    // + 表头淡彩 slot4 + 3px 下划 + 内容行白 0.75（列几何排版
+                    // 层存档，格内已折行）；Cards = 每行一卡（值框同配方）
+                    // 标题淡彩 slot0 双绘 + 字段行（Bold 字段名前缀走段排）；
+                    // DefList = 名（slot0 双绘）+ 值（缩进 1 格白 0.75）无框
                     if let Some(t) = &b.table {
                         match t.tier {
                             crate::ui::md_layout::TableTier::Fit
@@ -312,7 +313,11 @@ impl TermView {
                                         );
                                     }
                                 }
-                                // 表头下划带：3px accent 渐变（带内居中）
+                                // 表头下划带：3px accent 渐变（带内居中；
+                                // 网格化后跨网格全宽，不再跨内容宽——
+                                // 大横线贯穿页面正是用户判不合格的观感）
+                                let gx0 = x0 + i64::from(t.grid_x);
+                                let gx1 = gx0 + i64::from(t.grid_w);
                                 let uy = by
                                     + i64::from(t.header.h)
                                     + (i64::from(dp::TABLE_ROW_PAD)
@@ -324,7 +329,7 @@ impl TermView {
                                     if ay < 0 || ay >= fh {
                                         continue;
                                     }
-                                    for ax in x0..content_r {
+                                    for ax in gx0..gx1 {
                                         if ax < 0 || ax >= fw {
                                             continue;
                                         }
@@ -348,6 +353,69 @@ impl TermView {
                                         }
                                     }
                                 }
+                                // 完整横竖线网格（2026-10-02 用户打回复做：
+                                // 单横线不合格）——2px accent 渐变：竖线 =
+                                // 左右外框+列分隔（列隙中点），横线 = 顶/
+                                // 行间分隔（行隙中点）/底（底垫中点）；
+                                // 表头下划 3px 上行已画，不重复
+                                let gl = i64::from(dp::TABLE_GRID_LINE);
+                                let gy_top = by;
+                                let gy_bot =
+                                    by + i64::from(t.grid_bot) + i64::from(dp::TABLE_ROW_PAD) / 2;
+                                let hline = |frame: &mut Frame<'_>, y: i64, xa: i64, xb: i64| {
+                                    for ay in
+                                        (y - gl / 2).max(clip.0)..(y - gl / 2 + gl).min(clip.1)
+                                    {
+                                        if ay < 0 || ay >= fh {
+                                            continue;
+                                        }
+                                        for ax in xa..xb {
+                                            if ax < 0 || ax >= fw {
+                                                continue;
+                                            }
+                                            let c = ring_gradient_rgb(
+                                                accent.c2, accent.c1, ax, ay, denom,
+                                            );
+                                            frame.blend_px(ax as u32, ay as u32, c, 160);
+                                        }
+                                    }
+                                };
+                                let vline = |frame: &mut Frame<'_>, x: i64| {
+                                    for ax in (x - gl / 2).max(gx0)..(x - gl / 2 + gl).min(gx1) {
+                                        if ax < 0 || ax >= fw {
+                                            continue;
+                                        }
+                                        for ay in gy_top.max(clip.0)..(gy_bot + gl / 2).min(clip.1)
+                                        {
+                                            if ay < 0 || ay >= fh {
+                                                continue;
+                                            }
+                                            let c = ring_gradient_rgb(
+                                                accent.c2, accent.c1, ax, ay, denom,
+                                            );
+                                            frame.blend_px(ax as u32, ay as u32, c, 160);
+                                        }
+                                    }
+                                };
+                                // 横线：顶 + 行间 + 底
+                                hline(frame, gy_top, gx0, gx1);
+                                for w in t.rows.windows(2) {
+                                    let sep = by
+                                        + i64::from(w[0].y + w[0].h)
+                                        + i64::from(dp::TABLE_ROW_PAD) / 2;
+                                    hline(frame, sep, gx0, gx1);
+                                }
+                                hline(frame, gy_bot, gx0, gx1);
+                                // 竖线：左外框 + 列分隔（列隙中点）+ 右外框
+                                vline(frame, gx0);
+                                for j in 0..t.col_x.len().saturating_sub(1) {
+                                    let mid = x0
+                                        + (i64::from(t.col_x[j] + t.col_w[j])
+                                            + i64::from(t.col_x[j + 1]))
+                                            / 2;
+                                    vline(frame, mid);
+                                }
+                                vline(frame, gx1 - 1);
                             }
                             crate::ui::md_layout::TableTier::Cards => {
                                 let inner_x = x0 + i64::from(dp::INDENT_W);
@@ -781,8 +849,8 @@ mod md_paint_smoke {
 
     #[test]
     fn spec_bar218_表格三档出墨() {
-        // Fit：表头下划带中线出墨（3px accent 渐变）
-        let md = "| A | B |\n|---|---|\n| x | y |";
+        // Fit：表头下划带中线出墨（3px accent 渐变，网格化后跨网格全宽）
+        let md = "| A | B |\n|---|---|\n| x | y |\n| p | q |";
         let (buf, lay) = paint(md, 600, 1200, 0, (0, 1200));
         let b = &lay.blocks[0];
         let t = b.table.as_ref().unwrap();
@@ -790,8 +858,41 @@ mod md_paint_smoke {
         assert!(ink(&buf, 600, 300, uy), "Fit 表头下划带出墨");
         // 表头文字出墨（淡彩 slot4）
         assert!(
-            (b.y..b.y + t.header.h).any(|y| (0..200).any(|x| ink(&buf, 600, x, y))),
+            (b.y..b.y + t.header.h).any(|y| (0..400).any(|x| ink(&buf, 600, x, y))),
             "表头文字带"
+        );
+        // 完整横竖线网格（2026-10-02 用户打回复做，单横线判不合格）：
+        // 顶/底横线、行间分隔线、左右外框与列分隔竖线逐一出墨
+        let gx0 = t.grid_x; // 网格左缘（相对块原点=相对文档原点）
+        let row_mid_y = b.y + t.rows[0].y + t.rows[0].h / 2;
+        let gy_bot = b.y + t.grid_bot + dp::TABLE_ROW_PAD / 2;
+        let sep_y = b.y + t.rows[0].y + t.rows[0].h + dp::TABLE_ROW_PAD / 2;
+        assert!(ink(&buf, 600, 300, b.y), "网格顶横线出墨");
+        assert!(ink(&buf, 600, 300, gy_bot), "网格底横线出墨");
+        assert!(ink(&buf, 600, 300, sep_y), "行间分隔横线出墨");
+        assert!(
+            ink(&buf, 600, gx0, row_mid_y) || ink(&buf, 600, gx0 + 1, row_mid_y),
+            "左外框竖线出墨"
+        );
+        let mid_x = (t.col_x[0] + t.col_w[0] + t.col_x[1]) / 2;
+        assert!(
+            ink(&buf, 600, mid_x, row_mid_y) || ink(&buf, 600, mid_x + 1, row_mid_y),
+            "列分隔竖线出墨（列隙中点）"
+        );
+        assert!(
+            ink(&buf, 600, gx0 + t.grid_w - 1, row_mid_y)
+                || ink(&buf, 600, gx0 + t.grid_w - 2, row_mid_y),
+            "右外框竖线出墨"
+        );
+        // 居中：网格左缘不许贴内容左缘（500 宽夹具网格仅百来像素宽）
+        assert!(t.grid_x > 0, "按宽度屏幕左右居中——摘居中此钉红");
+        // 网格线厚 = 宪法 token TABLE_GRID_LINE（2px：hline 以线位为中心
+        // 上下各让——底线落底垫中点，gy_bot 与 gy_bot−1 两行同墨；顶线
+        // 在文档顶会被画布缘裁半，不作厚度判据）
+        assert!(
+            ink(&buf, 600, 300, gy_bot) && ink(&buf, 600, 300, gy_bot - 1),
+            "底横线厚 TABLE_GRID_LINE={} px（薄一行此钉红）",
+            dp::TABLE_GRID_LINE
         );
         // Cards：窄宽 3 列长文本 → 每行一卡，卡框左边框出墨（值框同配方 3px）
         let md3 = "| h1 | h2 | h3 |\n|---|---|---|\n| tttttttttttttttttttt | vaaaaaaaaaaaaaaaaaaa | vbbbbbbbbbbbbbbbbbbbb |";

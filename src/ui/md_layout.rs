@@ -87,6 +87,15 @@ pub struct MdTableLay {
     /// Cards 档字段名（= 表头各列纯文本，表头溶成字段名不成卡）；
     /// 其余档空
     pub labels: Vec<String>,
+    /// 网格几何（BAR-218 打回复做 2026-10-02：完整横竖线表格+按宽度
+    /// 屏幕左右居中——Fit/Shrink 专属；降级两档恒 0 不用）：
+    /// grid_x = 网格左缘相对块原点（已含居中偏移），grid_w = 网格全宽
+    /// （列合计+列隙+两侧各半列隙外沿），grid_bot = 内容底（末行底；
+    /// 零内容行 = 表头带+下划带底）。col_x 已含 grid_x+半列隙——
+    /// 涂装侧文字坐标零改动
+    pub grid_x: u32,
+    pub grid_w: u32,
+    pub grid_bot: u32,
 }
 
 /// 一块的几何+内容（y/h 相对文档画布原点，行带咬实例半格网）
@@ -171,12 +180,15 @@ fn plain_text(spans: &[Span]) -> String {
 }
 
 /// 表格三档排版（BAR-218，用户 2026-10-01 拍板细则）：
-/// ①放得下（自然宽合计 + 列隙 ≤ 内容宽）= Fit 经典表格；
+/// ①放得下（自然宽合计 + 列隙 + 网格外沿 ≤ 内容宽）= Fit 经典表格；
 /// ②中等超宽 = Shrink 注水法按比例压缩（下限 TABLE_COL_MIN_CELLS=10 格，
 /// 压过下限不如换形态——用户：折出七八行的瘦高表不好看）+格内折行；
 /// ③极端超宽（全按下限都摆不下）= 降级：两列 → DefList 定义清单单块
 /// （题头溶解，逐行 名+值 竖排）；≥3 列 → Cards 每内容行一卡
 /// （表头溶成字段名，**表头行永不单独成卡**）。
+/// Fit/Shrink = 完整横竖线网格表 + 按宽度屏幕左右居中（2026-10-02 用户
+/// 打回复做：单横线不合格——页面已有分隔线，再来一条大横线观感差）：
+/// 网格外沿 = 列区两侧各伸半列隙；居中偏移 = (内容宽 − 网格宽)/2。
 /// 截断省略不做（BAR-206 判红：省略=信息丢失）。
 fn layout_table(
     header: &[Vec<Span>],
@@ -190,6 +202,9 @@ fn layout_table(
     let min_w = dp::TABLE_COL_MIN_CELLS as f32 * step;
     let avail = content_w_px as f32;
     let gaps = gap * ncol.saturating_sub(1) as f32;
+    // 网格外沿（左右各半列隙）：外框线不贴字
+    let margin = (gap / 2.0).round();
+    let grid_over = margin * 2.0;
     // 自然列宽 = 表头与各内容格的最大格步进宽（空列也占 1 格）
     let natural: Vec<f32> = (0..ncol)
         .map(|j| {
@@ -201,9 +216,9 @@ fn layout_table(
         })
         .collect();
     let need: f32 = natural.iter().sum::<f32>() + gaps;
-    let tier = if need <= avail {
+    let tier = if need + grid_over <= avail {
         TableTier::Fit
-    } else if min_w * ncol as f32 + gaps <= avail {
+    } else if min_w * ncol as f32 + gaps + grid_over <= avail {
         TableTier::Shrink
     } else if ncol == 2 {
         TableTier::DefList
@@ -212,7 +227,7 @@ fn layout_table(
     };
     match tier {
         TableTier::Fit | TableTier::Shrink => {
-            let budget = (avail - gaps).max(0.0);
+            let budget = (avail - gaps - grid_over).max(0.0);
             let mut col_wf = natural.clone();
             if tier == TableTier::Shrink {
                 // 注水法：触下限的列固定，余列按比例分剩余预算，
@@ -256,6 +271,17 @@ fn layout_table(
                     x += gap.round() as u32;
                 }
             }
+            // 网格化+居中（用户打回复做）：grid_w = 列区宽 + 两侧外沿；
+            // 居中偏移 ox = (内容宽 − 网格宽)/2；col_x 整体平移 ox+margin
+            // ——涂装侧文字坐标零改动
+            let table_w = x;
+            let m = margin as u32;
+            let grid_w = table_w + m * 2;
+            let ox = (content_w_px.saturating_sub(grid_w)) / 2;
+            for cx in col_x.iter_mut() {
+                *cx += ox + m;
+            }
+            let grid_x = ox;
             let wrap_row = |row: &[Vec<Span>]| -> (Vec<Vec<MdLine>>, u32) {
                 let mut cells = Vec::with_capacity(ncol);
                 let mut hmax = 1u32;
@@ -283,6 +309,9 @@ fn layout_table(
                 });
                 ry += rh + dp::TABLE_ROW_PAD;
             }
+            let grid_bot = rows_lay
+                .last()
+                .map_or(header_lay.h + dp::TABLE_ROW_PAD, |r| r.y + r.h);
             MdTableLay {
                 tier,
                 col_x,
@@ -290,6 +319,9 @@ fn layout_table(
                 header: header_lay,
                 rows: rows_lay,
                 labels: Vec::new(),
+                grid_x,
+                grid_w,
+                grid_bot,
             }
         }
         TableTier::Cards => {
@@ -334,6 +366,9 @@ fn layout_table(
                 },
                 rows: cards,
                 labels,
+                grid_x: 0,
+                grid_w: 0,
+                grid_bot: 0,
             }
         }
         TableTier::DefList => {
@@ -364,6 +399,9 @@ fn layout_table(
                 },
                 rows: entries,
                 labels: Vec::new(),
+                grid_x: 0,
+                grid_w: 0,
+                grid_bot: 0,
             }
         }
     }
@@ -558,6 +596,7 @@ pub fn layout_md(text: &str, content_w_px: u32, cell: (u32, u32)) -> MdLayout {
                 let (header, rows) = &col.tables[*i];
                 let t = layout_table(header, rows, content_w_px, body_step, body_lh);
                 // 块高 = 表头带 + 下划带（Fit/Shrink）+ 各行/各卡高 + 行隙
+                // （Fit/Shrink 网格化后再加底垫一档——网格底边线落在垫中）
                 let mut h = t.header.h;
                 if matches!(t.tier, TableTier::Fit | TableTier::Shrink) {
                     h += dp::TABLE_ROW_PAD; // 表头下划带
@@ -567,6 +606,9 @@ pub fn layout_md(text: &str, content_w_px: u32, cell: (u32, u32)) -> MdLayout {
                     if ri + 1 < t.rows.len() {
                         h += dp::TABLE_ROW_PAD;
                     }
+                }
+                if matches!(t.tier, TableTier::Fit | TableTier::Shrink) {
+                    h += dp::TABLE_ROW_PAD; // 网格底垫
                 }
                 if t.rows.is_empty() && matches!(t.tier, TableTier::Cards | TableTier::DefList) {
                     h = t.header.h.max(body_lh); // 零内容行不塌
