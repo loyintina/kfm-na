@@ -82,7 +82,7 @@
 | `src/ui/keybar.rs` | 1 | 1 | 0 | — |
 | `src/ui/link_card.rs` | 14 | 11 | 3 | set_lay_lines lay_lines_now card_h_now |
 | `src/ui/mail_card.rs` | 5 | 4 | 1 | N_ENTRIES |
-| `src/ui/mail_page.rs` | 42 | 42 | 0 | — |
+| `src/ui/mail_page.rs` | 43 | 43 | 0 | — |
 | `src/ui/md_layout.rs` | 5 | 5 | 0 | — |
 | `src/ui/md_parse.rs` | 2 | 2 | 0 | — |
 | `src/ui/modal.rs` | 32 | 31 | 1 | VEIL_DIM_ARGB |
@@ -91,7 +91,7 @@
 | `src/ui/parser_chain.rs` | 15 | 12 | 3 | COL_W_NUM COL_W_DEN window_of |
 | `src/ui/parser_page.rs` | 60 | 48 | 12 | COL_GAP DIVIDER_ZONE MAX_VISIBLE_LINES MIN_VISIBLE_LINES MODAL_CARD_W MODAL_PAD_V MODAL_GAP MODAL_BTN_GAP CONFIRM_LABELS cancel_confirm register_parser_page parser_page_handle |
 | `src/ui/prompt_bar.rs` | 6 | 5 | 1 | row_of |
-| `src/ui/reader_page.rs` | 25 | 23 | 2 | PROGRESS_H register_reader |
+| `src/ui/reader_page.rs` | 26 | 24 | 2 | PROGRESS_H register_reader |
 | `src/ui/seam.rs` | 34 | 34 | 0 | — |
 | `src/ui/stage.rs` | 7 | 7 | 0 | — |
 | `src/ui/svc_card.rs` | 13 | 12 | 1 | head_word |
