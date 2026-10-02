@@ -70,5 +70,18 @@ grep -q 'DEFAULT_MAILBOX="$(readlink -f "$DEFAULT_MAILBOX")"' scripts/bar-new.sh
     && { echo "  ✓ BAR-217 DEFAULT同归一"; pass=$((pass+1)); } \
     || { echo "  ✗ BAR-217 DEFAULT同归一（bar-new.sh 缺 DEFAULT_MAILBOX readlink 归一）"; fail=$((fail+1)); }
 
+# ⑧BAR-226 源码守卫：自动 commit 闸的册在仓探测必须用 git rev-parse——
+# 2026-10-02 病灶：na 册并入设施仓（90-信箱 单仓两册）后 .git 在设施仓根，
+# 册子目录无字面 .git 目录，旧闸 [ -d "$MAILBOX/.git" ] 恒假 → 追踪信开了
+# 不落盘、静默漂流（0154 领号后 untracked 31 分钟/0155 至发现时仍漂流）。
+# 变异：闸条件改回字面 .git 探测 → 本咬双红。
+grep -q 'git -C "$MAILBOX" rev-parse --git-dir >/dev/null 2>&1' scripts/bar-new.sh \
+    && { echo "  ✓ BAR-226 闸用rev-parse探仓"; pass=$((pass+1)); } \
+    || { echo "  ✗ BAR-226 闸用rev-parse探仓（bar-new.sh 自动 commit 闸缺 git -C rev-parse 探测）"; fail=$((fail+1)); }
+# 负向咬收窄到闸行（注释里引旧闸形态记录病灶是合法的，全文件 grep 会误伤）
+grep '\[ "$MAILBOX" = "$DEFAULT_MAILBOX" \]' scripts/bar-new.sh | grep -q '\[ -d "$MAILBOX/\.git" \]' \
+    && { echo "  ✗ BAR-226 字面.git探测回潮（册并入设施仓后恒假 = 静默丢数据）"; fail=$((fail+1)); } \
+    || { echo "  ✓ BAR-226 字面.git探测不在闸行"; pass=$((pass+1)); }
+
 echo "[test-bar-new] $pass 过 / $fail 红"
 [ "$fail" = 0 ]
