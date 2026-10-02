@@ -314,13 +314,15 @@ fn list_md(dir: &Path) -> Vec<String> {
     v
 }
 
-/// 信箱信件全集三栏：在册（active）+ 归档（archive-v1）+ 撤回（archive-withdrawn/
+/// 信箱信件全集四栏：在册（active）+ 归档（archive-v1）+ 吸收栏（archive-v2.2，
+/// 契约 §九——票仍现行、照常执法，只换位置）+ 撤回（archive-withdrawn/
 /// → dir "withdrawn"；撤回件不参与执法，但孤儿/半状态判据须认这一栏——契约 §八 第 9 条）
 fn load_letters(mailbox: &Path) -> Vec<LetterText> {
     let mut out = vec![];
     for (sub, loc) in [
         ("", "active"),
         ("archive-v1", "archive-v1"),
+        ("archive-v2.2", "archive-v2.2"),
         ("archive-withdrawn", "withdrawn"),
     ] {
         let dir = if sub.is_empty() {
@@ -552,6 +554,7 @@ fn cmd_new(args: &Args) {
     let tokens_text = read_opt(&tokens_path).unwrap_or_default();
     let mut all_files = list_md(&mailbox);
     all_files.extend(list_md(&mailbox.join("archive-v1")));
+    all_files.extend(list_md(&mailbox.join("archive-v2.2")));
     let nos: Vec<String> = ledger_nos(&tokens_text);
     let no = next_number(
         &all_files,
@@ -562,7 +565,10 @@ fn cmd_new(args: &Args) {
         .map(|(func, name)| format!("{}{}", func.clone().unwrap_or_default(), name))
         .collect();
     let file = build_v21_file_name(&no, "", from_name, &display, reply, about, type_word);
-    if mailbox.join(&file).is_file() || mailbox.join("archive-v1").join(&file).is_file() {
+    if mailbox.join(&file).is_file()
+        || mailbox.join("archive-v1").join(&file).is_file()
+        || mailbox.join("archive-v2.2").join(&file).is_file()
+    {
         die(p, &format!("目标已存在：{file}"));
     }
 
@@ -969,7 +975,10 @@ fn cmd_reticket(args: &Args) {
     let new_name = args
         .opt("new-name")
         .unwrap_or_else(|| die(p, "reticket 需要 --new-name <新文件名>（改名不改号）"));
-    if mailbox.join(new_name).is_file() || mailbox.join("archive-v1").join(new_name).is_file() {
+    if mailbox.join(new_name).is_file()
+        || mailbox.join("archive-v1").join(new_name).is_file()
+        || mailbox.join("archive-v2.2").join(new_name).is_file()
+    {
         die(p, &format!("目标已存在：{new_name}"));
     }
     // ④ 禁止降级改名（BAR-177）：新名强制 v2.1 文法——旧 ASCII 名只许出现在
@@ -1465,7 +1474,7 @@ fn cmd_withdraw(args: &Args) {
     let mut replies: Vec<String> = vec![];
     for b in &book_list {
         let self_book = fs::canonicalize(b).unwrap_or_else(|_| b.clone()) == canon_mb;
-        for sub in ["", "archive-v1", "archive-withdrawn"] {
+        for sub in ["", "archive-v1", "archive-v2.2", "archive-withdrawn"] {
             let dir = if sub.is_empty() {
                 b.clone()
             } else {
