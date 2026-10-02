@@ -332,7 +332,8 @@ use kfm_na::ui::md_layout::TableTier;
 
 #[test]
 fn spec_bar218_07_fit档自然列宽与列隙() {
-    // 窄表放得下：Fit 档，列几何 = 自然宽 + 2 格列隙
+    // 窄表放得下：Fit 档，列几何 = 自然宽 + 2 格列隙（网格化后含
+    // 居中偏移——相对几何钉死，绝对位归 spec_bar218_12）
     let lay = layout_md("| 名 | 值 |\n|---|---|\n| a | b |", 500, X1);
     let b = &lay.blocks[0];
     assert_eq!(b.kind, BlockKind::Table);
@@ -340,12 +341,55 @@ fn spec_bar218_07_fit档自然列宽与列隙() {
     assert_eq!(t.tier, TableTier::Fit);
     // 自然宽：col0 = max("名"=2格, "a"=1格)×18 = 36
     assert_eq!(t.col_w[0], 36, "col0 自然宽 = 2 格 × 18px");
-    assert_eq!(t.col_x[0], 0);
     assert_eq!(
-        t.col_x[1],
+        t.col_x[1] - t.col_x[0],
         t.col_w[0] + dp::TABLE_COL_GAP_CELLS * 18,
         "列隙 = 2 字符格"
     );
+}
+
+#[test]
+fn spec_bar218_12_网格几何与按宽居中() {
+    // 2026-10-02 用户打回复做：完整横竖线表格 + 按宽度屏幕左右居中。
+    // 夹具同上：table_w = 36+36+36 = 108，外沿 = 半列隙 18×2，
+    // grid_w = 144，居中 ox = (500−144)/2 = 178
+    let lay = layout_md("| 名 | 值 |\n|---|---|\n| a | b |", 500, X1);
+    let t = lay.blocks[0].table.as_ref().unwrap();
+    assert_eq!(t.grid_w, 144, "网格宽 = 列区宽 + 两侧各半列隙外沿");
+    assert_eq!(t.grid_x, 178, "网格左缘 = (内容宽 − 网格宽)/2 居中");
+    assert_eq!(
+        t.col_x[0],
+        t.grid_x + 18,
+        "首列 = 网格左缘 + 半列隙（外框不贴字）"
+    );
+    // 变异面：摘居中（ox=0）→ grid_x 红；摘外沿（grid_w=table_w）→
+    // grid_w 红；首列不外让（col_x[0]=grid_x）→ 本行红
+    assert_eq!(t.grid_x + t.grid_w + t.grid_x, 500, "左右余白相等 = 真居中");
+    // grid_bot = 末行底（竖线落点）
+    let last = t.rows.last().unwrap();
+    assert_eq!(t.grid_bot, last.y + last.h);
+    // 网格线粗宪法 token（覆盖矩阵账：token 立了就得有钉引用）
+    assert_eq!(dp::TABLE_GRID_LINE, 2, "网格线粗 = 2px 宪法 token");
+}
+
+#[test]
+fn spec_bar218_12b_网格外沿入档判() {
+    // 临界夹具：自然宽 [13格, 8格]×18 = [234,144]，need = 234+144+36
+    // = 414；旧尺（不算外沿）440 宽刚好 Fit，新尺连网格外沿 36 一起
+    // 算 = 450 > 440 必须降 Shrink（漏算外沿 = 外框线出界内容宽）
+    let md = "| aaaaaaaaaaaaa | bbbbbbbb |\n|---|---|\n| 1 | 2 |";
+    let lay = layout_md(md, 440, X1);
+    let t = lay.blocks[0].table.as_ref().unwrap();
+    assert_eq!(
+        t.tier,
+        TableTier::Shrink,
+        "自然宽+列隙+网格外沿 > 内容宽必须降档（外沿入档判）"
+    );
+    // 同夹具放宽到 450 → Fit 且网格右缘恰顶内容宽不外溢
+    let lay2 = layout_md(md, 450, X1);
+    let t2 = lay2.blocks[0].table.as_ref().unwrap();
+    assert_eq!(t2.tier, TableTier::Fit);
+    assert!(t2.grid_x + t2.grid_w <= 450, "网格右缘不许溢出内容宽");
 }
 
 #[test]
@@ -414,8 +458,13 @@ fn spec_bar218_11_块高与行y自洽累进() {
     let b = &lay.blocks[0];
     let t = b.table.as_ref().unwrap();
     let lh = b.line_h;
-    let expect = t.header.h + dp::TABLE_ROW_PAD + t.rows[0].h + dp::TABLE_ROW_PAD + t.rows[1].h;
-    assert_eq!(b.h, expect, "块高 = 表头+下划带+行带累加+行隙");
+    let expect = t.header.h
+        + dp::TABLE_ROW_PAD
+        + t.rows[0].h
+        + dp::TABLE_ROW_PAD
+        + t.rows[1].h
+        + dp::TABLE_ROW_PAD; // 网格底垫（2026-10-02 网格化）
+    assert_eq!(b.h, expect, "块高 = 表头+下划带+行带累加+行隙+网格底垫");
     assert_eq!(
         t.rows[1].y,
         t.header.h + dp::TABLE_ROW_PAD + t.rows[0].h + dp::TABLE_ROW_PAD

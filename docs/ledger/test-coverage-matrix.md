@@ -70,7 +70,7 @@
 | `src/ui/conn_card.rs` | 6 | 6 | 0 | — |
 | `src/ui/cursor.rs` | 9 | 9 | 0 | — |
 | `src/ui/demo_icon.rs` | 6 | 6 | 0 | — |
-| `src/ui/demo_page.rs` | 28 | 25 | 3 | HEAD_FRAME_T QUOTE_BAR_W LIST_MARK_PX |
+| `src/ui/demo_page.rs` | 29 | 26 | 3 | HEAD_FRAME_T QUOTE_BAR_W LIST_MARK_PX |
 | `src/ui/down_card.rs` | 10 | 10 | 0 | — |
 | `src/ui/dual_pool.rs` | 19 | 19 | 0 | — |
 | `src/ui/filetree.rs` | 81 | 73 | 8 | SHIFT_CLAMP_CSS TRI_GAP_PX CURSOR_NAME_INSET CURSOR_BAR_W CURSOR_HAIR_W row_center register_filetree filetree_handle |

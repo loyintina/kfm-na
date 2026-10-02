@@ -93,6 +93,9 @@ pub const TABLE_COL_MIN_CELLS: u32 = 10;
 pub const TABLE_ROW_PAD: u32 = HU / 2;
 /// 表格表头下划线粗（px，与框厚同尺）
 pub const TABLE_HEAD_UNDER: u32 = 3;
+/// 表格网格线粗（px，2026-10-02 用户打回复做：单横线不合格——完整
+/// 横竖线表格；外框/行分隔/列分隔同尺，表头下划仍 3px 强调）
+pub const TABLE_GRID_LINE: u32 = 2;
 /// 淡彩家族槽位角色（宪法 §2.5 角色映射单源；家族本身 accent::
 /// pastel_family 派生——本表只管义不管色）
 pub mod pastel_role {
