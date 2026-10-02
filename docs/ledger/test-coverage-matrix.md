@@ -50,7 +50,7 @@
 | `src/seed_sched.rs` | 4 | 4 | 0 | — |
 | `src/self_restart.rs` | 11 | 5 | 6 | FLAG_REL set_files_dir button_label poll_flag restart restart |
 | `src/sess_mode.rs` | 3 | 3 | 0 | — |
-| `src/sess_pool.rs` | 33 | 31 | 2 | TAIL_EVENTS request_routes |
+| `src/sess_pool.rs` | 35 | 33 | 2 | TAIL_EVENTS request_routes |
 | `src/session.rs` | 14 | 14 | 0 | — |
 | `src/session_router.rs` | 11 | 11 | 0 | — |
 | `src/settings.rs` | 10 | 8 | 2 | QUIC_DEFAULT_PORT QUIC_REVERSE_PORT |

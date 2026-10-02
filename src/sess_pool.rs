@@ -297,6 +297,100 @@ fn err_detail(v: &Value) -> String {
         .to_string()
 }
 
+// ---- BAR-225 时间去时区（0152-B 用户拍板「时间一律去时区」）----
+// 查看器详情页直渲信件 md，楼层头（`> N楼：… · 2026-10-02 15:20 +08:00`）
+// 与信封行（`> 日期: …`）的时区在正文里——显示路发布前过本件，缓存存
+// 原文（写透在变换前）。只对「日期 时分 ±时区」三段连排动刀，其余文本
+// 一字不动（正文里的孤日期/孤时分不误伤）。
+
+/// 行内去时区：`YYYY-MM-DD HH:MM ±HH:MM` 三段连排 → 前两段（日期+时分）
+pub fn strip_tz_inline(line: &str) -> String {
+    fn is_date_b(b: &[u8]) -> bool {
+        b.len() == 10
+            && b[4] == b'-'
+            && b[7] == b'-'
+            && b.iter()
+                .enumerate()
+                .all(|(i, c)| i == 4 || i == 7 || c.is_ascii_digit())
+    }
+    fn is_hm(s: &str) -> bool {
+        let b = s.as_bytes();
+        b.len() == 5
+            && b[2] == b':'
+            && b.iter()
+                .enumerate()
+                .all(|(i, c)| i == 2 || c.is_ascii_digit())
+    }
+    fn is_tz(s: &str) -> bool {
+        let b = s.as_bytes();
+        b.len() == 6
+            && (b[0] == b'+' || b[0] == b'-')
+            && b[3] == b':'
+            && b[1..3].iter().all(|c| c.is_ascii_digit())
+            && b[4..6].iter().all(|c| c.is_ascii_digit())
+    }
+    /// 日期段尾验（允许「（2026-10-02」式前缀——信封状态行实拍形态；
+    /// 前缀随原文照留，只摘时区段）。字节级验尾 10 字节（日期形纯
+    /// ASCII，多字节前缀不误切）
+    fn tail_is_date(s: &str) -> bool {
+        let b = s.as_bytes();
+        b.len() >= 10 && is_date_b(&b[b.len() - 10..])
+    }
+    // 空白分段的 span 流（原文空白形态逐段拼回，不重排）
+    let mut spans: Vec<(usize, usize)> = Vec::new();
+    {
+        let bytes = line.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i].is_ascii_whitespace() {
+                i += 1;
+            } else {
+                let start = i;
+                while i < bytes.len() && !bytes[i].is_ascii_whitespace() {
+                    i += 1;
+                }
+                spans.push((start, i));
+            }
+        }
+    }
+    // 找三连 span（日期/时分/时区）——命中即摘第三段及其前空白；
+    // 同一行多个三连全摘（楼层头/信封日期各一）
+    let mut out = String::with_capacity(line.len());
+    let mut cursor = 0usize;
+    let mut i = 0usize;
+    while i + 2 < spans.len() {
+        let (a0, a1) = spans[i];
+        let (b0, b1) = spans[i + 1];
+        let (c0, c1) = spans[i + 2];
+        if tail_is_date(&line[a0..a1]) && is_hm(&line[b0..b1]) && is_tz(&line[c0..c1]) {
+            out.push_str(&line[cursor..b1]);
+            cursor = c1;
+            i += 3;
+        } else {
+            i += 1;
+        }
+    }
+    if cursor == 0 {
+        return line.to_string();
+    }
+    out.push_str(&line[cursor..]);
+    out
+}
+
+/// 整篇 md 去时区（逐行同律；无三连的行原样过）
+pub fn strip_tz_md(text: &str) -> String {
+    let joined = text
+        .lines()
+        .map(strip_tz_inline)
+        .collect::<Vec<_>>()
+        .join("\n");
+    if text.ends_with('\n') {
+        joined + "\n"
+    } else {
+        joined
+    }
+}
+
 /// URL query 值百分号编码（BAR-212 摘要批量端点的信名——中文句法名
 /// 必须编码进 query；unreserved 字符原样，其余按 UTF-8 字节 %XX）
 pub fn url_encode(s: &str) -> String {
@@ -561,9 +655,10 @@ pub fn request_content(key: RouteKey, name: &str) {
                             if let Some(d) = &dir {
                                 let _ = write_body(d, &name, &t);
                             }
-                            publish(t);
+                            // BAR-225：显示路去时区（缓存存原文，0152-B）
+                            publish(strip_tz_md(&t));
                         }
-                        OpenStep::Cached(t) | OpenStep::Failed(t) => publish(t),
+                        OpenStep::Cached(t) | OpenStep::Failed(t) => publish(strip_tz_md(&t)),
                     }
                 }
             }
