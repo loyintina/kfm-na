@@ -250,3 +250,26 @@ fn spec_bar170_对象轴文件席与文档() {
         "AGENTS 文档地图未登记阅读页"
     );
 }
+
+#[test]
+fn spec_bar220_阅读信箱两缝入帧时钟与帧账() {
+    // BAR-220（2026-10-02 承影真机「抬手即卡」定罪）：阅读/信箱两缝落地
+    // 时漏接 fx_frame_due 活性表（收场动画零泵 = 抬手即卡），信箱缝还漏
+    // 接 note_anim_frame 帧账表（panel-anim 收场轮无账可查）。行为钉在
+    // fx_spring_spec「spec_bar220_帧时钟_*缝活跃也产帧」；本钉守接线本
+    // 体——摘臂/摘账变异必红。
+    let fx = include_str!("../src/ui/fx_spring.rs");
+    assert!(
+        fx.contains("|| crate::ui::seam::reader_panel_offset_x_active()"),
+        "阅读缝活性必须进 fx_frame_due 的 active 表（摘掉 = 收场动画零泵）"
+    );
+    assert!(
+        fx.contains("|| crate::ui::seam::mail_panel_offset_x_active()"),
+        "信箱缝活性必须进 fx_frame_due 的 active 表（摘掉 = 收场动画零泵）"
+    );
+    let app = include_str!("../src/android_app.rs");
+    assert!(
+        app.contains("|| crate::ui::seam::mail_panel_offset_x_active()"),
+        "信箱缝活性必须进 note_anim_frame 帧账表（摘掉 = 收场轮 panel-anim 无账）"
+    );
+}

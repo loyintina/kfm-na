@@ -181,10 +181,11 @@ pub fn reset_frame_clock_for_test() {
 const VSYNC_WATCHDOG_MS: u64 = 32;
 
 /// 该画动画帧了：无活跃动画恒 false——零额外帧零唤醒（夜判据 0.45%
-/// 单核红线）。五道缝共用一只钟（2026-09-04 键盘 inset 缝入册、09-10
+/// 单核红线）。七道缝共用一只钟（2026-09-04 键盘 inset 缝入册、09-10
 /// 配置面板 X 缝入册、09-11 文件树面板 X 缝入册、09-12 解析面板 X 缝
-/// 入册：同窗同帧不双泵。09-12 Q 弹形变弹簧曾入册为第四路活性源，
-/// 同日二审取消退役）。
+/// 入册、10-02 阅读/信箱两缝补接入册（BAR-220：落地时漏接 = 收场动画
+/// 零泵「抬手即卡」）：同窗同帧不双泵。09-12 Q 弹形变弹簧曾入册为第四
+/// 路活性源，同日二审取消退役）。
 /// 产帧许可双模（BAR-081，2026-09-11 残影定案）：
 /// - **vsync 挂表期 = 锁相**：只认 due 账一跳一帧（定时器泵与 8.6ms
 ///   vsync 双钟不锁相 = swap 间隔 1/9/25ms 的残影真凶，锁相后相位跟屏）；
@@ -213,11 +214,19 @@ pub fn fx_frame_due(now_ms: u64) -> bool {
     // （放在 ft_fling 前：BAR-165 源码守卫钉死「|| ft_fling;」收尾字面量，
     // OR 链位置无语义差，新旧两钉同吃不破）
     let viewer_fling = viewer_fling_live();
+    // BAR-220 补接（2026-10-02 承影真机「抬手即卡」定罪）：阅读/信箱两缝
+    // 落地时漏进本表——收场 replay 续播期 active 读假 = 帧泵零产帧，动画
+    // 全靠别的脏帧源（终端输出/catchup）捎带推进，抬手后第一帧等下一个
+    // 脏帧源 = 「手指一离开屏幕就立刻卡一下」（拖动期触摸事件驱动故全程
+    // 不卡）。同类病史：第四缝（文件树）/第五缝（解析）同款漏接各抓过
+    // 一次，钉在 fx_spring_spec「帧时钟_*缝活跃也产帧」系列
     let active = crate::ui::seam::ai_panel_offset_y_active()
         || crate::ui::seam::chrome_ime_inset_active()
         || crate::ui::seam::config_panel_offset_x_active()
         || crate::ui::seam::filetree_panel_offset_x_active()
         || crate::ui::seam::parser_panel_offset_x_active()
+        || crate::ui::seam::reader_panel_offset_x_active()
+        || crate::ui::seam::mail_panel_offset_x_active()
         || ft_anim
         || reader_fling
         || viewer_fling

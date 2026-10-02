@@ -221,6 +221,8 @@ fn spec_bar077_帧预算_跟随刷新率可配() {
     seam::release_config_panel_offset_x();
     seam::release_filetree_panel_offset_x();
     seam::release_parser_panel_offset_x();
+    seam::release_reader_panel_offset_x();
+    seam::release_mail_panel_offset_x();
     // 默认：未设置 = 16ms（60fps 保守基线——核心层零平台依赖，壳没喂
     // 数字前必须能活）
     assert_eq!(fx_spring::frame_budget_ms(), 16, "默认预算必须是 16ms");
@@ -259,6 +261,8 @@ fn spec_帧时钟_无动画零帧有动画限频() {
     seam::release_config_panel_offset_x();
     seam::release_filetree_panel_offset_x();
     seam::release_parser_panel_offset_x();
+    seam::release_reader_panel_offset_x();
+    seam::release_mail_panel_offset_x();
     // 无占槽：恒不产帧（0.45% 单核夜判据红线——动画系统不许抬升基线）
     assert!(!fx_spring::panel_frame_due(0));
     assert!(!fx_spring::panel_frame_due(1000));
@@ -325,7 +329,9 @@ fn spec_帧时钟_键盘缝活跃也产帧() {
     seam::release_config_panel_offset_x();
     seam::release_filetree_panel_offset_x();
     seam::release_parser_panel_offset_x();
-    assert!(!fx_spring::fx_frame_due(0), "五道缝全空 = 零帧");
+    seam::release_reader_panel_offset_x();
+    seam::release_mail_panel_offset_x();
+    assert!(!fx_spring::fx_frame_due(0), "七道缝全空 = 零帧");
     // 只占键盘缝：帧时钟一样要转（fx_frame_due 是任一缝语义）
     seam::occupy_chrome_ime_inset(fx_spring::spring_occupier());
     assert_eq!(seam::sample_chrome_ime_inset(0.0, 2000), 0.0); // primed
@@ -391,7 +397,9 @@ fn spec_帧时钟_配置缝活跃也产帧() {
     seam::release_config_panel_offset_x();
     seam::release_filetree_panel_offset_x();
     seam::release_parser_panel_offset_x();
-    assert!(!fx_spring::fx_frame_due(0), "五道缝全空 = 零帧");
+    seam::release_reader_panel_offset_x();
+    seam::release_mail_panel_offset_x();
+    assert!(!fx_spring::fx_frame_due(0), "七道缝全空 = 零帧");
     // 只占配置缝：帧时钟一样要转（fx_frame_due 是任一缝语义）
     seam::occupy_config_panel_offset_x(kfm_na::ui::fx_ease::ease_occupier());
     assert_eq!(seam::sample_config_panel_offset_x(1260.0, 2000), 1260.0); // primed
@@ -466,7 +474,9 @@ fn spec_帧时钟_文件树缝活跃也产帧() {
     seam::release_config_panel_offset_x();
     seam::release_filetree_panel_offset_x();
     seam::release_parser_panel_offset_x();
-    assert!(!fx_spring::fx_frame_due(0), "五道缝全空 = 零帧");
+    seam::release_reader_panel_offset_x();
+    seam::release_mail_panel_offset_x();
+    assert!(!fx_spring::fx_frame_due(0), "七道缝全空 = 零帧");
     // 只占文件树缝：帧时钟一样要转（fx_frame_due 是任一缝语义）
     seam::occupy_filetree_panel_offset_x(kfm_na::ui::fx_ease::ease_occupier());
     assert_eq!(seam::sample_filetree_panel_offset_x(-1260.0, 2000), -1260.0); // primed
@@ -559,7 +569,9 @@ fn spec_帧时钟_解析缝活跃也产帧() {
     seam::release_config_panel_offset_x();
     seam::release_filetree_panel_offset_x();
     seam::release_parser_panel_offset_x();
-    assert!(!fx_spring::fx_frame_due(0), "五道缝全空 = 零帧");
+    seam::release_reader_panel_offset_x();
+    seam::release_mail_panel_offset_x();
+    assert!(!fx_spring::fx_frame_due(0), "七道缝全空 = 零帧");
     // 只占解析缝：帧时钟一样要转（fx_frame_due 是任一缝语义）
     seam::occupy_parser_panel_offset_x(kfm_na::ui::fx_ease::ease_occupier());
     assert_eq!(seam::sample_parser_panel_offset_x(1260.0, 2000), 1260.0); // primed
@@ -612,4 +624,54 @@ fn spec_bar098_池区泵_落停补帧不吃节流钉() {
     assert!(!cfg_fx_frame_due(true, true, 15), "活性期 15ms 不许产帧");
     // 翻 false 且距上帧已久——照样产（原节流路也放行的情形，防过修）
     assert!(cfg_fx_frame_due(true, false, 50), "翻 false 久未画必产");
+}
+
+// ---- 第六/七道缝：阅读/信箱面板 X 偏移（BAR-220，2026-10-02） ----
+// 承影真机「抬手即卡」定罪：两缝落地时漏进 fx_frame_due 活性表——收场
+// replay 续播期 active 读假 = 帧泵零产帧，动画全靠别的脏帧源捎带，抬手
+// 后第一帧等下一个脏帧源 = 「手指一离开屏幕就立刻卡一下」（拖动期触摸
+// 事件驱动故不卡）。同类病史：文件树缝/解析缝同款漏接各抓过一次。
+// 变异抽检：fx_frame_due 活性读数漏 reader 臂 → 阅读题红；漏 mail 臂 →
+// 信箱题红（本批立法方向即摘臂变异）。
+
+#[test]
+fn spec_bar220_帧时钟_阅读缝活跃也产帧() {
+    let _g = SEAM_LOCK.lock().unwrap();
+    seam::release_ai_panel_offset_y();
+    seam::release_chrome_ime_inset();
+    seam::release_config_panel_offset_x();
+    seam::release_filetree_panel_offset_x();
+    seam::release_parser_panel_offset_x();
+    seam::release_reader_panel_offset_x();
+    seam::release_mail_panel_offset_x();
+    assert!(!fx_spring::fx_frame_due(0), "七道缝全空 = 零帧");
+    // 只占阅读缝：帧时钟一样要转（fx_frame_due 是任一缝语义）
+    seam::occupy_reader_panel_offset_x(kfm_na::ui::fx_ease::ease_occupier());
+    assert_eq!(seam::sample_reader_panel_offset_x(1260.0, 2000), 1260.0); // primed
+    seam::sample_reader_panel_offset_x(0.0, 2000); // 目标翻转 = 动画开始
+    assert!(fx_spring::fx_frame_due(2000), "阅读缝活跃即产帧");
+    seam::sample_reader_panel_offset_x(0.0, 5000); // 到期贴死
+    assert!(!fx_spring::fx_frame_due(5016), "动画停即停表");
+    seam::release_reader_panel_offset_x();
+}
+
+#[test]
+fn spec_bar220_帧时钟_信箱缝活跃也产帧() {
+    let _g = SEAM_LOCK.lock().unwrap();
+    seam::release_ai_panel_offset_y();
+    seam::release_chrome_ime_inset();
+    seam::release_config_panel_offset_x();
+    seam::release_filetree_panel_offset_x();
+    seam::release_parser_panel_offset_x();
+    seam::release_reader_panel_offset_x();
+    seam::release_mail_panel_offset_x();
+    assert!(!fx_spring::fx_frame_due(0), "七道缝全空 = 零帧");
+    // 只占信箱缝：帧时钟一样要转（fx_frame_due 是任一缝语义）
+    seam::occupy_mail_panel_offset_x(kfm_na::ui::fx_ease::ease_occupier());
+    assert_eq!(seam::sample_mail_panel_offset_x(1260.0, 2000), 1260.0); // primed
+    seam::sample_mail_panel_offset_x(0.0, 2000); // 目标翻转 = 动画开始
+    assert!(fx_spring::fx_frame_due(2000), "信箱缝活跃即产帧");
+    seam::sample_mail_panel_offset_x(0.0, 5000); // 到期贴死
+    assert!(!fx_spring::fx_frame_due(5016), "动画停即停表");
+    seam::release_mail_panel_offset_x();
 }

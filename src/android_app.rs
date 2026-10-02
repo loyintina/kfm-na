@@ -10228,6 +10228,7 @@ impl App {
                     || crate::ui::seam::filetree_panel_offset_x_active()
                     || crate::ui::seam::parser_panel_offset_x_active()
                     || crate::ui::seam::reader_panel_offset_x_active()
+                    || crate::ui::seam::mail_panel_offset_x_active()
                     || Self::cfg_fx_active()
                     || self.sys_band_fx_active(),
                 t0.elapsed(),
