@@ -33,7 +33,6 @@
 {"bar": 210, "title": "prompt_bar.rs:246 切片越界 SIGABRT 崩溃（0075 §三：start>end ×4，病灶输入栏）", "claimant_func": "开发部", "claimant": "观澜", "letter": "0110", "ts": "2026-09-30 20:14 +0800"}
 {"bar":211,"title":"KFMHDR 播种头判负 4876 次致像素级滚动瘫痪（0081：r尾/错误块抢先两支仍在，判卷归承影）","claimant_func":"开发部","claimant":"观澜","letter":"0111","ts":"2026-09-30 22:34 +0800"}
 {"bar":212,"title":"信箱入口迁解析页左下常驻槽+页面级信件列表卡","claimant_func":"开发部","claimant":"闻灯","letter":"0098","ts":"2026-09-30 18:52 +0800"}
-{"bar":213,"title":"md 全量镜像落私有目录（BAR-187 v2：walk 清单端点+reconcile 镜像+断网回退链）","claimant_func":"开发部","claimant":"闻灯","letter":"0137","ts":"2026-10-01 12:38 +0800"}
 {"bar":214,"title":"信箱入口弹框改整页卡：右挤入/右滑出，三级框信渲染器按发信人随机双色","claimant_func":"开发部","claimant":"观澜","letter":"0138","ts":"2026-10-01 12:56 +0800"}
 {"bar":215,"title":"tmux 上滚三形态（历史段重播/行宽散开/跳屏断档）——209/211 已上机仍现","claimant_func":"开发部","claimant":"观澜","letter":"0143","ts":"2026-10-01 14:19 +0800"}
 {"bar":216,"title":"kimi 输出时 IME 输入无回显+页面闪烁——209/211 已上机仍现","claimant_func":"开发部","claimant":"观澜","letter":"0144","ts":"2026-10-01 14:20 +0800"}
@@ -41,3 +40,6 @@
 {"bar":218,"title":"md 渲染器表格三档降级+分隔线加粗","claimant_func":"研究部","claimant":"清和","letter":"0148","ts":"2026-10-02 00:02 +0800"}
 {"bar":219,"title":"BAR-145 观察期满裁决：拆仪器结案","claimant_func":"研究部","claimant":"清和","letter":"0149","ts":"2026-10-02 06:32 +0800"}
 {"bar":223,"title":"信箱工具对齐 v2.2：认 archive-v2.2 栏","claimant_func":"研究部","claimant":"清和","letter":"0154","ts":"2026-10-02 15:29 +0800"}
+{"bar":220,"title":"信箱页卡右滑退场半途卡一下（承影真机判卷 214 发现，疑似退场链触发作废重烘/重播种）","claimant_func":"开发部","claimant":"观澜","letter":"0150","ts":"2026-10-02 14:46 +0800"}
+{"bar":221,"title":"md 面板页捏合不进——pinch 手势只接终端区（204 pinch 一统契约未竟，承影真机判卷澄清）","claimant_func":"开发部","claimant":"观澜","letter":"0151","ts":"2026-10-02 14:46 +0800"}
+{"bar":224,"title":"mailbox-core verify/projection 补认第四栏 archive-v2.2（吸收栏≠撤回栏：进计数不进活信清单）——白露 v2.2 吸收 62 件挡 na chain 第 4 步","claimant_func":"开发部","claimant":"观澜","letter":"0155","ts":"2026-10-02 15:45 +0800"}

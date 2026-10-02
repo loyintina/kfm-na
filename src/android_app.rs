@@ -9390,17 +9390,24 @@ impl App {
         // pinch 变格变了必须重烘；epoch 已含文本与滚动代际，scroll 单列是
         // 进度线——它吃 scroll 不吃 epoch 空涨保护；BAR-204 实例格维换
         // 掉字号档样式维）
-        let (rd_epoch, rd_scroll) = crate::ui::reader_page::reader_handle()
+        let (rd_epoch, rd_scroll, rd_open) = crate::ui::reader_page::reader_handle()
             .map(|r| {
                 let pg = r.lock().unwrap();
-                (pg.epoch, pg.scroll.clamp(0, u32::MAX as i64) as u32)
+                (
+                    pg.epoch,
+                    pg.scroll.clamp(0, u32::MAX as i64) as u32,
+                    pg.is_open(),
+                )
             })
-            .unwrap_or((0, 0));
+            .unwrap_or((0, 0, false));
         let rd_cell = term_arc.lock().unwrap().cell_size();
         let rd_sig = (
             w, h, ime, bar_h, acc_rd.c1, acc_rd.c2, rd_epoch, rd_scroll, rd_cell.0, rd_cell.1,
         );
-        if rd_visible && sigs.reader.feed(rd_sig) {
+        // BAR-220 页存活闸：退场出栈即 close（epoch+1 → sig 必变），滑出期
+        // 页已死内容不可能再变——空页重烘恰撞动画帧 = 半途卡。sig 照喂
+        // 消费代际（重开必变必烘），烘焙只许页存活
+        if rd_visible && sigs.reader.feed(rd_sig) && rd_open {
             let px = g.slot_canvas(crate::gles_present::ChromeSlot::Reader);
             px.fill(0);
             crate::termview::paint_reader_page_chrome(px, w, h, bottom_inset, 0, acc_rd);
@@ -9429,7 +9436,9 @@ impl App {
         if mail_visible {
             Self::mail_page_feed(w, h, bottom_inset);
         }
-        let (mail_data_epoch, mail_view_epoch, mail_offb) = crate::ui::mail_page::snap()
+        let mail_view = crate::ui::mail_page::snap();
+        let (mail_data_epoch, mail_view_epoch, mail_offb) = mail_view
+            .as_ref()
             .map(|v| {
                 (
                     crate::mail_feed::epoch(),
@@ -9450,9 +9459,13 @@ impl App {
             (mail_view_epoch << 32) | u64::from(mail_offb),
             mail_cell.0,
             mail_cell.1,
-            crate::ui::mail_page::snap().map_or(0, |v| v.lays().len() as u32),
+            mail_view.as_ref().map_or(0, |v| v.lays().len() as u32),
         );
-        if mail_visible && sigs.mail.feed(mail_sig) {
+        // BAR-220 页存活闸：退场出栈即 close（VIEW=None → sig 归零，与
+        // 在页 sig 必异），滑出期页已死内容不可能再变——空页重烘恰撞
+        // 动画帧 = 半途卡（承影真机判卷 2026-10-02）。sig 照喂消费代际
+        // （重开必变必烘），烘焙只许页存活
+        if mail_visible && sigs.mail.feed(mail_sig) && mail_view.is_some() {
             let px = g.slot_canvas(crate::gles_present::ChromeSlot::Mail);
             px.fill(0);
             crate::termview::paint_mail_page_chrome(px, w, h, bottom_inset, 0, acc_mail);

@@ -142,6 +142,13 @@ impl ReaderPage {
         self.text_epoch += 1;
     }
 
+    /// 页存活闸（BAR-220）：close 后 path 清空。退场滑出期涂装仍可见
+    /// 但内容不可能再变（close 会 epoch+1 → sig 必变）——烘焙槽以此闸
+    /// 空页重烘
+    pub fn is_open(&self) -> bool {
+        !self.path.is_empty()
+    }
+
     /// 关闭（面板推回）：滚动回写 mem，清空本体（mem 留住）
     pub fn close(&mut self) {
         self.writeback_mem();

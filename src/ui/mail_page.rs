@@ -410,6 +410,12 @@ pub fn open_key() -> Option<MailKey> {
     VIEW.lock().unwrap().as_ref().map(|v| v.key)
 }
 
+/// 页存活闸（BAR-220）：close 后 VIEW=None。退场滑出期涂装仍可见
+/// （mail_draw=true）但内容不可能再变——烘焙槽以此闸空页重烘
+pub fn is_open() -> bool {
+    VIEW.lock().unwrap().is_some()
+}
+
 pub fn snap() -> Option<MailPageView> {
     VIEW.lock().unwrap().clone()
 }

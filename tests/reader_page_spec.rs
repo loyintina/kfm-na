@@ -285,3 +285,19 @@ fn spec_bar208_text_epoch_滚动不涨_文本事变才涨() {
     p.close();
     assert!(p.text_epoch > g2, "close 清文本必须涨文本代");
 }
+
+/// BAR-220 页存活闸：新生=死 / open=活 / close=死（mem 留住但页已死）。
+/// 阅读页 close 会 epoch+1 → 退场滑出期 sig 必变，烘焙槽凭 is_open
+/// 闸空页重烘（同族病与信箱页同闸）。变异咬：is_open 恒 true →
+/// 新生/收后断言红
+#[test]
+fn spec_bar220_阅读页存活闸() {
+    let mut p = ReaderPage::new();
+    assert!(!p.is_open(), "新生 = 死");
+    p.open("a/b.md".to_string(), "n".to_string());
+    assert!(p.is_open(), "open = 活");
+    p.close();
+    assert!(!p.is_open(), "close = 死（退场滑出期烘焙闸落）");
+    p.open("c/d.txt".to_string(), "n".to_string());
+    assert!(p.is_open(), "重开 = 活");
+}
