@@ -7050,8 +7050,8 @@ impl TermView {
     /// 渐变分隔线 + 三栏信卡流。几何/滚动/懒加载窗全吃 ui/mail_page
     /// 同一份 lays（眼手同尺）；卡色 = 发信人稳定双色（accent::
     /// accent_for_sender，渐变暗底无框=三级框未选中形态）；发信人 H1
-    /// 半包框走迷你 md 真管线（H1 形制唯一源不平行造）；行推进吃几何
-    /// 常量 BODY_LH（带内不漂移），字形吃实例格（pinch 联动）。
+    /// 半包框走迷你 md 真管线（H1 形制唯一源不平行造）；几何账与字形
+    /// 同吃实例格（BAR-221 pinch 联动，metrics_of 唯一运行期源）。
     /// mail_off_x 语义同 paint_reader_content；数据直读 mail_feed 快照
     pub(crate) fn paint_mail_content_impl(
         &self,
@@ -7067,6 +7067,10 @@ impl TermView {
             return;
         }
         let Some(v) = mp::snap() else { return };
+        // BAR-221：几何账吃实例格（pinch 联动）——涂装是实例格权威源，
+        // 顺手喂回页态（feed 臂下一轮烘焙即吃新格，零锁风险路径）
+        let m = mp::metrics_of(self.cell_size());
+        mp::note_cell(self.cell_size());
         let mut frame = Frame { buf, w, h };
         let off = i64::from(mail_off_x);
         let g = mp::mail_geom(w, h, bottom_inset);
@@ -7133,7 +7137,7 @@ impl TermView {
                 g.x0 + off,
                 vp.0,
                 (g.x1 - g.x0).max(0) as u32,
-                2 * CELL_H,
+                2 * self.cell_h,
                 meta_fg,
                 g.x0 + off,
                 clip32,
@@ -7148,7 +7152,7 @@ impl TermView {
             h: area0.h,
         };
         let lays = v.lays();
-        let blh = i64::from(mp::BODY_LH);
+        let blh = i64::from(m.body_lh);
         for i in mp::visible_range(lays, vp_h, offb) {
             let e = &book.entries[i];
             let lay = &lays[i];
@@ -7157,8 +7161,8 @@ impl TermView {
             let s_acc = crate::ui::accent::accent_for_sender(&sender, accent);
             // 三级框未选中形态 = 无框渐变暗底（发信人双色）
             paint_row_frame(&mut frame, r.x, r.y, r.w, r.h, false, s_acc, denom, vp);
-            let tx = r.x + i64::from(mp::ITEM_PAD_H);
-            let tw = r.w.saturating_sub(mp::ITEM_PAD_H * 2);
+            let tx = r.x + i64::from(m.item_pad_h);
+            let tw = r.w.saturating_sub(m.item_pad_h * 2);
             let band_y = r.y + i64::from(lay.meta_y);
             let band_h = i64::from(lay.meta_h);
 
@@ -7201,7 +7205,7 @@ impl TermView {
             // 行①中：箭头 + 收件人列（上下并置，整列在行内上下居中）
             let n_rcp = lay.recipients.len();
             if n_rcp > 0 {
-                let col_x = tx + h1_w + i64::from(CELL_W);
+                let col_x = tx + h1_w + i64::from(self.cell_w);
                 let name_x = col_x + 3 * i64::from(self.cell_w); // "→ " 三格让位
                 let blk_h = n_rcp as i64 * blh;
                 let blk_y = band_y + (band_h - blk_h).max(0) / 2;

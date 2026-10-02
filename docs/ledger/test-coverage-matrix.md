@@ -82,7 +82,7 @@
 | `src/ui/keybar.rs` | 1 | 1 | 0 | — |
 | `src/ui/link_card.rs` | 14 | 11 | 3 | set_lay_lines lay_lines_now card_h_now |
 | `src/ui/mail_card.rs` | 5 | 4 | 1 | N_ENTRIES |
-| `src/ui/mail_page.rs` | 43 | 43 | 0 | — |
+| `src/ui/mail_page.rs` | 48 | 48 | 0 | — |
 | `src/ui/md_layout.rs` | 5 | 5 | 0 | — |
 | `src/ui/md_parse.rs` | 2 | 2 | 0 | — |
 | `src/ui/modal.rs` | 32 | 31 | 1 | VEIL_DIM_ARGB |

@@ -556,9 +556,10 @@ struct App {
     /// 首帧无账，取帧预算）
     viewer_fling_last_ms: Option<u64>,
     /// 信箱页手势槽（BAR-214 整页卡；字段自 BAR-212 列表卡复用）：
-    /// (起手 x, 起手 y, 拖过 slop)——点按抬手 = 条目命中；拖过 = 页
-    /// 像素滚动（眼手同尺吃 mail_page 核 offset_bottom 账）
-    mail_touch: Option<(f64, f64, bool)>,
+    /// (指头 id, 起手 x, 起手 y, 拖过 slop)——点按抬手 = 条目命中；拖过 = 页
+    /// 像素滚动（眼手同尺吃 mail_page 核 offset_bottom 账）。id 为
+    /// BAR-221 捏合转换账（第二指落地转 pinch 时双指登记 touches）
+    mail_touch: Option<(u64, f64, f64, bool)>,
     /// 信箱页滚动接力件（TouchScroll 同件，速度采样时钟随起手建机）
     mail_scroll: Option<crate::scroll::TouchScroll>,
     /// 信箱页甩尾在途（抬手从滚动接力件交接，scroll.rs Fling 同一
@@ -572,9 +573,10 @@ struct App {
     reader_fling: Option<crate::scroll::Fling>,
     /// 阅读页甩尾帧泵末次推进时刻（同 ft_fling_last_ms 的规）
     reader_fling_last_ms: Option<u64>,
-    /// 阅读页手势槽（BAR-170）：(起手 x, 起手 y, 拖过 slop)——点按抬手
-    /// = 返回钮命中；拖过 = 正文像素滚动（眼手同尺吃 reader 核 scroll）
-    reader_touch: Option<(f64, f64, bool)>,
+    /// 阅读页手势槽（BAR-170）：(指头 id, 起手 x, 起手 y, 拖过 slop)——
+    /// 点按抬手 = 返回钮命中；拖过 = 正文像素滚动（眼手同尺吃 reader 核
+    /// scroll）。id 为 BAR-221 捏合转换账
+    reader_touch: Option<(u64, f64, f64, bool)>,
     /// 阅读页滚动接力件（moved_px_at 像素位移 + fling_on_release 甩尾
     /// 交接，与查看器 modal_scroll 同款现役复用件）
     reader_scroll: Option<crate::scroll::TouchScroll>,
@@ -668,8 +670,9 @@ struct App {
     last_tunnel_epoch: u64,
     last_tunnel_usable: bool,
     /// 跳框模态手势槽（宪法 §六 跳框条款，九修）：
-    /// (起手x, 起手y, 已拖过slop)——模态开着时配置页手势全归它
-    modal_touch: Option<(f64, f64, bool)>,
+    /// (指头 id, 起手x, 起手y, 已拖过slop)——模态开着时配置页手势全归它。
+    /// id 为 BAR-221 捏合转换账
+    modal_touch: Option<(u64, f64, f64, bool)>,
     /// 跳框手势的滚动接力件（BAR-167 ①）：查看器开着且拖过 slop 时
     /// 逐事件喂 moved_px_at（惯性速度采样唯一入口），抬手交接甩尾；
     /// comp modal 无可滚内容——件建了但不喂，恒点按态零行为差
@@ -1420,6 +1423,40 @@ impl App {
                 // 压暗层吃下层全部触摸（标签栏/池区/栏带/面板拖拽全家
                 // 让路）；抬手命中判定在 Completed（几何吃 ui/modal.rs）
                 let panel_top = self.last_ai_snap.and_then(|s| s.top);
+                // BAR-221：md 面板页捏合布线——第一指已在页槽（信箱页/
+                // 阅读页/查看器跳框模态）时第二指落地 → 转全局捏合，与
+                // 终端区同一律（双指登记 touches + pinch 建机；Moved 测距
+                // 应用与 Ended 收尾既有路径零改动）。页槽/滚动机同生同
+                // 灭——残留槽会在 Moved 各臂截胡捏合事件
+                if self.pinch.is_none() {
+                    let first = self
+                        .modal_touch
+                        .take()
+                        .or_else(|| self.reader_touch.take())
+                        .or_else(|| self.mail_touch.take());
+                    if let Some((fid, fx, fy, _)) = first {
+                        self.modal_scroll = None;
+                        self.reader_scroll = None;
+                        self.mail_scroll = None;
+                        self.touches.retain(|t| t.0 != fid && t.0 != id);
+                        self.touches.push((fid, fx, fy));
+                        self.touches.push((id, x, y));
+                        let dist0 = ((x - fx).powi(2) + (y - fy).powi(2)).sqrt().max(1.0);
+                        let base = self
+                            .term_handle()
+                            .map(|t| t.lock().unwrap().cell_size())
+                            .unwrap_or((crate::termview::CELL_W, crate::termview::CELL_H));
+                        self.pinch = Some((dist0, base));
+                        crate::report::report(
+                            "zoom",
+                            &format!(
+                                "捏合开始（面板页）: dist0={dist0:.0} base={}x{}",
+                                base.0, base.1
+                            ),
+                        );
+                        return;
+                    }
+                }
                 if panel_top == Some(crate::ai_presence::Panel::Config)
                     && crate::ui::seam::sample_config_panel_offset_x(
                         0.0,
@@ -1434,7 +1471,7 @@ impl App {
                     }
                 {
                     crate::report::report("gest", &format!("起手→跳框模态 ({x:.0},{y:.0})"));
-                    self.modal_touch = Some((x, y, false));
+                    self.modal_touch = Some((id, x, y, false));
                     // BAR-167 ①：滚动接力件同起手建机（速度采样时钟随件）
                     self.modal_scroll = Some(crate::scroll::TouchScroll::new(
                         y,
@@ -1514,7 +1551,7 @@ impl App {
                                 "gest",
                                 &format!("起手→跳框模态（文件树页）({x:.0},{y:.0})"),
                             );
-                            self.modal_touch = Some((x, y, false));
+                            self.modal_touch = Some((id, x, y, false));
                             // BAR-167 ①：滚动接力件同起手建机
                             self.modal_scroll = Some(crate::scroll::TouchScroll::new(
                                 y,
@@ -1597,7 +1634,7 @@ impl App {
                             }
                         }
                         crate::report::report("gest", &format!("起手→阅读页 ({x:.0},{y:.0})"));
-                        self.reader_touch = Some((x, y, false));
+                        self.reader_touch = Some((id, x, y, false));
                         self.reader_scroll = Some(crate::scroll::TouchScroll::new(
                             y,
                             f64::from(crate::termview::CELL_H),
@@ -1623,7 +1660,7 @@ impl App {
                                     &format!("起手→跳框模态（信箱页上）({x:.0},{y:.0})"),
                                 );
                                 drop(pg);
-                                self.modal_touch = Some((x, y, false));
+                                self.modal_touch = Some((id, x, y, false));
                                 self.modal_scroll = Some(crate::scroll::TouchScroll::new(
                                     y,
                                     f64::from(crate::termview::CELL_H),
@@ -1632,7 +1669,7 @@ impl App {
                             }
                         }
                         crate::report::report("gest", &format!("起手→信箱页 ({x:.0},{y:.0})"));
-                        self.mail_touch = Some((x, y, false));
+                        self.mail_touch = Some((id, x, y, false));
                         self.mail_scroll = Some(crate::scroll::TouchScroll::new(
                             y,
                             f64::from(crate::termview::CELL_H),
@@ -1791,7 +1828,7 @@ impl App {
                                 "gest",
                                 &format!("起手→跳框模态（解析页信箱）({x:.0},{y:.0})"),
                             );
-                            self.modal_touch = Some((x, y, false));
+                            self.modal_touch = Some((id, x, y, false));
                             self.modal_scroll = Some(crate::scroll::TouchScroll::new(
                                 y,
                                 f64::from(crate::termview::CELL_H),
@@ -2134,17 +2171,17 @@ impl App {
                 // 跳框模态手势：拖过 slop 只记账（抬手不归点按不收框）；
                 // 模态期间手势不出本槽（压暗层吃下层，宪法 §六）
                 if let Some(mt) = self.modal_touch.as_mut() {
-                    if !mt.2
-                        && ((x - mt.0).abs() > crate::scroll::TAP_SLOP_PX
-                            || (y - mt.1).abs() > crate::scroll::TAP_SLOP_PX)
+                    if !mt.3
+                        && ((x - mt.1).abs() > crate::scroll::TAP_SLOP_PX
+                            || (y - mt.2).abs() > crate::scroll::TAP_SLOP_PX)
                     {
-                        mt.2 = true;
+                        mt.3 = true;
                     }
                     // BAR-167 ①：查看器开着 + 拖过 slop = 正文滚动（眼手
                     // 同尺：scroll 住 cfg_page viewer 态，涂装/命中同读；
                     // max 按实时屏尺寸现算现喂）。手指上推（d<0）= 看
                     // 下文 = scroll 增大，故取反
-                    if mt.2
+                    if mt.3
                         && let (Some(page), Some((sw, sh))) =
                             (crate::ui::cfg_page::cfg_page_handle(), self.screen_px())
                         && let Some(ms) = self.modal_scroll.as_mut()
@@ -2175,8 +2212,8 @@ impl App {
                 // 上推（d<0）= 看更新 = 向底 = offset_bottom 减（追底账
                 // 同向，mail_page 核自钳）
                 if let Some(mt) = self.mail_touch.as_mut() {
-                    let (dx_all, dy_all) = (x - mt.0, y - mt.1);
-                    if !mt.2
+                    let (dx_all, dy_all) = (x - mt.1, y - mt.2);
+                    if !mt.3
                         && (dx_all.abs() > crate::ui::panel_drag::DRAG_LOCK_PX
                             || dy_all.abs() > crate::ui::panel_drag::DRAG_LOCK_PX)
                         && dx_all.abs() * crate::ui::panel_drag::DRAG_DIR_LOCK > dy_all.abs()
@@ -2185,7 +2222,7 @@ impl App {
                             "gest",
                             &format!("信箱页手势让回面板页 ({x:.0},{y:.0})"),
                         );
-                        let (sx, sy) = (mt.0, mt.1);
+                        let (sx, sy) = (mt.1, mt.2);
                         self.mail_touch = None;
                         self.mail_scroll = None;
                         self.panel_touch = Some(PanelTouch {
@@ -2206,13 +2243,13 @@ impl App {
                         self.dirty = true;
                         return;
                     }
-                    if !mt.2
-                        && ((x - mt.0).abs() > crate::scroll::TAP_SLOP_PX
-                            || (y - mt.1).abs() > crate::scroll::TAP_SLOP_PX)
+                    if !mt.3
+                        && ((x - mt.1).abs() > crate::scroll::TAP_SLOP_PX
+                            || (y - mt.2).abs() > crate::scroll::TAP_SLOP_PX)
                     {
-                        mt.2 = true;
+                        mt.3 = true;
                     }
-                    let dragged = mt.2; // mt 借用到此（E0502 同 reader 臂）
+                    let dragged = mt.3; // mt 借用到此（E0502 同 reader 臂）
                     let px = self.screen_px();
                     if dragged && let (Some(ms), Some((sw, sh))) = (self.mail_scroll.as_mut(), px) {
                         let d = ms.moved_px_at(y, crate::report::boot_ms() as f64);
@@ -2239,8 +2276,8 @@ impl App {
                     // 零动作都归面板页全家）——整槽让回（文件树同款让回律；
                     // BAR-170 redroid 判卷咬出：无让回 = 事件全被滚动槽吞，
                     // 右缘推回永远够不到面板拖拽）
-                    let (dx_all, dy_all) = (x - rt.0, y - rt.1);
-                    if !rt.2
+                    let (dx_all, dy_all) = (x - rt.1, y - rt.2);
+                    if !rt.3
                         && (dx_all.abs() > crate::ui::panel_drag::DRAG_LOCK_PX
                             || dy_all.abs() > crate::ui::panel_drag::DRAG_LOCK_PX)
                         && dx_all.abs() * crate::ui::panel_drag::DRAG_DIR_LOCK > dy_all.abs()
@@ -2249,7 +2286,7 @@ impl App {
                             "gest",
                             &format!("阅读页手势让回面板页 ({x:.0},{y:.0})"),
                         );
-                        let (sx, sy) = (rt.0, rt.1);
+                        let (sx, sy) = (rt.1, rt.2);
                         self.reader_touch = None;
                         self.reader_scroll = None;
                         self.panel_touch = Some(PanelTouch {
@@ -2271,13 +2308,13 @@ impl App {
                         self.dirty = true;
                         return;
                     }
-                    if !rt.2
-                        && ((x - rt.0).abs() > crate::scroll::TAP_SLOP_PX
-                            || (y - rt.1).abs() > crate::scroll::TAP_SLOP_PX)
+                    if !rt.3
+                        && ((x - rt.1).abs() > crate::scroll::TAP_SLOP_PX
+                            || (y - rt.2).abs() > crate::scroll::TAP_SLOP_PX)
                     {
-                        rt.2 = true;
+                        rt.3 = true;
                     }
-                    let dragged = rt.2; // rt 借用到此为止——屏参的 &self 与 rs 的 &mut 不并立（E0502）
+                    let dragged = rt.3; // rt 借用到此为止——屏参的 &self 与 rs 的 &mut 不并立（E0502）
                     let px = self.screen_px();
                     if dragged && let (Some(rs), Some((sw, sh))) = (self.reader_scroll.as_mut(), px)
                     {
@@ -2651,6 +2688,9 @@ impl App {
                             if let Some(t) = self.term_handle() {
                                 t.lock().unwrap().set_cell_size(cw, ch);
                             }
+                            // BAR-221：信箱页几何账同步吃新格（页态存格，
+                            // 本轮烘焙 feed 即取新值，不滞后一帧）
+                            crate::ui::mail_page::note_cell((cw, ch));
                             if let Some(w) = &self.window {
                                 let s = w.inner_size();
                                 self.apply_window_size(s.width, s.height);
@@ -3111,7 +3151,7 @@ impl App {
                 // 分流，不到本槽）；未拖抬手 = 无操作
                 if let Some(rt) = self.reader_touch.take() {
                     if phase == TouchPhase::Ended
-                        && rt.2
+                        && rt.3
                         && let Some(f) = self
                             .reader_scroll
                             .as_ref()
@@ -3138,7 +3178,7 @@ impl App {
                     // 末速过启动阈；点按/停住才松手 = None 不甩——
                     // scroll.rs Fling 同一物理机，不手写增量）
                     if phase == TouchPhase::Ended
-                        && mt.2
+                        && mt.3
                         && let Some(f) = self
                             .modal_scroll
                             .as_ref()
@@ -3155,7 +3195,7 @@ impl App {
                     }
                     self.modal_scroll = None;
                     if phase == TouchPhase::Ended
-                        && !mt.2
+                        && !mt.3
                         && let (Some(page), Some((sw, sh))) =
                             (crate::ui::cfg_page::cfg_page_handle(), self.screen_px())
                     {
@@ -3490,7 +3530,7 @@ impl App {
                 if let Some(mt) = self.mail_touch.take() {
                     // 抬手交接甩尾（viewer 同规：拖过才甩，信箱页还开着才接）
                     if phase == TouchPhase::Ended
-                        && mt.2
+                        && mt.3
                         && let Some(ms) = self.mail_scroll.take()
                     {
                         if crate::ui::mail_page::open_key().is_some()
@@ -3503,7 +3543,7 @@ impl App {
                         self.mail_scroll = None;
                     }
                     if phase == TouchPhase::Ended
-                        && !mt.2
+                        && !mt.3
                         && let (Some(v), Some((sw, sh))) =
                             (crate::ui::mail_page::snap(), self.screen_px())
                     {
@@ -5422,9 +5462,10 @@ impl App {
         };
         let g = crate::ui::mail_page::mail_geom(sw, sh, bottom_inset);
         let area = crate::ui::mail_page::items_area(&g);
-        let text_cells = crate::ui::mail_page::text_cells_of(area.w);
+        let m = crate::ui::mail_page::cur_metrics();
+        let text_cells = crate::ui::mail_page::text_cells_of(area.w, &m);
         let book = crate::mail_feed::book_snap(key);
-        crate::ui::mail_page::sync_items(&book.entries, text_cells, g.view_y1 - g.view_y0);
+        crate::ui::mail_page::sync_items(&book.entries, text_cells, g.view_y1 - g.view_y0, &m);
         let Some(v) = crate::ui::mail_page::snap() else {
             return;
         };

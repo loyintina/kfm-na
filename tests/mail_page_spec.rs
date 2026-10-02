@@ -48,7 +48,8 @@ fn spec_bar214_信头纯件() {
 }
 
 /// 钉②：行高同源——const 值与 md 管线 line_h_grid 运行期对表
-/// （const 钉死是 f32 ceil/round 非 const 的妥协，本钉是同源性的牙）
+/// （const 钉死是 f32 ceil/round 非 const 的妥协，本钉是同源性的牙；
+/// BAR-221 新约：const = 默认格值，实例格联动钉见 spec_bar221）
 #[test]
 fn spec_bar214_行高同源对表() {
     use kfm_na::ui::demo_page as dp;
@@ -56,18 +57,23 @@ fn spec_bar214_行高同源对表() {
     assert_eq!(BODY_LH, line_h_grid(CELL_H, 1.0));
     assert_eq!(H1_LH, line_h_grid(CELL_H, dp::H1_SCALE));
     assert_eq!(H1_BLOCK_H, dp::HU + H1_LH + dp::HU);
+    let d = default_metrics();
+    assert_eq!(d.body_lh, BODY_LH, "默认格 metrics 与 const 零漂移");
+    assert_eq!(d.h1_block_h, H1_BLOCK_H);
 }
 
 /// 钉③：第一栏高 = max(H1 块, 收件人行数)；两收件人上下并置长行
 #[test]
 fn spec_bar214_首栏高随收件人() {
-    let one = lay_item(&entry("a", "开发部观澜", "全体", "t", Some("s")), 0, 40);
+    let m = default_metrics();
+    let one = lay_item(&entry("a", "开发部观澜", "全体", "t", Some("s")), 0, 40, &m);
     assert_eq!(one.meta_h, H1_BLOCK_H, "单收件人栏高 = H1 块高");
     assert_eq!(one.recipients, vec!["全体".to_string()]);
     let two = lay_item(
         &entry("b", "开发部观澜", "评审部白露、全体", "t", Some("s")),
         0,
         40,
+        &m,
     );
     assert_eq!(
         two.meta_h,
@@ -75,21 +81,22 @@ fn spec_bar214_首栏高随收件人() {
         "双收件人栏高 = max(H1 块, 两行)"
     );
     assert_eq!(two.recipients.len(), 2);
-    let three = lay_item(&entry("c", "f", "甲、乙、丙", "t", Some("s")), 0, 40);
+    let three = lay_item(&entry("c", "f", "甲、乙、丙", "t", Some("s")), 0, 40, &m);
     assert_eq!(three.meta_h, H1_BLOCK_H.max(3 * BODY_LH));
 }
 
 /// 钉④：渲染器不设最大高度——长标题/长摘要折行往下长，卡高 = 三栏实量和
 #[test]
 fn spec_bar214_折行长高无上限() {
-    let short = lay_item(&entry("a", "f", "全体", "短", Some("短")), 0, 40);
+    let m = default_metrics();
+    let short = lay_item(&entry("a", "f", "全体", "短", Some("短")), 0, 40, &m);
     assert_eq!(short.title_lines.len(), 1);
     assert_eq!(short.sum_lines.len(), 1);
     let expect_h = ITEM_PAD_V * 2 + short.meta_h + ROW_GAP + BODY_LH + ROW_GAP + BODY_LH;
     assert_eq!(short.h, expect_h);
     // 长标题（40 格宽，每汉字 2 格 → 21 字折两行）
     let long_title = "这是一段足够长的标题用来验证折行机制是否按格正确工作";
-    let long = lay_item(&entry("b", "f", "全体", long_title, Some("短")), 0, 40);
+    let long = lay_item(&entry("b", "f", "全体", long_title, Some("短")), 0, 40, &m);
     assert!(long.title_lines.len() >= 2, "长标题必须折行");
     assert_eq!(
         long.h,
@@ -102,7 +109,7 @@ fn spec_bar214_折行长高无上限() {
     );
     // 超长摘要：100 行也照长（无最大高度条款）
     let huge_sum = "很长的摘要内容".repeat(200);
-    let huge = lay_item(&entry("c", "f", "全体", "t", Some(&huge_sum)), 0, 40);
+    let huge = lay_item(&entry("c", "f", "全体", "t", Some(&huge_sum)), 0, 40, &m);
     assert!(huge.sum_lines.len() > 10);
     assert_eq!(
         huge.h,
@@ -121,11 +128,12 @@ fn spec_bar214_折行长高无上限() {
 /// 钉⑤：摘要三态词面 + 空标题保底一行
 #[test]
 fn spec_bar214_摘要三态与空保底() {
-    let pending = lay_item(&entry("a", "f", "全体", "t", None), 0, 40);
+    let m = default_metrics();
+    let pending = lay_item(&entry("a", "f", "全体", "t", None), 0, 40, &m);
     assert_eq!(pending.sum_lines.len(), 1);
-    let empty = lay_item(&entry("b", "f", "全体", "t", Some("")), 0, 40);
+    let empty = lay_item(&entry("b", "f", "全体", "t", Some("")), 0, 40, &m);
     assert_eq!(empty.sum_lines.len(), 1);
-    let no_title = lay_item(&entry("c", "f", "全体", "", Some("s")), 0, 40);
+    let no_title = lay_item(&entry("c", "f", "全体", "", Some("s")), 0, 40, &m);
     assert_eq!(no_title.title_lines.len(), 1, "空标题保底一行不塌高");
     // 三态卡高一致（占位行与实单行同高 = 摘要不跳变）
     assert_eq!(pending.h, empty.h);
@@ -137,7 +145,7 @@ fn spec_bar214_流水滚动命中账() {
     let entries: Vec<MailEntry> = (0..10)
         .map(|i| entry(&format!("n{i}"), "f", "全体", "t", Some("s")))
         .collect();
-    let lays = lay_items(&entries, 40);
+    let lays = lay_items(&entries, 40, &default_metrics());
     // 前缀和：top(i+1) = top(i) + h + ITEM_GAP
     for w in lays.windows(2) {
         assert_eq!(w[1].top, w[0].top + i64::from(w[0].h) + i64::from(ITEM_GAP));
@@ -182,11 +190,12 @@ fn spec_bar214_流水滚动命中账() {
 #[test]
 fn spec_bar214_追底状态机() {
     use kfm_na::mail_feed::MailKey;
+    let m = default_metrics();
     let mut v = MailPageView::new(MailKey::NaBook);
     let entries: Vec<MailEntry> = (0..20)
         .map(|i| entry(&format!("n{i}"), "f", "全体", "t", Some("s")))
         .collect();
-    v.sync_items(&entries, 40, 300);
+    v.sync_items(&entries, 40, 300, &m);
     assert!(v.follow() && v.offset_bottom() == 0, "初态追底贴底");
     // 上滑看旧：follow 取消
     assert!(v.scroll_by(500));
@@ -201,10 +210,10 @@ fn spec_bar214_追底状态机() {
     assert!(v.follow() && v.offset_bottom() == 0);
     // 追底态同步新数据：恒贴底
     v.scroll_by(300);
-    v.sync_items(&entries, 40, 300);
+    v.sync_items(&entries, 40, 300, &m);
     assert_eq!(v.offset_bottom(), 300, "非追底同步不动视口");
     // 内容缩水钳回上限
-    v.sync_items(&entries[..3], 40, 300);
+    v.sync_items(&entries[..3], 40, 300, &m);
     assert!(v.offset_bottom() <= scroll_max(v.lays(), 300));
 }
 
@@ -221,7 +230,7 @@ fn spec_bar214_页几何与全局句柄() {
     assert_eq!(area.x, g.x0);
     assert_eq!(area.w, (g.x1 - g.x0) as u32);
     assert_eq!(
-        text_cells_of(area.w),
+        text_cells_of(area.w, &default_metrics()),
         (area.w - ITEM_PAD_H * 2) / CELL_W,
         "文宽格数 = (卡宽 - 两侧 pad) / 格宽"
     );
@@ -261,4 +270,59 @@ fn spec_bar220_页存活闸状态机() {
     open(MailKey::NaBook);
     assert!(is_open(), "重开 = 活（烘焙闸起）");
     close();
+}
+
+/// 钉⑨（BAR-221）：实例格几何账——默认格 metrics 与 const 逐值对表
+/// 零漂移；实例格变 → 几何全联动（留白/栏距/行高/H1 块高/卡高/文宽
+/// 折算）；note_cell 喂格 → 页态几何账与 mail_geom 右缘让位同吃新格；
+/// 收页 = 默认格回退。变异咬：metrics_of 某字段回 CELL 常量 → 对表
+/// 断言红；note_cell 不写 v.cell → mail_geom/cur_metrics 断言红；
+/// mail_geom 右缘回 CELL_W → x1 差值断言红
+#[test]
+fn spec_bar221_实例格几何联动() {
+    use kfm_na::mail_feed::MailKey;
+    use kfm_na::termview::CELL_W;
+    let d = default_metrics();
+    assert_eq!(d.body_lh, BODY_LH);
+    assert_eq!(d.h1_lh, H1_LH);
+    assert_eq!(d.h1_block_h, H1_BLOCK_H);
+    assert_eq!(d.item_pad_v, ITEM_PAD_V);
+    assert_eq!(d.item_pad_h, ITEM_PAD_H);
+    assert_eq!(d.row_gap, ROW_GAP);
+    assert_eq!(d.item_gap, ITEM_GAP);
+    // 双倍格：几何全翻（行高走 line_h_grid 同源，留白/栏距吃格直出）
+    let big = metrics_of((CELL_W * 2, CELL_H * 2));
+    assert_eq!(big.item_pad_v, CELL_H * 2);
+    assert_eq!(big.row_gap, CELL_H);
+    assert_eq!(
+        big.body_lh,
+        kfm_na::ui::md_layout::line_h_grid(CELL_H * 2, 1.0)
+    );
+    assert_ne!(big.body_lh, d.body_lh, "格变 → 行高必变");
+    let e = entry("a", "f", "全体", "t", Some("s"));
+    let lay_d = lay_item(&e, 0, 40, &d);
+    let lay_b = lay_item(&e, 0, 40, &big);
+    assert_eq!(lay_b.meta_y, big.item_pad_v, "卡内留白吃实例格");
+    assert!(lay_b.h > lay_d.h, "格变大 → 卡高必长");
+    // 文宽折算吃实例格宽
+    assert_eq!(
+        text_cells_of(720, &big),
+        (720 - big.item_pad_h * 2) / big.cell_w
+    );
+    // note_cell → 页态几何账 + mail_geom 右缘让位跟实例格宽
+    close(); // 防前题残态（页关 = 默认格回退）
+    assert_eq!(cur_cell(), (CELL_W, CELL_H));
+    let g0 = mail_geom(1260, 2560, 0);
+    open(MailKey::NaBook);
+    note_cell((CELL_W * 2, CELL_H * 2));
+    assert_eq!(cur_cell(), (CELL_W * 2, CELL_H * 2));
+    assert_eq!(cur_metrics().body_lh, big.body_lh, "页态几何账吃喂入格");
+    let g1 = mail_geom(1260, 2560, 0);
+    assert_eq!(
+        g0.x1 - g1.x1,
+        i64::from(CELL_W),
+        "格宽翻倍 → 右缘让位多 1 格"
+    );
+    close();
+    assert_eq!(cur_cell(), (CELL_W, CELL_H), "收页 = 默认格回退");
 }
