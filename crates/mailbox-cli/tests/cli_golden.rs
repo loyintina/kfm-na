@@ -1867,3 +1867,73 @@ fn spec_bar193_verify_撤回判据边界与两跳链() {
     let _ = fs::remove_dir_all(&d2);
     let _ = fs::remove_dir_all(&d3);
 }
+
+// ---------------------------------------------------------------
+// BAR-227：信封必填追 v2.2——「复」不再是必填项（契约 §三；JS
+// check-letter-token.mjs V21_REQUIRED=['日期','从','致','状态'] 已删，
+// Rust 侧 verify.rs 全册/单信两臂＋projection.rs V21_NEED 三处追平；
+// 主册 0104~0108 五封无「复」新信被旧闸假红的实证）。fp 与信文无关
+// （sha256("{no}|{nonce}|{file}|v2")），故改信文不破令牌。
+// 钉：缺「复」＝绿（单信＋全册）；缺「状态」＝红（必填仍执法）；
+// 写了非法「复」仍红（格式校验臂不误删）。
+// 变异方向：必填数组留「复」→ 第 1 幕红；「复」格式校验臂误删 →
+// 第 3 幕不红（咬中）。
+// ---------------------------------------------------------------
+#[test]
+fn spec_bar227_verify_复不再必填() {
+    let d = setup_verified_book("bar227");
+    let mb = d.to_str().unwrap().to_string();
+    let lp = d.join(LETTER_A).to_str().unwrap().to_string();
+    // 第 1 幕：删掉「> 复:」行 → 单信＋全册皆绿（必填留「复」的变异在此红）
+    let text = fs::read_to_string(d.join(LETTER_A)).unwrap();
+    let no_fu: String = text
+        .lines()
+        .filter(|l| !l.starts_with("> 复:"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(no_fu != text, "夹具前提：{LETTER_A} 应有「> 复:」行");
+    fs::write(d.join(LETTER_A), &no_fu).unwrap();
+    let out = run(&["verify", &lp, "--mailbox", &mb, "--roster", ROSTER]);
+    assert_ok(&out, "BAR-227 单信缺「复」应绿");
+    let out = run(&["verify", "--mailbox", &mb, "--roster", ROSTER]);
+    assert_ok(&out, "BAR-227 全册缺「复」应绿");
+    // 第 1b 幕：gen 投影臂（projection.rs V21_NEED）——缺「复」不得进投影缺字段行
+    // （V21_NEED 留「复」的变异在此咬：README 台账区会冒出 缺字段 行）
+    fs::write(
+        d.join("README.md"),
+        "# 夹具册\n\n<!-- gen:pending:start -->\n<!-- gen:pending:end -->\n\n<!-- gen:agent-inbox:start -->\n<!-- gen:agent-inbox:end -->\n",
+    )
+    .unwrap();
+    let out = run(&["gen", "--mailbox", &mb, "--roster", ROSTER]);
+    assert_ok(&out, "BAR-227 gen（缺「复」）");
+    let readme = fs::read_to_string(d.join("README.md")).unwrap();
+    assert!(
+        !readme.contains("信封缺字段"),
+        "BAR-227 gen 投影不得报缺「复」：{readme}"
+    );
+    // 第 2 幕：再删「> 状态:」→ 红（必填项仍执法）
+    let no_status: String = no_fu
+        .lines()
+        .filter(|l| !l.starts_with("> 状态:"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(d.join(LETTER_A), &no_status).unwrap();
+    let out = run(&["verify", &lp, "--mailbox", &mb, "--roster", ROSTER]);
+    assert_fail(&out, "BAR-227 缺「状态」应红");
+    let vout = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        vout.contains("缺字段：状态") && vout.contains("「复」v2.2 起不再必填"),
+        "红文应是 v2.2 新文案：{vout}"
+    );
+    // 第 3 幕：恢复状态、写入非法「复」→ 红（格式校验臂照在）
+    let bad_fu = no_fu.replace("> 状态:", "> 复: 这不是合法复值\n> 状态:");
+    assert!(bad_fu != no_fu, "夹具前提：可插入非法「复」行");
+    fs::write(d.join(LETTER_A), &bad_fu).unwrap();
+    let out = run(&["verify", &lp, "--mailbox", &mb, "--roster", ROSTER]);
+    assert_fail(&out, "BAR-227 非法「复」值应红（格式臂不误删）");
+    let _ = fs::remove_dir_all(&d);
+}
