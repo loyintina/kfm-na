@@ -141,19 +141,53 @@ fn spec_bar212_url_encode逗号与中文() {
 /// 钉（BAR-222）：列表解析楼层表 + manifest 楼层往返 + 缺字段容错空表
 #[test]
 fn spec_bar222_楼层透传与缓存往返() {
-    let body = r#"{"ok":true,"letters":[{"name":"0001号甲致乙的通报.md","bytes":10,"mtime":7,"time":"2026-10-02 06:23 +08:00","from":"开发部闻灯","to":"测试部承影","title":"题","floors":[{"n":1,"author":"闻灯","to":"承影","time":"2026-10-02 06:23 +08:00","body":"一楼正文"},{"n":2,"author":"承影","to":"1楼闻灯","time":"2026-10-02 07:00 +08:00","body":"二楼正文"}]},{"name":"0002号丙致丁的通报.md","bytes":5,"mtime":8,"time":"","from":"","to":"","title":""}]}"#;
+    let body = r#"{"ok":true,"letters":[{"name":"0001号甲致乙的通报.md","bytes":10,"mtime":7,"time":"2026-10-02 06:23 +08:00","from":"开发部闻灯","to":"测试部承影","title":"题","floors":[{"n":1,"author":"闻灯","to":"承影","time":"2026-10-02 06:23 +08:00","summary":"一楼白话。","detail":"一楼细节。","body":"摘要段\n\n一楼白话。\n\n正文段\n\n一楼细节。"},{"n":2,"author":"承影","to":"1楼闻灯","time":"2026-10-02 07:00 +08:00","summary":null,"detail":null,"body":"旧形二楼正文"}]},{"name":"0002号丙致丁的通报.md","bytes":5,"mtime":8,"time":"","from":"","to":"","title":""}]}"#;
     let list = parse_mail_list(body).expect("解析");
     assert_eq!(list.len(), 2);
-    // 楼层逐字段透传
+    // 楼层逐字段透传（summary/detail 原样透 Option）
     assert_eq!(list[0].floors.len(), 2);
     assert_eq!(list[0].floors[0].n, 1);
     assert_eq!(list[0].floors[0].author, "闻灯");
+    assert_eq!(list[0].floors[0].summary.as_deref(), Some("一楼白话。"));
+    assert_eq!(list[0].floors[0].detail.as_deref(), Some("一楼细节。"));
     assert_eq!(list[0].floors[1].to, "1楼闻灯");
-    assert_eq!(list[0].floors[1].body, "二楼正文");
+    assert_eq!(list[0].floors[1].summary, None);
+    assert_eq!(list[0].floors[1].body, "旧形二楼正文");
     // 缺 floors 字段（旧服务端/旧缓存）= 空表不炸
     assert!(list[1].floors.is_empty());
     // manifest 往返：楼层随缓存写透读回（断网也要有楼层看）
     let back = parse_mail_list(&manifest_json(&list)).expect("manifest 读回");
     assert_eq!(back[0].floors, list[0].floors, "manifest 楼层往返一致");
     assert!(back[1].floors.is_empty());
+}
+
+/// 钉（BAR-222，0153 楼1 白露机读面口径）：渲染正文单源 display_text——
+/// 新形吃 summary/detail（细节省则只摘要），旧形两键 null 回落 body
+#[test]
+fn spec_bar222_楼层渲染单源_display_text() {
+    use kfm_na::mail_feed::MailFloor;
+    let mk = |summary: Option<&str>, detail: Option<&str>, body: &str| MailFloor {
+        n: 1,
+        author: "甲".to_string(),
+        to: String::new(),
+        time: String::new(),
+        summary: summary.map(str::to_string),
+        detail: detail.map(str::to_string),
+        body: body.to_string(),
+    };
+    assert_eq!(
+        mk(Some("白话。"), Some("细节。"), "原文").display_text(),
+        "白话。\n\n细节。",
+        "新形 = 摘要隔空行接细节"
+    );
+    assert_eq!(
+        mk(Some("白话。"), None, "原文").display_text(),
+        "白话。",
+        "细节可省 = 只摘要"
+    );
+    assert_eq!(
+        mk(None, None, "旧形原文").display_text(),
+        "旧形原文",
+        "旧形回落 body"
+    );
 }

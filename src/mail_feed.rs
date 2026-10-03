@@ -57,14 +57,34 @@ impl MailKey {
     }
 }
 
-/// 楼层条目（BAR-222，NA0152 第四栏：agentd parse_floors 的客户端镜像）
+/// 楼层条目（BAR-222，NA0152 第四栏：agentd FloorMeta 的客户端镜像——
+/// 数据唯一源 = letters floor --list 的 JSON，0153 楼1 白露机读面口径）
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MailFloor {
     pub n: u32,
     pub author: String,
     pub to: String,
     pub time: String,
+    /// 新形两段制：摘要（旧形楼为 None）
+    pub summary: Option<String>,
+    /// 新形两段制：细节（可省，None）
+    pub detail: Option<String>,
+    /// 原文整段（旧形楼的渲染回落）
     pub body: String,
+}
+
+impl MailFloor {
+    /// 渲染正文单源（0153 楼1：渲染吃 summary/detail，旧形回落 body）：
+    /// 新形 = 摘要 +（有细节时隔空行接细节）；旧形 = body 原文
+    pub fn display_text(&self) -> String {
+        match &self.summary {
+            Some(s) => match &self.detail {
+                Some(d) if !d.is_empty() => format!("{s}\n\n{d}"),
+                _ => s.clone(),
+            },
+            None => self.body.clone(),
+        }
+    }
 }
 
 /// 信件条目（列表页一行的全部素材）：列表端点给 name/bytes/mtime +
@@ -120,6 +140,11 @@ pub fn parse_mail_list(body: &str) -> Result<Vec<MailEntry>, String> {
                                     .and_then(Value::as_str)
                                     .unwrap_or("")
                                     .to_string(),
+                                summary: f
+                                    .get("summary")
+                                    .and_then(Value::as_str)
+                                    .map(str::to_string),
+                                detail: f.get("detail").and_then(Value::as_str).map(str::to_string),
                                 body: f
                                     .get("body")
                                     .and_then(Value::as_str)
@@ -201,7 +226,8 @@ pub fn manifest_json(list: &[MailEntry]) -> String {
             "time": l.time, "from": l.from, "to": l.to, "title": l.title,
             "floors": l.floors.iter().map(|f| serde_json::json!({
                 "n": f.n, "author": f.author, "to": f.to,
-                "time": f.time, "body": f.body,
+                "time": f.time, "summary": f.summary, "detail": f.detail,
+                "body": f.body,
             })).collect::<Vec<_>>(),
         })).collect::<Vec<_>>(),
     })

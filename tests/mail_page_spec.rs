@@ -340,6 +340,8 @@ fn floored_entry(name: &str, floors: Vec<(&str, &str, &str, &str)>) -> MailEntry
                 author: author.to_string(),
                 to: to.to_string(),
                 time: time.to_string(),
+                summary: None,
+                detail: None,
                 body: body.to_string(),
             },
         )
@@ -398,6 +400,36 @@ fn spec_bar222_第四栏几何全账() {
     assert_eq!(
         lay2.h,
         base.h + m.row_gap + m.body_lh + m.h2_lh + want as u32 * m.body_lh
+    );
+}
+
+/// 钉（BAR-222，0153 楼1 机读面口径）③：几何吃 display_text 单源——
+/// 新形楼折行区间对「摘要+细节」算（body 原文不参与），旧形回落 body
+#[test]
+fn spec_bar222_楼层几何吃渲染单源() {
+    let m = default_metrics();
+    let mut e = entry(
+        "0001号甲致乙的通报.md",
+        "开发部观澜",
+        "全体",
+        "题",
+        Some("摘"),
+    );
+    e.floors = vec![kfm_na::mail_feed::MailFloor {
+        n: 1,
+        author: "观澜".to_string(),
+        to: "观澜".to_string(),
+        time: "2026-10-01 17:23 +08:00".to_string(),
+        summary: Some("白话摘要".to_string()),
+        detail: Some("细节全文".to_string()),
+        body: "原文两字".to_string(),
+    }];
+    let lay = lay_item(&e, 0, 40, &m);
+    let disp = "白话摘要\n\n细节全文";
+    let want = kfm_na::ui::grid_text::grid_wrap(disp, 40);
+    assert_eq!(
+        lay.floors[0].body_lines, want,
+        "折行区间对 display_text（摘要+细节）算，不对 body 原文"
     );
 }
 

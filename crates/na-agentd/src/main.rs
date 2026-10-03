@@ -136,7 +136,8 @@ fn letter_json(l: &na_agentd::service::LetterMeta) -> serde_json::Value {
         "time": l.time, "from": l.from, "to": l.to, "title": l.title,
         "floors": l.floors.iter().map(|f| serde_json::json!({
             "n": f.n, "author": f.author, "to": f.to,
-            "time": f.time, "body": f.body,
+            "time": f.time, "summary": f.summary, "detail": f.detail,
+            "body": f.body,
         })).collect::<Vec<_>>(),
     })
 }

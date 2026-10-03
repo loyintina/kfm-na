@@ -49,13 +49,18 @@ pub struct LetterMeta {
     pub floors: Vec<FloorMeta>,
 }
 
-/// 楼层条目（BAR-222；契约 §十二 新形楼头，旧形存量为零不兼容）
+/// 楼层条目（BAR-222；0153 楼1 白露机读面口径：数据唯一源 =
+/// `letters floor --list` 的一行 JSON——本结构即该 JSON 的逐键镜像，
+/// 不自建文本解析第二真源。summary/detail 新形两段制（2026-10-03
+/// 09:00 后的楼）；旧形楼两键为 None，渲染回落 body）
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FloorMeta {
     pub n: u32,
     pub author: String,
     pub to: String,
     pub time: String,
+    pub summary: Option<String>,
+    pub detail: Option<String>,
     pub body: String,
 }
 
@@ -252,12 +257,10 @@ impl AgentService {
                     .map(|m| (m.bytes, m.mtime))
                     .unwrap_or((0, 0));
                 let (title, time, from, to) = parse_letter_head(&read_head(&path));
-                let floors = if key == "main-book" || key == "na-book" {
-                    host.read_file(&path)
-                        .map(|t| parse_floors(&t))
-                        .unwrap_or_default()
-                } else {
-                    Vec::new()
+                let floors = match key {
+                    "main-book" => self.floors_of(&host, &path, "00-主册", &name),
+                    "na-book" => self.floors_of(&host, &path, "10-NA信箱", &name),
+                    _ => Vec::new(),
                 };
                 out.push(LetterMeta {
                     name,
@@ -273,6 +276,41 @@ impl AgentService {
         }
         out.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(out)
+    }
+
+    /// 一信的楼层（BAR-222）：哨兵命中才调 letters CLI——楼层数据
+    /// 唯一源 = `letters floor --list` 的 JSON（0153 楼1 白露机读面
+    /// 口径，不自建文本解析第二真源）。只读子命令；CLI 缺席/失败 =
+    /// 空表不连坐列表面（楼渲染不致死整面）
+    fn floors_of(&self, host: &StdHost, path: &str, book_dir: &str, name: &str) -> Vec<FloorMeta> {
+        let Ok(text) = host.read_file(path) else {
+            return Vec::new();
+        };
+        if !has_floor_marker(&text) {
+            return Vec::new();
+        }
+        let tool = format!("{}/30-工具/letters", self.mail_root);
+        let rel = format!("{book_dir}/{name}");
+        let out = std::process::Command::new("bash")
+            .arg(&tool)
+            .arg("floor")
+            .arg("--list")
+            .arg(&rel)
+            .arg("--mailbox")
+            .arg(book_dir)
+            .current_dir(&self.mail_root)
+            .output();
+        let Ok(o) = out else {
+            return Vec::new();
+        };
+        if !o.status.success() {
+            return Vec::new();
+        }
+        let stdout = String::from_utf8_lossy(&o.stdout);
+        let Some(line) = stdout.lines().rev().find(|l| !l.trim().is_empty()) else {
+            return Vec::new();
+        };
+        parse_floor_list_json(line).unwrap_or_default()
     }
 
     /// 点名信箱的信件正文
@@ -423,62 +461,63 @@ pub fn extract_summary(text: &str) -> String {
     parts.join(" ")
 }
 
-/// 楼层解析（BAR-222，NA0152 第四栏）：新形楼头
-/// `> <N>楼：<作者>→<被回复者> · <时间>`（契约 §十二 一行四段）。
-/// 作者/被回复者剥 `(楼主)` 冠饰；被回复者留回楼形（`2楼观澜`）。
-/// 正文 = 楼头下一行起到下一楼头/文末，剥尾部 `---` 分隔线与空行，
-/// **全量不截断**（与摘要同律「有多少放多少」）；楼内含 `——撤回：` 行
-/// = 已撤楼，整楼跳过。旧形楼头（`> 楼:` 四行）存量为零，不认不炸
-/// （楼头行不匹配即视为上一楼正文，自然吞入，不毒楼层表）。
-pub fn parse_floors(text: &str) -> Vec<FloorMeta> {
-    // 楼头判定：`> <数字>楼：<谁> · <时间>`——「 · 」右段含日期即坐实
-    let header = |line: &str| -> Option<(u32, String, String, String)> {
-        let body = line.strip_prefix("> ")?;
-        let (n_part, rest) = body.split_once("楼：")?;
-        let n: u32 = n_part.trim().parse().ok()?;
-        // 「 · 」取最后一次：时间恒在尾（名字/回楼形不含此分隔）
-        let (who, time) = rest.rsplit_once(" · ")?;
-        if !time.trim().starts_with(|c: char| c.is_ascii_digit()) {
-            return None;
-        }
-        let (author, to) = who.split_once('→').unwrap_or((who, ""));
-        let strip = |s: &str| s.replace("(楼主)", "").trim().to_string();
-        Some((n, strip(author), strip(to), time.trim().to_string()))
-    };
-    let mut out: Vec<FloorMeta> = Vec::new();
-    let mut cur: Option<(u32, String, String, String, Vec<String>)> = None;
-    let flush = |cur: &mut Option<(u32, String, String, String, Vec<String>)>,
-                 out: &mut Vec<FloorMeta>| {
-        let Some((n, author, to, time, mut lines)) = cur.take() else {
-            return;
+/// 楼头哨兵（BAR-222）：`> <数字>楼：` 行出现 = 信内可能有楼——只在
+/// 命中时才调 letters CLI（node 起步价不白付给秃信）；只作「要不要
+/// 调」的闸，不做解析（解析唯一源 = letters floor --list 的 JSON，
+/// 0153 楼1 白露机读面口径：不自建文本解析第二真源）
+pub fn has_floor_marker(text: &str) -> bool {
+    text.lines().any(|l| {
+        let Some(b) = l.strip_prefix("> ") else {
+            return false;
         };
-        // 剥尾部空行与 `---` 分隔（楼间分隔线不属于任何一楼的正文）
-        while matches!(lines.last(), Some(l) if l.trim().is_empty() || l.trim() == "---") {
-            lines.pop();
+        let Some((num, _)) = b.split_once("楼：") else {
+            return false;
+        };
+        !num.is_empty() && num.chars().all(|c| c.is_ascii_digit())
+    })
+}
+
+/// letters floor --list 的一行 JSON → 楼层表（纯函数）。
+/// 已撤楼（withdrawn=true）整楼跳过；按名取键不依赖键序；
+/// summary/detail 原样透 Option（旧形楼为 null → None，渲染回落 body）
+pub fn parse_floor_list_json(json: &str) -> Result<Vec<FloorMeta>, String> {
+    let v: serde_json::Value =
+        serde_json::from_str(json).map_err(|e| format!("楼层 JSON 坏: {e}"))?;
+    let floors = v
+        .get("floors")
+        .and_then(serde_json::Value::as_array)
+        .ok_or("缺 floors 字段")?;
+    let mut out = Vec::new();
+    for f in floors {
+        if f.get("withdrawn").and_then(serde_json::Value::as_bool) == Some(true) {
+            continue;
         }
-        // 已撤楼（楼内撤回行）整楼跳过
-        if lines.iter().any(|l| l.trim_start().starts_with("——撤回：")) {
-            return;
-        }
-        let body = lines.join("\n").trim().to_string();
+        let n = f
+            .get("no")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or("楼层缺 no")? as u32;
+        let s = |k: &str| {
+            f.get(k)
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("")
+                .to_string()
+        };
+        let opt = |k: &str| {
+            f.get(k)
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        };
         out.push(FloorMeta {
             n,
-            author,
-            to,
-            time,
-            body,
+            author: s("from"),
+            to: s("toName"),
+            time: s("date"),
+            summary: opt("summary"),
+            detail: opt("detail"),
+            body: s("body"),
         });
-    };
-    for line in text.lines() {
-        if let Some((n, author, to, time)) = header(line) {
-            flush(&mut cur, &mut out);
-            cur = Some((n, author, to, time, Vec::new()));
-        } else if let Some((_, _, _, _, lines)) = cur.as_mut() {
-            lines.push(line.to_string());
-        }
     }
-    flush(&mut cur, &mut out);
-    out
+    Ok(out)
 }
 
 /// 尾部 n 非空行

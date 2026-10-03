@@ -515,47 +515,103 @@ fn spec_bar212_端点_summaries非法名跳过不连坐() {
     assert!(ss.is_empty());
 }
 
-// ---- BAR-222（NA0152 第四栏）：楼层解析与列表端点透传 ----
+// ---- BAR-222（NA0152 第四栏，0153 楼1 白露机读面口径）：楼层唯一源 =
+// letters floor --list 的一行 JSON；哨兵只作「要不要调 CLI」的闸，
+// JSON → FloorMeta 映射为纯函数钉——不自建文本解析第二真源 ----
 
-/// 带楼层的信：新形楼头两楼 + 一撤楼 + 楼间 `---` 分隔
-const LETTER_FLOORED: &str = "# 某信\n\n> 日期: 2026-10-01 12:56 +08:00\n> 从: 开发部观澜\n> 致: 全体\n\n## 摘要\n\n有事。\n\n## 正文\n\n见下。\n\n---\n\n> 1楼：(楼主)观澜→(楼主)观澜 · 2026-10-01 17:23 +08:00\n\n自顶一楼，正文全量保留不截断。\n\n---\n\n> 2楼：承影→1楼(楼主)观澜 · 2026-10-02 14:40 +08:00\n\n回楼：判卷不过，请查。\n\n---\n\n> 3楼：评审部白露→(楼主)观澜 · 2026-10-02 15:21 +08:00\n\n这楼撤了。\n\n——撤回：2026-10-02 15:22 +08:00 评审部白露——原楼作废，理由：试撤\n";
+/// 带楼层哨兵的信托身（内容只喂哨兵；楼层数据由 mock letters CLI 供）
+const LETTER_FLOORED: &str = "# 某信\n\n> 日期: 2026-10-01 12:56 +08:00\n> 从: 开发部观澜\n> 致: 全体\n\n## 摘要\n\n有事。\n\n## 正文\n\n见下。\n\n---\n\n> 1楼：(楼主)观澜→(楼主)观澜 · 2026-10-01 17:23 +08:00\n\n自顶一楼。\n";
+
+/// letters floor --list 的罐头 JSON（键序照契约 §十二：no,form,from,
+/// fromFunc,isOwner,date,toNo,toName,toIsOwner,withdrawn,hasAsk,body,
+/// summary,detail）：新形两段制楼 + 细节省略楼 + 旧形楼（summary/
+/// detail null）+ 已撤楼（应跳过）+ toName null 容错
+const FLOOR_LIST_JSON: &str = r#"{"parent":"0091","parentFile":"0091号观澜致全体的通报.md","book":"10-NA信箱","count":4,"floors":[{"no":1,"form":"new","from":"观澜","fromFunc":"开发部","isOwner":true,"date":"2026-10-01 17:23 +08:00","toNo":null,"toName":"观澜","toIsOwner":true,"withdrawn":false,"hasAsk":false,"body":"摘要段\n\n一楼白话。\n\n正文段\n\n一楼细节全文。","summary":"一楼白话。","detail":"一楼细节全文。"},{"no":2,"form":"new","from":"承影","fromFunc":"测试部","isOwner":false,"date":"2026-10-02 14:40 +08:00","toNo":1,"toName":"1楼观澜","toIsOwner":true,"withdrawn":false,"hasAsk":true,"body":"摘要段\n\n判卷不过请查。","summary":"判卷不过请查。","detail":null},{"no":3,"form":"old","from":"清和","fromFunc":"研究部","isOwner":false,"date":"2026-09-28 08:00 +08:00","toNo":null,"toName":null,"toIsOwner":false,"withdrawn":false,"hasAsk":false,"body":"旧形单段正文原样。","summary":null,"detail":null},{"no":4,"form":"new","from":"白露","fromFunc":"评审部","isOwner":false,"date":"2026-10-02 15:21 +08:00","toNo":null,"toName":"观澜","toIsOwner":true,"withdrawn":true,"hasAsk":false,"body":"这楼撤了。","summary":"这楼撤了。","detail":null}]}"#;
 
 #[test]
-fn spec_bar222_楼层解析_新形楼头全账() {
-    let fs = na_agentd::service::parse_floors(LETTER_FLOORED);
-    assert_eq!(fs.len(), 2, "撤楼整楼跳过: {fs:?}");
-    // 1 楼：剥 (楼主) 冠饰，正文全量
+fn spec_bar222_楼层哨兵_只作调用闸() {
+    use na_agentd::service::has_floor_marker as m;
+    assert!(m(LETTER_FLOORED));
+    assert!(m("> 12楼：甲→乙 · 2026-10-03 09:00 +08:00\n"));
+    assert!(!m("# 秃信\n\n## 正文\n\n没楼。\n"));
+    assert!(!m("> 楼：旧形无数字\n"), "非数字不坐实");
+    assert!(!m("正文里提一句 3楼：不算\n"), "非行首引用不坐实");
+}
+
+#[test]
+fn spec_bar222_楼层json映射_全账() {
+    let fs = na_agentd::service::parse_floor_list_json(FLOOR_LIST_JSON).expect("罐头 JSON");
+    assert_eq!(fs.len(), 3, "撤楼整楼跳过: {fs:?}");
+    // 新形两段制：summary/detail 原样透
     assert_eq!(fs[0].n, 1);
     assert_eq!(fs[0].author, "观澜");
     assert_eq!(fs[0].to, "观澜");
     assert_eq!(fs[0].time, "2026-10-01 17:23 +08:00");
-    assert_eq!(fs[0].body, "自顶一楼，正文全量保留不截断。");
-    // 2 楼：回楼形被回复者留「1楼观澜」（剥 (楼主) 不剥楼号）
-    assert_eq!(fs[1].n, 2);
-    assert_eq!(fs[1].author, "承影");
+    assert_eq!(fs[0].summary.as_deref(), Some("一楼白话。"));
+    assert_eq!(fs[0].detail.as_deref(), Some("一楼细节全文。"));
+    // 细节可省：detail null → None；回楼形被回复者留「1楼观澜」
+    assert_eq!(fs[1].summary.as_deref(), Some("判卷不过请查。"));
+    assert_eq!(fs[1].detail, None);
     assert_eq!(fs[1].to, "1楼观澜");
-    assert_eq!(fs[1].body, "回楼：判卷不过，请查。");
+    // 旧形：summary/detail 为 None，body 原文兜底；toName null → ""
+    assert_eq!(fs[2].summary, None);
+    assert_eq!(fs[2].detail, None);
+    assert_eq!(fs[2].body, "旧形单段正文原样。");
+    assert_eq!(fs[2].to, "");
+    // 坏 JSON / 缺 floors 字段 = 机械报错
+    assert!(na_agentd::service::parse_floor_list_json("{bad").is_err());
+    assert!(na_agentd::service::parse_floor_list_json("{}").is_err());
 }
 
-#[test]
-fn spec_bar222_楼层解析_边界族() {
-    // 无楼层 = 空表
-    assert!(na_agentd::service::parse_floors("# 秃信\n\n## 正文\n\n没楼。\n").is_empty());
-    // 长正文不截断 + 多行正文保换行 + 尾部 --- 剥掉
-    let long = "长".repeat(500);
-    let text = format!(
-        "# 信\n\n> 1楼：闻灯→承影 · 2026-10-02 06:23 +08:00\n\n第一段。\n\n{long}\n\n---\n"
-    );
-    let fs = na_agentd::service::parse_floors(&text);
-    assert_eq!(fs.len(), 1);
-    assert_eq!(fs[0].author, "闻灯");
-    assert_eq!(fs[0].to, "承影");
-    assert_eq!(fs[0].body, format!("第一段。\n\n{long}"), "正文全量不截断");
-    assert!(!fs[0].body.ends_with("---"), "尾部分隔线不进正文");
+/// 装 mock letters CLI：固定吐罐头 JSON + 每次被调追加一行到账文件
+/// （钉「只有哨兵命中的信才调 CLI」与调用面形状）
+fn install_mock_letters(mail_root: &std::path::Path, log: &std::path::Path) {
+    let dir = mail_root.join("30-工具");
+    std::fs::create_dir_all(&dir).expect("建工具目录");
+    let script = "#!/bin/bash\necho \"$@\" >> ".to_string()
+        + &log.display().to_string()
+        + "\ncat <<'EOF'\n"
+        + FLOOR_LIST_JSON
+        + "\nEOF\n";
+    std::fs::write(dir.join("letters"), script).expect("写 mock letters");
 }
 
 #[test]
 fn spec_bar222_端点_列表带楼层且旧两面不带() {
+    let (t, svc) = book_fixture();
+    let mail = t.path().join("mail");
+    let log = t.path().join("mock-calls.log");
+    install_mock_letters(&mail, &log);
+    let na_book = mail.join("10-NA信箱");
+    std::fs::write(na_book.join("0091号观澜致全体的通报.md"), LETTER_FLOORED).expect("写带楼信");
+    let ls = svc.list_inbox_letters("na-book").expect("列NA册");
+    let floored = ls
+        .iter()
+        .find(|l| l.name == "0091号观澜致全体的通报.md")
+        .expect("带楼信在列");
+    assert_eq!(floored.floors.len(), 3, "列表端点透传楼层（撤楼已滤）");
+    assert_eq!(floored.floors[0].author, "观澜");
+    assert_eq!(floored.floors[0].summary.as_deref(), Some("一楼白话。"));
+    // 秃信（LETTER_FULL 无哨兵）= 空表不炸
+    let bare = ls
+        .iter()
+        .find(|l| l.name == "0090号闻灯致评审部白露复0050的回执.md")
+        .expect("旧信在列");
+    assert!(bare.floors.is_empty());
+    // 只有哨兵命中的信调 CLI，调用面 = letters floor --list <册/信> --mailbox <册>
+    let calls = std::fs::read_to_string(&log).expect("mock 账文件");
+    assert_eq!(calls.lines().count(), 1, "秃信不白付 CLI 调用: {calls}");
+    assert!(
+        calls.contains("floor --list 10-NA信箱/0091号观澜致全体的通报.md --mailbox 10-NA信箱"),
+        "调用面 = letters floor --list: {calls}"
+    );
+    // 旧两面（mailbox/agent-inbox）恒空表——不为新栏破整读戒
+    let old = svc.list_inbox_letters("agent-inbox").unwrap_or_default();
+    assert!(old.iter().all(|l| l.floors.is_empty()));
+}
+
+#[test]
+fn spec_bar222_端点_letters缺席空表不连坐() {
     let (t, svc) = book_fixture();
     let na_book = t.path().join("mail").join("10-NA信箱");
     std::fs::write(na_book.join("0091号观澜致全体的通报.md"), LETTER_FLOORED).expect("写带楼信");
@@ -564,15 +620,8 @@ fn spec_bar222_端点_列表带楼层且旧两面不带() {
         .iter()
         .find(|l| l.name == "0091号观澜致全体的通报.md")
         .expect("带楼信在列");
-    assert_eq!(floored.floors.len(), 2, "列表端点透传楼层（撤楼已滤）");
-    assert_eq!(floored.floors[0].author, "观澜");
-    // 秃信（LETTER_FULL 无楼层）= 空表不炸
-    let bare = ls
-        .iter()
-        .find(|l| l.name == "0090号闻灯致评审部白露复0050的回执.md")
-        .expect("旧信在列");
-    assert!(bare.floors.is_empty());
-    // 旧两面（mailbox/agent-inbox）恒空表——不为新栏破整读戒
-    let old = svc.list_inbox_letters("agent-inbox").unwrap_or_default();
-    assert!(old.iter().all(|l| l.floors.is_empty()));
+    assert!(
+        floored.floors.is_empty(),
+        "letters CLI 缺席 = 空表，列表面不死"
+    );
 }

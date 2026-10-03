@@ -7388,9 +7388,11 @@ impl TermView {
                     );
                 }
 
-                // 行③：评论正文（折行全画，正文档）
+                // 行③：评论正文（折行全画，正文档；display_text = 渲染
+                // 单源——新形 summary/detail，旧形回落 body，0153 楼1 口径）
                 let b_y0 = r.y + i64::from(fl.body_y);
-                let body_chars: Vec<char> = f.body.chars().collect();
+                let disp = f.display_text();
+                let body_chars: Vec<char> = disp.chars().collect();
                 for (k, &(a, b)) in fl.body_lines.iter().enumerate() {
                     let line: String = body_chars[a.min(body_chars.len())..b.min(body_chars.len())]
                         .iter()

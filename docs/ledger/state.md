@@ -11,12 +11,18 @@
 > 时区（详情页，观澜 BAR-225 已落地）/ C 第四栏楼层渲染。本线接 A+C。
 > **A 勘明+摘帽**：列表卡几何 BAR-214 起即无帽；真截断面 = agentd
 > extract_summary 的 120 字符帽，已摘（摘要全量返回，账务族同尺随长）。
-> **C 第四栏**：agentd 列表端点增 floors（新形楼头解析/撤楼跳过/正文
-> 全量；旧两面恒空表）→ mail_feed 透传+manifest 缓存往返 → mail_page
-> 每楼三行几何（`> N楼` 引用行/层主 H2+箭头+被回复者/正文折行全画，
-> 同律不截断）→ termview 涂装。
+> **C 第四栏**：agentd 列表端点增 floors → mail_feed 透传+manifest
+> 缓存往返 → mail_page 每楼三行几何（`> N楼` 引用行/层主 H2+箭头+
+> 被回复者/正文折行全画，同律不截断）→ termview 涂装。
+> **返工（2026-10-04，0153 楼1 白露机读面指正）**：楼层数据唯一源 =
+> `letters floor --list` 的一行 JSON（no/form/from/…/withdrawn/body/
+> summary/detail 固定键），原 parse_floors 文本解析属第二真源已拆除——
+> agentd 改为楼头哨兵（`> N楼：` 行）命中才调 letters CLI（秃信不白付
+> node 起步价；CLI 缺席/失败=空表不连坐列表面），JSON 映射纯函数化；
+> 渲染单源 display_text = 新形吃 summary/detail、旧形两键 null 回落
+> body，排版与涂装同吃一把尺。
 > **待办**：redroid 副口实拍 + agentd 重启吃新端点（承影 lane）+
-> 真机静默判过。钉七枚+变异四咬全中，bugs.md BAR-222 行全档。
+> 真机静默判过。钉十枚+变异五咬全中，bugs.md BAR-222 行全档。
 > 追踪信 0153。
 
 ## 当前位置（2026-10-03，用户换新机 Neo 11——设备侧迁移自查（MAIN0111））

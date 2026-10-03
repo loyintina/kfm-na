@@ -222,7 +222,7 @@ pub fn lay_item(e: &MailEntry, top: i64, text_cells: u32, m: &Metrics) -> ItemLa
         let quote_y = y;
         let who_y = quote_y + m.body_lh;
         let body_y = who_y + m.h2_lh;
-        let mut body_lines = grid_wrap(&f.body, body_cells);
+        let mut body_lines = grid_wrap(&f.display_text(), body_cells);
         if body_lines.is_empty() {
             body_lines.push((0, 0));
         }
