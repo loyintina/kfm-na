@@ -128,11 +128,16 @@ fn handle(mut stream: TcpStream, svc: &AgentService) -> Result<(), String> {
 }
 
 /// 信件列表条目的 JSON 形状（BAR-212：name/bytes/mtime 之外增 time/from/to/title
-/// 信头四字段——增量字段，旧客户端只读老三样不断）
+/// 信头四字段——增量字段，旧客户端只读老三样不断；
+/// BAR-222 增 floors 楼层表——同为增量字段，旧客户端不读不断）
 fn letter_json(l: &na_agentd::service::LetterMeta) -> serde_json::Value {
     serde_json::json!({
         "name": l.name, "bytes": l.bytes, "mtime": l.mtime,
         "time": l.time, "from": l.from, "to": l.to, "title": l.title,
+        "floors": l.floors.iter().map(|f| serde_json::json!({
+            "n": f.n, "author": f.author, "to": f.to,
+            "time": f.time, "body": f.body,
+        })).collect::<Vec<_>>(),
     })
 }
 

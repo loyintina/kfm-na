@@ -9,7 +9,10 @@
 //!   上下并置（本栏随收件人数长行），栏内字上下居中。
 //! - **第二栏**：字头标题，引用灰字样式，超长格折行。
 //! - **第三栏**：摘要，正文样式，超长格折行。
-//! - **渲染器不设最大高度**——卡高 = 三栏实量之和。
+//! - **第四栏（BAR-222，NA0152）**：楼层渲染，每楼三行——`> N楼` 引用行
+//!   （时间居右灰字无时区）/ 层主 H2 + 白正文箭头 + 被回复者 / 评论正文
+//!   折行；与前三栏同律不截断，楼数楼文有多少卡就长多少。
+//! - **渲染器不设最大高度**——卡高 = 各栏实量之和。
 //! - **按发信人取色**：accent::accent_for_sender（同名同色/异名异色/
 //!   与页色脱撞），渐变暗底 + 框吃发信人双色；点开三级框的查看器跳框
 //!   颜色继承本卡（ViewerSnap.accent 维，壳穿线）。
@@ -46,6 +49,9 @@ pub const ITEM_GAP: u32 = CELL_H;
 pub const BODY_LH: u32 = 54;
 /// H1 行高 90px = line_h_grid(CELL_H, dp::H1_SCALE=1.7)（对表同上）
 pub const H1_LH: u32 = 90;
+/// H2 行高 90px = line_h_grid(CELL_H, dp::H2_SCALE=1.45)（对表同上；
+/// 与 H1 同值是公式巧合不是笔误——对表钉防的是「改 scale 忘改这里」）
+pub const H2_LH: u32 = 90;
 /// H1 半包框块高 = 上垫 + 行带 + 下垫（md_layout H1 单行为期同式）
 pub const H1_BLOCK_H: u32 = dp::HU + H1_LH + dp::HU;
 /// 标题栏引用缩进（格）：左竖线 + 1 格缩进（md 引用同尺）
@@ -65,6 +71,8 @@ pub struct Metrics {
     pub body_lh: u32,
     pub h1_lh: u32,
     pub h1_block_h: u32,
+    /// H2 行高（BAR-222 第四栏层主行）= line_h_grid(cell_h, H2_SCALE)
+    pub h2_lh: u32,
 }
 
 pub fn metrics_of(cell: (u32, u32)) -> Metrics {
@@ -82,6 +90,7 @@ pub fn metrics_of(cell: (u32, u32)) -> Metrics {
         body_lh,
         h1_lh,
         h1_block_h: hu + h1_lh + hu,
+        h2_lh: crate::ui::md_layout::line_h_grid(ch, dp::H2_SCALE),
     }
 }
 
@@ -131,6 +140,19 @@ pub fn fmt_time(time: &str) -> String {
 
 // ---- 条目排版（可变高：卡高 = 三栏实量之和，不设最大高度）----
 
+/// 一楼的排版账（BAR-222，NA0152 §三 三行形制：引用行/层主行/正文，
+/// 同律不截断——正文折行全账，楼数与楼文长多少卡就长多少）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FloorLay {
+    /// 行①（`> N楼` 引用行）卡内相对 y（行高 metrics body_lh，时间居右同行）
+    pub quote_y: u32,
+    /// 行②（层主 H2 + 箭头 + 被回复者）卡内相对 y（行高 metrics h2_lh）
+    pub who_y: u32,
+    /// 行③（评论正文）首行卡内相对 y + 折行区间（char 下标，对 body）
+    pub body_y: u32,
+    pub body_lines: Vec<(usize, usize)>,
+}
+
 /// 一信的排版账（涂装直读；折行区间 = char 下标，与 grid_wrap 同约）
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ItemLay {
@@ -149,6 +171,8 @@ pub struct ItemLay {
     /// 第三栏摘要折行区间（≥1 行）
     pub sum_lines: Vec<(usize, usize)>,
     pub sum_y: u32,
+    /// 第四栏楼层（每楼一份三行账；空表 = 无楼层，卡高不增）
+    pub floors: Vec<FloorLay>,
 }
 
 /// 条目文宽（格）：卡宽 − 左右内缩，按实例格宽折算（BAR-221）
@@ -189,7 +213,28 @@ pub fn lay_item(e: &MailEntry, top: i64, text_cells: u32, m: &Metrics) -> ItemLa
     let meta_y = m.item_pad_v;
     let title_y = meta_y + meta_h + m.row_gap;
     let sum_y = title_y + title_lines.len() as u32 * m.body_lh + m.row_gap;
-    let h = sum_y + sum_lines.len() as u32 * m.body_lh + m.item_pad_v;
+    // 第四栏（BAR-222）：每楼 = 引用行(body_lh) + 层主行(h2_lh) + 正文
+    // 折行(≥1 行)，楼间 row_gap；与前三栏同一份文宽（正文不缩进）
+    let mut floors = Vec::new();
+    let mut y = sum_y + sum_lines.len() as u32 * m.body_lh;
+    for f in &e.floors {
+        y += m.row_gap;
+        let quote_y = y;
+        let who_y = quote_y + m.body_lh;
+        let body_y = who_y + m.h2_lh;
+        let mut body_lines = grid_wrap(&f.body, body_cells);
+        if body_lines.is_empty() {
+            body_lines.push((0, 0));
+        }
+        y = body_y + body_lines.len() as u32 * m.body_lh;
+        floors.push(FloorLay {
+            quote_y,
+            who_y,
+            body_y,
+            body_lines,
+        });
+    }
+    let h = y + m.item_pad_v;
     ItemLay {
         h,
         top,
@@ -200,6 +245,7 @@ pub fn lay_item(e: &MailEntry, top: i64, text_cells: u32, m: &Metrics) -> ItemLa
         title_y,
         sum_lines,
         sum_y,
+        floors,
     }
 }
 

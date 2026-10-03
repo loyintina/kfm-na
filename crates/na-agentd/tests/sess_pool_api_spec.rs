@@ -476,7 +476,7 @@ fn spec_bar212_端点_summaries提取与剔除() {
 }
 
 #[test]
-fn spec_bar212_端点_summaries截断120字() {
+fn spec_bar222_端点_summaries摘帽全量() {
     let (t, svc) = book_fixture();
     let long: String = "长".repeat(200);
     let text = format!("# 长信\n\n> 日期: 2026-09-30\n\n## 摘要\n\n{long}\n\n## 正文\n\n尾。\n");
@@ -486,9 +486,8 @@ fn spec_bar212_端点_summaries截断120字() {
         .inbox_summaries("na-book", &["long-letter.md".to_string()])
         .expect("取长摘要");
     assert_eq!(
-        ss[0].1.chars().count(),
-        na_agentd::service::SUMMARY_MAX_CHARS,
-        "字符安全截断到 120（中文按字不按字节）"
+        ss[0].1, long,
+        "BAR-222（NA0152「有多少放多少」）：摘要全量返回，逐字等于数据源不截断"
     );
 }
 
@@ -514,4 +513,66 @@ fn spec_bar212_端点_summaries非法名跳过不连坐() {
         .inbox_summaries("na-book", &["../x.md".to_string()])
         .expect("全非法");
     assert!(ss.is_empty());
+}
+
+// ---- BAR-222（NA0152 第四栏）：楼层解析与列表端点透传 ----
+
+/// 带楼层的信：新形楼头两楼 + 一撤楼 + 楼间 `---` 分隔
+const LETTER_FLOORED: &str = "# 某信\n\n> 日期: 2026-10-01 12:56 +08:00\n> 从: 开发部观澜\n> 致: 全体\n\n## 摘要\n\n有事。\n\n## 正文\n\n见下。\n\n---\n\n> 1楼：(楼主)观澜→(楼主)观澜 · 2026-10-01 17:23 +08:00\n\n自顶一楼，正文全量保留不截断。\n\n---\n\n> 2楼：承影→1楼(楼主)观澜 · 2026-10-02 14:40 +08:00\n\n回楼：判卷不过，请查。\n\n---\n\n> 3楼：评审部白露→(楼主)观澜 · 2026-10-02 15:21 +08:00\n\n这楼撤了。\n\n——撤回：2026-10-02 15:22 +08:00 评审部白露——原楼作废，理由：试撤\n";
+
+#[test]
+fn spec_bar222_楼层解析_新形楼头全账() {
+    let fs = na_agentd::service::parse_floors(LETTER_FLOORED);
+    assert_eq!(fs.len(), 2, "撤楼整楼跳过: {fs:?}");
+    // 1 楼：剥 (楼主) 冠饰，正文全量
+    assert_eq!(fs[0].n, 1);
+    assert_eq!(fs[0].author, "观澜");
+    assert_eq!(fs[0].to, "观澜");
+    assert_eq!(fs[0].time, "2026-10-01 17:23 +08:00");
+    assert_eq!(fs[0].body, "自顶一楼，正文全量保留不截断。");
+    // 2 楼：回楼形被回复者留「1楼观澜」（剥 (楼主) 不剥楼号）
+    assert_eq!(fs[1].n, 2);
+    assert_eq!(fs[1].author, "承影");
+    assert_eq!(fs[1].to, "1楼观澜");
+    assert_eq!(fs[1].body, "回楼：判卷不过，请查。");
+}
+
+#[test]
+fn spec_bar222_楼层解析_边界族() {
+    // 无楼层 = 空表
+    assert!(na_agentd::service::parse_floors("# 秃信\n\n## 正文\n\n没楼。\n").is_empty());
+    // 长正文不截断 + 多行正文保换行 + 尾部 --- 剥掉
+    let long = "长".repeat(500);
+    let text = format!(
+        "# 信\n\n> 1楼：闻灯→承影 · 2026-10-02 06:23 +08:00\n\n第一段。\n\n{long}\n\n---\n"
+    );
+    let fs = na_agentd::service::parse_floors(&text);
+    assert_eq!(fs.len(), 1);
+    assert_eq!(fs[0].author, "闻灯");
+    assert_eq!(fs[0].to, "承影");
+    assert_eq!(fs[0].body, format!("第一段。\n\n{long}"), "正文全量不截断");
+    assert!(!fs[0].body.ends_with("---"), "尾部分隔线不进正文");
+}
+
+#[test]
+fn spec_bar222_端点_列表带楼层且旧两面不带() {
+    let (t, svc) = book_fixture();
+    let na_book = t.path().join("mail").join("10-NA信箱");
+    std::fs::write(na_book.join("0091号观澜致全体的通报.md"), LETTER_FLOORED).expect("写带楼信");
+    let ls = svc.list_inbox_letters("na-book").expect("列NA册");
+    let floored = ls
+        .iter()
+        .find(|l| l.name == "0091号观澜致全体的通报.md")
+        .expect("带楼信在列");
+    assert_eq!(floored.floors.len(), 2, "列表端点透传楼层（撤楼已滤）");
+    assert_eq!(floored.floors[0].author, "观澜");
+    // 秃信（LETTER_FULL 无楼层）= 空表不炸
+    let bare = ls
+        .iter()
+        .find(|l| l.name == "0090号闻灯致评审部白露复0050的回执.md")
+        .expect("旧信在列");
+    assert!(bare.floors.is_empty());
+    // 旧两面（mailbox/agent-inbox）恒空表——不为新栏破整读戒
+    let old = svc.list_inbox_letters("agent-inbox").unwrap_or_default();
+    assert!(old.iter().all(|l| l.floors.is_empty()));
 }

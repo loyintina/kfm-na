@@ -18,6 +18,7 @@ fn entry(name: &str, from: &str, to: &str, title: &str, summary: Option<&str>) -
         to: to.to_string(),
         title: title.to_string(),
         summary: summary.map(|s| s.to_string()),
+        floors: Vec::new(),
     }
 }
 
@@ -325,4 +326,120 @@ fn spec_bar221_实例格几何联动() {
     );
     close();
     assert_eq!(cur_cell(), (CELL_W, CELL_H), "收页 = 默认格回退");
+}
+
+/// 带楼层条目构造（BAR-222 钉用）
+fn floored_entry(name: &str, floors: Vec<(&str, &str, &str, &str)>) -> MailEntry {
+    let mut e = entry(name, "开发部观澜", "全体", "题", Some("摘"));
+    e.floors = floors
+        .into_iter()
+        .enumerate()
+        .map(
+            |(i, (author, to, time, body))| kfm_na::mail_feed::MailFloor {
+                n: (i + 1) as u32,
+                author: author.to_string(),
+                to: to.to_string(),
+                time: time.to_string(),
+                body: body.to_string(),
+            },
+        )
+        .collect();
+    e
+}
+
+/// 钉（BAR-222）①：第四栏几何——卡高 = 各栏实量之和（楼层三行全账进高），
+/// 楼数/楼文长多少卡就长多少（无帽同律）
+#[test]
+fn spec_bar222_第四栏几何全账() {
+    let m = default_metrics();
+    let e = floored_entry(
+        "0001号甲致乙的通报.md",
+        vec![
+            ("观澜", "观澜", "2026-10-01 17:23 +08:00", "一楼正文"),
+            ("承影", "1楼观澜", "2026-10-02 14:40 +08:00", "回楼"),
+        ],
+    );
+    let base = lay_item(
+        &entry(
+            "0001号甲致乙的通报.md",
+            "开发部观澜",
+            "全体",
+            "题",
+            Some("摘"),
+        ),
+        0,
+        40,
+        &m,
+    );
+    let lay = lay_item(&e, 0, 40, &m);
+    assert_eq!(lay.floors.len(), 2);
+    // 每楼 = ROW_GAP + BODY_LH(引用行) + H2_LH(层主行) + 正文行×BODY_LH
+    let per_floor = m.row_gap + m.body_lh + m.h2_lh + m.body_lh;
+    assert_eq!(lay.h, base.h + per_floor * 2, "两楼全账进卡高");
+    // 楼内三行纵序：引用 < 层主 < 正文，逐行咬高
+    let f0 = &lay.floors[0];
+    assert_eq!(f0.who_y, f0.quote_y + m.body_lh);
+    assert_eq!(f0.body_y, f0.who_y + m.h2_lh);
+    assert_eq!(f0.body_lines.len(), 1, "短文单行");
+    // 长楼文折行全账：40 格宽 500 字必多行，行数 = grid_wrap 全量（不截）
+    let long = "长".repeat(500);
+    let e2 = floored_entry(
+        "0002号甲致乙的通报.md",
+        vec![("观澜", "观澜", "2026-10-01 17:23 +08:00", &long)],
+    );
+    let lay2 = lay_item(&e2, 0, 40, &m);
+    let want = kfm_na::ui::grid_text::grid_wrap(&long, 40).len();
+    assert!(want > 1);
+    assert_eq!(
+        lay2.floors[0].body_lines.len(),
+        want,
+        "楼正文折行全账不截断"
+    );
+    assert_eq!(
+        lay2.h,
+        base.h + m.row_gap + m.body_lh + m.h2_lh + want as u32 * m.body_lh
+    );
+}
+
+/// 钉（BAR-222）②：账务族同尺——带楼层卡进了 total_h/scroll_max/可见窗
+/// （§二连带：别只放高不算账）
+#[test]
+fn spec_bar222_楼层进账务族() {
+    let es = vec![
+        floored_entry(
+            "0001号甲致乙的通报.md",
+            vec![("甲", "乙", "2026-10-02 08:00 +08:00", "楼")],
+        ),
+        entry(
+            "0002号丙致丁的通报.md",
+            "开发部观澜",
+            "全体",
+            "题",
+            Some("摘"),
+        ),
+    ];
+    let m = default_metrics();
+    let lays = lay_items(&es, 40, &m);
+    let th = total_h(&lays);
+    assert_eq!(
+        th,
+        i64::from(lays[0].h) + i64::from(m.item_gap) + i64::from(lays[1].h),
+        "带楼层卡高进总账"
+    );
+    // 视口矮于总账 → scroll_max = 差值（含楼层那一截）
+    let sm = scroll_max(&lays, 100);
+    assert_eq!(sm, th - 100);
+    // 可见窗能框住带楼层的卡（半卡在沿也画）
+    let vr = visible_range(
+        &lays,
+        i64::from(lays[0].h) + 10,
+        th - (i64::from(lays[0].h) + 10),
+    );
+    assert!(vr.contains(&0));
+    // 行高同源：H2_LH 与 md 管线对表
+    use kfm_na::ui::demo_page as dp;
+    assert_eq!(
+        H2_LH,
+        kfm_na::ui::md_layout::line_h_grid(CELL_H, dp::H2_SCALE)
+    );
 }

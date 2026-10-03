@@ -25,6 +25,7 @@ fn entry(name: &str, mtime: u64) -> MailEntry {
         to: String::new(),
         title: String::new(),
         summary: None,
+        floors: Vec::new(),
     }
 }
 
@@ -135,4 +136,24 @@ fn spec_bar212_url_encode逗号与中文() {
     assert_eq!(sess_pool::url_encode("0001号.md"), "0001%E5%8F%B7.md");
     assert_eq!(sess_pool::url_encode("Ab9-_.~"), "Ab9-_.~");
     assert_eq!(sess_pool::url_encode("号"), "%E5%8F%B7");
+}
+
+/// 钉（BAR-222）：列表解析楼层表 + manifest 楼层往返 + 缺字段容错空表
+#[test]
+fn spec_bar222_楼层透传与缓存往返() {
+    let body = r#"{"ok":true,"letters":[{"name":"0001号甲致乙的通报.md","bytes":10,"mtime":7,"time":"2026-10-02 06:23 +08:00","from":"开发部闻灯","to":"测试部承影","title":"题","floors":[{"n":1,"author":"闻灯","to":"承影","time":"2026-10-02 06:23 +08:00","body":"一楼正文"},{"n":2,"author":"承影","to":"1楼闻灯","time":"2026-10-02 07:00 +08:00","body":"二楼正文"}]},{"name":"0002号丙致丁的通报.md","bytes":5,"mtime":8,"time":"","from":"","to":"","title":""}]}"#;
+    let list = parse_mail_list(body).expect("解析");
+    assert_eq!(list.len(), 2);
+    // 楼层逐字段透传
+    assert_eq!(list[0].floors.len(), 2);
+    assert_eq!(list[0].floors[0].n, 1);
+    assert_eq!(list[0].floors[0].author, "闻灯");
+    assert_eq!(list[0].floors[1].to, "1楼闻灯");
+    assert_eq!(list[0].floors[1].body, "二楼正文");
+    // 缺 floors 字段（旧服务端/旧缓存）= 空表不炸
+    assert!(list[1].floors.is_empty());
+    // manifest 往返：楼层随缓存写透读回（断网也要有楼层看）
+    let back = parse_mail_list(&manifest_json(&list)).expect("manifest 读回");
+    assert_eq!(back[0].floors, list[0].floors, "manifest 楼层往返一致");
+    assert!(back[1].floors.is_empty());
 }

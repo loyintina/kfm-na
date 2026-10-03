@@ -7313,6 +7313,104 @@ impl TermView {
                     clip32,
                 );
             }
+
+            // 第四栏楼层（BAR-222，NA0152 §三）：每楼三行——
+            // 行① `> N楼` 引用灰字 + 时间居右灰字无时区；
+            // 行② 层主 H2（迷你 md 真管线）+ 白正文箭头 + 被回复者；
+            // 行③ 评论正文折行全画（同律不截断）。几何全吃 lay.floors
+            for (f, fl) in e.floors.iter().zip(lay.floors.iter()) {
+                // 行①：引用行（左 `> N楼` 灰字，右时间灰字无时区）
+                let q_ly = r.y + i64::from(fl.quote_y);
+                let q_ytop = q_ly + (blh - i64::from(self.cell_h)).max(0) / 2;
+                let qword = format!("> {}楼", f.n);
+                let (qitems, _) = self.measure_items_grid(&qword);
+                self.draw_grid_text_left(
+                    &mut frame,
+                    &qitems,
+                    tx,
+                    q_ytop,
+                    self.cell_w,
+                    tw,
+                    meta_fg,
+                    0,
+                    clip32,
+                );
+                let ftime = mp::fmt_time(&f.time);
+                if !ftime.is_empty() {
+                    let (titems, tcells) = self.measure_items_grid(&ftime);
+                    let tpx = i64::from(tcells) * i64::from(self.cell_w);
+                    let t_x = (tx + i64::from(tw) - tpx).max(tx);
+                    self.draw_grid_text_left(
+                        &mut frame,
+                        &titems,
+                        t_x,
+                        q_ytop,
+                        self.cell_w,
+                        tpx as u32,
+                        meta_fg,
+                        0,
+                        clip32,
+                    );
+                }
+
+                // 行②：层主 H2（迷你 md 真管线，发信人双色）+ 箭头 + 被回复者
+                let w_ly = r.y + i64::from(fl.who_y);
+                let h2_lay = crate::ui::md_layout::layout_md(
+                    &format!("## {}", f.author),
+                    tw,
+                    self.cell_size(),
+                );
+                let h2_h = i64::from(h2_lay.total_h);
+                let h2_y = w_ly + (i64::from(m.h2_lh) - h2_h).max(0) / 2;
+                self.paint_md_body(&mut frame, &h2_lay, tx, h2_y, tw, vp, denom, s_acc);
+                let h2_w = h2_lay
+                    .blocks
+                    .first()
+                    .and_then(|b| b.lines.first())
+                    .map(|l| i64::from(l.w))
+                    .unwrap_or(0);
+                if !f.to.is_empty() {
+                    let arrow_x = tx + h2_w + i64::from(m.cell_w);
+                    let a_ytop = w_ly + (i64::from(m.h2_lh) - i64::from(self.cell_h)).max(0) / 2;
+                    let to_word = format!("→ {}", f.to);
+                    let (aitems, _) = self.measure_items_grid(&to_word);
+                    let max_w = (tx + i64::from(tw) - arrow_x).max(0) as u32;
+                    self.draw_grid_text_left(
+                        &mut frame,
+                        &aitems,
+                        arrow_x,
+                        a_ytop,
+                        self.cell_w,
+                        max_w,
+                        body_fg,
+                        0,
+                        clip32,
+                    );
+                }
+
+                // 行③：评论正文（折行全画，正文档）
+                let b_y0 = r.y + i64::from(fl.body_y);
+                let body_chars: Vec<char> = f.body.chars().collect();
+                for (k, &(a, b)) in fl.body_lines.iter().enumerate() {
+                    let line: String = body_chars[a.min(body_chars.len())..b.min(body_chars.len())]
+                        .iter()
+                        .collect();
+                    let ly = b_y0 + k as i64 * blh;
+                    let y_top = ly + (blh - i64::from(self.cell_h)).max(0) / 2;
+                    let (items, _) = self.measure_items_grid(&line);
+                    self.draw_grid_text_left(
+                        &mut frame,
+                        &items,
+                        tx,
+                        y_top,
+                        self.cell_w,
+                        tw,
+                        body_fg,
+                        0,
+                        clip32,
+                    );
+                }
+            }
         }
     }
 

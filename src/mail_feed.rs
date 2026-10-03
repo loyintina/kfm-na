@@ -57,8 +57,18 @@ impl MailKey {
     }
 }
 
+/// 楼层条目（BAR-222，NA0152 第四栏：agentd parse_floors 的客户端镜像）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MailFloor {
+    pub n: u32,
+    pub author: String,
+    pub to: String,
+    pub time: String,
+    pub body: String,
+}
+
 /// 信件条目（列表页一行的全部素材）：列表端点给 name/bytes/mtime +
-/// 字头四件；summary = 懒加载件（None = 未取到/未取，涂装层显占位）
+/// 字头四件 + 楼层表；summary = 懒加载件（None = 未取到/未取，涂装层显占位）
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MailEntry {
     pub name: String,
@@ -69,6 +79,8 @@ pub struct MailEntry {
     pub to: String,
     pub title: String,
     pub summary: Option<String>,
+    /// 楼层（缺 floors 字段容错空表——旧缓存/旧服务端不断）
+    pub floors: Vec<MailFloor>,
 }
 
 /// 列表响应 → 条目表（无 summary——懒加载件不在这条面；旧响应缺
@@ -85,6 +97,39 @@ pub fn parse_mail_list(body: &str) -> Result<Vec<MailEntry>, String> {
         .filter_map(|x| {
             let name = x.get("name").and_then(Value::as_str)?.to_string();
             let s = |k: &str| x.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+            let floors = x
+                .get("floors")
+                .and_then(Value::as_array)
+                .map(|fs| {
+                    fs.iter()
+                        .filter_map(|f| {
+                            Some(MailFloor {
+                                n: f.get("n").and_then(Value::as_u64)? as u32,
+                                author: f
+                                    .get("author")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("")
+                                    .to_string(),
+                                to: f
+                                    .get("to")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("")
+                                    .to_string(),
+                                time: f
+                                    .get("time")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("")
+                                    .to_string(),
+                                body: f
+                                    .get("body")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("")
+                                    .to_string(),
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
             Some(MailEntry {
                 name,
                 bytes: x.get("bytes").and_then(Value::as_u64).unwrap_or(0),
@@ -94,6 +139,7 @@ pub fn parse_mail_list(body: &str) -> Result<Vec<MailEntry>, String> {
                 to: s("to"),
                 title: s("title"),
                 summary: None,
+                floors,
             })
         })
         .collect())
@@ -145,14 +191,18 @@ pub fn summaries_wanted(entries: &[MailEntry], window: std::ops::Range<usize>) -
         .collect()
 }
 
-/// manifest 落盘串（与列表端点同形 + 字头四件——parse_mail_list 一口径
-/// 读回；ok:true 防「ok:false 不许吞表」闸咬自家缓存）
+/// manifest 落盘串（与列表端点同形 + 字头四件 + 楼层表——parse_mail_list
+/// 一口径读回；ok:true 防「ok:false 不许吞表」闸咬自家缓存）
 pub fn manifest_json(list: &[MailEntry]) -> String {
     serde_json::json!({
         "ok": true,
         "letters": list.iter().map(|l| serde_json::json!({
             "name": l.name, "bytes": l.bytes, "mtime": l.mtime,
             "time": l.time, "from": l.from, "to": l.to, "title": l.title,
+            "floors": l.floors.iter().map(|f| serde_json::json!({
+                "n": f.n, "author": f.author, "to": f.to,
+                "time": f.time, "body": f.body,
+            })).collect::<Vec<_>>(),
         })).collect::<Vec<_>>(),
     })
     .to_string()

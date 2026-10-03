@@ -43,6 +43,20 @@ pub struct LetterMeta {
     pub from: String,
     pub to: String,
     pub title: String,
+    /// 楼层（BAR-222，NA0152 第四栏）：只给 main-book/na-book 两册解析
+    /// （信箱页第四栏素材）；旧两面（mailbox/agent-inbox）恒空表——
+    /// 那两面不吃楼层且 BAR-174 起不走整读，不为新栏破功
+    pub floors: Vec<FloorMeta>,
+}
+
+/// 楼层条目（BAR-222；契约 §十二 新形楼头，旧形存量为零不兼容）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FloorMeta {
+    pub n: u32,
+    pub author: String,
+    pub to: String,
+    pub time: String,
+    pub body: String,
 }
 
 impl AgentService {
@@ -238,6 +252,13 @@ impl AgentService {
                     .map(|m| (m.bytes, m.mtime))
                     .unwrap_or((0, 0));
                 let (title, time, from, to) = parse_letter_head(&read_head(&path));
+                let floors = if key == "main-book" || key == "na-book" {
+                    host.read_file(&path)
+                        .map(|t| parse_floors(&t))
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
                 out.push(LetterMeta {
                     name,
                     bytes,
@@ -246,6 +267,7 @@ impl AgentService {
                     from,
                     to,
                     title,
+                    floors,
                 });
             }
         }
@@ -323,9 +345,6 @@ pub fn default_mail_root() -> String {
 /// 信头解析只读文件头部这么多字节（v2.1 字头远在窗口内，不整读）
 const HEAD_CAP: usize = 8 * 1024;
 
-/// 摘要面字符上限（BAR-212：按字符安全截断）
-pub const SUMMARY_MAX_CHARS: usize = 120;
-
 /// 读文件头部（≤HEAD_CAP 字节；打不开给空串，下游解析全字段落空）
 fn read_head(path: &str) -> String {
     use std::io::Read;
@@ -371,8 +390,9 @@ fn parse_letter_head(head: &str) -> (String, String, String, String) {
 }
 
 /// 摘要提取（BAR-212）：`^## 摘要` 段到下一个 `^##` 前；丢占位提示行
-/// （`> 注意` 开头）、空行、LETTER-TOKEN 注释行；剩余行空格连接，
-/// 字符安全截断到 SUMMARY_MAX_CHARS。无摘要块 → ""
+/// （`> 注意` 开头）、空行、LETTER-TOKEN 注释行；剩余行空格连接。
+/// BAR-222（NA0152 用户拍板「有多少放多少」）摘帽：全量返回不截断。
+/// 无摘要块 → ""
 pub fn extract_summary(text: &str) -> String {
     let mut in_summary = false;
     let mut parts: Vec<&str> = Vec::new();
@@ -400,8 +420,65 @@ pub fn extract_summary(text: &str) -> String {
         }
         parts.push(t);
     }
-    let joined = parts.join(" ");
-    joined.chars().take(SUMMARY_MAX_CHARS).collect()
+    parts.join(" ")
+}
+
+/// 楼层解析（BAR-222，NA0152 第四栏）：新形楼头
+/// `> <N>楼：<作者>→<被回复者> · <时间>`（契约 §十二 一行四段）。
+/// 作者/被回复者剥 `(楼主)` 冠饰；被回复者留回楼形（`2楼观澜`）。
+/// 正文 = 楼头下一行起到下一楼头/文末，剥尾部 `---` 分隔线与空行，
+/// **全量不截断**（与摘要同律「有多少放多少」）；楼内含 `——撤回：` 行
+/// = 已撤楼，整楼跳过。旧形楼头（`> 楼:` 四行）存量为零，不认不炸
+/// （楼头行不匹配即视为上一楼正文，自然吞入，不毒楼层表）。
+pub fn parse_floors(text: &str) -> Vec<FloorMeta> {
+    // 楼头判定：`> <数字>楼：<谁> · <时间>`——「 · 」右段含日期即坐实
+    let header = |line: &str| -> Option<(u32, String, String, String)> {
+        let body = line.strip_prefix("> ")?;
+        let (n_part, rest) = body.split_once("楼：")?;
+        let n: u32 = n_part.trim().parse().ok()?;
+        // 「 · 」取最后一次：时间恒在尾（名字/回楼形不含此分隔）
+        let (who, time) = rest.rsplit_once(" · ")?;
+        if !time.trim().starts_with(|c: char| c.is_ascii_digit()) {
+            return None;
+        }
+        let (author, to) = who.split_once('→').unwrap_or((who, ""));
+        let strip = |s: &str| s.replace("(楼主)", "").trim().to_string();
+        Some((n, strip(author), strip(to), time.trim().to_string()))
+    };
+    let mut out: Vec<FloorMeta> = Vec::new();
+    let mut cur: Option<(u32, String, String, String, Vec<String>)> = None;
+    let flush = |cur: &mut Option<(u32, String, String, String, Vec<String>)>,
+                 out: &mut Vec<FloorMeta>| {
+        let Some((n, author, to, time, mut lines)) = cur.take() else {
+            return;
+        };
+        // 剥尾部空行与 `---` 分隔（楼间分隔线不属于任何一楼的正文）
+        while matches!(lines.last(), Some(l) if l.trim().is_empty() || l.trim() == "---") {
+            lines.pop();
+        }
+        // 已撤楼（楼内撤回行）整楼跳过
+        if lines.iter().any(|l| l.trim_start().starts_with("——撤回：")) {
+            return;
+        }
+        let body = lines.join("\n").trim().to_string();
+        out.push(FloorMeta {
+            n,
+            author,
+            to,
+            time,
+            body,
+        });
+    };
+    for line in text.lines() {
+        if let Some((n, author, to, time)) = header(line) {
+            flush(&mut cur, &mut out);
+            cur = Some((n, author, to, time, Vec::new()));
+        } else if let Some((_, _, _, _, lines)) = cur.as_mut() {
+            lines.push(line.to_string());
+        }
+    }
+    flush(&mut cur, &mut out);
+    out
 }
 
 /// 尾部 n 非空行
