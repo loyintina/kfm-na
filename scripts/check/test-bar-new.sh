@@ -83,5 +83,15 @@ grep '\[ "$MAILBOX" = "$DEFAULT_MAILBOX" \]' scripts/bar-new.sh | grep -q '\[ -d
     && { echo "  ✗ BAR-226 字面.git探测回潮（册并入设施仓后恒假 = 静默丢数据）"; fail=$((fail+1)); } \
     || { echo "  ✓ BAR-226 字面.git探测不在闸行"; pass=$((pass+1)); }
 
+# ⑨自动提交走 letters commit（MAIN0123 §五 残留②）：裸 git -c user.name=kfm-na
+# 提交会被设施门④拒（作者≠信封作者），拒后暂存区滞留还挡全仓发楼（MAIN0113
+# 习性：暂存区有主即拒）。变异：退回裸 git commit 形态 → 负向咬红。
+grep -q 'LETTERS_BIN=' scripts/bar-new.sh \
+    && { echo "  ✓ 自动提交走letters"; pass=$((pass+1)); } \
+    || { echo "  ✗ 自动提交走letters（bar-new.sh 缺 LETTERS_BIN 兜底）"; fail=$((fail+1)); }
+grep -q 'user\.name=kfm-na' scripts/bar-new.sh \
+    && { echo "  ✗ 裸git署名回潮（撞门④滞留暂存区）"; fail=$((fail+1)); } \
+    || { echo "  ✓ 裸git署名不在"; pass=$((pass+1)); }
+
 echo "[test-bar-new] $pass 过 / $fail 红"
 [ "$fail" = 0 ]

@@ -124,7 +124,7 @@ if [ "${BAR_NEW_NO_LETTER:-}" != "1" ]; then
     TODAY=$(date '+%Y-%m-%d')
     out=$("$CLI" new --mailbox "$MAILBOX" --from-func "$FUNC" --from-name "$NAME" \
         --to-all --type 通报 --title "BAR-$NEXT $TITLE" \
-        --kind 通报 --expect "承办线按 AGENTS.md「BAR 追踪信」条款同信追加进展" \
+        --kind 通报 --expect "承办线按 AGENTS.md「BAR 追踪信」条款楼层追加进展" \
         --criteria "BAR-$NEXT 用户终验结案（信头状态翻 已验证）" \
         --status 待落地通报)
     file=$(printf '%s' "$out" | sed -n 's/.*已生成 \([^ ]*\.md\).*/\1/p')
@@ -148,9 +148,18 @@ if [ "${BAR_NEW_NO_LETTER:-}" != "1" ]; then
     # 找仓，独立册仓与设施仓子目录两形态都认；git add 的 pathspec 相对 cwd
     # （册目录）解析、commit 落所属仓，两形态行为一致。
     if [ "$MAILBOX" = "$DEFAULT_MAILBOX" ] && git -C "$MAILBOX" rev-parse --git-dir >/dev/null 2>&1; then
-        (cd "$MAILBOX" && git add "$file" README.md letters-index.jsonl letter-tokens.jsonl \
-            && git -c user.name=kfm-na -c user.email=na@kfm.local commit -q \
-               -m "feat(信箱): $LETTER BAR-$NEXT 追踪信开卷（$FUNC$NAME：$TITLE）" </dev/null)
+        # 2026-10-05（白露 MAIN0123 §五 残留②）：提交改走 letters commit——
+        # 裸 git 会被设施门③④拒（作者=kfm-na ≠ 信封作者；暂存区对表），拒后
+        # 滞留暂存区还挡全仓发楼（MAIN0113 习性）。letters commit 自带
+        # verify→gen→精确 pathspec→信封署名，失败即退不滞留。
+        LETTERS_BIN="${LETTERS_BIN:-$(dirname "$MAILBOX")/30-工具/letters}"
+        if [ -x "$LETTERS_BIN" ]; then
+            (cd "$MAILBOX" && "$LETTERS_BIN" commit "$file" \
+                -m "feat(信箱): $LETTER BAR-$NEXT 追踪信开卷（$FUNC$NAME：$TITLE）") \
+                || echo "⚠ letters commit 失败——信在盘未提交，请手动 letters commit $file" >&2
+        else
+            echo "⚠ letters 不在 $LETTERS_BIN——信在盘未提交，请手动 letters commit $file" >&2
+        fi
     fi
 fi
 
