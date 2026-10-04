@@ -121,12 +121,23 @@ fn spec_l1_插件注册_双工厂并存() {
 
 /// 考题 5(L3 挂勾):bootstrap 装好后 shell 换 $PREFIX/bin/bash,
 /// env 带 PATH/LD_LIBRARY_PATH/PREFIX;没装则回落系统 sh(行为不变)
+/// BAR-229 追平:「装好」= 文件在且可执行——夹具补 0755(克隆丢 x 位
+/// 形态的回落由 bar229_spec 断言)
 #[test]
 fn spec_l3_shell_plan_bash优先() {
     let tmp = tempfile::tempdir().unwrap();
     let prefix = tmp.path().join("usr");
     std::fs::create_dir_all(prefix.join("bin")).unwrap();
     std::fs::write(prefix.join("bin/bash"), b"fake").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(
+            prefix.join("bin/bash"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+    }
     let plan = kfm_na::local_pty::shell_plan(&prefix);
     assert_eq!(plan.shell, prefix.join("bin/bash").to_string_lossy());
     assert!(

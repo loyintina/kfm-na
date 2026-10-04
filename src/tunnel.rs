@@ -932,6 +932,10 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
         // spawn——零间隔重拉必撞服务器侧旧 sshd 尸体（9022 还在它手里），
         // ExitOnForwardFailure 255 再撞，每秒空转活锁
         let mut companion_hold_until: Option<std::time::Instant> = None;
+        // BAR-229：ssh 娃永久死旗（看门狗线程私有）——spawn EACCES/ENOENT
+        // （prefix 丢 x 位/缺件）时不许再 respawn；手动 Reconnect/进程
+        // 重启重臂。
+        let mut ssh_perm_dead = false;
         // 跳闸回切探测账（BAR-171 翻案③，看门狗线程私有）：ssh 兜底期
         // 按退避静默探 QUIC 握手；探测线程单飞，结果经信道回 loop 审理
         let (probe_tx, probe_rx) = channel::<bool>();
@@ -1745,6 +1749,26 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                 SshRole::Full => args.clone(),
             };
 
+            // BAR-229：永久死旗在——不 spawn，QUIC 腿自管；手动重连重臂
+            if ssh_perm_dead && !matches!(want_role, SshRole::None) {
+                match wait(&cmd_rx, std::time::Duration::from_secs(5)) {
+                    Some(TunnelCmd::Reconnect) | Some(TunnelCmd::HealQuic) => {
+                        ssh_perm_dead = false;
+                        reconnect(
+                            &mut child,
+                            &mut quic,
+                            &mut rev_quic,
+                            &mut attempts,
+                            &mut quic_fails,
+                            &mut rev_quic_fails,
+                            &snap_t,
+                        );
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+
             let spawn = std::process::Command::new(&ssh_bin)
                 .args(&ssh_args)
                 .env("PATH", prefix.join("bin"))
@@ -1803,6 +1827,29 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                     }
                 }
                 Err(e) => {
+                    // BAR-229：永久错误（EACCES/ENOENT）——ssh 娃挂起，
+                    // 不再 respawn（Neo 11 实证 6695 次无效重生）；QUIC
+                    // 双腿自管数据/反连，状态不翻。手动 Reconnect 或
+                    // 进程重启重臂。
+                    if crate::na_server_sup::is_permanent_spawn_err(&e) {
+                        ssh_perm_dead = true;
+                        crate::report::report(
+                            "tunnel",
+                            &format!(
+                                "ssh spawn 永久失败（{e}）——娃挂起（BAR-229），QUIC 腿自管；重连/重启恢复"
+                            ),
+                        );
+                        if quic.is_none() {
+                            set(
+                                TunnelState::Down {
+                                    attempts,
+                                    last_error: format!("spawn 失败（永久挂起）: {e}"),
+                                },
+                                &snap_t,
+                            );
+                        }
+                        continue;
+                    }
                     attempts += 1;
                     crate::report::report("tunnel", &format!("ssh spawn 失败: {e}"));
                     // 伴生 spawn 失败不翻数据路状态（QUIC 腿在，口还通）

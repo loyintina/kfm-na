@@ -60,8 +60,16 @@ pub struct ShellPlan {
 }
 
 pub fn shell_plan(prefix: &std::path::Path) -> ShellPlan {
+    use std::os::unix::fs::PermissionsExt;
     let bash = prefix.join("bin/bash");
-    if bash.is_file() {
+    // BAR-229：判据从「文件在」升「可执行」——克隆搬运丢 x 位时
+    // bash 在但 exec 必 EACCES，本地终端跟着死；回落 /system/bin/sh
+    // 保住「手机侧能敲命令」这条抢救通道。
+    let bash_usable = bash.is_file()
+        && std::fs::metadata(&bash)
+            .map(|m| m.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false);
+    if bash_usable {
         ShellPlan {
             shell: bash.to_string_lossy().into_owned(),
             arg0: CString::new("bash").unwrap(),

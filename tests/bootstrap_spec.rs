@@ -56,18 +56,28 @@ fn spec_l3_空prefix_完整安装() {
 }
 
 #[test]
-fn spec_l3_非空prefix_幂等跳过() {
+// BAR-229 追平（原 BAR-074 场景「非空=跳过」升「可用=跳过」）：非空
+// 但哨兵不可执行（marker-only 即环境死形态——克隆丢 x 位实证）→ 不再
+// 幂等跳过，走自愈重装；垃圾 zip 解不开 = Err（不静默当已装），失败
+// 路径不破坏既有目录（staging 清、prefix 原样，可重试）。健康 prefix
+// 的幂等跳过在 spec_bar229 末幕断言（重装后再 ensure = AlreadyPresent）。
+fn spec_l3_环境死prefix_不静默跳过_失败不破坏() {
     let tmp = tempfile::tempdir().unwrap();
     let prefix = tmp.path().join("files/usr");
     fs::create_dir_all(&prefix).unwrap();
     fs::write(prefix.join("marker"), b"old").unwrap();
-    // 垃圾字节也不该被解析——非空 prefix 直接跳过
-    let status = kfm_na::bootstrap::ensure_prefix(&prefix, b"not-a-zip").unwrap();
-    assert!(matches!(
-        status,
-        kfm_na::bootstrap::InstallStatus::AlreadyPresent
-    ));
+    // 垃圾 zip + 环境死 prefix → 拒（Err），不静默跳过
+    let r = kfm_na::bootstrap::ensure_prefix(&prefix, b"not-a-zip");
+    assert!(
+        r.is_err(),
+        "环境死样本 + 垃圾 zip 必须 Err（变异：退回纯存在性闸 → 此处得 AlreadyPresent 即红）"
+    );
+    // 失败不破坏：marker 原样、无 staging 残留（可重试）
     assert_eq!(fs::read(prefix.join("marker")).unwrap(), b"old");
+    assert!(
+        !tmp.path().join("files/usr-staging").exists(),
+        "staging 已清"
+    );
 }
 
 #[test]
@@ -118,10 +128,12 @@ fn spec_l3_second_stage命令组装() {
     );
 }
 
-// BAR-074 钉：幂等闸谓词三态——不存在/空目录/非空。壳靠它在读 32MB
+// BAR-074 钉：幂等闸谓词——不存在/空目录/非空三态。壳靠它在读 32MB
 // 资产之前就跳过（旧序读完才问 ensure_prefix，启动关键路径每启裸读
 // 32MB，IO 挤兑期 boot 段 3s+，PIN-boot 挂卷族）。
 // 变异抽检：谓词改成恒 true/恒 false 各咬一端。
+// BAR-229 追平第四态：非空但 bin/ 无任何 x 位（克隆丢 x 位的环境死
+// 样本）= false——「存在」升「可用」。
 #[test]
 fn spec_bar074_幂等闸谓词_三态() {
     let tmp = tempfile::tempdir().unwrap();
@@ -130,5 +142,67 @@ fn spec_bar074_幂等闸谓词_三态() {
     fs::create_dir_all(&prefix).unwrap();
     assert!(!kfm_na::bootstrap::prefix_ready(&prefix), "空目录=false");
     fs::write(prefix.join("marker"), b"x").unwrap();
-    assert!(kfm_na::bootstrap::prefix_ready(&prefix), "非空=true");
+    assert!(
+        !kfm_na::bootstrap::prefix_ready(&prefix),
+        "非空但 bin/ 无 x 位=false（BAR-229 环境死样本）"
+    );
+    fs::create_dir_all(prefix.join("bin")).unwrap();
+    fs::write(prefix.join("bin/tool"), b"#!/x").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(prefix.join("bin/tool"), fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    assert!(
+        kfm_na::bootstrap::prefix_ready(&prefix),
+        "bin/ 有 x 位=true"
+    );
+}
+
+// BAR-229 钉：换机克隆丢 x 位——prefix 非空但 bin/ 全无 x 位 = 环境死，
+// 幂等闸拒（变异：哨兵摘除回纯存在性判据 → 「丢x位=false」断言红）；
+// ensure_prefix 自愈 wipe 重装（remove_dir_all 摘非空旧 prefix），装完
+// x 位恢复（install_to_staging 显式 chmod，免疫 umask）。
+// 实证链：Neo 11 克隆搬运 + nasup spawn EACCES × 1034 + ssh 不在
+// bootstrap zip（存在即克隆来）+ 10-03 无 bootstrap 安装日志。
+#[test]
+fn spec_bar229_克隆丢x位_自愈重装() {
+    let tmp = tempfile::tempdir().unwrap();
+    let prefix = tmp.path().join("files/usr");
+    let st = kfm_na::bootstrap::ensure_prefix(&prefix, &fixture_zip(true)).unwrap();
+    assert!(matches!(st, kfm_na::bootstrap::InstallStatus::Installed));
+    assert!(kfm_na::bootstrap::prefix_ready(&prefix), "健康装好后=true");
+    // 克隆搬运模拟：bin/ 下全部摘 x 位（DAC 丢失形态）
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for e in fs::read_dir(prefix.join("bin"))
+            .unwrap()
+            .filter_map(|e| e.ok())
+        {
+            let p = e.path();
+            if fs::metadata(&p).map(|m| m.is_file()).unwrap_or(false) {
+                let m = fs::metadata(&p).unwrap().permissions().mode();
+                fs::set_permissions(&p, fs::Permissions::from_mode(m & 0o666)).unwrap();
+            }
+        }
+    }
+    assert!(
+        !kfm_na::bootstrap::prefix_ready(&prefix),
+        "丢 x 位=false（哨兵咬）"
+    );
+    // 自愈：wipe 重装而非 AlreadyPresent；重装产物恢复 x 位
+    let st = kfm_na::bootstrap::ensure_prefix(&prefix, &fixture_zip(true)).unwrap();
+    assert!(
+        matches!(st, kfm_na::bootstrap::InstallStatus::Installed),
+        "环境死样本应走重装（变异：摘哨兵 → 此处得 AlreadyPresent 即红）"
+    );
+    assert_eq!(mode_of(&prefix.join("bin/dash")), 0o700, "重装后 x 位恢复");
+    assert!(kfm_na::bootstrap::prefix_ready(&prefix), "自愈后=true");
+    // 末幕：健康 prefix 的幂等跳过（BAR-074 原契约在「可用」语义下续存）
+    let st = kfm_na::bootstrap::ensure_prefix(&prefix, &fixture_zip(true)).unwrap();
+    assert!(matches!(
+        st,
+        kfm_na::bootstrap::InstallStatus::AlreadyPresent
+    ));
 }
