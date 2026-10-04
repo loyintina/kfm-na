@@ -74,14 +74,13 @@ pub struct MailFloor {
 }
 
 impl MailFloor {
-    /// 渲染正文单源（0153 楼1：渲染吃 summary/detail，旧形回落 body）：
-    /// 新形 = 摘要 +（有细节时隔空行接细节）；旧形 = body 原文
+    /// 卡内显示文本单源（BAR-231，白露 0153 3楼①用户口述「楼层也只显示
+    /// 摘要」——与信卡摘要面同律）：新形 = **只出 summary**（detail 不进
+    /// 卡，留端点/详情页消费）；旧形无摘要段可摘，回落 body 全文（取舍：
+    /// 截断会造「被删节」假象，与「有多少放多少」同律全画，0153 楼5 记案）
     pub fn display_text(&self) -> String {
         match &self.summary {
-            Some(s) => match &self.detail {
-                Some(d) if !d.is_empty() => format!("{s}\n\n{d}"),
-                _ => s.clone(),
-            },
+            Some(s) => s.clone(),
             None => self.body.clone(),
         }
     }

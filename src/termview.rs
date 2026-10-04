@@ -7319,18 +7319,34 @@ impl TermView {
             // 行② 层主 H2（迷你 md 真管线）+ 白正文箭头 + 被回复者；
             // 行③ 评论正文折行全画（同律不截断）。几何全吃 lay.floors
             for (f, fl) in e.floors.iter().zip(lay.floors.iter()) {
-                // 行①：引用行（左 `> N楼` 灰字，右时间灰字无时区）
+                // 行①：引用行（BAR-231：左竖线 2px 渐变 + 1 格缩进「N楼」灰字
+                // ——md 引用同尺，与行②标题竖线同一把尺；不再整块灰字画
+                // 「> N楼」字面）+ 时间居右灰字无时区
                 let q_ly = r.y + i64::from(fl.quote_y);
                 let q_ytop = q_ly + (blh - i64::from(self.cell_h)).max(0) / 2;
-                let qword = format!("> {}楼", f.n);
+                for ay in q_ly.max(vp.0)..(q_ly + blh).min(vp.1) {
+                    if ay < 0 || ay >= i64::from(h) {
+                        continue;
+                    }
+                    for ax in tx..tx + i64::from(crate::ui::demo_page::QUOTE_BAR_W) {
+                        if ax < 0 || ax >= i64::from(w) {
+                            continue;
+                        }
+                        let c =
+                            ring_gradient_rgb(s_acc.c1, s_acc.c2, 0, ay - q_ly, (blh - 1).max(0));
+                        frame.blend_px(ax as u32, ay as u32, c, 255);
+                    }
+                }
+                let qword = format!("{}楼", f.n);
                 let (qitems, _) = self.measure_items_grid(&qword);
+                let qx = tx + i64::from(crate::ui::demo_page::INDENT_W);
                 self.draw_grid_text_left(
                     &mut frame,
                     &qitems,
-                    tx,
+                    qx,
                     q_ytop,
                     self.cell_w,
-                    tw,
+                    tw.saturating_sub(crate::ui::demo_page::INDENT_W),
                     meta_fg,
                     0,
                     clip32,

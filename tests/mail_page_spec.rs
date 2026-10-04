@@ -403,8 +403,8 @@ fn spec_bar222_第四栏几何全账() {
     );
 }
 
-/// 钉（BAR-222，0153 楼1 机读面口径）③：几何吃 display_text 单源——
-/// 新形楼折行区间对「摘要+细节」算（body 原文不参与），旧形回落 body
+/// 钉（BAR-231 改约：卡内只显摘要）③：几何吃 display_text 单源——
+/// 新形楼折行区间只对 summary 算（detail/body 原文不参与），旧形回落 body
 #[test]
 fn spec_bar222_楼层几何吃渲染单源() {
     let m = default_metrics();
@@ -422,14 +422,13 @@ fn spec_bar222_楼层几何吃渲染单源() {
         time: "2026-10-01 17:23 +08:00".to_string(),
         summary: Some("白话摘要".to_string()),
         detail: Some("细节全文".to_string()),
-        body: "原文两字".to_string(),
+        body: "长".repeat(100),
     }];
     let lay = lay_item(&e, 0, 40, &m);
-    let disp = "白话摘要\n\n细节全文";
-    let want = kfm_na::ui::grid_text::grid_wrap(disp, 40);
+    let want = kfm_na::ui::grid_text::grid_wrap("白话摘要", 40);
     assert_eq!(
         lay.floors[0].body_lines, want,
-        "折行区间对 display_text（摘要+细节）算，不对 body 原文"
+        "折行区间只对 summary 算（detail 不进卡，body 原文不参与）"
     );
 }
 

@@ -161,10 +161,11 @@ fn spec_bar222_楼层透传与缓存往返() {
     assert!(back[1].floors.is_empty());
 }
 
-/// 钉（BAR-222，0153 楼1 白露机读面口径）：渲染正文单源 display_text——
-/// 新形吃 summary/detail（细节省则只摘要），旧形两键 null 回落 body
+/// 钉（BAR-231，白露 0153 3楼①用户口述「楼层也只显示摘要」）：卡内
+/// 显示文本 = **只出 summary**（与信卡摘要面同律；detail 不进卡，留
+/// 端点/详情页消费）；旧形两键 null 回落 body 全文（无段可摘不造假截断）
 #[test]
-fn spec_bar222_楼层渲染单源_display_text() {
+fn spec_bar231_楼层卡只显摘要_display_text() {
     use kfm_na::mail_feed::MailFloor;
     let mk = |summary: Option<&str>, detail: Option<&str>, body: &str| MailFloor {
         n: 1,
@@ -177,17 +178,17 @@ fn spec_bar222_楼层渲染单源_display_text() {
     };
     assert_eq!(
         mk(Some("白话。"), Some("细节。"), "原文").display_text(),
-        "白话。\n\n细节。",
-        "新形 = 摘要隔空行接细节"
+        "白话。",
+        "新形 = 只摘要，detail 不进卡"
     );
     assert_eq!(
         mk(Some("白话。"), None, "原文").display_text(),
         "白话。",
-        "细节可省 = 只摘要"
+        "细节省略同形 = 只摘要"
     );
     assert_eq!(
         mk(None, None, "旧形原文").display_text(),
         "旧形原文",
-        "旧形回落 body"
+        "旧形回落 body 全文"
     );
 }
