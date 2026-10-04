@@ -53,6 +53,13 @@ pub fn banner_ok(line: &str) -> bool {
     line.starts_with("SSH-")
 }
 
+/// 外来占口定性判据（A 档纯逻辑，钉在 sshd_keeper_spec）：持有娃不在
+/// 而探活健康 = 口被外来 sshd 占着服务（承影 NA0160 5 楼真机边角）。
+/// 一集一报：已报过（noted）不再刷；娃活着不适用此口径。
+pub fn should_note_foreign(child_alive: bool, banner_healthy: bool, already_noted: bool) -> bool {
+    !child_alive && banner_healthy && !already_noted
+}
+
 /// 幂等启动：重复调用只记一行报表。prefix 不可用时由壳侧拦（不在此
 /// 判——哨兵语义单源在 bootstrap::prefix_ready）。
 pub fn start(prefix: PathBuf) {
@@ -104,6 +111,8 @@ fn keep_loop(prefix: PathBuf) {
     let mut backoff_secs: u64 = 1;
     let mut stable_since: Option<std::time::Instant> = None;
     let mut freeze_strikes: u32 = 0;
+    // 外来占口定性旗（一集一报，娃绑上口即复位）
+    let mut foreign_note = false;
     let mut tick: u32 = 0;
     loop {
         tick = tick.wrapping_add(1);
@@ -154,6 +163,18 @@ fn keep_loop(prefix: PathBuf) {
                     stable_since = None;
                 }
             }
+        } else {
+            // 承影 NA0160 5 楼三（判卷边角）：娃不在而 banner 健康 = 口被
+            // 外来 sshd 占（run-as+setsid 起的那类不随 force-stop 死）——
+            // 报一行定性，免得下次翻进程表；持有娃按退避继续重试绑口。
+            let banner = probe_banner().map(|l| banner_ok(&l)).unwrap_or(false);
+            if should_note_foreign(false, banner, foreign_note) {
+                crate::report::report(
+                    "sshd",
+                    "banner 在但持有娃不在——口被外来 sshd 占，看门狗让位重试中（BAR-230 承影 5 楼）",
+                );
+                foreign_note = true;
+            }
         }
         // ③ 稳定清零退避
         if stable_since.is_some_and(|t| t.elapsed() >= STABLE_RESET) {
@@ -166,6 +187,7 @@ fn keep_loop(prefix: PathBuf) {
             match spawn_sshd(&prefix) {
                 Ok(c) => {
                     crate::report::report("sshd", &format!("sshd 已重拉（pid {}）", c.id()));
+                    foreign_note = false;
                     child = Some(c);
                     freeze_strikes = 0;
                 }
