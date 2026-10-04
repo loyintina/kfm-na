@@ -26,6 +26,11 @@ use std::sync::Arc;
 
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, Ime, TouchPhase, WindowEvent};
+
+/// BAR-232 仪器臂闩：「键盘开+零跟随」诊断态（进态报一次/出态复位；
+/// 涂装装配函数无 self，挂全局）
+static KB_ZERO_DIAG_LATCH: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{Key, NamedKey};
 use winit::platform::android::EventLoopBuilderExtAndroid;
@@ -419,6 +424,8 @@ struct App {
     chrome_inset_px: u32,
     /// 上次 JNI 轮询时刻（500ms 节流）
     last_inset_poll: Option<std::time::Instant>,
+    /// BAR-232 仪器臂：inset 查询连败拍数（成功清零；30 拍吼一次）
+    ime_none_run: u32,
     /// AndroidApp 句柄（JNI 用；android_main 里 clone 进来）
     android_app: Option<winit::platform::android::activity::AndroidApp>,
     /// 事件循环心跳的上次上报时刻（BAR-012③ 诊断：循环卡死则心跳停，
@@ -4013,8 +4020,19 @@ impl App {
         };
         // None = 查询失败：维持旧值不抖动
         let Some(px) = insets.ime_bottom_px() else {
+            // BAR-232 仪器臂：查询连败=键盘补偿冻结嫌疑（None 路径本
+            // 零日志， blind 坏法在 field-reports 里是「无声」）——连败
+            // 30 拍（100ms 档 ≈3s）吼一嗓子，成功即清零
+            self.ime_none_run = self.ime_none_run.saturating_add(1);
+            if self.ime_none_run == 30 {
+                crate::report::report(
+                    "ime",
+                    "IME inset 查询连败 30 拍——键盘补偿冻结嫌疑（BAR-232）",
+                );
+            }
             return;
         };
+        self.ime_none_run = 0;
         // BAR-112：窗口死了不记账——挂起态记账不重算 = kb_shift 卡死半屏；
         // 留旧值待回前台同差再判（变更臂必带 apply_window_size 重算）
         let Some(px) = crate::insets::on_inset_poll(px, self.ime_bottom_px, self.window.is_some())
@@ -8417,6 +8435,19 @@ impl App {
             let mut term = t.lock().unwrap();
             if term.sync_kb_shift(h, kb_occlude) {
                 crate::report::report("ime", &format!("视口跟随 {}px", term.kb_shift_px()));
+            } else if kb_occlude > 300 && term.kb_shift_px() == 0 {
+                // BAR-232 仪器臂：键盘开着而零跟随（不变化）——进态闩一报，
+                // 定位「不滚到末行」落在哪条零臂（历史态 offset>0 / 空网格
+                // cursor 在顶 / 尺寸零）。出态复位；本函数无 self，闩挂全局
+                // （gate::note_frame_size 同先例）
+                if !KB_ZERO_DIAG_LATCH.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    crate::report::report(
+                        "ime",
+                        &format!("键盘开零跟随诊断: {}", term.kb_zero_diag(h, kb_occlude)),
+                    );
+                }
+            } else {
+                KB_ZERO_DIAG_LATCH.store(false, std::sync::atomic::Ordering::Relaxed);
             }
         }
         // AI 面板 Y 偏移过缝（ui-base §三）：目标值 = AI 在栈 0 靠泊 /

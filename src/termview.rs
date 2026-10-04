@@ -9677,6 +9677,9 @@ pub trait TermEmu: Send {
     /// 键盘遮挡 → 视口上移重算（2026-09-18「键盘弹起改视口平移」，
     /// android_app apply_window_size 调用方先例）：只动视口不碰 grid
     fn sync_kb_shift(&mut self, win_h: u32, occlude_px: u32) -> bool;
+    /// BAR-232 仪器面：键盘开而零跟随的现场三态串（历史态 offset>0 /
+    /// 空网格 cursor 顶 / 尺寸零）——android_app 诊断臂调用方先例
+    fn kb_zero_diag(&self, win_h: u32, occlude_px: u32) -> String;
     /// 当前视口上移像素数（同调用方上报读数；2026-09-24 像素级化——
     /// 原行数读数被实机判步进观感怪，亚行零头随遮挡带连续跟随）
     fn kb_shift_px(&self) -> u32;
@@ -10079,6 +10082,21 @@ pub trait TermEmu: Send {
 }
 
 impl TermEmu for TermView {
+    /// BAR-232 仪器面：键盘开着而零跟随时的现场三态串（历史态
+    /// display_offset>0 / 空网格 cursor 在顶 / 尺寸零）——哪条零臂
+    /// 一眼定罪，A 档只读不写
+    fn kb_zero_diag(&self, win_h: u32, occlude_px: u32) -> String {
+        let content = self.term.renderable_content();
+        let off = content.display_offset;
+        let cursor_row = content.cursor.point.line.0 + off as i32;
+        let visible_h = win_h.saturating_sub(margin_top(self.cell_h) + MARGIN_Y + occlude_px);
+        format!(
+            "offset={off} cursor_row={cursor_row} visible_h={visible_h} cell_h={} grid_rows={}",
+            self.cell_h,
+            self.term.grid().screen_lines()
+        )
+    }
+
     fn feed(&mut self, bytes: &[u8]) {
         TermView::feed(self, bytes)
     }
