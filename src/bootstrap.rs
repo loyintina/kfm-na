@@ -50,7 +50,36 @@ pub fn prefix_ready(prefix: &Path) -> bool {
         fs::metadata(e.path())
             .map(|m| m.permissions().mode() & 0o111 != 0)
             .unwrap_or(false)
-    })
+    }) // BAR-230：符号链接判据——克隆搬运整类丢符号链接（承影 MAIN0115
+       // 实证 find -type l = 0，login 脚本的 shebang 指向死 sh 即此形
+       // 态），只堵 x 位漏这一半。三态分档见 sh_link_state。
+        && sh_link_state(prefix) == ShLink::Healthy
+}
+
+/// bin/sh 链接三态（BAR-230，编址照 kfmv4 旧路径存在性三分类——小满
+/// MAIN0116 指路）：链接在且目标可解析＝健康；链接在但目标没了＝真断
+/// （克隆/搬运伤链接的典型形态）；链接本身没了＝可能重装没建链接。
+/// 三档分开报——处置不同。
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum ShLink {
+    /// 链接在且目标可解析（fs::metadata 跟随成功）
+    Healthy,
+    /// 链接在但目标解析失败
+    Dangling,
+    /// 链接本身不存在
+    Missing,
+}
+
+pub fn sh_link_state(prefix: &Path) -> ShLink {
+    let sh = prefix.join("bin/sh");
+    if fs::symlink_metadata(&sh).is_err() {
+        return ShLink::Missing;
+    }
+    if fs::metadata(&sh).is_ok() {
+        ShLink::Healthy
+    } else {
+        ShLink::Dangling
+    }
 }
 
 /// 首启安装入口:prefix 非空则跳过;否则 staging 解包 + 补链 + rename。
