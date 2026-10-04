@@ -4715,6 +4715,16 @@ impl App {
                     "tunnel",
                     "L3 prefix 不可用——ssh 娃臂将挂起（BAR-229 错误分类），QUIC 腿照常",
                 );
+                // BAR-230：看门狗同样不启动——哨兵不过 = prefix 环境死，
+                // spawn 必永久失败；BAR-229 自愈闸会在下次启动修复接管。
+                crate::report::report(
+                    "sshd",
+                    "看门狗不启动（prefix 不可用，BAR-229 自愈后下次启动接管）",
+                );
+            } else {
+                // BAR-230：sshd 看门狗（与 nasup 同族）——强停/重启带走
+                // sshd 后自动重拉，9022 反连桥不再哑死不自愈。
+                crate::sshd_keeper::start(prefix.clone());
             }
             Some(crate::tunnel::start(prefix, srv.clone()))
         });
