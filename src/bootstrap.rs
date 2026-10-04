@@ -26,19 +26,39 @@ pub enum InstallStatus {
 /// 幂等闸谓词：prefix 存在且非空 = 环境已装好（BAR-074 剥给壳前置用——
 /// 壳必须先问它再决定读不读 32MB 资产；ensure_prefix 内部同闸双保险，
 /// 语义单源在此，不许各写一份）
+///
+/// BAR-229 追平「可用」语义：非空之外还须 bin/ 下有任一可执行位——
+/// 换机克隆会把 files/usr 整体搬来但丢 owner x 位（DAC），旧闸放行
+/// 环境死样本（Neo 11 实证：ssh 娃 spawn EACCES × 1034、sshd 起不来、
+/// 闸门/deploy 全瘫）。哨兵取「bin/ 任一 x 位」而非点名 bash：判据
+/// 通用（bin/ 是 bootstrap 必带目录），不绑死件名。
 pub fn prefix_ready(prefix: &Path) -> bool {
     if !prefix.is_dir() {
         return false;
     }
-    match fs::read_dir(prefix) {
-        Ok(mut it) => it.next().is_some(),
-        Err(_) => false,
+    let mut entries = match fs::read_dir(prefix) {
+        Ok(it) => it,
+        Err(_) => return false,
+    };
+    if entries.next().is_none() {
+        return false;
     }
+    let Ok(bin) = fs::read_dir(prefix.join("bin")) else {
+        return false;
+    };
+    bin.filter_map(|e| e.ok()).any(|e| {
+        fs::metadata(e.path())
+            .map(|m| m.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+    })
 }
 
-/// 首启安装入口:prefix 非空则跳过;否则 staging 解包 + 补链 + rename
+/// 首启安装入口:prefix 非空则跳过;否则 staging 解包 + 补链 + rename。
+/// BAR-229 自愈闸：prefix 存在但哨兵不可执行（克隆丢 x 位等环境死）
+/// → wipe 重装——重装产物走 install_to_staging 的显式 chmod，免疫
+/// umask，装完即恢复可用。
 pub fn ensure_prefix(prefix: &Path, zip_bytes: &[u8]) -> Result<InstallStatus, String> {
-    // 幂等闸:prefix 存在且非空 = 环境已装好,zip 看都不看
+    // 幂等闸:prefix 存在且可用 = 环境已装好,zip 看都不看
     if prefix_ready(prefix) {
         return Ok(InstallStatus::AlreadyPresent);
     }
@@ -49,9 +69,11 @@ pub fn ensure_prefix(prefix: &Path, zip_bytes: &[u8]) -> Result<InstallStatus, S
 
     // 半途失败/上次残留的 staging 一律清掉重来;失败路径也清(可重试)
     let result = install_to_staging(&staging, zip_bytes).and_then(|()| {
-        // rename 前若 prefix 以空目录形态存在,先摘掉
+        // rename 前若 prefix 以目录形态存在(空目录,或 BAR-229 哨兵
+        // 不可执行的环境死样本)——一律摘掉再 rename(remove_dir 对
+        // 非空目录会失败,故用 remove_dir_all)
         if prefix.exists() {
-            fs::remove_dir(prefix).map_err(|e| format!("摘空 prefix 失败: {e}"))?;
+            fs::remove_dir_all(prefix).map_err(|e| format!("摘旧 prefix 失败: {e}"))?;
         }
         fs::rename(&staging, prefix).map_err(|e| format!("staging → prefix rename 失败: {e}"))
     });
@@ -242,6 +264,13 @@ mod android_shell {
         if super::prefix_ready(&prefix) {
             crate::report::report("boot", "L3: 环境已装——跳过(幂等闸前置)");
             return;
+        }
+        // BAR-229：存在但不可用（克隆丢 x 位等环境死）——自愈 wipe 重装
+        if prefix.is_dir() {
+            crate::report::report(
+                "boot",
+                "L3: prefix 存在但哨兵不可执行——自愈 wipe 重装（BAR-229，克隆丢 x 位实证）",
+            );
         }
         let assets = app.asset_manager();
         let name = std::ffi::CString::new(BOOTSTRAP_ASSET).unwrap();

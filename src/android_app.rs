@@ -4706,9 +4706,15 @@ impl App {
             .cloned();
         self.tunnel_snap = tunnel_srv.clone().and_then(|srv| {
             let prefix = crate::local_pty::android_prefix();
+            // BAR-229：QUIC 双腿是核内纯 Rust，不依赖 prefix——隧道无条件
+            // 起；prefix 不可用时 ssh 娃臂走永久错误分类自挂起，数据/反连
+            // 照通。（旧闸「prefix 未装不启动」是 ssh 娃时代遗留——它会把
+            // QUIC 腿一起杀，坏 prefix 手机直接断数据面。）
             if !crate::bootstrap::prefix_ready(&prefix) {
-                crate::report::report("tunnel", "L3 prefix 未装，隧道不启动（装好 L3 后重开 app）");
-                return None;
+                crate::report::report(
+                    "tunnel",
+                    "L3 prefix 不可用——ssh 娃臂将挂起（BAR-229 错误分类），QUIC 腿照常",
+                );
             }
             Some(crate::tunnel::start(prefix, srv.clone()))
         });

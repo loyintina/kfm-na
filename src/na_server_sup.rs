@@ -199,6 +199,20 @@ pub enum Verdict {
     Systemd,
     /// 拉起/探活失败
     Failed(String),
+    /// BAR-229：永久失败——ssh spawn EACCES/ENOENT（prefix 二进制丢
+    /// x 位/缺失，重试不会自愈）。纪律（MAIN0113 §四-4 候选）：
+    /// 重试必须带错误分类，永久错误不重试——挂起等重启/修复。
+    Permanent(String),
+}
+
+/// BAR-229：spawn 永久错误判据——权限位/二进制缺失是环境态，重试
+/// 无效（Neo 11 克隆丢 x 位实证：nasup 60s 一拍空转 1034 次、tunnel
+/// 伴生 6695 次）。PermissionDenied = EACCES，NotFound = ENOENT。
+pub fn is_permanent_spawn_err(e: &std::io::Error) -> bool {
+    matches!(
+        e.kind(),
+        std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::NotFound
+    )
 }
 
 /// verdict 解析（A 档纯函数）：取输出里**最后一个**标记行（脚本中途
@@ -354,8 +368,14 @@ fn run_exec_once(prefix: &std::path::Path, server: &ServerEntry) -> (Verdict, Su
     let mut child = match child {
         Ok(c) => c,
         Err(e) => {
+            // BAR-229：EACCES/ENOENT = 环境态（prefix 丢 x 位/缺件），
+            // 重试不自愈——交上层 Permanent 挂起，不再 60s 一拍空转。
             return (
-                Verdict::Failed(format!("ssh spawn 失败: {e}")),
+                if is_permanent_spawn_err(&e) {
+                    Verdict::Permanent(format!("ssh spawn 失败: {e}"))
+                } else {
+                    Verdict::Failed(format!("ssh spawn 失败: {e}"))
+                },
                 SupMode::Unknown,
             );
         }
@@ -492,6 +512,26 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<SupSnap>> {
                     attempts = 0;
                     we_spawned = false; // 活着归 systemd，不是「我们的娃」
                     set(SupState::ExternalUp, &snap_t);
+                }
+                Verdict::Permanent(e) => {
+                    // BAR-229：永久错误挂起——重试循环退出，状态面留
+                    // 「待修复」终态（修复路径 = BAR-229 自愈闸在下次
+                    // 启动 wipe 重装，或用户本地终端 chmod 后重启）。
+                    attempts += 1;
+                    crate::report::report(
+                        "nasup",
+                        &format!(
+                            "ensure 永久失败（{e}）——重试挂起（BAR-229 错误分类），修复/重启后自动恢复"
+                        ),
+                    );
+                    set(
+                        SupState::Down {
+                            attempts,
+                            last_error: format!("{e}（永久——重试挂起，BAR-229）"),
+                        },
+                        &snap_t,
+                    );
+                    return; // 退出看门狗线程：永久错误不重试
                 }
                 Verdict::Failed(e) => {
                     attempts += 1;
