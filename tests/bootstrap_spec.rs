@@ -152,10 +152,12 @@ fn spec_bar074_幂等闸谓词_三态() {
     {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(prefix.join("bin/tool"), fs::Permissions::from_mode(0o700)).unwrap();
+        // BAR-230 链接判据：健康形态还需 bin/sh 链接在且目标可解析
+        std::os::unix::fs::symlink("tool", prefix.join("bin/sh")).unwrap();
     }
     assert!(
         kfm_na::bootstrap::prefix_ready(&prefix),
-        "bin/ 有 x 位=true"
+        "bin/ 有 x 位且 bin/sh 链接健康=true"
     );
 }
 
