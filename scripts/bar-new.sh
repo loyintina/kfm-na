@@ -134,7 +134,7 @@ if [ "${BAR_NEW_NO_LETTER:-}" != "1" ]; then
     TODAY=$(date '+%Y-%m-%d')
     out=$("$CLI" new --mailbox "$MAILBOX" --from-func "$FUNC" --from-name "$NAME" \
         --to-all --type 通报 --title "BAR-$NEXT $TITLE" \
-        --kind 通报 --expect "承办线按 AGENTS.md「BAR 追踪信」条款楼层追加进展" \
+        --kind 通报 --expect "承办线（$FUNC$NAME）以楼层追加进展：$TITLE" \
         --criteria "BAR-$NEXT 用户终验结案（信头状态翻 已验证）" \
         --status 待落地通报)
     file=$(printf '%s' "$out" | sed -n 's/.*已生成 \([^ ]*\.md\).*/\1/p')

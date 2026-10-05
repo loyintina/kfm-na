@@ -99,5 +99,11 @@ grep -q 'mailbox-cli 缺（清 target 后遗症）' scripts/bar-new.sh \
     && { echo "  ✓ CLI缺件自愈在"; pass=$((pass+1)); } \
     || { echo "  ✗ CLI缺件自愈缺（清 target 后领号全瘫）"; fail=$((fail+1)); }
 
+# ⑪--expect 带主语带事由（白露加急 2026-10-07）：看板事由列直读 expect
+# 字段——纯样板文（无承办者无事由）四封信一个脸。变异：退回样板 → 红。
+grep -q -- '--expect "承办线（\$FUNC\$NAME）以楼层追加进展：\$TITLE"' scripts/bar-new.sh \
+    && { echo "  ✓ expect带主语带事由"; pass=$((pass+1)); } \
+    || { echo "  ✗ expect退回纯样板（看板事由列污染回潮）"; fail=$((fail+1)); }
+
 echo "[test-bar-new] $pass 过 / $fail 红"
 [ "$fail" = 0 ]
