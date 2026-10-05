@@ -51,6 +51,16 @@ BUGS="${BAR_NEW_BUGS:-$ROOT/docs/ledger/bugs.md}"
 REG="${BAR_NEW_REGISTRY:-$ROOT/docs/ledger/bar-registry.jsonl}"
 LOCK="$REG.lock"
 CLI="$ROOT/target/debug/mailbox-cli"
+# 2026-10-06（观澜 0126 9楼）：清主仓 target 会连坐领号器前置件——
+# 缺件自愈：cargo build -p mailbox-cli（39s 级，一次性），别让全信箱
+# 的领号停在「谁记得补建」上。
+[ -x "$CLI" ] || {
+    echo "[bar-new] mailbox-cli 缺（清 target 后遗症）——自动重建中"
+    (cd "$ROOT" && cargo build -p mailbox-cli) || {
+        echo "❌ mailbox-cli 重建失败——领号中止" >&2
+        exit 1
+    }
+}
 MAILBOX="${BAR_NEW_MAILBOX:-$HOME/.kfm/session/信箱}"
 DEFAULT_MAILBOX="$HOME/.kfm/session/信箱"
 # 符号链接解引用（202 双号实案 2026-09-30：生产信箱 = 上面那个路径
@@ -154,8 +164,8 @@ if [ "${BAR_NEW_NO_LETTER:-}" != "1" ]; then
         # verify→gen→精确 pathspec→信封署名，失败即退不滞留。
         LETTERS_BIN="${LETTERS_BIN:-$(dirname "$MAILBOX")/30-工具/letters}"
         if [ -x "$LETTERS_BIN" ]; then
-            (cd "$MAILBOX" && "$LETTERS_BIN" commit "$file" \
-                -m "feat(信箱): $LETTER BAR-$NEXT 追踪信开卷（$FUNC$NAME：$TITLE）") \
+            "$LETTERS_BIN" commit "$path" \
+                -m "feat(信箱): $LETTER BAR-$NEXT 追踪信开卷（$FUNC$NAME：$TITLE）" \
                 || echo "⚠ letters commit 失败——信在盘未提交，请手动 letters commit $file" >&2
         else
             echo "⚠ letters 不在 $LETTERS_BIN——信在盘未提交，请手动 letters commit $file" >&2

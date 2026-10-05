@@ -93,5 +93,11 @@ grep -q 'user\.name=kfm-na' scripts/bar-new.sh \
     && { echo "  ✗ 裸git署名回潮（撞门④滞留暂存区）"; fail=$((fail+1)); } \
     || { echo "  ✓ 裸git署名不在"; pass=$((pass+1)); }
 
+# ⑩CLI 缺件自愈（0126 9楼观澜）：清主仓 target 连坐领号器前置件——
+# bar-new.sh 必须自带重建，不许停在「谁记得补建」。变异：摘自愈块 → 红。
+grep -q 'mailbox-cli 缺（清 target 后遗症）' scripts/bar-new.sh \
+    && { echo "  ✓ CLI缺件自愈在"; pass=$((pass+1)); } \
+    || { echo "  ✗ CLI缺件自愈缺（清 target 后领号全瘫）"; fail=$((fail+1)); }
+
 echo "[test-bar-new] $pass 过 / $fail 红"
 [ "$fail" = 0 ]
