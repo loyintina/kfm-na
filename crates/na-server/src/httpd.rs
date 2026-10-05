@@ -50,6 +50,26 @@ pub fn respond(status: u16, reason: &str, body: &str) -> Vec<u8> {
     .into_bytes()
 }
 
+/// BAR-233：text/plain 响应（pending 体——channel\thex 行格式，见 gateq）
+pub fn respond_text(status: u16, reason: &str, body: &str) -> Vec<u8> {
+    format!(
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+    .into_bytes()
+}
+
+/// BAR-233：二进制响应（gate result 一次性取走——截图 rgb 等原样字节）
+pub fn respond_bytes(status: u16, reason: &str, body: &[u8]) -> Vec<u8> {
+    let mut out = format!(
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    )
+    .into_bytes();
+    out.extend_from_slice(body);
+    out
+}
+
 /// 路由结果（A 档纯函数）：(动作, 响应)
 pub enum Route {
     Report,
@@ -80,6 +100,24 @@ pub enum Route {
     /// na-agentd，不开新口）——携带剥前缀后的上游路径
     Agent {
         upstream: String,
+    },
+    /// POST /api/gate/<channel>（BAR-233 乙案 v1：闸门触发腿 QUIC 化——
+    /// 八通道下行入队，白名单判据在 gateq::channel_ok）
+    GatePush {
+        channel: String,
+    },
+    /// GET /api/gate/pending?wait=<秒>（长轮询：队列空则等至有货或超时；
+    /// 响应 text/plain 见 gateq::pending_body）
+    GatePending {
+        wait: u64,
+    },
+    /// POST /api/gate/result/<name>（上行结果：body 原样字节，一次性）
+    GateResultPut {
+        name: String,
+    },
+    /// GET /api/gate/result/<name>（一次性取走；没有 = 404）
+    GateResultGet {
+        name: String,
     },
     NotFound,
 }
@@ -135,6 +173,36 @@ pub fn route(method: &str, path: &str) -> Route {
             max: fsapi::parse_max(query),
             offset: fsapi::parse_offset(query),
             has_offset: fsapi::has_offset(query),
+        },
+        // BAR-233：/api/gate 四路（闸门触发腿 QUIC 化）——channel 白名单
+        // 与 pending 体格式在 gateq（A 档纯函数，钉在 httpd_spec）。
+        // result/ 两臂须在通用 gate 臂**之前**（/api/gate/result/x 也
+        // starts_with /api/gate/，臂序倒错会被当 channel 吞掉）
+        ("POST", p) if p.starts_with("/api/gate/result/") => Route::GateResultPut {
+            name: p
+                .strip_prefix("/api/gate/result/")
+                .unwrap_or_default()
+                .to_string(),
+        },
+        ("GET", p) if p.starts_with("/api/gate/result/") => Route::GateResultGet {
+            name: p
+                .strip_prefix("/api/gate/result/")
+                .unwrap_or_default()
+                .to_string(),
+        },
+        ("GET", "/api/gate/pending") => Route::GatePending {
+            wait: fsapi::query_get(query, "wait")
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(0)
+                .min(30),
+        },
+        ("POST", p) if p.starts_with("/api/gate/") => match p.strip_prefix("/api/gate/") {
+            // pending 是 GET 面（POST /api/gate/pending → 404）
+            Some("pending") => Route::NotFound,
+            Some(ch) => Route::GatePush {
+                channel: ch.to_string(),
+            },
+            None => Route::NotFound,
         },
         _ => Route::NotFound,
     }

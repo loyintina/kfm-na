@@ -22,6 +22,7 @@
 //! 从头自读），否则按平面 HTTP 处理（httpd）。
 
 use na_protocol::fsapi;
+use na_server::gateq;
 use na_server::httpd;
 use na_server::state::Registry;
 use na_server::wsterm;
@@ -398,7 +399,10 @@ async fn http_handle(
         .read_exact(&mut raw)
         .await
         .map_err(|e| format!("读请求失败: {e}"))?;
-    let body = String::from_utf8_lossy(&raw[head_len..]).into_owned();
+    // BAR-233：gate result 上行是二进制（截图 rgb 等）——保留原始字节，
+    // 文本面照旧走 lossy（旧路由零改动）
+    let body_bytes: Vec<u8> = raw[head_len..].to_vec();
+    let body = String::from_utf8_lossy(&body_bytes).into_owned();
 
     let resp = match httpd::route(&method, &path) {
         httpd::Route::Agent { upstream } => {
@@ -407,6 +411,59 @@ async fn http_handle(
                 Err(e) => httpd::respond(502, "Bad Gateway", &httpd::agent_error_body(&e)),
             }
         }
+        httpd::Route::GatePush { channel } => {
+            if !gateq::channel_ok(&channel) {
+                httpd::respond(
+                    400,
+                    "Bad Request",
+                    "{\"ok\":false,\"error\":\"bad channel\"}",
+                )
+            } else if body_bytes.len() > 64 * 1024 {
+                httpd::respond(
+                    413,
+                    "Payload Too Large",
+                    "{\"ok\":false,\"error\":\"payload >64KB\"}",
+                )
+            } else {
+                gateq::push(&channel, body_bytes);
+                httpd::respond(200, "OK", "{\"ok\":true}")
+            }
+        }
+        httpd::Route::GatePending { wait } => {
+            // 长轮询：空则等至有货或超时（100ms 粒度睡——current_thread
+            // 运行时不许同步睡，tokio::time 异步睡不冻别的连接）
+            if wait > 0 {
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(wait);
+                while gateq::queue_empty() && tokio::time::Instant::now() < deadline {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            }
+            let items = gateq::drain();
+            let text = gateq::pending_body(&items);
+            httpd::respond_text(200, "OK", &text)
+        }
+        httpd::Route::GateResultPut { name } => {
+            if name.is_empty()
+                || !name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.')
+            {
+                httpd::respond(400, "Bad Request", "{\"ok\":false,\"error\":\"bad name\"}")
+            } else if body_bytes.len() > 32 * 1024 * 1024 {
+                httpd::respond(
+                    413,
+                    "Payload Too Large",
+                    "{\"ok\":false,\"error\":\"result >32MB\"}",
+                )
+            } else {
+                gateq::put_result(&name, body_bytes);
+                httpd::respond(200, "OK", "{\"ok\":true}")
+            }
+        }
+        httpd::Route::GateResultGet { name } => match gateq::take_result(&name) {
+            Some(bytes) => httpd::respond_bytes(200, "OK", &bytes),
+            None => httpd::respond(404, "Not Found", "{\"ok\":false,\"error\":\"no result\"}"),
+        },
         httpd::Route::Report => match httpd::append_report(&body) {
             Ok(()) => httpd::respond(200, "OK", "{\"ok\":true}"),
             Err(e) => httpd::respond(500, "Internal Server Error", &httpd::error_body(&e)),
