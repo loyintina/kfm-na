@@ -38,6 +38,62 @@ gate() {
     fi
 }
 
+# ---- BAR-233（乙案 v1）：闸门触发腿走数据面（HTTP→na-server→QUIC 长轮询）
+# 触发下发与结果上行都不再依赖 sshd；HTTP 不通（老核/数据面断）自动退
+# ssh 老路——兼容未升级核。服务器本地直连 na-server（127.0.0.1）。
+na_gate_http() {
+    curl -m 4 -s -o /dev/null -w '%{http_code}'         -X POST --data-binary @-         "http://127.0.0.1:${NA_HTTP_PORT:-9021}/api/gate/$1"
+}
+
+# gate_touch <name> [payload-file]：写触发（payload 可空）。HTTP 2xx =
+# 已入队（na 侧长轮询秒级取走落盘）；不通退 ssh/adb 老路。
+gate_touch() {
+    local name=$1 pf=${2:-/dev/null}
+    if [[ $NA_TRANSPORT == adb ]]; then
+        "$NA_ADB" -s "$NA_ADB_SERIAL" shell "cat > $NA_TMP/$name.new && mv $NA_TMP/$name.new $NA_TMP/$name" < "$pf"
+        return $?
+    fi
+    local code
+    code=$(na_gate_http "$name" < "$pf") || code=000
+    if [[ $code == 2* ]]; then
+        return 0
+    fi
+    # 退老路：payload 进文件再改名（.new→mv 原子语义）；空 payload = touch
+    if [[ -s "$pf" ]]; then
+        na_ssh "cat > $NA_TMP/$name.new && mv $NA_TMP/$name.new $NA_TMP/$name" < "$pf"
+    else
+        na_ssh "touch $NA_TMP/$name"
+    fi
+}
+
+# gate_result <name> [outfile]：取结果（HTTP 一次性取走；404/不通退
+# cat 老路）。outfile 给了落文件，没给 stdout。
+gate_result() {
+    local name=$1 out=${2:-}
+    if [[ $NA_TRANSPORT != adb ]]; then
+        if [[ -n $out ]]; then
+            local code
+            code=$(curl -m 30 -s -o "$out" -w '%{http_code}' \
+                "http://127.0.0.1:${NA_HTTP_PORT:-9021}/api/gate/result/$name") || code=000
+            [[ $code == 2* ]] && return 0
+        else
+            local body code
+            body=$(curl -m 30 -s -w $'\n%{http_code}' \
+                "http://127.0.0.1:${NA_HTTP_PORT:-9021}/api/gate/result/$name") || body=""
+            code="${body##*$'\n'}"
+            if [[ $code == 2* ]]; then
+                printf '%s' "${body%$'\n'*}"
+                return 0
+            fi
+        fi
+    fi
+    if [[ $NA_TRANSPORT == adb ]]; then
+        "$NA_ADB" -s "$NA_ADB_SERIAL" shell "cat $NA_TMP/$name"
+    else
+        na_ssh "cat $NA_TMP/$name"
+    fi
+}
+
 gate_pull() {
     if [[ $NA_TRANSPORT == adb ]]; then
         "$NA_ADB" -s "$NA_ADB_SERIAL" pull "$1" "$2" >/dev/null

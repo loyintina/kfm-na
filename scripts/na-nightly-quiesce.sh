@@ -33,7 +33,7 @@ case "$FG" in
             echo "$(date '+%F %T') [quiesce][dry] na 在后台,将触发 restart-req"
             exit 0
         fi
-        if na_ssh "touch $NA_TMP/restart-req" 2>/dev/null; then
+        if gate_touch restart-req 2>/dev/null; then   # BAR-233
             echo "$(date '+%F %T') [quiesce] na 在后台 → restart-req 已投,体面退出"
         else
             echo "$(date '+%F %T') [quiesce] restart-req 投递失败"

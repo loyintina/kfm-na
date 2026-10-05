@@ -4757,6 +4757,9 @@ impl App {
             if crate::bootstrap::prefix_ready(&prefix) {
                 crate::na_server_sup::start(prefix, srv.clone());
             }
+            // BAR-233：闸门触发腿走数据面（仅 na-server 后端有 /api/gate
+            // 面；kfmv4 后端不启，闸门照旧走 ssh 桥老路）
+            crate::gate_poller::start(srv.tunnel.local_port);
         }
 
         // 服务卡数据面（2026-09-20，docs/active/na-server.md §四）：

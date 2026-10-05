@@ -19,6 +19,7 @@ pub mod exec_probe;
 pub mod fs_fetch;
 pub mod fs_mirror;
 pub mod gate;
+pub mod gate_poller;
 pub mod glyph_atlas;
 pub mod http1;
 pub mod ime_queue;

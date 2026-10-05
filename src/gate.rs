@@ -498,7 +498,9 @@ pub fn text_dump(dir: &str) -> bool {
     let Some(term) = term else { return false };
     let _ = std::fs::remove_file(&trigger);
     let text = term.lock().unwrap().dump_text();
-    let ok = std::fs::write(Path::new(dir).join("screen.txt"), text).is_ok();
+    let screen = Path::new(dir).join("screen.txt");
+    let ok = std::fs::write(&screen, text).is_ok();
+    crate::gate_poller::offer_result("screen.txt", &screen);
     if ok {
         STAT_TEXTS.fetch_add(1, Ordering::Relaxed);
     }
@@ -808,6 +810,9 @@ pub fn maybe_dump(dir: &str, buf: &[u32], w: u32, h: u32) -> bool {
         return false;
     }
     let _ = std::fs::write(Path::new(dir).join("shot.dim"), format!("{w} {h}"));
+    // BAR-233：结果回传数据面（HTTP 一次性取走，sshd 死也不堵截图链）
+    crate::gate_poller::offer_result("shot.rgb", &Path::new(dir).join("shot.rgb"));
+    crate::gate_poller::offer_result("shot.dim", &Path::new(dir).join("shot.dim"));
     true
 }
 
@@ -1001,6 +1006,8 @@ pub fn write_shot_gl(dir: &str, buf: &[u32], w: u32, h: u32) -> bool {
         return false;
     }
     let _ = std::fs::write(Path::new(dir).join("shot-gl.dim"), format!("{w} {h}"));
+    crate::gate_poller::offer_result("shot-gl.rgb", &Path::new(dir).join("shot-gl.rgb"));
+    crate::gate_poller::offer_result("shot-gl.dim", &Path::new(dir).join("shot-gl.dim"));
     true
 }
 
@@ -1560,7 +1567,9 @@ fn watch_loop(dir: &str) {
             WatchState::Stall(a) => format!("stall beat_age={a}ms(前台 >{LOOP_STALL_MS}ms,真卡死)"),
             WatchState::Alive(a) => format!("alive beat_age={a}ms(前台)"),
         };
-        std::fs::write(std::path::PathBuf::from(dir).join("ping-res"), verdict).ok();
+        let ping_res = std::path::PathBuf::from(dir).join("ping-res");
+        std::fs::write(&ping_res, verdict).ok();
+        crate::gate_poller::offer_result("ping-res", &ping_res);
     }
 }
 
@@ -1895,11 +1904,9 @@ fn trace_dump(dir: &str) {
         return;
     }
     std::fs::remove_file(&trigger).ok();
-    std::fs::write(
-        std::path::PathBuf::from(dir).join("trace.txt"),
-        crate::trace::dump_all(),
-    )
-    .ok();
+    let trace_txt = std::path::PathBuf::from(dir).join("trace.txt");
+    std::fs::write(&trace_txt, crate::trace::dump_all()).ok();
+    crate::gate_poller::offer_result("trace.txt", &trace_txt);
 }
 
 /// 通道七:stats-req → 统计快照落 stats-res(同 ping-req 一问一答)
@@ -1909,11 +1916,9 @@ fn stats_answer(dir: &str) {
         return;
     }
     std::fs::remove_file(&trigger).ok();
-    std::fs::write(
-        std::path::PathBuf::from(dir).join("stats-res"),
-        format_stats(&stats_snap()),
-    )
-    .ok();
+    let stats_res = std::path::PathBuf::from(dir).join("stats-res");
+    std::fs::write(&stats_res, format_stats(&stats_snap())).ok();
+    crate::gate_poller::offer_result("stats-res", &stats_res);
 }
 
 // ---- 通道八:touch-in → 触摸注入(2026-08-27,观测矩阵输入侧空格销案) ----
@@ -2213,6 +2218,7 @@ fn orb_check(dir: &str) {
         ),
     )
     .ok();
+    crate::gate_poller::offer_result("orb-inject-res", &res);
     if !errs.is_empty() {
         crate::report::report(
             "gate",

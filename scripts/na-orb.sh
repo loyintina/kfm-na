@@ -24,17 +24,14 @@ if [ $# -lt 1 ]; then
 fi
 
 script="$(printf '%s\n' "$@")"
-gate "rm -f $NA_TMP/orb-inject-res" >/dev/null
-printf '%s\n' "$script" | gate "cat > $NA_TMP/orb-inject.new && mv $NA_TMP/orb-inject.new $NA_TMP/orb-inject"
+printf '%s\n' "$script" | gate_touch orb-inject /dev/stdin   # BAR-233：结果一次性取走，无需预清
 ok=""
 for _ in $(seq 1 30); do
+    out=$(gate_result orb-inject-res 2>/dev/null) && { ok=1; break; }
     sleep 0.3
-    if gate "test -f $NA_TMP/orb-inject-res"; then
-        ok=1; break
-    fi
 done
 if [ -z "$ok" ]; then
     echo "❌ 9 秒内没等到回执——值守线程活着吗?(na-ping.sh 先探)" >&2
     exit 1
 fi
-gate "cat $NA_TMP/orb-inject-res"
+echo "$out"
