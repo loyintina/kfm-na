@@ -100,3 +100,14 @@ fn spec_bar233_端到端冒烟_假服务器落盘() {
     assert!(got, "假服务器 pending 应已落成触发文件");
     assert_eq!(std::fs::read(dump.join("restart-req")).unwrap(), b"hello");
 }
+
+#[test]
+fn spec_bar233_轮询节拍短窗() {
+    // BAR-233 追件：POLL_WAIT_SECS 须为 2（25s 长轮询在 QUIC 桥撞空闲
+    // 掐线——现场「响应无头体分隔」实证；变异：改回 25 → 本钉红）
+    assert_eq!(
+        kfm_na::gate_poller::POLL_WAIT_SECS,
+        2,
+        "短轮询节拍被改回长窗"
+    );
+}

@@ -459,7 +459,16 @@ pub async fn run_client(
     .await
     .map_err(|_| std::io::Error::other("QUIC 握手超时（UDP 黑洞？）"))?
     .map_err(|e| std::io::Error::other(e.to_string()))?;
-    let listener = tokio::net::TcpListener::bind(local_bind).await?;
+    // BAR-233 追件（白露 NA0163 7 楼裁②）：本机口 bind 失败要带着地址响亮
+    // 报错——双实例/分身竞争期谁持口无人知晓（判卷 38 次 refused 的观测
+    // 盲区）；裸 `?` 把 AddrInUse 折叠成无差别腿死，定性线索丢失。
+    let listener = tokio::net::TcpListener::bind(local_bind)
+        .await
+        .map_err(|e| {
+            std::io::Error::other(format!(
+                "本机数据口 bind 失败 {local_bind}: {e}（口被谁占？双实例/残留监听候选——BAR-233）"
+            ))
+        })?;
     loop {
         let (tcp, _) = listener.accept().await?;
         let Ok((mut send, recv)) = conn.open_bi().await else {
