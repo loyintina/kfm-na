@@ -20,8 +20,10 @@ use std::sync::OnceLock;
 use std::sync::mpsc;
 use std::time::Duration;
 
-/// 长轮询等待（秒）——与服务器侧 wait 上限 30 对齐留余量
-const POLL_WAIT_SECS: u8 = 25;
+/// 轮询等待（秒）——2026-10-07 判卷回炉改 2（白露 NA0163 7 楼裁①）：
+/// 25s 长轮询在 QUIC 桥上撞空闲掐线（现场实证「响应无头体分隔」反复），
+/// 短轮询掐线窗口消失、闸门 2s 延迟无感、失败重试成本恒定
+pub const POLL_WAIT_SECS: u8 = 2;
 /// 上传重试次数（超过即丢＋报表一行）
 const UPLOAD_RETRIES: u32 = 3;
 
