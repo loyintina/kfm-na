@@ -49,3 +49,5 @@
 {"bar":231,"title":"信箱页第四栏楼层两缺陷——卡内楼层全量渲染应只显摘要+引用行整块灰字应左竖线md引用同尺（白露0153楼3用户口述）","claimant_func":"开发部","claimant":"闻灯","letter":"0161","ts":"2026-10-04 12:10 +0800"}
 {"bar":230,"title":"sshd 无主管——app 强停/重启带走 sshd 后 9022 哑且不自愈（BAR-229 机制定性）；哨兵加 bin/sh 链接判据堵「只丢链接」残余缺口","claimant_func":"研究部","claimant":"清和","letter":"0160","ts":"2026-10-04 11:35 +0800"}
 {"bar":233,"title":"闸门触发腿 QUIC 化（乙案 v1）——八通道改走数据面：na-server /api/gate 路由+待取队列、na 核内轮询落盘 DUMP_DIR、gate-lib 切换兼容老核（MAIN0125 发令）","claimant_func":"研究部","claimant":"清和","letter":"0163","ts":"2026-10-06 08:15 +0800"}
+{"bar":234,"title":"8032 静态页面面走既有 QUIC 隧道：na-server 加 /ui 前缀反代臂（BAR-163 第二例）＋训练场落盘端点前缀无关化","claimant_func":"研究部","claimant":"南舟","letter":"0164","ts":"2026-10-06 06:26 +0800"}
+{"bar":235,"title":"报表实例标识加设备维——arch/pid 分不开两台同架构真机（双机误读为单机双实例）","claimant_func":"开发部","claimant":"观澜","letter":"0165","ts":"2026-10-07 20:28 +0800"}

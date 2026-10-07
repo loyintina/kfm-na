@@ -10,7 +10,7 @@
 |---|---|---|---|---|
 | `src/ai_chat.rs` | 11 | 10 | 1 | generation |
 | `src/ai_presence.rs` | 37 | 37 | 0 | — |
-| `src/bootstrap.rs` | 5 | 3 | 2 | ensure_pkg_tool first_boot_install |
+| `src/bootstrap.rs` | 6 | 4 | 2 | ensure_pkg_tool first_boot_install |
 | `src/brain.rs` | 14 | 14 | 0 | — |
 | `src/brain_ep.rs` | 4 | 4 | 0 | — |
 | `src/catchup.rs` | 14 | 14 | 0 | — |
@@ -23,6 +23,7 @@
 | `src/fs_fetch.rs` | 18 | 18 | 0 | — |
 | `src/fs_mirror.rs` | 9 | 8 | 1 | manifest_path |
 | `src/gate.rs` | 104 | 81 | 23 | register_gate_router text_dump inject_keys spawn_gate_watcher REC_FILE_CAP REC_FILE rec_output rec_resize PANIC_FILE PANIC_TRACE_FILE LOOP_STALL_FILE note_loop_beat loop_beat_age_ms note_foreground install_panic_hook note_draw note_session_death touch_take register_input_bar ALERT_RSS_COOLDOWN_MS ALERT_DEATHS_WINDOW_MS ALERT_DEATHS_COOLDOWN_MS HISTORY_EVERY_TICKS |
+| `src/gate_poller.rs` | 7 | 7 | 0 | — |
 | `src/glyph_atlas.rs` | 11 | 11 | 0 | — |
 | `src/http1.rs` | 10 | 7 | 3 | is_tick_err read_head_hook read_body_hook |
 | `src/ime_bridge.rs` | 1 | 0 | 1 | jni_counters |
@@ -33,8 +34,8 @@
 | `src/keybar.rs` | 20 | 16 | 4 | COLS MOD_ALT install_bridge_mods bridge_mods |
 | `src/keymap.rs` | 2 | 2 | 0 | — |
 | `src/local_pty.rs` | 7 | 6 | 1 | android_prefix |
-| `src/mail_feed.rs` | 18 | 16 | 2 | book_snap ensure_summaries |
-| `src/na_server_sup.rs` | 21 | 17 | 4 | HEALTH_URL EXEC_TIMEOUT_SECS RECHECK_SECS TUNNEL_WAIT_SECS |
+| `src/mail_feed.rs` | 19 | 17 | 2 | book_snap ensure_summaries |
+| `src/na_server_sup.rs` | 22 | 18 | 4 | HEALTH_URL EXEC_TIMEOUT_SECS RECHECK_SECS TUNNEL_WAIT_SECS |
 | `src/offline_keys.rs` | 10 | 10 | 0 | — |
 | `src/plugins/ai_presence.rs` | 2 | 2 | 0 | — |
 | `src/plugins/conn_provider_local.rs` | 3 | 3 | 0 | — |
@@ -44,17 +45,18 @@
 | `src/plugins/term_alacritty.rs` | 3 | 3 | 0 | — |
 | `src/plugins/ui_fx.rs` | 2 | 2 | 0 | — |
 | `src/providers.rs` | 5 | 5 | 0 | — |
-| `src/report.rs` | 12 | 7 | 5 | set_boot_t0 start_flusher report_sync report_sync_once http_status_is_200 |
+| `src/report.rs` | 14 | 9 | 5 | set_boot_t0 start_flusher report_sync report_sync_once http_status_is_200 |
 | `src/reseed.rs` | 1 | 1 | 0 | — |
 | `src/scroll.rs` | 20 | 20 | 0 | — |
 | `src/seed_sched.rs` | 4 | 4 | 0 | — |
-| `src/self_restart.rs` | 11 | 5 | 6 | FLAG_REL set_files_dir button_label poll_flag restart restart |
+| `src/self_restart.rs` | 11 | 7 | 4 | FLAG_REL set_files_dir button_label poll_flag |
 | `src/sess_mode.rs` | 3 | 3 | 0 | — |
 | `src/sess_pool.rs` | 35 | 33 | 2 | TAIL_EVENTS request_routes |
 | `src/session.rs` | 14 | 14 | 0 | — |
 | `src/session_router.rs` | 11 | 11 | 0 | — |
 | `src/settings.rs` | 10 | 8 | 2 | QUIC_DEFAULT_PORT QUIC_REVERSE_PORT |
 | `src/singleton.rs` | 7 | 4 | 3 | LOCK_PATH lock_exclusive try_acquire |
+| `src/sshd_keeper.rs` | 3 | 3 | 0 | — |
 | `src/svc_health.rs` | 12 | 9 | 3 | HIST_PATH set_visible sys_snap |
 | `src/sys_hist.rs` | 39 | 34 | 5 | BAR_W PLACEHOLDER_PCT hist_idx restore HIST_FORMAT |
 | `src/termview.rs` | 174 | 166 | 8 | AI_THINK_COLLAPSED FONT_CANDIDATES CJK_FONT_CANDIDATES load_cjk_font font_probe dump_all_active MAG_HALF_COLS MAG_HALF_ROWS |
@@ -70,7 +72,7 @@
 | `src/ui/conn_card.rs` | 6 | 6 | 0 | — |
 | `src/ui/cursor.rs` | 9 | 9 | 0 | — |
 | `src/ui/demo_icon.rs` | 6 | 6 | 0 | — |
-| `src/ui/demo_page.rs` | 29 | 26 | 3 | HEAD_FRAME_T QUOTE_BAR_W LIST_MARK_PX |
+| `src/ui/demo_page.rs` | 29 | 27 | 2 | HEAD_FRAME_T LIST_MARK_PX |
 | `src/ui/down_card.rs` | 10 | 10 | 0 | — |
 | `src/ui/dual_pool.rs` | 19 | 19 | 0 | — |
 | `src/ui/filetree.rs` | 81 | 73 | 8 | SHIFT_CLAMP_CSS TRI_GAP_PX CURSOR_NAME_INSET CURSOR_BAR_W CURSOR_HAIR_W row_center register_filetree filetree_handle |
@@ -82,7 +84,7 @@
 | `src/ui/keybar.rs` | 1 | 1 | 0 | — |
 | `src/ui/link_card.rs` | 14 | 11 | 3 | set_lay_lines lay_lines_now card_h_now |
 | `src/ui/mail_card.rs` | 5 | 4 | 1 | N_ENTRIES |
-| `src/ui/mail_page.rs` | 48 | 48 | 0 | — |
+| `src/ui/mail_page.rs` | 49 | 49 | 0 | — |
 | `src/ui/md_layout.rs` | 5 | 5 | 0 | — |
 | `src/ui/md_parse.rs` | 2 | 2 | 0 | — |
 | `src/ui/modal.rs` | 32 | 31 | 1 | VEIL_DIM_ARGB |
