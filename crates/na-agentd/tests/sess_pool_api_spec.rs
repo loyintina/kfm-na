@@ -625,3 +625,35 @@ fn spec_bar222_端点_letters缺席空表不连坐() {
         "letters CLI 缺席 = 空表，列表面不死"
     );
 }
+
+/// 钉（BAR-234）：楼层缓存 mtime 命中——mtime 不变第二次列表**不复调**
+/// letters CLI（node spawn 不复付，列表端点不吃 O(楼数) 慢化）；变了才重调
+#[test]
+fn spec_bar234_楼层缓存_mtime命中() {
+    let (t, svc) = book_fixture();
+    let mail = t.path().join("mail");
+    let log = t.path().join("mock-calls.log");
+    install_mock_letters(&mail, &log);
+    let na_book = mail.join("10-NA信箱");
+    let p = na_book.join("0091号观澜致全体的通报.md");
+    std::fs::write(&p, LETTER_FLOORED).expect("写带楼信");
+    let n = |ls: &Vec<na_agentd::service::LetterMeta>| {
+        ls.iter()
+            .find(|l| l.name.contains("0091"))
+            .expect("带楼信在列")
+            .floors
+            .len()
+    };
+    let ls1 = svc.list_inbox_letters("na-book").expect("首列");
+    assert_eq!(n(&ls1), 3, "首列楼层到位");
+    let calls1 = std::fs::read_to_string(&log).expect("账1").lines().count();
+    let ls2 = svc.list_inbox_letters("na-book").expect("二列");
+    assert_eq!(n(&ls2), 3, "缓存命中楼层照回");
+    let calls2 = std::fs::read_to_string(&log).expect("账2").lines().count();
+    assert_eq!(calls1, calls2, "mtime 未变不许复调 CLI");
+    std::thread::sleep(std::time::Duration::from_millis(2100));
+    std::fs::write(&p, LETTER_FLOORED).expect("touch 变 mtime");
+    let _ = svc.list_inbox_letters("na-book").expect("三列");
+    let calls3 = std::fs::read_to_string(&log).expect("账3").lines().count();
+    assert_eq!(calls3, calls2 + 1, "mtime 变了必须重调 CLI");
+}

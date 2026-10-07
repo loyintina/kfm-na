@@ -396,7 +396,11 @@ pub fn request_list(key: MailKey) {
         let mut g = inner().lock().unwrap();
         let b = book_mut(&mut g, key);
         b.loading = false;
-        // ③失败不动 entries：有缓存保持 ①灌的表
+        // ③失败不动 entries：有缓存保持 ①灌的表——但必须吼（BAR-234
+        // 停 0116 定罪：静默旧表=用户看不见停更）
+        if let Err(e) = &got {
+            crate::report::report("mail", &format!("信箱列表拉取失败（保持旧表）: {e}"));
+        }
         if let Ok(list) = got {
             let mut list = list;
             // 合已在内存里的摘要（同册 entries 现有的 Some 按名+mtime 带过去）
