@@ -530,11 +530,16 @@ fn cmd_new(args: &Args) {
     let about = args.opt("about");
     if let Some(ab) = about {
         let n = ab.chars().count();
-        let all_han = ab.chars().all(|c| ('\u{4e00}'..='\u{9fff}').contains(&c));
-        if !(2..=12).contains(&n) || !all_han {
+        // 2026-10-08 放宽（评审同步 check-letter-token）：收 BAR 号等 ASCII——汉字/字母/数字/连字符/下划线
+        let all_ok = ab.chars().all(|c| {
+            ('\u{4e00}'..='\u{9fff}').contains(&c) || c.is_alphanumeric() || c == '-' || c == '_'
+        });
+        if !(2..=28).contains(&n) || !all_ok {
             die(
                 p,
-                &format!("--about 非法：{ab}（事由须为 2–12 个汉字，建议 4–8）"),
+                &format!(
+                    "--about 非法：{ab}（事由须为 2–28 个字〔汉字/字母/数字/连字符/下划线〕，建议 4–12）"
+                ),
             );
         }
         if ab.chars().any(|c| CONNECT_CHARS.contains(&c)) || ab.contains("关于") {

@@ -136,7 +136,7 @@ if [ "${BAR_NEW_NO_LETTER:-}" != "1" ]; then
         --to-all --type 通报 --title "BAR-$NEXT $TITLE" \
         --kind 通报 --expect "承办线（$FUNC$NAME）以楼层追加进展：$TITLE" \
         --criteria "BAR-$NEXT 用户终验结案（信头状态翻 已验证）" \
-        --status 待落地通报)
+        --status 待落地通报 --about "BAR-${NEXT}${TITLE:0:12}")
     file=$(printf '%s' "$out" | sed -n 's/.*已生成 \([^ ]*\.md\).*/\1/p')
     [ -n "$file" ] || { echo "mailbox-cli new 输出解析失败: $out" >&2; exit 1; }
     # 2026-09-29 评审修订（白露）：不写本册自指码——契约 §二「分拣码…本册信一律不写，
