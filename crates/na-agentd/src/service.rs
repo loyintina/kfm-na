@@ -23,6 +23,10 @@ pub struct AgentService {
     pub max_rounds: u32,
     /// v1 全局串行闸：append-only 会话文件不许多线程交错写
     pub send_lock: Mutex<()>,
+    /// BAR-234 楼层缓存（path → (mtime, 楼层表)）：letters CLI 每带楼信
+    /// spawn 一次 node，列表端点 O(楼数) 慢化（实测 2.35s→客户端 3s
+    /// 超时静默停 0116）——mtime 不变即命中，变了才重调
+    pub floor_cache: Mutex<std::collections::HashMap<String, (u64, Vec<FloorMeta>)>>,
 }
 
 /// send 的产物（HTTP 响应面）。
@@ -72,6 +76,7 @@ impl AgentService {
             provider_json: provider_json.to_string(),
             max_rounds: agent::DEFAULT_MAX_ROUNDS,
             send_lock: Mutex::new(()),
+            floor_cache: Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -283,6 +288,14 @@ impl AgentService {
     /// 口径，不自建文本解析第二真源）。只读子命令；CLI 缺席/失败 =
     /// 空表不连坐列表面（楼渲染不致死整面）
     fn floors_of(&self, host: &StdHost, path: &str, book_dir: &str, name: &str) -> Vec<FloorMeta> {
+        // BAR-234：mtime 不变即吃缓存（node spawn 不复付）；变了才重调
+        let mtime = host.file_meta(path).map(|m| m.mtime).unwrap_or(0);
+        if let Ok(cache) = self.floor_cache.lock()
+            && let Some((cached_mtime, floors)) = cache.get(path)
+            && *cached_mtime == mtime
+        {
+            return floors.clone();
+        }
         let Ok(text) = host.read_file(path) else {
             return Vec::new();
         };
@@ -310,7 +323,11 @@ impl AgentService {
         let Some(line) = stdout.lines().rev().find(|l| !l.trim().is_empty()) else {
             return Vec::new();
         };
-        parse_floor_list_json(line).unwrap_or_default()
+        let floors = parse_floor_list_json(line).unwrap_or_default();
+        if let Ok(mut cache) = self.floor_cache.lock() {
+            cache.insert(path.to_string(), (mtime, floors.clone()));
+        }
+        floors
     }
 
     /// 点名信箱的信件正文

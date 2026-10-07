@@ -6,6 +6,7 @@
 
 const APP: &str = include_str!("../src/android_app.rs");
 const TERM: &str = include_str!("../src/termview.rs");
+const FEED: &str = include_str!("../src/mail_feed.rs");
 
 #[test]
 fn spec_bar232_键盘跟随仪器臂_接线守卫() {
@@ -40,5 +41,15 @@ fn spec_bar232_键盘跟随仪器臂_接线守卫() {
     assert!(
         APP.contains("self.ime_none_run = self.ime_none_run.saturating_add(1);"),
         "连败必须有计数增量（None 路径零日志盲区的主哨）"
+    );
+}
+
+/// 钉（BAR-234 停 0116 定罪）：列表拉取失败不许静默保持旧表——
+/// 失败臂必须上报（静默=用户看不见停更，承影取证也无线索）
+#[test]
+fn spec_bar234_列表拉取失败显形_接线守卫() {
+    assert!(
+        FEED.contains("信箱列表拉取失败（保持旧表）"),
+        "列表失败臂必须上报（mail_feed）"
     );
 }
