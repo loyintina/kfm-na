@@ -73,7 +73,14 @@ pub fn start_with(local_port: u16, dump_dir: PathBuf) {
 
 fn poll_loop(local_port: u16, dump_dir: PathBuf) {
     let mut down_reported = false;
+    let mut tick: u32 = 0;
     loop {
+        tick = tick.wrapping_add(1);
+        // tick 心跳（白露 NA0163 19 楼批）：每 30 拍一行——「成功静默」设计
+        // 让僵死与空转不可分，这行是解药（判据挂 field-reports 断档）
+        if tick.is_multiple_of(30) {
+            crate::report::report("gatepoll", &format!("tick {tick}"));
+        }
         match fetch_pending(local_port) {
             Ok(body) => {
                 if down_reported {
@@ -145,7 +152,12 @@ fn http_call(
     path: &str,
     body: Option<&[u8]>,
 ) -> Result<Vec<u8>, String> {
-    let mut s = TcpStream::connect(format!("127.0.0.1:{local_port}"))
+    // 2026-10-08（第三轮判卷定罪收窄）：connect 必须带超时——裸 connect
+    // 挂在半连接上可挂数分钟不报错（poller 僵死主嫌疑），2s 与轮询节拍同量级
+    let addr: std::net::SocketAddr = format!("127.0.0.1:{local_port}")
+        .parse()
+        .map_err(|e| format!("addr: {e}"))?;
+    let mut s = TcpStream::connect_timeout(&addr, Duration::from_secs(2))
         .map_err(|e| format!("connect: {e}"))?;
     s.set_read_timeout(Some(Duration::from_secs(POLL_WAIT_SECS as u64 + 10)))
         .map_err(|e| format!("timeout set: {e}"))?;
