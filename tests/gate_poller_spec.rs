@@ -1,13 +1,12 @@
-//! gate_poller_spec.rs — BAR-233 乙案 v1 na 侧考题。
+//! gate_poller_spec.rs — BAR-233 na 侧考题（纯函数钉）。
 //!
 //! 判卷维度：hex 编解码往返（含空/二进制）／pending 体解析（坏行跳过
-//! 不整批炸）／write_atomic 原子性与白名单纵深闸／端到端冒烟（假
-//! HTTP 服务器回 pending 体 → 触发文件出现在注入的 dump_dir）。
+//! 不整批炸）／write_atomic 原子性与白名单纵深闸／请求字节构造／
+//! 守卫常量（节拍/握手超时）。
+//! 端到端冒烟（真 QUIC 桥全环：fetch → parse → 原子落盘）在
+//! tests/gate_poller_quic_spec.rs（BAR-233 根治案，进程内 QUIC 直连）；
 //! 「断 sshd 全灭」场景判卷在设备侧（pkill sshd 后八通道全活——
-//! MAIN0125 §四），本卷钉住进程内环。
-
-use std::io::{Read, Write};
-use std::net::TcpListener;
+//! MAIN0125 §四）。
 
 #[test]
 fn spec_bar233_hex往返() {
@@ -20,6 +19,29 @@ fn spec_bar233_hex往返() {
     assert_eq!(f("0"), None);
     assert_eq!(f("0F"), None, "只认小写");
     assert_eq!(f("zz"), None);
+}
+
+/// HTTP/1.1 请求字节构造（QUIC 直连路的纯函数面）：method/path/Host/
+/// Content-Length/Connection: close 五件齐、CRLF 结尾——旧 TCP 路同构
+#[test]
+fn spec_bar233_请求字节构造() {
+    let req =
+        kfm_na::gate_poller::build_request("GET", "/api/gate/pending?wait=2", 0, "srv.example");
+    let s = String::from_utf8(req).unwrap();
+    assert!(
+        s.starts_with("GET /api/gate/pending?wait=2 HTTP/1.1\r\n"),
+        "请求行: {s}"
+    );
+    assert!(s.contains("Host: srv.example\r\n"), "Host 头: {s}");
+    assert!(s.contains("Content-Length: 0\r\n"), "Content-Length: {s}");
+    assert!(s.contains("Connection: close\r\n"), "Connection: {s}");
+    assert!(s.ends_with("\r\n\r\n"), "头体分隔收尾: {s}");
+    let post = kfm_na::gate_poller::build_request("POST", "/api/gate/result/x", 5, "h");
+    assert!(
+        String::from_utf8(post)
+            .unwrap()
+            .contains("Content-Length: 5\r\n")
+    );
 }
 
 #[test]
@@ -50,57 +72,6 @@ fn spec_bar233_write_atomic_原子与白名单() {
     assert_eq!(std::fs::read(dir.join("keys-in")).unwrap(), b"second");
 }
 
-/// 端到端冒烟：假服务器回一份 pending 体 → start_with 轮询 → 触发
-/// 文件落进注入的 dump_dir（进程内全环：fetch → parse → 原子落盘）。
-/// offer_result 未启动时 no-op 也在本卷顺带咬（直接调用不 panic）。
-#[test]
-fn spec_bar233_端到端冒烟_假服务器落盘() {
-    let tmp = tempfile::tempdir().unwrap();
-    let dump = tmp.path().join("dump");
-    std::fs::create_dir_all(&dump).unwrap();
-    let lis = TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = lis.local_addr().unwrap().port();
-    // 假服务器：第一轮回 pending（含两条），后续轮询空（避免忙循环
-    // 打满——Connection: close 一回一连接）
-    std::thread::spawn(move || {
-        for i in 0..40 {
-            let (mut s, _) = match lis.accept() {
-                Ok(v) => v,
-                Err(_) => return,
-            };
-            let mut buf = [0u8; 4096];
-            let _ = s.read(&mut buf);
-            let body: &str = if i == 0 {
-                "2\nping-req\t\nrestart-req\t68656c6c6f\n"
-            } else {
-                "0\n"
-            };
-            let resp = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                body.len(),
-                body
-            );
-            let _ = s.write_all(resp.as_bytes());
-        }
-    });
-    kfm_na::gate_poller::start_with(port, dump.clone());
-    // offer_result 在（伪）启动态：不 panic 即可（上传会连假口失败重试
-    // 3 次后丢——异步线程，不挡本卷）
-    std::thread::sleep(std::time::Duration::from_millis(500));
-    kfm_na::gate_poller::offer_result("never-file", std::path::Path::new("/nonexistent"));
-    // 等第一轮落盘
-    let mut got = false;
-    for _ in 0..40 {
-        if dump.join("ping-req").exists() && dump.join("restart-req").exists() {
-            got = true;
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
-    assert!(got, "假服务器 pending 应已落成触发文件");
-    assert_eq!(std::fs::read(dump.join("restart-req")).unwrap(), b"hello");
-}
-
 #[test]
 fn spec_bar233_轮询节拍短窗() {
     // BAR-233 追件：POLL_WAIT_SECS 须为 2（25s 长轮询在 QUIC 桥撞空闲
@@ -116,7 +87,10 @@ fn spec_bar233_轮询节拍短窗() {
 fn spec_bar233_tick心跳与超时常量() {
     // BAR-233 追件三（白露 NA0163 19 楼批）：僵死双治的守卫常量——
     // tick 每 30 拍（变异：摘心跳块 → 本钉红不了行为，钉常量存在性
-    // 由源码守卫咬，这里钉节拍不被改坏）；connect 超时 2s 同源。
+    // 由源码守卫咬，这里钉节拍不被改坏）；根治返工（共享腿连接）后
+    // 「不挂死」的防线 = 往返整体限时（握手归腿的 run_client 自带 8s
+    // 速败；poller 侧 open_bi/读写卡死由限时兜住——变异：摘 timeout
+    // 包装 → 本钉红）。
     assert_eq!(kfm_na::gate_poller::POLL_WAIT_SECS, 2);
     // tick 节拍 30 写死在 poll_loop——源码守卫（test-bar-new 同族）在
     // scripts/check/ 不便，这里以「常量面 + 源码 grep」双咬：
@@ -126,7 +100,27 @@ fn spec_bar233_tick心跳与超时常量() {
         "tick 心跳块被摘（每 30 拍一行是僵死可见性的唯一解药）"
     );
     assert!(
-        src.contains("connect_timeout"),
-        "connect 超时被退回裸 connect（挂死主嫌疑回潮）"
+        src.contains("tokio::time::timeout"),
+        "往返限时被摘（读写卡死/连接死无兜底——挂死防线回潮）"
+    );
+    assert!(
+        src.contains("block_on"),
+        "runtime-in-thread 同步桥被拆（poller 是 std::thread，学 tunnel.rs）"
+    );
+    assert!(
+        src.contains("data_conn_slot"),
+        "共享腿槽接线被拆（start 必须从 tunnel 真槽取连接）"
+    );
+    // tunnel 侧接线锚（返工裁定：腿握手后把 Connection 递进真槽）——
+    // spawn_quic_leg 必须给 run_client 传 Some(conn_tx)（变异：传 None
+    // → 槽永远空 → poller 永远等腿握手，此锚红）
+    let tsrc = std::fs::read_to_string("src/tunnel.rs").unwrap_or_default();
+    assert!(
+        tsrc.contains("Some(conn_tx)"),
+        "tunnel 腿没把 conn_out 信道递给 run_client（槽永远空）"
+    );
+    assert!(
+        tsrc.contains("DATA_CONN_SLOT"),
+        "tunnel 数据腿连接槽被摘（poller 无从取连接）"
     );
 }

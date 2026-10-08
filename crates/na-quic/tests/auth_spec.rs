@@ -92,6 +92,7 @@ async fn spec_auth_桥接带证_对错钥匙两判() {
         back_addr.port(),
         client_config(pinned),
         Some(psk),
+        None,
     ));
     let mut s = wait_connect(front_ok).await;
     let payload = "带证桥接：认钥不认人".as_bytes();
@@ -110,6 +111,7 @@ async fn spec_auth_桥接带证_对错钥匙两判() {
         back_addr.port(),
         client_config(pinned),
         Some([43u8; 32]),
+        None,
     ));
     let mut s = wait_connect(front_bad).await;
     s.write_all(payload).await.unwrap();

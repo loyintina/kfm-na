@@ -77,6 +77,7 @@ async fn spec_m3_桥接全链_echo_逐字节回还() {
         back_addr.port(),
         client_config(pinned),
         None,
+        None,
     ));
 
     // 全链：桥前写 → QUIC 流（端口头=后端口）→ 回联 echo → 原路回还
@@ -144,6 +145,7 @@ async fn spec_m3_桥接_http式半关全链() {
         back_addr.port(),
         client_config(pinned),
         None,
+        None,
     ));
 
     let mut s = wait_connect(front_addr).await;
@@ -201,6 +203,7 @@ async fn spec_bar171_桥一侧终_排水窗内收尾() {
         front_addr,
         back_addr.port(),
         client_config(pinned),
+        None,
         None,
     ));
 
@@ -308,4 +311,54 @@ async fn spec_bar171_probe_活口通_死口速败() {
         "死口探测必须速败（握手超时 8s + 余量），实际 {:?}",
         t0.elapsed()
     );
+}
+
+/// BAR-233 根治返工（共享腿连接）：run_client 的 conn_out 递连接——握手
+/// 成功后消费方信道收到 Connection clone，且该连接直接 open_bi 过桥
+/// 说话（端口头+标签先行，不落本机 TCP 桥前口——gate_poller 的用法面）；
+/// 腿本体（TCP 桥前口）行为不变。
+#[tokio::test]
+async fn spec_bar233_conn_out_握手后递连接_直开流过桥() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let (certs, key) = gen_self_signed("kfm-na");
+    let pinned = cert_fingerprint(&certs[0]);
+    let psk = [11u8; 32];
+
+    let quic_addr = free_addr().await;
+    let back_addr = free_addr().await; // echo（扮演 na-server 9021）
+    let front_addr = free_addr().await; // 桥前口（腿本体，行为不变面）
+
+    tokio::spawn(tcp_echo(back_addr));
+    tokio::spawn(run_server(quic_addr, server_config(certs, key), Some(psk)));
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    tokio::spawn(run_client(
+        quic_addr,
+        "kfm-na",
+        front_addr,
+        back_addr.port(),
+        client_config(pinned),
+        Some(psk),
+        Some(tx),
+    ));
+
+    // 握手成功即递（bind 前时点）——5s 内必须收到
+    let conn = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .expect("5s 内没收到 conn_out 连接")
+        .expect("信道关闭而没收到连接");
+
+    // 直开流（poller 同款路径）：端口头+认证标签先于载荷 → echo 原样回还
+    let (mut send, mut recv) = conn.open_bi().await.unwrap();
+    send.write_all(&port_header(back_addr.port()))
+        .await
+        .unwrap();
+    send.write_all(&auth_tag(&psk, back_addr.port()))
+        .await
+        .unwrap();
+    let payload = b"conn_out direct stream";
+    send.write_all(payload).await.unwrap();
+    send.finish().unwrap();
+    let mut back = vec![0u8; payload.len()];
+    recv.read_exact(&mut back).await.unwrap();
+    assert_eq!(back, payload, "递出的连接直开流必须经桥 echo 回还");
 }

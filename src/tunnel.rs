@@ -422,6 +422,24 @@ pub fn usable_edge_kick(prev_usable: bool, curr: &TunnelState, session_over: boo
 
 // ---- 数据面（UI 只读/按钮只写这两道门，绝不许碰锁内活物）----
 
+/// 数据腿连接槽（BAR-233 根治返工·共享腿连接）：QUIC 数据腿握手成功后
+/// 把 Connection 递进来，进程内共享消费方（gate_poller）在连接对象上
+/// 直接 open_bi 开流说话——不落本机 TCP 口（本地口存在性依赖腿、QUIC
+/// 态不可靠，判卷实证 refused 后永静默）。**共享而非专用连接**：na-quic
+/// run_server 的正连顶替语义（BAR-171，lib.rs 认领段）下第二条专用连接
+/// 会与腿连接互踢、把数据面踢降级 ssh；一条连接多流原生复用，poller 的
+/// HTTP 短流与 ws 长流同连接共存。Arc 包一层是给 gate_poller 的注入面
+/// （测试自连 client 写自己的槽，生产用本槽）。**腿死不清槽**：死连接
+/// 留在槽里（Connection 是 Clone 的句柄，留着无资源滞留），消费方对死
+/// 连接 open_bi 即错→退避；看门狗重拉腿握手成功→新 Connection 覆盖
+/// 槽位→消费方自愈（顶替语义现在帮我们：新腿自动是主）。
+pub static DATA_CONN_SLOT: OnceLock<Arc<Mutex<Option<quinn::Connection>>>> = OnceLock::new();
+
+/// 取数据腿连接槽（惰性初始化；None = 腿还没握上手）
+pub fn data_conn_slot() -> Arc<Mutex<Option<quinn::Connection>>> {
+    Arc::clone(DATA_CONN_SLOT.get_or_init(|| Arc::new(Mutex::new(None))))
+}
+
 /// 全局快照门：supervisor 启动时登记，插件卡经 snap() 读。
 /// 拍板（2026-09-20）：避免穿 App plumbing，UI 直读全局。
 static TUNNEL_SNAP: OnceLock<Arc<Mutex<TunnelSnap>>> = OnceLock::new();
@@ -647,6 +665,10 @@ fn spawn_quic_leg(server: &ServerEntry) -> Option<QuicLeg> {
     let qport = server.quic.port;
     let local = std::net::SocketAddr::from(([127, 0, 0, 1], server.tunnel.local_port));
     let target = target_port(&server.backend);
+    // 连接递出信道（BAR-233 根治返工）：run_client 握手成功 → Connection
+    // 经此信道 → 下方 recv 循环写 DATA_CONN_SLOT（腿重连自动覆盖）
+    let (conn_tx, mut conn_rx) = tokio::sync::mpsc::unbounded_channel::<quinn::Connection>();
+    let slot = data_conn_slot();
     std::thread::spawn(move || {
         let say = |m: String| {
             let _ = dead_tx.send(m);
@@ -670,6 +692,15 @@ fn spawn_quic_leg(server: &ServerEntry) -> Option<QuicLeg> {
             }
         };
         rt.block_on(async move {
+            // 槽投递循环：每条腿一个，随腿 runtime 同生灭（run_client 返回
+            // → sender drop → recv None → 循环退；腿死不清槽——死连接
+            // 留给消费方试错退避，见 DATA_CONN_SLOT 注）
+            let slot = slot.clone();
+            tokio::spawn(async move {
+                while let Some(conn) = conn_rx.recv().await {
+                    *slot.lock().unwrap() = Some(conn);
+                }
+            });
             tokio::select! {
                 r = na_quic::run_client(
                     addr,
@@ -678,6 +709,7 @@ fn spawn_quic_leg(server: &ServerEntry) -> Option<QuicLeg> {
                     target,
                     na_quic::client_config(pin),
                     Some(psk),
+                    Some(conn_tx),
                 ) => {
                     say(match r {
                         Ok(()) => "腿正常退出".into(),
