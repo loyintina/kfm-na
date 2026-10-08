@@ -31,25 +31,25 @@
 {"bar": 208, "title": "阅读页存在逻辑重构——盖中央页/滚动同终端/右滑文件树左滑空白解析页/终端钮回退/齿轮上浮/右侧滑入", "claimant_func": "研究部", "claimant": "清和", "letter": "0105", "ts": "2026-09-30 19:31 +0800"}
 {"bar": 209, "title": "attach/切会话不入追赶——清场黑屏+全量重播种57.8s（0075 承影定罪：catchup.enter 只挂 respawn_session）", "claimant_func": "开发部", "claimant": "观澜", "letter": "0107", "ts": "2026-09-30 19:46 +0800"}
 {"bar": 210, "title": "prompt_bar.rs:246 切片越界 SIGABRT 崩溃（0075 §三：start>end ×4，病灶输入栏）", "claimant_func": "开发部", "claimant": "观澜", "letter": "0110", "ts": "2026-09-30 20:14 +0800"}
-{"bar":211,"title":"KFMHDR 播种头判负 4876 次致像素级滚动瘫痪（0081：r尾/错误块抢先两支仍在，判卷归承影）","claimant_func":"开发部","claimant":"观澜","letter":"0111","ts":"2026-09-30 22:34 +0800"}
-{"bar":212,"title":"信箱入口迁解析页左下常驻槽+页面级信件列表卡","claimant_func":"开发部","claimant":"闻灯","letter":"0098","ts":"2026-09-30 18:52 +0800"}
-{"bar":214,"title":"信箱入口弹框改整页卡：右挤入/右滑出，三级框信渲染器按发信人随机双色","claimant_func":"开发部","claimant":"观澜","letter":"0138","ts":"2026-10-01 12:56 +0800"}
-{"bar":215,"title":"tmux 上滚三形态（历史段重播/行宽散开/跳屏断档）——209/211 已上机仍现","claimant_func":"开发部","claimant":"观澜","letter":"0143","ts":"2026-10-01 14:19 +0800"}
-{"bar":216,"title":"kimi 输出时 IME 输入无回显+页面闪烁——209/211 已上机仍现","claimant_func":"开发部","claimant":"观澜","letter":"0144","ts":"2026-10-01 14:20 +0800"}
-{"bar":217,"title":"bar-new.sh 信箱自动 commit 闸失效——MAILBOX readlink 归一后与未归一 DEFAULT_MAILBOX 比字符串恒假，追踪信永不自动提交（0138/0143/0144 三封 untracked 漂流实证）","claimant_func":"开发部","claimant":"闻灯","letter":"0147","ts":"2026-10-01 15:43 +0800"}
-{"bar":218,"title":"md 渲染器表格三档降级+分隔线加粗","claimant_func":"研究部","claimant":"清和","letter":"0148","ts":"2026-10-02 00:02 +0800"}
-{"bar":219,"title":"BAR-145 观察期满裁决：拆仪器结案","claimant_func":"研究部","claimant":"清和","letter":"0149","ts":"2026-10-02 06:32 +0800"}
-{"bar":223,"title":"信箱工具对齐 v2.2：认 archive-v2.2 栏","claimant_func":"研究部","claimant":"清和","letter":"0154","ts":"2026-10-02 15:29 +0800"}
-{"bar":220,"title":"信箱页卡右滑退场半途卡一下（承影真机判卷 214 发现，疑似退场链触发作废重烘/重播种）","claimant_func":"开发部","claimant":"观澜","letter":"0150","ts":"2026-10-02 14:46 +0800"}
-{"bar":221,"title":"md 面板页捏合不进——pinch 手势只接终端区（204 pinch 一统契约未竟，承影真机判卷澄清）","claimant_func":"开发部","claimant":"观澜","letter":"0151","ts":"2026-10-02 14:46 +0800"}
-{"bar":224,"title":"mailbox-core verify/projection 补认第四栏 archive-v2.2（吸收栏≠撤回栏：进计数不进活信清单）——白露 v2.2 吸收 62 件挡 na chain 第 4 步","claimant_func":"开发部","claimant":"观澜","letter":"0155","ts":"2026-10-02 15:45 +0800"}
-{"bar":226,"title":"bar-new.sh 自动提交闸恒假——[ -d MAILBOX/.git ] 不认设施仓子目录册（0154/0155 追踪信漂流实证，静默丢数据）","claimant_func":"研究部","claimant":"清和","letter":"0156","ts":"2026-10-03 06:31 +0800"}
-{"bar":227,"title":"verify/projection 信封必填追平 v2.2——「复」降为遗留字段（JS 已删 Rust 未追，主册 0104~0108 五封假红实证）","claimant_func":"研究部","claimant":"清和","letter":"0157","ts":"2026-10-03 06:49 +0800"}
-{"bar":222,"title":"信箱页条目形制三改之 A+C：三级卡取消限高/新增第四栏楼层渲染（NA0152 提案，B 时间格式归观澜）","claimant_func":"开发部","claimant":"闻灯","letter":"0153","ts":"2026-10-02 15:22 +0800"}
-{"bar":231,"title":"信箱页第四栏楼层两缺陷——卡内楼层全量渲染应只显摘要+引用行整块灰字应左竖线md引用同尺（白露0153楼3用户口述）","claimant_func":"开发部","claimant":"闻灯","letter":"0161","ts":"2026-10-04 12:10 +0800"}
-{"bar":230,"title":"sshd 无主管——app 强停/重启带走 sshd 后 9022 哑且不自愈（BAR-229 机制定性）；哨兵加 bin/sh 链接判据堵「只丢链接」残余缺口","claimant_func":"研究部","claimant":"清和","letter":"0160","ts":"2026-10-04 11:35 +0800"}
-{"bar":233,"title":"闸门触发腿 QUIC 化（乙案 v1）——八通道改走数据面：na-server /api/gate 路由+待取队列、na 核内轮询落盘 DUMP_DIR、gate-lib 切换兼容老核（MAIN0125 发令）","claimant_func":"研究部","claimant":"清和","letter":"0163","ts":"2026-10-06 08:15 +0800"}
-{"bar":234,"title":"8032 静态页面面走既有 QUIC 隧道：na-server 加 /ui 前缀反代臂（BAR-163 第二例）＋训练场落盘端点前缀无关化","claimant_func":"研究部","claimant":"南舟","letter":"0164","ts":"2026-10-06 06:26 +0800"}
-{"bar":235,"title":"报表实例标识加设备维——arch/pid 分不开两台同架构真机（双机误读为单机双实例）","claimant_func":"开发部","claimant":"观澜","letter":"0165","ts":"2026-10-07 20:28 +0800"}
-{"bar":236,"title":"na 舰队载波——62694 反连桥加 adb 通道注册面：手机侧无线调试口（5555）经 QUIC 反连映射服务器 127.0.0.1:614xx 段（按设备分口），卡萝舰队直连（白露 MAIN0130 楼1 裁，施工排乙案重判后）","claimant_func":"研究部","claimant":"清和","letter":"0166","ts":"2026-10-07 21:30 +0800"}
-{"bar":236,"title":"na 舰队载波——62694 反连桥加 adb 通道注册面：手机侧无线调试口经 QUIC 反连映射服务器 127.0.0.1:614xx 段（按设备分口），卡萝舰队直连（白露 MAIN0130 楼1 裁；边界：转发口仅回环+按设备分段+NA0165 设备维咬合；施工排乙案重判后）","claimant_func":"研究部","claimant":"清和","letter":"0166","ts":"2026-10-08 08:20 +0800"}
+{"bar": 211, "title": "KFMHDR 播种头判负 4876 次致像素级滚动瘫痪（0081：r尾/错误块抢先两支仍在，判卷归承影）", "claimant_func": "开发部", "claimant": "观澜", "letter": "0111", "ts": "2026-09-30 22:34 +0800"}
+{"bar": 212, "title": "信箱入口迁解析页左下常驻槽+页面级信件列表卡", "claimant_func": "开发部", "claimant": "闻灯", "letter": "0098", "ts": "2026-09-30 18:52 +0800"}
+{"bar": 214, "title": "信箱入口弹框改整页卡：右挤入/右滑出，三级框信渲染器按发信人随机双色", "claimant_func": "开发部", "claimant": "观澜", "letter": "0138", "ts": "2026-10-01 12:56 +0800"}
+{"bar": 215, "title": "tmux 上滚三形态（历史段重播/行宽散开/跳屏断档）——209/211 已上机仍现", "claimant_func": "开发部", "claimant": "观澜", "letter": "0143", "ts": "2026-10-01 14:19 +0800"}
+{"bar": 216, "title": "kimi 输出时 IME 输入无回显+页面闪烁——209/211 已上机仍现", "claimant_func": "开发部", "claimant": "观澜", "letter": "0144", "ts": "2026-10-01 14:20 +0800"}
+{"bar": 217, "title": "bar-new.sh 信箱自动 commit 闸失效——MAILBOX readlink 归一后与未归一 DEFAULT_MAILBOX 比字符串恒假，追踪信永不自动提交（0138/0143/0144 三封 untracked 漂流实证）", "claimant_func": "开发部", "claimant": "闻灯", "letter": "0147", "ts": "2026-10-01 15:43 +0800"}
+{"bar": 218, "title": "md 渲染器表格三档降级+分隔线加粗", "claimant_func": "研究部", "claimant": "清和", "letter": "0148", "ts": "2026-10-02 00:02 +0800"}
+{"bar": 219, "title": "BAR-145 观察期满裁决：拆仪器结案", "claimant_func": "研究部", "claimant": "清和", "letter": "0149", "ts": "2026-10-02 06:32 +0800"}
+{"bar": 223, "title": "信箱工具对齐 v2.2：认 archive-v2.2 栏", "claimant_func": "研究部", "claimant": "清和", "letter": "0154", "ts": "2026-10-02 15:29 +0800"}
+{"bar": 220, "title": "信箱页卡右滑退场半途卡一下（承影真机判卷 214 发现，疑似退场链触发作废重烘/重播种）", "claimant_func": "开发部", "claimant": "观澜", "letter": "0150", "ts": "2026-10-02 14:46 +0800"}
+{"bar": 221, "title": "md 面板页捏合不进——pinch 手势只接终端区（204 pinch 一统契约未竟，承影真机判卷澄清）", "claimant_func": "开发部", "claimant": "观澜", "letter": "0151", "ts": "2026-10-02 14:46 +0800"}
+{"bar": 224, "title": "mailbox-core verify/projection 补认第四栏 archive-v2.2（吸收栏≠撤回栏：进计数不进活信清单）——白露 v2.2 吸收 62 件挡 na chain 第 4 步", "claimant_func": "开发部", "claimant": "观澜", "letter": "0155", "ts": "2026-10-02 15:45 +0800"}
+{"bar": 226, "title": "bar-new.sh 自动提交闸恒假——[ -d MAILBOX/.git ] 不认设施仓子目录册（0154/0155 追踪信漂流实证，静默丢数据）", "claimant_func": "研究部", "claimant": "清和", "letter": "0156", "ts": "2026-10-03 06:31 +0800"}
+{"bar": 227, "title": "verify/projection 信封必填追平 v2.2——「复」降为遗留字段（JS 已删 Rust 未追，主册 0104~0108 五封假红实证）", "claimant_func": "研究部", "claimant": "清和", "letter": "0157", "ts": "2026-10-03 06:49 +0800"}
+{"bar": 222, "title": "信箱页条目形制三改之 A+C：三级卡取消限高/新增第四栏楼层渲染（NA0152 提案，B 时间格式归观澜）", "claimant_func": "开发部", "claimant": "闻灯", "letter": "0153", "ts": "2026-10-02 15:22 +0800"}
+{"bar": 231, "title": "信箱页第四栏楼层两缺陷——卡内楼层全量渲染应只显摘要+引用行整块灰字应左竖线md引用同尺（白露0153楼3用户口述）", "claimant_func": "开发部", "claimant": "闻灯", "letter": "0161", "ts": "2026-10-04 12:10 +0800"}
+{"bar": 230, "title": "sshd 无主管——app 强停/重启带走 sshd 后 9022 哑且不自愈（BAR-229 机制定性）；哨兵加 bin/sh 链接判据堵「只丢链接」残余缺口", "claimant_func": "研究部", "claimant": "清和", "letter": "0160", "ts": "2026-10-04 11:35 +0800"}
+{"bar": 233, "title": "闸门触发腿 QUIC 化（乙案 v1）——八通道改走数据面：na-server /api/gate 路由+待取队列、na 核内轮询落盘 DUMP_DIR、gate-lib 切换兼容老核（MAIN0125 发令）", "claimant_func": "研究部", "claimant": "清和", "letter": "0163", "ts": "2026-10-06 08:15 +0800"}
+{"bar": 234, "title": "8032 静态页面面走既有 QUIC 隧道：na-server 加 /ui 前缀反代臂（BAR-163 第二例）＋训练场落盘端点前缀无关化", "claimant_func": "研究部", "claimant": "南舟", "letter": "0164", "ts": "2026-10-06 06:26 +0800"}
+{"bar": 235, "title": "报表实例标识加设备维——arch/pid 分不开两台同架构真机（双机误读为单机双实例）", "claimant_func": "开发部", "claimant": "观澜", "letter": "0165", "ts": "2026-10-07 20:28 +0800"}
+{"bar": 236, "title": "na 舰队载波——62694 反连桥加 adb 通道注册面：手机侧无线调试口（5555）经 QUIC 反连映射服务器 127.0.0.1:614xx 段（按设备分口），卡萝舰队直连（白露 MAIN0130 楼1 裁，施工排乙案重判后）", "claimant_func": "研究部", "claimant": "清和", "letter": "0166", "ts": "2026-10-07 21:30 +0800"}
+{"bar": 237, "title": "渲染器停 0116 定罪修复——floors 缓存命中逻辑（原误记 BAR-234，评审 2026-10-08 校正）", "claimant_func": "开发部", "claimant": "闻灯", "letter": "0161", "ts": "2026-10-08 09:30 +0800"}
