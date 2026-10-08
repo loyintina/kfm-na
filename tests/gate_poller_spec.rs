@@ -111,3 +111,22 @@ fn spec_bar233_轮询节拍短窗() {
         "短轮询节拍被改回长窗"
     );
 }
+
+#[test]
+fn spec_bar233_tick心跳与超时常量() {
+    // BAR-233 追件三（白露 NA0163 19 楼批）：僵死双治的守卫常量——
+    // tick 每 30 拍（变异：摘心跳块 → 本钉红不了行为，钉常量存在性
+    // 由源码守卫咬，这里钉节拍不被改坏）；connect 超时 2s 同源。
+    assert_eq!(kfm_na::gate_poller::POLL_WAIT_SECS, 2);
+    // tick 节拍 30 写死在 poll_loop——源码守卫（test-bar-new 同族）在
+    // scripts/check/ 不便，这里以「常量面 + 源码 grep」双咬：
+    let src = std::fs::read_to_string("src/gate_poller.rs").unwrap_or_default();
+    assert!(
+        src.contains("is_multiple_of(30)"),
+        "tick 心跳块被摘（每 30 拍一行是僵死可见性的唯一解药）"
+    );
+    assert!(
+        src.contains("connect_timeout"),
+        "connect 超时被退回裸 connect（挂死主嫌疑回潮）"
+    );
+}
