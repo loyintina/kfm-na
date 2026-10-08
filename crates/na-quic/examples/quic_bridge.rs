@@ -43,6 +43,7 @@ async fn main() {
         target,
         na_quic::client_config(pin),
         Some(psk),
+        None,
     )
     .await
     {

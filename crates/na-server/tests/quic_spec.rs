@@ -73,6 +73,7 @@ async fn spec_m3_na_server_quic_leg_health() {
         tcp_port,
         na_quic::client_config(pinned),
         Some(psk),
+        None,
     ));
 
     // 经桥打健康检查（等桥前口起来）

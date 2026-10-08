@@ -439,7 +439,13 @@ pub async fn probe(server: SocketAddr, sni: &str, cfg: ClientConfig) -> bool {
 /// 标签——设计 §四客户端证）→ splice。连接死 = 本函数返回（看门狗
 /// 外侧重建——死亡检测是事件驱动的，这就是 QUIC 腿比 ssh 腿省掉探活
 /// 三件套的原因）。target_port 与 local_bind 解耦：部署惯例双端同口
-/// （9021→9021），但桥接模型本身不绑这个约定
+/// （9021→9021），但桥接模型本身不绑这个约定。
+/// conn_out（BAR-233 根治返工·共享腿连接）：Some 时**握手成功后、本地
+/// TCP 口 bind 之前**把 Connection clone 递出去——进程内共享消费方
+/// （gate_poller）在连接对象上直接 open_bi 开流说话，不落本机 TCP 口；
+/// 选 bind 前的时点＝尽早可用（bind 失败/腿死时槽里留着死连接，消费方
+/// 试错退避等下一条覆盖，与「腿死不清槽」语义一致）。None = 旧行为零
+/// 变化。
 pub async fn run_client(
     server: SocketAddr,
     sni: &str,
@@ -447,6 +453,7 @@ pub async fn run_client(
     target_port: u16,
     cfg: ClientConfig,
     psk: Option<[u8; 32]>,
+    conn_out: Option<tokio::sync::mpsc::UnboundedSender<Connection>>,
 ) -> std::io::Result<()> {
     let mut ep = Endpoint::client(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)))
         .map_err(|e| std::io::Error::other(e.to_string()))?;
@@ -459,6 +466,10 @@ pub async fn run_client(
     .await
     .map_err(|_| std::io::Error::other("QUIC 握手超时（UDP 黑洞？）"))?
     .map_err(|e| std::io::Error::other(e.to_string()))?;
+    if let Some(tx) = conn_out {
+        // unbounded：消费方不在也不卡腿；信道随 run_client 返回而关
+        let _ = tx.send(conn.clone());
+    }
     // BAR-233 追件（白露 NA0163 7 楼裁②）：本机口 bind 失败要带着地址响亮
     // 报错——双实例/分身竞争期谁持口无人知晓（判卷 38 次 refused 的观测
     // 盲区）；裸 `?` 把 AddrInUse 折叠成无差别腿死，定性线索丢失。

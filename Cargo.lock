@@ -866,6 +866,7 @@ dependencies = [
  "na-sys",
  "ndk",
  "nix",
+ "quinn",
  "raw-window-handle",
  "rustls",
  "serde",
