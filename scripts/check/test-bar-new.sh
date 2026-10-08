@@ -26,7 +26,7 @@ printf '{"names":{"观澜":{"functions":["开发部"]}}}\n' > "$T/mb/roster.json
 run() { # run <额外env...> -- 跑领号，输出落 $T/out；registry 每轮重置防累积
     printf '{"bar":184,"title":"参照 BAR-997 的修复"}\n' > "$T/reg.jsonl"
     env BAR_NEW_BUGS="$T/bugs.md" BAR_NEW_REGISTRY="$T/reg.jsonl" \
-        BAR_NEW_MAILBOX="$T/mb" BAR_NEW_NO_LETTER=1 "$@" \
+        BAR_NEW_MAILBOX="$T/mb" BAR_NEW_NO_LETTER=1 BAR_ABOUT="BAR-900考题短题" "$@" \
         bash "$BARNEW" --func 开发部 --name 观澜 "夹具主题" > "$T/out" 2>&1
 }
 
@@ -36,7 +36,7 @@ run; chk "跨树可见(185复跑)" 0 $? "BAR-191 已领"
 
 # ②信箱不可读拒领：mailbox 指向不存在目录 → exit 1（不许退回树内旧账）
 env BAR_NEW_BUGS="$T/bugs.md" BAR_NEW_REGISTRY="$T/reg.jsonl" \
-    BAR_NEW_MAILBOX="$T/不存在" BAR_NEW_NO_LETTER=1 \
+    BAR_NEW_MAILBOX="$T/不存在" BAR_NEW_NO_LETTER=1 BAR_ABOUT="BAR-900考题短题" \
     bash "$BARNEW" --func 开发部 --name 观澜 "夹具主题" > "$T/out" 2>&1
 chk "信箱不可读拒领" 1 $? "拒领"
 

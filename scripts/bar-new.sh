@@ -127,6 +127,16 @@ done < <(find "$MAILBOX" -name '*.md' -not -path '*/.git/*' -exec head -q -n 1 {
     | awk 'match($0, /BAR-[0-9]+/) { print substr($0, RSTART+4, RLENGTH-4) }' || true)
 NEXT=$((MAX + 1))
 
+# 关于段（2026-10-08 用户拍板：**题目自己填、不许机械截断**）——调用方用 BAR_ABOUT 传一句语义短题
+# （≤28 字；禁 连接字 号/致/复/的/及/等；禁点号）。缺则拒绝开工（宁可当场问一句，不要落一个残句名）。
+ABOUT="${BAR_ABOUT:-}"
+if [ -z "$ABOUT" ]; then
+    echo "❌ 缺关于段：跑 bar-new 时带上 BAR_ABOUT=\"BAR-<新号><一句短题>\"（≤28 字、禁 号致的及等、禁点）" >&2
+    echo "   例：BAR_ABOUT=\"BAR-237信箱工具补名收口\" bash scripts/bar-new.sh 开发部 闻灯 \"信箱工具补名\"" >&2
+    exit 1
+fi
+ABOUT_OPT="--about \"$ABOUT\""
+
 LETTER=""
 if [ "${BAR_NEW_NO_LETTER:-}" != "1" ]; then
     [ -x "$CLI" ] || { echo "缺 $CLI——先 cargo build -p mailbox-cli" >&2; exit 1; }
@@ -136,7 +146,7 @@ if [ "${BAR_NEW_NO_LETTER:-}" != "1" ]; then
         --to-all --type 通报 --title "BAR-$NEXT $TITLE" \
         --kind 通报 --expect "承办线（$FUNC$NAME）以楼层追加进展：$TITLE" \
         --criteria "BAR-$NEXT 用户终验结案（信头状态翻 已验证）" \
-        --status 待落地通报 --about "BAR-${NEXT}${TITLE:0:12}")
+        --status 待落地通报 ${ABOUT_OPT})
     file=$(printf '%s' "$out" | sed -n 's/.*已生成 \([^ ]*\.md\).*/\1/p')
     [ -n "$file" ] || { echo "mailbox-cli new 输出解析失败: $out" >&2; exit 1; }
     # 2026-09-29 评审修订（白露）：不写本册自指码——契约 §二「分拣码…本册信一律不写，
