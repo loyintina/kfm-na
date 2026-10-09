@@ -62,6 +62,9 @@ fn spec_bar233_write_atomic_原子与白名单() {
     let dir = tmp.path();
     // 白名单纵深闸：非白名单名拒（服务器侧已闸，这里第二道）
     assert!(kfm_na::gate_poller::write_atomic(dir, "evil-req", b"x").is_err());
+    // BAR-240：switch-req 过纵深闸（与 gateq.rs CHANNELS 同源同票）
+    kfm_na::gate_poller::write_atomic(dir, "switch-req", b"").unwrap();
+    assert!(dir.join("switch-req").exists());
     // 含换行/NUL 的 payload 逐字节落地；无 .new 残留
     let payload: &[u8] = b"line1\nline2\x00tail";
     kfm_na::gate_poller::write_atomic(dir, "keys-in", payload).unwrap();
