@@ -3,6 +3,9 @@
 #
 #   bash scripts/na-stats.sh     打印快照:uptime/前台态/循环龄期/帧数/
 #                                泵调用与字节/闸门动作计数/会话名单
+#                                attached=活跃腿身份(BAR-238:附着 tmux
+#                                会话名;裸 shell 腿=腿名 local/remote,
+#                                na-type.sh 第一参数照它填)
 #
 # trace ring 答「发生了什么」,本快照答「现在什么状态」。key=value
 # 一行一项,可直接 source 或 awk 取数。

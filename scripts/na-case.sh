@@ -48,8 +48,8 @@ cat > "$CASES/$BAR-repro.sh" <<'EOF'
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
-# 例:注入命令 → 等执行 → 读屏断言
-# bash scripts/na-type.sh 'ls\r'
+# 例:注入命令 → 等执行 → 读屏断言(BAR-238 起两参:目标会话名+字节)
+# bash scripts/na-type.sh "$(bash scripts/na-stats.sh | sed -n 's/^attached=//p')" 'ls\r'
 # sleep 1
 # bash scripts/na-text.sh | grep -q '预期输出' || { echo "❌ 复现未命中"; exit 1; }
 

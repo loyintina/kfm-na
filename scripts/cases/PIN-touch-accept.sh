@@ -19,7 +19,12 @@ first_line() {
     bash "$NA_ROOT/scripts/na-text.sh" 2>/dev/null | grep -m1 -v '^[[:space:]]*$'
 }
 
-bash "$NA_ROOT/scripts/na-type.sh" 'seq 1 200\r' >/dev/null \
+# BAR-238 两参:活跃腿不定(need_any_alive),身份从 stats 快照取
+# (附着 tmux 会话名;裸 shell 腿=腿名)
+target=$(bash "$NA_ROOT/scripts/na-stats.sh" 2>/dev/null | sed -n 's/^attached=//p')
+[ -n "${target:-}" ] || fail PIN-touch "stats 拉不到 attached 身份行"
+
+bash "$NA_ROOT/scripts/na-type.sh" "$target" 'seq 1 200\r' >/dev/null \
     || fail PIN-touch "注入 seq 失败"
 sleep 2.5
 A=$(first_line) || true
