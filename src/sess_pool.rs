@@ -412,6 +412,11 @@ pub fn url_encode(s: &str) -> String {
 const HTTP_TIMEOUT: Duration = Duration::from_secs(3);
 /// body 上限（tail 60 事件 + 长结果也就几十 KB，防爆内存）
 const BODY_CAP: usize = 256 * 1024;
+/// 信箱列表/摘要面专用帽（BAR-243 定罪：256KB 帽把 626KB 的
+/// 主册新表拒掉，客户端「保持旧表」→ 解析页恒显 10-04 旧缓存）。
+/// 这两面是**整册列表**，随信量线性长，给 8MB 安全阀；不是容量设计，
+/// 是「别让列表面被小帽拒掉」的止损档。
+pub const MAIL_BODY_CAP: usize = 8 * 1024 * 1024;
 
 /// 下池一行（路由）
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -749,8 +754,14 @@ fn sync_inbox_cache(root: &Path, inbox: &str, remote: &[LetterMeta], port: u16) 
 }
 
 /// GET 一个 JSON 面拿回 body（B 档胶水，svc_health::http_get 同款）：
-/// 连接/写/读全带超时，非 200 即错
+/// 连接/写/读全带超时，非 200 即错。默认帽 = BODY_CAP（256KB）
 pub(crate) fn http_get(port: u16, path: &str) -> Result<String, String> {
+    http_get_cap(port, path, BODY_CAP)
+}
+
+/// 带帽版 GET（BAR-243）：列表面（整册信 + 楼层）体量随信量线性长，
+/// 256KB 默认帽会把新表拒成「保持旧表」；调用方按面给帽
+pub(crate) fn http_get_cap(port: u16, path: &str, cap: usize) -> Result<String, String> {
     use std::io::Write;
     use std::net::{SocketAddr, TcpStream};
     let addr: SocketAddr = ([127, 0, 0, 1], port).into();
@@ -779,7 +790,7 @@ pub(crate) fn http_get(port: u16, path: &str) -> Result<String, String> {
             Ok(0) => break,
             Ok(n) => {
                 body.extend_from_slice(&buf[..n]);
-                if body.len() > BODY_CAP {
+                if body.len() > cap {
                     return Err("body 超限".into());
                 }
             }

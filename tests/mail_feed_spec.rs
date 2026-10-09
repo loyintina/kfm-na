@@ -192,3 +192,28 @@ fn spec_bar231_楼层卡只显摘要_display_text() {
         "旧形回落 body 全文"
     );
 }
+
+/// BAR-243：信箱列表面必须走大帽档——256KB 默认帽把 626KB 的主册新表
+/// 拒成「保持旧表」，解析页恒显 10-04 旧缓存（真机 field-reports 定罪：
+/// mail 面 body 超限）。
+#[test]
+fn spec_bar243_信箱列表大帽档() {
+    // 编译期咬：帽被砍回小档 = 测试二进制编不过（同 BAR-213 帽档钉惯例）
+    const {
+        assert!(
+            kfm_na::sess_pool::MAIL_BODY_CAP >= 8 * 1024 * 1024,
+            "MAIL_BODY_CAP 必须 >= 8MB（BAR-243：主册现役 626KB／NA 册 329KB）"
+        );
+    }
+    let feed = include_str!("../src/mail_feed.rs");
+    assert!(
+        feed.contains("crate::sess_pool::MAIL_BODY_CAP"),
+        "mail_feed 列表/摘要两面必须走 MAIL_BODY_CAP 大帽档——共用 256KB \
+         默认帽 = 新表被拒、恒显旧缓存（BAR-243 定罪）"
+    );
+    let pool = include_str!("../src/sess_pool.rs");
+    assert!(
+        pool.contains("pub(crate) fn http_get_cap(port: u16, path: &str, cap: usize)"),
+        "http_get_cap 带帽版必须在位（调用方按面给帽）"
+    );
+}

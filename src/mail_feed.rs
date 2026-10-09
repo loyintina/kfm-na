@@ -381,9 +381,10 @@ pub fn request_list(key: MailKey) {
         }
     }
     std::thread::spawn(move || {
-        let got = crate::sess_pool::http_get(
+        let got = crate::sess_pool::http_get_cap(
             port,
             &format!("/agent/api/agent/inboxes/{}/letters", key.api_key()),
+            crate::sess_pool::MAIL_BODY_CAP,
         )
         .and_then(|b| parse_mail_list(&b));
         if let Ok(list) = &got {
@@ -445,12 +446,13 @@ pub fn ensure_summaries(key: MailKey, wanted: Vec<String>) {
             .map(|n| crate::sess_pool::url_encode(n))
             .collect::<Vec<_>>()
             .join(",");
-        let got = crate::sess_pool::http_get(
+        let got = crate::sess_pool::http_get_cap(
             port,
             &format!(
                 "/agent/api/agent/inboxes/{}/summaries?names={qs}",
                 key.api_key()
             ),
+            crate::sess_pool::MAIL_BODY_CAP,
         )
         .and_then(|b| parse_summaries(&b));
         let mut g = inner().lock().unwrap();
