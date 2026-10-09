@@ -51,7 +51,7 @@
 | `src/seed_sched.rs` | 4 | 4 | 0 | — |
 | `src/self_restart.rs` | 11 | 7 | 4 | FLAG_REL set_files_dir button_label poll_flag |
 | `src/sess_mode.rs` | 3 | 3 | 0 | — |
-| `src/sess_pool.rs` | 35 | 33 | 2 | TAIL_EVENTS request_routes |
+| `src/sess_pool.rs` | 36 | 34 | 2 | TAIL_EVENTS request_routes |
 | `src/session.rs` | 14 | 14 | 0 | — |
 | `src/session_router.rs` | 14 | 14 | 0 | — |
 | `src/settings.rs` | 10 | 8 | 2 | QUIC_DEFAULT_PORT QUIC_REVERSE_PORT |
@@ -84,7 +84,7 @@
 | `src/ui/keybar.rs` | 1 | 1 | 0 | — |
 | `src/ui/link_card.rs` | 14 | 11 | 3 | set_lay_lines lay_lines_now card_h_now |
 | `src/ui/mail_card.rs` | 5 | 4 | 1 | N_ENTRIES |
-| `src/ui/mail_page.rs` | 49 | 49 | 0 | — |
+| `src/ui/mail_page.rs` | 59 | 58 | 1 | lay_items_fx |
 | `src/ui/md_layout.rs` | 5 | 5 | 0 | — |
 | `src/ui/md_parse.rs` | 2 | 2 | 0 | — |
 | `src/ui/modal.rs` | 32 | 31 | 1 | VEIL_DIM_ARGB |
