@@ -198,11 +198,16 @@ fn spec_bar231_楼层卡只显摘要_display_text() {
 /// mail 面 body 超限）。
 #[test]
 fn spec_bar243_信箱列表大帽档() {
-    // 编译期咬：帽被砍回小档 = 测试二进制编不过（同 BAR-213 帽档钉惯例）
+    // 编译期咬：帽被砍回小档 / 放大到掩盖增长档 = 测试二进制编不过
+    // （白露 NA0172 楼4：帽给中间值 2–3 倍，不许 8MB 把膨胀盖住）
     const {
         assert!(
-            kfm_na::sess_pool::MAIL_BODY_CAP >= 8 * 1024 * 1024,
-            "MAIL_BODY_CAP 必须 >= 8MB（BAR-243：主册现役 626KB／NA 册 329KB）"
+            kfm_na::sess_pool::MAIL_BODY_CAP >= 2 * 1024 * 1024,
+            "MAIL_BODY_CAP 必须 >= 2MB（BAR-243：主册现役 626KB 的 2–3 倍）"
+        );
+        assert!(
+            kfm_na::sess_pool::MAIL_BODY_CAP <= 4 * 1024 * 1024,
+            "MAIL_BODY_CAP 不许 >4MB（白露 NA0172 楼4：帽越大越盖住「表在膨胀」）"
         );
     }
     let feed = include_str!("../src/mail_feed.rs");
@@ -210,6 +215,11 @@ fn spec_bar243_信箱列表大帽档() {
         feed.contains("crate::sess_pool::MAIL_BODY_CAP"),
         "mail_feed 列表/摘要两面必须走 MAIL_BODY_CAP 大帽档——共用 256KB \
          默认帽 = 新表被拒、恒显旧缓存（BAR-243 定罪）"
+    );
+    assert!(
+        feed.contains("信箱列表") && feed.contains("体积"),
+        "每次拉列表必须报一行体积（白露 NA0172 楼4 b：让「表在长」可见，\
+         阈值只说到了、趋势说往哪去）"
     );
     let pool = include_str!("../src/sess_pool.rs");
     assert!(

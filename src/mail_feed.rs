@@ -386,7 +386,15 @@ pub fn request_list(key: MailKey) {
             &format!("/agent/api/agent/inboxes/{}/letters", key.api_key()),
             crate::sess_pool::MAIL_BODY_CAP,
         )
-        .and_then(|b| parse_mail_list(&b));
+        .and_then(|b| {
+            // BAR-243（白露 NA0172 楼4 b）：列表体积每拉一次进报表——
+            // 让「表在长」成为可见趋势，不必等撞帽才发现
+            crate::report::report(
+                "mail",
+                &format!("信箱列表 {} 体积 {}KB", key.api_key(), b.len() / 1024),
+            );
+            parse_mail_list(&b)
+        });
         if let Ok(list) = &got {
             // ②缓存写透（fs/网络 IO 全在锁外）：manifest 换新鲜表；
             // 摘要缓存不动（mtime 对账自然作废旧摘要）

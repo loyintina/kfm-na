@@ -414,9 +414,10 @@ const HTTP_TIMEOUT: Duration = Duration::from_secs(3);
 const BODY_CAP: usize = 256 * 1024;
 /// 信箱列表/摘要面专用帽（BAR-243 定罪：256KB 帽把 626KB 的
 /// 主册新表拒掉，客户端「保持旧表」→ 解析页恒显 10-04 旧缓存）。
-/// 这两面是**整册列表**，随信量线性长，给 8MB 安全阀；不是容量设计，
-/// 是「别让列表面被小帽拒掉」的止损档。
-pub const MAIL_BODY_CAP: usize = 8 * 1024 * 1024;
+/// 取值刻意只给当前需要的 2–3 倍（白露 NA0172 楼4：帽越大越把
+/// 「表在膨胀」盖住——256KB 一超就红、8MB 能撑很久不被发现；
+/// 止损期不许是盲区）。列表体积每拉一次进 mail 报表（同楼4 b 条）。
+pub const MAIL_BODY_CAP: usize = 2 * 1024 * 1024;
 
 /// 下池一行（路由）
 #[derive(Debug, Clone, PartialEq, Eq)]
