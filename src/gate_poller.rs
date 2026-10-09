@@ -71,16 +71,20 @@ static STARTED: OnceLock<()> = OnceLock::new();
 static UPLOAD_TX: OnceLock<tokio::sync::mpsc::UnboundedSender<(String, Vec<u8>)>> = OnceLock::new();
 
 pub fn start(srv: ServerEntry) {
+    // NA0163 楼25/26 多设备闸门：目标口取自 servers.json gatePort
+    // （缺省 9021＝主生产机；9 机判卷腿 9023）——端口即设备命名空间
+    let gate_leg = srv.gate_port;
     start_with(
         srv,
-        crate::tunnel::NA_SERVER_PORT,
+        gate_leg,
         crate::tunnel::data_conn_slot(),
         PathBuf::from(crate::gate::DUMP_DIR),
     );
 }
 
-/// 测试注入口：target_port＝QUIC 桥流头里的目标口（生产恒 NA_SERVER_PORT
-/// 9021＝na-server；测试注入随机口——开发机 9021 常被真 na-server 占用，
+/// 测试注入口：target_port＝QUIC 桥流头里的目标口（生产＝srv.gate_port
+/// ——缺省 NA_SERVER_PORT 9021＝主生产机，9 机配 9023；测试注入随机口
+/// ——开发机 9021 常被真 na-server 占用，
 /// 固定绑口不可行）、slot＝腿连接槽（生产用 tunnel::DATA_CONN_SLOT——
 /// start 经 data_conn_slot() 取真槽；测试自连 QUIC client 写自己的槽，
 /// 见 gate_poller_quic_spec）、dump_dir 可指定（start 幂等；start_with

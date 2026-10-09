@@ -32,6 +32,7 @@ fn srv(host: &str, user: &str, key: &str) -> ServerEntry {
         hotkey: None,
         backend: Backend::Kfmv4,
         quic: QuicFields::default(),
+        gate_port: NA_SERVER_PORT,
     }
 }
 

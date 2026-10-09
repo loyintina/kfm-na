@@ -35,7 +35,7 @@
 | `src/keymap.rs` | 2 | 2 | 0 | — |
 | `src/local_pty.rs` | 7 | 6 | 1 | android_prefix |
 | `src/mail_feed.rs` | 19 | 17 | 2 | book_snap ensure_summaries |
-| `src/na_server_sup.rs` | 22 | 18 | 4 | HEALTH_URL EXEC_TIMEOUT_SECS RECHECK_SECS TUNNEL_WAIT_SECS |
+| `src/na_server_sup.rs` | 23 | 19 | 4 | HEALTH_URL EXEC_TIMEOUT_SECS RECHECK_SECS TUNNEL_WAIT_SECS |
 | `src/offline_keys.rs` | 10 | 10 | 0 | — |
 | `src/plugins/ai_presence.rs` | 2 | 2 | 0 | — |
 | `src/plugins/conn_provider_local.rs` | 3 | 3 | 0 | — |

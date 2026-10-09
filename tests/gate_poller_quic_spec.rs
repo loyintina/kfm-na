@@ -123,6 +123,7 @@ async fn spec_bar233_quic共享腿直开流_端到端落盘() {
             pin: hex64(&pin),
             psk: hex64(&psk),
         },
+        gate_port: 9021,
     };
     kfm_na::gate_poller::start_with(srv, target_port, slot, dump.clone());
 

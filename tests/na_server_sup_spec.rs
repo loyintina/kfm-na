@@ -30,6 +30,7 @@ fn srv(host: &str, user: &str, key: &str) -> ServerEntry {
         hotkey: None,
         backend: Backend::NaServer,
         quic: QuicFields::default(),
+        gate_port: 9021,
     }
 }
 
@@ -117,6 +118,12 @@ fn spec_脚本_端口与绑定钉死() {
     assert!(
         s.contains("http://127.0.0.1:9021/api/na/health"),
         "health 探活打回环"
+    );
+    // NA0163 楼25/26：常驻 unit 与降级 spawn 两路都带多设备闸门腿
+    let line = s.lines().find(|l| l.contains("nohup")).unwrap();
+    assert!(
+        line.contains("NA_GATE_LEGS=9023"),
+        "降级 spawn 拉起行必须带闸门腿环境变量: {line}"
     );
 }
 
@@ -295,6 +302,10 @@ fn spec_常驻_unit内容与模式词() {
     assert!(
         u.contains("Environment=NA_QUIC_REV_BIND=0.0.0.0:62694"),
         "M4 反连腿常驻：UDP 62694 显式 0.0.0.0（特许公网仅这两腿）"
+    );
+    assert!(
+        u.contains("Environment=NA_GATE_LEGS=9023"),
+        "多设备闸门腿随 unit 下发（NA0163 楼25/26：9023 = 9 机判卷腿）"
     );
     assert!(
         u.contains("ExecStart=/opt/kfm-na/target/release/na-server"),
