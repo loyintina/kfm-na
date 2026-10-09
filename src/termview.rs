@@ -148,6 +148,29 @@ pub fn prefer_cjk(primary: &fontdue::Font, cjk: &fontdue::Font, c: char) -> bool
     primary.lookup_glyph_index(c) == 0 && cjk.lookup_glyph_index(c) != 0
 }
 
+/// 带圈字母降级映射（BAR-242，MAIN0136）：ⓐ–ⓩ（U+24D0–24E9）/ Ⓐ–Ⓩ
+/// （U+24B6–24CF）→ ASCII 字母。主备字体都缺这块（内嵌 CJK 只带圈数字
+/// ①–⑳不带圈字母——南舟 0171 楼1 实测：全设施 ⓐⓑ 34 处/6 件出方块，
+/// ①②③ 8 千处/670 件零目击），缺时降级 ASCII 形态 `(a)`，不依赖手机
+/// 装什么字体。None = 无降级形态（照 tofu 记账上报，不静默吞）
+pub fn enclosed_ascii(c: char) -> Option<char> {
+    let u = c as u32;
+    if (0x24D0..=0x24E9).contains(&u) {
+        char::from_u32(u - 0x24D0 + 'a' as u32)
+    } else if (0x24B6..=0x24CF).contains(&u) {
+        char::from_u32(u - 0x24B6 + 'A' as u32)
+    } else {
+        None
+    }
+}
+
+/// pick_font 双缺时的降级序列（BAR-242）：带圈字母 → `(x)` 三字符
+/// （文本路径折行量宽与画字共用 items 序列，降级在序列入口做 = 眼手
+/// 同尺天然不破）；None = 无降级形态（调用方照旧记 tofu）
+fn degrade_seq(c: char) -> Option<[char; 3]> {
+    enclosed_ascii(c).map(|a| ['(', a, ')'])
+}
+
 /// AI 面板整页移位压盖（采样缝过渡帧专用，2026-09-04 弹簧落下）。
 /// src = 整页面板渲染产物，y_off ∈ [-h, 0]：面板顶在屏上 y_off 行处
 /// （负 = 屏外上方）——dst 的 [0, h+y_off) 行从 src **底部**对应行整行
@@ -3620,6 +3643,8 @@ impl TermView {
         px: f32,
         px_cjk: f32,
     ) -> Option<(u8, fontdue::Metrics, Vec<u8>)> {
+        // BAR-242：与 draw_glyph 同律——带圈字母双缺降级单个 ASCII 字母
+        let c = self.degrade_cell(c);
         if self.font.lookup_glyph_index(c) == 0 {
             let covered = self
                 .cjk
@@ -3900,6 +3925,24 @@ impl TermView {
         }
     }
 
+    /// 终端格路径降级（BAR-242，draw_glyph / rasterize_for_atlas_px 共用
+    /// 单源）：格宽锁死塞不进三字符降级形 (x)——带圈字母双缺时降级为
+    /// 单个 ASCII 字母（保可读不破格），不再记 tofu 目击
+    fn degrade_cell(&self, c: char) -> char {
+        match enclosed_ascii(c) {
+            Some(a)
+                if self.font.lookup_glyph_index(c) == 0
+                    && self
+                        .cjk
+                        .as_ref()
+                        .is_none_or(|k| k.font.lookup_glyph_index(c) == 0) =>
+            {
+                a
+            }
+            _ => c,
+        }
+    }
+
     /// 逐字挑字体（输入栏/网格引擎文本规则，BAR-195 前键栏 draw_label
     /// 同——该件已随网格引擎收编退役）：主字体缺走 CJK 备用，双缺 =
     /// None（调用方记 tofu）
@@ -3967,6 +4010,13 @@ impl TermView {
         let mut items = Vec::new();
         for c in text.chars() {
             let Some(f) = self.pick_font(c) else {
+                if let Some(seq) = degrade_seq(c) {
+                    // BAR-242：带圈字母降级 (x)——主字体直供，不进 tofu 名单
+                    for d in seq {
+                        items.push((&self.font, d, self.font.metrics(d, px).advance_width));
+                    }
+                    continue;
+                }
                 let mut seen = self.tofu_seen.borrow_mut();
                 if !seen.contains(&c) && seen.len() < 16 {
                     seen.push(c);
@@ -9125,6 +9175,9 @@ impl TermView {
         clip_top: u32,
         clip_bottom: u32,
     ) {
+        // BAR-242：终端格路径格宽锁死，塞不进三字符降级形 (x)——带圈字母
+        // 双缺时降级为单个 ASCII 字母（保可读不破格），不再记 tofu 目击
+        let c = self.degrade_cell(c);
         if self.font.lookup_glyph_index(c) == 0 {
             let covered = self
                 .cjk
@@ -10662,6 +10715,15 @@ impl TermView {
                 continue;
             }
             let Some(f) = self.pick_font(c) else {
+                if let Some(seq) = degrade_seq(c) {
+                    // BAR-242：带圈字母降级 (x)——主字体 1 格/字；一字出三
+                    // 条目破 item==char 1:1，与 tofu 跳过同级破例（旧件 tofu
+                    // 字本来也破），不新增假设
+                    for d in seq {
+                        items.push((&self.font, d, px, self.cell_w as f32));
+                    }
+                    continue;
+                }
                 let mut seen = self.tofu_seen.borrow_mut();
                 if !seen.contains(&c) && seen.len() < 16 {
                     seen.push(c);
@@ -10699,6 +10761,14 @@ impl TermView {
         let mut cells = 0u32;
         for c in text.chars() {
             let Some(f) = self.pick_font(c) else {
+                if let Some(seq) = degrade_seq(c) {
+                    // BAR-242：带圈字母降级 (x)——主字体 1 格/字，不进 tofu 名单
+                    for d in seq {
+                        items.push((&self.font, d, px * scale, self.cell_w as f32));
+                        cells += 1;
+                    }
+                    continue;
+                }
                 let mut seen = self.tofu_seen.borrow_mut();
                 if !seen.contains(&c) && seen.len() < 16 {
                     seen.push(c);
@@ -10728,6 +10798,14 @@ impl TermView {
         let mut cells = 0u32;
         for c in text.chars() {
             let Some(f) = self.pick_font(c) else {
+                if let Some(seq) = degrade_seq(c) {
+                    // BAR-242：带圈字母降级 (x)——主字体 1 格/字，不进 tofu 名单
+                    for d in seq {
+                        items.push((&self.font, d, px * glyph_scale, step_unit));
+                        cells += 1;
+                    }
+                    continue;
+                }
                 let mut seen = self.tofu_seen.borrow_mut();
                 if !seen.contains(&c) && seen.len() < 16 {
                     seen.push(c);

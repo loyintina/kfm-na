@@ -822,6 +822,77 @@ fn spec_渲染_tab控制符不落墨不进目击名单() {
     assert!(cell_ink(&buf, 8) > 0, "'b' 必须落在 tab stop 第 8 列");
 }
 
+// ---------- A 档：BAR-242 带圈字母降级（MAIN0136：ⓐⓑ 手机出方块） ----------
+
+#[test]
+fn spec_bar242_降级映射_闭式形状() {
+    // ⓐ–ⓩ / Ⓐ–Ⓩ 整块闭式映射到 ASCII；块外 None——① CJK 字体自带不降级、
+    // '中' 照旧路由、ASCII 本身不降级（变异抽检：映射改坏/摘块本钉必红）
+    assert_eq!(termview::enclosed_ascii('ⓐ'), Some('a'));
+    assert_eq!(termview::enclosed_ascii('ⓑ'), Some('b'));
+    assert_eq!(termview::enclosed_ascii('ⓩ'), Some('z'));
+    assert_eq!(termview::enclosed_ascii('Ⓐ'), Some('A'));
+    assert_eq!(termview::enclosed_ascii('Ⓩ'), Some('Z'));
+    assert_eq!(termview::enclosed_ascii('①'), None);
+    assert_eq!(termview::enclosed_ascii('中'), None);
+    assert_eq!(termview::enclosed_ascii('a'), None);
+}
+
+#[test]
+fn spec_bar242_降级_量宽同尺且不目击() {
+    // 夹具前提：host 双 DejaVu 都无 ⓐ（fc-query 实证：mono 只有 24c-24d、
+    // sans 只有 2460-2469，24D0 段皆无）——降级路径真被走到，不是字体恰好有
+    let mono = host_font();
+    assert_eq!(mono.lookup_glyph_index('ⓐ'), 0, "夹具前提：主字体无 ⓐ");
+    let tv = TermView::new(host_font(), Some(host_font()), 8, 2, CELL_W, CELL_H);
+    // 量宽 = "(a)" 三字符宽——降级在 items 序列入口做，折行量宽与画字
+    // 共用同一条序列（眼手同尺不破）；且必须真比单字母宽
+    assert_eq!(tv.text_width("ⓐ", 16.0), tv.text_width("(a)", 16.0));
+    assert!(tv.text_width("ⓐ", 16.0) > tv.text_width("a", 16.0));
+    // 降级字不进 tofu 目击名单（判据②：从名单消失的机制保证）；
+    // 无降级形态的双缺字照旧进名单（不静默吞——PUA 私用区探针）
+    assert!(!tv.take_tofu_chars().contains(&'ⓐ'), "降级字不许进目击名单");
+    tv.text_width("\u{E000}", 16.0);
+    assert!(
+        tv.take_tofu_chars().contains(&'\u{E000}'),
+        "无降级形态的双缺字必须照旧目击"
+    );
+}
+
+#[test]
+fn spec_bar242_降级_格序列形状() {
+    // 网格引擎序列：ⓐ 展开为 (a) 三条目、每条 1 格步进（md 查看器/输入栏
+    // 同族序列同源降级——md_paint 走 measure_items_grid_stepped 同款 else 臂）
+    let tv = TermView::new(host_font(), Some(host_font()), 8, 2, CELL_W, CELL_H);
+    let items = tv.spec_measure_bar_items_grid("ⓐ");
+    assert_eq!(
+        items.iter().map(|it| it.0).collect::<Vec<_>>(),
+        vec!['(', 'a', ')'],
+        "ⓐ 必须展开为 (a) 三条目"
+    );
+    assert!(
+        items.iter().all(|it| (it.1 - CELL_W as f32).abs() < 0.01),
+        "降级序列每字符必须 1 格步进"
+    );
+}
+
+#[test]
+fn spec_bar242_终端格_降级字母上屏不目击() {
+    // 终端格路径格宽锁死塞不进 (x) 三字符——降级为单个 ASCII 字母上屏，
+    // 有墨（不是空占位）且不记 tofu
+    let mut tv = TermView::new(host_font(), Some(host_font()), 8, 2, CELL_W, CELL_H);
+    tv.feed("ⓐ".as_bytes());
+    let buf_w = 2 * termview::MARGIN_X + 8 * CELL_W;
+    let buf_h = termview::MARGIN_TOP + termview::MARGIN_Y + 2 * CELL_H;
+    let mut buf = vec![0u32; (buf_w * buf_h) as usize];
+    tv.render_into(&mut buf, buf_w, buf_h, 0);
+    assert!(buf.iter().any(|&p| is_ink(p)), "降级字母必须画墨");
+    assert!(
+        !tv.take_tofu_chars().contains(&'ⓐ'),
+        "终端格路径降级字不许进目击名单"
+    );
+}
+
 #[test]
 fn spec_滚动_scroll_lines驱动display_offset() {
     // 触摸滚动的 B 档钉：scroll_lines 必须真的驱动 alacritty 的 display_offset
