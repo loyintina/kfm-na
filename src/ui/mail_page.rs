@@ -12,6 +12,12 @@
 //! - **第四栏（BAR-222，NA0152）**：楼层渲染，每楼三行——`> N楼` 引用行
 //!   （时间居右灰字无时区）/ 层主 H2 + 白正文箭头 + 被回复者 / 评论正文
 //!   折行；与前三栏同律不截断，楼数楼文有多少卡就长多少。
+//! - **第五件（BAR-244，NA0173）**：楼层 >2 的信卡默认只显前 2 楼，
+//!   卡底多一行「展开余下 N 楼」控件；点开全楼长出（200-300ms ease-out，
+//!   panel_ease_pos 同族曲线），展开态第一楼上方另有「收起」控件。
+//!   核心不变量 = 被点控件行屏幕 y 动画全程不动（锚定补偿：新内容全在
+//!   锚上方长 → offset_bottom 账不变；锚下方消失 → 通用补偿式钳回）。
+//!   动画中途再点 = 从当前进度重定基反向，不跳。
 //! - **渲染器不设最大高度**——卡高 = 各栏实量之和。
 //! - **按发信人取色**：accent::accent_for_sender（同名同色/异名异色/
 //!   与页色脱撞），渐变暗底 + 框吃发信人双色；点开三级框的查看器跳框
@@ -173,6 +179,16 @@ pub struct ItemLay {
     pub sum_y: u32,
     /// 第四栏楼层（每楼一份三行账；空表 = 无楼层，卡高不增）
     pub floors: Vec<FloorLay>,
+    /// 顶控件（BAR-244，仅楼层 >2）：(控件行卡内 y = 摘要栏底+row_gap 最终位,
+    /// 块分配高 A1 = round(p×(row_gap+ctrl_h)))；p=0 块消失 = None。
+    /// 涂装裁剪带 = [行y−row_gap, 行y−row_gap+A1)
+    pub ctrl_top: Option<(u32, u32)>,
+    /// 底控件行卡内 y（仅楼层 >2；行高恒 ctrl_h=body_lh，折叠态紧跟
+    /// floor2+row_gap，展开态在全楼之后——同一行位随 p 连续移动）
+    pub ctrl_bottom: Option<u32>,
+    /// floors[2..] 涂装裁剪带（仅楼层 >2）：(region_y0 = floor2底+row_gap,
+    /// alloc = A2 = round(p×extra_full))；涂装与带取交，全量 floors 照排
+    pub extra_band: Option<(u32, u32)>,
 }
 
 /// 条目文宽（格）：卡宽 − 左右内缩，按实例格宽折算（BAR-221）
@@ -191,7 +207,11 @@ pub fn display_title(e: &MailEntry) -> &str {
 
 /// 排一信（纯函数）：text_cells = 卡内文宽（格）。折行宽保底 4 格防
 /// 零宽死循；行数下限各栏 1 行。几何吃 metrics（实例格，BAR-221）。
-pub fn lay_item(e: &MailEntry, top: i64, text_cells: u32, m: &Metrics) -> ItemLay {
+/// fx_p = 楼层展开进度 ∈[0,1]（BAR-244）：仅楼层 >2 生效——0 = 折叠
+/// （前 2 楼 + 底控件），1 = 全展开（全楼 + 顶/底双控件），中间值 =
+/// 动画帧（顶控件块 A1 与 floors[2..] 露出带 A2 随 p 线性长，控件行位
+/// 连续移动）；n≤2 恒全排无控件（fx_p 忽略，卡高与旧约逐值同）
+pub fn lay_item(e: &MailEntry, top: i64, text_cells: u32, m: &Metrics, fx_p: f32) -> ItemLay {
     let recipients = split_recipients(&e.to);
     let n_rcp = recipients.len().max(1) as u32;
     let meta_h = m.h1_block_h.max(n_rcp * m.body_lh);
@@ -216,23 +236,69 @@ pub fn lay_item(e: &MailEntry, top: i64, text_cells: u32, m: &Metrics) -> ItemLa
     // 第四栏（BAR-222）：每楼 = 引用行(body_lh) + 层主行(h2_lh) + 正文
     // 折行(≥1 行)，楼间 row_gap；与前三栏同一份文宽（正文不缩进）
     let mut floors = Vec::new();
-    let mut y = sum_y + sum_lines.len() as u32 * m.body_lh;
-    for f in &e.floors {
-        y += m.row_gap;
-        let quote_y = y;
+    let lay_floor = |f: &crate::mail_feed::MailFloor, y: &mut u32, floors: &mut Vec<FloorLay>| {
+        *y += m.row_gap;
+        let quote_y = *y;
         let who_y = quote_y + m.body_lh;
         let body_y = who_y + m.h2_lh;
         let mut body_lines = grid_wrap(&f.display_text(), body_cells);
         if body_lines.is_empty() {
             body_lines.push((0, 0));
         }
-        y = body_y + body_lines.len() as u32 * m.body_lh;
+        *y = body_y + body_lines.len() as u32 * m.body_lh;
         floors.push(FloorLay {
             quote_y,
             who_y,
             body_y,
             body_lines,
         });
+    };
+    let sum_end = sum_y + sum_lines.len() as u32 * m.body_lh;
+    if e.floors.len() > 2 {
+        // BAR-244 折叠/展开排版：顶控件块 A1 长在摘要栏底与 floor1 之间；
+        // floor1/2 全高照排（随 A1 下移）；floors[2..] 按全展开最终位置
+        // 排（涂装按 extra_band 裁剪露出）；底控件行恒占 ctrl_h，位置 =
+        // floor2底 + row_gap + A2（折叠紧贴 floor2，展开在全楼之后）。
+        // 守恒：p=0 布局 = 折叠定态逐像素相同（A1=A2=0 无间断跳）
+        let p = fx_p.clamp(0.0, 1.0);
+        let ctrl_h = m.body_lh;
+        let a1 = (p * (m.row_gap + ctrl_h) as f32).round() as u32;
+        let ctrl_top = if a1 > 0 {
+            Some((sum_end + m.row_gap, a1))
+        } else {
+            None
+        };
+        let mut y = sum_end + a1;
+        for f in &e.floors[..2] {
+            lay_floor(f, &mut y, &mut floors);
+        }
+        let floor2_end = y;
+        for f in &e.floors[2..] {
+            lay_floor(f, &mut y, &mut floors);
+        }
+        let extra_full = y - floor2_end;
+        let a2 = (p * extra_full as f32).round() as u32;
+        let ctrl_bottom_y = floor2_end + m.row_gap + a2;
+        let h = ctrl_bottom_y + ctrl_h + m.item_pad_v;
+        return ItemLay {
+            h,
+            top,
+            meta_y,
+            meta_h,
+            recipients,
+            title_lines,
+            title_y,
+            sum_lines,
+            sum_y,
+            floors,
+            ctrl_top,
+            ctrl_bottom: Some(ctrl_bottom_y),
+            extra_band: Some((floor2_end + m.row_gap, a2)),
+        };
+    }
+    let mut y = sum_end;
+    for f in &e.floors {
+        lay_floor(f, &mut y, &mut floors);
     }
     let h = y + m.item_pad_v;
     ItemLay {
@@ -246,16 +312,29 @@ pub fn lay_item(e: &MailEntry, top: i64, text_cells: u32, m: &Metrics) -> ItemLa
         sum_lines,
         sum_y,
         floors,
+        ctrl_top: None,
+        ctrl_bottom: None,
+        extra_band: None,
     }
 }
 
-/// 整册排版（前缀和流水）：oldest_first 序，最新在底
+/// 整册排版（折叠定态 p=0 流水，前缀和）：oldest_first 序，最新在底
 pub fn lay_items(entries: &[MailEntry], text_cells: u32, m: &Metrics) -> Vec<ItemLay> {
+    lay_items_fx(entries, text_cells, m, |_| 0.0)
+}
+
+/// 整册排版（逐信 fx 进度版）：fx_p 查不到 = 0.0（折叠定态）
+pub fn lay_items_fx(
+    entries: &[MailEntry],
+    text_cells: u32,
+    m: &Metrics,
+    fx_p: impl Fn(&MailEntry) -> f32,
+) -> Vec<ItemLay> {
     let mut top = 0i64;
     entries
         .iter()
         .map(|e| {
-            let lay = lay_item(e, top, text_cells, m);
+            let lay = lay_item(e, top, text_cells, m, fx_p(e));
             top += i64::from(lay.h) + i64::from(m.item_gap);
             lay
         })
@@ -327,13 +406,21 @@ pub fn summary_window(
     first..last.max(first)
 }
 
-/// 命中：视口带内点中条目卡 = Item(i)；页内其余 = Page（吞掉防穿透）
+/// 命中：视口带内点中条目卡 = Item(i)；点中控件行（全卡宽 × ctrl_h）
+/// = FloorToggle（**先于 Item 判定**；顶控件仅全展开态可点——动画中途
+/// 块高未满不派生命中）；页内其余 = Page（吞掉防穿透）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MailPageHit {
     Item(usize),
+    /// BAR-244 楼层展开/折叠控件：item = 条目下标，top = 顶控件（否则底）
+    FloorToggle {
+        item: usize,
+        top: bool,
+    },
     Page,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn hit(
     area: &PoolRect,
     vp: (i64, i64),
@@ -341,14 +428,36 @@ pub fn hit(
     offset_bottom: i64,
     x: i64,
     y: i64,
+    m: &Metrics,
 ) -> Option<MailPageHit> {
     let inside =
         |r: &PoolRect| x >= r.x && x < r.x + i64::from(r.w) && y >= r.y && y < r.y + i64::from(r.h);
     if y >= vp.0 && y < vp.1 {
+        let ctrl_h = i64::from(m.body_lh);
         for i in visible_range(lays, vp.1 - vp.0, offset_bottom) {
-            if inside(&item_rect(area, vp, lays, i, offset_bottom)) {
-                return Some(MailPageHit::Item(i));
+            let r = item_rect(area, vp, lays, i, offset_bottom);
+            if !inside(&r) {
+                continue;
             }
+            // BAR-244：控件行命中先于 Item
+            if let Some(cy) = lays[i].ctrl_bottom {
+                let y0 = r.y + i64::from(cy);
+                if y >= y0 && y < y0 + ctrl_h {
+                    return Some(MailPageHit::FloorToggle {
+                        item: i,
+                        top: false,
+                    });
+                }
+            }
+            if let Some((ty, alloc)) = lays[i].ctrl_top
+                && alloc >= m.row_gap + m.body_lh
+            {
+                let y0 = r.y + i64::from(ty);
+                if y >= y0 && y < y0 + ctrl_h {
+                    return Some(MailPageHit::FloorToggle { item: i, top: true });
+                }
+            }
+            return Some(MailPageHit::Item(i));
         }
     }
     Some(MailPageHit::Page)
@@ -406,6 +515,70 @@ pub fn items_area(g: &MailGeom) -> PoolRect {
     }
 }
 
+// ---- 楼层展开/折叠动画（BAR-244，NA0173）----
+
+/// 楼层展开进度采样器（fx_ease::EaseState 同款重定基模式本地件）：
+/// from→target 走 panel_ease_pos（进场 250ms power2_out/离场 180ms 镜像，
+/// 在 200-300ms 建议窗内）；toggle = 采当前进度重定基反向——动画中途
+/// 再点从当前进度反向、不跳（重定基语义天然连续）
+#[derive(Debug, Clone)]
+pub struct FloorFx {
+    from: f32,
+    target: f32,
+    start_ms: u64,
+    settled: bool,
+}
+
+impl FloorFx {
+    pub fn new() -> Self {
+        FloorFx {
+            from: 0.0,
+            target: 0.0,
+            start_ms: 0,
+            settled: true,
+        }
+    }
+
+    /// 采样当前进度（顺手结清 settled：贴死 target = 终态）
+    pub fn sample(&mut self, now_ms: u64) -> f32 {
+        let pos = crate::ui::fx_ease::panel_ease_pos(
+            self.from,
+            self.target,
+            now_ms.saturating_sub(self.start_ms),
+        );
+        self.settled = pos == self.target;
+        pos
+    }
+
+    /// 翻转目标：从当前进度重定基反向（中途反向不跳）
+    pub fn toggle(&mut self, now_ms: u64) {
+        let pos = self.sample(now_ms);
+        self.from = pos;
+        self.target = 1.0 - self.target;
+        self.start_ms = now_ms;
+        self.settled = false;
+    }
+
+    pub fn settled(&self) -> bool {
+        self.settled
+    }
+}
+
+impl Default for FloorFx {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// 锚定控件别（BAR-244）：被点的那行屏幕 y 动画全程不动
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnchorKind {
+    /// 顶控件（收起用；内容在锚下方消失，补偿式钳回）
+    Top,
+    /// 底控件（展开用；新内容全在锚上方长，offset_bottom 账天然不动）
+    Bottom,
+}
+
 // ---- 状态核（追底 = follow_tail 同款语义像素账版）----
 
 #[derive(Debug, Clone)]
@@ -421,6 +594,13 @@ pub struct MailPageView {
     /// 当前实例格（BAR-221：pinch 联动——pinch 应用臂与涂装两路喂，
     /// 几何/排版全吃它；默认格零漂移）
     cell: (u32, u32),
+    /// 楼层展开动画态（BAR-244）：key = MailEntry.name（同册内唯一）；
+    /// 无条目 = p 0.0（折叠定态）
+    floor_fx: Vec<(String, FloorFx)>,
+    /// 锚定补偿（BAR-244）：(信名, 控件别, 控件行屏幕 y)；fx settle 后清
+    anchor: Option<(String, AnchorKind, i64)>,
+    /// 本代条目名序（sync_items 顺手存——toggle 按名找卡与 lays 同代）
+    names: Vec<String>,
 }
 
 impl MailPageView {
@@ -433,6 +613,9 @@ impl MailPageView {
             viewport_h: 0,
             epoch: 0,
             cell: (CELL_W, CELL_H),
+            floor_fx: Vec::new(),
+            anchor: None,
+            names: Vec::new(),
         }
     }
 
@@ -449,15 +632,33 @@ impl MailPageView {
         &self.lays
     }
 
-    /// 排版+布局写回（壳烘焙轮喂）：追底态恒贴底；内容缩水钳回上限
+    /// 排版+布局写回（壳烘焙轮喂）：追底态恒贴底；内容缩水钳回上限。
+    /// BAR-244：逐信采样楼层展开进度进排版（无条目 = p 0.0）；末尾
+    /// 锚定补偿——anchor 在且该信找得到：new_scroll_top = 锚行新内容 y
+    /// − 锚屏 y，offset_bottom = (total_h − viewport_h − new_scroll_top)
+    /// .clamp(0, scroll_max)（clamp 撞边 = 内容不够补偿的极端边，锚漂
+    /// 认了）；该信 fx settle 后清锚
     pub fn sync_items(
         &mut self,
         entries: &[MailEntry],
         text_cells: u32,
         viewport_h: i64,
         m: &Metrics,
+        now_ms: u64,
     ) {
-        self.lays = lay_items(entries, text_cells, m);
+        self.names = entries.iter().map(|e| e.name.clone()).collect();
+        let mut sampled: Vec<(String, f32)> = Vec::with_capacity(self.floor_fx.len());
+        for (n, fx) in self.floor_fx.iter_mut() {
+            sampled.push((n.clone(), fx.sample(now_ms)));
+        }
+        let p_of = |e: &MailEntry| {
+            sampled
+                .iter()
+                .find(|(n, _)| n == &e.name)
+                .map(|(_, p)| *p)
+                .unwrap_or(0.0)
+        };
+        self.lays = lay_items_fx(entries, text_cells, m, p_of);
         self.viewport_h = viewport_h;
         let max = scroll_max(&self.lays, viewport_h);
         if self.follow {
@@ -465,6 +666,77 @@ impl MailPageView {
         } else if self.offset_bottom > max {
             self.offset_bottom = max;
         }
+        if let Some((name, kind, screen_y)) = self.anchor.clone() {
+            if let Some(i) = self.names.iter().position(|n| n == &name) {
+                let lay = &self.lays[i];
+                let row_y = match kind {
+                    // 顶控件行文本恒在最终位（摘要栏底+row_gap）——settle 帧
+                    // 块已消失（ctrl_top None）也要照最终位补最后一刀，
+                    // 否则末帧差值留在 offset 账里（锚漂一截）
+                    AnchorKind::Top => lay.ctrl_top.map(|(y, _)| y).or_else(|| {
+                        if lay.ctrl_bottom.is_some() {
+                            Some(lay.sum_y + lay.sum_lines.len() as u32 * m.body_lh + m.row_gap)
+                        } else {
+                            None
+                        }
+                    }),
+                    AnchorKind::Bottom => lay.ctrl_bottom,
+                };
+                if let Some(cy) = row_y {
+                    let new_content_y = lay.top + i64::from(cy);
+                    let new_scroll_top = new_content_y - screen_y;
+                    let max = scroll_max(&self.lays, viewport_h);
+                    self.offset_bottom =
+                        (total_h(&self.lays) - viewport_h - new_scroll_top).clamp(0, max);
+                    self.follow = self.offset_bottom == 0;
+                }
+            }
+            let settled = self
+                .floor_fx
+                .iter()
+                .find(|(n, _)| n == &name)
+                .map(|(_, f)| f.settled)
+                .unwrap_or(true);
+            if settled {
+                self.anchor = None;
+            }
+        }
+    }
+
+    /// 楼层展开/折叠翻转（BAR-244）：从当前 lays 算被点控件行屏幕 y
+    /// （content_y − scroll_top；scroll_top = total_h − viewport_h −
+    /// offset_bottom）存 anchor，再翻 FloorFx（重定基 = 中途反向不跳）。
+    /// 找不到信/控件行不在（顶控件 p=0 无块）= 不动
+    pub fn toggle_floors(&mut self, name: &str, kind: AnchorKind, now_ms: u64) -> bool {
+        let Some(i) = self.names.iter().position(|n| n == name) else {
+            return false;
+        };
+        let Some(lay) = self.lays.get(i) else {
+            return false;
+        };
+        let row_y = match kind {
+            AnchorKind::Top => lay.ctrl_top.map(|(y, _)| y),
+            AnchorKind::Bottom => lay.ctrl_bottom,
+        };
+        let Some(cy) = row_y else { return false };
+        let scroll_top = (total_h(&self.lays) - self.viewport_h - self.offset_bottom).max(0);
+        let screen_y = lay.top + i64::from(cy) - scroll_top;
+        match self.floor_fx.iter_mut().find(|(n, _)| n == name) {
+            Some((_, fx)) => fx.toggle(now_ms),
+            None => {
+                let mut fx = FloorFx::new();
+                fx.toggle(now_ms);
+                self.floor_fx.push((name.to_string(), fx));
+            }
+        }
+        self.anchor = Some((name.to_string(), kind, screen_y));
+        self.epoch += 1;
+        true
+    }
+
+    /// 任一楼层动画在飞（fx_spring 活性表第十路直读）
+    pub fn fx_active(&self) -> bool {
+        self.floor_fx.iter().any(|(_, f)| !f.settled)
     }
 
     /// 滚动（壳手势喂增量）：dy > 0 = 看更旧；回底 = 恢复追底。变了才
@@ -553,10 +825,57 @@ pub fn note_cell(cell: (u32, u32)) {
     }
 }
 
-pub fn sync_items(entries: &[MailEntry], text_cells: u32, viewport_h: i64, m: &Metrics) {
+pub fn sync_items(
+    entries: &[MailEntry],
+    text_cells: u32,
+    viewport_h: i64,
+    m: &Metrics,
+    now_ms: u64,
+) {
     if let Some(v) = VIEW.lock().unwrap().as_mut() {
-        v.sync_items(entries, text_cells, viewport_h, m);
+        v.sync_items(entries, text_cells, viewport_h, m, now_ms);
     }
+}
+
+/// 楼层展开/折叠翻转（BAR-244 点按臂）：页内自取 anchor 屏幕 y
+pub fn toggle_floors(name: &str, kind: AnchorKind, now_ms: u64) -> bool {
+    let mut g = VIEW.lock().unwrap();
+    match g.as_mut() {
+        Some(v) => {
+            let r = v.toggle_floors(name, kind, now_ms);
+            if r {
+                bump_dirty();
+            }
+            r
+        }
+        None => false,
+    }
+}
+
+/// 楼层动画活性（fx_frame_due 活性表第十路；本件状态在 ui 层，直读
+/// VIEW，无需 ft_fling 那种壳旗）
+pub fn fx_active() -> bool {
+    VIEW.lock()
+        .unwrap()
+        .as_ref()
+        .is_some_and(MailPageView::fx_active)
+}
+
+/// 帧泵拍（BAR-244）：有在飞动画才采样推进——采样结清 settled、
+/// epoch+1（烘焙 sig 换代必重烘）+ 记脏；全 settled = false 零动作
+pub fn tick_fx(now_ms: u64) -> bool {
+    let mut g = VIEW.lock().unwrap();
+    let Some(v) = g.as_mut() else { return false };
+    if !v.fx_active() {
+        return false;
+    }
+    for (_, fx) in v.floor_fx.iter_mut() {
+        fx.sample(now_ms);
+    }
+    v.epoch += 1;
+    drop(g);
+    bump_dirty();
+    true
 }
 
 pub fn scroll_by(dy: i64) -> bool {

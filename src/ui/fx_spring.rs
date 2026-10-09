@@ -214,6 +214,11 @@ pub fn fx_frame_due(now_ms: u64) -> bool {
     // （放在 ft_fling 前：BAR-165 源码守卫钉死「|| ft_fling;」收尾字面量，
     // OR 链位置无语义差，新旧两钉同吃不破）
     let viewer_fling = viewer_fling_live();
+    // 第十路活性源（BAR-244，2026-10-10）：信箱页信卡楼层展开/折叠动画
+    // 在飞——状态在 ui 层 VIEW，直读即可（无需 ft_fling 那种壳旗）。
+    // 插 viewer_fling 前：reader_wiring/ftree_wiring 两枚源码守卫钉死
+    // 链尾「|| viewer_fling || ft_fling;」字面量，尾段原样保留
+    let mail_floor_fx = crate::ui::mail_page::fx_active();
     // BAR-220 补接（2026-10-02 承影真机「抬手即卡」定罪）：阅读/信箱两缝
     // 落地时漏进本表——收场 replay 续播期 active 读假 = 帧泵零产帧，动画
     // 全靠别的脏帧源（终端输出/catchup）捎带推进，抬手后第一帧等下一个
@@ -229,6 +234,7 @@ pub fn fx_frame_due(now_ms: u64) -> bool {
         || crate::ui::seam::mail_panel_offset_x_active()
         || ft_anim
         || reader_fling
+        || mail_floor_fx
         || viewer_fling
         || ft_fling;
     if !active {

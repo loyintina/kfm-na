@@ -3560,6 +3560,7 @@ impl App {
                         let g = crate::ui::mail_page::mail_geom(sw, sh, inset);
                         let area = crate::ui::mail_page::items_area(&g);
                         let vp = (g.view_y0, g.view_y1);
+                        let m = crate::ui::mail_page::cur_metrics();
                         match crate::ui::mail_page::hit(
                             &area,
                             vp,
@@ -3567,7 +3568,32 @@ impl App {
                             v.offset_bottom(),
                             x as i64,
                             y as i64,
+                            &m,
                         ) {
+                            Some(crate::ui::mail_page::MailPageHit::FloorToggle { item, top }) => {
+                                // BAR-244 楼层展开/折叠控件：取条目名 → 页内
+                                // 翻 FloorFx（anchor 屏幕 y 页内自取）→ 记脏；
+                                // 动画帧泵见主循环 mail_fling 泵旁
+                                let book = crate::mail_feed::book_snap(v.key);
+                                if let Some(e) = book.entries.get(item) {
+                                    let kind = if top {
+                                        crate::ui::mail_page::AnchorKind::Top
+                                    } else {
+                                        crate::ui::mail_page::AnchorKind::Bottom
+                                    };
+                                    let now = crate::report::boot_ms() as u64;
+                                    if crate::ui::mail_page::toggle_floors(&e.name, kind, now) {
+                                        crate::report::report(
+                                            "gest",
+                                            &format!(
+                                                "信箱页楼层控件 {}「{}」",
+                                                if top { "顶" } else { "底" },
+                                                e.name
+                                            ),
+                                        );
+                                    }
+                                }
+                            }
                             Some(crate::ui::mail_page::MailPageHit::Item(i)) => {
                                 let book = crate::mail_feed::book_snap(v.key);
                                 if let Some(e) = book.entries.get(i) {
@@ -5507,7 +5533,13 @@ impl App {
         let m = crate::ui::mail_page::cur_metrics();
         let text_cells = crate::ui::mail_page::text_cells_of(area.w, &m);
         let book = crate::mail_feed::book_snap(key);
-        crate::ui::mail_page::sync_items(&book.entries, text_cells, g.view_y1 - g.view_y0, &m);
+        crate::ui::mail_page::sync_items(
+            &book.entries,
+            text_cells,
+            g.view_y1 - g.view_y0,
+            &m,
+            crate::report::boot_ms() as u64,
+        );
         let Some(v) = crate::ui::mail_page::snap() else {
             return;
         };
@@ -10320,6 +10352,7 @@ impl App {
                     || crate::ui::seam::parser_panel_offset_x_active()
                     || crate::ui::seam::reader_panel_offset_x_active()
                     || crate::ui::seam::mail_panel_offset_x_active()
+                    || crate::ui::mail_page::fx_active()
                     || Self::cfg_fx_active()
                     || self.sys_band_fx_active(),
                 t0.elapsed(),
@@ -11121,6 +11154,20 @@ impl ApplicationHandler for App {
                     self.mail_fling = None;
                     self.mail_fling_last_ms = None;
                     crate::report::report("scroll", &format!("信箱页甩尾尽: {why}"));
+                }
+            }
+            // 信箱页楼层展开/折叠动画帧泵（BAR-244）：活性期逐帧采样推进
+            // （tick_fx 采样结清 settled + epoch 换代逼烘焙槽重烘）→ 喂排版
+            // 账（sync_items 内锚定补偿钳 offset_bottom = 被点控件行屏幕 y
+            // 全程不动）→ 记脏。活性归 fx_frame_due 第十路（fx_spring.rs）
+            if crate::ui::mail_page::fx_active() {
+                let now = crate::report::boot_ms() as u64;
+                if crate::ui::mail_page::tick_fx(now)
+                    && let Some((sw, sh)) = self.screen_px()
+                {
+                    let inset = self.chrome_inset() + self.cur_bar_h();
+                    Self::mail_page_feed(sw, sh, inset);
+                    self.dirty = true;
                 }
             }
             // 查看器甩尾活性入表（fx_frame_due 第八路，同第七路的旗规）；

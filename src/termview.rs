@@ -7367,14 +7367,27 @@ impl TermView {
             // 第四栏楼层（BAR-222，NA0152 §三）：每楼三行——
             // 行① `> N楼` 引用灰字 + 时间居右灰字无时区；
             // 行② 层主 H2（迷你 md 真管线）+ 白正文箭头 + 被回复者；
-            // 行③ 评论正文折行全画（同律不截断）。几何全吃 lay.floors
-            for (f, fl) in e.floors.iter().zip(lay.floors.iter()) {
+            // 行③ 评论正文折行全画（同律不截断）。几何全吃 lay.floors。
+            // BAR-244：floors[2..]（extra_band 在时）竖向裁剪带 =
+            // [region_y0, region_y0+A2) ∩ vp——排版全量进账，露出归裁剪
+            for (fi, (f, fl)) in e.floors.iter().zip(lay.floors.iter()).enumerate() {
+                let (fvp, fclip) = match lay.extra_band {
+                    Some((by, bh)) if fi >= 2 => {
+                        let y0 = r.y + i64::from(by);
+                        let y1 = y0 + i64::from(bh);
+                        (
+                            (vp.0.max(y0), vp.1.min(y1)),
+                            Some((vp.0.max(y0) as i32, vp.1.min(y1) as i32)),
+                        )
+                    }
+                    _ => (vp, clip32),
+                };
                 // 行①：引用行（BAR-231：左竖线 2px 渐变 + 1 格缩进「N楼」灰字
                 // ——md 引用同尺，与行②标题竖线同一把尺；不再整块灰字画
                 // 「> N楼」字面）+ 时间居右灰字无时区
                 let q_ly = r.y + i64::from(fl.quote_y);
                 let q_ytop = q_ly + (blh - i64::from(self.cell_h)).max(0) / 2;
-                for ay in q_ly.max(vp.0)..(q_ly + blh).min(vp.1) {
+                for ay in q_ly.max(fvp.0)..(q_ly + blh).min(fvp.1) {
                     if ay < 0 || ay >= i64::from(h) {
                         continue;
                     }
@@ -7399,7 +7412,7 @@ impl TermView {
                     tw.saturating_sub(crate::ui::demo_page::INDENT_W),
                     meta_fg,
                     0,
-                    clip32,
+                    fclip,
                 );
                 let ftime = mp::fmt_time(&f.time);
                 if !ftime.is_empty() {
@@ -7415,7 +7428,7 @@ impl TermView {
                         tpx as u32,
                         meta_fg,
                         0,
-                        clip32,
+                        fclip,
                     );
                 }
 
@@ -7428,7 +7441,7 @@ impl TermView {
                 );
                 let h2_h = i64::from(h2_lay.total_h);
                 let h2_y = w_ly + (i64::from(m.h2_lh) - h2_h).max(0) / 2;
-                self.paint_md_body(&mut frame, &h2_lay, tx, h2_y, tw, vp, denom, s_acc);
+                self.paint_md_body(&mut frame, &h2_lay, tx, h2_y, tw, fvp, denom, s_acc);
                 let h2_w = h2_lay
                     .blocks
                     .first()
@@ -7450,7 +7463,7 @@ impl TermView {
                         max_w,
                         body_fg,
                         0,
-                        clip32,
+                        fclip,
                     );
                 }
 
@@ -7475,9 +7488,55 @@ impl TermView {
                         tw,
                         body_fg,
                         0,
-                        clip32,
+                        fclip,
                     );
                 }
+            }
+
+            // BAR-244 楼层控件行（灰字 meta_fg 同族，左对齐 1 格缩进）：
+            // 底行折叠态「展开余下 N 楼」/展开向（顶控件块已长）「收起」；
+            // 顶行「收起」——文本固定在最终位（行 y − row_gap 起算块），
+            // 涂装裁剪带 = [行y−row_gap, 行y−row_gap+A1) ∩ vp，与 lay 账同尺
+            let ctrl_h = i64::from(m.body_lh);
+            if let Some(cy) = lay.ctrl_bottom {
+                let word = if lay.ctrl_top.is_some() {
+                    "收起".to_string()
+                } else {
+                    format!("展开余下 {} 楼", e.floors.len() - 2)
+                };
+                let y0 = r.y + i64::from(cy);
+                let y_top = y0 + (ctrl_h - i64::from(self.cell_h)).max(0) / 2;
+                let (items, _) = self.measure_items_grid(&word);
+                self.draw_grid_text_left(
+                    &mut frame,
+                    &items,
+                    tx + i64::from(m.cell_w),
+                    y_top,
+                    self.cell_w,
+                    tw,
+                    meta_fg,
+                    0,
+                    clip32,
+                );
+            }
+            if let Some((ty, alloc)) = lay.ctrl_top {
+                let band0 = r.y + i64::from(ty) - i64::from(m.row_gap);
+                let band1 = band0 + i64::from(alloc);
+                let tclip = Some((band0.max(vp.0) as i32, band1.min(vp.1) as i32));
+                let y0 = r.y + i64::from(ty);
+                let y_top = y0 + (ctrl_h - i64::from(self.cell_h)).max(0) / 2;
+                let (items, _) = self.measure_items_grid("收起");
+                self.draw_grid_text_left(
+                    &mut frame,
+                    &items,
+                    tx + i64::from(m.cell_w),
+                    y_top,
+                    self.cell_w,
+                    tw,
+                    meta_fg,
+                    0,
+                    tclip,
+                );
             }
         }
     }
