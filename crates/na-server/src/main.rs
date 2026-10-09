@@ -37,6 +37,20 @@ fn bind_addr() -> String {
     std::env::var("NA_BIND").unwrap_or_else(|_| "127.0.0.1:9021".into())
 }
 
+/// 主口（NA_BIND 的端口段）＝闸门默认队列键（生产机）
+fn main_port(addr: &str) -> u16 {
+    addr.rsplit_once(':')
+        .and_then(|(_, p)| p.parse().ok())
+        .unwrap_or_else(|| panic!("NA_BIND 端口解析失败: {addr}"))
+}
+
+/// 额外闸门腿（NA0163 楼25/26 多设备闸门：每机一条腿，按口分队）。
+/// 解析/校验的纯函数在 gateq::parse_gate_legs（fail-loud）
+fn gate_legs(main: u16) -> Vec<u16> {
+    gateq::parse_gate_legs(std::env::var("NA_GATE_LEGS").ok().as_deref(), main)
+        .unwrap_or_else(|e| panic!("{e}"))
+}
+
 fn idle_exit_secs() -> u64 {
     std::env::var("NA_IDLE_EXIT_SECS")
         .ok()
@@ -247,11 +261,24 @@ async fn main() {
         .await
         .unwrap_or_else(|e| panic!("绑 {addr} 失败: {e}"));
     eprintln!("[na-server] 听 {addr}（idle 自退 {}s）", idle_exit_secs());
+    let main = main_port(&addr);
 
     let registry = Arc::new(Registry::new());
 
     spawn_quic_leg();
     spawn_rev_quic_leg();
+
+    // 额外闸门腿（NA0163 楼25/26）：每腿一个回环监听，只放 /api/gate/*，
+    // 队列按口分槽——脚本打哪口进哪队，手机 poller 桥指哪口取哪队
+    for leg in gate_legs(main) {
+        let laddr = format!("127.0.0.1:{leg}");
+        let l = TcpListener::bind(&laddr)
+            .await
+            .unwrap_or_else(|e| panic!("闸门腿绑 {laddr} 失败: {e}"));
+        eprintln!("[na-server] 闸门腿听 {laddr}（只放 /api/gate/*，按口分队）");
+        let reg = Arc::clone(&registry);
+        tokio::spawn(accept_loop(l, reg, leg, true));
+    }
 
     // idle 自退：无连接无会话持续超时 → 退出（下次 na 连接重新拉起）
     {
@@ -272,6 +299,18 @@ async fn main() {
         });
     }
 
+    accept_loop(listener, registry, main, false).await;
+}
+
+/// accept 环（主口与闸门腿共用）：gate_key = 闸门队列键（主口 = 主口号，
+/// 腿 = 腿口；NA0163 楼25/26 按口分槽）；gate_only = true 时只放
+/// /api/gate/* 不开 WS（闸门腿），false = 全路由（主口）
+async fn accept_loop(
+    listener: TcpListener,
+    registry: Arc<Registry>,
+    gate_key: u16,
+    gate_only: bool,
+) {
     loop {
         let (stream, peer) = match listener.accept().await {
             Ok(v) => v,
@@ -287,7 +326,7 @@ async fn main() {
         let _ = stream.set_nodelay(true);
         let reg = Arc::clone(&registry);
         tokio::spawn(async move {
-            if let Err(e) = dispatch(stream, reg).await {
+            if let Err(e) = dispatch(stream, reg, gate_key, gate_only).await {
                 // key 用错误种（稳定串），同款风暴归并；peer 端口进 line
                 na_server::logcap::throttled(&e, &format!("[na-server] 连接 {peer} 处理失败: {e}"));
             }
@@ -295,17 +334,23 @@ async fn main() {
     }
 }
 
-/// 连接分流：peek 头区 → WS 升级 or 平面 HTTP
-async fn dispatch(stream: TcpStream, registry: Arc<Registry>) -> Result<(), String> {
+/// 连接分流：peek 头区 → WS 升级 or 平面 HTTP（闸门腿不开 WS 面）
+async fn dispatch(
+    stream: TcpStream,
+    registry: Arc<Registry>,
+    gate_key: u16,
+    gate_only: bool,
+) -> Result<(), String> {
     let head = peek_head(&stream).await?;
-    if head
-        .lines()
-        .any(|l| l.eq_ignore_ascii_case("upgrade: websocket"))
+    if !gate_only
+        && head
+            .lines()
+            .any(|l| l.eq_ignore_ascii_case("upgrade: websocket"))
     {
         wsterm::handle(stream, registry).await;
         return Ok(());
     }
-    http_handle(stream, &head, registry).await
+    http_handle(stream, &head, registry, gate_key, gate_only).await
 }
 
 /// peek 到 \r\n\r\n 为止（不消费；上限 16KB / 10s）
@@ -386,11 +431,14 @@ where
         .map_err(|e| format!("fs 任务未完成: {e}"))
 }
 
-/// 平面 HTTP：读体 → 路由 → 响应
+/// 平面 HTTP：读体 → 路由 → 响应。gate_key = 闸门队列键（按口分槽，
+/// NA0163 楼25/26）；gate_only = true 时闸门腿只放 /api/gate/* 路由
 async fn http_handle(
     mut stream: TcpStream,
     head: &str,
     registry: Arc<Registry>,
+    gate_key: u16,
+    gate_only: bool,
 ) -> Result<(), String> {
     let (method, path, content_length) = httpd::parse_head(head)?;
     let head_len = head.len() + 4; // + \r\n\r\n
@@ -404,7 +452,27 @@ async fn http_handle(
     let body_bytes: Vec<u8> = raw[head_len..].to_vec();
     let body = String::from_utf8_lossy(&body_bytes).into_owned();
 
-    let resp = match httpd::route(&method, &path) {
+    let route = httpd::route(&method, &path);
+    // 闸门腿只放 /api/gate/*（NA0163 楼25/26）：腿是单设备专用入口，
+    // fs/report/health/agent 等面不从腿暴露（404 与主口 NotFound 同形）
+    if gate_only
+        && !matches!(
+            route,
+            httpd::Route::GatePush { .. }
+                | httpd::Route::GatePending { .. }
+                | httpd::Route::GateResultPut { .. }
+                | httpd::Route::GateResultGet { .. }
+        )
+    {
+        let resp = httpd::respond(404, "Not Found", "{\"ok\":false,\"error\":\"not found\"}");
+        stream
+            .write_all(&resp)
+            .await
+            .map_err(|e| format!("写响应失败: {e}"))?;
+        return Ok(());
+    }
+
+    let resp = match route {
         httpd::Route::Agent { upstream } => {
             match agent_proxy(&method, &upstream, body.as_bytes()).await {
                 Ok(raw) => raw,
@@ -425,7 +493,7 @@ async fn http_handle(
                     "{\"ok\":false,\"error\":\"payload >64KB\"}",
                 )
             } else {
-                gateq::push(&channel, body_bytes);
+                gateq::push(gate_key, &channel, body_bytes);
                 httpd::respond(200, "OK", "{\"ok\":true}")
             }
         }
@@ -434,11 +502,11 @@ async fn http_handle(
             // 运行时不许同步睡，tokio::time 异步睡不冻别的连接）
             if wait > 0 {
                 let deadline = tokio::time::Instant::now() + Duration::from_secs(wait);
-                while gateq::queue_empty() && tokio::time::Instant::now() < deadline {
+                while gateq::queue_empty(gate_key) && tokio::time::Instant::now() < deadline {
                     tokio::time::sleep(Duration::from_millis(100)).await;
                 }
             }
-            let items = gateq::drain();
+            let items = gateq::drain(gate_key);
             let text = gateq::pending_body(&items);
             httpd::respond_text(200, "OK", &text)
         }
@@ -456,11 +524,11 @@ async fn http_handle(
                     "{\"ok\":false,\"error\":\"result >32MB\"}",
                 )
             } else {
-                gateq::put_result(&name, body_bytes);
+                gateq::put_result(gate_key, &name, body_bytes);
                 httpd::respond(200, "OK", "{\"ok\":true}")
             }
         }
-        httpd::Route::GateResultGet { name } => match gateq::take_result(&name) {
+        httpd::Route::GateResultGet { name } => match gateq::take_result(gate_key, &name) {
             Some(bytes) => httpd::respond_bytes(200, "OK", &bytes),
             None => httpd::respond(404, "Not Found", "{\"ok\":false,\"error\":\"no result\"}"),
         },

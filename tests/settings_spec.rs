@@ -81,6 +81,20 @@ fn servers_reject_bad_shape() {
 }
 
 #[test]
+fn servers_gate_port_字段() {
+    // NA0163 楼25/26 多设备闸门：gatePort = 本机闸门腿口（端口即设备
+    // 命名空间——手机 poller 的 QUIC 桥流头指它）。缺省 9021＝主生产机
+    // （老配置零迁移）；显式 9023＝9 机判卷腿。
+    let v = parse_servers(SERVERS_SAMPLE).unwrap();
+    assert_eq!(
+        v[0].gate_port, 9021,
+        "缺 gatePort 必须缺省 9021（老配置零迁移）"
+    );
+    let v = parse_servers(r#"[{"id":"nine","gatePort":9023}]"#).unwrap();
+    assert_eq!(v[0].gate_port, 9023);
+}
+
+#[test]
 fn servers_find_by_id_or_name() {
     let v = parse_servers(SERVERS_SAMPLE).unwrap();
     assert_eq!(

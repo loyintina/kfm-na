@@ -39,6 +39,11 @@ pub const MARK_FAIL: &str = "NA_SERVER_FAIL";
 /// systemd unit 名（na 侧唯一引用点名；服务器上只此一份）
 pub const UNIT_NAME: &str = "kfm-na-server.service";
 
+/// 额外闸门腿（NA0163 楼25/26 多设备闸门：端口即设备命名空间——
+/// 9021 主口 = 主生产机（11 机）；9023 = 9 机判卷腿。加机 = 在此
+/// 追加口（逗号分隔），na-server 启动时按口分槽开回环监听）
+pub const NA_GATE_LEGS: &str = "9023";
+
 /// systemd unit 内容（A 档纯函数，**单一源：内容随 na 走**）。2026-09-21
 /// 用户拍板形态：**服务常驻在服务器，但它依然是 na 的触手**——na 发起
 /// 安装/更新/状态/控制，systemd 只负责「活着」（na 被杀、手机重启、整机
@@ -67,6 +72,7 @@ Environment=NA_BIND=127.0.0.1:{NA_SERVER_PORT}
 Environment=NA_IDLE_EXIT_SECS=0
 Environment=NA_QUIC_BIND=0.0.0.0:{QUIC_PORT}
 Environment=NA_QUIC_REV_BIND=0.0.0.0:{QUIC_REV_PORT}
+Environment=NA_GATE_LEGS={NA_GATE_LEGS}
 ExecStart={repo}/target/release/na-server
 Restart=always
 RestartSec=2
@@ -80,6 +86,7 @@ WantedBy=multi-user.target
         NA_SERVER_PORT = NA_SERVER_PORT,
         QUIC_PORT = crate::settings::QUIC_DEFAULT_PORT,
         QUIC_REV_PORT = crate::settings::QUIC_REVERSE_PORT,
+        NA_GATE_LEGS = NA_GATE_LEGS,
     )
 }
 
@@ -143,7 +150,7 @@ fi
 # ②降级（无 systemd：Termux 等）：先探活（活 = 接管，绝不重启别人的进程），
 # 再自持 spawn + 30 分钟 idle 自退
 if curl -s -m 2 "$H" >/dev/null 2>&1; then echo {MARK_ALIVE}; echo "mode=external"; exit 0; fi
-setsid nohup env NA_BIND=127.0.0.1:{NA_SERVER_PORT} NA_IDLE_EXIT_SECS=1800 NA_QUIC_REV_BIND=0.0.0.0:{QUIC_REV_PORT} ./target/release/na-server >/tmp/na-server.log 2>&1 </dev/null &
+setsid nohup env NA_BIND=127.0.0.1:{NA_SERVER_PORT} NA_IDLE_EXIT_SECS=1800 NA_QUIC_REV_BIND=0.0.0.0:{QUIC_REV_PORT} NA_GATE_LEGS={NA_GATE_LEGS} ./target/release/na-server >/tmp/na-server.log 2>&1 </dev/null &
 sleep 1
 if curl -s -m 2 "$H" >/dev/null 2>&1; then echo {MARK_SPAWNED}; echo "mode=spawn"; else echo {MARK_FAIL}; exit 1; fi
 "#,
@@ -154,6 +161,7 @@ if curl -s -m 2 "$H" >/dev/null 2>&1; then echo {MARK_SPAWNED}; echo "mode=spawn
         MARK_FAIL = MARK_FAIL,
         NA_SERVER_PORT = NA_SERVER_PORT,
         QUIC_REV_PORT = crate::settings::QUIC_REVERSE_PORT,
+        NA_GATE_LEGS = NA_GATE_LEGS,
         MARK_SYSTEMD = MARK_SYSTEMD,
         MARK_SPAWNED = MARK_SPAWNED,
     )

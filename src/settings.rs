@@ -110,6 +110,10 @@ pub struct ServerEntry {
     /// QUIC 隧道腿（设计 docs/active/quic隧道.md；缺省关——§七问题 1
     /// 公网 UDP 口裁决前只代码就位）
     pub quic: QuicFields,
+    /// 闸门腿口（servers.json "gatePort"，缺省 9021 = 主生产机 na-server
+    /// 主口；NA0163 楼25/26 多设备闸门：端口即设备命名空间——9 机判卷腿
+    /// 9023，加机加口；na-server 侧对应 NA_GATE_LEGS）
+    pub gate_port: u16,
 }
 
 /// QUIC 腿服务器 UDP 口（单一源——na-server NA_QUIC_BIND 部署对齐它）。
@@ -229,6 +233,10 @@ pub fn parse_servers(json: &str) -> Result<Vec<ServerEntry>, String> {
             hotkey: item.get("hotkey").and_then(parse_hotkey_value),
             backend: Backend::parse(item.get("backend")),
             quic,
+            gate_port: item
+                .get("gatePort")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(crate::tunnel::NA_SERVER_PORT as u64) as u16,
         });
     }
     Ok(out)
