@@ -38,6 +38,8 @@
 #   BAR_NEW_REGISTRY=路径  替代 bar-registry.jsonl（投影回写目标）
 #   BAR_NEW_NO_LETTER=1    跳过开信（只领号+登记；信箱扫描仍执行）
 #   BAR_NEW_MAILBOX=路径   替代信箱目录（扫描源/名册/new 指向它）
+#   ※ LEDGER/REGISTRY/MAILBOX 三件全设或全不设——部分设置 = 半隔离拒跑
+#     （0135 楼9②：漏设 REGISTRY，假号 1001 写进真 registry 实案）
 set -euo pipefail
 
 FUNC="" NAME="" TITLE=""
@@ -54,6 +56,18 @@ done
 case "$TITLE" in *[\"\\]*) echo "主题禁含双引号/反斜杠" >&2; exit 2 ;; esac
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# 夹具隔离完整性闸（0135 楼9② 白露实撞：只设 BAR_NEW_LEDGER 漏设
+# BAR_NEW_REGISTRY → 假号 1001 写进真 registry）——三个重定向测试口
+# 要么全设要么全不设，部分设置 = 半隔离 = 拒跑
+_fx=0
+for _v in BAR_NEW_LEDGER BAR_NEW_REGISTRY BAR_NEW_MAILBOX; do
+    [ -n "${!_v+x}" ] && _fx=$((_fx+1))
+done
+if [ "$_fx" -ne 0 ] && [ "$_fx" -ne 3 ]; then
+    echo "夹具隔离不完整：BAR_NEW_LEDGER/REGISTRY/MAILBOX 须全设或全不设（当前设了 $_fx/3）——拒跑（0135 楼9 假号 1001 实案）" >&2
+    exit 2
+fi
+unset _fx _v
 REG="${BAR_NEW_REGISTRY:-$ROOT/docs/ledger/bar-registry.jsonl}"
 LEDGER="${BAR_NEW_LEDGER:-$HOME/90-信箱/20-契约与向量/bar-号位登记.jsonl}"
 LOCK="$LEDGER.lock"
@@ -202,7 +216,7 @@ TS=$(date '+%Y-%m-%d %H:%M %z')
 # 字段与 registry 同名 + src（MAIN0135 楼4 白露回填簿同款 schema）；
 # letter 存全文件名（与回填行一致），NO_LETTER 夹具口 src=领号、letter 空
 SRC=开信; [ -n "$LETTER" ] || SRC=领号
-printf '{"bar": %d, "title": "%s", "claimant_func": "%s", "claimant": "%s", "letter": "%s", "ts": "%s", "src": "%s"}\n' \
+printf '{"bar": %d, "title": "%s", "claimant_func": "%s", "claimant": "%s", "letter": "%s", "ts": "%s", "src": "%s", "state": "有效"}\n' \
     "$NEXT" "$TITLE" "$FUNC" "$NAME" "${file:-}" "$TS" "$SRC" >> "$LEDGER"
 printf '{"bar": %d, "title": "%s", "claimant_func": "%s", "claimant": "%s", "letter": "%s", "ts": "%s"}\n' \
     "$NEXT" "$TITLE" "$FUNC" "$NAME" "$LETTER" "$TS" >> "$REG"
