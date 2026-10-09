@@ -172,3 +172,10 @@ cargo build || { echo "❌ 构建不过"; exit 1; }
 cargo check --target aarch64-linux-android --workspace || { echo "❌ android 目标 check 不过"; exit 1; }
 
 echo "=== [chain] ✅ 全部通过 ==="
+
+# 空间配额提示（MAIN0139 配额制落地，MAIN0140 白露出词照抄）——
+# 只看不拦：非步骤非闸，「13 步」口径不变。三约束：|| true（set -e 下
+# 不拦提交）／--dry-run（不塞话）／--auto（按 cwd 认人，全线共用不错判，
+# 无关目录静默跳过——宁可漏查，不许误判）。
+echo "=== [chain 提示] 空间配额（只看不拦，MAIN0139） ==="
+node /root/90-信箱/30-工具/check-空间配额.mjs --auto --dry-run 2>&1 | tail -4 || true
