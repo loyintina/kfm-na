@@ -10,10 +10,10 @@
 |---|---|---|---|---|
 | `src/ai_chat.rs` | 11 | 10 | 1 | generation |
 | `src/ai_presence.rs` | 37 | 37 | 0 | — |
-| `src/bootstrap.rs` | 5 | 3 | 2 | ensure_pkg_tool first_boot_install |
+| `src/bootstrap.rs` | 6 | 4 | 2 | ensure_pkg_tool first_boot_install |
 | `src/brain.rs` | 14 | 14 | 0 | — |
 | `src/brain_ep.rs` | 4 | 4 | 0 | — |
-| `src/catchup.rs` | 14 | 14 | 0 | — |
+| `src/catchup.rs` | 15 | 15 | 0 | — |
 | `src/conn.rs` | 4 | 2 | 2 | spawn_smoke ws_spawner |
 | `src/crash.rs` | 9 | 8 | 1 | install_signal_hook |
 | `src/ctrl_feed.rs` | 8 | 8 | 0 | — |
@@ -33,8 +33,8 @@
 | `src/keybar.rs` | 20 | 16 | 4 | COLS MOD_ALT install_bridge_mods bridge_mods |
 | `src/keymap.rs` | 2 | 2 | 0 | — |
 | `src/local_pty.rs` | 7 | 6 | 1 | android_prefix |
-| `src/mail_feed.rs` | 18 | 16 | 2 | book_snap ensure_summaries |
-| `src/na_server_sup.rs` | 21 | 17 | 4 | HEALTH_URL EXEC_TIMEOUT_SECS RECHECK_SECS TUNNEL_WAIT_SECS |
+| `src/mail_feed.rs` | 19 | 17 | 2 | book_snap ensure_summaries |
+| `src/na_server_sup.rs` | 22 | 18 | 4 | HEALTH_URL EXEC_TIMEOUT_SECS RECHECK_SECS TUNNEL_WAIT_SECS |
 | `src/offline_keys.rs` | 10 | 10 | 0 | — |
 | `src/plugins/ai_presence.rs` | 2 | 2 | 0 | — |
 | `src/plugins/conn_provider_local.rs` | 3 | 3 | 0 | — |
@@ -55,6 +55,7 @@
 | `src/session_router.rs` | 11 | 11 | 0 | — |
 | `src/settings.rs` | 10 | 8 | 2 | QUIC_DEFAULT_PORT QUIC_REVERSE_PORT |
 | `src/singleton.rs` | 7 | 4 | 3 | LOCK_PATH lock_exclusive try_acquire |
+| `src/sshd_keeper.rs` | 2 | 2 | 0 | — |
 | `src/svc_health.rs` | 12 | 9 | 3 | HIST_PATH set_visible sys_snap |
 | `src/sys_hist.rs` | 39 | 34 | 5 | BAR_W PLACEHOLDER_PCT hist_idx restore HIST_FORMAT |
 | `src/termview.rs` | 174 | 166 | 8 | AI_THINK_COLLAPSED FONT_CANDIDATES CJK_FONT_CANDIDATES load_cjk_font font_probe dump_all_active MAG_HALF_COLS MAG_HALF_ROWS |
@@ -70,7 +71,7 @@
 | `src/ui/conn_card.rs` | 6 | 6 | 0 | — |
 | `src/ui/cursor.rs` | 9 | 9 | 0 | — |
 | `src/ui/demo_icon.rs` | 6 | 6 | 0 | — |
-| `src/ui/demo_page.rs` | 29 | 26 | 3 | HEAD_FRAME_T QUOTE_BAR_W LIST_MARK_PX |
+| `src/ui/demo_page.rs` | 29 | 27 | 2 | HEAD_FRAME_T LIST_MARK_PX |
 | `src/ui/down_card.rs` | 10 | 10 | 0 | — |
 | `src/ui/dual_pool.rs` | 19 | 19 | 0 | — |
 | `src/ui/filetree.rs` | 81 | 73 | 8 | SHIFT_CLAMP_CSS TRI_GAP_PX CURSOR_NAME_INSET CURSOR_BAR_W CURSOR_HAIR_W row_center register_filetree filetree_handle |
@@ -82,7 +83,7 @@
 | `src/ui/keybar.rs` | 1 | 1 | 0 | — |
 | `src/ui/link_card.rs` | 14 | 11 | 3 | set_lay_lines lay_lines_now card_h_now |
 | `src/ui/mail_card.rs` | 5 | 4 | 1 | N_ENTRIES |
-| `src/ui/mail_page.rs` | 48 | 48 | 0 | — |
+| `src/ui/mail_page.rs` | 49 | 49 | 0 | — |
 | `src/ui/md_layout.rs` | 5 | 5 | 0 | — |
 | `src/ui/md_parse.rs` | 2 | 2 | 0 | — |
 | `src/ui/modal.rs` | 32 | 31 | 1 | VEIL_DIM_ARGB |
