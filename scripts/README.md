@@ -19,14 +19,16 @@
 - `check/` — chain 调用的单项检查（提交纪律闸门、stats 咬合闸、
   mailbox.sh 信箱执法等）。
 - `bar-new.sh` — **BAR 号唯一领取口**（2026-09-29 用户拍板，治三线
-  grep 空号的 TOCTOU 双号竞态；BAR-189 按 0055 裁决甲案扶正：
-  领号唯一源 = **信箱全量信件 H1**（含归档，跨线即时可见），
-  树内 bugs.md + registry 两账同扫取 max+1；信箱不可读拒领、
-  名册预检提到领号前）：flock 原子四步——领号 → 登记（登记即占有）→
+  grep 空号的 TOCTOU 双号竞态；BAR-241 按 MAIN0135 裁决收口：
+  领号唯一源 = **号位登记簿 ∪ 信箱全量信件 H1**（登记簿 =
+  90-信箱/20-契约与向量/bar-号位登记.jsonl，权威、跨树即时可见；
+  H1 兜存量含归档；树内 bugs.md + registry 降投影不作号源）；
+  登记簿或信箱不可读拒领、名册预检提到领号前）：flock 原子四步——
+  领号 → 登记（登记即占有）→
   开 BAR 追踪信（mailbox-cli，白话结论当场填实不挡别线 chain）→ 回写
-  信号 + commit 信箱小仓。用法 `scripts/bar-new.sh --func 开发部
+  信号 + commit 信箱小仓（信+登记簿+投影一笔）。用法 `scripts/bar-new.sh --func 开发部
   --name 观澜 "主题"`；新立 BAR 只许走它，禁手 grep 挑号。
-  考题 `check/test-bar-new.sh`（六夹具，chain 内）。
+  考题 `check/test-bar-new.sh`（十七夹具，chain 内）。
 
 ## 隧道韧性(跨隧道动作统一入口,2026-09-23 改版)
 

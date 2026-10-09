@@ -6,29 +6,36 @@
 # BAR-189（0055 裁决甲案+三补丁）：领号唯一源扶正**信箱**——树内两账
 # （bugs.md/registry）在分支流下树-local，登记到落 master 隔一个工单周期
 # （185 双号实案 0053）；信箱开信即 commit 小仓 = 唯一跨线即时可见账。
-# 领号扫描 = 三账取 max+1：bugs.md + registry + 信箱全量信件 H1 的
-# BAR-NNN（含 archive-v1/ 等归档目录——补丁①：老号归档 max 不许回退；
-# 口径只认 H1 首行不认文件名——0054 闻灯：让号改号只改 H1）。
-# BAR-192：三账口径再收窄到账位——bugs.md 只认账行首格 `| BAR-NNN |`、
-# registry 只认 "bar":NNN 字段、信箱 H1 只认每行首个 BAR-NNN（prose/正文
-# 援引的号不许毒 max；BAR-189 账本行正文里的夹具陷阱号 BAR-999 曾毒出
-# 实领 1000 跳号）。
-# 补丁②：信箱不可读 = 拒领，不许静默退回树内旧账。补丁③：名册预检提到
-# 领号前（§六 名字登记前移后开信 fail-closed，预检杜绝「号领了信生不出」）。
+# BAR-241（MAIN0135 裁决，237 撞号定罪）：号源再收口为**号位登记簿 ∪
+# 信箱全量 H1**——登记簿 = 90-信箱/20-契约与向量/bar-号位登记.jsonl
+# （设施仓内、跨树即时可见、登记即占有）；「改号/补登不开信」的占号动作
+# 在 H1 里不可见（237 实案：只在 master 树内两账登记），登记簿是唯一能
+# 兜住这类动作的账。树内两账（bugs.md/registry）降为**投影**——继续维护、
+# 继续被 chain 检查，但不再作号源。同族前案：185 双号（0053）/202 双号
+# （符号链接扫描得 0）/237-238 撞号（MAIN0135 §一）；另 registry 扫描曾
+# 恒空（grep 不容忍冒号后空格，而存量被一次手工合并全量重写为带空格，
+# 0135 楼1 实证）——本版扫描口径带空格容忍，写入格式被考题钉死。
+# 领号口径再收窄到账位（BAR-192）：登记簿只认 "bar":N 字段（冒号后空格
+# 容忍）、信箱 H1 只认每行首行首个 BAR-NNN——prose/正文援引的号不许毒
+# max（BAR-999 陷阱号曾毒出实领 1000 跳号）。
+# fail-closed（0055 补丁② + MAIN0135 §三.5）：登记簿或信箱任一不可读 =
+# **拒领**，不许退回树内旧账。名册预检提到领号前（§六 名字登记前移后
+# 开信 fail-closed，预检杜绝「号领了信生不出」）。
 #
-# 一次原子完成四件事（flock 包裹，同刻只许一个领号者）：
-#   1. 领号：max(bugs.md, bar-registry.jsonl, 信箱全量 H1) + 1
-#   2. 登记：docs/ledger/bar-registry.jsonl 追加一行（登记即占有）
+# 一次原子完成四件事（flock 包裹——锁落登记簿旁，跨树同一把；同刻只许
+# 一个领号者）：
+#   1. 领号：max(号位登记簿, 信箱全量 H1) + 1
+#   2. 登记：登记簿追加一行（登记即占有）+ 树内 registry 投影同步追加
 #   3. 开追踪信：mailbox-cli new（致全体/通报/待落地通报）+ 当场填白话结论
 #      与立案节（不留占位——chain 第 4 步信箱执法常绿，不挡别线的闸）
-#   4. 回写：信号（NNNN）补入登记行；信箱小仓自动 commit
+#   4. 回写：信号（NNNN）入登记行；信箱小仓自动 commit（信+登记簿+投影）
 #
 # 用法: scripts/bar-new.sh --func 开发部 --name 观澜 "主题一句话"
 #   主题禁含双引号与反斜杠（jsonl 转义从简）。
 #
 # 夹具测试口（test-bar-new.sh 用，正常领号别设）：
-#   BAR_NEW_BUGS=路径      替代 bugs.md 扫号源
-#   BAR_NEW_REGISTRY=路径  替代 bar-registry.jsonl（锁取同目尾加 .lock）
+#   BAR_NEW_LEDGER=路径    替代号位登记簿（锁取同目尾加 .lock）
+#   BAR_NEW_REGISTRY=路径  替代 bar-registry.jsonl（投影回写目标）
 #   BAR_NEW_NO_LETTER=1    跳过开信（只领号+登记；信箱扫描仍执行）
 #   BAR_NEW_MAILBOX=路径   替代信箱目录（扫描源/名册/new 指向它）
 set -euo pipefail
@@ -47,9 +54,9 @@ done
 case "$TITLE" in *[\"\\]*) echo "主题禁含双引号/反斜杠" >&2; exit 2 ;; esac
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BUGS="${BAR_NEW_BUGS:-$ROOT/docs/ledger/bugs.md}"
 REG="${BAR_NEW_REGISTRY:-$ROOT/docs/ledger/bar-registry.jsonl}"
-LOCK="$REG.lock"
+LEDGER="${BAR_NEW_LEDGER:-$HOME/90-信箱/20-契约与向量/bar-号位登记.jsonl}"
+LOCK="$LEDGER.lock"
 CLI="$ROOT/target/debug/mailbox-cli"
 # 2026-10-06（观澜 0126 9楼）：清主仓 target 会连坐领号器前置件——
 # 缺件自愈：cargo build -p mailbox-cli（39s 级，一次性），别让全信箱
@@ -91,25 +98,20 @@ exec 9>"$LOCK"
 flock 9
 
 MAX=0
-# 树内两账分账各扫，口径收窄到「账位」不认 prose（BAR-192：bugs.md 行内
-# 正文引号（夹具描述里的 BAR-999 陷阱号）曾把 max 毒到 999 → 实领 1000 跳号）：
-#   bugs.md 只认账行首格 `| BAR-NNN |`；registry 只认 jsonl 的 "bar":NNN 字段。
-# 零命中是合法态（首领/纯一方有号），grep 空果不许触发 pipefail
-if [ -f "$BUGS" ]; then
-    n=$(grep -oE '^\| BAR-[0-9]+' "$BUGS" | grep -oE '[0-9]+' | sort -n | tail -1 || true)
-    if [ -n "$n" ] && [ "$n" -gt "$MAX" ]; then MAX=$n; fi
-fi
-if [ -f "$REG" ]; then
-    n=$(grep -oE '"bar":[0-9]+' "$REG" | grep -oE '[0-9]+' | sort -n | tail -1 || true)
-    if [ -n "$n" ] && [ "$n" -gt "$MAX" ]; then MAX=$n; fi
-fi
+# 号源第一账 = 号位登记簿（BAR-241，MAIN0135 §三：权威账）。fail-closed：
+# 不可读 = 拒领（白露回填到位前本工具全线拒领，宁停不错发）。
+# 口径只认 jsonl 的 "bar":N 字段、冒号后空格容忍（0135 楼1 实证：存量曾
+# 被手工合并全量重写为带空格格式，不容忍 = 整账恒空）；prose 不毒 max。
+[ -r "$LEDGER" ] || {
+    echo "号位登记簿不可读：$LEDGER——拒领（MAIN0135 §三.5，存量回填未到位/路径错）" >&2; exit 1; }
+n=$(grep -oE '"bar": *[0-9]+' "$LEDGER" | grep -oE '[0-9]+' | sort -n | tail -1 || true)
+if [ -n "$n" ] && [ "$n" -gt "$MAX" ]; then MAX=$n; fi
 
-# 第三账 = 领号唯一源扶正（0055 甲案）：信箱全量信件 **H1** 的 BAR-NNN。
-# 树内两账（bugs.md/registry）在分支流下是树-local——登记到落 master 隔一个
-# 工单周期，跨树领号互不可见（185 双号实案 0053）；信箱开信即 commit 小仓，
-# 是唯一跨线即时可见的账。口径 = H1 首行（闻灯 0054：文件名出生冻结，
-# 让号改号只改 H1——扫文件名会复活旧号）。含归档目录（0055 补丁①：
-# 老号信归档后 max 不许回退，否则等于把抽过的号再发一次）。
+# 号源第二账 = 信箱全量信件 **H1** 的 BAR-NNN（0055 甲案扶正，兜存量——
+# 登记簿回填前的老号多只有 H1 在册）。信箱开信即 commit 小仓，跨线即时
+# 可见。口径 = H1 首行（闻灯 0054：文件名出生冻结，让号改号只改 H1——
+# 扫文件名会复活旧号）。含归档目录（0055 补丁①：老号信归档后 max 不许
+# 回退，否则等于把抽过的号再发一次）。
 # 补丁②：信箱不可读 = 拒领，不许静默退回树内旧账（那正是用了过期账的病灶）。
 # 扫描无条件执行（NO_LETTER 只跳过开信，不跳过领号账——夹具请配 BAR_NEW_MAILBOX）。
 [ -d "$MAILBOX" ] || {
@@ -127,15 +129,24 @@ done < <(find "$MAILBOX" -name '*.md' -not -path '*/.git/*' -exec head -q -n 1 {
     | awk 'match($0, /BAR-[0-9]+/) { print substr($0, RSTART+4, RLENGTH-4) }' || true)
 NEXT=$((MAX + 1))
 
-# 关于段（2026-10-08 用户拍板：**题目自己填、不许机械截断**）——调用方用 BAR_ABOUT 传一句语义短题
-# （≤28 字；禁 连接字 号/致/复/的/及/等；禁点号）。缺则拒绝开工（宁可当场问一句，不要落一个残句名）。
+# 关于段（2026-10-08 用户拍板：**题目自己填、不许机械截断**）——调用方用 BAR_ABOUT 传
+# 一句**纯汉字短题**（2–12 字；禁 连接字 号/致/复/的/及/等；禁点号；**禁 ASCII——
+# 号不进 about**（MAIN0135 楼6 白露撤回楼3：JS gen 关于段守纯汉字旧约，BAR 号必含
+# ASCII 必卡全册 gen，清和 0169 实撞）；号只在 H1 与登记簿，文件名结构性不带号 =
+# 文件名与 H1 号分叉（0169 文件名 239/H1 240 实案）不可能再发生）。
+# 缺则拒绝开工（宁可当场问一句，不要落一个残句名）；含非汉字本工具当场拒，
+# 别等 gen 才炸（清和 0135 楼5 洞②的提前闸）。
 ABOUT="${BAR_ABOUT:-}"
 if [ -z "$ABOUT" ]; then
-    echo "❌ 缺关于段：跑 bar-new 时带上 BAR_ABOUT=\"BAR-<新号><一句短题>\"（≤28 字、禁 号致的及等、禁点）" >&2
-    echo "   例：BAR_ABOUT=\"BAR-237信箱工具补名收口\" bash scripts/bar-new.sh 开发部 闻灯 \"信箱工具补名\"" >&2
+    echo "❌ 缺关于段：跑 bar-new 时带上 BAR_ABOUT=\"<纯汉字短题>\"（2–12 字、禁 号致的及等、禁点、禁 ASCII——号不进 about）" >&2
+    echo "   例：BAR_ABOUT=\"领号器号源收口\" bash scripts/bar-new.sh --func 开发部 --name 闻灯 \"领号器号源\"" >&2
     exit 1
 fi
-ABOUT_OPT="--about \"$ABOUT\""
+printf '%s' "$ABOUT" | python3 -c 'import sys,re; sys.exit(0 if re.fullmatch(r"[\u4e00-\u9fff]{2,12}", sys.stdin.read()) else 1)' || {
+    echo "❌ 关于段只许 2–12 个纯汉字（号不进 about，MAIN0135 楼6）：$ABOUT" >&2; exit 1; }
+# 直写 --about "$ABOUT"（0135 楼5 洞①急件：ABOUT_OPT 中间变量展开不做二次
+# 引号解析，字面双引号进 about 值 → 必被 mailbox-cli 字符校验拒，fresh
+# master 领号全撞；清和两格 diff 收编）
 
 LETTER=""
 if [ "${BAR_NEW_NO_LETTER:-}" != "1" ]; then
@@ -146,7 +157,7 @@ if [ "${BAR_NEW_NO_LETTER:-}" != "1" ]; then
         --to-all --type 通报 --title "BAR-$NEXT $TITLE" \
         --kind 通报 --expect "承办线（$FUNC$NAME）以楼层追加进展：$TITLE" \
         --criteria "BAR-$NEXT 用户终验结案（信头状态翻 已验证）" \
-        --status 待落地通报 ${ABOUT_OPT})
+        --status 待落地通报 --about "$ABOUT")
     file=$(printf '%s' "$out" | sed -n 's/.*已生成 \([^ ]*\.md\).*/\1/p')
     [ -n "$file" ] || { echo "mailbox-cli new 输出解析失败: $out" >&2; exit 1; }
     # 2026-09-29 评审修订（白露）：不写本册自指码——契约 §二「分拣码…本册信一律不写，
@@ -184,7 +195,32 @@ if [ "${BAR_NEW_NO_LETTER:-}" != "1" ]; then
 fi
 
 TS=$(date '+%Y-%m-%d %H:%M %z')
-printf '{"bar":%d,"title":"%s","claimant_func":"%s","claimant":"%s","letter":"%s","ts":"%s"}\n' \
+# 登记即占有：登记簿（权威账，跨树可见）与树内 registry 投影同步落。
+# 两账写入格式被 test-bar-new.sh 钉死（0135 楼2：读侧修得再对，写侧
+# 换格式而考题不红 = 白修）；registry 带空格对齐存量书写惯例（592317b
+# 手工合并重写后全库通行），扫描口径两格式都容忍。
+# 字段与 registry 同名 + src（MAIN0135 楼4 白露回填簿同款 schema）；
+# letter 存全文件名（与回填行一致），NO_LETTER 夹具口 src=领号、letter 空
+SRC=开信; [ -n "$LETTER" ] || SRC=领号
+printf '{"bar": %d, "title": "%s", "claimant_func": "%s", "claimant": "%s", "letter": "%s", "ts": "%s", "src": "%s"}\n' \
+    "$NEXT" "$TITLE" "$FUNC" "$NAME" "${file:-}" "$TS" "$SRC" >> "$LEDGER"
+printf '{"bar": %d, "title": "%s", "claimant_func": "%s", "claimant": "%s", "letter": "%s", "ts": "%s"}\n' \
     "$NEXT" "$TITLE" "$FUNC" "$NAME" "$LETTER" "$TS" >> "$REG"
+
+# 登记簿提交（册探测逻辑同上方 letters commit 块的 BAR-226 rev-parse 注释）：
+# 信件本体已由上方 letters commit 落盘，此处只补权威账——权威账不落提交 =
+# 跨树可见性空话（237 撞号正因为占号动作没落跨树账）。署名归领号人
+# （信箱提交门④拒 kfm-na 代署——0167 实证），邮箱取名册、缺则 <名>@kfm.dev。
+if [ "$MAILBOX" = "$DEFAULT_MAILBOX" ] && git -C "$MAILBOX" rev-parse --git-dir >/dev/null 2>&1; then
+    EMAIL=$(python3 -c '
+import json,sys
+try: print(json.load(open(sys.argv[1]))["names"][sys.argv[2]].get("email","") or "")
+except Exception: print("")' "$ROSTER" "$NAME" 2>/dev/null)
+    [ -n "$EMAIL" ] || EMAIL="$NAME@kfm.dev"
+    (cd "$MAILBOX" && git add "$LEDGER" \
+        && GIT_AUTHOR_NAME="$NAME" GIT_AUTHOR_EMAIL="$EMAIL" \
+           GIT_COMMITTER_NAME="$NAME" GIT_COMMITTER_EMAIL="$EMAIL" \
+           git commit -q -m "chore(号位): BAR-$NEXT 登记（$FUNC$NAME：$TITLE）" </dev/null)
+fi
 
 echo "BAR-$NEXT 已领（$FUNC$NAME：$TITLE）${LETTER:+；追踪信 $LETTER}"
