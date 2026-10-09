@@ -4,6 +4,7 @@
 //! 行为基准 = kfmv4/scripts/check/{new-letter,check-letter-token,gen-agent-inbox}.mjs，
 //! 格式面逐字节兼容（fp/token 行/台账行/索引行/README 两区段）。
 
+pub mod floor;
 pub mod header;
 pub mod json;
 pub mod name;

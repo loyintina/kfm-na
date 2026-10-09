@@ -26,7 +26,7 @@ printf '{"names":{"观澜":{"functions":["开发部"]}}}\n' > "$T/mb/roster.json
 run() { # run <额外env...> -- 跑领号，输出落 $T/out；registry 每轮重置防累积
     printf '{"bar":184,"title":"参照 BAR-997 的修复"}\n' > "$T/reg.jsonl"
     env BAR_NEW_BUGS="$T/bugs.md" BAR_NEW_REGISTRY="$T/reg.jsonl" \
-        BAR_NEW_MAILBOX="$T/mb" BAR_NEW_NO_LETTER=1 "$@" \
+        BAR_NEW_MAILBOX="$T/mb" BAR_NEW_NO_LETTER=1 BAR_ABOUT="BAR-900考题短题" "$@" \
         bash "$BARNEW" --func 开发部 --name 观澜 "夹具主题" > "$T/out" 2>&1
 }
 
@@ -36,7 +36,7 @@ run; chk "跨树可见(185复跑)" 0 $? "BAR-191 已领"
 
 # ②信箱不可读拒领：mailbox 指向不存在目录 → exit 1（不许退回树内旧账）
 env BAR_NEW_BUGS="$T/bugs.md" BAR_NEW_REGISTRY="$T/reg.jsonl" \
-    BAR_NEW_MAILBOX="$T/不存在" BAR_NEW_NO_LETTER=1 \
+    BAR_NEW_MAILBOX="$T/不存在" BAR_NEW_NO_LETTER=1 BAR_ABOUT="BAR-900考题短题" \
     bash "$BARNEW" --func 开发部 --name 观澜 "夹具主题" > "$T/out" 2>&1
 chk "信箱不可读拒领" 1 $? "拒领"
 
@@ -82,6 +82,28 @@ grep -q 'git -C "$MAILBOX" rev-parse --git-dir >/dev/null 2>&1' scripts/bar-new.
 grep '\[ "$MAILBOX" = "$DEFAULT_MAILBOX" \]' scripts/bar-new.sh | grep -q '\[ -d "$MAILBOX/\.git" \]' \
     && { echo "  ✗ BAR-226 字面.git探测回潮（册并入设施仓后恒假 = 静默丢数据）"; fail=$((fail+1)); } \
     || { echo "  ✓ BAR-226 字面.git探测不在闸行"; pass=$((pass+1)); }
+
+# ⑨自动提交走 letters commit（MAIN0123 §五 残留②）：裸 git -c user.name=kfm-na
+# 提交会被设施门④拒（作者≠信封作者），拒后暂存区滞留还挡全仓发楼（MAIN0113
+# 习性：暂存区有主即拒）。变异：退回裸 git commit 形态 → 负向咬红。
+grep -q 'LETTERS_BIN=' scripts/bar-new.sh \
+    && { echo "  ✓ 自动提交走letters"; pass=$((pass+1)); } \
+    || { echo "  ✗ 自动提交走letters（bar-new.sh 缺 LETTERS_BIN 兜底）"; fail=$((fail+1)); }
+grep -q 'user\.name=kfm-na' scripts/bar-new.sh \
+    && { echo "  ✗ 裸git署名回潮（撞门④滞留暂存区）"; fail=$((fail+1)); } \
+    || { echo "  ✓ 裸git署名不在"; pass=$((pass+1)); }
+
+# ⑩CLI 缺件自愈（0126 9楼观澜）：清主仓 target 连坐领号器前置件——
+# bar-new.sh 必须自带重建，不许停在「谁记得补建」。变异：摘自愈块 → 红。
+grep -q 'mailbox-cli 缺（清 target 后遗症）' scripts/bar-new.sh \
+    && { echo "  ✓ CLI缺件自愈在"; pass=$((pass+1)); } \
+    || { echo "  ✗ CLI缺件自愈缺（清 target 后领号全瘫）"; fail=$((fail+1)); }
+
+# ⑪--expect 带主语带事由（白露加急 2026-10-07）：看板事由列直读 expect
+# 字段——纯样板文（无承办者无事由）四封信一个脸。变异：退回样板 → 红。
+grep -q -- '--expect "承办线（\$FUNC\$NAME）以楼层追加进展：\$TITLE"' scripts/bar-new.sh \
+    && { echo "  ✓ expect带主语带事由"; pass=$((pass+1)); } \
+    || { echo "  ✗ expect退回纯样板（看板事由列污染回潮）"; fail=$((fail+1)); }
 
 echo "[test-bar-new] $pass 过 / $fail 红"
 [ "$fail" = 0 ]

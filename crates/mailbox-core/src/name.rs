@@ -213,9 +213,13 @@ pub fn parse_v21_name(file: &str) -> V21Parsed {
     }
     if let Some(subject) = &p.subject {
         let n = char_count(subject);
-        if !(2..=12).contains(&n) || !is_han_str(subject) {
+        // 2026-10-08 放宽（评审同步 check-letter-token）：收 BAR 号等 ASCII——汉字/字母/数字/连字符/下划线
+        let all_ok = subject.chars().all(|c| {
+            ('\u{4e00}'..='\u{9fff}').contains(&c) || c.is_alphanumeric() || c == '-' || c == '_'
+        });
+        if !(2..=28).contains(&n) || !all_ok {
             p.errs.push(format!(
-                "「关于」事由须为 2–12 个汉字（建议 4–8）：「{subject}」"
+                "「关于」事由须为 2–28 个字〔汉字/字母/数字/连字符/下划线〕，建议 4–12：「{subject}」"
             ));
         } else if has_connect_char(subject) || subject.contains("关于") {
             p.errs.push(format!(

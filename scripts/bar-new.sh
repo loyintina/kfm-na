@@ -51,6 +51,16 @@ BUGS="${BAR_NEW_BUGS:-$ROOT/docs/ledger/bugs.md}"
 REG="${BAR_NEW_REGISTRY:-$ROOT/docs/ledger/bar-registry.jsonl}"
 LOCK="$REG.lock"
 CLI="$ROOT/target/debug/mailbox-cli"
+# 2026-10-06（观澜 0126 9楼）：清主仓 target 会连坐领号器前置件——
+# 缺件自愈：cargo build -p mailbox-cli（39s 级，一次性），别让全信箱
+# 的领号停在「谁记得补建」上。
+[ -x "$CLI" ] || {
+    echo "[bar-new] mailbox-cli 缺（清 target 后遗症）——自动重建中"
+    (cd "$ROOT" && cargo build -p mailbox-cli) || {
+        echo "❌ mailbox-cli 重建失败——领号中止" >&2
+        exit 1
+    }
+}
 MAILBOX="${BAR_NEW_MAILBOX:-$HOME/.kfm/session/信箱}"
 DEFAULT_MAILBOX="$HOME/.kfm/session/信箱"
 # 符号链接解引用（202 双号实案 2026-09-30：生产信箱 = 上面那个路径
@@ -117,6 +127,16 @@ done < <(find "$MAILBOX" -name '*.md' -not -path '*/.git/*' -exec head -q -n 1 {
     | awk 'match($0, /BAR-[0-9]+/) { print substr($0, RSTART+4, RLENGTH-4) }' || true)
 NEXT=$((MAX + 1))
 
+# 关于段（2026-10-08 用户拍板：**题目自己填、不许机械截断**）——调用方用 BAR_ABOUT 传一句语义短题
+# （≤28 字；禁 连接字 号/致/复/的/及/等；禁点号）。缺则拒绝开工（宁可当场问一句，不要落一个残句名）。
+ABOUT="${BAR_ABOUT:-}"
+if [ -z "$ABOUT" ]; then
+    echo "❌ 缺关于段：跑 bar-new 时带上 BAR_ABOUT=\"BAR-<新号><一句短题>\"（≤28 字、禁 号致的及等、禁点）" >&2
+    echo "   例：BAR_ABOUT=\"BAR-237信箱工具补名收口\" bash scripts/bar-new.sh 开发部 闻灯 \"信箱工具补名\"" >&2
+    exit 1
+fi
+ABOUT_OPT="--about \"$ABOUT\""
+
 LETTER=""
 if [ "${BAR_NEW_NO_LETTER:-}" != "1" ]; then
     [ -x "$CLI" ] || { echo "缺 $CLI——先 cargo build -p mailbox-cli" >&2; exit 1; }
@@ -124,9 +144,9 @@ if [ "${BAR_NEW_NO_LETTER:-}" != "1" ]; then
     TODAY=$(date '+%Y-%m-%d')
     out=$("$CLI" new --mailbox "$MAILBOX" --from-func "$FUNC" --from-name "$NAME" \
         --to-all --type 通报 --title "BAR-$NEXT $TITLE" \
-        --kind 通报 --expect "承办线按 AGENTS.md「BAR 追踪信」条款同信追加进展" \
+        --kind 通报 --expect "承办线（$FUNC$NAME）以楼层追加进展：$TITLE" \
         --criteria "BAR-$NEXT 用户终验结案（信头状态翻 已验证）" \
-        --status 待落地通报)
+        --status 待落地通报 ${ABOUT_OPT})
     file=$(printf '%s' "$out" | sed -n 's/.*已生成 \([^ ]*\.md\).*/\1/p')
     [ -n "$file" ] || { echo "mailbox-cli new 输出解析失败: $out" >&2; exit 1; }
     # 2026-09-29 评审修订（白露）：不写本册自指码——契约 §二「分拣码…本册信一律不写，
@@ -148,9 +168,18 @@ if [ "${BAR_NEW_NO_LETTER:-}" != "1" ]; then
     # 找仓，独立册仓与设施仓子目录两形态都认；git add 的 pathspec 相对 cwd
     # （册目录）解析、commit 落所属仓，两形态行为一致。
     if [ "$MAILBOX" = "$DEFAULT_MAILBOX" ] && git -C "$MAILBOX" rev-parse --git-dir >/dev/null 2>&1; then
-        (cd "$MAILBOX" && git add "$file" README.md letters-index.jsonl letter-tokens.jsonl \
-            && git -c user.name=kfm-na -c user.email=na@kfm.local commit -q \
-               -m "feat(信箱): $LETTER BAR-$NEXT 追踪信开卷（$FUNC$NAME：$TITLE）" </dev/null)
+        # 2026-10-05（白露 MAIN0123 §五 残留②）：提交改走 letters commit——
+        # 裸 git 会被设施门③④拒（作者=kfm-na ≠ 信封作者；暂存区对表），拒后
+        # 滞留暂存区还挡全仓发楼（MAIN0113 习性）。letters commit 自带
+        # verify→gen→精确 pathspec→信封署名，失败即退不滞留。
+        LETTERS_BIN="${LETTERS_BIN:-$(dirname "$MAILBOX")/30-工具/letters}"
+        if [ -x "$LETTERS_BIN" ]; then
+            "$LETTERS_BIN" commit "$path" \
+                -m "feat(信箱): $LETTER BAR-$NEXT 追踪信开卷（$FUNC$NAME：$TITLE）" \
+                || echo "⚠ letters commit 失败——信在盘未提交，请手动 letters commit $file" >&2
+        else
+            echo "⚠ letters 不在 $LETTERS_BIN——信在盘未提交，请手动 letters commit $file" >&2
+        fi
     fi
 fi
 

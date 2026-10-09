@@ -10,16 +10,14 @@ set -euo pipefail
 
 source "$(dirname "$0")/lib/gate-lib.sh"
 
-gate "rm -f $NA_TMP/stats-res; touch $NA_TMP/stats-req" >/dev/null
+gate_touch stats-req   # BAR-233
 ok=""
 for _ in $(seq 1 30); do
+    out=$(gate_result stats-res 2>/dev/null) && { ok=1; break; }
     sleep 0.3
-    if gate "test -f $NA_TMP/stats-res"; then
-        ok=1; break
-    fi
 done
 if [ -z "$ok" ]; then
     echo "❌ 9 秒内没等到应答——值守线程活着吗?" >&2
     exit 1
 fi
-gate "cat $NA_TMP/stats-res"
+echo "$out"

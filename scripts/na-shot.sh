@@ -25,23 +25,27 @@ shoot() {
     # 帧（前台画帧时消费，观测真相）；静态屏无帧可消费 → 回退 shot.rgb
     # （值守 CPU 重画，画面没动过内容等价，后台也活）
     if [[ $PREFER_CPU == 1 ]]; then
-        gate "rm -f $NA_TMP/shot.rgb $NA_TMP/shot.dim; touch $NA_TMP/shot-req" >/dev/null
+        gate_touch shot-req   # BAR-233：HTTP 首选，老路兜底
     else
-        gate "rm -f $NA_TMP/shot.rgb $NA_TMP/shot.dim $NA_TMP/shot-gl.rgb $NA_TMP/shot-gl.dim; touch $NA_TMP/shot-req $NA_TMP/shot-gles-req" >/dev/null
+        gate_touch shot-req; gate_touch shot-gles-req   # BAR-233
     fi
-    local which=rgb ok=""
+    # BAR-233：结果经数据面取（na 写完即上传，gate_result 一次性取走，
+    # 内含 ssh 老路兜底）。GLES 优先（观测真相帧），超窗回退 CPU 帧。
+    local which=rgb ok="" dim
     if [[ $PREFER_CPU == 0 ]]; then
         for _ in $(seq 1 16); do
             sleep 0.5
-            if gate "test -f $NA_TMP/shot-gl.rgb -a -f $NA_TMP/shot-gl.dim"; then
+            if gate_result shot-gl.dim /tmp/na-shot.dim >/dev/null 2>&1 \
+                && gate_result shot-gl.rgb /tmp/na-shot.rgb >/dev/null 2>&1; then
                 which=gl; ok=1; break
             fi
         done
     fi
     if [ -z "$ok" ]; then
-        for _ in $(seq 1 30); do
+        for _ in $(seq 1 30 ); do
             sleep 0.5
-            if gate "test -f $NA_TMP/shot.rgb -a -f $NA_TMP/shot.dim"; then
+            if gate_result shot.dim /tmp/na-shot.dim >/dev/null 2>&1 \
+                && gate_result shot.rgb /tmp/na-shot.rgb >/dev/null 2>&1; then
                 ok=1; break
             fi
         done
@@ -52,14 +56,7 @@ shoot() {
             && echo "   触发文件还在:na 没有在画帧。应用在前台吗?把它切到前台再拍。"
         return 1
     fi
-    local dim rgbpath dimpath
-    if [ "$which" = gl ]; then
-        rgbpath=$NA_TMP/shot-gl.rgb; dimpath=$NA_TMP/shot-gl.dim
-    else
-        rgbpath=$NA_TMP/shot.rgb; dimpath=$NA_TMP/shot.dim
-    fi
-    dim=$(gate "cat $dimpath")
-    gate_pull "$rgbpath" /tmp/na-shot.rgb
+    dim=$(cat /tmp/na-shot.dim)
     "$PY" - $dim <<EOF
 import sys
 from PIL import Image

@@ -37,13 +37,139 @@ pub const PATH: &str = "/kfmv4/api/na-report";
 static SENDER: Mutex<Option<Sender<String>>> = Mutex::new(None);
 
 /// 设备/实例标识（BAR-134）：field-reports.log 是多设备混流（手机 + redroid
-/// 同写一个文件——BAR-126 误判「多实例抢口」的根因），每行末尾挂 [arch/pid]：
-/// arch 分设备族，pid 分进程实例（同设备多实例混流时一眼可辨）。放 msg 末尾
-/// = 落盘行尾，不破坏既有按前缀 grep 的脚本（scripts/cases/* 已清点无行尾锚）。
+/// 同写一个文件——BAR-126 误判「多实例抢口」的根因），每行末尾挂 [arch/pid]。
+/// **BAR-235 加设备维**（2026-10-08）：BAR-134 的 [arch/pid] 只分「设备族 ×
+/// 进程」，**两台同为 aarch64 的真机混流后与「一台机两个实例」完全同形**——
+/// 2026-10-07 乙案判卷据此把 Neo11（新核）+ neo9（卡萝实验场旧核）误读成
+/// 「单机双实例」，白露 12 楼由用户口述才纠正。故形态扩为 **[arch/dev/pid]**：
+/// dev = 机型（`ro.product.model`，见下），退化链兜底，恒非空。放 msg 末尾
+/// = 落盘行尾。**口径变更**：旧 `\[arch/pid\]` 精确尾锚 grep 改按
+/// `\[arch/[^]]*/pid\]` 或直接按 pid 段匹配（仓内 scripts/ 已清点无该锚）。
 static INSTANCE_TAG: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
+/// 设备位缓存（BAR-235）：整进程只解析一次（文件 IO 不在上报路径上重复做）
+static DEV_TAG: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// 设备位覆盖口（判卷/取证用：`NA_DEVICE_TAG=Neo11` 可钉死机型名，免猜）
+const DEV_OVERRIDE_ENV: &str = "NA_DEVICE_TAG";
+
+/// 退化链第三档的短 id 落点（机型读不到的老/怪 ROM 也要两台机分得开）
+const DEV_ID_PATH: &str = "/data/data/dev.kfm.na/files/device-tag";
+
+/// 机型属性文件候选（Android 9+ 把 ro.product.* 拆进 vendor/odm；
+/// `/system/build.prop` 只留一部分——四处都试，先中先用）
+const PROP_FILES: [&str; 4] = [
+    "/system/build.prop",
+    "/vendor/build.prop",
+    "/odm/etc/build.prop",
+    "/system/etc/prop.default",
+];
+
+/// 从 build.prop 文本里取机型（纯函数，A 档可判）：只认指定键；值去空白、
+/// **剜掉行内注释**（`ro.product.model=Neo11 # vivo` → `Neo11`——整行 `#`
+/// 注释天然过不了键名比对，真正要防的是行内尾注被当成机型字符吞进标识）；
+/// 剜后为空 = 未命中（继续找下一处）。先 model 后 device 的两轮扫描由调用方
+/// 决定（本函数只认一个键）
+pub fn parse_prop_key(props: &str, key: &str) -> Option<String> {
+    for line in props.lines() {
+        let Some((k, v)) = line.split_once('=') else {
+            continue;
+        };
+        if k.trim() != key {
+            continue;
+        }
+        let v = v.split('#').next().unwrap_or("").trim();
+        if !v.is_empty() {
+            return Some(v.to_string());
+        }
+    }
+    None
+}
+
+/// 机型串消毒（纯函数，A 档可判）：**只留字母数字与 `-`/`_`**，去掉空白与
+/// 标点（`Neo 11` → `Neo11`；`iQOO Neo11 (V2332A)` → `iQOO-Neo11-V2332A` 形态
+/// 由调用方拼接，不在本函数）；按字符截到 12（够辨识且不撑爆行）；结果空 =
+/// 不可用（调用方继续退化链）。**不许**留空格/引号/方括号——它会进
+/// 行尾标识，混进 grep 面与 JSON 文本
+pub fn sanitize_dev(raw: &str) -> String {
+    let mut out = String::new();
+    let mut n = 0usize;
+    for ch in raw.chars() {
+        if ch.is_alphanumeric() || ch == '-' || ch == '_' {
+            out.push(ch);
+            n += 1;
+            if n >= 12 {
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// 设备位取源（一次性缓存）：①环境覆盖 → ②机型属性文件 → ③持久短 id → ④unknown。
+/// 任何一步 IO 失败只降档，恒返回可打印串（上报通道永不成事故）
+fn device_dev() -> &'static str {
+    DEV_TAG.get_or_init(|| {
+        if let Ok(v) = std::env::var(DEV_OVERRIDE_ENV) {
+            let s = sanitize_dev(&v);
+            if !s.is_empty() {
+                return s;
+            }
+        }
+        for path in PROP_FILES {
+            let Ok(text) = std::fs::read_to_string(path) else {
+                continue;
+            };
+            if let Some(v) = parse_prop_key(&text, "ro.product.model")
+                .or_else(|| parse_prop_key(&text, "ro.product.device"))
+            {
+                let s = sanitize_dev(&v);
+                if !s.is_empty() {
+                    return s;
+                }
+            }
+        }
+        fallback_dev_id()
+    })
+}
+
+/// 退化链第三档：私有目录持久化短 id（首启生成，两台机必然不同）。
+/// 读/写失败都不致命——写不出（只读环境/测试宿主）就返回 "unknown"
+fn fallback_dev_id() -> String {
+    if let Ok(existing) = std::fs::read_to_string(DEV_ID_PATH) {
+        let s = sanitize_dev(&existing);
+        if !s.is_empty() {
+            return s;
+        }
+    }
+    let fresh = fresh_dev_id();
+    if std::fs::write(DEV_ID_PATH, &fresh).is_err() {
+        return "unknown".to_string();
+    }
+    fresh
+}
+
+/// 首启短 id：时间纳秒 + pid 混洗成 8 位十六进制（无需随机数源，跨机撞率可忽略）
+fn fresh_dev_id() -> String {
+    let n = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0)
+        ^ (u64::from(std::process::id()) << 32);
+    let mut x = n.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    x ^= x >> 29;
+    format!("{:08x}", x & 0xFFFF_FFFF)
+}
+
 fn instance_tag() -> &'static str {
-    INSTANCE_TAG.get_or_init(|| format!("[{}/{}]", std::env::consts::ARCH, std::process::id()))
+    INSTANCE_TAG.get_or_init(|| {
+        format!(
+            "[{}/{}/{}]",
+            std::env::consts::ARCH,
+            device_dev(),
+            std::process::id()
+        )
+    })
 }
 
 /// 给上报消息挂设备/实例标识（判读分道闸，见上）。空消息不领前导空格

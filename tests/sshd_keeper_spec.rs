@@ -91,3 +91,16 @@ mod bootstrap_fixture {
         w.finish().unwrap().into_inner()
     }
 }
+
+#[test]
+fn spec_bar230_外来占口定性判据() {
+    use kfm_na::sshd_keeper::should_note_foreign;
+    // 娃不在 + banner 健康 = 外来者占口 → 报（一次）
+    assert!(should_note_foreign(false, true, false));
+    // 已报过 → 一集不二报（娃绑上口后旗复位才再报）
+    assert!(!should_note_foreign(false, true, true));
+    // 娃活着 → 不适用此口径（健康/冻僵走探活臂）
+    assert!(!should_note_foreign(true, true, false));
+    // 娃不在 + banner 也不在 → 正常重拉路径，不是占口
+    assert!(!should_note_foreign(false, false, false));
+}
