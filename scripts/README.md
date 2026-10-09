@@ -15,7 +15,9 @@
   不许过链，比对键 file:symbol 多重集——BAR-188 起行号不入键；
   考题 check/test-grid-text-ratchet.sh 五夹具同段）→ fmt → clippy →
   android-check → javac → test → overlay/kfm-pkg 考题 → build。
-  pre-commit 自动跑。
+  pre-commit 自动跑。末尾附**空间配额提示**（MAIN0139/0140：
+  check-空间配额.mjs --auto --dry-run，按 cwd 认人、只打印
+  不拦链——非步骤非闸，「13 步」口径不变）。
 - `check/` — chain 调用的单项检查（提交纪律闸门、stats 咬合闸、
   mailbox.sh 信箱执法等）。
 - `bar-new.sh` — **BAR 号唯一领取口**（2026-09-29 用户拍板，治三线
