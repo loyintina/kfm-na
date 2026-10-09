@@ -13,7 +13,7 @@
 | `src/bootstrap.rs` | 6 | 4 | 2 | ensure_pkg_tool first_boot_install |
 | `src/brain.rs` | 14 | 14 | 0 | — |
 | `src/brain_ep.rs` | 4 | 4 | 0 | — |
-| `src/catchup.rs` | 14 | 14 | 0 | — |
+| `src/catchup.rs` | 15 | 15 | 0 | — |
 | `src/conn.rs` | 4 | 2 | 2 | spawn_smoke ws_spawner |
 | `src/crash.rs` | 9 | 8 | 1 | install_signal_hook |
 | `src/ctrl_feed.rs` | 8 | 8 | 0 | — |
