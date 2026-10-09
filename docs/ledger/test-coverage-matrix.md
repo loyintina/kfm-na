@@ -23,7 +23,7 @@
 | `src/fs_fetch.rs` | 18 | 18 | 0 | — |
 | `src/fs_mirror.rs` | 9 | 8 | 1 | manifest_path |
 | `src/gate.rs` | 104 | 81 | 23 | register_gate_router text_dump inject_keys spawn_gate_watcher REC_FILE_CAP REC_FILE rec_output rec_resize PANIC_FILE PANIC_TRACE_FILE LOOP_STALL_FILE note_loop_beat loop_beat_age_ms note_foreground install_panic_hook note_draw note_session_death touch_take register_input_bar ALERT_RSS_COOLDOWN_MS ALERT_DEATHS_WINDOW_MS ALERT_DEATHS_COOLDOWN_MS HISTORY_EVERY_TICKS |
-| `src/gate_poller.rs` | 7 | 7 | 0 | — |
+| `src/gate_poller.rs` | 8 | 8 | 0 | — |
 | `src/glyph_atlas.rs` | 11 | 11 | 0 | — |
 | `src/http1.rs` | 10 | 7 | 3 | is_tick_err read_head_hook read_body_hook |
 | `src/ime_bridge.rs` | 1 | 0 | 1 | jni_counters |
@@ -64,7 +64,7 @@
 | `src/tmux_ctl.rs` | 24 | 24 | 0 | — |
 | `src/tmux_exec.rs` | 1 | 1 | 0 | — |
 | `src/trace.rs` | 12 | 9 | 3 | TRACE_CAP format_tail dump_tail |
-| `src/tunnel.rs` | 37 | 31 | 6 | check_ssh_fields NA_SSHD_PORT request_reconnect request_resume_kick request_trip_quic request_heal_quic |
+| `src/tunnel.rs` | 38 | 32 | 6 | check_ssh_fields NA_SSHD_PORT request_reconnect request_resume_kick request_trip_quic request_heal_quic |
 | `src/ui/accent.rs` | 17 | 17 | 0 | — |
 | `src/ui/ai_page.rs` | 7 | 7 | 0 | — |
 | `src/ui/cfg_page.rs` | 74 | 68 | 6 | DROPDOWN_ENTER_MS DROPDOWN_EXIT_MS DROPDOWN_PICK_SYNC_MS open_viewer_with_accent register_cfg_page cfg_page_handle |
