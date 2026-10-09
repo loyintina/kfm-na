@@ -22,7 +22,7 @@
 | `src/exec_probe.rs` | 1 | 1 | 0 | — |
 | `src/fs_fetch.rs` | 18 | 18 | 0 | — |
 | `src/fs_mirror.rs` | 9 | 8 | 1 | manifest_path |
-| `src/gate.rs` | 104 | 81 | 23 | register_gate_router text_dump inject_keys spawn_gate_watcher REC_FILE_CAP REC_FILE rec_output rec_resize PANIC_FILE PANIC_TRACE_FILE LOOP_STALL_FILE note_loop_beat loop_beat_age_ms note_foreground install_panic_hook note_draw note_session_death touch_take register_input_bar ALERT_RSS_COOLDOWN_MS ALERT_DEATHS_WINDOW_MS ALERT_DEATHS_COOLDOWN_MS HISTORY_EVERY_TICKS |
+| `src/gate.rs` | 105 | 84 | 21 | text_dump spawn_gate_watcher REC_FILE_CAP REC_FILE rec_output rec_resize PANIC_FILE PANIC_TRACE_FILE LOOP_STALL_FILE note_loop_beat loop_beat_age_ms note_foreground install_panic_hook note_draw note_session_death touch_take register_input_bar ALERT_RSS_COOLDOWN_MS ALERT_DEATHS_WINDOW_MS ALERT_DEATHS_COOLDOWN_MS HISTORY_EVERY_TICKS |
 | `src/gate_poller.rs` | 8 | 8 | 0 | — |
 | `src/glyph_atlas.rs` | 11 | 11 | 0 | — |
 | `src/http1.rs` | 10 | 7 | 3 | is_tick_err read_head_hook read_body_hook |
@@ -53,7 +53,7 @@
 | `src/sess_mode.rs` | 3 | 3 | 0 | — |
 | `src/sess_pool.rs` | 35 | 33 | 2 | TAIL_EVENTS request_routes |
 | `src/session.rs` | 14 | 14 | 0 | — |
-| `src/session_router.rs` | 11 | 11 | 0 | — |
+| `src/session_router.rs` | 14 | 14 | 0 | — |
 | `src/settings.rs` | 10 | 8 | 2 | QUIC_DEFAULT_PORT QUIC_REVERSE_PORT |
 | `src/singleton.rs` | 7 | 4 | 3 | LOCK_PATH lock_exclusive try_acquire |
 | `src/sshd_keeper.rs` | 3 | 3 | 0 | — |
