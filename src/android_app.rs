@@ -6344,13 +6344,14 @@ impl App {
         crate::report::report(
             "term",
             &format!(
-                "追赶落地: {cause} 压制={}B 持续={}ms 节拍={} 累计进场={}（速率{}）落地={}",
+                "追赶落地: {cause} 压制={}B 持续={}ms 节拍={} 累计进场={}（速率{}）落地={} 击键落地={}",
                 st.held_bytes,
                 held_ms,
                 st.throttle_count,
                 st.enter_count,
                 st.rate_enter_count,
-                st.land_count
+                st.land_count,
+                st.keystroke_land_count
             ),
         );
         if let Some(t) = self.term_handle() {
@@ -7713,10 +7714,14 @@ impl App {
             }
         }
         if sent {
-            // BAR-216 观测账：追赶期落键——回显字节照喂 grid 但压帧，
-            // 用户看到的「无回显」若发生在追赶期，此账是第一现场
-            if self.catchup.catching() {
-                crate::report::report("ime", "追赶期落键——回显随压帧等落地");
+            // BAR-232 修复（定罪 = 承影打字窗账：回显被压追赶窗，49 轮
+            // 19 轮 ≥500ms 吃 93%）：追赶期落键 = 打字了就是要看现在——
+            // 立即出追赶态落地亮出（跳底+置脏），回显不许再等静默窗。
+            // 旧制此臂只报观测账「回显随压帧等落地」= 病灶的旁白。
+            if self.catchup.keystroke_land(crate::report::boot_ms())
+                == crate::catchup::CatchAct::Land
+            {
+                self.catchup_land("击键落地");
             }
             // IME 落字 = 用户输入：滚回底部贴最新输出
             if let Some(t) = self.term_handle() {
@@ -7764,6 +7769,13 @@ impl App {
         {
             // BAR-135：出向唯一入口 route_input（断线暂存/重孵/发送三合一）
             self.route_input(bytes);
+            // BAR-232：追赶期落键 = 打字了就是要看现在——立即出压帧
+            // 落地亮出（与 IME 路同律）
+            if self.catchup.keystroke_land(crate::report::boot_ms())
+                == crate::catchup::CatchAct::Land
+            {
+                self.catchup_land("击键落地");
+            }
             // 打字了就是要看现在——滚回底部贴最新输出
             if let Some(t) = self.term_handle() {
                 t.lock().unwrap().scroll_to_bottom();

@@ -264,3 +264,55 @@ fn spec_bar216_观测账_进场因报表词() {
     assert_eq!(enter_cause_name(EnterCause::Explicit), "显式");
     assert_eq!(enter_cause_name(EnterCause::Rate), "速率洪峰");
 }
+
+/// BAR-232 修复钉（击键落地真值表）：追赶期落键 = 打字了就是要看现在
+/// ——立即出追赶态判 Land（壳据此跳底亮出），回显不再被压帧吞等静默窗；
+/// 稳态落键/落地后二次落键 = None 不抢画；落地因独立计数留账。
+/// 定罪：承影打字窗账（回显压追赶窗 49 轮/3.86MB，19 轮≥500ms 吃 93%）
+#[test]
+fn spec_bar232_击键落地_真值表() {
+    let mut c = Catchup::new();
+    // 稳态落键：None，账不动（不抢稳态的画）
+    assert_eq!(
+        c.keystroke_land(500),
+        CatchAct::None,
+        "稳态撞键不许 Land——稳态即达即画，落地 = 无故跳底抢滚动条"
+    );
+    assert_eq!(c.stats().land_count, 0);
+    assert_eq!(c.stats().keystroke_land_count, 0);
+    // 显式轮（重连播种窗）追赶期落键：立即出态判 Land，只发一次
+    c.enter(1_000);
+    assert!(c.note_bytes(1_010, 100));
+    assert_eq!(
+        c.keystroke_land(1_020),
+        CatchAct::Land,
+        "追赶期落键必须立即落地出压帧——回显不许再等静默窗/尾锚"
+    );
+    assert!(!c.catching(), "击键落地必须出追赶态（终结本轮压帧）");
+    assert_eq!(c.stats().land_count, 1);
+    assert_eq!(
+        c.stats().keystroke_land_count,
+        1,
+        "击键落地独立计数——与静默/尾锚落地分账（判卷区分落地因）"
+    );
+    assert_eq!(
+        c.keystroke_land(1_030),
+        CatchAct::None,
+        "落地后二次撞键 = None——Land 只发一次，不许连环跳底"
+    );
+    // 速率轮（洪峰滴灌）追赶期落键同律
+    assert!(c.note_bytes(10_000, RATE_BYTES), "速率洪峰进场");
+    assert!(c.catching());
+    assert_eq!(
+        c.keystroke_land(10_050),
+        CatchAct::Land,
+        "速率轮追赶期落键同律立即落地——打字落在洪峰期是同一条病灶"
+    );
+    assert_eq!(c.stats().keystroke_land_count, 2, "击键落地随轮累计");
+    // 落地沿重置速率窗（同 enter）——旧窗洪峰记忆不许压住落地后的回显小流
+    assert!(!c.note_bytes(10_100, 64), "落地后小流回稳态即画");
+    assert!(
+        c.note_bytes(10_100, RATE_BYTES),
+        "洪峰继续 = 速率再进场（下键再救）"
+    );
+}

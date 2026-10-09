@@ -7,6 +7,7 @@ const LIB: &str = include_str!("../src/lib.rs");
 const TERMVIEW: &str = include_str!("../src/termview.rs");
 const RESEED: &str = include_str!("../src/reseed.rs");
 const GATE: &str = include_str!("../src/gate.rs");
+const CATCHUP: &str = include_str!("../src/catchup.rs");
 
 /// 源码取函数体（4 空格方法级）：从签名行到下一个同级 fn。接线钉
 /// 按函数粒度断言——全文件 contains 分不清同串挂在哪条路上
@@ -107,10 +108,27 @@ fn spec_bar186_追赶接线守卫() {
         APP.contains("\"追赶落地: {cause} 压制="),
         "落地报账行必须带压制量与持续时长（BAR-216 仪器）"
     );
-    // ⑥c 追赶期落键账（回显无影案第一现场）
+    // ⑥c BAR-232 修复（定罪 = 承影打字窗账：回显被压追赶窗 49 轮
+    //    /3.86MB、19 轮≥500ms 吃 93%）：追赶期落键 = 打字了就是要看
+    //    现在——IME/物理键两条落键路都必须挂 keystroke_land 立即出
+    //    追赶态落地（旧制此臂只报观测账「回显随压帧等落地」= 病灶
+    //    旁白；断接 = 新机打字延迟+不跟随复辟）
     assert!(
-        APP.contains("\"追赶期落键——回显随压帧等落地\""),
-        "drain_ime_inject 必须报追赶期落键（BAR-216 仪器）"
+        CATCHUP.contains("pub fn keystroke_land(&mut self, now_ms: u128) -> CatchAct"),
+        "catchup 必须有 keystroke_land 击键落地出口（BAR-232 修复件）"
+    );
+    for sig in ["fn drain_ime_inject(", "fn handle_key("] {
+        let body = fn_body(APP, sig);
+        assert!(
+            body.contains("self.catchup.keystroke_land(crate::report::boot_ms())")
+                && body.contains("self.catchup_land(\"击键落地\");"),
+            "{sig} 必须挂 keystroke_land → catchup_land 击键落地（BAR-232 修复）"
+        );
+    }
+    // 旧观测臂退役钉：纯旁白行不许回潮（有修复臂后它只剩误导）
+    assert!(
+        !APP.contains("追赶期落键——回显随压帧等落地"),
+        "旧「追赶期落键只报不动」观测臂必须退役（BAR-232 修复取而代之）"
     );
     // ⑥d BAR-216 修复：速率轮节拍帧必须挂 about_to_wait（tick 同位）
     //    ——断接 = 洪峰压帧回到全冻，回显无影+频闪复辟

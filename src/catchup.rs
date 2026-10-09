@@ -61,6 +61,9 @@ pub struct CatchStats {
     pub held_bytes: u64,
     /// 本轮速率追赶期已放节拍帧数（落地沿随账报；显式轮恒 0）
     pub throttle_count: u32,
+    /// 击键落地累计（BAR-232：追赶期落键 = 打字了就是要看现在——
+    /// 立即出追赶态落地亮出，回显不许再被压帧吞）
+    pub keystroke_land_count: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,8 +73,8 @@ enum Phase {
 }
 
 /// 追赶状态机。两入口：显式 enter（重连/发种/重播种窗口，壳侧钩子）
-/// 与速率自动进场（note_bytes 窗内字节超阈）；两出口：静默窗 tick
-/// 与播种尾锚 anchor。Land 都发且只发一次。
+/// 与速率自动进场（note_bytes 窗内字节超阈）；三出口：静默窗 tick、
+/// 播种尾锚 anchor、击键落地 keystroke_land（BAR-232）。Land 都发且只发一次。
 pub struct Catchup {
     phase: Phase,
     last_byte_ms: u128,
@@ -93,6 +96,8 @@ pub struct Catchup {
     last_throttle_ms: u128,
     /// 本轮已放节拍帧数（落地沿随账报，新沿清零）
     throttle_count: u32,
+    /// 击键落地累计计数（BAR-232 观测账：击键出态发生了几次）
+    keystroke_land_count: u32,
 }
 
 impl Default for Catchup {
@@ -117,6 +122,7 @@ impl Catchup {
             round_cause: EnterCause::Explicit,
             last_throttle_ms: 0,
             throttle_count: 0,
+            keystroke_land_count: 0,
         }
     }
 
@@ -155,6 +161,7 @@ impl Catchup {
             catching_since_ms: self.catching_since_ms,
             held_bytes: self.held_bytes,
             throttle_count: self.throttle_count,
+            keystroke_land_count: self.keystroke_land_count,
         }
     }
 
@@ -214,6 +221,26 @@ impl Catchup {
         if self.phase == Phase::Catching {
             self.phase = Phase::Steady;
             self.land_count += 1;
+            CatchAct::Land
+        } else {
+            CatchAct::None
+        }
+    }
+
+    /// 追平判据三：追赶期用户落键（BAR-232，打字了就是要看现在）——
+    /// 立即退出追赶态判落地：壳据此 catchup_land（跳底+置脏亮出），
+    /// 回显字节照流不丢（note_bytes 继续登记，洪峰未停则速率判据
+    /// 自会再进场，下一次落键再救）。稳态/落地后二次撞键 = None
+    /// （不抢稳态的画，Land 只发一次）。落地因独立计数留账。
+    /// 落地沿同 enter 重置速率窗——旧窗里的洪峰记忆不清，落地后第
+    /// 一笔回显即被旧账再进场压帧，击键落地形同虚设
+    pub fn keystroke_land(&mut self, now_ms: u128) -> CatchAct {
+        if self.phase == Phase::Catching {
+            self.phase = Phase::Steady;
+            self.land_count += 1;
+            self.keystroke_land_count += 1;
+            self.win_start_ms = now_ms;
+            self.win_bytes = 0;
             CatchAct::Land
         } else {
             CatchAct::None
