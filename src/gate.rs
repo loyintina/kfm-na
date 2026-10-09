@@ -8,7 +8,7 @@
 //! |-----------|--------------------------------|---------------------|
 //! | shot-req  | 锁终端离屏光栅化当前帧          | shot.rgb + shot.dim |
 //! | text-req  | 锁终端导当前视野纯文本          | screen.txt          |
-//! | keys-in   | 内容当裸字节发活跃会话 PTY      | 无（注入即消费）     |
+//! | keys-in   | 归属校验后注入活跃会话 PTY（载荷首行必须 `>@目标会话名`，与活跃腿附着名同锁比对，不符/无头即拒注报账——BAR-238） | 无（注入即消费）     |
 //! | ping-req  | 回一行 alive 报告（活性探测）    | 无（报告即回执）     |
 //! | restart-req | 记遗言后 exit(0) 体面退出     | 无（Termux 侧拉回）  |
 //! | trace-req | 行踪环全量落盘（report 流本地副本） | trace.txt        |
@@ -507,7 +507,35 @@ pub fn text_dump(dir: &str) -> bool {
     ok
 }
 
-// ---- 通道三：keys-in → 裸字节注入活跃会话 ----
+// ---- 通道三：keys-in → 归属校验后注入活跃会话 ----
+
+/// keys-in 载荷解析（BAR-238，MAIN0134 误投事故）：首行必须
+/// `>@<目标会话名>`，换行后其余为裸字节。无头/空目标/无换行 = 旧形或
+/// 畸形 → Err 拒收（fail-closed：宁可拒注，不再盲发活跃会话——
+/// 白露 0167 楼1 判据②：无目标名旧形载荷 fail-closed 拒）
+pub fn parse_keys_in(payload: &str) -> Result<(&str, &str), String> {
+    let Some((head, body)) = payload.split_once('\n') else {
+        return Err("无头旧形载荷（缺 `>@<会话名>` 首行）".into());
+    };
+    let Some(target) = head.strip_prefix(">@") else {
+        return Err(format!(
+            "首行不是目标头（须 `>@<会话名>`，实得 `{head:.20}`）"
+        ));
+    };
+    let target = target.trim();
+    if target.is_empty() {
+        return Err("目标会话名为空".into());
+    }
+    Ok((target, body))
+}
+
+/// 拒注账墙钟（白露 0167 楼3：拒注账要带时间戳）——epoch 秒，免 chrono
+fn epoch_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
 
 /// 原子取走 keys-in 的内容（rename 抢先，防写入端半写被读）：
 /// 无文件/空内容 → None；有内容 → Some(原文) 且文件已消费
@@ -525,13 +553,15 @@ pub fn drain_keys_in(dir: &str) -> Option<String> {
     }
 }
 
-/// keys-in 在就取出注入活跃会话（裸字节 = 按键流；Ctrl 组合直接写控制字节）。
-/// 注入全程上报（闸门判案纪律：drain/登记/send 哪环断了都得在报告里看得见）
+/// keys-in 在就取出、归属校验后注入活跃会话（BAR-238：载荷必须点名目标
+/// 会话，与活跃腿当前附着名在同一把路由锁内比对——比对与注入同锁 =
+/// 竞态窗结构性消除；不符/畸形一律拒注且响亮报账：时刻/目标/当前活跃/
+/// 字节数，报表可查。注入全程上报的判案纪律照旧）
 pub fn inject_keys(dir: &str) {
-    let Some(keys) = drain_keys_in(dir) else {
+    let Some(payload) = drain_keys_in(dir) else {
         return;
     };
-    let len = keys.len();
+    let len = payload.len();
     STAT_KEYS.fetch_add(1, Ordering::Relaxed);
     STAT_KEYS_BYTES.fetch_add(len as u64, Ordering::Relaxed);
     let router = GATE_ROUTER.lock().unwrap().clone();
@@ -542,12 +572,36 @@ pub fn inject_keys(dir: &str) {
         );
         return;
     };
+    let (target, bytes) = match parse_keys_in(&payload) {
+        Ok(v) => v,
+        Err(e) => {
+            crate::report::report(
+                "gate",
+                &format!("keys-in 拒注: {e}（{len}B, t={}）", epoch_secs()),
+            );
+            return;
+        }
+    };
     let r = router.lock().unwrap();
-    let alive = r.send_checked(crate::conn::TermCmd::Input(keys));
+    // 身份 = 附着 tmux 会话名；裸 shell 腿 = 腿名（local/remote）
+    let cur = r.active_identity();
+    if cur != target {
+        crate::report::report(
+            "gate",
+            &format!(
+                "keys-in 拒注: 目标={target} 当前活跃={cur} 字节={} t={}——归属不符不注入",
+                bytes.len(),
+                epoch_secs()
+            ),
+        );
+        return;
+    }
+    let alive = r.send_checked(crate::conn::TermCmd::Input(bytes.to_string()));
     crate::report::report(
         "gate",
         &format!(
-            "keys-in {len}B 注入: 活跃={} 通道存活={alive}",
+            "keys-in {}B 注入: 目标={target} 活跃={} 通道存活={alive}",
+            bytes.len(),
             r.active_name()
         ),
     );
@@ -1673,6 +1727,9 @@ pub struct StatsSnap {
     pub keys_bytes: u64,
     pub active: String,
     pub sessions: String,
+    /// 活跃腿当前身份（BAR-238）：附着 tmux 会话名；裸 shell = 腿名。
+    /// keys-in 载荷的目标名照此填（与归属校验同一条 active_identity 单源）
+    pub attached: String,
     // ---- 自观测第三块:资源画像 ----
     /// 帧耗时:累计/峰值毫秒(均值由 format 侧算,防除零)
     pub draw_total_ms: u64,
@@ -1722,12 +1779,16 @@ pub struct StatsSnap {
 
 /// 拍一张当前快照(各静态即读即还;会话名单过 router 锁,取完即还)
 pub fn stats_snap() -> StatsSnap {
-    let (active, sessions) = match GATE_ROUTER.lock().unwrap().clone() {
+    let (active, sessions, attached) = match GATE_ROUTER.lock().unwrap().clone() {
         Some(r) => {
             let r = r.lock().unwrap();
-            (r.active_name().to_owned(), r.names().join(","))
+            (
+                r.active_name().to_owned(),
+                r.names().join(","),
+                r.active_identity().to_owned(),
+            )
         }
-        None => ("-".to_owned(), "-".to_owned()),
+        None => ("-".to_owned(), "-".to_owned(), "-".to_owned()),
     };
     // 资源画像:/proc 读取失败静默给 0(观测铁律:不许反咬业务)
     let cpu_jiffies = std::fs::read_to_string("/proc/self/stat")
@@ -1819,6 +1880,7 @@ pub fn stats_snap() -> StatsSnap {
         keys_bytes: STAT_KEYS_BYTES.load(Ordering::Relaxed),
         active,
         sessions,
+        attached,
         draw_total_ms: STAT_DRAW_TOTAL_MS.load(Ordering::Relaxed),
         draw_max_ms: STAT_DRAW_MAX_MS.load(Ordering::Relaxed),
         cpu_jiffies,
@@ -1856,7 +1918,7 @@ pub fn format_stats(s: &StatsSnap) -> String {
     // 帧均耗防除零:一帧没画过就报 0
     let draw_avg = s.draw_total_ms.checked_div(s.frames).unwrap_or(0);
     format!(
-        "uptime={}ms\nforeground={}\nloop_beat_age={}\nframes={}\npump_calls={}\npump_bytes={}\nshots={}\ntexts={}\nkeys={}\nkeys_bytes={}\ntouches={}\nactive={}\nsessions={}\ndraw_avg_ms={}\ndraw_max_ms={}\ncpu_jiffies={}\nrss_kb={}\nbytes_local={}\nbytes_remote={}\nbytes_other={}\nsession_deaths={}\nlocal_dead={}\nremote_dead={}\nai_page={}\nai_running={}\nai_orb_x={}\nai_orb_y={}\nai_pressed={}\nai_overlay={}\npanel_top={}\npanel_cov={}\nai_epoch={}\ncfg_epoch={}\nft_epoch={}\npt_epoch={}\nbar_focused={}\nbar_text_len={}\n",
+        "uptime={}ms\nforeground={}\nloop_beat_age={}\nframes={}\npump_calls={}\npump_bytes={}\nshots={}\ntexts={}\nkeys={}\nkeys_bytes={}\ntouches={}\nactive={}\nsessions={}\ndraw_avg_ms={}\ndraw_max_ms={}\ncpu_jiffies={}\nrss_kb={}\nbytes_local={}\nbytes_remote={}\nbytes_other={}\nsession_deaths={}\nlocal_dead={}\nremote_dead={}\nai_page={}\nai_running={}\nai_orb_x={}\nai_orb_y={}\nai_pressed={}\nai_overlay={}\npanel_top={}\npanel_cov={}\nai_epoch={}\ncfg_epoch={}\nft_epoch={}\npt_epoch={}\nbar_focused={}\nbar_text_len={}\nattached={}\n",
         s.uptime_ms,
         s.foreground,
         age,
@@ -1893,7 +1955,8 @@ pub fn format_stats(s: &StatsSnap) -> String {
         s.ft_epoch,
         s.pt_epoch,
         s.bar_focused,
-        s.bar_text_len
+        s.bar_text_len,
+        s.attached
     )
 }
 

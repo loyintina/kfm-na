@@ -22,7 +22,8 @@ before=$(deaths)
 [ -n "${before:-}" ] || fail PIN-rehatch "stats 拉不到 session_deaths"
 
 # ① 制造故障:合法入口,shell 正常退出
-bash "$NA_ROOT/scripts/na-type.sh" 'exit\r' >/dev/null
+# (BAR-238 两参:本卷钉死 local 腿(need_alive 已断言),裸 shell 腿身份=腿名)
+bash "$NA_ROOT/scripts/na-type.sh" local 'exit\r' >/dev/null
 
 # ② 等 death 计数反应(值守 300ms 消费 + 主循环抽干,10s 上限)
 ok=""
@@ -47,7 +48,7 @@ done
 [ -n "$banner" ] || fail PIN-rehatch "death 计数涨了($before→$now)但 8s 无重孵横幅——活跃方自动 respawn 失灵?"
 
 # ④ 新 shell 回显活着(重孵是新的 sh,ls 执行成功即证输入输出链通)
-bash "$NA_ROOT/scripts/na-type.sh" 'echo probe_$((40+2))\r' >/dev/null
+bash "$NA_ROOT/scripts/na-type.sh" local 'echo probe_$((40+2))\r' >/dev/null
 alive=""
 for _ in $(seq 1 10); do
     sleep 0.5

@@ -354,6 +354,104 @@ fn spec_keys_in_原子取走协议() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+// ---------- BAR-238 keys-in 归属校验（MAIN0134 误投事故） ----------
+
+/// 载荷解析契约：首行 `>@<目标会话名>` + 换行 + 裸字节；无头/空目标/
+/// 非目标头/无换行一律 fail-closed 拒（旧形盲发通道就此关闭）
+#[test]
+fn spec_bar238_keys_in_载荷解析() {
+    use kfm_na::gate::parse_keys_in;
+    assert_eq!(
+        parse_keys_in(">@main\nls -la\r").unwrap(),
+        ("main", "ls -la\r")
+    );
+    assert_eq!(
+        parse_keys_in(">@kimi-白露\n你好\x03\r").unwrap(),
+        ("kimi-白露", "你好\x03\r"),
+        "中文名/控制字节照样过"
+    );
+    assert!(parse_keys_in("ls -la\r").is_err(), "无头旧形必须拒");
+    assert!(parse_keys_in(">@main").is_err(), "无换行（无字节段）必须拒");
+    assert!(parse_keys_in(">@\nls").is_err(), "空目标必须拒");
+    assert!(parse_keys_in("> main\nls").is_err(), "非目标头必须拒");
+    assert!(parse_keys_in("").is_err(), "空载荷必须拒");
+}
+
+/// 归属校验端到端：目标与活跃腿附着名不符 → 一粒不注（阴性）；
+/// 相符 → 原样注入（阳性）；无头旧形 → 拒（事故场景原样复现为阴性例，
+/// 白露 0167 楼1 判据②）
+#[test]
+fn spec_bar238_归属校验_拒注与放行() {
+    use kfm_na::gate::{inject_keys, register_gate_router};
+    use kfm_na::session_router::SessionRouter;
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut router = SessionRouter::new(tx, "remote");
+    router
+        .set_attached("remote", Some("kimi-白露".into()))
+        .unwrap();
+    register_gate_router(&std::sync::Arc::new(std::sync::Mutex::new(router)));
+
+    let dir = std::env::temp_dir().join(format!("kfm-keys238-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let d = dir.to_str().unwrap();
+
+    // 阴性①：目标不符（误投事故形态——目标是别人的会话）→ 一粒不注
+    std::fs::write(dir.join("keys-in"), ">@main\nexit\r").unwrap();
+    inject_keys(d);
+    assert!(rx.try_recv().is_err(), "目标不符必须拒注（一粒都不许进）");
+    assert!(!dir.join("keys-in").exists(), "拒注也要消费掉（不卡队列）");
+
+    // 阴性②：无头旧形 → 拒
+    std::fs::write(dir.join("keys-in"), "ls -la\r").unwrap();
+    inject_keys(d);
+    assert!(rx.try_recv().is_err(), "无头旧形必须拒注");
+
+    // 阳性：目标相符 → 原样注入
+    std::fs::write(dir.join("keys-in"), ">@kimi-白露\nls\r").unwrap();
+    inject_keys(d);
+    assert!(matches!(
+        rx.recv_timeout(std::time::Duration::from_millis(200)),
+        Ok(kfm_na::conn::TermCmd::Input(s)) if s == "ls\r"
+    ));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// 接线守卫（变异锚）：inject_keys 必须先解析、同锁比对附着名、再注入；
+/// 写入端 na-type.sh 必须写目标头；壳侧附着账同步接线六站点不许散失
+#[test]
+fn spec_bar238_接线守卫() {
+    let gate = include_str!("../src/gate.rs");
+    let inj = gate
+        .split("pub fn inject_keys")
+        .nth(1)
+        .expect("inject_keys 本体");
+    let i_parse = inj
+        .find("parse_keys_in")
+        .expect("inject_keys 必须先解析载荷");
+    let i_cmp = inj
+        .find("active_identity()")
+        .expect("inject_keys 必须读活跃腿身份（附着名/裸腿名）");
+    let i_send = inj
+        .find("send_checked")
+        .expect("inject_keys 必须走 send_checked");
+    assert!(
+        i_parse < i_cmp && i_cmp < i_send,
+        "顺序必须是 解析 → 身份比对 → 注入"
+    );
+    assert!(inj.contains("拒注"), "拒注报账分支不许摘");
+    let ty = include_str!("../scripts/na-type.sh");
+    assert!(
+        ty.contains(">@%s\\n") && ty.contains("目标会话名"),
+        "na-type.sh 必须写 `>@<名>` 目标头"
+    );
+    let app = include_str!("../src/android_app.rs");
+    let n = app.matches("sync_router_attached").count();
+    assert_eq!(
+        n, 7,
+        "附着账同步 = 1 定义 + 6 站点（装配/本地脱离/本地attach/远程脱离/远程attach/重孵勾销），实得 {n}"
+    );
+}
+
 // ---- 死亡观测考题(2026-08-25,与用户定:panic 落盘 + loop 看门狗) ----
 
 /// 卡死判定边界:龄期 ≤ 阈值不报警,> 阈值才报警(阈值含在「正常」侧,

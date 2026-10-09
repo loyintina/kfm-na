@@ -93,6 +93,7 @@ fn spec_stats_格式_keyvalue一行一项() {
         pt_epoch: 0,
         bar_focused: false,
         bar_text_len: 0,
+        attached: "local".into(),
     };
     let out = format_stats(&s);
     assert!(out.contains("uptime=61000ms\n"));
@@ -112,6 +113,8 @@ fn spec_stats_格式_keyvalue一行一项() {
     assert!(out.contains("local_dead=false\n"));
     assert!(out.contains("remote_dead=true\n"));
     assert!(out.contains("touches=4\n"));
+    // BAR-238 身份行:附着 tmux 会话名/裸腿名,调用方(na-type 判卷脚本)据此取目标
+    assert!(out.contains("attached=local\n"));
     assert!(out.ends_with('\n'));
     // 未起跳的龄期要人话,不是数字
     let mut s2 = s.clone();

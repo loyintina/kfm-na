@@ -29,7 +29,7 @@ printf '| BAR-180 | 修复（正文援引 BAR-998 陷阱号） |\n| BAR-999 | �
 printf '{"bar": 184, "title": "参照 BAR-997 的修复"}\n' > "$T/reg.jsonl"
 mkdir -p "$T/mb"
 printf '{"names":{"观澜":{"functions":["开发部"]}}}\n' > "$T/mb/roster.json"
-printf '{"bar": 190, "title": "基线", "claimant_func": "评审部", "claimant": "白露", "letter": "", "ts": "2026-10-09 09:00 +0800", "src": "存量"}\n' > "$T/ledger.jsonl"
+printf '{"bar": 190, "title": "基线", "claimant_func": "评审部", "claimant": "白露", "letter": "", "ts": "2026-10-09 09:00 +0800", "src": "存量", "state": "有效"}\n' > "$T/ledger.jsonl"
 # BAR_ABOUT 纯汉字短题（MAIN0135 楼6：号不进 about——JS gen 关于段守纯汉字，
 # 号必含 ASCII 必卡全册 gen；号只在 H1 与登记簿）
 run() { # run <额外env...> -- 跑领号，输出落 $T/out；投影每轮重置防累积
@@ -46,8 +46,9 @@ run; chk "不跳号回归" 0 $? "BAR-191 已领"
 grep -q '"bar": 191,' "$T/ledger.jsonl" \
     && { echo "  ✓ roundtrip-领号落登记簿"; pass=$((pass+1)); } \
     || { echo "  ✗ roundtrip-领号落登记簿（登记簿无 191 行）"; fail=$((fail+1)); }
-# ⑤写入格式钉死：登记簿新行必须带 `"bar": N, ` 钉死形态（换格式钉红）
-tail -1 "$T/ledger.jsonl" | grep -qE '^\{"bar": [0-9]+, "title": ".*", "claimant_func": ".*", "claimant": ".*", "letter": ".*", "ts": ".*", "src": "(开信|领号)"\}$' \
+# ⑤写入格式钉死：登记簿新行必须带 `"bar": N, ` 钉死形态（换格式钉红）；
+# state 必显式写（0135 楼9①：check-bar 咬 state 缺省红，隐式约定养瞎眼账）
+tail -1 "$T/ledger.jsonl" | grep -qE '^\{"bar": [0-9]+, "title": ".*", "claimant_func": ".*", "claimant": ".*", "letter": ".*", "ts": ".*", "src": "(开信|领号)", "state": "有效"\}$' \
     && { echo "  ✓ 写入格式钉死"; pass=$((pass+1)); } \
     || { echo "  ✗ 写入格式钉死（实得: $(tail -1 "$T/ledger.jsonl" | head -c 60)…）"; fail=$((fail+1)); }
 # ④roundtrip 下半：再领必须 192（不重用 191——写读格式互咬）
@@ -55,7 +56,7 @@ run; chk "roundtrip-再领不重用" 0 $? "BAR-192 已领"
 
 # ①登记簿权威（237 撞号复现）：重置登记簿为「只有 240（模拟改号占号、
 # 不开信、信箱 H1 无）」→ 领 241，绝不许 237-240 段重发
-printf '{"bar": 240, "title": "改号占号无信", "claimant_func": "评审部", "claimant": "白露", "letter": "", "ts": "t", "src": "改号"}\n' > "$T/ledger.jsonl"
+printf '{"bar": 240, "title": "改号占号无信", "claimant_func": "评审部", "claimant": "白露", "letter": "", "ts": "t", "src": "改号", "state": "有效"}\n' > "$T/ledger.jsonl"
 run; chk "登记簿权威(237事故复现)" 0 $? "BAR-241 已领"
 
 # ②fail-closed：登记簿不可读（不存在）→ 拒领（信箱/树内账都在也不许领）
@@ -73,14 +74,14 @@ chk "信箱不可读拒领" 1 $? "拒领"
 
 # ③双格式夹具：紧凑行（无空格）238 + 带空格行 240 → 241（两格式都被读到；
 # 只读带空格得 241 偶然也对——故先单跑紧凑行：只有紧凑 238 → 必须 239）
-printf '{"bar":238,"title":"紧凑格式","claimant_func":"x","claimant":"x","letter":"","ts":"t","src":"补登"}\n' > "$T/ledger.jsonl"
+printf '{"bar":238,"title":"紧凑格式","claimant_func":"x","claimant":"x","letter":"","ts":"t","src":"补登","state":"有效"}\n' > "$T/ledger.jsonl"
 run; chk "双格式-紧凑行被读到" 0 $? "BAR-239 已领"
-printf '{"bar":238,"title":"紧凑","claimant_func":"x","claimant":"x","letter":"","ts":"t","src":"补登"}\n{"bar": 240, "title": "带空格", "claimant_func": "x", "claimant": "x", "letter": "", "ts": "t", "src": "改号"}\n' > "$T/ledger.jsonl"
+printf '{"bar":238,"title":"紧凑","claimant_func":"x","claimant":"x","letter":"","ts":"t","src":"补登","state":"有效"}\n{"bar": 240, "title": "带空格", "claimant_func": "x", "claimant": "x", "letter": "", "ts": "t", "src": "改号", "state": "有效"}\n' > "$T/ledger.jsonl"
 run; chk "双格式-两格式同账取max" 0 $? "BAR-241 已领"
 
 # ⑦H1 次号不毒 max（BAR-192）：H1 首号 190 正文援引 996 → 按登记簿 240 领 241
 # （run 每次成功都落登记簿——重置登记簿防上轮累积毒期望）
-printf '{"bar": 240, "title": "改号占号无信", "claimant_func": "评审部", "claimant": "白露", "letter": "", "ts": "t", "src": "改号"}\n' > "$T/ledger.jsonl"
+printf '{"bar": 240, "title": "改号占号无信", "claimant_func": "评审部", "claimant": "白露", "letter": "", "ts": "t", "src": "改号", "state": "有效"}\n' > "$T/ledger.jsonl"
 printf '# BAR-190 别线信（正文援引 BAR-996 旧案）\n' > "$T/mb/0046号某人的通报.md"
 run; chk "H1次号不毒max" 0 $? "BAR-241 已领"
 
@@ -100,7 +101,7 @@ rm -rf "$T/mb/archive-v1"
 
 # ⑩名册预检：名册只有清和 → 观澜拒领；放回观澜 → 放行
 # （信箱扫描面须有信——归档夹具已拆，补一封普通信）
-printf '{"bar": 190, "title": "基线", "claimant_func": "x", "claimant": "x", "letter": "", "ts": "t", "src": "存量"}\n' > "$T/ledger.jsonl"
+printf '{"bar": 190, "title": "基线", "claimant_func": "x", "claimant": "x", "letter": "", "ts": "t", "src": "存量", "state": "有效"}\n' > "$T/ledger.jsonl"
 printf '# 普通信件标题\n' > "$T/mb/0099号某人的通报.md"
 printf '{"names":{"清和":{"functions":["研究部"]}}}\n' > "$T/mb/roster.json"
 run; chk "名不在册拒领" 1 $? "不在名册"
@@ -118,6 +119,17 @@ env BAR_NEW_LEDGER="$T/ledger.jsonl" BAR_NEW_REGISTRY="$T/reg.jsonl" \
     BAR_NEW_MAILBOX="$T/mb" BAR_NEW_NO_LETTER=1 BAR_ABOUT="修复BAR240" \
     bash "$BARNEW" --func 开发部 --name 观澜 "夹具主题" > "$T/out" 2>&1
 chk "ABOUT含ASCII拒领" 1 $? "纯汉字"
+
+# ⑬夹具隔离完整性闸（0135 楼9② 白露实撞：只设 LEDGER 漏设 REGISTRY →
+# 假号 1001 写进真 registry）——三件重定向部分设置 = 拒跑（exit 2）；
+# 全不设 = 正常生产路径不拦（本考题不跑真账，免）
+env BAR_NEW_LEDGER="$T/ledger.jsonl" BAR_NEW_NO_LETTER=1 BAR_ABOUT="考题短题" \
+    bash "$BARNEW" --func 开发部 --name 观澜 "夹具主题" > "$T/out" 2>&1
+chk "半隔离拒跑(只设LEDGER)" 2 $? "夹具隔离不完整"
+env BAR_NEW_LEDGER="$T/ledger.jsonl" BAR_NEW_REGISTRY="$T/reg.jsonl" \
+    BAR_NEW_NO_LETTER=1 BAR_ABOUT="考题短题" \
+    bash "$BARNEW" --func 开发部 --name 观澜 "夹具主题" > "$T/out" 2>&1
+chk "半隔离拒跑(缺MAILBOX)" 2 $? "夹具隔离不完整"
 
 # ⑪a BAR-217 源码守卫：MAILBOX 与 DEFAULT_MAILBOX 必须同经 readlink -f
 # 归一——2026-10-01 病灶：只归一 MAILBOX 后与未归一 DEFAULT 比字符串

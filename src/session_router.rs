@@ -13,6 +13,12 @@ use crate::conn::TermCmd;
 pub struct SessionRouter {
     active: (Sender<TermCmd>, &'static str),
     standby: Option<(Sender<TermCmd>, &'static str)>,
+    /// BAR-238 keys-in 归属校验真源：各腿当前附着的 tmux 会话名。
+    /// 与 sender 同锁同槽、切换随槽互换——inject_keys 在同一锁内
+    /// 「读名比对 → 注入」，竞态窗结构性消除（MAIN0134 误投事故：
+    /// 裸字节盲发活跃会话，注入与切换之间的窗口无人裁决）
+    active_attached: Option<String>,
+    standby_attached: Option<String>,
 }
 
 impl SessionRouter {
@@ -21,6 +27,8 @@ impl SessionRouter {
         SessionRouter {
             active: (active_tx, active_name),
             standby: None,
+            active_attached: None,
+            standby_attached: None,
         }
     }
 
@@ -68,7 +76,41 @@ impl SessionRouter {
         let old_name = self.active.1;
         let old = std::mem::replace(&mut self.active, standby);
         self.standby = Some(old);
+        // BAR-238：附着账随槽互换——名跟人走，活跃槽恒读到当前活跃腿的附着
+        std::mem::swap(&mut self.active_attached, &mut self.standby_attached);
         Some((old_name, new_name))
+    }
+
+    /// BAR-238：写某腿的附着 tmux 会话名（腿名 = local/remote 槽位名；
+    /// 壳侧 attach/脱离/重孵勾销时同步）。腿名不在槽 = 装配错位，报错不静默
+    pub fn set_attached(&mut self, leg: &str, name: Option<String>) -> Result<(), String> {
+        if self.active.1 == leg {
+            self.active_attached = name;
+            return Ok(());
+        }
+        if let Some((_, n)) = &self.standby
+            && *n == leg
+        {
+            self.standby_attached = name;
+            return Ok(());
+        }
+        Err(format!(
+            "set_attached: 腿 {leg} 不在槽（活跃={}）",
+            self.active.1
+        ))
+    }
+
+    /// BAR-238：活跃腿当前附着的 tmux 会话名（keys-in 归属校验比对源；
+    /// None = 活跃腿裸 shell/未附着）
+    pub fn active_attached(&self) -> Option<&str> {
+        self.active_attached.as_deref()
+    }
+
+    /// BAR-238：活跃腿当前身份（归属校验/统计快照同源，单源）——附着了
+    /// tmux 会话 = 会话名；裸 shell = 腿名（local/remote）。keys-in 载荷
+    /// 的目标名与此比对：说出你以为在跟谁说话，不符即拒
+    pub fn active_identity(&self) -> &str {
+        self.active_attached.as_deref().unwrap_or(self.active.1)
     }
 
     /// 换心脏（断线重连，2026-08-21）：会话线程死了旧 sender 是僵尸

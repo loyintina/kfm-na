@@ -57,6 +57,7 @@ fn snap() -> StatsSnap {
         pt_epoch: 0,
         bar_focused: false,
         bar_text_len: 0,
+        attached: "local".into(),
     }
 }
 

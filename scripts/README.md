@@ -124,7 +124,8 @@ termux-battery-status），只有 Termux 的 rootfs 干得了的活才用，
 
 ## 注入(控)
 
-- `na-type.sh 'cmd\r'` — 裸字节注入活跃会话 PTY(远程键盘;
+- `na-type.sh <目标会话名> 'cmd\r'` — 注入指定会话 PTY(远程键盘;
+  BAR-238 归属校验:目标须=stats 的 attached 身份行,不符拒注;
   `\r`/`\x03` 等转义由 printf '%b' 翻成真字节)。
 - `na-touch.sh 'scroll 3' [...]` — 触摸注入(通道八):tap/down/move/
   up/scroll/sleep 脚本化,与真手指同一入口;手势类 bug 的复现腿。

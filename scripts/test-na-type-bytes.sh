@@ -19,11 +19,18 @@ EOF
 chmod +x "$tmp/ssh"
 
 export FAKE_SSH_OUT="$tmp/payload"
-PATH="$tmp:$PATH" bash "$here/na-type.sh" 'inject-me\r' >/dev/null
+# 判卷必须封闭:HTTP 腿(NA_HTTP_PORT 指到死口)先失败,才轮到假 ssh 收料——
+# 否则本机有活 na-server 时载荷会真进手机队列(2026-10-07 实测踩到)
+export NA_HTTP_PORT=1
+PATH="$tmp:$PATH" bash "$here/na-type.sh" local 'inject-me\r' >/dev/null
 
 hex=$(od -An -tx1 "$tmp/payload" | tr -d ' \n')
 fail() { echo "❌ $1(落盘 hex: $hex)"; exit 1; }
 
+case "$hex" in
+    3e406c6f63616c0a*) : ;;  # BAR-238:首行必须是 `>@local\n` 目标头
+    *) fail "缺 \`>@<目标会话名>\` 头(BAR-238 归属校验载荷)" ;;
+esac
 case "$hex" in
     *0d) : ;;  # 末尾必须是真 CR
     *) fail "\\r 没翻成 CR(0x0d)" ;;

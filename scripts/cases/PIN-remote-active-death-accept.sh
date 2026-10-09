@@ -60,8 +60,11 @@ for _ in $(seq 1 16); do
     if echo "$text" | grep -q "已重连" && echo "$text" | grep -q "stdby_42"; then alive=1; break; fi
 done
 # 回显探测(横幅可能已滚出视野,回显是硬证据)
+# (BAR-238 两参:重孵后远程腿身份从 stats 取——附着 tmux 名或腿名 remote)
 if [ -z "$alive" ]; then
-    bash "$NA_ROOT/scripts/na-type.sh" 'echo rah_$((40+2))\r' >/dev/null
+    target=$(bash "$NA_ROOT/scripts/na-stats.sh" 2>/dev/null | sed -n 's/^attached=//p')
+    [ -n "${target:-}" ] || fail PIN-remote-active-death "stats 拉不到 attached 身份行"
+    bash "$NA_ROOT/scripts/na-type.sh" "$target" 'echo rah_$((40+2))\r' >/dev/null
     for _ in $(seq 1 10); do
         sleep 0.5
         text=$(bash "$NA_ROOT/scripts/na-text.sh" 2>/dev/null) || continue

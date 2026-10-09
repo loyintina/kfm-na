@@ -145,6 +145,33 @@ fn spec_l1_路由_send_checked回执() {
     );
 }
 
+/// 考题 BAR-238:附着账槽——名跟人走：set_attached 按腿名落槽、切换随槽
+/// 互换、活跃槽恒读到当前活跃腿的附着；腿名不在槽 = Err 不静默
+/// （keys-in 归属校验真源，MAIN0134 误投事故）
+#[test]
+fn spec_bar238_附着账_名随槽互换() {
+    let (tx_a, _rx_a) = fake_pair();
+    let (tx_b, _rx_b) = fake_pair();
+    let mut r = SessionRouter::new(tx_a, "local");
+    r.add_standby(tx_b, "remote").unwrap();
+    assert_eq!(r.active_attached(), None, "起步无附着");
+    r.set_attached("local", Some("main".into())).unwrap();
+    r.set_attached("remote", Some("kimi-x".into())).unwrap();
+    assert_eq!(r.active_attached(), Some("main"));
+    r.switch().unwrap();
+    assert_eq!(
+        r.active_attached(),
+        Some("kimi-x"),
+        "切换后活跃槽必须读到 remote 腿的附着"
+    );
+    r.switch().unwrap();
+    assert_eq!(r.active_attached(), Some("main"), "切回必须跟着翻回");
+    r.set_attached("remote", None).unwrap(); // 脱离勾销
+    r.switch().unwrap();
+    assert_eq!(r.active_attached(), None, "脱离后该腿附着必须是 None");
+    assert!(r.set_attached("nope", None).is_err(), "腿名不在槽必须报错");
+}
+
 /// 考题 BAR-124:抖动尺寸 = 行数减一且保底 1 行(0 行 pty 畸形不许造;
 /// 列数纹丝不动——只抖行,列抖了 tmux 横排也重画,白送一次洪峰)
 #[test]

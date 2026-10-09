@@ -5079,6 +5079,9 @@ impl App {
                 crate::report::report_sync("term", "双会话全灭——本屏无会话");
             }
         }
+        // BAR-238：路由装配完即同步附着账（启动命令提取的附着名先于路由存在）
+        self.sync_router_attached();
+
         // 建终端：经基座取终端工厂；build 失败 = 字体全灭走 Err（裁决 3，非插件失败）
         let Some((tv, _font_path, cjk_path)) = (match base.ctx().get::<dyn TermEmuFactory>() {
             Ok(factory) => match factory.build() {
@@ -6893,6 +6896,7 @@ impl App {
                 return;
             }
             self.local_attached = None;
+            self.sync_router_attached();
             if let Some(p) = &self.parser_page {
                 p.lock().unwrap().set_attached(None);
             }
@@ -6935,6 +6939,7 @@ impl App {
             return;
         }
         self.local_attached = Some(name.clone());
+        self.sync_router_attached();
         p.lock().unwrap().set_attached(Some(name.clone()));
         if let Some(t) = self.term_handle() {
             let banner = format!("\r\n\x1b[36m[kfm-na: 切换到 tmux 会话 {name}]\x1b[0m\r\n");
@@ -6993,6 +6998,7 @@ impl App {
                 return;
             }
             self.remote_attached = None;
+            self.sync_router_attached();
             // BAR-202：裸 shell 也是视面——持久化哨兵，下次冷启动不被
             // 强行拽回 tmux（用户有意脱离 = 尊重，点任意框即回）
             self.persist_last_view(crate::tmux_ctl::BOOTSTRAP_SHELL_SENTINEL);
@@ -7050,6 +7056,7 @@ impl App {
             return;
         }
         self.remote_attached = Some(name.clone());
+        self.sync_router_attached();
         // BAR-202：附着即记视面——下次冷启动引导附回这个会话
         self.persist_last_view(&name);
         p.lock().unwrap().set_attached(Some(name.clone()));
@@ -7254,6 +7261,7 @@ impl App {
         if name == "local" && self.local_attached.is_some() {
             crate::report::report("term", "本地重孵 = 裸 shell，附着账勾销");
             self.local_attached = None;
+            self.sync_router_attached();
             if let Some(p) = &self.parser_page {
                 p.lock().unwrap().set_attached(None);
             }
@@ -9974,6 +9982,25 @@ impl App {
     /// 取路由句柄（owned Arc，借用即还——同 term_handle 套路）
     fn router_handle(&self) -> Option<crate::gate::SharedRouter> {
         self.router.clone()
+    }
+
+    /// BAR-238：把两腿附着账（local_attached/remote_attached）按腿名写进
+    /// 路由槽——keys-in 归属校验的真源。目标名与注入目的地同锁同槽，
+    /// 比对与注入之间没有窗口（MAIN0134 误投事故的结构性消除）。
+    /// attach/脱离/重孵勾销/装配后各站点都必须过这一件，不许散写
+    fn sync_router_attached(&self) {
+        let Some(r) = self.router_handle() else {
+            return;
+        };
+        let mut r = r.lock().unwrap();
+        for (leg, name) in [
+            ("local", &self.local_attached),
+            ("remote", &self.remote_attached),
+        ] {
+            if let Err(e) = r.set_attached(leg, name.clone()) {
+                crate::report::report("gate", &format!("附着账入路由槽失败: {e}"));
+            }
+        }
     }
 
     /// 取终端句柄（Arc 克隆）：UI 线程与后台倒帧值守线程共用一把锁。
