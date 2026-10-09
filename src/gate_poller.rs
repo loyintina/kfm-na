@@ -43,9 +43,10 @@ const UPLOAD_RETRIES: u32 = 3;
 const BACKOFF_START_SECS: u64 = 1;
 const BACKOFF_MAX_SECS: u64 = 30;
 
-/// 八通道白名单（与 crates/na-server/src/gateq.rs CHANNELS 同源两份，
-/// 改要同票——注释互指）
-const CHANNELS: [&str; 9] = [
+/// 十通道白名单（与 crates/na-server/src/gateq.rs CHANNELS 同源两份，
+/// 改要同票——注释互指；BAR-240 补 switch-req：缺它远程切换被 400
+/// 逼成 keys-in 盲发，MAIN0134 实案）
+const CHANNELS: [&str; 10] = [
     "shot-req",
     "shot-gles-req",
     "text-req",
@@ -55,6 +56,7 @@ const CHANNELS: [&str; 9] = [
     "trace-req",
     "stats-req",
     "orb-inject",
+    "switch-req",
 ];
 
 fn channel_ok(ch: &str) -> bool {

@@ -9,7 +9,7 @@ use na_server::httpd::Route;
 
 #[test]
 fn spec_bar233_路由白名单红绿() {
-    // 绿：九名全通
+    // 绿：十名全通
     for ch in [
         "shot-req",
         "shot-gles-req",
@@ -20,6 +20,7 @@ fn spec_bar233_路由白名单红绿() {
         "trace-req",
         "stats-req",
         "orb-inject",
+        "switch-req",
     ] {
         assert!(gateq::channel_ok(ch), "{ch} 应在白名单");
         assert!(
@@ -66,6 +67,21 @@ fn spec_bar233_路由白名单红绿() {
 
 fn httpd_route(method: &str, path: &str) -> Route {
     na_server::httpd::route(method, path)
+}
+
+/// BAR-240（MAIN0134 实案）：switch-req 必须在白名单——承影远程「先切回
+/// 自己会话」的正路被 400 拒，才逼出 keys-in 盲发误投白露会话。
+/// 变异：从 CHANNELS 摘掉 switch-req → 本钉红。
+#[test]
+fn spec_bar240_switch_req入白名单() {
+    assert!(gateq::channel_ok("switch-req"), "switch-req 应在白名单");
+    assert!(
+        matches!(
+            httpd_route("POST", "/api/gate/switch-req"),
+            Route::GatePush { .. }
+        ),
+        "POST /api/gate/switch-req 应路由 GatePush"
+    );
 }
 
 #[test]
