@@ -449,6 +449,17 @@ pub const COMPONENTS: &[CompEntry] = &[
         desc: "活跃会话死（session_over）时终端页顶部浮三级框卡带：状态行 + [重试][切本地] 双钮（重试=kick_reconnect 敲键同路，切本地=switch_session Ctrl-] 同路）。画进终卡槽（与齿轮同槽，面板靠泊整层自隐=只在裸终端页出现），sig 带 session_over 维死活翻转自动重烘。几何宪法合规：卡带 4 格（内行 3 格+上下半格净空）、钮 3 格高 6 格宽右簇；色源 = 终端页族 TERM_FRAME_C1/C2（不随机）。卡顶让开齿轮带（+90px）。",
         preview: Preview::FieldLabel,
     },
+    CompEntry {
+        name: "无障碍状态行",
+        cat: "控件",
+        status: CompStatus::Active,
+        symbol: "a11y_ui_status_text",
+        file: "src/a11y.rs",
+        spec: "MAIN0149 §四（用户拍板：系统管理设置页入口）",
+        tests: "tests/a11y_spec.rs",
+        desc: "BAR-246 无障碍服务的用户面：系统管理页上池尾行「无障碍服务」——值列实时读授权态（Settings.Secure enabled_accessibility_services 含本包否 + 服务在线否，三态：未启用/已启用·在线/已启用·离线被停待自恢复）；点按跳系统无障碍设置页。服务本体 = 稳定 Java 薄壳 KfmA11yService + native 委托（热更碰不到服务类名，授权恒在）。",
+        preview: Preview::FieldLabel,
+    },
     // ---- 动效引擎 ----
     CompEntry {
         name: "弹簧",

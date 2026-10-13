@@ -67,6 +67,23 @@
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
 
+        <!-- BAR-246 无障碍服务（MAIN0149 用户拍板：adb 无线调试掉线时
+             na 自己伸手点开开关）：稳定 Java 薄壳 KfmA11yService，类名
+             永不变——热更只换 .so 碰不到服务类名，授权恒在（判据⑧）。
+             BIND_ACCESSIBILITY_SERVICE 系统级权限签名保护，exported=true
+             是系统绑定所必需；能力面收窄到「读窗口＋手势」（判据⑦不越权） -->
+        <service
+            android:name=".KfmA11yService"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/a11y_service" />
+        </service>
+
         <!-- 自持安装通道（KfmFileProvider 文件头）：私有目录 APK 经
              content:// + 一次性读授权递给系统安装器——无存储权限、
              不碰共享存储，Termux 路径的替身 -->

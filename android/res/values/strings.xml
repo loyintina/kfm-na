@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- BAR-246：无障碍服务在系统设置页里给用户看的描述 -->
+    <string name="a11y_desc">KFM-NA 无障碍服务（调试自持之手）</string>
+</resources>

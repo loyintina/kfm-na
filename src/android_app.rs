@@ -3419,6 +3419,20 @@ impl App {
                                         self.dirty = true;
                                     }
                                 }
+                            } else {
+                                // tab0 系统管理页：上池行点按（BAR-246）——
+                                // 命中「无障碍服务」状态行 = 跳系统无障碍
+                                // 设置页（用户手动授权路径；其余字段行
+                                // 只读不动作）
+                                let scroll = pg.upper_scroll();
+                                if let Some(i) = pg.upper_row_at_y(yi, &upper, scroll)
+                                    && pg.upper_label(i) == Some("无障碍服务")
+                                    && let Some(app) = self.android_app.as_ref()
+                                {
+                                    crate::a11y::open_settings_page(app);
+                                    crate::report::report("ui", "无障碍服务行点按→跳系统设置页");
+                                    self.dirty = true;
+                                }
                             }
                         }
                     }
@@ -5469,6 +5483,14 @@ impl App {
                 });
             }
         }
+        // BAR-246（MAIN0149 用户拍板）：无障碍服务状态行挂上池尾部——
+        // 点按跳系统无障碍设置页；值列 = 授权状态（未授权/已授权），
+        // 读取走 a11y::a11y_ui_status_text（纯逻辑＋Settings.Secure）
+        upper.push(crate::ui::cfg_page::UpperRow {
+            label: "无障碍服务".into(),
+            value: crate::a11y::a11y_ui_status_text(self.android_app.as_ref()),
+            is_dropdown: false,
+        });
         let mut p = page.lock().unwrap();
         p.set_rows(rows);
         p.set_options(options, sel);

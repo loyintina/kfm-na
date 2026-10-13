@@ -21,12 +21,13 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 
-/// 十通道触发文件名白名单（A 档纯函数判据，钉在 gate_http_spec）——shot
-/// 家族两个文件名（CPU/GLES）、orb 的注入文件名，共十名。加通道 =
+/// 十一通道触发文件名白名单（A 档纯函数判据，钉在 gate_http_spec）——shot
+/// 家族两个文件名（CPU/GLES）、orb 的注入文件名，共十一名。加通道 =
 /// 此表加一行（na 侧 gate_poller 同源两份，注释互指）。
 /// BAR-240（MAIN0134）：switch-req 补入——缺它时远程切换正路被 400 拒，
 /// 调用方被逼成 keys-in 盲发活跃会话（承影救机命令误投白露会话实案）。
-pub const CHANNELS: [&str; 10] = [
+/// BAR-246（MAIN0149 用户拍板）：a11y-req 补入——无障碍动作通道。
+pub const CHANNELS: [&str; 11] = [
     "shot-req",
     "shot-gles-req",
     "text-req",
@@ -37,6 +38,7 @@ pub const CHANNELS: [&str; 10] = [
     "stats-req",
     "orb-inject",
     "switch-req",
+    "a11y-req",
 ];
 
 pub fn channel_ok(ch: &str) -> bool {

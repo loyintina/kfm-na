@@ -8,6 +8,7 @@
 
 | 模块 | pub项 | 已引用 | 未覆盖 | 未覆盖清单 |
 |---|---|---|---|---|
+| `src/a11y.rs` | 19 | 14 | 5 | take_req service_up a11y_ui_status_text a11y_ui_status_text open_settings_page |
 | `src/ai_chat.rs` | 11 | 10 | 1 | generation |
 | `src/ai_presence.rs` | 37 | 37 | 0 | — |
 | `src/bootstrap.rs` | 6 | 4 | 2 | ensure_pkg_tool first_boot_install |
@@ -67,7 +68,7 @@
 | `src/tunnel.rs` | 38 | 32 | 6 | check_ssh_fields NA_SSHD_PORT request_reconnect request_resume_kick request_trip_quic request_heal_quic |
 | `src/ui/accent.rs` | 17 | 17 | 0 | — |
 | `src/ui/ai_page.rs` | 7 | 7 | 0 | — |
-| `src/ui/cfg_page.rs` | 74 | 68 | 6 | DROPDOWN_ENTER_MS DROPDOWN_EXIT_MS DROPDOWN_PICK_SYNC_MS open_viewer_with_accent register_cfg_page cfg_page_handle |
+| `src/ui/cfg_page.rs` | 75 | 68 | 7 | DROPDOWN_ENTER_MS DROPDOWN_EXIT_MS DROPDOWN_PICK_SYNC_MS upper_label open_viewer_with_accent register_cfg_page cfg_page_handle |
 | `src/ui/comp_registry.rs` | 6 | 6 | 0 | — |
 | `src/ui/conn_card.rs` | 6 | 6 | 0 | — |
 | `src/ui/cursor.rs` | 9 | 9 | 0 | — |

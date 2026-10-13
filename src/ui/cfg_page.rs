@@ -372,6 +372,12 @@ impl CfgPage {
         self.focus
     }
 
+    /// 上池行标签（BAR-246：壳点按分发按标签认行——「无障碍服务」行
+    /// 点按跳系统设置页，不靠行号硬编码）
+    pub fn upper_label(&self, i: usize) -> Option<&str> {
+        self.upper.get(i).map(|r| r.label.as_str())
+    }
+
     pub fn option_sel(&self) -> usize {
         self.option_sel
     }

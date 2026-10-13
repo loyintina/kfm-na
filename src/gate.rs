@@ -14,6 +14,7 @@
 //! | trace-req | 行踪环全量落盘（report 流本地副本） | trace.txt        |
 //! | stats-req | 运行时统计快照（帧/泵/闸门计数）  | stats-res          |
 //! | orb-inject | AI 外显事件注入（tap/drag/run/end/dismiss） | orb-inject-res |
+//! | a11y-req   | 无障碍动作批（逐行命令，BAR-246；语法与日志格式见 src/a11y.rs 头） | a11y-res + a11y-log.jsonl |
 //!
 //! restart-req 是热更新闭环的重启腿（2026-08-26 与用户定）：推完热更核心
 //! 后要换进程才生效。值守线程见到触发文件即同步直报遗言、就地退出——
@@ -640,6 +641,7 @@ pub fn spawn_gate_watcher() {
             rec_req_check(DUMP_DIR); // 通道十二:软件内实录(P2,2026-09-08)
             web_req_check(DUMP_DIR); // 通道十三:浏览器卡尖刺(SPKE-web,2026-09-12)
             install_req_check(DUMP_DIR); // 通道十五:自更新原语递交安装意图(BAR-162,2026-09-26)
+            crate::a11y::a11y_check(DUMP_DIR); // 通道十六:无障碍动作批(BAR-246,2026-10-13)
             alert_tick(tick);
             history_tick(DUMP_DIR, tick);
             thread_census(DUMP_DIR, tick);

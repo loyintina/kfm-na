@@ -149,6 +149,7 @@ echo "=== [package 4/6] aapt2 compile+link + 装 dex/lib ==="
 "$AAPT2" link -o "$BUILD/unsigned.apk" -I "$AJAR" \
     --manifest android/AndroidManifest.xml \
     -R "$BUILD/res.zip" \
+    --auto-add-overlay \
     --min-sdk-version "$MIN_API" --target-sdk-version "$TARGET_SDK" \
     --version-code "$VERSION_CODE" --version-name "$VERSION_NAME"
 cp "$BUILD/dex/classes.dex" "$BUILD/stage/"

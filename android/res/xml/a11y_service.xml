@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- BAR-246 无障碍服务能力声明（MAIN0149 判据⑦不越权：只声明必需能力——
+     读窗口＋手势，不申请截屏/触摸探索等无关能力；targetSdk=28 老 API
+     面，截屏 API（30+）够不到也不必够，截屏仍走 adb 那条腿——卡萝 §三
+     已知边界） -->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityFlags="flagRetrieveInteractiveWindows|flagIncludeNotImportantViews"
+    android:canRetrieveWindowContent="true"
+    android:accessibilityEventTypes="typeWindowStateChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:description="@string/a11y_desc" />
