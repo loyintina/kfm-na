@@ -7110,7 +7110,9 @@ impl App {
     fn parser_exec_done(&mut self, kind: ParserExec, res: Result<String, String>) {
         match (kind, res) {
             (ParserExec::List, Ok(out)) => {
-                let ss = crate::tmux_ctl::parse_session_list(&out);
+                // BAR-245：候选面白名单收口唯一闸——滤「可见性」不滤
+                // 「存在性」，临时测试窗不进面；白名单缺席退化全列
+                let ss = crate::tmux_ctl::parse_session_list_visible(&out);
                 crate::report::report("ui", &format!("tmux 插件: 会话表 {} 条", ss.len()));
                 // BAR-182：名单落地 = 退避账归零（自动臂下一圈即放行）
                 self.warm_list_fails = 0;

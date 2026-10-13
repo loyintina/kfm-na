@@ -14,6 +14,15 @@
 /// list-sessions 的 -F 格式串（cmd_list 与解析共用单一源）
 pub const LIST_FORMAT: &str = "#{session_name}|#{session_windows}|#{session_attached}";
 
+/// 候选面白名单源（BAR-245）：服务器侧七家窗口登记表（制表符分隔，
+/// 第一列 = tmux 会话名，`#` 起注释行）。读不到 = 白名单段空 →
+/// 解析侧退化全列（观测铁律：仪器缺席不许反咬业务，面不能空）
+pub const SESSION_MAP_PATH: &str = "/root/.kimi-session-map";
+
+/// list 输出里白名单段与会话段的分段哨兵（独占一行；整行等值才算，
+/// pty 回显的命令行含哨兵子串不命中）
+pub const LIST_WL_SENTINEL: &str = "__KFM_WL_END__";
+
 /// 一行会话记录
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TmuxSession {
@@ -90,9 +99,50 @@ pub fn parse_session_list(out: &str) -> Vec<TmuxSession> {
     v
 }
 
-/// 列全部会话（短命 ws 执行，尾带 exit 收会话）
+/// 列会话（短命 ws 执行，尾带 exit 收会话）。BAR-245 候选面白名单
+/// 收口：同一条命令先吐白名单表序（SESSION_MAP_PATH 第一列，滤注释
+/// 与空行），再吐哨兵行，再吐会话清单——壳侧
+/// parse_session_list_visible 按表滤 + 按表序排；地图缺席/读不到 →
+/// 白名单段空 → 壳侧退化全列，旧行为原样
 pub fn cmd_list() -> String {
-    format!("tmux list-sessions -F '{LIST_FORMAT}'; exit")
+    format!(
+        "{{ grep -v '^#' {SESSION_MAP_PATH} 2>/dev/null | cut -f1 | sed '/^[[:space:]]*$/d'; echo '{LIST_WL_SENTINEL}'; tmux list-sessions -F '{LIST_FORMAT}'; }}; exit"
+    )
+}
+
+/// 候选面解析（BAR-245）：哨兵分段——前段白名单（表序）、后段会话
+/// 表；会话按「名 ∈ 白名单」滤出并按白名单表序重排（滤「可见性」
+/// 不滤「存在性」：临时测试窗不进面，但会话本体不动）。退化两臂：
+/// 哨兵缺席（老核输出）或白名单段空（地图读不到）→ 原样全列
+pub fn parse_session_list_visible(out: &str) -> Vec<TmuxSession> {
+    let lines: Vec<String> = out
+        .lines()
+        .map(|l| strip_ansi(l).trim().to_string())
+        .collect();
+    // 末次命中 = 真哨兵（pty 命令回显总在真输出之前，双保险——
+    // 整行等值本就滤掉回显行里的子串形态）
+    let Some(sent) = lines.iter().rposition(|l| l == LIST_WL_SENTINEL) else {
+        return parse_session_list(out);
+    };
+    let mut whitelist: Vec<&str> = Vec::new();
+    for l in &lines[..sent] {
+        if !l.is_empty() && !whitelist.contains(&l.as_str()) {
+            whitelist.push(l);
+        }
+    }
+    let sessions = parse_session_list(&lines[sent + 1..].join("\n"));
+    if whitelist.is_empty() {
+        return sessions;
+    }
+    // 白名单段的回显/噪声行自然落空（find 不命中即跳过），只留
+    // 真在跑的表内会话
+    let mut visible = Vec::new();
+    for name in whitelist {
+        if let Some(s) = sessions.iter().find(|s| s.name == *name) {
+            visible.push(s.clone());
+        }
+    }
+    visible
 }
 
 /// 新建会话：Some(名) = 指定名（sanitize 后才许进）；None = tmux 自动编号。
@@ -151,7 +201,9 @@ fn veran_resolve() -> String {
 ///   的交互 shell 同语义）；
 /// ③有会话 → 附回上次视面：last = 会话名且活着 → 附它；last = 哨兵
 ///   （上次裸 shell）→ 落尾裸 shell；last 空（无记录）或会话名已死 →
-///   附 list 第一条。
+///   按七家登记表（SESSION_MAP_PATH）挑第一个活着的白名单会话
+///   （BAR-245：冷启动不许落进临时测试窗）；登记表读不到/表内无一
+///   活着 → 退回 list 第一条（旧径保底，面不能空）。
 /// last 持久化在壳侧 files/kfm-last-view（attach/脱离时写），本函数只消费。
 pub fn cmd_bootstrap(last: Option<&str>) -> String {
     let lv = sh_sq(last.unwrap_or(""));
@@ -164,7 +216,11 @@ pub fn cmd_bootstrap(last: Option<&str>) -> String {
          && tmux has-session -t \"=$KFM_LAST\" 2>/dev/null; then \
          exec tmux new-session -A -s \"$KFM_LAST\"; \
          elif [ \"$KFM_LAST\" != '{BOOTSTRAP_SHELL_SENTINEL}' ]; then \
-         exec tmux new-session -A -s \"$(tmux list-sessions -F '#{{session_name}}' | head -n 1)\"; \
+         KFM_PICK=''; for n in $(grep -v '^#' {SESSION_MAP_PATH} 2>/dev/null | cut -f1); do \
+         if tmux has-session -t \"=$n\" 2>/dev/null; then KFM_PICK=\"$n\"; break; fi; done; \
+         if [ -z \"$KFM_PICK\" ]; then \
+         KFM_PICK=\"$(tmux list-sessions -F '#{{session_name}}' | head -n 1)\"; fi; \
+         exec tmux new-session -A -s \"$KFM_PICK\"; \
          fi; \
          fi; \
          exec ${{SHELL:-/bin/sh}} -l",
