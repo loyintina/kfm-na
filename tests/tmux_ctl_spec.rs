@@ -103,10 +103,119 @@ fn spec_parse_全噪声得空表() {
 
 #[test]
 fn spec_cmd_list_精确字串() {
+    // BAR-245：同一条命令先吐白名单表序（七家窗口登记表第一列，
+    // 滤注释/空行），再吐分段哨兵，再吐会话清单；尾带 exit 收会话
     assert_eq!(
         cmd_list(),
-        "tmux list-sessions -F '#{session_name}|#{session_windows}|#{session_attached}'; exit"
+        "{ grep -v '^#' /root/.kimi-session-map 2>/dev/null | cut -f1 | sed '/^[[:space:]]*$/d'; echo '__KFM_WL_END__'; tmux list-sessions -F '#{session_name}|#{session_windows}|#{session_attached}'; }; exit"
     );
+    // 哨兵与地图路径同源（常量进串）
+    assert!(cmd_list().contains(tmux_ctl::LIST_WL_SENTINEL));
+    assert!(cmd_list().contains(tmux_ctl::SESSION_MAP_PATH));
+}
+
+// ---- BAR-245 候选面白名单收口（MAIN0148：临时测试窗不许上用户面；
+// 滤「可见性」不滤「存在性」；白名单缺席/读不到 = 退化全列——观测
+// 铁律：仪器缺席不许反咬业务，面不能空）----
+//
+// 变异抽检方向：过滤放行一切 / 摘掉表序重排 / 摘哨兵分段 / 空白名单
+// 不退化 ——本文件必须红。
+
+/// BAR-245 夹具：pty 真实形态（命令回显行 + \r\n + ANSI + 噪声）
+fn bar245_pty_out(wl: &str, rows: &str) -> String {
+    format!(
+        "$ {{ grep -v '^#' /root/.kimi-session-map; echo '__KFM_WL_END__'; tmux list-sessions; }}; exit\r\n{wl}\r\n{}\r\n{rows}",
+        tmux_ctl::LIST_WL_SENTINEL
+    )
+}
+
+#[test]
+fn spec_bar245_白名单滤出且按表序() {
+    // 会话表乱序 + 混入临时窗（pulse216/cychase）；输出只留表内名、
+    // 顺序 = 白名单表序而非 tmux 返回序
+    let out = bar245_pty_out(
+        "观澜\r\n清和\r\n白露",
+        "清和|1|0\r\npulse216|1|1\r\n观澜|1|1\r\ncychase|2|0\r\n白露|3|1\r\n",
+    );
+    let ss = tmux_ctl::parse_session_list_visible(&out);
+    let names: Vec<&str> = ss.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, ["观澜", "清和", "白露"]);
+    // 数据随行（不是只滤名字）——白露 3 窗附着的账要跟上
+    assert_eq!(ss[2].windows, 3);
+    assert!(ss[2].attached);
+}
+
+#[test]
+fn spec_bar245_新增临时窗候选面不变() {
+    // 回归判据（白露验收③）：同一个白名单，多加一个临时窗后输出
+    // 与之前完全相同——临时窗出现/消失永远不动用户面
+    let base = bar245_pty_out("观澜\r\n清和", "观澜|1|1\r\n清和|1|0\r\n");
+    let grown = bar245_pty_out(
+        "观澜\r\n清和",
+        "pulse216|1|1\r\n观澜|1|1\r\nrepro999|1|0\r\n清和|1|0\r\n",
+    );
+    assert_eq!(
+        tmux_ctl::parse_session_list_visible(&base),
+        tmux_ctl::parse_session_list_visible(&grown)
+    );
+}
+
+#[test]
+fn spec_bar245_哨兵缺席退化全列() {
+    // 老服务器/老核输出（无白名单段）= 旧行为原样：全列、原序
+    let out = "pulse216|1|1\r\n观澜|1|1\r\n";
+    assert_eq!(
+        tmux_ctl::parse_session_list_visible(out),
+        parse_session_list(out)
+    );
+    assert_eq!(tmux_ctl::parse_session_list_visible(out).len(), 2);
+}
+
+#[test]
+fn spec_bar245_白名单段空退化全列() {
+    // 地图文件读不到（别的服务器没有登记表）→ 哨兵在但段空 →
+    // 面不许空：全列原序
+    let out = format!(
+        "{}\r\npulse216|1|1\r\n观澜|1|1\r\n",
+        tmux_ctl::LIST_WL_SENTINEL
+    );
+    let ss = tmux_ctl::parse_session_list_visible(&out);
+    let names: Vec<&str> = ss.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, ["pulse216", "观澜"]);
+}
+
+#[test]
+fn spec_bar245_pty脏文本哨兵不串() {
+    // 命令回显行含哨兵字串（带引号带提示符）≠ 哨兵行；ANSI 染色的
+    // 白名单名照认；\r\n 照滤
+    let out = bar245_pty_out(
+        "\u{1b}[32m观澜\u{1b}[0m\r\n清和",
+        "pulse216|1|1\r\n观澜|1|1\r\n清和|1|0\r\n",
+    );
+    let ss = tmux_ctl::parse_session_list_visible(&out);
+    let names: Vec<&str> = ss.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, ["观澜", "清和"]);
+}
+
+#[test]
+fn spec_bar245_白名单名未运行跳过() {
+    // 表内有名但会话已死（七家不是人人常驻 tmux）→ 跳过不 panic
+    let out = bar245_pty_out("观澜\r\n小满\r\n清和", "观澜|1|1\r\n清和|1|0\r\n");
+    let ss = tmux_ctl::parse_session_list_visible(&out);
+    let names: Vec<&str> = ss.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, ["观澜", "清和"]);
+}
+
+#[test]
+fn spec_bar245_引导臂白名单优先兜底旧径() {
+    // 冷启动「附第一条」臂（BAR-202③）：先按登记表挑第一个活着的
+    // 白名单会话，挑不到才退回 list 第一条（旧径保底）
+    let cmd = tmux_ctl::cmd_bootstrap(None);
+    assert!(cmd.contains(tmux_ctl::SESSION_MAP_PATH));
+    assert!(cmd.contains("KFM_PICK"));
+    let wl_pos = cmd.find("for n in $(grep").expect("白名单环必须在");
+    let fb_pos = cmd.find("head -n 1").expect("旧径兜底必须留");
+    assert!(wl_pos < fb_pos, "白名单环必须在 head -n 1 兜底之前");
 }
 
 #[test]
