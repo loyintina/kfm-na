@@ -30,6 +30,12 @@ NA_TRANSPORT=${NA_TRANSPORT:-ssh}
 NA_ADB=${NA_ADB:-$HOME/40-资产/kfm-na-toolchain/sdk/platform-tools/adb}
 NA_ADB_SERIAL=${NA_ADB_SERIAL:-localhost:5555}
 
+# BAR-248（NA0177）：Termux 腿 8022 是「会漂的编号」——neo6s Termux →
+# 11 机 → 9 机三易其主（谁反连谁应答），无核验的 am start 曾误拉 9 机
+# 旧核引爆互踢风暴。用编号前先问「你是谁」，答非所期即拒。默认期待
+# 11 机（主生产机）；判卷/他机显式 NA_TERMUX_MODEL=<机型> 覆盖。
+NA_TERMUX_MODEL=${NA_TERMUX_MODEL:-V2573A}
+
 gate() {
     if [[ $NA_TRANSPORT == adb ]]; then
         "$NA_ADB" -s "$NA_ADB_SERIAL" shell "$1"
@@ -102,14 +108,34 @@ gate_pull() {
     fi
 }
 
+# gate_termux_model <ssh口>：取对面机型；不通/取不到 = 空串
+gate_termux_model() {
+    ssh -p "$1" -o BatchMode=yes -o ConnectTimeout=6 \
+        -o StrictHostKeyChecking=no localhost \
+        'getprop ro.product.model 2>/dev/null | head -1' 2>/dev/null \
+        | tr -d '\r' | head -1
+}
+
+# gate_termux_am <am start 参数>：Termux 腿发 am start，身份核验先行——
+# 对面机型 ≠ NA_TERMUX_MODEL 即拒（响亮 stderr + exit 1），宁拒不错拉。
+gate_termux_am() {
+    local port=8022 model
+    model=$(gate_termux_model "$port")
+    if [[ $model != "$NA_TERMUX_MODEL" ]]; then
+        echo "❌ BAR-248 身份核验拒：$port 对面机型「${model:-取不到}」≠ 期待「$NA_TERMUX_MODEL」——编号会漂（8022 三易其主），用 NA_TERMUX_MODEL=<机型> 显式指定目标机" >&2
+        return 1
+    fi
+    ssh -p "$port" -o BatchMode=yes -o ConnectTimeout=8 \
+        -o StrictHostKeyChecking=no localhost "am start $1" >/dev/null
+}
+
 gate_am_start() {
     if [[ $NA_TRANSPORT == adb ]]; then
+        # adb 臂 -s 序列号即身份，不核
         "$NA_ADB" -s "$NA_ADB_SERIAL" shell \
             "am start -n dev.kfm.na/.MainActivity" >/dev/null
     else
-        ssh -p 8022 -o BatchMode=yes -o ConnectTimeout=8 \
-            -o StrictHostKeyChecking=no localhost \
-            "am start -n dev.kfm.na/.MainActivity" >/dev/null
+        gate_termux_am "-n dev.kfm.na/.MainActivity"
     fi
 }
 
