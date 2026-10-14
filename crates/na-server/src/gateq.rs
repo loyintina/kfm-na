@@ -189,6 +189,55 @@ pub fn parse_gate_legs(env: Option<&str>, main_port: u16) -> Result<Vec<u16>, St
     parse_port_list("NA_GATE_LEGS", env, &[main_port])
 }
 
+/// NA_QUIC_REV_FRONTS 解析（A 档纯函数，钉在 gate_http_spec，BAR-247 改道
+/// 「一口多设备」）：逗号分隔的「TCP桥口:设备id」对（如 9025:neo9）——
+/// 每个 front 是主反连腿上一个按 deviceId 认领的本机桥前（9022 仍是
+/// legacy 槽的桥前，唯一属主不变；id 槽各绑各口 = 一口多设备零互踢）。
+/// fail-loud 拒：缺冒号/非端口/0 口/与主桥口或 front 间互重/空 id/
+/// 非法 id（na_quic::valid_device_id 同一把尺）/id 互重——错路由 =
+/// 串机温床，宁可拒启（parse_rev_legs 同族）。
+pub fn parse_rev_fronts(
+    env: Option<&str>,
+    banned_tcp: &[u16],
+) -> Result<Vec<(u16, String)>, String> {
+    let Some(s) = env else {
+        return Ok(Vec::new());
+    };
+    let mut out: Vec<(u16, String)> = Vec::new();
+    for part in s.split(',').map(str::trim) {
+        if part.is_empty() {
+            continue;
+        }
+        let (t, id) = part
+            .split_once(':')
+            .ok_or_else(|| format!("NA_QUIC_REV_FRONTS 项缺「TCP桥口:设备id」冒号: {part}"))?;
+        let tcp: u16 = t
+            .trim()
+            .parse()
+            .map_err(|_| format!("NA_QUIC_REV_FRONTS 含非端口项: {t}"))?;
+        if tcp == 0 {
+            return Err("NA_QUIC_REV_FRONTS 含 0 口".to_string());
+        }
+        if banned_tcp.contains(&tcp) || out.iter().any(|(x, _)| *x == tcp) {
+            return Err(format!("NA_QUIC_REV_FRONTS TCP 桥口重复: {tcp}"));
+        }
+        let id = id.trim();
+        if id.is_empty() {
+            return Err(format!("NA_QUIC_REV_FRONTS 项设备 id 空: {part}"));
+        }
+        if !na_quic::valid_device_id(id) {
+            return Err(format!(
+                "NA_QUIC_REV_FRONTS 设备 id 非法: {id:?}（1..=32 字节 ASCII 字母数字与 -_）"
+            ));
+        }
+        if out.iter().any(|(_, x)| x == id) {
+            return Err(format!("NA_QUIC_REV_FRONTS 设备 id 重复: {id}"));
+        }
+        out.push((tcp, id.to_string()));
+    }
+    Ok(out)
+}
+
 /// pending 响应体（text/plain，A 档纯函数，钉在 httpd_spec 黄金样例）：
 /// 首行十进制计数 N，随后 N 行 `channel\tpayload_hex`（hex 小写；空
 /// payload = 空 hex 段）。选此格式：na 侧零 JSON 依赖、零二进制歧义。
