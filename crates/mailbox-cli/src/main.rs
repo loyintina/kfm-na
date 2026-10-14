@@ -1,6 +1,6 @@
 //! mailbox-cli — kfm-na 信箱工具链 CLI（IO 壳；逻辑全在 mailbox-core）。
 //!
-//! 六子命令：
+//! 七子命令：
 //!   new       写信 + 发令牌（v2.1 模式，移植 new-letter.mjs 主流程）
 //!   verify    [信件路径]  不带参数 = 全册执法（check-letter-token.mjs 主循环）；
 //!             带文件 = 单信自检（new-letter.mjs --verify）
@@ -14,6 +14,9 @@
 //!             零回应窗口（看回应事实不看状态词，0034 裁）+ 作者/代撤权限 +
 //!             git mv 移档 archive-withdrawn/ +
 //!             台账原位 revokedAt（不带 renamedFrom）+ 信末撤回行 + gen 投影
+//!   floor     --list <父信路径> | --check <父信路径>  楼层只读面（契约 §十二）：
+//!             --list 一行 JSON（键序固定）；--check 楼层段自检（红即非零退出）。
+//!             写盘面（追楼/撤楼/信级锁/提交）尚未移植
 //!
 //! 公共选项：--mailbox / --roster / --name-prefix / --v1-manifest /
 //! --no-strict-pools（env KFM_MAILBOX_STRICT_POOLS=0 同效）/ --book-sorting。
@@ -23,7 +26,10 @@
 //! （至少 {"sorting":"NA","name":"na"}），索引 sorting = 文件名解析出的码 || 该码；
 //! 缺身份文件按 MAIN 兜底，但 --mailbox 非本仓主册时要求显式 --book-sorting。
 
-use mailbox_core::json::{JVal, parse_json, to_json_string};
+use mailbox_core::floor::{
+    Floor, match_old_start, parse_floors, split_floor_sections, verify_floors,
+};
+use mailbox_core::json::{JVal, jopt_str, parse_json, to_json_string};
 use mailbox_core::name::{
     CONNECT_CHARS, V21_TYPES, is_han_str, is_v21_name, parse_v21_name, v21_no_of,
 };
@@ -37,7 +43,7 @@ use mailbox_core::projection::{
 use mailbox_core::roster::{PoolEntry, Roster, check_pools};
 use mailbox_core::token::{self, fingerprint, ledger_nos, parse_ledger};
 use mailbox_core::verify::{BookCheck, LetterText, verify_book, verify_single};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::fs::OpenOptions;
 use std::os::fd::AsRawFd;
@@ -1741,6 +1747,213 @@ fn cmd_withdraw(args: &Args) {
 }
 
 // ---------------------------------------------------------------
+// floor：楼层只读面（--list 机读形状 / --check 楼层段自检）
+// 写盘面（追楼/撤楼/信级锁/提交）尚未移植——不在本批（new-letter.mjs --floor 写入路）
+// ---------------------------------------------------------------
+
+/// 楼主 ＝ 父信信封「从:」的**名字**（末两字；非「恰好两个汉字」⇒ None）——照 JS floorOwnerName
+fn floor_owner_name(text: &str) -> Option<String> {
+    let hdr = mailbox_core::header::parse_header(text, &["从"]);
+    let v = mailbox_core::header::header_get(&hdr, "从")?;
+    let last: String = v
+        .chars()
+        .rev()
+        .take(2)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    (last.chars().count() == 2 && is_han_str(&last)).then_some(last)
+}
+
+fn cmd_floor(args: &Args) {
+    let p = "mailbox-floor";
+    let (mode, parent_arg) = match (args.opt("list"), args.opt("check")) {
+        (Some(a), None) => ("list", a),
+        (None, Some(a)) => ("check", a),
+        (None, None) if args.has("list") || args.has("check") => die(
+            p,
+            "floor 需要 <父信路径>（如 mailbox-cli floor --list <父信路径>）",
+        ),
+        _ => die(
+            p,
+            "floor 需要且只需要 --list <父信路径> 或 --check <父信路径>（本批只有只读面；追楼/撤楼写入面尚未移植）",
+        ),
+    };
+    let mailbox = mailbox_of(args);
+    let lp0 = PathBuf::from(parent_arg);
+    let lp = if lp0.is_file() {
+        lp0
+    } else {
+        mailbox.join(parent_arg)
+    };
+    if !lp.is_file() {
+        die(p, &format!("父信不存在：{parent_arg}"));
+    }
+    let text = read_opt(&lp).unwrap_or_default();
+    let pfile = lp
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_string();
+    if !is_v21_name(&pfile) {
+        die(
+            p,
+            &format!("父信不是 v2.1 信（文件名须 <编号>号…的<类型词>.md）：{pfile}"),
+        );
+    }
+    let parsed = parse_v21_name(&pfile);
+    let parent_no = match parsed.no.clone() {
+        Some(n) if parsed.errs.is_empty() => n,
+        _ => die(
+            p,
+            &format!(
+                "父信文件名不合 v2.1 文法，定不了编号：{pfile}（{}）",
+                parsed.errs.join("；")
+            ),
+        ),
+    };
+    // 册根 = 父信所在目录（JS pBook）：名册按该册取（resolveRoster 同制，回落主册 roster.json）
+    let pdir = lp.parent().map(Path::to_path_buf).unwrap_or_default();
+    let roster = resolve_roster(args, &pdir);
+    let floors = parse_floors(&text);
+    // start_line 与 parse_floors 同源（同用 lines()），故索引一致
+    let lines: Vec<&str> = text.lines().collect();
+
+    // ---- --check：楼层段自检（verifyFloors 的核＝verify_floors；红即非零退出）----
+    if mode == "check" {
+        let names: HashSet<String> = roster
+            .as_ref()
+            .map(|r| r.names.iter().map(|(n, _)| n.clone()).collect())
+            .unwrap_or_default();
+        let errs = verify_floors(&floors, &names);
+        if !errs.is_empty() {
+            for e in &errs {
+                eprintln!("[{p}] ✗ 楼层自检：{e}");
+            }
+            exit(1);
+        }
+        println!(
+            "[{p}] ✓ 楼层自检通过：{pfile}（父信 {parent_no}，共 {} 楼）",
+            floors.len()
+        );
+        return;
+    }
+
+    // ---- --list：一行 JSON（照 new-letter.mjs --list 逐键、键序固定）----
+    //   外层键序：parent / parentFile / book / count / floors
+    //   每楼 14 键序：no form from fromFunc isOwner date toNo toName toIsOwner
+    //                 withdrawn hasAsk body summary detail；floors 按楼号升序
+    let owner = floor_owner_name(&text);
+    let mut by_no: HashMap<u32, &Floor> = HashMap::new();
+    for f in &floors {
+        by_no.insert(f.head.no, f); // 同号重复：后写覆盖（JS new Map 同制）
+    }
+    let mut sorted: Vec<&Floor> = floors.iter().collect();
+    sorted.sort_by_key(|f| f.head.no); // 稳定排序：同号保文件序
+    let items: Vec<JVal> = sorted
+        .iter()
+        .map(|f| {
+            // form：段界行是旧形 `> 楼: N` 还是新形 `> N楼：…`（parse_floors 同一判据）
+            let legacy = match_old_start(lines[f.start_line]).is_some();
+            let author = opt_nonempty(&f.head.author);
+            // fromFunc：名册派生（primary > functions[0]）；取不到 = null
+            let from_func = author
+                .as_deref()
+                .and_then(|n| roster.as_ref().map(|r| r.func_of_name(n, "")))
+                .filter(|s| !s.is_empty());
+            // 被回复者**按事实解**（resolveFloorReply 同制）：对主信 ⇒ 楼主；某楼 ⇒ 那一楼作者
+            let (to_no, to_name, to_is_owner): (Option<u32>, Option<String>, Option<bool>) =
+                match f.head.to_floor {
+                    None => (None, owner.clone(), Some(true)),
+                    Some(n) => match by_no.get(&n) {
+                        None => {
+                            // 指向本信不存在的楼：照写下的字面（旧形两字段本无 ⇒ null）
+                            if legacy {
+                                (Some(n), None, None)
+                            } else {
+                                (
+                                    Some(n),
+                                    opt_nonempty(&f.head.to_name),
+                                    Some(f.head.to_is_owner),
+                                )
+                            }
+                        }
+                        Some(t) => {
+                            let an = opt_nonempty(&t.head.author);
+                            (Some(n), an.clone(), Some(an == owner))
+                        }
+                    },
+                };
+            let sec = split_floor_sections(&f.body);
+            JVal::Obj(vec![
+                ("no".into(), JVal::Num(f.head.no as f64)),
+                (
+                    "form".into(),
+                    JVal::Str(if legacy { "legacy" } else { "new" }.into()),
+                ),
+                ("from".into(), jopt_str(author.as_deref())),
+                ("fromFunc".into(), jopt_str(from_func.as_deref())),
+                (
+                    "isOwner".into(),
+                    match &owner {
+                        None => JVal::Null,
+                        Some(o) => JVal::Bool(author.as_deref() == Some(o.as_str())),
+                    },
+                ),
+                (
+                    "date".into(),
+                    if f.head.time.is_empty() {
+                        JVal::Null
+                    } else {
+                        JVal::Str(f.head.time.clone())
+                    },
+                ),
+                (
+                    "toNo".into(),
+                    match to_no {
+                        None => JVal::Null,
+                        Some(n) => JVal::Num(n as f64),
+                    },
+                ),
+                ("toName".into(), jopt_str(to_name.as_deref())),
+                (
+                    "toIsOwner".into(),
+                    match to_is_owner {
+                        None => JVal::Null,
+                        Some(b) => JVal::Bool(b),
+                    },
+                ),
+                ("withdrawn".into(), JVal::Bool(f.withdrawn)),
+                ("hasAsk".into(), JVal::Bool(f.has_ask)),
+                ("body".into(), JVal::Str(f.body.clone())),
+                ("summary".into(), jopt_str(sec.summary.as_deref())),
+                ("detail".into(), jopt_str(sec.detail.as_deref())),
+            ])
+        })
+        .collect();
+    // book = 父信所在目录名（JS basename(pBook)）
+    let book = pdir
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_string();
+    let out = JVal::Obj(vec![
+        ("parent".into(), JVal::Str(parent_no)),
+        ("parentFile".into(), JVal::Str(pfile)),
+        ("book".into(), JVal::Str(book)),
+        ("count".into(), JVal::Num(items.len() as f64)),
+        ("floors".into(), JVal::Arr(items)),
+    ]);
+    println!("{}", to_json_string(&out));
+}
+
+/// 空串按「无」算（JS 里空 = falsy ⇒ null 的那些字段）
+fn opt_nonempty(s: &str) -> Option<String> {
+    (!s.is_empty()).then(|| s.to_string())
+}
+
+// ---------------------------------------------------------------
 // main
 // ---------------------------------------------------------------
 
@@ -1770,6 +1983,11 @@ const USAGE: &str = "mailbox-cli — kfm-na 信箱工具链（逻辑核 mailbox-
                           不降级 mv）④台账原位加 revokedAt+revokeReason ⑤信末追加
                           「——撤回：<戳> <职能><名字>——原信作废，理由：…」（正文不动）
                           ⑥重跑 gen 刷新投影 ⑦代撤须另行发信通告
+  mailbox-cli floor --list <父信路径> | --check <父信路径>
+                         楼层只读面（父信末尾楼层段，契约 §十二）：
+                         --list 输出一行 JSON（键序固定：parent/parentFile/book/count/floors，
+                           每楼 14 键；按楼号升序）；--check 跑楼层段自检，红即非零退出
+                         （写盘面追楼/撤楼/信级锁/提交尚未移植——不用本子命令）
 
 公共选项：
   --mailbox <dir>       信箱根（默认 env KFM_NA_MAILBOX，否则 $HOME/.kfm/session/信箱）
@@ -1804,6 +2022,7 @@ fn main() {
         "scan" => cmd_scan(&args),
         "reticket" => cmd_reticket(&args),
         "withdraw" => cmd_withdraw(&args),
+        "floor" => cmd_floor(&args),
         other => die("mailbox-cli", &format!("未知子命令：{other}\n\n{USAGE}")),
     }
 }
