@@ -27,7 +27,7 @@
 //! 缺身份文件按 MAIN 兜底，但 --mailbox 非本仓主册时要求显式 --book-sorting。
 
 use mailbox_core::floor::{
-    Floor, match_old_start, parse_floors, split_floor_sections, verify_floors,
+    Floor, floors_by_no, parse_floors, resolve_floor_reply, split_floor_sections, verify_floors,
 };
 use mailbox_core::json::{JVal, jopt_str, parse_json, to_json_string};
 use mailbox_core::name::{
@@ -43,7 +43,7 @@ use mailbox_core::projection::{
 use mailbox_core::roster::{PoolEntry, Roster, check_pools};
 use mailbox_core::token::{self, fingerprint, ledger_nos, parse_ledger};
 use mailbox_core::verify::{BookCheck, LetterText, verify_book, verify_single};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fs;
 use std::fs::OpenOptions;
 use std::os::fd::AsRawFd;
@@ -1817,18 +1817,22 @@ fn cmd_floor(args: &Args) {
     let pdir = lp.parent().map(Path::to_path_buf).unwrap_or_default();
     let roster = resolve_roster(args, &pdir);
     let floors = parse_floors(&text);
-    // start_line 与 parse_floors 同源（同用 lines()），故索引一致
-    let lines: Vec<&str> = text.lines().collect();
 
-    // ---- --check：楼层段自检（verifyFloors 的核＝verify_floors；红即非零退出）----
+    // ---- --check：楼层段自检（＝真源 verifyFloors；红即非零退出）----
     if mode == "check" {
-        let names: HashSet<String> = roster
-            .as_ref()
-            .map(|r| r.names.iter().map(|(n, _)| n.clone()).collect())
-            .unwrap_or_default();
-        let errs = verify_floors(&floors, &names);
-        if !errs.is_empty() {
-            for e in &errs {
+        let owner = floor_owner_name(&text);
+        let r = verify_floors(
+            &floors,
+            owner.as_deref(),
+            roster.as_ref(),
+            strict_pools(args),
+        );
+        // 「注意」行不管有没有红都先打（红只属那一楼；别让一处红吞掉别处的提醒），照真源顺序
+        for x in &r.notes {
+            println!("[{p}] 注意 — 楼层自检：{x}");
+        }
+        if !r.errors.is_empty() {
+            for e in &r.errors {
                 eprintln!("[{p}] ✗ 楼层自检：{e}");
             }
             exit(1);
@@ -1845,81 +1849,45 @@ fn cmd_floor(args: &Args) {
     //   每楼 14 键序：no form from fromFunc isOwner date toNo toName toIsOwner
     //                 withdrawn hasAsk body summary detail；floors 按楼号升序
     let owner = floor_owner_name(&text);
-    let mut by_no: HashMap<u32, &Floor> = HashMap::new();
-    for f in &floors {
-        by_no.insert(f.head.no, f); // 同号重复：后写覆盖（JS new Map 同制）
-    }
+    let by_no = floors_by_no(&floors); // 同号重复：后写覆盖（JS new Map 同制）
     let mut sorted: Vec<&Floor> = floors.iter().collect();
-    sorted.sort_by_key(|f| f.head.no); // 稳定排序：同号保文件序
+    sorted.sort_by_key(|f| f.no); // 稳定排序：同号保文件序
     let items: Vec<JVal> = sorted
         .iter()
         .map(|f| {
-            // form：段界行是旧形 `> 楼: N` 还是新形 `> N楼：…`（parse_floors 同一判据）
-            let legacy = match_old_start(lines[f.start_line]).is_some();
-            let author = opt_nonempty(&f.head.author);
+            let author = f.author_name.clone();
             // fromFunc：名册派生（primary > functions[0]）；取不到 = null
             let from_func = author
                 .as_deref()
                 .and_then(|n| roster.as_ref().map(|r| r.func_of_name(n, "")))
                 .filter(|s| !s.is_empty());
-            // 被回复者**按事实解**（resolveFloorReply 同制）：对主信 ⇒ 楼主；某楼 ⇒ 那一楼作者
-            let (to_no, to_name, to_is_owner): (Option<u32>, Option<String>, Option<bool>) =
-                match f.head.to_floor {
-                    None => (None, owner.clone(), Some(true)),
-                    Some(n) => match by_no.get(&n) {
-                        None => {
-                            // 指向本信不存在的楼：照写下的字面（旧形两字段本无 ⇒ null）
-                            if legacy {
-                                (Some(n), None, None)
-                            } else {
-                                (
-                                    Some(n),
-                                    opt_nonempty(&f.head.to_name),
-                                    Some(f.head.to_is_owner),
-                                )
-                            }
-                        }
-                        Some(t) => {
-                            let an = opt_nonempty(&t.head.author);
-                            (Some(n), an.clone(), Some(an == owner))
-                        }
-                    },
-                };
+            // 被回复者**按事实解**（真源 resolveFloorReply 同一函数）
+            let r = resolve_floor_reply(f, &by_no, owner.as_deref());
             let sec = split_floor_sections(&f.body);
             JVal::Obj(vec![
-                ("no".into(), JVal::Num(f.head.no as f64)),
-                (
-                    "form".into(),
-                    JVal::Str(if legacy { "legacy" } else { "new" }.into()),
-                ),
+                ("no".into(), JVal::Num(f.no as f64)),
+                ("form".into(), JVal::Str(f.form.as_str().into())),
                 ("from".into(), jopt_str(author.as_deref())),
                 ("fromFunc".into(), jopt_str(from_func.as_deref())),
                 (
                     "isOwner".into(),
-                    match &owner {
+                    match owner.as_deref() {
                         None => JVal::Null,
-                        Some(o) => JVal::Bool(author.as_deref() == Some(o.as_str())),
+                        Some(o) => JVal::Bool(author.as_deref() == Some(o)),
                     },
                 ),
-                (
-                    "date".into(),
-                    if f.head.time.is_empty() {
-                        JVal::Null
-                    } else {
-                        JVal::Str(f.head.time.clone())
-                    },
-                ),
+                ("date".into(), jopt_str(f.time.as_deref())),
                 (
                     "toNo".into(),
-                    match to_no {
+                    match r.to_no {
                         None => JVal::Null,
                         Some(n) => JVal::Num(n as f64),
                     },
                 ),
-                ("toName".into(), jopt_str(to_name.as_deref())),
+                ("toName".into(), jopt_str(r.to_name.as_deref())),
                 (
                     "toIsOwner".into(),
-                    match to_is_owner {
+                    match r.to_is_owner {
                         None => JVal::Null,
                         Some(b) => JVal::Bool(b),
                     },
@@ -1946,11 +1914,6 @@ fn cmd_floor(args: &Args) {
         ("floors".into(), JVal::Arr(items)),
     ]);
     println!("{}", to_json_string(&out));
-}
-
-/// 空串按「无」算（JS 里空 = falsy ⇒ null 的那些字段）
-fn opt_nonempty(s: &str) -> Option<String> {
-    (!s.is_empty()).then(|| s.to_string())
 }
 
 // ---------------------------------------------------------------

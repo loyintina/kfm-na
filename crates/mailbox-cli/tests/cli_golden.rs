@@ -2013,7 +2013,7 @@ fn floor_check_green_and_red() {
     assert_fail(&bad, "floor --check 坏例");
     let err = String::from_utf8_lossy(&bad.stderr);
     assert!(
-        err.contains("✗ 楼层自检") && err.contains("被回复的 9楼 不存在"),
+        err.contains("✗ 楼层自检") && err.contains("被回复者指向本信不存在的楼：9楼"),
         "坏例红文应指认不存在的楼：{err}"
     );
     let _ = fs::remove_dir_all(book.parent().unwrap());
