@@ -105,10 +105,15 @@ pub fn take_result(leg: u16, name: &str) -> Option<Vec<u8>> {
         .and_then(|m| m.remove(name))
 }
 
-/// NA_GATE_LEGS 解析（A 档纯函数，钉在 gate_http_spec）：逗号分隔的额外
-/// 闸门腿口（缺省/空 = 无腿）。fail-loud 拒：非数字、0、与主口重复、
-/// 腿间互重——半残/歧义配置 = 串机温床，宁可拒启不许错路由（BAR-200 同族）。
-pub fn parse_gate_legs(env: Option<&str>, main_port: u16) -> Result<Vec<u16>, String> {
+/// 端口清单解析（A 档纯函数，钉在 gate_http_spec）：逗号分隔的额外腿口
+/// （缺省/空 = 无腿）。fail-loud 拒：非数字、0、与禁口重复、腿间互重——
+/// 半残/歧义配置 = 串机温床，宁可拒启不许错路由（BAR-200 同族）。
+/// env_name 只进错误文案（谁的环境变量谁认领）；banned = 主口等禁口集。
+pub fn parse_port_list(
+    env_name: &str,
+    env: Option<&str>,
+    banned: &[u16],
+) -> Result<Vec<u16>, String> {
     let Some(s) = env else {
         return Ok(Vec::new());
     };
@@ -119,19 +124,69 @@ pub fn parse_gate_legs(env: Option<&str>, main_port: u16) -> Result<Vec<u16>, St
         }
         let port: u16 = part
             .parse()
-            .map_err(|_| format!("NA_GATE_LEGS 含非端口项: {part}"))?;
+            .map_err(|_| format!("{env_name} 含非端口项: {part}"))?;
         if port == 0 {
-            return Err("NA_GATE_LEGS 含 0 口".to_string());
+            return Err(format!("{env_name} 含 0 口"));
         }
-        if port == main_port {
-            return Err(format!("NA_GATE_LEGS 与主口 {main_port} 重复: {port}"));
+        if banned.contains(&port) {
+            return Err(format!("{env_name} 与禁口重复: {port}"));
         }
         if out.contains(&port) {
-            return Err(format!("NA_GATE_LEGS 腿间重复: {port}"));
+            return Err(format!("{env_name} 腿间重复: {port}"));
         }
         out.push(port);
     }
     Ok(out)
+}
+
+/// NA_QUIC_REV_LEGS 解析（A 档纯函数，钉在 gate_http_spec，BAR-247 分机
+/// 分口）：逗号分隔的「UDP口:TCP桥口」对——每条额外反连腿独立桥口
+/// （9022 唯一属主仍是主反连腿，腿间桥口不共享 = 设备命名空间不串）。
+/// fail-loud 拒：缺冒号/非数字/0 口/与主腿口重复/腿间互重（UDP 与
+/// TCP 各自成域，互不相查）。
+pub fn parse_rev_legs(
+    env: Option<&str>,
+    banned_udp: &[u16],
+    banned_tcp: &[u16],
+) -> Result<Vec<(u16, u16)>, String> {
+    let Some(s) = env else {
+        return Ok(Vec::new());
+    };
+    let mut out: Vec<(u16, u16)> = Vec::new();
+    for part in s.split(',').map(str::trim) {
+        if part.is_empty() {
+            continue;
+        }
+        let (u, t) = part
+            .split_once(':')
+            .ok_or_else(|| format!("NA_QUIC_REV_LEGS 项缺「UDP口:TCP桥口」冒号: {part}"))?;
+        let parse = |x: &str| -> Result<u16, String> {
+            let p: u16 = x
+                .trim()
+                .parse()
+                .map_err(|_| format!("NA_QUIC_REV_LEGS 含非端口项: {x}"))?;
+            if p == 0 {
+                return Err("NA_QUIC_REV_LEGS 含 0 口".to_string());
+            }
+            Ok(p)
+        };
+        let (udp, tcp) = (parse(u)?, parse(t)?);
+        if banned_udp.contains(&udp) || out.iter().any(|(x, _)| *x == udp) {
+            return Err(format!("NA_QUIC_REV_LEGS UDP 口重复: {udp}"));
+        }
+        if banned_tcp.contains(&tcp) || out.iter().any(|(_, x)| *x == tcp) {
+            return Err(format!("NA_QUIC_REV_LEGS TCP 桥口重复: {tcp}"));
+        }
+        out.push((udp, tcp));
+    }
+    Ok(out)
+}
+
+/// NA_GATE_LEGS 解析（A 档纯函数，钉在 gate_http_spec）：逗号分隔的额外
+/// 闸门腿口（缺省/空 = 无腿）。fail-loud 拒：非数字、0、与主口重复、
+/// 腿间互重——半残/歧义配置 = 串机温床，宁可拒启不许错路由（BAR-200 同族）。
+pub fn parse_gate_legs(env: Option<&str>, main_port: u16) -> Result<Vec<u16>, String> {
+    parse_port_list("NA_GATE_LEGS", env, &[main_port])
 }
 
 /// pending 响应体（text/plain，A 档纯函数，钉在 httpd_spec 黄金样例）：

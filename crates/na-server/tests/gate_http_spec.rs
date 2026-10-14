@@ -164,3 +164,49 @@ fn spec_na0163_gate_legs解析() {
     assert!(gateq::parse_gate_legs(Some("abc"), 9021).is_err());
     assert!(gateq::parse_gate_legs(Some("0"), 9021).is_err());
 }
+
+/// parse_port_list / parse_rev_legs（A 档纯函数，BAR-247 分机分口）：
+/// NA_QUIC_LEGS 额外正连口与 NA_QUIC_REV_LEGS「UDP:TCP」对，
+/// fail-loud 拒半残/歧义配置（互踢风暴的配伍闸）。
+/// 变异：禁口/腿间重复校验摘掉任一 → 对应断言红。
+#[test]
+fn spec_bar247_quic_extra_legs解析() {
+    // NA_QUIC_LEGS：未设/空 = 无额外腿；禁口 = 主腿 UDP 口
+    assert_eq!(
+        gateq::parse_port_list("NA_QUIC_LEGS", None, &[62633]),
+        Ok(vec![])
+    );
+    assert_eq!(
+        gateq::parse_port_list("NA_QUIC_LEGS", Some("62634, 62635"), &[62633]),
+        Ok(vec![62634, 62635])
+    );
+    // 拒：撞主腿口 / 腿间重复 / 非数字 / 0
+    assert!(gateq::parse_port_list("NA_QUIC_LEGS", Some("62633"), &[62633]).is_err());
+    assert!(gateq::parse_port_list("NA_QUIC_LEGS", Some("62634,62634"), &[62633]).is_err());
+    assert!(gateq::parse_port_list("NA_QUIC_LEGS", Some("abc"), &[62633]).is_err());
+    assert!(gateq::parse_port_list("NA_QUIC_LEGS", Some("0"), &[62633]).is_err());
+
+    // NA_QUIC_REV_LEGS：未设/空 = 无额外腿；禁口 = 主腿 UDP＋主桥 TCP
+    assert_eq!(gateq::parse_rev_legs(None, &[62694], &[9022]), Ok(vec![]));
+    assert_eq!(
+        gateq::parse_rev_legs(Some(""), &[62694], &[9022]),
+        Ok(vec![])
+    );
+    assert_eq!(
+        gateq::parse_rev_legs(Some("62696:9025"), &[62694], &[9022]),
+        Ok(vec![(62696, 9025)])
+    );
+    assert_eq!(
+        gateq::parse_rev_legs(Some("62696:9025, 62697:9026"), &[62694], &[9022]),
+        Ok(vec![(62696, 9025), (62697, 9026)])
+    );
+    // 拒：缺冒号 / 撞主腿 UDP / 撞主桥 TCP / 腿间 UDP 重复 / 腿间 TCP 重复 /
+    //     非数字 / 0
+    assert!(gateq::parse_rev_legs(Some("62696"), &[62694], &[9022]).is_err());
+    assert!(gateq::parse_rev_legs(Some("62694:9025"), &[62694], &[9022]).is_err());
+    assert!(gateq::parse_rev_legs(Some("62696:9022"), &[62694], &[9022]).is_err());
+    assert!(gateq::parse_rev_legs(Some("62696:9025,62696:9026"), &[62694], &[9022]).is_err());
+    assert!(gateq::parse_rev_legs(Some("62696:9025,62697:9025"), &[62694], &[9022]).is_err());
+    assert!(gateq::parse_rev_legs(Some("abc:9025"), &[62694], &[9022]).is_err());
+    assert!(gateq::parse_rev_legs(Some("62696:0"), &[62694], &[9022]).is_err());
+}

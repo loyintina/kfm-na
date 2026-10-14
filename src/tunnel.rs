@@ -146,6 +146,19 @@ pub fn next_attempts(prev: u32, lived_secs: u64) -> u32 {
     }
 }
 
+/// QUIC 腿连死退避（BAR-247 风暴放大器保险，A 档纯函数钉在 tunnel_spec）：
+/// 连死第 n 次退避 2^(n-1) 秒、60s 封顶（1/2/4/8/16/32/60…）。旧制腿死
+/// 下一拍即重拉——双机单槽互踢时这就是万次死亡风暴的发动机；有退避，
+/// 同类互撞只剩慢炖。腿稳定活过 LEG_STABLE_SECS 连死账清零（与 ssh 侧
+/// STABLE_SECS 同义：「活得久才算一次真连接」）。
+pub const LEG_STABLE_SECS: u64 = 300;
+pub fn leg_backoff_secs(consec_deaths: u32) -> u64 {
+    if consec_deaths == 0 {
+        return 0;
+    }
+    (1u64 << (consec_deaths - 1).min(6)).min(60)
+}
+
 /// 反连口释放脚本（A 档纯函数，2026-09-21 BAR-129 自愈）：**口即设备身份**
 /// ——每设备 10 口段（手机 9022 / redroid 9122），所以「谁占着本设备口」
 /// 必然是我们自己上一轮遗留的会话（手机退后台/灭屏/杀进程时，服务端 sshd
@@ -752,9 +765,10 @@ fn probe_quic(server: &ServerEntry) -> bool {
     rt.block_on(na_quic::probe(addr, "kfm-na", na_quic::client_config(pin)))
 }
 
-/// 起 QUIC 反连腿（M4，核内线程）：拨出到服务器 UDP 62694 注册，
-/// 随后服务器 9022 的入站经这条连接开流回联本机 na sshd（8024）。
-/// 无本地 TCP 绑定——「活着」的唯一信号是没死信；握手 8s 速败在
+/// 起 QUIC 反连腿（M4，核内线程）：拨出到服务器 UDP revPort（缺省 62694，
+/// BAR-247 分机分口——servers.json quic.revPort 指定，多机同 psk 不互顶
+/// 单槽）注册，随后服务器 9022 的入站经这条连接开流回联本机 na sshd
+/// （8024）。无本地 TCP 绑定——「活着」的唯一信号是没死信；握手 8s 速败在
 /// run_rev_client 内置超时里（UDP 黑洞也按时来信），无需数据腿
 /// 那套 Starting 宽限裁决
 fn spawn_rev_quic_leg(server: &ServerEntry) -> Option<QuicLeg> {
@@ -764,11 +778,12 @@ fn spawn_rev_quic_leg(server: &ServerEntry) -> Option<QuicLeg> {
     let (stop, stop_rx) = tokio::sync::oneshot::channel::<()>();
     let (dead_tx, dead) = channel::<String>();
     let host = server.ssh.host.clone();
+    let rev_port = server.quic.rev_port;
     std::thread::spawn(move || {
         let say = |m: String| {
             let _ = dead_tx.send(m);
         };
-        let Some(addr) = format!("{host}:{}", crate::settings::QUIC_REVERSE_PORT)
+        let Some(addr) = format!("{host}:{rev_port}")
             .to_socket_addrs()
             .ok()
             .and_then(|mut i| i.next())
@@ -974,6 +989,12 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
         let mut probe_running = false;
         let mut probe_fails: u32 = 0;
         let mut next_probe_at = std::time::Instant::now();
+        // BAR-247 腿连死退避账（看门狗线程私有）：上次腿死时刻——重生段
+        // spawn 闸拿它 × leg_backoff_secs（连死账）算放行点；手动重连/跳闸
+        // 清零连死账（reconnect/trip_quic 里 *fails=0）即自然立即放行，
+        // 用户在等永远优先于退避
+        let mut last_quic_death: Option<std::time::Instant> = None;
+        let mut last_rev_death: Option<std::time::Instant> = None;
         // 杀娃重拉（BAR-140/141 共用）：杀娃收尸、退避清零、死前绑过顺路
         // 请服务器收尸（免下一 spawn 白撞 255）；状态落 Down，调用方 continue
         let kill_zombie =
@@ -1021,6 +1042,26 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                 }
             } else {
                 leg_up_since = None;
+            }
+
+            // BAR-247：腿稳定活过 LEG_STABLE_SECS = 连死账清零（真连接不是
+            // 抖动环；数据腿须口开着才算稳定，反连腿无口、活着即稳定）
+            if quic_fails > 0
+                && port_open
+                && quic
+                    .as_ref()
+                    .is_some_and(|q| q.spawned_at.elapsed().as_secs() >= LEG_STABLE_SECS)
+            {
+                crate::report::report("tunnel", "QUIC 腿稳定 5 分钟——连死账清零");
+                quic_fails = 0;
+            }
+            if rev_quic_fails > 0
+                && rev_quic
+                    .as_ref()
+                    .is_some_and(|q| q.spawned_at.elapsed().as_secs() >= LEG_STABLE_SECS)
+            {
+                crate::report::report("tunnel", "QUIC 反连腿稳定 5 分钟——连死账清零");
+                rev_quic_fails = 0;
             }
 
             // 四口状态面（通道卡数据源）：每拍记账——腿供应商/本地口/
@@ -1117,9 +1158,13 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
             if let Some(msg) = quic_msg {
                 quic = None;
                 quic_fails += 1;
+                last_quic_death = Some(std::time::Instant::now());
                 crate::report::report(
                     "tunnel",
-                    &format!("QUIC 腿死（{msg}），第 {quic_fails}/{QUIC_FAIL_TRIP} 次"),
+                    &format!(
+                        "QUIC 腿死（{msg}），第 {quic_fails}/{QUIC_FAIL_TRIP} 次——{}s 后重拉",
+                        leg_backoff_secs(quic_fails)
+                    ),
                 );
                 if let Some(mut c) = child.take() {
                     let _ = c.kill();
@@ -1150,9 +1195,13 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
             if let Some(msg) = rev_msg {
                 rev_quic = None;
                 rev_quic_fails += 1;
+                last_rev_death = Some(std::time::Instant::now());
                 crate::report::report(
                     "tunnel",
-                    &format!("QUIC 反连腿死（{msg}），第 {rev_quic_fails} 次——9022 回落 ssh 兜底"),
+                    &format!(
+                        "QUIC 反连腿死（{msg}），第 {rev_quic_fails} 次——{}s 后重拉，9022 回落 ssh 兜底",
+                        leg_backoff_secs(rev_quic_fails)
+                    ),
                 );
             }
 
@@ -1230,6 +1279,7 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                         let _ = q.stop.send(());
                     }
                     quic_fails += 1;
+                    last_quic_death = Some(std::time::Instant::now());
                     if let Some(mut c) = child.take() {
                         let _ = c.kill();
                         let _ = c.wait();
@@ -1644,8 +1694,16 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
             }
 
             // 数据路裁决（QUIC 优先，跳闸降级 ssh 兜底）：腿不在且配置齐件
-            // 未跳闸 → 起 QUIC 腿；ssh 随之降级为 -R-only 伴生（推送路不断）
-            if quic.is_none() && leg_verdict(quic_configured(&server), quic_fails) == Leg::Quic {
+            // 未跳闸 → 起 QUIC 腿；ssh 随之降级为 -R-only 伴生（推送路不断）。
+            // BAR-247 连死退避闸：连死账 >0 时按 leg_backoff 爬坡放行
+            // （手动重连/跳闸/稳定清零把账清 0 = 立即放行，用户在等优先）
+            let quic_hold_ok = quic_fails == 0
+                || last_quic_death
+                    .is_none_or(|t| t.elapsed().as_secs() >= leg_backoff_secs(quic_fails));
+            if quic.is_none()
+                && quic_hold_ok
+                && leg_verdict(quic_configured(&server), quic_fails) == Leg::Quic
+            {
                 match spawn_quic_leg(&server) {
                     Some(q) => {
                         crate::report::report(
@@ -1670,16 +1728,19 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
             }
             // 反连路裁决（M4）：配置齐件即常拉 QUIC 反连腿（与数据腿
             // 独立——数据腿跳闸降级 ssh 时反连腿照跑，9022 仍归 QUIC 桥）。
-            // 腿死无退避：每次失败本身已耗握手 8s 超时，重生段 1s 一拍
-            if rev_quic.is_none() && quic_configured(&server) {
+            // 腿死退避（BAR-247）：旧制无退避 1s 一拍重拉，双机单槽互踢时
+            // 即风暴发动机；连死爬坡放行，账清（手动/稳定）立即放行
+            let rev_hold_ok = rev_quic_fails == 0
+                || last_rev_death
+                    .is_none_or(|t| t.elapsed().as_secs() >= leg_backoff_secs(rev_quic_fails));
+            if rev_quic.is_none() && rev_hold_ok && quic_configured(&server) {
                 match spawn_rev_quic_leg(&server) {
                     Some(q) => {
                         crate::report::report(
                             "tunnel",
                             &format!(
                                 "QUIC 反连腿已 spawn（UDP {}:{}，9022 归 QUIC 桥）",
-                                server.ssh.host,
-                                crate::settings::QUIC_REVERSE_PORT
+                                server.ssh.host, server.quic.rev_port
                             ),
                         );
                         rev_quic = Some(q);

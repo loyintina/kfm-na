@@ -613,3 +613,18 @@ fn spec_m4_正连参数_反连摘除() {
     let r = reverse_only_args(&srv("8.145.46.182", "root", "/k/id_ed25519")).expect("出参");
     assert!(r.iter().any(|x| x == "-R") && !r.iter().any(|x| x == "-L"));
 }
+
+#[test]
+fn spec_bar247_腿连死退避表() {
+    use kfm_na::tunnel::leg_backoff_secs;
+    // 0 次 = 无账立即放行（手动重连/跳闸清零后用户在等）
+    assert_eq!(leg_backoff_secs(0), 0);
+    // 连死爬坡 1/2/4/8/16/32，60s 封顶
+    // （变异口：封顶改大/指数底改大都咬在下两行）
+    assert_eq!(leg_backoff_secs(1), 1);
+    assert_eq!(leg_backoff_secs(2), 2);
+    assert_eq!(leg_backoff_secs(3), 4);
+    assert_eq!(leg_backoff_secs(6), 32);
+    assert_eq!(leg_backoff_secs(7), 60);
+    assert_eq!(leg_backoff_secs(100), 60, "封顶必须咬死（风暴期账可上千）");
+}
