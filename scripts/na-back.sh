@@ -14,8 +14,8 @@ if [[ $NA_TRANSPORT == adb ]]; then
     "$NA_ADB" -s "$NA_ADB_SERIAL" shell \
         "am start -a android.intent.action.MAIN -c android.intent.category.HOME" >/dev/null
 else
-    ssh -p 8022 -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=no localhost \
-        "am start -a android.intent.action.MAIN -c android.intent.category.HOME" >/dev/null
+    # BAR-248：8022 会漂，先身份核验（gate-lib.sh）
+    gate_termux_am "-a android.intent.action.MAIN -c android.intent.category.HOME"
 fi
 
 for i in $(seq 1 8); do

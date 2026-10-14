@@ -158,6 +158,10 @@ bash scripts/test-pack-toolchain.sh || { echo "❌ BAR-136 pack 契约考题不�
 # ssh 断流 cat 退出 0，2MB 半截核直落位命案；对账先于 mv/失败 exit/
 # mv 不挂 cat 链三言）
 bash scripts/test-na-push-so-atomic.sh || { echo "❌ BAR-150 半截核契约考题不过"; exit 1; }
+# 2026-10-14 同步挂入：BAR-248 拉起腿身份核验钉（8022 三易其主误拉 9 机
+# 旧核互踢命案——核验被摘 = 谁占 8022 谁挨 am start；异机拒/同机放/
+# 覆盖放/取不到拒/adb 臂直发五行为＋源码锚）
+bash scripts/test-gate-am-start.sh || { echo "❌ BAR-248 身份核验考题不过"; exit 1; }
 
 echo "=== [chain 12/13] 考卷覆盖矩阵棘轮闸（2026-08-27,自我测试缺口④） ==="
 # 治「新功能补题靠自觉」:各模块 pub 项被 tests/ 引用数,棘轮只许降
