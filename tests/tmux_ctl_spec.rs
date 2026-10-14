@@ -103,119 +103,99 @@ fn spec_parse_全噪声得空表() {
 
 #[test]
 fn spec_cmd_list_精确字串() {
-    // BAR-245：同一条命令先吐白名单表序（七家窗口登记表第一列，
-    // 滤注释/空行），再吐分段哨兵，再吐会话清单；尾带 exit 收会话
+    // BAR-245 形态判后三段输出退役，回到一段：会话清单本身
+    // （不再有表，也就不再有分段哨兵）
     assert_eq!(
         cmd_list(),
-        "{ grep -v '^#' /root/.kimi-session-map 2>/dev/null | cut -f1 | sed '/^[[:space:]]*$/d'; echo '__KFM_WL_END__'; tmux list-sessions -F '#{session_name}|#{session_windows}|#{session_attached}'; }; exit"
+        "tmux list-sessions -F '#{session_name}|#{session_windows}|#{session_attached}'; exit"
     );
-    // 哨兵与地图路径同源（常量进串）
-    assert!(cmd_list().contains(tmux_ctl::LIST_WL_SENTINEL));
-    assert!(cmd_list().contains(tmux_ctl::SESSION_MAP_PATH));
 }
 
-// ---- BAR-245 候选面白名单收口（MAIN0148：临时测试窗不许上用户面；
-// 滤「可见性」不滤「存在性」；白名单缺席/读不到 = 退化全列——观测
-// 铁律：仪器缺席不许反咬业务，面不能空）----
+// ---- BAR-245 候选面成员形态判（2026-10-14 用户拍板，NA0174 楼10 白露
+// 规格：谓词从「名 ∈ 登记表」换成「名 = 二字汉字」——二字中文名一律
+// 通行，其他一律过滤；登记表/哨兵/三段输出随之退役（净效果是删代码）。
+// 配套起名约定：临时/研究/测试窗一律非二字形态（带连字符/数字/英文），
+// 自动被滤）----
 //
-// 变异抽检方向：过滤放行一切 / 摘掉表序重排 / 摘哨兵分段 / 空白名单
-// 不退化 ——本文件必须红。
+// 变异抽检方向：谓词放行一切 / 谓词收成一字或三字 / 引导臂摘形态判环
+// ——本文件必须红。
 
-/// BAR-245 夹具：pty 真实形态（命令回显行 + \r\n + ANSI + 噪声）
-fn bar245_pty_out(wl: &str, rows: &str) -> String {
-    format!(
-        "$ {{ grep -v '^#' /root/.kimi-session-map; echo '__KFM_WL_END__'; tmux list-sessions; }}; exit\r\n{wl}\r\n{}\r\n{rows}",
-        tmux_ctl::LIST_WL_SENTINEL
-    )
+#[test]
+fn spec_bar245_谓词真值表() {
+    // 成员 = 恰好两个 CJK 统一表意文字（U+4E00–U+9FFF）
+    for yes in ["观澜", "清和", "白露", "闻灯", "小满", "南舟", "承影"] {
+        assert!(tmux_ctl::is_member_session_name(yes), "应通行: {yes}");
+    }
+    // 非二字形态（临时窗现形）/ 一字 / 三字 / 掺数字 / 掺空格 / 空名 /
+    // 扩 A 区（U+3400，出 4E00–9FFF 主区）一律滤
+    for no in [
+        "pulse216",
+        "ts-test",
+        "cychase",
+        "kfm-na",
+        "一",
+        "测试用",
+        "观澜1",
+        "",
+        "ab",
+        "观 澜",
+        "㐀㐁",
+    ] {
+        assert!(!tmux_ctl::is_member_session_name(no), "应滤掉: {no:?}");
+    }
 }
 
 #[test]
-fn spec_bar245_白名单滤出且按表序() {
-    // 会话表乱序 + 混入临时窗（pulse216/cychase）；输出只留表内名、
-    // 顺序 = 白名单表序而非 tmux 返回序
-    let out = bar245_pty_out(
-        "观澜\r\n清和\r\n白露",
-        "清和|1|0\r\npulse216|1|1\r\n观澜|1|1\r\ncychase|2|0\r\n白露|3|1\r\n",
-    );
-    let ss = tmux_ctl::parse_session_list_visible(&out);
+fn spec_bar245_候选面只留成员窗() {
+    // 混编输入：成员窗保留（顺序 = 服务器返回序——表序机制随登记表
+    // 一起退役），临时窗/英文窗滤掉；数据随行（不是只滤名字）
+    let out = "pulse216|1|1\r\n清和|1|0\r\n观澜|1|1\r\ncychase|2|0\r\n白露|3|1\r\n";
+    let ss = tmux_ctl::parse_session_list_visible(out);
     let names: Vec<&str> = ss.iter().map(|s| s.name.as_str()).collect();
-    assert_eq!(names, ["观澜", "清和", "白露"]);
-    // 数据随行（不是只滤名字）——白露 3 窗附着的账要跟上
+    assert_eq!(names, ["清和", "观澜", "白露"]);
     assert_eq!(ss[2].windows, 3);
     assert!(ss[2].attached);
 }
 
 #[test]
 fn spec_bar245_新增临时窗候选面不变() {
-    // 回归判据（白露验收③）：同一个白名单，多加一个临时窗后输出
-    // 与之前完全相同——临时窗出现/消失永远不动用户面
-    let base = bar245_pty_out("观澜\r\n清和", "观澜|1|1\r\n清和|1|0\r\n");
-    let grown = bar245_pty_out(
-        "观澜\r\n清和",
+    // 临时窗出现/消失永远不动用户面（非二字形态自动被滤）
+    let base = tmux_ctl::parse_session_list_visible("观澜|1|1\r\n清和|1|0\r\n");
+    let grown = tmux_ctl::parse_session_list_visible(
         "pulse216|1|1\r\n观澜|1|1\r\nrepro999|1|0\r\n清和|1|0\r\n",
     );
-    assert_eq!(
-        tmux_ctl::parse_session_list_visible(&base),
-        tmux_ctl::parse_session_list_visible(&grown)
-    );
+    assert_eq!(base, grown);
 }
 
 #[test]
-fn spec_bar245_哨兵缺席退化全列() {
-    // 老服务器/老核输出（无白名单段）= 旧行为原样：全列、原序
-    let out = "pulse216|1|1\r\n观澜|1|1\r\n";
-    assert_eq!(
-        tmux_ctl::parse_session_list_visible(out),
-        parse_session_list(out)
-    );
-    assert_eq!(tmux_ctl::parse_session_list_visible(out).len(), 2);
-}
-
-#[test]
-fn spec_bar245_白名单段空退化全列() {
-    // 地图文件读不到（别的服务器没有登记表）→ 哨兵在但段空 →
-    // 面不许空：全列原序
-    let out = format!(
-        "{}\r\npulse216|1|1\r\n观澜|1|1\r\n",
-        tmux_ctl::LIST_WL_SENTINEL
-    );
-    let ss = tmux_ctl::parse_session_list_visible(&out);
+fn spec_bar245_新增成员窗自动进面() {
+    // 新回归判据（NA0174 楼10，语义与表时代相反）：谁新起一个二字
+    // 汉字名会话，候选面自动含它，不许要登记动作
+    let ss = tmux_ctl::parse_session_list_visible("观澜|1|1\r\n砚北|2|0\r\n清和|1|0\r\n");
     let names: Vec<&str> = ss.iter().map(|s| s.name.as_str()).collect();
-    assert_eq!(names, ["pulse216", "观澜"]);
+    assert_eq!(names, ["观澜", "砚北", "清和"]);
 }
 
 #[test]
-fn spec_bar245_pty脏文本哨兵不串() {
-    // 命令回显行含哨兵字串（带引号带提示符）≠ 哨兵行；ANSI 染色的
-    // 白名单名照认；\r\n 照滤
-    let out = bar245_pty_out(
-        "\u{1b}[32m观澜\u{1b}[0m\r\n清和",
-        "pulse216|1|1\r\n观澜|1|1\r\n清和|1|0\r\n",
-    );
-    let ss = tmux_ctl::parse_session_list_visible(&out);
+fn spec_bar245_pty脏文本照滤() {
+    // 命令回显/ANSI/\r\n/噪声行不影响形态判（ANSI 染色的名字照认）
+    let out = "$ tmux list-sessions\r\n\u{1b}[32m观澜\u{1b}[0m|1|1\r\n\r\nno server running\r\npulse216|1|1\r\n清和|1|0\r\n";
+    let ss = tmux_ctl::parse_session_list_visible(out);
     let names: Vec<&str> = ss.iter().map(|s| s.name.as_str()).collect();
     assert_eq!(names, ["观澜", "清和"]);
 }
 
 #[test]
-fn spec_bar245_白名单名未运行跳过() {
-    // 表内有名但会话已死（七家不是人人常驻 tmux）→ 跳过不 panic
-    let out = bar245_pty_out("观澜\r\n小满\r\n清和", "观澜|1|1\r\n清和|1|0\r\n");
-    let ss = tmux_ctl::parse_session_list_visible(&out);
-    let names: Vec<&str> = ss.iter().map(|s| s.name.as_str()).collect();
-    assert_eq!(names, ["观澜", "清和"]);
-}
-
-#[test]
-fn spec_bar245_引导臂白名单优先兜底旧径() {
-    // 冷启动「附第一条」臂（BAR-202③）：先按登记表挑第一个活着的
-    // 白名单会话，挑不到才退回 list 第一条（旧径保底）
+fn spec_bar245_引导臂形态判优先兜底旧径() {
+    // 冷启动③臂（BAR-202/BAR-245）：先按形态判挑第一个二字汉字名
+    // 会话，挑不到退回 list 第一条（旧径保底）。壳侧谓词与这条 shell
+    // 判定同尺（U+4E00–U+9FFF），改一边必须改另一边
     let cmd = tmux_ctl::cmd_bootstrap(None);
-    assert!(cmd.contains(tmux_ctl::SESSION_MAP_PATH));
+    assert!(cmd.contains(r"grep -qP '^[\x{4e00}-\x{9fff}]{2}$'"));
     assert!(cmd.contains("KFM_PICK"));
-    let wl_pos = cmd.find("for n in $(grep").expect("白名单环必须在");
+    let pick_pos = cmd.find("for n in $(tmux").expect("形态判环必须在");
     let fb_pos = cmd.find("head -n 1").expect("旧径兜底必须留");
-    assert!(wl_pos < fb_pos, "白名单环必须在 head -n 1 兜底之前");
+    assert!(pick_pos < fb_pos, "形态判环必须在 head -n 1 兜底之前");
 }
 
 #[test]
