@@ -104,3 +104,17 @@ fn spec_bar230_外来占口定性判据() {
     // 娃不在 + banner 也不在 → 正常重拉路径，不是占口
     assert!(!should_note_foreign(false, false, false));
 }
+
+#[test]
+fn spec_bar247_让位期不spawn() {
+    use kfm_na::sshd_keeper::should_spawn;
+    // 娃不在 + 口上健康 banner（外来占口）= 真让位，不 spawn
+    // （变异口：把 !banner_healthy 改成 banner_healthy → 此行红）
+    assert!(!should_spawn(false, true));
+    // 娃不在 + banner 也没了（口腾出/本来空）= 照常重拉接管
+    // （变异口：把 !child_alive 改成 child_alive → 此行红）
+    assert!(should_spawn(false, false));
+    // 娃活着 → spawn 段本就不该进（健康/冻僵归探活臂）
+    assert!(!should_spawn(true, true));
+    assert!(!should_spawn(true, false));
+}
