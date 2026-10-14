@@ -61,3 +61,5 @@
 {"bar": 244, "title": "解析页信卡楼层展开折叠与锚定动画（MAIN0141）", "claimant_func": "开发部", "claimant": "闻灯", "letter": "0173", "ts": "2026-10-10 00:47 +0800"}
 {"bar": 245, "title": "tmux 候选面混入临时测试窗——白名单过滤（MAIN0148）", "claimant_func": "开发部", "claimant": "观澜", "letter": "0174", "ts": "2026-10-13 23:18 +0800"}
 {"bar": 246, "title": "na 自持无障碍服务与系统管理页入口（MAIN0149 用户拍板）", "claimant_func": "开发部", "claimant": "闻灯", "letter": "0175", "ts": "2026-10-13 23:30 +0800"}
+{"bar": 247, "title": "QUIC 腿死与 sshd 占口互撞", "claimant_func": "测试部", "claimant": "承影", "letter": "0176", "ts": "2026-10-14 11:48 +0800"}
+{"bar": 248, "title": "gate_am_start 8022 硬编码无身份核验误拉 9 机", "claimant_func": "测试部", "claimant": "承影", "letter": "0177", "ts": "2026-10-14 16:53 +0800"}
