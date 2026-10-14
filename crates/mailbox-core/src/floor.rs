@@ -14,6 +14,10 @@ pub const OWNER_MARK: &str = "(楼主)";
 pub const FLOOR_BODY_MAX: usize = 2000;
 /// 两段制生效时刻（epoch ms）：2026-10-03 09:00 +08:00 = 01:00 UTC = 1790989200000
 pub const FLOOR_TWO_SECTION_SINCE_MS: i64 = 1_790_989_200_000;
+/// 摘要字数硬闸生效时刻（epoch ms）：2026-10-03 23:00 +08:00 = 15:00 UTC = 1791039600000。
+/// **与两段制闸不是同一个时刻**（JS `SUMMARY_GATE_SINCE`）：09:00–23:00 之间的楼只判两段制、
+/// 不判摘要字数（01:00 UTC 那批楼摘要超长是合法的——0110/0111 实证）
+pub const FLOOR_SUMMARY_GATE_SINCE_MS: i64 = 1_791_039_600_000;
 
 // ---- 楼层头：新形单行四段 ----
 /// `> N楼：作者[(楼主)]→被回复者 · 时间`
@@ -79,13 +83,13 @@ pub fn match_old_start(line: &str) -> Option<u32> {
     let after = after
         .strip_prefix('：')
         .or_else(|| after.strip_prefix(':'))?;
+    // 冒号后只许空白 ＋ 纯数字（照 JS `^>[ \t]*楼[ \t]*[:：][ \t]*(\d+)[ \t]*$`）。
+    // 2026-10-14 修：原先多一条 `after.trim().len() == after.trim_end().len()`——
+    // 在「冒号后带空格」这种常规写法（`> 楼: 1`，after = " 1"）上恒假 ⇒ 旧形楼一律认不出
+    // （match_old_start 返回 None ⇒ parse_floors 的旧形分支永不进入；--list 的 form 也判不出 legacy）
     let no: u32 = after.trim().parse().ok()?;
-    if after.trim().parse::<u32>().is_ok() && after.trim().len() == after.trim_end().len() {
-        // 确认行尾没有别的
-        let n = after.trim();
-        if n.chars().all(|c| c.is_ascii_digit()) {
-            return Some(no);
-        }
+    if after.trim().chars().all(|c| c.is_ascii_digit()) {
+        return Some(no);
     }
     None
 }
@@ -158,6 +162,15 @@ pub fn floor_needs_two_sections(time_str: &str) -> bool {
     }
 }
 
+/// 该时间的楼是否适用**摘要字数硬闸**（≥ 23:00 生效时刻）；判不出时间 ⇒ 豁免侧
+/// （照 JS `atOrAfterSummaryGate`，与 `floor_needs_two_sections` 同制、只换阈值）
+pub fn floor_needs_summary_gate(time_str: &str) -> bool {
+    match floor_stamp_ms(time_str) {
+        Some(t) => t >= FLOOR_SUMMARY_GATE_SINCE_MS,
+        None => false,
+    }
+}
+
 // ---- 楼头解析（新形单行） ----
 /// `作者[(楼主)]→被回复者 · 时间` → FloorHead
 pub fn parse_head(after_no: &str, no: u32) -> Option<FloorHead> {
@@ -207,6 +220,25 @@ pub fn parse_head(after_no: &str, no: u32) -> Option<FloorHead> {
     })
 }
 
+/// 段落正文成形（照 JS parseFloors）：有下一楼时剥掉段尾那组「空行 ＋ `---` ＋ 空行」
+/// 引子（它属下一楼，不进本楼正文），再剥首尾换行。
+fn shape_floor_body(mut body_lines: Vec<&str>, has_next: bool) -> String {
+    if has_next {
+        let mut t = body_lines.len();
+        while t > 0 && body_lines[t - 1].is_empty() {
+            t -= 1;
+        }
+        if t > 0 && body_lines[t - 1] == FLOOR_SEP {
+            t -= 1;
+            while t > 0 && body_lines[t - 1].is_empty() {
+                t -= 1;
+            }
+        }
+        body_lines.truncate(t);
+    }
+    body_lines.join("\n").trim_matches('\n').to_string()
+}
+
 // ---- 解析一封信的全部楼层 ----
 pub fn parse_floors(text: &str) -> Vec<Floor> {
     let mut floors = Vec::new();
@@ -227,7 +259,7 @@ pub fn parse_floors(text: &str) -> Vec<Floor> {
                 body_lines.push(lines[i]);
                 i += 1;
             }
-            let body = body_lines.join("\n");
+            let body = shape_floor_body(body_lines, i < lines.len());
             let withdrawn = body.contains("——撤回：") && body.contains("——原楼作废，理由：");
             let has_ask = body.lines().any(|l| {
                 l.trim_start().starts_with("要办：") || l.trim_start().starts_with("要办:")
@@ -282,7 +314,7 @@ pub fn parse_floors(text: &str) -> Vec<Floor> {
                 body_lines.push(lines[i]);
                 i += 1;
             }
-            let body = body_lines.join("\n");
+            let body = shape_floor_body(body_lines, i < lines.len());
             let withdrawn = body.contains("——撤回：") && body.contains("——原楼作废，理由：");
             let has_ask = body.lines().any(|l| {
                 l.trim_start().starts_with("要办：") || l.trim_start().starts_with("要办:")
@@ -299,6 +331,69 @@ pub fn parse_floors(text: &str) -> Vec<Floor> {
         i += 1;
     }
     floors
+}
+
+// ---- 剖开楼层正文的两段（splitFloorSections） ----
+/// 楼层正文两段剖分结果。`order_ok` 只在两段都在场时有值（`### 摘要` 在前为 true）；
+/// 缺任一段 = None。`summary`／`detail` = 对应段文（段头之后、下一段头之前）join("\n")
+/// 后去首尾空白，空串 ⇒ None（照 JS `.trim() || null`）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct FloorSections {
+    pub has_summary: bool,
+    pub has_detail: bool,
+    pub order_ok: Option<bool>,
+    pub summary: Option<String>,
+    pub detail: Option<String>,
+}
+
+/// 段头行判据：整行匹配 `^[ \t]*###[ \t]*<word>[ \t]*$`
+/// （即 `### 摘要`／`###摘要`／`###  摘要` 等变体同认，照 JS 正则）。
+fn section_head_index(lines: &[&str], word: &str) -> Option<usize> {
+    lines.iter().position(|l| {
+        let t = l.trim_matches(|c: char| c == ' ' || c == '\t');
+        match t.strip_prefix("###") {
+            Some(rest) => rest.trim_matches(|c: char| c == ' ' || c == '\t') == word,
+            None => false,
+        }
+    })
+}
+
+/// `splitFloorSections` 的移植：找第一个 `### 摘要` 行 `si`、第一个 `### 正文` 行 `bi`；
+/// `summary = si===-1 ? None : lines[si+1 .. (bi>si ? bi : 末)]`、`detail = bi===-1 ? None : lines[bi+1..]`，
+/// 两段都过 `.trim()`，空串 ⇒ None。
+pub fn split_floor_sections(body: &str) -> FloorSections {
+    let lines: Vec<&str> = body.split('\n').collect();
+    let si = section_head_index(&lines, "摘要");
+    let bi = section_head_index(&lines, "正文");
+    let seg = |from: usize, to: usize| -> Option<String> {
+        let s = lines[from + 1..to.min(lines.len())].join("\n");
+        let s = s.trim();
+        if s.is_empty() {
+            None
+        } else {
+            Some(s.to_string())
+        }
+    };
+    let summary = si.and_then(|s| {
+        seg(
+            s,
+            match bi {
+                Some(b) if b > s => b,
+                _ => lines.len(),
+            },
+        )
+    });
+    let detail = bi.and_then(|b| seg(b, lines.len()));
+    FloorSections {
+        has_summary: si.is_some(),
+        has_detail: bi.is_some(),
+        order_ok: match (si, bi) {
+            (Some(s), Some(b)) => Some(s < b),
+            _ => None,
+        },
+        summary,
+        detail,
+    }
 }
 
 // ---- 正文校验 checkFloorBody ----
@@ -395,30 +490,6 @@ pub fn check_floor_body(body: &str, max_chars: usize, time_str: Option<&str>) ->
                 fc.errors
                     .push("### 摘要 必须在 ### 正文 之前（契约 §十二 4 三改）".to_string());
             }
-            // 摘要字数
-            if let Some(si) = sum_idx {
-                let summary_text: String = t
-                    .lines()
-                    .skip(si + 1)
-                    .take_while(|l| {
-                        let lt = l.trim();
-                        lt != "### 正文" && lt != "###正文" && !lt.starts_with("###")
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                let sum_chars: usize = summary_text.chars().filter(|c| !c.is_whitespace()).count();
-                if sum_chars > 125 {
-                    fc.errors.push(format!(
-                        "摘要 {} 字（口径：去空白字符数）＞ 上限 125（楼摘要硬上限；为宜 50–100）",
-                        sum_chars
-                    ));
-                } else if sum_chars < 50 {
-                    fc.notes.push(format!(
-                        "摘要 {} 字低于宜下限 50（楼摘要；为宜 50–100）",
-                        sum_chars
-                    ));
-                }
-            }
         }
         // 正文（如果给了标记）不得为空
         if has_detail {
@@ -428,6 +499,38 @@ pub fn check_floor_body(body: &str, max_chars: usize, time_str: Option<&str>) ->
             });
             if let Some(msg) = di_check(t, det_idx) {
                 fc.errors.push(msg);
+            }
+        }
+    }
+    // 摘要字数硬闸（生效时刻 2026-10-03 23:00 +08:00——**不是**两段制那一个闸，照 JS 分开判）
+    if let Some(ts) = time_str
+        && floor_needs_summary_gate(ts)
+    {
+        let sum_idx = t.lines().position(|l| {
+            let lt = l.trim();
+            lt == "### 摘要" || lt == "###摘要" || lt == "###  摘要"
+        });
+        if let Some(si) = sum_idx {
+            let summary_text: String = t
+                .lines()
+                .skip(si + 1)
+                .take_while(|l| {
+                    let lt = l.trim();
+                    lt != "### 正文" && lt != "###正文" && !lt.starts_with("###")
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            let sum_chars: usize = summary_text.chars().filter(|c| !c.is_whitespace()).count();
+            if sum_chars > 125 {
+                fc.errors.push(format!(
+                    "摘要 {} 字（口径：去空白字符数）＞ 上限 125（楼摘要硬上限；为宜 50–100）",
+                    sum_chars
+                ));
+            } else if sum_chars < 50 {
+                fc.notes.push(format!(
+                    "摘要 {} 字低于宜下限 50（楼摘要；为宜 50–100）",
+                    sum_chars
+                ));
             }
         }
     }
@@ -653,5 +756,118 @@ mod tests {
         assert_eq!(floors[0].head.no, 1);
         assert_eq!(floors[1].head.no, 2);
         assert_eq!(floors[1].head.to_floor, Some(1));
+    }
+
+    #[test]
+    fn test_old_start() {
+        // 旧形段界：`> 楼: N`（整行；冒号前后可有空格/制表）——JS FLOOR_OLD_START_RE 同制
+        assert_eq!(match_old_start("> 楼: 1"), Some(1));
+        assert_eq!(match_old_start("> 楼:1"), Some(1));
+        assert_eq!(match_old_start("> 楼：2"), Some(2));
+        assert_eq!(match_old_start("> 楼： 12"), Some(12));
+        assert_eq!(match_old_start(">楼:3"), Some(3));
+        // 非旧形段界
+        assert_eq!(
+            match_old_start("> 1楼：白露→(楼主)清和 · 2026-10-04 10:00 +08:00"),
+            None
+        );
+        assert_eq!(match_old_start("> 楼: 1 尾巴"), None);
+        assert_eq!(match_old_start("> 从: 研究部清和"), None);
+    }
+
+    #[test]
+    fn test_parse_floors_legacy() {
+        // 旧形四行字头（照存量过渡形态）：段界 `> 楼: N` ＋ 从／日期／复楼
+        let text = "> 楼: 1\n> 从: 研究部清和\n> 日期: 2026-10-01 10:00 +08:00\n> 复楼: 无\n\n旧形一楼正文。\n\n---\n\n> 2楼：白露→1楼清和 · 2026-10-04 10:00 +08:00\n\n### 摘要\n\n新形二楼。";
+        let floors = parse_floors(text);
+        assert_eq!(floors.len(), 2, "{:?}", floors.len());
+        assert_eq!(floors[0].head.no, 1);
+        assert_eq!(floors[0].head.author, "清和");
+        assert_eq!(floors[0].head.to_floor, None); // 复楼: 无 ⇒ 对主信
+        assert_eq!(floors[0].body, "旧形一楼正文。");
+        assert_eq!(floors[0].head.time, "2026-10-01 10:00 +08:00");
+        assert_eq!(floors[1].head.no, 2);
+    }
+
+    #[test]
+    fn test_split_floor_sections_two() {
+        let s = split_floor_sections("### 摘要\n\n结论。\n\n### 正文\n\n细节。");
+        assert!(s.has_summary && s.has_detail);
+        assert_eq!(s.order_ok, Some(true));
+        assert_eq!(s.summary.as_deref(), Some("结论。"));
+        assert_eq!(s.detail.as_deref(), Some("细节。"));
+    }
+
+    #[test]
+    fn test_split_floor_sections_summary_only() {
+        let s = split_floor_sections("### 摘要\n\n只说摘要。");
+        assert!(s.has_summary);
+        assert!(!s.has_detail);
+        assert_eq!(s.order_ok, None);
+        assert_eq!(s.summary.as_deref(), Some("只说摘要。"));
+        assert_eq!(s.detail, None);
+    }
+
+    #[test]
+    fn test_split_floor_sections_no_mark() {
+        let s = split_floor_sections("没有标记的正文。");
+        assert!(!s.has_summary && !s.has_detail);
+        assert_eq!(s.order_ok, None);
+        assert_eq!(s.summary, None);
+        assert_eq!(s.detail, None);
+    }
+
+    #[test]
+    fn test_split_floor_sections_variants_empty_and_reversed() {
+        // 变体（无空格／多空格）同认（照 JS 正则）
+        let s = split_floor_sections("###摘要\n\n甲乙。\n\n###  正文\n\n丙丁。");
+        assert_eq!(s.summary.as_deref(), Some("甲乙。"));
+        assert_eq!(s.detail.as_deref(), Some("丙丁。"));
+
+        // 段头在但段文空 ⇒ None（照 JS `.trim() || null`）
+        let e = split_floor_sections("### 摘要\n\n### 正文");
+        assert!(e.has_summary && e.has_detail);
+        assert_eq!(e.order_ok, Some(true));
+        assert_eq!(e.summary, None);
+        assert_eq!(e.detail, None);
+
+        // 顺序颠倒：orderOk=false；detail 段跨到下一段头（JS slice(bi+1) 同制）
+        let r = split_floor_sections("### 正文\n\n细节。\n\n### 摘要\n\n结论。");
+        assert_eq!(r.order_ok, Some(false));
+        assert_eq!(r.summary.as_deref(), Some("结论。"));
+        assert_eq!(r.detail.as_deref(), Some("细节。\n\n### 摘要\n\n结论。"));
+    }
+
+    #[test]
+    fn test_parse_floors_body_shape() {
+        // 段尾「空行 ＋ --- ＋ 空行」引子属下一楼，不进本楼正文（JS parseFloors 同制）
+        let text = "> 1楼：白露→(楼主)清和 · 2026-10-04 10:00 +08:00\n\n### 摘要\n\n你好。\n\n---\n\n> 2楼：(楼主)清和→1楼白露 · 2026-10-04 11:00 +08:00\n\n### 摘要\n\n收到。";
+        let floors = parse_floors(text);
+        assert_eq!(floors[0].body, "### 摘要\n\n你好。");
+        assert_eq!(floors[1].body, "### 摘要\n\n收到。");
+        assert_eq!(split_floor_sections(&floors[0].body).detail, None);
+    }
+
+    #[test]
+    fn test_summary_gate_separate_from_two_section() {
+        // 两段制闸 09:00 生效、摘要字数闸 23:00 生效——09:00–23:00 之间的楼只判两段、不判字数
+        let long = format!("### 摘要\n\n{}", "字".repeat(200));
+        // 22:00 的楼：两段制要摘要（写了）⇒ 过；摘要超长但未到 23:00 ⇒ 不判字数
+        let fc = check_floor_body(&long, 2000, Some("2026-10-03 22:00 +08:00"));
+        assert!(fc.errors.is_empty(), "{:?}", fc.errors);
+        // 23:00 之后：摘要超长 ⇒ 红
+        let fc2 = check_floor_body(&long, 2000, Some("2026-10-03 23:30 +08:00"));
+        assert!(
+            fc2.errors.iter().any(|e| e.contains("＞ 上限 125")),
+            "{:?}",
+            fc2.errors
+        );
+        // 09:00 之前：两闸同豁免
+        let fc3 = check_floor_body(&long, 2000, Some("2026-10-03 08:00 +08:00"));
+        assert!(fc3.errors.is_empty(), "{:?}", fc3.errors);
+        // 闸本身
+        assert!(floor_needs_summary_gate("2026-10-03 23:00 +08:00"));
+        assert!(!floor_needs_summary_gate("2026-10-03 22:59 +08:00"));
+        assert!(!floor_needs_summary_gate("bad"));
     }
 }

@@ -1937,3 +1937,84 @@ fn spec_bar227_verify_复不再必填() {
     assert_fail(&out, "BAR-227 非法「复」值应红（格式臂不误删）");
     let _ = fs::remove_dir_all(&d);
 }
+
+// ---------------------------------------------------------------
+// floor：楼层只读面（--list 一行 JSON 逐字节对表 ＋ --check 红绿）
+// golden ＝ 真 JS 工具（/root/90-信箱/30-工具/letters floor --list）实跑抄录
+// ---------------------------------------------------------------
+
+const FLOOR_FIX: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/floor");
+const FLOOR_LETTER: &str = "0007号白露致全体的通报.md";
+const FLOOR_BAD_LETTER: &str = "0008号白露致全体的通报.md";
+
+/// 楼层夹具册：`<tmp>/00-主册` 是**固定目录名**——`book` 字段取自父信所在目录名，
+/// 目录名一变 golden 就不可复现（JS 同制 basename(pBook)）
+fn setup_floor_book(tag: &str) -> PathBuf {
+    let d = tmpdir(tag).join("00-主册");
+    fs::create_dir_all(&d).unwrap();
+    for name in [FLOOR_LETTER, FLOOR_BAD_LETTER] {
+        fs::copy(Path::new(FLOOR_FIX).join(name), d.join(name)).unwrap();
+    }
+    d
+}
+
+#[test]
+fn floor_list_byte_exact() {
+    let book = setup_floor_book("floor-list");
+    let lp = book.join(FLOOR_LETTER);
+    let out = run(&[
+        "floor",
+        "--list",
+        lp.to_str().unwrap(),
+        "--mailbox",
+        book.to_str().unwrap(),
+        "--roster",
+        ROSTER,
+    ]);
+    assert_ok(&out, "floor --list");
+    assert_bytes_eq(
+        &out.stdout,
+        &read(Path::new(GOLDEN).join("floor_list.json").as_path()),
+        "floor --list 一行 JSON",
+    );
+    let _ = fs::remove_dir_all(book.parent().unwrap());
+}
+
+#[test]
+fn floor_check_green_and_red() {
+    let book = setup_floor_book("floor-check");
+    let mb = book.to_str().unwrap().to_string();
+    // 绿例：旧形（早于闸的日期 ⇒ 两段豁免）＋新形两段＋撤回楼
+    let ok = run(&[
+        "floor",
+        "--check",
+        book.join(FLOOR_LETTER).to_str().unwrap(),
+        "--mailbox",
+        &mb,
+        "--roster",
+        ROSTER,
+    ]);
+    assert_ok(&ok, "floor --check 绿例");
+    assert!(
+        String::from_utf8_lossy(&ok.stdout).contains("✓ 楼层自检通过"),
+        "绿例应打通过行：{}",
+        String::from_utf8_lossy(&ok.stdout)
+    );
+    // 坏例：被回复者指向不存在的楼 ⇒ 必红
+    let bad = run(&[
+        "floor",
+        "--check",
+        book.join(FLOOR_BAD_LETTER).to_str().unwrap(),
+        "--mailbox",
+        &mb,
+        "--roster",
+        ROSTER,
+    ]);
+    assert_fail(&bad, "floor --check 坏例");
+    let err = String::from_utf8_lossy(&bad.stderr);
+    assert!(
+        err.contains("✗ 楼层自检") && err.contains("被回复的 9楼 不存在"),
+        "坏例红文应指认不存在的楼：{err}"
+    );
+    let _ = fs::remove_dir_all(book.parent().unwrap());
+}

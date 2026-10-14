@@ -482,8 +482,12 @@ pub async fn run_client(
         })?;
     loop {
         let (tcp, _) = listener.accept().await?;
-        let Ok((mut send, recv)) = conn.open_bi().await else {
-            return Err(std::io::Error::other("QUIC 连接已死"));
+        // BAR-247：死因变体透出——superseded 顶号 / TimedOut / reset 分型
+        // 是断连风暴定罪的直接证据（反连腿同款早已带，「closed by peer:
+        // replaced」即由此见）；旧制吞变体只剩「连接已死」，万次死亡无定性
+        let (mut send, recv) = match conn.open_bi().await {
+            Ok(s) => s,
+            Err(e) => return Err(std::io::Error::other(format!("QUIC 连接已死: {e}"))),
         };
         tokio::spawn(async move {
             if send.write_all(&port_header(target_port)).await.is_err() {

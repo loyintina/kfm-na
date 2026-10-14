@@ -122,6 +122,7 @@ async fn spec_bar233_quic共享腿直开流_端到端落盘() {
             port: quic_port,
             pin: hex64(&pin),
             psk: hex64(&psk),
+            rev_port: kfm_na::settings::QUIC_REVERSE_PORT,
         },
         gate_port: 9021,
     };

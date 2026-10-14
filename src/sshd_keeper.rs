@@ -60,6 +60,15 @@ pub fn should_note_foreign(child_alive: bool, banner_healthy: bool, already_note
     !child_alive && banner_healthy && !already_noted
 }
 
+/// 让位期 spawn 裁决（A 档纯逻辑，BAR-247 三环，钉在 sshd_keeper_spec）：
+/// 娃不在且口上有健康 banner（外来 sshd 在服务）= **真让位不 spawn**。
+/// 旧制让位只停在报表层、每拍仍照拉——spawn→绑口撞墙退 255→再拉，
+/// 与外来占口者 1:1 空转（11 机实录 4625 对）。口腾出（banner 消失）
+/// 才回 spawn 路接管。
+pub fn should_spawn(child_alive: bool, banner_healthy: bool) -> bool {
+    !child_alive && !banner_healthy
+}
+
 /// 幂等启动：重复调用只记一行报表。prefix 不可用时由壳侧拦（不在此
 /// 判——哨兵语义单源在 bootstrap::prefix_ready）。
 pub fn start(prefix: PathBuf) {
@@ -113,6 +122,9 @@ fn keep_loop(prefix: PathBuf) {
     let mut freeze_strikes: u32 = 0;
     // 外来占口定性旗（一集一报，娃绑上口即复位）
     let mut foreign_note = false;
+    // 外来占口在位旗（BAR-247 真让位闸：本拍 banner 健康而娃不在 = true，
+    // ④ 的 spawn 被它闸住——只探口不抢口）
+    let mut foreign_serving = false;
     let mut tick: u32 = 0;
     loop {
         tick = tick.wrapping_add(1);
@@ -166,12 +178,14 @@ fn keep_loop(prefix: PathBuf) {
         } else {
             // 承影 NA0160 5 楼三（判卷边角）：娃不在而 banner 健康 = 口被
             // 外来 sshd 占（run-as+setsid 起的那类不随 force-stop 死）——
-            // 报一行定性，免得下次翻进程表；持有娃按退避继续重试绑口。
+            // 报一行定性，免得下次翻进程表；BAR-247 起让位升格为真让位
+            // （④ 被 foreign_serving 闸住，不再每拍硬拉撞 255）。
             let banner = probe_banner().map(|l| banner_ok(&l)).unwrap_or(false);
+            foreign_serving = banner;
             if should_note_foreign(false, banner, foreign_note) {
                 crate::report::report(
                     "sshd",
-                    "banner 在但持有娃不在——口被外来 sshd 占，看门狗让位重试中（BAR-230 承影 5 楼）",
+                    "banner 在但持有娃不在——口被外来 sshd 占，看门狗真让位（BAR-247），口腾即接管",
                 );
                 foreign_note = true;
             }
@@ -181,8 +195,9 @@ fn keep_loop(prefix: PathBuf) {
             backoff_secs = 1;
             stable_since = None;
         }
-        // ④ 缺娃重拉（退避睡醒再 spawn）
-        if child.is_none() {
+        // ④ 缺娃重拉（退避睡醒再 spawn）——BAR-247 真让位闸：外来 sshd
+        // 占着口（banner 健康）时不 spawn，本拍只探口；口腾出下拍接管
+        if should_spawn(child.is_some(), foreign_serving) {
             std::thread::sleep(Duration::from_secs(backoff_secs.min(60)));
             match spawn_sshd(&prefix) {
                 Ok(c) => {

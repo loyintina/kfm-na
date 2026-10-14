@@ -95,6 +95,22 @@ fn servers_gate_port_字段() {
 }
 
 #[test]
+fn spec_bar247_quic_revport_字段() {
+    // BAR-247 分机分口：quic.revPort = 本机反连腿 UDP 口（缺省 62694＝
+    // 老配置零迁移；双机同 psk 同口互踢的根治 = 第二台机写新口）。
+    // 变异：解析摘掉/缺省改值 → 下两行断言红。
+    let v = parse_servers(r#"[{"id":"eleven","quic":{"enable":true}}]"#).unwrap();
+    assert_eq!(
+        v[0].quic.rev_port, 62694,
+        "缺 revPort 必须缺省 62694（老配置零迁移）"
+    );
+    let v = parse_servers(r#"[{"id":"nine","quic":{"enable":true,"revPort":62696}}]"#).unwrap();
+    assert_eq!(v[0].quic.rev_port, 62696);
+    // 连坐检查：正连口 port 缺省链毫发无伤
+    assert_eq!(v[0].quic.port, 62633);
+}
+
+#[test]
 fn servers_find_by_id_or_name() {
     let v = parse_servers(SERVERS_SAMPLE).unwrap();
     assert_eq!(

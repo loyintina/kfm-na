@@ -12,6 +12,12 @@
 //! - NA_QUIC_GEN_KEYS   置 1 = 授权首跑生成 QUIC 身份三件（缺省不许）
 //! - NA_QUIC_REV_BIND   M4 反连 QUIC 监听（可选，UDP 62694；9022 从 sshd
 //!   绑口变本机 TCP 监听器+反向开流，撞口/僵尸/释放三件套消失）
+//! - NA_QUIC_LEGS       额外正连 QUIC 口（可选，逗号分隔 UDP 口；BAR-247
+//!   分机分口——单槽认领下双机同口互踢，每机一口才根治。与主腿同身份
+//!   同 psk，主机部分随 NA_QUIC_BIND；需 NA_QUIC_BIND 在场）
+//! - NA_QUIC_REV_LEGS   额外反连 QUIC 腿（可选，逗号分隔「UDP口:TCP桥口」
+//!   对，如 62696:9025；每条腿独立桥口——9022 唯一属主仍是主腿。需
+//!   NA_QUIC_REV_BIND 在场）
 //! - NA_QUIC_REV_TCP    反连本机桥前（缺省 127.0.0.1:9022，只准回环）
 //! - NA_QUIC_REV_TARGET 手机侧回联口（缺省 8024 = na sshd）
 //! - NA_FS_ROOTS        文件树数据面允许根（冒号分隔；缺省 = `/root`
@@ -89,6 +95,11 @@ fn home() -> String {
 /// 开腿即强制客户端证（HMAC 挑战，设计 §四——公网口的前置条件）。
 fn spawn_quic_leg() {
     let Ok(bind) = std::env::var("NA_QUIC_BIND") else {
+        // BAR-247：额外腿依附主腿身份——主腿不开而额外腿在 = 配置半残，拒启
+        assert!(
+            std::env::var("NA_QUIC_LEGS").is_err(),
+            "NA_QUIC_LEGS 需 NA_QUIC_BIND 在场（额外腿与主腿同身份同主机部）"
+        );
         return;
     };
     {
@@ -105,6 +116,28 @@ fn spawn_quic_leg() {
         hex(&na_quic::cert_fingerprint(&certs[0]))
     );
     let addr: std::net::SocketAddr = bind.parse().expect("NA_QUIC_BIND 解析");
+    // BAR-247 分机分口：额外正连腿（NA_QUIC_LEGS，每机一口）。单槽认领
+    // 是 per-监听口的（run_server 认领段），多口 = 多槽 = 双机不互踢。
+    // 与主腿同一份证书/psk（同一服务器身份），主机部随主腿（0.0.0.0 显式
+    // 公网语义一并继承）。fail-loud：解析错即拒启（panic 在 spawn 前）。
+    let extras = gateq::parse_port_list(
+        "NA_QUIC_LEGS",
+        std::env::var("NA_QUIC_LEGS").ok().as_deref(),
+        &[addr.port()],
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    for port in extras {
+        let (certs, key) = (certs.clone(), key.clone_key());
+        let eaddr = std::net::SocketAddr::new(addr.ip(), port);
+        eprintln!("[na-server] QUIC 额外腿听 {eaddr}（BAR-247 分机分口）");
+        tokio::spawn(async move {
+            if let Err(e) =
+                na_quic::run_server(eaddr, na_quic::server_config(certs, key), Some(psk)).await
+            {
+                eprintln!("[na-server] QUIC 额外腿退出: {e}");
+            }
+        });
+    }
     tokio::spawn(async move {
         if let Err(e) =
             na_quic::run_server(addr, na_quic::server_config(certs, key), Some(psk)).await
@@ -123,6 +156,11 @@ fn spawn_quic_leg() {
 /// - NA_QUIC_REV_TARGET：手机侧回联口（缺省 8024 = na sshd）
 fn spawn_rev_quic_leg() {
     let Ok(bind) = std::env::var("NA_QUIC_REV_BIND") else {
+        // BAR-247：额外腿依附主腿——主腿不开而额外腿在 = 配置半残，拒启
+        assert!(
+            std::env::var("NA_QUIC_REV_LEGS").is_err(),
+            "NA_QUIC_REV_LEGS 需 NA_QUIC_REV_BIND 在场（额外腿与主腿同身份）"
+        );
         return;
     };
     {
@@ -154,6 +192,34 @@ fn spawn_rev_quic_leg() {
         hex(&na_quic::cert_fingerprint(&certs[0]))
     );
     let addr: std::net::SocketAddr = bind.parse().expect("NA_QUIC_REV_BIND 解析");
+    // BAR-247 分机分口：额外反连腿（NA_QUIC_REV_LEGS，「UDP口:TCP桥口」对，
+    // 每机一腿一桥）。单槽认领 per-监听口，多口 = 多槽 = 双机不互踢；
+    // 桥口独立 = 9022 唯一属主不串（判卷机走自己的桥口）。
+    let rev_extras = gateq::parse_rev_legs(
+        std::env::var("NA_QUIC_REV_LEGS").ok().as_deref(),
+        &[addr.port()],
+        &[tcp_bind.port()],
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    for (udp, tcp) in rev_extras {
+        let (certs, key) = (certs.clone(), key.clone_key());
+        let eaddr = std::net::SocketAddr::new(addr.ip(), udp);
+        let etcp = std::net::SocketAddr::new(tcp_bind.ip(), tcp);
+        eprintln!("[na-server] QUIC 额外反连腿听 {eaddr}（TCP 桥前 {etcp}，BAR-247 分机分口）");
+        tokio::spawn(async move {
+            if let Err(e) = na_quic::run_rev_server(
+                eaddr,
+                na_quic::server_config_rev(certs, key),
+                Some(psk),
+                etcp,
+                target,
+            )
+            .await
+            {
+                eprintln!("[na-server] QUIC 额外反连腿退出: {e}");
+            }
+        });
+    }
     tokio::spawn(async move {
         if let Err(e) = na_quic::run_rev_server(
             addr,
