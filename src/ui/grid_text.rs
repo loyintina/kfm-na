@@ -40,13 +40,20 @@ use unicode_width::UnicodeWidthChar;
 /// 真盲区（BAR-191 实证订正）：谚文首字母 U+1100–115F 与零宽/组合符
 /// ——U+200B、U+0300 段——土判据全误判 1 格；全角标点 U+3000 段在
 /// 0x2E80 之上，土判据碰巧不瞎）
-/// **唯一有意分叉（BAR-199，承影 0075 redroid 实测定罪）**：箭头块
+/// **有意分叉之一（BAR-199，承影 0075 redroid 实测定罪）**：箭头块
 /// U+2190–U+21FF 的字体墨宽 ≈30px > 1 格（基准 18px），按 unicode-width
 /// 的 Ambiguous=1 落格会被「墨不溢本字格跨」钳成残字（→ 只剩横杆、
 /// ← 杆被截短）——CJK 优先产品的 Ambiguous 取宽口径：箭头块 = 2 格。
+/// **分叉之二（BAR-242 二修，2026-10-14 用户真机判「太小几乎看不到」）**：
+/// 带圈字母 Ⓐ-ⓩ U+24B6-24E9 与 ⑪-⑳ U+246A-2473 同为 Ambiguous——烘焙
+/// 字体按全角补形（824 墨盒零缩放），半格物理上限 17px 圆内字母不可读，
+/// UI 侧判 2 格（CJK 带圈字符惯例全角）。①-⑩ 未并轨（存量八千处零报障）。
 /// 终端内容网格走 alacritty 自己的宽度表，不受本判据影响
 pub fn char_cells(c: char) -> u32 {
     if ('\u{2190}'..='\u{21ff}').contains(&c) {
+        return 2;
+    }
+    if ('\u{24B6}'..='\u{24E9}').contains(&c) || ('\u{246A}'..='\u{2473}').contains(&c) {
         return 2;
     }
     UnicodeWidthChar::width(c).unwrap_or(0) as u32

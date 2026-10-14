@@ -36,6 +36,20 @@ fn spec_char_cells_真值表() {
     assert_eq!(char_cells('↓'), 2, "U+2193 箭头 = 2 格（BAR-199 分叉）");
     assert_eq!(char_cells('\u{21ff}'), 2, "箭头块末 = 2 格");
     assert_eq!(char_cells('\u{2200}'), 1, "块外 ∀ 不受分叉影响");
+    // 带圈族分叉之二（BAR-242 二修，2026-10-14 用户真机判半格版太小）：
+    // Ⓐ-ⓩ U+24B6-24E9 + ⑪-⑳ U+246A-2473 = 2 格（烘焙字体全角补形）；
+    // ①-⑩ 未并轨照旧 1 格（存量八千处零报障）；块外不受分叉影响
+    assert_eq!(
+        char_cells('ⓐ'),
+        2,
+        "U+24D0 带圈字母 = 2 格（BAR-242 二修分叉）"
+    );
+    assert_eq!(char_cells('Ⓐ'), 2, "U+24B6 带圈大写 = 2 格");
+    assert_eq!(char_cells('\u{24E9}'), 2, "ⓩ 带圈族末 = 2 格");
+    assert_eq!(char_cells('⑪'), 2, "U+246A ⑪ = 2 格");
+    assert_eq!(char_cells('⑳'), 2, "U+2473 ⑳ = 2 格");
+    assert_eq!(char_cells('①'), 1, "①-⑩ 未并轨 = 照旧 1 格");
+    assert_eq!(char_cells('⑩'), 1, "U+2469 ⑩ = 1 格（并轨界）");
 }
 
 #[test]

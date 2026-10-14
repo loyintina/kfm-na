@@ -149,12 +149,13 @@ pub fn prefer_cjk(primary: &fontdue::Font, cjk: &fontdue::Font, c: char) -> bool
 }
 
 /// 带圈字母降级映射（BAR-242，MAIN0136）：ⓐ–ⓩ（U+24D0–24E9）/ Ⓐ–Ⓩ
-/// （U+24B6–24CF）→ ASCII 字母。降级是条件式兜底臂：双字体都缺该码位才
-/// 触发（degrade_cell / measure_items 的 None 臂）——用户裁定补字体
-/// （NA0171 楼5 转「要真带圈，不接受降级」）后烘焙 CJK 已借形补入全族
-/// 62 码位（spec_bar242_烘焙字体_带圈族真字形覆盖 钉死），生产路径本臂
-/// 失业但保留，兜住未来字体再缺。None = 无降级形态（照 tofu 记账上报，
-/// 不静默吞）
+/// （U+24B6–24CF）→ ASCII 字母。降级是条件式兜底臂——用户裁定补字体
+/// （NA0171 楼5 转「要真带圈，不接受降级」）后烘焙 CJK 已按**全角**借形
+/// 补入全族 62 码位（同日二修：半格版被用户真机判「太小几乎看不到」；
+/// spec_bar242_烘焙字体_带圈族真字形覆盖 钉死全角口径）。触发面：
+/// 文本路径（measure_items 双缺 None 臂）＋终端格路径（degrade_cell：
+/// 双缺**或字形全角放不进 alacritty 宽度表判的 1 格**）。None = 无降级
+/// 形态（照 tofu 记账上报，不静默吞）
 pub fn enclosed_ascii(c: char) -> Option<char> {
     let u = c as u32;
     if (0x24D0..=0x24E9).contains(&u) {
@@ -3928,20 +3929,29 @@ impl TermView {
     }
 
     /// 终端格路径降级（BAR-242，draw_glyph / rasterize_for_atlas_px 共用
-    /// 单源）：格宽锁死塞不进三字符降级形 (x)——带圈字母双缺时降级为
-    /// 单个 ASCII 字母（保可读不破格），不再记 tofu 目击
+    /// 单源）：格宽锁死塞不进三字符降级形 (x)——带圈字母在下列两种情形
+    /// 降级为单个 ASCII 字母（保可读不破格），不再记 tofu 目击：
+    /// ① 主备字体双缺（原条件）；② 备用字体有字形但**全角**（二修，
+    /// 2026-10-14：UI 文本路径带圈族已升全角 2 格——终端格是 alacritty
+    /// 宽度表判的 1 格，全角字形放进来会被格跨钳成半圆，比降级更糟）
     fn degrade_cell(&self, c: char) -> char {
-        match enclosed_ascii(c) {
-            Some(a)
-                if self.font.lookup_glyph_index(c) == 0
-                    && self
-                        .cjk
-                        .as_ref()
-                        .is_none_or(|k| k.font.lookup_glyph_index(c) == 0) =>
-            {
-                a
+        let Some(a) = enclosed_ascii(c) else {
+            return c;
+        };
+        if self.font.lookup_glyph_index(c) != 0 {
+            return c; // 主字体有 → 原样
+        }
+        match &self.cjk {
+            None => a, // 双缺 → 降级
+            Some(k) => {
+                if k.font.lookup_glyph_index(c) == 0 {
+                    return a; // 双缺 → 降级
+                }
+                // 有字形但全角（步进 ≈ 全角基准 '中'）→ 放不进 1 格 → 降级
+                let full = k.font.metrics('中', 1000.0).advance_width;
+                let adv = k.font.metrics(c, 1000.0).advance_width;
+                if adv > full * 0.75 { a } else { c }
             }
-            _ => c,
         }
     }
 
@@ -3960,6 +3970,13 @@ impl TermView {
         } else {
             None
         }
+    }
+
+    /// 考题专用通道（BAR-242 二修钉）：degrade_cell 判定读数——双缺或
+    /// 「有字形但全角放不进终端单格」→ ASCII 降级字母，否则原字
+    #[doc(hidden)]
+    pub fn spec_degrade_cell(&self, c: char) -> char {
+        self.degrade_cell(c)
     }
 
     /// 光栅化带缓存（BAR-102）：热路径统一入口——draw_glyph / draw_label /

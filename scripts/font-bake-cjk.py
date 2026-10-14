@@ -69,8 +69,12 @@ BORROW_CPS = [0x26A1, 0x2713, 0x2717, 0x2718, 0x271A, 0x279C, 0x27A6]  # ⚡✓�
 # Ⓐ-ⓩ U+24B6-24E9 全族 + ⑪-⑳ U+246A-2473 补齐（①-⑩ 已由 GB2312 全表带到）。
 # Noto CJK 本家与 DejaVu 双捐体都没有这一族（fc-list :charset=24d0 全库零
 # 供体实证）——捐体 = Noto Sans Symbols（SIL OFL 同族许可，见 README）。
-# 宽度口径：EAW=A 歧义族不落自动档——显式 cells=1 半格，与在产 ①-⑩
-# （advance=500 半格、八千处使用零报障）同律。
+# 宽度口径（同日二修，用户真机实测半格版「太小、几乎看不到」）：半格物理
+# 上限 = 墨盒 480 单位（17px 圆、圈内字母 ~7px，数字①能读、小写字母不能读）
+# ——显式 cells=2 全角（824 墨盒零缩放，≈「中」90% 高，CJK 惯例全角），UI 文本
+# 路径 char_cells 同族判 2 格（BAR-199 箭头块同型先例）；终端格路径格宽锁死
+# 放不进 → degrade_cell 落单个 ASCII 字母。①-⑩ 未并轨（存量八千处零报障，
+# 并轨另裁）。
 ENCLOSED_CPS = list(range(0x24B6, 0x24EA)) + list(range(0x246A, 0x2474))
 MOON_CPS = list(range(0x1F311, 0x1F319))  # 🌑-🌘
 SYMBOL_NARROW_CPS = (
@@ -333,8 +337,8 @@ def main():
     got, miss = borrow(font, DEJAVU_MONO, FFFD_CPS)
     print(f"4.borrow(DejaVu): FFFD 借入 {len(got)} 个"
           + (f"，捐体缺 {[hex(c) for c in miss]}" if miss else ""))
-    got, miss = borrow(font, NSS_DONOR, ENCLOSED_CPS, cells=1)
-    print(f"4.borrow(NSS): 带圈族借入 {len(got)} 个（半格，与在产 ①-⑩ 同律）"
+    got, miss = borrow(font, NSS_DONOR, ENCLOSED_CPS, cells=2)
+    print(f"4.borrow(NSS): 带圈族借入 {len(got)} 个（全角，824 墨盒零缩放）"
           + (f"，捐体缺 {[hex(c) for c in miss]}" if miss else ""))
 
     font.save(dst)
@@ -364,7 +368,7 @@ def main():
     for cp in ENCLOSED_CPS:
         gn = cmap.get(cp)
         assert gn, f"U+{cp:04X} 带圈族 cmap 未命中"
-        assert chmtx[gn][0] == HALF, f"U+{cp:04X} 带圈族步进非半格（与 ①-⑩ 同律）"
+        assert chmtx[gn][0] == UPM, f"U+{cp:04X} 带圈族步进非全角（用户判半格太小）"
     for cp in MOON_CPS:
         assert chmtx[cmap[cp]][0] == UPM, f"U+{cp:04X} 月亮非全角位"
     for cp in (0xE0B0, 0xE0B2):

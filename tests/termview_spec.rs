@@ -898,9 +898,10 @@ fn spec_bar242_烘焙字体_带圈族真字形覆盖() {
     // 用户裁定补字体不接受降级（NA0171 楼5/6 转用户原话「要真带圈」）——
     // 渲染面降级是条件式的（双字体 lookup_glyph_index 全 0 才触发），本钉咬
     // 另一半承诺：烘焙产物（build.rs 的 cjk.ttf 来源）必须真带全族 62 码位
-    // （Ⓐ-ⓩ U+24B6-24E9 + ⑪-⑳ U+246A-2473）、有墨、半格步进（借形归格
-    // cells=1，与在产 ①-⑩ 同律）。变异抽检：换回补丁前字体 cmap 无码位，
-    // 本钉必红。
+    // （Ⓐ-ⓩ U+24B6-24E9 + ⑪-⑳ U+246A-2473）、有墨、**全角**（二修 2026-10-14：
+    // 用户真机判半格版「太小、几乎看不到」——半格物理上限 480 墨盒 = 17px 圆，
+    // 圈内字母不可读；全角 824 墨盒零缩放 ≈「中」90% 高，CJK 带圈惯例）。
+    // 变异抽检：换回半格版/补丁前字体，步进断言与 cmap 断言必红。
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/assets/fonts/NotoSansCJKsc-kfm.ttf"
@@ -921,14 +922,59 @@ fn spec_bar242_烘焙字体_带圈族真字形覆盖() {
             "{c} 必须真有墨"
         );
     }
-    // 半格归格：步进 = 全角 '中' 的一半（①-⑩ 在产同律的同一批 borrow）
+    // 全角归格：步进 = 全角 '中' 同步进；墨高 ≥ '中' 的 80%（824 vs 919
+    // 实测 ≈90%——防「再被打回半格」 regression：半格版只有 480/919 ≈52%）
     let px = CELL_H as f32;
-    let adv_half = font.metrics('ⓐ', px).advance_width;
     let adv_full = font.metrics('中', px).advance_width;
-    assert!(
-        (adv_half * 2.0 - adv_full).abs() < adv_full * 0.05,
-        "ⓐ 步进必须 = 全角一半（实测 ⓐ={adv_half} 中={adv_full}）"
+    let han_h = font.metrics('中', px).height;
+    for c in ['ⓐ', 'Ⓐ', '⑪'] {
+        let m = font.metrics(c, px);
+        assert!(
+            (m.advance_width - adv_full).abs() < adv_full * 0.05,
+            "{c} 步进必须 = 全角（实测 {} vs 中 {adv_full}）",
+            m.advance_width
+        );
+        assert!(
+            m.height * 5 >= han_h * 4,
+            "{c} 墨高必须 ≥ 中的 80%（实测 {} vs 中 {han_h}）",
+            m.height
+        );
+    }
+}
+
+#[test]
+fn spec_bar242_终端格_全角放不进降级单字母() {
+    // 二修新增判据：烘焙字体补形后 ⓐ 是全角字形，但终端格由 alacritty
+    // 宽度表判 1 格——放进来会被格跨钳成半圆（比降级更糟），degrade_cell
+    // 条件②「有字形但全角」必须把它降成单个 ASCII 字母。夹具：主字体
+    // host DejaVu（无 ⓐ）+ 生产烘焙 CJK（全角 ⓐ）。
+    // 变异抽检：摘掉条件②（adv 判断）本钉必红（ⓐ 原样通过 = 上屏半圆）。
+    let cjk_bytes = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/assets/fonts/NotoSansCJKsc-kfm.ttf"
+    ))
+    .expect("烘焙 CJK 字体缺失");
+    let cjk = fontdue::Font::from_bytes(cjk_bytes, fontdue::FontSettings::default())
+        .expect("fontdue 不认烘焙字体");
+    assert_ne!(cjk.lookup_glyph_index('ⓐ'), 0, "夹具前提：烘焙字体有 ⓐ");
+    let tv = TermView::new(host_font(), Some(cjk), 8, 2, CELL_W, CELL_H);
+    assert_eq!(
+        tv.spec_degrade_cell('ⓐ'),
+        'a',
+        "全角 ⓐ 放不进终端 1 格，必须降级为 a"
     );
+    assert_eq!(
+        tv.spec_degrade_cell('Ⓐ'),
+        'A',
+        "全角 Ⓐ 放不进终端 1 格，必须降级为 A"
+    );
+    // 负例：无降级映射的全角字原样通过（中），主字体自带的原样（a），
+    // 半格假设下的有映射字（host 夹具无 ① 映射——① enclosed_ascii=None）不动
+    assert_eq!(tv.spec_degrade_cell('中'), '中');
+    assert_eq!(tv.spec_degrade_cell('a'), 'a');
+    // 双缺照旧降级（host 双 DejaVu 无 ⓐ 的老路径不破）
+    let tv2 = TermView::new(host_font(), Some(host_font()), 8, 2, CELL_W, CELL_H);
+    assert_eq!(tv2.spec_degrade_cell('ⓐ'), 'a', "双缺照旧降级");
 }
 
 #[test]
