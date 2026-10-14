@@ -18,6 +18,10 @@
 //! - NA_QUIC_REV_LEGS   额外反连 QUIC 腿（可选，逗号分隔「UDP口:TCP桥口」
 //!   对，如 62696:9025；每条腿独立桥口——9022 唯一属主仍是主腿。需
 //!   NA_QUIC_REV_BIND 在场）
+//! - NA_QUIC_REV_FRONTS 主反连腿的额外桥前（可选，逗号分隔「TCP桥口:设备id」
+//!   对，如 9025:neo9；BAR-247 改道一口多设备——同一条 UDP 监听上按
+//!   deviceId 分槽认领，每槽各绑各桥口，9022 仍是 legacy 槽桥前。需
+//!   NA_QUIC_REV_BIND 在场）
 //! - NA_QUIC_REV_TCP    反连本机桥前（缺省 127.0.0.1:9022，只准回环）
 //! - NA_QUIC_REV_TARGET 手机侧回联口（缺省 8024 = na sshd）
 //! - NA_FS_ROOTS        文件树数据面允许根（冒号分隔；缺省 = `/root`
@@ -156,10 +160,14 @@ fn spawn_quic_leg() {
 /// - NA_QUIC_REV_TARGET：手机侧回联口（缺省 8024 = na sshd）
 fn spawn_rev_quic_leg() {
     let Ok(bind) = std::env::var("NA_QUIC_REV_BIND") else {
-        // BAR-247：额外腿依附主腿——主腿不开而额外腿在 = 配置半残，拒启
+        // BAR-247：额外腿/额外桥前依附主腿——主腿不开而它们在 = 配置半残，拒启
         assert!(
             std::env::var("NA_QUIC_REV_LEGS").is_err(),
             "NA_QUIC_REV_LEGS 需 NA_QUIC_REV_BIND 在场（额外腿与主腿同身份）"
+        );
+        assert!(
+            std::env::var("NA_QUIC_REV_FRONTS").is_err(),
+            "NA_QUIC_REV_FRONTS 需 NA_QUIC_REV_BIND 在场（额外桥前挂在主反连腿上）"
         );
         return;
     };
@@ -192,6 +200,29 @@ fn spawn_rev_quic_leg() {
         hex(&na_quic::cert_fingerprint(&certs[0]))
     );
     let addr: std::net::SocketAddr = bind.parse().expect("NA_QUIC_REV_BIND 解析");
+    // BAR-247 改道「一口多设备」：主反连腿升 run_rev_server_multi——认领面
+    // 按 deviceId 分槽，每槽一个本机桥前 front。9022 桥前 = legacy 槽
+    // （空 id，旧核 v1 零迁移）；NA_QUIC_REV_FRONTS（「TCP桥口:设备id」对，
+    // 如 9025:neo9）= 各 id 槽的桥前。fail-loud：解析错即拒启（panic 在
+    // spawn 前，parse_rev_legs 同款）
+    let mut fronts = vec![na_quic::RevFront {
+        tcp_bind,
+        device_id: String::new(),
+        target_port: target,
+    }];
+    for (tcp, id) in gateq::parse_rev_fronts(
+        std::env::var("NA_QUIC_REV_FRONTS").ok().as_deref(),
+        &[tcp_bind.port()],
+    )
+    .unwrap_or_else(|e| panic!("{e}"))
+    {
+        // 桥口主机部继承主桥前（已过回环硬闸）——fronts 环境变量不带主机部
+        fronts.push(na_quic::RevFront {
+            tcp_bind: std::net::SocketAddr::new(tcp_bind.ip(), tcp),
+            device_id: id,
+            target_port: target,
+        });
+    }
     // BAR-247 分机分口：额外反连腿（NA_QUIC_REV_LEGS，「UDP口:TCP桥口」对，
     // 每机一腿一桥）。单槽认领 per-监听口，多口 = 多槽 = 双机不互踢；
     // 桥口独立 = 9022 唯一属主不串（判卷机走自己的桥口）。
@@ -221,12 +252,11 @@ fn spawn_rev_quic_leg() {
         });
     }
     tokio::spawn(async move {
-        if let Err(e) = na_quic::run_rev_server(
+        if let Err(e) = na_quic::run_rev_server_multi(
             addr,
             na_quic::server_config_rev(certs, key),
             Some(psk),
-            tcp_bind,
-            target,
+            fronts,
         )
         .await
         {

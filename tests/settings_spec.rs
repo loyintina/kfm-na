@@ -111,6 +111,22 @@ fn spec_bar247_quic_revport_字段() {
 }
 
 #[test]
+fn spec_bar247_quic_device_id_字段() {
+    // BAR-247 改道「一口多设备」：quic.deviceId = 本机在服务器认领槽的身份
+    // （缺省 ""＝v1/legacy 形态，老配置零迁移；写了才走 v2 流头+换锚认证）。
+    // 变异：解析摘掉/缺省改值 → 下两行断言红。
+    let v = parse_servers(r#"[{"id":"eleven","quic":{"enable":true}}]"#).unwrap();
+    assert_eq!(
+        v[0].quic.device_id, "",
+        "缺 deviceId 必须缺省空串（v1 形态）"
+    );
+    let v = parse_servers(r#"[{"id":"nine","quic":{"enable":true,"deviceId":"neo9"}}]"#).unwrap();
+    assert_eq!(v[0].quic.device_id, "neo9");
+    // 连坐检查：revPort 缺省链毫发无伤
+    assert_eq!(v[0].quic.rev_port, 62694);
+}
+
+#[test]
 fn servers_find_by_id_or_name() {
     let v = parse_servers(SERVERS_SAMPLE).unwrap();
     assert_eq!(

@@ -127,3 +127,39 @@ fn spec_bar233_tick心跳与超时常量() {
         "tunnel 数据腿连接槽被摘（poller 无从取连接）"
     );
 }
+
+/// frame_head 流头帧构造（A 档纯函数钉，BAR-247 改道「一口多设备」）：
+/// v1 空 id = 端口头 2B＋auth_tag 32B；v2 非空 id = 魔数 0xFF02＋id＋端口
+/// ＋auth_tag2 换锚标签，且两形态的认证锚必须不同（换锚钉）。
+/// 变异：device_id 非空仍走 v1 帧（v2 分流被摘）→ 魔数断言红；
+///      v2 不换锚（复用 auth_tag）→ 两锚不同断言红。
+#[test]
+fn spec_bar247_frame_head_v1v2分流() {
+    let psk = [0x42u8; 32];
+    // v1：34 字节 = [端口be][auth_tag]
+    let v1 = kfm_na::gate_poller::frame_head(&psk, 9021, "").expect("v1 帧");
+    assert_eq!(v1.len(), 34, "v1 帧长");
+    assert_eq!(&v1[..2], &9021u16.to_be_bytes(), "v1 前两字节是端口头");
+    assert_eq!(&v1[2..], &na_quic::auth_tag(&psk, 9021), "v1 认证锚");
+    // v2：魔数起，含 id 与端口，认证锚换 auth_tag2
+    let v2 = kfm_na::gate_poller::frame_head(&psk, 9021, "neo9").expect("v2 帧");
+    let expect_len = 2 + 1 + 4 + 2 + 32; // 魔数＋id长＋"neo9"＋端口＋tag2
+    assert_eq!(v2.len(), expect_len, "v2 帧长");
+    assert_eq!(&v2[..2], &na_quic::V2_MAGIC.to_be_bytes(), "v2 魔数分流闸");
+    assert_eq!(v2[2], 4, "id 长字节");
+    assert_eq!(&v2[3..7], b"neo9", "id 入帧");
+    assert_eq!(&v2[7..9], &9021u16.to_be_bytes(), "v2 端口段");
+    assert_eq!(
+        &v2[9..],
+        &na_quic::auth_tag2(&psk, "neo9", 9021),
+        "v2 认证锚（换锚后）"
+    );
+    assert_ne!(
+        &v2[9..],
+        &na_quic::auth_tag(&psk, 9021),
+        "v2 锚必须与 v1 不同（换锚是本件的安全语义）"
+    );
+    // 非法 id → None（不发出坏帧）
+    assert!(kfm_na::gate_poller::frame_head(&psk, 9021, "neo 9").is_none());
+    assert!(kfm_na::gate_poller::frame_head(&psk, 9021, &"x".repeat(33)).is_none());
+}

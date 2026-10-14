@@ -10,6 +10,14 @@
 //! 双向同构——客户端开流带 9021（正连），服务器开流带 8024（反连），
 //! 对端按端口回联本机 127.0.0.1:{port}。撞口在类型层面不存在：
 //! 多并发 = 多条流，没有端口绑定动作。
+//!
+//! 协议 v2（BAR-247 改道，2026-10-14 用户终审「SG 零增开新口」——一口多
+//! 设备）：v1 的认证锚焊死端口号、认领槽全局唯一，双机同 psk 同口必互踢
+//! （11 机 field-reports 定罪）。v2 = 流头魔数 [`V2_MAGIC`] 分流 + 设备 id
+//! 入流头与认证锚（[`auth_tag2`]）+ 认领槽按 device_id 分槽（同 id 顶替
+//! 防僵尸保留，异 id 各占各槽）。无旗日：v1 客户端零改动照连，归 legacy
+//! 槽（空 id）；quinn 未配 ALPN，魔数走流内自描述，与「流头自带口+标签」
+//! 同构。
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
@@ -47,6 +55,79 @@ pub fn port_header(port: u16) -> [u8; 2] {
 
 pub fn parse_port_header(h: &[u8; 2]) -> u16 {
     u16::from_be_bytes(*h)
+}
+
+// ---- 协议 v2（BAR-247 改道「一口多设备」）：魔数分流 + 设备 id ----
+
+/// v2 流头魔数：首 2 字节 == 此值 = v2 头（随后 1 字节 id 长 + id + 2 字节
+/// 端口），否则按 v1 的 2 字节端口解。占 0xFF00 保留段——现网业务口
+/// （0 注册 / 8024 sshd / 90xx 闸门）全在其下，零撞（钉在 oneport_spec）。
+pub const V2_MAGIC: u16 = 0xFF02;
+
+/// 设备 id 字节上限（流头 1 字节长度前缀的硬顶之外再收一道：id 是配置面
+/// 人工命名，32 字节绰绰有余，收紧 = 坏配置早炸）
+pub const DEVICE_ID_MAX_LEN: usize = 32;
+
+/// 设备 id 合法判（A 档）：1..=32 字节，ASCII 字母数字与 `-_`。空串非法
+/// ——空 = v1/legacy 形态，不许混进 v2 通道（钉在 oneport_spec）
+pub fn valid_device_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= DEVICE_ID_MAX_LEN
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+/// v2 流头编码（A 档）：魔数 + 1 字节 id 长 + id + 2 字节端口（网络序）。
+/// 非法 id 拒编码（None）——调用方必须先用 [`valid_device_id`] 过闸
+pub fn stream_header_v2(device_id: &str, port: u16) -> Option<Vec<u8>> {
+    if !valid_device_id(device_id) {
+        return None;
+    }
+    let mut v = Vec::with_capacity(2 + 1 + device_id.len() + 2);
+    v.extend_from_slice(&V2_MAGIC.to_be_bytes());
+    v.push(device_id.len() as u8);
+    v.extend_from_slice(device_id.as_bytes());
+    v.extend_from_slice(&port.to_be_bytes());
+    Some(v)
+}
+
+/// v2 流头解码（A 档，入参 = 魔数之后的字节）：1 字节 id 长 + id + 2 字节
+/// 端口。坏体（截断/零长/超长/非法字符）一律 None——解析层不收尸，坏流
+/// 由调用方弃掉
+pub fn parse_stream_header_v2(body: &[u8]) -> Option<(&str, u16)> {
+    let (&len, rest) = body.split_first()?;
+    let len = len as usize;
+    if len == 0 || len > DEVICE_ID_MAX_LEN {
+        return None;
+    }
+    let id_b = rest.get(..len)?;
+    let id = std::str::from_utf8(id_b)
+        .ok()
+        .filter(|s| valid_device_id(s))?;
+    let port_b = rest.get(len..len + 2)?;
+    Some((id, u16::from_be_bytes([port_b[0], port_b[1]])))
+}
+
+/// 从流上读 v2 头字段（B 档胶水，魔数已被调用方消费）：读不齐/非法 = 弃流
+async fn read_v2_fields(recv: &mut quinn::RecvStream) -> Option<(String, u16)> {
+    let mut lb = [0u8; 1];
+    recv.read_exact(&mut lb).await.ok()?;
+    let len = lb[0] as usize;
+    if len == 0 || len > DEVICE_ID_MAX_LEN {
+        return None;
+    }
+    let mut idb = vec![0u8; len];
+    recv.read_exact(&mut idb).await.ok()?;
+    let id = String::from_utf8(idb).ok().filter(|s| valid_device_id(s))?;
+    let mut pb = [0u8; 2];
+    recv.read_exact(&mut pb).await.ok()?;
+    Some((id, u16::from_be_bytes(pb)))
+}
+
+/// 认领槽显示名（日志用）：空 id = v1 legacy 槽
+fn slot_name(id: &str) -> &str {
+    if id.is_empty() { "(v1-legacy)" } else { id }
 }
 
 // ---- 证书 ----
@@ -111,6 +192,19 @@ pub fn auth_tag(psk: &[u8; 32], port: u16) -> [u8; 32] {
     let mut m = [0u8; 17];
     m[..15].copy_from_slice(b"na-quic-auth-v1");
     m[15..].copy_from_slice(&port.to_be_bytes());
+    hmac_sha256(psk, &m)
+}
+
+/// 认证标签 v2（BAR-247 改道）：HMAC(psk, "na-quic-auth-v2" ‖ id 长 ‖
+/// 设备 id ‖ 端口头)。换锚三件套——异版本签名不可互挪用（"v1"≠"v2" 锚）、
+/// 跨机不可挪用（绑设备 id）、跨口不可挪用（绑端口照旧）。id 长度前缀入
+/// 锚 = 流头线格式与认证消息同源同构，无拼接歧义
+pub fn auth_tag2(psk: &[u8; 32], device_id: &str, port: u16) -> [u8; 32] {
+    let mut m = Vec::with_capacity(15 + 1 + device_id.len() + 2);
+    m.extend_from_slice(b"na-quic-auth-v2");
+    m.push(device_id.len() as u8);
+    m.extend_from_slice(device_id.as_bytes());
+    m.extend_from_slice(&port.to_be_bytes());
     hmac_sha256(psk, &m)
 }
 
@@ -328,14 +422,16 @@ pub async fn run_server(
         std::net::IpAddr,
         (u32, std::time::Instant),
     >::new()));
-    // 认领账（BAR-171 翻案·修复①）：正连腿同时只养一条活跃连接——
-    // 新连接第一条验签通过的流落地时，旧连接当场 close。级联收尸链：
+    // 认领账（BAR-171 翻案·修复①；BAR-247 改道升多槽）：正连腿按
+    // device_id 分槽养活跃连接——同槽新连接第一条验签通过的流落地时，
+    // 旧连接当场 close；异槽各占各（一口多设备零互踢，钉在 oneport_spec）。
+    // v1 客户端归 legacy 槽（空 id，顶替语义照旧 = 无旗日）。级联收尸链：
     // 旧连接死 → 其 splice 全终 → loopback TCP 全断 → wsterm killAll
     // → 预热壳整组收。**验签通过才认领**——握手无客户端证，扫描器
     // 光握手顶不掉真客户端（设计 §四）。QUIC 迁移不触雷：网络切换
     // 是同一 Connection 不换 Incoming，stable_id 不变不自杀。
     // （反连腿同款语义早已在 run_rev_server：「新注册挤掉旧的」）
-    let owner = std::sync::Arc::new(tokio::sync::Mutex::new(None::<Connection>));
+    let owner = std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::<String, Connection>::new()));
     while let Some(inc) = ep.accept().await {
         let fails = std::sync::Arc::clone(&fails);
         let owner = std::sync::Arc::clone(&owner);
@@ -366,11 +462,24 @@ pub async fn run_server(
                     if recv.read_exact(&mut hdr).await.is_err() {
                         return;
                     }
-                    let port = parse_port_header(&hdr);
+                    // v1/v2 分流（BAR-247 改道）：魔数 = v2（续读 id+端口），
+                    // 否则 hdr 即 v1 的 2 字节端口，归 legacy 槽（空 id）
+                    let (slot, port) = if u16::from_be_bytes(hdr) == V2_MAGIC {
+                        let Some((id, port)) = read_v2_fields(&mut recv).await else {
+                            return; // 坏头弃流（对齐 v1「读不齐即弃」，不入连败账）
+                        };
+                        (id, port)
+                    } else {
+                        (String::new(), parse_port_header(&hdr))
+                    };
                     if let Some(k) = psk {
                         let mut tag = [0u8; AUTH_TAG_LEN];
-                        let ok = recv.read_exact(&mut tag).await.is_ok()
-                            && ct_eq(&tag, &auth_tag(&k, port));
+                        let expect = if slot.is_empty() {
+                            auth_tag(&k, port)
+                        } else {
+                            auth_tag2(&k, &slot, port)
+                        };
+                        let ok = recv.read_exact(&mut tag).await.is_ok() && ct_eq(&tag, &expect);
                         if !ok {
                             let mut g = fails.lock().await;
                             let e = g.entry(ip).or_insert((0, std::time::Instant::now()));
@@ -382,16 +491,17 @@ pub async fn run_server(
                             return;
                         }
                     }
-                    // 验签通过 = 真客户端——认领正连载具：顶掉旧连接
-                    // （幂等：本连接已是主则零动作；逐流对账免 claimed 旗）
+                    // 验签通过 = 真客户端——认领本槽正连载具：顶掉同槽旧连接
+                    // （幂等：本连接已是槽主则零动作；逐流对账免 claimed 旗）
                     {
                         let mut g = owner.lock().await;
                         let mine = conn.stable_id();
-                        if g.as_ref().map(|c| c.stable_id()) != Some(mine)
-                            && let Some(old) = g.replace(conn.clone())
+                        if g.get(&slot).map(|c| c.stable_id()) != Some(mine)
+                            && let Some(old) = g.insert(slot.clone(), conn.clone())
                         {
                             eprintln!(
-                                "[na-quic] 正连顶替：旧连接 {} 收尸（新连接 {mine} 认领，{ip}）",
+                                "[na-quic] 正连顶替：槽 {} 旧连接 {} 收尸（新连接 {mine} 认领，{ip}）",
+                                slot_name(&slot),
                                 old.stable_id()
                             );
                             old.close(0u32.into(), b"superseded");
@@ -455,6 +565,66 @@ pub async fn run_client(
     psk: Option<[u8; 32]>,
     conn_out: Option<tokio::sync::mpsc::UnboundedSender<Connection>>,
 ) -> std::io::Result<()> {
+    run_client_inner(
+        server,
+        sni,
+        local_bind,
+        target_port,
+        cfg,
+        psk,
+        conn_out,
+        None,
+    )
+    .await
+}
+
+/// 客户端腿 v2（BAR-247 改道「一口多设备」）：与 [`run_client`] 同构，
+/// 唯流头走 v2（魔数+设备 id+端口）、认证走 [`auth_tag2`]——服务器按
+/// device_id 分槽认领，同 psk 多设备同 UDP 口共存零互踢。非法 id
+/// fail-loud 拒起（配置面坏件不许带伤跑）
+// v1 兼容皮同形签名 + 一个 device_id——参数与腿配置一一对应，拆包
+// 反丢可读性（run_client_inner 同款 allow）
+#[allow(clippy::too_many_arguments)]
+pub async fn run_client_v2(
+    server: SocketAddr,
+    sni: &str,
+    local_bind: SocketAddr,
+    target_port: u16,
+    cfg: ClientConfig,
+    psk: Option<[u8; 32]>,
+    conn_out: Option<tokio::sync::mpsc::UnboundedSender<Connection>>,
+    device_id: &str,
+) -> std::io::Result<()> {
+    if !valid_device_id(device_id) {
+        return Err(std::io::Error::other(format!(
+            "非法设备 id {device_id:?}（1..=32 字节 ASCII 字母数字与 -_）"
+        )));
+    }
+    run_client_inner(
+        server,
+        sni,
+        local_bind,
+        target_port,
+        cfg,
+        psk,
+        conn_out,
+        Some(device_id),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_client_inner(
+    server: SocketAddr,
+    sni: &str,
+    local_bind: SocketAddr,
+    target_port: u16,
+    cfg: ClientConfig,
+    psk: Option<[u8; 32]>,
+    conn_out: Option<tokio::sync::mpsc::UnboundedSender<Connection>>,
+    device_id: Option<&str>,
+) -> std::io::Result<()> {
+    let dev: Option<String> = device_id.map(str::to_string);
     let mut ep = Endpoint::client(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)))
         .map_err(|e| std::io::Error::other(e.to_string()))?;
     ep.set_default_client_config(cfg);
@@ -489,13 +659,27 @@ pub async fn run_client(
             Ok(s) => s,
             Err(e) => return Err(std::io::Error::other(format!("QUIC 连接已死: {e}"))),
         };
+        let dev = dev.clone();
         tokio::spawn(async move {
-            if send.write_all(&port_header(target_port)).await.is_err() {
-                return;
-            }
-            if let Some(k) = psk
-                && send.write_all(&auth_tag(&k, target_port)).await.is_err()
-            {
+            // 流头 + 认证标签：v2（魔数+id+端口+tag2）或 v1（端口+tag）
+            let mut head = match &dev {
+                Some(id) => {
+                    let mut h = stream_header_v2(id, target_port).expect("id 已过闸");
+                    if let Some(k) = psk {
+                        h.extend_from_slice(&auth_tag2(&k, id, target_port));
+                    }
+                    h
+                }
+                None => {
+                    let mut h = port_header(target_port).to_vec();
+                    if let Some(k) = psk {
+                        h.extend_from_slice(&auth_tag(&k, target_port));
+                    }
+                    h
+                }
+            };
+            head.shrink_to_fit();
+            if send.write_all(&head).await.is_err() {
                 return;
             }
             splice(tcp, send, recv).await;
@@ -514,18 +698,50 @@ pub async fn run_client(
 /// 注册流端口头（A 档常量）：0 不是合法业务口，天然不会与正连流混
 pub const REG_PORT: u16 = 0;
 
-/// 反连服务器腿：QUIC 监听（UDP 62694）；认领注册连接后绑本机 TCP
-/// （127.0.0.1:9022），每个入站 TCP → 沿注册连接开流（写端口头 =
-/// target_port，即手机侧 na sshd 8024）→ splice。连接死 = 收 TCP
-/// 监听器回 QUIC 认领循环（9022 让位给 ssh 伴生兜底——口随供应商走，
-/// 与今天 sshd 持有它的语义同构）。同时只认领一条（多设备是未来事，
-/// 新注册挤掉旧的：旧手机掉线残留不会让新手机认领不上）
+/// 反连桥前配置（BAR-247 改道「一口多设备」）：一个本机 TCP 口 ↔ 一个
+/// 设备 id 认领槽。device_id 空 = legacy 槽（v1 旧核注册）；非空 = v2
+/// 设备专属桥前（如 9025:neo9，na-server 经 NA_QUIC_REV_FRONTS 配置）。
+/// target_port = 设备侧回联口（8024 = na sshd）
+pub struct RevFront {
+    pub tcp_bind: SocketAddr,
+    pub device_id: String,
+    pub target_port: u16,
+}
+
+/// 反连服务器腿（v1 单 front 兼容皮）：等价于 [`run_rev_server_multi`] 只
+/// 挂一个 legacy front（空 id，tcp_bind/target_port 照旧）。旧调用零迁移
 pub async fn run_rev_server(
     bind: SocketAddr,
     cfg: ServerConfig,
     psk: Option<[u8; 32]>,
     tcp_bind: SocketAddr,
     target_port: u16,
+) -> std::io::Result<()> {
+    run_rev_server_multi(
+        bind,
+        cfg,
+        psk,
+        vec![RevFront {
+            tcp_bind,
+            device_id: String::new(),
+            target_port,
+        }],
+    )
+    .await
+}
+
+/// 反连服务器腿（多 front 形态）：QUIC 监听（UDP 62694 一口）；注册连接
+/// 按 device_id 分槽认领（同槽新注册挤掉旧的——旧机掉线残留不会让新机
+/// 认领不上；异槽各占各 = 一口多设备零互踢，钉在 oneport_spec）；每个
+/// front 在本槽认领存活期内绑自己的本机 TCP 口，入站 TCP → 沿本槽连接
+/// 开流（v2 槽写 v2 流头，legacy 槽写 v1 端口头）→ splice。连接死 =
+/// 收 TCP 监听器回等认领（桥口让位给 ssh 伴生兜底——口随供应商走，与
+/// 今天 sshd 持有它的语义同构）
+pub async fn run_rev_server_multi(
+    bind: SocketAddr,
+    cfg: ServerConfig,
+    psk: Option<[u8; 32]>,
+    fronts: Vec<RevFront>,
 ) -> std::io::Result<()> {
     let ep = Endpoint::server(cfg, bind).map_err(|e| std::io::Error::other(e.to_string()))?;
     let fails = std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::<
@@ -539,10 +755,17 @@ pub async fn run_rev_server(
     // 新握手零回包，弃尸排队永远排不完（62694 pcap 实录：60s cadence
     // 一具陈尸一组 PTO 序列，23 次新鲜尝试零回包）。考题
     // spec_m4_bar157_弃尸风暴_诚实客户端不被憋死。
-    let (claim_tx, mut claim_rx) = tokio::sync::mpsc::channel::<Connection>(8);
+    //
+    // BAR-247 改道：认领面 = watch 活账（device_id → 注册连接），注册任务
+    // 直写、front 任务订——单认领循环与 mpsc 随多槽化退场（「只留最新」
+    // 语义按槽天然成立：同槽 insert 即顶旧）。
+    let (claim_tx, claim_rx) =
+        tokio::sync::watch::channel(std::collections::HashMap::<String, Connection>::new());
+    let mut tasks = tokio::task::JoinSet::new();
     {
         let fails = std::sync::Arc::clone(&fails);
-        tokio::spawn(async move {
+        let claim_tx = claim_tx.clone();
+        tasks.spawn(async move {
             while let Some(inc) = ep.accept().await {
                 let fails = std::sync::Arc::clone(&fails);
                 let claim_tx = claim_tx.clone();
@@ -569,27 +792,9 @@ pub async fn run_rev_server(
                             return;
                         }
                     }
-                    // 注册流：第一条流必须是 REG_PORT + 合法标签
-                    let registered = async {
-                        let (_send, mut recv) = conn.accept_bi().await.ok()?;
-                        let mut hdr = [0u8; 2];
-                        recv.read_exact(&mut hdr).await.ok()?;
-                        let port = parse_port_header(&hdr);
-                        if port != REG_PORT {
-                            return None;
-                        }
-                        if let Some(k) = psk {
-                            let mut tag = [0u8; AUTH_TAG_LEN];
-                            let ok = recv.read_exact(&mut tag).await.is_ok()
-                                && ct_eq(&tag, &auth_tag(&k, port));
-                            if !ok {
-                                return None;
-                            }
-                        }
-                        Some(())
-                    }
-                    .await;
-                    if registered.is_none() {
+                    // 注册流：第一条流必须是合法注册（v1 = REG_PORT+标签
+                    // 归 legacy 槽；v2 = 魔数+id+REG_PORT+tag2 归 id 槽）
+                    let Some(id) = read_registration(&conn, &psk).await else {
                         let mut g = fails.lock().await;
                         let e = g.entry(ip).or_insert((0, std::time::Instant::now()));
                         if e.1.elapsed().as_secs() >= AUTH_BAN_SECS {
@@ -599,66 +804,128 @@ pub async fn run_rev_server(
                         eprintln!("[na-quic] 反连注册验签失败 {ip}（第 {} 次连败）", e.0);
                         conn.close(1u32.into(), b"bad registration");
                         return;
+                    };
+                    // 认领：同槽顶旧（旧连接 close → 其 front 服务段收尸
+                    // 让位），异槽插新；幂等——同连接重复注册零动作
+                    let mut replaced = None;
+                    let mine = conn.stable_id();
+                    claim_tx.send_if_modified(|m| {
+                        if m.get(&id).map(|c| c.stable_id()) == Some(mine) {
+                            return false;
+                        }
+                        replaced = m.insert(id.clone(), conn.clone());
+                        true
+                    });
+                    if let Some(old) = replaced {
+                        eprintln!(
+                            "[na-quic] 反连顶替：槽 {} 旧连接 {} 收尸（新连接 {mine} 认领，{ip}）",
+                            slot_name(&id),
+                            old.stable_id()
+                        );
+                        old.close(0u32.into(), b"replaced");
+                    } else {
+                        eprintln!(
+                            "[na-quic] 反连认领：槽 {} ← 连接 {mine}（{ip}）",
+                            slot_name(&id)
+                        );
                     }
-                    let _ = claim_tx.send(conn).await;
                 });
             }
         });
     }
-    // —— 认领/服务循环：取最新认领（channel 积压只留最新——「新注册
-    // 挤掉旧的」）；服务期来了新认领 = 旧连接当场 close（conn.closed()
-    // 让 serve 返回、TCP 口让出）换新连接续服。旧制服务期 accept 停摆
-    // = 换网络的手机要等旧连接 60s idle 收尸才能握手（BAR-157 同源
-    // 第二病灶）
-    let Some(mut conn) = claim_rx.recv().await else {
-        return Err(std::io::Error::other("QUIC accept 驱动死"));
-    };
-    loop {
-        while let Ok(newer) = claim_rx.try_recv() {
-            conn = newer; // 积压只留最新
-        }
+    // —— front 任务组：每 front 一个生命周期循环（认领在才绑口、死即
+    // 让位、复认领复绑），accept 驱动同组。任何组件退场 = 反连面半残，
+    // 响亮返回（部署侧进程级看门狗收尸重启），不许带病空转
+    for front in fronts {
         eprintln!(
-            "[na-quic] 反连认领 {} → 本机 TCP {tcp_bind}",
-            conn.remote_address().ip()
+            "[na-quic] 反连 front 就位：槽 {} → 本机 TCP {}",
+            slot_name(&front.device_id),
+            front.tcp_bind
         );
-        let outcome = {
-            let serving = serve_rev_tcp(&conn, tcp_bind, target_port);
-            tokio::pin!(serving);
-            tokio::select! {
-                // 连接死 → TCP 口让位给 ssh 伴生兜底，等下一条认领
-                _ = &mut serving => {
-                    eprintln!("[na-quic] 反连连接死，TCP {tcp_bind} 让位");
-                    None
-                }
-                // 新注册挤掉旧的：close 旧连接（serve 随之返回让口），换新续服
-                newer = claim_rx.recv() => match newer {
-                    Some(n) => {
-                        conn.close(0u32.into(), b"replaced");
-                        let _ = serving.await;
-                        Some(n)
-                    }
-                    None => {
-                        let _ = serving.await;
-                        return Err(std::io::Error::other("QUIC accept 驱动死"));
-                    }
-                },
-            }
-        }; // serving 随块退场，对 conn 的借用到此为止
-        conn = match outcome {
-            Some(n) => n,
-            None => {
-                let Some(c) = claim_rx.recv().await else {
-                    return Err(std::io::Error::other("QUIC accept 驱动死"));
-                };
-                c
-            }
+        tasks.spawn(run_rev_front(front, claim_rx.clone(), claim_tx.clone()));
+    }
+    // 任何组件先退场 = 反连面半残，响亮返回（部署侧进程级看门狗收尸
+    // 重启），不许带病空转。join_next 首返即定论——留在集合里的组件
+    // 随本函数返回被 JoinSet drop 一并收走
+    if let Some(r) = tasks.join_next().await {
+        return match r {
+            Ok(()) => Err(std::io::Error::other("QUIC 反连面组件退场（半残拒跑）")),
+            Err(e) => Err(std::io::Error::other(format!("QUIC 反连面组件 panic: {e}"))),
         };
+    }
+    Ok(())
+}
+
+/// 注册流裁决（run_rev_server_multi 私有）：第一条流必须是合法注册——
+/// v1（REG_PORT + 标签）归 legacy 槽（空 id 返回）；v2（魔数+id+
+/// REG_PORT+tag2）归 id 槽。None = 坏注册（调用方记连败 + 关连接）
+async fn read_registration(conn: &Connection, psk: &Option<[u8; 32]>) -> Option<String> {
+    let (_send, mut recv) = conn.accept_bi().await.ok()?;
+    let mut hdr = [0u8; 2];
+    recv.read_exact(&mut hdr).await.ok()?;
+    if u16::from_be_bytes(hdr) == V2_MAGIC {
+        let (id, port) = read_v2_fields(&mut recv).await?;
+        if port != REG_PORT {
+            return None;
+        }
+        if let Some(k) = psk {
+            let mut tag = [0u8; AUTH_TAG_LEN];
+            let ok = recv.read_exact(&mut tag).await.is_ok()
+                && ct_eq(&tag, &auth_tag2(k, &id, REG_PORT));
+            if !ok {
+                return None;
+            }
+        }
+        Some(id)
+    } else {
+        if parse_port_header(&hdr) != REG_PORT {
+            return None;
+        }
+        if let Some(k) = psk {
+            let mut tag = [0u8; AUTH_TAG_LEN];
+            let ok = recv.read_exact(&mut tag).await.is_ok() && ct_eq(&tag, &auth_tag(k, REG_PORT));
+            if !ok {
+                return None;
+            }
+        }
+        Some(String::new())
     }
 }
 
-/// TCP 服务段（run_rev_server 私有）：注册连接存活期内绑 tcp_bind，
-/// 每个入站 → 开流写 target_port 端口头 → splice；连接死返回
-async fn serve_rev_tcp(conn: &Connection, tcp_bind: SocketAddr, target_port: u16) {
+/// 单个桥前的生命周期循环（run_rev_server_multi 私有）：本槽有认领连接
+/// 才绑 TCP 口服务；连接死/被顶 → 服务段返回 → 槽里若仍是这条（自然死）
+/// 主动摘掉防循环空转，回等下一次认领；被顶的情形 = 槽里已是新连接，
+/// 直接拿去续服
+async fn run_rev_front(
+    front: RevFront,
+    mut rx: tokio::sync::watch::Receiver<std::collections::HashMap<String, Connection>>,
+    tx: tokio::sync::watch::Sender<std::collections::HashMap<String, Connection>>,
+) {
+    loop {
+        let conn = loop {
+            if let Some(c) = rx.borrow().get(&front.device_id) {
+                break c.clone();
+            }
+            if rx.changed().await.is_err() {
+                return; // 认领面全灭 = 服务器关张
+            }
+        };
+        serve_rev_tcp(&conn, front.tcp_bind, front.target_port, &front.device_id).await;
+        tx.send_if_modified(|m| match m.get(&front.device_id) {
+            Some(c) if c.stable_id() == conn.stable_id() => {
+                m.remove(&front.device_id);
+                true
+            }
+            _ => false,
+        });
+    }
+}
+
+/// TCP 服务段（run_rev_front 私有）：认领连接存活期内绑 tcp_bind，每个
+/// 入站 → 开流写目标端口流头 → splice；连接死返回。device_id 非空 =
+/// v2 槽，写 v2 流头（魔数+id+端口）；空 = legacy 槽，写 v1 的 2 字节
+/// 端口头（旧核零改动）
+async fn serve_rev_tcp(conn: &Connection, tcp_bind: SocketAddr, target_port: u16, device_id: &str) {
     let Ok(listener) = tokio::net::TcpListener::bind(tcp_bind).await else {
         return; // 口被占（ssh 伴生兜底在场？）——等下轮认领再说
     };
@@ -667,8 +934,13 @@ async fn serve_rev_tcp(conn: &Connection, tcp_bind: SocketAddr, target_port: u16
             a = listener.accept() => {
                 let Ok((tcp, _)) = a else { return };
                 let Ok((mut send, recv)) = conn.open_bi().await else { return };
+                let head = if device_id.is_empty() {
+                    port_header(target_port).to_vec()
+                } else {
+                    stream_header_v2(device_id, target_port).expect("front id 已过闸")
+                };
                 tokio::spawn(async move {
-                    if send.write_all(&port_header(target_port)).await.is_err() {
+                    if send.write_all(&head).await.is_err() {
                         return;
                     }
                     splice(tcp, send, recv).await;
@@ -690,6 +962,34 @@ pub async fn run_rev_client(
     cfg: ClientConfig,
     psk: Option<[u8; 32]>,
 ) -> std::io::Result<()> {
+    run_rev_client_inner(server, sni, cfg, psk, None).await
+}
+
+/// 反连客户端腿 v2（BAR-247 改道「一口多设备」）：注册流带设备 id
+/// （魔数+id+REG_PORT+tag2），服务器按 id 分槽认领、把本机对应 front
+/// 的流量路由进本条连接；业务流按 v2 流头读。非法 id fail-loud 拒起
+pub async fn run_rev_client_v2(
+    server: SocketAddr,
+    sni: &str,
+    cfg: ClientConfig,
+    psk: Option<[u8; 32]>,
+    device_id: &str,
+) -> std::io::Result<()> {
+    if !valid_device_id(device_id) {
+        return Err(std::io::Error::other(format!(
+            "非法设备 id {device_id:?}（1..=32 字节 ASCII 字母数字与 -_）"
+        )));
+    }
+    run_rev_client_inner(server, sni, cfg, psk, Some(device_id)).await
+}
+
+async fn run_rev_client_inner(
+    server: SocketAddr,
+    sni: &str,
+    cfg: ClientConfig,
+    psk: Option<[u8; 32]>,
+    device_id: Option<&str>,
+) -> std::io::Result<()> {
     let mut ep = Endpoint::client(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)))
         .map_err(|e| std::io::Error::other(e.to_string()))?;
     ep.set_default_client_config(cfg);
@@ -706,26 +1006,57 @@ pub async fn run_rev_client(
         .open_bi()
         .await
         .map_err(|e| std::io::Error::other(format!("注册流开不出: {e}")))?;
-    send.write_all(&port_header(REG_PORT))
-        .await
-        .map_err(|e| std::io::Error::other(e.to_string()))?;
-    if let Some(k) = psk {
-        send.write_all(&auth_tag(&k, REG_PORT))
-            .await
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
+    match device_id {
+        Some(id) => {
+            let mut h = stream_header_v2(id, REG_PORT).expect("id 已过闸");
+            if let Some(k) = psk {
+                h.extend_from_slice(&auth_tag2(&k, id, REG_PORT));
+            }
+            send.write_all(&h)
+                .await
+                .map_err(|e| std::io::Error::other(e.to_string()))?;
+        }
+        None => {
+            send.write_all(&port_header(REG_PORT))
+                .await
+                .map_err(|e| std::io::Error::other(e.to_string()))?;
+            if let Some(k) = psk {
+                send.write_all(&auth_tag(&k, REG_PORT))
+                    .await
+                    .map_err(|e| std::io::Error::other(e.to_string()))?;
+            }
+        }
     }
     let _ = send.finish();
+    let dev: Option<String> = device_id.map(str::to_string);
     loop {
         let (_send2, mut recv) = match conn.accept_bi().await {
             Ok(s) => s,
             Err(e) => return Err(std::io::Error::other(format!("QUIC 反连连接已死: {e}"))),
         };
+        let dev = dev.clone();
         tokio::spawn(async move {
-            let mut hdr = [0u8; 2];
-            if recv.read_exact(&mut hdr).await.is_err() {
-                return;
-            }
-            let port = parse_port_header(&hdr);
+            // 读流头：v2 = 魔数+id+端口（id 为服务器回显，无消费价值但字节
+            // 必须读走）；v1 = 2 字节端口
+            let port = if dev.is_some() {
+                let mut m = [0u8; 2];
+                if recv.read_exact(&mut m).await.is_err() {
+                    return;
+                }
+                if u16::from_be_bytes(m) != V2_MAGIC {
+                    return; // v2 槽连接上服务器只发 v2 头，否则 = 串线
+                }
+                let Some((_id, port)) = read_v2_fields(&mut recv).await else {
+                    return;
+                };
+                port
+            } else {
+                let mut hdr = [0u8; 2];
+                if recv.read_exact(&mut hdr).await.is_err() {
+                    return;
+                }
+                parse_port_header(&hdr)
+            };
             if port == REG_PORT {
                 return; // 注册口不是业务口
             }

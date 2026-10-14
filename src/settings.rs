@@ -130,15 +130,21 @@ pub const QUIC_REVERSE_PORT: u16 = 62694;
 /// QUIC 腿配置（servers.json "quic" 段）：enable 缺省 false（未裁决不开）、
 /// port 缺省 62633、pin = 服务器证书 DER 的 SHA-256 hex（服务器证 pinning）、
 /// psk = 预共享密钥 hex（客户端证 HMAC 挑战，设计 §四；两证齐全才准开腿）
-/// revPort 缺省 62694（BAR-247 分机分口：第二台真机写新口即互不顶槽）
+/// revPort 缺省 62694（反连腿服务器 UDP 口；BAR-247 改道后全机同口，
+/// 多机共存归下方 deviceId 分槽，不再分机分口）
+/// deviceId 缺省 ""（BAR-247 改道「一口多设备」：空 = v1/legacy 形态零迁移；
+/// 写了 = 本机认领槽身份，走 v2 流头+换锚认证，同 psk 多机同口共存）
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuicFields {
     pub enable: bool,
     pub port: u16,
     pub pin: String,
     pub psk: String,
-    /// 反连腿服务器 UDP 口（缺省 QUIC_REVERSE_PORT；BAR-247 多机分口）
+    /// 反连腿服务器 UDP 口（缺省 QUIC_REVERSE_PORT；BAR-247 改道后全机
+    /// 同口，多机共存归 deviceId v2 分槽）
     pub rev_port: u16,
+    /// 设备身份（缺省 "" = v1；BAR-247 改道一口多设备 v2 流头认领槽键）
+    pub device_id: String,
 }
 
 impl Default for QuicFields {
@@ -149,6 +155,7 @@ impl Default for QuicFields {
             pin: String::new(),
             psk: String::new(),
             rev_port: QUIC_REVERSE_PORT,
+            device_id: String::new(),
         }
     }
 }
@@ -228,6 +235,11 @@ pub fn parse_servers(json: &str) -> Result<Vec<ServerEntry>, String> {
                 .get("revPort")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(quic_d.rev_port as u64) as u16,
+            device_id: quic_v
+                .get("deviceId")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
         };
         out.push(ServerEntry {
             id: s("id"),

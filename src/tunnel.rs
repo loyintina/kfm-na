@@ -672,6 +672,19 @@ fn spawn_quic_leg(server: &ServerEntry) -> Option<QuicLeg> {
     use std::net::ToSocketAddrs as _;
     let pin = parse_pin(&server.quic.pin)?;
     let psk = parse_pin(&server.quic.psk)?;
+    // BAR-247 改道「一口多设备」：deviceId 非空 = 走 v2（流头带 id、认证
+    // 换锚、服务器分槽认领）；空 = v1/legacy 零迁移。非法 id 响亮报缺件
+    // 不 spawn（带伤跑 = 服务器侧连败封禁风暴）
+    let device_id = server.quic.device_id.clone();
+    if !device_id.is_empty() && !na_quic::valid_device_id(&device_id) {
+        crate::report::report(
+            "tunnel",
+            &format!(
+                "QUIC deviceId 非法（{device_id:?}，1..=32 字节 ASCII 字母数字与 -_），正连腿不 spawn"
+            ),
+        );
+        return None;
+    }
     let (stop, stop_rx) = tokio::sync::oneshot::channel::<()>();
     let (dead_tx, dead) = channel::<String>();
     let host = server.ssh.host.clone();
@@ -715,15 +728,32 @@ fn spawn_quic_leg(server: &ServerEntry) -> Option<QuicLeg> {
                 }
             });
             tokio::select! {
-                r = na_quic::run_client(
-                    addr,
-                    "kfm-na",
-                    local,
-                    target,
-                    na_quic::client_config(pin),
-                    Some(psk),
-                    Some(conn_tx),
-                ) => {
+                r = async {
+                    if device_id.is_empty() {
+                        na_quic::run_client(
+                            addr,
+                            "kfm-na",
+                            local,
+                            target,
+                            na_quic::client_config(pin),
+                            Some(psk),
+                            Some(conn_tx),
+                        )
+                        .await
+                    } else {
+                        na_quic::run_client_v2(
+                            addr,
+                            "kfm-na",
+                            local,
+                            target,
+                            na_quic::client_config(pin),
+                            Some(psk),
+                            Some(conn_tx),
+                            &device_id,
+                        )
+                        .await
+                    }
+                } => {
                     say(match r {
                         Ok(()) => "腿正常退出".into(),
                         Err(e) => format!("腿死: {e}"),
@@ -765,16 +795,29 @@ fn probe_quic(server: &ServerEntry) -> bool {
     rt.block_on(na_quic::probe(addr, "kfm-na", na_quic::client_config(pin)))
 }
 
-/// 起 QUIC 反连腿（M4，核内线程）：拨出到服务器 UDP revPort（缺省 62694，
-/// BAR-247 分机分口——servers.json quic.revPort 指定，多机同 psk 不互顶
-/// 单槽）注册，随后服务器 9022 的入站经这条连接开流回联本机 na sshd
-/// （8024）。无本地 TCP 绑定——「活着」的唯一信号是没死信；握手 8s 速败在
-/// run_rev_client 内置超时里（UDP 黑洞也按时来信），无需数据腿
+/// 起 QUIC 反连腿（M4，核内线程）：拨出到服务器 UDP revPort（缺省 62694；
+/// BAR-247 改道「一口多设备」——多机同口不互顶靠 servers.json quic.deviceId
+/// 分槽认领，非空走 v2 注册、空走 v1/legacy 零迁移）注册，随后服务器 9022
+/// （及 NA_QUIC_REV_FRONTS 声明的各 front 口）的入站经这条连接开流回联本机
+/// na sshd（8024）。无本地 TCP 绑定——「活着」的唯一信号是没死信；握手 8s
+/// 速败在 run_rev_client 内置超时里（UDP 黑洞也按时来信），无需数据腿
 /// 那套 Starting 宽限裁决
 fn spawn_rev_quic_leg(server: &ServerEntry) -> Option<QuicLeg> {
     use std::net::ToSocketAddrs as _;
     let pin = parse_pin(&server.quic.pin)?;
     let psk = parse_pin(&server.quic.psk)?;
+    // BAR-247 改道「一口多设备」：deviceId 非空 = v2 注册（id 入槽认领）；
+    // 空 = v1/legacy 零迁移。非法 id 响亮报缺件不 spawn
+    let device_id = server.quic.device_id.clone();
+    if !device_id.is_empty() && !na_quic::valid_device_id(&device_id) {
+        crate::report::report(
+            "tunnel",
+            &format!(
+                "QUIC deviceId 非法（{device_id:?}，1..=32 字节 ASCII 字母数字与 -_），反连腿不 spawn"
+            ),
+        );
+        return None;
+    }
     let (stop, stop_rx) = tokio::sync::oneshot::channel::<()>();
     let (dead_tx, dead) = channel::<String>();
     let host = server.ssh.host.clone();
@@ -803,12 +846,26 @@ fn spawn_rev_quic_leg(server: &ServerEntry) -> Option<QuicLeg> {
         };
         rt.block_on(async move {
             tokio::select! {
-                r = na_quic::run_rev_client(
-                    addr,
-                    "kfm-na",
-                    na_quic::client_config_rev(pin),
-                    Some(psk),
-                ) => {
+                r = async {
+                    if device_id.is_empty() {
+                        na_quic::run_rev_client(
+                            addr,
+                            "kfm-na",
+                            na_quic::client_config_rev(pin),
+                            Some(psk),
+                        )
+                        .await
+                    } else {
+                        na_quic::run_rev_client_v2(
+                            addr,
+                            "kfm-na",
+                            na_quic::client_config_rev(pin),
+                            Some(psk),
+                            &device_id,
+                        )
+                        .await
+                    }
+                } => {
                     say(match r {
                         Ok(()) => "反连腿正常退出".into(),
                         Err(e) => format!("反连腿死: {e}"),

@@ -210,3 +210,36 @@ fn spec_bar247_quic_extra_legs解析() {
     assert!(gateq::parse_rev_legs(Some("abc:9025"), &[62694], &[9022]).is_err());
     assert!(gateq::parse_rev_legs(Some("62696:0"), &[62694], &[9022]).is_err());
 }
+
+/// parse_rev_fronts（A 档纯函数，BAR-247 改道「一口多设备」）：
+/// NA_QUIC_REV_FRONTS「TCP桥口:设备id」对，fail-loud 拒半残/歧义配置
+/// （串机温床宁可拒启；设备 id 与 na_quic::valid_device_id 同一把尺）。
+/// 变异：桥口/id 去重或 id 合法性校验摘掉任一 → 对应断言红。
+#[test]
+fn spec_bar247_rev_fronts解析() {
+    // 未设/空 = 无额外桥前；禁口 = 主桥 TCP（9022）
+    assert_eq!(gateq::parse_rev_fronts(None, &[9022]), Ok(vec![]));
+    assert_eq!(gateq::parse_rev_fronts(Some(""), &[9022]), Ok(vec![]));
+    // 单个 / 多个（逗号分隔、容忍空白；id 带回车空白修剪）
+    assert_eq!(
+        gateq::parse_rev_fronts(Some("9025:neo9"), &[9022]),
+        Ok(vec![(9025, "neo9".to_string())])
+    );
+    assert_eq!(
+        gateq::parse_rev_fronts(Some("9025:neo9, 9026:neo11"), &[9022]),
+        Ok(vec![
+            (9025, "neo9".to_string()),
+            (9026, "neo11".to_string())
+        ])
+    );
+    // 拒：缺冒号 / 撞主桥口 / 桥口互重 / 空 id / 非法 id / id 互重 /
+    //     非数字 / 0
+    assert!(gateq::parse_rev_fronts(Some("9025"), &[9022]).is_err());
+    assert!(gateq::parse_rev_fronts(Some("9022:neo9"), &[9022]).is_err());
+    assert!(gateq::parse_rev_fronts(Some("9025:neo9,9025:neo11"), &[9022]).is_err());
+    assert!(gateq::parse_rev_fronts(Some("9025:"), &[9022]).is_err());
+    assert!(gateq::parse_rev_fronts(Some("9025:neo 9"), &[9022]).is_err());
+    assert!(gateq::parse_rev_fronts(Some("9025:neo9,9026:neo9"), &[9022]).is_err());
+    assert!(gateq::parse_rev_fronts(Some("abc:neo9"), &[9022]).is_err());
+    assert!(gateq::parse_rev_fronts(Some("0:neo9"), &[9022]).is_err());
+}
