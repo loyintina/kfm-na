@@ -120,18 +120,25 @@ pub struct ServerEntry {
 /// 2026-09-23 用户拍板双口、避约定俗成段：
 /// - 62633 = 正连数据路（本常量；数据面 QUIC 桥）
 /// - 62694 = 反连推送路（M4 把 9022 QUIC 化时用，先立常量占位）
+///
+/// BAR-247（2026-10-14）：两常量降为「缺省值」——双机同 psk 同口互踢
+/// 定罪（服务器单槽认领 11044 次顶替），分机分口是根治件：正连口由
+/// quic.port 指定（早就有），反连口新增 quic.revPort（缺省回本常量）
 pub const QUIC_DEFAULT_PORT: u16 = 62633;
 pub const QUIC_REVERSE_PORT: u16 = 62694;
 
 /// QUIC 腿配置（servers.json "quic" 段）：enable 缺省 false（未裁决不开）、
 /// port 缺省 62633、pin = 服务器证书 DER 的 SHA-256 hex（服务器证 pinning）、
 /// psk = 预共享密钥 hex（客户端证 HMAC 挑战，设计 §四；两证齐全才准开腿）
+/// revPort 缺省 62694（BAR-247 分机分口：第二台真机写新口即互不顶槽）
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuicFields {
     pub enable: bool,
     pub port: u16,
     pub pin: String,
     pub psk: String,
+    /// 反连腿服务器 UDP 口（缺省 QUIC_REVERSE_PORT；BAR-247 多机分口）
+    pub rev_port: u16,
 }
 
 impl Default for QuicFields {
@@ -141,6 +148,7 @@ impl Default for QuicFields {
             port: QUIC_DEFAULT_PORT,
             pin: String::new(),
             psk: String::new(),
+            rev_port: QUIC_REVERSE_PORT,
         }
     }
 }
@@ -216,6 +224,10 @@ pub fn parse_servers(json: &str) -> Result<Vec<ServerEntry>, String> {
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string(),
+            rev_port: quic_v
+                .get("revPort")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(quic_d.rev_port as u64) as u16,
         };
         out.push(ServerEntry {
             id: s("id"),

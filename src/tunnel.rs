@@ -765,9 +765,10 @@ fn probe_quic(server: &ServerEntry) -> bool {
     rt.block_on(na_quic::probe(addr, "kfm-na", na_quic::client_config(pin)))
 }
 
-/// 起 QUIC 反连腿（M4，核内线程）：拨出到服务器 UDP 62694 注册，
-/// 随后服务器 9022 的入站经这条连接开流回联本机 na sshd（8024）。
-/// 无本地 TCP 绑定——「活着」的唯一信号是没死信；握手 8s 速败在
+/// 起 QUIC 反连腿（M4，核内线程）：拨出到服务器 UDP revPort（缺省 62694，
+/// BAR-247 分机分口——servers.json quic.revPort 指定，多机同 psk 不互顶
+/// 单槽）注册，随后服务器 9022 的入站经这条连接开流回联本机 na sshd
+/// （8024）。无本地 TCP 绑定——「活着」的唯一信号是没死信；握手 8s 速败在
 /// run_rev_client 内置超时里（UDP 黑洞也按时来信），无需数据腿
 /// 那套 Starting 宽限裁决
 fn spawn_rev_quic_leg(server: &ServerEntry) -> Option<QuicLeg> {
@@ -777,11 +778,12 @@ fn spawn_rev_quic_leg(server: &ServerEntry) -> Option<QuicLeg> {
     let (stop, stop_rx) = tokio::sync::oneshot::channel::<()>();
     let (dead_tx, dead) = channel::<String>();
     let host = server.ssh.host.clone();
+    let rev_port = server.quic.rev_port;
     std::thread::spawn(move || {
         let say = |m: String| {
             let _ = dead_tx.send(m);
         };
-        let Some(addr) = format!("{host}:{}", crate::settings::QUIC_REVERSE_PORT)
+        let Some(addr) = format!("{host}:{rev_port}")
             .to_socket_addrs()
             .ok()
             .and_then(|mut i| i.next())
@@ -1738,8 +1740,7 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                             "tunnel",
                             &format!(
                                 "QUIC 反连腿已 spawn（UDP {}:{}，9022 归 QUIC 桥）",
-                                server.ssh.host,
-                                crate::settings::QUIC_REVERSE_PORT
+                                server.ssh.host, server.quic.rev_port
                             ),
                         );
                         rev_quic = Some(q);
