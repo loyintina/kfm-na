@@ -104,6 +104,20 @@ pub fn start_with(
         crate::report::report("gatepoll", "QUIC psk 缺件（64 位小写 hex），闸门轮询不启动");
         return;
     };
+    // BAR-247 改道「一口多设备」：deviceId 非空 = 轮询/上传流走 v2 流头
+    // （魔数+id+目标口）+ auth_tag2 换锚认证，服务器按 id 分槽路由；
+    // 空 = v1/legacy（port_header+auth_tag）零迁移。非法 id 响亮拒起
+    // （带伤跑 = 流头被服务器当 v1 端口解，静默全灭比红危险）
+    let device_id = srv.quic.device_id.clone();
+    if !device_id.is_empty() && !na_quic::valid_device_id(&device_id) {
+        crate::report::report(
+            "gatepoll",
+            &format!(
+                "QUIC deviceId 非法（{device_id:?}，1..=32 字节 ASCII 字母数字与 -_），闸门轮询不启动"
+            ),
+        );
+        return;
+    }
     if STARTED.set(()).is_err() {
         crate::report::report("gatepoll", "轮询已在跑，忽略重复启动");
         return;
@@ -119,8 +133,9 @@ pub fn start_with(
     );
     let host_up = host.clone();
     let slot_up = slot.clone();
-    std::thread::spawn(move || poll_loop(psk, target_port, host, slot, dump_dir));
-    std::thread::spawn(move || upload_loop(psk, target_port, host_up, slot_up, rx));
+    let device_id_up = device_id.clone();
+    std::thread::spawn(move || poll_loop(psk, target_port, host, device_id, slot, dump_dir));
+    std::thread::spawn(move || upload_loop(psk, target_port, host_up, device_id_up, slot_up, rx));
 }
 
 /// HTTP/1.1 请求字节构造（A 档纯函数，钉在 gate_poller_spec）：
@@ -130,17 +145,39 @@ pub fn build_request(method: &str, path: &str, body_len: usize, host: &str) -> V
         .into_bytes()
 }
 
+/// 流头帧构造（A 档纯函数，钉在 gate_poller_spec，BAR-247 改道
+/// 「一口多设备」）：v1（device_id 空）＝ port_header＋auth_tag 34 字节；
+/// v2 ＝ stream_header_v2（魔数+id+端口）＋auth_tag2 换锚标签拼一帧。
+/// 非法 id → None（上游 start_with 已拦，此处兜底——帧发不出去比发错
+/// 帧好：坏帧被服务器当 v1 端口解 = 静默全灭）
+pub fn frame_head(psk: &[u8; 32], target_port: u16, device_id: &str) -> Option<Vec<u8>> {
+    if device_id.is_empty() {
+        let mut h = na_quic::port_header(target_port).to_vec();
+        h.extend_from_slice(&na_quic::auth_tag(psk, target_port));
+        Some(h)
+    } else {
+        let mut h = na_quic::stream_header_v2(device_id, target_port)?;
+        h.extend_from_slice(&na_quic::auth_tag2(psk, device_id, target_port));
+        Some(h)
+    }
+}
+
 /// 单次 HTTP 往返（QUIC 版的旧 http_call）：腿连接对象上开一条 bi 流 →
-/// **帧序必须是 端口头(port_header)＋认证标签(auth_tag) 先于 HTTP 字节**
-/// （服务器桥逐流消费这 34 字节：路由到 127.0.0.1:{target_port}＋验
-/// 客户端证，psk 不符整流弃掉）→ 写请求 → 半关（FIN＝请求写完，服务器
-/// splice 见 EOF 转发断言）→ 读流至 EOF（Connection: close → 读尽即体）
+/// **帧序必须是 流头＋认证标签（frame_head）先于 HTTP 字节**——v1/v2
+/// 分流在 frame_head；服务器桥逐流消费：路由到 127.0.0.1:{target_port}
+/// ＋验客户端证（psk 不符整流弃掉）
+/// → 写请求 → 半关（FIN＝请求写完，服务器 splice 见 EOF 转发断言）
+/// → 读流至 EOF（Connection: close → 读尽即体）
 /// → 返回体字节（剥 \r\n\r\n 头，同旧逻辑）。整体限时（旧路 read_timeout
 /// 同量级）——不挂死防线：连接死/读写卡死都在限时内返回，调用方退避。
+// 参数与一次往返的上下文一一对应（连接/证/路由/身份/请求五件），拆包
+// 反丢可读性——run_client_v2 同款 allow
+#[allow(clippy::too_many_arguments)]
 async fn quic_http_roundtrip(
     conn: &quinn::Connection,
     psk: &[u8; 32],
     target_port: u16,
+    device_id: &str,
     method: &str,
     path: &str,
     body: &[u8],
@@ -148,12 +185,11 @@ async fn quic_http_roundtrip(
 ) -> Result<Vec<u8>, String> {
     tokio::time::timeout(Duration::from_secs(POLL_WAIT_SECS as u64 + 10), async {
         let (mut send, mut recv) = conn.open_bi().await.map_err(|e| format!("open_bi: {e}"))?;
-        send.write_all(&na_quic::port_header(target_port))
+        let head = frame_head(psk, target_port, device_id)
+            .ok_or_else(|| format!("deviceId 非法: {device_id:?}"))?;
+        send.write_all(&head)
             .await
-            .map_err(|e| format!("写端口头: {e}"))?;
-        send.write_all(&na_quic::auth_tag(psk, target_port))
-            .await
-            .map_err(|e| format!("写认证标签: {e}"))?;
+            .map_err(|e| format!("写流头: {e}"))?;
         send.write_all(&build_request(method, path, body.len(), host))
             .await
             .map_err(|e| format!("写请求: {e}"))?;
@@ -182,12 +218,14 @@ async fn fetch_pending(
     conn: &quinn::Connection,
     psk: &[u8; 32],
     target_port: u16,
+    device_id: &str,
     host: &str,
 ) -> Result<Vec<u8>, String> {
     quic_http_roundtrip(
         conn,
         psk,
         target_port,
+        device_id,
         "GET",
         &format!("/api/gate/pending?wait={POLL_WAIT_SECS}"),
         &[],
@@ -206,6 +244,7 @@ fn poll_loop(
     psk: [u8; 32],
     target_port: u16,
     host: String,
+    device_id: String,
     slot: Arc<Mutex<Option<quinn::Connection>>>,
     dump_dir: PathBuf,
 ) {
@@ -239,7 +278,7 @@ fn poll_loop(
                 backoff = (backoff * 2).min(BACKOFF_MAX_SECS);
                 continue;
             };
-            match fetch_pending(&c, &psk, target_port, &host).await {
+            match fetch_pending(&c, &psk, target_port, &device_id, &host).await {
                 Ok(body) => {
                     if down_reported {
                         crate::report::report("gatepoll", "腿连接恢复，轮询续跑");
@@ -282,6 +321,7 @@ fn upload_loop(
     psk: [u8; 32],
     target_port: u16,
     host: String,
+    device_id: String,
     slot: Arc<Mutex<Option<quinn::Connection>>>,
     mut rx: tokio::sync::mpsc::UnboundedReceiver<(String, Vec<u8>)>,
 ) {
@@ -301,7 +341,17 @@ fn upload_loop(
                     break; // 槽空：腿不在，重试也白搭——直接丢弃报表
                 };
                 let path = format!("/api/gate/result/{name}");
-                match quic_http_roundtrip(&c, &psk, target_port, "POST", &path, &bytes, &host).await
+                match quic_http_roundtrip(
+                    &c,
+                    &psk,
+                    target_port,
+                    &device_id,
+                    "POST",
+                    &path,
+                    &bytes,
+                    &host,
+                )
+                .await
                 {
                     Ok(resp) if resp.starts_with(b"{\"ok\":true}") => {
                         ok = true;
