@@ -43,12 +43,21 @@
   盲文/powerline/月亮 🌑-🌘/替换符 FFFD 捐体 FusionPixel（已退库，
   重烘前先 `git show` 取回，脚本 FP_DONOR 环境变量可指）；
   Latin-1/通用标点/货币补漏捐体 DejaVuSansMono→DejaVuSans；
-  emoji 23 个捐体 NotoEmoji（构建期依赖不进库）
+  emoji 23 个捐体 NotoEmoji（构建期依赖不进库）；
+  **带圈全族 62 码位（Ⓐ-ⓩ U+24B6-24E9 + ⑪-⑳ U+246A-2473）捐体
+  NotoSansSymbols（BAR-242 翻案重开，2026-10-14：用户裁定补字体
+  不接受降级；捐体 = Noto Sans Symbols Regular，SIL OFL 同族许可，
+  构建期依赖不进库——脚本 NSS_DONOR 环境变量可指，默认
+  ~/40-资产/kfm-na-toolchain/fonts/NotoSansSymbols-Regular.ttf）。
+  半格归格（cells=1，与在产 ①-⑩ 同律——ⓐ EAW=A 歧义，显式钉半格
+  不落自动档）。补丁于在产烘焙品直补（借形幂等，脚本已改好未来
+  重烘自带该族）**
 - 缺口边界（双源皆无，不补）：杂项符号 52 个、装饰符号 141 个、
   powerline 私有区 17 个（E0B3-E0BB/E0CC-E0CF 连体字形族）
 - 判卷（脚本尾自打印+断言）：槃/中/🌑/⠋/░/─/✅/E0B0/⚡/FFFD cmap+墨迹、
   汉字 ≥27900、ASCII 步进全半格、月亮全角位、powerline 墨迹贴满半格
-  左右缘、体积 ≤15MB
+  左右缘、体积 ≤15MB；BAR-242 增 ⓐⓏⒶⓩ⑪⑳ 六探针 cmap+墨迹+带圈全族
+  步进=半格断言
 
 ## 退役：FusionPixelMono12-gb2312.ttf（2026-09-20 入库 → BAR-176 退库）
 

@@ -149,10 +149,12 @@ pub fn prefer_cjk(primary: &fontdue::Font, cjk: &fontdue::Font, c: char) -> bool
 }
 
 /// 带圈字母降级映射（BAR-242，MAIN0136）：ⓐ–ⓩ（U+24D0–24E9）/ Ⓐ–Ⓩ
-/// （U+24B6–24CF）→ ASCII 字母。主备字体都缺这块（内嵌 CJK 只带圈数字
-/// ①–⑳不带圈字母——南舟 0171 楼1 实测：全设施 ⓐⓑ 34 处/6 件出方块，
-/// ①②③ 8 千处/670 件零目击），缺时降级 ASCII 形态 `(a)`，不依赖手机
-/// 装什么字体。None = 无降级形态（照 tofu 记账上报，不静默吞）
+/// （U+24B6–24CF）→ ASCII 字母。降级是条件式兜底臂：双字体都缺该码位才
+/// 触发（degrade_cell / measure_items 的 None 臂）——用户裁定补字体
+/// （NA0171 楼5 转「要真带圈，不接受降级」）后烘焙 CJK 已借形补入全族
+/// 62 码位（spec_bar242_烘焙字体_带圈族真字形覆盖 钉死），生产路径本臂
+/// 失业但保留，兜住未来字体再缺。None = 无降级形态（照 tofu 记账上报，
+/// 不静默吞）
 pub fn enclosed_ascii(c: char) -> Option<char> {
     let u = c as u32;
     if (0x24D0..=0x24E9).contains(&u) {

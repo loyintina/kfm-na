@@ -894,6 +894,44 @@ fn spec_bar242_终端格_降级字母上屏不目击() {
 }
 
 #[test]
+fn spec_bar242_烘焙字体_带圈族真字形覆盖() {
+    // 用户裁定补字体不接受降级（NA0171 楼5/6 转用户原话「要真带圈」）——
+    // 渲染面降级是条件式的（双字体 lookup_glyph_index 全 0 才触发），本钉咬
+    // 另一半承诺：烘焙产物（build.rs 的 cjk.ttf 来源）必须真带全族 62 码位
+    // （Ⓐ-ⓩ U+24B6-24E9 + ⑪-⑳ U+246A-2473）、有墨、半格步进（借形归格
+    // cells=1，与在产 ①-⑩ 同律）。变异抽检：换回补丁前字体 cmap 无码位，
+    // 本钉必红。
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/assets/fonts/NotoSansCJKsc-kfm.ttf"
+    );
+    let bytes = std::fs::read(path).expect("烘焙 CJK 字体缺失");
+    let font = fontdue::Font::from_bytes(bytes, fontdue::FontSettings::default())
+        .expect("fontdue 不认烘焙字体");
+    // 全族 62 码位一个不许漏
+    for u in (0x24B6u32..=0x24E9).chain(0x246A..=0x2473) {
+        let c = char::from_u32(u).unwrap();
+        assert_ne!(font.lookup_glyph_index(c), 0, "烘焙字体必须真带 U+{u:04X}");
+    }
+    // 头尾探针必须有墨（cmap 有码位 ≠ 有字形轮廓）
+    for c in ['ⓐ', 'ⓩ', 'Ⓐ', 'Ⓩ', '⑪', '⑳'] {
+        let (m, bmp) = font.rasterize(c, CELL_H as f32);
+        assert!(
+            m.width > 0 && m.height > 0 && bmp.iter().any(|&a| a > 0),
+            "{c} 必须真有墨"
+        );
+    }
+    // 半格归格：步进 = 全角 '中' 的一半（①-⑩ 在产同律的同一批 borrow）
+    let px = CELL_H as f32;
+    let adv_half = font.metrics('ⓐ', px).advance_width;
+    let adv_full = font.metrics('中', px).advance_width;
+    assert!(
+        (adv_half * 2.0 - adv_full).abs() < adv_full * 0.05,
+        "ⓐ 步进必须 = 全角一半（实测 ⓐ={adv_half} 中={adv_full}）"
+    );
+}
+
+#[test]
 fn spec_滚动_scroll_lines驱动display_offset() {
     // 触摸滚动的 B 档钉：scroll_lines 必须真的驱动 alacritty 的 display_offset
     // （正 = 看历史），scroll_to_bottom 必须贴回 0；越界由 alacritty 自钳

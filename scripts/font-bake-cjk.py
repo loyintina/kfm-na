@@ -65,6 +65,13 @@ PATCH_RANGES = [
     (0xE0A0, 0xE0D4),  # powerline 私有区
 ]
 BORROW_CPS = [0x26A1, 0x2713, 0x2717, 0x2718, 0x271A, 0x279C, 0x27A6]  # ⚡✓✗✘✚➜➦
+# 带圈族（BAR-242 翻案，2026-10-14 用户拍板「要真带圈，不接受降级」）：
+# Ⓐ-ⓩ U+24B6-24E9 全族 + ⑪-⑳ U+246A-2473 补齐（①-⑩ 已由 GB2312 全表带到）。
+# Noto CJK 本家与 DejaVu 双捐体都没有这一族（fc-list :charset=24d0 全库零
+# 供体实证）——捐体 = Noto Sans Symbols（SIL OFL 同族许可，见 README）。
+# 宽度口径：EAW=A 歧义族不落自动档——显式 cells=1 半格，与在产 ①-⑩
+# （advance=500 半格、八千处使用零报障）同律。
+ENCLOSED_CPS = list(range(0x24B6, 0x24EA)) + list(range(0x246A, 0x2474))
 MOON_CPS = list(range(0x1F311, 0x1F319))  # 🌑-🌘
 SYMBOL_NARROW_CPS = (
     list(range(0x00A0, 0x0100))
@@ -86,6 +93,8 @@ FP_DONOR = os.environ.get("FP_DONOR", "assets/fonts/FusionPixelMono12-gb2312.ttf
 DEJAVU_MONO = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
 DEJAVU_SANS = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 EMOJI_DONOR = os.path.expanduser("~/40-资产/kfm-na-toolchain/fonts/NotoEmoji-Regular.ttf")
+# 带圈族捐体（BAR-242）：Noto Sans Symbols，SIL OFL（与 Noto CJK 同族许可）
+NSS_DONOR = os.path.expanduser("~/40-资产/kfm-na-toolchain/fonts/NotoSansSymbols-Regular.ttf")
 
 
 def keep_unicodes():
@@ -100,7 +109,7 @@ def keep_unicodes():
             pass
     for lo, hi in HAN_RANGES + PATCH_RANGES:
         cps.update(range(lo, hi + 1))
-    cps.update(BORROW_CPS + MOON_CPS + SYMBOL_NARROW_CPS + EMOJI_CPS + FFFD_CPS)
+    cps.update(BORROW_CPS + MOON_CPS + SYMBOL_NARROW_CPS + EMOJI_CPS + FFFD_CPS + ENCLOSED_CPS)
     return sorted(cps)
 
 
@@ -324,6 +333,9 @@ def main():
     got, miss = borrow(font, DEJAVU_MONO, FFFD_CPS)
     print(f"4.borrow(DejaVu): FFFD 借入 {len(got)} 个"
           + (f"，捐体缺 {[hex(c) for c in miss]}" if miss else ""))
+    got, miss = borrow(font, NSS_DONOR, ENCLOSED_CPS, cells=1)
+    print(f"4.borrow(NSS): 带圈族借入 {len(got)} 个（半格，与在产 ①-⑩ 同律）"
+          + (f"，捐体缺 {[hex(c) for c in miss]}" if miss else ""))
 
     font.save(dst)
 
@@ -333,7 +345,10 @@ def main():
     cmap, cglyf, chmtx = check.getBestCmap(), check["glyf"], check["hmtx"]
     probes = [("槃", 0x69C3), ("中", 0x4E2D), ("🌑", 0x1F311), ("⠋", 0x280B),
               ("░", 0x2591), ("─", 0x2500), ("✅", 0x2705), ("", 0xE0B0),
-              ("⚡", 0x26A1), ("�", 0xFFFD)]
+              ("⚡", 0x26A1), ("�", 0xFFFD),
+              ("ⓐ", 0x24D0), ("Ⓩ", 0x24CF),
+              ("Ⓐ", 0x24B6), ("ⓩ", 0x24E9),
+              ("⑪", 0x246A), ("⑳", 0x2473)]
     for ch, cp in probes:
         gn = cmap.get(cp)
         assert gn, f"探针 {ch}U+{cp:04X} cmap 未命中"
@@ -346,6 +361,10 @@ def main():
     assert han >= 27900, f"汉字覆盖 {han} 不达标——这单的意义就是覆盖率"
     advs = {chmtx[cmap[cp]][0] for cp in range(0x21, 0x7F) if cp in cmap}
     assert advs == {HALF}, f"ASCII 步进应全 {HALF}，实得 {advs}"
+    for cp in ENCLOSED_CPS:
+        gn = cmap.get(cp)
+        assert gn, f"U+{cp:04X} 带圈族 cmap 未命中"
+        assert chmtx[gn][0] == HALF, f"U+{cp:04X} 带圈族步进非半格（与 ①-⑩ 同律）"
     for cp in MOON_CPS:
         assert chmtx[cmap[cp]][0] == UPM, f"U+{cp:04X} 月亮非全角位"
     for cp in (0xE0B0, 0xE0B2):
