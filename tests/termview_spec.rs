@@ -7,6 +7,7 @@
 //! - B 档：真 Term + 真字体（DejaVuSansMono）渲染冒烟——字形真画出来、
 //!   ANSI 红色真出红像素、光标格真反色、CJK 缺字形不 panic
 
+use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::vte::ansi::{Color, NamedColor};
 use kfm_na::termview::{
     self, ANSI_16, BOOT_COLS, BOOT_ROWS, CELL_H, CELL_W, DEFAULT_BG, DEFAULT_FG, TermEmu, TermView,
@@ -6317,8 +6318,8 @@ fn spec_浏览态_快照切换与像素滚动() {
     assert!(tv.browsing());
     assert_eq!(
         tv.display_offset(),
-        0,
-        "切入即贴快照底（= 起手瞬间所见，零跳动）"
+        1,
+        "切入即锚到内容尾（BAR-249 甲'：尾随光标空行不进首视口；本夹具尾空 1 行）"
     );
     assert_eq!(tv.scroll_frac_px(), 0.0, "切入清零头（视口态换源归零）");
     assert!(
@@ -6332,7 +6333,7 @@ fn spec_浏览态_快照切换与像素滚动() {
     assert!(!txt.contains("L09"), "浏览态漏 live 内容 = 双源串台");
     // 像素滚动作用于快照（满一行提交 + 零头挂账，与终端同款机制）
     tv.scroll_px(40.0);
-    assert_eq!(tv.display_offset(), 1, "快照滚动整行提交");
+    assert_eq!(tv.display_offset(), 2, "快照滚动整行提交（锚 1 + 滚 1）");
     assert_eq!(tv.scroll_frac_px(), 4.0, "快照滚动零头挂账");
     let txt2 = tv.dump_text();
     assert!(
@@ -6399,12 +6400,14 @@ fn spec_浏览态_原地刷新锚守恒() {
     // 落位（BAR-154：UI 线程零解析）——钉走真路，顺带验后台构建臂
     let (cols, rows) = tv.live_grid_dims();
     tv.enter_browse_term(TermView::build_browse_term(&cap1, cols, rows));
-    tv.scroll_px(72.0); // 滚 2 行进历史
-    assert_eq!(tv.display_offset(), 2);
+    // BAR-249 甲'：进场先锚内容尾（本夹具尾随光标空行 1 行）——offset 起 1
+    assert_eq!(tv.display_offset(), 1, "进场锚 = 尾空行数（BAR-249）");
+    tv.scroll_px(72.0); // 再滚 2 行进历史
+    assert_eq!(tv.display_offset(), 3);
     let before = tv.dump_text();
-    assert!(before.contains("A03") && before.contains("A06"));
+    assert!(before.contains("A02") && before.contains("A05"));
     assert!(
-        !before.contains("A02") && !before.contains("A07"),
+        !before.contains("A01") && !before.contains("A06"),
         "刷新前视口实得 {before:?}"
     );
     // 动态播放：新快照多了 2 行新输出（底部追加）——BAR-154 定罪：
@@ -6420,12 +6423,12 @@ fn spec_浏览态_原地刷新锚守恒() {
     assert!(tv.browsing());
     assert_eq!(
         tv.display_offset(),
-        4,
-        "底部追加 2 行 = offset 补偿 +2（阅读位钉死）"
+        5,
+        "底部追加 2 行 = offset 补偿 +2（阅读位钉死；含 BAR-249 进场锚 1）"
     );
     let txt = tv.dump_text();
     assert!(
-        txt.contains("A03") && txt.contains("A06") && !txt.contains("A07") && !txt.contains("A02"),
+        txt.contains("A02") && txt.contains("A05") && !txt.contains("A01") && !txt.contains("A06"),
         "刷新后可见内容必须与刷新前同一批（阅读位不跳），实得 {txt:?}"
     );
     // 历史变短（对端清了滚动缓冲）→ 锚钳到新顶，不许越界 panic
@@ -6436,6 +6439,125 @@ fn spec_浏览态_原地刷新锚守恒() {
     let mut tv2 = host_termview(10, 4);
     tv2.swap_browse("X\r\n");
     assert!(tv2.browsing());
+}
+
+// ---------- BAR-249 甲'（追踪信 NA0178 楼3 判据冻结）：进浏览态首视口
+// 锚到内容尾——尾部连续空行不进首视口，**裁视野不裁文本**（网格一格不动，
+// %output 续喂的绝对行寻址零错位风险）。病象定型 = 2026-10-15 承影 9 机
+// 实拍：天枢窗（rivet 日志式渲染，内容停窗顶几行不响应 SIGWINCH 重排）
+// 滚进画布后首视口仍停窗顶、下方大片死空 ----------
+
+#[test]
+fn spec_bar249_锚定_悬铃型满屏() {
+    // 悬铃型：窗约等于屏高、内容停顶部、尾部大片空行、有史可拉
+    // ⇒ 锚 = 尾空行数，首视口 = 上方填历史 + 内容尾贴底（满屏）
+    let cap = "H0\r\nH1\r\nH2\r\nC\r\n\r\n\r\n";
+    // 网格实态：史 [H0,H1,H2]，屏 [C, 空, 空, 空(光标行)]——尾空 3 行
+    let term = TermView::build_browse_term(cap, 10, 4);
+    assert_eq!(
+        termview::browse_anchor_offset(&term),
+        3,
+        "悬铃型：锚 = 尾部连续空行数（钳史顶内）"
+    );
+    let mut tv = host_termview(10, 4);
+    tv.enter_browse_term(term);
+    assert_eq!(tv.display_offset(), 3, "进场首视口即锚到内容尾");
+    let txt = tv.dump_text();
+    assert!(
+        txt.contains("H0") && txt.contains("C"),
+        "首视口 = 历史填上 + 内容尾贴底（满屏），实得 {txt:?}"
+    );
+    // 快照臂：v4 画布同规（enter_browse_canvas 挂钩同一 anchor_browse_tail）
+    let mut tv2 = host_termview(10, 4);
+    let (cols, rows) = tv2.live_grid_dims();
+    tv2.enter_browse_canvas(termview::Canvas::build(cap, cols, rows, (0, 3)));
+    assert_eq!(tv2.display_offset(), 3, "画布臂进场同锚");
+    // 锚出 offset>0 后续喂：新行入史 alacritty 自抬 offset——阅读位钉死
+    // （spec_推流画布_续喂生长锚守恒 钉的同一机制，这里咬两臂交点）
+    assert!(tv2.feed_browse(b"N\r\n"), "浏览态续喂必须受理");
+    assert_eq!(
+        tv2.display_offset(),
+        4,
+        "续喂新行入史 = offset 自抬（锚定视野钉在内容尾）"
+    );
+    let txt2 = tv2.dump_text();
+    assert!(
+        txt2.contains("H0") && txt2.contains("C"),
+        "续喂后视野不动（新行在视口下方等回底），实得 {txt2:?}"
+    );
+}
+
+#[test]
+fn spec_bar249_锚定_kimi型零变() {
+    // kimi 型回归闸：内容贴底生长、尾部空行 = 0 ⇒ 锚恒 0，进场零跳动
+    // （白露楼3 冻结判据：kimi 窗零变 = 回归闸）
+    let cap = (0..8)
+        .map(|i| format!("K{i:02}"))
+        .collect::<Vec<_>>()
+        .join("\r\n"); // 无尾换行：内容贴屏底
+    let term = TermView::build_browse_term(&cap, 10, 4);
+    assert_eq!(termview::browse_anchor_offset(&term), 0, "kimi 型锚恒 0");
+    let mut tv = host_termview(10, 4);
+    tv.enter_browse_term(term);
+    assert_eq!(tv.display_offset(), 0, "kimi 型进场零跳动");
+}
+
+#[test]
+fn spec_bar249_锚定_全空留一行() {
+    // 白露风险条：全屏皆空 → k 钳 屏行数-1，留一行不裁没。
+    // 有史全空（clear 后形态）：锚 = 屏行数-1（非屏行数——差的那行就是
+    // 「留一行」的实咬）；无史全空（新会话形态）：锚 0
+    let mut body = String::new();
+    for i in 0..10 {
+        body.push_str(&format!("L{i:02}\r\n"));
+    }
+    body.push_str("\x1b[2J\x1b[H"); // 清屏归位：屏全空（ED2 清法不究，史量自证见下）
+    let term = TermView::build_browse_term(&body, 10, 4);
+    assert!(
+        term.grid().history_size() >= 4,
+        "夹具史量自检：史必须 ≥ 屏行数，「留一行」钳才是唯一收紧源（实测 {}）",
+        term.grid().history_size()
+    );
+    assert_eq!(
+        termview::browse_anchor_offset(&term),
+        3,
+        "全屏皆空锚钳 屏行数-1 = 3（留一行不裁没）"
+    );
+    let blank = TermView::build_browse_term("\r\n", 10, 4);
+    assert_eq!(
+        termview::browse_anchor_offset(&blank),
+        0,
+        "无史全空（新会话）锚 0 = 不动"
+    );
+}
+
+#[test]
+fn spec_bar249_锚定_空谷型不纳入() {
+    // 空谷/空山型（窗 24 行矮于手机屏 62 行、史 11 行，总流装不满一屏）：
+    // 尾空行存在但无史可拉 ⇒ 锚被史量钳 0、视野不动。判据冻结：本型
+    // 明写不纳入（根是窗比屏矮，画布侧无解）
+    let term = TermView::build_browse_term("A\r\nB\r\n", 10, 4);
+    assert_eq!(
+        termview::browse_anchor_offset(&term),
+        0,
+        "空谷型：尾空行有、史无 ⇒ 锚钳 0"
+    );
+}
+
+#[test]
+fn spec_bar249_锚定_带背景色行不算空() {
+    // 空行判据带背景维：整行空格但背景非默认色（状态条/选中行形态）
+    // = 有内容，不许裁——只数「全空格且背景默认色」的真死空
+    let cap = "H0\r\nH1\r\nH2\r\nTOP\r\n\x1b[41m   \x1b[0m\r\n\r\n";
+    // 史 = [H0,H1,H2]，屏 = [TOP, 红底三空格, 空, 空(光标)]：尾空只 2 行
+    // （红底行非空——只数「全空格且背景默认色」的真死空；史 3 > 2，
+    // 若红底行被误数成空行 k=4→钳 3 ≠ 2，本钉咬得住）
+    let term = TermView::build_browse_term(cap, 10, 4);
+    assert_eq!(
+        termview::browse_anchor_offset(&term),
+        2,
+        "非默认背景的空格行不算空行（状态条不许裁）"
+    );
 }
 
 #[test]
@@ -6471,20 +6593,20 @@ fn spec_推流画布_续喂生长锚守恒() {
     let (cols, rows) = tv.live_grid_dims();
     let canvas = termview::Canvas::build(&cap, cols, rows, (0, 3));
     tv.enter_browse_canvas(canvas);
-    tv.scroll_px(72.0); // 滚 2 行进历史
-    assert_eq!(tv.display_offset(), 2);
+    tv.scroll_px(72.0); // 滚 2 行进历史（BAR-249 进场锚 1 之上再 +2）
+    assert_eq!(tv.display_offset(), 3);
     let before = tv.dump_text();
-    assert!(before.contains("A03") && before.contains("A06"));
+    assert!(before.contains("A02") && before.contains("A05"));
     // 推流续喂：%output 解码字节直喂浏览中画布（底部追加 2 行）
     assert!(tv.feed_browse(b"A08\r\nA09\r\n"), "浏览态续喂必须受理");
     assert_eq!(
         tv.display_offset(),
-        4,
-        "续喂追加 2 行 = alacritty 自动抬 offset +2（阅读位钉死）"
+        5,
+        "续喂追加 2 行 = alacritty 自动抬 offset +2（阅读位钉死；含 BAR-249 进场锚 1）"
     );
     let txt = tv.dump_text();
     assert!(
-        txt.contains("A03") && txt.contains("A06") && !txt.contains("A02") && !txt.contains("A07"),
+        txt.contains("A02") && txt.contains("A05") && !txt.contains("A01") && !txt.contains("A06"),
         "续喂后可见内容必须与喂前同一批（零跳动），实得 {txt:?}"
     );
     // 非浏览态 feed_browse = false（调用方转喂 App 侧后台画布）
@@ -6578,8 +6700,8 @@ fn spec_推流画布_对账重播锚守恒() {
         .join("\r\n")
         + "\r\n";
     tv.enter_browse_canvas(termview::Canvas::build(&cap1, cols, rows, (0, 3)));
-    tv.scroll_px(72.0); // 滚 2 行进历史
-    assert_eq!(tv.display_offset(), 2);
+    tv.scroll_px(72.0); // 滚 2 行进历史（BAR-249 进场锚 1 之上再 +2）
+    assert_eq!(tv.display_offset(), 3);
     // 对账重播种：新画布多了 2 行新输出（底部追加）——offset 补偿 +2
     let cap2 = (0..10)
         .map(|i| format!("A{i:02}"))
@@ -6590,18 +6712,18 @@ fn spec_推流画布_对账重播锚守恒() {
     assert!(tv.browsing());
     assert_eq!(
         tv.display_offset(),
-        4,
-        "对账重播底部追加 2 行 = offset 补偿 +2（阅读位钉死）"
+        5,
+        "对账重播底部追加 2 行 = offset 补偿 +2（阅读位钉死；含 BAR-249 进场锚 1）"
     );
     let txt = tv.dump_text();
     assert!(
-        txt.contains("A03") && txt.contains("A06"),
+        txt.contains("A02") && txt.contains("A05"),
         "重播后可见内容必须与重播前同一批，实得 {txt:?}"
     );
     // 换班后续喂受理（新画布的 proc 接流——旧 proc 已焚，这条喂不进
     // = swap 没换 proc 的实咬）
     assert!(tv.feed_browse(b"A10\r\n"), "对账重播后续喂必须受理");
-    assert_eq!(tv.display_offset(), 5, "换班后续喂照常锚守恒");
+    assert_eq!(tv.display_offset(), 6, "换班后续喂照常锚守恒");
 }
 
 #[test]
