@@ -1,8 +1,10 @@
 //! httpd.rs — na-server 的平面 HTTP 面（非 WS 升级请求）
 //!
-//! 就六个面：POST /api/na-report（含 /kfmv4 前缀别名）、GET /api/na/health、
+//! 就这些面：POST /api/na-report（含 /kfmv4 前缀别名）、GET /api/na/health、
 //! GET /api/na/sys（环境体征，na-sys 采集）、GET /api/fs/list、
-//! GET /api/fs/read（文件树数据面，逻辑在 na-protocol::fsapi）、其余 404。
+//! GET /api/fs/read（文件树数据面，逻辑在 na-protocol::fsapi）、
+//! /api/gate/*（闸门队列，BAR-233）、两条前缀反代 /agent（na-agentd，
+//! BAR-163）与 /ui（私有静态站，BAR-234）、其余 404。
 //! 响应构造是纯函数（A 档），IO 只是它的搬运工（fs 面的 IO 在 main.rs
 //! 的 spawn_blocking 里跑——current_thread 运行时上不许同步 fs）。
 
@@ -101,6 +103,11 @@ pub enum Route {
     Agent {
         upstream: String,
     },
+    /// /ui 前缀反代（BAR-234：手机经既有 9021 隧道取服务器私有静态站
+    /// 127.0.0.1:8032，UI 研究/训练场页面）——携带剥前缀后的上游路径
+    Ui {
+        upstream: String,
+    },
     /// POST /api/gate/<channel>（BAR-233 乙案 v1：闸门触发腿 QUIC 化——
     /// 八通道下行入队，白名单判据在 gateq::channel_ok）
     GatePush {
@@ -135,18 +142,54 @@ pub fn agent_upstream(path: &str) -> Option<String> {
     rest.starts_with("/api/").then(|| rest.to_string())
 }
 
+/// /ui 反代的上游路径（A 档纯函数）：`/ui/训练场/index.html` →
+/// `/训练场/index.html`；裸 `/ui` 与 `/ui/` → 上游根 `/`。query 原样携带
+/// （由 8032 静态站自己切）。
+///
+/// **前缀判定从严**：`/ui` 后面必须是 `/` 或字符串结束才算命中——
+/// `/uix/1`、`/ui2` 一律 None（不许误吞邻居路径，落 404 由路由自己答）。
+///
+/// **与 agent_upstream 的关键差异（BAR-234 评审点，写实不装作同款）**：
+/// /agent 限死上游路径须以 `/api/` 起头——反代面只许吃 agentd 的公开
+/// API 面，「反代不是任意口转发器」；而 /ui 这一面**是整站静态资源**
+/// （页面／js／css／json／日志文本），路径天然任意，**没有可枚举的路径
+/// 白名单可言**。限面因此不靠路径白名单，靠**上游地址写死为回环 8032**
+/// （只 NA_UI_UPSTREAM env 可改，见 main.rs ui_upstream_addr）——安全边界
+/// 从「允许哪些路径」移到「唯一出口是哪个地址」。
+pub fn ui_upstream(path: &str) -> Option<String> {
+    let rest = path.strip_prefix("/ui")?;
+    if rest.is_empty() || rest == "/" {
+        return Some("/".to_string());
+    }
+    // 必须紧跟 `/` 起头才是子路径；/uix/1、/ui2 这类邻居路径落 None
+    rest.starts_with('/').then(|| rest.to_string())
+}
+
 /// 路径归一化：/kfmv4 前缀别名折叠（na 客户端现网 POST 的是
 /// /kfmv4/api/na-report——经 kfmv4 时靠前缀路由，直连 na-server 时两边都认）
 ///
 /// **切 query 与折前缀的先后**：先切 query、再折前缀。query 不是路径的一部分，
 /// 折前缀只许作用于路径段——否则 query 里的 `/kfmv4` 字样会参与前缀判定；
 /// 两条 fs 面正是靠 query 传参（dir/path/max），切错 = 参数全丢落 404。
-/// 反代面例外：那一路的上游路径**连 query 原样带走**（agentd 自己切），
-/// 所以 agent_upstream 吃的是未切的整串。
+/// 反代面例外：那一路的上游路径**连 query 原样带走**（agentd/静态站自己切），
+/// 所以 agent_upstream/ui_upstream 吃的是未切的整串。
 pub fn route(method: &str, path: &str) -> Route {
     // /agent 前缀 = 反代面（方法照传——GET/POST 都可能是 agentd 的面）
     if let Some(upstream) = agent_upstream(path) {
         return Route::Agent { upstream };
+    }
+    // /ui 前缀 = 静态站反代面（BAR-234，方法照传）——位置与 /agent 并列，
+    // 同在切 query 与折 /kfmv4 前缀**之前**：上游路径连 query 原样带走
+    // （8032 静态站自己切）
+    //
+    // ★ 臂序纪律（BAR-234 评审要求写死在码上）：反代臂一律排在**宽前缀之前**——
+    //   具体前缀必须比"能把它吞掉"的宽前缀先判。反面教材就在本文件、同族：
+    //   BAR-233 的 `result/` 两臂若排在通用 `gate/` 臂之后，`/api/gate/result/x`
+    //   会被当成 channel 吞掉（starts_with 竞争，臂序倒错即静默错路由）。
+    //   本条目前与任何臂都不冲突，但**后继若加 `/ui2`、`/ui-legacy` 之类，
+    //   务必排在 `/ui` 之前**，否则会被本臂先吃掉。
+    if let Some(upstream) = ui_upstream(path) {
+        return Route::Ui { upstream };
     }
     let (p, query) = match path.split_once('?') {
         Some((p, q)) => (p, q),
@@ -236,6 +279,18 @@ pub fn agent_error_body(detail: &str) -> String {
     serde_json::json!({
         "ok": false,
         "error": format!("agent 反代失败: {detail}"),
+    })
+    .to_string()
+}
+
+/// /ui 反代失败诚实报错体（A 档纯函数）：502 = 上游静态站 8032 不可达/
+/// 转发失败，不许静默 404 不许空体——手机端卡面要显形「服务器私有静态站
+/// 没起」不是「没有这条线」。措辞指向静态站本身，不提 agentd（两条反代
+/// 是两个上游，报错串混了 = 排障走错门）
+pub fn ui_error_body(detail: &str) -> String {
+    serde_json::json!({
+        "ok": false,
+        "error": format!("ui 静态站反代失败: {detail}"),
     })
     .to_string()
 }

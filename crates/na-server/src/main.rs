@@ -27,6 +27,8 @@
 //! - NA_FS_ROOTS        文件树数据面允许根（冒号分隔；缺省 = `/root`
 //!   （服务端全库根，2026-09-27 用户裁决——不依赖 HOME）；设成空串 = 零根全 404）。
 //!   语义在 na-protocol::fsapi::roots（每请求现读，运行时可改）
+//! - NA_UI_UPSTREAM     /ui 前缀反代上游（缺省 127.0.0.1:8032 = 服务器
+//!   本机私有静态站，UI 研究/训练场页面；BAR-234）
 //!
 //! 分流：peek 请求头不消费——见 Upgrade: websocket 交 wsterm（tokio-tungstenite
 //! 从头自读），否则按平面 HTTP 处理（httpd）。
@@ -513,6 +515,51 @@ async fn agent_proxy(method: &str, upstream: &str, body: &[u8]) -> Result<Vec<u8
     Ok(raw)
 }
 
+/// /ui 反代上游（服务器本机私有静态站 `127.0.0.1:8032`——UI 研究/训练场
+/// 页面，python -m http.server 起的小站；8032 端口对账 2026-10-06 见
+/// docs/active/na-server.md §七端口地图，限面口径见 §三「前缀反代家族」）。
+/// env 可改（考题/多实例）
+fn ui_upstream_addr() -> String {
+    std::env::var("NA_UI_UPSTREAM").unwrap_or_else(|_| "127.0.0.1:8032".into())
+}
+
+/// /ui 反代（BAR-234，照 /agent 反代形制）：请求原样转发（剥 /ui 前缀的
+/// 上游路径 + 原 body），上游 Connection: close 响应**整段字节**回传中继
+/// ——状态行/头/体零重组，静态站的契约就是线上的契约（含 Content-Type，
+/// 页面/js/css/json 各是各的）。连接失败/转发失败 = 502 诚实报错
+/// （httpd::ui_error_body）。
+///
+/// **读超时 30s——与 /agent 的 3700s 故意不同**：那是给 agentd 慢同步口
+/// `/send` 留的（同步跑到 stop，反代不许比 CLI 先放弃）；静态站是毫秒级
+/// 小件（html/js/css/图片），30s 已是「上游卡死」的判定线，借慢口的大数
+/// = 卡死请求白占连接与线程。差异即设计，不默默抄大数
+async fn ui_proxy(method: &str, upstream: &str, body: &[u8]) -> Result<Vec<u8>, String> {
+    let addr = ui_upstream_addr();
+    let mut up = tokio::time::timeout(Duration::from_secs(3), TcpStream::connect(addr.as_str()))
+        .await
+        .map_err(|_| format!("连 {addr} 超时"))
+        .and_then(|r| r.map_err(|e| format!("连 {addr} 失败: {e}")))?;
+    let req = format!(
+        "{method} {upstream} HTTP/1.1\r\nHost: {addr}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    up.write_all(req.as_bytes())
+        .await
+        .map_err(|e| format!("写上游失败: {e}"))?;
+    up.write_all(body)
+        .await
+        .map_err(|e| format!("写上游失败: {e}"))?;
+    let mut raw = Vec::new();
+    tokio::time::timeout(Duration::from_secs(30), up.read_to_end(&mut raw))
+        .await
+        .map_err(|_| "读上游超时（30s 封顶）".to_string())?
+        .map_err(|e| format!("读上游失败: {e}"))?;
+    if raw.is_empty() {
+        return Err("上游空响应".into());
+    }
+    Ok(raw)
+}
+
 /// fs 面执行闸：na-server 是 `current_thread` 运行时——全部连接（含 WS 终端
 /// 流）共用那一条线程，handler 里直接同步 `std::fs` 会把所有连接一起冻住。
 /// 落 `spawn_blocking` 的阻塞池（运行时外挂线程，current_thread 同样有）、
@@ -573,6 +620,12 @@ async fn http_handle(
             match agent_proxy(&method, &upstream, body.as_bytes()).await {
                 Ok(raw) => raw,
                 Err(e) => httpd::respond(502, "Bad Gateway", &httpd::agent_error_body(&e)),
+            }
+        }
+        httpd::Route::Ui { upstream } => {
+            match ui_proxy(&method, &upstream, body.as_bytes()).await {
+                Ok(raw) => raw,
+                Err(e) => httpd::respond(502, "Bad Gateway", &httpd::ui_error_body(&e)),
             }
         }
         httpd::Route::GatePush { channel } => {
