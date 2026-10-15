@@ -162,6 +162,10 @@ bash scripts/test-na-push-so-atomic.sh || { echo "❌ BAR-150 半截核契约考
 # 旧核互踢命案——核验被摘 = 谁占 8022 谁挨 am start；异机拒/同机放/
 # 覆盖放/取不到拒/adb 臂直发五行为＋源码锚）
 bash scripts/test-gate-am-start.sh || { echo "❌ BAR-248 身份核验考题不过"; exit 1; }
+# 2026-10-16 同步挂入：BAR-251 merge 过闸钉（git merge 结构性不触发
+# pre-commit——chain 闸在合并路径缺席，0166 §二；pre-merge-commit 薄壳
+# 委派被摘/改错 = merge 又绕开 chain 落地）
+bash scripts/test-pre-merge-commit.sh || { echo "❌ BAR-251 merge 过闸考题不过"; exit 1; }
 
 echo "=== [chain 12/13] 考卷覆盖矩阵棘轮闸（2026-08-27,自我测试缺口④） ==="
 # 治「新功能补题靠自觉」:各模块 pub 项被 tests/ 引用数,棘轮只许降

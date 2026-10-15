@@ -98,7 +98,10 @@ bash scripts/deploy-phone.sh --build   # 先打包再送
 
 ## 纪律（五门，全部 hard fail，commit-msg/pre-commit 钩子机械化执法）
 
-1. **chain 全绿**：pre-commit 跑 `scripts/chain.sh`，红了提交不了。
+1. **chain 全绿**：pre-commit 跑 `scripts/chain.sh`，红了提交不了；
+   merge 提交同闸（2026-10-16，BAR-251：git merge 结构性不触发
+   pre-commit——`.githooks/pre-merge-commit` 薄壳委派同一实现补上，
+   合并落地前必过 chain，不再需要手工补跑）。
 2. **fix 必须带钉**：提交信息首行 `fix:`/`fix(范围):` 必须触及测试
    （tests/ 或 `*_test.rs`）。回归钉 = `#[test]` 名带 BAR 编号 +
    `docs/ledger/bugs.md` 登记一行。确属无需补钉（纯配置/文案/构建修复），
