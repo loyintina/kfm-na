@@ -1086,6 +1086,7 @@ mod tests {
         Roster {
             projects: vec![],
             functions: pairs.iter().map(|(_, f)| (*f).to_string()).collect(),
+            legacy_functions_until: None,
             names: pairs
                 .iter()
                 .map(|(n, f)| {
@@ -1093,6 +1094,7 @@ mod tests {
                         (*n).to_string(),
                         NameRec {
                             functions: Some(vec![(*f).to_string()]),
+                            legacy_functions: None,
                             project: None,
                             primary: Some((*f).to_string()),
                         },

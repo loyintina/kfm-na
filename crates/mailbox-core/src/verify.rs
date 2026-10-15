@@ -2,7 +2,7 @@
 
 use crate::header::{header_get, parse_header, parse_to_field};
 use crate::name::{is_v21_name, legacy_no_of, parse_v21_name, v21_no_of};
-use crate::roster::{PoolEntry, Roster, check_pools};
+use crate::roster::{PoolEntry, Roster, check_pools_with_legacy};
 use crate::status::{
     build_status_re, has_v21_stamp, is_valid_v21_date, parse_status_words, status_is_pending, to_ms,
 };
@@ -337,12 +337,24 @@ pub fn verify_book(b: &BookCheck) -> Diags {
             for e in pool_errs {
                 d.errs.push(format!("a. {e}（{f}）"));
             }
-            check_pools(
+            // 存量豁免（0166 §一）：本信日期早于名册边界 ⇒ 旧职能名黄、不拦
+            let legacy_allowed = match (
+                b.roster.and_then(|r| r.legacy_functions_until.as_deref()),
+                header_get(&h, "日期"),
+            ) {
+                (Some(until), Some(dt)) => {
+                    let (u, d0) = (to_ms(until), to_ms(dt));
+                    !u.is_nan() && !d0.is_nan() && d0 < u
+                }
+                _ => false,
+            };
+            check_pools_with_legacy(
                 b.roster,
                 &entries,
                 b.strict_pools,
                 &mut d.errs,
                 &mut d.warns,
+                legacy_allowed,
             );
 
             // 裸职能定点报错（如 收件人只写「研究部」）
@@ -766,7 +778,25 @@ pub fn verify_single(
                 name: it.name.clone(),
             });
         }
-        check_pools(roster, &entries, strict, &mut d.errs, &mut d.warns);
+        // 存量豁免（0166 §一）：信日期早于名册声明的边界 ⇒ 旧职能名黄、不拦
+        let legacy_allowed = match (
+            roster.and_then(|r| r.legacy_functions_until.as_deref()),
+            header_get(&h, "日期"),
+        ) {
+            (Some(until), Some(dt)) => {
+                let (u, d) = (to_ms(until), to_ms(dt));
+                !u.is_nan() && !d.is_nan() && d < u
+            }
+            _ => false,
+        };
+        check_pools_with_legacy(
+            roster,
+            &entries,
+            strict,
+            &mut d.errs,
+            &mut d.warns,
+            legacy_allowed,
+        );
         if let Some(rv) = header_get(&h, "复") {
             let rv_clean: String = rv.chars().filter(|c| !c.is_whitespace()).collect();
             if !rv_clean.starts_with('无')

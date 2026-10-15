@@ -7,6 +7,8 @@ use crate::name::{has_connect_char, is_han_str};
 pub struct NameRec {
     /// None = 名册未登记 functions 键（JS Array.isArray 判据 → 跳过组合校验）
     pub functions: Option<Vec<String>>,
+    /// 旧职能名白名单（2026-10-15 改「两部一委」：存量信用旧名可寻址、黄提示不拦；0166 §一）
+    pub legacy_functions: Option<Vec<String>>,
     pub project: Option<String>,
     /// 名册 primary 职能（撤回留痕署名取它，不取操作者自报——契约 §八 第 9 条③）
     pub primary: Option<String>,
@@ -17,6 +19,8 @@ pub struct Roster {
     pub projects: Vec<String>,
     /// 职能池（保序 = JSON 文本序）
     pub functions: Vec<String>,
+    /// 存量边界（ISO/信封式皆可）：信日期早于此值 ⇒ 可用旧职能名（0166 §一）
+    pub legacy_functions_until: Option<String>,
     /// 名字池（保序）
     pub names: Vec<(String, NameRec)>,
 }
@@ -37,9 +41,19 @@ impl Roster {
         if let Some(obj) = v.get("functions").and_then(JVal::as_obj) {
             r.functions = obj.iter().map(|(k, _)| k.clone()).collect();
         }
+        r.legacy_functions_until = v
+            .get("legacy_functions_until")
+            .and_then(JVal::as_str)
+            .map(str::to_string);
         if let Some(obj) = v.get("names").and_then(JVal::as_obj) {
             for (k, nv) in obj {
                 let functions = nv.get("functions").and_then(JVal::as_arr).map(|a| {
+                    a.iter()
+                        .filter_map(JVal::as_str)
+                        .map(str::to_string)
+                        .collect()
+                });
+                let legacy_functions = nv.get("legacy_functions").and_then(JVal::as_arr).map(|a| {
                     a.iter()
                         .filter_map(JVal::as_str)
                         .map(str::to_string)
@@ -51,6 +65,7 @@ impl Roster {
                     k.clone(),
                     NameRec {
                         functions,
+                        legacy_functions,
                         project,
                         primary,
                     },
@@ -101,6 +116,19 @@ pub fn check_pools(
     strict: bool,
     errs: &mut Vec<String>,
     warns: &mut Vec<String>,
+) {
+    check_pools_with_legacy(roster, entries, strict, errs, warns, false)
+}
+
+/// 同 check_pools，但允许"存量旧职能名"（0166 §一）：`legacy_allowed` 由调用方按
+/// 「信日期 < roster.legacy_functions_until」算出；命中 legacy_functions ⇒ 黄提示、不拦。
+pub fn check_pools_with_legacy(
+    roster: Option<&Roster>,
+    entries: &[PoolEntry],
+    strict: bool,
+    errs: &mut Vec<String>,
+    warns: &mut Vec<String>,
+    legacy_allowed: bool,
 ) {
     let Some(roster) = roster else {
         warns.push(
@@ -167,14 +195,25 @@ pub fn check_pools(
                 if let (Some(fn_), Some(fns)) = (fn_, &rec.functions)
                     && !fns.iter().any(|f| f == fn_)
                 {
-                    errs.push(format!(
-                        "{}「{}{}」组合不在名册内——{} 登记职能为 {}",
-                        e.who,
-                        fn_,
-                        e.name,
-                        e.name,
-                        fns.join("/")
-                    ));
+                    let is_legacy = rec
+                        .legacy_functions
+                        .as_ref()
+                        .is_some_and(|l| l.iter().any(|f| f == fn_));
+                    if legacy_allowed && is_legacy {
+                        warns.push(format!(
+                            "{}「{}{}」用的是旧职能名——按名册 legacy_functions（2026-10-15 改「两部一委」前的存量口径）豁免，不拦；新信请用新职能名",
+                            e.who, fn_, e.name
+                        ));
+                    } else {
+                        errs.push(format!(
+                            "{}「{}{}」组合不在名册内——{} 登记职能为 {}",
+                            e.who,
+                            fn_,
+                            e.name,
+                            e.name,
+                            fns.join("/")
+                        ));
+                    }
                 }
             }
         }

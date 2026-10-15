@@ -11,7 +11,7 @@ use mailbox_core::header::{header_get, parse_header, parse_to_field};
 use mailbox_core::name::{ToItem, is_v21_name, parse_v21_name, v21_no_of};
 use mailbox_core::newletter::{self, SkeletonParams};
 use mailbox_core::projection::{self, ScanTarget};
-use mailbox_core::roster::{PoolEntry, Roster, check_pools};
+use mailbox_core::roster::{PoolEntry, Roster, check_pools, check_pools_with_legacy};
 use mailbox_core::status;
 use mailbox_core::token::{self, fingerprint};
 use mailbox_core::verify::{self, BookCheck, LetterText};
@@ -1127,6 +1127,159 @@ fn pools_project_prefix_split_and_combo() {
         &mut warns,
     );
     assert!(errs.is_empty() && warns.is_empty());
+}
+
+// ---------------------------------------------------------------
+// 6.5 存量旧职能名豁免（BAR-250，0166 §一：名册改「两部一委」后
+//     存量信全红——核实侧黄不拦、落笔侧仍拒、边界默认不放行）
+// ---------------------------------------------------------------
+
+/// 「两部一委」后的名册形态夹具：清和 新职能坤部一组、旧职能研究部入
+/// legacy_functions；顶层边界 legacy_functions_until（信封式日期，与
+/// 名册现值同形态——to_ms 只认信封式，ISO 会解析成 NaN，0166 楼3 实录）
+const ROSTER_LEGACY_JSON: &str = r#"{
+  "projects": ["na", "kfmv4"],
+  "functions": {
+    "坤部一组": { "en": "na-a", "scope": "na" },
+    "乾部一组": { "en": "hq-a", "scope": "跨线" },
+    "研究部": { "en": "research", "scope": "旧词", "legacy": "仅存量信用" }
+  },
+  "legacy_functions_until": "2026-10-15 23:05 +08:00",
+  "names": {
+    "清和": { "functions": ["坤部一组"], "legacy_functions": ["研究部"], "project": "na" },
+    "白露": { "functions": ["乾部一组"], "project": "kfmv4" }
+  },
+  "reserved": ["全体"]
+}"#;
+
+/// 同名册但无边界字段（默认不放行臂）
+const ROSTER_LEGACY_NO_UNTIL_JSON: &str = r#"{
+  "projects": ["na", "kfmv4"],
+  "functions": {
+    "坤部一组": { "en": "na-a", "scope": "na" },
+    "乾部一组": { "en": "hq-a", "scope": "跨线" },
+    "研究部": { "en": "research", "scope": "旧词", "legacy": "仅存量信用" }
+  },
+  "names": {
+    "清和": { "functions": ["坤部一组"], "legacy_functions": ["研究部"], "project": "na" },
+    "白露": { "functions": ["乾部一组"], "project": "kfmv4" }
+  },
+  "reserved": ["全体"]
+}"#;
+
+fn roster_legacy() -> Roster {
+    Roster::from_json_str(ROSTER_LEGACY_JSON).expect("legacy 名册夹具应可解析")
+}
+
+fn legacy_entry() -> PoolEntry {
+    PoolEntry {
+        who: "发信人".into(),
+        func: Some("研究部".into()),
+        name: "清和".into(),
+    }
+}
+
+#[test]
+fn bar250_legacy_pools_verify_side_warns_not_blocks() {
+    // 核实侧（legacy_allowed=true）命中 legacy_functions ⇒ 黄提示、不拦
+    let r = roster_legacy();
+    let (mut errs, mut warns) = (vec![], vec![]);
+    check_pools_with_legacy(
+        Some(&r),
+        &[legacy_entry()],
+        true,
+        &mut errs,
+        &mut warns,
+        true,
+    );
+    assert!(errs.is_empty(), "存量旧职能不许硬红: {errs:?}");
+    assert!(
+        warns.iter().any(|w| w.contains("旧职能名")),
+        "豁免必须给黄提示（静默放行 = 假绿）: {warns:?}"
+    );
+}
+
+#[test]
+fn bar250_legacy_pools_new_side_still_rejects() {
+    let r = roster_legacy();
+    // 落笔侧（legacy_allowed=false）：旧职能名仍硬拒——新信必须用新职能名
+    let (mut errs, mut warns) = (vec![], vec![]);
+    check_pools_with_legacy(
+        Some(&r),
+        &[legacy_entry()],
+        true,
+        &mut errs,
+        &mut warns,
+        false,
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.contains("组合") && e.contains("不在名册内")),
+        "落笔侧旧职能必须仍拒: {errs:?}"
+    );
+    assert!(
+        !warns.iter().any(|w| w.contains("旧职能名")),
+        "落笔侧不许给豁免黄提示: {warns:?}"
+    );
+    // 非 legacy 词不豁免：legacy_allowed=true 但词不在 legacy_functions 里 ⇒ 仍红
+    let (mut errs, mut warns) = (vec![], vec![]);
+    check_pools_with_legacy(
+        Some(&r),
+        &[PoolEntry {
+            who: "发信人".into(),
+            func: Some("乾部一组".into()), // 清和 从来不是乾部一组
+            name: "清和".into(),
+        }],
+        true,
+        &mut errs,
+        &mut warns,
+        true,
+    );
+    assert!(
+        errs.iter().any(|e| e.contains("不在名册内")),
+        "非 legacy 登记词不许借豁免滑过: {errs:?}"
+    );
+}
+
+#[test]
+fn bar250_legacy_verify_single_boundary() {
+    // 边界判据（verify 层）：信日期 < legacy_functions_until ⇒ 豁免；
+    // 晚于边界 ⇒ 仍红；名册无边界字段 ⇒ 默认不放行
+    let r = roster_legacy();
+    let file = "0001号清和致乾部一组白露关于测试事由的提案.md";
+    let tokens = ledger_line("0001", file, "aabbccddeeff0011") + "\n";
+    // 边界前（2026-09-28）旧职能信 ⇒ 过 + 黄提示
+    let before = v21_letter(
+        file,
+        "aabbccddeeff0011",
+        "乾部一组白露",
+        "无（首信）",
+        "待回信",
+        "已填实的白话。",
+    );
+    let d = verify::verify_single(file, &before, Some(&tokens), Some(&r), true);
+    assert!(d.errs.is_empty(), "边界前旧职能不该红: {:?}", d.errs);
+    assert!(
+        d.warns.iter().any(|w| w.contains("旧职能名")),
+        "边界前要给黄提示: {:?}",
+        d.warns
+    );
+    // 边界后（2026-10-16）同一封旧职能信 ⇒ 硬红
+    let after = before.replace("2026-09-28 10:00 +08:00", "2026-10-16 10:00 +08:00");
+    let d2 = verify::verify_single(file, &after, Some(&tokens), Some(&r), true);
+    assert!(
+        d2.errs.iter().any(|e| e.contains("不在名册内")),
+        "边界后旧职能必须红: {:?}",
+        d2.errs
+    );
+    // 名册无边界字段 ⇒ 默认不放行（同一封边界前的信也红）
+    let r0 = Roster::from_json_str(ROSTER_LEGACY_NO_UNTIL_JSON).expect("无边界夹具应可解析");
+    let d3 = verify::verify_single(file, &before, Some(&tokens), Some(&r0), true);
+    assert!(
+        d3.errs.iter().any(|e| e.contains("不在名册内")),
+        "名册无边界字段 = 默认不放行: {:?}",
+        d3.errs
+    );
 }
 
 // ---------------------------------------------------------------
