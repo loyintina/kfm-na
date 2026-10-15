@@ -1,0 +1,11 @@
+#!/bin/sh
+# KFM-NA — pre-merge-commit hook（2026-10-16，BAR-251 / 追踪信 NA0180）：
+#   merge 提交也过 chain 闸。病灶：git merge 只触发本钩 + commit-msg +
+#   post-merge，**pre-commit 结构性缺席**——五门第①门（chain 全绿）在
+#   merge 路径上不存在（0166 §二「合并落地本该跑的检查没跑」机制面）。
+#   形制：薄壳委派 pre-commit——闸语义永远只有一处实现，防两份逻辑漂移；
+#   本钩触发时合并结果已入索引，pre-commit 的 docs 豁免哈希口径原样适用
+#   （git ≥2.24 原生钩，临时仓探针实证，见 NA0180 楼2）。
+#   边界：-c core.hooksPath 主动拆闸兜不住（钩被拆则钩内检查皆死），
+#   那条洞另案追踪（NA0180 楼3 白露裁，归她立）。
+exec sh "$(dirname "$0")/pre-commit"
