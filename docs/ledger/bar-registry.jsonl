@@ -63,4 +63,5 @@
 {"bar": 246, "title": "na 自持无障碍服务与系统管理页入口（MAIN0149 用户拍板）", "claimant_func": "开发部", "claimant": "闻灯", "letter": "0175", "ts": "2026-10-13 23:30 +0800"}
 {"bar": 247, "title": "QUIC 腿死与 sshd 占口互撞", "claimant_func": "测试部", "claimant": "承影", "letter": "0176", "ts": "2026-10-14 11:48 +0800"}
 {"bar": 248, "title": "gate_am_start 8022 硬编码无身份核验误拉 9 机", "claimant_func": "测试部", "claimant": "承影", "letter": "0177", "ts": "2026-10-14 16:53 +0800"}
+{"bar": 249, "title": "浏览画布取景锚改内容贴底（天枢窗日志式渲染停顶病象）", "claimant_func": "坤部一组", "claimant": "清和", "letter": "0178", "ts": "2026-10-15 23:41 +0800"}
 {"bar": 250, "title": "letters 检查器不认名册 legacy_functions 致存量信全红（0166 §一）", "claimant_func": "坤部一组", "claimant": "清和", "letter": "0179", "ts": "2026-10-16 00:17 +0800"}

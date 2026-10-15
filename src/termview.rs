@@ -1778,6 +1778,36 @@ pub fn kb_shift_px(visible_h_px: u32, cursor_row: i32, in_scrollback: bool, cell
     ((cursor_row as u32 + 1) * cell_h).saturating_sub(visible_h_px)
 }
 
+/// 浏览态进场首视口锚定（BAR-249 甲'，判据冻结见追踪信 NA0178 楼3：
+/// **裁视野不裁文本**）：尾部连续空行不进首视口——返回值 = 建议
+/// display_offset。空行判据 = 整行每格字符为 ' ' 且背景转 XRGB 后为
+/// DEFAULT_BG（color_to_xrgb 与渲染层同一把尺；宽字符 spacer 格所在行
+/// 因首格非空格自然判非空）。只数屏区（历史行不参与），自末行向上数到
+/// 首个非空行止。两道钳：①全屏皆空 → k 钳 屏行数-1（留一行不裁没，
+/// 白露风险条）；②钳历史存量 min(k, history_size)——史不够拉不出
+/// （alacritty 本身也钳，显式钳让本函数独立可考）。悬铃型（窗约等于
+/// 屏高、尾部大片空行、有史）锚后满屏：上方填旧帧、内容尾贴底；kimi 型
+/// （内容贴底、k=0）锚恒 0 = 零变化回归闸；空谷/空山型（窗矮于屏、史短
+/// 装不满屏）锚被史量钳到 0，明写不纳入本判据（根是窗比屏矮）。
+pub fn browse_anchor_offset(term: &Term<VoidListener>) -> usize {
+    let grid = term.grid();
+    let rows = grid.screen_lines();
+    let cols = grid.columns();
+    let mut k = 0usize;
+    for r in (0..rows).rev() {
+        let line = Line(r as i32);
+        let blank = (0..cols).all(|c| {
+            let cell = &grid[line][Column(c)];
+            cell.c == ' ' && color_to_xrgb(cell.bg) == DEFAULT_BG
+        });
+        if !blank {
+            break;
+        }
+        k += 1;
+    }
+    k.min(rows.saturating_sub(1)).min(grid.history_size())
+}
+
 /// 选择区（网格坐标 (Line, Column)：行号含历史负行——滚进历史后选择
 /// 跟着内容走，与 render_into 的 display_iter 行号同坐标系）。
 /// anchor = 长按落点词首，cursor = 拖动当前点；归一化在判定/提取时做
@@ -2662,20 +2692,36 @@ impl TermView {
 
     /// 进浏览态（预建快照 Term 落位）。进入即清分数零头（视口态换源归零）。
     /// v3 快照臂：快照流无续喂权——常驻 proc 一并清空（v4 画布走
-    /// enter_browse_canvas）
+    /// enter_browse_canvas）。落位后首视口锚到内容尾（anchor_browse_tail）
     pub fn enter_browse_term(&mut self, term: Term<VoidListener>) {
         self.browse = Some(term);
         self.browse_proc = None;
         self.scroll_frac_px = 0.0;
+        self.anchor_browse_tail();
     }
 
     /// 进浏览态（v4 推流画布落位）：画布 = 带内 capture 播种 + %output
     /// 字节续喂的活 Term，常驻 Processor 随画布进视图（续喂状态机不
-    /// 离画布）。进入即清分数零头（同 enter_browse_term）
+    /// 离画布）。进入即清分数零头（同 enter_browse_term），首视口同锚
     pub fn enter_browse_canvas(&mut self, canvas: Canvas) {
         self.browse = Some(canvas.term);
         self.browse_proc = Some(canvas.proc);
         self.scroll_frac_px = 0.0;
+        self.anchor_browse_tail();
+    }
+
+    /// BAR-249 甲'：进浏览态首视口锚到内容尾（语义/判据全在
+    /// browse_anchor_offset 文档）。锚出 offset>0 后续喂靠 alacritty
+    /// 内置锚守恒自动抬（spec_推流画布_续喂生长锚守恒 钉的同一机制），
+    /// 视野钉在阅读位不漂
+    fn anchor_browse_tail(&mut self) {
+        let Some(term) = self.browse.as_mut() else {
+            return;
+        };
+        let anchor = browse_anchor_offset(term);
+        if anchor > 0 {
+            term.scroll_display(Scroll::Delta(anchor as i32));
+        }
     }
 
     /// 浏览期字节续喂（v4 推流唯一写入口）：%output 解码字节直喂浏览中
