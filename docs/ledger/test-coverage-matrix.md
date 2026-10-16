@@ -36,7 +36,7 @@
 | `src/keybar.rs` | 20 | 16 | 4 | COLS MOD_ALT install_bridge_mods bridge_mods |
 | `src/keymap.rs` | 2 | 2 | 0 | — |
 | `src/local_pty.rs` | 7 | 6 | 1 | android_prefix |
-| `src/mail_feed.rs` | 19 | 17 | 2 | book_snap ensure_summaries |
+| `src/mail_feed.rs` | 21 | 19 | 2 | book_snap ensure_summaries |
 | `src/na_server_sup.rs` | 23 | 19 | 4 | HEALTH_URL EXEC_TIMEOUT_SECS RECHECK_SECS TUNNEL_WAIT_SECS |
 | `src/offline_keys.rs` | 10 | 10 | 0 | — |
 | `src/plugins/ai_presence.rs` | 2 | 2 | 0 | — |
@@ -86,7 +86,7 @@
 | `src/ui/keybar.rs` | 1 | 1 | 0 | — |
 | `src/ui/link_card.rs` | 14 | 11 | 3 | set_lay_lines lay_lines_now card_h_now |
 | `src/ui/mail_card.rs` | 5 | 4 | 1 | N_ENTRIES |
-| `src/ui/mail_page.rs` | 59 | 58 | 1 | lay_items_fx |
+| `src/ui/mail_page.rs` | 57 | 56 | 1 | lay_items_fx |
 | `src/ui/md_layout.rs` | 5 | 5 | 0 | — |
 | `src/ui/md_parse.rs` | 2 | 2 | 0 | — |
 | `src/ui/modal.rs` | 32 | 31 | 1 | VEIL_DIM_ARGB |
