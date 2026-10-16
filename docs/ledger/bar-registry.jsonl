@@ -70,3 +70,5 @@
 {"bar": 253, "title": "解析页重设计（调度器/控制台化）——判据包 MAIN0172", "claimant_func": "坤部一组", "claimant": "清和", "letter": "0182", "ts": "2026-10-16 15:24 +0800"}
 {"bar": 254, "title": "信箱渲染人名切分按名册职能池最长匹配（MAIN0173）", "claimant_func": "坤部一组", "claimant": "清和", "letter": "0183", "ts": "2026-10-16 15:32 +0800"}
 {"bar": 255, "title": "按册身份文件枚举取数（agentd 与 gen 两落点，白露 NA0182 楼3 裁立项）", "claimant_func": "坤部一组", "claimant": "清和", "letter": "0184", "ts": "2026-10-16 15:51 +0800"}
+{"bar": 256, "title": "冷启动动态引导附着账恒 None——路由读数与用户所见矛盾（NA0181 楼6③）", "claimant_func": "坤部一组", "claimant": "清和", "letter": "0185", "ts": "2026-10-16 18:27 +0800"}
+{"bar": 257, "title": "ResumeKick 清 attempts/quic_fails 但不清 rev_quic_fails——回前台在等时反连腿仍蹲满 60s 退避（NA0176 楼35 挂账）", "claimant_func": "坤部一组", "claimant": "清和", "letter": "0186", "ts": "2026-10-16 18:28 +0800"}
