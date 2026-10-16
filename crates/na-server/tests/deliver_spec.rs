@@ -217,34 +217,55 @@ fn spec_bar252_子孙树防环() {
 
 #[test]
 fn spec_bar252_键序构造() {
-    // send：字面文本 + Enter，目标 =名 精确匹配，-l -- 不解析键名
+    // send：字面文本 + Enter，目标 =名: 精确匹配到会话活动窗格，-l -- 不解析键名
     let (cmds, eff, note) = build_keys(Action::Send, &Harness::Kimi, "清和", "你好 世界").unwrap();
     assert_eq!(eff, Action::Send);
     assert!(note.is_none());
     assert_eq!(
         cmds,
         vec![
-            vec!["send-keys", "-t", "=清和", "-l", "--", "你好 世界"],
-            vec!["send-keys", "-t", "=清和", "Enter"],
+            vec!["send-keys", "-t", "=清和:", "-l", "--", "你好 世界"],
+            vec!["send-keys", "-t", "=清和:", "Enter"],
         ]
     );
     // interrupt：只发 Escape，不带文本
     let (cmds, eff, _) = build_keys(Action::Interrupt, &Harness::Kimi, "清和", "").unwrap();
     assert_eq!(eff, Action::Interrupt);
-    assert_eq!(cmds, vec![vec!["send-keys", "-t", "=清和", "Escape"]]);
+    assert_eq!(cmds, vec![vec!["send-keys", "-t", "=清和:", "Escape"]]);
     // queue：tianshu 发 M-Enter
     let (cmds, eff, note) = build_keys(Action::Queue, &Harness::Tianshu, "悬铃", "排着").unwrap();
     assert_eq!(eff, Action::Queue);
     assert!(note.is_none());
-    assert_eq!(cmds[1], vec!["send-keys", "-t", "=悬铃", "M-Enter"]);
+    assert_eq!(cmds[1], vec!["send-keys", "-t", "=悬铃:", "M-Enter"]);
     // queue：kimi 无排队键 → 降级 send，action_effective=send + note 透出
     let (cmds, eff, note) = build_keys(Action::Queue, &Harness::Kimi, "清和", "排着").unwrap();
     assert_eq!(eff, Action::Send);
     assert!(note.unwrap().contains("降级"));
-    assert_eq!(cmds[1], vec!["send-keys", "-t", "=清和", "Enter"]);
+    assert_eq!(cmds[1], vec!["send-keys", "-t", "=清和:", "Enter"]);
     // 空文本：send/queue 拒，interrupt 放行
     assert!(build_keys(Action::Send, &Harness::Kimi, "清和", "").is_err());
     assert!(build_keys(Action::Queue, &Harness::Tianshu, "悬铃", "").is_err());
+}
+
+/// BAR-152 锚定钉（承影 NA0181 楼6 打回：考题与答案同源自洽、一起错）：
+/// 凡是交给 tmux 的目标串，`-t` 的后一参数必须以冒号收尾——「=名」裸用
+/// 在 pane 目标上不成立（can't find pane），必须「=名:」指到会话活动
+/// 窗格。三动作 × 双 harness 全排列逐 argv 核，不抽样。
+#[test]
+fn spec_bar252_目标串冒号收尾() {
+    for action in [Action::Send, Action::Interrupt, Action::Queue] {
+        for harness in [Harness::Kimi, Harness::Tianshu] {
+            let (cmds, _, _) = build_keys(action, &harness, "清和", "探针").unwrap();
+            for argv in &cmds {
+                let pos = argv.iter().position(|a| a == "-t").expect("argv 缺 -t");
+                let t = &argv[pos + 1];
+                assert!(
+                    t.starts_with('=') && t.ends_with(':'),
+                    "目标串 {t} 必须是 =名: 形态（BAR-152）"
+                );
+            }
+        }
+    }
 }
 
 #[test]

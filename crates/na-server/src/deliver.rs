@@ -266,8 +266,11 @@ pub fn check_alive(row: &RegRow, panes: &[Pane], procs: &[Proc]) -> Result<u32, 
 pub type KeyPlan = (Vec<Vec<String>>, Action, Option<String>);
 
 /// ③ 键序（A 档纯函数）：argv 向量序列（execute 逐个 spawn tmux）。
-/// `-t =<名>` 等号 = 精确匹配（tmux 目标语法默认前缀匹配，二字名互做
-/// 前缀会投错窗）；`-l --` = 字面文本不解析键名。queue 在 kimi 上降级
+/// `-t =<名>:` 等号 = 精确匹配、尾冒号 = 指到会话的活动窗格
+/// （tmux 目标语法默认前缀匹配，二字名互做前缀会投错窗；`=名` 裸用
+/// 不带冒号在 pane 目标上不成立——BAR-152 实机定罪「can't find pane」，
+/// 同坑注释见 tmux_ctl.rs cmd_capture）；`-l --` = 字面文本不解析
+/// 键名。queue 在 kimi 上降级
 /// send（note 透出降级，响应 action_effective=send）
 pub fn build_keys(
     action: Action,
@@ -275,7 +278,8 @@ pub fn build_keys(
     target: &str,
     text: &str,
 ) -> Result<KeyPlan, String> {
-    let t = format!("={target}");
+    // BAR-152 锚：目标串必须以冒号收尾（=name: 指会话活动窗格）
+    let t = format!("={target}:");
     let send_plan = || {
         vec![
             vec![

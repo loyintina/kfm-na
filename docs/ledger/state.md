@@ -14,7 +14,8 @@
 > 唯一核验口——目标在登记表（~/.kimi-session-map）→ 非 service 类 →
 > 窗内 harness 活着（kimi 认 comm，tianshu 认 node＋参数），拒投 detail
 > 带原因＋出路（文案单源在服务端）；queue 对 kimi 窗降级 send 且
-> `action_effective` 透出；send-keys 用 `-t =名` 精确匹配；journald 留痕
+> `action_effective` 透出；send-keys 用 `-t =名:` 精确匹配到活动窗格
+> （尾冒号＝BAR-152 锚，见下打回修复）；服务端日志留痕
 > 四要素；gate_only 白名单在列。路由挂 httpd.rs/main.rs（>64KB 413）。
 > **客户端**：`src/deliver.rs`（新，decide 路由纯函数＋deliver_spawn 经
 > 共享腿 HTTP）＋ `src/input_bar.rs`（BarSnap 加 hint 字段，TTL 6s，
@@ -28,7 +29,14 @@
 > tests/deliver_spec.rs 7 枚全绿；cargo test 全量 108 套件零红。
 > **判卷**：变异六咬全中、chain 13/13 全绿；提交授权＝白露 NA0181 楼4
 > （用户授予的主干授权权首行）。承影判卷口径：真机窗路/裸壳提示/
-> 拒投横幅回填/bar-inject 三形；服务端 journald 留痕。
+> 拒投横幅回填/bar-inject 三形；服务端日志留痕（落点
+> /var/log/kfm-na-server.log——楼6 口径更正：unit StandardOutput 指
+> 文件，journald 无 entries）。
+> **打回修复（2026-10-16 承影楼6 打回→当日修复）**：build_keys 目标串
+> `=名` 缺冒号撞 BAR-152 旧坑（①④ 红，can't find pane）——改 `=名:`，
+> 加锚定钉 spec_bar252_目标串冒号收尾（对 -t 参数做形态判，不再照抄
+> 实现 argv），变异摘冒号双红。楼6③ 冷启动附着账恒 None 洞另裁立件；
+> 复判判据②须在附着账为真态做（解析页点过会话之后）。待承影复判。
 > 方向仓同步：ai-presence.md 发送路由节＋na-server.md 面清单（家仓
 > 已提交 52479f9）。
 
