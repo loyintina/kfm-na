@@ -628,3 +628,29 @@ fn spec_bar247_腿连死退避表() {
     assert_eq!(leg_backoff_secs(7), 60);
     assert_eq!(leg_backoff_secs(100), 60, "封顶必须咬死（风暴期账可上千）");
 }
+
+#[test]
+fn spec_bar257_resume_kick清反连退避账() {
+    // BAR-257：ResumeKick 九臂必须齐清 rev_quic_fails——回前台 = 用户在等，
+    // 反连腿不许再蹲满 leg_backoff 退避（旧账只清数据腿 quic_fails，
+    // 反连腿账漏清，回前台后 9022 仍按退避表空转；NA0176 楼35 挂账）。
+    // 源码锚钉（BAR-238 接线守卫先例）：看门狗线程私有账无法单测驱动，
+    // 直接锚源码——每臂起算点到下一臂前必须见清零，臂数变动钉红复核。
+    let src = include_str!("../src/tunnel.rs");
+    let arms: Vec<usize> = src
+        .match_indices("ResumeKick")
+        .filter(|(i, _)| {
+            src[*i..].starts_with("ResumeKick =>") || src[*i..].starts_with("ResumeKick) =>")
+        })
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(arms.len(), 9, "ResumeKick 臂数变动——本钉须随臂复核");
+    for (k, &start) in arms.iter().enumerate() {
+        let end = arms.get(k + 1).copied().unwrap_or(src.len());
+        assert!(
+            src[start..end].contains("rev_quic_fails = 0"),
+            "第 {} 臂缺 rev_quic_fails = 0（回前台在等，反连退避账必须清零）",
+            k + 1
+        );
+    }
+}

@@ -1047,8 +1047,9 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
         let mut probe_fails: u32 = 0;
         let mut next_probe_at = std::time::Instant::now();
         // BAR-247 腿连死退避账（看门狗线程私有）：上次腿死时刻——重生段
-        // spawn 闸拿它 × leg_backoff_secs（连死账）算放行点；手动重连/跳闸
-        // 清零连死账（reconnect/trip_quic 里 *fails=0）即自然立即放行，
+        // spawn 闸拿它 × leg_backoff_secs（连死账）算放行点；手动重连/跳闸/
+        // 回前台清零连死账（reconnect/trip_quic 里 *fails=0；BAR-257
+        // ResumeKick 九臂同清 rev_quic_fails）即自然立即放行，
         // 用户在等永远优先于退避
         let mut last_quic_death: Option<std::time::Instant> = None;
         let mut last_rev_death: Option<std::time::Instant> = None;
@@ -1479,6 +1480,7 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                                 consec_zombie = 0;
                                 attempts = 0;
                                 quic_fails = 0;
+                                rev_quic_fails = 0;
                             }
                             None => {}
                         }
@@ -1534,6 +1536,7 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                                 &snap_t,
                             );
                         }
+                        rev_quic_fails = 0;
                     }
                     None => {}
                 }
@@ -1600,6 +1603,7 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                                 consec_zombie = 0;
                                 attempts = 0;
                                 quic_fails = 0;
+                                rev_quic_fails = 0;
                             }
                             None => {}
                         }
@@ -1648,6 +1652,7 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                                 &set,
                             );
                         }
+                        rev_quic_fails = 0;
                     }
                     None => {}
                 }
@@ -1744,6 +1749,7 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                         Some(TunnelCmd::ResumeKick) => {
                             attempts = 0;
                             quic_fails = 0;
+                            rev_quic_fails = 0;
                         }
                         None => {}
                     }
@@ -1844,7 +1850,10 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                                 &snap_t,
                             );
                         }
-                        Some(TunnelCmd::ResumeKick) => companion_hold_until = None,
+                        Some(TunnelCmd::ResumeKick) => {
+                            companion_hold_until = None;
+                            rev_quic_fails = 0;
+                        }
                         None => {}
                     }
                     continue;
@@ -1875,6 +1884,7 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                         Some(TunnelCmd::ResumeKick) => {
                             attempts = 0;
                             quic_fails = 0;
+                            rev_quic_fails = 0;
                         }
                         None => {}
                     }
@@ -2035,6 +2045,7 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                         Some(TunnelCmd::ResumeKick) => {
                             attempts = 0;
                             quic_fails = 0;
+                            rev_quic_fails = 0;
                         }
                         None => {}
                     }
@@ -2061,6 +2072,7 @@ pub fn start(prefix: PathBuf, server: ServerEntry) -> Arc<Mutex<TunnelSnap>> {
                     TunnelCmd::ResumeKick => {
                         attempts = 0;
                         quic_fails = 0;
+                        rev_quic_fails = 0;
                     }
                 }
             }
