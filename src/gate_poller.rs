@@ -214,6 +214,42 @@ async fn quic_http_roundtrip(
     .map_err(|_| "往返超时".to_string())?
 }
 
+/// BAR-252：一次性 HTTP 往返公用口（输入栏投递等共用共享腿连接——deliver
+/// 与闸门轮询同一载体）。同步外壳：在调用方线程内建临时 current_thread
+/// runtime 跑一发；**调用方须已在自备线程**（瞬时返回契约在调用侧，
+/// UI/值守线程不许直调）。腿不在（槽空）/腿死/超时 = Err
+#[allow(clippy::too_many_arguments)]
+pub fn http_roundtrip(
+    slot: &Arc<Mutex<Option<quinn::Connection>>>,
+    psk: &[u8; 32],
+    target_port: u16,
+    device_id: &str,
+    method: &str,
+    path: &str,
+    body: &[u8],
+    host: &str,
+) -> Result<Vec<u8>, String> {
+    let conn = slot
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or("腿连接槽空（隧道未握手）")?;
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("tokio runtime 起不来: {e}"))?;
+    rt.block_on(quic_http_roundtrip(
+        &conn,
+        psk,
+        target_port,
+        device_id,
+        method,
+        path,
+        body,
+        host,
+    ))
+}
+
 async fn fetch_pending(
     conn: &quinn::Connection,
     psk: &[u8; 32],

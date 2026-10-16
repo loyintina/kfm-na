@@ -104,6 +104,10 @@ pub fn multiline_starts(chars: &[char], widths: &[f32], max_w: f32) -> Vec<usize
 /// 调用方按 (boot_ms / CARET_BLINK_MS) % 2 算相位传渲染
 pub const CARET_BLINK_MS: u64 = 530;
 
+/// BAR-252 瞬态小字存活时长（ms）：投递回执/分叉解释在空栏留 6s，
+/// 到期自动消（snap 按时刻算，渲染零定时器）
+pub const HINT_TTL_MS: u64 = 6000;
+
 /// 长按进入选择模式的时间阈值（ms）：与 Android 系统默认值一致。
 pub const SELECT_LONG_PRESS_MS: u64 = 400;
 
@@ -290,6 +294,9 @@ pub struct BarSnap {
     pub selection_start: usize,
     /// 选区右锚点（char 下标，不含）
     pub selection_end: usize,
+    /// BAR-252 栏内瞬态小字（投递回执「→ 窗·发送」/分叉解释「裸 shell——
+    /// 本句发往 AI 页」）：仅空栏时渲染层取代占位符画出；TTL 到期即空
+    pub hint: String,
 }
 
 struct Inner {
@@ -315,6 +322,8 @@ struct Inner {
     /// 发送出口（壳层装配时装入：接脑 + run_start/run_end）。
     /// 触摸发送钮 / IME Enter / 闸门注入 submit 全走这一个口（D9 同源）
     sender: Option<Sender>,
+    /// BAR-252 瞬态小字：（文本, 写入时刻 boot_ms）——TTL 内且栏空时渲染
+    hint: Option<(String, u64)>,
 }
 
 /// 发送回调：取走的文本推进 AiSendSink（期 0 = 壳层脑装配闭包）
@@ -343,12 +352,23 @@ impl InputBarState {
                 selection_end: 0,
                 sel_anchor: SelAnchor::None,
                 sender: None,
+                hint: None,
             }),
         }
     }
 
     pub fn snap(&self) -> BarSnap {
+        self.snap_at(crate::report::boot_ms() as u64)
+    }
+
+    /// 指定时刻的快照（考题注入口——boot_ms 在 host 恒 0，TTL 判定
+    /// 需要真时刻；生产走 snap()）
+    pub fn snap_at(&self, now_ms: u64) -> BarSnap {
         let g = self.inner.lock().unwrap();
+        let hint = match &g.hint {
+            Some((h, t0)) if now_ms.saturating_sub(*t0) < HINT_TTL_MS => h.clone(),
+            _ => String::new(),
+        };
         BarSnap {
             text: g.text.clone(),
             focused: g.focused,
@@ -361,6 +381,24 @@ impl InputBarState {
             selecting: g.selecting,
             selection_start: g.selection_start,
             selection_end: g.selection_end,
+            hint,
+        }
+    }
+
+    /// BAR-252：栏内瞬态小字（投递回执/分叉解释，白露 NA0181 楼2④「归 AI
+    /// 不许静默」）——空栏时渲染层取代占位符画出，TTL 6s 到期自动消。
+    /// 空串 = 立即清除。任何编辑/发送动作也会清（见各编辑臂）
+    pub fn set_hint(&self, s: &str) {
+        self.set_hint_at(s, crate::report::boot_ms() as u64);
+    }
+
+    /// 指定时刻版（考题注入口）
+    pub fn set_hint_at(&self, s: &str, now_ms: u64) {
+        let mut g = self.inner.lock().unwrap();
+        if s.is_empty() {
+            g.hint = None;
+        } else {
+            g.hint = Some((s.to_string(), now_ms));
         }
     }
 
@@ -591,6 +629,7 @@ impl InputBarState {
     pub fn replace_range(&self, start: usize, end: usize, text: &str) {
         let mut g = self.inner.lock().unwrap();
         Self::commit_composing(&mut g);
+        g.hint = None; // BAR-252 编辑即清瞬态小字
         let len = g.text.chars().count();
         let (s, e) = (start.min(end).min(len), start.max(end).min(len));
         let bs = g
@@ -617,6 +656,7 @@ impl InputBarState {
     /// 删除选区文字；返回是否发生了删除
     pub fn delete_selection(&self) -> bool {
         let mut g = self.inner.lock().unwrap();
+        g.hint = None; // BAR-252 编辑即清瞬态小字
         if !g.selecting || g.selection_start >= g.selection_end {
             return false;
         }
@@ -648,6 +688,7 @@ impl InputBarState {
         let had_selection = self.delete_selection();
         let mut g = self.inner.lock().unwrap();
         g.composing = None;
+        g.hint = None; // BAR-252 编辑即清瞬态小字
         g.follow = true;
         let len = g.text.chars().count();
         g.cursor = g.cursor.min(len);
@@ -819,6 +860,7 @@ impl InputBarState {
         let mut g = self.inner.lock().unwrap();
         g.composing = None; // 组合态下来 commit：虚拟区由落字取代（IME 语义）
         g.follow = true; // 编辑回跟随
+        g.hint = None; // BAR-252 编辑即清瞬态小字
         // 有选区先删选区
         if g.selecting && g.selection_start < g.selection_end {
             let start = g
@@ -864,6 +906,7 @@ impl InputBarState {
     /// 组合态退格删拼音尾
     pub fn backspace(&self) {
         let mut g = self.inner.lock().unwrap();
+        g.hint = None; // BAR-252 编辑即清瞬态小字
         if let Some(cs) = g.composing.take() {
             // 组合态退格删组合尾（删拼音字母，不碰已上屏字）
             g.follow = true;
@@ -922,6 +965,7 @@ impl InputBarState {
     pub fn clear(&self) {
         let mut g = self.inner.lock().unwrap();
         g.text.clear();
+        g.hint = None; // BAR-252 编辑即清瞬态小字
         g.cursor = 0;
         g.handle = false;
         g.composing = None;
@@ -942,6 +986,7 @@ impl InputBarState {
         g.cursor = 0;
         g.handle = false;
         g.composing = None; // 发送时组合文本不跟去下游（半截拼音不算话）
+        g.hint = None; // BAR-252 发送即清瞬态小字（新回执随后覆盖）
         g.selecting = false;
         g.selection_start = 0;
         g.selection_end = 0;
@@ -966,6 +1011,7 @@ impl InputBarState {
             g.cursor = 0;
             g.handle = false;
             g.composing = None;
+            g.hint = None; // BAR-252 发送即清瞬态小字（新回执随后覆盖）
             g.selecting = false;
             g.selection_start = 0;
             g.selection_end = 0;

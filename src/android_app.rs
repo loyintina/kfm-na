@@ -4802,6 +4802,10 @@ impl App {
             // 仅 na-server 后端有 /api/gate 面，kfmv4 后端不启（闸门照旧
             // 走 ssh 桥老路）
             crate::gate_poller::start(srv.clone());
+            // BAR-252：输入栏投递面同一份配置登记（POST /api/deliver 与
+            // 闸门同载体——共享腿 QUIC 桥）；kfmv4 后端无此面不登记，
+            // 路由判定的 configured 臂把发送留在 AI 旧路
+            crate::deliver::configure(srv);
         }
 
         // 服务卡数据面（2026-09-20，docs/active/na-server.md §四）：
@@ -5015,6 +5019,29 @@ impl App {
             let ai2 = ai.clone();
             let chat = self.ai_chat.clone();
             bar.install_sender(Arc::new(move |text| {
+                // BAR-252 发送口唯一分叉（MAIN0168 定位重定向第一步）：
+                // 终页裸奔 ∧ 附着服务器窗 → 窗路投递（不跳页——人正看着窗，
+                // 跳走是惊吓）；否则原 AI 路由（裸 shell 归 AI 带分叉提示）。
+                match crate::deliver::route_now() {
+                    crate::deliver::Route::Window(target) => {
+                        crate::report::report("deliver", &format!("发送改窗路 → {target}"));
+                        crate::deliver::deliver_spawn(
+                            target,
+                            crate::deliver::Action::Send,
+                            text,
+                            None,
+                        );
+                        return;
+                    }
+                    crate::deliver::Route::Ai(hint) => {
+                        // 裸 shell 归 AI 不静默（白露楼2④）：栏内瞬态一句
+                        if let Some(h) = hint
+                            && let Some(b) = crate::gate::input_bar_handle()
+                        {
+                            b.set_hint(&h);
+                        }
+                    }
+                }
                 let Some(chat) = &chat else {
                     crate::report::report("ai", "发送被吞：AI 对话状态核未就位");
                     return;

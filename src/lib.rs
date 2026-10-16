@@ -14,6 +14,7 @@ pub mod catchup;
 pub mod conn;
 pub mod crash;
 pub mod ctrl_feed;
+pub mod deliver;
 pub mod direct_brain;
 pub mod endpoint;
 pub mod exec_probe;

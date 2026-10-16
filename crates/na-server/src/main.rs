@@ -596,8 +596,10 @@ async fn http_handle(
     let body = String::from_utf8_lossy(&body_bytes).into_owned();
 
     let route = httpd::route(&method, &path);
-    // 闸门腿只放 /api/gate/*（NA0163 楼25/26）：腿是单设备专用入口，
-    // fs/report/health/agent 等面不从腿暴露（404 与主口 NotFound 同形）
+    // 闸门腿只放 /api/gate/* 与 /api/deliver（NA0163 楼25/26 + BAR-252：
+    // deliver 是设备侧输入栏的投递面，与闸门同一份「唯 QUIC 桥验签后可达」
+    // 边界）：腿是单设备专用入口，fs/report/health/agent 等面不从腿暴露
+    // （404 与主口 NotFound 同形）
     if gate_only
         && !matches!(
             route,
@@ -605,6 +607,7 @@ async fn http_handle(
                 | httpd::Route::GatePending { .. }
                 | httpd::Route::GateResultPut { .. }
                 | httpd::Route::GateResultGet { .. }
+                | httpd::Route::Deliver
         )
     {
         let resp = httpd::respond(404, "Not Found", "{\"ok\":false,\"error\":\"not found\"}");
@@ -681,6 +684,31 @@ async fn http_handle(
             Some(bytes) => httpd::respond_bytes(200, "OK", &bytes),
             None => httpd::respond(404, "Not Found", "{\"ok\":false,\"error\":\"no result\"}"),
         },
+        // BAR-252：输入栏投递——核验+投递一处成案（deliver::execute 里
+        // tmux/ps 是同步子进程调用，落阻塞池不冻 current_thread 上的其他
+        // 连接，与 fs 面同律）
+        httpd::Route::Deliver => {
+            if body_bytes.len() > 64 * 1024 {
+                httpd::respond(
+                    413,
+                    "Payload Too Large",
+                    "{\"ok\":false,\"error\":\"payload >64KB\"}",
+                )
+            } else {
+                match fs_blocking(move || na_server::deliver::execute(&body)).await {
+                    Ok((status, out)) => {
+                        let reason = match status {
+                            200 => "OK",
+                            400 => "Bad Request",
+                            413 => "Payload Too Large",
+                            _ => "Internal Server Error",
+                        };
+                        httpd::respond(status, reason, &out)
+                    }
+                    Err(e) => httpd::respond(500, "Internal Server Error", &httpd::error_body(&e)),
+                }
+            }
+        }
         httpd::Route::Report => match httpd::append_report(&body) {
             Ok(()) => httpd::respond(200, "OK", "{\"ok\":true}"),
             Err(e) => httpd::respond(500, "Internal Server Error", &httpd::error_body(&e)),

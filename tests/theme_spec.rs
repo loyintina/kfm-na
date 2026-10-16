@@ -55,6 +55,7 @@ fn spec_theme_换肤生效_控件只读token() {
         cursor: 0,
         handle: false,
         composing: String::new(),
+        hint: String::new(),
         scroll_px: 0,
         follow: true,
         selecting: false,

@@ -91,6 +91,16 @@ pub fn register_gate_router(router: &SharedRouter) {
     *GATE_ROUTER.lock().unwrap() = Some(router.clone());
 }
 
+/// 取共享路由句柄（BAR-252 投递路由读附着名；借用即还）；未登记 = None
+pub fn gate_router_handle() -> Option<SharedRouter> {
+    GATE_ROUTER.lock().unwrap().clone()
+}
+
+/// 取共享终端句柄（BAR-252 拒投横幅喂终端；借用即还）；未登记 = None
+pub fn dump_term_handle() -> Option<SharedTerm> {
+    DUMP_TERM.lock().unwrap().clone()
+}
+
 /// draw_frame 每帧报尺寸（后台时没有 surface，尺寸只能来自这里）
 pub fn note_frame_size(w: u32, h: u32) {
     DUMP_WH.store(((w as u64) << 32) | h as u64, Ordering::Relaxed);
@@ -2387,6 +2397,10 @@ pub enum BarCmd {
     Cut,
     /// 从系统剪贴板粘贴（替换当前选区/插在光标处）
     Paste,
+    /// BAR-252：投递三形（判卷先行——不经输入栏文本，直走路由判定 +
+    /// POST /api/deliver；结局落 DUMP_DIR/deliver-res）。text 可空
+    /// （interrupt 不带文本）
+    Deliver(crate::deliver::Action, String),
 }
 
 /// 解析一行(纯函数,钉死)。None = 空行/注释跳过;Some(Err) = 坏行
@@ -2448,6 +2462,19 @@ pub fn parse_bar_line(line: &str) -> Option<Result<BarCmd, String>> {
                     _ => bad(),
                 };
             }
+            // BAR-252 投递三形：deliver <send|interrupt|queue> [文本…]
+            // （文本含空格照收——splitn(2) 保原文）
+            if let Some(rest) = t.strip_prefix("deliver ") {
+                let mut parts = rest.splitn(2, ' ');
+                let action = parts.next().and_then(crate::deliver::Action::parse);
+                return match action {
+                    Some(a) => Some(Ok(BarCmd::Deliver(
+                        a,
+                        parts.next().unwrap_or_default().to_string(),
+                    ))),
+                    None => bad(),
+                };
+            }
             bad()
         }
     }
@@ -2485,6 +2512,9 @@ fn bar_check(dir: &str) {
         std::fs::write(&res, "error=input-bar 服务未登记\n").ok();
         return;
     };
+    // BAR-252：deliver 指令的路由决策账（逐条记，回执带出——判卷读
+    // 路由对不对不用猜日志）
+    let mut deliver_notes: Vec<String> = Vec::new();
     for cmd in &cmds {
         match cmd {
             BarCmd::Focus => bar.focus(),
@@ -2541,13 +2571,31 @@ fn bar_check(dir: &str) {
             BarCmd::Copy | BarCmd::Cut | BarCmd::Paste => {
                 // host 测试环境无系统剪贴板，指令 no-op（考题仍可用 select/select-all）
             }
+            BarCmd::Deliver(a, t) => {
+                // BAR-252 判卷先行：直走投递路由判定（与发送闭包同源）。
+                // 路由=AI 不真发 AI（注入通道不扰对话页），只记决策；
+                // 窗路投递结局异步落 DUMP_DIR/deliver-res
+                match crate::deliver::route_now() {
+                    crate::deliver::Route::Window(target) => {
+                        deliver_notes.push(format!("deliver {} → 窗路 {target}", a.as_str()));
+                        crate::deliver::deliver_spawn(target, *a, t.clone(), Some("deliver-res"));
+                    }
+                    crate::deliver::Route::Ai(hint) => {
+                        deliver_notes.push(format!(
+                            "deliver {} → AI 路（{}）",
+                            a.as_str(),
+                            hint.unwrap_or_default()
+                        ));
+                    }
+                }
+            }
         }
     }
     let s = bar.snap();
     std::fs::write(
         &res,
         format!(
-            "applied={} bad={}\nfocused={} text_len={} selecting={} sel={}..{} text={:?}\n",
+            "applied={} bad={}\nfocused={} text_len={} selecting={} sel={}..{} text={:?}\n{}",
             cmds.len(),
             errs.len(),
             s.focused,
@@ -2555,7 +2603,8 @@ fn bar_check(dir: &str) {
             s.selecting,
             s.selection_start,
             s.selection_end,
-            s.text
+            s.text,
+            deliver_notes.join("\n"),
         ),
     )
     .ok();

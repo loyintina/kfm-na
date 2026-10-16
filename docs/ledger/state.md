@@ -5,6 +5,33 @@
 > (速查表:症状 → 工具 → 字段 → 判卷)。本页只写「现在进行时」,
 > 历史功过在 bugs.md。
 
+## 当前位置（2026-10-17，BAR-252 输入栏投递进窗 客户端+服务端全落——白露授权提交，待判卷）
+
+> **BAR-252（输入栏投递目标改当前 tmux 窗，MAIN0168 用户拍板＋白露
+> 0181 楼2 四点全裁，追踪信 0181）**：输入栏发送不再恒归 AI 页——终页
+> 看窗时直投正在看的 tmux 窗（塞话同路子，本步只改路由不跳页）。
+> **服务端** `crates/na-server/src/deliver.rs`（新）：`POST /api/deliver`
+> 唯一核验口——目标在登记表（~/.kimi-session-map）→ 非 service 类 →
+> 窗内 harness 活着（kimi 认 comm，tianshu 认 node＋参数），拒投 detail
+> 带原因＋出路（文案单源在服务端）；queue 对 kimi 窗降级 send 且
+> `action_effective` 透出；send-keys 用 `-t =名` 精确匹配；journald 留痕
+> 四要素；gate_only 白名单在列。路由挂 httpd.rs/main.rs（>64KB 413）。
+> **客户端**：`src/deliver.rs`（新，decide 路由纯函数＋deliver_spawn 经
+> 共享腿 HTTP）＋ `src/input_bar.rs`（BarSnap 加 hint 字段，TTL 6s，
+> 编辑/发送即清）＋ `src/ui/prompt_bar.rs`（空栏 hint 臂，品牌青与占位
+> 灰分档）＋ `src/gate.rs`（bar-inject `deliver <action> [文本]` 三形，
+> deliver-res 落盘带决策行）＋ `src/gate_poller.rs`（http_roundtrip 同步
+> 外壳）＋ `src/android_app.rs`（发送闭包顶部分叉 route_now）。裸 shell
+> 归 AI 不静默（栏内小字解释分叉）；投成小字「→ 清和·发送」；拒投 =
+> 终端黄字横幅（原因＋出路）＋草稿回填。插队 UI 本期不做。
+> **钉**：服务端 crates/na-server/tests/deliver_spec.rs 10 枚＋客户端
+> tests/deliver_spec.rs 7 枚全绿；cargo test 全量 108 套件零红。
+> **判卷**：变异六咬全中、chain 13/13 全绿；提交授权＝白露 NA0181 楼4
+> （用户授予的主干授权权首行）。承影判卷口径：真机窗路/裸壳提示/
+> 拒投横幅回填/bar-inject 三形；服务端 journald 留痕。
+> 方向仓同步：ai-presence.md 发送路由节＋na-server.md 面清单（家仓
+> 已提交 52479f9）。
+
 ## 当前位置（2026-10-14 午，BAR-242 补字体落 master——翻案案收尾过半）
 
 > **BAR-242（带圈字母 ⓐⓑ 出方块，MAIN0136/追踪信 NA0171）**：降级映射版

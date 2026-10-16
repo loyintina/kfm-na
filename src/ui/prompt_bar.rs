@@ -233,19 +233,37 @@ impl crate::termview::TermView {
         let line_y = |k: usize| -> i32 { text_top + k as i32 * step as i32 };
         let text_cw = field_w - 40 - 12;
         if display.is_empty() {
-            // 占位符（BAR-197 格引擎左对齐）：起笔/纵向锚与正文行 0 同位
-            let (pitems, _) = self.measure_items_grid("输入消息…");
-            self.draw_grid_text_left(
-                &mut frame,
-                &pitems,
-                i64::from(text_cx + 18),
-                i64::from(line_y(0)),
-                cell_w,
-                text_cw,
-                t.placeholder,
-                i64::from(text_cx),
-                Some((field_y0, field_y1)),
-            );
+            if !snap.hint.is_empty() {
+                // BAR-252 瞬态小字（投递回执/分叉解释）：起笔/纵向锚与
+                // 占位符同位，品牌青与占位灰分档（回执要能被看见——白露
+                // 楼2④「归 AI 不许静默」的落点）
+                let (hitems, _) = self.measure_items_grid(&snap.hint);
+                self.draw_grid_text_left(
+                    &mut frame,
+                    &hitems,
+                    i64::from(text_cx + 18),
+                    i64::from(line_y(0)),
+                    cell_w,
+                    text_cw,
+                    t.accent,
+                    i64::from(text_cx),
+                    Some((field_y0, field_y1)),
+                );
+            } else {
+                // 占位符（BAR-197 格引擎左对齐）：起笔/纵向锚与正文行 0 同位
+                let (pitems, _) = self.measure_items_grid("输入消息…");
+                self.draw_grid_text_left(
+                    &mut frame,
+                    &pitems,
+                    i64::from(text_cx + 18),
+                    i64::from(line_y(0)),
+                    cell_w,
+                    text_cw,
+                    t.placeholder,
+                    i64::from(text_cx),
+                    Some((field_y0, field_y1)),
+                );
+            }
         } else {
             // textarea 折行：只画与 field 有交集的行，行内逐像素垂直裁剪
             let first = ((field_y0 - text_top).max(0) / step as i32) as usize;

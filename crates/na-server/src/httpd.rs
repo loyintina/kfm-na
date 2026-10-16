@@ -3,6 +3,7 @@
 //! 就这些面：POST /api/na-report（含 /kfmv4 前缀别名）、GET /api/na/health、
 //! GET /api/na/sys（环境体征，na-sys 采集）、GET /api/fs/list、
 //! GET /api/fs/read（文件树数据面，逻辑在 na-protocol::fsapi）、
+//! POST /api/deliver（输入栏投递进服务器 tmux 窗，BAR-252，逻辑在 deliver）、
 //! /api/gate/*（闸门队列，BAR-233）、两条前缀反代 /agent（na-agentd，
 //! BAR-163）与 /ui（私有静态站，BAR-234）、其余 404。
 //! 响应构造是纯函数（A 档），IO 只是它的搬运工（fs 面的 IO 在 main.rs
@@ -126,6 +127,10 @@ pub enum Route {
     GateResultGet {
         name: String,
     },
+    /// POST /api/deliver（BAR-252：输入栏投递进服务器 tmux 窗——核验与
+    /// 投递一处成案，逻辑在 deliver.rs；闸门腿同样放行，见 main.rs
+    /// gate_only 白名单）
+    Deliver,
     NotFound,
 }
 
@@ -247,6 +252,9 @@ pub fn route(method: &str, path: &str) -> Route {
             },
             None => Route::NotFound,
         },
+        // BAR-252：输入栏投递面（/api/deliver 与 /api/gate 前缀互不遮蔽，
+        // 臂序无关）
+        ("POST", "/api/deliver") => Route::Deliver,
         _ => Route::NotFound,
     }
 }
