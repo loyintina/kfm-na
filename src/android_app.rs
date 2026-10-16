@@ -3622,7 +3622,7 @@ impl App {
                                     let title = crate::sess_pool::content_title(&rk, &e.name);
                                     // 跳框颜色继承本三级卡（BAR-214 用户拍板）：
                                     // 发信人稳定双色随查看器快照同行
-                                    let sender = crate::ui::mail_page::strip_dept(&e.from);
+                                    let sender = crate::mail_feed::sender_display(e);
                                     let page_acc = self
                                         .last_ai_snap
                                         .map(|s| s.accent_mail)

@@ -86,8 +86,22 @@ impl MailFloor {
     }
 }
 
+/// 预切项（BAR-254 服务端 from_parts/to_parts 的客户端镜像——名册绝不
+/// 下推手机，客户端只消费形状不自切：person 取 name、broadcast/unknown
+/// 取 raw，与服务端 render_display 同尺）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NamePart {
+    /// "person" / "broadcast" / "unknown"（服务端 DispKind 的小写串）
+    pub kind: String,
+    pub func: Option<String>,
+    /// person＝二字名；broadcast/unknown＝原样整项
+    pub name: String,
+    pub inherited: bool,
+}
+
 /// 信件条目（列表页一行的全部素材）：列表端点给 name/bytes/mtime +
-/// 字头四件 + 楼层表；summary = 懒加载件（None = 未取到/未取，涂装层显占位）
+/// 字头四件 + 楼层表；summary = 懒加载件（None = 未取到/未取，涂装层显占位）；
+/// BAR-254 预切四件 = 服务端增量键（None = 旧服务端/旧缓存 → 回落原文）
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MailEntry {
     pub name: String,
@@ -100,6 +114,10 @@ pub struct MailEntry {
     pub summary: Option<String>,
     /// 楼层（缺 floors 字段容错空表——旧缓存/旧服务端不断）
     pub floors: Vec<MailFloor>,
+    pub from_parts: Option<Vec<NamePart>>,
+    pub to_parts: Option<Vec<NamePart>>,
+    pub from_disp: Option<String>,
+    pub to_disp: Option<String>,
 }
 
 /// 列表响应 → 条目表（无 summary——懒加载件不在这条面；旧响应缺
@@ -116,6 +134,10 @@ pub fn parse_mail_list(body: &str) -> Result<Vec<MailEntry>, String> {
         .filter_map(|x| {
             let name = x.get("name").and_then(Value::as_str)?.to_string();
             let s = |k: &str| x.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+            let so = |k: &str| {
+                let v = s(k);
+                if v.is_empty() { None } else { Some(v) }
+            };
             let floors = x
                 .get("floors")
                 .and_then(Value::as_array)
@@ -154,6 +176,27 @@ pub fn parse_mail_list(body: &str) -> Result<Vec<MailEntry>, String> {
                         .collect()
                 })
                 .unwrap_or_default();
+            let parts = |k: &str| {
+                x.get(k).and_then(Value::as_array).map(|ps| {
+                    ps.iter()
+                        .filter_map(|p| {
+                            let kind = p.get("kind").and_then(Value::as_str)?.to_string();
+                            let name = if kind == "person" {
+                                p.get("name").and_then(Value::as_str)?.to_string()
+                            } else {
+                                p.get("raw").and_then(Value::as_str)?.to_string()
+                            };
+                            Some(NamePart {
+                                kind,
+                                func: p.get("func").and_then(Value::as_str).map(str::to_string),
+                                name,
+                                inherited: p.get("inherited").and_then(Value::as_bool)
+                                    == Some(true),
+                            })
+                        })
+                        .collect()
+                })
+            };
             Some(MailEntry {
                 name,
                 bytes: x.get("bytes").and_then(Value::as_u64).unwrap_or(0),
@@ -164,6 +207,10 @@ pub fn parse_mail_list(body: &str) -> Result<Vec<MailEntry>, String> {
                 title: s("title"),
                 summary: None,
                 floors,
+                from_parts: parts("from_parts"),
+                to_parts: parts("to_parts"),
+                from_disp: so("from_disp"),
+                to_disp: so("to_disp"),
             })
         })
         .collect())
@@ -215,22 +262,96 @@ pub fn summaries_wanted(entries: &[MailEntry], window: std::ops::Range<usize>) -
         .collect()
 }
 
-/// manifest 落盘串（与列表端点同形 + 字头四件 + 楼层表——parse_mail_list
-/// 一口径读回；ok:true 防「ok:false 不许吞表」闸咬自家缓存）
+/// manifest 落盘串（与列表端点同形 + 字头四件 + 楼层表 + BAR-254 预切
+/// 四件——parse_mail_list 一口径读回；ok:true 防「ok:false 不许吞表」闸
+/// 咬自家缓存；预切键 None = 旧服务端语义，不落键）
 pub fn manifest_json(list: &[MailEntry]) -> String {
+    let parts_json = |ps: &Option<Vec<NamePart>>| {
+        ps.as_ref().map(|ps| {
+            ps.iter()
+                .map(|p| {
+                    if p.kind == "person" {
+                        let mut o = serde_json::json!({
+                            "kind": "person",
+                            "func": p.func,
+                            "name": p.name,
+                        });
+                        if p.inherited {
+                            o["inherited"] = serde_json::json!(true);
+                        }
+                        o
+                    } else {
+                        serde_json::json!({"kind": p.kind, "raw": p.name})
+                    }
+                })
+                .collect::<Vec<_>>()
+        })
+    };
     serde_json::json!({
         "ok": true,
-        "letters": list.iter().map(|l| serde_json::json!({
-            "name": l.name, "bytes": l.bytes, "mtime": l.mtime,
-            "time": l.time, "from": l.from, "to": l.to, "title": l.title,
-            "floors": l.floors.iter().map(|f| serde_json::json!({
-                "n": f.n, "author": f.author, "to": f.to,
-                "time": f.time, "summary": f.summary, "detail": f.detail,
-                "body": f.body,
-            })).collect::<Vec<_>>(),
-        })).collect::<Vec<_>>(),
+        "letters": list.iter().map(|l| {
+            let mut o = serde_json::json!({
+                "name": l.name, "bytes": l.bytes, "mtime": l.mtime,
+                "time": l.time, "from": l.from, "to": l.to, "title": l.title,
+                "floors": l.floors.iter().map(|f| serde_json::json!({
+                    "n": f.n, "author": f.author, "to": f.to,
+                    "time": f.time, "summary": f.summary, "detail": f.detail,
+                    "body": f.body,
+                })).collect::<Vec<_>>(),
+            });
+            if let Some(p) = parts_json(&l.from_parts) { o["from_parts"] = p.into(); }
+            if let Some(p) = parts_json(&l.to_parts) { o["to_parts"] = p.into(); }
+            if let Some(d) = &l.from_disp { o["from_disp"] = d.clone().into(); }
+            if let Some(d) = &l.to_disp { o["to_disp"] = d.clone().into(); }
+            o
+        }).collect::<Vec<_>>(),
     })
     .to_string()
+}
+
+// ---- BAR-254 显示三档回落链（结构化 → 显示串 → 原文）----
+// 名册绝不下推手机（白露楼6 加固3）：客户端只显示、不自切——
+// 旧 strip_dept/split_recipients 双源切分整族退役。
+
+/// 预切项 → 显示串（与服务端 render_display 同尺：person 取名、
+/// broadcast/unknown 取原样整项）
+fn parts_names(parts: &[NamePart]) -> Vec<String> {
+    parts.iter().map(|p| p.name.clone()).collect()
+}
+
+/// 原文逐项拆（回落第三档：只按分隔符分项、逐项原样，不做任何职能猜切）
+fn split_raw_segments(field: &str) -> Vec<String> {
+    field
+        .split(['、', '，', ',', '；', ';', '及', '等'])
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// 发信人显示名：parts → disp → 原文
+pub fn sender_display(e: &MailEntry) -> String {
+    if let Some(parts) = &e.from_parts
+        && let Some(first) = parts.first()
+    {
+        return first.name.clone();
+    }
+    if let Some(d) = &e.from_disp {
+        return d.clone();
+    }
+    e.from.clone()
+}
+
+/// 收件人显示名表（两人上下并置的素材）：parts → disp（按 、 再拆）→
+/// 原文逐项原样
+pub fn recipient_displays(e: &MailEntry) -> Vec<String> {
+    if let Some(parts) = &e.to_parts {
+        return parts_names(parts);
+    }
+    if let Some(d) = &e.to_disp {
+        return split_raw_segments(d);
+    }
+    split_raw_segments(&e.to)
 }
 
 /// summaries.json 落盘串（与摘要端点同形——parse_summaries 一口径读回）

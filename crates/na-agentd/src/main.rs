@@ -127,18 +127,12 @@ fn handle(mut stream: TcpStream, svc: &AgentService) -> Result<(), String> {
     Ok(())
 }
 
-/// 信件列表条目的 JSON 形状（BAR-212：name/bytes/mtime 之外增 time/from/to/title
-/// 信头四字段——增量字段，旧客户端只读老三样不断；
-/// BAR-222 增 floors 楼层表——同为增量字段，旧客户端不读不断）
-fn letter_json(l: &na_agentd::service::LetterMeta) -> serde_json::Value {
+/// 带名册的列表响应（roster 读不到 = None = 空池原样照抄，见 service.rs）
+fn letters_json(ls: &[na_agentd::service::LetterMeta], mail_root: &str) -> serde_json::Value {
+    let roster = na_agentd::service::load_roster(mail_root);
     serde_json::json!({
-        "name": l.name, "bytes": l.bytes, "mtime": l.mtime,
-        "time": l.time, "from": l.from, "to": l.to, "title": l.title,
-        "floors": l.floors.iter().map(|f| serde_json::json!({
-            "n": f.n, "author": f.author, "to": f.to,
-            "time": f.time, "summary": f.summary, "detail": f.detail,
-            "body": f.body,
-        })).collect::<Vec<_>>(),
+        "ok": true,
+        "letters": ls.iter().map(|l| na_agentd::service::letter_json(l, roster.as_ref())).collect::<Vec<_>>(),
     })
 }
 
@@ -201,10 +195,7 @@ fn route_exec(method: &str, path: &str, body: &str, svc: &AgentService) -> Vec<u
             Err(e) => err(404, "Not Found", &e),
         },
         httpd::Route::Letters => match svc.list_letters() {
-            Ok(ls) => ok(serde_json::json!({
-                "ok": true,
-                "letters": ls.iter().map(letter_json).collect::<Vec<_>>(),
-            })),
+            Ok(ls) => ok(letters_json(&ls, &svc.mail_root)),
             Err(e) => err(500, "Internal Server Error", &e),
         },
         httpd::Route::Letter { name } => match svc.letter(&name) {
@@ -213,10 +204,7 @@ fn route_exec(method: &str, path: &str, body: &str, svc: &AgentService) -> Vec<u
             Err(e) => err(404, "Not Found", &e),
         },
         httpd::Route::InboxLetters { key } => match svc.list_inbox_letters(&key) {
-            Ok(ls) => ok(serde_json::json!({
-                "ok": true,
-                "letters": ls.iter().map(letter_json).collect::<Vec<_>>(),
-            })),
+            Ok(ls) => ok(letters_json(&ls, &svc.mail_root)),
             Err(e) if e.contains("非法") => err(400, "Bad Request", &e),
             Err(e) => err(404, "Not Found", &e),
         },

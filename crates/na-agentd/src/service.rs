@@ -53,6 +53,64 @@ pub struct LetterMeta {
     pub floors: Vec<FloorMeta>,
 }
 
+/// BAR-254 名册加载（{mail_root}/00-主册/roster.json）——读不到/解析不出
+/// = None = 空池：letter_json 的预切键逐项原样照抄（白露楼6 加固1：
+/// 新旧不匹配不许显示空白；列表面不连坐）
+pub fn load_roster(mail_root: &str) -> Option<mailbox_core::roster::Roster> {
+    let path = format!("{mail_root}/00-主册/roster.json");
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| mailbox_core::roster::Roster::from_json_str(&s))
+}
+
+/// 信件列表条目的 JSON 形状（BAR-212：name/bytes/mtime 之外增 time/from/to/title
+/// 信头四字段——增量字段，旧客户端只读老三样不断；
+/// BAR-222 增 floors 楼层表——同为增量字段，旧客户端不读不断；
+/// BAR-254 增预切四键——from_parts/to_parts 结构化 + from_disp/to_disp
+/// 显示串，原文 from/to 不动；名册绝不下推手机，切分唯一出处 =
+/// mailbox-core split_display_items × roster.json）
+pub fn letter_json(
+    l: &LetterMeta,
+    roster: Option<&mailbox_core::roster::Roster>,
+) -> serde_json::Value {
+    use mailbox_core::roster::{DispItem, DispKind, render_display, split_display_items};
+    let parts_json = |items: &[DispItem]| {
+        items
+            .iter()
+            .map(|i| match i.kind {
+                DispKind::Person => {
+                    let mut o = serde_json::json!({
+                        "kind": "person",
+                        "func": i.func,
+                        "name": i.name,
+                    });
+                    if i.inherited {
+                        o["inherited"] = serde_json::json!(true);
+                    }
+                    o
+                }
+                DispKind::Broadcast => serde_json::json!({"kind": "broadcast", "raw": i.name}),
+                DispKind::Unknown => serde_json::json!({"kind": "unknown", "raw": i.name}),
+            })
+            .collect::<Vec<_>>()
+    };
+    let from_items = split_display_items(roster, &l.from);
+    let to_items = split_display_items(roster, &l.to);
+    serde_json::json!({
+        "name": l.name, "bytes": l.bytes, "mtime": l.mtime,
+        "time": l.time, "from": l.from, "to": l.to, "title": l.title,
+        "from_parts": parts_json(&from_items),
+        "from_disp": render_display(&from_items),
+        "to_parts": parts_json(&to_items),
+        "to_disp": render_display(&to_items),
+        "floors": l.floors.iter().map(|f| serde_json::json!({
+            "n": f.n, "author": f.author, "to": f.to,
+            "time": f.time, "summary": f.summary, "detail": f.detail,
+            "body": f.body,
+        })).collect::<Vec<_>>(),
+    })
+}
+
 /// 楼层条目（BAR-222；0153 楼1 白露机读面口径：数据唯一源 =
 /// `letters floor --list` 的一行 JSON——本结构即该 JSON 的逐键镜像，
 /// 不自建文本解析第二真源。summary/detail 新形两段制（2026-10-03

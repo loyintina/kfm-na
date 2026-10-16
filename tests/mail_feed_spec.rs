@@ -26,6 +26,10 @@ fn entry(name: &str, mtime: u64) -> MailEntry {
         title: String::new(),
         summary: None,
         floors: Vec::new(),
+        from_parts: None,
+        to_parts: None,
+        from_disp: None,
+        to_disp: None,
     }
 }
 
@@ -225,5 +229,122 @@ fn spec_bar243_信箱列表大帽档() {
     assert!(
         pool.contains("pub(crate) fn http_get_cap(port: u16, path: &str, cap: usize)"),
         "http_get_cap 带帽版必须在位（调用方按面给帽）"
+    );
+}
+
+// ---------------------------------------------------------------
+// BAR-254 预切四件：解析容错 / manifest 往返 / 三档回落链
+// （名册绝不下推手机——客户端只显示不自切，旧 strip_dept 族退役）
+// ---------------------------------------------------------------
+
+fn part(kind: &str, func: Option<&str>, name: &str, inherited: bool) -> NamePart {
+    NamePart {
+        kind: kind.to_string(),
+        func: func.map(str::to_string),
+        name: name.to_string(),
+        inherited,
+    }
+}
+
+#[test]
+fn spec_bar254_预切键解析与容错() {
+    let body = r#"{"ok":true,"letters":[{
+        "name":"0001.md","bytes":1,"mtime":2,
+        "time":"t","from":"坤部一组清和","to":"开发部闻灯及观澜、研究部全体","title":"题",
+        "from_parts":[{"kind":"person","func":"坤部一组","name":"清和"}],
+        "from_disp":"清和",
+        "to_parts":[
+            {"kind":"person","func":"开发部","name":"闻灯"},
+            {"kind":"person","func":"开发部","name":"观澜","inherited":true},
+            {"kind":"broadcast","raw":"研究部全体"}
+        ],
+        "to_disp":"闻灯、观澜、研究部全体"
+    }]}"#;
+    let es = parse_mail_list(body).unwrap();
+    let e = &es[0];
+    assert_eq!(
+        e.from_parts,
+        Some(vec![part("person", Some("坤部一组"), "清和", false)])
+    );
+    assert_eq!(e.from_disp.as_deref(), Some("清和"));
+    assert_eq!(
+        e.to_parts,
+        Some(vec![
+            part("person", Some("开发部"), "闻灯", false),
+            part("person", Some("开发部"), "观澜", true),
+            part("broadcast", None, "研究部全体", false),
+        ])
+    );
+    assert_eq!(e.to_disp.as_deref(), Some("闻灯、观澜、研究部全体"));
+    // 旧服务端缺键 = None 容错（回落链第三档的入口）
+    let old = r#"{"ok":true,"letters":[{"name":"0002.md","from":"开发部观澜","to":"全体"}]}"#;
+    let es = parse_mail_list(old).unwrap();
+    assert_eq!(es[0].from_parts, None);
+    assert_eq!(es[0].from_disp, None);
+}
+
+#[test]
+fn spec_bar254_manifest往返() {
+    let mut e = entry("0001号甲致乙.md", 42);
+    e.from = "坤部一组清和".into();
+    e.from_parts = Some(vec![part("person", Some("坤部一组"), "清和", false)]);
+    e.from_disp = Some("清和".into());
+    e.to_parts = Some(vec![
+        part("person", Some("开发部"), "闻灯", false),
+        part("broadcast", None, "研究部全体", false),
+    ]);
+    e.to_disp = Some("闻灯、研究部全体".into());
+    let back = parse_mail_list(&manifest_json(&[e.clone()])).unwrap();
+    assert_eq!(back[0], e, "预切四件 manifest 往返必须逐值同");
+    // None 档不落键、读回仍 None
+    let bare = entry("0002.md", 1);
+    let back = parse_mail_list(&manifest_json(&[bare])).unwrap();
+    assert_eq!(back[0].from_parts, None);
+    assert!(!manifest_json(&[entry("0002.md", 1)]).contains("from_parts"));
+}
+
+#[test]
+fn spec_bar254_三档回落链() {
+    // 档一：parts 在 → 用 parts（person 取名、broadcast 取原样）
+    let mut e = entry("a.md", 1);
+    e.from = "坤部一组清和".into();
+    e.to = "开发部闻灯及观澜、研究部全体".into();
+    e.from_parts = Some(vec![part("person", Some("坤部一组"), "清和", false)]);
+    e.to_parts = Some(vec![
+        part("person", Some("开发部"), "闻灯", false),
+        part("person", Some("开发部"), "观澜", true),
+        part("broadcast", None, "研究部全体", false),
+    ]);
+    e.from_disp = Some("错档".into());
+    assert_eq!(sender_display(&e), "清和", "parts 优先于 disp");
+    assert_eq!(
+        recipient_displays(&e),
+        vec![
+            "闻灯".to_string(),
+            "观澜".to_string(),
+            "研究部全体".to_string()
+        ]
+    );
+    // 档二：parts 缺、disp 在 → 用 disp
+    e.from_parts = None;
+    e.to_parts = None;
+    e.from_disp = Some("清和".into());
+    e.to_disp = Some("闻灯、观澜".into());
+    assert_eq!(sender_display(&e), "清和");
+    assert_eq!(
+        recipient_displays(&e),
+        vec!["闻灯".to_string(), "观澜".to_string()]
+    );
+    // 档三：全缺 → 原文逐项原样（不许客户端再剥部门——双源禁令）
+    e.from_disp = None;
+    e.to_disp = None;
+    assert_eq!(sender_display(&e), "坤部一组清和");
+    assert_eq!(
+        recipient_displays(&e),
+        vec![
+            "开发部闻灯".to_string(),
+            "观澜".to_string(),
+            "研究部全体".to_string()
+        ]
     );
 }
