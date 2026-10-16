@@ -100,6 +100,16 @@ EMOJI_DONOR = os.path.expanduser("~/40-资产/kfm-na-toolchain/fonts/NotoEmoji-R
 # 带圈族捐体（BAR-242）：Noto Sans Symbols，SIL OFL（与 Noto CJK 同族许可）
 NSS_DONOR = os.path.expanduser("~/40-资产/kfm-na-toolchain/fonts/NotoSansSymbols-Regular.ttf")
 
+# ---- 戊（BAR-242 重开，2026-10-16 NA0171 楼26 判做）：带圈族窄版孪生 ----
+# 终端格宽由 tmux/unicode-width 判 1 格，全角 ⓐ 放不进——degrade_cell
+# 条件②原降级单字母（用户翻案「要真带圈」）。戊＝同尺寸重试：PUA 窄版
+# 孪生（U+E000 起 62 连位，与 ENCLOSED_CPS 同序一一映射），**重绘非缩绘**
+# ——环粗 60 墨盒＋圈内字母墨高 ≈55% 圆径（NSS 缩绘版字母仅 ~40%，一修
+# 「太小」真因）。主码位全角字形不动（UI 面二修口径不破）；孪生只被
+# termview 条件②改道消费。字母捐体 DejaVuSans-Bold（SIL 自由许可族）。
+TWIN_BASE = 0xE000
+TWIN_LETTER_DONOR = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+
 
 def keep_unicodes():
     cps = set(range(0x20, 0x7F))
@@ -249,6 +259,96 @@ def register_cmap(font, cp, gname):
         ensure_cmap12(font).cmap[cp] = gname
 
 
+def twin_cp(cp):
+    """带圈族主码位 → PUA 窄版孪生码位（与 ENCLOSED_CPS 同序；族外 None）"""
+    if 0x24B6 <= cp <= 0x24E9:
+        return TWIN_BASE + (cp - 0x24B6)
+    if 0x246A <= cp <= 0x2473:
+        return TWIN_BASE + 52 + (cp - 0x246A)
+    return None
+
+
+def _ring(pen, cx, cy, r_out, r_in):
+    """圆环两轮廓（外 CCW 内 CW，TrueType 非零环绕得环）。三次贝塞尔
+    四段近似圆：控制点沿端点切向伸出 kappa*r，kappa=0.5522847498。"""
+    k = 0.5522847498307936
+    # 东/北/西/南四点，CCW 序；各点行进切向
+    for r, ccw in ((r_out, True), (r_in, False)):
+        pts = [(cx + r, cy), (cx, cy + r), (cx - r, cy), (cx, cy - r)]
+        tang = [(0, 1), (-1, 0), (0, -1), (1, 0)]
+        if not ccw:
+            pts = [pts[0]] + pts[1:][::-1]
+            tang = [tang[0]] + tang[1:][::-1]
+            tang = [(-tx, -ty) for tx, ty in tang]
+        pen.moveTo(pts[0])
+        for i in range(4):
+            p0, p1 = pts[i], pts[(i + 1) % 4]
+            t0, t1 = tang[i], tang[(i + 1) % 4]
+            c1 = (p0[0] + k * r * t0[0], p0[1] + k * r * t0[1])
+            c2 = (p1[0] - k * r * t1[0], p1[1] - k * r * t1[1])
+            pen.curveTo(c1, c2, p1)
+        pen.closePath()
+
+
+def redraw_enclosed_twins(font):
+    """戊：重绘 62 枚窄版孪生进 PUA（幂等覆盖，供设计迭代）。
+    画布 500（半格）：圆心 (250,357)（纵对齐在产全角 ⓐ 圆心）、圆径 480、
+    环粗 60；字母墨高：小写按 x 高 264、大写按 cap 高 290、数字 240，
+    双数字另限总宽 ≤330。"""
+    donor = TTFont(TWIN_LETTER_DONOR)
+    d_cmap, d_gs = donor.getBestCmap(), donor.getGlyphSet()
+    glyf, hmtx = font["glyf"], font["hmtx"]
+    vmtx = font["vmtx"] if "vmtx" in font else None
+    CX, CY, R_OUT, R_IN = HALF // 2, 357, 240, 180
+
+    def donor_bounds(gname):
+        pen = BoundsPen(d_gs)
+        d_gs[gname].draw(pen)
+        return pen.bounds
+
+    x_h = donor_bounds(d_cmap[ord("x")])[3] - donor_bounds(d_cmap[ord("x")])[1]
+    cap_h = donor_bounds(d_cmap[ord("H")])[3] - donor_bounds(d_cmap[ord("H")])[1]
+    dig_h = donor_bounds(d_cmap[ord("8")])[3] - donor_bounds(d_cmap[ord("8")])[1]
+
+    made = 0
+    for i, cp in enumerate(ENCLOSED_CPS):
+        if 0x24B6 <= cp <= 0x24CF:
+            payload, base_h, target = chr(ord("A") + cp - 0x24B6), cap_h, 290
+        elif 0x24D0 <= cp <= 0x24E9:
+            payload, base_h, target = chr(ord("a") + cp - 0x24D0), x_h, 264
+        else:
+            payload, base_h, target = str(11 + cp - 0x246A), dig_h, 240
+        pen = TTGlyphPen(glyf)
+        _ring(pen, CX, CY, R_OUT, R_IN)
+        # 载荷墨盒（donor 空间，逐字排）
+        cursor = 0.0
+        pieces = []
+        for ch in payload:
+            dg = d_cmap[ord(ch)]
+            b = donor_bounds(dg)
+            adv = donor["hmtx"][dg][0]
+            pieces.append((dg, cursor, b))
+            cursor += adv * 0.88  # 双数字收紧字距
+        x0 = min(b[0] + off for _, off, b in pieces)
+        x1 = max(b[2] + off for _, off, b in pieces)
+        s = min(target / base_h, 330 / (x1 - x0))
+        cx_d, cy_d = (x0 + x1) / 2, (min(b[1] for _, _, b in pieces) + max(b[3] for _, _, b in pieces)) / 2
+        for dg, off, _ in pieces:
+            rec = DecomposingRecordingPen(d_gs)
+            d_gs[dg].draw(rec)
+            t = Transform(s, 0, 0, s, CX - s * (cx_d - off), CY - s * cy_d)
+            rec.replay(TransformPen(pen, t))
+        gname = f"pua{TWIN_BASE + i:04X}"
+        glyf[gname] = pen.glyph()
+        b = ink_bounds(glyf, gname)
+        hmtx[gname] = (HALF, b[0] if b else 0)
+        if vmtx is not None:
+            vmtx[gname] = (font["head"].unitsPerEm, 0)
+        register_cmap(font, TWIN_BASE + i, gname)
+        made += 1
+    return made
+
+
 def borrow(font, donor_path, cps, cells="auto", powerline=False):
     """借形补缺（font-bake.py borrow 同律 + powerline 专用律）。
     源字体已有码点跳过（黑体气质优先）；powerline 墨迹 X 向钉满半格
@@ -340,6 +440,9 @@ def main():
     got, miss = borrow(font, NSS_DONOR, ENCLOSED_CPS, cells=2)
     print(f"4.borrow(NSS): 带圈族借入 {len(got)} 个（全角，824 墨盒零缩放）"
           + (f"，捐体缺 {[hex(c) for c in miss]}" if miss else ""))
+    n_twin = redraw_enclosed_twins(font)
+    print(f"4b.redraw(戊): 带圈族窄版孪生 {n_twin} 枚进 PUA U+{TWIN_BASE:04X} 起"
+          "（重绘非缩绘：环粗 60＋字母 ≈55% 圆径；终端 1 格面专用）")
 
     font.save(dst)
 
@@ -369,6 +472,14 @@ def main():
         gn = cmap.get(cp)
         assert gn, f"U+{cp:04X} 带圈族 cmap 未命中"
         assert chmtx[gn][0] == UPM, f"U+{cp:04X} 带圈族步进非全角（用户判半格太小）"
+    for cp in ENCLOSED_CPS:
+        t = twin_cp(cp)
+        gn = cmap.get(t)
+        assert gn, f"U+{t:04X} 窄版孪生 cmap 未命中（戊，主码位 U+{cp:04X}）"
+        assert chmtx[gn][0] == HALF, f"U+{t:04X} 孪生步进必须半格（终端 1 格面）"
+        b = ink_bounds(cglyf, gn)
+        assert b and 400 <= b[2] - b[0] <= HALF, \
+            f"U+{t:04X} 孪生墨宽须 ∈[400,500]（粗满但不溢格），实得 {b}"
     for cp in MOON_CPS:
         assert chmtx[cmap[cp]][0] == UPM, f"U+{cp:04X} 月亮非全角位"
     for cp in (0xE0B0, 0xE0B2):

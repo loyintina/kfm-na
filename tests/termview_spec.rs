@@ -851,11 +851,12 @@ fn spec_bar242_降级_量宽同尺且不目击() {
     assert_eq!(tv.text_width("ⓐ", 16.0), tv.text_width("(a)", 16.0));
     assert!(tv.text_width("ⓐ", 16.0) > tv.text_width("a", 16.0));
     // 降级字不进 tofu 目击名单（判据②：从名单消失的机制保证）；
-    // 无降级形态的双缺字照旧进名单（不静默吞——PUA 私用区探针）
+    // 无降级形态的双缺字照旧进名单（不静默吞——PUA 私用区探针，
+    // 取 U+E040：戊孪生只占 U+E000-E03D，E040 恒无字形）
     assert!(!tv.take_tofu_chars().contains(&'ⓐ'), "降级字不许进目击名单");
-    tv.text_width("\u{E000}", 16.0);
+    tv.text_width("\u{E040}", 16.0);
     assert!(
-        tv.take_tofu_chars().contains(&'\u{E000}'),
+        tv.take_tofu_chars().contains(&'\u{E040}'),
         "无降级形态的双缺字必须照旧目击"
     );
 }
@@ -945,11 +946,12 @@ fn spec_bar242_烘焙字体_带圈族真字形覆盖() {
 
 #[test]
 fn spec_bar242_终端格_全角放不进降级单字母() {
-    // 二修新增判据：烘焙字体补形后 ⓐ 是全角字形，但终端格由 alacritty
-    // 宽度表判 1 格——放进来会被格跨钳成半圆（比降级更糟），degrade_cell
-    // 条件②「有字形但全角」必须把它降成单个 ASCII 字母。夹具：主字体
-    // host DejaVu（无 ⓐ）+ 生产烘焙 CJK（全角 ⓐ）。
-    // 变异抽检：摘掉条件②（adv 判断）本钉必红（ⓐ 原样通过 = 上屏半圆）。
+    // 二修判据＋戊改道（2026-10-16，NA0171 楼26 判做）：烘焙字体补形后
+    // ⓐ 是全角字形，但终端格由 alacritty 宽度表判 1 格——放进来会被格跨
+    // 钳成半圆；degrade_cell 条件②触发时**孪生在场换窄版、缺席才降级
+    // 单字母**（降级路不退役）。夹具：主字体 host DejaVu（无 ⓐ）+ 生产
+    // 烘焙 CJK（全角 ⓐ＋戊孪生）。
+    // 变异抽检：摘掉条件②（adv 判断）或摘掉孪生臂，本钉必红。
     let cjk_bytes = std::fs::read(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/assets/fonts/NotoSansCJKsc-kfm.ttf"
@@ -961,21 +963,86 @@ fn spec_bar242_终端格_全角放不进降级单字母() {
     let tv = TermView::new(host_font(), Some(cjk), 8, 2, CELL_W, CELL_H);
     assert_eq!(
         tv.spec_degrade_cell('ⓐ'),
-        'a',
-        "全角 ⓐ 放不进终端 1 格，必须降级为 a"
+        '\u{E01A}',
+        "全角 ⓐ 放不进终端 1 格＋孪生在场，必须换 PUA 窄版孪生（戊）"
     );
     assert_eq!(
         tv.spec_degrade_cell('Ⓐ'),
-        'A',
-        "全角 Ⓐ 放不进终端 1 格，必须降级为 A"
+        '\u{E000}',
+        "全角 Ⓐ 放不进终端 1 格＋孪生在场，必须换 PUA 窄版孪生（戊）"
     );
     // 负例：无降级映射的全角字原样通过（中），主字体自带的原样（a），
     // 半格假设下的有映射字（host 夹具无 ① 映射——① enclosed_ascii=None）不动
     assert_eq!(tv.spec_degrade_cell('中'), '中');
     assert_eq!(tv.spec_degrade_cell('a'), 'a');
-    // 双缺照旧降级（host 双 DejaVu 无 ⓐ 的老路径不破）
+    // 双缺照旧降级（host 双 DejaVu 无 ⓐ 亦无孪生的老路径不破——降级路
+    // 不退役：楼26/28 边界）
     let tv2 = TermView::new(host_font(), Some(host_font()), 8, 2, CELL_W, CELL_H);
     assert_eq!(tv2.spec_degrade_cell('ⓐ'), 'a', "双缺照旧降级");
+}
+
+#[test]
+fn spec_bar242_戊_孪生映射_闭式形状() {
+    // 戊孪生映射表（与 font-bake-cjk.py twin_cp 双端手工对齐）：Ⓐ-ⓩ
+    // U+24B6-24E9（52 枚）→ U+E000 起同序，⑪-⑳ U+246A-2473（10 枚）顺接；
+    // 族外 None（① CJK 自带不进族、中/ASCII 不动）。
+    // 变异抽检：基底改数/两段边界错位/摘⑪段，本钉必红。
+    assert_eq!(termview::enclosed_twin('Ⓐ'), Some('\u{E000}'));
+    assert_eq!(termview::enclosed_twin('Ⓩ'), Some('\u{E019}'));
+    assert_eq!(termview::enclosed_twin('ⓐ'), Some('\u{E01A}'));
+    assert_eq!(termview::enclosed_twin('ⓩ'), Some('\u{E033}'));
+    assert_eq!(termview::enclosed_twin('⑪'), Some('\u{E034}'));
+    assert_eq!(termview::enclosed_twin('⑳'), Some('\u{E03D}'));
+    assert_eq!(termview::enclosed_twin('①'), None);
+    assert_eq!(termview::enclosed_twin('中'), None);
+    assert_eq!(termview::enclosed_twin('a'), None);
+}
+
+#[test]
+fn spec_bar242_戊_烘焙字体_窄版孪生覆盖() {
+    // 戊的另一半承诺：烘焙产物必须真带 62 枚 PUA 窄版孪生——半格步进
+    // （终端 1 格塞得下）、有墨、墨宽 ∈[400,500]（粗满但不溢格）、
+    // 中央有墨（字母在——防「环在字丢」残次）。
+    // 变异抽检：孪生缺枚/步进改全角/字母不绘，本钉必红。
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/assets/fonts/NotoSansCJKsc-kfm.ttf"
+    );
+    let bytes = std::fs::read(path).expect("烘焙 CJK 字体缺失");
+    let font = fontdue::Font::from_bytes(bytes, fontdue::FontSettings::default())
+        .expect("fontdue 不认烘焙字体");
+    let px = CELL_H as f32;
+    let half_adv = font.metrics('a', px).advance_width; // 主字体半步进参照
+    for u in 0xE000u32..=0xE03D {
+        let c = char::from_u32(u).unwrap();
+        assert_ne!(
+            font.lookup_glyph_index(c),
+            0,
+            "烘焙字体必须真带孪生 U+{u:04X}"
+        );
+    }
+    for c in ['\u{E000}', '\u{E01A}', '\u{E033}', '\u{E034}', '\u{E03D}'] {
+        let (m, bmp) = font.rasterize(c, px);
+        assert!(
+            m.width > 0 && m.height > 0 && bmp.iter().any(|&a| a > 0),
+            "{c:?} 必须真有墨"
+        );
+        assert!(
+            m.advance_width <= half_adv * 1.06,
+            "{c:?} 步进必须 ≤ 半格（实测 {} vs 半格 {half_adv}）",
+            m.advance_width
+        );
+        // 中央 1/3 盒必须有墨（字母），外圈顶边必须有墨（环）
+        let (w, h) = (m.width, m.height);
+        let mid = |x: usize, y: usize| bmp[y * w + x] > 0;
+        let center_ink = (h / 3..h * 2 / 3)
+            .step_by(2)
+            .any(|y| (w / 3..w * 2 / 3).step_by(2).any(|x| mid(x, y)));
+        assert!(center_ink, "{c:?} 中央必须有墨（字母在）");
+        let ring_ink =
+            (0..w).step_by(2).any(|x| mid(x, h / 12)) || (0..h).step_by(2).any(|y| mid(w / 12, y));
+        assert!(ring_ink, "{c:?} 外圈必须有墨（环在）");
+    }
 }
 
 #[test]

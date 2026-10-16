@@ -174,6 +174,22 @@ fn degrade_seq(c: char) -> Option<[char; 3]> {
     enclosed_ascii(c).map(|a| ['(', a, ')'])
 }
 
+/// 带圈族窄版孪生映射（BAR-242 戊，2026-10-16 NA0171 楼26）：Ⓐ-ⓩ
+/// （U+24B6-24E9，52 枚）→ U+E000 起同序，⑪-⑳（U+246A-2473，10 枚）
+/// 顺接——与 scripts/font-bake-cjk.py 的 twin_cp 同一张表（双端手工
+/// 对齐，spec_bar242_戊_孪生映射_闭式形状 钉死边界）。孪生 = 烘焙字体
+/// PUA 里的 1 格窄版重绘字形，degrade_cell 条件②的消费面。
+pub fn enclosed_twin(c: char) -> Option<char> {
+    let u = c as u32;
+    if (0x24B6..=0x24E9).contains(&u) {
+        char::from_u32(0xE000 + (u - 0x24B6))
+    } else if (0x246A..=0x2473).contains(&u) {
+        char::from_u32(0xE000 + 52 + (u - 0x246A))
+    } else {
+        None
+    }
+}
+
 /// AI 面板整页移位压盖（采样缝过渡帧专用，2026-09-04 弹簧落下）。
 /// src = 整页面板渲染产物，y_off ∈ [-h, 0]：面板顶在屏上 y_off 行处
 /// （负 = 屏外上方）——dst 的 [0, h+y_off) 行从 src **底部**对应行整行
@@ -3979,7 +3995,11 @@ impl TermView {
     /// 降级为单个 ASCII 字母（保可读不破格），不再记 tofu 目击：
     /// ① 主备字体双缺（原条件）；② 备用字体有字形但**全角**（二修，
     /// 2026-10-14：UI 文本路径带圈族已升全角 2 格——终端格是 alacritty
-    /// 宽度表判的 1 格，全角字形放进来会被格跨钳成半圆，比降级更糟）
+    /// 宽度表判的 1 格，全角字形放进来会被格跨钳成半圆，比降级更糟）。
+    /// 戊（2026-10-16，NA0171 楼26 判做）：条件②触发时**优先换 PUA 窄版
+    /// 孪生**（烘焙字体 U+E000 起 62 连位，重绘粗环大字母——同尺寸重试，
+    /// 用户判一修半格太小后给「更好的设计」一次机会）；孪生缺席才降级
+    /// 单字母（降级路不退役，楼26/28 边界）。
     fn degrade_cell(&self, c: char) -> char {
         let Some(a) = enclosed_ascii(c) else {
             return c;
@@ -3993,10 +4013,19 @@ impl TermView {
                 if k.font.lookup_glyph_index(c) == 0 {
                     return a; // 双缺 → 降级
                 }
-                // 有字形但全角（步进 ≈ 全角基准 '中'）→ 放不进 1 格 → 降级
+                // 有字形但全角（步进 ≈ 全角基准 '中'）→ 放不进 1 格
                 let full = k.font.metrics('中', 1000.0).advance_width;
                 let adv = k.font.metrics(c, 1000.0).advance_width;
-                if adv > full * 0.75 { a } else { c }
+                if adv > full * 0.75 {
+                    if let Some(t) = enclosed_twin(c)
+                        && k.font.lookup_glyph_index(t) != 0
+                    {
+                        return t; // 戊：窄版孪生在场 → 真带圈（1 格）
+                    }
+                    a // 孪生缺席 → 降级单字母（路不退役）
+                } else {
+                    c
+                }
             }
         }
     }
