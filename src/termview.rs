@@ -7272,7 +7272,7 @@ impl TermView {
             let e = &book.entries[i];
             let lay = &lays[i];
             let r = mp::item_rect(&area, vp, lays, i, offb);
-            let sender = mp::strip_dept(&e.from);
+            let sender = crate::mail_feed::sender_display(e);
             let s_acc = crate::ui::accent::accent_for_sender(&sender, accent);
             // 三级框未选中形态 = 无框渐变暗底（发信人双色）
             paint_row_frame(&mut frame, r.x, r.y, r.w, r.h, false, s_acc, denom, vp);

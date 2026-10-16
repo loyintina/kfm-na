@@ -109,30 +109,9 @@ pub fn default_metrics() -> Metrics {
 pub const SUMMARY_PENDING: &str = "（摘要待取）";
 pub const SUMMARY_EMPTY: &str = "（无摘要）";
 
-// ---- 信头纯件（剥部门/拆收件人/时间去时区）----
-
-/// 剥部门留名（用户拍板：不要部门，就二字名）：串内含「部」且剥完
-/// 还剩 ≥2 字 → 剥到第一个「部」（含）为止；否则原样（「全体」无部
-/// 字天然原样）。
-pub fn strip_dept(name: &str) -> String {
-    if let Some(pos) = name.find('部') {
-        let rest = &name[pos + '部'.len_utf8()..];
-        if rest.chars().count() >= 2 {
-            return rest.to_string();
-        }
-    }
-    name.to_string()
-}
-
-/// 拆收件人：「、」为主分隔（兼容 ，,；;），逐段 trim 去空，逐段剥部门。
-/// 两个收件人上下并置 = 本 Vec 逐行画；空串 = 一空 Vec（涂装不画箭头列）。
-pub fn split_recipients(to: &str) -> Vec<String> {
-    to.split(['、', '，', ',', '；', ';'])
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .map(strip_dept)
-        .collect()
-}
+// ---- 信头纯件（剥部门/拆收件人已退役——BAR-254：切分唯一出处 = 服务端
+// split_display_items × roster.json，客户端只显示（mail_feed 三档回落
+// 链 sender_display/recipient_displays），不留第二套切分）----
 
 /// 时间去时区（用户拍板：不要时区）：「2026-09-30 08:00 +08:00」→
 /// 「2026-09-30 08:00」——取前两段（日期 + 时分）；本就无第三段原样。
@@ -212,7 +191,7 @@ pub fn display_title(e: &MailEntry) -> &str {
 /// 动画帧（顶控件块 A1 与 floors[2..] 露出带 A2 随 p 线性长，控件行位
 /// 连续移动）；n≤2 恒全排无控件（fx_p 忽略，卡高与旧约逐值同）
 pub fn lay_item(e: &MailEntry, top: i64, text_cells: u32, m: &Metrics, fx_p: f32) -> ItemLay {
-    let recipients = split_recipients(&e.to);
+    let recipients = crate::mail_feed::recipient_displays(e);
     let n_rcp = recipients.len().max(1) as u32;
     let meta_h = m.h1_block_h.max(n_rcp * m.body_lh);
     let title_cells = text_cells.saturating_sub(TITLE_INDENT_CELLS).max(4);

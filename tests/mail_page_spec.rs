@@ -19,33 +19,51 @@ fn entry(name: &str, from: &str, to: &str, title: &str, summary: Option<&str>) -
         title: title.to_string(),
         summary: summary.map(|s| s.to_string()),
         floors: Vec::new(),
+        from_parts: None,
+        to_parts: None,
+        from_disp: None,
+        to_disp: None,
     }
 }
 
-/// 钉①：信头纯件——剥部门/拆收件人/时间去时区
+/// 钉①：信头纯件——人去时区保留；剥部门/拆收件人已退役（BAR-254：
+/// 切分唯一出处 = 服务端，客户端只显示）。lay_item 吃 mail_feed
+/// 三档回落链（parts → disp → 原文逐项原样）的钉在 mail_feed_spec，
+/// 本钉只守 lay_item 消费口：收件人表进几何（两人两行 meta 带）。
 #[test]
 fn spec_bar214_信头纯件() {
-    // 剥部门：剥完 ≥2 字才剥
-    assert_eq!(strip_dept("开发部观澜"), "观澜");
-    assert_eq!(strip_dept("研究部清和"), "清和");
-    assert_eq!(strip_dept("评审部白露"), "白露");
-    assert_eq!(strip_dept("全体"), "全体"); // 无部字原样
-    assert_eq!(strip_dept("研究部全体"), "全体");
-    assert_eq!(strip_dept("甲乙"), "甲乙"); // 二字名无部原样
-    // 拆收件人：主分隔「、」+ 兼容族 + 逐段剥部门
-    assert_eq!(split_recipients("全体"), vec!["全体".to_string()]);
-    assert_eq!(
-        split_recipients("评审部白露、全体"),
-        vec!["白露".to_string(), "全体".to_string()]
-    );
-    assert_eq!(
-        split_recipients("研究部清和，开发部观澜"),
-        vec!["清和".to_string(), "观澜".to_string()]
-    );
-    assert!(split_recipients("").is_empty());
     // 时间去时区
     assert_eq!(fmt_time("2026-09-30 08:00 +08:00"), "2026-09-30 08:00");
     assert_eq!(fmt_time("2026-09-30 08:00"), "2026-09-30 08:00");
+    // lay_item 消费口：两收件人（原文回落档逐项原样）→ meta 带两行高
+    let m = default_metrics();
+    let one = lay_item(
+        &entry("a.md", "开发部观澜", "全体", "题", Some("摘")),
+        0,
+        20,
+        &m,
+        1.0,
+    );
+    let two = lay_item(
+        &entry(
+            "b.md",
+            "开发部观澜",
+            "开发部观澜、研究部清和",
+            "题",
+            Some("摘"),
+        ),
+        0,
+        20,
+        &m,
+        1.0,
+    );
+    assert_eq!(one.recipients, vec!["全体".to_string()]);
+    assert_eq!(
+        two.recipients,
+        vec!["开发部观澜".to_string(), "研究部清和".to_string()],
+        "旧服务端回落档＝逐项原样，不许客户端再剥部门"
+    );
+    assert_eq!(two.meta_h, m.h1_block_h.max(2 * m.body_lh));
 }
 
 /// 钉②：行高同源——const 值与 md 管线 line_h_grid 运行期对表
