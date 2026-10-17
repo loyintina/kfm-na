@@ -62,7 +62,7 @@
 | `src/sshd_keeper.rs` | 4 | 4 | 0 | — |
 | `src/svc_health.rs` | 12 | 9 | 3 | HIST_PATH set_visible sys_snap |
 | `src/sys_hist.rs` | 39 | 34 | 5 | BAR_W PLACEHOLDER_PCT hist_idx restore HIST_FORMAT |
-| `src/termview.rs` | 178 | 170 | 8 | AI_THINK_COLLAPSED FONT_CANDIDATES CJK_FONT_CANDIDATES load_cjk_font font_probe dump_all_active MAG_HALF_COLS MAG_HALF_ROWS |
+| `src/termview.rs` | 180 | 172 | 8 | AI_THINK_COLLAPSED FONT_CANDIDATES CJK_FONT_CANDIDATES load_cjk_font font_probe dump_all_active MAG_HALF_COLS MAG_HALF_ROWS |
 | `src/theme.rs` | 1 | 1 | 0 | — |
 | `src/tmux_ctl.rs` | 26 | 26 | 0 | — |
 | `src/tmux_exec.rs` | 1 | 1 | 0 | — |
