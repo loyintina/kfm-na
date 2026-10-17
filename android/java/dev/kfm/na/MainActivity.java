@@ -322,7 +322,30 @@ public class MainActivity extends NativeActivity {
                         return;
                     }
                     if (mWeb == null) {
-                        android.webkit.WebView wv = new android.webkit.WebView(MainActivity.this);
+                        android.webkit.WebView wv = new android.webkit.WebView(MainActivity.this) {
+                            // 判据庚（NA0189 楼37）：「谁盖着屏谁处理返回」——
+                            // 浮窗自己吃 BACK：拆窗 + 请 Rust 弹栈，且**不漏给
+                            // Activity**（两个动作都 return true）。
+                            @Override
+                            public boolean dispatchKeyEvent(android.view.KeyEvent ev) {
+                                if (ev.getKeyCode() == android.view.KeyEvent.KEYCODE_BACK) {
+                                    if (ev.getAction() == android.view.KeyEvent.ACTION_UP) {
+                                        webPageTearDown("back-in-window");
+                                        boolean consumed = false;
+                                        try {
+                                            consumed = nativeWebBack();
+                                        } catch (Throwable t) {
+                                            webStatus("back-native-fail " + t);
+                                        }
+                                        if (!consumed) {
+                                            webStatus("back-native-not-consumed");
+                                        }
+                                    }
+                                    return true; // 吃掉：既关页也不漏给 Activity
+                                }
+                                return super.dispatchKeyEvent(ev);
+                            }
+                        };
                         android.webkit.WebSettings s = wv.getSettings();
                         s.setJavaScriptEnabled(true);
                         s.setDomStorageEnabled(true);
@@ -348,8 +371,11 @@ public class MainActivity extends NativeActivity {
                         // 的第二条出路）。**不是扩热区**——热区与绘制仍同一份
                         // （web_page::close_rect / bar_offset_px），这里只改
                         // 窗口的触摸/焦点归属。
-                        lp.flags = android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
-                                | android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
+                        // 裁乙（NA0189 楼37）：**只留 NOT_TOUCH_MODAL**，撤掉
+                        // NOT_FOCUSABLE——后者让我们这个任务里没有可聚焦窗，
+                        // vivo 据此把前台判定回退到 launcher（无 FATAL 却掉桌面）。
+                        // BACK 不再靠「让焦点」，改由浮窗自己吃（见 dispatchKeyEvent）。
+                        lp.flags = android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL;
                         lp.token = getWindow().getDecorView().getWindowToken();
                         lp.gravity = android.view.Gravity.TOP;
                         // yOffPx = 状态栏高 + 条高（Rust 算好传回，本端不做布局算术）
