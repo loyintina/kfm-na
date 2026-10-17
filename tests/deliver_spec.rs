@@ -2,11 +2,12 @@
 //! 裁决白露楼2 四点全裁）。
 //!
 //! 判卷维度：路由判定真值表／请求体与回执解析（与服务端同形往返）／
-//! 投成小字降级透出／bar-inject 投递三形解析／瞬态小字 TTL 与编辑清除／
-//! 接线守卫（发送闭包分叉、渲染 hint 臂、值守 Deliver 臂、词表同票）。
+//! 投成不写栏内小字（BAR-252／MAIN0175 楼23）／bar-inject 投递三形解析／
+//! 瞬态小字 TTL 与编辑清除／接线守卫（发送闭包分叉、渲染 hint 臂、
+//! 值守 Deliver 臂、词表同票）。
 
 use kfm_na::ai_presence::{Page, Panel};
-use kfm_na::deliver::{Action, Route, decide, hint_for, parse_resp, request_json};
+use kfm_na::deliver::{Action, Route, decide, parse_resp, request_json};
 use kfm_na::gate::{BarCmd, parse_bar_line};
 use kfm_na::input_bar::{HINT_TTL_MS, InputBarState};
 
@@ -81,22 +82,27 @@ fn spec_bar252_请求体与回执_往返同形() {
     assert!(parse_resp(r#"{"ok":true}"#).is_none());
 }
 
+/// BAR-252／MAIN0175 楼23：投成后不许再写栏内回执小字（「→ 窗·发送」
+/// 「已发送」退役——按下去＝塞进去＋输入栏清空，立刻能接着打字）。
+/// 源码锚：deliver_spawn 成功臂（`Ok(r) if r.ok =>` 到拒绝臂之间）不得
+/// 调用 set_hint；解释性提示保留（BAR-256 hold / 裸 shell 归 AI 分叉）。
 #[test]
-fn spec_bar252_投成小字_降级透出() {
-    // 同动作：直述
-    assert_eq!(hint_for("清和", Action::Send, "send"), "→ 清和·发送");
-    assert_eq!(hint_for("悬铃", Action::Queue, "queue"), "→ 悬铃·排队");
-    assert_eq!(
-        hint_for("清和", Action::Interrupt, "interrupt"),
-        "→ 清和·打断"
+fn spec_bar252_成功不写栏内小字() {
+    let src = include_str!("../src/deliver.rs");
+    let ok_arm = src
+        .split("Ok(r) if r.ok =>")
+        .nth(1)
+        .expect("deliver_spawn 应有成功臂");
+    let ok_arm = ok_arm.split("Ok(r) =>").next().expect("拒绝臂在后");
+    assert!(!ok_arm.contains("set_hint"), "投成后不许往输入栏写回执小字");
+    assert!(!src.contains("hint_for"), "投成小字构造器应已退役");
+    // 写出路的解释提示两个出口不许被这次清理带走
+    assert!(src.contains("pub fn hold"), "BAR-256 留栏提示须保留");
+    let app = include_str!("../src/android_app.rs");
+    assert!(
+        app.contains("Route::Ai(hint)") && app.contains("b.set_hint(&h)"),
+        "裸 shell 分叉解释提示须保留"
     );
-    // 降级：「排队（已降级为发送）」——白露楼2①「否则用户以为排上了」
-    assert_eq!(
-        hint_for("清和", Action::Queue, "send"),
-        "→ 清和·排队（已降级为发送）"
-    );
-    // 未知 effective 不炸（旧服务端无此键之外的坏形兜底）
-    assert_eq!(hint_for("清和", Action::Send, "???"), "→ 清和·发送");
 }
 
 #[test]

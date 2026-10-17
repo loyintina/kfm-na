@@ -7,8 +7,9 @@
 //! execute 薄 IO 胶的真机判卷归承影。
 
 use na_server::deliver::{
-    Action, Harness, Pane, Proc, RegRow, build_keys, check_alive, descendants, iso8, log_line,
-    lookup, parse_panes, parse_ps, parse_registry, parse_req, resp_json,
+    Action, Harness, KeyStep, Pane, Proc, RegRow, StepSpec, build_keys, check_alive, descendants,
+    expand_key_steps, iso8, log_line, lookup, parse_key_steps, parse_panes, parse_ps,
+    parse_registry, parse_req, resp_json, resp_json_with_screen, screen_tail,
 };
 
 fn kimi_row(name: &str) -> RegRow {
@@ -217,34 +218,114 @@ fn spec_bar252_子孙树防环() {
 
 #[test]
 fn spec_bar252_键序构造() {
-    // send：字面文本 + Enter，目标 =名: 精确匹配到会话活动窗格，-l -- 不解析键名
-    let (cmds, eff, note) = build_keys(Action::Send, &Harness::Kimi, "清和", "你好 世界").unwrap();
+    let cmd = |argv: &[&str]| KeyStep::Cmd(argv.iter().map(|s| s.to_string()).collect());
+    // send：BAR-252／MAIN0175 楼23 完整塞话键序——
+    // Esc → 0.3s → -l 字面文本 → 0.3s → Enter → 1s → Enter
+    // 目标 =名: 精确匹配到会话活动窗格，-l -- 不解析键名
+    let (steps, eff, note) = build_keys(Action::Send, &Harness::Kimi, "清和", "你好 世界").unwrap();
     assert_eq!(eff, Action::Send);
     assert!(note.is_none());
     assert_eq!(
-        cmds,
+        steps,
         vec![
-            vec!["send-keys", "-t", "=清和:", "-l", "--", "你好 世界"],
-            vec!["send-keys", "-t", "=清和:", "Enter"],
+            cmd(&["send-keys", "-t", "=清和:", "Escape"]),
+            KeyStep::Sleep(300),
+            cmd(&["send-keys", "-t", "=清和:", "-l", "--", "你好 世界"]),
+            KeyStep::Sleep(300),
+            cmd(&["send-keys", "-t", "=清和:", "Enter"]),
+            KeyStep::Sleep(1000),
+            cmd(&["send-keys", "-t", "=清和:", "Enter"]),
         ]
     );
-    // interrupt：只发 Escape，不带文本
-    let (cmds, eff, _) = build_keys(Action::Interrupt, &Harness::Kimi, "清和", "").unwrap();
+    // interrupt：只发 Escape，不带文本、不带停顿
+    let (steps, eff, _) = build_keys(Action::Interrupt, &Harness::Kimi, "清和", "").unwrap();
     assert_eq!(eff, Action::Interrupt);
-    assert_eq!(cmds, vec![vec!["send-keys", "-t", "=清和:", "Escape"]]);
-    // queue：tianshu 发 M-Enter
-    let (cmds, eff, note) = build_keys(Action::Queue, &Harness::Tianshu, "悬铃", "排着").unwrap();
+    assert_eq!(steps, vec![cmd(&["send-keys", "-t", "=清和:", "Escape"])]);
+    // queue：tianshu 仍发「字面文本＋M-Enter」（不进塞话键序）
+    let (steps, eff, note) = build_keys(Action::Queue, &Harness::Tianshu, "悬铃", "排着").unwrap();
     assert_eq!(eff, Action::Queue);
     assert!(note.is_none());
-    assert_eq!(cmds[1], vec!["send-keys", "-t", "=悬铃:", "M-Enter"]);
-    // queue：kimi 无排队键 → 降级 send，action_effective=send + note 透出
-    let (cmds, eff, note) = build_keys(Action::Queue, &Harness::Kimi, "清和", "排着").unwrap();
+    assert_eq!(
+        steps,
+        vec![
+            cmd(&["send-keys", "-t", "=悬铃:", "-l", "--", "排着"]),
+            cmd(&["send-keys", "-t", "=悬铃:", "M-Enter"]),
+        ]
+    );
+    // queue：kimi 无排队键 → 降级 send，action_effective=send + note 透出，
+    // 键序与 send 臂逐项相同（含三段停顿与双 Enter）
+    let (steps, eff, note) = build_keys(Action::Queue, &Harness::Kimi, "清和", "排着").unwrap();
     assert_eq!(eff, Action::Send);
     assert!(note.unwrap().contains("降级"));
-    assert_eq!(cmds[1], vec!["send-keys", "-t", "=清和:", "Enter"]);
+    assert_eq!(
+        steps,
+        vec![
+            cmd(&["send-keys", "-t", "=清和:", "Escape"]),
+            KeyStep::Sleep(300),
+            cmd(&["send-keys", "-t", "=清和:", "-l", "--", "排着"]),
+            KeyStep::Sleep(300),
+            cmd(&["send-keys", "-t", "=清和:", "Enter"]),
+            KeyStep::Sleep(1000),
+            cmd(&["send-keys", "-t", "=清和:", "Enter"]),
+        ]
+    );
     // 空文本：send/queue 拒，interrupt 放行
     assert!(build_keys(Action::Send, &Harness::Kimi, "清和", "").is_err());
     assert!(build_keys(Action::Queue, &Harness::Tianshu, "悬铃", "").is_err());
+}
+
+/// 键序单源（BAR-252／MAIN0175 楼23 白露硬要求）：唯一源声明解析出的
+/// 步骤 == build_keys(Send) 展开的步骤 == queue-kimi 降级臂步骤。
+/// 声明原文另以字面钉在这里——改 lib 任一键序步（含 sleep 秒数）必红。
+#[test]
+fn spec_bar252_键序单源() {
+    let lib = include_str!("../../../scripts/kfm-inject-lib.sh");
+    assert_eq!(
+        lib.matches("KFM_INJECT_STEPS=").count(),
+        1,
+        "唯一源只许一份 KFM_INJECT_STEPS 声明"
+    );
+    let specs = parse_key_steps(lib).expect("唯一源声明必须可解析");
+    assert_eq!(
+        specs,
+        vec![
+            StepSpec::Key("Escape"),
+            StepSpec::Sleep(300),
+            StepSpec::Text,
+            StepSpec::Sleep(300),
+            StepSpec::Key("Enter"),
+            StepSpec::Sleep(1000),
+            StepSpec::Key("Enter"),
+        ],
+        "唯一源声明必须是 v12 实测键序（改 lib 必红）"
+    );
+    let expected = expand_key_steps(&specs, "=清和:", "你好");
+    let (sent, _, _) = build_keys(Action::Send, &Harness::Kimi, "清和", "你好").unwrap();
+    assert_eq!(sent, expected, "build_keys(Send) 必须展开同一份唯一源");
+    let (queued, _, _) = build_keys(Action::Queue, &Harness::Kimi, "清和", "你好").unwrap();
+    assert_eq!(queued, expected, "queue-kimi 降级臂必须同源");
+}
+
+/// 键序接线守卫（源码锚）：deliver.rs 用 include_str! 指向 na 仓唯一源；
+/// 键名映射各只许出现一次（第二处硬编码 Escape/Enter 序列 = 红）。
+#[test]
+fn spec_bar252_键序接线守卫() {
+    let src = include_str!("../src/deliver.rs");
+    assert!(
+        src.contains("include_str!(\"../../../scripts/kfm-inject-lib.sh\")"),
+        "deliver.rs 必须 include_str! 唯一源（手机自举构建仓外不可见）"
+    );
+    assert!(src.contains("parse_key_steps"), "键序必须经唯一源解析");
+    assert_eq!(
+        src.matches("\"Escape\"").count(),
+        1,
+        "Escape 键名只许出现在 token→键名映射一处"
+    );
+    assert_eq!(
+        src.matches("\"Enter\"").count(),
+        1,
+        "Enter 键名只许出现在 token→键名映射一处"
+    );
 }
 
 /// BAR-152 锚定钉（承影 NA0181 楼6 打回：考题与答案同源自洽、一起错）：
@@ -256,7 +337,10 @@ fn spec_bar252_目标串冒号收尾() {
     for action in [Action::Send, Action::Interrupt, Action::Queue] {
         for harness in [Harness::Kimi, Harness::Tianshu] {
             let (cmds, _, _) = build_keys(action, &harness, "清和", "探针").unwrap();
-            for argv in &cmds {
+            for step in &cmds {
+                let KeyStep::Cmd(argv) = step else {
+                    continue; // Sleep 步没有 -t
+                };
                 let pos = argv.iter().position(|a| a == "-t").expect("argv 缺 -t");
                 let t = &argv[pos + 1];
                 assert!(
@@ -325,4 +409,44 @@ fn spec_bar252_闸门腿放行deliver() {
         gate_only_seg[..800].contains("httpd::Route::Deliver"),
         "gate_only 白名单应收 httpd::Route::Deliver"
     );
+}
+
+/// 判据③取证钉（白露 MAIN0175 楼23 第③条）：回执带 post_screen＝键序执行
+/// 后 600ms 取目标窗尾部三行（剥 ANSI、跳空行、≤200 字）——判卷人据它咬
+/// 「按下后对方窗口真进入处理」，不是只看屏上有字。
+#[test]
+fn spec_bar252_post_screen回执() {
+    // 尾部三行 + ANSI 剥净 + 空行跳过
+    let raw = "\u{1b}[32m行一\u{1b}[0m\n\n行二\n行三\n行四\n";
+    let tail = screen_tail(raw);
+    assert!(tail.contains("行二") && tail.contains("行三") && tail.contains("行四"));
+    assert!(!tail.contains('\u{1b}'), "ANSI 必须剥净：{tail}");
+    assert!(!tail.contains("行一"), "只留尾部三行：{tail}");
+    // 200 字截断
+    let long = "x".repeat(500);
+    assert!(
+        screen_tail(&long).chars().count() <= 200,
+        "超长必须截到 200 字"
+    );
+    // 回执六键齐（原五键 + post_screen）
+    let j: serde_json::Value = serde_json::from_str(&resp_json_with_screen(
+        true,
+        "清和",
+        "send",
+        "send",
+        "",
+        "行二\n行三",
+    ))
+    .unwrap();
+    for k in [
+        "ok",
+        "target",
+        "action",
+        "action_effective",
+        "detail",
+        "post_screen",
+    ] {
+        assert!(j.get(k).is_some(), "回执缺键 {k}");
+    }
+    assert_eq!(j["post_screen"], "行二\n行三");
 }

@@ -9,16 +9,16 @@
 //! - 否则 → **原 AI 路由**。裸 shell 归 AI 须不静默（白露楼2④）：栏内
 //!   一句瞬态小字解释分叉；AI 全屏页/面板开着归 AI 无提示（人没在窗上）。
 //!
-//! 回执（白露楼2①②）：
-//! - 投成 = 画布回显即凭 ＋ 栏内瞬态小字「→ 窗·发送」（降级透出
-//!   「排队（已降级为发送）」——action_effective 驱动）；
+//! 回执（白露楼2①②；BAR-252／MAIN0175 楼23 修订）：
+//! - 投成 = **不写栏内回执小字**（旧「→ 窗·发送」「已发送」已退役——用户
+//!   要按下去＝塞进去＋输入栏清空，立刻能接着打字；是否送到由服务端
+//!   post_screen 取证）；
 //! - 拒投 = 终端横幅一行（切换横幅同款机制）写**服务端 detail 原文**
 //!   （原因＋出路，客户端不再造文案——单源纪律）＋草稿回填栏不吞字；
 //! - 不走 toast（无 Looper 线程 NPE 已有定论）。
 //!
 //! 词表与 crates/na-server/src/deliver.rs 同源两份（action 三形），改要
-//! 同票。纯函数面（decide/request_json/parse_resp/hint_for）钉在
-//! tests/deliver_spec.rs。
+//! 同票。纯函数面（decide/request_json/parse_resp）钉在 tests/deliver_spec.rs。
 
 use crate::ai_presence::{Page, Panel};
 
@@ -45,15 +45,6 @@ impl Action {
             "interrupt" => Some(Action::Interrupt),
             "queue" => Some(Action::Queue),
             _ => None,
-        }
-    }
-
-    /// 回执小字用的中文名
-    pub fn zh(self) -> &'static str {
-        match self {
-            Action::Send => "发送",
-            Action::Interrupt => "打断",
-            Action::Queue => "排队",
         }
     }
 }
@@ -194,17 +185,6 @@ pub fn parse_resp(body: &str) -> Option<Resp> {
     })
 }
 
-/// 投成小字（A 档纯函数）：「→ 窗·发送」；请求动作与实际动作不同 =
-/// 服务端降级（kimi 无排队键），透出「排队（已降级为发送）」——白露
-/// 楼2①「回执要能说，否则用户以为排上了」
-pub fn hint_for(target: &str, action: Action, effective: &str) -> String {
-    match Action::parse(effective) {
-        Some(eff) if eff == action => format!("→ {target}·{}", action.zh()),
-        Some(eff) => format!("→ {target}·{}（已降级为{}）", action.zh(), eff.zh()),
-        None => format!("→ {target}·{}", action.zh()),
-    }
-}
-
 /// 阻塞版投递（须在自备线程调——瞬时返回契约由调用方的 spawn 保证）：
 /// 共享腿槽取当前数据腿连接，QUIC 桥直开流打 POST /api/deliver
 /// （与闸门轮询同一载体，BAR-233 根治形制）。腿不在/超时/坏回执 = Err
@@ -226,7 +206,8 @@ pub fn deliver_now(target: &str, action: Action, text: &str) -> Result<Resp, Str
     parse_resp(&text).ok_or_else(|| format!("回执坏形: {}", &text[..text.len().min(120)]))
 }
 
-/// 投递线程（发送闭包/值守线程调它即走）。回执：成 = 栏内瞬态小字；
+/// 投递线程（发送闭包/值守线程调它即走）。回执：成 = 不写栏内小字
+/// （BAR-252／MAIN0175 楼23：按下即塞进去＋输入栏清空，不做回执小字）；
 /// 拒/败 = 终端横幅（拒投写服务端 detail 原文——原因＋出路）＋草稿回填
 /// 不吞字；两端皆 report 留痕。res_name Some = 结果另落
 /// DUMP_DIR/<name>（bar-inject 判卷件——值守线程不阻塞等往返，
@@ -236,9 +217,6 @@ pub fn deliver_spawn(target: String, action: Action, text: String, res_name: Opt
         let out = deliver_now(&target, action, &text);
         let line = match &out {
             Ok(r) if r.ok => {
-                if let Some(bar) = crate::gate::input_bar_handle() {
-                    bar.set_hint(&hint_for(&target, action, &r.action_effective));
-                }
                 format!(
                     "投成 target={target} action={} effective={}",
                     action.as_str(),

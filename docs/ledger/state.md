@@ -5,6 +5,22 @@
 > (速查表:症状 → 工具 → 字段 → 判卷)。本页只写「现在进行时」,
 > 历史功过在 bugs.md。
 
+## 当前位置（2026-10-17 傍晚，BAR-252 输入栏投递打回重修——键序唯一源＋去残留提示＋post_screen 取证，钉绿待判）
+
+> **BAR-252 重修三改**（用户真机实测打回，白露 MAIN0175 楼23 三条）：
+> ①**键序唯一源**——na 仓 scripts/kfm-inject-lib.sh 只有一份声明
+> KFM_INJECT_STEPS（esc sleep0.3 text sleep0.3 enter sleep1 enter），
+> crates/na-server/src/deliver.rs 用 include_str! 编译期读入解析成
+> KeyStep::Cmd/Sleep 序列逐步执行（Send 与 queue-kimi 降级臂同源），
+> kfmv4 的 agent-send.sh source 同一份——两处不再各写一套；②**去残留
+> 提示**——成功路径不再往输入栏写回执小字，按下＝塞进去＋栏清空，
+> 拒投/裸 shell 分叉/留栏三类解释提示保留；③**post_screen 取证**——
+> 键序执行后 600ms capture-pane 尾部三行 ≤200 字随回执透出，判卷据它
+> 咬「对方真进入处理」。钉：键序构造改写＋键序单源＋接线守卫＋
+> post_screen 回执，变异三刀（改 lib／摘 esc／摘第二个 enter）全咬。
+> **注意**：agent-send.sh 侧的 source 改动须等本件合 master 后重接
+> （lib 未上 master 前 source 会当场拒绝——16:26 断过一轮的真实原因）。
+
 ## 当前位置（2026-10-17 午后，BAR-259 sshd 撞线环治本三面落码——钉绿待判卷）
 
 > **BAR-259（9 机 na sshd exit 1 撞线环，追踪信 NA0188，承影 MAIN0175

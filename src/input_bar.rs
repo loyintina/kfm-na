@@ -294,8 +294,9 @@ pub struct BarSnap {
     pub selection_start: usize,
     /// 选区右锚点（char 下标，不含）
     pub selection_end: usize,
-    /// BAR-252 栏内瞬态小字（投递回执「→ 窗·发送」/分叉解释「裸 shell——
-    /// 本句发往 AI 页」）：仅空栏时渲染层取代占位符画出；TTL 到期即空
+    /// BAR-252 栏内瞬态小字（分叉解释「裸 shell——本句发往 AI 页」/
+    /// BAR-256 Pending 留栏提示；**投成回执小字已退役**——MAIN0175 楼23）：
+    /// 仅空栏时渲染层取代占位符画出；TTL 到期即空
     pub hint: String,
 }
 
