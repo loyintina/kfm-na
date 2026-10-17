@@ -104,6 +104,6 @@
 | `src/ui/tab_bar.rs` | 27 | 27 | 0 | — |
 | `src/ui/term_btn.rs` | 8 | 8 | 0 | — |
 | `src/ui/viewport_push.rs` | 2 | 2 | 0 | — |
-| `src/ui/web_page.rs` | 23 | 18 | 5 | BAR_DP DENSITY_FALLBACK PAD_X TITLE close_side |
+| `src/ui/web_page.rs` | 24 | 19 | 5 | BAR_DP DENSITY_FALLBACK PAD_X TITLE close_side |
 | `src/vsync_book.rs` | 20 | 16 | 4 | last_due_ms chain_dead mark_chain_dead last_ns |
 | `src/wire_render.rs` | 1 | 1 | 0 | — |
