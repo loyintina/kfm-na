@@ -5,6 +5,21 @@
 > (速查表:症状 → 工具 → 字段 → 判卷)。本页只写「现在进行时」,
 > 历史功过在 bugs.md。
 
+## 当前位置（2026-10-17 午，MAIN0175 A 案客户端半落码——cleartext 窄门，待承影 9 机判卷、悬铃放行）
+
+> **MAIN0175 A 案（白露判据包：无头浏览器 A 能看优先／B 截图随后归空谷／C 判死）**：
+> demo 页复用既有 gate 十三 web-req→WebView 卡上机（推开式触发，零客户端
+> 入口码；用户面入口槽位归浏览器卡正式立项，9-12 挂账不动）。**客户端唯一
+> 改动＝cleartext 窄门**：targetSdk28 起明文 http 默认禁（SPKE-web 尖刺
+> 坑单③预言），新增 `android/res/xml/network_security_config.xml` 只放
+> 127.0.0.1/localhost 两回环域（includeSubdomains=false，无域名白名单），
+> manifest application 加一行属性引用；Java/Rust 零改（判据③）。
+> **交付＝整包**（manifest 热更 .so 够不着）；**回滚**＝revert 合并＋重打
+> 整包（versionCode epoch 单调递增，无降级拒装问题），改动面＝2 文件
+> ＋本行。判卷＝承影 9 机（弹卡截屏／实点实滚／外域 http 仍禁对照／close
+> 还原＋9021 回环复核），放行＝悬铃（MAIN0175 楼3）。demo 目录约定＝8032
+> DOCROOT 下新立 demo/ 与训练场分家（服务端半归空谷）；demo 内容＝茉莉。
+
 ## 当前位置（2026-10-17，BAR-252 输入栏投递进窗 客户端+服务端全落——白露授权提交，待判卷）
 
 > **BAR-252（输入栏投递目标改当前 tmux 窗，MAIN0168 用户拍板＋白露

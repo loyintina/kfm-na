@@ -29,7 +29,12 @@
         android:label="KFM-NA"
         android:icon="@mipmap/ic_launcher"
         android:extractNativeLibs="false"
+        android:networkSecurityConfig="@xml/network_security_config"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen">
+        <!-- networkSecurityConfig（MAIN0175 A 案，2026-10-17）：cleartext
+             窄门只放回环两域（127.0.0.1/localhost）——WebView 卡开 demo 页
+             走 127.0.0.1:9021/ui/ 反代；外域明文 http 仍禁。配置真身 =
+             res/xml/network_security_config.xml -->
         <!-- extractNativeLibs=false（BAR-013）：.so 不解压、直从 APK mmap，
              与 classes.dex 天然原子同版本——「覆盖安装不重解压 .so →
              dex 新 so 旧 → JNI 符号缺失」整条错配链连根拔掉。
