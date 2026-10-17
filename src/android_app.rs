@@ -1341,7 +1341,7 @@ impl App {
                 if phase == TouchPhase::Started
                     && psnap.top == Some(crate::ai_presence::Panel::Web)
                     && let Some((sw, _)) = self.screen_px()
-                    && crate::ui::web_page::hit_close(x, y, sw)
+                    && crate::ui::web_page::hit_close(x, y, sw, crate::ui::web_page::bar_h())
                 {
                     crate::report::report(
                         "gest",
@@ -11827,11 +11827,27 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
         crate::gate::register_web_hook(Box::new(move |url: String| {
             let r = vm2.attach_current_thread(|env| {
                 let ju = env.new_string(&url)?;
+                // BAR-260 段①（NA0189 楼6 判据①：条高单源）——密度由 Java
+                // 报来（平台事实），条高**只在这里算一次**（web_page::bar_px）
+                // 并落进程内单源；桥同时把这份值传给 Java，Java 不再自算。
+                let density = env
+                    .call_method(
+                        &gref2,
+                        jni::jni_str!("webDensity"),
+                        jni::jni_sig!(() -> float),
+                        &[],
+                    )
+                    .and_then(|v| v.f())
+                    .unwrap_or(crate::ui::web_page::DENSITY_FALLBACK as f32);
+                let bar = crate::ui::web_page::set_from_density(f64::from(density));
                 env.call_method(
                     &gref2,
                     jni::jni_str!("startWebViewFromGate"),
-                    jni::jni_sig!((java.lang.String) -> void),
-                    &[jni::objects::JValue::Object(&ju)],
+                    jni::jni_sig!((java.lang.String, int) -> void),
+                    &[
+                        jni::objects::JValue::Object(&ju),
+                        jni::objects::JValue::Int(bar as i32),
+                    ],
                 )
                 .map(|_| ())
             });

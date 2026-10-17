@@ -10495,7 +10495,7 @@ impl TermEmu for TermView {
         h: u32,
         accent: crate::ui::accent::AccentPair,
     ) {
-        crate::ui::web_page::paint(self, buf, w, h, accent);
+        crate::ui::web_page::paint(self, buf, w, h, accent, crate::ui::web_page::bar_h());
     }
     fn paint_cfg_tab_bar(
         &self,
