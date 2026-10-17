@@ -203,3 +203,53 @@ fn spec_bar259_接线守卫() {
     );
     assert!(src.contains("fuse_step"), "退出臂必过秒退连败熔断");
 }
+
+#[test]
+fn spec_bar259_秒退取样在spawn后() {
+    // 承影 NA0188 楼5 判卷红：存活若等到下一巡检拍（30s）才计时，秒退永远
+    // 算成 ≥2s，熔断臂形同虚设。钉两件：①spawn 后当拍以 QUICK_DEATH 窗探；
+    // ②探到即喂 fuse_step（纯函数钉只看逻辑，这条钉接线）。
+    let src = include_str!("../src/sshd_keeper.rs");
+    let i_spawn_ok = src.find("sshd 已重拉").expect("spawn 成功臂在");
+    let i_probe = src
+        .find("QUICK_DEATH.as_millis()")
+        .expect("秒退探针必须用 QUICK_DEATH 窗（变异：回退到下一拍计时 → 红）");
+    let i_quick = src.find("sshd 秒退（").expect("秒退报账臂在");
+    assert!(
+        i_spawn_ok < i_probe && i_probe < i_quick,
+        "探针必须在 spawn 成功之后、秒退报账之前"
+    );
+    assert!(
+        src[i_probe..].contains("fuse_step("),
+        "秒退探到的存活必须喂 fuse_step（不是只在纯函数里自证）"
+    );
+}
+
+#[test]
+fn spec_bar259_err日志追加不截断() {
+    // 承影 NA0188 楼5 副伤：create 截断会把上一轮证词抹掉——正好抹掉要定罪
+    // 的那一轮。改为追加；超帽才轮转。
+    let tmp = tempfile::tempdir().unwrap();
+    let prefix = tmp.path().to_path_buf();
+    {
+        let mut f = kfm_na::sshd_keeper::open_err_log(&prefix).unwrap();
+        std::io::Write::write_all(&mut f, b"first-run\n").unwrap();
+    }
+    {
+        let mut f = kfm_na::sshd_keeper::open_err_log(&prefix).unwrap();
+        std::io::Write::write_all(&mut f, b"second-run\n").unwrap();
+    }
+    let body = fs::read_to_string(prefix.join("tmp/sshd-err.log")).unwrap();
+    assert!(body.contains("first-run"), "上一轮证词不许被截断：{body}");
+    assert!(body.contains("second-run"), "本轮证词要落：{body}");
+    // 超帽轮转（64KB）：旧证词让位，新写从空文件起
+    let big = "x".repeat(70 * 1024);
+    fs::write(prefix.join("tmp/sshd-err.log"), &big).unwrap();
+    {
+        let mut f = kfm_na::sshd_keeper::open_err_log(&prefix).unwrap();
+        std::io::Write::write_all(&mut f, b"after-rotate\n").unwrap();
+    }
+    let body = fs::read_to_string(prefix.join("tmp/sshd-err.log")).unwrap();
+    assert!(!body.contains(&big), "超帽必须轮转清空旧内容");
+    assert!(body.contains("after-rotate"));
+}
