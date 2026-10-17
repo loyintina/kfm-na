@@ -1338,21 +1338,28 @@ impl App {
             if psnap.top == Some(crate::ai_presence::Panel::Web)
                 || psnap.covered == Some(crate::ai_presence::Panel::Web)
             {
-                if phase == TouchPhase::Started
-                    && psnap.top == Some(crate::ai_presence::Panel::Web)
-                    && let Some((sw, _)) = self.screen_px()
-                    && crate::ui::web_page::hit_close_off(
-                        x,
-                        y,
-                        sw,
-                        crate::ui::web_page::bar_h(),
-                        crate::ui::web_page::bar_offset_px(
-                            crate::ui::seam::sample_web_panel_offset_x(
-                                crate::ui::web_page::web_off_target(true, sw),
-                                crate::report::boot_ms() as u64,
+                // 出口裁决单一源（BAR-260，NA0189 楼19–20）：先判条区、再吞
+                // 其余——「先吞后判」就是这次出口红的病根形态（钩住顺序）
+                let in_close = psnap.top == Some(crate::ai_presence::Panel::Web)
+                    && self.screen_px().is_some_and(|(sw, _)| {
+                        crate::ui::web_page::hit_close_off(
+                            x,
+                            y,
+                            sw,
+                            crate::ui::web_page::bar_h(),
+                            crate::ui::web_page::bar_offset_px(
+                                crate::ui::seam::sample_web_panel_offset_x(
+                                    crate::ui::web_page::web_off_target(true, sw),
+                                    crate::report::boot_ms() as u64,
+                                ),
                             ),
-                        ),
-                    )
+                        )
+                    });
+                if crate::ui::web_page::web_touch_decide(
+                    psnap.top == Some(crate::ai_presence::Panel::Web),
+                    phase == TouchPhase::Started,
+                    in_close,
+                ) == Some(crate::ui::web_page::WebTouch::Dismiss)
                 {
                     crate::report::report(
                         "gest",
@@ -8399,6 +8406,10 @@ impl App {
         // BAR-260 段③（判据③）：全局页是否当前 z 序最顶——顶条只在最顶画，
         // 被别的面板压住时不越过盖层（z 序进 PANELS 的直接行为后果）
         web_on_top: bool,
+        // BAR-260 段④（判据④「只换承载不改可见」）：顶条是否画进本画布。
+        // CPU 路径 true（顶条就画在这张帧缓冲）；GLES 的 Over 槽 false——
+        // 顶条改由独立 WebBar 槽承载，可见性条件（web_on_top）一字不动
+        draw_web_bar: bool,
     ) {
         if let Some(bs) = bar_snap {
             term.render_inputbar(buf, w, h, ime_bottom_px, bs, sending, caret_on);
@@ -8414,7 +8425,8 @@ impl App {
         }
         // BAR-260 全局页顶部原生条：在栈即常驻（置顶直画，不进 z 序——
         // 本轮最小件）。只读栈读数/accent，页体加载状态一概不读
-        if web_on_top
+        if draw_web_bar
+            && web_on_top
             && let Some(s) = ai_snap
             && (s.top == Some(crate::ai_presence::Panel::Web)
                 || s.covered == Some(crate::ai_presence::Panel::Web))
@@ -8538,6 +8550,7 @@ impl App {
             magnifier_at,
             false,
             web_on_top,
+            true,
         );
         Self::report_tofu(&mut **term);
         ai_layout
@@ -10004,8 +10017,24 @@ impl App {
                 magnifier_at,
                 true,
                 web_on_top,
+                false,
             );
             g.slot_bake(crate::gles_present::ChromeSlot::Over);
+            // 段④：顶条独立承载层（只换承载——可见性仍由 web_on_top 置，
+            // 几何仍是 bar_h＋段② 那份 off；内容与原先画进 Over 槽的同源同参）
+            g.set_slot_visible(crate::gles_present::ChromeSlot::WebBar, web_on_top);
+            if web_on_top && let Some(s) = ai_snap {
+                let wbok =
+                    crate::ui::web_page::bar_offset_px(crate::ui::seam::sample_web_panel_offset_x(
+                        crate::ui::web_page::web_off_target(true, w),
+                        crate::report::boot_ms() as u64,
+                    ));
+                let px = g.slot_canvas(crate::gles_present::ChromeSlot::WebBar);
+                px.fill(0);
+                let mut term = term_arc.lock().unwrap();
+                term.paint_web_bar(px, w, h, s.accent_web, wbok);
+                g.slot_bake(crate::gles_present::ChromeSlot::WebBar);
+            }
         }
         Self::report_tofu(&mut **term_arc.lock().unwrap());
         ras_us += t_over.elapsed().as_micros() as u64;
@@ -10185,6 +10214,13 @@ impl App {
             rd_fade,
             mail_off,
             mail_fade,
+            crate::ui::web_page::bar_offset_px(crate::ui::seam::sample_web_panel_offset_x(
+                crate::ui::web_page::web_off_target(
+                    z_order[6] == crate::ai_presence::Panel::Web,
+                    w,
+                ),
+                crate::report::boot_ms() as u64,
+            )),
             z_order,
             term_place,
             ai_extra.dy,

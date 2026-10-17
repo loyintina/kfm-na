@@ -235,12 +235,25 @@ public class MainActivity extends NativeActivity {
                                         android.view.WindowManager.LayoutParams.TYPE_APPLICATION_PANEL,
                                         0,
                                         android.graphics.PixelFormat.TRANSLUCENT);
+                        // BAR-260 出口红修复（NA0189 楼19–20 白露硬判据）：
+                        // 页体窗**不许弹掉条区的触摸**——FLAG_NOT_TOUCH_MODAL
+                        // 让窗外的条带触摸回到 na（原生条在真实窗口层序上
+                        // 不受本窗遮盖：本窗顶从 bar 起，条带内无窗压着）；
+                        // FLAG_NOT_FOCUSABLE 让返回键不被本窗吃掉（页面困死
+                        // 的第二条出路）。**不是扩热区**——热区与绘制仍同一份
+                        // （web_page::close_rect / bar_offset_px），这里只改
+                        // 窗口的触摸/焦点归属。
+                        lp.flags = android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                                | android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
                         lp.token = getWindow().getDecorView().getWindowToken();
                         lp.gravity = android.view.Gravity.TOP;
                         lp.y = bar;
                         wm.addView(wv, lp);
                         mWeb = wv;
-                        webStatus("added-page bar=" + bar + " h=" + h + " token=" + (lp.token != null));
+                        // 判卷取证（dumpsys 对照用）：条高/页体高/纵向偏移/标志
+                        webStatus("added-page bar=" + bar + " h=" + h + " y=" + lp.y
+                                + " flags=0x" + Integer.toHexString(lp.flags)
+                                + " token=" + (lp.token != null));
                     }
                     mWeb.loadUrl(url);
                     webStatus("loading " + url);

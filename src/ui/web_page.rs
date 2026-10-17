@@ -105,6 +105,27 @@ pub fn web_off_target(in_stack: bool, w: u32) -> f32 {
     if in_stack { 0.0 } else { w as f32 }
 }
 
+/// 条区触摸裁决（BAR-260 出口红修复，NA0189 楼19–20 一手判据）：Web 在顶
+/// 时**先判条区、再吞其余**——顺序反了（先吞后判）就永远不进弹栈。
+/// 返回 None = 不归 Web 管（交后续路由）；Dismiss = 条上「×」；Swallow =
+/// Web 在顶的其余触摸（页体 Java 侧吃，到不了 Rust 的只剩条带与手势残段）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WebTouch {
+    Dismiss,
+    Swallow,
+}
+
+/// 纯裁决：web_top 才接管；只有 Started 能命中；命中「×」即弹栈，其余吞。
+pub fn web_touch_decide(web_top: bool, phase_started: bool, in_close: bool) -> Option<WebTouch> {
+    if !web_top {
+        return None;
+    }
+    if phase_started && in_close {
+        return Some(WebTouch::Dismiss);
+    }
+    Some(WebTouch::Swallow)
+}
+
 /// 桥下发判据（防抖）：整数位移与上次相同就不发——同一帧重复下发会让
 /// Java 侧 updateViewLayout 反复触发布局，画面抖。纯函数，供桥与考题共用。
 pub fn bridge_should_send(last: i32, cur: i32) -> bool {

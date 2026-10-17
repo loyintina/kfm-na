@@ -94,16 +94,16 @@ fn spec_bar170_涂装三路与槽号() {
         "阅读页 GLES 槽号必须 17（BAR-207 Demo 槽退役顺位，前 17 槽各有其主）"
     );
     assert!(
-        gles.contains("layers: [ChromeLayer; 19]"),
-        "槽层数组必须 19 件（17 旧槽 + Reader + Mail 信箱页槽 BAR-214 末尾入列）"
+        gles.contains("layers: [ChromeLayer; 20]"),
+        "槽层数组必须 20 件（BAR-260 段④：顶条槽末尾入列 19→20）"
     );
     // 构造器槽数钉（BAR-207 cfg 盲区实录：类型改后构造器字面量
     // 漏删一件，宿主 check 全绿、android check 才咬——mk_layer 调用
     // 计数 = 槽数的机械对表，变异：删/加一件即红）
     assert_eq!(
         gles.matches("mk_layer(&gl),").count(),
-        19,
-        "构造器 mk_layer 必须 19 件与槽层数组同数（BAR-207 cfg 盲区钉，BAR-214 升 19）"
+        20,
+        "构造器 mk_layer 必须 20 件与槽层数组同数（BAR-207 cfg 盲区钉，BAR-260 段④升 20）"
     );
     // BAR-260 段③：第七公民（全局页）入列，签名字面随之升 7——钉的本意不变
     // （Demo 仍死透、公民数随 PANELS 走）
@@ -273,5 +273,55 @@ fn spec_bar220_阅读信箱两缝入帧时钟与帧账() {
     assert!(
         app.contains("|| crate::ui::seam::mail_panel_offset_x_active()"),
         "信箱缝活性必须进 note_anim_frame 帧账表（摘掉 = 收场轮 panel-anim 无账）"
+    );
+}
+
+// ---- BAR-260 段④（NA0189 楼6 判据④：ChromeSlot 只换承载不改可见）----
+
+#[test]
+fn spec_bar260_段4_槽尾追加_现槽值不动() {
+    // 判据④的机械半边：新槽**只追加在末尾**，现有槽号一个不动（换个承载
+    // 不许牵动别家槽号——槽号是合成序与烘焙缓存的身份）。
+    // 变异抽检：把新槽插进中间、或挪 Reader/Mail 槽号，本钉必红。
+    // gles_present 是 cfg(android) 模块，宿主不可引用——按源码字面钉槽号
+    let gles = include_str!("../src/gles_present.rs");
+    assert!(gles.contains("    Reader = 17,"), "阅读页槽号不动");
+    assert!(gles.contains("    Mail = 18,"), "信箱页槽号不动");
+    assert!(gles.contains("    WebBar = 19,"), "顶条槽只追加在末尾");
+}
+
+#[test]
+fn spec_bar260_段4_只换承载不改可见() {
+    // 判据④的行为半边：顶条的**可见性条件与几何一字不改**，只是画布换了。
+    // 做法锚：GLES 的 Over 槽烘焙传 draw_web_bar=false（顶条不再进 Over 槽），
+    // 独立 WebBar 槽可见性仍由 web_on_top 置、内容仍由 paint_web_bar 同源画。
+    // 变异抽检：把 Over 槽改回画顶条（双承载＝同像素画两遍）、或去掉
+    // web_on_top 置可见性，本钉必红。
+    let app = include_str!("../src/android_app.rs");
+    assert!(
+        app.contains("crate::gles_present::ChromeSlot::WebBar"),
+        "顶条必须有自己的承载槽"
+    );
+    assert!(
+        app.contains("g.set_slot_visible(crate::gles_present::ChromeSlot::WebBar, web_on_top)"),
+        "可见性条件必须仍是 web_on_top（只换承载不改可见）"
+    );
+    assert!(
+        app.contains("term.paint_web_bar(px, w, h, s.accent_web, wbok)"),
+        "WebBar 槽内容必须由同一个 paint_web_bar 画（内容同源）"
+    );
+    // GLES 的 Over 槽烘焙必须显式关掉顶条（否则同像素画两遍）
+    let over_bake = app
+        .split("ChromeSlot::Over;")
+        .next()
+        .expect("Over 槽烘焙块");
+    assert!(
+        over_bake.contains("                web_on_top,\n                false,\n            );"),
+        "Over 槽烘焙必须传 draw_web_bar=false（顶条不再画进 Over 槽）"
+    );
+    // CPU 兜底路径仍要画顶条（那条路没有 GLES 槽可换）
+    assert!(
+        app.contains("            web_on_top,\n            true,\n        );"),
+        "CPU 路径必须继续把顶条画进帧缓冲（draw_web_bar=true）"
     );
 }

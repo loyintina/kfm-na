@@ -381,3 +381,63 @@ fn spec_bar260_段2_第八道缝_直通与占槽可拔() {
     );
     assert!(!seam::web_panel_offset_x_active());
 }
+
+// ---- 出口红修复钉（NA0189 楼19–20：修出口＝修窗口层序，禁扩热区）----
+
+#[test]
+fn spec_bar260_出口_条区触摸必达并弹栈() {
+    // 病根形态：Web 在顶时「先吞后判」⇒ 条区点击永远进不了弹栈。本钉把
+    // 裁决做成可喂坐标的真值表，顺序反了必红。
+    // 变异抽检：把 web_touch_decide 改成「web_top 即恒 Swallow（先吞后判）」，
+    // 或把「只有 Started 能命中」去掉，本钉必红。
+    use web_page::{WebTouch, web_touch_decide};
+    // ① Web 不在顶：一律不归它管（交后续路由——别的面板/终端要能收到）
+    assert_eq!(web_touch_decide(false, true, false), None);
+    assert_eq!(web_touch_decide(false, true, true), None);
+    // ② Web 在顶 + 落在「×」盒 + Started → 弹栈
+    assert_eq!(
+        web_touch_decide(true, true, true),
+        Some(WebTouch::Dismiss),
+        "条区「×」点击必须弹栈（这就是出口红要的那一条）"
+    );
+    // ③ Web 在顶 + 不在「×」盒 → 吞（页体 Java 侧吃，条带残余不留手）
+    assert_eq!(web_touch_decide(true, true, false), Some(WebTouch::Swallow));
+    // ④ Moved/Ended 不许弹栈（一次点击只弹一次）
+    assert_eq!(web_touch_decide(true, false, true), Some(WebTouch::Swallow));
+    // ⑤ 与几何同源：命中盒吃的是 close_rect_off 那一份（不是另算的矩形）
+    let bar = web_page::bar_px(3.0);
+    let (rx, ry, rw, rh) = web_page::close_rect_off(W, bar, 0);
+    let cx = f64::from(rx) + f64::from(rw) / 2.0;
+    let cy = f64::from(ry) + f64::from(rh) / 2.0;
+    assert!(web_page::hit_close_off(cx, cy, W, bar, 0));
+}
+
+#[test]
+fn spec_bar260_出口_java不吞条区不吃返回() {
+    // 硬判据（白露拍）：不许扩热区绕过——热区/绘制同源（本钉先咬这一点），
+    // 再由窗口标志把「条区触摸」还回 na；且返回键不许被页体窗吃掉。
+    // 变异抽检：删 FLAG_NOT_TOUCH_MODAL → 必红（条区又被吞）；
+    //           删 FLAG_NOT_FOCUSABLE → 必红（BACK 又被吃＝页面困死）。
+    let java = read_src("android/java/dev/kfm/na/MainActivity.java");
+    // 锚**赋值行本身**，不锚注释（「注释不是防线」：注释里提到常量名不算数）
+    let flags_kv = java
+        .split("lp.flags =")
+        .nth(1)
+        .and_then(|t| t.split(';').next())
+        .expect("页体窗必须显式设 lp.flags");
+    assert!(
+        flags_kv.contains("FLAG_NOT_TOUCH_MODAL"),
+        "页体窗必须 NOT_TOUCH_MODAL（窗外条区触摸回 na＝出口的唯一来路）"
+    );
+    assert!(
+        flags_kv.contains("FLAG_NOT_FOCUSABLE"),
+        "页体窗必须 NOT_FOCUSABLE（BACK 不被吃＝第二条出路）"
+    );
+    // 热区没被放大：命中盒仍由 close_rect_off 派生，边距常量没动
+    assert_eq!(web_page::CLOSE_MARGIN, 24, "关闭盒边距不许为「好点」而放大");
+    let jbody = fn_body(&java, "public void startWebViewFromGate(");
+    assert!(
+        jbody.contains("int bar = Math.max(1, barPx)") && jbody.contains("lp.y = bar"),
+        "页体窗顶必须从条高起（条带内无窗压着＝真高于）"
+    );
+}
