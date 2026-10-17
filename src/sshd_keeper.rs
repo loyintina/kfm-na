@@ -147,16 +147,36 @@ pub fn ensure_conf(prefix: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// stderr 落盘（BAR-259：Stdio::null 灭口拆掉）——每拉一次截断一次，
-/// 只留最近一轮 stderr（秒退连败时最后一轮的报错就是定罪证词）。
-/// prefix 不在场（假 prefix 钉/环境死）或落不了盘 → 回 null 兜底不挡 spawn。
+/// err.log 单文件上限（超出即轮转清空——只留最近若干轮秒退的证词）
+const ERR_LOG_CAP: u64 = 64 * 1024;
+
+/// 打开 stderr 落盘（BAR-259／承影 NA0188 楼5 副伤修：**追加**，不再每次
+/// create 截断——截断会把上一轮秒退的证词抹掉，正好抹掉要定罪的那一轮）。
+/// 超帽才轮转（删旧文件重开）。
+pub fn open_err_log(prefix: &Path) -> std::io::Result<std::fs::File> {
+    let dir = prefix.join("tmp");
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join("sshd-err.log");
+    if std::fs::metadata(&path)
+        .map(|m| m.len() > ERR_LOG_CAP)
+        .unwrap_or(false)
+    {
+        let _ = std::fs::remove_file(&path);
+    }
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+}
+
+/// stderr 落盘（BAR-259：Stdio::null 灭口拆掉）——追加写，证词跨轮留在
+/// tmp/sshd-err.log。prefix 不在场（假 prefix 钉/环境死）或落不了盘 →
+/// 回 null 兜底不挡 spawn。
 fn sshd_err_stdio(prefix: &Path) -> Stdio {
     if !prefix.exists() {
         return Stdio::null();
     }
-    let dir = prefix.join("tmp");
-    let _ = std::fs::create_dir_all(&dir);
-    match std::fs::File::create(dir.join("sshd-err.log")) {
+    match open_err_log(prefix) {
         Ok(f) => Stdio::from(f),
         Err(_) => Stdio::null(),
     }
@@ -315,6 +335,63 @@ fn keep_loop(prefix: PathBuf) {
                     spawned_at = Some(std::time::Instant::now());
                     child = Some(c);
                     freeze_strikes = 0;
+                    // BAR-259 修（承影 NA0188 楼5 判卷红）：秒退必须在 spawn 后
+                    // **当拍**取样——巡检拍是 30s，等下一拍 try_wait 再算存活永远
+                    // ≥2s，熔断臂因此永不触发（原实现就是这么形同虚设的）。这里
+                    // 用 QUICK_DEATH 窗以 100ms 粒度探，探到即按秒退计。
+                    let mut quick_exit: Option<std::process::ExitStatus> = None;
+                    let mut probe_killed = false;
+                    let probe_steps = (QUICK_DEATH.as_millis() / 100) as u32;
+                    for _ in 0..probe_steps {
+                        std::thread::sleep(Duration::from_millis(100));
+                        let Some(c) = child.as_mut() else { break };
+                        match c.try_wait() {
+                            Ok(Some(st)) => {
+                                quick_exit = Some(st);
+                                break;
+                            }
+                            Ok(None) => {}
+                            Err(e) => {
+                                crate::report::report(
+                                    "sshd",
+                                    &format!("try_wait 失败: {e}——按退出论"),
+                                );
+                                let _ = c.kill();
+                                let _ = c.wait();
+                                probe_killed = true;
+                                break;
+                            }
+                        }
+                    }
+                    if probe_killed {
+                        child = None;
+                        spawned_at = None;
+                        stable_since = None;
+                        quick_streak = 0;
+                    } else if let Some(st) = quick_exit {
+                        let survived = spawned_at.take().map(|t| t.elapsed());
+                        let (s, blow) = fuse_step(survived, quick_streak);
+                        quick_streak = s;
+                        crate::report::report(
+                            "sshd",
+                            &format!(
+                                "sshd 秒退（{st}，存活 {}ms）——第 {quick_streak} 次",
+                                survived.map(|d| d.as_millis()).unwrap_or(0)
+                            ),
+                        );
+                        child = None;
+                        stable_since = None;
+                        if blow {
+                            crate::report::report(
+                                "sshd",
+                                &format!(
+                                    "sshd 秒退连败 {quick_streak} 次（每次 <{}s）——熔断挂起（BAR-259），证词见 tmp/sshd-err.log，修复后重启",
+                                    QUICK_DEATH.as_secs()
+                                ),
+                            );
+                            return;
+                        }
+                    }
                 }
                 Err(e) if is_permanent_spawn_err(&e) => {
                     crate::report::report(
