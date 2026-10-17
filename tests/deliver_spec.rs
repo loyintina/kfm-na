@@ -18,25 +18,20 @@ fn spec_bar252_路由判定_真值表() {
         decide(Page::Terminal, None, Some("清和"), None, true),
         Route::Window("清和".to_string())
     );
-    // AI 路无提示：AI 全屏页本归 AI；面板开着 = 人没看窗
+    // 可达性裁定（NA0189 楼8→楼9）：AI 全屏页本归 AI（页面本义，不是改投）
     assert_eq!(
         decide(Page::AiFullscreen, None, Some("清和"), None, true),
         Route::Ai(None)
     );
-    assert_eq!(
-        decide(Page::Terminal, Some(Panel::Ai), Some("清和"), None, true),
-        Route::Ai(None)
-    );
-    assert_eq!(
-        decide(
-            Page::Terminal,
-            Some(Panel::FileTree),
-            Some("清和"),
-            None,
-            true
-        ),
-        Route::Ai(None)
-    );
+    // 面板开着（非 Ai 浮层）＝没有要投的窗：明确失败，不许替用户选目的地
+    for panel in [Panel::Ai, Panel::FileTree] {
+        match decide(Page::Terminal, Some(panel), Some("清和"), None, true) {
+            Route::Fail(m) => {
+                assert!(m.contains("面板") && m.contains("收起"), "{m}");
+            }
+            other => panic!("{panel:?} 开着应明确失败，实得 {other:?}"),
+        }
+    }
     // AI 路无提示：投递面未装配（kfmv4 后端）= 旧行为零变化
     assert_eq!(
         decide(Page::Terminal, None, Some("清和"), None, false),

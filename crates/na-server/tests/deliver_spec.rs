@@ -7,9 +7,9 @@
 //! execute 薄 IO 胶的真机判卷归承影。
 
 use na_server::deliver::{
-    Action, Harness, Pane, Plan, Proc, RegRow, TmuxOp, check_alive, descendants, iso8, log_line,
-    lookup, parse_panes, parse_ps, parse_registry, parse_req, plan_dispatch, resp_json,
-    resp_json_with_screen, run_agent_send, screen_tail,
+    Action, Harness, Pane, Plan, Proc, RegRow, TmuxOp, agent_send_path, check_alive, descendants,
+    iso8, log_line, lookup, parse_panes, parse_ps, parse_registry, parse_req, plan_dispatch,
+    resp_json, resp_json_with_screen, run_agent_send, screen_tail,
 };
 
 fn kimi_row(name: &str) -> RegRow {
@@ -250,6 +250,31 @@ fn spec_bar252_返工_委派塞话原语() {
         e.contains("boom") && e.contains("3"),
         "失败要带退出码与原语 stderr: {e}"
     );
+    // **env 间接臂**（清和 NA0189 楼8 点名）：NA_AGENT_SEND 指向假脚本 →
+    // agent_send_path() 必须取它，执行函数照该路径真跑一遍（不是只验常量）。
+    // 本测试二进制的其他用例不读 NA_AGENT_SEND（execute() 之外无人调
+    // agent_send_path），故此处 env 写入无并行竞态面。
+    let prev = std::env::var("NA_AGENT_SEND").ok();
+    unsafe {
+        std::env::set_var("NA_AGENT_SEND", &fake);
+    }
+    assert_eq!(
+        agent_send_path(),
+        fake.to_str().unwrap(),
+        "env 覆盖口必须生效"
+    );
+    std::fs::remove_file(&argv_log).ok();
+    run_agent_send(&agent_send_path(), "悬铃", "中文 与 空格").expect("按 env 路径真跑");
+    let got = std::fs::read_to_string(&argv_log).expect("env 臂应落 argv");
+    assert_eq!(
+        got.lines().collect::<Vec<_>>(),
+        vec!["悬铃", "中文 与 空格"],
+        "env 臂 argv 逐字（含中文与空格）"
+    );
+    match prev {
+        Some(v) => unsafe { std::env::set_var("NA_AGENT_SEND", v) },
+        None => unsafe { std::env::remove_var("NA_AGENT_SEND") },
+    }
     std::fs::remove_dir_all(&dir).ok();
 }
 

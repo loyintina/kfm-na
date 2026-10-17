@@ -246,17 +246,18 @@ fn spec_bar256_路由_附着真值压账() {
             "attached 在时账={boot:?} 不许改路由"
         );
     }
-    // 面板开着 / AI 页：Pending 也不 Hold（人没在看窗，归 AI 无提示）
-    assert_eq!(
-        decide(
-            Page::Terminal,
-            Some(Panel::Ai),
-            None,
-            Some(&BootMark::Pending),
-            true
-        ),
-        Route::Ai(None)
-    );
+    // 面板开着：Pending 也不 Hold（人没在看窗）；按 BAR-252 返工丙裁定，
+    // 面板臂＝Fail（不替用户选目的地），此处随之更新期望
+    match decide(
+        Page::Terminal,
+        Some(Panel::Ai),
+        None,
+        Some(&BootMark::Pending),
+        true,
+    ) {
+        Route::Fail(m) => assert!(m.contains("面板"), "{m}"),
+        other => panic!("面板开着应 Fail，实得 {other:?}"),
+    }
 }
 
 // ---- D. 引导脚本打标覆盖 ----
