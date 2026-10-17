@@ -11919,13 +11919,38 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
                     .and_then(|v| v.f())
                     .unwrap_or(crate::ui::web_page::DENSITY_FALLBACK as f32);
                 let bar = crate::ui::web_page::set_from_density(f64::from(density));
+                // NA0189 楼22/23：平台占用带从 WindowInsets 问来（Java 只报事实），
+                // 条与命中盒据此让进「系统不占用的带」——不硬编码机型数值
+                let itop = env
+                    .call_method(
+                        &gref2,
+                        jni::jni_str!("webInsetTop"),
+                        jni::jni_sig!(() -> int),
+                        &[],
+                    )
+                    .and_then(|v| v.i())
+                    .unwrap_or(0)
+                    .max(0) as u32;
+                let iright = env
+                    .call_method(
+                        &gref2,
+                        jni::jni_str!("webInsetRight"),
+                        jni::jni_sig!(() -> int),
+                        &[],
+                    )
+                    .and_then(|v| v.i())
+                    .unwrap_or(0)
+                    .max(0) as u32;
+                crate::ui::web_page::set_insets(itop, iright);
+                let y_off = (itop + bar) as i32;
                 env.call_method(
                     &gref2,
                     jni::jni_str!("startWebViewFromGate"),
-                    jni::jni_sig!((java.lang.String, int) -> void),
+                    jni::jni_sig!((java.lang.String, int, int) -> void),
                     &[
                         jni::objects::JValue::Object(&ju),
                         jni::objects::JValue::Int(bar as i32),
+                        jni::objects::JValue::Int(y_off),
                     ],
                 )
                 .map(|_| ())

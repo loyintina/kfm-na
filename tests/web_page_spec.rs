@@ -186,7 +186,7 @@ fn spec_bar260_段1_java只报密度不自算() {
         "Java 不许自算条高（两端各算一份＝判据①破）"
     );
     assert!(
-        java.contains("startWebViewFromGate(final String url, final int barPx)"),
+        java.contains("startWebViewFromGate(final String url, final int barPx, final int yOffPx)"),
         "承载几何必须吃 Rust 传回的条高"
     );
     assert!(
@@ -226,7 +226,10 @@ fn spec_bar260_弹卡整删守卫() {
     assert!(!java.contains("* 3 / 5"), "弹卡几何「屏高 3/5」必须删净");
     assert!(!java.contains("heightPixels * 3"), "弹卡高度公式残留");
     assert!(!java.contains("刻意不全屏"), "弹卡注释尸体残留");
-    assert!(java.contains("lp.y = bar"), "整页几何：纵向偏移让出顶条");
+    assert!(
+        java.contains("lp.y = Math.max(0, yOffPx)"),
+        "整页几何：纵向偏移让出「状态栏＋顶条」（yOff 由 Rust 算好传回）"
+    );
     assert!(
         !java.contains("44f * dm.density"),
         "Java 不许自算条高（NA0189 楼6 判据①：一端算、两端取值）"
@@ -437,7 +440,138 @@ fn spec_bar260_出口_java不吞条区不吃返回() {
     assert_eq!(web_page::CLOSE_MARGIN, 24, "关闭盒边距不许为「好点」而放大");
     let jbody = fn_body(&java, "public void startWebViewFromGate(");
     assert!(
-        jbody.contains("int bar = Math.max(1, barPx)") && jbody.contains("lp.y = bar"),
-        "页体窗顶必须从条高起（条带内无窗压着＝真高于）"
+        jbody.contains("int bar = Math.max(1, barPx)")
+            && jbody.contains("lp.y = Math.max(0, yOffPx)"),
+        "页体窗顶必须从「状态栏高+条高」起（条带内无窗压着＝真高于）"
+    );
+}
+
+// ---- 安全区钉（NA0189 楼22/23：条不许落进系统占用带；安全区从 WindowInsets 取）----
+
+#[test]
+fn spec_bar260_出口_条与命中盒不落系统带() {
+    // 楼22 层序读数的结论：条原先整条画在系统状态栏带（0–135）里、「×」又压
+    // 右缘手势条（x≥1176）——两处系统窗吃触摸，点按永远到不了 na。
+    // 本钉咬几何：条带纵原点＝状态栏高、命中盒右界让出手势条宽。
+    // 变异抽检：把 inset_top/inset_right 当 0（回退到全屏摆）本钉必红。
+    let bar = web_page::bar_px(3.0);
+    let (w, itop, iright) = (1260u32, 135u32, 84u32);
+    web_page::set_insets(itop, iright);
+    let (rx, ry, rw, rh) = web_page::close_rect_in(w, bar, itop, iright);
+    assert!(ry >= itop, "命中盒顶必须在状态栏下缘之下（实测 y={ry}）");
+    assert!(
+        rx + rw <= web_page::avail_w(w, iright) - web_page::CLOSE_MARGIN,
+        "命中盒右界必须让出手势条（实测右缘 {} vs 可用带 {}）",
+        rx + rw,
+        web_page::avail_w(w, iright)
+    );
+    // 命中判定吃同一份（close_rect_off 内部读单源 insets）
+    let cx = f64::from(rx) + f64::from(rw) / 2.0;
+    let cy = f64::from(ry) + f64::from(rh) / 2.0;
+    assert!(
+        web_page::hit_close_off(cx, cy, w, bar, 0),
+        "盒心必中（inset 单源）"
+    );
+    assert!(
+        !web_page::hit_close_off(cx, 60.0, w, bar, 0),
+        "状态栏带里的点不许命中（那里是系统窗的地盘）"
+    );
+    // 恢复默认，免得污染同卷其他用例
+    web_page::set_insets(0, 0);
+}
+
+#[test]
+fn spec_bar260_出口_安全区从系统问不硬编码() {
+    // 硬判据（清和楼23）：安全区**一律从 WindowInsets 取**，禁止 135／1176
+    // 这类机型数值进代码；可用带要给实测边界数（由判卷取，不写死）。
+    // 变异抽检：把 inset 改成字面常量、或退回全屏摆，本钉必红。
+    let java = read_src("android/java/dev/kfm/na/MainActivity.java");
+    for bad in ["= 135", "= 1176", "135;", "1176;"] {
+        assert!(
+            !java.contains(bad),
+            "Java 里不许出现硬编码安全区数值「{bad}」"
+        );
+    }
+    let top_body = fn_body(&java, "public int webInsetTop()");
+    assert!(
+        top_body.contains("WindowInsets") && top_body.contains("statusBars"),
+        "状态栏高必须从 WindowInsets 取"
+    );
+    let right_body = fn_body(&java, "public int webInsetRight()");
+    assert!(
+        right_body.contains("systemGestures") || right_body.contains("getSystemGestureInsets"),
+        "右缘手势条宽必须从 WindowInsets 取"
+    );
+    assert!(
+        right_body.contains("Math.max"),
+        "右缘取 max（systemGestures/mandatory/systemWindowInset 三者最大）"
+    );
+    // 桥必须真把这两条问回来并落单源；起页命令把算好的 yOff 传下去
+    let app = read_src("src/android_app.rs");
+    assert!(
+        app.contains("webInsetTop") && app.contains("webInsetRight"),
+        "桥必须问回两条 inset"
+    );
+    assert!(
+        app.contains("set_insets(itop, iright)"),
+        "inset 必须落 web_page 单源（几何只在一处算）"
+    );
+    assert!(
+        java.contains("final String url, final int barPx, final int yOffPx"),
+        "起页命令必须带 yOff（= 状态栏高 + 条高，Rust 算好）"
+    );
+}
+
+#[test]
+fn spec_bar260_出口_条带绘制不越系统带() {
+    // 像素级：条带涂装不许落进「状态栏带（y<inset_top）」和「右缘手势条
+    // （x≥可用带右界）」——那两处系统窗吃触摸，画在那里等于画给用户看不见
+    // 也点不着。变异抽检：绘制不吃 inset（回退全屏摆）本钉必红。
+    let (cell_w, cell_h) = (kfm_na::termview::CELL_W, kfm_na::termview::CELL_H);
+    let host = {
+        let p = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf";
+        let b = std::fs::read(p).expect("host 夹具字体缺失");
+        fontdue::Font::from_bytes(b, fontdue::FontSettings::default()).expect("host 字体不可用")
+    };
+    let tv = kfm_na::termview::TermView::new(host, None, 8, 2, cell_w, cell_h);
+    let (w, h) = (8 * cell_w, 3 * cell_h);
+    let (itop, iright) = (cell_h, 2 * cell_w);
+    web_page::set_insets(itop, iright);
+    let mut buf = vec![0u32; (w * h) as usize];
+    web_page::paint(
+        &tv,
+        &mut buf,
+        w,
+        h,
+        kfm_na::ui::accent::FALLBACK,
+        web_page::bar_px(3.0),
+        0,
+    );
+    web_page::set_insets(0, 0);
+    // 状态栏带内不许有条带墨（三处：条底、标题、关闭盒）
+    for y in 0..itop {
+        for x in 0..w {
+            assert_eq!(
+                buf[(y * w + x) as usize],
+                0,
+                "状态栏带 ({x},{y}) 出现了条带墨——条画进系统占用带了"
+            );
+        }
+    }
+    // 右缘手势条内不许有条带墨
+    let usable = web_page::avail_w(w, iright);
+    for y in 0..h {
+        for x in usable..w {
+            assert_eq!(
+                buf[(y * w + x) as usize],
+                0,
+                "手势条带 ({x},{y}) 出现了条带墨——条伸出可用带"
+            );
+        }
+    }
+    // 条带本体内必须真有墨（不是把整条画没了）
+    assert!(
+        buf.iter().any(|&p| p != 0),
+        "可用带内必须真画出了条（防「让位让成不画」）"
     );
 }
