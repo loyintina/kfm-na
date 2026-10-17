@@ -160,6 +160,15 @@ fn spawn_terminal_session_owned(
     command: Option<String>,
     mut inbound: impl FnMut(SessionEvent) + Send + 'static,
 ) -> std::sync::mpsc::Sender<TermCmd> {
+    // BAR-256 引导账开户（起算点＝本拍，南舟楼2②）：命令里带打标形
+    // （cmd_bootstrap 产物）= 冷启动动态引导——服务器侧裁决结果将由
+    // OSC 私有键回传；非引导命令（cmd_attach/裸 shell）不开户。
+    // ws 腿只走 remote，本地 PTY 不经此路（leg 写死不参数化）
+    if let Some(c) = &command
+        && c.contains("7777;kfmboot=")
+    {
+        crate::boot_mark::open("remote", crate::report::boot_ms() as u64);
+    }
     let (tx, rx) = std::sync::mpsc::channel::<TermCmd>();
     std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread()

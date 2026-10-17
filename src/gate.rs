@@ -646,6 +646,16 @@ pub fn spawn_gate_watcher() {
             stats_answer(DUMP_DIR);
             touch_check(DUMP_DIR);
             switch_req_check(DUMP_DIR);
+            // BAR-256 引导账超窗迁移（白露②：窗内未记到 ⇒ 留痕不静默）——
+            // 只有 remote 腿走引导开户；Missed 后路由归 AI 带「引导账未回」
+            if let Some((opened, win)) =
+                crate::boot_mark::tick("remote", crate::report::boot_ms() as u64)
+            {
+                crate::report::report(
+                    "boot",
+                    &format!("引导账超窗未回（Missed）：起算={opened} 窗长={win}ms"),
+                );
+            }
             orb_check(DUMP_DIR); // 通道十:AI 外显事件注入(直调状态核,落回执)
             bar_check(DUMP_DIR); // 通道十一:输入栏事件注入(直调状态核,落回执)
             rec_req_check(DUMP_DIR); // 通道十二:软件内实录(P2,2026-09-08)
@@ -695,6 +705,9 @@ pub struct SessionPump {
     /// 控制事件队列（Opened/Exited/Failed 按名带进；UI 专属——健康牌/
     /// 重连归壳管，泵一粒不判）
     control: VecDeque<(&'static str, SessionEvent)>,
+    /// BAR-256 引导标记剥离器（每会话一只）：泵内分发前剥壳——显示 sink／
+    /// 飞行记录 rec／待机 replay 三消费方全净（白露①，NA0185）
+    strips: Vec<(&'static str, crate::boot_mark::BootStrip)>,
 }
 
 impl SessionPump {
@@ -703,15 +716,29 @@ impl SessionPump {
             slots: Vec::new(),
             replay: Vec::new(),
             control: VecDeque::new(),
+            strips: Vec::new(),
         }
     }
 
     /// 登记会话入向通道；同名 = 断线重连换心脏——旧通道遗物一粒不收，
-    /// 该名 replay 一并清（旧 shell 遗物不喂新会话）
+    /// 该名 replay 一并清（旧 shell 遗物不喂新会话）；剥离器同清
+    /// （BAR-256：新会话新引导窗，旧窗的半截标记尾不留给新会话）
     pub fn register(&mut self, name: &'static str, rx: Receiver<SessionEvent>) {
         self.slots.retain(|(n, _)| *n != name);
         self.slots.push((name, rx));
         self.replay.retain(|(n, _, _)| *n != name);
+        self.strips.retain(|(n, _)| *n != name);
+    }
+
+    fn strip_for(&mut self, name: &'static str) -> &mut crate::boot_mark::BootStrip {
+        let i = match self.strips.iter().position(|(n, _)| *n == name) {
+            Some(i) => i,
+            None => {
+                self.strips.push((name, crate::boot_mark::BootStrip::new()));
+                self.strips.len() - 1
+            }
+        };
+        &mut self.strips[i].1
     }
 
     /// 抽干一轮：活跃方 Output 喂 sink（返回 true = 喂过，调用方置 dirty）；
@@ -738,17 +765,41 @@ impl SessionPump {
             }
         }
         let mut fed = false;
+        let now_ms = crate::report::boot_ms() as u64;
         for (name, batch) in batches {
             for ev in batch {
                 match ev {
-                    SessionEvent::Output { data } if name == active => {
-                        rec(name, data.as_bytes());
-                        sink(data.as_bytes());
-                        fed = true;
-                    }
                     SessionEvent::Output { data } => {
-                        rec(name, data.as_bytes());
-                        self.push_replay(name, data);
+                        // BAR-256：泵内分发前先剥引导标记——一处剥壳，
+                        // 显示 sink／rec 见证／replay 补屏三消费方全净
+                        let segs = self.strip_for(name).feed(&data);
+                        for seg in segs {
+                            let clean = match seg {
+                                crate::boot_mark::Seg::Clean(c) => c,
+                                crate::boot_mark::Seg::Mark { raw, payload } => {
+                                    match crate::boot_mark::record(name, &payload, now_ms) {
+                                        crate::boot_mark::Record::Kept => {
+                                            crate::report::report(
+                                                "boot",
+                                                &format!("引导账到标: 腿={name} 载荷={payload}"),
+                                            );
+                                            continue; // 标记字节就此消失
+                                        }
+                                        // 窗外/无账到标：原样透传（alacritty
+                                        // 对未知 OSC 静默忽略——失效安全臂）
+                                        crate::boot_mark::Record::Rejected => raw,
+                                    }
+                                }
+                            };
+                            if name == active {
+                                rec(name, clean.as_bytes());
+                                sink(clean.as_bytes());
+                                fed = true;
+                            } else {
+                                rec(name, clean.as_bytes());
+                                self.push_replay(name, clean);
+                            }
+                        }
                     }
                     ctl => {
                         if self.control.len() >= CONTROL_CAP {
@@ -2586,6 +2637,11 @@ fn bar_check(dir: &str) {
                             a.as_str(),
                             hint.unwrap_or_default()
                         ));
+                    }
+                    // BAR-256：引导账 Pending＝留栏。注入通道不真发也不回填
+                    // （判卷臂只记决策，与 AI 臂「不扰对话页」同律）
+                    crate::deliver::Route::Hold(hint) => {
+                        deliver_notes.push(format!("deliver {} → 留栏 Hold（{hint}）", a.as_str()));
                     }
                 }
             }

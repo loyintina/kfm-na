@@ -152,6 +152,11 @@ pub fn cmd_attach(name: &str) -> String {
 /// 会话名合法字符集不会产出它——下划线开头 tmux 允许但 veran/人手都不用）
 pub const BOOTSTRAP_SHELL_SENTINEL: &str = "__kfm_shell__";
 
+/// OSC 私有键引入子的 shell printf 形态（BAR-256 打标）：八进制转义由
+/// printf 解（\033=ESC；BEL 在 cmd_bootstrap 的格式串尾部 \007），
+/// 解出的字节与 boot_mark::INTRO 逐字节相同——改一边必须同步另一边
+const BOOT_MARK_OSC_SH: &str = "\\033]7777;kfmboot=";
+
 /// veran 可执行的环境变量口（2026-09-30 边界审计：原写死作者机器绝对路径）。
 /// 服务器侧解析：env 优先 → PATH 查 `veran`（部署侧把 veran 放进 PATH，
 /// 如软链到 /usr/local/bin）。非交互 sh 的 PATH 是服务器最小公分母——
@@ -180,26 +185,32 @@ fn veran_resolve() -> String {
 ///   挑第一个成员会话（BAR-245：冷启动不许落进临时测试窗）；
 ///   无一命中 → 退回 list 第一条（旧径保底，面不能空）。
 /// last 持久化在壳侧 files/kfm-last-view（attach/脱离时写），本函数只消费。
+///
+/// BAR-256 打标：每条 exec 臂出发前先 kfm_mark 打 OSC 私有键标记
+/// （载荷＝附着目标会话名；裸壳臂＝BOOTSTRAP_SHELL_SENTINEL）——壳侧
+/// 泵内剥离器剥出即扶正附着账（boot_mark.rs），字节不进网格/记录/补屏。
 pub fn cmd_bootstrap(last: Option<&str>) -> String {
     let lv = sh_sq(last.unwrap_or(""));
     format!(
         "KFM_LAST='{lv}'; \
+         kfm_mark() {{ printf '{OSC}%s\\007' \"$1\" 2>/dev/null || :; }}; \
          if ! tmux list-sessions >/dev/null 2>&1; then {VERAN_RESOLVE}; \
          [ -n \"$VERAN\" ] && \"$VERAN\" >/dev/null 2>&1; fi; \
          if tmux list-sessions >/dev/null 2>&1; then \
          if [ -n \"$KFM_LAST\" ] && [ \"$KFM_LAST\" != '{BOOTSTRAP_SHELL_SENTINEL}' ] \
          && tmux has-session -t \"=$KFM_LAST\" 2>/dev/null; then \
-         exec tmux new-session -A -s \"$KFM_LAST\"; \
+         kfm_mark \"$KFM_LAST\"; exec tmux new-session -A -s \"$KFM_LAST\"; \
          elif [ \"$KFM_LAST\" != '{BOOTSTRAP_SHELL_SENTINEL}' ]; then \
          KFM_PICK=''; for n in $(tmux list-sessions -F '#{{session_name}}'); do \
          if printf '%s' \"$n\" | grep -qP '^[\\x{{4e00}}-\\x{{9fff}}]{{2}}$'; then KFM_PICK=\"$n\"; break; fi; done; \
          if [ -z \"$KFM_PICK\" ]; then \
          KFM_PICK=\"$(tmux list-sessions -F '#{{session_name}}' | head -n 1)\"; fi; \
-         exec tmux new-session -A -s \"$KFM_PICK\"; \
+         kfm_mark \"$KFM_PICK\"; exec tmux new-session -A -s \"$KFM_PICK\"; \
          fi; \
          fi; \
-         exec ${{SHELL:-/bin/sh}} -l",
-        VERAN_RESOLVE = veran_resolve()
+         kfm_mark '{BOOTSTRAP_SHELL_SENTINEL}'; exec ${{SHELL:-/bin/sh}} -l",
+        VERAN_RESOLVE = veran_resolve(),
+        OSC = BOOT_MARK_OSC_SH,
     )
 }
 

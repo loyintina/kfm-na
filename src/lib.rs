@@ -7,6 +7,7 @@ pub use cordis_na as base;
 pub mod a11y;
 pub mod ai_chat;
 pub mod ai_presence;
+pub mod boot_mark;
 pub mod bootstrap;
 pub mod brain;
 pub mod brain_ep;

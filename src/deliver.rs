@@ -65,15 +65,28 @@ pub enum Route {
     Window(String),
     /// 原 AI 路由；Some = 栏内瞬态提示（分叉须可解释，白露楼2④）
     Ai(Option<String>),
+    /// BAR-256 留栏不发（白露 NA0185 楼4：Pending＝「我还不知道」，
+    /// 不许替用户选目的地把给窗的指令交 AI 执行）：草稿回填＋瞬态提示，
+    /// 账落定后用户再按一次即走落定后的路由
+    Hold(String),
 }
 
-/// 路由判定（A 档纯函数，钉在 deliver_spec）：
-/// 终页裸奔 ∧ 附着名在 ∧ 投递面已装配 → 窗路；其余 AI 旧路。
+/// 路由判定（A 档纯函数，钉在 deliver_spec / boot_mark_spec）：
+/// 终页裸奔 ∧ 附着名在 ∧ 投递面已装配 → 窗路；附着名缺 → 问引导账
+/// （BAR-256）：Pending=Hold 留栏／Stripped(名)=窗路（服务器真值直连，
+/// 不等 UI 应用账）／Stripped(哨兵)=已知裸壳归 AI／Missed/Bad=归 AI
+/// 带「引导账」提示；无账（非引导流）= 旧行为裸 shell 归 AI。
 /// page/top 来自 ai_presence 快照；attached 来自 SessionRouter::active_attached
 /// （附着了 tmux 会话 = 会话名，裸 shell = None——BAR-238 同源读数）。
 /// 附着名在哪个腿不问：本地腿 ssh attach 与远程腿 ws attach 看的都是
 /// 服务器 tmux 窗，投递到窗就是投递到人正在看的地方。
-pub fn decide(page: Page, top: Option<Panel>, attached: Option<&str>, configured: bool) -> Route {
+pub fn decide(
+    page: Page,
+    top: Option<Panel>,
+    attached: Option<&str>,
+    boot: Option<&crate::boot_mark::BootMark>,
+    configured: bool,
+) -> Route {
     // AI 全屏页输入栏本归 AI；面板开着 = 人没在看窗——都无提示归 AI
     if page != Page::Terminal || top.is_some() {
         return Route::Ai(None);
@@ -82,9 +95,29 @@ pub fn decide(page: Page, top: Option<Panel>, attached: Option<&str>, configured
     if !configured {
         return Route::Ai(None);
     }
-    match attached {
-        Some(name) => Route::Window(name.to_string()),
-        // 裸 shell 无从核验（NA0181 楼1：保守归 AI），但须解释分叉
+    // 真附着压一切账（用户手动 attach 是最高真值）
+    if let Some(name) = attached {
+        return Route::Window(name.to_string());
+    }
+    match boot {
+        // 「我还不知道」：留栏不发，不替用户选目的地（白露楼4）
+        Some(crate::boot_mark::BootMark::Pending) => {
+            Route::Hold("正在接通会话——落定后再发，草稿不丢".to_string())
+        }
+        Some(crate::boot_mark::BootMark::Stripped(n)) => {
+            if n == crate::tmux_ctl::BOOTSTRAP_SHELL_SENTINEL {
+                Route::Ai(Some("当前窗是裸 shell——本句发往 AI 页".to_string()))
+            } else {
+                Route::Window(n.clone())
+            }
+        }
+        Some(crate::boot_mark::BootMark::Missed) => {
+            Route::Ai(Some("引导账未回——本句按裸 shell 发往 AI 页".to_string()))
+        }
+        Some(crate::boot_mark::BootMark::Bad(_)) => {
+            Route::Ai(Some("引导账非法——本句按裸 shell 发往 AI 页".to_string()))
+        }
+        // 无账（非引导流）：裸 shell 无从核验（NA0181 楼1：保守归 AI）
         None => Route::Ai(Some("当前窗是裸 shell——本句发往 AI 页".to_string())),
     }
 }
@@ -104,7 +137,8 @@ pub fn configured() -> bool {
 }
 
 /// 现状路由（发送闭包与 bar-inject 同源的读数口）：ai_presence 快照 +
-/// 路由附着名 + 投递面装配位。状态核未登记（装配未完成）= AI 旧路不打扰
+/// 路由附着名 + 引导账（BAR-256）+ 投递面装配位。状态核未登记（装配
+/// 未完成）= AI 旧路不打扰
 pub fn route_now() -> Route {
     let Some(ai) = crate::gate::ai_presence_handle() else {
         return Route::Ai(None);
@@ -112,7 +146,23 @@ pub fn route_now() -> Route {
     let snap = ai.snap(crate::report::boot_ms() as u64);
     let attached = crate::gate::gate_router_handle()
         .and_then(|r| r.lock().unwrap().active_attached().map(|s| s.to_string()));
-    decide(snap.page, snap.top, attached.as_deref(), configured())
+    let boot = crate::boot_mark::peek("remote");
+    decide(
+        snap.page,
+        snap.top,
+        attached.as_deref(),
+        boot.as_ref(),
+        configured(),
+    )
+}
+
+/// Hold 臂落地（BAR-256 白露楼4）：草稿回填栏不吞字＋瞬态提示。
+/// 与拒投臂共用 refill（白露楼2② 不可丢弃同一纪律）
+pub fn hold(text: &str, hint: &str) {
+    refill(text);
+    if let Some(b) = crate::gate::input_bar_handle() {
+        b.set_hint(hint);
+    }
 }
 
 /// 请求体（A 档纯函数）：JSON 四键 v/target/action/text

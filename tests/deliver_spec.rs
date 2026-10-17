@@ -14,29 +14,35 @@ use kfm_na::input_bar::{HINT_TTL_MS, InputBarState};
 fn spec_bar252_路由判定_真值表() {
     // 窗路：终页 + 栈顶空 + 附着名在 + 已装配
     assert_eq!(
-        decide(Page::Terminal, None, Some("清和"), true),
+        decide(Page::Terminal, None, Some("清和"), None, true),
         Route::Window("清和".to_string())
     );
     // AI 路无提示：AI 全屏页本归 AI；面板开着 = 人没看窗
     assert_eq!(
-        decide(Page::AiFullscreen, None, Some("清和"), true),
+        decide(Page::AiFullscreen, None, Some("清和"), None, true),
         Route::Ai(None)
     );
     assert_eq!(
-        decide(Page::Terminal, Some(Panel::Ai), Some("清和"), true),
+        decide(Page::Terminal, Some(Panel::Ai), Some("清和"), None, true),
         Route::Ai(None)
     );
     assert_eq!(
-        decide(Page::Terminal, Some(Panel::FileTree), Some("清和"), true),
+        decide(
+            Page::Terminal,
+            Some(Panel::FileTree),
+            Some("清和"),
+            None,
+            true
+        ),
         Route::Ai(None)
     );
     // AI 路无提示：投递面未装配（kfmv4 后端）= 旧行为零变化
     assert_eq!(
-        decide(Page::Terminal, None, Some("清和"), false),
+        decide(Page::Terminal, None, Some("清和"), None, false),
         Route::Ai(None)
     );
     // AI 路带提示：裸 shell 归 AI 须不静默（白露楼2④）
-    match decide(Page::Terminal, None, None, true) {
+    match decide(Page::Terminal, None, None, None, true) {
         Route::Ai(Some(h)) => {
             assert!(h.contains("裸 shell") && h.contains("AI 页"), "{h}")
         }

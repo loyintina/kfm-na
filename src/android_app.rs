@@ -5033,6 +5033,13 @@ impl App {
                         );
                         return;
                     }
+                    // BAR-256（白露 NA0185 楼4）：引导账 Pending＝「我还不知道」，
+                    // 留栏不发不吞字——不许把给窗的指令交 AI 页执行
+                    crate::deliver::Route::Hold(h) => {
+                        crate::report::report("deliver", "发送留栏：引导账 Pending（窗内未落定）");
+                        crate::deliver::hold(&text, &h);
+                        return;
+                    }
                     crate::deliver::Route::Ai(hint) => {
                         // 裸 shell 归 AI 不静默（白露楼2④）：栏内瞬态一句
                         if let Some(h) = hint
@@ -6043,6 +6050,34 @@ impl App {
         self.cur_attached()
             .and_then(|n| self.warm_pool.get(&n).map(|e| e.feed.pane()))
             .is_some_and(|p| p.is_some())
+    }
+
+    /// BAR-256：引导附着账应用（about_to_wait 每圈一拍）——泵剥到标记后
+    /// 把服务器侧裁决扶正进 remote_attached（账与网格同一真源）；幂等
+    /// （boot_mark::take_apply 取过一次不再给），手动 attach/脱离先行销账
+    fn boot_mark_apply(&mut self) {
+        match crate::boot_mark::take_apply("remote") {
+            Some(crate::boot_mark::Apply::Session(name)) => {
+                if self.remote_attached.as_deref() == Some(name.as_str()) {
+                    return;
+                }
+                crate::report::report("boot", &format!("引导账扶正: 附着={name}"));
+                self.remote_attached = Some(name.clone());
+                self.sync_router_attached();
+                // 附着即记视面（BAR-202 同律）：下次冷启动附回这个会话
+                self.persist_last_view(&name);
+                if let Some(p) = &self.parser_page {
+                    p.lock().unwrap().set_attached(Some(name));
+                }
+                self.dirty = true;
+            }
+            Some(crate::boot_mark::Apply::Bare) => {
+                // 服务器裁决落裸 shell（用户上次有意脱离/无会话）——账扶正
+                // 为「已知裸壳」（remote_attached 保持 None），只留痕
+                crate::report::report("boot", "引导账扶正: 裸 shell（服务器哨兵标）");
+            }
+            None => {}
+        }
     }
 
     /// 每圈确保（about_to_wait 调用）：要就有（服务器相+已附着 → 池按
@@ -7080,6 +7115,9 @@ impl App {
             }
             self.remote_attached = None;
             self.sync_router_attached();
+            // BAR-256：手动脱离压过引导账——销账防旧账改判（用户动作是
+            // 最高真值；此处即「已知裸壳」，路由不需要账替它说话）
+            crate::boot_mark::close("remote");
             // BAR-202：裸 shell 也是视面——持久化哨兵，下次冷启动不被
             // 强行拽回 tmux（用户有意脱离 = 尊重，点任意框即回）
             self.persist_last_view(crate::tmux_ctl::BOOTSTRAP_SHELL_SENTINEL);
@@ -7138,6 +7176,8 @@ impl App {
         }
         self.remote_attached = Some(name.clone());
         self.sync_router_attached();
+        // BAR-256：手动 attach 压过引导账——销账（真附着不许被旧账改判）
+        crate::boot_mark::close("remote");
         // BAR-202：附着即记视面——下次冷启动引导附回这个会话
         self.persist_last_view(&name);
         p.lock().unwrap().set_attached(Some(name.clone()));
@@ -10951,6 +10991,9 @@ impl ApplicationHandler for App {
             // （ctrl_active 封口后 v3 全链熄火，保底语义不靠时序）
             self.ctrl_ensure();
             self.ctrl_drain();
+            // BAR-256：引导附着账应用（剥到名即扶正 remote_attached——
+            // 路由读数与用户所见同一真源，NA0185）
+            self.boot_mark_apply();
             // 浏览期动态播放（2026-09-25 用户拍板「tmux 窗口就该是动态
             // 播放的」）：v3 增量合并后单次刷新成本降到 rows 行级小抓，
             // 节奏提速——250ms 节流 + 在途不叠（exec 往返自限 ≈2-4Hz）

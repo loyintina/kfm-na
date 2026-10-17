@@ -447,8 +447,8 @@ fn spec_bar238_接线守卫() {
     let app = include_str!("../src/android_app.rs");
     let n = app.matches("sync_router_attached").count();
     assert_eq!(
-        n, 7,
-        "附着账同步 = 1 定义 + 6 站点（装配/本地脱离/本地attach/远程脱离/远程attach/重孵勾销），实得 {n}"
+        n, 8,
+        "附着账同步 = 1 定义 + 7 站点（装配/本地脱离/本地attach/远程脱离/远程attach/重孵勾销/引导账扶正BAR-256），实得 {n}"
     );
 }
 
