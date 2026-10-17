@@ -190,6 +190,29 @@ pub fn enclosed_twin(c: char) -> Option<char> {
     }
 }
 
+/// 带圈族**溢格**孪生映射（BAR-242 辛，2026-10-17 白露 NA0171 楼38 拍）：
+/// 与 enclosed_twin 同序，接在窄版 62 连位之后（U+E03E 起 62 枚）。宽版
+/// 孪生**advance 仍半格**（列账/wcwidth/tmux 对齐零改动）、墨盒放到 824
+/// 单位横向溢格（±162 单位 ≈ 半格宽的 32%）——只在左右邻皆空白时消费
+/// （wide_twin_room），故不压邻字、不留半圆切片。
+pub fn enclosed_wide_twin(c: char) -> Option<char> {
+    let u = c as u32;
+    if (0x24B6..=0x24E9).contains(&u) {
+        char::from_u32(0xE03E + (u - 0x24B6))
+    } else if (0x246A..=0x2473).contains(&u) {
+        char::from_u32(0xE03E + 52 + (u - 0x246A))
+    } else {
+        None
+    }
+}
+
+/// 溢格放行条件（辛边界之二「降级整字回落不留半圆」）：左右邻都必须是
+/// 空白或行首尾（None）——任一侧有字就回落窄版孪生，宁可小也不切片。
+/// 纯函数：渲染循环与考题共用这一条判据，不各写一份。
+pub fn wide_twin_room(prev: Option<char>, next: Option<char>) -> bool {
+    prev.is_none_or(|c| c == ' ') && next.is_none_or(|c| c == ' ')
+}
+
 /// AI 面板整页移位压盖（采样缝过渡帧专用，2026-09-04 弹簧落下）。
 /// src = 整页面板渲染产物，y_off ∈ [-h, 0]：面板顶在屏上 y_off 行处
 /// （负 = 屏外上方）——dst 的 [0, h+y_off) 行从 src **底部**对应行整行
@@ -3367,6 +3390,21 @@ impl TermView {
             flags: Flags,
         }
         let mut cells: Vec<Cell2D> = Vec::new();
+        // 同邻取字（辛：溢格放行的几何判据）——同 py 且列相邻才算邻；行首尾
+        // 或跨行/跨零头一律 None（None = 无字，放行）。顺序与收集顺序解耦，
+        // 只认坐标，不赌 display_iter 的排列。
+        let row_neighbor = |cells: &[Cell2D], i: usize, dir: i32| -> Option<char> {
+            let j = i as i64 + i64::from(dir);
+            if j < 0 || j as usize >= cells.len() {
+                return None;
+            }
+            let (a, b) = (&cells[i], &cells[j as usize]);
+            if a.py != b.py || b.px as i64 - a.px as i64 != i64::from(dir) * i64::from(self.cell_w)
+            {
+                return None;
+            }
+            Some(b.c)
+        };
         let screen_lines = self.active_term().grid().screen_lines() as i32;
         let history_lines = self.active_term().grid().history_size() as i32;
         let (cell_w, cell_h) = (self.cell_w, self.cell_h);
@@ -3514,18 +3552,30 @@ impl TermView {
         } else {
             buf_h
         };
-        for cell in &cells {
+        for (i, cell) in cells.iter().enumerate() {
             if !paintable(cell.c) || cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
                 continue;
             }
-            let clip_w = if cell.flags.contains(Flags::WIDE_CHAR) {
+            let mut clip_w = if cell.flags.contains(Flags::WIDE_CHAR) {
                 self.cell_w * 2
             } else {
                 self.cell_w
             };
+            let mut ch = cell.c;
+            // 辛（BAR-242，白露楼38）：带圈族在「左右邻皆空白」时换溢格
+            // 孪生并把裁剪宽放到 2 格；否则保持窄版（draw_glyph 里的
+            // degrade_cell 照旧兜底）——宁可小，不留半圆切片。
+            if let Some(w) = self.enclosed_wide_pick(cell.c) {
+                let prev = row_neighbor(&cells, i, -1);
+                let next = row_neighbor(&cells, i, 1);
+                if wide_twin_room(prev, next) {
+                    ch = w;
+                    clip_w = self.cell_w * 2;
+                }
+            }
             self.draw_glyph(
                 &mut frame,
-                cell.c,
+                ch,
                 cell.px,
                 cell.py,
                 cell.fg,
@@ -4028,6 +4078,26 @@ impl TermView {
                 }
             }
         }
+    }
+
+    /// 辛（BAR-242，NA0171 楼38 白露拍）：本格能否换**溢格**孪生——门与
+    /// 条件②同（主字体缺＋备用全角），另要求宽版孪生在烘焙字体里；左右邻
+    /// 是否给位由 wide_twin_room 在渲染循环判（字体级问题这里答，几何级
+    /// 问题那里答，两处各管一段）。
+    fn enclosed_wide_pick(&self, c: char) -> Option<char> {
+        let w = enclosed_wide_twin(c)?;
+        if self.font.lookup_glyph_index(c) != 0 {
+            return None; // 主字体有全角原字 → 走原路
+        }
+        let k = self.cjk.as_ref()?;
+        if k.font.lookup_glyph_index(c) == 0 {
+            return None; // 双缺 → 降级路
+        }
+        let full = k.font.metrics('中', 1000.0).advance_width;
+        if k.font.metrics(c, 1000.0).advance_width <= full * 0.75 {
+            return None; // 半格字形本来放得下 → 不动
+        }
+        (k.font.lookup_glyph_index(w) != 0).then_some(w)
     }
 
     /// 逐字挑字体（输入栏/网格引擎文本规则，BAR-195 前键栏 draw_label

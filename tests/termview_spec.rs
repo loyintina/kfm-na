@@ -1046,6 +1046,154 @@ fn spec_bar242_戊_烘焙字体_窄版孪生覆盖() {
 }
 
 #[test]
+fn spec_bar242_辛_溢格孪生映射_闭式形状() {
+    // 溢格孪生映射表（与 font-bake-cjk.py wide_twin_cp 双端手工对齐）：
+    // Ⓐ-ⓩ U+24B6-24E9（52 枚）→ U+E03E 起同序，⑪-⑳ U+246A-2473 顺接；
+    // 族外 None（① CJK 自带不进族、中/ASCII 不动）。与窄版表同序、基底
+    // 差 62 连位——两版字形同构，只差尺寸（辛＝advance 不动、墨盒溢格）。
+    // 变异抽检：基底改数/两段边界错位/摘⑪段/窄版表跟着挪，本钉必红。
+    assert_eq!(termview::enclosed_wide_twin('Ⓐ'), Some('\u{E03E}'));
+    assert_eq!(termview::enclosed_wide_twin('Ⓩ'), Some('\u{E057}'));
+    assert_eq!(termview::enclosed_wide_twin('ⓐ'), Some('\u{E058}'));
+    assert_eq!(termview::enclosed_wide_twin('ⓩ'), Some('\u{E071}'));
+    assert_eq!(termview::enclosed_wide_twin('⑪'), Some('\u{E072}'));
+    assert_eq!(termview::enclosed_wide_twin('⑳'), Some('\u{E07B}'));
+    assert_eq!(termview::enclosed_wide_twin('①'), None);
+    assert_eq!(termview::enclosed_wide_twin('中'), None);
+    assert_eq!(termview::enclosed_wide_twin('a'), None);
+    for c in ['Ⓐ', 'Ⓩ', 'ⓐ', 'ⓩ', '⑪', '⑳'] {
+        let n = termview::enclosed_twin(c).expect("窄版孪生在场") as u32;
+        let w = termview::enclosed_wide_twin(c).expect("溢格孪生在场") as u32;
+        assert_eq!(w - n, 62, "{c} 宽窄孪生必须相差 62 连位（同序同表）");
+    }
+    // 放行条件真值表（白露楼38 边界「条件性全宽写进判据」）：左右邻皆空白
+    // 或行首尾才放行；任一侧有字即回落。变异抽检：条件改成或/恒真，本段必红。
+    assert!(
+        termview::wide_twin_room(Some(' '), Some(' ')),
+        "空白夹持必须放行"
+    );
+    assert!(termview::wide_twin_room(None, None), "整行只有此字必须放行");
+    assert!(
+        termview::wide_twin_room(None, Some(' ')),
+        "行首＋右侧空白必须放行"
+    );
+    assert!(
+        termview::wide_twin_room(Some(' '), None),
+        "行尾＋左侧空白必须放行"
+    );
+    assert!(
+        !termview::wide_twin_room(Some('l'), Some(' ')),
+        "左侧有字必须回落"
+    );
+    assert!(
+        !termview::wide_twin_room(Some(' '), Some('a')),
+        "右侧有字必须回落"
+    );
+    assert!(
+        !termview::wide_twin_room(Some('中'), Some('中')),
+        "两侧有字必须回落"
+    );
+}
+
+#[test]
+fn spec_bar242_辛_烘焙字体_溢格孪生覆盖() {
+    // 辛的字体承诺：烘焙产物必须真带 62 枚溢格孪生（U+E03E-E07B）——
+    // advance 仍半格（列账/wcwidth/tmux 对齐零改动）、墨盒横向溢格（宽 ≈
+    // 824/500 = 1.65 倍半格，两侧出格）、中央有墨（字母在）＋外圈有墨（环在）。
+    // 变异抽检：孪生缺枚/步进改全角/墨盒缩回格内/字母不绘，本钉必红。
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/assets/fonts/NotoSansCJKsc-kfm.ttf"
+    );
+    let bytes = std::fs::read(path).expect("烘焙 CJK 字体缺失");
+    let font = fontdue::Font::from_bytes(bytes, fontdue::FontSettings::default())
+        .expect("fontdue 不认烘焙字体");
+    let px = CELL_H as f32;
+    let half_adv = font.metrics('a', px).advance_width;
+    for u in 0xE03Eu32..=0xE07B {
+        let c = char::from_u32(u).unwrap();
+        assert_ne!(
+            font.lookup_glyph_index(c),
+            0,
+            "烘焙字体必须真带溢格孪生 U+{u:04X}"
+        );
+    }
+    for c in ['\u{E03E}', '\u{E058}', '\u{E071}', '\u{E072}', '\u{E07B}'] {
+        let (m, bmp) = font.rasterize(c, px);
+        assert!(
+            m.width > 0 && m.height > 0 && bmp.iter().any(|&a| a > 0),
+            "{c:?} 必须真有墨"
+        );
+        assert!(
+            m.advance_width <= half_adv * 1.06,
+            "{c:?} advance 必须仍是半格（列账不动，实测 {} vs 半格 {half_adv}）",
+            m.advance_width
+        );
+        assert!(
+            m.width as f32 >= half_adv * 1.4,
+            "{c:?} 墨盒必须横向溢格（宽 ≈1.65 倍半格，实测 {} vs 半格 {half_adv}）",
+            m.width
+        );
+        let (w, h) = (m.width, m.height);
+        let mid = |x: usize, y: usize| bmp[y * w + x] > 0;
+        let center_ink = (h / 3..h * 2 / 3)
+            .step_by(2)
+            .any(|y| (w / 3..w * 2 / 3).step_by(2).any(|x| mid(x, y)));
+        assert!(center_ink, "{c:?} 中央必须有墨（字母在）");
+        let ring_ink =
+            (0..w).step_by(2).any(|x| mid(x, h / 12)) || (0..h).step_by(2).any(|y| mid(w / 12, y));
+        assert!(ring_ink, "{c:?} 外圈必须有墨（环在）");
+    }
+}
+
+#[test]
+fn spec_bar242_辛_双邻空白才溢格() {
+    // 辛的渲染条件（白露楼38 三条边界之一/之二）：左右邻皆空白才换溢格
+    // 孪生并把裁剪放宽到 2 格；任一侧有字回落窄版——宁可小，不留半圆切片。
+    // 钉法是像素级的独立断言（不复述实现）：量同一行墨的右缘，空白夹持
+    // 时必须比单侧有字时更往右（溢格发生），且两者都真有墨（不是画丢）。
+    let cjk_bytes = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/assets/fonts/NotoSansCJKsc-kfm.ttf"
+    ))
+    .expect("烘焙 CJK 字体缺失");
+    let cjk = fontdue::Font::from_bytes(cjk_bytes, fontdue::FontSettings::default())
+        .expect("fontdue 不认烘焙字体");
+    // 背景是渐变（整帧远非单色），逐像素「是墨」判不出文字——用**双渲染
+    // 差影**隔离字形：同长文本把带圈字换成等宽空白，两帧相减即只剩该字
+    // 的墨（光标位置两帧相同，不掺 chrome）。
+    let glyph_right_edge = |with_ring: &str, blank: &str| -> u32 {
+        let render = |text: &str| -> (Vec<u32>, u32, u32) {
+            let mut tv = TermView::new(host_font(), Some(cjk.clone()), 8, 2, CELL_W, CELL_H);
+            tv.feed(text.as_bytes());
+            let buf_w = 2 * termview::MARGIN_X + 8 * CELL_W;
+            let buf_h = termview::MARGIN_TOP + termview::MARGIN_Y + 2 * CELL_H;
+            let mut buf = vec![0u32; (buf_w * buf_h) as usize];
+            tv.render_into(&mut buf, buf_w, buf_h, 0);
+            (buf, buf_w, buf_h)
+        };
+        let (a, buf_w, buf_h) = render(with_ring);
+        let (b, _, _) = render(blank);
+        let mut right = 0u32;
+        for y in 0..buf_h {
+            for x in 0..buf_w {
+                if a[(y * buf_w + x) as usize] != b[(y * buf_w + x) as usize] {
+                    right = right.max(x);
+                }
+            }
+        }
+        assert!(right > 0, "{with_ring:?} 必须画墨（差影为空说明字没画）");
+        right
+    };
+    let roomy = glyph_right_edge(" ⓐ ", "   ");
+    let left_packed = glyph_right_edge("lⓐ", "l ");
+    assert!(
+        roomy > left_packed + 3,
+        "空白夹持时必须溢格（右缘 {roomy}），单侧有字必须回落窄版（右缘 {left_packed}）"
+    );
+}
+
+#[test]
 fn spec_滚动_scroll_lines驱动display_offset() {
     // 触摸滚动的 B 档钉：scroll_lines 必须真的驱动 alacritty 的 display_offset
     // （正 = 看历史），scroll_to_bottom 必须贴回 0；越界由 alacritty 自钳

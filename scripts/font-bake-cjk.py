@@ -110,6 +110,16 @@ NSS_DONOR = os.path.expanduser("~/40-资产/kfm-na-toolchain/fonts/NotoSansSymbo
 TWIN_BASE = 0xE000
 TWIN_LETTER_DONOR = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
+# ---- 辛（BAR-242 再重开，2026-10-17 NA0171 楼38 白露拍「溢格孪生」）----
+# 用户判戊「有圈但太小」：1 格 advance=500，孪生墨盒已占 96%＝顶格，格内
+# 无余量（字体实测 adv 500/ink 480）。辛＝**advance 仍半格、墨盒放到 824**
+# （±162 单位横向溢格 ≈ 半格宽的 32%，对齐二修全角墨盒），渲染侧只在左右
+# 邻皆空白时放行 2 格裁剪——列账/wcwidth/tmux 对齐零改动，只动绘制裁剪。
+# 62 枚接在窄版之后（U+E03E 起，与 ENCLOSED_CPS 同序）。
+WIDE_TWIN_BASE = TWIN_BASE + 62
+WIDE_TWIN_INK = 824   # 与二修全角 ⓐ 同墨盒（≈「中」92% 高）
+WIDE_RING = 103       # 环粗：窄版 60/480 的同比例（12.5% 圆径）
+
 
 def keep_unicodes():
     cps = set(range(0x20, 0x7F))
@@ -268,6 +278,15 @@ def twin_cp(cp):
     return None
 
 
+def wide_twin_cp(cp):
+    """带圈族主码位 → PUA **溢格**孪生码位（辛，U+E03E 起，同序；族外 None）"""
+    if 0x24B6 <= cp <= 0x24E9:
+        return WIDE_TWIN_BASE + (cp - 0x24B6)
+    if 0x246A <= cp <= 0x2473:
+        return WIDE_TWIN_BASE + 52 + (cp - 0x246A)
+    return None
+
+
 def _ring(pen, cx, cy, r_out, r_in):
     """圆环两轮廓（外 CCW 内 CW，TrueType 非零环绕得环）。三次贝塞尔
     四段近似圆：控制点沿端点切向伸出 kappa*r，kappa=0.5522847498。"""
@@ -295,11 +314,40 @@ def redraw_enclosed_twins(font):
     画布 500（半格）：圆心 (250,357)（纵对齐在产全角 ⓐ 圆心）、圆径 480、
     环粗 60；字母墨高：小写按 x 高 264、大写按 cap 高 290、数字 240，
     双数字另限总宽 ≤330。"""
+    return _redraw_enclosed(
+        font,
+        base=TWIN_BASE,
+        r_out=240,
+        r_in=180,
+        scale=1.0,
+        tag="pua",
+    )
+
+
+def redraw_enclosed_wide_twins(font):
+    """辛：重绘 62 枚**溢格**孪生进 PUA（U+E03E 起，幂等覆盖）。
+    圆心仍在 advance 中心 (250,357)（纵向与窄版同基，混排不跳行）；
+    圆径 824＝二修全角墨盒 → 墨盒横跨 [-162, 662]（**advance 仍 500**，
+    左右各溢 162 单位）；环粗按窄版同比例 12.5%＝103；字母墨高按
+    824/480 同比例放大（530/482/438，双数字总宽 ≤566）。"""
+    return _redraw_enclosed(
+        font,
+        base=WIDE_TWIN_BASE,
+        r_out=WIDE_TWIN_INK // 2,
+        r_in=WIDE_TWIN_INK // 2 - WIDE_RING,
+        scale=WIDE_TWIN_INK / 480.0,
+        tag="wua",
+    )
+
+
+def _redraw_enclosed(font, *, base, r_out, r_in, scale, tag):
+    """窄/溢格孪生共用重绘核（同一张 ENCLOSED_CPS 表、同一套载荷排法，
+    只有画布与比例不同——两版字形结构一致，只差尺寸）。"""
     donor = TTFont(TWIN_LETTER_DONOR)
     d_cmap, d_gs = donor.getBestCmap(), donor.getGlyphSet()
     glyf, hmtx = font["glyf"], font["hmtx"]
     vmtx = font["vmtx"] if "vmtx" in font else None
-    CX, CY, R_OUT, R_IN = HALF // 2, 357, 240, 180
+    CX, CY, R_OUT, R_IN = HALF // 2, 357, r_out, r_in
 
     def donor_bounds(gname):
         pen = BoundsPen(d_gs)
@@ -309,15 +357,16 @@ def redraw_enclosed_twins(font):
     x_h = donor_bounds(d_cmap[ord("x")])[3] - donor_bounds(d_cmap[ord("x")])[1]
     cap_h = donor_bounds(d_cmap[ord("H")])[3] - donor_bounds(d_cmap[ord("H")])[1]
     dig_h = donor_bounds(d_cmap[ord("8")])[3] - donor_bounds(d_cmap[ord("8")])[1]
+    cap_w = 330 * scale
 
     made = 0
     for i, cp in enumerate(ENCLOSED_CPS):
         if 0x24B6 <= cp <= 0x24CF:
-            payload, base_h, target = chr(ord("A") + cp - 0x24B6), cap_h, 290
+            payload, base_h, target = chr(ord("A") + cp - 0x24B6), cap_h, 290 * scale
         elif 0x24D0 <= cp <= 0x24E9:
-            payload, base_h, target = chr(ord("a") + cp - 0x24D0), x_h, 264
+            payload, base_h, target = chr(ord("a") + cp - 0x24D0), x_h, 264 * scale
         else:
-            payload, base_h, target = str(11 + cp - 0x246A), dig_h, 240
+            payload, base_h, target = str(11 + cp - 0x246A), dig_h, 240 * scale
         pen = TTGlyphPen(glyf)
         _ring(pen, CX, CY, R_OUT, R_IN)
         # 载荷墨盒（donor 空间，逐字排）
@@ -331,20 +380,20 @@ def redraw_enclosed_twins(font):
             cursor += adv * 0.88  # 双数字收紧字距
         x0 = min(b[0] + off for _, off, b in pieces)
         x1 = max(b[2] + off for _, off, b in pieces)
-        s = min(target / base_h, 330 / (x1 - x0))
+        s = min(target / base_h, cap_w / (x1 - x0))
         cx_d, cy_d = (x0 + x1) / 2, (min(b[1] for _, _, b in pieces) + max(b[3] for _, _, b in pieces)) / 2
         for dg, off, _ in pieces:
             rec = DecomposingRecordingPen(d_gs)
             d_gs[dg].draw(rec)
             t = Transform(s, 0, 0, s, CX - s * (cx_d - off), CY - s * cy_d)
             rec.replay(TransformPen(pen, t))
-        gname = f"pua{TWIN_BASE + i:04X}"
+        gname = f"{tag}{base + i:04X}"
         glyf[gname] = pen.glyph()
         b = ink_bounds(glyf, gname)
         hmtx[gname] = (HALF, b[0] if b else 0)
         if vmtx is not None:
             vmtx[gname] = (font["head"].unitsPerEm, 0)
-        register_cmap(font, TWIN_BASE + i, gname)
+        register_cmap(font, base + i, gname)
         made += 1
     return made
 
@@ -443,6 +492,9 @@ def main():
     n_twin = redraw_enclosed_twins(font)
     print(f"4b.redraw(戊): 带圈族窄版孪生 {n_twin} 枚进 PUA U+{TWIN_BASE:04X} 起"
           "（重绘非缩绘：环粗 60＋字母 ≈55% 圆径；终端 1 格面专用）")
+    n_wide = redraw_enclosed_wide_twins(font)
+    print(f"4c.redraw(辛): 带圈族溢格孪生 {n_wide} 枚进 PUA U+{WIDE_TWIN_BASE:04X} 起"
+          f"（advance 仍 {HALF}、墨盒 {WIDE_TWIN_INK} 横向溢格；左右邻空白才消费）")
 
     font.save(dst)
 
@@ -480,6 +532,18 @@ def main():
         b = ink_bounds(cglyf, gn)
         assert b and 400 <= b[2] - b[0] <= HALF, \
             f"U+{t:04X} 孪生墨宽须 ∈[400,500]（粗满但不溢格），实得 {b}"
+    for cp in ENCLOSED_CPS:
+        t = wide_twin_cp(cp)
+        gn = cmap.get(t)
+        assert gn, f"U+{t:04X} 溢格孪生 cmap 未命中（辛，主码位 U+{cp:04X}）"
+        assert chmtx[gn][0] == HALF, f"U+{t:04X} 溢格孪生 advance 必须仍半格（列账不动）"
+        b = ink_bounds(cglyf, gn)
+        assert b, f"U+{t:04X} 溢格孪生墨迹为空"
+        w = b[2] - b[0]
+        assert 800 <= w <= WIDE_TWIN_INK, \
+            f"U+{t:04X} 溢格孪生墨宽须 ∈[800,{WIDE_TWIN_INK}]，实得 {w}"
+        assert b[0] < 0 and b[2] > HALF, \
+            f"U+{t:04X} 溢格孪生必须两侧出格（左右邻空白才放行的前提），实得 {b}"
     for cp in MOON_CPS:
         assert chmtx[cmap[cp]][0] == UPM, f"U+{cp:04X} 月亮非全角位"
     for cp in (0xE0B0, 0xE0B2):
