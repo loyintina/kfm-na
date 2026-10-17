@@ -162,7 +162,14 @@ public class MainActivity extends NativeActivity {
     private android.webkit.WebView mWeb;
 
     /** 原生 gate 线程经 JNI 调（与 startRecordingFromGate 同槽注册） */
-    public void startWebViewFromGate(final String url) {
+    /** 条高单源（BAR-260 段①，NA0189 楼6 判据①）：Java 只报**密度**这个
+     * 平台事实，条高由 Rust 侧 web_page::bar_px 算一次并随桥传回——两端
+     * 不许各算一份。 */
+    public float webDensity() {
+        return getResources().getDisplayMetrics().density;
+    }
+
+    public void startWebViewFromGate(final String url, final int barPx) {
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
@@ -183,11 +190,11 @@ public class MainActivity extends NativeActivity {
                         s.setJavaScriptEnabled(true);
                         s.setDomStorageEnabled(true);
                         wv.setWebViewClient(new android.webkit.WebViewClient());
-                        // 整页几何：条高 = 44dp（与 src/ui/web_page.rs 的
-                        // BAR_H 同源；1260 宽 3x 真机 = 132 物理 px）——
+                        // 整页几何：条高**取 Rust 传回的那一份**（单源，见
+                        // web_page::bar_px）；本端不再自算 44dp×density——
                         // 条高让给 Rust 原生条，页体从条下缘铺到屏底
                         android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
-                        int bar = Math.max(1, Math.round(44f * dm.density));
+                        int bar = Math.max(1, barPx);
                         int h = Math.max(1, dm.heightPixels - bar);
                         android.view.WindowManager.LayoutParams lp =
                                 new android.view.WindowManager.LayoutParams(

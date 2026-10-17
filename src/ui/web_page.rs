@@ -12,15 +12,16 @@
 use crate::termview::Frame;
 use crate::ui::accent::{AccentPair, CARD_PAGE_BG};
 
-/// 条高（物理 px）：44dp @3x（1260 宽真机）；与 MainActivity 的
-/// 44dp 取值同源（跨语言两处常量，改一处必改另一处）
-pub const BAR_H: u32 = 132;
+/// 条高的**唯一位点**（NA0189 楼6 判据①）：dp 值只此一处，物理 px 一律经
+/// bar_px(density) 算；Java 侧只报密度、不再自算（一端算两端取值）。密度
+/// 未就位时的兜底档 = 3.0（1260 宽真机实拍档 → 132px）。
+pub const BAR_DP: f64 = 44.0;
+/// 兜底密度（桥未通时用；真机 3x）
+pub const DENSITY_FALLBACK: f64 = 3.0;
 /// 标题左内边距（物理 px）
 pub const PAD_X: u32 = 28;
 /// 「×」命中方块距条右/上下的边距（物理 px）
 pub const CLOSE_MARGIN: u32 = 24;
-/// 「×」命中方块边长（物理 px）
-pub const CLOSE_SIDE: u32 = BAR_H - CLOSE_MARGIN * 2;
 /// 页面标题
 pub const TITLE: &str = "全局页";
 /// 标题/关闭墨色（近白，与页面深底拉开）
@@ -28,19 +29,49 @@ const INK: u32 = 0x00E6_E6EE;
 /// 「×」笔触半径（物理 px）
 const CLOSE_STROKE_R: i64 = 5;
 
+/// 条高（物理 px）＝density × BAR_DP，四舍五入、下限 1——**全进程唯一算式**。
+pub fn bar_px(density: f64) -> u32 {
+    let v = (BAR_DP * density).round();
+    if !v.is_finite() || v < 1.0 {
+        return 1;
+    }
+    v.min(f64::from(u32::MAX)) as u32
+}
+
+/// 运行期条高（单源读数，bar_px 算出的那份；线程安全静态）
+pub fn bar_h() -> u32 {
+    BAR_H_PX.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// 运行期条高设定：桥报来密度，这里只调 bar_px 一次并落库——Java 不再算。
+pub fn set_from_density(density: f64) -> u32 {
+    let h = bar_px(density);
+    BAR_H_PX.store(h, std::sync::atomic::Ordering::Relaxed);
+    h
+}
+
+/// 进程内条高（px）；初始＝兜底密度档，桥通后用 set_from_density 覆写
+static BAR_H_PX: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(132); // = bar_px(DENSITY_FALLBACK)，见钉
+
+/// 「×」命中方块边长（物理 px）：条高 − 上下边距×2
+pub fn close_side(bar_h: u32) -> u32 {
+    bar_h.saturating_sub(CLOSE_MARGIN * 2)
+}
+
 /// 「×」命中方块（x, y, w, h）：条内右端，唯一命中区
-pub fn close_rect(buf_w: u32) -> (u32, u32, u32, u32) {
+pub fn close_rect(buf_w: u32, bar_h: u32) -> (u32, u32, u32, u32) {
+    let side = close_side(bar_h);
     (
-        buf_w.saturating_sub(CLOSE_MARGIN + CLOSE_SIDE),
+        buf_w.saturating_sub(CLOSE_MARGIN + side),
         CLOSE_MARGIN,
-        CLOSE_SIDE,
-        CLOSE_SIDE,
+        side,
+        side,
     )
 }
 
 /// 命中判定：只算右端「×」方块（条内其余位置与条外一律不中）
-pub fn hit_close(x: f64, y: f64, buf_w: u32) -> bool {
-    let (rx, ry, rw, rh) = close_rect(buf_w);
+pub fn hit_close(x: f64, y: f64, buf_w: u32, bar_h: u32) -> bool {
+    let (rx, ry, rw, rh) = close_rect(buf_w, bar_h);
     x >= f64::from(rx) && x < f64::from(rx + rw) && y >= f64::from(ry) && y < f64::from(ry + rh)
 }
 
@@ -53,6 +84,7 @@ pub fn paint(
     buf_w: u32,
     buf_h: u32,
     accent: AccentPair,
+    bar_h: u32,
 ) {
     if buf_w == 0 || buf_h == 0 {
         return;
@@ -63,8 +95,8 @@ pub fn paint(
         h: buf_h,
     };
     // 条带底（深底与各页同色）+ 底缘 2px accent 双色线（左 c1 右 c2）
-    frame.fill_rect(0, 0, buf_w, BAR_H, CARD_PAGE_BG);
-    let div_y = BAR_H.saturating_sub(2);
+    frame.fill_rect(0, 0, buf_w, bar_h, CARD_PAGE_BG);
+    let div_y = bar_h.saturating_sub(2);
     let half = buf_w / 2;
     frame.fill_rect(0, div_y, half, 2, accent.c1);
     frame.fill_rect(half, div_y, buf_w - half, 2, accent.c2);
@@ -72,8 +104,8 @@ pub fn paint(
     let (cell_w, cell_h) = term.cell_size();
     if cell_w > 0 {
         let (items, _) = term.measure_items_grid(TITLE);
-        let y_top = i64::from(BAR_H.saturating_sub(cell_h) / 2);
-        let max_w = buf_w.saturating_sub(PAD_X * 2 + CLOSE_SIDE).max(1);
+        let y_top = i64::from(bar_h.saturating_sub(cell_h) / 2);
+        let max_w = buf_w.saturating_sub(PAD_X * 2 + close_side(bar_h)).max(1);
         term.draw_grid_text_left(
             &mut frame,
             &items,
@@ -87,7 +119,7 @@ pub fn paint(
         );
     }
     // 右端「×」：细框 + 两段对角笔画（命中盒 = 视觉盒，眼手同尺）
-    let (cx, cy, cs, _) = close_rect(buf_w);
+    let (cx, cy, cs, _) = close_rect(buf_w, bar_h);
     paint_close_box(&mut frame, cx, cy, cs, accent.c2);
 }
 

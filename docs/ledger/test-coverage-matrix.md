@@ -19,13 +19,13 @@
 | `src/conn.rs` | 4 | 2 | 2 | spawn_smoke ws_spawner |
 | `src/crash.rs` | 9 | 8 | 1 | install_signal_hook |
 | `src/ctrl_feed.rs` | 8 | 8 | 0 | — |
-| `src/deliver.rs` | 13 | 10 | 3 | zh configured deliver_now |
+| `src/deliver.rs` | 11 | 9 | 2 | configured deliver_now |
 | `src/direct_brain.rs` | 2 | 2 | 0 | — |
 | `src/endpoint.rs` | 9 | 9 | 0 | — |
 | `src/exec_probe.rs` | 1 | 1 | 0 | — |
 | `src/fs_fetch.rs` | 18 | 18 | 0 | — |
 | `src/fs_mirror.rs` | 9 | 8 | 1 | manifest_path |
-| `src/gate.rs` | 107 | 84 | 23 | gate_router_handle dump_term_handle text_dump spawn_gate_watcher REC_FILE_CAP REC_FILE rec_output rec_resize PANIC_FILE PANIC_TRACE_FILE LOOP_STALL_FILE note_loop_beat loop_beat_age_ms note_foreground install_panic_hook note_draw note_session_death touch_take register_input_bar ALERT_RSS_COOLDOWN_MS ALERT_DEATHS_WINDOW_MS ALERT_DEATHS_COOLDOWN_MS HISTORY_EVERY_TICKS |
+| `src/gate.rs` | 112 | 89 | 23 | gate_router_handle dump_term_handle text_dump spawn_gate_watcher REC_FILE_CAP REC_FILE rec_output rec_resize PANIC_FILE PANIC_TRACE_FILE LOOP_STALL_FILE note_loop_beat loop_beat_age_ms note_foreground install_panic_hook note_draw note_session_death touch_take register_input_bar ALERT_RSS_COOLDOWN_MS ALERT_DEATHS_WINDOW_MS ALERT_DEATHS_COOLDOWN_MS HISTORY_EVERY_TICKS |
 | `src/gate_poller.rs` | 10 | 9 | 1 | http_roundtrip |
 | `src/glyph_atlas.rs` | 11 | 11 | 0 | — |
 | `src/http1.rs` | 10 | 7 | 3 | is_tick_err read_head_hook read_body_hook |
@@ -59,7 +59,7 @@
 | `src/session_router.rs` | 14 | 14 | 0 | — |
 | `src/settings.rs` | 10 | 9 | 1 | QUIC_DEFAULT_PORT |
 | `src/singleton.rs` | 7 | 4 | 3 | LOCK_PATH lock_exclusive try_acquire |
-| `src/sshd_keeper.rs` | 4 | 4 | 0 | — |
+| `src/sshd_keeper.rs` | 8 | 7 | 1 | conf_render |
 | `src/svc_health.rs` | 12 | 9 | 3 | HIST_PATH set_visible sys_snap |
 | `src/sys_hist.rs` | 39 | 34 | 5 | BAR_W PLACEHOLDER_PCT hist_idx restore HIST_FORMAT |
 | `src/termview.rs` | 180 | 172 | 8 | AI_THINK_COLLAPSED FONT_CANDIDATES CJK_FONT_CANDIDATES load_cjk_font font_probe dump_all_active MAG_HALF_COLS MAG_HALF_ROWS |
@@ -67,7 +67,7 @@
 | `src/tmux_ctl.rs` | 26 | 26 | 0 | — |
 | `src/tmux_exec.rs` | 1 | 1 | 0 | — |
 | `src/trace.rs` | 12 | 9 | 3 | TRACE_CAP format_tail dump_tail |
-| `src/tunnel.rs` | 40 | 33 | 7 | check_ssh_fields NA_SSHD_PORT LEG_STABLE_SECS request_reconnect request_resume_kick request_trip_quic request_heal_quic |
+| `src/tunnel.rs` | 40 | 34 | 6 | check_ssh_fields LEG_STABLE_SECS request_reconnect request_resume_kick request_trip_quic request_heal_quic |
 | `src/ui/accent.rs` | 17 | 17 | 0 | — |
 | `src/ui/ai_page.rs` | 7 | 7 | 0 | — |
 | `src/ui/cfg_page.rs` | 75 | 68 | 7 | DROPDOWN_ENTER_MS DROPDOWN_EXIT_MS DROPDOWN_PICK_SYNC_MS upper_label open_viewer_with_accent register_cfg_page cfg_page_handle |
@@ -104,5 +104,6 @@
 | `src/ui/tab_bar.rs` | 27 | 27 | 0 | — |
 | `src/ui/term_btn.rs` | 8 | 8 | 0 | — |
 | `src/ui/viewport_push.rs` | 2 | 2 | 0 | — |
+| `src/ui/web_page.rs` | 12 | 7 | 5 | BAR_DP DENSITY_FALLBACK PAD_X TITLE close_side |
 | `src/vsync_book.rs` | 20 | 16 | 4 | last_due_ms chain_dead mark_chain_dead last_ns |
 | `src/wire_render.rs` | 1 | 1 | 0 | — |

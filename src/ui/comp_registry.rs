@@ -301,7 +301,7 @@ pub const COMPONENTS: &[CompEntry] = &[
         file: "src/ui/web_page.rs",
         spec: "BAR-260 追踪信 NA0189 楼1（白露 MAIN0175 楼23）",
         tests: "tests/web_page_spec.rs",
-        desc: "全局页（第七公民 Panel::Web）顶部原生条（BAR-260）：一行恒驻条带，高 132 物理 px（44dp @3x），左端「全局页」标题文字、右端「×」——「×」是全局页唯一退出动作（弹栈回解析页 + 桥收起页体），右滑空操作不给第二条退路。绘制/命中只吃条几何与 accent，不读页面加载/滚动/白屏状态（常驻纪律）。页体由 Java 整页窗口承载（宽 MATCH_PARENT、高 = 屏高 − 条高、纵向偏移 = 条高）。",
+        desc: "全局页（第七公民 Panel::Web）顶部原生条（BAR-260）：一行恒驻条带，条高＝bar_px(density)（dp 值唯一位点在 web_page::BAR_DP，进程内单源 bar_h；Java 只报密度不自算），左端「全局页」标题文字、右端「×」——「×」是全局页唯一退出动作（弹栈回解析页 + 桥收起页体），右滑空操作不给第二条退路。绘制/命中只吃条几何与 accent，不读页面加载/滚动/白屏状态（常驻纪律）。页体由 Java 整页窗口承载（宽 MATCH_PARENT、高 = 屏高 − 条高、纵向偏移 = 条高）。",
         preview: Preview::ThinFrame,
     },
     CompEntry {

@@ -82,6 +82,7 @@ fn spec_bar260_入口_解析页再左滑() {
 
 #[test]
 fn spec_bar260_退出_只走点叉() {
+    let bar = web_page::bar_px(3.0);
     let ai = new_state();
     ai.swipe_left();
     ai.swipe_left();
@@ -100,18 +101,14 @@ fn spec_bar260_退出_只走点叉() {
     assert_eq!(after.covered, Some(Panel::Parser), "解析页仍在栈底");
 
     // 「×」命中：只算右端方块
-    let (rx, ry, rw, rh) = web_page::close_rect(W);
+    let (rx, ry, rw, rh) = web_page::close_rect(W, bar);
     let (cx, cy) = (
         f64::from(rx) + f64::from(rw) / 2.0,
         f64::from(ry) + f64::from(rh) / 2.0,
     );
-    assert!(web_page::hit_close(cx, cy, W), "× 中心必中");
-    assert!(!web_page::hit_close(10.0, cy, W), "条左端不中");
-    assert!(!web_page::hit_close(
-        cx,
-        f64::from(web_page::BAR_H) + 10.0,
-        W
-    ));
+    assert!(web_page::hit_close(cx, cy, W, bar), "× 中心必中");
+    assert!(!web_page::hit_close(10.0, cy, W, bar), "条左端不中");
+    assert!(!web_page::hit_close(cx, f64::from(bar) + 10.0, W, bar));
 
     // 命中 → 弹栈回解析页（唯一动作）
     assert!(ai.dismiss_top(Panel::Web), "× = 收顶");
@@ -124,19 +121,21 @@ fn spec_bar260_退出_只走点叉() {
 
 #[test]
 fn spec_bar260_顶条常驻几何() {
-    const {
-        assert!(web_page::BAR_H > 0, "条高常量必须为正");
-    }
-    // 44dp @3x 等价值（1260 宽真机）：132 物理 px
-    assert_eq!(web_page::BAR_H, 132, "条高 = 44dp @3x");
-    let (rx, ry, rw, rh) = web_page::close_rect(W);
-    assert!(ry < web_page::BAR_H, "× 盒顶在条内");
-    assert!(ry + rh <= web_page::BAR_H, "× 盒底在条内（不越条）");
+    // 条高单源（bar_px(3.0)＝132，1260 宽真机档）
+    let bar = web_page::bar_px(3.0);
+    let (rx, ry, rw, rh) = web_page::close_rect(W, bar);
+    assert!(ry < bar, "× 盒顶在条内");
+    assert!(ry + rh <= bar, "× 盒底在条内（不越条）");
     assert!(rx > W / 2, "× 盒在右半屏");
     assert!(rx + rw <= W, "× 盒不出屏");
     assert_eq!(rx + rw, W - web_page::CLOSE_MARGIN, "× 盒贴右端内边距");
-    assert!(web_page::hit_close(f64::from(rx), f64::from(ry), W));
-    assert!(!web_page::hit_close(f64::from(rx + rw), f64::from(ry), W));
+    assert!(web_page::hit_close(f64::from(rx), f64::from(ry), W, bar));
+    assert!(!web_page::hit_close(
+        f64::from(rx + rw),
+        f64::from(ry),
+        W,
+        bar
+    ));
 
     // 常驻纪律源码锚：涂装/命中不许出现页面状态标识（白屏/加载/滚动都照画）
     let src = read_src("src/ui/web_page.rs").to_lowercase();
@@ -146,6 +145,76 @@ fn spec_bar260_顶条常驻几何() {
             "web_page.rs 出现页面状态标识「{needle}」——常驻纪律破了"
         );
     }
+}
+
+// ---- 段①钉（NA0189 楼6 判据①：条高只留一份真源） ----
+
+#[test]
+fn spec_bar260_段1_条高公式唯一位点() {
+    // 条高＝density × 44dp，四舍五入、下限 1——全进程唯一算式。
+    // 变异抽检：改成 floor／去掉下限／把 44.0 挪成别的数，本钉必红。
+    assert_eq!(web_page::bar_px(3.0), 132, "3x 真机档 = 132px");
+    assert_eq!(web_page::bar_px(2.0), 88, "2x 档 = 88px");
+    assert_eq!(web_page::bar_px(2.75), 121, "2.75x 档 = 121px");
+    assert_eq!(web_page::bar_px(0.0), 1, "密度 0 也不许出 0 高条");
+    assert_eq!(web_page::bar_px(-1.0), 1, "负密度兜底 1");
+    assert_eq!(web_page::bar_px(f64::NAN), 1, "NaN 兜底 1");
+    // 单源守卫：常量 BAR_H 不许复活（复活＝又出现第二个位点）
+    let src = read_src("src/ui/web_page.rs");
+    assert!(src.contains("pub fn bar_px"), "条高算式 bar_px 必须在");
+    assert!(
+        !src.contains("pub const BAR_H"),
+        "pub const BAR_H 不许复活——条高只有 bar_px 一个位点"
+    );
+    assert!(
+        src.contains("pub fn bar_h"),
+        "运行期单源读数 bar_h 必须在（渲染/命中都读它）"
+    );
+}
+
+#[test]
+fn spec_bar260_段1_java只报密度不自算() {
+    // 判据①的跨语言半边：Java 报密度这个平台事实，条高由 Rust 算好传过去。
+    // 变异抽检：Java 里重新写回 44f*dm.density 本钉必红。
+    let java = read_src("android/java/dev/kfm/na/MainActivity.java");
+    assert!(
+        java.contains("public float webDensity()"),
+        "密度查询口必须在"
+    );
+    assert!(
+        !java.contains("44f * dm.density") && !java.contains("Math.round(44"),
+        "Java 不许自算条高（两端各算一份＝判据①破）"
+    );
+    assert!(
+        java.contains("startWebViewFromGate(final String url, final int barPx)"),
+        "承载几何必须吃 Rust 传回的条高"
+    );
+    assert!(
+        java.contains("int bar = Math.max(1, barPx)"),
+        "页体几何用传入条高（高＝屏高−条高、纵向偏移＝条高）"
+    );
+}
+
+#[test]
+fn spec_bar260_段1_桥传的就是那一份() {
+    // 桥上一份、两端同一份：Rust 侧先问密度→set_from_density 算一次→
+    // 把结果作为 int 传给 Java（同一值）。变异抽检：桥改回单参、或传常量
+    // 而非计算结果，本钉必红。
+    let app = read_src("src/android_app.rs");
+    let body = fn_body(&app, "register_web_hook(Box::new(move |url: String|");
+    assert!(body.contains("webDensity"), "桥必须问 Java 要密度");
+    assert!(
+        body.contains("set_from_density"),
+        "条高必须由 web_page::set_from_density 算一次并落单源"
+    );
+    assert!(
+        body.contains("java.lang.String, int"),
+        "桥签名必须带条高参数（两端同一份）"
+    );
+    assert!(
+        body.contains("JValue::Int(bar as i32)"),
+        "传过去的必须是算出的 bar 值"
+    );
 }
 
 // ---- 钉 4：弹卡整删守卫（源码锚） ----
@@ -158,7 +227,14 @@ fn spec_bar260_弹卡整删守卫() {
     assert!(!java.contains("heightPixels * 3"), "弹卡高度公式残留");
     assert!(!java.contains("刻意不全屏"), "弹卡注释尸体残留");
     assert!(java.contains("lp.y = bar"), "整页几何：纵向偏移让出顶条");
-    assert!(java.contains("44f * dm.density"), "条高 44dp 与 Rust 同源");
+    assert!(
+        !java.contains("44f * dm.density"),
+        "Java 不许自算条高（NA0189 楼6 判据①：一端算、两端取值）"
+    );
+    assert!(
+        java.contains("int bar = Math.max(1, barPx)"),
+        "Java 条高取 Rust 传值"
+    );
 
     // ② gate：web-req 只落 pending，不自动推 UI；桥入口在
     let gate = read_src("src/gate.rs");
