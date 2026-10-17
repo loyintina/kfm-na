@@ -351,6 +351,17 @@ fn book_fixture() -> (tempfile::TempDir, AgentService) {
     let na_book = mail.join("10-NA信箱");
     std::fs::create_dir_all(&main_book).expect("建主册");
     std::fs::create_dir_all(&na_book).expect("建NA信箱");
+    // BAR-255：册目录必须有身份文件 .mailbox.json 才进枚举面
+    std::fs::write(
+        main_book.join(".mailbox.json"),
+        r#"{"sorting":"MAIN","name":"main"}"#,
+    )
+    .expect("写主册身份文件");
+    std::fs::write(
+        na_book.join(".mailbox.json"),
+        r#"{"sorting":"NA","name":"na"}"#,
+    )
+    .expect("写NA册身份文件");
     std::fs::write(na_book.join("README.md"), "# 规范\n").expect("写 README");
     std::fs::write(
         na_book.join("0090号闻灯致评审部白露复0050的回执.md"),
@@ -399,6 +410,45 @@ fn spec_bar212_端点_两册新key映射() {
         .inbox_summaries("etc", &["a.md".to_string()])
         .unwrap_err();
     assert!(e.contains("未知"), "summaries unknown key = 404 语义: {e}");
+}
+
+#[test]
+fn spec_bar255_端点_册面按身份文件枚举() {
+    let (t, svc) = book_fixture();
+    let mail = t.path().join("mail");
+    // 第三册：带身份文件的假 PSH 册 → psh-book 自然进枚举面、列表可读
+    let psh_book = mail.join("20-评审信箱");
+    std::fs::create_dir_all(&psh_book).expect("建PSH册");
+    std::fs::write(
+        psh_book.join(".mailbox.json"),
+        r#"{"sorting":"PSH","name":"评审册"}"#,
+    )
+    .expect("写PSH身份文件");
+    std::fs::write(psh_book.join("0001号悬铃致全体的通报.md"), LETTER_FLOORED)
+        .expect("写PSH带楼信");
+    let log = t.path().join("mock-calls-bar255.log");
+    install_mock_letters(&mail, &log);
+    assert_eq!(
+        svc.inbox_root("psh-book").as_deref(),
+        Some(format!("{}/20-评审信箱", svc.mail_root)).as_deref(),
+        "带身份文件的第三册自动进面"
+    );
+    let ls = svc.list_inbox_letters("psh-book").expect("列PSH册");
+    assert_eq!(ls.len(), 1);
+    assert_eq!(ls[0].title, "某信");
+    // floors 面同枚举：第三册的带楼信也要出楼层（枚举化后 psh-book 不再恒空）
+    assert_eq!(ls[0].floors.len(), 3, "第三册 floors 面同按枚举覆盖");
+    // 无身份文件的目录不进枚举面：xx-book 仍 None → 404
+    let ghost = mail.join("30-无身份目录");
+    std::fs::create_dir_all(&ghost).expect("建无身份目录");
+    std::fs::write(ghost.join("0001号某致某的信.md"), LETTER_BARE).expect("写信");
+    assert!(
+        svc.inbox_root("xx-book").is_none(),
+        "无身份文件目录 fail-closed 不破"
+    );
+    // 无 -book 后缀的 key 不蹭枚举面
+    assert!(svc.inbox_root("psh").is_none(), "裸 sorting 不是 key");
+    assert!(svc.inbox_root("main").is_none(), "裸 sorting 不是 key");
 }
 
 #[test]

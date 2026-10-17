@@ -47,8 +47,9 @@ pub struct LetterMeta {
     pub from: String,
     pub to: String,
     pub title: String,
-    /// 楼层（BAR-222，NA0152 第四栏）：只给 main-book/na-book 两册解析
-    /// （信箱页第四栏素材）；旧两面（mailbox/agent-inbox）恒空表——
+    /// 楼层（BAR-222，NA0152 第四栏）：凡有 .mailbox.json 身份文件的册都解析
+    /// （BAR-255 起按身份文件枚举，不再只 main-book/na-book 两册——信箱页
+    /// 第四栏素材）；旧两面（mailbox/agent-inbox）恒空表——
     /// 那两面不吃楼层且 BAR-174 起不走整读，不为新栏破功
     pub floors: Vec<FloorMeta>,
 }
@@ -290,16 +291,57 @@ impl AgentService {
         self.inbox_letter("mailbox", name)
     }
 
+    /// 册目录枚举（BAR-255，白露 NA0182 楼3 裁：凡按册取数一律按册身份
+    /// 文件 .mailbox.json 的 sorting 枚举——不许硬编码册名/key 列表；
+    /// archive-* 是册内归档不是册，目录扫的是身份文件不是含信目录）。
+    /// 返回 [(目录名, key)]，key＝sorting 小写＋-book（MAIN→main-book、
+    /// NA→na-book、PSH→psh-book——旧 key 零迁移自然命中）。
+    /// mail_root 读不出/无身份文件目录 = 对应册不进表（fail-closed 不破）
+    fn book_dirs(&self) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        let Ok(rd) = std::fs::read_dir(&self.mail_root) else {
+            return out;
+        };
+        for ent in rd.flatten() {
+            let Ok(dir_name) = ent.file_name().into_string() else {
+                continue;
+            };
+            let Ok(text) = std::fs::read_to_string(ent.path().join(".mailbox.json")) else {
+                continue;
+            };
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
+                continue;
+            };
+            let Some(sorting) = v.get("sorting").and_then(serde_json::Value::as_str) else {
+                continue;
+            };
+            let key = format!("{}-book", sorting.to_lowercase());
+            out.push((dir_name, key));
+        }
+        out.sort();
+        out
+    }
+
+    /// key → 册目录名（枚举面反查；无身份文件的目录不进表 = None）
+    fn book_dir_for_key(&self, key: &str) -> Option<String> {
+        self.book_dirs()
+            .into_iter()
+            .find(|(_, k)| k == key)
+            .map(|(d, _)| d)
+    }
+
     /// 信箱 key → 根路径映射表（BAR-167，fail-closed：不在表里的 key
     /// 一律 None → 路由层 404，不开任意路径口；
-    /// BAR-212 增 main-book/na-book 两册挂 mail_root 下，旧两 key 不动）
+    /// BAR-212 增 main-book/na-book 两册挂 mail_root 下，旧两 key 不动；
+    /// BAR-255 册面改按身份文件枚举——*-book 系 key 一律由 .mailbox.json
+    /// 的 sorting 推导，枚举不出 = None 同 fail-closed）
     pub fn inbox_root(&self, key: &str) -> Option<String> {
         match key {
             "mailbox" => Some(format!("{}/{}", self.session_root, session::MAILBOX_DIR)),
             "agent-inbox" => Some(agent_inbox_root()),
-            "main-book" => Some(format!("{}/00-主册", self.mail_root)),
-            "na-book" => Some(format!("{}/10-NA信箱", self.mail_root)),
-            _ => None,
+            _ => self
+                .book_dir_for_key(key)
+                .map(|d| format!("{}/{d}", self.mail_root)),
         }
     }
 
@@ -311,6 +353,9 @@ impl AgentService {
             return Err(format!("信箱 key 未知: {key:?}"));
         };
         let host = StdHost::new(Path::new(&dir).to_path_buf());
+        // BAR-255：楼层覆盖面同按身份文件枚举（凡有 .mailbox.json 的册都给
+        // floors，不再只 main/na 两册）——枚举在循环外做一次，不逐封重扫
+        let book_dir = self.book_dir_for_key(key);
         let mut out = Vec::new();
         for name in host.list_files(&dir)? {
             if valid_letter_name(&name) {
@@ -320,10 +365,9 @@ impl AgentService {
                     .map(|m| (m.bytes, m.mtime))
                     .unwrap_or((0, 0));
                 let (title, time, from, to) = parse_letter_head(&read_head(&path));
-                let floors = match key {
-                    "main-book" => self.floors_of(&host, &path, "00-主册", &name),
-                    "na-book" => self.floors_of(&host, &path, "10-NA信箱", &name),
-                    _ => Vec::new(),
+                let floors = match &book_dir {
+                    Some(d) => self.floors_of(&host, &path, d, &name),
+                    None => Vec::new(),
                 };
                 out.push(LetterMeta {
                     name,
