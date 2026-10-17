@@ -196,6 +196,10 @@ pub fn dump_now(dir: &str) {
             mail_active,
             w as f32,
         );
+        // BAR-260 段③（判据③）：全局页第七公民进 z 序——在栈即视、活性取
+        // 第八道缝（段② 单源）；顶条不再循环外硬画
+        let web_in = stack_vec.contains(&Panel::Web);
+        let web_active = crate::ui::seam::web_panel_offset_x_active();
         let z_order = crate::ui::stage::panel_z_order(
             &stack_vec,
             [
@@ -205,6 +209,7 @@ pub fn dump_now(dir: &str) {
                 pt_active,
                 rd_active,
                 mail_active,
+                web_active,
             ],
         );
         let cfg_off = crate::ui::seam::sample_config_panel_offset_x(
@@ -471,9 +476,19 @@ pub fn dump_now(dir: &str) {
                         }
                     }
                 }
-                // BAR-260 全局页：页体由 Java 侧承载，Rust 只画顶部原生条
-                // （z 序/逐帧位置同步本轮不做——条恒在 y=0 顶层直画）
-                Panel::Web => {}
+                // BAR-260 全局页（第七公民，段③）：页体由 Java 侧承载，
+                // Rust 只画顶部原生条——**在本家的 z 位画**，不再循环外直画
+                Panel::Web => {
+                    if web_in {
+                        let off = crate::ui::web_page::bar_offset_px(
+                            crate::ui::seam::sample_web_panel_offset_x(
+                                crate::ui::web_page::web_off_target(true, w),
+                                crate::report::boot_ms() as u64,
+                            ),
+                        );
+                        t.paint_web_bar(&mut buf, w, h, acc_of(Panel::Web), off);
+                    }
+                }
             }
         }
         // BAR-260：全局页在栈 = 顶部原生条常驻（只读栈读数，不读页面状态）

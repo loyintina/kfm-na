@@ -1274,7 +1274,7 @@ impl GlesPresent {
         rd_alpha: f32,
         mail_off: i32,
         mail_alpha: f32,
-        z_order: [crate::ai_presence::Panel; 6],
+        z_order: [crate::ai_presence::Panel; 7],
         term_place: (f32, f32, f32),
         panel_dy_extra: f32,
         cfg_dy_extra: f32,

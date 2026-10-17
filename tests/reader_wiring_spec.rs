@@ -105,9 +105,11 @@ fn spec_bar170_涂装三路与槽号() {
         19,
         "构造器 mk_layer 必须 19 件与槽层数组同数（BAR-207 cfg 盲区钉，BAR-214 升 19）"
     );
+    // BAR-260 段③：第七公民（全局页）入列，签名字面随之升 7——钉的本意不变
+    // （Demo 仍死透、公民数随 PANELS 走）
     assert!(
-        gles.contains("z_order: [crate::ai_presence::Panel; 6]"),
-        "z_order 必须六公民（BAR-207 Demo 退役，BAR-214 信箱页入列）"
+        gles.contains("z_order: [crate::ai_presence::Panel; 7]"),
+        "z_order 必须七公民（BAR-207 Demo 退役，BAR-214 信箱页、BAR-260 全局页入列）"
     );
     assert!(
         gles.contains("Mail = 18"),

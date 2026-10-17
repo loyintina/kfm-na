@@ -84,13 +84,14 @@ fn spec_bar083_z序_动者在上_六公民() {
     assert_eq!(
         z(
             &[Panel::Config, Panel::Ai],
-            [true, false, false, false, false, false]
+            [true, false, false, false, false, false, false]
         ),
         [
             Panel::FileTree,
             Panel::Parser,
             Panel::Reader,
             Panel::Mail,
+            Panel::Web,
             Panel::Config,
             Panel::Ai
         ]
@@ -99,13 +100,14 @@ fn spec_bar083_z序_动者在上_六公民() {
     assert_eq!(
         z(
             &[Panel::Config, Panel::Ai],
-            [false, true, false, false, false, false]
+            [false, true, false, false, false, false, false]
         ),
         [
             Panel::FileTree,
             Panel::Parser,
             Panel::Reader,
             Panel::Mail,
+            Panel::Web,
             Panel::Ai,
             Panel::Config
         ]
@@ -114,13 +116,14 @@ fn spec_bar083_z序_动者在上_六公民() {
     assert_eq!(
         z(
             &[Panel::FileTree, Panel::Ai],
-            [false, false, true, false, false, false]
+            [false, false, true, false, false, false, false]
         ),
         [
             Panel::Config,
             Panel::Parser,
             Panel::Reader,
             Panel::Mail,
+            Panel::Web,
             Panel::Ai,
             Panel::FileTree
         ]
@@ -129,13 +132,14 @@ fn spec_bar083_z序_动者在上_六公民() {
     assert_eq!(
         z(
             &[Panel::Config, Panel::Ai],
-            [false, false, false, false, false, false]
+            [false, false, false, false, false, false, false]
         ),
         [
             Panel::FileTree,
             Panel::Parser,
             Panel::Reader,
             Panel::Mail,
+            Panel::Web,
             Panel::Config,
             Panel::Ai
         ]
@@ -144,26 +148,31 @@ fn spec_bar083_z序_动者在上_六公民() {
     assert_eq!(
         z(
             &[Panel::Config, Panel::Ai],
-            [true, true, false, false, false, false]
+            [true, true, false, false, false, false, false]
         ),
         [
             Panel::FileTree,
             Panel::Parser,
             Panel::Reader,
             Panel::Mail,
+            Panel::Web,
             Panel::Config,
             Panel::Ai
         ]
     );
     // 6. 不在栈者垫最底且次序确定（按 PANELS 声明序 Ai<Config<FileTree<Parser<Reader<Mail）
     assert_eq!(
-        z(&[Panel::Ai], [false, false, false, false, false, false]),
+        z(
+            &[Panel::Ai],
+            [false, false, false, false, false, false, false]
+        ),
         [
             Panel::Config,
             Panel::FileTree,
             Panel::Parser,
             Panel::Reader,
             Panel::Mail,
+            Panel::Web,
             Panel::Ai
         ]
     );
@@ -172,13 +181,14 @@ fn spec_bar083_z序_动者在上_六公民() {
     assert_eq!(
         z(
             &[Panel::FileTree, Panel::Parser],
-            [false, false, false, true, false, false]
+            [false, false, false, true, false, false, false]
         ),
         [
             Panel::Ai,
             Panel::Config,
             Panel::Reader,
             Panel::Mail,
+            Panel::Web,
             Panel::FileTree,
             Panel::Parser
         ]
@@ -186,13 +196,14 @@ fn spec_bar083_z序_动者在上_六公民() {
     assert_eq!(
         z(
             &[Panel::Parser, Panel::FileTree],
-            [false, false, true, false, false, false]
+            [false, false, true, false, false, false, false]
         ),
         [
             Panel::Ai,
             Panel::Config,
             Panel::Reader,
             Panel::Mail,
+            Panel::Web,
             Panel::Parser,
             Panel::FileTree
         ]
@@ -202,13 +213,14 @@ fn spec_bar083_z序_动者在上_六公民() {
     assert_eq!(
         z(
             &[Panel::Config, Panel::Reader],
-            [false, false, false, false, true, false]
+            [false, false, false, false, true, false, false]
         ),
         [
             Panel::Ai,
             Panel::FileTree,
             Panel::Parser,
             Panel::Mail,
+            Panel::Web,
             Panel::Config,
             Panel::Reader
         ]
@@ -219,15 +231,16 @@ fn spec_bar083_z序_动者在上_六公民() {
     assert_eq!(
         z(
             &[Panel::Config, Panel::Mail],
-            [false, false, false, false, false, true]
+            [false, false, false, false, false, true, false]
         ),
         [
             Panel::Ai,
             Panel::FileTree,
             Panel::Parser,
             Panel::Reader,
+            Panel::Web,
             Panel::Config,
-            Panel::Mail
+            Panel::Mail,
         ]
     );
 }
@@ -237,9 +250,12 @@ fn spec_bar083_z序_动者在上_六公民() {
 // 再钉一道防复活）
 #[test]
 fn spec_bar207_demo公民位死透() {
+    // BAR-260 段③（判据③）：第七公民 Web 入列——本条原判「六件」升为
+    // 「七件」，但**钉的本意不变**：Demo 打样页公民位必须死透（枚举无
+    // Demo 变体、声明表无 Demo 槽）
     assert_eq!(
         stage::PANELS.len(),
-        6,
+        7,
         "PANELS 必须六公民（Demo 已退役，信箱 BAR-214 入列）"
     );
     assert!(stage::PANELS.contains(&Panel::Reader));
@@ -276,4 +292,145 @@ fn spec_bar084_target只问栈_draw才看活性() {
     assert_eq!(td(false, false, 720.0), (720.0, false));
     // 5. 符号忠实：文件树家屏外是 -w，target 原样带符号（不取绝对值）
     assert_eq!(td(false, true, -720.0), (-720.0, true));
+}
+
+// ---- BAR-260 段③（NA0189 楼6 判据③：z 序进 PANELS 不许扰动六公民）----
+
+/// 测试内**独立参照**（不复用生产排序函数）：六公民在「Web 不参与」时的
+/// 底→顶次序，按生产文档口径自己写一遍——排序键 =（活性, 栈位阶），栈位阶
+/// 不在栈＝垫底序按声明序。与生产实现不同源，才能证明「入列没扰动六公民」。
+fn six_citizens_reference(stack: &[Panel], active6: [bool; 6]) -> Vec<Panel> {
+    const SIX: [Panel; 6] = [
+        Panel::Ai,
+        Panel::Config,
+        Panel::FileTree,
+        Panel::Parser,
+        Panel::Reader,
+        Panel::Mail,
+    ];
+    let mut v: Vec<(i32, i32, Panel)> = Vec::new();
+    for (decl, p) in SIX.iter().enumerate() {
+        let pos = stack.iter().position(|x| *x == *p);
+        let rank = match pos {
+            Some(i) => i as i32,
+            None => -(SIX.len() as i32) + decl as i32,
+        };
+        v.push((active6[decl] as i32, rank, *p));
+    }
+    v.sort_by_key(|(a, r, _)| (*a, *r));
+    v.into_iter().map(|(_, _, p)| p).collect()
+}
+
+#[test]
+fn spec_bar260_段3_七家入列_六公民相对序不变() {
+    // 判据③的机械半边：第七公民**只追加在声明表末尾**，前六家的相对次序
+    // 与栈位阶语义一字不动。变异抽检：把 Web 插进 PANELS 中间、或改前六家
+    // 顺序、或把垫底位阶常量写死（不回随长度派生），本钉必红。
+    assert_eq!(stage::PANELS.len(), 7, "七家入列");
+    assert_eq!(
+        &stage::PANELS[..6],
+        &[
+            Panel::Ai,
+            Panel::Config,
+            Panel::FileTree,
+            Panel::Parser,
+            Panel::Reader,
+            Panel::Mail
+        ],
+        "前六家声明序不许动（Web 只许追加在末尾）"
+    );
+    assert_eq!(stage::PANELS[6], Panel::Web, "第七位是全局页");
+    // 多组栈/活性下：把 Web 从结果里摘掉，必须与独立参照完全一致
+    let cases: [(&[Panel], [bool; 7]); 6] = [
+        (&[], [false, false, false, false, false, false, false]),
+        (
+            &[Panel::Ai],
+            [true, false, false, false, false, false, false],
+        ),
+        (
+            &[Panel::Config, Panel::Ai],
+            [false, true, false, false, false, false, false],
+        ),
+        (
+            &[Panel::Parser, Panel::Reader, Panel::Web],
+            [false, false, false, true, false, false, false],
+        ),
+        (
+            &[Panel::FileTree, Panel::Mail],
+            [false, false, false, false, false, true, false],
+        ),
+        (
+            &[Panel::Web, Panel::Ai],
+            [false, false, false, false, false, false, true],
+        ),
+    ];
+    for (stack, active) in cases {
+        let got: Vec<Panel> = stage::panel_z_order(stack, active)
+            .iter()
+            .copied()
+            .filter(|p| *p != Panel::Web)
+            .collect();
+        let want = six_citizens_reference(stack, active[..6].try_into().unwrap());
+        assert_eq!(got, want, "stack={stack:?} 六公民相对序被 Web 入列扰动了");
+    }
+}
+
+#[test]
+fn spec_bar260_段3_动者在上_web同律() {
+    // 判据③的行为半边：第七家吃与六公民同一套「动者在上」——活性时压顶；
+    // 都静止时跟栈序。变异抽检：Web 活性不进排序键 / Web 永垫底，本钉必红。
+    // ① 全局页推进中（active）压过栈里的解析页
+    let order = stage::panel_z_order(
+        &[Panel::Parser, Panel::Web],
+        [false, false, false, false, false, false, true],
+    );
+    assert_eq!(order[6], Panel::Web, "推进中的全局页必须压顶");
+    // ② 双静止：跟栈序（Web 在栈位 1，压在解析页之上）
+    let order = stage::panel_z_order(
+        &[Panel::Parser, Panel::Web],
+        [false, false, false, false, false, false, false],
+    );
+    assert_eq!(
+        order.to_vec()[5..7].to_vec(),
+        vec![Panel::Parser, Panel::Web],
+        "双静止跟栈序（Web 在栈顶）"
+    );
+    // ③ 全局页不在栈且不活跃：垫底组最上（声明序末位），不压栈内任何家
+    let order = stage::panel_z_order(
+        &[Panel::Mail],
+        [false, false, false, false, false, false, false],
+    );
+    assert_eq!(order[6], Panel::Mail, "Web 不参与时栈顶仍是信箱页");
+    assert_eq!(order[5], Panel::Web, "Web 在垫底组最上（声明序末位）");
+}
+
+#[test]
+fn spec_bar260_段3_被压不越盖层() {
+    // 判据③落地点（源码锚）：顶条只在全局页最顶时画——被别家盖住时不许
+    // 越过盖层。变异抽检：把门槛去掉（无条件画），本钉必红。
+    let root = env!("CARGO_MANIFEST_DIR");
+    let app =
+        std::fs::read_to_string(format!("{root}/src/android_app.rs")).expect("读 android_app.rs");
+    assert!(
+        app.contains("let web_on_top = z_order[6] == crate::ai_presence::Panel::Web;"),
+        "顶条绘制必须吃 z 序最顶读数（web_on_top）"
+    );
+    assert!(
+        app.contains("if web_on_top"),
+        "顶条绘制必须由 web_on_top 门槛守着（被压不越盖层）"
+    );
+    // 顶序索引必须随七家走（六家时代的 z_order[5] 已不是最顶）
+    assert!(
+        !app.contains("let ai_fully_covered = match z_order[5]"),
+        "最顶索引必须随公民数走（七家下是 [6]）"
+    );
+    let gate = std::fs::read_to_string(format!("{root}/src/gate.rs")).expect("读 gate.rs");
+    assert!(
+        gate.contains("Panel::Web =>"),
+        "值守倒帧的 z 循环必须真有 Web 臂（不是循环外硬画）"
+    );
+    assert!(
+        !gate.contains("// BAR-260 全局页顶部原生条：在栈即常驻（置顶直画"),
+        "循环外无条件直画必须删净"
+    );
 }

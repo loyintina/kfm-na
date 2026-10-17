@@ -94,19 +94,23 @@ pub fn slot_visibility(
 /// 入参 active 与 PANELS 同序对齐；返回底→顶次序（合成器按序画）。
 /// 红线：本函数的活性读数只许进 z 序，**不许进 target/presence**——
 /// 那是 BAR-084 的回粘回路（见 panel_target_and_draw）
-pub const PANELS: [crate::ai_presence::Panel; 6] = [
+pub const PANELS: [crate::ai_presence::Panel; 7] = [
     crate::ai_presence::Panel::Ai,
     crate::ai_presence::Panel::Config,
     crate::ai_presence::Panel::FileTree,
     crate::ai_presence::Panel::Parser,
     crate::ai_presence::Panel::Reader,
     crate::ai_presence::Panel::Mail,
+    // 第七公民（BAR-260 段③，NA0189 楼6 判据③）：全局页入列——**只追加
+    // 在声明序末尾**，前六家的相对序与栈位阶语义一字不动；不在栈时垫底
+    // 位阶由 -(PANELS.len()) 派生（BAR-214 的老坑：常量随长派生才不再踩）
+    crate::ai_presence::Panel::Web,
 ];
 
 pub fn panel_z_order(
     stack: &[crate::ai_presence::Panel],
-    active: [bool; 6],
-) -> [crate::ai_presence::Panel; 6] {
+    active: [bool; 7],
+) -> [crate::ai_presence::Panel; 7] {
     // 栈位阶：在栈 = 位置下标（0 底）；不在栈 = -PANELS.len()+声明序
     // （恒负——垫底序全压栈位阶 0 之下；BAR-214 六公民实录：硬编码 -5
     // 在六公民下 Mail 得 0 与栈位 0 撞号，稳定排序把它漏进栈层——
