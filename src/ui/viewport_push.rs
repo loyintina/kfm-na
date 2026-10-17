@@ -38,6 +38,7 @@ pub fn viewport_push(
     pt_off: i32,
     rd_off: i32,
     mail_off: i32,
+    web_off: i32,
     w: u32,
     h: u32,
 ) -> (Push, f32) {
@@ -50,12 +51,20 @@ pub fn viewport_push(
     let p_rd = ((w - rd_off as f32) / w).clamp(0.0, 1.0);
     // 信箱页右缘家同约定（2026-10-01 六公民，BAR-214）
     let p_mail = ((w - mail_off as f32) / w).clamp(0.0, 1.0);
+    // 全局页右缘家同约定（2026-10-17 七公民，BAR-260 段②）——它压在解析页
+    // 之上，进来时基座同向左移一份
+    let p_web = ((w - web_off as f32) / w).clamp(0.0, 1.0);
     (
         Push {
-            dx: p_ft * w - p_cfg * w - p_pt * w - p_rd * w - p_mail * w,
+            dx: p_ft * w - p_cfg * w - p_pt * w - p_rd * w - p_mail * w - p_web * w,
             dy: p_ai * h,
         },
-        p_ai.max(p_cfg).max(p_ft).max(p_pt).max(p_rd).max(p_mail),
+        p_ai.max(p_cfg)
+            .max(p_ft)
+            .max(p_pt)
+            .max(p_rd)
+            .max(p_mail)
+            .max(p_web),
     )
 }
 
@@ -69,6 +78,7 @@ fn panel_progress(
     pt_off: i32,
     rd_off: i32,
     mail_off: i32,
+    web_off: i32,
     w: f32,
     h: f32,
 ) -> Push {
@@ -102,7 +112,12 @@ fn panel_progress(
         },
         // 全局页（BAR-260）：本轮最小件不做逐帧位置同步/视口推移——
         // 页体归 Java 整页窗口，基座不随动（下一轮叠）
-        Panel::Web => Push { dx: 0.0, dy: 0.0 },
+        // BAR-260 段②（NA0189 楼6 判据②）：Web 位移单源＝这道缝的采样值，
+        // 本臂把同一份 off 报成 Push——渲染顶条/命中「×」/Java 窗位置都取它
+        Panel::Web => Push {
+            dx: -((w - web_off as f32) / w).clamp(0.0, 1.0) * w,
+            dy: 0.0,
+        },
     }
 }
 
@@ -118,6 +133,7 @@ pub fn covered_extra(
     pt_off: i32,
     rd_off: i32,
     mail_off: i32,
+    web_off: i32,
     w: u32,
     h: u32,
 ) -> Push {
@@ -128,7 +144,7 @@ pub fn covered_extra(
     let mut acc = Push { dx: 0.0, dy: 0.0 };
     for above in &stack[pos + 1..] {
         let p = panel_progress(
-            *above, panel_off, cfg_off, ft_off, pt_off, rd_off, mail_off, w, h,
+            *above, panel_off, cfg_off, ft_off, pt_off, rd_off, mail_off, web_off, w, h,
         );
         acc.dx += p.dx;
         acc.dy += p.dy;

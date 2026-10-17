@@ -69,10 +69,51 @@ pub fn close_rect(buf_w: u32, bar_h: u32) -> (u32, u32, u32, u32) {
     )
 }
 
+/// 「×」命中方块（x, y, w, h）：条内右端，唯一命中区。
+/// off = 该帧 Web 页位移（段②，见 bar_offset_px）——条随页面走，命中盒同走。
+pub fn close_rect_off(buf_w: u32, bar_h: u32, off: i32) -> (i32, i32, u32, u32) {
+    let (rx, ry, w, h) = close_rect(buf_w, bar_h);
+    (rx as i32 + off, ry as i32, w, h)
+}
+
+/// 命中判定：只算右端「×」方块（条内其余位置与条外一律不中）。
+/// 与 close_rect_off 同一份 off——眼手同尺（段②判据②的一半）。
+pub fn hit_close_off(x: f64, y: f64, buf_w: u32, bar_h: u32, off: i32) -> bool {
+    let (rx, ry, rw, rh) = close_rect_off(buf_w, bar_h, off);
+    x >= f64::from(rx)
+        && x < f64::from(rx + rw as i32)
+        && y >= f64::from(ry)
+        && y < f64::from(ry + rh as i32)
+}
+
+/// 【段②位移单源·唯一取整点】Web 页位移（物理 px，向右为正）：
+/// seam 采样出的浮点 off 在这里**只取整一次**，渲染顶条、命中「×」盒、
+/// 桥下发给 Java 窗三处一律吃这个整数——三处各自 round 就会各抖一像素
+/// （NA0189 楼6 判据②「位移单源无抖动」）。取整规则：四舍五入、NaN 兜底 0。
+pub fn bar_offset_px(web_off: f32) -> i32 {
+    if web_off.is_finite() {
+        web_off.round() as i32
+    } else {
+        0
+    }
+}
+
+/// 段②缝目标值语义（基础层）：在栈 = 0 靠泊；不在栈 = +屏宽 屏外右缘。
+/// 三个消费点（渲染顶条／命中盒／桥下发）都用它算 target——目标值也只有
+/// 一份，避免「谁把符号写反」这类各算一份。
+pub fn web_off_target(in_stack: bool, w: u32) -> f32 {
+    if in_stack { 0.0 } else { w as f32 }
+}
+
+/// 桥下发判据（防抖）：整数位移与上次相同就不发——同一帧重复下发会让
+/// Java 侧 updateViewLayout 反复触发布局，画面抖。纯函数，供桥与考题共用。
+pub fn bridge_should_send(last: i32, cur: i32) -> bool {
+    last != cur
+}
+
 /// 命中判定：只算右端「×」方块（条内其余位置与条外一律不中）
 pub fn hit_close(x: f64, y: f64, buf_w: u32, bar_h: u32) -> bool {
-    let (rx, ry, rw, rh) = close_rect(buf_w, bar_h);
-    x >= f64::from(rx) && x < f64::from(rx + rw) && y >= f64::from(ry) && y < f64::from(ry + rh)
+    hit_close_off(x, y, buf_w, bar_h, 0)
 }
 
 /// 顶部原生条涂装（只画条带；条外一字节不动）。跟随 page 模块惯例：
@@ -85,6 +126,7 @@ pub fn paint(
     buf_h: u32,
     accent: AccentPair,
     bar_h: u32,
+    off: i32,
 ) {
     if buf_w == 0 || buf_h == 0 {
         return;
@@ -94,12 +136,16 @@ pub fn paint(
         w: buf_w,
         h: buf_h,
     };
-    // 条带底（深底与各页同色）+ 底缘 2px accent 双色线（左 c1 右 c2）
-    frame.fill_rect(0, 0, buf_w, bar_h, CARD_PAGE_BG);
+    // 条带底（深底与各页同色）+ 底缘 2px accent 双色线（左 c1 右 c2）。
+    // off = 本帧位移（段②单源，bar_offset_px 取整后的那一份）——条随页面走。
+    let (bx, bw) = shift(0, buf_w, off);
+    frame.fill_rect(bx, 0, bw, bar_h, CARD_PAGE_BG);
     let div_y = bar_h.saturating_sub(2);
     let half = buf_w / 2;
-    frame.fill_rect(0, div_y, half, 2, accent.c1);
-    frame.fill_rect(half, div_y, buf_w - half, 2, accent.c2);
+    let (l1x, l1w) = shift(0, half, off);
+    frame.fill_rect(l1x, div_y, l1w, 2, accent.c1);
+    let (l2x, l2w) = shift(half, buf_w - half, off);
+    frame.fill_rect(l2x, div_y, l2w, 2, accent.c2);
     // 左端标题：网格引擎定尺（与页内文字同尺），纵向在条带内居中
     let (cell_w, cell_h) = term.cell_size();
     if cell_w > 0 {
@@ -109,7 +155,7 @@ pub fn paint(
         term.draw_grid_text_left(
             &mut frame,
             &items,
-            i64::from(PAD_X),
+            i64::from(PAD_X) + i64::from(off),
             y_top,
             cell_w,
             max_w,
@@ -119,8 +165,10 @@ pub fn paint(
         );
     }
     // 右端「×」：细框 + 两段对角笔画（命中盒 = 视觉盒，眼手同尺）
-    let (cx, cy, cs, _) = close_rect(buf_w, bar_h);
-    paint_close_box(&mut frame, cx, cy, cs, accent.c2);
+    let (cx, cy, cs, _) = close_rect_off(buf_w, bar_h, off);
+    if cx >= 0 {
+        paint_close_box(&mut frame, cx as u32, cy as u32, cs, accent.c2);
+    }
 }
 
 /// 「×」方块涂装：1px accent 细框 + 中心两段斜线
@@ -154,6 +202,18 @@ fn paint_close_box(frame: &mut Frame<'_>, x: u32, y: u32, side: u32, edge: u32) 
             }
         }
     }
+}
+
+/// 位移后矩形（越界裁剪）：三条带与标题/「×」共用，防负坐标进 u32。
+fn shift(x: u32, w: u32, off: i32) -> (u32, u32) {
+    let x0 = x as i64 + i64::from(off);
+    let x1 = x0 + i64::from(w);
+    let x0c = x0.max(0);
+    let x1c = x1.max(0);
+    (
+        x0c.min(i64::from(u32::MAX)) as u32,
+        (x1c - x0c).min(i64::from(u32::MAX)) as u32,
+    )
 }
 
 /// accent 色压暗（α 混合到深底；只用于细框，保持「不抢标题」）

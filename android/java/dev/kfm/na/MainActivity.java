@@ -169,6 +169,38 @@ public class MainActivity extends NativeActivity {
         return getResources().getDisplayMetrics().density;
     }
 
+    /** 全局页逐帧位移（BAR-260 段②，NA0189 楼6 判据②）：位移的**单源在
+     * Rust**（seam 采样→bar_offset_px 取整），本端只照数摆窗、不自算；Rust
+     * 侧值不变不会调进来（防抖在 gate::web_offset_sync）。 */
+    public void webOffset(final int dx) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    if (mWeb == null) {
+                        return;
+                    }
+                    android.view.ViewGroup.LayoutParams gp = mWeb.getLayoutParams();
+                    if (!(gp instanceof android.view.WindowManager.LayoutParams)) {
+                        return;
+                    }
+                    android.view.WindowManager.LayoutParams lp =
+                            (android.view.WindowManager.LayoutParams) gp;
+                    if (lp.x == dx) {
+                        return;
+                    }
+                    lp.x = dx;
+                    lp.gravity = android.view.Gravity.TOP | android.view.Gravity.LEFT;
+                    getWindowManager().updateViewLayout(mWeb, lp);
+                } catch (Throwable t) {
+                    java.io.StringWriter sw = new java.io.StringWriter();
+                    t.printStackTrace(new java.io.PrintWriter(sw));
+                    webStatus("offset-fail dx=" + dx + " " + sw.toString());
+                }
+            }
+        });
+    }
+
     public void startWebViewFromGate(final String url, final int barPx) {
         runOnUiThread(new Runnable() {
             @Override

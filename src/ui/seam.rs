@@ -346,3 +346,52 @@ pub fn replay_mail_panel_offset_x(offscreen: f32, now_ms: u64) {
         r(offscreen, now_ms);
     }
 }
+
+// ---- 第八道缝：Web 全局页 X 偏移（BAR-260 段②，NA0189 楼6 判据②）----
+// 目标值语义在基础层（全局页在栈=0 靠泊 / 不在栈=+屏宽 屏外右缘——解析页
+// 再左滑召唤、点顶条「×」推回，右缘家与配置/解析/阅读/信箱各缝同符号约定）。
+// **本缝是 Web 位移的唯一来源**：渲染顶条、命中「×」盒、桥下发给 Java 窗
+// 位置三处都吃这一条采样值（取整只在 web_page::bar_offset_px 一处做），
+// 三处不再各自算位移＝判据②的「单源；无抖动」。
+static WEB_PANEL_OFFSET_X: Mutex<Option<Occupier>> = Mutex::new(None);
+
+/// 占槽（后占者赢，ui-base §三 v1）
+pub fn occupy_web_panel_offset_x(o: Occupier) {
+    *WEB_PANEL_OFFSET_X.lock().unwrap() = Some(o);
+}
+
+/// 拔槽回硬切（插件卸载/禁用）
+pub fn release_web_panel_offset_x() {
+    *WEB_PANEL_OFFSET_X.lock().unwrap() = None;
+}
+
+/// 采样（渲染时过缝）：无占槽直通目标值——硬切基座语义
+pub fn sample_web_panel_offset_x(target: f32, now_ms: u64) -> f32 {
+    let g = WEB_PANEL_OFFSET_X.lock().unwrap();
+    match g.as_ref() {
+        Some(o) => (o.sampler)(target, now_ms),
+        None => target,
+    }
+}
+
+/// 该槽有活跃动画（帧时钟启停判据；无占槽恒 false = 零额外帧）
+pub fn web_panel_offset_x_active() -> bool {
+    WEB_PANEL_OFFSET_X
+        .lock()
+        .unwrap()
+        .as_ref()
+        .is_some_and(|o| (o.is_active)())
+}
+
+/// 入场重播踢（BAR-079 同律）：壳层见全局页入场代 bump 即踢——采样器重定
+/// 基到屏外右缘（目标不变）→ 重播抽屉入场。无占槽/无 replay = 空操作
+pub fn replay_web_panel_offset_x(offscreen: f32, now_ms: u64) {
+    if let Some(r) = WEB_PANEL_OFFSET_X
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|o| o.replay.as_ref())
+    {
+        r(offscreen, now_ms);
+    }
+}

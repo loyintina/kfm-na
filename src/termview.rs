@@ -10047,7 +10047,16 @@ pub trait TermEmu: Send {
     fn render_keybar(&self, buf: &mut [u32], w: u32, h: u32, ime_bottom: u32, mods: u8);
     /// 全局页顶部原生条（BAR-260／NA0189 楼1）：标题 + 右端「×」。
     /// 常驻——只吃条几何与 accent，不读页面加载/滚动状态
-    fn paint_web_bar(&self, buf: &mut [u32], w: u32, h: u32, accent: crate::ui::accent::AccentPair);
+    /// web_off = 本帧全局页位移（段②单源：seam 采样值经 bar_offset_px 取整
+    /// 后的那一份）——条随页面走，命中盒由调用方吃同一份 off
+    fn paint_web_bar(
+        &self,
+        buf: &mut [u32],
+        w: u32,
+        h: u32,
+        accent: crate::ui::accent::AccentPair,
+        web_off: i32,
+    );
     /// 配置卡标签栏涂装（主题宪法 §四，2026-09-13 五修）：标签文字
     /// （格内居中、内容带左缘裁剪）+ 选中功能光标开口框（ui/cursor.rs
     /// 规格——线色吃本页 accent 双色渐变，渐变框与页环同原点同分母；
@@ -10494,8 +10503,17 @@ impl TermEmu for TermView {
         w: u32,
         h: u32,
         accent: crate::ui::accent::AccentPair,
+        web_off: i32,
     ) {
-        crate::ui::web_page::paint(self, buf, w, h, accent, crate::ui::web_page::bar_h());
+        crate::ui::web_page::paint(
+            self,
+            buf,
+            w,
+            h,
+            accent,
+            crate::ui::web_page::bar_h(),
+            crate::ui::web_page::bar_offset_px(web_off as f32),
+        );
     }
     fn paint_cfg_tab_bar(
         &self,

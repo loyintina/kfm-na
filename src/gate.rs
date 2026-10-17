@@ -196,6 +196,10 @@ pub fn dump_now(dir: &str) {
             mail_active,
             w as f32,
         );
+        // BAR-260 段③（判据③）：全局页第七公民进 z 序——在栈即视、活性取
+        // 第八道缝（段② 单源）；顶条不再循环外硬画
+        let web_in = stack_vec.contains(&Panel::Web);
+        let web_active = crate::ui::seam::web_panel_offset_x_active();
         let z_order = crate::ui::stage::panel_z_order(
             &stack_vec,
             [
@@ -205,6 +209,7 @@ pub fn dump_now(dir: &str) {
                 pt_active,
                 rd_active,
                 mail_active,
+                web_active,
             ],
         );
         let cfg_off = crate::ui::seam::sample_config_panel_offset_x(
@@ -471,14 +476,29 @@ pub fn dump_now(dir: &str) {
                         }
                     }
                 }
-                // BAR-260 全局页：页体由 Java 侧承载，Rust 只画顶部原生条
-                // （z 序/逐帧位置同步本轮不做——条恒在 y=0 顶层直画）
-                Panel::Web => {}
+                // BAR-260 全局页（第七公民，段③）：页体由 Java 侧承载，
+                // Rust 只画顶部原生条——**在本家的 z 位画**，不再循环外直画
+                Panel::Web => {
+                    if web_in {
+                        let off = crate::ui::web_page::bar_offset_px(
+                            crate::ui::seam::sample_web_panel_offset_x(
+                                crate::ui::web_page::web_off_target(true, w),
+                                crate::report::boot_ms() as u64,
+                            ),
+                        );
+                        t.paint_web_bar(&mut buf, w, h, acc_of(Panel::Web), off);
+                    }
+                }
             }
         }
         // BAR-260：全局页在栈 = 顶部原生条常驻（只读栈读数，不读页面状态）
         if ai_snap.is_some_and(|s| s.top == Some(Panel::Web) || s.covered == Some(Panel::Web)) {
-            t.paint_web_bar(&mut buf, w, h, acc_of(Panel::Web));
+            let off =
+                crate::ui::web_page::bar_offset_px(crate::ui::seam::sample_web_panel_offset_x(
+                    crate::ui::web_page::web_off_target(true, w),
+                    crate::report::boot_ms() as u64,
+                ));
+            t.paint_web_bar(&mut buf, w, h, acc_of(Panel::Web), off);
         }
         // 输入栏：常驻 chrome，两页都画（同前台 rasterize 规则）；
         // sending 图标态跟 AI 运行态硬切；光标闪烁相位按节拍算
@@ -1213,6 +1233,36 @@ pub fn open_web(url: &str) {
         Some(f) => f(url.to_owned()),
         None => crate::report::report("web", "web 打开无钩子（host 或未注册），丢弃"),
     }
+}
+
+/// 全局页位移下发钩子（BAR-260 段②，NA0189 楼6 判据②）：Java 窗位置的
+/// 唯一通路——Rust 侧算好的整数位移经这里下去，值不变不发（防抖）。
+static WEB_OFF_HOOK: WebHookI32 = std::sync::Mutex::new(None);
+type WebHookI32 = std::sync::Mutex<Option<Box<dyn Fn(i32) + Send + Sync>>>;
+
+/// 注册位移钩子（android_app 启动时一次；host 不注册 = 空转合法）
+pub fn register_web_offset_hook(f: Box<dyn Fn(i32) + Send + Sync>) {
+    *WEB_OFF_HOOK.lock().unwrap() = Some(f);
+}
+
+/// 上一次已下发的位移（防抖基线；None = 尚未下发）
+static WEB_OFF_LAST: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(i32::MIN);
+
+/// 位移下发（逐帧可调）：与上次相同即不发——同一帧重复 updateViewLayout 会
+/// 让 Java 侧反复布局，画面抖（判据②「无抖动」的机制保证）。
+/// 返回是否真的下发，供读数/考题观察。
+pub fn web_offset_sync(off: i32) -> bool {
+    let last = WEB_OFF_LAST.load(std::sync::atomic::Ordering::Relaxed);
+    if !crate::ui::web_page::bridge_should_send(last, off) {
+        return false;
+    }
+    let guard = WEB_OFF_HOOK.lock().unwrap();
+    let Some(f) = guard.as_ref() else {
+        return false; // 无钩子（host/未注册）：不下发，也不算变了
+    };
+    f(off);
+    WEB_OFF_LAST.store(off, std::sync::atomic::Ordering::Relaxed);
+    true
 }
 
 /// 收起全局页（BAR-260 退出唯一动作的 Java 侧）：桥传 "close"，

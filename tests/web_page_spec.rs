@@ -261,3 +261,123 @@ fn spec_bar260_弹卡整删守卫() {
         "android_app 必须保留 JNI 桥并在进出栈时调用"
     );
 }
+
+// ---- 段②钉（NA0189 楼6 判据②：逐帧同步位移单源无抖动） ----
+
+#[test]
+fn spec_bar260_段2_位移单点取整且条与命中同吃() {
+    // 位移的**唯一取整点**是 bar_offset_px：渲染顶条、命中「×」盒、桥下发
+    // Java 窗三处都吃它的返回值。三处各自 round 就会各抖一像素。
+    // 变异抽检：把 round 改 floor／把 NaN 兜底去掉／命中盒不吃 off，本钉必红。
+    assert_eq!(web_page::bar_offset_px(37.4), 37, "37.4 → 37（四舍五入）");
+    assert_eq!(web_page::bar_offset_px(37.5), 38, "37.5 → 38（四舍五入）");
+    assert_eq!(web_page::bar_offset_px(0.0), 0);
+    assert_eq!(
+        web_page::bar_offset_px(f32::NAN),
+        0,
+        "NaN 兜底 0（不许出随机位移）"
+    );
+    assert_eq!(web_page::bar_offset_px(f32::INFINITY), 0, "Inf 兜底 0");
+    // 条与命中同源：off 平移多少，命中盒就平移多少
+    let bar = web_page::bar_px(3.0);
+    let (rx0, _, _, _) = web_page::close_rect(W, bar);
+    for off in [0i32, 37, -37, 400] {
+        let (rx, _, rw, rh) = web_page::close_rect_off(W, bar, off);
+        assert_eq!(rx, rx0 as i32 + off, "命中盒左缘必须随 off 平移");
+        let cx = f64::from(rx) + f64::from(rw) / 2.0;
+        let cy = f64::from(rh) / 2.0;
+        assert!(
+            web_page::hit_close_off(cx, cy, W, bar, off),
+            "off={off} 时盒心必中"
+        );
+        // 盒外一像素必须不中（眼手同尺：命中不许比画出来的盒更大）
+        assert!(
+            !web_page::hit_close_off(f64::from(rx) - 1.0, cy, W, bar, off),
+            "off={off} 时盒左缘外一像素不许中"
+        );
+        assert!(
+            !web_page::hit_close_off(cx, cy + f64::from(rh) + 1.0, W, bar, off),
+            "off={off} 时盒下缘外一像素不许中"
+        );
+    }
+    // 目标值语义也只有一份：在栈=0 靠泊 / 不在栈=+屏宽
+    assert_eq!(web_page::web_off_target(true, W), 0.0);
+    assert_eq!(web_page::web_off_target(false, W), W as f32);
+}
+
+#[test]
+fn spec_bar260_段2_桥只在值变时下发() {
+    // 防抖判据：同一份整数位移重复下发会让 Java 侧反复 updateViewLayout，
+    // 画面抖。变异抽检：判据改成恒真（每次都发）本钉必红；桥不发/发常量也红。
+    assert!(!web_page::bridge_should_send(37, 37), "同值不发");
+    assert!(web_page::bridge_should_send(37, 38), "变了要发");
+    assert!(
+        web_page::bridge_should_send(i32::MIN, 0),
+        "首次必发（基线是哨兵）"
+    );
+    assert!(web_page::bridge_should_send(0, -1), "负向也发");
+
+    // 源码锚：三处必须真的接上（防「钉绿但没人调用」）
+    let gate = read_src("src/gate.rs");
+    let body = fn_body(&gate, "pub fn web_offset_sync(");
+    assert!(body.contains("bridge_should_send"), "下发必须过防抖判据");
+    assert!(body.contains("WEB_OFF_HOOK"), "下发必须走钩子（唯一通路）");
+
+    let app = read_src("src/android_app.rs");
+    assert!(
+        app.contains("gate::web_offset_sync(off)"),
+        "渲染用的同一份 off 必须逐帧下发给 Java 窗"
+    );
+    assert!(
+        app.contains("register_web_offset_hook"),
+        "位移钩子必须注册（JNI webOffset）"
+    );
+
+    let java = read_src("android/java/dev/kfm/na/MainActivity.java");
+    assert!(
+        java.contains("public void webOffset(final int dx)"),
+        "Java 必须有位移入口"
+    );
+    let jbody = fn_body(&java, "public void webOffset(");
+    assert!(
+        !jbody.contains("density") && !jbody.contains("44"),
+        "Java 不许自己算位移（单源在 Rust）"
+    );
+    assert!(jbody.contains("lp.x = dx"), "照数摆窗");
+}
+
+#[test]
+fn spec_bar260_段2_第八道缝_直通与占槽可拔() {
+    // 缝纪律（ui-base §三）：无占槽 = 渲染值 == 目标值（硬切基座）；占槽 =
+    // 过采样器；拔槽 = 回直通。第八道缝是 Web 位移的唯一来源——它若被「优化」
+    // 成不经缝的直通，位移就没了单一采样点（判据②失效）。
+    // 变异抽检：sample 改成恒返回 target（绕过采样器）本钉必红。
+    use kfm_na::ui::seam;
+    use std::sync::Arc;
+    seam::release_web_panel_offset_x();
+    assert_eq!(
+        seam::sample_web_panel_offset_x(W as f32, 0),
+        W as f32,
+        "无占槽必须直通目标值"
+    );
+    assert!(!seam::web_panel_offset_x_active(), "无占槽 = 零额外帧");
+    seam::occupy_web_panel_offset_x(seam::Occupier {
+        sampler: Arc::new(|tgt: f32, _now: u64| tgt / 2.0),
+        is_active: Arc::new(|| true),
+        replay: None,
+    });
+    assert_eq!(
+        seam::sample_web_panel_offset_x(W as f32, 0),
+        W as f32 / 2.0,
+        "占槽后必须过采样器"
+    );
+    assert!(seam::web_panel_offset_x_active(), "占槽活跃 = 帧时钟启");
+    seam::replay_web_panel_offset_x(W as f32, 0); // 无 replay = 空操作，不 panic
+    seam::release_web_panel_offset_x();
+    assert_eq!(
+        seam::sample_web_panel_offset_x(W as f32, 0),
+        W as f32,
+        "拔槽回硬切直通"
+    );
+    assert!(!seam::web_panel_offset_x_active());
+}

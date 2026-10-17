@@ -25,11 +25,12 @@ use kfm_na::ui::viewport_push::{covered_extra, viewport_push};
 
 const W: u32 = 720;
 const H: u32 = 1280;
-/// 六面板屏外位（AI 上 / 文件树左 / 右缘四家右）
-const OFFS_OUT: (i32, i32, i32, i32, i32, i32) = (
+/// 七面板屏外位（AI 上 / 文件树左 / 右缘五家右；BAR-260 段② 全局页入列）
+const OFFS_OUT: (i32, i32, i32, i32, i32, i32, i32) = (
     -(H as i32),
     W as i32,
     -(W as i32),
+    W as i32,
     W as i32,
     W as i32,
     W as i32,
@@ -39,7 +40,7 @@ const OFFS_OUT: (i32, i32, i32, i32, i32, i32) = (
 fn spec_推移_ai落下基座下移() {
     // AI 屏外（off=-h）：基座原位、进度 0（其余五家全在屏外位）
     let (p, pmax) = viewport_push(
-        OFFS_OUT.0, OFFS_OUT.1, OFFS_OUT.2, OFFS_OUT.3, OFFS_OUT.4, OFFS_OUT.5, W, H,
+        OFFS_OUT.0, OFFS_OUT.1, OFFS_OUT.2, OFFS_OUT.3, OFFS_OUT.4, OFFS_OUT.5, OFFS_OUT.6, W, H,
     );
     assert_eq!((p.dx, p.dy), (0.0, 0.0), "AI 屏外 = 基座不动");
     assert_eq!(pmax, 0.0);
@@ -51,6 +52,7 @@ fn spec_推移_ai落下基座下移() {
         OFFS_OUT.3,
         OFFS_OUT.4,
         OFFS_OUT.5,
+        OFFS_OUT.6,
         W,
         H,
     );
@@ -58,7 +60,7 @@ fn spec_推移_ai落下基座下移() {
     assert!((pmax - 0.5).abs() < 1e-3);
     // AI 靠泊：基座整屏下沿
     let (p, _) = viewport_push(
-        0, OFFS_OUT.1, OFFS_OUT.2, OFFS_OUT.3, OFFS_OUT.4, OFFS_OUT.5, W, H,
+        0, OFFS_OUT.1, OFFS_OUT.2, OFFS_OUT.3, OFFS_OUT.4, OFFS_OUT.5, OFFS_OUT.6, W, H,
     );
     assert_eq!(p.dy, H as f32, "靠泊 = 基座推出整屏");
 }
@@ -73,12 +75,13 @@ fn spec_推移_水平双向镜像() {
         OFFS_OUT.3,
         OFFS_OUT.4,
         OFFS_OUT.5,
+        OFFS_OUT.6,
         W,
         H,
     );
     assert_eq!(p.dx, -(W as f32) / 2.0, "配置进一半 = 基座左移半屏");
     let (p, _) = viewport_push(
-        OFFS_OUT.0, 0, OFFS_OUT.2, OFFS_OUT.3, OFFS_OUT.4, OFFS_OUT.5, W, H,
+        OFFS_OUT.0, 0, OFFS_OUT.2, OFFS_OUT.3, OFFS_OUT.4, OFFS_OUT.5, OFFS_OUT.6, W, H,
     );
     assert_eq!(p.dx, -(W as f32), "配置靠泊 = 基座推出左缘");
     // 解析页从右来（右缘家与配置同约定）：基座左移（镜像同款）
@@ -89,12 +92,13 @@ fn spec_推移_水平双向镜像() {
         W as i32 / 2,
         OFFS_OUT.4,
         OFFS_OUT.5,
+        OFFS_OUT.6,
         W,
         H,
     );
     assert_eq!(p.dx, -(W as f32) / 2.0, "解析页进一半 = 基座左移半屏");
     let (p, pmax) = viewport_push(
-        OFFS_OUT.0, OFFS_OUT.1, OFFS_OUT.2, 0, OFFS_OUT.4, OFFS_OUT.5, W, H,
+        OFFS_OUT.0, OFFS_OUT.1, OFFS_OUT.2, 0, OFFS_OUT.4, OFFS_OUT.5, OFFS_OUT.6, W, H,
     );
     assert_eq!(p.dx, -(W as f32), "解析页靠泊 = 基座推出左缘");
     assert_eq!(pmax, 1.0);
@@ -107,12 +111,13 @@ fn spec_推移_水平双向镜像() {
         OFFS_OUT.3,
         W as i32 / 2,
         OFFS_OUT.5,
+        OFFS_OUT.6,
         W,
         H,
     );
     assert_eq!(p.dx, -(W as f32) / 2.0, "阅读页进一半 = 基座左移半屏");
     let (p, pmax) = viewport_push(
-        OFFS_OUT.0, OFFS_OUT.1, OFFS_OUT.2, OFFS_OUT.3, 0, OFFS_OUT.5, W, H,
+        OFFS_OUT.0, OFFS_OUT.1, OFFS_OUT.2, OFFS_OUT.3, 0, OFFS_OUT.5, OFFS_OUT.6, W, H,
     );
     assert_eq!(p.dx, -(W as f32), "阅读页靠泊 = 基座推出左缘");
     assert_eq!(pmax, 1.0);
@@ -125,12 +130,13 @@ fn spec_推移_水平双向镜像() {
         OFFS_OUT.3,
         OFFS_OUT.4,
         W as i32 / 2,
+        OFFS_OUT.6,
         W,
         H,
     );
     assert_eq!(p.dx, -(W as f32) / 2.0, "信箱页进一半 = 基座左移半屏");
     let (p, pmax) = viewport_push(
-        OFFS_OUT.0, OFFS_OUT.1, OFFS_OUT.2, OFFS_OUT.3, OFFS_OUT.4, 0, W, H,
+        OFFS_OUT.0, OFFS_OUT.1, OFFS_OUT.2, OFFS_OUT.3, OFFS_OUT.4, 0, OFFS_OUT.6, W, H,
     );
     assert_eq!(p.dx, -(W as f32), "信箱页靠泊 = 基座推出左缘");
     assert_eq!(pmax, 1.0);
@@ -142,12 +148,13 @@ fn spec_推移_水平双向镜像() {
         OFFS_OUT.3,
         OFFS_OUT.4,
         OFFS_OUT.5,
+        OFFS_OUT.6,
         W,
         H,
     );
     assert_eq!(p.dx, W as f32 / 2.0, "文件树进一半 = 基座右移半屏");
     let (p, pmax) = viewport_push(
-        OFFS_OUT.0, OFFS_OUT.1, 0, OFFS_OUT.3, OFFS_OUT.4, OFFS_OUT.5, W, H,
+        OFFS_OUT.0, OFFS_OUT.1, 0, OFFS_OUT.3, OFFS_OUT.4, OFFS_OUT.5, OFFS_OUT.6, W, H,
     );
     assert_eq!(p.dx, W as f32, "文件树靠泊 = 基座推出右缘");
     assert_eq!(pmax, 1.0);
@@ -166,6 +173,7 @@ fn spec_被压面板_只吃上方面板的推移() {
         OFFS_OUT.3,
         OFFS_OUT.4,
         OFFS_OUT.5,
+        OFFS_OUT.6,
         W,
         H,
     );
@@ -180,6 +188,7 @@ fn spec_被压面板_只吃上方面板的推移() {
         OFFS_OUT.3,
         OFFS_OUT.4,
         OFFS_OUT.5,
+        OFFS_OUT.6,
         W,
         H,
     );
@@ -195,6 +204,7 @@ fn spec_被压面板_只吃上方面板的推移() {
         OFFS_OUT.3,
         OFFS_OUT.4,
         OFFS_OUT.5,
+        OFFS_OUT.6,
         W,
         H,
     );
@@ -211,6 +221,7 @@ fn spec_被压面板_只吃上方面板的推移() {
         W as i32 / 2,
         OFFS_OUT.4,
         OFFS_OUT.5,
+        OFFS_OUT.6,
         W,
         H,
     );
@@ -227,6 +238,7 @@ fn spec_被压面板_只吃上方面板的推移() {
         OFFS_OUT.3,
         W as i32 / 2,
         OFFS_OUT.5,
+        OFFS_OUT.6,
         W,
         H,
     );
@@ -243,6 +255,7 @@ fn spec_被压面板_只吃上方面板的推移() {
         OFFS_OUT.3,
         OFFS_OUT.4,
         W as i32 / 2,
+        OFFS_OUT.6,
         W,
         H,
     );
@@ -257,8 +270,63 @@ fn spec_被压面板_只吃上方面板的推移() {
         OFFS_OUT.3,
         OFFS_OUT.4,
         OFFS_OUT.5,
+        OFFS_OUT.6,
         W,
         H,
     );
     assert_eq!((e.dx, e.dy), (0.0, 0.0), "不在栈零额外");
+}
+
+#[test]
+fn spec_bar260_段2_推移单源_web进基座左移() {
+    // BAR-260 段②（NA0189 楼6 判据②）：全局页是第七家，右缘家同约定——
+    // 它进来时基座同向左移，而它就是那一道缝的采样值本身（同一份 off 既
+    // 决定基座推移，也决定顶条/命中/Java 窗位置）。
+    // 变异抽检：web 臂漏减 / 符号反 / 只算自家不算基座，本钉必红。
+    // 屏外（全收）＝基座原位
+    let (p, pmax) = viewport_push(
+        OFFS_OUT.0, OFFS_OUT.1, OFFS_OUT.2, OFFS_OUT.3, OFFS_OUT.4, OFFS_OUT.5, OFFS_OUT.6, W, H,
+    );
+    assert_eq!((p.dx, p.dy), (0.0, 0.0), "七家全收 = 基座不动");
+    assert_eq!(pmax, 0.0);
+    // 全局页进一半（off = w/2）：基座左移半屏
+    let (p, pmax) = viewport_push(
+        OFFS_OUT.0,
+        OFFS_OUT.1,
+        OFFS_OUT.2,
+        OFFS_OUT.3,
+        OFFS_OUT.4,
+        OFFS_OUT.5,
+        W as i32 / 2,
+        W,
+        H,
+    );
+    assert_eq!(p.dx, -(W as f32) / 2.0, "全局页进一半 = 基座左移半屏");
+    assert!((pmax - 0.5).abs() < 1e-3, "进度取该家 0.5");
+    // 全局页靠泊（off = 0）：基座推出左缘
+    let (p, pmax) = viewport_push(
+        OFFS_OUT.0, OFFS_OUT.1, OFFS_OUT.2, OFFS_OUT.3, OFFS_OUT.4, OFFS_OUT.5, 0, W, H,
+    );
+    assert_eq!(p.dx, -(W as f32), "全局页靠泊 = 基座推出左缘");
+    assert_eq!(pmax, 1.0);
+    // 被压者随动同源：栈 [FileTree, Web]，Web 进一半 → 文件树同被左推半屏
+    let stack = [Panel::FileTree, Panel::Web];
+    let e = covered_extra(
+        &stack,
+        Panel::FileTree,
+        OFFS_OUT.0,
+        OFFS_OUT.1,
+        OFFS_OUT.2,
+        OFFS_OUT.3,
+        OFFS_OUT.4,
+        OFFS_OUT.5,
+        W as i32 / 2,
+        W,
+        H,
+    );
+    assert_eq!(
+        e.dx,
+        -(W as f32) / 2.0,
+        "被全局页压的文件树随其左移（同一份 off）"
+    );
 }

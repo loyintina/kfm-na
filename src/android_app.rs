@@ -1341,7 +1341,18 @@ impl App {
                 if phase == TouchPhase::Started
                     && psnap.top == Some(crate::ai_presence::Panel::Web)
                     && let Some((sw, _)) = self.screen_px()
-                    && crate::ui::web_page::hit_close(x, y, sw, crate::ui::web_page::bar_h())
+                    && crate::ui::web_page::hit_close_off(
+                        x,
+                        y,
+                        sw,
+                        crate::ui::web_page::bar_h(),
+                        crate::ui::web_page::bar_offset_px(
+                            crate::ui::seam::sample_web_panel_offset_x(
+                                crate::ui::web_page::web_off_target(true, sw),
+                                crate::report::boot_ms() as u64,
+                            ),
+                        ),
+                    )
                 {
                     crate::report::report(
                         "gest",
@@ -8052,7 +8063,7 @@ impl App {
         pt_off: i32,
         rd_off: i32,
         mail_off: i32,
-        z_order: [crate::ai_presence::Panel; 6],
+        z_order: [crate::ai_presence::Panel; 7],
         // 六公民页面 accent（[cfg, ft, pt, reader, mail]，来自 PresenceSnap
         // ——静态装配无 self，快照同行是唯一来源；调用方 None 时给 FALLBACK）
         accents: [crate::ui::accent::AccentPair; 5],
@@ -8392,6 +8403,9 @@ impl App {
         ai_snap: Option<crate::ai_presence::PresenceSnap>,
         magnifier_at: Option<(f64, f64)>,
         orb_alpha_out: bool,
+        // BAR-260 段③（判据③）：全局页是否当前 z 序最顶——顶条只在最顶画，
+        // 被别的面板压住时不越过盖层（z 序进 PANELS 的直接行为后果）
+        web_on_top: bool,
     ) {
         if let Some(bs) = bar_snap {
             term.render_inputbar(buf, w, h, ime_bottom_px, bs, sending, caret_on);
@@ -8407,11 +8421,19 @@ impl App {
         }
         // BAR-260 全局页顶部原生条：在栈即常驻（置顶直画，不进 z 序——
         // 本轮最小件）。只读栈读数/accent，页体加载状态一概不读
-        if let Some(s) = ai_snap
+        if web_on_top
+            && let Some(s) = ai_snap
             && (s.top == Some(crate::ai_presence::Panel::Web)
                 || s.covered == Some(crate::ai_presence::Panel::Web))
         {
-            term.paint_web_bar(buf, w, h, s.accent_web);
+            let off =
+                crate::ui::web_page::bar_offset_px(crate::ui::seam::sample_web_panel_offset_x(
+                    crate::ui::web_page::web_off_target(true, w),
+                    crate::report::boot_ms() as u64,
+                ));
+            term.paint_web_bar(buf, w, h, s.accent_web, off);
+            // 段②：渲染用的这一份 off 同帧下发给 Java 窗（值不变不发）
+            crate::gate::web_offset_sync(off);
         }
     }
 
@@ -8443,7 +8465,7 @@ impl App {
         pt_off: i32,
         rd_off: i32,
         mail_off: i32,
-        z_order: [crate::ai_presence::Panel; 6],
+        z_order: [crate::ai_presence::Panel; 7],
         panel_scratch: &mut Vec<u32>,
         tab_snap: Option<&crate::ui::tab_bar::TabBarSnap>,
         pool_snap: Option<&crate::ui::dual_pool::DualPoolSnap>,
@@ -8508,6 +8530,8 @@ impl App {
             );
             s
         });
+        // 段③：全局页在最顶才画顶条（z 序单源 stage::panel_z_order）
+        let web_on_top = z_order[6] == crate::ai_presence::Panel::Web;
         Self::paint_over(
             &mut **term,
             buf,
@@ -8520,6 +8544,7 @@ impl App {
             ai_snap,
             magnifier_at,
             false,
+            web_on_top,
         );
         Self::report_tofu(&mut **term);
         ai_layout
@@ -8692,6 +8717,7 @@ impl App {
         let pt_in = stack_vec.contains(&Panel::Parser);
         let rd_in = stack_vec.contains(&Panel::Reader);
         let mail_in = stack_vec.contains(&Panel::Mail);
+        let web_in = stack_vec.contains(&Panel::Web);
         let drag_cfg = drag.filter(|(p, _)| *p == Panel::Config).map(|(_, o)| o);
         let drag_ft = drag.filter(|(p, _)| *p == Panel::FileTree).map(|(_, o)| o);
         let drag_pt = drag.filter(|(p, _)| *p == Panel::Parser).map(|(_, o)| o);
@@ -8724,6 +8750,7 @@ impl App {
                 pt_active,
                 rd_active,
                 mail_active,
+                crate::ui::seam::web_panel_offset_x_active(),
             ],
         );
         // 跟手拖拽锁定期旁路缝采样（panel_drag：直接操纵不是动画——
@@ -8769,6 +8796,13 @@ impl App {
             ) as i32,
         };
         let mail_fade = 1.0_f32;
+        // BAR-260 段②（NA0189 楼6 判据②）：全局页位移单源＝第八道缝采样值，
+        // 与顶条渲染、命中「×」盒、桥下发给 Java 窗位置**同一份**（取整只在
+        // web_page::bar_offset_px 一处）——三处不再各算位移＝无抖动
+        let web_target = crate::ui::web_page::web_off_target(web_in, w);
+        let web_off =
+            crate::ui::seam::sample_web_panel_offset_x(web_target, crate::report::boot_ms() as u64)
+                as i32;
         // 视口推移（2026-09-12 用户拍板，ui/viewport_push.rs）：基座页
         // （终端卡槽/网格实例/键行槽）随面板 off 平移；被压面板吃上方
         // 推移（交叉轴叠加 [配置,AI]：配置随 AI 下移）。off 已含缝采样
@@ -8777,7 +8811,7 @@ impl App {
         // 「随推移滑回」。Q 弹形变同日二审取消（实拍不合预期）——scale
         // 恒 1.0，仿射管线保留
         let (vpush, _p_max) = crate::ui::viewport_push::viewport_push(
-            panel_off, cfg_off, ft_off, pt_off, rd_off, mail_off, w, h,
+            panel_off, cfg_off, ft_off, pt_off, rd_off, mail_off, web_off, w, h,
         );
         let term_place = (vpush.dx, vpush.dy, 1.0);
         let ai_extra = crate::ui::viewport_push::covered_extra(
@@ -8789,6 +8823,7 @@ impl App {
             pt_off,
             rd_off,
             mail_off,
+            web_off,
             w,
             h,
         );
@@ -8801,6 +8836,7 @@ impl App {
             pt_off,
             rd_off,
             mail_off,
+            web_off,
             w,
             h,
         );
@@ -8813,6 +8849,7 @@ impl App {
             pt_off,
             rd_off,
             mail_off,
+            web_off,
             w,
             h,
         );
@@ -8825,6 +8862,7 @@ impl App {
             pt_off,
             rd_off,
             mail_off,
+            web_off,
             w,
             h,
         );
@@ -8843,6 +8881,7 @@ impl App {
             pt_off,
             rd_off,
             mail_off,
+            web_off,
             w,
             h,
         );
@@ -8855,6 +8894,7 @@ impl App {
             pt_off,
             rd_off,
             mail_off,
+            web_off,
             w,
             h,
         );
@@ -9851,14 +9891,21 @@ impl App {
         // panel_off 进实例 y=刚体平移，2026-09-05 拍板不变）。别家面板靠泊
         // 在顶时 AI 被整页盖住：零生成零绘制（布局写回暂停，露出后下一帧
         // 自愈——被覆盖面板无手势够得着，眼手同尺不缺这份读数）
-        let ai_fully_covered = match z_order[5] {
+        let ai_fully_covered = match z_order[6] {
             Panel::Config => cfg_off == 0 && cfg_draw,
             Panel::FileTree => ft_off == 0 && ft_draw,
             Panel::Parser => pt_off == 0 && pt_draw,
             Panel::Reader => rd_off == 0 && rd_draw,
             Panel::Mail => mail_off == 0 && mail_draw,
-            // BAR-260：全局页不进 z 序（本轮最小件），AI 覆盖判定不认它
-            Panel::Web => false,
+            // BAR-260 段③：全局页入 z 序后，它靠泊（off==0）就是整页盖住
+            // AI（页体由 Java 承载、顶条 Rust 画）——覆盖判定必须认它，
+            // 否则 AI 会在盖层底下白跑生成
+            Panel::Web => {
+                crate::ui::web_page::bar_offset_px(crate::ui::seam::sample_web_panel_offset_x(
+                    crate::ui::web_page::web_off_target(true, w),
+                    crate::report::boot_ms() as u64,
+                )) == 0
+            }
             Panel::Ai => false,
         };
         let (ai_layout, ai_glyphs) = if panel_visible && !ai_fully_covered {
@@ -9947,6 +9994,7 @@ impl App {
                 h,
             ));
         if over_dirty {
+            let web_on_top = z_order[6] == crate::ai_presence::Panel::Web;
             let px = g.slot_canvas(crate::gles_present::ChromeSlot::Over);
             px.fill(0);
             let mut term = term_arc.lock().unwrap();
@@ -9962,6 +10010,7 @@ impl App {
                 ai_snap,
                 magnifier_at,
                 true,
+                web_on_top,
             );
             g.slot_bake(crate::gles_present::ChromeSlot::Over);
         }
@@ -10615,6 +10664,7 @@ impl App {
                     pt_active,
                     rd_active,
                     mail_active,
+                    crate::ui::seam::web_panel_offset_x_active(),
                 ],
             );
             // 跟手拖拽锁定期旁路缝采样（同 GLES 路径；拖拽偏移=距靠泊
@@ -11853,6 +11903,31 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
             });
             if let Err(e) = r {
                 crate::report::report_sync("web", &format!("JNI startWebViewFromGate 失败: {e}"));
+            }
+        }));
+        // BAR-260 段②（NA0189 楼6 判据②）：位移下发钩子——Java 窗位置的唯一
+        // 通路。vm/gref 已被上一臂 move 走，另建一对（同 reg 臂写法）
+        let vm3 = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr() as *mut _) };
+        let gref3 = vm3
+            .attach_current_thread(|env| {
+                let act = unsafe {
+                    jni::objects::JObject::from_raw(env, app.activity_as_ptr() as *mut _)
+                };
+                env.new_global_ref(&act)
+            })
+            .expect("MainActivity GlobalRef#3 建立失败");
+        crate::gate::register_web_offset_hook(Box::new(move |dx: i32| {
+            let r = vm3.attach_current_thread(|env| {
+                env.call_method(
+                    &gref3,
+                    jni::jni_str!("webOffset"),
+                    jni::jni_sig!((int) -> void),
+                    &[jni::objects::JValue::Int(dx)],
+                )
+                .map(|_| ())
+            });
+            if let Err(e) = r {
+                crate::report::report_sync("web", &format!("JNI webOffset({dx}) 失败: {e}"));
             }
         }));
         // BAR-162（2026-09-26）：gate install-apk-req → **na 自更新原语**。
