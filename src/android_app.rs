@@ -1328,6 +1328,31 @@ impl App {
         if !TERMINAL_MODE {
             return;
         }
+        // BAR-260 全局页：页体（Java 侧）吃自身矩形内触摸；到得了 Rust 的
+        // 只有顶部原生条。条内「×」= 唯一退出动作（弹栈回解析页，桥收起
+        // 页体走 poll_ai_presence 统一中继）；条内其余位置与条外、以及
+        // 同手势的 Moved/Ended 一律吞掉——不给第二条退路（右滑空操作，
+        // 边缘探测已否决）
+        if let Some(ai) = &self.ai_presence {
+            let psnap = ai.snap(crate::report::boot_ms() as u64);
+            if psnap.top == Some(crate::ai_presence::Panel::Web)
+                || psnap.covered == Some(crate::ai_presence::Panel::Web)
+            {
+                if phase == TouchPhase::Started
+                    && psnap.top == Some(crate::ai_presence::Panel::Web)
+                    && let Some((sw, _)) = self.screen_px()
+                    && crate::ui::web_page::hit_close(x, y, sw)
+                {
+                    crate::report::report(
+                        "gest",
+                        &format!("全局页「×」→ 弹栈回解析页 ({x:.0},{y:.0})"),
+                    );
+                    ai.dismiss_top(crate::ai_presence::Panel::Web);
+                    self.dirty = true;
+                }
+                return;
+            }
+        }
         match phase {
             TouchPhase::Started => {
                 static FIRST_TOUCH: std::sync::atomic::AtomicBool =
@@ -4449,6 +4474,21 @@ impl App {
                     if snap.mail_epoch != prev.mail_epoch && size.width > 0 {
                         crate::ui::seam::replay_mail_panel_offset_x(size.width as f32, now);
                     }
+                }
+            }
+            // BAR-260：全局页进/出栈 = 桥加载/收起（唯一落地通道 =
+            // register_web_hook 的 JNI 钩子）。进入消费 web-req 落的
+            // pending（无则 demo 页）；退出由「×」弹栈触发。此处在快照
+            // 翻代处统一收口，任何入口路径都走同一条桥。
+            let web_in = |s: &crate::ai_presence::PresenceSnap| {
+                s.top == Some(crate::ai_presence::Panel::Web)
+                    || s.covered == Some(crate::ai_presence::Panel::Web)
+            };
+            if let Some(prev) = self.last_ai_snap {
+                match (web_in(&prev), web_in(&snap)) {
+                    (false, true) => crate::gate::open_web_pending(),
+                    (true, false) => crate::gate::close_web(),
+                    _ => {}
                 }
             }
             // BAR-170：阅读页出栈（返回钮/拖拽推回/右滑推回三通道同收
@@ -8058,6 +8098,9 @@ impl App {
             crate::ai_presence::Panel::Parser => accents[2],
             crate::ai_presence::Panel::Reader => accents[3],
             crate::ai_presence::Panel::Mail => accents[4],
+            // BAR-260 全局页：条涂装走 paint_over（读快照 accent_web），
+            // 页体归 Java，本闭包只求穷尽
+            crate::ai_presence::Panel::Web => crate::ui::accent::FALLBACK,
             crate::ai_presence::Panel::Ai => crate::ui::accent::FALLBACK,
         };
         for slot in z_order {
@@ -8250,6 +8293,9 @@ impl App {
                         );
                     }
                 }
+                // BAR-260 全局页：Rust 不画页体，顶部原生条在 paint_over
+                // 常驻直画（z 序/逐帧位置同步本轮不做）
+                crate::ai_presence::Panel::Web => {}
                 crate::ai_presence::Panel::Ai => {
                     // AI 面板（三分支，panel_off 是缝采样值——无 ui-fx 占槽
                     // 时恒等于目标值 0 或 -h，退化为硬切；中间值 = 弹簧过渡帧）。
@@ -8351,6 +8397,14 @@ impl App {
         // 选区边界拖动中的放大镜浮窗
         if let Some((mx, my)) = magnifier_at {
             term.render_magnifier(buf, w, h, mx, my);
+        }
+        // BAR-260 全局页顶部原生条：在栈即常驻（置顶直画，不进 z 序——
+        // 本轮最小件）。只读栈读数/accent，页体加载状态一概不读
+        if let Some(s) = ai_snap
+            && (s.top == Some(crate::ai_presence::Panel::Web)
+                || s.covered == Some(crate::ai_presence::Panel::Web))
+        {
+            term.paint_web_bar(buf, w, h, s.accent_web);
         }
     }
 
@@ -9796,6 +9850,8 @@ impl App {
             Panel::Parser => pt_off == 0 && pt_draw,
             Panel::Reader => rd_off == 0 && rd_draw,
             Panel::Mail => mail_off == 0 && mail_draw,
+            // BAR-260：全局页不进 z 序（本轮最小件），AI 覆盖判定不认它
+            Panel::Web => false,
             Panel::Ai => false,
         };
         let (ai_layout, ai_glyphs) = if panel_visible && !ai_fully_covered {

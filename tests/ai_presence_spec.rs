@@ -1539,22 +1539,30 @@ fn spec_panel_tap_orb_栈语义开关() {
 #[test]
 fn spec_panel_swipe_四公民八臂契约() {
     // 滑向全表（§五B 2026-09-12 四公民·三缘语义，4 顶×2 向共八臂）：
-    // 左滑：顶=FileTree→推回左缘 / 顶=Config→空操作 / 顶=Parser→空操作 /
-    //   否则召唤解析页；右滑：顶=Config→推回右缘 / 顶=Parser→推回右缘 /
-    //   顶=FileTree→空操作 / 否则召唤文件树。任意栈态每个滑向有唯一归宿
-    // ——无洞（设置页不占召唤滑槽：召唤走齿轮钮，关闭只走右滑）。
+    // 左滑：顶=FileTree→推回左缘 / 顶=Config→空操作 / 顶=Parser→召唤
+    //   全局页（BAR-260 第二跳）/ 否则召唤解析页；右滑：顶=Config→推回右缘
+    //   / 顶=Parser→推回右缘 / 顶=FileTree·Web→空操作 / 否则召唤文件树。
+    //   任意栈态每个滑向有唯一归宿——无洞（设置页不占召唤滑槽：召唤走
+    //   齿轮钮，关闭只走右滑；全局页唯一退出 = 顶部「×」）。
     // 变异抽检：swipe_left 召唤臂写错公民（Config/FileTree）→ 第 1 条红；
     // swipe_right 漏 Parser 推回臂 → 第 5 条红；swipe_left 漏 FileTree
-    // 推回臂 → 第 6 条红；swipe_left 在 Parser 顶不空操作 → 第 2 条红。
+    // 推回臂 → 第 6 条红；解析页顶左滑不召全局页 → 第 2 条红（BAR-260）。
     let ai = new_state();
     // 1. 终端页左滑 = 召唤解析页（右缘家·解析器家族）
     ai.swipe_left();
     assert_eq!(ai.snap(0).top, Some(Panel::Parser), "左滑召唤解析页");
-    // 2. 解析页在顶左滑 = 空操作（本家在顶，一滑一义；幂等不复制）
+    // 2. 解析页在顶左滑 = 第二跳召唤全局页（BAR-260／NA0189 楼1：
+    //    终端左滑→解析页，解析页左滑→全局页；解析页留栈底）
     ai.swipe_left();
     let s = ai.snap(0);
-    assert_eq!(s.top, Some(Panel::Parser));
-    assert_eq!(s.covered, None, "幂等不复制");
+    assert_eq!(s.top, Some(Panel::Web), "解析页顶左滑 = 召唤全局页");
+    assert_eq!(s.covered, Some(Panel::Parser), "解析页留栈底待「×」弹回");
+    // 全局页右滑 = 空操作（BAR-260：唯一退路是顶部「×」）
+    ai.swipe_right();
+    assert_eq!(ai.snap(0).top, Some(Panel::Web), "全局页右滑空操作");
+    // 退出只有「×」：模拟命中后弹栈回解析页
+    assert!(ai.dismiss_top(Panel::Web));
+    assert_eq!(ai.snap(0).top, Some(Panel::Parser), "「×」→ 回解析页");
     // 3. 解析页在顶右滑 = 推回右缘（来向），露终端
     ai.swipe_right();
     assert_eq!(ai.snap(0).top, None, "推回解析页后露终端");

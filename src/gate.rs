@@ -471,7 +471,14 @@ pub fn dump_now(dir: &str) {
                         }
                     }
                 }
+                // BAR-260 全局页：页体由 Java 侧承载，Rust 只画顶部原生条
+                // （z 序/逐帧位置同步本轮不做——条恒在 y=0 顶层直画）
+                Panel::Web => {}
             }
+        }
+        // BAR-260：全局页在栈 = 顶部原生条常驻（只读栈读数，不读页面状态）
+        if ai_snap.is_some_and(|s| s.top == Some(Panel::Web) || s.covered == Some(Panel::Web)) {
+            t.paint_web_bar(&mut buf, w, h, acc_of(Panel::Web));
         }
         // 输入栏：常驻 chrome，两页都画（同前台 rasterize 规则）；
         // sending 图标态跟 AI 运行态硬切；光标闪烁相位按节拍算
@@ -1181,13 +1188,58 @@ pub fn register_web_hook(f: WebHook) {
     *WEB_HOOK.lock().unwrap() = Some(f);
 }
 
-/// 值守循环消费：有请求就甩钩子
+/// 全局页默认加载页（BAR-260）：web-req 没有 pending 时的落点——已就绪的
+/// demo 页（127.0.0.1:8032）。只在「进入全局页」时消费，不自动推 UI。
+pub const DEFAULT_WEB_URL: &str = "http://127.0.0.1:8032/demo/index.html";
+
+/// web-req 待加载 URL（BAR-260）：值守线程收到请求只落这里，**不自动推开
+/// 任何 UI**——全局页由用户手势进入，进入时才把 pending 交给桥加载。
+static PENDING_WEB: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// 摘取待加载 URL（进入全局页时消费一次；无 = None）
+pub fn take_pending_web() -> Option<String> {
+    PENDING_WEB.lock().unwrap().take()
+}
+
+/// 进入全局页时调桥加载：pending 优先，缺省落 DEFAULT_WEB_URL
+pub fn open_web_pending() {
+    let url = take_pending_web().unwrap_or_else(|| DEFAULT_WEB_URL.to_owned());
+    open_web(&url);
+}
+
+/// 调桥加载指定 URL（唯一落地通道 = register_web_hook 注册的 JNI 钩子）
+pub fn open_web(url: &str) {
+    match WEB_HOOK.lock().unwrap().as_ref() {
+        Some(f) => f(url.to_owned()),
+        None => crate::report::report("web", "web 打开无钩子（host 或未注册），丢弃"),
+    }
+}
+
+/// 收起全局页（BAR-260 退出唯一动作的 Java 侧）：桥传 "close"，
+/// Java 侧 removeView + destroy。host 不注册 = 空转合法。
+pub fn close_web() {
+    match WEB_HOOK.lock().unwrap().as_ref() {
+        Some(f) => f("close".to_owned()),
+        None => crate::report::report("web", "web 收起无钩子（host 或未注册），丢弃"),
+    }
+}
+
+/// 值守循环消费：web-req 只落 pending（BAR-260：自动推开派发整删——
+/// 收到 URL 不再弹卡，等全局页进入时 open_web_pending 消费）
 pub fn web_req_check(dir: &str) {
     if let Some(url) = take_web_req(dir) {
-        match WEB_HOOK.lock().unwrap().as_ref() {
-            Some(f) => f(url),
-            None => crate::report::report("web", "web-req 无钩子（host 或未注册），丢弃"),
+        // BAR-260：退出唯一动作 = 顶部「×」——web-req 的 "close" 命令
+        // 不再有自动收起权，也不许当 URL 落进 pending（下次进入会被
+        // Java 当成收起指令，凭空关页）
+        if url == "close" {
+            crate::report::report(
+                "web",
+                "web-req=close 已忽略（BAR-260 退出唯一 = 顶部「×」）",
+            );
+            return;
         }
+        *PENDING_WEB.lock().unwrap() = Some(url.clone());
+        crate::report::report("web", &format!("web-req 落 pending（不自动推 UI）: {url}"));
     }
 }
 
@@ -1872,6 +1924,7 @@ pub fn stats_snap() -> StatsSnap {
         Some(crate::ai_presence::Panel::Parser) => "parser".to_owned(),
         Some(crate::ai_presence::Panel::Reader) => "reader".to_owned(),
         Some(crate::ai_presence::Panel::Mail) => "mail".to_owned(),
+        Some(crate::ai_presence::Panel::Web) => "web".to_owned(),
     };
     let (
         ai_page,

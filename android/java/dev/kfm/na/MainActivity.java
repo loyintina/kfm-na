@@ -152,13 +152,12 @@ public class MainActivity extends NativeActivity {
         }
     }
 
-    // ---- 浏览器卡尖刺（SPKE-web，2026-09-12，用户拍板立项）：gate hook 的
+    // ---- 全局页（BAR-260／NA0189 楼1，白露 MAIN0175 楼23）：gate hook 的
     // Java 着陆点。判卷双轨：web-status 状态文件（建成/异常栈）+ 真屏截图。
-    // 第一钉已定罪（2026-09-12 实拍）：WebView 建成不崩（targetSdk28 兼容✓）
-    // 但塞进 content FrameLayout 不可见——与 BAR-017 键行同死法：原生
-    // busy-loop 每帧盖掉同窗 View。第二钉走独立窗口：WindowManager.addView
-    // + TYPE_APPLICATION_PANEL（自带 surface 合成于主窗之上，原生重绘够不
-    // 着；挂 activity token 免 SYSTEM_ALERT_WINDOW 权限）。
+    // 承载走独立窗口：WindowManager.addView + TYPE_APPLICATION_PANEL
+    // （自带 surface 合成于主窗之上，原生重绘够不着；挂 activity token 免
+    // SYSTEM_ALERT_WINDOW 权限）。几何 = 整页：宽 MATCH_PARENT、高 = 屏高
+    // − 顶部原生条高、纵向偏移 = 条高（让出顶部那一条给 Rust 原生条）。
     // url="close" 收起（removeView + destroy）。----
     private android.webkit.WebView mWeb;
 
@@ -184,10 +183,12 @@ public class MainActivity extends NativeActivity {
                         s.setJavaScriptEnabled(true);
                         s.setDomStorageEnabled(true);
                         wv.setWebViewClient(new android.webkit.WebViewClient());
-                        // 尖刺定版几何：整宽 × 屏高 3/5，顶部靠泊——刻意不全屏，
-                        // 好让截图一次判两事（上方 WebView 活没活 + 下方原生
-                        // 终端画面是否还在正常重绘）
-                        int h = getResources().getDisplayMetrics().heightPixels * 3 / 5;
+                        // 整页几何：条高 = 44dp（与 src/ui/web_page.rs 的
+                        // BAR_H 同源；1260 宽 3x 真机 = 132 物理 px）——
+                        // 条高让给 Rust 原生条，页体从条下缘铺到屏底
+                        android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
+                        int bar = Math.max(1, Math.round(44f * dm.density));
+                        int h = Math.max(1, dm.heightPixels - bar);
                         android.view.WindowManager.LayoutParams lp =
                                 new android.view.WindowManager.LayoutParams(
                                         android.view.WindowManager.LayoutParams.MATCH_PARENT,
@@ -197,9 +198,10 @@ public class MainActivity extends NativeActivity {
                                         android.graphics.PixelFormat.TRANSLUCENT);
                         lp.token = getWindow().getDecorView().getWindowToken();
                         lp.gravity = android.view.Gravity.TOP;
+                        lp.y = bar;
                         wm.addView(wv, lp);
                         mWeb = wv;
-                        webStatus("added-panel h=" + h + " token=" + (lp.token != null));
+                        webStatus("added-page bar=" + bar + " h=" + h + " token=" + (lp.token != null));
                     }
                     mWeb.loadUrl(url);
                     webStatus("loading " + url);

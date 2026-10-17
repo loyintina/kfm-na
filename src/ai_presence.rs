@@ -18,9 +18,10 @@
 //! 挤出栈底（静默坍缩为收起）；收起只许顶（被覆盖者不可见，无手势能
 //! 收它）；遮盖者退场被覆盖者直接露出（placement 从未离靠泊位，零动画）。
 //! 抽屉对称手势（四公民 2026-09-12 三缘语义）：swipe_left：顶=文件树推回 /
-//! 顶=配置空操作 / 顶=解析空操作 / 否则召唤解析页；swipe_right：顶=配置
-//! 推回 / 顶=解析推回 / 顶=文件树空操作 / 否则召唤文件树——任意栈态每个
-//! 滑向有唯一归宿。
+//! 顶=配置空操作 / 顶=解析召唤全局页（BAR-260 第二跳）/ 否则召唤解析页；
+//! swipe_right：顶=配置推回 / 顶=解析推回 / 顶=文件树·全局页空操作 / 否则
+//! 召唤文件树——任意栈态每个滑向有唯一归宿。全局页出场唯一 = 顶部原生条
+//! 右端「×」（BAR-260／NA0189 楼1，白露 MAIN0175 楼23）。
 //!
 //! 时钟注入铁律：一切时间判定吃 `now_ms` 参数，不碰墙钟——考题喂时间戳即判。
 //! 生产侧 now_ms = report::boot_ms()（进程单钟，stats/绘制/注入同一把尺）。
@@ -87,6 +88,11 @@ pub enum Panel {
     Reader,
     /// 信箱页（BAR-214）：右缘家，解析页入口召唤；出场唯一 = 右滑推回
     Mail,
+    /// 全局页（BAR-260／NA0189 楼1，白露 MAIN0175 楼23）：解析页再左滑
+    /// 召唤的第二跳（终端左滑→解析页，解析页左滑→全局页）；出场唯一 =
+    /// 顶部原生条右端「×」（右滑空操作，不给第二条退路）。本轮最小件：
+    /// z 序与逐帧位置同步下一轮叠
+    Web,
 }
 
 /// 水平滑向（抽屉手势识别结果，§五B 四公民）：左 = 解析家（顶是文件树则
@@ -149,6 +155,8 @@ pub struct PresenceSnap {
     pub rd_epoch: u64,
     /// 信箱面板的入场代（语义同 ai_epoch）
     pub mail_epoch: u64,
+    /// 全局页的入场代（BAR-260；语义同 ai_epoch）
+    pub web_epoch: u64,
     /// 公民页面随机 accent（宪法 §2.2）：随快照同行——壳层静态装配函数
     /// （无 self 直读状态核）与烘焙 sig 的唯一来源；AI 页不纳入（主题色恒定）
     pub accent_cfg: crate::ui::accent::AccentPair,
@@ -156,6 +164,8 @@ pub struct PresenceSnap {
     pub accent_pt: crate::ui::accent::AccentPair,
     pub accent_reader: crate::ui::accent::AccentPair,
     pub accent_mail: crate::ui::accent::AccentPair,
+    /// 全局页 accent（BAR-260；顶部原生条涂装用）
+    pub accent_web: crate::ui::accent::AccentPair,
 }
 
 /// 四态增益（纯函数，D8）：(整 sprite 增益, 光晕增益)。光晕增益只在 running
@@ -190,6 +200,7 @@ struct Inner {
     pt_placeholder: bool,
     epoch_rd: u64,
     epoch_mail: u64,
+    epoch_web: u64,
     x: f64,
     y: f64,
     /// 首次 set_bounds 落默认出生位的标记（之后 set_bounds 只钳制不搬家）
@@ -211,6 +222,7 @@ struct Inner {
     accent_pt: crate::ui::accent::AccentPair,
     accent_reader: crate::ui::accent::AccentPair,
     accent_mail: crate::ui::accent::AccentPair,
+    accent_web: crate::ui::accent::AccentPair,
     /// 配置卡标签栏绑定（宪法 §四 十一修：每标签独立随机双色）——
     /// 召唤配置卡时逐标签重随色列喂进标签栏，accent_cfg 取选中项；
     /// 未绑定 = 旧路兜底（accent_cfg 单对重随，色列不动）
@@ -242,6 +254,7 @@ impl AiPresenceState {
                 pt_placeholder: false,
                 epoch_rd: 0,
                 epoch_mail: 0,
+                epoch_web: 0,
                 x: 0.0,
                 y: 0.0,
                 positioned: false,
@@ -255,6 +268,7 @@ impl AiPresenceState {
                 accent_pt: accent_rng.generate(),
                 accent_reader: accent_rng.generate(),
                 accent_mail: accent_rng.generate(),
+                accent_web: accent_rng.generate(),
                 accent_rng,
                 tab_bar: None,
             }),
@@ -285,6 +299,7 @@ impl AiPresenceState {
             Panel::Parser => Some(g.accent_pt),
             Panel::Reader => Some(g.accent_reader),
             Panel::Mail => Some(g.accent_mail),
+            Panel::Web => Some(g.accent_web),
         }
     }
 
@@ -362,8 +377,10 @@ impl AiPresenceState {
     }
 
     /// 左滑（四公民 §五B 三缘语义，2026-09-12）：顶是文件树 = 推回它的来向
-    /// （左缘）；顶是配置/解析 = 空操作（右缘本家已在顶，一滑一义——
-    /// 设置页手势全退位只留关闭，解析页是本方向的新家）；
+    /// （左缘）；顶是配置/信箱/全局页 = 空操作（右缘本家已在顶/全局页没有
+    /// 第二条退路——BAR-260 出场唯一 = 顶部原生条右端「×」）；
+    /// 顶是解析页 = 第二跳召唤全局页（BAR-260／NA0189 楼1，白露 MAIN0175
+    /// 楼23：终端左滑→解析页，解析页左滑→全局页）；
     /// 其余 = 召唤解析页。**BAR-208：顶是阅读页也走「其余」**——召唤它自己
     /// 的解析页（空白占位相，summon_locked 按被盖者打标）
     pub fn swipe_left(&self) {
@@ -372,14 +389,18 @@ impl AiPresenceState {
             Some(&Panel::FileTree) => {
                 g.stack.pop();
             }
-            Some(&Panel::Config) | Some(&Panel::Parser) | Some(&Panel::Mail) => {}
+            Some(&Panel::Config) | Some(&Panel::Mail) | Some(&Panel::Web) => {}
+            // BAR-260 第二跳：解析页左滑召唤全局页（解析页留栈底，× 弹栈
+            // 即回解析页——退出唯一动作）
+            Some(&Panel::Parser) => summon_locked(&mut g, Panel::Web),
             _ => summon_locked(&mut g, Panel::Parser),
         }
     }
 
-    /// 右滑（四公民 §五B 三缘语义，2026-09-12）：顶是配置/解析 = 推回
-    /// 它们的来向（右缘——设置页唯一关闭路径）；顶是文件树 =
-    /// 空操作（本家已在顶）；其余 = 召唤文件树。**BAR-208：顶是阅读页也走
+    /// 右滑（四公民 §五B 三缘语义，2026-09-12）：顶是配置/解析/信箱 =
+    /// 推回它们的来向（右缘——设置页唯一关闭路径）；顶是文件树/全局页 =
+    /// 空操作（本家已在顶；BAR-260 全局页不给右滑退路——触摸归页内，且
+    /// 边缘探测已被否决）；其余 = 召唤文件树。**BAR-208：顶是阅读页也走
     /// 「其余」**——右滑召唤文件树（阅读页退出改归终端钮，不再右滑推回）
     pub fn swipe_right(&self) {
         let mut g = self.inner.lock().unwrap();
@@ -387,7 +408,7 @@ impl AiPresenceState {
             Some(&Panel::Config) | Some(&Panel::Parser) | Some(&Panel::Mail) => {
                 g.stack.pop();
             }
-            Some(&Panel::FileTree) => {}
+            Some(&Panel::FileTree) | Some(&Panel::Web) => {}
             _ => summon_locked(&mut g, Panel::FileTree),
         }
     }
@@ -486,11 +507,13 @@ impl AiPresenceState {
             pt_placeholder: g.pt_placeholder,
             rd_epoch: g.epoch_rd,
             mail_epoch: g.epoch_mail,
+            web_epoch: g.epoch_web,
             accent_cfg: g.accent_cfg,
             accent_ft: g.accent_ft,
             accent_pt: g.accent_pt,
             accent_reader: g.accent_reader,
             accent_mail: g.accent_mail,
+            accent_web: g.accent_web,
         }
     }
 }
@@ -565,6 +588,7 @@ fn regen_accent(g: &mut Inner, p: Panel) {
         Panel::Parser => g.accent_pt = g.accent_rng.generate(),
         Panel::Reader => g.accent_reader = g.accent_rng.generate(),
         Panel::Mail => g.accent_mail = g.accent_rng.generate(),
+        Panel::Web => g.accent_web = g.accent_rng.generate(),
     }
 }
 
@@ -577,6 +601,7 @@ fn bump_epoch(g: &mut Inner, p: Panel) {
         Panel::Parser => g.epoch_pt += 1,
         Panel::Reader => g.epoch_rd += 1,
         Panel::Mail => g.epoch_mail += 1,
+        Panel::Web => g.epoch_web += 1,
     }
 }
 

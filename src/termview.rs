@@ -10045,6 +10045,9 @@ pub trait TermEmu: Send {
     /// 与涂装同尺——android_app cfg_row0_text_widths/cfg_dropdown_* 调用方）
     fn grid_text_width(&self, text: &str) -> u32;
     fn render_keybar(&self, buf: &mut [u32], w: u32, h: u32, ime_bottom: u32, mods: u8);
+    /// 全局页顶部原生条（BAR-260／NA0189 楼1）：标题 + 右端「×」。
+    /// 常驻——只吃条几何与 accent，不读页面加载/滚动状态
+    fn paint_web_bar(&self, buf: &mut [u32], w: u32, h: u32, accent: crate::ui::accent::AccentPair);
     /// 配置卡标签栏涂装（主题宪法 §四，2026-09-13 五修）：标签文字
     /// （格内居中、内容带左缘裁剪）+ 选中功能光标开口框（ui/cursor.rs
     /// 规格——线色吃本页 accent 双色渐变，渐变框与页环同原点同分母；
@@ -10484,6 +10487,15 @@ impl TermEmu for TermView {
     }
     fn render_keybar(&self, buf: &mut [u32], w: u32, h: u32, ime_bottom: u32, mods: u8) {
         TermView::render_keybar(self, buf, w, h, ime_bottom, mods)
+    }
+    fn paint_web_bar(
+        &self,
+        buf: &mut [u32],
+        w: u32,
+        h: u32,
+        accent: crate::ui::accent::AccentPair,
+    ) {
+        crate::ui::web_page::paint(self, buf, w, h, accent);
     }
     fn paint_cfg_tab_bar(
         &self,

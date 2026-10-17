@@ -1440,6 +1440,9 @@ impl GlesPresent {
             // 槽画，别家在顶时被连墨带底一起盖住
             for slot in z_order {
                 match slot {
+                    // BAR-260 全局页：页体归 Java 整页窗口，Rust 的顶部
+                    // 原生条在 Over 槽常驻直画——不进 z 序（本轮最小件）
+                    crate::ai_presence::Panel::Web => {}
                     crate::ai_presence::Panel::Mail => {
                         let ml = &self.layers[ChromeSlot::Mail as usize];
                         if ml.visible && ml.baked {

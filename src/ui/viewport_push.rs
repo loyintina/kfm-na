@@ -100,6 +100,9 @@ fn panel_progress(
             dx: -((w - mail_off as f32) / w).clamp(0.0, 1.0) * w,
             dy: 0.0,
         },
+        // 全局页（BAR-260）：本轮最小件不做逐帧位置同步/视口推移——
+        // 页体归 Java 整页窗口，基座不随动（下一轮叠）
+        Panel::Web => Push { dx: 0.0, dy: 0.0 },
     }
 }
 

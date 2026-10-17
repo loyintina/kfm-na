@@ -756,10 +756,11 @@ fn spec_浏览器尖刺_web触发读取() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-// 浏览器卡尖刺钩子消费链（SPKE-web）：web_req_check 吃 web-req → 甩钩子 →
-// 摘文件。register/消费/一次性三件事一条链钉住。
+// BAR-260 全局页桥（NA0189 楼1）：web_req_check 收到 web-req 只落 pending，
+// **不自动推任何 UI**（自动推开派发整删）；进入全局页时 open_web_pending
+// 消费 pending，无 pending 落 demo 页；close_web 走同一钩子传 "close"。
 #[test]
-fn spec_浏览器尖刺_web钩子消费链() {
+fn spec_bar260_web_req只落pending_不自动推() {
     use std::sync::{Arc, Mutex};
     let dir = std::env::temp_dir().join(format!("webhook-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -769,20 +770,41 @@ fn spec_浏览器尖刺_web钩子消费链() {
     kfm_na::gate::register_web_hook(Box::new(move |u: String| {
         sink.lock().unwrap().push(u);
     }));
-    // 无请求 = 钩子不响
+    let _ = kfm_na::gate::take_pending_web(); // 清残 pending（同进程并发安全）
+    // 无请求 = 钩子不响、pending 空
     kfm_na::gate::web_req_check(d);
     assert!(got.lock().unwrap().is_empty());
-    // 有请求 = 钩子拿到 URL + 文件摘除
+    assert_eq!(kfm_na::gate::take_pending_web(), None);
+    // 有请求 = 只落 pending + 文件摘除，绝不甩钩子（不自动推 UI）
     std::fs::write(dir.join("web-req"), "https://example.com").unwrap();
     kfm_na::gate::web_req_check(d);
-    assert_eq!(
-        *got.lock().unwrap(),
-        vec!["https://example.com".to_string()]
-    );
-    assert!(!dir.join("web-req").exists());
+    assert!(got.lock().unwrap().is_empty(), "web-req 不许自动推 UI");
+    assert!(!dir.join("web-req").exists(), "消费后必须摘除");
     // 再跑一圈 = 不重复消费
     kfm_na::gate::web_req_check(d);
-    assert_eq!(got.lock().unwrap().len(), 1);
+    assert!(got.lock().unwrap().is_empty());
+    // 进入全局页：pending 优先（消费一次即空）；再进无 pending = demo 页
+    kfm_na::gate::open_web_pending();
+    assert_eq!(got.lock().unwrap().as_slice(), ["https://example.com"]);
+    assert_eq!(kfm_na::gate::take_pending_web(), None, "pending 单次消费");
+    kfm_na::gate::open_web_pending();
+    assert_eq!(
+        got.lock().unwrap().as_slice(),
+        ["https://example.com", kfm_na::gate::DEFAULT_WEB_URL]
+    );
+    // 退出唯一动作：close 原样过桥
+    kfm_na::gate::close_web();
+    assert_eq!(got.lock().unwrap().last().unwrap(), "close");
+    // web-req 的 "close" 不再有自动收起权，也不落 pending（BAR-260）
+    let n = got.lock().unwrap().len();
+    std::fs::write(dir.join("web-req"), "close").unwrap();
+    kfm_na::gate::web_req_check(d);
+    assert_eq!(got.lock().unwrap().len(), n, "web-req=close 不许自动收起");
+    assert_eq!(
+        kfm_na::gate::take_pending_web(),
+        None,
+        "close 不许落 pending"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
