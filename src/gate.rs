@@ -2696,6 +2696,11 @@ fn bar_check(dir: &str) {
                     crate::deliver::Route::Hold(hint) => {
                         deliver_notes.push(format!("deliver {} → 留栏 Hold（{hint}）", a.as_str()));
                     }
+                    // BAR-252 返工：没有窗＝明确失败（不投 AI，只记决策——判卷臂
+                    // 同样不扰对话页）
+                    crate::deliver::Route::Fail(msg) => {
+                        deliver_notes.push(format!("deliver {} → 无窗失败（{msg}）", a.as_str()));
+                    }
                 }
             }
         }

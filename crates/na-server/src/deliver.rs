@@ -8,13 +8,14 @@
 //! ② 活态核验——tmux 无此会话拒「会话不在」；pane_pid 子孙树扫不到
 //!    harness 拒「未跑 harness」（kimi 行认 comm kimi/kimi-code；tianshu
 //!    行认 cmdline 含 tianshu 的 node；天枢空壳窗落此档）；
-//! ③ 键序——send＝**塞话完整键序**（Esc → 0.3s → 字面文本 → 0.3s → Enter
-//!    → 1s → Enter；BAR-252／MAIN0175 楼23 用户真机实测定罪：旧 send 只有
-//!    「字面文本＋Enter」两条，目标窗只出现文本、没提交）；键序**唯一源**＝
-//!    scripts/kfm-inject-lib.sh 的 KFM_INJECT_STEPS（include_str! 编译期读入，
-//!    kfmv4 agent-send.sh 共用同一份，不许各写一套）；interrupt＝Escape；
-//!    queue＝tianshu 发 M-Enter、kimi 降级 send（action_effective 透出，
-//!    回执须能说「排队（已降级为发送）」——白露楼2①）；
+//! ③ 执行——**不再自实现键序**（BAR-252 返工，清和 NA0189 楼4 拆件单）：
+//! send＝**委派塞话原语** `bash <agent-send.sh> <target> <正文>`（唯一实现者＝
+//! kfmv4 scripts/agent-send.sh；路径 env NA_AGENT_SEND 可覆盖，夹具指假脚本）；
+//! interrupt＝单个 Escape（打断不是塞话序列，直发 tmux）；queue＝tianshu 文本＋
+//! M-Enter，kimi 降级 send（改走委派，action_effective 透出，回执须能说
+//! 「排队（已降级为发送）」——白露楼2①）。
+//! 旧「键序唯一源声明＋编译期读入」整段已删（两份实现的病）；
+//! na-server 侧只留「交给塞话原语」这一个动作。
 //! ④ 留痕——na-server 日志一行（时刻/目标/动作/结果/字节数）＋响应 JSON
 //!    （ok/target/action/action_effective/detail/post_screen）回客户端做回执；
 //!    post_screen = 键序执行后 600ms 取目标窗尾部三行（判据③「对方真进入
@@ -267,179 +268,104 @@ pub fn check_alive(row: &RegRow, panes: &[Pane], procs: &[Proc]) -> Result<u32, 
     }
 }
 
-/// 键序唯一源（BAR-252／MAIN0175 楼23）：手机自举构建时仓外不可见，故
-/// 必须随 na 仓走；kfmv4 agent-send.sh source 同一份文件。
-pub const INJECT_LIB: &str = include_str!("../../../scripts/kfm-inject-lib.sh");
+/// 塞话原语路径（BAR-252 返工）：唯一实现者＝kfmv4 scripts/agent-send.sh；
+/// env NA_AGENT_SEND 可覆盖（夹具指向假脚本，甲钉用）。
+pub fn agent_send_path() -> String {
+    std::env::var("NA_AGENT_SEND")
+        .ok()
+        .filter(|p| !p.is_empty())
+        .unwrap_or_else(|| "/root/10-项目/kfmv4/scripts/agent-send.sh".to_string())
+}
 
-/// 唯一源里的一步语义（A 档纯函数解析产物）：按键 / 字面文本 / 停顿
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum StepSpec {
-    /// tmux 按键名（Esc/Enter/M-Enter）
+/// 直发 tmux 的一步（只在「不是塞话序列」的臂用：interrupt 单 Esc／
+/// tianshu 排队文本＋M-Enter）——**不含任何 Esc→文本→Enter→sleep 序列**
+pub enum TmuxOp {
+    /// tmux 按键名（Escape/M-Enter）
     Key(&'static str),
     /// send-keys -l -- <文本>
-    Text,
-    /// 停顿毫秒
-    Sleep(u64),
+    Literal(String),
 }
 
-/// 待执行步骤（clippy type_complexity 要求抽别名，termview.rs:2019 同律）：
-/// execute 照序 spawn tmux 或线程停顿
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum KeyStep {
-    Cmd(Vec<String>),
-    Sleep(u64),
+/// 投递计划（A 档纯函数）：委派塞话原语，或直发 tmux
+pub enum Plan {
+    /// 委派塞话原语：argv = <target> <正文>（原语自己管键序与提交）
+    AgentSend { target: String, text: String },
+    /// 直发 tmux（目标串加 `=<名>:` 精确匹配＋活动窗格——BAR-152 锚）
+    Tmux { target: String, ops: Vec<TmuxOp> },
 }
 
-/// 键序计划：步骤序列 + 实际生效动作（降级透出）+ 降级备注
-pub type KeyPlan = (Vec<KeyStep>, Action, Option<String>);
+/// 计划 + 实际生效动作（降级透出）+ 降级备注
+pub type Dispatch = (Plan, Action, Option<String>);
 
-/// 声明词 → tmux 键名（唯一源只写 esc/enter/m-enter，键名映射收在这里）
-fn key_name(token: &str) -> Option<&'static str> {
-    match token {
-        "esc" => Some("Escape"),
-        "enter" => Some("Enter"),
-        "m-enter" => Some("M-Enter"),
-        _ => None,
-    }
-}
-
-/// 解析唯一源声明（A 档纯函数）：取 `KFM_INJECT_STEPS="..."` 一行，
-/// 空白分隔逐项转 StepSpec；缺声明/未知词/坏秒数 → Err。
-pub fn parse_key_steps(decl: &str) -> Result<Vec<StepSpec>, String> {
-    let line = decl
-        .lines()
-        .find(|l| l.contains("KFM_INJECT_STEPS="))
-        .ok_or("键序唯一源缺 KFM_INJECT_STEPS 声明")?;
-    let start = line.find('"').ok_or("KFM_INJECT_STEPS 声明缺双引号")?;
-    let end = line.rfind('"').ok_or("KFM_INJECT_STEPS 声明缺闭合双引号")?;
-    if end <= start + 1 {
-        return Err("KFM_INJECT_STEPS 声明为空".into());
-    }
-    let mut out = Vec::new();
-    for token in line[start + 1..end].split_whitespace() {
-        if token == "text" {
-            out.push(StepSpec::Text);
-        } else if let Some(key) = key_name(token) {
-            out.push(StepSpec::Key(key));
-        } else if let Some(secs) = token.strip_prefix("sleep") {
-            let secs: f64 = secs
-                .parse()
-                .map_err(|_| format!("键序唯一源坏秒数: {token}"))?;
-            if !secs.is_finite() || secs <= 0.0 {
-                return Err(format!("键序唯一源秒数必须为正: {token}"));
-            }
-            out.push(StepSpec::Sleep((secs * 1000.0).round() as u64));
-        } else {
-            return Err(format!("键序唯一源未知步: {token}"));
-        }
-    }
-    if out.is_empty() {
-        return Err("键序唯一源声明为空".into());
-    }
-    Ok(out)
-}
-
-/// 展开为待执行命令（A 档纯函数）：`-t =<名>:` 等号＝精确匹配、尾冒号＝
-/// 指到会话的活动窗格（BAR-152 铁钉：`=名` 裸用不带冒号在 pane 目标上
-/// 不成立「can't find pane」，同坑注释见 tmux_ctl.rs cmd_capture）；
-/// `-l --` = 字面文本不解析键名。
-pub fn expand_key_steps(specs: &[StepSpec], target: &str, text: &str) -> Vec<KeyStep> {
-    specs
-        .iter()
-        .map(|spec| match spec {
-            StepSpec::Key(key) => KeyStep::Cmd(vec![
-                "send-keys".to_string(),
-                "-t".to_string(),
-                target.to_string(),
-                key.to_string(),
-            ]),
-            StepSpec::Text => KeyStep::Cmd(vec![
-                "send-keys".to_string(),
-                "-t".to_string(),
-                target.to_string(),
-                "-l".to_string(),
-                "--".to_string(),
-                text.to_string(),
-            ]),
-            StepSpec::Sleep(ms) => KeyStep::Sleep(*ms),
-        })
-        .collect()
-}
-
-/// ③ 键序（A 档纯函数）：send 与 queue-kimi 降级臂都走唯一源展开的完整
-/// 塞话键序（Esc → 停顿 → 字面文本 → 停顿 → Enter → 停顿 → Enter）。
-/// queue 在 tianshu 上仍是文本＋M-Enter；kimi 降级 send（note 透出降级，
-/// 响应 action_effective=send）。
-pub fn build_keys(
+/// ③ 投递计划（A 档纯函数）：send 与 queue-kimi 降级臂都**委派塞话原语**
+/// （旧「Esc→文本→Enter 手写序列」整段删除——两份实现即病的根源）；
+/// interrupt 只发单个 Escape（不是塞话序列，直发 tmux）；queue 在 tianshu
+/// 上仍是文本＋M-Enter。空文本 = 拒。
+pub fn plan_dispatch(
     action: Action,
     harness: &Harness,
     target: &str,
     text: &str,
-) -> Result<KeyPlan, String> {
-    // BAR-152 锚：目标串必须以冒号收尾（=name: 指会话活动窗格）
-    let t = format!("={target}:");
-    let send_plan = || -> Result<Vec<KeyStep>, String> {
-        let specs = parse_key_steps(INJECT_LIB)?;
-        Ok(expand_key_steps(&specs, &t, text))
+) -> Result<Dispatch, String> {
+    let delegate = || Plan::AgentSend {
+        target: target.to_string(),
+        text: text.to_string(),
     };
     match action {
         Action::Send => {
             if text.is_empty() {
                 return Err("空文本不投递（interrupt 请用 action=interrupt）".into());
             }
-            Ok((send_plan()?, Action::Send, None))
+            Ok((delegate(), Action::Send, None))
         }
-        Action::Interrupt => {
-            // 打断只发一次 Esc（不读唯一源——那是塞话提交键序，不是打断）
-            let esc = key_name("esc").ok_or("键名表缺 esc")?;
-            Ok((
-                vec![KeyStep::Cmd(vec![
-                    "send-keys".to_string(),
-                    "-t".to_string(),
-                    t,
-                    esc.to_string(),
-                ])],
-                Action::Interrupt,
-                None,
-            ))
-        }
+        Action::Interrupt => Ok((
+            Plan::Tmux {
+                target: target.to_string(),
+                ops: vec![TmuxOp::Key("Escape")],
+            },
+            Action::Interrupt,
+            None,
+        )),
         Action::Queue => {
             if text.is_empty() {
                 return Err("空文本不投递（排队也要先有形）".into());
             }
             match harness {
-                Harness::Tianshu => {
-                    let m_enter = key_name("m-enter").ok_or("键名表缺 m-enter")?;
-                    Ok((
-                        vec![
-                            KeyStep::Cmd(vec![
-                                "send-keys".to_string(),
-                                "-t".to_string(),
-                                t.clone(),
-                                "-l".to_string(),
-                                "--".to_string(),
-                                text.to_string(),
-                            ]),
-                            KeyStep::Cmd(vec![
-                                "send-keys".to_string(),
-                                "-t".to_string(),
-                                t,
-                                m_enter.to_string(),
-                            ]),
-                        ],
-                        Action::Queue,
-                        None,
-                    ))
-                }
+                Harness::Tianshu => Ok((
+                    Plan::Tmux {
+                        target: target.to_string(),
+                        ops: vec![TmuxOp::Literal(text.to_string()), TmuxOp::Key("M-Enter")],
+                    },
+                    Action::Queue,
+                    None,
+                )),
                 // kimi 无排队键——降级发送，回执必须说得出口（白露楼2①）
                 _ => Ok((
-                    send_plan()?,
+                    delegate(),
                     Action::Send,
                     Some("kimi 无排队键——已降级为发送".to_string()),
                 )),
             }
         }
     }
+}
+
+/// 执行委派（B 档薄 IO）：`bash <agent-send> <target> <正文>`。
+/// 甲钉（独立断言）直调本函数用假脚本验 argv——咬的是「真把内容交给了
+/// 塞话原语」，不是「我以为我发对了键」。
+pub fn run_agent_send(send_path: &str, target: &str, text: &str) -> Result<(), String> {
+    let out = std::process::Command::new("bash")
+        .arg(send_path)
+        .arg(target)
+        .arg(text)
+        .output()
+        .map_err(|e| format!("agent-send spawn 失败: {e}"))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let err = String::from_utf8_lossy(&out.stderr);
+    let tail: String = err.lines().last().unwrap_or("").chars().take(200).collect();
+    Err(format!("agent-send 退出 {:?}: {tail}", out.status.code()))
 }
 
 /// ④ 回执体（A 档纯函数）：五键全在，detail 空串不省略（客户端凭键认
@@ -721,22 +647,43 @@ pub fn execute(body: &str) -> (u16, String) {
     if let Err(d) = check_alive(row, &panes, &procs) {
         return rej(d);
     }
-    // ③ 键序与执行（Sleep 步走线程停顿——与 agent-send 的 sleep 同秒数）
-    let (steps, effective, note) = match build_keys(req.action, &row.harness, target, &req.text) {
+    // ③ 执行：send／queue-kimi 委派塞话原语；interrupt／tianshu 排队直发 tmux
+    let (plan, effective, note) = match plan_dispatch(req.action, &row.harness, target, &req.text) {
         Ok(x) => x,
         Err(d) => return finish(400, target, action, action, false, bytes, &d, ""),
     };
-    for step in &steps {
-        let out = match step {
-            KeyStep::Cmd(args) => run_cmd(args),
-            KeyStep::Sleep(ms) => {
-                std::thread::sleep(std::time::Duration::from_millis(*ms));
-                Ok(())
+    let out = match &plan {
+        Plan::AgentSend { target: t, text } => run_agent_send(&agent_send_path(), t, text),
+        Plan::Tmux { target: t, ops } => {
+            let tmux_target = format!("={t}:");
+            let mut res = Ok(());
+            for op in ops {
+                let args: Vec<String> = match op {
+                    TmuxOp::Key(key) => vec![
+                        "send-keys".to_string(),
+                        "-t".to_string(),
+                        tmux_target.clone(),
+                        key.to_string(),
+                    ],
+                    TmuxOp::Literal(lit) => vec![
+                        "send-keys".to_string(),
+                        "-t".to_string(),
+                        tmux_target.clone(),
+                        "-l".to_string(),
+                        "--".to_string(),
+                        lit.clone(),
+                    ],
+                };
+                if let Err(e) = run_cmd(&args) {
+                    res = Err(e);
+                    break;
+                }
             }
-        };
-        if let Err(e) = out {
-            return finish(500, target, action, action, false, bytes, &e, "");
+            res
         }
+    };
+    if let Err(e) = out {
+        return finish(500, target, action, action, false, bytes, &e, "");
     }
     // ④ 判据③取证（BAR-252：按下后对方窗口真进入处理）
     let post_screen = capture_post_screen(target);

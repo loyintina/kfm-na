@@ -7,9 +7,9 @@
 //! execute 薄 IO 胶的真机判卷归承影。
 
 use na_server::deliver::{
-    Action, Harness, KeyStep, Pane, Proc, RegRow, StepSpec, build_keys, check_alive, descendants,
-    expand_key_steps, iso8, log_line, lookup, parse_key_steps, parse_panes, parse_ps,
-    parse_registry, parse_req, resp_json, resp_json_with_screen, screen_tail,
+    Action, Harness, Pane, Plan, Proc, RegRow, TmuxOp, check_alive, descendants, iso8, log_line,
+    lookup, parse_panes, parse_ps, parse_registry, parse_req, plan_dispatch, resp_json,
+    resp_json_with_screen, run_agent_send, screen_tail,
 };
 
 fn kimi_row(name: &str) -> RegRow {
@@ -216,140 +216,152 @@ fn spec_bar252_子孙树防环() {
     assert_eq!(d.len(), 2);
 }
 
+/// 甲（**独立断言**，不是复述实现）：投递真把 target 与正文原文交给了塞话
+/// 原语——夹具假脚本把收到的 argv 写进文件，run_agent_send 指向它，
+/// 断言 argv 里有目标名与正文原文。咬的是「内容交到原语手里」，
+/// 不是「我以为我发对了键」。
 #[test]
-fn spec_bar252_键序构造() {
-    let cmd = |argv: &[&str]| KeyStep::Cmd(argv.iter().map(|s| s.to_string()).collect());
-    // send：BAR-252／MAIN0175 楼23 完整塞话键序——
-    // Esc → 0.3s → -l 字面文本 → 0.3s → Enter → 1s → Enter
-    // 目标 =名: 精确匹配到会话活动窗格，-l -- 不解析键名
-    let (steps, eff, note) = build_keys(Action::Send, &Harness::Kimi, "清和", "你好 世界").unwrap();
+fn spec_bar252_返工_委派塞话原语() {
+    let dir = std::env::temp_dir().join(format!("na-deliver-jia-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let fake = dir.join("fake-agent-send.sh");
+    let argv_log = dir.join("argv.txt");
+    std::fs::write(
+        &fake,
+        format!(
+            "#!/bin/bash\nprintf '%s\\n' \"$@\" > {}\nexit 0\n",
+            argv_log.display()
+        ),
+    )
+    .unwrap();
+    run_agent_send(fake.to_str().unwrap(), "清和", "你好 世界").expect("假原语应成功");
+    let got = std::fs::read_to_string(&argv_log).expect("假脚本应写 argv");
+    let lines: Vec<&str> = got.lines().collect();
+    assert_eq!(
+        lines,
+        vec!["清和", "你好 世界"],
+        "argv 必须是 <target> <正文原文>"
+    );
+    // 原语非零退出 = Err（失败不被吞成成功）
+    let bad = dir.join("bad-agent-send.sh");
+    std::fs::write(&bad, "#!/bin/bash\necho boom >&2\nexit 3\n").unwrap();
+    let e = run_agent_send(bad.to_str().unwrap(), "清和", "x").unwrap_err();
+    assert!(
+        e.contains("boom") && e.contains("3"),
+        "失败要带退出码与原语 stderr: {e}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// 计划真值表（A 档）：send／queue-kimi 降级 → **委派原语**（不是自拼键序）；
+/// interrupt → 直发单个 Escape；queue-tianshu → 文本＋M-Enter；空文本拒。
+#[test]
+fn spec_bar252_返工_计划真值表() {
+    let (plan, eff, note) =
+        plan_dispatch(Action::Send, &Harness::Kimi, "清和", "你好 世界").unwrap();
     assert_eq!(eff, Action::Send);
     assert!(note.is_none());
-    assert_eq!(
-        steps,
-        vec![
-            cmd(&["send-keys", "-t", "=清和:", "Escape"]),
-            KeyStep::Sleep(300),
-            cmd(&["send-keys", "-t", "=清和:", "-l", "--", "你好 世界"]),
-            KeyStep::Sleep(300),
-            cmd(&["send-keys", "-t", "=清和:", "Enter"]),
-            KeyStep::Sleep(1000),
-            cmd(&["send-keys", "-t", "=清和:", "Enter"]),
-        ]
-    );
-    // interrupt：只发 Escape，不带文本、不带停顿
-    let (steps, eff, _) = build_keys(Action::Interrupt, &Harness::Kimi, "清和", "").unwrap();
+    match plan {
+        Plan::AgentSend { target, text } => {
+            assert_eq!(target, "清和", "委派用会话名，不是 tmux 目标串");
+            assert_eq!(text, "你好 世界");
+        }
+        other => panic!("send 必须委派塞话原语，实得 {}", plan_name(&other)),
+    }
+    // interrupt：单 Escape，直发 tmux，不带文本
+    let (plan, eff, _) = plan_dispatch(Action::Interrupt, &Harness::Kimi, "清和", "").unwrap();
     assert_eq!(eff, Action::Interrupt);
-    assert_eq!(steps, vec![cmd(&["send-keys", "-t", "=清和:", "Escape"])]);
-    // queue：tianshu 仍发「字面文本＋M-Enter」（不进塞话键序）
-    let (steps, eff, note) = build_keys(Action::Queue, &Harness::Tianshu, "悬铃", "排着").unwrap();
+    match plan {
+        Plan::Tmux { target, ops } => {
+            assert_eq!(target, "清和");
+            assert_eq!(ops.len(), 1);
+            assert!(matches!(ops[0], TmuxOp::Key("Escape")));
+        }
+        other => panic!("interrupt 必须直发单 Escape，实得 {}", plan_name(&other)),
+    }
+    // queue-tianshu：文本＋M-Enter（排队键，不是塞话序列）
+    let (plan, eff, note) =
+        plan_dispatch(Action::Queue, &Harness::Tianshu, "悬铃", "排着").unwrap();
     assert_eq!(eff, Action::Queue);
     assert!(note.is_none());
-    assert_eq!(
-        steps,
-        vec![
-            cmd(&["send-keys", "-t", "=悬铃:", "-l", "--", "排着"]),
-            cmd(&["send-keys", "-t", "=悬铃:", "M-Enter"]),
-        ]
-    );
-    // queue：kimi 无排队键 → 降级 send，action_effective=send + note 透出，
-    // 键序与 send 臂逐项相同（含三段停顿与双 Enter）
-    let (steps, eff, note) = build_keys(Action::Queue, &Harness::Kimi, "清和", "排着").unwrap();
-    assert_eq!(eff, Action::Send);
-    assert!(note.unwrap().contains("降级"));
-    assert_eq!(
-        steps,
-        vec![
-            cmd(&["send-keys", "-t", "=清和:", "Escape"]),
-            KeyStep::Sleep(300),
-            cmd(&["send-keys", "-t", "=清和:", "-l", "--", "排着"]),
-            KeyStep::Sleep(300),
-            cmd(&["send-keys", "-t", "=清和:", "Enter"]),
-            KeyStep::Sleep(1000),
-            cmd(&["send-keys", "-t", "=清和:", "Enter"]),
-        ]
-    );
-    // 空文本：send/queue 拒，interrupt 放行
-    assert!(build_keys(Action::Send, &Harness::Kimi, "清和", "").is_err());
-    assert!(build_keys(Action::Queue, &Harness::Tianshu, "悬铃", "").is_err());
-}
-
-/// 键序单源（BAR-252／MAIN0175 楼23 白露硬要求）：唯一源声明解析出的
-/// 步骤 == build_keys(Send) 展开的步骤 == queue-kimi 降级臂步骤。
-/// 声明原文另以字面钉在这里——改 lib 任一键序步（含 sleep 秒数）必红。
-#[test]
-fn spec_bar252_键序单源() {
-    let lib = include_str!("../../../scripts/kfm-inject-lib.sh");
-    assert_eq!(
-        lib.matches("KFM_INJECT_STEPS=").count(),
-        1,
-        "唯一源只许一份 KFM_INJECT_STEPS 声明"
-    );
-    let specs = parse_key_steps(lib).expect("唯一源声明必须可解析");
-    assert_eq!(
-        specs,
-        vec![
-            StepSpec::Key("Escape"),
-            StepSpec::Sleep(300),
-            StepSpec::Text,
-            StepSpec::Sleep(300),
-            StepSpec::Key("Enter"),
-            StepSpec::Sleep(1000),
-            StepSpec::Key("Enter"),
-        ],
-        "唯一源声明必须是 v12 实测键序（改 lib 必红）"
-    );
-    let expected = expand_key_steps(&specs, "=清和:", "你好");
-    let (sent, _, _) = build_keys(Action::Send, &Harness::Kimi, "清和", "你好").unwrap();
-    assert_eq!(sent, expected, "build_keys(Send) 必须展开同一份唯一源");
-    let (queued, _, _) = build_keys(Action::Queue, &Harness::Kimi, "清和", "你好").unwrap();
-    assert_eq!(queued, expected, "queue-kimi 降级臂必须同源");
-}
-
-/// 键序接线守卫（源码锚）：deliver.rs 用 include_str! 指向 na 仓唯一源；
-/// 键名映射各只许出现一次（第二处硬编码 Escape/Enter 序列 = 红）。
-#[test]
-fn spec_bar252_键序接线守卫() {
-    let src = include_str!("../src/deliver.rs");
-    assert!(
-        src.contains("include_str!(\"../../../scripts/kfm-inject-lib.sh\")"),
-        "deliver.rs 必须 include_str! 唯一源（手机自举构建仓外不可见）"
-    );
-    assert!(src.contains("parse_key_steps"), "键序必须经唯一源解析");
-    assert_eq!(
-        src.matches("\"Escape\"").count(),
-        1,
-        "Escape 键名只许出现在 token→键名映射一处"
-    );
-    assert_eq!(
-        src.matches("\"Enter\"").count(),
-        1,
-        "Enter 键名只许出现在 token→键名映射一处"
-    );
-}
-
-/// BAR-152 锚定钉（承影 NA0181 楼6 打回：考题与答案同源自洽、一起错）：
-/// 凡是交给 tmux 的目标串，`-t` 的后一参数必须以冒号收尾——「=名」裸用
-/// 在 pane 目标上不成立（can't find pane），必须「=名:」指到会话活动
-/// 窗格。三动作 × 双 harness 全排列逐 argv 核，不抽样。
-#[test]
-fn spec_bar252_目标串冒号收尾() {
-    for action in [Action::Send, Action::Interrupt, Action::Queue] {
-        for harness in [Harness::Kimi, Harness::Tianshu] {
-            let (cmds, _, _) = build_keys(action, &harness, "清和", "探针").unwrap();
-            for step in &cmds {
-                let KeyStep::Cmd(argv) = step else {
-                    continue; // Sleep 步没有 -t
-                };
-                let pos = argv.iter().position(|a| a == "-t").expect("argv 缺 -t");
-                let t = &argv[pos + 1];
-                assert!(
-                    t.starts_with('=') && t.ends_with(':'),
-                    "目标串 {t} 必须是 =名: 形态（BAR-152）"
-                );
+    match plan {
+        Plan::Tmux { target, ops } => {
+            assert_eq!(target, "悬铃");
+            assert_eq!(ops.len(), 2);
+            match (&ops[0], &ops[1]) {
+                (TmuxOp::Literal(l), TmuxOp::Key(k)) => {
+                    assert_eq!(l, "排着");
+                    assert_eq!(*k, "M-Enter");
+                }
+                _ => panic!("tianshu 排队应为 文本＋M-Enter"),
             }
         }
+        other => panic!("tianshu 排队必须直发，实得 {}", plan_name(&other)),
     }
+    // queue-kimi：降级 send → 委派原语 + note 透出
+    let (plan, eff, note) = plan_dispatch(Action::Queue, &Harness::Kimi, "清和", "排着").unwrap();
+    assert_eq!(eff, Action::Send);
+    assert!(note.unwrap().contains("降级"));
+    assert!(matches!(plan, Plan::AgentSend { .. }), "降级臂也必须走委派");
+    // 空文本：send/queue 拒
+    assert!(plan_dispatch(Action::Send, &Harness::Kimi, "清和", "").is_err());
+    assert!(plan_dispatch(Action::Queue, &Harness::Tianshu, "悬铃", "").is_err());
+}
+
+fn plan_name(p: &Plan) -> &'static str {
+    match p {
+        Plan::AgentSend { .. } => "AgentSend",
+        Plan::Tmux { .. } => "Tmux",
+    }
+}
+
+/// 乙（接线守卫，源码锚）：deliver.rs 不得再含键序实现标识与「Esc→文本→
+/// Enter」序列字面——两份实现的病；必须含塞话原语路径（委派接线在）。
+/// 直发臂的目标串仍须 `=名:`（BAR-152 锚，承影楼6 打回项）。
+#[test]
+fn spec_bar252_返工_接线守卫() {
+    let src = include_str!("../src/deliver.rs");
+    for banned in [
+        "KeyStep",
+        "parse_key_steps",
+        "expand_key_steps",
+        "StepSpec",
+        "kfm-inject-lib",
+        "include_str!",
+        "KFM_INJECT_STEPS",
+    ] {
+        assert!(
+            !src.contains(banned),
+            "键序自实现残留：{banned}（BAR-252 返工：唯一实现者是 agent-send.sh）"
+        );
+    }
+    assert!(src.contains("agent_send_path"), "必须按路径调塞话原语");
+    assert!(
+        src.contains("run_agent_send(&agent_send_path()"),
+        "委派臂必须真调执行函数（摘了它＝自实现回来了）"
+    );
+    assert!(
+        src.contains("NA_AGENT_SEND"),
+        "原语路径须 env 可覆盖（夹具口）"
+    );
+    assert!(
+        src.contains("/root/10-项目/kfmv4/scripts/agent-send.sh"),
+        "缺省路径指向塞话原语"
+    );
+    // 直发臂目标串 =名: 锚（BAR-152）
+    assert!(
+        src.contains("format!(\"={t}:\")"),
+        "直发 tmux 的目标串必须 =名: 形态"
+    );
+    // 唯一实现者仓里：na 仓不该再有键序声明文件
+    assert!(
+        !std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../scripts/kfm-inject-lib.sh"
+        ))
+        .exists(),
+        "kfm-inject-lib.sh 应已删除（键序只许在 agent-send.sh 一份）"
+    );
 }
 
 #[test]

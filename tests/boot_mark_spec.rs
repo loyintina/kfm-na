@@ -181,9 +181,10 @@ fn spec_bar256_路由_pending留栏不吞字() {
 
 #[test]
 fn spec_bar256_路由_missed_bad归ai带引导账提示() {
+    // BAR-252 返工（白露楼26）：引导账认不出窗＝明确失败，不改投 AI
     match decide(Page::Terminal, None, None, Some(&BootMark::Missed), true) {
-        Route::Ai(Some(h)) => assert!(h.contains("引导账未回"), "{h}"),
-        other => panic!("Missed 应归 AI 带提示，实得 {other:?}"),
+        Route::Fail(h) => assert!(h.contains("引导账未回"), "{h}"),
+        other => panic!("Missed 应明确失败，实得 {other:?}"),
     }
     match decide(
         Page::Terminal,
@@ -192,8 +193,8 @@ fn spec_bar256_路由_missed_bad归ai带引导账提示() {
         Some(&BootMark::Bad("x".into())),
         true,
     ) {
-        Route::Ai(Some(h)) => assert!(h.contains("引导账"), "{h}"),
-        other => panic!("Bad 应归 AI 带提示，实得 {other:?}"),
+        Route::Fail(h) => assert!(h.contains("引导账"), "{h}"),
+        other => panic!("Bad 应明确失败，实得 {other:?}"),
     }
 }
 
@@ -210,7 +211,7 @@ fn spec_bar256_路由_stripped快路与哨兵() {
         ),
         Route::Window("清和".into())
     );
-    // 哨兵 = 已知裸壳：照旧 AI 路带裸 shell 提示（不是「引导账未回」）
+    // 哨兵 = 已知裸壳：明确失败（不投 AI），原因＋出路
     match decide(
         Page::Terminal,
         None,
@@ -220,13 +221,13 @@ fn spec_bar256_路由_stripped快路与哨兵() {
         )),
         true,
     ) {
-        Route::Ai(Some(h)) => assert!(h.contains("裸 shell"), "{h}"),
-        other => panic!("哨兵应归 AI 裸 shell 提示，实得 {other:?}"),
+        Route::Fail(h) => assert!(h.contains("裸 shell") && h.contains("先"), "{h}"),
+        other => panic!("哨兵应明确失败，实得 {other:?}"),
     }
-    // 无账（非引导流）= 旧行为：裸 shell 提示
+    // 无账（非引导流）＝同样明确失败，不改投
     match decide(Page::Terminal, None, None, None, true) {
-        Route::Ai(Some(h)) => assert!(h.contains("裸 shell"), "{h}"),
-        other => panic!("无账应保持旧行为，实得 {other:?}"),
+        Route::Fail(h) => assert!(h.contains("裸 shell"), "{h}"),
+        other => panic!("无账应明确失败，实得 {other:?}"),
     }
 }
 

@@ -6,8 +6,11 @@
 //! - 页＝终页 ∧ 面板栈顶为空 ∧ 活跃腿附着名 S 在 ∧ 投递面已装配 →
 //!   **窗路**：spawn 线程经共享腿 HTTP POST /api/deliver（na-server 核验
 //!   投递一处成案），瞬时返回契约同 AI 脑；
-//! - 否则 → **原 AI 路由**。裸 shell 归 AI 须不静默（白露楼2④）：栏内
-//!   一句瞬态小字解释分叉；AI 全屏页/面板开着归 AI 无提示（人没在窗上）。
+//! - 页＝AI 全屏页／面板开着／投递面未装配 → **原 AI 路由**（人没在看窗，
+//!   或后端本就不带投递面）；
+//! - 终页但**没有窗**（裸 shell／引导账认不出）→ **Fail 明确失败**
+//!   （BAR-252 返工、白露楼26：不替用户改投 AI 页；横幅写原因＋出路，
+//!   草稿回填。此条取代 NA0181 楼2「裸 shell 路由 AI 页」，是取代不是遗漏）。
 //!
 //! 回执（白露楼2①②；BAR-252／MAIN0175 楼23 修订）：
 //! - 投成 = **不写栏内回执小字**（旧「→ 窗·发送」「已发送」已退役——用户
@@ -60,13 +63,17 @@ pub enum Route {
     /// 不许替用户选目的地把给窗的指令交 AI 执行）：草稿回填＋瞬态提示，
     /// 账落定后用户再按一次即走落定后的路由
     Hold(String),
+    /// BAR-252 返工（清和 NA0189 楼4；白露楼26）：**没有窗＝明确失败**，
+    /// 不替用户改投 AI 页——终端横幅写原因＋出路，草稿回填不吞字
+    Fail(String),
 }
 
 /// 路由判定（A 档纯函数，钉在 deliver_spec / boot_mark_spec）：
 /// 终页裸奔 ∧ 附着名在 ∧ 投递面已装配 → 窗路；附着名缺 → 问引导账
 /// （BAR-256）：Pending=Hold 留栏／Stripped(名)=窗路（服务器真值直连，
-/// 不等 UI 应用账）／Stripped(哨兵)=已知裸壳归 AI／Missed/Bad=归 AI
-/// 带「引导账」提示；无账（非引导流）= 旧行为裸 shell 归 AI。
+/// 不等 UI 应用账）／Stripped(哨兵)/Missed/Bad/无账＝**没有窗 → Fail**
+/// （BAR-252 返工、白露楼26：不替用户改投 AI 页——横幅写原因＋出路，
+/// 草稿回填）；无投递面（非 na-server 后端）= 旧行为零变化归 AI。
 /// page/top 来自 ai_presence 快照；attached 来自 SessionRouter::active_attached
 /// （附着了 tmux 会话 = 会话名，裸 shell = None——BAR-238 同源读数）。
 /// 附着名在哪个腿不问：本地腿 ssh attach 与远程腿 ws attach 看的都是
@@ -97,19 +104,24 @@ pub fn decide(
         }
         Some(crate::boot_mark::BootMark::Stripped(n)) => {
             if n == crate::tmux_ctl::BOOTSTRAP_SHELL_SENTINEL {
-                Route::Ai(Some("当前窗是裸 shell——本句发往 AI 页".to_string()))
+                Route::Fail(
+                    "当前窗是裸 shell，没有可投递的会话——先在解析页点开会话；草稿已回填"
+                        .to_string(),
+                )
             } else {
                 Route::Window(n.clone())
             }
         }
         Some(crate::boot_mark::BootMark::Missed) => {
-            Route::Ai(Some("引导账未回——本句按裸 shell 发往 AI 页".to_string()))
+            Route::Fail("引导账未回，认不出当前窗——先在解析页点开会话；草稿已回填".to_string())
         }
         Some(crate::boot_mark::BootMark::Bad(_)) => {
-            Route::Ai(Some("引导账非法——本句按裸 shell 发往 AI 页".to_string()))
+            Route::Fail("引导账非法，认不出当前窗——先在解析页点开会话；草稿已回填".to_string())
         }
-        // 无账（非引导流）：裸 shell 无从核验（NA0181 楼1：保守归 AI）
-        None => Route::Ai(Some("当前窗是裸 shell——本句发往 AI 页".to_string())),
+        // 无账（非引导流）：裸 shell 无从核验 → 同样明确失败，不改投
+        None => Route::Fail(
+            "当前窗是裸 shell，没有可投递的会话——先在解析页点开会话；草稿已回填".to_string(),
+        ),
     }
 }
 
@@ -154,6 +166,13 @@ pub fn hold(text: &str, hint: &str) {
     if let Some(b) = crate::gate::input_bar_handle() {
         b.set_hint(hint);
     }
+}
+
+/// Fail 臂落地（BAR-252 返工，白露楼26）：没有窗＝明确失败——终端横幅写
+/// 原因＋出路，草稿回填不吞字；**不改投 AI 页**（不替用户选目的地）
+pub fn fail(text: &str, msg: &str) {
+    refill(text);
+    banner(msg);
 }
 
 /// 请求体（A 档纯函数）：JSON 四键 v/target/action/text

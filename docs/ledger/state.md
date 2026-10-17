@@ -47,17 +47,19 @@
 > 边界（楼38）：条件性全宽写进判据／降级整字回落不留半圆／只给在用带圈族；
 > 验收＝与二修同屏并排由用户判够不够大。**已落 master（分支 e9656d3，合并 63ee421），NA0171 楼40 已请承影出核推 11 机。**
 
-## 当前位置（2026-10-17 傍晚，BAR-252 输入栏投递打回重修——键序唯一源＋去残留提示＋post_screen 取证，钉绿待判）
+## 当前位置（2026-10-17 晚，BAR-252 第二次返工——na-server 改委派塞话原语＋无窗明确失败，钉绿待对表）
 
-> **BAR-252 重修三改**（用户真机实测打回，白露 MAIN0175 楼23 三条）：
-> ①**键序唯一源**——na 仓 scripts/kfm-inject-lib.sh 只有一份声明
-> KFM_INJECT_STEPS（esc sleep0.3 text sleep0.3 enter sleep1 enter），
-> crates/na-server/src/deliver.rs 用 include_str! 编译期读入解析成
-> KeyStep::Cmd/Sleep 序列逐步执行（Send 与 queue-kimi 降级臂同源），
-> kfmv4 的 agent-send.sh source 同一份——两处不再各写一套；②**去残留
-> 提示**——成功路径不再往输入栏写回执小字，按下＝塞进去＋栏清空，
-> 拒投/裸 shell 分叉/留栏三类解释提示保留；③**post_screen 取证**——
-> 键序执行后 600ms capture-pane 尾部三行 ≤200 字随回执透出，判卷据它
+> **BAR-252 第二次返工**（清和 NA0189 楼4 拆件单，观澜承办）：
+> ①**删自实现**——crates/na-server/src/deliver.rs 的键序实现（KeyStep／
+> parse／sleep 序列）与 scripts/kfm-inject-lib.sh 整体删除，改为**委派
+> 塞话原语** `bash <agent-send.sh> <target> <正文>`（路径 env
+> NA_AGENT_SEND 可覆盖）；agent-send.sh 是唯一实现者（kfmv4 revert
+> 23bf1a9d，恢复自有 v12 键序）；interrupt 仍单 Escape、tianshu 排队仍
+> 文本＋M-Enter（都不是塞话序列）；②**无窗明确失败**——客户端
+> Route::Fail（横幅写原因＋出路＋草稿回填），删掉「改投 AI 页」兜底
+> （白露楼26：不许替用户选目的地；取代 NA0181 楼2 裸 shell 归 AI 条）；
+> BAR-256 Pending 留栏不动；③**post_screen 取证**保留——
+> 执行后 600ms capture-pane 尾部三行 ≤200 字随回执透出，判卷据它
 > 咬「对方真进入处理」。钉：键序构造改写＋键序单源＋接线守卫＋
 > post_screen 回执，变异三刀（改 lib／摘 esc／摘第二个 enter）全咬。
 > **注意**：agent-send.sh 侧的 source 改动须等本件合 master 后重接
@@ -126,7 +128,8 @@
 > 拒投横幅回填/bar-inject 三形；服务端日志留痕（落点
 > /var/log/kfm-na-server.log——楼6 口径更正：unit StandardOutput 指
 > 文件，journald 无 entries）。
-> **打回修复（2026-10-16 承影楼6 打回→当日修复）**：build_keys 目标串
+> **打回修复（2026-10-16 承影楼6 打回→当日修复；注：build_keys 已于
+> 2026-10-17 返工时整体删除，改委派塞话原语——此条留作历史）**：build_keys 目标串
 > `=名` 缺冒号撞 BAR-152 旧坑（①④ 红，can't find pane）——改 `=名:`，
 > 加锚定钉 spec_bar252_目标串冒号收尾（对 -t 参数做形态判，不再照抄
 > 实现 argv），变异摘冒号双红。楼6③ 冷启动附着账恒 None 洞另裁立件；

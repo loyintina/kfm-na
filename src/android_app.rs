@@ -5080,8 +5080,15 @@ impl App {
                         crate::deliver::hold(&text, &h);
                         return;
                     }
+                    // BAR-252 返工（清和 NA0189 楼4；白露楼26）：终页没有窗＝
+                    // 明确失败，不替用户改投 AI 页——横幅＋草稿回填，就此返回
+                    crate::deliver::Route::Fail(msg) => {
+                        crate::report::report("deliver", &format!("发送无窗：{msg}"));
+                        crate::deliver::fail(&text, &msg);
+                        return;
+                    }
                     crate::deliver::Route::Ai(hint) => {
-                        // 裸 shell 归 AI 不静默（白露楼2④）：栏内瞬态一句
+                        // AI 路提示（仅页/面板/未装配臂，hint 恒 None）：栏内瞬态一句
                         if let Some(h) = hint
                             && let Some(b) = crate::gate::input_bar_handle()
                         {

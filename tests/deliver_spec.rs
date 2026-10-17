@@ -42,12 +42,49 @@ fn spec_bar252_路由判定_真值表() {
         decide(Page::Terminal, None, Some("清和"), None, false),
         Route::Ai(None)
     );
-    // AI 路带提示：裸 shell 归 AI 须不静默（白露楼2④）
+    // BAR-252 返工（清和 NA0189 楼4；白露楼26）：终页没有窗＝明确失败，
+    // 不替用户改投 AI 页——原因＋出路都在 msg 里
     match decide(Page::Terminal, None, None, None, true) {
-        Route::Ai(Some(h)) => {
-            assert!(h.contains("裸 shell") && h.contains("AI 页"), "{h}")
+        Route::Fail(m) => {
+            assert!(
+                m.contains("裸 shell") && m.contains("先"),
+                "要写原因＋出路: {m}"
+            );
+            assert!(!m.contains("发往 AI"), "不许替用户改投 AI: {m}");
         }
-        other => panic!("裸 shell 应归 AI 且带提示，实得 {other:?}"),
+        other => panic!("裸 shell 应明确失败（不投 AI），实得 {other:?}"),
+    }
+}
+
+/// BAR-256 留栏臂不许被返工带走：引导账 Pending 仍是 Hold（不是 Fail/Ai）
+#[test]
+fn spec_bar256_留栏臂未被返工波及() {
+    use kfm_na::boot_mark::BootMark;
+    match decide(Page::Terminal, None, None, Some(&BootMark::Pending), true) {
+        Route::Hold(h) => assert!(h.contains("落定"), "{h}"),
+        other => panic!("Pending 应留栏，实得 {other:?}"),
+    }
+    // 引导账认得真名 = 窗路（服务器真值直连）
+    assert_eq!(
+        decide(
+            Page::Terminal,
+            None,
+            None,
+            Some(&BootMark::Stripped("清和".to_string())),
+            true
+        ),
+        Route::Window("清和".to_string())
+    );
+    // 哨兵/未回/非法 = 明确失败三臂（都不投 AI）
+    for boot in [
+        BootMark::Stripped(kfm_na::tmux_ctl::BOOTSTRAP_SHELL_SENTINEL.to_string()),
+        BootMark::Missed,
+        BootMark::Bad("x".to_string()),
+    ] {
+        match decide(Page::Terminal, None, None, Some(&boot), true) {
+            Route::Fail(_) => {}
+            other => panic!("{boot:?} 应明确失败，实得 {other:?}"),
+        }
     }
 }
 
@@ -98,11 +135,25 @@ fn spec_bar252_成功不写栏内小字() {
     assert!(!src.contains("hint_for"), "投成小字构造器应已退役");
     // 写出路的解释提示两个出口不许被这次清理带走
     assert!(src.contains("pub fn hold"), "BAR-256 留栏提示须保留");
+    // BAR-252 返工：终端终页没有窗＝Fail 臂（横幅＋回填），且**不落到 AI 发送**
     let app = include_str!("../src/android_app.rs");
     assert!(
-        app.contains("Route::Ai(hint)") && app.contains("b.set_hint(&h)"),
-        "裸 shell 分叉解释提示须保留"
+        app.contains("Route::Fail(msg)") && app.contains("crate::deliver::fail(&text, &msg)"),
+        "无窗失败臂须接线（横幅＋草稿回填）"
     );
+    let fail_arm = app
+        .split("Route::Fail(msg) =>")
+        .nth(1)
+        .expect("发送闭包应有 Fail 臂");
+    let fail_arm = fail_arm
+        .split("Route::Ai(hint) =>")
+        .next()
+        .expect("AI 臂在后");
+    assert!(
+        fail_arm.contains("return;"),
+        "无窗失败臂必须就地返回——不许继续走 AI 发送"
+    );
+    assert!(src.contains("pub fn fail"), "Fail 落地函数须在");
 }
 
 #[test]
