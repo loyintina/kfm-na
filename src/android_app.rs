@@ -12097,3 +12097,30 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
 }
 
 // BAR-046: 选择系统+复制粘贴菜单已在手机端 chain 验证通过 (2026-09-02)
+
+// ---- BAR-260 出口重修（NA0189 楼31/32）：BACK 语义的 Java→Rust 回调 ----
+// 浮窗窗口摘除由 Java 做（它是窗的主人），但**面板栈的弹出归 Rust**（栈是
+// 唯一真源）。Java 侧 onBackPressed 在浮窗挂着时调本函数：返回 true = 已消费
+// （关页回解析页），false = 无页可关、交原路。
+// 无符号时 Java 侧有 try/catch 兜底，不会因缺符号炸掉主流程。
+/// # Safety
+/// JNI 约定：由 Java 在 UI 线程调用，参数为空。
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_kfm_na_MainActivity_nativeWebBack(
+    _env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) -> jni::sys::jboolean {
+    let Some(ai) = crate::gate::ai_presence_handle() else {
+        return false;
+    };
+    let top = ai.snap(crate::report::boot_ms() as u64).top;
+    match crate::ui::web_page::back_action(top == Some(crate::ai_presence::Panel::Web)) {
+        crate::ui::web_page::BackAction::ClosePage => {
+            ai.dismiss_top(crate::ai_presence::Panel::Web);
+            crate::report::report("gest", "BACK：关全局页回解析页（不退 Activity）");
+            true
+        }
+        crate::ui::web_page::BackAction::Super => false,
+    }
+}

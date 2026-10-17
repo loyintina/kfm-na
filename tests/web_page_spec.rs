@@ -575,3 +575,72 @@ fn spec_bar260_出口_条带绘制不越系统带() {
         "可用带内必须真画出了条（防「让位让成不画」）"
     );
 }
+
+// ---- 出口重修第三件·生命周期与 BACK（NA0189 楼31/32 清和裁：三件全修＋四条判据）----
+
+#[test]
+fn spec_bar260_出口_back先关页不退activity() {
+    // 判据乙：浮窗挂着时 BACK 先关页（回解析页），**不退 Activity**——直接
+    // finish 会在浮窗未摘时销毁宿主，这正是 WindowLeaked 的来路。
+    // 变异抽检：把裁决改回恒 Super（直接交给 Activity finish）本钉必红。
+    use web_page::{BackAction, back_action};
+    assert_eq!(back_action(true), BackAction::ClosePage, "页开着 = 先关页");
+    assert_eq!(back_action(false), BackAction::Super, "页没开 = 交原路");
+    // Java 侧必须真按这个语义接线：先摘窗、再问 Rust 弹栈、消费掉就不 super
+    let java = read_src("android/java/dev/kfm/na/MainActivity.java");
+    let back = fn_body(&java, "public void onBackPressed()");
+    assert!(
+        back.contains("webPageTearDown(\"back\")"),
+        "BACK 必须先摘浮窗（否则 finish 时留残窗）"
+    );
+    assert!(
+        back.contains("nativeWebBack()"),
+        "BACK 必须请 Rust 弹面板栈（栈是唯一真源）"
+    );
+    assert!(
+        back.contains("if (consumed)") && back.contains("return;"),
+        "消费掉就不许再 super（不许退 Activity）"
+    );
+    assert!(
+        back.contains("super.onBackPressed();"),
+        "无页可关时仍要交原路（不许把 BACK 吃掉）"
+    );
+}
+
+#[test]
+fn spec_bar260_出口_生命周期幂等收尾() {
+    // 判据甲／丙的机制面：三处生命周期钩子都收尾，且收尾**幂等**
+    // （先置空再摘窗销毁——重复调用不二次 destroy，炸在钉上不炸在真机）。
+    // 变异抽检：删 onDestroy 那处 → 红；去掉判空/置空幂等 → 红。
+    let java = read_src("android/java/dev/kfm/na/MainActivity.java");
+    for (hook, why) in [
+        ("public void onPause()", "pause"),
+        ("public void onStop()", "stop"),
+        ("public void onDestroy()", "destroy"),
+    ] {
+        let body = fn_body(&java, hook);
+        assert!(
+            body.contains(&format!("webPageTearDown(\"{why}\")")),
+            "{hook} 必须收尾浮窗（缺一处＝后台/旋转时留残窗）"
+        );
+    }
+    let td = fn_body(&java, "private void webPageTearDown(");
+    assert!(
+        td.contains("if (mWeb == null)") && td.contains("return;"),
+        "收尾必须判空（幂等第一步）"
+    );
+    assert!(
+        td.contains("mWeb = null;"),
+        "收尾必须先置空再摘窗销毁（否则重复调用会二次 destroy）"
+    );
+    assert!(
+        td.contains("catch (Throwable"),
+        "收尾异常必须兜住（Activity 销毁期摘窗本就会抛）"
+    );
+    // 起页侧仍只有「新建」路径，不许在两处各写一份销毁逻辑
+    assert_eq!(
+        java.matches("removeView(").count(),
+        1,
+        "摘窗只许一处（收尾助手），别处再写一份就是双份销毁逻辑"
+    );
+}

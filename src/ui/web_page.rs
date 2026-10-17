@@ -165,6 +165,25 @@ pub fn web_touch_decide(web_top: bool, phase_started: bool, in_close: bool) -> O
     Some(WebTouch::Swallow)
 }
 
+/// BACK 键裁决（BAR-260 出口重修第二件，NA0189 楼31/32 清和裁）：浮窗还
+/// 挂着时 BACK 先关页、**不许直接 finish Activity**（后者会在浮窗未摘时销毁
+/// 宿主 → WindowLeaked）。纯函数，宿主可判卷。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackAction {
+    /// 关全局页（回解析页），消费掉这次 BACK
+    ClosePage,
+    /// 交原路（无页可关）
+    Super,
+}
+
+pub fn back_action(web_open: bool) -> BackAction {
+    if web_open {
+        BackAction::ClosePage
+    } else {
+        BackAction::Super
+    }
+}
+
 /// 桥下发判据（防抖）：整数位移与上次相同就不发——同一帧重复下发会让
 /// Java 侧 updateViewLayout 反复触发布局，画面抖。纯函数，供桥与考题共用。
 pub fn bridge_should_send(last: i32, cur: i32) -> bool {
