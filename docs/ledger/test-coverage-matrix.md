@@ -11,6 +11,7 @@
 | `src/a11y.rs` | 19 | 14 | 5 | take_req service_up a11y_ui_status_text a11y_ui_status_text open_settings_page |
 | `src/ai_chat.rs` | 11 | 10 | 1 | generation |
 | `src/ai_presence.rs` | 37 | 37 | 0 | — |
+| `src/boot_mark.rs` | 11 | 11 | 0 | — |
 | `src/bootstrap.rs` | 6 | 4 | 2 | ensure_pkg_tool first_boot_install |
 | `src/brain.rs` | 14 | 14 | 0 | — |
 | `src/brain_ep.rs` | 4 | 4 | 0 | — |
@@ -18,7 +19,7 @@
 | `src/conn.rs` | 4 | 2 | 2 | spawn_smoke ws_spawner |
 | `src/crash.rs` | 9 | 8 | 1 | install_signal_hook |
 | `src/ctrl_feed.rs` | 8 | 8 | 0 | — |
-| `src/deliver.rs` | 12 | 9 | 3 | zh configured deliver_now |
+| `src/deliver.rs` | 13 | 10 | 3 | zh configured deliver_now |
 | `src/direct_brain.rs` | 2 | 2 | 0 | — |
 | `src/endpoint.rs` | 9 | 9 | 0 | — |
 | `src/exec_probe.rs` | 1 | 1 | 0 | — |
