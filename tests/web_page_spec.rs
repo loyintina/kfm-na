@@ -416,7 +416,7 @@ fn spec_bar260_出口_条区触摸必达并弹栈() {
 }
 
 #[test]
-fn spec_bar260_出口_java不吞条区不吃返回() {
+fn spec_bar260_出口_条区回na且窗自身吃back() {
     // 硬判据（白露拍）：不许扩热区绕过——热区/绘制同源（本钉先咬这一点），
     // 再由窗口标志把「条区触摸」还回 na；且返回键不许被页体窗吃掉。
     // 变异抽检：删 FLAG_NOT_TOUCH_MODAL → 必红（条区又被吞）；
@@ -432,9 +432,11 @@ fn spec_bar260_出口_java不吞条区不吃返回() {
         flags_kv.contains("FLAG_NOT_TOUCH_MODAL"),
         "页体窗必须 NOT_TOUCH_MODAL（窗外条区触摸回 na＝出口的唯一来路）"
     );
+    // 裁乙（NA0189 楼37 判据戊）：**不许**再带 NOT_FOCUSABLE——它让我们这个
+    // 任务里没有可聚焦窗，vivo 据此把前台判定回退到 launcher（无 FATAL 却掉桌面）
     assert!(
-        flags_kv.contains("FLAG_NOT_FOCUSABLE"),
-        "页体窗必须 NOT_FOCUSABLE（BACK 不被吃＝第二条出路）"
+        !flags_kv.contains("FLAG_NOT_FOCUSABLE"),
+        "页体窗不许带 NOT_FOCUSABLE（判据戊：任务必须有可聚焦窗）"
     );
     // 热区没被放大：命中盒仍由 close_rect_off 派生，边距常量没动
     assert_eq!(web_page::CLOSE_MARGIN, 24, "关闭盒边距不许为「好点」而放大");
@@ -642,5 +644,51 @@ fn spec_bar260_出口_生命周期幂等收尾() {
         java.matches("removeView(").count(),
         1,
         "摘窗只许一处（收尾助手），别处再写一份就是双份销毁逻辑"
+    );
+}
+
+#[test]
+fn spec_bar260_出口_浮窗自己吃back不漏给activity() {
+    // 判据庚（NA0189 楼37 裁乙）：「谁盖着屏谁处理返回」——BACK 由浮窗自己吃：
+    // 拆窗 + 请 Rust 弹栈，且两个动作都 return true（既关页也不漏给 Activity）。
+    // 变异抽检：摘掉 dispatchKeyEvent／把 BACK 改成 super 透传，本钉必红。
+    let java = read_src("android/java/dev/kfm/na/MainActivity.java");
+    assert!(
+        java.contains("public boolean dispatchKeyEvent(android.view.KeyEvent ev)"),
+        "浮窗必须自己处理按键（dispatchKeyEvent 覆写）"
+    );
+    let disp = fn_body(
+        &java,
+        "public boolean dispatchKeyEvent(android.view.KeyEvent ev)",
+    );
+    assert!(
+        disp.contains("KEYCODE_BACK") && disp.contains("ACTION_UP"),
+        "只认 BACK 的抬起（按下不重复触发关页）"
+    );
+    assert!(
+        disp.contains("webPageTearDown(\"back-in-window\")"),
+        "窗内 BACK 必须先拆窗（不留残窗）"
+    );
+    assert!(
+        disp.contains("nativeWebBack()"),
+        "窗内 BACK 必须请 Rust 弹面板栈（栈是唯一真源）"
+    );
+    assert!(
+        disp.contains("return true; // 吃掉"),
+        "BACK 必须吃掉并返回 true（关页且不漏给 Activity）"
+    );
+    assert!(
+        disp.contains("return super.dispatchKeyEvent(ev);"),
+        "非 BACK 键仍要交父类（别把窗的其它按键一起吞了）"
+    );
+    // 判据己的机制半边：NOT_TOUCH_MODAL 必须在（条区触摸回 na 的唯一来路）
+    let flags_kv = java
+        .split("lp.flags =")
+        .nth(1)
+        .and_then(|t| t.split(';').next())
+        .expect("页体窗必须显式设 lp.flags");
+    assert!(
+        flags_kv.contains("FLAG_NOT_TOUCH_MODAL"),
+        "判据己：NOT_TOUCH_MODAL 必须留着（否则条区触摸又被吞）"
     );
 }
