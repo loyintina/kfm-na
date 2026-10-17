@@ -16,6 +16,12 @@
 //! - **spawn 错误分类**（BAR-229 资产复用）：EACCES/ENOENT = 永久
 //!   （prefix 环境态，重试不自愈）→ 报表一行后挂起退出线程；其余按
 //!   瞬时退避。
+//! - **conf 自给＋灭口拆除＋秒退熔断**（BAR-259，追踪信 NA0188）：
+//!   spawn 前 ensure_conf——kfm-sshd.conf 缺（overlay 装机带走／
+//!   postinst 配置步没落）按模板自生成，失败报红不 spawn；stderr 落
+//!   tmp/sshd-err.log（Stdio::null 灭口拆掉）；spawn 后秒退（<2s）
+//!   连败 8 次熔断永久挂起＋报红（9 机 exit 1 环 1s 重拉永动 8 天
+//!   7960 行的教训——1s 退避永动这个类就此杀掉）。
 //! - **自身失效信号**（小满 MAIN0116 指路的 kfmv4 教训：看门狗死了也
 //!   是绿的）：每 HEARTBEAT_EVERY 拍发一行心跳报表，判据挂「报表断
 //!   档」而非「进程在不在」——服务器侧可见断档即知看门狗死。
@@ -24,7 +30,7 @@
 
 use std::io::{BufRead, BufReader};
 use std::net::TcpStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -41,6 +47,10 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 const FREEZE_STRIKES: u32 = 2;
 /// 稳定存活多久后退避清零
 const STABLE_RESET: Duration = Duration::from_secs(300);
+/// 秒退判据（BAR-259 熔断）：存活不足此数 = 秒退连败一记
+const QUICK_DEATH: Duration = Duration::from_secs(2);
+/// 秒退连败上限：到顶熔断永久挂起（BAR-230 永久挂起同机制）
+const FUSE_STRIKES_MAX: u32 = 8;
 
 /// sshd 端口（与 tunnel.rs NA_SSHD_PORT 同源——那边是 pub const，此
 /// 处直接引用见 start_probe；本地副本只为 probe 函数自含）
@@ -95,8 +105,72 @@ fn spawn_sshd(prefix: &PathBuf) -> std::io::Result<Child> {
         .env("PREFIX", prefix)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(sshd_err_stdio(prefix))
         .spawn()
+}
+
+/// kfm-sshd.conf 渲染（BAR-259）：照 11 机在位件回描，路径全随 prefix
+/// 走；端口与 tunnel.rs NA_SSHD_PORT 同源（改口只改一处）。
+pub fn conf_render(prefix: &std::path::Path) -> String {
+    let p = prefix.display();
+    format!(
+        "Port {}\nListenAddress 127.0.0.1\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nPubkeyAuthentication yes\nStrictModes no\nAuthorizedKeysFile {}/etc/ssh/na_authorized_keys\nHostKey {}/etc/ssh/ssh_host_ed25519_key\nPidFile {}/var/run/sshd8024.pid\nSshdSessionPath {}/libexec/sshd-session\nSshdAuthPath {}/libexec/sshd-auth\nSubsystem sftp {}/libexec/sftp-server\nSetEnv HOME=/storage/emulated/0/Android/data/dev.kfm.na/files PREFIX={} TMPDIR={}/tmp LD_LIBRARY_PATH={}/lib PATH={}/bin:/system/bin\n",
+        SSHD_PORT, p, p, p, p, p, p, p, p, p, p
+    )
+}
+
+/// spawn 前保证 conf 在场（BAR-259）：缺则按模板自生成——na 的命不交给
+/// overlay 完整性（9 机 postinst 配置步没落，exit 1 环跑了 8 天无人知）。
+/// 二进制缺 = spawn 永久分类的领地（BAR-229/230），本函数不抢戏直接 Ok；
+/// 生成失败 = Err（调用方报红＋永久挂起，重试不自愈同环境死）。
+pub fn ensure_conf(prefix: &Path) -> Result<(), String> {
+    if !prefix.join("bin/sshd").exists() {
+        return Ok(());
+    }
+    let conf = prefix.join("etc/ssh/kfm-sshd.conf");
+    if conf.exists() {
+        return Ok(());
+    }
+    if let Some(dir) = conf.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
+    }
+    std::fs::write(&conf, conf_render(prefix))
+        .map_err(|e| format!("写 {}: {e}", conf.display()))?;
+    if prefix.join("etc/ssh/na_authorized_keys").exists() {
+        crate::report::report("sshd", "kfm-sshd.conf 缺——按模板自生成（BAR-259）");
+    } else {
+        crate::report::report(
+            "sshd",
+            "kfm-sshd.conf 缺——按模板自生成（BAR-259）；注意 na_authorized_keys 不在位，探针钥匙将被拒（须 postinst 补）",
+        );
+    }
+    Ok(())
+}
+
+/// stderr 落盘（BAR-259：Stdio::null 灭口拆掉）——每拉一次截断一次，
+/// 只留最近一轮 stderr（秒退连败时最后一轮的报错就是定罪证词）。
+/// prefix 不在场（假 prefix 钉/环境死）或落不了盘 → 回 null 兜底不挡 spawn。
+fn sshd_err_stdio(prefix: &Path) -> Stdio {
+    if !prefix.exists() {
+        return Stdio::null();
+    }
+    let dir = prefix.join("tmp");
+    let _ = std::fs::create_dir_all(&dir);
+    match std::fs::File::create(dir.join("sshd-err.log")) {
+        Ok(f) => Stdio::from(f),
+        Err(_) => Stdio::null(),
+    }
+}
+
+/// 秒退连败熔断裁决（BAR-259，A 档纯逻辑，钉在 sshd_keeper_spec）：
+/// survived＝本轮存活时长（None＝冻僵 kill／try_wait 错这类我们动手杀
+/// 的，不计连败）；存活 <QUICK_DEATH 计一记、否则清账；到顶＝熔断。
+pub fn fuse_step(survived: Option<Duration>, streak: u32) -> (u32, bool) {
+    let s = match survived {
+        Some(d) if d < QUICK_DEATH => streak + 1,
+        _ => 0,
+    };
+    (s, s >= FUSE_STRIKES_MAX)
 }
 
 /// 连 8024 读首行 banner；连不上/读不到 = None
@@ -125,6 +199,9 @@ fn keep_loop(prefix: PathBuf) {
     // 外来占口在位旗（BAR-247 真让位闸：本拍 banner 健康而娃不在 = true，
     // ④ 的 spawn 被它闸住——只探口不抢口）
     let mut foreign_serving = false;
+    // BAR-259 秒退熔断账：连败数＋本轮 spawn 时刻
+    let mut quick_streak: u32 = 0;
+    let mut spawned_at: Option<std::time::Instant> = None;
     let mut tick: u32 = 0;
     loop {
         tick = tick.wrapping_add(1);
@@ -140,8 +217,23 @@ fn keep_loop(prefix: PathBuf) {
                         "sshd",
                         &format!("sshd 退出（{st}）——{backoff_secs}s 后重拉"),
                     );
+                    // BAR-259 秒退连败熔断：spawn 成功但秒退（如 conf 缺件）
+                    // 不归 spawn 永久分类管，1s 退避会永动——连败到顶即挂起
+                    let survived = spawned_at.take().map(|t| t.elapsed());
+                    let (s, blow) = fuse_step(survived, quick_streak);
+                    quick_streak = s;
                     child = None;
                     stable_since = None;
+                    if blow {
+                        crate::report::report(
+                            "sshd",
+                            &format!(
+                                "sshd 秒退连败 {quick_streak} 次（每次 <{}s）——熔断挂起（BAR-259），证词见 tmp/sshd-err.log，修复后重启",
+                                QUICK_DEATH.as_secs()
+                            ),
+                        );
+                        return;
+                    }
                 }
                 Ok(None) => {}
                 Err(e) => {
@@ -149,6 +241,8 @@ fn keep_loop(prefix: PathBuf) {
                     let _ = c.kill();
                     child = None;
                     stable_since = None;
+                    spawned_at = None;
+                    quick_streak = 0;
                 }
             }
         }
@@ -173,6 +267,9 @@ fn keep_loop(prefix: PathBuf) {
                     }
                     child = None;
                     stable_since = None;
+                    // 冻僵 kill 是我们动手杀的，不计秒退连败（BAR-259）
+                    spawned_at = None;
+                    quick_streak = 0;
                 }
             }
         } else {
@@ -190,19 +287,32 @@ fn keep_loop(prefix: PathBuf) {
                 foreign_note = true;
             }
         }
-        // ③ 稳定清零退避
+        // ③ 稳定清零退避（连败账同清——稳定过的 sshd 不算带病）
         if stable_since.is_some_and(|t| t.elapsed() >= STABLE_RESET) {
             backoff_secs = 1;
             stable_since = None;
+            quick_streak = 0;
         }
         // ④ 缺娃重拉（退避睡醒再 spawn）——BAR-247 真让位闸：外来 sshd
         // 占着口（banner 健康）时不 spawn，本拍只探口；口腾出下拍接管
         if should_spawn(child.is_some(), foreign_serving) {
             std::thread::sleep(Duration::from_secs(backoff_secs.min(60)));
+            // BAR-259：spawn 前 conf 自给——缺则按模板自生成，失败报红
+            // 挂起（生成失败＝环境死同族，重试不自愈）
+            if let Err(msg) = ensure_conf(&prefix) {
+                crate::report::report(
+                    "sshd",
+                    &format!(
+                        "kfm-sshd.conf 自生成失败（{msg}）——看门狗挂起（BAR-259），修复 prefix 后重启"
+                    ),
+                );
+                return;
+            }
             match spawn_sshd(&prefix) {
                 Ok(c) => {
                     crate::report::report("sshd", &format!("sshd 已重拉（pid {}）", c.id()));
                     foreign_note = false;
+                    spawned_at = Some(std::time::Instant::now());
                     child = Some(c);
                     freeze_strikes = 0;
                 }

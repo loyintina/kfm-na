@@ -118,3 +118,88 @@ fn spec_bar247_让位期不spawn() {
     assert!(!should_spawn(true, true));
     assert!(!should_spawn(true, false));
 }
+
+// ---- BAR-259（追踪信 NA0188）：conf 自给／stderr 落盘／秒退熔断 ----
+// 定罪：9 机 kfm-sshd.conf 全树零命中（overlay 装机带走、postinst 配置步
+// 没落）→ sshd -f 缺件秒退 RC=1，1s 重拉永动 7960 行 8 天无人知（承影
+// MAIN0175 楼21 取证，楼22 裁定 a+b+d）。
+
+#[test]
+fn spec_bar259_conf缺_自生成且幂等() {
+    let tmp = tempfile::tempdir().unwrap();
+    let prefix = tmp.path().join("usr");
+    fs::create_dir_all(prefix.join("bin")).unwrap();
+    fs::write(prefix.join("bin/sshd"), b"fake").unwrap();
+    let conf = prefix.join("etc/ssh/kfm-sshd.conf");
+    assert!(!conf.exists(), "前提：conf 缺");
+    kfm_na::sshd_keeper::ensure_conf(&prefix).unwrap();
+    let body = fs::read_to_string(&conf).unwrap();
+    assert!(
+        body.contains("Port 8024"),
+        "模板端口钉死（与 NA_SSHD_PORT 同源）"
+    );
+    assert!(
+        body.contains(
+            &prefix
+                .join("etc/ssh/na_authorized_keys")
+                .display()
+                .to_string()
+        ),
+        "路径全随 prefix 走（变异：模板写死绝对路径 → 此处红）"
+    );
+    // 幂等：在位件不许被覆盖（手写标记后 ensure 不动它）
+    fs::write(&conf, b"# hand\n").unwrap();
+    kfm_na::sshd_keeper::ensure_conf(&prefix).unwrap();
+    assert_eq!(fs::read_to_string(&conf).unwrap(), "# hand\n");
+}
+
+#[test]
+fn spec_bar259_conf生成失败_不抢spawn分类() {
+    let tmp = tempfile::tempdir().unwrap();
+    let prefix = tmp.path().join("usr");
+    fs::create_dir_all(prefix.join("bin")).unwrap();
+    fs::write(prefix.join("bin/sshd"), b"fake").unwrap();
+    // etc 是个文件 → mkdir etc/ssh 必败 → Err（调用方报红＋永久挂起）
+    fs::write(prefix.join("etc"), b"block").unwrap();
+    assert!(kfm_na::sshd_keeper::ensure_conf(&prefix).is_err());
+    // 二进制缺 = spawn 永久分类的领地（BAR-229/230），ensure_conf 不抢戏：
+    // 应 Ok 且一个目录都不建（BAR-230 假 prefix 钉行为不变）
+    let tmp2 = tempfile::tempdir().unwrap();
+    let p2 = tmp2.path().join("usr");
+    kfm_na::sshd_keeper::ensure_conf(&p2).unwrap();
+    assert!(!p2.join("etc").exists(), "二进制缺时 conf 侧不许动土");
+}
+
+#[test]
+fn spec_bar259_熔断_秒退连败() {
+    use kfm_na::sshd_keeper::fuse_step;
+    use std::time::Duration;
+    // 秒退累计
+    assert_eq!(fuse_step(Some(Duration::from_secs(1)), 0), (1, false));
+    assert_eq!(fuse_step(Some(Duration::from_secs(1)), 6), (7, false));
+    // 到上限熔断（变异：上限调大/判断改 > → 此处红）
+    assert_eq!(fuse_step(Some(Duration::from_secs(1)), 7), (8, true));
+    // 活得久＝清账
+    assert_eq!(fuse_step(Some(Duration::from_secs(5)), 3), (0, false));
+    // 恰达阈值不算秒退（边界归健康侧）
+    assert_eq!(fuse_step(Some(Duration::from_secs(2)), 3), (0, false));
+    // None＝冻僵 kill／try_wait 错（我们动手杀的）不计连败
+    assert_eq!(fuse_step(None, 5), (0, false));
+}
+
+#[test]
+fn spec_bar259_接线守卫() {
+    // 锚源码（BAR-238 先例：看门狗线程私有账无法单测驱动，直接锚）：
+    // spawn 前必过 ensure_conf、stderr 必落盘、退出臂必过熔断
+    let src = include_str!("../src/sshd_keeper.rs");
+    let i_ensure = src
+        .find("ensure_conf(&prefix)")
+        .expect("spawn 前必过 ensure_conf");
+    let i_spawn = src.find("spawn_sshd(&prefix)").expect("spawn 调用点在");
+    assert!(i_ensure < i_spawn, "ensure_conf 必须在 spawn 之前");
+    assert!(
+        src.contains(".stderr(sshd_err_stdio(prefix))"),
+        "stderr 必落 tmp/sshd-err.log（Stdio::null 灭口已拆；只留函数不接线的变异也咬）"
+    );
+    assert!(src.contains("fuse_step"), "退出臂必过秒退连败熔断");
+}
