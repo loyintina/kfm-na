@@ -169,6 +169,72 @@ public class MainActivity extends NativeActivity {
         return getResources().getDisplayMetrics().density;
     }
 
+    /** 浮窗幂等收尾（BAR-260 出口重修第三件，NA0189 楼31/32 清和裁）：
+     * mWeb 挂着就摘＋销毁＋置空，异常全兜。**幂等**——重复调用不会二次
+     * destroy（那会炸在真机上，判据要求它炸在钉上）。 */
+    private void webPageTearDown(final String why) {
+        try {
+            if (mWeb == null) {
+                return;
+            }
+            android.webkit.WebView w = mWeb;
+            mWeb = null; // 先置空：即便下面抛，本端也不再持有（幂等的关键）
+            try {
+                getWindowManager().removeView(w);
+            } catch (Throwable ignored) {
+                // 窗已不在（Activity 正在销毁/已被系统摘）——正常情形
+            }
+            try {
+                w.destroy();
+            } catch (Throwable ignored) {
+            }
+            webStatus("teardown " + why);
+        } catch (Throwable t) {
+            webStatus("teardown-fail " + why + " " + t);
+        }
+    }
+
+    @Override
+    public void onPause() {
+        // 判据丙：走 onPause→onStop→onDestroy 不许留残窗（WindowLeaked 的根）
+        webPageTearDown("pause");
+        super.onPause();
+    }
+
+    @Override
+    public void onStop() {
+        webPageTearDown("stop");
+        super.onStop();
+    }
+
+    @Override
+    public void onDestroy() {
+        webPageTearDown("destroy");
+        super.onDestroy();
+    }
+
+    @Override
+    public void onBackPressed() {
+        // 判据乙：浮窗挂着时 BACK 先关页回解析页，**不退 Activity**
+        // （直接 finish 会在浮窗未摘时销毁宿主＝WindowLeaked）
+        if (mWeb != null) {
+            webPageTearDown("back");
+            boolean consumed = false;
+            try {
+                consumed = nativeWebBack();
+            } catch (Throwable t) {
+                webStatus("back-native-fail " + t);
+            }
+            if (consumed) {
+                return;
+            }
+        }
+        super.onBackPressed();
+    }
+
+    /** Rust 侧面板栈弹出（栈是唯一真源）；无符号时调用方已 try/catch 兜底。 */
+    private static native boolean nativeWebBack();
+
     /** 全局页逐帧位移（BAR-260 段②，NA0189 楼6 判据②）：位移的**单源在
      * Rust**（seam 采样→bar_offset_px 取整），本端只照数摆窗、不自算；Rust
      * 侧值不变不会调进来（防抖在 gate::web_offset_sync）。 */
@@ -250,12 +316,9 @@ public class MainActivity extends NativeActivity {
                 try {
                     android.view.WindowManager wm = getWindowManager();
                     if ("close".equals(url)) {
-                        if (mWeb != null) {
-                            wm.removeView(mWeb);
-                            mWeb.destroy();
-                            mWeb = null;
-                        }
-                        webStatus("closed");
+                        // 收尾单源（NA0189 楼32 判据：摘窗只许一处）——「×」
+                        // 退出与生命周期收尾走同一个幂等助手
+                        webPageTearDown("close");
                         return;
                     }
                     if (mWeb == null) {
