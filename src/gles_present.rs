@@ -132,6 +132,12 @@ pub enum ChromeSlot {
     /// accent 边框环 + 顶栏（册名 · N 封）+ 三栏信卡墨；placement.x 跟
     /// mail_off，右缘家同约定。**末尾追加——现有槽值不动**
     Mail = 18,
+    /// 全局页顶条槽（2026-10-17 七公民，BAR-260 段④「只换承载不改可见」）：
+    /// 顶条原先画在上层 chrome 槽（Over）的画布里，与本家 z 序无关；本槽把
+    /// **承载**换成独立层——placement.x 跟 web_off（段② 单源）、可见性仍由
+    /// web_on_top（z 序最顶）守，几何与可见语义一字不改。
+    /// **末尾追加——现有槽值不动**（Reader=17／Mail=18 保持）
+    WebBar = 19,
 }
 
 /// 视口平移合成参数（十九修 D8）：调用方逐帧从 cfg_snap.pan 求值——
@@ -662,7 +668,7 @@ pub struct GlesPresent {
     /// 2026-09-27 BAR-170；2026-09-30 BAR-207 Demo 页槽退役回收）+
     /// BAR-214 一件（信箱页槽，末尾入列 18→19），
     /// 置脏烘焙 + placement 合成——动画帧零光栅零上传
-    layers: [ChromeLayer; 19],
+    layers: [ChromeLayer; 20],
     /// 图层实例程序（rect+uv+tint 四边形；placement 逐槽进实例数据）
     layer_prog: glow::NativeProgram,
     layer_vao: glow::NativeVertexArray,
@@ -798,8 +804,9 @@ impl GlesPresent {
             }
         };
         // 先建槽数组再 move gl 进结构体（E0382：字段初始化按书写序移动）
-        // 19 槽（BAR-214：信箱页槽末尾入列 18→19，槽号序见 ChromeSlot）
+        // 20 槽（BAR-260 段④：全局页顶条槽末尾入列 19→20，槽号序见 ChromeSlot）
         let layers = [
+            mk_layer(&gl),
             mk_layer(&gl),
             mk_layer(&gl),
             mk_layer(&gl),
@@ -1274,6 +1281,8 @@ impl GlesPresent {
         rd_alpha: f32,
         mail_off: i32,
         mail_alpha: f32,
+        // BAR-260 段④：顶条独立承载层的 placement.x（段② 单源位移）
+        web_off: i32,
         z_order: [crate::ai_presence::Panel; 7],
         term_place: (f32, f32, f32),
         panel_dy_extra: f32,
@@ -1442,7 +1451,25 @@ impl GlesPresent {
                 match slot {
                     // BAR-260 全局页：页体归 Java 整页窗口，Rust 的顶部
                     // 原生条在 Over 槽常驻直画——不进 z 序（本轮最小件）
-                    crate::ai_presence::Panel::Web => {}
+                    crate::ai_presence::Panel::Web => {
+                        // 段④：顶条在本家 z 位、由自己的承载层画（可见性仍
+                        // 由壳层 web_on_top 置槽可见，本臂只负责摆放）
+                        let wb = &self.layers[ChromeSlot::WebBar as usize];
+                        if wb.visible && wb.baked {
+                            draw_slot_layer(
+                                gl,
+                                self.layer_prog,
+                                self.layer_vao,
+                                self.layer_vbo,
+                                wb.tex,
+                                web_off as f32,
+                                0.0,
+                                self.w as f32,
+                                self.h as f32,
+                                1.0,
+                            );
+                        }
+                    }
                     crate::ai_presence::Panel::Mail => {
                         let ml = &self.layers[ChromeSlot::Mail as usize];
                         if ml.visible && ml.baked {

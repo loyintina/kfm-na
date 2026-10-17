@@ -201,7 +201,49 @@ public class MainActivity extends NativeActivity {
         });
     }
 
-    public void startWebViewFromGate(final String url, final int barPx) {
+    /** 平台占用带·上（NA0189 楼22/23 硬判据）：状态栏高——**一律从
+     * WindowInsets 取，禁止硬编码机型数值**（135 这类数只作判卷对照，
+     * 不许进代码）。取不到时返回 0（宁可保守也不猜）。 */
+    public int webInsetTop() {
+        try {
+            android.view.WindowInsets wi = getWindow().getDecorView().getRootWindowInsets();
+            if (wi == null) {
+                return 0;
+            }
+            if (android.os.Build.VERSION.SDK_INT >= 30) {
+                return wi.getInsets(android.view.WindowInsets.Type.statusBars()).top;
+            }
+            return wi.getSystemWindowInsetTop();
+        } catch (Throwable t) {
+            webStatus("inset-top-fail " + t);
+            return 0;
+        }
+    }
+
+    /** 平台占用带·右（同上）：右缘系统手势条宽——取 systemGestures 与
+     * mandatorySystemGestures 的较大者，再与 systemWindowInset.right 取大。 */
+    public int webInsetRight() {
+        try {
+            android.view.WindowInsets wi = getWindow().getDecorView().getRootWindowInsets();
+            if (wi == null) {
+                return 0;
+            }
+            int r = 0;
+            if (android.os.Build.VERSION.SDK_INT >= 30) {
+                r = Math.max(
+                        wi.getInsets(android.view.WindowInsets.Type.systemGestures()).right,
+                        wi.getInsets(android.view.WindowInsets.Type.mandatorySystemGestures()).right);
+            } else if (android.os.Build.VERSION.SDK_INT >= 29) {
+                r = wi.getSystemGestureInsets().right;
+            }
+            return Math.max(r, wi.getSystemWindowInsetRight());
+        } catch (Throwable t) {
+            webStatus("inset-right-fail " + t);
+            return 0;
+        }
+    }
+
+    public void startWebViewFromGate(final String url, final int barPx, final int yOffPx) {
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
@@ -235,12 +277,29 @@ public class MainActivity extends NativeActivity {
                                         android.view.WindowManager.LayoutParams.TYPE_APPLICATION_PANEL,
                                         0,
                                         android.graphics.PixelFormat.TRANSLUCENT);
+                        // BAR-260 出口红修复（NA0189 楼19–20 白露硬判据）：
+                        // 页体窗**不许弹掉条区的触摸**——FLAG_NOT_TOUCH_MODAL
+                        // 让窗外的条带触摸回到 na（原生条在真实窗口层序上
+                        // 不受本窗遮盖：本窗顶从 bar 起，条带内无窗压着）；
+                        // FLAG_NOT_FOCUSABLE 让返回键不被本窗吃掉（页面困死
+                        // 的第二条出路）。**不是扩热区**——热区与绘制仍同一份
+                        // （web_page::close_rect / bar_offset_px），这里只改
+                        // 窗口的触摸/焦点归属。
+                        lp.flags = android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                                | android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
                         lp.token = getWindow().getDecorView().getWindowToken();
                         lp.gravity = android.view.Gravity.TOP;
-                        lp.y = bar;
+                        // yOffPx = 状态栏高 + 条高（Rust 算好传回，本端不做布局算术）
+                        lp.y = Math.max(0, yOffPx);
                         wm.addView(wv, lp);
                         mWeb = wv;
-                        webStatus("added-page bar=" + bar + " h=" + h + " token=" + (lp.token != null));
+                        // 判卷取证（dumpsys 对照用）：条高/页体高/纵向偏移/标志
+                        // 判卷取证（清和楼23「可用带要给实测边界数」）：inset 两条
+                        // 读数＋条带几何一并落，实测数从这里抄，代码里不写死
+                        webStatus("added-page bar=" + bar + " yOff=" + lp.y + " h=" + h
+                                + " insetTop=" + webInsetTop() + " insetRight=" + webInsetRight()
+                                + " flags=0x" + Integer.toHexString(lp.flags)
+                                + " token=" + (lp.token != null));
                     }
                     mWeb.loadUrl(url);
                     webStatus("loading " + url);

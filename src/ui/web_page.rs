@@ -58,12 +58,23 @@ pub fn close_side(bar_h: u32) -> u32 {
     bar_h.saturating_sub(CLOSE_MARGIN * 2)
 }
 
-/// 「×」命中方块（x, y, w, h）：条内右端，唯一命中区
+/// 「×」命中方块（x, y, w, h）：条内右端，唯一命中区（无平台占用带的基准形）
 pub fn close_rect(buf_w: u32, bar_h: u32) -> (u32, u32, u32, u32) {
+    close_rect_in(buf_w, bar_h, 0, 0)
+}
+
+/// 带平台占用带的命中盒（NA0189 楼22/23）：右界让出右缘手势条、纵原点
+/// 从状态栏下缘起——条与命中盒都不许落进系统吃触摸的那两条带。
+pub fn close_rect_in(
+    buf_w: u32,
+    bar_h: u32,
+    inset_top: u32,
+    inset_right: u32,
+) -> (u32, u32, u32, u32) {
     let side = close_side(bar_h);
     (
-        buf_w.saturating_sub(CLOSE_MARGIN + side),
-        CLOSE_MARGIN,
+        avail_w(buf_w, inset_right).saturating_sub(CLOSE_MARGIN + side),
+        inset_top + CLOSE_MARGIN,
         side,
         side,
     )
@@ -72,7 +83,7 @@ pub fn close_rect(buf_w: u32, bar_h: u32) -> (u32, u32, u32, u32) {
 /// 「×」命中方块（x, y, w, h）：条内右端，唯一命中区。
 /// off = 该帧 Web 页位移（段②，见 bar_offset_px）——条随页面走，命中盒同走。
 pub fn close_rect_off(buf_w: u32, bar_h: u32, off: i32) -> (i32, i32, u32, u32) {
-    let (rx, ry, w, h) = close_rect(buf_w, bar_h);
+    let (rx, ry, w, h) = close_rect_in(buf_w, bar_h, inset_top(), inset_right());
     (rx as i32 + off, ry as i32, w, h)
 }
 
@@ -98,11 +109,60 @@ pub fn bar_offset_px(web_off: f32) -> i32 {
     }
 }
 
+/// 平台占用带（NA0189 楼22 定罪：条原先画在系统状态栏带里、× 又压 vivo
+/// 右缘手势条——两处都系统窗吃触摸，点按永远到不了 na）。**条一律画在
+/// 系统不占用的带里**：纵向从状态栏下缘起，横向右端让出手势条宽。
+/// 两个值都是平台事实（Java 报），布局算式仍只在本模块一处。
+static INSET_TOP: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static INSET_RIGHT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// 设平台占用带（状态栏高、右缘手势条宽；桥在开页时问一次）
+pub fn set_insets(top: u32, right: u32) {
+    INSET_TOP.store(top, std::sync::atomic::Ordering::Relaxed);
+    INSET_RIGHT.store(right, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// 当前状态栏高（条带纵原点＝它，不再从 0 起）
+pub fn inset_top() -> u32 {
+    INSET_TOP.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// 当前右缘手势条宽（条带可用宽＝屏宽 − 它）
+pub fn inset_right() -> u32 {
+    INSET_RIGHT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// 条带可用宽（右端让出手势条）——「×」盒与标题排布的右界
+pub fn avail_w(w: u32, inset_right: u32) -> u32 {
+    w.saturating_sub(inset_right)
+}
+
 /// 段②缝目标值语义（基础层）：在栈 = 0 靠泊；不在栈 = +屏宽 屏外右缘。
 /// 三个消费点（渲染顶条／命中盒／桥下发）都用它算 target——目标值也只有
 /// 一份，避免「谁把符号写反」这类各算一份。
 pub fn web_off_target(in_stack: bool, w: u32) -> f32 {
     if in_stack { 0.0 } else { w as f32 }
+}
+
+/// 条区触摸裁决（BAR-260 出口红修复，NA0189 楼19–20 一手判据）：Web 在顶
+/// 时**先判条区、再吞其余**——顺序反了（先吞后判）就永远不进弹栈。
+/// 返回 None = 不归 Web 管（交后续路由）；Dismiss = 条上「×」；Swallow =
+/// Web 在顶的其余触摸（页体 Java 侧吃，到不了 Rust 的只剩条带与手势残段）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WebTouch {
+    Dismiss,
+    Swallow,
+}
+
+/// 纯裁决：web_top 才接管；只有 Started 能命中；命中「×」即弹栈，其余吞。
+pub fn web_touch_decide(web_top: bool, phase_started: bool, in_close: bool) -> Option<WebTouch> {
+    if !web_top {
+        return None;
+    }
+    if phase_started && in_close {
+        return Some(WebTouch::Dismiss);
+    }
+    Some(WebTouch::Swallow)
 }
 
 /// 桥下发判据（防抖）：整数位移与上次相同就不发——同一帧重复下发会让
@@ -137,21 +197,24 @@ pub fn paint(
         h: buf_h,
     };
     // 条带底（深底与各页同色）+ 底缘 2px accent 双色线（左 c1 右 c2）。
-    // off = 本帧位移（段②单源，bar_offset_px 取整后的那一份）——条随页面走。
-    let (bx, bw) = shift(0, buf_w, off);
-    frame.fill_rect(bx, 0, bw, bar_h, CARD_PAGE_BG);
-    let div_y = bar_h.saturating_sub(2);
-    let half = buf_w / 2;
+    // off = 本帧位移（段②单源）；纵原点从状态栏下缘起、横向止于可用带右界
+    // （NA0189 楼22/23：条不许落进系统状态栏带与右缘手势条——那里系统吃触摸）
+    let y0 = inset_top();
+    let usable = avail_w(buf_w, inset_right());
+    let (bx, bw) = shift(0, usable, off);
+    frame.fill_rect(bx, y0, bw, bar_h, CARD_PAGE_BG);
+    let div_y = y0 + bar_h.saturating_sub(2);
+    let half = usable / 2;
     let (l1x, l1w) = shift(0, half, off);
     frame.fill_rect(l1x, div_y, l1w, 2, accent.c1);
-    let (l2x, l2w) = shift(half, buf_w - half, off);
+    let (l2x, l2w) = shift(half, usable - half, off);
     frame.fill_rect(l2x, div_y, l2w, 2, accent.c2);
     // 左端标题：网格引擎定尺（与页内文字同尺），纵向在条带内居中
     let (cell_w, cell_h) = term.cell_size();
     if cell_w > 0 {
         let (items, _) = term.measure_items_grid(TITLE);
-        let y_top = i64::from(bar_h.saturating_sub(cell_h) / 2);
-        let max_w = buf_w.saturating_sub(PAD_X * 2 + close_side(bar_h)).max(1);
+        let y_top = i64::from(y0 + bar_h.saturating_sub(cell_h) / 2);
+        let max_w = usable.saturating_sub(PAD_X * 2 + close_side(bar_h)).max(1);
         term.draw_grid_text_left(
             &mut frame,
             &items,
