@@ -25,7 +25,7 @@
 | `src/exec_probe.rs` | 1 | 1 | 0 | — |
 | `src/fs_fetch.rs` | 18 | 18 | 0 | — |
 | `src/fs_mirror.rs` | 9 | 8 | 1 | manifest_path |
-| `src/gate.rs` | 112 | 89 | 23 | gate_router_handle dump_term_handle text_dump spawn_gate_watcher REC_FILE_CAP REC_FILE rec_output rec_resize PANIC_FILE PANIC_TRACE_FILE LOOP_STALL_FILE note_loop_beat loop_beat_age_ms note_foreground install_panic_hook note_draw note_session_death touch_take register_input_bar ALERT_RSS_COOLDOWN_MS ALERT_DEATHS_WINDOW_MS ALERT_DEATHS_COOLDOWN_MS HISTORY_EVERY_TICKS |
+| `src/gate.rs` | 114 | 91 | 23 | gate_router_handle dump_term_handle text_dump spawn_gate_watcher REC_FILE_CAP REC_FILE rec_output rec_resize PANIC_FILE PANIC_TRACE_FILE LOOP_STALL_FILE note_loop_beat loop_beat_age_ms note_foreground install_panic_hook note_draw note_session_death touch_take register_input_bar ALERT_RSS_COOLDOWN_MS ALERT_DEATHS_WINDOW_MS ALERT_DEATHS_COOLDOWN_MS HISTORY_EVERY_TICKS |
 | `src/gate_poller.rs` | 10 | 9 | 1 | http_roundtrip |
 | `src/glyph_atlas.rs` | 11 | 11 | 0 | — |
 | `src/http1.rs` | 10 | 7 | 3 | is_tick_err read_head_hook read_body_hook |
@@ -97,13 +97,13 @@
 | `src/ui/parser_page.rs` | 60 | 48 | 12 | COL_GAP DIVIDER_ZONE MAX_VISIBLE_LINES MIN_VISIBLE_LINES MODAL_CARD_W MODAL_PAD_V MODAL_GAP MODAL_BTN_GAP CONFIRM_LABELS cancel_confirm register_parser_page parser_page_handle |
 | `src/ui/prompt_bar.rs` | 6 | 5 | 1 | row_of |
 | `src/ui/reader_page.rs` | 26 | 24 | 2 | PROGRESS_H register_reader |
-| `src/ui/seam.rs` | 34 | 34 | 0 | — |
+| `src/ui/seam.rs` | 39 | 39 | 0 | — |
 | `src/ui/stage.rs` | 7 | 7 | 0 | — |
 | `src/ui/svc_card.rs` | 13 | 12 | 1 | head_word |
 | `src/ui/sys_card.rs` | 25 | 20 | 5 | set_lay_lines lay_lines_now card_h_now local_y bar_geom |
 | `src/ui/tab_bar.rs` | 27 | 27 | 0 | — |
 | `src/ui/term_btn.rs` | 8 | 8 | 0 | — |
 | `src/ui/viewport_push.rs` | 2 | 2 | 0 | — |
-| `src/ui/web_page.rs` | 12 | 7 | 5 | BAR_DP DENSITY_FALLBACK PAD_X TITLE close_side |
+| `src/ui/web_page.rs` | 17 | 12 | 5 | BAR_DP DENSITY_FALLBACK PAD_X TITLE close_side |
 | `src/vsync_book.rs` | 20 | 16 | 4 | last_due_ms chain_dead mark_chain_dead last_ns |
 | `src/wire_render.rs` | 1 | 1 | 0 | — |

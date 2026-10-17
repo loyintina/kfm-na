@@ -1341,7 +1341,18 @@ impl App {
                 if phase == TouchPhase::Started
                     && psnap.top == Some(crate::ai_presence::Panel::Web)
                     && let Some((sw, _)) = self.screen_px()
-                    && crate::ui::web_page::hit_close(x, y, sw, crate::ui::web_page::bar_h())
+                    && crate::ui::web_page::hit_close_off(
+                        x,
+                        y,
+                        sw,
+                        crate::ui::web_page::bar_h(),
+                        crate::ui::web_page::bar_offset_px(
+                            crate::ui::seam::sample_web_panel_offset_x(
+                                crate::ui::web_page::web_off_target(true, sw),
+                                crate::report::boot_ms() as u64,
+                            ),
+                        ),
+                    )
                 {
                     crate::report::report(
                         "gest",
@@ -8404,7 +8415,14 @@ impl App {
             && (s.top == Some(crate::ai_presence::Panel::Web)
                 || s.covered == Some(crate::ai_presence::Panel::Web))
         {
-            term.paint_web_bar(buf, w, h, s.accent_web);
+            let off =
+                crate::ui::web_page::bar_offset_px(crate::ui::seam::sample_web_panel_offset_x(
+                    crate::ui::web_page::web_off_target(true, w),
+                    crate::report::boot_ms() as u64,
+                ));
+            term.paint_web_bar(buf, w, h, s.accent_web, off);
+            // 段②：渲染用的这一份 off 同帧下发给 Java 窗（值不变不发）
+            crate::gate::web_offset_sync(off);
         }
     }
 
@@ -8685,6 +8703,7 @@ impl App {
         let pt_in = stack_vec.contains(&Panel::Parser);
         let rd_in = stack_vec.contains(&Panel::Reader);
         let mail_in = stack_vec.contains(&Panel::Mail);
+        let web_in = stack_vec.contains(&Panel::Web);
         let drag_cfg = drag.filter(|(p, _)| *p == Panel::Config).map(|(_, o)| o);
         let drag_ft = drag.filter(|(p, _)| *p == Panel::FileTree).map(|(_, o)| o);
         let drag_pt = drag.filter(|(p, _)| *p == Panel::Parser).map(|(_, o)| o);
@@ -8762,6 +8781,13 @@ impl App {
             ) as i32,
         };
         let mail_fade = 1.0_f32;
+        // BAR-260 段②（NA0189 楼6 判据②）：全局页位移单源＝第八道缝采样值，
+        // 与顶条渲染、命中「×」盒、桥下发给 Java 窗位置**同一份**（取整只在
+        // web_page::bar_offset_px 一处）——三处不再各算位移＝无抖动
+        let web_target = crate::ui::web_page::web_off_target(web_in, w);
+        let web_off =
+            crate::ui::seam::sample_web_panel_offset_x(web_target, crate::report::boot_ms() as u64)
+                as i32;
         // 视口推移（2026-09-12 用户拍板，ui/viewport_push.rs）：基座页
         // （终端卡槽/网格实例/键行槽）随面板 off 平移；被压面板吃上方
         // 推移（交叉轴叠加 [配置,AI]：配置随 AI 下移）。off 已含缝采样
@@ -8770,7 +8796,7 @@ impl App {
         // 「随推移滑回」。Q 弹形变同日二审取消（实拍不合预期）——scale
         // 恒 1.0，仿射管线保留
         let (vpush, _p_max) = crate::ui::viewport_push::viewport_push(
-            panel_off, cfg_off, ft_off, pt_off, rd_off, mail_off, w, h,
+            panel_off, cfg_off, ft_off, pt_off, rd_off, mail_off, web_off, w, h,
         );
         let term_place = (vpush.dx, vpush.dy, 1.0);
         let ai_extra = crate::ui::viewport_push::covered_extra(
@@ -8782,6 +8808,7 @@ impl App {
             pt_off,
             rd_off,
             mail_off,
+            web_off,
             w,
             h,
         );
@@ -8794,6 +8821,7 @@ impl App {
             pt_off,
             rd_off,
             mail_off,
+            web_off,
             w,
             h,
         );
@@ -8806,6 +8834,7 @@ impl App {
             pt_off,
             rd_off,
             mail_off,
+            web_off,
             w,
             h,
         );
@@ -8818,6 +8847,7 @@ impl App {
             pt_off,
             rd_off,
             mail_off,
+            web_off,
             w,
             h,
         );
@@ -8836,6 +8866,7 @@ impl App {
             pt_off,
             rd_off,
             mail_off,
+            web_off,
             w,
             h,
         );
@@ -8848,6 +8879,7 @@ impl App {
             pt_off,
             rd_off,
             mail_off,
+            web_off,
             w,
             h,
         );
@@ -11846,6 +11878,31 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
             });
             if let Err(e) = r {
                 crate::report::report_sync("web", &format!("JNI startWebViewFromGate 失败: {e}"));
+            }
+        }));
+        // BAR-260 段②（NA0189 楼6 判据②）：位移下发钩子——Java 窗位置的唯一
+        // 通路。vm/gref 已被上一臂 move 走，另建一对（同 reg 臂写法）
+        let vm3 = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr() as *mut _) };
+        let gref3 = vm3
+            .attach_current_thread(|env| {
+                let act = unsafe {
+                    jni::objects::JObject::from_raw(env, app.activity_as_ptr() as *mut _)
+                };
+                env.new_global_ref(&act)
+            })
+            .expect("MainActivity GlobalRef#3 建立失败");
+        crate::gate::register_web_offset_hook(Box::new(move |dx: i32| {
+            let r = vm3.attach_current_thread(|env| {
+                env.call_method(
+                    &gref3,
+                    jni::jni_str!("webOffset"),
+                    jni::jni_sig!((int) -> void),
+                    &[jni::objects::JValue::Int(dx)],
+                )
+                .map(|_| ())
+            });
+            if let Err(e) = r {
+                crate::report::report_sync("web", &format!("JNI webOffset({dx}) 失败: {e}"));
             }
         }));
         // BAR-162（2026-09-26）：gate install-apk-req → **na 自更新原语**。

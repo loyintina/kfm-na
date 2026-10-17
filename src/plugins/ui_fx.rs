@@ -65,6 +65,9 @@ impl Plugin for UiFx {
         // 第七道缝（2026-10-01 六公民，BAR-214）：信箱页面板 X 偏移——
         // 右缘家同约定，同一件 fx_ease
         crate::ui::seam::occupy_mail_panel_offset_x(crate::ui::fx_ease::ease_occupier());
+        // 第八道缝（2026-10-17 七公民 BAR-260 段②）：全局页 X 偏移——右缘家
+        // 同约定，同一件 fx_ease；本缝是 Web 位移单源（条/命中/Java 窗同吃）
+        crate::ui::seam::occupy_web_panel_offset_x(crate::ui::fx_ease::ease_occupier());
         ctx.effect(Box::new(|| {
             crate::ui::seam::release_ai_panel_offset_y();
             crate::ui::seam::release_chrome_ime_inset();
@@ -73,6 +76,7 @@ impl Plugin for UiFx {
             crate::ui::seam::release_parser_panel_offset_x();
             crate::ui::seam::release_reader_panel_offset_x();
             crate::ui::seam::release_mail_panel_offset_x();
+            crate::ui::seam::release_web_panel_offset_x();
         }));
         Ok(())
     }

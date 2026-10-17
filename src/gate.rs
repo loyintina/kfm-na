@@ -478,7 +478,12 @@ pub fn dump_now(dir: &str) {
         }
         // BAR-260：全局页在栈 = 顶部原生条常驻（只读栈读数，不读页面状态）
         if ai_snap.is_some_and(|s| s.top == Some(Panel::Web) || s.covered == Some(Panel::Web)) {
-            t.paint_web_bar(&mut buf, w, h, acc_of(Panel::Web));
+            let off =
+                crate::ui::web_page::bar_offset_px(crate::ui::seam::sample_web_panel_offset_x(
+                    crate::ui::web_page::web_off_target(true, w),
+                    crate::report::boot_ms() as u64,
+                ));
+            t.paint_web_bar(&mut buf, w, h, acc_of(Panel::Web), off);
         }
         // 输入栏：常驻 chrome，两页都画（同前台 rasterize 规则）；
         // sending 图标态跟 AI 运行态硬切；光标闪烁相位按节拍算
@@ -1213,6 +1218,36 @@ pub fn open_web(url: &str) {
         Some(f) => f(url.to_owned()),
         None => crate::report::report("web", "web 打开无钩子（host 或未注册），丢弃"),
     }
+}
+
+/// 全局页位移下发钩子（BAR-260 段②，NA0189 楼6 判据②）：Java 窗位置的
+/// 唯一通路——Rust 侧算好的整数位移经这里下去，值不变不发（防抖）。
+static WEB_OFF_HOOK: WebHookI32 = std::sync::Mutex::new(None);
+type WebHookI32 = std::sync::Mutex<Option<Box<dyn Fn(i32) + Send + Sync>>>;
+
+/// 注册位移钩子（android_app 启动时一次；host 不注册 = 空转合法）
+pub fn register_web_offset_hook(f: Box<dyn Fn(i32) + Send + Sync>) {
+    *WEB_OFF_HOOK.lock().unwrap() = Some(f);
+}
+
+/// 上一次已下发的位移（防抖基线；None = 尚未下发）
+static WEB_OFF_LAST: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(i32::MIN);
+
+/// 位移下发（逐帧可调）：与上次相同即不发——同一帧重复 updateViewLayout 会
+/// 让 Java 侧反复布局，画面抖（判据②「无抖动」的机制保证）。
+/// 返回是否真的下发，供读数/考题观察。
+pub fn web_offset_sync(off: i32) -> bool {
+    let last = WEB_OFF_LAST.load(std::sync::atomic::Ordering::Relaxed);
+    if !crate::ui::web_page::bridge_should_send(last, off) {
+        return false;
+    }
+    let guard = WEB_OFF_HOOK.lock().unwrap();
+    let Some(f) = guard.as_ref() else {
+        return false; // 无钩子（host/未注册）：不下发，也不算变了
+    };
+    f(off);
+    WEB_OFF_LAST.store(off, std::sync::atomic::Ordering::Relaxed);
+    true
 }
 
 /// 收起全局页（BAR-260 退出唯一动作的 Java 侧）：桥传 "close"，
