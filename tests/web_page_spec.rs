@@ -323,7 +323,10 @@ fn spec_bar260_段2_桥只在值变时下发() {
     // 源码锚：三处必须真的接上（防「钉绿但没人调用」）
     let gate = read_src("src/gate.rs");
     let body = fn_body(&gate, "pub fn web_offset_sync(");
-    assert!(body.contains("bridge_should_send"), "下发必须过防抖判据");
+    assert!(
+        body.contains("offset_should_send"),
+        "下发必须过判据（变了才发＋限频，判据内部含 bridge_should_send）"
+    );
     assert!(body.contains("WEB_OFF_HOOK"), "下发必须走钩子（唯一通路）");
 
     let app = read_src("src/android_app.rs");
@@ -346,7 +349,10 @@ fn spec_bar260_段2_桥只在值变时下发() {
         !jbody.contains("density") && !jbody.contains("44"),
         "Java 不许自己算位移（单源在 Rust）"
     );
-    assert!(jbody.contains("lp.x = dx"), "照数摆窗");
+    assert!(
+        jbody.contains("lp.x = want") && jbody.contains("want = mPendWebDx"),
+        "照最新值摆窗（覆盖不排队）"
+    );
 }
 
 #[test]
@@ -596,12 +602,12 @@ fn spec_bar260_出口_back先关页不退activity() {
         "BACK 必须先摘浮窗（否则 finish 时留残窗）"
     );
     assert!(
-        back.contains("nativeWebBack()"),
-        "BACK 必须请 Rust 弹面板栈（栈是唯一真源）"
+        back.contains("nativeWebBackRequest()"),
+        "BACK 必须请 Rust 弹面板栈（异步请求，栈仍是唯一真源）"
     );
     assert!(
-        back.contains("if (consumed)") && back.contains("return;"),
-        "消费掉就不许再 super（不许退 Activity）"
+        back.contains("return;"),
+        "页开着时本端消费掉，不许再 super（不许退 Activity）"
     );
     assert!(
         back.contains("super.onBackPressed();"),
@@ -670,8 +676,8 @@ fn spec_bar260_出口_浮窗自己吃back不漏给activity() {
         "窗内 BACK 必须先拆窗（不留残窗）"
     );
     assert!(
-        disp.contains("nativeWebBack()"),
-        "窗内 BACK 必须请 Rust 弹面板栈（栈是唯一真源）"
+        disp.contains("nativeWebBackRequest()"),
+        "窗内 BACK 必须走异步请求（UI 线程不进 Rust 取锁）"
     );
     assert!(
         disp.contains("return true; // 吃掉"),
@@ -690,5 +696,180 @@ fn spec_bar260_出口_浮窗自己吃back不漏给activity() {
     assert!(
         flags_kv.contains("FLAG_NOT_TOUCH_MODAL"),
         "判据己：NOT_TOUCH_MODAL 必须留着（否则条区触摸又被吞）"
+    );
+}
+
+// ---- 保活面（NA0189 楼52/53：判活判进展＋FGS 启动兜底；清和批准并要钉）----
+
+#[test]
+fn spec_bar260_保活_心跳落账与启动兜底() {
+    // 两条都要：①启动兜底——建渠道/startForeground/拿锁任一步抛，不许静默
+    // 无痕；②心跳落账——每 30s 一条可观察进展（序号＋时刻），死前最后一条
+    // 就是死亡时刻证据（MAIN0182 第四通则「进程活着≠在推进」）。
+    // 变异抽检：摘心跳→红；摘 try/catch→红；把心跳间隔改掉→红。
+    let svc = read_src("android/java/dev/kfm/na/KfmKeepAliveService.java");
+    assert!(
+        svc.contains("private static final long HB_MS = 30000L;"),
+        "心跳间隔必须是 30s 常量（判据要可核，不许散落字面量）"
+    );
+    let create = fn_body(&svc, "public void onCreate()");
+    assert!(
+        create.contains("try {") && create.contains("catch (Throwable"),
+        "onCreate 必须兜住异常（否则 FGS 静默没起来，查都无从查）"
+    );
+    assert!(
+        create.contains("fgs-boot-fail"),
+        "启动失败必须落痕（logcat 一行 fgs-boot-fail）"
+    );
+    assert!(
+        create.contains("mH.postDelayed(mBeat, HB_MS)"),
+        "onCreate 成功后必须起心跳"
+    );
+    // 心跳本身：序号＋时刻＋FGS 存活标记，且自续
+    assert!(
+        svc.contains("hb=\" + mHb + \" at=\" + now"),
+        "心跳必须带序号与时刻（两采样点无变化即判不推进）"
+    );
+    assert!(
+        svc.contains("mH.postDelayed(this, HB_MS)"),
+        "心跳必须自续（一锤子不算心跳）"
+    );
+    let destroy = fn_body(&svc, "public void onDestroy()");
+    assert!(
+        destroy.contains("mH.removeCallbacksAndMessages(null)") && destroy.contains("hb-stop"),
+        "onDestroy 必须停心跳并落 hb-stop（给死亡时刻留边界）"
+    );
+    // 通知构造单源（首帧与心跳同源，不各写一份）
+    // 通知构造集中在一处（buildNotification 里的 SDK 分档两条），首帧与心跳都
+    // 调它——外面再 new 一个 Builder 就是第二份构造
+    assert_eq!(
+        svc.matches("new Notification.Builder(").count(),
+        2,
+        "Builder 只许出现在 buildNotification 的 SDK 分档里"
+    );
+    let bn = fn_body(&svc, "private Notification buildNotification(");
+    assert!(
+        bn.matches("new Notification.Builder(").count() == 2,
+        "两处 Builder 都必须在 buildNotification 内"
+    );
+    assert!(
+        svc.matches("buildNotification(").count() >= 3,
+        "buildNotification 必须被首帧与心跳共用（定义 1 + 调用 2）"
+    );
+}
+
+#[test]
+fn spec_bar260_出口_ui线程不进rust取锁() {
+    // 判据（NA0189 楼57 清和裁）＝**主线程不再被 Rust 锁阻塞**：Java 的 UI 线程
+    // 只调异步请求（返回 void、只置原子标志），面板栈弹出由渲染循环下一帧消费。
+    // 变异抽检：改回同步调用（returns boolean／JNI 体内取锁）→ 本钉必红。
+    let java = read_src("android/java/dev/kfm/na/MainActivity.java");
+    assert!(
+        java.contains("private static native void nativeWebBackRequest();"),
+        "请求必须返回 void（Java 不等 Rust 结果＝UI 线程零等待）"
+    );
+    assert!(
+        !java.contains("nativeWebBack()"),
+        "同步版 nativeWebBack 必须整删（留着就会被再调）"
+    );
+    assert!(
+        !java.contains("boolean consumed = nativeWebBackRequest()"),
+        "不许把请求当返回值用（那就又同步了）"
+    );
+    let app = read_src("src/android_app.rs");
+    let jni_body = fn_body(
+        &app,
+        "pub extern \"system\" fn Java_dev_kfm_na_MainActivity_nativeWebBackRequest(",
+    );
+    assert!(jni_body.contains("WEB_BACK_REQ.store"), "JNI 体只许置标志");
+    for bad in ["ai_presence_handle", "Mutex", "lock()", "report("] {
+        assert!(
+            !jni_body.contains(bad),
+            "JNI 体内不许出现 {bad}（取锁／落盘都在 UI 线程上，正是要摘掉的东西）"
+        );
+    }
+    // 消费点在渲染循环里（同帧），且消费后真弹栈
+    let drain = fn_body(&app, "fn drain_web_back_request(&mut self)");
+    assert!(
+        drain.contains("take_web_back_request()")
+            && drain.contains("ai.dismiss_top(crate::ai_presence::Panel::Web)"),
+        "每帧排水函数必须消费请求并弹栈（栈是唯一真源）"
+    );
+    assert!(
+        app.contains("self.drain_web_back_request();"),
+        "排水函数必须真被每帧调用（钉绿但没人调＝没接上）"
+    );
+}
+
+#[test]
+fn spec_bar260_出口_搬窗限频与最新值覆盖() {
+    // 判据（NA0189 楼61/62：括号原文＝「已投递输入没处理完」，注入 2 个 MotionEvent
+    // 等 5000ms）：逐帧搬窗把 UI 线程堵住。两条收敛——**源头限频**（Rust 侧 33ms）
+    // 与**最新值覆盖不排队**（Java 侧一个 UI 任务带着最新值跑）。
+    // 变异抽检：去掉限频→红；改成排队（每帧 post 一个 runnable）→红。
+    use web_page::offset_should_send;
+    // 限频真值表：变了但太快→不发；变了且够久→发；没变→一律不发
+    assert!(
+        !offset_should_send(0, 5, 1000, 1010),
+        "10ms 内变了也不发（限频）"
+    );
+    assert!(offset_should_send(0, 5, 1000, 1033), "33ms 且变了→发");
+    assert!(
+        !offset_should_send(5, 5, 1000, 5000),
+        "没变→不发（防抖优先）"
+    );
+    assert!(offset_should_send(5, 6, 0, 1), "首次（last_at=0）不挡");
+    // Java 侧：覆盖不排队
+    let java = read_src("android/java/dev/kfm/na/MainActivity.java");
+    assert!(
+        java.contains("mPendWebDx = dx; // 覆盖，不排队"),
+        "迟到帧必须覆盖字段，不许排队"
+    );
+    assert!(
+        java.contains("if (mWebDxPosted)") && java.contains("return; // 已有一次 UI 任务在跑"),
+        "已有 UI 任务在跑时不许再 post（一次任务带最新值）"
+    );
+    let off_body = fn_body(&java, "public void webOffset(");
+    assert_eq!(
+        off_body.matches("runOnUiThread(new Runnable()").count(),
+        1,
+        "webOffset 内只许排一个 runnable（出现两处＝排队）"
+    );
+    // Rust 侧：限频常量与调用点都在
+    let gate = read_src("src/gate.rs");
+    assert!(
+        gate.contains("offset_should_send(last, off, last_at, now)"),
+        "下发必须过限频判据"
+    );
+    assert!(
+        read_src("src/ui/web_page.rs").contains("pub const OFFSET_MIN_INTERVAL_MS: u64 = 33;"),
+        "限频间隔必须是 33ms 常量（可核，不散落字面量）"
+    );
+}
+
+#[test]
+fn spec_bar265_尖峰落盘阈值与分项() {
+    // BAR-265／NA0194 楼4/5（清和批）：均值口径证不了单帧尖峰，加「整帧 ≥
+    // 阈值即逐帧落一行，带时刻与分项」。阈值 500ms 可核，分项四段齐。
+    // 变异抽检：阈值改 0（全报）或改 i64 级大数（全不报）→ 本钉必红。
+    use kfm_na::gate::{FRAME_SPIKE_MS, frame_spike_hit};
+    assert_eq!(FRAME_SPIKE_MS, 500, "阈值必须是 500ms 常量（可核、不散落）");
+    assert!(!frame_spike_hit(0), "0ms 不报");
+    assert!(!frame_spike_hit(499), "499ms 不报（阈值下方是噪声区）");
+    assert!(frame_spike_hit(500), "500ms 恰达即报");
+    assert!(frame_spike_hit(999), "999ms 报");
+    assert!(frame_spike_hit(60000), "整分钟级更报");
+    // 落盘行必须带时刻与四段分项（事后取证需要定位到段）
+    let gate = read_src("src/gate.rs");
+    let body = fn_body(&gate, "pub fn report_frame_spike(");
+    for f in ["total=", "at=", "gen=", "ras=", "upload=", "draw="] {
+        assert!(body.contains(f), "尖峰行必须含字段 {f}");
+    }
+    // 调用点必须真接上（钉绿但没人调＝没接上）
+    let app = read_src("src/android_app.rs");
+    assert!(
+        app.contains("crate::gate::frame_spike_hit(")
+            && app.contains("crate::gate::report_frame_spike("),
+        "绘制路径必须按判据调用尖峰落盘"
     );
 }

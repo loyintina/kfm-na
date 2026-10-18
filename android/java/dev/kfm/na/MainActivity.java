@@ -218,32 +218,50 @@ public class MainActivity extends NativeActivity {
         // 判据乙：浮窗挂着时 BACK 先关页回解析页，**不退 Activity**
         // （直接 finish 会在浮窗未摘时销毁宿主＝WindowLeaked）
         if (mWeb != null) {
+            // 页开着：拆窗 + 异步请 Rust 弹栈，本次 BACK 由本端消费（不退 Activity）
             webPageTearDown("back");
-            boolean consumed = false;
             try {
-                consumed = nativeWebBack();
+                nativeWebBackRequest();
             } catch (Throwable t) {
                 webStatus("back-native-fail " + t);
             }
-            if (consumed) {
-                return;
-            }
+            return;
         }
         super.onBackPressed();
     }
 
-    /** Rust 侧面板栈弹出（栈是唯一真源）；无符号时调用方已 try/catch 兜底。 */
-    private static native boolean nativeWebBack();
+    /** Rust 侧面板栈弹出请求（**异步**：只置标志即返回，UI 线程不进 Rust 取锁）；
+     * 无符号时调用方已 try/catch 兜底。栈仍是唯一真源，弹出由渲染循环消费。 */
+    private static native void nativeWebBackRequest();
 
     /** 全局页逐帧位移（BAR-260 段②，NA0189 楼6 判据②）：位移的**单源在
      * Rust**（seam 采样→bar_offset_px 取整），本端只照数摆窗、不自算；Rust
      * 侧值不变不会调进来（防抖在 gate::web_offset_sync）。 */
+    /** 待应用的位移（**最新值覆盖，不排队**）：动画期 R 次下发只排一次 UI 任务，
+     * 迟到帧直接覆盖这个字段——这是「已投递输入没处理完」那条 ANR 的收敛点之一
+     * （NA0189 楼61/62：注入 2 个 MotionEvent 等了 5000ms，凶手是逐帧搬窗把 UI
+     * 线程堵住）。 */
+    private volatile int mPendWebDx = Integer.MIN_VALUE;
+    private boolean mWebDxPosted = false;
+
     public void webOffset(final int dx) {
+        synchronized (this) {
+            mPendWebDx = dx; // 覆盖，不排队
+            if (mWebDxPosted) {
+                return; // 已有一次 UI 任务在跑，它会带上最新值
+            }
+            mWebDxPosted = true;
+        }
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
                 try {
-                    if (mWeb == null) {
+                    int want;
+                    synchronized (MainActivity.this) {
+                        want = mPendWebDx;
+                        mWebDxPosted = false;
+                    }
+                    if (mWeb == null || want == Integer.MIN_VALUE) {
                         return;
                     }
                     android.view.ViewGroup.LayoutParams gp = mWeb.getLayoutParams();
@@ -252,16 +270,16 @@ public class MainActivity extends NativeActivity {
                     }
                     android.view.WindowManager.LayoutParams lp =
                             (android.view.WindowManager.LayoutParams) gp;
-                    if (lp.x == dx) {
+                    if (lp.x == want) {
                         return;
                     }
-                    lp.x = dx;
+                    lp.x = want;
                     lp.gravity = android.view.Gravity.TOP | android.view.Gravity.LEFT;
                     getWindowManager().updateViewLayout(mWeb, lp);
                 } catch (Throwable t) {
                     java.io.StringWriter sw = new java.io.StringWriter();
                     t.printStackTrace(new java.io.PrintWriter(sw));
-                    webStatus("offset-fail dx=" + dx + " " + sw.toString());
+                    webStatus("offset-fail " + sw.toString());
                 }
             }
         });
@@ -331,14 +349,12 @@ public class MainActivity extends NativeActivity {
                                 if (ev.getKeyCode() == android.view.KeyEvent.KEYCODE_BACK) {
                                     if (ev.getAction() == android.view.KeyEvent.ACTION_UP) {
                                         webPageTearDown("back-in-window");
-                                        boolean consumed = false;
+                                        // 异步请求：UI 线程只置标志即返回，不进 Rust
+                                        // 取锁（判据＝主线程不再被 Rust 锁阻塞）
                                         try {
-                                            consumed = nativeWebBack();
+                                            nativeWebBackRequest();
                                         } catch (Throwable t) {
                                             webStatus("back-native-fail " + t);
-                                        }
-                                        if (!consumed) {
-                                            webStatus("back-native-not-consumed");
                                         }
                                     }
                                     return true; // 吃掉：既关页也不漏给 Activity

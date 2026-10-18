@@ -1247,13 +1247,18 @@ pub fn register_web_offset_hook(f: Box<dyn Fn(i32) + Send + Sync>) {
 
 /// 上一次已下发的位移（防抖基线；None = 尚未下发）
 static WEB_OFF_LAST: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(i32::MIN);
+/// 上次下发时刻（ms）——限频用（NA0189 楼61：逐帧搬窗会堵 UI 线程）
+static WEB_OFF_LAST_AT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// 位移下发（逐帧可调）：与上次相同即不发——同一帧重复 updateViewLayout 会
 /// 让 Java 侧反复布局，画面抖（判据②「无抖动」的机制保证）。
 /// 返回是否真的下发，供读数/考题观察。
 pub fn web_offset_sync(off: i32) -> bool {
     let last = WEB_OFF_LAST.load(std::sync::atomic::Ordering::Relaxed);
-    if !crate::ui::web_page::bridge_should_send(last, off) {
+    let now = crate::report::boot_ms() as u64;
+    let last_at = WEB_OFF_LAST_AT.load(std::sync::atomic::Ordering::Relaxed);
+    // 变了才发 + 限频（33ms）：动画期最多 ~30 次/秒，且迟到帧由 Java 侧覆盖
+    if !crate::ui::web_page::offset_should_send(last, off, last_at, now) {
         return false;
     }
     let guard = WEB_OFF_HOOK.lock().unwrap();
@@ -1262,6 +1267,7 @@ pub fn web_offset_sync(off: i32) -> bool {
     };
     f(off);
     WEB_OFF_LAST.store(off, std::sync::atomic::Ordering::Relaxed);
+    WEB_OFF_LAST_AT.store(now, std::sync::atomic::Ordering::Relaxed);
     true
 }
 
@@ -1833,6 +1839,32 @@ static STAT_BYTES_OTHER: AtomicU64 = AtomicU64::new(0);
 static STAT_SESSION_DEATHS: AtomicU64 = AtomicU64::new(0);
 
 /// draw_frame 每帧报耗时(含 present)
+/// 单帧尖峰落盘阈值（BAR-265／NA0194 楼4/5：均值口径证不了单帧尖峰，
+/// 摊薄后找不到凶手；清和批「>500ms 逐帧落一行，带时刻与分项」）。
+pub const FRAME_SPIKE_MS: u64 = 500;
+
+/// 尖峰判据（纯函数，宿主可判卷）：整帧 ≥ 阈值才落一行。
+pub fn frame_spike_hit(ms: u64) -> bool {
+    ms >= FRAME_SPIKE_MS
+}
+
+/// 尖峰落盘（逐帧一行）：只在整帧 ≥ 阈值时调——分项由调用方给（它手上才有
+/// gen／ras／upload／draw 的当帧数），这里只负责格式与落账。
+#[allow(clippy::too_many_arguments)]
+pub fn report_frame_spike(total_ms: u64, gen_us: u64, ras_us: u64, upload_us: u64, draw_us: u64) {
+    crate::report::report(
+        "frame-spike",
+        &format!(
+            "total={total_ms}ms at={} gen={}ms ras={}ms upload={}ms draw={}ms",
+            crate::report::boot_ms(),
+            gen_us / 1000,
+            ras_us / 1000,
+            upload_us / 1000,
+            draw_us / 1000,
+        ),
+    );
+}
+
 pub fn note_draw(elapsed: std::time::Duration) {
     let ms = elapsed.as_millis() as u64;
     STAT_DRAW_TOTAL_MS.fetch_add(ms, Ordering::Relaxed);

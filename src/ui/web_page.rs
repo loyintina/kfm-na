@@ -184,6 +184,23 @@ pub fn back_action(web_open: bool) -> BackAction {
     }
 }
 
+/// 桥下发限频（BAR-260 出口第五件，NA0189 楼61：括号原文定乙＝已投递输入
+/// 未在 5s 内处理完；凶手是**逐帧搬窗把 UI 线程堵住**）。判据两条：值变了
+/// 才发（bridge_should_send）＋**距上次下发不足 interval 就跳帧**。
+/// 跳帧不丢最新值：Java 侧留「最新值覆盖」（迟到帧覆盖，不排队）。
+pub const OFFSET_MIN_INTERVAL_MS: u64 = 33;
+
+/// 限频判据（纯函数，宿主可判卷）：变了 + 距上次 ≥ interval 才发。
+pub fn offset_should_send(last_off: i32, cur_off: i32, last_at_ms: u64, now_ms: u64) -> bool {
+    if !bridge_should_send(last_off, cur_off) {
+        return false;
+    }
+    if last_at_ms == 0 {
+        return true; // 首次（尚无下发时刻）：只要求变了，别让限频把首帧吃掉
+    }
+    now_ms.saturating_sub(last_at_ms) >= OFFSET_MIN_INTERVAL_MS
+}
+
 /// 桥下发判据（防抖）：整数位移与上次相同就不发——同一帧重复下发会让
 /// Java 侧 updateViewLayout 反复触发布局，画面抖。纯函数，供桥与考题共用。
 pub fn bridge_should_send(last: i32, cur: i32) -> bool {
