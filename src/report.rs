@@ -55,19 +55,56 @@ static INSTANCE_TAG: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 /// 设备位缓存（BAR-235）：整进程只解析一次（文件 IO 不在上报路径上重复做）
 static DEV_TAG: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
-/// 设备位覆盖口（判卷/取证用：`NA_DEVICE_TAG=Neo11` 可钉死机型名，免猜）
+/// 设备位覆盖口（判卷/取证用：`NA_DEVICE_TAG=Neo11` 可钉死机型名，免猜）。
+/// **生产构建默认拒绝**（BAR-273 第二批，楼199 白露）：能让 env 改写身份的机制
+/// 本身就是伪造通道——release 下直接忽略它，见 env_pin_allowed。
 const DEV_OVERRIDE_ENV: &str = "NA_DEVICE_TAG";
 
-/// 来源档四档（BAR-273 第二批；楼185 悬铃裁 A 甲「带来源档」＋楼186 白露
-/// 「先只留 model／fallback 两档，serial 等测出再加且须附读数」）。采信口径：
-/// model＝真读数，可跨机采信；env＝判卷手钉（NA_DEVICE_TAG），只在本轮判卷内
-/// 有效——**必须单独成档**，否则手钉值会冒充真读数，正是本件要防的误读；
-/// fallback＝持久短 id，同机恒定但**不是设备身份**；unknown＝全链失败，不采信。
-/// **serial 暂不采集**：未测出可读路径前不加档，也不裸存。
-pub const TIER_ENV: &str = "env";
+/// 来源档五枚举（BAR-273 第二批；楼203 悬铃裁为准）：
+/// - model（楼200 悬铃）＝真读数，**唯一**天然可跨机采信（fingerprint 可作
+///   model 来源，但见楼208：fingerprint 变 ≠ 换设备，它随系统升级变）；
+/// - human（楼202 白露／楼203 悬铃補）＝人报，**带出处三样**（谁／何时／怎么取）
+///   才可跨机采信，且引用时必须写明「人报」；缺一降 unknown。有命令＋输出的
+///   应升 model——human 是过渡档，不是终点；
+/// - devid（楼200）＝持久短 id 件读来，同机恒定但**不是设备身份**，不跨机采信；
+/// - env（楼198 清和／楼199 白露／楼200 悬铃）＝机器注入的假值，与真读数逐字
+///   同形 ⇒ 单独成档、必须留痕、**不跨机采信、不作判据**；
+/// - unknown＝全链失败，不跨机。
+///
+/// **tag 不加长**（楼200 原话）：TEST 标记与出处三样都不进 tag，走运行日志。
+/// 所以「能不能采信」要靠 tier ＋ 出处两件一起判，而不是看行尾。
+///
+/// **serial 字段永久删**（楼211 悬铃：ro.serialno 空串 rc=0＝「成功但无值」，
+/// 采了也是空壳）；fingerprint 只作 model 档来源、**不作身份**（升级即变）。
+///
+/// 行尾标识**成对带两维**（楼211）：「什么机」（model／human／env／unknown 档）
+/// ＋「哪一台」（devid 档），两段各自带档名，缺任一维即不足以判。
 pub const TIER_MODEL: &str = "model";
-pub const TIER_FALLBACK: &str = "fallback";
+pub const TIER_HUMAN: &str = "human";
+pub const TIER_DEVID: &str = "devid";
+pub const TIER_ENV: &str = "env";
 pub const TIER_UNKNOWN: &str = "unknown";
+
+/// 五档全枚举（判卷侧对表用，别在别处再抄一份）
+pub const DEV_TIERS: [&str; 5] = [TIER_MODEL, TIER_HUMAN, TIER_DEVID, TIER_ENV, TIER_UNKNOWN];
+
+/// 人报出处三样（楼202）：谁／何时／取值方法，缺一即无出处 ⇒ 降 unknown，
+/// 不许带 human 档落盘。纯函数，A 档可判。
+pub fn human_source_ok(who: &str, when: &str, how: &str) -> bool {
+    !who.trim().is_empty() && !when.trim().is_empty() && !how.trim().is_empty()
+}
+
+/// 手钉留痕口（楼200 悬铃裁「须在运行日志留谁／何时／为何」）：判卷侧钉死机型
+/// 时必须同时给 `NA_DEVICE_TAG_WHY="<谁>·<为何>"`，否则留痕记成「未留痕」——
+/// 手钉值不许无声落进报表。
+pub const DEV_OVERRIDE_WHY_ENV: &str = "NA_DEVICE_TAG_WHY";
+
+/// env 手钉是否可用（纯函数，A 档可判）：**只在调试构建里**（楼199 白露：能让
+/// env 改写身份的机制本身就是伪造通道）。**此条悬铃楼200 未对表**，已在楼202
+/// 声明——若判「生产也要能钉」，改成恒 true 一行即回。
+pub fn env_pin_allowed(debug_build: bool) -> bool {
+    debug_build
+}
 
 /// 短 id 落点（BAR-273 第二批，楼193 悬铃更正）：**共享存储的 kfm-na-id/**——
 /// 与 kfm-na-keys/ 刻意分开，一目录一用途（楼193 原话）。放私有目录时卸载/重装
@@ -144,12 +181,15 @@ pub fn sanitize_dev(raw: &str) -> String {
     out
 }
 
-/// 设备位取源（一次性缓存）：①环境覆盖 → ②机型属性文件 → ③持久短 id → ④unknown。
-/// 任何一步 IO 失败只降档，恒返回可打印串（上报通道永不成事故）。
-/// **每档都带来源标记**（BAR-273 第二批）：无标记的读数无法判「谁可跨机采信」。
+/// 第一维取源（一次性缓存）：①env 手钉（**仅调试构建**）→ ②机型属性文件
+/// （含 fingerprint，只作来源不作身份）→ ③unknown。任何一步 IO 失败只降档，恒返回可打印串（上报
+/// 通道永不成事故）。**每档都带来源标记**（BAR-273 第二批）：无标记的读数
+/// 无法判「谁可跨机采信」，而 env-pin 与真读数逐字同形的形态今晚已立过案。
 fn device_dev() -> &'static str {
     DEV_TAG.get_or_init(|| {
-        if let Ok(v) = std::env::var(DEV_OVERRIDE_ENV) {
+        if env_pin_allowed(cfg!(debug_assertions))
+            && let Ok(v) = std::env::var(DEV_OVERRIDE_ENV)
+        {
             let s = sanitize_dev(&v);
             if !s.is_empty() {
                 return with_tier(&s, TIER_ENV);
@@ -166,18 +206,38 @@ fn device_dev() -> &'static str {
                 }
             }
         }
-        fallback_dev_id()
+        // 第一维只答「什么机」；答不出就是 unknown——devid 属第二维（哪一台），
+        // 不许拿它冒充机型（楼211：单维不足以判，两维各说各的）。
+        with_tier("unknown", TIER_UNKNOWN)
     })
 }
 
-/// 拼「值@来源档」（纯函数，A 档可判）。档名只含小写字母，与 sanitize_dev 的
-/// 白名单（字母数字／`-`／`_`）不冲突；`@` 分隔符本身不参与消毒，所以先消毒
+/// 拼「值@来源档」（纯函数，A 档可判）。档名只含小写字母与 `-`，与 sanitize_dev
+/// 的白名单（字母数字／`-`／`_`）不冲突；`@` 分隔符本身不参与消毒，所以先消毒
 /// 再拼，顺序不许倒——倒着拼会把档名里的字符喂进消毒器。
 pub fn with_tier(v: &str, tier: &str) -> String {
     format!("{v}@{tier}")
 }
 
-/// 退化链第三档：共享存储持久化短 id（首启生成，两台机必然不同）。
+/// 从「值@档」里取档名（纯函数）：无 `@` ⇒ 空串＝无档（旧行，按 unknown 论）
+pub fn tier_of(dev: &str) -> &str {
+    dev.split_once('@').map(|(_, t)| t).unwrap_or("")
+}
+
+/// 这一行能不能**只凭 tag** 跨机采信（纯函数，判卷侧直接调，别各写一份）：
+/// 只有 model（楼200）。human 要看出处三样，另判（human_trusted）；
+/// env／devid／unknown 一律不可。
+pub fn tier_trusted_cross_machine(tier: &str) -> bool {
+    tier == TIER_MODEL
+}
+
+/// human 档能否跨机采信（楼202）：带出处三样可，且引用必须写明「人报」；
+/// 无出处降 unknown（由调用方把值改档，不是在这里偷偷放行）。
+pub fn human_trusted(who: &str, when: &str, how: &str) -> bool {
+    human_source_ok(who, when, how)
+}
+
+/// 退化链第三档：共享存储持久化短 id（首启生成，两台机必然不同）。档名 devid。
 /// 读/写失败都不致命——写不出（只读环境/测试宿主）就退到 unknown 档。
 /// 三条硬要求（楼185 悬铃裁 B 甲）：①落点在共享存储 ②旧私有目录的件要迁过来
 /// 且迁完删 ③写完**回读校验**，读不回不冒充成功。
@@ -186,7 +246,7 @@ fn fallback_dev_id() -> String {
     if let Ok(existing) = std::fs::read_to_string(DEV_ID_PATH) {
         let s = sanitize_dev(&existing);
         if !s.is_empty() {
-            return with_tier(&s, TIER_FALLBACK);
+            return with_tier(&s, TIER_DEVID);
         }
     }
     let fresh = fresh_dev_id();
@@ -199,7 +259,7 @@ fn fallback_dev_id() -> String {
     // 写后回读：共享存储可能被 scoped storage 挡住，写入「成功」但读不回来是
     // 一类真实故障（不是理论风险）。读不回 = 这一档不成立，如实降 unknown。
     match std::fs::read_to_string(DEV_ID_PATH) {
-        Ok(back) if sanitize_dev(&back) == fresh => with_tier(&fresh, TIER_FALLBACK),
+        Ok(back) if sanitize_dev(&back) == fresh => with_tier(&fresh, TIER_DEVID),
         _ => with_tier("unknown", TIER_UNKNOWN),
     }
 }
@@ -238,12 +298,21 @@ fn fresh_dev_id() -> String {
     format!("{:08x}", x & 0xFFFF_FFFF)
 }
 
+/// 第二维「哪一台」（楼211 悬铃裁：格式成对带两维，model 说什么机、devid 说
+/// 哪一台，单维不足以判）。整进程只解析一次。
+static DEV_WHICH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+fn device_which() -> &'static str {
+    DEV_WHICH.get_or_init(fallback_dev_id)
+}
+
 fn instance_tag() -> &'static str {
     INSTANCE_TAG.get_or_init(|| {
         format!(
-            "[{}/{}/{}]",
+            "[{}/{}/{}/{}]",
             std::env::consts::ARCH,
             device_dev(),
+            device_which(),
             std::process::id()
         )
     })
@@ -266,6 +335,35 @@ static BOOT_T0: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::n
 
 pub fn set_boot_t0() {
     BOOT_T0.set(std::time::Instant::now()).ok();
+    // 手钉留痕（BAR-273 第二批，楼200 悬铃裁）：tag 不加长，所以「谁／何时／为何」
+    // 只能落在运行日志里。设备位已在此前被 instance_tag 解析过（或由本次 report
+    // 解析），不会在自己的 OnceLock 初始化里重入。
+    if let Some(line) = env_pin_provenance(device_dev()) {
+        report("boot", &line);
+    }
+}
+
+/// 手钉留痕行（楼200：谁／何时／为何）。None＝本次没用手钉。
+/// 「谁·为何」取自 NA_DEVICE_TAG_WHY，缺 ⇒ 记「未留痕」——手钉值不许无声落
+/// 进报表（楼198／199 两处判词的同一条要求）。时刻取 epoch 秒。
+pub fn env_pin_provenance(dev: &str) -> Option<String> {
+    if tier_of(dev) != TIER_ENV {
+        return None;
+    }
+    let why = std::env::var(DEV_OVERRIDE_WHY_ENV)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+    let when = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    Some(match why {
+        Some(w) => format!("env-pin 留痕：value={dev}；谁·为何={w}；时刻=epoch {when}"),
+        None => format!(
+            "env-pin 留痕：value={dev}；谁·为何=未留痕（缺 {DEV_OVERRIDE_WHY_ENV}）；时刻=epoch {when}"
+        ),
+    })
 }
 
 pub fn boot_ms() -> u128 {

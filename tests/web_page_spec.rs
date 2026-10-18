@@ -1282,7 +1282,8 @@ fn spec_bar273_第二批_来源档与共享落点() {
     for (konst, want) in [
         ("TIER_MODEL", "\"model\""),
         ("TIER_ENV", "\"env\""),
-        ("TIER_FALLBACK", "\"fallback\""),
+        ("TIER_HUMAN", "\"human\""),
+        ("TIER_DEVID", "\"devid\""),
         ("TIER_UNKNOWN", "\"unknown\""),
     ] {
         let line = src
@@ -1316,7 +1317,10 @@ fn spec_bar273_第二批_来源档与共享落点() {
     for (need, why) in [
         ("with_tier(&s, TIER_ENV)", "env 档（判卷手钉）"),
         ("with_tier(&s, TIER_MODEL)", "model 档（真读数）"),
-        ("fallback_dev_id()", "fallback 档入口"),
+        (
+            "with_tier(\"unknown\", TIER_UNKNOWN)",
+            "答不出即 unknown（devid 不冒充机型）",
+        ),
     ] {
         assert!(dd.contains(need), "device_dev 必须走到 {why}");
     }
@@ -1371,7 +1375,81 @@ fn spec_bar273_第二批_来源档与共享落点() {
         "迁完必须删旧件，否则两份并存"
     );
 
-    // ⑦ serial 未测 ⇒ 不采集：机型键数组体里不许出现 serial
+    // ⑦ 人报档要出处三样，缺一不认（楼202 白露补第五档）
+    let hs = {
+        let i = src
+            .find("pub fn human_source_ok")
+            .expect("human_source_ok 必须在");
+        let j = src[i..].find("\n}\n").expect("函数必须闭合");
+        &src[i..i + j]
+    };
+    for need in ["who", "when", "how"] {
+        assert!(
+            hs.contains(need),
+            "人报出处三样必须含 {need}（谁/何时/取值方法）"
+        );
+    }
+    assert!(
+        hs.contains("trim().is_empty()") && hs.contains("&&"),
+        "三样缺一即无出处——必须是与关系，不是或"
+    );
+
+    // ⑧ 只凭 tag 能采信的只有 model（楼200）；human 另判，env/devid/unknown 不可
+    let tt = {
+        let i = src
+            .find("pub fn tier_trusted_cross_machine")
+            .expect("tier_trusted_cross_machine 必须在");
+        let j = src[i..].find("\n}\n").expect("函数必须闭合");
+        &src[i..i + j]
+    };
+    assert!(
+        tt.contains("tier == TIER_MODEL"),
+        "只凭 tag 可跨机采信的只有 model"
+    );
+
+    // ⑨ 手钉留痕：谁·为何从 NA_DEVICE_TAG_WHY 来，缺则记「未留痕」（tag 不加长，
+    //    留痕只能落运行日志）
+    let pv = {
+        let i = src
+            .find("pub fn env_pin_provenance")
+            .expect("env_pin_provenance 必须在");
+        let j = src[i..].find("\n}\n").expect("函数必须闭合");
+        &src[i..i + j]
+    };
+    assert!(pv.contains("DEV_OVERRIDE_WHY_ENV"), "留痕必须读 WHY 环境口");
+    assert!(pv.contains("未留痕"), "缺 WHY 时必须记未留痕，不许静默");
+
+    // ⑩ 生产构建默认拒绝 env 覆盖身份（楼199）：env_pin_allowed 只在调试为真
+    let ea = {
+        let i = src
+            .find("pub fn env_pin_allowed")
+            .expect("env_pin_allowed 必须在");
+        let j = src[i..].find("\n}\n").expect("函数必须闭合");
+        &src[i..i + j]
+    };
+    assert!(
+        ea.contains("debug_build"),
+        "env 手钉必须按构建档拒绝（生产默认不许改身份）"
+    );
+
+    // ⑫ 两维成对（楼211）：标识四段 arch/什么机/哪一台/pid，第二维走 device_which
+    let it = {
+        let i = src.find("fn instance_tag()").expect("instance_tag 必须在");
+        let j = src[i..].find("\n}\n").expect("函数必须闭合");
+        &src[i..i + j]
+    };
+    assert!(
+        it.contains("[{}/{}/{}/{}]")
+            && it.contains("device_dev()")
+            && it.contains("device_which()"),
+        "两维成对：标识必须同时含「什么机」与「哪一台」"
+    );
+    assert!(
+        src.contains("fn device_which()") && src.contains("DEV_WHICH"),
+        "第二维要有一份自己的解析与缓存（不许借第一维冒充）"
+    );
+
+    // ⑪ serial 未测 ⇒ 不采集：机型键数组体里不许出现 serial
     let arr = {
         let i = src.find("const MODEL_KEYS").expect("MODEL_KEYS 必须在");
         let j = src[i..].find("];").expect("数组必须有结尾");

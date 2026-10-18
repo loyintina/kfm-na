@@ -18,8 +18,13 @@ fn spec_bar235_报表行_挂设备维三段() {
     );
     let inner = &tail[1..tail.len() - 1];
     let parts: Vec<&str> = inner.split('/').collect();
-    assert_eq!(parts.len(), 3, "BAR-235 后必须三段 arch/dev/pid: {inner}");
-    let (arch, dev, pid) = (parts[0], parts[1], parts[2]);
+    // BAR-273 第二批（楼211 悬铃裁）：**成对带两维**——arch／什么机／哪一台／pid。
+    assert_eq!(
+        parts.len(),
+        4,
+        "两维成对：必须四段 arch/what/which/pid: {inner}"
+    );
+    let (arch, dev, which, pid) = (parts[0], parts[1], parts[2], parts[3]);
     assert!(!arch.is_empty(), "arch 不许为空");
     assert!(
         !dev.is_empty(),
@@ -46,8 +51,24 @@ fn spec_bar235_报表行_挂设备维三段() {
         "设备位值截 12 字符上限: {dev}"
     );
     assert!(
-        ["model", "env", "fallback", "unknown"].contains(&dev_tier),
-        "来源档必须是四档之一（model/env/fallback/unknown）: {dev}"
+        ["model", "human", "env", "unknown"].contains(&dev_tier),
+        "第一维（什么机）档名必须是 model/human/env/unknown 之一: {dev}"
+    );
+    // 第二维（哪一台）只有 devid 与 unknown 两档——它说的不是「什么机」
+    let (which_val, which_tier) = {
+        let mut it = which.split('@');
+        let v = it.next().unwrap_or("");
+        let t = it.next().unwrap_or("");
+        assert!(it.next().is_none(), "第二维 @ 只许一次: {which}");
+        (v, t)
+    };
+    assert!(
+        !which_val.is_empty(),
+        "第二维恒非空（两维成对，不许缺一维）: {inner}"
+    );
+    assert!(
+        ["devid", "unknown"].contains(&which_tier),
+        "第二维档名只能是 devid/unknown: {which}"
     );
     assert!(
         !pid.is_empty() && pid.chars().all(|c| c.is_ascii_digit()),
@@ -149,4 +170,59 @@ fn spec_bar139_报表走自持隧道() {
     );
     assert!(HOST_HEADER.contains("9021"), "Host 头随端口: {HOST_HEADER}");
     assert!(PATH.ends_with("/api/na-report"), "路径不许漂: {PATH}");
+}
+
+#[test]
+fn spec_bar273_来源档判别_纯函数全套() {
+    // BAR-273 第二批（楼203／楼211）：五档枚举与「谁能跨机采信」是判卷第一道
+    // 分辨闸，全走纯函数，A 档可判。变异抽检：把 tier_trusted 放宽到 devid、
+    // 或把 human_source_ok 的与门改成或门 → 本钉必红。
+    use kfm_na::report::{
+        DEV_TIERS, TIER_DEVID, TIER_ENV, TIER_HUMAN, TIER_MODEL, TIER_UNKNOWN, env_pin_allowed,
+        env_pin_provenance, human_source_ok, human_trusted, tier_of, tier_trusted_cross_machine,
+        with_tier,
+    };
+
+    // ① 五档枚举齐全，且常量与枚举表同源
+    assert_eq!(DEV_TIERS.len(), 5, "来源档必须五档");
+    for t in [TIER_MODEL, TIER_HUMAN, TIER_DEVID, TIER_ENV, TIER_UNKNOWN] {
+        assert!(DEV_TIERS.contains(&t), "枚举表缺档 {t}");
+    }
+
+    // ② 拼与拆（拆只认第一个 @；旧行无 @ ⇒ 空档＝无档）
+    assert_eq!(with_tier("Neo11", TIER_MODEL), "Neo11@model");
+    assert_eq!(tier_of("Neo11@model"), TIER_MODEL);
+    assert_eq!(tier_of("Neo11"), "", "旧行无档必须解成空串，不许猜档");
+    assert_eq!(tier_of("a@b@c"), "b@c", "只按第一个 @ 拆，后半原样交出");
+
+    // ③ 只凭 tag 能跨机采信的只有 model（楼200／203）
+    assert!(tier_trusted_cross_machine(TIER_MODEL), "model 可跨机");
+    for t in [TIER_HUMAN, TIER_DEVID, TIER_ENV, TIER_UNKNOWN, ""] {
+        assert!(!tier_trusted_cross_machine(t), "{t:?} 不许凭 tag 跨机采信");
+    }
+
+    // ④ human 出处三样：与关系，缺一不认（楼202／203）
+    assert!(human_source_ok(
+        "承影",
+        "2026-10-19 06:40 +08:00",
+        "dumpsys"
+    ));
+    assert!(!human_source_ok("", "2026-10-19 06:40 +08:00", "dumpsys"));
+    assert!(!human_source_ok("承影", "  ", "dumpsys"));
+    assert!(!human_source_ok("承影", "2026-10-19 06:40 +08:00", ""));
+    assert!(human_trusted("承影", "t", "how"));
+    assert!(!human_trusted("承影", "", "how"));
+
+    // ⑤ 生产拒绝 env 改写身份（楼199）
+    assert!(env_pin_allowed(true), "调试构建可用手钉");
+    assert!(!env_pin_allowed(false), "生产构建必须拒绝手钉身份");
+
+    // ⑥ 手钉留痕：非 env 档不产行；env 档必有行，且缺 WHY 时写明「未留痕」
+    assert!(env_pin_provenance("Neo11@model").is_none());
+    let line = env_pin_provenance("Neo11@env").expect("env 档必须留痕");
+    assert!(line.contains("env-pin"), "留痕行要标档名: {line}");
+    assert!(
+        line.contains("留痕") && (line.contains("谁·为何")),
+        "留痕行必须含谁/为何位: {line}"
+    );
 }
