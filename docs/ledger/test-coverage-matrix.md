@@ -12,7 +12,7 @@
 | `src/ai_chat.rs` | 11 | 10 | 1 | generation |
 | `src/ai_presence.rs` | 37 | 37 | 0 | — |
 | `src/boot_mark.rs` | 11 | 11 | 0 | — |
-| `src/bootstrap.rs` | 16 | 14 | 2 | ensure_pkg_tool first_boot_install |
+| `src/bootstrap.rs` | 17 | 15 | 2 | ensure_pkg_tool first_boot_install |
 | `src/brain.rs` | 14 | 14 | 0 | — |
 | `src/brain_ep.rs` | 4 | 4 | 0 | — |
 | `src/catchup.rs` | 15 | 15 | 0 | — |
@@ -48,7 +48,7 @@
 | `src/plugins/term_alacritty.rs` | 3 | 3 | 0 | — |
 | `src/plugins/ui_fx.rs` | 2 | 2 | 0 | — |
 | `src/providers.rs` | 5 | 5 | 0 | — |
-| `src/report.rs` | 14 | 9 | 5 | set_boot_t0 start_flusher report_sync report_sync_once http_status_is_200 |
+| `src/report.rs` | 19 | 14 | 5 | set_boot_t0 start_flusher report_sync report_sync_once http_status_is_200 |
 | `src/reseed.rs` | 1 | 1 | 0 | — |
 | `src/scroll.rs` | 20 | 20 | 0 | — |
 | `src/seed_sched.rs` | 4 | 4 | 0 | — |

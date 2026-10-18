@@ -42,9 +42,14 @@ static SENDER: Mutex<Option<Sender<String>>> = Mutex::new(None);
 /// 进程」，**两台同为 aarch64 的真机混流后与「一台机两个实例」完全同形**——
 /// 2026-10-07 乙案判卷据此把 Neo11（新核）+ neo9（卡萝实验场旧核）误读成
 /// 「单机双实例」，白露 12 楼由用户口述才纠正。故形态扩为 **[arch/dev/pid]**：
-/// dev = 机型（`ro.product.model`，见下），退化链兜底，恒非空。放 msg 末尾
-/// = 落盘行尾。**口径变更**：旧 `\[arch/pid\]` 精确尾锚 grep 改按
+/// dev = 机型（`ro.product.model`，见下）＋**来源档**，退化链兜底，恒非空。
+/// 放 msg 末尾 = 落盘行尾。**口径变更**：旧 `\[arch/pid\]` 精确尾锚 grep 改按
 /// `\[arch/[^]]*/pid\]` 或直接按 pid 段匹配（仓内 scripts/ 已清点无该锚）。
+///
+/// **BAR-273 第二批（MAIN0192 楼185 悬铃裁 A 甲）**：dev 段写成「值@来源档」，
+/// 让每条读数的来源自证、机器可判「谁可跨机采信」；**旧行无 @ 档 ⇒ 永久按
+/// unknown 处理，不跨机采信**。dev 段是**实例（装置）位标识，不是设备身份**：
+/// 它随落点与重装而变，不许当序列号用；序列号不裸存。
 static INSTANCE_TAG: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
 /// 设备位缓存（BAR-235）：整进程只解析一次（文件 IO 不在上报路径上重复做）
@@ -53,8 +58,24 @@ static DEV_TAG: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 /// 设备位覆盖口（判卷/取证用：`NA_DEVICE_TAG=Neo11` 可钉死机型名，免猜）
 const DEV_OVERRIDE_ENV: &str = "NA_DEVICE_TAG";
 
-/// 退化链第三档的短 id 落点（机型读不到的老/怪 ROM 也要两台机分得开）
-const DEV_ID_PATH: &str = "/data/data/dev.kfm.na/files/device-tag";
+/// 来源档四档（BAR-273 第二批；楼185 悬铃裁 A 甲「带来源档」＋楼186 白露
+/// 「先只留 model／fallback 两档，serial 等测出再加且须附读数」）。采信口径：
+/// model＝真读数，可跨机采信；env＝判卷手钉（NA_DEVICE_TAG），只在本轮判卷内
+/// 有效——**必须单独成档**，否则手钉值会冒充真读数，正是本件要防的误读；
+/// fallback＝持久短 id，同机恒定但**不是设备身份**；unknown＝全链失败，不采信。
+/// **serial 暂不采集**：未测出可读路径前不加档，也不裸存。
+pub const TIER_ENV: &str = "env";
+pub const TIER_MODEL: &str = "model";
+pub const TIER_FALLBACK: &str = "fallback";
+pub const TIER_UNKNOWN: &str = "unknown";
+
+/// 短 id 落点（BAR-273 第二批，楼193 悬铃更正）：**共享存储的 kfm-na-id/**——
+/// 与 kfm-na-keys/ 刻意分开，一目录一用途（楼193 原话）。放私有目录时卸载/重装
+/// 即换新值，「同机恒定」必然不成立（BAR-273 判据第二条），且是静默地变——
+/// 不报错，只让跨机读数失去可比性。**wipe 演练只许删这一个件**，不碰 usr/hot。
+const DEV_ID_PATH: &str = "/storage/emulated/0/kfm-na-id/device-tag";
+/// 旧落点（私有目录）：迁移源，迁完即删——两份各走一路比一份没有更坏。
+const DEV_ID_PATH_LEGACY: &str = "/data/data/dev.kfm.na/files/device-tag";
 
 /// 机型属性文件候选（Android 9+ 把 ro.product.* 拆进 vendor/odm；
 /// `/system/build.prop` 只留一部分——四处都试，先中先用）
@@ -124,13 +145,14 @@ pub fn sanitize_dev(raw: &str) -> String {
 }
 
 /// 设备位取源（一次性缓存）：①环境覆盖 → ②机型属性文件 → ③持久短 id → ④unknown。
-/// 任何一步 IO 失败只降档，恒返回可打印串（上报通道永不成事故）
+/// 任何一步 IO 失败只降档，恒返回可打印串（上报通道永不成事故）。
+/// **每档都带来源标记**（BAR-273 第二批）：无标记的读数无法判「谁可跨机采信」。
 fn device_dev() -> &'static str {
     DEV_TAG.get_or_init(|| {
         if let Ok(v) = std::env::var(DEV_OVERRIDE_ENV) {
             let s = sanitize_dev(&v);
             if !s.is_empty() {
-                return s;
+                return with_tier(&s, TIER_ENV);
             }
         }
         for path in PROP_FILES {
@@ -140,7 +162,7 @@ fn device_dev() -> &'static str {
             if let Some(v) = MODEL_KEYS.iter().find_map(|k| parse_prop_key(&text, k)) {
                 let s = sanitize_dev(&v);
                 if !s.is_empty() {
-                    return s;
+                    return with_tier(&s, TIER_MODEL);
                 }
             }
         }
@@ -148,20 +170,60 @@ fn device_dev() -> &'static str {
     })
 }
 
-/// 退化链第三档：私有目录持久化短 id（首启生成，两台机必然不同）。
-/// 读/写失败都不致命——写不出（只读环境/测试宿主）就返回 "unknown"
+/// 拼「值@来源档」（纯函数，A 档可判）。档名只含小写字母，与 sanitize_dev 的
+/// 白名单（字母数字／`-`／`_`）不冲突；`@` 分隔符本身不参与消毒，所以先消毒
+/// 再拼，顺序不许倒——倒着拼会把档名里的字符喂进消毒器。
+pub fn with_tier(v: &str, tier: &str) -> String {
+    format!("{v}@{tier}")
+}
+
+/// 退化链第三档：共享存储持久化短 id（首启生成，两台机必然不同）。
+/// 读/写失败都不致命——写不出（只读环境/测试宿主）就退到 unknown 档。
+/// 三条硬要求（楼185 悬铃裁 B 甲）：①落点在共享存储 ②旧私有目录的件要迁过来
+/// 且迁完删 ③写完**回读校验**，读不回不冒充成功。
 fn fallback_dev_id() -> String {
+    migrate_legacy_dev_id();
     if let Ok(existing) = std::fs::read_to_string(DEV_ID_PATH) {
         let s = sanitize_dev(&existing);
         if !s.is_empty() {
-            return s;
+            return with_tier(&s, TIER_FALLBACK);
         }
     }
     let fresh = fresh_dev_id();
-    if std::fs::write(DEV_ID_PATH, &fresh).is_err() {
-        return "unknown".to_string();
+    if let Some(dir) = std::path::Path::new(DEV_ID_PATH).parent() {
+        let _ = std::fs::create_dir_all(dir);
     }
-    fresh
+    if std::fs::write(DEV_ID_PATH, &fresh).is_err() {
+        return with_tier("unknown", TIER_UNKNOWN);
+    }
+    // 写后回读：共享存储可能被 scoped storage 挡住，写入「成功」但读不回来是
+    // 一类真实故障（不是理论风险）。读不回 = 这一档不成立，如实降 unknown。
+    match std::fs::read_to_string(DEV_ID_PATH) {
+        Ok(back) if sanitize_dev(&back) == fresh => with_tier(&fresh, TIER_FALLBACK),
+        _ => with_tier("unknown", TIER_UNKNOWN),
+    }
+}
+
+/// 旧私有目录 → 共享存储的一次性迁移。目标已在位就不覆盖（两份各走一路比
+/// 一份没有更坏），迁成功即删旧件；任何一步失败都只是「下轮再试」，不影响
+/// 当前进程的上报。
+fn migrate_legacy_dev_id() {
+    let legacy = std::path::Path::new(DEV_ID_PATH_LEGACY);
+    if !legacy.is_file() || std::path::Path::new(DEV_ID_PATH).is_file() {
+        return;
+    }
+    let Ok(text) = std::fs::read_to_string(legacy) else {
+        return;
+    };
+    if sanitize_dev(&text).is_empty() {
+        return;
+    }
+    if let Some(dir) = std::path::Path::new(DEV_ID_PATH).parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if std::fs::write(DEV_ID_PATH, text.trim()).is_ok() {
+        let _ = std::fs::remove_file(legacy);
+    }
 }
 
 /// 首启短 id：时间纳秒 + pid 混洗成 8 位十六进制（无需随机数源，跨机撞率可忽略）

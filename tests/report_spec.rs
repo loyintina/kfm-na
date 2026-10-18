@@ -25,12 +25,30 @@ fn spec_bar235_报表行_挂设备维三段() {
         !dev.is_empty(),
         "设备位恒非空（退化链兜底不许留空）: {inner}"
     );
+    // BAR-273 第二批（楼193 悬铃裁）：dev 段形态改为「值@来源档」。值仍只许
+    // 字母数字与 -/_（进 grep 面与 JSON 文本），档名进白名单——`@` 只许出现
+    // 一次，且必须是分隔符，不许出现在值里。
+    let (dev_val, dev_tier) = {
+        let mut it = dev.split('@');
+        let v = it.next().unwrap_or("");
+        let t = it.next().unwrap_or("");
+        assert!(it.next().is_none(), "来源档分隔符 @ 只许一次: {dev}");
+        (v, t)
+    };
     assert!(
-        dev.chars()
+        dev_val
+            .chars()
             .all(|c| c.is_alphanumeric() || c == '-' || c == '_'),
-        "设备位只许字母数字与 -/_（进 grep 面与 JSON 文本）: {dev}"
+        "设备位值只许字母数字与 -/_（进 grep 面与 JSON 文本）: {dev}"
     );
-    assert!(dev.chars().count() <= 12, "设备位截 12 字符上限: {dev}");
+    assert!(
+        dev_val.chars().count() <= 12,
+        "设备位值截 12 字符上限: {dev}"
+    );
+    assert!(
+        ["model", "env", "fallback", "unknown"].contains(&dev_tier),
+        "来源档必须是四档之一（model/env/fallback/unknown）: {dev}"
+    );
     assert!(
         !pid.is_empty() && pid.chars().all(|c| c.is_ascii_digit()),
         "pid 必须是数字: {pid}"

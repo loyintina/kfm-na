@@ -1269,3 +1269,116 @@ fn spec_bar273_机型读取补全六键六路() {
         "六个机型键必须真参与扫描"
     );
 }
+
+#[test]
+fn spec_bar273_第二批_来源档与共享落点() {
+    // BAR-273 第二批（MAIN0192 楼185 悬铃裁 A 甲／B 甲；楼186 白露「serial 未测
+    // 先不加档」）。四件事各一枚钉，全部扫**目标块**，不扫全文（注释里也写着
+    // 同样的字面量，扫全文会被哄过）。
+    let src = read_src("src/report.rs");
+
+    // ① 四档常量：model／env／fallback／unknown 一个不能少（env 必须单列——
+    //    判卷手钉的 tag 若与真读数同形，就是本件要防的误读）
+    for (konst, want) in [
+        ("TIER_MODEL", "\"model\""),
+        ("TIER_ENV", "\"env\""),
+        ("TIER_FALLBACK", "\"fallback\""),
+        ("TIER_UNKNOWN", "\"unknown\""),
+    ] {
+        let line = src
+            .lines()
+            .find(|l| l.contains(konst) && l.contains("pub const"))
+            .unwrap_or_else(|| panic!("{konst} 必须是 pub const"));
+        assert!(
+            line.contains(want),
+            "{konst} 的值必须是 {want}，实为 {line}"
+        );
+    }
+
+    // ② 拼接形态：值@档，且先消毒后拼（顺序倒了会把档名喂进消毒器）
+    let wt = {
+        let i = src.find("pub fn with_tier").expect("with_tier 必须在");
+        // 取到函数体闭合行（不能用第一个 '}'——格式串里就有 '}'）
+        let j = src[i..].find("\n}\n").expect("函数必须闭合");
+        &src[i..i + j]
+    };
+    assert!(
+        wt.contains("format!(\"{v}@{tier}\")"),
+        "来源档形态必须是「值@档」"
+    );
+
+    // ③ 三条取源路径都必须带档（漏一条 = 那条读数回到不可判来源的老形态）
+    let dd = {
+        let i = src.find("fn device_dev()").expect("device_dev 必须在");
+        let j = src[i..].find("\n    })\n}").expect("函数必须闭合");
+        &src[i..i + j]
+    };
+    for (need, why) in [
+        ("with_tier(&s, TIER_ENV)", "env 档（判卷手钉）"),
+        ("with_tier(&s, TIER_MODEL)", "model 档（真读数）"),
+        ("fallback_dev_id()", "fallback 档入口"),
+    ] {
+        assert!(dd.contains(need), "device_dev 必须走到 {why}");
+    }
+
+    // ④ 落点在共享存储，且不在私有目录（否则重装即换新值，「同机恒定」假成立）
+    let path_line = src
+        .lines()
+        .find(|l| l.contains("const DEV_ID_PATH:"))
+        .expect("DEV_ID_PATH 必须在");
+    assert!(
+        path_line.contains("/storage/emulated/0/"),
+        "短 id 必须落共享存储：{path_line}"
+    );
+    assert!(
+        !path_line.contains("/data/data"),
+        "短 id 落点不许回私有目录：{path_line}"
+    );
+
+    // ⑤ 写后回读：写入「成功」但读不回来是一类真故障，必须如实降 unknown
+    let fb = {
+        let i = src
+            .find("fn fallback_dev_id()")
+            .expect("fallback_dev_id 必须在");
+        let j = src[i..].find("\n    match").expect("必须带回读分支");
+        &src[i..i + j]
+    };
+    assert!(fb.contains("std::fs::write(DEV_ID_PATH"), "必须真写落点");
+    let readback = {
+        let i = src
+            .find("fn fallback_dev_id()")
+            .expect("fallback_dev_id 必须在");
+        let j = src[i..].find("\n}\n").expect("函数必须闭合");
+        &src[i..i + j]
+    };
+    assert!(
+        readback.contains("std::fs::read_to_string(DEV_ID_PATH)")
+            && readback.contains("TIER_UNKNOWN"),
+        "写完必须回读，读不回降 unknown（不冒充成功）"
+    );
+
+    // ⑥ 旧件迁移且迁完删（两份各走一路比一份没有更坏）
+    let mig = {
+        let i = src
+            .find("fn migrate_legacy_dev_id()")
+            .expect("迁移函数必须在");
+        let j = src[i..].find("\n}\n").expect("函数必须闭合");
+        &src[i..i + j]
+    };
+    assert!(mig.contains("DEV_ID_PATH_LEGACY"), "迁移必须读旧落点");
+    assert!(
+        mig.contains("remove_file(legacy)"),
+        "迁完必须删旧件，否则两份并存"
+    );
+
+    // ⑦ serial 未测 ⇒ 不采集：机型键数组体里不许出现 serial
+    let arr = {
+        let i = src.find("const MODEL_KEYS").expect("MODEL_KEYS 必须在");
+        let j = src[i..].find("];").expect("数组必须有结尾");
+        &src[i..i + j]
+    };
+    assert!(
+        !arr.contains("serial"),
+        "serial 未测出可读路径前不许进采集面（楼186 白露）"
+    );
+}
