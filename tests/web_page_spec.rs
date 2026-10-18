@@ -1227,3 +1227,45 @@ fn spec_bar275_conn报目标地址与ok语义() {
         "消费侧（drain+注入）才是执行证据"
     );
 }
+
+#[test]
+fn spec_bar273_机型读取补全六键六路() {
+    // BAR-273（MAIN0192 楼60/74 白露拍、清和裁「先修读取」）：
+    // 全库实证——只出现过两枚 8 位随机退化 id、**无一台读到机型**，说明档②（机型）
+    // 在所有设备上都没命中。根因：PROP_FILES 漏 product/system_ext 两处、
+    // 机型键漏 ro.product.{vendor,odm,system}.model 三个变体。
+    // 变异抽检：删掉 vendor 键／删 product 路径 → 本钉必红。
+    let src = read_src("src/report.rs");
+    for p in [
+        "/system/build.prop",
+        "/vendor/build.prop",
+        "/odm/etc/build.prop",
+        "/system/etc/prop.default",
+        "/product/build.prop",
+        "/system_ext/build.prop",
+    ] {
+        assert!(src.contains(p), "属性文件候选必须含 {p}");
+    }
+    // 只扫**数组体**，不扫全文——注释里也写着键名，扫全文会被注释哄过
+    // （今日第二次栽在「注释不是防线」上，故此处显式取数组体）
+    let arr = {
+        let i = src.find("const MODEL_KEYS").expect("MODEL_KEYS 必须在");
+        let j = src[i..].find("];").expect("数组必须有结尾");
+        &src[i..i + j]
+    };
+    for k in [
+        "ro.product.model",
+        "ro.product.vendor.model",
+        "ro.product.odm.model",
+        "ro.product.system.model",
+        "ro.product.device",
+        "ro.product.vendor.device",
+    ] {
+        assert!(arr.contains(k), "机型键数组体必须含 {k}");
+    }
+    // 键必须被 find_map 扫描（不是摆着不用）
+    assert!(
+        src.contains("MODEL_KEYS") && src.contains(".find_map(|k| parse_prop_key(&text, k))"),
+        "六个机型键必须真参与扫描"
+    );
+}

@@ -58,11 +58,28 @@ const DEV_ID_PATH: &str = "/data/data/dev.kfm.na/files/device-tag";
 
 /// 机型属性文件候选（Android 9+ 把 ro.product.* 拆进 vendor/odm；
 /// `/system/build.prop` 只留一部分——四处都试，先中先用）
-const PROP_FILES: [&str; 4] = [
+const PROP_FILES: [&str; 6] = [
     "/system/build.prop",
     "/vendor/build.prop",
     "/odm/etc/build.prop",
     "/system/etc/prop.default",
+    // BAR-273（2026-10-18 清和裁「先修读取」；全库实证：只出现过两枚 8 位随机
+    // 退化 id、**无一台读到机型**）：Android 10+ 常把机型拆进 product/system_ext，
+    // 旧四处漏掉这两处 ⇒ 永远落到退化第二档。
+    "/product/build.prop",
+    "/system_ext/build.prop",
+];
+
+/// 机型键候选（BAR-273）：Android 10+ 常见 `ro.product.vendor.model` /
+/// `ro.product.odm.model` / `ro.product.system.model` 四处分家；旧实现只认
+/// 前两个裸键 ⇒ 大量真机读不到机型（全库实证：0 台读到机型）。
+const MODEL_KEYS: [&str; 6] = [
+    "ro.product.model",
+    "ro.product.vendor.model",
+    "ro.product.odm.model",
+    "ro.product.system.model",
+    "ro.product.device",
+    "ro.product.vendor.device",
 ];
 
 /// 从 build.prop 文本里取机型（纯函数，A 档可判）：只认指定键；值去空白、
@@ -120,9 +137,7 @@ fn device_dev() -> &'static str {
             let Ok(text) = std::fs::read_to_string(path) else {
                 continue;
             };
-            if let Some(v) = parse_prop_key(&text, "ro.product.model")
-                .or_else(|| parse_prop_key(&text, "ro.product.device"))
-            {
+            if let Some(v) = MODEL_KEYS.iter().find_map(|k| parse_prop_key(&text, k)) {
                 let s = sanitize_dev(&v);
                 if !s.is_empty() {
                     return s;
