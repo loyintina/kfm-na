@@ -1909,6 +1909,63 @@ pub fn report_frame_spike(total_ms: u64, gen_us: u64, ras_us: u64) {
     );
 }
 
+// ---- 输入消费耗时仪器（BAR-265／NA0194 楼17-20，清和批）----
+// 白露要求：所有输入类型同一入口打点；age 与面3 RecentQueue 同口径。
+// **诚实边界（我楼19 说错、此处更正）**：winit 0.30 的 Touch／KeyEvent 不带
+// event_time（winit/src/event.rs:841 Touch 结构无 timestamp），故在我们这层
+// 拿不到「事件到达时刻」——本仪器测的是**消费耗时**（入口→返回），队列等待
+// 由面3 的 RecentQueue age 提供；两者相加才是端到端。落行同时带
+// **wall clock**（与 am_anr 对表）＋uptime（与 event_time 同基）。
+pub const INPUT_LAG_MS: u64 = 200;
+pub const INPUT_LAG_PER_HOUR: u32 = 200;
+
+/// 消费耗时是否超阈（纯函数，宿主可判卷）
+pub fn input_lag_hit(consume_ms: u64) -> bool {
+    consume_ms >= INPUT_LAG_MS
+}
+
+static INPUT_LAG_WIN_START: AtomicU64 = AtomicU64::new(0);
+static INPUT_LAG_WIN_COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// 输入滞后限流（同尖峰口径 200 行/小时；被限时每窗吭一声）
+pub fn input_lag_gate() -> bool {
+    let now = crate::report::boot_ms() as u64;
+    loop {
+        let start = INPUT_LAG_WIN_START.load(Ordering::Relaxed);
+        let count = INPUT_LAG_WIN_COUNT.load(Ordering::Relaxed);
+        let (ok, ns, nc) = frame_spike_admit(now, start, count);
+        if INPUT_LAG_WIN_START
+            .compare_exchange(start, ns, Ordering::Relaxed, Ordering::Relaxed)
+            .is_err()
+        {
+            continue;
+        }
+        INPUT_LAG_WIN_COUNT.store(nc, Ordering::Relaxed);
+        if !ok && count >= INPUT_LAG_PER_HOUR {
+            crate::report::report(
+                "input-lag",
+                &format!("throttled: 本小时已达 {INPUT_LAG_PER_HOUR} 行上限（at={now}）"),
+            );
+        }
+        return ok;
+    }
+}
+
+/// 落一行：wall clock（ms epoch）＋uptime（boot_ms）＋耗时＋类型＋位置。
+pub fn report_input_lag(consume_ms: u64, kind: &str, at: &str) {
+    let wall = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    crate::report::report(
+        "input-lag",
+        &format!(
+            "consume={consume_ms}ms wall={wall} uptime={} kind={kind} {at}（口径=消费耗时：入口→返回；队列等待见面的 RecentQueue age）",
+            crate::report::boot_ms(),
+        ),
+    );
+}
+
 pub fn note_draw(elapsed: std::time::Duration) {
     let ms = elapsed.as_millis() as u64;
     STAT_DRAW_TOTAL_MS.fetch_add(ms, Ordering::Relaxed);
