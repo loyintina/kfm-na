@@ -12,7 +12,7 @@
 | `src/ai_chat.rs` | 11 | 10 | 1 | generation |
 | `src/ai_presence.rs` | 37 | 37 | 0 | — |
 | `src/boot_mark.rs` | 11 | 11 | 0 | — |
-| `src/bootstrap.rs` | 6 | 4 | 2 | ensure_pkg_tool first_boot_install |
+| `src/bootstrap.rs` | 7 | 5 | 2 | ensure_pkg_tool first_boot_install |
 | `src/brain.rs` | 14 | 14 | 0 | — |
 | `src/brain_ep.rs` | 4 | 4 | 0 | — |
 | `src/catchup.rs` | 15 | 15 | 0 | — |
@@ -25,7 +25,7 @@
 | `src/exec_probe.rs` | 1 | 1 | 0 | — |
 | `src/fs_fetch.rs` | 18 | 18 | 0 | — |
 | `src/fs_mirror.rs` | 9 | 8 | 1 | manifest_path |
-| `src/gate.rs` | 121 | 98 | 23 | gate_router_handle dump_term_handle text_dump spawn_gate_watcher REC_FILE_CAP REC_FILE rec_output rec_resize PANIC_FILE PANIC_TRACE_FILE LOOP_STALL_FILE note_loop_beat loop_beat_age_ms note_foreground install_panic_hook note_draw note_session_death touch_take register_input_bar ALERT_RSS_COOLDOWN_MS ALERT_DEATHS_WINDOW_MS ALERT_DEATHS_COOLDOWN_MS HISTORY_EVERY_TICKS |
+| `src/gate.rs` | 128 | 105 | 23 | gate_router_handle dump_term_handle text_dump spawn_gate_watcher REC_FILE_CAP REC_FILE rec_output rec_resize PANIC_FILE PANIC_TRACE_FILE LOOP_STALL_FILE note_loop_beat loop_beat_age_ms note_foreground install_panic_hook note_draw note_session_death touch_take register_input_bar ALERT_RSS_COOLDOWN_MS ALERT_DEATHS_WINDOW_MS ALERT_DEATHS_COOLDOWN_MS HISTORY_EVERY_TICKS |
 | `src/gate_poller.rs` | 10 | 9 | 1 | http_roundtrip |
 | `src/glyph_atlas.rs` | 11 | 11 | 0 | — |
 | `src/http1.rs` | 10 | 7 | 3 | is_tick_err read_head_hook read_body_hook |
