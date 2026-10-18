@@ -1966,6 +1966,31 @@ pub fn report_input_lag(consume_ms: u64, kind: &str, at: &str) {
     );
 }
 
+/// 读自身 RSS（kB）：/proc/self/status 的 VmRSS——进程读自己，无需任何权限
+/// （NA0188 楼20 清和派：自己上报，不依赖 dumpsys／权限）。
+pub fn self_rss_kb() -> u64 {
+    let Ok(s) = std::fs::read_to_string("/proc/self/status") else {
+        return 0;
+    };
+    for line in s.lines() {
+        if let Some(rest) = line.strip_prefix("VmRSS:") {
+            return rest
+                .split_whitespace()
+                .next()
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(0);
+        }
+    }
+    0
+}
+
+/// 生命周期落盘一行（纯格式化，宿主可判卷）：事件名＋时刻三口径＋RSS。
+/// wall＝epoch ms（与 am_anr 对表）／uptime＝boot_ms（与 input event_time 同基）／
+/// rss＝VmRSS kB。字段顺序写死，便于判卷 grep。
+pub fn life_line(event: &str, wall_ms: u64, uptime_ms: u64, rss_kb: u64) -> String {
+    format!("event={event} wall={wall_ms} uptime={uptime_ms} rss={rss_kb}kB")
+}
+
 pub fn note_draw(elapsed: std::time::Duration) {
     let ms = elapsed.as_millis() as u64;
     STAT_DRAW_TOTAL_MS.fetch_add(ms, Ordering::Relaxed);

@@ -12178,7 +12178,7 @@ pub fn take_web_back_request() -> bool {
 }
 
 /// # Safety
-/// JNI 约定：由 Java 在 UI 线程调用；参数为空。**只置标志、不取任何锁**。
+/// JNI 约定：由 Java 在生命周期回调里调用。**只落一行报账，不取全局锁、不阻塞**。
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_kfm_na_MainActivity_nativeWebBackRequest(
@@ -12186,4 +12186,40 @@ pub extern "system" fn Java_dev_kfm_na_MainActivity_nativeWebBackRequest(
     _class: jni::objects::JClass<'_>,
 ) {
     WEB_BACK_REQ.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// 生命周期事件上报（NA0188 楼20 清和派）：Java 各回调传**整数码**（避免
+/// 字符串跨 JNI 的转换与分配）：0=onCreate 1=onStart 2=onResume 3=onPause
+/// 4=onStop 5=onDestroy，其它=unknown。
+/// # Safety
+/// JNI 约定：UI 线程调用。只落一行报账，不取全局锁、不阻塞。
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_kfm_na_MainActivity_nativeLifeEvent(
+    _env: jni::EnvUnowned<'_>,
+    _class: jni::objects::JClass<'_>,
+    code: jni::sys::jint,
+) {
+    let event = match code {
+        0 => "onCreate",
+        1 => "onStart",
+        2 => "onResume",
+        3 => "onPause",
+        4 => "onStop",
+        5 => "onDestroy",
+        _ => "unknown",
+    };
+    let wall = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    crate::report::report(
+        "life",
+        &crate::gate::life_line(
+            event,
+            wall,
+            crate::report::boot_ms() as u64,
+            crate::gate::self_rss_kb(),
+        ),
+    );
 }

@@ -938,3 +938,57 @@ fn spec_bar265_输入消费耗时打点四件() {
         "落行必须过限流"
     );
 }
+
+#[test]
+fn spec_bar265_生命周期落盘六回调与字段() {
+    // NA0188 楼20（清和派）：生命周期落盘——事件＋时刻三口径＋RSS，**自己上报
+    // 不依赖权限**（读 /proc/self/status 的 VmRSS，进程读自己）。
+    // 变异抽检：抹掉 rss 字段→红；删一个回调上报→红；JNI 体内取锁→红。
+    use kfm_na::gate::{life_line, self_rss_kb};
+    let line = life_line("onPause", 1760000000000, 123456, 412345);
+    for f in [
+        "event=onPause",
+        "wall=1760000000000",
+        "uptime=123456",
+        "rss=412345kB",
+    ] {
+        assert!(line.contains(f), "落盘行必须含字段 {f}");
+    }
+    // 自读 RSS：Linux 上 /proc/self/status 必有 VmRSS（本进程非零）
+    let rss = self_rss_kb();
+    assert!(rss > 0, "VmRSS 必须读得到（自己上报的前提）");
+
+    // Java：六个生命周期回调都要上报（整数码：0=onCreate…5=onDestroy）
+    let java = read_src("android/java/dev/kfm/na/MainActivity.java");
+    for (code, ev) in [
+        (0, "onCreate"),
+        (1, "onStart"),
+        (2, "onResume"),
+        (3, "onPause"),
+        (4, "onStop"),
+        (5, "onDestroy"),
+    ] {
+        let want = format!("lifeLog({code}) /* {ev} */;");
+        assert!(java.contains(&want), "{ev} 必须上报一行生命周期账");
+        // onResume 只许一处定义（既有回调与新增上报必须合并，不许重载/重复）
+        assert_eq!(
+            java.matches("void onResume()").count(),
+            1,
+            "onResume 只许定义一次（重复定义＝javac 直接报错）"
+        );
+    }
+    assert!(
+        java.contains("private static native void nativeLifeEvent(int code);"),
+        "上报必须走 JNI 到 Rust（整数码，免字符串跨 JNI 分配）"
+    );
+    // JNI 体：只落一行，不许在 UI 线程上取全局锁
+    let app = read_src("src/android_app.rs");
+    let body = fn_body(
+        &app,
+        "pub extern \"system\" fn Java_dev_kfm_na_MainActivity_nativeLifeEvent(",
+    );
+    assert!(body.contains("report("), "JNI 体必须落报账");
+    for bad in ["ai_presence_handle", "Mutex", "lock()"] {
+        assert!(!body.contains(bad), "生命周期上报不许在 UI 线程取 {bad}");
+    }
+}

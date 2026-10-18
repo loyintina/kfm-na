@@ -53,6 +53,7 @@ public class MainActivity extends NativeActivity {
         // 探针延迟 3s 发：onCreate 时 Rust 侧 report flusher 可能还没起
         // （enqueue 直接丢），delay 后通道必然就绪
         ime.postDelayed(() -> KfmImeView.imeLog("IME 占位已叠加, focus=" + ime.isFocused()), 3000);
+        lifeLog(0) /* onCreate */;
     }
 
     @Override
@@ -194,21 +195,42 @@ public class MainActivity extends NativeActivity {
         }
     }
 
+    /** 生命周期落盘（NA0188 楼20 清和派）：四回调各一行，自己上报不依赖权限。 */
+    private void lifeLog(int code) {
+        try {
+            nativeLifeEvent(code);
+        } catch (Throwable t) {
+            webStatus("life-native-fail code=" + code + " " + t);
+        }
+    }
+
+    /** 0=onCreate 1=onStart 2=onResume 3=onPause 4=onStop 5=onDestroy */
+    private static native void nativeLifeEvent(int code);
+
+    @Override
+    public void onStart() {
+        super.onStart();
+        lifeLog(1) /* onStart */;
+    }
+
     @Override
     public void onPause() {
         // 判据丙：走 onPause→onStop→onDestroy 不许留残窗（WindowLeaked 的根）
+        lifeLog(3) /* onPause */;
         webPageTearDown("pause");
         super.onPause();
     }
 
     @Override
     public void onStop() {
+        lifeLog(4) /* onStop */;
         webPageTearDown("stop");
         super.onStop();
     }
 
     @Override
     public void onDestroy() {
+        lifeLog(5) /* onDestroy */;
         webPageTearDown("destroy");
         super.onDestroy();
     }
@@ -496,5 +518,6 @@ public class MainActivity extends NativeActivity {
     protected void onResume() {
         super.onResume();
         reapplyImmersive();
+        lifeLog(2) /* onResume */;
     }
 }
