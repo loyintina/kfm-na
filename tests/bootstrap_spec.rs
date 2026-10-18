@@ -19,6 +19,11 @@ fn fixture_zip(with_symlinks: bool) -> Vec<u8> {
     std::io::Write::write_all(&mut w, b"fake-apt-method").unwrap();
     w.start_file("etc/motd", opt).unwrap();
     std::io::Write::write_all(&mut w, b"welcome").unwrap();
+    // MAIN0192 判据收紧：健康 prefix 必带这两件（8024 闸门与 kfm-sshd 两条对外腿）
+    w.start_file("bin/sshd", opt).unwrap();
+    std::io::Write::write_all(&mut w, b"fake-sshd").unwrap();
+    w.start_file("etc/ssh/kfm-sshd.conf", opt).unwrap();
+    std::io::Write::write_all(&mut w, b"Port 8024\n").unwrap();
     if with_symlinks {
         // 真 bootstrap 的 SYMLINKS.txt 格式：target←linkpath(U+2190 分隔)
         w.start_file("SYMLINKS.txt", opt).unwrap();
@@ -155,9 +160,19 @@ fn spec_bar074_幂等闸谓词_三态() {
         // BAR-230 链接判据：健康形态还需 bin/sh 链接在且目标可解析
         std::os::unix::fs::symlink("tool", prefix.join("bin/sh")).unwrap();
     }
+    // MAIN0192（2026-10-18）判据收紧：健康形态还须 bin/sshd 与
+    // etc/ssh/kfm-sshd.conf 同时在位——缺任一＝不算就绪（原钉构造的「健康」
+    // 只到 x 位＋链接，正是那次判据太宽的来源）
+    assert!(
+        !kfm_na::bootstrap::prefix_ready(&prefix),
+        "缺 bin/sshd 与 conf 不许判就绪（收紧后的判据）"
+    );
+    fs::create_dir_all(prefix.join("etc/ssh")).unwrap();
+    fs::write(prefix.join("bin/sshd"), b"#!/x").unwrap();
+    fs::write(prefix.join("etc/ssh/kfm-sshd.conf"), b"Port 8024\n").unwrap();
     assert!(
         kfm_na::bootstrap::prefix_ready(&prefix),
-        "bin/ 有 x 位且 bin/sh 链接健康=true"
+        "x 位＋sh 链接＋bin/sshd＋conf 四齐 = true"
     );
 }
 

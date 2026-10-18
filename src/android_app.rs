@@ -4866,16 +4866,19 @@ impl App {
             // 起；prefix 不可用时 ssh 娃臂走永久错误分类自挂起，数据/反连
             // 照通。（旧闸「prefix 未装不启动」是 ssh 娃时代遗留——它会把
             // QUIC 腿一起杀，坏 prefix 手机直接断数据面。）
-            if !crate::bootstrap::prefix_ready(&prefix) {
+            let pst = crate::bootstrap::prefix_state(&prefix);
+            if pst != crate::bootstrap::PrefixState::Ready {
                 crate::report::report(
                     "tunnel",
-                    "L3 prefix 不可用——ssh 娃臂将挂起（BAR-229 错误分类），QUIC 腿照常",
+                    &format!(
+                        "L3 prefix 不可用（{pst:?}）——ssh 娃臂将挂起（BAR-229 错误分类），QUIC 腿照常"
+                    ),
                 );
                 // BAR-230：看门狗同样不启动——哨兵不过 = prefix 环境死，
                 // spawn 必永久失败；BAR-229 自愈闸会在下次启动修复接管。
                 crate::report::report(
                     "sshd",
-                    "看门狗不启动（prefix 不可用，BAR-229 自愈后下次启动接管）",
+                    &format!("看门狗不启动（prefix 分档={pst:?}，BAR-229 自愈后下次启动接管）"),
                 );
             } else {
                 // BAR-230：sshd 看门狗（与 nasup 同族）——强停/重启带走

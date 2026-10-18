@@ -82,6 +82,11 @@ mod bootstrap_fixture {
         let opt = zip::write::SimpleFileOptions::default();
         w.start_file("bin/dash", opt).unwrap();
         std::io::Write::write_all(&mut w, b"fake-dash-binary").unwrap();
+        // MAIN0192 判据收紧：健康 prefix 必带 bin/sshd 与 etc/ssh/kfm-sshd.conf
+        w.start_file("bin/sshd", opt).unwrap();
+        std::io::Write::write_all(&mut w, b"fake-sshd").unwrap();
+        w.start_file("etc/ssh/kfm-sshd.conf", opt).unwrap();
+        std::io::Write::write_all(&mut w, b"Port 8024\n").unwrap();
         w.start_file("etc/motd", opt).unwrap();
         std::io::Write::write_all(&mut w, b"welcome").unwrap();
         if with_symlinks {

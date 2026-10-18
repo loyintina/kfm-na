@@ -33,27 +33,73 @@ pub enum InstallStatus {
 /// 闸门/deploy 全瘫）。哨兵取「bin/ 任一 x 位」而非点名 bash：判据
 /// 通用（bin/ 是 bootstrap 必带目录），不绑死件名。
 pub fn prefix_ready(prefix: &Path) -> bool {
+    matches!(prefix_state(prefix), PrefixState::Ready)
+}
+
+/// prefix 体检分档（2026-10-18 MAIN0192 楼4/6：原判据「目录非空＋bin 任一 x 位」
+/// 太宽——bin/sshd 缺也能判就绪，keeper 一启动就 ENOENT 永久挂起，报一行了事，
+/// 现场只能靠人猜。分档后报账直接写是哪一档，取证不用再猜）。
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum PrefixState {
+    /// 环境可用：bin 有 x 位文件、bin/sh 链接健康、**bin/sshd 与
+    /// etc/ssh/kfm-sshd.conf 同时在位**（后两项＝本次收紧的判据：
+    /// 8024 闸门与 kfm-sshd 是这套环境的对外两条腿，缺一个就不算就绪）
+    Ready,
+    /// prefix 目录本身不存在
+    NoDir,
+    /// prefix 目录是空的
+    Empty,
+    /// bin/ 目录读不到
+    NoBin,
+    /// bin/ 下没有一个可执行位文件（换机克隆丢 owner x 位，BAR-229）
+    NoExec,
+    /// bin/sh 链接断或缺失（BAR-230 三态里的非健康两种）
+    ShBroken,
+    /// **bin/sshd 不在位**（本次新增档：8024 闸门起不来的直接原因）
+    NoSshdBin,
+    /// **etc/ssh/kfm-sshd.conf 不在位**（spawn 必失败，BAR-259 会自生成，
+    /// 但自生成失败时也该一眼看到是这一档）
+    NoSshdConf,
+}
+
+/// prefix 分档体检（纯函数式的目录检查，可判卷）
+pub fn prefix_state(prefix: &Path) -> PrefixState {
     if !prefix.is_dir() {
-        return false;
+        return PrefixState::NoDir;
     }
-    let mut entries = match fs::read_dir(prefix) {
-        Ok(it) => it,
-        Err(_) => return false,
+    let Ok(mut entries) = fs::read_dir(prefix) else {
+        return PrefixState::NoBin;
     };
     if entries.next().is_none() {
-        return false;
+        return PrefixState::Empty;
     }
     let Ok(bin) = fs::read_dir(prefix.join("bin")) else {
-        return false;
+        return PrefixState::NoBin;
     };
-    bin.filter_map(|e| e.ok()).any(|e| {
+    let any_exec = bin.filter_map(|e| e.ok()).any(|e| {
         fs::metadata(e.path())
             .map(|m| m.permissions().mode() & 0o111 != 0)
             .unwrap_or(false)
-    }) // BAR-230：符号链接判据——克隆搬运整类丢符号链接（承影 MAIN0115
-       // 实证 find -type l = 0，login 脚本的 shebang 指向死 sh 即此形
-       // 态），只堵 x 位漏这一半。三态分档见 sh_link_state。
-        && sh_link_state(prefix) == ShLink::Healthy
+    });
+    if !any_exec {
+        return PrefixState::NoExec;
+    }
+    // BAR-230：符号链接判据——克隆搬运整类丢符号链接，只堵 x 位漏这一半
+    if sh_link_state(prefix) != ShLink::Healthy {
+        return PrefixState::ShBroken;
+    }
+    if !prefix.join("bin").join("sshd").exists() {
+        return PrefixState::NoSshdBin;
+    }
+    if !prefix
+        .join("etc")
+        .join("ssh")
+        .join("kfm-sshd.conf")
+        .exists()
+    {
+        return PrefixState::NoSshdConf;
+    }
+    PrefixState::Ready
 }
 
 /// bin/sh 链接三态（BAR-230，编址照 kfmv4 旧路径存在性三分类——小满

@@ -992,3 +992,70 @@ fn spec_bar265_生命周期落盘六回调与字段() {
         assert!(!body.contains(bad), "生命周期上报不许在 UI 线程取 {bad}");
     }
 }
+
+#[test]
+fn spec_bar265_prefix分档体检() {
+    // MAIN0192 楼4/6（观澜赞成即落）：原 prefix_ready 只查「目录非空＋bin 任一
+    // x 位」，bin/sshd 缺也能判就绪 ⇒ keeper 一启动就 ENOENT 永久挂起，现场
+    // 只能靠人猜。收紧为「bin/sshd 与 etc/ssh/kfm-sshd.conf 同时在位」，并把
+    // 失败分七档报账。
+    // 变异抽检：把 sshd/conf 两项判据撤掉 → 本钉必红。
+    use kfm_na::bootstrap::{PrefixState, prefix_ready, prefix_state};
+    let root = std::env::temp_dir().join(format!("kfm-prefix-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+
+    // 档一：目录不存在
+    assert_eq!(prefix_state(&root), PrefixState::NoDir);
+    assert!(!prefix_ready(&root));
+
+    // 档二：空目录
+    std::fs::create_dir_all(&root).unwrap();
+    assert_eq!(prefix_state(&root), PrefixState::Empty);
+
+    // 档三：bin 缺失
+    std::fs::create_dir_all(root.join("etc/ssh")).unwrap();
+    assert_eq!(prefix_state(&root), PrefixState::NoBin);
+
+    // 档四：bin 在但无可执行位
+    std::fs::create_dir_all(root.join("bin")).unwrap();
+    std::fs::write(root.join("bin/bash"), b"x").unwrap();
+    assert_eq!(prefix_state(&root), PrefixState::NoExec);
+
+    // 档五：x 位有了，但 bin/sh 是**悬挂软链**（BAR-230 克隆丢目标那形态）
+    use std::os::unix::fs::PermissionsExt;
+    let mut perms = std::fs::metadata(root.join("bin/bash"))
+        .unwrap()
+        .permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(root.join("bin/bash"), perms).unwrap();
+    std::os::unix::fs::symlink("/nonexistent/sh", root.join("bin/sh")).unwrap();
+    assert_eq!(
+        prefix_state(&root),
+        PrefixState::ShBroken,
+        "悬挂 sh 链接必须判断"
+    );
+
+    // 档六：换成健康软链 → 落到「sshd 缺」
+    let _ = std::fs::remove_file(root.join("bin/sh"));
+    std::os::unix::fs::symlink("/bin/sh", root.join("bin/sh")).unwrap();
+    assert_eq!(
+        prefix_state(&root),
+        PrefixState::NoSshdBin,
+        "本次收紧的核心：bin/sshd 缺不算就绪"
+    );
+
+    // 档七：sshd 在位但 conf 缺
+    std::fs::write(root.join("bin/sshd"), b"x").unwrap();
+    assert_eq!(
+        prefix_state(&root),
+        PrefixState::NoSshdConf,
+        "缺 kfm-sshd.conf 也不算就绪"
+    );
+
+    // 就绪档
+    std::fs::write(root.join("etc/ssh/kfm-sshd.conf"), b"Port 8024\n").unwrap();
+    assert_eq!(prefix_state(&root), PrefixState::Ready);
+    assert!(prefix_ready(&root));
+
+    let _ = std::fs::remove_dir_all(&root);
+}
