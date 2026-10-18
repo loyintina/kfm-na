@@ -12,7 +12,7 @@
 | `src/ai_chat.rs` | 11 | 10 | 1 | generation |
 | `src/ai_presence.rs` | 37 | 37 | 0 | — |
 | `src/boot_mark.rs` | 11 | 11 | 0 | — |
-| `src/bootstrap.rs` | 7 | 5 | 2 | ensure_pkg_tool first_boot_install |
+| `src/bootstrap.rs` | 16 | 14 | 2 | ensure_pkg_tool first_boot_install |
 | `src/brain.rs` | 14 | 14 | 0 | — |
 | `src/brain_ep.rs` | 4 | 4 | 0 | — |
 | `src/catchup.rs` | 15 | 15 | 0 | — |

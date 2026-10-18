@@ -188,10 +188,18 @@ pub fn asset_has_sshd(zip_bytes: &[u8]) -> bool {
 /// 源目录＝共享存储固定落点（na 有 MANAGE_EXTERNAL_STORAGE，读得到；
 /// 跨 uid 只有这一个共同面）。
 pub const KEY_SRC_DIR: &str = "/storage/emulated/0/kfm-na-keys";
-/// 回灌清单：（文件名，目标权限）
-pub const RESTORE_KEYS: [(&str, u32); 2] = [("na_authorized_keys", 0o600), ("id_ed25519", 0o600)];
+/// 默认回灌清单：**只有公钥清单一件**（MAIN0192 楼54/55：11 机需求是「服务器连进来」
+/// ⇒ 只需公钥；私钥是出向用的客户端钥匙，默认不落共享存储——今天下午刚花一轮防
+/// 私钥上公网，不能为修 prefix 又摊出去）。
+pub const RESTORE_KEYS: [(&str, u32); 1] = [("na_authorized_keys", 0o600)];
 
-/// 测试夹具：造两份最小 zip——含 `bin/sshd` 与不含（宿主可判卷；不进生产路径）
+/// 私钥**显式开关**（一次性动作）：源目录里放这个标记文件才回灌私钥。
+/// 存在即视为「有人明确决定这次要做」，并落两行账留痕。
+pub const PRIVATE_KEY_ALLOW_MARK: &str = "ALLOW_PRIVATE_KEY";
+/// 私钥件名（仅在显式开关在位时回灌）
+pub const PRIVATE_KEY_FILE: &str = "id_ed25519";
+
+/// 测试夹具：含 `bin/sshd` 的最小 zip（宿主可判卷，不进生产路径）
 pub fn test_fixture_zip_with_sshd() -> Vec<u8> {
     let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
     let opt = zip::write::SimpleFileOptions::default();
@@ -209,12 +217,23 @@ pub fn test_fixture_zip_without_sshd() -> Vec<u8> {
     w.finish().unwrap().into_inner()
 }
 
+/// 私钥是否被显式放行（标记文件在位）
+pub fn private_key_allowed(src_dir: &Path) -> bool {
+    src_dir.join(PRIVATE_KEY_ALLOW_MARK).is_file()
+}
+
 /// 从源目录把密钥搬进 `prefix/etc/ssh`（幂等覆盖）。返回每件的搬运结果。
+/// **默认只搬公钥清单**；私钥仅在显式开关在位时搬（见 private_key_allowed）。
 /// 缺件不报错（不阻塞）——调用方按返回结果落账即可。
 pub fn restore_keys_from(src_dir: &Path, prefix: &Path) -> Vec<(String, bool)> {
     let dst_dir = prefix.join("etc").join("ssh");
+    let allow_priv = private_key_allowed(src_dir);
+    let mut plan: Vec<(&str, u32)> = RESTORE_KEYS.to_vec();
+    if allow_priv {
+        plan.push((PRIVATE_KEY_FILE, 0o600));
+    }
     let mut out = Vec::new();
-    for (name, mode) in RESTORE_KEYS {
+    for (name, mode) in plan {
         let src = src_dir.join(name);
         let ok = if src.is_file() {
             fs::create_dir_all(&dst_dir).is_ok() && fs::copy(&src, dst_dir.join(name)).is_ok() && {
@@ -476,13 +495,29 @@ mod android_shell {
                         &format!("L3: second-stage 异常: {other:?}(环境在,下轮重启自愈)"),
                     ),
                 }
-                // BAR-272（MAIN0192 楼41/43）：装完即从共享存储回灌密钥。
-                // 白露按代码改正：wipe 丢的是**公钥清单**（host key 由 sshd 首启
-                // 自生成），故回灌不阻塞、缺件只落账——不备也能起 gate，只是探针
-                // 钥匙会被拒。
-                for (name, ok) in
-                    super::restore_keys_from(std::path::Path::new(super::KEY_SRC_DIR), &prefix)
-                {
+                // BAR-272（MAIN0192 楼54/55 白露/清和裁）：装完从共享存储回灌密钥。
+                // **默认只搬公钥清单**（11 机需求是「服务器连进来」）；出向私钥
+                // 仅在显式开关（源目录放 ALLOW_PRIVATE_KEY）在位时搬——留两行账。
+                let src_dir = std::path::Path::new(super::KEY_SRC_DIR);
+                let allow_priv = super::private_key_allowed(src_dir);
+                crate::report::report_sync(
+                    "boot",
+                    &format!(
+                        "L3: 密钥回灌清单＝{}；私钥开关={}（源={}）",
+                        if allow_priv {
+                            "na_authorized_keys＋id_ed25519"
+                        } else {
+                            "na_authorized_keys（私钥默认不落）"
+                        },
+                        if allow_priv {
+                            format!("显式开启（{} 在位）", super::PRIVATE_KEY_ALLOW_MARK)
+                        } else {
+                            "关".to_owned()
+                        },
+                        super::KEY_SRC_DIR
+                    ),
+                );
+                for (name, ok) in super::restore_keys_from(src_dir, &prefix) {
                     crate::report::report_sync(
                         "boot",
                         &format!(
@@ -490,7 +525,7 @@ mod android_shell {
                             if ok {
                                 "成功"
                             } else {
-                                "未备（探针钥匙将被拒，不阻塞）"
+                                "未备（不阻塞）"
                             },
                             super::KEY_SRC_DIR
                         ),

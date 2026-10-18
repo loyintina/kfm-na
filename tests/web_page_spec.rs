@@ -1066,12 +1066,20 @@ fn spec_bar272_wipe前置与密钥回灌() {
     // ①wipe 前置＝资产内 bin/sshd 存在（旧资产永装不出 sshd ⇒ 不加这条会每启 wipe）；
     // ②wipe 后从共享存储自动回灌密钥（丢的是公钥清单，host key 自生成 ⇒ 不阻塞）。
     // 变异抽检：把 wipe 前置撤掉→红；把「不含 sshd 也 wipe」→红；回灌漏权限→红。
-    use kfm_na::bootstrap::{KEY_SRC_DIR, RESTORE_KEYS, asset_has_sshd, restore_keys_from};
+    use kfm_na::bootstrap::{
+        KEY_SRC_DIR, PRIVATE_KEY_ALLOW_MARK, PRIVATE_KEY_FILE, RESTORE_KEYS, asset_has_sshd,
+        private_key_allowed, restore_keys_from,
+    };
+    // 开关/件名是契约字面量（生产用它们拼路径，考题必须钉住字面）
+    assert_eq!(PRIVATE_KEY_ALLOW_MARK, "ALLOW_PRIVATE_KEY");
+    assert_eq!(PRIVATE_KEY_FILE, "id_ed25519");
     assert_eq!(
         KEY_SRC_DIR, "/storage/emulated/0/kfm-na-keys",
         "密钥源目录必须是共享存储固定落点（跨 uid 唯一共同面）"
     );
-    assert_eq!(RESTORE_KEYS.len(), 2, "回灌清单＝公钥清单＋出向私钥两件");
+    // 判据一（MAIN0192 楼55 白露拍）：默认清单**只剩公钥一件**——私钥不得默认落共享存储
+    assert_eq!(RESTORE_KEYS.len(), 1, "默认回灌清单只许公钥一件");
+    assert_eq!(RESTORE_KEYS[0].0, "na_authorized_keys");
     assert!(
         RESTORE_KEYS.iter().all(|(_, m)| *m == 0o600),
         "回灌权限必须 600"
@@ -1112,6 +1120,31 @@ fn spec_bar272_wipe前置与密钥回灌() {
     assert_eq!(mode, 0o600, "回灌后权限必须 600");
     let third = restore_keys_from(&src, &prefix); // 幂等
     assert!(third.iter().any(|(n, ok)| n == "na_authorized_keys" && *ok));
+
+    // 判据三：默认路径下源里即便有私钥，也不搬、不报错、不落盘
+    std::fs::write(src.join(PRIVATE_KEY_FILE), b"PRIVATE-KEY-TEST").unwrap();
+    let dflt = restore_keys_from(&src, &prefix);
+    assert!(
+        dflt.iter().all(|(n, _)| n != "id_ed25519"),
+        "私钥默认不许进回灌清单"
+    );
+    assert!(
+        !prefix.join("etc/ssh/id_ed25519").exists(),
+        "默认路径下私钥不许落盘"
+    );
+    // 判据二：显式开关在位才搬私钥，且开关必须落一行账（源码锚）
+    assert!(!private_key_allowed(&src), "默认不许放行私钥");
+    std::fs::write(src.join(PRIVATE_KEY_ALLOW_MARK), b"1").unwrap();
+    assert!(private_key_allowed(&src), "标记在位时必须放行");
+    let on = restore_keys_from(&src, &prefix);
+    assert!(
+        on.iter().any(|(n, ok)| n == PRIVATE_KEY_FILE && *ok),
+        "显式开关在位时必须搬私钥"
+    );
+    assert!(
+        read_src("src/bootstrap.rs").contains("私钥开关="),
+        "开关必须落一行账（显式一次性动作留痕）"
+    );
     let _ = std::fs::remove_dir_all(&tmp);
 
     // 源码锚：wipe 前置必须真接线（资产不含 sshd 时 return，不进 wipe）
