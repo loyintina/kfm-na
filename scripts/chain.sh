@@ -127,7 +127,48 @@ rm -rf build/java-check && mkdir -p build/java-check
 rm -rf build/java-check
 
 echo "=== [chain 10/13] cargo test ==="
-cargo test --workspace || { echo "❌ 测试不过"; exit 1; }
+# ---- NA0190（2026-10-18 清和裁）两件：失败落日志 + 计时窗类局部串行 ----
+# 背景：na-server 的 live_spec／bar171_spec 在并发抢时下会误红（实测两例：
+# 链内 5s 级红、单跑 0.2s 全绿，慢 20~24 倍）。处置：
+#   ①**只让计时窗类进串行档**：整包 na-server 用 --test-threads=1 跑（就这两个
+#     target 在这个 crate 里），其余照旧并行——全链串行要 +7min，局部约 +十几秒；
+#   ②**失败落完整输出**：落 logs/chain-fail-<时刻>.log，只取该测试阶段的
+#     「失败用例名＋栈＋前后 20 行」，终端打一行指路（不刷屏）。
+# 判据（清和写死）：三条落地后同样负载连跑三轮零红；若局部串行后同类仍红，
+# 那不是并发问题=真缺陷，立刻回头按真缺陷查，不许拿「又抖了」搪塞。
+CHAIN_FAIL_DIR="logs"
+mkdir -p "$CHAIN_FAIL_DIR"
+chain_test_log="/tmp/kfm-chain-test-$$.log"
+_tail_fail() {
+    # $1=阶段名；其余=命令。失败时落片段日志并返回 1。
+    local label="$1"; shift
+    if "$@" >"$chain_test_log" 2>&1; then
+        return 0
+    fi
+    local ts out
+    ts=$(date +%Y%m%d-%H%M%S)
+    out="$CHAIN_FAIL_DIR/chain-fail-$ts.log"
+    {
+        echo "# chain 测试阶段失败｜$label｜$ts"
+        echo "# 命令：$*"
+        echo "# 只落失败用例名＋栈＋命中行前后 20 行（NA0190 清和批）"
+        grep -n -E '^---- .* stdout ----|^failures:$|^thread .* panicked' "$chain_test_log" \
+            | head -20 | while IFS=: read -r ln rest; do
+                local st en
+                st=$(( ln > 20 ? ln - 20 : 1 )); en=$(( ln + 20 ))
+                echo "----- 命中第 $ln 行：$rest"
+                sed -n "${st},${en}p" "$chain_test_log"
+            done
+        echo "----- 末尾 20 行"
+        tail -n 20 "$chain_test_log"
+    } >"$out"
+    echo "❌ 测试不过（$label）——失败片段：$out"
+    return 1
+}
+_tail_fail "na-server 串行档（计时窗类：live_spec／bar171_spec，--test-threads=1）" \
+    cargo test -p na-server -- --test-threads=1 || { exit 1; }
+_tail_fail "全工作区并行（--exclude na-server）" \
+    cargo test --workspace --exclude na-server || { exit 1; }
 
 echo "=== [chain 11/13] overlay 打包核考题（L2,fixture 假 deb) ==="
 # 2026-08-22 第 8 步：overlay-pack 是纯 shell 变换，cargo 看不见——

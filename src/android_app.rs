@@ -1036,6 +1036,33 @@ fn assemble_brain(
     }
 }
 
+/// 输入消费耗时探针（BAR-265 面1）：RAII——入口建、Drop 结账，早退全覆盖。
+/// 只在超阈且过限流时落一行；口径与墙钟/uptime 字段见 gate::report_input_lag。
+struct LagGuard {
+    t0: std::time::Instant,
+    kind: &'static str,
+    at: String,
+}
+
+impl LagGuard {
+    fn new(kind: &'static str, at: String) -> Self {
+        Self {
+            t0: std::time::Instant::now(),
+            kind,
+            at,
+        }
+    }
+}
+
+impl Drop for LagGuard {
+    fn drop(&mut self) {
+        let lag = self.t0.elapsed().as_millis() as u64;
+        if crate::gate::input_lag_hit(lag) && crate::gate::input_lag_gate() {
+            crate::gate::report_input_lag(lag, self.kind, &self.at);
+        }
+    }
+}
+
 impl App {
     /// 当前输入栏带高（textarea 随行数长高；栏未装 = 单行默认）。
     /// BAR-197：行距吃运行期 line_step(实例格高)——与渲染同一份 step
@@ -1325,6 +1352,19 @@ impl App {
     }
 
     fn handle_touch(&mut self, id: u64, x: f64, y: f64, phase: TouchPhase) {
+        // BAR-265 面1（NA0194 楼17-20）：输入消费耗时打点。**用 RAII guard**——
+        // 本函数有大量早退路径，尾部结账会漏记；guard 在 Drop 时结账，所有
+        // return 都覆盖。口径＝消费耗时（入口→返回）；事件到达时刻 winit 不提供
+        // （Touch 无 timestamp），队列等待看面3 的 RecentQueue age。
+        let _lag = LagGuard::new(
+            match phase {
+                TouchPhase::Started => "touch.down",
+                TouchPhase::Moved => "touch.move",
+                TouchPhase::Ended => "touch.up",
+                TouchPhase::Cancelled => "touch.cancel",
+            },
+            format!("x={x:.0} y={y:.0}"),
+        );
         if !TERMINAL_MODE {
             return;
         }
@@ -7949,6 +7989,15 @@ impl App {
 
     /// 键盘事件 → 终端输入字节（尖刺极简映射，IME 见文件头留白）
     fn handle_key(&mut self, event: &winit::event::KeyEvent) {
+        // BAR-265 面1（楼18：覆盖所有输入类型）——按键同入口同口径打点
+        let _lag = LagGuard::new(
+            if event.state == ElementState::Pressed {
+                "key.down"
+            } else {
+                "key.up"
+            },
+            format!("key={:?}", event.logical_key),
+        );
         if event.state != ElementState::Pressed {
             return;
         }
@@ -10067,8 +10116,8 @@ impl App {
         // 故本行能定「算力段尖峰」；若 present 段才是凶手，会表现为「整帧
         // 慢但无 spike 行」，届时另加 present 起点。
         let seg_total_us = gen_us + gen2_us + ras_us;
-        if crate::gate::frame_spike_hit(seg_total_us / 1000) {
-            crate::gate::report_frame_spike(seg_total_us / 1000, gen_us + gen2_us, ras_us, 0, 0);
+        if crate::gate::frame_spike_hit(seg_total_us / 1000) && crate::gate::frame_spike_gate() {
+            crate::gate::report_frame_spike(seg_total_us / 1000, gen_us + gen2_us, ras_us);
         }
         crate::gles_present::STAGE_GEN_US
             .fetch_add(gen_us + gen2_us, std::sync::atomic::Ordering::Relaxed);

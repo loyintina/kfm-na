@@ -859,17 +859,82 @@ fn spec_bar265_尖峰落盘阈值与分项() {
     assert!(frame_spike_hit(500), "500ms 恰达即报");
     assert!(frame_spike_hit(999), "999ms 报");
     assert!(frame_spike_hit(60000), "整分钟级更报");
-    // 落盘行必须带时刻与四段分项（事后取证需要定位到段）
+    // 落盘行必须带时刻与**真有的**分项：口径＝gen+ras 两段（upload／draw 在
+    // present 段取不到真值，不许假填 0 —— NA0194 楼7 清和点名的一处）
     let gate = read_src("src/gate.rs");
     let body = fn_body(&gate, "pub fn report_frame_spike(");
-    for f in ["total=", "at=", "gen=", "ras=", "upload=", "draw="] {
+    for f in ["total=", "at=", "gen=", "ras="] {
         assert!(body.contains(f), "尖峰行必须含字段 {f}");
     }
+    assert!(
+        body.contains("不含 present"),
+        "落盘行必须自报口径（否则下一个人会以为 total 是整帧）"
+    );
+    for fake in ["upload=", "draw="] {
+        assert!(
+            !body.contains(fake),
+            "不许再出现假分项 {fake}（传 0＝名存实亡）"
+        );
+    }
+    // 限流：200 行/小时（清和批准时定的，第一版漏了）
+    use kfm_na::gate::{FRAME_SPIKE_PER_HOUR, FRAME_SPIKE_WINDOW_MS, frame_spike_admit};
+    assert_eq!(FRAME_SPIKE_PER_HOUR, 200, "限流上限必须 200 行/小时");
+    assert_eq!(FRAME_SPIKE_WINDOW_MS, 3_600_000, "窗长必须 1 小时");
+    // 真值表：首帧放行建窗；窗内到顶拒；跨窗重置
+    let (ok, st, c) = frame_spike_admit(1000, 0, 0);
+    assert!(ok && st == 1000 && c == 1, "首帧放行并建窗");
+    let (ok, _, c) = frame_spike_admit(1500, 1000, 199);
+    assert!(ok && c == 200, "第 200 行放行");
+    let (ok, _, c) = frame_spike_admit(2000, 1000, 200);
+    assert!(!ok && c == 200, "第 201 行拒");
+    let (ok, st2, c2) = frame_spike_admit(3_602_000, 1000, 200);
+    assert!(ok && st2 == 3_602_000 && c2 == 1, "跨窗重置后放行");
     // 调用点必须真接上（钉绿但没人调＝没接上）
     let app = read_src("src/android_app.rs");
     assert!(
         app.contains("crate::gate::frame_spike_hit(")
+            && app.contains("crate::gate::frame_spike_gate()")
             && app.contains("crate::gate::report_frame_spike("),
-        "绘制路径必须按判据调用尖峰落盘"
+        "绘制路径必须按判据调用尖峰落盘，且过限流"
+    );
+}
+
+#[test]
+fn spec_bar265_输入消费耗时打点四件() {
+    // BAR-265 面1（NA0194 楼17-20 清和批：钉四件＋变异）。四项：
+    // ① 阈值真值表；② 落行必带 wall clock＋uptime（与 am_anr 对表）；
+    // ③ 两个输入入口都打点且用 RAII（早退不漏记）；④ 限流 200/小时。
+    // 变异抽检：阈值改 0／抹掉 wall clock／摘掉 key 入口／去掉 guard 改尾部结账 → 红。
+    use kfm_na::gate::{INPUT_LAG_MS, INPUT_LAG_PER_HOUR, input_lag_hit};
+    assert_eq!(INPUT_LAG_MS, 200, "阈值必须 200ms（可核常量）");
+    assert_eq!(INPUT_LAG_PER_HOUR, 200, "限流上限 200 行/小时");
+    assert!(!input_lag_hit(0));
+    assert!(!input_lag_hit(199), "199ms 不报");
+    assert!(input_lag_hit(200), "200ms 恰达即报");
+    assert!(input_lag_hit(5000), "5s 级必报");
+
+    let gate = read_src("src/gate.rs");
+    let body = fn_body(&gate, "pub fn report_input_lag(");
+    for f in ["consume=", "wall=", "uptime=", "kind="] {
+        assert!(body.contains(f), "落行必须含字段 {f}");
+    }
+    assert!(
+        body.contains("SystemTime::now"),
+        "wall clock 必须真取（am_anr 是墙钟，不对表就用不上）"
+    );
+
+    let app = read_src("src/android_app.rs");
+    assert_eq!(
+        app.matches("LagGuard::new(").count(),
+        2,
+        "两个输入入口（touch／key）都必须打点"
+    );
+    assert!(
+        app.contains("impl Drop for LagGuard"),
+        "必须 RAII 结账（本函数大量早退，尾部结账会漏记）"
+    );
+    assert!(
+        app.contains("crate::gate::input_lag_gate()"),
+        "落行必须过限流"
     );
 }
