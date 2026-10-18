@@ -94,6 +94,36 @@ pub fn human_source_ok(who: &str, when: &str, how: &str) -> bool {
     !who.trim().is_empty() && !when.trim().is_empty() && !how.trim().is_empty()
 }
 
+/// 人报出处单段字数上限（行内固定三段，见 human_dev_field）
+pub const HUMAN_CITE_MAX: usize = 40;
+
+/// 人报档的「什么机」字段（楼227 悬铃定稿）：**值@human(谁@何时@命令或原话
+/// 摘要)**——出处落**字段内**、固定三段、@ 分隔、机器可读，**不进四段行尾**
+/// （那四段是定长解析结构，塞自由文本会让它重新变脆：楼222 清和同一顾虑）。
+/// 缺段或像散文（句读、换行、超长）⇒ None，调用方必须**降 unknown**。
+/// **补出命令时应升 @model，并保留原 human 行**——升档不是改写历史。
+pub fn human_dev_field(value: &str, who: &str, when: &str, evidence: &str) -> Option<String> {
+    fn field(raw: &str) -> Option<String> {
+        let t = raw.trim();
+        if t.is_empty() || t.chars().count() > HUMAN_CITE_MAX {
+            return None;
+        }
+        if t.contains('\n') || t.contains('\r') {
+            return None;
+        }
+        // 不许散文：句读一律不收（命令本身不带这些）。
+        if t.chars()
+            .any(|c| matches!(c, '。' | '，' | '；' | '、' | '！' | '？'))
+        {
+            return None;
+        }
+        Some(t.to_string())
+    }
+    let v = field(value)?;
+    let (w, t, e) = (field(who)?, field(when)?, field(evidence)?);
+    Some(format!("{v}@{TIER_HUMAN}({w}@{t}@{e})"))
+}
+
 /// 手钉留痕口（楼200 悬铃裁「须在运行日志留谁／何时／为何」）：判卷侧钉死机型
 /// 时必须同时给 `NA_DEVICE_TAG_WHY="<谁>·<为何>"`，否则留痕记成「未留痕」——
 /// 手钉值不许无声落进报表。
@@ -221,7 +251,12 @@ pub fn with_tier(v: &str, tier: &str) -> String {
 
 /// 从「值@档」里取档名（纯函数）：无 `@` ⇒ 空串＝无档（旧行，按 unknown 论）
 pub fn tier_of(dev: &str) -> &str {
-    dev.split_once('@').map(|(_, t)| t).unwrap_or("")
+    let t = dev.split_once('@').map(|(_, t)| t).unwrap_or("");
+    // human 档允许带行内出处注：human(谁@何时@证据) —— 档名只取 '(' 之前
+    match t.find('(') {
+        Some(i) => &t[..i],
+        None => t,
+    }
 }
 
 /// 这一行能不能**只凭 tag** 跨机采信（纯函数，判卷侧直接调，别各写一份）：

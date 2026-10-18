@@ -50,8 +50,10 @@ fn spec_bar235_报表行_挂设备维三段() {
         dev_val.chars().count() <= 12,
         "设备位值截 12 字符上限: {dev}"
     );
+    // human 档允许带行内出处注：human(谁@何时@证据) —— 档名取 '(' 之前那段
+    let dev_tier_name = dev_tier.split('(').next().unwrap_or("");
     assert!(
-        ["model", "human", "env", "unknown"].contains(&dev_tier),
+        ["model", "human", "env", "unknown"].contains(&dev_tier_name),
         "第一维（什么机）档名必须是 model/human/env/unknown 之一: {dev}"
     );
     // 第二维（哪一台）只有 devid 与 unknown 两档——它说的不是「什么机」
@@ -225,4 +227,40 @@ fn spec_bar273_来源档判别_纯函数全套() {
         line.contains("留痕") && (line.contains("谁·为何")),
         "留痕行必须含谁/为何位: {line}"
     );
+}
+
+#[test]
+fn spec_bar273_人报出处_行内固定三段() {
+    // 楼227 悬铃定稿：出处落「什么机」字段内 = 值@human(谁@何时@命令或原话摘要)，
+    // 固定三段、@ 分隔、机器可读、不进四段行尾。缺一或像散文 ⇒ 降 unknown。
+    use kfm_na::report::{HUMAN_CITE_MAX, TIER_HUMAN, human_dev_field, tier_of, with_tier};
+
+    let ok = human_dev_field(
+        "Neo11",
+        "承影",
+        "2026-10-19 07:10 +08:00",
+        "adb shell dumpsys window",
+    )
+    .expect("三段齐必须成形");
+    assert!(
+        ok.starts_with("Neo11@human("),
+        "形态必须 值@human(...): {ok}"
+    );
+    assert!(ok.ends_with(')'), "出处必须括号收口: {ok}");
+    assert_eq!(tier_of(&ok), TIER_HUMAN, "带注也要解回 human 档");
+    assert_eq!(ok.matches('@').count(), 3, "值@ + 段内两个 @ = 三个: {ok}");
+
+    // 缺段一律 None（调用方降 unknown，不许带 human 档落盘）
+    assert!(human_dev_field("Neo11", "", "t", "how").is_none());
+    assert!(human_dev_field("Neo11", "承影", " ", "how").is_none());
+    assert!(human_dev_field("", "承影", "t", "how").is_none());
+    // 散文不收：句读／换行／超长
+    assert!(human_dev_field("Neo11", "承影说，大概是这样", "t", "how").is_none());
+    assert!(human_dev_field("Neo11", "承影", "t", "第一行\n第二行").is_none());
+    assert_eq!(HUMAN_CITE_MAX, 40, "单段上限是 40 字（改它等于改契约）");
+    let long = "x".repeat(HUMAN_CITE_MAX + 1);
+    assert!(human_dev_field("Neo11", "承影", "t", &long).is_none());
+
+    // 非 human 档不带出处注（出处只属于人报）
+    assert_eq!(with_tier("Neo11", "model"), "Neo11@model");
 }
