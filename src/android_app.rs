@@ -7685,6 +7685,22 @@ impl App {
     /// 中文落字从这里进终端（NativeActivity 无 InputConnection 的补丁，
     /// 链路见 ime_queue.rs 文件头）。键码在排干侧按当下光标模式翻序列
     /// （模式位只有这里的 Term 知道，keymap.rs 吃 app_cursor 参数）
+    /// BAR-260 出口第四件（NA0189 楼56/57）：消费 Java 侧异步 BACK 请求。
+    /// UI 线程只置标志（不进 Rust 取锁），弹面板栈在这里做——栈仍是唯一真源。
+    fn drain_web_back_request(&mut self) {
+        if !take_web_back_request() {
+            return;
+        }
+        let Some(ai) = &self.ai_presence else {
+            return;
+        };
+        if ai.snap(crate::report::boot_ms() as u64).top == Some(crate::ai_presence::Panel::Web) {
+            ai.dismiss_top(crate::ai_presence::Panel::Web);
+            self.dirty = true;
+            crate::report::report("gest", "BACK（窗内）→ 关全局页回解析页（异步消费）");
+        }
+    }
+
     fn drain_ime_inject(&mut self) {
         let mut items = crate::ime_queue::global().drain();
         if items.is_empty() {
@@ -11013,6 +11029,7 @@ impl ApplicationHandler for App {
         crate::gate::note_loop_beat(); // 看门狗心跳:每圈盖戳(降频后 ≥250/s,3s 阈值不变)
         if TERMINAL_MODE {
             self.drain_terminal_events();
+            self.drain_web_back_request();
             self.drain_ime_inject();
             self.drain_touch_in(); // 通道八:闸门触摸注入(与真手指同入口)
             if crate::gate::take_canvas_req(crate::gate::DUMP_DIR) {
@@ -12091,29 +12108,24 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
 
 // BAR-046: 选择系统+复制粘贴菜单已在手机端 chain 验证通过 (2026-09-02)
 
-// ---- BAR-260 出口重修（NA0189 楼31/32）：BACK 语义的 Java→Rust 回调 ----
-// 浮窗窗口摘除由 Java 做（它是窗的主人），但**面板栈的弹出归 Rust**（栈是
-// 唯一真源）。Java 侧 onBackPressed 在浮窗挂着时调本函数：返回 true = 已消费
-// （关页回解析页），false = 无页可关、交原路。
-// 无符号时 Java 侧有 try/catch 兜底，不会因缺符号炸掉主流程。
+// ---- BAR-260 出口重修（NA0189 楼31/32、楼56/57）：BACK 的 Java→Rust 通路 ----
+// **异步**：Java 的 UI 线程只置一个原子标志就返回，**不跨 JNI 进 Rust 取锁**
+// （判据＝主线程不再被 Rust 锁阻塞）。面板栈的弹出由渲染循环下一帧消费——
+// 栈仍是唯一真源，但 UI 线程零等待。
+static WEB_BACK_REQ: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// 消费一次「请弹 Web」请求（渲染循环每帧调；无请求＝false）
+pub fn take_web_back_request() -> bool {
+    WEB_BACK_REQ.swap(false, std::sync::atomic::Ordering::Relaxed)
+}
+
 /// # Safety
-/// JNI 约定：由 Java 在 UI 线程调用，参数为空。
+/// JNI 约定：由 Java 在 UI 线程调用；参数为空。**只置标志、不取任何锁**。
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_kfm_na_MainActivity_nativeWebBack(
+pub extern "system" fn Java_dev_kfm_na_MainActivity_nativeWebBackRequest(
     _env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
-) -> jni::sys::jboolean {
-    let Some(ai) = crate::gate::ai_presence_handle() else {
-        return false;
-    };
-    let top = ai.snap(crate::report::boot_ms() as u64).top;
-    match crate::ui::web_page::back_action(top == Some(crate::ai_presence::Panel::Web)) {
-        crate::ui::web_page::BackAction::ClosePage => {
-            ai.dismiss_top(crate::ai_presence::Panel::Web);
-            crate::report::report("gest", "BACK：关全局页回解析页（不退 Activity）");
-            true
-        }
-        crate::ui::web_page::BackAction::Super => false,
-    }
+) {
+    WEB_BACK_REQ.store(true, std::sync::atomic::Ordering::Relaxed);
 }
