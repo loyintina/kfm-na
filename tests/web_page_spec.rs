@@ -1059,3 +1059,65 @@ fn spec_bar265_prefix分档体检() {
 
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn spec_bar272_wipe前置与密钥回灌() {
+    // BAR-272（MAIN0192 楼36/37 白露拍；楼41/43 按代码改正风险等级）：
+    // ①wipe 前置＝资产内 bin/sshd 存在（旧资产永装不出 sshd ⇒ 不加这条会每启 wipe）；
+    // ②wipe 后从共享存储自动回灌密钥（丢的是公钥清单，host key 自生成 ⇒ 不阻塞）。
+    // 变异抽检：把 wipe 前置撤掉→红；把「不含 sshd 也 wipe」→红；回灌漏权限→红。
+    use kfm_na::bootstrap::{KEY_SRC_DIR, RESTORE_KEYS, asset_has_sshd, restore_keys_from};
+    assert_eq!(
+        KEY_SRC_DIR, "/storage/emulated/0/kfm-na-keys",
+        "密钥源目录必须是共享存储固定落点（跨 uid 唯一共同面）"
+    );
+    assert_eq!(RESTORE_KEYS.len(), 2, "回灌清单＝公钥清单＋出向私钥两件");
+    assert!(
+        RESTORE_KEYS.iter().all(|(_, m)| *m == 0o600),
+        "回灌权限必须 600"
+    );
+
+    // 资产能力：含 bin/sshd → true；不含 → false；垃圾字节 → false（保守不 wipe）
+    let with = kfm_na::bootstrap::test_fixture_zip_with_sshd();
+    let without = kfm_na::bootstrap::test_fixture_zip_without_sshd();
+    assert!(asset_has_sshd(&with), "含 bin/sshd 的资产必须判 true");
+    assert!(
+        !asset_has_sshd(&without),
+        "不含 sshd 的资产必须判 false（不许 wipe）"
+    );
+    assert!(!asset_has_sshd(b"not a zip"), "坏资产保守判 false");
+
+    // 回灌：源缺件→false 且不 panic；源有件→搬成并置 600；重复跑幂等
+    let tmp = std::env::temp_dir().join(format!("kfm-keys-{}", std::process::id()));
+    let prefix = tmp.join("usr");
+    std::fs::create_dir_all(prefix.join("etc/ssh")).unwrap();
+    let src = tmp.join("sd");
+    std::fs::create_dir_all(&src).unwrap();
+    let first = restore_keys_from(&src, &prefix);
+    assert!(first.iter().all(|(_, ok)| !ok), "源空时全部未搬且不报错");
+    std::fs::write(src.join("na_authorized_keys"), b"ssh-ed25519 AAAA test\n").unwrap();
+    let second = restore_keys_from(&src, &prefix);
+    assert!(
+        second
+            .iter()
+            .any(|(n, ok)| n == "na_authorized_keys" && *ok),
+        "源有件时必须搬成"
+    );
+    use std::os::unix::fs::PermissionsExt;
+    let mode = std::fs::metadata(prefix.join("etc/ssh/na_authorized_keys"))
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(mode, 0o600, "回灌后权限必须 600");
+    let third = restore_keys_from(&src, &prefix); // 幂等
+    assert!(third.iter().any(|(n, ok)| n == "na_authorized_keys" && *ok));
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    // 源码锚：wipe 前置必须真接线（资产不含 sshd 时 return，不进 wipe）
+    let src_bs = read_src("src/bootstrap.rs");
+    assert!(
+        src_bs.contains("资产不含 bin/sshd——按旧判据视为已装、**不 wipe**"),
+        "wipe 前置必须在启动路径上落账并 return"
+    );
+}

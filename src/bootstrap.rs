@@ -159,6 +159,84 @@ pub fn ensure_prefix(prefix: &Path, zip_bytes: &[u8]) -> Result<InstallStatus, S
     Ok(InstallStatus::Installed)
 }
 
+/// 资产能力判定（BAR-272，MAIN0192 楼36/37 白露拍）：**资产里有没有 bin/sshd**。
+/// 这条是 wipe 的前置——判据收紧（BAR-269 要求 bin/sshd 在位）＋旧资产（不含
+/// sshd）＝每次启动都判不就绪 ⇒ 每启 wipe 重装，比一次卸载重装更坏（静默丢
+/// keys/overlay）。故：资产不含 sshd 时**不许 wipe**，按旧判据视为已装并报一行。
+pub fn asset_has_sshd(zip_bytes: &[u8]) -> bool {
+    let Ok(mut archive) = zip::ZipArchive::new(std::io::Cursor::new(zip_bytes)) else {
+        return false; // 打不开就当没有——保守，不 wipe
+    };
+    for i in 0..archive.len() {
+        let Ok(entry) = archive.by_index(i) else {
+            continue;
+        };
+        if entry
+            .enclosed_name()
+            .map(|p| p == Path::new("bin/sshd"))
+            .unwrap_or(false)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// wipe 后密钥回灌（BAR-272，MAIN0192 楼41/43：白露按代码改正——wipe 丢的是
+/// **公钥清单**，不是私钥；host key 由 sshd 首启自生成，故回灌不阻塞 wipe，
+/// 只是「搬了就有探针钥匙，没搬就报一行」）。
+/// 源目录＝共享存储固定落点（na 有 MANAGE_EXTERNAL_STORAGE，读得到；
+/// 跨 uid 只有这一个共同面）。
+pub const KEY_SRC_DIR: &str = "/storage/emulated/0/kfm-na-keys";
+/// 回灌清单：（文件名，目标权限）
+pub const RESTORE_KEYS: [(&str, u32); 2] = [("na_authorized_keys", 0o600), ("id_ed25519", 0o600)];
+
+/// 测试夹具：造两份最小 zip——含 `bin/sshd` 与不含（宿主可判卷；不进生产路径）
+pub fn test_fixture_zip_with_sshd() -> Vec<u8> {
+    let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let opt = zip::write::SimpleFileOptions::default();
+    w.start_file("bin/sshd", opt).unwrap();
+    std::io::Write::write_all(&mut w, b"fake-sshd").unwrap();
+    w.finish().unwrap().into_inner()
+}
+
+/// 测试夹具：不含 `bin/sshd` 的最小 zip（模拟旧资产）
+pub fn test_fixture_zip_without_sshd() -> Vec<u8> {
+    let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let opt = zip::write::SimpleFileOptions::default();
+    w.start_file("bin/bash", opt).unwrap();
+    std::io::Write::write_all(&mut w, b"fake-bash").unwrap();
+    w.finish().unwrap().into_inner()
+}
+
+/// 从源目录把密钥搬进 `prefix/etc/ssh`（幂等覆盖）。返回每件的搬运结果。
+/// 缺件不报错（不阻塞）——调用方按返回结果落账即可。
+pub fn restore_keys_from(src_dir: &Path, prefix: &Path) -> Vec<(String, bool)> {
+    let dst_dir = prefix.join("etc").join("ssh");
+    let mut out = Vec::new();
+    for (name, mode) in RESTORE_KEYS {
+        let src = src_dir.join(name);
+        let ok = if src.is_file() {
+            fs::create_dir_all(&dst_dir).is_ok() && fs::copy(&src, dst_dir.join(name)).is_ok() && {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    fs::set_permissions(dst_dir.join(name), fs::Permissions::from_mode(mode))
+                        .is_ok()
+                }
+                #[cfg(not(unix))]
+                {
+                    true
+                }
+            }
+        } else {
+            false
+        };
+        out.push((name.to_owned(), ok));
+    }
+    out
+}
+
 fn install_to_staging(staging: &Path, zip_bytes: &[u8]) -> Result<(), String> {
     if staging.exists() {
         fs::remove_dir_all(staging).map_err(|e| format!("清 staging 失败: {e}"))?;
@@ -341,14 +419,32 @@ mod android_shell {
             return;
         }
         // BAR-229：存在但不可用（克隆丢 x 位等环境死）——自愈 wipe 重装
-        if prefix.is_dir() {
-            crate::report::report(
-                "boot",
-                "L3: prefix 存在但哨兵不可执行——自愈 wipe 重装（BAR-229，克隆丢 x 位实证）",
-            );
-        }
+        // BAR-272（MAIN0192 楼36/37 白露拍）：**wipe 前置＝资产内 bin/sshd 存在**。
+        // 判据收紧（BAR-269 要 bin/sshd）＋旧资产（不含 sshd）＝每启都判不就绪 ⇒
+        // 每启 wipe（静默丢数据，比一次卸载重装更坏）。故先核资产能力：
+        // 供不出 sshd 就不 wipe（wipe 也装不出就绪态）；供得出就必须让它 wipe 一次。
         let assets = app.asset_manager();
         let name = std::ffi::CString::new(BOOTSTRAP_ASSET).unwrap();
+        if prefix.is_dir() {
+            let cap = {
+                let mut v = Vec::new();
+                if let Some(mut a) = assets.open(&name) {
+                    let _ = a.read_to_end(&mut v);
+                }
+                v
+            };
+            if !super::asset_has_sshd(&cap) {
+                crate::report::report_sync(
+                    "boot",
+                    "L3: 资产不含 bin/sshd——按旧判据视为已装、**不 wipe**（BAR-272：wipe 也装不出就绪态）",
+                );
+                return;
+            }
+            crate::report::report(
+                "boot",
+                "L3: prefix 存在但哨兵不可执行——自愈 wipe 重装（BAR-229；BAR-272 已核资产含 sshd）",
+            );
+        }
         let Some(mut asset) = assets.open(&name) else {
             crate::report::report_sync(
                 "boot",
@@ -379,6 +475,26 @@ mod android_shell {
                         "boot",
                         &format!("L3: second-stage 异常: {other:?}(环境在,下轮重启自愈)"),
                     ),
+                }
+                // BAR-272（MAIN0192 楼41/43）：装完即从共享存储回灌密钥。
+                // 白露按代码改正：wipe 丢的是**公钥清单**（host key 由 sshd 首启
+                // 自生成），故回灌不阻塞、缺件只落账——不备也能起 gate，只是探针
+                // 钥匙会被拒。
+                for (name, ok) in
+                    super::restore_keys_from(std::path::Path::new(super::KEY_SRC_DIR), &prefix)
+                {
+                    crate::report::report_sync(
+                        "boot",
+                        &format!(
+                            "L3: 密钥回灌 {name} {}（源={}）",
+                            if ok {
+                                "成功"
+                            } else {
+                                "未备（探针钥匙将被拒，不阻塞）"
+                            },
+                            super::KEY_SRC_DIR
+                        ),
+                    );
                 }
             }
             Err(e) => crate::report::report_sync("boot", &format!("L3: 安装失败: {e}")),
