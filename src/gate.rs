@@ -35,7 +35,11 @@
 //! UI 侧只有 term→router 方向（滚轮上报站点），无 router→term → 无环。
 //!
 //! keys-in 半写防护：写入端先写 keys-in.new 再 mv 成 keys-in（rename
-//! 原子）；消费端 rename 到 keys-in.reading 再读再删（原子取走）。
+//! 原子）；消费端 rename 到 keys-in.reading 再读再删（注入即消费）。
+//! **应答语义（BAR-275，MAIN0193 楼73 卡萝实测）**：写入端拿到的 ok:true
+//! **只证「入队（文件原子落盘）」，不证「执行」**——真正执行在消费侧
+//! （drain_keys_in → inject_keys 注入活跃会话）。要证执行，看消费侧的
+//! keys-in.reading 出现即消失＋注入报账行，不看 ok。
 //! 注入是裸字节——Ctrl-](\x1d)会话切换是 UI 层逻辑，闸门不过（有意留白）；
 //! 会话死亡时 `SessionRouter::send` 静默吞（语义不动），闸门注入走
 //! `send_checked` 回执，三环结果各留一行 gate 报告。

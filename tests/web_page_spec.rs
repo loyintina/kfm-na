@@ -1189,3 +1189,36 @@ fn spec_bar274_资产外部覆盖优先() {
         "覆盖读失败必须落账并回落内嵌（不静默）"
     );
 }
+
+#[test]
+fn spec_bar275_conn报目标地址与ok语义() {
+    // BAR-275（MAIN0193 楼73 卡萝实测）：
+    // ①跨 uid 读 /proc 只能拿到 inode、**对端地址取不到** ⇒ 谁拿得到谁报：握手点把 url 落进同一行；
+    // ②闸门 ok:true **只证入队不证执行**（keys-in 写入端 rename 原子落盘即回 ok，
+    //   真正注入在消费侧 drain_keys_in→inject_keys）——这条要写进读数口径。
+    // 变异抽检：把 url 从 conn 行摘掉→红；把「只证入队」注释/口径删掉→红。
+    let conn = read_src("src/conn.rs");
+    // 两处落账的**格式串**都必须带 url=（摘掉即红，比数个数更咬人）
+    assert!(
+        conn.contains(r#""ws 握手 {} url={} (TCP="#),
+        "首连落账格式串必须含 url={{}}"
+    );
+    assert!(
+        conn.contains(r#""ws 握手完成 +{}ms url={} (升级段"#),
+        "常驻连接落账格式串必须含 url={{}}"
+    );
+    assert!(
+        conn.contains("对端地址取不到"),
+        "必须写明为什么由我们报（跨 uid 读不到对端）"
+    );
+
+    let gate = read_src("src/gate.rs");
+    assert!(
+        gate.contains("只证「入队") && gate.contains("不证「执行"),
+        "keys-in 的 ok 语义＝只证入队、不证执行，必须在源码口径里写明"
+    );
+    assert!(
+        gate.contains("pub fn drain_keys_in") && gate.contains("注入即消费"),
+        "消费侧（drain+注入）才是执行证据"
+    );
+}

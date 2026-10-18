@@ -345,11 +345,14 @@ async fn ws_handshake(
     .await;
     // 异步上报（BAR-022）：sync 直发会卡握手线程 ~0.3s 拖慢提示符；
     // 队列丢失可接受——这段归因数据只是遥测，连接提示行已让等待无感
+    // BAR-275（MAIN0193 楼73 卡萝实测）：跨 uid 读 /proc 只拿到 inode，**对端地址取不到**。
+    // 谁拿得到谁报——握手点是我们唯一知道目标的地方，故把 url 落进同一行。
     crate::report::report(
         "conn",
         &format!(
-            "ws 握手 {} (TCP={tcp_ms}ms 写请求={write_ms}ms 首字节+{}ms 头读完+{}ms)",
+            "ws 握手 {} url={} (TCP={tcp_ms}ms 写请求={write_ms}ms 首字节+{}ms 头读完+{}ms)",
             head_ms,
+            url,
             first_ms.map(|v| v - write_ms).unwrap_or(0),
             head_ms - write_ms
         ),
@@ -396,8 +399,9 @@ async fn run_terminal_session(
     crate::report::report(
         "conn",
         &format!(
-            "ws 握手完成 +{}ms (升级段 {}ms)",
+            "ws 握手完成 +{}ms url={} (升级段 {}ms)",
             crate::report::boot_ms(),
+            url,
             t0.elapsed().as_millis()
         ),
     );
