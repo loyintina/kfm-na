@@ -1154,3 +1154,38 @@ fn spec_bar272_wipe前置与密钥回灌() {
         "wipe 前置必须在启动路径上落账并 return"
     );
 }
+
+#[test]
+fn spec_bar274_资产外部覆盖优先() {
+    // BAR-274（MAIN0193 楼67 卡萝实证「本地执行壳通了」）：投递通道不必是「装新包」
+    // ——files/bootstrap-override.zip 在位时优先于 APK 内嵌资产。
+    // 变异抽检：把覆盖判据撤掉（恒用内嵌）→ 本钉必红。
+    use kfm_na::bootstrap::pick_asset_source;
+    // 行为真值表：覆盖在位→用覆盖且标记为覆盖源；覆盖缺席→用内嵌；两者皆无→None
+    let (v, is_ov) = pick_asset_source(Some(b"OVR".to_vec()), Some(b"EMB".to_vec())).unwrap();
+    assert_eq!(v, b"OVR".to_vec(), "覆盖在位时必须用覆盖");
+    assert!(is_ov, "必须标记为覆盖源（落账用）");
+    let (v, is_ov) = pick_asset_source(None, Some(b"EMB".to_vec())).unwrap();
+    assert_eq!(v, b"EMB".to_vec(), "覆盖缺席时必须用内嵌");
+    assert!(!is_ov);
+    assert!(pick_asset_source(None, None).is_none(), "两者皆无＝None");
+    let src = read_src("src/bootstrap.rs");
+    assert!(
+        src.contains(r#"const BOOTSTRAP_ASSET_OVERRIDE: &str = "bootstrap-override.zip""#),
+        "覆盖资产名必须是可核常量"
+    );
+    // 判定段与安装段都必须先看覆盖（两处都改，缺一处＝半截）
+    assert!(
+        src.matches("override_bytes").count() >= 3,
+        "覆盖字节流必须在判定段与安装段都被使用（实测 {} 处）",
+        src.matches("override_bytes").count()
+    );
+    assert!(
+        src.contains("用**外部覆盖资产**"),
+        "用覆盖资产时必须落账（否则现场看不出走的是哪份）"
+    );
+    assert!(
+        src.contains("外部覆盖资产读失败"),
+        "覆盖读失败必须落账并回落内嵌（不静默）"
+    );
+}

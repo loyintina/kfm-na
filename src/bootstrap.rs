@@ -199,6 +199,19 @@ pub const PRIVATE_KEY_ALLOW_MARK: &str = "ALLOW_PRIVATE_KEY";
 /// 私钥件名（仅在显式开关在位时回灌）
 pub const PRIVATE_KEY_FILE: &str = "id_ed25519";
 
+/// 资产来源选择（BAR-274，纯函数可判卷）：**外部覆盖优先**。
+/// 返回 (选中字节, 是否为覆盖源)。两处（能力判定／安装）都用它，防半截。
+pub fn pick_asset_source(
+    override_bytes: Option<Vec<u8>>,
+    embedded: Option<Vec<u8>>,
+) -> Option<(Vec<u8>, bool)> {
+    match (override_bytes, embedded) {
+        (Some(v), _) => Some((v, true)),
+        (None, Some(v)) => Some((v, false)),
+        (None, None) => None,
+    }
+}
+
 /// 测试夹具：含 `bin/sshd` 的最小 zip（宿主可判卷，不进生产路径）
 pub fn test_fixture_zip_with_sshd() -> Vec<u8> {
     let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
@@ -356,6 +369,11 @@ mod android_shell {
 
     /// assets 里的 bootstrap 包名(只产 aarch64——手机架构;其余架构未来再说)
     const BOOTSTRAP_ASSET: &str = "bootstrap-aarch64.zip";
+    /// 外部覆盖资产名（BAR-274，MAIN0193 楼67 卡萝实证「本地执行壳通了」）：
+    /// 若 `files/<此名>` 在位，**优先于 APK 内嵌资产**——这样投递通道不必是
+    /// 「装新包」：任何能写 na 私有目录的腿（本地执行壳／热更通道）丢一份
+    /// 新资产进去，下次首启即用它重装，gate 不用等安装器。
+    const BOOTSTRAP_ASSET_OVERRIDE: &str = "bootstrap-override.zip";
 
     /// 应用私有 files 目录(JNI getFilesDir——不硬编码,多用户/工作资料
     /// 档案自适应;AndroidApp 句柄只在壳侧有,local_pty 线程那份是硬编码)
@@ -444,13 +462,42 @@ mod android_shell {
         // 供不出 sshd 就不 wipe（wipe 也装不出就绪态）；供得出就必须让它 wipe 一次。
         let assets = app.asset_manager();
         let name = std::ffi::CString::new(BOOTSTRAP_ASSET).unwrap();
-        if prefix.is_dir() {
-            let cap = {
-                let mut v = Vec::new();
-                if let Some(mut a) = assets.open(&name) {
-                    let _ = a.read_to_end(&mut v);
+        // BAR-274：外部覆盖优先（同一份字节流，后面全走同一路径）
+        let override_path = files.join(BOOTSTRAP_ASSET_OVERRIDE);
+        let override_bytes = if override_path.is_file() {
+            match std::fs::read(&override_path) {
+                Ok(v) => {
+                    crate::report::report_sync(
+                        "boot",
+                        &format!(
+                            "L3: 用**外部覆盖资产**（{} 字节，源=files/{}）",
+                            v.len(),
+                            BOOTSTRAP_ASSET_OVERRIDE
+                        ),
+                    );
+                    Some(v)
                 }
-                v
+                Err(e) => {
+                    crate::report::report_sync(
+                        "boot",
+                        &format!("L3: 外部覆盖资产读失败（{e}）——回落内嵌"),
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        if prefix.is_dir() {
+            let cap = match override_bytes.clone() {
+                Some(v) => v,
+                None => {
+                    let mut v = Vec::new();
+                    if let Some(mut a) = assets.open(&name) {
+                        let _ = a.read_to_end(&mut v);
+                    }
+                    v
+                }
             };
             if !super::asset_has_sshd(&cap) {
                 crate::report::report_sync(
@@ -464,18 +511,25 @@ mod android_shell {
                 "L3: prefix 存在但哨兵不可执行——自愈 wipe 重装（BAR-229；BAR-272 已核资产含 sshd）",
             );
         }
-        let Some(mut asset) = assets.open(&name) else {
-            crate::report::report_sync(
-                "boot",
-                "L3: 无内嵌 bootstrap(zip 未入包)——本地会话回落系统 sh",
-            );
-            return;
+        // BAR-274：安装字节流优先取外部覆盖资产（与上面判定段同一份）
+        let mut bytes = match override_bytes {
+            Some(v) => v,
+            None => {
+                let Some(mut asset) = assets.open(&name) else {
+                    crate::report::report_sync(
+                        "boot",
+                        "L3: 无内嵌 bootstrap(zip 未入包)——本地会话回落系统 sh",
+                    );
+                    return;
+                };
+                let mut v = Vec::with_capacity(asset.length());
+                if let Err(e) = asset.read_to_end(&mut v) {
+                    crate::report::report_sync("boot", &format!("L3: 读 bootstrap 资产失败: {e}"));
+                    return;
+                }
+                v
+            }
         };
-        let mut bytes = Vec::with_capacity(asset.length());
-        if let Err(e) = asset.read_to_end(&mut bytes) {
-            crate::report::report_sync("boot", &format!("L3: 读 bootstrap 资产失败: {e}"));
-            return;
-        }
         crate::report::report(
             "boot",
             &format!("L3: bootstrap 资产 {} 字节,开始安装", bytes.len()),
