@@ -33,7 +33,11 @@ pub enum InstallStatus {
 /// 闸门/deploy 全瘫）。哨兵取「bin/ 任一 x 位」而非点名 bash：判据
 /// 通用（bin/ 是 bootstrap 必带目录），不绑死件名。
 pub fn prefix_ready(prefix: &Path) -> bool {
-    matches!(prefix_state(prefix), PrefixState::Ready)
+    // ReadyNeedsConf 也算就绪（conf 由 keeper 自生成；见该档注释的鸡生蛋死锁）
+    matches!(
+        prefix_state(prefix),
+        PrefixState::Ready | PrefixState::ReadyNeedsConf
+    )
 }
 
 /// prefix 体检分档（2026-10-18 MAIN0192 楼4/6：原判据「目录非空＋bin 任一 x 位」
@@ -57,8 +61,12 @@ pub enum PrefixState {
     ShBroken,
     /// **bin/sshd 不在位**（本次新增档：8024 闸门起不来的直接原因）
     NoSshdBin,
-    /// **etc/ssh/kfm-sshd.conf 不在位**（spawn 必失败，BAR-259 会自生成，
-    /// 但自生成失败时也该一眼看到是这一档）
+    /// **etc/ssh/kfm-sshd.conf 不在位**，但 bin/sshd 在——**这一档仍算就绪**
+    /// （BAR-259：conf 由 keeper 的 ensure_conf 自生成）。若把它判成不就绪，
+    /// keeper 不启动 ⇒ conf 永远没人写 ⇒ 鸡生蛋死锁（2026-10-18 11 机实证：
+    /// openssh 装好、host key 已生成，8024 就是不起，根子正是这条）。
+    ReadyNeedsConf,
+    /// 保留档位名以便报表可读；**不再由 prefix_state 产出**（并入 ReadyNeedsConf）
     NoSshdConf,
 }
 
@@ -97,7 +105,9 @@ pub fn prefix_state(prefix: &Path) -> PrefixState {
         .join("kfm-sshd.conf")
         .exists()
     {
-        return PrefixState::NoSshdConf;
+        // conf 缺 → 仍算就绪（keeper 的 ensure_conf 会自生成）；单独成档只为报表可读。
+        // 判成不就绪＝keeper 不启＝conf 永无人生成＝鸡生蛋死锁（11 机实证）。
+        return PrefixState::ReadyNeedsConf;
     }
     PrefixState::Ready
 }

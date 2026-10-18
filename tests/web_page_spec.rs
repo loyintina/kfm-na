@@ -1044,12 +1044,17 @@ fn spec_bar265_prefix分档体检() {
         "本次收紧的核心：bin/sshd 缺不算就绪"
     );
 
-    // 档七：sshd 在位但 conf 缺
+    // 档七：sshd 在位但 conf 缺 → **仍算就绪**（conf 由 keeper 自生成；
+    // 若判不就绪则 keeper 不启、conf 永无人生成＝鸡生蛋死锁，11 机实证）
     std::fs::write(root.join("bin/sshd"), b"x").unwrap();
     assert_eq!(
         prefix_state(&root),
-        PrefixState::NoSshdConf,
-        "缺 kfm-sshd.conf 也不算就绪"
+        PrefixState::ReadyNeedsConf,
+        "conf 缺必须单独成档（报表可读）"
+    );
+    assert!(
+        prefix_ready(&root),
+        "conf 缺仍须判就绪，否则 keeper 起不来、conf 永远没人写"
     );
 
     // 就绪档
