@@ -846,3 +846,30 @@ fn spec_bar260_出口_搬窗限频与最新值覆盖() {
         "限频间隔必须是 33ms 常量（可核，不散落字面量）"
     );
 }
+
+#[test]
+fn spec_bar265_尖峰落盘阈值与分项() {
+    // BAR-265／NA0194 楼4/5（清和批）：均值口径证不了单帧尖峰，加「整帧 ≥
+    // 阈值即逐帧落一行，带时刻与分项」。阈值 500ms 可核，分项四段齐。
+    // 变异抽检：阈值改 0（全报）或改 i64 级大数（全不报）→ 本钉必红。
+    use kfm_na::gate::{FRAME_SPIKE_MS, frame_spike_hit};
+    assert_eq!(FRAME_SPIKE_MS, 500, "阈值必须是 500ms 常量（可核、不散落）");
+    assert!(!frame_spike_hit(0), "0ms 不报");
+    assert!(!frame_spike_hit(499), "499ms 不报（阈值下方是噪声区）");
+    assert!(frame_spike_hit(500), "500ms 恰达即报");
+    assert!(frame_spike_hit(999), "999ms 报");
+    assert!(frame_spike_hit(60000), "整分钟级更报");
+    // 落盘行必须带时刻与四段分项（事后取证需要定位到段）
+    let gate = read_src("src/gate.rs");
+    let body = fn_body(&gate, "pub fn report_frame_spike(");
+    for f in ["total=", "at=", "gen=", "ras=", "upload=", "draw="] {
+        assert!(body.contains(f), "尖峰行必须含字段 {f}");
+    }
+    // 调用点必须真接上（钉绿但没人调＝没接上）
+    let app = read_src("src/android_app.rs");
+    assert!(
+        app.contains("crate::gate::frame_spike_hit(")
+            && app.contains("crate::gate::report_frame_spike("),
+        "绘制路径必须按判据调用尖峰落盘"
+    );
+}

@@ -1839,6 +1839,32 @@ static STAT_BYTES_OTHER: AtomicU64 = AtomicU64::new(0);
 static STAT_SESSION_DEATHS: AtomicU64 = AtomicU64::new(0);
 
 /// draw_frame 每帧报耗时(含 present)
+/// 单帧尖峰落盘阈值（BAR-265／NA0194 楼4/5：均值口径证不了单帧尖峰，
+/// 摊薄后找不到凶手；清和批「>500ms 逐帧落一行，带时刻与分项」）。
+pub const FRAME_SPIKE_MS: u64 = 500;
+
+/// 尖峰判据（纯函数，宿主可判卷）：整帧 ≥ 阈值才落一行。
+pub fn frame_spike_hit(ms: u64) -> bool {
+    ms >= FRAME_SPIKE_MS
+}
+
+/// 尖峰落盘（逐帧一行）：只在整帧 ≥ 阈值时调——分项由调用方给（它手上才有
+/// gen／ras／upload／draw 的当帧数），这里只负责格式与落账。
+#[allow(clippy::too_many_arguments)]
+pub fn report_frame_spike(total_ms: u64, gen_us: u64, ras_us: u64, upload_us: u64, draw_us: u64) {
+    crate::report::report(
+        "frame-spike",
+        &format!(
+            "total={total_ms}ms at={} gen={}ms ras={}ms upload={}ms draw={}ms",
+            crate::report::boot_ms(),
+            gen_us / 1000,
+            ras_us / 1000,
+            upload_us / 1000,
+            draw_us / 1000,
+        ),
+    );
+}
+
 pub fn note_draw(elapsed: std::time::Duration) {
     let ms = elapsed.as_millis() as u64;
     STAT_DRAW_TOTAL_MS.fetch_add(ms, Ordering::Relaxed);

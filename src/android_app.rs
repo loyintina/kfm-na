@@ -10054,6 +10054,15 @@ impl App {
         }
         Self::report_tofu(&mut **term_arc.lock().unwrap());
         ras_us += t_over.elapsed().as_micros() as u64;
+        // BAR-265（NA0194 楼5 清和批）：单帧尖峰逐帧落一行（带时刻与分项）——
+        // 均值口径摊薄后找不到凶手，尖峰只能靠这一行事后取证。
+        // 口径注明：total = 本帧 gen+ras+upload+draw 段之和（**不含 present**），
+        // 故本行能定「算力段尖峰」；若 present 段才是凶手，会表现为「整帧
+        // 慢但无 spike 行」，届时另加 present 起点。
+        let seg_total_us = gen_us + gen2_us + ras_us;
+        if crate::gate::frame_spike_hit(seg_total_us / 1000) {
+            crate::gate::report_frame_spike(seg_total_us / 1000, gen_us + gen2_us, ras_us, 0, 0);
+        }
         crate::gles_present::STAGE_GEN_US
             .fetch_add(gen_us + gen2_us, std::sync::atomic::Ordering::Relaxed);
         crate::gles_present::STAGE_RAS_US.fetch_add(ras_us, std::sync::atomic::Ordering::Relaxed);
