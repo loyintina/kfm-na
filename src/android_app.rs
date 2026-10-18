@@ -10060,8 +10060,8 @@ impl App {
         // 故本行能定「算力段尖峰」；若 present 段才是凶手，会表现为「整帧
         // 慢但无 spike 行」，届时另加 present 起点。
         let seg_total_us = gen_us + gen2_us + ras_us;
-        if crate::gate::frame_spike_hit(seg_total_us / 1000) {
-            crate::gate::report_frame_spike(seg_total_us / 1000, gen_us + gen2_us, ras_us, 0, 0);
+        if crate::gate::frame_spike_hit(seg_total_us / 1000) && crate::gate::frame_spike_gate() {
+            crate::gate::report_frame_spike(seg_total_us / 1000, gen_us + gen2_us, ras_us);
         }
         crate::gles_present::STAGE_GEN_US
             .fetch_add(gen_us + gen2_us, std::sync::atomic::Ordering::Relaxed);

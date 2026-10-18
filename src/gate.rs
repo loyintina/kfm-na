@@ -1848,19 +1848,63 @@ pub fn frame_spike_hit(ms: u64) -> bool {
     ms >= FRAME_SPIKE_MS
 }
 
-/// 尖峰落盘（逐帧一行）：只在整帧 ≥ 阈值时调——分项由调用方给（它手上才有
-/// gen／ras／upload／draw 的当帧数），这里只负责格式与落账。
-#[allow(clippy::too_many_arguments)]
-pub fn report_frame_spike(total_ms: u64, gen_us: u64, ras_us: u64, upload_us: u64, draw_us: u64) {
+/// 每小时最多落多少行（NA0194 楼7 清和定的限流）：尖峰连发会把报表刷爆，
+/// 而判卷只需要前几十行定位「有没有尖峰、尖峰多大」。
+pub const FRAME_SPIKE_PER_HOUR: u32 = 200;
+/// 限流窗长（1 小时）
+pub const FRAME_SPIKE_WINDOW_MS: u64 = 3_600_000;
+
+/// 限流判据（纯函数，宿主可判卷）：返回（是否放行, 新窗起点, 新窗内计数）。
+pub fn frame_spike_admit(now_ms: u64, win_start_ms: u64, count_in_win: u32) -> (bool, u64, u32) {
+    if win_start_ms == 0 || now_ms.saturating_sub(win_start_ms) >= FRAME_SPIKE_WINDOW_MS {
+        return (true, now_ms, 1);
+    }
+    if count_in_win >= FRAME_SPIKE_PER_HOUR {
+        return (false, win_start_ms, count_in_win);
+    }
+    (true, win_start_ms, count_in_win + 1)
+}
+
+static SPIKE_WIN_START: AtomicU64 = AtomicU64::new(0);
+static SPIKE_WIN_COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// 走限流后决定是否落（壳层每帧调）；被限时**每窗只吭一声**，不静默
+pub fn frame_spike_gate() -> bool {
+    let now = crate::report::boot_ms() as u64;
+    loop {
+        let start = SPIKE_WIN_START.load(Ordering::Relaxed);
+        let count = SPIKE_WIN_COUNT.load(Ordering::Relaxed);
+        let (ok, ns, nc) = frame_spike_admit(now, start, count);
+        if SPIKE_WIN_START
+            .compare_exchange(start, ns, Ordering::Relaxed, Ordering::Relaxed)
+            .is_err()
+        {
+            continue;
+        }
+        SPIKE_WIN_COUNT.store(nc, Ordering::Relaxed);
+        if !ok && count == FRAME_SPIKE_PER_HOUR {
+            crate::report::report(
+                "frame-spike",
+                &format!(
+                    "throttled: 本小时已达 {FRAME_SPIKE_PER_HOUR} 行上限，后续尖峰不再落账（at={now}）"
+                ),
+            );
+        }
+        return ok;
+    }
+}
+
+/// 尖峰落盘（逐帧一行）：**口径只覆盖 gen+ras 两段**——upload／draw 在 present
+/// 段里出账，本行取不到真值，故不设这两个字段（NA0194 楼7：分项名存实亡比
+/// 缺项更坏）。整帧含 present 的口径看 gles-stage／stats 快照。
+pub fn report_frame_spike(total_ms: u64, gen_us: u64, ras_us: u64) {
     crate::report::report(
         "frame-spike",
         &format!(
-            "total={total_ms}ms at={} gen={}ms ras={}ms upload={}ms draw={}ms",
+            "total={total_ms}ms at={} gen={}ms ras={}ms（口径=gen+ras 段和，不含 present）",
             crate::report::boot_ms(),
             gen_us / 1000,
             ras_us / 1000,
-            upload_us / 1000,
-            draw_us / 1000,
         ),
     );
 }
