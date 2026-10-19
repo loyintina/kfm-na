@@ -1460,3 +1460,97 @@ fn spec_bar273_第二批_来源档与共享落点() {
         "serial 未测出可读路径前不许进采集面（楼186 白露）"
     );
 }
+
+#[test]
+fn spec_bar273_报表时刻与重拉间隔() {
+    // BAR-273 第 5 条（MAIN0192 楼261 清和裁「要加 ts」、楼262 承影消费方声明、
+    // 楼263 白露实测）：报表原先没有时刻轴，「单位时间重拉次数」与「单次存活
+    // 时长」两条健康判据无从导出。两条钉：①JSON 行带 ts（epoch 毫秒）②sshd
+    // 重拉行带间隔毫秒——后者让频率在 ts 生效前也能算（1/平均间隔）。
+    let src = read_src("src/report.rs");
+    let lj = {
+        let i = src.find("fn line_json(").expect("line_json 必须在");
+        let j = src[i..].find("\n}\n").expect("函数必须闭合");
+        &src[i..i + j]
+    };
+    assert!(
+        lj.contains("\\\"ts\\\":{}") || lj.contains("\"ts\":{}"),
+        "JSON 行必须带 ts 字段（否则报表没有时间轴）"
+    );
+    assert!(
+        lj.contains("now_ms()"),
+        "ts 必须取真实时刻（epoch 毫秒），不许占位常量"
+    );
+    assert!(
+        src.contains("fn now_ms()"),
+        "时刻取值要有一份实现（重复实现＝两处口径）"
+    );
+
+    let keeper = read_src("src/sshd_keeper.rs");
+    // 按字符取窗口，别按字节切——源码里有中文，字节切会落在多字节字符中间
+    let win = |from: usize, n: usize| -> String { keeper[from..].chars().take(n).collect() };
+    assert!(
+        keeper.contains("last_spawn_at"),
+        "keeper 必须记上一次 spawn 时刻（间隔的来源）"
+    );
+    let spawn_at = keeper
+        .find("sshd 已重拉")
+        .expect("重拉报账行必须在（判据靠它）");
+    let spawn_line = win(spawn_at, 260);
+    assert!(
+        spawn_line.contains("间隔 {}ms"),
+        "重拉行必须带间隔毫秒（频率＝1/平均间隔，相减也算不出）: {spawn_line}"
+    );
+    // 退出行补「存活 Nms」（楼266）：判「活不住」看单次存活分布，不看重拉次数
+    let exit_at = keeper
+        .find("sshd 退出（{st}")
+        .expect("退出报账行必须在（存活时长靠它）");
+    let exit_line = win(exit_at, 200);
+    assert!(
+        exit_line.contains("存活 {lived_ms}ms"),
+        "退出行必须带存活毫秒: {exit_line}"
+    );
+    assert!(
+        keeper.contains("\"unknown\".to_owned()"),
+        "取不到存活时刻要记 unknown，不许拿 0 冒充安静退出"
+    );
+}
+
+#[test]
+fn spec_bar273_熔断计数持久化() {
+    // 通则第 8 条（MAIN0186）：「计数到 N 就动作」的机制，计数器必须落盘＋重启
+    // 读回；只在内存＝重启清零＝阈值永不触发。实证：MAIN0192 楼269 白露读到
+    // 11 机 8,929 次重拉、十余个实例全是「第 1 次」——计数器是 keep_loop 的局部
+    // 变量，App 每启一次账就清一次，BAR-259 熔断因此形同虚设。
+    let keeper = read_src("src/sshd_keeper.rs");
+    let win = |from: usize, n: usize| -> String { keeper[from..].chars().take(n).collect() };
+
+    assert!(
+        keeper.contains("QUICK_STREAK_REL"),
+        "连败账必须有一个确定的落点（相对 prefix）"
+    );
+    assert!(
+        keeper.contains("fn load_quick_streak(") && keeper.contains("fn save_quick_streak("),
+        "读回与落账两个函数都要在（只有一半＝重启照样遗忘）"
+    );
+    // 初始化必须从盘上读，不许写死 0
+    let init_at = keeper
+        .find("let mut quick_streak")
+        .expect("quick_streak 初始化必须在");
+    let init = win(init_at, 160);
+    assert!(
+        init.contains("load_quick_streak(&prefix)"),
+        "初始值必须从盘上读回，不许写死 0: {init}"
+    );
+    // 每次账变都要落盘：秒退两处＋稳定清零一处
+    let saves = keeper.matches("save_quick_streak(&prefix").count();
+    assert!(
+        saves >= 3,
+        "账变的三条路径（当拍秒退／下拍审理／稳定清零）都要落盘，实见 {saves} 处"
+    );
+    // 复位口要写清：删件即复位，不靠重启
+    assert!(
+        keeper.contains("复位口"),
+        "持久化之后必须写清复位口（删件），否则熔断无法解除"
+    );
+}

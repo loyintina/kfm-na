@@ -480,12 +480,25 @@ pub fn report_sync_once(stage: &str, msg: &str) {
 }
 
 /// 上报行 JSON 装配（单一源：三条上报路径全走这里，设备/实例标识在此挂）
+/// JSON 行（stage／msg／ts）。**ts 是 BAR-273 第 5 条**（MAIN0192 楼261 清和裁
+/// 「要加」）：此前 335 万行里带时刻的 0 条，导致「单位时间重拉次数」「单次存活
+/// 时长」这类健康判据永远只能靠人现场直测——报表退化成不可用。ts＝epoch 毫秒，
+/// 只加键、不改既有键名。sshd 那条另有 `间隔 Nms`（见 sshd_keeper），两条可互证。
 fn line_json(stage: &str, msg: &str) -> String {
     format!(
-        "{{\"stage\":\"{}\",\"msg\":\"{}\"}}",
+        "{{\"ts\":{},\"stage\":\"{}\",\"msg\":\"{}\"}}",
+        now_ms(),
         escape_json(stage),
         escape_json(&stamp_msg(msg))
     )
+}
+
+/// 当前 epoch 毫秒（ts 字段用；系统时钟异常时退 0，不挡上报）
+fn now_ms() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0)
 }
 
 fn enqueue(line: String) {

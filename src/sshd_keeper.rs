@@ -209,6 +209,44 @@ fn probe_banner() -> Option<String> {
     }
 }
 
+/// 秒退连败计数的落点（相对 prefix）。**BAR-259 熔断的账必须持久化**——通则第 8
+/// 条（MAIN0186）：「计数到 N 就动作」的机制只在内存里，App 每重启一次账就清一次。
+///
+/// **口径以 MAIN0192 楼273 为准（我楼269 的初判说重了，此处改正）**：同一实例内
+/// 账**是**累加的（fuse_step 当拍即加，空山复核见过「第 8 次」），所以熔断在单实例
+/// 内有效；丢的是**跨实例**那段——11 机的 churn 场景恰好跨 App 重启，于是账上多数
+/// 行是「第 1 次」。因此这条改的是「跨重启不忘账」，**不解决死因**（楼273 的
+/// 8025 对照实验把当前死因指向 8024 被占用）。
+///
+/// 复位口＝删这一个件（修好之后），不靠重启。
+pub const QUICK_STREAK_REL: &str = "tmp/sshd-quick-streak";
+
+fn quick_streak_path(prefix: &std::path::Path) -> std::path::PathBuf {
+    prefix.join(QUICK_STREAK_REL)
+}
+
+/// 读回连败账（读不到/坏值当 0——首次运行与刚复位都长这样）
+fn load_quick_streak(prefix: &std::path::Path) -> u32 {
+    std::fs::read_to_string(quick_streak_path(prefix))
+        .ok()
+        .and_then(|t| t.trim().parse::<u32>().ok())
+        .unwrap_or(0)
+}
+
+/// 落账（失败不致命：只报一行，绝不让记账挡住看门狗）
+fn save_quick_streak(prefix: &std::path::Path, n: u32) {
+    let p = quick_streak_path(prefix);
+    if let Some(dir) = p.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if std::fs::write(&p, n.to_string()).is_err() {
+        crate::report::report(
+            "sshd",
+            "秒退连败账落盘失败——熔断阈值本轮只能靠内存（通则第 8 条：重启即遗忘）",
+        );
+    }
+}
+
 fn keep_loop(prefix: PathBuf) {
     let mut child: Option<Child> = None;
     let mut backoff_secs: u64 = 1;
@@ -219,9 +257,15 @@ fn keep_loop(prefix: PathBuf) {
     // 外来占口在位旗（BAR-247 真让位闸：本拍 banner 健康而娃不在 = true，
     // ④ 的 spawn 被它闸住——只探口不抢口）
     let mut foreign_serving = false;
-    // BAR-259 秒退熔断账：连败数＋本轮 spawn 时刻
-    let mut quick_streak: u32 = 0;
+    // BAR-259 秒退熔断账：连败数＋本轮 spawn 时刻。连败数**从盘上读回**——
+    // 只在内存时 App 每重启一次账就清一次，阈值永不触发（通则第 8 条；楼269 实证）
+    let mut quick_streak: u32 = load_quick_streak(&prefix);
     let mut spawned_at: Option<std::time::Instant> = None;
+    // 上一次 spawn 的时刻（BAR-273 第 5 条，MAIN0192 楼262／楼263）：报表原先
+    // 只有「已重拉」的次数，没有间隔也没有时刻，于是「单位时间重拉次数」与
+    // 「单次存活时长」两条健康判据都无从导出。这里记上一次 spawn，本次 spawn
+    // 时把**间隔毫秒**写进那行——频率＝1/平均间隔，判卷不必再等全场 ts。
+    let mut last_spawn_at: Option<std::time::Instant> = None;
     let mut tick: u32 = 0;
     loop {
         tick = tick.wrapping_add(1);
@@ -233,15 +277,23 @@ fn keep_loop(prefix: PathBuf) {
         if let Some(c) = child.as_mut() {
             match c.try_wait() {
                 Ok(Some(st)) => {
+                    // 退出行补「存活 Nms」（MAIN0192 楼266 悬铃裁）：判「活不住」
+                    // 要看单次存活分布，不看重拉次数。存活取 spawned_at（spawn 时
+                    // 记的时刻），取不到记 unknown——不许拿 0 冒充安静退出。
+                    let lived_ms = spawned_at
+                        .map(|t| t.elapsed().as_millis())
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "unknown".to_owned());
                     crate::report::report(
                         "sshd",
-                        &format!("sshd 退出（{st}）——{backoff_secs}s 后重拉"),
+                        &format!("sshd 退出（{st}，存活 {lived_ms}ms）——{backoff_secs}s 后重拉"),
                     );
                     // BAR-259 秒退连败熔断：spawn 成功但秒退（如 conf 缺件）
                     // 不归 spawn 永久分类管，1s 退避会永动——连败到顶即挂起
                     let survived = spawned_at.take().map(|t| t.elapsed());
                     let (s, blow) = fuse_step(survived, quick_streak);
                     quick_streak = s;
+                    save_quick_streak(&prefix, quick_streak);
                     child = None;
                     stable_since = None;
                     if blow {
@@ -311,7 +363,12 @@ fn keep_loop(prefix: PathBuf) {
         if stable_since.is_some_and(|t| t.elapsed() >= STABLE_RESET) {
             backoff_secs = 1;
             stable_since = None;
-            quick_streak = 0;
+            // 稳定过的 sshd 不算带病：内存与盘上的账一起清，否则下次启动会把
+            // 一笔早该作废的连败账读回来，冤枉一台已经好了的机
+            if quick_streak != 0 {
+                quick_streak = 0;
+                save_quick_streak(&prefix, 0);
+            }
         }
         // ④ 缺娃重拉（退避睡醒再 spawn）——BAR-247 真让位闸：外来 sshd
         // 占着口（banner 健康）时不 spawn，本拍只探口；口腾出下拍接管
@@ -330,8 +387,15 @@ fn keep_loop(prefix: PathBuf) {
             }
             match spawn_sshd(&prefix) {
                 Ok(c) => {
-                    crate::report::report("sshd", &format!("sshd 已重拉（pid {}）", c.id()));
+                    // 间隔＝距上一次 spawn 的毫秒数（首拉记 0）。判据：间隔中位数
+                    // 在涨＝活不住；在落＝守住了（BAR-273 第 5 条）。
+                    let since_last_ms = last_spawn_at.map(|t| t.elapsed().as_millis()).unwrap_or(0);
+                    crate::report::report(
+                        "sshd",
+                        &format!("sshd 已重拉（pid {}，间隔 {}ms）", c.id(), since_last_ms),
+                    );
                     foreign_note = false;
+                    last_spawn_at = Some(std::time::Instant::now());
                     spawned_at = Some(std::time::Instant::now());
                     child = Some(c);
                     freeze_strikes = 0;
@@ -372,6 +436,7 @@ fn keep_loop(prefix: PathBuf) {
                         let survived = spawned_at.take().map(|t| t.elapsed());
                         let (s, blow) = fuse_step(survived, quick_streak);
                         quick_streak = s;
+                        save_quick_streak(&prefix, quick_streak);
                         crate::report::report(
                             "sshd",
                             &format!(
