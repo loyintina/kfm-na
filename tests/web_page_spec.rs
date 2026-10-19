@@ -1584,3 +1584,31 @@ fn spec_bar596_绘制路径同作用域不得二次取锁() {
         "收紧 scope 的理由注释必须在位（防回退）"
     );
 }
+
+#[test]
+fn spec_bar273_keeper启动不依赖服务器条目() {
+    // MAIN0192 楼430 定性、楼808 死锁环：keeper::start 原先被包在 tunnel_srv 的
+    // and_then 闭包里 ⇒ servers.json 空时整段不执行 ⇒ 8024 永不自起 ⇒
+    // 「撤核要壳 → 壳要 8024 → 8024 要 keeper → keeper 要条目」死锁。
+    // 钉：keeper::start 必须在闭包**外**（无条件按 prefix 分档启动）。
+    let src = read_src("src/android_app.rs");
+    let closure_at = src
+        .find("self.tunnel_snap = tunnel_srv.clone().and_then")
+        .expect("隧道闭包必须在");
+    // 闭包起点之前必须有 keeper::start（说明它被移到了闭包外）
+    let before = &src[..closure_at];
+    let last_start = before.rfind("crate::sshd_keeper::start(");
+    assert!(
+        last_start.is_some(),
+        "keeper::start 必须在隧道闭包**之前**（不依赖服务器条目）"
+    );
+    // 闭包之后到闭包结束之间不许再出现第二处 start（否则仍有一条被条目门控的路径）
+    let after = &src[closure_at..];
+    let body_end = after
+        .find("Some(crate::tunnel::start")
+        .expect("闭包体哨兵必须在");
+    assert!(
+        !after[..body_end].contains("crate::sshd_keeper::start("),
+        "隧道闭包内不许再起看门狗（会重新被 servers 条目门控）"
+    );
+}

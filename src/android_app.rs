@@ -4860,6 +4860,28 @@ impl App {
         let tunnel_srv = default_idx
             .and_then(|i| self.settings_servers.get(i))
             .cloned();
+        // **sshd 看门狗只依赖 prefix，不依赖「有没有服务器条目」**（MAIN0192 楼430
+        // 定性、楼808 死锁环）：原先 keeper::start 被包在下面 tunnel_srv 的 and_then
+        // 闭包里 ⇒ servers.json 空时整段不执行 ⇒ 8024 永不自起 ⇒「撤核要壳 → 壳要
+        // 8024 → 8024 要 keeper → keeper 要条目」的死锁。移出来，只按 prefix 分档判。
+        {
+            let prefix = crate::local_pty::android_prefix();
+            let pst = crate::bootstrap::prefix_state(&prefix);
+            match pst {
+                crate::bootstrap::PrefixState::Ready
+                | crate::bootstrap::PrefixState::ReadyNeedsConf => {
+                    // 未就绪档不启动：spawn 必永久失败，等 BAR-229 自愈后下次启动接管
+                    crate::sshd_keeper::start(prefix);
+                }
+                _ => crate::report::report(
+                    "sshd",
+                    &format!(
+                        "看门狗不启动（prefix 分档={pst:?}）——与是否有服务器条目无关；BAR-229 自愈后下次启动接管"
+                    ),
+                ),
+            }
+        }
+
         self.tunnel_snap = tunnel_srv.clone().and_then(|srv| {
             let prefix = crate::local_pty::android_prefix();
             // BAR-229：QUIC 双腿是核内纯 Rust，不依赖 prefix——隧道无条件
@@ -4874,17 +4896,8 @@ impl App {
                         "L3 prefix 不可用（{pst:?}）——ssh 娃臂将挂起（BAR-229 错误分类），QUIC 腿照常"
                     ),
                 );
-                // BAR-230：看门狗同样不启动——哨兵不过 = prefix 环境死，
-                // spawn 必永久失败；BAR-229 自愈闸会在下次启动修复接管。
-                crate::report::report(
-                    "sshd",
-                    &format!("看门狗不启动（prefix 分档={pst:?}，BAR-229 自愈后下次启动接管）"),
-                );
-            } else {
-                // BAR-230：sshd 看门狗（与 nasup 同族）——强停/重启带走
-                // sshd 后自动重拉，9022 反连桥不再哑死不自愈。
-                crate::sshd_keeper::start(prefix.clone());
             }
+            // 看门狗已在上方按 prefix 分档独立启动（不在此闭包内）——这里只管隧道
             Some(crate::tunnel::start(prefix, srv.clone()))
         });
 

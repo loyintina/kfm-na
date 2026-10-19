@@ -9,4 +9,5 @@
 #   3. 到期未复核即红（带 expired 计数）；
 #   4. 豁免计数单列，增长需 reviewer 背书。
 
-src/android_app\.rs:11570->11574  # reason=guard 在 is_some_and 闭包体内，闭包返回即放；静态扫描按整行花括号计数分不清闭包边界 | evidence=python3 scripts/check/check-mutex-reentry.py 仅此一条命中 | reviewer=闻灯 | expires=2026-11-19
+# 目前零豁免（原 11570->11574 那条在检查器改为逐字符花括号后，假阳性消失 ⇒ 病灶已走，
+# 按「失配即红」的规矩撤销——这条正好验证了绑行号的豁免会随代码漂移）。

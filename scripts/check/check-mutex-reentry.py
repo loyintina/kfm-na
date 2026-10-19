@@ -60,10 +60,17 @@ def scan_file(path: Path):
                 for gd, grecv, gname, gl in guards:
                     if gd <= depth and grecv == recv:
                         hits.append((path, gl, gname, grecv, i))
-        depth += line.count("{") - line.count("}")
-        guards = [g for g in guards if g[0] <= depth]
-        if depth < 0:
-            depth = 0
+        # **逐字符处理花括号**（楼720／832 的教训：整行净差会把闭包的 `}) {` 抵消掉，
+        # 导致闭包体内的 guard 被误判为「仍存活」而报假阳性）。逐字符时闭包 `}` 一到，
+        # 深度下降，闭包内建立的 guard 当场出域。
+        for ch in line:
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth < 0:
+                    depth = 0
+                guards = [g for g in guards if g[0] <= depth]
     return hits
 
 
