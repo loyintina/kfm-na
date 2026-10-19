@@ -377,3 +377,27 @@ fn spec_bar311_心跳行带状态维且看门狗不停止() {
         "全文件只允许 start() 那处幂等 return（防重复线程），其余一律不停止"
     );
 }
+
+#[test]
+fn spec_bar408_计数清零必须报账() {
+    // MAIN0192 楼408 清和挂账：清零是一次状态变更，静默清等于把「它曾经病过」从
+    // 账上抹掉。判据：清零路径必须报一行，且带三样——理由／此前连败数／当时存活；
+    // 且只在真有账可清时落行（否则每 5 分钟刷一行噪声）。
+    let keeper = include_str!("../src/sshd_keeper.rs");
+    let at = keeper
+        .find("sshd 计数清零")
+        .expect("清零报账行必须在（静默清零＝抹账）");
+    let line = &keeper[at..(at + 320).min(keeper.len())];
+    for need in ["理由", "连败", "存活"] {
+        assert!(line.contains(need), "清零报账缺「{need}」: {line}");
+    }
+    // 必须先判「有账」再报，不许无条件刷
+    let block_at = keeper
+        .find("if stable_since.is_some_and(|t| t.elapsed() >= STABLE_RESET)")
+        .expect("稳定清零块必须在");
+    let block = &keeper[block_at..(block_at + 900).min(keeper.len())];
+    assert!(
+        block.contains("if quick_streak != 0 || backoff_secs != 1"),
+        "清零报账必须有「有账才报」的前置，否则每 5 分钟刷噪声"
+    );
+}

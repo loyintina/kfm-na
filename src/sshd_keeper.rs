@@ -462,8 +462,23 @@ fn keep_loop(prefix: PathBuf) {
                 foreign_note = true;
             }
         }
-        // ③ 稳定清零退避（连败账同清——稳定过的 sshd 不算带病）
+        // ③ 稳定清零退避（连败账同清——稳定过的 sshd 不算带病）。
+        // **清零必须报账**（MAIN0192 楼408 清和挂账）：清零是一次状态变更，静默清
+        // 等于把「它曾经病过」从账上抹掉；报账要带三样——理由、此前连败数、当时存活。
+        // 只在「真有账可清」时落行（否则每 5 分钟刷一行噪声）。
         if stable_since.is_some_and(|t| t.elapsed() >= STABLE_RESET) {
+            let lived = spawned_at
+                .map(|t| format!("{}ms", t.elapsed().as_millis()))
+                .unwrap_or_else(|| "unknown".to_owned());
+            if quick_streak != 0 || backoff_secs != 1 {
+                crate::report::report(
+                    "sshd",
+                    &format!(
+                        "sshd 计数清零（理由：稳定存活 ≥ {}s；此前连败 {quick_streak}；当时存活 {lived}；退避回 1s）",
+                        STABLE_RESET.as_secs()
+                    ),
+                );
+            }
             backoff_secs = 1;
             stable_since = None;
             quick_streak = 0;
