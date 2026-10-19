@@ -218,6 +218,8 @@ _lockprobe_norm() {
 }
 _lockprobe_norm --fixture scripts/check/lockprobe-samples-real.txt || { echo "❌ 探针真样本对表不过（dims=field）"; exit 1; }
 _lockprobe_norm --self-test || { echo "❌ 探针报行文本层校验不过"; exit 1; }
+# 别名传播与负对照（楼843：同一对象不同名会漏；顺序取锁不许报）
+bash scripts/test-mutex-reentry.sh || { echo "❌ 重入检查器别名/负对照考题不过"; exit 1; }
 # 同接收者重入属性检查（MAIN0192 楼697／700：判据按属性不按行号清单）——命中即红，
 # 豁免须在 scripts/check/mutex-reentry-allow.txt 写理由
 python3 scripts/check/check-mutex-reentry.py || { echo "❌ 同一 Arc 持锁期内二次取锁（自锁类）"; exit 1; }

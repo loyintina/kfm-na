@@ -32,20 +32,37 @@ GUARD = re.compile(
 )
 # 任意直接取锁
 TAKE = re.compile(r"(?P<recv>\w+)\.lock\(\)")
+# 别名传播（MAIN0192 楼719／843：同一 Arc 换个名字就漏，例如
+#   let t = term_arc.clone();  /  let th = &term_arc;
+# 口径限制：不做作用域精确（全局近似），命中仍需人复核。
+ALIAS = re.compile(r"^\s*let\s+(?:mut\s+)?(?P<new>\w+)\s*(?::[^=]+)?=\s*&?(?P<old>\w+)(?:\.clone\(\))?\s*;")
+
+
+def canon(name: str, aliases: dict) -> str:
+    seen = set()
+    while name in aliases and name not in seen:
+        seen.add(name)
+        name = aliases[name]
+    return name
 
 
 def scan_file(path: Path):
     lines = path.read_text(errors="ignore").split("\n")
     depth = 0
+    aliases = {}  # new -> old（规范名解析）
     guards = []  # (depth, recv, name, lineno)
     hits = []
     for i, line in enumerate(lines, start=1):
         if line.strip().startswith("//"):
             depth += line.count("{") - line.count("}")
             continue
+        am = ALIAS.match(line)
+        if am and am.group("new") != am.group("old"):
+            aliases[am.group("new")] = am.group("old")
         m = GUARD.match(line)
         if m:
             recv, name = m.group("recv"), m.group("name")
+            recv = canon(recv, aliases)
             # 同一接收者已有存活 guard ⇒ 这就是重入
             for gd, grecv, gname, gl in guards:
                 if gd <= depth and grecv == recv:
@@ -56,7 +73,7 @@ def scan_file(path: Path):
             guards = [g for g in guards if g[2] != dm.group(1)]
         if not m:
             for t in TAKE.finditer(line):
-                recv = t.group("recv")
+                recv = canon(t.group("recv"), aliases)
                 for gd, grecv, gname, gl in guards:
                     if gd <= depth and grecv == recv:
                         hits.append((path, gl, gname, grecv, i))
