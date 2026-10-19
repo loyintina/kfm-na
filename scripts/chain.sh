@@ -196,6 +196,10 @@ bash scripts/test-bar114-modal-cursor.sh || { echo "❌ BAR-114 模态压顶守�
 # 流被 vivo 冻结掐死三跑命案——续传/对账/绝对路径/files-only 四契约）
 # 2026-10-19 挂入：BAR-273 推核前闸（MAIN0192 楼418／420 清和裁——核内嵌 vc 必须与
 # 机上 APK versionCode 一致；不一致即拒推。11 机实证：核比壳新 ⇒ 一点终端即崩）
+# 缺件闸先行（楼517：查「脚本在不在位」必须落在调用方——写在被检脚本自己里，
+# 脚本被删时那一条根本不执行，等于没有）。缺件的红与脚本自报错的红分开。
+[ -f scripts/check/check-hot-core-vc.sh ] && [ -f scripts/test-hot-core-vc.sh ] \
+  || { echo "❌ 推核前闸缺件（check-hot-core-vc.sh 或 test-hot-core-vc.sh 不在位）——闸等于不存在"; exit 1; }
 bash scripts/test-hot-core-vc.sh || { echo "❌ 推核前闸考题不过"; exit 1; }
 bash scripts/test-pack-toolchain.sh || { echo "❌ BAR-136 pack 契约考题不过"; exit 1; }
 # 2026-09-24 同步挂入：BAR-150 半截核不落位契约钉（cat&&mv 假原子——
