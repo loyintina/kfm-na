@@ -27,7 +27,84 @@ SCHEMA = "v4"
 # **覆盖面做成必填字段 dims**（楼759：自由文本后缀照样靠人记得写；dims 是机器可核的
 # 必填项，缺失即落 invalid reason=missing_field field=dims，复用 v4 的缺字段机制）。
 # 语义有效性不归本校验器（归契约定）。
-DIMS = "field_presence,field_order,init_schema,invalid_shape"
+# **词表归契约**（楼764／766）：工具**不内置**任何 dims 值，只从契约文件读；
+# 文件缺失或格式坏 ⇒ 拒跑（rc=2，第三态），不许回退到内置词表。
+VOCAB = Path(__file__).resolve().parent / "lockprobe-dims-vocab.txt"
+
+
+def load_vocab():
+    """返回 (vocab_str, None) 或 (None, 拒跑原因)"""
+    if not VOCAB.exists():
+        return None, "vocab_missing"
+    vals = []
+    for raw in VOCAB.read_text().splitlines():
+        t = raw.split("#")[0].strip()
+        if not t:
+            continue
+        if not all(c.isalnum() or c in "_-" for c in t):
+            return None, "vocab_malformed"
+        vals.append(t)
+    if not vals:
+        return None, "vocab_empty"
+    return ",".join(vals), None
+
+
+# **两套闭集，各自机械强制**（楼779／781／782）：
+# 行级 = pass / invalid / init / instrument_error —— 「行坏」与「判不了」必须分开，
+#        否则仪器故障会被记成行有问题；
+# 列级 = judged / UNCHECKED —— 只许出现在列级统计，**行输出里出现即格式错**。
+ROW_STATES = ("pass", "invalid", "init", "instrument_error")
+COL_STATES = ("judged", "UNCHECKED")
+
+
+def assert_row_state(st: str) -> None:
+    if st not in ROW_STATES:
+        raise SystemExit(
+            f"INVALID reason=bad_value field=row_state expect={'|'.join(ROW_STATES)} got={st}"
+        )
+    if st in COL_STATES:
+        raise SystemExit(
+            f"INVALID reason=bad_value field=row_state got={st}（UNCHECKED 是列级状态，不许进行输出）"
+        )
+
+
+_SEQ = [0]
+
+
+def _now_stamp() -> str:
+    """时刻戳两段：wall（跨机对表，先核偏差）＋进程内单调序号（同秒 tie-break）。
+    取最新一律按 (wall, seq) 排，不按文件顺序（楼773／774）。"""
+    import datetime
+    _SEQ[0] += 1
+    t = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+    return f"t={t} seq={_SEQ[0]}"
+
+
+def vocab_stamp() -> str:
+    """仪器戳（楼772）：每条结论带词表可用性与版本，这样「同一行两个结论」是两次
+    测量而不是矛盾；转变时不回改旧行，只追加新行。"""
+    vocab, why = load_vocab()
+    if vocab is None:
+        return f"vocab=unavailable({why}) {_now_stamp()}"
+    import hashlib
+
+    ver = hashlib.sha256(vocab.encode()).hexdigest()[:8]
+    return f"vocab=available@{ver} {_now_stamp()}"
+
+
+def emit_instrument() -> None:
+    """仪器状态**单列一行**（楼769）：行属性只判存在性/形态；值合规与否取决于词表，
+    词表缺失就记「未覆盖」，不把 undefined 写进结论态。"""
+    vocab, why = load_vocab()
+    if vocab is None:
+        print(
+            f"[check-lockprobe-line] INSTRUMENT state=unavailable reason={why} "
+            f"uncovered={"all_value_dims"} schema={SCHEMA}"
+        )
+    else:
+        print(
+            f"[check-lockprobe-line] INSTRUMENT state=available dims={vocab} schema={SCHEMA}"
+        )
 
 
 def emit_invalid(reason: str, field: str, detail: str) -> None:
@@ -40,6 +117,8 @@ def check_line(line: str):
     s = line.strip()
     if not s:
         return None
+    if "dims=" in s and not s.split("dims=")[1].split()[0].strip():
+        return ("missing_field", f"dims 为空: {s}")
     if s.startswith("probe=invalid"):
         for need in ("schema=", "reason="):
             if need not in s:
@@ -102,7 +181,8 @@ def main() -> int:
         if bad:
             print(f"[check-lockprobe-line] 夹具 {bad} 挂 / {n} 条")
             return 1
-        print(f"[check-lockprobe-line] OK fixture={n} dims={DIMS}+kind_expect schema={SCHEMA}")
+        emit_instrument()
+        print(f"[check-lockprobe-line] OK fixture={n} schema={SCHEMA} {vocab_stamp()}")
         return 0
 
     if "--self-test" in sys.argv:
@@ -132,7 +212,8 @@ def main() -> int:
         if bad:
             print(f"[check-lockprobe-line] {bad} 挂")
             return 1
-        print(f"[check-lockprobe-line] OK tests=6 dims={DIMS} schema={SCHEMA}")
+        emit_instrument()
+        print(f"[check-lockprobe-line] OK tests=6 schema=v4 {vocab_stamp()}")
         return 0
 
     if len(sys.argv) < 2:
@@ -149,7 +230,8 @@ def main() -> int:
     if bad:
         print(f"[check-lockprobe-line] {bad} 行不合规（共 {i} 行）")
         return 1
-    print(f"[check-lockprobe-line] OK lines={i} dims={DIMS} schema={SCHEMA}")
+    emit_instrument()
+    print(f"[check-lockprobe-line] OK lines={i} schema={SCHEMA} {vocab_stamp()}")
     return 0
 
 
