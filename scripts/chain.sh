@@ -194,6 +194,9 @@ bash scripts/test-bar123-keybar-ruler.sh || { echo "❌ BAR-123 同尺守卫考�
 bash scripts/test-bar114-modal-cursor.sh || { echo "❌ BAR-114 模态压顶守卫考题不过"; exit 1; }
 # 2026-09-23 同步挂入：BAR-136 pack-toolchain 冻结韧性契约钉（8022 长 tar
 # 流被 vivo 冻结掐死三跑命案——续传/对账/绝对路径/files-only 四契约）
+# 2026-10-19 挂入：BAR-273 推核前闸（MAIN0192 楼418／420 清和裁——核内嵌 vc 必须与
+# 机上 APK versionCode 一致；不一致即拒推。11 机实证：核比壳新 ⇒ 一点终端即崩）
+bash scripts/test-hot-core-vc.sh || { echo "❌ 推核前闸考题不过"; exit 1; }
 bash scripts/test-pack-toolchain.sh || { echo "❌ BAR-136 pack 契约考题不过"; exit 1; }
 # 2026-09-24 同步挂入：BAR-150 半截核不落位契约钉（cat&&mv 假原子——
 # ssh 断流 cat 退出 0，2MB 半截核直落位命案；对账先于 mv/失败 exit/
