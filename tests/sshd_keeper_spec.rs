@@ -61,16 +61,24 @@ fn spec_bar230_哨兵含链接判据() {
 }
 
 #[test]
-fn spec_bar230_start幂等_假prefix永久挂起() {
-    // host 冒烟：不存在的前缀 → spawn ENOENT（永久档）→ 看门狗线程
-    // 自己退出且 start 幂等（两次调用不 panic；第二次打「已在跑」报表）
+fn spec_bar230_start幂等_假prefix不停止() {
+    // host 冒烟：不存在的前缀 → spawn ENOENT（永久性档）。
+    // **口径已反向**（MAIN0192 楼306 清和裁「永不产生停止状态」／楼340 审计：
+    // 旧的「永久挂起」测试名与裁冲突）：看门狗**不再退出**，改为报红＋退避封顶
+    // 继续试——prefix 修好即自愈。本钉咬三件：
+    // ① start 幂等（两次调用不 panic，第二次走「已在跑」）；② 永久性失败不 panic；
+    // ③ 线程仍在跑（不是一次性退出烧完就没了）。
     let fake = std::env::temp_dir().join("bar230-no-such-prefix");
     kfm_na::sshd_keeper::start(fake.clone());
     kfm_na::sshd_keeper::start(fake);
-    // 给线程一拍时间走永久失败分支（spawn 前有 backoff 睡眠）
+    // 给线程一拍时间走永久性失败分支（spawn 前有退避睡眠）
     std::thread::sleep(std::time::Duration::from_millis(1500));
-    // 无法直接断言线程退出（无句柄）——判据走报表/真机 C 档；
-    // 本钉至少咬住：幂等闸 + 永久分类不 panic 不死循环烧 CPU（1.5s 内返回）。
+    // ③ 心跳快照必须已发布且 state 非 not-started——证「线程活着并在记账」
+    let snap = kfm_na::sshd_keeper::health_snapshot();
+    assert!(
+        !snap.contains("not-started"),
+        "看门狗必须已在跑并发布状态（取消永久挂起后不许退出）: {snap}"
+    );
 }
 
 /// 夹具 zip 的最小复刻（bootstrap_spec 的 fixture_zip 是私有 fn，
@@ -222,6 +230,23 @@ fn spec_bar293_退出分档与退避封顶() {
     assert_eq!(
         classify_exit(Some(1), "Address already in use"),
         ExitClass::BindBusy
+    );
+    // 关键词必须**整句**（楼340 清和审计）：裸 port／bind 会把配置病当撞口
+    assert_eq!(
+        classify_exit(Some(1), "Badly formatted Port number."),
+        ExitClass::EnvDead,
+        "配置病不许被当成撞口（否则外因冒充、不计账）"
+    );
+    assert_eq!(
+        classify_exit(Some(1), "bind: invalid syntax"),
+        ExitClass::EnvDead,
+        "只认 OpenSSH 撞口原文那两句"
+    );
+    // rc 优先于关键词：255 一律撞口
+    assert_eq!(
+        classify_exit(Some(255), "no hostkeys available"),
+        ExitClass::BindBusy,
+        "rc=255 优先判撞口（关键词只在 rc 判不出时兜底）"
     );
     // 其它 rc 不许默认进账（楼291 承影）：判不出＝Unknown
     assert_eq!(classify_exit(Some(42), ""), ExitClass::Unknown);

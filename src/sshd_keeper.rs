@@ -216,10 +216,10 @@ pub enum ExitClass {
 /// 分类（纯函数，A 档可判）。rc 优先；stderr 只在 rc 判不出或与关键词冲突时兜底。
 pub fn classify_exit(rc: Option<i32>, err_hint: &str) -> ExitClass {
     let h = err_hint.to_lowercase();
-    let bindish = h.contains("address already in use")
-        || h.contains("bind")
-        || h.contains("cannot bind")
-        || h.contains("port");
+    // 收紧到**整句**（楼340 清和审计：裸 "port"／"bind" 会把
+    // 「Badly formatted Port」这类 rc=1 配置病误判成撞口，于是外因冒充、不计账）。
+    // 只认 OpenSSH 撞口的两句原文。
+    let bindish = h.contains("address already in use") || h.contains("cannot bind any address");
     let envish = h.contains("kfm-sshd.conf")
         || h.contains("host key")
         || h.contains("no hostkeys available")
