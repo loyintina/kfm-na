@@ -1,4 +1,12 @@
-# 同接收者重入检查的豁免（脚本 scripts/check/check-mutex-reentry.py）
-# 格式：<文件>:<guard 行>-><再取锁行>   # 理由（必填）
-# 规矩：命中必须二选一——修掉，或在下面写清理由。
-src/android_app.rs:11570->11574  # guard 在 is_some_and 的闭包体内，闭包返回即放；静态扫描按整行花括号计数分不清闭包边界，属工具口径限制，非真重入
+# 同接收者重入检查的豁免表（scripts/check/check-mutex-reentry.py）
+#
+# 格式（一行一条，五件缺一即红）：
+#   <正则模式>  # reason=<为何工具看不到> | evidence=<命令与输出摘要> | reviewer=<谁> | expires=<YYYY-MM-DD>
+#
+# 规矩（楼719／720）：
+#   1. 绑**模式**不绑行号——行号会漂，漂了就静默失配（既不红也不生效）；
+#   2. 模式必须命中至少一处，**失配即红**（防「豁免还在、病灶已走」）；
+#   3. 到期未复核即红（带 expired 计数）；
+#   4. 豁免计数单列，增长需 reviewer 背书。
+
+src/android_app\.rs:11570->11574  # reason=guard 在 is_some_and 闭包体内，闭包返回即放；静态扫描按整行花括号计数分不清闭包边界 | evidence=python3 scripts/check/check-mutex-reentry.py 仅此一条命中 | reviewer=闻灯 | expires=2026-11-19

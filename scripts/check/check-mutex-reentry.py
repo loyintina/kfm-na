@@ -67,37 +67,101 @@ def scan_file(path: Path):
     return hits
 
 
+REQUIRED_FIELDS = ("reason=", "evidence=", "reviewer=", "expires=")
+
+
 def load_allow():
-    """豁免清单：每行 `文件:行号  # 理由`。空豁免不许——每条都要有理由。"""
-    out = {}
+    """豁免表：模式 + 四字段（reason／evidence／reviewer／expires），缺一即红。
+
+    楼719／720：绑**模式**不绑行号（行号会漂，漂了静默失配）；模式必须命中至少
+    一处，否则红；到期未复核也红。返回 ([(pattern, fields)], errors)。
+    """
+    out, errors = [], []
     if not ALLOW.exists():
-        return out
+        return out, errors
     for raw in ALLOW.read_text().splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
-        key, _, reason = line.partition("#")
-        key = key.strip()
-        reason = reason.strip()
-        assert reason, f"豁免必须带理由：{raw}"
-        out[key] = reason
-    return out
+        pat, _, meta = line.partition("#")
+        pat = pat.strip()
+        meta = meta.strip()
+        missing = [f for f in REQUIRED_FIELDS if f not in meta]
+        if not pat or missing:
+            errors.append(f"豁免条目不合规（缺 {'/'.join(missing) or '模式'}）：{line}")
+            continue
+        fields = {}
+        for part in meta.split("|"):
+            k, _, v = part.partition("=")
+            fields[k.strip()] = v.strip()
+        out.append((pat, fields))
+    return out, errors
 
 
 def main() -> int:
+    import sys as _sys
+    global SRC
+    if "--src" in _sys.argv:
+        SRC = Path(_sys.argv[_sys.argv.index("--src") + 1])
     all_hits = []
     for p in sorted(SRC.rglob("*.rs")):
         all_hits.extend(scan_file(p))
-    allow = load_allow()
+    allow, allow_errors = load_allow()
+    if allow_errors:
+        for e in allow_errors:
+            print(f"[check-mutex-reentry] ❌ {e}")
+        return 1
+    import datetime
+    import re as _re
+    today = datetime.date.today().isoformat()
+    unused, expired = [], []
     kept = []
     for hit in all_hits:
         p, gl, gname, grecv, ln = hit
-        key = f"{p.relative_to(ROOT)}:{gl}->{ln}"
-        if key in allow:
+        try:
+            rel = p.relative_to(ROOT)
+        except ValueError:
+            rel = p
+        key = f"{rel}:{gl}->{ln}"
+        matched = None
+        for pat, fields in allow:
+            if _re.search(pat, key):
+                matched = (pat, fields)
+                break
+        if matched is None:
+            kept.append(hit)
             continue
-        kept.append(hit)
+        if matched[1].get("expires", "") < today:
+            expired.append((key, matched[1].get("reviewer", "?"), matched[1].get("expires", "?")))
+    for pat, fields in allow:
+        def _key(h):
+            try:
+                r = h[0].relative_to(ROOT)
+            except ValueError:
+                r = h[0]
+            return f"{r}:{h[1]}->{h[4]}"
+
+        if not any(_re.search(pat, _key(h)) for h in all_hits):
+            unused.append((pat, fields.get("expires", "?")))
     all_hits = kept
-    if not all_hits:
+    for p, gl, gname, grecv, ln in all_hits:
+        try:
+            rel = p.relative_to(ROOT)
+        except ValueError:
+            rel = p
+        print(f"[check-mutex-reentry] ❌ 命中 {rel}:{gl} guard {gname}={grecv}.lock() … → {rel}:{ln} 又取 {grecv}.lock()")
+    bad = bool(all_hits)
+    for key, reviewer, exp in expired:
+        print(f"[check-mutex-reentry] ❌ 豁免已到期未复核：{key}（reviewer={reviewer}，expires={exp}）")
+        bad = True
+    for pat, exp in unused:
+        print(f"[check-mutex-reentry] ❌ 豁免失配（模式没命中任何一处，病灶可能已走）：{pat} expires={exp}")
+        bad = True
+    if bad:
+        return 1
+    if allow:
+        print(f"[check-mutex-reentry] ℹ️ 豁免 {len(allow)} 条（计数单列，增长需 reviewer 背书）")
+    if not all_hits and not expired and not unused:
         print("[check-mutex-reentry] OK — 口径内零命中（直接取锁／同接收者／guard 存活期）")
         return 0
     print(f"[check-mutex-reentry] ❌ 命中 {len(all_hits)} 处（同一接收者的 guard 存活期内再取锁）：")

@@ -114,3 +114,48 @@ fn spec_lockprobe_报行字段同形且自锁无end() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn spec_lockprobe_init与invalid两类行可构造() {
+    // 楼727／728：对表此前只比 probe=lock 行；init 与 invalid 两类也要能构造、可核。
+    // ① init：init_log 后必须有一行 probe=lock mode=init schema=v4（三态判读第一态）
+    // ② invalid：frame==0 即整行无效，落 probe=invalid reason=frame（缺字段名要说清）
+    let dir = std::env::temp_dir().join(format!("lockprobe-ii-{}", std::process::id()));
+    let path = dir.join("lockprobe.log");
+    let _ = std::fs::remove_dir_all(&dir);
+    init_log(&path);
+
+    let arc2 = "test-arc-ii";
+    clear_holder(arc2);
+    let tok = prefetch_token();
+    {
+        // frame=0 ⇒ 故意构造无效行；守卫出来即 ended，additionally 不写 end
+        let _g = enter("site-invalid", arc2, tok, Anchors::default(), 0);
+    }
+
+    let lines = log_path_read(&path);
+    let init = lines
+        .iter()
+        .find(|l| l.contains("mode=init"))
+        .expect("init 行必须可构造");
+    assert!(
+        init.contains("schema=v4"),
+        "init 行必须带 schema 版本: {init}"
+    );
+    let inv = lines
+        .iter()
+        .find(|l| l.contains("probe=invalid"))
+        .expect("invalid 行必须可构造");
+    assert!(
+        inv.contains("reason=frame"),
+        "invalid 行必须给缺失字段名: {inv}"
+    );
+    // 无效行不得冒充有效证据：不许出现 site-invalid 的 lock 行
+    assert!(
+        !lines
+            .iter()
+            .any(|l| l.contains("site-invalid") && l.contains("probe=lock")),
+        "frame 缺时不许出 probe=lock 行（整行无效）"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
