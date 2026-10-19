@@ -13,7 +13,10 @@
   probe=lock 行必须含 12 个字段且**顺序**一致 → 否则 invalid(reason=缺的第一个字段)
   probe=invalid 行必须含 schema= 与 reason= → 这是合法行，不算无效
   probe=lock mode=init 行必须含 schema="v4"
-退出码：0 全合规；1 有不合规行
+退出码分层（楼814）：
+  0 通过 ｜ 1 判红（行不合规）｜ 2 拒跑（词表缺/坏，**必带 INSTRUMENT 自报**）
+  3 缺件或环境不对（夹具/目录/输入不存在——此时**没有**仪器自报，下游据此区分）
+  4 **内部异常**（不该发生；Python 未捕获异常默认也是 1，会和「判红」撞码，故单列）
 """
 import sys
 from pathlib import Path
@@ -85,11 +88,28 @@ def vocab_stamp() -> str:
     测量而不是矛盾；转变时不回改旧行，只追加新行。"""
     vocab, why = load_vocab()
     if vocab is None:
-        return f"vocab=unavailable({why}) {_now_stamp()}"
+        return f"dims=unknown({why}) {_now_stamp()}"
     import hashlib
 
     ver = hashlib.sha256(vocab.encode()).hexdigest()[:8]
-    return f"vocab=available@{ver} {_now_stamp()}"
+    return f"dims={MY_DIM} vocab@{ver} {_now_stamp()}"
+
+
+# 单维校验器只允许声明 field 一档（清单第 9 项：虚报即 invalid）
+MY_DIM = "field"
+
+
+def check_dims_declared(declared: str):
+    """声明值必须在契约闭集内，且单维校验器只能写 field"""
+    vocab, _ = load_vocab()
+    if vocab is None:
+        return None  # 词表不在 ⇒ 不出值判定（仪器行会说）
+    allowed = set(vocab.split(","))
+    if declared not in allowed:
+        return ("bad_value", f"dims 不在契约闭集内: {declared}")
+    if declared != MY_DIM:
+        return ("bad_value", f"单维校验器只能写 {MY_DIM}，声明 {declared} 属虚报")
+    return None
 
 
 def emit_instrument() -> None:
@@ -99,11 +119,12 @@ def emit_instrument() -> None:
     if vocab is None:
         print(
             f"[check-lockprobe-line] INSTRUMENT state=unavailable reason={why} "
-            f"uncovered={"all_value_dims"} schema={SCHEMA}"
+            f"uncovered=value,semantic schema={SCHEMA}"
         )
     else:
         print(
-            f"[check-lockprobe-line] INSTRUMENT state=available dims={vocab} schema={SCHEMA}"
+            f"[check-lockprobe-line] INSTRUMENT state=available vocab={vocab} "
+            f"mine={MY_DIM} uncovered=value,semantic schema={SCHEMA}"
         )
 
 
@@ -140,11 +161,18 @@ def check_line(line: str):
 
 
 def main() -> int:
+    # 楼818：rc=4 必须有可触发的构造用例，否则只是「见码未见验」。
+    # 用隐藏开关造一次真异常，由 tests/脚本断言 rc=4 且输出 INTERNAL 行。
+    if "--prove-internal-error" in sys.argv:
+        raise RuntimeError("deliberate-internal-error-for-rc4-proof")
     if "--fixture" in sys.argv:
         # 共用夹具模式（楼744／750／752／754）：**二维期望表**——行类型 × 判据，
         # 一行可同时挂两类判据，所以字段用 | 分隔、各自具名（kind=／expect=／format=）
         from pathlib import Path as _P
         fp = _P(sys.argv[sys.argv.index("--fixture") + 1])
+        if not fp.exists():
+            print(f"[check-lockprobe-line] MISSING fixture={fp}（rc=3：缺件，不是判红）", file=sys.stderr)
+            return 3
         bad = 0
         n = 0
         for raw in fp.read_text().splitlines():
@@ -182,6 +210,8 @@ def main() -> int:
             print(f"[check-lockprobe-line] 夹具 {bad} 挂 / {n} 条")
             return 1
         emit_instrument()
+        if load_vocab()[0] is None:
+            return 2
         print(f"[check-lockprobe-line] OK fixture={n} schema={SCHEMA} {vocab_stamp()}")
         return 0
 
@@ -213,6 +243,9 @@ def main() -> int:
             print(f"[check-lockprobe-line] {bad} 挂")
             return 1
         emit_instrument()
+        if load_vocab()[0] is None:
+            # 766：词表缺失/坏 ⇒ 拒跑 rc=2（自报已由 emit_instrument 打出）
+            return 2
         print(f"[check-lockprobe-line] OK tests=6 schema=v4 {vocab_stamp()}")
         return 0
 
@@ -220,6 +253,9 @@ def main() -> int:
         print("用法: check-lockprobe-line.py <行文件> | --self-test", file=sys.stderr)
         return 1
     path = Path(sys.argv[1])
+    if not path.exists():
+        print(f"[check-lockprobe-line] MISSING input={path}（rc=3：缺件，不是判红）", file=sys.stderr)
+        return 3
     bad = 0
     for i, line in enumerate(path.read_text(errors="ignore").splitlines(), start=1):
         r = check_line(line)
@@ -231,9 +267,17 @@ def main() -> int:
         print(f"[check-lockprobe-line] {bad} 行不合规（共 {i} 行）")
         return 1
     emit_instrument()
+    if load_vocab()[0] is None:
+        return 2
     print(f"[check-lockprobe-line] OK lines={i} schema={SCHEMA} {vocab_stamp()}")
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except SystemExit:
+        raise
+    except Exception as exc:  # 楼815：崩溃不许与「判红」同码
+        print(f"[check-lockprobe-line] INTERNAL error={exc!r}（rc=4：不该发生）", file=sys.stderr)
+        sys.exit(4)

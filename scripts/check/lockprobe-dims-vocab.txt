@@ -1,0 +1,11 @@
+# dims 值域（封闭集合）——**内容逐字引自 清单v3 第8.1（白露裁定，2026-10-19）**：
+#   dims=field  只判字段完整性
+#   dims=value  字段完整性＋值合法性
+#   dims=full   字段＋值＋语义
+# 集合外任何值 ⇒ invalid、reason=bad_value、field=dims。
+# 仪器状态（undefined／UNCHECKED）永不进入 dims。
+# 落文本归承影；若本文件与 清单v3 第8.1 不一致，以该条为准。
+# 引用纪律（清单v3 第803 楼）：楼里引用条款须写「清单vN第X项」。
+field
+value
+full

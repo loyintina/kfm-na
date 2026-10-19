@@ -204,3 +204,40 @@ fn spec_lockprobe_真实现产出的行按类型对表() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success(), "真原文按类型期望表必须全过：{stdout}");
 }
+
+#[test]
+fn spec_lockprobe_退出码四档可构造() {
+    // 楼814／815／818：退出码分层必须每档都有可触发用例，否则只是「见码未见验」。
+    // 0 通过／1 判红／2 拒跑（带自报）／3 缺件（无自报）／4 内部异常（不许与判红同码）
+    let checker = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/scripts/check/check-lockprobe-line.py"
+    );
+    let run = |args: &[&str]| -> (i32, String, String) {
+        let out = std::process::Command::new("python3")
+            .arg(checker)
+            .args(args)
+            .output()
+            .expect("python3 必须可起");
+        (
+            out.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&out.stdout).to_string(),
+            String::from_utf8_lossy(&out.stderr).to_string(),
+        )
+    };
+
+    let (rc0, so0, _) = run(&["--self-test"]);
+    assert_eq!(rc0, 0, "0 档：self-test 应通过；stdout={so0}");
+    assert!(so0.contains("OK tests=6"), "0 档必须有 pass 行");
+
+    let (rc3, _, se3) = run(&["--fixture", "/tmp/no-such-fixture-lockprobe.txt"]);
+    assert_eq!(rc3, 3, "3 档：缺件必须是 3（不是判红）");
+    assert!(se3.contains("MISSING"), "3 档必须打 MISSING 且无仪器自报");
+
+    let (rc4, so4, se4) = run(&["--prove-internal-error"]);
+    assert_eq!(rc4, 4, "4 档：内部异常必须是 4（不许与判红同码）");
+    assert!(
+        se4.contains("INTERNAL"),
+        "4 档必须有 INTERNAL 行；stdout={so4} stderr={se4}"
+    );
+}

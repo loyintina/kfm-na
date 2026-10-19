@@ -198,11 +198,26 @@ bash scripts/test-bar114-modal-cursor.sh || { echo "❌ BAR-114 模态压顶守�
 # 机上 APK versionCode 一致；不一致即拒推。11 机实证：核比壳新 ⇒ 一点终端即崩）
 # 探针报行文本层校验（MAIN0192 楼739／740：缺字段用例落在文本层，喂手工造的行；
 # 模块内单测只算自述，进证据面必须给第三方可复跑命令）
-# 探针报行文本层校验：**暂不在链上**（楼764／766）——dims 词表归契约，工具不内置词表，
-# 词表文件未落时它会拒跑（rc=2）。挂着要么红、要么逼我造词表，两者都不许。
-# 词表落到 scripts/check/lockprobe-dims-vocab.txt 后，把下面两行取消注释即挂回：
-# python3 scripts/check/check-lockprobe-line.py --fixture scripts/check/lockprobe-samples-real.txt || { echo "❌ 探针真样本对表不过"; exit 1; }
-# python3 scripts/check/check-lockprobe-line.py --self-test || { echo "❌ 探针报行文本层校验不过"; exit 1; }
+# 探针报行文本层校验：dims 词表已按契约 v5 §8.1 落地（field/value/full 三值闭集），
+# 本校验器只声明 dims=field（单维不虚报）；值合法性与语义两列在 10.1 里是 UNCHECKED。
+# 读侧归一化**只在这一处**实现（楼820：每个消费者各写一遍＝各猜一遍）：
+#   rc=1 但输出里没有 INVALID 行 ⇒ 按 4 档（内部异常）归一，并**计数留痕**
+#   （不留痕会把生产侧「忘了退 4」永久遮住）。
+_lockprobe_norm() {
+  local out rc
+  out=$(python3 scripts/check/check-lockprobe-line.py "$@" 2>&1); rc=$?
+  if [ "$rc" -eq 1 ] && ! printf '%s' "$out" | grep -q 'INVALID'; then
+    mkdir -p logs
+    printf '%s rc=1-no-invalid-line → normalized to 4（疑似崩溃/未退4）\n' "$(date -Iseconds)" >> logs/lockprobe-norm.log
+    echo "⚠️ lockprobe rc=1 但无 INVALID 行 ⇒ 归一为 4（已计数留痕 logs/lockprobe-norm.log）"
+    echo "$out"
+    return 4
+  fi
+  echo "$out"
+  return "$rc"
+}
+_lockprobe_norm --fixture scripts/check/lockprobe-samples-real.txt || { echo "❌ 探针真样本对表不过（dims=field）"; exit 1; }
+_lockprobe_norm --self-test || { echo "❌ 探针报行文本层校验不过"; exit 1; }
 # 同接收者重入属性检查（MAIN0192 楼697／700：判据按属性不按行号清单）——命中即红，
 # 豁免须在 scripts/check/mutex-reentry-allow.txt 写理由
 python3 scripts/check/check-mutex-reentry.py || { echo "❌ 同一 Arc 持锁期内二次取锁（自锁类）"; exit 1; }
