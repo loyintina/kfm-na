@@ -124,3 +124,45 @@ fn spec_残留自清_宿主空转() {
     let e = kfm_na::singleton::reap_foreign_instances("");
     assert!(e.is_empty(), "空包名 = 零动作（判据残缺不许开路）");
 }
+
+#[test]
+fn spec_bar457_同进程重入不自尽() {
+    // MAIN0192 楼456／457 立件：flock 是 per-open-file-description 的，同进程重入
+    // android_main 时新 fd 抢同一把锁必败，锁文件里读到的是自己的 pid。旧逻辑据
+    // 此报「已有活实例」并 exit(0)＝**自杀**。9 机实证：55 行让位 holder 全等于
+    // 本进程 pid，0 行不等。
+    use kfm_na::singleton::is_reentrant_self;
+
+    // ① 同 pid ⇒ 重入，不许让位
+    assert!(
+        is_reentrant_self(Some(6506), 6506),
+        "holder==self 必须判重入"
+    );
+    // ② 别的 pid ⇒ 真占用，让位照旧
+    assert!(
+        !is_reentrant_self(Some(6507), 6506),
+        "holder≠self 是真占用，仍应让位"
+    );
+    // ③ 读不到 holder ⇒ 判不出，按原逻辑让位（保守：不乱复用）
+    assert!(
+        !is_reentrant_self(None, 6506),
+        "holder 未知时不许当重入放行"
+    );
+
+    // ④ 源码锚：让位 exit 之前必须有重入判定，且重入分支不许 exit
+    let app = include_str!("../src/android_app.rs");
+    let at = app
+        .find("单实例让位：已有活实例")
+        .expect("让位报账行必须在");
+    // 按字符取窗口（源码含中文，按字节切会落在多字节字符中间——今晚栽过两次）
+    let before: String = app[..at].chars().rev().take(1200).collect();
+    let win: String = before.chars().rev().collect();
+    assert!(
+        win.contains("is_reentrant_self"),
+        "exit 之前必须有 is_reentrant_self 判定（否则重入即自杀）"
+    );
+    assert!(
+        win.contains("同进程重入"),
+        "重入分支必须报一行（复用已持锁），不许静默"
+    );
+}

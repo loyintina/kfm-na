@@ -11874,17 +11874,29 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
     // 写遗言就退。进程死内核自动释放锁 → 不存在陈旧锁卡住下一次启动
     if !crate::singleton::try_acquire() {
         let holder =
-            crate::singleton::holder_pid(std::path::Path::new(crate::singleton::LOCK_PATH))
-                .map(|p| p.to_string())
-                .unwrap_or_else(|| "?".into());
-        crate::report::report_sync(
-            "death",
-            &format!(
-                "单实例让位：已有活实例 pid={holder}（本进程 pid={}）",
-                std::process::id()
-            ),
-        );
-        std::thread::spawn(|| std::process::exit(0)).join().ok();
+            crate::singleton::holder_pid(std::path::Path::new(crate::singleton::LOCK_PATH));
+        // **同进程重入 ≠ 别人占着**（楼456／457）：flock 是 per-open-fd 的，同一
+        // 进程再抢同一把锁必败，且锁文件里就是自己的 pid。此时 exit(0) 是自杀
+        // ——9 机实证 55 行让位全部 holder==self。改为复用已持锁继续走。
+        if crate::singleton::is_reentrant_self(holder, std::process::id()) {
+            crate::report::report_sync(
+                "death",
+                &format!(
+                    "单实例：同进程重入（holder==self pid={}）——复用已持锁，不让位",
+                    std::process::id()
+                ),
+            );
+        } else {
+            let holder_s = holder.map(|p| p.to_string()).unwrap_or_else(|| "?".into());
+            crate::report::report_sync(
+                "death",
+                &format!(
+                    "单实例让位：已有活实例 pid={holder_s}（本进程 pid={}）",
+                    std::process::id()
+                ),
+            );
+            std::thread::spawn(|| std::process::exit(0)).join().ok();
+        }
     }
     // BAR-131 残留实例自清：拿到锁之后立刻清同 uid 的**其它** na 进程
     // （旧核实例还在抢反连口/刷状态——用户侧就是「反复重启才勉强能用」）。

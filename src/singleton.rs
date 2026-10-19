@@ -68,8 +68,23 @@ pub fn holder_pid(path: &Path) -> Option<u32> {
     std::fs::read_to_string(path).ok()?.trim().parse().ok()
 }
 
+/// 让位前的「是不是自己」判定（MAIN0192 楼456／457 立件）。
+///
+/// 病灶：flock 是 **per-open-file-description** 的——同一进程再 open 一次同一
+/// 文件拿新 fd，再去 LOCK_EX|LOCK_NB 会自己和自己冲突。于是同进程重入
+/// android_main 时 try_acquire 必败、锁文件里读到的是**自己的 pid**，旧逻辑
+/// 据此报「已有活实例」并 exit(0)——**自杀**。9 机实证：55 行让位，holder 全部
+/// 等于本进程 pid，0 行不等。
+///
+/// 判据（纯函数，A 档可判）：holder == 自己 ⇒ 同进程重入，**复用已持锁、不让位**；
+/// holder 为空或别人 ⇒ 按原逻辑让位。
+pub fn is_reentrant_self(holder: Option<u32>, me: u32) -> bool {
+    holder == Some(me)
+}
+
 /// 生产入口：抢应用私有目录那把锁。true = 本进程是唯一实例（句柄存进
 /// `HELD` 直到进程结束）；false = 已有活实例，调用方必须**立刻让位退出**
+/// （唯一例外：holder==自己＝同进程重入，见 is_reentrant_self）
 pub fn try_acquire() -> bool {
     let p = Path::new(LOCK_PATH);
     match try_acquire_at(p) {
