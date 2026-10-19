@@ -1545,3 +1545,42 @@ fn spec_bar273_熔断账暂不持久化() {
         "分档前 fuse_step 只判存活窗（这正是要分档的理由）"
     );
 }
+
+#[test]
+fn spec_bar596_绘制路径同作用域不得二次取锁() {
+    // MAIN0192 楼596／601 定性：draw_frame_gles 里 if over_dirty 块的外层 term_arc
+    // guard 原先活到块尾，web_on_top＋ai_snap 分支又 lock 同一 Arc ⇒ std Mutex 不可
+    // 重入 ⇒ 永久阻塞（futex 死等）⇒ 输入 5 秒不消费 ⇒ am_anr ⇒ AMS 杀。
+    // 修法＝把外层 guard 收紧到这一次 paint_over 之内。本钉咬三件：
+    // ①该块内 term_arc.lock() 恰好一处（二次取锁即红）；
+    // ②web_on_top 分支自己的取锁仍在（不许为了过钉删功能）；
+    // ③收紧的理由注释在位（防后来人又把 scope 拉宽）。
+    let src = read_src("src/android_app.rs");
+    let start = src
+        .find("if over_dirty {")
+        .expect("over_dirty 分支必须在（绘制路径入口）");
+    let end = src[start..]
+        .find("Self::report_tofu")
+        .expect("块尾哨兵必须在");
+    let block = &src[start..start + end];
+
+    // 两处取锁都在（paint_over 一处、web_on_top 分支一处）——病不在「次数」而在
+    // 「嵌套」：外层 guard 若活到块尾，第二处就是同线程重入。所以钉的是**作用域**：
+    assert_eq!(
+        block.matches("term_arc.lock()").count(),
+        2,
+        "两处功能取锁都必须在（不许为过钉删功能）"
+    );
+    assert!(
+        block.contains("{\n                let mut term = term_arc.lock().unwrap();"),
+        "paint_over 那次取锁必须在独立花括号内（guard 出块即放，不许活到块尾）"
+    );
+    assert!(
+        block.contains("web_on_top"),
+        "web_on_top 分支必须在（不许为过钉删功能）"
+    );
+    assert!(
+        block.contains("guard 作用域必须收紧"),
+        "收紧 scope 的理由注释必须在位（防回退）"
+    );
+}

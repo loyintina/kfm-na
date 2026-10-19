@@ -10071,22 +10071,29 @@ impl App {
             let web_on_top = z_order[6] == crate::ai_presence::Panel::Web;
             let px = g.slot_canvas(crate::gles_present::ChromeSlot::Over);
             px.fill(0);
-            let mut term = term_arc.lock().unwrap();
-            Self::paint_over(
-                &mut **term,
-                px,
-                w,
-                h,
-                ime,
-                bar_snap,
-                sending,
-                caret_on,
-                ai_snap,
-                magnifier_at,
-                true,
-                web_on_top,
-                false,
-            );
+            // **guard 作用域必须收紧到这一次 paint_over 之内**（MAIN0192 楼596／601
+            // 定性的同线程重入）：原先这个 guard 活到整个 if over_dirty 块尾，而下方
+            // web_on_top＋ai_snap 分支又 lock 同一 Arc ⇒ std Mutex 不可重入 ⇒ 永久
+            // 阻塞（futex 死等，CPU 不涨）⇒ 输入 5 秒不消费 ⇒ am_anr ⇒ AMS 杀。
+            // 判据：同一作用域内对 term_arc 的 lock 恒为 1（钉在 web_page_spec）。
+            {
+                let mut term = term_arc.lock().unwrap();
+                Self::paint_over(
+                    &mut **term,
+                    px,
+                    w,
+                    h,
+                    ime,
+                    bar_snap,
+                    sending,
+                    caret_on,
+                    ai_snap,
+                    magnifier_at,
+                    true,
+                    web_on_top,
+                    false,
+                );
+            }
             g.slot_bake(crate::gles_present::ChromeSlot::Over);
             // 段④：顶条独立承载层（只换承载——可见性仍由 web_on_top 置，
             // 几何仍是 bar_h＋段② 那份 off；内容与原先画进 Over 槽的同源同参）

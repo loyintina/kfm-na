@@ -315,8 +315,16 @@ fn spec_bar260_段4_只换承载不改可见() {
         .split("ChromeSlot::Over;")
         .next()
         .expect("Over 槽烘焙块");
+    // 判据与缩进无关（区间收紧后调用被嵌进花括号内，缩进变了但实参没变）：
+    // 只认「最后两个实参依次是 web_on_top、false」这个语义。
+    let baked_off = over_bake
+        .lines()
+        .map(|l| l.trim())
+        .collect::<Vec<_>>()
+        .windows(2)
+        .any(|w| w[0] == "web_on_top," && w[1] == "false,");
     assert!(
-        over_bake.contains("                web_on_top,\n                false,\n            );"),
+        baked_off,
         "Over 槽烘焙必须传 draw_web_bar=false（顶条不再画进 Over 槽）"
     );
     // CPU 兜底路径仍要画顶条（那条路没有 GLES 槽可换）
