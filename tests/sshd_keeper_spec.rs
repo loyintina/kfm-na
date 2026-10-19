@@ -177,19 +177,68 @@ fn spec_bar259_conf生成失败_不抢spawn分类() {
 
 #[test]
 fn spec_bar259_熔断_秒退连败() {
-    use kfm_na::sshd_keeper::fuse_step;
+    use kfm_na::sshd_keeper::{ExitClass, fuse_step};
     use std::time::Duration;
-    // 秒退累计
-    assert_eq!(fuse_step(Some(Duration::from_secs(1)), 0), (1, false));
-    assert_eq!(fuse_step(Some(Duration::from_secs(1)), 6), (7, false));
-    // 到上限熔断（变异：上限调大/判断改 > → 此处红）
-    assert_eq!(fuse_step(Some(Duration::from_secs(1)), 7), (8, true));
+    let env = ExitClass::EnvDead;
+    // 内因秒退才计账（conf／host key 缺这类，同一环境重试不自愈）
+    assert_eq!(fuse_step(Some(Duration::from_secs(1)), 0, env), (1, false));
+    assert_eq!(fuse_step(Some(Duration::from_secs(1)), 6, env), (7, false));
+    // 到上限（变异：上限调大／判断改 > → 此处红）
+    assert_eq!(fuse_step(Some(Duration::from_secs(1)), 7, env), (8, true));
     // 活得久＝清账
-    assert_eq!(fuse_step(Some(Duration::from_secs(5)), 3), (0, false));
+    assert_eq!(fuse_step(Some(Duration::from_secs(5)), 3, env), (0, false));
     // 恰达阈值不算秒退（边界归健康侧）
-    assert_eq!(fuse_step(Some(Duration::from_secs(2)), 3), (0, false));
+    assert_eq!(fuse_step(Some(Duration::from_secs(2)), 3, env), (0, false));
     // None＝冻僵 kill／try_wait 错（我们动手杀的）不计连败
-    assert_eq!(fuse_step(None, 5), (0, false));
+    assert_eq!(fuse_step(None, 5, env), (0, false));
+    // 楼291／293：撞口与未知 rc **一律不计账**（外因记成内因＝把占口升级成不再重试）
+    assert_eq!(
+        fuse_step(Some(Duration::from_secs(1)), 3, ExitClass::BindBusy),
+        (3, false)
+    );
+    assert_eq!(
+        fuse_step(Some(Duration::from_secs(1)), 7, ExitClass::Unknown),
+        (7, false)
+    );
+}
+
+#[test]
+fn spec_bar293_退出分档与退避封顶() {
+    use kfm_na::sshd_keeper::{
+        BACKOFF_CAP_SECS, BACKOFF_EXTERNAL_SECS, ExitClass, classify_exit, next_backoff,
+    };
+    // rc 优先：255＝撞口（清和楼283 定案读数），1＝环境死
+    assert_eq!(classify_exit(Some(255), ""), ExitClass::BindBusy);
+    assert_eq!(classify_exit(Some(1), ""), ExitClass::EnvDead);
+    // stderr 兜底：rc 判不出时按关键词；撞口类关键词优先于 conf 类
+    assert_eq!(
+        classify_exit(None, "sshd: bind() failed: Address already in use"),
+        ExitClass::BindBusy
+    );
+    assert_eq!(
+        classify_exit(Some(1), "sshd: no hostkeys available"),
+        ExitClass::EnvDead
+    );
+    assert_eq!(
+        classify_exit(Some(1), "Address already in use"),
+        ExitClass::BindBusy
+    );
+    // 其它 rc 不许默认进账（楼291 承影）：判不出＝Unknown
+    assert_eq!(classify_exit(Some(42), ""), ExitClass::Unknown);
+    assert_eq!(classify_exit(None, ""), ExitClass::Unknown);
+    // 退避：撞口/未知走长档且恒定（口腾即恢复）；环境死才指数增长并封顶
+    assert_eq!(
+        next_backoff(ExitClass::BindBusy, 1),
+        BACKOFF_EXTERNAL_SECS,
+        "撞口用长档，不必越退越久"
+    );
+    assert_eq!(next_backoff(ExitClass::Unknown, 1), BACKOFF_EXTERNAL_SECS);
+    assert_eq!(next_backoff(ExitClass::EnvDead, 1), 2);
+    assert_eq!(next_backoff(ExitClass::EnvDead, 200), BACKOFF_CAP_SECS);
+    assert!(
+        next_backoff(ExitClass::EnvDead, BACKOFF_CAP_SECS) <= BACKOFF_CAP_SECS,
+        "退避必须封顶（永久挂起这个出口整体取消，楼293）"
+    );
 }
 
 #[test]

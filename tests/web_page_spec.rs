@@ -1517,40 +1517,31 @@ fn spec_bar273_报表时刻与重拉间隔() {
 }
 
 #[test]
-fn spec_bar273_熔断计数持久化() {
-    // 通则第 8 条（MAIN0186）：「计数到 N 就动作」的机制，计数器必须落盘＋重启
-    // 读回；只在内存＝重启清零＝阈值永不触发。实证：MAIN0192 楼269 白露读到
-    // 11 机 8,929 次重拉、十余个实例全是「第 1 次」——计数器是 keep_loop 的局部
-    // 变量，App 每启一次账就清一次，BAR-259 熔断因此形同虚设。
+fn spec_bar273_熔断账暂不持久化() {
+    // 楼290 清和裁：**先分档、持久化后置**。持久化＋跨重启保留挂起＝把一次「撞口」
+    // 升级成永久瘫痪且就地解不了（没人知道要删哪个件）。分档落之前账保持内存局部
+    // ——重启即清，反而是一条自愈路。
+    // 变异抽检：给 quick_streak 加落盘/读回 → 本钉必红（那就是退回被否的形态）。
     let keeper = read_src("src/sshd_keeper.rs");
+    assert!(
+        !keeper.contains("QUICK_STREAK_REL")
+            && !keeper.contains("load_quick_streak")
+            && !keeper.contains("save_quick_streak"),
+        "分档落之前不许给连败账加落盘/读回（楼290 裁）"
+    );
     let win = |from: usize, n: usize| -> String { keeper[from..].chars().take(n).collect() };
-
-    assert!(
-        keeper.contains("QUICK_STREAK_REL"),
-        "连败账必须有一个确定的落点（相对 prefix）"
-    );
-    assert!(
-        keeper.contains("fn load_quick_streak(") && keeper.contains("fn save_quick_streak("),
-        "读回与落账两个函数都要在（只有一半＝重启照样遗忘）"
-    );
-    // 初始化必须从盘上读，不许写死 0
     let init_at = keeper
         .find("let mut quick_streak")
         .expect("quick_streak 初始化必须在");
-    let init = win(init_at, 160);
+    let init = win(init_at, 200);
     assert!(
-        init.contains("load_quick_streak(&prefix)"),
-        "初始值必须从盘上读回，不许写死 0: {init}"
+        init.contains("quick_streak: u32 = 0"),
+        "连败账必须是内存局部初值 0: {init}"
     );
-    // 每次账变都要落盘：秒退两处＋稳定清零一处
-    let saves = keeper.matches("save_quick_streak(&prefix").count();
+    // 前置条件也要在码里说清：fuse_step 只看存活时长、不看退出码
+    let fuse_at = keeper.find("pub fn fuse_step(").expect("fuse_step 必须在");
     assert!(
-        saves >= 3,
-        "账变的三条路径（当拍秒退／下拍审理／稳定清零）都要落盘，实见 {saves} 处"
-    );
-    // 复位口要写清：删件即复位，不靠重启
-    assert!(
-        keeper.contains("复位口"),
-        "持久化之后必须写清复位口（删件），否则熔断无法解除"
+        win(fuse_at, 600).contains("QUICK_DEATH"),
+        "分档前 fuse_step 只判存活窗（这正是要分档的理由）"
     );
 }

@@ -182,15 +182,95 @@ fn sshd_err_stdio(prefix: &Path) -> Stdio {
     }
 }
 
-/// 秒退连败熔断裁决（BAR-259，A 档纯逻辑，钉在 sshd_keeper_spec）：
-/// survived＝本轮存活时长（None＝冻僵 kill／try_wait 错这类我们动手杀
-/// 的，不计连败）；存活 <QUICK_DEATH 计一记、否则清账；到顶＝熔断。
-pub fn fuse_step(survived: Option<Duration>, streak: u32) -> (u32, bool) {
-    let s = match survived {
-        Some(d) if d < QUICK_DEATH => streak + 1,
-        _ => 0,
+/// 秒退连败裁决（BAR-259；楼293 清和改判：**分档 + 退避封顶＋每轮报红，
+/// 永久挂起这个出口整体取消**）。survived＝本轮存活时长（None＝我们动手杀的，
+/// 不计）；**只有 ExitClass::EnvDead 且秒退才计账**，撞口与未知 rc 不计账。
+pub fn fuse_step(survived: Option<Duration>, streak: u32, class: ExitClass) -> (u32, bool) {
+    let quick = matches!(survived, Some(d) if d < QUICK_DEATH);
+    match (quick, class) {
+        // 内因秒退才计账：conf／host key 缺这类，同一环境重试不自愈
+        (true, ExitClass::EnvDead) => {
+            let s = streak + 1;
+            (s, s >= FUSE_STRIKES_MAX)
+        }
+        // 存活过窗 ⇒ 清账（稳定过的 sshd 不算带病）
+        (false, _) => (0, false),
+        // 外因（撞口）与判不出的 rc **一律不计账**（楼291／293：外因记成内因
+        // 就会把一次占口升级成永久不再重试）
+        (true, _) => (streak, false),
+    }
+}
+
+/// 退出分类（楼293 清和裁：分档依据 **rc 优先、stderr 关键词兜底**；未知 rc
+/// 一律**不计连败、不挂起**，只长退避＋报红——撞口的表现可能不止 255）。
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum ExitClass {
+    /// 口被占（外因，可自愈）：rc 255，或 stderr 命中地址占用类关键词
+    BindBusy,
+    /// 环境死（内因）：rc 1（conf 缺／host key 缺），或关键词命中
+    EnvDead,
+    /// 判不出：不计账、不挂起、长退避
+    Unknown,
+}
+
+/// 分类（纯函数，A 档可判）。rc 优先；stderr 只在 rc 判不出或与关键词冲突时兜底。
+pub fn classify_exit(rc: Option<i32>, err_hint: &str) -> ExitClass {
+    let h = err_hint.to_lowercase();
+    let bindish = h.contains("address already in use")
+        || h.contains("bind")
+        || h.contains("cannot bind")
+        || h.contains("port");
+    let envish = h.contains("kfm-sshd.conf")
+        || h.contains("host key")
+        || h.contains("no hostkeys available")
+        || h.contains("missing privilege separation");
+    match rc {
+        Some(255) => ExitClass::BindBusy,
+        Some(1) => {
+            if bindish && !envish {
+                ExitClass::BindBusy
+            } else {
+                ExitClass::EnvDead
+            }
+        }
+        _ => {
+            if bindish {
+                ExitClass::BindBusy
+            } else if envish {
+                ExitClass::EnvDead
+            } else {
+                ExitClass::Unknown
+            }
+        }
+    }
+}
+
+/// 退避档（秒）：撞口与未知走**长档**（口腾出来自动恢复，不必越退越久）；
+/// 环境死才指数增长（同一环境重试不自愈）。上限 BACKOFF_CAP_SECS。
+pub const BACKOFF_CAP_SECS: u64 = 300;
+pub const BACKOFF_EXTERNAL_SECS: u64 = 60;
+
+pub fn next_backoff(class: ExitClass, prev: u64) -> u64 {
+    match class {
+        ExitClass::EnvDead => (prev.saturating_mul(2)).clamp(1, BACKOFF_CAP_SECS),
+        ExitClass::BindBusy | ExitClass::Unknown => BACKOFF_EXTERNAL_SECS,
+    }
+}
+
+/// err.log 末句摘要（截 80 字）：报账行带上它，「撞口」与「conf 缺」才在报表上
+/// 可分（楼273／楼285 的同一条要求）。读不到回空串——不许挡报账。
+pub fn err_log_hint(prefix: &Path) -> String {
+    let path = prefix.join("tmp").join("sshd-err.log");
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return String::new();
     };
-    (s, s >= FUSE_STRIKES_MAX)
+    let last = text
+        .lines()
+        .rev()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("")
+        .trim();
+    last.chars().take(80).collect()
 }
 
 /// 连 8024 读首行 banner；连不上/读不到 = None
@@ -209,44 +289,11 @@ fn probe_banner() -> Option<String> {
     }
 }
 
-/// 秒退连败计数的落点（相对 prefix）。**BAR-259 熔断的账必须持久化**——通则第 8
-/// 条（MAIN0186）：「计数到 N 就动作」的机制只在内存里，App 每重启一次账就清一次。
-///
-/// **口径以 MAIN0192 楼273 为准（我楼269 的初判说重了，此处改正）**：同一实例内
-/// 账**是**累加的（fuse_step 当拍即加，空山复核见过「第 8 次」），所以熔断在单实例
-/// 内有效；丢的是**跨实例**那段——11 机的 churn 场景恰好跨 App 重启，于是账上多数
-/// 行是「第 1 次」。因此这条改的是「跨重启不忘账」，**不解决死因**（楼273 的
-/// 8025 对照实验把当前死因指向 8024 被占用）。
-///
-/// 复位口＝删这一个件（修好之后），不靠重启。
-pub const QUICK_STREAK_REL: &str = "tmp/sshd-quick-streak";
-
-fn quick_streak_path(prefix: &std::path::Path) -> std::path::PathBuf {
-    prefix.join(QUICK_STREAK_REL)
-}
-
-/// 读回连败账（读不到/坏值当 0——首次运行与刚复位都长这样）
-fn load_quick_streak(prefix: &std::path::Path) -> u32 {
-    std::fs::read_to_string(quick_streak_path(prefix))
-        .ok()
-        .and_then(|t| t.trim().parse::<u32>().ok())
-        .unwrap_or(0)
-}
-
-/// 落账（失败不致命：只报一行，绝不让记账挡住看门狗）
-fn save_quick_streak(prefix: &std::path::Path, n: u32) {
-    let p = quick_streak_path(prefix);
-    if let Some(dir) = p.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    if std::fs::write(&p, n.to_string()).is_err() {
-        crate::report::report(
-            "sshd",
-            "秒退连败账落盘失败——熔断阈值本轮只能靠内存（通则第 8 条：重启即遗忘）",
-        );
-    }
-}
-
+/// 秒退连败账**暂不持久化**（MAIN0192 楼290 清和裁：持久化＋跨重启保留挂起＝
+/// 把一次「撞口」升级成永久瘫痪，而且就地解不了——删件要有人知道删哪个）。
+/// 顺序改成「先分档再持久化」：fuse_step 现在只看存活时长、不看退出码
+/// （:188-194），撞口 255 与 conf 缺 rc1 同档计账，8 次即永久挂起。
+/// 分档落之前，账保持内存局部（重启即清，反而是一条自愈路）。
 fn keep_loop(prefix: PathBuf) {
     let mut child: Option<Child> = None;
     let mut backoff_secs: u64 = 1;
@@ -257,9 +304,10 @@ fn keep_loop(prefix: PathBuf) {
     // 外来占口在位旗（BAR-247 真让位闸：本拍 banner 健康而娃不在 = true，
     // ④ 的 spawn 被它闸住——只探口不抢口）
     let mut foreign_serving = false;
-    // BAR-259 秒退熔断账：连败数＋本轮 spawn 时刻。连败数**从盘上读回**——
-    // 只在内存时 App 每重启一次账就清一次，阈值永不触发（通则第 8 条；楼269 实证）
-    let mut quick_streak: u32 = load_quick_streak(&prefix);
+    // BAR-259 秒退熔断账：连败数＋本轮 spawn 时刻。**内存局部、不落盘**——
+    // 楼290 清和裁：先把「撞口 255」与「conf/hostkey 缺 rc1」分档，再谈持久化；
+    // 现在持久化＝把外因（口被占）记成内因并跨重启保留，清场了也不起。
+    let mut quick_streak: u32 = 0;
     let mut spawned_at: Option<std::time::Instant> = None;
     // 上一次 spawn 的时刻（BAR-273 第 5 条，MAIN0192 楼262／楼263）：报表原先
     // 只有「已重拉」的次数，没有间隔也没有时刻，于是「单位时间重拉次数」与
@@ -291,20 +339,23 @@ fn keep_loop(prefix: PathBuf) {
                     // BAR-259 秒退连败熔断：spawn 成功但秒退（如 conf 缺件）
                     // 不归 spawn 永久分类管，1s 退避会永动——连败到顶即挂起
                     let survived = spawned_at.take().map(|t| t.elapsed());
-                    let (s, blow) = fuse_step(survived, quick_streak);
+                    let hint = err_log_hint(&prefix);
+                    let class = classify_exit(st.code(), &hint);
+                    let (s, over) = fuse_step(survived, quick_streak, class);
                     quick_streak = s;
-                    save_quick_streak(&prefix, quick_streak);
+                    backoff_secs = next_backoff(class, backoff_secs);
                     child = None;
                     stable_since = None;
-                    if blow {
-                        crate::report::report(
-                            "sshd",
-                            &format!(
-                                "sshd 秒退连败 {quick_streak} 次（每次 <{}s）——熔断挂起（BAR-259），证词见 tmp/sshd-err.log，修复后重启",
-                                QUICK_DEATH.as_secs()
-                            ),
-                        );
-                        return;
+                    crate::report::report(
+                        "sshd",
+                        &format!(
+                            "sshd 判退（类 {:?}／连败 {quick_streak}／退避 {backoff_secs}s{}）——不挂起，按档重试（楼293）",
+                            class,
+                            if over { "／内因已达上限" } else { "" }
+                        ),
+                    );
+                    if !hint.is_empty() {
+                        crate::report::report("sshd", &format!("sshd stderr 末句：{hint}"));
                     }
                 }
                 Ok(None) => {}
@@ -363,12 +414,7 @@ fn keep_loop(prefix: PathBuf) {
         if stable_since.is_some_and(|t| t.elapsed() >= STABLE_RESET) {
             backoff_secs = 1;
             stable_since = None;
-            // 稳定过的 sshd 不算带病：内存与盘上的账一起清，否则下次启动会把
-            // 一笔早该作废的连败账读回来，冤枉一台已经好了的机
-            if quick_streak != 0 {
-                quick_streak = 0;
-                save_quick_streak(&prefix, 0);
-            }
+            quick_streak = 0;
         }
         // ④ 缺娃重拉（退避睡醒再 spawn）——BAR-247 真让位闸：外来 sshd
         // 占着口（banner 健康）时不 spawn，本拍只探口；口腾出下拍接管
@@ -434,28 +480,25 @@ fn keep_loop(prefix: PathBuf) {
                         quick_streak = 0;
                     } else if let Some(st) = quick_exit {
                         let survived = spawned_at.take().map(|t| t.elapsed());
-                        let (s, blow) = fuse_step(survived, quick_streak);
+                        let hint = err_log_hint(&prefix);
+                        let class = classify_exit(st.code(), &hint);
+                        let (s, over) = fuse_step(survived, quick_streak, class);
                         quick_streak = s;
-                        save_quick_streak(&prefix, quick_streak);
+                        backoff_secs = next_backoff(class, backoff_secs);
                         crate::report::report(
                             "sshd",
                             &format!(
-                                "sshd 秒退（{st}，存活 {}ms）——第 {quick_streak} 次",
-                                survived.map(|d| d.as_millis()).unwrap_or(0)
+                                "sshd 秒退（{st}，存活 {}ms）——类 {:?}，内因连败 {quick_streak} 次，退避 {backoff_secs}s（不挂起，楼293）{}",
+                                survived.map(|d| d.as_millis()).unwrap_or(0),
+                                class,
+                                if over { "，内因已达上限" } else { "" }
                             ),
                         );
+                        if !hint.is_empty() {
+                            crate::report::report("sshd", &format!("sshd stderr 末句：{hint}"));
+                        }
                         child = None;
                         stable_since = None;
-                        if blow {
-                            crate::report::report(
-                                "sshd",
-                                &format!(
-                                    "sshd 秒退连败 {quick_streak} 次（每次 <{}s）——熔断挂起（BAR-259），证词见 tmp/sshd-err.log，修复后重启",
-                                    QUICK_DEATH.as_secs()
-                                ),
-                            );
-                            return;
-                        }
                     }
                 }
                 Err(e) if is_permanent_spawn_err(&e) => {
