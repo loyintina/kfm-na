@@ -11931,7 +11931,12 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
         loop {
             std::thread::sleep(std::time::Duration::from_secs(3));
             n += 1;
-            crate::report::report_sync("alive", &format!("心跳 {}", n));
+            // 楼311：心跳行带状态维（一行答尽「它现在在干什么」）——看门狗五维
+            // 随心跳带走，「没有消息」与「它死了」从此不同形。
+            crate::report::report_sync(
+                "alive",
+                &format!("心跳 {} {}", n, crate::sshd_keeper::health_snapshot()),
+            );
         }
     });
     log::info!("KFM-NA android_main 进入");

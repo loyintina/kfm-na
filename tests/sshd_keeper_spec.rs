@@ -307,3 +307,48 @@ fn spec_bar259_err日志追加不截断() {
     assert!(!body.contains(&big), "超帽必须轮转清空旧内容");
     assert!(body.contains("after-rotate"));
 }
+
+#[test]
+fn spec_bar311_心跳行带状态维且看门狗不停止() {
+    // 楼310 白露：无所作为也必须留痕（否则「没有消息」与「它死了」在账上同形）；
+    // 楼311 清和：心跳行带状态维（state／attempt／最近 rc＋存活），**一行答尽**，
+    // 不开第二条心跳；楼306：永不产生停止状态（只许报红＋加长退避）。
+    let keeper = include_str!("../src/sshd_keeper.rs");
+
+    // ① 快照五维齐全
+    let at = keeper
+        .find("pub fn health_snapshot()")
+        .expect("health_snapshot 必须在");
+    let snap = &keeper[at..(at + keeper[at..].find("\n}\n").expect("函数必须闭合"))];
+    for dim in ["state=", "attempt=", "last_rc=", "存活=", "退避="] {
+        assert!(snap.contains(dim), "心跳状态维缺 {dim}（缺维判红）");
+    }
+
+    // ② 载体是既有 alive 心跳行，不许另开第二条心跳
+    let app = include_str!("../src/android_app.rs");
+    assert!(
+        app.contains("sshd_keeper::health_snapshot()"),
+        "alive 心跳行必须带上状态维（否则不可核）"
+    );
+    assert!(
+        !keeper.contains("sshd 心跳"),
+        "不许在 keeper 里另开第二条心跳——「一行答尽」"
+    );
+
+    // ③ spawn 尝试必须落行（「变相停止」的判据靠它）
+    assert!(
+        keeper.contains("sshd spawn 尝试"),
+        "spawn 尝试行必须在（成功失败都算一次尝试）"
+    );
+
+    // ④ keep_loop 内不许有 return：停止状态整体取消，只许报红＋拉长退避
+    let loop_at = keeper.find("fn keep_loop(").expect("keep_loop 必须在");
+    assert!(
+        !keeper[loop_at..].contains("return;"),
+        "keep_loop 内不许出现 return——停止状态只能靠退避拉长，不许退出看门狗"
+    );
+    assert!(
+        keeper.matches("return;").count() <= 1,
+        "全文件只允许 start() 那处幂等 return（防重复线程），其余一律不停止"
+    );
+}

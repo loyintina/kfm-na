@@ -294,6 +294,48 @@ fn probe_banner() -> Option<String> {
 /// 顺序改成「先分档再持久化」：fuse_step 现在只看存活时长、不看退出码
 /// （:188-194），撞口 255 与 conf 缺 rc1 同档计账，8 次即永久挂起。
 /// 分档落之前，账保持内存局部（重启即清，反而是一条自愈路）。
+/// 看门狗健康快照（楼311 清和裁「心跳行带状态维，一行答尽它现在在干什么」；
+/// 载体用既有的 alive 心跳行——它本来就在跳，不必再开第二条心跳）。
+/// 五维：state／attempt／last_rc／存活／退避；缺任一维判红。
+#[derive(Debug, Clone)]
+pub struct HealthSnap {
+    pub state: &'static str,
+    pub attempts: u64,
+    pub last_rc: Option<i32>,
+    pub last_lived_ms: Option<u128>,
+    pub backoff_secs: u64,
+}
+
+static HEALTH: std::sync::Mutex<Option<HealthSnap>> = std::sync::Mutex::new(None);
+
+fn publish_health(snap: HealthSnap) {
+    if let Ok(mut g) = HEALTH.lock() {
+        *g = Some(snap);
+    }
+}
+
+/// 给 alive 心跳行拼状态维；看门狗还没起时如实说 not-started（不许静默留空）
+pub fn health_snapshot() -> String {
+    let Ok(g) = HEALTH.lock() else {
+        return "sshd(state=unknown)".to_owned();
+    };
+    match g.as_ref() {
+        None => "sshd(state=not-started,attempt=0,last_rc=none,存活=none,退避=none)".to_owned(),
+        Some(h) => format!(
+            "sshd(state={},attempt={},last_rc={},存活={}ms,退避={}s)",
+            h.state,
+            h.attempts,
+            h.last_rc
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "none".to_owned()),
+            h.last_lived_ms
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "none".to_owned()),
+            h.backoff_secs
+        ),
+    }
+}
+
 fn keep_loop(prefix: PathBuf) {
     let mut child: Option<Child> = None;
     let mut backoff_secs: u64 = 1;
@@ -314,6 +356,13 @@ fn keep_loop(prefix: PathBuf) {
     // 「单次存活时长」两条健康判据都无从导出。这里记上一次 spawn，本次 spawn
     // 时把**间隔毫秒**写进那行——频率＝1/平均间隔，判卷不必再等全场 ts。
     let mut last_spawn_at: Option<std::time::Instant> = None;
+    // spawn 尝试计数（判「变相停止」的分母：任一封顶窗口内必须 >0 次，楼308）
+    let mut spawn_attempts: u64 = 0;
+    // 上一轮的退出分类（进尝试行，便于串起「为什么退这么久」）
+    let mut last_class: ExitClass = ExitClass::Unknown;
+    // 最近一次退出的 rc 与存活（进心跳行——楼311：「一行答尽它现在在干什么」）
+    let mut last_rc: Option<i32> = None;
+    let mut last_lived_ms: Option<u128> = None;
     let mut tick: u32 = 0;
     loop {
         tick = tick.wrapping_add(1);
@@ -332,6 +381,8 @@ fn keep_loop(prefix: PathBuf) {
                         .map(|t| t.elapsed().as_millis())
                         .map(|v| v.to_string())
                         .unwrap_or_else(|| "unknown".to_owned());
+                    last_rc = st.code();
+                    last_lived_ms = spawned_at.map(|t| t.elapsed().as_millis());
                     crate::report::report(
                         "sshd",
                         &format!("sshd 退出（{st}，存活 {lived_ms}ms）——{backoff_secs}s 后重拉"),
@@ -341,6 +392,7 @@ fn keep_loop(prefix: PathBuf) {
                     let survived = spawned_at.take().map(|t| t.elapsed());
                     let hint = err_log_hint(&prefix);
                     let class = classify_exit(st.code(), &hint);
+                    last_class = class;
                     let (s, over) = fuse_step(survived, quick_streak, class);
                     quick_streak = s;
                     backoff_secs = next_backoff(class, backoff_secs);
@@ -420,16 +472,32 @@ fn keep_loop(prefix: PathBuf) {
         // 占着口（banner 健康）时不 spawn，本拍只探口；口腾出下拍接管
         if should_spawn(child.is_some(), foreign_serving) {
             std::thread::sleep(Duration::from_secs(backoff_secs.min(60)));
-            // BAR-259：spawn 前 conf 自给——缺则按模板自生成，失败报红
-            // 挂起（生成失败＝环境死同族，重试不自愈）
+            // **spawn 尝试行**（MAIN0192 楼308 白露判据／楼309 清和指出的缺口）：
+            // 「永不产生停止状态」要靠「封顶窗口内仍观测到尝试」来验证，而此前
+            // 成功 spawn 不落行 ⇒ 报表里没有「尝试」这一维，判据不可核。故每次
+            // 尝试前无条件落一行（成功失败都算一次尝试）。
+            spawn_attempts = spawn_attempts.saturating_add(1);
+            crate::report::report(
+                "sshd",
+                &format!(
+                    "sshd spawn 尝试 #{spawn_attempts}（退避 {}s，上一轮类 {:?}）",
+                    backoff_secs, last_class
+                ),
+            );
+            // BAR-259：spawn 前 conf 自给——缺则按模板自生成。**生成失败不再挂起**
+            // （楼306 清和：计账只能升格报红与加长退避，永不产生停止状态）：
+            // 报红＋长退避，下一轮继续尝试（环境修好后自愈）。
             if let Err(msg) = ensure_conf(&prefix) {
                 crate::report::report(
                     "sshd",
                     &format!(
-                        "kfm-sshd.conf 自生成失败（{msg}）——看门狗挂起（BAR-259），修复 prefix 后重启"
+                        "kfm-sshd.conf 自生成失败（{msg}）——不挂起，按退避 {BACKOFF_CAP_SECS}s 重试（修好 prefix 即自愈）"
                     ),
                 );
-                return;
+                backoff_secs = BACKOFF_CAP_SECS;
+                last_class = ExitClass::EnvDead;
+                std::thread::sleep(Duration::from_secs(RECHECK_SECS));
+                continue;
             }
             match spawn_sshd(&prefix) {
                 Ok(c) => {
@@ -480,8 +548,11 @@ fn keep_loop(prefix: PathBuf) {
                         quick_streak = 0;
                     } else if let Some(st) = quick_exit {
                         let survived = spawned_at.take().map(|t| t.elapsed());
+                        last_rc = st.code();
+                        last_lived_ms = survived.map(|d| d.as_millis());
                         let hint = err_log_hint(&prefix);
                         let class = classify_exit(st.code(), &hint);
+                        last_class = class;
                         let (s, over) = fuse_step(survived, quick_streak, class);
                         quick_streak = s;
                         backoff_secs = next_backoff(class, backoff_secs);
@@ -502,13 +573,16 @@ fn keep_loop(prefix: PathBuf) {
                     }
                 }
                 Err(e) if is_permanent_spawn_err(&e) => {
+                    // 楼306：**永不产生停止状态**。分类仍报「永久性」以便人判，
+                    // 但看门狗不退出——按封顶退避继续尝试（prefix 修好即自愈）。
                     crate::report::report(
                         "sshd",
                         &format!(
-                            "sshd spawn 永久失败（{e}）——看门狗挂起（BAR-230），修复 prefix 后重启"
+                            "sshd spawn 永久性失败（{e}）——不挂起，按退避 {BACKOFF_CAP_SECS}s 重试（修好 prefix 即自愈）"
                         ),
                     );
-                    return;
+                    backoff_secs = BACKOFF_CAP_SECS;
+                    last_class = ExitClass::EnvDead;
                 }
                 Err(e) => {
                     crate::report::report("sshd", &format!("sshd spawn 失败: {e}——退避重试"));
@@ -516,6 +590,25 @@ fn keep_loop(prefix: PathBuf) {
                 }
             }
         }
+        // 每拍发布健康快照（楼310「无所作为也必须留痕」＋楼311「心跳行带状态维」）：
+        // 由 alive 心跳行统一带走，**不开第二条心跳**——「一行答尽」是这个意思。
+        let state = if child.is_some() {
+            "running"
+        } else if foreign_serving {
+            "yield"
+        } else if backoff_secs > BACKOFF_EXTERNAL_SECS && last_class == ExitClass::EnvDead {
+            "backoff-envdead"
+        } else {
+            "backoff"
+        };
+        publish_health(HealthSnap {
+            state,
+            attempts: spawn_attempts,
+            last_rc,
+            last_lived_ms,
+            backoff_secs,
+        });
+        tick = tick.saturating_add(1);
         std::thread::sleep(Duration::from_secs(RECHECK_SECS));
     }
 }
