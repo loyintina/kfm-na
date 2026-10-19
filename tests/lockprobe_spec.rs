@@ -47,6 +47,7 @@ fn spec_lockprobe_报行字段同形且自锁无end() {
                 web_on_top: true,
                 ai_snap: false,
             },
+            42,
         );
         g.acquired();
         assert_eq!(holder_of(arc), tok, "acquired 后 holder 必须是本令牌");
@@ -65,6 +66,7 @@ fn spec_lockprobe_报行字段同形且自锁无end() {
                 web_on_top: true,
                 ai_snap: true,
             },
+            43,
         );
         // 故意不让它 acquired——自锁时也走不到那里
     }
@@ -91,6 +93,12 @@ fn spec_lockprobe_报行字段同形且自锁无end() {
     ] {
         assert!(joined.contains(f), "报行缺字段 {f}: {joined}");
     }
+    // 楼703：契约两项必须在（begin_ms／frame），不许用 mono_ms 顶替 begin_ms
+    assert!(
+        joined.contains("begin_ms="),
+        "缺 begin_ms（契约项）: {joined}"
+    );
+    assert!(joined.contains("frame=43"), "缺帧号（契约项）: {joined}");
     // 因果锚（楼665）：自锁那行的锚必须带 web_on_top=1 / ai_snap=1
     let dead = lines
         .iter()

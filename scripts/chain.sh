@@ -196,6 +196,9 @@ bash scripts/test-bar114-modal-cursor.sh || { echo "❌ BAR-114 模态压顶守�
 # 流被 vivo 冻结掐死三跑命案——续传/对账/绝对路径/files-only 四契约）
 # 2026-10-19 挂入：BAR-273 推核前闸（MAIN0192 楼418／420 清和裁——核内嵌 vc 必须与
 # 机上 APK versionCode 一致；不一致即拒推。11 机实证：核比壳新 ⇒ 一点终端即崩）
+# 同接收者重入属性检查（MAIN0192 楼697／700：判据按属性不按行号清单）——命中即红，
+# 豁免须在 scripts/check/mutex-reentry-allow.txt 写理由
+python3 scripts/check/check-mutex-reentry.py || { echo "❌ 同一 Arc 持锁期内二次取锁（自锁类）"; exit 1; }
 # 缺件闸先行（楼517：查「脚本在不在位」必须落在调用方——写在被检脚本自己里，
 # 脚本被删时那一条根本不执行，等于没有）。缺件的红与脚本自报错的红分开。
 [ -f scripts/check/check-hot-core-vc.sh ] && [ -f scripts/test-hot-core-vc.sh ] \

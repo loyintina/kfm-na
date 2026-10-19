@@ -38,6 +38,34 @@ pub fn classify(holder: u64, me: u64) -> Verdict {
     }
 }
 
+/// 契约版本。**改字段集必须同时升版本并在此记一行**（楼704：未记的契约变更会被
+/// 误当成「格式漂移」，责任就落错了人）。
+///
+/// - v1（楼654）：probe=lock / mode / site / arc / tok / holder / verdict / begin_ms / frame
+/// - v2（楼665）：v1 ＋ 因果锚 web_on_top / ai_snap
+/// - v3（楼703／704）：把 begin_ms、frame 明确为必带项（此前实现只用 mono_ms 顶替，
+///   属实现偏离契约）；并前置 mono_ms 作为机器可读时刻
+/// - v4（承影 6c4fe6f，楼712／714）：frame／begin_ms 升甲级（缺则整行无效）；
+///   init 行带 schema；invalid 行带缺失字段名；三态判读齐
+pub const LINE_FIELDS_VERSION: &str = "v4";
+
+/// **报行字段契约（唯一源）**：真实现与夹具（含假探针）都按这份清单对表——
+/// 对齐目标是契约，不是另一份实现（MAIN0192 楼702）。顺序即输出顺序。
+pub const LINE_FIELDS: [&str; 12] = [
+    "probe=lock",
+    "mode=",
+    "mono_ms=",
+    "begin_ms=",
+    "frame=",
+    "site=",
+    "arc=",
+    "tok=",
+    "holder=",
+    "verdict=",
+    "web_on_top=",
+    "ai_snap=",
+];
+
 /// 命中来源：自然（用户真实使用中撞上）——主动触发一律不用探针记录，见楼659。
 pub const MODE_NATURAL: &str = "natural";
 
@@ -86,6 +114,28 @@ pub fn holder_of(arc: &'static str) -> u64 {
 /// 落盘句柄：**帧外预打开**（`init_log`），死锁路径上只用这个 fd
 static LOG_FILE: std::sync::Mutex<Option<std::fs::File>> = std::sync::Mutex::new(None);
 
+/// 启动自检行（楼711／712）：`probe=lock mode=init schema=v3`。判读三态的第一态靠它
+/// ——没有这一行＝探针没跑起来，与「跑了但没命中」必须分开。
+fn write_init() {
+    let mut l = Line::new();
+    l.push(b"probe=lock mode=init schema=");
+    l.push(LINE_FIELDS_VERSION.as_bytes());
+    l.push(b"\n");
+    l.flush();
+}
+
+/// 无效行（楼710／712）：必填项缺失即整行无效，但**必须计数并给缺的字段名**，
+/// 否则「没有证据」会被读成「没发生」。
+fn write_invalid(reason: &'static str) {
+    let mut l = Line::new();
+    l.push(b"probe=invalid schema=");
+    l.push(LINE_FIELDS_VERSION.as_bytes());
+    l.push(b" reason=");
+    l.push(reason.as_bytes());
+    l.push(b"\n");
+    l.flush();
+}
+
 /// 帧外调用一次：预打开探针日志（追加写）。失败不影响主流程，只是探针静默。
 pub fn init_log(path: &std::path::Path) {
     if let Some(dir) = path.parent() {
@@ -98,6 +148,9 @@ pub fn init_log(path: &std::path::Path) {
         && let Ok(mut g) = LOG_FILE.lock()
     {
         *g = Some(f);
+        // 启动自检行（楼711）：没有这一行＝探针没跑起来，与「跑了没命中」必须分开
+        drop(g);
+        write_init();
     }
 }
 
@@ -168,18 +221,40 @@ impl Line {
 
 /// 一行落盘。`mode` 区分**自然命中**与**我们主动触发**（楼660：账上必须能分开，
 /// 否则将来看到一条自锁行，分不清是不是自己制造的）。
-fn write_line(
+/// 一次落盘所需的全部量（收成结构体，免得参数表越改越长）
+struct Row {
     site: &'static str,
     arc: &'static str,
     tok: u64,
     holder: u64,
-    verdict: &str,
-    mode: &str,
+    verdict: &'static str,
+    mode: &'static str,
     anchors: Anchors,
-) {
+    begin_ms: u64,
+    frame: u64,
+}
+
+fn write_line(r: Row) {
+    let Row {
+        site,
+        arc,
+        tok,
+        holder,
+        verdict,
+        mode,
+        anchors,
+        begin_ms,
+        frame,
+    } = r;
     let mut l = Line::new();
     l.push(b"mono_ms=");
     l.push_u64(mono_ms());
+    // begin_ms＝等待起点（本次 enter 的时刻），frame＝帧号（楼654 契约两项，
+    // 楼703 逐字对表时补回——原先只用 mono_ms 替代，属实现偏离契约）
+    l.push(b" begin_ms=");
+    l.push_u64(begin_ms);
+    l.push(b" frame=");
+    l.push_u64(frame);
     l.push(b" ");
     l.push(b"probe=lock mode=");
     l.push(mode.as_bytes());
@@ -210,18 +285,61 @@ pub struct ProbeGuard {
     pub arc: &'static str,
     pub tok: u64,
     anchors: Anchors,
+    begin_ms: u64,
+    frame: u64,
     /// 是否真的登记上了 holder（自锁时走不到 acquired，于是 Drop 不写 end）
     acquired: bool,
     ended: bool,
 }
 
 /// 帧外／临界区前调用。`tok` 必须来自 `prefetch_token()`（帧外取好）。
-pub fn enter(site: &'static str, arc: &'static str, tok: u64, anchors: Anchors) -> ProbeGuard {
+pub fn enter(
+    site: &'static str,
+    arc: &'static str,
+    tok: u64,
+    anchors: Anchors,
+    frame: u64,
+) -> ProbeGuard {
+    let begin_ms = mono_ms();
+    if frame == 0 {
+        // 楼709 拍甲级：frame 必填，缺则**整行无效**、不作任何证据；此处落 invalid 行
+        write_invalid("frame");
+        return ProbeGuard {
+            site,
+            arc,
+            tok,
+            anchors,
+            begin_ms,
+            frame,
+            acquired: false,
+            ended: true,
+        };
+    }
     let holder = holder_of(arc);
     let v = classify(holder, tok);
     match v {
-        Verdict::SelfDeadlock => write_line(site, arc, tok, holder, "self", MODE_NATURAL, anchors),
-        Verdict::Contend => write_line(site, arc, tok, holder, "contend", MODE_NATURAL, anchors),
+        Verdict::SelfDeadlock => write_line(Row {
+            site,
+            arc,
+            tok,
+            holder,
+            verdict: "self",
+            mode: MODE_NATURAL,
+            anchors,
+            begin_ms,
+            frame,
+        }),
+        Verdict::Contend => write_line(Row {
+            site,
+            arc,
+            tok,
+            holder,
+            verdict: "contend",
+            mode: MODE_NATURAL,
+            anchors,
+            begin_ms,
+            frame,
+        }),
         Verdict::Unowned => {}
     }
     ProbeGuard {
@@ -229,6 +347,8 @@ pub fn enter(site: &'static str, arc: &'static str, tok: u64, anchors: Anchors) 
         arc,
         tok,
         anchors,
+        begin_ms,
+        frame,
         acquired: false,
         ended: false,
     }
@@ -249,15 +369,17 @@ impl Drop for ProbeGuard {
         // （楼653：这条是故意的，不是漏写）。
         if !self.ended && self.acquired && holder_of(self.arc) == self.tok {
             clear_holder(self.arc);
-            write_line(
-                self.site,
-                self.arc,
-                self.tok,
-                0,
-                "end",
-                MODE_NATURAL,
-                self.anchors,
-            );
+            write_line(Row {
+                site: self.site,
+                arc: self.arc,
+                tok: self.tok,
+                holder: 0,
+                verdict: "end",
+                mode: MODE_NATURAL,
+                anchors: self.anchors,
+                begin_ms: self.begin_ms,
+                frame: self.frame,
+            });
             self.ended = true;
         }
     }
