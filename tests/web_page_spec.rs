@@ -1612,3 +1612,36 @@ fn spec_bar273_keeper启动不依赖服务器条目() {
         "隧道闭包内不许再起看门狗（会重新被 servers 条目门控）"
     );
 }
+
+#[test]
+fn spec_bar273_配置缺失必须报账且有回灌口() {
+    // MAIN0192 楼425 定性：settings 两件缺失时静默退化（只有解析失败才留痕）⇒
+    // 11 机退「本地兜底相」而账上无痕，最终是 17 小时零上报。
+    // 钉四件：①缺失走自己的报账话术（与解析失败分开）②回灌函数存在且缺才搬
+    // ③回灌不覆盖在位件 ④回灌写后回读。
+    let app = read_src("src/android_app.rs");
+    assert!(
+        app.contains("servers.json 不在——无远程服务器条目"),
+        "缺 servers.json 必须单独报账（不许与解析失败混一句）"
+    );
+    assert!(
+        app.contains("terminal.json 不在——默认会话按 Local 起步"),
+        "缺 terminal.json 必须单独报账"
+    );
+    let fn_at = app
+        .find("fn restore_settings_from(")
+        .expect("回灌函数必须在（卸载/重装不再把「怎么连服务器」清掉）");
+    let body = &app[fn_at..(fn_at + 900).min(app.len())];
+    assert!(
+        body.contains("if dst.is_file()"),
+        "回灌必须「缺才搬」，不许覆盖在位件"
+    );
+    assert!(
+        body.contains("read_to_string(&dst)"),
+        "回灌必须写后回读（同密钥回灌口径）"
+    );
+    assert!(
+        app.contains("SETTINGS_MIRROR_DIR"),
+        "回灌源目录要有一个具名常量（不许散落字面量）"
+    );
+}

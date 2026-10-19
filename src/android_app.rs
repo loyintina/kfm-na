@@ -969,6 +969,35 @@ const DEFAULT_MODEL: &str = "glm-5.3-flash";
 /// 代码侧不再读；md 字号唯一来源 = 实例格 pinch）
 ///
 /// 配置文件不进 git——由脚本经隧道推送（ai/providers.json 同款纪律）
+/// 配置回灌的共享存储落点（与密钥回灌同族：na 有 MANAGE_EXTERNAL_STORAGE，读得到；
+/// 跨 uid 只有共享存储这一个共同面）。
+const SETTINGS_MIRROR_DIR: &str = "/storage/emulated/0/kfm-na-config";
+
+/// 从共享存储把**缺失**的 settings 两件搬进私有目录（缺才搬，**不覆盖在位件**）。
+/// 任何失败都不阻塞启动，只落一行账。
+fn restore_settings_from(dst_dir: &std::path::Path, src_dir: &str) -> Vec<(&'static str, bool)> {
+    let mut out = Vec::new();
+    for name in ["servers.json", "terminal.json"] {
+        let dst = dst_dir.join(name);
+        if dst.is_file() {
+            continue; // 在位不覆盖
+        }
+        let src = std::path::Path::new(src_dir).join(name);
+        let ok = src.is_file()
+            && std::fs::create_dir_all(dst_dir).is_ok()
+            && std::fs::copy(&src, &dst).is_ok()
+            && std::fs::read_to_string(&dst).is_ok(); // 写后回读，同密钥回灌口径
+        if ok {
+            crate::report::report_sync(
+                "term",
+                &format!("settings 回灌成功 {name}（源={src_dir}）"),
+            );
+        }
+        out.push((name, ok));
+    }
+    out
+}
+
 fn load_settings(
     app: Option<&winit::platform::android::activity::AndroidApp>,
 ) -> (
@@ -984,17 +1013,33 @@ fn load_settings(
     // self_restart::poll_flag；拿不到目录 = 远程重启路断，钮路不受影响）
     crate::self_restart::set_files_dir(dir.clone());
     let cfg = dir.join("settings");
-    if let Ok(j) = std::fs::read_to_string(cfg.join("servers.json")) {
-        match crate::settings::parse_servers(&j) {
+    // **缺失必须报账**（MAIN0192 楼425 定性）：此前只有解析失败才留痕，文件「不在」
+    // 一声不响 ⇒ 11 机退化成「本地兜底相」而账上无痕，最终是「NA 能开但连不上服务器」
+    // 的 17 小时零上报。缺失与解析失败分两态报。
+    // 回灌口：共享存储里有备份时，缺失先搬回来再读（卸载/重装不再把「怎么连服务器」
+    // 一起清掉）；缺件不阻塞，搬不回照常报账。
+    restore_settings_from(&cfg, SETTINGS_MIRROR_DIR);
+    let srv_path = cfg.join("servers.json");
+    let term_path = cfg.join("terminal.json");
+    match std::fs::read_to_string(&srv_path) {
+        Ok(j) => match crate::settings::parse_servers(&j) {
             Ok(v) => servers = v,
             Err(e) => crate::report::report_sync("term", &format!("servers.json 解析失败: {e}")),
-        }
+        },
+        Err(_) => crate::report::report_sync(
+            "term",
+            "servers.json 不在——无远程服务器条目，会话退本地兜底（缺件·非解析失败）",
+        ),
     }
-    if let Ok(j) = std::fs::read_to_string(cfg.join("terminal.json")) {
-        match crate::settings::parse_terminal(&j) {
+    match std::fs::read_to_string(&term_path) {
+        Ok(j) => match crate::settings::parse_terminal(&j) {
             Ok(t) => term_cfg = t,
             Err(e) => crate::report::report_sync("term", &format!("terminal.json 解析失败: {e}")),
-        }
+        },
+        Err(_) => crate::report::report_sync(
+            "term",
+            "terminal.json 不在——默认会话按 Local 起步（缺件·非解析失败）",
+        ),
     }
     (servers, term_cfg)
 }
