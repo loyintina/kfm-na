@@ -1,0 +1,9 @@
+# 探针报行夹具（MAIN0192 楼744）：**两份独立实现共用同一批输入**
+# 格式：<一行报行> | expect=<ok|missing_field|init_schema|unknown_kind|invalid_line_malformed>
+probe=lock mode=natural mono_ms=1 begin_ms=1 frame=1 site=s arc=a tok=1 holder=0 verdict=end web_on_top=1 ai_snap=0 | expect=ok
+probe=lock mode=natural mono_ms=1 begin_ms=1 site=s arc=a tok=1 holder=0 verdict=self web_on_top=1 ai_snap=1 | expect=missing_field
+probe=lock mode=natural mono_ms=1 frame=1 site=s arc=a tok=1 holder=0 verdict=contend web_on_top=0 ai_snap=0 | expect=missing_field
+probe=invalid schema=v4 reason=frame | expect=ok
+probe=lock mode=init schema=v4 | expect=ok
+probe=lock mode=init | expect=init_schema
+hello world | expect=unknown_kind

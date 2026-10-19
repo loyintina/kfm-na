@@ -165,9 +165,11 @@ pub struct Anchors {
 pub fn mono_ms() -> u64 {
     use std::sync::OnceLock;
     static BASE: OnceLock<std::time::Instant> = OnceLock::new();
+    // +1：0 是「无值」哨兵（validate 用它判缺字段），所以单调钟绝不返回 0
     BASE.get_or_init(std::time::Instant::now)
         .elapsed()
         .as_millis() as u64
+        + 1
 }
 
 /// 栈上定长写入器（**不分配**，符合死锁路径白名单）
@@ -246,18 +248,16 @@ fn write_line(r: Row) {
         begin_ms,
         frame,
     } = r;
+    // **顺序必须与 LINE_FIELDS 一致**（楼750／751：字段序错＝下游解析错位）
     let mut l = Line::new();
-    l.push(b"mono_ms=");
+    l.push(b"probe=lock mode=");
+    l.push(mode.as_bytes());
+    l.push(b" mono_ms=");
     l.push_u64(mono_ms());
-    // begin_ms＝等待起点（本次 enter 的时刻），frame＝帧号（楼654 契约两项，
-    // 楼703 逐字对表时补回——原先只用 mono_ms 替代，属实现偏离契约）
     l.push(b" begin_ms=");
     l.push_u64(begin_ms);
     l.push(b" frame=");
     l.push_u64(frame);
-    l.push(b" ");
-    l.push(b"probe=lock mode=");
-    l.push(mode.as_bytes());
     l.push(b" site=");
     l.push(site.as_bytes());
     l.push(b" arc=");
@@ -268,7 +268,6 @@ fn write_line(r: Row) {
     l.push_u64(holder);
     l.push(b" verdict=");
     l.push(verdict.as_bytes());
-    // 因果锚（楼665）：两个都是绘制路径上的**局部量**，不取任何锁
     l.push(b" web_on_top=");
     l.push(if anchors.web_on_top { b"1" } else { b"0" });
     l.push(b" ai_snap=");
@@ -292,6 +291,19 @@ pub struct ProbeGuard {
     ended: bool,
 }
 
+/// 必填项校验（**纯函数、可独立调用**——楼735：夹具要能造出真实现造不出的输入，
+/// 前提是校验逻辑不绑在 enter 的私有路径里）。
+/// 返回 Err(缺失字段名) 即整行无效（楼709 拍甲级）。
+pub fn validate(begin_ms: u64, frame: u64) -> Result<(), &'static str> {
+    if begin_ms == 0 {
+        return Err("begin_ms");
+    }
+    if frame == 0 {
+        return Err("frame");
+    }
+    Ok(())
+}
+
 /// 帧外／临界区前调用。`tok` 必须来自 `prefetch_token()`（帧外取好）。
 pub fn enter(
     site: &'static str,
@@ -301,9 +313,9 @@ pub fn enter(
     frame: u64,
 ) -> ProbeGuard {
     let begin_ms = mono_ms();
-    if frame == 0 {
-        // 楼709 拍甲级：frame 必填，缺则**整行无效**、不作任何证据；此处落 invalid 行
-        write_invalid("frame");
+    if let Err(reason) = validate(begin_ms, frame) {
+        // 楼709 拍甲级：必填项缺即**整行无效**、不作任何证据；落 invalid 行并说清缺哪个
+        write_invalid(reason);
         return ProbeGuard {
             site,
             arc,

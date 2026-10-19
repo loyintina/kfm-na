@@ -3,6 +3,9 @@
 //! 判卷维度：三分类纯逻辑、令牌唯一性、报行字段同形（含因果锚与单调钟）、
 //! 自锁路径**故意不写 end**（这是判据，不是漏写）。
 
+/// 这几枚共享全局状态（HOLDERS 槽 + LOG_FILE），必须串行跑
+static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 use kfm_na::lockprobe::{
     Anchors, Verdict, classify, clear_holder, enter, holder_of, init_log, log_path_read,
     prefetch_token, set_holder,
@@ -10,6 +13,7 @@ use kfm_na::lockprobe::{
 
 #[test]
 fn spec_lockprobe_三分类真值表() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     // 自锁的唯一判据是「命中持有者是自己」；holder 为 0 是「有人持着没登记」
     assert_eq!(classify(7, 7), Verdict::SelfDeadlock);
     assert_eq!(classify(7, 8), Verdict::Contend);
@@ -20,6 +24,7 @@ fn spec_lockprobe_三分类真值表() {
 
 #[test]
 fn spec_lockprobe_令牌唯一且非零() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let a = prefetch_token();
     let b = prefetch_token();
     assert!(a > 0 && b > 0, "令牌从 1 起，0 保留给「无主」");
@@ -28,6 +33,7 @@ fn spec_lockprobe_令牌唯一且非零() {
 
 #[test]
 fn spec_lockprobe_报行字段同形且自锁无end() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let dir = std::env::temp_dir().join(format!("lockprobe-{}", std::process::id()));
     let path = dir.join("lockprobe.log");
     let _ = std::fs::remove_dir_all(&dir);
@@ -117,6 +123,7 @@ fn spec_lockprobe_报行字段同形且自锁无end() {
 
 #[test]
 fn spec_lockprobe_init与invalid两类行可构造() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     // 楼727／728：对表此前只比 probe=lock 行；init 与 invalid 两类也要能构造、可核。
     // ① init：init_log 后必须有一行 probe=lock mode=init schema=v4（三态判读第一态）
     // ② invalid：frame==0 即整行无效，落 probe=invalid reason=frame（缺字段名要说清）
@@ -158,4 +165,42 @@ fn spec_lockprobe_init与invalid两类行可构造() {
         "frame 缺时不许出 probe=lock 行（整行无效）"
     );
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn spec_lockprobe_校验逻辑可独立调用() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    // 楼735：真实现里 tok／begin_ms 由内部生成，「缺字段」不可达；但夹具要能造出来，
+    // 前提是**校验逻辑可独立调用**——所以 validate 是 pub 纯函数。
+    use kfm_na::lockprobe::validate;
+    assert_eq!(validate(1, 1), Ok(()));
+    assert_eq!(validate(0, 1), Err("begin_ms"), "缺 begin_ms 要能判出来");
+    assert_eq!(validate(1, 0), Err("frame"), "缺 frame 要能判出来");
+    // 两个都缺时按字段顺序先报 begin_ms（确定性，便于对表）
+    assert_eq!(validate(0, 0), Err("begin_ms"));
+}
+
+#[test]
+fn spec_lockprobe_真实现产出的行按类型对表() {
+    // 楼750／751／752：正对照**不是**「全 pass」，而是「真原文 ＋ 按类型的期望表」——
+    // invalid 行本身在格式层合法（自带 schema+reason），期望也是 ok；该判 missing_field
+    // 的是「缺字段的 lock 行」，那不可能由真实现产出。
+    // 样本留档：scripts/check/lockprobe-samples-real.txt（输入也跟着结果一起留）。
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let checker = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/scripts/check/check-lockprobe-line.py"
+    );
+    let samples = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/scripts/check/lockprobe-samples-real.txt"
+    );
+    let out = std::process::Command::new("python3")
+        .arg(checker)
+        .arg("--fixture")
+        .arg(samples)
+        .output()
+        .expect("必须能起 python3");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "真原文按类型期望表必须全过：{stdout}");
 }

@@ -1,0 +1,8 @@
+# 真实现产出样本（MAIN0192 楼750／751／752）：**输入也要留档**，不能只留「pass」。
+# 格式：<真原文> | kind=<lock|end|self|invalid> | expect=<ok|missing_field|init_schema>
+# 说明：invalid 行在**格式层是合法的**（它自带 schema+reason），期望是 ok；
+#       真正该判 missing_field 的是「缺字段的 lock 行」——那不可能由真实现产出。
+probe=lock mode=natural mono_ms=2 begin_ms=1 frame=7 site=site-real arc=real-arc tok=1 holder=0 verdict=end web_on_top=0 ai_snap=1 | kind=end | expect=ok
+probe=lock mode=natural mono_ms=3 begin_ms=2 frame=8 site=site-real-dead arc=real-arc tok=2 holder=2 verdict=self web_on_top=1 ai_snap=1 | kind=self | expect=ok
+probe=invalid schema=v4 reason=frame | kind=invalid | expect=ok
+probe=lock mode=init schema=v4 | kind=init | expect=ok

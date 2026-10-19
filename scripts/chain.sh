@@ -196,6 +196,10 @@ bash scripts/test-bar114-modal-cursor.sh || { echo "❌ BAR-114 模态压顶守�
 # 流被 vivo 冻结掐死三跑命案——续传/对账/绝对路径/files-only 四契约）
 # 2026-10-19 挂入：BAR-273 推核前闸（MAIN0192 楼418／420 清和裁——核内嵌 vc 必须与
 # 机上 APK versionCode 一致；不一致即拒推。11 机实证：核比壳新 ⇒ 一点终端即崩）
+# 探针报行文本层校验（MAIN0192 楼739／740：缺字段用例落在文本层，喂手工造的行；
+# 模块内单测只算自述，进证据面必须给第三方可复跑命令）
+python3 scripts/check/check-lockprobe-line.py --fixture scripts/check/lockprobe-samples-real.txt || { echo "❌ 探针真样本对表不过（二维：kind × expect）"; exit 1; }
+python3 scripts/check/check-lockprobe-line.py --self-test || { echo "❌ 探针报行文本层校验不过"; exit 1; }
 # 同接收者重入属性检查（MAIN0192 楼697／700：判据按属性不按行号清单）——命中即红，
 # 豁免须在 scripts/check/mutex-reentry-allow.txt 写理由
 python3 scripts/check/check-mutex-reentry.py || { echo "❌ 同一 Arc 持锁期内二次取锁（自锁类）"; exit 1; }
