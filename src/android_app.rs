@@ -10153,10 +10153,19 @@ impl App {
                 );
             }
             g.slot_bake(crate::gles_present::ChromeSlot::Over);
-            // 段④：顶条独立承载层（只换承载——可见性仍由 web_on_top 置，
-            // 几何仍是 bar_h＋段② 那份 off；内容与原先画进 Over 槽的同源同参）
-            g.set_slot_visible(crate::gles_present::ChromeSlot::WebBar, web_on_top);
-            if web_on_top && let Some(s) = ai_snap {
+            // 段④：顶条独立承载层（只换承载——几何仍是 bar_h＋段② 那份 off；
+            // 内容与原先画进 Over 槽的同源同参）。**可见性判据与 CPU 路径同源**：
+            // GLES 侧原先只看 web_on_top，而空栈时 z_order[6] 恒是 Web
+            // （stage::panel_z_order 把「不在栈」按声明序垫底，Web 在声明序末位）
+            // ⇒ 空栈也恒画顶条，与 CPU 侧（还查 top/covered 在栈）分叉。
+            // 这里补同一条栈条件，两条渲染腿同判；z 序语义不动。
+            let web_bar_on = web_on_top
+                && ai_snap.is_some_and(|s| {
+                    s.top == Some(crate::ai_presence::Panel::Web)
+                        || s.covered == Some(crate::ai_presence::Panel::Web)
+                });
+            g.set_slot_visible(crate::gles_present::ChromeSlot::WebBar, web_bar_on);
+            if web_bar_on && let Some(s) = ai_snap {
                 let wbok =
                     crate::ui::web_page::bar_offset_px(crate::ui::seam::sample_web_panel_offset_x(
                         crate::ui::web_page::web_off_target(true, w),

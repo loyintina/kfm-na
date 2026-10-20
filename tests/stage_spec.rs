@@ -415,9 +415,16 @@ fn spec_bar260_段3_被压不越盖层() {
         app.contains("let web_on_top = z_order[6] == crate::ai_presence::Panel::Web;"),
         "顶条绘制必须吃 z 序最顶读数（web_on_top）"
     );
+    // BAR-276（2026-10-20）：门槛由 web_on_top 收紧为 web_bar_on（＝ web_on_top
+    // ∧ top/covered 是 Panel::Web），两渲染腿同判。本钉原字面「if web_on_top」
+    // 随契约变更改写，意图不变：**门槛必须在**，不许无条件画（被压不越盖层）。
     assert!(
-        app.contains("if web_on_top"),
-        "顶条绘制必须由 web_on_top 门槛守着（被压不越盖层）"
+        app.contains("if web_bar_on &&"),
+        "顶条绘制必须由门槛守着（web_bar_on＝web_on_top∧在栈，不许无条件画）"
+    );
+    assert!(
+        app.contains("let web_bar_on = web_on_top"),
+        "门槛必须由 z 序最顶读数派生（web_bar_on 首项就是 web_on_top）"
     );
     // 顶序索引必须随七家走（六家时代的 z_order[5] 已不是最顶）
     assert!(

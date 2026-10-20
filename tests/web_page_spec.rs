@@ -1586,6 +1586,50 @@ fn spec_bar596_绘制路径同作用域不得二次取锁() {
 }
 
 #[test]
+fn spec_bar276_顶条可见性两路径同判() {
+    // BAR-276（MAIN0192 楼1090／1097／1112-1114 定性）：顶条（ChromeSlot::WebBar）
+    // 的可见性在两条渲染腿上判据分叉——CPU 路径（paint_over）除 web_on_top 外还要
+    // 查 top/covered 是否 Panel::Web；GLES 路径原先只看 web_on_top。而空栈时
+    // z_order[6] 恒是 Web（stage::panel_z_order 把「不在栈」按声明序垫底，Web 在
+    // 声明序末位）⇒ GLES 侧空栈也恒画顶条，冷启动首帧必带「全局页」条。
+    // 修法＝GLES 侧补同一条栈条件（web_bar_on），两路径同判；z 序语义不动。
+    // 本钉咬三件：
+    // ① 可见性与绘制分支都吃 web_bar_on（任何一处回退到 web_on_top 即红）；
+    // ② web_bar_on 定义必须同时含 top 与 covered 两半（删一半即红——covered 那半
+    //    是全局页被下层页盖住时的可见性，删了就与 CPU 路径再次分叉）；
+    // ③ 理由注释在位（防后来人把判据搬回 z 序）。
+    let src = read_src("src/android_app.rs");
+    let at = src
+        .find("ChromeSlot::WebBar, web_bar_on")
+        .expect("GLES 侧 WebBar 可见性必须吃 web_bar_on（BAR-276）");
+    let win = &src[at.saturating_sub(1600)..(at + 400).min(src.len())];
+    assert!(
+        win.contains("let web_bar_on = web_on_top"),
+        "web_bar_on 必须由 web_on_top 派生（不是另起一套判据）"
+    );
+    assert!(
+        win.contains("s.top == Some(crate::ai_presence::Panel::Web)"),
+        "web_bar_on 必须查 top 是 Panel::Web（与 CPU 路径同判）"
+    );
+    assert!(
+        win.contains("s.covered == Some(crate::ai_presence::Panel::Web)"),
+        "web_bar_on 必须查 covered 是 Panel::Web（被盖住时顶条仍可见，与 CPU 同判）"
+    );
+    assert!(
+        win.contains("if web_bar_on &&"),
+        "绘制分支也必须吃 web_bar_on（可见性与烘焙同源，不许一处松一处紧）"
+    );
+    assert!(
+        win.contains("可见性判据与 CPU 路径同源"),
+        "同源理由注释必须在位（防回退到只看 z 序）"
+    );
+    assert!(
+        !win.contains("ChromeSlot::WebBar, web_on_top"),
+        "不许有第二处只吃 web_on_top 的 WebBar 可见性（两路径分叉的原始形态）"
+    );
+}
+
+#[test]
 fn spec_bar273_keeper启动不依赖服务器条目() {
     // MAIN0192 楼430 定性、楼808 死锁环：keeper::start 原先被包在 tunnel_srv 的
     // and_then 闭包里 ⇒ servers.json 空时整段不执行 ⇒ 8024 永不自起 ⇒

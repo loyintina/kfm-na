@@ -302,9 +302,18 @@ fn spec_bar260_段4_只换承载不改可见() {
         app.contains("crate::gles_present::ChromeSlot::WebBar"),
         "顶条必须有自己的承载槽"
     );
+    // BAR-276（2026-10-20，MAIN0192 楼1088-1114）：可见性判据由 web_on_top 收紧为
+    // web_bar_on ＝ web_on_top ∧（top/covered 是 Panel::Web），两条渲染腿同判
+    // （GLES 侧原先只看 web_on_top，空栈时 z_order[6] 恒是 Web ⇒ 冷启动恒画顶条）。
+    // 本钉原字面「必须是 web_on_top」随契约变更改写，但**意图不变**：顶条仍由
+    // z 序判据派生（web_bar_on 首项就是 web_on_top），不许另起第二套判据、不许双承载。
     assert!(
-        app.contains("g.set_slot_visible(crate::gles_present::ChromeSlot::WebBar, web_on_top)"),
-        "可见性条件必须仍是 web_on_top（只换承载不改可见）"
+        app.contains("g.set_slot_visible(crate::gles_present::ChromeSlot::WebBar, web_bar_on)"),
+        "可见性必须由 web_bar_on 置（= web_on_top ∧ 在栈），承载只换、不另立判据"
+    );
+    assert!(
+        app.contains("let web_bar_on = web_on_top"),
+        "web_bar_on 必须由 web_on_top 派生（不许另起一套可见性判据）"
     );
     assert!(
         app.contains("term.paint_web_bar(px, w, h, s.accent_web, wbok)"),
