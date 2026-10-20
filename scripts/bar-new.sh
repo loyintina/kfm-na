@@ -209,6 +209,12 @@ if [ "${BAR_NEW_NO_LETTER:-}" != "1" ]; then
 fi
 
 TS=$(date '+%Y-%m-%d %H:%M %z')
+# 写前备份（BAR-278）：提交失败要能原样退回——「写台账与提交同成同败」，
+# 否则一次闸拒绝就留半状态（登记行在、提交没成 ⇒ 号已占而账没入仓 ⇒
+# 下一次可能重发同号，237 撞号那类病以新形态回来）。备份连指纹一起记，
+# 回滚后要能校验「换回的是原来那份」，不是「我记得换回了」。
+REG_BAK=$(mktemp); cp "$LEDGER" "$REG_BAK" && REG_SHA=$(sha256sum "$REG_BAK" | cut -d' ' -f1)
+
 # 登记即占有：登记簿（权威账，跨树可见）与树内 registry 投影同步落。
 # 两账写入格式被 test-bar-new.sh 钉死（0135 楼2：读侧修得再对，写侧
 # 换格式而考题不红 = 白修）；registry 带空格对齐存量书写惯例（592317b
@@ -231,10 +237,29 @@ import json,sys
 try: print(json.load(open(sys.argv[1]))["names"][sys.argv[2]].get("email","") or "")
 except Exception: print("")' "$ROSTER" "$NAME" 2>/dev/null)
     [ -n "$EMAIL" ] || EMAIL="$NAME@kfm.dev"
-    (cd "$MAILBOX" && git add "$LEDGER" \
+    # BAR-278（MAIN0192 楼1259-1302）：**工具自提交**
+    #   ① 身份**暂仍用领号人**：工具身份表 20-契约与向量/bar-工具身份.tsv 里
+    #      bar-new.sh 的允许身份现为「*＝名册全员」，bar-tool 不在名册 ⇒ 用它会被
+    #      号库提交门拒（本轮实测：拒＋回滚校验通过）。切到 bar-tool 须先由评审改表，
+    #      改表归评审面，不自行加行（表头原话：为了过闸自己加行 = 把来源层做废）。
+    #   ② 提交信息末行**独立行**写 tools: bar-new.sh（门只认这一行，prose 里提到不算）；
+    #   ③ 提交失败 ⇒ 用写前备份原样退回并**校验指纹**，再报错退出：
+    #      写台账与提交必须同成同败，否则一次拒绝就留半状态（行在、账没入仓）。
+    ( cd "$MAILBOX" && git add "$LEDGER" \
         && GIT_AUTHOR_NAME="$NAME" GIT_AUTHOR_EMAIL="$EMAIL" \
            GIT_COMMITTER_NAME="$NAME" GIT_COMMITTER_EMAIL="$EMAIL" \
-           git commit -q -m "chore(号位): BAR-$NEXT 登记（$FUNC$NAME：$TITLE）" </dev/null)
+           git commit -q -m "chore(号位): BAR-$NEXT 登记（$FUNC$NAME：$TITLE）" \
+                          -m "tools: bar-new.sh" </dev/null ) || {
+        cp "$REG_BAK" "$LEDGER"
+        if [ "$(sha256sum "$LEDGER" | cut -d' ' -f1)" = "$REG_SHA" ]; then
+            echo "❌ 领号未落：登记簿提交失败，已回滚并校验（sha256 一致）；BAR-$NEXT 未占用" >&2
+        else
+            echo "❌ 领号未落：提交失败且**回滚校验不符**——请人工核对 $LEDGER（备份在 $REG_BAK）" >&2
+        fi
+        exit 1
+    }
 fi
+rm -f "$REG_BAK"
+
 
 echo "BAR-$NEXT 已领（$FUNC$NAME：$TITLE）${LETTER:+；追踪信 $LETTER}"

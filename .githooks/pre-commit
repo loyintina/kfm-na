@@ -15,6 +15,22 @@ if [ "$NOW_HASH" = "d41d8cd98f00b204e9800998ecf8427e" ]; then
     echo "✅ 纯 docs 提交，无代码可验（chain 闸不适用）"
     exit 0
 fi
+
+# ---- 早失败段（BAR-278，MAIN0192 楼1287-1302）：领号脚本形制一致性 ----
+# 为什么在这而不是 chain 的某一步：它防的是**提交**（悬铃 1294①），不是业务步骤；
+# 且单文件判据是秒级，没理由排在 cargo 之后（空谷 1293）。放这里等于不占链步号，
+# 13 步编号与 docs 里「第 N 步」的引用都不用动。
+# 读**暂存版**（空谷 1296／悬铃 1300）：闸要判「将被提交的那份」，不是工作区
+# 那个可能还没 git add 的版本。
+# 段名自报（悬铃 1297）：红了必须能看出是哪一段拦的，否则等于「无缘无故失败」。
+echo "[pre-commit] 早失败段①：领号脚本形制（读暂存版）…"
+if ! git show :scripts/bar-new.sh 2>/dev/null | grep -q 'tools: bar-new.sh'; then
+    echo "❌ [早失败段①／领号脚本形制] 暂存版 scripts/bar-new.sh 未带工具署名 trailer——" >&2
+    echo "   形制：提交信息末行独立写 tools: bar-new.sh（BAR-278；MAIN0192 楼1207／1215）。" >&2
+    echo "   为何在此拦：工具不自署 ⇒「谁写的」无法核，号库提交门会把下一次领号拒在半路。" >&2
+    exit 1
+fi
+echo "✅ [早失败段①／领号脚本形制] 暂存版含 tools: bar-new.sh"
 HOUR=$(date +%H)
 if [ "$HOUR" -ge 1 ] && [ "$HOUR" -lt 7 ]; then
     bash scripts/chain.sh || exit 1
