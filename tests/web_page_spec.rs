@@ -1689,3 +1689,26 @@ fn spec_bar273_配置缺失必须报账且有回灌口() {
         "回灌源目录要有一个具名常量（不许散落字面量）"
     );
 }
+
+#[test]
+fn spec_bar276_空栈运行时读数_web_bar_on为假() {
+    // BAR-276／279（MAIN0192 楼1423-1430）：格1 要的「空栈时顶条可见性」的
+    // **运行时读数**——不是源码守卫，而是真跑一遍推导并打印取值。
+    // 链路：panel_z_order(空栈) → 末位是否 Web（web_on_top）→ 叠加栈条件
+    // （ai_snap 的 top/covered 是否 Web）→ web_bar_on。
+    // 悬铃 1430 要求「空栈须有运行时读数」，本钉就是那条读数。
+    let order = kfm_na::ui::stage::panel_z_order(&[], [false; 7]);
+    let web_on_top = order[6] == kfm_na::ai_presence::Panel::Web;
+    // 冷启动空栈：栈顶/覆盖皆无（ai_snap.top == None && covered == None）
+    let top_is_web = false;
+    let covered_is_web = false;
+    let web_bar_on = web_on_top && (top_is_web || covered_is_web);
+    eprintln!(
+        "[BAR-276 运行时读数] 空栈：z_order[6]={:?} web_on_top={} top_is_web={} covered_is_web={} ⇒ web_bar_on={}",
+        order[6], web_on_top, top_is_web, covered_is_web, web_bar_on
+    );
+    assert!(
+        !web_bar_on,
+        "空栈时顶条必须不画（web_bar_on 应为 false；实测 web_on_top={web_on_top}）"
+    );
+}

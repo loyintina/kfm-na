@@ -79,3 +79,7 @@
 {"bar": 271, "title": "链闸第4步信箱索引漂移：任一楼层落地后 letters-index 过期即判红，验证轮次被设施噪声污染（归口空谷设施面）", "claimant_func": "坤部一组", "claimant": "闻灯", "letter": "0197", "ts": "2026-10-18 18:20 +0800"}
 {"bar": 272, "title": "wipe 前置须核资产能力：资产不含 bin/sshd 时不许 wipe 重装（判据收紧的副作用，与 BAR-269 同版发）", "claimant_func": "坤部一组", "claimant": "闻灯", "letter": "0198", "ts": "2026-10-18 19:02 +0800"}
 {"bar": 274, "title": "bootstrap 资产支持外部覆盖：files/bootstrap-override.zip 优先于内嵌资产（投递通道不必是装包）", "claimant_func": "坤部一组", "claimant": "闻灯", "letter": "0199", "ts": "2026-10-18 20:11 +0800"}
+{"bar": 276, "title": "顶条可见性两路径同判", "claimant_func": "坤部一组", "claimant": "闻灯", "letter": "0200", "ts": "2026-10-20 19:07 +0800"}
+{"bar": 277, "title": "领号脚本自署与失败回滚", "claimant_func": "坤部一组", "claimant": "闻灯", "letter": "0201", "ts": "2026-10-20 21:10 +0800", "state": "作废", "void_reason": "与 BAR-278 同题（同一次工作两次领号），归并至 278；0201 信留作误领留痕", "void_at": "2026-10-20 21:55 +0800", "void_by": "空谷"}
+{"bar": 278, "title": "领号脚本自署与失败回滚", "claimant_func": "坤部一组", "claimant": "闻灯", "letter": "0202", "ts": "2026-10-20 21:11 +0800"}
+{"bar": 279, "title": "空栈时 z 序末位不得为 Web", "claimant_func": "坤部一组", "claimant": "闻灯", "letter": "0203", "ts": "2026-10-20 23:21 +0800", "state": "作废", "void_reason": "无代码落地：结论为「z 序不许动（清和 1425），空栈顶条由 BAR-276 的 web_bar_on 解决」，并入 276", "void_at": "2026-10-20 23:28 +0800", "void_by": "闻灯"}
