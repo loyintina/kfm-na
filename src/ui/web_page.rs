@@ -24,6 +24,24 @@ pub const PAD_X: u32 = 28;
 pub const CLOSE_MARGIN: u32 = 24;
 /// 页面标题
 pub const TITLE: &str = "全局页";
+
+/// 顶条可见性**唯一判据**（BAR-276，MAIN0192 楼1088-1460）。
+///
+/// 两条渲染腿（CPU 的 `paint_over`、GLES 的 Over 槽烘焙）都必须调它，
+/// 不许各自复制表达式——复制出来的第二份就是「抄真源」，会与实现分叉，
+/// 而贴在测试里的副本更坏：它让钉测的是副本、不是产品代码（楼1460 悬铃）。
+///
+/// 语义：`web_on_top` 是 z 序末位派生量（**背景量**，空栈下按 BAR-214 的
+/// 垫底设计恒为真）；真正的可见性还要叠加「Web 是否真在栈」——`top` 或
+/// `covered` 其一为 Web。⇒ 空栈（两者皆 None）时返回 false，顶条不画。
+pub fn bar_visible(
+    web_on_top: bool,
+    top: Option<crate::ai_presence::Panel>,
+    covered: Option<crate::ai_presence::Panel>,
+) -> bool {
+    let is_web = |p: Option<crate::ai_presence::Panel>| p == Some(crate::ai_presence::Panel::Web);
+    web_on_top && (is_web(top) || is_web(covered))
+}
 /// 标题/关闭墨色（近白，与页面深底拉开）
 const INK: u32 = 0x00E6_E6EE;
 /// 「×」笔触半径（物理 px）

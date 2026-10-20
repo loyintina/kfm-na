@@ -422,9 +422,11 @@ fn spec_bar260_段3_被压不越盖层() {
         app.contains("if web_bar_on &&"),
         "顶条绘制必须由门槛守着（web_bar_on＝web_on_top∧在栈，不许无条件画）"
     );
+    // 楼1460 起：判据搬进产品函数 web_page::bar_visible（单源）；此处咬「由它派生」，
+    // 不再咬内联表达式——内联即第二份副本，与真值表退化同源。
     assert!(
-        app.contains("let web_bar_on = web_on_top"),
-        "门槛必须由 z 序最顶读数派生（web_bar_on 首项就是 web_on_top）"
+        app.contains("crate::ui::web_page::bar_visible("),
+        "门槛必须由产品函数 bar_visible 派生（web_on_top 是它的首项）"
     );
     // 顶序索引必须随七家走（六家时代的 z_order[5] 已不是最顶）
     assert!(

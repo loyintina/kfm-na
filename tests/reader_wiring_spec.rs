@@ -311,9 +311,11 @@ fn spec_bar260_段4_只换承载不改可见() {
         app.contains("g.set_slot_visible(crate::gles_present::ChromeSlot::WebBar, web_bar_on)"),
         "可见性必须由 web_bar_on 置（= web_on_top ∧ 在栈），承载只换、不另立判据"
     );
+    // 楼1460 起：判据搬进产品函数 web_page::bar_visible（单源）。此处咬「由它派生」，
+    // 不再咬内联表达式——内联即第二份副本。
     assert!(
-        app.contains("let web_bar_on = web_on_top"),
-        "web_bar_on 必须由 web_on_top 派生（不许另起一套可见性判据）"
+        app.contains("crate::ui::web_page::bar_visible("),
+        "web_bar_on 必须由产品函数 bar_visible 派生（不许另起一套可见性判据）"
     );
     assert!(
         app.contains("term.paint_web_bar(px, w, h, s.accent_web, wbok)"),

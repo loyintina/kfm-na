@@ -1603,17 +1603,15 @@ fn spec_bar276_顶条可见性两路径同判() {
         .find("ChromeSlot::WebBar, web_bar_on")
         .expect("GLES 侧 WebBar 可见性必须吃 web_bar_on（BAR-276）");
     let win = &src[at.saturating_sub(1600)..(at + 400).min(src.len())];
+    // 楼1460 起：表达式搬进产品函数 web_page::bar_visible（单源），此处咬「调它」，
+    // 并咬「windows 内不再内联 top/covered 判据」——内联即第二份副本。
     assert!(
-        win.contains("let web_bar_on = web_on_top"),
-        "web_bar_on 必须由 web_on_top 派生（不是另起一套判据）"
+        win.contains("crate::ui::web_page::bar_visible("),
+        "GLES 侧必须调产品函数 bar_visible（判据单源，不许内联副本）"
     );
     assert!(
-        win.contains("s.top == Some(crate::ai_presence::Panel::Web)"),
-        "web_bar_on 必须查 top 是 Panel::Web（与 CPU 路径同判）"
-    );
-    assert!(
-        win.contains("s.covered == Some(crate::ai_presence::Panel::Web)"),
-        "web_bar_on 必须查 covered 是 Panel::Web（被盖住时顶条仍可见，与 CPU 同判）"
+        !win.contains("s.covered == Some(crate::ai_presence::Panel::Web)"),
+        "GLES 侧不许再内联 covered 判据（已搬进 bar_visible）"
     );
     assert!(
         win.contains("if web_bar_on &&"),
@@ -1692,33 +1690,25 @@ fn spec_bar273_配置缺失必须报账且有回灌口() {
 
 #[test]
 fn spec_bar276_空栈运行时读数_web_bar_on为假() {
-    // BAR-276／279（MAIN0192 楼1423-1430）：格1 要的「空栈时顶条可见性」的
-    // **运行时读数**——不是源码守卫，而是真跑一遍推导并打印取值。
-    // 链路：panel_z_order(空栈) → 末位是否 Web（web_on_top）→ 叠加栈条件
-    // （ai_snap 的 top/covered 是否 Web）→ web_bar_on。
-    // 悬铃 1430 要求「空栈须有运行时读数」，本钉就是那条读数。
+    // BAR-276／279（MAIN0192 楼1423-1460）：格1 要的「空栈顶条可见性」运行时读数。
+    // 判据**调产品函数** `web_page::bar_visible`——不在这里复制表达式，否则钉测的是
+    // 副本、不是产品代码（楼1460 悬铃）。四格覆盖：空栈一格为 false，另三格为 true，
+    // 后者证明这层不是恒假。
+    use kfm_na::ai_presence::Panel;
     let order = kfm_na::ui::stage::panel_z_order(&[], [false; 7]);
-    let web_on_top = order[6] == kfm_na::ai_presence::Panel::Web;
-    // 悬铃 1452 改进：不写死单个输入，跑**四格真值表**（top×covered）。
-    // 冷启动那一格是 (false,false)——ai_snap.top/covered 皆非 Web；
-    // 另三格是「有人/某路径真的把 Web 压进栈」的对侧，用来证明这层不是恒假。
-    for (top_is_web, covered_is_web) in [(false, false), (true, false), (false, true), (true, true)]
-    {
-        let web_bar_on = web_on_top && (top_is_web || covered_is_web);
+    let web_on_top = order[6] == Panel::Web;
+    let table: [(Option<Panel>, Option<Panel>, bool); 4] = [
+        (None, None, false),
+        (Some(Panel::Web), None, true),
+        (None, Some(Panel::Web), true),
+        (Some(Panel::Web), Some(Panel::Web), true),
+    ];
+    for (top, covered, want) in table {
+        let got = kfm_na::ui::web_page::bar_visible(web_on_top, top, covered);
         eprintln!(
-            "[BAR-276 运行时读数] 空栈：z_order[6]={:?} web_on_top={} top_is_web={} covered_is_web={} ⇒ web_bar_on={}",
-            order[6], web_on_top, top_is_web, covered_is_web, web_bar_on
+            "[BAR-276 运行时读数] 空栈 z_order[6]={:?} web_on_top={} top={:?} covered={:?} ⇒ bar_visible={}",
+            order[6], web_on_top, top, covered, got
         );
-        if !(top_is_web || covered_is_web) {
-            assert!(
-                !web_bar_on,
-                "空栈且 top/covered 皆非 Web ⇒ 顶条不画（web_bar_on 应为 false）"
-            );
-        } else {
-            assert!(
-                web_bar_on,
-                "Web 真在栈（top/covered 其一为 Web）时顶条必须画——否则这层是恒假"
-            );
-        }
+        assert_eq!(got, want, "顶条可见性须由产品函数 bar_visible 给出");
     }
 }
