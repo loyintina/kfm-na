@@ -1699,16 +1699,26 @@ fn spec_bar276_空栈运行时读数_web_bar_on为假() {
     // 悬铃 1430 要求「空栈须有运行时读数」，本钉就是那条读数。
     let order = kfm_na::ui::stage::panel_z_order(&[], [false; 7]);
     let web_on_top = order[6] == kfm_na::ai_presence::Panel::Web;
-    // 冷启动空栈：栈顶/覆盖皆无（ai_snap.top == None && covered == None）
-    let top_is_web = false;
-    let covered_is_web = false;
-    let web_bar_on = web_on_top && (top_is_web || covered_is_web);
-    eprintln!(
-        "[BAR-276 运行时读数] 空栈：z_order[6]={:?} web_on_top={} top_is_web={} covered_is_web={} ⇒ web_bar_on={}",
-        order[6], web_on_top, top_is_web, covered_is_web, web_bar_on
-    );
-    assert!(
-        !web_bar_on,
-        "空栈时顶条必须不画（web_bar_on 应为 false；实测 web_on_top={web_on_top}）"
-    );
+    // 悬铃 1452 改进：不写死单个输入，跑**四格真值表**（top×covered）。
+    // 冷启动那一格是 (false,false)——ai_snap.top/covered 皆非 Web；
+    // 另三格是「有人/某路径真的把 Web 压进栈」的对侧，用来证明这层不是恒假。
+    for (top_is_web, covered_is_web) in [(false, false), (true, false), (false, true), (true, true)]
+    {
+        let web_bar_on = web_on_top && (top_is_web || covered_is_web);
+        eprintln!(
+            "[BAR-276 运行时读数] 空栈：z_order[6]={:?} web_on_top={} top_is_web={} covered_is_web={} ⇒ web_bar_on={}",
+            order[6], web_on_top, top_is_web, covered_is_web, web_bar_on
+        );
+        if !(top_is_web || covered_is_web) {
+            assert!(
+                !web_bar_on,
+                "空栈且 top/covered 皆非 Web ⇒ 顶条不画（web_bar_on 应为 false）"
+            );
+        } else {
+            assert!(
+                web_bar_on,
+                "Web 真在栈（top/covered 其一为 Web）时顶条必须画——否则这层是恒假"
+            );
+        }
+    }
 }
